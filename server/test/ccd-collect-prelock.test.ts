@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { eventsOf, readJournal, refusalsOf } from './lifecycleHelpers.js';
 import {
   AGED, COL_ID, PAUSE, type Answer, collectAudit, collectOf, identityOf, lockOf, makeOrphan, moveIntoSlot, plantRecord,
@@ -316,7 +316,7 @@ describe.skipIf(!LINUX)('the collector opens the reap lock only after an advisor
 });
 
 describe('the source: one dash-free sentence, and a pass that prints, journals and locks nothing (path-identity spec §2.5)', () => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   /** `name`'s body, from its head line to its first closing brace at column 0, or '' when it is not defined. */
   const bodyOf = (name: string): string => {
     const a = src.indexOf(`\n${name}() {`);

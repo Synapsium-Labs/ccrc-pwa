@@ -104,6 +104,7 @@ real values: `deploy/reference-fleet.md` (gitignored).
   worktree no registry row names, under the ccd worktree root or a `.claude`/`.superpowers` worktrees directory), behind a
   token re-proved on the box, never `--force` — never a session's verb, and never run against the live host from a shell or a test.
   **`scratch-rescue` is forbidden to every session too** (D-6632): the temp sweep's act, which only adds attic refs for a session's scratch repository (`ccd scratch-rescue --session <id> <path>`), behind the installed direct entry — never a session's verb, and never run against the live host from a shell or a test.
+  **`ws-shed-deps` is forbidden to every session too** (D-7278): it is the SERVER's act on a SLEEPING worker's or coordinator's git-ignored, untracked dependency directories only (`ccd ws-shed-deps --session <id> --class child|coordinator`, composed by the deps-shed arm of the run-done row, shadow until `$REG/deps-shed-live`), behind the installed direct entry, with every rung re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
 - **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
   `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
   or onto the launcher (`~/.local/bin/claude`) are forbidden on a session's prompt (`FORBIDDEN_CCD_VERBS` and
@@ -133,8 +134,9 @@ real values: `deploy/reference-fleet.md` (gitignored).
   coordinator or child — runs the mutating `ccrc account` subs (`add`, `auth-start`, `auth-code`, `auth-cancel`, `set`,
   `check`, `enable`, `disable`, `credential`, `remove`, `seed`), `openrouter-management` with any sub (`ceiling`
   included), `ccd-account-auth` or `ccd account-pane`; reads `~/.cc-secrets/`, `~/.ccrc/auth-scratch/`,
-  `~/.ccrc/codex/*/runtime.env` or `~/.ccrc/agent.env`; writes under `~/.cc-sessions/.auth/` or
-  `~/.cc-sessions/.accounts/`; or prints the whole environment (bare `env`, `printenv`). They are the operator's, from
+  `~/.ccrc/codex/*/runtime.env`, `~/.ccrc/agent.env`, the Linear slot store `~/.ccrc/linear/` or the legacy
+  `~/.ccrc/linear.key` (D-7675); writes under `~/.cc-sessions/.auth/` or `~/.cc-sessions/.accounts/`; or prints the
+  whole environment (bare `env`, `printenv`). They are the operator's, from
   the PWA's Accounts screen or their own shell. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
   spawn in `~/.cc-sessions/account-deny.settings.json`, the session hook's account arm refuses the path-qualified,
   quoted and `$VAR` forms, and the classifier marks the verbs forbidden, so no approval can rule one. It is an
@@ -267,28 +269,45 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   full run's shard, on the case that makes a branch between the in-lock recompute and the pin, and green alone); any
   other red is a real break, so re-run the file alone first.
 - **What CI runs** (design `docs/superpowers/specs/2026-09-23-ci-test-selection-design.md`; one pipeline,
-  `ci.yml`, whose trigger picks a mode). **A pull request** is the LIGHT run (operator ruling 2026-10-25): it runs the server tests its change can affect, chosen
-  from a traced dependency map (`.github/ci/select-tests.mjs`) and sharded across runners behind the required
-  summary `test (server)`. The agent, pwa and browser TESTS run only when the change can reach them
+  `ci.yml`, whose trigger picks a mode). **A pull request** is the FAST run (operator ruling 2026-10-28, replacing
+  2026-10-25's light run: builders run scoped tests before pushing and every PR gets two reviews): every typecheck,
+  `build-pwa`, the static checks, the server tests vitest relates to the change from its merge base, the traced map's
+  selection for every changed path vitest's import graph cannot follow (select's `untraced`: ccd scripts, Python,
+  JSON/SQL fixtures; `vitestFollows` in select-tests.mjs; a test that failed under the trace is judged there by what it
+  recorded, not always, D-7780), the guard suites that scan the whole tree or the diff
+  (censuses, single-definition, deviation-refs, growth-check, ownership, rings, ccd-contexts, dtbd, `typecheck-tests`,
+  `oss-metadata`, the `*-pin` suites less `PIN_MAP_CARRIED`, and every test whose source runs `git ls-files`,
+  `git diff` or `git merge-base` itself: `TREE_READER`; and every test that lists a source tree itself — `server/src`,
+  `shared`, `pwa/src`, `agent/src` or `ccd` — whose file took at most `SCANNER_MAX_MS` on the last full run, the heavier
+  ones named in the summary and left to the queue: the full run RECORDS which tests list a root (a setup file wraps fs's
+  listers, `.github/ci/tree-scanners.mjs`, published as the `tree-scanners` artifact beside `testtimes`), unioned with
+  the static `scansSourceTree`, which stands alone when no artifact is readable), and every `session-hook*` suite when `ccd/ccd`,
+  `ccd/session-hook.sh` or `shared/api.ts` changed (`.github/ci/fast-plan.mjs`, the `fast-plan` job), packed by measured duration behind the
+  required summary `test (server)`; and the agent and pwa TESTS only when the change can reach them
   (`.github/ci/reach.mjs`: a package skips only when every changed file is under a directory it never reads, so `agent`
-  skips for `pwa/` and `ui/` only, `pwa` and `browser` for `agent/`, `server/`, `ccd/` and `deploy/` only); every typecheck,
-  `build-pwa`, the static checks, `node-floor` (on exactly the floor's version) and `probe-macos` always run, and every
-  required check name still reports, a skipped test step reading green. `test-macos` runs the same selection, advisory.
-  A change under `.github/` or `server/scripts/`, to any
-  `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`, `.gitattributes` or `.npmrc`, a missing
-  map, or the **`full-ci` label** on the pull request runs the full suite instead (a label starts no run: add it, then push or close and reopen; GitHub's "Re-run jobs" replays the run with the label set it started with, so it does not pick up `full-ci`). On a `pwa` change that is only `.ts`/`.tsx` the pwa shards run what vitest relates to it plus every pwa test that reads the tree from disk (derived in `reach.mjs`); any other change under `pwa/src` or `ui/src` (CSS, JSON, assets) runs them all. Server tests the map has no entry for, or whose record is older than a change to what it read, are selected only when the pull request touches them; the rest are left to the merge queue, and the select summary counts them. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
-  `shadow`, the selection is only reported and every server test runs. **A merge-queue run** (`merge_group`) is the FULL run (operator ruling 2026-10-25, replacing 2026-09-28's "what a pull
-  request runs"): every server shard, the agent, pwa and browser tests, in a concurrency group of its own, and never the
-  macOS legs or `full-suite`. The queue is the safety net for everything the light run leaves out, so nobody bypasses
-  it: an admin merge that skips the queue lands on the light run only. **A merge
-  to `main`** starts no CI run: an **hourly** `refresh` run (cron plus `workflow_dispatch -f mode=refresh`, one concurrency
-  group so runs coalesce) re-traces the tests every merge since the last refresh affected and updates the map, running
+  skips for `pwa/` and `ui/` only, `pwa` for `agent/`, `server/`, `ccd/` and `deploy/` only). The browser suite,
+  `node-floor`, the perf legs and the macOS legs do not run on it. Every required check name still reports, over what
+  ran. A head branch under **`train/`**, the **`full-ci` label**, or a change to shared infrastructure (under
+  `.github/` or `server/scripts/`, any `package.json` or lockfile, `vitest.config.*`, `tsconfig*.json`,
+  `.gitattributes` or `.npmrc`: select-tests.mjs `infraTrigger`) runs the full suite instead, server tests chosen from
+  the traced dependency map (`.github/ci/select-tests.mjs`) as before (a label starts no run: add it, then push or close and reopen; GitHub's "Re-run jobs" replays the run with the label set it started with, so it does not pick up `full-ci`). On a `pwa` change that is only `.ts`/`.tsx` the pwa shards run what vitest relates to it plus every pwa test that reads the tree from disk (derived in `reach.mjs`); any other change under `pwa/src` or `ui/src` (CSS, JSON, assets) runs them all. A server test the map has no entry for or does not trust, or one that reads a TypeScript file as text without importing it, is left to the merge queue, so a fast PR's `plan fast server tests` summary is the list of what ran. `CCRC_SELECTION` in `ci.yml` reads `enforce` since 2026-09-29 (#211); set back to
+  `shadow`, a full-run PR's selection is only reported and every server test runs. **A merge-queue run** (`merge_group`) is the FULL run (operator ruling 2026-10-25, replacing 2026-09-28's "what a pull
+  request runs"): every server shard, the agent, pwa and browser tests and the node floor, in a concurrency group of its own, and never the
+  macOS legs or `full-suite`; there `test (pwa)` refuses a red browser suite and `test (server)` a red node floor
+  (step-level, merge_group-only refusals), so both gate the merge, and the perf legs stay advisory. The queue is the
+  safety net for everything the fast run leaves out, so nobody bypasses it: an admin merge that skips the queue
+  (`gh pr merge --admin`; the ruleset's admin bypass allows it) lands on the fast run only, so never use it. **The macOS legs** (`test-macos`, `probe-macos`)
+  live in `.github/workflows/macos.yml`, off the merge path and off the push to `main` (2026-11-02): the daily run calls them (their nightly run), a dispatched
+  or called full run (release-stable's gate) runs the tests, and `gh workflow run macos.yml` runs both on demand; a red
+  one is a failing run on `main`, never a PR's or a queue entry's. **CodeQL** is an advanced setup (`.github/workflows/codeql.yml`, D-7744), not GitHub's default setup: it scans every pull request to `main` and `main` once a day, never a push to `main` and never the merge queue, and it feeds no required check. **A merge
+  to `main`** starts no `ci.yml` run: a `refresh` run **every three hours** (cron plus `workflow_dispatch -f mode=refresh`, one concurrency
+  group so runs coalesce; the scheduled one traces nothing when `main` has not moved since the newest map, D-7747) re-traces the tests every merge since the last refresh affected and updates the map, running
   no test legs and reporting newly failing or timed-out tests as a warning and a job summary, never a red job (D-6769).
   **Daily**, on `main`, every leg runs in full, macOS included, and the map is rebuilt — skipped when `main`'s
   head already has a green `full-suite` job from a trusted run (a daily or manual full run on `main`, or a stable
   gate; never a pull request's). **A promotion to `stable`** needs such a green `full-suite` on the commit:
-  `release-stable.yml`'s `gate` finds one or runs `ci.yml` in full mode first. So a green PR proves its
-  selection, not the whole suite; the merge queue runs the whole server suite before a merge, and the daily run and the stable gate catch the rest.
+  `release-stable.yml`'s `gate` finds one or runs `ci.yml` in full mode first. So a green PR proves its fast checks,
+  not the whole suite; the merge queue runs the whole Linux suite before a merge, and the daily run and the stable gate catch the rest.
 - **Node floor `>=22.16.0`, identical across the three engines**, pinned by `server/test/node-floor.test.ts`
   (server-only; CI's `node-floor` job runs it on exactly 22.16.0). Two reasons: `server/src/coord/db.ts` imports
   `node:sqlite` unconditionally (below 22.13 the server fails to boot), and below 22.16 that `node:sqlite` has no
@@ -335,7 +354,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `BuildLine`, and doctor's `skills` check (every home vs the shipped tree; `ccrc doctor --fix` cures it, D-3113).
   The control plane's per-node inventory — every node's measured stamp, install state, provenance, caps and
   resolved desired tag, re-measured every minute — is read at `GET /api/updates` (session-gated), and
-  `/api/fleet/health`'s `builds` is a view of it. The PWA's one tap (`POST /api/updates/apply` or
+  `/api/fleet/health`'s `build` word is decided from it (the `builds` pair was retired in wave 33). The PWA's one tap (`POST /api/updates/apply` or
   `POST /api/updates/rollback`) ends in the same `ccrc update --to <tag>` or `ccrc rollback --to <tag>` on the
   node, run `--detach --from pwa` — the fleet node's through the agent's `update` op, the server node's spawned
   locally, one node at a time and fleet first, a `failed`/`reverted` row halting the rest until `ack` — and
@@ -449,8 +468,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   than open empty**. Its synchrony is a stated concurrency invariant — **do not wrap it async** (a repository/async
   interface over `CoordStore` is explicitly rejected). It is a server-side RE-MEASUREMENT of ccd's flat files
   (registry, hold, `.prhistory`), which stay ground truth; a lost coord.db re-measures those from them, but
-  what it adds on top — mail, claims, asks, central pool edges, update intents, the stall-watch settings choice,
-  the collector switch — is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into
+  what it adds on top — the landing line, mail, claims, asks, central pool edges, update intents, the stall-watch
+  settings choice, the collector switch — is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into
   `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The switch's `collect-lane-generation.log` is never
   copied into a snapshot or restored with one: leave it in place, so a database restored alone never re-arms the
   collector (one from before the switch's last change is safety-stopped). One from before the legacy collector file's
@@ -470,11 +489,19 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   proceeds). `coord-pause-route.test.ts`'s `UNGATED` set pins all four in both directions, and with `CCRC_AUTH`
   armed all four still sit behind the session gate (`auth/gate.ts`'s NOT-EXEMPT note: gating them there
   "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
-  whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
-  /api/asks/:id/answer`, `POST /api/asks/:id/release`, `POST /api/claims`, `POST /api/claims/:id/release`,
-  `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations`, `GET /api/ledger` and the approvals lane's
-  six (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key`, `POST /api/approvals/:id/rule`,
-  `POST /api/approvals/:id/release` and `GET /api/approvals/:id`, coordinator-first routing D-5298) all call
+  whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): the
+  question door family's claimant pair `POST
+  /api/questions/:id/rule` and `POST /api/questions/:id/release` (W3 Q3f, D-7030), `POST /api/claims`, `POST
+  /api/claims/:id/release`,
+  `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations`, `GET /api/ledger`, `GET /api/landing` and the approvals lane's
+  four (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key` and
+  `GET /api/approvals/:id`, coordinator-first routing D-5298) and the programme ledgers' coordinator routes (plan PL3; their handlers
+  are in `server/src/coord/ledgersRoutes.ts`, a lane source of its own for the census, registered from `registerCoordRoutes`:
+  `POST /api/programmes/:slug/items`, `GET /api/programmes/:slug/items`, `POST /api/items/:id/confirm`,
+  `POST /api/items/:id/return`, `POST /api/items/:id/withdraw`, `POST /api/items/:id/blocking`,
+  `POST /api/programmes/:slug/spec`, `POST /api/programmes/:slug/modifications` and
+  `POST /api/programmes/:slug/modifications/merged`; each is attribution-checked, then ownership-checked by
+  `claimsProgramme`, and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
   caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`
@@ -484,12 +511,16 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   coordination WRITES that carry no box token at all: `POST /api/sessions/:id/kickoff` (wave 4),
   `POST /api/coord/caps` (wave 6), `POST /api/coord/reclaim-pause` (child-reclamation wave 4),
   `POST /api/coord/stall-watch` (stall-watch settings wave 1), `POST /api/coord/collect-lane`
-  (child-reclamation wave 10, which also refuses `live` while sign-in is dark) and `POST /api/coord/review-cap`
-  (D-6795, the operator's lift of the review-round cap for one work run) are
+  (child-reclamation wave 10, which also refuses `live` while sign-in is dark), `POST /api/coord/review-cap`
+  (D-6795, the operator's lift of the review-round cap for one work run), `POST /api/coord/dispatch-abandon` (D-7319, the
+  operator's switch on abandoning a dispatch that never came back), `POST /api/coord/roll-idle` (D-7453, the
+  operator's Settings row for the automatic coordinator roll), `POST /api/testbox/switch` (test box plan TB9, D-7411,
+  the operator's remote switch for test runs; the test box's read and sync take a session or the box token, D-7554)
+  and `POST /api/questions/:id/answer` (W3 Q3f, D-7030, the operator's answer door of the question family) are
   session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other five are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other eight are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST
@@ -503,7 +534,12 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   registered in `server.ts` for the kickoff route's reason, so `box-token-census.test.ts` names it beside that
   route's literal. So does `POST /api/digest/correct` (coordinator-first routing D-5300): it queues the operator's
   correction of a digest line as durable system mail to that line's coordinator, consults no box token, is
-  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
+  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/programmes/:slug/goals`,
+  `POST /api/items/:id/tick` and `POST /api/items/:id/dismiss`, consult no box token either: the tick queues the operator's
+  answer as system mail to the programme's coordinator in the move's own transaction, and every one is session-gated when armed. They are
+  registered by `registerLedgerOperatorRoutes` in `server/src/coord/ledgersRoutes.ts`, called from `server.ts`; the census reads
+  that file as a lane source of its own and keeps their names in a hand-kept `LEDGER_OPERATOR_DOORS`, checked against it in both
+  directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
   the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
   the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which
   the census reads as a lane source of its own and checks against `CODE_DOORS` and `TOKEN_DOORS` in both directions.
@@ -537,6 +573,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
 - **Done-fingerprint re-measures the WORKSPACE BRANCH** (`handoffCommit === branchTip`). A worker commits on its
   workspace branch, **never a separate feature branch** (a feature branch wedges every close with `stale-tip`).
   Re-measurement reads git ref files + `.prhistory` fresh, never the claim body.
+  For a project whose landing conf opts in (`$REG/landing/<project>/enabled`), the fingerprint also accepts a claimed
+  tip that the conflict radar's lineage carries to the live tip through clean base merges, and the landing then binds
+  that live tip; anything it cannot read answers as before, or `lineage-unmeasured`.
 - **One run row per wave; wave N+1 is a NEW `POST /api/runs`, not a reopen. Open wave N+1's run BEFORE closing
   wave N's** — close-first leaves zero open runs and the server retires the program, breaking
   `toId:'coordinator'` mail that carries NO `runId`. Mail naming a `runId` still resolves

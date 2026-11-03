@@ -63,11 +63,12 @@ export interface FleetState {
    *  why `server/test/` (typechecked by `typecheck-tests.test.ts`, not by the
    *  build) is part of the enumeration rather than collateral damage.
    *
-   *  NO LONGER `FleetHealth.builds`' SOURCE when a coordination database is
-   *  wired (design 2026-09-20 §14): a handshake-cadence sample cannot stand in
-   *  for a per-minute fact — the `observedEpoch` lesson below — so the route
-   *  derives both sides from the inventory rows through `derivedBuilds`. This
-   *  field is still populated on every `ready`, and still feeds the route when
+   *  NO LONGER THE SOURCE of `FleetHealth.build`'s fleet side when a
+   *  coordination database is wired (design 2026-09-20 §14): a handshake-cadence
+   *  sample cannot stand in for a per-minute fact — the `observedEpoch` lesson
+   *  below — so the route derives both sides from the inventory rows through
+   *  `derivedBuilds`, and `buildAgreement` decides from that pair. This field is
+   *  still populated on every `ready`, and still feeds the route when
    *  `Deps.coord` is absent (tests and scripts that build `Deps` by hand). */
   build: BuildInfo | null;
   /** The epoch of the pool projection the fleet host reported it actually has
@@ -145,6 +146,23 @@ export interface FleetState {
    *  The runtime substitute for the compile error is the same whole-object
    *  `toEqual` in `remote-connect.test.ts`. */
   agentOps?: readonly string[];
+}
+
+/** One answer about `ccd caps`, as its source gives it. `'ready'` is the agent's ready frame: what it carries is the
+ *  list for this connection, `null` (no usable `ccdVerbs`) included, so a reconnect to an older agent resets. A
+ *  `'measured'` answer is a refresh (remote mode's `caps` request, or local mode's one read of this box's `ccd`): a
+ *  `null` from it is no evidence and keeps what stands, and an answer asked under one connection epoch is dropped
+ *  once the epoch has moved (path-identity spec 2026-10-12 §5.2). */
+export type CcdVerbsAnswer =
+  | { from: 'ready'; verbs: string[] | null }
+  | { from: 'measured'; verbs: string[] | null; askedEpoch: number; epochNow: () => number };
+
+/** The one writer of `FleetState.ccdVerbs` (D-7079; ARCH-72). It writes by the answer's own rule and returns whether
+ *  it wrote; which answer to ask for, and when, stays with its callers. */
+export function recordCcdVerbs(state: Pick<FleetState, 'ccdVerbs'>, answer: CcdVerbsAnswer): boolean {
+  if (answer.from === 'measured' && (answer.verbs === null || answer.epochNow() !== answer.askedEpoch)) return false;
+  state.ccdVerbs = answer.verbs;
+  return true;
 }
 
 export interface FleetSnapshot { sessions: FleetSession[]; savedAt: number }
@@ -286,10 +304,11 @@ export function fleetCarriesRunsAttribution(
 export interface BuildSource { role: NodeRole | null; build: BuildInfo | null }
 
 /**
- * `FleetHealth.builds` as a VIEW of the node inventory (design 2026-09-20
- * §14), so a PWA that reads `{own, fleet}` keeps its answer while the console
- * learns to read `NodeWire[]` (W3), after which the field is unread by any
- * shipped reader and retires under wire discipline.
+ * The `{own, fleet}` pair of stamps `buildAgreement` decides from, as a VIEW of
+ * the node inventory (design 2026-09-20 §14). Once the console read
+ * `NodeWire[]` (W3) no shipped reader needed the pair, so wave 33 retired the
+ * `FleetHealth.builds` wire field that carried it; this function stays as the
+ * input to the `build` agreement word and nothing else.
  *
  * `own` is the first source whose role is `server` or `both` — THIS box, in
  * either install shape; `fleet` is the first whose role is `fleet`. FIRST, and
@@ -299,7 +318,7 @@ export interface BuildSource { role: NodeRole | null; build: BuildInfo | null }
  * excluded; excluding them is the store's job, and deciding which row is which
  * side is this function's — the route composes the two and decides nothing.
  *
- * `buildAgreement` above is unchanged: three words, sha + dirty, now fed from
+ * `buildAgreement` above is unchanged: three words, sha + dirty, fed from
  * here.
  */
 export function derivedBuilds(sources: readonly BuildSource[]): { own: BuildInfo | null; fleet: BuildInfo | null } {

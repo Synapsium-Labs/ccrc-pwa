@@ -56,9 +56,10 @@ const MARKER_CLASS: Record<MarkerKey, string> = {
 
 /**
  * A card fact that may not fit (verifier round 1): its FULL text and its token-shortened form, both drawn and both
- * `aria-hidden`, with the full text spoken once from an `sr-only` span. fleet.css's container query on
- * `.sess-body` shows the full form wherever the card's column can hold it (it wraps at a space or a hyphen, never
- * by an ellipsis) and the shortened one only in a phone-narrow column. Without a shorter form it is plain text.
+ * `aria-hidden`, with the full text spoken once from an `sr-only` span. fleet.css picks: from the 900px desk
+ * breakpoint the full form (it wraps at a space or a hyphen, never by an ellipsis; a name and a branch are cut at
+ * a second line, a programme slug never is: D-6332), and below it the shortened form, except where `.sess-body`'s
+ * own container query finds the column 320px wide or wider. Without a shorter form it is plain text.
  */
 export function Fit({ full, short }: { full: string; short?: string | undefined }): ReactNode {
   if (short === undefined || short === full) return full;
@@ -163,6 +164,10 @@ export function SessionMeta({
           {glance.marker !== null && glance.marker.key !== 'spawn' && (
             <Marker fact={glance.marker} full={false} />
           )}
+          {/* R9 (delegation broker wave 4): a programme worker's live delegated work, one chip after the marker. */}
+          {glance.delegated !== null && (
+            <span className="sess-meta-chip" title={glance.delegated.title}>{glance.delegated.text}</span>
+          )}
         </span>
         {context !== null && <span className="sess-meta sess-meta--context" style={metaStyle}>{context}</span>}
       </>
@@ -208,6 +213,8 @@ export function SessionMeta({
           ⑂ {subagentList.length} subagent{subagentList.length === 1 ? '' : 's'}
         </button>
       )}
+      {/* R9 (delegation broker wave 4): the card's chip, the same text, so the header stays a superset (D-5545). */}
+      {f.delegated !== null && <span className="sess-meta-chip" title={f.delegated.title}>{f.delegated.text}</span>}
       {/* Every marker, in full — but the last spawn and the restart, which the header already draws (the spawn chip
           above, the header's own restart chip). */}
       {markers(f).filter((m) => m.key !== 'spawn' && m.key !== 'restarted').map((m) => (
@@ -227,7 +234,8 @@ function ContextCell({ fact }: { fact: Fact }): ReactNode {
 }
 
 /** `<programme> · wave 5 of 7` as two spans: the wave never shortens (D-5528), and on the card the programme
- *  slug is shortened by whole tokens (`shortenByToken`, D-5545) rather than cut by an ellipsis. The full text is
+ *  slug is shortened by whole tokens (`shortenByToken`, D-5545) below the desk rather than cut by an ellipsis; from
+ *  900px up it draws whole and wraps, and no line clamp reaches it (fleet.css, D-6332). The full text is
  *  `programmeWave`'s, character for character. */
 function ProgrammeWave({ run, short }: { run: NonNullable<ChildRunContext['run']>; short: boolean }): ReactNode {
   return (

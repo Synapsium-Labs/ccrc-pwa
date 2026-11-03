@@ -3,7 +3,7 @@
 // reading (`useDesk()`), and nothing remounts on a crossing. The 900 query is written once, in
 // `ui/src/lib/use-media-query.ts`, and `.whats-new-panel`, the local copy of this arm, is gone.
 //
-// jsdom computes no layout and no animation: this file holds the chrome, the drag's stand-down (the error signal
+// jsdom computes no layout and no animation: this file holds the chrome, the drag's stand-down (the pointer-capture signal
 // `sheet-handle-only.test.tsx` documents), the classes and the source pins. What Chrome computes from them is
 // `browser/sheet-desktop-arm.browser.test.tsx`'s.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -49,14 +49,16 @@ const dragAcross = (el: HTMLElement): void => {
   fireEvent.pointerMove(el, { pointerId: 1, clientX: 100, clientY: 220, isPrimary: true, pointerType: 'touch' });
   fireEvent.pointerUp(el, { pointerId: 1, clientX: 100, clientY: 220, isPrimary: true, pointerType: 'touch' });
 };
-/** What vaul threw while a drag was dispatched: vaul's drag reads a computed transform jsdom does not produce, so a
- *  panel that CLAIMS the drag throws and one that stood down does not (measured in `sheet-handle-only.test.tsx`). */
-const errorsDuring = (run: () => void): unknown[] => {
-  const errors: unknown[] = [];
-  const onError = (e: ErrorEvent): void => { errors.push(e.error); };
-  window.addEventListener('error', onError);
-  try { run(); } finally { window.removeEventListener('error', onError); }
-  return errors;
+/** The elements vaul captured the pointer on while a drag was dispatched: a panel that CLAIMS the drag runs vaul's
+ *  `onPress`, which captures the pointer on the pressed element, and one that stood down captures nothing (measured
+ *  in `sheet-handle-only.test.tsx`). */
+const capturesDuring = (run: () => void): Element[] => {
+  const captured: Element[] = [];
+  const spy = vi.spyOn(window.HTMLElement.prototype, 'setPointerCapture').mockImplementation(function (this: Element) {
+    captured.push(this);
+  });
+  try { run(); } finally { spy.mockRestore(); }
+  return captured;
 };
 
 describe('the arm is chosen by width, never by skin', () => {
@@ -91,11 +93,11 @@ describe('≥900: the dialog closes by the ✕, Escape and the scrim, and never 
 
   it('a pointer drag on the panel does not close it', () => {
     const onClose = vi.fn();
-    const errors = errorsDuring(() => {
+    const captures = capturesDuring(() => {
       render(<Sheet open onClose={onClose} title="Pick one"><div data-testid="list">a list</div></Sheet>);
       dragAcross(screen.getByTestId('list'));
     });
-    expect(errors, 'vaul claimed a drag on the centred dialog').toEqual([]);
+    expect(captures, 'vaul claimed a drag on the centred dialog').toEqual([]);
     expect(onClose).not.toHaveBeenCalled();
     expect(document.querySelector('[data-vaul-handle]'), 'a handle would be a drag target').toBeNull();
   });
@@ -139,12 +141,12 @@ describe('≥900: the dialog closes by the ✕, Escape and the scrim, and never 
 describe('<900: the bottom sheet is unchanged', () => {
   it('the grabber is back and the panel claims the drag', () => {
     setWidth(390);
-    const errors = errorsDuring(() => {
+    const captures = capturesDuring(() => {
       render(<Sheet open onClose={() => {}} title="Pick one"><div data-testid="list">a list</div></Sheet>);
       dragAcross(screen.getByTestId('list'));
     });
     expect(grabber()).not.toBeNull();
-    expect(errors.length, 'the phone panel stood down: a swipe no longer dismisses').toBeGreaterThan(0);
+    expect(captures, 'the phone panel stood down: a swipe no longer dismisses').toContain(screen.getByTestId('list'));
   });
 });
 

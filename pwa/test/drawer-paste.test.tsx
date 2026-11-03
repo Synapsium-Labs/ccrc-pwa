@@ -95,7 +95,8 @@ import type { Terminal as XTerm } from '@xterm/xterm';
 import { Terminal } from '@xterm/xterm';
 import { KEY_SEQ, PASTE_CLOSE, PASTE_OPEN, oneKey } from '../src/session/keyBar';
 import { insertedFrame, inputLetter, keyLetter, sanitizeTyped, typedFrame } from '../src/session/typedFrame';
-import { VIEW_OVERRIDE_KEY, type StorageLike } from '../src/session/drawerView';
+import { VIEW_OVERRIDE_KEY } from '../src/session/drawerView';
+import type { StoragePort } from '../src/lib/storage';
 import { SYNTHETIC_SCREENS } from './fixtures/drawer/synthetic';
 
 const made = vi.hoisted(() => ({ terms: [] as unknown[] }));
@@ -367,7 +368,7 @@ const makeSocket = (url: string): WebSocket => new FakeSocket(url) as unknown as
 
 const ID = 'lane-a:project-a';
 
-const memStore = (): StorageLike & { map: Map<string, string> } => {
+const memStore = (): StoragePort & { map: Map<string, string> } => {
   const map = new Map<string, string>();
   return {
     map,

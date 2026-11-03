@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# The test box's run units' fixed ExecStart (D-7406; plan docs/superpowers/plans/2026-10-29-test-box.md, Task TB4;
+# spec §2.3 "A fixed environment"): `runner <spec file>`, as the run user, with no network but loopback.
+#
+# It reads the spec the test service wrote (`agent/src/testbox/spec.ts`: NUL-terminated records after the header
+# `ccrc-testbox-spec`) and `exec`s its argv from its command directory with EXACTLY its environment: `env -i` drops
+# whatever the system manager gave this process, so the run sees the allowlist plus the forwarded names and nothing
+# else. It reads no config file and no test box variable; every value comes from the spec.
+set -euo pipefail
+
+die() { printf 'ccrc-testbox-runner: %s\n' "$*" >&2; exit 2; }
+
+[ "$#" -eq 1 ] || die "usage: runner <spec file>"
+spec=$1
+[ -f "$spec" ] && [ ! -L "$spec" ] || die "no spec file: $spec"
+
+header=
+cwd=
+envs=()
+argv=()
+while IFS= read -r -d '' rec; do
+  if [ -z "$header" ]; then
+    [ "$rec" = ccrc-testbox-spec ] || die "not a test box spec: $spec"
+    header=1
+    continue
+  fi
+  case $rec in
+    C*) cwd=${rec:1} ;;
+    E*) case ${rec:1} in [A-Za-z_]*=*) envs+=("${rec:1}") ;; *) die "a bad environment record" ;; esac ;;
+    A*) argv+=("${rec:1}") ;;
+    *) ;;
+  esac
+done < "$spec"
+
+[ -n "$header" ] || die "empty spec: $spec"
+[ -n "$cwd" ] || die "the spec names no command directory"
+[ "${#argv[@]}" -gt 0 ] || die "the spec names no command"
+case $cwd in /*) ;; *) die "the command directory is not absolute: $cwd" ;; esac
+cd -- "$cwd" || die "no command directory: $cwd"
+
+exec env -i ${envs[@]+"${envs[@]}"} "${argv[@]}"

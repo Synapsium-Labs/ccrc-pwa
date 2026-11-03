@@ -8,9 +8,10 @@
 //     line in the operator's terms (`<programme> · wave N of M`, or `· review of
 //     wave N`; for a session no run names, its PR or its branch, or nothing), at
 //     most ONE attention marker chosen by the fixed priority `MARKER_ORDER`, and
-//     the cross-project chip (D-5527). No bookkeeping ids, no fragment cut by an
-//     ellipsis: a long name or programme is shortened HERE, by whole tokens
-//     (`shortenByToken`), never mid-token, and the full text rides `title`.
+//     the cross-project chip (D-5527). No bookkeeping ids, no fragment cut mid-token:
+//     below the 900px desk a long name or programme is shortened HERE, by whole tokens
+//     (`shortenByToken`), and from 900px up the full form draws (a name or branch past
+//     two lines ends in the browser's clamp `…`, D-6332); the full text rides `title`.
 //   • The HEADER is the full set — a SUPERSET of the card: every card fact under
 //     the same key, with its full text, plus everything the card leaves out.
 //     `cardFacts(f)` ⊆ `headerFacts(f)` is pinned by `card-header-facts.test.tsx`.
@@ -24,7 +25,7 @@
 import {
   ASK_OPERATOR_PRINCIPAL, backgroundWork, backgroundWords, ctxPressure, graphGateCount, graphReadCount,
   sessionAsk, sessionWithCoordinator, substrateFault, turnStall, unmeasuredFields, withCoordinatorWords,
-  type FleetSession, type ProjectPoolWire, type RosterWire, type SessionBucket,
+  type DelegationActivityWire, type FleetSession, type ProjectPoolWire, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
 import { accountLabel, accountPool } from '../lib/accounts';
 import { elapsedShort, elapsedWords, statusLabel } from '@ccrc/ui';
@@ -32,24 +33,28 @@ import { restartWords, type RestartWords } from '../lib/restart';
 import { humanBytes } from '../lib/format';
 import { lifecycleQualifier } from './lifecycleWords';
 import { hibernatedSince, hibernatedWords } from './hibernated';
+import { paneGone } from './presence';
 import {
   childOfRunLabel, programmeWave, programmeWaveTail, runSentence,
   type ChildOfRunLabel, type ChildRunContext,
 } from './runWords';
 import { spawnChip, type SpawnChip } from './spawnWords';
 import { substrateFaultText } from './substrateWords';
-import type { CoordPresence } from './coordWords';
+import type { CoordinatorPresence } from './presence';
 import { sessionLabel } from './sessionLabel';
-import { unmeasuredTitle } from './chips';
+import { unmeasuredTitle } from './unmeasuredWords';
+import { delegatedChip, type Chip } from './delegationWords';
 
 /** Routing policy calls a window critical above this. */
 export const CRITICAL = 75;
 /** Context-pressure floor (D-2011), statusline-command.sh's own. */
 export const CTX_PRESSURE = 80;
-/** The card's name budget, in characters, and its programme budget. Chosen by
- *  measurement at 360px (both skins): the card's text column is 226px — ~30
- *  label characters at 7.4px, ~31 mono characters at 7.2px — and the context
- *  line holds the programme plus its wave (` · wave 3 of 5`, 14 characters). */
+/** The PHONE's name budget, in characters, and its programme budget: the length of the token-shortened form
+ *  (`Fit`) a card draws below the 900px desk breakpoint. Chosen by measurement at 360px (both skins): the card's text
+ *  column is 226px — ~30 label characters at 7.4px, ~31 mono characters at 7.2px — and the context line holds the
+ *  programme plus its wave (` · wave 3 of 5`, 14 characters). From 900px up the full form draws instead, a name and
+ *  a branch on up to two lines and a programme slug whole (fleet.css, D-6332, `desk-rule-not-container-threshold`),
+ *  so no budget applies at the desk. */
 export const NAME_BUDGET = 28;
 export const PROGRAMME_BUDGET = 16;
 
@@ -87,7 +92,7 @@ export type FactKey =
   | 'name' | 'status' | 'role' | 'working-on'
   | 'programme' | 'coordinator' | 'run' | 'child-marker' | 'hold'
   | 'pr' | 'branch' | 'tasks' | 'subagents' | 'graph' | 'cleanup' | 'lane'
-  | 'ask-state' | MarkerKey;
+  | 'ask-state' | 'delegated' | MarkerKey;
 
 /** The attention markers, in their FIXED priority: the card shows the first one present. */
 export const MARKER_ORDER = [
@@ -116,9 +121,12 @@ export interface FactInput {
   readonly workingOn?: string | null;
   /** The presence of its coordinator when that coordinator is not a live row beside it
    *  (`orphanNote`'s `presence`): `dead` is "coordinator gone", `hibernated` says so. */
-  readonly coordinator?: CoordPresence | null;
+  readonly coordinator?: CoordinatorPresence | null;
   /** The orphan marker's guidance (`orphanGuidance`): the card and the header both put it on the marker. */
   readonly coordinatorTitle?: string | null;
+  /** Delegation broker wave 4 (R9): the activities this session started, when `nestFleet` attached them to its row
+   *  (a programme worker) or the session header read them; absent or `null` = none known. */
+  readonly delegated?: readonly DelegationActivityWire[] | null;
 }
 
 /** Everything the session's rows render, decided once. The cells read these values;
@@ -164,6 +172,8 @@ export interface SessionFactSet {
   readonly offPool: string | null;
   readonly orphan: 'gone' | 'hibernated' | null;
   readonly orphanTitle: string | null;
+  /** R9: the live delegated work as one chip (`delegatedChip`); `null` with none live, and on a dead row. */
+  readonly delegated: Chip | null;
 }
 
 function askWords(ask: { state: string; parentId: string; answeredBy: string | null }):
@@ -218,9 +228,9 @@ export const COORDINATOR_WORD = 'coordinator';
 export function sessionFacts(input: FactInput): SessionFactSet {
   const {
     session, now, roster = [], projectPool = null, childRun, workingOn = null, coordinator = null,
-    coordinatorTitle = null,
+    coordinatorTitle = null, delegated = null,
   } = input;
-  const dead = session.status === 'dead';
+  const dead = paneGone(session);
   const asleepAt = hibernatedSince(session);
   const state = rowStateWord(session);
 
@@ -322,6 +332,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     offPool,
     orphan: coordinator === 'dead' ? 'gone' : coordinator === 'hibernated' ? 'hibernated' : null,
     orphanTitle: coordinator === 'dead' || coordinator === 'hibernated' ? coordinatorTitle : null,
+    delegated: dead ? null : delegatedChip(delegated ?? []),
   };
 }
 
@@ -384,6 +395,8 @@ export interface CardFacts {
   readonly context: Fact | null;
   readonly marker: Fact | null;
   readonly workingOn: Fact | null;
+  /** R9: a programme worker's live delegated work (delegation broker wave 4). */
+  readonly delegated: Fact | null;
 }
 
 export function cardFacts(f: SessionFactSet): CardFacts {
@@ -394,6 +407,7 @@ export function cardFacts(f: SessionFactSet): CardFacts {
     context: contextFact(f),
     marker: markers(f)[0] ?? null,
     workingOn: f.workingOn === null ? null : { key: 'working-on', text: f.workingOn, title: `works on ${f.workingOn}’s code` },
+    delegated: f.delegated === null ? null : { key: 'delegated', text: f.delegated.text, title: f.delegated.title },
   };
 }
 
@@ -421,6 +435,7 @@ export function headerFacts(f: SessionFactSet): Fact[] {
   if (f.subagents !== null && f.subagents.length > 0) {
     out.push({ key: 'subagents', text: `${f.subagents.length} subagent${f.subagents.length === 1 ? '' : 's'}` });
   }
+  if (f.delegated !== null) out.push({ key: 'delegated', text: f.delegated.text, title: f.delegated.title });
   if (f.askState !== null) out.push({ key: 'ask-state', text: f.askState.label, title: f.askState.title });
   if (f.graph !== null) {
     out.push({ key: 'graph', text: `graph ${f.graph.reads}${f.graph.gated === null ? '' : ` · gated ${f.graph.gated}`}` });
@@ -433,7 +448,8 @@ export function headerFacts(f: SessionFactSet): Fact[] {
 /** The subset rule, as a predicate the test and the harness both call: every card
  *  fact has a header fact under its key carrying its FULL text. */
 export function cardWithinHeader(card: CardFacts, header: readonly Fact[]): Fact[] {
-  const shown = [card.name, card.status, card.context, card.marker, card.workingOn].filter((x): x is Fact => x !== null);
+  const shown = [card.name, card.status, card.context, card.marker, card.workingOn, card.delegated]
+    .filter((x): x is Fact => x !== null);
   // The header's form BEGINS with the card's: the same words, the header adding what the glance leaves out
   // (`waiting` → `waiting on you`, `idle` → `idle · 2m ago`, `held` → `held: <the verbatim hold>`).
   return shown.filter((c) => !header.some((h) => h.key === c.key && h.text.startsWith(c.text)));

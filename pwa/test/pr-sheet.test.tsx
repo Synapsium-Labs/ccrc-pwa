@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession, PrState, PrView, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ToastHost } from '@ccrc/ui';
 import { PrSheet } from '../src/session/PrSheet';
@@ -38,9 +39,12 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 // mutate the app-wide store singleton — the `AbandonSheet`/`SessionActionsSheet`
 // idiom, and the reason PrSheet gained both props (Tasks 213 and 215). The
 // override keys are the PROP names, so `{...over}` is the whole wiring.
+/** The sheet over a fleet store, its session carrying the run binding the current server sends over the store's runs
+ *  (D-7182, C7d), as a fleet frame and a runs frame from one server would. */
 const open = (s: FleetSession = sess(), onReap = (): void => {},
               over: { archive?: typeof api.archive; fleet?: FleetStore } = {}) =>
-  render(<><ToastHost /><PrSheet session={s} open onClose={() => {}} onReap={onReap} {...over} /></>);
+  render(<><ToastHost /><PrSheet session={over.fleet === undefined ? s : withRunBinding([s], over.fleet.getState().runs)[0]!}
+    open onClose={() => {}} onReap={onReap} {...over} /></>);
 
 /** A fleet store carrying exactly the one slice the post-merge note reads.
  *  A FRESH store per call, never `useFleetStore`: the singleton outlives the

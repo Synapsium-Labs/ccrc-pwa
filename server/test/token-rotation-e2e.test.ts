@@ -19,7 +19,7 @@ import {
 } from '../src/token/policy.js';
 import type { TokenStore, TokenSyncLink } from '../src/token/ports.js';
 import { checkMailToken, extractToken } from '../src/coord/token.js';
-import { AgentOpError, LinkNotSentError } from '../src/remote/client.js';
+import { AgentOpError, LinkNotSentError } from '../src/remote/errors.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';

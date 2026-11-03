@@ -223,11 +223,15 @@ describe('release-artifact.sh: record, in the build job', () => {
     const { root, head } = repo(home);
     // build.json first, then a MANIFEST of incompressible bytes, so cutting
     // the stream in half lands inside the MANIFEST: tar prints build.json
-    // whole and then fails on the truncated gzip stream.
+    // whole and then fails on the truncated gzip stream. The MANIFEST is
+    // 256 KiB, not 64: bsdtar (libarchive, macOS) refuses to open a gzip
+    // stream shorter than its first read ahead and prints nothing, while
+    // GNU tar streams what it has. At 256 KiB the half that is kept is past
+    // that first read under both tars, so the premise below holds on both.
     const src = join(home, 'tree-truncated');
     mkdirSync(src);
     writeFileSync(join(src, 'build.json'), buildJson(head, TAG));
-    writeFileSync(join(src, 'MANIFEST'), randomBytes(64 * 1024));
+    writeFileSync(join(src, 'MANIFEST'), randomBytes(256 * 1024));
     const dir = join(home, 'release-out');
     mkdirSync(dir);
     const full = join(home, 'full.tar.gz');

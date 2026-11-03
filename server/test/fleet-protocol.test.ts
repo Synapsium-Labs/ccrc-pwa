@@ -1,6 +1,6 @@
 // The dormant handshake's constants (shared/api.ts) — pinned once, here,
 // because nothing else in the tree pins a shared/api.ts export's raw VALUE
-// (PRESENCE_REFRESH_MS/PRESENCE_TTL_MS are only ever consumed, never
+// (VIEWER_REFRESH_MS/VIEWER_TTL_MS are only ever consumed, never
 // asserted-on). MIN <= PROTO is the one invariant the design leans on: it is
 // what makes "no hello" and "hello with min <= this build's proto" both mean
 // "usable" rather than leaving a gap a future edit could invert by accident.

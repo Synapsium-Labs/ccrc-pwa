@@ -132,7 +132,7 @@ const store = (home: string): CoordStore => new CoordStore(openCoordDb(path.join
 const regRow = (id: string, uuid: string = UUID, over: Partial<SessionRecord> = {}): SessionRecord => ({
   hibernatedAt: null,
   namedByOperator: false, title: null,
-  id, wrapper: 'claude', project: 'demo', workdir: '/w/demo', uuid,
+  id, wrapper: 'claude', project: 'demo', projectEvidence: 'measured', workdir: '/w/demo', uuid,
   started: true, home: null, pool: null, lastswap: null,
   workspace: `${id}-ws`, branch: null, branchEvidence: 'absent', base: null,
   prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
@@ -933,7 +933,7 @@ describe('sweepStalls: wiring', () => {
     const claims = at('this.lapseClaims(sessions, registryRead.refused);');
     // `void` is the pin that the sweep is dispatched and never awaited: `inlinedSourceOf` splices a helper before its statement, so the keyword stays in front of the call.
     const lane = at('void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(');
-    expect(src).toContain('this.usage, this.currentHeadBranches(), panePids);');   // the pids are assembleFleet's own
+    expect(src).toContain('this.usage, this.currentHeadBranches(), panePids, this.landings);');   // the pids are assembleFleet's own
     const primed = at('this.primed = true;');
     expect(claims).toBeGreaterThan(-1);
     expect(lane).toBeGreaterThan(claims);

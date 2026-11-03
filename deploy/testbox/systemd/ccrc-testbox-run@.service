@@ -1,0 +1,25 @@
+# Run %i's command (D-7406, D-7409; spec §2.2 "Run", §2.3 "Static units", "Network"): the runner as the run user, in
+# a network namespace of its own with only its own loopback, IPAddressDeny=any as a second fence. Its output goes to
+# out/%i/stdout and out/%i/stderr, opened by the system manager before it drops to the run user (D-7501). User= for a
+# run user prefix and RuntimeMaxSec= are in ccrc-testbox-run@.service.d/50-ccrc-testbox.conf. No environment file:
+# the runner's environment is built from empty plus specs/%i (D-7451).
+[Unit]
+Description=ccrc test box: run %i's command
+
+[Service]
+Type=exec
+User=ccrc-tb-%i
+Slice=ccrc-testbox-run-%i.slice
+ExecStart=@@TREE@@/deploy/testbox/bin/runner @@ROOT@@/specs/%i
+StandardOutput=truncate:@@ROOT@@/out/%i/stdout
+StandardError=truncate:@@ROOT@@/out/%i/stderr
+PrivateNetwork=yes
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/32 ::1/128
+ProtectProc=invisible
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+RemoveIPC=yes
+ProtectSystem=strict
+ReadWritePaths=@@ROOT@@/runs/%i/run

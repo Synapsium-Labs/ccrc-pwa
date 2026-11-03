@@ -1,0 +1,16 @@
+# ccd-testbox-times.service - the test box's per-file durations (test box TB11, D-7413, D-7421, D-7567). One oneshot,
+# fired by ccd-testbox-times.timer: with the fleet host's gh it fetches the newest `testtimes` artifact of a trusted CI
+# run for each row of the sources file beside CCRC_TESTBOX_TIMES and replaces that file whole, by rename. A failure
+# keeps the previous file and logs one line; with no test box configured it fetches nothing.
+[Unit]
+Description=Fetch the test box's per-file test durations from CI (daily; read-only toward every repository)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ccd-testbox-times
+# Three gh calls and one artifact download per row, each a small JSON file: a pass is seconds. A pass past this is a
+# hung download, killed so the next day's starts clean; the previous file stays, because the write is a rename.
+TimeoutStartSec=300
+# jq over one durations map (about 1,100 entries per repository): a few megabytes. Capped for ccd-cap-scopes' reason.
+MemoryMax=256M
+Nice=10
+IOSchedulingClass=idle

@@ -18,6 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +29,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
 const CI = '.github/workflows/ci.yml';
 const DEPS = '.github/actions/server-deps/action.yml';
+const MACOS = '.github/workflows/macos.yml';
 
 /** A top-level section — `key:` at column 0 through the line before the next
  *  column-0 key. Comments at column 0 end nothing. */
@@ -86,6 +88,13 @@ function steps(block: string): string[] {
 function job(id: string): string {
   const b = jobs(read(CI)).get(id);
   expect(b, `ci.yml has no job \`${id}\``).toBeDefined();
+  return b!;
+}
+
+/** A job of macos.yml, where the macOS legs live (operator ruling 2026-10-28). */
+function macJob(id: string): string {
+  const b = jobs(read(MACOS)).get(id);
+  expect(b, `macos.yml has no job \`${id}\``).toBeDefined();
   return b!;
 }
 
@@ -150,7 +159,7 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
   });
 
   it('the required legs and the browser leg skip by STEP, only on a refresh or a rebuild', () => {
-    const leg = "${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
+    const leg = "${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
     for (const id of ['test', 'pwa-shard', 'pwa-static', 'build-pwa', 'browser-pwa']) {
       expect(job(id), `${id}: the job-level leg switch`).toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
       const s = steps(job(id));
@@ -436,7 +445,9 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
   it('test (server) is a summary that fails closed: always() over select, the shards and the typecheck', () => {
     const b = job('server');
     expect(jobKey(b, 'if')).toBe('always()');
-    expect(needs(b)).toEqual(['select', 'server-shard', 'server-typecheck']);
+    // node-floor: the merge queue's gate on the floor (operator ruling 2026-10-28), a refusal step of its own.
+    expect(needs(b)).toEqual(['fast-plan', 'node-floor', 'select', 'server-shard', 'server-typecheck']);
+    expect(b).toContain("      - name: Refuse a node floor that did not succeed in the merge queue\n        if: github.event_name == 'merge_group' && needs.node-floor.result != 'success'\n        run: exit 1\n");
     expect(b).toMatch(/^ {8}run: node \.github\/ci\/verdict\.mjs server$/m);
     // The verdict reads these six and nothing else; a swapped pair (the
     // typecheck's result passed as the shards') would be green on a red shard.
@@ -446,8 +457,9 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
       'SELECT_RESULT: ${{ needs.select.result }}',
       'TYPECHECK_RESULT: ${{ needs.server-typecheck.result }}',
       'SHARDS_RESULT: ${{ needs.server-shard.result }}',
-      'TESTS: ${{ needs.select.outputs.tests }}',
-      'COUNT: ${{ needs.select.outputs.count }}',
+      // A fast pull request is judged over fast-plan's count (operator ruling 2026-10-28); every other run over select's.
+      "TESTS: ${{ needs.select.outputs.fast == 'true' && 'selected' || needs.select.outputs.tests }}",
+      "COUNT: ${{ needs.select.outputs.fast == 'true' && needs.fast-plan.outputs.count || needs.select.outputs.count }}",
       'EVENT: ${{ github.event_name }}',
     ]) {
       expect(b, `test (server) no longer passes ${line}`).toMatch(new RegExp(`^ {10}${line.replace(/[$.{}()|]/g, '\\$&')}$`, 'm'));
@@ -460,7 +472,7 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
     const s = steps(job('server'))[0];
     expect(s).toBe(
       "      - name: Refuse a prerequisite that did not succeed (no script involved)\n"
-      + "        if: needs.select.result != 'success' || contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.server-shard.result) || contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.server-typecheck.result)\n"
+      + "        if: needs.select.result != 'success' || contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.server-shard.result) || contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.server-typecheck.result) || (needs.select.outputs.fast == 'true' && needs.fast-plan.result != 'success')\n"
       + "        run: exit 1\n");
     const f = steps(job('full-suite'))[0];
     expect(f).toBe(
@@ -478,18 +490,19 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
     // An empty `include` is a hard error ("Matrix vector does not contain any
     // values"), which would turn a docs-only PR's `count: 0` into a red shard.
     expect(jobKey(job('server-shard'), 'if')).toContain("needs.select.outputs.count != '0'");
-    expect(jobKey(job('test-macos'), 'if')).toContain("needs.select.outputs.macos_count != '0'");
+    expect(jobKey(job('server-shard'), 'if')).toContain("needs.fast-plan.outputs.count != '0'");
+    expect(jobKey(job('macos'), 'if')).toContain("needs.select.outputs.macos_count != '0'");
     expect(jobKey(job('trace-shard'), 'if')).toContain("needs.select.outputs.trace_count != '0'");
     expect(jobKey(job('map-build'), 'if')).toContain("needs.select.outputs.trace_count != '0'");
   });
 });
 
 describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23 §3, §4.3)', () => {
-  it('triggers: pull_request, a daily and an hourly schedule, dispatch and call — both with a mode, and no push (D-6769)', () => {
+  it('triggers: pull_request, a daily and a three-hourly schedule, dispatch and call — both with a mode, and no push (D-6769, D-7747)', () => {
     const on = section(read(CI), 'on');
-    expect(on, 'a push to main starts no run: the refresh is hourly').not.toMatch(/^ {2}push:/m);
+    expect(on, 'a push to main starts no run: the refresh is scheduled').not.toMatch(/^ {2}push:/m);
     expect(on).toMatch(/^ {2}pull_request:$/m);
-    expect(on).toMatch(/^ {2}schedule:\n {4}- cron: '17 3 \* \* \*'\n {4}- cron: '23 \* \* \* \*'$/m);
+    expect(on).toMatch(/^ {2}schedule:\n {4}- cron: '17 3 \* \* \*'\n {4}- cron: '23 \*\/3 \* \* \*'$/m);
     expect(on).toMatch(/^ {2}workflow_dispatch:\n {4}inputs:\n {6}mode:\n(?: {8}.*\n)*? {8}type: choice\n {8}options: \[full, rebuild, refresh\]\n {8}default: full$/m);
     expect(on).toMatch(/^ {2}workflow_call:\n {4}inputs:\n {6}mode:\n(?: {8}.*\n)*? {8}type: string$/m);
     expect(on, 'the stable gate reads this output').toMatch(/^ {8}value: \$\{\{ jobs\.full-suite\.outputs\.verdict \}\}$/m);
@@ -527,23 +540,49 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
   it('the least-privilege comment names every job that asks for more than contents: read (FR-6)', () => {
     // Derived, not listed: every job with a `permissions:` block of its own, against the top comment's census.
     const own = [...jobs(read(CI))].filter(([, b]) => /^ {4}permissions:$/m.test(b)).map(([id]) => id).sort();
-    expect(own).toEqual(['map-build', 'select']);
+    expect(own).toEqual(['build-pwa', 'fast-plan', 'macos', 'macos-probe', 'map-build', 'select']);
     const comment = /^# Least privilege, stated rather than inherited[\s\S]*?(?=^permissions:)/m.exec(read(CI))?.[0] ?? '';
     expect(comment, 'the least-privilege comment is gone').not.toBe('');
     for (const id of own) {
       expect(comment, `the comment does not name ${id}`).toContain(`\`${id}\``);
-      expect(job(id), `${id} asks for more than contents: read + actions: read`)
-        .toMatch(/^ {4}permissions:\n {6}contents: read\n {6}actions: read\n(?! {6}[a-z-]+:)/m);
+      // build-pwa asks for attestations: read instead (M8.16); the grant covers this repository's attestations, not the library's (see the census at the top of ci.yml).
+      const block = id === 'build-pwa'
+        ? /^ {4}permissions:\n {6}contents: read\n {6}attestations: read\n(?! {6}[a-z-]+:)/m
+        : /^ {4}permissions:\n {6}contents: read\n {6}actions: read\n(?! {6}[a-z-]+:)/m;
+      expect(job(id), `${id} asks for more than its stated permissions`).toMatch(block);
     }
-    expect(comment).toContain('Two jobs ask for more than this');
+    expect(comment).toContain('Six jobs ask for more than this');
   });
 
-  it('probe-macos runs on pull requests and the daily schedule only — never gating a called or dispatched full run', () => {
-    expect(jobKey(job('probe-macos'), 'if')).toBe("github.event_name == 'pull_request' || (github.event_name == 'schedule' && github.event.schedule != '23 * * * *')");
+  it('probe-macos runs on a dispatch of macos.yml and the daily schedule only — never on a pull request or a push, and never gating a called or dispatched full run', () => {
+    // macos.yml (operator rulings 2026-10-28 and 2026-11-02): a direct run (a dispatch), or a call that asks with `probe: true`.
+    expect(jobKey(macJob('probe-macos'), 'if')).toBe("github.workflow == 'macos' || inputs.probe");
+    expect(jobKey(job('macos-probe'), 'if')).toBe("github.event_name != 'merge_group' && github.event_name == 'schedule' && github.event.schedule != '23 */3 * * *'");
+    expect(job('macos-probe')).toMatch(/^ {6}probe: true$/m);
+    // The call full-suite needs never asks for the probe; the probe's call is needed by nothing.
+    expect(job('macos')).not.toMatch(/probe:/);
+    for (const [id, b] of jobs(read(CI))) expect(needs(b), `${id} must not wait on the probe`).not.toContain('macos-probe');
   });
 
-  it('every job declares a deadline between 1 and 60 minutes', () => {
-    for (const [id, b] of jobs(read(CI))) {
+  it('the macOS legs are off the merge path and off the push: macos.yml runs when called (the daily run is their nightly) or dispatched, never on a push, a schedule of its own, a pull request or a queue run', () => {
+    // Re-pointed 2026-11-02 from "runs on a push to main": 56 of the 65 per-push runs were red and held the
+    // organisation's macOS slots the daily run and release-stable's gate need. ci.yml's daily run already calls both
+    // legs, so a schedule here would run the same suite twice a night.
+    const on = section(read(MACOS), 'on');
+    expect(on).not.toMatch(/^ {2}(push|schedule):/m);
+    expect(on).toMatch(/^ {2}workflow_dispatch:$/m);
+    expect(on).toMatch(/^ {2}workflow_call:$/m);
+    expect(on).not.toMatch(/pull_request|merge_group/);
+    expect(read(CI)).not.toMatch(/runs-on: macos/);
+    expect(jobKey(job('macos'), 'if')).toContain("github.event_name != 'merge_group' && github.event_name != 'pull_request'");
+    // Dispatches coalesce: one group for every direct run, never cancelled.
+    expect(section(read(MACOS), 'concurrency')).toContain('cancel-in-progress: false');
+    expect(section(read(MACOS), 'concurrency')).toContain("github.workflow == 'macos' && 'main'");
+  });
+
+  it('every job declares a deadline between 1 and 60 minutes (a call of a reusable workflow carries none: its jobs do)', () => {
+    for (const [id, b] of [...jobs(read(CI)), ...jobs(read(MACOS))]) {
+      if (/^ {4}uses: \.\/\.github\/workflows\/[\w-]+\.yml$/m.test(b)) continue;
       const m = /^ {4}timeout-minutes: (\d+)$/m.exec(b);
       expect(m, `job ${id} has no timeout-minutes`).not.toBeNull();
       expect(Number(m![1]), `job ${id}`).toBeGreaterThan(0);
@@ -658,6 +697,62 @@ describe('ci.yml: times-build reads a single-artifact pattern download too (D-67
     expect(r.status).toBe(1);
     expect(r.stdout).toContain('::error::no shard left a times.json');
     expect(r.argv, 'shards.mjs never ran').toBe('');
+  });
+});
+
+// D-7455: a full run records the tree scanners (server/test/tree-scans.setup.mjs) beside the durations, times-build
+// publishes them as `tree-scanners`, and fast-plan fetches and reads them the way it does `testtimes`.
+describe('ci.yml: the tree scanners travel as the durations do (D-7455)', () => {
+  it('a full run\'s shard loads the capture and keeps its lines; no other run does', () => {
+    const st = step(job('server-shard'), 'Test');
+    expect(st).toMatch(/^ {10}CCRC_TREE_SCANS_OUT: \$\{\{ needs\.select\.outputs\.tests == 'full' && format\('\{0\}\/scans\.jsonl', runner\.temp\) \|\| '' \}\}$/m);
+    const keep = step(job('server-shard'), 'Keep the tree scans');
+    expect(keep).toMatch(/^ {8}if: always\(\) && needs\.select\.outputs\.tests == 'full'$/m);
+    expect(keep).toMatch(/^ {10}name: scans-\$\{\{ matrix\.shard \}\}\n {10}path: \$\{\{ runner\.temp \}\}\/scans\.jsonl\n/m);
+    // The setup file is added by the select config only when the variable names a file.
+    const cfg = read('server/vitest.select.config.ts');
+    expect(cfg).toContain("if (process.env.CCRC_TREE_SCANS_OUT) {");
+    expect(cfg).toContain("'test/tree-scans.setup.mjs']");
+  });
+
+  it('times-build publishes tree-scanners beside testtimes; fast-plan fetches both with one lookup and hands --scanners', () => {
+    expect(step(job('times-build'), 'Fetch the tree scans')).toMatch(/^ {10}pattern: scans-\*\n {10}path: \$\{\{ runner\.temp \}\}\/scans$/m);
+    const keep = step(job('times-build'), 'Keep the tree scanners as an artifact');
+    expect(keep).toMatch(/^ {8}if: steps\.scans\.outputs\.publish == 'true'$/m);
+    expect(keep).toMatch(/^ {10}name: tree-scanners\n {10}path: \$\{\{ runner\.temp \}\}\/ci-cache\/tree-scanners\.json\n/m);
+    const fetch = runScript(step(job('fast-plan'), 'Fetch the newest trusted durations'));
+    expect(fetch).toContain('for name in testtimes tree-scanners; do\n');
+    expect(fetch).toContain('main-artifact.mjs --repo "$REPO" --repo-id "$REPO_ID" --name "$name")');
+    expect(fetch).toContain('gh run download "$run_id" --repo "$REPO" -n "$name" -D "$RUNNER_TEMP/ci-cache"');
+    expect(runScript(step(job('fast-plan'), 'Plan'))).toContain('if [ -f "$RUNNER_TEMP/ci-cache/tree-scanners.json" ]; then args+=(--scanners "$RUNNER_TEMP/ci-cache/tree-scanners.json"); fi\n');
+  });
+
+  function merge(layout: Record<string, string>): { status: number | null, output: string, argv: string, rt: string } {
+    const ws = mkTmp('ccrc-ci-scans-');
+    const rt = join(ws, 'rt');
+    mkdirSync(join(rt, 'scans'), { recursive: true });
+    for (const [rel, body] of Object.entries(layout)) {
+      mkdirSync(path.dirname(join(rt, 'scans', rel)), { recursive: true });
+      writeFileSync(join(rt, 'scans', rel), body);
+    }
+    const bin = fakeBin({ node: 'printf "%s\\n" "$@" > "$NODE_LOG"' });
+    const log = join(ws, 'node.log');
+    const r = runStep(step(job('times-build'), 'Merge the tree scans'), ws, { PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: rt, NODE_LOG: log });
+    return { status: r.status, output: r.output, argv: existsSync(log) ? readFileSync(log, 'utf8') : '', rt };
+  }
+  const head = (rt: string): string => `.github/ci/tree-scanners.mjs\nmerge\n--out\n${rt}/ci-cache/tree-scanners.json\n`;
+
+  it('Merge the tree scans reads both download layouts (D-6740), and publishes nothing, without failing, when no shard wrote one', () => {
+    const one = merge({ 'scans.jsonl': '' });
+    expect(one.status).toBe(0);
+    expect(one.argv).toBe(`${head(one.rt)}${one.rt}/scans/scans.jsonl\n`);
+    expect(one.output).toBe('publish=true\n');
+    const two = merge({ 'scans.jsonl': '', 'scans-1/scans.jsonl': '', 'scans-2/scans.jsonl': '' });
+    expect(two.argv).toBe(`${head(two.rt)}${two.rt}/scans/scans-1/scans.jsonl\n${two.rt}/scans/scans-2/scans.jsonl\n`);
+    const none = merge({ 'scans-1/other.json': '' });
+    expect(none.status).toBe(0);
+    expect(none.output).toBe('publish=false\n');
+    expect(none.argv, 'tree-scanners.mjs never ran').toBe('');
   });
 });
 
@@ -898,12 +993,12 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
     expect(step(b, 'Keep the map as an artifact')).not.toContain('steps.build');
   });
 
-  it('the refresh is hourly and coalesced: its own group, never cancelled, and every refresh predicate names the hourly cron (D-6769)', () => {
+  it('the refresh is three-hourly and coalesced: its own group, never cancelled, and every refresh predicate names the refresh cron (D-6769, D-7747)', () => {
     const src = read(CI);
     const g = /^ {2}group: (.*)$/m.exec(section(src, 'concurrency'))?.[1] ?? '';
-    expect(g).toContain("(github.event.schedule == '23 * * * *' || inputs.mode == 'refresh') && 'refresh'");
+    expect(g).toContain("(github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh') && 'refresh'");
     expect(section(src, 'concurrency')).toMatch(/cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/);
-    expect(step(job('select'), 'Select')).toContain("INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 * * * *' && 'refresh') || '' }}");
+    expect(step(job('select'), 'Select')).toContain("INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 */3 * * *' && 'refresh') || '' }}");
     expect(src).not.toMatch(/github\.event_name == 'push'/);
   });
 });
@@ -999,7 +1094,7 @@ describe('ci.yml: the daily run\'s "already green?" question fails SAFE (design 
 
   it('asks main-artifact.mjs green-full-suite, on the schedule only, with the token the module reads', () => {
     const st = step(job('select'), 'Does this commit already carry a green full-suite?');
-    expect(st).toMatch(/^ {8}if: github\.event_name == 'schedule' && github\.event\.schedule != '23 \* \* \* \*'$/m);
+    expect(st).toMatch(/^ {8}if: github\.event_name == 'schedule' && github\.event\.schedule != '23 \*\/3 \* \* \*'$/m);
     expect(st).toMatch(/^ {8}env:\n {10}GITHUB_TOKEN: \$\{\{ github\.token \}\}\n {10}REPO: \$\{\{ github\.repository \}\}\n {10}REPO_ID: \$\{\{ github\.repository_id \}\}\n {10}SHA: \$\{\{ github\.sha \}\}\n {8}run: \|$/m);
     expect(ask('echo found=true').log).toBe(`.github/ci/main-artifact.mjs green-full-suite --repo o/r --repo-id 1001 --sha ${'f'.repeat(40)}\n`);
   });
@@ -1022,10 +1117,12 @@ describe('ci.yml: test (pwa) is a summary over the pwa shards (D-6768)', () => {
     const b = job('pwa');
     expect(jobKey(b, 'name')).toBe('test (pwa)');
     expect(jobKey(b, 'if')).toBe('always()');
-    expect(needs(b)).toEqual(['pwa-shard', 'pwa-static']);
+    // browser-pwa: the merge queue's gate on the browser suite (operator ruling 2026-10-28), a refusal step of its own;
+    // elsewhere the browser suite stays advisory, so the first refusal does not read it.
+    expect(needs(b)).toEqual(['browser-pwa', 'pwa-shard', 'pwa-static']);
     // Script-free refusal: success is the only result that passes, so failure, cancelled and skipped all fail it.
-    expect(b).toContain("if: needs.pwa-shard.result != 'success' || needs.pwa-static.result != 'success'");
-    expect(b).not.toContain('merge_group');
+    expect(b).toContain("if: needs.pwa-shard.result != 'success' || needs.pwa-static.result != 'success'\n");
+    expect(b).toContain("      - name: Refuse a browser suite that did not succeed in the merge queue\n        if: github.event_name == 'merge_group' && needs.browser-pwa.result != 'success'\n        run: exit 1\n");
   });
 
   it('runs the pwa suite as N shards that together cover vitest --shard=1/N..N/N, and typechecks pwa exactly once', () => {
@@ -1045,7 +1142,7 @@ describe('ci.yml: test (pwa) is a summary over the pwa shards (D-6768)', () => {
 describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23 §7, §8)', () => {
   it('full-suite needs every leg — Linux shards, typecheck, agent, pwa, build, macOS, the Node floor, the browser — and asks verdict.mjs full', () => {
     const b = job('full-suite');
-    expect(needs(b)).toEqual(['browser-pwa', 'build-pwa', 'node-floor', 'pwa', 'select', 'server', 'server-shard', 'server-typecheck', 'test', 'test-macos']);
+    expect(needs(b)).toEqual(['browser-pwa', 'build-pwa', 'macos', 'node-floor', 'pwa', 'select', 'server', 'server-shard', 'server-typecheck', 'test']);
     // Never on a merge-queue run (landing-order stage 2): a queue run skips
     // test-macos, and a queue run that fell back to `full` would read that skip
     // as a red leg here (ci-merge-queue.test.ts derives the rule).
@@ -1076,34 +1173,228 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
     // The shard also records each file's whole wall time (hooks and collection included) for the next plan.
     expect(runScript(step(job('server-shard'), 'Test'))).toBe(
       `${list}CCRC_FILE_TIMES_OUT="$RUNNER_TEMP/times.json" ${run} --reporter=default --reporter=../.github/ci/file-times-reporter.mjs\n`);
-    expect(runScript(step(job('test-macos'), 'Test'))).toBe(`${list}${run}\n`);
+    expect(runScript(step(macJob('test-macos'), 'Test'))).toBe(`${list}${run}\n`);
     for (const id of ['server-shard', 'test-macos']) {
-      const st = step(job(id), 'Test');
+      const jb = id === 'test-macos' ? macJob : job;
+      const st = step(jb(id), 'Test');
       expect(st, `${id}: matrix workers reach the Test command`).toMatch(/^ {10}WORKERS: \$\{\{ matrix\.workers \}\}$/m);
       expect(st, `${id}: the Test step runs in server/`).toMatch(/^ {8}working-directory: server$/m);
       // A failed shard must fail its job: no continue-on-error (on the step or the job), and the runner's own
       // `bash -e` — no shell override on the step, and no `defaults:` on the job or the workflow.
-      expect(job(id), `${id}: continue-on-error`).not.toMatch(/continue-on-error/);
+      expect(jb(id), `${id}: continue-on-error`).not.toMatch(/continue-on-error/);
       expect(st, `${id}: a shell override on the Test step`).not.toMatch(/^ {8}shell:/m);
-      expect(job(id), `${id}: job-level defaults`).not.toMatch(/^ {4}defaults:/m);
+      expect(jb(id), `${id}: job-level defaults`).not.toMatch(/^ {4}defaults:/m);
     }
     expect(read(CI), 'workflow-level defaults').not.toMatch(/^defaults:/m);
+    expect(read(MACOS), 'workflow-level defaults').not.toMatch(/^defaults:/m);
   });
 
   it('every server-running job installs through server-deps, and the Linux arm installs strace', () => {
-    for (const [id, platform] of [['server-shard', 'linux'], ['trace-shard', 'linux'], ['test-macos', 'macos']] as const) {
-      expect(job(id), `${id} must install what any server file needs`)
+    for (const [id, platform] of [['server-shard', 'linux'], ['trace-shard', 'linux'], ['fast-plan', 'linux'], ['test-macos', 'macos']] as const) {
+      expect((id === 'test-macos' ? macJob : job)(id), `${id} must install what any server file needs`)
         .toMatch(new RegExp(`^ {6}- uses: \\./\\.github/actions/server-deps\\n {8}with:\\n {10}platform: ${platform}$`, 'm'));
     }
     const a = read(DEPS);
-    // The miss arm of the apt install (D-6770): the hit arm dpkg-installs the cached packages first.
-    expect(a).toMatch(/^ {4}- name: Install system dependencies \(linux\)\n(?: {6}.*\n)*? {8}sudo apt-get update && sudo apt-get install -y tmux jq strace python3$/m);
-    expect(a).toMatch(/^ {4}- name: Install system dependencies \(macos\)\n {6}if: inputs\.platform == 'macos'\n {6}shell: bash\n {6}run: brew install bash tmux flock jq coreutils$/m);
+    // The miss arm of the apt install (D-6770): the hit arm dpkg-installs the cached packages first, and the miss
+    // arm runs under a deadline with one retry (D-7686).
+    expect(a).toMatch(/^ {4}- name: Install system dependencies \(linux\)\n(?: {6}.*\n)*? {8}\.github\/ci\/apt-bounded\.sh 180 sh -c 'apt-get update && apt-get install -y tmux jq strace python3'$/m);
+    expect(a).toMatch(/^ {4}- name: Install system dependencies \(macos\)\n {6}if: inputs\.platform == 'macos'\n {6}shell: bash\n {6}run: \.github\/ci\/bounded\.sh 300 brew install bash tmux flock jq coreutils$/m);
     for (const pkg of ['server', 'agent', 'pwa']) {
-      expect(a, `server-deps no longer installs ${pkg}/`).toMatch(new RegExp(`^ {6}working-directory: ${pkg}\\n {6}run: npm ci$`, 'm'));
+      expect(a, `server-deps no longer installs ${pkg}/`).toMatch(new RegExp(`^ {6}working-directory: ${pkg}\\n {6}run: \\.\\./\\.github/ci/bounded\\.sh 180 npm ci$`, 'm'));
     }
     // ui too: pwa reads it as source (the census above), and the cache entry holds all four trees.
-    expect(a).toMatch(/^ {6}working-directory: ui\n {6}run: npm ci$/m);
+    expect(a).toMatch(/^ {6}working-directory: ui\n {6}run: \.\.\/\.github\/ci\/bounded\.sh 180 npm ci$/m);
+  });
+});
+
+// ── D-7686: no apt-get can hold a job to its limit ──────────────────────────
+describe('apt runs only when needed, and never without a deadline (D-7686)', () => {
+  /** The Linux apt step's `run: |` body from server-deps (a composite step: 6-space keys, 8-space script). */
+  const aptStep = (): string => {
+    const all = read(DEPS).split(/^(?= {4}- )/m);
+    const st = all.find((p) => p.startsWith('    - name: Install system dependencies (linux)\n'));
+    expect(st, 'no Linux apt step').toBeDefined();
+    const lines = st!.split('\n');
+    const at = lines.findIndex((l) => /^ {6}run: \|$/.test(l));
+    expect(at, 'the apt step has no `run: |`').toBeGreaterThan(-1);
+    const body: string[] = [];
+    for (const l of lines.slice(at + 1)) {
+      if (l !== '' && !l.startsWith(' '.repeat(8))) break;
+      body.push(l.slice(8));
+    }
+    return body.join('\n').replace(/\n+$/, '\n');
+  };
+
+  /**
+   * A PATH holding ONLY fakes plus the few real tools the step and apt-bounded.sh use, so "is tmux in the image"
+   * is decided by `present`, not by the box running the test. sudo and timeout pass straight through (timeout drops
+   * its `-k N LIMIT`), so the argv that reaches apt-get is the one the runner would run as root.
+   */
+  const sandbox = (present: string[], aptFailures: number) => {
+    const real = (bin: string): string => execFileSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' }).trim();
+    const log = join(mkTmp('ccrc-apt-log-'), 'log');
+    writeFileSync(log, '');
+    const count = `${log}.n`;
+    writeFileSync(count, '0');
+    const fakes: Record<string, string> = {
+      sudo: `echo "sudo $*" >> '${log}'\nexec "$@"`,
+      timeout: `echo "timeout $1 $2 $3" >> '${log}'\nshift 3\nexec "$@"`,
+      pkill: `echo "pkill $*" >> '${log}'`,
+      'apt-get': `echo "apt-get $*" >> '${log}'\nn=$(cat '${count}'); echo $((n + 1)) > '${count}'\n[ "$n" -ge ${aptFailures} ]`,
+    };
+    for (const bin of present) fakes[bin] = 'exit 0';
+    const dir = fakeBin(fakes);
+    for (const bin of ['bash', 'sh', 'env', 'cat', 'mkdir', 'cp']) execFileSync('ln', ['-s', real(bin), join(dir, bin)]);
+    const script = join(mkTmp('ccrc-apt-step-'), 'step.sh');
+    writeFileSync(script, aptStep());
+    const r = spawnSync(real('bash'), ['--noprofile', '--norc', '-eo', 'pipefail', script], {
+      cwd: REPO, encoding: 'utf8',
+      env: { PATH: dir, HIT: '', RUNNER_TEMP: mkTmp('ccrc-apt-rt-'), GITHUB_OUTPUT: join(mkTmp('ccrc-apt-out-'), 'out') },
+    });
+    return { status: r.status, stdout: r.stdout, log: readFileSync(log, 'utf8') };
+  };
+
+  it('all four in the image: the step installs nothing and calls no sudo', () => {
+    const r = sandbox(['tmux', 'jq', 'strace', 'python3'], 0);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('no apt');
+    expect(r.log, 'apt ran although every package is in the image').toBe('');
+  });
+
+  it('one missing: apt runs as root under the deadline, once when it succeeds', () => {
+    const r = sandbox(['tmux', 'jq', 'python3'], 0);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('not in the image: strace');
+    expect(r.log).toMatch(/^sudo env PATH=\S+ timeout -k 10 180 sh -c apt-get update && apt-get install -y tmux jq strace python3$/m);
+    expect(r.log.match(/^timeout -k 10 180$/gm), 'one attempt').toHaveLength(1);
+    expect(r.log).toContain('apt-get update\napt-get install -y tmux jq strace python3\n');
+  });
+
+  it('a failed (or timed-out) attempt is retried once, after killing what it left behind', () => {
+    const r = sandbox(['tmux', 'jq', 'python3'], 1);
+    expect(r.status).toBe(0);
+    expect(r.log.match(/^timeout -k 10 180$/gm), 'two attempts').toHaveLength(2);
+    expect(r.log).toContain('sudo pkill -KILL -x apt-get');
+    expect(r.stdout).toContain('::warning::apt-bounded: attempt 1 of 2');
+  });
+
+  it('two failures fail the step — never a third attempt', () => {
+    const r = sandbox(['tmux', 'jq', 'python3'], 99);
+    expect(r.status).not.toBe(0);
+    expect(r.log.match(/^timeout -k 10 180$/gm), 'exactly two attempts').toHaveLength(2);
+  });
+
+  it('every apt-get in the workflows goes through apt-bounded.sh, and storybook-a11y\'s apt half is bounded too', () => {
+    const files = ['.github/workflows/ci.yml', '.github/workflows/macos.yml', DEPS];
+    for (const f of files) {
+      const code = read(f).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+      expect(code, `${f}: a bare sudo apt-get`).not.toMatch(/\bsudo apt-get\b/);
+      expect(code, `${f}: --with-deps runs apt with no deadline`).not.toMatch(/--with-deps/);
+    }
+    const sb = steps(job('storybook-a11y')).find((st) => /playwright install-deps/.test(st));
+    expect(sb, 'storybook-a11y no longer installs the browser libraries').toBeDefined();
+    expect(sb).toMatch(/^ {8}timeout-minutes: \d+$/m);
+    expect(sb).toMatch(/^ {10}\.\.\/\.github\/ci\/apt-bounded\.sh \d+ \.\/node_modules\/\.bin\/playwright install-deps chromium$/m);
+    expect(sb).toMatch(/^ {10}\.\.\/\.github\/ci\/bounded\.sh \d+ \.\/node_modules\/\.bin\/playwright install chromium$/m);
+  });
+});
+
+// ── D-7689: every install command has a deadline and one retry ───────────────
+describe('every install command runs under a deadline, at most twice (D-7689)', () => {
+  const BOUNDED = join(REPO, '.github', 'ci', 'bounded.sh');
+  const real = (bin: string): string => execFileSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' }).trim();
+
+  /**
+   * Runs bounded.sh with a PATH of fakes only: `deadline` is the fake deadline tool's name (timeout, gtimeout, or
+   * none — then the script must fall back to perl), and `install` fails its first `failures` calls.
+   */
+  const sandbox = (deadline: 'timeout' | 'gtimeout' | 'none', failures: number, args?: string[]) => {
+    const log = join(mkTmp('ccrc-bounded-log-'), 'log');
+    writeFileSync(log, '');
+    const count = `${log}.n`;
+    writeFileSync(count, '0');
+    const fakes: Record<string, string> = {
+      install: `echo "install $*" >> '${log}'\nn=$(cat '${count}'); echo $((n + 1)) > '${count}'\n[ "$n" -ge ${failures} ]`,
+    };
+    if (deadline !== 'none') fakes[deadline] = `echo "${deadline} $1 $2 $3" >> '${log}'\nshift 3\nexec "$@"`;
+    const dir = fakeBin(fakes);
+    for (const bin of ['bash', 'sh', 'env', 'cat', 'perl']) execFileSync('ln', ['-s', real(bin), join(dir, bin)]);
+    const r = spawnSync(real('bash'), [BOUNDED, ...(args ?? ['90', 'install', 'ci'])], {
+      encoding: 'utf8', env: { PATH: dir }, timeout: 30_000,
+    });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr, log: readFileSync(log, 'utf8') };
+  };
+
+  it('a command that succeeds runs once, under `timeout -k 10 <seconds>`', () => {
+    const r = sandbox('timeout', 0);
+    expect(r.status).toBe(0);
+    expect(r.log).toBe('timeout -k 10 90\ninstall ci\n');
+  });
+
+  it('a failed (or timed-out) attempt is retried once, with a warning; two failures fail — never a third attempt', () => {
+    const once = sandbox('timeout', 1);
+    expect(once.status).toBe(0);
+    expect(once.log.match(/^install ci$/gm), 'two attempts').toHaveLength(2);
+    expect(once.stdout).toContain('::warning::bounded: attempt 1 of 2 failed or passed 90s: install ci');
+    const never = sandbox('timeout', 99);
+    expect(never.status).not.toBe(0);
+    expect(never.log.match(/^install ci$/gm), 'exactly two attempts').toHaveLength(2);
+  });
+
+  it('macOS: gtimeout (coreutils) when there is no timeout, and perl\'s alarm when there is neither — never no deadline', () => {
+    const g = sandbox('gtimeout', 0);
+    expect(g.status).toBe(0);
+    expect(g.log).toBe('gtimeout -k 10 90\ninstall ci\n');
+    // The perl arm, for real: a command that would sleep 30 s is cut at 1 s, twice, and the script fails.
+    const dir = fakeBin({ hang: 'exec perl -e "sleep 30"' });
+    for (const bin of ['bash', 'perl']) execFileSync('ln', ['-s', real(bin), join(dir, bin)]);
+    const t0 = Date.now();
+    const r = spawnSync(real('bash'), [BOUNDED, '1', 'hang'], { encoding: 'utf8', env: { PATH: dir }, timeout: 25_000 });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout.match(/::warning::bounded: attempt [12] of 2/g)).toHaveLength(2);
+    expect(Date.now() - t0, 'the perl deadline did not cut the command').toBeLessThan(15_000);
+  });
+
+  it('refuses a missing or non-numeric deadline', () => {
+    for (const args of [['install'], ['soon', 'install'], ['0', 'install']]) {
+      const r = sandbox('timeout', 0, args);
+      expect(r.status, args.join(' ')).toBe(2);
+      expect(r.log, 'ran anyway').toBe('');
+    }
+  });
+
+  /** Code lines only (comments dropped) of every workflow and composite action. */
+  const sources = (): Array<[string, string]> => {
+    const workflows = readdirSync(join(REPO, '.github', 'workflows')).filter((f) => /\.ya?ml$/.test(f))
+      .map((f) => `.github/workflows/${f}`);
+    const actions = readdirSync(join(REPO, '.github', 'actions')).map((d) => `.github/actions/${d}/action.yml`)
+      .filter((f) => existsSync(join(REPO, f)));
+    expect(workflows, 'the workflow scan went vacuous').toContain(CI);
+    expect(actions, 'the composite-action scan went vacuous').toContain(DEPS);
+    return [...workflows, ...actions].map((f) => [f, read(f).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')]);
+  };
+
+  it('every npm ci, brew install and playwright browser download goes through bounded.sh, with a deadline of at most 5 minutes', () => {
+    let seen = 0;
+    for (const [f, code] of sources()) {
+      for (const m of code.matchAll(/^.*\b(?:npm ci|brew install|playwright install(?!-deps))\b.*$/gm)) {
+        if (/^\s*(?:- )?(?:name|description):/.test(m[0])) continue; // prose, not a command
+        seen++;
+        const bound = /(?:^|\s)(?:\.\.\/)?\.github\/ci\/bounded\.sh (\d+) (?:npm ci|brew install|\.\/node_modules\/\.bin\/playwright install)\b/.exec(m[0]);
+        expect(bound, `${f}: an install with no deadline: ${m[0].trim()}`).not.toBeNull();
+        expect(Number(bound![1]), `${f}: ${m[0].trim()}`).toBeLessThanOrEqual(300);
+      }
+    }
+    expect(seen, 'the install census went vacuous').toBeGreaterThanOrEqual(14);
+  });
+
+  it('every cache restore (actions/cache/restore and setup-node\'s npm cache) gives up on a stalled download after 3 minutes', () => {
+    // @actions/cache reads SEGMENT_DOWNLOAD_TIMEOUT_MINS (default 10) and treats a download past it as a MISS, so a
+    // stalled restore falls to the bounded npm ci instead of holding the job. Workflow-level, so the composite's
+    // restore steps and every setup-node inherit it.
+    for (const f of [CI, MACOS]) {
+      expect(read(f), f).toMatch(/^env:\n(?: {2}.*\n| *\n)*? {2}SEGMENT_DOWNLOAD_TIMEOUT_MINS: '3'$/m);
+    }
   });
 });
 
@@ -1144,7 +1435,10 @@ describe('ci.yml: dependencies are installed once per run, and handed to the job
     for (const st of saves) expect(st, 'a save that runs without save: true').toMatch(/if: .*inputs\.save == 'true'/);
     expect(a, 'actions/cache itself would save on every caller').not.toMatch(/uses: actions\/cache@/);
     const callers = [...jobs(read(CI))].filter(([, b]) => /^ {6}- uses: \.\/\.github\/actions\/server-deps$/m.test(b));
-    expect(callers.map(([id]) => id).sort()).toEqual(['deps', 'node-floor', 'pwa-shard', 'pwa-static', 'server-perf', 'server-shard', 'test-macos', 'trace-shard']);
+    expect(callers.map(([id]) => id).sort()).toEqual(['deps', 'fast-plan', 'mask-perf', 'node-floor', 'pwa-shard', 'pwa-static', 'server-perf', 'server-shard', 'trace-shard']);
+    const macCallers = [...jobs(read(MACOS))].filter(([, b]) => /^ {6}- uses: \.\/\.github\/actions\/server-deps$/m.test(b));
+    expect(macCallers.map(([id]) => id)).toEqual(['test-macos']);
+    for (const [id, b] of macCallers) expect(/save: 'true'/.test(b), `${id}: only deps may save`).toBe(false);
     for (const [id, b] of callers) {
       const saves = /save: 'true'/.test(b);
       expect(saves, `${id}: only deps may save`).toBe(id === 'deps');
@@ -1163,8 +1457,9 @@ describe('ci.yml: dependencies are installed once per run, and handed to the job
   });
 
   it('server shards, trace shards and the Node floor need deps but still run when it fails (a fallback install)', () => {
-    for (const id of ['server-shard', 'trace-shard']) {
-      expect(needs(job(id)), id).toEqual(['deps', 'select']);
+    // server-shard needs fast-plan too: a fast pull request runs its matrix (operator ruling 2026-10-28).
+    for (const [id, want] of [['server-shard', ['deps', 'fast-plan', 'select']], ['trace-shard', ['deps', 'select']], ['fast-plan', ['deps', 'select']]] as const) {
+      expect(needs(job(id)), id).toEqual(want);
       expect(jobKey(job(id), 'if'), id).toMatch(/^\$\{\{ !cancelled\(\) && /);
     }
     expect(needs(job('node-floor'))).toEqual(['deps', 'select']); // select lends only its floor output (D-6771)
@@ -1176,7 +1471,7 @@ describe('ci.yml: dependencies are installed once per run, and handed to the job
   it('pwa is typechecked once per run: test (pwa) runs tsc, build-pwa runs vite build alone', () => {
     const build = job('build-pwa').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     expect(build, 'build-pwa runs tsc a second time through `npm run build`').not.toMatch(/npm run build/);
-    expect(build).toMatch(/^ {8}run: npm ci && \.\/node_modules\/\.bin\/vite build$/m);
+    expect(build).toMatch(/^ {8}run: \.\/node_modules\/\.bin\/vite build$/m);
     expect(build).not.toMatch(/\btsc\b[^\n]*--noEmit/);
     expect(step(job('test'), 'Typecheck')).toMatch(/^ {8}run: \.\/node_modules\/\.bin\/tsc --noEmit$/m);
     // package.json's build is still `tsc && vite build` for a developer's `npm run build`; the CI step is its second half.
@@ -1228,8 +1523,8 @@ describe('ci.yml: the node-floor leg runs on exactly the declared floor (spec 20
     expect(needs(b)).toEqual(['deps', 'select']);
   });
 
-  it('skips by STEP, on a refresh, a rebuild or a pull request that left its inputs alone (D-6771)', () => {
-    const leg = "${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && needs.select.outputs.floor != 'true')) && 'skip' || 'run' }}";
+  it('skips by STEP, on a refresh, a rebuild, a fast pull request or a pull request that left its inputs alone (D-6771)', () => {
+    const leg = "${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true'))) && 'skip' || 'run' }}";
     const b = job('node-floor');
     expect(b, 'the job-level leg switch').toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
     const s = steps(b);
@@ -1316,13 +1611,19 @@ describe('the node-floor leg runs every history test file on the floor interpret
 // rules it shares with the required legs (pinned above). Here: its one name,
 // its runner and deadline, and exactly what it runs.
 describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', () => {
-  it('is one job, `browser-pwa`, named `browser (pwa)`, on ubuntu-latest with a 15-minute deadline', () => {
+  it('is one job, `browser-pwa`, named `browser (pwa) i/n` over a shard matrix, on ubuntu-latest with a 20-minute deadline (D-7746)', () => {
     const b = job('browser-pwa');
-    expect(jobKey(b, 'name')).toBe('browser (pwa)');
+    expect(jobKey(b, 'name')).toBe('browser (pwa) ${{ matrix.shard }}/${{ matrix.total }}');
     const named = [...jobs(read(CI)).values()].map((x) => jobKey(x, 'name'));
-    expect(named.filter((n) => n === 'browser (pwa)'), 'two jobs report `browser (pwa)`').toHaveLength(1);
+    expect(named.filter((n) => n?.startsWith('browser (pwa)')), 'two jobs report `browser (pwa)`').toHaveLength(1);
     expect(jobKey(b, 'runs-on')).toBe('ubuntu-latest');
-    expect(jobKey(b, 'timeout-minutes')).toBe('15');
+    expect(jobKey(b, 'timeout-minutes')).toBe('20');
+    // The shards are exactly 1..total, so `--shard=i/n` covers the whole browser config.
+    const total = /^ {8}total: \[(\d+)\]$/m.exec(b)?.[1];
+    const list = /^ {8}shard: \[([\d, ]+)\]$/m.exec(b)?.[1];
+    expect(total, 'the shard matrix names no total').toBeDefined();
+    expect(list!.split(',').map((x) => Number(x.trim()))).toEqual(Array.from({ length: Number(total) }, (_, i) => i + 1));
+    expect(b).toMatch(/^ {6}fail-fast: false$/m);
   });
 
   it('checks out, sets up Node 22, installs pwa with npm ci, and runs the browser config with the local vitest', () => {
@@ -1334,14 +1635,14 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
     expect(s[1]).toMatch(/^ {6}- name: Can this change reach the browser tests\?\n/);
     expect(s[2]).toMatch(/^ {6}- uses: actions\/setup-node@v7\n/);
     expect(s[2]).toMatch(/^ {10}node-version: '22'$/m);
-    expect(s[2]).toMatch(/^ {10}cache-dependency-path: pwa\/package-lock\.json$/m);
-    expect(step(job('browser-pwa'), 'Install')).toMatch(/^ {8}working-directory: pwa\n {8}run: npm ci\n/m);
+    expect(s[2]).toMatch(/^ {10}cache-dependency-path: \|\n {12}pwa\/package-lock\.json\n {12}ui\/package-lock\.json$/m);
+    expect(step(job('browser-pwa'), 'Install')).toMatch(/^ {8}working-directory: pwa\n {8}run: \.\.\/\.github\/ci\/bounded\.sh 180 npm ci\n/m);
     // pwa reads @ccrc/ui as SOURCE and the leg's imports reach it, so ui is installed too, before the Test step.
-    expect(step(job('browser-pwa'), 'Install @ccrc/ui')).toMatch(/^ {8}working-directory: ui\n {8}run: npm ci\n/m);
+    expect(step(job('browser-pwa'), 'Install @ccrc/ui')).toMatch(/^ {8}working-directory: ui\n {8}run: \.\.\/\.github\/ci\/bounded\.sh 180 npm ci\n/m);
     expect(s.findIndex((st) => /- name: Install @ccrc\/ui$/m.test(st)), 'ui is installed before the Test step')
       .toBeLessThan(s.findIndex((st) => /- name: Test$/m.test(st)));
     expect(step(job('browser-pwa'), 'Test'))
-      .toMatch(/^ {8}working-directory: pwa\n {8}run: \.\/node_modules\/\.bin\/vitest run --config vitest\.browser\.config\.ts\n/m);
+      .toMatch(/^ {8}working-directory: pwa\n {8}run: \.\/node_modules\/\.bin\/vitest run --config vitest\.browser\.config\.ts --shard=\$\{\{ matrix\.shard \}\}\/\$\{\{ matrix\.total \}\}\n/m);
   });
 
   it('reads no secret and asks for no permission of its own', () => {
@@ -1378,7 +1679,10 @@ describe('ci.yml: the light pull-request rule for the agent, pwa and browser tes
   it('a label starts no run (default activity types), and the full-ci label forces the full suite of the next run', () => {
     expect(read(CI)).toMatch(/^ {2}pull_request:\n {2}# THE MERGE QUEUE/m);
     expect(read(CI)).not.toMatch(/^ {4}types: .*labeled/m);
-    expect(read(CI)).toContain("FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}");
+    // A head branch under train/ asks for the full suite too (operator ruling 2026-10-28), in every place the label is read.
+    const full = "FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') || startsWith(github.head_ref, 'train/') }}";
+    expect(read(CI).split(full).length - 1).toBe(4);
+    expect(read(CI)).not.toMatch(/FULL_LABEL: \$\{\{ contains\([^|]*\}\}/);
   });
 
   it('a `changed` pwa run also runs, sharded, every test reach.mjs says reads the tree from disk', () => {
@@ -1416,7 +1720,9 @@ describe('ci.yml: the session-hook budgets run in `perf (server)`, which is not 
     const b = job('server-perf');
     expect(jobKey(b, 'name')).toBe('perf (server)');
     expect(needs(b)).toEqual(['deps', 'select']);
-    expect(jobKey(b, 'if')).toBe(jobKey(job('server-shard'), 'if'));
+    // Select's half of the server shards' gate, and never on a fast pull request (operator ruling 2026-10-28).
+    expect(jobKey(b, 'if')).toBe("${{ !cancelled() && needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}");
+    expect(jobKey(job('server-shard'), 'if')).toContain("needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')");
     expect(jobKey(b, 'timeout-minutes')).toBe('20');
     // NOT REQUIRED for two weeks (operator ruling 2026-10-25): no required summary or aggregate reads it.
     for (const id of ['server', 'full-suite']) expect(needs(job(id)), `${id} must not wait on the perf job`).not.toContain('server-perf');
@@ -1457,5 +1763,237 @@ describe('ci.yml: the session-hook budgets run in `perf (server)`, which is not 
     }
     // Every `Date.now() - t0` timing in the three p95 rows is under the gate: no ungated row reads times[37].
     expect((src.match(/expect\(times\[37\]\)\.toBeLessThan\(150\)/g) ?? []).length).toBe(3);
+  });
+});
+
+// ── c1-secret-mask-wall-clock-to-perf-job: secret-mask's 2 MB slicing wall clock runs in a non-required job of its own ──
+describe('ci.yml: the secret-mask slicing row runs in `perf (secret-mask)`, a job of its own that is not required and has no promotion clock (c1-secret-mask-wall-clock-to-perf-job)', () => {
+  const MASK_TEST = 'server/test/secret-mask.test.ts';
+
+  it('is one job, named `perf (secret-mask)`, gated like the server shards, with a deadline and no part in any required summary', () => {
+    const b = job('mask-perf');
+    expect(jobKey(b, 'name')).toBe('perf (secret-mask)');
+    expect(needs(b)).toEqual(['deps', 'select']);
+    // Select's half of the server shards' gate, and never on a fast pull request (operator ruling 2026-10-28).
+    expect(jobKey(b, 'if')).toBe("${{ !cancelled() && needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}");
+    expect(jobKey(job('server-shard'), 'if')).toContain("needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')");
+    expect(jobKey(b, 'timeout-minutes')).toBe('20');
+    expect(b, 'continue-on-error would hide a red').not.toMatch(/continue-on-error/);
+  });
+
+  it('is NOT REQUIRED: the required summaries and every other job leave it out of `needs`', () => {
+    for (const id of ['server', 'full-suite']) expect(needs(job(id)), `${id} must not wait on the mask perf job`).not.toContain('mask-perf');
+    for (const [id, b] of jobs(read(CI))) {
+      expect(needs(b), `${id} must not wait on the mask perf job`).not.toContain('mask-perf');
+    }
+  });
+
+  it('runs one step, `Mask slices`: the secret-mask file only, one worker, no file parallelism, CCRC_PERF=1, the row selected by title', () => {
+    const t = step(job('mask-perf'), 'Mask slices');
+    expect(t).toMatch(/^ {10}CCRC_PERF: '1'$/m);
+    expect(t).toMatch(/^ {8}working-directory: server$/m);
+    expect(runScript(t)).toBe(
+      "./node_modules/.bin/vitest run test/secret-mask.test.ts --maxWorkers=1 --no-file-parallelism -t 'a 2 MB TUI pane history: after a warm-up pass'\n");
+  });
+
+  it('`perf (server)` carries no part of it: no `Mask slices` step and no mention of secret-mask, so its promotion clock is the hook rows\' alone', () => {
+    const b = job('server-perf');
+    expect(steps(b).filter((st) => st.includes('name: Mask slices\n')), 'the mask step belongs to mask-perf').toHaveLength(0);
+    // Comment lines are left out: the job text runs on to the next job's header, so it carries mask-perf's own leading
+    // comment, which names this row by its slug.
+    const yamlLines = b.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n');
+    expect(yamlLines, 'no step or script of perf (server) names secret-mask').not.toMatch(/secret-mask/);
+  });
+
+  it('the gated row keeps the bound, the required row pins the slices and reads no clock', () => {
+    const src = read(MASK_TEST);
+    const gatedHead = "it.runIf(process.env['CCRC_PERF'] === '1')('a 2 MB TUI pane history: after a warm-up pass";
+    const requiredHead = "it('a 2 MB TUI pane history is masked in slices of at most 64 Ki units with a pause between every two, with the same answer as one string, a key a slice cut splits included'";
+    // A row runs from its header to the next `it(` / `it.runIf(` header.
+    const rowAt = (head: string): string => {
+      const at = src.indexOf(head);
+      expect(at, `secret-mask.test.ts has no row headed ${head}`).toBeGreaterThan(-1);
+      const rest = src.slice(at + head.length);
+      const next = rest.search(/^ *it(?:\.runIf\([^\n]*?\))?\('/m);
+      return next === -1 ? rest : rest.slice(0, next);
+    };
+    expect(rowAt(gatedHead), 'the gated row keeps its threshold, unchanged').toContain('toBeLessThan(BOUND / 5)');
+    const required = rowAt(requiredHead);
+    for (const clock of ['performance.now', 'Date.now', 'process.hrtime']) {
+      expect(required, `the required slicing row must not read ${clock}: no wall-clock assertion in a required check`).not.toContain(clock);
+    }
+  });
+});
+
+// ── M8.16: the shared Markdown library is verified before it is installed ──
+describe('M8.16: build-pwa verifies the shared Markdown library before it builds', () => {
+  const SCRIPT = '.github/ci/library-provenance.sh';
+  const PROVENANCE_RUN = 'bash .github/ci/library-provenance.sh';
+  /** A step without its comment lines (a trailing comment block is read into the step before it). */
+  const code = (st: string): string => st.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  const runOf = (st: string): string | null => /^ {8}run: (.*)$/m.exec(code(st))?.[1] ?? null;
+  const buildSteps = (): string[] => steps(job('build-pwa')).map(code);
+  /** An install in any spelling: a bare or bounded `npm ci`, `npm install`/`npm i`, yarn, pnpm. */
+  const installs = (st: string): boolean =>
+    /\bnpm (?:ci|install|i|add)\b|\byarn (?:install|add)\b|\bpnpm (?:install|i|add)\b/.test(st);
+
+  it('build-pwa runs the provenance script before npm ci, then npm audit signatures, then vite build', () => {
+    const all = buildSteps();
+    const at = all.findIndex((st) => runOf(st) === PROVENANCE_RUN);
+    expect(at, 'the provenance step is missing').toBeGreaterThan(-1);
+    const setup = all.findIndex((st) => /^ {6}- uses: actions\/setup-node@/m.test(st));
+    expect(setup, 'setup-node is missing').toBeGreaterThan(-1);
+    expect(at, 'the provenance step is the first step after setup-node').toBe(setup + 1);
+    for (const st of all.slice(0, at)) expect(installs(st), `an install runs before the provenance check:\n${st}`).toBe(false);
+    const wanted = all.filter((st) => /^ {8}working-directory: pwa$/m.test(st) || runOf(st) === PROVENANCE_RUN);
+    expect(wanted.map(runOf)).toEqual([
+      PROVENANCE_RUN,
+      '../.github/ci/bounded.sh 180 npm ci',
+      '../.github/ci/bounded.sh 180 npm audit signatures',
+      './node_modules/.bin/vite build',
+    ]);
+    for (const st of wanted) {
+      expect(st, `a step without the leg switch:\n${st}`).toMatch(/^ {6}- if: env\.CCRC_LEG == 'run'$/m);
+      expect(st, 'a step that may fail soft').not.toMatch(/continue-on-error/);
+    }
+    // The pwa steps run in pwa/; the check reads the lock from the repo root.
+    expect(all[at]).not.toMatch(/working-directory/);
+  });
+
+  it('build-pwa grants attestations: read and gives GH_TOKEN to the provenance step only', () => {
+    const block = job('build-pwa');
+    expect(block).toMatch(/^ {4}permissions:\n {6}contents: read\n {6}attestations: read\n(?! {6}[a-z-]+:)/m);
+    const all = buildSteps();
+    for (const st of all) {
+      if (runOf(st) === PROVENANCE_RUN) {
+        expect(st).toMatch(/^ {8}env:\n {10}GH_TOKEN: \$\{\{ github\.token \}\}$/m);
+      } else {
+        expect(st, `GH_TOKEN reaches a step other than the provenance check:\n${st}`).not.toMatch(/GH_TOKEN/);
+      }
+    }
+    expect(block.split('\n').filter((l) => !/^\s*#/.test(l)).filter((l) => /^ {4}env:/.test(l)).length).toBe(1);
+    expect(code(block).match(/GH_TOKEN/g) ?? []).toHaveLength(1);
+  });
+
+  it('the provenance script pins the library repo, its release workflow, the tag ref and hosted runners by exact text', () => {
+    const text = read(SCRIPT);
+    const lines = text.split('\n');
+    const times = (l: string): number => lines.filter((x) => x === l).length;
+    expect(times('REPO=Synapsium-Labs/docserver')).toBe(1);
+    expect(times('SIGNER=Synapsium-Labs/docserver/.github/workflows/release.yml')).toBe(1);
+    const verify = '"$bounded" 90 gh attestation verify "$tgz" --repo "$REPO" --signer-workflow "$SIGNER" --source-ref "refs/tags/v$version" --deny-self-hosted-runners';
+    expect(lines.filter((l) => l.trim() === verify), 'exactly one verify line').toHaveLength(1);
+    expect(text.match(/gh attestation verify/g) ?? [], 'no other mention of the verify call').toHaveLength(1);
+    expect(lines[0]).toBe('#!/usr/bin/env bash');
+    expect(lines).toContain('set -euo pipefail');
+    expect(statSync(join(REPO, SCRIPT)).mode & 0o100, 'the owner can execute it').toBe(0o100);
+  });
+
+  it('the provenance script compares the packed tarball sha512 with the lock integrity before it verifies the attestation', () => {
+    const text = read(SCRIPT);
+    expect(text).toContain('packages["node_modules/@synapsium-labs/docserver"]');
+    expect(text).toContain('package-lock.json');
+    const cmp = text.indexOf('if [ "$actual" = "$integrity" ]; then');
+    const verify = text.indexOf('gh attestation verify');
+    expect(cmp, 'the integrity comparison is missing').toBeGreaterThan(-1);
+    expect(verify).toBeGreaterThan(-1);
+    expect(cmp, 'the comparison comes first').toBeLessThan(verify);
+    const tail = text.slice(cmp, verify);
+    expect(tail, 'the else-branch exits non-zero').toMatch(/\n\s*else\n(?:.*\n)*?\s*exit 1\n\s*fi\n/);
+    expect(text, 'the script never reads node_modules from disk').not.toMatch(/\.\/node_modules|cat node_modules|require\('\.\/node_modules/);
+  });
+
+  it('the provenance script computes the integrity from the packed tarball, never from the lock (exact npm pack, tgz and actual lines)', () => {
+    const lines = read(SCRIPT).split('\n');
+    const times = (l: string): number => lines.filter((x) => x === l).length;
+    expect(times('"$bounded" 90 npm pack "@synapsium-labs/docserver@$version" --pack-destination "$dest" --silent || { echo "library-provenance: npm pack failed or passed its deadline twice" >&2; exit 1; }'), 'the pack line').toBe(1);
+    expect(times('tgz="$dest/synapsium-labs-docserver-$version.tgz"'), 'the tgz line').toBe(1);
+    expect(times('actual="sha512-$(openssl dgst -sha512 -binary "$tgz" | base64 -w0)"'), 'the actual line').toBe(1);
+    // `actual` has one writer, and it never reads the lock's value.
+    expect(lines.filter((l) => /^\s*actual=/.test(l)), 'one assignment of actual').toHaveLength(1);
+    expect(lines.filter((l) => /^\s*tgz=/.test(l)), 'one assignment of tgz').toHaveLength(1);
+    expect(lines.filter((l) => /^\s*integrity=/.test(l)), 'integrity is only read from the lock').toHaveLength(0);
+  });
+
+  // Linux only: the script runs only on ubuntu-latest in CI and uses GNU `base64 -w0`, which BSD base64 (the macOS legs'
+  // userland, where no gnubin joins PATH) rejects; the real-script cases would go red there for a reason that is not a defect.
+  describe.skipIf(process.platform !== 'linux')('the provenance script, run for real against fake npm, gh and timeout', () => {
+    const real = (bin: string): string => execFileSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' }).trim();
+    const VERSION = '1.2.3';
+    const TARBALL = 'the packed bytes';
+    const integrityOf = (bytes: string): string => `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
+    const run = (lockIntegrity: string, deadline: 'pass' | 'expire' | 'expire-gh' = 'pass') => {
+      const root = mkTmp('ccrc-prov-root-');
+      mkdirSync(join(root, 'pwa'));
+      writeFileSync(join(root, 'pwa', 'package-lock.json'), JSON.stringify({
+        packages: { 'node_modules/@synapsium-labs/docserver': { version: VERSION, integrity: lockIntegrity } },
+      }));
+      const log = join(mkTmp('ccrc-prov-log-'), 'log');
+      writeFileSync(log, '');
+      const dir = fakeBin({
+        // npm pack writes the tarball where --pack-destination says, as the real one does.
+        npm: `echo "npm $*" >> '${log}'\nwhile [ "$#" -gt 0 ]; do [ "$1" = --pack-destination ] && dest=$2; shift; done\nprintf '%s' '${TARBALL}' > "$dest/synapsium-labs-docserver-${VERSION}.tgz"`,
+        gh: `echo "gh $*" >> '${log}'`,
+        // bounded.sh's deadline tool: it logs its argv; `expire` is a deadline that fires (124) without running the command, `expire-gh` one that fires on gh alone.
+        timeout: `echo "timeout $1 $2 $3" >> '${log}'\n${deadline === 'expire' ? 'exit 124' : deadline === 'expire-gh' ? '[ "$4" = gh ] && exit 124\nshift 3\nexec "$@"' : 'shift 3\nexec "$@"'}`,
+      });
+      for (const bin of ['bash', 'sh', 'env', 'cat', 'dirname', 'perl', 'node', 'openssl', 'base64', 'mktemp'])
+        execFileSync('ln', ['-s', real(bin), join(dir, bin)]);
+      const r = spawnSync(real('bash'), [join(REPO, SCRIPT)], {
+        cwd: root, encoding: 'utf8', timeout: 60_000,
+        env: { PATH: dir, RUNNER_TEMP: mkTmp('ccrc-prov-rt-') },
+      });
+      return { status: r.status, stdout: r.stdout, stderr: r.stderr, log: readFileSync(log, 'utf8') };
+    };
+
+    it('a lock integrity that matches the packed bytes passes, and the attestation is then verified once, pinned', () => {
+      const r = run(integrityOf(TARBALL));
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.log.match(/^gh attestation verify /gm), 'one verify call').toHaveLength(1);
+      expect(r.log).toContain(`--repo Synapsium-Labs/docserver --signer-workflow Synapsium-Labs/docserver/.github/workflows/release.yml --source-ref refs/tags/v${VERSION} --deny-self-hosted-runners`);
+    });
+
+    it('npm pack and the attestation lookup each run under a 90 second deadline', () => {
+      const r = run(integrityOf(TARBALL));
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.log).toMatch(/^timeout -k 10 90\nnpm pack @synapsium-labs\/docserver@1\.2\.3 /m);
+      expect(r.log).toMatch(/^timeout -k 10 90\ngh attestation verify /m);
+      expect(r.log.match(/^timeout -k 10 90$/gm), 'one deadline per call').toHaveLength(2);
+    });
+
+    it('a deadline that fires on npm pack fails the script closed: nothing is compared or verified, and the pack is tried twice', () => {
+      const r = run(integrityOf(TARBALL), 'expire');
+      expect(r.status).not.toBe(0);
+      expect(r.log.match(/^timeout -k 10 90$/gm), 'one retry, no third attempt').toHaveLength(2);
+      expect(r.log, 'gh ran after the pack timed out').not.toContain('gh attestation verify');
+      // The helper's warnings stay visible (the pack's stdout is not discarded), and the script says what failed.
+      expect(r.stdout).toContain('::warning::bounded: attempt 1 of 2 failed or passed 90s: npm pack ');
+      expect(r.stderr).toContain('library-provenance: npm pack failed or passed its deadline twice');
+      expect(r.stdout, 'the match message was printed after a timed-out pack').not.toContain('matches the lock');
+    });
+
+    it('a deadline that fires on the attestation lookup fails the script closed: the lookup is tried twice and the script never reports success', () => {
+      const r = run(integrityOf(TARBALL), 'expire-gh');
+      expect(r.status).not.toBe(0);
+      expect(r.log, 'the lookup itself never ran: its deadline fired first').not.toContain('gh attestation verify');
+      expect(r.log.match(/^timeout -k 10 90$/gm), 'pack once, the lookup twice').toHaveLength(3);
+      expect(r.stdout, 'success was reported after a timed-out lookup').not.toContain('was built by');
+    });
+
+    it('a lock integrity that does not match the packed bytes fails, and the attestation is never asked', () => {
+      const r = run(integrityOf('some other bytes'));
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toContain('is not the one the lock records');
+      expect(r.log, 'gh ran although the packed bytes are not the lock\'s').not.toContain('gh attestation verify');
+    });
+  });
+
+  it('no other file under .github names the release signer workflow', () => {
+    const listed = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '.github'],
+      { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    const names = [...new Set(listed.split('\0').filter((n) => n !== ''))].filter((n) => existsSync(join(REPO, n)) && statSync(join(REPO, n)).isFile());
+    expect(names.length, 'the .github scan went vacuous').toBeGreaterThan(10);
+    const holders = names.filter((n) => read(n).includes('docserver/.github/workflows/release.yml')).sort();
+    expect(holders).toEqual([SCRIPT]);
   });
 });

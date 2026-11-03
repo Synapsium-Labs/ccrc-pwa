@@ -13,14 +13,24 @@
 //                       "the open groups are ordered Needs you, Done, Working; the folded four follow"
 // The instrument-list suite's rows for these, and for PHONE_TABS alone, are that file's header's.
 import { describe, it, expect, expectTypeOf, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import ts from 'typescript';
 import { createElement } from 'react';
 import { render, cleanup } from '@testing-library/react';
 import type { FleetSession, SessionBucket } from '../../shared/api';
-import { groupByStatus, needsReason, STATUS_GROUPS } from '../src/fleet/statusGroups';
-import { BUCKET_ORDER, sortFleet } from '../src/fleet/sortFleet';
+import {
+  groupByStatus, needsReason, PROGRAMMES_GROUP, STATUS_GROUPS, statusGroupLabel, statusView, statusViewTotal, type BoxClock,
+} from '../src/fleet/statusGroups';
+import { fleetTree } from '../src/fleet/fleetTree';
+import { asking, HOUR, MIN, NOW, run, sess } from './rollupFixture';
+import { withRunBinding } from './runBindingFixture';
+import { sortFleet } from '../src/fleet/sortFleet';
+import { BUCKET_ORDER } from '../../shared/api';
 import { BucketBar } from '../src/fleet/BucketBar';
 import type { Acks } from '../src/lib/seen';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
+import { parseTs } from './literalWalker';
 
 const s = (over: Partial<FleetSession>): FleetSession =>
   fleetSession({ id: 'x', wrapper: 'claude9', home: 'claude9', project: 'p', workdir: '/p', statusUpdatedAt: 0, ...over });
@@ -31,14 +41,14 @@ describe('groupByStatus (D-5473)', () => {
   it('the open groups are ordered Needs you, Done, Working; the folded four follow', () => {
     const g = groupByStatus([], {});
     expect(g.map((x) => x.bucket)).toEqual(['attention', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
-    expect(g.map((x) => x.label)).toEqual(['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Dead']);
+    expect(g.map((x) => x.label)).toEqual(['Needs you', 'Done', 'Working', 'Idle', 'Cleanup', 'Archived', 'Exited']);
     expect(g.map((x) => x.folds)).toEqual([false, false, false, true, true, true, true]);
     // An empty group is kept, with a count of 0: the view decides.
     expect(g.every((x) => x.sessions.length === 0 && x.unseen === 0)).toBe(true);
   });
 
-  it('a dead session still dialogPending is in Dead, not Needs you', () => {
-    const killed = s({ id: 'k', status: 'dead', dialogPending: true, hookState: 'waiting', bucket: 'dead' });
+  it('a dead session still dialogPending is in Exited, not Needs you', () => {
+    const killed = s({ id: 'k', status: 'dead', lifecycle: DEAD_LIFECYCLE, dialogPending: true, hookState: 'waiting', bucket: 'dead' });
     const g = groupByStatus([killed], {});
     expect(g.find((x) => x.bucket === 'attention')!.sessions).toEqual([]);
     expect(g.find((x) => x.bucket === 'dead')!.sessions.map((x) => x.id)).toEqual(['k']);
@@ -82,8 +92,8 @@ describe('groupByStatus (D-5473)', () => {
       // Never acked and dated: `isUnseenAt` alone would count it; the BADGED
       // precondition in `isUnseen` does not.
       s({ id: 'idle-never', bucket: 'idle', bucketSince: 300 }),
-      s({ id: 'clean-new', bucket: 'cleanup', status: 'dead', archivedAt: 1, bucketSince: 700 }),
-      s({ id: 'dead-new', bucket: 'dead', status: 'dead', bucketSince: 600 }),
+      s({ id: 'clean-new', bucket: 'cleanup', status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1, bucketSince: 700 }),
+      s({ id: 'dead-new', bucket: 'dead', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucketSince: 600 }),
     ];
     const acks: Acks = { 'att-seen': 200 };
     const g = groupByStatus(fleet, acks);
@@ -95,12 +105,162 @@ describe('groupByStatus (D-5473)', () => {
     const barUnseen = new Map<SessionBucket, number>();
     heads.forEach((head, i) => {
       const badge = head.querySelector('.bucket-head-unseen');
-      barUnseen.set(shown[i]!, badge === null ? 0 : Number(badge.textContent));
+      barUnseen.set(shown[i]!, badge === null ? 0 : Number.parseInt(badge.textContent ?? '', 10));
     });
 
     for (const group of g) expect(group.unseen).toBe(barUnseen.get(group.bucket) ?? 0);
     expect(g.find((x) => x.bucket === 'idle')!.unseen).toBe(0);
     expect(g.find((x) => x.bucket === 'attention')!.unseen).toBe(1);
+  });
+});
+
+// Task G3 (D-7333): the Status view's groups, given the fleet's tree. RED FIRST on main (34ee3e3f8): `statusView` is absent.
+describe('statusView (Task G3, D-7333)', () => {
+  const coord = (id: string, project: string, over: Partial<FleetSession> = {}): FleetSession =>
+    sess(id, project, { role: 'coordinator', bucket: 'working', status: 'busy', ...over });
+  const fleet: FleetSession[] = [
+    coord('c1', 'project-a'),
+    sess('k1', 'project-a', asking({ ask: { state: 'held', parentId: 'c1', answeredBy: null } })),
+    sess('k2', 'project-a', { bucket: 'done' }),
+    coord('c2', 'project-b', { bucket: 'idle', status: 'idle' }),
+    sess('k3', 'project-b', { bucket: 'working', status: 'busy' }),
+    sess('far', 'project-b', { bucket: 'done' }),
+    sess('lone-a', 'project-a', asking({ ask: null })),
+    sess('lone-d', 'project-b', { bucket: 'done' }),
+  ];
+  const runs = [
+    run(1, 'c1', 'k1', { program: 'prog-a', project: 'project-a' }), run(2, 'c1', 'k2', { program: 'prog-a', project: 'project-a' }),
+    run(3, 'c2', 'k3', { program: 'prog-b', project: 'project-b' }), run(4, 'c1', 'far', { program: 'prog-a', project: 'project-b' }),
+  ];
+  const lookupIn = (s: readonly FleetSession[]) => (id: string): FleetSession | null => s.find((x) => x.id === id) ?? null;
+  /** A current server's frame: each session carries its run binding over the runs (D-7461). */
+  const statusOf = (s: FleetSession[], r: typeof runs, selectedId: string | null, frameSeen: boolean, clock?: BoxClock) => {
+    const b = withRunBinding(s, r);
+    return statusView(b, fleetTree(b, ['project-a', 'project-b'], r), {}, selectedId, lookupIn(b), frameSeen, clock);
+  };
+  const view = (s: FleetSession[] = fleet, r = runs) => statusOf(s, r, null, true);
+  const ids = (xs: readonly FleetSession[]): string[] => xs.map((x) => x.id);
+
+  it('the groups are Needs you, Programmes, then the buckets, Programmes labelled and open', () => {
+    expect(view().map((g) => g.id)).toEqual(['attention', 'programmes', 'done', 'working', 'idle', 'cleanup', 'archived', 'dead']);
+    expect(statusGroupLabel('programmes')).toBe('Programmes');
+    expect(PROGRAMMES_GROUP.folds).toBe(false);
+  });
+
+  it('a box needing the operator is in Needs you before the lone asks; the other box is in Programmes', () => {
+    const [needs, programmes, done] = view();
+    expect(needs!.boxes.map((b) => b.view.coordinatorId)).toEqual(['c1']);
+    expect(ids(needs!.sessions)).toEqual(['lone-a']);
+    expect(programmes!.boxes.map((b) => [b.view.coordinatorId, b.state, b.project])).toEqual([['c2', 'moving', 'project-b']]);
+    expect(ids(done!.sessions)).toEqual(['lone-d']);
+  });
+
+  it('a member is hidden, and in its tray only while it asks; a far worker is a member too', () => {
+    const g = view();
+    const all = g.flatMap((x) => ids(x.sessions));
+    for (const id of ['c1', 'c2', 'k1', 'k2', 'k3', 'far']) expect(all, id).not.toContain(id);
+    expect(g[0]!.boxes[0]!.tray.rows.map((r) => (r.kind === 'session' ? r.session.id : ''))).toEqual(['k1']);
+    expect(g[0]!.boxes[0]!.tray.summary).toBeNull();
+    const asksFar = fleet.map((x) => (x.id === 'far' ? { ...x, ...asking({ ask: null }) } : x));
+    expect(view(asksFar)[0]!.boxes[0]!.tray.rows.map((r) => (r.kind === 'session' ? r.session.id : ''))).toEqual(['k1', 'far']);
+  });
+
+  it('a box that needs you only through a far worker is in Needs you, with that worker in its tray', () => {
+    const s = fleet.map((x) => (x.id === 'k1' ? { ...x, ...sess('k1', 'project-a', { bucket: 'working', status: 'busy' }) }
+      : x.id === 'far' ? { ...x, ...asking({ ask: null }) } : x));
+    const [needs, programmes] = view(s);
+    expect(needs!.boxes.map((b) => [b.view.coordinatorId, b.state])).toEqual([['c1', 'needs']]);
+    expect(needs!.boxes[0]!.tray.rows.map((r) => (r.kind === 'session' ? r.session.id : ''))).toEqual(['far']);
+    expect(programmes!.boxes.map((b) => b.view.coordinatorId)).toEqual(['c2']);
+  });
+
+  it('every group counts what it draws, and All is their sum', () => {
+    const g = view();
+    for (const x of g) expect(x.count, x.id).toBe(x.boxes.length + x.sessions.length);
+    expect(g.map((x) => x.count)).toEqual([2, 1, 1, 0, 0, 0, 0, 0]);
+    expect(statusViewTotal(g)).toBe(4);
+  });
+
+  it('Needs you is held while it draws anything; Mark all seen covers what a group draws, coordinators included', () => {
+    const g = view();
+    expect(g.map((x) => x.held)).toEqual([true, false, false, false, false, false, false, false]);
+    expect(ids(g[0]!.seen)).toEqual(['c1', 'k1', 'lone-a']);
+    expect(ids(g[1]!.seen)).toEqual(['c2']);
+  });
+
+  it('the session the operator has open stays in its box\'s tray (G3\'s Step 0 ruling), and makes no box need anything', () => {
+    const g = statusOf(fleet, runs, 'k3', true);
+    expect(g[1]!.boxes[0]!.tray.rows.map((r) => (r.kind === 'session' ? r.session.id : ''))).toEqual(['k3']);
+    expect(g[1]!.boxes[0]!.state).toBe('moving');
+    expect(g[1]!.count).toBe(1);
+  });
+
+  it('a worker whose claimant is a box nowhere stays a row of its own', () => {
+    const s = [...fleet, sess('orphan', 'project-a', { bucket: 'working', status: 'busy' })];
+    const g = view(s, [...runs, run(9, 'nobody', 'orphan', { program: 'prog-z', project: 'project-a' })]);
+    expect(ids(g.find((x) => x.id === 'working')!.sessions)).toEqual(['orphan']);
+  });
+
+  it('a claimant measured dead keeps none of its workers: its box is gone and draws, its children are rows of their own (fix round 2)', () => {
+    const dead = { status: 'dead' as const, presence: 'dead' as const, bucket: 'dead' as const, lifecycle: 'orphan' as const };
+    const s = fleet.map((x) => (x.id === 'c1' ? { ...x, ...dead } : x));
+    const g = view(s);
+    const all = g.flatMap((x) => x.boxes);
+    expect(all.find((b) => b.view.coordinatorId === 'c1')).toMatchObject({ gone: true, state: 'moving', tray: { rows: [] } });
+    expect(all.find((b) => b.view.coordinatorId === 'c2')!.gone).toBe(false);
+    // k1 asks, k2 is done, far is done on another card: each a row of its own, in its own status's group.
+    expect(ids(g.find((x) => x.id === 'attention')!.sessions)).toEqual(expect.arrayContaining(['k1', 'lone-a']));
+    expect(ids(g.find((x) => x.id === 'done')!.sessions)).toEqual(expect.arrayContaining(['k2', 'far']));
+    // The frame unseen measures nothing, so nothing is gone.
+    const unseen = statusOf(s, runs, null, false);
+    expect(unseen.flatMap((x) => x.boxes).every((b) => !b.gone)).toBe(true);
+  });
+
+  // Task G1c (D-7380, D-7373, D-7376): the Status view's boxes read stalled or paused exactly as a project card's do, from the
+  // moves on the runs (`runLastMove`), the stall watch's quiet time and the operator's pause, handed in as one clock.
+  describe('movement: the box reads stalled or paused as its card does (Task G1c, D-7380)', () => {
+    const QUIET = 2 * HOUR;
+    const clock = (over: Partial<BoxClock> = {}): BoxClock => ({ now: NOW, quietMs: QUIET, paused: false, ...over });
+    /** `fleet`'s runs, the programme of `c2` last moved at `at`, and c1's a minute ago. */
+    const moved = (at: number | null) => runs.map((r) => ({ ...r, lastMoveAt: r.claimedBy === 'c2' ? at : NOW - MIN }));
+    const stateOf = (g: ReturnType<typeof statusOf>, coordinator: string): string | undefined =>
+      g.flatMap((x) => x.boxes).find((b) => b.view.coordinatorId === coordinator)?.state;
+
+    it('a box quiet for the threshold reads stalled, and one a millisecond short of it reads moving', () => {
+      expect(stateOf(statusOf(fleet, moved(NOW - QUIET), null, true, clock()), 'c2')).toBe('stalled');
+      expect(stateOf(statusOf(fleet, moved(NOW - QUIET + 1), null, true, clock()), 'c2')).toBe('moving');
+    });
+
+    it('the threshold is the frame\'s own quiet time, never a default (D-7376)', () => {
+      const r = moved(NOW - 150 * MIN);
+      expect(stateOf(statusOf(fleet, r, null, true, clock({ quietMs: 3 * HOUR })), 'c2')).toBe('moving');
+      expect(stateOf(statusOf(fleet, r, null, true, clock({ quietMs: HOUR })), 'c2')).toBe('stalled');
+    });
+
+    it('with no quiet time a box never stalls, however long it has been quiet', () => {
+      expect(stateOf(statusOf(fleet, moved(NOW - 5 * HOUR), null, true, clock({ quietMs: null })), 'c2')).toBe('moving');
+    });
+
+    it('under the operator\'s pause a quiet box reads paused, never stalled, and a box that needs you still needs you', () => {
+      const g = statusOf(fleet, moved(NOW - 3 * HOUR), null, true, clock({ paused: true }));
+      expect(stateOf(g, 'c2')).toBe('paused');
+      expect(stateOf(g, 'c1')).toBe('needs');
+    });
+
+    it('Programmes runs stalled first, then moving (spec §2.7)', () => {
+      const s = [...fleet, coord('c3', 'project-a'), sess('k4', 'project-a', { bucket: 'working', status: 'busy' })];
+      const r = [...moved(NOW - QUIET), { ...run(7, 'c3', 'k4', { program: 'prog-c', project: 'project-a' }), lastMoveAt: NOW - MIN }];
+      const programmes = statusOf(s, r, null, true, clock()).find((x) => x.id === 'programmes')!;
+      expect(programmes.boxes.map((b) => [b.view.coordinatorId, b.state])).toEqual([['c2', 'stalled'], ['c3', 'moving']]);
+    });
+  });
+
+  it('with no open run it is groupByStatus exactly, and no Programmes', () => {
+    const g = view(fleet, []);
+    const today = groupByStatus(fleet, {});
+    expect(g.filter((x) => x.id !== 'programmes').map((x) => [x.id, ids(x.sessions), x.unseen])).toEqual(
+      today.map((x) => [x.bucket, ids(x.sessions), x.unseen]));
+    expect(g.find((x) => x.id === 'programmes')!.count).toBe(0);
   });
 });
 
@@ -142,9 +302,33 @@ describe('needsReason (D-5473, D-5497)', () => {
 
   it('a session outside Needs you has no reason, whatever its fields say', () => {
     expect(needsReason(s({ bucket: 'working', substrate: { at: 1, text: 'x' } }))).toBeNull();
-    expect(needsReason(s({ bucket: 'dead', status: 'dead', dialogPending: true, ask: { state: 'held', parentId: 'p', answeredBy: null } }))).toBeNull();
+    expect(needsReason(s({ bucket: 'dead', status: 'dead', lifecycle: DEAD_LIFECYCLE, dialogPending: true, ask: { state: 'held', parentId: 'p', answeredBy: null } }))).toBeNull();
     expect(needsReason(s({
       bucket: 'working', withCoordinator: { kind: 'approval', parentId: 'p-coord', since: 1, notifyAt: 2 },
     }))).toBeNull();
   });
+});
+
+// T3a (D-6331): the chips and the group heads speak ONE vocabulary. `BucketBar` used to type its own table of bucket
+// words, so a rename in `STATUS_GROUPS` left the two surfaces saying different things ("Attention" and "Needs you",
+// "Dead" and "Exited"). A SOURCE check, because no render can tell a derived word from a typed one that happens to match.
+it('BucketBar.tsx derives SECTION_LABEL from STATUS_GROUPS and holds no bucket-word literal', () => {
+  const file = path.join(import.meta.dirname, '..', 'src', 'fleet', 'BucketBar.tsx');
+  expect(readFileSync(file, 'utf8')).toMatch(/\bSTATUS_GROUPS\b/);
+
+  /** Every string a reader of the file could see as a literal: strings, template parts and JSX text. Comments are not
+   *  nodes, so they are not read. */
+  const literals: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) literals.push(n.text);
+    else if (ts.isTemplateExpression(n)) literals.push(n.head.text, ...n.templateSpans.map((sp) => sp.literal.text));
+    else if (ts.isJsxText(n)) literals.push(n.text);
+    n.forEachChild(visit);
+  };
+  visit(parseTs(file));
+  expect(literals.length, 'the walk reads literals at all').toBeGreaterThan(3);
+
+  const words = [...Object.values(STATUS_GROUPS).map((g) => g.label), 'Attention', 'Dead'];
+  const found = literals.flatMap((text) => words.filter((w) => new RegExp(`\\b${w}\\b`).test(text)).map((w) => `${w} in "${text}"`));
+  expect(found).toEqual([]);
 });

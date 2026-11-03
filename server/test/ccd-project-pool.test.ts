@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-project-pool-'); });
@@ -1129,7 +1129,7 @@ describe('the swap.log project-line comment: rehome and auto-pool are real now',
     // (`grep -n '_lc_done rehome\|aff_verb=auto-pool' ccd/ccd`) — re-run
     // that same pattern here so a regression that silently dropped either
     // write reds this suite rather than only leaving the prose stale.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src, '`_lc_done rehome` no longer appears — the swap.log comment\'s claim is now false').toMatch(/_lc_done rehome/);
     expect(src, '`aff_verb=auto-pool` no longer appears — the swap.log comment\'s claim is now false').toMatch(/aff_verb=auto-pool/);
   });
@@ -1145,7 +1145,7 @@ describe('the `pools-v1` header states a --cross-pool arm count that stays hones
     // count ("Measured: `grep -c -- '--cross-pool)' ccd/ccd` finds exactly
     // N now") — re-run that same pattern here and require the stated N to
     // still be true.
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('and so did `--cross-pool`');
     expect(from, 'the pools-v1 --cross-pool sentence could not be found').toBeGreaterThan(-1);
     const block = src.slice(from, from + 700);

@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { LINUX, NO_COPY } from './collectRaceFixture.js';
 
 let h: PrHarness;
@@ -413,7 +413,7 @@ describe('_ws_tmproot_remove: a drop that is not complete is its 2, never its 1 
 });
 
 describe('the source: the drop prints nothing, and reuses the collector’s compare-and-drop', () => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   /** `name`'s body, from its head line to its first closing brace at column 0, or '' when it is not defined. */
   const bodyOf = (name: string): string => {
     const a = src.indexOf(`\n${name}() {`);

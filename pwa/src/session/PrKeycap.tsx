@@ -13,6 +13,7 @@ import { Keycap, elapsedShort } from '@ccrc/ui';
 import type { PrChecks, PrReason, PrState } from '../../../shared/api';
 import { UNCHECKED_PR } from '../../../shared/api';
 import { UNSUPPORTED_VERB_TEXT } from '../lib/api';
+import { prDoorWord } from './prCap';
 import './chat.css';
 
 /** Integration finding 6: "we have not looked yet" is defined ONCE, in
@@ -23,12 +24,6 @@ import './chat.css';
  *  import keeps working and so the cap and the sheet still demonstrably share
  *  one object; `server/test/single-definition.test.ts` fails on a fourth. */
 export { UNCHECKED_PR };
-
-/** A workspace session has a PR cap; a main checkout has none. ONE predicate: the header's cap renders where it holds
- *  and the palette offers `session-pr` where it holds, so neither offers a PR the other hides (W2 Task S2d). */
-export function hasPrCap<S extends { workspace: string | null }>(session: S | null): session is S {
-  return session !== null && session.workspace !== null;
-}
 
 /** '2m' | '3h' | '5d', or null under a minute — `elapsedShort`'s own answer
  *  there, which is why this cap needs nothing of its own for that case. */
@@ -93,6 +88,12 @@ const REASON_TEXT: Record<PrReason, string> = {
   // So this copy must not blame the connection — it says what is missing and
   // implies the safe consequence (ccrc will not offer cleanup on this).
   'merge-unproven': 'GitHub reports this merged but named no usable merge commit, so ccrc will not call it merged.',
+  // The third reason that is NOT a failed read, and the one a `closed` phase carries (D-7362): GitHub answered, the PR
+  // wears the landed-in-train label, and no merged train PR lists it at its head, so ccrc will not call it merged.
+  'train-unproven': 'It is labelled as landed in a merge train, but no merged train PR lists it at its head, so ccrc will not call it merged.',
+  // A FAILED read (D-7378): the same label, and the train record was not read yet. Not closed and not merged; ccrc
+  // reads the record on its own and says which once it has.
+  'train-unread': 'It is labelled as landed in a merge train, and ccrc has not read the train’s record yet. ccrc will try again.',
   // The second reason that is NOT a failed read: ccrc's registry and git
   // disagree about which branch this workspace is on, so there are two
   // candidate answers to "its PR" and ccd measured neither rather than
@@ -149,7 +150,10 @@ export function prSentence(pr: PrState, branch?: string): string {
       return `Pull request #${pr.number ?? '?'}: merged${ago === null ? '' : ` ${ago} ago`}.`;
     }
     case 'closed':
-      return `Pull request #${pr.number ?? '?'}: closed without merging. This branch's commits are not on main.`;
+      // `train-unproven` (D-7362): the PR wears the landed-in-train label, but the train record did not prove it.
+      return pr.reason === 'train-unproven'
+        ? `Pull request #${pr.number ?? '?'}: closed. ${REASON_TEXT['train-unproven']}`
+        : `Pull request #${pr.number ?? '?'}: closed without merging. This branch's commits are not on main.`;
     case 'unknown':
       return `Pull request: ${unknownReasonText(pr.reason)}${retryText(pr.retryAt)}${stale}`;
   }
@@ -252,11 +256,14 @@ export function PrKeycap(
       data-phase={state.phase}
       data-checks={state.checks ?? undefined}
       aria-label={prSentence(state)}
+      title={tooltipSentence(prSentence(state))}
       data-command={command}
       onClick={onOpen}
     >
       <span className="pr-dot" aria-hidden="true" />
+      {/* Two spans, one shown per width (chat.css): the legend below 900, the door's word from it. */}
       <span className="pr-legend">{prLegend(state)}</span>
+      <span className="keycap-word" aria-hidden="true">{prDoorWord(state)}</span>
       {glyph !== null && <span className="pr-glyph" aria-hidden="true">{glyph}</span>}
     </Keycap>
   );

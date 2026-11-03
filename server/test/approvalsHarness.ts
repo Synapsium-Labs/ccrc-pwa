@@ -80,8 +80,13 @@ export interface Approvals {
   request(body: Record<string, unknown>): Promise<LightMyRequestResponse>;
   rule(id: number, from: string, verdict: 'allow' | 'deny', extra?: Record<string, unknown>): Promise<LightMyRequestResponse>;
   release(id: number, from: string): Promise<LightMyRequestResponse>;
-  /** A server restart: a fresh server over the same store, registry and key; the old one is closed. */
+  /** A server restart: a fresh server over the same store, registry and key; the old one is closed. A restart is a new
+   *  process, so it makes a new watcher too (`f.watcher` is replaced): question state lives in one `Questions` instance
+   *  per composition, the watcher's when `buildServer` is given one (D-7026), and a server rebuilt over the OLD watcher
+   *  would keep its memory-only inputs, which no real restart does (slug restart-fresh-watcher; W3 Task Q3e). */
   restart(): Promise<void>;
+  /** The deps the fixture's server is built from, for a row that builds a second server over the same store. */
+  readonly deps: Parameters<typeof buildServer>[0];
   ruling(id: number, nonce: string): Promise<LightMyRequestResponse>;
   close(): Promise<void>;
 }
@@ -133,11 +138,11 @@ export async function approvalsFixture(over: ApprovalsFixtureOpts = {}): Promise
     ...(over.masker ? { masker: over.masker(coord.db) } : {}),
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
   };
-  const watcher = new FleetWatcher(deps, new Bus(), 10_000);
+  let watcher = new FleetWatcher(deps, new Bus(), 10_000);
   let app = await buildServer(deps, new Bus(), watcher);
   const put = (id: string, field: string, v: string): void => writeFileSync(path.join(reg, `${id}.${field}`), v);
   const f: Approvals = {
-    home, coord, app, watcher, log, sent, panes, gone, unmeasured,
+    home, coord, app, watcher, log, sent, panes, gone, unmeasured, deps,
     viewers: (deps as { viewers?: Viewers }).viewers as Viewers,
     seed(id, project, version = VERIFIED) {
       for (const [k, v] of Object.entries({ wrapper: 'claude', project, workdir: workdirOf(id), uuid: uuidOf(id), started: '1' })) put(id, k, v);
@@ -169,14 +174,20 @@ export async function approvalsFixture(over: ApprovalsFixtureOpts = {}): Promise
       if (o.coordProject === null) coord.db.prepare('UPDATE runs SET coordProject = NULL WHERE id = ?').run(r.id);
       return r.id as number;
     },
-    restart: async () => { await app.close(); app = await buildServer(deps, new Bus(), watcher); f.app = app; },
+    restart: async () => {
+      await app.close();
+      watcher = new FleetWatcher(deps, new Bus(), 10_000);
+      app = await buildServer(deps, new Bus(), watcher);
+      f.app = app; f.watcher = watcher;
+    },
     request: (body) => app.inject({ method: 'POST', url: '/api/approvals', headers: TOK, payload: body }),
     rule: (id, from, verdict, extra = {}) => app.inject({
-      method: 'POST', url: `/api/approvals/${id}/rule`, headers: TOK,
-      payload: { fromId: from, fromUuid: uuidOf(from), verdict, reason: `${verdict} by the fixture`, ...extra },
+      method: 'POST', url: `/api/questions/approval-${id}/rule`, headers: TOK,
+      payload: { kind: 'approval', fromId: from, fromUuid: uuidOf(from), verdict, reason: `${verdict} by the fixture`, ...extra },
     }),
     release: (id, from) => app.inject({
-      method: 'POST', url: `/api/approvals/${id}/release`, headers: TOK, payload: { fromId: from, fromUuid: uuidOf(from) },
+      method: 'POST', url: `/api/questions/approval-${id}/release`, headers: TOK,
+      payload: { kind: 'approval', fromId: from, fromUuid: uuidOf(from) },
     }),
     ruling: (id, nonce) => app.inject({ method: 'GET', url: `/api/approvals/${id}/ruling?nonce=${nonce}`, headers: TOK }),
     close: async () => { await app.close(); },

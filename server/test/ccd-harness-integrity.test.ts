@@ -100,12 +100,17 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'ccd-collect-race-forge.test.ts': ['_race_swap'],
   'ccd-die-containment.test.ts': ['_c', '_f', '_g', '_leaf', '_middle', '_top', '_v'],
   'ccd-leaf-root-newline.test.ts': ['_fp', '_fpp'],
+  // The loader-globals census's fixture function: it plants every write form of the loader's globals in a tmp ccd/ccd.
+  'ccd-lib-load.test.ts': ['_fx'],
   'ccd-lifecycle-emit.test.ts': ['_lc_obs_probe'],
   'ccd-limit-banner.test.ts': ['_leaky'],
   'ccd-orphan-audit.test.ts': ['_fpp'],
   'ccd-path-users-esrch.test.ts': ['_fpp'],
   'ccd-path-users-many.test.ts': ['_fpp'],
   'ccd-path-users.test.ts': ['_fpp'],
+  // Each retire-verdict cell's own driver: `__cell` takes the lock and seeds a verb's locals, `__inner` is the body it
+  // runs under `_ws_reclaim_contained`.
+  'ccd-retire-verdicts.test.ts': ['__cell', '__inner'],
   'ccd-route-apply.test.ts': ['_tmux_recording'],
   'ccd-route-tick.test.ts': ['_advance'],
   'ccd-tick-diet-clock-seam.test.ts': ['_advance'],
@@ -117,10 +122,21 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   // The tick diet's runner and row builders, which the two per-locale files share.
   'ccdTickDietRunner.ts': ['__diet_caller', '__diet_side', '__hm2', '__lfc', '__lfx', '__lj6', '__rg4', '__rt', '__rt_snap',
     '__seq'],
+  // The cadence census's fixture tree: each job function plants one plist shape a query must see or must skip, and the
+  // two doctor-check fixtures plant the cadence words and bounds the doctor scan must flag or must pass.
+  'census-w8/cadence.test.ts': ['_ccd_job', '_check_bounds', '_check_words', '_elsewhere', '_job_accepted',
+    '_job_assigned_in_another_function', '_job_calendar', '_job_foreign', '_job_inline', '_job_literal',
+    '_job_unassigned_local'],
   'ccrc-doctor-codex.test.ts': ['_check_failed', '_check_warned', '_fix_failed', '_fix_warned'],
   'ccrc-doctor-fleet.test.ts': ['_check_alpha', '_check_beta', '_check_boom', '_check_dual', '_check_gamma', '_check_liar',
     '_check_mute', '_check_nothing', '_check_omega', '_check_sneak', '_check_weird'],
   'ccrc-models.test.ts': ['_fk_cfg', '_fk_log', '_fk_probe', '_fk_rc', '_fk_ret'],
+  // The helper census's PLANTED fixture keeps ccd's two retired refusal helpers (D-7072), so its name-family
+  // disagreement row still has two names to disagree. Its lock-runner fixture (D-7076) defines `${R}_not`, a longer
+  // name that is no call of the runner, and this scanner reads the part after the interpolation, `_not`.
+  'census-w5/ccdHelpers.test.ts': ['_not', '_reap_refuse', '_ws_collect_refuse'],
+  // The redactor census's fixture function: a python table in a bash heredoc, which the scanner must name.
+  'census-w5/redactors.test.ts': ['_fx_py'],
   'collectFixture.ts': ['_t'],
   'pool-name-parity.test.ts': ['_doctor_omits'],
   'pools-existence-pairing.test.ts': ['_fixture_latest', '_fixture_message', '_fixture_mixed', '_fixture_reader',
@@ -210,9 +226,10 @@ describe('every `_x() {` a test writes names a shipped function or a listed test
 });
 
 describe('every python heredoc a shipped shell script holds parses and compiles (D-6051)', () => {
-  /** The count `pythonHeredocs` finds over the shipped shell scripts, measured on this tree: eight in ccd/ccd, two in
-   *  ccd-graph-sweep, one in ccgpt-runtime, three in ccrc-models-probe. */
-  const PINNED_COUNT = 14;
+  /** The count `pythonHeredocs` finds over the shipped shell scripts, measured on this tree: eight in ccd/ccd, one in
+   *  ccd/lib/train-proof.sh (`_pr_train_py`, the train record's python, moved out of `_pr_py`'s, D-7463), two in
+   *  ccd-graph-sweep, one in ccgpt-runtime, three in ccrc-models-probe, one in ccd-land-probe. */
+  const PINNED_COUNT = 16;
 
   const all = (): { where: string; tag: string; body: string }[] => shippedShellScripts().flatMap((rel) =>
     pythonHeredocs(fs.readFileSync(path.join(REPO, rel), 'utf8')).map((d) => ({ where: `${rel}:${d.line}`, ...d })));

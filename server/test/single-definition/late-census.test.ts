@@ -3,7 +3,12 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { sourceOfSymbol } from '../scan/symbols.js';
+import { callsIn, parsedFile, sourceOfSymbol, symbolOf } from '../scan/symbols.js';
+import { identifierReferences, parseSource, stringExpressions } from '../scan/parse.js';
+import { hibernateActSites, sleepVerdictLadders } from '../census-w4/sleep.js';
+import { retirePortReaders, retireRowSteps } from '../census-w4/retire.js';
+import { RETIRE_STEPS } from '../../src/retire.js';
+import { SLEEP_POLICY_NAMES } from '../../src/sleep.js';
 import { SWITCHES } from '../../../shared/switches.js';
 import { ALL, ALL_MJS, BASH, HISTORY_DIR, HISTORY_MJS, ccrcRoot, codeLines, here, holdersOf, mjsUnder, prose, rel, stallCode, stallCodeText } from './helpers.js';
 
@@ -59,17 +64,31 @@ describe('the credential shapes and the egress mask each have one home (D-5513)'
     }
   });
   it('the mask lives in its one file', () => {
-    for (const c of ['SecretMasker', 'DrawerMask', 'SHAPE_ONLY_MASKER', 'fingerprintOf', 'fingerprintGeneration', 'shapeMatchers',
+    for (const c of ['SecretMasker', 'DrawerMask', 'SHAPE_ONLY_MASKER', 'fingerprintOf', 'fingerprintGeneration',
       'fingerprintRow', 'fingerprintAnswerOf']) {   // the last two: D-5996
       expect(holders(decl(c)), c).toEqual(['server/src/accounts/mask.ts']);
     }
+    expect(holders(decl('shapeMatchers')), 'shapeMatchers').toEqual(['server/src/accounts/shapes.ts']);   // D-7513
   });
   it("maskSecretAssigns's file and mask.ts read the shapes from CREDENTIAL_MASKS, and no other file spells one", () => {
     expect(holders(/\bcredentialMaskSource\('genericSk'\)/)).toEqual(['server/src/coord/redact.ts']);
     expect(holders(/\bcredentialMaskSource\('jwt'\)/)).toEqual(['server/src/coord/redact.ts']);
-    expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/mask.ts']);
+    expect(holders(/\bCREDENTIAL_MASKS\b/).filter((f) => f !== 'shared/api.ts')).toEqual(['server/src/accounts/shapes.ts']);   // D-7513
     // A second copy of a shape's source: the Anthropic family's prefix, the generic rule, or the JWT header pair.
     expect(holders(/sk-ant-\[|sk-\[A-Za-z0-9_-\]\{8,\}|eyJ\[A-Za-z0-9_-\]\+\\\.eyJ/)).toEqual(['shared/api.ts']);
+  });
+  it('the shape half has one owner: SecretMasker splices and walks through shapes.ts, and keeps no copy (D-7513)', () => {
+    const mask = 'server/src/accounts/mask.ts';
+    const named = (sym: string): string[] => callsIn(symbolOf(mask, sym)).map((c) => c.name ?? '');
+    expect(named('SecretMasker.maskWithCarry')).toEqual(expect.arrayContaining(['shapeSpans', 'spliceMasked']));
+    expect(named('SecretMasker.maskDeep')).toEqual(expect.arrayContaining(['walkStrings']));
+    expect(parsedFile(mask).symbols.map((x) => x.name)).not.toContain('SecretMasker.walk');
+    // and the shape-only mask splices the same spans: no private copy of shapeSpans behind SHAPE_MASK
+    expect(callsIn(symbolOf('server/src/accounts/shapes.ts', 'maskShapes')).map((c) => c.name ?? ''))
+      .toEqual(expect.arrayContaining(['shapeSpans', 'spliceMasked']));
+    for (const c of ['shapeSpans', 'spliceMasked', 'walkStrings', 'SHAPE_MASK']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/accounts/shapes.ts']);
+    }
   });
 });
 
@@ -457,14 +476,23 @@ describe('fleet disk retention DR-15: the collector’s loose-arm marker has no 
   });
 
   it('it is read in ONE place, nearest the argv: the job consults it after the lane’s own switch and before the loose verb', () => {
-    // D-6114: keyed on the job's symbol (scan/symbols.ts), never a literal slice of the file.
-    const job = stallCodeText(sourceOfSymbol(path.join(ccrcRoot, 'server/src/coord/collectTempRoot.ts'), 'collectTempRoot'));
-    expect(job.match(/\blooseMarker\b/g)?.length, 'the job reads the final listing’s marker once').toBe(1);
-    const at = (needle: string): number => job.split('\n').findIndex((l) => l.includes(needle));
-    const [live, marker, verb] = [at('collectLaneLive(lane)'), at('looseMarker'), at('wsCollectLoose(')];
-    expect([live, marker, verb].every((i) => i > -1), 'an anchor is gone').toBe(true);
+    // D-6114: keyed on the job's symbols (scan/symbols.ts), never a literal slice of the file. D-7168 (ARCH-44 C4k): the
+    // job is its row, `TEMP_ORPHAN_RETIRE`, its port's readers and its act, so the order is the row's declaration.
+    const EXEC = path.join(ccrcRoot, 'server/src/coord/collectTempRoot.ts');
+    const reads = (text: string): number => stallCodeText(text).match(/(?<!RETIRE_STEPS)\.looseMarker\b/g)?.length ?? 0;
+    expect(reads(sourceOfSymbol(EXEC, 'collectRetirePort')), 'the port reads the final listing’s marker once').toBe(1);
+    expect(retirePortReaders(EXEC, 'collectRetirePort').filter((r) => reads(r.text) > 0).map((r) => r.step),
+      'the marker is read in the loose-marker reader alone').toEqual([RETIRE_STEPS.looseMarker]);
+    expect(reads(sourceOfSymbol(EXEC, 'collectTempRootAct')), 'the act reads the marker').toBe(0);
+    const steps = retireRowSteps(EXEC, 'TEMP_ORPHAN_RETIRE').map((x) => x.step);
+    const [live, marker] = [steps.indexOf(RETIRE_STEPS.live), steps.indexOf(RETIRE_STEPS.looseMarker)];
+    expect([live, marker].every((i) => i > -1), 'an anchor is gone').toBe(true);
     expect(live).toBeLessThan(marker);
-    expect(marker).toBeLessThan(verb);
+    expect(marker, 'the marker is the row’s last step, so it is read before the act').toBe(steps.length - 1);
+    const act = symbolOf(EXEC, 'collectTempRootAct');
+    const verbs = parsedFile(EXEC).calls.filter((c) => c.name === 'wsCollectLoose');
+    expect(verbs.length, 'the loose verb is composed').toBeGreaterThan(0);
+    expect(verbs.every((c) => act.start <= c.start && c.end <= act.end), 'the loose verb is composed outside the act').toBe(true);
   });
 });
 
@@ -526,7 +554,7 @@ describe('ARCH-77: child reclaim’s off switch has no writer in the tree, and o
   });
 
   it('no other cleanup lane names it: expiry, collect, the dead-coordinator lane and stop-done are stopped by reclaim-paused alone', () => {
-    const LANES = ['server/src/archivedExpiry.ts', 'server/src/stopDoneSweep.ts', 'server/src/deadCoordinator.ts',
+    const LANES = ['server/src/archivedExpiry.ts', 'server/src/sleepLane.ts', 'server/src/deadCoordinator.ts',
       'server/src/coord/expireArchived.ts', 'server/src/coord/endDeadCoordinator.ts', 'server/src/coord/collectTempRoot.ts',
       'server/src/coord/collectOrphanTree.ts', 'server/src/coord/staleArchive.ts'];
     for (const f of LANES) {
@@ -582,5 +610,324 @@ describe('codex bridge Stage 2 Task 10: the bridge file names and the lane mode 
     // CONTROL: the one bash reader of the mode reads lane.json's key, so the scan above is not vacuously empty of
     // a reader.
     expect(readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8')).toMatch(/^_codex_lane_mode\(\)\s+\{/m);
+  });
+});
+
+
+// D-7040 (ARCH-43, consolidation plan 2026-10-26 Task C4b; spec K1, C4 "Policies, not lanes"). APPENDED. The two sleep
+// lanes share ONE hold ladder, `decideSleep` in `server/src/sleep.ts`, steered by each policy row's fields and never by
+// its name. `sleepVerdictLadders` (the census in `census-w4/sleep.ts`: each server/src function whose body returns a
+// `hold('viewer')` call) read 2 at C4b's base (`stopDone.ts#stopDoneVerdict`, `coord/hibernate.ts#hibernateVerdict`)
+// and is pinned at 1 here; it may only shrink. The name scan walks `decideSleep`'s parsed body (`scan/symbols.ts`,
+// `scan/parse.ts`), never a text match over the file: a read of `.name` (a comparison, a `switch`, a destructure), of
+// `SLEEP_POLICY_NAMES`, or a quoted policy name is red.
+describe('the sleep lanes share one ladder, which never asks which policy it runs (D-7040; ARCH-43)', () => {
+  const HOME = 'server/src/sleep.ts';
+  /** Every way `body` could ask which policy it runs, each as the source that does it. */
+  const nameReads = (body: string): string[] => [
+    ...identifierReferences(body, 'decideSleep.ts', new Set(['name', 'SLEEP_POLICY_NAMES'])).map((r) => r.context),
+    ...stringExpressions(body, 'decideSleep.ts').filter((e) => (SLEEP_POLICY_NAMES as readonly string[]).includes(e.text)).map((e) => e.text),
+  ];
+
+  // D-7278: `depsShedVerdict` is NOT a sleep ladder, legitimately different: it decides another act (`ws-shed-deps`, never
+  // `ccd hibernate`) over the population this ladder skips (a row with a stop stamp answers `stopped` here), and its
+  // `viewer` hold is the same presence fact read again. It is named by symbol, so a second SLEEP ladder is still red.
+  const NOT_SLEEP_LADDERS: readonly string[] = ['server/src/depsShed.ts#depsShedVerdict'];
+  it('the sleep verdict ladders are one, decideSleep in sleep.ts (2 -> 1 at C4b; may only shrink)', () => {
+    const all = sleepVerdictLadders().map((s) => s.symbol);
+    expect(all.filter((s) => !NOT_SLEEP_LADDERS.includes(s))).toEqual([`${HOME}#decideSleep`]);
+    expect(all.filter((s) => NOT_SLEEP_LADDERS.includes(s)), 'each named exception is still a ladder the census sees').toEqual(NOT_SLEEP_LADDERS);
+  });
+
+  it('CONTROL: the name scan sees a comparison, a switch, a destructure, the name list and a quoted name, and passes a field read', () => {
+    const probe = (stmt: string): number => nameReads(`function decideSleep(i, policy) { ${stmt} }`).length;
+    expect([
+      "if (policy.name === 'run-done') return 1;",
+      'switch (policy.name) { default: return 1; }',
+      'const { name } = policy; return name;',
+      'return SLEEP_POLICY_NAMES.indexOf(policy.held);',
+      "return policy.held === 'idle-hours';",
+    ].map(probe)).toEqual([2, 1, 2, 1, 1]);
+    expect(probe('if (policy.turnVerdict && policy.entry.child) return 1;')).toBe(0);
+  });
+
+  it('decideSleep reads no policy name', () => {
+    const body = sourceOfSymbol(HOME, 'decideSleep');
+    expect(body, 'CONTROL: the slice is the ladder').toContain("hold('viewer')");
+    expect(nameReads(body)).toEqual([]);
+  });
+
+  // C4d (C4b's review): a helper the ladder calls is the ladder's, so the scan walks decideSleep's in-file callees too —
+  // every top-level function of the same file it names (a call or a value passed on), transitively, each once.
+  /** `decideSleep`'s source, then that of every top-level function of the same source text it reaches by name. */
+  const ladderSources = (text: string, root = 'decideSleep'): string[] => {
+    const p = parseSource(text, 'sleep.ts');
+    const tops = p.symbols.filter((x) => (x.kind === 'function' || x.kind === 'variable-function') && !x.name.includes('.'));
+    const names = new Set(tops.map((x) => x.name));
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const visit = (name: string): void => {
+      const fn = tops.find((x) => x.name === name);
+      if (fn === undefined || seen.has(name)) return;
+      seen.add(name);
+      const body = p.text.slice(fn.start, fn.end);
+      out.push(body);
+      for (const r of identifierReferences(body, 'sleep.ts', names)) visit(r.name);
+    };
+    visit(root);
+    return out;
+  };
+
+  it('CONTROL: the walk reaches a helper decideSleep calls, and a helper\'s helper, and the name scan catches the helper\'s compare', () => {
+    const src = [
+      "function isRunDone(p) { return p.name === 'run-done'; }",
+      'function viaHelper(p) { return isRunDone(p); }',
+      'function unrelated(p) { return p.name; }',
+      'export function decideSleep(i, policy) { if (viaHelper(policy)) return 1; return 0; }',
+    ].join('\n');
+    const reached = ladderSources(src);
+    expect(reached.map((b) => /function (\w+)/.exec(b)?.[1])).toEqual(['decideSleep', 'viaHelper', 'isRunDone']);
+    expect(nameReads(reached[0]!), 'the ladder\'s own body asks nothing: only the walk sees the helper').toEqual([]);
+    expect(reached.flatMap(nameReads)).toEqual(["p.name", 'run-done']);
+  });
+
+  it('decideSleep\'s in-file callees read no policy name either', () => {
+    const reached = ladderSources(parsedFile(HOME).text);
+    expect(reached[0], 'CONTROL: the walk starts at the ladder').toBe(sourceOfSymbol(HOME, 'decideSleep'));
+    expect(reached.flatMap(nameReads)).toEqual([]);
+  });
+});
+
+// D-7042 (ARCH-43, consolidation plan 2026-10-26 Task C4d; spec K1). APPENDED. The two sleep lanes share ONE executor,
+// `sleepPass` and `sleepAct` in `server/src/sleepLane.ts`, over the per-policy `SLEEP_LANES` rows. `hibernateActSites`
+// (`census-w4/sleep.ts`: each top-level server/src function that hands `runCcd` a `CCD_ARGV.hibernate(` argv, inline
+// or bound first) read 2 at C4d's base (`stopDoneSweep.ts#stopDonePass` inline, `hibernateSweep.ts#actOn` bound) and is
+// pinned at 1 here; it may only shrink. Every verb question is `ccdCan`'s: no capability site carries the retired
+// `w4-held` tag, and the executor asks no verb through `verbSupported(`.
+describe('the sleep lanes share one executor (D-7042; ARCH-43)', () => {
+  const HOME = 'server/src/sleepLane.ts';
+
+  it('the ccd hibernate act sites are one, sleepAct in sleepLane.ts (2 -> 1 at C4d; may only shrink)', () => {
+    expect(hibernateActSites().map((s) => s.symbol)).toEqual([`${HOME}#sleepAct`]);
+  });
+
+  it('no capability site is held for W4, and sleepLane.ts asks no verb through verbSupported(', async () => {
+    const { capabilityChoiceSites, W4_HELD_FILES } = await import('../consolidationCensus.js');
+    const sites = await capabilityChoiceSites();
+    expect(W4_HELD_FILES).toEqual([]);
+    expect(sites.map((x): string => x.tag)).not.toContain('w4-held');
+    const mine = sites.filter((x) => x.file === HOME);
+    expect(mine.filter((x) => x.tag === 'verb' && x.form !== 'ccdCan').map((x) => `${x.line} ${x.text.trim()}`)).toEqual([]);
+    expect(mine.some((x) => x.form === 'ccdCan'), 'CONTROL: the census reads the executor').toBe(true);
+  });
+});
+
+// D-7079 (ARCH-72, consolidation plan 2026-10-27 W5 Task C5j; spec K16), built under the coordinator's ring ruling,
+// option (a). APPENDED. `FleetState.ccdVerbs` has ONE writer, `recordCcdVerbs` in `server/src/fleetstate.ts`, beside
+// the type: the ready frame (`remote/client.ts#onReady`), the remote refresh (`refreshcaps.ts#makeRefreshCaps`, handed
+// the setter by the composition root under that ruling, so it imports `fleetstate.ts` only as a type) and local mode's
+// one read (`index.ts`) all write through it. `ccdVerbsWriters()` (`census-w5/singleWriters.ts`) read 3 at C5j's base and is pinned at 1 here;
+// it may only shrink. The two object-literal initialisers (`ccdVerbs: null`) are reported apart and are not writers.
+describe('FleetState.ccdVerbs has one writer, recordCcdVerbs, handed to refreshcaps.ts by the composition root (D-7079; ARCH-72)', () => {
+  it('the ccdVerbs writers are one, fleetstate.ts#recordCcdVerbs (3 -> 1 at C5j; may only shrink)', async () => {
+    const { ccdVerbsWriters } = await import('../census-w5/singleWriters.js');
+    const r = ccdVerbsWriters();
+    expect(r.writers.map((s) => s.name)).toEqual(['fleetstate.ts#recordCcdVerbs']);
+    expect(r.initialisers.map((s) => s.name).sort(), 'the initialisers, reported apart').toEqual(['index.ts#(module)', 'remote/client.ts#FleetClient']);
+  });
+});
+
+// D-7166 (ARCH-44, consolidation plan 2026-10-27 Task C4i; spec K1, C4 "Policies, not lanes"). APPENDED. The three retire
+// executors (temp-orphan, archive-expired, child-spent) share ONE gate decider, `decideRetire` in `server/src/retire.ts`,
+// over the per-reason rows (`TEMP_ORPHAN_RETIRE`, `ARCHIVE_EXPIRED_RETIRE`, `CHILD_SPENT_RETIRE`). `retireDeciders()`
+// (`census-w4/retire.ts`: each top-level server/src function declared to answer a `RetireDecision`) read 0 at C4i's base
+// and is pinned at exactly 1 here. The decider never asks which reason it runs: no reference to the identifier `name`
+// stands in its body (a comparison, a `switch` and a lookup alike), so every difference is a row field.
+describe('the retire executors share one gate decider, decideRetire (D-7166; ARCH-44)', () => {
+  const HOME = 'server/src/retire.ts';
+
+  it('the retire gate deciders are one, retire.ts#decideRetire (0 -> 1 at C4i; exactly 1)', async () => {
+    const { retireDeciders } = await import('../census-w4/retire.js');
+    expect(retireDeciders().map((s) => s.symbol)).toEqual([`${HOME}#decideRetire`]);
+  });
+
+  it('decideRetire never reads a reason\'s name: the identifier `name` is referenced nowhere in its body', () => {
+    const CONTROL = "function f(reason) { if (reason.name === 'child-spent') return 1; return 0; }";
+    expect(identifierReferences(CONTROL, 'control.ts', new Set(['name'])), 'CONTROL: the scan sees a name compare').toHaveLength(1);
+    expect(identifierReferences(sourceOfSymbol(HOME, 'decideRetire'), 'retire.ts', new Set(['name']))).toEqual([]);
+  });
+});
+
+// D-7080 (ARCH-72, W5 plan 2026-10-27-consolidation-w5-ccd-helpers.md Task C5k; OA-C13 ruled (b) 2026-10-27). APPENDED.
+// The usage sidecars (`$REG/usage/<id>.json`, its `.<id>.*.tmp` temps and `<id>.agents/`) have TWO deleters, and both
+// are kept: `_usage_purge` in ccd, run by `_reg_purge` when a row dies, and the usage sweep's `reap_orphans`, which
+// runs in ANOTHER PROCESS (a python timer with its own guard: no `$REG/<id>.uuid` and a readable `ts` more than a day
+// old, so an unreadable row fails toward keeping the sidecar). Spec K16's "usage sidecars deleted only by
+// `_usage_purge`" is recorded as NOT APPLIED under D-7080; option (a), a ccd verb the sweep would call, was not taken.
+// The names come from the census (`census-w5/singleWriters.ts#usageSidecarDeleters`), never a source pin here. What
+// each one removes for one orphan is pinned side by side in `server/test/usage-sidecar-removals.test.ts`.
+describe('the usage-sidecar deleters are two, named, and may only shrink: _usage_purge and the sweep\'s reap_orphans, which runs in another process (D-7080; spec K16\'s "only by `_usage_purge`" not applied)', () => {
+  it('usageSidecarDeleters() is exactly ccd/ccd#_usage_purge and ccd/ccd-usage-sweep.py#reap_orphans (2 at C5k\'s base; may only shrink)', async () => {
+    const { usageSidecarDeleters } = await import('../census-w5/singleWriters.js');
+    const r = usageSidecarDeleters();
+    expect(r.deleters.map((s) => s.name)).toEqual(['ccd/ccd#_usage_purge', 'ccd/ccd-usage-sweep.py#reap_orphans']);
+  });
+});
+
+// D-7168 (ARCH-44, consolidation plan 2026-10-27 Task C4k; spec §5.7 "reasons migrate one PR each"). APPENDED. The
+// temp-orphan executor runs through the one retire loop (`retireLane.ts#retireAct`) over its row and port, so its
+// hand-written gate ladder is gone. `retireGateLadders()` (`census-w4/retire.ts`) read 3 at C4k's base and is pinned at
+// most 2 here; it may only shrink (C4l and C4m take it to 1, then 0), and no site outside the two remaining ladders
+// may stand in it.
+describe('the temp-orphan executor has no gate ladder of its own (D-7168; ARCH-44 C4k)', () => {
+  it('retireGateLadders() is at most 2 (3 -> 2 at C4k; may only shrink), and only the two reasons not yet moved', async () => {
+    const { retireGateLadders } = await import('../census-w4/retire.js');
+    const sites = retireGateLadders().map((s) => s.symbol);
+    expect(sites.length).toBeLessThanOrEqual(2);
+    const LEFT = ['server/src/coord/childReclaim.ts#childReclaimOutcome', 'server/src/coord/expireArchived.ts#expireArchived'];
+    expect(sites.filter((s) => !LEFT.includes(s)), 'a gate ladder outside the two reasons not yet moved').toEqual([]);
+  });
+});
+
+// D-7169 (ARCH-44, consolidation plan 2026-10-27 Task C4l). APPENDED. `expireArchived` runs archive-expired's row,
+// `ARCHIVE_EXPIRED_RETIRE`, through the one executor loop (`retireLane.ts#retireAct`). The expiry id gate of
+// `id-argv-census.test.ts` now reads the id check alone, in `expiryIdJudge` (D-7204), so what its dropped capability half
+// meant (the id refused before the capability is asked) is read here off the row's declaration, through `scan/parse.ts`'s
+// `retireFacts` walk (D-7227): `id` before `capability` in the row's `decide`. The census modules are loaded inside the
+// rows, so this block adds no import line.
+describe('archive-expired runs through retireAct, its id judged before its capability (D-7169; ARCH-44)', () => {
+  const ROW_FILE = 'server/src/coord/expireArchived.ts';
+  /** The `RETIRE_STEPS` member each element of `row`'s `decide` array names, in declaration order. */
+  const decideSteps = async (p: ReturnType<typeof parseSource>, row: string): Promise<string[]> => {
+    const { retireFacts } = await import('../scan/parse.js');
+    const decide = retireFacts(p).literals[row]?.properties.find((m) => m.name === 'decide');
+    expect(decide?.elements, `${row} declares a decide array`).toBeTruthy();
+    return (decide?.elements ?? []).map((e) => {
+      const step = e.literal?.properties.find((m) => m.name === 'step');
+      const at = step === undefined ? '' : p.text.slice(step.start, step.end);
+      return /^step:\s*RETIRE_STEPS\.(\w+)$/.exec(at)?.[1] ?? `(unread: ${e.text})`;
+    });
+  };
+
+  it('CONTROL: the declaration reader sees a decide array\'s steps in order, through as const', async () => {
+    const SRC = [
+      'export const ROW = {',
+      '  decide: [{ step: RETIRE_STEPS.capability, sync: true }, { step: RETIRE_STEPS.id, sync: true }],',
+      '} as const;',
+    ].join('\n');
+    expect(await decideSteps(parseSource(SRC, 'control.ts'), 'ROW')).toEqual(['capability', 'id']);
+  });
+
+  it('ARCHIVE_EXPIRED_RETIRE.decide declares id before capability, and both', async () => {
+    const steps = await decideSteps(parsedFile(path.join(ccrcRoot, ROW_FILE)), 'ARCHIVE_EXPIRED_RETIRE');
+    expect(steps).toContain('id');
+    expect(steps).toContain('capability');
+    expect(steps.indexOf('id'), steps.join(' < ')).toBeLessThan(steps.indexOf('capability'));
+  });
+
+  it('the retire gate ladders are at most 1, and only the one not yet moved (2 -> 1 at C4l, after C4k; may only shrink)', async () => {
+    const { retireGateLadders } = await import('../census-w4/retire.js');
+    const sites = retireGateLadders().map((s) => s.symbol);
+    expect(sites.length, sites.join(', ')).toBeLessThanOrEqual(1);
+    for (const s of sites) {
+      expect(['server/src/coord/childReclaim.ts#childReclaimOutcome'], s).toContain(s);
+    }
+  });
+});
+
+// D-7170 (ARCH-44, consolidation plan 2026-10-27 Task C4m; spec §5.7 "reasons migrate one PR each"). APPENDED.
+// `reclaimChild` runs child-spent's row, `CHILD_SPENT_RETIRE`, through the one executor loop (`retireLane.ts#retireAct`)
+// over its port (`childReclaimRetirePort`), so the last hand-written retire gate ladder, `childReclaimOutcome`, is gone.
+// `retireGateLadders()` (`census-w4/retire.ts`) read 3 at C4k's base and is exact at 0 here: the three executors share
+// one body and one gate decider (`retire.ts#decideRetire`), and a new ladder anywhere under server/src is red.
+describe('child-spent runs through retireAct, and no retire executor keeps a gate ladder of its own (D-7170; ARCH-44 C4m)', () => {
+  it('retireGateLadders() is exactly 0 (3 -> 0 over C4k, C4l and C4m; 1 -> 0 at C4m)', async () => {
+    const { retireGateLadders } = await import('../census-w4/retire.js');
+    const sites = retireGateLadders().map((s) => s.symbol);
+    expect(sites, sites.join(', ')).toEqual([]);
+  });
+});
+
+// D-7171 (ARCH-44, consolidation plan 2026-10-27 Task C4n; spec K1 "Consumers move"). APPENDED. The four retire entries'
+// queue calls (`watch.ts#execChildReclaim`, `#collectAct`, `#archivedExpiryPass` and the close route's
+// `coord/routes.ts#childReclaimPort`) run through ONE owner, `retireExecutor.ts#retireExecutor` (L4, D-7198), whose body
+// is the `KeyedQueue` call. `retireQueueOwners()` read 4 at C4n's base (each by (a), its own `queue.run` site) and is
+// exact at 1 here; `retireQueueSites()` read 4 `via: queue.run` and 0 `via: retireExecutor`, and reads 0 and 4 here.
+describe('a retire entry reaches the session queue through one owner, retireExecutor (D-7171; ARCH-44 C4n)', () => {
+  it('retireQueueOwners() is exactly 1, retireExecutor.ts#retireExecutor (4 -> 1 at C4n)', async () => {
+    const { retireQueueOwners } = await import('../census-w4/retire.js');
+    const owners = retireQueueOwners().map((s) => s.symbol);
+    expect(owners, owners.join(', ')).toEqual(['server/src/retireExecutor.ts#retireExecutor']);
+  });
+
+  it('no retire entry is queued through queue.run (4 -> 0 at C4n), and exactly 4 through retireExecutor (0 -> 4 at C4n)', async () => {
+    const { retireQueueSites } = await import('../census-w4/retire.js');
+    const sites = retireQueueSites();
+    const via = (v: string): string[] => sites.filter((s) => s.via === v).map((s) => s.symbol);
+    expect(via('queue.run'), via('queue.run').join(', ')).toEqual([]);
+    expect(via('retireExecutor'), via('retireExecutor').join(', ')).toHaveLength(4);
+  });
+});
+
+// D-7304 (ARCH-72, plan 2026-10-29-consolidation-k16-panescope-reader.md Task C5m; OA-C21 ruled (a) under D-7401).
+// APPENDED. Spec K16's last bullet ("they share one reader of `$REG/<id>.panescope`") is met in ANOTHER FORM: the
+// marker has one writer (`_panescope_record`) and one reader (`_end_cause`, the restart-cause classifier), both in
+// ccd, and the two acts read no marker at all. The cap (`ccd-cap-scopes`) and the stop (`ccd-scope-sweep`) each read
+// systemd's list of `tmux-spawn-*.scope` units, and those two reads stay two, pinned by name as legitimately
+// different: the cap over-includes and fails toward capping, the stop under-includes and fails toward not stopping.
+// Every name comes from the census (`census-w5/paneScopes.ts`, D-7303), never a source pin here; the marker check
+// reads the two acts' parsed code lines (`census-w5/accountMarkers.ts#bashBodies`, comments stripped). The doctor's
+// two read-only listers act on nothing and are reported, not pinned. The census modules are loaded inside the rows.
+describe('the pane scope marker keeps one reader and one writer, and the two acts read no marker (D-7304; spec K16\'s last bullet met in another form, OA-C21 (a), D-7401)', () => {
+  const CAP = 'ccd/ccd-cap-scopes';
+  const SWEEP = 'ccd/ccd-scope-sweep';
+  /** The marker's field token or path, as a whole word: `panescope`, not `_panescope_record`. */
+  const MARKER_TOKEN = /(?<![A-Za-z0-9_])panescope(?![A-Za-z0-9_])/;
+
+  it('panescopeReaders() is exactly ccd/ccd#_end_cause (1 at C5m\'s base; may only shrink)', async () => {
+    const { panescopeReaders } = await import('../census-w5/paneScopes.js');
+    expect(panescopeReaders().map((s) => s.name)).toEqual(['ccd/ccd#_end_cause']);
+  });
+
+  it('panescopeWriters() is exactly ccd/ccd#_panescope_record (1 at C5m\'s base; may only shrink); _reg_purge\'s suffix glob is reported apart, not counted', async () => {
+    const { panescopeSuffixPurgers, panescopeWriterLines, panescopeWriters } = await import('../census-w5/paneScopes.js');
+    const purgers = panescopeSuffixPurgers().map((s) => s.name);
+    console.log(`D-7304 apart: panescopeSuffixPurgers ${purgers.join(', ')}; panescopeWriterLines ${panescopeWriterLines().length}`);
+    expect(panescopeWriters().map((s) => s.name)).toEqual(['ccd/ccd#_panescope_record']);
+  });
+
+  it('neither act names the marker on a code line: ccd/ccd-cap-scopes and ccd/ccd-scope-sweep, 0 (pinned)', async () => {
+    const { bashBodies, shippedBashPrograms } = await import('../census-w5/accountMarkers.js');
+    const { panescopeReaders, panescopeWriters } = await import('../census-w5/paneScopes.js');
+    expect(shippedBashPrograms(), 'both acts are shipped bash programs the census reads').toEqual(expect.arrayContaining([CAP, SWEEP]));
+    const hits = [CAP, SWEEP].flatMap((file) => bashBodies(readFileSync(path.join(ccrcRoot, file), 'utf8'))
+      .flatMap((b) => b.lines.filter((r) => MARKER_TOKEN.test(r.code)).map((r) => `${file}#${b.name}:${r.line}  ${r.raw.trim()}`)));
+    expect(hits, 'a code line of an act that names the marker').toEqual([]);
+    const sites = [...panescopeReaders(), ...panescopeWriters()].filter((s) => s.file === CAP || s.file === SWEEP);
+    expect(sites.map((s) => s.name), 'a census reader or writer inside an act').toEqual([]);
+  });
+
+  it('the acting pane-scope listers are exactly the cap and the stop, two and legitimately different; the doctor\'s two read-only listers are reported apart, not pinned', async () => {
+    const { paneScopeListers } = await import('../census-w5/paneScopes.js');
+    const all = paneScopeListers();
+    console.log(`D-7304 apart (read-only, act on nothing): ${all.filter((s) => !s.acts).map((s) => s.name).join(', ')}`);
+    expect(all.filter((s) => s.acts).map((s) => s.name)).toEqual([`${CAP}#<top-level>`, `${SWEEP}#<top-level>`]);
+  });
+
+  it('the cap\'s list over-includes (no --plain, every slice, the first column), failing toward capping', async () => {
+    const { paneScopeListers } = await import('../census-w5/paneScopes.js');
+    const cap = paneScopeListers().filter((s) => s.acts && s.name === `${CAP}#<top-level>`);
+    expect(cap.map((s) => ({ name: s.name, plain: s.plain }))).toEqual([{ name: `${CAP}#<top-level>`, plain: false }]);
+  });
+
+  it('the stop\'s list under-includes (--plain, then its own filters), failing toward not stopping: the opposite safety direction', async () => {
+    const { paneScopeListers } = await import('../census-w5/paneScopes.js');
+    const stop = paneScopeListers().filter((s) => s.acts && s.name === `${SWEEP}#<top-level>`);
+    expect(stop.map((s) => ({ name: s.name, plain: s.plain }))).toEqual([{ name: `${SWEEP}#<top-level>`, plain: true }]);
+  });
+
+  it('paneScopeActs() is exactly the cap\'s set-property and the stop\'s stop (2 at C5m\'s base; may only shrink)', async () => {
+    const { paneScopeActs } = await import('../census-w5/paneScopes.js');
+    expect(paneScopeActs().map((s) => s.name)).toEqual([`${CAP}#<top-level>:set-property`, `${SWEEP}#<top-level>:stop`]);
   });
 });

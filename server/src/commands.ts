@@ -2,7 +2,7 @@ import type { Deps } from './deps.js';
 import type { FleetIO } from './io.js';
 import { walkBack, wholeLines } from './backread.js';
 import { readSessionRecord } from './registry.js';
-import { readLiveState } from './livestate.js';
+import type { LiveState } from './livestate.js';
 import { resolveTranscript } from './transcript/resolve.js';
 import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
 import type { SlashCommand } from '../../shared/api.js';
@@ -113,8 +113,11 @@ async function transcriptSkills(io: FleetIO, file: string): Promise<SlashCommand
   return answerOf([...listingsIn(lines), ...seen]) ?? [];
 }
 
+/** How the command list reads a pane's live state: the caller hands it in (D-7511), so this file loads no reader. */
+export type LiveStateReader = (configDir: string, pid: number) => Promise<LiveState | null>;
+
 /** Built-ins plus the session's skills (from its transcript's skill_listing). */
-export async function sessionCommands(deps: Deps, id: string): Promise<{ builtins: SlashCommand[]; skills: SlashCommand[] }> {
+export async function sessionCommands(deps: Deps, id: string, readLive: LiveStateReader): Promise<{ builtins: SlashCommand[]; skills: SlashCommand[] }> {
   // One row, not the registry: every answer but `found` is "no row" here, as it was for the sweep's miss.
   const read = await readSessionRecord(deps.io, deps.cfg, id);
   if (read.kind !== 'found') return { builtins: BUILTINS, skills: [] };
@@ -124,7 +127,7 @@ export async function sessionCommands(deps: Deps, id: string): Promise<{ builtin
   if (cfgDir && (await deps.tmux.hasSession(id))) {
     const pid = await deps.tmux.panePid(id);
     if (pid) {
-      const live = await readLiveState(deps.io, cfgDir, pid);
+      const live = await readLive(cfgDir, pid);
       if (live?.cwd) cwd = live.cwd;
     }
   }

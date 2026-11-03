@@ -10,7 +10,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { KILL_GRACE_MS, readLocalCcdCaps } from '../src/localcaps.js';
+import { KILL_GRACE_MS, LOCAL_CAPS_TIMEOUT_MS, readLocalCcdCaps } from '../src/localcaps.js';
 import { mkTmp } from './tmpHelpers.js';
 
 // A DEADLINE THAT OUTLASTS THE SPAWN. Two fixtures below prove a timeout by
@@ -211,4 +211,88 @@ describe('readLocalCcdCaps', () => {
       warnSpy.mockRestore();
     }
   });
+});
+
+// W8 Task C8d (D-7056; ARCH-73 (#808); spec K17 "Audited one at a time"): the characterization the localcaps audit
+// stands on, green on main before any census or allowlist row. `readLocalCcdCaps` answers `null` ("no evidence") on
+// every failure and the parsed caps on success; its bound is 10 s; at the bound the whole group gets SIGTERM, then
+// SIGKILL `KILL_GRACE_MS` later. The rows below pin what the audit table names: a stderr flood changes no answer
+// (stderr is ignored), the child inherits the server's environment, output past the cap is no evidence, and the
+// group, a TERM-trapping grandchild included, is gone after the grace and not before.
+describe('readLocalCcdCaps — the C8d audit characterization (D-7056)', () => {
+  const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const quiet = (): ReturnType<typeof vi.spyOn> => vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+  it('the bound is 10 s and the grace 2 s, and the default bound is the 10 s one', async () => {
+    expect(LOCAL_CAPS_TIMEOUT_MS).toBe(10_000);
+    expect(KILL_GRACE_MS).toBe(2_000);
+    expect(readLocalCcdCaps.length, 'one required parameter: the bound defaults').toBe(1);
+  });
+
+  it('success: the caps parsed, and a stderr flood beside them changes nothing (stderr is ignored)', async () => {
+    const home = mkTmp('ccrc-localcaps-');
+    const ccdBin = writeStubCcd(home, "head -c 200000 /dev/zero | tr '\\0' x >&2\necho start\necho stop\nexit 0");
+    expect(await readLocalCcdCaps(ccdBin, 5000)).toEqual(['start', 'stop']);
+  });
+
+  it('the child inherits the server\'s environment (no env option)', async () => {
+    const home = mkTmp('ccrc-localcaps-');
+    const ccdBin = writeStubCcd(home, 'echo "$C8D_PROBE_VERB"\nexit 0');
+    process.env['C8D_PROBE_VERB'] = 'probe-verb';
+    try {
+      expect(await readLocalCcdCaps(ccdBin, 5000)).toEqual(['probe-verb']);
+    } finally {
+      delete process.env['C8D_PROBE_VERB'];
+    }
+  });
+
+  it('null on a nonzero exit, even with caps on stdout', async () => {
+    const spy = quiet();
+    try {
+      const home = mkTmp('ccrc-localcaps-');
+      expect(await readLocalCcdCaps(writeStubCcd(home, 'echo start\necho stop\nexit 7'), 5000)).toBeNull();
+      expect(spy.mock.calls[0]![0]).toMatch(/exited 7/);
+    } finally { spy.mockRestore(); }
+  });
+
+  it('null on a spawn error (a missing binary), reason "spawn error"', async () => {
+    const spy = quiet();
+    try {
+      const home = mkTmp('ccrc-localcaps-');
+      expect(await readLocalCcdCaps(path.join(home, 'absent-ccd'), 5000)).toBeNull();
+      expect(spy.mock.calls[0]![0]).toMatch(/spawn error: .*ENOENT/);
+    } finally { spy.mockRestore(); }
+  });
+
+  it('null on output past the cap, though the exit is zero and every line is verb-shaped', async () => {
+    const spy = quiet();
+    try {
+      const home = mkTmp('ccrc-localcaps-');
+      // 9 MB of `start` lines: past the 8 MiB cap.
+      const ccdBin = writeStubCcd(home, 'yes start | head -c 9000000\nexit 0');
+      expect(await readLocalCcdCaps(ccdBin, 8000)).toBeNull();
+      expect(spy.mock.calls[0]![0]).toMatch(/stdout exceeded 8388608 bytes/);
+    } finally { spy.mockRestore(); }
+  }, 15_000);
+
+  it('null at the bound; the group, a TERM-trapping grandchild included, outlives the SIGTERM and is gone after the grace', async () => {
+    const spy = quiet();
+    try {
+      const home = mkTmp('ccrc-localcaps-');
+      const leaderPid = path.join(home, 'leader');
+      const childPid = path.join(home, 'grandchild');
+      const ccdBin = writeStubCcd(home,
+        `trap '' TERM\nsh -c 'trap "" TERM; echo $$ > "${childPid}"; sleep 600' &\n`
+        + `echo $$ > '${leaderPid}'\nsleep 600`);
+      const start = Date.now();
+      expect(await readLocalCcdCaps(ccdBin, KILL_BOUND_MS)).toBeNull();
+      expect(Date.now() - start, 'the answer comes at the bound, not after the grace').toBeLessThan(KILL_GRACE_MS);
+      expect(spy.mock.calls[0]![0]).toMatch(new RegExp(`timed out after ${KILL_BOUND_MS}ms`));
+      const pids = [leaderPid, childPid].map((f) => parseInt(readFileSync(f, 'utf8').trim(), 10));
+      await new Promise((r) => setTimeout(r, 300));
+      expect(pids.map(alive), 'SIGTERM alone, trapped: the group is still there').toEqual([true, true]);
+      await new Promise((r) => setTimeout(r, KILL_GRACE_MS));
+      expect(pids.map(alive), 'after the grace the SIGKILL has reached the whole group').toEqual([false, false]);
+    } finally { spy.mockRestore(); }
+  }, 15_000);
 });

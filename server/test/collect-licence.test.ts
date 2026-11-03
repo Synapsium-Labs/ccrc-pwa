@@ -5,7 +5,7 @@
 // it is `coord/collectTempRoot.ts`'s, and the lane's own suite pins that each L4 trigger makes its reset.
 import { describe, it, expect } from 'vitest';
 import {
-  collectAfterAct, collectAfterAudit, collectAfterHold, collectAfterPresence, collectAfterWouldCollect, collectCapture,
+  collectAfterAct, collectAfterAudit, collectAfterHold, collectAfterViewer, collectAfterWouldCollect, collectCapture,
   collectClearPair, collectFirstSighting, collectFresh, collectLicence, collectLicenceStands,
   type CollectAudit, type CollectCapture, type CollectEntry, type CollectLicence, type CollectObservation,
 } from '../src/collectLane.js';
@@ -40,7 +40,7 @@ const lane = () => {
     ask: (a: CollectAudit, mono: number): CollectLicence => self.answer(self.compose(), a, mono),
     act: (mono: number, r = COLLECTED) => { e = collectAfterAct(e!, r, step(mono, ++g)); },
     hold: (mono: number) => { e = collectAfterHold(e!, 'run-open', step(mono, ++g)); },
-    presence: (mono: number) => { e = collectAfterPresence(e!, step(mono, ++g)); },
+    presence: (mono: number) => { e = collectAfterViewer(e!, step(mono, ++g)); },
     wouldCollect: (mono: number) => { e = collectAfterWouldCollect(e!, step(mono, ++g)); },
     /** A lane-wide clear: one mechanism in L1, whatever raised it. */
     clearLane: () => { laneGen = ++g; if (e !== undefined) e = collectClearPair(e); },

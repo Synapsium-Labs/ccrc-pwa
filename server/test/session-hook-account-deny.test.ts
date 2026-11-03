@@ -105,6 +105,11 @@ const DENIED: ReadonlyArray<[string, string, Record<string, unknown>]> = [
   ['cat ~/.cc-secrets/x-oauth.env', 'Bash', { command: 'cat ~/.cc-secrets/x-oauth.env' }],
   ['a Read of ~/.ccrc/auth-scratch/x/pkce', 'Read', { file_path: '~/.ccrc/auth-scratch/x/pkce' }],
   ['printenv', 'Bash', { command: 'printenv' }],
+  // the Linear slot store and the legacy key (D-7675; #1444 §13.3, row 20)
+  ['cat ~/.ccrc/linear/x.key', 'Bash', { command: 'cat ~/.ccrc/linear/x.key' }],
+  ['cat "$HOME/.ccrc/linear/x.key"', 'Bash', { command: 'cat "$HOME/.ccrc/linear/x.key"' }],
+  ['a Read of ~/.ccrc/linear.key', 'Read', { file_path: '~/.ccrc/linear.key' }],
+  ['a Read of ~/.ccrc/linear/x.key', 'Read', { file_path: '~/.ccrc/linear/x.key' }],
 ];
 
 describe('the account arm denies on every session (D-6202)', () => {
@@ -130,6 +135,27 @@ describe('the account arm denies on every session (D-6202)', () => {
       ['Write', { file_path: '~/.cc-sessions/.accounts/lane-x.json', content: '{}' }],
       ['Edit', { file_path: '~/.cc-sessions/.auth/lane-x/status', old_string: 'a', new_string: 'b' }],
     ] as const) expect(fire(id, tool, input, extra), `${tool} ${JSON.stringify(input)}`).not.toBeNull();
+  });
+
+  it.each(CALLERS)('%s: the Linear slot store and the legacy key are refused in the quoted, `$HOME` and path forms, and by Read, Grep and Glob (D-7675)', (_c, id, extra) => {
+    for (const command of [
+      "cat '~/.ccrc/linear/x.key'", 'cat "~/.ccrc/linear/x.key"', 'cat $HOME/.ccrc/linear/x.key', 'cat "$HOME"/.ccrc/linear/x.key',
+      'cat "${HOME}/.ccrc/linear/x.key"', 'cat /srv/home/.ccrc/linear/x.key', 'cat ~/.ccrc//linear/x.key', 'ls ~/.ccrc/linear',
+      'head ~/.ccrc/linear.key', 'cat "$HOME/.ccrc/linear.key"', 'cp ~/.ccrc/linear.key /tmp/k', 'cd x && cat ~/.ccrc/linear.key',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).not.toBeNull();
+    for (const [tool, input] of [
+      ['Read', { file_path: `${home}/.ccrc/linear.key` }], ['Read', { file_path: `${home}/.ccrc/linear/x.key` }],
+      ['Read', { file_path: '~/.ccrc/./linear.key' }], ['Grep', { pattern: 'lin_api_', path: '~/.ccrc/linear' }],
+      ['Glob', { pattern: '~/.ccrc/linear/*.key' }],
+    ] as const) expect(fire(id, tool, input, extra), `${tool} ${JSON.stringify(input)}`).not.toBeNull();
+  });
+
+  it.each(CALLERS)('%s: the legacy details file and the Linear source tree stay open (no key in either)', (_c, id, extra) => {
+    for (const command of ['cat ~/.ccrc/linear.json', 'grep -n readLinearKey server/src/linear/connection.ts', 'ls server/src/linear']) {
+      expect(fire(id, 'Bash', { command }, extra), command).toBeNull();
+    }
+    expect(fire(id, 'Read', { file_path: '~/.ccrc/linear.json' }, extra)).toBeNull();
+    expect(fire(id, 'Read', { file_path: `${CWD}/server/src/linear/store.ts` }, extra)).toBeNull();
   });
 
   it.each(CALLERS)('%s: the evasion case — `bash -c "$(printf …)"` assembling the verb is NOT denied: the documented limit of an accident guard', (_c, id, extra) => {

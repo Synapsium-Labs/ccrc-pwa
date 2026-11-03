@@ -13,6 +13,9 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { codeOnly } from './sourceScan.js';
+import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
+import { retireFacts } from './scan/parse.js';
+import { retirePortReaders } from './census-w4/retire.js';
 
 const ccrcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const rel = (p: string): string => path.relative(ccrcRoot, p).split(path.sep).join('/');
@@ -88,10 +91,10 @@ describe('the collect token reaches ws-collect only from the act job’s own aud
     expect(enclosingFunction('const x = 1;\nvoid CCD_ARGV.wsCollect(t, i, d);\n', 18), 'no function, no scope').toBeNull();
   });
 
-  it('there is ONE CCD_ARGV.wsCollect( site in server/src, inside collectTempRoot', () => {
+  it('there is ONE CCD_ARGV.wsCollect( site in server/src, inside collectTempRootAct', () => {
     const sites = sitesOf('wsCollect');
     expect(sites.map((s) => s.file)).toEqual([EXECUTOR]);
-    expect(enclosingFunction(sites[0]!.text, sites[0]!.at)?.name).toBe('collectTempRoot');
+    expect(enclosingFunction(sites[0]!.text, sites[0]!.at)?.name).toBe('collectTempRootAct');
   });
 
   it('its first argument is <obs>.token, <obs> bound ONCE as <answer>.value, <answer> the job’s one collectAudit( answer, before the act', () => {
@@ -107,18 +110,32 @@ describe('the collect token reaches ws-collect only from the act job’s own aud
     expect([...fn.body.matchAll(new RegExp(`\\b(?:const|let|var)\\s+${obs}\\b`, 'g'))].length, `${obs} is declared more than once`).toBe(1);
     const bindAt = binds[0]!.index! + binds[0]![0].search(new RegExp(`\\b${obs}\\b`));
     expect(new RegExp(`(?<![\\w$.])${obs}\\b`).exec(fn.body)!.index, `${obs} is named before its binding: a parameter, or an earlier value`).toBe(bindAt);
-    // <answer> is the binding of the job's ONE audit call, or ONE alias of it, both in this function and before <obs>.
-    const asks = [...fn.body.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=\s*await\s+collectAudit\s*\(\s*deps\s*,\s*job\.id\s*\)\s*;/g)];
-    expect(asks.length, `${fn.name} binds its own audit, await collectAudit(deps, job.id), exactly once`).toBe(1);
-    expect(fn.body.match(/\bcollectAudit\s*\(/g)?.length ?? 0, `${fn.name} calls collectAudit( more than once`).toBe(1);
-    const asked = asks[0]![1]!;
+    // D-7200 (ARCH-44 C4k): the job's ONE audit is asked by its port's `audit` reader, and the act is handed that answer
+    // as the `audit` fact of its third parameter. <answer> is bound ONCE as <facts>.audit, no parameter and no second
+    // alias, before <obs>; and the act asks no audit of its own.
+    const sig = retireFacts(parsedFile(EXECUTOR)).signatures[fn.name];
+    const facts = sig?.paramNames[2] ?? null;
+    expect(facts, `${fn.name} takes no third parameter, the facts`).not.toBeNull();
     const answer = binds[0]![1]!;
-    const via = answer === asked ? asks[0]! : new RegExp(`\\bconst\\s+${answer}\\s*(?::[^=;]+)?=\\s*${asked}\\s*;`).exec(fn.body);
-    expect(via, `${answer} is neither ${asked}, the audit call's binding, nor one alias of it`).not.toBeNull();
+    expect(sig!.paramNames, `${answer} is a parameter of ${fn.name}`).not.toContain(answer);
+    const via = [...fn.body.matchAll(new RegExp(`\\bconst\\s+${answer}\\s*(?::[^=;]+)?=\\s*${facts!}\\.audit\\s*;`, 'g'))];
+    expect(via.length, `${answer} is bound as ${facts!}.audit exactly once in ${fn.name}`).toBe(1);
     expect([...fn.body.matchAll(new RegExp(`\\b(?:const|let|var)\\s+${answer}\\b`, 'g'))].length, `${answer} is declared more than once`).toBe(1);
-    expect(asks[0]!.index!, 'the alias names an answer the function had not yet asked for').toBeLessThanOrEqual(via!.index!);
-    expect(via!.index!, `${obs} reads an answer bound after it`).toBeLessThan(binds[0]!.index!);
+    expect(fn.body.match(/\bcollectAudit\s*\(/g)?.length ?? 0, `${fn.name} asks an audit of its own`).toBe(0);
+    expect(via[0]!.index!, `${obs} reads an answer bound after it`).toBeLessThan(binds[0]!.index!);
     expect(binds[0]!.index!, 'the act composed before its observation').toBeLessThan(site);
+    // The port's ONE call, collectAudit(deps, job.id), inside its `audit` reader; learnCollect's is the file's only other.
+    const asks = callsIn(symbolOf(EXECUTOR, 'collectRetirePort')).filter((c) => c.name === 'collectAudit');
+    expect(asks.map((c) => [c.callee, ...c.args.map((a) => a.text)]), 'the port asks the audit once, as collectAudit(deps, job.id)')
+      .toEqual([['collectAudit', 'deps', 'job.id']]);
+    const reader = retirePortReaders(EXECUTOR, 'collectRetirePort').filter((r) => r.step === 'audit');
+    expect(reader, 'the port has one audit reader').toHaveLength(1);
+    expect(reader[0]!.start <= asks[0]!.start && asks[0]!.end <= reader[0]!.end, 'the port asks the audit outside its audit reader')
+      .toBe(true);
+    const learn = callsIn(symbolOf(EXECUTOR, 'learnCollect')).filter((c) => c.name === 'collectAudit');
+    expect(learn, 'learnCollect asks its own audit once').toHaveLength(1);
+    expect(parsedFile(EXECUTOR).calls.filter((c) => c.name === 'collectAudit').map((c) => c.start).sort((a, b) => a - b),
+      'a collectAudit( call outside the port and learnCollect').toEqual([asks[0]!.start, learn[0]!.start].sort((a, b) => a - b));
   });
 
   it('CONTROL: the gate pattern sees either form of the collector\'s question, and not another token or row', () => {
@@ -135,9 +152,17 @@ describe('the collect token reaches ws-collect only from the act job’s own aud
     const site = s!.at - fn.start;
     const stmt = Math.max(fn.body.lastIndexOf(';', site), fn.body.lastIndexOf('{', site), fn.body.lastIndexOf('}', site));
     const gates = [...fn.body.slice(0, stmt).matchAll(collectGate())];
-    expect(gates.length, 'asked at the job’s start and again before the act').toBeGreaterThanOrEqual(2);
+    // D-7200 (ARCH-44 C4k): the act asks once, in its own scope; the job's start and step 6 ask in the port (below).
+    expect(gates.length, 'the act asks again in its own scope, before the argv').toBeGreaterThanOrEqual(1);
     expect(fn.body.slice(gates.at(-1)!.index!, stmt), 'an await stands between the last capability check and the argv')
       .not.toMatch(/\bawait\b/);
+    // The port asks ccdCan(…, 'wsCollect') exactly twice: in its `capability` reader (step 1) and in its `lane` reader
+    // (step 6's caps, after the job's last await), each placed by its call's offset in that reader's span.
+    const readers = retirePortReaders(EXECUTOR, 'collectRetirePort');
+    const asks = callsIn(symbolOf(EXECUTOR, 'collectRetirePort'))
+      .filter((c) => c.name === 'ccdCan' && c.args[1]?.kind === 'string' && c.args[1].text === 'wsCollect');
+    expect(asks.map((c) => readers.find((r) => r.start <= c.start && c.end <= r.end)?.step ?? null),
+      'the port asks the collector\'s capability at step 1 and at step 6, in those readers, and nowhere else').toEqual(['capability', 'lane']);
   });
 });
 

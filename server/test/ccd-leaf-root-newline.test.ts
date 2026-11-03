@@ -117,7 +117,7 @@ describe('_ws_path_users: a parent whose physical path holds a newline is unmeas
 describe('_ws_expire_cwd_users: a parent whose physical path holds a newline is unmeasured — never "nobody"', () => {
   const EXP = 'demo-quiet-dune';
   const LEAF = 'quiet-dune';
-  /** The expiry probe's answer: its rc, and the verdict and detail it leaves (`_ws_reclaim_unmeasured`, `_reap_refuse`). */
+  /** The expiry probe's answer: its rc, and the verdict and detail it leaves (`_ws_reclaim_unmeasured`, `_ws_refuse`). */
   const cwdUsers = (workdir: string, pre = ''): { rc: string; verdict: string; detail: string } => {
     const [rc = '', verdict = '', detail = ''] = h.sh(`_ws_reclaim_reset; ${pre} _ws_expire_cwd_users ${EXP} "${workdir}"; rc=$?;`
       + ` printf '%s\\x1f%s\\x1f%s' "$rc" "\${REAP_VERDICT-}" "\${REAP_DETAIL-}"`).split('\x1f');

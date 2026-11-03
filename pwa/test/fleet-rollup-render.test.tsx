@@ -15,6 +15,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { HOUR, MIN, NOW, asking, coordinatorFleet, sess } from './rollupFixture';
+import { activity, frame } from './delegationFixture';
+import { NEST_BRACKET } from '../src/fleet/ProjectCard';
 
 const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
@@ -88,27 +90,30 @@ describe.each([REFINED, INSTRUMENT] as const)('the fleet rollup in the %s fleet 
     expect(busy.querySelectorAll('.sess-line')).toHaveLength(1);
   });
 
-  it('folds the workers to one line and keeps the one with the operator\'s question as its own row', () => {
+  // Task G2: the coordinator's workers fold into its programme box, and the box's footer is the one toggle
+  // that was the separate summary line.
+  it('folds the workers into the programme box and keeps the one with the operator\'s question in its tray', () => {
     mount(skin);
     const c = cardOf('project-c');
     expect(c.getAttribute('data-collapsed')).toBeNull();
-    const line = within(c).getByRole('button', { name: /5 workers · 1 needs you · 2 working · 2 idle/ });
+    const box = c.querySelector<HTMLElement>('section.pg-box')!;
+    const line = within(box).getByRole('button', { name: '4 more workers · 2 working' });
     expect(line.getAttribute('aria-expanded')).toBe('false');
-    // The coordinator and the asking worker: two rows, the three quiet siblings folded away.
+    // The coordinator and the asking worker: two rows, the four quiet siblings folded away.
     expect(c.querySelectorAll('.sess-line')).toHaveLength(2);
+    expect(box.querySelector('.pg-tray .sess-label')?.textContent).toBe('w5');
     fireEvent.click(line);
     expect(c.querySelectorAll('.sess-line')).toHaveLength(6);
   });
 
-  it('draws each count of the worker line as one unbreakable part, needs you first and in the attention ink', () => {
+  it('draws each count of the footer as one unbreakable part, and never counts the worker it draws', () => {
     mount(skin);
-    const line = within(cardOf('project-c')).getByRole('button', { name: /5 workers/ });
+    const line = within(cardOf('project-c')).getByRole('button', { name: /more workers/ });
     const parts = [...line.querySelectorAll('.proj-children-part')].map((el) => el.textContent);
-    expect(parts).toEqual(['5 workers', '1 needs you', '2 working', '2 idle']);
-    expect(line.querySelector('.proj-children-part--needs-you')?.textContent).toBe('1 needs you');
+    // The worker that needs you is in the tray, with its ask, so the footer counts only what it hides.
+    expect(parts).toEqual(['4 more workers', '2 working']);
     const css = readFileSync(join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
     expect(css).toMatch(/\.proj-children-part\s*\{[^}]*white-space:\s*nowrap/);
-    expect(css).toMatch(/\.proj-children-part--needs-you\s*\{[^}]*color:\s*var\(--status-attention-text\)/);
   });
 
   it('keeps a held-open project\'s ▾ in the tab order and says why it does nothing', () => {
@@ -129,6 +134,30 @@ describe.each([REFINED, INSTRUMENT] as const)('the fleet rollup in the %s fleet 
     cleanup();
     mount(skin);
     expect(cardOf('project-a').getAttribute('data-collapsed')).toBeNull();
+  });
+
+  it('W4-U31: a folded coordinator counts two live activities in its line and hides them; expanded, both nest', () => {
+    const store = mount(skin);
+    act(() => {
+      store.setState({ delegation: frame({ activities: [
+        activity({ activityId: 'a1', parentId: 'coord', displayName: 'map the tree' }),
+        activity({ activityId: 'a2', parentId: 'coord', displayName: 'read the plan', openedAt: '2026-10-26T10:01:00.000Z' }),
+      ] }) });
+    });
+    const c = cardOf('project-c');
+    // Task G2: the line is the programme box's footer, which counts what the tray hides: the four quiet workers, then
+    // the two activities, never as workers.
+    const line = within(c.querySelector<HTMLElement>('section.pg-box')!).getByRole('button', { name: /more workers/ });
+    expect([...line.querySelectorAll('.proj-children-part')].map((el) => el.textContent))
+      .toEqual(['4 more workers', '2 working', '2 delegated']);
+    expect(c.querySelectorAll('.proj-work')).toHaveLength(0);
+    fireEvent.click(line);
+    // Open, the footer hides the five workers and names the two activities apart from them.
+    const open = within(cardOf('project-c').querySelector<HTMLElement>('section.pg-box')!).getByRole('button', { name: /^hide/ });
+    expect([...open.querySelectorAll('.proj-children-part')].map((el) => el.textContent)).toEqual(['hide 5 workers', '2 delegated']);
+    const rows = [...cardOf('project-c').querySelectorAll('.proj-work')];
+    expect(rows).toHaveLength(2);
+    for (const r of rows) expect(r.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);
   });
 });
 

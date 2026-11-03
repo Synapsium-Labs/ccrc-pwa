@@ -11,7 +11,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-libra
 import type { NodeWire, UpdatesView } from '../../shared/api';
 import type { BoxTokenView, RotateAnswer } from '../../shared/box-token';
 import { BOX_TOKEN_PHASES, TOKEN_HOLDS } from '../../shared/box-token';
-import { boxTokenHoldText, boxTokenStateText, boxTokenTransportText } from '../src/screens/settings/SecuritySection';
+import { boxTokenHoldText, boxTokenStateText, boxTokenTransportText } from '../src/screens/settings/boxTokenWords';
 import { renderSettings } from './settingsHost';
 import { asUpdatesView } from '../src/fleet/updatesRead';
 import { ApiError, api, apiErrorText, createApi, readBoxTokenView } from '../src/lib/api';

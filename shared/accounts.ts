@@ -75,6 +75,10 @@ export interface LaneState {
   readonly keyExpiresAt?: number;
   readonly seedVerifiedAt?: number;
   readonly lastRunAt?: number;
+  /** When `add` made the lane and when `enable` first switched it on (accounts plan Task A16): the write routes' discard
+   *  check reads them (A17, D-7739). Never on `LaneWire`. */
+  readonly addedAt?: number;
+  readonly enabledAt?: number;
 }
 
 /** The two non-readings stay two (D-5517): an absent file is Not checked, an unreadable one Inconclusive. */
@@ -132,6 +136,26 @@ const resetLine = (resetAt: number | null | undefined, now: number): string => {
   return ` · resets in ${left >= 60 ? `${Math.floor(left / 60)}h ${left % 60}m` : `${left}m`}`;
 };
 
+/** The source sentences whose words carry an age, spelled once: `stateWordFor` writes them at the server's instant and
+ *  `sourceAt` speaks them again at the screen's (D-7718 (10)). */
+const checkedAgo = (at: number, now: number): string => `checked ${shortSpan(now - at)} ago`;
+const limitSource = (window: '5h' | '7d', resetAt: number | null | undefined, now: number): string =>
+  `${window} limit reached${resetLine(resetAt, now)}`;
+const unreachedSource = (at: number, now: number): string =>
+  `the last check couldn't reach the provider · ${checkedAgo(at, now)} · nothing was learned about the credential`;
+const mintedTokenSource = (mintedAt: number, now: number): string => {
+  const left = mintedAt + MINTED_TOKEN_LIFETIME_MS - now;
+  const months = Math.floor((now - mintedAt) / (DAY_MS * 365.25 / 12));
+  const weeks = Math.round(left / DAY_MS / 7); // a unit (days to weeks), not a seven-day quantity
+  const leftLine = left <= 0 ? 'past its estimated year'
+    : weeks >= 1 ? `about ${plural(weeks, 'week')} left` : `about ${plural(Math.ceil(left / DAY_MS), 'day')} left`;
+  return `token minted ${plural(months, 'month')} ago · ${leftLine} · estimated`;
+};
+const keyExpirySource = (expiresAt: number, now: number): string => {
+  const days = Math.ceil((expiresAt - now) / DAY_MS);
+  return days > 0 ? `key expires in ${plural(days, 'day')} · set when minted` : 'key expired · set when minted';
+};
+
 /**
  * THE ONE STATE WORD (D-5517, spec §4.1; created by Task A12 ahead of A2, D-6058 (3)): the first row of the table that applies, with its source. Pure, L1 policy
  * in L0: the server derives `LaneWire.state` from it, and nothing re-derives a word elsewhere.
@@ -156,15 +180,15 @@ export function stateWordFor(i: StateWordInput): AccountStateAnswer {
   if (i.disabled) return { word: 'off', source: 'Off on the fleet host' };
 
   if (check?.verdict === 'auth-dead') {
-    return { word: 'signed-out', source: `HTTP 401 · checked ${shortSpan(now - check.at)} ago`, at: check.at };
+    return { word: 'signed-out', source: `HTTP 401 · ${checkedAgo(check.at, now)}`, at: check.at };
   }
   if (i.authDead) return { word: 'signed-out', source: 'HTTP 401' };
 
   if (i.five !== null && i.five >= WINDOW_LIMITED_PCT) {
-    return { word: 'rate-limited', source: `5h limit reached${resetLine(i.fiveResetAt, now)}` };
+    return { word: 'rate-limited', source: limitSource('5h', i.fiveResetAt, now) };
   }
   if (i.seven !== null && i.seven >= WINDOW_LIMITED_PCT) {
-    return { word: 'rate-limited', source: `7d limit reached${resetLine(i.sevenResetAt, now)}` };
+    return { word: 'rate-limited', source: limitSource('7d', i.sevenResetAt, now) };
   }
   const credit = openrouterKey ? st?.credit : undefined;
   if (credit !== undefined && credit.limit !== null && credit.remaining !== null && credit.remaining <= 0) {
@@ -173,13 +197,7 @@ export function stateWordFor(i: StateWordInput): AccountStateAnswer {
 
   if (mintedToken && st?.mintedAt !== undefined) {
     const left = st.mintedAt + MINTED_TOKEN_LIFETIME_MS - now;
-    if (left < MINTED_TOKEN_EXPIRING_MS) {
-      const months = Math.floor((now - st.mintedAt) / (DAY_MS * 365.25 / 12));
-      const weeks = Math.round(left / DAY_MS / 7); // a unit (days to weeks), not a seven-day quantity
-      const leftLine = left <= 0 ? 'past its estimated year'
-        : weeks >= 1 ? `about ${plural(weeks, 'week')} left` : `about ${plural(Math.ceil(left / DAY_MS), 'day')} left`;
-      return { word: 'expiring', source: `token minted ${plural(months, 'month')} ago · ${leftLine} · estimated`, at: st.mintedAt };
-    }
+    if (left < MINTED_TOKEN_EXPIRING_MS) return { word: 'expiring', source: mintedTokenSource(st.mintedAt, now), at: st.mintedAt };
   }
   if (credit !== undefined && credit.limit !== null && credit.limit > 0 && credit.remaining !== null
       && credit.remaining <= credit.limit * CREDIT_EXPIRING_FRACTION) {
@@ -187,34 +205,72 @@ export function stateWordFor(i: StateWordInput): AccountStateAnswer {
   }
   if (openrouterKey && st?.keySource === 'minted' && st.keyExpiresAt !== undefined
       && st.keyExpiresAt - now < MINTED_KEY_EXPIRING_MS) {
-    const days = Math.ceil((st.keyExpiresAt - now) / DAY_MS);
-    return {
-      word: 'expiring',
-      source: days > 0 ? `key expires in ${plural(days, 'day')} · set when minted` : 'key expired · set when minted',
-      at: st.keyExpiresAt,
-    };
+    return { word: 'expiring', source: keyExpirySource(st.keyExpiresAt, now), at: st.keyExpiresAt };
   }
 
   if (lane.kind === 'unreadable') return { word: 'inconclusive', source: 'lane state unreadable' };
   if (check === undefined) return { word: 'not-checked', source: 'no check recorded yet' };
   if (now - check.at >= SIGNED_IN_WITHIN_MS) {
-    return { word: 'not-checked', source: `last checked ${shortSpan(now - check.at)} ago`, at: check.at };
+    return { word: 'not-checked', source: `last ${checkedAgo(check.at, now)}`, at: check.at };
   }
-  if (check.verdict === 'ok') return { word: 'signed-in', source: `checked ${shortSpan(now - check.at)} ago`, at: check.at };
-  return {
-    word: 'inconclusive',
-    source: `the last check couldn't reach the provider · checked ${shortSpan(now - check.at)} ago · nothing was learned about the credential`,
-    at: check.at,
-  };
+  if (check.verdict === 'ok') return { word: 'signed-in', source: checkedAgo(check.at, now), at: check.at };
+  return { word: 'inconclusive', source: unreachedSource(check.at, now), at: check.at };
+}
+
+/** The reset instants (epoch seconds) a Rate-limited source counts down to: the telemetry row's, which is what
+ *  `stateWordFor` read them from. */
+export interface SourceResets {
+  readonly fiveResetAt?: number | null;
+  readonly sevenResetAt?: number | null;
+}
+
+/** "checked 4m ago" wherever a source says how long ago its check was. */
+const CHECKED_AGO_RE = /\bchecked \d+[smhd] ago\b/;
+/** A window's limit with or without its countdown. */
+const LIMIT_RE = /^(5h|7d) limit reached(?: · resets in (?:\d+h )?\d+m)?$/;
+const MINTED_TOKEN_RE = /^token minted \d+ months? ago · (?:past its estimated year|about \d+ (?:weeks?|days?) left) · estimated$/;
+const KEY_EXPIRY_RE = /^key expire(?:s in \d+ days?|d) · set when minted$/;
+
+/**
+ * An answer's source spoken at `now` (D-7718 (10)). The server writes its ages into the source at request time
+ * ("checked 2h ago", "resets in 1h 12m", "key expires in 9 days"), and an answer the screen holds keeps that text for
+ * as long as it holds the answer: offline, for hours. Every other age on the card is the screen's own, from its own
+ * clock, so a held source would contradict its card. This says the same sentence again from the instant it was
+ * measured (`answer.at`) or the window's reset (`resets`), with the same spelling `stateWordFor` used, so a source
+ * re-spoken at the server's instant is the server's text. A source this build does not recognise (a newer server's), an
+ * answer with no finite `at`, or a countdown with no reset to count to, stands as it came. The word is never changed:
+ * a word that would have moved since is the held answer's, and the screen says how old that answer is elsewhere.
+ */
+export function sourceAt(answer: AccountStateAnswer, now: number, resets?: SourceResets): string {
+  const { word, source } = answer;
+  const at = typeof answer.at === 'number' && Number.isFinite(answer.at) ? answer.at : undefined;
+  switch (word) {
+    case 'signed-out': case 'signed-in': case 'not-checked': case 'inconclusive':
+      return at !== undefined && CHECKED_AGO_RE.test(source) ? source.replace(CHECKED_AGO_RE, checkedAgo(at, now)) : source;
+    case 'rate-limited': {
+      const m = LIMIT_RE.exec(source);
+      if (m === null || resets === undefined) return source;
+      const window = m[1] as '5h' | '7d';
+      return limitSource(window, window === '5h' ? resets.fiveResetAt : resets.sevenResetAt, now);
+    }
+    case 'expiring':
+      if (at === undefined) return source;
+      if (MINTED_TOKEN_RE.test(source)) return mintedTokenSource(at, now);
+      if (KEY_EXPIRY_RE.test(source)) return keyExpirySource(at, now);
+      return source;
+    default:
+      return source;
+  }
 }
 
 /** Why a lane is not ready, the first that applies (A13's three conditions, as the lane-state file records them): no
- *  readable lane state, no last check of `ok`, or no seed verified after the last run. Display only (D-5518): `enable`
- *  reads the file on the box. Spelled here, structurally, as `LANE_NOT_READY_REASONS` in `shared/api.ts`. */
-export function laneNotReadyReason(read: LaneStateRead): 'no-lane-state' | 'not-checked' | 'seed-unverified' | null {
+ *  readable lane state, no check, a last check not `ok`, or no seed verified after the last run. Display only (D-5518):
+ *  `enable` reads the file on the box, which alone also answers `no-credential` (D-7732). In the box's order. */
+export function laneNotReadyReason(read: LaneStateRead): 'no-lane-state' | 'not-checked' | 'check-failed' | 'seed-unverified' | null {
   if (read.kind !== 'read') return 'no-lane-state';
   const st = read.state;
-  if (st.check?.verdict !== 'ok') return 'not-checked';
+  if (st.check === undefined) return 'not-checked';
+  if (st.check.verdict !== 'ok') return 'check-failed';
   if (st.seedVerifiedAt === undefined || st.lastRunAt === undefined || !(st.seedVerifiedAt > st.lastRunAt)) return 'seed-unverified';
   return null;
 }
@@ -233,6 +289,12 @@ const UNPRINTABLE_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Cf}]/u;
  *  on the wire than the hint is meant to show. */
 export const KEY_HINT_RE = /^[A-Za-z0-9_-]{1,16}…[A-Za-z0-9]{4}$/;
 
+/** An identity a lane-state file may hold and a screen may draw: 1 to `LANE_IDENTITY_MAX` characters, not blank, no
+ *  unprintable character. The one grammar for the file's `identity` and for the stated account `set` carries (the write
+ *  routes refuse anything else `bad-stated` before the verb, which holds it to its own rule again; A17, D-7739). */
+export const isLaneIdentity = (v: unknown): v is string =>
+  typeof v === 'string' && v.trim() !== '' && v.length <= LANE_IDENTITY_MAX && !UNPRINTABLE_RE.test(v);
+
 const timeOf = (v: unknown): number | undefined => {
   if (typeof v !== 'string' || !ISO_RE.test(v)) return undefined;
   const t = Date.parse(v);
@@ -246,7 +308,8 @@ const oneOf = <T extends string>(set: readonly T[], v: unknown): T | undefined =
 /**
  * The lane-state file's JSON, held field by field to its grammar (D-5755 (11): any fleet-user process can write the
  * file, so every field is untrusted). A field off its grammar is dropped, never the file: what is left is still a
- * measurement. Only the fields `LaneWire` carries or `stateWordFor` reads are kept; `keyHash`, `retiredKeyHash`,
+ * measurement. Only the fields `LaneWire` carries, `stateWordFor` reads or the write routes' discard check reads
+ * (`addedAt`, `enabledAt`) are kept; `keyHash`, `retiredKeyHash`,
  * `keyLimit`, `limitReset` and `fleetIdentity` never leave the box's file through here. `null` for a value that is
  * not a JSON object, which the reader answers as unreadable.
  */
@@ -260,9 +323,7 @@ export function laneStateOf(json: unknown): LaneState | null {
     if (at !== undefined) out.check = { verdict: c.verdict, at };
   }
   const id = o['identity'];
-  if (typeof id === 'string' && id.trim() !== '' && id.length <= LANE_IDENTITY_MAX && !UNPRINTABLE_RE.test(id)) {
-    out.identity = id;
-  }
+  if (isLaneIdentity(id)) out.identity = id;
   const idSource = oneOf(LANE_IDENTITY_SOURCES, o['identitySource']);
   if (idSource !== undefined) out.identitySource = idSource;
   const hint = o['keyHint'];
@@ -275,9 +336,31 @@ export function laneStateOf(json: unknown): LaneState | null {
     const remaining = amountOf(cr.limit_remaining);
     if (limit !== undefined && remaining !== undefined && (limit === null || limit >= 0)) out.credit = { limit, remaining };
   }
-  for (const k of ['validatedAt', 'mintedAt', 'keyExpiresAt', 'seedVerifiedAt', 'lastRunAt'] as const) {
+  for (const k of ['validatedAt', 'mintedAt', 'keyExpiresAt', 'seedVerifiedAt', 'lastRunAt', 'addedAt', 'enabledAt'] as const) {
     const t = timeOf(o[k]);
     if (t !== undefined) out[k] = t;
   }
   return out;
+}
+
+// ── The kind chip (spec §4.1 "Type is visible"; accounts plan Task A2, D-7718) ──────────────────────────────────────
+
+/** Each lane kind's chip, keyed `<provider>/<kind>` (`RosterKindWire`'s two fields, spelled structurally so this file
+ *  imports nothing): `words` is Refined's mono chip, `code` Instrument's short column (A4). The one list: the screens
+ *  read it through `kindCodeOf` and never re-list a kind. */
+export const KIND_CODES = {
+  'anthropic/sign-in': { words: 'claude · sign-in', code: 'cl·in' },
+  'anthropic/token': { words: 'claude · token', code: 'cl·tok' },
+  'openai/codex': { words: 'chatgpt · codex', code: 'gpt' },
+  'openrouter/key': { words: 'openrouter · key', code: 'or' },
+  'compatible/key': { words: 'compatible · key', code: 'cmp' },
+} as const;
+export type KindCode = (typeof KIND_CODES)[keyof typeof KIND_CODES];
+
+/** The chip for a lane's provider and kind, or `null` when the roster does not say (an older server, an undeclared
+ *  lane) or names a pair this build has no chip for: no chip rather than a wrong one. */
+export function kindCodeOf(provider: string | undefined, kind: string | undefined): KindCode | null {
+  if (provider === undefined || kind === undefined) return null;
+  const key = `${provider}/${kind}`;
+  return Object.prototype.hasOwnProperty.call(KIND_CODES, key) ? KIND_CODES[key as keyof typeof KIND_CODES] : null;
 }

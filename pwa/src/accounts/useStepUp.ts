@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { StepUpAnswer, StepUpStart } from '../../../shared/api';
 import { ApiError, api } from '../lib/api';
 import { PasskeyCeremonyError, assertStepUp, passkeyLoginSupported, type CredentialsApi } from '../lib/passkey';
+import { onPageVisible } from '../lib/pageClock';
 
 /**
  * THE STEP OF "CONFIRM IT'S YOU" (D-5512, spec §3.2; accounts plan Task A6; D-5690).
@@ -245,8 +246,7 @@ export function useStepUp(freshUntil: number | null, deps: StepUpDeps = {}): Ste
       if (document.visibilityState !== 'visible' || busyRef.current || challenge.current === null) return;
       setGeneration((g) => g + 1);
     };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
+    return onPageVisible(onVisibility);
   }, [needed]);
 
   const confirmed = useCallback((a: StepUpAnswer): void => {

@@ -16,13 +16,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { CCD_FUNCTION_DEF, ccdCallGraph, ccdFunctionDefinitions } from './consolidationCensus.js';
 import { DEFAULT_TEST_ROSTER } from './helpers/roster.js';
 import { PANE_EXEC, paneFragment } from './worktreeIdentityFixture.js';
 
 const LINUX = process.platform === 'linux';
-const SRC = fs.readFileSync(CCD, 'utf8');
+const SRC = ccdSource();
 const UUID = 'deadbeef-0000-4000-8000-000000000000';
 const ID = 'demo-quiet-mesa';
 const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

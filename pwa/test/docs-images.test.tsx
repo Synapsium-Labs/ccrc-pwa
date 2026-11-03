@@ -13,12 +13,14 @@ import {
   type DocPin, type DocsEntry, type DocsPageLocation, type DocsTreeOk,
 } from '../../shared/docs';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
-import { SHARED_COMPONENTS } from '../src/lib/markdown';
+import { SHARED_COMPONENTS, codeLanguage, inMarkdownPageBudget, inScanPageBudget } from '../src/lib/markdown';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
 import { DocImage, DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
 import { DocLink, DocLinkContext, type DocLinkContextValue } from '../src/docs/DocLink';
-import { detachUrls, docsLocation, imagePinFor, type ImagePin } from '../src/docs/docsLinks';
+import {
+  detachUrls, docsLocation, imagePinFor, type DocsHighlightLanguages, type ImagePin,
+} from '../src/docs/docsLinks';
 import {
   DOC_IMAGE_REFUSED_SENTENCE, DOC_IMAGE_TEXT, DOCS_SHOW_NOT_SVG, failureSentence, fillSentence, kib, slotSentence,
   type DocImageRefusal,
@@ -26,6 +28,9 @@ import {
 import { DOCS_PWA_FETCH_CONCURRENCY, createFetchQueue, type FetchQueue } from '../src/docs/fetchQueue';
 import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
 import { COMMIT_A, COMMIT_B, SERVED, draftOf, entry, failedAnswer, fileResponse, holder, pageAt, treeOk } from './docsFixtures';
+
+/** The renderer's three grammar facts, as the Docs page hands them to `detachUrls` (D-7574). */
+const LANGS: DocsHighlightLanguages = { codeLanguage, inScanPageBudget, inMarkdownPageBudget };
 
 const FP_2 = 'e'.repeat(64);
 
@@ -118,7 +123,7 @@ interface DocOpts {
 function docUi(src: string | HastRoot, o: DocOpts = {}) {
   const page = leafAt(o.url ?? '/docs/demo/specs/a.md');
   const tree = o.tree ?? treeOk();
-  const d = detachUrls(typeof src === 'string' ? treeOf(src) : src);
+  const d = detachUrls(typeof src === 'string' ? treeOf(src) : src, LANGS);
   const assets = o.assets ?? fakeAssets();
   const ctx: DocLinkContextValue = {
     project: page.project, pageRef: page.ref, view: page.view, section: page.section, path: page.path, tree,
@@ -331,7 +336,7 @@ describe('M4.U1: nothing hostile becomes src, and nothing is fetched for it', ()
   });
 
   it('outside a Docs page every image is refused, and nothing is fetched', () => {
-    const d = detachUrls(treeOf('![i](i.png)'));
+    const d = detachUrls(treeOf('![i](i.png)'), LANGS);
     const bare = render(<>{renderHast(d.tree, { components: { ...SHARED_COMPONENTS, img: DocImage } })}</>);
     expect(bare.container.querySelector('span.doc-img-refused')?.textContent).toBe(refusedText('outside-page'));
     cleanup();

@@ -23,6 +23,9 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { hashLine } from '../src/auth/secret.js';
 import { CCRC_API, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
+import { clientRoutes } from './ccrcApiTable.js';
+import { renderServerCaps, SERVER_CAPS, SERVER_CAPS_FILE } from '../../shared/api.js';
+import { runClient, writeClientHome, type Run } from './ccrcApiClient.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { loopbackCurlFront } from './containedTools.js';
@@ -34,17 +37,6 @@ let seen: { method: string; url: string; auth: string | undefined; body: string 
 let reply: { code: number; body: string };
 
 const TOKEN = 'z'.repeat(64);
-
-/** The token file as it really ships: a `#`-comment preamble above ONE value
- *  line. Measured on the fleet host 2026-08-26 — 23 preamble lines above a
- *  64-char value — and reproduced here because a fixture holding a bare token
- *  would let a `cat`-shaped read pass this whole file. */
-const tokenDoc = (): string =>
-  ['# ccrc box token — do not commit, do not print.',
-   '# The server reads this with coord/token.ts\'s extractToken:',
-   '# first non-blank, non-# line, whitespace stripped.',
-   '',
-   TOKEN, ''].join('\n');
 
 beforeEach(async () => {
   home = mkTmp('ccrc-api-home-');
@@ -65,11 +57,7 @@ beforeEach(async () => {
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const port = (server.address() as AddressInfo).port;
 
-  fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
-  fs.mkdirSync(path.join(home, '.cc-secrets'), { recursive: true });
-  fs.writeFileSync(path.join(home, '.ccrc', 'agent.env'),
-    `CCRC_AGENT_TOKEN=irrelevant\nCCRC_SERVER_URL=http://127.0.0.1:${port}\n`);
-  fs.writeFileSync(path.join(home, '.cc-secrets', 'ccrc-mail.token'), tokenDoc(), { mode: 0o600 });
+  writeClientHome(home, `http://127.0.0.1:${port}`, TOKEN);
 });
 
 afterEach(async () => {
@@ -77,46 +65,9 @@ afterEach(async () => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-/** `stdinEpipe`: the child left before it read all of its stdin (a refusal that
- *  never reads it). That is the child's answer, not a harness failure, so it is
- *  recorded here and every other stdin error still throws. */
-type Run = { stdout: string; stderr: string; status: number; stdinEpipe: boolean };
-
-/** Runs the client. ASYNC, and that is not a style choice: the fake server above
- *  listens in THIS process, so a synchronous `execFileSync` would block the event
- *  loop for as long as the child runs — the server could never accept the
- *  connection, and every call would sit until curl's own `-m` bound expired.
- *  Measured while writing this file: 30047ms per case, `seen` empty, which reads
- *  exactly like a broken client and is not one.
- *
- *  Never rejects on a non-zero exit: the exit status is part of what these tests
- *  measure, so turning it into an exception would hide it. */
-function run(args: string[], input?: string,
-             overrides?: Record<string, string | undefined>): Promise<Run> {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true });
-  // EXPLICIT, NEVER INHERITED. `process.env` is spread above, so a developer
-  // running this suite inside a tmux pane hands the child a real TMUX_PANE and
-  // the "no pane" case would measure their terminal instead of the fixture.
-  // `undefined` DELETES — the state cron and CI are actually in.
-  for (const [k, v] of Object.entries(overrides ?? {})) {
-    if (v === undefined) delete env[k]; else env[k] = v;
-  }
-  return new Promise<Run>((resolve) => {
-    const child = spawn(CCRC_API, args, { env });
-    let stdout = '', stderr = '', stdinEpipe = false;
-    child.stdout.on('data', (c) => { stdout += c; });
-    child.stderr.on('data', (c) => { stderr += c; });
-    child.stdin.on('error', (e: NodeJS.ErrnoException) => {
-      if (e.code !== 'EPIPE') throw e;
-      stdinEpipe = true;
-    });
-    // stdin is CLOSED unless a test supplies input. Left open, `--json -` would
-    // block in `cat` forever — the client is right to wait, so the harness must
-    // be explicit about there being nothing to read.
-    if (input !== undefined) child.stdin.end(input); else child.stdin.end();
-    child.on('close', (code) => resolve({ stdout, stderr, status: code ?? -1, stdinEpipe }));
-  });
-}
+/** Runs the client in this file's fixture HOME (`ccrcApiClient.ts#runClient`, moved there, D-7320). */
+const run = (args: string[], input?: string, overrides?: Record<string, string | undefined>): Promise<Run> =>
+  runClient(home, args, input, overrides);
 
 /** The two names this file used to have for one thing. `run` already captures
  *  both streams, so `runBoth` is the same call — kept as an alias only until the
@@ -191,20 +142,21 @@ const sh = (script: string, input: string): Promise<string> =>
  *  second copy of this slice is exactly how the two would come to disagree,
  *  which is the fault the pin exists to catch one level up.
  *
- *  The class allows a HYPHEN: `runs items-list` is the first two-word verb, and
- *  a `[a-z.]+` class silently DROPPED it (D-843) — that is the whole reason this
- *  reads the client instead of counting the `ROWS` table below. */
-const routeKeys = (): string[] => {
-  const src = fs.readFileSync(CCRC_API, 'utf8');
-  const table = src.slice(src.indexOf('declare -A ROUTES=('));
-  return [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.-]+)\]=/gm)].map((m) => m[1]!);
-};
+ *  Read through `ccrcApiTable.ts#clientRoutes`, the one reader of the table
+ *  (D-7320), whose key class allows a HYPHEN: `runs items-list` is the first
+ *  two-word verb, and a `[a-z.]+` class silently DROPPED it (D-843) — that is
+ *  the whole reason this reads the client instead of counting the `ROWS` table
+ *  below. */
+const routeKeys = (): string[] => clientRoutes().map((r) => r.key);
 
 describe('the closed route table', () => {
   // One case per row of the table, method AND path, because a table is only a
   // table if every row is reachable and lands where it says. The ids here are
   // deliberately plain: the id-validation cases live in their own describe.
-  const ROWS: [string[], string, string][] = [
+  // The four claimant rows carry a fourth element, the question door family's path the row names (D-7325), sent in
+  // place of the third only while the server advertises `questions-v1` (the describe below); with no cap file, as
+  // every row here runs, each row sends its own path.
+  const ROWS: [string[], string, string, string?][] = [
     [['runs', 'list'], 'GET', '/api/runs'],
     [['runs', 'open'], 'POST', '/api/runs'],
     [['runs', 'dispatch', '12'], 'POST', '/api/runs/12/dispatch'],
@@ -227,9 +179,12 @@ describe('the closed route table', () => {
     [['claims', 'release', '3'], 'POST', '/api/claims/3/release'],
     [['ledger', 'list'], 'GET', '/api/ledger'],
     [['ledger', 'allocate'], 'POST', '/api/ledger/deviations'],
+    // The landing line's read (landing order wave 5e, D-7625).
+    [['landing', 'show'], 'GET', '/api/landing'],
     [['asks', 'list'], 'GET', '/api/asks'],
-    [['asks', 'answer', '7'], 'POST', '/api/asks/7/answer'],
-    [['asks', 'release', '7'], 'POST', '/api/asks/7/release'],
+    // The claimant's two ask rows: the question door family's path since the old doors retired (K5 Q3l, D-7324).
+    [['asks', 'answer', '7'], 'POST', '/api/questions/ask-7/rule'],
+    [['asks', 'release', '7'], 'POST', '/api/questions/ask-7/release'],
     // The durable feed, filterable by programme (cross-repo programmes §4). A
     // NEW ROW rather than a `--program` on some existing one: the table is the
     // client's own contract and grows by a row, never by a URL argument.
@@ -242,14 +197,40 @@ describe('the closed route table', () => {
     [['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], 'GET', '/api/approvals/41/ruling'],
     [['approvals', 'key'], 'GET', '/api/approvals/key'],
     // The claimant's three rows (coordinator-first routing, plan Task 16, D-5298).
-    [['approvals', 'rule', '41'], 'POST', '/api/approvals/41/rule'],
-    [['approvals', 'release', '41'], 'POST', '/api/approvals/41/release'],
+    [['approvals', 'rule', '41'], 'POST', '/api/questions/approval-41/rule'],
+    [['approvals', 'release', '41'], 'POST', '/api/questions/approval-41/release'],
     [['approvals', 'show', '41'], 'GET', '/api/approvals/41'],
+    // The test box's two rows (test box plan TB9, D-7411, D-7554): its status block and the update lane's tools sync.
+    [['testbox', 'status'], 'GET', '/api/testbox'],
+    [['testbox', 'tools-sync'], 'POST', '/api/testbox/tools-sync'],
+    // The programme ledgers' nine rows (plan PL3): items by programme slug, item moves by item id, Goals by slug.
+    [['items', 'raise', 'prog-a'], 'POST', '/api/programmes/prog-a/items'],
+    [['items', 'list', 'prog-a'], 'GET', '/api/programmes/prog-a/items'],
+    [['items', 'confirm', '7'], 'POST', '/api/items/7/confirm'],
+    [['items', 'return', '7'], 'POST', '/api/items/7/return'],
+    [['items', 'withdraw', '7'], 'POST', '/api/items/7/withdraw'],
+    [['items', 'block', '7'], 'POST', '/api/items/7/blocking'],
+    [['goals', 'pin', 'prog-a'], 'POST', '/api/programmes/prog-a/spec'],
+    [['goals', 'modify', 'prog-a'], 'POST', '/api/programmes/prog-a/modifications'],
+    [['goals', 'merged', 'prog-a'], 'POST', '/api/programmes/prog-a/modifications/merged'],
+    // The twelve Linear rows (D-7669, #1444): every one derives the pane's identity into its query, so each runs in a pane.
+    [['linear', 'workspaces'], 'GET', '/api/linear/proxy/workspaces'],
+    [['linear', 'teams'], 'GET', '/api/linear/proxy/teams'],
+    [['linear', 'issue', 'AAA-12'], 'GET', '/api/linear/proxy/issues/AAA-12'],
+    [['linear', 'search'], 'POST', '/api/linear/proxy/search'],
+    [['linear', 'comments', 'AAA-12'], 'GET', '/api/linear/proxy/issues/AAA-12/comments'],
+    [['linear', 'statuses'], 'GET', '/api/linear/proxy/statuses'],
+    [['linear', 'projects'], 'GET', '/api/linear/proxy/projects'],
+    [['linear', 'labels'], 'GET', '/api/linear/proxy/labels'],
+    [['linear', 'users'], 'GET', '/api/linear/proxy/users'],
+    [['linear', 'create'], 'POST', '/api/linear/proxy/issues'],
+    [['linear', 'update', 'AAA-12'], 'POST', '/api/linear/proxy/issues/AAA-12'],
+    [['linear', 'comment', 'AAA-12'], 'POST', '/api/linear/proxy/issues/AAA-12/comments'],
   ];
 
-  it.each(ROWS)('%s -> %s %s', async (args, method, url) => {
+  it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
     const paned = (args[0] === 'asks' && args[1] === 'list') || args[0] === 'coordinators'
-      || (args[0] === 'approvals' && args[1] === 'show');
+      || (args[0] === 'approvals' && args[1] === 'show') || args[0] === 'linear';
     if (paned) plantPane('demo-ws');
     await run(args as string[], undefined, paned ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
@@ -257,6 +238,10 @@ describe('the closed route table', () => {
     // Query strings are the caller's (`mail list --to x` appends one); the path
     // is the table's, so compare the path half exactly.
     expect(seen[0]!.url.split('?')[0]).toBe(url);
+    // The row's fifth field, read through the one reader of the table (D-7320): the family's template on the four
+    // claimant rows from Q3j; none on any row since Q3l (D-7324), whose path is the family's own.
+    const row = clientRoutes().find((r) => r.key === `${args[0]}.${args[1]}`)!;
+    expect(row.family === null ? null : row.family.replace('{id}', args[2]!)).toBe(family ?? null);
   });
 
   it('has exactly the rows exercised above — the table is read from the client, not from here', () => {
@@ -277,7 +262,11 @@ describe('the closed route table', () => {
     // Twenty-five since `coordinators.intent` (delegation broker wave 3, Task 15).
     // Twenty-eight since the approvals rows (coordinator-first routing, plan Task 14).
     // Thirty-one since the claimant's approvals rows (plan Task 16).
-    expect(keys).toHaveLength(31);
+    // Thirty-three since the test box's status and tools-sync rows (test box plan TB9, D-7411).
+    // Thirty-four since the landing line's read (landing order wave 5e, D-7625).
+    // Forty-six since the twelve Linear rows (D-7669, #1444).
+    // Fifty-five since the programme ledgers' nine (plan PL3).
+    expect(keys).toHaveLength(55);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -287,6 +276,10 @@ describe('the closed route table', () => {
       19: 'nineteen', 20: 'twenty', 21: 'twenty-one', 22: 'twenty-two',
       23: 'twenty-three', 24: 'twenty-four', 25: 'twenty-five', 26: 'twenty-six',
       27: 'twenty-seven', 28: 'twenty-eight', 29: 'twenty-nine', 30: 'thirty', 31: 'thirty-one',
+      32: 'thirty-two', 33: 'thirty-three', 34: 'thirty-four', 35: 'thirty-five', 36: 'thirty-six',
+      37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
+      43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
+      49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -318,6 +311,145 @@ describe('the closed route table', () => {
     const r = await run(['coord', 'pause']);
     expect(r.status).not.toBe(0);
     expect(seen).toHaveLength(0);
+  });
+});
+
+describe('the four claimant rows send the question door family, and refuse locally only a current cap file without questions-v1 (D-7322, D-7324, D-7328)', () => {
+  // `~/.ccrc/server-caps`, as `ccd-update-sync` writes it on a fleet node: `at`, the words, `end`. Only the four
+  // claimant rows read it, through the one guarded call `census-w3/claimant.ts#capReaderCalls()` counts; no row here
+  // puts a FIFO or any other blocking file at the path, because the reader's `<` open blocks on one (D-7339).
+  const capFile = (): string => path.join(home, '.ccrc', SERVER_CAPS_FILE);
+  const nowS = (): number => Math.floor(Date.now() / 1000);
+  const writeCaps = (words: readonly string[] = SERVER_CAPS, at = nowS()): void => {
+    fs.writeFileSync(capFile(), renderServerCaps(words, at));
+  };
+  const CLAIMANT: ReadonlyArray<readonly [string, string, string, 'ask' | 'approval', string]> = [
+    ['asks', 'answer', '/api/questions/ask-7/rule', 'ask', '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}'],
+    ['asks', 'release', '/api/questions/ask-7/release', 'ask', '{"fromId":"parent","fromUuid":"u"}'],
+    ['approvals', 'rule', '/api/questions/approval-7/rule', 'approval', '{"fromId":"parent","fromUuid":"u","verdict":"allow","reason":"r"}'],
+    ['approvals', 'release', '/api/questions/approval-7/release', 'approval', '{"fromId":"parent","fromUuid":"u"}'],
+  ];
+
+  it('the family rows are exactly the four claimant rows, read through clientRoutes(), the family their only path', () => {
+    expect(clientRoutes().filter((r) => r.path.startsWith('/api/questions/')).map((r) => [r.key, r.path])).toEqual([
+      ['asks.answer', '/api/questions/ask-{id}/rule'], ['asks.release', '/api/questions/ask-{id}/release'],
+      ['approvals.rule', '/api/questions/approval-{id}/rule'], ['approvals.release', '/api/questions/approval-{id}/release'],
+    ]);
+    expect(clientRoutes().filter((r) => r.family !== null).map((r) => r.key), 'no row carries a second template').toEqual([]);
+  });
+
+  it.each(CLAIMANT)('%s %s, with a current cap file listing questions-v1, sends POST %s with the row\'s kind (%s) spliced first', async (group, verb, url, kind, body) => {
+    writeCaps();
+    const r = await run([group, verb, '7', '--json', '-'], body);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen).toEqual([{ method: 'POST', url, auth: TOKEN, body: `{"kind":"${kind}",${body.slice(1)}` }]);
+  });
+
+  it('the spliced kind is the row\'s: the same body is spliced ask on an asks row and approval on an approvals row', async () => {
+    writeCaps();
+    const body = '{"fromId":"parent","fromUuid":"u"}';
+    await run(['asks', 'release', '7', '--json', '-'], body);
+    await run(['approvals', 'release', '7', '--json', '-'], body);
+    expect(seen.map((s) => [s.url, s.body])).toEqual([
+      ['/api/questions/ask-7/release', '{"kind":"ask","fromId":"parent","fromUuid":"u"}'],
+      ['/api/questions/approval-7/release', '{"kind":"approval","fromId":"parent","fromUuid":"u"}'],
+    ]);
+  });
+
+  it('a body naming kind is left alone, so a contrary kind reaches the server (the byId fill\'s textual rule)', async () => {
+    writeCaps();
+    const bodies = ['{"fromId":"parent","fromUuid":"u","kind":"approval"}', '{ "kind" : "ask", "fromId":"parent","fromUuid":"u"}'];
+    for (const b of bodies) await run(['asks', 'release', '7', '--json', '-'], b);
+    expect(seen.map((s) => [s.url, s.body])).toEqual(bodies.map((b) => ['/api/questions/ask-7/release', b]));
+  });
+
+  it('a bodyless call is sent as the row\'s kind alone, and {} as the kind alone', async () => {
+    writeCaps();
+    await run(['approvals', 'rule', '7']);
+    await run(['asks', 'answer', '7', '--json', '-'], ' { } ');
+    expect(seen.map((s) => [s.url, s.body])).toEqual([
+      ['/api/questions/approval-7/rule', '{"kind":"approval"}'], ['/api/questions/ask-7/rule', '{"kind":"ask"}'],
+    ]);
+  });
+
+  it('a body that is not a JSON object is refused bad-body, exit 2, and nothing is sent', async () => {
+    writeCaps();
+    for (const b of ['[]', '"x"', '[{"kind":"ask"}]']) {
+      const r = await run(['asks', 'answer', '7', '--json', '-'], b);
+      expect([r.status, (JSON.parse(r.stdout) as { error: string }).error], b).toEqual([2, 'bad-body']);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  // D-7328: the old doors are gone (K5 Q3l), so the fail direction is inverted on purpose. An absent, stale, torn or
+  // future cap file sends the family, the only door left; only a current, well-formed file that omits questions-v1
+  // is refused here, `no-questions-door`, and nothing is sent.
+  it('an absent cap file sends the family, the kind spliced', async () => {
+    const body = '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}';
+    await run(['asks', 'answer', '7', '--json', '-'], body);
+    expect(seen).toEqual([{ method: 'POST', url: '/api/questions/ask-7/rule', auth: TOKEN, body: `{"kind":"ask",${body.slice(1)}` }]);
+  });
+
+  it('a cap file 181 s old sends the family, the kind spliced', async () => {
+    writeCaps(SERVER_CAPS, nowS() - 181);
+    const body = '{"fromId":"parent","fromUuid":"u","verdict":"allow","reason":"r"}';
+    await run(['approvals', 'rule', '7', '--json', '-'], body);
+    expect(seen).toEqual([{ method: 'POST', url: '/api/questions/approval-7/rule', auth: TOKEN, body: `{"kind":"approval",${body.slice(1)}` }]);
+  });
+
+  it('a server that lists words without questions-v1 is refused locally, nothing sent', async () => {
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'questions-v1'));
+    for (const [g, v, , , body] of CLAIMANT) {
+      for (const b of [body, '[]']) {
+        const r = await run([g, v, '7', '--json', '-'], b);
+        expect([r.status, JSON.parse(r.stdout)], `${g} ${v} ${b}`).toEqual([2, { ok: false, error: 'no-questions-door',
+          detail: 'the server this box talks to does not answer the question door family; update it before answering' }]);
+      }
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it('a current cap file listing no words, as a server older than the caps answer is recorded, is refused locally too', async () => {
+    writeCaps([]);
+    const r = await run(['asks', 'release', '7', '--json', '-'], '{"fromId":"parent","fromUuid":"u"}');
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'no-questions-door']);
+    expect(seen).toEqual([]);
+  });
+
+  it('with that same current file, every non-claimant row sends a request byte-identical to its no-file request', async () => {
+    const keys = new Set(CLAIMANT.map(([g, v]) => `${g}.${v}`));
+    const rows: string[][] = [
+      ['runs', 'list', '--closed', '1'], ['runs', 'open', '--json', '-'], ['runs', 'dispatch', '12'], ['runs', 'advance', '12'],
+      ['runs', 'close', '12'], ['runs', 'items', '12'], ['runs', 'items-list', '12'], ['runs', 'signals', '12'],
+      ['runs', 'route', '12'], ['mail', 'list', '--to', 'x'], ['mail', 'send', '--json', '-'], ['mail', 'fetch', '7'],
+      ['mail', 'ack', '7'], ['peers', 'list'], ['lifecycle', 'list'], ['claims', 'list'], ['claims', 'take', '--json', '-'],
+      ['claims', 'release', '3'], ['ledger', 'list'], ['ledger', 'allocate', '--json', '-'], ['landing', 'show', '--project', 'project-a'], ['asks', 'list'], ['feed', 'list'],
+      ['coordinators', 'intent', 'set', '--session', 'demo-ws'], ['approvals', 'request', '--json', '-'],
+      ['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], ['approvals', 'key'], ['approvals', 'show', '41'],
+      ['testbox', 'status'], ['testbox', 'tools-sync'],
+      ['items', 'raise', 'prog-a', '--json', '-'], ['items', 'list', 'prog-a', '--byId', 'demo-ws', '--byUuid', 'u-demo-ws'],
+      ['items', 'confirm', '7', '--json', '-'], ['items', 'return', '7', '--json', '-'], ['items', 'withdraw', '7', '--json', '-'],
+      ['items', 'block', '7', '--json', '-'], ['goals', 'pin', 'prog-a', '--json', '-'], ['goals', 'modify', 'prog-a', '--json', '-'],
+      ['goals', 'merged', 'prog-a', '--json', '-'],
+      ['linear', 'workspaces'], ['linear', 'teams', '--workspace', 'ws-a'], ['linear', 'issue', 'AAA-12'],
+      ['linear', 'search', '--json', '-'], ['linear', 'comments', 'AAA-12', '--limit', '5'], ['linear', 'statuses', '--team', 'AAA'],
+      ['linear', 'projects'], ['linear', 'labels'], ['linear', 'users'], ['linear', 'create', '--json', '-'],
+      ['linear', 'update', 'AAA-12', '--json', '-'], ['linear', 'comment', 'AAA-12', '--json', '-'],
+    ];
+    expect(rows.map((a) => `${a[0]}.${a[1]}`).sort(), 'every non-claimant row, once').toEqual(routeKeys().filter((k) => !keys.has(k)).sort());
+    plantPane('demo-ws');
+    const pane = { TMUX_PANE: '%7' };
+    const sendAll = async (): Promise<typeof seen> => {
+      seen = [];
+      for (const a of rows) await run(a, a.includes('--json') ? '{"title":"t","program":"p"}' : undefined, pane);
+      return seen;
+    };
+    fs.rmSync(capFile(), { force: true });
+    const without = await sendAll();
+    writeCaps();
+    const withFile = await sendAll();
+    expect(without).toHaveLength(rows.length);
+    expect(withFile).toEqual(without);
   });
 });
 
@@ -541,9 +673,10 @@ describe('the token never rides curl\'s argv (R16)', () => {
     // (`claimedByUuid`, D-5298), and this case measures a body sent as written.
     ['a POST whose body is a --json file', ['claims', 'take', '--json', 'BODYFILE'], undefined, '{"program":"p","wave":1}'],
     // THE COLLISION CASE: stdin is the body (read by `body=$(cat)`) AND curl's
-    // config (the printf pipe). The mail envelope's own ack line is this shape.
+    // config (the printf pipe). The mail envelope's own ack line is this shape. Since K5 Q3l (D-7324) the claimant row
+    // always sends the family, so the body arrives with the row's kind spliced first.
     ['a POST whose body is --json - (stdin twice: the body, then curl\'s config)', ['asks', 'answer', '7', '--json', '-'],
-      '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}', '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}'],
+      '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}', '{"kind":"ask","fromId":"parent","fromUuid":"u","optionIndexes":[0]}'],
   ])('%s: argv holds neither the token nor its header, stdin carries the config, and both arrive', async (_what, args, input, body) => {
     plantRecorder();
     if (args.includes('BODYFILE')) fs.writeFileSync(path.join(home, 'body.json'), body);
@@ -568,7 +701,7 @@ describe('the token never rides curl\'s argv (R16)', () => {
     expect([a.status, b.status], `${a.stderr}\n${b.stderr}`).toEqual([0, 0]);
     expect(fs.existsSync(path.join(home, 'curl-poison')), 'the front refused a call the client makes').toBe(false);
     expect(seen.map((x) => [x.method, x.url, x.auth, x.body])).toEqual([
-      ['POST', '/api/asks/7/answer', TOKEN, body],
+      ['POST', '/api/questions/ask-7/rule', TOKEN, `{"kind":"ask",${body.slice(1)}`],
       ['GET', '/api/runs', TOKEN, ''],
     ]);
   });
@@ -774,6 +907,11 @@ describe('a query key rides only if its row declared it', () => {
   // Anything else is refused rather than appended, for the same reason the path
   // is a template and not an argument — a client that forwarded arbitrary query
   // keys would be a URL builder with extra steps.
+  it('the landing read carries its project', async () => {
+    await run(['landing', 'show', '--project', 'project-a']);
+    expect(seen[0]!.url).toBe('/api/landing?project=project-a');
+  });
+
   it('appends a declared key', async () => {
     await run(['mail', 'list', '--to', 'a-workspace']);
     expect(seen[0]!.url).toBe('/api/mail?to=a-workspace');
@@ -913,15 +1051,15 @@ describe('the body comes from --json, and only from there', () => {
   });
 
   it.each([
-    ['answer', '/api/asks/7/answer'],
-    ['release', '/api/asks/7/release'],
-  ])('carries only the declared ask %s id and JSON body', async (verb, url) => {
+    ['answer', '/api/questions/ask-7/rule'],
+    ['release', '/api/questions/ask-7/release'],
+  ])('carries only the declared ask %s id and JSON body (the row\'s kind spliced first)', async (verb, url) => {
     const body = verb === 'answer'
       ? '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}'
       : '{"fromId":"parent","fromUuid":"u"}';
     await run(['asks', verb, '7', '--json', '-'], body);
     expect(seen).toHaveLength(1);
-    expect(seen[0]).toMatchObject({ method: 'POST', url, body });
+    expect(seen[0]).toMatchObject({ method: 'POST', url, body: `{"kind":"ask",${body.slice(1)}` });
   });
 });
 

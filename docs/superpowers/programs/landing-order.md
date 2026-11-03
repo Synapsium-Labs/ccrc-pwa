@@ -19,15 +19,28 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 |---|---|---|---|---|---|---|
 | 1 | 1 | worker clause 16 and coordinator clause 15 with their pins and count words; the PreToolUse advisory on syncs of `main`; `ccrc restamp`; `update-branch` pinned absent from executable source and counted in the skills | skills, hook (fleet box) | — | #231 | merged 2026-10-02 (`10f32755`); run 218 closed; deploy AGENT-FIRST by the update mechanism |
 | 2 | 2, repository code | `ci.yml` gains `merge_group`, the macOS skip and a `pull_request` concurrency group; `pr-state`'s `queue` field; the dequeue feed event and coordinator mail; the hook denies `gh pr merge` to workers; clause 15's native-queue sentence | ccd, hook, server | wave 1; child-reclamation wave 3 | #234 | merged 2026-10-03 (`0087a045`); run 238 closed; deploy via ccrc's updater (fleet-first measured safe); Task 7's proof run 2026-10-20 stopped by stop rule 3 (Decisions, 2026-10-20 13:00); its re-run on 2026-10-21 turned the queue on, and it stays on by the operator's ruling after stop rule 6 (Decisions, 2026-10-21 12:15) |
-| 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run; wave 3d | — | to plan, after wave 3e's plan (spec §11, item 12) |
+| 2b | 2, the bypass deny | the hook denies `--admin` and a `gh api` merge call in every fleet session | hook | the operator's queue ruleset, approvals at 0, and the proof run; wave 3d; wave 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave2b-bypass-deny.md`, D-7111 to D-7116; amended by #1753 with the operator's per-project allowance, D-7249); run 1144 (the run's wave 8) dispatched 2026-10-29, once wave 3e had merged and another programme's worker, on the operator's instruction, released its claim on `ccd/session-hook.sh`; block 7309–7318; PR #1863; fix round 1 after review 1184; accepted on `e0a57a94` after review run 1195 and merged through the native queue as `d3250900` (Decisions, 2026-10-29 09:41); D-7309–D-7315 defined after the merge; deploy and live check wait (Next-wave brief) |
 | 3 | — | Task 7's preconditions (the payload cap, the quote-dense timing pin), wave 2's residue, Task 7's runbook text | hook, ccd, doctor | wave 2 | #248 | merged 2026-10-07 (`9a255a74`); run 250 closed; deploy AGENT-FIRST via ccrc's updater, then Task 7; run 250 (`ccrc-pwa-still-delta`); block 3906–3915 + 3916–3920 |
-| 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | — | run 310 open (planned; the run's wave 4), block 4326–4335; to plan |
+| 3b | 3 | `ccd-land-probe`, the read-only conflict radar, and its opt-in mirror | ccd, deploy | wave 3 | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave3b-conflict-radar.md`); run 310 (the run's wave 4) dispatched 2026-10-27 on `ccrc-pwa-clear-ridge`, block 4326–4335; PR #1740; fix rounds 1–5 after reviews 1109, 1125, 1140, 1143 and 1158; accepted on `8190c6df` after review run 1171 and merged through the native queue as `3ca67389` (Decisions, 2026-10-29 06:01); D-4335 and D-7382–D-7400 defined after the merge; deploy and live proof wait (Next-wave brief) |
 | 3c | — | Task 7's re-run preconditions: `pr-state`'s per-workspace git cost, a sweep failure the server reports, the two suite flakes the queue turned into removals, the runbook's re-run changes | ccd, server, tests, plan text | wave 2's proof run | plan #974; #1046 | merged 2026-10-21 (`4ce282f8`) after reviews 718, 724 and 726 and two fix rounds; run 710 (the run's wave 5) closed; its block of 10 defined in the plan; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 7's re-run followed (Decisions, 2026-10-21 12:15) |
 | 3d | 2, the lane | the dequeue lane treats the removal GitHub records at a successful queue merge as no dequeue: `pr-state` reads the removal's `reason`, and a removal whose reason is `merged` reads `landed`, never `dequeued`; any other reason, or none, is still announced on its first read; no two-sweep wait, no new wire field, no reason allowlist; and the `merged` feed record is kept once per workspace and PR across a server restart (stop rule 6; Decisions, 2026-10-21 14:49) | server, ccd | Task 7's re-run | plan #1088; #1096 | merged 2026-10-21 (`e173c1aa`) through the merge queue after review 759, with no fix round; run 751 (the run's wave 6) closed; three numbers of its block of 10 defined in the plan; deploy via ccrc's updater (either box first, the fleet box by default), then the live proof (Decisions, 2026-10-21 19:17) |
-| 3e | 2, the landing route | the coordinator reads the repository's own rules before each landing: the merge method from every effective `pull_request` rule and the merge settings, the required checks from the rulesets and classic protection (confirmed absence apart from an unreadable read), three routes (the native queue, a gated direct merge, an ungated direct merge), a merge-commits-only repository landing with `--merge` at the reviewed head, and every conflict a stop (spec §5.7) | skills, tests | wave 3d | plan #1121 | §5.7's text approved 2026-10-22; planned 2026-10-22 in `docs/superpowers/plans/2026-10-22-landing-order-wave3e-landing-route.md` (Decisions, 2026-10-22 07:13); its run and block open at dispatch |
-| 3f | — | the server's checks word reads a queued or running check run as `pending`, not `pass`; the cost of the 30 s sweep cadence is measured in its plan (spec §5.7.8) | server | wave 3e | — | ruled 2026-10-21; to plan |
-| 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | wave 3 | — | to plan |
-| 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | to plan |
+| 3e | 2, the landing route | the coordinator reads the repository's own rules before each landing: the merge method from every effective `pull_request` rule and the merge settings, the required checks from the rulesets and classic protection (confirmed absence apart from an unreadable read), three routes (the native queue, a gated direct merge, an ungated direct merge), a merge-commits-only repository landing with `--merge` at the reviewed head, and every conflict a stop (spec §5.7) | skills, tests | wave 3d | plan #1121 | §5.7's text approved 2026-10-22; planned 2026-10-22 in `docs/superpowers/plans/2026-10-22-landing-order-wave3e-landing-route.md` (Decisions, 2026-10-22 07:13); run 774 (the run's wave 7), PR #1127; fix rounds 1–6; accepted on `c8b56b8e` after review run 1141 and merged through the native queue as `7e38b5f4` (Decisions, 2026-10-28 19:12); D-6336–D-6345; live proof complete 2026-10-29 (Decisions, 2026-10-29 06:01) |
+| 3f | — | the server's checks word reads a queued or running check run as `pending`, not `pass`; the cost of the 30 s sweep cadence is measured in its plan (spec §5.7.8) | server | wave 3e | #1383 | ruled 2026-10-21; the fix shipped from outside the programme in #1383 (`5a009277`, 2026-10-25); the cadence-cost measurement is left (Decisions, 2026-10-29 09:41) |
+| 4 | 4 | the opted-in lineage table; `lineage-unmeasured` | server | waves 3b and 3e | plan #1678 | planned 2026-10-27 (`docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md`, D-7102 to D-7110; amended 2026-10-28, D-7268 and D-7269); run 1189 (the run's wave 9) dispatched 2026-10-29, block 7433–7442, with the coordinator's rulings on where the plan had drifted from `main` (Decisions, 2026-10-29 09:41); PR #1884; fix round 1 after review 1212; accepted on `5aa30a97` after review run 1216 and merged through the native queue as `f6b67a5b` (Decisions, 2026-10-29 17:38); D-7433–D-7442 and D-7464–D-7467 defined after the merge; deploy, arming (the operator's) and the live proof wait (Next-wave brief) |
+| 4b | 3, the console half | the radar's server reader, its wire field `FleetSession.landing` and the PWA predicted-conflict chip (moved out of wave 3b, D-4329) | server, pwa | waves 4 and 4c | #1923 (plan #1906) | planned 2026-10-29 (`docs/superpowers/plans/2026-10-29-landing-order-wave4b-radar-console.md`, D-7477 to D-7484; Decisions, 2026-10-29 18:40); run 1224 (the run's wave 12) opened and dispatched after wave 4c merged, before run 1219 closed (Decisions, 2026-10-29 22:55); sent back once after review run 1225, accepted on `38bcaf1e` after review run 1226, and merged through the native queue as `85d61aa8` (Decisions, 2026-10-30 02:32); D-7514–D-7523 defined in its departures note, and D-7526 after the merge |
+| 4c | 4, hardening | the lineage hardening carried from wave 4's reviews (Carried constraints), kept apart from 4b so that no PR mixes an acceptance change with a display change (D-4329's reason) | server, skills | wave 4 | #1911 | run 1219 (the run's wave 10) opened 2026-10-29 as planned, before run 1189 closed, under the title "wave 4b: lineage hardening" given before this row was split from 4b (Decisions, 2026-10-29 17:38); planned 2026-10-29 (`docs/superpowers/plans/2026-10-29-landing-order-wave4c-lineage-hardening.md`, D-7469 to D-7476); the coordinator-side re-proof moved to the operator (Decisions, 2026-10-29 18:40); accepted on `0a9ff1b2` after review run 1220, then one clean merge of `main` reviewed alone (run 1223), and merged through the native queue as `9ec4fc54` (Decisions, 2026-10-29 22:55); D-7486–D-7495 defined after the merge |
+| 5 | 5 | the landing line: entries, intents, holds, `land-candidate`, the coordinator's pinned merge, the PWA doors | server, ccd, skills, pwa | waves 2–4; session-continuity wave 1 | — | split 2026-10-30 into sub-waves 5b to 5k (Decisions, 2026-10-30 23:24); run 1227 (the run's wave 13) opened 2026-10-30, before run 1224 closed (Decisions, 2026-10-30 02:32) |
+| 5a | 3 and 4, hardening | the hardening that the reviews of waves 4c and 4b, and three older review items (1141, 1216, 1222), carried forward: the lineage parser, the radar lane, the chip's words, and text and pins (Carried constraints). Kept apart from 5 so that the landing line's PR carries only its own data, routes and verb (D-4329's reason) | server, pwa, skills | waves 4c and 4b | #1960 (plan #1944) | planned 2026-10-30 (`docs/superpowers/plans/2026-10-30-landing-order-wave5a-carried-hardening.md`, D-7528 to D-7539; Decisions, 2026-10-30 03:40); run 1228 (the run's wave 14) opened 2026-10-30; reviewed once (run 1232) and accepted with no fix round; merged 2026-10-30 (`d196d8b3`); five departures, D-7544 to D-7548, in `docs/superpowers/plans/2026-10-30-landing-order-wave5a-departures.md` (Decisions, 2026-10-30 08:16) |
+| 5b | 5, skill text | the new-head route is the coordinator's own act (the operator's answer to D-7536's question), the evidence that a red is `main`'s own, the report-less fix round from `merging`, review 1232's F9 (a) and (c), and **A requested change** against clause 19; D-7546's restatement is a droppable task, held for the operator | skills | wave 5a | — | merged 2026-10-31 (#2015 `83c3544c`; `docs/superpowers/plans/2026-10-30-landing-order-wave5b-landing-skill-text.md`, D-7588 to D-7592, and its departures note, D-7606 to D-7608; Decisions, 2026-10-31 02:45); Task 2 (D-7546) not taken, held for the operator |
+| 5c | 5, landed state | `ccd pr-state --project <p> --pr <n>`: its five words, its train proof and its capability token; the server's words, reader and capability-gated brand; wave 3d's F1 and F6 text and review 1109's paged rules read | ccd (fleet box first), server | wave 5a | — | merged 2026-10-31 (#2017 `a77811e5`; `docs/superpowers/plans/2026-10-30-landing-order-wave5c-pr-keyed-pr-state.md`, D-7593 to D-7599, and its departures note, D-7600 to D-7604; Decisions, 2026-10-31 07:06); reaches the fleet box with the next release the operator rolls out |
+| 5d | 5, the lander key | the radar's conf accepts `lander=coordinator` or `none`, mirrored to a marker the server reads; and D-7546's restatement, wave 5b's dropped Task 2 | ccd (fleet box first), skills | — | — | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`, D-7635 to D-7647; Decisions, 2026-10-31 15:52); run 1311 (the run's wave 17) |
+| 5e | 5, the line's core | `landing_entries` and `landing_projects`, an entry pinned at `advance → merging`, the ejection that records its base, the second-ejection notice, the order and hold decider, and the coordinator's read of the line (`GET /api/landing`) | server, skills | wave 5a | — | merged 2026-10-31 (#2020 `4fc83e57`; `docs/superpowers/plans/2026-10-31-landing-order-wave5e-landing-line-core.md`, D-7610 to D-7627, and its departures note, D-7628 to D-7633; Decisions, 2026-10-31 15:17) |
+| 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | — | to plan; run 1312 |
+| 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | to plan |
+| 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan |
+| 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | — | to plan |
+| 5j | 5, the doors (server) | the two session-only routes, pause the line and withdraw an entry, and `landing-subtractive.test.ts` | server, skills | 5e and 5i | — | to plan |
+| 5k | 5, the doors (PWA) | the line on the project card, the pause control and the withdraw sheet | pwa | 5j | — | to plan |
 
 **A fresh workspace per wave (R4) is child-reclamation's.** The spec first drew it as step 6 of the wave lifecycle,
 gated on #166 wave 3. #166 wave 2 (#178) made it live on `main` as "One PR per child", so wave 1 no longer
@@ -635,6 +648,66 @@ carries it (spec §5.1, amended 2026-09-24).
     - (d) is read before each run's final close, because the close reclaims the child workspace.
     - (e)'s feed body may not read "No open run names a coordinator to tell", because D's workspace belongs to an
       open run (at `awaiting-review`, not `merging`). It is recorded as found.
+- **2026-10-07 01:39 — Task 7 Steps 1, 2 and 4 done: the merge queue is ON for `main` (ruleset write 01:38:37 UTC).**
+  - **Deploy.** Wave 3 has been on both boxes since 2026-10-07 00:51 UTC. Both boxes run v0.0.112 (`543777fb`, which
+    contains `9a255a74`), applied from the console: the fleet box finished at 00:51:18 and the server box at 00:51:42.
+    Each box's `update.json` reads phase `done`, and `ccrc version` reads `install: complete` on both.
+  - **Step 1.**
+    - `merge_group` is on `main`'s `ci.yml` (`1`).
+    - The trusted full run is 37552120108 (`workflow_dispatch` on `9a255a74`, five server shards). `typecheck (server)`,
+      `server 1/5`–`5/5`, `test (server)`, `test (agent)`, `test (pwa)` and `build-pwa` all read `success`. The macOS
+      legs are not read; one failed.
+    - `MERGE_PARSE_CAP=2048` is in the installed hook (`1`). Doctor reads `PASS jq_regex`, with no FAIL line.
+    - THE CANARY printed `deny` on the fleet box's `/usr/bin/jq`, jq-1.7.
+    - The census read `census-done: 11 coordinator(s) checked`, with no MARKED or HELD line.
+    - **Substitution:** both boxes were measured with `ccrc version` and `update.json` instead of
+      `ccrc rollout --check --to v0.0.112`, because the operator's 2026-09-30 ruling forbids running `ccrc rollout`
+      by hand.
+  - **Step 2** matched the runbook's 2026-09-23 values:
+    - Two rulesets: main's is 22520257, and stable's is 23740920.
+    - Main's one rule was `pull_request` with 1 approval, and its bypass actors were roles 2 (maintain) and 5 (admin),
+      both in `pull_request` mode.
+    - Classic protection: `strict` false, the four required contexts, `enforce_admins` true, 0 approvals.
+    - Repository settings: `allow_squash_merge` true, `allow_auto_merge` false, `allow_update_branch` false and
+      `delete_branch_on_merge` true.
+    - The only new reading is three parameters GitHub now reports on the rule, a schema addition:
+      `allowed_merge_methods`, `dismissal_restriction` and `require_extra_approval_for_unattributed_changes` (true).
+  - **Step 3 and Step 4.** Step 4a's diff showed exactly the three changes:
+    - the maintain bypass (role 2) removed, as R9 ruled;
+    - approvals 1 → 0;
+    - the `merge_queue` rule added: SQUASH, build concurrency 1, group size 1–1, wait 0, ALLGREEN, timeout 60 minutes.
+
+    Step 4b's PUT answered `rules: ["pull_request","merge_queue"]` with the one bypass actor (role 5), and a re-read
+    shows the same. The ruleset's name still says "Admin and Maintain bypass", because the runbook's transform keeps the
+    name. `ruleset-before.json`, `ruleset-rollback.json`, `ruleset-after.json` and `ruleset-written.json` are kept in
+    the coordinator's evidence folder. The rollback is a PUT of `ruleset-rollback.json` to ruleset 22520257.
+  - **Next: (a0) on this ledger PR (slot C)** once its own CI is green, then the proof dispatches.
+- **2026-10-07 01:53 — (a0) hit STOP RULE 4. The proof halts, the ruleset is ROLLED BACK, and the operator decides.**
+  - **(a0)** ran at 01:52:12 on this ledger PR (#311, slot C), with every required check green at `907cb649`.
+    `gh pr merge 311 --match-head-commit 0000…` answered `GraphQL: Auto merge is not allowed for this repository
+    (enablePullRequestAutoMerge)`, rc 1. The read-back showed `mergeQueueEntry: null` and `autoMergeRequest: null`:
+    nothing was queued and nothing was armed. gh 2.45 reaches a required queue through the auto-merge mutation
+    (Pre-flight finding 16), and the repository's `allow_auto_merge` is false (Step 2). The refusal names auto-merge,
+    not the head, so it is stop rule 4, not (a0)'s pass. Under the operator's 2026-09-29 ruling the proof halts here.
+    The coordinator does not change that setting (clause 15).
+  - **The rollback, at 01:52:56.** This revises the sequence entry's "the queue stays on meanwhile", for this reason.
+    On a native-queue project, clause 15 tells every coordinator to land with
+    `gh pr merge <n> --match-head-commit <sha>`, never with `--admin`. With auto-merge off, that spelling can land
+    nothing. So any ccrc-pwa coordinator following its clause literally could not land until the operator rules,
+    while the proof can make no progress either way. `ruleset-rollback.json` was PUT back. A re-read is identical to
+    it: the `pull_request` rule with 1 approval, and the maintain and admin bypasses. The queue was on from 01:38:37
+    to 01:52:56. Nothing merged to `main` in that window (the last merge was #310, at 00:47).
+  - **For the operator: three ways on.**
+    1. **Enable "Allow auto-merge"** (Settings → General → Pull Requests). The coordinator then re-applies Step 4 from
+       the saved `ruleset-after.json` and re-runs the proof from (a0). This is the path the runbook assumes: (a1)
+       expects an armed auto-merge request. Held and child sessions are already denied every `gh pr merge`, `--auto`
+       included, and wave 2b closes the `gh api graphql` mutations. **Recommended.**
+    2. **Keep auto-merge off,** and land through the queue with a direct GraphQL `enqueuePullRequest` call that
+       carries `expectedHeadOid`. That is not clause 15's spelling, so clause 15, the runbook and the hook's deny
+       need a wave first.
+    3. **Park Task 7,** and keep landing with `--admin` as now.
+  - **Slot C (#311)** stays open, unmerged, until the operator rules. The proof programme `landing-order-proof` is NOT
+    opened, and no dispatch was spent.
 - **2026-10-20 13:00 — Task 7's proof run, stopped by stop rule 3; the queue is off.** This is Step 7's record.
   - **Arming.** The operator chose "Run Task 7 now" on 2026-10-20. Step 1 was clean: a trusted full run on `main`
     (daily run 39364571048), both boxes on one release, the payload cap in the installed hook, doctor's
@@ -917,6 +990,707 @@ carries it (spec §5.1, amended 2026-09-24).
     worker re-measures each one.
 - **2026-10-25 — R5 overturned: unattended landing is the goal (D-6857).** The operator ruled "WE WANT UNATTENDED MERGES ... maximise autonomy with safeguards". A lane, a timer or the operator's keeper may land a PR unattended when the native queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and there is no `--admin` and no `update-branch`. Orchestrator call, open to overturn: a worker never merges its own PR. The coordinator skill (clause 15 and the wave lifecycle) and the worker skill (clause 16) match; the wave lifecycle's allowance of `--admin` where the ruleset requires it is withdrawn. Stages 3 to 5 are not touched here; where their text says a landing never comes from a timer, R5 as amended governs.
 - **2026-10-25 — rulings 2, 3 and 5 (D-6857).** Ruling 5: governance of merges (who may merge, `--admin`, GitHub API merges, bypass) belongs to the repository's external policy authority, not to ccrc text; ccrc provides the enforcement points. It supersedes the narrow approval-licence pointer: in the wave lifecycle, `--admin` and GitHub API merge or enqueue calls are governed by that authority, and until it answers (wave 2b) a coordinator never uses them. Ruling 2: the live queue's grouping (build 2, merge 3) is accepted; one release may cover several commits. Ruling 3: the two private repositories should drop strict protection; the native queue is not available on their plan, so how they land is open.
+- **2026-10-27 08:20 — wave 3e: fix round 5 handed off; its fresh review waits on the review-round cap.**
+  - **The run.** Wave 3e is run 774 (the run's wave 7) on `ws/warm-summit`, PR #1127. Reviews 780, 827 and 863 each
+    ruled a fix round (1, 2 and 3). The fourth review run, 903, was abandoned; the operator authorised one local
+    independent review in its place, which ruled CHANGES REQUIRED at `1ba4d1f0` (four important source-boundary
+    findings at reads 1, 3 and 6, and one minor), and fix round 4 answered them.
+  - **Fix round 5**, approved by the operator on 2026-10-26, made one more ordinary merge of a pinned `main`
+    (`ba36d742`) into the PR and reconciled clause 15 and the wave lifecycle's route paragraph with ruling 5: the narrow
+    approval licence is retired, the route prints `admin=never`, and a direct route whose required approval is missing
+    stops. Its wave-done was verified at `04745c73`: the workspace branch and the PR head agree, the exact-head CI run
+    passed with both owning test files in its selection, and run 774 moved to `awaiting-review`.
+  - **Held.** Opening the fresh review was refused `cap-review-rounds` (4 rounds against a cap of 3) on 2026-10-26 at
+    15:27 UTC and again on 2026-10-27 at 08:08. The ask is the operator's: the console lifts a run's cap. The worker
+    keeps the branch frozen, and nothing lands until a fresh independent review is accepted.
+- **2026-10-27 11:06 — waves 3b, 4 and 2b planned and approved; wave 3b dispatched.**
+  - **The plans** landed together in #1678 (`89472477`):
+    - wave 3b, the conflict radar, `docs/superpowers/plans/2026-10-27-landing-order-wave3b-conflict-radar.md`, on run 310's
+      block (4326 to 4334 defined, 4335 spare). The radar's console half, its server reader, wire fields and PWA chip,
+      moves to a new wave 4b (D-4329);
+    - wave 4, lineage acceptance, `docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md`, D-7102 to
+      D-7110;
+    - wave 2b, the bypass deny, `docs/superpowers/plans/2026-10-27-landing-order-wave2b-bypass-deny.md`, D-7111 to D-7116.
+  - **Their numbers.** Waves 4 and 2b have no run yet, so their blocks were minted when their plans landed, not at a
+    run's open: `dtbd.test.ts` refuses a plan that carries a `D-TBD` placeholder. A departure found while executing
+    either plan is numbered when it is ruled.
+  - **Review.** Each plan had three Opus lenses with a Sonnet refuter per finding, then an Opus recheck after each
+    revision until a pass found nothing important. The operator approved all three on 2026-10-27.
+  - **Wave 3b dispatched** as run 310 on a fresh child, `ccrc-pwa-clear-ridge`. Its Task 4 edits `README.md`, which
+    wave 3e's worker holds, so that task waits for the claim or for its holder's consent.
+  - **What waits.** Wave 4 dispatches after waves 3b and 3e merge; arming it is the operator's (`lineage=on` in the
+    project's landing conf). Wave 2b dispatches after wave 3e, once the operator confirms its fleet-wide reach: the
+    coordinator measured that reach privately on 2026-10-27, and the findings stay out of this file. Wave 3b's live
+    proof needs the operator to write the project's landing conf with `lineage=off`.
+  - **Noted for wave 2b's brief:** the deny refuses `--admin=false` with the other spellings, with a reason that says
+    to drop the flag. Refusing a harmless spelling is the safe direction.
+  - **Wave 3e is still held.** The operator reported lifting run 774's review-round cap, but at 11:05 the server still
+    read it as not lifted, so the fresh review was not opened.
+  - **#311**, the old ledger branch, was closed unmerged and its branch deleted. Its records landed through #1674,
+    #1675 and #1676.
+- **2026-10-28 08:00 — wave 3b reviewed and sent back for one fix round; the operator's answers.**
+  - **The wave-done.** Run 310's worker reported wave-done at `f372653a`, PR #1740, after one absorption of `main`
+    (worker clause 16, trigger 2: `main`'s D-7054 cadence census landed after the branch's base). The tip, the PR's
+    head and the remote branch agreed, and the required checks were green. The run went to `awaiting-review`.
+  - **Review run 1109** ran the held-out panel and two wave lenses (the read-only boundary and the interface stage 4
+    reads). It found 7 confirmed findings, 14 advisory and 7 refuted, with no lens unverified. The confirmed ones:
+    - the branch-rules read took one page, so a required check past it could read green;
+    - the git door's option rule was a prefix deny list, which a file-writing option and abbreviated long options pass
+      (no call site reaches them today);
+    - git refreshes the time of an object the project already has instead of writing a copy;
+    - a stop signal during the closing rewrite left the scratch behind;
+    - the `GIT_*` scrub had no red;
+    - a fetch cut by the project budget left old lineage files in place;
+    - the source pins missed aliased spawns.
+  - **Ruled: fix round 1.** Six of the seven are fixed, each with a red, together with nine advisories. The git door
+    becomes an allowlist of argument forms. The git refresh is accepted: it changes no content, ref, setting, hook or
+    object set, so only the wording of the read-only claim changes. The operator accepted that ruling on 2026-10-28.
+    Null store figures after an interrupted tick are inside the `probe` grammar. Doctor's PASS for `pending` and
+    `no-required-set` stays.
+  - **`enabled` is reconciled at each tick's start.** The reviewer measured up to about 1110 s between two writes of
+    `enabled` with four opted-in projects, and more in a contrived case, against wave 4's three-interval bound of
+    900 s, because it was written after each project's measurement. A pre-pass now writes or removes it before any
+    project is measured, so its spacing is the spacing of tick starts. Wave 4's bound still needs one change, owed by
+    this coordinator before wave 4 dispatches: four intervals (1200 s), because a tick that runs past one interval
+    delays the next start.
+  - **The fleet box moved to new hardware** between about 06:44 and 07:46. Run 310's worker was restarted twice,
+    which cost it a gate run and its scratch files. Its commits are intact and unpushed; the gate runs again.
+  - **The operator's answers.**
+    - A repository whose PRs need an approval no session can give keeps landing them by admin merge, with the
+      operator's express permission. So wave 2b's deny gets an operator-written allowance for that one project, with
+      no writer in the tree, before wave 2b dispatches. Which repository it is stays out of this file.
+    - The other projects' notes that tell sessions to merge with `--admin` or through `gh api` are the operator's to
+      change; no coordinator mail goes out.
+  - **Wave 3e is still held.** At 08:00 run 774 still reads 4 review rounds against a cap of 3, and no lift is
+    recorded.
+- **2026-10-28 11:05 — wave 3b's fix round 1 reviewed and sent back for a second; wave 4's lineage reads amended.**
+  - **The wave-done.** Run 310's worker reported fix round 1's wave-done at `b3b5e7ab`, four commits after the
+    reviewed tip. The tip, the PR's head and the remote branch agreed, and the required checks were green. The run went
+    to `awaiting-review`.
+  - **Review run 1125**, round 2 of the run's cap of 3, ran the held-out panel over the fix round and two wave lenses
+    (conformance to the round-1 rulings, and the read-only boundary over the whole probe). It found 6 important
+    findings, 11 advisory and 9 refuted, with no lens unverified. The wave's suites and the repo-wide guards were
+    green at the tip. The reviewer re-measured 15 of the worker's 53 mutation rows, all red, and planted five gaps of
+    its own, each green. The important ones:
+    - nothing goes red when the child is recorded only after the signals are unblocked;
+    - the table of option forms the git door admits has no literal pin, unlike the door's other tables;
+    - README says the door refuses an option after an operand, and it does not;
+    - README and a test name say the spawn pins catch any other way to start a process, and an `asyncio` spawn passes;
+    - an aliased import after a semicolon passes the alias pin;
+    - an undecided row's lineage carries `tip: null`, which the plan's form does not allow, and no test pins it.
+  - **Ruled: fix round 2.** The advisories traced most of the remaining cleanup gaps to one cause: the stop-signal
+    handler raises wherever the interpreter happens to be. A signal in the closing path, just after the scratch or a
+    temp file is made, or inside the stale sweep's removal can leave the scratch or a temp file behind. Masks narrow
+    those windows but cannot close them. So:
+    - the handler now only records the signal and kills the child's process group;
+    - the probe stops at fixed points, and every cleanup runs to its end.
+    - The spawn pins become a census of the program's syntax tree: its imports, their aliases and the dynamic
+      builtins.
+    - The git door refuses a dash-led element after the fetch's `--` too.
+    - Each unpinned guard gets its red, and the prose says what the pins hold.
+  - **Accepted:**
+    - `tip: null` for a row whose local read the budget left undecided;
+    - `fetch-failed` for a failure before the first write;
+    - the probe header's step list;
+    - the wider wording "an object the project already holds";
+    - the child unblocking its signals before its exec;
+    - `gh pr list` being a GraphQL read.
+
+    Their numbers are defined when the wave is accepted.
+  - **Wave 4's reads amended** (its plan, D-7268 and D-7269):
+    - the lineage file's own `at` gets a freshness bound of 2400 s, so a lineage the radar stopped rewriting never
+      accepts;
+    - an unmeasured doc's `null` fields read as absent, and a `null` tip answers `lineage-unmeasured` with the fixed
+      detail `tip-unmeasured`. The ruling first said the answer would carry the doc's own `why`. A fixed word keeps
+      text from the file out of the mail, so the plan uses it.
+  - **The review cap.** The next review of wave 3b is the last before the operator must lift run 310's cap.
+  - **Wave 3e is still held.** At 11:05 run 774 still reads 4 review rounds against a cap of 3, and no lift is
+    recorded.
+- **2026-10-28 19:12 — wave 3e accepted and merged; wave 3b's fix round 2 reviewed and sent back for a third.**
+  - **Wave 3e's cap.** The operator lifted run 774's review-round cap on 2026-10-28. The cap had held its fresh review
+    since 2026-10-27 (Decisions, 2026-10-27 08:20).
+  - **Review run 1138** read the whole wave at `04745c73`, the first held-out panel since review run 863. It found no
+    behaviour defect and three gaps in the pins:
+    - the half of the approval check that counts any `pull_request` rule, not only the first, had no test;
+    - no case pinned "exactly `APPROVED`" against a near miss;
+    - clause 15 was pinned as a substring, so a licence appended to its line left the suite green.
+  - **Ruled: fix round 6, tests and comments only.** It added the cases, a whole-line pin of clause 15 and two comment
+    fixes, with no change to the skill or its reference.
+  - **Review run 1141** read the round at `c8b56b8e`. Neither panel confirmed a finding. All 15 of the worker's
+    mutants were red at the tip, and seven sampled ones survived the old tests. **Accepted.** Its one advisory, that a
+    verbatim copy of clause 15 elsewhere in SKILL.md passes beside a rewritten real one, is carried (D-6345).
+  - **Merged.** PR #1127 went through the native queue at `c8b56b8e` as `7e38b5f4`.
+  - **Recorded:**
+    - the wave's departures, D-6336 to D-6345, in its plan's Deviations;
+    - spec §5.7, §6's skill row, §11 item 10 and §12 amended to match ruling 5's retirement of the approval licence,
+      with no ruling new (spec §11, Amendment 2026-10-28).
+  - **The live proof's first part.** gh 2.103.3's `pr checks --required` exits `0` when every required check passed,
+    `1` when one failed and `8` when one was pending, as the route prose assumes. It was measured on three open PRs at
+    the landing. The rest waits on the deploy: the installed skill text in every home, and the next landing that the
+    verdict routes.
+  - **Wave 3b's fix round 2** reached its wave-done at `36f3e207`. That included a second merge of `main`, licensed by
+    ruling because `ccd/ccrc`'s uninstall summary conflicted with #1738. The one licensed resolution was `main`'s line
+    whole, with the probe's name inserted.
+  - **Review run 1140,** the last review round under run 310's cap, found the merge exact and the round-2 rulings
+    held. It also found two important gaps:
+    - a read the stop signal killed in the before-first-write fallback was decided, so its row's old lineage file was
+      deleted instead of rewritten unmeasured;
+    - an interrupted tick's probe has the in-progress shape, so doctor shows the previous tick's main-health verdict
+      until the next tick.
+  - **Ruled: fix round 3.**
+    - Only rc 0 (with a 40-hex tip) and rc 1 decide a row; every other answer leaves it undecided.
+    - The census holds the git door's option table bound once and never written.
+    - The self-signal pin reads the whole tracked tree.
+    - Four sentences are corrected.
+    - The interrupted-tick reading is accepted as the in-progress shape, so an explicit marker is a later wave's.
+  - **Wave 3b is held.** The fix round's wave-done came at `ab98835c`. Opening its review was refused at the cap,
+    and the server raised the ask to the operator.
+- **2026-10-29 06:01 — wave 3b accepted and merged; wave 3e's live proof complete; wave 2b dispatched.**
+  - **The cap.** The operator lifted run 310's review-round cap on 2026-10-29, and review run 1143 read fix round 3.
+  - **Review run 1143** (fix round 3, `ab98835c`) found fix round 3's rulings held, and seven important gaps. In three
+    of them a read that could not answer still deleted a lineage file:
+    - an unlistable registry;
+    - a registry field that exists but cannot be read;
+    - git's rc 1, which also answers for a broken or unreadable ref.
+
+    **Ruled: fix round 4**, on one principle: the probe never narrows a distinction it received, and takes git's answer
+    where git does not tell the cases apart.
+    - An unlistable registry decides nothing.
+    - An unreadable registry row is held whole.
+    - The wording about rc 1 is corrected, with `git show-ref --exists` carried as its remedy.
+    - The option-table census pins every occurrence, and two rule arms got their missing tests.
+
+    `main` had moved since the branch's last absorption, so the round absorbed it once more, by ruling, for one
+    conflicting hunk in `server/test/ccrc-doctorFixture.ts`. Wave 3b and #1785 had each raised `HEALTHY_SKIPS`, the
+    expected count of doctor SKIP lines, and the resolution keeps both.
+  - **Review run 1158** (fix round 4, `02896df4`) found the round's rulings held, and two important gaps:
+    - the option-table census missed the keyword names in a `match` statement's class patterns, and the `__globals__`
+      and `f_globals` attributes;
+    - a `ws/` branch holding a NUL byte stopped the whole lineage pass.
+
+    One of its minor findings was that a `ws/` branch shaped like a revision expression was read as one.
+
+    **Ruled: fix round 5, declared the wave's last open-ended round.** From then on, a finding outside the round's
+    diff, present before it and failing closed was carried, not fixed. A finding fails closed when wave 4 can never
+    accept on what it leaves, and a bad registry row never stops another row from being measured. In the round:
+    - a `ws/` branch that is not a well-formed name is held;
+    - the census counts those keyword names and refuses the `__globals__`, `f_globals` and `f_locals` attributes;
+    - two routes got their tests;
+    - four overstated sentences were corrected.
+
+    The narrowing that an unlistable registry gives every head a null `id` is carried to waves 4 and 4b.
+  - **Review run 1171** (fix round 5, `8190c6df`) was scoped to the round. Neither panel confirmed a finding; its seven
+    minor findings all fail closed. **Accepted**, with the minors carried (Carried constraints).
+  - **Landed.** The landing verdict read `ROUTE Q method=squash admin=never strict=no`, and the required-checks gate
+    exited `0`.
+    - The first queue attempt was dequeued. Its group failed a `delegation-spool.test.ts` race case, which none of the
+      PR's files reaches, and the delegation programme's coordinator was told.
+    - One re-enqueue under the skill's dequeue rule landed: PR #1740 merged at `8190c6df` as `3ca67389`.
+  - **Recorded:** the wave's twenty departures, D-4335 and D-7382 to D-7400, in its plan's Deviations, one per row of
+    the notes' departures table.
+  - **Wave 3e's live proof is complete.**
+    - Part 2: after the deploy of v0.0.797, which carries #1127, the installed coordinator skill text was byte-equal
+      to that release in all 18 skill homes on the fleet box, measured file by file.
+    - Part 3: #1740 was the first landing the shipped verdict routed. It was routed to the queue, enqueued at the
+      reviewed head after the checks gate, read back as queued, and re-enqueued once after a dequeue the PR did not
+      cause.
+  - **Wave 2b** is run 1144. Its prerequisite, the operator's per-project allowance, was answered on 2026-10-28 and
+    planned by #1753 (D-7249). It was dispatched once wave 3e had merged and another programme's worker, on the
+    operator's instruction, released its claim on `ccd/session-hook.sh`.
+- **2026-10-29 09:41 — wave 2b accepted and merged; wave 4 dispatched; wave 3f's fix found already shipped.**
+  - **The operator** asked, on 2026-10-29, for everything ready to land to land and for the waves to proceed. The wave 3b
+    ledger PR, #1861, then landed through the queue as `fa275b66`, at its reviewed head.
+  - **Review run 1184** (wave 2b's first, `76ad2ff4`) found no false refusal of a landing spelling the skill prescribes.
+    It extracted 13 spellings from the skill text on `main` and fed each to the branch's hook from a fixture HOME. Its
+    one important finding was that the operator's allowance accepted an over-long `.project`: the hook's registry
+    reader cuts a file at 128 characters and then trims blanks, so `proj-a`, 122 spaces and `junk` read as `proj-a`.
+    **Ruled: fix round 1.**
+    - The allowance refuses a value that filled the read.
+    - A plain read refused because a later redirect target, quoted string or glued argument holds `/merge` stays
+      refused. It is named as a cost, and the reason gives the remedy.
+    - The over-cap `/merge` keeps no end bound, because it is also what catches `/merges`.
+    - Several header words and pins.
+
+    The worker's seven departures were accepted.
+  - **Review run 1195** (fix round 1, `e0a57a94`) was scoped to the round.
+    - The rulings held. No refusal the first review measured reopened, and every prescribed landing spelling still
+      passes.
+    - Its ten items are minor or carried. The five in the round's diff fail closed.
+    - The two that do not, a NUL-padded `.project` and a symlinked one, were there before the round. They pass only
+      through planted registry state, and only as the allowed project's own name. By the deny's stopping line they are deliberate evasions, to be listed;
+      the listing is carried (Carried constraints).
+
+    **Accepted.**
+  - **Landed.** The landing verdict read `ROUTE Q method=squash admin=never strict=no`, run on its own, and the
+    required-checks gate exited `0`. PR #1863 was enqueued at the reviewed head and merged at `e0a57a94` as `d3250900`,
+    with no dequeue.
+  - **Recorded:** the wave's seven departures, D-7309 to D-7315, in its plan's Deviations.
+  - **From the deploy of wave 2b on,** the coordinator runs the landing verdict, the checks gate and the enqueue as
+    separate commands. Run as one, they are refused over the cap, because the verdict block's comments name `--admin`
+    (D-7314). The skill already runs them separately.
+  - **Wave 4** is run 1189. Its brief rules on where the plan had drifted from `main`, measured at dispatch. The plan is
+    amended after the merge, with each ruling as a departure.
+    - `FleetIO` has `lstatMeasured`, so D-7109's premise is false: the reader re-proves the probe's regular-file rule,
+      and reads the pause markers by lstat.
+    - The landing briefs take no head today, so the episode head is carried into `landingVerdict`; their pins are in
+      `landing-verdict.test.ts` and `pr-queue-lane.test.ts`.
+    - The measured list of `handoffCommit` readers.
+    - One rule sentence for every `<handoffCommit>` in `wave-lifecycle.md` §5 and §5b, never editing the verdict
+      block's code.
+    - A single-definition guard for `DONE_REFUSAL_CODES`.
+  - **Wave 3f's fix** shipped from outside the programme in #1383 on 2026-10-25: the first non-empty of a check entry's
+    conclusion, state and status speaks for it, so a queued or running check run reads `pending`. What remains is the
+    plan's measurement of what the 30 s sweep cadence costs; where it runs is for that plan to decide.
+- **2026-10-29 17:38 — wave 4 accepted and merged; wave 4c opened.**
+  - **Review run 1212** (wave 4's first, `2a7e0db9`) found the wave sound where it measured:
+    - the touched files, the guards and both typechecks green, and the sampled mutation rows red;
+    - red-first measured, and the brief's rulings applied;
+    - no interaction with #1844, the one overlapping `main` commit no CI run had tested beside the wave.
+
+    Its three important findings, and the worker's items:
+    - **F1.** An `unmeasured` doc, or one naming no base, accepted when its chain held the claim. The radar never
+      writes such a doc, and spec §5.4's accept row says "fetched base named". **Ruled: fixed.** A non-empty chain
+      requires a sha `base` and a `stop`, and `state` and `stop` agree.
+    - **F2.** The forgery's reach, measured: a session that puts its own `ws/` ref at a head and writes a fresh
+      `enabled` marker and a consistent lineage file lands that head unreviewed. It needs no forged mail, works after
+      the genuine review closed, and can opt in a project the operator never opted in. **Ruled: accepted at
+      attribution grade,** as spec §4 and its edge-case list already say. The plan's sentence that stage 4 "adds no
+      capability a session lacked" is corrected: it adds no new class, but it lowers the cost. A coordinator-side
+      re-proof of the chain is carried to wave 4c.
+    - **F3.** D-7441's rule had no end, so it would wedge an ordinary fix round. **Ruled: fixed,** scoped to the
+      wave-done it answers.
+    - **The worker's items:**
+      - a `TIP MOVED` report whose close was accepted is followed by a fresh review run against the live tip;
+      - a brief names the radar base as a ref name, read from the PR's `baseRefName`;
+      - an unreadable marker keeps its `landing-marker-unreadable` detail even in a project nobody opted in, as spec
+        §5.4's second row says. So the plan's "a project with no `enabled` marker answers byte for byte as today" holds
+        for a marker proven absent.
+  - **`main` moved during the review.** #1797 conflicted with the wave in `landing.ts`. Fix round 1 absorbed `main` with
+    one merge, resolved as #1797's doc comment over the wave's signature. It pinned a merged brief that carries both the
+    recorded head and #1797's train proof.
+  - **Review run 1216** (fix round 1, `5aa30a97`) was scoped to the round.
+    - The rulings held, no wider and no narrower, and the merge changed only its one hunk.
+    - The suites and guards were green, and the sampled mutation rows red.
+    - Its nine findings are none critical. Each fails closed except one: the new parser header claims more than its two
+      checks hold. A measured doc with no `branch`, a cut walk with no `why`, and an `unmeasured` doc with a full chain
+      still accept, though each needs a hand-written file, within F2's accepted reach.
+
+    **Accepted, with no fix round 2.** The findings are carried to wave 4c (Carried constraints).
+  - **Landed.** The landing verdict read `ROUTE Q method=squash admin=never strict=no`, run on its own, and the
+    required-checks gate exited `0`. PR #1884 was enqueued at the reviewed head and merged at `5aa30a97` as `f6b67a5b`,
+    with no dequeue.
+  - **Recorded:** D-7433 to D-7442 and D-7464 to D-7467 in the plan's Deviations, and the plan's "What this does not
+    claim" corrected.
+  - **Wave 4c** is run 1219, opened as planned before run 1189 closed, so the programme keeps an open run. It takes the
+    lineage hardening carried from wave 4's reviews. It is a row of its own, not part of wave 4b, for D-4329's reason:
+    one PR must not mix an acceptance change with a display change. The run's title, "wave 4b: lineage hardening",
+    was given before the split, and no route retitles a run. Wave 4b, the console half, opens its own run when it
+    dispatches.
+  - **Until wave 4c lands,** the coordinator's first worker brief for an opted-in project names the radar base as
+    `origin/<default branch>`, because no PR exists yet to read `baseRefName` from.
+- **2026-10-29 18:40 — waves 4c and 4b planned; the coordinator-side re-proof goes to the operator.**
+  - **Both plans had two Opus review passes.** The first pass was three lenses per plan (spec fidelity, executability,
+    fail-closed), with a Sonnet refuter on each serious finding. The second pass was one Opus reader per plan, reading the
+    rewrite. Every finding that held is answered in the plans.
+  - **Wave 4c**, the lineage hardening (run 1219), keeps the parser's radar-shape rules, one shared freshness predicate,
+    the dequeue brief's head, two pins and the base before a PR. It defines D-7469, D-7470 and D-7472 to D-7475.
+  - **The coordinator-side re-proof is not in wave 4c (D-7472).** Each review pass measured a new way to make a git walk
+    in the coordinator's checkout answer for objects other than the ones that land. The redirections were replace refs,
+    a graft file, attributes and a merge driver, hooks, a commit-graph file, and the remote's URL. Every fleet session
+    can write each of them, and they are the same class of write as the forgery the walk exists to stop.
+    - A robust walk needs a scratch repository with every config source disabled, a base sha and a head sha read from
+      GitHub, and a stated stopping line.
+    - Choosing that line is a threat-model decision, so it is put to the operator. Until the operator rules, wave 4's
+      attribution grade stands, as ruled after review 1212.
+  - **The review-cap ask's handling of a `TIP MOVED` report** is carried to the programme that owns the review cap
+    (D-6795, D-6910, D-6911). The ask is the operator's, and the PWA sheet must say what the notice says.
+  - **Wave 4b**, the console half, ships `FleetSession.landing` and the predicted-conflict chip, and dispatches after
+    wave 4c merges. Two parts of spec §5.3's text are narrowed, and the operator is told:
+    - `RunSummary.landing` is not shipped, because a run's landing is its session's (D-7477);
+    - `main-health` is stage 5's to read (D-7478).
+  - **Wave 4b alone does not move spec §10's stage 3 metric.** It gives the operator the reading. A coordinator-skill
+    reader is not yet planned (D-7483), so the metric's two-week clock should not start at wave 4b's rollout.
+- **2026-10-29 22:55 — a red `main` fixed first; wave 4c accepted and merged; wave 4b dispatched.**
+  - **`main` went red under every landing.** #1897 gave `ccd/ccd` a second sourced library, and
+    `ccd-retire-verdicts.test.ts` extracted the merge base's `ccd` with only the first one beside it. Its 15 rows failed
+    wherever the file ran: in at least six pull-request runs on four branches, none of them touching `ccd/ccd` or
+    `ccd/lib`, and in one merge-queue run (#1910's). By the same code it would red the daily run too. No fix was open, so this programme ran one (run 1221, the run's wave 11): `baseCcd()` writes every
+    file the merge base's own `ccd/lib/` holds (D-7496, defined in
+    `docs/superpowers/plans/2026-10-29-retire-verdicts-base-libs.md`). Review run 1222 confirmed no finding.
+  - **#1913 merged before its review reported.** Auto-merge was enabled on it at 20:41Z, before its wave-done and its
+    review. The coordinator did not enable it, and the brief forbids the worker any merge command. GitHub records one
+    shared login for every session, so it cannot show which one did. The PR landed through the queue at the head the
+    review then read (`23b426d9`, as `62857ed9`), and the review confirmed nothing, so the landing stands. Who enabled
+    it is put to the operator.
+  - **Review run 1220** (wave 4c, `0a9ff1b2`) found nothing critical or important. Every touched suite and guard was
+    green at the worker's counts, all 12 plan mutation rows were red, and red-first was measured against the merge
+    base. Every radar shape git's tools can make still parses, and each new refused case fails one rule. Its eight
+    minor findings fail closed or are text. **Accepted, with no fix round for its findings.**
+    - **F1:** a hand-made commit object with two identical parent lines passes the radar's walk, and the `p1 === p2`
+      rule refuses its doc. The rule stays (D-7494).
+    - **F2, F3, F4 and F8** are carried to wave 5 (Carried constraints).
+    - **F5:** nothing pins `freshWithin`'s one definition. It is added in wave 4b's Task 1, from that run's block.
+  - **The landing needed a new head (D-7495).** The verdict judges every check suite on the head, and two runs on
+    `0a9ff1b2` stay red on `main`'s old failure for good, because a rerun replays a run's original merge commit. Closing
+    and reopening the PR started fresh runs, the first on a merge ref GitHub had not yet recomputed. So the run was sent
+    back once (fix round 1) for one clean merge of `main` and nothing else, which gave the PR a new head. Review run 1223 found the merge's tree equal to `git merge-tree` of its
+    parents and the wave's 11 files unchanged.
+  - **Landed.** The verdict on the new head read `ROUTE Q method=squash admin=never strict=no`, run on its own, and the
+    required-checks gate exited `0`. PR #1911 was enqueued at `390445dc` and merged as `9ec4fc54`, with no dequeue.
+  - **Wave 4b** is run 1224 (the run's wave 12). It was opened before run 1219 closed, so the programme keeps an open
+    run, and dispatched with an execution block minted then and the `freshWithin` row added to its Task 1.
+- **2026-10-30 02:32 — wave 4b sent back once, accepted and merged; wave 5 opened.**
+  - **Review run 1225** (wave 4b, `38409807`) found nothing critical or important after refutation. All 23 plan
+    mutation rows were red, and every touched suite, every guard the plan names and all three typechecks were green, the
+    full PWA suite included; the full server suite is left to the merge queue. But the wave's one promise is that the
+    chip's words are true, and the review measured a landing past its window on the wire. While the registry
+    could not be listed, the `/ws/fleet` cold frame and `GET /api/fleet`'s degraded arm sent the watcher's last fleet,
+    aged landing and all. And the chip could show such a landing as fresh for one render, the first after a long gap. **Sent
+    back once (fix round 1):**
+    - **R1:** one helper in `fleet.ts`, `dropStaleLandings`, drops every landing `freshWithin` no longer accepts from
+      the four sends that do not assemble afresh: the cold frame, the degraded arm, that arm's fallback to the saved
+      snapshot, and the remote disconnected arm. `assembleFleet` keeps its own check.
+    - **R2:** the chip ages by the later of its stored clock and the render's own.
+    - **R3:** three things the review's own mutants showed unpinned are now pinned: the tick's `null` hand-off for an
+      unlistable registry, the radar lane's 60 s cadence and its skip-while-in-flight rule, and `readRegular`'s check of
+      the bytes it read.
+    - **R4:** a PR the sweep is backing off on (`unknown`, `unchecked`) keeps its number and matches nothing, so its
+      sessions' landings are absent while the sweep fails. That fails closed and stays, and the text now says so.
+    - **R5 and R6:** the PR body discloses three more decisions against the plan's text, and the departures note
+      defines D-7516 to D-7523.
+    - Review 1225's F5, F6, F9 and the smaller gaps of its F4 are carried to wave 5 (Carried constraints). Its F8, four
+      intermediate commits red on one census, is accepted, because the merge is a squash.
+  - **Review run 1226** (the round, `38bcaf1e`) found nothing critical or important. No send was missed, the new tests were
+    red before the fix, all six mutants were red as predicted, and the departures matched the rulings byte for byte. **Accepted, with no
+    second round.** Its F1 and F2 are text, carried to wave 5. Its F3 is the worker's one departure, D-7526:
+    `dropStaleLandings` returns its input when nothing is stale, because the cold frame's cache is keyed on the array.
+    It is defined in the departures note after the merge.
+  - **Landed.** The verdict on the new head read `ROUTE Q method=squash admin=never strict=no`, run on its own, and the
+    required-checks gate exited `0`. PR #1923 was enqueued at `38bcaf1e` and merged as `85d61aa8`, with no dequeue.
+  - **Wave 5** is run 1227 (the run's wave 13). It was opened as planned before run 1224 closed, so the programme keeps
+    an open run.
+- **2026-10-30 03:40 — wave 5 split; wave 5a planned.**
+  - **Stage 5 is unbuilt.** A read-only survey of `main` found no code for the landing line yet: no landing tables,
+    routes, `land-candidate` verb, PR-keyed `pr-state` form or `main-health` reader. Every dependency row 5 names is
+    merged. Its scope still has open questions that are the operator's (below).
+  - **Wave 5a** takes what the reviews of waves 4c and 4b carried to wave 5, apart from the landing line, and three
+    older review items (1141, 1216 and 1222). Every item is
+    minor, fails closed, is a gap in a test or guard, or is text. It is run 1228 (the run's wave 14), and its plan,
+    `docs/superpowers/plans/2026-10-30-landing-order-wave5a-carried-hardening.md`, defines D-7528 to D-7539. Each task was drafted against `main` and checked against `main` by a second
+    reader. Three Opus lenses then reviewed the plan, a Sonnet refuter checked each serious finding, and each finding
+    that held is answered.
+  - **D-7495's carried question is ruled (D-7536).** The landing verdict keeps its strict rule. A red that is `main`'s
+    own ends as the `red-unreachable` stop, and its report names the new-head route. Spec §5.7.5 makes a red that is
+    not the PR's own a stop once it is still red after the one rerun, or at once when it is not a GitHub Actions run, so
+    the coordinator does not take the route unasked. Whether it may, as wave 4c's landing did, is put to the operator.
+  - **Closed:** wave 4's "lenient chains and times" item. Cycles, duplicate entries and `p2 === p1` are refused on
+    `main`. Wave 4c kept `Date.parse` through `freshWithin` and dropped the strict time format on purpose (its plan's
+    review).
+  - **Not in 5a, and carried on.** These stay carried to the next wave that edits each file:
+    - the items in `ccd/ccd`, `ccd/session-hook.sh` and `ccd/ccd-land-probe`;
+    - `deploy/measure-landing.py`'s single-page read.
+
+    Three items are left for stage 5, whose PR-keyed landed reader (spec §5.5) may serve them:
+    - wave 3d's backstop for an open PR read as landed;
+    - wave 2's closed-unmerged PR reading `unmeasured`;
+    - review 1216's first item, a train-landed spent producer's proof after its row is reclaimed.
+  - **Put to the operator for stage 5.**
+    1. On this repository the native queue is the composition test, so `ccd land-candidate` has no consumer here.
+       Does wave 5 ship the line (entries, intents, holds, the PWA doors, the next-to-land mail) and leave
+       `land-candidate` until a project lands without a queue?
+    2. How do the two private repositories land (ruling 3 left it open)?
+    3. Where is `lander:coordinator` declared? The spec uses it three times and never defines it.
+    4. The spec names three CLAUDE.md amendments: the coord.db invariant, the box-token bullet and the ccd-verb rule
+       (§5.5, §6 and §7). §7 says the ccd-verb rule's wording is the operator's. Should the wave's PR propose the text
+       of all three for the operator to apply?
+    5. The plan prerequisite of spec §10, the coordinator's mail latency, has a measuring tool, but no recorded
+       result since wave 1's plan. May the coordinator run its read-only measurement?
+- **2026-10-30 08:16 — wave 5a accepted and merged; D-7544 to D-7548 defined.**
+  - **Review run 1232** (wave 5a, `981b77cf`) found one important finding and minors. All 67 plan mutation rows were
+    red, and 21 of them were supersets, the same 21 the worker found. Red-first failed 40 cases at the base's source,
+    each new or amended on purpose. Every touched suite, every guard the plan names, all three typechecks and the full
+    PWA suite were green, and §5b's verdict block was byte-identical. The full server suite was left to the merge
+    queue. **Accepted, with no fix round.** No change the wave makes reads cleaner than before. Every finding but one
+    is text, a gap in a guard, or fails closed. The exception is F1 (D-7547), which was there before the wave and
+    needs a corrupt or hand-made registry file. F5's io past the deadline happens in local mode only, so the live
+    server, which is remote, is not affected.
+  - **Five numbers are defined** in `docs/superpowers/plans/2026-10-30-landing-order-wave5a-departures.md`:
+    - D-7544 and D-7545 are the worker's two departures. The plan's literal pin (D-7544) and the brief's literal path
+      (D-7545) would each have failed the build, and the review measured both.
+    - **D-7546:** read 5 lists only the latest run of each check name (M1, measured). So the strict rule of D-7536
+      decides over the latest run of each name, and a failed-then-green rerun of a required name reads green. Until the
+      operator rules, the coordinator also reads every head with `filter=all`, read-only, before the enqueue.
+    - **D-7547:** D-7532 holds for an io failure only (F1). The server and the radar read `.project` by different
+      rules, so four hand-made shapes can still read a landing cleaner. The gap was there before the wave.
+    - **D-7548:** the chip drops four things, not three (F2), and "under 5,000 characters" is not a bound (F3).
+  - **The spec** gains two inline notes for D-7537 (F8), at §5.7.4's merge proof and at §5.7.5's not-at-head stop.
+  - **Landed.** The verdict on the head read `ROUTE Q method=squash admin=never strict=no`, and the required-checks
+    gate exited `0` with all four required checks passing. Every attempt of those four on the head had passed
+    (`filter=all`). PR #1960 was
+    enqueued at `981b77cf` and merged as `d196d8b3`, with no dequeue.
+  - **Put to the operator, beside wave 5's questions:** D-7546. Either read 5 adds `filter=all`, which holds the rule as
+    written but stops a flake cleared by a rerun from landing without a new head, or the stop paragraph is restated as
+    the rule over the latest run of each name, which is the gate every landing so far has used. It is the companion of
+    D-7536's question (may the coordinator take the new-head route unasked): both decide what clears a red.
+- **2026-10-30 10:50 — the operator's answers; waves 3b and 2b proven live; the mail latency measured.**
+  - **The operator answered (about 10:40):**
+    - **D-7536:** the coordinator may take the new-head route on its own when a red is `main`'s own. The skill's
+      sentence for it goes in wave 5, with review 1232's F9 (b).
+    - **Wave 5, question 1:** `ccd land-candidate` is left out of wave 5.
+    - **Question 4:** wave 5's PR proposes the text of the three CLAUDE.md amendments, for the operator to apply.
+    - **Question 5:** the mail-latency measurement is run (below).
+    - **Deploys and switches** are the coordinator's to make.
+  - **Still open, with the coordinator's recommendation:**
+    - **Question 2, the two private repositories.** The options are (a) a direct merge once the PR's own checks pass
+      (route G), (b) the combination test of `ccd land-candidate`, or (c) leaving them out of the landing line. The
+      coordinator recommends (a) now, with `main`'s breakage there measured before (b) is built.
+    - **Question 3, where `lander:coordinator` is declared.** The coordinator recommends a `lander=` key in the
+      project's landing conf, the one per-project file for landing switches, which the radar already reads.
+    - **D-7546.** The coordinator recommends restating the stop paragraph as the rule over the latest attempt of each
+      name, which is GitHub's own rule, and keeping the every-attempt read as a report, not a stop.
+    - **D-7472.** The coordinator recommends building the re-proof in wave 5, measured in a fresh scratch clone
+      fetched from GitHub with a clean environment rather than in a shared checkout, and arming `lineage=on` after it.
+      Until then `lineage=on` is not set, because it changes how every coordinator's wave-dones on this project are
+      accepted.
+  - **The deploy.** The fleet box runs v0.0.862 (`c69ad880`), which carries waves 2b, 4, 4c, 4b and 5a. The server
+    box's version was not measured from the fleet box.
+  - **Wave 3b's live proof** (its plan's Task 4 Step 4) holds. The conf `~/.ccrc/landing/ccrc-pwa.conf` was written at
+    10:45 with `base=main` and `lineage=off`. The tick at 10:46 took 4 s:
+    - `probe` is `measured`: 15 open PRs, 15 pairs of 6 heads, no cut;
+    - all 30 answers reproduce exactly (9 of the 15 base answers and 11 of the 15 pair answers are conflicts) with
+      `git merge-tree --write-tree --name-only --no-messages` in a scratch repository;
+    - `main-health` reads `green` at `main`'s tip, and GitHub reports the four required checks passing there;
+    - `enabled` is absent;
+    - the project's store is unchanged by the tick (0 objects added);
+    - doctor's `land-probe` line passes.
+  - **Wave 2b's live check** (its plan's Task 3 Step 4) holds. The installed hook is byte-equal to the release tree's.
+    Fed from a fixture HOME, it denies `gh pr merge 1 --admin` and a `gh api` enqueue, and passes clause 15's spelling
+    and a verdict read. The operator's allowance file for the one project allowed to keep admin merges (D-7249) is
+    absent, so that project's sessions are refused an admin merge until the operator writes it.
+  - **The mail latency** (spec §10's prerequisite), measured from 2026-10-16 to 2026-10-29 with
+    `deploy/measure-landing.py mail-latency`, over 14 coordinators:
+    - 1161 mails: median 0.2 min, 90th percentile 8.8 min, maximum 1651.8 min;
+    - none unmatched and 14 undelivered;
+    - 6 coordinators' pages came back full, so their mail is left out, and the closed-run read reached its cap of
+      500. The figure covers 8 of the 14 coordinators.
+  - **Wave 4b's live read** waits. The plan's read is `GET /api/fleet`, and the fleet box has no read of it.
+- **2026-10-30 23:24 — the operator's second answers; stage 5 split into ten sub-waves; waves 5b and 5c planned.**
+  - **The operator answered (about 22:15):**
+    - **The allowance file (D-7249):** the coordinator writes it. It was written at 22:20, an empty regular file at the
+      path the hook reads, for the one project allowed to keep admin merges.
+    - **Question 2: (a).** The two private repositories land by direct merge once the PR's own checks pass (route G).
+      Nothing tests a PR combined with `main` there before it lands. Ruling R10's strict-protection flip stays the
+      operator's.
+    - **The server box:** likely moved by the 10:22 update; it is not measured from the fleet box. The fleet box moved
+      again, to v0.0.874, by a console update at 19:35.
+  - **Still open, each with the coordinator's recommendation:**
+    - **Question 3:** a `lander=coordinator` key in the project's landing conf. The radar refuses an unknown key, so
+      sub-wave 5d teaches it the key before anyone writes it.
+    - **D-7546:** restate the rule as the latest attempt of each required check name, and keep the every-attempt read
+      as a report line. Wave 5b's Task 2 holds that text, and it is droppable.
+    - **D-7472, changed:** no re-proof in wave 5, and `lineage=on` stays off. On this repository the queue does not
+      require a PR to be up to date (`strict=no`), so a clean merge of `main` after review is rare. Its one routine
+      case, the new-head route, is followed by a short review of one merge commit. Lineage and the re-proof pay where a
+      project requires up-to-date branches, and they are revisited when one joins the landing line.
+    - **Wave 4b's live read:** a look at the chip on two bound PRs' cards, named to the operator.
+    - **The CLAUDE.md lines (question 4).** `box-token-census` and `collect-switch-prose` read the PR's own
+      `CLAUDE.md`, so sub-waves 5e, 5f and 5j must carry their box-token and coord.db lines in the PR itself. The
+      coordinator proposes to hold each such PR for the operator to read those lines before the enqueue. The ccd-verb
+      rule needs no change: with `land-candidate` left out, stage 5 adds no verb.
+  - **Stage 5 is split into ten sub-waves, 5b to 5k** (Waves table), from a read-only survey of `main`, so that each
+    PR carries only its own data, routes and verb (D-4329's reason):
+    - first, in parallel: 5b (skill text), 5c (the PR-keyed `pr-state`), and 5d (the `lander=` key) once question 3
+      is answered;
+    - then 5e, 5f and 5g in series, because they share the schema, the store and the routes;
+    - then 5h once 5c runs on the fleet box, and 5i once 5d does;
+    - then 5j and 5k.
+
+    The survey's open design choices for 5e onward are settled in each sub-wave's own plan: two migrations, no `repo`
+    column, an entry's identity, when `landing.log` is replayed, and the rest.
+  - **Waves 5b and 5c are planned** (D-7588 to D-7599). Each task was drafted against `main` by an Opus reader and checked by a Sonnet reader, and all 22 fixes are applied. Five Opus lenses then reviewed the two plans, Sonnet refuters checked the serious findings, and a reader checked each fixed plan for consistency. One critical finding per plan held and is answered: in 5c, Task 2's reader expected a line Task 1 never prints; in 5b, a number word the clause-count census refuses. So is every important finding. Until sub-wave 5e records a base, 5b reads clause 15's ejection as covering its report-less round, on the operator's answer to D-7536's question (D-7590).
+  - **The spec** gains an inline note for D-7588, in Figure 1's caption and in §5.7.5's row for a red nothing here can
+    reach.
+  - **Clause 19.** The coordinator's own workflows now run as clause 19 says: short, time-capped and at `medium`
+    effort. Earlier ones in this programme ran at `high`.
+- **2026-10-31 02:45 — wave 5b sent back once, then merged; D-7606 to D-7608 defined.**
+  - **Task 2 (D-7546) was not taken.** No ruling reached the worker, so Tasks 1, 3 and 4 ran without it, and the
+    D-7495 sentence is unchanged. If the operator rules for it, it is a run of its own.
+  - **Review run 1302** (`22e68b1a`) found two important findings. Its 18 measured mutation rows were red, and every
+    suite was green.
+    - **F1:** the new-head route's red-on-`main` read did not follow first parents. On a project that lands with
+      merge commits, it would list another PR's branch commits as `main`'s own.
+    - **F2:** step 6 read every report-less round as clause 15's ejection, the dequeue round included. The operator's
+      answer of 2026-10-30 covers the new-head route only.
+
+    It also found that the reads named could not tell a full run from a refresh run (F3, F4), and it put four
+    questions for a ruling.
+  - **Fix round 1 took every item** (R1 to R8). Each narrows the text, so a case it does not cover stays a stop for
+    the operator:
+    - the red-on-`main` read follows first parents;
+    - only a merge-queue run shows "already fixed", tied to its check suite;
+    - the new-head round is sent only on a merge `git merge-tree` measures clean, and the worker aborts and asks on a
+      conflict;
+    - a report-less round takes one of two forms. An ejection, for the new-head route or a dequeue on a measured
+      conflict, carries a base. A red the PR owns (`red: #<pr>`) carries none and licenses no absorb. A dequeue's other
+      causes stay a stop;
+    - three text items, and a departures note.
+  - **Three numbers are defined** in `docs/superpowers/plans/2026-10-30-landing-order-wave5b-departures.md`:
+    - D-7606 is the worker's whitespace-only rewrap;
+    - D-7607 narrows D-7590's reading of clause 15 to the operator's ruling;
+    - D-7608 amends D-7589's evidence.
+
+    This PR corrects D-7606's line count (review 1303, F3).
+  - **Review run 1303** (`9e3d7c8d`, scoped to the round) found R1 to R8 done as written. Walking each case literally,
+    it found no absorb the text leads to that clause 15 or the operator's answer does not license. All 30 mutation rows
+    were red, and every suite was green. **Accepted, with no second round:** its four findings are minor or advisory,
+    and none leads to a wrong act. They are carried (Carried constraints, "From wave 5b's reviews").
+  - **Landed.** The verdict on the head read `ROUTE Q method=squash admin=never strict=no`, and the required-checks gate
+    exited `0`. No attempt of a required check on the head failed (`filter=all`, 44 runs). PR #2015 was enqueued at
+    `9e3d7c8d` and merged as `83c3544c`, with no dequeue. Each of its six files on `main` is byte-identical to the
+    reviewed head.
+- **2026-10-31 07:06 — wave 5c sent back once, then merged; D-7600 to D-7604 defined; wave 5e's run opened.**
+  - **Review run 1304** (`37a872c6`) found no wrong word and no changed answer from `pr-state --session` or
+    `--project`: 31 fixtures gave byte-identical output on the base and the tip. No argv an older `ccd` can receive
+    was found either.
+    - All 53 plan mutation rows reproduced: 52 red, and 5C-FORM-17 survives as the plan predicts.
+    - Every touched suite, guard, `typecheck-tests` and both `tsc` runs were green.
+    - Two findings were sent back. First, the guard Review Focus 1 calls critical was half pinned: three of the
+      review's own mutants of the `absent` and MERGED checks survived the whole suite. Second, the form's header gave
+      the wrong word for an issue number.
+  - **Fix round 1** (R1 to R5):
+    - **R1:** an issue number answered at rc 1 with `Could not resolve to a PullRequest` reads `absent`, GitHub's
+      definite word that no pull request has that number. Only the header changed; the code already said so.
+    - **R2:** three cases pin the guards, each red under its mutant.
+    - **R3 and R4:** a comment and two spec sentences are corrected.
+    - **R5:** a departures note.
+  - **Five numbers are defined** in `docs/superpowers/plans/2026-10-30-landing-order-wave5c-departures.md`:
+    - D-7600: `h.sh` trims stdout, so no pin sees the trailing newline;
+    - D-7601: 5C-FORM-18's prediction. Review Focus 3's characterization holds through `ccd-pr-state` and
+      `ccd-pr-landing` only;
+    - D-7602: the die-containment census entry;
+    - D-7603: the paged rules read fails closed at one whitespace edge;
+    - D-7604: the base-name grammar's three copies, legitimately different (other processes and languages).
+
+    D-7605 is unused.
+  - **Review run 1306** (`de665d16`, scoped to the round) found R1 to R5 done as written, and each new pin red under
+    its mutant. `ccd/ccd`'s diff is comments only, and its growth is unchanged at the waiver's 100. **Accepted, with no
+    second round:** its five findings are text, and they are carried with the parked minors (Carried constraints,
+    "From wave 5c's reviews").
+  - **Landed.** The verdict on the head read `ROUTE Q method=squash admin=never strict=no`, and the required-checks gate
+    exited `0`. No attempt of a required check on the head failed (`filter=all`, 43 runs). PR #2017 was enqueued at
+    `de665d16` and merged as `a77811e5`, with no dequeue. Each of its 26 files on `main` is byte-identical to the
+    reviewed head.
+  - **Wave 5e's run, 1307, is opened** before run 1227 closed, so the programme keeps an open run.
+  - **Recommendations put to the operator** on all six open items:
+    - **Question 3:** a `lander=coordinator` key in the project's landing conf. A project with no key counts as `none`.
+      Sub-wave 5d teaches the radar the key first.
+    - **D-7546:** the latest attempt of each required name decides, and the every-attempt read stays a report line.
+    - **D-7472:** no re-proof. `lineage=on` stays off until a project that requires up-to-date branches joins.
+    - **Wave 4b's chip:** one look on the live fleet screen.
+    - **The `CLAUDE.md` lines (changed):** each of 5e, 5f and 5j proposes its lines word for word in its plan, for the
+      operator to read there. At landing, the coordinator compares the PR's lines to the approved text: identical
+      lands with no hold, and any difference waits for the operator.
+    - **Clause 15:** no separate amendment now. 5e, which first records a base, proposes the amendment in its plan.
+- **2026-10-31 08:14 — wave 5e planned (D-7610 to D-7627).**
+  - **The journal moves to 5f** (D-7610). Every fact the journal protects is first written in 5f, 5g or 5j: order
+    edges, `fixesMain`, run-less entries, intents, the operator pause and withdrawals. So 5e would ship a journal with
+    nothing to journal. 5e keeps the tables (one migration, both tables complete, D-7611; no `repo` column, D-7612),
+    the entry pinned at `merging` by one writer (D-7614), the order decider, the second-ejection notice (D-7624) and
+    the read `GET /api/landing` (with the client verb `ccrc-api landing show`, D-7625).
+  - **Clause 15 needs no amendment.** A `merging → working` advance records the ejection's base on the line (D-7615),
+    so clause 15's "an ejection naming the base sha the landing line recorded" is literally true. The interim reading
+    (D-7590, narrowed by D-7607) is retired. An ejection is sent only for a run whose entry reads `pinned`, and only
+    once the advance answers that the line recorded the base (D-7627). Otherwise the round is a stop for the operator.
+  - **The read is advisory in 5e** (D-7626). The coordinator checks the pause and its own entry's pin. The order is
+    read, not obeyed, until 5i. A server older than the line answers 404, which reads as no entry, and any other failed
+    read stops the landing.
+  - **Two `CLAUDE.md` lines,** for the operator to read in the plan's block **CLAUDE.md (for the operator to read)**.
+    `the landing line` goes first in the coord.db bullet's loss list (D-7620), and `GET /api/landing` joins the
+    box-token bullet. The worker's PR must carry those bytes, and the coordinator compares them at landing and holds
+    the PR until the operator has read them.
+  - **Plan review.** Each task was drafted against `main` by an Opus reader and checked by a Sonnet reader. Three Opus
+    lenses then reviewed the whole plan, and Sonnet refuters checked the serious findings. Two critical findings held
+    and are answered: the new refusal arrives on `reject.code`, and the route fixtures open real runs. So is each
+    important finding.
+  - **Clause 19.** The coordinator's drafting, fix and review workflows ran at `medium` effort with time caps.
+- **2026-10-31 15:17 — wave 5e sent back once, then merged; D-7628 to D-7633 defined; the operator's rulings on
+  question 3, D-7546, D-7472 and 5e's `CLAUDE.md` lines; runs for 5d and 5f opened.**
+  - **Review run 1308** (`ae2a278f`) found no wrong answer in the line, the decider or the read. No path sends an
+    `ejected:` round, absorbs or lands without a recorded base, whichever box moves first. All 77 plan mutation rows
+    reproduced with no survivor, and the fence, the slot, the `CLAUDE.md` bytes and the growth figures held. Two
+    findings were sent back:
+    - three suites were red at the tip, and the PR's fast run was red on exactly them. `refusal-status` found two
+      inline refusal sends, and `peers-claims-l0` and `collect-lane-l0` pin `shared/api.ts` at eleven import lines.
+      The plan's gate did not list them, and the wave-done went before the fast run had finished;
+    - the re-pin's `pinnedAt`, `runId` and `handoffCommit` had no case that goes red on mutation (D-7617 rests on
+      them).
+  - **Fix round 1** (R1 to R8): both refusals go through the file's helpers with unchanged bytes; both L0 pins name
+    twelve lines; a re-pin case from another run; a parse-based purity describe for `landingEntry.ts`; the §4
+    `ejection-not-merging` row states its precedence and is pinned whole; §5b's new-head paragraph points at step 6's
+    `ejected: new-head:#<pr>` form; README and comment text; and a departures note.
+  - **Six numbers are defined** in `docs/superpowers/plans/2026-10-31-landing-order-wave5e-departures.md`:
+    - D-7628: `auth-gate`'s per-file route count, 57 to 58;
+    - D-7629: the closed client's skill-verb list gains `landing.show`;
+    - D-7630: three kept arms of `decideLandingWrite` pinned;
+    - D-7631: the purity describe keyed on `test/scan`, for the ARCH-06 ratchet;
+    - D-7632: the census suites outside the plan's gate;
+    - D-7633: the review's guards. **Correction (review 1310, F2):** `coord-policy-rings` already guarded
+      `landingEntry.ts`'s `node:sqlite` half; only the fs and clock halves were unguarded.
+
+    The block is spent.
+  - **The rows the round added,** recorded here because a merged plan is append-only (review 1310, F1). Each was
+    measured red as predicted by the worker and again by the reviewer:
+
+    | Row | Mutation | Predicted red |
+    |---|---|---|
+    | 5E-DATA-24 | a pin re-pins an `unknown` row | `landing-entry-store`: a pin onto a row this build cannot read keeps it |
+    | 5E-DATA-25 | drop the `runId` half of the retreat's kept test | `landing-entry-store`: a retreat never ejects another run's pinned entry |
+    | 5E-DATA-26 | drop the `state` half of the retreat's kept test | `landing-entry-store`: a retreat leaves this run's own ejected and landed entries |
+    | 5E-DATA-27 | drop `pinnedAt = ?` from the re-pin `UPDATE` | `landing-entry-store`: a re-pin by another run hands the row over |
+    | 5E-DATA-28 | drop `runId = ?` from it | the same case |
+    | 5E-DATA-29 | drop `handoffCommit = ?` from it | the same case |
+    | 5E-DATA-30 | a `Date.now()` call in `decideLandingWrite` | `landing-entry-census`: reads no clock and no filesystem |
+    | 5E-DATA-31 | a `node:fs` import plus a use in `landingEntry.ts` | that case, and imports no node builtin |
+    | 5E-SKILLS-17 | delete the §4 `ejection-not-merging` row's last sentence | `coordinator-skill`: the row's whole-row pin |
+    | FR1-R5 | delete the new-head paragraph's step 6 clause | `coordinator-skill`: the two pins that hold the paragraph |
+
+  - **Review run 1310** (`c42ad17f`, scoped to the round) found R1 to R8 done as written, both refusals' bytes and
+    statuses unchanged, and every new and re-measured mutant red as predicted. **Accepted, with no second round:** its
+    findings are the record gap answered above, D-7633's wording, and two ragged README lines.
+  - **The operator's rulings,** given to the coordinator's questions on 2026-10-31:
+    - **5e's `CLAUDE.md` lines are approved** as the plan's operator block gives them. The PR's diff was byte-identical
+      to that block (three lines removed and three added), so it landed.
+    - **Question 3:** a `lander=coordinator` or `lander=none` key in the project's landing conf. A project with no key
+      counts as `none`. 5d teaches the radar the key before anyone writes it.
+    - **D-7546:** the latest attempt of each required check name decides, which is GitHub's own rule. The
+      every-attempt read (`filter=all`) stays a report line, not a stop. 5d carries the restatement, wave 5b's dropped
+      Task 2.
+    - **D-7472:** no re-proof. `lineage=on` stays off until a project whose queue requires up-to-date branches joins.
+  - **Landed.** The verdict on the head read `ROUTE Q method=squash admin=never strict=no`, and the required-checks gate
+    exited `0`. No attempt of a required check on the head failed (`filter=all`, 43 runs). PR #2020 was enqueued at
+    `c42ad17f` and merged as `4fc83e57` at 15:14:15Z, with no dequeue. Each of its files on `main` is byte-identical to
+    the reviewed head.
+  - **For every later sub-wave's plan:** Task 5's wave-done waits for the PR's fast run on the exact tip, and reports
+    its conclusion. The whole-tree census suites surface there, not in a plan's list of readers.
+  - **Runs 1311 (5d) and 1312 (5f) are opened** before run 1307 closed, so the programme keeps an open run.
+- **2026-10-31 15:52 — wave 5d planned (D-7635 to D-7647).**
+  - **The lander key** (question 3): the radar's conf accepts `lander=coordinator` or `lander=none`, with `none` the
+    default, and mirrors a valid `lander=coordinator` as `$REG/landing/<project>/lander`. The marker is written on the
+    conditions `enabled` uses, except for the lineage test (D-7636), and uninstall removes it with `enabled` (D-7635).
+    A marker reached through a symlinked directory is neither written nor removed, so 5i reads one as absent (D-7647).
+    Nothing reads the marker until 5i.
+  - **The latest-attempt rule** (D-7546): §5b's prose says what the verdict already does. The latest attempt of each
+    required name decides. An earlier failed attempt, read with `filter=all`, is a line in the coordinator's turn
+    text, never a stop (D-7639, D-7640). The verdict fence is byte-identical.
+  - **The radar's carried items:** review 1171's wording and pins, and the tick's order. Projects are taken least
+    recently measured first, which closes review 1125's N6 without a clock (D-7642). The wave 3b notes are corrected
+    in place (D-7646).
+  - **Not in 5d:** D-7391 (a new git verb, the operator's), D-7393's marker, and every server change.
+  - **Plan review.** Each task was drafted against `main` by an Opus reader and checked by a Sonnet reader. Three Opus
+    lenses then reviewed the whole plan, and Sonnet refuters checked the serious findings. No critical finding was
+    raised, and each important finding that held is answered.
+  - **The operator writes `lander=`** only after the fleet box runs this wave's probe. An older probe reads the key
+    as `unknown-key` and stops measuring the whole conf.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -1091,6 +1865,11 @@ above were read on 2026-10-25 and end at that day's midday; a later run of the s
 
 ## Carried constraints
 
+- **A run the dead-coordinator lane closes is an operator abandon here** (workspace-lifecycle spec §6, the Landing-order
+  bullet; recorded 2026-10-07, where the spec said it already was). Workspace lifecycle's wave 4 (run 314) adds
+  `causedBy: 'sweep'` to `closeRun`'s abandon arm. Every landing reading keyed on an abandon treats a `sweep` close
+  exactly as an `operator` one. Wave 4's plan measures what landing code keys on `causedBy` today and pins the
+  equivalence with a test. A landing plan written after it inherits the rule.
 - **CI test selection landed first (#183, `814fc53d`).** Wave 2's re-plan derives its `ci.yml` edits against that shape
   rather than overwriting it: a `merge_group` run keeps a run-unique concurrency group (never the shared push-to-main
   refresh group, which may drop runs), the mode table gains a `merge_group` row, the macOS legs and `full-suite` skip a
@@ -1157,16 +1936,242 @@ above were read on 2026-10-25 and end at that day's midday; a later run of the s
   - `sweepPr`'s docstring still calls a restart's loss of the latch a silently replaced notification (F5).
     §5.2's query bullet keeps the rationale the wave 3d amendment disproves (F6). The MERGED `none` cases carry
     no number and no list as a reason (F7).
+- **From wave 3b's review (1109), carried:** two other readers of `GET repos/<slug>/rules/branches/<base>` take one
+  page, as the probe did before its fix round: `ccd/ccd`'s landing-rules read and `deploy/measure-landing.py`. A
+  later wave pages them, or treats a full page as unmeasured.
+- **From wave 3e's review (1141), carried:** clause 15's whole-line pin checks that the line exists, not how often. A
+  verbatim copy of clause 15 left elsewhere in SKILL.md, beside a rewritten real one, passes. A later wave asserts
+  that SKILL.md splits on clause 15's line into exactly two parts (D-6345).
+- **From wave 3b's reviews (1140, 1143, 1158 and 1171), carried.** Each fails closed: wave 4 never accepts on what it
+  leaves, and a bad registry row never stops another row from being measured.
+  - **rc 1 and git's name lookup.** `rev-parse --verify -q` answers rc 1 for a missing ref and for one git ignores as
+    broken or cannot read. It also resolves a missing but well-formed branch through another ref of a matching name,
+    such as a tag named `refs/heads/ws/<x>`. `git show-ref --exists` tells both apart (D-7391), but it adds a verb to
+    the probe's git door, so it is a later wave's. Wave 4's reader reads a claim's live tip by its full ref name
+    exactly, never through git's name lookup.
+  - **A null `id`** in `probe` means one of four things: no row names the head's branch, more than one does, the only
+    one that does is held, or the registry could not be listed. The record does not say which (D-7393). Waves 4 and
+    4b read the registry state themselves before trusting a null `id`, or add a marker to the probe.
+  - **An interrupted tick** reads as a running one until the next tick. A later reader that must tell them apart adds
+    an explicit marker (review 1140).
+  - **What a killed tick can leave.** A SIGKILLed tick can leave a `.lp.*` temp file, or a scratch directory with no
+    marker file. A removal that takes the marker file first and then fails, or is SIGKILLed, leaves a remnant. No sweep
+    clears either. The remedy is to remove the marker file last.
+  - **The option-table census is a tripwire, not a boundary.** It does not see a refused builtin reached through the
+    builtins module (`globals`, `getattr`, `vars`, `exec`, `eval`), through a frame's `f_builtins`, or under a name
+    built as a string. Its known-limit paragraph names the first as a class and covers the others by its string
+    clause.
+  - **A `ws/` branch whose name contains a git setting the probe pins on every call** (`core.fsmonitor`,
+    `core.hooksPath`) passes ccd, git and the probe's grammar. The git door then refuses it, so that row never gets a
+    lineage file. Two sentences are reworded later: the grammar comment's "covers every name ccd writes", and
+    `qualifying`'s "decided, logged once" (it is once per refused row).
+  - **Wording and pins left by review 1171:**
+    - no test pins that the two `lineage-skip` lines stay apart;
+    - README's and `project_rows`' "a shape git forbids" is true only of the ruled shapes: the grammar also holds
+      git-valid names such as `ws/a+b`;
+    - the census header's "a call's keyword" understates an arm that counts any keyword;
+    - the notes' undecided-rows row and `qualifying`'s docstring name only some of the failure routes that rewrite
+      with `tip: null`;
+    - README and the PR body still list an alternates failure under the before-first-write fallback's
+      `fetch-failed`;
+    - the doctor header's and the notes' no-checkpoint cases leave out an all-cross-repository PR list and a spent
+      budget.
+- **A project the tick budget leaves unstarted** keeps its old lineage files while `enabled` stays fresh, and the
+  tick takes projects in sorted order, so the same tail project can miss every tick (review 1125's N6). Wave 4's
+  lineage freshness bound makes that fail safe (D-7268). A later wave may rotate the order.
+- **From wave 2b's reviews (1184 and 1195), carried** to the next wave that edits `ccd/session-hook.sh`. Four of them
+  are passes: a NUL-padded or symlinked `.project` and an allowance directory symlink or hard link, each only through
+  planted state; the `xargs` bulk merge, a listed class; and the dispatcher jq's fail-open, older than this wave. The
+  rest are wording, pins or an extra refusal:
+  - **A NUL-padded or symlinked `.project`** reads as the allowed project, because the registry reader drops NUL bytes
+    without counting them and follows links. List both in the allowance header with a pin each, or close them with the
+    generation reader's `read -d '' -n` probe and a `-L` refusal.
+  - **The other `.project` readers and the hold reader** have the same cut-then-trim shape with no check of the raw
+    length. They decide display, grouping or an extra refusal, never a pass.
+  - **An allowance directory that is itself a symlink, and a hard link to the allowance file,** both pass. The header
+    describes only the test on the file, so code and header agree.
+  - **A bulk admin merge through `xargs`** passes under the cap and is refused over it. It is wave 2's listed `xargs` head
+    class; closing it changes wave 2's grammar for every worker.
+  - **The dispatcher jq** exits the whole hook on a lone UTF-16 surrogate escape: a fail-open older than this wave.
+  - **Wording and pins:**
+    - the header credits the glued `pulls/<n>;x/merge` to the separator-bounded reading, but the space-free one
+      refuses it;
+    - the new comments' "filled the read" holds for NUL-free files only;
+    - add the 127/128 boundary pair as a control;
+    - a control's title says ccd writes a newline, which it does not;
+    - the new PullRequest prefilter control is masked by an older assertion;
+    - the allowance header and README list fewer refusals than the code makes;
+    - the `\u` listed pass pairs `--input -` with `-f query=`, where gh encodes the value, so that call cannot merge.
+  - **jq 1.6 and 1.7** are unmeasured; only 1.8.1 was installed where the wave was measured.
+- **From wave 4's reviews (1212 and 1216), carried to wave 4c** (landed in #1911, except the re-proof, which is the operator's (D-7472), the review-cap ask, which is another programme's, the close after a second merge, carried to wave 5; the lenient chains and times, closed 2026-10-30; and the header's
+restatement, taken by wave 5a). None of them accepts wrongly a doc the radar writes:
+  each fails closed, or needs a hand-written file within the attribution-grade reach the plan states.
+  - **The parser header** says the parser reads only the radar's shapes. But a measured doc with no `branch`, a cut walk
+    with no `why`, a measured doc with a `why`, and an `unmeasured` doc with an 8-entry chain still accept. Require
+    `branch`, make `why` agree with `state` and an 8-entry chain with `stop: 'limit'`, then restate the header. Until
+    then, it reads "an inconsistent `state`, `stop`, `base` or chain is unreadable".
+  - **One "radar control"** has a sha base, an empty chain and a null stop, which is not a radar shape. It answers a
+    wait, never an accept. Move it out of the controls, or refuse it.
+  - **The base before a PR exists.** The opt-in paragraph reads `baseRefName` from the PR, but a first worker brief comes
+    before one exists. Add the fallback: the default branch.
+  - **The head-null merged brief's case** asserts less than its comment says. Assert equality with `main`'s text.
+    (These items, the base and the dequeue brief are planned in wave 4c's plan, D-7469, D-7470 and D-7473.)
+  - **A train-landed line** answers `merged` before any head check. The coordinator's MERGED proof still refuses a
+    different head. Pin a train-landed line under a lineage-accepted episode head.
+  - **The review-cap ask** carries the newest `review-done` report, which can be a `TIP MOVED` one that is never ruled
+    on. Carried to the programme that owns the review cap (D-6795, D-6910, D-6911): the ask is the operator's, and the
+    PWA sheet must say what the notice says (Decisions, 2026-10-29 18:40).
+  - **A coordinator-side re-proof of the chain** before a lineage-bound landing. It would walk the verified head back to
+    the reviewed tip, checking two parents, a second parent on the base and a clean merge tree, so the files become
+    hints. **The operator's decision (D-7472).** A walk in the coordinator's checkout can be redirected by writes any
+    fleet session can make, so the design needs a stated stopping line (Decisions, 2026-10-29 18:40).
+  - **The dequeue brief** reads the current episode's head without checking the run's state. So a run sent back and
+    later dequeued could print the earlier episode's head.
+  - **A close after a second merge following the wave-done** records a third sha. Clause 9 forbids that merge, and the
+    MERGED proof comes first.
+  - **Lenient chains and times:** closed (Decisions, 2026-10-30 03:40). Cycles, duplicate entries and `p2 === p1` are
+    refused on `main`, and wave 4c kept `Date.parse` through `freshWithin` on purpose.
+- **From wave 4c's review (1220) and its landing, carried to wave 5; taken by wave 5a** (#1960 `d196d8b3`; Task 1, D-7528 and D-7529; D-7495's question ruled as D-7536, though read 5 judges only the latest run of each name, D-7546). Each fails closed or is text.
+  - **F2.** The unmeasured half of the `state`/`stop` rule (wave 4 fix round 1) can no longer go red: wave 4c's two
+    unmeasured rules refuse every doc it refuses. Delete it, or keep it as a stated belt with a measured red.
+  - **F3 and F4.** The parser header says it refuses every doc the radar cannot write, and that the accept row is
+    reachable only through the radar's shapes. Docs the radar cannot write still parse and accept, though none widens
+    what `decideLineage` accepts, and a null `tip` with a sha `base` parses and answers `tip-unmeasured`. Restate the
+    header, and D-7469's text, to the measured rules, and decide whether to refuse a null `tip` with a base.
+  - **F8.** No lane-level case dequeues a run sent back to `working`. The verdict-level cases pin the arm, and the
+    review measured the production loop. An optional pin.
+  - **The verdict's reading of several check suites on one head (D-7495).** It calls a required name red if any run of
+    it on the head failed, which is stricter than GitHub's rule that the newest run counts, because a later passing run
+    of the same name could hide a real failure. But it leaves a main-red fixed on `main` no route through a rerun. Decide
+    between judging the newest run per name, app and workflow, and keeping the rule while the skill names the new-head
+    route.
+- **From wave 4b's reviews (1225 and 1226), carried to wave 5; taken by wave 5a** (#1960 `d196d8b3`; D-7530 to D-7535 and D-7538), apart from the residual of the first item (D-7547, below). None fails on a healthy box at today's scale: each
+  needs an unreadable file, a hostile listing or a much larger fleet, or is text or a gap in a test or guard.
+  - **A row whose `.project` the server cannot read** is filed under its own id, so its branch is absent from its
+    project's rows while the radar gives that branch's head `id:null`. `unbound` can then be missed for that head, and
+    the project's landings can read clean. It needs an unreadable `.project` (review 1225, F5).
+  - **The chip's sentence** has no length cap: ten heads of twenty 300-character paths measured a 334,403-character
+    accessible name. "(list cut)" names three different cuts, and the partial clauses name no PR or project (F6).
+  - **Hardening at scale and against a hostile `FleetIO`** (review 1225, F9). Only the first needs a listing a real
+    `readdir` cannot return; the rest are scale and fault cases:
+    - the radar's reads apply no `isSafeProjectSegment` to the listing;
+    - a newline in a project name forges a second log line;
+    - the per-project fan-out is unbounded;
+    - the deadline covers the reads only, so a hung local listing never settles, and an abandoned pass released
+      later overwrites a newer map with an empty one;
+    - a thrown listing warns on every pass.
+  - **The smaller gaps of review 1225's F4:**
+    - no case checks that the chip sits after the hot-files strip;
+    - one test's title names the broadcast but asserts only `currentLandings()`;
+    - `core-vocab`'s D-7514 scan skips a reader file that no longer exists, and does not see a server reader's
+      `new Date(`;
+    - no guard pins that `landingOf` is the PWA's one reader.
+  - **Two comments still say the cold frame is what the watcher last broadcast:** `server.ts`'s comment above the cold frame
+    and `watch.ts`'s `currentFleet` docstring. Since fix round 1, a cold frame past the window drops the landing, and
+    the next tick that can list the registry corrects it. Correct both (review 1226, F1).
+  - **The G6 case's title says "re-aged"**, but its second tick runs inside the window, so it pins the hand-off and
+    the kept map only. Retitle it (review 1226, F2).
+- **From review 1222 (the retire-verdicts fix, D-7496), for the next wave that edits that test; taken by wave 5a** (#1960 `d196d8b3`, D-7539). No present failure.
+  - The guard compares the extracted `ccd/lib` names with the base's, never their contents; compare blob ids.
+  - The extraction drops each entry's mode, so a symlink or an executable library would extract as a plain file.
+  - `baseCcd()`'s comment says it never throws at collection time, but its temp writes can.
+- **From wave 4's review 1216, for the next wave that edits the merge-train proof text (#1797).** The second item is
+  taken in §5b's prose by wave 5a (#1960 `d196d8b3`, D-7537), and the verdict block still prints the `CLOSED` stop; the
+  first is left for stage 5. Both fail closed: the coordinator reports instead of acting.
+  - A train-landed spent producer cannot prove its landing once its row is reclaimed, because the proof reads
+    `ccd pr-state --session <id>` after the close.
+  - §5b's prose and verdict do not name the `landedInTrain` alternative that step 3 accepts.
+- **From wave 5a's review (1232), carried to the next wave that edits each file.** Each is text or a gap in a guard,
+  or fails closed, apart from the first, which needs a corrupt or hand-made registry file (D-7547).
+  - **The server's `.project` reader takes the radar's rule** (D-7547): no symlink, one line, UTF-8, at most 4096
+    bytes. Restate `radar.ts`'s comment on held rows and the `ProjectEvidence` docstring's `absent`.
+  - **The chip** (D-7548): restate the `conflictWords.ts` header and Review Focus 3's three to four. Either bound each
+    path in the PWA reader, or restate the claim to the 300-character wire bound.
+  - **Two guard gaps the review's own mutants survived:**
+    - an abandoned pass that speaks, with `gen !== this.radarGen` moved below the `said` line;
+    - a second reader of `projectEvidence` inside `registry.ts`.
+  - **Local-mode io past the deadline.** `localIO.readdirMeasured` ignores `timeoutMs` and `signal`, and `lstat` and
+    `stat` take no signal, so the reader's "the read is aborted" holds for the last step only. The remote adapter
+    honours both, so the live server is not affected.
+  - **The `ProjectEvidence` docstring** says nothing decides on `project`, but several deciders still read the folded
+    id. One is `lineageQualifies`, which answers `lineage-not-expected` for an unreadable `.project` where the honest
+    word is unmeasured. Every one fails closed.
+  - **Text and wrap:**
+    - the golden's comment in `registry-bounded-read.test.ts` still says the golden was generated on the base;
+    - §5b's "On every route" paragraph needs rewrapping (taken by wave 5b, #2015);
+    - once the operator answers D-7536, one clause saying when the new-head route is taken (taken by wave 5b, #2015);
+    - `trainUnread` has two remedies under one word (taken by wave 5b, #2015);
+    - the `mergeBaseFiles` docstring omits its `null` answer.
+  - **Guard reach:**
+    - the `new Date(` scan reads `watch.ts`, `server.ts` and `fleet.ts` whole;
+    - T4-2's two scans go red by a bare ENOENT, not by their own message;
+    - the double-quote census leaves out two new sentences of §5b.
+- **From wave 5b's reviews (1302, 1303), carried to the next wave that edits the skills (5e).** None leads to a wrong
+  act: each is text or a gap in a guard. Wave 5e took all of them except the "address" answer's mail form, which
+  stays carried.
+  - **§5's dequeue paragraph** still names `gh pr view <pr> --json mergeStateStatus` as the conflict read. It also
+    offers a fix round for a dequeue of any cause, with no pointer to the stop step 6 names for the other causes. Step 6
+    names the `git merge-tree` read, and its fix-round arm stops or sends a form.
+  - **The narrowing's pins are per sentence.** A sentence added to step 6's report-less paragraph or to the worker's
+    fix-round bullet that widens it again passes both skill suites (review 1303, F2, measured). Pin each paragraph
+    whole.
+  - **The dequeue ejection's conflict read** should say "a tree id on its first line, then the paths", as worker
+    clause 16 does: `git merge-tree` also exits 1 for a ref that does not resolve.
+  - **A requested change the operator answers "address"** has no mail form of its own.
+  - **The RED bullet** does not point at step 6's `red:` form.
+- **From wave 5c's reviews (1304, 1306), carried to sub-wave 5h, the form's first reader.** The plan's verbatim
+  interfaces govern each of them, and the reviews found each fails closed or is text.
+  - **The reader drops `train` and `trainMergeCommit`:** a train-landed PR's read carries no landing commit and no
+    train number. 5h extends `readPrStatePrLine`; it does not parse the line again.
+  - **The base grammar applies to every row:** an open or merged PR whose base holds `+` or `@` reads `missing-field`
+    for ever. So 5h's backoff must treat a standing `missing-field` as a state, or the grammar narrows to the rows
+    whose base reaches an argv (a train claim).
+  - **The two languages split on merge facts:** an OPEN or CLOSED row that carries merge facts prints `open` or
+    `closed` in `ccd`, but the reader refuses it as `{by: 'reader', reason: 'fields'}`. So a reader refusal is not
+    always build skew.
+  - **No server vocabulary for the reason words:** a reason outside the closed set passes through, and a non-string
+    reason reads `unstated`.
+  - **A missing or dotted project reads `no-remote`,** the same word as an origin that is not GitHub.
+  - **A train record is written for a row `by-pr` then rejects** (a sound proof, and an `unmeasured` line).
+  - **No byte-level pin of one line** (D-7600).
+  - **Text:**
+    - §5.2's restated sentence is true for a removal recorded after the merge only; say so in words;
+    - `_gh_fail_reason`'s comment names a window `_gh_pr_list` no longer sends: put it in the past tense;
+    - §5.5's "one `gh pr view` unless a CLOSED PR carries the train label" is an upper bound, not a count.
+  - **Superseded plan text:** fix round 1 replaced three texts that
+    `docs/superpowers/plans/2026-10-30-landing-order-wave5c-pr-keyed-pr-state.md` gives word for word: the
+    `_pr_state_by_pr` header's issue-number sentence (and D-7593's "reads `unmeasured`" for an issue number), the §5.2
+    F6 restatement, and the §5.5 amendment. Read the shipped text, not the plan's.
+- **From wave 5e's reviews (1308, 1310).** Each is inert in 5e or fails closed.
+  - **To 5f** (the journal and the attributed writes):
+    - **A stale pin after an older build:** an older server re-entering `merging` leaves the entry pinned at a head the
+      run no longer carries. The landing check stops on the mismatch, and the next pin heals it. 5f's recompute must
+      reconcile an entry's `pinnedSha` with the run's episode head, or the eject arm must compare them.
+    - **An `after` edge to an id outside the entries** releases its follower. 5f's writer of `afterIds` refuses a
+      missing or cross-project id, or the decider treats an unknown id as outstanding.
+    - **A bare retreat counts as an ejection** (D-7616), so the ejected-twice notice can fire on `red:` rounds. Its
+      text then reads "unrecorded against base unrecorded". Reword the notice for the bare case.
+    - **`AdvanceOk.landing`** types `kind` as `string`. It should carry the union the store answers, `created` and
+      `state` included.
+    - **Step 6 never names `landing.entry.baseSha`.**
+    - **A non-zero, unreadable `fixesMain`, `pinnedAt` or `ejections`** from a newer build: the writer and the reader
+      must agree on what each reads as.
+  - **To 5h** (the landed reader):
+    - **Nothing writes `landed`.** 5h marks the entries pinned in 5e to 5g as landed before 5i makes the order binding,
+      or 5i's head is a merged PR.
+    - **The read is unbounded.** With a held 40-byte secret, the masker replaces `order`'s shas after about 2048
+      entries, and `entries`' after about 4096. The landing check then fails closed. 5h bounds the read, to
+      non-terminal states or with `?pr=`.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec
   whitelist; never print secret contents.
 
 ## Next-wave brief
 
-Waves 1–3, 3c and 3d are merged (#231 `10f32755`, #234 `0087a045`, #248 `9a255a74`, #1046 `4ce282f8`, #1096
-`e173c1aa`). Task 7's re-run on 2026-10-21 turned the merge queue on for `main`, and it stays on by the operator's
-ruling (Decisions, 2026-10-21 12:15). Wave 3d answers its stop rule 6: a removal whose reason is `merged` reads
-`landed` (Decisions, 2026-10-21 14:49 and 19:17).
+Waves 1–3, 2b, 3b, 3c, 3d, 3e, 4, 4c, 4b, 5a, 5b, 5c and 5e are merged (#231 `10f32755`, #234 `0087a045`, #1863 `d3250900`, #248 `9a255a74`,
+#1740 `3ca67389`, #1046 `4ce282f8`, #1096 `e173c1aa`, #1127 `7e38b5f4`, #1884 `f6b67a5b`, #1911 `9ec4fc54`, #1923 `85d61aa8`, #1960 `d196d8b3`, #2015 `83c3544c`, #2017 `a77811e5`, #2020 `4fc83e57`). Task 7's re-run on 2026-10-21 turned the merge queue on for `main`, and
+it stays on by the operator's ruling (Decisions, 2026-10-21 12:15). Wave 3d answers its stop rule 6: a removal whose
+reason is `merged` reads `landed` (Decisions, 2026-10-21 14:49 and 19:17).
 
 **Wave 3d's deploy and live proof come first.** The operator moves both boxes with ccrc's updater. Then the
 coordinator reads, read-only, what the plan's Task 6 names: the next queue merge of a bound PR reads `merged …
@@ -1174,11 +2179,72 @@ landed`; no `dequeued:` notice names a PR that then reads merged; after the depl
 extra `merged` row per merged workspace whose pre-wave-3d row's reason clause has changed (review 759's F3); and no
 second `merged` row after a later restart.
 
-**Wave 3e is planned** (Decisions, 2026-10-22 07:13): the landing route from the repository's own rules (spec
-§5.7), in `docs/superpowers/plans/2026-10-22-landing-order-wave3e-landing-route.md`. Three tasks: the landing
-verdict and the test that runs it; clause 15, the route prose, the licence, the stops and their pins; the gate,
-the PR, the deploy (`ccrc rollout --to` the prerelease that carries it, then the installed skill text verified in
-every home) and the live proof. Then wave 3f, the server's running-check fix.
+**Wave 3e is merged and proven** (#1127 `7e38b5f4`): the landing route from the repository's own rules (spec §5.7).
+Its live proof finished with #1740's landing (Decisions, 2026-10-29 06:01). Next in that line is wave 3f, whose fix
+shipped in #1383; its plan's measurement of the 30 s sweep cadence's cost is left.
 
-**Wave 3b (stage 3, `ccd-land-probe`)** stays planned, run 310 open.
-- **Wave 2b** (deny `--admin` and `gh api` merges fleet-wide) is planned after wave 3e's plan (spec §11, item 12).
+**Wave 3b is merged** (#1740 `3ca67389`; Decisions, 2026-10-29 06:01): `ccd-land-probe`, the read-only conflict radar.
+- **Deploy.** The fleet box's installed release read v0.0.811 on 2026-10-29, the first release that carries it. Doctor's `services` and
+  `land-probe` lines are expected to read SKIP while no project has a conf.
+- **Proven live** on 2026-10-30, with `lineage=off` (Decisions, 2026-10-30 10:50).
+- **The proof never sets `lineage=on`.** That is wave 4's to arm.
+
+**Wave 4 is merged** (#1884 `f6b67a5b`; Decisions, 2026-10-29 17:38). A clean merge of `main` keeps its wave-done and
+its review, for a project the operator opts in.
+- **Deploy.** ccrc's updater carries the skills before the server (AGENT-FIRST, plan Task 4 Step 3).
+- **Arming is the operator's:** `lineage=on` in the radar's conf for `ccrc-pwa`, after wave 3b's live proof with
+  `lineage=off`.
+- **The live proof** is the programme's next work run whose worker absorbs the base cleanly after its wave-done. The
+  advance with the original claim answers `verifiedHead`, the landing binds it, and the ledger records both shas. That
+  run's brief names the opt-in and the base: a PR's `baseRefName`, or, before a PR exists, the repository's default
+  branch (wave 4c, D-7473).
+
+**Wave 2b is merged** (#1863 `d3250900`; Decisions, 2026-10-29 09:41): `--admin` and `gh api` merges are refused in every
+fleet session, with the operator's per-project allowance (D-7249).
+- **Deploy.** ccrc's updater carries the hook to every home (AGENT-FIRST).
+- **The live check, plan Task 3 Step 4,** holds (Decisions, 2026-10-30 10:50). The operator's allowance file
+  (D-7249) was written on 2026-10-30 at the operator's instruction (Decisions, 2026-10-30 23:24).
+- **From then on,** the landing verdict, the checks gate and the enqueue run as separate commands (D-7314).
+
+**Wave 4c is merged** (#1911 `9ec4fc54`; Decisions, 2026-10-29 22:55): the lineage parser refuses the docs the radar's
+rules rule out (a measured doc with no `branch`, a `why` that disagrees with `state`, an 8-entry chain not at `limit`, a
+`p1` equal to its `p2`), though it still reads some docs the radar cannot write (carried to wave 5); the radar files'
+freshness rule is one predicate (`freshWithin`); the dequeue brief prints a head only at `merging`; and a first brief
+names its base before a PR exists. It ships with the next release: the skill sentence through ccrc's updater, skills
+before the server, and the rest with the server. Nothing in it needs arming, and `lineage=on` stays the operator's.
+
+**Wave 4b is merged** (#1923 `85d61aa8`; Decisions, 2026-10-30 02:32). The server reads the radar's probe for each
+project a fleet session belongs to. A session whose current PR matches a head the radar measured, in a probe within its
+window, carries `FleetSession.landing`, and the PWA shows a read-only predicted-conflict chip. No send carries a landing
+past its window, and the chip ages a frame it already holds.
+- **Deploy.** ccrc's updater carries the server and the PWA. The order of the two boxes does not matter, because the
+  wave reads files wave 3b already writes.
+- **The live read** (plan Task 4 Step 4) is the coordinator's, read-only, once a project has a conf: `GET /api/fleet`'s
+  `landing` for that project's bound sessions, and the chip. The ledger then records the release, the rollout date
+  (which starts §10's stage 3 clock for the operator's view only, D-7483) and the first fresh landing seen.
+
+**Waiting on the operator:** a look at wave 4b's chip on the live fleet screen. Question 3, D-7546, D-7472 and 5e's
+`CLAUDE.md` lines are ruled (Decisions, 2026-10-31 15:17).
+
+**Wave 5a is merged** (#1960 `d196d8b3`; Decisions, 2026-10-30 08:16). It carries the hardening that the reviews of
+waves 4c and 4b, and three older review items, left for wave 5:
+- the lineage parser refuses a null tip under a base;
+- the radar lane's pass is bounded, under one deadline that covers its listing, with a generation;
+- an unreadable `.project` stays a fact;
+- the chip's sentence is capped, and the radar's cut and an unbound head have sentences of their own (a path-list cut
+  stays a note on its own line, D-7548);
+- §5b names the new-head route and the train-landed proof, and its verdict block is unchanged.
+
+Deploy: ccrc's updater carries the server, the PWA and the skill text.
+
+**Wave 5**, the landing line, is split into sub-waves 5b to 5k (Waves table; Decisions, 2026-10-30 23:24). Questions
+1, 2, 4 and 5 and D-7536 are answered.
+- **5b is merged** (#2015 `83c3544c`; Decisions, 2026-10-31 02:45), without its Task 2 (D-7546).
+- **5c is merged** (#2017 `a77811e5`; Decisions, 2026-10-31 07:06). It reaches the fleet box with the next
+  release the operator rolls out, and 5h reads it only once the fleet box runs it.
+- **5e is merged** (#2020 `4fc83e57`; Decisions, 2026-10-31 15:17). Deploy: ccrc's updater carries the server and
+  the skill text. Its read is advisory until 5i, and a server older than the line answers 404, which reads as no entry.
+- **5d is planned** (`docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`, run 1311; Decisions, 2026-10-31 15:52): the `lander=` key and D-7546's restatement,
+  with the radar's carried wording. It ships to the fleet box first.
+- **5f is next in line** (run 1312), then 5g to 5k in order, each planned against `main` as it then stands. 5h also
+  waits until the fleet box runs 5c.

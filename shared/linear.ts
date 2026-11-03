@@ -102,11 +102,13 @@ export interface LinearConnectionAnswer { ok: true; connection: LinearConnection
  * key (a 401, the ONLY answer that marks the stored key rejected), `forbidden` Linear refusing this request (a 403: a
  * scope or a team the key lacks, which says nothing against the key and never marks it), `not-found` a ticket that
  * does not exist, `timeout` is worth retrying,
- * `malformed` is an answer that was not the shape asked for, and `unreachable` is everything else the service or the
- * network did (a 5xx, a 429, a refused connection, a GraphQL errors array).
+ * `malformed` is an answer that was not the shape asked for, `rate-limited` is Linear refusing over its rate limit (a
+ * 429, or a `RATELIMITED` code on any status) or ccrc's own rate service refusing before any call (spec §6.7), and
+ * `unreachable` is everything else the service or the network did (a 5xx, a refused connection, a GraphQL errors
+ * array).
  */
 export const LINEAR_FAILURES = [
-  'not-configured', 'unauthorised', 'forbidden', 'not-found', 'timeout', 'malformed', 'unreachable',
+  'not-configured', 'unauthorised', 'forbidden', 'not-found', 'timeout', 'malformed', 'unreachable', 'rate-limited',
 ] as const;
 export type LinearFailure = (typeof LINEAR_FAILURES)[number];
 
@@ -119,3 +121,154 @@ export type ResolveAnswer =
   | { kind: 'auto'; slug: null; title: null; source: 'offline' }
   | { kind: 'refused'; slug: null; title: null; source: 'offline'; reason: NameRefusal }
   | { kind: 'named'; slug: string; title: string; source: 'linear' | 'offline'; reason?: LinearFailure };
+
+// ---------------------------------------------------------------------------
+// The slot store (#1444): one key per Linear workspace under `~/.ccrc/linear/`, `<id>.key` beside its version 2
+// record `<id>.json`, where `<id>` is the workspace's id. The record is a DISPLAY record, never a credential: of the
+// key it carries the tail and the digest, and the digest never leaves the server. `server/src/linear/store.ts`
+// reads and writes it; the wire answer that shows it is `LinearWorkspaceView`, below.
+// ---------------------------------------------------------------------------
+
+/** A Linear id (a workspace's `organization { id }`, a team's `id`): a lowercase UUID. A workspace id is a slot's
+ *  file stem, so it is checked against this before it becomes a file name. */
+export const LINEAR_UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** A workspace's URL key, the `ws-a` of its links. */
+export const LINEAR_URL_KEY_SHAPE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+/** A team key (`AAA`), after it is uppercased: team keys are compared uppercased. */
+export const LINEAR_TEAM_KEY_SHAPE = /^[A-Z][A-Z0-9_]{0,15}$/;
+/** The most teams a record keeps: two pages of the key check. */
+export const LINEAR_TEAMS_MAX = 500;
+
+export const isLinearUuid = (v: unknown): v is string => typeof v === 'string' && LINEAR_UUID_SHAPE.test(v);
+export const isLinearUrlKey = (v: unknown): v is string => typeof v === 'string' && LINEAR_URL_KEY_SHAPE.test(v);
+export const isLinearTeamKey = (v: unknown): v is string => typeof v === 'string' && LINEAR_TEAM_KEY_SHAPE.test(v.toUpperCase());
+
+/** One team the key's user reaches. `name` is Linear's text, cleaned before it is stored. */
+export interface LinearTeam {
+  id: string;
+  key: string;
+  name: string;
+}
+
+/** What `<id>.json` holds. `name`, `urlKey` and `user` are null, and `teams` empty with `teamsAt` null, only when no
+ *  check of this key has learned them (its first check was rejected, or Linear did not answer), as the v1 record's
+ *  `org` and `user` are. `outcome` keeps the four words of `LINEAR_CHECK_OUTCOMES`. */
+export interface LinearStoreRecord {
+  workspaceId: string;
+  name: string | null;
+  urlKey: string | null;
+  user: string | null;
+  teams: LinearTeam[];
+  /** Epoch ms of the check that learned `teams`, or null when none has. */
+  teamsAt: number | null;
+  keyTail: string;
+  keyDigest: string;
+  checkedAt: number;
+  outcome: LinearCheckOutcome;
+}
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+/** True when `o` has exactly the fields named, no more and no fewer. */
+const hasExactly = (o: Record<string, unknown>, fields: readonly string[]): boolean => {
+  const own = Object.keys(o);
+  return own.length === fields.length && fields.every((f) => Object.prototype.hasOwnProperty.call(o, f));
+};
+/** A name as the server stores it: Linear's text after `cleanName` (control runs gone, bounded). The bound here is a
+ *  parse bound, the v1 record's (`parseLinearDetails`), never looser than what the cleaner keeps. */
+export const isLinearStoredName = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 400 && !/\p{Cc}/u.test(v);
+const isTime = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+const isDigest = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
+
+const TEAM_FIELDS = ['id', 'key', 'name'] as const;
+const RECORD_FIELDS = [
+  'v', 'workspaceId', 'name', 'urlKey', 'user', 'teams', 'teamsAt', 'keyTail', 'keyDigest', 'checkedAt', 'outcome',
+] as const;
+
+/** A team list as a record holds it; null when the list, or any entry, is not exactly that shape, when it holds more
+ *  than `LINEAR_TEAMS_MAX` teams, or when two entries share an id or (uppercased) a key: the router never chooses
+ *  between two teams of one workspace. */
+export function parseLinearTeams(v: unknown): LinearTeam[] | null {
+  if (!Array.isArray(v) || v.length > LINEAR_TEAMS_MAX) return null;
+  const ids = new Set<string>();
+  const keys = new Set<string>();
+  const out: LinearTeam[] = [];
+  for (const t of v) {
+    if (!isPlainObject(t) || !hasExactly(t, TEAM_FIELDS)) return null;
+    const { id, key, name } = t;
+    if (!isLinearUuid(id) || !isLinearTeamKey(key) || !isLinearStoredName(name)) return null;
+    if (ids.has(id) || keys.has(key.toUpperCase())) return null;
+    ids.add(id);
+    keys.add(key.toUpperCase());
+    out.push({ id, key, name });
+  }
+  return out;
+}
+
+/** Parses a slot record's text; null when it is not exactly the version 2 shape: an unknown field, a missing one, or
+ *  any field out of its grammar. Teams with no `teamsAt` are refused, since no check learned them. */
+export function parseLinearStoreRecord(raw: string): LinearStoreRecord | null {
+  let v: unknown;
+  try { v = JSON.parse(raw); } catch { return null; }
+  if (!isPlainObject(v) || v['v'] !== 2 || !hasExactly(v, RECORD_FIELDS)) return null;
+  const { workspaceId, name, urlKey, user, teamsAt, keyTail, keyDigest, checkedAt, outcome } = v;
+  if (!isLinearUuid(workspaceId)) return null;
+  if (!(name === null || isLinearStoredName(name)) || !(user === null || isLinearStoredName(user))) return null;
+  if (!(urlKey === null || isLinearUrlKey(urlKey))) return null;
+  const teams = parseLinearTeams(v['teams']);
+  if (teams === null) return null;
+  if (!(teamsAt === null || isTime(teamsAt)) || (teamsAt === null && teams.length > 0)) return null;
+  if (typeof keyTail !== 'string' || keyTail.length !== 4 || !isDigest(keyDigest) || !isTime(checkedAt)) return null;
+  if (!(LINEAR_CHECK_OUTCOMES as readonly unknown[]).includes(outcome)) return null;
+  return {
+    workspaceId, name, urlKey, user, teams, teamsAt, keyTail, keyDigest, checkedAt, outcome: outcome as LinearCheckOutcome,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The Settings routes' answer (#1444, spec §10.1, §10.2): what `GET /api/linear/workspaces` and each key act on
+// `/api/linear/workspaces` answer. NEVER A KEY: the most the wire carries of one is `keyTail`, and never the digest.
+// ---------------------------------------------------------------------------
+
+/** A team as a row shows it: its key and its (cleaned) name. Linear's team id stays on the server. */
+export interface LinearTeamShown {
+  key: string;
+  name: string;
+}
+
+/** What a slot's row shows beside its state. Each field is what the slot's record learned for the key now stored,
+ *  and null (`teams` empty) when no record describes that key: the record is absent, unreadable, malformed, or
+ *  describes another key (`details-unknown` says which), or the key file itself cannot be used. */
+export interface LinearWorkspaceShown {
+  /** The workspace's id, the slot's name: what the check and remove routes take as `:id`. */
+  id: string;
+  name: string | null;
+  urlKey: string | null;
+  user: string | null;
+  teams: LinearTeamShown[];
+  keyTail: string | null;
+  checkedAt: number | null;
+}
+
+/** One slot as the Settings card shows it (spec §10.2): today's per-key view, its nine states unchanged, carried per
+ *  slot. A slot always has a key file, so its state is never `not-connected`. */
+export type LinearWorkspaceView = LinearWorkspaceShown & LinearConnectionView;
+
+/** The legacy pair's row (spec §3.4): `view` is today's `LinearConnectionView` of the pair; `workspace` is what its
+ *  Check again learned for the key now stored, or null; `superseded` is true while a file slot holds that workspace. */
+export interface LinearLegacyRow {
+  view: LinearConnectionView;
+  workspace: { name: string; urlKey: string; teams: LinearTeamShown[] } | null;
+  superseded: boolean;
+}
+
+/** Every successful answer of the four `/api/linear/workspaces` routes. `store` is `unreadable` when the slot
+ *  directory cannot be listed (permissions), and the list is then empty. An add names its slot in `added`, a replace
+ *  in `replaced`. */
+export interface LinearWorkspacesAnswer {
+  ok: true;
+  store: 'ok' | 'unreadable';
+  workspaces: LinearWorkspaceView[];
+  legacy: LinearLegacyRow | null;
+  added?: string;
+  replaced?: string;
+}

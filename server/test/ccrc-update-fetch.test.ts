@@ -2533,6 +2533,58 @@ describe('ccrc update: the tarball name is bounded — no path separator (D-3148
   });
 });
 
+describe('_upd_release_base [file]: the release base in either reading (D-7457)', () => {
+  // The test box's tools unit reads the base the way box mode reads every box key (`ccd/testbox-knobs#_tb_release_base`):
+  // `file` mode, so the environment's value is not read. Every existing caller passes no mode and reads as before.
+  const ENV_BASE = 'http://env.testbox.invalid/releases';
+  const FILE_BASE = 'http://file.testbox.invalid/releases';
+  it('`_upd_release_base file` ignores an environment value and reads ccrc.env; `_upd_release_base` with no mode still prefers the environment', () => {
+    const home = freshUpdateBox('ccrc-update-relbase-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    appendFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_RELEASE_BASE_URL=${FILE_BASE}\n`);
+    const env = `CCRC_RELEASE_BASE_URL='${ENV_BASE}'; export CCRC_RELEASE_BASE_URL; `;
+    const file = sourcedCcrc(home, `${env}_upd_release_base file`);
+    expect(file.code, file.stderr).toBe(0);
+    expect(file.stdout).toBe(FILE_BASE);
+    const plain = sourcedCcrc(home, `${env}_upd_release_base`);
+    expect(plain.code, plain.stderr).toBe(0);
+    expect(plain.stdout).toBe(ENV_BASE);
+  });
+  it('`file` mode with no line in ccrc.env is the default host, never the environment\'s', () => {
+    const home = freshUpdateBox('ccrc-update-relbase-default-');
+    const r = sourcedCcrc(home, `CCRC_RELEASE_BASE_URL='${ENV_BASE}'; export CCRC_RELEASE_BASE_URL; _upd_release_base file`);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^https:\/\/github\.com\/[^/]+\/[^/]+\/releases$/);
+  });
+});
+
+describe('_upd_resolve: its staging directory under UPD_STAGE_PARENT, else under TMPDIR (TB6, D-7408)', () => {
+  // The test box's tools unit stages the release under its own `<tools>` through UPD_STAGE_PARENT, composing no TMPDIR
+  // (the recycled-slug proof's premise 1 allows one TMPDIR composer). A fixed driver: `curl` is a function that prints
+  // the staging directory `_upd_resolve` made and fails, so nothing is fetched; the parent comes in as an argument.
+  const DRIVER = '. "$1"; curl() { printf "STAGE=%s\\n" "$UPD_STAGE" >&2; return 22; }; if [ -n "$2" ]; then UPD_STAGE_PARENT="$2"; fi; _upd_resolve v0.0.1';
+  const stageOf = (home: string, parent: string, tmp: string): string => {
+    const r = spawnSync(BASH, ['-c', DRIVER, 'ccrc-under-test', join(REPO, 'ccd', 'ccrc'), parent], { env: { ...updateEnv(home), TMPDIR: tmp }, encoding: 'utf8' });
+    expect(r.status, r.stderr).not.toBe(0);
+    const m = /^STAGE=(.+)$/m.exec(r.stderr ?? '');
+    expect(m, r.stderr).not.toBeNull();
+    return m![1]!;
+  };
+  it('a set UPD_STAGE_PARENT holds the staging directory; unset, TMPDIR does, as before; either is removed on the die', () => {
+    const home = freshUpdateBox('ccrc-update-stage-parent-');
+    const parent = join(home, 'tools-stage');
+    const tmp = join(home, 'tmp');
+    mkdirSync(parent);
+    mkdirSync(tmp);
+    const under = stageOf(home, parent, tmp);
+    expect(under.startsWith(`${parent}/ccd.`), under).toBe(true);
+    expect(existsSync(under)).toBe(false);
+    const plain = stageOf(home, '', tmp);
+    expect(plain.startsWith(parent), plain).toBe(false);
+    expect(readdirSync(parent)).toEqual([]);
+  });
+});
+
 // R20a (centralised-update wave 13): each test's fixture homes go in a root `afterEach`, not all at once in the
 // file's `afterAll`. Measured at 9221416a: the three parts of this file leave 648 homes, about 99,700 entries and
 // 2.47 GB to that one hook, which overran vitest's 20 s hook timeout on CI shards at 670d25fd and 7b0a5454. It sits

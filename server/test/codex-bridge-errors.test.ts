@@ -254,6 +254,24 @@ describe.skipIf(!PY)('the error table (codex-bridge spec §2.4)', () => {
     expect(none.error.requestId).toBeNull();
   });
 
+  // The backend sends x-oai-request-id and neither of the other two (runbook step 2, 2026-10-27; D-7084), the name
+  // Codex reads after x-request-id (openai/codex codex-rs/codex-api/src/api_bridge.rs at rust-v0.164.0,
+  // extract_request_id). The first name present still decides, a malformed value under it included.
+  it('the upstream request id falls back to x-oai-request-id when neither x-request-id nor request-id is sent, and x-request-id wins over it', async () => {
+    const [oai, both, plainFirst, badFirst, badOai] = await run([
+      http(500, '', { 'x-oai-request-id': 'oai-req-fx1' }),
+      http(500, '', { 'x-oai-request-id': 'oai-req-fx1', 'x-request-id': 'req_fx2' }),
+      http(500, '', { 'x-oai-request-id': 'oai-req-fx1', 'request-id': 'req_fx3' }),
+      http(500, '', { 'x-oai-request-id': 'oai-req-fx1', 'x-request-id': 'has spaces and; more' }),
+      http(500, '', { 'x-oai-request-id': 'has spaces and; more' }),
+    ]);
+    expect(oai.error.requestId).toBe('oai-req-fx1');
+    expect(both.error.requestId).toBe('req_fx2');
+    expect(plainFirst.error.requestId).toBe('req_fx3');
+    expect(badFirst.error.requestId).toBeNull();
+    expect(badOai.error.requestId).toBeNull();
+  });
+
   it('header names are read case-insensitively from a plain mapping', async () => {
     const [l] = await run([http(429, '', { 'Retry-After': '5', 'X-Request-Id': 'req_fx4' })]);
     expectRow(l, { status: 429, etype: 'rate_limit_error', headers: { 'retry-after': '5' } });

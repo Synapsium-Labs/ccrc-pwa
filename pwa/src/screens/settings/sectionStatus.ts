@@ -10,12 +10,12 @@ import { AUTO_MODES, FLEET_SCOPE, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT } from '.
 import { COLLECT_STATE_TEXT } from '../../fleet/collectLaneWords';
 import { releaseWaitingWords } from '../../fleet/releaseWaiting';
 import { haltingNodes } from '../../fleet/updateHalt';
-import { readBoxTokenView } from '../../lib/api';
+import { readBoxTokenView } from '../../lib/wireReaders';
 import type { SettingsSectionId } from '../../lib/routes';
 import type { PushState, SettingsView } from './SettingsDataProvider';
-import { boxTokenSummary } from './SecuritySection';
+import { boxTokenSummary } from './boxTokenWords';
 import { unarmedExposure } from './signInGate';
-import { AUTO_LABELS, CHANNEL_SENTENCES } from './UpdatesSection';
+import { AUTO_LABELS, CHANNEL_SENTENCES } from './updatesWords';
 
 /** `attention` is a release waiting (the word and `↑`); amber and red are the page's own warn tones. */
 export type StatusTone = 'calm' | 'attention' | 'amber' | 'red';

@@ -18,7 +18,7 @@ import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/update
 import { realRunner, type ExecResult, type Runner } from '../src/exec.js';
 import type { FleetState } from '../src/fleetstate.js';
 import { localIO, type FleetIO } from '../src/io.js';
-import { AgentOpError, LinkNotSentError } from '../src/remote/client.js';
+import { AgentOpError, LinkNotSentError } from '../src/remote/errors.js';
 import type { Deps } from '../src/server.js';
 import {
   LINK_DOWN_DETAIL, LOCAL_SPAWNING_DETAIL, NO_FLEET_LINK_DETAIL, NO_LOCAL_RUNNER_DETAIL,

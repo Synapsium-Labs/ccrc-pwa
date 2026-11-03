@@ -29,7 +29,8 @@ const headerProps = (session: FleetSession): HeaderHostProps => ({
 const here = (): string => location.pathname + location.search;
 
 beforeEach(() => {
-  // The sheet mounts SwapSheet, which polls `/api/accounts` while open: answer it with an empty roster.
+  // The sheet mounts SwapSheet, which once polled `/api/accounts` while open (it reads the fleet store since C8,
+  // D-6440): any read of the route still gets an empty roster.
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (String(input).includes('/api/accounts')
     ? new Response(JSON.stringify({ accounts: [], projected: null, roster: [] }),
       { status: 200, headers: { 'content-type': 'application/json' } })
@@ -175,8 +176,8 @@ describe('one builder for both surfaces (spec 4.8, M4.L2)', () => {
   // template, a `?ref=`, a call to `docsPageUrl` or `docsLocation`). It does not see a builder imported from a third
   // module under another name, or a URL assembled from pieces that never spell those; the behaviour cases above are
   // what pin the hrefs themselves.
-  // The menu's caller moved with the menu (W2 Task S2d): `SessionFlows` builds the ⋯ menu now.
-  it.each(['src/fleet/SessionActionsSheet.tsx', 'src/session/SessionFlows.tsx'])(
+  // The menu's caller moved with the menu (W2 Task S2d): `SessionFlows` builds the ⋯ menu now; its items to `sessionMenu.ts` (D-7573).
+  it.each(['src/fleet/SessionActionsSheet.tsx', 'src/session/sessionMenu.ts'])(
     '%s calls sessionDocsHref and builds no Docs URL of its own', (rel) => {
       const text = readFileSync(path.join(import.meta.dirname, '..', rel), 'utf8');
       expect(text).toContain('sessionDocsHref(session)');

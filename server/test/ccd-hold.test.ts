@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, WS_ADD, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, WS_ADD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-hold-'); });
@@ -321,7 +321,7 @@ describe('held is a refusal rung on the destructive verbs', () => {
 });
 
 describe('cmd_ws_release: what the comment promises', () => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   // The WHOLE function, bounded by the next top-level definition rather than
   // by a character count: the plan's 1200-char window stopped short of the
   // `die` message the third test below pins, so a guard meant to prove the

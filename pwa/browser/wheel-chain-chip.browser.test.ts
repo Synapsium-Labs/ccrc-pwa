@@ -42,7 +42,7 @@ describe('a wheel over an answer chip whose content fits moves .chat-scroller', 
       expect(dims.oy, 'the chip is a scroll container even when its answer fits').toBe('auto');
       expect(dims.sh, 'the one-line answer fits').toBeLessThanOrEqual(dims.ch);
       const dy = direction(chip);
-      const m = await wheelOver(page, 'chipfit', 0, dy);
+      const m = await wheelOver(page, 'chipfit', 0, dy, chip);
       expect(Math.abs(m.boxTop), 'the chip has nothing to scroll').toBeLessThan(2);
       expect(Math.abs(m.scroller), `the transcript moved by ${m.scroller}px (wanted more than 50)`).toBeGreaterThan(50);
       expect(Math.sign(m.scroller), 'in the wheel direction').toBe(Math.sign(dy));

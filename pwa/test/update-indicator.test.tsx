@@ -174,7 +174,7 @@ describe('UpdateIndicator (D-6327)', () => {
     // Refined on a phone: a row of the phone header, after the accounts strip.
     el = await mount(REFINED, 899);
     expect(el.closest('header.ref-phone-head'), 'Refined 899: under the phone header').not.toBeNull();
-    expect(el.previousElementSibling?.matches('.accounts-strip, .accounts-compact'), 'after the accounts strip').toBe(true);
+    expect(el.previousElementSibling?.matches('.accounts-strip'), 'after the accounts strip').toBe(true);
     expect(el).toHaveAttribute('data-form', 'row');
     cleanup();
     // Instrument on a phone: in the fleet column, after the banner stack's slots (asserted below).

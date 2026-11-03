@@ -595,6 +595,8 @@ export const GROUNDS = {
 export const SELF_GROUNDED_EXEMPT = {
   '.chat-head .keycap:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is documented sub-AA in tokens.css',
   '.send-btn:disabled': 'WCAG 1.4.3 exempts inactive controls',
+  // R89 S1: a failed bubble's Retry while the desk's inline ask card is held; --ink-disabled on the message column's page ground.
+  '.pending-actions .pending-retry:disabled': 'WCAG 1.4.3 exempts inactive controls; --ink-disabled is documented sub-AA in tokens.css',
   // Measured, not assumed: --ink-disabled on the ghost button's sheet ground is
   // 2.85 dark / 2.63 light. It is the same --ink-disabled the three entries
   // above are exempt for; this one only became visible when variants that
@@ -722,6 +724,19 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
   },
+  // The Move sessions sheet (accounts plan Task A3): its session rows and the progress line sit in .sheet-panel.
+  '.move-project': {
+    under: ['var(--bg-sheet)'],
+    why: "the Move sessions sheet's project line under each session's name (MoveSessionsSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). .move-list, .move-row and .move-name paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.move-word': {
+    under: ['var(--bg-sheet)'],
+    why: "the Move sessions sheet's outcome word at the right of each session row (MoveSessionsSheet.tsx), on .sheet-panel's var(--bg-sheet), the same ground and reasoning as .move-project",
+  },
+  '.move-progress': {
+    under: ['var(--bg-sheet)'],
+    why: "the Move sessions sheet's live progress line (MoveSessionsSheet.tsx), a direct child of the sheet body on .sheet-panel's var(--bg-sheet), the same ground and reasoning as .move-project",
+  },
   '.route-field-label': {
     under: ['var(--bg-sheet)'],
     why: 'the new-session sheet\'s routing row (routing spec, slice 4, Task 6) sits directly in .sheet-panel, same as .pool-note above. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
@@ -733,6 +748,101 @@ export const INHERITED_GROUNDS = {
   '.code-block-lang': {
     under: ['var(--well-bar-bg)'],
     why: "the language label is the copy affordance's sibling inside .code-block-bar (CodeBlock, lib/markdown.tsx) and takes --syn-comment on the same 5%-ink-over-well fill. It sets no background of its own and its selector names no ancestor, so no route could ground it — it was in the uncovered census next to a rule that was shipping at 3.03:1",
+  },
+  // ── the code palette on the well (T4a, D-6387) ──────────────────────────
+  // Thirteen combined `.msg-assist .hljs-*, .well .hljs-*` rules and seven
+  // `.well .ansi-*` rules. Every arm paints a --syn-* / --diff-* hue on
+  // --bg-well, and the colour is read from the stylesheet, so retinting a rule
+  // re-measures it. The ground is the DOM's: a fenced block's <pre> and the
+  // .code-block wrapper both paint --bg-well (prose.css), and a tool box is a
+  // <pre class="well"> (primitives/well.tsx). The same chat code block is
+  // drawn by the Docs reader (its `.doc-body` carries the prose hook class, and
+  // renders the same CodeBlock), so one registration covers both pages.
+  '.msg-assist .hljs-comment, .msg-assist .hljs-quote, .well .hljs-comment, .well .hljs-quote': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-keyword, .msg-assist .hljs-selector-tag, .msg-assist .hljs-section, .msg-assist .hljs-literal, .well .hljs-keyword, .well .hljs-selector-tag, .well .hljs-section, .well .hljs-literal': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-string, .msg-assist .hljs-regexp, .well .hljs-string, .well .hljs-regexp': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-number, .msg-assist .hljs-symbol, .msg-assist .hljs-bullet, .well .hljs-number, .well .hljs-symbol, .well .hljs-bullet': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-title, .msg-assist .hljs-title.function_, .msg-assist .hljs-function .hljs-title, .well .hljs-title, .well .hljs-title.function_, .well .hljs-function .hljs-title': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-type, .msg-assist .hljs-built_in, .msg-assist .hljs-title.class_, .msg-assist .hljs-class .hljs-title, .well .hljs-type, .well .hljs-built_in, .well .hljs-title.class_, .well .hljs-class .hljs-title': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-attr, .msg-assist .hljs-attribute, .msg-assist .hljs-property, .msg-assist .hljs-variable, .msg-assist .hljs-template-variable, .msg-assist .hljs-selector-class, .msg-assist .hljs-selector-id, .well .hljs-attr, .well .hljs-attribute, .well .hljs-property, .well .hljs-variable, .well .hljs-template-variable, .well .hljs-selector-class, .well .hljs-selector-id': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-tag, .well .hljs-tag': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-tag .hljs-name, .msg-assist .hljs-name, .well .hljs-tag .hljs-name, .well .hljs-name': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-meta, .well .hljs-meta': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-deletion, .well .hljs-deletion': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-addition, .well .hljs-addition': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.msg-assist .hljs-link, .well .hljs-link': {
+    under: ['var(--bg-well)'],
+    why: "a highlighted token inside a code block or a tool box: its ground is the well (a fenced block's <pre> and .code-block, or a `.well` tool box), which no selector arm names, and the same in the chat transcript and the Docs reader",
+  },
+  '.well .ansi-red': {
+    under: ['var(--bg-well)'],
+    why: "an ANSI hue span inside a tool box's <pre class=\"well\">: the span paints a code-palette token on the well, the selector's `.well` arm names the ancestor but the well's own background is a utility class no stylesheet rule paints",
+  },
+  '.well .ansi-green': {
+    under: ['var(--bg-well)'],
+    why: "an ANSI hue span inside a tool box's <pre class=\"well\">: the span paints a code-palette token on the well, the selector's `.well` arm names the ancestor but the well's own background is a utility class no stylesheet rule paints",
+  },
+  '.well .ansi-yellow': {
+    under: ['var(--bg-well)'],
+    why: "an ANSI hue span inside a tool box's <pre class=\"well\">: the span paints a code-palette token on the well, the selector's `.well` arm names the ancestor but the well's own background is a utility class no stylesheet rule paints",
+  },
+  '.well .ansi-blue': {
+    under: ['var(--bg-well)'],
+    why: "an ANSI hue span inside a tool box's <pre class=\"well\">: the span paints a code-palette token on the well, the selector's `.well` arm names the ancestor but the well's own background is a utility class no stylesheet rule paints",
+  },
+  '.well .ansi-magenta': {
+    under: ['var(--bg-well)'],
+    why: "an ANSI hue span inside a tool box's <pre class=\"well\">: the span paints a code-palette token on the well, the selector's `.well` arm names the ancestor but the well's own background is a utility class no stylesheet rule paints",
+  },
+  '.well .ansi-cyan': {
+    under: ['var(--bg-well)'],
+    why: "an ANSI hue span inside a tool box's <pre class=\"well\">: the span paints a code-palette token on the well, the selector's `.well` arm names the ancestor but the well's own background is a utility class no stylesheet rule paints",
+  },
+  '.well .ansi-muted': {
+    under: ['var(--bg-well)'],
+    why: "an ANSI hue span inside a tool box's <pre class=\"well\">: the span paints a code-palette token on the well, the selector's `.well` arm names the ancestor but the well's own background is a utility class no stylesheet rule paints",
+  },
+  // The word `failed` on an errored tool call's row (T4a, D-6387). The row sits in .toolcard, which paints
+  // --bg-surface, the same card ground .exit-badge is registered against; the selector names no painted ancestor.
+  '.tool-fail': {
+    under: ['var(--bg-surface)'],
+    why: "the failed word on a tool card's header row takes --status-dead-text; the card (.toolcard, tool-card.css) paints background: var(--bg-surface) and .tool-fail's selector names no painted ancestor, so no route could ground it. The same ground and the same ink as the gate's `dead-text / surface` pair, and as .exit-badge's entry",
   },
   '.term-histbar-word': {
     under: ['color-mix(in srgb, var(--bg-well) 88%, var(--ink-on-well))'],
@@ -850,9 +960,22 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the emptied card's own sentence about where its work went (spec §6, board-placement wave 2), same ground and register as .proj-abroad-line above — both sit directly on .proj-card-body's ground. Its selector names no ancestor, so no route could ground it",
   },
-  '.proj-released-toggle, .proj-archived-toggle, .proj-children-toggle': {
+  // ── delegated work and its worktrees on a project card (delegation broker wave 4, PR2) ──────────────────────
+  '.proj-pending, .proj-work': {
     under: ['var(--bg-surface)'],
-    why: "the card's fold toggles (workspace lifecycle spec §5.1), and since D-6088 the coordinator's folded-workers line, which sits in .proj-card-body on the same card ground; rekeyed when that selector joined the rule. Siblings of .proj-card-body inside the card, on the card's own ground. ONE rule since both became <BareRow>: they had declared the same seven declarations as each other as well as the six the component carries, and this key moved with them — a rule key is `<basename> <selector>`, so merging two selectors rekeys, which the gate said out loud rather than passing quietly. Neither sets a background of its own and the selector names no ancestor, so no route could ground it",
+    why: "the pending spawn's row and, since delegation broker wave 4, a delegated activity's, worktree's or unowned tree's line: one rule, the same inert nested line in .proj-nest inside .proj-card-body, on the card ground. Neither is ever a selected row, and the selector names no ancestor, so no route could ground it. Registered when the second selector joined the rule (`.proj-pending` alone had been a grandfathered blind spot)",
+  },
+  '.proj-work-parts > *:not(:first-child)::before': {
+    under: ['var(--bg-surface)'],
+    why: "the middot between the cells of a .proj-work line, the .proj-pending-meta separator's twin on the same card ground. Registered separately for the reason the .auth-block-sub entry states",
+  },
+  '.proj-work-chip': {
+    under: ['var(--bg-surface)'],
+    why: "the inferred chip and the creating Bash call's chip on a raw worktree's line (D-6999), words in a currentColor frame like .sess-workson, on the same card ground; it paints no background of its own",
+  },
+  '.proj-released-toggle, .proj-archived-toggle, .proj-children-toggle, .proj-group-toggle': {
+    under: ['var(--bg-surface)'],
+    why: "the card's fold toggles (workspace lifecycle spec §5.1), and since D-6088 the coordinator's folded-workers line, which sits in .proj-card-body on the same card ground; rekeyed when that selector joined the rule. Siblings of .proj-card-body inside the card, on the card's own ground. Rekeyed again when the delegation broker's two group headers (wave 4) joined it: the same disclosure, on the same ground. ONE rule since both became <BareRow>: they had declared the same seven declarations as each other as well as the six the component carries, and this key moved with them — a rule key is `<basename> <selector>`, so merging two selectors rekeys, which the gate said out loud rather than passing quietly. Neither sets a background of its own and the selector names no ancestor, so no route could ground it",
   },
   '.proj-released-heading, .proj-released-note': {
     under: ['var(--bg-surface)'],
@@ -896,8 +1019,8 @@ export const INHERITED_GROUNDS = {
     why: "the account-pool epoch/observed staleness indicator (Task 9, account-pool-membership wave 1) sits in .fleet-head-right on the fleet screen's header. .fleet, .fleet-head and .fleet-head-right all paint no background of their own, so the real ground is body's --bg-page (styles/base.css:111) — same reasoning and same ground as .mail-chip/.mail-group-head above, which sit on the sibling .mail-screen's unpainted body. Its selector names no ancestor, so no route could ground it. Review round 1, C2: this was first added to GRANDFATHERED_UNCOVERED on the mistaken claim that nothing at this header level paints a background — INHERITED_GROUNDS already grounds three OTHER rules in this exact file against --bg-page for exactly this reason, and --ink-tertiary over --bg-page measures 6.23 dark / 5.25 light, clearing the 4.5 floor in both themes.",
   },
   '.dlg-later:disabled': {
-    under: ['var(--bg-sheet)'],
-    why: "D-6325 (the-ask-holds-through-a-reconnect): Deny's disabled look while the reconnect gap holds the ask, tertiary ink as the own-words Send and the tab chips take. It sits in .dlg-actions inside the ask sheet's <Sheet>, whose .sheet-panel paints background: var(--bg-sheet) (primitives.css:141); the rule paints no ground and its selector names no painted ancestor. Registered rather than grandfathered: the ground is recoverable by reading the component.",
+    under: ['var(--bg-sheet)', 'var(--bg-surface)'],
+    why: "D-6325 (the-ask-holds-through-a-reconnect): Deny's disabled look while the reconnect gap holds the ask, tertiary ink as the own-words Send and the tab chips take. It sits in .dlg-actions inside the ask sheet's <Sheet>, whose panel paints background: var(--bg-sheet) (its bg-sheet utility, ui/src/primitives/sheet.tsx#Sheet); the rule paints no ground and its selector names no painted ancestor. Registered rather than grandfathered: the ground is recoverable by reading the component. D-6326: at the desk the same row sits in the inline ask card, `.ask-inline` (chat.css), which paints background: var(--bg-surface), so both grounds are measured.",
   },
   '.opt-inert': {
     under: ['var(--bg-sheet)'],
@@ -1089,6 +1212,75 @@ export const INHERITED_GROUNDS = {
   '.settings-when': {
     under: ['var(--bg-surface)'],
     why: "a Settings card's when-line (\"when you would change it\"), the tertiary step under a control's notes. Every section page's cards are @ccrc/ui's Section, whose card paints --bg-surface (SECTION_CARD's bg-surface), and the line sits directly inside it; its selector names no painted ancestor",
+  },  // ── accounts plan Task A18 (D-7740): the Add account door and the connect sheet ──────────────────
+  '.acct-door': {
+    under: ['var(--bg-page)'],
+    why: "the Add account door on a phone (ConnectSheet.tsx's AddAccountDoor), the lane list's last row: a ListRow with a transparent fill in .accounts-list, on the Accounts page's body, which paints nothing of its own over the page's var(--bg-page) (PageScaffold); the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-door-meta': {
+    under: ['var(--bg-page)'],
+    why: "the door's meta line (Anthropic · OpenAI · OpenRouter), inside the same row, on the Accounts page's body, which paints nothing of its own over the page's var(--bg-page) (PageScaffold); the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  ".acct-door[data-narrowed='true'], .acct-door[data-narrowed='true'] .acct-door-meta, .acct-door-action[data-narrowed='true']": {
+    under: ['var(--bg-page)'],
+    why: "the narrowed door in its disabled ink: the phone row in .accounts-list, or the header action in PageScaffold's head (bg-page, PAGE_HEAD), on the Accounts page's body, which paints nothing of its own over the page's var(--bg-page) (PageScaffold); the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-field > label, .acct-secret > label': {
+    under: ['var(--bg-sheet)'],
+    why: "the connect sheet's field labels (NameFrame.tsx, SecretField.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-field-note, .acct-narrowed, .acct-door-reason > p, .acct-door-reason .acct-fix-hold': {
+    under: ['var(--bg-sheet)', 'var(--bg-page)'],
+    why: "the connect sheet's field notes and a narrowed provider's or method's reason (NameFrame.tsx, ProviderFrame.tsx, MethodFrame.tsx) inside <Sheet>'s .sheet-panel, which paints var(--bg-sheet), and the Add account door's reason (DoorReason) on the Accounts page's var(--bg-page); none of the frames or the reason's box paints a background, and the selector names no painted ancestor, so the auditor cannot recover either ground from CSS alone",
+  },
+  '.acct-derived': {
+    under: ['var(--bg-sheet)'],
+    why: "the derived config folder and wrapper under the Name field (NameFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-method-name': {
+    under: ['var(--bg-sheet)'],
+    why: "a method's name in the method radio (MethodFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-method-line': {
+    under: ['var(--bg-sheet)'],
+    why: "a method's consequence line in the method radio (MethodFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-ledger': {
+    under: ['var(--bg-sheet)'],
+    why: "the Run frame's step ledger (RunFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-ledger-clock': {
+    under: ['var(--bg-sheet)'],
+    why: "each ledger line's clock (RunFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-result-word': {
+    under: ['var(--bg-sheet)'],
+    why: "the Result frame's state word (ResultFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-result-line': {
+    under: ['var(--bg-sheet)'],
+    why: "the Result frame's identity and latency lines (ResultFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  // ── accounts plan Task A19 (D-7742): Remove, Discard, Replace token and the compromise disclosure ──────────────────
+  '.acct-remove-name': {
+    under: ['var(--bg-sheet)'],
+    why: "a session's name in the remove sheet's live list and the replace sheet's restart list (RemoveSheet.tsx, ReplaceSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-session-word': {
+    under: ['var(--bg-sheet)'],
+    why: "a session's restart word in the replace sheet (ReplaceSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-removal-lines': {
+    under: ['var(--bg-sheet)'],
+    why: "a ledger section's mono lines, and the sleeping session ids (RemoveSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-compromise > summary': {
+    under: ['var(--bg-sheet)'],
+    why: "the compromise disclosure's summary, in a result frame (CompromiseSteps.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-compromise-steps': {
+    under: ['var(--bg-sheet)'],
+    why: "the compromise disclosure's steps, in a result frame (CompromiseSteps.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
 };
 
@@ -1108,7 +1300,7 @@ export const OPACITY_REGISTRY = {
   },
   '.bell:disabled 0.35': { noText: 'WCAG 1.4.3 exempts inactive controls' },
   '.pending-actions .pending-send-it:disabled 0.6': {
-    noText: 'WCAG 1.4.3 exempts inactive controls; the button is only disabled for the moment its own Enter is in flight',
+    noText: 'WCAG 1.4.3 exempts inactive controls; the button is disabled while its own Enter is in flight, and while the desk\'s inline ask card holds sends (D-6326, R96)',
   },
   ".attach-chip[data-state='uploading'] .attach-thumb 0.55": {
     noText: 'an <img> upload preview; the uploading state is also carried by the ::before ring',
@@ -1289,7 +1481,7 @@ export function audit(root = PWA_ROOT) {
    *      .keycap`'s ground was exactly that, and threw);
    *    * a rule with a SELF_GROUNDED_EXEMPT reason is exempt wherever it is
    *      reached, not only when route 1 reaches it. */
-  const contextsFor = (base) => {
+  const contextsOf = (base) => {
     const vars = localVars(base.body);
     const out = [{ suffix: '', vars, rule: base }];
     // Each variant gets its own context, AND variants that qualify the base's
@@ -1348,6 +1540,17 @@ export function audit(root = PWA_ROOT) {
       if (g.names.length > 1) out.push({ ...g, suffix: ` [as ${g.names.join(' + ')}]` });
     }
     return out;
+  };
+
+  /** `contextsOf`, worked out once per base. It reads only this audit's fixed
+   *  inputs (the rules, the self-grounded set, the registries), so a second call
+   *  for the same rule returns the same contexts — and the passes below ask for
+   *  153 distinct bases 471 times, each answer a scan of every rule. Callers
+   *  only read the contexts; none of them mutates one. */
+  const contextsMemo = new Map();
+  const contextsFor = (base) => {
+    if (!contextsMemo.has(base)) contextsMemo.set(base, contextsOf(base));
+    return contextsMemo.get(base);
   };
 
   /** Measure one ink against one ground, in both themes. The single place a

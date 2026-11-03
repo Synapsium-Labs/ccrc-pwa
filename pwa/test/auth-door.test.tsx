@@ -77,9 +77,12 @@ const json = (status: number, body: unknown): Response =>
 
 /** The fleet screen's own routes, `GET /api/auth/status`, the passkey list and
  *  the two enrolment/revocation calls. A fresh Response per call, never one
- *  shared instance: AccountsStrip, FleetHostBanner, the store's roster poll and
- *  the notice all fetch on mount, and a body can only be read once
- *  (fleet-screen.test.tsx's helper carries the same warning).
+ *  shared instance: the store's accounts poll, the host's `FleetChromeProvider`
+ *  (fleet health and updates), `HotFilesStrip` and the banner stack's
+ *  `usePasskeyStatus()` (whose answer `PasskeyNotice` takes as a prop) all
+ *  fetch on mount, and a body can only be read once (fleet-screen.test.tsx's
+ *  helper carries the same warning). AccountsStrip fetches nothing since C8
+ *  (D-6440), and FleetHostBanner takes its health as a prop, as it did before.
  *
  *  `status` and `list` may be GETTERS, so a test can change what the box says
  *  about itself half-way through — which is the whole point of the retiring

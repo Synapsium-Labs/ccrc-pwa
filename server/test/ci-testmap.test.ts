@@ -441,7 +441,7 @@ describe('the floor: repo-wide guards must come out repo-wide (spec §5.2)', () 
   it('names the floor exactly as the spec does', () => {
     expect(GIT_FLOOR).toEqual(['source-bytes', 'topology-clean', 'deviation-refs', 'dtbd', 'providers',
       'modelenv-single-writer', 'install-census', 'gitignore-secrets'].map((n) => `server/test/${n}.test.ts`));
-    expect(WALK_FLOOR).toEqual([...['advance-switches', 'ask-digest', 'child-reclaim', 'core-vocab', 'docs-l0', 'docs-ring', 'late-census', 'roster-bash', 'switches-history', 'update-stall', 'vocabularies'].map((n) => `server/test/single-definition/${n}.test.ts`),
+    expect(WALK_FLOOR).toEqual([...['advance-switches', 'ask-digest', 'child-reclaim', 'core-vocab', 'docs-l0', 'docs-ring', 'kernel-tail-cadence', 'kernel-tail-journal', 'kernel-tail-spawn', 'late-census', 'roster-bash', 'switches-history', 'update-stall', 'vocabularies'].map((n) => `server/test/single-definition/${n}.test.ts`),
       'server/test/typecheck-tests.test.ts']);
   });
 

@@ -7,22 +7,26 @@
 // Every screen is a recorded one (`askPanes.ts`, copied from `parseDialog` and kept equal to it by
 // `server/test/dialog.test.ts`), named by its fixture. A shape no recording shows is DERIVED from one in the test, and
 // says so.
+//
+// C7f (D-7184): the client's pairing is deleted, and the sheet reads the wire's. So the pairing rows below are the
+// PAIRING READER's, over the same corpus: the pairing the server attaches for the envelope and the screen
+// (`wirePairing.ts`, the server's own rule, D-7363), as `askLive.ts#pairingFor` reads it for the question `askSource`
+// shows. The four readers below keep the deleted functions' names, so every assertion is as it was.
 import { describe, expect, it } from 'vitest';
-import type { Dialog, HookAskQuestion } from '../../shared/api';
+import type { AskPairing, Dialog, HookAskQuestion } from '../../shared/api';
 import {
+  askSource,
   freeTextSlot,
   isAskReview,
-  liveQuestion,
-  namedQuestion,
+  pairingFor,
   paneTicks,
-  questionCorresponds,
   questionKey,
   rowText,
   slotHolds,
   slotHoldsPart,
-  titleMatches,
   wantedTicks,
 } from '../src/session/askLive';
+import { wirePairing } from './wirePairing';
 import {
   CACHING_TRACING,
   COLOUR_ONE,
@@ -43,6 +47,22 @@ const derive = (env: AskEnvelope, edit: (qs: HookAskQuestion[]) => void): AskEnv
 
 /** A DERIVED screen: a recorded one with `patch` applied. */
 const screen = (name: string, patch: Partial<Dialog>): Dialog => ({ ...pane(name), ...patch });
+
+/** The pairing the sheet reads for `env` over `dialog`: the wire's (`wirePairing`), for the question `askSource` shows
+ *  (`pairingFor`), or null for none (no dialog, or nothing to pair). */
+const read = (env: AskEnvelope, dialog: Dialog | null): AskPairing | null =>
+  pairingFor(askSource({ ask: env, dialog, askFrameSeen: true }), wirePairing(env, dialog));
+/** Which question the pane is painting: the pairing's `live`. */
+const liveQuestion = (env: AskEnvelope, dialog: Dialog | null): number | null => read(env, dialog)?.live ?? null;
+/** The one question the pane's title names: the pairing's `named`. */
+const namedQuestion = (env: AskEnvelope, dialog: Dialog | null): number | null => read(env, dialog)?.named ?? null;
+/** Does question `q` line up with the pane's rows: the pairing's `corresponds`, for an envelope of that one question. */
+const questionCorresponds = (q: HookAskQuestion, dialog: Dialog | null): boolean =>
+  read({ questions: [q] }, dialog)?.corresponds[0] ?? false;
+/** Does the pane's `title` name `question`: the pairing names it, for an envelope of that one question (listing no
+ *  options, so labels say nothing) over a recorded parsed screen carrying that title. */
+const titleMatches = (question: string, title: string): boolean =>
+  namedQuestion({ questions: [{ question, multiSelect: false, options: [] }] }, screen('cc300-ask-1q-open', { title })) === 0;
 
 describe('liveQuestion: which question the pane is painting (D-5089)', () => {
   it('a one-question envelope keeps the labels-only rule', () => {

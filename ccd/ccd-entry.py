@@ -29,6 +29,8 @@
 #     orphaned worktree, behind a token the box re-proves)
 #   scratch-rescue <any tail>                     — likewise (disk retention: keeps a session's scratch
 #     repository in its project's attic; called only by the temp sweep)
+#   ws-shed-deps <any tail>                       — likewise (the deps-shed arm, D-7278: the server's removal of a
+#     sleeping session's ignored dependency directories, re-proved on the box)
 #   ws-audit --session <value> --reclaim [--defer-expired] [--stale <word>] [--hold-digest <digest>] — the token skeleton;
 #   ws-audit --session <value> --expire           — the expiry's token skeleton;
 #   ws-audit --session <value> --expire --child-of <value> — the same, for an archived child (expire-child-v1);
@@ -58,6 +60,14 @@
 # launcher/body pair; a same-user writer that replaces both files is not
 # stopped by it, and the window between hashing the body and Bash opening it
 # is not closed.
+#
+# THE BODY'S LIBRARIES (#1279). The body loads two more files beside it, `lib/disk-retention.sh` and
+# `lib/train-proof.sh`, and pins each file's SHA-256 in its own text, which THIS digest covers: the launcher pins the
+# body, the body pins the libraries.
+# The body reads the library once, hashes what it read and evaluates what it hashed; a missing, linked or changed
+# file refuses the start with status 125 before any verb runs. The path comes from the body's own location, so no
+# environment variable and no argument names it. It is the same trust surface as the body: PATH, and the hashing
+# tool it selects, are trusted prerequisites.
 #
 # STANDARD LIBRARY ONLY, and the shebang's `-IS` is load-bearing: isolated mode
 # ignores every PYTHON* variable, user site-packages and the current directory,
@@ -151,7 +161,7 @@ def folds_to(token, word):
 
 def is_protected(argv):
     # CASE-INSENSITIVE, A SUPERSET ON PURPOSE — see WHAT IS PROTECTED above.
-    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue')):
+    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue', 'ws-shed-deps')):
         return True
     if len(argv) == 4 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session') \
             and (folds_to(argv[3], '--expire') or folds_to(argv[3], '--collect')):

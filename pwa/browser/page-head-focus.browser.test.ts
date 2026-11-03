@@ -33,7 +33,7 @@ const archived = (i: number): object => ({
   status: 'dead', statusUpdatedAt: null, limits: null, dialogPending: false, version: null, model: null, effort: null,
   ultracode: false, branch: `ws/ws-${i}`, ctxPct: null, paneCols: null, tasks: null, pr: null,
   archivedAt: NOW - i * 100_000, archivedBytes: 100_000_000 * (i + 1), held: null, hookState: null, askSummary: null,
-  subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null, bucket: 'dead',
+  subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null, bucket: 'archived',
   unmeasured: [], started: true, child: { kind: 'none' },
 });
 const FIXTURE: AppFixture = {

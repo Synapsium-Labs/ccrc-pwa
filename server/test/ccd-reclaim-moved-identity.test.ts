@@ -20,7 +20,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { CHILD_BRANCH, CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
 import { assertRefuted, type Shape, type Target } from './containmentRefutedFamilies.js';
@@ -315,7 +315,7 @@ describe('_ws_reclaim_moved_check, asked directly', () => {
 
 describe('the source', () => {
   it('S1 one identity measure and one identity rule in the moved-check, and the rung records only a valid field', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const code = (name: string): string => {
       const from = src.indexOf(`\n${name}() {`);
       expect(from, `${name} is defined`).toBeGreaterThan(-1);

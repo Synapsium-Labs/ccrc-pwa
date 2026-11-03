@@ -178,7 +178,7 @@ describe('docs verbs: advertised, dispatched, and every well-shaped call is one 
     const r = runCcdDocs(h, ['docs-nope']);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe('');
-    expect(r.stderr).toContain('|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version}');
+    expect(r.stderr).toContain('|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version}');
   });
 
   it.each(DOCS_T6_WELL_SHAPED.map(([label, args]) => [label, args] as const))(
@@ -386,7 +386,7 @@ import sys
 
 
 def main_of(argv):
-    p = subprocess.run([sys.executable, H.__file__] + argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p = subprocess.run([sys.executable, H.__file__, H.Sys.redact_cli, '-'] + argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return [p.returncode, p.stdout.decode('utf-8')]
 
 
@@ -396,6 +396,21 @@ out({'verb': main_of(['docs-fetch'] + ROOTS + ['--project', 'demo']), 'nope': ma
     expect(got.verb[1].indexOf('\n')).toBe(got.verb[1].length - 1);
     expect(JSON.parse(got.verb[1])).toMatchObject({ v: 1, verb: 'docs-fetch' });
     expect(got.nope).toEqual([2, '']);
+  });
+
+  it('main() with no argument, or with only the redactor\'s CLI path, exits 2 with both streams empty (D-7077)', () => {
+    const got = unitJson<[number, string, string][]>(h.home, `${PRE}
+import subprocess
+import sys
+
+
+def raw(argv):
+    p = subprocess.run([sys.executable, H.__file__] + argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return [p.returncode, p.stdout.decode('utf-8'), p.stderr.decode('utf-8')]
+
+
+out([raw([]), raw([H.Sys.redact_cli])])`);
+    expect(got).toEqual([[2, '', ''], [2, '', '']]);
   });
 
   it('line_of is compact strict UTF-8 with no newline; framed_len is the length once the line is a JSON string', () => {

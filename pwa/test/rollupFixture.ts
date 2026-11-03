@@ -2,6 +2,7 @@
 // every state the summary line counts. Shared by the decider's suite and the rendered one, so both read one fleet.
 import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 
 export const NOW = 1_800_000_000_000;
 export const MIN = 60_000;
@@ -53,5 +54,6 @@ export function coordinatorFleet(w5: Partial<FleetSession>): { sessions: FleetSe
     sess('w5', 'project-c', { role: 'child', ...w5 }),
   ];
   const runs = kids.map((k, i) => run(10 + i, 'coord', k.id));
-  return { sessions: [coord, ...kids], runs };
+  // Each worker carries the binding the current server sends over these runs (D-7182, C7d).
+  return { sessions: withRunBinding([coord, ...kids], runs), runs };
 }

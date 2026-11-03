@@ -14,10 +14,12 @@
 // clause), a `desiredTag` to move to (a converged row's is NULL), and moveRefusal's capability clauses for an auto
 // move — `carriesDetachCap`, `carriesUpdateGate` (`no-update-gate`), `agentPredatesUpdateOp` — and `stampUnread`
 // (`stamp-unread`, D-4270): the resolver gives a tag to a node whose stamp did not read, which the dispatcher refuses.
-import type { AutoMode, NodeWire, UpdateIntentWire } from '../../../shared/api';
-import { FLEET_SCOPE, isAutoMode, isReleaseTag, isUpdateChannel } from '../../../shared/api';
+import type { AutoMode, NodeWire, ReleaseWire, UpdateIntentWire } from '../../../shared/api';
+import { FLEET_SCOPE, SETTLED_UPDATE_STATES, isAutoMode, isReleaseTag, isUpdateChannel } from '../../../shared/api';
+import { isNewerTag } from '../../../shared/semver';
+import { remoteSides } from '../../../shared/update-summary';
 import {
-  agentPredatesUpdateOp, autoPermits, carriesDetachCap, carriesUpdateGate, isHaltingUpdate, stampUnread,
+  agentPredatesUpdateOp, autoPermits, carriesDetachCap, carriesUpdateGate, isHaltingUpdate, stampUnread, updateTargetListed,
 } from '../../../shared/update-move';
 import { isManagedNode } from './movePlan';
 
@@ -99,7 +101,13 @@ export function autoWouldMove(n: NodeWire, auto: AutoMode): boolean {
  *     flight) and a lease that could not be read. The console cannot vouch for a move then, so the terminal verbs
  *     stand. */
 export type SkewRemedy =
-  | { kind: 'halt'; halting: NodeWire[]; then: 'auto' | 'cli' } | { kind: 'auto' } | { kind: 'cli' };
+  | { kind: 'halt'; halting: NodeWire[]; then: 'auto' | 'cli' } | { kind: 'auto' } | { kind: 'cli' }
+  /** D-7680: the lagging box is already on its way to the leading tag — a request stands on it (`moving: false`) or
+   *  its lease runs to that tag (`moving: true`). */
+  | { kind: 'queued'; nodeId: string; label: string; tag: string; moving: boolean }
+  /** D-7680: the fleet box leads at `tag`, the server box is idle with no request, the console can move it and the
+   *  release is listed with its bundle and not yanked: the banner offers the one-node move to that tag. */
+  | { kind: 'move'; nodeId: string; label: string; tag: string };
 
 /** Where one node ENDS once auto has done its work: the tag the resolver gave it (auto moves it there), else the
  *  release tag it runs (it stays). null when neither is a release tag — a stamp that did not read, a hand-placed
@@ -128,16 +136,85 @@ function autoArm(nodes: readonly NodeWire[], intent: readonly UpdateIntentWire[]
   return typeof first === 'string' && ends.every((e) => e === first) ? 'auto' : 'cli';
 }
 
+/** The two sides of a skew, each with the release tag it runs (a stamp that read a tag), or null. */
+function skewSides(nodes: readonly NodeWire[]): { fleet: NodeWire; server: NodeWire; fleetTag: string; serverTag: string } | null {
+  const { fleet, server } = remoteSides(nodes);
+  if (fleet === null || server === null) return null;
+  const tagOf = (n: NodeWire): string | null =>
+    n.stampRead === 'ok' && typeof n.current?.version === 'string' && isReleaseTag(n.current.version) ? n.current.version : null;
+  const fleetTag = tagOf(fleet);
+  const serverTag = tagOf(server);
+  if (fleetTag === null || serverTag === null || fleetTag === serverTag) return null;
+  return { fleet, server, fleetTag, serverTag };
+}
+
+const SETTLED: readonly string[] = SETTLED_UPDATE_STATES;
+
+/** D-7680 `queued`: the box BEHIND carries a request for the leading tag, or a lease running to it. */
+function queuedArm(nodes: readonly NodeWire[]): Extract<SkewRemedy, { kind: 'queued' }> | null {
+  const sides = skewSides(nodes);
+  if (sides === null) return null;
+  const fleetLeads = isNewerTag(sides.fleetTag, sides.serverTag);
+  const lagging = fleetLeads ? sides.server : sides.fleet;
+  const tag = fleetLeads ? sides.fleetTag : sides.serverTag;
+  const state: unknown = lagging.update?.state;
+  if (typeof state === 'string' && !SETTLED.includes(state) && lagging.update.target === tag) {
+    return { kind: 'queued', nodeId: lagging.nodeId, label: lagging.label, tag, moving: true };
+  }
+  const req = lagging.request;
+  if (req !== null && typeof req === 'object' && req.kind === 'update' && req.tag === tag) {
+    return { kind: 'queued', nodeId: lagging.nodeId, label: lagging.label, tag, moving: false };
+  }
+  return null;
+}
+
+/** D-7680 `move`: the fleet box LEADS at T (never the server ahead: the console never moves the server to a tag the
+ *  fleet box is not on), the server is idle with no request, the console can move it (`consoleCanMove`), its floor is
+ *  below T (the dispatcher's not-newer), and T's release row is listed with its bundle and not yanked (moveRefusal's
+ *  unknown-tag). What the route then refuses, it says in the sheet. */
+function moveArm(nodes: readonly NodeWire[], releases: readonly ReleaseWire[] | null | undefined): Extract<SkewRemedy, { kind: 'move' }> | null {
+  if (!Array.isArray(releases)) return null;
+  const sides = skewSides(nodes);
+  if (sides === null || !isNewerTag(sides.fleetTag, sides.serverTag)) return null;
+  const { server, fleetTag } = sides;
+  if (server.update?.state !== 'idle' || server.request !== null || !consoleCanMove(server)) return null;
+  if (isReleaseTag(server.highestVersion) && !isNewerTag(fleetTag, server.highestVersion)) return null;
+  const row = releases.find((r) => r.tag === fleetTag);
+  if (!updateTargetListed(row)) return null;
+  return { kind: 'move', nodeId: server.nodeId, label: server.label, tag: fleetTag };
+}
+
+/** The `queued` arm's sentence: the tag, and that the box follows the fleet box's move (or is moving now). */
+export function skewQueuedText(q: { label: string; tag: string; moving: boolean }): string {
+  return q.moving
+    ? `${q.label} is moving to ${q.tag} — follow the move in Settings.`
+    : `${q.label} is requested ${q.tag} and follows once the fleet box’s move settles.`;
+}
+/** The `move` arm's sentence and its button. */
+export const skewMoveText = (m: { label: string; tag: string }): string =>
+  `The console can move ${m.label} to ${m.tag}, the fleet box's release.`;
+export const skewMoveLabel = (m: { label: string; tag: string }): string => `Update the ${m.label} to ${m.tag}`;
+
 /** `stale` (wave 19, R24(b)): a later poll failed, so `nodes` and `intent` are the last answer that landed. A
  *  standing failure never vouches for auto: `then` (and so the arm) is `cli`. The halt is still said, because the
- *  Ack is still the door; only the promise of what moves after it is withdrawn. */
+ *  Ack is still the door; only the promise of what moves after it is withdrawn.
+ *
+ *  D-7680: with no halt, a fresh poll and every lease readable, `queued` (the lagging box is already on its way) and
+ *  then — after auto — `move` (the console offers the one-node move; `releases` is the catalogue the PWA polled, and
+ *  without it there is no `move`) are said before the terminal verbs. */
 export function skewRemedy(
   nodes: readonly NodeWire[] | null | undefined, intent: readonly UpdateIntentWire[] | null | undefined, stale = false,
+  releases?: readonly ReleaseWire[] | null,
 ): SkewRemedy {
   // An empty inventory needs no guard of its own: no node has a tag to move to, so autoArm answers `cli`.
   if (!Array.isArray(nodes)) return { kind: 'cli' };
   const halting = haltingNodes(nodes);
-  const then = stale || nodes.some(leaseUnreadable) ? 'cli' : autoArm(nodes, intent);
+  const unvouched = stale || nodes.some(leaseUnreadable);
+  const then = unvouched ? 'cli' : autoArm(nodes, intent);
   if (halting.length > 0) return { kind: 'halt', halting, then };
-  return { kind: then };
+  if (unvouched) return { kind: 'cli' };
+  const queued = queuedArm(nodes);
+  if (queued !== null) return queued;
+  if (then === 'auto') return { kind: 'auto' };
+  return moveArm(nodes, releases) ?? { kind: 'cli' };
 }

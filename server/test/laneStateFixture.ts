@@ -98,7 +98,7 @@ export function laneBox(prefix: string, roster: unknown = FIXTURE_ROSTER): strin
   const reg = join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
   for (const n of ['install-session-hooks.sh', 'install-coordinator-skill.sh', 'install-worker-skill.sh',
-    'install-reviewer-skill.sh', 'install-graphify-skill.sh', 'install-history-skill.sh']) {
+    'install-reviewer-skill.sh', 'install-graphify-skill.sh', 'install-history-skill.sh', 'install-linear-skill.sh']) {
     writeFileSync(join(reg, n),
       `#!/bin/sh\nprintf '%s %s\\n' "${n}" "$*" >> "$HOME/installer-calls"\n`
       + `[ "${n}" = install-session-hooks.sh ] && [ -f "$HOME/slow-installer" ] && sleep 3\nexit 0\n`,
@@ -154,6 +154,17 @@ export function writeLaneState(home: string, args: string[]): Result {
   const r = spawnSync(BASH, ['-c', 'umask 022; exec node "$@"', '_', ACCOUNT_OP, 'lane-state', ...args],
     { env: { ...boxEnv(home) }, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** A lane the lane state records as ready to enable (accounts plan Task A13): a last check of `ok`, a run, and a seed
+ *  verified after it; and, for a sign-in lane, an identity read off the provider. Written through the one writer. */
+export function markReady(home: string, id: string, opts: { signIn?: boolean } = {}): void {
+  const r = writeLaneState(home, [
+    '--id', id, '--check-verdict', 'ok', '--check-at', '2026-11-01T00:00:00Z',
+    '--last-run-at', '2026-11-01T00:00:00.000Z', '--seed-verified-at', '2026-11-01T00:00:00.001Z',
+    ...(opts.signIn === true ? ['--identity', 'someone@example.invalid', '--identity-source', 'measured'] : []),
+  ]);
+  if (r.code !== 0) throw new Error(`markReady: the lane-state writer refused: ${r.stdout}${r.stderr}`);
 }
 
 /** Every secret temp under `~/.cc-secrets` for one lane. */

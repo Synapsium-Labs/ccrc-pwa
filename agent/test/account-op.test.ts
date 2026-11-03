@@ -28,6 +28,7 @@ import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_TS = path.resolve(here, '..', 'src', 'server.ts');
 const ACCOUNTOP_TS = path.resolve(here, '..', 'src', 'accountop.ts');
+const KERNEL_MJS = path.resolve(here, '..', '..', 'shared', 'spawn.mjs');
 
 interface Res {
   t: 'res'; id: number; ok: boolean; err?: string; kind?: string; why?: string; code?: number; stdout?: string;
@@ -131,7 +132,8 @@ describe('the account op', () => {
     expect(res).toEqual({ t: 'res', id: 1, ok: true, kind: 'exited', code: 0, stdout: '{"ok":true}\n', fleetIdentity: NODE_ID });
     expect(readFileSync(path.join(h, 'argv'), 'utf8')).toBe([
       path.join(h, '.local', 'bin', 'ccrc'),
-      'account', 'add', '--id=lane-a', '--provider=anthropic', '--method=paste', '--label=Lane A', '--hue=cyan', '',
+      // `--credential=-`: the verb's one spelling for a secret on stdin (accounts plan Task A17).
+      'account', 'add', '--id=lane-a', '--provider=anthropic', '--method=paste', '--label=Lane A', '--hue=cyan', '--credential=-', '',
     ].join('\n'));
     expect(readFileSync(path.join(h, 'argv'), 'utf8'), 'the secret reached argv').not.toContain(CANARY);
     expect(readFileSync(path.join(h, 'stdin'), 'utf8')).toBe(CANARY);
@@ -317,7 +319,7 @@ describe('the account op', () => {
     agent = await boot(fixture!);
     const c = new TestClient(agent.port);
     clients.push(c);
-    expect((await c.hello() as AgentReady).ops).toEqual(['update', 'token-sync', 'account', 'disk']);
+    expect((await c.hello() as AgentReady).ops).toEqual(['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync']);
   });
 
   it("the op reaches no exec path: case 'account' and the port name no exec-surface symbol, and spawn the absolute launcher", () => {
@@ -330,6 +332,12 @@ describe('the account op', () => {
     expect(body).toMatch(/\bctx\.spawnAccount\(/);
     expect(port).not.toMatch(EXEC_PATH);
     expect(port, 'the port reads the agent environment itself').not.toMatch(/env:\s*process\.env|\.\.\.process\.env/);
-    expect(port).toMatch(/detached: true/);
+    // D-7057 (OA-C8a (a)): the port's body is `shared/spawn.mjs#boundedStdinSpawn`, so the spawn's own shape is read
+    // there, under the same three rules; the port calls it.
+    expect(port).toMatch(/\bboundedStdinSpawn\(/);
+    const kernel = slice(readFileSync(KERNEL_MJS, 'utf8'), 'export function boundedStdinSpawn(', /\n}\n/);
+    expect(kernel).not.toMatch(EXEC_PATH);
+    expect(kernel, 'the kernel reads the agent environment itself').not.toMatch(/env:\s*process\.env|\.\.\.process\.env/);
+    expect(kernel).toMatch(/detached: true/);
   });
 });

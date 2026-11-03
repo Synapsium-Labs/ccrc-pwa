@@ -44,6 +44,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv, ghPoisonAt, seedAccountsSh } from './ccdWsHelpers.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine, compiledSecretJs } from './authFixtures.js';
 import { IS_DARWIN } from './platformFixtures.js';
+import { plantShippedTimers } from './shippedTimers.js';
 import { DOCS_INDEX_READY, docsIndexStubScript } from './docsIndexFixtures.js';
 import { codexRoster, freeLanes, GPT_LANE_BINS, killLaneProcesses, plantFakeRuntime, plantCodexUsage, plantLaneAuth, spawnListener, type LanePorts, type Listener } from './codexLaneFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
@@ -91,19 +92,20 @@ export function installCcrc(home: string): void {
   symlinkSync(LIB_SRC, join(ccd, 'ccrc-wrapper-shape'));
   // The jq module the transcripts check loads (ARCH-65), beside the checks file as in a shipped tree.
   symlinkSync(join(REPO, 'ccd', 'lib'), join(ccd, 'lib'));
-  // The four shipped skill trees (release/rollout design §6): `_check_skills`
+  // The five shipped skill trees (release/rollout design §6): `_check_skills`
   // compares every home's installed copy against THESE, the tree the stamp
   // names — not against the `.cc-sessions` placed copy, which was stale too
   // on 2026-09-17.
-  for (const n of ['coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill']) {
+  for (const n of ['coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill', 'linear-skill']) {
     symlinkSync(join(REPO, 'ccd', n), join(ccd, n));
   }
-  // …and the four INSTALLERS that ship beside them (R12). `_check_skills`'
+  // …and the five INSTALLERS that ship beside them (R12). `_check_skills`'
   // FAIL remedy now names `$HOME/ccrc/ccd/install-<role>-skill.sh` — the
   // script out of the same measured tree as the source — so a fixture that
   // planted only the skill trees could not run the remedy it prints. A real
   // box has them: `_inst_tree` rsyncs `ccd/` whole.
-  for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh', 'install-history-skill.sh']) {
+  for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh', 'install-history-skill.sh',
+    'install-linear-skill.sh']) {
     symlinkSync(join(REPO, 'ccd', n), join(ccd, n));
   }
   // …and the HOOK installer (delegation broker wave 3, Task 14): `_check_delegation-hooks` reads the approved event
@@ -115,6 +117,11 @@ export function installCcrc(home: string): void {
   // and this module's imports (`./lib.mjs`, `./store.mjs`) sit beside it in the checkout, as they do in a box's
   // tree (`_inst_tree` rsyncs `ccd/` whole).
   symlinkSync(join(REPO, 'ccd', 'history'), join(ccd, 'history'));
+  // D-7298: `_check_test-slice` asks the shipped `ccrc test` wrapper for the slice and the queue.
+  symlinkSync(join(REPO, 'ccd', 'ccrc-test'), join(ccd, 'ccrc-test'));
+  // GR7 (D-7353): `_check_graphify` sources the graph resolver beside ccrc and runs the engine wrapper's `--probe`.
+  symlinkSync(join(REPO, 'ccd', 'graph-resolve'), join(ccd, 'graph-resolve'));
+  symlinkSync(join(REPO, 'ccd', 'graph-build'), join(ccd, 'graph-build'));
   // ── the `auth` check's two artifacts (Task 9) ──────────────────────────
   // `_check_auth` measures `~/.ccrc/auth.scrypt` by running
   // `deploy/gen-auth-hash.mjs --check`, which imports the compiled reader out
@@ -148,6 +155,10 @@ export function installCcrc(home: string): void {
   for (const f of ['roster-json.mjs', 'base-url.mjs']) {
     copyFileSync(join(REPO, 'shared', f), join(home, 'ccrc', 'shared', f));
   }
+  // The shipped timers (W8 Task C8b, D-7054): the doctor reads each cadence from `$BOX_TREE_DIR/deploy/systemd/<unit>`,
+  // never the installed copy, and both deploy lanes place `deploy/` whole. COPIES, so a row may replace one
+  // (`writeShippedTimer`).
+  plantShippedTimers(join(home, 'ccrc'));
 }
 
 /** `~/.ccrc/auth.scrypt`, as `ccrc passwd` really writes it: 0600, one line,
@@ -655,6 +666,13 @@ export function stubSystemctl(home: string): void {
     + '  done\n'
     + '  exit $rc\n'
     + 'fi\n'
+    // D-7298: `ccrc test --status` asks `show ccrctests.slice -p …` for seven properties at once, and
+    // reads each line by name. The answer is `fixture-show-ccrctests.slice`'s own text; an absent file prints nothing.
+    + 'if [ "$1" = "--user" ] && [ "$2" = "show" ] && [ "$3" = "ccrctests.slice" ]; then\n'
+    + '  f="$HOME/fixture-show-ccrctests.slice"\n'
+    + '  if [ -f "$f" ]; then while IFS= read -r l; do echo "$l"; done < "$f"; fi\n'
+    + '  exit 0\n'
+    + 'fi\n'
     + 'if [ "$1" = "--user" ] && [ "$2" = "list-units" ]; then\n'
     + '  f="$HOME/fixture-scopes"\n'
     + '  if [ -f "$f" ]; then while IFS= read -r l; do echo "$l"; done < "$f"; fi\n'
@@ -1029,6 +1047,15 @@ export function plantOomDropins(home: string, which: ReadonlyArray<keyof typeof 
     writeFileSync(p, '[Scope]\nOOMPolicy=continue\n');
   }
 }
+/** D-7298: `ccrctests.slice` at the path `_inst_units` places it, and the user manager's answer for
+ *  it (`fixture-show-ccrctests.slice`, read by the stub's `show ccrctests.slice` arm), loaded at the shipped defaults
+ *  unless `show` says otherwise. */
+export function plantTestSlice(home: string, show = 'LoadState=loaded\nMemoryCurrent=1073741824\nMemoryMax=6442450944\nMemorySwapMax=1073741824\nCPUWeight=20\nCPUQuotaPerSecUSec=4s\nIOWeight=20\n'): void {
+  const p = join(home, '.config', 'systemd', 'user', 'ccrctests.slice');
+  mkdirSync(path.dirname(p), { recursive: true });
+  writeFileSync(p, readFileSync(join(REPO, 'deploy', 'systemd', 'ccrctests.slice'), 'utf8'));
+  writeFileSync(join(home, 'fixture-show-ccrctests.slice'), show);
+}
 export function plantOomPolicy(home: string, unit: string, value: string): void {
   writeFileSync(join(home, `fixture-oompolicy-of-${unit}`), `${value}\n`);
 }
@@ -1106,9 +1133,9 @@ export function runDoctor(home: string, args: string[] = ['doctor'], extraEnv: N
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
-/** The four shipped skill trees and the name each installs under in a home —
+/** The five shipped skill trees and the name each installs under in a home —
  *  `_check_skills`' subject. One list for `healthy()` and `healthyCodexBox()`. */
-export const SHIPPED_SKILLS = [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer'], ['history-skill', 'ccrc-history']] as const;
+export const SHIPPED_SKILLS = [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer'], ['history-skill', 'ccrc-history'], ['linear-skill', 'ccrc-linear']] as const;
 
 /** The hook installer a fixture tree carries beside the doctor file, and the approved event set as an INDEPENDENT
  *  reader of it sees it: `EVENTS_JSON` (the events that get a matcher-less managed entry) plus `PreToolUse`, the one
@@ -1164,7 +1191,7 @@ export function plantSpoolDir(home: string, id: string): string {
 }
 
 /** `python3 -I -c <program>` for the two programs `_check_box-token` runs (`_BT_PY_STATE`, `_BT_PY_FLEET` in
- *  `ccd/ccrc-doctor-checks`), handed to the real interpreter; the text is read from the shipped file so a third or an
+ *  `ccd/ccrc-doctor-checks`) and the one `_check_land-probe` runs (`_LP_PY`, landing order wave 3b), handed to the real interpreter; the text is read from the shipped file so a third or an
  *  edited program still reaches the stub's bare `exit 0`. Empty when this box has no python3 (the check then says so).
  *  Its second arm (codex-bridge Stage 1, Task 9) hands `python3 -IS $HOME/.local/bin/ccgpt-auth.py …` to the real
  *  interpreter too: `_codex_auth`'s exact argv, so the doctor's `codex` check reads the placed library's own `status`
@@ -1173,7 +1200,7 @@ export const BT_PY_ARM = ((): string => {
   const real = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
   if (real === '') return '';
   const src = readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8');
-  const progs = ['_BT_PY_STATE', '_BT_PY_FLEET'].map((n) => {
+  const progs = ['_BT_PY_STATE', '_BT_PY_FLEET', '_LP_PY'].map((n) => {
     const m = new RegExp(`^${n}='([^']*)'$`, 'm').exec(src);
     if (!m) throw new Error(`ccd/ccrc-doctor-checks no longer holds ${n}='…' in the shape this stub reads`);
     return `'${m[1]}'`;
@@ -1219,6 +1246,8 @@ export function healthy(prefix: string): string {
   // D-5241: both scope drop-ins on disk and the pane scope reading `continue`: `oom-policy` PASSes.
   plantOomDropins(home);
   plantOomPolicy(home, 'tmux-spawn-fixture.scope', 'continue');
+  // D-7298: the test slice placed and loaded at its default caps: `test-slice` PASSes on Linux.
+  plantTestSlice(home);
   // The pane-scope sweep's verdict record, fresh and empty: `scope-sweep` PASSes.
   writeFileSync(join(home, 'fixture-scope-sweep.state'), `# ccd-scope-sweep v1 tick=${Math.floor(Date.now() / 1000)} up=8640000 mode=shadow\n`);
   // tmux answers its versions, client and server agreeing — a healthy box is
@@ -1379,9 +1408,16 @@ export function healthy(prefix: string): string {
   linkReal(home, 'realpath');
   symlinkSync(join(home, '.ccrc', 'graphify-venv', 'bin', 'graphify'),
     join(home, '.local', 'bin', 'graphify'));
+  // repos[] is what the repository sweep writes (GR4, D-7350), and all the doctor reads (GR7, D-7353).
   writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
     started: new Date().toISOString(), finished: new Date().toISOString(),
-    pin: '0.9.9', status: 'ok', trees: [] }] }));
+    pin: '0.9.9', status: 'ok', repos: [] }] }));
+  // …the store `ccrc install` creates with its marker (D-7360), at the default CCRC_GRAPH_STORE, and the venv's
+  // interpreter that `graph-build --probe` runs under, answering the probe (GR7): healthy()'s contract is that every
+  // check PASSES.
+  mkdirSync(join(home, '.ccrc', 'graphs'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'graphs', '.ccrc-graph-store'), 'ccrc graph store (graph revision 2); removed only by ccrc\n');
+  writeFileSync(join(home, '.ccrc', 'graphify-venv', 'bin', 'python'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   // …and its ccd answers Docs (spec 2026-10-01 §7.2): `docs` is a check, and
   // healthy()'s contract is that every check PASSES. `$HOME/.local/bin/ccd`,
   // the file the agent execs and the check runs, prints the canned ready
@@ -1677,8 +1713,24 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  `approval-key-colocated` SKIPs - `healthy()` writes no server signing key
  *  (`~/.ccrc/approval-signing.key`), which only a server that started with
  *  coordination creates. Its sibling `approval-digest-mismatch` PASSes there (no
- *  refusals journal), so it moves no count. */
-export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 2 : 0) + 12;
+ *  refusals journal), so it moves no count.
+ *
+ *  RAISED BY ONE ON macOS ONLY (D-7298): `test-slice` SKIPs there
+ *  (launchd has no slice). On Linux `healthy()` plants the slice and the manager's
+ *  answer for it, so it PASSes and the count is unchanged there.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (landing order wave 3b, Task 3): `land-probe`
+ *  SKIPs - `healthy()` writes no `~/.ccrc/landing/<project>.conf`, so no project is
+ *  opted in to the conflict radar and there is nothing to measure (it SKIPs on macOS
+ *  and on a server-role box too). The `land-probe` describe in `ccrc-doctor-core.test.ts`
+ *  plants a conf and its files where the check answers. Measured the same way: with the
+ *  check in the table and this `+ 1` absent, every `(N skipped)` pin that reads this
+ *  constant reds.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (test box TB11, D-7413, D-7567): `testbox`
+ *  SKIPs - `healthy()` sets no test box URL, so no test box is configured (state
+ *  `off`). `ccrc-doctor-testbox.test.ts` configures one and plants each answer. */
+export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 14;
 
 // ── the session gate: the flag, and the passphrase it needs ───────────────
 // Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,

@@ -86,14 +86,14 @@ describe('GET /api/fleet/health', () => {
   it('remote mode + connected fleetState reports connected', async () => {
     const app = await buildServer(remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown', builds: { own: null, fleet: null } });
+    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
     await app.close();
   });
 
   it('remote mode + disconnected fleetState surfaces connected:false and downSince', async () => {
     const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown', builds: { own: null, fleet: null } });
+    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
     await app.close();
   });
 
@@ -155,7 +155,7 @@ describe('GET /api/fleet/health', () => {
     }
   });});
 
-describe('GET /api/fleet/health — the inventory-derived `builds` degrades, never 500s (design 2026-09-20 §14)', () => {
+describe('GET /api/fleet/health — the inventory-derived `build` degrades, never 500s (design 2026-09-20 §14)', () => {
   const STAMP: BuildInfo = { sha: 'abc1234', ref: 'main', builtAt: '2026-09-21T00:00:00Z', dirty: false, version: 'v0.0.11' };
   const serverRow = (role: 'server' | 'both'): NodeMeasurement => ({
     nodeId: 'server', role, label: 'server',
@@ -166,7 +166,7 @@ describe('GET /api/fleet/health — the inventory-derived `builds` degrades, nev
     os: 'linux', measuredAt: 1_758_000_000_000, report: null,
   });
 
-  it('an inventory that cannot be read answers builds null per side and build unknown — the route stays up', async () => {
+  it('an inventory that cannot be read answers build unknown and no `builds` key — the route stays up', async () => {
     // `nodes()` is a synchronous sqlite read; a corrupt or locked coord.db throws. Before W2 nothing in this arm
     // touched coord.db, so a throw here would be a NEW way for the banner route to 500. It degrades the way
     // `readPoolEpoch` degrades — and it does NOT fall back to the handshake stamp planted below (spec §8).
@@ -179,7 +179,27 @@ describe('GET /api/fleet/health — the inventory-derived `builds` degrades, nev
     try {
       const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({ mode: 'remote', connected: true, build: 'unknown', builds: { own: null, fleet: null } });
+      expect(res.json()).toMatchObject({ mode: 'remote', connected: true, build: 'unknown' });
+      expect('builds' in res.json()).toBe(false);
+    } finally {
+      await app.close();
+      coord.db.close();
+    }
+  });
+
+  it('two inventory rows on different commits answer build skewed and carry no `builds` key (wave 33)', async () => {
+    // The pair is retired from the wire; the word is still decided from the rows, so a disagreement between them
+    // still reads `skewed`.
+    const deps = remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null });
+    const coord = new CoordStore(openCoordDb(deps.cfg.coordDbPath));
+    expect(coord.upsertNodeMeasurement(serverRow('server'))).toMatchObject({ ok: true });
+    const fleetRow: NodeMeasurement = { ...serverRow('server'), nodeId: 'fleet', role: 'fleet', label: 'fleet', currentSha: 'f00ba12', agentOps: [] };
+    expect(coord.upsertNodeMeasurement(fleetRow)).toMatchObject({ ok: true });
+    const app = await buildServer({ ...deps, coord });
+    try {
+      const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+      expect(body['build']).toBe('skewed');
+      expect('builds' in body).toBe(false);
     } finally {
       await app.close();
       coord.db.close();
@@ -489,15 +509,41 @@ describe('/api/fleet/health: the delegation observation health (wave 3, Task 13)
     });
   });
 
-  it('adds no PWA state and no fleet frame: the type is an optional member and the PWA source never names it', () => {
+  // Delegation broker wave 4 (PR2; D-7010, licensed by the coordinator for ask 142): the PWA reads the `delegation` FRAME into
+  // a store slot of that name, so `.delegation` is allowed in wave 4 PR2's frame files only. `W4_PWA_FILES` is a local of the
+  // scope census (`delegation-wave3.integration.test.ts`, PR1's), not exported, so it is mirrored here literally, and the
+  // mirror is checked against the census's own text so the two cannot drift. The health member's type stays named nowhere.
+  const W4_PWA_FILES = [
+    'pwa/src/fleet/delegationWords.ts',
+    'pwa/src/stores/fleet.ts', 'pwa/src/fleet/nestFleet.ts', 'pwa/src/fleet/fleetTree.ts', 'pwa/src/fleet/rollup.ts',
+    'pwa/src/fleet/ProjectCard.tsx', 'pwa/src/fleet/FleetCards.tsx', 'pwa/src/fleet/sessionFacts.ts',
+    'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/fleet/SessionLine.tsx', 'pwa/src/screens/SessionScreen.tsx',
+  ];
+  it('wave 3 Task 13, narrowed in wave 4: the health member adds no PWA state (its type is named nowhere in pwa/src), and `.delegation` (the frame\'s store slot) appears only in wave 4\'s frame files', () => {
     const fh: FleetHealth = { mode: 'local', connected: true, downSince: null };
     expect(fh.delegation).toBeUndefined();
-    const pwa = path.resolve(__dirname, '../../pwa/src');
-    const grep = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const repo = path.resolve(__dirname, '../..');
+    const census = readFileSync(path.join(__dirname, 'delegation-wave3.integration.test.ts'), 'utf8');
+    const block = /const W4_PWA_FILES = \[([\s\S]*?)\] as const;/.exec(census);
+    expect(block, 'the scope census still declares W4_PWA_FILES').not.toBeNull();
+    expect([...block![1]!.matchAll(/'([^']+)'/g)].map((m) => m[1]!), 'the mirror equals the census').toEqual(W4_PWA_FILES);
+    const allowed: string[] = [...W4_PWA_FILES];
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
       const p = path.join(dir, e.name);
-      return e.isDirectory() ? grep(p) : /\.(ts|tsx|svelte|js)$/.test(e.name) && /DelegationObservationHealth|\.delegation\b/.test(readFileSync(p, 'utf8')) ? [p] : [];
+      return e.isDirectory() ? walk(p) : /\.(ts|tsx|svelte|js)$/.test(e.name) ? [path.relative(repo, p).split(path.sep).join('/')] : [];
     });
-    expect(grep(pwa)).toEqual([]);
+    const offenders = (files: readonly string[], text: (f: string) => string): string[] => files.filter((f) => {
+      const src = text(f);
+      return /DelegationObservationHealth/.test(src) || (/\.delegation\b/.test(src) && !allowed.includes(f));
+    });
+    expect(offenders(walk(path.join(repo, 'pwa/src')), (f) => readFileSync(path.join(repo, f), 'utf8'))).toEqual([]);
+    // CONTROL: a file outside the list reading `.delegation` is red, and so is a listed file naming the health's type.
+    const fake: Record<string, string> = {
+      'pwa/src/fleet/Other.tsx': 'export const d = (s: { delegation: null }) => s.delegation;\n',
+      'pwa/src/fleet/FleetCards.tsx': 'type H = DelegationObservationHealth;\n',
+      'pwa/src/stores/fleet.ts': 'export const d = (s: { delegation: null }) => s.delegation;\n',
+    };
+    expect(offenders(Object.keys(fake), (f) => fake[f]!)).toEqual(['pwa/src/fleet/Other.tsx', 'pwa/src/fleet/FleetCards.tsx']);
   });
 });
 

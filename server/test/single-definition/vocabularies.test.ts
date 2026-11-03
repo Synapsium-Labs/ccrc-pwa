@@ -5,6 +5,7 @@ import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { componentFamily } from '../sourceScan.js';
 import { PR_REASONS, LIFECYCLE_ACTS, LC_ACT_UNKNOWN, ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, SPAWN_VERDICTS } from '../../../shared/api.js';
+import { PR_STATE_PR_WORDS } from '../../src/prstate.js';
 import { reclaimPauseParseSites } from '../consolidationCensus.js';
 import { callsIn, symbolOf } from '../scan/symbols.js';
 import { ALL, BASH, ROOTS, ccrcRoot, codeLines, here, holdersOf, isBash, prose, rel, sources } from './helpers.js';
@@ -515,6 +516,15 @@ describe('one absent/unreadable read vocabulary', () => {
     expect(registry).toMatch(/import\s+type\s*\{[^}]*\bReadFailure\b[^}]*\}\s*from\s*'\.\/io\.js'/);
   });
 
+  it('is what registry.ts derives ProjectEvidence from, not a second copy (4b F5)', () => {
+    const registry = readFileSync(path.join(ccrcRoot, 'server/src/registry.ts'), 'utf8');
+    expect(registry).not.toMatch(PAIR);
+    // A census over every scanned file, not a literal pin over registry.ts: a type alias is no symbol of scan/symbols.ts,
+    // and a pin would raise the D-6114 ratchet's row for that file.
+    const DERIVED = /export type ProjectEvidence = 'measured' \| ReadFailure;/;
+    expect(ALL.filter((f) => DERIVED.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['server/src/registry.ts']);
+  });
+
   it('is what delegation-model.ts derives a census record\'s state from, not a third copy (ruling R43)', () => {
     const model = readFileSync(path.join(ccrcRoot, 'server/src/coord/delegation-model.ts'), 'utf8');
     expect(model).not.toMatch(PAIR);
@@ -632,6 +642,40 @@ describe('delegation wave 3: the closed vocabularies are declared once, in share
   }
 });
 
+
+// Delegation broker wave 4, PR1 Task 1.1: the `delegation` frame's closed words. These follow `SESSION_ROLE_MAP`'s idiom
+// (a hand-typed union, a sibling `Record<X, true>` map, a list from `Object.keys` and a guard), so the type line is the one
+// hand-typed copy the idiom allows: the union fingerprint must find it in shared/api.ts exactly once, and nowhere else.
+describe('delegation wave 4: the projection\'s closed words are declared once, in shared/api.ts', () => {
+  const VOCABS = [
+    ['DELEGATION_LIVENESS_MAP', 'DelegationLiveness', 'DELEGATION_LIVENESS', ['live', 'stale', 'ended', 'unmeasured']],
+    ['DELEGATION_ROW_GROUP_MAP', 'DelegationRowGroup', 'DELEGATION_ROW_GROUPS', ['parent', 'offline-coordinator']],
+    ['DELEGATION_ACTIVITY_PLACEMENT_MAP', 'DelegationActivityPlacement', 'DELEGATION_ACTIVITY_PLACEMENTS', ['row', 'chip']],
+    ['DELEGATION_CREATOR_KIND_MAP', 'DelegationCreatorKind', 'DELEGATION_CREATOR_KINDS', ['bash-call', 'unmeasured']],
+  ] as const;
+  const declaredIn = (decl: RegExp): string[] => ALL.filter((f) => decl.test(readFileSync(f, 'utf8'))).map(rel);
+  const UNION_RUN = /'[^'\n]+'(?:\s*\|\s*'[^'\n]+')+/g;
+  const unionCount = (text: string, members: readonly string[]): number =>
+    (text.match(UNION_RUN) ?? []).map((run) => new Set([...run.matchAll(/'([^'\n]+)'/g)].map((m) => m[1]!)))
+      .filter((set) => set.size === members.length && members.every((m) => set.has(m))).length;
+
+  for (const [map, type, list, members] of VOCABS) {
+    it(`W4-V1: ${map} and ${type} are each declared exactly once, in shared/api.ts`, () => {
+      expect(declaredIn(new RegExp(`^\\s*(?:export\\s+)?const\\s+${map}\\b`, 'm')), map).toEqual(['shared/api.ts']);
+      expect(declaredIn(new RegExp(`^\\s*(?:export\\s+)?type\\s+${type}\\b\\s*=`, 'm')), type).toEqual(['shared/api.ts']);
+    });
+
+    it(`W4-V2: ${list} is exported with the plan's members in the plan's order`, async () => {
+      const api = (await import('../../../shared/api.js')) as unknown as Record<string, unknown>;
+      expect(api[list], `${list} is exported`).toEqual(members);
+    });
+
+    it(`W4-V3: a union equal to ${type}'s members is held only by shared/api.ts, exactly once`, () => {
+      const holders = ALL.map((f) => [rel(f), unionCount(readFileSync(f, 'utf8'), members)] as const).filter(([, n]) => n > 0);
+      expect(holders).toEqual([['shared/api.ts', 1]]);
+    });
+  }
+});
 
 // Delegation broker wave 3, Task 4: `ReadFailure` stays declared ONCE, in
 // `shared/agent-protocol.ts` (D-1438), and the two consumer shapes this task
@@ -973,11 +1017,12 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
     // A `LIFECYCLE_ACTS` that had gone empty would make `every` vacuously true
     // for EVERY file, turning the assertion above into a list of all 200-odd
     // sources — loud, but for the wrong reason. This fails first, and
-    // specifically. Measured when written: the highest-scoring NON-holder is
-    // `pwa/src/lib/api.ts` at 8 of 24, so the margin is 15 tokens.
+    // specifically. Re-measured at 30 acts (D-7278's `shed-deps`): the
+    // highest-scoring NON-holder is `server/src/deadCoordinator.ts` at 14 of
+    // 30, so the margin is 16 tokens.
     const enumerates = (src: string): boolean =>
       LIFECYCLE_ACTS.every((a) => new RegExp(`(?:'${a}'|(?<![\\w'-])${a}\\s*:)`).test(src));
-    expect(LIFECYCLE_ACTS.length).toBe(29);
+    expect(LIFECYCLE_ACTS.length).toBe(30);
     expect(LIFECYCLE_ACTS).toContain(LC_ACT_UNKNOWN);
     expect(enumerates(readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8'))).toBe(true);
     expect(enumerates(readFileSync(path.join(ccrcRoot, 'pwa/src/lib/api.ts'), 'utf8'))).toBe(false);
@@ -1315,5 +1360,26 @@ describe('one scratch-slug predicate — four prefixes and one infix, three bash
       .map(rel)
       .sort();
     expect(holders).toEqual(['server/test/scratchSlugs.ts']);
+  });
+});
+
+describe('landing order wave 5c — the PR-keyed pr-state words, defined once and derived', () => {
+  const PRSTATE = path.join(ccrcRoot, 'server/src/prstate.ts');
+  it('PR_STATE_PR_MAP and PR_STATE_PR_WORDS are declared in exactly one file, prstate.ts', () => {
+    expect(ALL.filter((f) => /^\s*const PR_STATE_PR_MAP\b/m.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['server/src/prstate.ts']);
+    expect(ALL.filter((f) => /^\s*export const PR_STATE_PR_WORDS\b/m.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['server/src/prstate.ts']);
+  });
+  it('DERIVES the list from the map, never a hand-written array', () => {
+    const DERIVED = /export const PR_STATE_PR_WORDS: readonly PrStatePrWord\[\] =\s*\n?\s*Object\.keys\(PR_STATE_PR_MAP\)/;
+    expect(DERIVED.test(readFileSync(PRSTATE, 'utf8'))).toBe(true);
+    expect(/PR_STATE_PR_WORDS(?::[^=\n]*)?=\s*\[/.test(readFileSync(PRSTATE, 'utf8'))).toBe(false);  // the name, an optional same-line type annotation, then '= ['
+  });
+  it('spells four or more of the five nowhere as a free-standing list', () => {
+    const M = `(?:${PR_STATE_PR_WORDS.join('|')})`;
+    const LIST = new RegExp(`\\[\\s*'${M}'\\s*(?:,\\s*'${M}'\\s*){${PR_STATE_PR_WORDS.length - 2},}\\]`);
+    expect(LIST.test(`['${[...PR_STATE_PR_WORDS].reverse().join("', '")}']`), 'CONTROL: the five, reversed').toBe(true);
+    expect(LIST.test(`['${PR_STATE_PR_WORDS.slice(1).join("','")}']`), 'CONTROL: four of them').toBe(true);
+    expect(LIST.test("['open', 'merged', 'closed']"), 'CONTROL: three is not a list of these').toBe(false);
+    expect(ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
   });
 });

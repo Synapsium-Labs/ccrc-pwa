@@ -17,7 +17,8 @@ import {
   type CollectProbeClass,
 } from '../src/collectLane.js';
 import { SENTENCES } from '../src/wsaudit.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
+import { lockDeclineSites, refuseWords } from './census-w5/ccdHelpers.js';
 import { codeOnly } from './sourceScan.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { COL_ID, COL_RUN, WRONG_TOKEN, collectAudit, collectVerb, makeOrphan, regOf } from './wsCollectFixture.js';
@@ -27,18 +28,20 @@ const rel = (p: string): string => path.relative(ccrcRoot, p);
 const LINUX = process.platform === 'linux';
 
 // ── ccd's text, read at test time ───────────────────────────────────────────────────────────────────────────────
-const ccdSrc = readFileSync(CCD, 'utf8');
+const ccdSrc = ccdSource();
 /** Whole-line `#` comments dropped, so prose that names a word is never read as a call. */
 const bashCode = (t: string): string => t.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 /** ccd's text from `from` to the first `to` after it. Both anchors are asserted, so a lost one reds rather than
  *  widening the slice to the rest of the file. */
-const between = (from: string, to: string): string => {
+const between = (from: string, to: string): string => ccdSrc.slice(...offsetsOf(from, to));
+/** `between`'s `[from, to)` offsets of ccd's text, both anchors asserted. */
+function offsetsOf(from: string, to: string): [number, number] {
   const a = ccdSrc.indexOf(from);
   expect(a, `ccd/ccd: ${JSON.stringify(from)} is gone`).toBeGreaterThan(-1);
   const b = ccdSrc.indexOf(to, a + from.length);
   expect(b, `ccd/ccd: ${JSON.stringify(to)} does not follow ${JSON.stringify(from)}`).toBeGreaterThan(a);
-  return ccdSrc.slice(a, b);
-};
+  return [a, b];
+}
 const uniq = (xs: readonly string[]): string[] => [...new Set(xs)].sort();
 
 /** Every probe word ccd's collector answers `unmeasured` with: the literal first argument of each
@@ -58,6 +61,11 @@ const probesFromCcd = (): string[] => {
 
 /** The collector's whole region, from its first helper to the capability's marker. */
 const collectRegion = (): string => bashCode(between('\n_ws_collect_enc() {', '\n# COLLECT-V1.'));
+/** The collector family's words within that region's offsets, comment lines dropped: the census harvest (D-7072). */
+const collectRefuseWords = (): string[] => {
+  const [from, to] = offsetsOf('\n_ws_collect_enc() {', '\n# COLLECT-V1.');
+  return refuseWords('collect', { from, to, codeOnly: true });
+};
 /** Every word `ws-collect` can print as `refused`, by the five routes a word reaches `_ws_collect_refused` or a
  *  literal refusal document. `collectable` and `unmeasured` are verdicts, not refusals. */
 const verbRefusalsFromCcd = (): string[] => {
@@ -65,27 +73,30 @@ const verbRefusalsFromCcd = (): string[] => {
   return uniq([
     ...[...r.matchAll(/_ws_collect_refused "\$id" "[^"]*" ([a-z][a-z-]*)/g)].map((m) => m[1]!),
     ...[...r.matchAll(/_WS_REPROVE_WORD=([a-z][a-z-]*)/g)].map((m) => m[1]!),
-    ...[...r.matchAll(/_ws_collect_refuse ([a-z][a-z-]*)/g)].map((m) => m[1]!),
+    ...collectRefuseWords(),
     ...[...r.matchAll(/REAP_VERDICT=([a-z][a-z-]*)/g)].map((m) => m[1]!),
     ...[...r.matchAll(/"refused":"([a-z-]+)"/g)].map((m) => m[1]!),
   ].filter((w) => w !== 'collectable' && w !== 'unmeasured'));
 };
 /** The audit's own refusal words: the ones `_ws_collect_eval`, its resume and the audit's own rungs set. */
 const auditRefusalsFromCcd = (): string[] =>
-  uniq([...collectRegion().matchAll(/_ws_collect_refuse ([a-z][a-z-]*)/g)].map((m) => m[1]!));
+  uniq(collectRefuseWords());
 /** The words the audit JOURNALS, its terminal ones: `_ws_collect_audit_doc`'s case. */
 const auditJournaledFromCcd = (): string[] => {
   const doc = between('\n_ws_collect_audit_doc() {', '\n# ── end ws-audit --collect');
   return uniq([...doc.matchAll(/^\s+([a-z-]+)\)\s+_lc_emit collect refused "\$id" "" verb ws-audit refusal ([a-z-]+) /gm)]
     .map((m) => { expect(m[2], 'the case arm journals its own word').toBe(m[1]); return m[1]!; }));
 };
-/** Every message `cmd_ws_collect` dies with before its lock: each `die "…"`, and each `_lc_refuse collect`'s message.
+/** Every message `cmd_ws_collect` dies with before its lock: each `die "…"`, and each `_lc_refuse collect`'s message;
+ *  and, when it calls the reap-lock runner (D-7076), the runner's two `_lc_refuse` messages, read off it by name.
  *  A message ccd builds with a variable is read up to the `$`, its fixed prefix. */
 const diesFromCcd = (): string[] => {
   const region = bashCode(between('\ncmd_ws_collect() {', '\n_ws_collect_locked() {'));
   const re = /\bdie "((?:[^"\\]|\\.)*)"|_lc_refuse\s+collect\s+"\$id"\s+\S+[\s\\]*"((?:[^"\\]|\\.)*)"/g;
-  return uniq([...region.matchAll(re)].map((m) => {
-    const t = (m[1] ?? m[2])!;
+  const lock = lockDeclineSites(ccdSource());
+  const lockDies = lock.runner && lock.calls.some((c) => c.fn === 'cmd_ws_collect' && c.act === 'collect')
+    ? lock.runner.refuses.map((r) => r.sentence ?? '') : [];
+  return uniq([...[...region.matchAll(re)].map((m) => (m[1] ?? m[2])!), ...lockDies].map((t) => {
     const d = t.indexOf('$');
     return d === -1 ? t : t.slice(0, d);
   }));
@@ -440,8 +451,10 @@ describe('the collect readers are their own (spec §5.10)', () => {
     // `shared/switches.js` is L0 too: the lane's live marker is spelled once there (D-5855).
     // ARCH-14 (#560): `shared/ccd-refusal.js` is L0 as well: the machine token's reader and the one spelling of the lock word.
     // ARCH-41 (#776): `shared/workspaceTransitions.js` is L0: the refusal words are typed and narrowed from its table.
+    // D-7059 (ARCH-73 #808): `./journalKernel.js` is L1 and imports nothing: the journal's NDJSON framing is its
+    // `splitJournalRecords`, and the parse's strictness stays here.
     const ALLOWED = new Set(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js',
-      '../../shared/workspaceTransitions.js', './childReclaimSweep.js']);
+      '../../shared/workspaceTransitions.js', './childReclaimSweep.js', './journalKernel.js']);
     expect(specs.filter((s) => !ALLOWED.has(s)), 'a specifier outside that pair')
       .toEqual([]);
     expect(code).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);

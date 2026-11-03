@@ -14,12 +14,13 @@
 // Spawning describes skip on darwin (O24), except §8.3's Darwin row. The pure describe runs everywhere.
 // DatabaseSync, plantTranscript and SEED_SLUG are imported here for Task 11's describe, which writes a store row
 // and plants a second copy of a transcript.
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import type { SQLInputValue } from 'node:sqlite';
 import {
   makeHistoryBox, runSweep, runCli, withPane, sleepyTmux, seedFamily, plantSession, plantTranscript, spoolLine, counters,
   openStoreRO, preloadOptions, PRELOADS, CLI, REPO, SEED_SLUG, type HistoryBox,
@@ -1139,6 +1140,10 @@ type GrepMod = {
   runDescribe?(rc: GrepRc, a: libRead.DescribeArgs, deps?: { cap?: number }): GrepVerbResult;
   runExpand?: (rc: unknown, a: Record<string, unknown>) => { exit: number; blocks: string[]; items: Array<Record<string, unknown>>; next: string[] | null; hint?: string };
   describePageEnd(text: string, off: number, room: number, json: boolean, show: (from: number, to: number) => string): { end: number; page: string };
+  /** The test seams (CP-39d, D-7095): the ranked pool and true count, and the two match texts. */
+  rankedAndCounted(rc: GrepRc, matchSql: string, sort: string, all: Record<string, unknown>): { pool: Array<Record<string, unknown>>; total: number } | { result: GrepVerbResult };
+  FTS_MATCH: string;
+  REGEX_MATCH: string;
 };
 
 const GRX = {
@@ -1194,6 +1199,98 @@ const GRX = {
     return new Proxy(db, { get(t, k) { if (k === 'prepare') return (sql: string) => { calls.push(sql); return t.prepare(sql); }; const v = Reflect.get(t, k, t) as unknown; return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v; } }) as RDatabaseSync;
   },
 };
+
+// ── CP-39d (D-7095): the shipped ranked and count statements, as the oracle ──────────────────────────────────────────
+/** The statements grep ran before CP-39d, copied from ccd/history/recall.mjs as of commit 5d3c6d25a (unchanged through
+ *  this wave's base): `referrerSql` with its `WITH m(blob_id, rank)` match joined to every arm and the scope filtered after
+ *  the join, `rankedSql`, and `countSql`. It is the shipped TEXT, never a second implementation of the rule. Three
+ *  substitutions only: `versioned(rc, T, A, cols)` becomes `(SELECT <cols> FROM T) AS A`, the form selectColumns gives at
+ *  the current schema version (case a3 asserts that against lib); `cutAnd`/`cutTerm` become lib's asOfEntrySql
+ *  when `cut` is set and '' otherwise; and the statements' binds go through `shippedBindFor`, a copy of `bindFor`'s rule.
+ *  Its match texts are the shipped `FTS_MATCH` and `REGEX_MATCH`, rank included. One addition that changes no compared text:
+ *  `ranked`'s `probe` flag appends the sort key and `ref_key` to the select list, for the tie CONTROLs only. */
+const SHIPPED_SQL = {
+  ftsMatch: 'SELECT rowid, rank FROM blobs_fts WHERE blobs_fts MATCH :q',
+  regexMatch: 'SELECT value, 0 FROM json_each(:blobs)',
+  entryCols: ['entry_id', 'uuid', 'transcript_pk', 'ts_ms', 'role', 'provenance', 'tool_name', 'blob_id'],
+  variantCols: ['entry_id', 'blob_id'],
+  sidecarCols: ['transcript_pk', 'name', 'blob_id', 'entry_id', 'first_seen_ms'],
+  sidecarEntryCols: ['entry_id', 'uuid', 'ts_ms'],
+  grepFilter: `r.transcript_pk IN (SELECT value FROM json_each(:tpks))
+      AND r.provenance IN (SELECT value FROM json_each(:provs))
+      AND (:role IS NULL OR r.role = :role)
+      AND (:tool IS NULL OR r.tool_name = :tool)
+      AND (:since IS NULL OR r.ts_ms >= :since)
+      AND (:before IS NULL OR r.ts_ms < :before)
+      AND (:nodes IS NULL OR r.entry_id IN (SELECT value FROM json_each(:nodes)))`,
+  versioned(table: string, alias: string, cols: readonly string[]): string {
+    return `(SELECT ${cols.join(', ')} FROM ${table}) AS ${alias}`;
+  },
+  referrer(matchSql: string, cut: boolean): string {
+    const v = SHIPPED_SQL.versioned;
+    const cutAnd = (a: string): string => (cut ? ` AND (${libRead.asOfEntrySql(a)})` : '');
+    const cutTerm = (a: string): string => (cut ? `(${libRead.asOfEntrySql(a)})` : '');
+    const e = (alias: string): string => v('entries', alias, SHIPPED_SQL.entryCols);
+    return `WITH m(blob_id, rank) AS (${matchSql}),
+  refs(via, entry_id, uuid, transcript_pk, ts_ms, role, provenance, tool_name, blob_id, name, rank, ref_key) AS (
+    SELECT 'entry', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank,
+        'entry:' || e.entry_id
+      FROM m JOIN ${e('e')} ON e.blob_id = m.blob_id${cutAnd('e')}
+    UNION ALL
+    SELECT 'variant', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank,
+        'variant:' || e.entry_id || ':' || v.blob_id
+      FROM m JOIN ${v('entry_variants', 'v', SHIPPED_SQL.variantCols)} ON v.blob_id = m.blob_id
+        JOIN ${e('e')} ON e.entry_id = v.entry_id
+      WHERE v.blob_id <> e.blob_id${cutAnd('e')}
+    UNION ALL
+    SELECT 'sidecar', s.entry_id, se.uuid, s.transcript_pk, COALESCE(se.ts_ms, s.first_seen_ms), NULL, 'tool', NULL,
+        m.blob_id, s.name, m.rank, 'sidecar:' || s.transcript_pk || ':' || s.name || ':' || s.blob_id
+      FROM m JOIN ${v('sidecars', 's', SHIPPED_SQL.sidecarCols)} ON s.blob_id = m.blob_id
+        LEFT JOIN ${v('entries', 'se', SHIPPED_SQL.sidecarEntryCols)} ON se.entry_id = s.entry_id${cut ? `
+      WHERE ${cutTerm('se')}` : ''}
+  )`;
+  },
+  /** `probe` adds the tie keys the CONTROLs read (the sort's key, and the referrer's own key); the pooled columns are the shipped nine. */
+  ranked(matchSql: string, sort: string, cut: boolean, probe = false): string {
+    const key = sort === 'recency' ? 'r.ts_ms' : sort === 'relevance' ? 'r.rank' : libRead.ftsOrderBy('hybrid', 'r.ts_ms').split(' ASC, ')[0]!;
+    return `${SHIPPED_SQL.referrer(matchSql, cut)}
+  SELECT r.via AS via, r.entry_id AS entry_id, r.uuid AS uuid, r.ts_ms AS ts_ms, r.role AS role,
+      r.provenance AS provenance, r.blob_id AS blob_id, r.name AS name, r.transcript_pk AS transcript_pk${probe ? `, ${key} AS tie_key, r.ref_key AS ref_key` : ''}
+    FROM refs r WHERE ${SHIPPED_SQL.grepFilter}
+    ORDER BY ${libRead.ftsOrderBy(sort, 'r.ts_ms')}, r.blob_id, r.entry_id, r.ref_key LIMIT :pool`;
+  },
+  count(matchSql: string, cut: boolean): string {
+    return `${SHIPPED_SQL.referrer(matchSql, cut)}
+  SELECT count(*) AS n FROM refs r WHERE ${SHIPPED_SQL.grepFilter}`;
+  },
+};
+
+/** recall.mjs's bindFor rule, copied: only the named parameters `sql` uses (node:sqlite refuses an unknown one). */
+function shippedBindFor(sql: string, all: Record<string, unknown>): Record<string, SQLInputValue> {
+  const out: Record<string, SQLInputValue> = {};
+  for (const [k, v] of Object.entries(all)) if (new RegExp(`:${k}(?![A-Za-z0-9_])`).test(sql)) out[k] = v as SQLInputValue;
+  return out;
+}
+
+type PoolRow = Record<string, unknown>;
+/** The shipped ranked pool and true count, over the shipped statements. */
+function shippedPool(db: RDatabaseSync, match: 'fts' | 'regex', sort: string, all: Record<string, unknown>, cut: boolean): { pool: PoolRow[]; total: number } {
+  const m = match === 'fts' ? SHIPPED_SQL.ftsMatch : SHIPPED_SQL.regexMatch;
+  const rs = SHIPPED_SQL.ranked(m, sort, cut);
+  const cs = SHIPPED_SQL.count(m, cut);
+  const pool = db.prepare(rs).all(shippedBindFor(rs, all)) as unknown as PoolRow[];
+  const total = Number((db.prepare(cs).get(shippedBindFor(cs, all)) as { n: number }).n);
+  return { pool, total };
+}
+
+/** Every named parameter grep's statements may use, as grepParams builds them; `extra` brings `q` or `blobs` and any filter. */
+const CP39D_NOW = Date.UTC(2026, 9, 6, 10, 0, 0);
+function cp39dAll(rc: GrepRc, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    tpks: JSON.stringify(rc.scope.transcriptPks), provs: JSON.stringify(libRead.SEARCHABLE_PROVENANCE),
+    role: null, tool: null, since: null, before: null, nodes: null, pool: libRead.RANK_POOL, now_ms: CP39D_NOW, ...extra,
+  };
+}
 
 describe('grep, the FTS path: index gate, provenance, filters and everyday words (W1-B2 task 12)', () => {
   beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
@@ -1571,6 +1668,280 @@ describe("C27 and DM46: the scope join runs before the LIMIT; another project's 
     expect(r.code, r.stderr).toBe(0);
     expect((r.json?.scope as { transcripts: number }).transcripts, "A's scope holds its own transcript only").toBe(1);
   }, 60_000);
+
+  it("CP-39d (f) the plan: every referrer arm is driven from the scope's transcripts through entries_ts and no blob-led index drives one (D-7095), as built and after ANALYZE", async () => {
+    // B (3,000 out-of-scope zqneedle rows) gains 300 variant referrers (a second copy whose first 300 rows differ) and 300 sidecars.
+    const bRows = (variant: boolean): rFx.Row[] => Array.from({ length: 3000 }, (_, i) =>
+      GRX.user(TB, 100 + i, `zqneedle zqneedle zqneedle n${i}${variant && i < 300 ? ' variant' : ''}`));
+    rH.plantTranscript(box, 'claude-a', rH.SEED_SLUG, GRX.file(TB), bRows(true));
+    const sideDir = path.join(box.accountHome['claude-b']!, 'projects', rH.SEED_SLUG, GRX.file(TB), 'tool-results');
+    fs.mkdirSync(sideDir, { recursive: true });
+    for (let i = 0; i < 300; i += 1) fs.writeFileSync(path.join(sideDir, `n${i}.txt`), `zqneedle sidecar ${i}\n`);
+    const holds = (): { variants: number; sidecars: number } => {
+      const db = rH.openStoreRO(box);
+      try {
+        const bpk = (db.prepare('SELECT transcript_pk AS p FROM transcripts WHERE cc_session_uuid = ?').get(GRX.file(TB)) as { p: number }).p;
+        return {
+          variants: Number((db.prepare("SELECT count(*) AS n FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id WHERE e.transcript_pk = ? AND v.blob_id <> e.blob_id AND v.blob_id IN (SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH 'zqneedle')").get(bpk) as { n: number }).n),
+          sidecars: Number((db.prepare("SELECT count(*) AS n FROM sidecars WHERE transcript_pk = ? AND blob_id IN (SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH 'zqneedle')").get(bpk) as { n: number }).n),
+        };
+      } finally { db.close(); }
+    };
+    for (let k = 0; k < 4 && (holds().variants < 300 || holds().sidecars < 300); k += 1) t16scan(box);
+    const planted = holds();
+    expect(planted.variants, "CONTROL: B holds 300 variant referrers").toBeGreaterThanOrEqual(300);
+    expect(planted.sidecars, 'CONTROL: B holds 300 zqneedle sidecars').toBeGreaterThanOrEqual(300);
+
+    const recall = await GRX.recall();
+    const pin = async (half: string, rc: GrepRc): Promise<void> => {
+      for (const sort of libRead.GREP_SORTS) {
+        const calls: string[] = [];
+        const r = recall.runGrep({ ...rc, db: GRX.spyDb(rc.db, calls) }, await GRX.grepArgs(['zqneedle', '--sort', sort]));
+        expect(r.exit, `${half}/${sort}`).toBe(0);
+        const ranked = calls.filter((s) => s.includes('blobs_fts MATCH') && s.includes('LIMIT :pool'));
+        expect(ranked, `${half}/${sort}`).toHaveLength(1);
+        const all = cp39dAll(rc, { q: libRead.sanitizeFtsQuery('zqneedle') });
+        const plan = (sql: string): string[] => (rc.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(shippedBindFor(sql, all)) as unknown as Array<{ detail: string }>).map((x) => x.detail);
+        const built = plan(ranked[0]!);
+        // Both the entry arm and the variant arm read entries through entries_ts, so at least two plan rows name it.
+        expect(built.filter((d) => /USING (?:COVERING )?INDEX entries_ts \(transcript_pk=\?/.test(d)).length, `${half}/${sort}: fewer than two entries_ts (transcript_pk=?) rows in the plan:\n${built.join('\n')}`).toBeGreaterThanOrEqual(2);
+        expect(built.filter((d) => /\b(?:entries_blob|entries_blob_prov|entry_variants_blob|sidecars_blob)\b/.test(d)), `${half}/${sort}: a blob-led index in the plan`).toEqual([]);
+        // The variant arm's unary + on its blob term is a guard: without it the probe becomes an IN-loop on (entry_id=? AND blob_id=?), one seek per box-wide match per in-scope entry.
+        expect(built.some((d) => /^SEARCH entry_variants USING (?:COVERING )?INDEX sqlite_autoindex_entry_variants_1 \(entry_id=\?\)/.test(d)), `${half}/${sort}: the variant arm is not probed by (entry_id=?) alone:\n${built.join('\n')}`).toBe(true);
+        expect(built.filter((d) => /\(entry_id=\? AND blob_id=\?\)/.test(d)), `${half}/${sort}: the variant arm is probed on (entry_id=? AND blob_id=?)`).toEqual([]);
+        const shipped = plan(SHIPPED_SQL.ranked(SHIPPED_SQL.ftsMatch, sort, false));
+        expect(shipped.some((d) => /\bentries_blob(?:_prov)?\b/.test(d)), `${half}/${sort}: CONTROL the shipped statement's plan is blob-led:\n${shipped.join('\n')}`).toBe(true);
+      }
+    };
+    const asBuilt = await GRX.rc(box, GRX.idA);
+    try { await pin('as built', asBuilt); } finally { asBuilt.db.close(); }
+
+    const store = await import('../../ccd/history/store.mjs');
+    const w = store.openWriter(libRead.historyPaths(box.home).dbFile);
+    try { w.exec('ANALYZE'); } finally { store.closeWriter(w); }
+    // SQLite loads sqlite_stat1 into a connection when its schema cookie changes, so the second half reads on a fresh reader.
+    const analyzed = await GRX.rc(box, GRX.idA);
+    try {
+      expect(Number((analyzed.db.prepare("SELECT count(*) AS n FROM sqlite_stat1 WHERE tbl = 'entries' AND idx = 'entries_ts'").get() as { n: number }).n),
+        'CONTROL: ANALYZE wrote the entries_ts statistics row').toBe(1);
+      await pin('after ANALYZE', analyzed);
+    } finally { analyzed.db.close(); }
+  }, 600_000);
+});
+
+// ── CP-39d (D-7095): grep drives each referrer arm from its scope ─────────────────────────────────────────────────────
+// One box, swept twice, then given its second copies and its sidecars and scanned. Three families:
+//   A (project demo): twelve `zqeq` rows with BM25 spread by repeat counts and two tied pairs (an equal stamp and an equal
+//     body length), plus a tool_use and its tool_result; three byte-identical `zqeq` sidecars and one unique one;
+//   B (project demo, another workdir): six `zqeq` rows and one sidecar byte-identical to A's shared one;
+//   O (project other): three `zqeq` rows and one sidecar.
+// A second copy of each transcript, in another account's home, differs in one `zqeq` row, so each family holds a variant
+// referrer. Each case reads in process over a ReadContext whose scope is replaced: family [A], project [A, B], [B] alone and
+// the empty scope. The oracle is the shipped statement's own text (SHIPPED_SQL).
+describe.skipIf(process.platform === 'darwin')('CP-39d: grep drives each referrer arm from its scope (D-7095)', () => {
+  const TA = 0x61; const TB = 0x62; const TO = 0x63;
+  const W_B = '/home/u/worktrees/p/zqeq-b';
+  const W_O = '/home/u/worktrees/p/zqeq-o';
+  const at = (h: number): string => new Date(GRX.t0 + h * 3_600_000).toISOString();
+  const atMs = (h: number): number => GRX.t0 + h * 3_600_000;
+  const fill = (n: number): string => Array.from({ length: n }, (_, k) => `f${k}`).join(' ');
+  type Scope = 'family' | 'project' | 'B' | 'empty';
+  const SCOPES: Scope[] = ['family', 'project', 'B', 'empty'];
+  let box: rH.HistoryBox;
+  let rc0: GrepRc;
+  let mod: GrepMod;
+  let tpk: Record<'A' | 'B' | 'O', number>;
+  let aEntryIds: number[];
+
+  /** A's rows 1 to 12 and the tool pair. Rows 5 and 6, and 9 and 10, are tied pairs: one stamp, one token count. */
+  const aRows = (variant: boolean): rFx.Row[] => {
+    const rows: rFx.Row[] = [];
+    for (let i = 1; i <= 12; i += 1) {
+      const tie = i === 5 || i === 6 ? 5 : i === 9 || i === 10 ? 9 : i;
+      const text = tie !== i || i === 5 || i === 9
+        ? `zqeq tie${tie} aa${i} bb${i}`
+        : `${'zqeq '.repeat(1 + (i % 3))}${fill(3 + ((i * 7) % 25))}`;
+      const body = variant && i === 3 ? `${text} zqeq variant` : text;
+      const base = i % 2 === 1 ? GRX.user(TA, i, body) : GRX.assistant(TA, i, body);
+      rows.push({ ...base, timestamp: at(tie) });
+    }
+    rows.push({ ...GRX.toolUse(TA, 13, 'toolu_01CP39DTOOL', 'echo zqeq tool'), timestamp: at(13) });
+    rows.push({ ...GRX.toolResult(TA, 14, 'toolu_01CP39DTOOL', 'zqeq tool result text'), timestamp: at(14) });
+    return rows;
+  };
+  const bRows = (variant: boolean): rFx.Row[] => Array.from({ length: 6 }, (_, k) => ({
+    ...GRX.user(TB, 100 + k, `${'zqeq '.repeat(1 + (k % 2))}b${k} ${fill(4 + k)}${variant && k === 2 ? ' zqeq variant' : ''}`, { cwd: W_B }), timestamp: at(20 + k),
+  }));
+  const oRows = (variant: boolean): rFx.Row[] => Array.from({ length: 3 }, (_, k) => ({
+    ...GRX.user(TO, 200 + k, `zqeq o${k} ${fill(3 + k)}${variant && k === 1 ? ' zqeq variant' : ''}`, { cwd: W_O }), timestamp: at(40 + k),
+  }));
+  const sidecarDir = (tag: number): string => path.join(box.accountHome['claude-a']!, 'projects', rH.SEED_SLUG, GRX.file(tag), 'tool-results');
+
+  beforeAll(async () => {
+    if (process.platform === 'darwin') return;
+    box = rH.makeHistoryBox('ccrc-hist-cp39d-');
+    rH.seedFamily(box, { id: GRX.idA, project: 'demo', workdir: GRX.W, uuid: GRX.file(TA), rows: aRows(false) });
+    rH.seedFamily(box, { id: GRX.idB, project: 'demo', workdir: W_B, uuid: GRX.file(TB), rows: bRows(false) });
+    rH.seedFamily(box, { id: GRX.idO, project: 'other', workdir: W_O, uuid: GRX.file(TO), rows: oRows(false) });
+    rH.plantTranscript(box, 'claude-b', rH.SEED_SLUG, GRX.file(TA), aRows(true));
+    rH.plantTranscript(box, 'claude-b', rH.SEED_SLUG, GRX.file(TB), bRows(true));
+    rH.plantTranscript(box, 'claude-b', rH.SEED_SLUG, GRX.file(TO), oRows(true));
+    const side = (tag: number, name: string, text: string): void => {
+      fs.mkdirSync(sidecarDir(tag), { recursive: true });
+      fs.writeFileSync(path.join(sidecarDir(tag), name), text);
+    };
+    for (const n of ['s1.txt', 's2.txt', 's3.txt']) side(TA, n, 'zqeq one shared sidecar body\n');
+    side(TA, 'u1.txt', 'zqeq a sidecar of its own in A\n');
+    side(TB, 'b1.txt', 'zqeq one shared sidecar body\n');
+    side(TO, 'o1.txt', 'zqeq a sidecar of its own in O\n');
+    for (let i = 0; i < 2; i += 1) { const s = rH.runSweep(box); expect(s.code, s.stderr).toBe(0); }
+    t16scan(box);
+    rc0 = await GRX.rc(box, GRX.idA);
+    mod = await GRX.recall();
+    const pk = (tag: number): number => Number((rc0.db.prepare('SELECT transcript_pk AS p FROM transcripts WHERE cc_session_uuid = ?').get(GRX.file(tag)) as { p: number }).p);
+    tpk = { A: pk(TA), B: pk(TB), O: pk(TO) };
+    aEntryIds = (rc0.db.prepare('SELECT entry_id AS e FROM entries WHERE transcript_pk = ? ORDER BY entry_id').all(tpk.A) as unknown as Array<{ e: number }>).map((r) => Number(r.e));
+  }, 240_000);
+
+  afterAll(() => { try { rc0?.db.close(); } catch { /* already closed */ } });
+
+  /** `rc0` with its scope's transcripts replaced. */
+  const inScope = (s: Scope): GrepRc => ({ ...rc0, scope: { ...rc0.scope, transcriptPks: s === 'family' ? [tpk.A] : s === 'project' ? [tpk.A, tpk.B] : s === 'B' ? [tpk.B] : [] } });
+  const Q = libRead.sanitizeFtsQuery('zqeq');
+  const ftsAll = (rc: GrepRc, extra: Record<string, unknown> = {}): Record<string, unknown> => cp39dAll(rc, { q: Q, ...extra });
+  const GLOBAL_MATCHES = "SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH 'zqeq'";
+
+  it('(a0) CONTROL: the fixture is what the cases assume: each family holds a variant and a sidecar referrer, a sidecar blob is shared, and the box matches more than the family does', () => {
+    const one = (sql: string, ...p: number[]): number => Number((rc0.db.prepare(sql).get(...p) as { n: number }).n);
+    for (const k of ['A', 'B', 'O'] as const) {
+      expect(one(`SELECT count(*) AS n FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id
+        WHERE e.transcript_pk = ? AND v.blob_id <> e.blob_id AND v.blob_id IN (SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH 'zqeq')`, tpk[k]), `${k} holds a matching variant`).toBeGreaterThanOrEqual(1);
+      expect(one("SELECT count(*) AS n FROM sidecars WHERE transcript_pk = ? AND blob_id IN (SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH 'zqeq')", tpk[k]), `${k} holds a matching sidecar`).toBeGreaterThanOrEqual(1);
+    }
+    expect(one("SELECT count(*) AS n FROM sidecars WHERE transcript_pk = ? AND blob_id IN (SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH 'zqeq')", tpk.A), 'A holds four sidecars').toBe(4);
+    const shared = rc0.db.prepare(`SELECT blob_id AS b FROM sidecars WHERE transcript_pk IN (?, ?) GROUP BY blob_id HAVING count(DISTINCT transcript_pk) = 2`).all(tpk.A, tpk.B);
+    expect(shared, 'the shared sidecar blob has referrers in A and in B').toHaveLength(1);
+    const fam = shippedPool(rc0.db, 'fts', 'recency', ftsAll(inScope('family')), false);
+    expect(one(GLOBAL_MATCHES), 'the box matches more blobs than the family has referrers').toBeGreaterThan(fam.total);
+    expect(fam.total, 'a variant, the tool pair, twelve rows and four sidecars are all referrers').toBe(12 + 2 + 1 + 4);
+  });
+
+  it('(a1) the seams exist: rankedAndCounted is a function, FTS_MATCH and REGEX_MATCH are strings', () => {
+    expect(typeof mod.rankedAndCounted).toBe('function');
+    expect(typeof mod.FTS_MATCH).toBe('string');
+    expect(typeof mod.REGEX_MATCH).toBe('string');
+  });
+
+  it('(a2) FTS_MATCH and REGEX_MATCH are the match texts with no rank column', () => {
+    expect(mod.FTS_MATCH).toBe('SELECT rowid FROM blobs_fts WHERE blobs_fts MATCH :q');
+    expect(mod.REGEX_MATCH).toBe('SELECT value FROM json_each(:blobs)');
+  });
+
+  it("(a3) the oracle's derived-table form is the one selectColumns gives at the store's version", () => {
+    for (const [t, cols] of [['entries', SHIPPED_SQL.entryCols], ['entry_variants', SHIPPED_SQL.variantCols], ['sidecars', SHIPPED_SQL.sidecarCols], ['entries', SHIPPED_SQL.sidecarEntryCols]] as const) {
+      expect(`(SELECT ${libRead.selectColumns(rc0.version, t, cols, rc0.schema as never)} FROM ${t}) AS x`, t).toBe(SHIPPED_SQL.versioned(t, 'x', cols));
+    }
+  });
+
+  /** The filter sets (b) runs: none, a role, a tool, a window cutting the ties, a node subset and the recall-echo provenance. */
+  const FILTERS: Array<[string, () => Record<string, unknown>]> = [
+    ['none', () => ({})],
+    ['role', () => ({ role: 'user' })],
+    ['tool', () => ({ tool: 'Bash' })],
+    ['window', () => ({ since: atMs(5), before: atMs(9) })],
+    ['nodes', () => ({ nodes: JSON.stringify(aEntryIds.filter((_, i) => i % 2 === 0)) })],
+    ['provenance', () => ({ provs: JSON.stringify(libRead.INDEXED_PROVENANCE) })],
+  ];
+
+  it('(b) rankedAndCounted deep-equals the shipped statement on every sort, scope, filter and pool size (the pool at every LIMIT boundary)', () => {
+    for (const sort of libRead.GREP_SORTS) {
+      // CONTROL: the empty scope holds nothing, and the family scope has two rows tied on the sort's key, cut by some pool.
+      expect(shippedPool(rc0.db, 'fts', sort, ftsAll(inScope('empty')), false).total, `${sort}: the empty scope's total`).toBe(0);
+      const fam = ftsAll(inScope('family'));
+      const probe = SHIPPED_SQL.ranked(SHIPPED_SQL.ftsMatch, sort, false, true);
+      const rows = rc0.db.prepare(probe).all(shippedBindFor(probe, fam)) as unknown as Array<{ tie_key: unknown; ts_ms: unknown; blob_id: number; entry_id: unknown; ref_key: string }>;
+      const cutsATie = rows.some((r, k) => k >= 2 && k < rows.length && r.tie_key === rows[k - 1]!.tie_key && r.ts_ms === rows[k - 1]!.ts_ms
+        && (r.blob_id !== rows[k - 1]!.blob_id || r.ref_key !== rows[k - 1]!.ref_key));
+      expect(cutsATie, `${sort} CONTROL: some pool k cuts a tie on the sort's key (rows k-1 and k)`).toBe(true);
+      for (const scope of SCOPES) {
+        const rc = inScope(scope);
+        for (const [fname, filt] of FILTERS) {
+          const base = ftsAll(rc, filt());
+          const total = shippedPool(rc.db, 'fts', sort, base, false).total;
+          if (scope !== 'empty' && scope !== 'B' && fname !== 'nodes') expect(total, `${sort}/${scope}/${fname}: CONTROL the oracle finds referrers`).toBeGreaterThan(0);
+          const pools = [libRead.RANK_POOL, ...Array.from({ length: total + 1 }, (_, k) => k + 1)];
+          for (const pool of pools) {
+            const all = { ...base, pool };
+            const got = mod.rankedAndCounted(rc, mod.FTS_MATCH, sort, all);
+            const want = shippedPool(rc.db, 'fts', sort, all, false);
+            expect(got, `${sort}/${scope}/${fname}/pool ${pool}`).toEqual(want);
+            if (pool < total) expect(want.total, `${sort}/${scope}/${fname}/pool ${pool}: CONTROL the true count exceeds the pool`).toBeGreaterThan(want.pool.length);
+          }
+        }
+      }
+    }
+  }, 600_000);
+
+  it('(c) the regex arm: rankedAndCounted over the child\'s blob list deep-equals the shipped statement on every scope and pool size', async () => {
+    // The child's list: every blob whose decoded plain text holds the word (store.mjs's blobPlainText, the decode grep itself uses).
+    const store = await import('../../ccd/history/store.mjs');
+    const sidecarBlobs = new Set((rc0.db.prepare('SELECT DISTINCT blob_id AS b FROM sidecars').all() as unknown as Array<{ b: number }>).map((r) => Number(r.b)));
+    const all0 = rc0.db.prepare('SELECT blob_id AS b, z, raw_len AS n FROM blobs ORDER BY blob_id').all() as unknown as Array<{ b: number; z: Uint8Array | null; n: number }>;
+    const blobs = all0.filter((r) => store.blobPlainText(r.z, sidecarBlobs.has(Number(r.b)), libRead.makePairIndex([]), Number(r.n)).includes('zqeq')).map((r) => Number(r.b));
+    expect(blobs.length, 'CONTROL: the decoded-text set is not empty').toBeGreaterThan(20);
+    const fts = (rc0.db.prepare("SELECT rowid AS b FROM blobs_fts WHERE blobs_fts MATCH 'zqeq' ORDER BY rowid").all() as unknown as Array<{ b: number }>).map((r) => Number(r.b));
+    expect(blobs, 'CONTROL: on this fixture the decoded-text set is the FTS match').toEqual(fts);
+    for (const scope of SCOPES) {
+      const rc = inScope(scope);
+      const base = cp39dAll(rc, { blobs: JSON.stringify(blobs) });
+      const total = shippedPool(rc.db, 'regex', 'recency', base, false).total;
+      if (scope === 'empty') expect(total, 'CONTROL: the empty scope holds nothing').toBe(0);
+      else expect(total, `${scope}: CONTROL the oracle finds referrers`).toBeGreaterThan(0);
+      for (const pool of [libRead.RANK_POOL, ...Array.from({ length: total + 1 }, (_, k) => k + 1)]) {
+        const all = { ...base, pool };
+        expect(mod.rankedAndCounted(rc, mod.REGEX_MATCH, 'recency', all), `${scope}/pool ${pool}`).toEqual(shippedPool(rc.db, 'regex', 'recency', all, false));
+      }
+    }
+  }, 600_000);
+
+  it('(d) one grep prepares exactly one statement that holds blobs_fts MATCH, on every sort, and it carries LIMIT :pool', async () => {
+    for (const sort of libRead.GREP_SORTS) {
+      const calls: string[] = [];
+      const r = mod.runGrep({ ...rc0, db: GRX.spyDb(rc0.db, calls) }, await GRX.grepArgs(['zqeq', '--sort', sort]));
+      expect(r.exit, sort).toBe(0);
+      const matching = calls.filter((s) => s.includes('blobs_fts MATCH'));
+      expect(matching, `${sort}: one prepared statement carries the match`).toHaveLength(1);
+      expect(matching[0], sort).toContain('LIMIT :pool');
+    }
+  });
+
+  it("(e) recency's ranked statement reads no rank; relevance's and hybrid's do", async () => {
+    const rankedOf = async (sort: string): Promise<string> => {
+      const calls: string[] = [];
+      expect(mod.runGrep({ ...rc0, db: GRX.spyDb(rc0.db, calls) }, await GRX.grepArgs(['zqeq', '--sort', sort])).exit, sort).toBe(0);
+      const ranked = calls.filter((s) => s.includes('blobs_fts MATCH') && s.includes('LIMIT :pool'));
+      expect(ranked, sort).toHaveLength(1);
+      return ranked[0]!;
+    };
+    expect(await rankedOf('recency'), "recency's statement reads rank").not.toMatch(/\brank\b/);
+    for (const sort of ['relevance', 'hybrid']) expect(await rankedOf(sort), `CONTROL: ${sort} orders by rank`).toMatch(/\brank\b/);
+  });
+
+  it("(h) through the CLI: grep --json's total is the oracle's over the family's, the project's and the workspace's transcripts", () => {
+    const wsRows = rc0.db.prepare(`SELECT DISTINCT t.transcript_pk AS p FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk
+      JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid
+      WHERE e.confirmed_ms IS NOT NULL AND s.merged_into IS NULL AND s.project = 'demo' AND (e.cwd_real = ? OR (e.cwd_real IS NULL AND e.cwd = ?))
+      ORDER BY t.transcript_pk`).all(GRX.W, GRX.W) as unknown as Array<{ p: number }>;
+    const ws = wsRows.map((r) => Number(r.p));
+    expect(ws, "CONTROL: A's workdir names A and not B").toEqual([tpk.A]);
+    const want = (pks: readonly number[]): number => shippedPool(rc0.db, 'fts', 'recency', ftsAll({ ...rc0, scope: { ...rc0.scope, transcriptPks: [...pks] } }), false).total;
+    for (const [flag, pks] of [[null, [tpk.A]], ['--project', [tpk.A, tpk.B]], ['--workspace', ws]] as const) {
+      const r = GRX.cli(box, GRX.idA, ['grep', 'zqeq', ...(flag === null ? [] : [flag]), '--json']);
+      expect(r.code, `${flag ?? 'family'}: ${r.stderr}`).toBe(0);
+      expect(r.json?.total, flag ?? 'family').toBe(want(pks));
+    }
+    expect(want([tpk.A, tpk.B]), 'CONTROL: the project holds more than the family').toBeGreaterThan(want([tpk.A]));
+  }, HEAVY);
 });
 
 describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix round 1, phase A)", () => {
@@ -1690,7 +2061,8 @@ describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix
   it('F7: Task 12\'s module-private helpers keep their exact names, each declared once, and renderHits takes termsOf per hit', () => {
     const src = fs.readFileSync(path.join(REPO, 'ccd', 'history', 'recall.mjs'), 'utf8');
     const decl = (name: string): number => (src.match(new RegExp(`^(?:export )?(?:function ${name}\\(|const ${name} =)`, 'gm')) ?? []).length;
-    for (const n of ['FRAME_RESERVE', 'versioned', 'bindFor', 'referrerSql', 'rankedSql', 'countSql', 'GREP_FILTER', 'FTS_MATCH', 'indexGate',
+    // D-7095: countSql is gone (the count rides in the ranked statement); SCOPE_IN and REGEX_MATCH are declared once.
+    for (const n of ['FRAME_RESERVE', 'versioned', 'bindFor', 'referrerSql', 'rankedSql', 'SCOPE_IN', 'REGEX_MATCH', 'GREP_FILTER', 'FTS_MATCH', 'indexGate',
       'refusal', 'notFound', 'grepNotFound', 'hintLine', 'scopeArgs', 'iso', 'nodeEntries', 'grepParams', 'rankedAndCounted', 'blobOf',
       'hitSnippet', 'hitLine', 'hitItem', 'renderHits']) expect(decl(n), n).toBe(1);
     for (const n of ['grepVersioned', 'grepRefusal', 'grepHint']) expect(decl(n), `${n} is an alias the seam does not name`).toBe(0);
@@ -6421,6 +6793,38 @@ describe.skipIf(process.platform === 'darwin')('W2-D36: hidden means absent at e
     expect(src.match(/\basOfEntrySql\(/g) ?? [], 'one splice point, cutTerm').toHaveLength(1);
     expect(src.match(/\basOfBinds\(/g) ?? [], 'one binding point, cutBinds').toHaveLength(1);
   });
+
+  it('CP-39d (g) rankedAndCounted deep-equals the shipped statement with and without the as-of cut, on every sort and pool, for the FTS match and the regex blob list', async () => {
+    const binds = libRead.asOfBinds(cut as unknown as libRead.AsOfCut);
+    const onOf = (rc: GrepRc): boolean => (rc.scope as unknown as { cut?: unknown }).cut != null;
+    const totals: Record<string, { cut: number; none: number }> = {};
+    for (const word of ['zqcutpool', 'zqcutsidevis', 'zqcutsidehid', 'zqcutsideorphan', 'zqcutvarvis', 'zqcutvarhid']) {
+      const r = await both((mod, rc) => {
+        const on = onOf(rc);
+        const out: number[] = [];
+        for (const sort of libRead.GREP_SORTS) {
+          for (const pool of [libRead.RANK_POOL, 1, 2]) {
+            const all = cp39dAll(rc, { q: libRead.sanitizeFtsQuery(word), pool, ...(on ? binds : {}) });
+            const want = shippedPool(rc.db, 'fts', sort, all, on);
+            expect(mod.rankedAndCounted(rc, mod.FTS_MATCH, sort, all), `${word}/${sort}/pool ${pool}/${on ? 'cut' : 'none'}`).toEqual(want);
+            if (pool === libRead.RANK_POOL && sort === 'recency') out.push(want.total);
+          }
+        }
+        return out[0]!;
+      });
+      totals[word] = { cut: r.cut, none: r.none };
+    }
+    expect(totals['zqcutpool'], 'CONTROL: the cut changes the oracle total of zqcutpool').toEqual({ cut: 1, none: POOL + 1 });
+    for (const word of ['zqcutsidehid', 'zqcutsideorphan', 'zqcutvarhid']) expect(totals[word]!.cut, `CONTROL: ${word} is hidden by the cut`).toBeLessThan(totals[word]!.none);
+    await both((mod, rc) => {
+      const on = onOf(rc);
+      const blobs = (rc.db.prepare('SELECT blob_id AS b FROM blobs ORDER BY blob_id').all() as unknown as Array<{ b: number }>).map((x) => Number(x.b));
+      for (const pool of [libRead.RANK_POOL, 1, 2]) {
+        const all = cp39dAll(rc, { blobs: JSON.stringify(blobs), pool, ...(on ? binds : {}) });
+        expect(mod.rankedAndCounted(rc, mod.REGEX_MATCH, 'recency', all), `regex/pool ${pool}/${on ? 'cut' : 'none'}`).toEqual(shippedPool(rc.db, 'regex', 'recency', all, on));
+      }
+    });
+  }, 600_000);
 });
 
 // ── W2-2a Task 3 (W2-D35, W2-D36): the node cut ─────────────────────────────────────────────────────────────────────

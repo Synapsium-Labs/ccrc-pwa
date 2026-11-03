@@ -17,6 +17,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { absentField, unreadableField } from './ioDoubles.js';
 import { assembleFleet } from '../src/fleet.js';
+import { liveStateReaderOver } from '../src/livestate.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { reviveFleetSession, type FleetSession } from '../../shared/api.js';
 
@@ -172,7 +173,7 @@ describe('reviveFleetSession — child (ADDITIVE, absence-permits)', () => {
 
 describe('assembleFleet — child rides the fleet frame', () => {
   const noopRun: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
-  const fleet = (io: FleetIO = localIO) => assembleFleet(io, cfg(), new Tmux(noopRun), 1784600000);
+  const fleet = (io: FleetIO = localIO) => assembleFleet(io, cfg(), new Tmux(noopRun), liveStateReaderOver(io), 1784600000);
 
   it('carries a marker naming a run', async () => {
     mark('42');

@@ -1,0 +1,4 @@
+# The test box's units' parent slice (D-7409): the per-run slices (ccrc-testbox-run-<k>.slice) and the install slice
+# are below it.
+[Unit]
+Description=ccrc test box

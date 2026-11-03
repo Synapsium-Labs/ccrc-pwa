@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { makeCcdHarness, type CcdHarness, WIDE_PANE, WS_ADD, CCD, BOUNDED, ghContainedEnv } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, WS_ADD, CCD, BOUNDED, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { familyClassOf, FAMILY_TOKENS } from '../../shared/models.mjs';
 
@@ -223,7 +223,7 @@ describe('a /model value maps through the alias table, then familyClassOf\'s das
     const bash = h.sh(corpus.map((id) => `out=$(_model_family_class ${JSON.stringify(id)}); echo "[$out]"`).join('; ')).split('\n').map((l) => l.slice(1, -1));
     expect(bash).toHaveLength(corpus.length);
     corpus.forEach((id, i) => expect(bash[i], id).toBe(familyClassOf(id) ?? ''));
-    const declared = /^MODEL_FAMILY_TOKENS="([^"]+)"/m.exec(fs.readFileSync(CCD, 'utf8'));
+    const declared = /^MODEL_FAMILY_TOKENS="([^"]+)"/m.exec(ccdSource());
     expect(declared?.[1]).toBe(FAMILY_TOKENS.map(([t, c]) => `${t}:${c}`).join(' '));
   });
 });
@@ -819,7 +819,7 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       cmd_account_pane: 'an account\'s login pane, not a session',
       cmd_supervise: 'a crash loop\'s give-up: Claude Code already exited, and no ccd stop precedes a revival',
     };
-    const src = fs.readFileSync(CCD, 'utf8').split('\n');
+    const src = ccdSource().split('\n');
     const owner = (i: number): string => {
       for (let j = i; j >= 0; j--) { const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(src[j]!); if (m) return m[1]!; }
       return '';
@@ -876,7 +876,7 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       _tmux_new_session: 'the primitive itself: the wrapper that places the tmux server',
       cmd_account_pane: 'an account\'s login pane, not a Claude Code session',
     };
-    const src = fs.readFileSync(CCD, 'utf8').split('\n');
+    const src = ccdSource().split('\n');
     const owner = (i: number): string => {
       for (let j = i; j >= 0; j--) { const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(src[j]!); if (m) return m[1]!; }
       return '';

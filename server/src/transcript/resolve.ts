@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import { mungePath } from '../munge.js';
+import { limiter, type Limit } from '../bounded.js';
 import { continuationInTail, CONTINUATION_TAIL_BYTES, finishedTurnDecides } from './parse.js';
 
 /**
@@ -240,25 +241,6 @@ export function pickNewest(hits: readonly GlobHit[]): GlobHit | null {
  */
 export const GLOB_STAT_CONCURRENCY = 32;
 
-/** Runs a call once a slot is free: at most `max` in flight, the rest waiting in arrival order. */
-type Limit = <T>(call: () => Promise<T>) => Promise<T>;
-
-/** A promise limiter (D-6369). The slot is released in `finally`, so a call that rejects still frees it, and a
- *  freed slot is handed straight to the longest waiter, so the count never dips below the bound while any wait. */
-const limiter = (max: number): Limit => {
-  let active = 0;
-  const waiting: (() => void)[] = [];
-  return async (call) => {
-    if (active < max) active += 1;
-    else await new Promise<void>((go) => { waiting.push(go); });   // the slot arrives already counted
-    try { return await call(); }
-    finally {
-      const next = waiting.shift();
-      if (next === undefined) active -= 1; else next();
-    }
-  };
-};
-
 /**
  * `<configDir>/projects/*​/<uuid>.jsonl`, existence-checked. `complete: false`
  * means the directory could not be MEASURED — never that it held nothing.
@@ -336,9 +318,11 @@ async function globByUuid(
     if (livenessWitness === null) return { hits: [], complete: false };
     return { hits: [], complete: (await limit(() => io.stat(livenessWitness))) !== null };
   }
-  // The per-directory stats go out together, `limit` holding them to the bound. `hits` is then built in `names`
-  // order from the per-index answers, so a completion order that differs from the issue order changes nothing
-  // `pickNewest` sees. A null stat is folded to absent, as it always was (see the choice recorded above).
+  // The per-directory stats go out together, `limit` holding them to the bound. `hits` is built in `names` order
+  // from the per-index answers, but that order is not what makes the answer stable: `pickNewest` is a total order
+  // (mtime, then roster order, then path) and so is `collapseHits`' survivor (lowest (order, path) of a size:mtime
+  // group), so no input order, completion order included, changes it. A null stat is folded to absent, as it
+  // always was (see the choice recorded above).
   const paths = names.map((name) => path.join(root, name, `${uuid}.jsonl`));
   const stats = await Promise.all(paths.map((p) => limit(() => io.stat(p))));
   const hits: GlobHit[] = [];
@@ -490,8 +474,8 @@ async function ladder(io: FleetIO, o: ResolveOpts): Promise<Laddered> {
   // true, which is only possible if this io answered non-null ABOUT that
   // directory, so it exists — see `globByUuid`'s own doc for why that makes
   // a later null stat of it evidence about the connection and not the disk.
-  // The accounts are searched together under the shared `limit` (D-6369) and
-  // pooled in roster order, so `pickNewest` sees what the serial search gave it.
+  // The accounts are searched together under the shared `limit` (D-6369) and pooled in roster order; the answer is
+  // order-free all the same, because `pickNewest` and `collapseHits`' survivor are total orders (see `globByUuid`).
   const globs = await Promise.all((o.foreign ?? []).map(
     (acct, order) => globByUuid(io, acct.configDir, o.uuid, acct.account, order, o.configDir, limit)));
   for (const g of globs) {

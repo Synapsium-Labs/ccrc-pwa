@@ -19,6 +19,7 @@
 // choice made in either, never a copy taken at mount.
 import { useSyncExternalStore } from 'react';
 import { THEME_STORAGE_KEY, SYSTEM, applyTheme, resolveTheme } from '@ccrc/ui';
+import { readKey, writeKey } from './storage';
 
 /** The slice of MediaQueryList the theme needs — injectable for tests. */
 export interface ThemeMedia {
@@ -32,21 +33,14 @@ export interface ThemeMedia {
  *  runs before first paint — an exception here is a blank app, so the read is
  *  guarded and a failure is simply "no preference". */
 export function storedTheme(): string {
-  try {
-    return resolveTheme(localStorage.getItem(THEME_STORAGE_KEY));
-  } catch {
-    return SYSTEM;
-  }
+  // The port's read is guarded (a throw answers null), and `resolveTheme` reads null as SYSTEM.
+  return resolveTheme(readKey(THEME_STORAGE_KEY));
 }
 
 /** Remember a choice. A failed write is not an error the user needs: the theme
  *  still applies for this session, it just will not survive a reload. */
 export function rememberTheme(choice: string): void {
-  try {
-    localStorage.setItem(THEME_STORAGE_KEY, choice);
-  } catch {
-    /* private window, blocked storage — the session keeps the theme anyway */
-  }
+  writeKey(THEME_STORAGE_KEY, choice); // refused (private window, blocked storage): the session keeps the theme anyway
 }
 
 function chrome(root: HTMLElement): void {

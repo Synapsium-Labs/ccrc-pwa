@@ -169,7 +169,8 @@ export const MAX_ASK_ACTIONS = 2;
  *    and later that Enter toggled the cursor row instead of committing. It now
  *    refuses every multiSelect question before any key. Multi-select is
  *    answered in the app, where the boxes are visible, through
- *    `POST /api/sessions/:id/dialog/multi`.
+ *    `POST /api/questions/session-<id>/answer` with `multi: true` (the
+ *    retired `POST /api/sessions/:id/dialog/multi`'s answer, W7 C7p).
  *  - a BLANK option label ANYWHERE in the envelope → see below.
  *
  * A blank label poisons the WHOLE envelope, so the answer is `null`, not "ship

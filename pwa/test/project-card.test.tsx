@@ -2,14 +2,24 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, RunSummary } from '../../shared/api';
-import { fleetSession, hibernatedSession } from './fleetFixture';
+import type { DelegationProjectionWire, FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, RunSummary } from '../../shared/api';
+import { fleetSession, hibernatedSession, DEAD_LIFECYCLE } from './fleetFixture';
 import type { ProjectPlacementRead } from '../src/fleet/placementWords';
 import { SPAWN_STALL_MS } from '../../shared/api';
 import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
-import { NEST_BRACKET, POOL_UNAVAILABLE_TEXT, ProjectCard } from '../src/fleet/ProjectCard';
+import { NEST_BRACKET, POOL_UNAVAILABLE_TEXT, ProjectCard as Card } from '../src/fleet/ProjectCard';
+import { withRunBinding } from './runBindingFixture';
+
+/** The card as a current server feeds it (D-7182, C7d): each of the group's sessions carries the run binding the server
+ *  sends over the runs this render hands the card (`runBindingFixture.ts`), so a worker of a run on the card is that
+ *  run's bound worker, as it is on the wire. Every assertion below reads the real card. */
+const ProjectCard = (p: Parameters<typeof Card>[0]): ReturnType<typeof Card> =>
+  <Card {...p} group={{ ...p.group, sessions: withRunBinding(p.group.sessions, p.runs ?? []) }} />;
 import { waveLabel } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
+import { fleetTree } from '../src/fleet/fleetTree';
+import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
+import { NO_ROLLUP_PREFS, rollupCard, toggleChildren, type RollupPrefs } from '../src/fleet/rollup';
 import { WARN_GLYPH } from '@ccrc/ui';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
@@ -40,10 +50,16 @@ describe('uniform shape', () => {
     expect(screen.getByText('still-cove')).toBeInTheDocument();
   });
 
-  it('shows the live session count', () => {
+  it('shows the live session count, as a number with its noun (T3a, D-6331)', () => {
     const g = grp({ sessions: [sess(), sess({ id: 'b', workspace: 'still-cove' })] });
     render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('2 sessions')).toBeInTheDocument();
+    expect(screen.queryByText('2')).not.toBeInTheDocument();
+  });
+
+  it('shows no count for a project holding one session', () => {
+    const { container } = render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card-count')).toBeNull();
   });
 
   it('renders NO pin chip on an empty card — nothing is pinned and nothing disagrees', () => {
@@ -69,7 +85,7 @@ describe('folding', () => {
       sessions: [sess({ dialogPending: true }), sess({ id: 'demo-still-cove', workspace: 'still-cove' })],
     });
     render(<ProjectCard group={g} collapsed onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('2 sessions')).toBeInTheDocument();
     expect(screen.getByLabelText('waiting on you')).toBeInTheDocument();
   });
 
@@ -123,9 +139,15 @@ describe('pinned account', () => {
     expect(screen.getByText('team·b')).toBeInTheDocument();
   });
 
-  it('says "mixed" when the sessions disagree rather than picking one', () => {
+  it('says "several accounts" when the sessions disagree rather than picking one (T3a, D-6331)', () => {
     render(<ProjectCard group={grp({ pin: { state: 'mixed' } })} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('mixed')).toBeInTheDocument();
+    const chip = screen.getByText('several accounts');
+    expect(chip).toBeInTheDocument();
+    // The chip measures each session's PINNED account (ccd `home`), not where it runs, so its title says "pinned".
+    expect(chip).toHaveAttribute('title', 'The sessions here are pinned to different accounts');
+    expect(chip).toHaveAttribute('aria-label', 'pinned accounts differ');
+    expect(chip).toHaveAttribute('data-mixed');
+    expect(screen.queryByText('mixed')).not.toBeInTheDocument();
   });
 
   it('names the pin for assistive tech — a bare label reads as decoration', () => {
@@ -298,7 +320,7 @@ describe('session count', () => {
   it('renders from two upwards', () => {
     const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
     render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
-    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('2 sessions')).toBeInTheDocument();
   });
 });
 
@@ -448,7 +470,10 @@ describe('the nesting bracket', () => {
     // reads off a run stays identical. Nesting is then the only variable left.
     const orphaned = runFor({ id: 11, sessionId: 'demo-still-cove', claimedBy: 'other-project-coordinator' });
     const flat = render(<ProjectCard group={g} runs={[orphaned]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
-    const before = flat.container.querySelectorAll('.sess-line')[1]?.outerHTML;
+    // By its label, not its index: a worker of a programme elsewhere is drawn under its own sub-heading (Task G2).
+    const before = [...flat.container.querySelectorAll('.sess-line')]
+      .find((el) => el.querySelector('.sess-label')?.textContent === 'still-cove')?.outerHTML;
+    expect(before).toBeDefined();
     cleanup();
     const { container } = render(
       <ProjectCard group={g} runs={[childRun]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
@@ -524,6 +549,22 @@ describe('the pending child — a spawn the operator can watch arrive', () => {
     expect(container.querySelector('.proj-pending-glyph')?.textContent).toBe(WARN_GLYPH);
   });
 
+  it('D-7563: the stalled run bound to its returned child clears the wedge, and the child is drawn under its coordinator', () => {
+    // The server's auto-bind leaves the run planned and its stamp as it was, and names the child workspace as its
+    // session. BOTH directions on the same group: unbound, the wedge; bound, the child's own row and no wedge.
+    const stalled = spawning({ dispatchStartedAt: FROZEN - SPAWN_STALL_MS * 600 });
+    const unbound = render(
+      <ProjectCard group={pair} runs={[stalled]} nowMs={FROZEN} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('spawn never completed')).toBeInTheDocument();
+    unbound.unmount();
+    const { container } = render(
+      <ProjectCard group={pair} runs={[{ ...stalled, sessionId: 'demo-still-cove' }]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText('spawn never completed')).toBeNull();
+    expect(container.querySelector('.proj-pending')).toBeNull();
+    expect(container.querySelector('.proj-nest[data-depth="1"] .sess-label')?.textContent).toBe('still-cove');
+  });
+
   it('renders nothing at all for a planned run nobody has dispatched', () => {
     // The no-regression pin, and the reason the STAMP is the signal: a wave N+1
     // opened and waiting, and every wave N>=2 resume, carry no stamp and have
@@ -585,6 +626,15 @@ describe('the held cell opens the run board when a run is actually on it (Task 5
     expect(document.querySelector('button.sess-held')).toBeNull();
   });
 
+  // C7d's behaviour row, OA-C15 (a) (D-7265): the door follows the wire's binding. A run that names the session by id
+  // but that the server binds to no incarnation of it (#746's recycled id, or an older server's frame with no binding)
+  // is not the session's run, so the hold reads as the inert text it is (a door before C7d).
+  it('opens no door for an open run that names the session but that the wire does not bind to it', () => {
+    render(<ProjectCard group={grp({ sessions: [{ ...heldWorker, run: null, openRun: null }] })} runs={[childRun]} nowMs={FROZEN}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(cell()?.tagName).toBe('SPAN');
+  });
+
   it('opens no door for a run that names a DIFFERENT session on the same card', () => {
     // The edge is `run.sessionId === session.id` and nothing looser. A card
     // carrying one run and two held rows must not light both.
@@ -611,6 +661,7 @@ describe('the pool chip', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
     expect(screen.queryByText(/pool/i)).not.toBeInTheDocument();
     expect(screen.queryByText('no pool')).not.toBeInTheDocument();
+    expect(screen.queryByText('Set pool')).not.toBeInTheDocument();
   });
 
   it('names the pool a tagged project is in', () => {
@@ -621,10 +672,40 @@ describe('the pool chip', () => {
   });
 
   it('flags a MEASURED untagged project — ruling 3\'s worklist', () => {
+    // No handler: nowhere to go, so the chip is a span and keeps the state's own words — a word that names an action
+    // must not appear where there is no door to take it (T3a, D-6331).
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
                         placement={measured({ state: 'untagged' })} pools={listed({})} />);
     const chip = screen.getByText('no pool');
     expect(chip).toHaveAttribute('data-pool', 'untagged');
+    expect(chip.tagName).toBe('SPAN');
+    expect(screen.queryByText('Set pool')).not.toBeInTheDocument();
+  });
+
+  it("an untagged project's chip reads 'Set pool' and is still the button that opens the pool sheet", () => {
+    const onPool = vi.fn();
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'untagged' })} pools={listed({})} onPool={onPool} />);
+    const chip = screen.getByText('Set pool');
+    expect(chip.tagName).toBe('BUTTON');
+    // Ruling 3's attention ink keys on this attribute (`fleet.css`), so the new word keeps it.
+    expect(chip).toHaveAttribute('data-pool', 'untagged');
+    // The accessible name begins with the words the door shows (WCAG 2.5.3, R121 Q6; C12 item 10), then the state's
+    // sentence; the tooltip stays the sentence.
+    expect(chip).toHaveAccessibleName('Set pool — no project pool — any account may serve this project');
+    expect(chip).toHaveAttribute('title', 'no project pool — any account may serve this project');
+    expect(screen.queryByText('no pool')).not.toBeInTheDocument();
+    fireEvent.click(chip);
+    expect(onPool).toHaveBeenCalledTimes(1);
+    expect(onPool).toHaveBeenCalledWith('demo');
+  });
+
+  it('a dim untagged chip (the fleet ccd predates pools) keeps its state word, not the action word', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'untagged' })}
+                        pools={listed({}, 'unavailable')} onPool={() => {}} />);
+    expect(screen.queryByText('Set pool')).not.toBeInTheDocument();
+    expect(screen.getByText('no pool').tagName).toBe('SPAN');
   });
 
   it('tells malformed from unreadable, in two aria-labels that each carry the full path', () => {
@@ -665,7 +746,7 @@ describe('the pool chip', () => {
     const chip = screen.getByText(/app older than fleet; reload/i);
     expect(chip).toHaveAttribute('data-pool', 'unrecognised');
     expect(chip).toHaveAccessibleName(/app bundle is older than the fleet; reload/i);
-    for (const absent of ['pool-z', 'pool unreadable', 'pool malformed', 'no pool']) {
+    for (const absent of ['pool-z', 'pool unreadable', 'pool malformed', 'no pool', 'Set pool']) {
       expect(screen.queryByText(absent)).not.toBeInTheDocument();
     }
   });
@@ -742,7 +823,7 @@ describe('route-owned pool handoff to session rows', () => {
     // the active case above independently pins ProjectCard's handoff.
     const archived = sess({
       id: 'demo-quiet-basin', wrapper: 'claude9', home: 'claude9',
-      workspace: 'quiet-basin', status: 'dead', bucket: 'archived',
+      workspace: 'quiet-basin', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived',
       archivedAt: 1_785_300_000,
     });
     render(<ProjectCard group={grp({ archived: [archived] })} placement={placement}
@@ -814,7 +895,7 @@ describe('the stranded cell', () => {
   it('does not surface a stranded aggregate for a sole dead marker-bearing row', () => {
     const marker = { at: 1, reason: 'no account in pool pool-a can take it' };
     const [group] = groupFleet([
-      sess({ status: 'dead', bucket: 'dead', stranded: marker }),
+      sess({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stranded: marker }),
     ], []);
     render(<ProjectCard group={group!} onOpen={() => {}} onActions={() => {}} />);
 
@@ -1006,7 +1087,9 @@ describe('the orphan worker\'s marker rides its row', () => {
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-nest')).toBeNull();
     expect(container.querySelector('.proj-crossing')).toBeNull();
-    const row = container.querySelectorAll('.sess-line')[1]!;
+    // Task G2: a worker whose coordinator is off this card sits under "Workers of programmes elsewhere".
+    const row = [...container.querySelectorAll('.sess-line')].find((el) => el.querySelector('.sess-label')?.textContent === 'still-cove')!;
+    expect(row.closest('.pg-elsewhere')).not.toBeNull();
     expect(row.textContent!.split('build9b').length - 1).toBe(1);
     expect(row.textContent).toContain('build9b · wave 2 of 3');
   });
@@ -1035,13 +1118,16 @@ describe('the orphan worker\'s marker rides its row', () => {
     expect(marker(container)).toBeNull();
   });
 
-  it('keeps the marked row a direct child of the card body — no wrapper, no sibling line', () => {
+  it('keeps the marked row its own line — no marker wrapper, no sibling line', () => {
     const { container } = render(
       <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN} frameSeen
                    coordOf={(id) => (id === 'off-card-coordinator' ? deadCoord : null)}
                    onOpen={() => {}} onActions={() => {}} />);
-    const row = container.querySelectorAll('.sess-line')[1]!;
-    expect(row.parentElement).toBe(container.querySelector('.proj-card-body'));
+    const row = [...container.querySelectorAll('.sess-line')].find((el) => el.querySelector('.sess-label')?.textContent === 'still-cove')!;
+    // Task G2: its one wrapper is the elsewhere group's row slot (the programme's hue), never a marker line.
+    expect(row.parentElement?.classList.contains('pg-far')).toBe(true);
+    expect(row.parentElement?.childElementCount).toBe(1);
+    expect(row.parentElement?.parentElement?.parentElement).toBe(container.querySelector('.proj-card-body'));
     expect(row.nextElementSibling?.classList.contains('proj-crossing') ?? false).toBe(false);
     expect(marker(row as HTMLElement)).not.toBeNull();
   });
@@ -1095,6 +1181,31 @@ describe('the orphan worker\'s marker rides its row', () => {
     const m = marker(container)!;
     expect(m.getAttribute('data-marker')).toBe('coordinator-hibernated');
     expect(m.textContent).toBe('coordinator hibernated');
+  });
+
+  // D-7371: a hibernated orphan or never-started coordinator (the server reads it `dead`) is asleep, never gone.
+  it.each(['orphan', 'never-started'] as const)('says HIBERNATED, not gone, for a hibernated %s coordinator (D-7371)', (lifecycle) => {
+    const sleepingCoord = fleetSession({ id: 'off-card-coordinator', project: 'elsewhere', status: 'dead', bucket: 'dead',
+      lifecycle, hibernatedAt: FROZEN - 3_600_000 });
+    const { container } = render(
+      <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? sleepingCoord : null)}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const m = marker(container)!;
+    expect(m.getAttribute('data-marker')).toBe('coordinator-hibernated');
+    expect(container.textContent).not.toContain('coordinator gone');
+  });
+
+  // D-7370: a substrate stamp over a pane tmux called gone is doubt (D-309): no marker, no "coordinator gone".
+  it('claims nothing about a coordinator whose gone pane carries a substrate stamp (D-7370)', () => {
+    const stamped = fleetSession({ id: 'off-card-coordinator', project: 'elsewhere', status: 'dead', bucket: 'dead',
+      lifecycle: 'orphan', substrate: { at: 1, text: 'tmux: no server running' } });
+    const { container } = render(
+      <ProjectCard group={orphans()} runs={[orphanRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? stamped : null)}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(marker(container)).toBeNull();
+    expect(container.textContent).not.toContain('coordinator gone');
   });
 
   it('claims nothing about a coordinator the frame has not measured', () => {
@@ -1238,7 +1349,7 @@ describe('the Released (n) fold (workspace lifecycle spec §5.1)', () => {
       releasedFrom: { runId: closedAt, program, programTitle: program === 'alpha' ? 'Alpha programme' : null, claimedBy: 'coord', closedAt, child },
       ...over,
     });
-  const archivedRow = sess({ id: 'demo-old-bay', workspace: 'old-bay', status: 'dead', bucket: 'archived', archivedAt: 1_785_300_000 });
+  const archivedRow = sess({ id: 'demo-old-bay', workspace: 'old-bay', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 1_785_300_000 });
 
   it('renders nothing when nothing is released', () => {
     render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
@@ -1352,5 +1463,101 @@ describe('the Released (n) fold (workspace lifecycle spec §5.1)', () => {
     const { container } = render(
       <ProjectCard collapsed selectedId="demo-amber-delta" group={g} onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-card')).toHaveAttribute('data-holds-selection');
+  });
+});
+
+// Delegation broker wave 4, PR2 Task 2.7: delegated work, worktrees and the two groups on a project card. The card
+// draws `fleetTree`'s rows and the words module's labels; it decides nothing of its own.
+describe('delegation rows on a project card (delegation broker wave 4)', () => {
+  const coordA = fleetSession({ id: 'coord-a', project: 'project-a', workspace: null, workdir: '/work/project-a', name: 'coord-a' });
+  const workerA = fleetSession({ id: 'worker-a', project: 'project-a', workspace: 'worker-a', workdir: '/work/project-a/.ws/worker-a', role: 'child' });
+  const prun = (over: Partial<RunSummary>): RunSummary => ({
+    id: 7, program: 'port-api', programTitle: 'Port the API', wave: 1, waveOf: 3, project: 'project-a', homeProject: null,
+    sessionId: 'worker-a', workspace: 'worker-a', branch: null, state: 'dispatched', kind: 'work', reviews: null,
+    claimedBy: 'coord-a', resumed: false, clearedAt: null, openedAt: 1, dispatchStartedAt: null, dispatchedAt: null,
+    closedAt: null, handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,
+    health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true,
+      clearError: null, coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, ...over,
+  });
+  const cardFor = (w: DelegationProjectionWire, sessions = [coordA], runs: RunSummary[] = []) =>
+    fleetTree(withRunBinding(sessions, runs), [], runs, {}, w).find((g) => g.project === 'project-a')!;
+  const countText = (root: HTMLElement, text: string): number =>
+    [...root.querySelectorAll('*')].filter((el) => el.childElementCount === 0 && el.textContent === text).length;
+
+  it('W4-U28: a raw worktree under its parent reads inferred and its Bash call, with no control of its own', () => {
+    const { container } = render(<ProjectCard group={cardFor(frame({ leases: [lease({ sourceKind: 'raw' })] }))}
+      onOpen={() => {}} onActions={() => {}} />);
+    const row = container.querySelector<HTMLElement>('.proj-work');
+    if (row === null) throw new Error('no worktree row');
+    expect(row.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);
+    const chips = [...row.querySelectorAll('.proj-work-chip')];
+    expect(chips.map((c) => c.textContent)).toEqual(['inferred', 'Bash call …est_0001']);
+    expect(chips[1]!.getAttribute('title')).toContain(TOOL_USE_ID);
+    expect(chips[0]!.getAttribute('title')).toContain(TOOL_USE_ID);
+    expect(row.querySelector('button')).toBeNull();
+    expect(row.closest('.proj-nest')!.querySelector('button')).toBeNull();
+    // No user-facing word says "lease": the operator's word is "worktree".
+    expect(container.textContent).not.toMatch(/lease/i);
+  });
+
+  it('W4-U29: every raw worktree wears inferred wherever it lands: nested, via a worker, and in the opened groups', () => {
+    const w = frame({
+      leases: [
+        lease({ leaseId: 'l-nested', sourceKind: 'raw' }),
+        lease({ leaseId: 'l-via', sourceKind: 'raw', via: 'worker-a', adminRecord: 'agent-v1', canonicalPath: '/work/project-a/.claude/worktrees/agent-v1' }),
+        lease({ leaseId: 'l-off', sourceKind: 'raw', parentId: 'coord-gone', adminRecord: 'agent-o1', canonicalPath: '/work/project-a/.claude/worktrees/agent-o1' }),
+        lease({ leaseId: 'l-agent', sourceKind: 'agent', adminRecord: 'agent-g1', canonicalPath: '/work/project-a/.claude/worktrees/agent-g1' }),
+      ],
+      unowned: [unowned({ verdict: 'conflicting', adminRecord: 'agent-a1' })],
+    });
+    const { container } = render(<ProjectCard group={cardFor(w, [coordA, workerA], [prun({})])} onOpen={() => {}} onActions={() => {}}
+      offlineOpen unownedOpen />);
+    expect(countText(container, 'inferred')).toBe(3);
+    const via = [...container.querySelectorAll('.proj-work')].find((r) => r.textContent?.includes('via '));
+    expect(via?.textContent).toContain('inferred');
+    expect(container.textContent).toContain('Offline coordinator (1)');
+    expect(container.textContent).toContain('Unowned work (1)');
+  });
+
+  it('R9 on the card: a programme worker\'s live activity is a chip on its row, never a row of its own', () => {
+    const w = frame({ activities: [activity({ activityId: 'a-w', parentId: 'worker-a', placement: 'chip' })] });
+    const { container } = render(<ProjectCard group={cardFor(w, [coordA, workerA], [prun({})])} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
+    const chips = [...container.querySelectorAll('.sess-meta-chip')];
+    expect(chips.map((c) => c.textContent)).toEqual(['1 delegated']);
+    expect(chips[0]!.closest('.proj-nest')).not.toBeNull();
+  });
+
+  it('a session in no programme folds three delegated activities into one line, as the rollup decided (main\'s boxes)', () => {
+    const w = frame({ activities: ['a1', 'a2', 'a3'].map((id) => activity({ activityId: id, parentId: 'coord-a' })) });
+    // A working session, so the card is active and open by default (rollup rule 2).
+    const g = cardFor(w, [{ ...coordA, status: 'busy', bucket: 'working' }]);
+    const drawn = (prefs: RollupPrefs) => render(<ProjectCard group={g} rollup={rollupCard(g, prefs, Date.now(), null)}
+      onOpen={() => {}} onActions={() => {}} onToggleChildren={() => {}} />);
+    const { container, unmount } = drawn(NO_ROLLUP_PREFS);
+    expect(container.querySelector('section.pg-box'), 'coord-a claims no run: it is no box').toBeNull();
+    const line = screen.getByRole('button', { name: '3 delegated' });
+    expect(line.getAttribute('aria-expanded')).toBe('false');
+    expect(line.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);
+    expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
+    unmount();
+    const open = drawn(toggleChildren(NO_ROLLUP_PREFS, 'coord-a'));
+    expect(screen.getByRole('button', { name: '3 delegated' }).getAttribute('aria-expanded')).toBe('true');
+    expect(open.container.querySelectorAll('.proj-work')).toHaveLength(3);
+  });
+
+  it('W4-U30: a group is a closed disclosure by default, opened under its composite key', async () => {
+    const w = frame({ unowned: [unowned({ adminRecord: 'u1' }), unowned({ adminRecord: 'u2' }), unowned({ adminRecord: 'u3' })] });
+    const onToggle = vi.fn();
+    const { container, rerender } = render(<ProjectCard group={cardFor(w)} onOpen={() => {}} onActions={() => {}} onToggle={onToggle} />);
+    const toggle = screen.getByRole('button', { name: /Unowned work \(3\)/ });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('title')).toContain('never makes one eligible for removal');
+    expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
+    await userEvent.click(toggle);
+    expect(onToggle).toHaveBeenCalledWith('project-a::unowned');
+    rerender(<ProjectCard group={cardFor(w)} onOpen={() => {}} onActions={() => {}} onToggle={onToggle} unownedOpen />);
+    expect(screen.getByRole('button', { name: /Unowned work \(3\)/ }).getAttribute('aria-expanded')).toBe('true');
+    expect(container.querySelectorAll('.proj-work')).toHaveLength(3);
   });
 });

@@ -14,10 +14,17 @@
     grid-template-rows: auto minmax(0, 1fr) auto;
   }
   /* The fourth column is the inspector's (S12), and exists only with an Inspector part (below, at >=1600). */
+  /* The bar's line clears the lanes row (C12 item 19, `top-bar-sits-clear-of-the-lanes-row`): the command field and
+     New session fill the line top to bottom, so the line takes the cards' own gap (`--sp-2`) below it and the same
+     above it, and its controls sit centred between the header's top and the first line of cards. The header grows by
+     those two gaps and nothing in it moves against anything else. */
   .ins-frame .shell-accounts {
     grid-column: 1 / -1;
     grid-row: 1;
-    padding: 0 var(--sp-2) 0 0;
+    padding: var(--sp-2) var(--sp-4);
+  }
+  .ins-frame .ins-topbar {
+    margin-block-end: var(--sp-2);
   }
   /* No `overflow` here: any value but visible makes the rail a clip box in both axes, which cuts away the tooltip
      drawn beside it and lets the hidden tips scroll the rail sideways. Stacked above the list column, so the tip
@@ -44,12 +51,6 @@
     grid-column: 1 / -1;
     grid-row: 3;
   }
-  /* The fleet list's floating New session sits in the list column, clear of the rail (shell.css pins it to the
-     frame's left edge, which is the rail's here), and above the status bar. */
-  .ins-frame .fab {
-    left: calc(52px + var(--sp-4));
-    bottom: calc(var(--sp-4) + var(--tap-min));
-  }
 }
 
 /* W2 desk polish T2e (D-6335): the list column widens at 1600, and the 320px fourth track appears only with what fills
@@ -74,13 +75,13 @@
   min-height: var(--tap-min);
   min-width: 0;
 }
-/* The wordmark sits over the rail's 52px and runs past it: its left edge is the rail's centre line. */
+/* The wordmark sits over the rail's 52px and runs past it: its left edge is the header's gutter, which the lanes row
+   under the line shares. */
 .ins-wordmark {
   flex: none;
-  padding-left: var(--sp-4);
 }
 /* The breadcrumb gives first: it takes only the room the others leave (a zero basis), its middle crumbs truncate
-   before its last, and it keeps a floor, so the meters collapse before it would vanish. */
+   before its last, and it keeps a floor, so it never vanishes. */
 .ins-crumbs {
   display: flex;
   flex: 1 1 0;
@@ -110,8 +111,8 @@
   content: '›';
   padding: 0 var(--sp-1);
 }
-/* The command field: a door, not an input. Its words shrink away after the meters have collapsed; the search glyph
-   and ⌘K stay, and so does its accessible name. */
+/* The command field: a door, not an input. Its words shrink away after the crumbs have given up their room; the search
+   glyph and ⌘K stay, and so does its accessible name. */
 .ins-command {
   display: flex;
   flex: 0 100 280px;
@@ -130,15 +131,6 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: clip;
-}
-/* The LED meters: the shared compact gauges in their `led` arrangement, which count what wrapped into their "+n". */
-.ins-meters {
-  display: flex;
-  flex: 0 1000 auto;
-  min-width: calc(var(--tap-min) + var(--sp-6));
-}
-.ins-meters > * {
-  min-width: 0;
 }
 .ins-new {
   flex: none;
@@ -166,7 +158,8 @@
   width: 100%;
   min-height: var(--tap-min);
 }
-/* The Inbox door's unread count (T2e fix round 1, D-6335): the pill is `<CountBadge>`'s (its colours are the primitive's);
+/* The Inbox door's count of sessions waiting on the operator (T2e fix round 1, D-6335; since T2d, D-6330, it counts no
+   unread mail): the pill is `<CountBadge>`'s (its colours are the primitive's);
    here it only sits on the door's top-right corner, over the icon's box, and takes no clicks of its own. */
 .ins-rail-count {
   position: absolute;
@@ -286,13 +279,21 @@
   background: var(--bg-raised);
   color: var(--ink-primary);
 }
-/* The four tabs share the row at 360: each takes an equal part, none wraps or scrolls. Underline tabs: the ghost
-   button's hairline goes and the chosen tab's accent edge is drawn by a positioned `::after`, which takes no room, so
-   choosing moves no label. */
+/* Five tabs (Task G3, D-7333: Programmes after Needs you): each takes its words' width (`width: auto` over the
+   button's full width), and when the five do not fit the row (at 360, say) the tablist scrolls sideways inside itself,
+   never the page, on one line. Its pad is the focus ring's room
+   (2px at a 2px offset), which a scroller would otherwise clip, and the margin gives the pad back, so nothing moves.
+   Underline tabs: the ghost button's hairline goes and the chosen tab's accent edge is drawn by a positioned `::after`,
+   which takes no room, so choosing moves no label. */
+.ins-tabs {
+  overflow-x: auto;
+  padding: var(--sp-1);
+  margin: calc(-1 * var(--sp-1));
+}
 .ins-tab {
   position: relative;
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 0 0 auto;
+  width: auto;
   gap: var(--sp-1);
   padding: 0 var(--sp-1);
   border: 0;
@@ -327,26 +328,20 @@
 .ins-row .sess-line {
   min-height: var(--row-h);
 }
-.ins-coord-crumb {
-  display: block;
-  padding: 0 var(--sp-2) var(--sp-1) calc(var(--sp-2) * 3);
-  font-size: var(--fs-xs);
-  overflow-wrap: anywhere;
-}
-
 /* W2 desk polish T2e (D-6335): the two-line dense row. Under a fine pointer at a desk a status row is the name with its
-   state word, then its context: two lines and at most 42px when the name and state fit side by side, and never more than
-   three lines and under 61px: no fact is dropped (D-5545), a long name still
-   wraps, and the density is the sheet's own `--row-h` (32 under a fine pointer) instead of `--tap-min`. Under a coarse
-   pointer, or below 900, none of this applies and every row and control keeps the tap floor. CSS only: `SessionLine`
-   keeps its three children, and the wrapping flex row below puts the second (the state word) beside the first. */
+   state word at the end of the line, then its context: two lines and at most 42px when the name and the state fit side
+   by side. When they do not, the state word ends the context line instead, as long as the context fits there whole
+   (T3b, R21's F2 and the operator's R121, D-7252), so a long needs-you name does not push it onto a line of its own;
+   when neither fits, the state word takes a line of its own and the context keeps its whole width. No fact is dropped
+   (D-5545), and the density is the sheet's own `--row-h` (32 under a fine pointer) instead of `--tap-min`. Under a
+   coarse pointer, or below 900, none of this applies and every row and control keeps the tap floor. CSS only:
+   `SessionLine` keeps its three children (the name, the state word, the context) in that order. */
 @media (min-width: 900px) and (pointer: fine) {
   /* A wrapping flex row (fix round 1, ruling on F2): the name and the state word share the first line when they fit
-     side by side, the state at its own width and pushed to the line's end; the context takes a line of its own. A flex
-     line breaks on the items' max-content sizes, so the state drops to its own line ONLY when the name and it do not
-     fit together, and the name then has the whole line: a long needs-you row is three lines (name, state, context),
-     never four, and a short one stays two. A row without a context (a main checkout) is one line, on the floor, when its
-     name and state fit side by side, and two (the name, then the state) when they do not. */
+     side by side, the state at its own width and pushed to the line's end. A flex line breaks on the items' max-content
+     sizes, so the state drops to a line of its own ONLY when the name and it do not fit together. This is the whole
+     layout of a row without a context (a main checkout): one line, on the floor, when its name and state fit side by
+     side, and two (the name, then the state) when they do not. A row with a context lays out by the T3b rules below. */
   .ins-row .sess-body {
     display: flex;
     flex-flow: row wrap;
@@ -366,6 +361,39 @@
   }
   .ins-row .sess-meta--context {
     flex: 1 0 100%;
+  }
+  /* T3b (R21's F2, the operator's ruling R121, D-7252): a row with a context fact. One flex line cannot put the state
+     word after the name on one row and after the context on another, so this row is a block and the state word floats
+     to the end of the first line with room for it: the name's line when the two fit side by side (the name is an
+     inline box at its own width), else the context's line. The context is as wide as its text (`max-content`, capped
+     at the line), and it is `.sess-meta`, a flex container (fleet.css), so a formatting context of its own: a float
+     leaves such a box, when it would not fit beside it, to start below it (an ordinary block would run under the float
+     and only shorten its lines, CSS 2.1 9.5; instrument-list pins that `display` on every rule of fleet.css and this
+     sheet that can reach the context). So the state word ends the context line only when the whole context fits
+     there, and otherwise takes a line of its own, the context below it at its whole width. The state never narrows
+     the context, so a programme's wave tail, a child marker and a branch are never cut by it, and no row is taller
+     than with the state word on its own line. The state stays first in the
+     document, so a screen reader still hears name, state, context; only its place on the screen moves. The 2px gap
+     the flex row put between the lines is the float's top margin and the context's top padding, so the state word's
+     text stays level with the context's when they share a line. Beside the name it sits 1.0 px higher than main's
+     baseline alignment had it (the float's top alignment and margin; measured in review 1130 and accepted). */
+  .ins-row .sess-line:has(.sess-meta--context) .sess-body {
+    display: block;
+  }
+  .ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-open {
+    display: inline-flex;
+    max-width: 100%;
+    vertical-align: top;
+  }
+  .ins-row .sess-line:has(.sess-meta--context) .sess-body > .sess-meta:not(.sess-meta--context) {
+    float: right;
+    margin-block-start: calc(var(--sp-1) / 2);
+    margin-inline-start: var(--sp-2);
+  }
+  .ins-row .sess-line:has(.sess-meta--context) .sess-meta--context {
+    width: max-content;
+    max-width: 100%;
+    padding-block-start: calc(var(--sp-1) / 2);
   }
   /* The shared sheet centres the lamp and the actions button on a three-line stack with a margin worked out from the
      tap floor; here the lamp sits on the name's line (it is as tall as that line) and the button on the row's middle.
@@ -392,6 +420,7 @@
     align-self: center;
     margin-top: 0;
   }
+  .ins-group-seen,
   .ins-group-head,
   .ins-toggle-option {
     min-height: var(--row-h);

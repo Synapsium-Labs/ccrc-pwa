@@ -7,6 +7,7 @@ import { RenderBoundary, RootFallback } from './components/RenderBoundary';
 import { initTheme } from './lib/theme';
 import { initSkin } from './lib/skin';
 import { setUpdater } from './lib/swupdate';
+import { onPageVisible } from './lib/pageClock';
 
 // Theme before first render (index.html pre-stamps the attribute so even the
 // pre-bundle paint is right; this adds the live change listener + meta sync).
@@ -48,7 +49,7 @@ registerSW({
     if (!registration) return;
     const check = (): void => void registration.update();
     setInterval(check, UPDATE_CHECK_MS);
-    document.addEventListener('visibilitychange', () => {
+    onPageVisible(() => {
       if (document.visibilityState === 'visible') check();
     });
     // The fleet store's other reason to ask for a check: an incompatible

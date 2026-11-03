@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { heldKindOf, stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/stopDoneSweep.js';
+import { heldKindOf, stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/sleepLane.js';
 import { STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS } from '../src/stopDone.js';
-import { PRESENCE_OPEN_TTL_MS, PRESENCE_TTL_MS, type FleetSession } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, VIEWER_TTL_MS, type FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { FleetState } from '../src/fleetstate.js';
 import path from 'node:path';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
@@ -28,7 +29,7 @@ import { HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, NO_HIBERNATE_SUF
 // the declared stop, the one feed row, and the retry memory.
 
 const NOW = 1_800_000_000_000;
-const STARTED = NOW - PRESENCE_OPEN_TTL_MS - 60_000;
+const STARTED = NOW - VIEWER_OPEN_TTL_MS - 60_000;
 const HOUR = 3_600_000;
 /** A `done` marker seven hours old — past N — nothing in the background, nothing scheduled. */
 const MARK_IDLE = { ok: true, state: 'done', bg: 0, crons: 0, turnAt: NOW - 7 * HOUR - 60_000, stopAt: NOW - 7 * HOUR, restartAt: null } as const;
@@ -119,6 +120,7 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
     },
     serial: o.serial === false ? null : async (fn) => { f.serialCalls++; return fn(); },
     queueRun: async (_id, fn) => fn(),
+    listing: async () => [],
     startedAt: STARTED,
     now: () => NOW,
   };
@@ -311,11 +313,11 @@ describe('stopDonePass (D-5370)', () => {
     expect(f.argv).toEqual([]);
   });
 
-  it('the post-start hold lasts PRESENCE_OPEN_TTL_MS (D-5242): past the visible TTL it still holds, past the open one it stops', async () => {
+  it('the post-start hold lasts VIEWER_OPEN_TTL_MS (D-5242): past the visible TTL it still holds, past the open one it stops', async () => {
     const f = fake([ID]);
-    await stopDonePass({ ...f.deps, startedAt: NOW - PRESENCE_TTL_MS - 1 }, mem(), [row(ID)], [rec(ID)], []);
+    await stopDonePass({ ...f.deps, startedAt: NOW - VIEWER_TTL_MS - 1 }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([]);
-    await stopDonePass({ ...f.deps, startedAt: NOW - PRESENCE_OPEN_TTL_MS }, mem(), [row(ID)], [rec(ID)], []);
+    await stopDonePass({ ...f.deps, startedAt: NOW - VIEWER_OPEN_TTL_MS }, mem(), [row(ID)], [rec(ID)], []);
     expect(f.argv).toEqual([HIB(ID)]);
   });
 
@@ -603,10 +605,20 @@ describe('stopDonePass: the mail-only feed row (D-6091)', () => {
     }
   });
 
+  // D-7041: the pair is raised through the funnel, so the lane writes neither the archive nor the ring itself. Read
+  // through scan/symbols.ts, not a literal pin: no `.recordFeedEvent(` and no `.record(` call anywhere in the files, and
+  // `recordFeed` calls `notify` once, record-only. D-7042: the pair's code is the one sleep executor's (`sleepLane.ts`),
+  // and `recordFeed` is read where it now lives. D-7046: `stopDoneSweep.ts` is gone, so `sleepLane.ts` is the one file.
   it('the feed archive keeps one writer site', () => {
-    const src = readFileSync(path.join(__dirname, '..', 'src', 'stopDoneSweep.ts'), 'utf8');
-    expect(src.match(/\.recordFeedEvent\(/g) ?? []).toHaveLength(1);
-    expect(src.match(/\.record\(/g) ?? []).toHaveLength(1);
+    const SRC = 'server/src/sleepLane.ts';
+    for (const file of [SRC]) {
+      const calls = parsedFile(file).calls;
+      expect(calls.filter((c) => c.name === 'recordFeedEvent').map((c) => c.line), `${file}: a hand-written archive write`).toEqual([]);
+      expect(calls.filter((c) => c.name === 'record' && c.callee !== 'record').map((c) => c.line), `${file}: a hand-written ring record`).toEqual([]);
+    }
+    const raised = callsIn(symbolOf(SRC, 'recordFeed')).filter((c) => c.callee === 'notify');
+    expect(raised, 'recordFeed calls notify').toHaveLength(1);
+    expect(raised[0]!.args[2], 'record-only: recorded whatever the presence, never pushed').toEqual({ kind: 'string', text: 'record-only' });
   });
 });
 
@@ -676,7 +688,7 @@ describe('run by the watcher\'s tick (D-5370)', () => {
     try {
       const deps = { ...testDeps(home, async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), cfg, coord };
       const w = new FleetWatcher(deps as never, new Bus(), 10_000);
-      const spy = vi.spyOn(w, 'sweepStopDone').mockResolvedValue(undefined);
+      const spy = vi.spyOn(w, 'sweepSleep').mockResolvedValue(undefined);
       await w.tick();
       expect(spy, 'the priming tick judges nothing').not.toHaveBeenCalled();
       await w.tick();
@@ -689,7 +701,7 @@ describe('run by the watcher\'s tick (D-5370)', () => {
   });
 });
 
-// The pass's own suite stubs `mark` and `rowAtAct`; this one runs the REAL `sweepStopDone`, so the closures the watcher
+// The pass's own suite stubs `mark` and `rowAtAct`; this one runs the REAL `sweepSleep` (`run-done`), so the closures the watcher
 // wires (`turnMarkFor` judged against the live process, the record re-read at the act) are what decides. A temp
 // registry, a real coordination store, a pane whose pid and live file the fixture writes, and one runner that answers
 // tmux and ccd, so a stop is one `stop` argv in its log.
@@ -742,7 +754,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     // buildServer always hands the watcher a Viewers; an absent port reads as a viewer (fail closed).
     const deps = { ...testDeps(home, run), cfg, coord, fleetState: { ccdVerbs: ['hibernate'] }, viewers: new Viewers(() => Date.now()) };
     const w = new FleetWatcher(deps as never, new Bus(), 10_000);
-    (w as unknown as { stopDoneStartedAt: number }).stopDoneStartedAt = startedAt;
+    (w as unknown as { sleepStartedAt: number }).sleepStartedAt = startedAt;
     w.useStopDoneSerialiser({ serial: async (fn: () => Promise<unknown>) => fn() } as never);
     // The tick's rows and records, assembled now — before anything a case writes afterwards.
     const tick = async () => {
@@ -753,7 +765,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       return { rows: [row], records: [r.record] };
     };
     const stops = () => calls.filter((c) => c[0] === 'hibernate' || c[0] === 'stop');
-    return { home, reg, coord, w, tick, stops, turnMark, startedAt };
+    return { home, reg, coord, w, tick, stops, turnMark, startedAt, deps };
   };
 
   it('control: an idle worker whose run is done, with a fresh `done` marker, is stopped', async () => {
@@ -761,7 +773,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     try {
       const t = await h.tick();
       expect(t.rows[0]).toMatchObject({ held: null, bucket: 'idle', child: { kind: 'child' } });
-      await h.w.sweepStopDone(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([['hibernate', WID]]);
     } finally {
       h.coord.db.close();
@@ -774,7 +786,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       const t = await h.tick();
       expect(t.rows[0]!.held).toBeNull();
       writeFileSync(path.join(h.reg, `${WID}.hold`), 'a program claimed it');
-      await h.w.sweepStopDone(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([]);
     } finally {
       h.coord.db.close();
@@ -786,7 +798,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     try {
       h.turnMark(h.startedAt - 60_000);
       const t = await h.tick();
-      await h.w.sweepStopDone(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([]);
     } finally {
       h.coord.db.close();
@@ -801,7 +813,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
         v: 1, sessionId: WUUID, state: 'done', event: 'Stop', at, turnAt: at - 60_000, stopAt: at,
         bg: 1, bgKinds: 'monitor', bgIds: 'b1', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '', crons: 0 })}\n`);
       const t = await h.tick();
-      await h.w.sweepStopDone(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([]);
     } finally {
       h.coord.db.close();
@@ -816,7 +828,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     try {
       h.coord.db.prepare("UPDATE runs SET state = 'failed'").run();
       const t = await h.tick();
-      await h.w.sweepStopDone(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([['hibernate', WID]]);
     } finally {
       h.coord.db.close();
@@ -828,7 +840,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     try {
       h.coord.db.prepare("UPDATE runs SET state = 'awaiting-review', closedAt = NULL").run();
       const t = await h.tick();
-      await h.w.sweepStopDone(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([['hibernate', WID]]);
     } finally {
       h.coord.db.close();
@@ -840,10 +852,131 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     try {
       h.coord.db.prepare("UPDATE runs SET state = 'working', closedAt = NULL").run();
       const t = await h.tick();
-      await h.w.sweepStopDone(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([]);
     } finally {
       h.coord.db.close();
     }
+  });
+
+  // C4g fix round (D-7047; the plain-readdir ratchet, D-5969): the act's listing, as the watcher wires it, reads
+  // `readdirMeasured`, and its failure holds the act. The run-done lane has no arming switch, so a listing that read a
+  // failure as "no switches raised" would simply clear it; these rows pin the real wiring. The plain listing is left
+  // answering the registry's names, so a wiring that read it would act; both failures, and a rejection, hold.
+  for (const failure of ['absent', 'unreadable', 'rejects'] as const) {
+    it(`the act's listing through readdirMeasured: a registry ${failure} at the act holds it (fail shut)`, async () => {
+      const h = await harness();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const t = await h.tick();
+        const io = h.deps.io;
+        const regDir = h.deps.cfg.registryDir;
+        const reads: string[] = [];
+        h.deps.io = {
+          ...io,
+          readdir: async (p: string) => { if (p === regDir) reads.push('plain'); return io.readdir(p); },
+          readdirMeasured: async (p: string) => {
+            if (p !== regDir) return io.readdirMeasured(p);
+            reads.push('measured');
+            if (failure === 'rejects') throw new Error('EIO');
+            return { ok: false, reason: failure };
+          },
+        } as never;
+        // the plain listing would still answer the registry's names
+        expect(await io.readdir(regDir)).toContain(`${WID}.uuid`);
+        await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
+        expect(h.stops()).toEqual([]);
+        // the act lists once, measured
+        expect(reads.filter((r) => r === 'measured')).toEqual(['measured']);
+        expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('stop-done')))
+          .toEqual([`ccrc-server: stop-done: ${WID} was not put to sleep: the registry was unlistable during the pass`]);
+      } finally {
+        warn.mockRestore();
+        h.coord.db.close();
+      }
+    });
+  }
+});
+
+// D-7041 (ARCH-43, the run-done funnel task), characterization: green on the lane before its feed pair moved onto the
+// funnel and its switches onto `readSwitches`, and green after. A throwing archive costs the archive row alone and
+// prints the lane's own line, `stop-done: ` prefix and degrade sentence byte for byte, for both rows; each of the
+// three switches, raised alone, stops the pass before anything is read, composed or recorded.
+describe('stopDonePass: the feed pair and the switches, before and after the funnel (D-7041)', () => {
+  const DISK_FULL = 'disk full';
+  const archiveThrows = (f: Fake): StopDoneSweepDeps => ({
+    ...f.deps, coord: { ...f.deps.coord, recordFeedEvent: () => { throw new Error(DISK_FULL); } },
+  });
+  const failLines = (warn: { mock: { calls: unknown[][] } }): string[] =>
+    warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('recordFeedEvent failed'));
+
+  it('a throwing archive: the asleep row warns with its sentence, the ring still records it, the act is unchanged', async () => {
+    const f = fake([ID]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const out = await stopDonePass(archiveThrows(f), { retryAt: new Map(), mailOnly: 0 }, [row(ID)], [rec(ID)], []);
+      expect(out).toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
+      expect(sleepRows(f)).toEqual([{ sessionId: ID, runId: 10 }]);
+      expect(failLines(warn)).toEqual([`ccrc-server: stop-done: recordFeedEvent failed (${DISK_FULL}) — ${ID}'s sleep has no feed row`]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('a throwing archive: the mail-only row warns with its sentence, and the ring still records it', async () => {
+    const f = fake([ID]);
+    f.mailTo.add(ID);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const out = await stopDonePass(archiveThrows(f), mem(), [row(ID)], [rec(ID)], []);
+      expect(out).toEqual([]);
+      expect(f.feed.filter((e) => e.kind === 'coord').map((e) => e.title)).toEqual(['Workers kept awake by unread mail: 1']);
+      expect(failLines(warn)).toEqual(['ccrc-server: stop-done: recordFeedEvent failed (disk full) — the mail-only count has no feed row']);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each([STOP_DONE_DISABLED_MARKER, RECLAIM_PAUSE_MARKER, HIBERNATE_DISABLED_MARKER])(
+    '%s raised alone stops the pass: nothing is read, composed or recorded', async (k) => {
+      const f = fake([ID]);
+      const live = vi.fn(f.deps.liveWord);
+      const last = vi.fn(f.deps.coord.lastRunBySession);
+      const deps = { ...f.deps, liveWord: live, coord: { ...f.deps.coord, lastRunBySession: last } };
+      expect(await stopDonePass(deps, mem(), [row(ID)], [rec(ID)], ['project-a-other.uuid', k])).toEqual([]);
+      expect(f.argv).toEqual([]);
+      expect(f.feed, 'not even the first pass\'s mail-only zero').toEqual([]);
+      expect(live).not.toHaveBeenCalled();
+      expect(last).not.toHaveBeenCalled();
+      expect(f.serialCalls).toBe(0);
+    });
+
+  it('CONTROL: with none of the three raised, the same pass sleeps the worker', async () => {
+    const f = fake([ID]);
+    expect(await stopDonePass(f.deps, mem(), [row(ID)], [rec(ID)], ['project-a-other.uuid']))
+      .toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
+  });
+});
+
+// CHARACTERIZATION (D-7278, the deps-shed arm; green on `main` before the arm): the run-done pass reads a sleeping row,
+// worker or coordinator, as already asleep and composes nothing for it, however long its run has been closed. What
+// sheds a sleeping row's dependencies is a separate pass (`depsShedPass`), never this one.
+describe('characterization: the run-done pass leaves a sleeping row alone (D-7278)', () => {
+  const ASLEEP = { stoppedBy: { at: NOW - 48 * HOUR, surface: 'agent' } } as const;
+  it('a sleeping worker whose run closed two days ago: no ccd call, no outcome, no feed row but the mail-only count', async () => {
+    const f = fake([ID]);
+    f.runs.set(ID, { runId: 10, state: 'done', closedAt: NOW - 48 * HOUR });
+    expect(await stopDonePass(f.deps, mem(), [row(ID, ASLEEP)], [rec(ID)], [])).toEqual([]);
+    expect(f.argv).toEqual([]);
+    expect(f.serialCalls).toBe(0);
+    expect(sleepRows(f)).toEqual([]);
+  });
+  it('a sleeping coordinator (no child marker, it claimed a run): no ccd call and no outcome', async () => {
+    const f = fake([]);
+    const coord = 'lane-a-project-a';
+    expect(await stopDonePass(f.deps, mem(), [row(coord, { ...ASLEEP, child: { kind: 'none' } as never })], [rec(coord)], []))
+      .toEqual([]);
+    expect(f.argv).toEqual([]);
+    expect(f.serialCalls).toBe(0);
   });
 });

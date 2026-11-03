@@ -18,7 +18,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 const REPO = path.resolve(path.dirname(CCD), '..');
 const ROOTS = [path.join(REPO, 'ccd'), path.join(REPO, 'deploy')];
@@ -125,7 +125,7 @@ describe('premise 2 — ONE `.child` writer', () => {
 });
 
 describe('premise 3 — the marker is read, by direct lookup, BEFORE the mkdir', () => {
-  const src = fs.readFileSync(CCD, 'utf8');
+  const src = ccdSource();
 
   it('`_child_tmpdir` reads `.child`, and returns on a non-child, before its one `mkdir`', () => {
     expect([...src.matchAll(/^_child_tmpdir\(\) \{/gm)], 'defined once').toHaveLength(1);

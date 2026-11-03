@@ -1904,8 +1904,10 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 
 Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1,
 D-6862 to D-6907 and D-6921 for wave 2, D-6944 to D-6963 for wave 3, D-6994 to D-6998 for the follow-up to the
-suite's macOS failures). A further departure found while executing is written `D-TBD-<slug>` and named in the task's
-report.
+suite's macOS failures, D-7083 to D-7089, D-7093, D-7094, D-7119 and D-7120 for what the first live step, the flip and the rollout measured,
+D-7143 and D-7144 for the tool-change blocks honoured and the second lane's switch, and D-7676 and D-7677 for the
+reasoning store's start check and its state in the stats file). A further
+departure found while executing is written `D-TBD-<slug>` and named in the task's report.
 
 ### D-6410 — `end_turn:false` is continued upstream, never `pause_turn`
 
@@ -3613,3 +3615,784 @@ report.
   rule, and needs a ruling.
 - **Cost if wrong:** The 7-day watch could read a count short. It reads its counters after a request, or after a
   restart's drain, and a killed bridge's last `FLUSH_S` of counts is lost.
+
+### D-7083 — the response headers every live answer carried are explained
+
+- **Departs from:** Task 5's `KNOWN["responseHeader"]` and `ccd/codexbridge/known.py`'s docstring, which left out
+  "the edge and cache headers of the backend's front end, which nothing in this repository or in Codex reads and
+  nobody has measured yet (the runbook's first live step records the response header names)".
+- **What changed:** Thirteen names join `KNOWN["responseHeader"]` (`ccd/codexbridge/known.py:76-96`), in commented
+  groups, each said to be measured on every answer of runbook step 2 (2026-10-27): `x-oai-request-id` (D-7084);
+  `content-type:absent`, the media-type name a backend 2xx stream with no content type counts
+  (`server.py#_media_type`, :370-373); the CDN's `server`, `cf-ray` and `cf-cache-status`; `set-cookie`; the policy and
+  reporting headers `nel`, `report-to`, `strict-transport-security`, `x-content-type-options`,
+  `cross-origin-opener-policy` and `referrer-policy`; and `x-openai-proxy-wasm`. Upstream is cited as
+  `openai/codex <path> at rust-v0.164.0` where the headers analysis found a reader: `cf-ray` as a tracking id
+  (`codex-rs/codex-api/src/api_bridge.rs`, `extract_request_tracking_id`) and the cookie jar
+  (`codex-rs/http-client/src/chatgpt_cloudflare_cookies.rs`). The docstring's "not here, on purpose" sentence is now a
+  "measured since" paragraph (:33-36). Pin: `server/test/codex-bridge-count-stats.test.ts:274`, which feeds
+  `header_names` the 33 names step 1 printed, plus `name("responseHeader", "content-type:absent")`, and expects every
+  name counted and no `unexplained.responseHeader`. Row: `"cf-ray"` deleted from the group, the case reds
+  (`expected [ 'cf-ray' ] to be undefined`); restored from a copy, sha256 compared OK.
+- **Why:** Measured: all five answers carried the same 33 header names, and the set difference against `KNOWN` and the
+  `x-codex-` prefix was those twelve headers plus the media-type name. `stats.Stats.name` lists each in `unexplained`,
+  so the doctor's drift row (Task 17) would WARN from the first request served on the direct lane, and runbook step 4
+  asks that "`ccrc doctor` keeps the `codex` check green". Only the name is ever counted: `Stats.header_names` keeps
+  no value, and the bridge writes its own downstream head.
+- **Cost if wrong:** A name the front end adds later still WARNs once, as any new name does. If one of these names
+  starts to matter (a challenge page's `cf-ray`, say), explaining it here hides nothing: its counter still moves in
+  `names.responseHeader`.
+
+### D-7084 — the upstream request id is also read from `x-oai-request-id`
+
+- **Departs from:** Task 1's error table ("the upstream request id kept in the status file", spec §2.4), whose
+  `request_id_of` read `x-request-id`, else `request-id`.
+- **What changed:** `errors.request_id_of` (`ccd/codexbridge/errors.py:163-173`) reads `x-request-id`, then
+  `request-id`, then `x-oai-request-id` (:169), Codex's order (`openai/codex codex-rs/codex-api/src/api_bridge.rs at
+  rust-v0.164.0`, `extract_request_id`, which reads `x-request-id`, else `x-oai-request-id`). The first name PRESENT
+  still decides, so a malformed value under it is None whatever a later name holds; the docstring says both. Pins:
+  `server/test/codex-bridge-errors.test.ts:260` (the fallback, `x-request-id` and `request-id` winning over it, and a
+  malformed first name or third name giving None); `server/test/codex-bridge-server.test.ts:984` (an upstream 500
+  carrying only `x-oai-request-id` keeps that id in the status file's `lastRequestId` and in the stats file's
+  `lastUpstreamRequestId`); `server/test/codex-bridge-live-tools.test.ts:777` (the probe prints the id from
+  `x-oai-request-id`). The comment on the server's call (`ccd/codexbridge/server.py:775`) names all three headers.
+  Row: the tuple without its third name, all three cases red (`expected null to be
+  'oai-req-fx1'`, `expected null to be 'oai-req-fx-500'`, and the probe's `request-id none`); restored OK.
+- **Why:** Measured: every answer of runbook step 2 carried `x-oai-request-id` (UUID-shaped, under `REQUEST_ID_RE`)
+  and neither of the other two names, so the probe printed `request-id none` five times. On the live lane every
+  upstream failure would have reached the status file and the stats file with no id, and the first credential or
+  limit incident of the watch would have had no id to quote. `record_upstream`'s bound (`_bounded_upstream`) already
+  takes an id of this shape, so nothing else changes.
+- **Cost if wrong:** If the backend ever sends `x-request-id` too, that one wins, as it does upstream. `cf-ray`,
+  upstream's last fallback, is not read.
+
+### D-7085 — the live probe prints an attribution item key as its kind, never the id
+
+- **Departs from:** Task 18's live probe, whose module docstring promises "never a header value, a text, an id or an
+  encrypted content", and whose usage report printed every key path through `_name`.
+- **What changed:** `liveprobe._usage_lines` (`ccd/codexbridge/liveprobe.py:314-324`) names each key through
+  `liveprobe._usage_key` (:304-311): a key under `attribution.items` prints as its kind in brackets (`<msg>`, `<fc>`,
+  `<rs>`, the id's prefix when it is 1 to 8 lower-case letters, else `<item>`), and so does a key in the scrubber's id
+  shape anywhere else (`record.SCRUB_PATTERNS`' `id`, read by name at :301, so the shape is spelled once); every other
+  key prints as before. Every count still prints, one line per item: `usage attribution.items.<msg>.input_tokens 15`.
+  The docstring names the placeholder. Pin: `server/test/codex-bridge-live-tools.test.ts:794`, a synthetic answer whose
+  usage carries `attribution.items` keyed by `msg_fx1`, an id-shaped synthetic `fc_` key and `rs_fx3`: no key appears
+  in the output, every usage line matches the grammar with bracketed kinds, and the twelve item counts and the
+  request-field counts print. Row: `_usage_key(key, path)` back to `_name(key)`, the case reds (`not to contain
+  'msg_fx1'`); restored OK.
+- **Why:** Measured: the backend's `usage.attribution.items` is keyed by item ids (a `msg_`/`fc_` prefix and about 50
+  characters), which pass `stats.NAME_RE`, so `step1.out` to `step5.out` carry the ids in their usage lines. The bridge
+  never calls `_usage_lines`, so traffic was never affected. Those five files stay out of every write-up: they are
+  described here by shape only.
+- **Cost if wrong:** Two items of one kind print lines with the same name, so a reader tells them apart by their order
+  only. The per-part `content[]` lists inside each item are still not walked (lists never were).
+
+### D-7086 — the scrubber rewrites the attribution keys through the id map
+
+- **Departs from:** Task 18's scrubber (`ccd/codexbridge/record.py`'s docstring: "Object KEYS are kept everywhere").
+- **What changed:** One object's keys are rewritten: `items` inside a response's `usage.attribution`. The rewrite is
+  anchored on the `attribution` object inside `usage` (`record.ID_KEYED = ("attribution", "usage")`,
+  `ccd/codexbridge/record.py:216`), and only that object's `items` child (`record.ID_KEYED_CHILD`, :217) has its keys
+  rewritten, by `_Scrubber.id_keyed` (:297-299, called at :306-308) through `_Scrubber.id_of`, the map the id values
+  use; each child still sits under `within == "items"`. An output item's key therefore becomes the same
+  `<prefix>_fx<n>` its `id` becomes, a reasoning item's (`rs_`) included, and an input item's key, which appears
+  nowhere else, gets a number of its own. Every other key is kept as before, so `SCRUB_PATTERNS`' `id` still refuses
+  an id-shaped key anywhere else. The docstring names the one exception and the anchor (:26-34). Pins:
+  - `server/test/codex-bridge-live-tools.test.ts:548`, a synthetic stream in the measured shape (a reasoning item, a
+    message, two function calls, and an input-only message, with `attribution.items` keyed by their id-shaped
+    synthetic ids): the scrub exits 0 with no residue, the keys read `msg_fx2, rs_fx1, msg_fx1, fc_fx1, fc_fx2`
+    against output ids `rs_fx1, msg_fx1, fc_fx1, fc_fx2`, and every count, the request fields and `input_tokens` are
+    unchanged. Row: the key rewrite dropped (keys kept), the case reds on residue (`record: refused: the output still
+    matches id; nothing written`); restored OK.
+  - `server/test/codex-bridge-live-tools.test.ts:600` (the review finding): a `response.created` and a
+    `response.completed` that echo a tool schema with `properties.attribution = {type: 'array', items: {type:
+    'string'}}`, beside a `usage.attribution.items` keyed by an id: the schema's `items` keeps its `type` key in both
+    echoes, and the usage key maps to its item's synthetic id with its counts unchanged. Row: the first version's
+    two-level check put back (`("items", "attribution")`, every key of that object through `id_of`), the case reds
+    (`expected { type: 'array', …(1) } to deeply equal { type: 'array', …(1) }`); restored from a copy, sha256
+    compared OK.
+- **Why:** Measured: `record.py scrub` refused all five live recordings (residue `id`, 21 matches, every one in key
+  position under `attribution.items`), so runbook step 2's "Scrub the recordings into the corpus" could not be done,
+  nor D-6430's replacement of the synthetic streams, nor any `record-streams` recording of the watch. With the
+  change, an in-process scrub of the five recordings (read only, nothing written) leaves no residue on any of them,
+  and each output item's key equals its scrubbed id. The first version anchored on the `items` key inside any
+  `attribution` object, which a review found also matches a tool schema property of that name, whose keys the
+  backend echoes in `response.created`: the anchor moved up one level, to `usage`.
+- **Cost if wrong:** The scrubber sees only an object's parent key, so an object literally keyed `usage`, then
+  `attribution`, then `items`, outside the usage (a schema's `default` or `examples` value, say), is still a false
+  positive: its `items` keys would be rewritten. A schema property named `usage` is not, because its sub-properties
+  sit under `properties`. That is
+  accepted, because a recording still needs a human read before it enters the corpus (the module docstring). An
+  id-shaped key inside a function call's `arguments` JSON is still kept, so such a recording still fails closed. The
+  scrubbed corpus streams themselves are not added here: that stays the reviewed change with the human read the
+  docstring requires (a real session's tool schema property names survive the scrub).
+
+### D-7087 — runbook step 0, the offline rehearsal, as run
+
+- **Departs from:** runbook step 0's "with the fake also set as `HTTPS_PROXY`/`HTTP_PROXY`": a separate recording proxy
+  on loopback was the proxy, and the fake backend was not; otherwise the record of runbook step 0 (2026-10-26).
+- **What changed:** Nothing in the bridge. Claude Code 2.1.310 (its versioned binary, under `env -i`, with the lane's
+  settings env block) ran against this tree's bridge (`3a0bd0ad1`) and a fake Responses backend on loopback. A
+  SEPARATE recording proxy on loopback was set as `HTTPS_PROXY`/`HTTP_PROXY`, with `NO_PROXY` the loopback names
+  (the harness kept the two apart).
+  Every scenario recorded zero proxy requests, and a positive control (a non-loopback base
+  URL that does not resolve) showed Claude Code does use the proxy and the recorder does see it. Of the 12 scenarios,
+  10 were as expected: the tool round trip; proactive compaction; the prompt-too-long 400 after one exchange starting
+  a compaction; the 429 `billing_error` ending the turn with one request; the `policy_blocked` 400 with one request;
+  pings through a 60 s silence; the overflow `response.failed` after `HOLD_S` committed the head (the `stream:false`
+  re-send, a real 400, then a compaction, after one exchange; on a turn's first exchange Claude Code refuses to compact
+  a conversation that small, as it does for a pre-stream 400); the 15 s held head; the lane-shape refusal; and the
+  byte-for-byte replay. Two differ, from one Claude Code behaviour: an `error` after a content block was released
+  makes Claude Code keep the partial text and send a NEW `stream:true` request carrying it and a synthetic resume note
+  ("Your response above was cut off mid-stream …"), never a `stream:false` re-send, while an error before any block
+  still falls back to `stream:false`. That is the mid-stream error case's after-block shape, and the 310 s silence,
+  where the turn did not end on the bridge's idle error but went on with one resume request.
+- **Why:** The open questions it settled: a ping resets Claude Code's 300 s stream watchdog (20 pings in 300 s, and
+  the stream lasted 320 s); proactive compaction fires at window − 33k (between 366k and 367k on a 400k window); a
+  15 s first byte is waited out (with the launcher's `API_TIMEOUT_MS`); a refusal is continued once with a note, then
+  `model_refusal_no_fallback` ends the turn; an assistant text with trailing whitespace and non-ASCII characters is
+  sent back byte for byte, and the text-keyed reasoning replay matched it. Open question 3 is answered for the
+  launcher's timeout, not for Claude Code's default.
+- **Cost if wrong:** The verifiers' caveats. `x-should-retry: false` was not captured on the wire: the one request of
+  the 429 and the 400 rests on the bridge's source and Claude Code's behaviour. The held-head case measured an
+  upstream that withheld its head, so the bridge's own commit at `HOLD_S` was exercised by the overflow case and by
+  the mid-stream error's no-block run (the head committed at `HOLD_S` with no block, then the stream ended, and
+  Claude Code re-sent with `stream:false`). No non-catalogue model was sent (the lane has no fallback model), so the
+  local 404 for one is unmeasured. Zero proxy requests proves no proxy-honouring traffic, not zero packets. After
+  the flip, the resume request means a long silence costs one more upstream request, which can wait up to 300 s
+  again.
+
+### D-7088 — runbook steps 2 and 3, the first live step and its reading, as run
+
+- **Departs from:** nothing; the record of runbook steps 2 and 3 (2026-10-27).
+- **What changed:** Five requests on lane-b, one at a time, all 200, with the spare sixth unused. Accepted:
+  `originator: ccrc` and the bridge's User-Agent; developer-first input with no `instructions`; two parallel calls of
+  one top-level tool with `parallel_tool_calls: true`; their round trip under `toolu_`-shaped call ids with a result
+  for each; a trailing developer item after the user item; and step 1 repeated with the same `session-id` and
+  `prompt_cache_key`. What the answers showed that this plan did not predict, and what the bridge does with each:
+  - the request id comes as `x-oai-request-id`, with no `x-request-id` (D-7084);
+  - no `openai-model` on any answer; `response.model` equalled the requested model on all five, and the bridge has no
+    served-model check (its `modelSubstitution` counts the client's model only);
+  - one `response.metadata` per answer, holding moderation flags: explained (`known._CODEX_SKIPPED_EVENTS`), counted
+    by name only, never read;
+  - function-call arguments arrive only as `response.function_call_arguments.done`, with no deltas: both are ignored
+    and the call is built from `response.output_item.done` (`reducer.IGNORED_EVENTS`; replay fixture
+    `probe-no-deltas.sse`);
+  - no `end_turn` on `response.completed`: the reducer reads an absent key as None
+    (`ccd/codexbridge/reducer.py:469-470`) and so as a finished turn, and only `False` continues (:492-494), so
+    D-6410's continuation is dormant on ordinary answers;
+  - a usage `attribution` block, a per-item partition of `input_tokens` and `output_tokens` keyed by item id: the
+    bridge reads only its four usage fields, so nothing reaches the stats file, but the probe printed the ids (D-7085)
+    and the scrubber refused the recordings (D-7086);
+  - `x-codex-turn-state`, a fresh token on every answer: kept out of the stats file as a token header
+    (`stats.TOKEN_HEADERS`, `ccd/codexbridge/stats.py:81`); Codex echoes it on every request of one turn for sticky
+    routing, and the bridge does not echo it;
+  - three load-balancer and CDN cookies, which the bridge neither keeps nor sends back (`backend.build_headers`);
+  - the edge and policy headers (D-7083).
+- **Why:** Open questions this answered. Tools at top level, `toolu_` ids in the round trip and the trailing developer
+  item: accepted. The cache headers: there are none (`cf-cache-status` is the CDN's); the cache is reported only in
+  the usage body, which the bridge maps. Still open, each with how the 7-day watch observes it and what flips lane-b
+  back:
+  - the `rs_` reasoning id's replay: effort low gave no reasoning, so steps 3 and 6 could replay none. Observed on the
+    first lane-b tool turns at Claude Code's effort: `outcomes.4xx`, the status file's upstream code (now with its
+    request id, D-7084), and the doctor's `itemType` drift; a 4xx on a round trip that names an input or item error
+    flips the lane back;
+  - the order of a mixed turn (reasoning, message, reasoning, call): step 2's reply had no text before its calls.
+    Observed and flipped back exactly as the reasoning id;
+  - a cache hit: step 5's prompt was 28 tokens, below the backend's documented minimum for caching, so both cache
+    fields were 0 and nothing was shown either way. Observed from lane-b's transcripts (`cache_read_input_tokens`,
+    `cache_creation_input_tokens`; the stats file keeps no cache figure). Not a criterion: a persistent zero on long
+    sessions is recorded as drift, not a flip;
+  - the turn-state echo, and keeping the cookies: whether either raises `cached_tokens` is a Stage 3 A/B; the backend
+    served the tool round trip and the same-session repeat without them. No flip trigger;
+  - Cloudflare challenges at volume without the cookies: they would show as a rising `outcomes.4xx` or `5xx` (an HTML
+    or 403 answer). A 5xx rate worse than the baseline's flips the lane back, as step 5 says;
+  - the token endpoint's request id: `ccgpt-auth.py`'s own reader (`ccd/ccgpt-auth.py#_request_id`, :1101-1110) reads
+    `x-request-id`, else `request-id`, and not `x-oai-request-id` (D-7084 changed the bridge's reader only). Whether the
+    token endpoint answers with `x-oai-request-id` alone was not measured: the probe never refreshes. Observed at the
+    watch's first refresh: a successful refresh writes its id to `auth.status.json`'s `lastRequestId`
+    (`_refreshed_fields`, :1450), so a null there after a refresh shows the endpoint sent neither name. Not a
+    flip trigger (an id is a diagnostic), but a credential incident still flips the lane back;
+  - `openai-model` on a safety reroute: no answer of step 2 carried it, and Codex reads it (in the head, or in a
+    `response.metadata` event's `headers`) as the served model when the backend's safety routing serves another
+    model than the one requested. The bridge reads neither, nor `response.model`, and writes the requested model
+    into `message_start`, so a reroute is invisible to Claude Code and to the stats file. Observed in
+    `names.responseHeader.openai-model` (the name is counted; its value is not kept). A count of a served
+    substitution is a spec D3 extension that needs a ruling. No flip trigger.
+- **Cost if wrong:** Five tiny requests on one lane say nothing about volume, long prompts or a moderation block. The
+  printed step outputs carry item ids (D-7085), so they are described here by shape and never quoted. The recordings
+  stay on the box, 0600, until the reviewed corpus change scrubs them (D-7086).
+
+### D-7089 — runbook step 4, the flip, as run
+
+- **Departs from:** runbook step 4 and step 1, twice. Step 4's "`ccrc doctor` keeps the `codex` check green" read
+  WARN, with 21 measured names (no FAIL), and reads so until this change rolls out (D-7083, D-7093). Step 1's "at a
+  quiet time" was applied to the switch itself, as a gap with no request in flight, measured from the connection
+  timers.
+- **What changed:** Nothing in the bridge. The operator gave the go, and the controller switched lane-b to `direct`
+  on 2026-10-27:
+  - the wait: four live sessions kept the lane busy, so no quiet time came. A first watcher waited 30 minutes for
+    45 s with no bytes on the lane's front port and never found one. A second read each connection's `ss -tin`
+    timers, counting a connection busy when it had a request waiting (`lastrcv < lastsnd`: data received after its
+    last send) or had streamed within 3 s, and switched at the first 8 s with none busy: 06:26:03Z, with zero
+    connections open. The gap matters because the switch leaves the port unserved for about 3 s, and the lane allows
+    Claude Code `CLAUDE_CODE_MAX_RETRIES=2`;
+  - the switch: `ccrc codex switch lane-b direct` exited 0 in 2.8 s, printing that the bridge started under systemd
+    and "switched from litellm to direct (shim stopped, litellm stopped)". `ccrc codex status lane-b` then read mode
+    `direct`, auth `ok`, the bridge running under systemd, litellm and the shim stopped. The bridge's unit has been
+    active since 06:26:05Z with no restarts;
+  - the first traffic: three 2xx by 06:27:11Z; 61 2xx and one compaction request by 06:46Z; and at 07:08:37Z
+    (`bridge.stats.json`'s `updatedAt`) `outcomes` read 150 `2xx`, 1 `compactionRequests` and 1 `countTokens`,
+    and at 07:09:52Z 155 `2xx`, with no `4xx` and no `5xx` (counts only);
+  - the doctor: `ccrc doctor` exited 0 with no FAIL. The `codex` check WARNs "the bridge met 21 name(s) it does not
+    know": the 13 `responseHeader` names D-7083 explains, which the box's build predates, and the 8 `betaValue` names
+    of Claude Code 2.1.310's `anthropic-beta` header (D-7093), which the live probe never sends, so step 3 could not
+    see them. No unknown content block type, tool type or other request family appeared. Later, by 07:09:52Z, a
+    ninth beta value was counted once, `token-counting-2024-11-01`, on the lane's first `count_tokens` request
+    (`outcomes.countTokens` 1), which the bridge answers locally (Task 8). It is the 22nd name the check names until
+    this change rolls out; D-7093 explains it.
+- **Why:** The watch (runbook step 5) runs from 2026-10-27 06:26Z to 2026-11-03 06:26Z, against lane-b's own 7 days on
+  `litellm` before it. The flip back, at any failed criterion or at once on a credential incident, is
+  `ccrc codex switch lane-b litellm`.
+- **Cost if wrong:** Until this change is rolled out, the `codex` check's WARN is expected and names only those 22;
+  a 23rd name is new drift. After the rollout, the two tool-change betas (D-7093) still WARN on purpose, so the watch's last criterion ("no unexplained name in the
+  doctor's WARN") reads against those names until the bridge honours the two betas' blocks or the operator rules
+  them out. The 3 s gap was not measured as a failed request: a request that met it would have shown as one Claude
+  Code retry, which no counter here records.
+
+### D-7093 — Claude Code's nine beta values, seven explained and two left open
+
+- **Departs from:** Task 5's `KNOWN["betaValue"]`, which explained `effort-2025-11-24` only.
+- **What changed:** Seven of the nine `anthropic-beta` values Claude Code 2.1.310 sent lane-b after the flip join
+  `KNOWN["betaValue"]` (`ccd/codexbridge/known.py:111-145`), each with a comment saying what it gates and why the
+  bridge need not act; the two tool-change betas are named there as left out on purpose (:128-133). The bridge never
+  forwards a beta upstream (`backend.build_headers`, `ccd/codexbridge/backend.py:160-173`); inbound counts each value
+  as a name (`ccd/codexbridge/inbound.py:550-553`). Sources: Anthropic's documentation
+  (platform.claude.com: beta headers, tool search, mid-conversation system messages, context editing, extended
+  thinking), Claude Code 2.1.310's binary read with `strings` only (its beta table, built as `k(<feature>, <beta>)`,
+  and the code that reads each), this tree's bridge, and lane-b's `bridge.stats.json` `names` (names and counts).
+
+  | beta | what it gates on the Messages API | seen on lane-b | the bridge today | class |
+  |---|---|---|---|---|
+  | `claude-code-20250219` | Claude Code's identity beta (`claude_code` in its table); no request field, block or response shape of its own | on every request | name only | explain |
+  | `interleaved-thinking-2025-05-14` | thinking blocks between tool calls in one assistant turn | the header on every request; no `thinking` field reaches the bridge and no `requestField:thinking-block` was counted | the effort hook pops `thinking` (`ccd/ccgpt-proxy.py:576`); the reducer emits no thinking block; a thinking block sent back is dropped and counted (`inbound.py:375`) | explain |
+  | `context-management-2025-06-27` | `context_management.edits` (`clear_thinking_20251015`, `clear_tool_uses_20250919`) and the response's `context_management.applied_edits` | `contextEdit:clear_thinking_20251015` on every request; no `clear_tool_uses` (Claude Code's tool-result clearing sits behind a client setting whose default is off) | each edit's type counted `contextEdit` (`inbound.py:545-549`), none applied (D-6417, which keeps `clear_tool_uses` unexplained in that family); Claude Code reads `applied_edits` as optional | explain |
+  | `advanced-tool-use-2025-11-20` | tool search (`tool_search` in Claude Code's table): `defer_loading` tools, `tool_reference` blocks, the server tool search tools | `requestField:defer_loading` (972 by 07:09:52Z, over 155 requests); no `unsupportedField` | `defer_loading` counted and the tool sent as an ordinary function (`inbound.py:426-427`); a `tool_reference` in a tool_result sent as `Tool loaded: <name>` (:249); a server tool type refused and counted (:422). Claude Code searches client-side; its binary carries no `input_examples` or `allowed_callers` | explain |
+  | `thinking-display-updates-2026-08-18` | `thinking.display: "updates"`: progress updates as thinking text, reasoning hidden | the header on every message request (not on `count_tokens`) | `thinking` is popped and no thinking block is emitted, so there is nothing to display | explain |
+  | `thinking-token-count-2026-05-13` | a thinking token count in the usage: Claude Code's usage schema reads `output_tokens_details.thinking_tokens` as optional, and drops the beta when a server rejects it (the field is documented on the extended-thinking page, `usage.output_tokens_details.thinking_tokens`, which arrives on the final `message_delta` when streaming; the beta's name is on no public page) | the header on every message request (not on `count_tokens`) | the usage carries the four counts (`reducer.anthropic_usage`, `ccd/codexbridge/reducer.py:102`) and no thinking count | explain |
+  | `mid-conversation-tool-changes-2026-07-01` | `tool_addition` and `tool_removal` blocks, by reference, in a `role: "system"` entry of `messages` | the header on every message request (not on `count_tokens`); the blocks unmeasured until D-7094 rolls out (below) | dropped; counted by name since D-7094 (below) | **needs-code** |
+  | `inline-tools-2026-09-15` | the same blocks, plus a tool defined by value (`tool_addition.tool = {type: "tool_definition", definition}`), the tool absent from `tools` | the header on 110 of the first 179 message requests (by 07:36Z); the blocks unmeasured until D-7094 rolls out | dropped; counted by name since D-7094 (below) | **needs-code** |
+  | `token-counting-2024-11-01` | the token-counting endpoint, `POST /v1/messages/count_tokens` | on the `count_tokens` requests only (5 of 184 by 07:36Z) | answered locally (Task 8, `outcomes.countTokens`); nothing is sent upstream | explain |
+
+  Pin: `server/test/codex-bridge-count-stats.test.ts:299` counts all nine and `effort-2025-11-24`, and expects
+  every name counted and `unexplained.betaValue` to be exactly the two tool-change betas. Row:
+  `"context-management-2025-06-27"` deleted from KNOWN, the case reds (`expected [ …(3) ] to deeply equal [
+  'inline-tools-2026-09-15', …(1) ]`); restored from a copy, sha256 compared OK.
+- **Why:** A beta is a name only for the bridge, so explaining one is right when the shapes it enables either never
+  reach this lane, are answered by the bridge itself, or are already counted by their own family; the seven above
+  are. The two tool-change betas are not, and stay OPEN (needs code, not written here):
+  - the shape: an entry `{"role": "system", "content": [ … ]}` whose blocks are any of a `text`, a `tool_removal`
+    (`tool: {type: "tool_reference", name}`) and a `tool_addition` (`tool` by reference, or, under `inline-tools`, a
+    `tool_definition` carrying a `tools`-style definition), the last block possibly carrying `cache_control`. Claude
+    Code 2.1.310 builds it for tools that arrive or leave mid-conversation (its `[late-tool-additions]` and
+    `[inline-tools]` paths): with `inline-tools`, a late tool is defined by value and NOT declared in `tools`. It
+    falls back to declaring the tool in `tools` (or to its ToolSearch announcement) only when the server rejects the
+    block or the beta, and the bridge rejects neither;
+  - the bridge today: `_Translation.walk` maps a system entry through `_texts` (`ccd/codexbridge/inbound.py:325-343`,
+    :159-166), which keeps text blocks only, so both blocks are dropped; before D-7094 no name was counted, and since it
+    each dropped block's type is (`_count_dropped`, :169-191). Measured in process before D-7094: a
+    system entry holding a text, a `tool_removal`, a by-value `tool_addition` and a by-reference `tool_addition` gave
+    one developer item with the text, a `tools` list unchanged, and no count but `requestField:defer_loading`. An
+    entry with no text gives no item at all;
+  - what goes wrong: a tool defined by value is never offered upstream, so the model cannot call a tool Claude Code
+    believes it offered; a removed tool stays offered, so the model can still call a tool Claude Code withdrew;
+    and before D-7094 nothing counted either, so neither the stats file nor the doctor showed it happening (since
+    D-7094 each block's type is counted and the doctor names it). A by-reference addition is harmless today only
+    because the bridge already offers every `defer_loading` tool up front;
+  - seen on lane-b: unmeasured until D-7094 rolls out. By 07:36Z `mid-conversation-tool-changes` rode all 179 message
+    requests and `inline-tools` 110 of them, but the bridge on the box counts no system-entry block type, so whether
+    any request carried one cannot be read from its stats file. From the rollout on, D-7094 counts each block, and the
+    watch reads `names.requestField` and `unexplained.requestField` for `tool_addition-block`, `tool_removal-block`,
+    `tool_addition-block.tool_reference` and `tool_addition-block.tool_definition` (the by-value case, the one that
+    loses a tool), and the doctor's `codex` WARN names each the day it first arrives;
+  - the remedy needs a ruling: count the block types first (a name, so the doctor can see them; D-7094), then honour them (a
+    definition joins the Responses `tools`, through `cut_name` and the name map; a removal leaves it), or refuse them
+    with a 400 that sends Claude Code down its own fallback, which is unmeasured against the bridge.
+- **Cost if wrong:** Explaining a beta silences only its name: if one of the six starts to gate a shape Claude Code
+  sends here, its own family (a request field, a content block or a context edit) still counts it. The two open
+  betas keep the doctor's `codex` check at WARN after the rollout, on purpose, until the bridge honours their blocks
+  or the operator rules them out.
+
+### D-7094 — the blocks a system entry drops are counted by name
+
+- **Departs from:** D-7093's "the bridge today": a `role: "system"` entry's non-text blocks were "dropped and no name is
+  counted". They are still dropped, and are now counted.
+- **What changed:** `_Translation.walk` passes each system entry's content to `_count_dropped`
+  (`ccd/codexbridge/inbound.py:334`; the function at :169-191, anchor `system-entry-dropped-blocks`), which counts
+  every block other than a `text` as `requestField:<type>-block`, the spelling of `requestField:thinking-block`
+  (:375), and a `tool_addition`'s `tool` type beside it as `requestField:tool_addition-block.<type>`:
+  `tool_reference` by reference, `tool_definition` by value. A block that is not an object, or a type that is not a
+  string, counts `unrecognised` in its place (`unrecognised-block`, `tool_addition-block.unrecognised`). Names only:
+  no tool name, description, schema or text of a block is counted. The names are NOT in `known.KNOWN`, on purpose,
+  so each stays in `unexplained.requestField` and the doctor's drift WARN names it the day it first arrives; the
+  function's docstring and the betas' comment (`ccd/codexbridge/known.py:139-144`) say so. What is sent is byte for
+  byte as before: `_texts` alone still builds the entry's item. Pins, in `server/test/codex-bridge-inbound.test.ts`:
+  - :136: an entry holding a text, a `tool_removal` by reference, a by-value `tool_addition` and a by-reference one
+    counts exactly `tool_removal-block`, `tool_addition-block`, `tool_addition-block.tool_definition`,
+    `tool_addition-block` and `tool_addition-block.tool_reference`; the control, the same entry with its text alone,
+    gives the same request in every field (`cache_key` aside, a fresh anonymous key per request), so the developer
+    item and `tools` are unchanged; no tool name, description, schema key or cache marker of a dropped block appears;
+    and the driver's `known` op shows none of the names explained, with no `requestField` prefix;
+  - :159: an entry with no text counts its blocks (an unknown type, a non-object and a `tool_addition` with no `tool`
+    among them) and still gives no item.
+
+  Row: the `_count_dropped` call deleted from `walk`, both cases red (`expected [] to deeply equal [
+  'tool_removal-block', …(4) ]`, and `…(6)`); restored from a copy, sha256 compared OK. Measured besides, in process
+  against the pre-change `inbound.py`: both entries give an equal NeutralRequest before and after, and only the
+  names differ.
+- **Why:** The watch cannot tell from the stats file whether lane-b ever carries one of these blocks (D-7093), and
+  whether to honour them or refuse them is a ruling that needs that count first. The by-value count separates the
+  case that loses a tool from the harmless by-reference one.
+- **Cost if wrong:** The names appear only after this change rolls out to the fleet box; until then the watch cannot
+  read them, and a request carrying the blocks is invisible exactly as D-7093 says. A block type Claude Code adds
+  later is counted under its own `<type>-block` name and named by the doctor as drift, which is the intent. Counting
+  adds names to `requestField`, bounded by `stats.NAMES_MAX` like every family, and changes no outcome.
+
+### D-7119 — the backend's `keepalive` event is explained
+
+- **Departs from:** `known.py`'s `KNOWN["eventType"]`, which held the reducer's ignored events and the two Codex skips
+  only, and D-7088's list of what the answers showed: step 2's five short requests carried no `keepalive`, which
+  appeared only on real traffic after the flip (4 events in the first 471 message requests on lane-b, counted by name
+  in `bridge.stats.json`, and named by the doctor's `codex` WARN once #1673 rolled out, D-7120).
+- **What changed:** `keepalive` joins `KNOWN["eventType"]` through a set of its own, `_BACKEND_EVENTS`
+  (`ccd/codexbridge/known.py:55-64`, joined at :75), beside `_CODEX_SKIPPED_EVENTS`; its comment says what was
+  measured of the event (its name and count only) and why the bridge need not read it. Nothing else changes: the
+  bridge already reads nothing from the event (`reducer.Reducer.feed` reaches its last arm and only names it,
+  `ccd/codexbridge/reducer.py:247-248`), and its arrival already resets the bridge's idle bound like any parsed
+  event (`server.py#_Request._reduce` sets
+  `last_event` for each, `ccd/codexbridge/server.py:821-822`, against `backend.IDLE_TIMEOUT_S` at :814 and :837).
+  Upstream, re-read at openai/codex `rust-v0.164.0` (`codex-rs/codex-api/src/sse/responses.rs`):
+  `process_responses_event` has no arm for `keepalive`: an event whose data carries `type: "keepalive"` reaches its
+  default arm, which only `debug!`-logs "unhandled responses event" and returns nothing, and a frame named `keepalive`
+  whose data has no `type` fails Codex's parse into `ResponsesStreamEvent` and is skipped. The bridge cannot tell the
+  two shapes apart: it takes an event's type from its data and, failing that, from the SSE `event:` name
+  (`ccd/codexbridge/sse.py:144-146`), and it keeps no payload. Only that file's kind-independent readers
+  (`response_model()` from `headers`, `safety_buffering()`) run on every event, and they would act on a keepalive
+  only through fields nothing has measured it carrying. And `process_sse_with_treatment` bounds every wait with
+  `timeout(idle_timeout, stream.next())`, so any event, a keepalive included, resets Codex's idle timeout too. A code
+  search of openai/codex for `keepalive` finds only websocket, relay and MCP keepalives, nothing on the Responses
+  route. Pins, in `server/test/codex-bridge-count-stats.test.ts`: :263 counts `keepalive` beside the fixture event
+  `response.fx_new_event` (the positive control) and expects both counted and `unexplained.eventType` to hold only the
+  fixture name; :336 pins `keepalive` in the `known` op's `eventType`. Row: `_BACKEND_EVENTS` emptied, the :263 case
+  reds (`expected [ Array(2) ] to deeply equal [ 'response.fx_new_event' ]`); restored from a copy, sha256 compared OK.
+- **Why:** The 7-day watch's last criterion is no unexplained name in the doctor's WARN beyond the two tool-change betas
+  (D-7093). `keepalive` yields no event in Codex and is only named by the bridge, so naming it as drift every day would
+  only hide a real new name behind it.
+- **Cost if wrong:** If a future backend gives `keepalive` a payload that matters, the bridge still reads nothing from
+  it and the doctor no longer names it. The name's count still moves in the stats file's `names.eventType`, so a
+  change in how often it arrives stays readable there.
+
+### D-7120 — the rollout of #1673, as measured
+
+- **Departs from:** D-7089's and D-7093's expectation that after the rollout the doctor's `codex` check names only the
+  two tool-change betas: it named a third, `eventType:keepalive`, which D-7119 explains. And it records what a rollout
+  that changes `ccd/codexbridge/` costs a busy direct lane, which no runbook step said: the update restarts the bridge
+  onto the new tree, and the restart's drain cut one in-flight request.
+- **What changed:** Nothing in the bridge. #1673 (D-7083 to D-7089, D-7093, D-7094) merged at 09:23:19Z on
+  2026-10-27, prerelease v0.0.754. The operator moved the fleet box from the PWA to v0.0.755, which contains it:
+  - the update: its report reads started 10:05:00Z, done 10:06:26Z. It read the bridge stale (the bridge's digest
+    covers every `ccd/codexbridge/*.py`), and lane-b's bridge unit restarted onto the new tree at 10:05:39Z, with no
+    restart since;
+  - the drain: the restart's drain cut ONE in-flight request, counted `drain-cut: 1` in `outcomes` (D-6835's count);
+  - the outcomes since the flip (06:26:05Z), at the stats file's write of 10:33:37Z: 468 `2xx`, 2 `5xx`, 8
+    `compactionRequests`, 35 `countTokens` and 1 `drain-cut`; auth `ok`, mode `direct`. Both 5xx came before the
+    rollout: one upstream `server_is_overloaded` near 08:22Z and one `idle-timeout` (the bridge's own idle bound) near
+    09:10Z. Neither is a credential failure, so neither is the watch's at-once flip trigger;
+  - the doctor: `ccrc doctor` exited 0 with no FAIL. Its `codex` check WARNs "the bridge met 3 name(s) it does not
+    know": `betaValue:inline-tools-2026-09-15` and `betaValue:mid-conversation-tool-changes-2026-07-01` (expected,
+    D-7093) and `eventType:keepalive`, seen 4 times (D-7119). The 13 header names and 7 betas D-7083 and D-7093
+    explain are gone from it;
+  - D-7094's first reading: by 10:33:37Z no `requestField:*-block` and no `*tool_addition-block.*` name was counted,
+    so no request since the restart carried a `tool_addition` or `tool_removal` block. Since the flip the
+    `inline-tools` beta rode 172 of the 471 message requests and `mid-conversation-tool-changes` all 471.
+- **Why:** The watch reads against the build the box runs. From 10:05:39Z that build explains the headers and seven
+  betas and counts the dropped system-entry blocks, so its drift row is the watch's reading from here on.
+- **Cost if wrong:** Zero blocks in the first window, about half an hour of traffic, is not evidence that Claude Code
+  never sends them: the watch keeps reading `names.requestField` for them to its end. One drain-cut is one request
+  on one restart; a busier lane or a longer response at the restart could cut more, each answered 503 or cut short
+  and left to Claude Code's retry. And the two 5xx are counts with their codes, not a rate: the watch compares the
+  week's 5xx rate against lane-b's `litellm` baseline, not these two.
+
+### D-7143 — the tool-change blocks of a system entry are honoured
+
+- **Departs from:** D-7093's "needs-code" for `mid-conversation-tool-changes-2026-07-01` and `inline-tools-2026-09-15`,
+  and D-7094's "the names are NOT in `known.KNOWN`, on purpose": a system entry's `tool_addition` and `tool_removal`
+  blocks were dropped, so a tool added by value was never offered upstream and a removed tool stayed offered.
+- **What changed:** The controller's ruling (2026-10-27): honour the blocks. The tools offered upstream are the ones
+  Claude Code holds at the end of the conversation: the request's `tools`, then each system entry's blocks folded in
+  message order (`ccd/codexbridge/inbound.py:22-25`, the module docstring's THE TOOLS).
+  - The shapes, read from Claude Code 2.1.310's binary with `strings` only. Its system-entry builder emits a `text`
+    block when it has one, then each removal as `{type: "tool_removal", tool: {type: "tool_reference", name}}`, then
+    each addition as `{type: "tool_addition", tool: {type: "tool_reference", name}}` or, under `inline-tools`, as
+    `{type: "tool_addition", tool: {type: "tool_definition", definition}}`, with `cache_control` on the last of those
+    blocks, and a suffix text (its `ephemeralSuffix`) can follow them; `_texts` reads every text in order. The SDK's
+    tool runner builds the same blocks, a definition being the tool object with its `run`, `parse` and `close` keys
+    stripped. Its fold reads each block's name (a reference's `name`, a definition's `definition.name`) and, in order,
+    deletes it for a removal and adds it for an addition. It reads a reference's `name` only: `tool_name` is the
+    field of a tool_result's reference (its ToolSearch result), never written in a system entry, so the bridge reads
+    `name` only too.
+  - One per-tool helper: `_tool` (`inbound.py:490-510`) is `_tools`'s former loop body (the `_CUSTOM_TOOL_TYPES`
+    check and `_unsupported` for a server tool, the `_malformed` refusals, `defer_loading` counted,
+    `DeferredToolPlaceholder` skipped, `cut_name`, the `strict: False` function shape), and `_tools` (:519-532) and the
+    fold both call it; `_required` (:513-516) computes `tools_required` from a final list for both.
+  - The record: `_Translation.walk` keeps a system entry's text handling and `_count_dropped`'s counts as they were,
+    and adds `_tool_changes`'s reading of the entry to `self.tool_changes` (:415; the list at :358). `_tool_changes`
+    (:236-270) returns each block in order as a `_ToolChange` (:208-215): an addition by reference or by value, or a
+    removal by reference.
+  - The fold: `from_anthropic` calls `_fold_tool_changes` (:535-573) after the walk (:698). A by-value addition goes
+    through `_tool`, and its tool replaces one of the same cut name in place, or is appended; a by-reference addition
+    of a name not offered re-offers the latest definition of that name (from `tools` or an earlier by-value addition),
+    and of a name neither holds is counted `requestField:tool_addition-block.unknown-reference`
+    (`UNKNOWN_REFERENCE`, :59) and changes nothing; a name already offered changes nothing; a removal drops the name.
+    `name_map` only gains names, so a `function_call` in the history to a removed tool still maps back, and replay of
+    earlier turns is unchanged. With no block the fold returns `_tools`'s list and required set as they were.
+  - The malformed-block rule: a tool-change block the bridge cannot read is refused (`_tool_change_refused`,
+    :228-233, a 400 whose text begins `a tool_addition/tool_removal block:`), EXCEPT where `_count_dropped` already
+    counts it `unrecognised`: a `tool_addition` whose `tool` is not an object or has no string type adds nothing and
+    is passed over, its
+    `tool_addition-block.unrecognised` count left unexplained for the doctor. So a `tool_addition` whose tool has an
+    unknown type, a `tool_reference` with no name, and a `tool_removal` with no tool or a tool other than a reference
+    are each a 400, and a by-value definition fails the checks a `tools` entry does (no name, not an object, or a
+    server tool's `_unsupported`, still counted `unsupportedField`), its refusal re-worded the same way. Every such
+    refusal names `tool_addition` on purpose: Claude Code 2.1.310's retry handler reads a 400 naming it, under its
+    tool-change betas, as the server rejecting the blocks, and sends the conversation again without them and with
+    both betas off until `/clear` or `/compact` (read from the binary; not yet measured against the bridge). A
+    refusal without the word gets no such recovery, and the same history is refused again. A removal is never passed
+    over: skipped, it would leave a removed tool offered.
+    A block that is not an object or has no type is no tool-change block, counted `unrecognised-block` and passed
+    over as before.
+  - The names: `KNOWN["requestField"]` explains `tool_removal-block`, `tool_addition-block`,
+    `tool_addition-block.tool_reference` and `tool_addition-block.tool_definition` (`ccd/codexbridge/known.py:76-86`),
+    and `KNOWN["betaValue"]` the two betas (:152-159), whose "NOT HERE, ON PURPOSE (D-7093)" comment they replace.
+    `unrecognised`, any other block or tool type and the unknown-reference name stay unexplained (:84-86, and the
+    module docstring's NOT HERE list, :29-33), so the doctor still names a shape the bridge does not handle.
+  - The measured trigger: lane-a switched to `direct` at 12:32Z on 2026-10-27 (D-7144), and in its first 14 message
+    requests the bridge counted `requestField:tool_addition-block` 1 and `tool_addition-block.tool_definition` 1: a
+    tool added by value, the case that loses a tool. The `inline-tools` beta rode all 14 there; on lane-b it rode 172
+    of 471 and no block was counted.
+
+  Pins, in `server/test/codex-bridge-inbound.test.ts`, each request in Claude Code's shape with synthetic tool names:
+  :417 a by-value addition offered with its schema, cut name and name-map entry, and `countable_bytes` over the
+  folded list; :438 a by-value addition replacing a same-named `tools` entry in place; :450 a by-reference addition
+  of an offered tool, deferred or not, giving the same request as none; :461 a by-reference addition of an unknown
+  name counted and changing nothing; :473 a removal dropping the tool and its required entry, the history's call to
+  it unchanged and still mapped; :493 a removal then a re-addition (by reference and by value) bringing it back;
+  :506 a tool named over the cut limit, removed and re-added by its full name (the match is by cut name); :532 a
+  suffix text after the tool blocks, kept in the developer item in order; :540 an addition then a removal leaving it
+  gone; :558 the malformed-block rule, case by case, every refusal's text pinned to name `tool_addition` (a
+  `tool_name`-only reference among them);
+  :603 the control, a request with no block, pinned field by field. D-7094's two cases (:141, :167) keep their
+  counts, followed by the new unknown-reference count for their by-reference `ToolFx3`, which nothing offers; their
+  assertion that what is sent is unchanged now reads the by-value `ToolFx2` offered. In
+  `server/test/codex-bridge-count-stats.test.ts`, :314 counts the nine betas and expects `unexplained.betaValue`
+  absent, and :336 counts the four honoured names beside five open ones and expects only the five unexplained.
+  Rows, each restored from a saved copy with sha256 compared: the fold call deleted, codex-bridge-inbound 9 red, the
+  by-value case among them (`expected [ { …(5) } ] to deeply equal [ { type: 'function', …(4) }, …(2) ]`); the
+  removal arm made a no-op, the three removal cases red; the fold's match by full rather than cut name
+  (`cut = change.name`), the over-the-limit case red; `inline-tools-2026-09-15` deleted from KNOWN, the beta case
+  red (`expected [ 'inline-tools-2026-09-15' ] to be undefined`).
+- **Why:** The model is told, through the ToolSearch result's `Tool loaded: <name>` text, that a tool is loaded; a tool
+  added by value but never offered cannot then be called, and a withdrawn tool can. Folding by Claude Code's own rule
+  makes the upstream's tools what the client believes it offered. Passing over an addition with no typed tool keeps
+  D-7094's counted case answering as before, and costs nothing, since such a block adds nothing.
+- **Cost if wrong:** A backend that refuses a `function_call` in the input whose tool is no longer offered would turn
+  every request after a removal into an error; the bridge keeps the history as sent, so that would show as a new
+  upstream 4xx after the first removal, not as a silent loss. A definition shape Claude Code changes (a new tool type,
+  a renamed key) is refused as a 400 under the rule above, which Claude Code answers by dropping the blocks and both
+  betas for the rest of the conversation: the session keeps working, its late tools no longer added mid-conversation,
+  and the doctor names the new type the day it is counted. If a later Claude Code stops matching `tool_addition` in
+  a refusal, that recovery is lost and the same history is refused again. A tool removed and then called by the
+  model regardless is the model's error, answered by Claude Code as an unknown tool.
+
+### D-7144 — lane-a switched to `direct`, as measured
+
+- **Departs from:** the runbook's order (step 7: lane-a only after lane-b's 7-day watch). The operator ruled the
+  switch at about 12:25Z on 2026-10-27, about six hours into lane-b's watch.
+- **What changed:** Nothing in the tree. Measured on the fleet box:
+  - the watcher (the D-7089 method: 8 s with no request pending or streaming on lane-a's front port) started at
+    12:26:19Z and switched at 12:32:04Z;
+  - `ccrc codex switch lane-a direct` exited 0 in 17.8 s (lane-b's took 2.8 s): the shim stopped at 12:32:07.49Z,
+    LiteLLM at 12:32:10.17Z, and the bridge's unit started at 12:32:22.08Z, so the port went unserved for about
+    14.6 s, while the box's load was about 70 to 83. Which step took the 12 s between LiteLLM's stop and the bridge's
+    start was not measured;
+  - no API error appeared in any of lane-a's session transcripts after 12:31Z;
+  - the bridge renewed lane-a's credential at 12:33:22Z, about a minute after it started, as lane-b's did. LiteLLM had
+    never renewed it (`lastRefreshAt` null), and it was due to expire at 18:46Z that day;
+  - the first outcomes: 45 `2xx`, 2 compaction requests and 5 `countTokens` by 12:50Z, with no `4xx` or `5xx`;
+  - the unexplained names in lane-a's stats file by 12:36Z: the two tool-change betas and the two by-value block names
+    (`requestField:tool_addition-block` and `tool_addition-block.tool_definition`), which D-7143 now explains.
+- **Why:** The operator's ruling (about 12:25Z). What was measured around it: lane-a's credential had not been
+  renewed while it ran on LiteLLM (`lastRefreshAt` null) and was due to expire at 18:46Z; the bridge renewed it at
+  12:33:22Z.
+- **Cost if wrong:** This does not show that lane-a is as healthy as lane-b: its watch is hours, not a week, and its
+  first window carried a by-value tool addition the bridge then dropped (D-7143). The unserved gap grows with the
+  box's load, and Claude Code meets it with `CLAUDE_CODE_MAX_RETRIES=2`: a longer gap under heavier load could exhaust
+  those retries for a request sent inside it. The flip back is `ccrc codex switch lane-a litellm`.
+
+### D-7676 — the reasoning store is checked at start, and a damaged store is set aside and started fresh
+
+- **Departs from:** Task 4's "THE STORE NEVER FAILS A REQUEST" as built: any exception inside the store disabled it
+  for the life of the process, so a store that was already damaged when the bridge started was disabled at its first
+  write and every request after it was answered without the model's earlier reasoning replayed, until someone
+  restarted the bridge on a repaired file. Nothing in the plan checked the file at start.
+- **What changed:** `ReasoningStore.__init__` (`ccd/codexbridge/store.py`), once the file is created and the schema
+  ensured on the constructing thread, runs `PRAGMA integrity_check` on that connection when the store is not disabled
+  and its `user_version` is `USER_VERSION`; healthy is exactly one row, `ok`. Damage is an `integrity_check` answer
+  other than that, or an `sqlite3.DatabaseError` whose class is exactly `sqlite3.DatabaseError` (never a subclass)
+  raised while opening, reading `user_version`, ensuring the schema or checking. `OperationalError` (locked, busy, I/O,
+  read-only), `IntegrityError` and every other subclass keep the old behaviour: the store is disabled as `store:<class
+  name>` and the file is left as it is. A newer store (`store:newer-version`) is never checked and never touched. A
+  damaged store is set aside: the constructing thread's connection is closed without a checkpoint (so, on Python 3.12
+  and later, a damaged WAL is never folded into the copy; an older Python's close may checkpoint the damaged WAL into
+  the copy, which stays openable but has no separate `-wal`), the file is renamed to `<path>.damaged-<UTC stamp
+  YYYYmmddTHHMMSSZ>` and its `-wal` and `-shm`, when present, to the same name with those suffixes, so the copy stays
+  openable as one database and no damaged WAL is left at `<path>-wal` for the fresh store; only then every older copy in
+  the directory, with its siblings, is removed (a failed removal is ignored), and the fresh store is made by the first
+  start's own path (`_create`, then `_conn`). The set-aside is reported once to the store's callback as
+  `store:set-aside`, with what was found (`integrity-check` or the exception class name) and the copy's basename. A
+  set-aside that cannot finish (a rename's `OSError`, the fresh store failing) disables the store as
+  `store:set-aside-failed`; when the file had already been renamed, that one report also carries what was found and the
+  copy's basename (D-7677 records them in `setAside`), so the copy is never left unnamed. Nothing raises, and nothing
+  else changes at runtime: a failure after the start still disables the store for the process, and the next start's
+  check is what repairs a store damaged while running.
+  - `integrity_check`, not `quick_check` (fix round 1, from a held-out review): `quick_check` counts an index's
+    entries but never compares them with the table. A torn copy whose table page is from after an `INSERT OR REPLACE`
+    (the store's own write: the row is deleted and inserted under a new rowid, so the count is unchanged) and whose
+    primary-key index page is from before it passes `quick_check` as `ok`; the first `get` of that key then raises
+    exactly `sqlite3.DatabaseError` (`database disk image is malformed`), the store is disabled for the process, and
+    every restart repeats it without setting it aside. `integrity_check` reports it (`row N missing from index
+    sqlite_autoindex_reasoning_1`). Measured on both lanes' live stores (45 and 54 MB, warm cache): `quick_check` 9 to
+    12 ms, `integrity_check` 10 to 13 ms.
+  - The classes, measured on the fixtures (Python 3.14.4, sqlite 3.46.1): a file whose bytes are not sqlite's raises
+    exactly `sqlite3.DatabaseError` (`file is not a database`) at `PRAGMA user_version`; a torn primary-key index (the
+    index page written back as it stood before three later rows) raises nothing at `user_version` or at either check,
+    which answers it in rows (`quick_check` exactly `wrong # of entries in index sqlite_autoindex_reasoning_1`, the
+    incident's text); the equal-count tear above raises nothing, `quick_check` answers `ok` and `integrity_check`
+    answers rows naming the row missing from the index; an index page filled with 0xff raises nothing at
+    `user_version` or at `quick_check`, which answers it in rows, while `integrity_check` raises exactly
+    `sqlite3.DatabaseError`, which the start reads as damage too (`found` is then `DatabaseError`); a store another
+    connection holds exclusively raises `sqlite3.OperationalError` (`database is locked`).
+  - The close before the renames passes `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE` (Python 3.12's `setconfig`, when present;
+    below 3.12 the close may checkpoint, see Cost if wrong): measured, a plain last close checkpoints a damaged store's
+    WAL into the file and deletes it, so the copy would lose its WAL. A connection `_conn` refuses is closed the same
+    way. With the WAL left at `<path>-wal` instead, sqlite deletes it when the fresh, empty file is first opened
+    (measured), so the row is never replayed, but the copy loses it.
+  - One write the order leaves: `_conn`'s `PRAGMA journal_mode = WAL` runs before the check, so a damaged store in
+    rollback-journal mode is switched to WAL (its header written) before it is set aside.
+
+  Pins, in `server/test/codex-bridge-store.test.ts`'s "the start check" block: CONTROL (a healthy store with a row
+  survives a restart, no copy, the entry `ok`); NOT A DATABASE (set aside, the copy 0600 from a 0644 plant and byte for
+  byte the planted file, the fresh store serving, `store:set-aside` counted once, `found` the measured class);
+  DAMAGED INDEX OR PAGE (both shapes set aside, `found` `integrity-check` for the stale index and `DatabaseError` for
+  the 0xff page, their rows not answered); EQUAL COUNT (the equal-count tear: `quick_check` `ok`, `integrity_check`
+  not; set aside with `found` `integrity-check`, the fresh store serving); the WAL case (the copy's `-wal` is the
+  damaged one's byte for byte, and the copy with it still answers the row; the fresh store not answering it is
+  sqlite's own doing, which deletes a WAL left beside a 0-byte database at its first open, and the case says so);
+  RETENTION (two damaged starts, an older copy and a stray sibling planted: only the newest copy is left, and two
+  names outside the shape stay); LOCKED (`store:OperationalError`, no copy, the file's inode and bytes unchanged);
+  SET-ASIDE FAILS (the first `os.rename` fails with EACCES: `store:set-aside-failed`, the request still built, the
+  file unchanged, `setAside` null); SET-ASIDE FAILS AFTER ITS RENAMES (the fresh store's `os.open` fails: disabled as
+  `store:set-aside-failed`, the entry's `setAside` naming the copy and `found`). The WAL case and RETENTION skip only
+  on a measured python3 below 3.12 (the driver's `store-caps` op answers its `sys.version_info[:2]` beside
+  `noCkptClose`), since their fixture's WAL is checkpointed there; fix round 2: a probe that failed (an import failure,
+  a timeout, a renamed op) skips nothing, and "the capability probe answers" (a case of its own, run wherever python3
+  runs) is red unless the probe line exists, did not raise, names the version, and says `noCkptClose` on 3.12 and
+  later. DAMAGED INDEX OR PAGE takes the 0xff page's expected `found` from the probe (`raised`, else
+  `integrity-check`), as NOT A DATABASE does, since which SQLite raises there is that SQLite's choice; its pin on the
+  page is that `integrity_check` did not answer `ok`. The newer-version case also checks that no copy is made. Rows, each restored
+  from a saved copy with sha256 compared: the check's call replaced by an `ok` answer, DAMAGED INDEX OR PAGE, the WAL
+  case and RETENTION red (`stale-index: expected { items: [], phase: null } to be null`); `integrity_check` swapped
+  back to `quick_check`, EQUAL COUNT red (`expected 'store:DatabaseError' to be null`) and DAMAGED INDEX OR PAGE red
+  on the 0xff page's `found` (the stale index stays green: `quick_check` sees its count); the failed set-aside's
+  detail dropped, SET-ASIDE FAILS AFTER ITS RENAMES red (`expected null to deeply equal { Object (at, found, ...)
+  }`); the driver made to report no no-checkpoint close, the WAL case and RETENTION skipped and the other 24 green
+  (fix round 2: now the capability case red, `{"noCkptClose":false,"op":"store-caps","python":[3,14]}: expected false
+  to be true`, and the WAL case and RETENTION run; the op renamed, the capability case red and neither skipped);
+  the exact-class test
+  widened to every `DatabaseError`, LOCKED red (`expected null to be 'store:OperationalError'`); the sibling renames
+  skipped, the WAL case and RETENTION red; the retention call removed, RETENTION red (`expected [ …(2) ] to have a
+  length of 1 but got 2`); the unchecked close made a plain close, the WAL case and RETENTION red; the set-aside's own
+  reason replaced by a re-raise, SET-ASIDE FAILS red (`expected 'store:PermissionError' to be
+  'store:set-aside-failed'`).
+
+  Fix round 3 (a final held-out review): removing the lane reaps the copy. `_codex_reap_files` (`ccd/ccrc`) removed
+  lane.json's store with its `-wal`/`-shm` but no `<store>.damaged-<stamp>` copy, so the lane directory outlived a
+  removed account holding that account's encrypted reasoning. The `runtime.env.tmp.*` glob line now also globs the
+  copy's exact shape, `<store>.damaged-` + 8 digits + `T` + 6 digits + `Z` with `-wal`, `-shm` or neither, keyed on
+  the store's own name from lane.json and only once that name passed the bare-name check (never a bare
+  `*.damaged-*`), with the same `rm -f` and `lane-unwritable` handling; `ccd/ccrc` is 27695 lines before and after.
+  Pins: in `server/test/ccrc-codex-bridge.test.ts`, "removal reaps the store's set-aside copy with its -wal and -shm,
+  and leaves a look-alike" (the copy and both siblings reaped and the directory removed; another file's copy, a short
+  stamp, a suffix, a prefix and a bare `reasoning.sqlite.damaged-` all left); and, end to end through the driver, in
+  `server/test/ccrc-doctor-codex.test.ts`'s store row block, "a copy the store itself set aside is named by the WARN
+  and reaped with the lane": a real set-aside (`store-damage` `not-a-database`, then a store open with the stats
+  callback and a forced flush) makes the copy under store.py's DAMAGED_STAMP, the doctor's WARN names it with the
+  probe's `found`, and `_codex_reap_files` removes it and the directory, so a change of that stamp the doctor and the
+  reap do not follow reds it. Rows, each restored from a saved copy with sha256 compared: the copy's glob made never to
+  fire, the reap case red (the copy and both siblings left); the glob keyed on any prefix, the reap case red (three
+  look-alikes reaped). The end-to-end case, with the previous doctor and `ccd/ccrc` swapped in, was red at the reap
+  (the copy left). DAMAGED INDEX OR PAGE pins, for the stale index, `integrity_check`'s rows naming
+  `sqlite_autoindex_reasoning_1`; for the 0xff page only that `integrity_check` did not answer exactly `ok`. It no
+  longer pins `quick_check` for either: the pull request's first CI run, on the Linux runner's SQLite, answered `ok`
+  to `quick_check` on the stale index (and on the WAL case's), while `integrity_check` named the index, so whether
+  `quick_check` counts an index's entries depends on the SQLite. That is a second, measured reason for the start
+  check to run `integrity_check`: on that SQLite, `quick_check` would have missed the incident's own shape.
+- **Why:** On 2026-10-28 the fleet box moved to a new machine and each lane's directory was carried over with its
+  `reasoning.sqlite`. Both lanes' stores arrived damaged: `PRAGMA quick_check` on them as they stood answered
+  `wrong # of entries in index sqlite_autoindex_reasoning_1`, a torn primary-key index, which fits a live sqlite file
+  copied while it was being written (how it was copied was not measured). Each bridge started on its damaged store,
+  met an `sqlite3.DatabaseError` at its first write and disabled its store; both lanes then ran for about six hours
+  with no reasoning replayed, until both bridges were restarted by hand on a hand-repaired store. `quick_check` on the
+  live stores (47 to 55 MB) took 8 to 10 ms, and `integrity_check` 10 to 13 ms on the 45 and 54 MB stores, so the
+  check costs nothing a start notices. The store holds only replay
+  material, so starting it fresh loses nothing a request needs; the one copy is kept for the operator to read.
+  The subclasses are left out because each names a condition of the moment (a lock another process holds, an I/O
+  error, a read-only file), not of the file, and setting aside a healthy store behind a lock would discard it.
+- **Cost if wrong:** A store that `integrity_check` passes but that fails at its first write is still disabled for
+  the process, as before (the stats entry of D-7677 says so). A store damaged in a way sqlite reports only as a subclass
+  (an I/O error on a bad sector, say) is never set aside, and stays disabled at every start until it is repaired by
+  hand. A damaged store that is set aside loses its replay rows: the requests after the start replay nothing older
+  than the start, which is what a disabled store gave anyway. Keeping one copy bounds the disk to one store's size
+  beside the live one. On Python below 3.12 the close before the renames may checkpoint the damaged WAL into the copy:
+  the copy stays openable but has no separate `-wal`, and what the WAL held is folded into a file already damaged.
+  A set-aside whose renames succeeded but whose fresh store failed leaves the copy, named in the stats entry; the next
+  start makes a fresh store at the path, so that copy stays until a later set-aside replaces it.
+
+### D-7677 — the store's state for this process is written to the stats file
+
+- **Departs from:** Task 5's "THE FILE, VERSION 1", which had no field for the store: a disabled store was counted
+  only in the cumulative `outcomes` (`store:<class name>`), which a reader cannot tell from a disable that happened
+  days ago in another process.
+- **What changed:** The stats document (still version 1: the field is additive) gains `"store": {"state": "ok" |
+  "set-aside" | "disabled", "reason", "at", "setAside": null | {"at", "found", "file"}}`
+  (`ccd/codexbridge/stats.py`). It describes this process only: it is reset to `{"state": "ok", "reason": null,
+  "at": null, "setAside": null}` at construction and never carried from a loaded file, unlike `outcomes`, which stay
+  cumulative. `disabled` outranks `set-aside` in `state` when both happen (a fresh store that later failed), and
+  `setAside` keeps its record. One writer, `Stats.store_event(reason, found=None, file=None)`, sets the entry and
+  counts `reason` in `outcomes` as `outcome()` does; `serve()` (`ccd/codexbridge/server.py`) passes it to the
+  `ReasoningStore` as its callback, and forces a stats flush after the store is built and before the server binds
+  its port, so the file describes this process from its first moment. A reader of an older file finds no `store`
+  key, which means the bridge predates the entry, never `ok`. The doctor's row that reads the entry landed in this pull
+  request (below). `file` is kept only as a basename (a value
+  with a `/` is `unrecognised`), since NAME_RE alone admits a path. Fix round 1: `store_event` makes the next flush
+  write at once, whatever `FLUSH_S` says (the one-shot a failed write already used), so a store disabled at the first
+  request is written at the next flush, which is that request's own unless another write is in flight, then the next
+  one's (an unforced flush that finds the write lock held returns before it reads the one-shot; nothing is lost), not
+  `FLUSH_S` later behind the pre-bind flush's time; the one-shot is cleared
+  when a flush serialises the document, never after its write, so an event made while a write is in flight survives
+  it. A `store:set-aside-failed` that names a copy (D-7676) records `setAside` (`at`, `found`, `file`) while `state`
+  is `disabled`.
+
+  Pins, in `server/test/codex-bridge-count-stats.test.ts`'s "the store entry" block: the entry reset at construction
+  while a planted file's outcomes are carried; a set-aside recorded and counted through `store_event`; `disabled`
+  outranking `set-aside` in either order with `setAside` kept; a `found` or `file` outside the bounds written
+  `unrecognised`; a failed set-aside naming its copy (`disabled`, `setAside` recorded); a store event making the next
+  unforced flush write inside `FLUSH_S` while a plain count does not; an event made during a write in flight still
+  making the next unforced flush write; and the first stats-file case's key list now holding `store`. In
+  `server/test/codex-bridge-server.test.ts`, "the stats file describes this process before its first request": a healthy
+  start and a damaged one, each reading the file before any request, and a store disabled at the first request (a file
+  swapped in under it: `store:replaced`) in the file right after that request with `FLUSH_S` at 600. Rows, each restored
+  from a saved copy with sha256 compared: the one-shot removed from `store_event`, the server case red (`expected { at:
+  null, reason: null, …(2) } to match object { state: 'disabled', …(2) }`) and both flush cases red (`expected false to
+  be true`); the one-shot cleared after the write instead, the in-flight case red; the failed set-aside's `setAside`
+  dropped, the failed set-aside case red; the entry dropped from the constructor, five stats cases red; the loaded entry
+  carried in `_load`, the reset case red; the outranking guard removed, the either-order case red (`disabled-first`);
+  the basename guard removed, the bounds case red; the pre-bind flush removed, both pre-bind server cases red (`expected
+  '2026-01-01T00:00:00.000Z' not to be '2026-01-01T00:00:00.000Z'`).
+
+  The doctor's store row (`ccd/ccrc-doctor-checks`, `_dr_cx_store`), called from `_dr_cx_lane` beside the drift row
+  and, like it, on a `direct` lane only. It reads the stats file through `_dr_cx_stats_read`, the one reader the drift
+  row now shares (lane.json's `bridgeFiles.stats`, a regular file and not a symlink, at most READ_MAX), and bounds
+  every value it prints through `_dr_cx_bound`, whose `name_re` is stats.py's NAME_RE (the existing pin now reads it
+  there), else `unrecognised`. No `store` key, an `ok` entry, or a file the reader cannot read as the bridge's (the
+  drift row's unmeasured WARN names that) is no line. `disabled` is a WARN: "the bridge's reasoning store is switched
+  off for the rest of its last process (<reason>, since <at>): every request that process answers is answered without
+  the model's earlier reasoning replayed", adding "; at its start it had set its damaged store (<found>) aside as
+  <file>" when the entry carries a `setAside` record, and "(names only, never content)". Its remedy is `ccrc codex
+  stop <id>`, then `ccrc codex start <id>` (the start alone when the bridge is not running): the stop drains the bridge
+  (a request in flight gets DRAIN_S to finish, one still open then is cut with an error Claude Code sends again), the
+  start's check sets a damaged store aside, and the line clears when the new process writes its entry, before it binds
+  its port. `set-aside` is a WARN only while the copy `setAside.file` names is in the lane directory: "at its start the
+  bridge found its reasoning store damaged (<found>) and set it aside as <file>, starting a fresh store; only the
+  model's earlier reasoning was lost", with the remedy to read the copy if needed and delete it with its `-wal` and
+  `-shm`, which clears the line. The copy is checked only when its name is a bare name in store.py's shape
+  (`<name>.damaged-<YYYYmmddTHHMMSSZ>`); any other value is `unrecognised` and checks nothing. Whether the bridge runs
+  is not measured for this row: it is asked before `_dr_cx_tiers` measures the tiers, and asking it there would be new
+  I/O, so the WARN names the LAST process, the one that wrote the file, and holds for a stopped bridge until its next
+  start. Pins, in `server/test/ccrc-doctor-codex.test.ts`'s "the store row (D-7677)" block, each file written by the
+  real `Stats` through the driver unless named: no `store` key (planted by removing it) and `ok`, no line; `disabled`,
+  the WARN with its reason and time; a `store:set-aside-failed` naming its copy, the WARN naming it; `set-aside` with
+  the copy present, the WARN, then no line once the copy is deleted; a litellm lane with a `disabled` entry, no line,
+  beside a direct lane that warns; and hand-planted values outside the bound, each `unrecognised` with no byte of them
+  printed, and a set-aside naming a path, no line. Rows, each restored from a saved copy with sha256 compared: the
+  row's call removed from `_dr_cx_lane`, five cases red (the `disabled`, failed set-aside, set-aside, litellm and bounds
+  cases); the copy-exists test removed, the set-aside case red at the deleted copy; the bound removed, the bounds case
+  red.
+
+  Fix round 2: `ccrc codex status <id> --json` (`ccd/ccrc`, `_codex_cmd_status`) projects the entry as `bridge.store`,
+  `null` when the file has no `store` key (a bridge that predates it, never `ok`), on the projection's existing line.
+  Pins, in `server/test/ccrc-codex-bridge.test.ts`: "status --json names the mode and the bridge's stats" now expects
+  `store: null` in its exact `bridge` object (its file has no entry), and "status --json names the stats file's store
+  entry under bridge.store" reads a planted `disabled` entry with a `setAside` record back unchanged, then `null` with
+  the key removed. Row, restored from a saved copy with sha256 compared: the projection's `store` removed, both cases
+  red (`expected { …(5) } to deeply equal { …(6) }`; `expected undefined to deeply equal { state: 'disabled', …(3) }`).
+
+  Fix round 3 (a final held-out review), replacing the `set-aside` arm above: the entry is per process, so a restart
+  wrote `ok` and cleared the copy's WARN while the copy stayed. The row now finds the copy ON DISK, whatever the entry
+  says: a regular file, never a symlink, in the lane directory named `<store>.damaged-<8 digits>T<6 digits>Z`, keyed on
+  lane.json's `bridgeFiles.store` (a bare name, else no copy is looked for), its `-wal`/`-shm` not counted, the newest
+  such name the one named. While one exists the row WARNs, with the same remedy: "at its start the bridge found its
+  reasoning store damaged (<found>) and set it aside as <copy>, …" when the entry's `setAside.file` is that copy, else
+  "at an earlier start the bridge set a damaged reasoning store aside as <copy>, and the copy is still in the lane
+  directory (what was found is not in the stats file, whose entry describes only the bridge's last process); only the
+  model's earlier reasoning was lost." The `disabled` WARN stays entry-driven, and a stats file that is absent or
+  unreadable as the bridge's is still no line. `store:newer-version` has its own remedy: a newer build wrote the store
+  and a restart does not change it, so run that build again (`ccrc update --to <its version>`, or `ccrc rollout --to
+  <its version>`), or stop the lane, move the store and its `-wal`/`-shm` aside by hand, and start it again. Pins, in
+  the store row block: "a store a newer build wrote warns as disabled, and its remedy is that build, never a restart";
+  "a copy still in the lane directory after a restart warns, though the entry reads ok" (an older copy and the newest
+  copy's `-wal`/`-shm` planted beside it: the newest is named, once; no line once they are deleted); "a look-alike that
+  is not the store's copy, or a symlink of its shape, has no store row" (another file's copy, `bridge.stats.json`'s
+  included, short stamps, a suffix, a prefix, and a symlink at the copy's own name); the set-aside case above, whose
+  entry names the copy, keeps its `found`; and the end-to-end case of D-7676's fix round 3. With the previous doctor
+  and `ccd/ccrc` swapped in, the newer-version, restart and end-to-end cases were red. Rows, each restored from a saved copy with
+  sha256 compared: the on-disk look removed, the set-aside, restart and end-to-end cases red; the store-name key
+  replaced by any prefix, the look-alike case red; the symlink test removed, the look-alike case red; the
+  newer-version special case removed, the newer-version case red (`expected '  remedy: restart the lane\'s bridge …'
+  to be '  remedy: a newer build of the bridge…'`).
+
+  Fix round 4 (a re-review), replacing fix round 3's two copy-line forms: the copy line printed under a `disabled`
+  entry said "starting a fresh store" and "nothing to repair: the bridge serves from its fresh store" beneath the
+  `disabled` WARN, whose remedy is a restart. A `store:set-aside-failed` that names its copy always has that copy on
+  disk (store.py names it only after its rename succeeded), so that case printed both lines, and its pin, which never
+  planted the copy, checked one. The descriptive form, with its "nothing to repair" remedy, is now printed only when
+  the entry's `state` is `set-aside` and its `setAside.file` is that copy. Every other case (an `ok` entry after a
+  restart, `disabled`, an entry naming another file) gets the NEUTRAL line: "a set-aside copy of the lane's reasoning
+  store, <copy>, is in the lane directory", adding " (set aside at a start that found the store damaged: <found>)"
+  when the entry's `setAside.file` is that copy and "; the line above names the store's own repair" under `disabled`;
+  its remedy is to read the copy if the damage needs explaining, then delete it with its `-wal` and `-shm`, which
+  clears the line. It never says the bridge serves from a fresh store. Pins, in the store row block: the failed
+  set-aside case now plants the copy and pins exactly two store lines in order, the `disabled` WARN with the restart
+  remedy, then the neutral copy line with its `found` and the pointer, with no "fresh store" in the copy line or its
+  remedy; "a store disabled at runtime with an older copy on disk warns as disabled, and its copy line is neutral"
+  (`store:OperationalError`, `setAside` null), the same two lines with no `found`; and the restart case now expects
+  the neutral line. With the previous doctor, all three were red. Rows, each restored from a saved copy with sha256
+  compared: the `state` condition removed (the descriptive form whenever the entry names the copy), the failed
+  set-aside case red; the `found` clause made unconditional, the runtime-disabled and restart cases red; the
+  `disabled` pointer removed, both two-line cases red.
+- **Why:** The 2026-10-28 incident of D-7676: both lanes' stores were disabled for about six hours and nothing told
+  the operator. The only trace was a `store:DatabaseError` count among the cumulative outcomes, and the doctor said
+  nothing. A per-process entry, written before the first request, is what a reader can rule on.
+- **Cost if wrong:** One more forced write of the stats file at each start, before the port is bound (the file is a
+  few kilobytes). A reader that took the absence of `store` for `ok` would read an older bridge as healthy; the
+  docstring's schema listing says it is not.

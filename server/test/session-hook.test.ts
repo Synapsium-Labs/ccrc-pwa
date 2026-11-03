@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { tl, GRAPH, type GraphContent } from './compactCardFixtures.js';
 import { isScratchSlug } from './scratchSlugs.js';
 import { hasCommit, isAncestorOfHead, isShallow, readAtSha } from './frozenSource.js';
@@ -892,11 +892,16 @@ describe('graphQueries — the read counter the console can see', () => {
 // nobody asked.
 describe('the SessionStart graph card', () => {
   /** THE CENSUS FIXTURE IS WRITTEN BY THE SWEEP'S OWN WRITER (D-1337).
-   *  `_gs_row` and `_gs_finish` are lifted verbatim out of ccd/ccd-graph-sweep
-   *  and run in a bash subshell against this fixture HOME, because the hook is
-   *  a SECOND, hand-rolled reader of that schema (`.passes[].trees[]` carrying
-   *  `path`/`outcome`/`reason`) with nothing importable to couple it to the
-   *  writer — the shape D-306 is the scar from. Hand-written JSON here would
+   *  `_gs_emit` (the one builder of a row's JSON), `_gs_row`, `_gs_finish` and
+   *  the sweep's `declare -A K_…` lines are lifted verbatim out of
+   *  ccd/ccd-graph-sweep and run from a driver file against this fixture HOME,
+   *  the rows travelling as arguments, because the hook is
+   *  a SECOND, hand-rolled reader of that schema (since graph revision 2's
+   *  repository sweep, D-7350: `.passes[].repos[]`, one row per repository
+   *  carrying `source`/`outcome`/`reason`) with nothing importable to couple it
+   *  to the writer — the shape D-306 is the scar from. A row is given here by the
+   *  tree it is about and written for that tree's repository: `source` is the
+   *  realpath of its common dir, the key the hook selects by. Hand-written JSON here would
    *  let a `reason` -> `why` rename leave every suite green while the shipped
    *  card went permanently silent on the no-graph path. install-session-hooks
    *  .test.ts derives its event list from the hook's own `case` block for
@@ -915,16 +920,31 @@ describe('the SessionStart graph card', () => {
    *  it. Call twice for two passes; the hook reads the LAST. */
   const sweepPass = (rows: { path: string; outcome: string; reason: string }[]): void => {
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
-    const script = [
+    const declares = fs.readFileSync(SWEEP, 'utf8').split('\n').filter((l) => /^declare -A K_/.test(l));
+    expect(declares.length, 'ccd-graph-sweep no longer declares its K_* state').toBeGreaterThan(0);
+    // The sweep's own top-level counter initialisers, verbatim (`GS_LINKED=0 …`, `GS_MDONE=0 …`): every counter
+    // `_gs_emit` reads must be among them, so a rename or a new counter cannot leave this driver behind.
+    const counters = fs.readFileSync(SWEEP, 'utf8').split('\n').filter((l) => /^GS_[A-Z]+=0 /.test(l));
+    const initialised = new Set(counters.flatMap((l) => [...l.matchAll(/(GS_[A-Z]+)=/g)].map((m) => m[1])));
+    for (const v of new Set([...liftFn('_gs_emit').matchAll(/\$\{?(GS_[A-Z_]+)/g)].map((m) => m[1]))) {
+      expect(initialised.has(v!), `ccd-graph-sweep no longer initialises ${v} at the top level`).toBe(true);
+    }
+    const driver = path.join(home, 'sweep-pass.sh');
+    fs.writeFileSync(driver, [
       'set -uo pipefail',
       'CENSUS="$HOME/.ccrc/graph-sweep.json"',
       'STARTED="2026-09-02T00:00:00Z"', 'PIN="0.9.9"', 'ROWS=()',
-      liftFn('_gs_row'), liftFn('_gs_finish'),
-      'while [ "$#" -gt 0 ]; do _gs_row "$1" "$2" "$3" 0; shift 3; done',
+      ...declares, ...counters,
+      liftFn('_gs_row'), liftFn('_gs_finish'), liftFn('_gs_emit'),
+      'n=0',
+      'while [ "$#" -gt 0 ]; do n=$((n+1)); K_RK["k$n"]=project-a-0123abcd; K_COMMON["k$n"]="$1"; K_OUTCOME["k$n"]="$2"; K_REASON["k$n"]="$3"; _gs_emit "k$n" >/dev/null; shift 3; done',
       '_gs_finish ok 0',
-    ].join('\n');
-    execFileSync('bash', ['-c', script, 'sweep',
-      ...rows.flatMap((r) => [r.path, r.outcome, r.reason])],
+    ].join('\n'));
+    const source = (tree: string): string => {
+      const gitDir = path.join(tree, '.git');
+      return fs.existsSync(gitDir) ? fs.realpathSync(gitDir) : gitDir;
+    };
+    execFileSync('bash', [driver, ...rows.flatMap((r) => [source(r.path), r.outcome, r.reason])],
       { env: { ...process.env, HOME: home }, encoding: 'utf8' });
   };
 
@@ -1211,21 +1231,45 @@ describe('the SessionStart graph card', () => {
     // execFileSync THROWS on a non-zero exit, so a green run is the exit-0
     // assertion — the contract this whole file lives under.
     //
-    // The census row is what makes the `[ -d "$cwd" ]` guard MEASURABLE. With
-    // nothing seeded, deleting that guard is invisible: the no-graph branch is
-    // taken anyway, the census read finds no file, and the card stays silent —
-    // the same green. Seeded with a row FOR THIS PATH, a hook that skipped the
-    // directory check would print the sweep's line about a directory that is
-    // not there, and this assertion goes red.
+    // A census is present, so the no-graph branch has a file to read. Until GR7
+    // (D-7353) this row seeded a per-tree row FOR THIS PATH, which made the
+    // `[ -d "$cwd" ]` guard measurable through the hook's old-shape arm (read by
+    // path). That arm is retired with the sweep's rewrite live (GR4): the hook
+    // reads only repository rows, matched by the realpath of the tree's common
+    // dir, which a directory that is not there cannot have. The guard's own
+    // effect on the census line is therefore no longer observable here; the row
+    // keeps the exit-0-and-silent contract.
     const gone = path.join(home, 'gone');
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     fs.writeFileSync(path.join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({
-      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [
-        { path: gone, outcome: 'never-built', reason: 'no exclude entry', duration_ms: 3 },
-      ] }],
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', repos: [] }],
     })); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so this subject's own silence is what is measured
     expect(run({ hook_event_name: 'SessionStart', cwd: gone })).toBe('');
     expect(readState().state).toBe('done');
+  });
+
+  // GR7 (D-7353): the per-tree arm the hook kept while the sweep still wrote the
+  // old shape (GR4-interim) is retired. A last pass with no `repos[]` says
+  // nothing about this tree, so the card gives no census line: neither one the
+  // sweep ended before any repository (`paused`, `pass-locked`, `failed`) nor a
+  // pass of the retired per-tree shape that names THIS PATH, which the old arm
+  // read by path and printed. That second census is the retirement's proof, and
+  // the one per-tree spelling left in the tree (graph-r2-consumers names it).
+  it('a last pass with no repos[] gives no census line, even an old-shape row for this path', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so this subject's own silence is what is measured
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const census = path.join(home, '.ccrc', 'graph-sweep.json');
+    fs.writeFileSync(census, JSON.stringify({
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'paused' }],
+    }));
+    expect(run({ hook_event_name: 'SessionStart', cwd: tree }), 'a pass ended before any repository').toBe('');
+    fs.writeFileSync(census, JSON.stringify({
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [
+        { path: tree, outcome: 'refused', reason: 'no exclude entry', duration_ms: 3 },
+      ] }],
+    }));
+    expect(run({ hook_event_name: 'SessionStart', cwd: tree }), 'a retired per-tree row for this path').toBe('');
   });
 
   it('exits 0 and still prints a card when the tree is not a git repo', () => {
@@ -2024,7 +2068,7 @@ describe('the co-tenant subject', () => {
   // and can source nothing.
   it('the hook, ccd and shared agree on the supervised-freshness window', () => {
     const hook = fs.readFileSync(path.resolve(__dirname, '../../ccd/session-hook.sh'), 'utf8');
-    const ccd = fs.readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const api = fs.readFileSync(path.resolve(__dirname, '../../shared/api.ts'), 'utf8');
     const h = /CCRC_FRESH_S=(\d+)/.exec(hook);
     const c = /now - sup >= 0 && now - sup < (\d+)/.exec(ccd);
@@ -4294,7 +4338,7 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     // allows exactly one file in the test tree to name the ccd script, and it
     // is `ccdWsHelpers.ts`. (Measured — this line spelled it directly for one
     // commit and reds that rule in chunk 03.)
-    const ccdSrc = fs.readFileSync(CCD, 'utf8');
+    const ccdSrc = ccdSource();
     const specSrc = fs.readFileSync(path.resolve(__dirname,
       '../../docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md'), 'utf8');
     // CALL SITES, not the definition: the trailing quote is what separates
@@ -4539,7 +4583,7 @@ describe('the compaction card — PreCompact source order (spec §3.1)', () => {
 // are asserted rather than merely edited.
 describe('the compaction card — the sentences D-2605 falsifies (spec §3.4)', () => {
   const hook = (): string => fs.readFileSync(HOOK, 'utf8');
-  const ccd = (): string => fs.readFileSync(CCD, 'utf8');
+  const ccd = (): string => ccdSource();
 
   /** Every comment BLOCK (a run of consecutive `#` lines) that carries
    *  `needle` and is NOT marked as a retraction.
@@ -4911,11 +4955,15 @@ describe('the compaction card — the two documents say what the code does (spec
   // record this project keeps rather than deletes.
   const SHELL_CORPUS = (): Array<[string, string]> => {
     const dir = path.resolve(__dirname, '../../ccd');
-    return fs.readdirSync(dir, { withFileTypes: true })
+    // ccd's library, loaded at ccd's foot (D-6913), is ccd's code: its definitions resolve the references
+    // the moved comments and the comments left behind make, and its own comments are held to the same rule.
+    const libs = fs.readdirSync(path.join(dir, 'lib')).filter((n) => n.endsWith('.sh'))
+      .map((n) => [`lib/${n}`, fs.readFileSync(path.join(dir, 'lib', n), 'utf8')] as [string, string]);
+    return [...fs.readdirSync(dir, { withFileTypes: true })
       .filter((e) => e.isFile())
-      .map((e) => [e.name, fs.readFileSync(path.join(dir, e.name), 'utf8')] as [string, string]);
+      .map((e) => [e.name, fs.readFileSync(path.join(dir, e.name), 'utf8')] as [string, string]), ...libs];
   };
-  const SCANNED = ['session-hook.sh', 'ccd'];
+  const SCANNED = ['session-hook.sh', 'ccd', 'lib/disk-retention.sh', 'lib/train-proof.sh'];   // the second library's comments too (D-7463)
   /** NOT FUNCTIONS, and each is here for a stated reason rather than because it
    *  was in the way. All three are declared by the GENERATED roster projection
    *  (`~/.ccrc/accounts.sh`, `shared/generate.mjs`), which this repo builds but
@@ -6640,7 +6688,7 @@ describe('the compaction card — every canonical write is on the list (spec §5
   ];
 
   const bashCorpus = (): Array<readonly [string, string]> =>
-    [['hook', fs.readFileSync(HOOK, 'utf8')], ['ccd', fs.readFileSync(CCD, 'utf8')]] as const;
+    [['hook', fs.readFileSync(HOOK, 'utf8')], ['ccd', ccdSource()]] as const;
 
   const entryOf = (s: Site): number[] =>
     ALLOW.filter((e) => e.file === s.file && e.fn === s.fn && e.cmd === s.cmd && s.text.includes(e.needle)).map((e) => e.id);

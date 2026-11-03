@@ -1,0 +1,1862 @@
+{
+  "note": "Each row is one line run through the bash log-line redactor (ccd/ccrc's _upd_redact, plain and bare-host, and ccd-update-sync's say); its columns hold what each printed. A row labelled known-limit holds a line whose secret is still printed, recorded on purpose with a note naming the gap (D-7564): a userinfo inside a query string or a path (https://h/x?proxy=user:secret@host, GET /p?u=user:secret@host:8443, dir/user:secret@host) a raw '#', '?' or '/' inside a password (user:pa#ss@host refused), a token-only userinfo before a host that no port (or an empty port, as in tok@h: refused) and no path follows, which neither mode masks while more text follows the host (--proxy=tok@host refused, --proxy tok@host refused), a port followed by a letter, '-', '_' or '~', characters a host name holds, while more text follows (tok@host:8443-x retrying, tok@host:8443a x), the same after a run of '.', '!' or '}' (tok@host:8443.x retrying, tok@host:8443!x retrying, tok@host:8443}x retrying), and a host of digits only before its port (tok@2130706433:80 x), which reads as a time's build@10:30. These are the known limits. Any other character after a port ends it, ASCII or not: an ellipsis, a curly quote, a no-break space, '(', '&', '\\', '=' or an invalid byte. A blast row holds a line with no credential that the redactor masks anyway, so its cost stays visible. A row with inputRuns holds its input as runs of text, each repeated times times.",
+  "rows": [
+    {
+      "rule": "R5",
+      "input": "/srv/home/u/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "/srv/home/u/x",
+      "bareHost": "/srv/home/u/x",
+      "updateSync": "/srv/home/u/x"
+    },
+    {
+      "rule": "R5",
+      "input": "/srv/home/u:/usr/bin",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "/srv/home/u:/usr/bin",
+      "bareHost": "/srv/home/u:/usr/bin",
+      "updateSync": "/srv/home/u:/usr/bin"
+    },
+    {
+      "rule": "R5",
+      "input": "/srv/home/u",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "/srv/home/u",
+      "bareHost": "/srv/home/u",
+      "updateSync": "/srv/home/u"
+    },
+    {
+      "rule": "R5",
+      "input": "cannot read /home/u/.ccrc/agent.env",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "cannot read ~/.ccrc/agent.env",
+      "bareHost": "cannot read ~/.ccrc/agent.env",
+      "updateSync": "cannot read ~/.ccrc/agent.env"
+    },
+    {
+      "rule": "R5",
+      "input": "K=/home/u/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "K=~/x",
+      "bareHost": "K=~/x",
+      "updateSync": "K=~/x"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/u",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "~",
+      "bareHost": "~",
+      "updateSync": "~"
+    },
+    {
+      "rule": "R5",
+      "input": "http://h/p",
+      "home": "/",
+      "locale": "C",
+      "ccrc": "http://h/p",
+      "bareHost": "http://h/p",
+      "updateSync": "http://h/p"
+    },
+    {
+      "rule": "R2",
+      "input": "https://u:p@x@host",
+      "home": "/fixture-home",
+      "locale": "C",
+      "ccrc": "https://host",
+      "bareHost": "https://host",
+      "updateSync": "https://host"
+    },
+    {
+      "rule": "R1",
+      "input": "u:p@x@host/path",
+      "home": "/fixture-home",
+      "locale": "C",
+      "ccrc": "host/path",
+      "bareHost": "host/path",
+      "updateSync": "host/path"
+    },
+    {
+      "rule": "authority",
+      "input": "https://host/path@x",
+      "home": "/fixture-home",
+      "locale": "C",
+      "ccrc": "https://host/path@x",
+      "bareHost": "https://host/path@x",
+      "updateSync": "https://host/path@x"
+    },
+    {
+      "rule": "authority",
+      "input": "https://host?a@b",
+      "home": "/fixture-home",
+      "locale": "C",
+      "ccrc": "https://host?a@b",
+      "bareHost": "https://host?a@b",
+      "updateSync": "https://host?a@b"
+    },
+    {
+      "rule": "authority",
+      "input": "https://host#a@b",
+      "home": "/fixture-home",
+      "locale": "C",
+      "ccrc": "https://host#a@b",
+      "bareHost": "https://host#a@b",
+      "updateSync": "https://host#a@b"
+    },
+    {
+      "rule": "authority",
+      "input": "https://u:p@host?a@b#c@d",
+      "home": "/fixture-home",
+      "locale": "C",
+      "ccrc": "https://host?a@b#c@d",
+      "bareHost": "https://host?a@b#c@d",
+      "updateSync": "https://host?a@b#c@d"
+    },
+    {
+      "rule": "plain",
+      "input": "https://github.com/Synapsium-Labs/ccrc-pwa/releases/download/v1.0.0/SHA256SUMS",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://github.com/Synapsium-Labs/ccrc-pwa/releases/download/v1.0.0/SHA256SUMS",
+      "bareHost": "https://github.com/Synapsium-Labs/ccrc-pwa/releases/download/v1.0.0/SHA256SUMS",
+      "updateSync": "https://github.com/Synapsium-Labs/ccrc-pwa/releases/download/v1.0.0/SHA256SUMS"
+    },
+    {
+      "rule": "plain",
+      "input": "https://example.com/path?email=a@example.com&x=1",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://example.com/path?email=a@example.com&x=1",
+      "bareHost": "https://example.com/path?email=a@example.com&x=1",
+      "updateSync": "https://example.com/path?email=a@example.com&x=1"
+    },
+    {
+      "rule": "scheme",
+      "input": "http://user:s3cretTOKEN@127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "http://127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS",
+      "bareHost": "http://127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS",
+      "updateSync": "http://127.0.0.1:1/rel/download/v0.0.1/SHA256SUMS"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/u/.ccrc/floor",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "~/.ccrc/floor",
+      "bareHost": "~/.ccrc/floor",
+      "updateSync": "~/.ccrc/floor"
+    },
+    {
+      "rule": "R1",
+      "input": "fetching user:s3cretTOKEN@127.0.0.1:1/rel/x and \"tok@h/r\"",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "fetching 127.0.0.1:1/rel/x and \"h/r\"",
+      "bareHost": "fetching 127.0.0.1:1/rel/x and \"h/r\"",
+      "updateSync": "fetching 127.0.0.1:1/rel/x and \"h/r\""
+    },
+    {
+      "rule": "R1",
+      "input": "see <u:p<w@h/r> and u:p\"w@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see <h/r> and h/r",
+      "bareHost": "see <h/r> and h/r",
+      "updateSync": "see <h/r> and h/r"
+    },
+    {
+      "rule": "R3",
+      "input": "fetching http:/u:s3cretTOKEN@h/r and https:///u:s3cretTOKEN@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "fetching http:/h/r and https:///h/r",
+      "bareHost": "fetching http:/h/r and https:///h/r",
+      "updateSync": "fetching http:/h/r and https:///h/r"
+    },
+    {
+      "rule": "R6",
+      "input": "curl: (6) user@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "curl: (6) user@host",
+      "bareHost": "curl: (6) host",
+      "updateSync": "curl: (6) host"
+    },
+    {
+      "rule": "R6",
+      "input": "mail a@example.com today",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "mail a@example.com today",
+      "bareHost": "mail a@example.com today",
+      "updateSync": "mail a@example.com today"
+    },
+    {
+      "rule": "authority",
+      "input": "https://h/r?email=a@example.com/y",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h/r?email=a@example.com/y",
+      "bareHost": "https://h/r?email=a@example.com/y",
+      "updateSync": "https://h/r?email=a@example.com/y"
+    },
+    {
+      "rule": "prose",
+      "input": "@scope/pkg",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "@scope/pkg",
+      "bareHost": "@scope/pkg",
+      "updateSync": "@scope/pkg"
+    },
+    {
+      "rule": "R5",
+      "input": "cmd http://h/p",
+      "home": "/",
+      "locale": "C",
+      "ccrc": "cmd http://h/p",
+      "bareHost": "cmd http://h/p",
+      "updateSync": "cmd http://h/p"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/u/.ccrc/floor",
+      "home": "/home/u/",
+      "locale": "C",
+      "ccrc": "~/.ccrc/floor",
+      "bareHost": "~/.ccrc/floor",
+      "updateSync": "~/.ccrc/floor"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/user2/f",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "/home/user2/f",
+      "bareHost": "/home/user2/f",
+      "updateSync": "/home/user2/f"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/u/f",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "~/f",
+      "bareHost": "~/f",
+      "updateSync": "~/f"
+    },
+    {
+      "rule": "R5",
+      "input": "path \"/home/u\" here",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "path \"~\" here",
+      "bareHost": "path \"~\" here",
+      "updateSync": "path \"~\" here"
+    },
+    {
+      "rule": "R5",
+      "input": "PATH=/home/u:/usr/bin",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "PATH=~:/usr/bin",
+      "bareHost": "PATH=~:/usr/bin",
+      "updateSync": "PATH=~:/usr/bin"
+    },
+    {
+      "rule": "R5",
+      "input": "(cd /home/u)",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "(cd ~)",
+      "bareHost": "(cd ~)",
+      "updateSync": "(cd ~)"
+    },
+    {
+      "rule": "authority",
+      "input": "https://h?a@b",
+      "home": "",
+      "locale": "C",
+      "ccrc": "https://h?a@b",
+      "bareHost": "https://h?a@b",
+      "updateSync": "https://h?a@b"
+    },
+    {
+      "rule": "authority",
+      "input": "https://h#a@b",
+      "home": "",
+      "locale": "C",
+      "ccrc": "https://h#a@b",
+      "bareHost": "https://h#a@b",
+      "updateSync": "https://h#a@b"
+    },
+    {
+      "rule": "R5",
+      "input": "/srv/home/u/x and /home/u/y",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "/srv/home/u/x and ~/y",
+      "bareHost": "/srv/home/u/x and ~/y",
+      "updateSync": "/srv/home/u/x and ~/y"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/u/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "~/x",
+      "bareHost": "~/x",
+      "updateSync": "~/x"
+    },
+    {
+      "rule": "R5",
+      "input": "cd /home/u/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "cd ~/x",
+      "bareHost": "cd ~/x",
+      "updateSync": "cd ~/x"
+    },
+    {
+      "rule": "R5",
+      "input": "/usr/bin:/home/u/bin",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "/usr/bin:~/bin",
+      "bareHost": "/usr/bin:~/bin",
+      "updateSync": "/usr/bin:~/bin"
+    },
+    {
+      "rule": "R5",
+      "input": "\"/home/u/x\"",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "\"~/x\"",
+      "bareHost": "\"~/x\"",
+      "updateSync": "\"~/x\""
+    },
+    {
+      "rule": "R5",
+      "input": "file:///home/u/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "file://~/x",
+      "bareHost": "file://~/x",
+      "updateSync": "file://~/x"
+    },
+    {
+      "rule": "R1",
+      "input": "user:s3cret@127.0.0.1:1/rel/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "127.0.0.1:1/rel/x",
+      "bareHost": "127.0.0.1:1/rel/x",
+      "updateSync": "127.0.0.1:1/rel/x"
+    },
+    {
+      "rule": "R1",
+      "input": "\"tok@h/r\"",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "\"h/r\"",
+      "bareHost": "\"h/r\"",
+      "updateSync": "\"h/r\""
+    },
+    {
+      "rule": "R2",
+      "input": "https://u:p@x@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h/r",
+      "bareHost": "https://h/r",
+      "updateSync": "https://h/r"
+    },
+    {
+      "rule": "R2",
+      "input": "https://a@b@c@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h/r",
+      "bareHost": "https://h/r",
+      "updateSync": "https://h/r"
+    },
+    {
+      "rule": "R2",
+      "input": "https://u@//v@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https:////h/r",
+      "bareHost": "https:////h/r",
+      "updateSync": "https:////h/r"
+    },
+    {
+      "rule": "R3",
+      "input": "http:/u:s3cret@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "http:/h/r",
+      "bareHost": "http:/h/r",
+      "updateSync": "http:/h/r"
+    },
+    {
+      "rule": "R3",
+      "input": "https:///u:s3cret@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https:///h/r",
+      "bareHost": "https:///h/r",
+      "updateSync": "https:///h/r"
+    },
+    {
+      "rule": "R3",
+      "input": "file:///u@/home/u/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "file:////home/u/x",
+      "bareHost": "file:////home/u/x",
+      "updateSync": "file:////home/u/x"
+    },
+    {
+      "rule": "R3",
+      "input": "note:/x@y/z",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "note:/y/z",
+      "bareHost": "note:/y/z",
+      "updateSync": "note:/y/z"
+    },
+    {
+      "rule": "R3",
+      "input": "x:///u@/home/u/f",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "x:////home/u/f",
+      "bareHost": "x:////home/u/f",
+      "updateSync": "x:////home/u/f"
+    },
+    {
+      "rule": "R3",
+      "input": "x:///u@/home/u/f",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "x:////home/u/f",
+      "bareHost": "x:////home/u/f",
+      "updateSync": "x:////home/u/f"
+    },
+    {
+      "rule": "R4",
+      "input": "https://a b@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h/r",
+      "bareHost": "https://h/r",
+      "updateSync": "https://h/r"
+    },
+    {
+      "rule": "R4",
+      "input": "https://a b@h/r",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "https://h/r",
+      "bareHost": "https://h/r",
+      "updateSync": "https://h/r"
+    },
+    {
+      "rule": "R4",
+      "input": "https://u :p@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h/r",
+      "bareHost": "https://h/r",
+      "updateSync": "https://h/r"
+    },
+    {
+      "rule": "R4",
+      "input": "https://u :p@h/r",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "https://h/r",
+      "bareHost": "https://h/r",
+      "updateSync": "https://h/r"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/u/.ccrc/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "~/.ccrc/x",
+      "bareHost": "~/.ccrc/x",
+      "updateSync": "~/.ccrc/x"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/u/.ccrc/x",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "~/.ccrc/x",
+      "bareHost": "~/.ccrc/x",
+      "updateSync": "~/.ccrc/x"
+    },
+    {
+      "rule": "R5",
+      "input": "/srv/home/u/x",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "/srv/home/u/x",
+      "bareHost": "/srv/home/u/x",
+      "updateSync": "/srv/home/u/x"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/user2/f",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "/home/user2/f",
+      "bareHost": "/home/user2/f",
+      "updateSync": "/home/user2/f"
+    },
+    {
+      "rule": "R5",
+      "input": "é/home/u/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "é/home/u/x",
+      "bareHost": "é/home/u/x",
+      "updateSync": "é/home/u/x"
+    },
+    {
+      "rule": "R5",
+      "input": "é/home/u/x",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "é/home/u/x",
+      "bareHost": "é/home/u/x",
+      "updateSync": "é/home/u/x"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/ué",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "/home/ué",
+      "bareHost": "/home/ué",
+      "updateSync": "/home/ué"
+    },
+    {
+      "rule": "R5",
+      "input": "/home/ué",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "/home/ué",
+      "bareHost": "/home/ué",
+      "updateSync": "/home/ué"
+    },
+    {
+      "rule": "R5",
+      "inputHex": "ff2f686f6d652f752f78",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrcHex": "ff2f686f6d652f752f78",
+      "bareHostHex": "ff2f686f6d652f752f78",
+      "updateSyncHex": "ff2f686f6d652f752f78"
+    },
+    {
+      "rule": "R5",
+      "inputHex": "ff2f686f6d652f752f78",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrcHex": "ff2f686f6d652f752f78",
+      "bareHostHex": "ff2f686f6d652f752f78",
+      "updateSyncHex": "ff2f686f6d652f752f78"
+    },
+    {
+      "rule": "R5",
+      "inputHex": "2f686f6d652f75ff",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrcHex": "2f686f6d652f75ff",
+      "bareHostHex": "2f686f6d652f75ff",
+      "updateSyncHex": "2f686f6d652f75ff"
+    },
+    {
+      "rule": "R5",
+      "inputHex": "2f686f6d652f75ff",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrcHex": "2f686f6d652f75ff",
+      "bareHostHex": "2f686f6d652f75ff",
+      "updateSyncHex": "2f686f6d652f75ff"
+    },
+    {
+      "rule": "R5",
+      "input": "file:///home/u/x",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "file://~/x",
+      "bareHost": "file://~/x",
+      "updateSync": "file://~/x"
+    },
+    {
+      "rule": "R6",
+      "input": "could not resolve host in u:hunter2@h.invalid:9)",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "could not resolve host in h.invalid:9)",
+      "bareHost": "could not resolve host in h.invalid:9)",
+      "updateSync": "could not resolve host in h.invalid:9)"
+    },
+    {
+      "rule": "R6",
+      "input": "mail a@b",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "mail a@b",
+      "bareHost": "mail b",
+      "updateSync": "mail b"
+    },
+    {
+      "rule": "R6",
+      "input": "x (a@b)",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "x (a@b)",
+      "bareHost": "x b)",
+      "updateSync": "x b)"
+    },
+    {
+      "rule": "R6",
+      "input": "h@\"",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "h@\"",
+      "bareHost": "\"",
+      "updateSync": "\""
+    },
+    {
+      "rule": "R7",
+      "input": "u:p@)h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": ")h/r",
+      "bareHost": ")h/r",
+      "updateSync": ")h/r"
+    },
+    {
+      "rule": "R7",
+      "input": " S@)<?",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": " )<?",
+      "bareHost": " )<?",
+      "updateSync": " )<?"
+    },
+    {
+      "rule": "blast",
+      "input": "sweep: 1 of 2 supervisors did not stay up on a first verify; a re-check failed, 1 left un-re-checked — install complete, nothing was rolled back (first failed re-check: claude-session@demo-gone.service); read: systemctl --user status claude-session@demo-gone.service",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "sweep: 1 of 2 supervisors did not stay up on a first verify; a re-check failed, 1 left un-re-checked — install complete, nothing was rolled back (first failed re-check: claude-session@demo-gone.service); read: systemctl --user status claude-session@demo-gone.service",
+      "bareHost": "sweep: 1 of 2 supervisors did not stay up on a first verify; a re-check failed, 1 left un-re-checked — install complete, nothing was rolled back (first failed re-check: demo-gone.service); read: systemctl --user status demo-gone.service",
+      "updateSync": "sweep: 1 of 2 supervisors did not stay up on a first verify; a re-check failed, 1 left un-re-checked — install complete, nothing was rolled back (first failed re-check: demo-gone.service); read: systemctl --user status demo-gone.service"
+    },
+    {
+      "rule": "blast",
+      "input": "see claude-session@abc.service",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see claude-session@abc.service",
+      "bareHost": "see abc.service",
+      "updateSync": "see abc.service"
+    },
+    {
+      "rule": "blast",
+      "input": "sets CCRC_MAIL_FROM=ops@example.com",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "sets CCRC_MAIL_FROM=ops@example.com",
+      "bareHost": "sets example.com",
+      "updateSync": "sets example.com"
+    },
+    {
+      "rule": "blast",
+      "input": "ssh root@box",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "ssh root@box",
+      "bareHost": "ssh box",
+      "updateSync": "ssh box"
+    },
+    {
+      "rule": "blast",
+      "input": "git HEAD@{1}",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "git HEAD@{1}",
+      "bareHost": "git {1}",
+      "updateSync": "git {1}"
+    },
+    {
+      "rule": "control",
+      "inputHex": "68747470733a2f2f753a53336372ff6574544f4b454e40682f72",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrcHex": "68747470733a2f2f682f72",
+      "bareHostHex": "68747470733a2f2f682f72",
+      "updateSyncHex": "68747470733a2f2f682f72"
+    },
+    {
+      "rule": "R8",
+      "input": "server user:secret@host:8443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "server host:8443 refused",
+      "bareHost": "server host:8443 refused",
+      "updateSync": "server host:8443 refused"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host: refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host: refused",
+      "bareHost": "host: refused",
+      "updateSync": "host: refused"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host' failed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host' failed",
+      "bareHost": "host' failed",
+      "updateSync": "host' failed"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host\" failed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host\" failed",
+      "bareHost": "host\" failed",
+      "updateSync": "host\" failed"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host\tfailed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host\tfailed",
+      "bareHost": "host\tfailed",
+      "updateSync": "host\tfailed"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host\rfailed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host\rfailed",
+      "bareHost": "host\rfailed",
+      "updateSync": "host\rfailed"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@@host/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host/x",
+      "bareHost": "host/x",
+      "updateSync": "host/x"
+    },
+    {
+      "rule": "R8",
+      "input": "@user:secret@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host",
+      "bareHost": "host",
+      "updateSync": "host"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host:8443",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443",
+      "bareHost": "host:8443",
+      "updateSync": "host:8443"
+    },
+    {
+      "rule": "R8",
+      "input": "see <user:secret@host:8443> now",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see <host:8443> now",
+      "bareHost": "see <host:8443> now",
+      "updateSync": "see <host:8443> now"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443 refused",
+      "bareHost": "host:8443 refused",
+      "updateSync": "host:8443 refused"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@10.0.0.1:443",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "10.0.0.1:443",
+      "bareHost": "10.0.0.1:443",
+      "updateSync": "10.0.0.1:443"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443, retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443, retrying",
+      "bareHost": "host:8443, retrying",
+      "updateSync": "host:8443, retrying"
+    },
+    {
+      "rule": "R8",
+      "input": "u:p@x@host:8443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443 refused",
+      "bareHost": "host:8443 refused",
+      "updateSync": "host:8443 refused"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host:",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:",
+      "bareHost": "host:",
+      "updateSync": "host:"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host failed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host failed",
+      "bareHost": "host failed",
+      "updateSync": "host failed"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host\nfailed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host\nfailed",
+      "bareHost": "host\nfailed",
+      "updateSync": "host\nfailed"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host, retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host, retrying",
+      "bareHost": "host, retrying",
+      "updateSync": "host, retrying"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host; retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host; retrying",
+      "bareHost": "host; retrying",
+      "updateSync": "host; retrying"
+    },
+    {
+      "rule": "R8",
+      "input": "(user:secret@host)",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "(host)",
+      "bareHost": "(host)",
+      "updateSync": "(host)"
+    },
+    {
+      "rule": "R8",
+      "input": "see 'user:secret@host' failed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see 'host' failed",
+      "bareHost": "see 'host' failed",
+      "updateSync": "see 'host' failed"
+    },
+    {
+      "rule": "R8",
+      "input": "<user:secret@host>",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "<host>",
+      "bareHost": "<host>",
+      "updateSync": "<host>"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host",
+      "bareHost": "host",
+      "updateSync": "host"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host!",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host!",
+      "bareHost": "host!",
+      "updateSync": "host!"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@ refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": " refused",
+      "bareHost": " refused",
+      "updateSync": " refused"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@@h/r",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "h/r",
+      "bareHost": "h/r",
+      "updateSync": "h/r"
+    },
+    {
+      "rule": "R8",
+      "input": "@user:secret@host/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host/x",
+      "bareHost": "host/x",
+      "updateSync": "host/x"
+    },
+    {
+      "rule": "R8",
+      "input": "user:secret@host: refused",
+      "home": "/home/u",
+      "locale": "utf8",
+      "ccrc": "host: refused",
+      "bareHost": "host: refused",
+      "updateSync": "host: refused"
+    },
+    {
+      "rule": "prose",
+      "input": "mail a@example.com: refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "mail a@example.com: refused",
+      "bareHost": "mail a@example.com: refused",
+      "updateSync": "mail a@example.com: refused"
+    },
+    {
+      "rule": "prose",
+      "input": "from ops@example.com, cc b@example.org today",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "from ops@example.com, cc b@example.org today",
+      "bareHost": "from ops@example.com, cc b@example.org today",
+      "updateSync": "from ops@example.com, cc b@example.org today"
+    },
+    {
+      "rule": "prose",
+      "input": "'a@example.com' bounced",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "'a@example.com' bounced",
+      "bareHost": "'a@example.com' bounced",
+      "updateSync": "'a@example.com' bounced"
+    },
+    {
+      "rule": "prose",
+      "input": "a@example.com\tok",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "a@example.com\tok",
+      "bareHost": "a@example.com\tok",
+      "updateSync": "a@example.com\tok"
+    },
+    {
+      "rule": "prose",
+      "input": "see claude-session@x.service: active",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see claude-session@x.service: active",
+      "bareHost": "see claude-session@x.service: active",
+      "updateSync": "see claude-session@x.service: active"
+    },
+    {
+      "rule": "prose",
+      "input": "at 10:30 restarted",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "at 10:30 restarted",
+      "bareHost": "at 10:30 restarted",
+      "updateSync": "at 10:30 restarted"
+    },
+    {
+      "rule": "prose",
+      "input": "restarted at 10:30:15",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "restarted at 10:30:15",
+      "bareHost": "restarted at 10:30:15",
+      "updateSync": "restarted at 10:30:15"
+    },
+    {
+      "rule": "prose",
+      "input": "build@10:30 done",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "build@10:30 done",
+      "bareHost": "build@10:30 done",
+      "updateSync": "build@10:30 done"
+    },
+    {
+      "rule": "prose",
+      "input": "https://h:8443/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h:8443/x",
+      "bareHost": "https://h:8443/x",
+      "updateSync": "https://h:8443/x"
+    },
+    {
+      "rule": "prose",
+      "input": "connect h:8443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "connect h:8443 refused",
+      "bareHost": "connect h:8443 refused",
+      "updateSync": "connect h:8443 refused"
+    },
+    {
+      "rule": "prose",
+      "input": "http://127.0.0.1:8443",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "http://127.0.0.1:8443",
+      "bareHost": "http://127.0.0.1:8443",
+      "updateSync": "http://127.0.0.1:8443"
+    },
+    {
+      "rule": "prose",
+      "input": "listening on [::1]:8443 ok",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "listening on [::1]:8443 ok",
+      "bareHost": "listening on [::1]:8443 ok",
+      "updateSync": "listening on [::1]:8443 ok"
+    },
+    {
+      "rule": "blast",
+      "input": "mailto:a@example.com",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "example.com",
+      "bareHost": "example.com",
+      "updateSync": "example.com"
+    },
+    {
+      "rule": "R8",
+      "input": "reach tok@host:8443.",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "reach host:8443.",
+      "bareHost": "reach host:8443.",
+      "updateSync": "reach host:8443."
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443! retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443! retrying",
+      "bareHost": "host:8443! retrying",
+      "updateSync": "host:8443! retrying"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443}",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443}",
+      "bareHost": "host:8443}",
+      "updateSync": "host:8443}"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@[::1]:8443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "[::1]:8443 refused",
+      "bareHost": "[::1]:8443 refused",
+      "updateSync": "[::1]:8443 refused"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@[fe80::1]:443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "[fe80::1]:443 refused",
+      "bareHost": "[fe80::1]:443 refused",
+      "updateSync": "[fe80::1]:443 refused"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@[::1]:8443",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "[::1]:8443",
+      "bareHost": "[::1]:8443",
+      "updateSync": "[::1]:8443"
+    },
+    {
+      "rule": "R8",
+      "input": "@tok@host:8443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443 refused",
+      "bareHost": "host:8443 refused",
+      "updateSync": "host:8443 refused"
+    },
+    {
+      "rule": "R8",
+      "input": "user%3Asecret@host refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host refused",
+      "bareHost": "host refused",
+      "updateSync": "host refused"
+    },
+    {
+      "rule": "R8",
+      "input": "user%3asecret@host refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host refused",
+      "bareHost": "host refused",
+      "updateSync": "host refused"
+    },
+    {
+      "rule": "R8",
+      "input": "CCRC_X=user:secret@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "CCRC_X=host",
+      "bareHost": "CCRC_X=host",
+      "updateSync": "CCRC_X=host"
+    },
+    {
+      "rule": "R8",
+      "input": "CCRC_X=user:secret@host/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "CCRC_X=host/x",
+      "bareHost": "CCRC_X=host/x",
+      "updateSync": "CCRC_X=host/x"
+    },
+    {
+      "rule": "R8",
+      "input": "--proxy=user:secret@host:8080",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "--proxy=host:8080",
+      "bareHost": "--proxy=host:8080",
+      "updateSync": "--proxy=host:8080"
+    },
+    {
+      "rule": "R8",
+      "input": "dG9rZW4=:x@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host",
+      "bareHost": "host",
+      "updateSync": "host"
+    },
+    {
+      "rule": "R8",
+      "input": "connecting to tok@host:8443... retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "connecting to host:8443... retrying",
+      "bareHost": "connecting to host:8443... retrying",
+      "updateSync": "connecting to host:8443... retrying"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443... ok",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443... ok",
+      "bareHost": "host:8443... ok",
+      "updateSync": "host:8443... ok"
+    },
+    {
+      "rule": "R8",
+      "input": "reach (tok@host:8443.) now",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "reach (host:8443.) now",
+      "bareHost": "reach (host:8443.) now",
+      "updateSync": "reach (host:8443.) now"
+    },
+    {
+      "rule": "R8",
+      "input": "reach tok@host:8443.,",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "reach host:8443.,",
+      "bareHost": "reach host:8443.,",
+      "updateSync": "reach host:8443.,"
+    },
+    {
+      "rule": "R8",
+      "input": "reach tok@host:8443!! now",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "reach host:8443!! now",
+      "bareHost": "reach host:8443!! now",
+      "updateSync": "reach host:8443!! now"
+    },
+    {
+      "rule": "R8",
+      "input": "reach tok@host:8443}}",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "reach host:8443}}",
+      "bareHost": "reach host:8443}}",
+      "updateSync": "reach host:8443}}"
+    },
+    {
+      "rule": "R8",
+      "input": "error: \"dial tok@host:8443.\"",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "error: \"dial host:8443.\"",
+      "bareHost": "error: \"dial host:8443.\"",
+      "updateSync": "error: \"dial host:8443.\""
+    },
+    {
+      "rule": "R8",
+      "input": "dial tok@host:8443.) retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "dial host:8443.) retrying",
+      "bareHost": "dial host:8443.) retrying",
+      "updateSync": "dial host:8443.) retrying"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443!!",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443!!",
+      "bareHost": "host:8443!!",
+      "updateSync": "host:8443!!"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443}.",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443}.",
+      "bareHost": "host:8443}.",
+      "updateSync": "host:8443}."
+    },
+    {
+      "rule": "R8",
+      "input": "failed to reach `tok@host:8443` (refused)",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "failed to reach `host:8443` (refused)",
+      "bareHost": "failed to reach `host:8443` (refused)",
+      "updateSync": "failed to reach `host:8443` (refused)"
+    },
+    {
+      "rule": "R8",
+      "input": "failed to reach `tok@host:8443`",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "failed to reach `host:8443`",
+      "bareHost": "failed to reach `host:8443`",
+      "updateSync": "failed to reach `host:8443`"
+    },
+    {
+      "rule": "R8",
+      "input": "see `user@host:8443`.",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see `host:8443`.",
+      "bareHost": "see `host:8443`.",
+      "updateSync": "see `host:8443`."
+    },
+    {
+      "rule": "R8",
+      "input": "`tok@host:8443`",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "`host:8443`",
+      "bareHost": "`host:8443`",
+      "updateSync": "`host:8443`"
+    },
+    {
+      "rule": "R1",
+      "input": "see `tok@host/x` now",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see `host/x` now",
+      "bareHost": "see `host/x` now",
+      "updateSync": "see `host/x` now"
+    },
+    {
+      "rule": "R1",
+      "input": "@tok@host/x refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host/x refused",
+      "bareHost": "host/x refused",
+      "updateSync": "host/x refused"
+    },
+    {
+      "rule": "R6",
+      "input": "@tok@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "@tok@host",
+      "bareHost": "host",
+      "updateSync": "host"
+    },
+    {
+      "rule": "prose",
+      "input": "v pkg@h:1.2.3 ok",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "v pkg@h:1.2.3 ok",
+      "bareHost": "v pkg@h:1.2.3 ok",
+      "updateSync": "v pkg@h:1.2.3 ok"
+    },
+    {
+      "rule": "blast",
+      "input": "see a@b:3.x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "see a@b:3.x",
+      "bareHost": "see b:3.x",
+      "updateSync": "see b:3.x"
+    },
+    {
+      "rule": "prose",
+      "input": "use x@h:1.2 now",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "use x@h:1.2 now",
+      "bareHost": "use x@h:1.2 now",
+      "updateSync": "use x@h:1.2 now"
+    },
+    {
+      "rule": "prose",
+      "input": "@host:8443 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "@host:8443 refused",
+      "bareHost": "@host:8443 refused",
+      "updateSync": "@host:8443 refused"
+    },
+    {
+      "rule": "blast",
+      "input": "x@h:1.2",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "x@h:1.2",
+      "bareHost": "h:1.2",
+      "updateSync": "h:1.2"
+    },
+    {
+      "rule": "blast",
+      "input": "npm:pkg@1.2.3",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "1.2.3",
+      "bareHost": "1.2.3",
+      "updateSync": "1.2.3"
+    },
+    {
+      "rule": "blast",
+      "input": "WARNING:root:bob@example.com",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "example.com",
+      "bareHost": "example.com",
+      "updateSync": "example.com"
+    },
+    {
+      "rule": "blast",
+      "input": "stash@{0}:3",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "{0}:3",
+      "bareHost": "{0}:3",
+      "updateSync": "{0}:3"
+    },
+    {
+      "rule": "blast",
+      "input": "claude-session@x.service:12",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "x.service:12",
+      "bareHost": "x.service:12",
+      "updateSync": "x.service:12"
+    },
+    {
+      "rule": "R8",
+      "input": "https://@tok@host/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://host/x",
+      "bareHost": "https://host/x",
+      "updateSync": "https://host/x"
+    },
+    {
+      "rule": "R8",
+      "input": "https://@tok@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://host",
+      "bareHost": "https://host",
+      "updateSync": "https://host"
+    },
+    {
+      "rule": "R8",
+      "input": "http://@tok@host/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "http://host/x",
+      "bareHost": "http://host/x",
+      "updateSync": "http://host/x"
+    },
+    {
+      "rule": "R8",
+      "input": "http://@tok@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "http://host",
+      "bareHost": "http://host",
+      "updateSync": "http://host"
+    },
+    {
+      "rule": "R8",
+      "input": "https://@@tok@host/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://host/x",
+      "bareHost": "https://host/x",
+      "updateSync": "https://host/x"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@[fe80::1%25en0]:80 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "[fe80::1%25en0]:80 refused",
+      "bareHost": "[fe80::1%25en0]:80 refused",
+      "updateSync": "[fe80::1%25en0]:80 refused"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@[v1.fe80::1]:80 refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "[v1.fe80::1]:80 refused",
+      "bareHost": "[v1.fe80::1]:80 refused",
+      "updateSync": "[v1.fe80::1]:80 refused"
+    },
+    {
+      "rule": "blast",
+      "input": "ref@[main]:2 ok",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "[main]:2 ok",
+      "bareHost": "[main]:2 ok",
+      "updateSync": "[main]:2 ok"
+    },
+    {
+      "rule": "blast",
+      "input": "log@[core:io]:2 ok",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "[core:io]:2 ok",
+      "bareHost": "[core:io]:2 ok",
+      "updateSync": "[core:io]:2 ok"
+    },
+    {
+      "rule": "R8",
+      "input": "proxy tok@host:8443 x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "proxy host:8443 x",
+      "bareHost": "proxy host:8443 x",
+      "updateSync": "proxy host:8443 x"
+    },
+    {
+      "rule": "R8",
+      "input": "proxy tok@host:8443　x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "proxy host:8443　x",
+      "bareHost": "proxy host:8443　x",
+      "updateSync": "proxy host:8443　x"
+    },
+    {
+      "rule": "R8",
+      "inputHex": "70726f787920746f6b40686f73743a38343433ff2078",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrcHex": "70726f787920686f73743a38343433ff2078",
+      "bareHostHex": "70726f787920686f73743a38343433ff2078",
+      "updateSyncHex": "70726f787920686f73743a38343433ff2078"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443( x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443( x",
+      "bareHost": "host:8443( x",
+      "updateSync": "host:8443( x"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443& x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443& x",
+      "bareHost": "host:8443& x",
+      "updateSync": "host:8443& x"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443\\ x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443\\ x",
+      "bareHost": "host:8443\\ x",
+      "updateSync": "host:8443\\ x"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443= x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443= x",
+      "bareHost": "host:8443= x",
+      "updateSync": "host:8443= x"
+    },
+    {
+      "rule": "R8",
+      "input": "\"msg\":\"proxy tok@host:8443\\\" refused\"",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "\"msg\":\"proxy host:8443\\\" refused\"",
+      "bareHost": "\"msg\":\"proxy host:8443\\\" refused\"",
+      "updateSync": "\"msg\":\"proxy host:8443\\\" refused\""
+    },
+    {
+      "rule": "R8",
+      "input": "proxy=\\\"tok@host:8443\\\" failed",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443\\\" failed",
+      "bareHost": "host:8443\\\" failed",
+      "updateSync": "host:8443\\\" failed"
+    },
+    {
+      "rule": "R8",
+      "input": "connect to tok@host:8443\\nretry",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "connect to host:8443\\nretry",
+      "bareHost": "connect to host:8443\\nretry",
+      "updateSync": "connect to host:8443\\nretry"
+    },
+    {
+      "rule": "R8",
+      "input": "https:\\/\\/u:secret@host\\/x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https:\\/\\/host\\/x",
+      "bareHost": "https:\\/\\/host\\/x",
+      "updateSync": "https:\\/\\/host\\/x"
+    },
+    {
+      "rule": "R8",
+      "input": "https:\\/\\/tok@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https:\\/\\/host",
+      "bareHost": "https:\\/\\/host",
+      "updateSync": "https:\\/\\/host"
+    },
+    {
+      "rule": "R8",
+      "input": "\"url\":\"https:\\/\\/u:secret@host\"",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "\"url\":\"https:\\/\\/host\"",
+      "bareHost": "\"url\":\"https:\\/\\/host\"",
+      "updateSync": "\"url\":\"https:\\/\\/host\""
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a userinfo inside a query string or a path is not masked; a token starts only at the text's start or after whitespace, a quote, '<' or '('",
+      "input": "https://h/x?proxy=user:secret@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "https://h/x?proxy=user:secret@host",
+      "bareHost": "https://h/x?proxy=user:secret@host",
+      "updateSync": "https://h/x?proxy=user:secret@host"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a userinfo inside a query string or a path is not masked; a token starts only at the text's start or after whitespace, a quote, '<' or '('",
+      "input": "GET /p?u=user:secret@host:8443",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "GET /p?u=user:secret@host:8443",
+      "bareHost": "GET /p?u=user:secret@host:8443",
+      "updateSync": "GET /p?u=user:secret@host:8443"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a userinfo inside a query string or a path is not masked; a token starts only at the text's start or after whitespace, a quote, '<' or '('",
+      "input": "dir/user:secret@host",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "dir/user:secret@host",
+      "bareHost": "dir/user:secret@host",
+      "updateSync": "dir/user:secret@host"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a raw '#', '?' or '/' in a password ends the userinfo, so no '@' follows it and nothing is masked",
+      "input": "user:pa#ss@host refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "user:pa#ss@host refused",
+      "bareHost": "user:pa#ss@host refused",
+      "updateSync": "user:pa#ss@host refused"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a raw '#', '?' or '/' in a password ends the userinfo, so no '@' follows it and nothing is masked",
+      "input": "user:pa?ss@host refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "user:pa?ss@host refused",
+      "bareHost": "user:pa?ss@host refused",
+      "updateSync": "user:pa?ss@host refused"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a raw '#', '?' or '/' in a password ends the userinfo, so no '@' follows it and nothing is masked",
+      "input": "user:pa/ss@host refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "user:pa/ss@host refused",
+      "bareHost": "user:pa/ss@host refused",
+      "updateSync": "user:pa/ss@host refused"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a token-only userinfo (no ':') before a host that no port (or an empty one, as in tok@h: refused) and no path follows reads as prose's user@host, so neither mode masks it while more text follows the host",
+      "input": "--proxy=tok@host refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "--proxy=tok@host refused",
+      "bareHost": "--proxy=tok@host refused",
+      "updateSync": "--proxy=tok@host refused"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a token-only userinfo (no ':') before a host that no port (or an empty one, as in tok@h: refused) and no path follows reads as prose's user@host, so neither mode masks it while more text follows the host",
+      "input": "--proxy tok@host refused",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "--proxy tok@host refused",
+      "bareHost": "--proxy tok@host refused",
+      "updateSync": "--proxy tok@host refused"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443… x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443… x",
+      "bareHost": "host:8443… x",
+      "updateSync": "host:8443… x"
+    },
+    {
+      "rule": "R8",
+      "input": "tok@host:8443” x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "host:8443” x",
+      "bareHost": "host:8443” x",
+      "updateSync": "host:8443” x"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a letter, '-', '_' or '~' (characters a host name holds, so the text after the ':' is arguably no port) does not end the port, so a token-only userinfo before it is not masked while more text follows",
+      "input": "tok@host:8443-x retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443-x retrying",
+      "bareHost": "tok@host:8443-x retrying",
+      "updateSync": "tok@host:8443-x retrying"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a letter, '-', '_' or '~' (characters a host name holds, so the text after the ':' is arguably no port) does not end the port, so a token-only userinfo before it is not masked while more text follows",
+      "input": "tok@host:8443- x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443- x",
+      "bareHost": "tok@host:8443- x",
+      "updateSync": "tok@host:8443- x"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a letter, '-', '_' or '~' (characters a host name holds, so the text after the ':' is arguably no port) does not end the port, so a token-only userinfo before it is not masked while more text follows",
+      "input": "tok@host:8443a x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443a x",
+      "bareHost": "tok@host:8443a x",
+      "updateSync": "tok@host:8443a x"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a letter, '-', '_' or '~' (characters a host name holds, so the text after the ':' is arguably no port) does not end the port, so a token-only userinfo before it is not masked while more text follows",
+      "input": "tok@host:8443_x y",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443_x y",
+      "bareHost": "tok@host:8443_x y",
+      "updateSync": "tok@host:8443_x y"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a letter, '-', '_' or '~' (characters a host name holds, so the text after the ':' is arguably no port) does not end the port, so a token-only userinfo before it is not masked while more text follows",
+      "input": "tok@host:8443~ x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443~ x",
+      "bareHost": "tok@host:8443~ x",
+      "updateSync": "tok@host:8443~ x"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a run of '.', '!' or '}' and then a letter, '-', '_' or '~' (a version's x@h:1.2 has that shape) does not end the port, so a token-only userinfo before it is not masked while more text follows",
+      "input": "tok@host:8443.x retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443.x retrying",
+      "bareHost": "tok@host:8443.x retrying",
+      "updateSync": "tok@host:8443.x retrying"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a run of '.', '!' or '}' and then a letter, '-', '_' or '~' (a version's x@h:1.2 has that shape) does not end the port, so a token-only userinfo before it is not masked while more text follows",
+      "input": "tok@host:8443!x retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443!x retrying",
+      "bareHost": "tok@host:8443!x retrying",
+      "updateSync": "tok@host:8443!x retrying"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a port followed by a run of '.', '!' or '}' and then a letter, '-', '_' or '~' (a version's x@h:1.2 has that shape) does not end the port, so a token-only userinfo before it is not masked while more text follows",
+      "input": "tok@host:8443}x retrying",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@host:8443}x retrying",
+      "bareHost": "tok@host:8443}x retrying",
+      "updateSync": "tok@host:8443}x retrying"
+    },
+    {
+      "rule": "known-limit",
+      "note": "known limit: a host of digits only (a decimal IPv4 address such as 2130706433) reads as a time's build@10:30, so a token-only userinfo before its port is not masked while more text follows",
+      "input": "tok@2130706433:80 x",
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "tok@2130706433:80 x",
+      "bareHost": "tok@2130706433:80 x",
+      "updateSync": "tok@2130706433:80 x"
+    },
+    {
+      "rule": "bound",
+      "inputRuns": [
+        {
+          "text": "fetch failed: u:secret@h ",
+          "times": 1
+        },
+        {
+          "text": "x",
+          "times": 9000
+        },
+        {
+          "text": " u:secret@h /home/u",
+          "times": 4000
+        }
+      ],
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "fetch failed: h [cut: 85001 more bytes withheld, over the redactor's 4096-byte cap]",
+      "bareHost": "fetch failed: h [cut: 85001 more bytes withheld, over the redactor's 4096-byte cap]",
+      "updateSync": "fetch failed: h [cut: 85001 more bytes withheld, over the redactor's 4096-byte cap]"
+    },
+    {
+      "rule": "bound",
+      "inputRuns": [
+        {
+          "text": "fetch failed:",
+          "times": 1
+        },
+        {
+          "text": " u:secret@h:1 u:secret@h:1 u:secret@h:1 /home/u/x",
+          "times": 2000
+        }
+      ],
+      "home": "/home/u",
+      "locale": "C",
+      "ccrc": "fetch failed: h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 [cut: 94018 more bytes withheld, over the redactor's 4096-byte cap]",
+      "bareHost": "fetch failed: h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 [cut: 94018 more bytes withheld, over the redactor's 4096-byte cap]",
+      "updateSync": "fetch failed: h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 h:1 h:1 ~/x h:1 [cut: 94018 more bytes withheld, over the redactor's 4096-byte cap]"
+    }
+  ]
+}

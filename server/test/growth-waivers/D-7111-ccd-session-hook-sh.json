@@ -1,0 +1,7 @@
+{
+  "file": "ccd/session-hook.sh",
+  "maxDelta": 65,
+  "d": "D-7111",
+  "reason": "landing-order wave 2b: the bypass deny in the PreToolUse merge arm (the raw read, the gh api head, the over-cap kinds and the per-project admin allowance) measured +55 net code lines against the merge-base; kept inline because a second installed hook file would need install, update, backup and uninstall support in ccd/ccrc, as D-6798 records",
+  "added": "2026-10-29"
+}

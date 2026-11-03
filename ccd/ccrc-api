@@ -21,7 +21,10 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, thirty-one rows, and nothing else.
+#   * The route comes from ROUTES below, fifty-five rows, and nothing else; the
+#     four claimant rows name the question door family's template, their only
+#     door since the old ones were retired (D-7324), refused here, unsent, when a
+#     current cap file says the server lacks `questions-v1` (D-7328).
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
@@ -57,7 +60,10 @@
 #
 # SELF-CONTAINED. This file `source`s nothing. The moment it does it needs the
 # shim treatment `ccrc` has (deploy/deploy.sh argues that at length) and a lone
-# copy at ~/.local/bin would be dead on every box.
+# copy at ~/.local/bin would be dead on every box. The GENERATED SERVER-CAP
+# READER region below is a byte copy of the hook's `_hook_server_cap`, renamed
+# `_api_server_cap` (D-7321), never a `source`; regenerate it with
+# `ccrc restamp ccd/ccrc-api`.
 set +x; set -uo pipefail   # `set +x` FIRST, a SECRETS control as in ccd-pool-sync: an inherited xtrace would print the box token (R16, D-4096)
 
 # `~/.local/bin` is NOT on the `claude-session@` unit PATH (measured 2026-08-26),
@@ -77,7 +83,11 @@ REG="$HOME/.cc-sessions"
 SAFE_RE='^[A-Za-z0-9_-]+$'
 
 # METHOD|path|needs-id|comma-separated query keys this row accepts (or `-`).
-# Thirty-one rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# The four claimant rows' path is the question door family's template
+# (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
+# fifth field, sent only while the server advertised `questions-v1` (D-7325), and
+# since the old doors were retired it is their path (D-7324). Every row has four.
+# Fifty-five rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -127,6 +137,8 @@ declare -A ROUTES=(
   [claims.release]='POST|/api/claims/{id}/release|yes|-'
   [ledger.list]='GET|/api/ledger|no|project'
   [ledger.allocate]='POST|/api/ledger/deviations|no|-'
+  # The landing line's read (landing order wave 5e, D-7625): one project's entries, flags and order.
+  [landing.show]='GET|/api/landing|no|project'
   # A token-authenticated session may list only its own children's asks. The
   # client derives both identity fields below; `--parent` is accepted only as a
   # compatibility assertion and may never select somebody else.
@@ -140,8 +152,8 @@ declare -A ROUTES=(
   # IS the ask's parent. Deriving here would read as a security boundary this
   # client cannot be — identity on this fleet is attribution, not authentication,
   # and every `.uuid` is readable by the one UNIX user these sessions share.
-  [asks.answer]='POST|/api/asks/{id}/answer|yes|-'
-  [asks.release]='POST|/api/asks/{id}/release|yes|-'
+  [asks.answer]='POST|/api/questions/ask-{id}/rule|yes|-'
+  [asks.release]='POST|/api/questions/ask-{id}/release|yes|-'
   # The durable feed. `--program` filters through `feed_events.runId` and answers
   # one programme's events; without it the read is the whole box's, oldest-first.
   # An event that names no run is programless and appears only unfiltered.
@@ -165,10 +177,72 @@ declare -A ROUTES=(
   # there too: this grammar takes no positional word after the id (D-5489). `show` derives identity from the pane, as
   # `asks list` does, so a session reads only a row held for it. A CHILD's own tool call to any `approvals` row is
   # refused by its PreToolUse deny (plan Task 14), before this client runs.
-  [approvals.rule]='POST|/api/approvals/{id}/rule|yes|-'
-  [approvals.release]='POST|/api/approvals/{id}/release|yes|-'
+  [approvals.rule]='POST|/api/questions/approval-{id}/rule|yes|-'
+  [approvals.release]='POST|/api/questions/approval-{id}/release|yes|-'
   [approvals.show]='GET|/api/approvals/{id}|yes|-'
+  # The test box (test box plan TB9, D-7411, D-7554): its status block, and the tools sync the update lane signals
+  # once a roll ends (spec §2.10). Both routes take a session OR the box token; neither takes a body or a query, and the
+  # sync sends the box only the fleet host's own release and measured versions. The switch has NO row, on purpose:
+  # arming remote runs is the operator's act, from the Settings card.
+  [testbox.status]='GET|/api/testbox|no|-'
+  [testbox.tools-sync]='POST|/api/testbox/tools-sync|no|-'
+  # The programme ledgers (plan PL3): the coordinator's side of the Waiting-on-you list and the Goals pin. All nine
+  # are box-token gated and attribution-checked, and a coordinator may act only on its own programme's items and pin. The
+  # `{id}` of the first, second and last three is the programme's slug (a `SAFE_RE` shape); of the four item-move rows, the
+  # item's id. `items list` is a read that names its caller in the query: `byId` and `byUuid` are the caller's own,
+  # supplied as flags.
+  [items.raise]='POST|/api/programmes/{id}/items|yes|-'
+  [items.list]='GET|/api/programmes/{id}/items|yes|byId,byUuid'
+  [items.confirm]='POST|/api/items/{id}/confirm|yes|-'
+  [items.return]='POST|/api/items/{id}/return|yes|-'
+  [items.withdraw]='POST|/api/items/{id}/withdraw|yes|-'
+  [items.block]='POST|/api/items/{id}/blocking|yes|-'
+  [goals.pin]='POST|/api/programmes/{id}/spec|yes|-'
+  [goals.modify]='POST|/api/programmes/{id}/modifications|yes|-'
+  [goals.merged]='POST|/api/programmes/{id}/modifications/merged|yes|-'
+  # Linear, through the server's proxy and the key ccrc holds for each workspace (D-7669, #1444): sessions never sign
+  # in to Linear and never hold a key. Twelve rows, nine reads and three writes; the SERVER decides each row's class,
+  # never the method, which is why `search`, a read, is a POST: its text is free text, and free text never rides a URL
+  # (SAFE_RE refuses it as a query value), so it goes in the `--json` body. `search` has its own path so no issue
+  # route's `{id}` can match it. The `{id}` on the four issue rows is an issue identifier (`AAA-12`), held to
+  # LINEAR_REF_RE below before anything is sent. `workspace` is a declared query key on every row that acts in one
+  # workspace, the POSTs included, and never a body field; only `workspaces`, which lists them all, takes none. Every
+  # row carries the pane's identity in its QUERY, appended after the declared keys (the Linear block in `main`).
+  [linear.workspaces]='GET|/api/linear/proxy/workspaces|no|-'
+  [linear.teams]='GET|/api/linear/proxy/teams|no|workspace'
+  [linear.issue]='GET|/api/linear/proxy/issues/{id}|yes|workspace'
+  [linear.search]='POST|/api/linear/proxy/search|no|workspace'
+  [linear.comments]='GET|/api/linear/proxy/issues/{id}/comments|yes|workspace,limit,after'
+  [linear.statuses]='GET|/api/linear/proxy/statuses|no|team,workspace'
+  [linear.projects]='GET|/api/linear/proxy/projects|no|team,workspace,limit,after'
+  [linear.labels]='GET|/api/linear/proxy/labels|no|team,workspace'
+  [linear.users]='GET|/api/linear/proxy/users|no|workspace,limit,after'
+  [linear.create]='POST|/api/linear/proxy/issues|no|workspace'
+  [linear.update]='POST|/api/linear/proxy/issues/{id}|yes|workspace'
+  [linear.comment]='POST|/api/linear/proxy/issues/{id}/comments|yes|workspace'
 )
+
+# A Linear issue identifier, the `<REF>` of the four issue rows (D-7669): a team key that starts with a letter, a hyphen,
+# then one to nine digits. Every match also matches SAFE_RE; this is the narrower check on those rows, so `AAA12`,
+# `AAA-` and `search` are refused here, locally, as `bad-ref` (D-7685), and never sent. The server checks it again. The classes are spelled
+# out, never ranges, for the reason `_api_server_cap` gives: under a UTF-8 locale a range may collate non-ASCII letters.
+LINEAR_REF_RE='^[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz][ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_]*-[0123456789]{1,9}$'
+
+# ── BEGIN GENERATED SERVER-CAP READER (shared/hook-helpers.mjs; edit _hook_server_cap in ccd/session-hook.sh, then regenerate) ──
+# ccrc:generated 1 sha256=b13a129bd7002352be7dfc797c104d07461cf4b34ab6bc1d6cb6e2dde47e177a
+_api_server_cap() {
+  local want="$1" l1="" l2="" l3="" l4="" at now
+  { { IFS= read -r l1 && IFS= read -r l2 && IFS= read -r l3 && ! IFS= read -r l4; } < "$HOME/.ccrc/server-caps"; } 2>/dev/null || return 1
+  [[ -z "$l4" && "$l3" == end && "$l1" =~ ^at\ ([0123456789]{1,11})$ ]] || return 1
+  at=$(( 10#${BASH_REMATCH[1]} ))
+  # The word class is spelled out, never a range: under a UTF-8 locale `a-z` may collate non-ASCII letters into it.
+  [[ "$l2" =~ ^caps(\ [abcdefghijklmnopqrstuvwxyz0123456789-]{1,64})*$ ]] || return 1
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then now="${EPOCHREALTIME%%[.,]*}"; else printf -v now '%(%s)T' -1; fi
+  [[ "$now" =~ ^[0123456789]+$ ]] || return 1
+  (( at <= now && now - at <= 180 )) || return 1
+  [[ " ${l2#caps} " == *" $want "* ]]
+}
+# ── END GENERATED SERVER-CAP READER ──
 
 # Every refusal leaves by this door, in the SAME JSON envelope the routes
 # themselves use, so a caller never parses two shapes. The human sentence goes to
@@ -206,7 +280,7 @@ usage() {
     printf 'which a later release stops writing by default.\n\n'
     printf 'Closed table — no URL, host or path is an argument.\n\n'
     for k in $(printf '%s\n' "${!ROUTES[@]}" | sort); do
-      IFS='|' read -r m p _ q <<< "${ROUTES[$k]}"
+      IFS='|' read -r m p _ q _ <<< "${ROUTES[$k]}"
       [[ "$q" == '-' ]] && q='' || q="  [--${q//,/ | --}]"
       printf '  %-18s %-5s %s%s\n' "${k/./ }" "$m" "$p" "$q"
     done
@@ -392,6 +466,9 @@ main() {
   if [[ "$needs" == 'yes' ]]; then
     [[ -n "$id" ]] || refuse 'no-id' "$group $verb needs an id"
     [[ "$id" =~ $SAFE_RE ]] || refuse 'bad-id' 'id is not a plain id'
+    if [[ "$group" == 'linear' ]]; then
+      [[ "$id" =~ $LINEAR_REF_RE ]] || refuse 'bad-ref' 'the issue reference is not an identifier such as AAA-12'
+    fi
   else
     # Not ignored: a caller who passed one believes it is going somewhere.
     [[ -z "$id" ]] || refuse 'unexpected-id' "$group $verb takes no id"
@@ -444,8 +521,9 @@ main() {
   # The intent row's body is the body `parse_intent` synthesized: never read from a file or stdin.
   [[ -z "$intent_body" ]] || body="$intent_body"
 
-  # THE FIRST BODY THIS CLIENT REWRITES. It now rewrites two more: the intent
-  # row's (above, replaced whole) and `runs.open`'s (below). Measured
+  # THE FIRST BODY THIS CLIENT REWRITES. It now rewrites three more: the intent
+  # row's (above, replaced whole), `runs.open`'s (below) and the claimant rows'
+  # `kind` (below, D-7322). Measured
   # 2026-09-02: at least 101 of this project's allocations already carry an empty
   # holder, because the documented body omits `byId` and the route stores
   # `byId ?? ''` — an omitted field and an explicit empty string reaching one
@@ -538,6 +616,19 @@ main() {
     query="fromId=$DERIVED_ID&fromUuid=$DERIVED_UUID"
   fi
 
+  # Every Linear row (D-7669, #1444) carries the pane's identity, GETs and POSTs alike, and it rides the QUERY, after
+  # the declared keys, the way `approvals show` builds `fromId`/`fromUuid`. THIS BLOCK NEVER READS OR EDITS THE BODY:
+  # no splice and no textual test, so a POST's body goes on the wire byte for byte as the caller gave it. That is the
+  # opposite of the `byId` fill above, on purpose: here the caller may not choose whom a write is attributed to through
+  # this client. `byId` and `byUuid` are not declared query keys, so `--byId` is `unknown-query`, and no declared key's
+  # value can add one, because SAFE_RE refuses `&` and `=`. A body that names either (however it spells the key) is the
+  # server's to refuse, after parsing, as `bad-field`; the server reads identity from the query only. A pane with no
+  # identity is refused here and nothing is sent.
+  if [[ "$key" == linear.* ]]; then
+    derive_identity
+    query+="${query:+&}byId=$DERIVED_ID&byUuid=$DERIVED_UUID"
+  fi
+
   if [[ "$key" == 'asks.list' ]]; then
     derive_identity
     [[ -z "$ask_parent" || "$ask_parent" == "$DERIVED_ID" ]] \
@@ -546,6 +637,54 @@ main() {
     # an unfiltered diagnostic read, so the bounded client fixes the held view
     # rather than exposing caller-selected state.
     query="parent=$DERIVED_ID&fromUuid=$DERIVED_UUID&state=held"
+  fi
+
+  # THE THIRD BODY FILL: the question door family's `kind` (D-7322), on the four claimant rows, whose template is the
+  # family's and their only door: the old doors were retired (D-7324), so nothing falls back. The kind is the ROW's,
+  # read from the template's `ask-` or `approval-` prefix, never from the caller; `$claimant` holds it, and is empty on
+  # every other row.
+  #
+  # THE ONE LOCAL REFUSAL (D-7328), and the fail direction inverted on purpose: a CURRENT, well-formed
+  # `~/.ccrc/server-caps` that omits `questions-v1` says the server this box talks to is older than the family, so
+  # `no-questions-door` is answered and nothing is sent. An absent, stale, torn or future file sends the family, the
+  # only door left. The file is read by `_api_server_cap`, the generated copy of the hook's reader, and only for a
+  # claimant row: the test of `$claimant` comes first on the one line that calls the reader. That line asks it twice,
+  # for `questions-v1` and then for the empty word, which the reader answers 0 for every current, well-formed file
+  # (its last test looks for `" $want "` in the caps line with a space added at each end, and that padded line always
+  # holds two spaces), whether it lists the other words or none (a server older than the caps answer is recorded as
+  # none). A 404 is never read as "no family": `unknown-ask` and `unknown-approval` are 404s too.
+  #
+  # The `byId` fill's rules hold for the splice: a body that already names `"kind":` (the same textual test over a
+  # whitespace-stripped copy, with the same stated limits) is left alone, so a contrary kind reaches the server and is
+  # answered there; a bodyless call is sent as the kind alone, which both doors refuse alike; a body that is not a JSON
+  # object is refused here and nothing is sent.
+  local claimant=''
+  if [[ "$tmpl" == '/api/questions/'* ]]; then
+    claimant="${tmpl#/api/questions/}"
+    claimant="${claimant%%-*}"
+  fi
+  if [[ -n "$claimant" ]]; then
+    local want served='family'
+    for want in questions-v1 ''; do
+      if [[ -n "$claimant" ]] && _api_server_cap "$want"; then
+        [[ -n "$want" ]] || served=''
+        break
+      fi
+    done
+    [[ -n "$served" ]] || refuse 'no-questions-door' \
+      'the server this box talks to does not answer the question door family; update it before answering'
+    if [[ -z "$body" ]]; then
+      body="{\"kind\":\"$claimant\"}"
+    else
+      local kb="${body//[[:space:]]/}"
+      [[ "$kb" == '{'* ]] || refuse 'bad-body' 'the body is not a JSON object; kind cannot be added'
+      case "$kb" in
+        *'"kind":'*) : ;;                    # the caller has spoken
+        *)
+          splice_body_field 'kind' "$claimant" \
+            'the body is not a JSON object; kind cannot be added' ;;
+      esac
+    fi
   fi
 
   local path url

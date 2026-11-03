@@ -7,7 +7,8 @@
 // Every case runs the package through `runBridgeDriver`'s `count`, `known` and `stats-*` ops in a mkTmp HOME, with the
 // stats file in a lane directory this file makes 0700 (as the tier's start does), and both endpoint variables at a
 // closed loopback URL: nothing here makes a request. Model ids are neutral, lanes are `lane-a`/`lane-b`, and the
-// `x-codex-` headers used here are fixture names under that prefix, never the usage poller's own names.
+// `x-codex-` headers used here are fixture names under that prefix, never the usage poller's own names, except in the
+// one case that lists the header names the live probe measured (D-7083): names only, never their values.
 import { describe, it, expect } from 'vitest';
 import {
   mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, existsSync, lstatSync, symlinkSync,
@@ -139,9 +140,10 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     expect(readdirSync(dir)).toEqual([STATS]);
     const doc = readDoc(file);
     expect(Object.keys(doc).sort()).toEqual([
-      'lane', 'lastUpstreamRequestId', 'names', 'outcomes', 'refusals', 'routes', 'since', 'startedAt', 'unexplained',
-      'updatedAt', 'usageHeaders', 'version',
+      'lane', 'lastUpstreamRequestId', 'names', 'outcomes', 'refusals', 'routes', 'since', 'startedAt', 'store',
+      'unexplained', 'updatedAt', 'usageHeaders', 'version',
     ]);
+    expect(doc.store).toEqual({ state: 'ok', reason: null, at: null, setAside: null });
     expect(doc.version).toBe(1);
     expect(doc.lane).toBe('lane-a');
     expect(doc.since).toMatch(ISO);
@@ -256,6 +258,92 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     expect(snap.doc.names.eventType).toEqual({ 'response.fx_new_event': 1, 'response.metadata': 1 });
   });
 
+  // The backend's `keepalive` event, counted on the live lane's direct traffic (2026-10-27; D-7119): Codex yields no
+  // event for it and the bridge only names it (known.py#_BACKEND_EVENTS), so it is explained and the doctor stops
+  // naming it.
+  it("the backend's keepalive event is explained, and an unknown event beside it is not", async () => {
+    const { home, file } = lane('cb-stats-keepalive-');
+    const [, , , snap] = await run(home, [
+      open(file),
+      call('name', ['eventType', 'keepalive']),
+      call('name', ['eventType', 'response.fx_new_event']),
+      { op: 'stats-snapshot' },
+    ]);
+    // the control: both names were counted, so the unexplained list is about KNOWN, not a call that missed
+    expect(snap.doc.names.eventType).toEqual({ keepalive: 1, 'response.fx_new_event': 1 });
+    expect(snap.doc.unexplained.eventType).toEqual(['response.fx_new_event']);
+  });
+
+  // The 33 response header names every answer of runbook step 2 carried (2026-10-27, measured on the live probe's
+  // first step; D-7083), in the order the probe printed them, and the media-type name a 2xx stream with no content
+  // type counts. Unlike this file's other x-codex- names these are the backend's own: the case pins that the
+  // measured set is explained, so the doctor's drift row stays quiet on the backend's ordinary answers.
+  const MEASURED_HEADERS = [
+    'date', 'transfer-encoding', 'connection', 'server', 'x-codex-active-limit', 'x-codex-plan-type',
+    'x-codex-primary-used-percent', 'x-codex-secondary-used-percent', 'x-codex-primary-window-minutes',
+    'x-codex-primary-over-secondary-limit-percent', 'x-codex-secondary-window-minutes',
+    'x-codex-primary-reset-after-seconds', 'x-codex-secondary-reset-after-seconds', 'x-codex-primary-reset-at',
+    'x-codex-secondary-reset-at', 'x-codex-credits-has-credits', 'x-codex-credits-balance', 'x-codex-credits-unlimited',
+    'x-models-etag', 'x-codex-turn-state', 'x-codex-safety-buffering-enabled', 'x-codex-safety-buffering-faster-model',
+    'x-oai-request-id', 'x-openai-proxy-wasm', 'x-content-type-options', 'cf-cache-status', 'cross-origin-opener-policy',
+    'strict-transport-security', 'nel', 'report-to', 'set-cookie', 'referrer-policy', 'cf-ray',
+  ];
+  it('every response header name the live probe measured (runbook step 2) is explained', async () => {
+    expect(MEASURED_HEADERS).toHaveLength(33);
+    const { home, file } = lane('cb-stats-measured-');
+    const [, , , snap] = await run(home, [
+      open(file),
+      call('header_names', [Object.fromEntries(MEASURED_HEADERS.map((n) => [n, 'fx']))]),
+      call('name', ['responseHeader', 'content-type:absent']),
+      { op: 'stats-snapshot' },
+    ]);
+    // the control: every name was counted, so the empty unexplained list is about KNOWN, not a call that missed
+    expect(Object.keys(snap.doc.names.responseHeader).sort()).toEqual([...MEASURED_HEADERS, 'content-type:absent'].sort());
+    expect(snap.doc.unexplained.responseHeader).toBeUndefined();
+  });
+
+  // Claude Code 2.1.310's nine `anthropic-beta` values, measured on the live lane's first traffic after the flip
+  // (runbook step 4, 2026-10-27; D-7093). Seven gate shapes the bridge never sends, answers itself or already counts by
+  // their own family; the two tool-change betas gate `tool_addition`/`tool_removal` blocks in a system entry, which
+  // inbound honours since D-7143 (ccd/codexbridge/inbound.py#_fold_tool_changes). All nine are explained, so the
+  // doctor is quiet on them.
+  const MEASURED_BETAS = [
+    'advanced-tool-use-2025-11-20', 'claude-code-20250219', 'context-management-2025-06-27',
+    'inline-tools-2026-09-15', 'interleaved-thinking-2025-05-14', 'mid-conversation-tool-changes-2026-07-01',
+    'thinking-display-updates-2026-08-18', 'thinking-token-count-2026-05-13', 'token-counting-2024-11-01',
+  ];
+  it("Claude Code's nine measured betas are explained, the two tool-change betas among them (D-7143)", async () => {
+    expect(MEASURED_BETAS).toHaveLength(9);
+    const { home, file } = lane('cb-stats-betas-');
+    const all = [...MEASURED_BETAS, 'effort-2025-11-24'];
+    const out = await run(home, [open(file), ...all.map((b) => call('name', ['betaValue', b])), { op: 'stats-snapshot' }]);
+    const snap = out[out.length - 1];
+    // the control: every beta was counted, so the empty unexplained list is about KNOWN, not a call that missed
+    expect(Object.keys(snap.doc.names.betaValue).sort()).toEqual([...all].sort());
+    expect(snap.doc.unexplained.betaValue).toBeUndefined();
+  });
+
+  // The block names inbound counts for a system entry (ccd/codexbridge/inbound.py#@system-entry-dropped-blocks): the
+  // four it honours since D-7143 are explained; a block or tool it cannot type (`unrecognised`), a tool type it does
+  // not know, and a by-reference addition of a name nothing offers stay unexplained, so the doctor names each the day
+  // it arrives.
+  const HONOURED_BLOCKS = [
+    'tool_addition-block', 'tool_addition-block.tool_definition', 'tool_addition-block.tool_reference', 'tool_removal-block',
+  ];
+  const OPEN_BLOCKS = [
+    'future_fx-block', 'tool_addition-block.future_kind', 'tool_addition-block.unknown-reference',
+    'tool_addition-block.unrecognised', 'unrecognised-block',
+  ];
+  it('the honoured tool-change block names are explained, and the shapes the bridge cannot handle are not (D-7143)', async () => {
+    const { home, file } = lane('cb-stats-blocks-');
+    const all = [...HONOURED_BLOCKS, ...OPEN_BLOCKS];
+    const out = await run(home, [open(file), ...all.map((n) => call('name', ['requestField', n])), { op: 'stats-snapshot' }]);
+    const snap = out[out.length - 1];
+    // the control: every name was counted, so the unexplained list is about KNOWN, not a call that missed
+    expect(Object.keys(snap.doc.names.requestField).sort()).toEqual([...all].sort());
+    expect(snap.doc.unexplained.requestField).toEqual([...OPEN_BLOCKS].sort());
+  });
+
   it('KNOWN covers every family, and its errorCode family is errors.ALL_CODES', async () => {
     const { home } = lane('cb-stats-known-');
     const [k, sets] = await run(home, [{ op: 'known' }, { op: 'sets' }]);
@@ -267,6 +355,7 @@ describe.skipIf(!PY)('the stats file (codex-bridge spec §2.7, §2.9 D3; D-6418)
     expect(k.known.errorCode).toEqual(sets.ALL_CODES);
     expect(k.known.contextEdit).toEqual(['clear_thinking_20251015']);
     expect(k.known.eventType).toContain('response.metadata');
+    expect(k.known.eventType).toContain('keepalive');
     expect(k.prefixes).toEqual({ responseHeader: ['x-codex-'] });
   });
 
@@ -703,5 +792,114 @@ describe.skipIf(!PY)('the stats file\'s write lock and value rules (codex-bridge
     const doc = readDoc(file);
     expect(doc.usageHeaders.values).toEqual({ 'x-codex-fx-ok': '1.5e-3', 'x-codex-fx-n': '-17' });
     expect(doc.names.responseHeader['x-codex-turn-state']).toBe(1); // the name is still counted
+  });
+});
+
+describe.skipIf(!PY)('the store entry: the reasoning store\'s state for this process (D-7677)', () => {
+  const STORE_OK = { state: 'ok', reason: null, at: null, setAside: null };
+  const COPY = 'reasoning.sqlite.damaged-20261028T120000Z';
+
+  it('the entry is reset at construction, never carried, while the outcomes are', async () => {
+    const { home, file } = lane('cb-stats-store-reset-');
+    writeFileSync(file, JSON.stringify({
+      version: 1, lane: 'lane-a', since: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z',
+      outcomes: { 'store:DatabaseError': 3, 'store:set-aside': 1 },
+      store: {
+        state: 'disabled', reason: 'store:DatabaseError', at: '2026-01-01T00:00:01.000Z',
+        setAside: { at: '2026-01-01T00:00:00.500Z', found: 'integrity-check', file: COPY },
+      },
+    }), { mode: 0o600 });
+    const [o, , flushed] = await run(home, [open(file), call('flush', [], { force: true }), { op: 'stats-snapshot' }]);
+    expect(o.doc.store).toEqual(STORE_OK);
+    expect(o.doc.outcomes).toEqual({ 'store:DatabaseError': 3, 'store:set-aside': 1 });
+    expect(flushed.doc.store).toEqual(STORE_OK);
+    expect(readDoc(file).store).toEqual(STORE_OK);
+  });
+
+  it('a set-aside is recorded, and counted through the one method', async () => {
+    const { home, file } = lane('cb-stats-store-aside-');
+    const [, , snap] = await run(home, [
+      open(file),
+      call('store_event', ['store:set-aside', 'integrity-check', COPY], { now: 1_700_000_000 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.store).toEqual({
+      state: 'set-aside', reason: 'store:set-aside', at: '2023-11-14T22:13:20.000Z',
+      setAside: { at: '2023-11-14T22:13:20.000Z', found: 'integrity-check', file: COPY },
+    });
+    expect(snap.doc.outcomes).toEqual({ 'store:set-aside': 1 });
+  });
+
+  it('disabled outranks set-aside in either order, and setAside keeps its record', async () => {
+    for (const order of ['aside-first', 'disabled-first'] as const) {
+      const { home, file } = lane('cb-stats-store-rank-');
+      const aside = call('store_event', ['store:set-aside', 'DatabaseError', COPY], { now: 1_700_000_000 });
+      const failed = call('store_event', ['store:DatabaseError'], { now: 1_700_000_060 });
+      const [, , , snap] = await run(home, [
+        open(file), ...(order === 'aside-first' ? [aside, failed] : [failed, aside]), { op: 'stats-snapshot' },
+      ]);
+      expect(snap.doc.store, order).toEqual({
+        state: 'disabled', reason: 'store:DatabaseError', at: '2023-11-14T22:14:20.000Z',
+        setAside: { at: '2023-11-14T22:13:20.000Z', found: 'DatabaseError', file: COPY },
+      });
+      expect(snap.doc.outcomes, order).toEqual({ 'store:set-aside': 1, 'store:DatabaseError': 1 });
+    }
+  });
+
+  it('a set-aside that failed after its renames records the copy, and the store is disabled', async () => {
+    const { home, file } = lane('cb-stats-store-aside-failed-');
+    const [, , snap] = await run(home, [
+      open(file),
+      call('store_event', ['store:set-aside-failed', 'integrity-check', COPY], { now: 1_700_000_000 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.store).toEqual({
+      state: 'disabled', reason: 'store:set-aside-failed', at: '2023-11-14T22:13:20.000Z',
+      setAside: { at: '2023-11-14T22:13:20.000Z', found: 'integrity-check', file: COPY },
+    });
+    expect(snap.doc.outcomes).toEqual({ 'store:set-aside-failed': 1 });
+  });
+
+  it('a found or file outside NAME_RE is unrecognised, never written as given', async () => {
+    const { home, file } = lane('cb-stats-store-bound-');
+    const [, , snap] = await run(home, [
+      open(file),
+      call('store_event', ['store:set-aside', 'a found with spaces', '/an/absolute/path/to/a/copy'], { now: 1_700_000_000 }),
+      { op: 'stats-snapshot' },
+    ]);
+    expect(snap.doc.store.setAside).toEqual({ at: '2023-11-14T22:13:20.000Z', found: 'unrecognised', file: 'unrecognised' });
+  });
+
+  it('a store event makes the next unforced flush write at once, whatever FLUSH_S says; a count does not', async () => {
+    const { home, file } = lane('cb-stats-store-due-');
+    const [, first, , quiet, , due] = await run(home, [
+      open(file),
+      call('flush', [], { force: true }),
+      call('outcome', ['2xx']),
+      call('flush'),
+      call('store_event', ['store:DatabaseError']),
+      call('flush'),
+    ], { consts: { 'stats.FLUSH_S': 600 } });
+    expect(first.result).toBe(true);
+    expect(quiet.result).toBe(false); // inside FLUSH_S an ordinary count waits
+    expect(due.result).toBe(true);
+    expect(readDoc(file).store).toMatchObject({ state: 'disabled', reason: 'store:DatabaseError' });
+    expect(readDoc(file).outcomes).toEqual({ '2xx': 1, 'store:DatabaseError': 1 });
+  });
+
+  it('a store event while a write is in flight still makes the next unforced flush write', async () => {
+    const { home, file } = lane('cb-stats-store-due-race-');
+    const [, r, next] = await run(home, [
+      open(file),
+      { op: 'stats-race', flush: { force: true }, during: [{ method: 'store_event', args: ['store:DatabaseError'], kwargs: {} }],
+        waitS: 5 },
+      call('flush'),
+    ], { consts: { 'stats.FLUSH_S': 600 } });
+    expect(r.result).toBe(true);
+    expect(r.duringFinished).toBe(true);
+    expect(r.duringRaised).toEqual([]);
+    // The write in flight serialised the document before the event; its success must not spend the event's one-shot.
+    expect(next.result).toBe(true);
+    expect(readDoc(file).store).toMatchObject({ state: 'disabled', reason: 'store:DatabaseError' });
   });
 });

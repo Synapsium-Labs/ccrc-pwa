@@ -1,0 +1,131 @@
+{
+  "name": "error-linear-invalid-state",
+  "documentSource": "code",
+  "document": "mutation IssueCreate($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title description priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } } }",
+  "variables": {
+    "input": {
+      "teamId": "00000000-0001-4000-8000-000000000001",
+      "title": "FX invalid state",
+      "stateId": "00000000-0008-4000-8000-000000000002"
+    }
+  },
+  "requestBody": "{\"query\":\"mutation IssueCreate($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title description priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } } }\",\"variables\":{\"input\":{\"teamId\":\"00000000-0001-4000-8000-000000000001\",\"title\":\"FX invalid state\",\"stateId\":\"00000000-0008-4000-8000-000000000002\"}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631409157,
+  "receivedAtMs": 1793631409391,
+  "sentAt": "2026-11-02T14:56:49.157+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:49 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "378"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "11"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999989"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793635009740"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2498"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793635009740"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "errors": [
+      {
+        "message": "Entity not found in validateAccess: stateId",
+        "path": [
+          "issueCreate"
+        ],
+        "locations": [
+          {
+            "line": 1,
+            "column": 51
+          }
+        ],
+        "extensions": {
+          "meta": {
+            "missingIds": [
+              "00000000-0008-4000-8000-000000000002"
+            ]
+          },
+          "type": "invalid input",
+          "code": "INPUT_ERROR",
+          "statusCode": 400,
+          "userError": true,
+          "userPresentableMessage": "An item needed to save your changes is unavailable."
+        }
+      }
+    ],
+    "data": null
+  },
+  "bodyRaw": "{\"errors\":[{\"message\":\"Entity not found in validateAccess: stateId\",\"path\":[\"issueCreate\"],\"locations\":[{\"line\":1,\"column\":51}],\"extensions\":{\"meta\":{\"missingIds\":[\"00000000-0008-4000-8000-000000000002\"]},\"type\":\"invalid input\",\"code\":\"INPUT_ERROR\",\"statusCode\":400,\"userError\":true,\"userPresentableMessage\":\"An item needed to save your changes is unavailable.\"}}],\"data\":null}\n",
+  "note": "An invalid input: a well-formed random UUID as stateId."
+}

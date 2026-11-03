@@ -1,0 +1,133 @@
+{
+  "name": "mutation-issue-create-with-parent",
+  "documentSource": "code",
+  "document": "mutation IssueCreate($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title description priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } } }",
+  "variables": {
+    "input": {
+      "teamId": "00000000-0001-4000-8000-000000000001",
+      "title": "FX capture child issue",
+      "description": "Child issue created by the FX fixture capture.\n\n— written by a ccrc fleet session",
+      "parentId": "00000000-0006-4000-8000-000000000001"
+    }
+  },
+  "requestBody": "{\"query\":\"mutation IssueCreate($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title description priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } } }\",\"variables\":{\"input\":{\"teamId\":\"00000000-0001-4000-8000-000000000001\",\"title\":\"FX capture child issue\",\"description\":\"Child issue created by the FX fixture capture.\\n\\n— written by a ccrc fleet session\",\"parentId\":\"00000000-0006-4000-8000-000000000001\"}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631365438,
+  "receivedAtMs": 1793631365742,
+  "sentAt": "2026-11-02T14:56:05.438+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:06 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "493"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "11"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999989"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634966012"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634966012"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "issueCreate": {
+        "success": true,
+        "issue": {
+          "id": "00000000-0006-4000-8000-000000000002",
+          "identifier": "AAA-7",
+          "title": "FX capture child issue",
+          "description": "Child issue created by the FX fixture capture.\n\n— written by a ccrc fleet session",
+          "priority": 0,
+          "createdAt": "2026-11-02T14:56:06.026Z",
+          "updatedAt": "2026-11-02T14:56:06.026Z",
+          "team": {
+            "key": "AAA"
+          },
+          "state": {
+            "name": "Backlog",
+            "type": "backlog"
+          },
+          "assignee": null,
+          "labels": {
+            "nodes": []
+          },
+          "project": null,
+          "parent": {
+            "identifier": "AAA-6"
+          }
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"issueCreate\":{\"success\":true,\"issue\":{\"id\":\"00000000-0006-4000-8000-000000000002\",\"identifier\":\"AAA-7\",\"title\":\"FX capture child issue\",\"description\":\"Child issue created by the FX fixture capture.\\n\\n— written by a ccrc fleet session\",\"priority\":0,\"createdAt\":\"2026-11-02T14:56:06.026Z\",\"updatedAt\":\"2026-11-02T14:56:06.026Z\",\"team\":{\"key\":\"AAA\"},\"state\":{\"name\":\"Backlog\",\"type\":\"backlog\"},\"assignee\":null,\"labels\":{\"nodes\":[]},\"project\":null,\"parent\":{\"identifier\":\"AAA-6\"}}}}}\n"
+}

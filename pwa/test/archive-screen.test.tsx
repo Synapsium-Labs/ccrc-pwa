@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { ArchiveScreen, archivedSizeText, archivedSummary } from '../src/screens/ArchiveScreen';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', status: 'dead', branch: 'ws/quiet-basin', archivedAt: 1785300123, archivedBytes: 1_200_000_000, ...over }));
+const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', status: 'dead', lifecycle: DEAD_LIFECYCLE, branch: 'ws/quiet-basin', archivedAt: 1785300123, archivedBytes: 1_200_000_000, ...over }));
 
 describe('archivedSummary', () => {
   it('counts the archived rows and totals their bytes', () => {

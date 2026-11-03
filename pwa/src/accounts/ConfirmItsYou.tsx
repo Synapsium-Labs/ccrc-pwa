@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
 import { Button, TextInput } from '@ccrc/ui';
 import type { StepUp } from './useStepUp';
+import { onPageHidden } from '../lib/pageClock';
 
 export { LOCKED_TEXT } from './useStepUp';
 
@@ -49,8 +50,7 @@ function PassphraseStep({ stepUp }: { stepUp: StepUp }): ReactNode {
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden') setPassphrase('');
     };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
+    return onPageHidden(onVisibility);
   }, []);
   const submit = (e: FormEvent): void => {
     e.preventDefault();

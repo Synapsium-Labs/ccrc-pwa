@@ -8,16 +8,19 @@
 // task-19-report.md.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { FleetSession } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import type { AccountUsage, FleetSession } from '../../shared/api';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { App } from '../src/app';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { navigate } from '../src/lib/router';
 import { setSkin } from '../src/lib/skin';
 import { matchRoute, ROUTES } from '../src/lib/routes';
 import { useFleetStore } from '../src/stores/fleet';
+import { api } from '../src/lib/api';
+import { TEST_ROSTER } from './rosterFixture';
+import { seventeenLanes } from './seventeenLanes';
 
-const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', status: 'dead', branch: 'ws/quiet-basin', archivedAt: 1785300123, archivedBytes: 1_200_000_000, ...over }));
+const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', status: 'dead', lifecycle: DEAD_LIFECYCLE, branch: 'ws/quiet-basin', archivedAt: 1785300123, archivedBytes: 1_200_000_000, ...over }));
 
 afterEach(() => {
   cleanup();
@@ -73,6 +76,44 @@ describe('App /accounts route (Task 6, Build 3 PR G)', () => {
     render(<App />);
     expect(screen.getByRole('heading', { name: /accounts/i })).toBeInTheDocument();
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
+  });
+});
+
+// T2c (D-6329, Q14): a card opens /accounts?lane=<id>, and the screen scrolls the lane's row into view. The shell's
+// reset of the detail pane runs on every path or search change, as a LAYOUT effect, and layout effects run child before
+// parent: an arrival made in a layout effect (the screen is the child) would be undone by the reset that follows it.
+describe('App /accounts?lane= (T2c, D-6329)', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("a second lane on /accounts scrolls after the shell's pane reset", async () => {
+    const at = Math.floor(Date.now() / 1000);
+    const usage = (wrapper: string): AccountUsage => ({
+      wrapper, five: 10, seven: 5, ts: at - 60, fiveResetAt: null, sevenResetAt: null,
+      fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false,
+    });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [usage('claude'), usage('claude9')], projected: null, roster: TEST_ROSTER });
+    // One array for the pane's scrollTop writes and the arrival's scrollIntoView calls: their ORDER is the property.
+    const log: string[] = [];
+    vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(function (this: HTMLElement) {
+      const lane = this.matches('.accounts-row[data-lane]') ? this.getAttribute('data-lane') : null;
+      if (lane !== null) log.push(`scroll:${lane}`);
+    });
+    navigate('/accounts?lane=claude');
+    render(<App />);
+    await screen.findAllByText('team·alt');
+    await act(async () => {});
+    expect(log, 'the first lane arrived once the poll landed').toEqual(['scroll:claude']);
+    const pane = document.querySelector('.shell-detail');
+    expect(pane).not.toBeNull();
+    let top = 300;
+    Object.defineProperty(pane!, 'scrollTop', {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => { top = v; log.push(`reset:${v}`); },
+    });
+    log.length = 0;
+    act(() => { navigate('/accounts?lane=claude9'); });
+    expect(log).toEqual(['reset:0', 'scroll:claude9']);
   });
 });
 
@@ -438,10 +479,10 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
 
   // ONE ACCOUNTS STRIP PER WIDTH (W2 Global constraints, D-5678): the gate is split between `ShellFrame`'s
   // `desk &&` and `FleetColumn`'s `showAccounts={!desktop}`, so it is counted through App, in both skins.
-  // From W2 Task S4b Refined's bar places the compact gauges (`.accounts-compact`), the same readout in its bar form.
+  // The full strip is the only lane readout (T2c, D-6329): both desk bars mount it under their line, in the header.
   for (const skin of [REFINED, INSTRUMENT]) {
     for (const desk of [true, false]) {
-      it(`${skin}, ${desk ? 'desk' : 'phone'}: exactly one accounts strip, in ${desk ? 'the bar' : 'the fleet column'}`, () => {
+      it(`${skin}, ${desk ? 'desk' : 'phone'}: exactly one accounts strip, in ${desk ? 'the header' : 'the fleet column'}`, () => {
         vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
         vi.stubGlobal('matchMedia', (q: string) => ({
           matches: desk && q.includes('min-width: 900px'), media: q, onchange: null,
@@ -451,8 +492,7 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
           setSkin(skin);
           navigate('/');
           render(<App />);
-          // The full strip, or the compact gauges a bar places (Instrument's LED meters, W2 Task S9): one either way.
-          const strips = document.querySelectorAll('.accounts-strip, .accounts-compact');
+          const strips = document.querySelectorAll('.accounts-strip');
           expect(strips).toHaveLength(1);
           const bar = document.querySelector('header.shell-accounts');
           const fleet = screen.getByRole('region', { name: 'Fleet' });
@@ -463,6 +503,58 @@ describe('the frame: landmarks and the skip link (W2 Task S2b)', () => {
             expect(bar).toBeNull();
             expect(fleet.contains(strips[0]!)).toBe(true);
           }
+        } finally {
+          setSkin(REFINED);
+          vi.unstubAllGlobals();
+        }
+      });
+    }
+  }
+
+  // ONE FOLD CONTROL PER WIDTH (S5b, D-6530): the strip folds wherever it mounts, so with 17 lanes each width holds one
+  // control, in the place that width's one strip sits. The desk's row is measured, so its arm stubs a 1248 px group.
+  for (const skin of [REFINED, INSTRUMENT]) {
+    for (const desk of [true, false]) {
+      it(`one fold control per width, in both skins: ${skin}, ${desk ? 'desk, in the header\'s lanes row' : 'phone, in the fleet column'}`, async () => {
+        const f = seventeenLanes(Math.floor(Date.now() / 1000));
+        vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: f.accounts, projected: { wrapper: 'w0', score: 0 }, roster: f.roster });
+        vi.stubGlobal('matchMedia', (q: string) => ({
+          matches: desk && q.includes('min-width: 900px'), media: q, onchange: null,
+          addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+        }));
+        vi.stubGlobal('ResizeObserver', class {
+          private readonly cb: ResizeObserverCallback;
+          constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+          observe(target: Element): void {
+            this.cb([{ target, contentRect: { width: 1248 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+          }
+          unobserve(): void {}
+          disconnect(): void {}
+        });
+        try {
+          setSkin(skin);
+          navigate('/');
+          render(<App />);
+          const strip = await screen.findByRole('group', { name: /^account usage/ });
+          // The fold's control, not a card: `lane-a` shows before the fold does (the row is measured a render or two after
+          // the poll lands), so a wait on it can read the strip at 17 cards with no control.
+          await within(strip).findByRole('button', { name: /more/ });
+          const controls = [...document.querySelectorAll('[aria-expanded][aria-controls]')]
+            .filter((el) => /^(\+\d+ more|Show fewer)/.test(el.textContent ?? ''));
+          expect(controls).toHaveLength(1);
+          expect(strip.contains(controls[0]!)).toBe(true);
+          // At the desk it names the cards' group it pins open; on a phone it names the panel it opens (phone-strip-tap-panel).
+          if (desk) expect(controls[0]).toHaveAttribute('aria-controls', strip.id);
+          else {
+            const names = controls[0]!.getAttribute('aria-controls');
+            expect(names).toMatch(/\S/);
+            expect(names).not.toBe(strip.id);
+          }
+          const bar = document.querySelector('header.shell-accounts');
+          if (desk) expect(bar?.contains(strip)).toBe(true);
+          else expect(screen.getByRole('region', { name: 'Fleet' }).contains(strip)).toBe(true);
+          // Four on a phone; at the desk three of the 1248 px row's four tracks, the last the end cell's.
+          expect(strip.querySelectorAll('.account-gauge')).toHaveLength(desk ? 3 : 4);
         } finally {
           setSkin(REFINED);
           vi.unstubAllGlobals();

@@ -7550,12 +7550,17 @@ describe('the substring belt (W1-B2 Task 7A; spec §8.3 layer 4, §6.2; O59 lib 
     // (finding V10 measured it: 117 ms and 238 ms).
     const g = v[14]!.toLowerCase() === 'x' ? 'z' : 'x';
     const shape = (bytes: number): string => `${v.slice(0, 14)}${g}`.repeat(Math.ceil(bytes / 15));
+    // D-7368: CPU time, not wall time. On a loaded runner the 512 KiB pass (about 8 ms) is far likelier to be
+    // descheduled than the 64 KiB one (about 1 ms), so a wall-clock ratio read 18.8 on a post-merge macOS shard and
+    // 17-32 in 2 of 20 runs under load on a laptop. process.cpuUsage counts only the time this process ran (forks
+    // pool: one process per file), so the ratio stays near 8 under the same load; the quadratic shape is still 64.
+    const cpuMs = (): number => { const u = process.cpuUsage(); return (u.user + u.system) / 1000; };
     const best = (t: string): number => {
       let m = Infinity;
       for (let k = 0; k < 5; k += 1) {
-        const t0 = performance.now();
+        const t0 = cpuMs();
         const out = libRedact.beltMask(t, idx.belt, true);
-        m = Math.min(m, performance.now() - t0);
+        m = Math.min(m, cpuMs() - t0);
         expect(out === libRedact.REDACTED_MARK, 'the whole run is one mark').toBe(true);
       }
       return m;
@@ -10435,6 +10440,68 @@ describe('redactAfter: a relayed batch is read with its stream\'s look-behind (D
     expect(batch.split('\n').length, 'CONTROL: the batch held two').toBe(2);
     expect(libRedact.redactAfter('file a.md ok\n{"password":', batch, idx).emit, 'CONTROL: the same key without the sequence is aligned, and the plain line is written').toBe(`"${M}"}\nnext line`);
   });
+
+  // D-7336: the shim's stdout reaches the relay in whatever reads the pipe gives it, and a loaded runner split the two one-chunk
+  // relay cases of history-maint at a line break. The relay batches as cli.mjs's onOut does: each read's whole lines but the last,
+  // the line held before them first. Every chunking at line breaks is read here, and none leaks. The residual, pinned as measured:
+  // a read that ends right after the TOKEN line holds it, and the next read's lines go out with it as one batch, behind a
+  // look-behind that ends on the open BEGIN line. The batch's standalone pass masks its own BEGIN to END, so the joined reading sees
+  // the look-behind's BEGIN with no END, and its mark runs to the batch's end: the line after TOKEN's in that batch is lost. An
+  // availability loss, never a leak (the residual named above).
+  it('every chunking at line breaks of the two one-chunk relay cases leaks nothing; a read ending after the TOKEN line loses the next line (D-7336)', () => {
+    const relay = (reads: string[]): string => {
+      let buf = '';
+      let held: string | null = null;
+      let keep = '';
+      let out = '';
+      for (const d of reads) {
+        buf += d;
+        const cut = buf.lastIndexOf('\n');
+        if (cut === -1) continue;
+        const lines = buf.slice(0, cut).split('\n');
+        buf = buf.slice(cut + 1);
+        const last = lines.pop()!;
+        if (held !== null) lines.unshift(held);
+        if (lines.length > 0) {
+          const r = libRedact.redactAfter(keep, lines.join('\n'), idx);
+          keep = r.keep;
+          out += `${r.emit}\n`;
+        }
+        held = last;
+      }
+      return out;
+    };
+    const chunkings = (stdout: string): string[][] => {
+      const writes = stdout.split(/(?<=\n)/);
+      return Array.from({ length: 1 << (writes.length - 1) }, (_, cuts) => {
+        const reads: string[] = [];
+        let cur = '';
+        writes.forEach((w, i) => {
+          cur += w;
+          if (i < writes.length - 1 && (cuts >> i) & 1) { reads.push(cur); cur = ''; }
+        });
+        return [...reads, cur];
+      });
+    };
+    const V = 'hunter2xyzABCDEF';
+    const pem = `zqx26 start\nzqx26 ${BEGIN}\nTOKEN=${BEGIN}abc${END}${V}\nzqx26 after\n{"rc":0}\n`;
+    const json = `zqx26 start\n{"token":\n"password": "${V}"}\nzqx26 after\n{"rc":0}\n`;
+    for (const [name, stdout] of [['pem', pem], ['json', json]] as const) {
+      const all = chunkings(stdout);
+      expect(all, `CONTROL ${name}: every chunking of five writes`).toHaveLength(16);
+      for (const reads of all) {
+        const out = relay(reads);
+        expect(out, `${name} ${JSON.stringify(reads)}: nothing leaks`).not.toContain(V);
+        expect(out.split('\n'), `${name} ${JSON.stringify(reads)}: the first line arrives`).toContain('zqx26 start');
+      }
+      expect(relay([stdout]).split('\n'), `CONTROL ${name}: one read, the line after arrives`).toContain('zqx26 after');
+    }
+    const lines = pem.split(/(?<=\n)/);
+    const split = relay([lines.slice(0, 3).join(''), lines.slice(3).join('')]);
+    expect(split, 'the residual: a read ending after the TOKEN line').toBe(`zqx26 start\nzqx26 ${M}\n${M}\n`);
+    expect(relay([lines.slice(0, 3).join(''), lines[3]!, lines[4]!]).split('\n'), 'CONTROL: a read ending after the line after it too puts the TOKEN line in a batch of its own, and the line after arrives').toContain('zqx26 after');
+    for (const reads of chunkings(json)) expect(relay(reads).split('\n'), `json ${JSON.stringify(reads)}: the line after arrives in every chunking`).toContain('zqx26 after');
+  });
 });
 
 // ── W5h-2 Task 4: the op marker names its process (D-5748 (history-op-marker-identity)) ─────────────────────────
@@ -12014,5 +12081,53 @@ describe('CP-39 Task 4: the ladder of ceilings and the floors, from one set of s
         expect(Number.isInteger(x.maxBytes) && x.maxBytes <= b.maxBytes).toBe(true);
       }
     }
+  });
+});
+
+describe('CP-39d: decideActiveRead (D-7096)', () => {
+  type ActiveStat = { isFile: boolean; dev: bigint; ino: bigint; size: number; mtimeNs: bigint };
+  type ActiveRow = { dev: bigint; ino: bigint; offset: number; size: number | null; mtimeNs: bigint | null };
+  const NOW = 1_800_000_000_000;
+  const FRESH_NS = BigInt(NOW - 60_000) * 1_000_000n;
+  const row = (over: Partial<ActiveRow> = {}): ActiveRow => ({ dev: 7n, ino: 9n, offset: 100, size: 100, mtimeNs: FRESH_NS, ...over });
+  const stat = (over: Partial<ActiveStat> = {}): ActiveStat => ({ isFile: true, dev: 7n, ino: 9n, size: 100, mtimeNs: FRESH_NS, ...over });
+
+  it('(a) ACTIVE_STAT_MAX is 256', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.ACTIVE_STAT_MAX).toBe(256);
+  });
+
+  it('(a) the table: each rule answers its word, and each read flips to same with its one changed input restored', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const decide = (r: ActiveRow, s: ActiveStat | null, nowMs = NOW): string =>
+      lib.decideActiveRead({ row: r, stat: s, nowMs, tornStaleMs: lib.SCAN_INTERVAL_MS });
+    // the base: an equal stat is the same
+    expect(decide(row(), stat()), 'an equal stat').toBe('same');
+    // skip: no stat, or not a regular file
+    expect(decide(row(), null), 'a null stat').toBe('skip');
+    expect(decide(row(), stat({ isFile: false })), 'a link, a directory').toBe('skip');
+    // read, each with CONTROL: the one input restored answers same
+    const cases: Array<[string, ActiveRow, ActiveStat, ActiveRow, ActiveStat]> = [
+      ['another ino', row(), stat({ ino: 10n }), row(), stat()],
+      ['another dev', row(), stat({ dev: 8n }), row(), stat()],
+      ['a size below the offset', row({ offset: 100, size: 100 }), stat({ size: 99 }), row(), stat()],
+      ['another mtime', row(), stat({ mtimeNs: FRESH_NS + 1n }), row(), stat()],
+      ['a null recorded mtime', row({ mtimeNs: null }), stat(), row(), stat()],
+      ['growth over the recorded size, fresh', row({ offset: 100, size: 100 }), stat({ size: 150 }), row({ size: 150 }), stat({ size: 150 })],
+    ];
+    for (const [name, r, s, cr, cs] of cases) {
+      expect(decide(r, s), name).toBe('read');
+      expect(decide(cr, cs), `${name}: restored`).toBe('same');
+    }
+    // a null recorded size reads 0
+    expect(decide(row({ size: null, offset: 0 }), stat({ size: 5 })), 'a null recorded size is 0').toBe('read');
+    // a stale torn tail: the size is above the recorded size, but the mtime is older than tornStaleMs and equals the recorded one
+    const stale = BigInt(NOW - lib.SCAN_INTERVAL_MS - 1) * 1_000_000n;
+    expect(decide(row({ mtimeNs: stale, offset: 100, size: 100 }), stat({ mtimeNs: stale, size: 150 })), 'a stale torn tail').toBe('same');
+    // CONTROL: the same growth with a fresh mtime (equal on both sides) is read
+    expect(decide(row({ mtimeNs: FRESH_NS, offset: 100, size: 100 }), stat({ mtimeNs: FRESH_NS, size: 150 })), 'the same growth, fresh').toBe('read');
+    // the boundary: exactly tornStaleMs old is stale (the examinedSize rule is `>=`)
+    const edge = BigInt(NOW - lib.SCAN_INTERVAL_MS) * 1_000_000n;
+    expect(decide(row({ mtimeNs: edge }), stat({ mtimeNs: edge, size: 150 })), 'exactly tornStaleMs old').toBe('same');
   });
 });

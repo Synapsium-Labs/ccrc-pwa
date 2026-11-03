@@ -26,7 +26,6 @@ import { isRegistryId } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okRun } from './coordReadHelpers.js';
-import { openRunsClaimedBy } from '../src/coord/bindingReads.js';
 import { REFUSED_IDS } from './registryIdCases.js';
 import { appFor, recorder, seedRow, storedRun } from './idGateFixture.js';
 
@@ -293,8 +292,7 @@ describe('the abandon arm closes a bad stored id failed with no fleet act (spec 
     const handle = registerCoordRoutes(Fastify({ logger: false }), { ...d.base, coord: d.coord }, new Bus(), undefined,
       { tmux: d.base.tmux, queue: d.base.queue, readAsk: async () => null });
     const plan = await handle.withAbandon(d.coord, (abandon, refusalOf) => decideArchive({
-      openRunsForSession: (sid) => d.coord.openRunsForSession(sid),
-      openRunsClaimedBy: (sid) => openRunsClaimedBy(d.coord, sid),
+      bindingsOf: (sid) => d.coord.bindingsOf(sid),
       abandonRefusal: refusalOf,
       abandon,
     }, CLAIMED_BY, { force: false, interrupt: false, programmeEnd: true }, IDLE_MAIN));

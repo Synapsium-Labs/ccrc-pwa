@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, WS_ADD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 let home: string;
@@ -277,7 +277,7 @@ describe('an account-valued write re-reads the roster it is about to name', () =
     // the same defect the removal report carried about `ccrc models <id> rm`.
     // Pinned in both directions so the sentence cannot drift back.
     expect(r.stderr).toContain('ccrc account roster');
-    expect(readFileSync(CCD, 'utf8'), 'ccd grew an `accounts` verb — this assertion is now the stale one')
+    expect(ccdSource(), 'ccd grew an `accounts` verb — this assertion is now the stale one')
       .not.toMatch(/^\s+accounts\)/m);
     expect(reg('claude-a-demo', 'wrapper'),
       'a registry row names an account the roster no longer has').toBeNull();

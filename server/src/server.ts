@@ -10,7 +10,8 @@ import { pwaStaticOptions } from './pwaStatic.js';
 import { configDirFor } from './config.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { Deps } from './deps.js';
-import { assembleFleet } from './fleet.js';
+import { assembleFleet, dropStaleLandings } from './fleet.js';
+import { liveStateReaderOver, readLiveState } from './livestate.js';
 import { readLaneStates, readLimits, projectHome, projectPlacement } from './limits.js';
 import { accountsConnect, lanesWire } from './accounts/lanes.js';
 import { accountOriginClass } from './accounts/gate.js';
@@ -49,8 +50,8 @@ import {
   sendPrompt, answerDialog, answerDialogMulti, answerDialogText, interrupt, interruptVerdict, moveDialogTab, submitEnter, refusalShape,
   type InterruptVerdict, type SendDeps,
 } from './inject/send.js';
-import { answerAsk, readAskAnswer, type AskDeps } from './inject/ask.js';
-import { freshAskAt, measuredIdentity, readRegistryMeasured, readSessionRecord } from './registry.js';
+import { answerAsk, type AskDeps } from './inject/ask.js';
+import { measuredIdentity, readRegistryMeasured, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
@@ -62,21 +63,26 @@ import { SHAPE_ONLY_MASKER, type SecretMasker } from './accounts/mask.js';
 import { maskBody, maskedError, maskFleetFrame } from './accounts/egress.js';
 import { Viewers } from './viewer.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
-import { registerCoordRoutes } from './coord/routes.js';
+import { registerCoordRoutes, type OperatorDoorWiring } from './coord/routes.js';
+import { registerLedgerOperatorRoutes, waitingViewOf } from './coord/ledgersRoutes.js';
+import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
+import { attributionVerdict } from './coord/attribution.js';
+import { createQuestions, type OperatorDoorDeps } from './coord/questions.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { registerTokenRoutes } from './token/routes.js';
-import { registerLinearRoutes } from './linear/routes.js';
+import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
+import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { createAccountGate } from './accounts/gate.js';
+import { registerAccountRoutes } from './accounts/routes.js';
 import { resolveTitle } from './linear/resolve.js';
 import { classifyAddFailure, planCreate } from './workspaceCreate.js';
 import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
-import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore, type NodeRow } from './coord/store.js';
-import { incarnationsOfSessions, withChildIds } from './coord/runWire.js';
-import { openRunsClaimedBy } from './coord/bindingReads.js';
+import { toRunSummary, type CoordStore, type NodeRow } from './coord/store.js';
+import { incarnationsOfSessions, withChildIds, withLastMoves } from './coord/runWire.js';
 import { buildInfoOfRow } from './update/inventory.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
@@ -92,16 +98,16 @@ import {
   ChallengeStore, relyingPartyProblem, userHandleFor, verifyAssertion, verifyRegistration,
 } from './auth/webauthn.js';
 import {
-  ASK_OPERATOR_PRINCIPAL, CLIP_EXT_ALT, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES,
+  CLIP_EXT_ALT, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES,
   PANE_HISTORY_LINES,
   PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS,
-  type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
+  type AccountsResponse, type AccountUsage, type RosterWire, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
-  type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
+  type DelegationProjectionWire, type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
 import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
@@ -206,8 +212,12 @@ export const WRITE_ANSWER_EXEMPT = /^\/api\/(?:auth\/|token\/|sessions\/:id\/upl
  *  in `secret-mask.test.ts`'s egress inventory. */
 export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
-  '/api/runs', '/api/runs/:id', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/asks',
+  '/api/runs', '/api/runs/:id', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/landing', '/api/asks',
   '/api/approvals/:id', '/api/coord/review-cap/:id',
+  // The programme ledgers (plan PL3): an item's title, reason and steps are written by sessions.
+  '/api/programmes/:slug/items',
+  // The operator's reads of the same text (plan PL4): the waiting list, and one programme's goals (an In short copy a session wrote).
+  '/api/waiting', '/api/programmes/:slug/goals',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -299,11 +309,13 @@ function findPwaRoot(): string | null {
 }
 
 /**
- * `FleetHealth.builds`, derived from the inventory rows (design 2026-09-20
- * §14): each live row's role and its five `current*` columns as one
- * `BuildInfo` (`buildInfoOfRow`, update/inventory.ts), paired by
- * `derivedBuilds`. Composition only — which row is which side is decided
- * there.
+ * The `{own, fleet}` pair of stamps `buildAgreement` decides `FleetHealth.build`
+ * from, derived from the inventory rows (design 2026-09-20 §14): each live
+ * row's role and its five `current*` columns as one `BuildInfo`
+ * (`buildInfoOfRow`, update/inventory.ts), paired by `derivedBuilds`. The pair
+ * is only this input now — the `FleetHealth.builds` wire field that once
+ * carried it was retired in wave 33. Composition only — which row is which
+ * side is decided there.
  *
  * A THROWING `nodes()` (a corrupt or locked coord.db) answers null on both
  * sides, the way `readPoolEpoch` (pools.ts) degrades its own read: before W2
@@ -311,8 +323,8 @@ function findPwaRoot(): string | null {
  * route must not gain a new way to 500. It deliberately does NOT fall back to
  * `fleetState.build` — spec §8: the handshake sample is never read as the
  * current build where an inventory is wired. The fold of "unreadable" into
- * "no rows yet" is honest for this field's readers, which render both as a
- * dash; `GET /api/updates` is where the distinction is shown.
+ * "no rows yet" is honest for the one word decided from it (`unknown`);
+ * `GET /api/updates` is where the distinction is shown.
  */
 function inventoryBuilds(coord: Pick<CoordStore, 'nodes'>): { own: BuildInfo | null; fleet: BuildInfo | null } {
   let rows: NodeRow[];
@@ -1171,7 +1183,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // persisted (spec §5.4.1), so there is nothing measured to serve, and a
       // cached tag rendered as live policy would lie. Absence reads as
       // "unknown" on the PWA, which is the truth here.
-      if (snap) return { sessions: snap.sessions, stale: true, downSince: deps.fleetState.downSince };
+      if (snap) return { sessions: dropStaleLandings(snap.sessions, Date.now()), stale: true, downSince: deps.fleetState.downSince };
     }
     // ONE registry read for this request (spec §2.3), handed to `assembleFleet` as its `records`; that function's own
     // fallback read is reached by tests alone. An UNLISTABLE registry is not an empty fleet: `{sessions: []}` would
@@ -1184,7 +1196,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // [registry-refused:stale]
     const reg = await readRegistryMeasured(deps.io, deps.cfg);
     if (!reg.listed) {
-      return { sessions: watcher?.currentFleet() ?? (await loadSnapshot(stateCachePath))?.sessions ?? [], stale: true };
+      return { sessions: dropStaleLandings(watcher?.currentFleet() ?? (await loadSnapshot(stateCachePath))?.sessions ?? [], Date.now()), stale: true };
     }
     // FIRST PAINT (spec §5.4.4). The `pools` frame is emitted ON CHANGE from
     // the watcher tick, so a client connecting into a quiet fleet would
@@ -1208,7 +1220,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       readObservedEpochFromRegistry(deps.io, deps.cfg, PROJECT_POOLS_REQUEST_BUDGET_MS),
     ]);
     return {
-      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), reg.records, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches()),
+      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io), undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), reg.records, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches(), undefined, watcher?.currentLandings()),
       pools: poolsWire(
         poolsRead,
         poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
@@ -1272,6 +1284,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const archivedHeld = watcher?.archivedHeld() ?? undefined;
     // The disk alarm's block (D-6615), held by `sweepDisk`. Absent before its first sweep: absence reads as UNKNOWN.
     const disk = watcher?.disk() ?? undefined;
+    // The host's PSI and the link's classification by it (#1170). Local mode has no link: it is always up.
+    const psi = watcher?.pressure(deps.cfg.fleetMode !== 'remote' || deps.fleetState?.connected === true) ?? undefined;
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       // The two stamps: with a coordination database, the inventory's rows —
       // re-measured every minute by `sweepInventory`, superseded rows excluded
@@ -1280,7 +1294,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // fleet host said on its last `ready` (`fleetState.build`). `?? null`
       // because `Deps.build` is optional for such callers — an absent stamp
       // and a null one are the same condition, exactly as `/health` treats
-      // them. `buildAgreement` decides from whichever pair this is.
+      // them. `buildAgreement` decides from whichever pair this is; the pair
+      // itself is not on the wire (`FleetHealth.builds` retired in wave 33).
       const builds = deps.coord
         ? inventoryBuilds(deps.coord)
         : { own: deps.build ?? null, fleet: deps.fleetState.build ?? null };
@@ -1290,12 +1305,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         downSince: deps.fleetState.downSince,
         roster: rosterAgreement(deps.fleetState.rosterFp, ownRosterFp()),
         build: buildAgreement(builds.fleet, builds.own),
-        builds,
         projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
         ...(lifecycle ? { lifecycle } : {}),
         ...(delegation ? { delegation } : {}),
         ...(archivedHeld ? { archivedHeld } : {}),
         ...(disk ? { disk } : {}),
+        ...(psi ? { psi } : {}),
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1319,6 +1334,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       ...(delegation ? { delegation } : {}),
       ...(archivedHeld ? { archivedHeld } : {}),
       ...(disk ? { disk } : {}),
+      ...(psi ? { psi } : {}),
     };
   });
 
@@ -1379,6 +1395,25 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // (D-5513).
     return (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(deps.notifyLog.catchUp(q.epoch ?? null, Number.isFinite(seq) ? seq : 0));
   });
+
+  /** `GET /api/accounts`'s `roster`, the browser's fields only (`RosterWire`), over ONE pool-edges snapshot. The lane
+   *  routes (`accounts/routes.ts`, accounts plan Task A14) answer the same rows after a switch. */
+  const rosterWireOf = (accountEdges: ReturnType<typeof readAccountPoolEdges>): RosterWire[] =>
+    deps.cfg.roster.accounts.map((a) => ({
+      id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
+      pool: a.pool,
+      ...rosterKindOf(a),
+      // T7-R2 (D-3076): the RESOLVED membership (central
+      // beats declared beats untagged, design §5.6) — `pool` above is the
+      // declared carrier alone, and a client that computed its own
+      // crossing warning from it would contradict what `POST
+      // /api/sessions`/`POST /api/sessions/:id/swap`'s `refusePool`
+      // actually decides the moment a central `pool_edges` row exists
+      // (`NewSessionSheet.tsx`'s crossing warning, measured live before this field
+      // existed). Reads the ONE `accountEdges` snapshot it is handed, not a
+      // fresh per-account read.
+      resolvedPool: resolvedAccountPool(a.id, a, accountEdges),
+    }));
 
   // Account usage read straight from telemetry (cc-limits), independent of which
   // sessions are running or where they've swapped — so it survives restarts,
@@ -1454,21 +1489,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // agrees with `refusePool`'s refusal pre-check about which accounts a
       // central tag has moved.
       projected: projectHome(deps.cfg.roster, limits, { state: 'untagged' }, accountEdges),
-      roster: deps.cfg.roster.accounts.map((a) => ({
-        id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
-        pool: a.pool,
-        ...rosterKindOf(a),
-        // T7-R2 (D-3076): the RESOLVED membership (central
-        // beats declared beats untagged, design §5.6) — `pool` above is the
-        // declared carrier alone, and a client that computed its own
-        // crossing warning from it would contradict what `POST
-        // /api/sessions`/`POST /api/sessions/:id/swap`'s `refusePool`
-        // actually decides the moment a central `pool_edges` row exists
-        // (`NewSessionSheet.tsx:186-188`, measured live before this field
-        // existed). Reads the ONE `accountEdges` snapshot above, not a
-        // fresh per-account read.
-        resolvedPool: resolvedAccountPool(a.id, a, accountEdges),
-      })),
+      roster: rosterWireOf(accountEdges),
     };
     // `lanes` and `connect` for the SESSION verdict only (D-5511, D-5517): a dark gate's reader, and a box token (which
     // an armed gate refuses before this handler), get today's three fields and nothing else. The lane states are read
@@ -1497,6 +1518,39 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     frameCache.set(key, { v, json });
     return json;
   };
+  // Programme ledgers (plan PL4): what waits on the operator, built ONCE per change and handed to every socket, so a broadcast is
+  // masked and serialized once (`maskedFrame` keys on the object). Every emit drops it; a new socket always builds afresh, so
+  // a label that moves with the clock (the stale one) is current at connect.
+  // The coordinator's presence for an item's stale label, built ONCE and handed to both lanes' routes and the frame (review 1335
+  // F4): the watcher's last fleet frame and its registry ids, so an id the registry lists but the frame lacks is a doubt.
+  const presenceOf = (id: string) => coordinatorPresenceIn(watcher?.currentFleet() ?? null, watcher?.currentRegistryIds() ?? null, id);
+  let waitingBuilt: WaitingView | null = null;
+  // A build that threw stands until the next cache drop, so the sockets of one change share ONE attempt and one failure
+  // (review 1336 F4), and the warning is said once per distinct error, not once per socket per fleet emit.
+  let waitingFailed = false;
+  let waitingWarned: string | null = null;
+  const dropWaiting = (): void => { waitingBuilt = null; waitingFailed = false; };
+  // A ledger write drops it, and so does a fleet emit: presence and the clock move the stale label with no ledger write (F3).
+  bus.on('waiting', dropWaiting);
+  bus.on('fleet', dropWaiting);
+  const waitingNow = (fresh: boolean): WaitingView | null => {
+    if (!deps.coord) return null;
+    if (fresh) dropWaiting();
+    if (waitingFailed) return null;
+    try {
+      waitingBuilt ??= waitingViewOf(deps.coord, Date.now(), presenceOf);
+      waitingWarned = null;
+      return waitingBuilt;
+    } catch (err) {
+      // A row this box cannot read (a corrupt JSON column) sends no frame; the read route says the same in its own answer.
+      // A parse error can quote a session-written column, so the line goes through the masker like every other egress.
+      waitingFailed = true;
+      const line = (deps.masker ?? SHAPE_ONLY_MASKER).maskText(`ccrc-server: waiting frame not built: ${err instanceof Error ? err.message : String(err)}`);
+      if (line !== waitingWarned) console.warn(line);
+      waitingWarned = line;
+      return null;
+    }
+  };
   app.get('/ws/fleet', { websocket: true }, (socket) => {
     // The dormant protocol handshake (Rider E): sent SYNCHRONOUSLY, before the
     // awaited assembleFleet below, so it is always the first frame a client
@@ -1510,27 +1564,57 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const sendFleet = (sessions: FleetSession[]) =>
       socket.send(maskedFrame(sessions, (mk) => maskFleetFrame(mk, { type: 'fleet', sessions } satisfies FleetMsg)));
     // THE COLD FRAME IS THE WATCHER'S LAST BROADCAST once there is one
-    // (`currentFleet`), and a snapshot is assembled only before it. The watcher
-    // re-emits only on change (`lastJson`), so a cold frame that differs from
-    // what it last broadcast is never corrected: one assembled from watcher
+    // (`currentFleet`), less any landing past its window (`dropStaleLandings`,
+    // D-7481), and a snapshot is assembled only before it. The watcher
+    // re-emits only on change (`lastJson`), so a cold frame ASSEMBLED apart
+    // from that broadcast would never be corrected: one assembled from watcher
     // state captured at connect could land AFTER a newer broadcast and replace
     // it, and one assembled off a registry listing that failed once sent
-    // `fleet: []` to a fleet that was there. Before the first broadcast the
-    // snapshot is all there is, and `broadcastSeen` still keeps it from
-    // landing on a broadcast that beat it: anything newer it did read differs
-    // from `lastJson`, so the next tick broadcasts that anyway.
+    // `fleet: []` to a fleet that was there. The one difference the cold frame
+    // may carry is the landings it drops. Those are past their window: the
+    // next listable tick assembles without them and re-emits, and until then
+    // the PWA's `landingOf` hides them too (review 1226, F1).
+    // Before the first broadcast the snapshot is all there is, and
+    // `broadcastSeen` still keeps it from landing on a broadcast that beat it:
+    // anything newer it did read differs from `lastJson`, so the next tick
+    // broadcasts that anyway.
     let broadcastSeen = false;
     const onFleet = (sessions: FleetSession[]) => {
       broadcastSeen = true;
       sendFleet(sessions);
     };
     const onNotice = (n: Notice) => socket.send(maskedFrame(n, (mk) => mk.maskDeep({ type: 'notice', ...n } satisfies FleetMsg)));
-    const onRuns = (runs: RunSummary[]) =>
-      socket.send(maskedFrame(runs, (mk) => mk.maskDeep({ type: 'runs', runs } satisfies FleetMsg)));
+    // D-7334: the frame carries the stall watch's quiet time, as the watcher's last runs frame read it (`emitRuns`, whose
+    // byte-equality guard keys on it, so a Settings change re-emits). Absent before that first frame.
+    const onRuns = (runs: RunSummary[]) => {
+      const stallQuietMs = watcher?.currentStallQuietMs() ?? null;
+      socket.send(maskedFrame(runs, (mk) => mk.maskDeep(
+        { type: 'runs', runs, ...(stallQuietMs === null ? {} : { stallQuietMs }) } satisfies FleetMsg)));
+    };
     const onCoord = (coord: CoordStatus) =>
       socket.send(maskedFrame(coord, (mk) => mk.maskDeep({ type: 'coord', coord } satisfies FleetMsg)));
     const onPools = (pools: ProjectPoolsWire) =>
       socket.send(JSON.stringify({ type: 'pools', pools } satisfies FleetMsg));
+    // Delegation broker wave 4: masked like the session-derived frames (a display name is the session's own text); `null` withdraws it.
+    const onDelegation = (delegation: DelegationProjectionWire | null) =>
+      socket.send(delegation === null
+        ? JSON.stringify({ type: 'delegation', delegation: null } satisfies FleetMsg)   // nothing to mask; the cache keys on an object
+        : maskedFrame(delegation, (mk) => mk.maskDeep({ type: 'delegation', delegation } satisfies FleetMsg)));
+    // Programme ledgers (plan PL4): masked like the session-derived frames (an item's text is a session's own). Additive, no
+    // `FLEET_PROTO` bump. Sent on connect (below) and on every `bus 'waiting'`.
+    // The last frame THIS socket was sent, masked: a fleet emit re-sends only when the bytes changed (as the runs frame does),
+    // so a label the clock or a coordinator's presence moved reaches a connected tab with no timer and no push (review 1335 F3).
+    let lastWaitingJson: string | null = null;
+    const onWaiting = (fresh: boolean, onlyIfChanged: boolean) => {
+      const waiting = waitingNow(fresh);
+      if (waiting === null) return;
+      const json = maskedFrame(waiting, (mk) => mk.maskDeep({ type: 'waiting', waiting } satisfies FleetMsg));
+      if (onlyIfChanged && json === lastWaitingJson) return;
+      lastWaitingJson = json;
+      socket.send(json);
+    };
+    const onWaitingEvent = () => onWaiting(false, false);
+    const onFleetWaiting = () => onWaiting(false, true);
     // §1.6's census. NO COLD START, deliberately: the sweep's own byte-equality
     // guard re-broadcasts to every connected client the next time the census
     // changes, and there is no `currentDivergences()` to serve — a fabricated
@@ -1553,11 +1637,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // and the `runs` frame below is still sent.
     let cold: Promise<FleetSession[] | null>;
     if (broadcast !== null) {
-      cold = Promise.resolve(broadcast);
+      cold = Promise.resolve(dropStaleLandings(broadcast, Date.now()));
     } else {
       // [registry-refused:stale]
       cold = readRegistryMeasured(deps.io, deps.cfg).then((reg) => (reg.listed
-        ? assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), reg.records, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches())
+        ? assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io), undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), reg.records, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches(), undefined, watcher?.currentLandings())
         : null));
     }
     void cold.then((sessions) => {
@@ -1590,7 +1674,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           } else {
             // ARCH-61 (#796): `childIds` against the fleet this socket's frame carries; with no listable registry there is
             // no reading of the sessions to decide against, so the frame goes without it (absence permits).
-            const summaries = read.runs.map(toRunSummary);
+            // D-7334: each run's last move, in one read for the frame (`withLastMoves`); a failed read leaves the field off.
+            const summaries = withLastMoves(deps.coord, read.runs.map(toRunSummary), (d) => console.warn(`ccrc-server: /ws/fleet cold-start could not read the runs' last moves (${d}) — lastMoveAt absent`));
             onRuns(sessions === null ? summaries : withChildIds(deps.coord, summaries, incarnationsOfSessions(deps.coord, sessions), (c, d) => console.warn(`ccrc-server: /ws/fleet cold-start could not read the series of ${c} (${d}) — childIds absent for its runs`)));
           }
         }
@@ -1616,6 +1701,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // the phone that nothing on the fleet is tagged.
       const poolsNow = watcher?.currentPools();
       if (poolsNow) onPools(poolsNow);
+      // Chained after `pools`: hello, fleet, runs, coord, pools, delegation; a null value sends NOTHING, `coord`'s rule.
+      const delegationNow = watcher?.currentDelegation();
+      if (delegationNow) onDelegation(delegationNow);
+      // Chained after `delegation`: the operator's waiting list, whole; nothing on a box with no coordination database.
+      onWaiting(true, false);
     });
     bus.on('fleet', onFleet);
     bus.on('notice', onNotice);
@@ -1623,6 +1713,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     bus.on('coord', onCoord);
     bus.on('divergence', onDivergence);
     bus.on('pools', onPools);
+    bus.on('delegation', onDelegation);
+    bus.on('waiting', onWaitingEvent);
+    bus.on('fleet', onFleetWaiting);
     socket.on('close', () => {
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
@@ -1630,6 +1723,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       bus.off('coord', onCoord);
       bus.off('divergence', onDivergence);
       bus.off('pools', onPools);
+      bus.off('delegation', onDelegation);
+      bus.off('waiting', onWaitingEvent);
+      bus.off('fleet', onFleetWaiting);
     });
   });
 
@@ -1784,7 +1880,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` are built HERE, ahead of `registerCoordRoutes`
   // below, rather than beside the `/api/sessions/:id/{prompt,dialog,ask}`
   // routes further down this file (where they used to live) — Task 9's
-  // `POST /api/asks/:id/answer` (`coord/routes.ts`) must serialize through
+  // `POST /api/questions/ask-<n>/rule` (`coord/routes.ts`, the parent's answer) must serialize through
   // this SAME `askDeps`/`queue`, not a second one it builds for itself, so
   // both routes agree on the one per-session lock. `knownId` stays where it
   // was: nothing here depends on it.
@@ -1802,8 +1898,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         case 'found': break;
         case 'absent': case 'unmeasurable': case 'unlistable': return null;
         // Masked on both of its paths (spec §2.3): `knownId` refuses a
-        // non-registry id on `POST /api/sessions/:id/ask`, and on
-        // `POST /api/asks/:id/answer` `freshAskAt`'s own `bad-id` answers
+        // non-registry id on `POST /api/questions/session-<id>/answer` (the
+        // operator's ask, since W7 C7p retired `/api/sessions/:id/ask`), and on
+        // `POST /api/questions/ask-<n>/rule` `freshAskAt`'s own `bad-id` answers
         // `child-unmeasurable` before `answerAsk` reaches this read. `null`,
         // the safe word, all the same.
         case 'bad-id': return null;
@@ -1824,14 +1921,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   };
 
   // `freshAskAt` (D-2170's fail-shut re-measurement `takeAskForAnswer`'s CAS
-  // is checked against) is `registry.ts`'s export, fix round 1 finding 2 —
-  // this route and `coord/routes.ts`'s `POST /api/asks/:id/answer` both
-  // close over the SAME `Deps` object (`registerCoordRoutes` below is
-  // handed this function's own `deps`, unmodified), so a security-relevant
-  // fail-shut guard had no business existing as two copies that could
-  // silently drift. See `registry.ts`'s own doc comment on it for the full
-  // reasoning, and this route's own comment below for why a lost CAS here
-  // never refuses the operator regardless of which unmeasurable arm fired.
+  // is checked against) is `registry.ts`'s export, fix round 1 finding 2, so a
+  // security-relevant fail-shut guard has no second copy that could silently
+  // drift. Since W3 Q3f (D-7030) both answer paths read it in one file,
+  // `coord/questions.ts` (the operator's core and the claimant's). See
+  // `registry.ts`'s own doc comment on it for the full reasoning, and
+  // `coord/questions.ts`'s operator ask ladder (Task 12, D-2171) for why a lost
+  // CAS never refuses the operator regardless of which unmeasurable arm fired.
 
   // Build 7 coordination: mail ingress + ack (this build) and run routes
   // (Task 9) — registered from their own module because six-plus routes
@@ -1844,22 +1940,41 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `authStore` lives (the class began with `GET /api/runs`, D-149).
   //
   // The 5th argument (Task 9) is `askDeps`, ONE PER SERVER, so `answerAsk`
-  // reached from `POST /api/asks/:id/answer` serializes through the exact
+  // reached from `POST /api/questions/ask-<n>/rule` serializes through the exact
   // same `KeyedQueue` as `/api/sessions/:id/{prompt,dialog,ask}` below —
   // independent queues would let a parent's pre-emption race a child's own
   // in-flight prompt against the identical tmux pane.
   //
   // The 6th argument (Task 10) is this function's own `watcher` parameter,
-  // passed straight through: `POST /api/asks/:id/release` calls
-  // `watcher?.releaseHeldAsk` to drop the in-memory hold and fire the
-  // deferred push the moment a parent declines, rather than making the
-  // operator wait out the rest of the grace window. `Deps` deliberately does
+  // passed straight through. Since W3 Q3f (D-7030) the decline drops the
+  // in-memory hold and fires the deferred push through the watcher's own
+  // `Questions` instance (the 8th argument, `watcher.questions`) and the doors
+  // sink the watcher gave it, the moment a parent declines, rather than making
+  // the operator wait out the rest of the grace window. `Deps` deliberately does
   // not carry the watcher (this function's own third argument), so there is
   // no second place this wiring could come from.
   //
   // It answers with its handle (workspace lifecycle §5.2): the coordination serialiser with the operator abandon inside
   // it, which the archive door below runs its `{programme:'end'}` on.
-  const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher, notice);
+  // D-7026: this server's ONE owner of question state, the watcher's own when it is given one (`index.ts` hands it
+  // one, so production has exactly one instance), and its own otherwise; never module scope.
+  const questions = watcher?.questions ?? createQuestions(deps);
+  // W3 Q3f (D-7030): what the operator's core reads (`questions.answer`), built ONCE and handed to the family's
+  // `POST /api/questions/:id/answer` in `coord/routes.ts` (the old operator doors that read it too were retired in W7
+  // C7p, D-7194): the presses over this server's `askDeps` and `sendDeps`, the answered frame's emit, and the child's
+  // hookstate as the watcher last read it. `coord`, `io` and `cfg` are read at the call, as the old doors read them. The
+  // emit and `knownId` are declared below, beside the session routes, so both are read lazily, at a request.
+  const operatorDoorDeps: OperatorDoorDeps = {
+    get coord() { return deps.coord; }, get io() { return deps.io; }, get cfg() { return deps.cfg; }, notice,
+    pressAsk: (id, key, optionIndexes) => answerAsk(askDeps, id, key, optionIndexes),
+    pressDialog: (id, dialogId, optionIndex) => answerDialog(sendDeps, id, dialogId, optionIndex),
+    pressDialogText: (id, dialogId, optionIndex, text) => answerDialogText(sendDeps, id, dialogId, optionIndex, text),
+    pressDialogMulti: (id, dialogId, optionIndexes) => answerDialogMulti(sendDeps, id, dialogId, optionIndexes),
+    answered: (id, route, res) => answeredFrame(id, route, res),
+    hookStateOf: (id) => watcher?.currentHookStates().get(id) ?? null,
+  };
+  const operatorDoors = (): OperatorDoorWiring => ({ knownId, answerDeps: operatorDoorDeps });
+  const coordRoutes = registerCoordRoutes(app, deps, bus, sessionAuth, askDeps, watcher, notice, questions, operatorDoors, presenceOf);
   // The dead-coordinator lane (workspace lifecycle §5.4) ends a programme only on this same serialiser: the watcher is
   // handed the sweep's abandon here, and has no other way to close a run. Called optionally: a test's stand-in watcher
   // (a structural double, not a `FleetWatcher`) carries no such method, and has no lane to hand it to.
@@ -1886,7 +2001,64 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const accountGate = createAccountGate({
     enabled: deps.cfg.authEnabled, origin: deps.cfg.origin, sessionAuth, fleetState: () => deps.fleetState, stepUp,
   });
-  registerLinearRoutes(app, { ccrcDir: deps.cfg.ccrcDir, gate: accountGate, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs });
+  // The one Linear rate service (spec §6.7) and the one background refresher (spec §4.3) are passed through as they
+  // are, possibly absent: never a default built here.
+  registerLinearRoutes(app, {
+    ccrcDir: deps.cfg.ccrcDir, gate: accountGate, rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
+    fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+  });
+  // The Settings routes for workspace keys (#1444, spec §10.1), beside the connection's in the same file: the same gate,
+  // rate service and refresher, and the one journal every key act writes first, each passed through as it is (possibly
+  // absent, never a default).
+  registerLinearWorkspaceRoutes(app, {
+    ccrcDir: deps.cfg.ccrcDir, gate: accountGate, rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
+    journal: deps.linearJournal ?? null, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+  });
+  // The Linear proxy's twelve box-token routes (#1444, spec §6), beside the connection's: the same rate service and
+  // refresher, the one journal and the policy point, each passed through as it is (possibly absent, never a default),
+  // the box token read at request time as every lane reads it, and `attributionVerdict` over this server's registry.
+  registerLinearProxyRoutes(app, {
+    ccrcDir: deps.cfg.ccrcDir, mailToken: () => deps.mailToken ?? null,
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
+    rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
+    journal: deps.linearJournal ?? null, policy: deps.linearPolicy ?? null,
+    fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+  });
+  // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which
+  // `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts` read by name. Each takes the same account gate on the
+  // `account-v2` cap, and runs the ONE reconciling `AccountOps` arm `index.ts` built; a server with none (a test, a
+  // script) answers `unavailable` once the gate passes. The answer's lane is re-read through `lanesWire`, the GET's.
+  const accountOps = deps.accountOps;
+  // The registry rows naming a lane (its `wrapper` or `home`), for discard's route-side check (accounts plan Task A17,
+  // D-7739). An unlistable registry answers null, which refuses the discard rather than reading as no session.
+  const accountSessionsOn = async (id: string): Promise<readonly string[] | null> => {
+    // [registry-refused:refuses] an unlistable registry refuses the discard; the verb counts every row again
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    return reg.listed ? reg.records.filter((r) => r.wrapper === id || r.home === id).map((r) => r.id) : null;
+  };
+  registerAccountRoutes(app, {
+    gate: accountGate,
+    ops: { run: async (...a) => accountOps === undefined ? { kind: 'not-started' } : accountOps.run(...a) },
+    laneOf: (id) => {
+      const entry = deps.cfg.roster.byId.get(id);
+      return entry === undefined ? null : { provider: rosterKindOf(entry).provider ?? null };
+    },
+    view: async (id) => {
+      const limits = await readLimits(deps.io, deps.cfg);
+      const roster = rosterWireOf(readAccountPoolEdges());
+      const lanes = lanesWire(roster.filter((r) => r.id === id), limits, await readLaneStates(deps.io, deps.cfg),
+        deps.masker ?? SHAPE_ONLY_MASKER, Date.now());
+      return { roster, lane: lanes[id] ?? null };
+    },
+    audit: deps.accountAudit,
+    fleetIdentity: () => knownFleetIdentity(deps.fleetIdentity),
+    // The write routes (A17): discard's check reads the lane-state file and the kill-switch marker, and the registry.
+    laneState: async (id) => {
+      const read = await readLaneStates(deps.io, deps.cfg);
+      return { lane: read.lanes[id] ?? { kind: 'absent' }, disabled: read.disabled.has(id) };
+    },
+    sessionsOn: accountSessionsOn,
+  });
 
   // The native Docs reader's API (design 2026-10-01 section 3.4), registered from its own files as ONE encapsulated
   // plugin, so its provenance hook, its request-body error handler and its response policy reach its four routes and
@@ -1916,11 +2088,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // get un-notified by the first one's disconnect. It is the TTL, not this
     // key, that handles a socket dying WITHOUT a close frame — every frame
     // below re-stamps the claim, and the client sends one every
-    // PRESENCE_REFRESH_MS for exactly that reason (see the Viewers class's own doc).
+    // VIEWER_REFRESH_MS for exactly that reason (see the Viewers class's own doc).
     const token = Symbol('viewer');
     // D-5242's presence contract: the OPEN claim, stamped at connect and re-stamped by EVERY frame — before the frame
     // is parsed, so even one that fails to parse proves the socket alive. A hidden tab beats too, and holds its session
-    // awake for `PRESENCE_OPEN_TTL_MS` after its last frame; `drop` at close removes both claims.
+    // awake for `VIEWER_OPEN_TTL_MS` after its last frame; `drop` at close removes both claims.
     viewers.markOpen(token, id);
     socket.on('message', (raw) => {
       viewers.touch(token);
@@ -2127,11 +2299,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 22 request-id routes (18 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 18 request-id routes (14 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
-  // fleet's baseline is 745 agent-WS operations [registry-read-census:fleet]
-  // per call in remote mode, before conditional reconfirmation, in front of
+  // fleet's floor is 97 agent-WS operations [registry-read-census:fleet]
+  // per call in remote mode, before its other listed fields and conditional reconfirmation, in front of
   // every human keystroke — purely to answer "does
   // this id exist". Its FIRST statement is the registry-id predicate
   // (`isRegistryId`, L0; path-identity spec §2.3): a name ccd could read as a
@@ -2153,7 +2325,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // "known".
   //
   // Side benefit: this no longer runs `readRegistry`'s full per-session parse
-  // (31 [registry-read-census:fields] field reads; identity failures follow
+  // (4 [registry-read-census:fields] unconditional reads plus one per other listed field; identity failures follow
   // `registry.ts`'s measured drop/degrade ladder), so a transient
   // failure to read one of a LIVE session's own sibling fields (e.g.
   // `workdir`) can no longer 404 a prompt typed into that session.
@@ -2269,6 +2441,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     };
     return answer;
   });
+
+  // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token.
+  registerLedgerOperatorRoutes(app, { coord: deps.coord, bus, now: () => Date.now(), presenceOf });
 
   /**
    * `POST /api/digest/correct` (spec §10, D-5300): the operator's correction of one digest line, `{rowKind, id,
@@ -2404,71 +2579,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (res.next !== undefined) bus.emit(`answered:${id}`, res.next);
   };
 
-  app.post('/api/sessions/:id/dialog', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndex?: unknown };
-    if (typeof body.dialogId !== 'string' || typeof body.optionIndex !== 'number') {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    // D-5298 (spec §6.3 server step 7): an approval dialog records the operator on the child's open approval rows
-    // BEFORE any key, so every approval has an answering principal and a claimant's later ruling is
-    // `409 already-ruled`. Read off the watcher's hookstate; with none to read, the rows are marked anyway — the
-    // operator answering is the one principal that always wins (D-5491).
-    const hs = watcher?.currentHookStates().get(id) ?? null;
-    if (hs === null || (hs.ask !== null && 'approval' in hs.ask)) {
-      try {
-        deps.coord?.markApprovalOperator(id, Date.now());
-      } catch (err) {
-        console.warn(`ccrc-server: recording the operator on ${id}'s approval rows failed (${err instanceof Error ? err.message : String(err)}) — answering anyway`);
-      }
-    }
-    const res = await answerDialog(sendDeps, id, body.dialogId, body.optionIndex);
-    answeredFrame(id, 'dialog', res);
-    return res.ok ? res : reply.code(409).send(res);
-  });
-
-  /**
-   * D-5047: type an answer into an AskUserQuestion's free-text row ("Type something.") and submit it, proved focused
-   * before typing and echoed before Enter (`answerDialogText`, `inject/send.ts`). A NEW route, deliberately not a
-   * `text` field on `/dialog` above: an older server would ignore that field, walk onto the empty row and press Enter,
-   * which rejects the whole ask. An older server answers this route 404 instead. `bad-text` (`isDialogText`,
-   * `shared/api.ts`) is the caller's to fix, so it is a 400 like a malformed body; every other refusal is a 409.
-   */
-  app.post('/api/sessions/:id/dialog/text', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndex?: unknown; text?: unknown };
-    if (typeof body.dialogId !== 'string' || typeof body.optionIndex !== 'number' || typeof body.text !== 'string') {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    const res = await answerDialogText(sendDeps, id, body.dialogId, body.optionIndex, body.text);
-    answeredFrame(id, 'dialog/text', res);
-    if (res.ok) return res;
-    return reply.code(res.error === 'bad-text' ? 400 : 409).send(res);
-  });
-
-  /**
-   * D-5048: answer a multiSelect AskUserQuestion question, leaving exactly `optionIndexes` ticked and committing it
-   * with Tab, each step proved on a fresh capture (`answerDialogMulti`, `inject/send.ts`). A NEW route, like
-   * `/dialog/text`: an older server answers it 404, where a field on `/dialog` would have walked and pressed Enter,
-   * which on a multiSelect question toggles a box and commits nothing. `bad-indexes` (`isDialogMultiIndexes`,
-   * `shared/api.ts`) is the caller's to fix, so it is a 400 like a malformed body; every other refusal is a 409.
-   */
-  app.post('/api/sessions/:id/dialog/multi', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { dialogId?: unknown; optionIndexes?: unknown };
-    if (typeof body.dialogId !== 'string' || !Array.isArray(body.optionIndexes) ||
-        !body.optionIndexes.every((n) => typeof n === 'number')) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    const res = await answerDialogMulti(sendDeps, id, body.dialogId, body.optionIndexes as number[]);
-    answeredFrame(id, 'dialog/multi', res);
-    if (res.ok) return res;
-    return reply.code(res.error === 'bad-indexes' ? 400 : 409).send(res);
-  });
-
   /**
    * Decision `ask-dialog-tab-route`: move an AskUserQuestion's pane to another tab with ←/→ (the sheet's arrow keys and
    * its tab strip), each step proved by the screen it lands on, never Enter (`moveDialogTab`, `inject/send.ts`). The
@@ -2484,185 +2594,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return reply.code(res.error === 'bad-request' ? 400 : 409).send(res);
   });
 
-  /**
-   * Task 12 (D-2171) — this is the OPERATOR's own answer path, the ordinary
-   * lock-screen route every ask goes through, PWA and pre-emption lane
-   * alike. Before this task it never consulted the `asks` table at all: if
-   * the operator answered first, the row stayed `'held'`, the parent's
-   * later `POST /api/asks/:id/answer` CAS'd it to `'answering'`, got
-   * refused by `answerAsk` below (the menu was already gone), and rolled
-   * back to `'held'` via `untakeAsk` — asserting the question was STILL
-   * pre-emptible when it had in fact just been answered, and never naming
-   * who answered it. Both routes serialize through the ONE per-session
-   * `KeyedQueue` (`askDeps`, built once per server, above), so exactly one
-   * digit ever reaches the pane regardless of this route's own logic — this
-   * is a RECORD defect, not a safety one, and everything below is in
-   * service of the record alone.
-   *
-   * `heldAskFor` returning null — no row for this child, the overwhelming
-   * majority of asks — takes EXACTLY the pre-Task-12 path: one `answerAsk`
-   * call, same refusal shape, no added read once a row exists nowhere to
-   * look up (a coord-less box skips `heldAskFor` entirely). This is the
-   * single most important property of this route: it is not new behaviour
-   * layered onto the common case, it is new behaviour reached only on the
-   * lane's own minority path.
-   *
-   * When a row IS held, it is taken (`takeAskForAnswer`, the identical CAS
-   * `/api/asks/:id/answer` uses, guarded by the same fresh re-read —
-   * `registry.ts`'s `freshAskAt`, imported above, shared with that route)
-   * BEFORE the keystroke: the row is the mutex, so
-   * taking it after the press would be decorative. Unlike the parent's own
-   * route, though, a LOST race here never refuses the caller — the operator
-   * is the authority this row exists to protect against being locked out
-   * of, not a third party mediated by it, so losing the CAS only means this
-   * request cannot claim the record; the press still goes through on its
-   * own merits (`answerAsk`'s own thirteen pre-send guards plus its
-   * post-send `sendKey` check, D-2177, are the only refusal that still
-   * applies; D-5048 added the thirteenth, the multiSelect refusal, and took
-   * away the commit Enter and its check).
-   */
-  app.post('/api/sessions/:id/ask', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    // D-5293: one reader for this body and the parent's (`readAskAnswer`).
-    const body = readAskAnswer(req.body ?? {});
-    if (body === null || body.askKey === undefined) {
-      return reply.code(400).send({ ok: false, error: 'bad-request' });
-    }
-    const optionIndexes = body.optionIndexes;
-    // Narrowed to `string` by the guard above, but that narrowing does not
-    // cross into `pressPlain`'s own closure below — a fresh `const` of the
-    // narrowed type carries it there.
-    const key = body.askKey;
-
-    // The plain press, byte-identical to every line this route ran before
-    // Task 12 existed — reached by BOTH "no coord configured" and "coord
-    // configured, nothing held for this child" below, deliberately the same
-    // call rather than two copies that could drift apart.
-    const pressPlain = async () => {
-      const res = await answerAsk(askDeps, id, key, optionIndexes);
-      return res.ok ? res : reply.code(409).send(res);
-    };
-
-    const coord = deps.coord;
-    if (coord === undefined) return pressPlain();
-
-    // GUARDED, BOTH OF THEM (whole-branch review F3). `heldAskFor` is an
-    // ordinary read and `takeAskForAnswer` runs `tx()` -> `BEGIN IMMEDIATE`,
-    // and `node:sqlite` throws SYNCHRONOUSLY — a closed handle, a lock race,
-    // a corrupt file. Both sit BEFORE `answerAsk`, so an unguarded throw
-    // turns THE OPERATOR'S OWN LOCK-SCREEN ANSWER into a 500 with no
-    // keystroke — the one path the design doc promises is untouched (§2.7)
-    // and whose degradation is supposed to be free (D-2169: "its loss is
-    // free: every held ask degrades to an immediate push"). Every other new
-    // coord touchpoint on this branch already fails this way on purpose
-    // (`sweepAsks`, both `detectDialogs` writes, `settleAsk` on both routes,
-    // `recordFeedEvent`, `fleet.ts`'s `readCurrentAsks`); these two did not,
-    // and they are the pair carrying a shipped promise.
-    //
-    // The degrade is `pressPlain()` — the byte-identical pre-Task-12 path,
-    // the same call the "no coord configured" and "nothing held" arms take.
-    // What is lost is the RECORD (the row is not taken, not settled, and no
-    // second feed event is written); what is NOT lost is the digit. That is
-    // exactly the trade D-2169 rules on, applied to a database that is
-    // present but broken rather than absent.
-    let held: AskRow | null;
-    try {
-      const read = coord.heldAskFor(id);
-      // D-2545: the SAME degrade as the throw arm just below, reached by a
-      // typed result. D-2169's promise is that the operator's own lock-screen
-      // press never becomes a 500, and a row this box cannot read is no more
-      // a reason to refuse the digit than a database it cannot open.
-      if (!read.ok) {
-        console.warn(`ccrc-server: heldAskFor(${id}) refused (${read.detail}) — answering the ` +
-          "operator's press unrecorded rather than refusing it");
-        return pressPlain();
-      }
-      held = read.ask;
-    } catch (err) {
-      console.warn(`ccrc-server: heldAskFor(${id}) failed ` +
-        `(${err instanceof Error ? err.message : String(err)}) — answering the operator's press ` +
-        'unrecorded rather than refusing it');
-      return pressPlain();
-    }
-    if (held === null) return pressPlain();
-
-    let taken: AskTakeResult;
-    try {
-      // `freshAskAt` is inside the guard too: it is registry+hookstate IO,
-      // not `node:sqlite`, but a throw from it would refuse the operator for
-      // exactly the same non-reason.
-      taken = coord.takeAskForAnswer(held.id, await freshAskAt(deps.io, deps.cfg, id));
-    } catch (err) {
-      console.warn(`ccrc-server: takeAskForAnswer(${held.id}) failed ` +
-        `(${err instanceof Error ? err.message : String(err)}) — answering the operator's press ` +
-        'unrecorded rather than refusing it');
-      return pressPlain();
-    }
-    const res = await answerAsk(askDeps, id, key, optionIndexes);
-
-    if (!taken.ok) {
-      // Lost the CAS — another principal already holds the row (mid-answer)
-      // or the instance moved since the mint. Nothing was taken, so there is
-      // nothing to roll back and nothing this request may settle. The
-      // operator is never refused for this: the press above already ran on
-      // its own merits.
-      return res.ok ? res : reply.code(409).send(res);
-    }
-
-    if (!res.ok) {
-      // No digit landed here either — not because every `answerAsk` guard
-      // returns before its send loop (since D-2177 a failed `sendKey`
-      // refuses too), but because a HELD row only ever exists for a
-      // single-select ask (`askActions` returns null on `multiSelect`, the
-      // sole eligibility gate `hold` checks before minting one — D-2173),
-      // which makes exactly one `sendKey` call and no Enter. Roll the row
-      // back to `held`, not stranded `answering`: the same rollback verb
-      // `/api/asks/:id/answer` uses on its own refused press; see
-      // `untakeAsk`'s own docstring (`store.ts`) for the full argument.
-      if (!coord.untakeAsk(held.id, taken.from)) {
-        console.warn(`ccrc-server: untakeAsk(${held.id}) returned false after a refused operator ` +
-          "press — the ask row was not 'answering' when the rollback ran; it may be stranded");
-      }
-      return reply.code(409).send(res);
-    }
-
-    // The digit landed. D-2172's second durable record — written BEFORE
-    // `settleAsk` (same order `/api/asks/:id/answer` uses) so that if
-    // `settleAsk` then throws, at least one durable trace of the answer
-    // survives. Independently optional, same as that route: a box with no
-    // `notifyLog` configured still answers the request. Recorded whatever the
-    // presence, never pushed, and a failed archive never fails the answer
-    // (the notice sink's `'record-only'`, D-5857).
-    notice({
-      kind: 'ask', sessionId: id, runId: null,
-      title: 'question answered',
-      body: `operator answered ${id}'s question: ${held.question} → ` +
-            `${held.options[optionIndexes[0]!] ?? '?'}`,
-    }, 'record-only', { degraded: 'ask answered, feed archive degraded' });
-
-    // GUARDED (Task 9's own lesson): the digit already landed above, so a
-    // failure to record it must never turn a successful press into a 500.
-    // The row is held exclusively by this request (CAS'd to `'answering'`
-    // above), so this is a genuine infra fault if it throws, not a lost
-    // race — but left unguarded it would strand the row `'answering'` and
-    // 500 a press that actually succeeded. The digit is pressed either way,
-    // so the response below is unconditional.
-    try {
-      coord.settleAsk(held.id, ASK_OPERATOR_PRINCIPAL, held.options[optionIndexes[0]!] ?? '', Date.now());
-    } catch (err) {
-      console.warn("ccrc-server: settleAsk failed after the operator's digit was already pressed " +
-        `(${err instanceof Error ? err.message : String(err)}) — the ask row may be stranded 'answering'; ` +
-        'the feed record above (if it landed) is the surviving audit trace');
-    }
-
-    return res;
-  });
-
   app.get('/api/sessions/:id/commands', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    return sessionCommands(deps, id);
+    return sessionCommands(deps, id, (dir, pid) => readLiveState(deps.io, dir, pid));
   });
 
   app.post('/api/sessions/:id/interrupt', async (req, reply) => {
@@ -3054,7 +2989,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // goes on (M5). It is sanitised inside `resolveTitle`, so ccd's control-character and byte-cap refusals cannot turn a
     // lookup into a 502. The id is ccd's `$project-$slug` (`cmd_ws_add`).
     const { title } = await resolveTitle(plan.name, plan.ask.ticket, {
-      ccrcDir: deps.cfg.ccrcDir, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+      ccrcDir: deps.cfg.ccrcDir, rate: deps.linearRate ?? null, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
     });
     const slug = plan.ask.slug;
     const res = await deps.runCcd(CCD_ARGV.wsAddNamed(project, slug, { title, wrapper: plan.wrapper }, routed.route, pwaDec(req)));
@@ -3859,8 +3794,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const plan = coord === undefined
       ? await decideArchive(null, id, flags, measure)
       : await coordRoutes.withAbandon(coord, (abandon, abandonRefusal) => decideArchive({
-        openRunsForSession: (sid) => coord.openRunsForSession(sid),
-        openRunsClaimedBy: (sid) => openRunsClaimedBy(coord, sid),
+        bindingsOf: (sid) => coord.bindingsOf(sid),
         abandonRefusal,
         abandon,
       }, id, flags, measure));
@@ -4006,7 +3940,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // title otherwise (never a failure), and sanitised inside `resolveTitle`, so ccd's text refusals are not reachable
     // through a lookup.
     const title = plan.kind === 'clear' ? null : (await resolveTitle(plan.name, plan.ticket, {
-      ccrcDir: deps.cfg.ccrcDir, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+      ccrcDir: deps.cfg.ccrcDir, rate: deps.linearRate ?? null, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
     })).title;
     const argv = CCD_ARGV.wsTitle(id, title === null ? { clear: true } : { title });
     // Through the per-session queue, like the reap and the forget, so a rename cannot interleave with another write to

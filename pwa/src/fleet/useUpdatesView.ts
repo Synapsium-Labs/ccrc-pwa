@@ -11,11 +11,12 @@
 // and must not claim the list is fresh either. (2) It re-polls when the page
 // becomes visible, because a phone that slept through three polls should not
 // show a 3-minute-old "vX is out" as current.
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { UpdatesView } from '../../../shared/api';
 import { ApiError, api } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
 import { asUpdatesView } from './updatesRead';
+import { sameJson } from '../lib/sameJson';
 
 /** The read's cadence. The spec names none for the PWA; 60 s is the server's
  *  own fastest cadence over these rows — the inventory sweep
@@ -82,14 +83,20 @@ export function useUpdatesView(pollMs: number = UPDATES_POLL_MS): UpdatesPoll {
     onOutcome: (outcome, issue) => {
       if (outcome.ok) {
         const view = asUpdatesView(outcome.raw);
+        // An equal good answer keeps the previous view's reference (C8, D-6440), so its readers do not re-render, but
+        // `seq` still takes this read's number: HaltBanner reads it as the issue of the last good read (D-4273).
         setState((prev) => (view === null
           ? { view: prev.view, failure: 'failed', seq: prev.seq }
-          : { view, failure: null, seq: issue }));
+          : { view: sameJson(prev.view, view) ? prev.view : view, failure: null, seq: issue }));
       } else {
         const failure = failureOf(outcome.err);
         setState((prev) => ({ view: prev.view, failure, seq: prev.seq }));
       }
     },
   });
-  return { view: state.view, failure: state.failure, seq: state.seq, reload };
+  // Memoised (C6, D-6438): `reload` is `usePoll`'s `useCallback([])`, so the plane changes only when a poll lands.
+  return useMemo(
+    () => ({ view: state.view, failure: state.failure, seq: state.seq, reload }),
+    [state.view, state.failure, state.seq, reload],
+  );
 }

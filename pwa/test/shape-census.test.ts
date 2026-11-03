@@ -228,7 +228,7 @@ const REGISTERED: Record<string, string> = {
     + 'layout glue that means nothing beyond itself. A constant for every '
     + 'common quadruple of utilities is a second spelling of Tailwind, and '
     + 'the registry would stop being able to tell the two apart.',
-  ['chat.css .compaction--sys .compaction-label + fleet.css .sess-subagent-name '
+  ['chat.css .compaction--sys .compaction-label + fleet.css .acct-card-label + fleet.css .sess-subagent-name '
     + '+ ui/workbench-account-row.css .wb-acct-row .wb-acct-name '
     + '+ ui/workbench-sidebar.css .wb-side .wb-side-clip '
     + '+ ui/workbench-sidebar.css .wb-side-agent .wb-side-name '
@@ -238,13 +238,22 @@ const REGISTERED: Record<string, string> = {
     + 'utility on it. The workbench sheets joined it when they were enrolled '
     + '(an account name, a chip\'s clipped text, an agent name, a tab title): '
     + 'each sits on a ground of its own and carries the idiom because a long '
-    + 'id must ellipsize there, not because they are one component.',
+    + 'id must ellipsize there, not because they are one component. The '
+    + 'Accounts card\'s label joined it with the state words (D-7718): a long '
+    + 'label gives way to the lamp on the card\'s first line.',
   'ui/workbench-account-row.css .wb-acct-head .wb-acct-lead + ui/workbench-sidebar.css .wb-side-row .wb-side-word':
     'DIFFERENT THINGS. The same `truncate` idiom as a shrinking flex item '
     + '(`flex: 0 1 auto` beside the four). One is the folded account line\'s '
     + 'lead, which yields so the off accounts after it never do; the other is '
     + 'a session row\'s state word, the last thing on its line to yield. Their '
     + 'shared part is the yield, and each sheet\'s yield order is its own.',
+  'fleet.css .proj-card-last + shell.css .shell-accounts .account-gauge-label':
+    'DIFFERENT THINGS. The same `truncate` idiom as a shrinking flex item '
+    + '(`flex: 0 1 auto` beside the four) and the meta type size. One is a '
+    + 'project card\'s last-activity line, which yields before the project '
+    + 'name does; the other is a lane card\'s name in the lanes row, which yields '
+    + 'so the windows after it keep their countdowns inside the card. Their '
+    + 'shared part is the yield, and each row\'s yield order is its own.',
   'ui/tool-card.css .tool-dot + ui/workbench-status-bar.css .wb-status-dot + ui/workbench-terminal.css .wb-term-dot':
     'DIFFERENT THINGS. A matte 6px point — width, height, a full radius, no '
     + 'shrink — and nothing else in common: a tool call\'s outcome on the '

@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  BASH, CANARY, HAVE_FLOCK, NODE_ID, addLane, answer, boxEnv, ccrcIn, laneBox, laneState, modeOf,
+  BASH, CANARY, HAVE_FLOCK, NODE_ID, addLane, answer, boxEnv, ccrcIn, laneBox, laneState, markReady, modeOf,
 } from './laneStateFixture.js';
 
 beforeEach((ctx) => { if (!HAVE_FLOCK) ctx.skip(); });
@@ -83,7 +83,7 @@ describe('one act per lane (G18)', () => {
     const home = laneBox('ccrc-lane-lock-check-');
     expect(addLane(home, 'lane-c').code).toBe(0);
     held(home, 'lane-c', 'account check --id lane-c');
-    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID });
+    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID, addedAt: expect.any(String) });
   });
 
   it('`remove` on a held lane is refused `lane-busy`, and the lane stands', () => {
@@ -127,6 +127,7 @@ describe('the lock order (spec §3.9)', () => {
     expectOrder('add');
     run(['account', 'disable', '--id', 'lane-c']);
     expectOrder('disable');
+    markReady(home, 'lane-c');
     run(['account', 'enable', '--id', 'lane-c']);
     expectOrder('enable');
   });

@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD } from './ccdWsHelpers.js';
 import { parsedFile } from './scan/symbols.js';
-import { scheduleFacts, statementStartAt, type ScheduleFacts } from './scan/parse.js';
+import { scheduleFacts, type ScheduleFacts } from './scan/parse.js';
 
 /** The repository root: every query's default tree. A fixture tree passes its own root in its place. */
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -105,16 +105,35 @@ export function ccdLauncherIn(root: string = REPO): string {
   return path.join(root, path.relative(REPO, CCD));
 }
 
+/** The library files `ccd/ccd` loads at its foot (D-6913), in load order. The census reads them AFTER `ccd/ccd`,
+ *  as one program: a moved function is still ccd's, with its row in `ccd/contexts.tsv`, its edges in the call graph and its
+ *  line in the heredoc check. A tree without one (a fixture) has no lines from it. */
+export const CCD_LIB_FILES: readonly string[] = ['ccd/lib/disk-retention.sh', 'ccd/lib/train-proof.sh'];
+
+/** One line of ccd's shell source, with the repo-relative file it is in and its 1-based line there. */
+export interface CcdSourceLine { readonly file: string; readonly line: number; readonly text: string }
+
+/** `ccd/ccd`, then each library file that exists under `root`, as lines. */
+export function ccdSourceLines(root: string = REPO): CcdSourceLine[] {
+  const out: CcdSourceLine[] = [];
+  const add = (file: string, abs: string): void => {
+    if (!existsSync(abs)) return;
+    const lines = readFileSync(abs, 'utf8').split('\n');
+    // A file's final newline is not a line of its own: the library ends in one, and a phantom empty line would end nothing.
+    if (lines[lines.length - 1] === '' && file !== 'ccd/ccd') lines.pop();
+    lines.forEach((text, i) => out.push({ file, line: i + 1, text }));
+  };
+  add('ccd/ccd', ccdLauncherIn(root));
+  for (const rel of CCD_LIB_FILES) add(rel, path.join(root, rel));
+  return out;
+}
+
 /** A definition `ccd/ccd` writes: a function name at column 0, `()`, optional spaces, `{`. */
 export const CCD_FUNCTION_DEF = /^([A-Za-z_][A-Za-z0-9_]*)\(\) *\{/;
 
-/** ccd's function definitions, one site per `name() {` line of `ccd/ccd` (the site's `text` is the line). */
+/** ccd's function definitions, one site per `name() {` line of `ccd/ccd` and its library (the site's `text` is the line). */
 export function ccdFunctionDefinitions(root: string = REPO): CensusSite[] {
-  const out: CensusSite[] = [];
-  readFileSync(ccdLauncherIn(root), 'utf8').split('\n').forEach((text, i) => {
-    if (CCD_FUNCTION_DEF.test(text)) out.push({ file: 'ccd/ccd', line: i + 1, text });
-  });
-  return out;
+  return ccdSourceLines(root).filter((s) => CCD_FUNCTION_DEF.test(s.text));
 }
 
 /** The manifest's rows, one site per non-comment, non-blank line of `ccd/contexts.tsv` (`text` is the line). No
@@ -135,12 +154,13 @@ export function bashCodeOf(line: string): string {
   return line.replace(/\s#(?:\s.*)?$/, '');
 }
 
-/** One edge of ccd's call graph: `caller`'s region names `callee` first at `line` (1-based, in `ccd/ccd`). */
-export interface CcdCallEdge { readonly caller: string; readonly callee: string; readonly line: number }
+/** One edge of ccd's call graph: `caller`'s region names `callee` first at `line` (1-based, in `file`). */
+export interface CcdCallEdge { readonly caller: string; readonly callee: string; readonly line: number; readonly file: string }
 
 /** ccd's call graph: one edge per (caller, callee) pair, in definition order, then by first reference. */
 export function ccdCallGraph(root: string = REPO): CcdCallEdge[] {
-  const lines = readFileSync(ccdLauncherIn(root), 'utf8').split('\n');
+  const src = ccdSourceLines(root);
+  const lines = src.map((s) => s.text);
   const defs: { name: string; at: number }[] = [];
   lines.forEach((l, i) => { const m = CCD_FUNCTION_DEF.exec(l); if (m) defs.push({ name: m[1]!, at: i }); });
   const names = new Set(defs.map((d) => d.name));
@@ -157,7 +177,7 @@ export function ccdCallGraph(root: string = REPO): CcdCallEdge[] {
         const callee = m[2]!;
         if (m[1] !== undefined || m[3] !== undefined || callee === d.name || !names.has(callee) || seen.has(callee)) continue;
         seen.add(callee);
-        out.push({ caller: d.name, callee, line: j + 1 });
+        out.push({ caller: d.name, callee, line: src[j]!.line, file: src[j]!.file });
       }
     }
   });
@@ -169,7 +189,8 @@ export function ccdCallGraph(root: string = REPO): CcdCallEdge[] {
  *  line. A heredoc opens at `<<WORD`, `<<-WORD` or a quoted WORD on a code line (`<<<` is a here-string, not one) and
  *  closes at the line that is WORD (after leading tabs for `<<-`); one that never closes is a site too. */
 export function ccdHeredocBraces(root: string = REPO): CensusSite[] {
-  const lines = readFileSync(ccdLauncherIn(root), 'utf8').split('\n');
+  const src = ccdSourceLines(root);
+  const lines = src.map((s) => s.text);
   const open = /(?<!<)<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g;
   const out: CensusSite[] = [];
   let inFn = false;
@@ -178,16 +199,16 @@ export function ccdHeredocBraces(root: string = REPO): CensusSite[] {
     if (pending.length > 0) {
       const h = pending[0]!;
       if ((h.tabs ? text.replace(/^\t+/, '') : text) === h.word) pending.shift();
-      else if (inFn && text.startsWith('}')) out.push({ file: 'ccd/ccd', line: i + 1, text });
+      else if (inFn && text.startsWith('}')) out.push({ file: src[i]!.file, line: src[i]!.line, text });
       return;
     }
     if (CCD_FUNCTION_DEF.test(text)) inFn = true;
     else if (text.startsWith('}')) inFn = false;
     if (!inFn) return;
-    for (const m of bashCodeOf(text).matchAll(open)) pending.push({ word: m[3]!, tabs: m[1] === '-', at: i + 1 });
+    for (const m of bashCodeOf(text).matchAll(open)) pending.push({ word: m[3]!, tabs: m[1] === '-', at: i });
   });
   // A heredoc that never closes means this reader misparsed one; say so rather than read nothing after it.
-  for (const h of pending) out.push({ file: 'ccd/ccd', line: h.at, text: `<<${h.word} never closes` });
+  for (const h of pending) out.push({ file: src[h.at]!.file, line: src[h.at]!.line, text: `<<${h.word} never closes` });
   return out;
 }
 
@@ -199,7 +220,7 @@ export function ccdCrossContextCalls(root: string = REPO): CensusSite[] {
   return ccdCallGraph(root).flatMap((e) => {
     const a = ctx.get(e.caller); const b = ctx.get(e.callee);
     if (a === undefined || b === undefined || a === b || b === 'K') return [];
-    return [{ file: 'ccd/ccd', line: e.line, text: `${e.caller} (${a}) -> ${e.callee} (${b})` }];
+    return [{ file: e.file, line: e.line, text: `${e.caller} (${a}) -> ${e.callee} (${b})` }];
   });
 }
 
@@ -352,15 +373,16 @@ export function runCcdOldFoldSites(root: string = REPO, table: readonly RanTable
   return runCcdSiteArms(root, table).filter((s) => s.arm === null).map(({ file, line, text }) => ({ file, line, text }));
 }
 
-/** D-5866 (Task C1k; ARCH-71 #806): the W4 files W1b never edits. Their capability sites are reported, tagged
- *  `w4-held`, and W4 moves them. */
-export const W4_HELD_FILES: readonly string[] = ['server/src/hibernateSweep.ts', 'server/src/stopDoneSweep.ts'];
+/** D-5866 (Task C1k; ARCH-71 #806): the W4 files W1b never edits. Their capability sites were reported, tagged
+ *  `w4-held`, and W4 moved them: since D-7042 (ARCH-43 C4d) both sleep lanes ask `ccdCan` in the one executor
+ *  (`sleepLane.ts`), and no file is held. */
+export const W4_HELD_FILES: readonly string[] = [];
 
 /** What a capability site asks. `verb`: whether this box's ccd can run a `CCD_ARGV` row (every `ccdCan(` and every
  *  `verbSupported(`, and a `capSupported(` of some `CCD_CAN` row's token). `verb-precondition`: a `capSupported(` on
  *  a line that also asks `ccdCan(` of another row (the pause marker the collector needs beside its own token). `flag`:
- *  any other token, which an existing verb parses. `w4-held`: any site in `W4_HELD_FILES`. */
-export type CapabilityTag = 'verb' | 'verb-precondition' | 'flag' | 'w4-held';
+ *  any other token, which an existing verb parses. (`w4-held`, a site in `W4_HELD_FILES`, was retired by D-7042.) */
+export type CapabilityTag = 'verb' | 'verb-precondition' | 'flag';
 
 /** One capability site: where, in which form, the token it names (`null` for `verbSupported`, or an expression this
  *  census does not resolve), and its tag. */
@@ -390,7 +412,7 @@ function secondArg(code: string, open: number): string | null {
  * `server/src`, outside `ccdargv.ts` (which defines them), each tagged. THE TAG IS READ FROM `CCD_CAN`, never from a
  * list: a `capSupported(` token is resolved through `ccdargv.ts`'s own exports (an exported constant's value, or a
  * quoted literal), and is `verb` when it is some row's token. Exit target: no `verb`-tagged `verbSupported(` or
- * `capSupported(` outside `W4_HELD_FILES` (every verb question goes through `ccdCan`).
+ * `capSupported(` anywhere (every verb question goes through `ccdCan`; `W4_HELD_FILES` is empty since D-7042).
  * KNOWN WIDTH: "beside" is the same code line; a call whose arguments wrap onto the next line resolves no token, and
  * its tag is `flag` unless its form says otherwise.
  */
@@ -416,8 +438,7 @@ export async function capabilityChoiceSites(root: string = REPO): Promise<Capabi
         const form = m[1] as CapabilitySite['form'];
         const token = form === 'capSupported' ? tokenOf(secondArg(code, m.index! + m[0].length)) : null;
         const beside = form === 'capSupported' && /\bccdCan\s*\(/.test(code);
-        const tag: CapabilityTag = W4_HELD_FILES.includes(file) ? 'w4-held'
-          : form !== 'capSupported' ? 'verb'
+        const tag: CapabilityTag = form !== 'capSupported' ? 'verb'
             : beside ? 'verb-precondition'
               : token !== null && rowTokens.has(token) ? 'verb' : 'flag';
         out.push({ file, line: i + 1, text, form, token, tag });
@@ -614,13 +635,15 @@ export function declaredDerivations(root: string = REPO): Array<{ name: string; 
 /**
  * D-5864 (Task C1j; ARCH-51 #786; spec K13's listing half): every place `server/src/watch.ts` lists the registry, from its
  * syntax tree (`scan/symbols.ts`, over `scan/parse.ts`), never from a count typed by hand. A site is a call of `readRegistry(`
- * or `readRegistryMeasured(`, or of a `readdir(` whose first argument names `registryDir`, inside a method of the class.
+ * or `readRegistryMeasured(`, or of a `readdir(` or `readdirMeasured(` whose first argument names `registryDir`, inside a
+ * method of the class.
  * Each is tagged by the method it sits in:
  * - `selection`: it chooses rows for a lane. Exit target (C1j): exactly one, in `FleetWatcher.tick`; the lanes take the
  *   tick's `FleetReadModel`.
  * - `act`: it is read at the act and stays fresh, by name (`ACT_LISTING_METHODS`): the mail lane's last switch read
- *   before it delivers, and the divergence census's listing, taken after git's records on purpose; and the tick's own bare
- *   `readdir`, the snapshot write's re-confirmation when the fleet shrank.
+ *   before it delivers, and the divergence census's listing, taken after git's records on purpose; each sleep lane's
+ *   thunk for its act's switch read, nearest the argv (D-7047, C4g; it lists only when an act is about to compose); and
+ *   the tick's own bare `readdir`, the snapshot write's re-confirmation when the fleet shrank.
  * - `tests-only`: a lane's own read when called with no model, reached by tests alone (`TESTS_ONLY_LISTING_METHODS`);
  *   the registry-refused census pins that `tick()` hands each lane its model.
  * A method not named in either list is `selection`, so a new lane that lists for itself is counted as one.
@@ -628,7 +651,11 @@ export function declaredDerivations(root: string = REPO): Array<{ name: string; 
  * and left to the request-time readers' work (ARCH-52, W2); a listing reached through an alias, a helper or a `readdir`
  * whose argument is a local that holds `registryDir` is not seen.
  */
-export const ACT_LISTING_METHODS: readonly string[] = ['FleetWatcher.mailPass', 'FleetWatcher.divergencesPass'];
+export const ACT_LISTING_METHODS: readonly string[] = [
+  'FleetWatcher.mailPass', 'FleetWatcher.divergencesPass', 'FleetWatcher.sleepRunDone', 'FleetWatcher.sleepIdleHours',
+  // D-7452: the automatic roll's act-time switch read (D-7047's), a row of the same sleep executor.
+  'FleetWatcher.sweepRoll',
+];
 export const TESTS_ONLY_LISTING_METHODS: readonly string[] = ['FleetWatcher.fleetFor', 'FleetWatcher.sweepHookStates', 'FleetWatcher.detectDialogs'];
 export const SELECTION_LISTING_METHOD = 'FleetWatcher.tick';
 
@@ -643,7 +670,7 @@ export function registryListingSites(root: string = REPO): RegistryListingSite[]
   const out: RegistryListingSite[] = [];
   for (const c of parsed.calls) {
     const isReader = c.name === 'readRegistry' || c.name === 'readRegistryMeasured';
-    const isListing = c.name === 'readdir' && (c.args[0]?.text ?? '').includes('registryDir');
+    const isListing = (c.name === 'readdir' || c.name === 'readdirMeasured') && (c.args[0]?.text ?? '').includes('registryDir');
     if (!isReader && !isListing) continue;
     const inner = parsed.symbols.filter((s) => s.kind === 'method' && s.name.startsWith('FleetWatcher.') && s.start <= c.start && c.end <= s.end)
       .sort((a, b) => b.start - a.start)[0];
@@ -697,88 +724,3 @@ export const ONCE_WARN_ALLOWED: ReadonlyArray<{ readonly file: string; readonly 
   // tmp-sweep-mail.test.ts's characterization: a key that comes back after another key or a clean pass stays silent.
   { file: 'server/src/tmpSweepLane.ts', reason: 'once-ever, not a change latch, D-6991' },
 ];
-
-// W8's census split (the 2026-10-26 consolidation W8 plan, Task C8-0): each of W8's three chains keeps its queries in
-// its own module under `census-w8/`, so no two of its PRs append to this tail. Re-exported here, so every count still
-// comes from this module's named queries.
-export * from './census-w8/cadence.js';
-export * from './census-w8/spawn.js';
-export * from './census-w8/journal.js';
-
-// ARCH-43 (spec 2026-10-19 K1; plan C4a): the sleep lanes' two censuses. Both read parsed symbols (`scan/symbols.ts`, over
-// `scan/parse.ts`), never a line regex, and both REPORT until their series reaches its target: `sleepVerdictLadders` 2 -> 1
-// at C4b (`decideSleep`), `hibernateActSites` 2 -> 1 at C4d (one sleep executor), each pinned in the commit that reaches it.
-
-/** One site of a parsed-symbol census: the function it was found in (`file#name`), anchored on that function's first
- *  line. */
-export interface SymbolSite extends CensusSite { readonly symbol: string }
-
-const relOf = (root: string, f: string): string => path.relative(root, f).split(path.sep).join('/');
-
-/**
- * The sleep verdicts' hold ladders: each function under `server/src` whose body RETURNS a `hold('viewer')` call, one site
- * per function (the innermost named function holding the call). 2 at the C4a base: `server/src/stopDone.ts#stopDoneVerdict`
- * and `server/src/coord/hibernate.ts#hibernateVerdict`.
- * KNOWN WIDTH: "returns" is the text just before the call, from its statement's start, ending in `return`; a call returned
- * through a ternary, a wrapper or a variable, a `hold` under another name and a `'viewer'` built from pieces are not seen.
- */
-export function sleepVerdictLadders(root: string = REPO): SymbolSite[] {
-  const out: SymbolSite[] = [];
-  for (const f of sourceFiles(root, 'server/src')) {
-    const file = relOf(root, f);
-    const p = parsedFile(f);
-    const lines = p.text.split('\n');
-    const seen = new Set<string>();
-    for (const c of p.calls) {
-      if (c.callee !== 'hold' || c.args[0]?.kind !== 'string' || c.args[0].text !== 'viewer') continue;
-      if (!/\breturn\s*$/.test(p.text.slice(statementStartAt(p.text, c.start, f), c.start))) continue;
-      const fn = p.symbols
-        .filter((s) => (s.kind === 'function' || s.kind === 'variable-function' || s.kind === 'method' || s.kind === 'arrow-property')
-          && s.start <= c.start && c.end <= s.end)
-        .sort((a, b) => b.start - a.start)[0];
-      if (fn === undefined || seen.has(fn.name)) continue;
-      seen.add(fn.name);
-      out.push({ file, line: fn.line, text: lines[fn.line - 1] ?? '', symbol: `${file}#${fn.name}` });
-    }
-  }
-  return out;
-}
-
-/** How an act site hands its argv to `runCcd(`: written in the call, or bound first in the same body. */
-export type HibernateActShape = 'inline' | 'bound';
-export interface HibernateActSite extends SymbolSite { readonly shape: HibernateActShape }
-
-const HIBERNATE_ARGV = /\bCCD_ARGV\.hibernate\s*\(/;
-
-/**
- * The `ccd hibernate` act sites: each TOP-LEVEL function under `server/src` (a `function` or a `const` arrow, nested
- * closures included in its body) that passes to a `runCcd(` call either a `CCD_ARGV.hibernate(` expression (`inline`) or
- * an identifier the same body binds to one (`const argv = CCD_ARGV.hibernate(…)`, then `runCcd(argv)`: `bound`), one site
- * per function. A `CCD_ARGV.hibernate(` that only feeds `verbSupported(` or `ccdCan(` is a verb question, not an act, and
- * is not counted. 2 at the C4a base: `server/src/stopDoneSweep.ts#stopDonePass` (inline) and
- * `server/src/hibernateSweep.ts#actOn` (bound); a textual `runCcd(CCD_ARGV.hibernate(` query finds 1 and is not this
- * census. KNOWN WIDTH: a class method, an argv passed through a helper or a second variable, and a `runCcd` under another
- * name are not seen.
- */
-export function hibernateActSites(root: string = REPO): HibernateActSite[] {
-  const out: HibernateActSite[] = [];
-  for (const f of sourceFiles(root, 'server/src')) {
-    const file = relOf(root, f);
-    const p = parsedFile(f);
-    const lines = p.text.split('\n');
-    for (const fn of p.symbols) {
-      if (fn.name.includes('.') || (fn.kind !== 'function' && fn.kind !== 'variable-function')) continue;
-      let shape: HibernateActShape | null = null;
-      for (const c of p.calls) {
-        if (c.name !== 'runCcd' || c.start < fn.start || c.end > fn.end) continue;
-        const arg = c.args[0]?.text ?? '';
-        if (HIBERNATE_ARGV.test(arg)) { shape = 'inline'; break; }
-        const bound = /^[A-Za-z_$][\w$]*$/.test(arg) && p.bindings.some((b) => b.name === arg && b.start >= fn.start && b.end <= fn.end
-          && b.scopeStart <= c.start && c.start < b.scopeEnd && HIBERNATE_ARGV.test(b.init));
-        if (bound) shape ??= 'bound';
-      }
-      if (shape !== null) out.push({ file, line: fn.line, text: lines[fn.line - 1] ?? '', symbol: `${file}#${fn.name}`, shape });
-    }
-  }
-  return out;
-}

@@ -19,7 +19,8 @@ import v8 from 'node:v8';
 import vm from 'node:vm';
 import { ACCOUNT_SUBS } from '../../shared/api.js';
 import { accountOpsFor, accountSpawnEnv, localAccountOps, remoteAccountOps, type AccountOpsMakers } from '../src/accounts/ops.js';
-import { AgentOpError, LinkNotSentError, type FleetClient } from '../src/remote/client.js';
+import type { FleetClient } from '../src/remote/client.js';
+import { AgentOpError, LinkNotSentError } from '../src/remote/errors.js';
 import { ACCOUNT_OP_DRAIN_MS, accountOpRequestTimeoutMs } from '../../shared/agent-protocol.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -206,7 +207,8 @@ describe('the local arm (D-5513: the account spawn\'s environment is explicit)',
     expect(ans).toEqual({ kind: 'exited', code: 0, stdout: '{"ok":true}\n' });
     expect(readFileSync(path.join(rec, 'argv0'), 'utf8')).toBe(path.join(home, '.local', 'bin', 'ccrc'));
     const argv = readFileSync(path.join(rec, 'argv'), 'utf8');
-    expect(argv).toBe('account\ncredential\n--id=lane-a\n');
+    // `--credential=-`: the verb's one spelling for a secret on stdin (accounts plan Task A17); never the secret itself.
+    expect(argv).toBe('account\ncredential\n--id=lane-a\n--credential=-\n');
     expect(argv).not.toContain('CANARY-');
     expect(readFileSync(path.join(rec, 'stdin'))).toEqual(secret);
     expect(readFileSync(path.join(rec, 'environ'), 'utf8')).not.toContain('CANARY-');
@@ -250,9 +252,10 @@ describe('the local arm (D-5513: the account spawn\'s environment is explicit)',
 
   it('builds typed fields into one argv word each, from the same builder as the agent (A8)', async () => {
     const { home, rec } = fixtureHome();
-    expect(await localAccountOps({ home }).run('set', 'lane-a', { placement: 'full', stated: 'Max plan, work' }))
+    // The stated identity rides stdin, never argv (accounts plan Task A16): the builder writes `--stated=-`.
+    expect(await localAccountOps({ home }).run('set', 'lane-a', { placement: 'full' }, Buffer.from('Max plan, work')))
       .toMatchObject({ kind: 'exited', code: 0 });
-    expect(readFileSync(path.join(rec, 'argv'), 'utf8')).toBe('account\nset\n--id=lane-a\n--stated=Max plan, work\n--placement=full\n');
+    expect(readFileSync(path.join(rec, 'argv'), 'utf8')).toBe('account\nset\n--id=lane-a\n--placement=full\n--stated=-\n');
   });
 
   it('a sub past its bound gets TERM, then KILL after the grace, and answers timeout', async () => {

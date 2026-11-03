@@ -19,6 +19,7 @@ import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import { useFleetStore } from '../src/stores/fleet';
 import { PALETTE_MOTION_VARS, VAUL_MOTION } from '../../ui/src/lib/motion';
 import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import { TEST_ROSTER } from './rosterFixture';
 
 // (pointer: fine), as header.test.tsx stubs it: the header binds the physical
@@ -717,7 +718,8 @@ describe('the top search finds sessions (D-6714)', () => {
   });
 
   it("a coordinator is found by its programme's title; its worker is not", () => {
-    useFleetStore.setState({ runs: [PROGRAMME] });
+    // The runs frame and the fleet frame of a current server: the worker carries the run binding (D-7182, C7d).
+    useFleetStore.setState({ runs: [PROGRAMME], sessions: withRunBinding(useFleetStore.getState().sessions, [PROGRAMME]) });
     render(<CommandLayer openNewSession={vi.fn()} />);
     openPalette();
     type('Programme A');

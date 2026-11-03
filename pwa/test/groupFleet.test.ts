@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { groupFleet, inReleasedFold, releasedByProgramme } from '../src/fleet/groupFleet';
 import type { FleetSession, ReleasedFrom } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 
 const s = (over: Partial<FleetSession>): FleetSession => (fleetSession({ id: 'x', wrapper: 'claude9', home: 'claude9', project: 'p', workdir: '/p', statusUpdatedAt: 0, ...over }));
 
@@ -125,7 +125,7 @@ describe('groupFleet', () => {
     // so it cannot see a second writer coming back. The live fixture below is
     // the one that can.
     const g = groupFleet([
-      s({ id: 'a', project: 'alpha', status: 'dead', dialogPending: true }),
+      s({ id: 'a', project: 'alpha', status: 'dead', lifecycle: DEAD_LIFECYCLE, dialogPending: true }),
     ], []);
     expect(g).toHaveLength(1);
     expect(g[0]!.attention).toBe(false);
@@ -153,8 +153,8 @@ describe('groupFleet', () => {
       s({ id: 'idle', status: 'idle', bucket: 'idle', stranded: marker }),
       s({ id: 'working', status: 'busy', bucket: 'working', stranded: marker }),
       s({ id: 'away', status: 'idle', bucket: 'idle', wrapper: 'claude9', home: 'claude', stranded: marker }),
-      s({ id: 'dead', status: 'dead', bucket: 'dead', stranded: marker }),
-      s({ id: 'archived', status: 'dead', bucket: 'archived', stranded: marker }),
+      s({ id: 'dead', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stranded: marker }),
+      s({ id: 'archived', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', stranded: marker }),
     ], [])[0]!;
     expect(g.stranded).toBe(3);
   });
@@ -293,7 +293,7 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
 describe('the Archived fold takes stopped main checkouts (workspace lifecycle spec §5.2)', () => {
   const STOP = (at: number) => ({ at, surface: 'pwa' as const });
   const main = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
-    s({ id, project: 'demo', workspace: null, status: 'dead', bucket: 'dead', ...over });
+    s({ id, project: 'demo', workspace: null, status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', ...over });
   const ws = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
     s({ id, project: 'demo', workspace: id, ...over });
 
@@ -307,9 +307,9 @@ describe('the Archived fold takes stopped main checkouts (workspace lifecycle sp
     ['a main checkout started again — the stop stamp is gone', main('claude9-demo', { status: 'idle', bucket: 'idle' })],
     ['a crashed main checkout — dead, never stopped', main('claude9-demo')],
     ['a stopped workspace that is not archived — it offers Archive again', ws('demo-b', {
-      status: 'dead', bucket: 'dead', stoppedBy: STOP(5) })],
+      status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stoppedBy: STOP(5) })],
     ['a merged-and-archived workspace — `cleanup` stays in its chip\'s list',
-      ws('demo-b', { status: 'dead', archivedAt: 1785300000, bucket: 'cleanup' })],
+      ws('demo-b', { status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1785300000, bucket: 'cleanup' })],
   ] as const)('keeps %s at the top level', (_label, row) => {
     const [g] = groupFleet([row], []);
     expect(g!.sessions.map((x) => x.id)).toEqual([row.id]);
@@ -318,16 +318,16 @@ describe('the Archived fold takes stopped main checkouts (workspace lifecycle sp
 
   it('runs newest first — a workspace by its archive time, a main checkout by its stop', () => {
     const [g] = groupFleet([
-      ws('demo-old', { status: 'dead', archivedAt: 1, bucket: 'archived', bucketSince: 100 }),
+      ws('demo-old', { status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1, bucket: 'archived', bucketSince: 100 }),
       main('claude9-demo', { stoppedBy: STOP(300) }),
-      ws('demo-mid', { status: 'dead', archivedAt: 2, bucket: 'archived', bucketSince: 200 }),
+      ws('demo-mid', { status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 2, bucket: 'archived', bucketSince: 200 }),
     ], []);
     expect(g!.archived.map((x) => x.id)).toEqual(['claude9-demo', 'demo-mid', 'demo-old']);
   });
 
   it('a released workspace once archived is in Archived, never in both folds', () => {
     const released = { runId: 4, program: 'lifecycle', programTitle: null, claimedBy: 'demo-c', closedAt: 9, child: false };
-    const [g] = groupFleet([ws('demo-r', { status: 'dead', archivedAt: 1, bucket: 'archived', bucketSince: 10,
+    const [g] = groupFleet([ws('demo-r', { status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1, bucket: 'archived', bucketSince: 10,
       releasedFrom: released })], []);
     expect(g!.archived.map((x) => x.id)).toEqual(['demo-r']);
     expect(g!.released).toEqual([]);
@@ -354,7 +354,7 @@ describe('the Archived fold takes stopped main checkouts (workspace lifecycle sp
   });
 
   it('the fold may hold a row the Dead chip counts — stated, not changed', () => {
-    const fleet = [ws('demo-b', { status: 'dead', archivedAt: 1, bucket: 'archived' }), main('claude9-demo', { stoppedBy: STOP(5) })];
+    const fleet = [ws('demo-b', { status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1, bucket: 'archived' }), main('claude9-demo', { stoppedBy: STOP(5) })];
     const [g] = groupFleet(fleet, []);
     expect(g!.archived).toHaveLength(2);
     // What the chips count is the fleet screen's to pin, not this fixture's: `fleet-screen.test.tsx`'s
@@ -369,7 +369,7 @@ describe('the Archived fold takes stopped main checkouts (workspace lifecycle sp
       // oldest by `statusUpdatedAt`: were the order keyed on the fold, it would join part 3 and lead the crashed one.
       main('claude9-stopped', { project: 'stopped', stoppedBy: STOP(5), statusUpdatedAt: 10 }),
       main('claude9-crashed', { project: 'crashed', statusUpdatedAt: 99 }),
-      ws('demo-arch', { project: 'arch', status: 'dead', archivedAt: 1, bucket: 'archived', bucketSince: 3, statusUpdatedAt: 1 }),
+      ws('demo-arch', { project: 'arch', status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1, bucket: 'archived', bucketSince: 3, statusUpdatedAt: 1 }),
     ];
     const g = groupFleet(fleet, []);
     expect(g.map((x) => x.project)).toEqual(['arch', 'crashed', 'stopped']);
@@ -379,7 +379,7 @@ describe('the Archived fold takes stopped main checkouts (workspace lifecycle sp
   it('splits one card three ways — live row on top, the stopped main checkout and the archived workspace in the fold', () => {
     const [g] = groupFleet([
       main('claude9-demo', { stoppedBy: STOP(5), statusUpdatedAt: 500 }),
-      ws('demo-arch', { status: 'dead', archivedAt: 1, bucket: 'archived', bucketSince: 3, statusUpdatedAt: 1 }),
+      ws('demo-arch', { status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1, bucket: 'archived', bucketSince: 3, statusUpdatedAt: 1 }),
       ws('demo-live', { bucket: 'working', status: 'idle', statusUpdatedAt: 2 }),
     ], []);
     expect(g!.sessions.map((x) => x.id)).toEqual(['demo-live']);
@@ -545,7 +545,7 @@ describe('the Released sub-fold (workspace lifecycle spec §5.1)', () => {
     ['an attention', { bucket: 'attention' }],
     ['a working', { bucket: 'working' }],
     ['a live stranded', { stranded: { at: 1, reason: 'no lane' } }],
-    ['a dead stranded', { status: 'dead', bucket: 'dead', stranded: { at: 1, reason: 'no lane' } }],
+    ['a dead stranded', { status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stranded: { at: 1, reason: 'no lane' } }],
   ] as const)('never folds %s row — the fold cannot hide what needs a person', (_label, over) => {
     const g = groupFleet([s({ id: 'r', releasedFrom: rel(1, 100), ...(over as Partial<FleetSession>) })], [])[0]!;
     expect(g.released).toEqual([]);
@@ -556,7 +556,7 @@ describe('the Released sub-fold (workspace lifecycle spec §5.1)', () => {
     const g = groupFleet([
       s({ id: 'a', bucket: 'idle', releasedFrom: rel(1, 100) }),
       s({ id: 'b', bucket: 'done', releasedFrom: rel(2, 200) }),
-      s({ id: 'c', status: 'dead', bucket: 'dead', releasedFrom: rel(3, 300) }),
+      s({ id: 'c', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', releasedFrom: rel(3, 300) }),
     ], [])[0]!;
     expect(g.released.map((m) => m.id)).toEqual(['c', 'b', 'a']);   // newest close first
     expect(g.sessions).toEqual([]);
@@ -586,7 +586,7 @@ describe('the Released sub-fold (workspace lifecycle spec §5.1)', () => {
   it('a released-only card still ranks above an archived-only card', () => {
     // Both cards' only rows are folded; the released one was the more urgent before the fold and must stay so.
     const g = groupFleet([
-      s({ id: 'a', project: 'alpha', status: 'dead', bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'a', project: 'alpha', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 5 }),
       s({ id: 'r', project: 'beta', bucket: 'done', releasedFrom: rel(1, 100) }),
     ], []);
     expect(g.map((x) => x.project)).toEqual(['beta', 'alpha']);
@@ -595,8 +595,8 @@ describe('the Released sub-fold (workspace lifecycle spec §5.1)', () => {
   it('a released DEAD-only card ranks above an archived-only card, though sortFleet alone ranks dead below archived', () => {
     // Only a RELEASED dead row is lifted past archived (the fold's own rule); `sortFleet` puts dead (6) below archived (5).
     const g = groupFleet([
-      s({ id: 'a', project: 'B', status: 'dead', bucket: 'archived', archivedAt: 5 }),
-      s({ id: 'd', project: 'A', status: 'dead', bucket: 'dead', releasedFrom: rel(1, 100) }),
+      s({ id: 'a', project: 'B', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'd', project: 'A', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', releasedFrom: rel(1, 100) }),
     ], []);
     expect(g.map((x) => x.project)).toEqual(['A', 'B']);
     expect(g[0]!.released.map((m) => m.id)).toEqual(['d']);
@@ -606,8 +606,8 @@ describe('the Released sub-fold (workspace lifecycle spec §5.1)', () => {
     // The strand marker keeps the row out of the fold (`inReleasedFold`), so it is an unfolded dead row: visible in
     // `sessions`, and in part 4 of the order below archived (5 above dead 6), whatever `releasedFrom` says.
     const g = groupFleet([
-      s({ id: 'd', project: 'A', status: 'dead', bucket: 'dead', stranded: { at: 1, reason: 'no lane' }, releasedFrom: rel(1, 100) }),
-      s({ id: 'a', project: 'B', status: 'dead', bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'd', project: 'A', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead', stranded: { at: 1, reason: 'no lane' }, releasedFrom: rel(1, 100) }),
+      s({ id: 'a', project: 'B', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 5 }),
     ], []);
     expect(g.map((x) => x.project)).toEqual(['B', 'A']);
     expect(g[1]!.released).toEqual([]);
@@ -617,8 +617,8 @@ describe('the Released sub-fold (workspace lifecycle spec §5.1)', () => {
   it('an UNRELEASED dead row keeps its rank below archived: the lift is for released rows only', () => {
     // Neither card holds a released row, so the fold must not reorder them: archived (5) outranks dead (6) in sortFleet.
     const g = groupFleet([
-      s({ id: 'd', project: 'dead-card', status: 'dead', bucket: 'dead' }),
-      s({ id: 'a', project: 'arch-card', status: 'dead', bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'd', project: 'dead-card', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }),
+      s({ id: 'a', project: 'arch-card', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'archived', archivedAt: 5 }),
     ], []);
     expect(g.map((x) => x.project)).toEqual(['arch-card', 'dead-card']);
   });

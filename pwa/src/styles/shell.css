@@ -104,7 +104,10 @@
      so hiding what was then its only door there was the bug, not a feature.
      AccountsStrip now always renders a non-empty `.accounts-strip`, with a quiet
      placeholder body in that state, so this bar is never `:empty` and the old
-     auto-hide rule is gone. */
+     auto-hide rule is gone.
+
+     Both skins mount that strip here, as the lanes row: under the bar's line,
+     inside this header, every lane a card (T2c, D-6329). */
   .shell-accounts {
     grid-column: 1 / -1;
     grid-row: 1;
@@ -112,14 +115,49 @@
     border-bottom: 1px solid var(--edge-subtle);
     background: var(--bg-surface);
   }
-  /* One gauge per account across the width. 260px is all a gauge needs now that
-     the name sits beside its windows rather than above them, so all four stay
-     side by side down to ~1100px of viewport; below that auto-fit drops to fewer
-     columns and the strip grows a row rather than truncating a readout. */
+  /* One card per lane across the width, as many to a line as the width holds, and the end cell, the fold's control and
+     All accounts, in the track after the last card. A card's floor is only what its name and two windows need now
+     that the name sits beside them rather than above them; below that floor the tracks drop to fewer to a line and the
+     row wraps onto another line rather than truncating a readout. The floor is `LANE_CARD_MIN` (stripFold.ts), written
+     once there and handed to this rule by the strip as `--lane-card-min`, so the tracks drawn and the count the fold
+     measures (`rowFit`) agree. auto-fill, not auto-fit, so the tracks keep a card's width when the last line holds
+     fewer cards than the line. */
   .shell-accounts .accounts-strip {
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    /* `--lane-card-min` is declared here, with no value of its own (`initial`), and the strip's inline style always
+       outranks it with `LANE_CARD_MIN`: the figure stays written once, in stripFold.ts, and the token is still one
+       a stylesheet defines (css-vars.test.ts). Without the inline style the grid's columns are invalid and the cards
+       stack, a visible failure rather than a second figure. */
+    --lane-card-min: initial;
+    position: relative;
+    grid-template-columns: repeat(auto-fill, minmax(var(--lane-card-min), 1fr));
     gap: var(--sp-2);
     margin: 0;
+  }
+  /* The flyout (R120, strip-hover-flyout): the cards of the lanes the folded line leaves out (Task C13), in a panel
+     under the line, drawn over the content and pushing none of it down. It is out of flow, hung from the line's bottom
+     edge (`top: 100%` of the strip, which is `position: relative` above), above the frame's content in the sheet layer.
+     Its cards wrap in the line's own tracks and gap, the same card in the same floor, and its columns sit under the
+     line's: the panel reaches out past the strip's edges by its own padding and border, so its content box is the
+     strip's width at the strip's left and its auto-fill tracks are the line's, track for track, while the panel does
+     not scroll (a classic scrollbar, once it scrolls, narrows its content box and so its tracks). Taller than the room
+     under the line, it scrolls itself: at most 70% of the viewport's height, since the line sits at the top of the
+     window. Layer, hairline and the pop shadow: the surface the other floating panels use, no token of its own. */
+  .shell-accounts .accounts-flyout {
+    position: absolute;
+    top: 100%;
+    left: calc(-1 * (var(--sp-2) + 1px));
+    right: calc(-1 * (var(--sp-2) + 1px));
+    z-index: var(--z-sheet);
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--lane-card-min), 1fr));
+    gap: var(--sp-2);
+    max-height: 70dvh;
+    overflow-y: auto;
+    padding: var(--sp-2);
+    background: var(--bg-surface);
+    border: 1px solid var(--edge-subtle);
+    border-radius: var(--r-md);
+    box-shadow: var(--elev-pop);
   }
   /* Gauge: the account name moves from ABOVE its windows to BESIDE them, which is
      where the height comes from — three stacked lines become two. The windows
@@ -137,13 +175,29 @@
     border: 1px solid var(--edge-subtle);
     border-radius: var(--r-md);
   }
+  /* The end cell sits inline in the next track here, not on a row of its own as on a phone. It holds the fold's control
+     beside All accounts in that one track, on one row (fleet.css): the cell may shrink below its content
+     (`min-width: 0`, so a long "+13 more · 1 sign-in expired · 1 rate-limited" never widens the track) and the
+     control's words wrap inside it, so the cell stays one row and every item in the line keeps one top. */
+  .shell-accounts .accounts-end {
+    grid-column: auto;
+    min-width: 0;
+  }
+  /* The lane's name gives first: a long one is cut with an ellipsis (its full name is the label's `title`) so the
+     windows keep their countdowns inside the card. */
   .shell-accounts .account-gauge-label {
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: var(--fs-meta);
   }
+  /* The windows never shrink below what they draw, so only the name gives. `min-width: min-content` did not hold them:
+     a grid of rows with a 1fr track measures narrower than its rows draw, so a long name's card shrank them and the
+     countdowns spilled out of the card (lanes-row.browser.test.ts). */
   .shell-accounts .acct-rows {
-    flex: 1;
-    min-width: 0;
+    flex: 1 0 auto;
     gap: 1px;
   }
   /* The meter is the only elastic column, so it — never a number — is what gives
@@ -161,6 +215,7 @@
   }
   .shell-accounts .acct-win {
     color: var(--ink-secondary);
+    font-size: var(--fs-meta);
   }
   /* The percentage leads: primary ink, medium, one step up in size. */
   .shell-accounts .acct-pct {
@@ -170,6 +225,10 @@
   }
   .shell-accounts .acct-reset {
     color: var(--ink-secondary);
+    font-size: var(--fs-meta);
+  }
+  .shell-accounts .acct-unread {
+    font-size: var(--fs-meta);
   }
   /* No height for the meter: it is `Meter`'s, from `--meter-h` (D-5098), so
      the strip's meters take the skin's shape like every other. */

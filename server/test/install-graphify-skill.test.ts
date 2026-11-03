@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs'; import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
+import { CCRC_SKILL_CLAUSE, PKG_DESCRIPTION, installedSkillMd, skillMd } from './graphifySkillFixture.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-graphify-skill.sh');
 const HOMES = ['.claude', '.claude-home', '.claude-acme', '.claude-gpt'];
@@ -55,7 +55,7 @@ describe('install-graphify-skill', () => {
   it('assembles SKILL.md + references/ + .graphify_version into every home', () => {
     run();
     for (const d of HOMES) {
-      expect(fs.readFileSync(skill(d, 'SKILL.md'), 'utf8')).toBe(skillMd(PKG_DESCRIPTION));
+      expect(fs.readFileSync(skill(d, 'SKILL.md'), 'utf8')).toBe(installedSkillMd(PKG_DESCRIPTION));
       expect(fs.readFileSync(skill(d, 'references', 'update.md'), 'utf8')).toBe('ref\n');
       expect(fs.readFileSync(skill(d, '.graphify_version'), 'utf8')).toBe('0.9.9');
     }
@@ -68,6 +68,35 @@ describe('install-graphify-skill', () => {
     const after = fs.statSync(p);
     expect(after.ino).toBe(before.ino);
     expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+  // Spec §6.4 (D-7351): the clause is in every home, once, after the package's
+  // own body; and convergence is decided against the staged copy that carries
+  // it (D-7359), so a home already holding the clause is never rewritten.
+  it('appends the ccrc clause to every home\'s SKILL.md, once, and a second run keeps every home\'s inode and mtime', () => {
+    run();
+    const stats = HOMES.map((d) => {
+      const md = fs.readFileSync(skill(d, 'SKILL.md'), 'utf8');
+      expect(md.startsWith(skillMd(PKG_DESCRIPTION)), `${d}: the package's body is not first, verbatim`).toBe(true);
+      expect(md.endsWith(CCRC_SKILL_CLAUSE), `${d}: no ccrc clause at the end`).toBe(true);
+      expect(md.split('ccrc-managed link').length - 1, `${d}: the clause is not there exactly once`).toBe(1);
+      return fs.statSync(skill(d, 'SKILL.md'));
+    });
+    run();
+    HOMES.forEach((d, i) => {
+      const after = fs.statSync(skill(d, 'SKILL.md'));
+      expect(after.ino, `${d} was reinstalled on a converged run`).toBe(stats[i]!.ino);
+      expect(after.mtimeMs).toBe(stats[i]!.mtimeMs);
+    });
+    expect(fs.existsSync(path.join(home, 'ccrc-backups')), 'a converged run took a backup').toBe(false);
+  });
+  it('a home holding the package body without the clause converges to the clause', () => {
+    const dest = skill('.claude');
+    fs.mkdirSync(path.join(dest, 'references'), { recursive: true });
+    fs.writeFileSync(path.join(dest, 'SKILL.md'), skillMd(PKG_DESCRIPTION));
+    fs.writeFileSync(path.join(dest, 'references', 'update.md'), 'ref\n');
+    fs.writeFileSync(path.join(dest, '.graphify_version'), '0.9.9');
+    run();
+    expect(fs.readFileSync(skill('.claude', 'SKILL.md'), 'utf8')).toBe(installedSkillMd(PKG_DESCRIPTION));
   });
   it('writes a symlinked skills dir exactly once (realpath de-dup)', () => {
     // .claude-gpt/skills -> .claude/skills, the live fleet's real shape (spec §B)
@@ -118,8 +147,9 @@ describe('install-graphify-skill', () => {
     expect(r.stderr).toMatch(/graphify query/);
     expect(r.stderr).toMatch(/graphify-out\//);
     expect(r.stderr).toMatch(/pin 0\.9\.9/);                 // names the pin the rewording arrived on
-    // and the skill still lands, unedited — ccrc reports the package's text, never rewrites it
-    expect(fs.readFileSync(skill('.claude', 'SKILL.md'), 'utf8')).toBe(skillMd(description));
+    // and the skill still lands, the package's text unedited (ccrc reports it, never rewrites
+    // it) with only spec §6.4's clause appended after it
+    expect(fs.readFileSync(skill('.claude', 'SKILL.md'), 'utf8')).toBe(installedSkillMd(description));
   });
   it('refuses loudly when the package carries no skill body', () => {
     fs.rmSync(path.join(pkg, 'skill.md'));

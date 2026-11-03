@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { defaultCachePath, loadSnapshot, saveSnapshot } from '../src/fleetstate.js';
-import { reviveFleetSession, substrateFault, boardHome, repoLabel, type FleetSession } from '../../shared/api.js';
+import { defaultCachePath, loadSnapshot, recordCcdVerbs, saveSnapshot } from '../src/fleetstate.js';
+import { reviveFleetSession, substrateFault, boardHome, repoLabel, type FleetSession, type SessionLanding } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const tmpDir = (): string => mkTmp('ccrc-cache-');
@@ -600,6 +600,63 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
   });
 
+  // Landing order wave 4b (D-7481): `landing` is optional on the wire, and ABSENCE means unknown, so a revived row
+  // either carries the key whole or has no key at all: never `landing: null`, and never a rejected session.
+  describe('landing (wave 4b)', () => {
+    const landing: SessionLanding = {
+      at: '2026-10-27T09:00:00Z', pr: 12, head: 'a'.repeat(40), baseRef: 'main',
+      base: { state: 'conflict', paths: ['README.md'], pathsCut: false },
+      paired: true, conflicts: [{ pr: 14, paths: ['src/x.ts'], pathsCut: true }], unmeasuredWith: [15],
+      cut: { heads: false, pairs: true, unbound: false },
+    };
+
+    it('round-trips a populated landing', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      const populated: FleetSession = { ...session('claude-quiet-basin'), landing };
+      await saveSnapshot([populated], cachePath);
+      expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
+    });
+
+    it('a cache without it revives with NO key, not null (a cache from an older build)', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+      const snap = await loadSnapshot(cachePath);
+      expect(snap, 'an older cache must still revive').not.toBeNull();
+      expect(Object.keys(snap?.sessions[0] ?? {})).not.toContain('landing');
+    });
+
+    it('a malformed landing revives with no key, and the session is kept', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      for (const bad of [
+        'nowhere', null, 7, [], {},
+        { ...landing, at: 7 },
+        { ...landing, at: undefined },
+        { ...landing, at: 'yesterday' },
+        { ...landing, at: '2026-10-27 09:00:00' },
+        { ...landing, at: '2026-10-27T09:00:00.000Z' },
+        { ...landing, pr: 0 },
+        { ...landing, base: { state: 'green' } },
+        { ...landing, base: { state: 'conflict', paths: [1] } },
+        { ...landing, paired: 'yes' },
+        { ...landing, conflicts: [{ pr: 14, paths: ['x'] }] },
+        { ...landing, unmeasuredWith: ['15'] },
+        { ...landing, cut: { heads: false, pairs: true } },
+      ]) {
+        writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), landing: bad }]);
+        const snap = await loadSnapshot(cachePath);
+        const label = JSON.stringify(bad);
+        expect(snap?.sessions, label).toHaveLength(1);
+        expect(Object.keys(snap?.sessions[0] ?? {}), label).not.toContain('landing');
+      }
+    });
+
+    it('a newer cache with a field this build does not know reads the known ones and drops the rest', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), landing: { ...landing, tomorrow: 'x', cut: { ...landing.cut, later: true } } }]);
+      expect((await loadSnapshot(cachePath))?.sessions[0]?.landing).toEqual(landing);
+    });
+  });
+
   it('rejects a malformed stranded rather than laundering it into null', async () => {
     // `reviveSwapBlocked`'s contract exactly: the reason is free text ccd wrote,
     // so there is no vocabulary to degrade onto — and null would read "no
@@ -816,5 +873,55 @@ describe('repoLabel — the ONE renderer decision for ProjectRepoWire (Task 1)',
     expect(repoLabel({ state: 'absent' })).toBeNull();
     expect(repoLabel({ state: 'unmeasured' })).toBeNull();
     expect(repoLabel(undefined)).toBeNull();
+  });
+});
+
+// D-7079 (ARCH-72, W5 C5j): the one writer of `FleetState.ccdVerbs`. Its two modes stay apart: a ready frame writes
+// what it carries, `null` included (the reset); a measured answer writes only a non-null list, and only under the
+// epoch it was asked on. It returns whether it wrote.
+describe('recordCcdVerbs: the one writer of FleetState.ccdVerbs (D-7079)', () => {
+  it("'ready' writes the list as given", () => {
+    const s = { ccdVerbs: ['start'] as string[] | null };
+    expect(recordCcdVerbs(s, { from: 'ready', verbs: ['start', 'ws-audit'] })).toBe(true);
+    expect(s.ccdVerbs).toEqual(['start', 'ws-audit']);
+  });
+
+  it("'ready' writes a null too: the ready frame's reset", () => {
+    const s = { ccdVerbs: ['start'] as string[] | null };
+    expect(recordCcdVerbs(s, { from: 'ready', verbs: null })).toBe(true);
+    expect(s.ccdVerbs).toBeNull();
+  });
+
+  it("'measured' writes a list asked under the epoch that still stands", () => {
+    const s = { ccdVerbs: ['start'] as string[] | null };
+    expect(recordCcdVerbs(s, { from: 'measured', verbs: [], askedEpoch: 3, epochNow: () => 3 })).toBe(true);
+    expect(s.ccdVerbs).toEqual([]);
+  });
+
+  it("'measured' keeps the list when the answer is null", () => {
+    const s = { ccdVerbs: ['start'] as string[] | null };
+    expect(recordCcdVerbs(s, { from: 'measured', verbs: null, askedEpoch: 3, epochNow: () => 3 })).toBe(false);
+    expect(s.ccdVerbs).toEqual(['start']);
+  });
+
+  it("'measured' writes nothing when the epoch moved", () => {
+    const s = { ccdVerbs: ['start'] as string[] | null };
+    expect(recordCcdVerbs(s, { from: 'measured', verbs: ['start', 'ws-rename'], askedEpoch: 3, epochNow: () => 4 })).toBe(false);
+    expect(s.ccdVerbs).toEqual(['start']);
+  });
+
+  it("local mode's shape (epoch 0 asked, 0 now): a list writes, a null keeps null", () => {
+    const s = { ccdVerbs: null as string[] | null };
+    expect(recordCcdVerbs(s, { from: 'measured', verbs: null, askedEpoch: 0, epochNow: () => 0 })).toBe(false);
+    expect(s.ccdVerbs).toBeNull();
+    expect(recordCcdVerbs(s, { from: 'measured', verbs: ['start', 'stop-surface'], askedEpoch: 0, epochNow: () => 0 })).toBe(true);
+    expect(s.ccdVerbs).toEqual(['start', 'stop-surface']);
+  });
+
+  it('reads the epoch after the answer, not before: epochNow is called once the verbs are in hand', () => {
+    const s = { ccdVerbs: ['start'] as string[] | null };
+    let calls = 0;
+    expect(recordCcdVerbs(s, { from: 'measured', verbs: ['x'], askedEpoch: 1, epochNow: () => { calls += 1; return 1; } })).toBe(true);
+    expect(calls).toBe(1);
   });
 });

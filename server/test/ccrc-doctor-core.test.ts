@@ -7,6 +7,7 @@ import path, { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { ghContainedEnv, ghPoisonAt, plantPoolEpoch, seedAccountsSh } from './ccdWsHelpers.js';
 import { fixtureSecretLine } from './authFixtures.js';
+import { writeShippedTimer } from './shippedTimers.js';
 import { describeLinux, describeDarwin, itLinux, itDarwin } from './platformFixtures.js';
 import { codexAuthDir } from './codexLaneFixture.js';
 import { familyClassOf } from '../../shared/models.mjs';
@@ -3952,5 +3953,323 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       expect(authLine(r.stdout)).not.toContain('POSIXLY_CORRECT');
       expect(r.stdout).not.toMatch(/^PASS auth: .*gated/m);
     });
+  });
+});
+// ── land-probe (landing order wave 3b) ──────────────────────────────────────
+// `_check_land-probe` READS the two files `ccd-land-probe` rewrites every tick and never runs git or gh: a box whose fixture
+// has neither on PATH still answers. `healthy()` writes no landing conf, so the check SKIPs there (counted in `HEALTHY_SKIPS`);
+// every case below plants the conf and the files it needs.
+describeLinux('ccrc doctor: land-probe', () => {
+  const iso = (agoS: number): string => new Date(Date.now() - agoS * 1000).toISOString().replace(/\.\d+Z$/, 'Z');
+  const SHA = 'a'.repeat(40);
+  const store = (count: number): object => ({ count, size: 0, inPack: 4, packs: 1 });
+  const probeDoc = (agoS: number, over: Record<string, unknown> = {}): object => ({
+    v: 1, project: 'proj-a', at: iso(agoS), state: 'measured', base: { ref: 'main', sha: SHA },
+    heads: [
+      { pr: 12, head: SHA, branch: 'ws/alpha', id: 'lane-a-proj-a-alpha', base: { state: 'clean' } },
+      { pr: 13, head: SHA, branch: 'feature/x', id: null, base: { state: 'conflict', paths: ['README.md'], pathsCut: false } },
+      { pr: 14, head: SHA, branch: 'ws/beta', id: null, base: { state: 'clean' } },
+    ],
+    headsCut: false, pairs: [], pairHeads: [14, 13, 12], pairsCut: false,
+    store: { before: store(0), after: store(0) }, scratch: { sizeKiB: 12 }, elapsedMs: 1234, ...over,
+  });
+  const mainDoc = (agoS: number, over: Record<string, unknown> = {}): object => ({
+    v: 1, project: 'proj-a', at: iso(agoS), sha: SHA, state: 'green', required: [{ name: 'build', app: null }], failing: [], pending: [], ...over,
+  });
+  /** One opted-in project: its conf, and (unless `null`) the two files, each as the object or the raw text given. */
+  const plant = (home: string, project = 'proj-a', files: { probe?: object | string | null; main?: object | string | null } = {}, confAgeS = 3600): string => {
+    mkdirSync(join(home, '.ccrc', 'landing'), { recursive: true });
+    const confFile = join(home, '.ccrc', 'landing', `${project}.conf`);
+    writeFileSync(confFile, 'lineage=off\n');
+    const confTime = new Date(Date.now() - confAgeS * 1000);
+    utimesSync(confFile, confTime, confTime);   // an opt-in older than ten minutes: a missing probe is then the radar's fault, not a fresh opt-in's
+    const dir = join(home, '.cc-sessions', 'landing', project);
+    mkdirSync(dir, { recursive: true });
+    const put = (name: string, v: object | string | null | undefined, dflt: object): void => {
+      if (v === null) return;
+      const body = v === undefined ? dflt : v;
+      writeFileSync(join(dir, name), typeof body === 'string' ? body : JSON.stringify(body));
+    };
+    put('probe', files.probe, probeDoc(60));
+    put('main-health', files.main, mainDoc(60));
+    return dir;
+  };
+  const verdict = (home: string, extraEnv: NodeJS.ProcessEnv = {}): string => anyVerdictFor(runDoctor(home, ['doctor'], extraEnv).stdout, 'land-probe') ?? '';
+  const ageUnit = (home: string, agoS: number): void => {
+    writeUnitFile(home, 'ccd-land-probe.timer');
+    const t = new Date(Date.now() - agoS * 1000);
+    utimesSync(join(unitDirOf(home), unitFileOf('ccd-land-probe.timer')), t, t);
+  };
+
+  it('PASSes on fresh files, and says what it read: heads, conflicts, the base, the store delta and the scratch', () => {
+    const home = healthy('ccrc-doctor-land-probe-pass-');
+    plant(home);
+    const out = runDoctor(home);
+    expect(lineFor(out.stdout, 'land-probe')).toBe('PASS land-probe: proj-a: 3 heads, 1 conflicting with main, main green; store +0 objects, scratch 12 KiB this tick');
+    expect(out.code).toBe(0);
+  });
+
+  it('reads the store delta as objects gained over the tick, loose and packed together', () => {
+    const home = healthy('ccrc-doctor-land-probe-delta-');
+    plant(home, 'proj-a', { probe: probeDoc(60, { store: { before: store(3), after: store(20) } }) });
+    expect(verdict(home)).toContain('store +17 objects');
+  });
+
+  it('PASSes a red or a pending base: that is the repository\'s fact, which the line states, not the probe\'s fault', () => {
+    const red = healthy('ccrc-doctor-land-probe-red-');
+    plant(red, 'proj-a', { main: mainDoc(60, { state: 'red', failing: ['build'] }) });
+    expect(verdict(red)).toMatch(/^PASS land-probe: proj-a: 3 heads, 1 conflicting with main, main red; /);
+    const pending = healthy('ccrc-doctor-land-probe-pending-');
+    plant(pending, 'proj-a', { main: mainDoc(60, { state: 'unmeasured', why: 'pending' }) });
+    expect(verdict(pending)).toMatch(/^PASS land-probe: .*main pending; /);
+  });
+
+  it('names every opted-in project on one line', () => {
+    const home = healthy('ccrc-doctor-land-probe-two-');
+    plant(home, 'proj-a');
+    plant(home, 'proj-b', { probe: probeDoc(60, { heads: [] }) });
+    const line = lineFor(runDoctor(home).stdout, 'land-probe') ?? '';
+    expect(line).toMatch(/^PASS land-probe: proj-a: 3 heads, .* \| proj-b: 0 heads, 0 conflicting with main, main green; /);
+  });
+
+  it('SKIPs on a server-role box, however stale its files', () => {
+    const home = healthy('ccrc-doctor-land-probe-server-');
+    plant(home, 'proj-a', { probe: probeDoc(86400) });
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    expect(verdict(home)).toMatch(/^SKIP land-probe: this box records CCRC_ROLE=server/);
+  });
+
+  it('SKIPs with no conf: nobody opted in, which is every box until the operator does', () => {
+    const home = healthy('ccrc-doctor-land-probe-noconf-');
+    expect(verdict(home)).toMatch(/^SKIP land-probe: no project is opted in /);
+    mkdirSync(join(home, '.ccrc', 'landing'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'landing', 'notes.txt'), 'not a conf');
+    expect(verdict(home), 'only <project>.conf files opt a project in').toMatch(/^SKIP land-probe: no project is opted in /);
+  });
+
+  it('SKIPs while the operator has paused the probe: its files then age by design, never a stopped timer', () => {
+    const home = healthy('ccrc-doctor-land-probe-paused-');
+    plant(home, 'proj-a', { probe: probeDoc(86400) });
+    writeFileSync(join(home, '.cc-sessions', 'land-probe-paused'), '');
+    expect(verdict(home)).toMatch(/^SKIP land-probe: paused by the operator /);
+  });
+
+  it('SKIPs when every opted-in project is paused, and measures the one that is not', () => {
+    const home = healthy('ccrc-doctor-land-probe-project-paused-');
+    const a = plant(home, 'proj-a', { probe: probeDoc(86400) });
+    writeFileSync(join(a, 'paused'), '');
+    expect(verdict(home)).toMatch(/^SKIP land-probe: every opted-in project is paused /);
+    plant(home, 'proj-b');
+    const line = verdict(home);
+    expect(line).toMatch(/^PASS land-probe: proj-b: 3 heads/);
+    expect(line, 'a paused project is not measured').not.toContain('proj-a');
+  });
+
+  it('WARNs land-probe-not-yet inside ten minutes of the timer unit landing, and land-probe-never after', () => {
+    const fresh = healthy('ccrc-doctor-land-probe-notyet-');
+    plant(fresh, 'proj-a', { probe: null, main: null });
+    ageUnit(fresh, 30);
+    const out = runDoctor(fresh).stdout.split('\n');
+    const i = out.findIndex((l) => l.startsWith('WARN land-probe: '));
+    expect(i, out.join('\n')).toBeGreaterThan(-1);
+    expect(out[i]).toContain('land-probe-not-yet: proj-a has no probe file yet and ccd-land-probe.timer was installed ');
+    expect(out[i], 'the first-tick sentence names no number').toContain(' ago - its first tick follows the timer\'s arming delay, so this is expected right after an install');
+    expect(out[i + 1], 'the remedy names the shipped timer\'s period (300 s)').toMatch(/^ {2}remedy: wait for the first tick \(the timer fires every 5 minutes\), then re-run doctor/);
+
+    const old = healthy('ccrc-doctor-land-probe-never-');
+    plant(old, 'proj-a', { probe: null, main: null });
+    ageUnit(old, 11 * 60);
+    const o = runDoctor(old).stdout.split('\n');
+    const j = o.findIndex((l) => l.startsWith('WARN land-probe: '));
+    expect(o[j]).toContain('land-probe-never: proj-a is opted in but the radar has never written its probe, so no PR conflict is measured');
+    expect(o[j]).not.toContain('land-probe-not-yet');
+    expect(o[j + 1]).toMatch(/^ {2}remedy: systemctl --user status ccd-land-probe\.timer ccd-land-probe\.service/);
+
+    const none = healthy('ccrc-doctor-land-probe-never-nounit-');
+    plant(none, 'proj-a', { probe: null, main: null });
+    expect(verdict(none), 'no timer unit file at all is a radar that was never installed').toContain('land-probe-never: proj-a');
+  });
+
+  it('WARNs land-probe-unreadable for a file that is not a v1 record, a missing main-health, a symlink and a future time', () => {
+    const cases: Array<[string, { probe?: object | string | null; main?: object | string | null }, RegExp]> = [
+      ['garbled', { probe: '{not json' }, /land-probe-unreadable: proj-a: the probe file under .* is not a regular v1 record with a readable time/],
+      ['later-format', { probe: probeDoc(60, { v: 2 }) }, /land-probe-unreadable: proj-a: the probe file/],
+      ['no-time', { probe: probeDoc(60, { at: 'yesterday' }) }, /land-probe-unreadable: proj-a: the probe file/],
+      ['main-health-missing', { main: null }, /land-probe-unreadable: proj-a: the main-health file under .* is missing beside a probe/],
+      ['main-health-garbled', { main: '[]' }, /land-probe-unreadable: proj-a: the main-health file/],
+      ['future', { probe: probeDoc(-3600) }, /land-probe-unreadable: proj-a: the probe file under .* is dated in the future/],
+      ['wrong-shape', { probe: probeDoc(60, { heads: 'three' }) }, /land-probe-unreadable: proj-a: the probe file/],
+    ];
+    for (const [name, files, re] of cases) {
+      const home = healthy(`ccrc-doctor-land-probe-unreadable-${name}-`);
+      plant(home, 'proj-a', files);
+      const out = runDoctor(home).stdout.split('\n');
+      const i = out.findIndex((l) => l.startsWith('WARN land-probe: '));
+      expect(out.join('\n'), name).toMatch(re);
+      expect(out[i + 1], name).toMatch(/^ {2}remedy: let the probe rewrite its files: systemctl --user start ccd-land-probe\.service/);
+    }
+    const link = healthy('ccrc-doctor-land-probe-unreadable-symlink-');
+    const dir = plant(link, 'proj-a', { probe: null });
+    writeFileSync(join(link, 'elsewhere.json'), JSON.stringify(probeDoc(60)));
+    symlinkSync(join(link, 'elsewhere.json'), join(dir, 'probe'));
+    expect(verdict(link), 'a symlink is not a regular file').toContain('land-probe-unreadable: proj-a: the probe file');
+  });
+
+  it('WARNs land-probe-stale past CCRC_LAND_PROBE_STALE_S (default four periods of the shipped timer, 1200 s), for either file, and the knob moves the line', () => {
+    const home = healthy('ccrc-doctor-land-probe-stale-');
+    plant(home, 'proj-a', { probe: probeDoc(1500) });
+    const out = runDoctor(home).stdout.split('\n');
+    const i = out.findIndex((l) => l.startsWith('WARN land-probe: '));
+    expect(out[i], out.join('\n')).toMatch(/land-probe-stale: proj-a: the probe file is 1[0-9]{3}s old - the radar ticks every 5 minutes, so it has stopped/);
+    expect(out[i + 1]).toMatch(/^ {2}remedy: systemctl --user status ccd-land-probe\.timer ccd-land-probe\.service; journalctl --user -u ccd-land-probe\.service/);
+    expect(verdict(home, { CCRC_LAND_PROBE_STALE_S: '3600' })).toMatch(/^PASS land-probe: /);
+    expect(verdict(home, { CCRC_LAND_PROBE_STALE_S: 'abc' }), 'a non-number falls back to the default').toContain('land-probe-stale');
+    const mh = healthy('ccrc-doctor-land-probe-stale-main-');
+    // A tick in progress (its probe has no store.after yet) beside a main-health from long ago: the main-health is stale.
+    plant(mh, 'proj-a', { probe: probeDoc(60, { store: { before: store(0), after: null }, scratch: { sizeKiB: null } }), main: mainDoc(1500) });
+    expect(verdict(mh)).toContain('land-probe-stale: proj-a: the main-health file is ');
+    // A FINISHED probe beside a main-health older than it is the sharper fact: the tick stopped before writing it.
+    const inc = healthy('ccrc-doctor-land-probe-incomplete-');
+    plant(inc, 'proj-a', { main: mainDoc(1500) });
+    expect(verdict(inc)).toMatch(/^WARN land-probe: land-probe-incomplete: proj-a: the main-health file is 14[0-9]{2}s older than the probe file, so the last tick wrote its probe and stopped before its main-health/);
+    const edge = healthy('ccrc-doctor-land-probe-stale-edge-');
+    plant(edge, 'proj-a', { probe: probeDoc(1100), main: mainDoc(1100) });
+    expect(verdict(edge), 'inside the bound is fresh').toMatch(/^PASS land-probe: /);
+  });
+
+  it('an unreadable ccd-land-probe.timer: the bounds it would have set are not invented, and the WARN names the unit (D-7054, OA-C8c (a))', () => {
+    // The shipped unit file is gone from the box's tree (the same fixture seam the other cadence rows use), so no period can be read.
+    const noTimer = (prefix: string): string => {
+      const h = healthy(prefix);
+      writeShippedTimer(join(h, 'ccrc'), 'ccd-land-probe.timer', null);
+      return h;
+    };
+    const lines = (h: string, env: NodeJS.ProcessEnv = {}): string[] => {
+      const out = runDoctor(h, ['doctor'], env).stdout.split(h).join('<home>').split('\n');
+      return out.flatMap((l, i) => (l.startsWith('WARN land-probe: ') || l.startsWith('PASS land-probe: ') ? [l, out[i + 1] ?? ''] : []));
+    };
+    const unreadSentence = (what: string): string =>
+      `ccd-land-probe.timer's cadence could not be read from the shipped unit file (<home>/ccrc/deploy/systemd/ccd-land-probe.timer), so ${what} is unmeasured`;
+    const unreadFix = '  remedy: the shipped tree at <home>/ccrc is incomplete or damaged';
+
+    // No override: there is no stale bound, so a file 1500 s old is not called stale and a fresh one is not a PASS.
+    const old = noTimer('ccrc-doctor-land-probe-unread-old-');
+    plant(old, 'proj-a', { probe: probeDoc(1500), main: mainDoc(1500) });
+    const o = lines(old);
+    expect(o, o.join('\n')).toHaveLength(2);
+    expect(o[0]).toBe(`WARN land-probe: ${unreadSentence("the stale bound (four of the timer's periods; the stale arm did not run)")}`);
+    expect(o[1]).toContain(unreadFix);
+    const fresh = noTimer('ccrc-doctor-land-probe-unread-fresh-');
+    plant(fresh, 'proj-a');
+    expect(lines(fresh)[0], 'a PASS would claim a freshness nothing measured').toBe(o[0]);
+
+    // An override stands without the period: a fresh file PASSes, unchanged.
+    expect(lines(fresh, { CCRC_LAND_PROBE_STALE_S: '3600' })[0]).toMatch(/^PASS land-probe: proj-a: 3 heads/);
+    // ... and a stale one is called stale by the override, its sentence dropping the period it cannot name.
+    const ov = lines(old, { CCRC_LAND_PROBE_STALE_S: '1000' });
+    expect(ov[0]).toMatch(/^WARN land-probe: land-probe-stale: proj-a: the probe file is 1[0-9]{3}s old - the radar has stopped, and its conflict and base-health readings are stale$/);
+    expect(ov.join('\n')).toContain(unreadSentence('the period the stale sentence names'));
+
+    // An absent probe has no not-yet window to be judged by: it reads never, and the WARN says the window is unmeasured.
+    const none = noTimer('ccrc-doctor-land-probe-unread-window-');
+    plant(none, 'proj-a', { probe: null, main: null }, 30);
+    ageUnit(none, 30);
+    const n = lines(none, { CCRC_LAND_PROBE_STALE_S: '3600' });
+    expect(n[0]).toContain('land-probe-never: proj-a');
+    expect(n.join('\n')).not.toContain('land-probe-not-yet');
+    expect(n.join('\n')).toContain(unreadSentence("the not-yet window (two of the timer's periods; the not-yet arm did not run)"));
+  });
+
+  it('F2 counts the heads that came back unmeasured on the PASS line, and WARNs land-probe-unmeasured when every head did', () => {
+    const heads = (states: Array<object>): object[] => states.map((base, n) => ({ pr: 20 + n, head: SHA, branch: `feature/${n}`, id: null, base }));
+    const some = healthy('ccrc-doctor-land-probe-some-unmeasured-');
+    plant(some, 'proj-a', { probe: probeDoc(60, { heads: heads([{ state: 'clean' }, { state: 'conflict', paths: ['x'], pathsCut: false }, { state: 'unmeasured', why: 'budget' }, { state: 'unmeasured', why: 'timeout' }]) }) });
+    expect(verdict(some)).toBe('PASS land-probe: proj-a: 4 heads, 1 conflicting with main, 2 unmeasured, main green; store +0 objects, scratch 12 KiB this tick');
+    const none = healthy('ccrc-doctor-land-probe-none-unmeasured-');
+    plant(none, 'proj-a', { probe: probeDoc(60, { heads: heads([{ state: 'clean' }, { state: 'conflict', paths: ['x'], pathsCut: false }]) }) });
+    expect(verdict(none), 'K = 0 leaves the PASS text as it was').toBe('PASS land-probe: proj-a: 2 heads, 1 conflicting with main, main green; store +0 objects, scratch 12 KiB this tick');
+    const all = healthy('ccrc-doctor-land-probe-all-unmeasured-');
+    plant(all, 'proj-a', { probe: probeDoc(60, { heads: heads([{ state: 'unmeasured', why: 'budget' }, { state: 'unmeasured', why: 'rc-128' }, { state: 'unmeasured', why: 'timeout' }]) }) });
+    const out = runDoctor(all).stdout.split('\n');
+    const i = out.findIndex((l) => l.startsWith('WARN land-probe: '));
+    expect(out[i], out.join('\n')).toContain('land-probe-unmeasured: proj-a: all 3 of its open PR heads came back unmeasured against the base');
+    expect(out.join('\n')).not.toMatch(/^PASS land-probe/m);
+    const zero = healthy('ccrc-doctor-land-probe-zero-heads-');
+    plant(zero, 'proj-a', { probe: probeDoc(60, { heads: [] }) });
+    expect(verdict(zero), 'no heads at all is nothing to measure, not an unmeasured radar').toMatch(/^PASS land-probe: proj-a: 0 heads, 0 conflicting with main, main green; /);
+  });
+
+  it('F3 reads a conf written under ten minutes ago as not-yet, never land-probe-never', () => {
+    const fresh = healthy('ccrc-doctor-land-probe-newconf-');
+    plant(fresh, 'proj-a', { probe: null, main: null }, 30);
+    ageUnit(fresh, 3 * 3600);   // the timer is old: only the conf is new
+    const out = runDoctor(fresh).stdout.split('\n');
+    const i = out.findIndex((l) => l.startsWith('WARN land-probe: '));
+    expect(out[i], out.join('\n')).toContain('land-probe-not-yet: proj-a has no probe file yet and its conf was written ');
+    expect(out[i]).not.toContain('land-probe-never');
+    expect(out[i], 'the next-tick clause is read from the shipped timer').toContain('the next tick (the timer fires every 5 minutes) is the first to measure it');
+    expect(out[i + 1]).toMatch(/^ {2}remedy: wait for the first tick \(the timer fires every 5 minutes\), then re-run doctor/);
+    // The window is two periods of the shipped timer (2 x 300 s), so 600 s is the edge this fixture's unit file puts it at.
+    const old = healthy('ccrc-doctor-land-probe-oldconf-');
+    plant(old, 'proj-a', { probe: null, main: null }, 601);
+    ageUnit(old, 3 * 3600);
+    expect(verdict(old), 'a conf past ten minutes with no probe is the radar\'s fault').toContain('land-probe-never: proj-a');
+  });
+
+  it('M5 the never and stale remedy names an invalid conf or a missing checkout as a reason the writes stop', () => {
+    const home = healthy('ccrc-doctor-land-probe-remedy-');
+    plant(home, 'proj-a', { probe: null, main: null });
+    const out = runDoctor(home).stdout.split('\n');
+    const i = out.findIndex((l) => l.startsWith('WARN land-probe: '));
+    expect(out[i + 1]).toMatch(/an invalid conf or a missing checkout under .*\/projects also stops them, and the journal names it$/);
+  });
+
+  it('WARNs land-probe-unmeasured when the probe ran and could not measure, with the why it gave', () => {
+    const home = healthy('ccrc-doctor-land-probe-unmeasured-');
+    plant(home, 'proj-a', { probe: probeDoc(60, { state: 'unmeasured', why: 'fetch-failed', heads: [], pairs: [] }) });
+    const out = runDoctor(home).stdout.split('\n');
+    const i = out.findIndex((l) => l.startsWith('WARN land-probe: '));
+    expect(out[i], out.join('\n')).toContain('land-probe-unmeasured: proj-a: the probe ran and could not measure its probe (why: fetch-failed), so no conflict reading stands for this project');
+    expect(out[i], 'M4: the sentence is limited to what the file names').not.toContain('base-health');
+    expect(out[i + 1]).toMatch(/^ {2}remedy: read why the tick could not measure: journalctl --user -u ccd-land-probe\.service/);
+    expect(out.join('\n')).not.toMatch(/^PASS land-probe/m);
+
+    const gh = healthy('ccrc-doctor-land-probe-unmeasured-main-');
+    plant(gh, 'proj-a', { main: mainDoc(60, { state: 'unmeasured', why: 'gh-failed' }) });
+    expect(verdict(gh)).toContain('the probe ran and could not measure its main-health (why: gh-failed), so no base-health reading stands for this project');
+    expect(verdict(gh), 'M4: a main-health that could not be measured says nothing of the conflict reading').not.toContain('conflict reading');
+
+    const odd = healthy('ccrc-doctor-land-probe-unmeasured-why-');
+    plant(odd, 'proj-a', { probe: probeDoc(60, { state: 'unmeasured', why: 'x'.repeat(200) }) });
+    expect(verdict(odd), 'a reason that is not a short word is never echoed').toContain('(why: no-reason)');
+  });
+
+  it('is the verdict when one project is fine and another is not: the fine one is not hidden, the bad one is named', () => {
+    const home = healthy('ccrc-doctor-land-probe-mixed-');
+    plant(home, 'proj-a');
+    plant(home, 'proj-b', { probe: probeDoc(5000) });
+    const line = verdict(home);
+    expect(line).toMatch(/^WARN land-probe: land-probe-stale: proj-b: /);
+    expect(line).not.toContain('proj-a');
+  });
+
+  it('services: an installed, stopped ccd-land-probe.timer WARNS with its own consequence', () => {
+    const home = healthy('ccrc-doctor-services-land-probe-timer-');
+    writeUnitFile(home, 'ccd-land-probe.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-land-probe.timer'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccd-land-probe.timer is installed but inactive');
+    expect(lines[i]).toContain('no open PR is measured for a conflict with the base');
+    expect(lines[i]).not.toContain('the job it fires is not running');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccd-land-probe\.timer$/);
+  });
+
+  it('services: an active ccd-land-probe.timer is named among the PASSes', () => {
+    const home = healthy('ccrc-doctor-services-land-probe-timer-ok-');
+    writeUnitFile(home, 'ccd-land-probe.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-land-probe.timer'), 'active\n');
+    expect(lineFor(runDoctor(home).stdout, 'services')).toContain('ccd-land-probe.timer is active');
   });
 });

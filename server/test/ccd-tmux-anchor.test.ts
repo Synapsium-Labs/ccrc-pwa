@@ -37,11 +37,12 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, harnessBin, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, harnessBin, ghContainedEnv, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { tmuxName, tmuxTarget } from '../../shared/tmux-target.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { mkTmp } from './tmpHelpers.js';
 import { CONTAINED_TOOLS, plantPoison, assertNoRealTool } from './containedTools.js';
+import { removePrivateSocket, resetPrivateServer } from './privateTmux.js';
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const KEEPALIVE = path.join(ROOT, 'ccd', 'ccd-telemetry-keepalive');
@@ -105,20 +106,8 @@ const mk = (name: string): void => {
   throw new Error(`fixture pane ${name} never printed its mark`);
 };
 
-/** No server on the private socket, MEASURED rather than assumed: `kill-server`
- *  returns before the server has gone, and a test that killed a server's last
- *  session leaves it exiting on its own — a `new-session` that lands in that
- *  window answers `server exited unexpectedly` (measured, this suite). So poll
- *  until tmux itself says there is nothing to connect to. */
-const resetServer = (): void => {
-  T('kill-server');
-  for (let i = 0; i < 200; i++) {
-    const r = T('list-sessions');
-    if (r.status !== 0 && /no server running|error connecting/.test(r.stderr)) return;
-    spawnSync('sleep', ['0.05']);
-  }
-  throw new Error(`the private tmux server on ${SOCK} would not go away`);
-};
+/** No server on the private socket, measured: the shared reset (`privateTmux.ts`) polls until tmux says so. */
+const resetServer = (): void => resetPrivateServer(T, SOCK);
 
 const created = (name: string): string =>
   T('display-message', '-p', '-t', `=${name}:`, '#{session_created}').stdout.trim();
@@ -141,12 +130,8 @@ describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
   });
   afterAll(() => {
     if (REAL_TMUX !== null) T('kill-server');
-    // tmux leaves the socket FILE behind after `kill-server` (measured, 3.4).
-    // Its path is tmux's own default — `/tmp/tmux-<uid>/<name>`, since
-    // TMUX_TMPDIR is unset — and the name is this run's alone.
-    if (typeof process.getuid === 'function') {
-      fs.rmSync(path.join('/tmp', `tmux-${process.getuid()}`, SOCK), { force: true });
-    }
+    // tmux leaves the socket FILE behind after `kill-server` (measured, 3.4); the name is this run's alone.
+    removePrivateSocket(SOCK);
     h?.cleanup();
   });
   beforeEach(() => { resetServer(); });
@@ -436,7 +421,7 @@ describe('wave 9 M8 — ccd creates the NAME already sanitised, so the target ma
 // site USES it. Per D-2781 it scans the CALL: a literal `-t cc-` appears only
 // in comments, so a scan for that string proves nothing.
 
-const CCD_SRC = fs.readFileSync(CCD, 'utf8');
+const CCD_SRC = ccdSource();
 const KA_SRC = fs.readFileSync(KEEPALIVE, 'utf8');
 
 /** Whole-line comments dropped (the cut `ccd-account-pane.test.ts` makes). */

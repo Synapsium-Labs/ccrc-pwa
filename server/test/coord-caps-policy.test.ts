@@ -11,19 +11,28 @@ import { fileURLToPath } from 'node:url';
 import { CAP_MAX, CAP_MIN, decideCaps } from '../src/coord/caps.js';
 import type { CoordCaps } from '../../shared/api.js';
 
-const CURRENT: CoordCaps = { maxConcurrentWorkers: 3, maxSessionsPerDay: 12 };
+const CURRENT: CoordCaps = { maxConcurrentWorkers: 3 };
 
 describe('decideCaps', () => {
-  it('takes a partial: an omitted field keeps its current value', () => {
+  it('takes the workers cap', () => {
     expect(decideCaps(CURRENT, { maxConcurrentWorkers: 5 }))
-      .toEqual({ ok: true, next: { maxConcurrentWorkers: 5, maxSessionsPerDay: 12 } });
-    expect(decideCaps(CURRENT, { maxSessionsPerDay: 20 }))
-      .toEqual({ ok: true, next: { maxConcurrentWorkers: 3, maxSessionsPerDay: 20 } });
+      .toEqual({ ok: true, next: { maxConcurrentWorkers: 5 } });
   });
 
-  it('takes both at once', () => {
-    expect(decideCaps(CURRENT, { maxConcurrentWorkers: 4, maxSessionsPerDay: 16 }))
-      .toEqual({ ok: true, next: { maxConcurrentWorkers: 4, maxSessionsPerDay: 16 } });
+  // The daily brake is retired (D-7068). Its field is accepted from an older PWA and IGNORED: never
+  // merged, never validated, and a body carrying nothing else is its own verdict, not a write.
+  it('ignores the retired daily field beside a live one, whatever its value', () => {
+    for (const legacy of [16, 0, CAP_MAX + 1, 2.5, 'x']) {
+      expect(decideCaps(CURRENT, { maxConcurrentWorkers: 4, maxSessionsPerDay: legacy }), String(legacy))
+        .toEqual({ ok: true, next: { maxConcurrentWorkers: 4 } });
+    }
+  });
+
+  it('a body with only the retired daily field is the retired verdict, not a write and not a 400', () => {
+    expect(decideCaps(CURRENT, { maxSessionsPerDay: 20 }))
+      .toEqual({ ok: 'retired', retired: ['maxSessionsPerDay'] });
+    expect(decideCaps(CURRENT, { maxSessionsPerDay: 0 }))
+      .toEqual({ ok: 'retired', retired: ['maxSessionsPerDay'] });
   });
 
   it('refuses a body that asks for nothing — a no-op write is a caller bug, not a write', () => {
@@ -43,16 +52,13 @@ describe('decideCaps', () => {
     ['null', { maxConcurrentWorkers: null }],
     ['NaN', { maxConcurrentWorkers: Number.NaN }],
     ['Infinity', { maxConcurrentWorkers: Number.POSITIVE_INFINITY }],
-    ['zero per day', { maxSessionsPerDay: 0 }],
-    ['per day above the ceiling', { maxSessionsPerDay: CAP_MAX + 1 }],
-    ['per day fractional', { maxSessionsPerDay: 2.5 }],
   ])('refuses %s', (_label, body) => {
     expect(decideCaps(CURRENT, body).ok).toBe(false);
   });
 
   it('accepts exactly the boundary values', () => {
-    expect(decideCaps(CURRENT, { maxConcurrentWorkers: CAP_MIN, maxSessionsPerDay: CAP_MAX }).ok).toBe(true);
-    expect(decideCaps(CURRENT, { maxConcurrentWorkers: CAP_MAX, maxSessionsPerDay: CAP_MIN }).ok).toBe(true);
+    expect(decideCaps(CURRENT, { maxConcurrentWorkers: CAP_MIN }).ok).toBe(true);
+    expect(decideCaps(CURRENT, { maxConcurrentWorkers: CAP_MAX }).ok).toBe(true);
   });
 
   it('refuses a non-object body without throwing, and SAYS it was not an object', () => {
@@ -82,12 +88,12 @@ describe('decideCaps', () => {
     // Additive tolerance, per the wire rule: a newer client's third field must
     // not be a 400 from an older server.
     expect(decideCaps(CURRENT, { maxConcurrentWorkers: 4, maxSomethingElse: 9 }))
-      .toEqual({ ok: true, next: { maxConcurrentWorkers: 4, maxSessionsPerDay: 12 } });
+      .toEqual({ ok: true, next: { maxConcurrentWorkers: 4 } });
   });
 
   it('names the offending field in the detail', () => {
-    expect(decideCaps(CURRENT, { maxSessionsPerDay: 0 }))
-      .toMatchObject({ ok: false, detail: expect.stringContaining('maxSessionsPerDay') });
+    expect(decideCaps(CURRENT, { maxConcurrentWorkers: 0 }))
+      .toMatchObject({ ok: false, detail: expect.stringContaining('maxConcurrentWorkers') });
   });
 
   it('CAP_MIN is one, because zero workers is a wedge with no release valve', () => {

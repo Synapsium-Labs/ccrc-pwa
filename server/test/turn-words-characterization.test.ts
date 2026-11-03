@@ -7,7 +7,7 @@ import { liveSessionStatus } from '../src/livestate.js';
 import { stopVerdict } from '../src/coord/archiveDoor.js';
 import { mailTurnIdle } from '../src/turnidle.js';
 import { hibernateVerdict, HIBERNATE_AFTER_MS_DEFAULT, type HibernateInput } from '../src/coord/hibernate.js';
-import { PRESENCE_OPEN_TTL_MS } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS } from '../../shared/api.js';
 
 const WORDS = ['idle', 'busy', 'shell', 'waiting', 'compacting', '', 'Idle'] as const;
 const NOW = 1_800_000_000_000;
@@ -39,7 +39,7 @@ describe('every reader of the status word, per word', () => {
         statusUnmeasured: false, dialogPending: false, background: null, subagents: null, stranded: null,
         swapBlocked: null, substrate: null,
       },
-      optedOut: false, viewer: false, sinceStartMs: PRESENCE_OPEN_TTL_MS + 1,
+      optedOut: false, viewer: false, sinceStartMs: VIEWER_OPEN_TTL_MS + 1,
       store: { ok: true, openWorker: false, openClaimant: false, claim: false, mail: false },
       live: {
         kind: 'read', word: { ok: true, word },

@@ -15,7 +15,7 @@
 //     token rather than a literal `44px` that would not follow the token;
 //   - the RENDER proves a real element still carries the class, which is what
 //     a rule with no matching element would silently stop doing.
-import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, vi, beforeEach, onTestFinished } from 'vitest';
 import type { CoordCapsView } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
@@ -24,7 +24,7 @@ import path from 'node:path';
 import type { CoordStatus, FleetSession, MailSummary, NotifyEvent, PrState, RunSummary, WsAudit } from '../../shared/api';
 import { declValue, norm, rootBody, ruleIn, stripComments } from './cssRule';
 import { api } from '../src/lib/api';
-import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ArchiveScreen } from '../src/screens/ArchiveScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
@@ -45,7 +45,7 @@ import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DocsFailureView } from '../src/docs/DocsFailureView';
 import { DOC_MARKDOWN_ACTION } from '../src/docs/DocMarkdown';
-import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT } from '../src/docs/docsText';
+import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT, SHARE_SHEET_TEXT } from '../src/docs/docsText';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
 import { SessionHeaderHost } from './sessionHost';
 import { parseMarkdown } from '../src/lib/markdownParse';
@@ -99,10 +99,12 @@ const wsAudit: WsAudit = {
   transcript: '/t.jsonl', children: [], verdict: 'reapable', detail: '', token: 'q'.repeat(64), sentence: '',
 };
 
-/** Store whose ReconnectingSocket gets an inert fake — connect() is harmless. */
-const makeStore = (): FleetStore => createFleetStore({
+/** Store whose ReconnectingSocket gets an inert fake — connect() is harmless. `fetchFeed` is the store's feed reader,
+ *  which `MailScreen` reads through `refreshFeed()` (C7n, D-7209). */
+const makeStore = (fetchFeed?: () => Promise<{ events: NotifyEvent[] }>): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null,
     close(): void {} }) as unknown as WebSocket,
+  ...(fetchFeed === undefined ? {} : { fetchFeed }),
 });
 
 // Build 7 Task 5 — RunSummary as PR I actually shipped it (see
@@ -382,7 +384,7 @@ describe('.mail-badge — the only door to /mail', () => {
     expect(declValue(ruleIn(fleetCss, '.mail-badge'), 'min-width')).toBe('var(--tap-min)');
   });
   it('is the class the rendered head control actually carries', () => {
-    render(<MailBadge unread={0} />);
+    render(<MailBadge waiting={0} />);
     expect(screen.getByRole('button', { name: /mail/i })).toHaveClass('mail-badge');
   });
 });
@@ -436,7 +438,7 @@ describe('.mail-back — the feed’s back control', () => {
     expect(backButton).not.toContain('44px');
   });
   it('is the class the rendered control actually carries', () => {
-    render(<MailScreen store={makeStore()} loadFeed={async () => ({ events: [] })} />);
+    render(<MailScreen store={makeStore(async () => ({ events: [] }))} />);
     expect(screen.getByLabelText(/back to fleet/i)).toHaveClass('mail-back');
   });
 });
@@ -458,7 +460,7 @@ describe('.mail-chip — the feed’s programme filter', () => {
       { id: 5, program: 'build9b', programTitle: 'Build 9b' },
       { id: 6, program: 'crossrepo', programTitle: 'Cross-repo' },
     ] as unknown as RunSummary[];
-    render(<MailScreen store={makeStore()} loadFeed={async () => ({ events })}
+    render(<MailScreen store={makeStore(async () => ({ events }))}
                         loadRuns={async () => ({ runs })} />);
     expect(await screen.findByRole('button', { name: 'Build 9b' })).toHaveClass('mail-chip');
     expect(screen.getByRole('button', { name: 'All' })).toHaveClass('mail-chip');
@@ -604,9 +606,10 @@ describe('.program-start-go — the sheet’s own confirm control', () => {
     expectQuietIsATarget();
   });
   it('is the class the rendered confirm button actually carries', async () => {
-    vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [], projected: { wrapper: 'claude', score: 5 }, roster: [],
-    });
+    // The sheet reads the app-wide fleet store's projection, which that store's one /api/accounts poll writes
+    // (C8, D-6440); reset when the case ends.
+    act(() => { useFleetStore.setState({ projected: { wrapper: 'claude', score: 5 } }); });
+    onTestFinished(() => { useFleetStore.setState({ projected: undefined }); });
     const store = makeStore();
     render(<StartProgramSheet open onClose={() => {}} fleet={store}
       openRunProjects={new Set<string>()}
@@ -1123,6 +1126,39 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'More' }));
       expect(screen.getByRole('button', { name: 'Docs' })).toHaveClass('menu-item', 'docs-menu-item');
     });
+  });
+});
+
+// — native Docs reader W5, Share: the header's Share, the share sheet's two buttons, and the field a refused copy
+// leaves (spec 2026-10-01 4.14, 4.16). Both halves for each, as for the Docs controls above. —
+describe('Share: .docs-share on .docs-action, the share sheet’s Share… and Copy link, and .docs-share-field (docs W5 Share)', () => {
+  afterEach(() => {
+    history.replaceState(null, '', '/');
+    Reflect.deleteProperty(navigator, 'share');
+    Reflect.deleteProperty(navigator, 'clipboard');
+  });
+
+  it('are at least one tap tall: .docs-action and .docs-share-field on the token, the sheet’s buttons off @ccrc/ui’s Button', () => {
+    expect(floorIn(docsCss, '.docs-action')).toBe('var(--tap-min)');
+    expect(floorIn(docsCss, '.docs-share-field')).toBe('var(--tap-min)');
+    expect(buttonVariants({ variant: 'primary' })).toContain('min-h-tap');
+    expect(buttonVariants({ variant: 'ghost' })).toContain('min-h-tap');
+  });
+
+  it('are the classes the rendered controls carry', async () => {
+    Object.defineProperty(navigator, 'share', { configurable: true, writable: true, value: () => Promise.resolve() });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true, value: { writeText: () => Promise.reject(new Error('denied')) },
+    });
+    openDocs('/docs/demo/specs/a.md', markdownLeaf('# A\n'));
+    const share = await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    expect(share).toHaveClass('docs-action', 'docs-share');
+    fireEvent.click(share);
+    expect(await screen.findByRole('button', { name: SHARE_SHEET_TEXT.share })).toHaveClass('min-h-tap');
+    const copy = screen.getByRole('button', { name: SHARE_SHEET_TEXT.copy });
+    expect(copy).toHaveClass('min-h-tap');
+    fireEvent.click(copy);
+    expect(await screen.findByRole('textbox', { name: SHARE_SHEET_TEXT.field })).toHaveClass('docs-share-field');
   });
 });
 

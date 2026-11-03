@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Dialog, DialogMulti } from '../../../shared/api.js';
 import { CHAT_ABOUT_ROW_RE, COMMIT_ROW_RE, EDIT_HINT_RE, FREE_TEXT_PLACEHOLDER_RE } from '../../../shared/ask-menu.js';
+import { PROMPT_GLYPH } from '../../../shared/pane-glyph.js';
 import { promptBoxShowing } from './statusline.js';
 
 /**
@@ -50,8 +51,8 @@ export function turnRunning(pane: string): boolean { return BUSY_RE.test(pane); 
 /** The row starts with Claude Code's prompt glyph (`❯`): the input box's marker row, or a past
  *  turn in the scrollback, or the cursor resting on a menu option. ONE spelling of the test
  *  (ARCH-24): `inject/send.ts` reads the box through it rather than with inline literals. The
- *  caller strips escapes first. */
-export function startsWithPromptGlyph(row: string): boolean { return row.startsWith('❯'); }
+ *  glyph is `shared/pane-glyph.ts`'s, the drawer's own (D-7187). The caller strips escapes first. */
+export function startsWithPromptGlyph(row: string): boolean { return row.startsWith(PROMPT_GLYPH); }
 const MENU_RE = /Enter to (confirm|select)/;
 const SGR = /\x1b\[[0-9;]*m/g;
 /** The ONE SGR (colour/attribute) stripper (ARCH-63): every reader of pane or terminal text that wants the escapes off
@@ -307,7 +308,9 @@ export function editHintShown(pane: string): boolean {
  * Multi-select menus and menus without ≥2 consecutive numbered options come
  * back as `{ parsed: false, raw }` — terminal-drawer territory in v1. A
  * multiSelect AskUserQuestion question also carries `multi` (D-5048,
- * `multiMenu` below), which `POST /api/sessions/:id/dialog/multi` answers from.
+ * `multiMenu` below), which the operator's multiSelect answer reads
+ * (`POST /api/questions/session-<id>/answer`, `multi: true`; the retired
+ * `POST /api/sessions/:id/dialog/multi` until W7 C7p).
  */
 export function parseDialog(pane: string): Dialog | null {
   // hasMenu, not paneState(pane) !== 'menu': the busy check must not veto a

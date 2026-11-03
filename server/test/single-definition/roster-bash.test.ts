@@ -5,6 +5,8 @@ import path from 'node:path';
 import { PROVIDER_IDS } from '../../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from '../helpers.js';
 import { ALL, BASH, ROOTS, ccrcRoot, codeLines, here, holdersOf, prose, rel, sources } from './helpers.js';
+import { accountMarkerWriters, disabledProjectionWriters } from '../census-w5/accountMarkers.js';
+import { gateDefinitions, inlineGates, loopbackSets, verdictTypeDecls } from '../census-kernel/baseUrl.js';
 
 
 // Increment 1a (docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md):
@@ -207,9 +209,9 @@ describe('the provider table — one table, one home', () => {
   });
 
   it('BASE_URL_OK is declared in exactly one file, and it is not the table', () => {
-    const RE = /^\s*(?:export\s+)?const\s+BASE_URL_OK\b/m;
-    const holders = ALL.filter((f) => RE.test(readFileSync(f, 'utf8'))).map(rel);
-    expect(holders).toEqual(['shared/base-url.ts']);
+    const fileOf = (site: string): string => site.split('#')[0]!;
+    const holders = [...new Set(gateDefinitions().definitions.map(fileOf))];
+    expect(holders).toEqual(['shared/base-url.mjs']);
     // The loopback SET — the three hosts written as one closed list — is the
     // other value a second copy would be spelled from, and a caller that
     // re-spells it has re-decided the exception rather than reused it.
@@ -225,10 +227,11 @@ describe('the provider table — one table, one home', () => {
     // ordered three-element spelling catches the copy this task is about and
     // leaves those four alone. Measured before writing it: the set spelling has
     // ZERO holders under the four roots today, so this goes from `[]` to
-    // `['shared/base-url.ts']` and never through a red.
-    const LOOP_SET = /\['127\.0\.0\.1', '\[::1\]', 'localhost'\]/;
-    const loopHolders = ALL.filter((f) => LOOP_SET.test(readFileSync(f, 'utf8'))).map(rel);
-    expect(loopHolders).toEqual(['shared/base-url.ts']);
+    // `['shared/base-url.ts']` and never through a red. Since D-7306 both scans
+    // read the census module (`census-kernel/baseUrl.ts`), so the set scan is
+    // order-insensitive and both read `.mjs` files as well as `.ts` ones.
+    const loopHolders = [...new Set(loopbackSets().map(fileOf))];
+    expect(loopHolders).toEqual(['shared/base-url.mjs']);
   });
 });
 
@@ -1359,5 +1362,71 @@ describe('one upstream .cc-secrets/<id>-oauth.env fallback, in exactly five bash
       .toBe('<dir>/<id>-oauth.env');
     expect(shape(ccdSrc[0]!), 'ccd stats a path the writer does not create')
       .toBe('<dir>/<id>-oauth.env');
+  });
+});
+
+// NO ROSTER PROJECTION (D-7048; ARCH-72, Task C5a; spec K16). `$REG/<lane>-disabled` is an operator switch, not a
+// projection of the roster's kind fields (`homeAble`, a report's `disabled`): collapsing them would make a measured,
+// working lane permanently unplaceable and turn the UI's Enable control into a roster write (`_acct_mark_off`'s header).
+// Its writers are exactly the bodies `accountMarkerWriters('disabled')` names (3 at base; C5c takes them to 1); no
+// other file under `deploy/`, `shared/` or `ccd/` writes a lane's switch, in bash, JS/TS or Python. The writer set is
+// already at its target, so the count is pinned now at 0 (spec §5.1 rule 3). The behavioural half, a hand-raised switch
+// surviving every verb that does not name its lane, is in `account-markers-pin.test.ts`.
+describe('the disabled switch is never projected from the roster (D-7048)', () => {
+  it('no file under deploy/, shared/ or ccd/ writes a <lane>-disabled path outside the named writer bodies: 0', () => {
+    const named = accountMarkerWriters('disabled').map((s) => s.name);
+    expect(named.length, 'the named writer bodies are found at all').toBeGreaterThan(0);
+    const extra = disabledProjectionWriters();
+    expect(extra.map((s) => `${s.name}  ${s.text.trim()}`), `named writers: ${named.join(', ')}`).toEqual([]);
+  });
+});
+
+// ONE AUTH-DEAD WRITE PRIMITIVE (D-7049; ARCH-72, Task C5b; spec K16). `$REG/<lane>-authdead` is written and removed
+// by `_authdead_mark`, `_authdead_clear` and `_authdead_sweep_staged`, defined once in `ccd/ccd`, and by
+// `_authdead_expired`'s compare-and-remove, the named exception (frozen in the tick diet's E0c closure). The probe's
+// byte copies in `ccd/ccd-account-health`'s generated region count zero sites by the census's own rule (a differing
+// copy counts as its own). At C5a's base 6; here 4. MAY ONLY SHRINK: a name leaves this list in the commit that
+// removes its writer; none is ever added, so a new inline `mv -f … "$REG/$x-authdead"` anywhere in `ccd/` reds here.
+describe('the auth-dead marker has one write primitive (D-7049)', () => {
+  it('its writer bodies are exactly the three primitive functions in ccd/ccd and _authdead_expired: 4', () => {
+    expect(accountMarkerWriters('authdead').map((s) => s.name)).toEqual([
+      'ccd/ccd#_authdead_mark', 'ccd/ccd#_authdead_clear', 'ccd/ccd#_authdead_sweep_staged', 'ccd/ccd#_authdead_expired',
+    ]);
+  });
+});
+
+// ONE DISABLED-SWITCH WRITE PRIMITIVE (D-7050; ARCH-72, Task C5c; spec K16, §2.2 C1, §5.8). `$REG/<lane>-disabled` is
+// written and removed only by `ccd/ccrc#_acct_switch_write` (`off` for add, declare and disable through
+// `_acct_mark_off`; `on` for enable; `on-any` for remove's artefact step). At C5a's base 3 (`_acct_mark_off`,
+// `_acct_enable`, `_acct_remove`); here 1. MAY ONLY SHRINK: none is ever added, so a new `touch`, `rm`, `mv` or
+// redirection onto a lane's switch in any `ccrc account` verb, or anywhere in `ccd/`, reds here. The projection pin
+// above stays at 0.
+describe('the disabled switch has one write primitive (D-7050)', () => {
+  it('its writer bodies are exactly ccd/ccrc#_acct_switch_write: 1', () => {
+    expect(accountMarkerWriters('disabled').map((s) => s.name)).toEqual(['ccd/ccrc#_acct_switch_write']);
+  });
+});
+
+// THE ENDPOINT GATE'S CENSUS (D-7305; D-7306, D-7307; spec §5.13, §5.1 rule 3). The ceilings the base-url move reaches,
+// over the census module's queries (`census-kernel/baseUrl.ts`, whose exact characterization rows live in its sibling
+// test). At the plan's base 2 definitions of `BASE_URL_OK` (`shared/base-url.ts`, `shared/base-url.mjs`) and 2
+// declarations of each verdict type (`shared/base-url.ts`, `shared/base-url.d.mts`); here 1 each. MAY ONLY SHRINK: a
+// second implementation of the gate under any census root, in any of `.ts`, `.tsx`, `.mjs`, or a second declaration of
+// a verdict type under `shared/`, reds here.
+describe("the endpoint gate's census (D-7305)", () => {
+  it('BASE_URL_OK has at most one definition (D-7306)', () => {
+    expect(gateDefinitions().definitions.length).toBeLessThanOrEqual(1);
+  });
+
+  it('each verdict type has at most one declaration (D-7307)', () => {
+    for (const [name, sites] of Object.entries(verdictTypeDecls())) expect(sites.length, name).toBeLessThanOrEqual(1);
+  });
+
+  it('the loopback set is spelled at most once (D-7308)', () => {
+    expect(loopbackSets().length).toBeLessThanOrEqual(1);
+  });
+
+  it('no function outside the gate tests a URL inline for https: or a loopback http: (D-7308)', () => {
+    expect(inlineGates().gates.length).toBeLessThanOrEqual(0);
   });
 });

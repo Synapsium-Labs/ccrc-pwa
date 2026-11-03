@@ -6,7 +6,7 @@
 // other box was a false claim about the reader's machine.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { FleetHealth, NodeWire, UpdateIntentWire } from '../../shared/api';
+import type { FleetHealth, NodeWire, ReleaseWire, UpdateIntentWire } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { api } from '../src/lib/api';
 import { FleetHostBanner } from '../src/fleet/FleetHostBanner';
@@ -41,13 +41,6 @@ const inventoryNode = (role: 'fleet' | 'server' | 'both', current: BuildInfo | n
 });
 const FLEET_V7: BuildInfo = { sha: 'bd2bf57a8733883085b3c118911fc983dc441299', ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.7' };
 const SERVER_V9: BuildInfo = { sha: '2985b9d1000000000000000000000000000000000', ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.9' };
-/** A stamp pair on the HEALTH answer that disagrees with every inventory row:
- *  whatever renders from it is the old reader, not the new one. */
-const DECOY_BUILDS = {
-  fleet: { sha: '9'.repeat(40), ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v9.9.9' },
-  own: { sha: '9'.repeat(40), ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v9.9.9' },
-};
-
 describe('FleetHostBanner', () => {
   it('keeps the newest issued poll authoritative when an older request resolves last', async () => {
     vi.useFakeTimers();
@@ -228,12 +221,11 @@ describe('FleetHostBanner', () => {
 
   it('warns when the boxes run DIFFERENT builds, naming both nodes\' versions from the inventory and the verb (spec §6, §14)', () => {
     render(<FleetHostBanner
-      health={health({ connected: true, downSince: null, roster: 'agreed', build: 'skewed', builds: DECOY_BUILDS })}
+      health={health({ connected: true, downSince: null, roster: 'agreed', build: 'skewed' })}
       nodes={[inventoryNode('fleet', FLEET_V7), inventoryNode('server', SERVER_V9)]} />);
     expect(screen.getByText(/run different builds/i)).toBeInTheDocument();
     expect(screen.getByText(/fleet v0\.0\.7 \(bd2bf57a\)/)).toBeInTheDocument();
     expect(screen.getByText(/server v0\.0\.9 \(2985b9d1\)/)).toBeInTheDocument();
-    expect(screen.queryByText(/v9\.9\.9/)).not.toBeInTheDocument();
     expect(screen.getByText(/ccrc rollout/)).toBeInTheDocument();
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
@@ -257,18 +249,16 @@ describe('FleetHostBanner', () => {
     expect(screen.getByText(/fleet unversioned \(bd2bf57a\)/)).toBeInTheDocument();
   });
 
-  it('skewed with no inventory answer still warns, without versions — never from the health route\'s pair', () => {
+  it('skewed with no inventory answer still warns, without versions — the health route carries no pair to name', () => {
     // `nodes` absent (the standalone shape) and `nodes: null` (FleetScreen
-    // before /api/updates answers) both omit the clause; the decoy pair on the
-    // health answer is NOT a fallback — reading it would be the old reader.
-    const skewed = health({ connected: true, downSince: null, build: 'skewed', builds: DECOY_BUILDS });
+    // before /api/updates answers) both omit the clause; the health answer
+    // carries only the word (`FleetHealth.builds` retired in wave 33).
+    const skewed = health({ connected: true, downSince: null, build: 'skewed' });
     const { rerender } = render(<FleetHostBanner health={skewed} />);
     expect(screen.getByText(/run different builds/i)).toBeInTheDocument();
-    expect(screen.queryByText(/v9\.9\.9/)).not.toBeInTheDocument();
     expect(screen.queryByText(/fleet —/)).not.toBeInTheDocument();
     rerender(<FleetHostBanner health={skewed} nodes={null} />);
     expect(screen.getByText(/run different builds/i)).toBeInTheDocument();
-    expect(screen.queryByText(/v9\.9\.9/)).not.toBeInTheDocument();
   });
 
   it('the trigger is still the server\'s agreement word — disagreeing rows under an agreed health are silent', () => {
@@ -382,5 +372,56 @@ describe('FleetHostBanner — the skew arm\'s remedy (R15(c))', () => {
     rerender(<FleetHostBanner health={skewed} nodes={[fleet, movable('server', SERVER_V9)]} intent={autoOn} stale={false} />);
     expect(msg()).not.toContain(UPDATES_STALE_TEXT);
     expect(msg()).toContain('auto-install then moves the lagging box.');
+  });
+});
+
+// D-7680: the skew arm never leaves the split unexplained. With the fleet box ahead and nothing standing on the
+// server, it offers the console's own one-node move (the shared confirm sheet, a single-node apply to the fleet box's
+// tag); with a request or a lease already carrying the server there, it says so and offers nothing.
+describe('FleetHostBanner — the skew arm\'s queued and move arms (D-7680)', () => {
+  const skewed = health({ connected: true, downSince: null, roster: 'agreed', build: 'skewed' });
+  const msg = (): string => document.querySelector('.banner-msg')?.textContent ?? '';
+  const FLEET_V9: BuildInfo = { ...FLEET_V7, version: 'v0.0.9' };
+  const SERVER_V8: BuildInfo = { ...SERVER_V9, version: 'v0.0.8' };
+  const movable = (role: 'fleet' | 'server', current: BuildInfo, over: Partial<NodeWire> = {}): NodeWire =>
+    ({ ...inventoryNode(role, current), caps: ['detach', 'update-gate'], agentOps: role === 'fleet' ? ['update'] : null,
+      desiredTag: null, ...over });
+  const RELEASES: ReleaseWire[] = [
+    { tag: 'v0.0.9', version: 'v0.0.9', channel: 'stable', publishedAt: 1, commitSha: null, bundleListed: true, yanked: false, refused: [], notes: null },
+  ];
+  const off: UpdateIntentWire[] = [{ scope: '*', channel: 'stable', pinnedTag: null, auto: 'off', notify: 'off', setAt: 1, setBy: 'pwa' }];
+
+  it('the fleet box leads and the server is idle: "Update the server to v0.0.9" opens the move sheet, whose confirm sends the single-node apply', async () => {
+    const apply = vi.spyOn(api, 'applyUpdate').mockResolvedValue({ ok: true, requested: [movable('server', SERVER_V8).nodeId], skipped: [] });
+    const onMoved = vi.fn();
+    const nodes = [movable('fleet', FLEET_V9), movable('server', SERVER_V8)];
+    render(<FleetHostBanner health={skewed} nodes={nodes} intent={off} releases={RELEASES} onMoved={onMoved} />);
+    expect(msg()).toBe('The two boxes run different builds. fleet v0.0.9 (bd2bf57a) · server v0.0.8 (2985b9d1). '
+      + "The console can move server to v0.0.9, the fleet box's release.");
+    expect(screen.queryByText(/ccrc rollout/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Update the server to v0.0.9' }));
+    expect(screen.getByRole('list', { name: 'Nodes this moves, in order' }).textContent).toBe('1. server (server) v0.0.8 → v0.0.9');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.9' })); });
+    expect(apply).toHaveBeenCalledWith({ nodeId: nodes[1]!.nodeId, tag: 'v0.0.9' });
+    expect(onMoved).toHaveBeenCalled();
+  });
+
+  it('a request for the fleet box\'s tag already on the server: it says the server follows, and offers no button', () => {
+    const nodes = [movable('fleet', FLEET_V9), movable('server', SERVER_V8, { request: { tag: 'v0.0.9', kind: 'update', at: 1 } })];
+    render(<FleetHostBanner health={skewed} nodes={nodes} intent={off} releases={RELEASES} />);
+    expect(msg()).toBe('The two boxes run different builds. fleet v0.0.9 (bd2bf57a) · server v0.0.8 (2985b9d1). '
+      + 'server is requested v0.0.9 and follows once the fleet box’s move settles.');
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('without the catalogue, or stale, the terminal verbs stand and no button is offered', () => {
+    const cli = 'Run ccrc rollout from the deploying machine, or ccrc update on the lagging box, fleet box first.';
+    const nodes = [movable('fleet', FLEET_V9), movable('server', SERVER_V8)];
+    const { rerender } = render(<FleetHostBanner health={skewed} nodes={nodes} intent={off} />);
+    expect(msg()).toContain(cli);
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    rerender(<FleetHostBanner health={skewed} nodes={nodes} intent={off} releases={RELEASES} stale />);
+    expect(msg()).toContain(cli);
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 });

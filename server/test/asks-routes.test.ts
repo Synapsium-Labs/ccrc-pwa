@@ -29,6 +29,7 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
+import { questionsTestView } from '../src/coord/questions.js';
 import type { PushPayload } from '../src/push.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import { okAsk } from './coordReadHelpers.js';
@@ -111,9 +112,9 @@ const openApp = async (home: string, run: Runner, over: Partial<Deps> = {}) => {
 
 const answer = (app: FastifyInstance, id: number | string, body: Record<string, unknown>,
                 headers: Record<string, string> = TOK) =>
-  app.inject({ method: 'POST', url: `/api/asks/${id}/answer`, headers, payload: body });
+  app.inject({ method: 'POST', url: `/api/questions/ask-${id}/rule`, headers, payload: { kind: 'ask', ...body } });
 
-describe('POST /api/asks/:id/answer', () => {
+describe('POST /api/questions/ask-<n>/rule (the parent\'s answer)', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
@@ -322,7 +323,7 @@ describe('POST /api/asks/:id/answer', () => {
   });
 
   // D-5293: the parent's route reads the operator's body shape (`readAskAnswer`, `inject/ask.ts`, the reader
-  // `POST /api/sessions/:id/ask` reads), so `askKey`, the key the operator's route requires, is understood here too:
+  // the operator's ask reads, `POST /api/questions/session-<id>/answer` since W7 C7p retired `/api/sessions/:id/ask`), so `askKey`, the key the operator's route requires, is understood here too:
   // the key the parent was shown must be the row's, or nothing is pressed.
   it("accepts the operator's body shape: the row's own askKey beside optionIndexes presses the digit (D-5293)", async () => {
     const { coord, id, calls } = await setup(Date.now());
@@ -356,7 +357,7 @@ describe('POST /api/asks/:id/answer', () => {
  * `POST /api/asks/:id/release` — the parent DECLINES to rule on its
  * child's question (Task 10). The verb that makes the grace window a
  * CEILING rather than a flat tax on every ask the parent cannot answer: a
- * decline fires the operator's push NOW, through `FleetWatcher.releaseHeldAsk`
+ * decline fires the operator's push NOW, through the `released` door-in (the watcher's forward until W3 Q3f)
  * — the ONLY door a route has into the watcher's in-memory hold, since
  * `heldAsks` is watcher-private state.
  *
@@ -365,18 +366,18 @@ describe('POST /api/asks/:id/answer', () => {
  * the store's own `declineAsk` CAS (`'held' -> 'declined'`, D-5289) — a decline that
  * finds nothing held refuses `not-held` rather than pretending to succeed.
  */
-describe('POST /api/asks/:id/release', () => {
+describe('POST /api/questions/ask-<n>/release (the parent\'s decline)', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
   const release = (id: number | string, body: Record<string, unknown>,
                    headers: Record<string, string> = TOK) =>
-    app!.inject({ method: 'POST', url: `/api/asks/${id}/release`, headers, payload: body });
+    app!.inject({ method: 'POST', url: `/api/questions/ask-${id}/release`, headers, payload: { kind: 'ask', ...body } });
 
   /** Same shape as `buildServer`'s own third argument (`fleetws.test.ts`'s
    *  idiom): the `FleetWatcher` is constructed FIRST, sharing the one `deps`
    *  object `buildServer` also receives, so both sides see the same
-   *  `heldAsks` map this route reaches through `releaseHeldAsk`. */
+   *  hold this route reaches through the `released` door-in (since W3 Q3f, the claimant's core). */
   const openAppWithWatcher = async (home: string, run: Runner, sent: PushPayload[]) => {
     const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
     const notify = async (p: PushPayload) => { sent.push(p); };
@@ -387,13 +388,11 @@ describe('POST /api/asks/:id/release', () => {
     return { app: built, coord, w };
   };
 
-  /** Reflection idiom `asks-sweep.test.ts`/`hold-gate.test.ts` already use to
-   *  reach the watcher's private, in-memory hold — `heldAsks` deliberately
-   *  has no public read; `releaseHeldAsk` is its only public WRITE. */
+  /** The watcher's in-memory hold, through its `Questions` instance's test-only view (W3 Q3d, D-7028, named
+   *  exception 1; it was a reflection read of the private `heldAsks`): per child, as that map held it. The hold still
+   *  has no public read; the `released` door-in is its only route WRITE, and `plantHeldAsk` seeds it as `hold()` would. */
   const heldMap = (w: FleetWatcher): Map<string, { until: number; askId: number;
-      ev: unknown; answeringSince: number | null }> =>
-    (w as unknown as { heldAsks: Map<string, { until: number; askId: number;
-      ev: unknown; answeringSince: number | null }> }).heldAsks;
+      ev: unknown; answeringSince: number | null }> => questionsTestView(w.questions).heldAsks();
 
   /** Registry (child + parent + a third, unrelated session), a held ask row,
    *  and the watcher's own in-memory hold seeded to match it — the shape
@@ -415,7 +414,7 @@ describe('POST /api/asks/:id/release', () => {
       askAt: now, dialogId: 'dlg-1', question: QUESTION.question,
       options: QUESTION.options.map((o) => o.label), now,
     });
-    heldMap(built.w).set(CHILD, {
+    questionsTestView(built.w.questions).plantHeldAsk(CHILD, {
       until: now + 180_000, askId: id, answeringSince: null,
       ev: { kind: 'ask', sessionId: CHILD, project: 'demo', title: 'question needs you',
         body: QUESTION.question, tag: `ask-${CHILD}` },
@@ -700,7 +699,7 @@ describe('GET /api/asks', () => {
 });
 
 /**
- * `POST /api/sessions/:id/ask` — the OPERATOR's own answer path, closing the
+ * The OPERATOR's own ask answer path, closing the
  * hole Task 12 exists for (D-2171). Before this task the route never
  * consulted the `asks` table at all: if the operator answered first, the
  * row stayed `'held'` forever, the parent's later `/api/asks/:id/answer`
@@ -719,13 +718,19 @@ describe('GET /api/asks', () => {
  * This file adds the coord-configured cases `routes.test.ts` has no way to
  * build: a row held for the child, and a coord-configured box with no row
  * at all (the "parentless path" the overwhelming majority of asks take).
+ *
+ * W7 C7p (D-7194): the path was `POST /api/sessions/:id/ask` until C7p
+ * retired it; these rows run through the family's door that replaced it,
+ * `POST /api/questions/session-<id>/answer` with `{kind:'ask', …}`, which
+ * calls the same operator core (`coord/questions.ts`), so each row asserts
+ * what it asserted before.
  */
-describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
+describe('POST /api/questions/session-<id>/answer {kind:\'ask\'} — closes the held row (Task 12)', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
   const post = (id: string, body: Record<string, unknown>) =>
-    app!.inject({ method: 'POST', url: `/api/sessions/${id}/ask`, payload: body });
+    app!.inject({ method: 'POST', url: `/api/questions/session-${id}/answer`, payload: { kind: 'ask', ...body } });
 
   /** Same shape as `/answer`'s own `setup` above: registry, a fresh waiting
    *  hookstate for the child at `now`, and — the one difference — the
@@ -769,8 +774,8 @@ describe('POST /api/sessions/:id/ask — closes the held row (Task 12)', () => {
     // find nothing to take, and say why (D-5289: `already-answered`, no
     // longer folded onto `not-held`).
     const parent = await app!.inject({
-      method: 'POST', url: `/api/asks/${id}/answer`, headers: TOK,
-      payload: { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [0] },
+      method: 'POST', url: `/api/questions/ask-${id}/rule`, headers: TOK,
+      payload: { kind: 'ask', fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [0] },
     });
     expect(parent.statusCode).toBe(409);
     expect(parent.json()).toEqual({ ok: false, error: 'already-answered' });
@@ -976,16 +981,17 @@ describe('late answer wins; declined (D-5289)', () => {
     });
     const ev = { kind: 'ask' as const, sessionId: KID, project: 'demo', title: '❓ Question',
       body: QUESTION.question };
-    (w as unknown as { heldAsks: Map<string, unknown> }).heldAsks.set(KID,
+    questionsTestView(w.questions).plantHeldAsk(KID,
       { until: now + 1, askId: id, ev, answeringSince: null });
     // `sweepAsks` runs only once the watcher has primed; set it the way the
     // sweep tests' first `tick()` would, without a tick's other lanes.
     (w as unknown as { primed: boolean }).primed = true;
     return { coord, w, id, sent, calls };
   };
+  // K5 Q3l (D-7728): the parent's answer and decline through the question door family, the same claimant core.
   const by = (id: number, verb: 'answer' | 'release', extra: Record<string, unknown> = {}) =>
-    app!.inject({ method: 'POST', url: `/api/asks/${id}/${verb}`, headers: TOK,
-      payload: { fromId: MESA, fromUuid: MESA_UUID, ...extra } });
+    app!.inject({ method: 'POST', url: `/api/questions/ask-${id}/${verb === 'answer' ? 'rule' : 'release'}`, headers: TOK,
+      payload: { kind: 'ask', fromId: MESA, fromUuid: MESA_UUID, ...extra } });
 
   it('the release route leaves the row declined and pushes at once', async () => {
     const { coord, id, sent } = await setup(Date.now());
@@ -1078,8 +1084,9 @@ describe('late answer wins; declined (D-5289)', () => {
     expect(tagged[1]!.body).toBe(`Answered by ${MESA}`);
   });
 
+  // W7 C7p (D-7194): the operator's ask through the family's door (was `POST /api/sessions/:id/ask`).
   const operator = (body: Record<string, unknown>) =>
-    app!.inject({ method: 'POST', url: `/api/sessions/${KID}/ask`, payload: body });
+    app!.inject({ method: 'POST', url: `/api/questions/session-${KID}/answer`, payload: { kind: 'ask', ...body } });
 
   it("a refused operator press after the lapse goes back to released, not held", async () => {
     const { coord, w, id, calls } = await setup(Date.now());

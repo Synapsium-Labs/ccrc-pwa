@@ -6,6 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
+import { isItemMoveRefusal } from '../../shared/ledgers.js';
 import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
@@ -21,6 +22,9 @@ import { isClaimantState } from '../src/coord/staleSibling.js';
 import { isApprovalKebab } from '../src/coord/approvalsign.js';
 import { isDigestKebab } from '../src/coord/digest.js';
 import { isStallKebab, isStallCoordGate } from '../src/coord/stall.js';
+import { isQuestionPolicyKebab } from '../src/coord/questionPolicy.js';
+import { isDeadDispatchKebab } from '../src/coord/deadDispatch.js';
+import { isAutoRollKebab } from '../src/coord/rollTarget.js';
 import { isHibernateKebab } from '../src/coord/hibernate.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
@@ -35,6 +39,7 @@ import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlatio
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
 import { isDriftKind, isRunSpendUnmeasuredReason } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
+import { isDelegationProjectionKebab } from '../src/coord/delegation-projection.js';
 import { isCollectLaneKebab } from '../src/collectLane.js';
 import { isNoticeMode } from '../src/notice.js';
 import { isArchiveGateKebab } from '../src/coord/archiveAdmission.js';
@@ -616,6 +621,9 @@ describe('the rejection table is total, in both directions', () => {
       'runs-unreadable',     // the list read's own word: GET /api/runs, all-or-failure
       'ask-unreadable',      // the ask half of the same family, /answer//release//asks
       'no-commits',          // coord/fingerprint.ts — a DoneRun verdict, not a mail code
+      'no-pr',               // coord/landingEntry.ts: a LandingWrite kind (landing order wave 5e), not a refusal code, though it does cross the wire in the advance's landing.kind
+      'no-episode',          // coord/landingEntry.ts: a LandingWrite kind (landing order wave 5e), not a refusal code, though it does cross the wire in the advance's landing.kind
+      'no-entry',            // coord/landingEntry.ts: a LandingWrite kind (landing order wave 5e), not a refusal code, though it does cross the wire in the advance's landing.kind
       'packed-refs',         // coord/gitref.ts — a git filename
       'refused-project',     // coord/gitref.ts — a `WorktreeRead.reason` (§1.7).
                              // NOT a refusal a client ever sees: `readWorktreeRecords`
@@ -670,6 +678,13 @@ describe('the rejection table is total, in both directions', () => {
       'wave-done-rejected',   // mail SUBJECT text (close's own rejection)
       'wave-advance-rejected', // mail SUBJECT text (advance's own rejection, review findings 1/15)
       'review-done-rejected', // mail SUBJECT text (the review close's own rejection, design 2026-09-14)
+      // LANDING ORDER WAVE 4, Task 2: the radar-timing answer's three mail SUBJECTS (`closeDecide.ts`'s
+      // `doneRejectionMail`), beside the three refusal subjects above, and `measured.via`'s one word. Subjects are
+      // mail text, never a wire code; the code they carry, `lineage-unmeasured`, is a `MAIL_REJECT_CODES` member.
+      'wave-done-unmeasured',
+      'wave-advance-unmeasured',
+      'review-done-unmeasured',
+      'base-only-merge',      // `fingerprint.ts`'s `measured.via`: a server-internal verdict word, answered on the wire as `verifiedHead`
       'awaiting-review',      // a RunState value (advance's own target list), not a mail code
       'enter-ignored',        // a `SendResult` error (`inject/send.ts`), reached here as
                               // half of `rundefs.ts`'s `CLEAR_REFUSED_STRANDS_TEXT` — the
@@ -783,6 +798,24 @@ describe('the rejection table is total, in both directions', () => {
       'stash-failed',
       'stash-occupied',
       'enter-ignored',
+      // LANDING ORDER WAVE 4 (plan docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md, Task 1):
+      // `coord/lineage.ts` spells wave 3b's walk-stop words (`LINEAGE_STOPS`, the radar's vocabulary, written into a
+      // lineage file and only read here) and the DETAIL words of `decideLineage`'s answers. A detail is free text
+      // appended to a refusal's own body (` (<detail>)`) or to `lineage-unmeasured`'s, never a code of its own: no
+      // route, no `error`/`refused`/`reject.code` field and no wire union carries one by itself.
+      'not-a-merge',
+      'second-parent-not-on-base',
+      'tree-differs',
+      'landing-marker-unreadable',
+      'landing-marker-stale',
+      'lineage-not-expected',
+      'not-yet-measured',
+      'lineage-unreadable',
+      'lineage-stale',
+      'tip-unmeasured',
+      'older-than-the-live-tip',
+      'partly-measured',
+      'land-probe-paused',    // `coord/lineageRead.ts`: the global pause marker's FILE NAME under `$REG`, wave 3b's; a path segment
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
@@ -931,6 +964,12 @@ describe('the rejection table is total, in both directions', () => {
         || isDelegationModelKebab(tok) || isDelegationJournalKebab(tok) || isDelegationCheckpointKebab(tok)
         || isDelegationIngestKebab(tok) || isDelegationCorrelationKebab(tok) || isDelegationCensusKebab(tok)
         || isDelegationPolicyKebab(tok)
+        // DELEGATION BROKER, WAVE 4 (PR1): the projection's words, checked beside the seventeenth union and never merged into it, on
+        // the standing rule `enter-ignored` above states. `coord/delegation-projection.ts` spells the frame's liveness, row groups,
+        // placements and creator kinds (`offline-coordinator`, `bash-call`) as literals. None is a mail rejection or a run refusal:
+        // they ride the `delegation` frame. Admitted through the exported guard, derived from `shared/api.ts`'s four tables, never
+        // NOT_CODES, for the reason every union above gives.
+        || isDelegationProjectionKebab(tok)
         // CHILD RECLAMATION, WAVE 10: the next union, re-counted on the merged tree, checked together and never merged,
         // on the standing rule `enter-ignored` above states. `coord/collectLaneJournal.ts` (the collector switch's
         // generation journal adapter) spells its read kinds as literals, and the switch's other coord-side code
@@ -990,8 +1029,24 @@ describe('the rejection table is total, in both directions', () => {
         // THE COORD-BLOCKED ARM (D-6942): `coord/stall.ts` names why a coordinator's mail is held as literals
         // (`'busy-unread'`). A gate reason words the operator push, never a `refused` or `reject.code`. Admitted through
         // the exported guard, derived from `STALL_COORD_GATES`, never NOT_CODES.
-        || isStallCoordGate(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state or coord-blocked gate reason`).toBe(true);
+        || isStallCoordGate(tok)
+        // THE QUESTION SWEEP'S DECIDERS (W3 Q3c, D-7027): `coord/questionPolicy.ts` names its answer words and the ask
+        // read's stages as literals (`'push-and-drop'`, `'row-refused'`). A word decides the sweep's act, never a `refused`
+        // or `reject.code`. Admitted through the exported guard, derived from that file's tables, never NOT_CODES.
+        || isQuestionPolicyKebab(tok)
+        // THE DEAD-DISPATCH ACT (D-7319): `coord/deadDispatch.ts` and `coord/abandonDeadDispatch.ts` name why a run is kept
+        // (`'in-flight'`, `'child-workspace'`) and the switch door's refusals (`'state-unreadable'`) as literals. A keep
+        // reason rides a log line and the arm's re-measure, never a mail rejection or a run refusal. Admitted through the
+        // exported guard, derived from `DEAD_DISPATCH_KEEPS` and `DISPATCH_ABANDON_REFUSALS`, never NOT_CODES.
+        || isDeadDispatchKebab(tok)
+        // THE AUTOMATIC ROLL'S VERDICT (D-7452): `coord/rollTarget.ts` names its skip words, its opt-out suffix and its
+        // actor as literals. A word names a skip in the lane's journal, never a `refused` or `reject.code`.
+        || isAutoRollKebab(tok)
+        // THE PROGRAMME LEDGERS' ITEM MOVES (plan PL2): `coord/ledgersStore.ts` (behind `CoordStore`) answers a refused move of an operator item with
+        // `'unknown-item'`, `'wrong-actor'`, `'not-open'` or `'programme-live'`. The decider's words and the store's, one
+        // union in `shared/ledgers.ts`. Admitted through its exported guard, derived from `ITEM_MOVE_REFUSALS`, never NOT_CODES.
+        || isItemMoveRefusal(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word or item-move refusal`).toBe(true);
     }
   });
 });

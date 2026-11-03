@@ -14,7 +14,7 @@
 // account picker, its limit gauges and its consequence confirm.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { READER_MIN_COLS, substrateFault, type FleetSession } from '../../../shared/api';
+import { isArchivedRow, READER_MIN_COLS, substrateFault, type FleetSession } from '../../../shared/api';
 import { Button, QuickConfirm, Sheet, toast } from '@ccrc/ui';
 import { api, failedTo } from '../lib/api';
 
@@ -23,13 +23,16 @@ import { navigate } from '../lib/router';
 import { sessionDocsHref } from '../docs/docsLinks';
 import { sessionLabel } from './sessionLabel';
 import { narrowSinceWidened } from './spawnWords';
+import { paneGone, presenceOf } from './presence';
 import { hibernatedSince } from './hibernated';
 import { substrateFaultText, substrateFaultTitle } from './substrateWords';
 import { SwapSheet } from './SwapSheet';
 import { HoldControl } from './HoldControl';
 import { RenameSheet } from './RenameSheet';
-import { ArchiveSheet, isPutAway, restoreReachesEnsure, restoreSession } from './ArchiveSheet';
+import { ArchiveSheet, restoreSession } from './ArchiveSheet';
+import { isPutAway, restoreReachesEnsure } from './archivePutAway';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { useEnsure } from '../session/useEnsure';
 import './fleet.css';
 
 /** Release's consequence sentence — what releasing the hold actually changes,
@@ -82,7 +85,7 @@ export function SessionActionsSheet({
   // Every hook runs BEFORE the null guard below: `session` goes null whenever
   // the sheet closes, and a conditional hook would throw on that render.
   const [swapOpen, setSwapOpen] = useState(false);
-  const [restarting, setRestarting] = useState(false);
+  const { busy: restarting, ensure: ensureNow } = useEnsure();
   const [archBusy, setArchBusy] = useState(false);
   /** The one Archive's sheet (workspace lifecycle §5.2) is open over this one. It hosts every refusal the archive
    *  door can answer — the `run-open` claim this sheet used to hold as `conflict` among them. */
@@ -152,21 +155,11 @@ export function SessionActionsSheet({
   const fault = substrateFault(session);
   const faultTitle = substrateFaultTitle(session);
 
-  const restart = async (): Promise<void> => {
-    if (restarting) return;
-    setRestarting(true);
-    try {
-      await api.ensure(session.id);
-      onClose();
-    } catch (err) {
-      // apiErrorText, never err.message: the runCcd routes fail as
-      // 502 { ok, stderr } with no `error` key, so err.message yields the
-      // generic "request failed (502)" and ccd's refusal never reaches anyone.
-      toast(failedTo(hibernatedSince(session) !== null ? 'wake' : 'restart', err), 'error');
-    } finally {
-      setRestarting(false);
-    }
-  };
+  // apiErrorText (through failedTo), never err.message: the runCcd routes fail as
+  // 502 { ok, stderr } with no `error` key, so err.message yields the
+  // generic "request failed (502)" and ccd's refusal never reaches anyone.
+  const restart = (): Promise<void> =>
+    ensureNow(session.id, (err) => failedTo(hibernatedSince(session) !== null ? 'wake' : 'restart', err), onClose);
 
   // Workspace lifecycle §5.2: every session offers Archive, and every session already put away offers Restore.
   const putAway = isPutAway(session);
@@ -240,7 +233,7 @@ export function SessionActionsSheet({
   const five = session.limits?.five ?? null;
   const seven = session.limits?.seven ?? null;
   const critical =
-    session.status === 'dead' ? null
+    paneGone(session) ? null
     : five !== null && five > CRITICAL ? '5h'
     : seven !== null && seven > CRITICAL ? '7d'
     : null;
@@ -338,17 +331,17 @@ export function SessionActionsSheet({
               the remedy is widening it. Once it has died, Restart session IS the
               respawn — the second arm. The width is the constant ccd stands
               down at. */}
-          {session.spawnState === 'narrow' && session.status !== 'dead' && !narrowSinceWidened(session) && (
+          {session.spawnState === 'narrow' && !paneGone(session) && !narrowSinceWidened(session) && (
             <p className="sess-sheet-note">
               {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, so ccd answered none of its startup prompts, skipped its /effort and turn re-drive, and keeps auto-swap and auto-compact off while it stays that narrow. Opening and closing this session's terminal drawer widens it; then check the terminal for an unanswered startup prompt. A current ccd pins every spawn 220x50, so the usual cause is a terminal attached straight to this session; it can also be a failed pin or a width ccd could not read, and a marker left by an older ccd may come from a narrow terminal on any session.`}
             </p>
           )}
-          {narrowSinceWidened(session) && session.status !== 'dead' && (
+          {narrowSinceWidened(session) && !paneGone(session) && (
             <p className="sess-sheet-note">
               {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, so ccd answered none of its startup prompts and skipped its /effort and its re-drive of any interrupted turn. The pane has since been widened and its prompt is up, so auto-swap and auto-compact are back on — if this session was mid-turn when it respawned, it may still be waiting for a nudge. This marker stays until the session next spawns.`}
             </p>
           )}
-          {session.spawnState === 'narrow' && session.status === 'dead' && !asleep && (
+          {session.spawnState === 'narrow' && paneGone(session) && !asleep && (
             <p className="sess-sheet-note">
               {`The last spawn landed in a pane under ${READER_MIN_COLS} columns, or one whose width ccd could not read, and that pane is gone. Restart session builds a new one, which a current ccd pins 220x50.`}
             </p>
@@ -429,7 +422,7 @@ export function SessionActionsSheet({
               exclusive renders (not a stacked sheet): with only ONE control
               ever on screen for this row, "tap Hold, submit empty" needs no
               disambiguation between two same-named buttons. */}
-          {session.workspace !== null && session.archivedAt === null
+          {session.workspace !== null && !isArchivedRow(session)
             && session.held === null && (
             <HoldControl session={session} sheetOpen={open} onHeld={onClose} />
           )}
@@ -451,7 +444,7 @@ export function SessionActionsSheet({
               carry. Archived only: archive is the staging step, and the audit
               this opens refuses `not-archived` anyway — offering it earlier
               would just be a button that always refuses. */}
-          {session.workspace !== null && session.archivedAt !== null && (
+          {session.workspace !== null && isArchivedRow(session) && (
             <Button variant="ghost" className="sess-sheet-remove"
                     disabled={fault !== null} title={faultTitle}
                     onClick={() => onReap(session.id)}>
@@ -465,8 +458,12 @@ export function SessionActionsSheet({
               non-workspace, strictly: a live session's removal is a kill and
               goes through Stop first; a workspace's removal destroys git
               state and goes through the audited sheet above. ccd re-proves
-              both gates (and the hold) on the box. */}
-          {session.workspace === null && session.status === 'dead' && !asleep && (
+              both gates (and the hold) on the box. Dead is the SERVER's
+              word (`presenceOf`, OA-C15 (a), D-7181), and a doubted row
+              (`unknown`) hides the door; a sleeper (the server's `asleep`,
+              and any row `hibernatedSince` reads asleep) offers Wake
+              instead (ccd forget refuses it, D-5423). */}
+          {session.workspace === null && presenceOf(session) === 'dead' && !asleep && (
             <Button variant="ghost" className="sess-sheet-remove"
                     disabled={fault !== null} title={faultTitle}
                     onClick={() => setForgetConfirmOpen(true)}>
@@ -474,7 +471,7 @@ export function SessionActionsSheet({
             </Button>
           )}
 
-          {session.status !== 'dead' && session.wrapper !== session.home && (
+          {!paneGone(session) && session.wrapper !== session.home && (
             <p className="sess-sheet-note">
               Pinned to {accountLabel(roster, session.home)}, running on{' '}
               {accountLabel(roster, session.wrapper)} — moved when its account filled up.

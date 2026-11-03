@@ -23,7 +23,6 @@ import { accountPoolState } from '../src/lib/accounts';
 import { ACCOUNT_POOL_UNAVAILABLE_TEXT, AccountsScreen } from '../src/screens/AccountsScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
-import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 
@@ -31,7 +30,10 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   navigate('/');
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null }));
+  act(() => useFleetStore.setState({
+    sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null,
+    usage: null, projected: undefined, roster: [],
+  }));
 });
 
 /** A minimal one-account roster, built directly (not off `TEST_ROSTER`, which
@@ -113,8 +115,9 @@ describe('AccountsScreen — the account pool chip', () => {
     fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
   });
 
+  // The screen reads the app-wide fleet store's accounts answer, which the store's one poll writes (C8, D-6440).
   const stubAccounts = (roster: RosterWire[], accounts: AccountUsage[] = []): void => {
-    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts, projected: null, roster });
+    act(() => { useFleetStore.setState({ usage: accounts, projected: null, roster }); });
   };
 
   it('renders the origin, so clearing a central tag does not look like a no-op', async () => {
@@ -260,10 +263,10 @@ describe('the chip for a pool this box could not decide', () => {
     fiveResetAt: null, sevenResetAt: null,
     fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
   });
+  // The screen reads the app-wide fleet store's accounts answer (C8, D-6440).
   const stub = (resolved: AccountPoolWire): void => {
-    vi.spyOn(api, 'accounts').mockResolvedValue({
-      accounts: [acct()], projected: null,
-      roster: rosterWithResolved('acct-a', resolved, null),
+    act(() => {
+      useFleetStore.setState({ usage: [acct()], projected: null, roster: rosterWithResolved('acct-a', resolved, null) });
     });
   };
 

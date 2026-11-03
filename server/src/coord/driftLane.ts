@@ -11,6 +11,7 @@
 // phone. The marker is hand-armed and nothing in the tree writes it.
 import type { ChildMark } from '../../../shared/api.js';
 import { DRIFT_PUSH_LIVE_MARKER } from '../../../shared/switches.js';
+import { heldForDrift } from './questions.js';
 import type { ClaimantReading } from '../deadCoordinator.js';
 import type { NoticeSink } from '../notice.js';
 import { deadCoordinatorLaneArmed } from './endDeadCoordinator.js';
@@ -18,7 +19,6 @@ import { driftFindings, type DriftInput, type DriftWorkerRow } from './drift.js'
 import { chooseDriftPushes } from './driftPush.js';
 import { childBirthOf } from './childSpent.js';
 import { incarnationOf } from './runBinding.js';
-import { childParentRead } from './bindingReads.js';
 import type { CoordStore } from './store.js';
 
 /** The lane's two fixed notice tags: the summary push and the shadow notice. A tag names a ring row, never a
@@ -32,7 +32,7 @@ export function isDriftLaneTag(v: string): boolean {
 
 export interface DriftLaneDeps {
   readonly coord: Pick<CoordStore, 'driftOpenRuns' | 'driftOutstandingDeliveries' | 'driftAwaitingReview'
-    | 'driftHeldQuestions' | 'driftFindingRows' | 'driftStallToldRows' | 'driftPushesOnDay' | 'bindingRunsOf' | 'run'
+    | 'driftHeldQuestions' | 'driftFindingRows' | 'driftStallToldRows' | 'driftPushesOnDay' | 'bindingsOf' | 'run'
     | 'recordDriftPass' | 'markDriftPushed' | 'markDriftShadowed'>;
   /** The reclaim ladder's verdict for one claimant (`measureClaimant`, bound by the watcher): no second vocabulary. */
   readonly measure: (id: string, at: number) => Promise<ClaimantReading>;
@@ -63,7 +63,7 @@ async function pass(d: DriftLaneDeps, now: number): Promise<void> {
   const runs = d.coord.driftOpenRuns();
   const deliveries = d.coord.driftOutstandingDeliveries();
   const reviews = d.coord.driftAwaitingReview();
-  const asks = d.coord.driftHeldQuestions();
+  const asks = heldForDrift(d.coord);
   const before = d.coord.driftFindingRows();
   const told = d.coord.driftStallToldRows();
   for (const r of [runs, deliveries, reviews, asks, before, told]) {
@@ -91,7 +91,7 @@ async function pass(d: DriftLaneDeps, now: number): Promise<void> {
     const incarnation = incarnationOf(sessionId, childBirthOf(minting, sessionId));
     // heldFor's parent, read the same way: a series this process cannot represent yields the parent its open binding
     // proves, or none (as before the fold); the pass goes on, and says so.
-    const { parent: parentId, series } = childParentRead(d.coord, sessionId, minting.ok && minting.run !== null ? minting.run.claimedBy : null, incarnation);
+    const { parent: parentId, series } = d.coord.bindingsOf(sessionId).parent(minting.ok && minting.run !== null ? minting.run.claimedBy : null, incarnation);
     if (!series.ok) d.warn(`ccrc-server: sweepDrift could not read the runs of ${sessionId} (${series.detail}) — its parent is the open run's claimant, if any, this pass`);
     workers.push({ sessionId, markRunId: mark.runId, parentId,
       // The mark's run may be closed and so absent from `runs.rows`; its claimant is the minting run's own.

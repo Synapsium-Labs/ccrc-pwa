@@ -2,7 +2,8 @@
 // builds and `buildServer` and `FleetWatcher` take, and `CollectLaneDeps`, one of its members. They are declared here,
 // not in `server.ts`, so a consumer below L4 that takes `Deps` (`commands.ts`) reads inward only. This file is
 // type-only and emits nothing: a composition-root type, not a domain layer. `server.ts` re-exports both names, so
-// every caller that imports them from there still compiles.
+// every caller that imports them from there still compiles. `WatcherDeps` (D-7579) is `Deps` with `coord` narrowed to
+// the watcher's store port, for `FleetWatcher` alone.
 import type { CcrcConfig } from './config.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { Tmux } from './exec.js';
@@ -21,6 +22,7 @@ import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childRecl
 import type { BoxTokenHolder } from './coord/token.js';
 import type { TokenRouteDriver } from './token/routes.js';
 import type { CoordStore } from './coord/store.js';
+import type { WatcherCoordPort } from './coord/ports.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
 import type { CataloguePoller } from './update/catalogue.js';
 import type { UpdateIntentLog } from './coord/updateintentlog.js';
@@ -29,6 +31,10 @@ import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import type { AccountAudit } from './accounts/audit.js';
 import type { AccountOps } from './accounts/ops.js';
 import type { FetchLike } from './linear/client.js';
+import type { LinearJournal } from './linear/journal.js';
+import type { LinearWritePolicy } from './linear/policy.js';
+import type { LinearRateService } from './linear/rate.js';
+import type { LinearRefresher } from './linear/refresher.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
  *  generation journal `CoordStore.setCollectLane` appends to inside its transaction, and this process's boot nonce,
@@ -167,6 +173,13 @@ export interface Deps {
   /** D-5516 (accounts plan Task A7): the account audit over this process's one coord.db, built in `index.ts`.
    *  Absent → no row is written (a test, a script). */
   accountAudit?: AccountAudit;
+  /** D-7671 (#1444, spec §7): the Linear write journal over this process's one coord.db, built in `index.ts`. Its
+   *  consumers are the proxy's write routes and the Settings key routes (LK9, LK11). Absent (a test, a script): a
+   *  route that needs it answers `linear-unavailable` before any other work, and nothing calls Linear (D-7684). */
+  linearJournal?: LinearJournal;
+  /** D-7672 (#1444, spec §8): the policy decision point on Linear writes; `index.ts` wires `allowAll`. Absent: as
+   *  `linearJournal`. Never a grant by actor. */
+  linearPolicy?: LinearWritePolicy;
   /** Spec §13.2, G13 (accounts plan Task A7): the ONE `AccountOps` arm, chosen in `index.ts` by `cfg.fleetMode` only
    *  (`accountOpsFor`). The account routes (A14 onward) are its consumers. */
   accountOps?: AccountOps;
@@ -174,4 +187,20 @@ export interface Deps {
    *  route and the workspace create alike so a test reaches neither the network nor an 8 s wait. Absent in
    *  production, where the client's own `fetch` and `LINEAR_TIMEOUT_MS` apply. */
   linear?: { fetch?: FetchLike; timeoutMs?: number };
+  /** D-7670, R4 (#1444, spec §6.7): the ONE Linear rate service, built in `index.ts` and passed through by `server.ts`
+   *  to every caller of Linear (today the legacy Check again and Connect, and the title lookups). Absent (a test, a
+   *  script): nothing calls Linear: a title is the offline one and those two routes answer `linear-unavailable`
+   *  (D-7684). `server.ts` never builds a default. */
+  linearRate?: LinearRateService;
+  /** D-7668 (#1444, spec §4.3): the ONE background refresher of what each Linear slot knows, built in `index.ts` over
+   *  the one rate service and passed through by `server.ts` to the routes that need it (today the legacy Check again,
+   *  whose check counts as its slot's refresh). Absent (a test, a script): those routes answer `linear-unavailable`
+   *  before any Linear call (D-7684). `server.ts` never builds a default. */
+  linearRefresher?: LinearRefresher;
 }
+
+/** D-7579 (increment 7, WP2): `Deps` with `coord` narrowed to the watcher's one store port, `WatcherCoordPort`. From
+ *  WP10 on, `FleetWatcher`'s constructor takes this in place of `Deps`, so the watcher and its lane files hold no
+ *  path to the whole store; until then nothing names it. A `Deps` is assignable to it, so `index.ts` hands the same
+ *  bag on. */
+export type WatcherDeps = Omit<Deps, 'coord'> & { coord?: WatcherCoordPort };

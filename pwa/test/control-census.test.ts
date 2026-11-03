@@ -223,6 +223,7 @@ function controls(): Map<string, number[]> {
 /** Every hand-drawn control, with the way it reaches a thumb. */
 const CONTROLS: Record<string, string> = {
   // ── TOKEN: the control's own rule declares the floor ─────────────────────
+  'fleet/AccountKnob.tsx <button> acct-switch': 'TOKEN. The lane\'s kill switch on the Accounts card (D-7732): a 36px track inside a tap-floor box.',
   'fleet/MailBadge.tsx <button> mail-badge': 'TOKEN. The mail door in the fleet header.',
   'fleet/NewSessionSheet.tsx <button> acct-change': 'TOKEN. The change-account line above the project list.',
   'fleet/chips.tsx <button> acct-disclosure':
@@ -244,6 +245,7 @@ const CONTROLS: Record<string, string> = {
   'screens/AccountsScreen.tsx <button> accounts-session': 'TOKEN. A session row on the accounts screen.',
   'screens/AccountsScreen.tsx <button> proj-card-pool acct-pool-chip': "TOKEN. The card's pool tag, reused as a chip.",
   'screens/FleetScreen.tsx <button> fab': 'TOKEN by VALUE, not by name — see FLOOR_BY_VALUE.',
+  'skins/instrument/PhoneFab.tsx <button> fab': "TOKEN by VALUE, not by name — see FLOOR_BY_VALUE. Instrument's round + below 900 (T2b, D-6328).",
   'screens/FleetScreen.tsx <button> notice-x': 'TOKEN. The notice dismiss.',
   'screens/settings/SettingsIndex.tsx <a> settings-index-row text-ink-primary no-underline':
     'TOKEN. A Settings index row (settings Task R2b1, D-5504): the whole row is the link, at least 64px and never '
@@ -283,13 +285,13 @@ const CONTROLS: Record<string, string> = {
 
   // ── not buttons: the seventeen the first spelling of this census missed ──
   'fleet/AccountsStrip.tsx <div> accounts-strip':
-    'TOKEN. A `role="link"` div with `tabIndex={0}` and a keydown handler — '
-    + 'the strip D-161 calls the only door to /accounts. `.accounts-strip` '
-    + 'declares the floor.',
-  'fleet/CompactGauges.tsx <div> accounts-compact':
-    'TOKEN. The compact arrangement of the strip (W2 Task S2c), the gauges '
-    + 'both shells place: the same `role="link"` door to /accounts, one group. '
-    + '`.accounts-compact` declares the floor.',
+    'TOKEN. The PLACEHOLDER strip only (T2c, D-6329): with no lane to show it is a `role="link"` div with '
+    + '`tabIndex={0}` and a keydown handler, the door D-161 calls the only door to /accounts. With lanes to show the '
+    + 'same div is a plain `role="group"` and no control. `.accounts-strip[role="link"]` declares the floor.',
+  'fleet/AccountsStrip.tsx <div> account-gauge':
+    'TOKEN. A lane\'s card: a `role="link"` div, one roving tab stop across the cards, the door to its lane '
+    + '(`actionDoor(\'open-lane\', …)`). `.account-gauge` declares the floor at every width, since a weekly-only or '
+    + 'no-reading card is otherwise 20 to 36px tall.',
   // THE TWO DROPDOWNS LEFT THIS CENSUS, and the right way round: they are
   // `<Select>` (@ccrc/ui) now, so the app draws no dropdown by hand and there
   // is nothing here to classify — the same reason no `<Button>` call site
@@ -428,6 +430,9 @@ const CONTROLS: Record<string, string> = {
   'docs/DocsHead.tsx <button> docs-crumbs-more': "TOKEN. The phone's leading … in the crumbs, which opens the full path.",
   'docs/DocsHead.tsx <button> docs-fresh': "TOKEN. The freshness chip at the truth line's end, which fetches from origin.",
   'docs/DocsHead.tsx <button> docs-copy': 'TOKEN. Copy commit, on the truth line.',
+  'docs/DocsHead.tsx <button> docs-action docs-share':
+    "TOKEN. Share (spec 4.16), after View on GitHub: a <button> wearing the header's link-action class, `.docs-action`, "
+    + 'whose rule carries the floor.',
   'docs/DocsHead.tsx <a> docs-action': 'TOKEN. View on GitHub and Open committed version, standalone links in the header.',
   'docs/DocsIndexView.tsx <button> docs-row': 'TOKEN. A project row of the Docs index, one button per row (spec 4.4).',
   'docs/DocsTreeView.tsx <button> docs-row': 'TOKEN. A section or entry row of a Docs directory, the same rule.',

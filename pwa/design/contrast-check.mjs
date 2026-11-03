@@ -45,6 +45,9 @@ const { DARK, LIGHT, byName } = report.themes;
 const ALL_PALETTES = [['DARK ', DARK], ...Object.entries(byName)
   .map(([n, t]) => [n.toUpperCase(), t])];
 
+/** The nine distinct `--syn-*` hues of the code palette, one pair each on the well. */
+const SYN_HUES = ['comment', 'keyword', 'string', 'number', 'function', 'type', 'tag', 'attr', 'punct'];
+
 /** A token pair is named by its tokens.css custom property; the hex is looked
  *  up per theme, so there is no second copy of the palette to keep in sync. */
 const palette = (theme) => {
@@ -74,6 +77,12 @@ const palette = (theme) => {
     track: of('--limit-track'), lOk: of('--limit-ok'), lWarn: of('--limit-warn'), lCrit: of('--limit-critical'),
     diffAdd: of('--diff-add'), diffDel: of('--diff-del'),
     accentOnWell: of('--accent-on-well'),
+    // The code palette's nine distinct hues (T4a, D-6387): `--syn-deleted` and
+    // `--syn-inserted` alias --diff-del / --diff-add, which are paired above.
+    // Declared once in :root and spread under every [data-theme] block by
+    // loadThemes, except --syn-comment, which a palette may retune; `of`
+    // resolves each per palette, so no hex is typed here.
+    syn: Object.fromEntries(SYN_HUES.map((h) => [h, of(`--syn-${h}`)])),
     // --pr-merged (tokens.css) aliases --acct-violet, so it resolves to that
     // same hex per theme rather than being a second colour to keep in sync.
     prMerged: of('--pr-merged'),
@@ -274,19 +283,35 @@ const pairs = (T, name) => [
   [`${name} limit ok / track (UI 3:1)`, T.lOk, T.track, 3],
   [`${name} limit warn / track (UI 3:1)`, T.lWarn, T.track, 3],
   [`${name} limit crit / track (UI 3:1)`, T.lCrit, T.track, 3],
-  // THE FOURTH BAND IS DELIBERATELY ABSENT FROM THIS CONTRACT. `off` measures
-  // 1.02-1.10 against the track in all twelve palettes — it is not a quiet
-  // fill, it is an invisible one. That is a PRESERVED defect, not an accepted
-  // floor: stating it here as a pair would red the gate for a pixel this
-  // branch is not allowed to change. It is pinned instead by
-  // `pwa/test/limit-off-band.test.ts`, which measures the same numbers and
-  // reds if they move in either direction.
+  // THE FOURTH BAND IS ABSENT FROM THIS CONTRACT, BY DESIGN. `off` paints
+  // `bg-ink-tertiary` (meter.tsx, D-5494), which measures 3.99-5.04 on the
+  // track and is gated as text on the card grounds above; it is not a
+  // fill-on-track pair here, and `pwa/test/limit-off-band.test.ts` pins the
+  // numbers in both directions.
+  // THE EMPTY METER'S OUTLINE (T2c, D-6329). `Meter`'s track carries a 1px
+  // inset ring in --ink-tertiary: over the twelve palettes and both card
+  // grounds the track itself (--limit-track) measures 1.07-1.56, --edge-subtle
+  // 1.12-1.71 and --edge-strong 1.43-2.15, so no edge token clears 3:1
+  // everywhere and a 0% meter could be a blank. The ring is a non-text mark
+  // (3:1) on the desk card's ground (--bg-raised) and the phone card's
+  // (--bg-surface).
+  [`${name} meter track outline / raised (UI 3:1)`, T.inkT, T.raised, 3],
+  [`${name} meter track outline / surface (UI 3:1)`, T.inkT, T.surface, 3],
   // The ask sheet's two accent-on-quiet-ground texts. Both are 11px
   // (--fs-2xs), so both are body text at 4.5 — not the 3:1 UI threshold.
   [`${name} ask header chip / accent-tint`, T.accent, T.accentTint, 4.5],
   [`${name} preview toggle / sheet`, T.accent, T.sheet, 4.5],
   [`${name} diff-add / well`, T.diffAdd, T.well, 4.5],
   [`${name} diff-del / well`, T.diffDel, T.well, 4.5],
+  // THE CODE PALETTE ON THE WELL (T4a, D-6387). Colour lives in the dark
+  // wells (spec §3.1): a code block, a tool box, an ANSI span and the terminal
+  // all paint a --syn-* hue on --bg-well, and the well is dark in EVERY
+  // palette. The rules that paint these hues were in the uncovered census with
+  // nothing measuring them, so a retuned hue, or a palette that overrode one,
+  // shipped unmeasured: a well hue nothing measures is a blind spot. Each hue is gated here at the
+  // 4.5 body floor (the code is 13px mono text), per palette, whichever rules
+  // use it.
+  ...SYN_HUES.map((h) => [`${name} syn-${h} / well`, T.syn[h], T.well, 4.5]),
   // The code block's COPY / COPIED label. --accent flips with the theme and the
   // light one is tuned for paper, so on a well — which is dark in BOTH themes —
   // it read 3.03:1 and shipped that way. --accent-on-well is the well spelling

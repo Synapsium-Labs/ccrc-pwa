@@ -14,22 +14,30 @@ export interface LifecycleClass {
 }
 
 export const LIFECYCLE: readonly LifecycleClass[] = [
-  { name: 'workspace-graph-store', root: '<workdir>/graphify-out/', pattern: 'W',
-    creators: ['ccd-graph-sweep'],
-    collector: 'git worktree remove via cmd_ws_rm / reap tail / ws-gc orphan arm (ccd:4225-4232, :9298, :9989)',
-    bound: 'workspace lifetime', tier: '~11 MB/tree measured (ccrc, 763 files)', ruling: null },
-  { name: 'project-graph-store', root: '<projects-root>/<repo>/graphify-out/', pattern: 'O',
-    creators: ['ccd-graph-sweep'], collector: null, bound: 'repo lifetime',
-    tier: '~11 MB/repo, AST-only, backups disabled',
-    ruling: '~11 MB per repo, AST-only, backups disabled, regenerable at any time; persists for the repo\'s lifetime; reclaim manually (rm -rf <repo>/graphify-out) if ever needed.' },
-  { name: 'graph-corpus-filter', root: '<tree>/.graphifyignore', pattern: 'E',
-    creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep (trap EXIT INT TERM + stray sweep)',
-    bound: 'one build', tier: '<1 KB', ruling: null },
-  { name: 'graph-build-lock', root: '<tree>/graphify-out/.rebuild.lock', pattern: 'E',
-    creators: ['graphify'], collector: 'graphify', bound: 'one build', tier: 'negligible', ruling: null },
+  // Graph revision 2 (D-7354; spec 2026-10-28 §10): one graph per repository in the store (`CCRC_GRAPH_STORE`, default
+  // ~/.ccrc/graphs, marked by `.ccrc-graph-store`), and one ignored link per tree. These six rows replace the per-tree
+  // classes (`workspace-graph-store`, `project-graph-store`, `graph-corpus-filter`, `graph-build-lock`), whose paths
+  // nothing writes any more. No class is permanent, so none carries a ruling. `ccrc uninstall` removes a marked store.
+  { name: 'graph-repo-build', root: '<store>/<repo-key>/builds/', pattern: 'E',
+    creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep (pass end: beyond CCRC_GRAPH_KEEP_BUILDS and older than CCRC_GRAPH_BUILD_GRACE_SECS)',
+    bound: 'CCRC_GRAPH_KEEP_BUILDS published builds per repository', tier: 'one AST graph per build', ruling: null },
+  // The checkout sits under <key>/checkout/, never <key>/<name>, so a repository named builds, memory or staging
+  // cannot collide with its siblings (D-7664; ccd-graph-sweep writes this layout).
+  { name: 'graph-repo-checkout', root: '<store>/<repo-key>/checkout/<repo-name>/', pattern: 'O',
+    creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep, when the repository is gone or excluded (after CCRC_GRAPH_BUILD_GRACE_SECS)',
+    bound: 'one per repository', tier: 'one checkout of the main line per repository', ruling: null },
+  { name: 'graph-repo-memory', root: '<store>/<repo-key>/memory/', pattern: 'O',
+    creators: ['graphify save-result'], collector: 'ccd-graph-sweep, with its repository',
+    bound: 'repository lifetime', tier: 'saved query results; small', ruling: null },
+  { name: 'graph-staging', root: '<store>/<repo-key>/staging/', pattern: 'E',
+    creators: ['ccd-graph-sweep'], collector: 'the build\'s trap, and ccd-graph-sweep at the next pass after a crash',
+    bound: 'one build', tier: 'one build in progress', ruling: null },
+  { name: 'graph-tree-link', root: '<tree>/graphify-out (a symlink to <store>/<repo-key>/current)', pattern: 'W',
+    creators: ['ccd-graph-sweep'], collector: 'the worktree\'s own collectors (git worktree remove, ws-rm, reap, ws-gc; the link is ignored)',
+    bound: 'tree lifetime', tier: 'one symlink', ruling: null },
   { name: 'graph-sweep-census', root: '~/.ccrc/graph-sweep.json', pattern: 'R',
     creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep (last 10 passes kept)',
-    bound: 'rolling', tier: 'bounded by pass count', ruling: null },
+    bound: 'rolling', tier: 'bounded by pass count; one row per repository a pass', ruling: null },
   // Policy row #9: "a root we declare to agents in their own system prompt and
   // then never collect". Session-bound (S), collected by age PLUS the absence of
   // a live owner — the live-session, open-fd and newest-mtime checks the
@@ -82,6 +90,15 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     collector: 'ws-reclaim on the run\'s close and by the sweep; its stale arm at 7 idle days (behind its live switch in shared/switches.ts); ws-expire once archived',
     bound: 'the run\'s close, or 7 idle days when kept, or 7 days after an archive; never while it coordinated',
     tier: 'a worktree plus its pinned attic refs; the work is kept under refs/ccrc/attic/<id>/ before the tree goes', ruling: null },
+  // D-7278 (the operator's A1 ruling of 2026-10-28, extended to coordinators; design note 2026-10-28 §4): the one class
+  // inside a workspace that has a collector of its own. Policy row 2 gave `node_modules` its workspace's lifetime, and a
+  // finished worker's or a coordinator's workspace outlives its use; while the session sleeps past the age, the deps-shed
+  // arm removes the git-ignored, untracked directories git lists, and keeps every git fact.
+  { name: 'workspace-dependency-dirs', root: '<workdir>/**/node_modules (git-ignored and untracked; CCD_DEPS_SHED_NAMES may only narrow the names)', pattern: 'W',
+    creators: ['package managers (npm ci, npm install), at agent runtime'],
+    collector: 'ws-shed-deps, composed by the server\'s deps-shed arm of the run-done row (shadow unless its live switch in shared/switches.ts stands), re-proved on the box; otherwise the workspace\'s own collectors',
+    bound: 'the workspace\'s lifetime; in a sleeping worker\'s or coordinator\'s worktree, CCRC_DEPS_SHED_AFTER_HOURS after its work finished (and CCD_DEPS_SHED_MIN_ASLEEP_S asleep), once a sleep',
+    tier: 'about 1.1 GB per worktree of this repository, most of it node_modules (measured 2026-10-28)', ruling: null },
   // Session-continuity wave 4: the pane-scope sweep's verdict record. Rolling (R):
   // rewritten whole by rename every tick, so it holds only the scopes dead NOW;
   // it lives in the runtime dir, so a reboot empties it — the safe direction for
@@ -175,4 +192,23 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd ws-archive'],
     collector: 'ccd ws-expire, asked by the server\'s expiry lane (children included, a child only under its own capability and marker)',
     bound: '7 days after the archive', tier: 'one worktree per archived row', ruling: null },
+  // Test box TB11 (D-7413; spec 2026-10-28 §2.5, §2.10, §4): the fleet host's test box files. The token and the push key
+  // are the operator's (placed when the box is installed, Part B); the durations file and its rows are the daily
+  // timer's and the operator's; the runs log is the wrapper's alone (D-7445), its one writer and its collector.
+  { name: 'testbox-token', root: '~/.ccrc/testbox.token (CCRC_TESTBOX_TOKEN_FILE)', pattern: 'O',
+    creators: ['the operator, when the test box is installed'], collector: null,
+    bound: 'the test box\'s lifetime', tier: 'one token line',
+    ruling: 'operator-placed secret the fleet agent\'s testbox op reads; nothing in the tree writes or removes it; removed by hand when the test box is retired.' },
+  { name: 'testbox-push-key', root: '~/.ccrc/testbox-push.key (CCRC_TESTBOX_GIT_KEY)', pattern: 'O',
+    creators: ['the operator, when the test box is installed'], collector: null,
+    bound: 'the test box\'s lifetime', tier: 'one ssh private key',
+    ruling: 'operator-placed key the wrapper pushes run snapshots with; nothing in the tree writes or removes it; removed by hand when the test box is retired.' },
+  { name: 'testbox-times', root: '~/.ccrc/testbox-times.json (CCRC_TESTBOX_TIMES), its rows in testbox-times.sources beside it, and the writer\'s temp <file>.tmp.<pid> while one is written', pattern: 'R',
+    creators: ['ccd-testbox-times (the daily timer)', 'the operator (the .sources rows)'],
+    collector: 'ccd-testbox-times (replaced whole by a rename each day; a failed pass keeps the previous file and removes its temp)',
+    bound: 'one file: the newest trusted testtimes artifact per row', tier: 'about 70 KB per repository row', ruling: null },
+  { name: 'testbox-runs-log', root: '$REG/testbox-runs/<UTC date>.log', pattern: 'R',
+    creators: ['ccd/ccrc-test (the wrapper, the runs log\'s one writer, D-7445)'],
+    collector: 'ccd/ccrc-test (the append that creates today\'s file removes the day files older than two days, by name)',
+    bound: 'two day files (today\'s and yesterday\'s), the 24 hours the card counts', tier: 'at most 128 B per test run', ruling: null },
 ];

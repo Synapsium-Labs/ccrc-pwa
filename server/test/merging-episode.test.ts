@@ -12,6 +12,7 @@ import { CoordStore } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { okRun } from './coordReadHelpers.js';
 import { CHECKS_MAIL_TOKEN, readMergingAtDetail } from '../../shared/landing.js';
 
 const TOKEN = 'f'.repeat(64);
@@ -230,5 +231,52 @@ describe('handoffCommit keeps its one writer', () => {
     const writers = files(src).filter((f) => /UPDATE\s+runs\s+SET[^`'"]*handoffCommit\s*=/.test(readFileSync(f, 'utf8')))
       .map((f) => path.relative(src, f));
     expect(writers).toEqual(['coord/store.ts']);
+  });
+});
+
+describe('the landing entry (landing order wave 5e)', () => {
+  const eject = (s: Awaited<ReturnType<typeof scenario>>) => s.app.inject({ method: 'POST', url: `/api/runs/${s.id}/advance`,
+    headers: { 'x-ccrc-mail-token': TOKEN },
+    payload: { to: 'working', fingerprint: { branchTip: TIP, prNumber: 7, prPhase: 'open', handoffCommit: TIP },
+      ejection: { base: OTHER_TIP, kind: 'dequeued' } } });
+
+  it('the advance to merging pins one entry at the verified head', async () => {
+    const s = await scenario({ markers: LIVE }); app = s.app;
+    expect((await s.toMerging()).statusCode).toBe(200);
+    expect(s.coord.landingEntries(PROJECT)).toEqual([expect.objectContaining({
+      pr: 7, pinnedSha: TIP, handoffCommit: TIP, state: 'pinned', runId: s.id, ejections: 0 })]);
+    expect(readMergingAtDetail(mergingRows(s.details())[0]!.detail!)!.head).toBe(TIP);
+  });
+
+  it('a refused re-measurement pins nothing', async () => {
+    const s = await scenario({ markers: LIVE }); app = s.app;
+    expect((await s.post('awaiting-review')).statusCode).toBe(200);
+    expect((await s.post('merging', OTHER_TIP)).statusCode).toBe(409);
+    expect(s.coord.landingEntries(PROJECT)).toEqual([]);
+  });
+
+  it('merging → working with an ejection ejects the entry', async () => {
+    const s = await scenario({ markers: LIVE }); app = s.app;
+    await s.toMerging();
+    expect((await eject(s)).statusCode).toBe(200);
+    expect(s.coord.landingEntries(PROJECT)).toEqual([expect.objectContaining({
+      state: 'ejected', baseSha: OTHER_TIP, ejectionKind: 'dequeued', ejections: 1 })]);
+  });
+
+  it('an ejection from awaiting-review answers 409 and moves nothing', async () => {
+    const s = await scenario({ markers: LIVE }); app = s.app;
+    expect((await s.post('awaiting-review')).statusCode).toBe(200);
+    const res = await eject(s);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, reject: { code: 'ejection-not-merging', from: 'awaiting-review' } });
+    expect(okRun(s.coord.run(s.id))!.state).toBe('awaiting-review');
+  });
+
+  it('the advance answers what the line recorded (D-7627)', async () => {
+    const s = await scenario({ markers: LIVE }); app = s.app;
+    expect((await s.toMerging()).json().landing).toMatchObject({ kind: 'pinned', created: true,
+      entry: { pr: 7, pinnedSha: TIP, state: 'pinned' } });
+    expect((await eject(s)).json().landing).toMatchObject({ kind: 'ejected',
+      entry: { state: 'ejected', baseSha: OTHER_TIP, ejectionKind: 'dequeued', ejections: 1 } });
   });
 });

@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# checkout — the run's checkout, in the prepare phase, as the run user (D-7405; spec §2.1 "The run's checkout").
+#
+#   checkout --mirror <bare mirror> --run-id <32 hex> --fetch-url <url> --dest <dir> [--branch <name>]
+#
+# Reproduces the session's git state from the run's scratch refs: HEAD on the session's branch (or detached when no
+# --branch is given), origin/main at the session's base (absent when the session had none), and, when the run carries
+# a snapshot, the session's staged, unstaged and untracked changes as uncommitted changes, never as commits.
+#
+#   1. git init <dest>; objects/info/alternates names the mirror's object directory; origin's URL is the row's fetch
+#      URL, never fetched from (git clone --shared --no-checkout without the mirror's own refs);
+#   2. git fetch <mirror> 'refs/ccrc-test/<run-id>/*:refs/ccrc-test/run/*' (the objects are shared: no data moves);
+#   3. git checkout --force -B <branch> refs/ccrc-test/run/head, or --detach;
+#   4. git update-ref refs/remotes/origin/main refs/ccrc-test/run/base, unless the session had no base;
+#   5. with a snapshot: git read-tree -m -u HEAD <S_W tree> lays W into the working tree, git read-tree <S_I tree>
+#      puts the index back to I, then git update-index -q --refresh.
+#
+# Every git call runs with GIT_CONFIG_NOSYSTEM=1, -c core.hooksPath=/dev/null and the five git location variables
+# scrubbed; the fetch that reads the mirror runs its upload-pack as `git -c safe.directory=<mirror> upload-pack` (the
+# mirror is the service's, and git does not hand the fetch's own -c settings to a local upload-pack). A
+# failed step prints one `test box: prepare failed (git <step>: <detail>)` line (shared/testbox.ts TESTBOX_FALLBACK)
+# and exits 3; a usage error exits 2.
+set -uo pipefail
+export GIT_CONFIG_NOSYSTEM=1
+
+usage() { printf 'usage: checkout --mirror <dir> --run-id <32 hex> --fetch-url <url> --dest <dir> [--branch <name>]\n' >&2; exit 2; }
+line() { local s=$1; s=${s//[[:cntrl:]]/?}; printf '%s' "$s"; }
+fail() {
+  local l=''
+  [[ -s $ERR ]] && IFS= read -r l < "$ERR"
+  printf 'test box: prepare failed (git %s: %s)\n' "$1" "$(line "${l:-${2:-no detail}}")"
+  exit 3
+}
+g() {
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+    git -c core.hooksPath=/dev/null "$@" 2> "$ERR"
+}
+
+mirror='' runid='' url='' dest='' branch='' have_branch=0
+while (($#)); do
+  case $1 in
+    --mirror) (($# >= 2)) || usage; mirror=$2; shift 2 ;;
+    --run-id) (($# >= 2)) || usage; runid=$2; shift 2 ;;
+    --fetch-url) (($# >= 2)) || usage; url=$2; shift 2 ;;
+    --dest) (($# >= 2)) || usage; dest=$2; shift 2 ;;
+    --branch) (($# >= 2)) || usage; branch=$2; have_branch=1; shift 2 ;;
+    *) usage ;;
+  esac
+done
+[[ $mirror == /* && -n $url && $dest == /* ]] || usage
+[[ $runid =~ ^[0-9a-f]{32}$ ]] || usage
+((have_branch)) && [[ -z $branch ]] && usage
+
+ERR=$(mktemp "${TMPDIR:-/tmp}/checkout-err.XXXXXX") || { printf 'test box: prepare failed (git init: no temporary file)\n'; exit 3; }
+trap 'rm -f "$ERR"' EXIT
+
+# 1. init, alternates, origin's URL.
+[[ ! -e $dest ]] || { : > "$ERR"; fail init "$dest already exists"; }
+g init -q -- "$dest" || fail init
+printf '%s\n' "$mirror/objects" > "$dest/.git/objects/info/alternates" 2> "$ERR" || fail init
+cd "$dest" || fail init
+g remote add origin "$url" || fail init
+
+# 2. the run's refs, and nothing else of the mirror's. The mirror is the service's, so its upload-pack needs the
+#    safe.directory exception; git drops the fetch's own -c settings from the local upload-pack's environment, so the
+#    exception goes on upload-pack's command line (a shell word, the mirror single-quoted).
+q=${mirror//\'/\'\\\'\'}
+g fetch -q --no-tags --no-write-fetch-head --upload-pack="git -c safe.directory='$q' upload-pack" "$mirror" \
+  "refs/ccrc-test/$runid/*:refs/ccrc-test/run/*" || fail fetch
+g rev-parse --verify --quiet 'refs/ccrc-test/run/head^{commit}' > /dev/null || { : > "$ERR"; fail fetch "the run has no head ref"; }
+
+# 3. the session's branch, or detached.
+if ((have_branch)); then
+  g check-ref-format --branch "$branch" > /dev/null || fail checkout
+  g checkout -q --force -B "$branch" refs/ccrc-test/run/head || fail checkout
+else
+  g checkout -q --force --detach refs/ccrc-test/run/head || fail checkout
+fi
+
+# 4. origin/main, when the session had a base.
+if g rev-parse --verify --quiet 'refs/ccrc-test/run/base^{commit}' > /dev/null; then
+  g update-ref refs/remotes/origin/main refs/ccrc-test/run/base || fail update-ref
+fi
+
+# 5. the dirty state, as uncommitted changes.
+if g rev-parse --verify --quiet 'refs/ccrc-test/run/snap^{commit}' > /dev/null; then
+  g read-tree -m -u HEAD 'refs/ccrc-test/run/snap^{tree}' || fail read-tree
+  g read-tree 'refs/ccrc-test/run/snap^1^{tree}' || fail read-tree
+  g update-index -q --refresh > /dev/null || true
+fi
+exit 0

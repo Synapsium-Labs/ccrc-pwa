@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, WS_ADD } from './ccdWsHelpers.js';
+import { WS_ADD, ccdSource } from './ccdWsHelpers.js';
 import { makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
 
 let h: PrHarness;
@@ -23,7 +23,7 @@ afterEach(() => { h.cleanup(); });
  *  hardcoded, for `ccd-pr-state.test.ts`'s reason: these assertions are about
  *  WHICH timeout wraps WHICH call. */
 const ccdSeconds = (name: string): number => {
-  const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(readFileSync(CCD, 'utf8'));
+  const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(ccdSource());
   if (!m) throw new Error(`ccd no longer defines ${name} as a bare integer assignment`);
   return Number(m[1]);
 };
@@ -149,7 +149,7 @@ describe('the five answers', () => {
 
   // Wave 3d: a removal whose reason is `merged` is the queue's own landing (below). Any other reason, or none, on a
   // MERGED PR is a removal the PR outlived: it was merged by hand after it.
-  it.each([['absent'], ['manual'], ['failed_checks'], ['merge_conflict'], [null], ['some_new_reason'], ['MERGED']])(
+  it.each([['absent'], ['manual'], ['failed_checks'], ['merge_conflict'], [null], ['some_new_reason'], ['MERGED'], [7], [['merged']]])(
     'none — a MERGED PR whose last queue act is a removal for any reason but merged (reason %j)', (why) => {
       const tip = workspaceWithCommit('demo', 'quiet-basin');
       h.ghRows([mergedRow({ headRefOid: tip })]);
@@ -182,6 +182,35 @@ describe('the five answers', () => {
     expect(sweep('return 1').queue).toBe('unmeasured');
   });
 
+  it('none — a PR a merge train landed and closed: phase merged, in neither window, never unmeasured', () => {
+    // The train closed the member, so it is in neither the OPEN nor the MERGED
+    // window; its line already says `merged` from ccd's `landedInTrain`, and a
+    // closed PR is in no queue — the same answer a plain CLOSED one gets.
+    const tip = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([openRow({ state: 'CLOSED', headRefOid: tip, closedAt: '2026-07-21T09:00:00Z',
+      labels: [{ name: 'landed-in-train' }] })]);
+    setQueue(answer([node(7, 'OPEN', true, 'AddedToMergeQueueEvent')]));
+    // The sweep reads only proofs already kept (D-7362): with none kept the
+    // record was not read, so the phase is unmeasured (`train-unread`,
+    // D-7378) and so is the queue word — never `none` off a guess.
+    const unread = sweep();
+    expect([unread.phase, unread.reason, unread.queue]).toEqual(['unknown', 'train-unread', 'unmeasured']);
+    // The proof a `--session` read, an audit or `pr-train-prove` kept, keyed by base.
+    fs.appendFileSync(path.join(h.home, '.cc-sessions', '.train-proofs'), `o/r main 42 ${tip} 50 ${'e'.repeat(40)}\n`);
+    const o = sweep();
+    expect(o.phase).toBe('merged');
+    expect(o.queue).toBe('none');
+    expect('queueAt' in o).toBe(false);
+    expect(sweep('return 1').queue).toBe('unmeasured');
+  });
+
+  it('unmeasured — a MERGED PR outside both windows is still unmeasured (only the train-landed close reads none)', () => {
+    const tip = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip })]);
+    setQueue(answer([node(7, 'OPEN', true, 'AddedToMergeQueueEvent')]));
+    expect(sweep().queue).toBe('unmeasured');
+  });
+
   it('unmeasured — the bound PR is outside both windows', () => {
     const tip = workspaceWithCommit('demo', 'quiet-basin');
     h.ghRows([openRow({ headRefOid: tip })]);
@@ -199,8 +228,8 @@ describe('the five answers', () => {
   });
 });
 
-// Landing-order wave 3d. GitHub records a removal with reason `merged` at every successful queue merge, at or one
-// second before the PR reads MERGED (16 of 16 queue merges, measured 2026-10-21). That removal is the landing, never
+// Landing-order wave 3d. GitHub records a removal with reason `merged` at every successful queue merge, within a second
+// of the merge, either side (22 of 22 queue merges, measured 2026-10-21, D-6216). That removal is the landing, never
 // a dequeue. The reason only chooses the word: it never reaches the line.
 describe('the removal\'s reason (landing-order wave 3d)', () => {
   const T = '2026-10-21T07:24:15Z';

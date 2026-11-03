@@ -14,6 +14,7 @@ import {
   type DocsRefreshFetch, type DocsRefSpec, type DocsTreeOk, type DocsTreeResponse,
 } from '../../../shared/docs';
 import { onAuthRegained } from '../lib/auth';
+import { onPageVisible } from '../lib/pageClock';
 import {
   docsRetryPlan, type DocsClientSlot, type DocsFileAnswer, type DocsLoaders, type DocsNotOk,
   type DocsRefreshLoaderAnswer, type DocsTreeAnswer,
@@ -197,7 +198,9 @@ function autoRetryId(scope: string, key: string, word: string): string {
   return [scope, key, word].join(NUL);
 }
 
-function samePin(a: DocPin, b: DocPin): boolean {
+/** Whether two pins name the same bytes: every field equal; a committed pin never equals a draft pin. Share compares a
+ *  leaf's opened pin with `pinFor`'s answer through it (spec 4.16). */
+export function samePin(a: DocPin, b: DocPin): boolean {
   if (a.kind === 'committed' && b.kind === 'committed') {
     return a.commit === b.commit && a.servedRef === b.servedRef && a.section === b.section && a.path === b.path;
   }
@@ -237,7 +240,8 @@ function fragmentKeyOfHref(href: string): string | null {
   return parsed.ok ? fragmentKey(parsed.loc) : null;
 }
 
-function pinCommit(pin: DocPin): string {
+/** The commit a pin reads at: a committed pin's commit, a draft pin's holder HEAD. */
+export function pinCommit(pin: DocPin): string {
   return pin.kind === 'committed' ? pin.commit : pin.head;
 }
 
@@ -560,11 +564,11 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       // A GET, never a POST (spec 4.3, M4.A3).
       if (slot?.s === 'ok' && Date.now() - slot.receivedAt > DOCS_STALE_MS) listTree(target);
     };
-    document.addEventListener('visibilitychange', onVisibility);
+    const stopVisible = onPageVisible(onVisibility);
     return () => {
       st.alive = false;
       unsubscribe();
-      document.removeEventListener('visibilitychange', onVisibility);
+      stopVisible();
       for (const t of st.timers) clearTimeout(t);
       st.timers.clear();
       for (const [c, fKey] of st.aborts) {

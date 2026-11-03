@@ -19,7 +19,7 @@
 // server.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { READER_MIN_COLS } from '../../shared/api.js';
 
 let h: CcdHarness;
@@ -385,7 +385,7 @@ interface Site { fn: string; line: number; text: string }
  *  HERE defines — `PaneHistoryReply`'s docstring in `shared/api.ts` argues that
  *  rule at length). A scan's own docstring should not add two more. */
 function sites(): Site[] {
-  const lines = readFileSync(CCD, 'utf8').split('\n');
+  const lines = ccdSource().split('\n');
   const out: Site[] = [];
   let fn = '';
   lines.forEach((raw, i) => {
@@ -405,7 +405,7 @@ function sites(): Site[] {
  *  into a LATER function's guard and credit it to this one (fix round 1
  *  finding 4). */
 function bodyBefore(fn: string, line: number): string[] {
-  const lines = readFileSync(CCD, 'utf8').split('\n');
+  const lines = ccdSource().split('\n');
   const start = lines.findIndex((l) => new RegExp(`^${fn}\\(\\)\\s*\\{`).test(l));
   expect(start, `ccd/ccd no longer defines ${fn}() at column 0 — re-anchor this scan`)
     .toBeGreaterThanOrEqual(0);
@@ -449,7 +449,7 @@ describe('every phrase-matching reader stands down first (mutation tripwire)', (
   });
 
   it('_pane_measurable is defined exactly once, and reads the width it claims to', () => {
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src.split('\n').filter((l) => /^_pane_measurable\(\)\s*\{/.test(l)))
       .toHaveLength(1);
     const body = src.slice(src.indexOf('_pane_measurable() {'));
@@ -486,7 +486,7 @@ describe('the phrase literals themselves are NOT changed (F11)', () => {
     // `sites()` still carries it verbatim; that job belongs to `sites()`'s
     // own `PHRASES.some((p) => raw.includes(p))` filter (fix round 1
     // finding 5: the title here now says only what this checks).
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).toContain('grep -qiE "continuing automatically|continuing shortly"');
     expect(src).toContain('grep -q "esc to interrupt"');
     expect(src).toContain('grep -q "Enter to confirm"');

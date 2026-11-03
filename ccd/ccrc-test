@@ -1,0 +1,886 @@
+#!/usr/bin/env bash
+# ccrc-test — `ccrc test`: run one test or typecheck command inside the fleet's
+# test slice, behind the fleet-wide admission queue (D-7298).
+#
+#   ccrc test [--local|--remote] [--heavy|--light] [--] <command> [<arg>...]   # --light only confirms a light reading
+#   ccrc test --classify [--] <command> [<arg>...]   # prints heavy or light
+#   ccrc test --classify-shell [--] '<command line>'  # heavy, wrapped (a systemd-run of one's own around a test) or light
+#   ccrc test --status                               # the slice and the queue, one line
+#
+# WHY. On a fleet box about twenty sessions each ran vitest, tests-inclusive
+# tsc, browser tests and mutation loops in their own pane scopes, beside the
+# sessions themselves. The box's load passed the agent's ability to answer, so
+# the server read the fleet box as unreachable, and the tests' fsyncs raised the
+# io-pressure banner. This wrapper moves every test run out of the session's
+# pane scope into one slice of its own, `ccrctests.slice`
+# (deploy/systemd/ccrctests.slice), whose hard memory cap, bounded swap, low
+# CPU and IO weight and CPU quota hold the runs below the sessions: a session
+# always wins the CPU, and a run past the memory cap is killed inside the slice
+# without pushing the session slice into reclaim.
+#
+# THE SLICE. The command runs as `systemd-run --user --scope
+# --slice=ccrctests.slice -- <command>`. A scope runs the command in this
+# process's place, with this process's environment, working directory and
+# terminal, so the run sees the session environment exactly as a bare run
+# would. Before each run the slice's five limits are applied from the box's
+# settings (`_test_knobs` in ccd/ccrc, read by ccrc's one reader `_ccrc_knob`
+# from ~/.ccrc/ccrc.env, else the default: the slice and the queue are the
+# box's, so a caller's environment never sets them) with `systemctl
+# --user set-property --runtime`, so a changed setting holds from the next
+# run, and a reboot falls back to the unit file's own values, which are the
+# same defaults. A slice the user manager has not loaded is never asked for:
+# `systemd-run --slice=` of an unknown slice makes a transient one with no
+# limits at all. DEGRADE, NEVER REFUSE: the session hook sends every bare heavy
+# run and every systemd-run of one's own here, so a refusal would leave a
+# session no way to run a test. Where the slice cannot be used (not loaded, no
+# systemctl or systemd-run) the command runs uncontained, says so in one WARN
+# line, and still takes its turn in the queue; where only the box's limits
+# cannot be applied it runs in the slice under the unit file's own limits, and
+# says that. macOS has no user manager and no cgroups; there the command runs
+# as it is, says so, and still takes its turn in the queue.
+#
+# THE QUEUE. A HEAVY run (`_heavy` below: tsc and typecheck, a full or wide
+# vitest or jest run, browser tests, mutation tests, `npm test`) takes one of
+# CCRC_TEST_HEAVY_SLOTS slots before it starts. A slot is a lock file in the
+# registry, `~/.cc-sessions/test-slots/slot-<n>`, held with `flock` for the
+# whole run; `slot-<n>.who` says who holds it. THE SLOT IS THE RUN'S, not this
+# wrapper's: in the slice the command inherits the lock's descriptor, so the
+# lock lives as long as any process of the run, and a wrapper killed by SIGKILL
+# (a tool timeout that kills only the parent) leaves its run still counted,
+# never a second heavy run beside it under the same slot. A waiter that finds a
+# slot held by a gone wrapper stops that orphaned run's scope, which nobody
+# watches, and the kernel then drops the lock. When the command ends, its scope
+# is stopped too, so a process it left behind (a leaked vitest worker) ends with
+# the run instead of staying charged to the slice. Uncontained (macOS) there is
+# no scope to bound the run's tree, so there the command runs with the
+# descriptor closed and the slot follows the wrapper. A signal to a queued run
+# leaves the queue and exits 128+signal: the command never starts. A
+# run that finds every slot held prints once that it is queued, and who holds
+# the slots, then waits; `wait-<pid>` (locked the same way) is what
+# `--status` counts as waiting. With CCRC_TEST_PRESSURE_MAX above 0, a heavy
+# run also waits, before it takes a slot, while the box's memory or CPU
+# pressure (PSI `some avg10`) is above it. A LIGHT run (one or a few named test
+# files) takes no slot and runs in the slice at once. `--heavy` makes any run
+# heavy; `--light` only confirms a light reading: on a command the classifier
+# reads as heavy it is ignored, with a one-line note, and the run queues.
+#
+# ALREADY INSIDE. A run inside a run is already contained, so it runs as it
+# is: a nested heavy run never waits on its own parent's slot. That is read
+# from the process itself, never from the environment (`_tinside`): its
+# /proc/self/cgroup is under ccrctests.slice, or, uncontained (macOS, a slice
+# not loaded), the holder of a held slot is one of its ancestors. No variable
+# is set for the run, so none can be copied into a session to skip the queue.
+#
+# SCOPE: GOOD FAITH (D-7298). The sessions are cooperative, not adversaries.
+# This wrapper and the hook's reading of it (`--classify-shell`) catch the
+# accidental spellings a well-behaved session writes; the backstop is the
+# cgroup caps already on the box (the session slice's CPUQuota and memory
+# caps). Deliberately obfuscated spellings are accepted, out of scope, and are
+# not chased: a systemd-run inside a command substitution, prlimit, unshare or
+# cgexec prefixes, find -exec, a python os.system, an npm script that wraps
+# the suite.
+#
+# THE TEST BOX (D-7410; test box spec §2.4, §2.5). With the switch marker in
+# the registry and CCRC_TESTBOX_URL set (the fleet host's test box settings,
+# read through ccrc's one reader by ccd/testbox-knobs), a run goes to the test
+# box: the client (agent/dist/agent/src/testbox/client.js, run with the fleet
+# host's node) checks spec §2.4's rows in shared/testbox.ts TESTBOX_FALLBACK's
+# order, pushes the snapshot (ccd/testbox-snap), submits the command and
+# streams its output back; the summary's last line is `ran on: test box`. A
+# row that fails prints `test box: <reason>` first and runs TODAY'S LOCAL PATH
+# UNCHANGED (the slice and the queue below), whose last line is then `ran on:
+# local (fallback: <reason>)`; a fallback in a package with no node_modules
+# first runs `npm ci` there through this wrapper (the slice and the queue), or,
+# with CCRC_TESTBOX_FALLBACK_INSTALL=refuse, refuses. `--local` forces the local
+# path and reads nothing of the test box; `--remote` asks for the box alone:
+# over the budget it refuses (EXIT), and every other row falls back as for a
+# bare run. The package is the first path segment of the cwd under the
+# repository root (D-7417). With the marker absent and no `--remote`, or with
+# CCRC_TESTBOX_URL unset, nothing of the test box runs, is read or is written:
+# the switch off is today, byte for byte (server/test/testbox-pins.test.ts).
+#
+# THE RUNS LOG (D-7445). When CCRC_TESTBOX_URL is set and the marker is present
+# or `--remote` was given, this wrapper, its one writer, appends exactly one
+# shared/testbox.ts RUNS_LOG_LINE to $REG/testbox-runs/<UTC date>.log as its
+# last act before it exits: `remote` with `-`, `fallback` with the row's id and
+# the local run's exit, or `refused` with the row's id. One printf builtin to a
+# file opened for append, so a line is never interleaved and the append forks
+# nothing; the directory is made 0700 on first use, and when the append made
+# today's file, the day files before yesterday are removed by name.
+#
+# EXIT. The command's own exit code, wherever it ran: the box's run's, and on
+# every fallback the local run's, so a counted exit reads a fallback as the run
+# it was. This wrapper refuses only a usage error, exit 2 (ccrc's house
+# convention), and a ccd/ccrc it cannot load beside it, exit 1, each with one
+# `ccrc test:` line on stderr; and exit 75 (`EX_TEMPFAIL`, D-7417) is reserved
+# for "refused, nothing ran", from exactly three refusals of the test box arm:
+# an explicit `--remote` over the budget, CCRC_TESTBOX_FALLBACK_INSTALL=refuse
+# on a fallback with no local node_modules, and CCRC_TESTBOX_LOST_RUN=fail when
+# the box was lost before any output came. The command never ran when any of
+# them is printed. A slice or a queue that
+# cannot be used degrades the run, with a WARN line, and never refuses it.
+set -uo pipefail
+
+TEST_HERE="${BASH_SOURCE[0]}"
+[[ "$TEST_HERE" == */* ]] || TEST_HERE="./$TEST_HERE"
+TEST_HERE="$(cd "${TEST_HERE%/*}" && pwd)"
+# shellcheck source=ccrc
+. "$TEST_HERE/ccrc" || { echo "ccrc test: cannot load $TEST_HERE/ccrc, so no setting can be read" >&2; exit 1; }
+PROG="ccrc test"
+
+SLICE=ccrctests.slice
+SLOT_DIR="$HOME/.cc-sessions/test-slots"
+# How often a queued run looks again, in seconds. Environment only: a bound on one wait, overridable so a suite need not
+# wait it out (the CCRC_HEALTH_TIMEOUT class), never a box's setting.
+POLL_S="${CCRC_TEST_POLL_S:-2}"
+PROC_ROOT="${CCRC_PROC_ROOT:-/proc}"
+
+_tusage() { echo "$PROG: $*" >&2; echo "usage: ccrc test [--heavy|--light] [--] <command> [<arg>...] | --classify [--] <command>... | --classify-shell [--] '<line>' | --status" >&2; exit 2; }
+
+# ── the settings, validated ───────────────────────────────────────────────
+# `_test_knobs` (ccd/ccrc) prints `KEY<US>default<US>value<US>from` per setting (US, octal 037, is not IFS whitespace,
+# so an empty field stays a field), the value empty and `from` the
+# reader's sentence when the setting cannot be read. A value that is not the setting's shape keeps the default and warns
+# on stderr, naming the key, the value and where it came from: a typo never removes a cap.
+declare -A TK=()
+# The settings that hold for the whole box, one slice and one queue: `_test_knobs` reads them from ~/.ccrc/ccrc.env alone.
+TBOXWIDE="CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES"
+_tshape() {   # <KEY> <value> -> 0 when the value is the key's shape
+  local v="$2"
+  case "$1" in
+    CCRC_TEST_SLICE_MEMORY_MAX) [[ "$v" =~ ^[1-9][0-9]*[KMGT]$ || "$v" =~ ^([1-9][0-9]?|100)%$ ]] ;;
+    CCRC_TEST_SLICE_SWAP_MAX) [[ "$v" =~ ^(0|[1-9][0-9]*[KMGT])$ ]] ;;
+    CCRC_TEST_SLICE_CPU_WEIGHT|CCRC_TEST_SLICE_IO_WEIGHT) [[ "$v" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$v" -le 10000 ] ;;
+    CCRC_TEST_SLICE_CPU_QUOTA) [[ "$v" =~ ^[1-9][0-9]{0,5}%$ ]] ;;
+    CCRC_TEST_HEAVY_SLOTS) [[ "$v" =~ ^[1-9][0-9]?$ ]] ;;
+    CCRC_TEST_WIDE_FILES) [[ "$v" =~ ^[0-9]{1,3}$ ]] ;;
+    CCRC_TEST_PRESSURE_MAX) [[ "$v" =~ ^[0-9]{1,2}$ ]] ;;
+    *) return 1 ;;
+  esac
+}
+_tshape_says() {   # <KEY> -> the shape, in words, for the warning
+  case "$1" in
+    CCRC_TEST_SLICE_MEMORY_MAX) echo "a whole number with a K, M, G or T suffix, or 1% to 100%" ;;
+    CCRC_TEST_SLICE_SWAP_MAX) echo "0, or a whole number with a K, M, G or T suffix" ;;
+    CCRC_TEST_SLICE_CPU_QUOTA) echo "a whole percentage such as 400%" ;;
+    CCRC_TEST_HEAVY_SLOTS) echo "a whole number from 1 to 99" ;;
+    CCRC_TEST_WIDE_FILES) echo "a whole number from 0 to 999" ;;
+    CCRC_TEST_PRESSURE_MAX) echo "a whole number from 0 (off) to 99" ;;
+    *) echo "a whole number from 1 to 10000" ;;
+  esac
+}
+_tload() {
+  local k d v from
+  while IFS=$'\037' read -r k d v from; do
+    [ -n "$k" ] || continue
+    if [ -z "$v" ]; then
+      echo "$PROG: WARN: ${from:-$k cannot be read}; using its default $d" >&2; v="$d"
+    elif ! _tshape "$k" "$v"; then
+      [ "$from" = file ] && from="~/.ccrc/ccrc.env"
+      echo "$PROG: WARN: $k=$v (from the $from) is not $(_tshape_says "$k"); using its default $d" >&2; v="$d"
+    fi
+    TK["$k"]="$v"
+    # A box-wide value set in the caller's environment is not read (`_test_knobs`); one that differs says so.
+    case " $TBOXWIDE " in
+      *" $k "*) [ -z "${!k:-}" ] || [ "${!k}" = "$v" ] \
+        || echo "$PROG: WARN: $k=${!k} in the environment is ignored: it holds for the whole box, so only ~/.ccrc/ccrc.env sets it (in use: $v)" >&2 ;;
+    esac
+  done < <(_test_knobs)
+}
+
+# ── heavy or light ────────────────────────────────────────────────────────
+# Heavy: a typecheck (`tsc`, `vue-tsc`, `tsgo`, any word naming `typecheck`), browser or end-to-end tests (`playwright`,
+# vitest's `--browser`), mutation tests (`stryker`), a package manager's whole suite (`npm test`, `npm t`, `npm run
+# test…`, `npm run t`, and the same under pnpm, yarn and bun), and a vitest or jest run that is WIDE or names more than
+# CCRC_TEST_WIDE_FILES test files. Only a word naming a test file (`*.test.*`, `*.spec.*`) is counted; a directory, a
+# glob or a name filter makes the run wide, and a flag's value (`--config vitest.config.ts`, `--project server`) is
+# skipped, never counted. Everything else is light: installing a package that names a test program among them. A word is
+# read by its last path component, a script extension dropped, so `npx vitest`, `./node_modules/.bin/vitest`, `vitest`
+# and `node node_modules/vitest/vitest.mjs` are one program.
+#
+# A shell's `-c` string (`sh -c`, `bash -lc`) and a tmux window's command are read as scripts, by `_tshell_heavy`: each
+# simple command in them, its prefixes dropped (`_tstrip`: assignments, `env`, `timeout`, `nice`, `command`, systemd-run
+# with its value flags, setsid, `sudo -u <user>`, `flock <file>`, xargs…; `eval`, `script -c`, `flock … -c` and `watch`
+# strings are read as scripts too), is classified in command position, and `make test`/`make check` is a whole suite.
+# `--classify-shell` is the same reader over a whole Bash command line, for the session hook (ccd/session-hook.sh): it
+# answers `heavy`, `light`, or `wrapped` for a systemd-run of one's own around any test or typecheck (WRAPPED, below),
+# one classifier for the wrapper and both of the hook's arms. In that reading a `ccrc test` command is already contained and is skipped
+# (unless its own command is a systemd-run around a test, which is WRAPPED like any other), and a command word
+# that is no package manager, node, test program or `$variable` is light whatever its arguments say, so `grep vitest`,
+# `git commit -m 'npm test'` and `echo tsc` stay light.
+_tvalflag() {   # <flag> -> 0 when a vitest or jest flag takes the next word as its value
+  case "$1" in
+    -c|--config|-r|--root|--dir|--project|--reporter|--reporters|--outputFile|--environment|--env|-t|--testNamePattern \
+      |--testPathPattern|--testPathIgnorePatterns|--shard|--pool|--maxWorkers|--minWorkers|--exclude|--mode \
+      |--selectProjects|--rootDir|--testRegex|--testTimeout|--workspace) return 0 ;;
+  esac
+  return 1
+}
+_targv_heavy() {   # <wide> <command> [<arg>...] -> 0 heavy, 1 light (the argv reading)
+  local wide="$1" w p i j n prog="" files=0 wideb=0 sub=1
+  shift
+  local -a a=("$@")
+  n=${#a[@]}
+  for ((i = 0; i < n; i++)); do
+    p="${a[i]##*/}"
+    case "$p" in *.mjs|*.cjs|*.js) p="${p%.*}" ;; esac
+    case "$p" in
+      tsc|vue-tsc|tsgo|stryker|*typecheck*) return 0 ;;
+      playwright) case "${a[i+1]:-}" in install|install-deps|uninstall) return 1 ;; esac; return 0 ;;
+      npm|pnpm|yarn|bun)
+        j=$((i + 1))
+        while ((j < n)); do
+          case "${a[j]}" in
+            --prefix|-C|--dir|--filter|-F|-w|--workspace|--cwd) j=$((j + 2)) ;;
+            -*) j=$((j + 1)) ;;
+            *) break ;;
+          esac
+        done
+        case "${a[j]:-}" in
+          test|test[:-]*|t|tst) return 0 ;;
+          run|run-script) case "${a[j+1]:-}" in t|tst|test*|*typecheck*) return 0 ;; esac ;;
+          install|i|add|ci|remove|rm|uninstall|update|up|upgrade|link) return 1 ;;
+        esac ;;
+      make|gmake)
+        # The suite by its target: test, tests, check, test-*/test:*/test_*, or any typecheck target.
+        for ((j = i + 1; j < n; j++)); do
+          case "${a[j]}" in
+            -C|--directory|-f|--file|--makefile|-I|--include-dir|-o|--old-file|-W|--what-if|--assume-new) j=$((j + 1)) ;;
+            -j|--jobs|-l|--load-average) [[ "${a[j+1]:-}" =~ ^[0-9.]+$ ]] && j=$((j + 1)) ;;
+            -*|*=*) ;;
+            test|tests|check|test[-:_]*|*typecheck*) return 0 ;;
+          esac
+        done ;;
+      vitest|jest) prog="$p"; break ;;
+    esac
+  done
+  [ -n "$prog" ] || return 1
+  for ((i = i + 1; i < n; i++)); do
+    w="${a[i]}"
+    case "$w" in
+      --browser|--browser=*|--browser.*) return 0 ;;
+      --|--*=*) ;;
+      -*) ! _tvalflag "$w" || i=$((i + 1)) ;;
+      *)
+        if [ "$sub" = 1 ]; then
+          sub=0
+          case "$w" in run|watch|dev|related|bench) continue ;; esac
+        fi
+        case "$w" in
+          *'*'*|*'?'*|*'['*) wideb=1 ;;
+          *.test.*|*.spec.*) files=$((files + 1)) ;;
+          *) wideb=1 ;;
+        esac ;;
+    esac
+  done
+  [ "$wideb" = 1 ] || [ "$files" -eq 0 ] || [ "$files" -gt "$wide" ]
+}
+_tstrip() {   # <word>... -> TW: the words from the command word on; TSR=1 when a systemd-run was among the prefixes
+  # A prefix that runs the rest as a command is dropped with its options (and their values), as `env` is. One that runs a
+  # STRING (`eval`, `script -c`, `flock … -c`, `watch`) becomes `sh -c '<string>'`, which `_tcmd_heavy` reads as a script.
+  TW=("$@"); TSR=0
+  local i=0 n=${#TW[@]} w p
+  while ((i < n)); do
+    w="${TW[i]}"
+    if [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then i=$((i + 1)); continue; fi
+    p="${w##*/}"
+    case "$p" in
+      '!'|'{'|'}'|then|do|else|elif|if|while|until|command|exec|time|nohup|builtin) i=$((i + 1)) ;;
+      env)
+        i=$((i + 1))
+        while ((i < n)); do
+          case "${TW[i]}" in
+            -u|-C|--unset|--chdir) i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) [[ "${TW[i]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] && i=$((i + 1)) || break ;;
+          esac
+        done ;;
+      nice|ionice|stdbuf|timeout)
+        i=$((i + 1))
+        while ((i < n)); do
+          case "${TW[i]}" in
+            -n|-c|-s|-k|--signal|--kill-after) i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) break ;;
+          esac
+        done
+        [ "$p" != timeout ] || i=$((i + 1)) ;;   # its duration
+      systemd-run)
+        TSR=1; i=$((i + 1))
+        while ((i < n)); do
+          case "${TW[i]}" in
+            --) i=$((i + 1)); break ;;
+            -u|--unit|--slice|-p|--property|-E|--setenv|--description|-M|--machine|-H|--host|--uid|--gid|--nice \
+              |--working-directory|--service-type|--on-active|--on-boot|--on-startup|--on-unit-active \
+              |--on-unit-inactive|--on-calendar|--path-property|--socket-property|--timer-property|-C|--capsule) i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) break ;;
+          esac
+        done ;;
+      setsid|sudo|doas|taskset|chrt)
+        i=$((i + 1))
+        while ((i < n)); do
+          case "${TW[i]}" in
+            --) i=$((i + 1)); break ;;
+            -u|--user|-g|--group|-C|--close-from|-D|--chdir|-h|--host|-p|--prompt|-r|--role|-t|--type|-T \
+              |--command-timeout|-U|--other-user|-R|--chroot) [ "$p" = setsid ] && i=$((i + 1)) || i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) break ;;
+          esac
+        done
+        case "$p" in taskset|chrt) i=$((i + 1)) ;; esac ;;   # the CPU mask, the priority
+      xargs)
+        i=$((i + 1))
+        while ((i < n)); do
+          case "${TW[i]}" in
+            -a|--arg-file|-d|--delimiter|-E|-I|-L|-n|--max-args|-P|--max-procs|-s|--max-chars|--process-slot-var) i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) break ;;
+          esac
+        done ;;
+      flock)
+        i=$((i + 1))
+        while ((i < n)); do
+          case "${TW[i]}" in
+            -w|--timeout|--wait|-E|--conflict-exit-code) i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) break ;;
+          esac
+        done
+        i=$((i + 1))   # the lock file
+        case "${TW[i]:-}" in -c|--command) TW=(sh -c "${TW[i+1]:-}"); return 0 ;; esac ;;
+      watch)
+        i=$((i + 1))
+        while ((i < n)); do
+          case "${TW[i]}" in
+            -n|--interval|-q|--equexit) i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) break ;;
+          esac
+        done
+        TW=(sh -c "${TW[*]:i}"); return 0 ;;
+      eval) TW=(sh -c "${TW[*]:i+1}"); return 0 ;;
+      script)
+        local j
+        for ((j = i + 1; j < n; j++)); do
+          case "${TW[j]}" in
+            -c|--command|-[a-zA-Z]*c) TW=(sh -c "${TW[j+1]:-}"); return 0 ;;
+            --command=*) TW=(sh -c "${TW[j]#--command=}"); return 0 ;;
+          esac
+        done
+        break ;;
+      *) break ;;
+    esac
+  done
+  TW=("${TW[@]:i}")
+}
+# One line per simple command in a shell string, its words joined by US (octal 037), quotes removed. A word is cut at
+# blanks outside quotes; a command at `;`, `&`, `|`, a newline, `(`, `)`, a backquote and `$(`, outside single quotes, so
+# a command substitution is read as a command of its own. A redirection and its target are dropped, and so is a comment.
+# Not a shell: an accident guard's reader, which errs towards reading a command (heavy) rather than missing one.
+_tsegments() {   # <string>
+  local s="$1" i n=${#1} c q="" back="" w="" have=0 skip=0 seg="" US=$'\037'
+  for ((i = 0; i < n; i++)); do
+    c="${s:i:1}"
+    if [ "$q" = "'" ]; then if [ "$c" = "'" ]; then q=""; else w+="$c"; fi; continue; fi
+    if [ "$c" = '\' ]; then i=$((i + 1)); w+="${s:i:1}"; have=1; continue; fi
+    if [ "$q" = '"' ]; then
+      case "$c" in
+        '"') q="" ;;
+        '`') q=""; back='"'; c=';' ;;
+        '$') if [ "${s:i+1:1}" = '(' ]; then q=""; back='"'; c=';'; i=$((i + 1)); else w+="$c"; fi ;;
+        *) w+="$c" ;;
+      esac
+      [ "$c" = ';' ] || continue
+    fi
+    if [ "$c" = '$' ] && [ "${s:i+1:1}" = '(' ]; then c=';'; i=$((i + 1)); fi
+    case "$c" in
+      "'"|'"') q="$c"; have=1; continue ;;
+      '#') if [ "$have" = 0 ]; then while ((i + 1 < n)) && [ "${s:i+1:1}" != $'\n' ]; do i=$((i + 1)); done; continue; fi
+           w+="$c"; continue ;;
+      '>'|'<')
+        if [ "$have" = 1 ] && [[ "$w" =~ ^[0-9]+$ ]]; then w=""; have=0; fi
+        if [ "$have" = 1 ]; then { [ "$skip" = 1 ] && skip=0; } || seg+="$w$US"; w=""; have=0; fi
+        while ((i + 1 < n)) && [[ "${s:i+1:1}" == [\<\>\&\|] ]]; do i=$((i + 1)); c="${s:i:1}"; done
+        if [ "$c" = '&' ] && [[ "${s:i+1:1}" == [0-9-] ]]; then
+          while ((i + 1 < n)) && [[ "${s:i+1:1}" == [0-9-] ]]; do i=$((i + 1)); done
+        else skip=1; fi
+        continue ;;
+      ' '|$'\t'|';'|'&'|'|'|$'\n'|'('|')'|'`') ;;
+      *) w+="$c"; have=1; continue ;;
+    esac
+    if [ "$have" = 1 ]; then { [ "$skip" = 1 ] && skip=0; } || seg+="$w$US"; w=""; have=0; fi
+    case "$c" in ' '|$'\t') ;; *) [ -z "$seg" ] || printf '%s\n' "$seg"; seg=""; skip=0 ;; esac
+    # The end of a substitution opened inside double quotes returns to them: `"$(…)"` closes where it opened.
+    case "$c" in ')'|'`') if [ -n "$back" ]; then q="$back"; back=""; have=1; fi ;; esac
+  done
+  if [ "$have" = 1 ]; then { [ "$skip" = 1 ] && skip=0; } || seg+="$w$US"; fi
+  [ -z "$seg" ] || printf '%s\n' "$seg"
+}
+_tcmd_heavy() {   # <wide> <how: argv, shell or hook> <command> [<arg>...] -> 0 heavy
+  # argv: the wrapper's own command, read whole. shell: one simple command of a shell string, read only when its command
+  # word is a test program. hook: as shell, and a `ccrc test` command is skipped, as already contained.
+  local wide="$1" how="$2" p i n
+  shift 2
+  local -a a=("$@")
+  n=${#a[@]}
+  ((n > 0)) || return 1
+  p="${a[0]##*/}"
+  case "$p" in
+    ccrc|ccrc-test)
+      if [ "$p" = ccrc ]; then [ "${a[1]:-}" = test ] || return 1; a=("${a[@]:2}"); else a=("${a[@]:1}"); fi
+      while [ ${#a[@]} -gt 0 ]; do case "${a[0]}" in --) a=("${a[@]:1}"); break ;; -*) a=("${a[@]:1}") ;; *) break ;; esac; done
+      _tstrip "${a[@]}"
+      # `ccrc test -- systemd-run … <test>`: the inner systemd-run moves the run out of the slice the wrapper put it in,
+      # so its command gets the same WRAPPED check as a bare line's (below), at a wide line of 0.
+      if [ "$TSR" = 1 ] || { [ "$TLINE_SR" = 1 ] && [[ "${TW[0]:-}" == '$'* ]]; }; then
+        if _tcmd_heavy 0 argv "${TW[@]}"; then TWRAPPED=1; return 0; fi
+        [ "$how" = argv ] || return 1
+      fi
+      if [ "$how" = hook ]; then
+        # Contained, so never heavy here; only a WRAPPED run inside its own shell string (`ccrc test -- sh -c '…'`) counts.
+        _tcmd_heavy "$wide" hook "${TW[@]}" || :
+        [ "$TWRAPPED" = 1 ]; return
+      fi
+      _tcmd_heavy "$wide" argv "${TW[@]}"; return ;;
+    sh|bash|zsh|dash|ksh)
+      for ((i = 1; i < n; i++)); do
+        case "${a[i]}" in
+          --*) ;;
+          -*c*) [ $((i + 1)) -lt "$n" ] || return 1; _tshell_heavy "$wide" "$how" "${a[i+1]}"; return ;;
+          -*) ;;
+          *) return 1 ;;
+        esac
+      done
+      return 1 ;;
+    tmux)
+      case "${a[1]:-}" in
+        new-window|neww|split-window|splitw|new-session|new|respawn-pane|respawnp|respawn-window|respawnw|run-shell|run)
+          ((n > 2)) || return 1; _tshell_heavy "$wide" "$how" "${a[n-1]}"; return ;;
+      esac
+      return 1 ;;
+  esac
+  if [ "$how" != argv ]; then
+    case "${p%.*}" in
+      npx|bunx|pnpx|npm|pnpm|yarn|bun|node|vitest|jest|tsc|vue-tsc|tsgo|playwright|stryker|make|gmake|*typecheck*|'$'*) ;;
+      *) return 1 ;;
+    esac
+  fi
+  _targv_heavy "$wide" "${a[@]}"
+}
+# WRAPPED: a simple command whose prefixes include systemd-run (its words read through, `"systemd-run"` included, since
+# quotes are removed) and whose command is ANY test or typecheck, light or heavy: it is read at a wide line of 0, under
+# which every vitest or jest run is heavy. A `$variable` in command position on a line that names systemd-run anywhere
+# (`S=systemd-run; $S …`) is read the same way. It sets TWRAPPED, which `--classify-shell` answers as `wrapped`, and the
+# whole string is read, so a bare heavy command before it never hides it.
+TWRAPPED=0 TLINE_SR=0
+_tshell_heavy() {   # <wide> <how: shell or hook> <shell string> -> 0 when a simple command in it is heavy (or wrapped)
+  local wide="$1" how="${2/argv/shell}" line sr hit=1
+  local -a ws
+  while IFS= read -r line; do
+    IFS=$'\037' read -r -a ws <<<"$line"
+    [ ${#ws[@]} -gt 0 ] || continue
+    _tstrip "${ws[@]}"; sr=$TSR
+    [ ${#TW[@]} -gt 0 ] || continue
+    [ "$sr" = 1 ] || [ "$TLINE_SR" != 1 ] || [[ "${TW[0]}" != '$'* ]] || sr=1
+    if [ "$sr" = 1 ]; then
+      if _tcmd_heavy 0 "$how" "${TW[@]}"; then TWRAPPED=1; return 0; fi
+    elif _tcmd_heavy "$wide" "$how" "${TW[@]}"; then
+      hit=0
+    fi
+    [ "$TWRAPPED" = 0 ] || return 0   # a nested string (`sh -c '…'`) found one
+  done < <(_tsegments "$3")
+  return "$hit"
+}
+_heavy() {   # <wide> <command> [<arg>...] -> 0 heavy, 1 light
+  local wide="$1"
+  shift
+  _tstrip "$@"
+  _tcmd_heavy "$wide" argv "${TW[@]}"
+}
+
+# ── already inside ────────────────────────────────────────────────────────
+_tlocked() { ! flock -n "$1" true 2>/dev/null; }   # <file> -> 0 when another process holds its lock
+_tinside() {   # -> 0 when this process already runs inside a `ccrc test` run (ALREADY INSIDE above); never the environment
+  local line f who p d=0
+  if [ -r "$PROC_ROOT/self/cgroup" ]; then
+    while IFS= read -r line; do
+      case "$line" in */"$SLICE"|*/"$SLICE"/*) return 0 ;; esac
+    done < "$PROC_ROOT/self/cgroup"
+  fi
+  # Uncontained there is no cgroup to read: inside when the holder of a held slot is one of this process's ancestors.
+  command -v flock >/dev/null 2>&1 || return 1
+  local -A holder=()
+  for f in "$SLOT_DIR"/slot-*.who; do
+    [ -f "$f" ] && _tlocked "${f%.who}" || continue
+    who=""; IFS= read -r who < "$f" || :
+    [[ "$who" =~ ^pid\ ([0-9]+)\  ]] && holder["${BASH_REMATCH[1]}"]=1
+  done
+  [ ${#holder[@]} -gt 0 ] || return 1
+  p="$PPID"
+  while [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -gt 1 ] && [ "$d" -lt 64 ]; do
+    [ -z "${holder[$p]:-}" ] || return 0
+    p=$(ps -o ppid= -p "$p" 2>/dev/null) || return 1
+    p="${p//[[:space:]]/}"; d=$((d + 1))
+  done
+  return 1
+}
+
+# ── the queue ─────────────────────────────────────────────────────────────
+_tholders() {   # -> "slot <n>: <who>; …" for every held slot
+  local f out="" who
+  for f in "$SLOT_DIR"/slot-*; do
+    case "$f" in *.who|*'*') continue ;; esac
+    [ -e "$f" ] && _tlocked "$f" || continue
+    who=""; [ -f "$f.who" ] && IFS= read -r who < "$f.who"
+    out+="${out:+; }${f##*/}: ${who:-unknown}"
+  done
+  printf '%s' "$out"
+}
+_theld() {   # -> how many slot files are held, at any index: a slot above a lowered count is still a heavy run
+  local f k=0
+  for f in "$SLOT_DIR"/slot-*; do
+    case "$f" in *.who|*'*') continue ;; esac
+    [ -e "$f" ] && _tlocked "$f" && k=$((k + 1))
+  done
+  echo "$k"
+}
+_tpressure() {   # <max> -> 0 while memory or cpu pressure is above it; PRESSURE_SAID says which
+  local max="$1" r v
+  PRESSURE_SAID=""
+  for r in memory cpu; do
+    [ -r "$PROC_ROOT/pressure/$r" ] || continue
+    v=$(awk '$1 == "some" { for (i = 2; i <= NF; i++) if ($i ~ /^avg10=/) { sub(/^avg10=/, "", $i); print $i; exit } }' "$PROC_ROOT/pressure/$r" 2>/dev/null)
+    [ -n "$v" ] || continue
+    if awk -v v="$v" -v m="$max" 'BEGIN { exit !(v + 0 > m + 0) }'; then PRESSURE_SAID="host $r pressure (avg10) is $v, above CCRC_TEST_PRESSURE_MAX=$max"; return 0; fi
+  done
+  return 1
+}
+SLOT_FD=""; WAIT_FD=""; SLOT_FILE=""; WAIT_FILE=""
+_trelease() {
+  [ -z "$SLOT_FILE" ] || rm -f -- "$SLOT_FILE.who"
+  [ -z "$WAIT_FILE" ] || rm -f -- "$WAIT_FILE"
+  [ -z "$SLOT_FD" ] || exec {SLOT_FD}>&-
+  [ -z "$WAIT_FD" ] || exec {WAIT_FD}>&-
+  SLOT_FD=""; WAIT_FD=""
+}
+_treap_gone() {   # stop the run of every held slot whose wrapper is gone; its run holds the slot and nobody watches it
+                  # -> 0 when it stopped one (its .who goes with it, so a run that will not stop is asked once)
+  [ "$contained" = 1 ] || return 1
+  local f who pid reaped=1
+  for f in "$SLOT_DIR"/slot-*; do
+    case "$f" in *.who|*'*') continue ;; esac
+    [ -f "$f.who" ] && _tlocked "$f" || continue
+    who=""; IFS= read -r who < "$f.who" || :
+    [[ "$who" =~ ^pid\ ([0-9]+)\  ]] || continue
+    pid="${BASH_REMATCH[1]}"
+    [ "$pid" != "$$" ] && ! kill -0 "$pid" 2>/dev/null || continue
+    echo "$PROG: ${f##*/}'s holder (pid $pid) is gone; stopping its run ccrc-test-$pid.scope" >&2
+    systemctl --user stop "ccrc-test-$pid.scope" >/dev/null 2>&1 || :
+    rm -f -- "$f.who"
+    reaped=0
+  done
+  return "$reaped"
+}
+_tacquire() {   # <summary> -> sets SLOT_FD and SLOT_FILE, or warns that the run is unqueued
+  local summary="$1" n="${TK[CCRC_TEST_HEAVY_SLOTS]}" max="${TK[CCRC_TEST_PRESSURE_MAX]}" i f fd said=0 why t0=$SECONDS
+  # No queue to wait in is a degraded run, never a refused one (DEGRADE, NEVER REFUSE below): it starts unqueued, saying so.
+  mkdir -p -- "$SLOT_DIR" 2>/dev/null \
+    || { echo "$PROG: WARN: cannot create the slot directory ~/.cc-sessions/test-slots, so this heavy run is NOT queued" >&2; return 0; }
+  command -v flock >/dev/null 2>&1 \
+    || { echo "$PROG: WARN: flock is not on PATH, so this heavy run is NOT queued (install util-linux)" >&2; return 0; }
+  while :; do
+    why=""
+    if [ "$max" -gt 0 ] && _tpressure "$max"; then why="$PRESSURE_SAID"
+    else
+      for ((i = 0; i < n; i++)); do
+        [ "$(_theld)" -lt "$n" ] || break
+        f="$SLOT_DIR/slot-$i"
+        exec {fd}>>"$f" || continue
+        # Counted again once held: every slot file at every index, this one included, so a slot held above a lowered
+        # count, or a caller that took one in the same instant, never makes the box run more than n heavy runs.
+        if flock -n "$fd"; then
+          if [ "$(_theld)" -gt "$n" ]; then exec {fd}>&-; break; fi
+          SLOT_FD=$fd; SLOT_FILE=$f
+          printf 'pid %s since %s: %s\n' "$$" "$(date +%H:%M:%S)" "$summary" > "$f.who"
+          [ "$said" -eq 0 ] || echo "$PROG: slot $i is free after $((SECONDS - t0))s; starting" >&2
+          [ -z "$WAIT_FILE" ] || { rm -f -- "$WAIT_FILE"; exec {WAIT_FD}>&-; WAIT_FD=""; WAIT_FILE=""; }
+          return 0
+        fi
+        exec {fd}>&-
+      done
+      if _treap_gone; then continue; fi   # look again at once: the stopped run's slot is free
+      why="all $n heavy test slots are held ($(_tholders))"
+    fi
+    if [ "$said" -eq 0 ]; then
+      echo "$PROG: queued: $why; waiting (it starts when that clears)" >&2
+      said=1
+      WAIT_FILE="$SLOT_DIR/wait-$$"
+      if exec {WAIT_FD}>>"$WAIT_FILE"; then
+        flock -n "$WAIT_FD" || :
+        printf 'pid %s since %s: %s\n' "$$" "$(date +%H:%M:%S)" "$summary" > "$WAIT_FILE"
+      fi
+    fi
+    sleep "$POLL_S"
+  done
+}
+
+# ── the slice ─────────────────────────────────────────────────────────────
+_tslice_props() {   # -> the five limits as set-property arguments
+  printf '%s\n' "MemoryMax=${TK[CCRC_TEST_SLICE_MEMORY_MAX]}" "MemorySwapMax=${TK[CCRC_TEST_SLICE_SWAP_MAX]}" \
+    "CPUWeight=${TK[CCRC_TEST_SLICE_CPU_WEIGHT]}" "CPUQuota=${TK[CCRC_TEST_SLICE_CPU_QUOTA]}" "IOWeight=${TK[CCRC_TEST_SLICE_IO_WEIGHT]}"
+}
+_tslice_ready() {   # -> 0 when the run can go in the slice (TSLICE_WHY says when the box's limits could not be applied
+                    # and the unit file's own hold); 1, TSLICE_WHY saying why, when it cannot
+  local load props
+  TSLICE_WHY=""
+  command -v systemctl >/dev/null 2>&1 && command -v systemd-run >/dev/null 2>&1 \
+    || { TSLICE_WHY="systemctl or systemd-run is not on PATH, so the run cannot be put in $SLICE"; return 1; }
+  load=$(systemctl --user show "$SLICE" -p LoadState --value 2>/dev/null) || load=""
+  [ "$load" = loaded ] || { TSLICE_WHY="$SLICE is not loaded by the user manager (LoadState=${load:-unanswered}): ccrc install or ccrc update places ~/.config/systemd/user/$SLICE, then systemctl --user daemon-reload"; return 1; }
+  mapfile -t props < <(_tslice_props)
+  systemctl --user set-property --runtime "$SLICE" "${props[@]}" 2>/dev/null \
+    || TSLICE_WHY="systemctl --user set-property $SLICE ${props[*]} failed, so the run is in $SLICE under its unit file's own limits"
+  return 0
+}
+
+# The slice's OOM kill count (memory.events `oom_kill`), empty when it cannot be read. The cgroup path is ASKED FOR
+# (`-p ControlGroup`), never built: building it is what left ccd-cap-scopes capping nothing for 13 days.
+_toom_kills() {
+  local cg
+  cg=$(systemctl --user show "$SLICE" -p ControlGroup --value 2>/dev/null) || cg=""
+  [ -n "$cg" ] || { echo 0; return 0; }
+  awk '$1 == "oom_kill" { print $2; exit }' "${CCRC_CGROUP_ROOT:-/sys/fs/cgroup}$cg/memory.events" 2>/dev/null
+}
+_thuman() { awk -v b="$1" 'BEGIN { split("B K M G T", u, " "); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ } printf (i == 1 ? "%d%s" : "%.1f%s"), b, u[i] }'; }
+
+# ── --status: one line for doctor ─────────────────────────────────────────
+# rc 0 and the line on stdout; rc 2 and the line when the slice is not loaded or holds no memory cap (doctor's WARN).
+_tstatus() {
+  local f held=0 waiting=0 k v line="" rc=0
+  local -A p=()
+  if [ -d "$SLOT_DIR" ]; then
+    for f in "$SLOT_DIR"/slot-* "$SLOT_DIR"/wait-*; do
+      [ -e "$f" ] || continue
+      case "$f" in *.who) continue ;; esac
+      _tlocked "$f" || continue
+      case "${f##*/}" in slot-*) held=$((held + 1)) ;; *) waiting=$((waiting + 1)) ;; esac
+    done
+  fi
+  local queue="heavy slots $held of ${TK[CCRC_TEST_HEAVY_SLOTS]} held, $waiting waiting"
+  if [ "${CCD_OS:-linux}" = darwin ] || ! command -v systemctl >/dev/null 2>&1; then
+    echo "no user manager here, so runs are not contained; $queue"; return 0
+  fi
+  while IFS='=' read -r k v; do [ -n "$k" ] && p["$k"]="$v"; done \
+    < <(systemctl --user show "$SLICE" -p LoadState -p MemoryCurrent -p MemoryMax -p MemorySwapMax -p CPUWeight -p CPUQuotaPerSecUSec -p IOWeight 2>/dev/null)
+  if [ "${p[LoadState]:-}" != loaded ]; then
+    echo "$SLICE is not loaded (LoadState=${p[LoadState]:-unanswered}), so ccrc test runs every run uncontained; $queue"; return 2
+  fi
+  local cur="${p[MemoryCurrent]:-}" max="${p[MemoryMax]:-}"
+  [[ "$cur" =~ ^[0-9]+$ ]] && cur="$(_thuman "$cur")" || cur="0B"
+  if ! [[ "$max" =~ ^[0-9]+$ ]]; then
+    echo "$SLICE holds $cur with no memory cap (MemoryMax=${max:-unanswered}); $queue"; return 2
+  fi
+  line="$SLICE holds $cur of its $(_thuman "$max") memory cap"
+  v="${p[MemorySwapMax]:-}"; [[ "$v" =~ ^[0-9]+$ ]] && line+=", swap cap $(_thuman "$v")"
+  line+=", CPU weight ${p[CPUWeight]:-unanswered}, CPU quota ${p[CPUQuotaPerSecUSec]:-unanswered} per second, IO weight ${p[IOWeight]:-unanswered}; $queue"
+  echo "$line"; return "$rc"
+}
+
+# ── the test box arm (THE TEST BOX and THE RUNS LOG above) ──────────────
+REG="$HOME/.cc-sessions"
+TB_RUNS="$REG/testbox-runs"
+TB_CLIENT="${TEST_HERE%/*}/agent/dist/agent/src/testbox/client.js"   # the release tree's, beside ccd/ (no `..`: ccd/ may be a link)
+TB_LIVE=0 TB_LOG=0 TB_ID="" TB_REASON="" TB_CHILD="" TB_PKG="" TB_PKGDIR=""
+_tb_runs_log() {   # <outcome> <TestboxFallbackId or -> <exit>: the runs log's one line, once per call
+  [ "$TB_LOG" = 1 ] || return 0
+  TB_LOG=0
+  local now yday f old day new=0
+  TZ=UTC0 printf -v now '%(%Y-%m-%dT%H:%M:%SZ)T' -1
+  [ -d "$TB_RUNS" ] || mkdir -p -m 700 -- "$TB_RUNS" 2>/dev/null || return 0
+  f="$TB_RUNS/${now%%T*}.log"
+  [ -e "$f" ] || new=1
+  { printf '%s\t%s\t%s\t%s\n' "$now" "$1" "$2" "$3" >> "$f"; } 2>/dev/null || return 0
+  [ "$new" = 1 ] || return 0
+  # Today's file is new: the day files before yesterday go, by name (a glob over the dated names, no find).
+  TZ=UTC0 printf -v yday '%(%Y-%m-%d)T' "$(( ${EPOCHSECONDS:-$(date +%s)} - 86400 ))"
+  for old in "$TB_RUNS"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].log; do
+    [ -e "$old" ] || continue
+    day="${old##*/}"; day="${day%.log}"
+    if [[ "$day" < "$yday" ]]; then rm -f -- "$old"; fi
+  done
+}
+_tb_refused() { _tb_runs_log refused "$1" 75; exit 75; }   # <TestboxFallbackId>: one of the three refusals (EXIT); nothing ran
+_tb_package() {   # -> TB_PKG and TB_PKGDIR: the first path segment of the cwd under the repository root (D-7417)
+  local out prefix=""
+  TB_PKG="" TB_PKGDIR=""
+  out=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+    git rev-parse --show-toplevel --show-prefix 2>/dev/null) || return 0
+  [[ "$out" != *$'\n'* ]] || prefix="${out#*$'\n'}"
+  TB_PKG="${prefix%%/*}"
+  [ -z "$TB_PKG" ] || TB_PKGDIR="${out%%$'\n'*}/$TB_PKG"
+}
+_tb_fallback() {   # <TestboxFallbackId> <its `test box: …` line> [printed]: back to today's local path, or a refusal
+  TB_ID="$1" TB_REASON="${2#test box: }"
+  [ "${3:-}" = printed ] || printf '%s\n' "$2" >&2
+  _tb_package
+  [ -n "$TB_PKGDIR" ] && [ -f "$TB_PKGDIR/package.json" ] && [ ! -e "$TB_PKGDIR/node_modules" ] || return 0
+  if [ "${TBK[CCRC_TESTBOX_FALLBACK_INSTALL]:-}" = refuse ]; then
+    printf '%s; no local deps for %s\n' "$2" "$TB_PKG" >&2
+    _tb_refused "$1"
+  fi
+  printf '%s; installing %s locally\n' "$2" "$TB_PKG" >&2
+  ( cd "$TB_PKGDIR" && bash "$TEST_HERE/ccrc-test" --local --heavy -- npm ci ) \
+    || echo "$PROG: WARN: npm ci in $TB_PKG failed; the run goes ahead locally" >&2
+}
+_tb_end() {   # <exit status>: a fallback's summary line and its runs log line, the last acts before the exit
+  [ -n "$TB_ID" ] || return 0
+  printf 'ran on: local (fallback: %s)\n' "$TB_REASON" >&2
+  _tb_runs_log fallback "$TB_ID" "$1"
+}
+_tb_arm() {   # the remote decision: exits after a run on the box or a refusal; returns to today's local path
+  # shellcheck source=testbox-knobs
+  { . "$TEST_HERE/testbox-knobs" && _tb_load host; } 2>/dev/null || return 0
+  if [ -z "${TBK[CCRC_TESTBOX_URL]:-}" ]; then
+    [ "$where" != remote ] || _tb_fallback off "test box: off"
+    return 0
+  fi
+  TB_LOG=1
+  if [ "$TB_LIVE" != 1 ]; then _tb_fallback off "test box: off"; return 0; fi
+  command -v node >/dev/null 2>&1 || { _tb_fallback unreachable "test box: unreachable (no node on PATH)"; return 0; }
+  [ -f "$TB_CLIENT" ] || { _tb_fallback unreachable "test box: unreachable (no test box client beside this wrapper)"; return 0; }
+  local vdir v1="" v2="" v3="" rc=0
+  vdir=$(mktemp -d "${TMPDIR:-/tmp}/ccrc-test-box.XXXXXX" 2>/dev/null) \
+    || { _tb_fallback unreachable "test box: unreachable (no temporary directory)"; return 0; }
+  local -a cargs=(run --verdict "$vdir/verdict")
+  [ "$where" != remote ] || cargs+=(--explicit)
+  # A signal is passed to the client, which cancels the box's run (SIGNALS below holds for the local path).
+  node "$TB_CLIENT" "${cargs[@]}" -- "${cmd[@]}" <&0 &
+  TB_CHILD=$!
+  trap 'kill -INT "$TB_CHILD" 2>/dev/null' INT
+  trap 'kill -TERM "$TB_CHILD" 2>/dev/null' TERM
+  trap 'kill -HUP "$TB_CHILD" 2>/dev/null' HUP
+  while :; do
+    { wait "$TB_CHILD"; } 2>/dev/null; rc=$?
+    kill -0 "$TB_CHILD" 2>/dev/null || break
+  done
+  trap - INT TERM HUP
+  [ ! -f "$vdir/verdict" ] || IFS=$'\t' read -r v1 v2 v3 < "$vdir/verdict"
+  rm -rf -- "$vdir"
+  case "$v1" in
+    remote) [[ "$v2" =~ ^[0-9]+$ ]] && rc="$v2"; _tb_runs_log remote - "$rc"; exit "$rc" ;;
+    refused) _tb_refused "$v2" ;;
+    fallback) _tb_fallback "$v2" "$v3" printed ;;
+    *) _tb_fallback unreachable "test box: unreachable (the client ended with exit $rc and no verdict)" ;;
+  esac
+}
+
+# ── main ──────────────────────────────────────────────────────────────────
+mode=run force="" where=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --local|--remote) [ -z "$where" ] || [ "$where" = "${1#--}" ] || _tusage "--local and --remote together"; where="${1#--}"; shift ;;
+    --heavy) force=heavy; shift ;;
+    --light) force=light; shift ;;
+    --classify) mode=classify; shift ;;
+    --classify-shell) mode=classify-shell; shift ;;
+    --status) mode=status; shift ;;
+    --testbox-knobs) mode=testbox-knobs; shift ;;
+    -h|--help) sed -n '2,8p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --) shift; break ;;
+    -*) _tusage "unknown argument: $1" ;;
+    *) break ;;
+  esac
+done
+# `--testbox-knobs host|box` (D-7403, D-7430): the test box's settings, validated, one `KEY<US>default<US>value<US>from`
+# line each, from ccd/testbox-knobs. It only reads: the slice's settings are not loaded and nothing is forked.
+if [ "$mode" = testbox-knobs ]; then
+  [ $# -eq 1 ] && { [ "$1" = host ] || [ "$1" = box ]; } || _tusage "--testbox-knobs takes host or box"
+  # shellcheck source=testbox-knobs
+  . "$TEST_HERE/testbox-knobs" || { echo "$PROG: cannot load $TEST_HERE/testbox-knobs, so no test box setting can be read" >&2; exit 1; }
+  _testbox_knobs "$1"; exit $?
+fi
+_tload
+if [ "$mode" = status ]; then [ $# -eq 0 ] || _tusage "--status takes no command"; _tstatus; exit $?; fi
+if [ "$mode" = classify-shell ]; then
+  [ $# -eq 1 ] || _tusage "--classify-shell takes one command line, as one argument"
+  [[ "$1" != *systemd-run* ]] || TLINE_SR=1
+  if ! _tshell_heavy "${TK[CCRC_TEST_WIDE_FILES]}" hook "$1"; then echo light
+  elif [ "$TWRAPPED" = 1 ]; then echo wrapped
+  else echo heavy; fi
+  exit 0
+fi
+[ $# -gt 0 ] || _tusage "missing command"
+cmd=("$@")
+if [ "$force" != heavy ]; then
+  if _heavy "${TK[CCRC_TEST_WIDE_FILES]}" "${cmd[@]}"; then reads=heavy; else reads=light; fi
+  # --light only confirms a light reading: a habit of passing it never lets a whole suite skip the queue.
+  [ "$force" != light ] || [ "$reads" = light ] \
+    || echo "$PROG: --light is ignored: this command reads as heavy, so it takes its turn in the heavy queue" >&2
+  force="$reads"
+fi
+if [ "$mode" = classify ]; then echo "$force"; exit 0; fi
+
+if _tinside; then exec "${cmd[@]}"; fi
+if [ "$where" != local ]; then
+  [ -e "$REG/testbox-remote-live" ] && TB_LIVE=1
+  if [ "$TB_LIVE" = 1 ] || [ "$where" = remote ]; then _tb_arm; fi
+fi
+summary="${cmd[*]}"; summary="${summary//$'\n'/ }"; summary="${summary:0:160}"
+contained=1
+if [ "${CCD_OS:-linux}" = darwin ]; then
+  contained=0
+  echo "$PROG: this box has no systemd user manager (macOS), so the run is not contained; the queue still applies" >&2
+elif ! _tslice_ready; then
+  # DEGRADE, NEVER REFUSE. The session hook sends every bare heavy run here, so a refusal would leave a session no way
+  # to run a test at all. Uncontained, the run is still queued; `--slice=` of a slice the manager has not loaded is
+  # never asked for, since that makes a transient slice with no limits.
+  contained=0
+  echo "$PROG: WARN: the run is NOT contained: $TSLICE_WHY; it still takes its turn in the queue" >&2
+elif [ -n "$TSLICE_WHY" ]; then
+  echo "$PROG: WARN: $TSLICE_WHY" >&2
+fi
+# SIGNALS. Before the command is launched nothing has started: a signal leaves the queue (the wait file and any slot go)
+# and exits 128+signal, so a cancelled call never leaves a waiter that later runs a test nobody watches. Once it is
+# launched, a signal is passed to the command and the run's scope is stopped, and the wrapper exits with the command.
+launched=0 stopped=0 child=""
+_tstop_run() {   # stop this run's scope: every process the command left behind, not only its main pid
+  [ "$contained" = 1 ] && [ "$launched" = 1 ] && [ "$stopped" = 0 ] || return 0
+  stopped=1
+  systemctl --user stop "ccrc-test-$$.scope" >/dev/null 2>&1 || :
+}
+_tonsig() {   # <exit code>
+  if [ "$launched" = 0 ]; then _trelease; exit "$1"; fi
+  [ -z "$child" ] || kill -TERM "$child" 2>/dev/null
+  _tstop_run
+  [ -n "$child" ] || { _trelease; exit "$1"; }
+}
+trap 'TB_RC=$?; _tstop_run; _trelease; _tb_end "$TB_RC"' EXIT
+trap '_tonsig 143' TERM
+trap '_tonsig 130' INT
+trap '_tonsig 129' HUP
+[ "$force" = light ] || _tacquire "$summary"
+[ -z "$WAIT_FD" ] || { exec {WAIT_FD}>&-; WAIT_FD=""; }
+oom0=""; [ "$contained" = 0 ] || oom0=$(_toom_kills)
+launched=1
+if [ "$contained" = 1 ]; then
+  # The slot's descriptor (when a heavy run holds one) is inherited on purpose: the slot is the run's (THE QUEUE above).
+  systemd-run --user --scope --quiet --collect --slice="$SLICE" --unit="ccrc-test-$$" --description="ccrc test: $summary" -- "${cmd[@]}" <&0 &
+elif [ -n "$SLOT_FD" ]; then
+  "${cmd[@]}" <&0 {SLOT_FD}>&- &
+else
+  "${cmd[@]}" <&0 &
+fi
+child=$!
+rc=0
+while :; do
+  { wait "$child"; } 2>/dev/null; rc=$?   # bash's own `Killed` job line says less than the line below
+  kill -0 "$child" 2>/dev/null || break
+done
+_tstop_run
+if [ -n "$oom0" ]; then
+  oom1=$(_toom_kills)
+  [[ "$oom0" =~ ^[0-9]+$ && "$oom1" =~ ^[0-9]+$ ]] && [ "$oom1" -gt "$oom0" ] \
+    && echo "$PROG: the test slice's memory cap killed a process during this run (MemoryMax=${TK[CCRC_TEST_SLICE_MEMORY_MAX]}, CCRC_TEST_SLICE_MEMORY_MAX; $((oom1 - oom0)) OOM kill(s) in $SLICE); exit $rc" >&2
+fi
+exit "$rc"

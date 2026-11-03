@@ -616,6 +616,13 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // that stayed up); `fixture-mainpid-drift` makes the SECOND sample differ,
     // which is exactly how a crash loop shows itself.
     '  show)',
+    // D-7298: the closing doctor's `test-slice` check asks `show ccrctests.slice -p …` through
+    // `ccrc test --status`. The slice is loaded once `_inst_units` has placed its file (the causal chain a real
+    // `daemon-reload` gives), at the shipped defaults; before that the manager does not know it.
+    '    if [ "$2" = ccrctests.slice ]; then',
+    '      if [ -f "$HOME/.config/systemd/user/ccrctests.slice" ]; then printf \'LoadState=loaded\\nMemoryCurrent=0\\nMemoryMax=6442450944\\nMemorySwapMax=1073741824\\nCPUWeight=20\\nCPUQuotaPerSecUSec=4s\\nIOWeight=20\\n\'; else echo LoadState=not-found; fi',
+    '      exit 0',
+    '    fi',
     // W6 Task 5 — spec §11's GC reads `show -p ExecStart <unit>`, answered in
     // systemd's REAL struct form (measured on a user unit, 2026-09-23):
     // `path=` is `/usr/bin/env` and the tree path is inside `argv[]`, so a
@@ -757,7 +764,8 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // prints the canned ready answer. Canned rather than forwarded to the real
     // python3, so the install stays hermetic and reads no projects root.
     `[ "$1" = -c ] && [ "$2" = '${DOCS_PROBE}' ] && exit 0`,
-    `[ "$1" = /dev/fd/3 ] && [ "$2" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
+    // The helper's first two words are the docs redactor's CLI path and its pins (D-7077), so the verb is the fourth.
+    `[ "$1" = /dev/fd/3 ] && [ "$4" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
     // codex-bridge Stage 1, Task 8: `ccrc codex start` reads the lane's status
     // through the auth library (`_codex_auth`, `python3 -IS <lib> status …`).
     // That library, and ONLY at its installed path, goes to the REAL
@@ -766,7 +774,8 @@ export function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     `[ "$1" = -IS ] && [ "$2" = "$HOME/.local/bin/ccgpt-auth.py" ] && exec '${PYTHON3}' "$@"`,
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
-  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT', 'CCRC_VERSIONS_KEEP', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_UPDATE_HEALTH_S', 'CCRC_UPDATE_DEADLINE_MS', 'CCRC_RELEASE_BASE_URL', 'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT', 'CCRC_VERSIONS_KEEP', 'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_UPDATE_HEALTH_S', 'CCRC_UPDATE_DEADLINE_MS', 'CCRC_RELEASE_BASE_URL', 'CCRC_MODELS_ADVANCE_BUDGET_S', 'CCRC_SESSION_SLICE_MEMORY_MAX', 'CCRC_SESSION_SLICE_SWAP_MAX', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S',
+    'CCRC_KEEPALIVE_MODEL', 'CCRC_KEEPALIVE_PROMPT', 'CCRC_KEEPALIVE_FRESH', 'CCRC_USAGE_SWEEP_DAYS']) delete env[k];
   // `verify-service.sh`'s own knobs, at the values its header says a test uses:
   // the production defaults sleep 3 + 5 seconds per call, and `_inst_enable`
   // makes one call per install. Zeroed here rather than per test, for the
@@ -1150,6 +1159,12 @@ export const UNIT_FILES: Array<[string, string]> = [
   // The pane-scope sweep: ROLE-GATED on the reaper's terms — a server box runs no pane scopes.
   ['ccd-scope-sweep.service', 'deploy/systemd/ccd-scope-sweep.service'],
   ['ccd-scope-sweep.timer', 'deploy/systemd/ccd-scope-sweep.timer'],
+  // The read-only conflict radar (landing order wave 3b): ROLE-GATED `!= server` - a server box checks out no project to measure.
+  ['ccd-land-probe.service', 'deploy/systemd/ccd-land-probe.service'],
+  ['ccd-land-probe.timer', 'deploy/systemd/ccd-land-probe.timer'],
+  // Test box TB11 (D-7413): the durations timer's pair, ROLE-GATED `!= server` - only a box that runs `ccrc test` estimates.
+  ['ccd-testbox-times.service', 'deploy/systemd/ccd-testbox-times.service'],
+  ['ccd-testbox-times.timer', 'deploy/systemd/ccd-testbox-times.timer'],
   // W4a Task 9 (design §11): the server-role watchdog's pair — ROLE-GATED the
   // OTHER way round from the pairs above: `_inst_units` places it on `server`
   // and `both` (this list's role) and never on `fleet`, whose node the
@@ -1803,7 +1818,8 @@ export const PROVISIONED_BOX_TOKEN =
  *  `filevault` and `secrets-backup-excluded` SKIP at every stage (darwin's), and `snapshot-posture` SKIPs on the fresh
  *  box (no lane secret) and PASSes on the provisioned one, whose `fleetFiles` state `none`.
  *  Wave 24 added `box-settings` (D-6599): PASS at every stage, re-measured from both box-token cases' own failing diff
- *  (a fresh box's ccrc.env sets none of ccrc's settings). */
+ *  (a fresh box's ccrc.env sets none of ccrc's settings). Landing order wave 3b added `land-probe`: SKIP at every stage
+ *  (no landing conf is opted in on a fresh box), re-measured from both box-token cases' own failing diff. */
 export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "accounts": "PASS",
   "approval-digest-mismatch": "SKIP",
@@ -1837,6 +1853,7 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "history": "PASS",
   "jq": "PASS",
   "jq_regex": "PASS",
+  "land-probe": "SKIP",
   "linger": "PASS",
   "memory": "PASS",
   "model-default": "PASS",
@@ -1858,6 +1875,11 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "services": "PASS",
   "skills": "PASS",
   "snapshot-posture": "SKIP",
+  // D-7298: PASS at every stage, re-measured from both box-token cases' own failing diff (the install
+  // places ccrctests.slice, and this fixture's manager then answers it loaded).
+  "test-slice": "PASS",
+  // Test box TB11 (D-7413, D-7567): SKIP at every stage, since a fresh fleet box configures no test box (no URL).
+  "testbox": "SKIP",
   "timeout": "PASS",
   "tmux": "PASS",
   "tmux_skew": "PASS",

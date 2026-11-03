@@ -377,11 +377,12 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 
   // D-5856 (plan docs/superpowers/plans/2026-10-19-consolidation-w1a-switches-notify.md, Task C1b; ARCH-70 (#805)).
   // Every reclaim-paused reader, at the pass and at the act, goes through `readSwitches`: the private parse sites fold
-  // 10 -> 1 on C1b's tip. The one left is the stop-done lane's (`stopDoneSweep.ts`), which W4 moves. May only shrink.
-  it('reclaim-paused is parsed at <= 1 site outside readSwitches (may only shrink)', () => {
+  // 10 -> 1 on C1b's tip. The one left was the stop-done lane's (`stopDoneSweep.ts`); D-7041 (ARCH-43; spec §5.7
+  // "1 -> 0") folds it, so none is left. May only shrink.
+  it('reclaim-paused is parsed at <= 0 sites outside readSwitches (may only shrink)', () => {
     const sites = reclaimPauseParseSites();
-    expect(sites.length, 'a private includes(RECLAIM_PAUSE_MARKER): read it through readSwitches').toBeLessThanOrEqual(1);
-    expect(sites.map((x) => x.file)).toEqual(sites.length === 0 ? [] : ['server/src/stopDoneSweep.ts']);
+    expect(sites.length, 'a private includes(RECLAIM_PAUSE_MARKER): read it through readSwitches').toBeLessThanOrEqual(0);
+    expect(sites.map((x) => x.file)).toEqual([]);
   });
 
   // D-5853 (Task C0f; ARCH-00 (#525)). The test scanners' TS parser, the operator's option (a) (a TypeScript 6 alias),
@@ -673,10 +674,10 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   it('literal source pins over W1a\'s files may only shrink (D-5854; ARCH-06\'s counting rule)', () => {
     // Measured on merge day. Lower a row when a pin moves onto scan/symbols.ts; never raise one.
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 79,
+      'server/src/watch.ts': 68,   // W3 Q3d (D-7028): 79 - 10, the pins whose text moved to coord/questions.ts, re-keyed on scan/symbols.ts; C4n (D-7171): - 1, execChildReclaim's queue pin
       'server/src/server.ts': 23,
       'server/src/interruptlog.ts': 0,
-      'server/src/coord/routes.ts': 38,
+      'server/src/coord/routes.ts': 37,   // C4n (D-7171): 38 - 1, childReclaimPort's queue pin re-keyed on scan/symbols.ts
       'server/src/coord/childReclaim.ts': 6,
       'server/src/coord/expireArchived.ts': 0,
       'server/src/coord/collectTempRoot.ts': 0,
@@ -714,8 +715,8 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   // onto scan/symbols.ts ahead of W1b lowers a row here. Measured on this slice's tip; may only shrink.
   it('literal source pins over W1b\'s files may only shrink (D-6114; ARCH-06\'s counting rule)', () => {
     const CEILING: Record<string, number> = {
-      'server/src/watch.ts': 79,
-      'server/src/coord/routes.ts': 38,
+      'server/src/watch.ts': 68,   // W3 Q3d (D-7028): 79 - 10, the pins whose text moved to coord/questions.ts, re-keyed on scan/symbols.ts; C4n (D-7171): - 1, execChildReclaim's queue pin
+      'server/src/coord/routes.ts': 37,   // C4n (D-7171): 38 - 1, childReclaimPort's queue pin re-keyed on scan/symbols.ts
       'server/src/ccdargv.ts': 6,
       'server/src/registry.ts': 2,
       'server/src/coord/redact.ts': 0,
@@ -762,11 +763,10 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 
   it('literal source pins over every other server/src file may only shrink (ARCH-06; the counting rule)', () => {
     const CEILING: Record<string, number> = {
-      'server/src/accounts/mask.ts': 1,
       'server/src/askbody.ts': 1,
       'server/src/askkey.ts': 1,
       'server/src/askwindow.ts': 1,
-      'server/src/auth/sessions.ts': 3,
+      'server/src/auth/sessions.ts': 2,
       'server/src/auth/webauthn.ts': 2,
       'server/src/childReclaimSweep.ts': 7,
       'server/src/collectLane.ts': 7,
@@ -778,7 +778,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/coord/delegation-checkpoint.ts': 33,
       'server/src/coord/delegation-correlation.ts': 4,
       'server/src/coord/delegation-ingest.ts': 5,
-      'server/src/coord/delegation-journal.ts': 14,
+      'server/src/coord/delegation-journal.ts': 10,
       'server/src/coord/delegation-model.ts': 5,
       'server/src/coord/delegation-policy.ts': 6,
       'server/src/coord/digest.ts': 2,
@@ -797,20 +797,18 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/coord/stall.ts': 6,
       'server/src/coord/stallsettings.ts': 5,
       'server/src/coord/store.ts': 56,
-      'server/src/coord/token.ts': 1,
       'server/src/deps.ts': 2,
       'server/src/docs/policy.ts': 10,
       'server/src/exec.ts': 1,
       'server/src/fleet.ts': 3,
-      'server/src/hibernateSweep.ts': 2,
       'server/src/hookstate.ts': 3,
-      'server/src/index.ts': 38,
+      'server/src/index.ts': 37,
       'server/src/inject/ask.ts': 4,
       'server/src/inject/send.ts': 3,
       'server/src/io.ts': 8,
       'server/src/limits.ts': 1,
       'server/src/linear/client.ts': 2,
-      'server/src/livestate.ts': 2,
+      'server/src/livestate.ts': 1,
       'server/src/localcaps.ts': 3,
       'server/src/pane/dialog.ts': 4,
       'server/src/poolrule.ts': 6,
@@ -818,7 +816,6 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
       'server/src/prstate.ts': 2,
       'server/src/remote/io.ts': 1,
       'server/src/remote/runner.ts': 1,
-      'server/src/stopDoneSweep.ts': 5,
       'server/src/turnidle.ts': 9,
       'server/src/update/converge.ts': 12,
       'server/src/update/dispatch.ts': 8,
@@ -844,21 +841,20 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
 // a `verbSupported(` or a verb-tagged `capSupported(` (`consolidationCensus.ts`'s `capabilityChoiceSites`, tagged
 // from `CCD_CAN`) may stand only in W4's two files, which W1b never edits (three `verbSupported(` there). `watch.ts`'s
 // seven deferred calls moved in the follow-up `c1k-watch-after-c1f`, so nothing else is exempt. The W4 set may only
-// shrink. Flag and verb-precondition sites are reported, never ratcheted. The census is loaded inside the rows, so
+// shrink, and since D-7042 (ARCH-43 C4d) it is empty: no file is exempt. Flag and verb-precondition sites are reported, never ratcheted. The census is loaded inside the rows, so
 // this block adds no import line.
 describe('one verb question (ARCH-71): ccdCan(state, row) (D-5866)', () => {
-  it('no verb question outside ccdCan, except W4\'s three', async () => {
-    const { capabilityChoiceSites, W4_HELD_FILES } = await import('../consolidationCensus.js');
+  // D-7042 (ARCH-43 C4d): W4 moved its three verb sites into the one sleep executor's ccdCan, so nothing is held.
+  it('no verb question outside ccdCan', async () => {
+    const { capabilityChoiceSites } = await import('../consolidationCensus.js');
     const sites = await capabilityChoiceSites();
     const legacy = sites.filter((x) => x.tag === 'verb' && x.form !== 'ccdCan');
     const show = (xs: typeof sites): string[] => xs.map((x) => `${x.file}:${x.line} ${x.text.trim()}`);
     expect(show(legacy), 'ask ccdCan(state, row) instead').toEqual([]);
-    const w4 = sites.filter((x) => x.tag === 'w4-held');
-    expect(w4.filter((x) => x.form === 'verbSupported').length, 'W4\'s three verb sites may only shrink')
-      .toBeLessThanOrEqual(3);
-    expect(w4.every((x) => W4_HELD_FILES.includes(x.file))).toBe(true);
+    expect(sites.map((x): string => x.tag), 'no site is tagged w4-held any more').not.toContain('w4-held');
+    expect(sites.filter((x) => x.form === 'verbSupported').length, 'W4\'s three verb sites are gone').toBe(0);
     console.log(`capability census: flag ${sites.filter((x) => x.tag === 'flag').length}, verb-precondition ${
-      sites.filter((x) => x.tag === 'verb-precondition').length}, w4-held ${w4.length}, ccdCan ${
+      sites.filter((x) => x.tag === 'verb-precondition').length}, ccdCan ${
       sites.filter((x) => x.form === 'ccdCan').length}`);
   });
 
@@ -937,19 +933,18 @@ describe('one change latch (ARCH-76): changeLatch (D-5861)', () => {
 // `LANE_SCHEDULE` (`server/src/laneSchedule.ts`) and one `runLane` (`FleetWatcher`): no lane keeps a `last*` clock or a
 // guard field of its own. Named by `consolidationCensus.ts`'s `laneClockFields` and `singleFlightGuards`, and for a clock
 // nobody named by `laneClockShapes` (a numeric field compared as `now - this.X < CONST`). What stays is reported by name:
-// W4's two lanes (`stopDoneSweeping`/`lastStopDoneSweep`, `hibernateSweeping`/`lastHibernateSweep`), the tick's own guard,
-// `dispatchNow`'s run and its one follow-up (a trigger with no cadence). `DelegationLane#lastSweepAt` is the `delegation` row
+// the tick's own guard, `dispatchNow`'s run and its one follow-up (a trigger with no cadence). W4's two sleep lanes
+// (`stopDoneSweeping`/`lastStopDoneSweep`, `hibernateSweeping`/`lastHibernateSweep`) are the `sleepRunDone` and
+// `sleepIdleHours` rows since D-7045 (ARCH-43), so no lane clock field is left. `DelegationLane#lastSweepAt` is the `delegation` row
 // (the series that held that class has merged). Each counts only down. The census is loaded inside the rows, so this block adds no import line.
 describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () => {
   const text = (xs: ReadonlyArray<{ text: string }>): string[] => xs.map((x) => x.text.trim());
 
-  it('only W4\'s two clocks remain as lane clock fields, and no unnamed clock is compared with a constant', async () => {
+  it('no lane clock field remains (W4\'s two are rows since D-7045), and no unnamed clock is compared with a constant', async () => {
     const { laneClockFields, laneClockShapes } = await import('../consolidationCensus.js');
-    expect(text(laneClockFields()), 'a lane clock is a row of LANE_SCHEDULE, not a field').toEqual([
-      'private lastStopDoneSweep = 0;', 'private lastHibernateSweep = 0;',
-    ]);
+    expect(text(laneClockFields()), 'a lane clock is a row of LANE_SCHEDULE, not a field').toEqual([]);
     const shapes = laneClockShapes().map((x) => x.text.trim());
-    expect(shapes.filter((t) => !/lastStopDoneSweep|lastHibernateSweep/.test(t)), 'no lane clock outside runLane').toEqual([
+    expect(shapes, 'no lane clock outside runLane').toEqual([
       // Nothing remains in `FleetWatcher`. Four lanes that landed on main while this ratchet was in review kept clocks of their
       // own, and the consolidation (GitHub #1279) moved them out: the orphan-worktree lane (D-6631) is the `orphanTrees` row now,
       // and the stale-archive arm (D-6643), the disk alarm (D-6615) and the tmp sweep census (D-6624) keep their wall-clock
@@ -979,11 +974,11 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
     });
   });
 
-  it('only the tick\'s guard, dispatchNow\'s run and its follow-up, and W4\'s two guards remain as single-flight fields', async () => {
+  it('only the tick\'s guard, dispatchNow\'s run and its follow-up remain as single-flight fields (W4\'s two are rows since D-7045)', async () => {
     const { singleFlightGuards } = await import('../consolidationCensus.js');
     expect(text(singleFlightGuards()).sort(), 'a lane\'s single flight is its row\'s flight').toEqual([
       'private dispatchAgain = false;', 'private dispatchRun: Promise<DispatchRunResult> | null = null;',
-      'private hibernateSweeping = false;', 'private stopDoneSweeping = false;', 'private ticking = false;',
+      'private ticking = false;',
     ]);
   });
 
@@ -1073,6 +1068,27 @@ describe('one registry listing per tick (ARCH-51): the tick\'s FleetReadModel (D
         'class FleetWatcher {',
         '  async tick(): Promise<void> { await readRegistryMeasured(io, cfg); }',
         '  private async fooPass(): Promise<void> { await readRegistry(io, cfg); }',
+        '}',
+      ].join('\n'));
+      expect(registryListingSites(tree).filter((x) => x.tag === 'selection' && x.method !== 'FleetWatcher.tick')).toHaveLength(1);
+    } finally {
+      rm(tree, { recursive: true, force: true });
+    }
+  });
+
+  // D-7047 fix round: a listing read through `readdirMeasured(registryDir)` (the sleep lanes' act-time listing) is a
+  // listing too, so a lane that selects its rows that way is not hidden from the ratchet by the measured read.
+  it('CONTROL: the census sees a lane that lists for itself through readdirMeasured', async () => {
+    const { registryListingSites } = await import('../consolidationCensus.js');
+    const { mkdtempSync: mk, mkdirSync: md, writeFileSync: wf, rmSync: rm } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const tree = mk(path.join(tmpdir(), 'listing-ratchet-measured-'));
+    try {
+      md(path.join(tree, 'server/src'), { recursive: true });
+      wf(path.join(tree, 'server/src/watch.ts'), [
+        'class FleetWatcher {',
+        '  async tick(): Promise<void> { await readRegistryMeasured(io, cfg); }',
+        '  private async fooPass(): Promise<void> { await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); }',
         '}',
       ].join('\n'));
       expect(registryListingSites(tree).filter((x) => x.tag === 'selection' && x.method !== 'FleetWatcher.tick')).toHaveLength(1);

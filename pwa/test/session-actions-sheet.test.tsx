@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
-import { fleetSession, hibernatedSession } from './fleetFixture';
+import { fleetSession, hibernatedSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { READER_MIN_COLS } from '../../shared/api';
 import { ToastHost } from '@ccrc/ui';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
@@ -25,11 +25,13 @@ const stubFetch = (body: unknown, status = 502): void => {
 /** A real `AccountsResponse` shape for `GET /api/accounts` — every other
  *  route this blanket stub answers still gets the bare `'{}'` 200, which is
  *  fine for a POST action that only needs to succeed. `/api/accounts` is
- *  different: `SwapSheet` mounts under every `SessionActionsSheet` and polls
- *  it via `useAccountUsage` whenever the sheet is open, so a bare `{}`
- *  here answered `roster: undefined` — a wire shape the server never sends
- *  (fix round 1: the guards this motivated should be a production boundary
- *  check, not load-bearing for the suite). */
+ *  different: `SwapSheet` mounts under every `SessionActionsSheet`, and it
+ *  used to poll it via `useAccountUsage` whenever the sheet was open, so a
+ *  bare `{}` here answered `roster: undefined` — a wire shape the server
+ *  never sends (fix round 1: the guards this motivated should be a production
+ *  boundary check, not load-bearing for the suite). Since C8 (D-6440) the
+ *  fleet store is the route's one reader and the sheet polls nothing; the
+ *  arm stays so any read of the route still gets the real shape. */
 const accountsRoute = (): Response =>
   new Response(JSON.stringify({ accounts: [], projected: null, roster: TEST_ROSTER }), {
     status: 200, headers: { 'content-type': 'application/json' },
@@ -94,7 +96,7 @@ describe('composition', () => {
   // Dead sessions stay silent about limits (SessionLine does the same): a
   // session that will never run again has nothing to warn about moving.
   it('says nothing about limits on a dead session, even past the threshold', () => {
-    render(<SessionActionsSheet session={s({ status: 'dead', limits: { five: 90, seven: 90 } })}
+    render(<SessionActionsSheet session={s({ status: 'dead', lifecycle: DEAD_LIFECYCLE, limits: { five: 90, seven: 90 } })}
                                 open onClose={() => {}} onReap={() => {}} />);
     expect(screen.queryByText(/limit near/i)).not.toBeInTheDocument();
   });
@@ -102,12 +104,12 @@ describe('composition', () => {
 
 describe('actions', () => {
   it('restarts through api.ensure', async () => {
-    render(<SessionActionsSheet session={s({ status: 'dead' })} open onClose={() => {}} onReap={() => {}} />);
+    render(<SessionActionsSheet session={s({ status: 'dead', lifecycle: DEAD_LIFECYCLE })} open onClose={() => {}} onReap={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: /restart/i }));
-    // SwapSheet is mounted (hidden) alongside every SessionActionsSheet and
-    // polls /api/accounts on its own effect (useAccountUsage), so the
-    // restart call is no longer necessarily the first fetch recorded — find
-    // it by the id it must carry, rather than assume its position.
+    // The restart call need not be the first fetch recorded (SwapSheet, mounted
+    // hidden alongside every SessionActionsSheet, once polled /api/accounts on
+    // its own; since C8, D-6440, it reads the fleet store) — find it by the id
+    // it must carry, rather than assume its position.
     await waitFor(() =>
       expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes('demo-quiet-mesa'))).toBe(true),
     );
@@ -117,7 +119,7 @@ describe('actions', () => {
     stubFetch({ ok: false, stderr: 'ccd: no such session: demo-quiet-mesa' });
     render(
       <>
-        <SessionActionsSheet session={s({ status: 'dead' })} open onClose={() => {}} onReap={() => {}} />
+        <SessionActionsSheet session={s({ status: 'dead', lifecycle: DEAD_LIFECYCLE })} open onClose={() => {}} onReap={() => {}} />
         <ToastHost />
       </>,
     );
@@ -205,10 +207,10 @@ describe('archive and restore (workspace lifecycle §5.2: one Archive, Restore o
   });
 
   it.each([
-    ['an archived workspace', s({ status: 'dead', archivedAt: 1785300000, bucket: 'archived' }), '/demo-quiet-mesa/restore'],
-    ['a stopped main checkout', s({ id: 'claude-demo', workspace: null, status: 'dead', bucket: 'dead',
+    ['an archived workspace', s({ status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1785300000, bucket: 'archived' }), '/demo-quiet-mesa/restore'],
+    ['a stopped main checkout', s({ id: 'claude-demo', workspace: null, status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead',
       stoppedBy: { at: 1785300000_000, surface: 'pwa' } }), '/claude-demo/ensure'],
-    ['a merged-and-archived (`cleanup`) workspace', s({ status: 'dead', archivedAt: 1785300000, bucket: 'cleanup' }),
+    ['a merged-and-archived (`cleanup`) workspace', s({ status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1785300000, bucket: 'cleanup' }),
       '/demo-quiet-mesa/restore'],
   ] as const)('%s offers Restore and no Archive, and Restore POSTs %s', async (_label, session, suffix) => {
     renderSheet(session);
@@ -218,9 +220,9 @@ describe('archive and restore (workspace lifecycle §5.2: one Archive, Restore o
   });
 
   it.each([
-    ['a stopped workspace that is not archived — Archive again', s({ status: 'dead', bucket: 'dead',
+    ['a stopped workspace that is not archived — Archive again', s({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead',
       stoppedBy: { at: 1785300000_000, surface: 'pwa' } })],
-    ['a crashed main checkout — dead, never stopped', s({ id: 'claude-demo', workspace: null, status: 'dead', bucket: 'dead' })],
+    ['a crashed main checkout — dead, never stopped', s({ id: 'claude-demo', workspace: null, status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' })],
   ] as const)('%s offers Archive and no Restore', (_label, session) => {
     renderSheet(session);
     expect(screen.getByRole('button', { name: 'Archive' })).toBeInTheDocument();
@@ -319,9 +321,10 @@ describe('hold and release', () => {
     released = [];
     // A fetch stub that RECORDS hold/release requests rather than merely
     // answering 200 — `stubFetch`'s blanket 502 above is the wrong shape
-    // here (SwapSheet's useAccountUsage polls /api/accounts on its own
-    // effect, mounted alongside every SessionActionsSheet, and that call
-    // must not read as a hold/release failure).
+    // here: any other call (SwapSheet, mounted alongside every
+    // SessionActionsSheet, once polled /api/accounts on its own; since C8,
+    // D-6440, it reads the fleet store) must not read as a hold/release
+    // failure.
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? 'GET';
@@ -539,7 +542,7 @@ describe('forget — the end-of-life a non-workspace session never had', () => {
   // sheet can remove — archive/reap are workspace-only, stop leaves the row.
   const deadWrapper = (over: Partial<FleetSession> = {}): FleetSession =>
     s({ id: 'claude-acme-demo', wrapper: 'claude-acme', home: 'claude-acme',
-        workspace: null, status: 'dead', ...over });
+        workspace: null, status: 'dead', lifecycle: DEAD_LIFECYCLE, ...over });
 
   it('offers Forget on a dead non-workspace session only', () => {
     render(<SessionActionsSheet session={deadWrapper()} open onClose={() => {}} onReap={() => {}} />);
@@ -553,8 +556,18 @@ describe('forget — the end-of-life a non-workspace session never had', () => {
   });
 
   it('hides Forget on a workspace, dead or not — those go archive → reap', () => {
-    render(<SessionActionsSheet session={s({ status: 'dead' })}
+    render(<SessionActionsSheet session={s({ status: 'dead', lifecycle: DEAD_LIFECYCLE })}
                                 open onClose={() => {}} onReap={() => {}} />);
+    expect(screen.queryByRole('button', { name: /forget session/i })).not.toBeInTheDocument();
+  });
+
+  // OA-C15 (a) (D-7265; C7c Step 6, D-7181): the door follows the server's word, and doubt is never dead.
+  it.each([
+    ['the server doubts the row (presence unknown: tmux did not answer)', { presence: 'unknown' as const }],
+    ['the server sends no presence (an older server, or a snapshot from before D-7208)', { presence: undefined }],
+    ['the pane is gone under a lifecycle that resolves on its own (restarting reads alive)', { lifecycle: 'restarting' as const }],
+  ])('hides Forget when %s', (_why, over) => {
+    render(<SessionActionsSheet session={deadWrapper(over)} open onClose={() => {}} onReap={() => {}} />);
     expect(screen.queryByRole('button', { name: /forget session/i })).not.toBeInTheDocument();
   });
 
@@ -598,7 +611,7 @@ describe('the substrate gate — destructive affordances refuse a session nobody
   const sheetProps = { open: true, onClose: () => {}, onReap: () => {} };
 
   it('Restart is disabled, names the fault, and never posts /ensure', () => {
-    render(<SessionActionsSheet session={faulted({ status: 'dead' })} {...sheetProps} />);
+    render(<SessionActionsSheet session={faulted({ status: 'dead', lifecycle: DEAD_LIFECYCLE })} {...sheetProps} />);
     const btn = screen.getByRole('button', { name: /restart session/i });
     expect(btn).toBeDisabled();
     expect(btn.getAttribute('title')).toContain('x');
@@ -609,7 +622,7 @@ describe('the substrate gate — destructive affordances refuse a session nobody
 
   it('Restore on a faulted stopped main checkout is disabled and never posts /ensure', () => {
     render(<SessionActionsSheet
-      session={faulted({ id: 'claude-demo', workspace: null, status: 'dead', bucket: 'dead',
+      session={faulted({ id: 'claude-demo', workspace: null, status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead',
         stoppedBy: { at: 1785300000_000, surface: 'pwa' } })} {...sheetProps} />);
     const btn = screen.getByRole('button', { name: 'Restore' });
     expect(btn).toBeDisabled();
@@ -667,7 +680,7 @@ describe('the substrate gate — destructive affordances refuse a session nobody
   });
 
   it('Forget session… is disabled and its consequence confirm never opens', () => {
-    render(<SessionActionsSheet session={faulted({ workspace: null, status: 'dead' })}
+    render(<SessionActionsSheet session={faulted({ workspace: null, status: 'dead', lifecycle: DEAD_LIFECYCLE })}
                                 {...sheetProps} />);
     const btn = screen.getByRole('button', { name: /forget session/i });
     expect(btn).toBeDisabled();
@@ -677,7 +690,7 @@ describe('the substrate gate — destructive affordances refuse a session nobody
   });
 
   it('a null substrate leaves Restart enabled with no gate title', () => {
-    render(<SessionActionsSheet session={s({ status: 'dead' })} {...sheetProps} />);
+    render(<SessionActionsSheet session={s({ status: 'dead', lifecycle: DEAD_LIFECYCLE })} {...sheetProps} />);
     const btn = screen.getByRole('button', { name: /restart session/i });
     expect(btn).toBeEnabled();
     expect(btn.getAttribute('title')).toBeNull();
@@ -772,7 +785,7 @@ describe('the spawn-state note (§1.6b)', () => {
     // `.spawn` survives the pane, so a stopped or dead row can still carry rc
     // 6. There is no drawer to open; Restart session is the respawn, and ccd
     // pins that new pane 220x50.
-    renderSheet(s({ spawnState: 'narrow', status: 'dead', bucket: 'dead' }));
+    renderSheet(s({ spawnState: 'narrow', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }));
     const t = notes().join(' ');
     expect(t).toContain('Restart session builds a new one');
     // True only on a fleet box running a pinning ccd, and it says so.
@@ -812,7 +825,7 @@ describe('a door that fails still says so, in ccd’s own words', () => {
     // 502 `{stderr}` with no `error` key is the REAL shape every runCcd route
     // fails as, which is why `apiErrorText` and not `err.message`.
     stubFetch({ ok: false, stderr: 'ws-restore: worktree is gone' });
-    renderSheet(s({ status: 'dead', archivedAt: 1785300000, bucket: 'archived' }));
+    renderSheet(s({ status: 'dead', lifecycle: DEAD_LIFECYCLE, archivedAt: 1785300000, bucket: 'archived' }));
     fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
     expect(await screen.findByText(/ws-restore: worktree is gone/)).toBeInTheDocument();
   });
@@ -868,7 +881,7 @@ describe('the spawn notes, one per state', () => {
     // The third of three spawn-state notes and the only one with no case. It
     // is the one that answers the reader's actual question — the pane is gone,
     // so is my work? — and silence there is the worst of the three.
-    renderSheet(s({ spawnState: 'vanished', status: 'dead', bucket: 'dead' }));
+    renderSheet(s({ spawnState: 'vanished', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }));
     expect(screen.getByText(/tmux session disappeared/)).toBeInTheDocument();
     expect(screen.getByText(/resumed\s+from the transcript, not from that pane/)).toBeInTheDocument();
   });

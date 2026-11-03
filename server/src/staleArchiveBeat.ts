@@ -3,7 +3,7 @@
 // watcher's, keeps the arm's memory, and holds one pass at a time on the arm's own clock. SHADOW until `$REG/stale-archive-live`.
 // Its clock is the WALL clock, as it was in the watcher: making it a `LANE_SCHEDULE` row (monotonic, `skip`) changes the clock,
 // so it stays a follow-up.
-import type { Deps } from './deps.js';
+import type { WatcherDeps } from './deps.js';
 import type { FleetWatcherView } from './coord/ports.js';
 import { notify } from './notice.js';
 import { readSessionRecord, type SessionRecord } from './registry.js';
@@ -19,7 +19,7 @@ export class StaleArchiveBeat {
   private sweeping = false;
   private readonly memory: StaleArchiveMemory = { sightings: new Map(), would: new Set(), failed: new Map() };
 
-  constructor(private readonly deps: () => Deps, private readonly view: FleetWatcherView, private readonly resolve: ResolveTranscript) {}
+  constructor(private readonly deps: () => Pick<WatcherDeps, 'io' | 'cfg' | 'tmux' | 'coord' | 'notifyLog' | 'viewers' | 'runCcd' | 'fleetState' | 'queue'>, private readonly view: FleetWatcherView, private readonly resolve: ResolveTranscript) {}
 
   /** Hourly, one pass at a time, on the tick's rows and listing. Never rejects: a throw is warned and costs the pass. */
   async sweep(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {

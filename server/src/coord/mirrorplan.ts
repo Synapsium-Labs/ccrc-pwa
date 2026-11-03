@@ -48,16 +48,17 @@ export function frameRead(
   cursor: number, data: string, size: number, lastSize: number,
 ): FramedRead {
   if (size < cursor || size < lastSize) return { lines: [], nextCursor: 0, shrank: true };
-  const lastLf = data.lastIndexOf('\n');
-  if (lastLf < 0) return { lines: [], nextCursor: cursor, shrank: false };
-  const complete = data.slice(0, lastLf + 1);
+  // D-7059: the framing is the kernel's (shared with the collect-lane journal); the policy is this reader's own. A
+  // blank record is dropped here, its bytes still inside `complete`; the tail is left unconsumed for the next read.
+  const { complete, records } = splitJournalRecords(data);
   return {
-    lines: complete.split('\n').slice(0, -1).filter((l) => l !== ''),
+    lines: records.filter((l) => l !== ''),
     nextCursor: cursor + Buffer.byteLength(complete, 'utf8'),
     shrank: false,
   };
 }
 
+import { splitJournalRecords } from '../journalKernel.js';
 import {
   compareGenerations, looksLikeGenerationFile, parseLifecycleGeneration,
   type LifecycleGapReason,

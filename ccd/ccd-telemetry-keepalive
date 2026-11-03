@@ -71,8 +71,11 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — see SECRETS below
 # idiom, and the reason it is a FILE is that a wedged fleet must have a door
 # that needs no service running.
 #
-# Serialized oneshot driven by ccd-telemetry-keepalive.timer. Every knob is
-# env-overridable (the CCRC_GRAPH_* precedent); the roots are HOME-derived
+# Serialized oneshot driven by ccd-telemetry-keepalive.timer. Its three
+# operator settings (CCRC_KEEPALIVE_FRESH, _MODEL and _PROMPT) are read as ccrc
+# reads its own (wave 29, D-6981): a set environment, else a line in
+# ~/.ccrc/ccrc.env, else the default. Every other knob is env-overridable (the
+# CCRC_GRAPH_* precedent); the roots are HOME-derived
 # with no override, exactly as ccd/ccd and ccd-graph-sweep do — HOME is
 # the test harness's isolation boundary.
 #
@@ -120,11 +123,22 @@ STATE_DIR="$HOME/.ccrc/keepalive-state"
 #
 # IT IS ALSO THE INTERVAL KNOB. The timer sets the FLOOR; this sets the real
 # spacing, because a refreshed account is skipped until its row is this old.
-# CCRC_KEEPALIVE_FRESH=7200 in a drop-in quarters the fleet's spend without
-# touching a unit file.
-: "${CCRC_KEEPALIVE_FRESH:=1800}"
-: "${CCRC_KEEPALIVE_MODEL:=haiku}"
-: "${CCRC_KEEPALIVE_PROMPT:=Reply with the single word: ok}"
+# A CCRC_KEEPALIVE_FRESH=7200 line in ~/.ccrc/ccrc.env quarters the fleet's
+# spend without touching a unit file.
+#
+# THE THREE SETTINGS, through ccrc's one reader (wave 29, D-6981): this unit
+# has no shell and no EnvironmentFile=, so the file is read by `_ccrc_knob`,
+# sourced from ccd/lib/ccrc-settings.sh beside this script (the repository's
+# suites) or where `_inst_bins` places it. A value it cannot read stops the
+# pass here, before the lock, exit 1, and never runs a default (`_ka_say` is
+# not defined yet, so these print for themselves). The freshness is validated
+# with the other spend knobs below, and its source is kept for that line.
+_settings_lib="${BASH_SOURCE[0]%/*}/lib/ccrc-settings.sh"; [ -f "$_settings_lib" ] || _settings_lib="$HOME/.local/libexec/ccrc/ccrc-settings.sh"
+. "$_settings_lib" 2>/dev/null && declare -F _ccrc_knob >/dev/null 2>&1 || { echo "${0##*/}: the settings reader is missing or broken (~/.local/libexec/ccrc/ccrc-settings.sh) — this pass did nothing; 'ccrc update --force' places it" >&2; exit 1; }
+_ccrc_knob CCRC_KEEPALIVE_FRESH 1800 && CCRC_KEEPALIVE_FRESH="$KNOB" || { printf 'keepalive: %s — nothing was measured\n' "$KNOB_WHY" >&2; exit 1; }
+case "$KNOB_FROM" in environment) KA_FRESH_FROM=', as set in the environment' ;; file) KA_FRESH_FROM=', as set in ~/.ccrc/ccrc.env' ;; *) KA_FRESH_FROM='' ;; esac
+_ccrc_knob CCRC_KEEPALIVE_MODEL haiku && CCRC_KEEPALIVE_MODEL="$KNOB" || { printf 'keepalive: %s — nothing was measured\n' "$KNOB_WHY" >&2; exit 1; }
+_ccrc_knob CCRC_KEEPALIVE_PROMPT "Reply with the single word: ok" && CCRC_KEEPALIVE_PROMPT="$KNOB" || { printf 'keepalive: %s — nothing was measured\n' "$KNOB_WHY" >&2; exit 1; }
 : "${CCRC_KEEPALIVE_TURN_TIMEOUT:=120}"
 # The backoff, and it is deliberately three plain numbers rather than a curve:
 # after this many CONSECUTIVE non-refreshing turns an account is skipped until
@@ -259,7 +273,7 @@ _ka_flock_works \
   || { _ka_say 'flock cannot take -n on an open fd — nothing was measured'; exit 1; }
 
 # THE KNOBS THAT CONTROL THE MONEY ARE VALIDATED LIKE ANY OTHER INPUT. An
-# operator writing CCRC_KEEPALIVE_FRESH=30m in a drop-in — the obvious spelling,
+# operator writing CCRC_KEEPALIVE_FRESH=30m in ccrc.env or a drop-in — the obvious spelling,
 # and systemd's own for timers — used to FAIL OPEN: `[ 30m -lt … ]` is a syntax
 # error, `[` returns 2, every account reads as not-fresh, EVERY account takes a
 # turn, and then `--argjson fresh 30m` aborts the census so the pass cannot even
@@ -268,9 +282,14 @@ _ka_flock_works \
 for knob in CCRC_KEEPALIVE_FRESH CCRC_KEEPALIVE_TURN_TIMEOUT \
             CCRC_KEEPALIVE_BACKOFF_AFTER CCRC_KEEPALIVE_BACKOFF_BASE \
             CCRC_KEEPALIVE_BACKOFF_MAX; do
-  [[ "${!knob}" =~ ^[0-9]+$ ]] \
-    || { _ka_say "$knob must be a whole number — got '${!knob}'; nothing was measured"; exit 1; }
+  [[ "${!knob}" =~ ^[0123456789]+$ ]] \
+    || { src=""; [ "$knob" != CCRC_KEEPALIVE_FRESH ] || src="$KA_FRESH_FROM"
+         _ka_say "$knob must be a whole number — got '${!knob}'$src; nothing was measured"; exit 1; }
 done
+# Use the freshness gates' own decimal comparison, not bash arithmetic (which
+# wraps overflow and treats leading zeros as octal), to prove representability.
+[ "$CCRC_KEEPALIVE_FRESH" -ge 0 ] 2>/dev/null \
+  || { _ka_say "CCRC_KEEPALIVE_FRESH must be a representable whole number — got '$CCRC_KEEPALIVE_FRESH'$KA_FRESH_FROM; nothing was measured"; exit 1; }
 
 STARTED="$(date -u +%FT%TZ)"
 

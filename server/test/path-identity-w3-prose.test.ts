@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SENTENCES } from '../src/wsaudit.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (f: string): string => readFileSync(path.join(root, f), 'utf8');
@@ -215,7 +216,7 @@ describe('the path-identity spec records W3 as built (path-identity spec §4.12,
   const spec = read(SPEC);
   const raw = asBuilt();
   const s = flat(raw);
-  const ccd = read(CCD);
+  const ccd = ccdSource();
 
   it("§4.12 stands after §4.11's last row, and directly above §5", () => {
     const p411 = spec.indexOf('\n### 4.11 Proof\n');
@@ -440,7 +441,7 @@ describe('the path-identity spec records W3 as built (path-identity spec §4.12,
 
 describe('the programme’s rulings file carries the W3 as-built note (path-identity spec §4.12)', () => {
   const c = read(CONTRACT);
-  const ccd = read(CCD);
+  const ccd = ccdSource();
   const head = /^### §17 as built \(path-identity W3, run \d+\)$/m.exec(c);
   const at = head ? head.index : -1;
   const next = at < 0 ? -1 : c.slice(at + 1).search(/\n#{2,3} /);

@@ -9,13 +9,13 @@
 // keeps ccrc's write surface at exactly one additive verb.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { substrateFault } from '../../../shared/api';
+import { isArchivedRow, substrateFault } from '../../../shared/api';
 import type { FleetSession, PrView } from '../../../shared/api';
 import { Button, QuickConfirm, Sheet, TextInput, TEXT_INPUT_INLINE, toast } from '@ccrc/ui';
 import { GHOST_ANCHOR } from '../lib/ghostAnchor';
 import { api, apiErrorText } from '../lib/api';
 import { ArchiveConflictSheet, runOpenRuns, type ArchiveConflictRun } from '../fleet/ArchiveConflictSheet';
-import { isRunClosed } from '../fleet/runWords';
+import { boundOpenRun } from '../fleet/runWords';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { checkPhrase, prSentence, tooltipSentence, UNCHECKED_PR } from './PrKeycap';
 import './chat.css';
@@ -105,9 +105,14 @@ export function PrSheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, id]);
 
-  // THE OPEN RUN the merged note names, and it needs ZERO wire change: the
-  // fleet store already carries the active run list. Both reads are HOOKS, so
-  // they run above the `session === null` guard like every other hook here.
+  // THE OPEN RUN the merged note names: the OPEN-ONLY policy, named (D-7182).
+  // The workspace's open run is the one the wire binds to it
+  // (`sessionRunOf(s, 'open')`, through `boundOpenRun`, matched to the active
+  // run list the fleet store carries), never a run that merely names its id
+  // (#746: a recycled workspace name does not inherit an earlier occupant's
+  // run), and never its newest bound run, which may have closed while an older
+  // one is open. The reads are HOOKS, so they run above the `session === null`
+  // guard like every other hook here.
   //
   // Gated on `runsFrameSeen` — an empty `runs` before the first frame is not
   // evidence of no runs, the store's own idiom — and DEGRADING to the plain
@@ -115,7 +120,8 @@ export function PrSheet({
   // The plain sentence is true of every unarchived merged workspace, so
   // degrading to it says less than we know, never more.
   const runsFrameSeen = fleet((s) => s.runsFrameSeen);
-  const openRun = fleet((s) => s.runs).find((r) => r.sessionId === id && !isRunClosed(r)) ?? null;
+  const runs = fleet((s) => s.runs);
+  const openRun = session === null ? null : boundOpenRun(runs, session);
   const claimingRun = runsFrameSeen ? openRun : null;
 
   if (!session) return null;
@@ -136,7 +142,7 @@ export function PrSheet({
   const pr = view?.pr ?? session.pr;
   const facts = view?.facts ?? null;
   const draft = view?.draft ?? null;
-  const archived = session.archivedAt !== null;
+  const archived = isArchivedRow(session);
 
   // The substrate gate (spec §4, branch review): the actions sheet disables
   // Archive/Clean-up with the named reason, and this sheet offered the SAME

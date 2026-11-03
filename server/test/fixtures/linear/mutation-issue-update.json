@@ -1,0 +1,140 @@
+{
+  "name": "mutation-issue-update",
+  "documentSource": "code",
+  "document": "mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success issue { id identifier title description priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } } }",
+  "variables": {
+    "id": "00000000-0006-4000-8000-000000000002",
+    "input": {
+      "title": "FX capture child issue (updated)",
+      "description": "Child issue updated by the FX fixture capture.\n\n— written by a ccrc fleet session",
+      "priority": 2,
+      "addedLabelIds": [
+        "00000000-0003-4000-8000-000000000003"
+      ]
+    }
+  },
+  "requestBody": "{\"query\":\"mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success issue { id identifier title description priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } } }\",\"variables\":{\"id\":\"00000000-0006-4000-8000-000000000002\",\"input\":{\"title\":\"FX capture child issue (updated)\",\"description\":\"Child issue updated by the FX fixture capture.\\n\\n— written by a ccrc fleet session\",\"priority\":2,\"addedLabelIds\":[\"00000000-0003-4000-8000-000000000003\"]}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631380302,
+  "receivedAtMs": 1793631380597,
+  "sentAt": "2026-11-02T14:56:20.302+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:21 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "525"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "11"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999989"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634980886"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2498"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634980886"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "issueUpdate": {
+        "success": true,
+        "issue": {
+          "id": "00000000-0006-4000-8000-000000000002",
+          "identifier": "AAA-7",
+          "title": "FX capture child issue (updated)",
+          "description": "Child issue updated by the FX fixture capture.\n\n— written by a ccrc fleet session",
+          "priority": 2,
+          "createdAt": "2026-11-02T14:56:06.026Z",
+          "updatedAt": "2026-11-02T14:56:20.909Z",
+          "team": {
+            "key": "AAA"
+          },
+          "state": {
+            "name": "Backlog",
+            "type": "backlog"
+          },
+          "assignee": null,
+          "labels": {
+            "nodes": [
+              {
+                "name": "Improvement"
+              }
+            ]
+          },
+          "project": null,
+          "parent": {
+            "identifier": "AAA-6"
+          }
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"issueUpdate\":{\"success\":true,\"issue\":{\"id\":\"00000000-0006-4000-8000-000000000002\",\"identifier\":\"AAA-7\",\"title\":\"FX capture child issue (updated)\",\"description\":\"Child issue updated by the FX fixture capture.\\n\\n— written by a ccrc fleet session\",\"priority\":2,\"createdAt\":\"2026-11-02T14:56:06.026Z\",\"updatedAt\":\"2026-11-02T14:56:20.909Z\",\"team\":{\"key\":\"AAA\"},\"state\":{\"name\":\"Backlog\",\"type\":\"backlog\"},\"assignee\":null,\"labels\":{\"nodes\":[{\"name\":\"Improvement\"}]},\"project\":null,\"parent\":{\"identifier\":\"AAA-6\"}}}}}\n"
+}

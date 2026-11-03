@@ -11,8 +11,9 @@
  * three (plus "describes another key") fold into one `details-unknown` that still says which, because the
  * remedy is the same (press Check again) and the reason is worth a line in the section.
  */
-import type { LinearCheckOutcome, LinearConnectionView, LinearDetailsRead } from '../../../shared/linear.js';
+import type { LinearCheckOutcome, LinearConnectionView, LinearDetailsRead, LinearStoreRecord } from '../../../shared/linear.js';
 import type { LinearVerifyFailure } from './client.js';
+import type { LinearRecordRead } from './connection.js';
 
 /** `readLinearKey`'s answer with the key replaced by its digest. */
 export type KeyMeasure =
@@ -25,7 +26,8 @@ export type KeyMeasure =
 /**
  * What a failed key check means for the STORED outcome: Linear's 401 says the key is bad (`rejected`) and its 403 is
  * its own outcome (`forbidden`: refused, which is not a verdict on the key); every other arm (a timeout, a 5xx, a
- * refused connection, an answer of the wrong shape) decided nothing about the key, so it is `unreachable`. The wire
+ * refused connection, an answer of the wrong shape, Linear's rate limit) decided nothing about the key, so it is
+ * `unreachable`, which keeps the v1 and v2 records to their four outcome words (spec §6.7). The wire
  * to the caller keeps the arm word (`timeout`, `malformed`); only the stored outcome folds, because the section's
  * table has one state for "could not check".
  */
@@ -33,8 +35,24 @@ export function checkOutcomeOf(reason: LinearVerifyFailure): LinearCheckOutcome 
   switch (reason) {
     case 'unauthorised': return 'rejected';
     case 'forbidden': return 'forbidden';
-    case 'timeout': case 'malformed': case 'unreachable': return 'unreachable';
+    case 'timeout': case 'malformed': case 'unreachable': case 'rate-limited': return 'unreachable';
   }
+}
+
+/**
+ * A workspace slot's view state (#1444, spec §5.4's `workspaces` item): {@link linearConnectionView}'s state over the
+ * slot's own key and its version 2 record, so a slot and the legacy pair are read by one decider. The record's
+ * workspace name stands where the v1 record's organisation name stands; nothing else of it reaches the state.
+ */
+export function linearSlotViewState(key: KeyMeasure, record: LinearRecordRead<LinearStoreRecord>): LinearConnectionView['state'] {
+  const details: LinearDetailsRead = record.kind !== 'details' ? record : {
+    kind: 'details',
+    details: {
+      org: record.details.name, user: record.details.user, keyTail: record.details.keyTail,
+      keyDigest: record.details.keyDigest, checkedAt: record.details.checkedAt, outcome: record.details.outcome,
+    },
+  };
+  return linearConnectionView(key, details).state;
 }
 
 export function linearConnectionView(key: KeyMeasure, details: LinearDetailsRead): LinearConnectionView {

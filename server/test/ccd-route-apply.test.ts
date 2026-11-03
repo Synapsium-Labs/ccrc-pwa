@@ -31,7 +31,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { USAGE_FRESH_S } from '../src/usage.js';
 
 let h: CcdHarness;
@@ -150,7 +150,7 @@ const install = (w: string): void => {
  *  `ccd-route-tick.test.ts` slices `_auto_compact_check`'s body: this suite imports nothing
  *  from bash. */
 const STOPS: string[] = (() => {
-  const m = /^ROUTE_EFFORT_STOPS="([^"]*)"$/m.exec(fs.readFileSync(CCD, 'utf8'));
+  const m = /^ROUTE_EFFORT_STOPS="([^"]*)"$/m.exec(ccdSource());
   if (!m) throw new Error('ccd/ccd no longer defines ROUTE_EFFORT_STOPS= at column 0 — re-anchor this test');
   return m[1]!.split(' ');
 })();
@@ -1271,7 +1271,7 @@ describe('the read-back — a class the pane already runs is recorded, never typ
   });
 
   it('ROUTE_READBACK_FRESH is USAGE_FRESH_S — the age the fleet row calls stale', () => {
-    const m = /^ROUTE_READBACK_FRESH=(\d+)\b/m.exec(fs.readFileSync(CCD, 'utf8'));
+    const m = /^ROUTE_READBACK_FRESH=(\d+)\b/m.exec(ccdSource());
     expect(m, 'ccd/ccd no longer defines ROUTE_READBACK_FRESH= at column 0').not.toBeNull();
     expect(Number(m![1])).toBe(USAGE_FRESH_S);
   });

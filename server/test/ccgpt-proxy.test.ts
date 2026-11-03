@@ -1,8 +1,8 @@
 // server/test/ccgpt-proxy.test.ts
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { type ChildProcess } from 'node:child_process';
 import { createServer, request as httpRequest, type Server } from 'node:http';
-import { connect as netConnect } from 'node:net';
+import { connect as netConnect, type AddressInfo } from 'node:net';
 import { writeFileSync, mkdirSync, utimesSync, chmodSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { gzipSync, gunzipSync, deflateSync, inflateSync } from 'node:zlib';
@@ -15,8 +15,23 @@ import { CLOSED_AUTH_BASE } from './codexAuthFixture.js';
 import { freePort } from './codexLaneFixture.js';
 import { BRIDGE_AUTH_LIB, BRIDGE_DIR, BRIDGE_MODELS, fakeResponses, plantBridgeLane } from './codexBridgeFixture.js';
 
-const PROXY_PORT = 45010;
-const UPSTREAM_PORT = 45011;
+// No case listens on a fixed port. A fixed listening port (this file once
+// bound 45010 and 45011) sits inside Linux's ephemeral range (32768-60999), so
+// any concurrent socket on a CI runner could already hold it and the case
+// failed with EADDRINUSE.
+// - PROXY_PORT is the SHIM's: the shim takes its port from CCGPT_PROXY_PORT
+//   before it binds and refuses 0, so every case draws its own from the
+//   codex-lane fixture's `freePort` (D-6856: below the ephemeral range, and
+//   disjoint from every other live worker's) in the `beforeEach` below.
+// - UPSTREAM_PORT is the in-process upstream's: `startPair` binds it on port 0
+//   and records the port the OS assigned here, for the shim's
+//   CCGPT_LITELLM_PORT and for a case that asserts on it.
+// - UNDIALLED_LITELLM_PORT is for a shim that never dials LiteLLM: one that
+//   refuses to start, or exits before it serves, or runs the direct entry.
+//   Nothing in this file listens on it.
+let PROXY_PORT = 0;
+let UPSTREAM_PORT = 0;
+const UNDIALLED_LITELLM_PORT = 45011;
 
 // The shim's `SYSTEM_LEAD`, spelled here as its own LITERAL rather than read
 // out of `ccd/ccgpt-proxy.py`: a test that derived its expectation from the
@@ -65,6 +80,11 @@ it('this box has a usable python3', () => {
 
 let proc: ChildProcess | null = null;
 let upstream: Server | null = null;
+
+beforeEach(async () => {
+  PROXY_PORT = await freePort();
+  UPSTREAM_PORT = 0;
+});
 
 afterEach(async () => {
   // commit b56286a4 Fix round 1, C-2 part 3: await the child's own `'close'` after
@@ -252,11 +272,14 @@ function chunkEncode(data: Buffer, ext?: string): Buffer {
  *  if it dies first. `opts.listenUpstream: false` (D-4933) leaves the upstream
  *  port with nothing listening, for a case about a refused connection; the
  *  returned `listenUpstream()` starts the listener when that case wants it.
- *  `opts.upstreamPort` (D-4933) replaces the fixed `UPSTREAM_PORT` for that one
- *  case, both as the port the listener takes and as the shim's
- *  `CCGPT_LITELLM_PORT`, so a case that leaves its port unbound does not do it
- *  on a port another process may bind. The shim's own readiness poll never
- *  touches upstream, so it comes up either way. */
+ *  Without `opts.upstreamPort` the upstream binds port 0, and the port the OS
+ *  assigned becomes `UPSTREAM_PORT` and the shim's `CCGPT_LITELLM_PORT`.
+ *  `opts.upstreamPort` (D-4933) names the port instead, for a case that leaves
+ *  it unbound (`listenUpstream: false`) and binds it later, both as the port
+ *  the listener takes and as the shim's `CCGPT_LITELLM_PORT`, so a case that
+ *  leaves its port unbound does not do it on a port another process may bind.
+ *  The shim's own readiness poll never touches upstream, so it comes up either
+ *  way. */
 async function startPair(
   home: string,
   handler: (req: any, body: Buffer, res: any) => void,
@@ -269,10 +292,17 @@ async function startPair(
     req.on('end', () => handler(req, Buffer.concat(chunks), res));
   });
   upstream = server;
-  const upstreamPort = opts.upstreamPort ?? UPSTREAM_PORT;
-  const listenUpstream = () =>
-    new Promise<void>((r) => server.listen(upstreamPort, '127.0.0.1', () => r()));
-  if (opts.listenUpstream !== false) await listenUpstream();
+  if (opts.listenUpstream === false && opts.upstreamPort === undefined) {
+    throw new Error('startPair: listenUpstream: false needs an upstreamPort to leave unbound');
+  }
+  const listenOn = (port: number) =>
+    new Promise<number>((r) => server.listen(port, '127.0.0.1', () => r((server.address() as AddressInfo).port)));
+  let upstreamPort = opts.upstreamPort ?? 0;
+  const listenUpstream = async () => { await listenOn(upstreamPort); };
+  if (opts.listenUpstream !== false) {
+    upstreamPort = await listenOn(upstreamPort);
+    UPSTREAM_PORT = upstreamPort;
+  }
 
   const lane = mintLane();
   const { child } = spawnPy(ccgptFile('ccgpt-proxy.py'), {
@@ -282,8 +312,8 @@ async function startPair(
       ...env,
       // Applied LAST, deliberately: a caller's own `env` — even one that
       // (by mistake or by copying an older example) sets `CCGPT_ACCOUNT_ID`
-      // — cannot override the minted lane or the fixed port pair this file
-      // owns.
+      // — cannot override the minted lane or the port pair this file
+      // allocates.
       CCGPT_ACCOUNT_ID: lane,
       CCGPT_PROXY_PORT: String(PROXY_PORT),
       CCGPT_LITELLM_PORT: String(upstreamPort),
@@ -300,7 +330,7 @@ async function startPair(
   //
   // commit b56286a4 Fix round 1, C-2: this used to accept the first `r.ok`, full stop — a
   // port answering was treated as proof this child was alive and correct.
-  // Measured by the reviewer: pre-bind an unrelated listener on 45010 and
+  // Measured by the reviewer: pre-bind an unrelated listener on the shim's port and
   // the whole suite reports "4 passed" in under a second while every one of
   // its own children died `EADDRINUSE` — a green suite that tested nothing.
   // Two fixes, both here: (1) race the poll against the child's own
@@ -380,9 +410,9 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     const firstLane = first.lane;
 
     // Tear this child (and its upstream) down before starting the second —
-    // both share the same PROXY_PORT/UPSTREAM_PORT pair, and the whole point
-    // of minting is that reusing the pair back to back must still never
-    // repeat an id.
+    // both share the same PROXY_PORT (this case's own, from `beforeEach`), and
+    // the whole point of minting is that reusing the port back to back must
+    // still never repeat an id.
     await new Promise<void>((resolve) => {
       const c = first.child;
       if (c.exitCode !== null || c.signalCode !== null) { resolve(); return; }
@@ -600,7 +630,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
         PYTHONPATH: PYSTUB_DIR,
         CCGPT_ACCOUNT_ID: mintLane(),
         CCGPT_PROXY_PORT: String(PROXY_PORT),
-        CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
+        CCGPT_LITELLM_PORT: String(UNDIALLED_LITELLM_PORT),
       },
     });
     let stderr = '';
@@ -645,7 +675,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
         PYTHONPATH: PYSTUB_DIR,
         CCGPT_ACCOUNT_ID: mintLane(),
         CCGPT_PROXY_PORT: String(PROXY_PORT),
-        CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
+        CCGPT_LITELLM_PORT: String(UNDIALLED_LITELLM_PORT),
       },
     });
     proc = child;
@@ -670,7 +700,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
         PYTHONPATH: PYSTUB_DIR,
         CCGPT_ACCOUNT_ID: 'codex-a-nodefault',
         CCGPT_PROXY_PORT: String(PROXY_PORT),
-        CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
+        CCGPT_LITELLM_PORT: String(UNDIALLED_LITELLM_PORT),
       };
       delete fullEnv[missing];
       const { child } = spawnPy(ccgptFile('ccgpt-proxy.py'), { home, env: fullEnv });
@@ -696,7 +726,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
         PYTHONPATH: PYSTUB_DIR,
         CCGPT_ACCOUNT_ID: 'codex-a-badport',
         CCGPT_PROXY_PORT: 'not-a-port',
-        CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
+        CCGPT_LITELLM_PORT: String(UNDIALLED_LITELLM_PORT),
       },
     });
     proc = child;
@@ -1721,7 +1751,7 @@ describe.skipIf(!PY)('ccgpt-proxy: a refused upstream connection is waited out, 
   // (D-6856), below the kernel's ephemeral range: a refused-connection case
   // binds its upstream LATER (`listenUpstream`), and a sibling suite's port-0
   // bind could otherwise take it in between. Each case takes its OWN, so the
-  // fixed `UPSTREAM_PORT` is never left unbound for one of them to be refused on.
+  // upstream port of another case is never left unbound for one of them to be refused on.
   /** `startPair` with nothing listening upstream yet, on a port of its own. */
   async function startRefusedPair(
     home: string, handler: (req: any, body: Buffer, res: any) => void, env: Record<string, string> = {},
@@ -1924,7 +1954,7 @@ describe.skipIf(!PY)('ccgpt-proxy: a refused upstream connection is waited out, 
     PYTHONPATH: PYSTUB_DIR,
     CCGPT_ACCOUNT_ID: 'codex-a-waitenv',
     CCGPT_PROXY_PORT: String(PROXY_PORT),
-    CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
+    CCGPT_LITELLM_PORT: String(UNDIALLED_LITELLM_PORT),
     CCGPT_UPSTREAM_WAIT_S: value,
   });
   it.each([
@@ -2926,20 +2956,23 @@ function spawnIsolated(home: string, shim: string, env: Record<string, string>, 
   return child;
 }
 
-/** A listener on the LiteLLM port that counts the connections it is offered and drops each one at once, so a shim
- *  that relays there answers its own 502 rather than waiting. */
-async function countingListener(port: number): Promise<{ count(): number; close(): Promise<void> }> {
+/** A listener for the LiteLLM port, on port 0 (its `port` is the one the OS assigned), that counts the connections
+ *  it is offered and drops each one at once, so a shim that relays there answers its own 502 rather than waiting. */
+async function countingListener(): Promise<{ port: number; count(): number; close(): Promise<void> }> {
   let n = 0;
   const srv: NetServer = createNetServer((sock) => { n += 1; sock.destroy(); });
-  await new Promise<void>((r) => srv.listen(port, '127.0.0.1', () => r()));
-  return { count: () => n, close: () => new Promise<void>((r) => srv.close(() => r())) };
+  const port = await new Promise<number>((r) => srv.listen(0, '127.0.0.1', () => r((srv.address() as AddressInfo).port)));
+  return { port, count: () => n, close: () => new Promise<void>((r) => srv.close(() => r())) };
 }
 
 type DirectShim = { child: ChildProcess; lane: string; key: string; laneAnswer: unknown; stderr(): string };
 
 /** Start the shim in direct mode on PROXY_PORT for a lane planted under `home`, and wait until it answers its lane.
- *  The answer is kept (`laneAnswer`), not judged: a case asserts its shape. */
-async function startDirect(home: string, upstreamBase: string, noFqdn = false): Promise<DirectShim> {
+ *  The answer is kept (`laneAnswer`), not judged: a case asserts its shape. Direct mode never dials LiteLLM, so its
+ *  port is `UNDIALLED_LITELLM_PORT` unless a case listens there to prove it (`litellmPort`). */
+async function startDirect(
+  home: string, upstreamBase: string, noFqdn = false, litellmPort = UNDIALLED_LITELLM_PORT,
+): Promise<DirectShim> {
   const lane = mintLane();
   const planted = plantBridgeLane(home, lane);
   const { shim, bridgeDir, authLib } = placeDirectTree(home);
@@ -2947,7 +2980,7 @@ async function startDirect(home: string, upstreamBase: string, noFqdn = false): 
     CCGPT_BRIDGE: 'direct',
     CCGPT_ACCOUNT_ID: lane,
     CCGPT_PROXY_PORT: String(PROXY_PORT),
-    CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
+    CCGPT_LITELLM_PORT: String(litellmPort),
     CCGPT_BRIDGE_DIR: bridgeDir,
     CCGPT_LANE_DIR: planted.laneDir,
     CCRC_CODEX_AUTH_LIB: authLib,
@@ -3034,10 +3067,10 @@ describe.skipIf(!PY)('ccgpt-proxy: the direct entry (codex bridge Stage 2, Task 
 
   it('CCGPT_BRIDGE=direct serves /v1/messages from the package and never connects to the LiteLLM port', async () => {
     const home = mkTmp('ccgpt-proxy-direct-serve-');
-    const litellm = await countingListener(UPSTREAM_PORT);
+    const litellm = await countingListener();
     const fake = await fakeResponses([{ status: 200, sse: directTextReply('hello from the package') }]);
     try {
-      const d = await startDirect(home, fake.base);
+      const d = await startDirect(home, fake.base, false, litellm.port);
       const r = await postDirect(d.key, {
         model: DIRECT_MODEL, max_tokens: 16, stream: true, messages: [{ role: 'user', content: 'hi' }],
       });
@@ -3069,7 +3102,7 @@ describe.skipIf(!PY)('ccgpt-proxy: the direct entry (codex bridge Stage 2, Task 
         CCGPT_BRIDGE: value,
         CCGPT_ACCOUNT_ID: mintLane(),
         CCGPT_PROXY_PORT: String(PROXY_PORT),
-        CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
+        CCGPT_LITELLM_PORT: String(UNDIALLED_LITELLM_PORT),
       },
     });
     proc = child;
@@ -3118,7 +3151,7 @@ describe.skipIf(!PY)('ccgpt-proxy: the direct entry (codex bridge Stage 2, Task 
       CCGPT_BRIDGE: 'direct',
       CCGPT_ACCOUNT_ID: mintLane(),
       CCGPT_PROXY_PORT: String(PROXY_PORT),
-      CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
+      CCGPT_LITELLM_PORT: String(UNDIALLED_LITELLM_PORT),
     };
     if (dir !== null) env.CCGPT_BRIDGE_DIR = dir;
     const child = spawnIsolated(home, shim, env);

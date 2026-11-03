@@ -41,6 +41,7 @@ import { UpdateMoveSheet } from '../src/fleet/UpdateMoveSheet';
 import { planMove } from '../src/fleet/movePlan';
 import { createFleetStore } from '../src/stores/fleet';
 import { createSessionStore } from '../src/stores/session';
+import { served } from './wirePairing';
 import { CACHING_TRACING, pane } from './askPanes';
 import { fleetSession } from './fleetFixture';
 import { TEST_ROSTER } from './rosterFixture';
@@ -211,10 +212,10 @@ describe('no input on open: a phone keyboard never rises unasked', () => {
   });
 
   it('DialogSheet with a free-text row: no input or textarea has the focus on open', async () => {
-    const store = createSessionStore('lane-a:project-a', {
+    const store = served(createSessionStore('lane-a:project-a', {
       makeSocket: () => ({ close(): void {} }) as unknown as WebSocket,
       api: { prompt: vi.fn().mockResolvedValue(undefined) },
-    });
+    }));
     render(<><DialogSheet id="lane-a:project-a" store={store} onOpenTerminal={vi.fn()} /><ToastHost /></>);
     act(() => {
       store.getState().apply({ type: 'dialog', dialog: pane('cc300-ask-same-labels-q2') });

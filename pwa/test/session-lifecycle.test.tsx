@@ -8,8 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { ChatEvent, FleetSession, RosterWire, SessionLifecycle, SessionStreamMsg } from '../../shared/api';
-import { fleetSession } from './fleetFixture';
-import { BUCKET_ORDER, RANK, sortFleet } from '../src/fleet/sortFleet';
+import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
+import { RANK, sortFleet } from '../src/fleet/sortFleet';
+import { BUCKET_ORDER } from '../../shared/api';
 import { lifecycleQualifier } from '../src/fleet/lifecycleWords';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { markers, sessionFacts } from '../src/fleet/sessionFacts';
@@ -276,7 +277,7 @@ describe('the row says which kind of dead it is', () => {
   // the TypeError `unmeasuredFields`' docstring records. Kills a direct
   // `session.stoppedBy.surface` read and a dropped `?? null`.
   it('a row from a server that predates the field renders no qualifier', () => {
-    const older = s({ status: 'dead', bucket: 'dead' }) as unknown as Record<string, unknown>;
+    const older = s({ status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'dead' }) as unknown as Record<string, unknown>;
     delete older['lifecycle'];
     delete older['stoppedBy'];
     delete older['swapBlocked'];
@@ -546,9 +547,9 @@ describe('a chat that had to look elsewhere says so', () => {
   });
 
   // The unarrived-roster case (DISPATCH-CONTEXT's task-12 addendum): a
-  // `/s/:id` deep link that never mounted FleetScreen's own accounts poller
-  // has `roster: []` (`stores/fleet.ts`'s own default, deliberately, for
-  // exactly this window). `accountLabel` degrades to the raw wrapper id
+  // `/s/:id` deep link opened before the fleet store's one accounts poll has
+  // answered has `roster: []` (`stores/fleet.ts`'s own default, deliberately,
+  // for exactly this window). `accountLabel` degrades to the raw wrapper id
   // rather than a blank cell or a throw — the same fallback SessionLine and
   // SessionActionsSheet already lean on. Kills a banner that goes blank (or
   // omits itself) before the roster has arrived, and any implementation that

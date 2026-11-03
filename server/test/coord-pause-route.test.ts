@@ -257,6 +257,9 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
    *  `/api/coord/review-cap` (D-6795): the operator's lift of the review-round cap for one work run, caps' argument
    *  exactly: no machine lane may lift a cap on its own work, and the PWA holds no box token.
    *
+   *  `/api/questions/:id/answer` (W3 Q3f, D-7030): the operator's answer to a question their fleet put to them, an ask
+   *  or a dialog. caps' argument holds: no machine lane answers in the operator's name, and the PWA holds no box token.
+   *
    *  `/api/coord/collect-lane` (child-reclamation wave 10): the operator's
    *  switch on what arms the temp-root collector's deletion. Arming it starts
    *  a deleting lane rather than releasing a wedge, so `UNGATED`'s argument
@@ -264,6 +267,13 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
    *  the PWA holds no box token. Its POST also refuses `live` while sign-in is
    *  dark, and its GET half rides this entry as the caps and stall-watch reads
    *  do.
+   *
+   *  `/api/coord/dispatch-abandon` (D-7319): the operator's switch on the act
+   *  that abandons a dispatch that never came back. Turning it on starts an
+   *  abandoning pass rather than releasing a wedge, so `UNGATED`'s argument
+   *  does not apply, and caps' argument holds: no machine lane calls it, and
+   *  the PWA holds no box token. Its GET half rides this entry as the caps,
+   *  stall-watch and collect-lane reads do.
    *
    *  A BLIND SPOT, recorded beside the set rather than papered over by widening
    *  the scanner (coordinator ruling, wave 6 item 2). `POST /api/sessions/:id/
@@ -280,6 +290,14 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
   const SESSION_ONLY = new Set([
     '/api/coord/caps', '/api/coord/reclaim-pause', '/api/coord/stall-watch', '/api/coord/collect-lane',
     '/api/coord/review-cap',
+    // D-7319: the dead-dispatch switch (see the docstring above).
+    '/api/coord/dispatch-abandon',
+    // D-7453: Settings › Automation › Roll idle sessions, an operator dial, session-gated like the stall-watch door.
+    '/api/coord/roll-idle',
+    // D-7411: the test box remote switch, an act for the operator alone (its read and its sync take the box token too, D-7554).
+    '/api/testbox/switch',
+    // W3 Q3f (D-7030): the operator door of the question family (see the docstring above).
+    '/api/questions/:id/answer',
   ]);
 
   /** The two mechanisms that count as "the token was checked" — the shared

@@ -37,6 +37,7 @@ import {
   type DelegationObservationInterval,
 } from '../src/coord/delegation-model.js';
 import { DelegationDurability, type DelegationProjectionPort } from '../src/coord/delegation-checkpoint.js';
+import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import type { DelegationHealthInput } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -333,7 +334,7 @@ describe('W3-M68 checkpoint-interval restart table: an unmeasured session-hour i
     ({ project: (cp) => store.projectDelegationCheckpoint(cp), projectChanged: (prior, next) => store.projectDelegationCheckpointChanges(prior, next), insertEvents: (rows) => store.insertDelegationEvents(rows), eventStats: () => store.delegationEventStats() });
   async function open(dir: string, store: CoordStore | null, edge?: (edge: string, when: 'before' | 'after') => void): Promise<DelegationDurability> {
     const d = await DelegationDurability.open({
-      dir, projection: store === null ? null : portOf(store), now: () => NOW, randomUUID: () => '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f',
+      dir, projection: store === null ? null : portOf(store), now: () => NOW, randomUUID: () => '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f', port: nodeDelegationFilePort,
       ...(edge === undefined ? {} : { onEdge: edge as never }),
     });
     live.push(d);
@@ -500,7 +501,7 @@ describe('cursor retention (R58, D-4654): one horizon, derived once; a cursor re
 
   it('dropping a cursor moves no interval from unmeasured to measured and does not change the health (the seven-day arithmetic is untouched)', async () => {
     const dir = mkTmp('ccrc-dh-');
-    const d = await DelegationDurability.open({ dir, projection: null, now: () => NOW, randomUUID: () => '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f' });
+    const d = await DelegationDurability.open({ dir, projection: null, now: () => NOW, randomUUID: () => '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f', port: nodeDelegationFilePort });
     try {
       const rows = [...grid(2, 3), ivOf(cur(60, { sessionId: 's0' }), 'unmeasured')];
       await d.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: rows }));

@@ -2,13 +2,15 @@ import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import { defaultCoordDbPath } from './coord/db.js';
-import { defaultSessionsPath } from './auth/sessions.js';
+import { defaultSessionsPath } from './auth/paths.js';
 import { defaultPasskeysPath } from './auth/credentials.js';
 import { parseRoster, RosterError, type Roster } from '../../shared/roster.js';
 import { isNodeRole } from '../../shared/node-role.js';
 import { isReleaseSourceName } from '../../shared/release-notes.js';
-import type { NodeRole } from '../../shared/api.js';
+import { SPAWN_STALL_MS, type NodeRole } from '../../shared/api.js';
+import { DISPATCH_ABANDON_DEFAULT_MS } from '../../shared/dispatch-abandon.js';
 import type { FingerprintAnswer } from './accounts/mask.js';
+import { DEPS_SHED_AFTER_HOURS_DEFAULT, DEPS_SHED_PER_PASS_DEFAULT } from './depsShed.js';
 
 export type FleetMode = 'local' | 'remote';
 
@@ -51,6 +53,18 @@ export const DEFAULT_RELEASE_API_URL = 'https://api.github.com';
 /** How long an update may run before the server calls it failed (§10). Stored
  *  from W2; nothing reads it until W4's dispatcher. */
 export const DEFAULT_UPDATE_DEADLINE_MS = 15 * 60_000;
+
+/** `CCRC_DISPATCH_ABANDON_MS` read (D-7319): unset or empty is the default, silently; a value below `SPAWN_STALL_MS` or
+ *  not a safe integer is the default too, said once, because a bound inside the `ws-add` ceiling could abandon a run
+ *  whose dispatch is still running. */
+export function dispatchAbandonMsOf(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DISPATCH_ABANDON_DEFAULT_MS;
+  const n = Number(raw.trim());
+  if (Number.isSafeInteger(n) && n >= SPAWN_STALL_MS) return n;
+  console.warn(`ccrc-server: CCRC_DISPATCH_ABANDON_MS=${JSON.stringify(raw.slice(0, 40))} is not a whole number of `
+    + `milliseconds at or above ${SPAWN_STALL_MS}; using ${DISPATCH_ABANDON_DEFAULT_MS}`);
+  return DISPATCH_ABANDON_DEFAULT_MS;
+}
 
 // One owner or repo name is `isReleaseSourceName` (`shared/release-notes.ts`): GitHub's own
 // character set, at most 100, never only dots (D-3196). It moved to L0 so the PWA's
@@ -198,6 +212,15 @@ export interface CcrcConfig {
   /** `CCRC_UPDATE_DEADLINE_MS` as a positive safe integer, else
    *  `DEFAULT_UPDATE_DEADLINE_MS`. Read by W4; carried from W2. */
   updateDeadlineMs: number;
+  /** The deps-shed arm's thresholds (D-7278), deployment config with neutral defaults: `CCRC_DEPS_SHED_AFTER_HOURS`
+   *  (24), `CCRC_DEPS_SHED_PARKED_AFTER_HOURS` (unset: a parked run never sheds) and `CCRC_DEPS_SHED_PER_PASS` (1).
+   *  `depsShedConfigOf` reads them. */
+  depsShed: DepsShedConfig;
+  /** D-7319: `CCRC_DISPATCH_ABANDON_MS`, how old a `planned` run's dispatch stamp must be, with no session bound,
+   *  before the server abandons it (`coord/abandonDeadDispatch.ts`). A safe integer at or above `SPAWN_STALL_MS` (the
+   *  console's own stalled threshold, itself at or above the `ws-add` ceiling), else `DISPATCH_ABANDON_DEFAULT_MS`; a
+   *  value set and refused says so once at load. */
+  dispatchAbandonMs: number;
   /**
    * Stage 3a's session gate — is it ARMED? `false` is the shipped default and
    * the whole deploy story: with the flag off `server/src/auth/gate.ts`'s one
@@ -376,6 +399,37 @@ function loadRoster(accountsPath: string): Roster {
   return parseRoster(json);
 }
 
+/** The deps-shed arm's thresholds, in the units the arm reads (D-7278). */
+export interface DepsShedConfig {
+  readonly afterMs: number;
+  /** Null: unset, and a run parked at review, merge or close never sheds (A4, left unset by the operator's ruling). */
+  readonly parkedAfterMs: number | null;
+  readonly perPass: number;
+}
+
+/** One deps-shed key: a canonical positive whole number of at most nine digits, or null. An absent or empty value is
+ *  unset and silent; any other value that is not one says so once and is unset too. */
+function depsShedKey(env: NodeJS.ProcessEnv, key: string): number | null {
+  const raw = env[key];
+  if (raw === undefined || raw === '') return null;
+  if (/^[1-9][0-9]{0,8}$/.test(raw)) return Number(raw);
+  console.warn(`ccrc-server: ${key}=${JSON.stringify(raw.slice(0, 40))} is not a positive whole number; it reads as unset (the default).`);
+  return null;
+}
+
+/** The deps-shed thresholds from the environment (D-7278). Every one is deployment config with a neutral default. */
+export function depsShedConfigOf(env: NodeJS.ProcessEnv): DepsShedConfig {
+  const hour = 3_600_000;
+  const after = depsShedKey(env, 'CCRC_DEPS_SHED_AFTER_HOURS');
+  const parked = depsShedKey(env, 'CCRC_DEPS_SHED_PARKED_AFTER_HOURS');
+  const perPass = depsShedKey(env, 'CCRC_DEPS_SHED_PER_PASS');
+  return {
+    afterMs: (after ?? DEPS_SHED_AFTER_HOURS_DEFAULT) * hour,
+    parkedAfterMs: parked === null ? null : parked * hour,
+    perPass: perPass ?? DEPS_SHED_PER_PASS_DEFAULT,
+  };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   const home = env.CCRC_HOME ?? os.homedir();
   // `||`, not `??`: an EnvironmentFile's bare `CCRC_ACCOUNTS=` line — which is
@@ -445,6 +499,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   const installedCcrcPath = path.join(home, 'ccrc', 'ccd', 'ccrc');
   const releaseApiUrl = (env.CCRC_RELEASE_API_URL || '').replace(/\/+$/, '');
   const deadlineNum = Number(env.CCRC_UPDATE_DEADLINE_MS);
+  const dispatchAbandonMs = dispatchAbandonMsOf(env.CCRC_DISPATCH_ABANDON_MS);
   return {
     // `||`, not `??`: a bare `CCRC_HOST=` EnvironmentFile line yields '', and
     // `listen({host: ''})` binds ALL interfaces — the opposite of the loopback
@@ -491,6 +546,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     // and `Number('')` is 0, which the positive test refuses.
     releaseApiUrl: releaseApiUrl || DEFAULT_RELEASE_API_URL,
     updateDeadlineMs: Number.isSafeInteger(deadlineNum) && deadlineNum > 0 ? deadlineNum : DEFAULT_UPDATE_DEADLINE_MS,
+    depsShed: depsShedConfigOf(env),
+    dispatchAbandonMs,
     // The auth keys. Task 5 added ONLY the ones the gate itself consumes (the
     // plan parks config in Task 10, but there is no gating a route on a key
     // that does not exist); Task 8 adds `rpId`/`origin`/`passkeysPath`; Task 10

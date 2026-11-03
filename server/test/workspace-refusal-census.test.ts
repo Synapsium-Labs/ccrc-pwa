@@ -18,8 +18,11 @@ import { REFUSAL_STATUS } from '../../shared/refusal.js';
 import { decideArchive, refusedAtStop, archiveOutcome, edgeStatus, type ArchiveMeasure } from '../src/coord/archiveDoor.js';
 import { SENTENCES } from '../src/wsaudit.js';
 import { parseFile } from './scan/parse.js';
+import { ccdSource } from './ccdWsHelpers.js';
+import { functionSpan, lockDeclineSites, refuseWords } from './census-w5/ccdHelpers.js';
 import { EXPIRE_TOKEN_KIND, expireTokenKind, parseExpireResult } from '../src/archivedExpiry.js';
 import { CHILD_RECLAIM_TOKEN_KIND, childReclaimTokenKind, isChildReclaimToken, parseChildReclaimResult } from '../src/coord/childReclaim.js';
+import { CHILD_RECLAIM_TRANSIENT_WORD } from '../src/childReclaimSweep.js';
 import { COLLECT_REFUSAL_CLASS, COLLECT_REFUSAL_WORDS, collectRefusalClass } from '../src/collectLane.js';
 import {
   WORKSPACE_TRANSITIONS, WORKSPACE_VERBS, WORKSPACE_STATES, WORKSPACE_REFUSALS_BY_VERB, isWorkspaceRefusal,
@@ -240,6 +243,15 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
   };
   const lcRefused = (t: string, act: string): string[] =>
     [...t.matchAll(new RegExp(`_lc_refuse ${act} (?:"[^"]*"|\\S+) ([a-z][a-z-]*)`, 'g'))].map((m) => m[1]!);
+  // The reap-lock runner (D-7076) refuses with `_lc_refuse "$act" …`, which the pattern above never reads, and its
+  // in-progress document stands outside every verb's span: an act's harvest also takes the runner's two tokens and its
+  // document's word when the runner has a call for that act, read off it by name (D-7299: the plan named only the two
+  // tokens, but the word the reap move drops is the document's `in-progress`).
+  const lockRefused = (act: string): string[] => {
+    const lock = lockDeclineSites(CCD);
+    return lock.runner && lock.calls.some((c) => c.act === act)
+      ? [...lock.runner.refuses, ...lock.runner.printfs].map((r) => String(r.token)) : [];
+  };
   const excluded = Object.keys(EXCLUDED);
   it('restore and forget: each verb’s codes equal what its ccd verb refuses with, less EXCLUDED', () => {
     const restore = lcRefused(bodyOf('cmd_ws_restore'), 'restore');
@@ -255,10 +267,13 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
     const mirror = nonComment(CCD.slice(CCD.indexOf('MIRROR-BEGIN'), CCD.indexOf('MIRROR-END')));
     expect(from).toBeGreaterThan(-1);
     expect(mirror.length).toBeGreaterThan(0);
+    // D-7072: the reap family's words within `_ws_reap_eval`'s offsets in ccd's text, comment lines dropped.
+    const [evalFrom, evalTo] = functionSpan(ccdSource(), '_ws_reap_eval');
     const harvested = [
-      ...[...bodyOf('_ws_reap_eval').matchAll(/_reap_refuse ([a-z][a-z-]*)/g)].map((m) => m[1]!),
+      ...refuseWords('reap', { from: evalFrom, to: evalTo, codeOnly: true }),
       ...[...(span + mirror).matchAll(/"refused":"([a-z][a-z-]*)"/g)].map((m) => m[1]!),
       ...lcRefused(nonComment(CCD), 'reap'),
+      ...lockRefused('reap'),
       ...lcRefused(bodyOf('cmd_ws_rm'), '[a-z]+'),
     ];
     expect(new Set(harvested).size, 'guards the guard: an empty harvest').toBeGreaterThan(30);
@@ -319,14 +334,16 @@ describe('WORKSPACE_TRANSITIONS answers the census (ARCH-41, #776)', () => {
     const flags = { force: false, interrupt: false, programmeEnd: false };
     const idle = { ok: true as const, siblings: [] };
     const open = { ok: true as const, siblings: [{ id: 1 } as never] };
-    const port = (o: object) => ({ openRunsForSession: () => idle, openRunsClaimedBy: () => idle, abandonRefusal: () => null, abandon: async () => ({ ok: true }) as never, ...o });
+    const port = (o: { worker?: typeof idle; claimant?: typeof idle; abandonRefusal?: () => never }) => ({
+      bindingsOf: () => ({ worker: () => o.worker ?? idle, claimant: () => o.claimant ?? idle }),
+      abandonRefusal: o.abandonRefusal ?? (() => null), abandon: async () => ({ ok: true }) as never });
     const decided = [
       await decideArchive(null, 's', flags, m({ turn: 'unmeasured' })),
       await decideArchive(null, 's', flags, m({ turn: 'busy' })),
       await decideArchive(null, 's', flags, m({ worktree: 'absent' })),
-      await decideArchive(port({ openRunsForSession: () => open }), 's', flags, m({})),
-      await decideArchive(port({ openRunsClaimedBy: () => open }), 's', flags, m({})),
-      await decideArchive(port({ openRunsClaimedBy: () => open, abandonRefusal: () => ({ ok: false, kind: 'x' }) as never }), 's', { ...flags, programmeEnd: true }, m({})),
+      await decideArchive(port({ worker: open }), 's', flags, m({})),
+      await decideArchive(port({ claimant: open }), 's', flags, m({})),
+      await decideArchive(port({ claimant: open, abandonRefusal: () => ({ ok: false, kind: 'x' }) as never }), 's', { ...flags, programmeEnd: true }, m({})),
     ];
     expect(decided.map((d) => !d.ok && d.reply.body.error)).toEqual(
       ['status-unknown', 'session-busy', 'worktree-gone', 'run-open', 'coordinator-has-open-runs', 'programme-partly-ended']);
@@ -367,7 +384,9 @@ describe('the expire, reclaim and collect lanes read refusals as they do today (
   };
   const RECLAIM_KINDS = {
     'no-such-session': 'gone', 'not-a-workspace': 'terminal', 'not-a-child': 'terminal', 'branch-elsewhere': 'terminal',
-    'tree-unreadable': 'terminal', 'containment-unproven': 'terminal', 'no-worktree-record': 'terminal',
+    // `tree-unreadable` is a retry word for reclaim (an errored read is transient), and the ONE retry word the executor
+    // answers as a failure (`CHILD_RECLAIM_TRANSIENT_WORD`), so the sweep's failure backoff paces it; pinned below.
+    'tree-unreadable': 'retry', 'containment-unproven': 'terminal', 'no-worktree-record': 'terminal',
     paused: 'retry', held: 'retry', attached: 'retry', 'tree-busy': 'retry', 'state-changed': 'retry',
     'in-progress': 'retry', 'reap-in-progress': 'retry', 'nested-rescue-too-large': 'terminal',
     'nested-rescue-failed': 'retry', 'not-idle': 'retry',
@@ -393,6 +412,8 @@ describe('the expire, reclaim and collect lanes read refusals as they do today (
 
   it('reclaim: every word’s kind, and the guard and result parser narrow exactly those words', () => {
     expect(CHILD_RECLAIM_TOKEN_KIND).toEqual(RECLAIM_KINDS);
+    expect(CHILD_RECLAIM_TRANSIENT_WORD).toBe('tree-unreadable');
+    expect(RECLAIM_KINDS[CHILD_RECLAIM_TRANSIENT_WORD]).toBe('retry');
     for (const [w, k] of Object.entries(RECLAIM_KINDS)) {
       expect(childReclaimTokenKind(w), w).toBe(k);
       expect(isChildReclaimToken(w), w).toBe(true);

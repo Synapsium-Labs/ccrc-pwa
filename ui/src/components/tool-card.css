@@ -35,6 +35,13 @@
   .tool-dot--err {
     background: var(--status-dead);
   }
+  /* The word `failed` on an errored call's row, beside its dot: the failure is a word as well as a hue. It never
+     shrinks (`.tool-sum` is the row's shrinking cell), so it stays on a 360px row. */
+  .tool-fail {
+    flex: none;
+    font: var(--weight-medium) var(--fs-meta) / 1 var(--family-mono);
+    color: var(--status-dead-text);
+  }
   .tool-dot--run {
     background: var(--status-busy);
     box-shadow: var(--glow-dot-busy);
@@ -93,6 +100,16 @@
   .tool-eyebrow {
     color: var(--ink-tertiary);
   }
+  /* ANSI hues in a tool well (T4a, D-6387). A well is dark in every palette, so each hue paints the code palette's
+     token on it, the same six the terminal drawer draws (`GLASS_ANSI[1..6]`); `muted` is the dim/black colour. One
+     rule per `AnsiHue`, the table `ANSI_HUE_TOKEN` (pwa/src/lib/ansi.ts) names. */
+  .well .ansi-red { color: var(--diff-del); }
+  .well .ansi-green { color: var(--diff-add); }
+  .well .ansi-yellow { color: var(--syn-number); }
+  .well .ansi-blue { color: var(--syn-type); }
+  .well .ansi-magenta { color: var(--syn-keyword); }
+  .well .ansi-cyan { color: var(--syn-function); }
+  .well .ansi-muted { color: var(--syn-comment); }
   .tool-meta {
     display: flex;
     align-items: center;

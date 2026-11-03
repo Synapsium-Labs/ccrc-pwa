@@ -50,9 +50,9 @@ export interface SessionHeaderProps {
    *  satisfy without a cast). Defaults to `null` so a caller that never wires
    *  the picker's queue state renders exactly as it always did. */
   queuedField?: RouteField | null;
-  /** Pre-snapshot identity derived from the session id (`wrapper:project`) —
-   *  keeps the header instant on deep links before `/ws/fleet` lands. */
-  fallback?: { title: string; wrapper: string };
+  /** Pre-snapshot identity derived from the session id (`deepLinkFallback`: its title, crumb and lane, the words the
+   *  row will give) — keeps the header instant on deep links before `/ws/fleet` lands. */
+  fallback?: { title: string; crumb?: string | null; wrapper: string };
   /** The account roster (`stores/fleet.ts`'s `roster`) — defaults to `[]` so
    *  a header rendered before the first poll lands degrades to
    *  `accountLabel`'s own raw-wrapper-name fallback rather than needing a
@@ -115,19 +115,38 @@ export function HeaderBack({ onBack }: { onBack: () => void }): ReactNode {
   );
 }
 
-/** The title and its crumb. */
+/** The title's own node, both skins'. Only a present workspace row's title types in (`TypedLabel`), because only a
+ *  change to it is a rename (`view.renames`). The fallback and a main checkout's title are plain text: a swap between
+ *  the fallback and the row then draws plainly (a TypedLabel mounted afresh never animates), and a main checkout
+ *  mounts no TypedLabel, as before the title was the label (desktop polish T3c, D-6333). */
+export function HeaderTitleText({ view }: { view: SessionHeaderView }): ReactNode {
+  return view.renames
+    ? <TypedLabel className="chat-title-text" text={view.title} />
+    : <span className="chat-title-text">{view.title}</span>;
+}
+
+/** The crumb's own node, both skins' (Refined adds its class): typed in on the rule the title follows. */
+export function HeaderCrumbText({ view, className = 'chat-crumb' }: { view: SessionHeaderView; className?: string }): ReactNode {
+  if (view.crumb === null) return null;
+  return view.renames
+    ? <TypedLabel className={className} text={view.crumb} />
+    : <span className={className}>{view.crumb}</span>;
+}
+
+/** The session's title, the project before it as its crumb ("project-a › ws-a"; desktop polish T3c, D-6333). The title
+ *  text is a node of its own, so a skin that draws the crumb elsewhere (Refined's, above the title) keeps this one. */
 export function HeaderTitle({ view }: { view: SessionHeaderView }): ReactNode {
   return (
     <h1 className="chat-title">
-      {view.title}
       {view.crumb !== null && (
         <>
+          <HeaderCrumbText view={view} />
           <span className="chat-crumb-sep" aria-hidden="true">
             ›
           </span>
-          <TypedLabel className="chat-crumb" text={view.crumb} />
         </>
       )}
+      <HeaderTitleText view={view} />
     </h1>
   );
 }
@@ -226,13 +245,17 @@ export function HeaderDoors({ view, openMenu }: { view: SessionHeaderView; openM
   // The PR cap runs `session-pr` (D-5469's door rule), which opens `SessionFlows`' PR sheet.
   const prDoor = commandDoor('session-pr');
   const pr = chipOf(view, 'pr');
+  // The doors carry a visible word from 900 (`.keycap-word`, chat.css), and a `title` at every width; below 900 they
+  // stay glyphs at 44px and the More sheet lists each door with its word (`sessionMenu`).
   return (
     <>
-      <Keycap className="keycap--term" aria-label="Terminal" {...commandDoor('open-terminal')}>
+      <Keycap className="keycap--term" aria-label="Terminal" title="Terminal" {...commandDoor('open-terminal')}>
         <span aria-hidden="true">&gt;_</span>
+        <span className="keycap-word" aria-hidden="true">Terminal</span>
       </Keycap>
-      <Keycap className="keycap--more" aria-label="More" onClick={openMenu}>
+      <Keycap className="keycap--more" aria-label="More" title="More" onClick={openMenu}>
         <span aria-hidden="true">⋯</span>
+        <span className="keycap-word" aria-hidden="true">More</span>
       </Keycap>
       {/* Top right, to the right of the ···. `esc` keeps the OUTER edge because
           it is the interrupt and its position is muscle memory; on a fine

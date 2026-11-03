@@ -823,7 +823,7 @@ describe('an idle compaction reads as waiting for you, not as a stall (D-5371)',
   const RECAP = 'This session is being continued from a previous conversation that ran out of context.\n\nSummary:\nthe things\n\nContinue the conversation from where it left off without asking the user any further questions.';
   const events: ChatEvent[] = [
     { kind: 'assistant', uuid: 'a1', ts: '2026-10-17T17:43:12.000Z', text: 'Here is the third question.' },
-    { kind: 'user', uuid: 's1', ts: '2026-10-17T18:37:58.500Z', text: RECAP },
+    { kind: 'user', uuid: 's1', ts: '2026-10-17T18:37:58.500Z', text: RECAP, compaction: true },
     { kind: 'system', uuid: 'n1', ts: '2026-10-17T18:37:59.980Z', text: NOTICE, origin: 'idle-compact' },
   ];
   it('the folded recap, then the pill — the pill is the last row, CC\'s sentence as its tooltip', () => {
@@ -925,7 +925,7 @@ describe('a system row that carries a BODY folds — it never floods the scroll'
   it('the /compact recap still folds with its own label, hint and Markdown body (unchanged)', () => {
     const recap = 'This session is being continued from a previous conversation that ran out of context.\n\n## Summary\n\nthe things';
     const { container } = render(
-      <ChatListInner id="s" events={[{ kind: 'user', uuid: 'y5', ts: TS, text: recap }]} pending={[]} />,
+      <ChatListInner id="s" events={[{ kind: 'user', uuid: 'y5', ts: TS, text: recap, compaction: true }]} pending={[]} />,
     );
     expect(container.querySelector('.compaction')).not.toBeNull();
     expect(container.querySelector('.compaction--sys')).toBeNull();
@@ -934,6 +934,30 @@ describe('a system row that carries a BODY folds — it never floods the scroll'
     fireEvent.click(head);
     expect(container.querySelector('.compaction-body.msg-assist')).not.toBeNull();
     expect(container.querySelector('.compaction-raw')).toBeNull();
+  });
+});
+
+// D-7361 (C7i): a summary Claude Code marks `isCompactSummary` in words other than the recap sentence carries the
+// server's flag. Before C7i it rendered as the operator's bubble; after, it is the compaction card like any recap.
+describe('a marker-only compaction summary folds into the compaction card (D-7361)', () => {
+  const TS = '2026-10-29T09:00:00.000Z';
+  const text = 'Summary of the work so far: the census landed.\n\n## Next\n\nthe drawer';
+  it('the flagged row is the card, closed, its summary one tap away; no user bubble', () => {
+    const { container } = render(
+      <ChatListInner id="s" events={[{ kind: 'user', uuid: 'm1', ts: TS, text, compaction: true }]} pending={[]} />,
+    );
+    expect(container.querySelector('.msg-user')).toBeNull();
+    expect(container.querySelector('.compaction')).not.toBeNull();
+    expect(container.querySelector('.compaction--sys')).toBeNull();
+    const head = screen.getByRole('button', { name: /Context compacted/ });
+    expect(head).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(head);
+    expect(container.querySelector('.compaction-body.msg-assist')?.textContent ?? '').toContain('the census landed');
+  });
+  it('the same words without the flag stay the operator\'s bubble', () => {
+    const { container } = render(<ChatListInner id="s" events={[{ kind: 'user', uuid: 'm2', ts: TS, text }]} pending={[]} />);
+    expect(container.querySelector('.compaction')).toBeNull();
+    expect(container.querySelector('.msg-user')).not.toBeNull();
   });
 });
 

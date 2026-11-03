@@ -2,7 +2,9 @@
 // here unchanged, and the fixtures they share are in `ccrc-doctorFixture.ts`.
 import { describe, it, expect } from 'vitest';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync, existsSync, utimesSync, appendFileSync, readdirSync, lstatSync, readlinkSync, statSync, renameSync, truncateSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, symlinkSync, rmSync, chmodSync, existsSync, utimesSync, appendFileSync, readdirSync, lstatSync, readlinkSync, statSync, renameSync, truncateSync, lutimesSync } from 'node:fs';
+import { fixClock, fixedNow } from './fixedClock.js';
+import { plantShippedTimers, writeShippedTimer } from './shippedTimers.js';
 import path, { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { describeLinux, itLinux, itDarwin, IS_DARWIN } from './platformFixtures.js';
@@ -162,6 +164,8 @@ function usageBox(prefix: string, o: Parameters<typeof plantCodexUsage>[2] = {})
   for (const b of ['jq', 'date', 'stat']) linkReal(home, b);
   codexRoster(home, [{ id: 'codex-a', proxyPort: 45010, litellmPort: 45011 }]);
   plantCodexUsage(home, 'codex-a', o);
+  // The shipped tree's timers: the rows read the usage timer's cadence from there (W8 Task C8b, D-7054).
+  plantShippedTimers(join(home, 'ccrc'));
   return home;
 }
 
@@ -1523,6 +1527,112 @@ describeLinux('ccrc doctor: codex — the usage rows, measured in isolation (Pla
     expect(r.stdout).toMatch(/^ {2}remedy: read what the publisher says: journalctl --user -u ccrc-codex-usage@codex-a\.service -n 50$/m);
   });
 
+  // W8 Task C8b's characterization pin (D-7054; ARCH-69 (#804)): each bound one second inside and one second past, on a
+  // fixed clock, the whole of what the rows print, byte for byte (the fixture HOME written as `<home>`): three of
+  // ccrc-codex-usage@.timer's 15-minute periods (2700 s) on a lane whose mode cannot be read and on a litellm lane, that
+  // plus the bridge's BRIDGE_FRESH_S (3600 s) on a direct lane, for a row's age and for a never-published row's link,
+  // and the first-poll note that restates the timer's OnActiveSec=5min (kept by name, D-7054). These run unchanged at
+  // every commit of the series.
+  const clocked = (prefix: string, o: { ageS?: number; linkAgeS: number }, mode: 'litellm' | 'direct' | null): string => {
+    const home = usageBox(prefix, o.ageS === undefined ? { row: false } : {});
+    const now = fixedNow();
+    fixClock(home, stubBin(home), now);
+    if (o.ageS !== undefined) {
+      writeFileSync(join(home, '.cc-limits', 'codex-a.json'),
+        JSON.stringify({ five: null, seven: 12, ts: now - o.ageS, fiveResetAt: null, sevenResetAt: null }));
+    }
+    lutimesSync(join(home, '.config', 'systemd', 'user', 'timers.target.wants', 'ccrc-codex-usage@codex-a.timer'),
+      now - o.linkAgeS, now - o.linkAgeS);
+    return mode === null ? home : laneMode(home, mode);
+  };
+  const rowsOf = (home: string): string[] => usageRows(home).stdout.split(home).join('<home>').split('\n');
+  const NOTE_ROWS = (note: string): string[] => [
+    'rc=0,0', 'pair=present', 'box-note=', `note=${note}`, `PASS codex: usage rows measured`, '',
+  ];
+  const WARN_ROWS = (what: string, fix: string): string[] => [
+    'rc=0,2', 'pair=present', 'box-note=', 'note=ccrc-codex-usage@codex-a.timer enabled', `WARN codex: ${what}`, `  remedy: ${fix}`, '',
+  ];
+  const LOG = 'read what the publisher says: journalctl --user -u ccrc-codex-usage@codex-a.service -n 50';
+  it.each(MODES)('C8b: a row 2700 s old on a lane %s is fresh, and 2701 s old WARNs, byte for byte', (_what, mode) => {
+    expect(rowsOf(clocked('c8b-usage-2700-', { ageS: 2700, linkAgeS: 9000 }, mode)))
+      .toEqual(NOTE_ROWS('ccrc-codex-usage@codex-a.timer enabled; usage row 2700s old'));
+    expect(rowsOf(clocked('c8b-usage-2701-', { ageS: 2701, linkAgeS: 9000 }, mode)))
+      .toEqual(WARN_ROWS('codex-a: its usage row was last written 45 min ago — more than three of ccrc-codex-usage@codex-a.timer\'s polls', LOG));
+  });
+  it('C8b: a direct lane\'s row 3600 s old is fresh, and 3601 s old WARNs, byte for byte', () => {
+    expect(rowsOf(clocked('c8b-usage-direct-3600-', { ageS: 3600, linkAgeS: 9000 }, 'direct')))
+      .toEqual(NOTE_ROWS('ccrc-codex-usage@codex-a.timer enabled; usage row 3600s old'));
+    expect(rowsOf(clocked('c8b-usage-direct-3601-', { ageS: 3601, linkAgeS: 9000 }, 'direct')))
+      .toEqual(WARN_ROWS('codex-a: its usage row was last measured 61 min ago — more than 60 min, so ccrc-codex-usage@codex-a.timer\'s recent polls have published nothing', LOG));
+  });
+  it.each([...MODES, ['in direct mode', 'direct'] as const])('C8b: no row on a lane %s — the first-poll note inside the bound, byte for byte, and the never-published WARN one second past it', (_what, mode) => {
+    const bound = mode === 'direct' ? 3600 : 2700;
+    expect(rowsOf(clocked('c8b-usage-norow-young-', { linkAgeS: 120 }, mode)))
+      .toEqual(NOTE_ROWS('ccrc-codex-usage@codex-a.timer enabled; no usage row yet (enabled 120s ago; the first poll runs five minutes after enable)'));
+    expect(rowsOf(clocked('c8b-usage-norow-bound-', { linkAgeS: bound }, mode)))
+      .toEqual(NOTE_ROWS(`ccrc-codex-usage@codex-a.timer enabled; no usage row yet (enabled ${bound}s ago; the first poll runs five minutes after enable)`));
+    expect(rowsOf(clocked('c8b-usage-norow-past-', { linkAgeS: bound + 1 }, mode)))
+      .toEqual(WARN_ROWS(`codex-a: ccrc-codex-usage@codex-a.timer has been enabled for longer than ${bound / 60} min and this lane has never published a usage row (<home>/.cc-limits/codex-a.json)`, LOG));
+  });
+
+  // C8b step 4 (OA-C8c (a), D-7062): an unreadable ccrc-codex-usage@.timer leaves the row's staleness unmeasured — a
+  // WARN naming the unit, never a comparison against a literal; ccrc's reader not loaded records a FAIL naming the bug.
+  const UNREAD_USAGE = (what: string): string[] => [
+    'rc=0,2', 'pair=present', 'box-note=', 'note=ccrc-codex-usage@codex-a.timer enabled',
+    `WARN codex: codex-a: ccrc-codex-usage@.timer's cadence could not be read from the shipped unit file (<home>/ccrc/deploy/systemd/ccrc-codex-usage@.timer), so ${what} is unmeasured`,
+    '  remedy: the shipped tree at <home>/ccrc is incomplete or damaged — both deploy lanes place the whole tree there, so the next ccrc update (or deploy) restores it; then re-run ccrc doctor',
+    '',
+  ];
+  const noUsageTimer = (home: string): string => { writeShippedTimer(join(home, 'ccrc'), 'ccrc-codex-usage@.timer', null); return home; };
+  it.each([[60, null], [2701, null], [2701, 'litellm'], [3601, 'direct']] as const)('C8b: an unreadable ccrc-codex-usage@.timer leaves a row %i s old on a %s lane unmeasured, never compared against a literal', (age, mode) => {
+    const home = noUsageTimer(clocked(`c8b-usage-unread-${age}-`, { ageS: age, linkAgeS: 9000 }, mode));
+    expect(rowsOf(home)).toEqual(UNREAD_USAGE(`whether this lane's usage row, ${age}s old, is stale`));
+  });
+  it('C8b: an unreadable ccrc-codex-usage@.timer leaves a missing row unmeasured, young or old', () => {
+    for (const link of [120, 9000]) {
+      const home = noUsageTimer(clocked(`c8b-usage-unread-norow-${link}-`, { linkAgeS: link }, null));
+      expect(rowsOf(home)).toEqual(UNREAD_USAGE('whether this lane\'s first usage row is overdue (none at <home>/.cc-limits/codex-a.json yet)'));
+    }
+  });
+  it('C8b: ccrc\'s timer reader not loaded: the row records a FAIL naming the bug', () => {
+    const home = clocked('c8b-usage-unloaded-', { ageS: 2701, linkAgeS: 9000 }, null);
+    const r = usageRows(home, false, [
+      'DRX_CLASS=(); DRX_WHAT=(); DRX_FIX=()',
+      'BOX_TREE_DIR=',
+      '_dr_codex_usage_box; b=$?',
+      '_dr_codex_usage codex-a; l=$?',
+      'printf "rc=%s,%s\\n" "$b" "$l"',
+      '_dr_cx_report "usage rows measured"; :',
+    ].join('\n'));
+    expect(r.stdout.split(home).join('<home>').split('\n')).toEqual([
+      'rc=0,1',
+      'FAIL codex: codex-a: ccrc\'s own timer reader is not loaded, so whether this lane\'s usage row, 2701s old, is stale was never measured',
+      '  remedy: this is a bug in ccrc, not a fact about your box — _check_codex reads ccrc-codex-usage@.timer\'s cadence through _timer_period_s and BOX_TREE_DIR, both declared once in ccrc itself, and this check table was sourced by something that is not ccrc',
+      '',
+    ]);
+  });
+
+  // The doctor's cadence pin went away (ARCH-69 (#804), W8 Task C8b, D-7054): the bounds are no longer constants held
+  // against the timer's text, they are read from the shipped timer, so this row MOVES the timer and watches both bounds
+  // move. At OnUnitActiveSec=20min a litellm lane's bound is three cycles, 3600 s, and a direct lane's that plus the
+  // bridge's freshness window, 4500 s: a direct row one missed poll old must not read stale.
+  it('the staleness bounds follow the shipped timer: at 20 min, 3600 s on a litellm lane and 4500 s on a direct one', () => {
+    const at20 = (prefix: string, ageS: number, mode: 'litellm' | 'direct'): string => {
+      const home = clocked(prefix, { ageS, linkAgeS: 9000 }, mode);
+      writeShippedTimer(join(home, 'ccrc'), 'ccrc-codex-usage@.timer',
+        readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-codex-usage@.timer'), 'utf8').replace(/^OnUnitActiveSec=15min$/m, 'OnUnitActiveSec=20min'));
+      return home;
+    };
+    expect(rowsOf(at20('c8b-usage-20m-litellm-3600-', 3600, 'litellm')))
+      .toEqual(NOTE_ROWS('ccrc-codex-usage@codex-a.timer enabled; usage row 3600s old'));
+    expect(rowsOf(at20('c8b-usage-20m-litellm-3601-', 3601, 'litellm')))
+      .toEqual(WARN_ROWS('codex-a: its usage row was last written 60 min ago — more than three of ccrc-codex-usage@codex-a.timer\'s polls', LOG));
+    expect(rowsOf(at20('c8b-usage-20m-direct-4500-', 4500, 'direct')), 'a direct row one missed poll old reads stale')
+      .toEqual(NOTE_ROWS('ccrc-codex-usage@codex-a.timer enabled; usage row 4500s old'));
+    expect(rowsOf(at20('c8b-usage-20m-direct-4501-', 4501, 'direct')))
+      .toEqual(WARN_ROWS('codex-a: its usage row was last measured 76 min ago — more than 75 min, so ccrc-codex-usage@codex-a.timer\'s recent polls have published nothing', LOG));
+  });
+
   it('no row yet, the timer enabled moments ago: no WARN, and the note says why', () => {
     const r = usageRows(usageBox('ccrc-doctor-usage-norow-fresh-', { row: false }));
     expect(warns(r.stdout)).toEqual([]);
@@ -1662,15 +1772,12 @@ describe('ccrc doctor: codex — the usage rows, on any host (Plan 3a Task 6)', 
   // Fix round 3 (FR2-2): a direct lane's row carries the bridge's stamp, up to BRIDGE_FRESH_S older than its poll, so
   // three cycles alone would read a direct lane's row stale after ONE missed poll. The whole-wave fix round (FR3-1):
   // that bound is a direct lane's alone, and a litellm lane (and one whose mode cannot be read) keeps three cycles.
-  it('the staleness thresholds: three of the shipped timer\'s cycles on a litellm lane, plus the bridge\'s freshness window on a direct one', () => {
-    const r = spawnSync(BASH, ['-c', `. ${shq(CHECKS_SRC)}; printf '%s %s' "$_DR_CODEX_USAGE_STALE_S" "$_DR_CODEX_USAGE_STALE_DIRECT_S"`], { encoding: 'utf8' });
-    const [litellm, direct] = r.stdout.split(' ').map(Number);
-    const m = /^OnUnitActiveSec=(\d+)min$/m.exec(readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-codex-usage@.timer'), 'utf8'));
-    expect(m, 'the usage timer\'s cadence is not spelled in minutes — this pin has gone stale').not.toBeNull();
+  it('the direct bound\'s bridge window is ccgpt-usage.py\'s BRIDGE_FRESH_S, and the two bounds are defined nowhere at file level', () => {
     const fresh = /^BRIDGE_FRESH_S = (\d+)$/m.exec(readFileSync(join(REPO, 'ccd', 'ccgpt-usage.py'), 'utf8'));
     expect(fresh, 'ccgpt-usage.py no longer spells BRIDGE_FRESH_S as a bare integer — this pin has gone stale').not.toBeNull();
-    expect(litellm, 'a litellm lane\'s bound is three polls, as before the bridge').toBe(3 * Number(m![1]) * 60);
-    expect(direct, 'a direct row one missed poll old would read as stale').toBeGreaterThanOrEqual(3 * Number(m![1]) * 60 + Number(fresh![1]));
+    const src = readFileSync(CHECKS_SRC, 'utf8');
+    expect(/^_DR_CODEX_BRIDGE_FRESH_S=(\d+)$/m.exec(src)?.[1]).toBe(fresh![1]);
+    expect(src).not.toMatch(/^_DR_CODEX_USAGE_STALE(?:_DIRECT)?_S=/m);
   });
 });
 
@@ -5924,7 +6031,7 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
 
   it('the doctor reads no stats file larger than stats.py\'s READ_MAX, spelled the same', () => {
     const py = [...readFileSync(join(REPO, 'ccd', 'codexbridge', 'stats.py'), 'utf8').matchAll(/^READ_MAX = ([^#\n]+?)\s+#/gm)];
-    const sh = [...readFileSync(CHECKS_SRC, 'utf8').matchAll(/^\s*local read_max=\$\(\( ([^)]+?) \)\) /gm)];
+    const sh = [...readFileSync(CHECKS_SRC, 'utf8').matchAll(/^\s*local read_max=\$\(\( ([^)]+?) \)\)$/gm)];
     expect(py).toHaveLength(1);
     expect(sh).toHaveLength(1);
     expect(sh[0][1]).toBe(py[0][1]);
@@ -5933,11 +6040,281 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
   // Fix round 2, R5: the most names a bridge writes is known.KNOWN's family count times NAMES_MAX plus `overflow`.
   it('the doctor bounds a file\'s names by stats.py\'s NAMES_MAX and known.KNOWN\'s families, counted the same', () => {
     const { namesMax, families } = bridgeBounds();
-    const sh = [...readFileSync(CHECKS_SRC, 'utf8').matchAll(/^\s*local read_max=.* names_max=(\d+) families=(\d+) /gm)];
+    const sh = [...readFileSync(CHECKS_SRC, 'utf8').matchAll(/^\s*local names_max=(\d+) families=(\d+) /gm)];
     expect(sh).toHaveLength(1);
     expect(new Set(families).size).toBe(families.length);
     expect(Number(sh[0][1])).toBe(namesMax);
     expect(Number(sh[0][2])).toBe(families.length);
+  });
+
+  // D-7677: the store row, beside the drift row on a direct lane, reads the stats file's `store` entry through the
+  // same reader (`_dr_cx_stats_read`). The fixture lanes run no tier, so every WARN below is read off a bridge that is
+  // not running: the row names the LAST process, the one that wrote the file (it is asked before `_dr_cx_tiers`
+  // measures the bridge), and the next start's entry clears it.
+  describe('the store row (D-7677)', () => {
+    const AT = 1767225600;   // 2026-01-01T00:00:00.000Z
+    const AT_ISO = '2026-01-01T00:00:00.000Z';
+    const COPY = 'reasoning.sqlite.damaged-20260101T000000Z';
+    const STORE_LINE = /the bridge's reasoning store is switched off|found its reasoning store damaged|a set-aside copy of the lane's reasoning store/;
+    const DISABLED = (id: string, reason: string, at: string, copy = ''): string =>
+      `WARN codex: ${id}: the bridge's reasoning store is switched off for the rest of its last process (${reason}, since ${at}): every request that process answers is answered without the model's earlier reasoning replayed${copy} (names only, never content).`;
+    const COPY_CLAUSE = (found: string, file: string): string => `; at its start it had set its damaged store (${found}) aside as ${file}`;
+    const DISABLED_FIX = (id: string): string =>
+      `  remedy: restart the lane's bridge so its start check runs again: ccrc codex stop ${id}, then ccrc codex start ${id} (a bridge that is not running needs the start alone, which every session launch runs too); the stop drains the bridge, so a request in flight gets DRAIN_S (ccd/codexbridge/server.py) to finish and one still open then is cut with an error that Claude Code sends again. At the start a damaged store is set aside and a fresh one made, and this line clears once the new process writes its stats file, before it serves`;
+    const SET_ASIDE = (id: string, found: string, file: string): string =>
+      `WARN codex: ${id}: at its start the bridge found its reasoning store damaged (${found}) and set it aside as ${file}, starting a fresh store; only the model's earlier reasoning was lost.`;
+    const SET_ASIDE_FIX = (dir: string, file: string): string =>
+      `  remedy: nothing to repair: the bridge serves from its fresh store. Read the copy, ${dir}/${file}, if the damage needs explaining, then delete it with its -wal and -shm (rm -f -- ${dir}/${file} ${dir}/${file}-wal ${dir}/${file}-shm), and this line clears; the bridge keeps only the newest copy, and ccrc never deletes one for you`;
+    // Fix round 4, G1: a copy found on disk in every case but a `set-aside` entry naming it (an `ok` entry after a
+    // restart, a `disabled` one, an entry naming another file) is NEUTRAL: it never says the bridge serves from a
+    // fresh store. `found` is said only when the entry's copy is this one; a `disabled` entry adds its pointer.
+    const NEUTRAL = (id: string, file: string, found = '', disabled = false): string =>
+      `WARN codex: ${id}: a set-aside copy of the lane's reasoning store, ${file}, is in the lane directory${found === '' ? '' : ` (set aside at a start that found the store damaged: ${found})`}${disabled ? '; the line above names the store\'s own repair' : ''}.`;
+    const NEUTRAL_FIX = (dir: string, file: string): string =>
+      `  remedy: read the copy, ${dir}/${file}, if the damage needs explaining, then delete it with its -wal and -shm (rm -f -- ${dir}/${file} ${dir}/${file}-wal ${dir}/${file}-shm), and this line clears; the bridge keeps only the newest copy, and ccrc never deletes one for you`;
+    // Fix round 3, F4: a newer build's store is never checked or touched, so a restart is not its remedy.
+    const NEWER_FIX = (id: string, dir: string): string =>
+      `  remedy: a newer build of the bridge wrote this reasoning store (its user_version is above USER_VERSION in ccd/codexbridge/store.py), and a restart does not change it: the start never checks or touches a newer store. Run that build again (ccrc update --to <its version>, or ccrc rollout --to <its version> across the fleet), or stop the lane (ccrc codex stop ${id}), move ${dir}/reasoning.sqlite and its -wal and -shm aside by hand, then start it again (ccrc codex start ${id}): the bridge makes a fresh store, without the model's earlier reasoning — ccrc never moves it for you`;
+    /** Lane `id`'s stats file as its bridge writes it, with `events` passed to the real `Stats.store_event`. */
+    const writeStore = async (home: string, id: string,
+      events: ReadonlyArray<{ reason: string; found?: string; file?: string }>): Promise<string> => {
+      const file = statsFile(home, id);
+      const ops = [
+        { op: 'stats-open', path: file, lane: id },
+        ...events.map((e) => ({ op: 'stats-call', method: 'store_event', args: [e.reason],
+          kwargs: { ...(e.found === undefined ? {} : { found: e.found }), ...(e.file === undefined ? {} : { file: e.file }), now: AT } })),
+        { op: 'stats-call', method: 'flush', kwargs: { force: true } },
+      ];
+      const r = await runBridgeDriver(home, { ops });
+      expect(r.timedOut, r.stderr).toBe(false);
+      const lines = driverLines(r.stdout);
+      expect(lines.map((l) => l['op']), `${r.stdout}\n${r.stderr}`).toEqual(ops.map((o) => o.op));
+      for (const l of lines) expect(l['raised'], JSON.stringify(l)).toBeUndefined();
+      return file;
+    };
+    const storeOf = (file: string): unknown => (JSON.parse(readFileSync(file, 'utf8')) as { store?: unknown }).store;
+    /** The line `line` exactly once, with `fix` as its remedy. */
+    const expectOnce = (stdout: string, line: string, fix: string): void => {
+      const re = new RegExp(`^${reEsc(line)}$`, 'm');
+      expect(stdout, stdout).toMatch(re);
+      expect(remedyAfter(stdout, re)).toBe(fix);
+      expect(stdout.split('\n').filter((l) => STORE_LINE.test(l))).toHaveLength(1);
+    };
+    /** Fix round 4, G1: a `disabled` entry with a copy on disk prints exactly two store lines, in this order: the
+     *  entry's `disabled` WARN with the restart remedy, then the NEUTRAL copy line, which never says "fresh store". */
+    const expectDisabledThenCopy = (stdout: string, disabled: string, disabledFix: string, copy: string, copyFix: string): void => {
+      expect(stdout.split('\n').filter((l) => STORE_LINE.test(l)), stdout).toEqual([disabled, copy]);
+      expect(remedyAfter(stdout, new RegExp(`^${reEsc(disabled)}$`, 'm'))).toBe(disabledFix);
+      const copyRe = new RegExp(`^${reEsc(copy)}$`, 'm');
+      expect(remedyAfter(stdout, copyRe)).toBe(copyFix);
+      const ls = stdout.split('\n');
+      const i = ls.findIndex((l) => copyRe.test(l));
+      expect(`${ls[i]}\n${ls[i + 1]}`).not.toContain('fresh store');
+    };
+
+    // (a) A bridge from before the entry writes no `store` key: no row, never read as `ok` or as anything else.
+    // (b) A fresh `Stats` writes `ok`: no row.
+    it('a stats file with no store entry, or an ok one, has no store row', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-none-', ['codex-a', 'codex-b']);
+      for (const id of ['codex-a', 'codex-b']) plantDirectLane(home, id);
+      const a = await writeStore(home, 'codex-a', [{ reason: 'store:DatabaseError' }]);
+      const doc = JSON.parse(readFileSync(a, 'utf8')) as Record<string, unknown>;
+      delete doc['store'];
+      plantStats(a, JSON.stringify(doc));
+      const b = await writeStore(home, 'codex-b', []);
+      expect(storeOf(b)).toEqual({ state: 'ok', reason: null, at: null, setAside: null });
+      const r = runDoctor(home);
+      expect(r.stdout, r.stdout).not.toMatch(STORE_LINE);
+      for (const id of ['codex-a', 'codex-b']) {
+        expect(lineFor(r.stdout, 'codex') ?? '', r.stdout).toMatch(new RegExp(`^PASS codex: .*${reEsc(id)} \\(ports \\d+\\/\\d+, direct mode, `));
+      }
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // (c) A store disabled by a request: the WARN with its reason and time, and the restart remedy.
+    it('a disabled store warns with its reason, and the remedy restarts the bridge', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-disabled-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const file = await writeStore(home, 'codex-a', [{ reason: 'store:DatabaseError' }]);
+      expect(storeOf(file)).toEqual({ state: 'disabled', reason: 'store:DatabaseError', at: AT_ISO, setAside: null });
+      const r = runDoctor(home);
+      expectOnce(r.stdout, DISABLED('codex-a', 'store:DatabaseError', AT_ISO), DISABLED_FIX('codex-a'));
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // (d) A set-aside that failed after its renames names its copy (D-7676): the WARN names it too. The copy is then
+    // always on disk (store.py names it only once its rename succeeded), so it is planted here, and the real output is
+    // pinned: the `disabled` WARN with the restart remedy, then the NEUTRAL copy line (fix round 4, G1).
+    it('a failed set-aside that named its copy warns as disabled, naming the copy, and its copy line is neutral', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-failed-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const file = await writeStore(home, 'codex-a', [{ reason: 'store:set-aside-failed', found: 'integrity-check', file: COPY }]);
+      expect(storeOf(file)).toMatchObject({ state: 'disabled', reason: 'store:set-aside-failed', setAside: { found: 'integrity-check', file: COPY } });
+      const dir = laneDir(home, 'codex-a');
+      writeFileSync(join(dir, COPY), 'fixture\n', { mode: 0o600 });
+      const r = runDoctor(home);
+      expectDisabledThenCopy(r.stdout,
+        DISABLED('codex-a', 'store:set-aside-failed', AT_ISO, COPY_CLAUSE('integrity-check', COPY)), DISABLED_FIX('codex-a'),
+        NEUTRAL('codex-a', COPY, 'integrity-check', true), NEUTRAL_FIX(dir, COPY));
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // Fix round 4, G1: a store disabled at runtime, with an older copy still on disk, prints the same two lines; the
+    // entry names no copy, so the copy line says no `found`.
+    it('a store disabled at runtime with an older copy on disk warns as disabled, and its copy line is neutral', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-disabled-copy-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const file = await writeStore(home, 'codex-a', [{ reason: 'store:OperationalError' }]);
+      expect(storeOf(file)).toEqual({ state: 'disabled', reason: 'store:OperationalError', at: AT_ISO, setAside: null });
+      const dir = laneDir(home, 'codex-a');
+      writeFileSync(join(dir, COPY), 'fixture\n', { mode: 0o600 });
+      const r = runDoctor(home);
+      expectDisabledThenCopy(r.stdout,
+        DISABLED('codex-a', 'store:OperationalError', AT_ISO), DISABLED_FIX('codex-a'),
+        NEUTRAL('codex-a', COPY, '', true), NEUTRAL_FIX(dir, COPY));
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // (e) A set-aside whose copy is still in the lane directory: the WARN names it, and the remedy is to delete it.
+    // (f) The same once the copy is deleted: no row.
+    it('a set-aside warns while its copy is in the lane directory, and clears once the copy is deleted', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-aside-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const file = await writeStore(home, 'codex-a', [{ reason: 'store:set-aside', found: 'DatabaseError', file: COPY }]);
+      expect(storeOf(file)).toMatchObject({ state: 'set-aside', reason: 'store:set-aside', setAside: { found: 'DatabaseError', file: COPY } });
+      const copy = join(laneDir(home, 'codex-a'), COPY);
+      writeFileSync(copy, 'fixture\n', { mode: 0o600 });
+      const r = runDoctor(home);
+      expectOnce(r.stdout, SET_ASIDE('codex-a', 'DatabaseError', COPY), SET_ASIDE_FIX(laneDir(home, 'codex-a'), COPY));
+      noRunnerBugLine(r.stdout, 'codex');
+      rmSync(copy);
+      const again = runDoctor(home);
+      expect(again.stdout, again.stdout).not.toMatch(STORE_LINE);
+      expect(lineFor(again.stdout, 'codex') ?? '', again.stdout).toMatch(/^PASS codex: /);
+      noRunnerBugLine(again.stdout, 'codex');
+    });
+
+    // (g) A lane switched back to litellm keeps its stats file and the entry its last bridge wrote: no bridge runs
+    // there, so the entry is no row of that lane's. Lane b, direct, with the same entry, still warns.
+    it('a litellm lane has no store row', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-litellm-', ['codex-a', 'codex-b']);
+      plantDirectLane(home, 'codex-b');
+      for (const id of ['codex-a', 'codex-b']) await writeStore(home, id, [{ reason: 'store:DatabaseError' }]);
+      const r = runDoctor(home);
+      expectOnce(r.stdout, DISABLED('codex-b', 'store:DatabaseError', AT_ISO), DISABLED_FIX('codex-b'));
+      expect(r.stdout).not.toMatch(/codex-a: the bridge's reasoning store/);
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // (h) No `Stats` writes a value outside NAME_RE, so these files are planted by hand: every value outside it, and a
+    // copy name that is not a bare name of store.py's shape, prints `unrecognised`, and no byte of it reaches the
+    // output. A set-aside whose copy name is not of that shape has nothing to check, so it has no row.
+    it('every value the row prints is bounded, else unrecognised', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-bounded-', ['codex-a', 'codex-b']);
+      for (const id of ['codex-a', 'codex-b']) plantDirectLane(home, id);
+      const sentinels = ['fx-sentinel value with spaces', 'fx-sentinel\nWARN codex: forged line', `fx-sentinel-${'x'.repeat(64)}`,
+        '../fx-sentinel.damaged-20260101T000000Z'];
+      const base = { version: 1, since: AT_ISO, startedAt: AT_ISO, updatedAt: AT_ISO, routes: {}, refusals: {}, outcomes: {},
+        names: {}, unexplained: {}, usageHeaders: null, lastUpstreamRequestId: null };
+      plantStats(statsFile(home, 'codex-a'), JSON.stringify({ ...base, lane: 'codex-a', store: {
+        state: 'disabled', reason: sentinels[0], at: sentinels[1], setAside: { at: AT_ISO, found: sentinels[2], file: sentinels[3] } } }));
+      // The copy the sentinel names, planted where `..` would reach it: the row never checks a path from the file.
+      writeFileSync(join(laneDir(home, 'codex-b'), '..', 'fx-sentinel.damaged-20260101T000000Z'), 'fixture\n', { mode: 0o600 });
+      plantStats(statsFile(home, 'codex-b'), JSON.stringify({ ...base, lane: 'codex-b', store: {
+        state: 'set-aside', reason: 'store:set-aside', at: AT_ISO, setAside: { at: AT_ISO, found: 'integrity-check', file: sentinels[3] } } }));
+      const r = runDoctor(home);
+      expectOnce(r.stdout, DISABLED('codex-a', 'unrecognised', 'unrecognised', COPY_CLAUSE('unrecognised', 'unrecognised')), DISABLED_FIX('codex-a'));
+      expect(r.stdout).not.toContain('fx-sentinel');
+      expect(r.stdout).not.toMatch(/codex-b: at its start the bridge/);
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // Fix round 3, F4: `store:newer-version` names what wrote the store, and its remedy is that build, or a hand move.
+    it('a store a newer build wrote warns as disabled, and its remedy is that build, never a restart', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-newer-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      await writeStore(home, 'codex-a', [{ reason: 'store:newer-version' }]);
+      const r = runDoctor(home);
+      expectOnce(r.stdout, DISABLED('codex-a', 'store:newer-version', AT_ISO), NEWER_FIX('codex-a', laneDir(home, 'codex-a')));
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // Fix round 3, F2: the entry is per process, so a restart writes `ok` while the copy stays. The copy is found on
+    // disk, so its WARN lasts until it is deleted; with no entry naming it, the line is NEUTRAL and says no `found`.
+    it('a copy still in the lane directory after a restart warns, though the entry reads ok', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-restarted-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const file = await writeStore(home, 'codex-a', []);
+      expect(storeOf(file)).toEqual({ state: 'ok', reason: null, at: null, setAside: null });
+      const dir = laneDir(home, 'codex-a');
+      const older = 'reasoning.sqlite.damaged-20251231T235959Z';
+      for (const f of [older, COPY, `${COPY}-wal`, `${COPY}-shm`]) writeFileSync(join(dir, f), 'fixture\n', { mode: 0o600 });
+      const r = runDoctor(home);
+      // The newest copy by its stamp is the one named; its -wal and -shm are not copies of their own.
+      expectOnce(r.stdout, NEUTRAL('codex-a', COPY), NEUTRAL_FIX(dir, COPY));
+      noRunnerBugLine(r.stdout, 'codex');
+      for (const f of [older, COPY, `${COPY}-wal`, `${COPY}-shm`]) rmSync(join(dir, f));
+      const again = runDoctor(home);
+      expect(again.stdout, again.stdout).not.toMatch(STORE_LINE);
+      noRunnerBugLine(again.stdout, 'codex');
+    });
+
+    // Fix round 3, F2/F3: only the store's OWN copy shape counts — keyed on lane.json's `bridgeFiles.store`, a regular
+    // file, never a symlink: another file's copy, a short stamp, a suffix and a symlink are no copy, so no row.
+    it('a look-alike that is not the store\'s copy, or a symlink of its shape, has no store row', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-lookalike-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      await writeStore(home, 'codex-a', []);
+      const dir = laneDir(home, 'codex-a');
+      for (const f of ['bridge.stats.json.damaged-20260101T000000Z', 'other.sqlite.damaged-20260101T000000Z',
+        'reasoning.sqlite.damaged-2026010T000000Z', 'reasoning.sqlite.damaged-20260101T00000Z',
+        `${COPY}-x`, `${COPY}-wal`, `x${COPY}`]) {
+        writeFileSync(join(dir, f), 'fixture\n', { mode: 0o600 });
+      }
+      const target = join(home, 'elsewhere-copy');
+      writeFileSync(target, 'fixture\n', { mode: 0o600 });
+      symlinkSync(target, join(dir, COPY));
+      const r = runDoctor(home);
+      expect(r.stdout, r.stdout).not.toMatch(STORE_LINE);
+      expect(lineFor(r.stdout, 'codex') ?? '', r.stdout).toMatch(/^PASS codex: /);
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // Fix round 3, F3: the copy's name shape, end to end. A REAL copy, made by the store's own set-aside at a start
+    // (store.py's DAMAGED_STAMP), is named by the doctor's WARN and removed by the lane's reap, so a change of that
+    // stamp that the doctor and `_codex_reap_files` do not follow reds this case.
+    it('a copy the store itself set aside is named by the WARN and reaped with the lane', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-real-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const dir = laneDir(home, 'codex-a');
+      const store = join(dir, (JSON.parse(readFileSync(join(dir, 'lane.json'), 'utf8')) as
+        { bridgeFiles: Record<string, string> }).bridgeFiles['store']);
+      const ops = [
+        { op: 'store-damage', path: store, how: 'not-a-database' },
+        { op: 'stats-open', path: statsFile(home, 'codex-a'), lane: 'codex-a' },
+        { op: 'store-open', path: store, stats: true },
+        { op: 'stats-call', method: 'flush', kwargs: { force: true } },
+      ];
+      const run = await runBridgeDriver(home, { ops });
+      expect(run.timedOut, run.stderr).toBe(false);
+      const lines = driverLines(run.stdout);
+      expect(lines.map((l) => l['op']), `${run.stdout}\n${run.stderr}`).toEqual(ops.map((o) => o.op));
+      expect(lines[2]['disabled'], JSON.stringify(lines[2])).toBeNull();
+      const copies = readdirSync(dir).filter((n) => n.startsWith(`${store.slice(dir.length + 1)}.damaged-`));
+      expect(copies).toHaveLength(1);
+      const copy = copies[0]!;
+      const found = (lines[0]['probe'] as { raised: string }).raised;
+      const r = runDoctor(home);
+      expectOnce(r.stdout, SET_ASIDE('codex-a', found, copy), SET_ASIDE_FIX(dir, copy));
+      noRunnerBugLine(r.stdout, 'codex');
+      // The reap removes with `rm` and `rmdir`, which the doctor's contained PATH holds only when linked in.
+      for (const bin of ['rm', 'rmdir']) linkReal(home, bin);
+      const reap = spawnSync(BASH, ['-c', `. ${JSON.stringify(join(home, 'ccrc', 'ccd', 'ccrc'))}; _codex_reap_files codex-a; echo "rc=$?"`],
+        { env: doctorEnv(home), encoding: 'utf8' });
+      expect(reap.stdout, reap.stderr).toBe('rc=0\n');
+      expect(existsSync(join(dir, copy))).toBe(false);
+      expect(existsSync(dir), existsSync(dir) ? readdirSync(dir).join(' ') : '').toBe(false);
+    });
   });
 });
 
@@ -6380,5 +6757,40 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
       expect(r.stdout, how).not.toContain('hunter2');
       expect(r.code, how).toBe(0);
     }
+  });
+
+  // wave 29 (D-6981): the ccd-* sweeps read four settings through ccrc's reader too, so the check reports them like
+  // ccrc's own; on a server-role box, where no sweep timer runs, a sweep setting the file sets says so (ruling 4).
+  const roleBox = (prefix: string, role: string, lines: string[]): string => {
+    const home = mkTmp(prefix);
+    installCcrc(home);
+    containedPath(home);
+    linkReal(home, 'awk');
+    writeCcrcEnv(home, [`CCRC_ROLE=${role}`, ...lines, ''].join('\n'));
+    return home;
+  };
+
+  it('W29-D1: a sweep\'s setting is reported like ccrc\'s', () => {
+    const r = runBs(roleBox('ccrc-doctor-bs-sweep-', 'fleet', ['CCRC_USAGE_SWEEP_DAYS=4']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_USAGE_SWEEP_DAYS=4; not set there/);
+    expect(verdict(r), 'a fleet box runs the sweeps').not.toMatch(/server-role/);
+    expect(r.code).toBe(0);
+    const w = runBs(roleBox('ccrc-doctor-bs-sweep-export-', 'fleet', ['export CCRC_USAGE_SWEEP_DAYS=4']));
+    expect(w.stdout).toMatch(/^WARN box-settings: CCRC_USAGE_SWEEP_DAYS cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take/m);
+    expect(w.code).toBe(2);
+  });
+
+  it('W29-D3: an empty sweep setting on a server-role box names its default and the inactive sweeps', () => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-sweep-empty-', ['CCRC_USAGE_SWEEP_DAYS=']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(
+      /^PASS box-settings: the box's ccrc.env sets CCRC_USAGE_SWEEP_DAYS= \(empty: the default\) \(read by the ccd-\* sweeps, which do not run on a server-role box\); not set there/);
+    expect(r.code).toBe(0);
+  });
+
+  it('W29-D2: on a server-role box a sweep setting is still reported, and says the sweeps do not run there', () => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-sweep-server-', ['CCRC_USAGE_SWEEP_DAYS=4', 'CCRC_BACKUP_KEEP=5']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(
+      /^PASS box-settings: the box's ccrc.env sets CCRC_BACKUP_KEEP=5, CCRC_USAGE_SWEEP_DAYS=4 \(read by the ccd-\* sweeps, which do not run on a server-role box\); not set there/);
+    expect(r.code).toBe(0);
   });
 });

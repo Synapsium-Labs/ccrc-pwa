@@ -1,0 +1,117 @@
+{
+  "name": "key-check-page-2",
+  "documentSource": "code",
+  "document": "query KeyCheck($after: String) { viewer { name } organization { id name urlKey } teams(first: 250, after: $after) { nodes { id key name } pageInfo { hasNextPage endCursor } } }",
+  "variables": {
+    "after": "00000000-0001-4000-8000-000000000001"
+  },
+  "requestBody": "{\"query\":\"query KeyCheck($after: String) { viewer { name } organization { id name urlKey } teams(first: 250, after: $after) { nodes { id key name } pageInfo { hasNextPage endCursor } } }\",\"variables\":{\"after\":\"00000000-0001-4000-8000-000000000001\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631303548,
+  "receivedAtMs": 1793631303780,
+  "sentAt": "2026-11-02T14:55:03.548+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:55:04 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "207"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "628"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999372"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634904141"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634904141"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "viewer": {
+        "name": "User A"
+      },
+      "organization": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "name": "Workspace A",
+        "urlKey": "ws-a"
+      },
+      "teams": {
+        "nodes": [],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": null
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"viewer\":{\"name\":\"User A\"},\"organization\":{\"id\":\"00000000-0000-4000-8000-000000000001\",\"name\":\"Workspace A\",\"urlKey\":\"ws-a\"},\"teams\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null}}}}\n",
+  "note": "Second page asked with the first page's endCursor although hasNextPage was false (the workspace has one team)."
+}

@@ -6,19 +6,21 @@
 // coordinator presence) asks here first, so a sleeping session reads as asleep and offers Wake, never as a death.
 import type { FleetSession } from '../../../shared/api';
 import { elapsedShort } from '@ccrc/ui';
+import { paneGone } from './presence';
 
 /** When this row went to sleep (epoch MS), or `null` when it is not asleep.
  *
  *  BOTH halves. `hibernatedAt` alone is not enough: the frame that wakes a session can carry a stale marker for a
  *  tick (`cmd_ensure` removes `.hibernated`, and the listing that carries it is read beside the liveness probe), and a
- *  live row is awake whatever that says. `status` alone is not enough either: a dead row with no marker crashed, or
- *  was stopped, and opening it must never restart it silently.
+ *  live row is awake whatever that says. The pane's half is `paneGone` (D-7181), the pane's own word: the server's
+ *  `presence` reads a sleeper `asleep` from the same two facts. `status` alone is not enough either: a dead row with no
+ *  marker crashed, or was stopped, and opening it must never restart it silently.
  *
  *  `?? null`, never the typed field directly: the live `fleet` frame is CAST on arrival (`stores/fleet.ts`'s
  *  `asFleetMsg`), so a row from a server older than the field lacks the key at runtime. */
 export function hibernatedSince(s: Pick<FleetSession, 'status'> & Partial<Pick<FleetSession, 'hibernatedAt'>>): number | null {
   const at = s.hibernatedAt ?? null;
-  if (s.status !== 'dead' || typeof at !== 'number' || !Number.isFinite(at)) return null;
+  if (!paneGone(s) || typeof at !== 'number' || !Number.isFinite(at)) return null;
   return at;
 }
 

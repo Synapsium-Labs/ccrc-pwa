@@ -232,8 +232,15 @@ describe('the restart seed (childReclaimTierSeed)', () => {
     }
   });
 
+  it('a journaled refused tree-unreadable is a countable failure, so the seed equals the live memory', () => {
+    for (const n of [1, 3, 6, 9]) {
+      expect(seed([...generation(), ...times(n, 0).flatMap(() => refusedAttempt('tree-unreadable'))]), String(n))
+        .toEqual(tierOf(fold(fresh(), times(n, failed('tree-unreadable')))));
+    }
+  });
+
   it('any other reclaim outcome ends the walk; another act is read past', () => {
-    for (const end of [ev('reclaim', 'refused', { refusal: 'tree-unreadable' }), ev('reclaim', 'refused', { refusal: 'no-such-session' }),
+    for (const end of [ev('reclaim', 'refused', { refusal: 'branch-elsewhere' }), ev('reclaim', 'refused', { refusal: 'no-such-session' }),
       ev('reclaim', 'done'), ev('reclaim', 'unknown')]) {
       expect(seed([...generation(...times(5, A)), end]), `${end.outcome}:${String(end.refusal)}`).toEqual(CHILD_RECLAIM_TIER_NONE);
     }

@@ -5,14 +5,14 @@
 // archive's instant — so a refusal asked again is not a second row. Recorded, never pushed; a missing log or a throwing
 // archive costs the row and never the act (the funnel's rule, `notice.ts`).
 import type { NotifyLog } from '../notifylog.js';
-import type { CoordStore } from './store.js';
+import type { WatcherCoordPort } from './ports.js';
 import { notify } from '../notice.js';
 import { journalShadowVerdict } from './shadowJournal.js';
 import { SHADOW_LANE, type ShadowRung } from '../../../shared/shadowJournal.js';
 import { NESTED_RESCUE_SHADOW_TITLE, nestedRescueShadowBody } from '../../../shared/nestedRescue.js';
 
 export function recordNestedRescueShadow(
-  deps: { readonly coord: CoordStore; readonly notifyLog?: NotifyLog | undefined },
+  deps: { readonly coord: WatcherCoordPort; readonly notifyLog?: NotifyLog | undefined },
   row: { readonly sessionId: string; readonly runId: number | null; readonly key: string; readonly who: string; readonly count: number;
     readonly paths?: readonly string[];
     /** Which ladder refused (`reclaim:rescue`, epoch a run id; `expire:rescue`, epoch an archive instant). */

@@ -392,6 +392,14 @@ describe('parseJournalLine: the three families never merge', () => {
     expect(reviveMeas({ project: 'demo' })!.project).toBe('demo');
   });
 
+  it('carries `meas.childRun` (D-7278), and a line from a ccd that does not write it reads null (the skew row)', () => {
+    // New ccd, this server: the run marker a deps-shed line was judged against survives ingest as ccd wrote it.
+    expect(parseJournalLine(line({ verb: 'ws-shed-deps', meas: { mode: 'child', childRun: '42' } })).meas)
+      .toMatchObject({ mode: 'child', childRun: '42' });
+    // Skew: a ccd older than the key (or a coordinator's line, which has no marker) — absent reads null, not a guess.
+    expect(parseJournalLine(line({ verb: 'ws-shed-deps', meas: { mode: 'coordinator' } })).meas?.childRun).toBeNull();
+  });
+
   it('narrows `meas.atticsrc` to its three declared members, collapsing an unrecognised token to null', () => {
     expect(parseJournalLine(line({ meas: { atticsrc: 'worktree' } })).meas?.atticsrc).toBe('worktree');
     expect(parseJournalLine(line({ meas: { atticsrc: 'registry' } })).meas?.atticsrc).toBe('registry');

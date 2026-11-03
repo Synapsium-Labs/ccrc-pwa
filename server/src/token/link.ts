@@ -5,7 +5,8 @@
 // `SyncResult` arm, and the generation read keeps absent, unreadable and an id
 // apart (`readGenerationFile`, the one reader).
 import path from 'node:path';
-import { AgentOpError, LinkNotSentError, type FleetClient } from '../remote/client.js';
+import { AgentOpError, LinkNotSentError } from '../remote/errors.js';
+import type { FleetClient } from '../remote/client.js';
 import type { FleetIO } from '../io.js';
 import { INVENTORY_BUDGET_MS, readNodeFile } from '../update/inventory.js';
 import { openPoolReadDeadline } from '../pools.js';

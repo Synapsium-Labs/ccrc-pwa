@@ -3,8 +3,9 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
-import { GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
+import { CCD, WS_ADD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
+import { GH_HTTP_502, GH_RATE_LIMITED, GH_STUB, makePrHarness, mergedRow, notAPullRequest, trainBlock, trainComment, trainRow,
+  type PrHarness } from './ccdPrHelpers.js';
 import { isFullLine, parsePrLines, phaseFor } from '../src/prstate.js';
 import { plantGitRecorder, type RecordedGitCall } from './ccdDocsHelpers.js';
 import { createHash } from 'node:crypto';
@@ -40,6 +41,19 @@ describe('pr-state argv', () => {
     expect(h.run('cmd_pr_state --session a --project b').code).toBe(1);
     expect(h.run('cmd_pr_state --session "a b"').stderr).toMatch(/bad session/);
     expect(h.run('cmd_pr_state --project "a b"').stderr).toMatch(/bad project/);
+  });
+
+  it('the PR-keyed form dies on a bad number, a bad project or a wrong shape, before any gh call (landing order wave 5c)', () => {
+    h.makeGhRepo('demo');
+    for (const argv of ['--project demo --pr 0', '--project demo --pr abc', '--project demo --pr 12345678901',
+      '--project demo --pr -1', '--project demo --pr', '--project demo --pr 42 x', '--pr 42 --project demo',
+      '--project demo --session 42']) {
+      expect(h.run(`${GH_STUB} cmd_pr_state ${argv}`).code, argv).toBe(1);
+    }
+    expect(h.run(`${GH_STUB} cmd_pr_state --project "a b" --pr 42`).stderr).toMatch(/bad project/);
+    expect(h.run(`${GH_STUB} cmd_pr_state --project demo --pr 0`).stderr).toMatch(/bad pr number/);
+    expect(h.ghCalls()).toEqual([]);
+    expect(h.ghPoison()).toEqual([]);
   });
 
   it('refuses an id it does not hold, and a main checkout that has no branch', () => {
@@ -91,12 +105,12 @@ describe('pr-state argv', () => {
     expect(call).not.toContain('mergeStateStatus');   // literal "UNKNOWN" on merged PRs
     expect(call).not.toContain('mergeable');
     // The whole list, in order. The loop above says WHY six of these are here;
-    // this says that none of the thirteen may quietly leave, which the loop
+    // this says that none of the fifteen may quietly leave, which the loop
     // cannot: the stub returns its rows whatever --json asks for, and `state`
     // is a substring of `--state all`, so five field names were assertable
     // only as an exact string. Task 12's prstate.ts reads every one of them.
     expect(call).toContain('--json number,state,headRefName,headRefOid,baseRefName,'
-      + 'isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt,statusCheckRollup');
+      + 'isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt,labels,closedAt,statusCheckRollup');
     // …and the call is WRAPPED. `gh pr list` has no timeout of its own, so a
     // blocking DNS hang is bounded by this and nothing else; without the stub
     // logging its own argv, dropping the wrapper left the suite green.
@@ -218,7 +232,7 @@ describe('the per-session call asks about one branch', () => {
  *  actually ships). A literal here re-pins the number in a third place and reds
  *  the next resize for no reason. */
 const ccdSeconds = (name: string): number => {
-  const src = readFileSync(CCD, 'utf8');
+  const src = ccdSource();
   const m = new RegExp(`^${name}=(\\d+)`, 'm').exec(src);
   if (!m) throw new Error(`ccd no longer defines ${name} as a bare integer assignment`);
   return Number(m[1]);
@@ -280,12 +294,13 @@ describe('the project sweep fetches the rollup it reads, not the ninety-nine it 
       .find((c) => c.includes('--json number,state,'));
     expect(rowCall).toBeDefined();
     expect(rowCall).not.toContain('statusCheckRollup');
-    // The other twelve stay, in order and entire: this task removes ONE field,
+    // The other fourteen stay, in order and entire: this task removes ONE field,
     // and the row window is still what every binding conjunct is read from.
     // The twelfth, `createdAt`, is no binding conjunct: it dates a row against
-    // a child's birth (child-reclamation spec §5.3).
+    // a child's birth (child-reclamation spec §5.3). `labels` and `closedAt`
+    // read a PR closed as landed in a merge train, and when it landed.
     expect(rowCall).toContain('--json number,state,headRefName,headRefOid,baseRefName,'
-      + 'isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt');
+      + 'isCrossRepository,mergedAt,mergeCommit,url,title,isDraft,createdAt,labels,closedAt');
     expect(rowCall).toContain('--state all');
     expect(rowCall).toContain('--limit 100');
   });
@@ -1535,6 +1550,480 @@ describe('gh isolation', () => {
   });
 });
 
+describe('a PR closed as landed in a merge train', () => {
+  const landed = (label: string, over: Record<string, unknown> = {}): Record<string, unknown> =>
+    ({ state: 'CLOSED', mergedAt: null, mergeCommit: null, closedAt: '2026-07-21T09:00:00Z',
+       labels: [{ name: label }], ...over });
+  const TRAIN_MERGE = 'e'.repeat(40);
+  /** The train record that proves #42 at `tip`: the train's comment on #42 and train #50, MERGED, listing it. */
+  const proven = (tip: string, over: Record<string, unknown> = {}): void => {
+    h.ghView(42, trainComment(50));
+    h.ghView(50, trainRow(50, TRAIN_MERGE, [[42, tip]], over));
+  };
+
+  it('is merged when the train record proves it, and persists the phase and number the archive trigger reads', () => {
+    // ws-archive files `merged:#N` off exactly these two registry fields
+    // (ccd-archive.test.ts pins that half), and the server's merged notice and
+    // cleanup bucket read the same phase off the line.
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    proven(tip);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.phase).toBe('merged');
+    expect(o.reason).toBeNull();
+    expect(o.number).toBe(42);
+    expect(o.rows[0].landedInTrain).toBe(true);
+    expect(o.rows[0].trainUnproven).toBe(false);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('merged');
+    expect(h.reg('demo-quiet-basin', 'prnumber')).toBe('42');
+    const s = phaseFor(o as never);
+    expect([s.phase, s.reason]).toEqual(['merged', null]);
+  });
+
+  // RED-FIRST ROWS (D-7362): the label is a claim, and a claim the train
+  // record does not back is closed — for the run close and the archive
+  // (`prphase`, `phaseFor`), and for the merged notice (`pr-landing`'s rows
+  // in ccd-pr-landing.test.ts).
+  it.each([
+    ['the train PR is CLOSED unmerged', { state: 'CLOSED', mergedAt: null, mergeCommit: null }],
+    ['the train PR lists the member at a different sha', { body: trainBlock([[42, 'c'.repeat(40)]]) }],
+  ])('a labelled PR is NOT merged when %s: closed, train-unproven, on both sides', (_n, over) => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    proven(tip, over);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.phase).toBe('closed');
+    expect(o.reason).toBe('train-unproven');
+    expect(o.rows[0].landedInTrain).toBe(false);
+    expect(o.rows[0].trainUnproven).toBe(true);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('closed');
+    const s = phaseFor(o as never);
+    expect([s.phase, s.reason]).toEqual(['closed', 'train-unproven']);
+  });
+
+  it('a label on a PR no train names is closed, train-unproven', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, { comments: [] });
+    h.ghSearch([]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect([o.phase, o.reason]).toEqual(['closed', 'train-unproven']);
+  });
+
+  // D-7378: the sweep has no train budget, so a labelled member with no kept
+  // proof is UNREAD there — unmeasured, never closed — until a read keeps one.
+  const sweep = (): Record<string, any> =>
+    line(h.sh(`${GH_STUB} cmd_pr_state --project demo`).split('\n').find((l) => l.includes('"rows"'))!);
+  const proofsFile = (): string => {
+    const f = path.join(h.home, '.cc-sessions', '.train-proofs');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+  };
+
+  it('the --project sweep reads only kept proofs: unread before any proof, merged once a --session read kept one', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    proven(tip);
+    const before = sweep();
+    expect([before.phase, before.reason]).toEqual(['unknown', 'train-unread']);
+    expect([before.rows[0].trainUnread, before.rows[0].trainUnproven, before.rows[0].landedInTrain])
+      .toEqual([true, false, false]);
+    expect(h.reg('demo-quiet-basin', 'prphase'), 'an unread proof never persists `closed`').not.toBe('closed');
+    const s = phaseFor(before as never);
+    expect([s.phase, s.reason]).toEqual(['unknown', 'train-unread']);
+    expect(h.ghCalls().some((c) => c.startsWith('pr view')), 'the sweep spends no gh call on a train').toBe(false);
+    expect(line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).phase).toBe('merged');
+    const calls = h.ghCalls().length;
+    expect(sweep().phase).toBe('merged');
+    expect(h.ghCalls().slice(calls).some((c) => c.startsWith('pr view'))).toBe(false);
+  });
+
+  it('a train-landed member with no kept proof reads unread on the sweep, then merged after pr-train-prove', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    proven(tip);
+    expect(sweep().reason).toBe('train-unread');
+    const out = h.sh(`${GH_STUB} cmd_pr_train_prove --project demo`).trim().split('\n').map((l) => JSON.parse(l));
+    expect(out).toEqual([{ id: 'demo-quiet-basin', number: 42, proof: 'proved' }]);
+    expect(proofsFile()).toBe(`o/r main 42 ${tip} 50 ${TRAIN_MERGE}\n`);
+    const after = sweep();
+    expect([after.phase, after.reason, after.rows[0].landedInTrain]).toEqual(['merged', null, true]);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('merged');
+    // Proved ONCE: a second prover call answers from the kept proof, with no train read.
+    const calls = h.ghCalls().length;
+    const again = h.sh(`${GH_STUB} cmd_pr_train_prove --project demo`).trim();
+    expect(JSON.parse(again)).toEqual({ id: 'demo-quiet-basin', number: 42, proof: 'kept' });
+    expect(h.ghCalls().slice(calls).some((c) => c.startsWith('pr view'))).toBe(false);
+  });
+
+  it('pr-train-prove keeps proofs only, never a refusal, and an unread record is unread', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    proven(tip, { state: 'CLOSED', mergedAt: null, mergeCommit: null });
+    // The member's comments time out: not read, so nothing is kept and the answer is `unread`.
+    h.ghViewFail(42, 124);
+    expect(JSON.parse(h.sh(`${GH_STUB} cmd_pr_train_prove --project demo`).trim()).proof).toBe('unread');
+    expect(proofsFile()).toBe('');
+    expect(sweep().reason).toBe('train-unread');
+    // Read now, and the train is CLOSED unmerged: a refusal, and still nothing is kept as a proof.
+    fs.rmSync(path.join(h.home, 'gh-view-42.rc'));
+    expect(JSON.parse(h.sh(`${GH_STUB} cmd_pr_train_prove --project demo`).trim()).proof).toBe('unproven');
+    expect(proofsFile()).toBe('');
+  });
+
+  it('pr-train-prove proves at most --max members a call, and defers the rest to the next', () => {
+    const a = workspaceWithCommit('demo', 'quiet-basin');
+    // A second workspace of the same project, on the same repository.
+    h.sh(`${WS_ADD} CCD_WS_SLUG=still-cove cmd_ws_add demo`);
+    const wtB = path.join(h.home, 'worktrees', 'demo', 'still-cove');
+    fs.writeFileSync(path.join(wtB, 'g.txt'), 'other work\n');
+    h.git(wtB, 'add', 'g.txt');
+    h.git(wtB, 'commit', '-m', 'the other work');
+    const b = { tip: h.git(wtB, 'rev-parse', 'HEAD') };
+    h.ghRows([
+      mergedRow({ headRefOid: a.tip, ...landed('landed-in-train') }),
+      mergedRow({ number: 43, headRefName: 'ws/still-cove', headRefOid: b.tip, url: 'https://github.com/o/r/pull/43',
+        ...landed('landed-in-train') }),
+    ]);
+    h.ghView(42, trainComment(50));
+    h.ghView(43, trainComment(50));
+    h.ghView(50, trainRow(50, TRAIN_MERGE, [[42, a.tip], [43, b.tip]]));
+    const first = h.sh(`${GH_STUB} cmd_pr_train_prove --project demo --max 1`).trim().split('\n')
+      .map((l) => JSON.parse(l).proof).sort();
+    expect(first).toEqual(['deferred', 'proved']);
+    const second = h.sh(`${GH_STUB} cmd_pr_train_prove --project demo --max 1`).trim().split('\n')
+      .map((l) => JSON.parse(l).proof).sort();
+    expect(second).toEqual(['kept', 'proved']);
+    expect(h.run(`cmd_pr_train_prove --project demo --max 0`).code).not.toBe(0);
+    expect(h.run(`cmd_pr_train_prove --project 'de mo'`).code).not.toBe(0);
+  });
+
+  it('a kept proof is keyed by base: a proof for one base is no proof for another', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.train-proofs'),
+      `o/r release/9 42 ${tip} 50 ${TRAIN_MERGE}\no/r 42 ${tip} 50 ${TRAIN_MERGE}\n`);
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    // Neither the other base's line nor an older five-field line proves #42 on main.
+    expect(sweep().reason).toBe('train-unread');
+    expect(h.run(`_ws_train_kept o/r main 42 ${tip}`).code).toBe(1);
+    expect(h.sh(`_ws_train_kept o/r release/9 42 ${tip} && echo "$_WS_TRAIN_NUM $_WS_TRAIN_MERGE"`).trim())
+      .toBe(`50 ${TRAIN_MERGE}`);
+  });
+
+  it('--session: a train read the bound kills is unread, never train-unproven', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, trainComment(50));
+    h.ghViewFail(50, 124);
+    h.ghSearch([]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect([o.phase, o.reason]).toEqual(['unknown', 'train-unread']);
+    expect(h.reg('demo-quiet-basin', 'prphase')).not.toBe('closed');
+  });
+
+  // D-7381: a candidate FAILS only on GitHub's definitive answer about it; any
+  // other failure is UNREAD, and an unread candidate is never outvoted by an
+  // empty search fallback.
+  it.each([
+    ['an HTTP 502', 1, GH_HTTP_502],
+    ['a rate limit', 1, GH_RATE_LIMITED],
+    ['a network error', 1, 'error connecting to api.github.com\n'],
+    ['a timeout', 124, ''],
+    ['a signal', 137, ''],
+  ])('--session: a train read that fails with %s, then an empty search, is unread, never closed', (_n, rc, err) => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, trainComment(50));
+    h.ghViewFail(50, rc, err);
+    h.ghSearch([]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect([o.phase, o.reason]).toEqual(['unknown', 'train-unread']);
+    expect([o.rows[0].trainUnread, o.rows[0].trainUnproven]).toEqual([true, false]);
+    expect(h.reg('demo-quiet-basin', 'prphase')).not.toBe('closed');
+    const s = phaseFor(o as never);
+    expect([s.phase, s.reason]).toEqual(['unknown', 'train-unread']);
+  });
+
+  it('--session: a train answer that is not a pull request\'s JSON, then an empty search, is unread', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, trainComment(50));
+    fs.writeFileSync(path.join(h.home, 'gh-view-50.json'), '<html>unicorn</html>');
+    h.ghSearch([]);
+    expect(line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).reason).toBe('train-unread');
+  });
+
+  it('--session: GitHub saying the train is no pull request here, then an empty search, is closed, train-unproven', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, trainComment(50));
+    h.ghViewFail(50);   // rc 1, `Could not resolve to a PullRequest`
+    h.ghSearch([]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect([o.phase, o.reason]).toEqual(['closed', 'train-unproven']);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('closed');
+  });
+
+  it('one unread candidate beside a definitive refusal is still unread', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, { comments: [{ body: 'Landed in train #50.' }, { body: 'train #77' }] });
+    h.ghViewFail(77);                      // definitive: no such pull request
+    h.ghViewFail(50, 1, GH_HTTP_502);      // transient
+    h.ghSearch([]);
+    expect(line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).reason).toBe('train-unread');
+  });
+
+  // D-7381: the prover is FAIR, and a refusal it read stays a refusal while fresh.
+  const triedFile = (): string => {
+    const f = path.join(h.home, '.cc-sessions', '.train-tried');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+  };
+  /** Three workspaces of `demo` in registry order: #41 and #43 refused by a CLOSED
+   *  train #60, #44 landed in train #50. */
+  const refusedRefusedLanded = (): Record<number, string> => {
+    h.makeGhRepo('demo');
+    const tips: Record<number, string> = {};
+    const rows: Record<string, unknown>[] = [];
+    for (const [n, slug] of [[41, 'amber-fen'], [43, 'birch-gap'], [44, 'cedar-run']] as Array<[number, string]>) {
+      h.sh(`${WS_ADD} CCD_WS_SLUG=${slug} cmd_ws_add demo`);
+      const wt = path.join(h.home, 'worktrees', 'demo', slug);
+      fs.writeFileSync(path.join(wt, `${slug}.txt`), `${slug}\n`);
+      h.git(wt, 'add', `${slug}.txt`);
+      h.git(wt, 'commit', '-m', slug);
+      tips[n] = h.git(wt, 'rev-parse', 'HEAD');
+      rows.push(mergedRow({ number: n, headRefName: `ws/${slug}`, headRefOid: tips[n],
+        url: `https://github.com/o/r/pull/${n}`, ...landed('landed-in-train') }));
+    }
+    h.ghRows(rows);
+    h.ghView(41, trainComment(60));
+    h.ghView(43, trainComment(60));
+    h.ghView(60, trainRow(60, 'd'.repeat(40), [[41, tips[41]!], [43, tips[43]!]],
+      { state: 'CLOSED', mergedAt: null, mergeCommit: null }));
+    h.ghView(44, trainComment(50));
+    h.ghView(50, trainRow(50, TRAIN_MERGE, [[44, tips[44]!]]));
+    h.ghSearch([]);
+    return tips;
+  };
+  const prove = (args = '--max 1'): Record<number, string> => Object.fromEntries(
+    h.sh(`${GH_STUB} cmd_pr_train_prove --project demo ${args}`).trim().split('\n')
+      .map((l) => JSON.parse(l)).map((o) => [o.number, o.proof]));
+  const sweepById = (): Record<string, Record<string, any>> => Object.fromEntries(
+    h.sh(`${GH_STUB} cmd_pr_state --project demo`).split('\n').filter((l) => l.includes('"rows"'))
+      .map((l) => JSON.parse(l)).map((o) => [o.id, o]));
+
+  it('with --max 1 and members [refused, refused, landed], the landed one is proved within 3 calls', () => {
+    refusedRefusedLanded();
+    expect(prove()).toEqual({ 41: 'unproven', 43: 'deferred', 44: 'deferred' });
+    expect(prove()).toEqual({ 41: 'unproven', 43: 'unproven', 44: 'deferred' });
+    const calls = h.ghCalls().length;
+    expect(prove()).toEqual({ 41: 'unproven', 43: 'unproven', 44: 'proved' });
+    // The fresh refusals were not asked again: the third call read only #44's record.
+    const third = h.ghCalls().slice(calls).filter((c) => c.startsWith('pr view'));
+    expect(third.every((c) => /^pr view (44|50) /.test(c)), third.join('\n')).toBe(true);
+    expect(proofsFile()).toMatch(/^o\/r main 44 [0-9a-f]{40} 50 e{40}\n$/);
+    // A proof is never a tried line, and a tried line is never a proof.
+    expect(triedFile().split('\n').filter(Boolean).map((l) => l.split(' ').slice(2, 3).concat(l.split(' ')[4]!)))
+      .toEqual([['41', 'failed'], ['43', 'failed']]);
+  });
+
+  it('a refused member reads train-unproven on the sweep while its record is fresh, and its keycap copy is the refusal', () => {
+    refusedRefusedLanded();
+    prove('--max 3');
+    const calls = h.ghCalls().length;
+    const s = sweepById();
+    for (const [id, n] of [['demo-amber-fen', 41], ['demo-birch-gap', 43]] as Array<[string, number]>) {
+      expect([s[id]!.phase, s[id]!.reason], id).toEqual(['closed', 'train-unproven']);
+      const row = s[id]!.rows.find((r: Record<string, unknown>) => r.number === n);
+      expect([row.trainUnproven, row.trainUnread], id).toEqual([true, false]);
+      const p = phaseFor(s[id] as never);
+      expect([p.phase, p.reason]).toEqual(['closed', 'train-unproven']);
+    }
+    expect([s['demo-cedar-run']!.phase,
+      s['demo-cedar-run']!.rows.find((r: Record<string, unknown>) => r.number === 44).landedInTrain]).toEqual(['merged', true]);
+    expect(h.ghCalls().slice(calls).some((c) => c.startsWith('pr view')), 'the sweep spends no gh call on a train').toBe(false);
+    // The sweep answering from a fresh line rewrites nothing.
+    const before = triedFile();
+    sweepById();
+    expect(triedFile()).toBe(before);
+  });
+
+  it('an expired refusal is unread on the sweep again and the prover asks again', () => {
+    const tips = refusedRefusedLanded();
+    const old = Math.floor(Date.now() / 1000) - 1801;
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.train-tried'),
+      `o/r main 41 ${tips[41]} failed ${old}\no/r main 43 ${tips[43]} failed ${old}\n`);
+    expect(sweepById()['demo-amber-fen']!.reason).toBe('train-unread');
+    // Never-tried #44 goes first; then the oldest tried.
+    expect(prove()).toEqual({ 41: 'deferred', 43: 'deferred', 44: 'proved' });
+    expect(prove()).toEqual({ 41: 'unproven', 43: 'deferred', 44: 'kept' });
+  });
+
+  it('an unread outcome is retried on the next call', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, trainComment(50));
+    h.ghViewFail(50, 1, GH_HTTP_502);
+    h.ghSearch([]);
+    expect(prove()).toEqual({ 42: 'unread' });
+    expect(triedFile()).toMatch(new RegExp(`^o/r main 42 ${tip} unread [0-9]+\\n$`));
+    expect(sweep().reason).toBe('train-unread');
+    // GitHub answers now: the next call asks again and proves it, and the tried line goes.
+    fs.rmSync(path.join(h.home, 'gh-view-50.rc'));
+    h.ghView(50, trainRow(50, TRAIN_MERGE, [[42, tip]]));
+    expect(prove()).toEqual({ 42: 'proved' });
+    expect(triedFile()).toBe('');
+    expect(sweep().phase).toBe('merged');
+  });
+
+  // #1797 round 7 (D-7381): a fresh `failed` line answers ONLY a read that
+  // could make no gh call (the sweep); a read that asked GitHub and hit an
+  // unread candidate is unread whatever the line says. An OPEN train, or one
+  // whose state is missing or odd, is unread, never failed. A proof found by
+  // any read clears the member's line, and the sweep reads kept proofs first.
+  const freshFailed = (tip: string, n = 42): void => {
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.train-tried'),
+      `o/r main ${n} ${tip} failed ${Math.floor(Date.now() / 1000) - 60}\n`);
+  };
+
+  it('--session: a fresh failed line, a 502 on the train and an empty search is train-unread, and the line becomes unread', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    freshFailed(tip);
+    h.ghView(42, trainComment(50));
+    h.ghViewFail(50, 1, GH_HTTP_502);
+    h.ghSearch([]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect([o.phase, o.reason]).toEqual(['unknown', 'train-unread']);
+    expect([o.rows[0].trainUnread, o.rows[0].trainUnproven]).toEqual([true, false]);
+    expect(h.reg('demo-quiet-basin', 'prphase')).not.toBe('closed');
+    expect(triedFile()).toMatch(new RegExp(`^o/r main 42 ${tip} unread [0-9]+\\n$`));
+  });
+
+  it('the sweep still answers train-unproven from a fresh failed line, with no gh call', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    freshFailed(tip);
+    const o = sweep();
+    expect([o.phase, o.reason]).toEqual(['closed', 'train-unproven']);
+    expect(h.ghCalls().some((c) => c.startsWith('pr view'))).toBe(false);
+  });
+
+  it.each([
+    ['OPEN', { state: 'OPEN', mergedAt: null, mergeCommit: null }],
+    ['missing', { state: undefined, mergedAt: null, mergeCommit: null }],
+    ['odd', { state: 'WEIRD', mergedAt: null, mergeCommit: null }],
+    ['MERGED with no merge commit', { mergeCommit: null }],
+  ])('--session: a train whose state is %s is unread, never failed, and writes no failed line', (_n, over) => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, trainComment(50));
+    h.ghView(50, trainRow(50, TRAIN_MERGE, [[42, tip]], over));
+    h.ghSearch([]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect([o.phase, o.reason]).toEqual(['unknown', 'train-unread']);
+    expect(h.reg('demo-quiet-basin', 'prphase')).not.toBe('closed');
+    expect(triedFile()).not.toMatch(/ failed /);
+    expect(JSON.parse(h.sh(`${GH_STUB} cmd_pr_train_prove --project demo`).trim()).proof).toBe('unread');
+    expect(triedFile()).not.toMatch(/ failed /);
+  });
+
+  it('an OPEN train beside a CLOSED one is still unread: an unread candidate is never outvoted', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    h.ghView(42, { comments: [{ body: 'Landed in train #50.' }, { body: 'train #77' }] });
+    h.ghView(77, trainRow(77, 'd'.repeat(40), [[42, tip]], { state: 'CLOSED', mergedAt: null, mergeCommit: null }));
+    h.ghView(50, trainRow(50, TRAIN_MERGE, [[42, tip]], { state: 'OPEN', mergedAt: null, mergeCommit: null }));
+    h.ghSearch([]);
+    expect(line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).reason).toBe('train-unread');
+  });
+
+  it('a proof found by a read clears a stale failed line', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    freshFailed(tip);
+    proven(tip);
+    expect(line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).phase).toBe('merged');
+    expect(triedFile()).toBe('');
+  });
+
+  it('the sweep reads a kept proof before a tried line, and the kept proof clears the line', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    freshFailed(tip);
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', '.train-proofs'), `o/r main 42 ${tip} 50 ${TRAIN_MERGE}\n`);
+    const o = sweep();
+    expect([o.phase, o.rows[0].landedInTrain]).toEqual(['merged', true]);
+    expect(triedFile()).toBe('');
+    expect(h.ghCalls().some((c) => c.startsWith('pr view'))).toBe(false);
+  });
+
+  it('the train lists are cleared per call: a proof handed down by a caller never reaches the next workspace', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    const o = line(h.sh(`_PR_TRAIN_PROOFS="42 ${tip} 50 ${TRAIN_MERGE}"; ${GH_STUB} cmd_pr_state --project demo | grep '"rows"'`));
+    expect([o.phase, o.reason]).toEqual(['unknown', 'train-unread']);
+  });
+
+  it('stays closed without the label, and annotates no other state', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([
+      mergedRow({ headRefOid: tip, ...landed('wontfix') }),
+      mergedRow({ number: 41, headRefOid: tip, labels: [{ name: 'landed-in-train' }] }),
+    ]);
+    const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.phase).toBe('closed');
+    expect(o.reason).toBeNull();
+    expect(o.rows.map((r: Record<string, unknown>) => r.landedInTrain)).toEqual([false, false]);
+    expect(o.rows.map((r: Record<string, unknown>) => r.trainUnproven)).toEqual([false, false]);
+    expect(h.reg('demo-quiet-basin', 'prphase')).toBe('closed');
+  });
+
+  it('reads the label the deployment names, and only that one', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    proven(tip);
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('shipped') })]);
+    expect(line(h.sh(`export CCD_LANDED_LABEL=shipped; ${GH_STUB} cmd_pr_state --session demo-quiet-basin`)).phase)
+      .toBe('merged');
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    const o = line(h.sh(`export CCD_LANDED_LABEL=shipped; ${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect([o.phase, o.reason]).toEqual(['closed', null]);
+  });
+
+  it('reads no label at all when the deployment sets it empty', () => {
+    const { tip } = workspaceWithCommit('demo', 'quiet-basin');
+    proven(tip);
+    h.ghRows([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    const o = line(h.sh(`export CCD_LANDED_LABEL=; ${GH_STUB} cmd_pr_state --session demo-quiet-basin`));
+    expect(o.phase).toBe('closed');
+    expect(o.rows[0].landedInTrain).toBe(false);
+  });
+
+  it('hands the reap a proven PR as merged, with `landed` where a merge commit would be', () => {
+    // A closed member has no `mergeCommit.oid`, so `pick` names the one fact
+    // that stands in for it, and only for a member `_pr_train_proofs` proved:
+    // `_ws_reap_eval` takes the train PR's merge commit from the same proof.
+    const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
+    const rows = JSON.stringify([mergedRow({ headRefOid: tip, ...landed('landed-in-train') })]);
+    fs.writeFileSync(path.join(h.home, 'rows.json'), rows);
+    const proofs = `_PR_TRAIN_PROOFS="42 ${tip} 50 ${TRAIN_MERGE}"`;
+    expect(h.sh(`${proofs} _pr_py pick "${main}" ws/quiet-basin main "${tip}" < "$HOME/rows.json"`).trim())
+      .toBe(`42\thttps://github.com/o/r/pull/42\tlanded\t${tip}`);
+    // The proof names the member AT ITS HEAD: a proof for another head is none.
+    const other = `_PR_TRAIN_PROOFS="42 ${'c'.repeat(40)} 50 ${TRAIN_MERGE}"`;
+    expect(h.sh(`${other} _pr_py pick "${main}" ws/quiet-basin main "${tip}" < "$HOME/rows.json"`).trim())
+      .toBe('!not-merged train 42');
+    expect(h.sh(`_pr_py pick "${main}" ws/quiet-basin main "${tip}" < "$HOME/rows.json"`).trim())
+      .toBe('!not-merged train 42');
+  });
+
+  it('still refuses the reap `not-merged` for a closed PR without the label', () => {
+    const { main, tip } = workspaceWithCommit('demo', 'quiet-basin');
+    const rows = JSON.stringify([mergedRow({ headRefOid: tip, ...landed('wontfix') })]);
+    fs.writeFileSync(path.join(h.home, 'rows.json'), rows);
+    expect(h.sh(`_pr_py pick "${main}" ws/quiet-basin main "${tip}" < "$HOME/rows.json"`).trim()).toBe('!not-merged');
+  });
+});
+
 describe('ccd and prstate.ts agree about phase, always', () => {
   // The predicate exists twice by necessity: ccd persists it (the server
   // cannot write the registry) and prstate.ts puts it on the wire. Drift means
@@ -1589,6 +2078,25 @@ describe('ccd and prstate.ts agree about phase, always', () => {
     ['open',            { state: 'OPEN', mergedAt: null, mergeCommit: null }, 'open', null],
     ['draft',           { state: 'OPEN', mergedAt: null, mergeCommit: null, isDraft: true }, 'draft', null],
     ['closed',          { state: 'CLOSED', mergedAt: null, mergeCommit: null }, 'closed', null],
+    // LABELS. A closed PR is `closed` whatever labels it carries, except the
+    // one label the deployment names as "landed in a merge train" (default
+    // `landed-in-train`). A merged PR is `merged` with or without it.
+    ['closed, another label', { state: 'CLOSED', mergedAt: null, mergeCommit: null,
+      closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'wontfix' }] }, 'closed', null],
+    // A merge train lands the PR's work through a train PR and then CLOSES
+    // the member with the train label: GitHub never says MERGED for it. The
+    // label is only a claim, and with no train record behind it (this
+    // fixture's gh names no train) the PR is closed, and says why (D-7362);
+    // the proven half is in the describe above.
+    ['closed, labelled, no train record behind it', { state: 'CLOSED', mergedAt: null, mergeCommit: null,
+      closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'landed-in-train' }] }, 'closed', 'train-unproven'],
+    // The label never stands in for the binding: a fork's labelled PR binds
+    // to nothing, and an OPEN PR carrying the label is still open.
+    ['closed, landed in a train, a fork', { state: 'CLOSED', mergedAt: null, mergeCommit: null, isCrossRepository: true,
+      closedAt: '2026-07-21T09:00:00Z', labels: [{ name: 'landed-in-train' }] }, 'none', null],
+    ['open, carrying the label', { state: 'OPEN', mergedAt: null, mergeCommit: null,
+      labels: [{ name: 'landed-in-train' }] }, 'open', null],
+    ['merged, carrying the label', { labels: [{ name: 'landed-in-train' }] }, 'merged', null],
   ];
 
   it.each(matrix)('%s', async (_name, over, expected, expectedReason) => {
@@ -1678,7 +2186,7 @@ describe('ccd and prstate.ts agree about phase, always', () => {
 
 describe('pr-state persists its fields atomically (registry-durability wave 2)', () => {
   it('put() renames rather than truncating, with the same invisible tmp shape as _reg_set', () => {
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const put = /def put\(field, value\):([\s\S]*?)\n\n/.exec(src)?.[1] ?? '';
     expect(put, 'put() must no longer open the destination for writing').not.toMatch(/open\(os\.path\.join\(reg, id_ \+ '\.' \+ field\), 'w'\)/);
     expect(put).toMatch(/os\.replace\(/);
@@ -1692,7 +2200,7 @@ describe('pr-state persists its fields atomically (registry-durability wave 2)',
     // rewrite would lock two different inodes and BOTH enter the
     // compare-and-set — the duplicate prhistory append and the lost update
     // this lock exists to prevent. A dedicated file is never replaced.
-    const src = readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     expect(src).not.toMatch(/lock_f = open\(os\.path\.join\(reg, id_ \+ '\.uuid'\)\)/);
     expect(src).toMatch(/\.prstate-'/);
   });
@@ -1781,5 +2289,167 @@ describe('a workspace whose worktree is parked on another branch', () => {
     expect(l.reason).not.toBe('branch-drift');
     expect(l.tip).toBeNull();
     expect(l.ahead).toBeNull();
+  });
+});
+
+describe('the PR-keyed form: pr-state --project <p> --pr <n> (landing order wave 5c)', () => {
+  const HEAD = 'a'.repeat(40);
+  const MERGE = 'b'.repeat(40);
+  const TRAIN_MERGE = 'e'.repeat(40);
+  const AT = '2026-07-20T10:00:00Z';
+  const FIELDS = 'number,state,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,labels';
+  const viewRow = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    number: 42, state: 'OPEN', headRefOid: HEAD, baseRefName: 'main', isCrossRepository: false,
+    mergedAt: null, mergeCommit: null, labels: [], ...over });
+  const NULLS = { headRefOid: null, baseRefName: null, isCrossRepository: null, mergedAt: null, mergeCommit: null,
+    landedInTrain: false, trainUnproven: false, trainUnread: false, train: null, trainMergeCommit: null };
+  const ECHO = { headRefOid: HEAD, baseRefName: 'main', isCrossRepository: false, mergedAt: null, mergeCommit: null,
+    landedInTrain: false, trainUnproven: false, trainUnread: false, train: null, trainMergeCommit: null };
+  /** The line, key order included: `_pr_py by-pr` prints compact JSON in exactly this order (`h.sh` trims the newline). */
+  const lineOf = (state: string, reason: string | null, rest: Record<string, unknown>): string =>
+    JSON.stringify({ number: 42, state, reason, ...rest });
+  const byPr = (env = ''): string => h.sh(`${GH_STUB} ${env} cmd_pr_state --project demo --pr 42`);
+  const viewed = (): string[] => h.ghCalls().filter((c) => c.startsWith('pr view')).map((c) => c.split(' ')[2]!);
+  const REG = (): string => path.join(h.home, '.cc-sessions');
+  const proofsFile = (): string => {
+    const f = path.join(REG(), '.train-proofs');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+  };
+  beforeEach(() => { h.makeGhRepo('demo'); });
+
+  it.each([
+    ['open', viewRow(), 'open', {}],
+    ['merged', viewRow({ state: 'MERGED', mergedAt: AT, mergeCommit: { oid: MERGE } }), 'merged',
+      { mergedAt: AT, mergeCommit: MERGE }],
+    ['closed, no label', viewRow({ state: 'CLOSED' }), 'closed', {}],
+    ['open, from a fork', viewRow({ isCrossRepository: true }), 'open', { isCrossRepository: true }],
+  ])('%s: one gh pr view under its own timeout, one line, no workspace and nothing written', (_n, row, state, over) => {
+    h.sh(`${GH_STUB} :`);
+    const before = fs.readdirSync(REG()).sort();
+    h.ghView(42, row);
+    expect(byPr()).toBe(lineOf(state as string, null, { ...ECHO, ...(over as object) }));
+    expect(h.ghCalls()).toEqual([
+      `timeout ${ccdSeconds('PR_GH_VIEW_TIMEOUT')} gh pr view 42 --repo o/r --json ${FIELDS}`,
+      `pr view 42 --repo o/r --json ${FIELDS}`,
+    ]);
+    expect(fs.readdirSync(REG()).sort()).toEqual(before);
+  });
+
+  it('absent only for GitHub\'s definite "Could not resolve to a PullRequest"', () => {
+    h.ghViewFail(42);
+    expect(byPr()).toBe(lineOf('absent', null, NULLS));
+  });
+
+  it('the resolve text at an rc other than 1 is unmeasured error, not absent (rc 1 AND the text)', () => {
+    h.ghViewFail(42, 2, notAPullRequest(42));
+    expect(byPr()).toBe(lineOf('unmeasured', 'error', NULLS));
+  });
+
+  it('rc 1 with "is not a pull request" is unmeasured error: the narrower test than the train record\'s', () => {
+    h.ghViewFail(42, 1, 'GraphQL: #42 is not a pull request\n');
+    expect(byPr()).toBe(lineOf('unmeasured', 'error', NULLS));
+  });
+
+  it('a MERGED body with a merge commit and no mergedAt is unmeasured missing-field', () => {
+    h.ghView(42, viewRow({ state: 'MERGED', mergedAt: null, mergeCommit: { oid: MERGE } }));
+    expect(byPr()).toBe(lineOf('unmeasured', 'missing-field', NULLS));
+  });
+
+  it.each([
+    ['a timeout', () => h.ghViewFail(42, 124), 'timeout'],
+    ['an HTTP 502', () => h.ghViewFail(42, 1, GH_HTTP_502), 'unavailable'],
+    ['a rate limit', () => h.ghViewFail(42, 1, GH_RATE_LIMITED), 'rate-limit'],
+    ['rc 1 with no stderr', () => h.ghViewFail(42, 1, ''), 'error'],
+    ['a signal', () => h.ghViewFail(42, 137), 'error'],
+    ['a body that is not JSON', () => fs.writeFileSync(path.join(h.home, 'gh-view-42.json'), '<html>'), 'unreadable'],
+    ['an empty body', () => fs.writeFileSync(path.join(h.home, 'gh-view-42.json'), ''), 'unreadable'],
+    ["another PR's object", () => h.ghView(42, viewRow({ number: 43 })), 'unreadable'],
+    ['a JSON list', () => h.ghView(42, [viewRow()]), 'unreadable'],
+    ['a float number', () => fs.writeFileSync(path.join(h.home, 'gh-view-42.json'),
+      JSON.stringify(viewRow()).replace('"number":42', '"number":42.0')), 'unreadable'],
+    ['no headRefOid', () => h.ghView(42, viewRow({ headRefOid: undefined })), 'missing-field'],
+    ['a short headRefOid', () => h.ghView(42, viewRow({ headRefOid: 'abc1234' })), 'missing-field'],
+    ['MERGED with a short merge commit', () => h.ghView(42, viewRow({ state: 'MERGED', mergedAt: AT, mergeCommit: { oid: 'abc1234' } })), 'missing-field'],
+    ['isCrossRepository as a string', () => h.ghView(42, viewRow({ isCrossRepository: 'false' })), 'missing-field'],
+    ['an unknown state', () => h.ghView(42, viewRow({ state: 'DRAFT' })), 'missing-field'],
+    ['MERGED with no merge commit', () => h.ghView(42, viewRow({ state: 'MERGED', mergedAt: AT })), 'missing-field'],
+    ['no labels', () => h.ghView(42, viewRow({ labels: undefined })), 'missing-field'],
+    ['a base name with a space', () => h.ghView(42, viewRow({ baseRefName: 'ma in' })), 'missing-field'],
+  ])('%s is unmeasured, never absent', (_n, plant, reason) => {
+    (plant as () => void)();
+    expect(byPr()).toBe(lineOf('unmeasured', reason as string, NULLS));
+  });
+
+  it('a project whose origin is not GitHub is unmeasured no-remote, with no gh call', () => {
+    h.makeRepo('plain');
+    expect(h.sh(`${GH_STUB} cmd_pr_state --project plain --pr 42`))
+      .toBe(JSON.stringify({ number: 42, state: 'unmeasured', reason: 'no-remote', ...NULLS }));
+    expect(h.ghCalls()).toEqual([]);
+  });
+
+  describe('a PR closed with the train claim is never a bare closed', () => {
+    const claimed = (over: Record<string, unknown> = {}): Record<string, unknown> =>
+      ({ ...viewRow({ state: 'CLOSED', labels: [{ name: 'landed-in-train' }] }), ...trainComment(50), ...over });
+    const CLAIM_ECHO = { ...ECHO };
+
+    it('proved: merged, landedInTrain, the train and its merge commit; the proof is kept and reused', () => {
+      h.ghView(42, claimed());
+      h.ghView(50, trainRow(50, TRAIN_MERGE, [[42, HEAD]]));
+      const proved = lineOf('merged', null, { ...CLAIM_ECHO, landedInTrain: true, train: 50, trainMergeCommit: TRAIN_MERGE });
+      expect(byPr()).toBe(proved);
+      expect(viewed()).toEqual(['42', '42', '50']);
+      expect(proofsFile()).toBe(`o/r main 42 ${HEAD} 50 ${TRAIN_MERGE}\n`);
+      const calls = h.ghCalls().length;
+      expect(byPr()).toBe(proved);
+      expect(h.ghCalls().slice(calls).filter((c) => c.startsWith('pr view')).map((c) => c.split(' ')[2])).toEqual(['42']);
+    });
+
+    it.each([
+      ['the train PR is CLOSED unmerged', () => h.ghView(50, trainRow(50, TRAIN_MERGE, [[42, HEAD]],
+        { state: 'CLOSED', mergedAt: null, mergeCommit: null }))],
+      ['the train lists another sha', () => h.ghView(50, trainRow(50, TRAIN_MERGE, [[42, 'c'.repeat(40)]]))],
+    ])('refused (%s): unmeasured train-unproven, nothing kept', (_n, plant) => {
+      h.ghView(42, claimed());
+      (plant as () => void)();
+      h.ghSearch([]);
+      expect(byPr()).toBe(lineOf('unmeasured', 'train-unproven', { ...CLAIM_ECHO, trainUnproven: true }));
+      expect(proofsFile()).toBe('');
+    });
+
+    it('no train names it: unmeasured train-unproven', () => {
+      h.ghView(42, claimed({ comments: [] }));
+      h.ghSearch([]);
+      expect(byPr()).toBe(lineOf('unmeasured', 'train-unproven', { ...CLAIM_ECHO, trainUnproven: true }));
+    });
+
+    it('a train read the budget or GitHub cuts short: unmeasured train-unread, never closed', () => {
+      h.ghView(42, claimed());
+      h.ghViewFail(50, 124);
+      h.ghSearch([]);
+      expect(byPr()).toBe(lineOf('unmeasured', 'train-unread', { ...CLAIM_ECHO, trainUnread: true }));
+    });
+
+    it('a claimed PR from a fork reads no train: unmeasured train-unread', () => {
+      h.ghView(42, claimed({ isCrossRepository: true }));
+      expect(byPr()).toBe(lineOf('unmeasured', 'train-unread', { ...CLAIM_ECHO, isCrossRepository: true, trainUnread: true }));
+      expect(viewed()).toEqual(['42']);
+      expect(proofsFile()).toBe('');
+    });
+
+    it('a claimed row whose base is not a ref name is unmeasured missing-field and no train is read', () => {
+      h.ghView(42, claimed({ baseRefName: '-x' }));
+      expect(byPr()).toBe(lineOf('unmeasured', 'missing-field', NULLS));
+      expect(viewed()).toEqual(['42']);
+    });
+
+    it('the label turned off (CCD_LANDED_LABEL empty) is a plain closed, and no train is read', () => {
+      h.ghView(42, claimed());
+      expect(byPr('CCD_LANDED_LABEL=')).toBe(lineOf('closed', null, CLAIM_ECHO));
+      expect(viewed()).toEqual(['42']);
+    });
+  });
+
+  it('ccd caps advertises pr-state-pr-v1', () => {
+    expect(h.sh('cmd_caps').split('\n')).toContain('pr-state-pr-v1');
   });
 });

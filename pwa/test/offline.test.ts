@@ -92,6 +92,39 @@ describe('fleet snapshot (lib/offline)', () => {
   });
 });
 
+// Landing order wave 4b (D-7481): the snapshot copies live frames, and a landing is optional and additive. It survives the
+// round trip, an absent key stays absent (never a clean landing), and a malformed one revives as no key, the session kept.
+describe('the landing radar reading in the snapshot (wave 4b)', () => {
+  const landing = {
+    at: '2026-10-29T12:00:00Z', pr: 12, head: 'abc1234', baseRef: 'main',
+    base: { state: 'conflict', paths: ['src/a.ts'] }, paired: true,
+    conflicts: [{ pr: 14, paths: ['src/x.ts'], pathsCut: false }], unmeasuredWith: [],
+    cut: { heads: false, pairs: false, unbound: false },
+  };
+
+  it('keeps `landing` through the round trip', () => {
+    saveFleetSnapshot([{ ...session('claude:ProjectC'), landing } as FleetSession]);
+    expect(loadFleetSnapshot()?.sessions[0]?.landing).toEqual(landing);
+  });
+
+  it('keeps no key as no key', () => {
+    saveFleetSnapshot([session('claude:ProjectC')]);
+    const s = loadFleetSnapshot()?.sessions[0];
+    expect(s).toBeDefined();
+    expect('landing' in s!).toBe(false);
+  });
+
+  it('gives no key for a malformed landing, and keeps the session', () => {
+    window.localStorage.setItem('ccrc.fleet-snapshot.v1', JSON.stringify({
+      savedAt: Date.now(), roster: [],
+      sessions: [{ ...session('claude:ProjectC'), landing: { ...landing, base: { state: 'fine' } } }],
+    }));
+    const s = loadFleetSnapshot()?.sessions[0];
+    expect(s?.id).toBe('claude:ProjectC');
+    expect('landing' in s!).toBe(false);
+  });
+});
+
 // Fix round 1, finding 3: a cold offline start hydrated `sessions` from the
 // snapshot but never `roster` — every account rendered as its raw wrapper id
 // (`claude9`, `claude-acme`) instead of the jargon-free label this module
@@ -533,6 +566,51 @@ describe('snapshot revival (a snapshot written by an older build)', () => {
   it('still round-trips a snapshot this build wrote', () => {
     saveFleetSnapshot([session('claude:ProjectC')]);
     expect(loadFleetSnapshot()?.sessions).toEqual([session('claude:ProjectC')]);
+  });
+});
+
+// D-7208 (Task C7c Step 2c; plan item 20): the snapshot keeps ARCH-48's two keys, so a row hydrated at cold start (all
+// the fleet the PWA has offline) reads the presence its last frame carried, not `unknown`.
+describe('the snapshot keeps presence and deadSince (D-7208)', () => {
+  const revived = (extra: Record<string, unknown>): FleetSession | undefined => {
+    putRaw([{ ...v1Session('session-a'), ...extra }]);
+    return loadFleetSnapshot()?.sessions[0];
+  };
+
+  it('a row with each Presence word revives with it', () => {
+    for (const presence of ['alive', 'asleep', 'dead', 'unknown'] as const) {
+      window.localStorage.clear();
+      expect(revived({ presence })?.presence, presence).toBe(presence);
+    }
+  });
+
+  it('a row with no key revives with no key, not `unknown` written in', () => {
+    const s = revived({});
+    expect(s).toBeDefined();
+    expect(Object.keys(s ?? {})).not.toContain('presence');
+    expect(Object.keys(s ?? {})).not.toContain('deadSince');
+  });
+
+  it('a word this build does not know revives as no key (it reads unknown), and the row is kept', () => {
+    const s = revived({ presence: 'zombie' });
+    expect(s?.id).toBe('session-a');
+    expect(Object.keys(s ?? {})).not.toContain('presence');
+  });
+
+  it('deadSince revives a number as itself, null as null, and absent as absent', () => {
+    expect(revived({ deadSince: 1_784_400_000_000 })?.deadSince).toBe(1_784_400_000_000);
+    window.localStorage.clear();
+    const nulled = revived({ deadSince: null });
+    expect(Object.keys(nulled ?? {})).toContain('deadSince');
+    expect(nulled?.deadSince).toBeNull();
+    window.localStorage.clear();
+    expect(Object.keys(revived({}) ?? {})).not.toContain('deadSince');
+  });
+
+  it('a row this build wrote with both keys round-trips them', () => {
+    const row = { ...session('session-a'), presence: 'dead' as const, deadSince: 1_784_400_000_000 };
+    saveFleetSnapshot([row]);
+    expect(loadFleetSnapshot()?.sessions[0]).toEqual(row);
   });
 });
 

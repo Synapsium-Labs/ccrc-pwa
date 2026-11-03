@@ -63,6 +63,7 @@ export const CHECKS_MODES: readonly ChecksMode[] = Object.keys(CHECKS_MODE_MAP) 
 export const PR_LANDING_REASON_MAP = {
   'pr-unreadable': 'GitHub answered no object for the PR number',
   'branch-drift': 'the workspace is no longer on the branch the PR was opened from',
+  train: 'the PR is labelled as landed in a merge train and its train record was not read inside the call',
 } as const;
 
 /** The 45 min bound of a wait (the CI job bound is 30 min). */

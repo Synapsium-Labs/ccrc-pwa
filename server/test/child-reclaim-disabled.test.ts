@@ -95,10 +95,11 @@ describe('the executor with child-reclaim-disabled set', () => {
       let audited = false;
       const r = await rig((verb) => { if (verb === 'ws-audit') audited = true; });
       const real = r.deps.io;
-      const deps: ChildReclaimDeps = { ...r.deps, io: { ...real, readdir: async (p, t, s) => {
-        if (!audited || p !== r.reg) return real.readdir(p, t, s);
+      // The act's listing is the measured one (D-5969).
+      const deps: ChildReclaimDeps = { ...r.deps, io: { ...real, readdirMeasured: async (p, t, s) => {
+        if (!audited || p !== r.reg) return real.readdirMeasured(p, t, s);
         if (how === 'reject') throw new Error('EIO');
-        return null;
+        return { ok: false, reason: 'unreadable' };
       } } };
       const out = await reclaimChild(deps, r.req());
       expect(out).toMatchObject({ kind: 'deferred', why: 'paused-at-server' });

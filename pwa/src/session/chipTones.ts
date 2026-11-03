@@ -24,9 +24,9 @@
 // changes — these are the same four and three class strings chat.css has
 // always skinned, which is why this file is types and no logic.
 
-/** What a chip on the session header can be SAYING. Each one is a chat.css
- *  rule; the rule is where the colour argument lives. */
-export type ChipTone = 'active' | 'repo' | 'archived' | 'restart';
+/** What a chip can be SAYING: on the session header, each one a chat.css rule, or on the fleet screen (`conflict`, the
+ *  predicted-conflict chip), a rule in fleet.css. Either way the rule is where the colour argument lives. */
+export type ChipTone = 'active' | 'repo' | 'archived' | 'restart' | 'conflict';
 
 /** The modifiers of the meta row's own pill. `model` and `ultra` are live
  *  choosers, `branch` is a label — which is the distinction `button.metachip`
@@ -38,6 +38,7 @@ const CHIP: Record<ChipTone, string> = {
   repo: 'chip--repo',
   archived: 'chip--archived',
   restart: 'chip--restart',   // D-5237: a recent process end, as quiet as `archived`
+  conflict: 'chip--conflict', // landing order wave 4b: the fleet screen's predicted-conflict chip (fleet.css)
 };
 
 const METACHIP: Record<MetaChipTone, string> = {

@@ -55,6 +55,7 @@ import { makeCcdHarness } from './ccdWsHelpers.js';
 import * as policy from '../src/coord/delegation-policy.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { parsedFile } from './scan/symbols.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const HOOK = path.join(REPO_ROOT, 'ccd/session-hook.sh');
@@ -1117,26 +1118,51 @@ function commandsOutside(body: string, rules: CommandRules): string[] {
   return [...bad, ...writes.map((w) => `a write: ${w}`)];
 }
 
+/** Wave 4 PR2's PWA files: the only ones that may name the broker. PR2 creates exactly the first and edits the rest. */
+const W4_PWA_FILES = [
+  'pwa/src/fleet/delegationWords.ts',
+  'pwa/src/stores/fleet.ts', 'pwa/src/fleet/nestFleet.ts', 'pwa/src/fleet/fleetTree.ts', 'pwa/src/fleet/rollup.ts',
+  'pwa/src/fleet/ProjectCard.tsx', 'pwa/src/fleet/FleetCards.tsx', 'pwa/src/fleet/sessionFacts.ts',
+  'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/fleet/SessionLine.tsx', 'pwa/src/screens/SessionScreen.tsx',
+] as const;
+
 describe('8. the closed scope census', () => {
-  it('no new PWA source, state or frame: measured against main, the PWA holds no name of the broker and the frame union is exactly main\'s seven', () => {
+  it('the wave-4 shape: the frame union is main\'s seven plus `delegation`, and the broker\'s words appear only in PR2\'s named PWA files', () => {
     const ui = [...filesUnder('pwa/src', /\.(ts|tsx|css|html|js)$/), ...filesUnder('ui/src', /\.(ts|tsx|css|html|js)$/)];
     expect(ui.length, 'the scan reached the PWA').toBeGreaterThan(200);
     // NAMES. A stem of the family at the start of a word in any path segment: main has none (`archiveReleased.ts` is not one: the stem
     // must start the word), so a new `leaseRows.ts` or `DelegationRows.tsx` is a file wave 3 may not add.
     const FAMILY_NAME = /(?:^|[^A-Za-z])(?:delegat|lease|spool|carrier|adopt|retain|dispos|cleanup)/i;
-    expect(ui.filter((f) => f.split('/').some((seg) => FAMILY_NAME.test(seg))), 'a PWA file named for the broker').toEqual([]);
-    // CONTENT, in two parts, both measured on origin/main at 0b3ff2f62 (the merge base). Stems main never names are allowed nowhere...
-    const NEVER = /delegation|disposition|\bspool|cleanup(?:Due|State|Population|Evidence|Queue|Token)|auditToken|explicitIntent|coordinatorIntent|stageGate/i;
+    // Wave 4: PR2 adds exactly one file named for the broker, its words module; on PR1's branch it does not exist, so the same
+    // allow-list text is green on both branches.
+    const named = ui.filter((f) => f !== 'pwa/src/fleet/delegationWords.ts');
+    expect(named.filter((f) => f.split('/').some((seg) => FAMILY_NAME.test(seg))), 'a PWA file named for the broker').toEqual([]);
+    // CONTENT, in three parts, measured on origin/main at 0b3ff2f62 (the merge base). `delegation` is wave 4's frame word: allowed in
+    // PR2's named files only...
+    const W4_WORD = /delegation/i;
+    expect(pwaWordOffenders(ui, read, W4_WORD, W4_PWA_FILES), 'a PWA file outside PR2\'s list that names the broker').toEqual([]);
+    const other: Record<string, string> = { 'pwa/src/fleet/Other.tsx': "export const k = 'delegation';\n" };
+    expect(pwaWordOffenders(Object.keys(other), (f) => other[f]!, W4_WORD, W4_PWA_FILES), 'CONTROL: a file outside the list is red').toEqual(
+      ['pwa/src/fleet/Other.tsx']);
+    // ...the stems main never names are allowed nowhere...
+    const NEVER = /disposition|\bspool|cleanup(?:Due|State|Population|Evidence|Queue|Token)|auditToken|explicitIntent|coordinatorIntent|stageGate/i;
     expect(pwaWordOffenders(ui, read, NEVER, []), 'a PWA file that names the broker').toEqual([]);
     // ...and the stems main already uses in other senses (the update lease, a roster `adopt`, CSS `retain`, a `carrier` in account copy)
     // are allowed in exactly the files main has them in. A new file that names one is a new PWA source to look at.
     // R80 N3: re-measured with comments stripped, so each list holds the files whose CODE names the word (a comment no longer counts).
     const MAIN_HAS: ReadonlyArray<[string, RegExp, readonly string[]]> = [
-      ['lease', /\bleases?\b|\blease[A-Z]\w*/, ['pwa/src/fleet/HaltBanner.tsx', 'pwa/src/fleet/updateHalt.ts']],
+      // wave 4: PR2's rows name the frame's `leases`, in its named files only
+      ['lease', /\bleases?\b|\blease[A-Z]\w*/, ['pwa/src/fleet/HaltBanner.tsx', 'pwa/src/fleet/updateHalt.ts', ...W4_PWA_FILES]],
       // `workspaceAddWords.ts` joined the list with the named-workspace add: its refusal text for an account that cannot take the
       // session names ccd's own remedy ("adopt them there with: ccd start ..."), the worktree-onto-an-account sense `ccd` has always
       // used. It is user-facing copy, a string and no identifier, and no part of the delegation broker's adoption.
-      ['adopt', /\badopt\w*/i, ['pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/workspaceAddWords.ts', 'pwa/src/screens/settings/SecuritySection.tsx']],
+      // `ConnectSheet.tsx` and `accountWords.ts` joined it with the connect sheet's "Use what's there" (accounts A18): the roster
+      // `adopt` of the account add, the add route's existing `adopt?: true` field (a lane taking a config folder already on the
+      // box), its state flag and its one status line. No part of the delegation broker's adoption either.
+      ['adopt', /\badopt\w*/i, [
+        'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/workspaceAddWords.ts', 'pwa/src/screens/settings/SecuritySection.tsx',
+        'pwa/src/accounts/ConnectSheet.tsx', 'pwa/src/fleet/accountWords.ts',
+      ]],
       ['retain', /\bretain\w*/i, []],
       ['carrier', /\bcarrier\w*/i, ['pwa/src/fleet/AccountPoolSheet.tsx']],
       ['cleanup', /\bcleanup[A-Z]\w*/, ['pwa/src/fleet/SessionMeta.tsx']],
@@ -1154,7 +1180,7 @@ describe('8. the closed scope census', () => {
     const adopt = MAIN_HAS.find(([w]) => w === 'adopt')!;
     expect(pwaWordOffenders(Object.keys(fake), (f) => fake[f]!, adopt[1], adopt[2]), 'comments are green; an identifier, or a string, is red').toEqual(
       ['pwa/src/x/url.ts', 'pwa/src/x/id.ts']);
-    // FRAMES. The union is exactly main's seven, and every arm is written inline: a named `interface DelegationRowsFrame` joined by `|`
+    // FRAMES. The union is exactly main's seven plus wave 4's `delegation`, and every arm is written inline: a named `interface DelegationRowsFrame` joined by `|`
     // would have no `{ type: '...' }` for a parse to see, so each arm is required to open with a brace.
     const api = read('shared/api.ts');
     const at = api.indexOf('export type FleetMsg =');
@@ -1171,9 +1197,11 @@ describe('8. the closed scope census', () => {
     arms.push(union.slice(armStart));
     const armsTrimmed = arms.map((a) => a.trim()).filter((a) => a !== '');
     expect(armsTrimmed.filter((a) => !a.startsWith('{')), 'every FleetMsg arm is an inline object type').toEqual([]);
-    expect(armsTrimmed.map((a) => /^\{\s*type:\s*'([a-z-]+)'/.exec(a)?.[1]), 'the frame union is exactly main\'s seven').toEqual(
-      ['hello', 'fleet', 'notice', 'runs', 'coord', 'divergence', 'pools']);
-    for (const f of filesUnder('server/src', /\.ts$/)) expect(code(read(f)), f).not.toMatch(/\b(type|t):\s*'delegation'/);
+    expect(armsTrimmed.map((a) => /^\{\s*type:\s*'([a-z-]+)'/.exec(a)?.[1]), 'the frame union is main\'s seven plus `delegation` and the programme ledgers\' `waiting`').toEqual(
+      ['hello', 'fleet', 'notice', 'runs', 'coord', 'divergence', 'pools', 'delegation', 'waiting']);
+    // the frame's literal is the socket's alone (a subset, so this is green before the socket sends it and on PR2's branch)
+    const literal = filesUnder('server/src', /\.ts$/).filter((f) => /\b(type|t):\s*'delegation'/.test(code(read(f))));
+    expect(literal.filter((f) => f !== 'server/src/server.ts'), 'a server file outside the socket that writes the frame').toEqual([]);
     // the one wire exposure is a member of the health route's answer, which the PWA does not read
     expect(read('shared/api.ts')).toMatch(/delegation\?: DelegationObservationHealth/);
   });
@@ -1380,7 +1408,7 @@ describe('8. the closed scope census', () => {
     expect(cuts, 'every truncating call in a file that can reach a file (a new string helper there needs listing here)').toEqual([
       'server/src/coord/collectLaneJournal.ts: ftruncateSync(',
       'server/src/coord/delegation-checkpoint.ts: this.port.truncate(',
-      'server/src/coord/delegation-journal.ts: fsp.truncate(',
+      'server/src/coord/delegation-file-port.ts: fsp.truncate(',
       'server/src/coord/delegation-journal.ts: truncate(',
     ]);
 
@@ -1445,16 +1473,19 @@ describe('8. the closed scope census', () => {
     expect(jr.match(/^.*(?:DELEGATION_JOURNAL_FILE|delegation-events\.log).*$/gm)?.map((l) => l.trim()), 'the journal module names its file once').toEqual(
       ["export const DELEGATION_JOURNAL_FILE = 'delegation-events.log';"]);
     // every `fsp.` call of the module is inside the node port's own literal (the adapter), never a free function
-    const portAt = jr.indexOf('export const nodeDelegationFilePort');
-    const portEnd = jr.indexOf('\n};\n', portAt);
+    const portFile = parsedFile('server/src/coord/delegation-file-port.ts');
+    const portBinding = portFile.bindings.find((b) => b.name === 'nodeDelegationFilePort');
+    const portAt = portBinding?.initStart ?? -1;
+    const portEnd = portAt + (portBinding?.init.length ?? 0);
     expect(portAt, 'the node port literal').toBeGreaterThan(-1);
-    expect((jr.slice(0, portAt) + jr.slice(portEnd)).match(/\bfsp\.\w+\(/g) ?? [], 'an `fsp` call outside the node port').toEqual([]);
-    // and the node port is reached, across the server, only by its declaration and the applier's default
+    expect(code(portFile.text.slice(0, portAt) + portFile.text.slice(portEnd)).match(/\bfsp\.\w+\(/g) ?? [], 'an `fsp` call outside the node port').toEqual([]);
+    expect(code(parsedFile('server/src/coord/delegation-journal.ts').text).match(/\bfsp\.\w+\(/g) ?? [], 'an `fsp` call in the journal module').toEqual([]);
+    // and the node port is reached, across the server, only by its declaration and the composition root (`watch.ts`'s import and its applier's `port:` argument)
     const portUses = SRC.flatMap((f) => (code(read(f)).match(/^.*\bnodeDelegationFilePort\b.*$/gm) ?? []).map((l) => `${f}: ${l.trim()}`));
     expect(portUses, 'every use of the node file port in the server').toEqual([
-      'server/src/coord/delegation-checkpoint.ts: nodeDelegationFilePort,',
-      'server/src/coord/delegation-checkpoint.ts: this.port = deps.port ?? nodeDelegationFilePort;',
-      'server/src/coord/delegation-journal.ts: export const nodeDelegationFilePort: DelegationFilePort = {',
+      'server/src/coord/delegation-file-port.ts: export const nodeDelegationFilePort: DelegationFilePort = {',
+      "server/src/watch.ts: import { nodeDelegationFilePort } from './coord/delegation-file-port.js';",
+      'server/src/watch.ts: port: nodeDelegationFilePort,',
     ]);
 
     // 4. Outside the server: the deploy helper reads the live journal (capture) and replaces it whole from a validated snapshot (restore),
@@ -1486,14 +1517,15 @@ describe('8. the closed scope census', () => {
   it('no new agent request operation, capability word or protocol bump: `readFrom` is the same op with one optional field', () => {
     expect([FLEET_PROTO, FLEET_PROTO_MIN]).toEqual([1, 1]);
     const proto = read('shared/agent-protocol.ts');
-    // the request ops are a small closed set: main's sixteen (the sixteenth, `disk`, is fleet disk retention's DR-2, D-6614; the fifteenth, `account`, is the accounts plan's A8, not
+    // the request ops are a small closed set: main's nineteen (the eighteenth and nineteenth, `testbox` and `testbox-tools-sync`, are the test box plan's TB9, D-7411; the seventeenth, `pressure`, is the host-pressure read of #1170; the sixteenth, `disk`, is fleet disk retention's DR-2, D-6614; the fifteenth, `account`, is the accounts plan's A8, not
     // delegation's), whatever form a new one is declared in (an interface, or a `type X = { ...; op: 'x' }` alias, which an
-    // interface-shaped parse cannot see), and exactly main's sixteen members of the union
+    // interface-shaped parse cannot see), and exactly main's nineteen members of the union
     const ops = [...proto.matchAll(/\bop:\s*'([\w-]+)'/g)].map((m) => m[1]!);
     expect(ops, 'every request op the protocol declares').toEqual(['exec', 'read', 'readFrom', 'readB64', 'readdir', 'stat', 'lstat', 'caps', 'writeB64', 'tailOpen',
-      'tailClose', 'ptyOpen', 'update', 'token-sync', 'account', 'disk']);
+      'tailClose', 'ptyOpen', 'update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync']);
     expect(/export type AgentReq = ([^;]+);/.exec(proto)![1]!.split('|').map((m) => m.trim()), 'the union of requests').toEqual(['ExecReq', 'ReadReq', 'ReadFromReq',
-      'ReadB64Req', 'ReaddirReq', 'StatReq', 'LstatReq', 'WriteB64Req', 'TailOpenReq', 'TailCloseReq', 'PtyOpenReq', 'CapsReq', 'UpdateReq', 'TokenSyncReq', 'AccountOpReq', 'DiskReq']);
+      'ReadB64Req', 'ReaddirReq', 'StatReq', 'LstatReq', 'WriteB64Req', 'TailOpenReq', 'TailCloseReq', 'PtyOpenReq', 'CapsReq', 'UpdateReq', 'TokenSyncReq', 'AccountOpReq', 'DiskReq', 'PressureReq',
+      'TestboxReq', 'TestboxToolsSyncReq']);
     expect(proto).toMatch(/export interface ReadFromReq \{ t: 'req'; id: number; op: 'readFrom'; path: string; offset: number; maxBytes\?: number \}/);
     expect(proto.match(/\bmaxBytes\b/g)!.length).toBeGreaterThan(0);
     // the ready frame, the advertised words and the agent's op switch carry nothing of the broker's
@@ -1642,7 +1674,8 @@ describe('8. the closed scope census', () => {
       'projectChanged: (prior, next) => coord.projectDelegationCheckpointChanges(prior, next),',
       'insertEvents: (rows) => coord.insertDelegationEvents(rows),',
       'eventStats: () => coord.delegationEventStats(),',
-      'if (this.deps.coord === undefined) return;',
+      // wave 4 (PR1 Task 1.3): `sweep` answers whether a pass ran, so the watcher projects only after one
+      'if (this.deps.coord === undefined) return false;',
     ]);
     expect(lane).toMatch(/private readonly dropped = new Map/);
     expect(lane).toMatch(/pathsByProject = new Map/);

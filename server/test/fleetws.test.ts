@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { performance } from 'node:perf_hooks';
-import { FLEET_PROTO, FLEET_PROTO_MIN, type Divergence } from '../../shared/api.js';
+import { FLEET_PROTO, FLEET_PROTO_MIN, type DelegationProjectionWire, type Divergence } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
 import type { Runner } from '../src/exec.js';
 import { Bus } from '../src/bus.js';
@@ -22,6 +23,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { watcherTeardown } from './watcherTeardown.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { okRuns } from './coordReadHelpers.js';
+import { readRegistry } from '../src/registry.js';
 
 const seedSession = (home: string, id: string, wrapper: string) => {
   const reg = path.join(home, '.cc-sessions');
@@ -56,6 +58,8 @@ const seedSession = (home: string, id: string, wrapper: string) => {
 // case at the bottom of this file is what closes that, and it can only exist
 // because the drop is opt-in.
 const collect = (ws: WebSocket, opts: { dropDivergence?: boolean; keepPools?: boolean } = {}) => {
+  // The programme ledgers' `waiting` frame (plan PL4) rides every cold start on a box with a coordination database and is the
+  // subject of `ledgers-frame.test.ts` alone: dropped here, as `pools` is, so the order cases below stay about their own frames.
   const queue: unknown[] = [];
   const waiters: Array<(m: unknown) => void> = [];
   ws.on('message', (d) => {
@@ -68,6 +72,7 @@ const collect = (ws: WebSocket, opts: { dropDivergence?: boolean; keepPools?: bo
     // edits today, and a silent break for the eleventh case somebody writes
     // tomorrow. The one describe that is ABOUT this frame passes `keepPools`.
     if (opts.keepPools !== true && (m as { type?: unknown }).type === 'pools') return;
+    if ((m as { type?: unknown }).type === 'waiting') return;
     const w = waiters.shift();
     if (w) w(m);
     else queue.push(m);
@@ -1105,6 +1110,107 @@ describe('fleet REST + WS', () => {
     });
   });
 
+  // Delegation broker wave 4 (spec §5.8, §8.4): the `{type:'delegation'}` frame. FLEET-LEVEL like `pools`; the watcher decides it
+  // (`currentDelegation`, Task 1.3), so these rows stub that value and drive the bus, and pin only the socket's half: the cold-start
+  // order, an absent value sending nothing, the broadcast, masking, an old client, and the withdrawal.
+  describe('the `delegation` frame', () => {
+    const KEY = ['sk', 'ant', 'api03', createHash('sha256').update('w4-f4').digest('base64url').repeat(3).slice(0, 95)].join('-');
+    const wire = (displayName: string | null = 'explore'): DelegationProjectionWire => ({
+      asOf: '2026-10-15T10:30:00.000Z',
+      activities: [{
+        activityId: 'a1', parentId: 'lane-a-demo', group: 'parent', placement: 'row', sourceKind: 'agent', upstreamId: 'agent-1',
+        displayName, liveness: 'live', openedAt: '2026-10-15T10:01:00.000Z', lastEventAt: '2026-10-15T10:02:00.000Z',
+      }],
+      leases: [],
+      unowned: [],
+    });
+    const connect = async (over: Partial<Deps> = {}, current: DelegationProjectionWire | null = null) => {
+      const deps = { ...testDeps(home), ...over };
+      const bus = new Bus();
+      const watcher = mkWatcher(deps, bus);
+      vi.spyOn(watcher, 'currentDelegation').mockReturnValue(current);
+      app = await buildServer(deps, bus, watcher);
+      await watcher.tick();
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const raw: string[] = [];
+      ws.on('message', (d) => { raw.push(String(d)); });
+      const next = collect(ws, { dropDivergence: true, keepPools: true });
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+      return { ws, next, watcher, bus, raw };
+    };
+
+    it('W4-F1: cold-starts last, after pools: hello, fleet, runs, coord, pools, delegation', async () => {
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      const WIRE = wire();
+      const { ws, next } = await connect({ coord }, WIRE);
+      const types: string[] = [];
+      let last: any = null;
+      for (let i = 0; i < 6; i++) { last = await next(); types.push(last.type); }
+      expect(types).toEqual(['hello', 'fleet', 'runs', 'coord', 'pools', 'delegation']);
+      expect(last).toEqual({ type: 'delegation', delegation: WIRE });
+      ws.close();
+    });
+
+    it('W4-F2: an absent value sends NOTHING on connect, never a fabricated empty frame', async () => {
+      const { ws, next, bus } = await connect();
+      expect((await next()).type).toBe('hello');
+      bus.emit('notice', { message: 'unrelated' });
+      const seen: string[] = [];
+      for (let m = await next(); m.type !== 'notice'; m = await next()) seen.push(m.type);
+      expect(seen).not.toContain('delegation');
+      ws.close();
+    });
+
+    it('W4-F3: a broadcast reaches a connected socket, and the listener leaves with the socket', async () => {
+      const { ws, next, bus } = await connect();
+      for (let m = await next(); m.type !== 'pools'; m = await next()) { /* the cold start */ }
+      const listening = bus.listenerCount('delegation');
+      const WIRE2 = wire('second');
+      bus.emit('delegation', WIRE2);
+      expect(await next()).toEqual({ type: 'delegation', delegation: WIRE2 });
+      ws.close();
+      await vi.waitFor(() => { expect(bus.listenerCount('delegation')).toBe(listening - 1); });
+    });
+
+    it('W4-F4: the frame is masked: an API-key-shaped display name never reaches the socket', async () => {
+      const { ws, next, bus, raw } = await connect({}, wire(`run ${KEY}`));
+      for (let m = await next(); m.type !== 'delegation'; m = await next()) { /* the cold start, masked */ }
+      bus.emit('delegation', wire(`again ${KEY}`));
+      const frame = await next();
+      expect(frame.type).toBe('delegation');
+      expect(raw.join('\n')).not.toContain(KEY);
+      expect(raw.join('\n')).toContain('"displayName":"run ');
+      ws.close();
+    });
+
+    it('W4-F5: an old client that knows only hello and fleet receives a plain object it can ignore, and the socket stays usable', async () => {
+      const { ws, next, bus } = await connect({}, wire());
+      const known = new Set(['hello', 'fleet']);
+      const unknown: Array<Record<string, unknown>> = [];
+      for (let m = await next(); ; m = await next()) {
+        if (!known.has(m.type)) unknown.push(m);
+        if (m.type === 'delegation') break;
+      }
+      expect(Object.keys(unknown.find((m) => m.type === 'delegation')!).sort()).toEqual(['delegation', 'type']);
+      bus.emit('notice', { message: 'still here' });
+      expect(await next()).toEqual({ type: 'notice', message: 'still here' });
+      expect(FLEET_PROTO).toBe(1);
+      ws.close();
+    });
+
+    it('W4-F6: a withdrawal reaches the socket as exactly a null delegation', async () => {
+      const { ws, next, bus, raw } = await connect();
+      for (let m = await next(); m.type !== 'pools'; m = await next()) { /* the cold start */ }
+      bus.emit('delegation', null);
+      expect(await next()).toEqual({ type: 'delegation', delegation: null });
+      expect(raw.at(-1)).toBe('{"type":"delegation","delegation":null}');
+      ws.close();
+    });
+  });
+
   // Account pools, spec §5.4.5 / §11 row 22 — the `{type:'pools'}` frame. A
   // FLEET-LEVEL fact: a project's tag is not a property of any session, and
   // riding it on `FleetSession` would make `reviveFleetSession` a second
@@ -1616,6 +1722,48 @@ describe('fleet REST + WS', () => {
       const row = snapshot.sessions.find((session: { id: string }) => session.id === CHILD);
       expect(row, 'the seeded session must reach the cold-start snapshot').toBeDefined();
       expect(row.ask).toEqual(CHIP);
+      ws.close();
+    });
+  });
+
+  // Landing order wave 4b: the cold frame (assembled from the lane's map at connect) and the tick's broadcast (the same map,
+  // handed to the same assembly) are two builders of one field, and a client must not see it change between them.
+  describe('the radar landing on the cold frame and the broadcast', () => {
+    const CHILD = 'claude-a-project-f';
+
+    it('the cold snapshot and the tick\'s fleet broadcast carry the same landing', async () => {
+      const reg = path.join(home, '.cc-sessions');
+      writeFileSync(path.join(reg, `${CHILD}.branch`), 'ws/alpha');
+      mkdirSync(path.join(reg, 'landing', CHILD), { recursive: true });
+      const sha = (n: number): string => n.toString(16).padStart(40, '0');
+      writeFileSync(path.join(reg, 'landing', CHILD, 'probe'), JSON.stringify({
+        v: 1, project: CHILD, at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'), state: 'measured',
+        base: { ref: 'main', sha: sha(9) },
+        heads: [{ pr: 12, head: sha(12), branch: 'ws/alpha', id: CHILD, base: { state: 'clean' } }],
+        headsCut: false, pairs: [], pairHeads: [12], pairsCut: false,
+      }));
+      const deps = testDeps(home);
+      const bus = new Bus();
+      const watcher = mkWatcher(deps, bus);
+      app = await buildServer(deps, bus, watcher);
+      await watcher.sweepRadar(await readRegistry(deps.io, deps.cfg));   // the lane has run; nothing has broadcast yet
+
+      await app.listen({ host: '127.0.0.1', port: 0 });
+      const addr = app.server.address();
+      const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      const next = collect(ws, { dropDivergence: true });
+      await new Promise<void>((resolve, reject) => { ws.on('open', () => resolve()); ws.on('error', reject); });
+      expect((await next()).type).toBe('hello');
+      const cold = await next();
+      expect(cold.type).toBe('fleet');
+      const coldLanding = cold.sessions.find((s: { id: string }) => s.id === CHILD)?.landing;
+      expect(coldLanding, 'the cold snapshot carried no landing').toMatchObject({ pr: 12, head: sha(12), paired: true });
+
+      await watcher.tick();   // the first broadcast
+      let pushed = await next();
+      while (pushed.type !== 'fleet') pushed = await next();
+      expect(pushed.sessions.find((s: { id: string }) => s.id === CHILD)?.landing).toEqual(coldLanding);
       ws.close();
     });
   });

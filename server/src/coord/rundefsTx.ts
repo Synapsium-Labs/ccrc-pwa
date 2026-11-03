@@ -6,8 +6,9 @@
 // `coord-policy-rings.test.ts` pins both halves.
 import { tx } from './tx.js';
 import { renderEnvelope } from './envelope.js';
-import type { CoordStore, RunRow, StallObservation } from './store.js';
+import type { RunRow, StallObservation } from './store.js';
 import type { SystemMailSender } from './rundefs.js';
+import type { WatcherCoordPort } from './ports.js';
 import type { MailKind } from '../../../shared/api.js';
 import { readChecksRowDetail } from '../../../shared/landing.js';
 
@@ -60,7 +61,7 @@ export type SystemMailQueued =
  * transaction, because `tx` is not re-entrant.
  */
 export function queueSystemMail(
-  coord: CoordStore,
+  coord: WatcherCoordPort,
   run: Pick<RunRow, 'program' | 'wave' | 'waveOf'> | null,
   m: { fromId: SystemMailSender; toId: string; runId: number | null;
        kind: MailKind; subject: string; body: string },
@@ -92,7 +93,7 @@ export function queueSystemMail(
  * each caller's own rule.
  */
 export function insertSystemMailTx(
-  coord: CoordStore,
+  coord: WatcherCoordPort,
   run: Pick<RunRow, 'program' | 'wave' | 'waveOf'> | null,
   m: { fromId: SystemMailSender; toId: string; runId: number | null;
        kind: MailKind; subject: string; body: string },
@@ -169,7 +170,7 @@ export type StallNoticeQueued =
  * either arm.
  */
 export function queueStallNotice(
-  coord: CoordStore,
+  coord: WatcherCoordPort,
   run: Pick<RunRow, 'id' | 'program' | 'wave' | 'waveOf'> | null,
   n: { detail: string; at: number; toId: string; kind: MailKind; subject: string; body: string },
 ): StallNoticeQueued {
@@ -203,7 +204,7 @@ export type LandingNoticeQueued = StallNoticeQueued;
  * already holds an edge. `tx` is not re-entrant: no caller may hold one around this.
  */
 export function queueLandingNotice(
-  coord: CoordStore,
+  coord: WatcherCoordPort,
   run: Pick<RunRow, 'id' | 'program' | 'wave' | 'waveOf'>,
   n: { detail: string; at: number; episode: number; toId: string; subject: string; body: string },
 ): LandingNoticeQueued {

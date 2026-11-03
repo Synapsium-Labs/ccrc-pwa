@@ -3,17 +3,19 @@
 // Nothing in this task can hibernate a session: the pass is handed no ccd runner at all, and the watcher's own pass,
 // run end to end below with a runner that records every command, reaches ccd for nothing whatever the markers say.
 import { describe, expect, it, vi } from 'vitest';
+import { withBindingsOf } from './bindingsFake.js';
+import type { Incarnation } from '../src/coord/runBinding.js';
 import path from 'node:path';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   hibernatePass, type HibernateSweepMemory, type HibernateSweepDeps,
-} from '../src/hibernateSweep.js';
+} from '../src/sleepLane.js';
 import {
   HIBERNATE_AFTER_HOURS_FILE, HIBERNATE_DISABLED_MARKER, HIBERNATE_LIVE_MARKER, HIBERNATE_SWEEP_MS,
   NO_HIBERNATE_SUFFIX, type HibernateMark,
 } from '../src/coord/hibernate.js';
-import { PRESENCE_OPEN_TTL_MS, RUN_STATES, TERMINAL_RUN_STATES, type FleetSession, type RunState } from '../../shared/api.js';
+import { VIEWER_OPEN_TTL_MS, RUN_STATES, TERMINAL_RUN_STATES, type FleetSession, type RunState } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -28,13 +30,13 @@ import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { Runner } from '../src/exec.js';
 import { ACTOR_FLAGS_CAP } from '../src/ccdargv.js';
-import type { HibernateActPort } from '../src/hibernateSweep.js';
+import type { HibernateActPort } from '../src/sleepLane.js';
 import type { CcdResult } from '../src/lifecycle.js';
 
 const NOW = 1_800_000_000_000;
 const MIN = 60_000;
 const HOUR = 60 * MIN;
-const STARTED = NOW - PRESENCE_OPEN_TTL_MS - MIN;
+const STARTED = NOW - VIEWER_OPEN_TTL_MS - MIN;
 const ID = 'project-a-quiet-basin';
 const OTHER = 'lane-a-project-a';
 
@@ -50,10 +52,12 @@ const mark = (ageMs: number, o: Partial<HibernateMark> = {}): HibernateMark =>
 
 const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-hib-'), '.ccrc', 'coord.db')));
 /** The store port the sweep declares, over a real store, with any read overridden. */
-const port = (s: CoordStore, o: Partial<NonNullable<HibernateSweepDeps['coord']>> = {}): NonNullable<HibernateSweepDeps['coord']> => ({
-  openRunsForSession: (...a) => s.openRunsForSession(...a),
+/** The readers the store port answers through: `bindingsOf` is the store's own view over the port's `openRunsForSession`. */
+type HibReaders = Pick<CoordStore, 'openRunsForSession' | 'activeClaims' | 'outstandingMailFor'>;
+const port = (s: CoordStore, o: Partial<HibReaders> = {}): NonNullable<HibernateSweepDeps['coord']> & HibReaders => withBindingsOf({
+  openRunsForSession: (...a: Parameters<CoordStore['openRunsForSession']>) => s.openRunsForSession(...a),
   activeClaims: () => s.activeClaims(),
-  outstandingMailFor: (id, n) => s.outstandingMailFor(id, n),
+  outstandingMailFor: (id: string, n?: number) => s.outstandingMailFor(id, n),
   ...o,
 });
 
@@ -156,16 +160,16 @@ describe('hibernatePass: the shadow line', () => {
 });
 
 describe('hibernatePass: after a server start, presence is unknown', () => {
-  it('an idle row with no open claim logs nothing inside PRESENCE_OPEN_TTL_MS of the start, and logs one sweep after', async () => {
+  it('an idle row with no open claim logs nothing inside VIEWER_OPEN_TTL_MS of the start, and logs one sweep after', async () => {
     const f = fake();
     f.deps = { ...f.deps, startedAt: NOW };
     const m = mem();
-    for (let t = NOW; t < NOW + PRESENCE_OPEN_TTL_MS; t += HIBERNATE_SWEEP_MS) {
+    for (let t = NOW; t < NOW + VIEWER_OPEN_TTL_MS; t += HIBERNATE_SWEEP_MS) {
       f.clock.now = t;
       await pass(f, m);
     }
     expect(f.lines).toEqual([]);
-    f.clock.now = NOW + PRESENCE_OPEN_TTL_MS + HIBERNATE_SWEEP_MS;
+    f.clock.now = NOW + VIEWER_OPEN_TTL_MS + HIBERNATE_SWEEP_MS;
     await pass(f, m);
     expect(f.lines).toHaveLength(1);
   });
@@ -259,13 +263,13 @@ describe('hibernatePass: the viewer is Viewers.isOpen', () => {
     expect(viewers.isVisible(ID)).toBe(false);
     const f = fake({ viewers });
     expect((await pass(f))[0]!.verdict).toEqual({ act: 'hold', reason: 'viewer' });
-    t = NOW + PRESENCE_OPEN_TTL_MS + 1;
+    t = NOW + VIEWER_OPEN_TTL_MS + 1;
     f.clock.now = t;
     expect((await pass(f))[0]!.verdict.act).toBe('hibernate');
   });
 });
 
-// The pass above is handed stubs; this one runs the watcher's REAL `sweepHibernate`, so the closures it wires
+// The pass above is handed stubs; this one runs the watcher's REAL `sweepSleep` (`idle-hours`), so the closures it wires
 // (the registry listing, `turnMarkFor` judged against the live process, the store) decide, and one runner that
 // answers tmux and ccd alike records every command: the shadow arm reaches ccd for nothing.
 describe('the watcher\'s own shadow pass, its deps unmocked', () => {
@@ -304,7 +308,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     // granted or not, lands in `calls` here.
     const deps = { ...testDeps(home, run), runCcd: ccdRunner(run, cfg), cfg, coord, viewers: new Viewers() };
     const w = new FleetWatcher(deps as never, new Bus(), 10_000);
-    (w as unknown as { hibernateStartedAt: number }).hibernateStartedAt = startedAt;
+    (w as unknown as { sleepStartedAt: number }).sleepStartedAt = startedAt;
     const tick = async () => {
       const r = await readSessionRecord(deps.io, cfg, WID);
       if (r.kind !== 'found') throw new Error('fixture record not found');
@@ -313,7 +317,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
       return { rows: [row], records: [r.record] };
     };
     const ccdCalls = () => calls.filter((c) => !c.cmd.endsWith('tmux'));
-    return { reg, coord, w, tick, ccdCalls, calls };
+    return { reg, coord, w, tick, ccdCalls, calls, deps };
   };
 
   it('an idle row 7 h past its Stop logs one shadow line, and no command but tmux reads ran — whatever the markers', async () => {
@@ -322,7 +326,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     try {
       const t = await h.tick();
       expect(t.rows[0]).toMatchObject({ bucket: 'idle', status: 'idle' });
-      await h.w.sweepHibernate(t.rows, t.records, [HIBERNATE_LIVE_MARKER]);
+      await h.w.sweepSleep(t.rows, t.records, [HIBERNATE_LIVE_MARKER], 'idle-hours');
       const shadow = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('hibernate-shadow'));
       expect(shadow).toEqual([`ccrc-server: hibernate-shadow ${WID} idle=7h`]);
       expect(h.ccdCalls()).toEqual([]);
@@ -339,8 +343,10 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     try {
       const order: string[] = [];
       h.w.useStopDoneSerialiser({ serial: async <T>(fn: () => Promise<T>): Promise<T> => { order.push('serial'); return fn(); } } as never);
+      // The registry the pass's listing names: the act lists it again (C4g, D-7047).
+      writeFileSync(path.join(h.reg, HIBERNATE_LIVE_MARKER), '');
       const t = await h.tick();
-      await h.w.sweepHibernate(t.rows, t.records, [HIBERNATE_LIVE_MARKER]);
+      await h.w.sweepSleep(t.rows, t.records, [HIBERNATE_LIVE_MARKER], 'idle-hours');
       expect(h.ccdCalls().map((c) => c.args.slice(-2))).toEqual([['hibernate', WID]]);
       expect(order).toEqual(['serial']);
       expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('hibernat'))).toEqual([`ccrc-server: hibernated ${WID} idle=7h (D-5242)`]);
@@ -350,14 +356,53 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
     }
   });
 
+  // C4g fix round (D-7047; the plain-readdir ratchet, D-5969): the act's listing is a read whose failure decides
+  // something (it holds the act), so it reads `readdirMeasured`, never the collapsing `readdir`. The plain listing is
+  // left answering the registry's names, so a wiring that read it would act; both failures, and a rejection, hold.
+  for (const failure of ['absent', 'unreadable', 'rejects'] as const) {
+    it(`armed, the act's listing through readdirMeasured: a registry ${failure} at the act holds it (fail shut)`, async () => {
+      const h = await harness();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        h.w.useStopDoneSerialiser({ serial: async <T>(fn: () => Promise<T>): Promise<T> => fn() } as never);
+        writeFileSync(path.join(h.reg, HIBERNATE_LIVE_MARKER), '');
+        const t = await h.tick();
+        const io = h.deps.io;
+        const regDir = h.deps.cfg.registryDir;
+        const reads: string[] = [];
+        h.deps.io = {
+          ...io,
+          readdir: async (p: string) => { if (p === regDir) reads.push('plain'); return io.readdir(p); },
+          readdirMeasured: async (p: string) => {
+            if (p !== regDir) return io.readdirMeasured(p);
+            reads.push('measured');
+            if (failure === 'rejects') throw new Error('EIO');
+            return { ok: false, reason: failure };
+          },
+        } as never;
+        // the plain listing would still answer the registry's names
+        expect(await io.readdir(regDir)).toContain(HIBERNATE_LIVE_MARKER);
+        await h.w.sweepSleep(t.rows, t.records, [HIBERNATE_LIVE_MARKER], 'idle-hours');
+        expect(h.ccdCalls()).toEqual([]);
+        // the act lists once, measured; the plain reads the pass's other readers make are not the act's
+        expect(reads.filter((r) => r === 'measured')).toEqual(['measured']);
+        expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('hibernat')))
+          .toEqual([`ccrc-server: hibernate-skip ${WID}: the registry was unlistable during the pass — asked again next sweep`]);
+      } finally {
+        warn.mockRestore();
+        h.coord.db.close();
+      }
+    });
+  }
+
   it('runs on its own clock: a second call inside HIBERNATE_SWEEP_MS reads nothing more', async () => {
     const h = await harness();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       const t = await h.tick();
-      await h.w.sweepHibernate(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'idle-hours');
       const n = h.calls.length;
-      await h.w.sweepHibernate(t.rows, t.records, []);
+      await h.w.sweepSleep(t.rows, t.records, [], 'idle-hours');
       expect(h.calls.length).toBe(n);
     } finally {
       warn.mockRestore();
@@ -368,7 +413,7 @@ describe('the watcher\'s own shadow pass, its deps unmocked', () => {
   it('the tick runs the shadow pass, and not on the priming tick', async () => {
     const h = await harness();
     try {
-      const spy = vi.spyOn(h.w, 'sweepHibernate').mockResolvedValue(undefined);
+      const spy = vi.spyOn(h.w, 'sweepSleep').mockResolvedValue(undefined);
       await (h.w as unknown as { tick(): Promise<void> }).tick();
       expect(spy).not.toHaveBeenCalled();
       await (h.w as unknown as { tick(): Promise<void> }).tick();
@@ -393,10 +438,10 @@ describe('hibernatePass: the store and presence are read again after the live re
   it('a run opened for the session while the live reads run holds run-worker', async () => {
     const f = fake();
     let calls = 0;
-    const real = f.deps.coord!;
+    const real = f.coord;
     const coord: NonNullable<HibernateSweepDeps['coord']> = {
-      ...real,
-      openRunsForSession: (id, e, i, role) => {
+      ...f.deps.coord!,
+      openRunsForSession: (id: string, e?: number, i?: Incarnation, role?: 'worker' | 'claimant') => {
         if (role === 'claimant') return real.openRunsForSession(id, e, i, role);
         calls += 1;
         return calls > 1 ? { ok: true, siblings: [{ id: 1, program: 'program-a', wave: 1, waveOf: 1 }] } : real.openRunsForSession(id, e, i, role);
@@ -436,6 +481,7 @@ describe('hibernatePass: the live act', () => {
       serial: o.serial === 'none' ? null : (o.serial ?? (async (fn) => { order.push('serial'); return fn(); })),
       queueRun: async (_id, fn) => { order.push('queue'); return fn(); },
       rowAtAct: o.rowAtAct ?? (async (r) => ({ ok: true, row: row(r.id) })),
+      listing: async () => [HIBERNATE_LIVE_MARKER],
     };
     return { f: { ...f, deps: { ...f.deps, act: port } }, argvs, order, port };
   };
@@ -537,7 +583,7 @@ describe('hibernatePass: the live act', () => {
 
   // The store, the live claims and the mail queue are read again INSIDE the serialiser (D-5428): what the tick read
   // is not what holds at the kill. Each case flips its read only once the serialiser has been entered.
-  const atAct = (o: (inside: () => boolean) => Partial<NonNullable<HibernateSweepDeps['coord']>>) => {
+  const atAct = (o: (inside: () => boolean) => Partial<NonNullable<HibernateSweepDeps['coord']> & HibReaders>) => {
     let inside = false;
     const l = live();
     const coord = { ...l.f.deps.coord!, ...o(() => inside) } as NonNullable<HibernateSweepDeps['coord']>;

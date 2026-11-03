@@ -96,6 +96,11 @@ describe('per-verb timeouts', () => {
     [['ws-expire', '--expect', 'a'.repeat(64), '--session', 'x'], 240_000],
     // The child temp-root collector: a bounded idle walk, a quarantine move and a tree removal under the reap lock.
     [['ws-collect', '--expect', 'a'.repeat(64), '--session', 'x'], 240_000],
+    // The deps-shed act (D-7278) has ws-reap's row; its shadow, the dry run, a shorter one of its own (166 s of bounds),
+    // because it runs inside the run-done lane's single flight. `deps-shed-budget.test.ts` holds both sums.
+    [['ws-shed-deps', '--session', 'x', '--class', 'child'], 240_000],
+    [['ws-shed-deps', '--session', 'x', '--class', 'child', '--dry-run'], 180_000],
+    [['ws-shed-deps', '--session', 'x', '--class', 'coordinator', '--dry-run', '--surface', 'server', '--actor', 'deps-shed'], 180_000],
     // The two SPAWNING verbs (F8, 2026-08-12). Both run `_spawn`, which blocks
     // in `_accept_first_run_prompts` until the new pane renders a ready banner
     // — a COLD Claude Code start in a fresh workspace HOME, which on the live
@@ -116,6 +121,13 @@ describe('per-verb timeouts', () => {
     // cover. A verb whose worst case exceeds its budget should say so here.
     [['start', 'demo-quiet-basin'], 300_000],
     [['enable', 'demo-quiet-basin'], 300_000],
+    // D-7458: `ccd hibernate --roll` runs `cmd_ensure` inside the same verb, so it carries ensure's budget. At the flat
+    // 90 s a cold wake would be killed after the sleep, leaving the coordinator hibernated and the answer a failure.
+    [['hibernate', '--roll', 'project-a-quiet-basin', '--surface', 'agent', '--actor', 'sweep:roll'], 300_000],
+    // D-7541: only the roll carries that bound. A plain hibernate (the two sleep lanes) is a re-measure and a kill, and
+    // its lanes hold the coordination serialiser across the call, so it keeps the flat 90 s.
+    [['hibernate', 'project-a-quiet-basin', '--surface', 'agent', '--actor', 'sweep:hibernate'], 90_000],
+    [['hibernate', '--hold-ok', 'wave 3', 'project-a-quiet-basin'], 90_000],
     // The four Docs verbs (spec 2026-10-01 section 2 (a), Budgets): each outlasts ccd's own helper deadline plus
     // its 2 s kill grace plus 5 s, which `docs-budget.test.ts` holds against ccd's source. Without these rows a
     // missing entry silently inherits the flat 90 s and nothing here reds.

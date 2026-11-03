@@ -21,27 +21,20 @@ const seed = (dir: string, id: string, fields: Record<string, string>) => {
 const REGISTRY_CENSUS_TAG = 'registry-read-census';
 
 /**
- * One bare `field(`/`fieldMeasured(` call site is one registry read — except
- * the ONE call site that reads several files through
- * `ROUTE_WRITABLE_FIELDS.map((f) => fieldMeasured(...))` (routing slice 6,
- * Task 4 fix round 2, finding 3: one pass over the vocabulary instead of
- * `ROUTE_WRITABLE_FIELDS.length` hand-typed calls), which the bare regex
- * below sees as exactly ONE call but which fires `ROUTE_WRITABLE_FIELDS
- * .length` reads at runtime. Derived from the real constant, not a
- * hand-typed "5", so a change to the vocabulary's own size keeps this
- * census honest without a second edit here.
+ * One bare `field(`/`fieldMeasured(` call site in `buildRecord`'s `Promise.all` is one registry read that EVERY row
+ * pays. Since desktop polish C1 (D-6388) that is exactly four: the identity triple (`wrapper`, `workdir`, `uuid`) and
+ * `hold`. Every other field is read through `listedField` / `listedMeasured`, which read only a field the listing
+ * names, so they are not part of the cost every row pays: a row pays one read more for each other field it lists, and
+ * `registry-bounded-read.test.ts` measures that with a counting `FleetIO`. The helpers' names carry no bare
+ * `field(` / `fieldMeasured(` token, so this count sees exactly the unconditional reads (it used to subtract the
+ * listed-only ternaries and widen the one `ROUTE_WRITABLE_FIELDS.map` call to its five reads, D-5347). That widening
+ * is dropped because the route map now goes through `listedMeasured`; a bare `field(`/`fieldMeasured(` call inside a
+ * `.map(...)` over N fields would count as 1 here and must be widened again.
  */
 function buildRecordFieldReadCount(src: string): number {
   const body = src.match(/async function buildRecord\([\s\S]*?await Promise\.all\(\[([\s\S]*?)\n  \]\);/);
   expect(body, '`buildRecord` no longer has the one Promise.all this census measures').not.toBeNull();
-  const text = body![1]!;
-  const bareCalls = [...text.matchAll(/\bfield(?:Measured)?\(/g)].length;
-  const mapCalls = [...text.matchAll(/ROUTE_WRITABLE_FIELDS\.map\(/g)].length;
-  // A read guarded by the listing (`names.includes(...) ? field(...) :
-  // Promise.resolve(null)`, D-5237's `lastend`) fires only for a row whose
-  // listing names the file, so it is not part of the cost every row pays (D-5347).
-  const listedOnly = [...text.matchAll(/names\.includes\([^)]*\)\s*\?\s*field(?:Measured)?\(/g)].length;
-  return bareCalls + mapCalls * (ROUTE_WRITABLE_FIELDS.length - 1) - listedOnly;
+  return [...body![1]!.matchAll(/\bfield(?:Measured)?\(/g)].length;
 }
 
 function taggedRegistryCensusClaims(src: string): Map<string, number[]> {
@@ -80,7 +73,7 @@ describe('registry read census', () => {
       ['single', 1 + fieldReads],
       ['fleet', 1 + 24 * fieldReads],
     ]);
-    expect(expected).toEqual(new Map([['fields', 31], ['single', 32], ['fleet', 745]]));
+    expect(expected).toEqual(new Map([['fields', 4], ['single', 5], ['fleet', 97]]));
 
     const files = filesUnder(path.join(root, 'server'))
       .filter((file) => /\.(?:ts|js|mjs|cjs)$/.test(file));
@@ -676,8 +669,9 @@ describe('PR and archive fields', () => {
 });
 
 // C0.3: readSessionRecord is the SAME parser (buildRecord) as readRegistry,
-// narrowed to one id — one readdir plus that id's 31
-// [registry-read-census:fields] field reads instead of a whole-fleet sweep.
+// narrowed to one id — one readdir plus that id's 4
+// [registry-read-census:fields] unconditional reads (and one per other listed field)
+// instead of a whole-fleet sweep.
 // These pin that it agrees with readRegistry's own
 // per-record answer, id-by-id, rather than re-testing every field this file
 // already covers above.
@@ -769,9 +763,11 @@ describe('readSessionRecord', () => {
     expect(readdirCalls).toBe(1);
     // DERIVED, not typed: the census's own counter over `buildRecord`'s one
     // `Promise.all` (child-reclamation wave 2 moved it 30 -> 31 and found this
-    // second hard-coded copy by its red).
+    // second hard-coded copy by its red). Since D-6388 that counter is the reads every row pays
+    // (the identity triple and `hold`); the fixture lists one field beyond them (`project`), which is
+    // read once, and nothing else is read.
     expect(fieldReads).toHaveLength(buildRecordFieldReadCount(
-      readFileSync(path.resolve(import.meta.dirname, '..', 'src', 'registry.ts'), 'utf8')));
+      readFileSync(path.resolve(import.meta.dirname, '..', 'src', 'registry.ts'), 'utf8')) + 1);
     expect(fieldReads.every((p) => p.includes('claude-a-project-f'))).toBe(true);
   });
 

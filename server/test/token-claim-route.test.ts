@@ -13,6 +13,7 @@ import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { ClaimDoor } from '../src/token/door.js';
+import { mintClaimCode } from '../src/token/files.js';
 import type { TokenRouteDriver } from '../src/token/routes.js';
 import { BURNED_CODES_KEPT, BURNED_CODE_KEEP_MS, CLAIM_MISS_BUDGET, MAX_PENDING } from '../src/token/policy.js';
 import { CLAIM_BODY_LIMIT_BYTES, TOKEN_CLAIM_PATH, TOKEN_ROTATE_PATH, type BoxTokenView, type RotateAnswer } from '../../shared/box-token.js';
@@ -46,7 +47,7 @@ const fakeDriver = (): FakeDriver => {
   const warnings: string[] = [];
   const values = new Map([[GEN, VALUE], [GEN2, VALUE2]]);
   const d: FakeDriver = {
-    door: new ClaimDoor({ valueOf: (g) => values.get(g) ?? null, warn: (l) => warnings.push(l) }),
+    door: new ClaimDoor({ valueOf: (g) => values.get(g) ?? null, warn: (l) => warnings.push(l), mintClaimCode }),
     commits: [], failCommit: false, warnings,
     rotateAnswer: { ok: true, outcome: 'started', view: VIEW },
     async commitHandOut(generation, at) {
@@ -86,10 +87,12 @@ const DOOR_ALLOWED: Record<string, readonly string[]> = {
   // D-5896: `NODE_ID_RE` from its L0 home, so the door imports nothing from `../coord/store.js`, and no entry allows it.
   '../../../shared/agent-protocol.js': ['NODE_ID_RE', 'isClaimCode'],
   '../../../shared/box-token.js': ['ClaimRefusal'],
-  '../coord/token.js': ['matchDigestSlots'],
+  './digestSlots.js': ['matchDigestSlots'],
   './policy.js': ['BURNED_CODES_KEPT', 'CLAIM_ALERT_EVERY_MS', 'MAX_PENDING', 'claimVerdict', 'codeExpiresAt', 'keepBurned',
     'ClaimDoorState', 'ClaimMatch'],
-  './files.js': ['mintClaimCode'],   // a pure random-bytes mint: it writes nothing
+  // D-7505: the door takes nothing from `./files.js` (its mint comes through its options, `TokenStore#mintClaimCode`). The
+  // key stays, with an empty list, so a planted `./files.js` import reads as the name it takes (the F4 rows' sentences).
+  './files.js': [],
 };
 /** Every way `src` departs from the allowlist, as sentences (empty: the source conforms). */
 const doorImportViolations = (src: string): string[] => {
@@ -338,14 +341,14 @@ describe('POST /api/token/claim', () => {
 
 describe('ClaimDoor', () => {
   it('keeps only the sha256 of a code: neither the code nor the value is in its state', () => {
-    const d = new ClaimDoor({ valueOf: () => VALUE, warn: () => {} });
+    const d = new ClaimDoor({ valueOf: () => VALUE, warn: () => {}, mintClaimCode });
     const code = d.issue(GEN, NODE, 1_000);
     expect(JSON.stringify(d)).not.toContain(code);
     expect(JSON.stringify(d)).not.toContain(VALUE);
   });
 
   it('claimNow is ONE synchronous step: it answers a value, not a promise', () => {
-    const d = new ClaimDoor({ valueOf: () => VALUE, warn: () => {} });
+    const d = new ClaimDoor({ valueOf: () => VALUE, warn: () => {}, mintClaimCode });
     const code = d.issue(GEN, NODE, 1_000);
     const step = d.claimNow({ code, nodeId: NODE }, 1_001);
     expect(typeof (step as unknown as { then?: unknown }).then).toBe('undefined');
@@ -356,7 +359,7 @@ describe('ClaimDoor', () => {
     // Contract addition (marked): `compare` is injectable for this count only.
     let calls = 0;
     const compare = (a: Buffer, b: Buffer): boolean => { calls++; return timingSafeEqual(a, b); };
-    const d = new ClaimDoor({ valueOf: () => VALUE, warn: () => {}, compare });
+    const d = new ClaimDoor({ valueOf: () => VALUE, warn: () => {}, compare, mintClaimCode });
     const code = d.issue(GEN, NODE, 1_000);
     for (const body of [{ code: JUNK(3), nodeId: NODE }, { code, nodeId: NODE }, { code, nodeId: NODE }]) {
       const before = calls;
@@ -370,7 +373,7 @@ describe('ClaimDoor', () => {
   });
 
   it('holds at most two live codes, a re-issue for the same generation replaces its code, and revoke drops one', () => {
-    const d = new ClaimDoor({ valueOf: (g) => (g === GEN ? VALUE : VALUE2), warn: () => {} });
+    const d = new ClaimDoor({ valueOf: (g) => (g === GEN ? VALUE : VALUE2), warn: () => {}, mintClaimCode });
     const first = d.issue(GEN, NODE, 1_000);
     const second = d.issue(GEN, NODE, 1_000);
     expect(second).not.toBe(first);
@@ -383,7 +386,7 @@ describe('ClaimDoor', () => {
 
   it('warns on a miss at most once a minute, with the count, and never prints a code', () => {
     const lines: string[] = [];
-    const d = new ClaimDoor({ valueOf: () => VALUE, warn: (l) => lines.push(l) });
+    const d = new ClaimDoor({ valueOf: () => VALUE, warn: (l) => lines.push(l), mintClaimCode });
     for (let i = 0; i < 5; i++) d.claimNow({ code: JUNK(i), nodeId: NODE }, 1_000 + i);
     expect(lines).toHaveLength(1);
     d.claimNow({ code: JUNK(9), nodeId: NODE }, 1_000 + 60_000);
@@ -393,7 +396,7 @@ describe('ClaimDoor', () => {
   });
 
   it('a burned code ages out by A6\'s keepBurned: after BURNED_CODE_KEEP_MS a replay is a miss, not a code-used', () => {
-    const d = new ClaimDoor({ valueOf: () => VALUE, warn: () => {} });
+    const d = new ClaimDoor({ valueOf: () => VALUE, warn: () => {}, mintClaimCode });
     const code = d.issue(GEN, NODE, 1_000);
     expect(d.claimNow({ code, nodeId: NODE }, 1_001)).toMatchObject({ status: 200 });
     expect(d.claimNow({ code, nodeId: NODE }, 1_002)).toMatchObject({ status: 410, error: 'code-used' });
@@ -404,7 +407,7 @@ describe('ClaimDoor', () => {
     const LINE = /^ccrc-server: box token: /;
     const rig = () => {
       const lines: string[] = [];
-      const d = new ClaimDoor({ valueOf: () => VALUE, warn: (l) => lines.push(l) });
+      const d = new ClaimDoor({ valueOf: () => VALUE, warn: (l) => lines.push(l), mintClaimCode });
       return { d, lines };
     };
 
@@ -456,7 +459,7 @@ describe('ClaimDoor', () => {
 
     it('no-claim (a live code naming a generation the server no longer holds) names the word, the generation and both nodes (F11)', () => {
       const lines: string[] = [];
-      const d = new ClaimDoor({ valueOf: () => null, warn: (l) => lines.push(l) });
+      const d = new ClaimDoor({ valueOf: () => null, warn: (l) => lines.push(l), mintClaimCode });
       const code = d.issue(GEN, NODE, 1_000);
       expect(d.claimNow({ code, nodeId: NODE }, 1_001)).toMatchObject({ status: 404, error: 'no-claim', generation: GEN });
       expect(lines).toHaveLength(1);
@@ -505,7 +508,8 @@ describe('ClaimDoor', () => {
 
   it('door.ts imports an ALLOWLIST of names, so no import can persist a code (F6)', () => {
     const src = readFileSync(path.join(here, '..', 'src', 'token', 'door.ts'), 'utf8');
-    expect(importsOf(src).length, 'the scan parsed the import statements of door.ts').toBeGreaterThan(5);
+    expect(importsOf(src).map((i) => i.spec).sort(), 'the scan parsed the import statements of door.ts').toEqual(['../../../shared/agent-protocol.js',
+      '../../../shared/box-token.js', './digestSlots.js', './policy.js', 'node:crypto']);
     expect(doorImportViolations(src)).toEqual([]);
   });
 
@@ -531,8 +535,8 @@ describe('ClaimDoor', () => {
     it.each([
       ['an indented import', `${real}\n  import { writeState } from './files.js';\n`],
       ['a tab-indented import', `${real}\n\timport { writeState } from './files.js';\n`],
-      ['a second import after a `;` on one line', real.replace("import { mintClaimCode } from './files.js';",
-        "import { mintClaimCode } from './files.js'; import { writeState } from './files.js';")],
+      ['a second import after a `;` on one line', real.replace("import type { ClaimRefusal } from '../../../shared/box-token.js';",
+        "import type { ClaimRefusal } from '../../../shared/box-token.js'; import { writeState } from './files.js';")],
       ['an import after a `}` on one line', `${real}\nfunction f() {} import { writeState } from './files.js';\n`],
       ['an import behind a block comment', `${real}\n/* x */ import { writeState } from './files.js';\n`],
     ])('%s', (_name, planted) => {

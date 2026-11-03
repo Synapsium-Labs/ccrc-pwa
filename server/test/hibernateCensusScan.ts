@@ -1,5 +1,5 @@
 // The hibernation census's DERIVATION (D-5242, plan Task 17b): every reader in the server tree, `shared` and the PWA
-// that can call a session dead, found by scanning for five things — never listed by hand. `hibernate-census.test.ts`
+// that can call a session dead, found by scanning for six things — never listed by hand. `hibernate-census.test.ts`
 // holds the stance table against this scan.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const CENSUS_ROOTS = ['server/src', 'shared', 'pwa/src'] as const;
 
-/** The five sources (spec §5.11's census, plan Task 17b), each one pattern over comment- and import-stripped source. */
+/** The six sources (spec §5.11's census, plan Task 17b; the sixth, D-7181), each one pattern over comment- and import-stripped source. */
 export const CENSUS_SOURCES = {
   /** 1. a reader of `lifecycleIsDead` or `DEAD_LIFECYCLES` (and `isDeadLifecycle`, the reclaim ladder's alias of it). */
   'dead-lifecycle': /\b(?:lifecycleIsDead|DEAD_LIFECYCLES|isDeadLifecycle)\b/g,
@@ -23,9 +23,17 @@ export const CENSUS_SOURCES = {
    *  lifecycle word at all — and of the two local names the PWA keeps for them (`SessionHeader`'s `st`, the coordinator
    *  `presence` derived from it). */
   'dead-compare': /\b(?:status|bucket|effectiveStatus|st|presence)\s*[!=]==\s*'dead'|'dead'\s*[!=]==\s*[\w.?]*\b(?:status|bucket|effectiveStatus|st|presence)\b/g,
+  /** 6. a PWA reader of the server's presence (D-7181, Task C7c exception 4): a call of `presenceOf(` or
+   *  `coordinatorPresence(`, and of `paneGone(`, the one pane predicate OA-C15 (a) keeps for a site that only words
+   *  what the pane shows, so a site that asks presence instead of comparing a status with
+   *  `'dead'` is still a reader with a stance. `pwa/src` only (`CENSUS_SCOPES`): `server/src/sessionReading.ts` has a
+   *  private ladder function of the same name, held through that file's own rows. */
+  'presence-reader': /\b(?:presenceOf|coordinatorPresence|paneGone)\(/g,
 } as const;
 export type CensusSource = keyof typeof CENSUS_SOURCES;
 export const CENSUS_SOURCE_NAMES = Object.keys(CENSUS_SOURCES) as CensusSource[];
+/** A source read under one root only (the others read every root). */
+export const CENSUS_SCOPES: Partial<Record<CensusSource, string>> = { 'presence-reader': 'pwa/src/' };
 
 /** Source text with comments and import/re-export statements removed: a name in a comment or an import reads nothing. */
 export function stripForCensus(text: string): string {
@@ -59,6 +67,8 @@ export function censusScan(files: readonly CensusFile[]): Map<string, number> {
   for (const f of files) {
     const text = stripForCensus(f.text);
     for (const k of CENSUS_SOURCE_NAMES) {
+      const scope = CENSUS_SCOPES[k];
+      if (scope !== undefined && !f.rel.startsWith(scope)) continue;
       const n = (text.match(CENSUS_SOURCES[k]) ?? []).length;
       if (n > 0) out.set(`${k} ${f.rel}`, n);
     }

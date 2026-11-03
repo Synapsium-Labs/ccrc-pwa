@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 import { COL_ID, type Orphan, makeOrphan, regOf, witnessOf } from './wsCollectFixture.js';
 import { LINUX, NO_COPY, ROOT_USER } from './collectRaceFixture.js';
 
@@ -64,7 +64,7 @@ describe('_ws_collect_aside_id: a `.<id>.drop.<pid>` name, parsed EXACTLY (path-
   });
 
   it('its body holds ONE re=\'…\', the grammar the server’s lane is held equal to', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const at = src.indexOf('\n_ws_collect_aside_id() {');
     expect(at, '_ws_collect_aside_id is defined in ccd/ccd').toBeGreaterThan(-1);
     const body = src.slice(at, src.indexOf('\n}\n', at));
@@ -80,7 +80,7 @@ describe('_ws_tmproot_aside_path: the ONE composer of an aside’s name (path-id
   });
 
   it('is the only spelling of an aside’s name in ccd’s code, braced as the id-cap census reads it', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();
     const def = [...src.matchAll(/^_ws_tmproot_aside_path\(\) \{.*$/gm)].map((m) => m[0]);
     expect(def, 'one definition, on one line').toHaveLength(1);
     expect(def[0], 'the braces are what ccd-id-cap’s census reads').toContain('printf \'%s\' "$REG/tmproots/.${id}.drop.${pid}"');

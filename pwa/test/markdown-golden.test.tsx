@@ -37,7 +37,7 @@ const html = (c: CorpusCase): string =>
 /** The recap's Markdown body renders only once the card is opened, so it goes through the DOM and a click. */
 function openedRecap(): string {
   const { container } = render(
-    <MessageBubble id="s" event={{ kind: 'assistant', uuid: 'g-recap', ts: TS, text: RECAP_CASE.text }} />,
+    <MessageBubble id="s" event={{ kind: 'assistant', uuid: 'g-recap', ts: TS, text: RECAP_CASE.text, ...(RECAP_CASE.compaction === true ? { compaction: true } : {}) }} />,
   );
   fireEvent.click(screen.getByRole('button', { name: /Context compacted/ }));
   expect(container.querySelector('.compaction-body.msg-assist')).not.toBeNull();

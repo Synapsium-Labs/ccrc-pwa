@@ -17,10 +17,13 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/auth/gate.ts': { reason: "the gate: one onRequest hook in front of every route", since: '2026-10-20' },
   'server/src/auth/stepup.ts': { reason: "step-up auth: reads the request's cookie and answers on the reply", since: '2026-10-20' },
   'server/src/accounts/gate.ts': { reason: "the accounts routes' gate: reads the request's session and answers on the reply", since: '2026-10-20' },
+  'server/src/accounts/routes.ts': { reason: "the accounts context's HTTP routes: Check and the kill switch (D-7732), and the write routes (D-7739)", since: '2026-11-01' },
   'server/src/coord/routes.ts': { reason: "the coordination context's HTTP routes", since: '2026-10-20' },
+  'server/src/coord/ledgersRoutes.ts': { reason: "the programme ledgers' coordinator HTTP routes (PL3)", since: '2026-11-01' },
   'server/src/docs/routes.ts': { reason: "the docs context's HTTP routes", since: '2026-10-20' },
   'server/src/docs/hooks.ts': { reason: "the docs plugin's request and response hooks (L4 by its header)", since: '2026-10-20' },
   'server/src/token/routes.ts': { reason: "the box token's HTTP routes", since: '2026-10-20' },
   'server/src/linear/routes.ts': { reason: "the Linear connection's HTTP routes (the ticket-title preview read)", since: '2026-10-20' },
+  'server/src/linear/proxyRoutes.ts': { reason: "the Linear proxy's box-token HTTP routes", since: '2026-11-02' },
   'server/src/update/routes.ts': { reason: "the update control plane's HTTP routes", since: '2026-10-20' },
 };
