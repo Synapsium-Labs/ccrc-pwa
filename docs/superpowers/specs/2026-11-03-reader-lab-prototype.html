@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reader lab prototype</title>
+<style>
+:root {
+  --bg: #f6f6f3; --panel: #ffffff; --ink: #1d1d1b; --muted: #66665f; --line: #deded8;
+  --accent: #2f5fd0; --ok: #1f7a3f; --ok-bg: #e4f3e8; --bad: #b3261e; --bad-bg: #fbe7e5;
+  --warn: #8a5a00; --warn-bg: #fdf1d8; --run: #2f5fd0; --run-bg: #e6edfb; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --phone: #11110f;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161614; --panel: #1f1f1d; --ink: #ecebe6; --muted: #a3a29a; --line: #34342f;
+    --accent: #8fb0ff; --ok: #7ed39a; --ok-bg: #1d3325; --bad: #ff8a80; --bad-bg: #3a1f1d;
+    --warn: #f3c46b; --warn-bg: #3a2f17; --run: #8fb0ff; --run-bg: #1f2a44; --phone: #000;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1180px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 26px; margin: 0 0 4px; }
+h2 { font-size: 19px; margin: 36px 0 8px; }
+p, li { max-width: 72ch; }
+.sub { color: var(--muted); margin: 0 0 20px; }
+.note { border-left: 3px solid var(--accent); padding: 8px 12px; background: var(--panel); border-radius: 4px; max-width: 80ch; }
+.phones { display: flex; flex-wrap: wrap; gap: 28px; margin-top: 16px; }
+.phone-wrap { display: flex; flex-direction: column; gap: 8px; }
+.phone-cap { font-weight: 600; font-size: 14px; }
+.phone { width: 340px; max-width: 100%; border: 10px solid var(--phone); border-radius: 34px; background: var(--panel); overflow: hidden; }
+.bar { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); font-weight: 600; }
+.bar .back { color: var(--accent); font-weight: 400; }
+.screen { padding: 14px; display: flex; flex-direction: column; gap: 12px; min-height: 600px; font-size: 14px; }
+.intro { color: var(--muted); margin: 0; }
+.device { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.btn { display: inline-block; border: 1px solid var(--accent); color: var(--accent); background: transparent; border-radius: 10px; padding: 10px 16px; font: inherit; font-weight: 600; min-height: 44px; }
+.btn.primary { background: var(--accent); color: var(--panel); }
+.btn[disabled] { opacity: .45; }
+.group { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.group h3 { margin: 0; font-size: 13px; padding: 8px 10px; background: var(--bg); border-bottom: 1px solid var(--line); }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.row:last-child { border-bottom: 0; }
+.row .what { flex: 1; }
+.row .what small { display: block; color: var(--muted); font-size: 12px; }
+.chip { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.chip.ok { color: var(--ok); background: var(--ok-bg); }
+.chip.bad { color: var(--bad); background: var(--bad-bg); }
+.chip.warn { color: var(--warn); background: var(--warn-bg); }
+.chip.run { color: var(--run); background: var(--run-bg); }
+.chip.wait { color: var(--muted); background: var(--bg); border: 1px solid var(--line); }
+.progress { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; }
+.progress > i { display: block; height: 100%; width: 46%; background: var(--accent); }
+.heart { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.verdict { border-radius: 10px; padding: 10px 12px; background: var(--warn-bg); color: var(--warn); font-weight: 600; }
+pre.result { margin: 0; font-family: var(--mono); font-size: 11.5px; line-height: 1.45; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; white-space: pre-wrap; }
+table { border-collapse: collapse; width: 100%; max-width: 1100px; background: var(--panel); }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+th { font-size: 13px; color: var(--muted); }
+code { font-family: var(--mono); font-size: 13px; }
+.steps li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<main>
+<h1>Reader lab (prototype)</h1>
+<p class="sub">A proposal for W8b: one console page that runs the Docs reader's phone checks, E17 and E18 from the rich-docs spec, on whatever phone opens it. This is a static mockup. Nothing here runs, and every number on it is an example.</p>
+
+<div class="note">
+<p><strong>Why a page.</strong> E17 and E18 must run on your phone's browser engine. They need a busy-loop frame, a planted hostile frame and a cookie probe, and none of that can be put in an ordinary doc. Today the only alternative is you running developer tools on the phone. With the page, you open one link, tap Start, wait about two minutes, then copy the result and send it to me.</p>
+</div>
+
+<h2>The page, on a phone</h2>
+<p>It lives under Settings, beside "Measure highlighting" (<code>/settings/reader-lab</code>, also on the command palette as "Go to Settings › Reader lab"). Like that page, it stores nothing, sends nothing and writes no clipboard; you select the result yourself.</p>
+
+<div class="phones">
+
+  <div class="phone-wrap">
+    <div class="phone-cap">1. Before you start</div>
+    <div class="phone"><div class="bar"><span class="back">‹ Settings</span><span>Reader lab</span></div>
+    <div class="screen">
+      <p class="intro">Checks the Docs reader's safety walls and responsiveness on this device, once. Keep the screen on and the app in front until it says Done. Then select the result and copy it, or take a screenshot, and send it on. It saves and sends nothing itself.</p>
+      <div class="device">Engine: WebKit (iOS 19)<br>Worker: yes · srcdoc sandbox: yes<br>Reader library: 1.0.1 (pinned)</div>
+      <div class="group"><h3>Walls (E18): 7 checks</h3>
+        <div class="row"><span class="what">Opaque origin</span><span class="chip wait">not run</span></div>
+        <div class="row"><span class="what">No cookie on frame requests</span><span class="chip wait">not run</span></div>
+        <div class="row"><span class="what">Frame CSP, 27 channels</span><span class="chip wait">not run</span></div>
+        <div class="row"><span class="what">…4 more</span><span class="chip wait">not run</span></div>
+      </div>
+      <div class="group"><h3>Stays responsive (E17): 2 checks</h3>
+        <div class="row"><span class="what">Busy frame</span><span class="chip wait">not run</span></div>
+        <div class="row"><span class="what">Heavy Mermaid page</span><span class="chip wait">not run</span></div>
+      </div>
+      <div><button class="btn primary">Start</button></div>
+    </div></div>
+  </div>
+
+  <div class="phone-wrap">
+    <div class="phone-cap">2. Running</div>
+    <div class="phone"><div class="bar"><span class="back">‹ Settings</span><span>Reader lab</span></div>
+    <div class="screen">
+      <div class="progress"><i></i></div>
+      <div class="heart">console heartbeat: 812 ticks · longest gap 14 ms</div>
+      <div class="group"><h3>Walls (E18)</h3>
+        <div class="row"><span class="what">Opaque origin<small>parent, cookie, storage, IndexedDB</small></span><span class="chip ok">holds</span></div>
+        <div class="row"><span class="what">No cookie on frame requests<small>fetch, XHR, beacon, WebSocket, image</small></span><span class="chip ok">holds</span></div>
+        <div class="row"><span class="what">Frame CSP, 27 channels<small>the real library and Mermaid running</small></span><span class="chip ok">0 / 27 reached</span></div>
+        <div class="row"><span class="what">No popup, no top navigation</span><span class="chip ok">holds</span></div>
+        <div class="row"><span class="what">Frame cannot navigate itself</span><span class="chip run">running…</span></div>
+        <div class="row"><span class="what">No ambient state</span><span class="chip wait">waiting</span></div>
+        <div class="row"><span class="what">Bridge ignores stray messages</span><span class="chip wait">waiting</span></div>
+      </div>
+      <div class="group"><h3>Stays responsive (E17)</h3>
+        <div class="row"><span class="what">Busy frame</span><span class="chip wait">waiting</span></div>
+        <div class="row"><span class="what">Heavy Mermaid page</span><span class="chip wait">waiting</span></div>
+      </div>
+      <div><button class="btn">Stop</button></div>
+    </div></div>
+  </div>
+
+  <div class="phone-wrap">
+    <div class="phone-cap">3. Done (example: walls hold, the frame shares the thread)</div>
+    <div class="phone"><div class="bar"><span class="back">‹ Settings</span><span>Reader lab</span></div>
+    <div class="screen">
+      <div class="group"><h3>Walls (E18): 7 of 7 hold, as on desktop</h3>
+        <div class="row"><span class="what">Opaque origin</span><span class="chip ok">holds</span></div>
+        <div class="row"><span class="what">No cookie on frame requests</span><span class="chip ok">holds</span></div>
+        <div class="row"><span class="what">Frame CSP, 27 channels<small>the <code>csp</code> attribute is Chromium-only; the meta carried it</small></span><span class="chip ok">0 / 27 reached</span></div>
+        <div class="row"><span class="what">No popup, no top navigation</span><span class="chip ok">holds</span></div>
+        <div class="row"><span class="what">Frame cannot navigate itself</span><span class="chip ok">holds</span></div>
+        <div class="row"><span class="what">No ambient state</span><span class="chip ok">holds</span></div>
+        <div class="row"><span class="what">Bridge ignores stray messages</span><span class="chip ok">holds</span></div>
+      </div>
+      <div class="group"><h3>Stays responsive (E17)</h3>
+        <div class="row"><span class="what">Busy frame (3 s loop)<small>frame shares the console's thread; watchdog fired only after the loop</small></span><span class="chip bad">console froze 3.0 s</span></div>
+        <div class="row"><span class="what">Heavy Mermaid page (6 figures)<small>longest console stall while drawing</small></span><span class="chip warn">420 ms</span></div>
+      </div>
+      <div class="verdict">Mermaid auto-draw: keep it on tap on this phone.</div>
+      <pre class="result">reader-lab 1 · WebKit (iOS 19) · library 1.0.1
+E18 walls: 7/7 hold (desktop Chromium 7/7)
+  opaque-origin      holds
+  no-cookie          holds
+  csp-27             0/27 (csp attr unsupported)
+  no-popup-top-nav   holds
+  no-self-navigate   holds
+  no-ambient-state   holds
+  bridge-strays      holds
+E17 responsive:
+  shared-thread      yes
+  busy-frame         stall 3010 ms, watchdog after loop
+  mermaid-6          stall max 420 ms
+verdict: mermaid stays on tap</pre>
+      <div><button class="btn">Select result</button></div>
+    </div></div>
+  </div>
+
+</div>
+
+<h2>What it runs</h2>
+<table>
+<thead><tr><th>Check</th><th>Spec row</th><th>What it does on the phone</th><th>A pass means</th></tr></thead>
+<tbody>
+<tr><td>Opaque origin</td><td>lab 1-2, M8.B3</td><td>A reader frame tries to read the console, <code>document.cookie</code>, storage, IndexedDB and caches</td><td>Every read throws or is empty</td></tr>
+<tr><td>No cookie on frame requests</td><td>M8.B2</td><td>The frame calls <code>/api/docs/…</code> by fetch with credentials, XHR, beacon, WebSocket and an image; the server counts which requests carried the session</td><td>None carried it</td></tr>
+<tr><td>Frame CSP, 27 channels</td><td>M8.B1 (E15)</td><td>The 27-channel exfiltration battery, with the real library and Mermaid running, against two listener addresses</td><td>0 of 27 reached either</td></tr>
+<tr><td>No popup, no top navigation</td><td>M8.B4, E1</td><td><code>window.open</code>, <code>top.location=</code>, <code>target=_blank</code></td><td>All inert</td></tr>
+<tr><td>Frame cannot navigate itself</td><td>E11</td><td>The frame tries to load another document; the console watches for a second <code>load</code></td><td>Blocked, and the port closes</td></tr>
+<tr><td>Bridge ignores stray messages</td><td>M8.B5</td><td>Oversize, unknown, early and <code>parent.postMessage</code> ops</td><td>None takes effect</td></tr>
+<tr><td>Busy frame</td><td>E17</td><td>A frame spins for 3 s while the console ticks a 50 ms heartbeat</td><td>The heartbeat never stalls past the watchdog budget, so auto-draw is safe</td></tr>
+<tr><td>Heavy Mermaid page</td><td>E17</td><td>Draws the six figures of the path-identity spec one by one, timing the console's longest stall</td><td>Under the frame budget</td></tr>
+</tbody>
+</table>
+
+<h2>What it would cost</h2>
+<ul>
+<li><strong>Where it lands:</strong> W8b, beside the W8a residue. It is a page plus a small test-only server door that counts which lab requests carried the session. The door is off unless the page is open and the request carries a per-run nonce. That door is the one part that needs a security review.</li>
+<li><strong>Size:</strong> about the size of the highlighting measurement page (one screen, one driver, fixtures), plus the planted frames the browser tests already have, reused.</li>
+<li><strong>Beside it:</strong> CI also runs the same batteries on Playwright's WebKit and Firefox as proxies. They catch engine differences early, but they are not your phone, so they do not replace E18's retirement-gate run.</li>
+<li><strong>If you would rather not have the page:</strong> E17 and E18 stay manual. You would run developer tools on the phone with a fixture page from me, which is slow and easy to get wrong.</li>
+</ul>
+
+<h2>What you would do</h2>
+<ol class="steps">
+<li>Open Settings › Reader lab on the phone you read on.</li>
+<li>Tap Start and keep the app in front for about two minutes.</li>
+<li>Tap Select result, copy, and send it to me. Repeat on any other phone or browser you use.</li>
+</ol>
+</main>
+</body>
+</html>
