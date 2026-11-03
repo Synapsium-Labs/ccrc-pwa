@@ -40,10 +40,10 @@ export function seamHook(dir: string, fn: string, v: string): { file: string; re
 }
 
 /** A BASH_ENV file that defines `_w4_seam`. Each call counts itself in `$HOME/w4-seam-n`. On call number `at` it
- *  creates (`: >> "$1"`) or removes (`rm -f -- "$1"`) the path, then prints the path. */
-export function seamEnv(home: string, at: number, move: 'create' | 'remove'): Record<string, string> {
-  const file = path.join(home, `w4-seam-env-${move}-${at}.bash`);
-  const act = move === 'create' ? ': >> "$1"' : 'rm -f -- "$1"';
+ *  creates the path (`: >> "$1"`), then prints the path. */
+export function seamEnv(home: string, at: number): Record<string, string> {
+  const file = path.join(home, `w4-seam-env-create-${at}.bash`);
+  const act = ': >> "$1"';
   fs.writeFileSync(file, [
     '_w4_seam() {',
     '  local n=0',
@@ -64,11 +64,12 @@ export function seamCount(home: string): number {
   return fs.existsSync(f) ? Number(fs.readFileSync(f, 'utf8').trim()) : 0;
 }
 
-/** W4-H3's source pin, for `fn`'s guard on `$${v}`: the guard line refuses with `ret`, applies each of `-L -d -p -S -b -c` to
- *  `"$${v}"`, holds no `-f`, no `! -e` and no negated type test, and no code line between the function's opening and its write
- *  (`${op} "$${v}"`) holds `-f "$${v}"` or `! -e "$${v}"`. Returns the failures, empty when the pin holds. Throws when it
- *  finds no guard line or no write line, as `seamHook` does, so it can never pass vacuously. */
-export function guardPin(fn: string, v: string, ret: string, op: '>>' | '>'): string[] {
+/** The positive-form source pin, for `fn`'s guard on `$${v}`: the guard line refuses with `ret`, applies each of
+ *  `-L -d -p -S -b -c` to `"$${v}"`, holds no `-f`, no `! -e` and no negated type test, and no code line between the function's
+ *  opening and its write (`> "$${v}"`) holds `-f "$${v}"` or `! -e "$${v}"`. Returns the failures, empty when the pin holds.
+ *  Throws when it finds no guard line or no write line, as `seamHook` does, so it can never pass vacuously. */
+export function guardPin(fn: string, v: string, ret: string): string[] {
+  const op = '>';
   const hook = path.resolve(__dirname, '../../ccd/session-hook.sh');
   const src = fs.readFileSync(hook, 'utf8').split('\n');
   const { open, at } = guardLine(src, fn, v);

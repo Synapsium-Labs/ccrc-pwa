@@ -11527,7 +11527,7 @@ describe('W4-H: the scope marker\'s guard refuses only a positive non-regular ty
     for (let k = 1; k <= reads; k += 1) {
       fs.rmSync(marker(), { force: true }); fs.rmSync(path.join(home, 'w4-seam-n'), { force: true });
       const r = spawnSync('bash', [file], {
-        input: JSON.stringify(pre(transcript)), encoding: 'utf8', env: hookEnv({ ...HISTORY_HOOK_SCRUB, ...seamEnv(home, k, 'create') }), timeout: 60_000,
+        input: JSON.stringify(pre(transcript)), encoding: 'utf8', env: hookEnv({ ...HISTORY_HOOK_SCRUB, ...seamEnv(home, k) }), timeout: 60_000,
       });
       expect(r.status, `k=${k}: exit 0`).toBe(0);
       expect(seamCount(home), `k=${k}: the seam fired at read ${k}`).toBeGreaterThanOrEqual(k);
@@ -11537,6 +11537,6 @@ describe('W4-H: the scope marker\'s guard refuses only a positive non-regular ty
 
   it('W4-H7: the scope guard tests a positive type (-L -d -p -S -b -c) and returns 0; no two-read shape stands before the write', async () => {
     const { guardPin } = await import('./hookGuardSeam.js');
-    expect(guardPin('_hook_history_scope', 'f', 'return 0', '>')).toEqual([]);
+    expect(guardPin('_hook_history_scope', 'f', 'return 0')).toEqual([]);
   });
 });

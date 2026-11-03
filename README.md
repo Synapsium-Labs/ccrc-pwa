@@ -1279,8 +1279,8 @@ when the recorded role is `fleet`) — on macOS it tails the LaunchAgent's `~/.c
 passed through. `ccrc uninstall` takes the box off ccrc and leaves reinstall safe: it refuses while live sessions
 exist, and while an update holds `~/.ccrc/update.lock` or that lock cannot be measured (`--force` passes both;
 D-3453), removes the units (every enabled `ccrc-codex-usage@<id>.timer` disabled first, while its template is still on
-disk; another tool's `ccgpt-usage@` units are never touched), ccrc's managed settings.json hook entries (per-file
-backup; unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts inside
+disk; another tool's `ccgpt-usage@` units are never touched), ccrc's own hook command from settings.json (per-file
+backup; each entry keeps its matcher and every other hook), marker-verified wrappers only, ccrc's own artifacts inside
 `~/.cc-sessions` file-by-file, `~/ccrc`, a staged `~/ccrc.new` link (D-3452), every kept tree under `~/ccrc-versions`
 and a leftover `~/ccrc.migrating`, and the installed executables — and preserves `~/.ccrc` (less the node's
 install-state files — `installed`, `node-id`, `ccrc-caps`, `floor`, `previous`, `install-step`, `update.json`,
