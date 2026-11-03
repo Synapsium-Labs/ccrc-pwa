@@ -20,7 +20,7 @@ import { BareRow, Door, Icon, useNow } from '@ccrc/ui';
 import type { RunSummary } from '../../../shared/api';
 import { programmeWaitingCount } from '../ledgers/ledgerWords';
 import { navigate } from '../lib/router';
-import { programmePath } from '../lib/routes';
+import { programmeIsOpenable, programmePath } from '../lib/routes';
 import { useFleetStore } from '../stores/fleet';
 import { badgePrint } from './navBadges';
 import { fleetRowKey, type FleetRow } from './nestFleet';
@@ -50,8 +50,14 @@ function WaitingChip({ slug, title }: { slug: string; title: string }): ReactNod
     programmeWaitingCount(s.waiting, s.fleetFrameSeen ? s.sessions : null, s.runsFrameSeen ? s.runs : null, slug));
   if (count === 0) return null;
   const words = waitingChipWords(count);
+  // A slug the programme view would refuse (a name the route cannot carry) is told as a plain count, never a dead door.
+  if (!programmeIsOpenable(slug)) return <span className="pg-waiting-plain">{words}</span>;
+  // The accessible name carries the real number, as every navigation badge's does (`navBadges.ts`); the figure drawn is capped.
   return (
-    <Door className="pg-waiting" glyph="›" aria-label={`${words}: open ${title}`} onClick={() => navigate(programmePath(slug))}>
+    <Door
+      className="pg-waiting" glyph="›" aria-label={`${count} waiting on you: open ${title}`}
+      onClick={() => navigate(programmePath(slug))}
+    >
       {words}
     </Door>
   );

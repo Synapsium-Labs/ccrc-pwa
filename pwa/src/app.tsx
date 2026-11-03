@@ -25,7 +25,7 @@ import { FleetChromeProvider } from './fleet/FleetChrome';
 import { FleetFlows, useFleetFlows } from './fleet/FleetFlows';
 import { useAuthLost } from './lib/auth';
 import { navigate, useLocation } from './lib/router';
-import { matchRoute, sessionPath } from './lib/routes';
+import { isProgrammeSlug, matchRoute, sessionPath } from './lib/routes';
 import { useSkin } from './lib/skin';
 import { AccountsScreen } from './screens/AccountsScreen';
 import { ArchiveScreen } from './screens/ArchiveScreen';
@@ -167,8 +167,9 @@ export function App(): ReactNode {
     <WaitingRoute />
   ) : route === 'item' ? (
     <ItemRouteAt param={at!.param} />
-  ) : route === 'programme' ? (
-    // Keyed by the slug: one programme's Goals read never shows under another's name.
+  ) : route === 'programme' && isProgrammeSlug(at!.param!) ? (
+    // Keyed by the slug: one programme's Goals read never shows under another's name. A slug the server would refuse
+    // (`shapeProgramSlug`) falls to the placeholder below, as an unknown path does.
     <ProgrammeScreen key={at!.param} slug={at!.param!} />
   ) : (
     <div className="shell-placeholder">

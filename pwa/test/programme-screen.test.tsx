@@ -8,7 +8,8 @@ import type { GoalsView } from '../../shared/ledgers';
 import { WAITS_ON_WORDS } from '../../shared/ledgers';
 import { ApiError } from '../src/lib/apiError';
 import { api } from '../src/lib/api';
-import { ROUTES, matchRoute, programmePath } from '../src/lib/routes';
+import { PROGRAM_SLUG_MAX_CHARS } from '../../shared/api';
+import { ROUTES, isProgrammeSlug, matchRoute, programmeIsOpenable, programmePath } from '../src/lib/routes';
 import { ProgrammeScreen } from '../src/ledgers/ProgrammeScreen';
 import { itemPath } from '../src/ledgers/WaitingRoutes';
 import { createFleetStore } from '../src/stores/fleet';
@@ -46,9 +47,26 @@ describe('the programme route', () => {
     expect(at?.route.id).toBe('programme');
     expect(at?.param).toBe('prog-a');
     expect(matchRoute('/programmes/prog-a/')?.param).toBe('prog-a');
-    for (const bad of ['/programmes', '/programmes/', '/programmes/Prog-A', '/programmes/-a', '/programmes/a/b', '/programmesx/a', '/programme/a']) {
+    for (const bad of ['/programmes', '/programmes/', '/programmes/a/b', '/programmesx/a', '/programme/a']) {
       expect(matchRoute(bad)?.route.id, bad).not.toBe('programme');
     }
+  });
+
+  it('takes the owner\'s slug grammar (`shapeProgramSlug`): upper case, underscores and a leading dash are programme slugs too', () => {
+    for (const slug of ['Build_4', 'pA', 'Prog-A', '-a', 'build_4-name', 'a1-b2']) {
+      expect(isProgrammeSlug(slug), slug).toBe(true);
+      expect(programmeIsOpenable(slug), slug).toBe(true);
+      expect(matchRoute(programmePath(slug))?.route.id, slug).toBe('programme');
+      expect(matchRoute(programmePath(slug))?.param, slug).toBe(slug);
+    }
+  });
+
+  it('refuses what the owner refuses: a dot, a space, a slash, an empty slug or one past the length cap', () => {
+    for (const slug of ['a.b', 'a b', 'a/b', ' a', 'a ', '', 'é', 'a'.repeat(PROGRAM_SLUG_MAX_CHARS + 1)]) {
+      expect(isProgrammeSlug(slug), JSON.stringify(slug)).toBe(false);
+      expect(programmeIsOpenable(slug), JSON.stringify(slug)).toBe(false);
+    }
+    expect(isProgrammeSlug('a'.repeat(PROGRAM_SLUG_MAX_CHARS))).toBe(true);
   });
 
   it('is a page under the fleet, not a place of its own: no tab, and no "Go to" command', () => {
@@ -75,13 +93,17 @@ describe('the programme view: the head', () => {
     expect(location.pathname).toBe('/');
   });
 
-  it('says the programme has ended once the runs frame holds none open, and not before it has been heard', () => {
+  it('says the programme has no open run once, in the card, and not before the runs have been heard', () => {
     const store = heard({ runs: [runRow({ id: 1, program: 'prog-a', state: 'done' })] });
     const view = render(<ProgrammeScreen slug="prog-a" store={store} />);
-    expect(screen.getByText(WAITS_ON_WORDS.ended, { selector: '[data-ended]' })).toBeTruthy();
+    expect(screen.getByText('Nothing needs you. The programme has no open run.')).toBeTruthy();
+    // Once: the header does not say it again, and the words' fragment ("Waiting on: nothing: …") is not in the card.
+    expect(view.container.textContent!.split('has no open run').length - 1).toBe(1);
+    expect(view.container.querySelector('.pv-head')!.textContent).not.toContain('no open run');
+    expect(view.container.textContent).not.toContain('Waiting on:');
     view.unmount();
-    render(<ProgrammeScreen slug="prog-a" store={heard({ runsFrameSeen: false, runs: [] })} />);
-    expect(screen.queryByText(WAITS_ON_WORDS.ended, { selector: '[data-ended]' })).toBeNull();
+    const unheard = render(<ProgrammeScreen slug="prog-a" store={heard({ runsFrameSeen: false, runs: [] })} />);
+    expect(unheard.container.textContent).not.toContain('no open run');
   });
 });
 
@@ -101,15 +123,54 @@ describe('the programme view: Goals', () => {
     expect(screen.queryByRole('link', { name: 'Open the spec in Docs' })).toBeNull();
   });
 
-  it('draws the Goals the list already carries while the read is on the wire, and the read\'s answer replaces them', async () => {
+  it('draws the Goals the list already carries while the read is on the wire, and the frame\'s copy stays the one drawn after the answer', async () => {
     let release!: (v: { ok: true; goals: GoalsView }) => void;
     vi.spyOn(api, 'goals').mockReturnValue(new Promise((r) => { release = r; }));
     const store = heard({ waiting: waitingView({ goals: [goals({ inShort: 'The list\'s copy.' })] }) });
     render(<ProgrammeScreen slug="prog-a" store={store} />);
     expect(screen.getByText('The list\'s copy.')).toBeTruthy();
-    await act(async () => { release({ ok: true, goals: goals({ inShort: 'The newer read.' }) }); });
-    expect(await screen.findByText('The newer read.')).toBeTruthy();
-    expect(screen.queryByText('The list\'s copy.')).toBeNull();
+    await act(async () => { release({ ok: true, goals: goals({ inShort: 'The older read.' }) }); });
+    expect(screen.getByText('The list\'s copy.')).toBeTruthy();
+    expect(screen.queryByText('The older read.')).toBeNull();
+  });
+
+  it('a new frame after the answer changes what is drawn: a merged change stops reading pending, a new pin replaces "In short"', async () => {
+    const pending = { id: 1, at: NOW - MIN, text: 'Added a ledger', ruling: null, itemId: null, pr: 12, merged: false };
+    vi.spyOn(api, 'goals').mockResolvedValue({ ok: true, goals: goals({ inShort: 'The read.', modifications: [pending] }) });
+    const store = heard();
+    render(<ProgrammeScreen slug="prog-a" store={store} />);
+    // The frame lists no Goals for this programme, so the answer is what is drawn.
+    expect(await screen.findByText('The read.')).toBeTruthy();
+    expect(screen.getByText(/spec update pending \(PR #12\)/)).toBeTruthy();
+    // The coordinator marks the change merged and pins a new summary: the frame is re-sent, and the frame's text is drawn.
+    act(() => store.setState({ waiting: waitingView({ goals: [goals({ inShort: 'The frame after the merge.', modifications: [{ ...pending, merged: true }] })] }) }));
+    expect(screen.getByText('The frame after the merge.')).toBeTruthy();
+    expect(screen.queryByText('The read.')).toBeNull();
+    expect(screen.queryByText(/spec update pending/)).toBeNull();
+  });
+
+  it('draws THIS programme\'s entry of the frame, never the first: another programme\'s Goals listed first are not shown', async () => {
+    const other = goals({ program: 'prog-0', inShort: 'Another programme\'s summary.' });
+    const mine = goals({ inShort: 'This programme\'s own copy.' });
+    vi.spyOn(api, 'goals').mockReturnValue(new Promise(() => {}));
+    const store = heard({ waiting: waitingView({ goals: [other, mine] }) });
+    const view = render(<ProgrammeScreen slug="prog-a" store={store} />);
+    expect(screen.getByText('This programme\'s own copy.')).toBeTruthy();
+    expect(screen.queryByText('Another programme\'s summary.')).toBeNull();
+    view.unmount();
+    // A frame that lists only another programme's Goals: this one reads (pending) or says it could not be read, never the other's.
+    const only = heard({ waiting: waitingView({ goals: [other] }) });
+    render(<ProgrammeScreen slug="prog-a" store={only} />);
+    expect(screen.getByText('Reading Goals…')).toBeTruthy();
+    expect(screen.queryByText('Another programme\'s summary.')).toBeNull();
+  });
+
+  it('with another programme\'s Goals first in the frame and the read failed, it says the read failed, never the other\'s', async () => {
+    vi.spyOn(api, 'goals').mockRejectedValue(new TypeError('offline'));
+    const other = goals({ program: 'prog-0', inShort: 'Another programme\'s summary.' });
+    render(<ProgrammeScreen slug="prog-a" store={heard({ waiting: waitingView({ goals: [other] }) })} />);
+    expect((await screen.findByRole('alert')).textContent).toBe('Goals could not be read.');
+    expect(screen.queryByText('Another programme\'s summary.')).toBeNull();
   });
 
   it('draws only a view that is this programme\'s: another programme\'s answer is a failed read', async () => {
@@ -243,7 +304,7 @@ describe('the programme view: when nothing needs the operator', () => {
 
   it('a programme with no open run says that, in the same sentence', () => {
     const store = heard({ runs: [runRow({ id: 1, program: 'prog-a', state: 'done' })] });
-    expect(says(store)).toContain(`Nothing needs you. Waiting on: ${WAITS_ON_WORDS.ended}`);
+    expect(says(store)).toContain('Nothing needs you. The programme has no open run.');
   });
 
   it('an item the coordinator is checking is not the operator\'s: the sentence stands and the item is still listed', () => {

@@ -1,6 +1,6 @@
 // A programme as a box in its project card (Task G2), measured in a real Chrome over the production build. The jsdom
 // suites (test/programme-box.test.ts, test/programme-box-card.test.tsx) pin the decider and the markup; this file
-// holds what they cannot: the layout at 390, 1280 and 1920 in both skins and both palettes, the hue the box's rule is
+// holds what they cannot: the layout at 360, 390, 900, 1280 and 1920 in both skins and both palettes, the hue the box's rule is
 // actually drawn in, the kicker's measured contrast, and the tap floor of the box's controls under a coarse pointer.
 //
 // The fixture is two projects and three programmes. project-a holds `billing` (a worker asks the operator) and
@@ -111,7 +111,10 @@ const FIXTURE: AppFixture = {
 
 const SKINS = [REFINED, INSTRUMENT] as const;
 const THEMES = [PHOSPHOR, 'light'] as const;
-const WIDTHS = [390, 1280, 1920] as const;
+// 360 is the narrowest phone the shell supports, 900 the layout breakpoint (the programme view's two columns and the shell's
+// desk layout both start there): the chip's widest figure ("99+ waiting on you", on `billing`'s 100 items and one question) is
+// measured at each, review 1386 F16.
+const WIDTHS = [360, 390, 900, 1280, 1920] as const;
 
 let dist: string | undefined;
 let server: DistServer | undefined;

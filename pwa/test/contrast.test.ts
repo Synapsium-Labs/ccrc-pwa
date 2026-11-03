@@ -2330,8 +2330,8 @@ describe('the programme box\'s hues (Task G2)', () => {
   });
 
   // Desktop-polish PL5b: the waiting chip states its own ground and ink, so it is one pair in every palette whatever the hue.
-  it('measures the waiting chip, ink on the surface, in every palette', () => {
-    const key = '.pg-waiting';
+  it('measures the waiting chip, ink on the surface, in every palette (the door and the plain count share the rule)', () => {
+    const key = '.pg-waiting, .pg-waiting-plain';
     const rows = rowsFor(key);
     expect(rows, key).toHaveLength(THEME_COUNT);
     for (const row of rows) {

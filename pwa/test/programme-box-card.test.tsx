@@ -12,6 +12,7 @@ import { ProgrammeScreen } from '../src/ledgers/ProgrammeScreen';
 import { assignHues } from '../src/fleet/programmeBoxes';
 import { api } from '../src/lib/api';
 import { resetAcks } from '../src/lib/seen';
+import { matchRoute } from '../src/lib/routes';
 import { setSkin } from '../src/lib/skin';
 import { SKIN_SETS } from '../src/skins';
 import { createFleetStore, useFleetStore } from '../src/stores/fleet';
@@ -529,7 +530,7 @@ describe('the waiting chip on a programme box (PL5b)', () => {
       waiting: waitingView({ items }), sessions: from.sessions, runs: from.runs, fleetFrameSeen: true, runsFrameSeen: true,
     }));
   };
-  const chip = (c: Element): HTMLElement | null => c.querySelector<HTMLElement>('.pg-kicker .pg-waiting');
+  const chip = (c: Element): HTMLElement | null => c.querySelector<HTMLElement>('.pg-kicker .pg-waiting, .pg-kicker .pg-waiting-plain');
   afterEach(() => { act(() => useFleetStore.setState({ sessions: [], runs: [], fleetFrameSeen: false, runsFrameSeen: false })); });
 
   it('shows "N waiting on you" after the title when the programme has N open items', () => {
@@ -607,6 +608,44 @@ describe('the waiting chip on a programme box (PL5b)', () => {
     expect(location.pathname).toBe('/programmes/port-api');
     expect(c.querySelector('.pg-foot button')?.getAttribute('aria-expanded'), 'the footer toggle is untouched').toBe('false');
     history.replaceState(null, '', '/');
+  });
+
+  it.each(['Build_4', 'pA', 'build_4-name'])('is a door to the view for the programme %s, a slug the server accepts that the first route refused', (slug) => {
+    const f = quiet();
+    const from = { sessions: f.sessions, runs: f.runs.map((r) => ({ ...r, program: slug })) };
+    withList(OPEN(2, slug), from);
+    const c = drawCard(from.sessions, from.runs, 'project-c');
+    const door = within(c).getByRole('button', { name: /2 waiting on you/ });
+    history.replaceState(null, '', '/');
+    fireEvent.click(door);
+    expect(location.pathname).toBe(`/programmes/${slug}`);
+    expect(matchRoute(location.pathname)?.route.id).toBe('programme');
+    expect(matchRoute(location.pathname)?.param).toBe(slug);
+    history.replaceState(null, '', '/');
+  });
+
+  it('draws a plain count, no door, for a slug the programme view would refuse (the owner\'s grammar has no dot)', () => {
+    const f = quiet();
+    const from = { sessions: f.sessions, runs: f.runs.map((r) => ({ ...r, program: 'old.name' })) };
+    withList(OPEN(2, 'old.name'), from);
+    const c = drawCard(from.sessions, from.runs, 'project-c');
+    const plain = chip(c)!;
+    expect(plain.textContent).toContain('2 waiting on you');
+    expect(plain.tagName).not.toBe('BUTTON');
+    expect(within(c).queryByRole('button', { name: /waiting on you/ })).toBeNull();
+    history.replaceState(null, '', '/');
+    fireEvent.click(plain);
+    expect(location.pathname).toBe('/');
+  });
+
+  it('names the real count to a screen reader past the cap: 150 items read "150 waiting on you" in the label, "99+" on screen', () => {
+    withList(OPEN(150));
+    const { sessions, runs } = quiet();
+    const c = drawCard(sessions, runs, 'project-c');
+    const door = within(c).getByRole('button', { name: /150 waiting on you/ });
+    expect(door.getAttribute('aria-label')).toMatch(/^150 waiting on you: open /);
+    expect(door.textContent).toContain('99+ waiting on you');
+    expect(door.textContent).not.toContain('150');
   });
 
   it('prints its widest count as "99+", the one width the layout is measured at', () => {

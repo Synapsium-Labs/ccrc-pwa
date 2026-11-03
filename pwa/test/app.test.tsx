@@ -372,7 +372,7 @@ describe('ROUTES and the ladder, both ways', () => {
     // Waiting on you (desktop-polish PL5a): the list, an item, and near misses that name no route.
     '/waiting', '/waiting/7', '/waiting/x', '/waiting/7/y', '/waitingx',
     // The programme view (desktop-polish PL5b): a programme by slug, and near misses that name no route.
-    '/programmes/prog-a', '/programmes/prog-a/', '/programmes', '/programmes/Prog-A', '/programmes/a/b', '/programmesx',
+    '/programmes/prog-a', '/programmes/prog-a/', '/programmes', '/programmes/Prog-A', '/programmes/Build_4', '/programmes/a/b', '/programmesx',
     // Settings' five pages and the catch-all (D-5504).
     '/settings/updates', '/settings/appearance', '/settings/notifications', '/settings/automation',
     '/settings/security', '/settings/bogus', '/settings/a/b', '/settings/measure-highlighting',
@@ -454,6 +454,23 @@ describe('ROUTES and the ladder, both ways', () => {
       expect(within(detail).getByRole('region', { name: 'Goals' })).toBeInTheDocument();
       fireEvent.click(within(detail).getByRole('button', { name: /Pick the order/ }));
       expect(location.pathname).toBe('/waiting/7');
+    });
+
+    it.each(['Build_4', 'pA', '-a'])('`/programmes/%s`, a slug the server accepts, renders that programme\'s view', (slug) => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+      act(() => useFleetStore.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView() }));
+      navigate(`/programmes/${slug}`);
+      render(<App />);
+      const detail = document.querySelector('.shell-detail') as HTMLElement;
+      expect(within(detail).getByRole('heading', { level: 1, name: slug })).toBeInTheDocument();
+    });
+
+    it('`/programmes/<a name the owner refuses>` is the placeholder, not a view of a programme that cannot exist', () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+      navigate('/programmes/a.b');
+      render(<App />);
+      expect(document.querySelector('.shell-placeholder')).not.toBeNull();
+      expect(document.querySelector('.pv')).toBeNull();
     });
 
     it('an item the list does not hold says so, and so does a number past the safe integers', () => {

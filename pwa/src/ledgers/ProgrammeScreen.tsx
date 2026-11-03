@@ -7,10 +7,11 @@
 // waits on is `programmeWaitsOn`'s, and the two panels' own words are the combined list's (`ItemRow`, `QuestionButton`) and
 // `GoalsPanel`'s.
 //
-// GOALS COME FROM TWO PLACES AND NEITHER IS "NOT PINNED". The `waiting` frame carries every programme's Goals, so the copy the
-// list holds is drawn at once; `GET /api/programmes/:slug/goals` is asked once on arrival and its answer replaces that copy. A
-// read that fails changes nothing when there is a copy and, when there is none, says so: "no spec is pinned yet" is a fact
-// about the programme, never a word for "nothing has been heard".
+// GOALS COME FROM TWO PLACES AND NEITHER IS "NOT PINNED". The `waiting` frame carries Goals for each programme that has an item
+// or a pin, and it is re-sent whenever they change, so its entry for THIS programme is drawn whenever there is one;
+// `GET /api/programmes/:slug/goals` is asked once on arrival and answers for a programme the frame does not list. A read that
+// fails changes nothing when there is a copy and, when there is none, says so: "no spec is pinned yet" is a fact about the
+// programme, never a word for "nothing has been heard".
 //
 // "NOTHING NEEDS YOU" is said only for what is KNOWN: with no open item the card says what the programme waits on instead
 // (spec section 3), and names it only once the runs frame has landed; a programme is never called ended on runs not heard.
@@ -18,7 +19,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import {
-  WAITS_ON_WORDS, programmeWaitsOn, type GoalsView, type ItemView, type WaitingView,
+  WAITS_ON_WORDS, programmeWaitsOn, type GoalsView, type ItemView, type WaitingView, type WaitsOn,
 } from '../../../shared/ledgers';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { programWave, programmeTitle, runHomeProject } from '../fleet/runWords';
@@ -27,7 +28,7 @@ import { navigate } from '../lib/router';
 import { ROUTES, sessionPath } from '../lib/routes';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { GoalsPanel } from './GoalsPanel';
-import { EMPTY_WORD, NO_FRAME_WORD, groupByProgramme, openRunsOf, programmeIsLive, questionRows } from './ledgerWords';
+import { EMPTY_WORD, NO_FRAME_WORD, groupByProgramme, openRunsOf, questionRows } from './ledgerWords';
 import { Back, itemPath, useHeard, useUnavailable } from './WaitingRoutes';
 import { ClearedTrail, ItemRows } from './WaitingScreen';
 import './ledgers.css';
@@ -71,11 +72,23 @@ function homeProjectOf(slug: string, runs: readonly RunSummary[]): string | null
 const NO_RUNS: readonly RunSummary[] = [];
 const NO_ITEMS: readonly ItemView[] = [];
 
+/** The card's one sentence when nothing is waiting on the operator: what the programme waits on, named only once the runs have
+ *  been heard, and, for a programme with no open run, said once as a sentence of its own, not as `WAITS_ON_WORDS.ended`'s tail
+ *  after "Waiting on:" (that text reads as a fragment and is the words' other readers', `pl5b-ended-words-literal`). */
+function waitsOnSentence(waitsOn: WaitsOn | null): string {
+  if (waitsOn === null) return EMPTY_WORD;
+  if (waitsOn === 'ended') return `${EMPTY_WORD} The programme has no open run.`;
+  return `${EMPTY_WORD} Waiting on: ${WAITS_ON_WORDS[waitsOn]}`;
+}
+
 /** The cards' left column: Goals, or the word for why there are none to show. */
 function GoalsCard({ read, held, homeProject, heldItems }: {
   read: GoalsRead; held: GoalsView | null; homeProject: string | null; heldItems: ReadonlySet<number>;
 }): ReactNode {
-  const goals = read !== 'reading' && read !== 'failed' ? read : held;
+  // The frame's copy for THIS programme wins whenever the frame has one: the frame is re-sent on every spec pin, change and merge,
+  // so it is never older than the one fetch. The fetch answers only for a programme the frame does not list (a programme with a
+  // pin and nothing else waiting is in it; one with neither is not), and a read that has not answered or failed says so.
+  const goals = held ?? (read !== 'reading' && read !== 'failed' ? read : null);
   if (goals === null) {
     return (
       <section className="pg-goals" aria-label="Goals">
@@ -109,12 +122,12 @@ function WaitingCard({ slug, view, sessions, runs, unavailable, now }: {
   const waiting = group?.waiting ?? 0;
   const cleared = view.cleared.filter((c) => c.program === slug);
   // What the programme waits on, over ALL its runs: `programmeWaitsOn` leaves the finished ones out itself.
-  const waitsOn = runs === null ? null : WAITS_ON_WORDS[programmeWaitsOn(runs.filter((r) => r.program === slug))];
+  const waitsOn = runs === null ? null : programmeWaitsOn(runs.filter((r) => r.program === slug));
   return (
     <section className="pv-card" aria-label="Waiting on you">
       <h2 className="pv-h">{`Waiting on you · ${waiting}`}</h2>
       {waiting === 0 && (
-        <p className="pv-none">{waitsOn === null ? EMPTY_WORD : `${EMPTY_WORD} Waiting on: ${waitsOn}`}</p>
+        <p className="pv-none">{waitsOnSentence(waitsOn)}</p>
       )}
       {group !== null && group.rows.length > 0 && (
         <ItemRows rows={group.rows} now={now} onOpenItem={(id) => navigate(itemPath(id))} onOpenSession={(id) => navigate(sessionPath(id))} />
@@ -133,7 +146,6 @@ export function ProgrammeScreen({ slug, store = useFleetStore }: { slug: string;
   const heard = runs ?? NO_RUNS;
   const open = openRunsOf(slug, heard);
   const wave = open.length === 0 ? null : programWave(open);
-  const ended = runs !== null && !programmeIsLive(slug, runs);
   const held = view?.goals.find((g) => g.program === slug) ?? null;
   const heldItems = new Set<number>([...(view?.items ?? NO_ITEMS), ...(view?.cleared ?? NO_ITEMS)].map((i) => i.id));
   const hue = fleetHues(heard).get(slug) ?? 'none';
@@ -144,7 +156,6 @@ export function ProgrammeScreen({ slug, store = useFleetStore }: { slug: string;
         <span className="pv-kicker">Programme</span>
         <h1 className="pv-title">{programmeTitle(slug, heard)}</h1>
         {wave !== null && <span className="pv-sub">{wave.waveOf === null ? `wave ${wave.wave}` : `wave ${wave.wave} of ${wave.waveOf}`}</span>}
-        {ended && <span className="pv-sub" data-ended="true">{WAITS_ON_WORDS.ended}</span>}
       </header>
       <div className="pv-two">
         <div className="pv-card">

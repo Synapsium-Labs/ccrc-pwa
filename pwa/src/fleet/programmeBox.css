@@ -72,8 +72,11 @@
 /* The waiting chip (desktop-polish PL5b): "N waiting on you", a `Door` to the programme's view. It is NOT tinted and not the
    hue's text: it states its own ground and ink (`--bg-surface` under `--ink-primary`, the page's own pair), with the hue as its
    non-text outline, so the audit measures one pair in every palette whatever the programme's hue. Never wider than its words
-   ("99+ waiting on you" is the widest it prints): it does not shrink, and the kicker wraps before it would overflow. */
-.pg-waiting {
+   ("99+ waiting on you" is the widest it prints): it does not shrink, and the kicker wraps before it would overflow. A slug the
+   programme view would refuse is told as the same count in a plain span (`.pg-waiting-plain`), not a door: a class worn by a
+   design-system component is worn by nothing else (`hook-class-collision.test.ts`). */
+.pg-waiting,
+.pg-waiting-plain {
   flex: none;
   padding: 0 var(--sp-2);
   border: 1px solid var(--pg);

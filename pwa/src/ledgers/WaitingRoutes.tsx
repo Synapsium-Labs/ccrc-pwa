@@ -1,6 +1,7 @@
 // The two ladder arms of the Waiting on you routes (desktop-polish PL5a, D-7712): `/waiting`, the combined list, and
-// `/waiting/<id>`, one item. They are the only readers of the fleet store and the router in this directory: the screens
-// they render (`WaitingScreen`, `ItemView`) take everything as props. Ring L4: no decision is made here that the words
+// `/waiting/<id>`, one item. The screens they render (`WaitingScreen`, `ItemView`) take everything as props. The programme
+// view (`ProgrammeScreen`, PL5b) reads the store and the router itself, as a screen of its own, through the hooks and the
+// back button this file exports (`useHeard`, `useUnavailable`, `Back`). Ring L4: no decision is made here that the words
 // or the server did not make (a tick's order and refusals are the server's, the labels are `ledgerWords.ts`'s).
 //
 // THE CLOCK IS READ FRESH ON EVERY RENDER, never ticked (the rollup's rule, `useRollupClock`): an age is the screen's own
