@@ -6,17 +6,33 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { Bus } from '../src/bus.js';
 import type { CcrcConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
-import { listProjects } from '../src/lifecycle.js';
-import { testDeps } from './helpers.js';
+import {
+  FLEET_ROWS_MAX_AGE_MS, PROJECT_WALK_CONCURRENCY, PROJECT_WALK_TTL_MS, ProjectWalkCache, fleetRowsUsable, listProjects,
+  type FleetRowsListing, type ProjectSourceRow,
+} from '../src/lifecycle.js';
+import { readRegistryMeasured } from '../src/registry.js';
+import { buildServer, type Deps } from '../src/server.js';
+import { FleetWatcher } from '../src/watch.js';
+import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 interface Req { op: string; path: string }
 interface Gate { pending: (() => void)[] }
+interface CountingOptions {
+  gate?: Gate;
+  /** A request's delay, from its path and its issue index (0 for the first request this io saw). */
+  delayMs?: (p: string, index: number) => number;
+  /** Directories whose listing fails (`readdir` null, `readdirMeasured` unreadable). Mutable between requests. */
+  unlistable?: Set<string>;
+}
 
-/** A counting wrapper over `localIO`: every call is logged, counted in flight, and held at `gate` or delayed. */
-const countingIO = (opts: { gate?: Gate; delayMs?: (p: string) => number } = {}) => {
+/** A counting wrapper over `localIO`: every call is logged, counted in flight, and held at `gate` or delayed. A call
+ *  that reaches a sibling (`readdir` calls `this.readdirMeasured`) runs on `localIO`, so it is one request, as on the
+ *  agent link. */
+const countingIO = (opts: CountingOptions = {}) => {
   const requests: Req[] = [];
   let inFlight = 0;
   let maxInFlight = 0;
@@ -25,14 +41,19 @@ const countingIO = (opts: { gate?: Gate; delayMs?: (p: string) => number } = {})
     if (typeof fn !== 'function') continue;
     io[op] = async (...args: unknown[]) => {
       const p = String(args[0]);
+      const index = requests.length;
       requests.push({ op, path: p });
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       try {
         if (opts.gate !== undefined) await new Promise<void>((go) => { opts.gate!.pending.push(go); });
         else if (opts.delayMs !== undefined) {
-          const ms = opts.delayMs(p);
+          const ms = opts.delayMs(p, index);
           await new Promise<void>((go) => { setTimeout(go, ms); });
+        }
+        if (opts.unlistable?.has(p)) {
+          if (op === 'readdir') return null;
+          if (op === 'readdirMeasured') return { ok: false, reason: 'unreadable' };
         }
         return await (fn as (...a: unknown[]) => unknown).apply(localIO, args);
       } finally {
@@ -40,7 +61,11 @@ const countingIO = (opts: { gate?: Gate; delayMs?: (p: string) => number } = {})
       }
     };
   }
-  return { io: io as unknown as FleetIO, requests, maxInFlight: () => maxInFlight, inFlightNow: () => inFlight };
+  return {
+    io: io as unknown as FleetIO, requests,
+    maxInFlight: () => maxInFlight,
+    reset: () => { requests.length = 0; maxInFlight = 0; },
+  };
 };
 
 /** One registry row as plain files. */
@@ -92,6 +117,7 @@ const projectsFixture = (prefix: string) => {
   plant(cfg, 'lane-a-r6', 'solo', path.join(away, 'solo'));
   return { home, deps, cfg, root, away };
 };
+type Fixture = ReturnType<typeof projectsFixture>;
 
 /** Today's answer for `projectsFixture`, recorded on the serial code (Step 1), workdirs relative to the HOME. */
 const RECORDED = {
@@ -104,10 +130,50 @@ const RECORDED = {
   ],
 } as const;
 
-const relative = (home: string, r: { roots: string[]; projects: { name: string; workdir: string }[]; registry: string }) => ({
+const relative = (home: string, r: { projects: { name: string; workdir: string }[]; registry?: string }) => ({
   registry: r.registry,
   projects: r.projects.map((p) => ({ name: p.name, workdir: path.relative(home, p.workdir) })),
 });
+
+/** The fixture's registry rows in record order, as the watcher's listing carries them. */
+const fixtureRows = async (f: Fixture): Promise<ProjectSourceRow[]> => {
+  const read = await readRegistryMeasured(localIO, f.cfg);
+  if (!read.listed) throw new Error('fixture: the registry did not list');
+  return read.records.map((r) => ({ project: r.project, workdir: r.workdir }));
+};
+
+/** A read of one session's field file: `<registryDir>/<id>.<field>`. */
+const fieldReads = (cfg: CcrcConfig, requests: Req[]): Req[] =>
+  requests.filter((q) => (q.op === 'readFile' || q.op === 'readFileMeasured') && path.dirname(q.path) === cfg.registryDir
+    && /^lane-a-r\d\./.test(path.basename(q.path)));
+
+/** Every request about the projects' own directories: the root walk and the registry workdirs' probes. */
+const walkReads = (f: Fixture, requests: Req[]): Req[] =>
+  requests.filter((q) => q.path === f.root || q.path.startsWith(f.root + path.sep) || q.path.startsWith(f.away + path.sep));
+
+/** A server over the fixture with a counting io and a real, never-ticked watcher whose listing a case sets. */
+const routeRig = async (f: Fixture, c: ReturnType<typeof countingIO>) => {
+  const deps: Deps = { ...f.deps, io: c.io, stateCachePath: path.join(f.home, 'state-cache.json') };
+  const watcher = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
+  const state: { listing: FleetRowsListing | null; fleet: ProjectSourceRow[] | null } = { listing: null, fleet: null };
+  Object.assign(watcher, {
+    currentFleetListing: () => state.listing,
+    currentFleet: () => state.fleet,
+  });
+  const app = await buildServer(deps, new Bus(), watcher);
+  const get = async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/projects' });
+    expect(res.statusCode).toBe(200);
+    return res.json() as { registry: string; projects: { name: string; workdir: string; pool?: unknown }[] };
+  };
+  return { app, state, get };
+};
+
+const T0 = Date.parse('2026-11-03T12:00:00Z');
+const fakeDate = (at: number): void => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(at);
+};
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
@@ -117,5 +183,223 @@ describe('the recorded answer (Step 1, green on the serial code)', () => {
     const got = await listProjects(countingIO().io, f.cfg);
     expect(got.roots).toEqual([f.root]);
     expect(relative(f.home, got)).toEqual(RECORDED);
+  });
+});
+
+describe('the registry half comes from the watcher only while its listing is current (D-6436)', () => {
+  it('a fresh listed tick: no session field read', async () => {
+    fakeDate(T0);
+    const f = projectsFixture('ccrc-projects-fresh-');
+    const c = countingIO();
+    const r = await routeRig(f, c);
+    try {
+      r.state.listing = { sessions: await fixtureRows(f), listedAt: T0 - (FLEET_ROWS_MAX_AGE_MS - 1) };
+      c.reset();
+      const body = await r.get();
+      expect(fieldReads(f.cfg, c.requests), 'no session field file is read').toEqual([]);
+      expect(relative(f.home, body)).toEqual(RECORDED);
+    } finally { await r.app.close(); }
+  });
+
+  it("after an unlistable tick: own read, registry 'unlistable'", async () => {
+    fakeDate(T0);
+    const f = projectsFixture('ccrc-projects-unlistable-tick-');
+    const unlistable = new Set<string>();
+    const c = countingIO({ unlistable });
+    const r = await routeRig(f, c);
+    try {
+      // The watcher keeps its last broadcast through an unlistable tick, but its listing answers null; and the
+      // route's own read cannot list the registry either.
+      r.state.fleet = await fixtureRows(f);
+      r.state.listing = null;
+      unlistable.add(f.cfg.registryDir);
+      c.reset();
+      const body = await r.get();
+      expect(body.registry).toBe('unlistable');
+      expect(c.requests.some((q) => q.op === 'readdir' && q.path === f.cfg.registryDir), 'the route listed the registry itself')
+        .toBe(true);
+      expect(relative(f.home, body).projects, 'the root walk alone').toEqual([
+        { name: 'alpha', workdir: 'projects/alpha' }, { name: 'plain', workdir: 'projects/plain' },
+      ]);
+    } finally { await r.app.close(); }
+  });
+
+  it('a listed tick past the bound is not used', async () => {
+    fakeDate(T0);
+    const f = projectsFixture('ccrc-projects-stale-');
+    const c = countingIO();
+    const r = await routeRig(f, c);
+    try {
+      // A listing that would answer differently if it were used: one extra registry-only project.
+      const extra = dir(path.join(f.away, 'from-the-stale-listing'), 'main');
+      r.state.listing = { sessions: [...await fixtureRows(f), { project: 'stale', workdir: extra }], listedAt: T0 - FLEET_ROWS_MAX_AGE_MS };
+      c.reset();
+      const body = await r.get();
+      expect(fieldReads(f.cfg, c.requests).length, 'the route read the registry itself').toBeGreaterThan(0);
+      expect(relative(f.home, body)).toEqual(RECORDED);
+    } finally { await r.app.close(); }
+  });
+
+  it('before the first broadcast: own read, as today', async () => {
+    fakeDate(T0);
+    const f = projectsFixture('ccrc-projects-cold-');
+    const c = countingIO();
+    const r = await routeRig(f, c);
+    try {
+      c.reset();
+      const body = await r.get();
+      expect(fieldReads(f.cfg, c.requests).length, 'the route read the registry itself').toBeGreaterThan(0);
+      expect(relative(f.home, body)).toEqual(RECORDED);
+    } finally { await r.app.close(); }
+  });
+
+  it('the watcher answers a listing after a listed tick, none after an unlistable one, and stamps when its read began', async () => {
+    fakeDate(T0);
+    const f = projectsFixture('ccrc-projects-watcher-');
+    const unlistable = new Set<string>();
+    const c = countingIO({ unlistable });
+    const deps: Deps = { ...f.deps, io: c.io, stateCachePath: path.join(f.home, 'state-cache.json') };
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
+    expect(w.currentFleetListing(), 'before the first tick').toBeNull();
+    await w.tick();
+    const listed = w.currentFleetListing();
+    expect(listed?.listedAt).toBe(T0);
+    expect(listed?.sessions.map((s) => [s.project, path.relative(f.home, s.workdir)])).toEqual([
+      ['alpha-renamed', 'projects/alpha'], ['zeta', 'elsewhere/shared'], ['beta', 'elsewhere/shared'],
+      ['linked', 'projects/linked'], ['linked-two', 'elsewhere/linked-two'], ['solo', 'elsewhere/solo'],
+    ]);
+    unlistable.add(f.cfg.registryDir);
+    vi.setSystemTime(T0 + 5_000);
+    await w.tick();
+    expect(w.currentFleet(), 'the broadcast fleet is kept').not.toBeNull();
+    expect(w.currentFleetListing(), 'but it is not a current listing').toBeNull();
+    unlistable.delete(f.cfg.registryDir);
+    vi.setSystemTime(T0 + 9_000);
+    await w.tick();
+    expect(w.currentFleetListing()?.listedAt, 'an unchanged fleet still restamps').toBe(T0 + 9_000);
+    w.stop();
+  });
+
+  it('fleetRowsUsable: null, a future stamp and an age at the bound all answer null; inside it, the rows', () => {
+    const sessions = [{ project: 'p', workdir: '/w/p' }];
+    expect(fleetRowsUsable(null, T0, 1000)).toBeNull();
+    expect(fleetRowsUsable({ sessions, listedAt: T0 + 1 }, T0, 1000)).toBeNull();
+    expect(fleetRowsUsable({ sessions, listedAt: T0 - 1000 }, T0, 1000)).toBeNull();
+    expect(fleetRowsUsable({ sessions, listedAt: T0 - 999 }, T0, 1000)).toEqual(sessions);
+    expect(fleetRowsUsable({ sessions, listedAt: T0 }, T0, 1000)).toEqual(sessions);
+  });
+});
+
+describe('the walk is concurrent and bounded, and its answer is today\'s (D-6436)', () => {
+  /** A wider root than the recorded fixture, so the bound can bind: 3 x the bound directories, half main checkouts. */
+  const wide = (prefix: string): Fixture => {
+    const f = projectsFixture(prefix);
+    for (let i = 0; i < 3 * PROJECT_WALK_CONCURRENCY; i += 1) dir(path.join(f.root, `wide-${String(i).padStart(2, '0')}`), i % 2 === 0 ? 'main' : 'none');
+    for (let i = 0; i < 2 * PROJECT_WALK_CONCURRENCY; i += 1) dir(path.join(f.away, `ws-${String(i).padStart(2, '0')}`), 'linked');
+    return f;
+  };
+  const wideRows = (f: Fixture, base: ProjectSourceRow[]): ProjectSourceRow[] => [
+    ...base,
+    ...Array.from({ length: 2 * PROJECT_WALK_CONCURRENCY }, (_, i) => ({ project: 'alpha', workdir: path.join(f.away, `ws-${String(i).padStart(2, '0')}`) })),
+  ];
+
+  it('the second readdir is issued before the first resolves', async () => {
+    const f = wide('ccrc-projects-concurrent-');
+    const gate: Gate = { pending: [] };
+    const c = countingIO({ gate });
+    const p = listProjects(c.io, f.cfg, await fixtureRows(f));
+    const settle = () => new Promise<void>((go) => { setTimeout(go, 0); });
+    await settle();
+    expect(c.requests).toEqual([{ op: 'readdir', path: f.root }]);
+    gate.pending.splice(0).forEach((go) => { go(); });
+    await settle();
+    const entryListings = c.requests.filter((q) => q.op === 'readdir' && path.dirname(q.path) === f.root);
+    expect(entryListings.length, 'several entries are listed while none has answered').toBeGreaterThan(1);
+    for (let spin = 0; spin < 1000 && gate.pending.length > 0; spin += 1) { gate.pending.splice(0).forEach((go) => { go(); }); await settle(); }
+    await p;
+  });
+
+  it('never more than the bound in flight', async () => {
+    const f = wide('ccrc-projects-bound-');
+    const c = countingIO({ delayMs: () => 2 });
+    await listProjects(c.io, f.cfg, wideRows(f, await fixtureRows(f)));
+    expect(PROJECT_WALK_CONCURRENCY).toBe(8);
+    expect(c.maxInFlight()).toBeLessThanOrEqual(PROJECT_WALK_CONCURRENCY);
+    expect(c.maxInFlight(), 'and the bound is reached').toBe(PROJECT_WALK_CONCURRENCY);
+  });
+
+  it('the answer equals the recorded one', async () => {
+    // Reads finish in reverse issue order within each batch: a later request waits less.
+    const reverse = (_p: string, index: number): number => Math.max(0, 40 - index);
+    const f = projectsFixture('ccrc-projects-reverse-');
+    const fromRows = await listProjects(countingIO({ delayMs: reverse }).io, f.cfg, await fixtureRows(f));
+    expect(relative(f.home, fromRows), 'from the watcher\'s rows').toEqual(RECORDED);
+    const ownRead = await listProjects(countingIO({ delayMs: reverse }).io, f.cfg);
+    expect(relative(f.home, ownRead), 'from the route\'s own read').toEqual(RECORDED);
+    const cached = new ProjectWalkCache();
+    await listProjects(countingIO().io, f.cfg, undefined, cached);
+    expect(relative(f.home, await listProjects(countingIO({ delayMs: reverse }).io, f.cfg, undefined, cached)), 'from the cache')
+      .toEqual(RECORDED);
+  });
+});
+
+describe('the walk cache (D-6436)', () => {
+  it('within the TTL nothing is walked; after it, a new directory appears', async () => {
+    fakeDate(T0);
+    const f = projectsFixture('ccrc-projects-ttl-');
+    const c = countingIO();
+    const r = await routeRig(f, c);
+    try {
+      expect(relative(f.home, await r.get())).toEqual(RECORDED);
+      dir(path.join(f.root, 'newcomer'), 'main');
+      vi.setSystemTime(T0 + PROJECT_WALK_TTL_MS - 1);
+      c.reset();
+      const within = await r.get();
+      expect(walkReads(f, c.requests), 'no walk and no probe inside the TTL').toEqual([]);
+      expect(within.projects.map((p) => p.name)).not.toContain('newcomer');
+      vi.setSystemTime(T0 + PROJECT_WALK_TTL_MS);
+      c.reset();
+      const after = await r.get();
+      expect(walkReads(f, c.requests).length, 'walked again').toBeGreaterThan(0);
+      expect(after.projects.map((p) => p.name)).toContain('newcomer');
+    } finally { await r.app.close(); }
+  });
+
+  it('an unlistable projects root is not cached', async () => {
+    fakeDate(T0);
+    const f = projectsFixture('ccrc-projects-root-fail-');
+    const unlistable = new Set<string>();
+    const c = countingIO({ unlistable });
+    const r = await routeRig(f, c);
+    try {
+      unlistable.add(f.root);
+      const failed = await r.get();
+      expect(failed.projects.map((p) => p.name), 'the registry half alone').toEqual(['alpha-renamed', 'solo', 'zeta']);
+      unlistable.delete(f.root);
+      vi.setSystemTime(T0 + 1);
+      expect(relative(f.home, await r.get()), 'the next request walks the root').toEqual(RECORDED);
+    } finally { await r.app.close(); }
+  });
+
+  it('a pool write shows on the next request', async () => {
+    fakeDate(T0);
+    const f = projectsFixture('ccrc-projects-pool-');
+    const c = countingIO();
+    const r = await routeRig(f, c);
+    const poolsDir = path.join(f.cfg.registryDir, 'pools');
+    try {
+      const before = (await r.get()).projects.find((p) => p.name === 'alpha')!.pool;
+      mkdirSync(poolsDir, { recursive: true });
+      writeFileSync(path.join(poolsDir, 'alpha'), 'pool-b\n');
+      vi.setSystemTime(T0 + 1);
+      const after = (await r.get()).projects.find((p) => p.name === 'alpha')!.pool;
+      expect(after).not.toEqual(before);
+      // and it is what a server with no cache at all answers
+      const fresh = await buildServer({ ...f.deps, stateCachePath: path.join(f.home, 'state-cache.json') });
+      try {
+        const res = (await fresh.inject({ method: 'GET', url: '/api/projects' })).json() as { projects: { name: string; pool?: unknown }[] };
+        expect(after).toEqual(res.projects.find((p) => p.name === 'alpha')!.pool);
+      } finally { await fresh.close(); }
+    } finally { await r.app.close(); }
   });
 });

@@ -374,4 +374,35 @@ describe('one refused row wedges nothing fleet-wide (Review Focus 3)', () => {
       await app.close();
     }
   });
+
+  it("with a fresh listed tick, GET /api/projects is 'listed' and carries no --actor workdir", async () => {
+    // D-6436: the registry half comes from the watcher's listing, which built the valid row alone; the route reads no
+    // session field file of either row.
+    const home = mkTmp('ccrc-refused-wedge-projects-tick-');
+    plantBoth(home);
+    const touched: string[] = [];
+    const io: FleetIO = {
+      ...localIO,
+      readFileMeasured: async (p, t, s) => { touched.push(p); return localIO.readFileMeasured(p, t, s); },
+      readFile: async (p) => { touched.push(p); return localIO.readFile(p); },
+    };
+    const deps: Deps = { ...testDeps(home), io, stateCachePath: path.join(home, 'state-cache.json') };
+    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
+    await w.tick();
+    expect(w.currentFleetListing()?.sessions.map((s) => s.id), 'the tick listed the valid row alone').toEqual([GOOD]);
+    const app = await buildServer(deps, new Bus(), w);
+    try {
+      touched.length = 0;
+      const res = await app.inject({ method: 'GET', url: '/api/projects' });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { registry?: string; projects: { workdir: string }[] };
+      expect(body.registry).toBe('listed');
+      expect(body.projects.map((p) => p.workdir), `the valid row joins; /w/${BAD} never does`).toEqual([`/w/${GOOD}`]);
+      const reg = path.join(home, '.cc-sessions');
+      expect(touched.filter((p) => path.dirname(p) === reg && /^(demo-a|--actor)\./.test(path.basename(p))), 'no session field read')
+        .toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
 });
