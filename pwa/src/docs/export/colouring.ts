@@ -50,7 +50,8 @@ function plainClassOf(first: PlainCause): ExportPlain | null {
 }
 
 /** Every block of `blocks` (a tree's `codeBlocksOf`, or a text leaf's one block), counted by what it draws. `dropped`:
- *  the builder rendered with no store to fit the size limit. */
+ *  the builder rendered with no store to fit the size limit. `store: null` has one meaning: no store, which only goes
+ *  with `dropped` (a text leaf with no grammar has no block to count, so it never reaches this). */
 export function exportColouring(
   blocks: readonly CodeBlockText[], store: HighlightStore | null, dropped: boolean,
 ): ExportColouring {
