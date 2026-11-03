@@ -341,7 +341,7 @@ export interface HighlightStore {
   evictUnreferenced(): void;
   /** How many rows the store keeps per map, entries, cached `subscribe(key)` functions and listener Sets. The test
    *  seam for M4.C5's retention (review 1364 F2): no production caller reads it. */
-  retainedKeys(): { readonly entries: number; readonly subscribers: number; readonly listeners: number };
+  heldKeys(): { readonly entries: number; readonly subscribers: number; readonly listeners: number };
   releaseAll(): void;
 }
 
@@ -636,7 +636,7 @@ export function createHighlightStore(
     }
   }
 
-  function retainedKeys(): { readonly entries: number; readonly subscribers: number; readonly listeners: number } {
+  function heldKeys(): { readonly entries: number; readonly subscribers: number; readonly listeners: number } {
     return { entries: entries.size, subscribers: subscribers.size, listeners: listeners.size };
   }
 
@@ -650,6 +650,6 @@ export function createHighlightStore(
 
   return {
     mode: options.mode, debounceMs, keyOf: (lang, raw) => blockKey(lang, raw, part1), seed, peek, copySkip, request, show,
-    subscribe, settled, evictUnreferenced, retainedKeys, releaseAll,
+    subscribe, settled, evictUnreferenced, heldKeys, releaseAll,
   };
 }

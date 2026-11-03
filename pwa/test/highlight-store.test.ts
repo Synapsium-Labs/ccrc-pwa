@@ -208,7 +208,7 @@ describe('M4.H11: a content-keyed store', () => {
       const { store } = setup({ mode: 'chat' });
       streamingFence(store, (n) => 'x'.repeat(n), 40);
       // The last key alone: shown and listened to, never requested, so no entry.
-      expect(store.retainedKeys()).toEqual({ entries: 0, subscribers: 1, listeners: 1 });
+      expect(store.heldKeys()).toEqual({ entries: 0, subscribers: 1, listeners: 1 });
     });
 
     it('unsubscribing the last listener of a key drops its listener Set at once, before any eviction', () => {
@@ -216,11 +216,11 @@ describe('M4.H11: a content-keyed store', () => {
       const a = key('ts', 'a');
       const off1 = store.subscribe(a)(() => undefined);
       const off2 = store.subscribe(a)(() => undefined);
-      expect(store.retainedKeys().listeners).toBe(1);
+      expect(store.heldKeys().listeners).toBe(1);
       off1();
-      expect(store.retainedKeys().listeners).toBe(1);
+      expect(store.heldKeys().listeners).toBe(1);
       off2();
-      expect(store.retainedKeys().listeners).toBe(0);
+      expect(store.heldKeys().listeners).toBe(0);
       // The cached function stays until eviction, and a later subscription starts a fresh Set that is notified.
       let heard = 0;
       store.subscribe(a)(() => { heard += 1; });
@@ -233,10 +233,10 @@ describe('M4.H11: a content-keyed store', () => {
       const a = key('ts', 'a');
       const offA = store.subscribe(a)(() => undefined);
       store.evictUnreferenced();
-      expect(store.retainedKeys()).toEqual({ entries: 0, subscribers: 1, listeners: 1 });
+      expect(store.heldKeys()).toEqual({ entries: 0, subscribers: 1, listeners: 1 });
       offA();
       store.evictUnreferenced();
-      expect(store.retainedKeys()).toEqual({ entries: 0, subscribers: 0, listeners: 0 });
+      expect(store.heldKeys()).toEqual({ entries: 0, subscribers: 0, listeners: 0 });
     });
   });
 

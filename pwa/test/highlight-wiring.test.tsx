@@ -239,7 +239,7 @@ describe('M4.C5 (F2): a chat message\'s store keeps no row for the keys a growin
       expect(chat.calls).toHaveLength(1);
       expect(stores).toHaveLength(1);
       // The last key alone: shown and listened to, its request still in the debounce, so no entry.
-      expect(stores[0]!.retainedKeys()).toEqual({ entries: 0, subscribers: 1, listeners: 1 });
+      expect(stores[0]!.heldKeys()).toEqual({ entries: 0, subscribers: 1, listeners: 1 });
     } finally {
       vi.useRealTimers();
     }
