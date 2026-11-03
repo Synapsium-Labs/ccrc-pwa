@@ -171,9 +171,16 @@ const blobOf = (path: string): string => createHash('sha1').update(path).digest(
 interface HookConfig {
   /** Parent realm: make `setAttribute('csp', ...)` on an iframe do nothing (WebKit's and Gecko's condition). */
   readonly skipCspAttr?: boolean;
-  /** Parent realm: run an iframe's `load` listeners this many ms late, so a self-navigating frame's child is what the
-   *  library's first `load` handler finds. */
-  readonly delayLoadMs?: number;
+  /** Parent realm: hold a srcdoc iframe's `load` listener calls until the navigated child (`navigateTo`) says so: the
+   *  first until the child is up, every later one until it holds the port. The library's first `load` handler then
+   *  posts its hello to the child whichever load fired first, and its 'navigated' fallback cannot remove the frame
+   *  before the child has taken that hello. It replaces a fixed 700 ms delay, which promised neither (merge queue run
+   *  41551141767: "the child received the port: expected 0 to be greater than 0"). Measured under load, the frame hook
+   *  runs in the srcdoc at readyState `interactive`, after the bootstrap's scripts (20 of 20 runs), and the srcdoc's
+   *  own load fired before the hook navigated in 2 of 27; with a child that commits more than 700 ms after that load,
+   *  the hello goes to the srcdoc. And a child slower than about 1.3 s pushed the delayed handler past the 2 s
+   *  watchdog, so no hello was posted at all. */
+  readonly holdLoadForChild?: boolean;
   /** Parent realm: messages posted on the frame's end of the port just before it is handed to the frame, so they are
    *  on the wire ahead of anything the frame says (the Playwright init script reaches a srcdoc frame before its
    *  scripts in some loads and after them in others, so a frame-realm hook cannot be relied on to speak first). */
@@ -197,12 +204,29 @@ function hookScript(cfg: HookConfig): string {
         return orig.call(this, n, v);
       };
     }
-    if (CFG.delayLoadMs) {
+    if (CFG.holdLoadForChild) {
+      // Two gates, each opened by the child's own word (it sits in the sandbox with no allow-same-origin, so its
+      // messages carry origin "null" and it names itself): the first load listener call waits until the child is up,
+      // every later one until the child holds the port. A later call is the library's 'navigated' fallback, which
+      // removes the frame; run before the child has taken its hello, it would discard that hello with the frame.
+      const state = { up: false, port: false };
+      const held = [];
+      let ran = 0;
+      const pump = () => {
+        while (held.length > 0 && (ran === 0 ? state.up : state.port)) { ran += 1; held.shift()(); }
+      };
+      window.addEventListener('message', (e) => {
+        const d = e.data;
+        if (!d || d.ccrcHookChild === undefined || d.href !== CFG.navigateTo) return;
+        if (d.ccrcHookChild === 'up') state.up = true;
+        if (d.ccrcHookChild === 'port') state.port = true;
+        pump();
+      });
       const add = EventTarget.prototype.addEventListener;
       EventTarget.prototype.addEventListener = function (type, cb, opts) {
         if (type === 'load' && this instanceof HTMLIFrameElement && typeof cb === 'function' && this.hasAttribute('srcdoc')) {
           const orig = cb; const self = this;
-          cb = function (ev) { setTimeout(() => orig.call(self, ev), CFG.delayLoadMs); };
+          cb = function (ev) { held.push(() => orig.call(self, ev)); pump(); };
         }
         return add.call(this, type, cb, opts);
       };
@@ -248,6 +272,7 @@ function hookScript(cfg: HookConfig): string {
       ready();
     }).observe(document, { childList: true, subtree: true });
   } else {
+    const heldFor = CFG.holdLoadForChild === true && location.href === CFG.navigateTo;
     window.addEventListener('message', (e) => {
       const d = e.data;
       if (!d || d.t !== 'hello' || !e.ports || e.ports.length !== 1) return;
@@ -255,7 +280,11 @@ function hookScript(cfg: HookConfig): string {
       window.__ccrcPort = p;
       console.log('ccrc-hook hello ' + (location.href === 'about:srcdoc' ? 'srcdoc' : location.href));
       for (const m of (CFG.onHello || [])) p.postMessage(m);
+      if (heldFor) top.postMessage({ ccrcHookChild: 'port', href: location.href }, '*');
     }, true);
+    // The child is the frame's current document once its own script runs, its hello listener above already in place:
+    // the parent hook may now run the first load listener call it held.
+    if (heldFor) top.postMessage({ ccrcHookChild: 'up', href: location.href }, '*');
     if (CFG.navigateTo && location.href === 'about:srcdoc') location.href = CFG.navigateTo;
   }
 })();`;
@@ -520,6 +549,16 @@ async function openInserted(path: string, opts: SessionOptions = {}): Promise<Se
   await s.goto(leafUrl(path));
   await s.page.waitForFunction(() => (window as unknown as { __frames: unknown[] }).__frames.length > 0, undefined, { timeout: 60_000 });
   return s;
+}
+
+/** How many headings named `name` the page shows once the plain view has formatted its body. The fallback note and the
+ *  plain view's "Formatting" line land in one commit and the formatted document only after the parse worker answers
+ *  (measured 6 to 7 ms later, more on a loaded runner), so a count taken the moment `settle` sees the note can find
+ *  none (merge queue run 41557867782: "the plain view shows the document: expected 0 to be greater than 0"). */
+async function plainHeadings(page: Page, name: string): Promise<number> {
+  const heading = page.getByRole('heading', { name });
+  await heading.first().waitFor({ timeout: 10_000 }).catch(() => undefined);
+  return heading.count();
 }
 
 const pathOf = (page: Page): string => new URL(page.url()).pathname;
@@ -896,7 +935,7 @@ describe('W8a reader frame in Chrome', () => {
     expect(await settle(s.page, 20_000, 'fallback'), 'a blocked self-navigation still fires a second load, and the reader falls back').toBe('fallback');
     expect(await s.page.locator('.doc-plain-note').first().textContent()).toBe(READER_FALLBACK_NOTE);
     expect(await s.page.locator('.docs-reader').count(), 'the frame is gone').toBe(0);
-    expect(await s.page.getByRole('heading', { name: 'Small page' }).count(), 'the plain view shows the document').toBeGreaterThan(0);
+    expect(await plainHeadings(s.page, 'Small page'), 'the plain view shows the document').toBeGreaterThan(0);
     expect(s.logs.some((l) => l.includes('ccrc: reader fell back (navigated)')), 'the reason went to the console').toBe(true);
     expect(await s.page.evaluate(() => document.body.outerHTML.includes('navigated')), 'and appears nowhere in the DOM (M8.11)').toBe(false);
     await sleep(800);
@@ -953,7 +992,7 @@ describe('W8a reader frame in Chrome', () => {
     const lna = await checksOffBrowser();
     const s = await openSession({
       index: (html) => html.replace(SHELL_META, ''),
-      hook: { delayLoadMs: 700, navigateTo: child, onHello: ops },
+      hook: { holdLoadForChild: true, navigateTo: child, onHello: ops },
     }, lna);
     sessions.splice(sessions.indexOf(s.app), 1);
     const from = origins.hits.length;
@@ -962,7 +1001,8 @@ describe('W8a reader frame in Chrome', () => {
     await sleep(500);
     const childHits = origins.hits.slice(from).filter((h) => h.origin === 'b' && h.path === '/child');
     expect(childHits.length, 'without the shell meta the frame navigated, and the child loaded').toBeGreaterThan(0);
-    expect(s.logs.filter((l) => l.includes('ccrc-hook hello') && l.includes('/child')).length, 'the child received the port').toBeGreaterThan(0);
+    const hellos = s.logs.filter((l) => l.includes('ccrc-hook hello'));
+    expect(hellos.filter((l) => l.includes('/child')).length, `the child received the port (hellos: ${JSON.stringify(hellos)})`).toBeGreaterThan(0);
     expect(pathOf(s.page), 'no route').toBe(leafUrl('small.md'));
     expect(await readerKeys(s.page), 'no store write').toEqual([]);
     expect(await s.page.getByText('Open this link?').count() + await s.page.getByText('Copy with hidden characters?').count(), 'no sheet').toBe(0);
@@ -995,7 +1035,7 @@ describe('W8a reader frame in Chrome', () => {
     await s.goto(leafUrl('small.md'));
     expect(await settle(s.page, 30_000), 'the shell\'s script-src reaches the srcdoc child and its inline scripts do not run').toBe('fallback');
     expect(await s.page.locator('.doc-plain-note').first().textContent()).toBe(READER_FALLBACK_NOTE);
-    expect(await s.page.getByRole('heading', { name: 'Small page' }).count(), 'the fallback renders the document').toBeGreaterThan(0);
+    expect(await plainHeadings(s.page, 'Small page'), 'the fallback renders the document').toBeGreaterThan(0);
     expect(s.logs.some((l) => l.includes('ccrc: reader fell back (timeout)')), 'the reason (the watchdog) went to the console').toBe(true);
     expect(await s.page.evaluate(() => document.body.outerHTML.includes('timeout')), 'and appears nowhere in the DOM (M8.11)').toBe(false);
   }, 120_000);
