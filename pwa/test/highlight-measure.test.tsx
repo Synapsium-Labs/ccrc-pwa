@@ -53,7 +53,7 @@ function fakes(over: Partial<MeasureDeps> = {}) {
     highlighter: (deadlineMs) => (deadlineMs === HIGHLIGHT_BLOCK_DEADLINE_MS
       ? timingOut()
       // A crafted shape (longer than 2000 characters) is answered in kind, not run through highlight.js in-thread.
-      : overriding(inThreadHighlighter(), (r) => (r.code.length > 2000 ? { kind: 'html', html: 'x'.repeat(2 * r.code.length) } : null))),
+      : overriding(inThreadHighlighter(), (r) => (r.code.length > 2000 ? { kind: 'html', mode: 'block', html: 'x'.repeat(2 * r.code.length) } : null))),
     now: () => (t += 1),
     frame: () => new Promise<number>((resolve) => { setTimeout(() => resolve(t), 0); }),
     sleep: async () => undefined,
@@ -136,7 +136,7 @@ describe('R19: what the figures keep', () => {
 
   it('a crafted shape answered over the cap gives its ratio and is marked over the cap', async () => {
     const over = (r: { lang: string; code: string }): HighlightOutcome | null => (r.code.length > 2000
-      ? (r.lang === 'rust' ? { kind: 'too-large', htmlChars: 8 * r.code.length } : { kind: 'html', html: 'x'.repeat(2 * r.code.length) })
+      ? (r.lang === 'rust' ? { kind: 'too-large', htmlChars: 8 * r.code.length } : { kind: 'html', mode: 'block', html: 'x'.repeat(2 * r.code.length) })
       : null);
     const { deps } = fakes({ highlighter: () => overriding(inThreadHighlighter(), over) });
     const r = await runHighlightMeasure(deps, () => undefined);
