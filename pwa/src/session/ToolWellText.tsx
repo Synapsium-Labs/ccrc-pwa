@@ -9,7 +9,7 @@
 // original text, exactly as a fenced block over its bound renders plain.
 import { useMemo, type ReactNode } from 'react';
 import { ansiClass, ansiRuns, stripAnsi } from '../lib/ansi';
-import { HighlightedCode, useHighlightEntry, useHighlightRequest } from '../lib/markdown';
+import { HighlightedCode, useEvictAfterCommit, useHighlightEntry, useHighlightRequest } from '../lib/markdown';
 import { isRegisteredGrammar } from '../lib/highlightNames';
 import { useChatHighlightStore } from '../lib/highlighterContext';
 import { toolWellPlan, type ToolWellPart } from './toolWell';
@@ -23,6 +23,8 @@ function CodeWell({ lang, text, head, fallback }: { lang: string; text: string; 
   const key = answer.kind === 'key' ? answer.key : null;
   const entry = useHighlightEntry(store, key);
   useHighlightRequest(store, key);
+  // After the request effect (effects run in declaration order), so a re-shown key is requested before eviction.
+  useEvictAfterCommit(store);
   if (key === null) return fallback;
   return (
     <>

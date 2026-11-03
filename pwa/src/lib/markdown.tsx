@@ -396,7 +396,7 @@ const CHAT_RENDER: RenderHastOptions = { components: CHAT_COMPONENTS, urlTransfo
  *  its current blocks only (section 4.10 "Chat"). No dependency list: it runs after every commit, after the effects of
  *  the blocks below it. `ChatMarkdown` calls it for its own commits; the async path's component calls it too, because
  *  its new tree commits there, after `ChatMarkdown`'s own commit. */
-function useEvictAfterCommit(store: HighlightStore | null): void {
+export function useEvictAfterCommit(store: HighlightStore | null): void {
   useEffect(() => { store?.evictUnreferenced(); });
 }
 

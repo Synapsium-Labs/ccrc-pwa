@@ -8,13 +8,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as planner from '../src/session/toolWell';
 import { HLJS } from '../src/lib/highlightGrammars';
 import { ToolWellText } from '../src/session/ToolWellText';
-import { cleanup, fireEvent, render } from '@testing-library/react';
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { ToolCard, type ToolResultEvent, type ToolUseEvent } from '@ccrc/ui';
 import { renderToolWell } from '../src/session/ToolWellText';
 import { ChatMarkdown } from '../src/lib/markdown';
 import { MD_HIGHLIGHT_BLOCK_MAX_CHARS } from '../src/lib/markdownLimits';
 import { ANSI_HUE_TOKEN } from '../src/lib/ansi';
-import { withSyncHighlight } from './highlightTestStore';
+import { HighlighterContext } from '../src/lib/highlighterContext';
+import type { HighlightStore } from '../src/lib/highlightStore';
+import { inThreadContext, withSyncHighlight } from './highlightTestStore';
 
 afterEach(cleanup);
 
@@ -207,3 +209,28 @@ describe('tool well', () => {
     expect(resultWell!.querySelector('code.hljs .hljs-addition')?.textContent).toBe('+new');
   });
 });
+
+describe('L1-3: a tool well\'s store evicts what its text no longer shows', () => {
+  it('after the text changes and commits, the superseded text\'s answered entry is gone from the well\'s store', async () => {
+    const stores: HighlightStore[] = [];
+    const base = inThreadContext();
+    const ctx = { ...base, createStore: (h: Parameters<typeof base.createStore>[0], m: Parameters<typeof base.createStore>[1]) => { const s = base.createStore(h, m); stores.push(s); return s; } };
+    const first = '@@ -1 +1 @@\n-old\n+new';
+    const second = '@@ -1 +1 @@\n-one\n+two';
+    const well = (text: string) => (
+      <HighlighterContext value={ctx}><ToolWellText use={{ name: 'Bash', input: '{"command":"git diff"}' }} part="result" text={text} /></HighlighterContext>
+    );
+    const { rerender, container } = render(well(first));
+    const store = stores.at(-1)!;
+    const key = store.keyOf('diff', first);
+    expect(key.kind).toBe('key');
+    const oldKey = (key as { key: string }).key;
+    await waitFor(() => expect(store.peek(oldKey).kind).toBe('html'));
+    expect(container.querySelector('.hljs-deletion')?.textContent).toBe('-old');
+    rerender(well(second));
+    expect(stores).toHaveLength(1);
+    expect(store.peek(oldKey).kind).toBe('unrequested');
+    await waitFor(() => expect(container.querySelector('.hljs-deletion')?.textContent).toBe('-one'));
+  });
+});
+
