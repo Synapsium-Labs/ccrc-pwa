@@ -3,16 +3,22 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > [!CAUTION]
-> **W2-PASS gate. This is a draft, and it authorises nothing yet.** It was drafted under programme item CP-60 while the W2 window waits. Drafting and review may go ahead now.
+> **A held draft. It authorises nothing.** It was drafted under programme item CP-60 and is not accepted: its review findings still need disposition.
 > This plan does **not** authorise any of the following:
 > - a feature implementation, or the merge of this document;
 > - touching a `steer-on/<id>` or `history-steer-live.<backend>` marker;
 > - a live model probe, a store read, a release or a rollout.
 >
-> Each of those waits for CP-50, the operator's recorded W2 gate decision, to read **pass**. A release or arming also waits for CP-51's close acts. On a fail, this plan is cancelled with the verdict as its reason.
-> - **CP-60 is not met by this draft.** CP-60 asks for the precompute reuse to be re-measured on the installed version. That is a read of the installed build and of stored boundaries, which this drafting assignment forbids, so it has **not** been done. The plan may not merge until an authorised act has measured it (Task 1E, act 1, moved ahead of the merge), and a live path then holds every arming (O3).
-> - The operator's rulings R-B1 to R-B4 stand as ruled. In particular R-B2: from act 6 to act 28, no release is installed and no wrapper changes.
-> - W2 is not shortened or waived here.
+> **W2 is not this plan's gate.** The operator's conditional skip ruling of 2026-11-02 (the programme's "Current route", recorded by #2070) takes the full W2 replay and seven-day A/B off the progress path. It records W2 as **evaluation not run**: not passed, not failed, and not scheduled. So this plan cites that ruling where it used to wait for CP-50 to read pass. It claims no W2 result and no benefit from steering, and it changes no scientific threshold and no runtime default.
+>
+> What still gates W3 under that route:
+> - **acceptance of this plan**, through independent review, before any implementation;
+> - **the focused spike of spec §7.5** (Task 1). It measures output headroom, compliance, compaction duration and echo overhead. It gates relying on steering and arming it (CP-62, CP-63), not the start of any seven-day study;
+> - **the operator's per-backend compliance bars and arming.** An unarmed session keeps its native leaf, which stays the fallback;
+> - **CP-60's precompute re-measurement on the installed version, which has not been performed.** It reads the installed build and the stored boundaries, read-only. This drafting assignment forbids that read. The re-measurement needs no model spend and no live compaction. The plan may not merge until an authorised read-only act has measured it (Task 1E, act 1, moved ahead of the merge), and a live path then holds every arming (O3);
+> - **CP-51's W2 close acts, which are not waived.** Before a W3 release or arming, the operator measures on the node any W2 live state those acts name: a recall-off generation, a headless-on marker, an update freeze or an `--out` file. None is assumed absent, and closing one is the operator's act.
+>
+> - The operator's rulings R-B1 to R-B4 stand as ruled. R-B2's span (acts 6 to 28) is a W2 window, and none is scheduled under the current route. If W2 is expressly resumed, no W3 release is installed inside that span.
 > - Nothing here claims that W1's acceptance or its migration integrity is complete. W1-k's miss of 2026-10-01 still waits on the operator's ruling, and W1-b, W1-e and W1-f are still to be re-measured (CP-37).
 
 **Goal:** At each main-scope compaction, the session writes its own archive entry for the span: a `<ccrc-leaf>` block with a gist, topics and refs, and a steered leaf replaces the native one. W1-B2's parser reads that block with one gap: it splits `refs:` on whitespace and commas, while the approved template asks for semicolons, so template-shaped refs are dropped today. Task 1F repairs that inside the spike PR, before the spike relies on refs. The order of work:
@@ -40,13 +46,13 @@
 - §10.3, §10.6 item 5, and §10.7's W3 row and W3 kill rule;
 - §16's slugs `history-steer-hook-never-consumes`, `history-steer-arming-markers`, `history-steer-receipt`, `history-steer-per-backend` and `history-steer-archive-quote`.
 
-Programme: `docs/superpowers/programs/ccrc-history.md`, Stage 6 (CP-60 to CP-63), and its Carried constraints. Read both at `ce0c2c5ca1f691fec62d4dfa80934c84a6dc45bd`. Every anchor below was re-measured by content there, read-only, from source. It reconciles at `origin/main` `8de56f255`: since the drafting base, the only path this plan cites that changed is `shared/api.ts`, and the change is unrelated.
+Programme: `docs/superpowers/programs/ccrc-history.md`, Stage 6 (CP-60 to CP-63), and its Carried constraints. Read both at `ce0c2c5ca1f691fec62d4dfa80934c84a6dc45bd`. Every anchor below was re-measured by content there, read-only, from source. It reconciles at `origin/main` `8de56f255`: since the drafting base, the only path this plan cites that changed is `shared/api.ts`, and the change is unrelated. The programme's "Current route", the conditional skip ruling of 2026-11-02 recorded by #2070, was read at `origin/main` `408d93806`. It supersedes the CP-50 pass dependency that Stage 6's rows still carry.
 
 ## Global Constraints
 
-- **Gate.** No task below runs before CP-50 reads pass. No release or arming before CP-51 (R-B2's window ends at act 28).
+- **Gate.** No task below runs before this plan is accepted and CP-60's precompute condition is measured (the box above). The 2026-11-02 ruling replaces the CP-50 pass this line used to require. No release or arming happens until the W2 live state CP-51 names has been measured and, if any stands, closed by the operator.
 - **Order.** W3 and W4 are independent (§10.4 "Wave independence"). The spike comes first (CP-60, CP-61, §7.5 "task 1, before reliance").
-- **Hook edits are in the tail only** (§10.6 item 5). The tail is everything below `# @anchor compact-arm-emit-call`, the emitter call in the SessionStart arm that README cites. Nothing new lands above it. `_hook_history_card` sits above it as the one sanctioned exception, and W3 edits nothing there.
+- **W3's hook edits are in the tail only** (§10.6 item 5). The tail is everything below `# @anchor compact-arm-emit-call`, the emitter call in the SessionStart arm that README cites. No W3 edit lands above it. `_hook_history_card` sits above it as the one sanctioned exception, and W3 edits nothing there. The rule binds W3's own edits. Nothing in this plan restricts a later, unrelated edit above the anchor (Task 1C).
 - **Switches have no writer in the tree** (the spec's pin O13, not this plan's decision O13; `switches-history.test.ts`):
   - `~/.ccrc/history-steer-off`;
   - `~/.ccrc/history-steer-live.anthropic` and `~/.ccrc/history-steer-live.other`;
@@ -72,15 +78,15 @@ Programme: `docs/superpowers/programs/ccrc-history.md`, Stage 6 (CP-60 to CP-63)
 - **Compliance bars are the operator's** (CP-62). No task, test or default sets one, and no code compares compliance with a bar. A bar never reopens the two fixed gates: truncation 0 and added p50 at most +10% (§10.7) hold whatever bar the operator sets.
 - **No live probe** runs in any task's tests: fixture transcripts, fixture HOMEs (`makeCcdHarness`, `tmpHelpers.ts`), and fixture accounts `lane-a` and `lane-b`.
 - **Every test, typecheck and mutant** runs through `ccrc test -- …`, in the foreground, with a timeout of at least 600,000 ms and `--maxWorkers=2`, at build time. This drafting wave runs none of them.
-- **Blocked decisions.** A step that consumes an open decision (the table "Open decisions and proposals") is marked **BLOCKED on O*n***. It does not run until O*n* is ruled. The recommended default is shown, and it is not approved.
+- **Blocked decisions.** Anything that encodes an open decision's answer is marked **BLOCKED on O*n*** (the decision table): a step, a test assertion, an expected value or a mutant. A blocked step does not run. A blocked test is written now and kept `.todo`, and a blocked mutant is held. Each takes the ruling's expectation once O*n* is ruled. A recommendation is shown, and it is never a runnable expectation.
 - **Claims are whole paths, measured when the work starts.** Run `ccrc-api claims list --project ccrc-pwa` at the wave's start. A path held by another run is mailed to its holder through the 409's `mailHint`, and is edited only after the holder releases it or hands it over. A claim description in this plan is not permission.
-- **Departures.** No deviation number is issued for this plan. A departure found while building is reported to the coordinator as an unnumbered slug.
+- **Departures.** This plan proposes departures from the spec and the programme. Each is unnumbered and unapproved, and is listed by slug under "Build questions and proposed departures". The coordinator numbers any that is approved. No deviation number is issued for this plan, and a departure found while building is reported as an unnumbered slug.
 - **The anchor rule.** A line number in this plan is a hint at `ce0c2c5ca`. Each task re-finds its anchor by the quoted content, and a moved line is a corrected prediction, never a stop (G1).
 
 ## Review Focus
 
 These are the five failure modes the spec implies but does not pin, most likely first. Each line names the task that owns its test.
-1. **A breaker transition counted twice.** A leaf re-derived by `refreshLeaf`, `reparse`, `doctor --repair` or a rebuild must not move the breaker again. Owned by Task 2, test `breaker counts a span once, at first derivation`.
+1. **A breaker transition counted twice.** A leaf re-derived in place by `refreshLeaf`, `reparse` or `doctor --repair` must not move the breaker again. Owned by Task 2, test `breaker counts a span once, at first derivation`. A rebuild derives every leaf afresh into a new store, so what its breaker holds is O16's choice, held in Task 2.
 2. **A swap between the steer file's write and PreCompact.** The hook must read the lane and the breaker file for the current lane at print time, never anything stamped in the steer file. Owned by Task 3, test `a swap after the steer file was written uses the new lane's breaker`.
 3. **A stale print**, read as today's code reads it. The session compacts twice before the sweep re-mints, so the second print carries the first span's id. Today's `pickReceipt` gives the second span no receipt, so it is `not-requested` and is never counted. The first span keeps its first receipt. That is pinned honestly, and changing it is a separate, unapproved proposal (O7). The other stale shape, a compaction that printed nothing followed by a print before the next tick, is O13. Owned by Task 1B, test `a stale print leaves its span not-requested and never moves the breaker`.
 4. **A gist that ends inside an escape.** The 300-char cap falls before escaping, so no entity or closing tag is cut. Owned by Task 1A, test `the cap falls before the escape, never inside an entity`.
@@ -97,8 +103,8 @@ These are the five failure modes the spec implies but does not pin, most likely 
 | PreCompact's arms in the tail | `unset CS_SCOPE`, the `_hook_compact_pre` call line, `# >>> history-scope` … `# <<< history-scope`, then `if [[ "$event" == PostCompact ]]`, then `exit 0` | the print goes between `# <<< history-scope` and the PostCompact line |
 | The tail comment says nothing prints | "Nothing below prints — PostCompact's whole output is a journal line on disk, and this file's contract is silence." | amended in Task 1C, in the print's commit |
 | The scope verdict | `_hook_history_scope` (in the tail) reads `${CS_SCOPE+x}`, and when it is unset parses the payload and runs `_hook_compact_scope`. That arm forks: one `jq`, and the scope rule's `find`s. `_hook_compact_scope` sets `CS_SCOPE` as a global | Task 1C factors that unset arm into `_hook_history_scope_verdict`, also in the tail (characterization first), and orders its gates so an unarmed session never reaches it |
-| Directory names in the hook | `HISTORY_SCOPE_DIR` and `HISTORY_CARD_DIR` are assigned above the anchor, and the tail reaches both through those variables | the steer directory's name is a tail variable too, so PX13's scan resolves names, not literals (Task 1C) |
-| The recall-off generation gate | inline in `_hook_history_card`, **above** the tail: `CCRC_SESSION_GENERATION`, then `$REG/<id>.generation`, then `card/<id>/<psid>.gen` | no factoring (tail rule). Task 1C writes a tail copy under a parity matrix (O9) |
+| Directory names in the hook | `HISTORY_SCOPE_DIR` and `HISTORY_CARD_DIR` are assigned above the anchor, and the tail reaches both through those variables | the steer directory's name is a tail variable too, declared as `HISTORY_STEER_DIR="$HOME/.ccrc/history/steer"`. So PX13's scan seeds on that spelling and resolves names, not only literals (Task 1C) |
+| The recall-off generation gate | inline in `_hook_history_card`, **above** the tail: `CCRC_SESSION_GENERATION`, then `$REG/<id>.generation`, then `card/<id>/<psid>.gen` | no factoring, under the tail rule. How the print reads it is O9's, and blocked. The recommendation is a tail copy held equal to it by a parity matrix (Task 1C) |
 | The spool block | `# >>> history-spool`, in the tail (below the anchor), with its `_hs` builder and `printf '\n%s\n' "$_hs" >> "$_hs_p"` | the receipt reuses it through a tail-local append function (Task 1C) |
 | The next leaf id's owner | `lib.mjs` `predictedSpanStart` and `planCardPrediction`, through `decideLeafId` (`fork-qualified` → skip); `card.mjs`'s private `predict(db, s, id, uuid)` measures the inputs, and `oneCard` calls it | Task 1B's steer file is acted on inside `oneCard`, from the same `prediction`; no second span rule |
 | The card's lifecycle | `card.mjs` `oneCard`: a write is due only at end-of-file of the registered session's live copy this tick, with budget left (`atEof`, `mayWrite`). `decideCardFile` deletes a consumed, skipped or unreadable file off end-of-file. A consumed file whose replacement fails is unlinked (D-5059), and so is a prediction whose generation record cannot be acted on (R-recalloff-keep). `withdrawCards` unlinks every prediction on a pass with no card step: `holdPass` with no DB, the `ids === null` hold, the migrate, recover and hold arms, and, in the tick, a cap or floor pause, a floor stop, an unreadable roster or a spent budget (`decideCardWithdraw`, `CARD_WITHDRAW_REASONS`). `withdrawSkippedCards` unlinks one session's on a skipped copy (D-5061). `history-off` and a pass no timer starts withdraw nothing (D-5062) | Task 1B applies every one of these arms to the steer file, through the same deciders |
@@ -117,7 +123,7 @@ These are the five failure modes the spec implies but does not pin, most likely 
 
 ```mermaid
 flowchart LR
-  P["prerequisites: CP-50 pass, CP-51,<br/>precompute measured (Task 1E act 1)"] --> T1["W3-1 the spike PR<br/>(Tasks 1A-1D, 1F)"]
+  P["prerequisites: this plan accepted,<br/>precompute measured (Task 1E act 1)"] --> T1["W3-1 the spike PR<br/>(Tasks 1A-1D, 1F)"]
   T1 --> R1["one release tag carrying W3-1<br/>and no later W3 PR"]
   R1 --> C{{"spike cohort, both backends<br/>(Task 1E, operator acts)"}}
   C --> E["markers removed; evidence posted"]
@@ -131,17 +137,22 @@ flowchart LR
   A --> M
   M --> R4["W3-4 released onto armed nodes"]
 ```
-*Figure 1. Spike first. The spike PR carries only what the cohort needs: the steer-on-only print with no breaker, and the refs repair. The cohort runs on one immutable release, and no later W3 PR is rolled onto a cohort node until its markers are removed. Arming waits for the breaker, the lanes and the operator's bar. W3-4's add-on reaches an armed node only after it is measured there, under the same fixed gates.*
+*Figure 1. Spike first, with no W2 PASS before it (the 2026-11-02 ruling), and any W2 live state measured before a release. The spike PR carries only what the cohort needs: the steer-on-only print with no breaker, and the refs repair. The cohort runs on one immutable release, and no later W3 PR is rolled onto a cohort node until its markers are removed. Arming waits for the breaker, the lanes and the operator's bar. W3-4's add-on reaches an armed node only after it is measured there, under the same fixed gates.*
 
 **What CP-63's evidence covers (A2).** The spike measures the composer with `children: []`, so CP-63's arming covers the leaf template and the previous-leaf lines only. W3-4's add-on adds up to 4,000 chars to one compaction in eight, which nothing has measured. So W3-4 is released onto a node with an armed backend only after an add-on re-measure there (Task 4 Step 6, an operator act, O15). That re-measure uses the spec's fixed gates unchanged: truncation 0, and added p50 compaction time at most +10%. Neither gate moves, and a compliance bar does not reopen them.
 
-**How CP-61's list maps here (O10, a proposed reading, not approved).** CP-61 expects "the spike PR, then the hook, receipt, breaker and parser PRs". A §7.5 spike arms `steer-on/<id>` sessions, and those can only steer if a print and a receipt exist. So:
+**How CP-61's list maps here (O10, a proposed ordering departure, not approved).** CP-61 expects "the spike PR, then the hook, receipt, breaker and parser PRs". A §7.5 spike arms `steer-on/<id>` sessions, and those can only steer if a print and a receipt exist. This plan proposes, as the departure `history-steer-spike-pr-scope`:
 - the steer-on-only print and the receipt land **inside** the spike PR;
+- so does Task 1F's parser change, `blockFields` reading the template's `;` refs, which CP-61's list would place in a later parser PR. The spike's compliance and ref figures read what it stores;
 - the later "hook" PR is W3-3's per-backend arming;
 - there is no separate receipt PR;
 - the "parser" PR is W3-4's node-block read.
 
-If the coordinator rules CP-61's list literally, the spike cannot run before a hook PR, and the conflict goes back to the operator. This plan does not decide it.
+The alternatives stay open with O10:
+- **CP-61 literally:** a hook PR, a receipt PR and a parser PR before the spike. The spike then cannot run first, and that conflict goes back to the operator;
+- **Task 1F on its own:** a separate parser PR, merged and released with W3-1 before the cohort. It keeps the parser change out of the spike PR at the cost of one more PR before the cohort.
+
+The proposal is recommended and not approved. O10 is the coordinator's to rule, and the operator's if it is ruled a change to CP-61. W3-1's dispatch is blocked until then.
 
 **The cohort's immutable version (O11, proposed).**
 - The cohort runs on one ccrc release tag, carrying W3-1 and no later W3 PR.
@@ -160,6 +171,7 @@ If the coordinator rules CP-61's list literally, the spike cannot run before a h
 All test paths are under `server/test/`.
 - W3-1 is one PR, because CP-61 names one spike PR. If its review finds it too large, the coordinator may split it into 1A, 1F and 1B-1C, and 1D, all merged and released before the cohort (a build question). Task 1F is never left out of the cohort's release: the spike's compliance figures read refs.
 - Every PR that grows `ccd/session-hook.sh` runs `GROWTH_CHECK=1` growth-check in its gate. A waiver counts only once it is committed.
+- Every W3 PR that edits `ccd/session-hook.sh` (W3-1, W3-2 and W3-3) runs the tail rule's PR-time check in its gate (Task 1C Step 4). It is a gate command, not a committed test, so it binds W3's own edits and retires with W3.
 - Every PR runs `deviation-refs` after `git fetch origin main`, plus `dtbd`, `citations` and `anchors`.
 
 **Predecessor contracts:**
@@ -169,25 +181,36 @@ All test paths are under `server/test/`.
 
 **README's region.** The claim is whole-path, but the edit is only the two sentences "`PreCompact` and `PostCompact` print nothing", found by content. If README is held when W3-1 starts (the Carried constraints say another run's claim holds its driver paragraph), the worker mails the holder and edits nothing in README until it is released or handed over. The rest of W3-1 can proceed meanwhile.
 
-## Open decisions and proposals (none approved by this plan)
+## Decision table (none approved by this plan)
 
-| # | Decision | Recommendation | First executable consumer (BLOCKED there) | Owner |
-|---|---|---|---|---|
-| O1 | Outcomes while a breaker is open | They do not move it, until `open_until_ms` | Task 2 Step 3 (`decideBreaker`'s open arm) | the coordinator, or the operator if ruled product |
-| O2 | The spike's sample bound | 20 receipted main compactions per backend, or 7 days, whichever is first; below 10 is `insufficient` | Task 1E act 5 | the operator |
-| O3 | A live precompute path on the installed version | Hold every arming; the operator weighs the forfeit | Task 1E act 1, before act 3 | the operator |
-| O4 | Each backend's compliance bar | None: the spec leaves it to the operator, from the evidence | CP-62 | the operator |
-| O5 | The spike report's home | `history-counters.mjs spike` (`history-steer-spike-report`) | Task 1D Step 3 | the coordinator |
-| O6 | A fork-qualified next span (`planCardPrediction` → skip `fork-qualified`) | Write no steer file and remove any, so an armed hook prints the generic variant and the parser assigns the id | Task 1B Step 3, fork arm | the coordinator |
-| O7 | The stale-receipt association | Keep today's `pickReceipt`, under which a stale print's span is `not-requested`. Unapproved alternative below | Task 2 (only if the alternative is ruled in) | the operator (it changes what counts as requested) |
-| O8 | The breaker's clock: which time the derive path passes `decideBreaker` | The boundary row's `ts_ms`, never derive time. A boundary with no time uses derive time, counted `breaker_clock_derive` | Task 2 Step 3, with Review Focus 5's case and mutant (e), both held `.todo` | the coordinator |
-| O9 | The recall-off gate in the tail | Default: a tail copy, `_hook_history_steer_recall_off`, held equal to the card's gate by a parity matrix. Unapproved alternative: a second sanctioned exception to the tail rule, so that one function serves both, which amends §10.6 | Task 1C Step 3 | the coordinator (default); the operator (the alternative) |
-| O10 | CP-61's PR list (see "Order") | The steer-on-only print and the receipt land in the spike PR | W3-1's dispatch | the coordinator |
-| O11 | The cohort's immutable version and its restart rule | As in "Order" | Task 1E act 3 | the operator |
-| O12 | The `refs:` residue Task 1F leaves: a URL token that holds `;`, an item with spaces inside it (a test's name), and a block whose every ref fails `classifyRef` still reading `ok` | Keep today's behaviour for all three: no wider identifier grammar, and no status change. Task 1D's report counts the stored `model` refs per steered leaf, so the loss is measured, not guessed | none in W3. A parser task follows only if ruled in | the coordinator; the operator if it changes what `ok` means |
-| O13 | Stale-print attribution: a compaction that printed nothing (history-off, unarmed, a switch, or a lane with no live marker), then a print before the next tick. Today's `pickReceipt` gives the earlier, unprinted span the exact receipt, so it reads `absent` though it was never asked | Options: (a) accept it; (b) withdraw steer files on a `history-off` pass, which covers only the longest window; (c) an exact receipt counts only inside its span's window, an O7-family change to association; (d) the breaker skips a leaf whose exact receipt is later than its own boundary, counted `breaker_late_receipt`, with status and association unchanged. Recommended: (d) now, and (c) offered with O7 | Task 2 Step 3, the counting rule (its case held `.todo`). Task 1B pins today's behaviour as a characterization, and Task 1D counts late receipts apart, neither of which needs the ruling | the operator, since (c) changes what counts as requested, as O7 does |
-| O14 | The parent add-on's own text and budget, which §7.1 does not fix: the instruction text, the current span's slot, a child gist's cap, and the node block's status rule | As Task 4: the proposed text; the current slot `[{LEAF_ID} this span]`; one cap `C` for every child gist, the largest in 40 to 300 that keeps both bounds; a node block judged on its id and gist only | Task 4 Step 3 | the coordinator; the operator for the cap, a truncation tradeoff |
-| O15 | Add-on evidence before W3-4 reaches an armed backend | An add-on re-measure on each armed backend, under the fixed gates (Task 4 Step 6) | W3-4's release onto a node with an armed backend | the operator |
+This is the plan's one decision table, and none of its rows is approved here. Each row blocks its first consumer until it is ruled, together with every test assertion and mutant that encodes its answer (Global Constraints, "Blocked decisions"). Accepting this draft rules no row, and ruling a row arms nothing.
+
+| # | Decision (owner) | Options | Recommendation, not approved | Affected task | First blocked consumer |
+|---|---|---|---|---|---|
+| O1 | Outcomes while a breaker is open (the coordinator; the operator if ruled product) | (a) they do not move it until `open_until_ms`; (b) they keep counting | (a) | Task 2 | Step 3's open arm; its case and mutant (f) held |
+| O2 | The spike's sample bound (the operator) | a count of receipted main compactions per backend; a time; whichever comes first | 20 per backend or 7 days, whichever is first; under 10 reads `insufficient` | Task 1E | act 5 |
+| O3 | A live precompute path on the installed version (the operator) | hold every arming; arm and accept the forfeit | hold every arming | Task 1E | act 1, before act 3 |
+| O4 | Each backend's compliance bar (the operator) | any bar the evidence supports | none: the spec leaves it to the operator | CP-62 | CP-63's arming |
+| O5 | The spike report's home (the coordinator) | `history-counters.mjs spike`; a script of its own | `history-counters.mjs spike` | Task 1D | Step 3 |
+| O6 | A fork-qualified next span (the coordinator) | (a) no steer file, so an armed hook prints the generic variant and the parser assigns the id; (b) a file carrying the fork-qualified id | (a) | Task 1B | Step 3's fork arm, and its parity case |
+| O7 | Stale-receipt association (the operator: it changes what counts as requested) | (a) today's `pickReceipt`; (b) also a non-generic receipt timed in the span's window, marked stale (below) | (a) | Task 2 | Task 2, only if (b) is ruled in |
+| O8 | The breaker's clock (the coordinator) | the boundary row's `ts_ms`; derive time | `ts_ms`, with derive time only for a boundary that has none, counted `breaker_clock_derive` | Task 2 | Step 3's clock; Review Focus 5's case and mutant (e) held |
+| O9 | The recall-off gate in the tail (the coordinator; the operator for (b)) | (a) a tail copy held equal to the card's gate by a parity matrix; (b) one function above the anchor, a second sanctioned exception that amends §10.6 | (a) | Task 1C | Step 3; Step 1's verdict matrix, its placement row and mutant (g) held |
+| O10 | CP-61's PR order (the coordinator; the operator if ruled a change to CP-61) | (a) the print, the receipt and Task 1F in the spike PR (`history-steer-spike-pr-scope`); (b) CP-61 literally; (c) Task 1F as its own PR before the cohort | (a) | Tasks 1C, 1F | W3-1's dispatch |
+| O11 | The cohort's immutable version and restart rule (the operator) | as "Order"; no rule | as "Order" | Task 1E | act 3 |
+| O12 | The `refs:` residue Task 1F leaves (the coordinator; the operator if `ok` changes) | (a) keep today's behaviour, measured by Task 1D's `modelRefs`; (b) a wider identifier grammar; (c) a status rule for refs that never classify | (a) | none in W3 | a parser task, only if (b) or (c) is ruled in |
+| O13 | Stale-print attribution (the operator) | (a) accept it; (b) withdraw steer files on a `history-off` pass; (c) an exact receipt counts only inside its span's window (O7's family); (d) the breaker skips a leaf whose exact receipt is later than its boundary, counted | (d), with (c) offered beside O7 | Task 2 | Step 3's counting rule; its case and mutant (g) held |
+| O14 | The parent add-on's text and budget (the coordinator; the operator for the cap) | the instruction text; the current slot's spelling; one cap `C` for every child gist, or one per child; the node block's status rule | Task 4's proposal: its text, `[{LEAF_ID} this span]`, one `C` from 40 to 300 by binary search, a node judged on id and gist | Task 4 | Step 3; the `C`-value, floor, slot and node-status cases and mutant (g) held |
+| O15 | Add-on evidence before W3-4 reaches an armed backend (the operator) | a re-measure on each armed backend under the fixed gates; none | the re-measure | Task 4 Step 6 | W3-4's release onto a node with an armed backend |
+| O16 | The breaker on a rebuilt store (the operator; §7.3 does not choose) | (a) replay and count: a rebuild applies `decideBreaker` to each receipted leaf, in derivation order; (b) start closed: a rebuild writes no breaker transition | none: this plan selects neither | Task 2 | the rebuild arm of Step 3's insert path; its case and mutant (h) held |
+
+**O13 in detail.** A compaction printed nothing (history-off, unarmed, a switch, or a lane with no live marker), and a print followed before the next tick. Today's `pickReceipt` gives the earlier, unprinted span the exact receipt, so that span reads `absent` though it was never asked. Option (b) covers only the longest such window. Option (d) leaves status and association unchanged and counts `breaker_late_receipt`. Task 1B pins today's behaviour as a characterization, and Task 1D counts late receipts apart: neither needs the ruling.
+
+**O16 in detail** (`history-steer-breaker-on-rebuild`). The earlier draft disagreed with itself. It said both that a rebuilt store starts every breaker closed and that a rebuild must not move the breaker again. Meanwhile, Task 2 applies `decideBreaker` where a new leaf is inserted, and a rebuild inserts every leaf afresh, so every receipted leaf can move the breaker there. This is a contract question for code not yet written, not a defect in shipped code, and spec §7.3 does not choose between the two options.
+- Under (a), the rebuilt breaker equals the old one only if its clock replays too, so (a) depends on O8.
+- Under (b), the rebuild's derive call must say that it is a rebuild. The W3-2 worker finds where that call is and claims that file if (b) is ruled.
+
+The case is written now and kept `.todo`, and its mutant is held.
 
 **The unapproved alternative for O7** (`history-steer-stale-receipt-window`, not to be built unless ruled in):
 - **The change:** `pickReceipt` also returns a non-generic receipt whose `ts` lies in the span's window (`afterMs < ts ≤ uptoMs`) when no exact one exists, and marks it `stale`. The span is then requested, its block parses, and PX5's wrong-id rule gives `degraded`/`id-mismatch`.
@@ -196,17 +219,16 @@ All test paths are under `server/test/`.
 - **Dependency hold:** it waits on O7, and its existing PX5, PX19 and Review Focus 3 cases are kept. A ruling replaces Review Focus 3's expectation in the same commit.
 - **The ambiguity, returned explicitly:** §7.4 item 2 says blocks parse only at "a main boundary whose span has a steer receipt". The spec does not say whether a receipt naming another span's id belongs to the span whose window it falls in.
 
-**Build questions, by slug (unnumbered, for the coordinator):**
-
-| Slug | What |
-|---|---|
-| `history-steer-module` | The steer file's IO, the breaker publisher and the lane publisher live in a new `ccd/history/steer.mjs`, called from `card.mjs`'s card step, not from `sweep.mjs` as §7.6 says. The decisions stay in lib |
-| `history-steer-on-the-card-lifecycle` | The steer file shares the card's lifecycle: `decideCardFile` gains an `artifact` argument rather than a second decider, and each withdrawal arm unlinks both artifacts |
-| `history-steer-range-text` | A slot's range is the `tree` verb's text, `isoOf(earliest)..isoOf(latest)` (`recall.mjs`), at most 36 ASCII chars. lib gains `nodeRangeText` with that spelling. `recall.mjs`'s private `isoOf` folds into it when `recall.mjs` is next edited (its first editor's carry) |
-| `history-steer-hook-copies` | The hook carries the template's first line, the generic variant and the lane words as constants, each parity-pinned against lib. Legitimately different: another process (bash cannot import `lib.mjs`) |
-| `history-steer-recall-off-tail-copy` | O9's default: a second spelling of the recall-off gate, forced by the tail rule and held equal by a parity matrix |
-| `history-steer-breaker-first-derivation` | A breaker transition is applied only at a leaf's first derivation. A rebuilt store starts every breaker closed |
-| `history-steer-spike-report` | O5 |
+**Build questions and proposed departures, by slug.** These are unnumbered and unapproved. They are the coordinator's, and each is numbered only if approved:
+- `history-steer-module`, a departure from §7.6's file list. The steer file's IO, the breaker publisher and the lane publisher live in a new `ccd/history/steer.mjs`, called from `card.mjs`'s card step, not from `sweep.mjs` as §7.6 says. The decisions stay in lib;
+- `history-steer-on-the-card-lifecycle`. The steer file shares the card's lifecycle: `decideCardFile` gains an `artifact` argument rather than a second decider, and each withdrawal arm unlinks both artifacts;
+- `history-steer-range-text`. A slot's range is the `tree` verb's text, `isoOf(earliest)..isoOf(latest)` (`recall.mjs`), at most 36 ASCII chars. lib gains `nodeRangeText` with that spelling. `recall.mjs`'s private `isoOf` folds into it when `recall.mjs` is next edited (its first editor's carry);
+- `history-steer-hook-copies`, a recorded second spelling. The hook carries the template's first line, the generic variant and the lane words as constants, each parity-pinned against lib. They are legitimately different, because they live in another process: bash cannot import `lib.mjs`;
+- `history-steer-recall-off-tail-copy`, O9's recommendation and blocked with it: a second spelling of the recall-off gate, forced by the tail rule and held equal by a parity matrix;
+- `history-steer-breaker-first-derivation`. A breaker transition is applied only at a leaf's first derivation, so a re-derivation in place never moves it. What a rebuilt store holds is O16's (`history-steer-breaker-on-rebuild`);
+- `history-steer-spike-report`: O5;
+- `history-steer-spike-pr-scope`, a proposed ordering departure from CP-61 (O10): the print, the receipt and Task 1F's parser change land in the spike PR;
+- `history-steer-stale-receipt-window`: O7's alternative, above, built only if it is ruled in.
 
 Spec errata, for the coordinator's docs PR after the merge:
 - §7.6 omits `ccd/ccd-history-sweep`, which §7.2 requires ("The roster is data passed by the shim"), and omits `card.mjs`.
@@ -214,7 +236,7 @@ Spec errata, for the coordinator's docs PR after the merge:
 
 ## Carried constraints this plan owns
 
-The programme assigns these to "the next wave that edits" each file, and W3 and W4 are independent. So **whichever of W3 and W4 first edits a file after W2 closes takes that file's carries**. The other wave's first step checks that they are done.
+The programme assigns these to "the next wave that edits" each file, and W3 and W4 are independent. So **whichever of W3 and W4 first edits a file takes that file's carries**. The other wave's first step checks that they are done.
 
 | File | Carry | Owner here |
 |---|---|---|
@@ -342,7 +364,7 @@ The generic variant is the same text with `<ccrc-leaf v="1">` in place of the id
 
 Lettered F so that 1B to 1E keep the meaning earlier reviews gave them. It lands in W3-1, before the cohort, because the spike's compliance and ref figures read what this task stores.
 
-The approved template asks for "up to 20 semicolon-separated identifiers", and §7.4 keeps classified refs. Today a block written to the template, `refs: ccd/x.mjs; D-4740; abc1234`, parses to the tokens `ccd/x.mjs;`, `D-4740;` and `abc1234`. `classifyRef` names only the last, and `blockFields` drops the other two without a count, while `blockStatus` still reads `ok`. This task repairs that one gap and nothing wider. It authorises no parser change before W2 passes, like every task here.
+The approved template asks for "up to 20 semicolon-separated identifiers", and §7.4 keeps classified refs. Today a block written to the template, `refs: ccd/x.mjs; D-4740; abc1234`, parses to the tokens `ccd/x.mjs;`, `D-4740;` and `abc1234`. `classifyRef` names only the last, and `blockFields` drops the other two without a count, while `blockStatus` still reads `ok`. This task repairs that one gap and nothing wider. Like every task here, it authorises no parser change before this plan is accepted. Its place in the spike PR is a proposed ordering departure from CP-61 (O10).
 
 **Files:**
 - Modify: `ccd/history/lib.mjs`, `blockFields` only. Its signature, and so `lib.d.mts`, is unchanged.
@@ -392,7 +414,9 @@ it('input that classifies today is unchanged: comma and space lists, and a URL h
 
   In `history-derive.test.ts`:
   - `a steered leaf's template-shaped refs reach node_refs`: a receipted span whose summary carries the template block with the six refs above. `node_refs` holds those six with origin `model`, in that order, ahead of the mined refs, and a ref that was also mined stays `model`;
-  - in the redaction-order describe, `a registered value inside a semicolon-joined refs token leaves no belt-width stretch in node_refs`: the token `<seeded value>;ccd/x.mjs` stores only `ccd/x.mjs`, with no fragment of the value.
+  - in the redaction-order describe (review R30's, `a registered value is redacted before any derived field is cut`), `a semicolon-joined refs token holding a registered value: no stored field keeps the value`. The steered block's gist holds the describe's registered value `V`, and its refs line is `src/<V>/model.ts;ccd/x.mjs`. Stored: the gist and topics hold no belt-width stretch of `V`, and `node_refs` holds `ccd/x.mjs` and nothing that holds `V` or the redaction mark. `V` is the describe's own value, registered the way the describe registers it, so the case adds no new secret shape.
+    - **The characterization precondition**, a CONTROL in the same describe that runs first: a fixture whose secret file never names `V` stores `V` in the gist and `src/<V>/model.ts` as a `path` ref. Both fields keep `V` when nothing redacts it, so the case cannot pass vacuously.
+    - **How it kills mutant (d)** (planned, and measured only when built): (d) parses the block from unredacted text, so its gist keeps `V`, and the gist assertion goes red. The refs half alone cannot kill (d). A registered value is one run that holds no `;`. A ref whose redacted form holds the mark does not classify, so it is dropped either way, as `minedRefs` and `redactedRollup` drop one. The refs half kills only a variant that stores a redacted ref under its earlier kind.
 - [ ] **Step 2: Run them: the template cases fail** (the refs come back short), and the unchanged-input case passes.
   Run: `cd server && ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/history-parser.test.ts test/history-derive.test.ts`
 - [ ] **Step 3: Implement** the rule in `blockFields`.
@@ -400,7 +424,7 @@ it('input that classifies today is unchanged: comma and space lists, and a URL h
   - (a) split on `;` before trying the whole token (the URL case);
   - (b) no `;` split (the template case);
   - (c) the split moved into `parseBlocks`, which changes its raw tokens (the existing raw-token pin, and the URL case);
-  - (d) the block parsed from unredacted text, each ref redacted after the split (the redaction-order case).
+  - (d) the block parsed from unredacted text, each ref redacted after the split (the redaction-order case's gist assertion; its refs half alone cannot kill it).
 - [ ] **Step 5: Commit** `fix(history): read the steer template's semicolon refs (spec §7.1, §7.4 item 7)`.
 
 O12 lists what this task leaves on purpose: a URL followed by `;` and another ref with no space keeps today's one-URL reading; an item with spaces inside it is split into words, as today; and a block whose refs all fail to classify still reads `ok`.
@@ -494,9 +518,9 @@ The card's per-session step already measures, decides and acts for the next comp
 - Modify: `ccd/session-hook.sh`, the tail only:
   - `_hook_history_scope_verdict`, factored from `_hook_history_scope`'s unset arm;
   - a tail-local `_hook_history_spool_append <json>`, factored from the spool block's gate and append;
-  - `_hook_history_steer_recall_off`, under O9's default;
+  - `_hook_history_steer_recall_off`, O9's recommendation, and blocked on O9;
   - `_hook_history_pre` and its call line, between `# <<< history-scope` and the PostCompact line;
-  - the names it reads by: `HISTORY_STEER_DIR`, `HISTORY_STEER_FIRST_LINE` and `HISTORY_STEER_GENERIC`, assigned in the tail, unlike the card's directory names above the anchor;
+  - the names it reads by, assigned in the tail, unlike the card's directory names above the anchor. The steer directory's assignment is declared here as `HISTORY_STEER_DIR="$HOME/.ccrc/history/steer"`, spelled as `HISTORY_CARD_DIR="$HOME/.ccrc/history/card"` is, with no trailing slash. PX13's static scan seeds on that spelling. The other two names are `HISTORY_STEER_FIRST_LINE` and `HISTORY_STEER_GENERIC`;
   - the tail comment.
 - Modify: `README.md`, the two sentences only (the README rule above).
 - Test: `session-hook-steer.test.ts` (new); `session-hook.test.ts` (the S16 scope cases and the spool cases are the characterization pins); `session-hook-compact-carry.test.ts`; `single-definition/switches-history.test.ts`.
@@ -541,18 +565,24 @@ The card's per-session step already measures, decides and acts for the next comp
   - `scope ambiguous, scope rc 1, and an empty transcript_path → stdout empty`, the §7.7 scope row;
   - PX11: `history-off, history-steer-off, a matching recall-off/<id>, and an unarmed session → stdout empty; compact-steer-off alone → still prints`;
   - PX12: `an unreadable steer file → stdout empty`;
-  - PX13, the static half: `no command in session-hook.sh removes, moves, truncates or writes a path that names steer/`. Its scanner, `steerWriters(text): string[]`, lives in the test file:
-    - the steer names are `steer/` itself and every variable whose assignment, plain or `local`, names `steer/` or an earlier steer name, taken to a fixpoint;
-    - an offender is a line whose command word is `rm`, `mv`, `unlink`, `truncate`, `ln`, `cp`, `install`, `tee`, `dd` or `sed -i`, or that carries a writing redirection (`>`, `>>`, `>|`, `&>`, `<>`), with a steer name in an operand or in the redirection's target. A redirection to `/dev/null`, or to a descriptor (`2>&1`, `>&2`), is not a write.
+  - PX13, the static half: `no command in session-hook.sh removes, moves, truncates or writes a path in the steer directory`. Its scanner lives in the test file, as two functions:
+    - `steerNames(text): string[]` finds the steer names. The seed is the path segment `.ccrc/history/steer`, followed by `/`, a quote, whitespace or the end of the word. That is what the declared assignment `HISTORY_STEER_DIR="$HOME/.ccrc/history/steer"` holds. A variable is a steer name when its assignment (plain, `local` or `readonly`) holds the seed, or holds `$NAME` or `${NAME}` of an earlier steer name. The names are taken to a fixpoint;
+    - `steerWriters(text): string[]` finds the offending lines. An offender is a line whose command word is `rm`, `mv`, `unlink`, `truncate`, `ln`, `cp`, `install`, `tee`, `dd` or `sed -i`, or that carries a writing redirection (`>`, `>>`, `>|`, `&>`, `<>`), with the seed or a steer name in an operand or in the redirection's target. A redirection to `/dev/null`, or to a descriptor (`2>&1`, `>&2`), is not a write.
 
-    The assertions, all in this one case:
+    Both fixtures carry the declared assignment, so the seed reaches the variable they use. The assertions, all in this one case:
     ```js
+    const SEED = 'HISTORY_STEER_DIR="$HOME/.ccrc/history/steer"\n_hs_sf="$HISTORY_STEER_DIR/$id/$psid.txt"\n';
+    // the real hook is seeded, so its empty answer is not vacuous
+    expect(steerNames(hookText)).toContain('HISTORY_STEER_DIR');
     expect(steerWriters(hookText)).toEqual([]);
-    // the contained mutant: a deletion through a variable
-    expect(steerWriters('_hs_sf="$HISTORY_STEER_DIR/$id/$psid.txt"\nrm -f -- "$_hs_sf"')).toHaveLength(1);
-    // the control: the legitimate bounded read and its stderr redirect
-    expect(steerWriters('_hs_sf="$HISTORY_STEER_DIR/$id/$psid.txt"\n{ IFS= read -r -N 8193 t < "$_hs_sf"; } 2>/dev/null')).toEqual([]);
+    // the contained mutant: a deletion through a seeded variable
+    expect(steerNames(`${SEED}rm -f -- "$_hs_sf"`)).toEqual(['HISTORY_STEER_DIR', '_hs_sf']);
+    expect(steerWriters(`${SEED}rm -f -- "$_hs_sf"`)).toHaveLength(1);
+    // the control: the same seeded variable in the legitimate bounded read and its stderr redirect
+    expect(steerNames(`${SEED}{ IFS= read -r -N 8193 t < "$_hs_sf"; } 2>/dev/null`)).toEqual(['HISTORY_STEER_DIR', '_hs_sf']);
+    expect(steerWriters(`${SEED}{ IFS= read -r -N 8193 t < "$_hs_sf"; } 2>/dev/null`)).toEqual([]);
     ```
+    The control resolves the same two names as the mutant, so it passes only because the read is not a write;
   - PX13, the behavioural half: `the steer file is unchanged by every hook run`. Each case in this file that plants a steer file asserts, after the hook exits, the same bytes, inode and mtime;
   - PX17: `a steer file beginning { or with another first line → no print`;
   - PX18: `armed, scope main, no steer file → the generic text, and the receipt's leaf is ""`;
@@ -561,13 +591,14 @@ The card's per-session step already measures, decides and acts for the next comp
   - `the receipt parses under lib's SPOOL_KEYS.steer and SPOOL_VALUE`, through `parseSpoolLine`;
   - the PX16 half;
   - the fork count (Linux, the S16 idiom, `strace -f`): `an unarmed session's PreCompact forks as often as the same run under history-steer-off`. The fixture sets `compact-card-off` and has no `scope/` directory, so `CS_SCOPE` stays unset and a scope check would fork;
-  - the tail rule, durable: `every W3 name in session-hook.sh is defined and called below # @anchor compact-arm-emit-call`. The names are `_hook_history_pre`, `_hook_history_scope_verdict`, `_hook_history_spool_append`, `_hook_history_steer_recall_off` and `HISTORY_STEER_*`. The assertion: each definition's and each call's line number is greater than the anchor's. It runs on every tree, `main` included, for as long as the file exists;
-  - the tail rule, this PR's diff: `no line above # @anchor compact-arm-emit-call differs from git merge-base origin/main HEAD`. The comparison point is growth-check's, and so is its rule: with no `origin/main` it skips with a printed notice, never failing falsely. On `main` the merge base is HEAD, so this case can red only while a branch carries the change. It guards the PR; the durable case above guards every tree after it;
-  - the recall-off parity matrix (O9's default):
+  - the tail rule, durable: `every W3 name in session-hook.sh is defined and called below # @anchor compact-arm-emit-call`. The names are `_hook_history_pre`, `_hook_history_scope_verdict`, `_hook_history_spool_append` and `HISTORY_STEER_*`. The assertion: each definition's and each call's line number is greater than the anchor's. It names only W3's own names, so it never constrains an unrelated edit, and it runs on every tree, `main` included, for as long as the file exists.
+    - The row for `_hook_history_steer_recall_off` is **BLOCKED on O9**. Under the recommendation that function sits below the anchor. Under the alternative, the one shared function would be the second sanctioned exception above it. The row is written now and kept `.todo`.
+    - The PR-time half of the tail rule is a gate command, not a test (Step 4);
+  - the recall-off verdict matrix, **BLOCKED on O9** (written now, kept `.todo`):
     - generation sources: the env, `.generation`, the card's `.gen` record, each absent, empty, malformed or linked;
     - recall-off states: absent, matching, other generation, linked, unreadable, a full window.
 
-    Each row runs through SessionStart(compact), where the card line is served or withheld, and through PreCompact, where the print happens or not, and asserts the same withhold verdict;
+    Each row runs through SessionStart(compact), where the card line is served or withheld, and through PreCompact, where the print happens or not, and asserts the same withhold verdict. That equality is the spec's requirement under either option. But the matrix runs through whichever gate O9's ruling builds, so it waits with the gate;
   - narrowed: `PreCompact prints nothing unless armed and scope main`, the two existing pins, and README's two sentences as amended;
   - parity: `HISTORY_STEER_FIRST_LINE`, `HISTORY_STEER_GENERIC` and the hook's lane words equal lib's `STEER_FIRST_LINE`, `STEER_GENERIC_TEXT` and `BACKENDS`;
   - `switches-history.test.ts`:
@@ -575,7 +606,7 @@ The card's per-session step already measures, decides and acts for the next comp
     - `PENDING_EMITTERS` loses `steer`, so the emitter check now requires the hook to emit it.
 - [ ] **Step 2: Run them: they fail.**
   Run: `cd server && ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/session-hook-steer.test.ts test/session-hook.test.ts test/session-hook-compact-carry.test.ts test/single-definition/switches-history.test.ts`
-- [ ] **Step 3: Implement** commits 1 and 2, then `_hook_history_steer_recall_off` (**BLOCKED on O9**; the default is the tail copy), `_hook_history_pre`, its call line and the amended tail comment.
+- [ ] **Step 3: Implement** commits 1 and 2, then `_hook_history_steer_recall_off` (**BLOCKED on O9**; the recommendation is the tail copy), `_hook_history_pre`, its call line and the amended tail comment.
 - [ ] **Step 4: Run the four files, then `session-hook*` whole and `history-card.test.ts`: all pass.** `session-hook*` is a known load flake: re-run a red file alone first. Mutants, each killed by the case named:
   - (a) printing on `ambiguous` (the scope row);
   - (b) the receipt before the print (PX22);
@@ -583,12 +614,18 @@ The card's per-session step already measures, decides and acts for the next comp
   - (d) no 8 KB bound (PX20);
   - (e) `LC_ALL=C` dropped (the UTF-8 case);
   - (f) `compact-steer-off` read as a history switch (PX11);
-  - (g) a recall-off copy that ignores the `.gen` record (the parity matrix);
-  - (h) `rm -f -- "$f"` through a steer variable in `_hook_history_pre` (PX13's behavioural half; its static half holds the same shape as a contained fixture);
+  - (g) a recall-off copy that ignores the `.gen` record (the verdict matrix). It is **held with O9**, and runs once O9 is ruled, against the ruled gate;
+  - (h) `rm -f -- "$f"` through a steer variable in `_hook_history_pre`, with `f` assigned from `HISTORY_STEER_DIR`. Both halves of PX13 kill it: the static scan of the hook names the line, and the behavioural half sees the file change;
   - (i) scope checked before arming (the fork count);
   - (j) a W3 function moved above the anchor (the durable tail case).
 
-  Then run `GROWTH_CHECK=1` growth-check.
+  Then run `GROWTH_CHECK=1` growth-check, and then the tail rule's PR-time check. §10.6 item 5 binds W3's own hook edits, so this check runs at W3's own gates:
+  - take `git diff --unified=0 "$(git merge-base origin/main HEAD)" HEAD -- ccd/session-hook.sh`;
+  - every removed line's old number must be greater than the anchor's line in the merge base;
+  - every added line's new number must be greater than the anchor's line at HEAD;
+  - the anchor line itself must be unchanged.
+
+  Record the result in the PR body. It is a gate command of W3's hook-editing PRs (W3-1, W3-2 and W3-3), and never a committed test. So it binds W3's edits only, retires with W3, and never reds a later, unrelated edit above the anchor.
 - [ ] **Step 5: Commit** `feat(history-hook): the W3 steer print and receipt, armed by steer-on/<id> (spec §7.2)`.
 
 #### Task 1D: The spike report
@@ -638,7 +675,7 @@ It prints counts and aggregates only, never text. It opens the store read-only.
 #### Task 1E: The cohort (operator acts; none authorised here)
 
 **Prerequisites, all measured and posted before act 3:**
-1. CP-50 reads pass, and CP-51's close acts are done.
+1. This plan is accepted. W2 PASS is not a prerequisite (the 2026-11-02 ruling). Any W2 live state that CP-51's close acts name has been measured on the cohort's nodes and, if one stands, closed by the operator (the box above).
 2. W3-1 has merged, and one release tag carries it and no later W3 PR (O11).
 3. Act 1's precompute measurement is done and is not live, or the operator has ruled O3.
 4. The two sessions are ordinary working sessions the operator chose (act 2), never ones started for the spike.
@@ -671,7 +708,7 @@ The evidence per backend:
 **Files:**
 - Modify:
   - `ccd/history/lib.mjs`: **create** `decideBreaker` and `breakerWord`;
-  - `ccd/history/derive.mjs`: apply them in the insert path of a new leaf, never in `refreshLeaf`;
+  - `ccd/history/derive.mjs`: apply them in the insert path of a new leaf, never in `refreshLeaf`. What a rebuild's inserts do is O16's, and blocked;
   - `ccd/history/steer.mjs`: publish the word, called from `card.mjs` `oneCard` beside the steer file;
   - `ccd/session-hook.sh`, in the tail: `_hook_history_pre` reads it.
 - Test: `history-steer.test.ts`, `history-card.test.ts`, `session-hook-steer.test.ts`
@@ -698,7 +735,8 @@ A breaker file is not withdrawn on a pass with no card step. Without a derivatio
 - [ ] **Step 1: Write the failing tests:**
   - PX15: `5 absent with receipts across 5 separate sweep processes → open; 24 h on → half-open; spans without receipts do not count`. Its fixture gives each boundary the same time as its derivation, so it holds whichever clock O8 rules;
   - PX26: `5 absent on other-produced spans, then an anthropic-produced span → breaker.other open, breaker.anthropic closed; a swap-landing fixture counts under other`, with its CONTROL keyed on the last row before the boundary;
-  - Review Focus 1: `breaker counts a span once, at first derivation`. `refreshLeaf`, a reparse and a repair re-derive the five leaves, and the state is unchanged;
+  - Review Focus 1: `breaker counts a span once, at first derivation`. `refreshLeaf`, a reparse and a repair re-derive the five leaves in place, and the state is unchanged;
+  - O16, **BLOCKED until ruled**: `a rebuild leaves the breaker as O16 rules`. Five receipted `absent` leaves open a breaker, then `doctor --rebuild` derives them into a new store. Under (a) the rebuilt breaker reads what the old store's read, on O8's ruled clock. Under (b) it reads closed, with no row. The case is written now and kept `.todo`, and the ruling sets its expectation;
   - `half-open closes or re-opens on the first counted leaf at or after openUntilMs`, at the `decideBreaker` level with `clockMs` injected, so it holds under either clock;
   - Review Focus 5, **BLOCKED on O8**: `half-open is decided by the O8-ruled clock`. The boundary is inside the open window and is derived a day later. Written to the recommendation, where the breaker stays open, and kept `.todo` until O8 is ruled; the ruling sets its expectation;
   - O1, **BLOCKED until ruled**: `outcomes inside the open window do not move it`. The case is written to the recommended behaviour and stays `.todo` until O1 is ruled;
@@ -706,7 +744,7 @@ A breaker file is not withdrawn on a pass with no card step. Without a derivatio
   - PX21: `an unreadable breaker file → the generic text`;
   - `a readable open breaker file → the generic text, and the receipt's leaf is ""`.
 - [ ] **Step 2: Run them: they fail.**
-- [ ] **Step 3: Implement.** Apply `decideBreaker` in the transaction that inserts a new leaf, and publish the word per `(id, backend)` from `oneCard`, by temp and rename. The clock the derive path passes (O8), the open-window rule (O1) and the late-receipt skip (O13) are each **BLOCKED** until ruled; until then the code takes none of their recommendations.
+- [ ] **Step 3: Implement.** Apply `decideBreaker` in the transaction that inserts a new leaf, and publish the word per `(id, backend)` from `oneCard`, by temp and rename. Four things are each **BLOCKED** until ruled: the clock the derive path passes (O8), the open-window rule (O1), the late-receipt skip (O13), and what a rebuild's inserts do (O16, which has no recommendation). Until they are ruled, the code takes none of their recommendations.
 - [ ] **Step 4: Run them: they pass.** Mutants, each killed by the case named:
   - (a) the breaker updated by `refreshLeaf` (Review Focus 1);
   - (b) `not-requested` counted (PX15);
@@ -716,7 +754,10 @@ A breaker file is not withdrawn on a pass with no card step. Without a derivatio
   Held with their rulings, and run only once each is ruled, against the ruled expectation:
   - (e) the other clock passed by the derive path (Review Focus 5, O8);
   - (f) outcomes moving an open breaker (O1's case);
-  - (g) a late exact receipt counted (O13's case).
+  - (g) a late exact receipt counted (O13's case);
+  - (h) a rebuild taking the option O16 did not rule (O16's case).
+
+  Then run `GROWTH_CHECK=1` growth-check and the tail rule's PR-time check (Task 1C Step 4): this task edits the hook.
 - [ ] **Step 5: Commit** `feat(history): the per-backend compliance breaker (spec §7.3)`.
 
 ### Task 3: Lanes and per-backend arming (W3-3)
@@ -755,7 +796,7 @@ Only after all four does the hook build `steer/.lanes/$w`, and it reads that fil
   - `HOLDERS` lists `ccd/session-hook.sh` for `history-steer-live`.
 - [ ] **Step 2: Run them: they fail.**
 - [ ] **Step 3: Implement** the four changes and widen the lifecycle row.
-- [ ] **Step 4: Run them, then `session-hook*` and `history-sweep.test.ts`: all pass.** Then run growth-check armed, and these mutants, each killed by the case named:
+- [ ] **Step 4: Run them, then `session-hook*` and `history-sweep.test.ts`: all pass.** Then run growth-check armed and the tail rule's PR-time check (Task 1C Step 4), and these mutants, each killed by the case named:
   - (a) the trailing-`*` glob in place of the negated class (`a/b`);
   - (b) `unknown` armed by a live marker (PX27);
   - (c) the lane taken from the steer file (Review Focus 2);
@@ -825,17 +866,24 @@ The spans, oldest first (the last is this span):
 
 The order in the file: the leaf template, the previous-leaf lines, the instruction text, then each stored child's slot followed by its quote and sentence when it has one, then the current slot.
 
-- [ ] **Step 1: Write the failing tests:**
-  - the trigger: `the add-on appears exactly when planCardPrediction answers parentKind predicted, and names its parentId and children`. A run of eight slots with one not final gives no predicted parent and no add-on;
-  - all-escapable: `seven 300-char all-& child gists and a 300-char all-& previous gist`. The add-on is at most 4,000 chars and the file at most 8,192 bytes. Eight slots, eight quotes (seven children and the previous leaf), each closed exactly once and each followed by the sentence. No `&` that does not begin `&amp;`, `&lt;` or `&gt;`. `C` is maximal: here the char bound decides, at `C` = 62 (3,993 chars), and `C` = 63 breaks it (4,028);
-  - non-ASCII: `seven 300-char gists of a three-byte character, and a previous gist of the same`. Here the byte bound decides: `C` = 198 gives 8,187 bytes while the add-on is 3,209 chars, and `C` = 199 breaks the byte bound (8,208);
-  - astral: `a gist of four-byte characters is cut between surrogate pairs, never inside one`;
-  - the floor: `the fixed parts with seven quotes at C = 40 fit both bounds in both worst cases`, a direct check of the arithmetic above;
-  - PX24, several quotes: `a parent add-on with three steered children carries the sentence four times, once after every closing tag`;
-  - PX14 and §7.7's child row: `a native child gives its id and range only; a flagged child's gist is omitted; a child carrying a fixture token is redacted; a child whose row cannot be read, or whose status is unreadable, gives its id and range only`;
-  - `the generic variant never carries the add-on` (the open-breaker print of Task 2 is the generic variant);
-  - `a steered node block replaces only the parent's gist, a block with no topics or refs is not degraded for it, and a wrong id is degraded`.
-  The expected `C` values hold for the proposed text. Each case derives them by checking `C` and `C + 1` against both bounds, so a ruled change to the text moves the numbers, not the cases.
+- [ ] **Step 1: Write the failing tests.** The canonical cases assert only what §7.1, §6.3 and the hook's read bound fix. The O14 cases assert the proposed budget and text, so they are **BLOCKED on O14**: written now, kept `.todo`, and given the ruled expectation once O14 is ruled.
+  - The canonical cases:
+    - the trigger: `the add-on appears exactly when planCardPrediction answers parentKind predicted, and names its parentId and children`. A run of eight slots with one not final gives no predicted parent and no add-on;
+    - both bounds, all-escapable: `seven 300-char all-& child gists and a 300-char all-& previous gist`. The add-on is at most 4,000 chars and the file at most 8,192 bytes. There are eight slots and eight quotes (seven children and the previous leaf), each closed exactly once and each followed by the sentence. Every `&` begins `&amp;`, `&lt;` or `&gt;`;
+    - both bounds, non-ASCII: `seven 300-char gists of a three-byte character, and a previous gist of the same` keep the same two bounds;
+    - astral: `a gist of four-byte characters is cut between surrogate pairs, never inside one`;
+    - PX24, several quotes: `a parent add-on with three steered children carries the sentence four times, once after every closing tag`;
+    - PX14 and §7.7's child row: `a native child gives its id and range only; a flagged child's gist is omitted; a child carrying a fixture token is redacted; a child whose row cannot be read, or whose status is unreadable, gives its id and range only`;
+    - `the generic variant never carries the add-on` (the open-breaker print of Task 2 is the generic variant);
+    - `a steered node block replaces only the parent's gist (§6.3), and a wrong id is degraded`.
+  - The O14 cases, each `.todo`:
+    - maximality, all-escapable: the char bound decides, at `C` = 62 (3,993 chars), and `C` = 63 breaks it (4,028);
+    - maximality, non-ASCII: the byte bound decides, at `C` = 198 (8,187 bytes, with the add-on at 3,209 chars), and `C` = 199 breaks it (8,208);
+    - the floor: `the fixed parts with seven quotes at C = 40 fit both bounds in both worst cases`, a direct check of the arithmetic above;
+    - the current slot reads `[{LEAF_ID} this span]`, and the instruction text equals the proposed text;
+    - `a steered node block with no topics or refs is not degraded for it` (the proposed status rule).
+
+  The numbers are those of the proposed text. Each O14 case derives them by checking `C` and `C + 1` against both bounds, so a ruled change to the text or the budget moves the numbers, not the cases.
 - [ ] **Step 2: Run them: they fail.**
 - [ ] **Step 3: Implement** the `children` answer, the composer's contract and the node read. The budget is **BLOCKED on O14**: until it is ruled, Task 4 does not merge.
 - [ ] **Step 4: Run them, then `history-derive.test.ts` and `history-card.test.ts` whole: all pass.** Mutants, each killed by the case named:
@@ -845,7 +893,7 @@ The order in the file: the leaf template, the previous-leaf lines, the instructi
   - (d) a node gist that replaces the topics too (the node case);
   - (e) the budget counted in chars only (the non-ASCII case: 8,192 bytes broken);
   - (f) the cut after the escape (the all-escapable case: a clipped entity);
-  - (g) a fixed `C` of 40 (the maximality checks);
+  - (g) a fixed `C` of 40 (the maximality cases). It is **held with O14**, and runs once O14 is ruled, against the ruled budget;
   - (h) the previous-leaf lines left out of the budget (the non-ASCII case: the byte bound broken);
   - (i) a second fan-in rule in `steer.mjs`, counting `FAN_IN.leaf` slots itself (the trigger case with one slot not final).
 - [ ] **Step 5: Commit** `feat(history): the parent add-on and steered node gists (spec §7.1)`.
@@ -876,7 +924,7 @@ The order in the file: the leaf template, the previous-leaf lines, the instructi
 | §7.1 indexer writes after the latest main boundary, keyed on the uuid | Task 1B, from the card's prediction and on its lifecycle |
 | §7.1 `refs:` semicolon-separated, read by §7.4 item 7 | Task 1F (the residue is O12) |
 | §7.2 placement after `STEER_TEXT`, leading LF | Task 1C (PX16 half; the full case owed by Plan B's PR) |
-| §7.2 gates: scope `main`, switches, recall-off generation, arming, 8 KB | Task 1C (PX10, PX11, PX20, the scope row, the parity matrix), Task 3 |
+| §7.2 gates: scope `main`, switches, recall-off generation, arming, 8 KB | Task 1C (PX10, PX11, PX20, the scope row; the recall-off verdict matrix, held on O9), Task 3 |
 | §7.2 current lane read live, `.lanes/<wrapper>` through the shim | Task 3 (PX27, the grammar) |
 | §7.2 receipt after the print, `""` for generic | Task 1C (PX18, PX22) |
 | §7.2 pins narrowed, README's two sentences | Task 1C |
@@ -886,10 +934,10 @@ The order in the file: the leaf template, the previous-leaf lines, the instructi
 | §7.5 spike, task 1, one session per backend, bars per backend | Task 1 (1A-1F), CP-62 |
 | §7.7 failure table | the table below |
 | §9.4 `history-steer-files`, `history-switches` | Tasks 1B, 3 |
-| §10.6 item 5, tail only | Global Constraints; Task 1C's durable placement case and its PR-time diff scan |
+| §10.6 item 5, tail only, for W3's own hook edits | Global Constraints; Task 1C's durable placement case over W3's names, and the PR-time check in W3-1, W3-2 and W3-3's gates, a gate command rather than a committed test |
 | §10.7 W3 row, W3 kill rule; the fixed gates kept apart from the bar | Task 1E, Task 4 Step 6 (O15), "Arming and the kill rule" |
 | Carried constraints for `lib.mjs`, `sweep.mjs`, `history-counters.mjs` | Tasks 1A, 1B, 1D |
-| R-B1 to R-B4 preserved; W2 not shortened | Global Constraints; the gate box |
+| R-B1 to R-B4 preserved; W2 recorded as evaluation not run, never as a pass (the 2026-11-02 ruling); CP-60's precompute condition kept, unperformed | the gate box; Global Constraints; Task 1E act 1 |
 
 Spec §7.7's failure table, row by row:
 
@@ -907,4 +955,4 @@ Spec §7.7's failure table, row by row:
 
 ## Deviations found
 
-None defined by this plan. Proposed departures and build questions are listed above by slug, unnumbered. No deviation number is issued for this run.
+No deviation number is defined by this plan, and none is issued for this run. Its proposed departures are not "none". Each is listed by slug, unnumbered and unapproved, under "Build questions and proposed departures", beside the spec errata. The coordinator numbers any that is approved.

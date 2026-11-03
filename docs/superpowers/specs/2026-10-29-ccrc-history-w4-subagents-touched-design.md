@@ -3,17 +3,25 @@
 **Spec** · 2026-10-29 · Status: Draft, for the operator's approval · Owner: the operator approves; the programme's coordinator drafts · Linear: none · Related: `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` (rev 3.6: §6.2, §7.4, §8.2, §9.3, §9.15, §10.4, §10.6 item 5, §10.7), `docs/superpowers/programs/ccrc-history.md` (Stage 7, CP-70 to CP-73), `docs/superpowers/plans/2026-10-29-ccrc-history-w3-steering.md` (W3, independent of this)
 
 > [!CAUTION]
-> **W2-PASS gate. This is a draft, and it authorises nothing.** It was drafted under CP-70 while the W2 window waits. Drafting and review may go ahead now.
+> **A held draft. It authorises nothing.** It was drafted under CP-70 and is not accepted: its review findings still need disposition.
 > This addendum authorises none of the following:
 > - its own approval or merge;
 > - a W4 plan's merge, or a W4 implementation;
-> - a store read, a release or a rollout.
+> - a store read, a release, a promotion or a rollout.
 >
-> Approval and merge wait for CP-50, the operator's W2 gate decision, to read **pass**. A release also waits for CP-51's close acts and for W1-B4 being live on every session-hosting node, measured again at that time. On a fail, this addendum is cancelled with the verdict as its reason.
-> - The operator's rulings R-B1 to R-B4 stand as ruled. In particular R-B2: from act 6 to act 28, no release is installed and no wrapper changes.
-> - W2 is not shortened or waived here.
+> **W2 is not this addendum's gate.** The operator's conditional skip ruling of 2026-11-02 (the programme's "Current route", recorded by #2070) takes the full W2 replay and seven-day A/B off the progress path. It records W2 as **evaluation not run**: not passed, not failed, and not scheduled. W2 PASS is no longer W4's prerequisite (the route's step 3), so this addendum cites that ruling where it used to wait for CP-50 to read pass. It claims no W2 result and no benefit, and it changes no scientific threshold and no runtime default.
+>
+> What still gates W4 under that route:
+> - **the operator's approval of this addendum** (A11, CP-70). It must settle parent linkage, subagent boundary handling, `touched`'s output and ranking, and cap and growth policy;
+> - **an accepted W4 plan**, with independent review (CP-71);
+> - **W1-B4 live before any subagent capture** (A8), on every session-hosting node, measured again at that time;
+> - **the parent-link coverage check** (A9, by the census) and **the resource-bound checks** (P5, P9);
+> - **CP-51's W2 close acts, which are not waived.** Before a W4 release, the operator measures on the node any W2 live state those acts name. None is assumed absent, and closing one is the operator's act.
+>
+> - The operator's rulings R-B1 to R-B4 stand as ruled. R-B2's span (acts 6 to 28) is a W2 window, and none is scheduled under the current route. If W2 is expressly resumed, no W4 release is installed inside that span.
 > - Nothing here claims that W1's acceptance or its migration integrity is complete. W1-k's miss of 2026-10-01 still waits on the operator's ruling, and W1-b, W1-e and W1-f are still to be re-measured (CP-37).
 > - **W4's acceptance is blocked.** The canonical bar stands at 95% (A9), but which population it is measured over, and what a workflow link must prove, are open decisions (P11, P12).
+> - **When subagent ingest may first reach a node is open** (P15). Every shipping merge may cut a prerelease, and this addendum authorises no promotion or rollout.
 
 ## In short
 
@@ -21,13 +29,14 @@
   - the transcripts of subagents and workflow agents join the lossless store, each linked to its parent;
   - a read-only `ccrc history touched <path|symbol>` verb that names the history nodes whose refs name a file.
 - **What this addendum does.** It turns spec §10.4's five bullets into decisions a plan can be built from: the link and how it is resolved, the census and its populations, the scan rules for subagent boundaries, `touched`'s matching, output and ranking, what growth does to the cap, file ownership, a pin table, a failure table and a PR split.
-- **Approved and proposed are kept apart.** Section 2 lists what the operator has already approved, with its source. Section 4 lists every open choice, P1 to P14, as a **proposal** with a recommendation. Nothing in a proposal is approved by this draft.
+- **Approved and proposed are kept apart.** Section 2 lists what the operator has already approved, with its source. Section 4's decision table lists every open choice, P1 to P16, as a **proposal**. Each row gives its options, its recommendation, its PR and its first blocked consumer. Nothing in a proposal is approved by this draft.
 - **What the operator checks first:**
   - P5, subagent capture pausing before main capture does;
   - P6, no automatic backfill of past subagent text;
   - P7, subagent rows opt-in in the read verbs;
   - P8, what `touched` means, how it matches and how it ranks, which is not the compaction card's `touched` tag;
-  - P11 and P12, the census denominator and the workflow link, without which W4 cannot be accepted. The census itself never turns an unknown count into a zero, and withholds every share while a directory it could not enter stands.
+  - P11 and P12, the census denominator and the workflow link, without which W4 cannot be accepted. The census itself never turns an unknown count into a zero. It withholds every share while a directory it could not enter stands, at any level from the projects root down;
+  - P15, when subagent ingest may first reach a node, since every shipping merge may cut a prerelease.
 
 ## 1. Context
 
@@ -67,10 +76,10 @@ These come from the approved spec and the programme. This addendum does not reop
 | A7 | `touched` accepts `--project` or `--workspace` like every read verb, both together is exit 2, and the whitelist comes from one list | §8.2 | Agreed |
 | A8 | **B4-live prerequisite.** W4 does not ship before W1-B4 is live on every session-hosting node, so subagent text reaches the export from its first ingest | §10.6 item 5; CP-72 depends on CP-34 | Agreed |
 | A9 | **Acceptance bar.** At least 95% of subagent and workflow transcripts carry a parent link, by census | §10.7 W4 row; CP-73 | Agreed |
-| A10 | W4 is gated on W2. W3 and W4 are independent | §10.4 "Wave independence" | Agreed |
+| A10 | W3 and W4 are independent. §10.4 also gated W4 on W2; the operator's ruling of 2026-11-02 lifts that gate (the programme's current route, step 3) | §10.4 "Wave independence"; the programme's current route | Agreed; its W2 gate lifted by the 2026-11-02 ruling |
 | A11 | The addendum is a new product decision, so the operator approves it before any W4 plan merges | CP-70 | Agreed |
 
-On A8: CP-34(b) recorded B4 live on the only session-hosting node on 2026-10-27. That record is not taken as the prerequisite. It is a measurement at W4's dispatch and again before its release, on every session-hosting node named then. It is a release gate, not a test, and section 5 says so.
+On A8: CP-34(b) recorded B4 live on the only session-hosting node on 2026-10-27. That record is not taken as the prerequisite. It is measured at W4's dispatch, again before its release, and again before subagent capture first starts on a node (P15), on every session-hosting node named then. It is a release gate, not a test, and section 5 says so.
 
 ## 3. Design
 
@@ -92,9 +101,16 @@ flowchart TD
 *Figure 1. Where a subagent transcript comes from, and the identity its row takes. The dotted edge is a file the walk lists and never reads.*
 
 - **The walk** reads only regular, non-link files inside a session directory that is a real directory.
+  - **Its levels, from the top:**
+    - the projects root, `<home>/projects`;
+    - a project directory: every entry of the root;
+    - a session directory: an entry of a project directory named as a session id (`UUID_RE`, with no `.jsonl`);
+    - `subagents/`, `subagents/workflows/` and a run directory.
+
+    An entry of a project directory with any other name is not a session directory (a main transcript `<uuid>.jsonl`, or a directory not named as a session id), and the walk never looks inside it.
   - A name must be `agent-<ID>.jsonl`, with `<ID>` in `[A-Za-z0-9_-]` and at most 128 chars, the hook's own shape gate (`_hook_compact_scope`, `CCRC_ID_MAX`).
   - A run directory must match `RUN_ID_RE`. A real directory whose name does not is listed, and each file in it is refused, counted `agent_file_refused:run-id`, with none read.
-  - A `subagents/`, `workflows/` or run directory that is a link, is not a directory, or cannot be listed is never entered, counted `agent_dir_refused:<reason>`. What lies below it is unknown (section 3.3).
+  - **At any level, a directory that is a link, is not a directory, or cannot be listed is never entered.** It is counted `agent_dir_refused:<level>:<reason>`, and what lies below it is unknown (section 3.3). Main discovery (`walkTranscripts`) differs here: it lists a linked project directory, and it skips an unlistable one silently. This walk does neither. So when a session's project directory is a link, the session keeps its main transcript, and its subagent files are unknown.
   - Any other file is refused and counted `agent_file_refused:<reason>`.
 - **The meta file** is read bounded (64 KiB, *chosen*), as JSON.
   - `toolUseId` is the only field the spec measured.
@@ -109,7 +125,7 @@ flowchart TD
 A row *names* a link when its link column is set. It *resolves* only when the parent holds the call the link names. The two are counted apart, so a named but unresolved link never counts as linked.
 
 **An Agent-tool link (P4, mechanism)** resolves when the parent's main transcript holds an assistant row with a `tool_use` block whose `id` equals `parent_tool_use_id`. Ids live only inside compressed bodies, so the check is a bounded decode:
-1. Let `t0` be the subagent transcript's first timed row. With none, the verdict is `unmeasured`.
+1. Let `t0` be the subagent transcript's first timed row. With none, the verdict is `unmeasured`. With no main transcript of the parent session in the store, it is `unmeasured` too (reason `parent-not-stored`), since nothing could be checked.
 2. Take the parent's candidates with `entries_ts` (`transcript_pk, ts_ms`): assistant rows with `tool_name IS NOT NULL` (at least one named `tool_use`) and `ts_ms` in `[t0 − 15 min, t0]` (*chosen*), newest first.
 3. Decode at most 64 of them (*chosen*). Each body's `tool_use` blocks are tested by id, the precedent being `toolUseInputPath`, so a block that is not a row's first `tool_use` is still found.
 4. The verdict is `linked` on a match, and `unresolved` when every candidate was decoded with no match. It is `unmeasured` when the 64-decode bound stopped the search, a candidate could not be decoded, or a candidate's body is over `blobOverDecodeCap` and so is never decoded.
@@ -117,13 +133,10 @@ A row *names* a link when its link column is set. It *resolves* only when the pa
 The check runs only in the census, a read-only pass in Node (Python never decodes blobs). Nothing stores its verdict, so W4 needs no schema change. The cost is at most 64 decodes per subagent transcript, about 93,000 at G14's 1,454 metas. The W4 plan measures it on a fixture of that size.
 - Unapproved alternative: store the verdict, or add a side table or index of `tool_use` ids, in a schema v3 behind §6.11's snapshot.
 
-**A workflow link (P12, predicate).** A2 says workflows are linked "through `runId`". What that proves is open.
-
-| Option | What it proves | Status |
-|---|---|---|
-| (a) placement: the run directory matches `RUN_ID_RE` under the session's directory | the file belongs to that session's tree. That is true by construction for every admitted file, so it measures nothing | Proposed, not recommended as the bar |
-| (b) run named: a parent user row carries a `tool_result` block that names the run id, the result of the call that launched the run. The lookup is below | a real association with a launching call | Recommended, but **unavailable and blocked** until the W4 plan measures, on the installed version, that the launch result names the run id and when it arrives |
-| (c) run summary: `S/workflows/<runId>.json` exists | the run reached a final status for this session | Proposed |
+**A workflow link (P12, predicate).** A2 says workflows are linked "through `runId`". What that proves is open. Every workflow row names a link, because `workflow_run_id` is set from its path, so a workflow file is never `X`. Its verdict is the predicate P12 rules:
+- **(a) placement.** The run directory matches `RUN_ID_RE` under the session's directory. That is true by construction for every admitted file, so under (a) every admitted workflow file is `L`, and the option measures nothing. Proposed, not recommended as the bar;
+- **(b) run named.** A parent user row carries a `tool_result` block that names the run id: the result of the call that launched the run. The lookup is below, and it gives `L`, `U` or `M`. This proves a real association with a launching call. Recommended, but **unavailable and blocked** until the W4 plan measures, on the installed version, that the launch result names the run id and when it arrives;
+- **(c) run summary.** `S/workflows/<runId>.json` exists. This gives `L` when the file exists, `U` when it does not, and `M` when it cannot be read. It proves the run reached a final status for this session. Proposed.
 
 **Option (b)'s lookup, proposed.** The decode above selects assistant rows by `tool_name`, which a result never has: a launch result is a `tool_result` block in a **user** row, and no column marks such a row. So (b) has a lookup of its own:
 1. Candidates: the parent's rows with `type = 'user'` and `ts_ms` in the window, through `entries_ts`, nearest the window's anchor first.
@@ -132,38 +145,81 @@ The check runs only in the census, a read-only pass in Node (Python never decode
 4. In each decoded body, each `tool_result` block's text (a string, or its `text` items) is tested for the run id as a whole token, `RUN_ID_RE`'s shape and equal to the directory's name.
 5. The verdict is `linked` on a match, `unresolved` when every candidate was decoded with none, and `unmeasured` when the bound stopped it, a body was over the cap, or a body could not be decoded.
 
-The cost is at most 64 decodes per workflow run, beside the Agent-tool decode's 64 per transcript. Until (b) is measured and ruled, workflows are reported under (a), labelled "placed, not call-linked", and are **not counted toward the canonical bar** unless the operator rules them in.
+The cost is at most 64 decodes per workflow run, beside the Agent-tool decode's 64 per transcript.
 
-### 3.3 The census (P11)
+Until P12 is ruled, the census prints the workflow kind under each option it can measure, side by side, and shows (b) as `unavailable` until it is measured. No workflow file counts toward the canonical share, as linked or as not linked. A9's population includes workflow transcripts (section 3.3), so no canonical share is computed until then.
+
+### 3.3 The census (P11, P12, P16)
 
 The census is how A9 is measured. It is a read-only Node pass that lists the tree itself and joins what it lists with the store. It reports every population apart, says which figures partition and which overlap, and never turns an unknown into a zero.
 
-**What it can enumerate.** A directory the census never enters has an unknown number of files below it: a `subagents/`, `subagents/workflows/` or run directory that is a link, is not a directory, or cannot be listed. The census counts such directories by reason, never their files, and reports no share over a tree that holds one.
+**One unit.** Every population counts listed files, except `K`, which counts directories. A link verdict is decided per row, and an admitted file takes the verdict of the row its identity names. P1 makes that one row per file: an Agent-tool id holds no `/`, and a workflow agent's id carries its run directory's name. Two listed files can still name one row (one session uuid under two project directories, say). They are counted `identity_collision`, and every share is withheld while one stands, as for a failed sum.
+
+**What it cannot enumerate.** At every level of the walk (section 3.1), from the projects root down to a run directory, a directory that is a link, is not a directory, or cannot be listed is never entered. The census counts it in `K` by level and reason. The files below it are **unknown**, never 0. No share and no 95% certification is drawn from a tree that holds one.
 
 | Population | Definition | Where it sits |
 |---|---|---|
-| unentered directories `K` | the directories above, by reason (`link`, `not-dir`, `unlistable`) | a count of directories. Their files are **unknown**, never 0 |
+| unentered directories `K` | the directories above, by level (projects root, project, session, `subagents/`, `workflows/`, run) and by reason (`link`, `not-dir`, `unlistable`) | a count of directories. Their files are **unknown**, never 0 |
 | listed `D` | every `*.jsonl` name the census listed in an entered directory, `journal.jsonl` excepted | the files the census knows of |
 | refused `R` | listed files the walk refuses: a name outside the grammar, a link, not a regular file, or a file in a run directory whose name is outside `RUN_ID_RE`. Such a directory is a real one, so it is listed, and no file in it is read | part of `D` |
-| pre-install `P` | listed, admissible files whose `mtime` is before W4's install record (P6), so they are never ingested and never refused | part of `D` |
+| pre-install, not admitted `P` | listed, admissible files whose `mtime` is before W4's install record (P6), with no `transcripts` row | part of `D` |
 | pending `Q` | listed, admissible, post-install files with no `transcripts` row yet: discovery rotates within a budget | part of `D` |
-| admitted `Ad` | listed files with a `transcripts` row | part of `D` |
-| linked `L`, unresolved `U`, unmeasured `M`, unnamed `X` | admitted rows by their link verdict (section 3.2). `X` has no link column set | a partition of `Ad` |
+| admitted `Ad` | listed files with a `transcripts` row, whatever their `mtime` | part of `D` |
+| linked `L`, unresolved `U`, unmeasured `M`, unnamed `X` | admitted files by their row's link verdict (section 3.2). `X` has no link column set, which only an Agent-tool row can have | a partition of `Ad` |
+| imported `I` | admitted files whose `mtime` is before the install record: what P6's operator import brought in | a subset of `Ad` |
 | gone `G` | stored subagent rows whose file the census did not list (deleted or moved) | outside `D`, reported apart |
 
-- **The partitions.** `D = R + P + Q + Ad`, and `Ad = L + U + M + X`. Every listed file is in exactly one part of each. The census checks both sums on every run, and prints no share when either fails.
-- **The overlapping subsets,** labelled as subsets and never added to a partition: eligible `E = Q + Ad`; post-install `D − P`; named `N = L + U + M`.
-- **By kind.** Every figure is also split into Agent-tool and workflow files, a partition by place.
+- **The partitions.** `D = R + P + Q + Ad`, by admission state, and `Ad = L + U + M + X`, by verdict. Every listed file is in exactly one part of the first, and every admitted file in exactly one part of the second. An import moves a file out of `P` and into `Ad` and `I`. The census checks both sums on every run, and prints no share when either fails.
+- **The overlapping subsets,** labelled as subsets and never added to a partition: imported `I`; every pre-install admissible file, `T = P + I`; eligible `E = Q + Ad`; named `N = L + U + M`.
+- **By kind.** Every figure is also split into Agent-tool and workflow files, a partition by place. An Agent-tool file takes the decode's verdict (section 3.2). A workflow file takes the verdict of P12's predicate, and the census prints it under each option it can measure.
+- **Every verdict has a part.**
+  - A meta that is absent or unreadable, or that carries no `toolUseId`, leaves the link column unset, so its row is `X`.
+  - A parent session with no stored main transcript is `M` (`parent-not-stored`), for an Agent-tool row and under P12 (b).
+  - `M` also covers no timed row, a candidate that cannot be decoded, a body over the decode cap, and the 64-decode bound reached.
+  - A window decoded whole with no match is `U`.
+
+  No census verdict is called `unlinked`, and that word names no part.
 
 **Uncertainty is shown, never folded:**
-- while `K > 0`, the census prints `share withheld: <k> unentered directories`, with the per-reason counts, and no share;
+- while `K > 0` or `identity_collision > 0`, the census prints `share withheld:` with the counts by level and reason, and no share;
 - `M` is uncertain in the numerator, so every share is printed as a range, `L / den` to `(L + M) / den`;
 - `Q` counts as not linked, and `G` is outside every denominator.
 
-**The denominator is open (P11).** The options are `D − P`, `D`, `E` and `Ad`.
-- Recommended, not approved: `D − P`, every post-install file listed, refused and pending included. A refusal or a pending file can never raise the share, and pre-install files are outside W4 under P6. They are reported apart, so a P6 ruling the other way counts them back in.
-- Acceptance is **withheld** until P11 and P12 are ruled. Under the recommendation it is also withheld while `K > 0`, or while the lower end of the range is below 95%.
+**Membership by option** (the detail of P11 and P12):
+- The denominator is P11's. It covers both kinds, since A9 counts subagent and workflow transcripts.
+- The numerator is the denominator's linked files. An Agent-tool file is linked by the decode, and a workflow file by the predicate P12 rules.
+- The census prints every column, and only the ruled one is ever called canonical.
+
+| Part | `D − T` (recommended) | `D` | `E` | `Ad` |
+|---|---|---|---|---|
+| `R`, refused | in | in | out | out |
+| `P`, pre-install, not admitted | out | in | out | out |
+| `Q`, pending | in | in | in | out |
+| `Ad − I`, admitted post-install | in | in | in | in |
+| `I`, imported pre-install | out | in | in | in |
+
+- **Recommended, not approved: `D − T`.** It is the set the earlier draft wrote as `D − P`, when `P` still held every pre-install file: every listed file but the pre-install admissible ones, with refused and pending files included. A refusal or a pending file can never raise the share, and pre-install files are W4's only by import under P6. They are reported apart, so a ruling the other way, on P6 or P11, counts them back in.
+- **Which way imported and refused pre-install files count is part of P11.** The table shows each option's answer, and none is chosen here.
+- Acceptance is **withheld** until P11 and P12 are ruled. Under every option it is also withheld while `K > 0` or `identity_collision > 0`, and while the lower end of the range is below 95%.
 - P6's predicate, proposed with P6: a file whose `mtime` is at or after the install record is post-install, and is ingested whole. The install record is a `meta` row the first W4 tick writes (`agents_since_ms`), which needs no schema change.
+
+**The census's contract (proposed, P16).**
+- **Owner:** W4-1.
+- **Home:** a new `ccd/history/census.mjs` holds the read-only pass: the tree listing, the store join, the Agent-tool decode and P12 (b)'s lookup. `lib.mjs` holds the pure deciders: the parts, the two sums, the verdicts and the share's range. `deploy/measure-history.py` counts the parts Python can count without decoding.
+- **Verb (a CLI expansion, proposed):** `ccrc history census [--json]`, an operator verb in `cli.mjs`'s `OP_OF_VERB`. So it runs through the shim, which hands it the rostered homes and is the one lock taker.
+  - It is not a writing form. It opens the store read-only and writes nothing.
+  - It prints counts and shares only, never text.
+  - It holds the writer's lock while it runs, as every op does. So the W4 plan measures its duration on a fixture of G14's size.
+- **Exits:** lib's existing `EXIT` codes, and no new one:
+  - 0: the census ran. A withheld share is a result, not an error;
+  - 2: a refusal, `bad-args` or one of the operator door's own words, such as `writer-absent`;
+  - 4: writer busy;
+  - 5: a store error;
+  - 6: not indexed;
+  - 9: no store on this box;
+  - 1: internal.
+- **Files W4-1 claims for it:** `census.mjs` (new), `lib.mjs`, `lib.d.mts`, `cli.mjs` (the verb's row and usage line), `sweep.mjs` (its op arm), `ccd/ccrc` (the help line, so W4-1 runs growth-check armed), `deploy/measure-history.py`, and their tests. Sections 7 and 8 name the same files.
+- **The alternative, with no CLI change:** an arm of `deploy/history-counters.mjs`, `census --db <store> --home <home>…`, which the operator runs like W3's spike report. Its cost is a home list typed by hand, and a missing home is an unknown that reads as nothing.
 
 ### 3.4 Subagent boundaries (the scan rules)
 
@@ -190,25 +246,34 @@ flowchart LR
   K -- "contains / or a file extension" --> P["a path"]
   K -- "file.ext:identifier" --> PS["a path and a symbol"]
   K -- "a bare identifier" --> S["a symbol"]
+  S --> SQ["candidate path:symbol refs:<br/>value LIKE %:symbol, bounded"]
   S --> G{"graph.json loads?"}
   G -- "yes" --> F["files whose nodes carry that label"]
-  G -- "no" --> SR["path:symbol refs naming that symbol only"]
   P --> Q["candidate refs:<br/>value LIKE %basename%, bounded"]
   PS --> Q
   F --> Q
   Q --> NM["split the suffix, normalise the stored path,<br/>match exact, suffix or outside"]
-  SR --> RK["rank, cut, print with the disclosure"]
-  NM --> RK
+  SQ --> NM
+  NM --> RK["rank, cut, print with the disclosure"]
 ```
-*Figure 2. How `touched` turns its argument into files and then into nodes. Only a bare symbol needs the graph, and even without it the stored `path:symbol` refs still answer.*
+*Figure 2. How `touched` turns its argument into candidate refs, then into nodes. A bare symbol always reads the bounded `path:symbol` select, and with a graph it also reads the files that carry its label. Every candidate set passes the same cap, normalisation and ranking.*
 
 **The matching contract (proposed):**
-1. **Candidates, bounded.**
+1. **Candidates, bounded.** A file query reads the select below. A file query is a path, a `path:symbol`, or each file that a graph gives a symbol:
    ```
    SELECT node_id, kind, value, origin FROM node_refs
    WHERE kind IN ('path','path:symbol','test') AND value LIKE ? ESCAPE '\'
    ```
-   The pattern is `%<basename>%`, with `%`, `_` and `\` escaped. The kinds include `test`, because every test file is stored under it (section 1). The select is capped at 10,000 candidate rows (*chosen*), and it has no order: so a capped answer prints `(candidates capped at 10000: the ranking covers those only, and newer matches may be missing)`. P13 is the bounded alternative that makes a capped ranking exact.
+   Its pattern is `%<basename>%`. A symbol query also reads, with or without a graph:
+   ```
+   SELECT node_id, kind, value, origin FROM node_refs
+   WHERE kind = 'path:symbol' AND value LIKE ? ESCAPE '\'
+   ```
+   Its pattern is `%:<symbol>`.
+   - Every pattern escapes `%`, `_` and `\`. The kinds include `test`, because every test file is stored under it (section 1).
+   - One query's candidates, from every select it reads, are capped at 10,000 rows together (*chosen*).
+   - The selects have no order. So a capped answer prints `(candidates capped at 10000: the ranking covers those only, and newer matches may be missing)`.
+   - P13 is the bounded alternative that makes a capped ranking exact, and it orders every select the same way.
 2. **Split the stored value.**
    - A `path` ref drops a trailing `:N` or `:N-M` and keeps it as the line. So `x.test.ts:12`, stored as `path`, becomes `x.test.ts` with line 12.
    - A `test` ref is a whole path: its kind takes no suffix.
@@ -221,7 +286,7 @@ flowchart LR
    - `exact` when the normalised path equals `F`;
    - `suffix` when it is relative, has no `..`, and `F` ends with `/<it>` on a segment boundary that is unique among the graph's files (`resolveToken`'s rule). With no graph, a bare-basename ref never matches;
    - `outside` refs match only a query that is that same absolute path.
-5. **A symbol query** also matches a `path:symbol` ref whose symbol equals it, with or without the graph.
+5. **A symbol query** also matches a `path:symbol` ref whose symbol equals it, from the symbol select above, with or without a graph. With a graph, the label's files add their candidates too. So the cap, its sentence and P13's order cover the symbol branch exactly as they cover a path. This matching is part of P8's proposal, and nothing here approves it.
 6. **One row per node and file.** A node whose refs name the file under two kinds (a `test` ref and a line-suffixed `path` ref, say) is one row, listing each matching ref.
 
 **Output.**
@@ -239,7 +304,7 @@ The stored origin is shown, not ranked. It is first-wins, so ranking by it would
 
 The ranking is exact only when the candidate cap was not hit. With the cap hit, the shown rows are the newest of an arbitrary 10,000, and the answer says so (step 1).
 
-**P13, the bounded alternative (proposed, blocked).** The candidate select joins `nodes` and orders before it cuts: `ORDER BY n.latest_ms DESC, r.node_id, r.kind, r.value LIMIT 10000`. Then every match outside the cut is no newer than the last candidate kept, under the same order the ranking uses, so the shown rows are the newest matches overall. Only the node the cut falls inside may list fewer of its refs, and its row says so. When fewer rows match than the limit, the answer still says older matches may exist. The cost is the same full scan of `node_refs` that the leading `%` already forces, one `nodes` lookup by primary key per candidate, and SQLite's sort bounded by the `LIMIT`. The W4 plan measures it against the 2 s p95 target (P9).
+**P13, the bounded alternative (proposed, blocked).** Each candidate select joins `nodes` and orders before it cuts: `ORDER BY n.latest_ms DESC, r.node_id, r.kind, r.value LIMIT 10000`. A symbol query that reads two selects merges them under the same order before its one cut. Then every match outside the cut is no newer than the last candidate kept, under the same order the ranking uses, so the shown rows are the newest matches overall. Only the node the cut falls inside may list fewer of its refs, and its row says so. When fewer rows match than the limit, the answer still says older matches may exist. The cost is the same full scan of `node_refs` that the leading `%` already forces, one `nodes` lookup by primary key per candidate, and SQLite's sort bounded by the `LIMIT`. The W4 plan measures it against the 2 s p95 target (P9).
 
 **Read-only.** Nothing graph-derived is stored. graphify ids are cache keys, never foreign keys (A5).
 
@@ -269,33 +334,39 @@ At the cap or below the floor, §9.3 pauses **all** capture. W4 therefore makes 
 
 The export (§9.15) grows on the home filesystem at the store's rate once subagent text nears its retention, under its own `planCopy` floor, unchanged.
 
-Repo growth: `ccd/ccrc`'s `_usage_history_paragraph` gains `touched` and `--agents`, and that file is on growth-check's list, so that PR runs `GROWTH_CHECK=1` growth-check.
+Repo growth: `ccd/ccrc`'s `_usage_history_paragraph` gains `census` (P16), `--agents` and `touched`. That file is on growth-check's list, so each PR that edits it (W4-1, W4-3 and W4-4) runs `GROWTH_CHECK=1` growth-check.
 
 ## 4. Decisions
 
-Each proposal is the operator's to rule, or to accept as recommended. A build question inside a PR stays the coordinator's (G7). None is approved by this draft. Each is blocked at its first consumer, named in the last column.
+Each proposal is the operator's to rule, or to accept as recommended. A build question inside a PR stays the coordinator's (G7). None is approved by this draft.
 
-| # | Decision | Options considered | Recommended, and why | Status | First consumer |
+This is the addendum's one decision table. Each row blocks its first consumer until it is ruled, together with the pins that encode its answer. Approving this addendum is a separate act from ruling its rows, and neither arms anything.
+
+| # | Decision | Options | Recommendation, not approved | Affected PR | First blocked consumer |
 |---|---|---|---|---|---|
-| P1 | A workflow agent's `agent_id` | `<ID>`; `<RUN>/<ID>` | `<RUN>/<ID>`: the key is per session, and uniqueness across runs is not measured | Proposed | W4-1 |
-| P2 | Subagent leaves in the DAG | own chain, no parents; condensed per transcript; children of a main leaf | Own chain, none condensed: subagents rarely compact, and a cross-thread edge has no approved rule | Proposed | W4-2 |
-| P3 | When subagent files are read | scan ticks only; every tick; scan plus the active parent's | Scan plus the active parent's, inside CP-39d's cap | Proposed | W4-1 |
-| P4 | How an Agent-tool link is resolved | a bounded decode at census; a stored verdict; a schema v3 side table or index | The bounded decode at census (15 min, 64 decodes, *chosen*): no schema change | Proposed | W4-1 |
-| P5 | Subagent text against the cap | one cap for all (the spec); subagents pause first at 90%; a separate cap file | Subagents pause first at 90% (*chosen*), so main history, the part W2 evaluated, is never starved by W4 | Proposed (NEW product decision) | W4-1 |
-| P6 | Past subagent text | backfill on the first tick; operator import with a forecast | Operator import with a dry-run forecast: up to about 20 GB at once is the operator's call. A file is post-install when its `mtime` is at or after the install record (section 3.3) | Proposed (NEW product decision) | W4-1 |
-| P7 | Subagent rows in `grep`, `describe`, `expand`, `tree` | included by default; opt-in `--agents` | Opt-in `--agents`, so the default output stays what W2 evaluated | Proposed (NEW product decision) | W4-3 |
-| P8 | `touched`'s meaning, matching and ranking | as section 3.5; rank by stored origin; rank by ref count | Section 3.5: any stored `path`, `path:symbol` or `test` ref, the matching contract, one row per node and file, recency ranking, the stored origin shown with the disclosure, and the cap's ranking sentence | Proposed (NEW product decision) | W4-4 |
-| P9 | `touched`'s cost path | no schema change; a v3 index or column; a backfill | No schema change unless the plan measures a p95 over 2 s; anything else is a new proposal | Proposed | W4-4 |
-| P10 | Where the run-id grammar lives | a second copy in `ccd/history` (another process, recorded as legitimately different); one `shared/*.mjs` holder both import | The shared holder with a single-definition pin, if the plan measures that `shared/` ships beside `ccd/` on every session-hosting node; else the recorded copy with a parity pin | Proposed (build question) | W4-1 |
-| P11 | The census's canonical denominator, and when a share may be called canonical | `D − P`; `D`; `E`; `Ad` | `D − P`: a refusal or a pending file never raises the share, and pre-install files are W4's only by import (P6). No share while `K > 0`; the share as a range over `M`; acceptance only when the range's lower end is at least 95% | Proposed (blocks acceptance) | CP-73 |
-| P12 | What a workflow link proves | (a) placement; (b) run named, by the user-row lookup of section 3.2; (c) run summary | (b), once the W4 plan measures that the launch result names the run id, and when. Until then (b) is unavailable, and (a) is reported apart, outside the bar unless ruled in | Proposed (blocks acceptance) | W4-1 census, CP-73 |
-| P13 | `touched`'s ranking under the candidate cap | the unordered cap, with its sentence; the ordered cap | The ordered cap: it makes the newest-first claim true at the same scan cost, if the W4 plan measures its p95 under 2 s | Proposed | W4-4 |
-| P14 | The graph's provenance in `touched`'s header | none (`graph` or `no graph`); `loadGraph`'s `builtAt` | None: no reader is added, and the session card already measures the graph's freshness | Proposed | W4-4 |
+| P1 | A workflow agent's `agent_id` | `<ID>`; `<RUN>/<ID>` | `<RUN>/<ID>`: the key is per session, and uniqueness across runs is not measured | W4-1 | the walk's identity step; SA3 |
+| P2 | Subagent leaves in the DAG | own chain, no parents; condensed per transcript; children of a main leaf | own chain, none condensed: subagents rarely compact, and a cross-thread edge has no approved rule | W4-2 | subagent leaf derivation; SA8 |
+| P3 | When subagent files are read | scan ticks only; every tick; scan ticks plus the active parent's | scan ticks plus the active parent's, inside CP-39d's cap | W4-1 | the read cadence; SA10 |
+| P4 | How an Agent-tool link is resolved | a bounded decode at census; a stored verdict; a schema v3 side table or index | the bounded decode at census (15 min, 64 decodes, *chosen*): no schema change | W4-1 | the census decode; SA2 |
+| P5 | Subagent text against the cap (a NEW product decision) | one cap for all (the spec); subagents pause first at 90%; a separate cap file | subagents pause first at 90% (*chosen*), so main-session history is never starved by W4's volume | W4-1 | the pause order; SA11 |
+| P6 | Past subagent text (a NEW product decision) | backfill on the first tick; operator import with a forecast | operator import with a dry-run forecast, since up to about 20 GB at once is the operator's call. Post-install means an `mtime` at or after the install record | W4-1 | the install record and the import arm; SA12, SA18 |
+| P7 | Subagent rows in `grep`, `describe`, `expand`, `tree` (a NEW product decision) | included by default; opt-in `--agents` | opt-in `--agents`, so the default output stays as it is today | W4-3 | the read verbs' filter; AG1 |
+| P8 | `touched`'s meaning, matching and ranking (a NEW product decision) | as section 3.5; rank by stored origin; rank by ref count | section 3.5: stored `path`, `path:symbol` and `test` refs, the bounded selects, one row per node and file, recency ranking, and the origin shown with the disclosure | W4-4 | the `touched` verb; TC1 to TC19, TC22, TC23 |
+| P9 | `touched`'s cost path | no schema change; a v3 index or column; a backfill | no schema change unless the plan measures a p95 over 2 s; anything else is a new proposal | W4-4 | the p95 measurement |
+| P10 | Where the run-id grammar lives (a build question) | a recorded second copy in `ccd/history`; one `shared/*.mjs` holder that both import | the shared holder, if the plan measures that `shared/` ships beside `ccd/` on every session-hosting node; else the copy, with a parity pin | W4-1 | SA17 |
+| P11 | The census's canonical denominator, and when a share may be called canonical (blocks acceptance) | `D − T`; `D`; `E`; `Ad`, each with its membership in section 3.3 | `D − T`, as a range over `M`, with no share while `K > 0`; acceptance only when the lower end is at least 95% | W4-1 (the census) | CP-73's acceptance |
+| P12 | What a workflow link proves (blocks acceptance) | (a) placement; (b) run named, by the user-row lookup; (c) run summary | (b), once it is measured on the installed version; no canonical share until then | W4-1 (the census) | CP-73's acceptance; SA14's (b) rows held |
+| P13 | `touched`'s ranking under the candidate cap | the unordered cap, with its sentence; the ordered cap | the ordered cap, if the W4 plan measures its p95 under 2 s | W4-4 | TC20, and TC23's order, held |
+| P14 | The graph's provenance in `touched`'s header | none (`graph` or `no graph`); `loadGraph`'s `builtAt` | none: no reader is added, and the session card already measures the graph's freshness | W4-4 | TC21's alternative, held |
+| P15 | When subagent ingest may first reach a node (a NEW operator choice) | (a) staged rollout: no W4 build is promoted or rolled onto a session-hosting node until W4-4 has merged and A8 holds; (b) an ingest arming marker with no writer in the tree, a new switch the operator would have to approve; (c) the read side first: W4-2's leaf guards and W4-3's filter land before W4-1's ingest | (b): with no switch, every release after W4-1's merge carries its ingest, so (a) holds every later rollout of `main` | W4-1 | W4-1's ingest step, the walk's first write of a subagent row; SA22 held |
+| P16 | The census's home and verb (a CLI expansion) | (a) `ccrc history census`, an operator verb on the shim's op lane; (b) an arm of `deploy/history-counters.mjs` | (a): the shim hands it the rostered homes, so no home is left out by hand | W4-1 | W4-1's census arm; SA23 held |
 
 Unapproved departures from the approved spec, listed for the coordinator to number once approved and never numbered here:
 - **P5**: §9.3's "the cap and the floor govern" gains an order;
 - **P6**: §10.4's ingest is narrowed to files written after install;
-- **P7**: the read verbs' default scope.
+- **P7**: the read verbs' default scope;
+- **P15 (b)**, if ruled in: §9.7's switches gain an ingest arming marker;
+- **P16 (a)**, if ruled in: §8.4's operator verbs gain `census`.
 
 ## 5. Pin table
 
@@ -315,15 +386,18 @@ New pin ids are `SA` (subagents) and `TC` (`touched`). Each pin ships with a tes
 | SA10 | read cadence | a non-scan tick with an inactive parent → no subagent stat; an active parent → stat'ed inside `ACTIVE_STAT_MAX` |
 | SA11 | pause order (P5) | at 90% of a fixture cap → main rows ingested, subagent rows held with cursors unmoved, counted; at 100% → both paused |
 | SA12 | no backfill (P6) | a subagent file older than the install record → not ingested by a tick; `import --agents` (dry run) prints its size and writes nothing |
-| SA13 | census partitions | a fixture holding one file of each of `R`, `P`, `Q`, `L`, `U`, `M` and `X`, one row of `G`, and no unentered directory → every count equals the hand count, both partition sums hold, and the share prints as a range. CONTROL: a mutant that leaves `P` out of `D` breaks the sum, and the census prints no share |
+| SA13 | census partitions | a fixture holding one file of each of `R`, `P`, `Q`, `L`, `U`, `M` and `X`, one imported pre-install file, one row of `G`, and no unentered directory → every count equals the hand count, both partition sums hold, the imported file is in `Ad` and `I` and never in `P`, and the share prints as a range. A meta with no `toolUseId` is `X`, and a parent with no stored main transcript is `M`. CONTROL: a mutant that leaves `P` out of `D` breaks the sum, and the census prints no share; a mutant that keeps an imported file in `P` breaks it too |
 | SA14 | workflow predicate (P12) | (a), (b) and (c) each over a fixture where only that predicate holds → only that row counts it. For (b): a `tool_result` naming the run id in a parent user row inside the window → `linked`; the same row outside it → `unresolved`; 65 candidates with the match last → `unmeasured`; a body over the decode cap → `unmeasured`; two agents of one run → one lookup. CONTROL: a mutant treating placement as `linked` under (b). The (b) rows stay `.todo` until (b) is measured and ruled |
-| SA15 | parent not stored | a session directory whose uuid has no main transcript in the store → the subagent row kept, census `unlinked` |
+| SA15 | parent not stored | a session directory whose uuid has no main transcript in the store → the subagent row kept; census `M`, reason `parent-not-stored`, never `U` |
 | SA16 | `agent_type` | a meta without the measured field → NULL; with it → its value |
 | SA17 | one run-id grammar (P10) | the single-definition scan finds the one holder, or the parity pin holds the copy equal |
-| SA18 | pre-install (P6) | a regular, admissible file whose `mtime` is before the install record → counted `P`, never ingested, never refused, and outside `D − P`; touched after the record → `Q`, then admitted |
-| SA19 | unentered directories | `subagents` as a link, a `workflows/<run>` that is a regular file, and a `subagents/` that cannot be listed (mode 000, skipped as root) → none entered, each counted in `K` by reason with no file count, and the share withheld with `K` named. CONTROL: a mutant counting an unentered directory's files as 0 prints a share and goes red |
+| SA18 | pre-install (P6) | a regular, admissible file whose `mtime` is before the install record → counted `P`, never ingested by a tick, never refused, and outside `D − T`. Touched after the record → `Q`, then admitted. Imported by the operator's import in the fixture HOME → `Ad` and `I`, out of `P`, still outside `D − T` |
+| SA19 | unentered directories, every level | `subagents` as a link, a `workflows/<run>` that is a regular file, a `subagents/` that cannot be listed (mode 000, skipped as root), a projects root that is a link, a project directory that cannot be listed, a session directory that is a link, and a session-id entry that is a regular file → none entered, each counted in `K` by level and reason with no file count, and the share withheld with `K` named. CONTROL: a mutant counting an unentered directory's files as 0 prints a share and goes red, at the upper levels as at the inner ones |
 | SA20 | a name-refused run directory | a real directory `wf_bad` holding two agent files → listed, both counted `R` (`run-id`), neither read |
-| TC1 | path, no graph | no `graph.json` → `touched ccd/x.mjs` answers from refs; `touched someSymbol` answers from `path:symbol` refs only |
+| SA21 | one unit | two listed files that name one row (one session uuid under two project directories) → `identity_collision`, and no share. CONTROL: a mutant that ignores the collision, giving both files the row's verdict, prints a share |
+| SA22 | ingest arming (P15 (b), held until ruled) | no marker → a tick reads no subagent file and writes no subagent row; the marker present → the walk runs. `.todo` until P15 is ruled, and dropped if (b) is not |
+| SA23 | the census verb (P16 (a), held until ruled) | `ccrc history census` writes nothing (the store's bytes, mtime and `user_version` unchanged, and no file under the history directory), is not a writing form, and answers only lib's `EXIT` codes. `.todo` until P16 is ruled |
+| TC1 | path, no graph | no `graph.json` → `touched ccd/x.mjs` answers from refs; `touched someSymbol` answers from `path:symbol` refs only, through the bounded symbol select |
 | TC2 | symbol with a graph | two files whose nodes carry label `foo` → two groups |
 | TC3 | ranking | three nodes of different `latest_ms` → newest first; a tie → `node_id` |
 | TC4 | cut shown | 25 matches at limit 20 → 20 rows and `(+5 not shown)` |
@@ -344,6 +418,8 @@ New pin ids are `SA` (subagents) and `TC` (`touched`). Each pin ships with a tes
 | TC19 | one file, two kinds | node A stores `server/test/foo.test.ts` (`test`), node B `server/test/foo.test.ts:12` (`path`), node C both → three rows, B with `line 12`, C one row listing both refs |
 | TC20 | the ordered cap (P13, held until ruled) | 10,001 candidates whose newest match was inserted last, so an unordered scan reaches it after the cut → listed first under P13. `.todo` until P13 is ruled |
 | TC21 | header provenance (P14) | under the recommendation, the header never carries a sha. Under the alternative, held `.todo` until ruled: a graph with a decoy `built_at_commit` at its head and the real one last → `builtAt` is the last; no key, or a value that is not hex → null |
+| TC22 | symbol, graph and refs together (P8) | a graph whose label `foo` names one file, and a `path:symbol` ref `ccd/y.mjs:foo` in a file the graph does not label → both nodes listed: the labelled file's and the ref's. CONTROL: a mutant that skips the symbol select when a graph loads drops the second |
+| TC23 | symbol candidates capped (P8, P13) | no graph, and 10,001 `path:symbol` refs naming `foo` → the cap line, with its ranking sentence. Under P13, the newest is listed first, held `.todo` with TC20 until ruled |
 | AG1 | `--agents` on the read verbs (P7) | `grep`, `describe`, `expand` and `tree` each hide a subagent row without `--agents` and show it with it; runnable without `touched` |
 | AG2 | one flag list (A7) | `--agents` is declared once, in the read verbs' one table, and every read verb's whitelist derives it from there. A second spelling goes red in the single-definition scan. Runnable without `touched`, so it lands with the flag in W4-3 |
 
@@ -356,18 +432,20 @@ This section gives, for each input W4 reads, what happens when it cannot decide,
 | Input | When it cannot decide | Direction |
 |---|---|---|
 | `subagents/` | absent | nothing read, no count: the common case |
-| `subagents/`, `workflows/` or a run directory | a link, not a directory, or cannot be listed | never entered; counted in `K` by reason; its files unknown, never 0; every share withheld while one stands |
+| the projects root | absent | nothing to walk on that home: no session there, and no count |
+| any directory of the walk: the projects root, a project or session directory, `subagents/`, `workflows/` or a run directory | a link, not a directory, or cannot be listed | never entered; counted in `K` by level and reason; its files unknown, never 0; every share withheld while one stands |
+| two listed files | they name one row | `identity_collision`; every share withheld while one stands |
 | run directory | a real directory whose name is outside `RUN_ID_RE` | listed; each file in it refused (`R`, `run-id`), none read |
 | agent file | a link, not regular, a name outside the grammar | refused and counted; in `D`, never in `L` |
-| agent file | `mtime` before the install record | `P`: not ingested, not refused, outside `D − P` (P6) |
+| agent file | `mtime` before the install record | `P` while it has no row: not ingested by a tick, not refused, outside `D − T` (P6). Once imported, `Ad` and `I` |
 | stored subagent row | its file no longer listed | `G`, outside every denominator |
 | `journal.jsonl` | any | listed, never read (A3) |
-| meta | absent, over 64 KiB, unreadable, not JSON, no `toolUseId` | row kept with a NULL link; counted; `unlinked` |
+| meta | absent, over 64 KiB, unreadable, not JSON, no `toolUseId` | row kept with a NULL link; counted `agent_meta_unreadable`; census `X` |
 | `toolUseId` | no candidate in the window matches | `unresolved`; re-checked at the next census, never guessed |
 | link check | no timed row, a candidate not decodable or over the decode cap, the 64-decode bound reached | `unmeasured`, never `linked` |
-| workflow (b) lookup | (b) not yet measured on the installed version | unavailable: reported under (a), outside the bar |
+| workflow verdict | P12 not ruled, or (b) not yet measured on the installed version | each option printed side by side where measurable, (b) shown `unavailable`; no canonical share |
 | workflow (b) lookup | a user row over the decode cap, not decodable, or the 64-decode bound reached | `unmeasured`, never `linked` |
-| parent main transcript | not in the store | row kept under its uuid; `unlinked` |
+| parent main transcript | not in the store | row kept under its uuid; census `M` (`parent-not-stored`), never `U` |
 | agent id | the same id in two runs | two rows under P1; under a rejected P1, refused as a collision and counted |
 | subagent boundary | its anchor names no row | `raw_leaf` (DM25), as on main |
 | cap or floor | at 90% of the cap | subagent ingest paused (P5); at the cap or the floor, all paused (§9.3) |
@@ -375,7 +453,7 @@ This section gives, for each input W4 reads, what happens when it cannot decide,
 | `graph.json` | absent, over 96 MiB, malformed, no nodes or links | symbol queries use `path:symbol` refs only; path queries answer |
 | a stored ref | outside every root; a basename matching two graph files | `outside` (exact absolute query only); no match |
 | a stored ref | kind `test`, or a test file stored as a line-suffixed `path` | matched as a path; one row per node and file |
-| the prefilter | over 10,000 candidates | the cap line printed, saying the ranking covers the candidates only; never a silent cut (P13 is the exact alternative) |
+| the prefilter | over 10,000 candidates, for a path or a symbol query alike | the cap line printed, saying the ranking covers the candidates only; never a silent cut (P13 is the exact alternative) |
 | store | unreadable, migrating, recovering | the read verbs' existing exits (§8.8) |
 
 ## 7. Files and ownership
@@ -384,12 +462,14 @@ This section names every file W4 changes, what it changes, and the ring and cont
 
 | File | W4 change | Ring and context |
 |---|---|---|
-| `ccd/history/lib.mjs`, `lib.d.mts` | pure deciders: the file and directory grammar, the identity (P1), the link verdict over decoded blocks, the census partitions and their sum checks (P11), the workflow predicate (P12), the pause order (P5), the pre-install predicate (P6), `touched`'s split, normalisation, match and ranking (P8, P13) | pure policy, ccrc history |
-| `ccd/history/sweep.mjs` | the walk of `subagents/`, the meta read, the cadence (P3), the pause (P5), the install record (P6) | adapter and tick |
+| `ccd/history/lib.mjs`, `lib.d.mts` | pure deciders: the file and directory grammar at every level, the identity (P1), the link verdict over decoded blocks, the census parts, their sum checks and the share's range (P11), the workflow predicate (P12), the pause order (P5), the pre-install predicate (P6), `touched`'s split, normalisation, match and ranking (P8, P13) | pure policy, ccrc history |
+| `ccd/history/sweep.mjs` | the walk, from the projects root down, the meta read, the cadence (P3), the pause (P5), the install record (P6), the census's op arm (P16) | adapter and tick |
+| `ccd/history/census.mjs` (new, W4-1) | the census pass (P16): the tree listing, the store join, the Agent-tool decode and the user-row lookup of P12 (b), all read-only | adapter |
 | `ccd/history/derive.mjs` | subagent leaves on their own chain, no receipt lookup | adapter |
-| `ccd/history/recall.mjs`, `cli.mjs` | `touched`; `--agents`; the census pass, including its tree listing and the user-row lookup of P12 (b) | adapter and delivery |
+| `ccd/history/cli.mjs` | the verbs' rows: `census` in `OP_OF_VERB` (W4-1, P16), `--agents` (W4-3), `touched` (W4-4) | delivery |
+| `ccd/history/recall.mjs` | `--agents` on the read verbs (W4-3); `touched` (W4-4) | adapter |
 | `ccd/compact-card.mjs` | unchanged under P14's recommendation, imported for `loadGraph`, `loadLabels`, `resolveToken`. Under P14's alternative, `loadGraph`'s answer gains `builtAt` (W4-4, TC21) | none, or delivery under the alternative |
-| `ccd/ccrc` | the help paragraph gains `touched` and `--agents` | delivery |
+| `ccd/ccrc` | the help paragraph gains `census` (W4-1), `--agents` (W4-3) and `touched` (W4-4) | delivery |
 | `ccd/history-skill/SKILL.md` | one line on `touched` | skill text |
 | `deploy/measure-history.py` | the census rows Python can count without decoding (`K`, `D`, `R`, `P`, `Q`, `Ad`, `N`, `X` and `G`, with the `D` sum check); `L`, `U` and `M`, and so the `Ad` sum check, come from the Node census pass | deploy |
 | `shared/*.mjs` (P10, if measured shippable) | the run-id grammar, imported by `server/src/workflows/model.ts` and `ccd/history` | L0 kernel |
@@ -397,7 +477,7 @@ This section names every file W4 changes, what it changes, and the ring and cont
 
 No lifecycle row is added, since every file W4 writes is inside the store. No wire, no `coord.db`, no exec surface and no box-token route changes (§13).
 
-**Carried constraints W4 owns.** W3 and W4 are independent, so whichever first edits a file after W2 closes takes that file's carries, and the other's first step checks they are done:
+**Carried constraints W4 owns.** W3 and W4 are independent, so whichever first edits a file takes that file's carries, and the other's first step checks they are done:
 - `ccd/history/lib.mjs`: review 1088 F2's `MARK_CHECK_GLOSS.budget` gloss, its block comment and its runtime pin in `history-lib.test.ts`;
 - `ccd/history/sweep.mjs`: review 1065's F4 (`activeFiles` marks a file before its lstat) and F10 (`activeRows` with an empty uuid list), each with its own regression and mutant. The W3 plan's Tasks 1A and 1B spell all three; W4-1 runs them if it lands first;
 - `ccd/history/recall.mjs` (W4-3, its first editor in W4): review 1065 F2 and review 1088 F4. The comments that say the global match runs once, or that a grep costs only what its scope holds, are reworded. The match is evaluated once per arm that reads it: 3 scans for recency, 4 with `rk`. These are comments only, with no runtime pin. And if W3-1 has landed lib's `nodeRangeText` (the W3 plan's `history-steer-range-text`), `recall.mjs`'s private `isoOf` is replaced by it here, with `tree`'s output pinned unchanged.
@@ -406,26 +486,30 @@ No lifecycle row is added, since every file W4 writes is inside the store. No wi
 
 ## 8. Proposed PR split
 
-This section orders the PRs so that no release ingests subagent text without the pause order, and no pin depends on a PR that comes after it.
+This section orders the PRs so that no build ingests subagent text without the pause order, and no pin depends on a PR that comes after it. Every shipping merge may cut a prerelease, so the order of merges is not the order in which nodes see the code: that is P15's, and promotion and rollout stay the operator's acts.
 
 ```mermaid
 flowchart LR
   W1["W4-1 walk, identity, link check,<br/>census, pause order"] --> W2["W4-2 subagent boundaries and leaves"]
   W2 --> W3["W4-3 --agents on the read verbs"]
   W3 --> W4["W4-4 touched"]
-  P["B4 live on every node,<br/>measured again"] --> R["release and rollout (CP-73)"]
+  W1 -. "every shipping merge may cut a prerelease" .-> PR["prereleases (dev)"]
+  S{{"P15 ruled: when ingest may first reach a node"}} --> R["promotion and rollout,<br/>the operator's acts (CP-73)"]
+  P["B4 live on every node,<br/>measured again"] --> R
   W4 --> R
   D["P11 and P12 ruled"] --> AC["acceptance"]
   R --> AC
 ```
-*Figure 3. The order. W4-1 carries the pause order, so no release ingests subagent text without it. W4-3 and W4-4 both edit `cli.mjs` and `recall.mjs`, so they run one after the other. Acceptance needs the release and the operator's rulings on P11 and P12.*
+*Figure 3. The order. W4-1 carries the pause order, so no build ingests subagent text without it. A build that ingests exists as soon as W4-1 merges, so when ingest may first reach a node is P15's, and promotion and rollout stay the operator's acts. W4-3 and W4-4 both edit `cli.mjs` and `recall.mjs`, so they run one after the other. Acceptance needs the release and the operator's rulings on P11 and P12.*
 
 | PR | Claims | Pins | Blocked on |
 |---|---|---|---|
-| W4-1 | `lib.mjs`, `lib.d.mts`, `sweep.mjs`, `cli.mjs` (the census pass), `deploy/measure-history.py`, `shared/*.mjs` and `server/src/workflows/model.ts` (P10 only), and their tests | SA1 to SA6, SA10 to SA20 | P1, P3 to P6, P10, P11 (the census's share), P12 |
+| W4-1 | `lib.mjs`, `lib.d.mts`, `sweep.mjs`, `census.mjs` (new), `cli.mjs` (the census verb's row), `ccd/ccrc` (the census help line), `deploy/measure-history.py`, `shared/*.mjs` and `server/src/workflows/model.ts` (P10 only), and their tests | SA1 to SA6, SA10 to SA23 | P1, P3 to P6, P10, P11 (the census's share), P12, P15 (its ingest step), P16 (the census verb) |
 | W4-2 | `derive.mjs`, `lib.mjs`, their tests | SA7 to SA9 | P2 |
 | W4-3 | `recall.mjs`, `cli.mjs`, `lib.mjs` (the read verbs' table), `ccd/ccrc`, their tests | AG1, AG2, and the `recall.mjs` carry | P7 |
-| W4-4 | `recall.mjs`, `cli.mjs`, `lib.mjs`, `ccd/ccrc`, `ccd/history-skill/SKILL.md`, `README.md`, `ccd/compact-card.mjs` (P14's alternative only), their tests | TC1 to TC21 | P8, P9, P13, P14 |
+| W4-4 | `recall.mjs`, `cli.mjs`, `lib.mjs`, `ccd/ccrc`, `ccd/history-skill/SKILL.md`, `README.md`, `ccd/compact-card.mjs` (P14's alternative only), their tests | TC1 to TC23 | P8, P9, P13, P14 |
+
+Each PR that edits `ccd/ccrc` (W4-1, W4-3 and W4-4) runs `GROWTH_CHECK=1` growth-check in its gate.
 
 Each PR is its own run, opened before the previous run closes, with a held-out review, and landed under rule L. A W4 plan (CP-71) is written only after this addendum is approved.
 
@@ -433,10 +517,11 @@ Each PR is its own run, opened before the previous run closes, with a held-out r
 
 This section says how W4 would be shown to work, and what stays unproven until the operator rules.
 - Every pin in section 5 is red first, then green, with its mutant measured, on fixture HOMEs only, through `ccrc test --`.
-- **Acceptance (A9)** is **blocked** until P11 and P12 are ruled. After the release, the census reports every population of section 3.3 per node and per kind. Only the ruled share is called canonical, against 95%, and no share is called anything while `K > 0`.
+- **Acceptance (A9)** is **blocked** until P11 and P12 are ruled. After the release, the census reports every population of section 3.3 per node and per kind. Only the ruled share is called canonical, against 95%, and no share is called anything while `K > 0` or `identity_collision > 0`.
 - G14's 276 of 1,454 counts metas carrying `toolUseId`, workflow ones included. It is a risk to the bar, which the census's per-kind split names.
-- `touched` is accepted when TC1 to TC21 pass (the held rows once ruled) and its p95, on a fixture of the measured `node_refs` size, is under 2 s.
-- The census proves its own arithmetic: SA13's sums, SA18's pre-install files and SA19's unentered directories each have a mutant that prints a share it should withhold.
+- `touched` is accepted when TC1 to TC23 pass (the held rows once ruled) and its p95, on a fixture of the measured `node_refs` size, is under 2 s.
+- The census proves its own arithmetic. SA13's sums, SA18's pre-install and imported files, SA19's unentered directories at every level, and SA21's single unit each have a mutant that prints a share it should withhold.
+- Every pin here is planned, not run: this drafting wave ran no test, fixture or mutant.
 
 ## Where things stand
 
@@ -446,10 +531,10 @@ This section says how W4 would be shown to work, and what stays unproven until t
 
 ### Waiting on you
 
-- Approval of this addendum, after CP-50 reads pass.
-- P5, P6, P7 and P8: new product decisions, each with a recommendation.
+- Approval of this addendum (A11, CP-70), once its review findings are disposed of. W2 PASS is no longer its prerequisite (the 2026-11-02 ruling).
+- P5, P6, P7, P8 and P15: new product decisions, each with a recommendation.
 - P11 and P12: W4's acceptance cannot be called until they are ruled. P12's option (b) also waits on a measurement of the installed version.
-- P1 to P4, P9, P10, P13 and P14: their recommendations, which the W4 plan builds on unless you rule otherwise.
+- P1 to P4, P9, P10, P13, P14 and P16: their recommendations. Each stays proposed, and blocks its first consumer, until you rule it.
 
 ### Later
 
