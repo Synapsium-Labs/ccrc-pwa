@@ -4950,9 +4950,14 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
 | `server`: `typecheck-tests` | 12 passed |
 | `git diff --stat <BASE> -- pwa/test/golden` | empty |
 
+**The PR's first CI run** (on the results commit) was red twice, and both are fixed on this branch:
+
+- `pwa`: R19's "an answer over the HTML cap still gives its ratio" timed out (92 s against 60 s), and the item-6 rejection case took 59 s. Both had bypassed the default fake's in-kind answer for a crafted shape, so every crafted shape ran through highlight.js in-thread. Both now use that answer (`inKind`) and take about 3 s. Rows W5HA-T9-M14, W5HA-T10-M1 and W5HA-T10-M2 re-measured as recorded.
+- `server`: `update-move.test.ts`'s census of the quoted word `'detach'` (the update move's `DETACH_CAP`) found the runner's own option, `abortRunning: 'terminate' | 'detach'`. The census now sets aside a code line naming `abortRunning`, only that line, and its CONTROL pins both directions (rows W5HA-T11-M1 and W5HA-T11-M2). Task 11's server runs did not include this suite; the PR's server selection ran it.
+
 ### The mutation table
 
-137 rows (the last occurrence of each id), run sequentially in the workspace, each restored from a saved copy and checked by sha256, with `git status` clean after every row: **137 red, 0 green, 0 unmatched.** Seven rows measured more failing cases than their earlier record, with every recorded case still among them, because later tasks and fix rounds added cases the same mutation also reds: W5HA-T4-M2 (7), W5HA-T4-M8 (9), W5HA-T5-M8 (2), W5HA-T5-M28 (3), W5HA-T9-M1 (8), W5HA-T9-M13 (4), W5HA-T7-X1 (2, now the same mutant as W5HA-T7-M6). The rows below carry the measured red; a `note` records a coordinator ruling or a re-anchoring. Part 1's moved bounds are pinned at their new homes by W5HA-T10-A7 to A14.
+137 rows (the last occurrence of each id), run sequentially in the workspace, each restored from a saved copy and checked by sha256, with `git status` clean after every row: **137 red, 0 green, 0 unmatched**, and the two rows the CI fix added (Task 11) red too. Seven rows measured more failing cases than their earlier record, with every recorded case still among them, because later tasks and fix rounds added cases the same mutation also reds: W5HA-T4-M2 (7), W5HA-T4-M8 (9), W5HA-T5-M8 (2), W5HA-T5-M28 (3), W5HA-T9-M1 (8), W5HA-T9-M13 (4), W5HA-T7-X1 (2, now the same mutant as W5HA-T7-M6). The rows below carry the measured red; a `note` records a coordinator ruling or a re-anchoring. Part 1's moved bounds are pinned at their new homes by W5HA-T10-A7 to A14.
 
 ### Measurements
 
@@ -6419,6 +6424,33 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "new": "",
   "tests": "test/markdown-highlight-worker.test.ts",
   "red": "1 failed: 'a post that throws is answered once more with threw; a second throwing post is swallowed'"
+ }
+]
+```
+
+#### Task 11 (2 rows)
+
+```json
+[
+ {
+  "id": "W5HA-T11-M1",
+  "spec": "update-move census (CI fix)",
+  "pkg": "server",
+  "file": "test/update-move.test.ts",
+  "old": "filter((l) => !/\\babortRunning\\b/.test(l))",
+  "new": "filter(() => true)",
+  "tests": "test/update-move.test.ts",
+  "red": "2 failed: 'CONTROL: the walk sees every root; the patterns see a declaration and a quoted copy, not a re-export or prose'; 'DETACH_CAP is declared, and the word quoted, in shared/update-move.ts alone — dispatch.ts re-exports it'"
+ },
+ {
+  "id": "W5HA-T11-M2",
+  "spec": "update-move census (CI fix)",
+  "pkg": "server",
+  "file": "test/update-move.test.ts",
+  "old": "filter((l) => !/\\babortRunning\\b/.test(l))",
+  "new": "filter(() => false)",
+  "tests": "test/update-move.test.ts",
+  "red": "2 failed: 'CONTROL: the walk sees every root; the patterns see a declaration and a quoted copy, not a re-export or prose'; 'DETACH_CAP is declared, and the word quoted, in shared/update-move.ts alone — dispatch.ts re-exports it'"
  }
 ]
 ```
