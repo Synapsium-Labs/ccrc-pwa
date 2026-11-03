@@ -128,7 +128,10 @@ describe('parseBoxSettings: the corpus, each file with its verdict', () => {
     }
   });
 
-  it('a fixture a bash writer made is what the verb prints now: the corpus regenerates from the real verb (the deferred Task 1 row)', () => {
+  // Linux only: the snapshot is written only on Linux (the timer is Linux's, spec D6), and the ok corpus is that writer's output. On
+  // macOS `_ccrc_knob` reads ccrc.env by a different rule on purpose (launchd sources the whole file with bash, so one line that is
+  // not a plain NAME=value makes every key unmeasured), so the same scenario prints a different, correct, document there.
+  it.skipIf(process.platform === 'darwin')('a fixture a bash writer made is what the verb prints now: the corpus regenerates from the real verb (the deferred Task 1 row)', () => {
     const write = process.env['BOX_SETTINGS_FIXTURES'] === 'write';
     for (const s of SCENARIOS) {
       const file = join(FIX, `ok--${s.name}.json`);
