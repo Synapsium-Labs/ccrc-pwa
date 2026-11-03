@@ -2,7 +2,8 @@
 //  - the lane (`backupLane.ts`) on a scripted io and clock: no block before a read lands, one read a minute, never two
 //    asks out, a failed ask keeps the last read, and staleness is judged when the block is read;
 //  - the route: `GET /api/fleet/health` carries `backup` once the lane has read, in both modes, and adds nothing else;
-//    a failed fixture shows on the first sweep after it is written (one fleet-health cycle);
+//    a failed fixture shows on the first sweep after it is written (one fleet-health cycle), and the watcher's own
+//    tick runs that sweep, so nobody has to call it;
 //  - the local adapter over a real fixture directory, through this process's environment (D-7859).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -121,6 +122,30 @@ describe('/api/fleet/health: the backup block (D-7858)', () => {
         (watcher as unknown as { backupLane: { lastSweep: number } }).backupLane.lastSweep -= BACKUP_SWEEP_MS;
         await watcher.sweepBackup();
         expect(readBackupHealth(await health())).toMatchObject({ status: 'failed', lastFailure: { exit: 2, note: 'step-a' } });
+      } finally { await app.close(); }
+    });
+
+    it(`${name} mode: the watcher's own fleet-health cycle runs the sweep, and its read reaches the route (nobody has to call it)`, async () => {
+      const home = mkTmp('ccrc-fh-backup-tick-');
+      seedRoster(home);
+      const cfg = loadConfig({ CCRC_HOME: home, CCRC_BACKUP_STALE_HOURS: '36', ...env });
+      const read: BackupRead = { state: 'read', files: { 'last-success': `${iso(Date.now() - H)} mode=backup` } };
+      let asks = 0;
+      const io = { ...localIO, backupMeasured: async (): Promise<MeasuredBackup> => { asks++; return { ok: true, read }; } };
+      const deps = {
+        cfg, runCcd: ccdRunner(deadRunner, cfg), tmux: new Tmux(deadRunner), io, queue: new KeyedQueue(),
+        fleetState: { connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null },
+      } as never as Deps;
+      const bus = new Bus();
+      const watcher = new FleetWatcher(deps, bus);
+      const app = await buildServer(deps, bus, watcher);
+      try {
+        await watcher.tick();
+        await vi.waitFor(() => expect(asks, 'the tick asked the backup read').toBeGreaterThan(0), { timeout: 3000 });
+        await vi.waitFor(async () => {
+          const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+          expect(readBackupHealth(body)).toMatchObject({ status: 'ok', staleHours: 36 });
+        }, { timeout: 3000 });
       } finally { await app.close(); }
     });
   }
