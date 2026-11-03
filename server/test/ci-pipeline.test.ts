@@ -1603,6 +1603,12 @@ describe('the node-floor leg runs every history test file on the floor interpret
   });
 });
 
+/** TRANSITIONAL (2026-11-02; the queue's browser skip describe below says when it goes): whether `browser-pwa`
+ *  carries the merge-queue ask (the owner's ruling of 2026-11-02) rather than the pull-request ask alone. */
+function browserQueueSkip(block: string): boolean {
+  return /^ {6}- name: Can this merge-queue group reach the browser tests\?$/m.test(block);
+}
+
 // ── the real-browser leg (native Docs reader spec 2026-10-01 §5.7) ──────────
 //
 // pwa's second vitest config, driving a real Chrome. Not a branch-protection
@@ -1628,14 +1634,18 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
 
   it('checks out, sets up Node 22, installs pwa with npm ci, and runs the browser config with the local vitest', () => {
     const s = steps(job('browser-pwa'));
-    expect(s, 'the browser leg has exactly six steps (the reach step is the sixth)').toHaveLength(6);
+    // TRANSITIONAL (see browserQueueSkip below): the merge-queue ask is the third step once ci.yml carries it.
+    const queue = browserQueueSkip(job('browser-pwa'));
+    expect(s, `the browser leg has exactly ${queue ? 'seven' : 'six'} steps`).toHaveLength(queue ? 7 : 6);
     // A version pin is a deliberate edit, so a future bump reds it again
     // (D-6739: the pins name the majors #364 moved to).
     expect(s[0]).toMatch(/^ {6}- uses: actions\/checkout@v7\n/);
     expect(s[1]).toMatch(/^ {6}- name: Can this change reach the browser tests\?\n/);
-    expect(s[2]).toMatch(/^ {6}- uses: actions\/setup-node@v7\n/);
-    expect(s[2]).toMatch(/^ {10}node-version: '22'$/m);
-    expect(s[2]).toMatch(/^ {10}cache-dependency-path: \|\n {12}pwa\/package-lock\.json\n {12}ui\/package-lock\.json$/m);
+    const setup = queue ? 3 : 2;
+    if (queue) expect(s[2]).toMatch(/^ {6}- name: Can this merge-queue group reach the browser tests\?\n/);
+    expect(s[setup]).toMatch(/^ {6}- uses: actions\/setup-node@v7\n/);
+    expect(s[setup]).toMatch(/^ {10}node-version: '22'$/m);
+    expect(s[setup]).toMatch(/^ {10}cache-dependency-path: \|\n {12}pwa\/package-lock\.json\n {12}ui\/package-lock\.json$/m);
     expect(step(job('browser-pwa'), 'Install')).toMatch(/^ {8}working-directory: pwa\n {8}run: \.\.\/\.github\/ci\/bounded\.sh 180 npm ci\n/m);
     // pwa reads @ccrc/ui as SOURCE and the leg's imports reach it, so ui is installed too, before the Test step.
     expect(step(job('browser-pwa'), 'Install @ccrc/ui')).toMatch(/^ {8}working-directory: ui\n {8}run: \.\.\/\.github\/ci\/bounded\.sh 180 npm ci\n/m);
@@ -1649,6 +1659,130 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
     const b = job('browser-pwa');
     expect(b).not.toContain('secrets.');
     expect(b).not.toMatch(/^ {4}permissions:/m);
+  });
+});
+
+// ── the queue's browser skip (the owner's ruling of 2026-11-02) ─────────────
+//
+// In a merge-queue run the browser shards skip their TESTS when no file in the group can reach them (reach.mjs
+// `queueScope`; a docs-only group above all). The skip is by STEP, as every leg's is: the job still runs, every step
+// after the asks is skipped, and the shard reports success. So `test (pwa)`'s queue refusal, which passes only a
+// browser result of `success`, passes a deliberate skip and still refuses a shard that failed or was cancelled, and a
+// job skipped by `if:` too (browser-pwa carries no job-level `if:`, pinned above). Both halves are EVALUATED here,
+// on the workflow's own expressions, by a reader of the small grammar they use.
+//
+// TRANSITIONAL (2026-11-02). This lands in three pull requests, because a pull request that changes ci.yml may change
+// nothing else: first these pins, while ci.yml has no merge-queue ask; then ci.yml (with reach.mjs and CLAUDE.md)
+// alone; then a pull request that deletes every PRE-SKIP arm and `browserQueueSkip` with it. Until then each case
+// accepts exactly one of the two WHOLE shapes: the ask step and both gates on every later step, or neither.
+
+/** GitHub's value of `expr` in `ctx`: the `==`, `!=`, `&&`, `||`, `!` and parentheses over string literals and
+ *  context paths that the workflow's `if:`s use. A path `ctx` does not hold reads as '' (a skipped step's output
+ *  does). Anything else throws, so an expression this reader cannot follow is red, never guessed. */
+function evalIf(expr: string, ctx: Readonly<Record<string, string>>): boolean {
+  const toks = expr.match(/'[^']*'|==|!=|&&|\|\||!|\(|\)|[A-Za-z_][\w.-]*|\S/g) ?? [];
+  let i = 0;
+  const peek = (): string | undefined => toks[i];
+  const take = (t?: string): string => {
+    const got = toks[i++];
+    if (got === undefined || (t !== undefined && got !== t)) throw new Error(`cannot read \`${expr}\` at token ${i}`);
+    return got;
+  };
+  const truthy = (v: string | boolean): boolean => (typeof v === 'boolean' ? v : v !== '');
+  const operand = (): string | boolean => {
+    const t = take();
+    if (t === '(') { const v = or(); take(')'); return v; }
+    if (t.startsWith("'")) return t.slice(1, -1);
+    if (/^[A-Za-z_][\w.-]*$/.test(t) && peek() !== '(') return ctx[t] ?? '';
+    throw new Error(`cannot read \`${expr}\`: unexpected \`${t}\``);
+  };
+  const compare = (): string | boolean => {
+    if (peek() === '!') { take(); return !truthy(compare()); }
+    const a = operand();
+    if (peek() === '==' || peek() === '!=') {
+      const op = take();
+      const b = operand();
+      return op === '==' ? String(a) === String(b) : String(a) !== String(b);
+    }
+    return a;
+  };
+  const and = (): string | boolean => { let v = compare(); while (peek() === '&&') { take(); const r = compare(); v = truthy(v) && truthy(r); } return v; };
+  const or = (): string | boolean => { let v = and(); while (peek() === '||') { take(); const r = and(); v = truthy(v) || truthy(r); } return v; };
+  const v = or();
+  if (i !== toks.length) throw new Error(`cannot read \`${expr}\`: trailing \`${toks.slice(i).join(' ')}\``);
+  return truthy(v);
+}
+
+/** A step's `if:`, from its dash line or its first-level key; null when it has none. */
+function stepIf(st: string): string | null {
+  return /^(?: {6}- | {8})if: (.*)$/m.exec(st)?.[1] ?? null;
+}
+
+/** The names (or `uses:`) of the browser leg's steps that RUN in `ctx`, in order. */
+function browserStepsRun(ctx: Readonly<Record<string, string>>): string[] {
+  return steps(job('browser-pwa')).filter((st) => { const c = stepIf(st); return c === null || evalIf(c, ctx); })
+    .map((st) => /^ {6}- (?:name|uses): (.*)$/m.exec(st)![1]!);
+}
+
+describe('the queue\'s browser skip (owner ruling 2026-11-02): a deliberate skip is a success, a red or cancelled shard is not', () => {
+  const REFUSAL = 'Refuse a browser suite that did not succeed in the merge queue';
+
+  it('the reader agrees with GitHub on the forms the browser leg and test (pwa) use', () => {
+    expect(evalIf("a == 'x' && b != 'y'", { a: 'x', b: 'z' })).toBe(true);
+    expect(evalIf("a == 'x' && b != 'y'", { a: 'x', b: 'y' })).toBe(false);
+    expect(evalIf("(a == 'x' || a == 'y') && !c", { a: 'y' })).toBe(true);
+    expect(evalIf("steps.reach.outputs.skip != 'true'", {})).toBe(true); // a skipped step's output reads ''
+    expect(() => evalIf("contains(a, 'x')", {})).toThrow(/cannot read/);
+  });
+
+  it("test (pwa)'s queue refusal passes a browser result of success, and refuses failure, cancelled and skipped", () => {
+    const cond = stepIf(step(job('pwa'), REFUSAL));
+    expect(cond).not.toBeNull();
+    expect(step(job('pwa'), REFUSAL)).toMatch(/^ {8}run: exit 1\n/m);
+    const refuses = (event: string, result: string): boolean => evalIf(cond!, { 'github.event_name': event, 'needs.browser-pwa.result': result });
+    expect(refuses('merge_group', 'success'), 'a deliberate skip (every shard success) is refused').toBe(false);
+    for (const result of ['failure', 'cancelled', 'skipped', '']) expect(refuses('merge_group', result), result).toBe(true);
+    // Off the queue the browser suite stays advisory: the refusal never runs.
+    for (const event of ['pull_request', 'schedule', 'workflow_dispatch']) expect(refuses(event, 'failure'), event).toBe(false);
+  });
+
+  it('a group that cannot reach the browser tests runs only the checkout and the ask, so the shard reports success', () => {
+    const b = job('browser-pwa');
+    // Nothing turns a skip into anything but success, or a red into a skip: no job-level if (pinned above), no
+    // continue-on-error, and the asks themselves are never skipped by a failure of another step.
+    expect(jobKey(b, 'if')).toBeNull();
+    expect(b).not.toMatch(/continue-on-error/);
+    const queueRun = (skip: string) => browserStepsRun({ 'env.CCRC_LEG': 'run', 'github.event_name': 'merge_group', 'steps.queue-reach.outputs.skip': skip });
+    if (!browserQueueSkip(b)) {
+      // PRE-SKIP arm (transitional): the queue runs every step but the pull request's ask, whatever changed.
+      expect(b, 'a gate on a merge-queue answer with no step that asks it').not.toContain('steps.queue-reach');
+      expect(queueRun('true')).toEqual(['actions/checkout@v7', 'actions/setup-node@v7', 'Install', 'Install @ccrc/ui', 'Test']);
+      return;
+    }
+    const ask = step(b, 'Can this merge-queue group reach the browser tests?');
+    expect(ask).toContain('        id: queue-reach\n');
+    expect(ask).toContain("        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'\n");
+    expect(ask).toContain('          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}\n');
+    expect(ask).toContain('        run: node .github/ci/reach.mjs --pkg browser --event merge_group --base "$QUEUE_BASE"\n');
+    // Every step after the two asks is gated on BOTH answers, and on nothing wider.
+    for (const st of steps(b).slice(3)) {
+      expect(stepIf(st), st).toBe("env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && steps.queue-reach.outputs.skip != 'true'");
+    }
+    expect(queueRun('true'), 'a deliberate skip').toEqual(['actions/checkout@v7', 'Can this merge-queue group reach the browser tests?']);
+    expect(queueRun('false'), 'a group that reaches the browser tests runs them')
+      .toEqual(['actions/checkout@v7', 'Can this merge-queue group reach the browser tests?', 'actions/setup-node@v7', 'Install', 'Install @ccrc/ui', 'Test']);
+    // The queue's ask runs only in the queue, and a pull request's only on a pull request.
+    const prRun = browserStepsRun({ 'env.CCRC_LEG': 'run', 'github.event_name': 'pull_request', 'steps.reach.outputs.skip': 'false' });
+    expect(prRun).not.toContain('Can this merge-queue group reach the browser tests?');
+    expect(prRun).toContain('Test');
+    const daily = browserStepsRun({ 'env.CCRC_LEG': 'run', 'github.event_name': 'schedule' });
+    expect(daily, 'the daily run asks nothing and runs the tests').toEqual(['actions/checkout@v7', 'actions/setup-node@v7', 'Install', 'Install @ccrc/ui', 'Test']);
+    // A refresh still skips every step.
+    expect(browserStepsRun({ 'env.CCRC_LEG': 'skip', 'github.event_name': 'merge_group' })).toEqual([]);
+  });
+
+  it('the checkout keeps the history the queue\'s ask diffs against (the group\'s base sha)', () => {
+    expect(steps(job('browser-pwa'))[0]).toMatch(/^ {10}fetch-depth: 0$/m);
   });
 });
 
