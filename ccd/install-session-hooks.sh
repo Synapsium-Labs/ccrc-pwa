@@ -213,7 +213,7 @@ fi
 # `~/.cc-sessions/account-deny.settings.json`, whose `permissions.deny` is `ACCOUNT_DENY_RULES`
 # (`shared/api.ts`): the mutating `ccrc account` subs, `seed`, `openrouter-management` with every sub,
 # `ccd-account-auth`, `ccd account-pane`, Read of the secret and scratch paths and `agent.env`, and
-# writes under `.auth/` and `.accounts/`. `ccd` passes it to EVERY session's spawn in its one
+# writes under `.auth/` and `.accounts/`, and the claude.ai Linear connector's tools (`LINEAR_MCP_DENY`). `ccd` passes it to EVERY session's spawn in its one
 # `--settings`. It never names a swap path (the operator's Q8 ruling of 2026-10-19): no other `ccd`
 # rule, no bare `ccrc account`, no `env`/`printenv` rule (the hook refuses only their bare forms).
 # The documented second copy, held equal to the TypeScript list by iteration in `account-deny.test.ts`.
@@ -231,6 +231,7 @@ _account_deny_json() {
     rules+=("Read($p)")
   done
   for p in '~/.cc-sessions/.auth/**' '~/.cc-sessions/.accounts/**'; do rules+=("Edit($p)"); done
+  rules+=('mcp__claude_ai_Linear')   # LINEAR_MCP_DENY (D-7674): the claude.ai Linear connector's tools
   printf '%s\n' "${rules[@]}" | jq -R . | jq -s '{permissions:{deny:.}}'
 }
 if [[ "$MODE" != remove ]]; then

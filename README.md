@@ -1058,7 +1058,10 @@ failed with its word), whether a rotation is owed and why, whether the fleet con
 generation, its transport (`http` said as unencrypted), the previous and retired values still presented, the
 proof that the retired value is refused, a boot recovery, a token-file finding from the last re-read, an
 alert after three failures in a row or a stall (a failed mint, a rotation owed for a day), and **Rotate now**
-(`POST /api/token/rotate`, session-only). Settings then has
+(`POST /api/token/rotate`, session-only). A **Linear** card follows it (#1444): the Linear keys ccrc holds, one per
+workspace, each row with its workspace's name, teams, key tail and last check, **Add a workspace** to add a key, and
+the older single key as a legacy row; every session reaches Linear through these keys alone, by way of `ccrc-api
+linear` (below), and never signs in to Linear itself. Settings then has
 a further section, **Notifications**: the push bell for this browser (the same
 toggle as the fleet header's) and **Release notifications** — `on my channel`, `stable only` or `off`, written
 as the fleet intent's `notify` through `POST /api/updates/intent`. Settings then has a further section, **Stall watch**
@@ -3819,7 +3822,7 @@ honest boundary — this section covers only what that one does not: the install
 lane and the skills' client, the PWA surfaces, the disaster-recovery drill, the
 Build 4 dogfood runbook, cross-repo programmes, and workspace holds.
 
-**All four skills ship to every rostered account's config dir.** The
+**All five skills ship to every rostered account's config dir.** The
 coordinator's protocol is now a trio: its worker counterpart is the
 `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, nineteen clauses pinned by
 `server/test/worker-skill.test.ts`), and its reviewer counterpart is the
@@ -3852,6 +3855,9 @@ A fourth skill, `ccrc-history` (`ccd/history-skill/`, installed by `ccd/install-
 rides the same two lanes into the same homes and teaches a session the `ccrc history` recall verbs
 ("Session history", below). It points into no other skill's tree, so it has no place in that order,
 and its MIT notice, `LICENSE.lossless-claw`, is copied into every home beside its `SKILL.md`.
+A fifth, `ccrc-linear` (`ccd/linear-skill/`, installed by `ccd/install-linear-skill.sh`, #1444), rides the same lanes
+into the same homes and teaches every session the `ccrc-api linear` verbs (below); like the history skill it points
+into no other skill's tree, and doctor's `skills` check and `ccrc doctor --fix` cover it too.
 
 **None of the three role skills (`ccrc-coordinator`, `ccrc-worker` and `ccrc-reviewer`; not `ccrc-history`) is a subagent's to load, and the hook now enforces it (D-4934).** Each skill's
 description says "Never use it inside a subagent": a session started by another session's Agent tool or a
@@ -3879,6 +3885,16 @@ tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
 `POST /api/runs/:id/abandon`, `POST /api/claims/:id/break`,
 `POST /api/runs/:id/reclaim`) have no verb in it, by decision.
+**The `linear` group** (`linear workspaces|teams|issue|comments|search|statuses|projects|labels|users|create|update|comment`,
+#1444) is how every session works with Linear, in every workspace the operator has added a key for in Settings → Linear:
+the server holds the keys and calls Linear through its proxy routes, so no session signs in to Linear, holds a key or
+uses a Linear MCP tool, a connector or `curl` for it. Each verb carries the pane's identity in its query, free text
+travels only in a `--json` body, `<REF>` must be an identifier such as `AAA-12` before anything is sent, and every verb
+but `workspaces` takes `--workspace`. The fifth installed skill, `ccrc-linear` (`ccd/linear-skill/`, installed by
+`ccd/install-linear-skill.sh` into every rostered home whatever the session's role, on the same two lanes as the other
+four), is its reference: the verbs, the bodies, the answers with Linear's own text fenced under `untrusted`, and every
+refusal with its remedy. The coordinator, worker and reviewer skills each point at it, and every fleet session's
+account deny file refuses the claude.ai Linear connector's tools.
 `ccrc install` and `ccrc update` place it on every role except `server`,
 whose box hosts no sessions, and `deploy/deploy.sh`'s agent arm installs it
 beside `ccd`, as the fallback. The token it reads is the server's to place:

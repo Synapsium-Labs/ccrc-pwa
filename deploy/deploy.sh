@@ -987,10 +987,21 @@ cd ~/ccrc/agent && npm ci && npm run build \
   rsync -az --delete -e "${SSH[*]}" ccd/history-skill/ "$BOX":.cc-sessions/history-skill/
   install_atomic ccd/install-history-skill.sh .cc-sessions/install-history-skill.sh 755
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-history-skill.sh'
+  # THE LINEAR SKILL SHIPS FIFTH (#1444, spec 2026-10-31 §11). Every session's,
+  # whatever its role, as the history skill is, and like it the skill points
+  # into no other skill's tree, so this place is a grouping, not an ordering
+  # rule: it needs only the roster its installer sources, which lands above.
+  # Like the notes above, this comment deliberately does NOT spell this skill's
+  # directory name with a trailing slash: install-linear-skill.test.ts locates
+  # the rsync by the FIRST line in the arm that contains that spelling.
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/linear-skill'
+  rsync -az --delete -e "${SSH[*]}" ccd/linear-skill/ "$BOX":.cc-sessions/linear-skill/
+  install_atomic ccd/install-linear-skill.sh .cc-sessions/install-linear-skill.sh 755
+  "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-linear-skill.sh'
   # graphify Task 10 (O3/O6b): the assembled-SRC skill installer, AFTER all
-  # four roster-reading skill arms above (spec §B: its SRC is the INSTALLED
+  # five roster-reading skill arms above (spec §B: its SRC is the INSTALLED
   # package, never vendored, which is what makes it a plain `install_atomic` +
-  # remote run rather than the rsync-a-tree-then-run shape its four
+  # remote run rather than the rsync-a-tree-then-run shape its five
   # neighbours need).
   #
   # R-8 (fix round, F1): GATED on ~/.ccrc/graphify.pin existing on the box —

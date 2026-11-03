@@ -12562,6 +12562,13 @@ export const ACCOUNT_SECRET_PATHS: readonly string[] =
   ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key'];
 export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
 
+/** The Linear MCP tools no fleet session may call (D-7674, #1444 spec §11): every Linear act goes through `ccrc-api linear`
+ *  and the server's proxy, never a sign-in of a session's own. `mcp__claude_ai_Linear` is the claude.ai Linear connector's
+ *  fixed prefix, which names no workspace, so the rule refuses every tool it offers. A per-account MCP server's name is the
+ *  operator's and may name a workspace, so this public tree cannot list it; no server-name wildcard ships, because whether
+ *  the pinned Claude Code honours one is not in CF13's rig record, and those entries stay the rollout's manual removal. */
+export const LINEAR_MCP_DENY: readonly string[] = ['mcp__claude_ai_Linear'];
+
 /** The `permissions.deny` list of `~/.cc-sessions/account-deny.settings.json` (D-6202), which `ccd` passes to EVERY
  *  fleet session's spawn in its one `--settings` (a top-level row, a routed row and a `.child` row alike), beside the
  *  children's `CHILD_DENY_RULES`. An accident guard: `bash -c` with an assembled string, another interpreter or a
@@ -12577,6 +12584,7 @@ export const ACCOUNT_DENY_RULES: readonly string[] = [
   'Bash(ccd account-pane:*)',
   ...ACCOUNT_SECRET_PATHS.map((p) => `Read(${p})`),
   ...ACCOUNT_WRITE_DIRS.map((p) => `Edit(${p})`),
+  ...LINEAR_MCP_DENY,
 ];
 
 /** `FleetHealth`'s disk block (D-6615), declared HERE at the foot as an interface merge, with its type import beside it,
