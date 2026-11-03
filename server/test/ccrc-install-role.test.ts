@@ -539,7 +539,10 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(b.code, b.stderr).toBe(0);
     expect(readFileSync(join(home, '.ccrc', 'node-id'), 'utf8')).toBe(id);
     expect(b.stdout).toMatch(/^install: node-id: kept /m);
-  });
+    // AN EXPLICIT BOUND, as the floor case below: two whole install spines. 6.8 s in a full-suite
+    // queue shard; 33 s in a PR shard that ran it beside the session-hook and typecheck suites,
+    // twice in a row — past the 20 s Linux default though nothing here was wrong.
+  }, 60_000);
 
   it('node-id: a file that is not a uuid is refused, never overwritten — it identifies this node to the console', () => {
     const home = freshBox('ccrc-install-nodeid-bad-');
