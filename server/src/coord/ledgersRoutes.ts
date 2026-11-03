@@ -49,9 +49,9 @@ export interface LedgerCoordinatorDeps {
   presenceOf: (sessionId: string) => CoordinatorPresence;
 }
 
-/** A reason for `ruling` on a modification: the programme ledger's entry id or a short pointer, never prose. */
 /** The PWA route a blocking item's push opens on tap: the Waiting on you list (`pwa/src/lib/routes.ts`'s `waiting` row). */
 const WAITING_URL = '/waiting';
+/** A reason for `ruling` on a modification: the programme ledger's entry id or a short pointer, never prose. */
 const RULING_MAX = 600;
 /** The coordinator's note when it sends an item back (spec §3.3). */
 const RETURN_NOTE_MAX = 600;
