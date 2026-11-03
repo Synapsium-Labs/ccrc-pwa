@@ -123,8 +123,12 @@ describe('isWaitingView', () => {
   });
 });
 
-// PL5b: the programme box's chip. Its count is decided here, once; the box draws it (`programme-box-card.test.tsx`).
+// PL5b: the programme box's chip. Its number is `programmeWaitingCount`, decided here once and the same sum the programme view's
+// heading reads (`groupByProgramme`'s `waiting`): the programme's open items plus its sessions' questions (ruling 14290).
 describe('programmeWaitingCount (the chip\'s count)', () => {
+  const runs = [runRow({ id: 1, program: 'prog-a', state: 'working', sessionId: 'project-a-ask' })];
+  const asker = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question', bucketSince: NOW - MIN });
+  const sessions = withRunBinding([asker], runs);
   const view = waitingView({
     items: [
       itemView({ id: 1, program: 'prog-a' }),
@@ -134,13 +138,23 @@ describe('programmeWaitingCount (the chip\'s count)', () => {
       itemView({ id: 4, program: 'prog-b' }),
     ],
   });
-  it('counts the programme\'s open items, a sent-back one included and one being checked not', () => {
-    expect(programmeWaitingCount(view, 'prog-a')).toBe(2);
-    expect(programmeWaitingCount(view, 'prog-b')).toBe(1);
+  it('counts the programme\'s open items and its sessions\' questions: a sent-back item included, one being checked not', () => {
+    expect(programmeWaitingCount(view, sessions, runs, 'prog-a')).toBe(2 + 1);
+    expect(programmeWaitingCount(view, sessions, runs, 'prog-b')).toBe(1);
   });
-  it('is zero for a programme with nothing open, and while no list has been heard', () => {
-    expect(programmeWaitingCount(view, 'prog-c')).toBe(0);
-    expect(programmeWaitingCount(null, 'prog-a')).toBe(0);
-    expect(programmeWaitingCount(waitingView({ items: [itemView({ state: 'done', closedAt: NOW })] }), 'prog-a')).toBe(0);
+  it('is the programme view\'s heading figure: the group\'s `waiting` is the same number', () => {
+    const group = groupByProgramme(view.items, questionRows(sessions, runs)).find((g) => g.program === 'prog-a')!;
+    expect(programmeWaitingCount(view, sessions, runs, 'prog-a')).toBe(group.waiting);
+    expect(programmeWaitingCount(view, sessions, runs, 'prog-b')).toBe(groupByProgramme(view.items, questionRows(sessions, runs)).find((g) => g.program === 'prog-b')!.waiting);
+  });
+  it('a question of another programme, or of none, is not this programme\'s', () => {
+    expect(programmeWaitingCount(waitingView(), sessions, runs, 'prog-b')).toBe(0);
+    expect(programmeWaitingCount(waitingView(), sessions, [], 'prog-a')).toBe(0); // runs unheard: its programme is unknown
+  });
+  it('is zero for a programme with nothing open, and until the list and the fleet frame have both been heard', () => {
+    expect(programmeWaitingCount(view, sessions, runs, 'prog-c')).toBe(0);
+    expect(programmeWaitingCount(null, sessions, runs, 'prog-a')).toBe(0);
+    expect(programmeWaitingCount(view, null, runs, 'prog-a')).toBe(0);
+    expect(programmeWaitingCount(waitingView({ items: [itemView({ state: 'done', closedAt: NOW })] }), [], [], 'prog-a')).toBe(0);
   });
 });

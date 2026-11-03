@@ -44,7 +44,10 @@ const waitingChipWords = (count: number): string => `${badgePrint(count)} waitin
 
 /** The chip: nothing at zero (and while no list has been heard), else the count in words, and a way into the programme. */
 function WaitingChip({ slug, title }: { slug: string; title: string }): ReactNode {
-  const count = useFleetStore((s) => programmeWaitingCount(s.waiting, slug));
+  // The same number the programme view's heading reads (`waitingTotal`): open items plus its sessions' questions. The
+  // fleet's rows and runs count only once their frames have landed, as the navigation badge reads them.
+  const count = useFleetStore((s) =>
+    programmeWaitingCount(s.waiting, s.fleetFrameSeen ? s.sessions : null, s.runsFrameSeen ? s.runs : null, slug));
   if (count === 0) return null;
   const words = waitingChipWords(count);
   return (

@@ -8,6 +8,7 @@ import type { FleetSession, RunSummary, UpdatesView } from '../../shared/api';
 import { fleetTree } from '../src/fleet/fleetTree';
 import { NO_ROLLUP_PREFS, rollupFleet, type RollupPrefs } from '../src/fleet/rollup';
 import { ProjectCard } from '../src/fleet/ProjectCard';
+import { ProgrammeScreen } from '../src/ledgers/ProgrammeScreen';
 import { assignHues } from '../src/fleet/programmeBoxes';
 import { api } from '../src/lib/api';
 import { resetAcks } from '../src/lib/seen';
@@ -514,18 +515,26 @@ describe.each([REFINED, INSTRUMENT] as const)('the box\'s fold in the %s fleet l
 });
 
 // PL5b: the chip on the programme box. "N waiting on you" beside the title, only when N is above zero, and a door to the
-// programme's view. The list is the fleet store's `waiting` (one list for every reader); the box reads its programme's count.
+// programme's view. N is what the programme view's heading reads (ruling 14290): the programme's open items plus its sessions'
+// questions. The list, the fleet's rows and its runs are the fleet store's (one list for every reader); the box reads its own
+// programme's number. `fleet()`'s worker `w1` asks the operator, so the default fleet holds one question for `port-api`;
+// `quiet()` is the same fleet with nobody asking.
 describe('the waiting chip on a programme box (PL5b)', () => {
   const OPEN = (n: number, program = 'port-api') =>
     Array.from({ length: n }, (_v, i) => itemView({ id: 100 + i, program, title: `Item ${i}` }));
-  const withList = (items: ReturnType<typeof itemView>[]): void => {
-    act(() => useFleetStore.setState({ waiting: waitingView({ items }) }));
+  const quiet = () => fleet(answeredByCoordinator());
+  /** Put `items` on the store's list, with the fleet the box is drawn from heard (its rows and its runs). */
+  const withList = (items: ReturnType<typeof itemView>[], from = quiet()): void => {
+    act(() => useFleetStore.setState({
+      waiting: waitingView({ items }), sessions: from.sessions, runs: from.runs, fleetFrameSeen: true, runsFrameSeen: true,
+    }));
   };
   const chip = (c: Element): HTMLElement | null => c.querySelector<HTMLElement>('.pg-kicker .pg-waiting');
+  afterEach(() => { act(() => useFleetStore.setState({ sessions: [], runs: [], fleetFrameSeen: false, runsFrameSeen: false })); });
 
   it('shows "N waiting on you" after the title when the programme has N open items', () => {
     withList(OPEN(3));
-    const { sessions, runs } = fleet();
+    const { sessions, runs } = quiet();
     const kicker = drawCard(sessions, runs, 'project-c').querySelector('.pg-kicker')!;
     const c = chip(kicker)!;
     expect(c.textContent).toContain('3 waiting on you');
@@ -533,9 +542,29 @@ describe('the waiting chip on a programme box (PL5b)', () => {
     expect(title.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('draws no chip at zero: no list yet, a list without this programme, or nothing but items being checked or done', () => {
-    const { sessions, runs } = fleet();
+  it('counts its sessions\' questions with its open items: 2 items and 1 question read "3 waiting on you" on the box and 3 on the view (ruling 14290)', () => {
+    const asking = fleet();
+    withList(OPEN(2), asking);
+    const box = drawCard(asking.sessions, asking.runs, 'project-c');
+    expect(chip(box)!.textContent).toContain('3 waiting on you');
+    cleanup();
+    render(<ProgrammeScreen slug="port-api" store={useFleetStore} />);
+    expect(screen.getByRole('heading', { name: 'Waiting on you · 3' })).toBeTruthy();
+  });
+
+  it('counts a question alone: a programme with no open item but one asking session still has a chip', () => {
+    const asking = fleet();
+    withList([], asking);
+    expect(chip(drawCard(asking.sessions, asking.runs, 'project-c'))!.textContent).toContain('1 waiting on you');
+  });
+
+  it('draws no chip at zero: no list yet, no fleet frame yet, a list without this programme, or nothing but items being checked or done', () => {
+    const { sessions, runs } = quiet();
     expect(chip(drawCard(sessions, runs, 'project-c'))).toBeNull(); // no list heard
+    cleanup();
+    withList(OPEN(2), quiet());
+    act(() => useFleetStore.setState({ fleetFrameSeen: false })); // the list, but not the fleet's rows
+    expect(chip(drawCard(sessions, runs, 'project-c'))).toBeNull();
     cleanup();
     withList(OPEN(2, 'another-programme'));
     expect(chip(drawCard(sessions, runs, 'project-c'))).toBeNull();
@@ -549,12 +578,12 @@ describe('the waiting chip on a programme box (PL5b)', () => {
 
   it('counts only its own programme\'s open items', () => {
     withList([...OPEN(2), ...OPEN(5, 'another-programme')]);
-    const { sessions, runs } = fleet();
+    const { sessions, runs } = quiet();
     expect(chip(drawCard(sessions, runs, 'project-c'))!.textContent).toContain('2 waiting on you');
   });
 
   it('follows the list: the chip appears, changes and goes when the count does', () => {
-    const { sessions, runs } = fleet();
+    const { sessions, runs } = quiet();
     const c = drawCard(sessions, runs, 'project-c');
     expect(chip(c)).toBeNull();
     withList(OPEN(1));
@@ -567,7 +596,7 @@ describe('the waiting chip on a programme box (PL5b)', () => {
 
   it('is a door: a labelled button that opens the programme\'s view and nothing else on the box', () => {
     withList(OPEN(3));
-    const { sessions, runs } = fleet();
+    const { sessions, runs } = quiet();
     const c = drawCard(sessions, runs, 'project-c');
     const door = within(c).getByRole('button', { name: /3 waiting on you/ });
     expect(door.classList.contains('pg-waiting')).toBe(true);
@@ -576,13 +605,13 @@ describe('the waiting chip on a programme box (PL5b)', () => {
     history.replaceState(null, '', '/');
     fireEvent.click(door);
     expect(location.pathname).toBe('/programmes/port-api');
-    expect(within(c).getByRole('button', { name: '2 more workers · 1 working' }).getAttribute('aria-expanded')).toBe('false');
+    expect(c.querySelector('.pg-foot button')?.getAttribute('aria-expanded'), 'the footer toggle is untouched').toBe('false');
     history.replaceState(null, '', '/');
   });
 
   it('prints its widest count as "99+", the one width the layout is measured at', () => {
     withList(OPEN(250));
-    const { sessions, runs } = fleet();
+    const { sessions, runs } = quiet();
     const c = chip(drawCard(sessions, runs, 'project-c'))!;
     expect(c.textContent).toContain('99+ waiting on you');
     expect(c.textContent).not.toContain('250');

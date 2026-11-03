@@ -86,11 +86,21 @@ export function questionRows(sessions: readonly FleetSession[], runs: readonly R
 export const waitingTotal = (items: readonly ItemView[], questions: readonly QuestionRow[]): number =>
   waitingCount(items) + questions.length;
 
-/** What the programme box's chip counts (spec §3: "N waiting on you"): this programme's OPEN items, a sent-back one included
- *  and one the coordinator is checking not. Zero while no list has been heard: the chip is an addition, and "not heard
- *  yet" draws nothing rather than a guess. The box draws the chip only above zero, so this is the whole decision. */
-export const programmeWaitingCount = (view: WaitingView | null, program: string): number =>
-  view === null ? 0 : waitingCount(view.items.filter((i) => i.program === program));
+/** The chip's number for `program`, off what the fleet store holds: "waiting on you" as spec §2 defines it once, the programme's
+ *  open items (sent-back ones included, one being checked not) plus the questions its sessions ask, summed by `waitingTotal`,
+ *  the one sum the combined list, the navigation badge and the programme view's heading (`groupByProgramme`'s `waiting`) read
+ *  too, so a programme never reads one number on its box and another on its view (ruling 14290). Zero until the list AND the
+ *  fleet frame have landed (`sessions`, as the navigation badge gates them): "not heard yet" draws no chip rather than a guess. `runs` may be `null` (no runs frame yet): a question's programme is then
+ *  unknown, so it counts for no programme. */
+export function programmeWaitingCount(
+  view: WaitingView | null, sessions: readonly FleetSession[] | null, runs: readonly RunSummary[] | null, program: string,
+): number {
+  if (view === null || sessions === null) return 0;
+  return waitingTotal(
+    view.items.filter((i) => i.program === program),
+    questionRows(sessions, runs ?? []).filter((q) => q.program === program),
+  );
+}
 
 /** The runs of one programme that are still open (`isRunClosed`, the runs board's own predicate), which is what keeps its
  *  coordinator waiting on the operator's tick and refuses a dismiss. The list's wave label and `programmeIsLive` both read
@@ -130,7 +140,7 @@ export function groupByProgramme(items: readonly ItemView[], questions: readonly
       ...asks.map((question): Row => ({ kind: 'question', question })),
       ...mine.filter((i) => !isBlocking(i)).map((item): Row => ({ kind: 'item', item })),
     ];
-    groups.push({ program, rows, blocking: mine.some(isBlocking), waiting: waitingCount(mine) + asks.length });
+    groups.push({ program, rows, blocking: mine.some(isBlocking), waiting: waitingTotal(mine, asks) });
   }
   const key = (g: ProgrammeGroup): string => g.program ?? '￿';
   return groups.sort((a, b) => Number(b.blocking) - Number(a.blocking) || key(a).localeCompare(key(b)));
