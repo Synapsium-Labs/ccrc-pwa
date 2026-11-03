@@ -21,13 +21,15 @@ not the ledger. Times are UTC, 2026-11-03.
   A roster reload keeps the operator-secret lanes (`reloadRoster`'s `keep`, `config.ts`), and the re-key after a rotation
   carries their rows (`index.ts`).
 - **The deny rules**: `~/.ccrc/operator-secrets/**` joins `ACCOUNT_SECRET_PATHS` (one line, `shared/api.ts`, edited under
-  leave), the installer's copy, and the hook's `ASEC`, `APSEC` and account-arm prefilter. The CLAUDE.md SAFETY bullet is the
-  remaining edit (see "Not done yet").
+  leave), the installer's copy, and the hook's `ASEC`, `APSEC` and account-arm prefilter. CLAUDE.md's SAFETY account bullet names the slots among
+  the paths a session never reads (edited under leave, mail 14334).
 - **The panel** (`pwa/src/ledgers/ItemView.tsx`): a password field in the panel's own state, trimmed at both ends and sent once
   through `useStepUp`'s `runAct`, cleared after saving and on page hide, disabled with "Saving a secret needs sign-in turned
   on for this console." on `auth-off` or `insecure-origin`. "Confirm it's you" sits outside the save form, so the step's own
   passphrase form never re-sends the save. After saving: "Saved. Ends in ….", and the masking line when it is not masked. A
-  checking secret item shows the slot's state from the server; its answer is never rendered.
+  checking secret item shows the slot's state from the server; its answer is never rendered. The client call is
+  `api.saveItemSecret` (`pwa/src/lib/api.ts`, edited under leave, mail 14334), answering `SecretSaveAnswer`
+  (`shared/ledgers.ts`).
 
 ## Departures from the plan, for the ledger to number
 
@@ -63,20 +65,25 @@ not the ledger. Times are UTC, 2026-11-03.
   169 to 170), the route joins `FLAG_AWARE` (seventeen to eighteen, the Linear credential writes' reason), and `auth/gate.ts`'s
   docstring count follows.
 - `pl6-census-door`: `/api/items/:id/secret` joins `box-token-census.test.ts`'s `LEDGER_OPERATOR_DOORS`.
-- `pl6-local-save-stub`: the panel's client call is `saveItemSecret` in `ItemView.tsx` while `pwa/src/lib/api.ts` is held; it
-  moves to `api.ts` when that file frees.
 - `pl6-no-value-reader`: `readValueFile` is not used. It takes the first non-comment line and strips whitespace, so it would not
   read a pasted value back as written; nothing reads a value yet (spec §5) except the re-key, which reads the file whole.
 - Files beyond the plan's list: `shared/ledgers.ts`, `shared/refusal.ts`, `server/src/index.ts`, `server/src/server.ts`,
   `server/src/coord/routes.ts`, `server/src/accounts/gate.ts`, `server/src/auth/gate.ts`, `pwa/src/lib/refusalWords.ts`, and the
   tests `box-token-census.test.ts`, `auth-gate.test.ts` and `item-view.test.tsx`.
 
-## Not done yet (held files)
+## Edited under leave
 
-- `CLAUDE.md` (claim 3306): the SAFETY account bullet names `~/.ccrc/operator-secrets/`, and the coordination bullet names
-  `PUT /api/items/:id/secret` among the operator's doors. Until then two pins are red: `account-deny.test.ts`'s "names each
-  command and path" and `box-token-census.test.ts`'s "box-token bullet is TRUE".
-- `pwa/src/lib/api.ts` (claim 3315): `saveItemSecret(id, value)` moves there from `ItemView.tsx`.
+- `shared/api.ts` (claim 3297, leave 14319): one `ACCOUNT_SECRET_PATHS` entry and its doc comment's count.
+- `CLAUDE.md` (claim 3306, leave 14334): the SAFETY account bullet names `~/.ccrc/operator-secrets/`, and the box-token
+  bullet names `PUT /api/items/:id/secret` among the ledgers' operator doors. Nothing else in the file.
+- `pwa/src/lib/api.ts` (claim 3315, leave 14334): `saveItemSecret` and its doc comment, before the `waiting` entry, with its
+  own `import type` line; the shared ledgers import is untouched.
+
+## A load flake measured, not fixed here
+
+`secret-mask.test.ts`'s 25 ms frame bound failed once, in one batch run of about 30 server suites at `--maxWorkers=2` while
+the box ran other sessions' suites, and passed on its re-run alone (1 red in 2 runs). The suite's code is not changed by
+this task.
 
 ## The leak scan covers
 

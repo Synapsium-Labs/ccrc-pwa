@@ -19,11 +19,13 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, RadioFieldset, TextInput } from '@ccrc/ui';
 import {
-  ANSWER_MAX, SECRET_VALUE_MAX, WAITS_ON_WORDS, isSecretValue, type ItemView as ItemWire, type SecretUnmasked,
+  ANSWER_MAX, SECRET_VALUE_MAX, WAITS_ON_WORDS, isSecretValue, type ItemView as ItemWire, type SecretSaveAnswer,
+  type SecretUnmasked,
 } from '../../../shared/ledgers';
 import type { ProgHue } from '../fleet/programmeBoxes';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
+import { api } from '../lib/api';
 import { ApiError } from '../lib/apiError';
 import { onPageHidden } from '../lib/pageClock';
 import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
@@ -48,26 +50,11 @@ export interface ItemViewProps {
   readonly stepUpDeps?: StepUpDeps;
 }
 
-/** What the secret's route answers on success: the slot's state, never the value. */
-export interface SecretSaved {
-  readonly ok: true;
-  readonly secret: { readonly setAt: number; readonly tail: string; readonly masked: boolean; readonly why?: SecretUnmasked };
-  readonly item: ItemWire;
-}
-export type SaveSecret = (id: number, value: string) => Promise<SecretSaved>;
+/** Sends a secret item's value to its own route (`api.saveItemSecret`): the slot's state comes back, never the value. */
+export type SaveSecret = (id: number, value: string) => Promise<SecretSaveAnswer>;
 
-/** `PUT /api/items/:id/secret`. A refusal rejects with an `ApiError` carrying the route's word, as every client call does.
- *  (A local client call: `lib/api.ts`'s `saveItemSecret` takes its place once that file is free to edit.) */
-export const saveItemSecret: SaveSecret = async (id, value) => {
-  const res = await fetch(`/api/items/${id}/secret`, {
-    method: 'PUT', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ value }),
-  });
-  const text = await res.text().catch(() => '');
-  let body: unknown = text;
-  try { body = JSON.parse(text); } catch { /* a non-JSON body stays text */ }
-  if (!res.ok) throw new ApiError(res.status, body, res.headers.get('content-type'));
-  return body as SecretSaved;
-};
+/** The panel's default: the console's client call. */
+const saveItemSecret: SaveSecret = (id, value) => api.saveItemSecret(id, value);
 
 const NO_STEP_UP_DEPS: StepUpDeps = {};
 /** The hook is told the session's step-up is fresh until an act proves otherwise (the Linear card's rule): a panel that
@@ -119,7 +106,7 @@ function SecretPanel({ item, saveSecret, stepUpDeps }: { item: ItemWire; saveSec
   const [busy, setBusy] = useState(false);
   const [dark, setDark] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const [saved, setSaved] = useState<SecretSaved['secret'] | null>(null);
+  const [saved, setSaved] = useState<SecretSaveAnswer['secret'] | null>(null);
   const stepUp = useStepUp(ASSUME_FRESH, stepUpDeps);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -135,12 +122,12 @@ function SecretPanel({ item, saveSecret, stepUpDeps }: { item: ItemWire; saveSec
     setBusy(true);
     setRefusal(null);
     try {
-      let answer: SecretSaved | null = null;
+      let answer: SecretSaveAnswer | null = null;
       const outcome = await stepUp.runAct(async () => { answer = await saveSecret(item.id, trimmed); });
       if (outcome === 'step-up' || answer === null) return;
       if (!mounted.current) return;
       setValue('');
-      setSaved((answer as SecretSaved).secret);
+      setSaved((answer as SecretSaveAnswer).secret);
     } catch (err) {
       const word = wordOf(err);
       if (word !== null && GATE_DARK.has(word)) { setDark(true); setValue(''); return; }

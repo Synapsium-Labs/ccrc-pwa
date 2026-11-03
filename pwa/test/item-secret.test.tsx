@@ -4,7 +4,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ApiError } from '../src/lib/apiError';
-import { ItemView, SECRET_TEXT, type SaveSecret, type SecretSaved } from '../src/ledgers/ItemView';
+import { createApi } from '../src/lib/api';
+import { ItemView, SECRET_TEXT, type SaveSecret } from '../src/ledgers/ItemView';
+import type { SecretSaveAnswer } from '../../shared/ledgers';
 import type { StepUpDeps } from '../src/accounts/useStepUp';
 import { NOW, itemView } from './ledgersFixture';
 
@@ -20,7 +22,7 @@ const stepUpDeps: StepUpDeps = {
 };
 const secretItem = (over: Parameters<typeof itemView>[0] = {}) =>
   itemView({ kind: 'secret', title: 'Give the service key', secretSlot: 'api-key', ...over });
-const answer = (over: Partial<SecretSaved['secret']> = {}): SecretSaved =>
+const answer = (over: Partial<SecretSaveAnswer['secret']> = {}): SecretSaveAnswer =>
   ({ ok: true, secret: { setAt: NOW, tail: '6789', masked: true, ...over }, item: secretItem({ state: 'checking' }) });
 
 const show = (saveSecret: SaveSecret, item = secretItem()) =>
@@ -132,5 +134,32 @@ describe('the secret panel (plan PL6)', () => {
     fireEvent.click(saveButton());
     await waitFor(() => expect(field().value).toBe(''));
     expect(setItem.mock.calls.filter((c) => c.some((a) => String(a).includes(VALUE)))).toEqual([]);
+  });
+});
+
+describe('api.saveItemSecret (the console client call)', () => {
+  it('PUTs the value in the body only, to the item\'s own route, and answers the slot\'s state', async () => {
+    const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const client = createApi((async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(JSON.stringify(answer()), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch);
+    const got = await client.saveItemSecret(7, VALUE);
+    expect(got.secret).toEqual({ setAt: NOW, tail: '6789', masked: true });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe('/api/items/7/secret');
+    expect(calls[0]!.url).not.toContain(VALUE);
+    expect(calls[0]!.init?.method).toBe('PUT');
+    expect(calls[0]!.init?.body).toBe(JSON.stringify({ value: VALUE }));
+    expect(new Headers(calls[0]!.init?.headers).get('content-type')).toBe('application/json');
+  });
+
+  it('a refusal rejects with the route\'s ApiError, its word in the body', async () => {
+    const client = createApi((async () =>
+      new Response(JSON.stringify({ ok: false, error: 'step-up-required' }), { status: 403, headers: { 'content-type': 'application/json' } })) as typeof fetch);
+    const err = await client.saveItemSecret(7, VALUE).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(403);
+    expect((err as ApiError).body).toEqual({ ok: false, error: 'step-up-required' });
   });
 });

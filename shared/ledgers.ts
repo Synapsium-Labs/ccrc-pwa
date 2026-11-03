@@ -238,6 +238,13 @@ export function secretAnswer(s: { setAt: number; tail: string }): string {
   return s.tail === '' ? `set ${at}` : `set ${at} ending ${s.tail}`;
 }
 
+/** What `PUT /api/items/:id/secret` answers on success: the slot's state and the ticked item, never the value. */
+export interface SecretSaveAnswer {
+  readonly ok: true;
+  readonly secret: { readonly setAt: number; readonly tail: string; readonly masked: boolean; readonly why?: SecretUnmasked };
+  readonly item: ItemView;
+}
+
 const SPEC_PREFIX = 'docs/superpowers/specs/';
 /** A spec path the PWA may turn into a Docs link: under the specs directory, Markdown, no parent
  *  hop, no empty segment, not absolute, at most 200 characters. */
