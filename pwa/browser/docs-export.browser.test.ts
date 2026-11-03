@@ -9,8 +9,8 @@
 // (the refresh, the clicked link), excluded by name, may reach B, because a CSP meta does not stop navigation (lab 3).
 // The CONTROL, the string page with no meta, reaches B on a fetch-type channel: the detector is not blind. Chrome's
 // local-network checks are off, so they cannot make a property hold. The stylesheet is the shipped one (`server.fs.allow`
-// lets this config read @ccrc/ui's sheets), so the construction build covers the stylesheet channel too: a `url()` or
-// `@import` that survived `exportStylesheetPart` would reach B from the file with no CSP meta.
+// lets this config read @ccrc/ui's sheets), so every build carries the real `EXPORT_CSS`; whether that text holds a
+// `url()` or `@import` is held by docs-export.test.tsx's stylesheet cases, not here (no shipped sheet names origin B).
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/docs-export.browser.test.ts )`.
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
