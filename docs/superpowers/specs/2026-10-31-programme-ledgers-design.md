@@ -41,6 +41,7 @@ This section describes the three views. The prototype on branch `brainstorm/prog
 - **The programme box chip.** A programme box in the fleet list shows "N waiting on you" when N is above zero. Tapping it opens the programme view.
 - **The programme view.** Goals on one side, this programme's share of the list on the other. When nothing is waiting on the operator, that panel says what the programme *is* waiting on, for example "Nothing needs you. Waiting on: review of task G4." So a programme that is stopped with nothing on the list is plainly not stopped on the operator.
 - **The item view.** What, why, how as numbered steps, a "needed by" label, the item's history, and the action panel for its kind (§3).
+- **Moving between items (operator, 2026-11-03, D23).** Opening an item never strands the operator. The item view shows a visible way back to the list it was opened from, at every width, phone included. It steps to the previous and next item of that same list, in the list's own order and filter, with a position such as "3 of 6". The list is the combined one, one programme's share, or the programme view. On a wide screen the list stays beside the open item, as the fleet list stays beside an open session, so the operator can move along it without going back at all.
 
 ```mermaid
 flowchart LR
@@ -71,7 +72,9 @@ Questions are not stored as items. The list reads them through the one existing 
 
 ### 3.2 What an item carries
 
-Raised by the coordinator: programme, the run it belongs to (if any), kind, title (the what), why, how (an ordered list of steps), options (Decide only), the secret slot (Give a secret only, §5), and a needed-by label. Needed-by is one of **blocking** (work has stopped on it), **soon** (with a short label such as "before wave 6"), or **later** (before the programme can finish). Only the coordinator sets blocking, and it sets it when the work actually stops on the item.
+Raised by the coordinator: programme, the run it belongs to (if any), kind, title (the what), why, how (an ordered list of steps), options (Decide only), the recommendation (Decide only), the secret slot (Give a secret only, §5), and a needed-by label.
+
+**The recommendation (operator, 2026-11-03, D24).** A Decide item names the option its raiser recommends, and says why that option is better than each alternative, in a few plain sentences. The reasons include what each alternative would cost or risk. The raise route refuses a Decide item that has no recommendation. The console marks the recommended option among the choices and shows the reasoning beside them, before the operator picks. The operator is still free to pick any option or write their own. An item raised before this rule has no recommendation, and it is drawn as before. Needed-by is one of **blocking** (work has stopped on it), **soon** (with a short label such as "before wave 6"), or **later** (before the programme can finish). Only the coordinator sets blocking, and it sets it when the work actually stops on the item.
 
 Kept by the server: state, raised-at, ticked-at, closed-at, the operator's answer (never a secret), the coordinator's latest note when it sends an item back, and a history of each transition with its time.
 
@@ -182,7 +185,7 @@ sequenceDiagram
 This section covers what coordinators do with the ledgers and how they do it.
 
 - **New `ccrc-api` verbs**, all box-token gated and attribution-checked like the other coordination writes: raise, confirm, send back and withdraw an item; set blocking on or off; set the spec pin and its current "In short"; record a modification; read the programme's items. A coordinator may act only on its own programme's items.
-- **A new coordinator-skill clause.** The ccrc-coordinator skill gains a twentieth clause: raise an item as soon as you can see the operator will be needed, with what, how and why; set blocking only when work has stopped on it; on a tick, re-measure before confirming and send it back with what you found if it does not hold; whenever the operator steers, rewrite the spec on your ledger PR and record the modification; set the spec pin when the operator approves a spec. The clause is pinned verbatim by `server/test/coordinator-skill.test.ts`, like the other nineteen.
+- **A new coordinator-skill clause.** The ccrc-coordinator skill gains a twentieth clause: raise an item as soon as you can see the operator will be needed, with what, how and why; set blocking only when work has stopped on it; on a tick, re-measure before confirming and send it back with what you found if it does not hold; whenever the operator steers, rewrite the spec on your ledger PR and record the modification; set the spec pin when the operator approves a spec. Since 2026-11-03 (D24) it also says that a Decide item names the recommended option and why that option beats each alternative. The clause is pinned verbatim by `server/test/coordinator-skill.test.ts`, like the other nineteen.
 - **Clause 19 is unchanged.** A coordinator still puts its questions to the operator in its closing turn text, never in a dialog. Clause 20 adds that each such question is also raised as an item, so the list is complete even when the operator was not watching that session.
 - **Seeding from a spec.** When the operator approves a spec, the coordinator raises an item for each open point in the spec's own "Where things stand: Waiting on you" box. After that the list is the only source of truth for what is waiting.
 - **The ledger file keeps its job.** The programme ledger in the repo still records rulings and receipts. Items are not written there, because this repository is public and an item may name something that must not be. A decision's outcome reaches the ledger as a ruling, in the coordinator's words, as today.
@@ -256,6 +259,8 @@ Every decision is Agreed: the operator's own rulings, and the coordinator's call
 | D18 | Which session questions join | Asks only; every question model; including held ones | Asks, permission prompts and dialogs, once they have reached the operator | Agreed |
 | D19 | A tick nobody picks up | Push the operator; label only | A label computed on read; no push, no new stall arm | Agreed |
 | D20 | Clause 19 (questions in closing text) | Replace with items; keep and add items | Keep clause 19; clause 20 adds an item for each such question | Agreed |
+| D23 | Moving between items | Back to the list only; back plus previous and next; the list beside the item on a wide screen | All three: a visible back at every width, previous and next with the position in the list it came from, and the list beside the item on a wide screen (operator: "as I go into an entry I lose the ability to navigate between them") | Agreed |
+| D24 | Whether a Decide item recommends | Options only; a recommended option with its reasons | The raiser names the recommended option and why it beats each alternative; the route refuses a Decide item without one; the console marks it (operator: "I don't see what is recommended … with an explanation as to WHY") | Agreed |
 
 ## 9. Testing and proof
 
@@ -269,6 +274,8 @@ This section names how each promise will be shown to hold.
 - **"Waiting on" decider.** Pure-function tests over each run-state mix, including "stopped with nothing on the list".
 - **Census and skill.** The box-token census counts each new door. The coordinator-skill test pins clause 20 verbatim.
 - **Screens.** Browser tests at desktop and phone width for the three views, the chip and the nav count, in each palette the contrast gate already measures.
+- **Moving between items.** At phone and desk widths, an opened item shows its way back. Previous and next follow the list it was opened from, the combined list, a programme's share or the programme view, with its filter. The first and last items have no step past the end. On a wide screen the list stays beside the item.
+- **The recommendation.** The raise route refuses a Decide item with no recommendation, or one naming an option it does not list. The item view marks the recommended option and shows its reasons. An older item without one draws as before.
 
 ## Where things stand
 
@@ -280,6 +287,7 @@ This section names how each promise will be shown to hold.
 - The spec is rewritten when the operator steers, so it is always what the programme is working towards, with a dated list of modifications beside it (operator, 2026-11-01, D3, replacing the 2026-10-31 choice to keep the spec as approved).
 - The prototype's three views as the shape of the screens ("pretty great overall", operator, 2026-10-31).
 - The Docs reader coordinator's guidance on linking, amendments and the spec's own box (2026-10-31).
+- Moving between items, and a recommended option with its reasons on every Decide item (operator, 2026-11-03, D23 and D24; built as PL9).
 
 ### Waiting on you
 

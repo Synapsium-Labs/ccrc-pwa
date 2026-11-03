@@ -21,7 +21,7 @@ import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { fleetSession } from '../test/fleetFixture';
-import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 
 const THEMES = [PHOSPHOR, 'light'];
 const SKINS = [REFINED, INSTRUMENT];
@@ -77,7 +77,7 @@ let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
@@ -85,7 +85,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await server?.close();
-  removeDist(dist);
 });
 
 const CARDS = '.accounts-list .accounts-row[data-lane]';

@@ -15,6 +15,8 @@ import { DiskBanner } from '../fleet/DiskBanner';
 import { diskBannerShows } from '../fleet/diskWords';
 import { PressureBanner } from '../fleet/PressureBanner';
 import { pressureBannerShows } from '../fleet/pressureWords';
+import { BackupBanner } from '../fleet/BackupBanner';
+import { backupBannerShows } from '../fleet/backupWords';
 import { UpdateIndicator } from '../fleet/UpdateIndicator';
 import { ClassChooser } from '../fleet/ClassChooser';
 import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
@@ -382,9 +384,14 @@ export function FleetBanners(): ReactNode {
   const useStore = chrome.store;
   const sessions = useStore((s) => s.sessions);
   const conn = useStore((s) => s.conn);
+  const linkLost = useStore((s) => s.linkLost);
   const notices = useStore((s) => s.notices);
   const dismissNotice = useStore((s) => s.dismissNotice);
   const fleetHealth = chrome.health;
+  // "Reconnecting…" for the whole outage on an empty pane: each reconnect attempt reads `connecting`, and with no
+  // session held the stale-cards banner below says nothing, so the link's loss is said through the attempt too. A cold
+  // start that has not failed yet (`linkLost` false) is unchanged. Exclusive of the `connecting` banner by construction.
+  const offline = conn === 'down' || (conn === 'connecting' && linkLost && sessions.length === 0);
   const updates = chrome.updates;
   // Wave 19, R24(b): a later poll failed and the view is the last answer that landed; every banner says so.
   const stale = updates.view !== null && updates.failure !== null;
@@ -406,6 +413,8 @@ export function FleetBanners(): ReactNode {
         { id: 'pressure', shows: pressureBannerShows(fleetHealth), node: <PressureBanner health={fleetHealth} /> },
         // The disk alarm (D-6617), from the same health poll as the fleet-host banner above.
         { id: 'disk', shows: diskBannerShows(fleetHealth), node: <DiskBanner health={fleetHealth} /> },
+        // The fleet box's backup alarm (D-7860), from the same health poll: failed or stale only.
+        { id: 'backup', shows: backupBannerShows(fleetHealth), node: <BackupBanner health={fleetHealth} /> },
         // The halt, with each halting node's Ack in place (programme wave 14, R15(a)). Re-polls on every Ack. The
         // release that waits is not a banner (D-6327): it is the quiet update line, placed once per width.
         {
@@ -418,8 +427,8 @@ export function FleetBanners(): ReactNode {
         { id: 'substrate', shows: substrateBannerShows(sessions), node: <SubstrateBanner store={useStore} /> },
         {
           id: 'offline',
-          shows: conn === 'down',
-          node: conn === 'down' && (
+          shows: offline,
+          node: offline && (
             <div className={`offline-banner ${ATTENTION_DOT}`} role="status">
               Reconnecting…
             </div>

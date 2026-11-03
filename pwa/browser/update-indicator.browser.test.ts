@@ -28,7 +28,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
-import { buildDist, openApp, removeDist, seedStripExpanded, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { openApp, seedStripExpanded, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 
 const THEMES = [PHOSPHOR, 'light'];
 const named = (v: AppView): string => `${v.skin}, ${v.theme}, ${v.width}px, ${v.touch === true ? 'touch' : 'mouse'}`;
@@ -75,7 +75,7 @@ let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
@@ -83,7 +83,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await server?.close();
-  removeDist(dist);
 });
 
 /** The page answers the view until `fail.on`, then HTTP 500: the hook keeps the last good view and reports the failure

@@ -31,7 +31,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
 import { resolveChrome } from './harness';
-import { buildDist, removeDist, serveDist, type DistServer } from './app';
+import { serveDist, sharedDist, type DistServer } from './app';
 import { direction, inView, named, settle, tallBox, VIEWS, wheelOver, type Rig } from './wheel';
 
 let dist: string | undefined;
@@ -40,7 +40,7 @@ let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
@@ -48,7 +48,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await server?.close();
-  removeDist(dist);
 });
 
 const rig = (): Rig => ({ browser: browser!, server: server! });

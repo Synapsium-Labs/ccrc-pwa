@@ -127,9 +127,7 @@ const PIPELINE_STEP_LINES = [
 
 /** The browser leg's merge-queue ask (the owner's ruling of 2026-11-02): a STEP of `browser-pwa`, never a job-level
  *  condition, that asks reach.mjs whether the group's change can reach the browser tests. It may skip only the browser
- *  leg's own later steps (ci-pipeline.test.ts evaluates that), so its lines are allowed there and nowhere else.
- *  TRANSITIONAL (2026-11-02): allowed, not yet required, until the rules-only pull request lands it; the pull request
- *  after that requires it. */
+ *  leg's own later steps (ci-pipeline.test.ts evaluates that), so its lines are allowed there and nowhere else. */
 const QUEUE_BROWSER_ASK_LINES = [
   "        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'",
   '          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}',
@@ -218,8 +216,8 @@ describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s 
         .not.toContain('merge_group');
     }
     expect(refusals.sort(), 'the queue-only refusals are exactly the browser suite and the node floor').toEqual(['pwa: browser-pwa', 'server: node-floor']);
-    // The browser ask is whole or absent (TRANSITIONAL: absent until the rules-only pull request lands it).
-    expect([0, QUEUE_BROWSER_ASK_LINES.length], 'browser-pwa carries part of the merge-queue ask').toContain(browserAsk);
+    // The browser ask is there, whole, once.
+    expect(browserAsk, 'browser-pwa does not carry the whole merge-queue ask exactly once').toBe(QUEUE_BROWSER_ASK_LINES.length);
     // The docs-only shapes are whole (D-7868): the agent's ask, and the floor's one leg line.
     expect(agentAsk, 'test (agent) carries part of the docs-only merge-queue ask').toBe(QUEUE_AGENT_ASK_LINES.length);
     expect(floorLeg, 'node-floor carries no docs-only leg switch').toBe(1);

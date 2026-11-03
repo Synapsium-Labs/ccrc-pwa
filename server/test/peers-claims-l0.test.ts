@@ -154,7 +154,7 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly thirteen import lines: twelve types, and one value from an import-free L0 sibling (D-3021)', () => {
+  it('shared/api.ts has exactly fourteen import lines: thirteen types, and one value from an import-free L0 sibling (D-3021)', () => {
     // Account-pool membership, release rollout, the box-token console card and
     // the node role each added an L0 sibling shape, and the session's workflow
     // rows (D-5560) a sixth, and the lane state's wire words (D-6058 (3)) a seventh, and the fleet health's disk block (D-6615) an eighth, and the landing checks mail token (a type-only import, `typeof import(...)` being forbidden) a tenth: no duplicate wire types.
@@ -164,6 +164,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
     // eleventh, a type from the import-free pressure.ts. The landing line's entry (landing order wave 5e) a twelfth,
     // a type from the import-free landingLine.ts. The operator's waiting frame (programme ledgers PL4) a thirteenth, a type from
     // ledgers.ts, which imports from api.ts only types and the run-state list: the import is erased, so nothing cycles.
+    // The fleet health's backup block (D-7858) a fourteenth, a type from the import-free backup.ts.
     const lines = readFileSync(apiPath, 'utf8').split('\n');
     const imports = lines.filter((l) => /^import\s/.test(l));
     expect(imports).toEqual([
@@ -181,6 +182,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import type { DiskHealth } from './disk.js';",
       "import { parseReapCrumb, type ReapCrumb } from './reapcrumb.js';",
       "import type { HostPressureHealth } from './pressure.js';",
+      "import type { BackupHealth } from './backup.js';",
     ]);
   });
 });

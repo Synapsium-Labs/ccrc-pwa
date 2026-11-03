@@ -372,10 +372,10 @@ describe('RB13: a clone owns its Bash facts', () => {
 
 describe('RB-CLONE: clone() and replaceRows() carry every collection of the builder (the clone census)', () => {
   const Z = 'agent-ghi789';
-  /** The 17 collections `clone()` copies (the four newest: bashCalls, bashDue, stopDue, workflowLaunches). */
+  /** The 18 collections `clone()` copies (the newest: bashCalls, bashDue, stopDue, workflowLaunches, and wave 4's equalPreSequence, D-7021). */
   const COLLECTIONS = [
     'sessions', 'attempts', 'activities', 'mapping', 'intent', 'leases', 'lineage', 'cursors', 'intervals', 'candidates', 'leaseFacts',
-    'leaseByIdentity', 'leaseByPath', 'bashCalls', 'bashDue', 'stopDue', 'workflowLaunches',
+    'leaseByIdentity', 'leaseByPath', 'bashCalls', 'bashDue', 'stopDue', 'workflowLaunches', 'equalPreSequence',
   ].sort();
   /** The scalars `clone()` deliberately does NOT copy, each with its reason. None today: every scalar field is carried by value. */
   const NOT_COPIED: Record<string, string> = {};
@@ -398,12 +398,25 @@ describe('RB-CLONE: clone() and replaceRows() carry every collection of the buil
   function populated(): DelegationCheckpointBuilder {
     // Covered: a session, a Workflow launch and the run's completed notification. The checkpoint is the one the launch alone would have
     // left (the run active), so observing the notification ends the run and counts it (D-6269).
+    // A zero-delta Bash call on a key an old-rule checkpoint maps (its identity is the PreToolUse): observing it leaves an 'equal' fact and the
+    // sequence of its PreToolUse (equalPreSequence, D-7021).
     const covered = chainAt([
       [sessionStart(1), A0], [wfLaunchAt(2, 'wf_run1', 'task_1', 'toolu_wf1'), A0 + 1000], [notificationAt(3, 'toolu_wf1', 'task_1'), A0 + 2000],
+      [bashPre(30, 'toolu_eq', ['wt-a']), A0 + 2100], [bashPost(31, 'toolu_eq', ['wt-a']), A0 + 2200],
     ]);
     const cp0 = recoverDelegation(null, covered).state.checkpoint;
+    const eqKey = { parentId: PARENT, parentIncarnation: INC, sourceKind: 'bash-worktree' as const, upstreamId: 'toolu_eq' };
+    const eqId = deriveDelegationActivityId(eqKey, covered[3]!.journalId);
     // revision 1, so the builder's revisionNo is off its initial 0 and a clone() that forgot it would red (the derived scalar census).
-    const stale = { ...cp0, revision: 1, activities: cp0.activities.map((a) => (a.sourceKind === 'workflow' ? { ...a, executionState: 'active' as const, endedAt: null, lastEventAt: T(2) } : a)) };
+    const stale = {
+      ...cp0, revision: 1,
+      activities: [
+        ...cp0.activities.map((a) => (a.sourceKind === 'workflow' ? { ...a, executionState: 'active' as const, endedAt: null, lastEventAt: T(2) } : a)),
+        { activityId: eqId, parentId: PARENT, parentIncarnation: INC, sourceKind: 'bash-worktree' as const, upstreamId: 'toolu_eq', identityJournalId: covered[3]!.journalId,
+          displayName: null, executionState: 'ended' as const, openedAt: T(30), endedAt: T(31), lastEventAt: T(31) },
+      ],
+      activityIdsByNaturalKey: { ...cp0.activityIdsByNaturalKey, [modelNs.encodeDelegationNaturalKey(eqKey)]: eqId },
+    };
     const b = DelegationCheckpointBuilder.from(stale);
     for (const r of covered) b.observeRecord(r);
     // Folded: an agent that opens, a bare occurrence of another (a candidate), a start-less stop (a stop-only candidate) and a pending Bash Pre.
@@ -434,10 +447,10 @@ describe('RB-CLONE: clone() and replaceRows() carry every collection of the buil
     return b;
   }
 
-  it('RB-CLONE: (i) clone() copies each of the 17 collections as a new object equal by value, and every scalar by value (mutants MCL(F), MCL-s)', () => {
+  it('RB-CLONE: (i) clone() copies each of the 18 collections as a new object equal by value, and every scalar by value (mutants MCL(F), MCL-s)', () => {
     const b = populated();
     const own = collectionsOf(b);
-    expect(Object.keys(own).sort(), 'the builder\'s Map, Array and plain-object fields are exactly the 17 collections clone() must copy').toEqual(COLLECTIONS);
+    expect(Object.keys(own).sort(), 'the builder\'s Map, Array and plain-object fields are exactly the 18 collections clone() must copy').toEqual(COLLECTIONS);
     for (const name of COLLECTIONS) expect(sizeOf(own[name]), `the fixture fills ${name}`).toBeGreaterThan(0);
     const coveredEnds = scalarsOf(b)['coveredEnds'];
     expect(typeof coveredEnds === 'number' && coveredEnds > 0, `coveredEnds (${String(coveredEnds)}) counts the run a covered notification ended`).toBe(true);
@@ -457,8 +470,8 @@ describe('RB-CLONE: clone() and replaceRows() carry every collection of the buil
 
   it('RB-CLONE: (ii) replaceRows(build()) keeps each journal-derived field equal by value (mutants MCL-r(F))', () => {
     const b = populated();
-    expect(Object.keys(collectionsOf(b)).sort(), 'the builder\'s collection fields are exactly the 17 named').toEqual(COLLECTIONS);
-    const FIELDS = ['candidates', 'leaseFacts', 'bashCalls', 'bashDue', 'stopDue', 'workflowLaunches'];
+    expect(Object.keys(collectionsOf(b)).sort(), 'the builder\'s collection fields are exactly the 18 named').toEqual(COLLECTIONS);
+    const FIELDS = ['candidates', 'leaseFacts', 'bashCalls', 'bashDue', 'stopDue', 'workflowLaunches', 'equalPreSequence'];
     const before = collectionsOf(b);
     const snapshot = Object.fromEntries(FIELDS.map((f) => [f, structuredClone(before[f])]));
     for (const f of FIELDS) expect(sizeOf(before[f]), `the fixture fills ${f}`).toBeGreaterThan(0);

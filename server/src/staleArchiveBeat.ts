@@ -1,32 +1,27 @@
 // D-6643 (fleet disk retention spec §2.7.5); moved out of `watch.ts` by the consolidation (GitHub #1279). L4: the stale-archive
 // arm's beat. `staleArchivePass` (`coord/staleArchive.ts`) holds the decisions and the act; this builds its ports from the
-// watcher's, keeps the arm's memory, and holds one pass at a time on the arm's own clock. SHADOW until `$REG/stale-archive-live`.
-// Its clock is the WALL clock, as it was in the watcher: making it a `LANE_SCHEDULE` row (monotonic, `skip`) changes the clock,
-// so it stays a follow-up.
+// watcher's and keeps the arm's memory. SHADOW until `$REG/stale-archive-live`. Its cadence and its one pass at a time are the
+// `staleArchive` row of `LANE_SCHEDULE` (`skip`), run by `FleetWatcher.runLane` on the monotonic clock (D-7895). Until then the
+// throttle read the wall clock, in the watcher and in this class; the pass's verdicts still do (`now: Date.now`).
 import type { WatcherDeps } from './deps.js';
 import type { FleetWatcherView } from './coord/ports.js';
 import { notify } from './notice.js';
 import { readSessionRecord, type SessionRecord } from './registry.js';
 import { liveWordFor, turnReadDeps } from './turnverdict.js';
 import {
-  STALE_ARCHIVE_SWEEP_MS, paneFromLiveWord, staleArchivePass, transcriptMtimeVia, wokeAtVia, type StaleArchiveMemory,
+  paneFromLiveWord, staleArchivePass, transcriptMtimeVia, wokeAtVia, type StaleArchiveMemory,
 } from './coord/staleArchive.js';
 
 type ResolveTranscript = Parameters<typeof transcriptMtimeVia>[3];
 
 export class StaleArchiveBeat {
-  private last = 0;
-  private sweeping = false;
   private readonly memory: StaleArchiveMemory = { sightings: new Map(), would: new Set(), failed: new Map() };
 
   constructor(private readonly deps: () => Pick<WatcherDeps, 'io' | 'cfg' | 'tmux' | 'coord' | 'notifyLog' | 'viewers' | 'runCcd' | 'fleetState' | 'queue'>, private readonly view: FleetWatcherView, private readonly resolve: ResolveTranscript) {}
 
-  /** Hourly, one pass at a time, on the tick's rows and listing. Never rejects: a throw is warned and costs the pass. */
-  async sweep(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
-    const now = Date.now();
-    if (this.sweeping || (this.last !== 0 && now - this.last < STALE_ARCHIVE_SWEEP_MS)) return;
-    this.last = now;
-    this.sweeping = true;
+  /** One pass, on the tick's rows and listing; the caller holds the cadence and the single flight (the `staleArchive` row).
+   *  Never rejects: a throw is warned and costs the pass. */
+  async pass(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     try {
       const d = this.deps();
       const reads = turnReadDeps(d, this.view);
@@ -43,8 +38,6 @@ export class StaleArchiveBeat {
       }, this.memory, records, names);
     } catch (err) {
       console.warn(`ccrc-server: sweepStaleArchive failed (${err instanceof Error ? err.message : String(err)}) — no archives this pass`);
-    } finally {
-      this.sweeping = false;
     }
   }
 }
