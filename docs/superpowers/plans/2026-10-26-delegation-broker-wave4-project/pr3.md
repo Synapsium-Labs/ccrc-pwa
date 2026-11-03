@@ -446,4 +446,14 @@ The integration census rejected a combined close-and-store-presence condition. T
 
 The complete captures of all three post-fix push-copy runs contain zero checkpoint ENOENT details, durable-application failure lines, upkeep-failure lines, RPC teardown errors, unhandled blocks, `unknown test` headers or file-only stderr contexts after the final named context. Each contains 31 existing budget-cut warnings within named contexts: close aborts active reads through the existing warning path, not a log-suppression change. No queue/wait notice appeared. These are occurrence counts, not distinct-operation counts; stdout/stderr ordering is not inferred.
 
-An armed growth-check run passed 47/47 but measured the preceding committed HEAD, not these uncommitted changes. It is not repair-growth evidence: the scoped repair must be committed and the armed gate rerun before the remaining static gates. Exact-new-head CI is still pending. The full server suite was not run locally; soaks remain waived, not passed.
+An initial armed growth-check run passed 47/47 but measured the preceding committed HEAD, not the uncommitted repair; it is not repair-growth evidence. The scoped repair was then committed as `c0bf4bb2d2966900a5662bc08f0787ddb807acb6`, with the required parsed ledger trailer and attribution. The following gates measured that committed repair:
+
+| Final static gate | Result | Duration |
+|---|---|---:|
+| Armed growth-check (`GROWTH_CHECK=1`) | 47/47 passed; watch 5,861 → 5,896, +35; limit +40; no waiver or over-limit file | 2.701 s |
+| Rings plus coordination-policy rings, 12 files | 138/138 passed | 11.775 s |
+| Deviation references, after fetching main | 31/31 passed | 8.811 s |
+| Deviation placeholders | 1/1 passed | 0.417 s |
+| Ledger guard | Outer exit 0; required HEAD trailer parsed; the top-level plan edit covered | 0.145 s |
+
+This final note-only update changes no production or test source. Exact-new-head CI is still pending. The full server suite was not run locally; soaks remain waived, not passed.
