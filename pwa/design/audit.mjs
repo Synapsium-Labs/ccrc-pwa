@@ -1118,6 +1118,11 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the muted role/os, desired-resolution, request, reachability and state lines of the same unfilled inventory row, in --ink-tertiary. Same ground and same reason as .settings-node-current--amber; registered separately because it sets its own colour",
   },
+  // ── box settings view, D-6917: the Box settings card ────────────────────
+  '.box-settings-danger': {
+    under: ['var(--bg-page)'],
+    why: "a refused or unmeasured setting's sentence, and the backups and disk lines when the box could not measure them, in --status-dead-text, in the Updates section's Box settings card. .box-settings-node draws a hairline and no fill, .settings-section/.settings-screen and .shell-detail paint no background, so body's --bg-page (styles/base.css:111) is behind it — the .settings-node-detail reasoning. Registered on its own because it sets its own colour",
+  },
   // ── native Docs reader W5 part 1, Task 11: the Docs door and the Docs screen's chrome (docs/docs.css) ──
   // The Docs screen renders into .shell-detail, and neither it nor .docs-screen nor any view inside paints a
   // background, so body's --bg-page (styles/base.css) is behind every rule below: the .settings-title reasoning.

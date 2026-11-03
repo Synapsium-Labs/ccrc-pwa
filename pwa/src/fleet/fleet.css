@@ -4179,3 +4179,23 @@ button.proj-card-pool::before {
   color: var(--ink-primary);
   overflow-wrap: anywhere;
 }
+
+/* — box settings view, D-6917: the Box settings card under Settings › Updates —
+   One block per node, the settings as a definition list (key, then value and its source, then the sentence for a
+   refused or unmeasured one). Layout only, except `.box-settings-danger`: the page's refusal red,
+   `--status-dead-text`, as an ink with no ground of its own, registered in design/audit.mjs's INHERITED_GROUNDS against
+   --bg-page (the .settings-note reasoning). The age line wears `SETTINGS_AMBER_NOTE`, the secondary lines
+   `.settings-note` and `.settings-node-detail`: no other ink is new. */
+.box-settings-node { display: grid; gap: var(--sp-2); min-width: 0; padding: var(--sp-3) 0; border-top: 1px solid var(--edge-subtle); }
+.box-settings-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2); min-width: 0; margin: 0; font-weight: inherit; }
+.box-settings-node p { margin: 0; overflow-wrap: anywhere; }
+.box-settings-rows { display: grid; gap: var(--sp-1); margin: 0; padding: 0; min-width: 0; }
+.box-settings-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; min-width: 0; }
+.box-settings-row > dt,
+.box-settings-row > dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.box-settings-key { font: var(--weight-regular) var(--fs-meta) / var(--lh-normal) var(--family-mono); }
+.box-settings-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-2); font: var(--weight-medium) var(--fs-sm) / var(--lh-normal) var(--family-mono); }
+.box-settings-value > .settings-note { font-family: var(--family-ui); font-weight: var(--weight-regular); }
+.box-settings-why { font-size: var(--fs-meta); line-height: var(--lh-normal); }
+.box-settings-line { font-size: var(--fs-sm); line-height: var(--lh-normal); }
+.box-settings-danger { color: var(--status-dead-text); }
