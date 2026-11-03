@@ -8,9 +8,9 @@
 import { isAccountStdin } from '../../../shared/account-argv';
 import { PROVIDERS, type ConnectMethod, type ProviderRow } from '../../../shared/providers';
 import { HUES, newLaneIdProblem, newLaneLabelProblem, type Hue } from '../../../shared/roster';
-import type { AccountsConnect, RosterWire } from '../../../shared/api';
+import type { AccountsConnect, LaneWire, RosterWire } from '../../../shared/api';
 import { NEEDS_FLEET_UPDATE, PROVIDER_ROWS, type SignInEndKind } from '../fleet/accountWords';
-import type { AuthStatusState } from '../../../shared/accounts';
+import { AUTH_TERMINAL_STATES, type AuthStatusState } from '../../../shared/accounts';
 
 /** The providers the door offers, in its order (spec §5: three rows, no "Other"; `compatible` stays CLI in v1): the
  *  keys of the rows' words, so the list and the rows cannot disagree. */
@@ -42,7 +42,7 @@ const SHEET_RUNS: ReadonlySet<string> = new Set(['anthropic:paste', 'anthropic:s
 
 /** The methods this sheet runs as a sign-in (Task A22, D-7849): an attempt on the box, its URL, and a code pasted back. */
 export type SignInMethod = 'setup-token' | 'login';
-export const isSignInMethod = (m: ConnectMethod | null): m is SignInMethod => m === 'setup-token' || m === 'login';
+export const isSignInMethod = (m: string | null): m is SignInMethod => m === 'setup-token' || m === 'login';
 export const sheetRuns = (provider: DoorProvider, method: ConnectMethod): boolean => SHEET_RUNS.has(`${provider}:${method}`);
 
 /** One row of a choice: its value, and the reason it narrows in place (`null`: it may be chosen). */
@@ -140,4 +140,45 @@ export function grantScopes(url: string): string[] {
   let scope: string | null = null;
   try { scope = new URL(url).searchParams.get('scope'); } catch { scope = null; }
   return scope === null ? [] : scope.split(/\s+/).filter((w) => w !== '');
+}
+
+// ── Resume and the method switches (accounts plan Task A23, D-7871; spec §6.2, §9) ──────────────────────────────────
+
+/** An attempt this session started that the resume banner offers to continue (spec §6.2): `mine`, waiting for its code,
+ *  before its deadline, of a method this build's sheets run. The one soonest to expire first, ties by lane id, so the
+ *  banner and the screen name the same one. Read from `GET /api/accounts` alone, never from storage or the URL. */
+export function resumableAttempt(
+  lanes: Readonly<Record<string, LaneWire>> | null, now: number,
+): { readonly id: string; readonly held: { attemptId: string; method: SignInMethod; expiresAt: number } } | null {
+  let best: { id: string; held: { attemptId: string; method: SignInMethod; expiresAt: number } } | null = null;
+  for (const [id, lane] of Object.entries(lanes ?? {})) {
+    const a = heldAttemptOf(lane, now);
+    if (a === null || lane.authAttempt?.state !== 'waiting-code') continue;
+    if (best === null || a.expiresAt < best.held.expiresAt || (a.expiresAt === best.held.expiresAt && id < best.id)) best = { id, held: a };
+  }
+  return best;
+}
+
+/** The attempt the server holds for THIS session on a lane, still before its deadline, in any live state, of a method
+ *  this build's sheets run; `null` otherwise (another session's, ended, or none). */
+export function heldAttemptOf(
+  lane: LaneWire | undefined, now: number,
+): { attemptId: string; method: SignInMethod; expiresAt: number } | null {
+  const a = lane?.authAttempt;
+  if (a === undefined || !a.mine || a.expiresAt <= now || AUTH_TERMINAL_STATES.includes(a.state)) return null;
+  const m: string = a.method;
+  return isSignInMethod(m) ? { attemptId: a.attemptId, method: m, expiresAt: a.expiresAt } : null;
+}
+
+/** Which sheet continues an attempt (spec §9): `setup-token` on a sign-in lane and `login` on a token lane are the two
+ *  method switches; the same method as the lane's is the connect sheet's sign-in of a lane it added. */
+export function resumeSheetFor(kind: RosterWire['kind'] | undefined, method: SignInMethod): 'switch' | 'connect' {
+  return (method === 'setup-token' && kind === 'sign-in') || (method === 'login' && kind === 'token') ? 'switch' : 'connect';
+}
+
+/** The method a lane switches TO from its fold (spec §4.4, §9; Q1): a sign-in lane to the long-lived token, a token lane
+ *  to the sign-in; `null` for any lane that is not an Anthropic sign-in or token lane. */
+export function switchTargetOf(entry: Pick<RosterWire, 'provider' | 'kind'> | undefined): SignInMethod | null {
+  if (entry?.provider !== 'anthropic') return null;
+  return entry.kind === 'sign-in' ? 'setup-token' : entry.kind === 'token' ? 'login' : null;
 }

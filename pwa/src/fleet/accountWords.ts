@@ -949,3 +949,76 @@ export const signOutConfirm = (id: string, method: 'login' | 'setup-token'): str
   ? `${id} is signed out on the fleet host, then a new sign-in starts. Sign in with the account you meant.`
   : `A new mint starts for ${id}; its token replaces the lane's once you approve it with the account you meant.`);
 export const KEEP_IT = 'Keep it';
+
+// ── Resume on any route, and the two method switches (accounts plan Task A23, D-7871; spec §6.2, §9, §4.2, §4.4) ──────
+// Every sentence the resume banner, the lane card's resume line and the method switch sheet say. As above, NO DURATION
+// IS WRITTEN HERE: the banner's minutes are read from the attempt's `expiresAt`. The OA1 record (2026-11-01) did not
+// measure §9 (what a live session does once its lane's sign-in is logged out), so Sign the old sign-in out stays the
+// spec's danger confirm while a listed session predates the switch; nor G23, so the sign-out says nothing about the
+// provider beyond "unmeasured".
+
+/** The minutes left of an attempt, as the banner says them: whole minutes, rounded up, at least one while it is live. */
+export const minutesLeft = (expiresAt: number, now: number): number => Math.max(1, Math.ceil((expiresAt - now) / 60_000));
+/** The app-level resume banner (spec §6.2): on any route, for an attempt this session started that waits for its code. */
+export const resumeBannerText = (id: string, minutes: number): string =>
+  `A sign-in for ${id} is waiting for its code · ${minutes} min left`;
+export const CONTINUE = 'Continue';
+/** The lane card's line for the same attempt, beside Continue and Cancel. */
+export const RESUME_CARD_LINE = 'A sign-in is waiting for its code';
+
+/** The fold's and the trouble card's switch acts (spec §4.2, §4.4, §9; Q1). */
+export const SWITCH_TO_TOKEN = 'Switch to a long-lived token';
+export const SWITCH_TO_SIGN_IN = 'Switch to sign-in';
+export const switchTitle = (id: string, to: 'setup-token' | 'login'): string =>
+  (to === 'setup-token' ? `Switch ${id} to a long-lived token` : `Switch ${id} to sign-in`);
+/** What the switch does, before it starts (spec §9): nothing changes until the new credential passes its check. */
+export const switchIntro = (id: string, to: 'setup-token' | 'login'): string => (to === 'setup-token'
+  ? `A long-lived token is minted for ${id} and checked before anything changes. Until it passes, ${id} keeps its sign-in. `
+    + 'Afterwards you sign the old sign-in out here.'
+  : `${id} signs in with Claude, and the sign-in is checked before anything changes. Until it passes, ${id} keeps its token.`);
+export const SWITCH_START: { readonly [M in 'setup-token' | 'login']: string } = {
+  'setup-token': 'Mint the token',
+  login: 'Start the sign-in',
+};
+export const switchLedger = {
+  switched: (id: string, to: 'setup-token' | 'login'): string =>
+    (to === 'setup-token' ? `✓ ${id} now runs on the long-lived token` : `✓ ${id} now runs on its sign-in`),
+} as const;
+
+/** A switch's terminal states (spec §9: "a refused, cancelled or expired attempt leaves the lane exactly as it was"),
+ *  each saying what did not happen, from its kind. A lost attempt may have finished, so it claims nothing. */
+export function switchEnd(id: string, to: 'setup-token' | 'login', kind: SignInEndKind, failure?: string): string {
+  const keeps = `Nothing changed: ${id} still uses its ${to === 'setup-token' ? 'sign-in' : 'token'}.`;
+  switch (kind) {
+    case 'expired': return `The sign-in timed out. ${keeps}`;
+    case 'code-refused': return `The new credential wasn't accepted: claude.ai refused the code, or the check of what it gave failed. ${keeps}`;
+    case 'untrusted': return `The sign-in link on the fleet host didn't look like claude.ai, so it isn't shown. ${keeps}`;
+    case 'cancelled': return `Switch cancelled. ${keeps}`;
+    case 'node-changed': return `The fleet host answering now is not the one the sign-in started on, so it was stopped. ${keeps}`;
+    case 'unknown': return `The fleet host didn't answer in time, so whether the sign-in started is unknown. ${keeps}`;
+    case 'failed':
+      return `The sign-in stopped on the fleet host before a code was sent${failure !== undefined && CODE_RE.test(failure) ? ` (${failure})` : ''}. ${keeps}`;
+    case 'lost':
+      return `The server no longer holds the sign-in for ${id}, so whether the switch finished is unknown. Check ${id} to see which credential it uses.`;
+  }
+}
+export const CLOSE = 'Close';
+export const START_SWITCH_AGAIN = 'Start again';
+
+/** After a switch to the token (spec §9): the sessions still on the sign-in, and the old sign-in's sign-out. */
+export const switchRestartLead = (n: number): string =>
+  `${plural(n, 'session')} on this lane ${n === 1 ? 'still uses' : 'still use'} the sign-in until ${n === 1 ? 'it restarts' : 'they restart'}.`;
+export const SIGN_OLD_OUT = 'Sign the old sign-in out';
+export const SIGN_OLD_OUT_ANYWAY = 'Sign it out anyway';
+/** The danger confirm while a listed session predates the switch (spec §9's words). */
+export const signOldOutDanger = (n: number, id: string): string =>
+  `${plural(n, 'session')} on ${id} still ${n === 1 ? 'uses' : 'use'} the sign-in and may fail ${n === 1 ? 'its' : 'their'} next turn.`;
+export const STEP_UP_AGAIN_SIGN_OLD_OUT = "Confirm it's you again, then press it again. Nothing was signed out.";
+/** The old sign-in's sign-out was refused, or its answer never came: the lane keeps both until it is signed out. */
+export const signOldOutRefused = (id: string, word: string | undefined): string => (word !== undefined && CODE_RE.test(word)
+  ? `The fleet host refused (${word}): ${id}'s old sign-in was not signed out.`
+  : `The request didn't complete, so whether ${id}'s old sign-in was signed out is unknown. Press it again.`);
+/** Until the old sign-in is signed out, the lane holds both (spec §9's one stated exception to "never two"). */
+export const bothHeld = (id: string): string =>
+  `${id} holds both the new token and its old sign-in until you sign the old one out.`;
+export const SWITCH_CLOSE_TOKEN = "Sessions on this lane won't ask you to sign in again for about a year.";

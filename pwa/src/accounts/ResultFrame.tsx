@@ -42,11 +42,13 @@ export interface ResultFrameProps {
 }
 
 /** "Which account did you just approve?" (spec §6.3, Q5): optional, one line of 1 to 120 characters (the lane-state
- *  file's identity grammar, `isLaneIdentity`), saved with `set {stated}`. Not a secret: an ordinary controlled field. */
-function StatedField({ onSave, busy, notice, blocked }: {
-  onSave: (text: string) => void; busy: boolean; notice: string | null; blocked: boolean;
+ *  file's identity grammar, `isLaneIdentity`), saved with `set {stated}`. Not a secret: an ordinary controlled field.
+ *  `initial` is its default text: the switch to a long-lived token offers the sign-in's readable email (spec §9; Task
+ *  A23, D-7871). */
+export function StatedField({ onSave, busy, notice, blocked, initial = '' }: {
+  onSave: (text: string) => void; busy: boolean; notice: string | null; blocked: boolean; initial?: string;
 }): ReactNode {
-  const [v, setV] = useState('');
+  const [v, setV] = useState(initial);
   const fieldId = useId();
   const noteId = useId();
   const bad = v !== '' && !isLaneIdentity(v);
