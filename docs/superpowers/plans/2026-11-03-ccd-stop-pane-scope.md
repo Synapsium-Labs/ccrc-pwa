@@ -22,16 +22,21 @@ scope. Follow-up to the scope sweep (session-continuity spec §5.6 item 2), appr
 | `ccd stop` (the PWA's Stop, a session's own shell) | `cmd_stop` | yes, before `_ws_unsupervise` and the kill | reads the scope, then `_pane_scope_stop` after the kill |
 | stop-done (a finished worker) | composes `ccd hibernate` (`server/src/stopDone.ts`, D-5427) | yes: the hibernate re-measure requires a live pane | through `cmd_hibernate` |
 | hibernation (a long-idle session) | `cmd_hibernate` | yes, same re-measure | reads the scope before `_ws_unsupervise`, stops it after the kill |
-| the roll (`hibernate --roll`) | `cmd_hibernate` | yes | the stop runs after the kill and BEFORE the wake, so the wake's new pane is never in the scope it stops |
+| the roll (`hibernate --roll`) | `cmd_hibernate` | yes | the delayed stop is dispatched after the kill and before the wake, for the scope read before the kill; the wake's new pane runs in a new scope |
 | the auto-swap restart | `cmd_swap` | n/a | untouched: a swap is not a stop |
 | `ws-archive`, `ws-rm`, `ws-reap`, `forget` | `_ws_unsupervise` callers | varies | untouched (not in this change's scope) |
 
 ## The act, in order
 
-`_pane_scope_stop <id>`, after the kill, on what `_pane_scope_of <id>` read before it:
+`_pane_scope_stop <id>`, after the kill, on what `_pane_scope_of <id>` read before it, checks step 1 at once and hands
+steps 2 to 5 to `_pane_scope_reap` in its own transient unit (`_pane_scope_detach`, through `_svc_run_detached`, the
+swap's own detach). The verb never waits: a plain hibernate is called with the coordination serialiser held
+(`server/src/remote/runner.ts`, D-7541), so a verb that waited out the main process and the grace would hold every
+coordination write for as long. The detached job inherits none of the verb's descriptors or locks and runs outside every
+cgroup it might stop. Its `bash -c` string carries only words checked against a charset with no quote, space or `$`.
 
-1. the unit is `tmux-spawn-*.scope` and its parent cgroup is the session slice, or it is held (never the tmux server's
-   own scope, never another slice);
+1. the unit's parent cgroup is the session slice (outside it nothing is logged: it is no ccd pane scope), and the unit
+   is `tmux-spawn-*.scope`, or it is held (never the tmux server's own scope);
 2. the main process (the pane's pid) exits within `PANE_SCOPE_EXIT_WAIT_S` (10 s), or it is held; then
    `PANE_SCOPE_STOP_GRACE_S` (10 s) passes;
 3. something is still in the scope's `cgroup.procs`, or the line says nothing is left;
