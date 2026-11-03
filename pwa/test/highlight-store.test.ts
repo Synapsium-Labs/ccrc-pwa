@@ -7,7 +7,7 @@ import type { Root as HastRoot } from 'hast';
 import type { Highlighter, HighlighterStatus, HighlightJob, HighlightOutcome, HighlightRequest } from '../src/lib/highlightProtocol';
 import { createHighlighter, type WorkerLike } from '../src/lib/markdownRunner';
 import {
-  UNREQUESTED_ENTRY, blockKey, codeBlocksOf, createHighlightStore, type HighlightClock, type HighlightEntry,
+  UNREQUESTED_ENTRY, blockKey, codeBlocksOf, createHighlightStore, readHighlightOutcome, type HighlightClock, type HighlightEntry,
   type HighlightStoreOptions,
 } from '../src/lib/highlightStore';
 import {
@@ -742,6 +742,78 @@ describe('L3-1: the worker-time ceiling counts a run of back-to-back jobs (the r
     await flush();
     expect(store.peek(ks[4]!)).toEqual({ kind: 'skipped', ceiling: 'page-worker-time' });
     expect(store.settled()).toBe(true);
+  });
+});
+
+describe('A4: an outcome of a shape this build does not know settles its entry, never leaves it pending', () => {
+  /** What a first-party worker of another chunk version could send: not an outcome of this build. */
+  const SHAPES: ReadonlyArray<readonly [string, unknown]> = [
+    ['an unknown kind', { kind: 'bogus' }],
+    ['html without html', { kind: 'html', mode: 'block' }],
+    ['html with a non-string html', { kind: 'html', html: 7, mode: 'block' }],
+    ['html with an unknown mode', { kind: 'html', html: OK, mode: 'span' }],
+    ['a timeout without budgetMs', { kind: 'timeout' }],
+    ['a threw without a string error', { kind: 'threw', error: 3 }],
+  ];
+
+  for (const [name, bad] of SHAPES) {
+    it(`${name}: the entry is plain (malformed) and a Docs store seeded with the key reaches settled()`, async () => {
+      const { h, store, key, answer } = setup();
+      const a = key('python', 'a');
+      store.seed([{ lang: 'python', raw: 'a' }]);
+      expect(store.settled()).toBe(false);
+      let heard = 0;
+      store.subscribe(a)(() => { heard += 1; });
+      store.request(a);
+      await answer(0, bad as HighlightOutcome);
+      expect(store.peek(a)).toEqual({ kind: 'plain', first: { kind: 'malformed' }, retry: null });
+      expect(heard).toBe(2);
+      expect(store.settled()).toBe(true);
+      expect(h.calls).toHaveLength(1);
+    });
+  }
+
+  it('a malformed outcome on a block long enough for a line retry is not retried, and a malformed timeout counts no timeout', async () => {
+    const { h, store, key, answer } = setup({ mode: 'chat' });
+    const long = key('python', py(HIGHLIGHT_LINE_RETRY_UNITS + 10, 'long'));
+    store.request(long);
+    await answer(0, { kind: 'timeout' } as unknown as HighlightOutcome);
+    expect(h.calls).toHaveLength(1);
+    expect(store.peek(long)).toEqual({ kind: 'plain', first: { kind: 'malformed' }, retry: null });
+    for (let i = 0; i < HIGHLIGHT_PAGE_MAX_TIMEOUTS; i += 1) {
+      store.request(key('python', `m${i}`));
+      await answer(1 + i, { kind: 'timeout' } as unknown as HighlightOutcome);
+    }
+    const next = key('python', 'next');
+    store.request(next);
+    expect(store.peek(next).kind).toBe('pending');
+  });
+
+  it('a malformed outcome of a line retry leaves the first failure and records the retry as malformed', async () => {
+    const { h, store, key, answer } = setup({ mode: 'chat' });
+    const long = key('python', py(HIGHLIGHT_LINE_RETRY_UNITS + 10, 'long'));
+    store.request(long);
+    await answer(0, TIMEOUT);
+    expect(h.calls[1]!.req.mode).toBe('line');
+    await answer(1, { kind: 'bogus' } as unknown as HighlightOutcome);
+    expect(store.peek(long)).toEqual({ kind: 'plain', first: { kind: 'timeout', budgetMs: HIGHLIGHT_BLOCK_DEADLINE_MS }, retry: { kind: 'malformed' } });
+  });
+
+  it('readHighlightOutcome accepts exactly the eight arms, each with its fields\' types, and nothing else', () => {
+    const good: HighlightOutcome[] = [
+      { kind: 'html', html: OK, mode: 'block' }, { kind: 'html', html: '', mode: 'line' },
+      { kind: 'too-large', htmlChars: 5 }, { kind: 'line-too-long', chars: 5 }, { kind: 'threw', error: 'RangeError' },
+      { kind: 'timeout', budgetMs: 750 }, { kind: 'worker-unavailable' }, { kind: 'worker-failed', error: 'boot' }, { kind: 'unregistered' },
+    ];
+    for (const o of good) expect(readHighlightOutcome(o)).toEqual(o);
+    const bad: unknown[] = [
+      null, undefined, 'html', 7, [], {}, { kind: 1 }, { kind: 'bogus' },
+      { kind: 'html' }, { kind: 'html', html: 1, mode: 'block' }, { kind: 'html', html: OK }, { kind: 'html', html: OK, mode: 'span' },
+      { kind: 'too-large' }, { kind: 'too-large', htmlChars: '5' }, { kind: 'line-too-long' }, { kind: 'line-too-long', chars: null },
+      { kind: 'threw' }, { kind: 'threw', error: 1 }, { kind: 'timeout' }, { kind: 'timeout', budgetMs: '750' },
+      { kind: 'worker-failed' }, { kind: 'worker-failed', error: 1 },
+    ];
+    for (const o of bad) expect(readHighlightOutcome(o)).toBeNull();
   });
 });
 

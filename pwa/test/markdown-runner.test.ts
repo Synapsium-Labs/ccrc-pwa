@@ -958,6 +958,27 @@ describe('W5h-a: the highlighter (createWorkerRunner with a ready handshake and 
     expect(a.state).toBe('pending');
   });
 
+  it('A4: a reply whose result is not an outcome this build knows answers worker-failed / malformed-reply, and the next job still runs', async () => {
+    const shapes: unknown[] = [
+      { kind: 'bogus' }, { kind: 'html', mode: 'block' }, { kind: 'html', html: 'x', mode: 'span' }, { kind: 'timeout' }, {},
+    ];
+    for (const result of shapes) {
+      const { hl, workers } = hlHarness();
+      const a = trackHl(hl.highlight(req('a'), {}));
+      const b = trackHl(hl.highlight(req('b'), {}));
+      workers[0]!.ready();
+      workers[0]!.onmessage?.({ data: { id: 1, result } });
+      await flush();
+      expect(a.value).toEqual({ kind: 'worker-failed', error: 'malformed-reply' });
+      // The job left the queue like any answered one: the next is posted, on the same worker.
+      expect(workers[0]!.posts[1]).toEqual({ id: 2, lang: 'ts', code: 'b' });
+      workers[0]!.answer(2, HTML('B'));
+      await flush();
+      expect(b.value).toEqual({ kind: 'html', html: 'B', mode: 'block' });
+      expect(workers).toHaveLength(1);
+    }
+  });
+
   it('docsHighlighter and chatHighlighter are two highlighters', () => {
     expect(docsHighlighter).not.toBe(chatHighlighter);
     expect(typeof docsHighlighter.highlight).toBe('function');

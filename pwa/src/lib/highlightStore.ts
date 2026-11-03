@@ -23,7 +23,8 @@
 //   - `settled()`: a Docs store when every seeded key is `html`, `plain` or `skipped`; a chat store when no key a
 //     mounted block references is `unrequested` or `pending`, a block referencing the key it shows (`show`) as well as
 //     the key it requested, so a block in chat's debounce window, showing a key it has not requested yet, is waiting.
-//   - On receipt, in this order (the W5h-a plan's refinement (e)): an answer longer than MD_HIGHLIGHT_MAX_HTML_CHARS
+//   - On receipt, in this order (the W5h-a plan's refinement (e)): an outcome `readHighlightOutcome` does not know (a
+//     reply from a worker of another chunk version) is `malformed`, never left pending; an answer longer than MD_HIGHLIGHT_MAX_HTML_CHARS
 //     is `too-large`; one the check refuses is `malformed`; on a Docs store, one that would take the page's HTML past
 //     DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS is `skipped` by that ceiling, counted per drawn copy: each admitted copy of the
 //     key adds the answer's length, in document order; the first copy that would pass the ceiling, and every later copy
@@ -151,6 +152,28 @@ export function checkHighlightHtml(html: string, steps?: { n: number }): Checked
 /** Whether `v` is a value `checkHighlightHtml` made (by identity, not by shape). */
 export function isCheckedHighlightHtml(v: unknown): v is CheckedHighlightHtml {
   return typeof v === 'object' && v !== null && CHECKED.has(v);
+}
+
+/** A job's outcome, or `null` for a value that is not an outcome this build knows: exactly the arms of
+ *  `HighlightOutcome`, each with its fields' types. The ONE shape check of an outcome: the runner reads a worker's reply
+ *  through it, and the store reads what a highlighter answers through it, so a reply from a worker of another chunk
+ *  version (an unknown `kind`, a missing field) settles its block and never leaves it pending (review 1364 A4). It
+ *  lives here because this module is L1 and the runner (L3) may import it; `highlightProtocol.ts` holds types only.
+ *  `null` means only "not an outcome this build knows". The answer is a fresh object. */
+export function readHighlightOutcome(v: unknown): HighlightOutcome | null {
+  if (typeof v !== 'object' || v === null) return null;
+  const o = v as Readonly<Record<string, unknown>>;
+  switch (o.kind) {
+    case 'html': return typeof o.html === 'string' && (o.mode === 'block' || o.mode === 'line') ? { kind: 'html', html: o.html, mode: o.mode } : null;
+    case 'too-large': return typeof o.htmlChars === 'number' ? { kind: 'too-large', htmlChars: o.htmlChars } : null;
+    case 'line-too-long': return typeof o.chars === 'number' ? { kind: 'line-too-long', chars: o.chars } : null;
+    case 'threw': return typeof o.error === 'string' ? { kind: 'threw', error: o.error } : null;
+    case 'timeout': return typeof o.budgetMs === 'number' ? { kind: 'timeout', budgetMs: o.budgetMs } : null;
+    case 'worker-failed': return typeof o.error === 'string' ? { kind: 'worker-failed', error: o.error } : null;
+    case 'worker-unavailable': return { kind: 'worker-unavailable' };
+    case 'unregistered': return { kind: 'unregistered' };
+    default: return null;
+  }
 }
 
 // ---- Keys and the seeding walk ----
@@ -429,14 +452,19 @@ export function createHighlightStore(
     ).then((o) => answered(job, o), () => undefined);
   }
 
-  function answered(job: Job, o: HighlightOutcome): void {
+  /** `reply` is what the highlighter answered, read through the check before anything else: it leaves `jobs` and stops
+   *  its clock first, so nothing below may throw on a value this build does not know. */
+  function answered(job: Job, reply: unknown): void {
     if (jobs.get(job.key) !== job) return;
     jobs.delete(job.key);
     stopClock(job);
     const key = job.key;
-    if (o.kind === 'timeout') timeouts += 1;
+    const o = readHighlightOutcome(reply);
+    if (o?.kind === 'timeout') timeouts += 1;
     let failure: PlainCause;
-    if (o.kind !== 'html') {
+    if (o === null) {
+      failure = { kind: 'malformed' };
+    } else if (o.kind !== 'html') {
       failure = causeOf(o);
     } else if (o.html.length > MD_HIGHLIGHT_MAX_HTML_CHARS) {
       failure = { kind: 'too-large' };

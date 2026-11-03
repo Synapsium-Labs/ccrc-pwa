@@ -46,6 +46,7 @@ import type { ReaderRenderJob, ReaderRenderOutcome } from './readerRenderJob';
 import type {
   Highlighter, HighlighterStatus, HighlightJob, HighlightOutcome, HighlightRequest,
 } from './highlightProtocol';
+import { readHighlightOutcome } from './highlightStore';
 import { HIGHLIGHT_BLOCK_DEADLINE_MS, HIGHLIGHT_BOOT_BUDGET_MS } from './markdownLimits';
 
 /** The type of `runner.parse`. Resolves with the job's outcome; rejects only on an abort or `dispose()`. */
@@ -390,13 +391,18 @@ export const docsRunner: MarkdownRunner = createMarkdownRunner();
 /** Chat's runner, for messages over `CHAT_SYNC_MAX_BYTES` (Task 6). */
 export const chatRunner: MarkdownRunner = createMarkdownRunner();
 
-/** The highlight worker's message: `{ready: true}`, or `{id, result}` with a result object. */
+/** What a reply with a result object that is not an outcome this build knows answers (a worker of another chunk
+ *  version): the job settles, so its block does not wait for good (review 1364 A4). */
+const MALFORMED_REPLY: HighlightOutcome = Object.freeze({ kind: 'worker-failed', error: 'malformed-reply' } as const);
+
+/** The highlight worker's message: `{ready: true}`, or `{id, result}` with a result object, read through the store's
+ *  one shape check (`readHighlightOutcome`). */
 function readHighlightReply(data: unknown): WorkerMessage<HighlightOutcome> {
   if (typeof data !== 'object' || data === null) return OTHER;
   const d = data as { readonly ready?: unknown; readonly id?: unknown; readonly result?: unknown };
   if (d.ready === true) return { kind: 'ready' };
   if (typeof d.result !== 'object' || d.result === null) return OTHER;
-  return { kind: 'reply', id: d.id, outcome: d.result as HighlightOutcome };
+  return { kind: 'reply', id: d.id, outcome: readHighlightOutcome(d.result) ?? MALFORMED_REPLY };
 }
 
 /** A module worker over `markdownHighlightWorker.ts`: the ONE literal that spawns it (M7.11). Throws where there is no
