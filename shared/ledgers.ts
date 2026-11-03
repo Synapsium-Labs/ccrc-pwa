@@ -108,7 +108,9 @@ export interface ItemView {
   answer: string | null;
   note: string | null;
   secretSlot: string | null;
-  secretSet: { at: number; tail: string; masked: boolean } | null;
+  /** The slot's state (plan PL6), read from its metadata file: when it was set, its tail (`secretTailOf`) and whether the
+   *  egress masker knows it. `why` says why it does not, and is absent when it does (or from a server before PL6). */
+  secretSet: { at: number; tail: string; masked: boolean; why?: SecretUnmasked } | null;
   history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null }[];
 }
 
@@ -188,6 +190,75 @@ const SLOT_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 /** A secret slot's name, safe to build a path from. */
 export function isSlotSlug(s: string): boolean {
   return typeof s === 'string' && SLOT_SLUG_RE.test(s);
+}
+
+// ── secrets pasted into the console (plan PL6, spec §5) ────────────────────────────────────────────────────────────
+
+/** The directory under `~/.ccrc` that holds the operator-secret slots (`server/src/coord/ledgersSecrets.ts`); the account deny
+ *  rules name the same directory (`ACCOUNT_SECRET_PATHS`, `shared/api.ts`), and `account-deny.test.ts` holds the two equal. */
+export const OPERATOR_SECRETS_DIR = 'operator-secrets';
+/** The egress masker's lane prefix of an operator-secret slot (`operator-secret:<programme>:<slot>`). The slot store names
+ *  its lanes with it, and the masker's roster prune (`SecretMasker.retain`) never deletes a lane that carries it: those lanes
+ *  are this server's own, not the roster's (review 1389 F1). */
+export const OPERATOR_SECRET_LANE_PREFIX = 'operator-secret:';
+
+/** The longest secret the console takes, in characters and in UTF-8 bytes alike (the masker's longest run is 8192 bytes,
+ *  so a value inside this bound is never too long for it). */
+export const SECRET_VALUE_MAX = 8192;
+/** The shortest value whose tail is shown, in UTF-8 BYTES after any trailing `=`, counted as the egress masker counts a
+ *  secret: its floor, `RUN_MIN_BYTES` (`server/src/accounts/shapes.ts`), which `ledgers-secrets.test.ts` holds equal to this
+ *  (review 1389 A1). Below it no character of the value leaves the server: the masker cannot catch such a value in outgoing
+ *  text, and four characters of it are a fifth or more of it. */
+export const SECRET_TAIL_MIN = 20;
+/** How many characters the tail shows. */
+export const SECRET_TAIL_CHARS = 4;
+
+/** Why the egress masker does not know a saved secret (Review Focus 2: never a silent skip). `too-short`: under the
+ *  masker's 20-byte floor (after any trailing `=`); `too-long`: past its 8192-byte run; `unregistered`: the masker could
+ *  not take it (no box token yet, or coord.db stayed busy). */
+export type SecretUnmasked = 'too-short' | 'too-long' | 'unregistered';
+const SECRET_UNMASKED_MAP: Record<SecretUnmasked, true> = { 'too-short': true, 'too-long': true, unregistered: true };
+export const SECRET_UNMASKED_WHYS = Object.keys(SECRET_UNMASKED_MAP) as readonly SecretUnmasked[];
+export function isSecretUnmasked(v: unknown): v is SecretUnmasked {
+  return typeof v === 'string' && (SECRET_UNMASKED_WHYS as readonly string[]).includes(v);
+}
+
+/** UTF-8 bytes of a string, counted without an encoder (this file imports nothing). A lone surrogate counts 3, as an
+ *  encoder writes U+FFFD for it. */
+export function utf8Bytes(s: string): number {
+  let n = 0;
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!;
+    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+  }
+  return n;
+}
+
+/** Whether a pasted value is one the console takes: 1 to `SECRET_VALUE_MAX` characters and UTF-8 bytes. */
+export function isSecretValue(v: unknown): v is string {
+  return typeof v === 'string' && v.length >= 1 && v.length <= SECRET_VALUE_MAX && utf8Bytes(v) <= SECRET_VALUE_MAX;
+}
+
+/** The last `SECRET_TAIL_CHARS` characters (code points, so a surrogate pair is never split) of a value of at least
+ *  `SECRET_TAIL_MIN` bytes, its trailing `=` set aside as the masker sets it aside; `''` for a shorter one, whose tail is
+ *  never shown. */
+export function secretTailOf(value: string): string {
+  if (utf8Bytes(value.replace(/=+$/, '')) < SECRET_TAIL_MIN) return '';
+  return Array.from(value).slice(-SECRET_TAIL_CHARS).join('');
+}
+
+/** THE ANSWER A SECRET ITEM'S TICK CARRIES to the coordinator (spec §5: set, the time and the last four, never the value):
+ *  `set <ISO time> ending <tail>`, or `set <ISO time>` when no tail is shown. */
+export function secretAnswer(s: { setAt: number; tail: string }): string {
+  const at = new Date(s.setAt).toISOString();
+  return s.tail === '' ? `set ${at}` : `set ${at} ending ${s.tail}`;
+}
+
+/** What `PUT /api/items/:id/secret` answers on success: the slot's state and the ticked item, never the value. */
+export interface SecretSaveAnswer {
+  readonly ok: true;
+  readonly secret: { readonly setAt: number; readonly tail: string; readonly masked: boolean; readonly why?: SecretUnmasked };
+  readonly item: ItemView;
 }
 
 const SPEC_PREFIX = 'docs/superpowers/specs/';

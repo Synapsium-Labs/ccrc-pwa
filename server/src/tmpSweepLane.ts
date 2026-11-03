@@ -1,7 +1,8 @@
 // D-6624 (plan Task DR-12): the census lane's I/O. L4 delivery: it READS the tmp sweep's census through the fleet io and
 // QUEUES the system mail; every decision (the parse, which rows are receipts, which sessions are owed a notice, the
-// words) is `tmpSweep.ts`'s (L1). `TmpCensusBeat` owns the clock, the state and the holders it last named (moved out of
-// `watch.ts` by the consolidation, GitHub #1279); the watcher owns one and calls `sweep()` from its tick.
+// words) is `tmpSweep.ts`'s (L1). `TmpCensusBeat` owns the state and the holders it last named (moved out of `watch.ts` by
+// the consolidation, GitHub #1279); the watcher owns one and runs `pass()` from its tick. The cadence is the `tmpCensus` row
+// of `LANE_SCHEDULE`, run by `FleetWatcher.runLane` on the monotonic clock (D-7895).
 //
 // FAIL TOWARD KEEPING: a census that cannot be read or parsed mails nothing and names no holders; a mail that throws
 // latches nothing, so the next pass tries again; the coord store's own subject check (`hasMailWithSubject`, every
@@ -124,12 +125,11 @@ export async function runTmpSweepCensusLane(
   return { holders };
 }
 
-/** The census lane's clock (D-6624, spec §2.1): the census is read and its mail queued every 5 minutes. */
-export const TMP_SWEEP_CENSUS_MS = 5 * 60_000;
+/** The census lane's clock (D-6624, spec §2.1): declared in `laneSchedule.ts` with the watcher's other cadences (D-7895). */
+export { TMP_SWEEP_CENSUS_MS } from './laneSchedule.js';
 
-/** The census lane's beat: its own wall clock (the first pass is at once), its memory, and the holders it last named. */
+/** The census lane's pass: its memory and the holders it last named. Its clock is the `tmpCensus` row (the first pass is at once). */
 export class TmpCensusBeat {
-  private last = 0;
   private readonly state = newTmpSweepLaneState();
   private named: DiskHolder[] = [];
 
@@ -138,12 +138,10 @@ export class TmpCensusBeat {
   /** The five largest sessions as the last pass named them: `disk.holders`. Empty until a census reads. */
   holders(): readonly DiskHolder[] { return this.named; }
 
-  /** One pass, throttled. `known` is the registry ids of the last good listing, `null` until one lands. PUBLIC through the
-   *  watcher for the reason `sweepReadiness` is: `tick()` dispatches it with `void`. */
-  async sweep(known: ReadonlySet<string> | null): Promise<void> {
-    const now = Date.now();
-    if (this.last !== 0 && now - this.last < TMP_SWEEP_CENSUS_MS) return;
-    this.last = now;
+  /** One pass; the caller holds the cadence (the `tmpCensus` row). `known` is the registry ids of the last good listing,
+   *  `null` until one lands. Reached through the watcher's `sweepTmpSweepCensus` for the reason `sweepReadiness` is public:
+   *  `tick()` dispatches it with `void`. */
+  async pass(known: ReadonlySet<string> | null): Promise<void> {
     const { io, cfg, coord } = this.deps();
     this.named = (await runTmpSweepCensusLane({ io, ccrcDir: cfg.ccrcDir, coord }, this.state, known)).holders;
   }

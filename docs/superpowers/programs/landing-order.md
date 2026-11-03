@@ -33,9 +33,9 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5a | 3 and 4, hardening | the hardening that the reviews of waves 4c and 4b, and three older review items (1141, 1216, 1222), carried forward: the lineage parser, the radar lane, the chip's words, and text and pins (Carried constraints). Kept apart from 5 so that the landing line's PR carries only its own data, routes and verb (D-4329's reason) | server, pwa, skills | waves 4c and 4b | #1960 (plan #1944) | planned 2026-10-30 (`docs/superpowers/plans/2026-10-30-landing-order-wave5a-carried-hardening.md`, D-7528 to D-7539; Decisions, 2026-10-30 03:40); run 1228 (the run's wave 14) opened 2026-10-30; reviewed once (run 1232) and accepted with no fix round; merged 2026-10-30 (`d196d8b3`); five departures, D-7544 to D-7548, in `docs/superpowers/plans/2026-10-30-landing-order-wave5a-departures.md` (Decisions, 2026-10-30 08:16) |
 | 5b | 5, skill text | the new-head route is the coordinator's own act (the operator's answer to D-7536's question), the evidence that a red is `main`'s own, the report-less fix round from `merging`, review 1232's F9 (a) and (c), and **A requested change** against clause 19; D-7546's restatement is a droppable task, held for the operator | skills | wave 5a | — | merged 2026-10-31 (#2015 `83c3544c`; `docs/superpowers/plans/2026-10-30-landing-order-wave5b-landing-skill-text.md`, D-7588 to D-7592, and its departures note, D-7606 to D-7608; Decisions, 2026-10-31 02:45); Task 2 (D-7546) not taken, held for the operator |
 | 5c | 5, landed state | `ccd pr-state --project <p> --pr <n>`: its five words, its train proof and its capability token; the server's words, reader and capability-gated brand; wave 3d's F1 and F6 text and review 1109's paged rules read | ccd (fleet box first), server | wave 5a | — | merged 2026-10-31 (#2017 `a77811e5`; `docs/superpowers/plans/2026-10-30-landing-order-wave5c-pr-keyed-pr-state.md`, D-7593 to D-7599, and its departures note, D-7600 to D-7604; Decisions, 2026-10-31 07:06); reaches the fleet box with the next release the operator rolls out |
-| 5d | 5, the lander key | the radar's conf accepts `lander=coordinator` or `none`, mirrored to a marker the server reads; and D-7546's restatement, wave 5b's dropped Task 2 | ccd (fleet box first), skills | — | — | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`, D-7635 to D-7647; Decisions, 2026-10-31 15:52); run 1311 (the run's wave 17) |
+| 5d | 5, the lander key | the radar's conf accepts `lander=coordinator` or `none`, mirrored to a marker the server reads; and D-7546's restatement, wave 5b's dropped Task 2 | ccd (fleet box first), skills | — | #2029 | run 1311 (the run's wave 17); review 1313 closed at `36f9897d2`, fix round 1 (Decisions, 2026-11-01 18:39); review 1327 closed at `40cfb6752`, fix round 2 (Decisions, 2026-11-02 22:35); review 1357 clean at `307e47b85`, accepted, departures D-7788 to D-7790 (Decisions, 2026-11-02 23:55); merged 2026-11-03 (`43e11b36`, release v0.0.921; Decisions, 2026-11-03 03:38), run 1311 closed done; plan `docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`, D-7635 to D-7647; the fleet box runs it (v0.0.926), and `lander=coordinator` is written for this project (Decisions, 2026-11-03 06:27) |
 | 5e | 5, the line's core | `landing_entries` and `landing_projects`, an entry pinned at `advance → merging`, the ejection that records its base, the second-ejection notice, the order and hold decider, and the coordinator's read of the line (`GET /api/landing`) | server, skills | wave 5a | — | merged 2026-10-31 (#2020 `4fc83e57`; `docs/superpowers/plans/2026-10-31-landing-order-wave5e-landing-line-core.md`, D-7610 to D-7627, and its departures note, D-7628 to D-7633; Decisions, 2026-10-31 15:17) |
-| 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | — | to plan; run 1312 |
+| 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | — | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); the operator approved its CLAUDE.md amendments (Decisions, 2026-11-03 06:27); run 1312 dispatched 2026-11-03 before the plan reached `main`, on the operator's ruling (Decisions, 2026-11-03 16:14) |
 | 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | to plan |
 | 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan |
 | 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | — | to plan |
@@ -1691,6 +1691,185 @@ carries it (spec §5.1, amended 2026-09-24).
     raised, and each important finding that held is answered.
   - **The operator writes `lander=`** only after the fleet box runs this wave's probe. An older probe reads the key
     as `unknown-key` and stops measuring the whole conf.
+- **2026-10-31 20:00 — wave 5f planned (D-7652 to D-7663), not dispatched.**
+  - The plan is `docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`.
+    The twelve planning deviations were issued and immediately defined there; no unused execution block was reserved.
+  - **Authority is not a measured projection.** The journal recovers subject identity, creation evidence, order,
+    `fixesMain` and attribution, never a current run, pin or landed state. Contradictory surviving binding evidence
+    holds the line; only a successful verified pin may write the exact DB-only witness. A wholly lost, unjournalled
+    change remains undetectable. Target-only recovery, strict numeric reads and stale-head quarantine are bounded
+    explicitly, rather than repaired with fabricated defaults.
+  - **Failure stays uncertain.** Append, apply and COMMIT failures close the global landing fence, including a pin
+    or retreat that makes no append. Durable replay needs a proved clean transaction boundary; an uncertain rollback
+    needs restart. Failed writes and replay send no changed-order notice.
+  - **Review is qualified.** One independent Opus reader read the entire consolidated plan and found no verified
+    material blocker in the covered areas. Source corroboration was partial, as listed in the plan; this is not
+    executable verification or operator approval. The supported method-local `log.append` census spelling is now
+    explicit, and Task 2's known intermediate corpus red remains documented until Task 4.
+  - **Instruction proposals remain proposals.** Exact Before/After blocks for the coord.db recovery invariant and
+    the two attributed token-only doors are in the plan. They have not been applied to CLAUDE.md. Run 1312 remains
+    planned and undispatched until publication checks finish and the operator reads those exact amendments.
+    No implementation, test pass or mutation kill is claimed by this planning decision.
+- **2026-11-01 18:39 — wave 5d's review recovered; fix round 1 required.**
+  - **The stop and its disposition.** Closing review 1313 directly from `dispatched` had answered `bad-transition`.
+    The coordinator recipe omitted the intermediate `working` marker that the review transition table requires;
+    the reviewer cannot advance itself. The operator asked this coordinator to get the programme moving again.
+    After fresh identity, original completion evidence and same-review binding checks, the supported advance to
+    `working` answered `ok: true`, with `landing.kind: none`; a readback confirmed it. Closing that same review with
+    its unchanged original `{reviewedTip, report}` then answered `ok: true`, `state: done`, `released: true`.
+    No forced transition, replacement fingerprint, database edit, cap change or replacement review was used.
+    The deployed version was not measured; these successful API answers prove the relevant live behaviour only.
+  - **The report gate held.** Only after the accepted close did the coordinator read the report on `36f9897d2`.
+    Three held-out lenses returned, with no unverified lens: 14 findings raised, one confirmed Important (F1),
+    nine advisory rows representing six distinct minor items, four refuted, none unexamined. The reviewer found
+    no production defect in the covered implementation; closure is neither wave acceptance nor enqueue permission.
+  - **F1 — fix.** The plan requires one clock acquisition per project. Equality of two one-second timestamp
+    strings does not deterministically prove that: two acquisitions within a second can compare equal. The
+    delayed divergent-time mutant is narrower evidence, not a sufficient pin for the acquisition rule. Require
+    a fixture-controlled clock or call-count proof, with an ordinary repeated-call mutant red without a sleep
+    or second-boundary luck. Keep this test-side; do not change timestamp resolution or add a production clock
+    subsystem. Any unavoidable source seam is a question before editing, not implied scope permission.
+  - **Advisory rulings.** Fix A1 by comparing the measured `probe` and `main-health` content with the lander key
+    on and off, accounting explicitly for fixture-controlled time. Fix A3 with write and removal cases through
+    a symlinked landing directory, proving the outside target's exact contents stay unchanged. Fix A4's README
+    grammar and its overly strong interpretation of an absent marker; fix A5's warning that an old probe also
+    removes `enabled`, disabling lineage acceptance. Remove A6's discarded test-local block without losing the
+    existing no-filter pin. These minors do not independently fail the wave; they are bounded round improvements.
+  - **A2 — carried, not a verified production defect.** The cross-suite semantics of GitHub's default check-run
+    filter were not verified. The operator's latest-attempt decision stands and the verdict fence stays unchanged.
+    Keep that external-behaviour evidence limit explicit for the later landing-reader work; do not silently claim
+    a cross-suite proof or alter the gate in this test/documentation round. The panel's four refuted rows are not
+    reopened. The already-carried ambiguity between landing attempts and check attempts remains for wave 5h.
+  - **Evidence limits and departures.** The reviewer ran the named suites, armed growth check, typechecks and
+    whole-branch pass, and checked the exact-tip fast CI selection. The 38 mutation kills, including the delayed
+    clock mutant, remain the worker's measurements, not independent reproductions. The coordinator ran no new
+    tests and did not read the feature diff. The work handoff says `suite: unrun`, deliberately: no full server
+    suite was run before handoff. The worker's three unnumbered departures remain claims to disposition before
+    acceptance; no deviation number is invented here. The review report was accepted from its clips path, not
+    the scratch root named in the brief: readability is proved, brief compliance is not. Retain the accepted
+    evidence, record that process departure, and require the next report under its review session's original
+    temp root; this does not justify discarding the review or spending a replacement round.
+  - **Ownership and next act.** The fresh active-claim read did not include the old worker or planning claims;
+    it does not prove why they ended or grant an early handover. The coordinator acquired the ledger claim before
+    this edit. The worker must acquire accepted claims before any round edits, keep its workspace branch, return
+    a fresh exact-tip fast-CI handoff, and receive a new held-out review. Send-back uses the existing work run's
+    advance and `fix-round` mail, never redispatch. No landing or file-availability notice is authorized yet.
+    The normal handover still follows actual merge and measured release. Wave 5f's instruction/publication hold
+    is separate and unchanged; run 1312 remains planned and undispatched. The recipe omission remains a carried
+    maintenance item: future review closes must first record genuine review work as `working` through the API.
+- **2026-11-02 22:35 — review 1327 closed after this coordinator's placement error; fix round 2 required.**
+  - **Fix round 1 returned.** The worker's handoff at `40cfb6752` (#2029, exact-tip fast CI green) was advanced to
+    `awaiting-review`, and review 1327, the work run's second review round of three, was dispatched.
+  - **The stall was this coordinator's brief.** The brief told the reviewer to write its report under its own
+    session's original temp root and never in a clips directory. That confused the scratch rule (the temp root,
+    never a work tree) with the report's place: reviewer clause 7 puts the report in the reviewer's clips directory
+    because the close route reads it through the agent, whose read allowlist has no temp root. The close answered
+    `report-unreadable`, and the programme waited about a day. The previous entry's instruction to require the
+    next report under the temp root was wrong and is withdrawn: a review brief never overrides clause 7's placement.
+  - **The recovery.** The reviewer had re-sent `review-done` with the same report at its clips path and the same
+    reviewed tip. When the operator asked for progress, the coordinator re-measured the branch tip (unmoved) and
+    closed review 1327 with that fingerprint: `ok: true`, `state: done`. Both copies of the report hash equal. No
+    forced transition, database edit, cap change or replacement review was used.
+  - **The report.** Three held-out lenses and 17 refuters ran; none died, no lens is unverified and no finding is
+    unexamined: one Important finding confirmed, three advisory, five refuted. The reviewer reproduced the scoped
+    suite counts, the verdict fence's hash, the fix round's file set, F1, and two mutants of its own (a second clock
+    acquisition and a name-only order), each killed. The worker's 43 mutation rows remain worker-only evidence, and
+    the exact-tip CI ran the PR's merge ref rather than the bare tip.
+  - **F1 — fix.** The wave 3b notes are an existing ledger-tree file the branch corrects in place under D-7646, and
+    the ledger guard reads only the head commit's `Ledger-Edit` trailer, which sits on an older commit. The guard
+    warns today and would fail once armed. The edit is this change's own, so it stays; the final head commit
+    carries the trailer, checked with the guard in enforce mode before the handoff.
+  - **F2 — accepted as written.** The every-attempt sentence is the plan's own prescribed Task 2 text, word for
+    word. The plan's summary of it says each required name, narrower than the text it prescribes; that
+    inconsistency is the plan's, not the worker's. The line is a report, never a stop (D-7546), so naming a
+    non-required check too decides nothing. No deviation and no branch change.
+  - **F3 and F4 — fix, wording only.** The README's `lander` row must not read as though the probe removes a file
+    behind a symlinked landing directory: it writes and removes nothing there, and a later reader must treat such a
+    file as absent (D-7647). The README's order paragraph and `tick_order`'s docstring must not promise that a
+    project the tick budget left unstarted is measured first on the next tick: the code orders it before the
+    projects that tick measured, not before every project. The worker received exact replacement text, checked
+    against the code by three read-only checkers before it was sent.
+  - **Next.** Run 1311 is back at `working`, and the fix-round mail asks for fresh claims, one commit and an
+    exact-tip fast-CI handoff; the third and last ordinary review round follows. The worker's three departures
+    still need a disposition before acceptance. Wave 5f's hold is unchanged; run 1312 stays planned and undispatched.
+- **2026-11-02 23:55 — wave 5d accepted after review 1357 (D-7788 to D-7790).**
+  - **The review.** Fix round 2 returned one commit, `307e47b85`, touching only the README and `tick_order`'s
+    docstring, with exact-tip fast CI green (30 jobs succeeded, 8 skipped, none failed). Review 1357, the third and
+    last ordinary round, closed `ok: true` with the reviewer's own fingerprint. Three lenses and seven refuters ran,
+    none unverified. Every round-2 ruling held at the tip: the ledger guard passes in enforce mode by the trailer,
+    the every-attempt sentence equals the plan's text, and the new wording matches the code. The reviewer reran all
+    14 gate files with the handoff's counts; CI did not run `docs-grammar` or `docs-shared`, whose green rests on
+    those local runs and the merge queue's full run.
+  - **The one finding — carried to 5i, not a fix round.** No test goes red if `remove_own`'s check that the
+    project's own landing directory is real is deleted: the symlinked-project-directory case plants no mirror file
+    behind the link, and K7/K7b link only `landing/`. The guard dates from wave 3b and the code is right by every
+    reading; the gap sits under the README promise that round 2 wrote. Three refuters upheld it by reading, none ran
+    the mutant. The review cap is spent and a test-only round would need the operator's lift, while 5i adds the
+    marker's reader that must treat such a file as absent (D-7647). So 5i carries the pin (Carried constraints).
+  - **Departures.** The worker's three claims are issued and defined in
+    `docs/superpowers/plans/2026-11-02-landing-order-wave5d-departures.md`: D-7788 (mutation evidence in the temp
+    root, as the brief asked), D-7789 (a bash runner around the plan's own `ccrc test` command) and D-7790 (eight
+    commits: three task commits, two wording-neutral rewraps and three ordered fix-round commits). Each is accepted.
+  - **Next.** Wave 5f's run 1312 is already open, so the programme keeps an open run. Run 1311 advances to
+    `merging` and #2029 lands by the verdict's route, bound to `307e47b85`; the run closes only after the merge is
+    proven. The `lander=` key is the operator's to write, once the fleet box runs this probe.
+- **2026-11-03 03:38 — wave 5d merged (#2029 `43e11b36`); run 1311 closed; the server told nobody of the merge.**
+  - **The landing.** The verdict chose the native queue (`ROUTE Q method=squash admin=never strict=no`), the four
+    required checks passed, and the landing line held #2029 pinned at `307e47b85` with the order unpaused. #2029 was
+    enqueued bound to that head, without `--admin`, and merged at 01:03:22Z as `43e11b36`. Release v0.0.921 is cut
+    from that commit.
+  - **The proof and the close.** `gh pr view 2029` reads MERGED, with `headRefOid` equal to run 1311's
+    `handoffCommit`, `307e47b85`. The worker was mailed MERGED first. The run then closed with `final: true`, and the
+    close answered `released: true` with a queued child reclaim; its closed row reads `done`. The worker's claim on
+    `README.md` and `ccd/ccd-land-probe` ended with the run.
+  - **No merge notice.** The run waited at `merging` for the server's `merged:#2029` mail, and none came. The
+    coordinator learned of the merge at 03:34Z, from a peer coordinator's mail, and proved it itself. The feed
+    holds no `merged` record for #2029 either, though `ccd pr-state --session ccrc-pwa-quiet-prairie` reads the PR
+    MERGED, and the same feed recorded two merges of another project in that time. #2145, from another
+    ccrc-pwa workspace, merged at 01:29Z with no `merged` record. The cause is not measured. It is the operator's
+    to look at before the next landing waits on that mail, and 5h, the lane that reads landings, carries it
+    (Carried constraints).
+  - **The child's reclaim fails and is retried.** `ws-audit --reclaim` measured nothing: two other registry rows,
+    `ccrc-pwa-brisk-mesa` and `ccrc-pwa-calm-mesa`, name a working directory that no longer resolves, so `ccd`
+    cannot place them against the child. The remedy is the operator's: purge each row once its session has ended,
+    or restore the path. This session touches no registry file. Until then the worker's workspace and the two review
+    workspaces held for run 1311 stay on disk.
+- **2026-11-03 06:27 — the operator approves 5f's `CLAUDE.md` amendments; `lander=coordinator` is written; the 5f plan
+  publishes.**
+  - **The amendments.** The operator read amendments A and B in the 5f plan's section **Operator text and census
+    supplement** and agreed to them. Tasks 1 and 2 apply them byte for byte. At landing the coordinator compares the
+    PR's `CLAUDE.md` diff with the two blocks, and any difference goes to the operator before the PR is enqueued.
+  - **Amendment B is re-based.** Measured against `main` at `be6cd1048`, amendment A's before-block is present once.
+    Amendment B's first line, the one it replaces, is present once too, but the line after it, which is context only,
+    now begins `four (`: #2084 retired two of the approvals lane's routes. The plan's two B blocks now carry `main`'s
+    context line. The replaced line and the inserted words are unchanged, and they are what the operator approved.
+  - **The lander key.** On the operator's instruction, the coordinator wrote `lander=coordinator` into this project's
+    landing conf, keeping `base=main` and `lineage=off`. It measured the fleet box first: `ccrc version` reads
+    v0.0.926 with `install: complete`, and the installed probe accepts the key. The probe's next tick wrote the
+    `lander` mirror for this project at 06:25:53Z and measured the project as before. `enabled` stays absent, because
+    lineage is off. Nothing reads the marker until 5i.
+  - **Publication.** The plan's header now says it is published for dispatch, and its "Waiting on you" list is empty.
+    This ledger's PR, #2030, carries the plan to `main`, and run 1312 is dispatched once it is there.
+  - **Measured on `main` for the brief.** Migrations 36 and 37 are taken, so 5f's migration takes slot 38, a case
+    Task 1 already names. The README's auth paragraph was restructured for the programme-ledger routes (#2100,
+    #2108), so every count in the plan's source-derived baseline is re-measured before use. Another programme holds
+    `README.md` under a claim, so the worker takes its own claims before it edits that file.
+- **2026-11-03 16:14 — run 1312 (5f) dispatched before its plan reached `main`, on the operator's ruling.**
+  - **This PR's landing stopped.** At `88ea95c58` three required checks passed and `test (server)` was red: one test
+    in `ccrc-update-fetch.test.ts` timed out at 20 s in `server 10/12`. It was not this docs-only PR's own, and the
+    same test failed the same way on another programme's docs-only ledger PR. The one rerun §5b allows went red the
+    same way, so the landing stopped (`red-unreachable`) and nothing was enqueued. The bounded wait was already spent
+    when the coordinator watched the checks once more; that watch broke §5b's rule, and it was reported.
+  - **The operator's ruling.** Wait for the CI fix and then land this PR; and dispatch run 1312 now, with the plan
+    read from this PR's head (`88ea95c58`, the plan's blob `e519df1c`).
+  - **The dispatch.** Run 1312 went to `ccrc-pwa-keen-mesa`, a fresh child from `main`, with five items (Tasks 1 to 4
+    and the gate) and the worker row's routing, unchanged from 5e: opus/high, sonnet/high subagents, workflow off,
+    compact 40. No execution block is reserved, so departures come back as `D-TBD`. The worker merges `main` once
+    the plan is there, before its gate, and sends no wave-done until then. The first send was refused `oversize` (the
+    brief and the kickoff prefix came to more than 8192 bytes), so the brief was condensed and sent again.
+  - **The CI break had passed by then.** `main` now carries `7daaf3792` (#2187): a docs-only change runs only the
+    checks that can see it, and pull-request runs since have been green. This PR is pushed again for a fresh run,
+    and lands through the queue if the verdict allows.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -2162,14 +2341,27 @@ restatement, taken by wave 5a). None of them accepts wrongly a doc the radar wri
     - **The read is unbounded.** With a held 40-byte secret, the masker replaces `order`'s shas after about 2048
       entries, and `entries`' after about 4096. The landing check then fails closed. 5h bounds the read, to
       non-terminal states or with `?pr=`.
+- **From wave 5d's reviews (1327, 1357).**
+  - **To 5i** (the marker's reader):
+    - **Pin the project-directory symlink arm.** Plant `lander` and `enabled` behind a symlinked `landing/<project>`,
+      run with `lander=none` or no conf, and assert both survive; deleting `remove_own`'s `real_dir(dirpath)` check
+      must go red. Today only a symlinked `landing/` is pinned (K7, K7b).
+    - **The word "first" survives in two places:** N6-b's test title and the 5d plan's D-7642 text. The shipped
+      README and docstring promise only an order before the projects a tick rewrote. Read the shipped text.
+- **From wave 5d's landing (#2029, 2026-11-03).**
+  - **To 5h** (the landed reader):
+    - **No merge notice came.** Run 1311 waited at `merging`, and neither the `merged:#2029` mail nor a `merged`
+      feed record appeared, though `ccd pr-state --session` read the PR MERGED. 5h is planned only once the cause is
+      measured: a lane that reads landings cannot rest on a notice that stayed silent. Until then, any report of a
+      merge is a cue for the coordinator to prove it, as this landing did.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec
   whitelist; never print secret contents.
 
 ## Next-wave brief
 
-Waves 1–3, 2b, 3b, 3c, 3d, 3e, 4, 4c, 4b, 5a, 5b, 5c and 5e are merged (#231 `10f32755`, #234 `0087a045`, #1863 `d3250900`, #248 `9a255a74`,
-#1740 `3ca67389`, #1046 `4ce282f8`, #1096 `e173c1aa`, #1127 `7e38b5f4`, #1884 `f6b67a5b`, #1911 `9ec4fc54`, #1923 `85d61aa8`, #1960 `d196d8b3`, #2015 `83c3544c`, #2017 `a77811e5`, #2020 `4fc83e57`). Task 7's re-run on 2026-10-21 turned the merge queue on for `main`, and
+Waves 1–3, 2b, 3b, 3c, 3d, 3e, 4, 4c, 4b, 5a, 5b, 5c, 5d and 5e are merged (#231 `10f32755`, #234 `0087a045`, #1863 `d3250900`, #248 `9a255a74`,
+#1740 `3ca67389`, #1046 `4ce282f8`, #1096 `e173c1aa`, #1127 `7e38b5f4`, #1884 `f6b67a5b`, #1911 `9ec4fc54`, #1923 `85d61aa8`, #1960 `d196d8b3`, #2015 `83c3544c`, #2017 `a77811e5`, #2020 `4fc83e57`, #2029 `43e11b36`). Task 7's re-run on 2026-10-21 turned the merge queue on for `main`, and
 it stays on by the operator's ruling (Decisions, 2026-10-21 12:15). Wave 3d answers its stop rule 6: a removal whose
 reason is `merged` reads `landed` (Decisions, 2026-10-21 14:49 and 19:17).
 
@@ -2244,7 +2436,9 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   release the operator rolls out, and 5h reads it only once the fleet box runs it.
 - **5e is merged** (#2020 `4fc83e57`; Decisions, 2026-10-31 15:17). Deploy: ccrc's updater carries the server and
   the skill text. Its read is advisory until 5i, and a server older than the line answers 404, which reads as no entry.
-- **5d is planned** (`docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`, run 1311; Decisions, 2026-10-31 15:52): the `lander=` key and D-7546's restatement,
-  with the radar's carried wording. It ships to the fleet box first.
-- **5f is next in line** (run 1312), then 5g to 5k in order, each planned against `main` as it then stands. 5h also
-  waits until the fleet box runs 5c.
+- **5d is merged** (#2029 `43e11b36`, release v0.0.921; Decisions, 2026-11-03 03:38). Review 1357 accepted it with one
+  carried test gap (to 5i); departures D-7788 to D-7790. The plan is
+  `docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`. The fleet box runs it
+  (v0.0.926), and `lander=coordinator` is written for this project (Decisions, 2026-11-03 06:27).
+- **5f is dispatched** (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, run 1312; Decisions, 2026-10-31 20:00, 2026-11-03 06:27 and 16:14). The operator approved its exact `CLAUDE.md` amendments. The plan publishes with this ledger's PR; the worker merges `main` once it is there, before its gate.
+- **5g to 5k follow in order**, each planned against `main` as it then stands. 5h also waits until the fleet box runs 5c.

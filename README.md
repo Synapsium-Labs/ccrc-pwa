@@ -3822,6 +3822,13 @@ the last-known-good fleet snapshot instead of going blank:
   time, in that order); `unknown` is a real answer the PWA stays silent on. On a box with
   `CCRC_AUTH=on` this is a gated read like any other — a cookieless `curl` gets `401
   unauthenticated`; `/health` is the ungated probe, and it reports the build, not the link.
+  A `backup` block (D-7858) joins once the fleet box's backup state files have been read once (the agent's
+  `backup` op, once a minute): `status` is `stale`, `failed`, `warning`, `ok`, `unreadable` or
+  `not-configured`, judged at the read of the route against `CCRC_BACKUP_STALE_HOURS` (default 36), with the
+  last success, failure, skip and warning. The directory is `CCRC_BACKUP_STATE_DIR` in the reading process's
+  environment: the fleet box's `~/.ccrc/agent.env`, or a local-mode server's `ccrc.env` (D-7859). `failed` and
+  `stale` raise a banner; Settings › Automation › Backups shows the quiet line for every status, and an unset
+  directory reads "Backups not configured", never an alarm.
 - `POST /api/fleet/reboot` fires a Hetzner Cloud reboot of the fleet host —
   the PWA's confirm dialog names the collateral, because a reboot takes down
   everything else running on that box, not just the fleet. Guards: `409` if

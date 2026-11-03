@@ -407,7 +407,7 @@ export interface AccountOpReq {
  *  A frame with any extra field is a malformed frame (`bad-request`), the same word an agent that predates the op
  *  answers. */
 export interface DiskReq { t: 'req'; id: number; op: 'disk' }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq|BackupReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 /** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
  *  agent can say beyond the word — the `--detach` parent's first stderr line,
@@ -1056,3 +1056,20 @@ export function readTestboxToolsSyncReply(raw: unknown): TestboxToolsSyncReply |
   return { outcome: raw.outcome as TestboxSyncOutcome, detail: raw.detail, frame };
 }
 import { readTestboxFrame, TESTBOX_TOOLS, type StatusAnswer, type TestboxFrame, type TestboxTool, type ToolsSync } from './testbox.js';
+
+// ── the `backup` op (D-7858) ─────────────────────────────────────────────────────────────────────────────────────
+// The agent reads the backup state files in the directory its own environment names (`CCRC_BACKUP_STATE_DIR`, D-7859)
+// and answers what it read (`BackupRead`, shared/backup.ts); the server's decider (`backupVerdict`) judges it. Declared
+// at the file's foot so no line cited above moves. The op takes NO argument, so no path crosses the link. ADDITIVE: no
+// `FLEET_PROTO` bump; an agent that predates it answers `bad-request` and is never sent the op (the server reads
+// `ready.ops` first).
+
+/** ONE member of the `req` envelope. A frame with any extra field is a malformed frame (`bad-request`). */
+export interface BackupReq { t: 'req'; id: number; op: 'backup' }
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const BACKUP_OP = 'backup';
+
+/** The `backup` op's reply: exactly what the decider takes, in this one type. */
+export type BackupOpReply = BackupRead;
+import type { BackupRead } from './backup.js';

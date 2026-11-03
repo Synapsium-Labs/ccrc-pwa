@@ -320,6 +320,12 @@ export const SETTINGS_CARDS = {
       purpose: 'Restarts an idle coordinator onto the current ccrc release, resuming its conversation, once it has been '
         + 'quiet for 90 minutes. Other sessions pick up a new release when they next start.',
     },
+    /** D-7860: the fleet box's backup, a quiet line; the card before Test box, which stays the section's last. */
+    backup: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Backups',
+      purpose: 'When the fleet box last backed up, from the state files its backup job keeps. A failed or stale backup '
+        + 'also shows a banner above the fleet.',
+    },
     /** Test box plan TB10 (D-7412): the section's last card (D-7418). */
     testbox: {
       scope: SETTINGS_SCOPE.fleet, title: 'Test box',

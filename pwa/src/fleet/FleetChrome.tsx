@@ -79,3 +79,11 @@ export function useFleetChrome(): FleetChrome {
   if (chrome === null) throw new Error('FleetChrome is not mounted');
   return chrome;
 }
+
+/** The shell's one health poll for a reader that may render where no provider is mounted (D-7860: Settings' quiet
+ *  Backups line, whose page a test may mount alone). Inside a provider it is `useFleetChrome().health`; outside one it
+ *  is `undefined`, which such a reader says as "not known yet". A part that needs the chrome's planes or sheets asks
+ *  `useFleetChrome()`, which throws instead. */
+export function useChromeHealthIfMounted(): FleetHealth | null | undefined {
+  return useContext(FleetChromeContext)?.health;
+}

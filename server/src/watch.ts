@@ -83,6 +83,8 @@ import type { BoxSettingsHeld } from './update/boxSettings.js';
 import { BoxSettingsLane } from './update/boxSettingsLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
 import { PressureLane } from './pressureLane.js';
+import { BackupLane } from './backupLane.js';
+import type { BackupHealth } from '../../shared/backup.js';
 import { TestboxLane } from './testboxLane.js';
 import type { HostPressureHealth } from '../../shared/pressure.js';
 import type { DiskHealth } from '../../shared/disk.js';
@@ -1063,10 +1065,12 @@ export class FleetWatcher {
    *  `undefined` until the first sweep lands — the same contract every other
    *  `currentX()` on this class already has, and the route turns it into a
    *  `readiness: null` on the wire rather than omitting the key. */
-  /** The disk alarm (D-6615) and the tmp sweep census lane (D-6624): each holds its clock and its memory. */
+  /** The disk alarm (D-6615) and the tmp sweep census lane (D-6624): each holds its memory, and each clock is its row (D-7895). */
   private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
   /** The host-pressure beat (#1170): its last reading classifies a stalled link. */
   private readonly pressureLane = new PressureLane(() => this.deps);
+  /** The backup-health beat (D-7858): the last read of the backup state files, judged when the block is read. */
+  private readonly backupLane = new BackupLane(() => this.deps);
   /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
   readonly testboxLane = new TestboxLane(() => this.deps);
   private readonly tmpCensus = new TmpCensusBeat(() => this.deps);
@@ -2017,6 +2021,10 @@ export class FleetWatcher {
   pressure(linkUp: boolean): HostPressureHealth | null { return this.pressureLane.block(linkUp); }
   /** The host-pressure beat (#1170). PUBLIC for the reason `sweepDisk` is: `tick()` dispatches it with `void`. */
   async sweepPressure(): Promise<void> { await this.pressureLane.sweep(); }
+  /** `FleetHealth.backup` (D-7858); `null` before the first read landed (absence is UNKNOWN). */
+  backup(): BackupHealth | null { return this.backupLane.block(); }
+  /** The backup-health beat (D-7858). PUBLIC for the reason `sweepDisk` is: `tick()` dispatches it with `void`. */
+  async sweepBackup(): Promise<void> { await this.backupLane.sweep(); }
 
   /** What the lane last concluded, for tests and diagnostics: nothing here is wire. */
   delegationReport() {
@@ -2357,10 +2365,11 @@ export class FleetWatcher {
     return Promise.allSettled(started).then(() => undefined);
   }
 
-  /** The STALE-ARCHIVE ARM (D-6643, fleet disk retention spec §2.7.5): `StaleArchiveBeat` holds the clock, the memory and the
-   *  pass. Hourly, one pass at a time, on the tick's rows and listing; SHADOW until `$REG/stale-archive-live`. */
+  /** The STALE-ARCHIVE ARM (D-6643, fleet disk retention spec §2.7.5): `StaleArchiveBeat` holds the memory and the pass, the
+   *  `staleArchive` row the clock and the single flight (D-7895). Hourly, one pass at a time, on the tick's rows and listing;
+   *  SHADOW until `$REG/stale-archive-live`. */
   async sweepStaleArchive(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
-    await this.staleArchive.sweep(records, names);
+    await this.runLane('staleArchive', () => this.staleArchive.pass(records, names));
   }
 
   /** At an unattended act (the stop-done lane's, hibernation's): the registry record read AGAIN and the frame's row
@@ -2444,14 +2453,16 @@ export class FleetWatcher {
       // The disk alarm (D-6615) is gated HERE too, above the registry read's fail-shut return, because it reads no
       // registry: a full disk is exactly when the registry read fails, and the one alarm must still sound. NEVER
       // awaited: a `statfs` of a stalled volume is what hangs (the agent bounds each root, the link bounds the request),
-      // and the dialog detector must not wait behind it. Own clock (`DiskAlarmLane`).
+      // and the dialog detector must not wait behind it. Its clock is the `diskAlarm` row (D-7895).
       void this.sweepDisk().catch(() => { /* one bad sweep must not kill the poll */ });
       // The host-pressure beat (#1170), above the fail-shut return for the same reason: a thrash is when that read fails.
       void this.sweepPressure();
+      // The backup-health beat (D-7858) reads no registry either, so it sits with the two above and never waits behind it.
+      void this.sweepBackup();
       // The test box's poll (D-7411), above the fail-shut return too: it lists the registry itself. Own clock, never awaited.
       void this.testboxLane.sweep();
       // The tmp sweep's census (D-6624) sits beside it for the same reason: a file read, and the holders are wanted
-      // exactly when the registry read fails. Own clock (`TmpCensusBeat`), never awaited.
+      // exactly when the registry read fails. Its clock is the `tmpCensus` row (D-7895), never awaited.
       void this.sweepTmpSweepCensus().catch(() => { /* one bad sweep must not kill the poll */ });
 
       // The server-caps beat (D-5232's mechanism, Task 9b) sits BESIDE the inventory lane, never inside it: that lane
@@ -7195,13 +7206,13 @@ export class FleetWatcher {
     }
   }
 
-  /** The disk alarm (D-6615, spec §2.5): `DiskAlarmLane` holds the pass. PUBLIC for the reason `sweepReadiness` is: `tick()`
-   *  dispatches it with `void`, so a test that awaits `tick()` has not awaited this. */
-  async sweepDisk(): Promise<void> { await this.diskAlarm.sweep(); }
+  /** The disk alarm (D-6615, spec §2.5): `DiskAlarmLane` holds the pass, the `diskAlarm` row its cadence (D-7895). PUBLIC for
+   *  the reason `sweepReadiness` is: `tick()` dispatches it with `void`, so a test that awaits `tick()` has not awaited this. */
+  async sweepDisk(): Promise<void> { await this.runLane('diskAlarm', () => this.diskAlarm.pass()); }
 
-  /** The tmp sweep's census (D-6624, spec §2.1): `TmpCensusBeat` holds the pass, on the last good registry listing. PUBLIC for
-   *  the reason `sweepDisk` is. */
-  async sweepTmpSweepCensus(): Promise<void> { await this.tmpCensus.sweep(this.registryIds); }
+  /** The tmp sweep's census (D-6624, spec §2.1): `TmpCensusBeat` holds the pass, on the last good registry listing, and the
+   *  `tmpCensus` row its cadence (D-7895). PUBLIC for the reason `sweepDisk` is. */
+  async sweepTmpSweepCensus(): Promise<void> { await this.runLane('tmpCensus', () => this.tmpCensus.pass(this.registryIds)); }
 
   /**
    * F3: the program-ready preconditions, measured once per lane tick and

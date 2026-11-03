@@ -15,6 +15,8 @@ import { DiskBanner } from '../fleet/DiskBanner';
 import { diskBannerShows } from '../fleet/diskWords';
 import { PressureBanner } from '../fleet/PressureBanner';
 import { pressureBannerShows } from '../fleet/pressureWords';
+import { BackupBanner } from '../fleet/BackupBanner';
+import { backupBannerShows } from '../fleet/backupWords';
 import { UpdateIndicator } from '../fleet/UpdateIndicator';
 import { ClassChooser } from '../fleet/ClassChooser';
 import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
@@ -406,6 +408,8 @@ export function FleetBanners(): ReactNode {
         { id: 'pressure', shows: pressureBannerShows(fleetHealth), node: <PressureBanner health={fleetHealth} /> },
         // The disk alarm (D-6617), from the same health poll as the fleet-host banner above.
         { id: 'disk', shows: diskBannerShows(fleetHealth), node: <DiskBanner health={fleetHealth} /> },
+        // The fleet box's backup alarm (D-7860), from the same health poll: failed or stale only.
+        { id: 'backup', shows: backupBannerShows(fleetHealth), node: <BackupBanner health={fleetHealth} /> },
         // The halt, with each halting node's Ack in place (programme wave 14, R15(a)). Re-polls on every Ack. The
         // release that waits is not a banner (D-6327): it is the quiet update line, placed once per width.
         {

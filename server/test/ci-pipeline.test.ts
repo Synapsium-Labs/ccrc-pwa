@@ -24,6 +24,8 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { RECORDS_FORMAT, readRecordsDir } from '../../.github/ci/testmap.mjs';
+import { FOREIGN, queueScope } from '../../.github/ci/reach.mjs';
+import { serverVerdict } from '../../.github/ci/verdict.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
@@ -247,8 +249,9 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
       if (/\btest-storybook\b/.test(st)) {
         const cond = /^\s*-?\s*if: (.*)$/m.exec(st)?.[1].trim();
         if (cond !== undefined) {
-          expect(cond, `a test-storybook step is conditional on something other than !cancelled():\n${st}`)
-            .toBe('${{ !cancelled() }}');
+          // !cancelled(), and since D-7868 the docs-only pull request's skip (`steps.reach`): nothing else.
+          expect(['${{ !cancelled() }}', "steps.reach.outputs.skip != 'true'", "${{ !cancelled() && steps.reach.outputs.skip != 'true' }}"],
+            `a test-storybook step is conditional on something other than !cancelled() and the docs-only skip:\n${st}`).toContain(cond);
         }
         expect(st, `a test-storybook step ignores its own result:\n${st}`).not.toMatch(/\bcontinue-on-error\b|\|\|/);
         // Exact-command anchor: a token blocklist misses `| tee`, `; exit 0`,
@@ -256,7 +259,8 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
         // line of the step must be one of these three, whole, with nothing
         // after the URL.
         const odd = st.split('\n').filter((l) => l.trim() !== '' && !(
-          /^\s*-?\s*if: \$\{\{ !cancelled\(\) \}\}$/.test(l)
+          /^\s*-?\s*if: \$\{\{ !cancelled\(\)(?: && steps\.reach\.outputs\.skip != 'true')? \}\}$/.test(l)
+          || /^\s*-?\s*if: steps\.reach\.outputs\.skip != 'true'$/.test(l)
           || /^\s*-?\s*working-directory: ui$/.test(l)
           || /^\s*-?\s*run: npm run test-storybook -- --maxWorkers=2 --url http:\/\/127\.0\.0\.1:\d+$/.test(l)));
         expect(odd, `a test-storybook step holds more than the exact run:\n${st}`).toEqual([]);
@@ -1546,7 +1550,8 @@ describe('ci.yml: the node-floor leg runs on exactly the declared floor (spec 20
   });
 
   it('skips by STEP, on a refresh, a rebuild, a fast pull request or a pull request that left its inputs alone (D-6771)', () => {
-    const leg = "${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true'))) && 'skip' || 'run' }}";
+    // D-7868: and a docs-only merge-queue group, which select answers `fast` for (reach.mjs `queueScope`).
+    const leg = "${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true')) || (github.event_name == 'merge_group' && needs.select.outputs.fast == 'true')) && 'skip' || 'run' }}";
     const b = job('node-floor');
     expect(b, 'the job-level leg switch').toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
     const s = steps(b);
@@ -1808,6 +1813,138 @@ describe('the queue\'s browser skip (owner ruling 2026-11-02): a deliberate skip
   });
 });
 
+// ── a docs-only change (D-7868, the operator's direction of 2026-11-03) ────
+//
+// A docs-only merge-queue group (reach.mjs `docsOnly`: every file under docs/, none of them infrastructure) runs the
+// server tests a pull request runs for its change (select answers `fast`, so fast-plan plans them from the queue's
+// base), skips the node floor's tests (its leg switch) and the agent's (its queue ask), and runs the pwa suite whole.
+// Every required summary still passes, because every skip is by STEP. A mixed group runs exactly as before. All of it
+// is EVALUATED here, on the workflow's own expressions, with each leg's answer taken from reach.mjs itself.
+
+/** `evalIf` over a job- or step-level `${{ … }}` condition: the wrapper stripped, `!cancelled()` and `always()` read as
+ *  true (no run here is cancelled), and `contains(fromJSON('[…]'), X)` read as the disjunction it is. */
+function evalExpr(expr: string, ctx: Readonly<Record<string, string>>): boolean {
+  let e = expr.trim().replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, '$1');
+  e = e.replace(/!cancelled\(\)/g, "'t'").replace(/always\(\)/g, "'t'");
+  e = e.replace(/contains\(fromJSON\('\[([^\]]*)\]'\), ([\w.-]+)\)/g, (_m, list: string, x: string) =>
+    `(${list.split(',').map((v) => `${x} == '${v.trim().replace(/^"|"$/g, '')}'`).join(' || ')})`);
+  return evalIf(e, ctx);
+}
+
+/** The leg switch of a job: true when `CCRC_LEG` evaluates to `skip`. */
+function legSkips(block: string, ctx: Readonly<Record<string, string>>): boolean {
+  const leg = /^ {6}CCRC_LEG: \$\{\{ \(([\s\S]*)\) && 'skip' \|\| 'run' \}\}$/m.exec(block)?.[1];
+  expect(leg, 'a job with no leg switch of the usual shape').toBeDefined();
+  return evalIf(leg!, ctx);
+}
+
+/** The names (or `uses:`) of a job's steps that run in `ctx`. */
+function stepsRun(id: string, ctx: Readonly<Record<string, string>>): string[] {
+  return steps(job(id)).filter((st) => { const c = stepIf(st); return c === null || evalExpr(c, ctx); })
+    .map((st) => /^ {6}- (?:name|uses|if): (.*)$/m.exec(st)![1]!);
+}
+
+describe('a docs-only change (D-7868): the queue runs the pull request\'s server selection and skips what cannot see docs/', () => {
+  /** The context a merge-queue run sees for `changed`, every leg's answer taken from reach.mjs. */
+  const queueCtx = (changed: string[]): Record<string, string> => {
+    const fast = queueScope('server', changed) === 'selected' ? 'true' : 'false';
+    return {
+      'github.event_name': 'merge_group', 'github.event.schedule': '', 'inputs.mode': '',
+      'needs.select.result': 'success', 'needs.select.outputs.fast': fast,
+      'needs.select.outputs.tests': fast === 'true' ? 'selected' : 'full', 'needs.select.outputs.count': '40',
+      'needs.select.outputs.floor': 'true',
+      'needs.fast-plan.result': fast === 'true' ? 'success' : 'skipped', 'needs.fast-plan.outputs.count': fast === 'true' ? '25' : '',
+      'steps.queue-reach.outputs.skip': String(queueScope('agent', changed) === 'skip'),
+    };
+  };
+  const DOCS = ['docs/superpowers/plans/2026-11-03-x.md', 'docs/superpowers/specs/2026-11-03-y.md'];
+  const MIXED = ['docs/superpowers/plans/2026-11-03-x.md', 'pwa/src/a.ts'];
+
+  it('a docs-only group: the fast plan runs, from the queue\'s base, and the server shards run its matrix', () => {
+    const ctx = queueCtx(DOCS);
+    expect(ctx['needs.select.outputs.fast']).toBe('true');
+    expect(evalExpr(jobKey(job('fast-plan'), 'if')!, ctx), 'fast-plan runs').toBe(true);
+    expect(evalExpr(jobKey(job('server-shard'), 'if')!, ctx), 'the server shards run').toBe(true);
+    expect(job('server-shard')).toContain("matrix: ${{ fromJSON(needs.select.outputs.fast == 'true' && needs.fast-plan.outputs.server_matrix || needs.select.outputs.server_matrix) }}");
+    // Both diff from the queue's base sha in a merge-queue run, and from origin/<base> on a pull request.
+    const base = "          BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || format('origin/{0}', github.base_ref) }}\n";
+    expect(step(job('select'), 'Select')).toContain(base);
+    expect(step(job('select'), 'Select')).toContain('node .github/ci/reach.mjs --ask fast --event "$EVENT" --base "$BASE"');
+    expect(step(job('fast-plan'), 'Plan')).toContain(base);
+    expect(runScript(step(job('fast-plan'), 'Plan'))).toContain('mb=$(git merge-base "$BASE" HEAD)\n');
+    expect(step(job('fast-plan'), 'Plan'), 'a base only a pull request has').not.toContain('BASE_REF');
+  });
+
+  it('a docs-only group: the node floor and the agent tests skip by step; the pwa suite runs whole', () => {
+    const ctx = queueCtx(DOCS);
+    expect(legSkips(job('node-floor'), ctx), 'the node floor skips').toBe(true);
+    expect(stepsRun('node-floor', { ...ctx, 'env.CCRC_LEG': 'skip' }), 'a node-floor step runs on a skip').toEqual([]);
+    for (const st of steps(job('node-floor'))) expect(stepIf(st), st).toMatch(/^env\.CCRC_LEG == 'run'/);
+    const agent = stepsRun('test', { ...ctx, 'env.CCRC_LEG': 'run' });
+    expect(agent).toContain('Can this merge-queue group reach the agent tests?');
+    expect(agent, 'the agent tests skip').not.toContain('Test');
+    expect(agent, 'the agent typecheck still runs').toContain('Typecheck');
+    const pwa = stepsRun('pwa-shard', { ...ctx, 'env.CCRC_LEG': 'run' });
+    expect(pwa, 'the pwa suite runs').toContain('Test');
+    expect(step(job('pwa-shard'), 'Test'), 'no queue ask gates the pwa suite').not.toContain('queue-reach');
+    // The pwa build checks run in the queue whatever changed: their ask is a pull request's only.
+    for (const id of ['pwa-static', 'build-pwa']) expect(stepsRun(id, { ...ctx, 'env.CCRC_LEG': 'run' }).length, id).toBe(steps(job(id)).length - 1);
+  });
+
+  it('a docs-only group: every required summary passes, and each still refuses a real red', () => {
+    const ctx = { ...queueCtx(DOCS), 'needs.server-shard.result': 'success', 'needs.server-typecheck.result': 'success',
+      'needs.node-floor.result': 'success', 'needs.pwa-shard.result': 'success', 'needs.pwa-static.result': 'success', 'needs.browser-pwa.result': 'success' };
+    const refusals = (id: string, c: Record<string, string>): string[] => steps(job(id))
+      .filter((st) => /^ {8}run: exit 1$/m.test(st) && evalExpr(stepIf(st)!, c)).map((st) => /^ {6}- name: (.*)$/m.exec(st)![1]!);
+    expect(refusals('server', ctx), 'test (server) refuses a docs-only group').toEqual([]);
+    expect(refusals('pwa', ctx), 'test (pwa) refuses a docs-only group').toEqual([]);
+    // …and the verdict reads the fast plan's count over the selection, which a merge-queue run may now answer.
+    const v = step(job('server'), 'Verdict');
+    expect(v).toContain("TESTS: ${{ needs.select.outputs.fast == 'true' && 'selected' || needs.select.outputs.tests }}");
+    expect(serverVerdict({ select: 'success', typecheck: 'success', shards: 'success', tests: 'selected', count: '25', event: 'merge_group' }).ok).toBe(true);
+    // A red that is not a skip still refuses.
+    for (const [k, red] of [['needs.server-shard.result', 'failure'], ['needs.fast-plan.result', 'failure'], ['needs.node-floor.result', 'failure'],
+      ['needs.node-floor.result', 'skipped'], ['needs.select.result', 'failure']] as const) {
+      expect(refusals('server', { ...ctx, [k]: red }).length, `${k}=${red}`).toBeGreaterThan(0);
+    }
+    for (const [k, red] of [['needs.pwa-shard.result', 'failure'], ['needs.pwa-static.result', 'cancelled']] as const) {
+      expect(refusals('pwa', { ...ctx, [k]: red }).length, `${k}=${red}`).toBeGreaterThan(0);
+    }
+    // No leg of the docs-only skip is skipped by a job-level if: (a skipped required job reads as passing).
+    expect(jobKey(job('test'), 'if')).toBeNull();
+    expect(jobKey(job('node-floor'), 'if')).toBe('${{ !cancelled() }}');
+    for (const id of ['test', 'node-floor', 'pwa-static', 'build-pwa', 'pwa-shard']) {
+      expect(job(id).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n'), id).not.toMatch(/continue-on-error/);
+    }
+  });
+
+  it('a mixed group, a root file and an empty group run exactly as before: the full matrix, the floor and the agent tests', () => {
+    for (const changed of [MIXED, ['README.md'], ['docs/a.md', 'CLAUDE.md'], []]) {
+      const ctx = queueCtx(changed);
+      expect(ctx['needs.select.outputs.fast'], JSON.stringify(changed)).toBe('false');
+      expect(evalExpr(jobKey(job('fast-plan'), 'if')!, ctx), 'fast-plan runs').toBe(false);
+      expect(evalExpr(jobKey(job('server-shard'), 'if')!, ctx), 'the server shards run select\'s full matrix').toBe(true);
+      expect(legSkips(job('node-floor'), ctx), 'the node floor skips').toBe(false);
+      expect(stepsRun('test', { ...ctx, 'env.CCRC_LEG': 'run' }), 'the agent tests run').toContain('Test');
+    }
+    // select failing in the queue: the floor runs (no answer is no skip).
+    expect(legSkips(job('node-floor'), { ...queueCtx(DOCS), 'needs.select.outputs.fast': '' })).toBe(false);
+  });
+
+  it('a docs-only pull request skips the agent tests and the pwa build checks by step, and still runs every typecheck it must', () => {
+    const pr = { 'github.event_name': 'pull_request', 'env.CCRC_LEG': 'run', 'steps.reach.outputs.skip': 'true' };
+    for (const id of ['pwa-static', 'build-pwa', 'storybook-a11y']) {
+      expect(stepsRun(id, pr), id).toEqual(['actions/checkout@v7', 'Can this change reach the pwa build?']);
+      expect(stepsRun(id, { ...pr, 'steps.reach.outputs.skip': 'false' }).length, `${id} on a change that reaches it`).toBe(steps(job(id)).length);
+    }
+    const agent = stepsRun('test', pr);
+    expect(agent).not.toContain('Test');
+    expect(agent).toContain('Typecheck');
+    // The server typecheck never consults a reach answer, and its job runs for every selected or full run.
+    expect(job('server-typecheck')).not.toContain('steps.reach');
+  });
+});
+
 describe('Review 439 F26: the browser leg cannot be softened by continue-on-error, a shell override or defaults', () => {
   // The full-suite legs are pinned the same three ways above. A browser leg that
   // failed and still reported green would read as a pass in full-suite's RESULTS.
@@ -1837,7 +1974,8 @@ describe('ci.yml: the light pull-request rule for the agent, pwa and browser tes
     expect(read(CI)).not.toMatch(/^ {4}types: .*labeled/m);
     // A head branch under train/ asks for the full suite too (operator ruling 2026-10-28), in every place the label is read.
     const full = "FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') || startsWith(github.head_ref, 'train/') }}";
-    expect(read(CI).split(full).length - 1).toBe(4);
+    // Select, the three test legs' asks, and the docs-only asks of pwa-static, build-pwa and storybook-a11y (D-7868).
+    expect(read(CI).split(full).length - 1).toBe(7);
     expect(read(CI)).not.toMatch(/FULL_LABEL: \$\{\{ contains\([^|]*\}\}/);
   });
 
@@ -1861,10 +1999,29 @@ describe('ci.yml: the light pull-request rule for the agent, pwa and browser tes
     expect(step(job('test'), 'Typecheck')).toContain("if: env.CCRC_LEG == 'run'");
   });
 
-  it('the pwa typecheck, the static checks and the build never consult the answer', () => {
-    for (const id of ['pwa-static', 'build-pwa', 'server-typecheck']) {
-      expect(job(id), id).not.toContain('steps.reach');
+  // The pwa typecheck, the static checks and the build consult ONE answer, since D-7868 (the operator's direction of
+  // 2026-11-03): the pull request's `pwa-build` ask, whose FOREIGN list is docs/ alone, so they skip for a docs-only
+  // pull request and for nothing else. The server typecheck never consults one.
+  it('the pwa typecheck, the static checks and the build consult only the docs-only pull request\'s pwa-build answer', () => {
+    expect(job('server-typecheck')).not.toContain('steps.reach');
+    for (const id of ['pwa-static', 'build-pwa', 'storybook-a11y']) {
+      const b = job(id);
+      const ask = step(b, 'Can this change reach the pwa build?');
+      expect(ask, id).toContain('        id: reach\n');
+      expect(ask, id).toContain("github.event_name == 'pull_request'\n");
+      expect(ask, id).toContain('        run: node .github/ci/reach.mjs --pkg pwa-build --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"\n');
+      expect(b, `${id}: a merge-queue ask`).not.toContain('merge_group --base');
+      // The checkout comes first and is never gated on the answer; every step after the ask is.
+      const s = steps(b);
+      expect(s[0], id).toMatch(/^ {6}- uses: actions\/checkout@v7\n/);
+      expect(s[0], id).toMatch(/^ {10}fetch-depth: 0$/m);
+      expect(s[0], id).not.toContain('steps.reach');
+      const at = s.findIndex((st) => st.includes('- name: Can this change reach the pwa build?'));
+      expect(at, id).toBe(1);
+      for (const st of s.slice(2)) expect(stepIf(st), `${id}: a step the docs-only skip does not gate:\n${st}`).toContain("steps.reach.outputs.skip != 'true'");
     }
+    // FOREIGN for pwa-build is docs/ alone: nothing wider is claimed for these checks.
+    expect(FOREIGN['pwa-build']).toEqual(['docs/']);
   });
 });
 
@@ -2009,7 +2166,8 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
       './node_modules/.bin/vite build',
     ]);
     for (const st of wanted) {
-      expect(st, `a step without the leg switch:\n${st}`).toMatch(/^ {6}- if: env\.CCRC_LEG == 'run'$/m);
+      // The leg switch, and the docs-only pull request's skip (D-7868).
+      expect(st, `a step without the leg switch:\n${st}`).toMatch(/^ {6}- if: env\.CCRC_LEG == 'run' && steps\.reach\.outputs\.skip != 'true'$/m);
       expect(st, 'a step that may fail soft').not.toMatch(/continue-on-error/);
     }
     // The pwa steps run in pwa/; the check reads the lock from the repo root.
