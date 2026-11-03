@@ -55,8 +55,8 @@ export const MEASURE_SETTLE_CADENCES_MS: readonly number[] = [50, 100, 250];
 export interface MeasureDeps {
   readonly loaders: Pick<DocsLoaders, 'projects' | 'tree' | 'file'>;
   readonly parse: MarkdownParser;
-  /** A fresh highlighter with this deadline (each call a new worker). */
-  readonly highlighter: (deadlineMs: number) => Highlighter;
+  /** A fresh highlighter with this deadline (each call a new worker) and this boot budget (omitted: the shipped one). */
+  readonly highlighter: (deadlineMs: number, bootBudgetMs?: number) => Highlighter;
   readonly now: () => number;
   /** The next animation frame's time. */
   readonly frame: () => Promise<number>;
@@ -213,8 +213,11 @@ const PLAIN: HighlightEntry = { kind: 'plain', first: { kind: 'malformed' }, ret
 
 export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: string) => void): Promise<MeasureResult> {
   deps.signal.throwIfAborted();
+  // Items 1 to 5 and 8 time a boot and a block rather than cut either off (a boot past the shipped budget is timed, so
+  // item 2 can measure a slow one); items 6 and 7 keep the shipped deadline and the shipped boot budget.
+  const measureHighlighter = (): Highlighter => deps.highlighter(MEASURE_DEADLINE_MS, MEASURE_DEADLINE_MS);
   // Items 1-3: the corpus, warm, after one tiny job per grammar (the first of which boots: item 2, cold).
-  const warm = deps.highlighter(MEASURE_DEADLINE_MS);
+  const warm = measureHighlighter();
   const created = deps.now();
   let coldMs: number | null = null;
   for (const g of HIGHLIGHT_GRAMMARS) {
@@ -269,7 +272,7 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
   const respawnMs: number[] = [];
   for (const [grammar, s] of stats) {
     progress(`Item 1: ${grammar}, cold`);
-    const fresh = deps.highlighter(MEASURE_DEADLINE_MS);
+    const fresh = measureHighlighter();
     const at = deps.now();
     const r = await timed(deps, fresh, grammar, s.largest);
     respawnMs.push(round(r.postedAt - at));
@@ -304,7 +307,7 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
   let firstFrameToColouredMs: number | null = null;
   const largest = page as Page | null;
   if (largest !== null) {
-    const h5 = deps.highlighter(MEASURE_DEADLINE_MS);
+    const h5 = measureHighlighter();
     let published: HighlightStore | null = null;
     const ctx: HighlighterContextValue = {
       docs: h5, chat: h5, publish: (s) => { published = s; },
@@ -323,7 +326,7 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
   // Item 3, the crafted shapes: section 7.8 runs items 1 to 5 on the measurement-only deadline, so a shape past the
   // shipped deadline is timed and its ratio read, not cut off (item 6, next, is the shipped deadline's).
   const crafted: { shape: string; ratio: number | null; overCap: boolean }[] = [];
-  const measured = deps.highlighter(MEASURE_DEADLINE_MS);
+  const measured = measureHighlighter();
   for (const s of CRAFTED_SHAPES) {
     progress(`Item 3: ${s.name}`);
     const r = await timed(deps, measured, s.lang, s.code);
@@ -366,7 +369,7 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
     const byDebounce: MeasureResult['item8']['byCadence'][number]['byDebounce'][number][] = [];
     for (const d of MEASURE_CANDIDATE_DEBOUNCES) {
       progress(`Item 8: every ${settleMs} ms, debounce ${d} ms`);
-      const inner = deps.highlighter(MEASURE_DEADLINE_MS);
+      const inner = measureHighlighter();
       let requests = 0;
       const counting: Highlighter = {
         highlight: (r, o) => { if (r.code.startsWith(LINES[0]!)) requests += 1; return inner.highlight(r, o); },

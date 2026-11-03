@@ -159,6 +159,29 @@ describe('R19: item 3\'s crafted shapes run under the measurement-only deadline'
   }, 60_000);
 });
 
+describe('R19: the measurement highlighters time a boot, the shipped ones keep the shipped budget', () => {
+  it('items 1 to 5 and 8 ask for the measurement deadline as the boot budget; items 6 and 7 ask for the shipped deadline and no budget', async () => {
+    const asked: { deadline: number; boot: number | undefined }[] = [];
+    const { deps } = fakes({ highlighter: (deadline, boot) => { asked.push({ deadline, boot }); return fakes().deps.highlighter(deadline); } });
+    await runHighlightMeasure(deps, () => undefined);
+    expect(asked.length).toBeGreaterThan(15);
+    for (const a of asked) {
+      if (a.deadline === HIGHLIGHT_BLOCK_DEADLINE_MS) expect(a.boot).toBeUndefined();
+      else expect(a).toEqual({ deadline: MEASURE_DEADLINE_MS, boot: MEASURE_DEADLINE_MS });
+    }
+    expect(asked.filter((a) => a.deadline === HIGHLIGHT_BLOCK_DEADLINE_MS).length).toBe(2);
+  }, 60_000);
+
+  it('a first boot slower than the shipped boot budget is timed by item 2, not turned into a failed run', async () => {
+    const { spawn } = spawner(HIGHLIGHT_BOOT_BUDGET_MS + 300);
+    render(<HighlightMeasure deps={{ ...pageDeps(), now: () => performance.now() }} spawn={spawn} />);
+    fireEvent.click(screen.getByRole('button', { name: MEASURE_TEXT.start }));
+    const caption = await waitFor(() => screen.getByText(MEASURE_TEXT.result), { timeout: 40_000 });
+    const result = JSON.parse(caption.closest('figure')?.querySelector('pre')?.textContent ?? '{}') as { item2: { coldMs: number | null } };
+    expect(result.item2.coldMs).toBeGreaterThanOrEqual(HIGHLIGHT_BOOT_BUDGET_MS);
+  }, 60_000);
+});
+
 describe('R19: the page', () => {
   it('Start runs the measurement and shows its result as text, which Select result selects whole', async () => {
     const { deps } = fakes();
@@ -189,7 +212,11 @@ class AnsweringWorker implements WorkerLike<HighlightJob> {
   onmessageerror: ((e: unknown) => void) | null = null;
   terminated = 0;
   private readonly answer = createHighlightAnswerer();
-  constructor() { queueMicrotask(() => { if (this.terminated === 0) this.onmessage?.({ data: { ready: true } }); }); }
+  constructor(readyAfterMs = 0) {
+    const ready = (): void => { if (this.terminated === 0) this.onmessage?.({ data: { ready: true } }); };
+    if (readyAfterMs === 0) queueMicrotask(ready);
+    else setTimeout(ready, readyAfterMs);
+  }
   postMessage(job: HighlightJob): void {
     const reply = (data: unknown): void => queueMicrotask(() => { if (this.terminated === 0) this.onmessage?.({ data }); });
     if (job.code.length > 2000) reply({ id: job.id, result: { kind: 'unregistered' } });
@@ -204,9 +231,9 @@ function pageDeps() {
   return rest;
 }
 
-function spawner() {
+function spawner(firstReadyAfterMs = 0) {
   const spawned: AnsweringWorker[] = [];
-  const spawn = (): AnsweringWorker => { const w = new AnsweringWorker(); spawned.push(w); return w; };
+  const spawn = (): AnsweringWorker => { const w = new AnsweringWorker(spawned.length === 0 ? firstReadyAfterMs : 0); spawned.push(w); return w; };
   return { spawned, spawn };
 }
 

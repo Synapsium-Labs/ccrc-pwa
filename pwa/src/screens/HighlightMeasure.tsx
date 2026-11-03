@@ -53,7 +53,7 @@ export function HighlightMeasure(p: {
     const deps: MeasureDeps = {
       loaders: api.docs,
       parse: (src, o) => docsRunner.parse(src, o),
-      highlighter: (deadlineMs) => createHighlighter({ deadlineMs, spawn }),
+      highlighter: (deadlineMs, bootBudgetMs) => createHighlighter({ deadlineMs, spawn, ...(bootBudgetMs === undefined ? {} : { bootBudgetMs }) }),
       now: () => performance.now(),
       frame: () => new Promise((resolve) => { requestAnimationFrame(resolve); }),
       sleep: (ms) => new Promise((resolve) => { window.setTimeout(resolve, ms); }),
