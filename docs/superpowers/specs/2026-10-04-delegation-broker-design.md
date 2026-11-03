@@ -561,10 +561,14 @@ hooks never delete; no session invokes these verbs and no skill names them.
   chunks, and a repair deletes rows below the journal's first sequence that are not carried evidence before
   anything else, never a wipe. Compaction runs from the first ready pass with no marker (D-7022). An older
   build ignores carried evidence: after compaction it can refuse `lease-proof` for a cut `lease-created`
-  record, or `held-evidence-missing` for a cut identity-candidate hold's first record; otherwise it can
-  recover ready on the journal alone, and journal-only repair can discard carried evidence from SQLite.
-  The refusal arms stay `reconstructing`. Returning to this build reads and repairs carried evidence;
-  restoring a pre-compaction snapshot with this build's helper discards evidence recorded since it.
+  record, `held-evidence-missing` for a cut identity-candidate hold's first record, or `fold-refused` for
+  a zero-delta Bash pair straddling the cut (only its PreToolUse is carried; it can take the place of the
+  other two); otherwise it can recover ready on the journal alone, and journal-only repair can discard
+  carried evidence from SQLite. The refusal arms stay `reconstructing`. Returning to this build reads and
+  repairs carried evidence; on the `held-evidence-missing` arm the older build's own update backup
+  refuses, so that return is a rollback flip to a kept tree of this build. Restoring the snapshot taken
+  before this build's first install, with this build's helper, discards evidence recorded since it
+  (amended 2026-11-03, wave 4 fold; D-7022).
 - **Retirement behind the cut (amended 2026-10-26, operator rulings D-7001, D-7024; wave 4):** after a cut
   is durable, an ended activity that no lease or lineage edge names, whose identity record no hold names and
   that no retained record (carried or above S) names leaves the checkpoint with its natural-key mapping and
