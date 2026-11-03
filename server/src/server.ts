@@ -65,6 +65,7 @@ import { Viewers } from './viewer.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes, type OperatorDoorWiring } from './coord/routes.js';
 import { registerLedgerOperatorRoutes, waitingViewOf } from './coord/ledgersRoutes.js';
+import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
 import { createQuestions, type OperatorDoorDeps } from './coord/questions.js';
@@ -1547,7 +1548,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (fresh) dropWaiting();
     if (waitingFailed) return null;
     try {
-      waitingBuilt ??= waitingViewOf(deps.coord, Date.now(), presenceOf);
+      waitingBuilt ??= waitingViewOf(deps.coord, Date.now(), presenceOf, (p, slot) => readOperatorSecretMeta(deps.cfg.ccrcDir, p, slot));
       waitingWarned = null;
       return waitingBuilt;
     } catch (err) {
@@ -2464,7 +2465,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
 
   // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token.
-  registerLedgerOperatorRoutes(app, { coord: deps.coord, bus, now: () => Date.now(), presenceOf });
+  // The secret's route (plan PL6) takes the account gate with a step-up, writes the slot under `cfg.ccrcDir`, and registers
+  // the value with the egress masker (no masker: `unregistered`, said in the answer, never a silent skip).
+  registerLedgerOperatorRoutes(app, {
+    coord: deps.coord, bus, now: () => Date.now(), presenceOf, gate: accountGate, ccrcDir: deps.cfg.ccrcDir,
+    registerSecret: (laneId, value) => deps.masker?.ingestSecret(laneId, value) ?? 'unregistered',
+  });
 
   /**
    * `POST /api/digest/correct` (spec §10, D-5300): the operator's correction of one digest line, `{rowKind, id,

@@ -82,6 +82,24 @@ export function accountOriginClass(origin: string): AccountOriginClass {
   return 'insecure';
 }
 
+/**
+ * The route options of a credential write whose BODY is the credential (programme ledgers plan PL6's secret route): its
+ * body cap; `Cache-Control: no-store` from `onRequest`, so it is on the answers that come before the gate runs (a parse
+ * error, an oversize body) as well as on the gate's own; and those body errors as fixed words, because Fastify's own
+ * parse error text can quote a fragment of the body. The Linear key's routes spell the same three for themselves.
+ */
+export function credentialBodyRoute(bodyLimit: number): {
+  bodyLimit: number;
+  onRequest: (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  errorHandler: (err: Error & { statusCode?: number }, req: FastifyRequest, reply: FastifyReply) => FastifyReply;
+} {
+  return {
+    bodyLimit,
+    onRequest: async (_req, reply) => { reply.header('cache-control', 'no-store'); },
+    errorHandler: (err, _req, reply) => refuseRoute(reply, err.statusCode === 413 ? 'oversize' : 'bad-request'),
+  };
+}
+
 export function createAccountGate(deps: AccountGateDeps): AccountGate {
   // Measured once: `cfg.origin` is boot configuration, and nothing a request carries can move it.
   const originClass = accountOriginClass(deps.origin);
