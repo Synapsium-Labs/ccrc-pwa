@@ -1,5 +1,6 @@
 import { createHistogram, performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
+import type { WatcherDeps } from './deps.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
 import { readRadarPass } from './coord/lineageRead.js';
@@ -149,7 +150,7 @@ import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
 import {
-  toRunSummary, type CoordStore, type MarkReleaseNotifiedResult,
+  toRunSummary, type MarkReleaseNotifiedResult,
   type OpenSibling, type RunRow,
 } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
@@ -1396,7 +1397,7 @@ export class FleetWatcher {
    *  `buildServer` (`watcher.questions`), so the routes and the watcher reach the same instance. Never module scope. */
   readonly questions: Questions;
 
-  constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
+  constructor(private deps: WatcherDeps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     // W3 Q3f (D-7030): the doors' sink, this watcher's: the door cores push through `pushOne` as the lapse sinks do, and
     // read the two pane-edge facts a door-in needs (the painted dialog, the child's project) at the call, never copied.
     this.questions = createQuestions(deps, { heldFor, doors: {
@@ -6821,7 +6822,7 @@ export class FleetWatcher {
   }
 
   /** The stall rows among one run's events, parsed. A detail this build cannot name is skipped (`parseStallDetail`). */
-  private stallNoticesOf(events: ReturnType<CoordStore['runEvents']>): StallNotice[] {
+  private stallNoticesOf(events: ReturnType<WatcherCoordPort['runEvents']>): StallNotice[] {
     const notices: StallNotice[] = [];
     for (const e of events) {
       const parsed = parseStallDetail(e.detail);
@@ -10330,7 +10331,7 @@ class DelegationLane {
     } catch { /* diagnostics only: a line that cannot be built is not written, and `run` settles as it would have */ }
   }
 
-  constructor(private readonly deps: Deps, private readonly census: () => DelegationCensusPass | null, private readonly lanes: LaneRunner) {}
+  constructor(private readonly deps: WatcherDeps, private readonly census: () => DelegationCensusPass | null, private readonly lanes: LaneRunner) {}
 
   /** R103 (review F3): an unlistable registry stops `tick()` before the census and before this lane's pass (its fail-shut return), so
    *  nothing is listed while it lasts: it is "no census", and marks the lane NOT READY. The first pass after it sets the ready instant. */

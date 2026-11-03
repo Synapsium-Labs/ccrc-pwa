@@ -2,17 +2,17 @@
 // The census of what the watcher and its lane files reach on the coordination store: `scan/parse.ts#storeReach`, a
 // type-checked walk (the plan's §What the measurement found, item 3). The CONTROL rows hold each rule exactly on a
 // fixture program, so a rule mutant reds one. The two real-tree rows below them hold at every step of the series. The
-// three REPORT rows print the real tree's counts and every member or key that differs from the record (the reach
-// row's is the port's own list, `coord/ports.ts#WatcherCoordMember`, since D-7579; the other two's are in
-// `watcher-store-port.data.ts`), and pass: before WP10 a census reports and never reds (spec §5.1 rule 3 rev 2). With
-// `WATCHER_PORT_STRICT=1` (the series' own red-first steps and mutation runs; CI never sets it) they assert exactly.
+// three set rows print the real tree's counts and every member or key that differs from the record (the reach row's
+// is the port's own list, `coord/ports.ts#WatcherCoordMember`, since D-7579; the other two's are in
+// `watcher-store-port.data.ts`) and assert it exactly. They only reported until D-7587 (WP10, the series' target,
+// spec §5.1 rule 3 rev 2), which flipped `FleetWatcher` onto `WatcherDeps`, emptied both whole sets and made them
+// exact pins, with two more: no port entry and no bare `CoordStore` annotation is left in scope.
 import { beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { parseFile, storeReach, type StoreReach } from '../scan/parse.js';
 import { REPO } from './walkSrc.js';
 import { WATCHER_WHOLE_HANDOFFS, WATCHER_WHOLE_REACH } from './watcher-store-port.data.js';
 
-const STRICT = process.env['WATCHER_PORT_STRICT'] === '1';
 const DATA = 'server/test/rings/watcher-store-port.data.ts';
 const PORTS_FILE = 'server/src/coord/ports.ts';
 
@@ -314,21 +314,20 @@ describe('the store census on the real tree (D-7578)', () => {
     expect(Object.keys(census.units)).toContain('watch.ts#FleetWatcher.tick');
   });
 
-  /** Prints the census's set against the record and, under WATCHER_PORT_STRICT=1, asserts it exactly. */
+  /** Prints the census's set against the record and asserts it exactly (D-7587). */
   const reportSet = (what: string, got: readonly string[], record: readonly string[], name: string,
     where: string = DATA): void => {
     const added = got.filter((m) => !record.includes(m));
     const gone = record.filter((m) => !got.includes(m));
     console.log(`${what}: ${got.length} (record ${record.length}); new: ${added.join(', ') || 'none'}; `
       + `gone: ${gone.join(', ') || 'none'}`);
-    if (STRICT) {
-      expect({ new: added, gone }, `${what}: the census differs from ${name}; a series task writes what it `
-        + `measures into ${where} (${name})`).toEqual({ new: [], gone: [] });
-    }
+    expect({ new: added, gone }, `${what}: the census differs from ${name}; a series task writes what it `
+      + `measures into ${where} (${name})`).toEqual({ new: [], gone: [] });
   };
 
-  it('report: what the watcher and its lane files reach, against WatcherCoordPort\'s members', () => {
-    const sum = (r: Record<string, number>): number => Object.values(r).reduce((a, b) => a + b, 0);
+  const sum = (r: Record<string, number>): number => Object.values(r).reduce((a, b) => a + b, 0);
+
+  it('the watcher and its lane files reach exactly WatcherCoordPort\'s members', () => {
     console.log(`port reach: ${census.portReach.length}; port members: ${census.portMembers.length}; port entries: `
       + `${sum(census.portEntries)}; bare CoordStore annotations in scope: ${sum(census.bareAnnotations)}`);
     // D-7579 (WP2): the record is the port's own member list, read by the checker. `new` is a reached member the port
@@ -346,11 +345,11 @@ describe('the store census on the real tree (D-7578)', () => {
     expect(members, `WatcherCoordMember (${PORTS_FILE}) is out of order or holds a duplicate`).toEqual(sorted);
   });
 
-  it('report: what they reach through Deps.coord\'s whole store, against WATCHER_WHOLE_REACH', () => {
+  it('they reach nothing through Deps.coord\'s whole store', () => {
     reportSet('whole reach', census.wholeReach, WATCHER_WHOLE_REACH, 'WATCHER_WHOLE_REACH');
   });
 
-  it('report: where they hand the whole store on, against WATCHER_WHOLE_HANDOFFS', () => {
+  it('they hand the whole store to nothing', () => {
     const got = census.wholeHandoffs;
     const keys = [...new Set([...Object.keys(got), ...Object.keys(WATCHER_WHOLE_HANDOFFS)])].sort();
     const differs = keys.filter((k) => got[k] !== WATCHER_WHOLE_HANDOFFS[k])
@@ -359,9 +358,19 @@ describe('the store census on the real tree (D-7578)', () => {
     console.log(`whole hand-offs: ${sites} sites in ${Object.keys(got).length} keys (record `
       + `${Object.values(WATCHER_WHOLE_HANDOFFS).reduce((a, b) => a + b, 0)} in `
       + `${Object.keys(WATCHER_WHOLE_HANDOFFS).length}); differs: ${differs.join('; ') || 'none'}`);
-    if (STRICT) {
-      expect(differs, `whole hand-offs differ from WATCHER_WHOLE_HANDOFFS (record -> census); a series task writes `
-        + `what it measures into ${DATA}`).toEqual([]);
-    }
+    expect(differs, `whole hand-offs differ from WATCHER_WHOLE_HANDOFFS (record -> census); a series task writes `
+      + `what it measures into ${DATA}`).toEqual([]);
+  });
+
+  // D-7587 (WP10): `Deps.coord`'s whole store no longer reaches the watcher, so every store value in scope is a port
+  // value (none is a whole value handed to a port-typed slot) and nothing in scope is annotated with the whole store.
+  it('no port entry is left in scope', () => {
+    expect(census.portEntries, 'a whole store value still enters the port in scope (unit -> sites)').toEqual({});
+    expect(sum(census.portEntries)).toBe(0);
+  });
+
+  it('no bare CoordStore annotation is left in scope', () => {
+    expect(census.bareAnnotations, 'a bare CoordStore annotation is left in scope (unit -> count)').toEqual({});
+    expect(sum(census.bareAnnotations)).toBe(0);
   });
 });

@@ -289,7 +289,7 @@ D-6992; a row names the test that holds it, or the ARCH ticket that finishes it)
 | 4 | done | `openRun`'s preconditions are L1 (`coord/openRun.ts`, ARCH-21, `open-run-preconditions.test.ts`); `dispatchRun` decides through `decideDispatch` (`coord/dispatchDecide.ts`, ARCH-22 (#553), `dispatch-decide.test.ts`) and acts through its deps, `sendClear` included; `closeRun` decides through `decideClose` (`coord/closeDecide.ts`, ARCH-35 (#556), `close-decide.test.ts`) and acts in `abandonRun` and `closeWorkRun` |
 | 5 | done | every writer carries the terminal guard and the pair is spelled once (single-definition's "spells the delivery terminal pair ONCE"); one guarded primitive answers `DeliveryWrite` to every caller (ARCH-15, #532, closed): `mail-deliveries-writer.test.ts` |
 | 6 | done | `FleetIO`'s `readFileMeasured`, `readdirMeasured`, `statMeasured` and kin (`io.test.ts`); the catch-to-null folds moved with ARCH-08b (#534, closed) |
-| 7 | partly | consumer-side ports landed with ARCH-03 (#541, closed): `coord/ports.ts` and the type-only `deps.ts`, held by `rings/host-imports.test.ts`; that ticket moved declarations and narrowed nothing, so the watcher still takes the whole `CoordStore` (`Deps.coord`, `deps.ts`), and no open ARCH ticket narrows it |
+| 7 | done | `rings/watcher-store-port.test.ts` (D-7578's census: the watcher and its lane files reach exactly `WatcherCoordPort`'s members, none through the whole store) and `tsc` (`FleetWatcher` takes `WatcherDeps`, D-7587); the consumer-side ports themselves (`coord/ports.ts`, the type-only `deps.ts`, ARCH-03, #541) stay held by `rings/host-imports.test.ts` |
 
 ## Enforcement — mechanisms, not intentions
 
