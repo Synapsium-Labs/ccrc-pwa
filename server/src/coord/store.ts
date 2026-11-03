@@ -3183,7 +3183,9 @@ export class CoordStore {
     if (log === undefined) return { ok: false, error: 'landing-journal-unavailable', recovery: 'restart' };
     if (this.landingFence === 'restart') return { ok: false, error: 'landing-fenced', recovery: 'restart' };
     let held: LandingJournalSnapshot | null = null;
-    let applied = false;
+    // Which database step a throw interrupted: a failed read or BEGIN is db-unavailable, a failed record db-apply, a
+    // failed COMMIT db-commit.
+    let phase: 'read' | 'apply' | 'commit' = 'read';
     // Called with the fence OPEN, a failed replay closes it (the more severe restart fence a boundary proof sets stays).
     const wasOpen = this.landingFence === null;
     const refuse = (f: LandingInfrastructureFailure): LandingJournalReplay => {
@@ -3201,11 +3203,12 @@ export class CoordStore {
           : confirmed.error === 'changed' ? 'landing-journal-changed' : 'landing-journal-unreadable' });
       }
       const suffix = hist.records.filter((r) => r.seq > hist.cursor);
-      tx(this.db, () => { suffix.forEach((r) => this.applyLandingRecord(r)); applied = true; });
+      tx(this.db, () => { phase = 'apply'; suffix.forEach((r) => this.applyLandingRecord(r)); phase = 'commit'; });
       this.landingFence = null;
       return { ok: true, applied: suffix.length, lastSeq: hist.lastSeq };
     } catch {
-      return refuse({ error: applied ? 'landing-db-commit' : 'landing-db-apply', recovery: this.landingBoundary() });
+      const error = phase === 'commit' ? 'landing-db-commit' : phase === 'apply' ? 'landing-db-apply' : 'landing-db-unavailable';
+      return refuse({ error, recovery: this.landingBoundary() });
     } finally { held?.release(); }
   }
 

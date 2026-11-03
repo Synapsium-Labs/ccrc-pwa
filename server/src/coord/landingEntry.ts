@@ -86,12 +86,14 @@ export function decideLandingWrite(f: { landing: LandingAdvance; from: RunState;
 
 const isPositiveSafe = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n > 0;
 
-/** A stored `afterIds`: a JSON array of positive safe integers, or null for anything else. */
+/** A stored `afterIds`: a JSON array of distinct positive safe integers, or null for anything else. Distinct, because a
+ *  journal record's `after` is duplicate-free (`landingJournalPolicy.ts`): a copied duplicate would append a line the
+ *  next read of the history refuses. */
 function afterIdsOf(v: unknown): number[] | null {
   if (typeof v !== 'string') return null;
   try {
     const parsed: unknown = JSON.parse(v);
-    return Array.isArray(parsed) && parsed.every(isPositiveSafe) ? parsed : null;
+    return Array.isArray(parsed) && parsed.every(isPositiveSafe) && new Set(parsed).size === parsed.length ? parsed : null;
   } catch {
     return null;
   }

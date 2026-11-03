@@ -559,6 +559,18 @@ describe('typed write failures reach HTTP with their status and word', () => {
     expect(w.journal()).toBe(before);
   });
 
+  it('a stored afterIds with a duplicate id is unreadable, so an order keeping it refuses and appends nothing', async () => {
+    // Copying such a list into the journal would append a line (`after` is duplicate-free) that the next read of the
+    // history refuses, fencing the line and refusing the next boot.
+    const w = await world();
+    rawProjection(w, 4, 2, P);
+    rawProjection(w, 5, 3, P);
+    w.db.prepare("UPDATE landing_entries SET afterIds = '[4,4]' WHERE id = 5").run();
+    const before = w.journal();
+    refused(await post(w, 'order', orderBody('lane-b', 3, { fixesMain: true })), 'landing-projection-unreadable', { recovery: 'restart' });
+    expect(w.journal()).toBe(before);
+  });
+
   it('landing-id-overflow is 409 when the allocator has no safe id left', async () => {
     const w = await world();
     rawProjection(w, Number.MAX_SAFE_INTEGER, 1, P);

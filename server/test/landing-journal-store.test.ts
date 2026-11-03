@@ -808,7 +808,8 @@ describe('failure handling around the guarded entrances (review round)', () => {
     expect(seen.released).toBe(seen.reads);
     db.exec('DELETE FROM landing_journal_cursor');
     const before = seen.reads;
-    expect(store.replayLandingJournal()).toMatchObject({ ok: false, error: 'landing-db-apply' });
+    // the cursor read failed before any record was applied: a failed read is db-unavailable, never db-apply
+    expect(store.replayLandingJournal()).toMatchObject({ ok: false, error: 'landing-db-unavailable' });
     expect(seen.reads).toBe(before + 1);
     expect(seen.released).toBe(seen.reads);
     // the write entrance reads through the same helper: fenced now, so it never reads; the invariant holds either way
@@ -833,6 +834,24 @@ describe('failure handling around the guarded entrances (review round)', () => {
     expect(back).toEqual({ ok: false, error: 'landing-db-unavailable', recovery: 'replay' });
     vi.restoreAllMocks();
     expect(runState(f, run)).toBe('merging');
+  });
+
+  it('replay-begin-is-db-unavailable: a replay whose BEGIN fails applied nothing and says so', () => {
+    const f = boot();
+    created(f, 1);
+    failOnce(f.db, 'BEGIN IMMEDIATE');
+    expect(f.store.replayLandingJournal()).toMatchObject({ ok: false, error: 'landing-db-unavailable' });
+    vi.restoreAllMocks();
+    expect(f.store.replayLandingJournal()).toMatchObject({ ok: true });
+  });
+
+  it('replay-apply-is-db-apply: a replay whose record fails to apply answers landing-db-apply', () => {
+    const f = boot();
+    created(f, 1);
+    f.db.exec('UPDATE landing_journal_cursor SET appliedSeq = 0');
+    f.db.exec("CREATE TRIGGER fixture_apply_fault BEFORE UPDATE ON landing_journal_cursor BEGIN SELECT RAISE(ABORT, 'fixture'); END");
+    expect(f.store.replayLandingJournal()).toMatchObject({ ok: false, error: 'landing-db-apply' });
+    expect(cursor(f)).toBe(0);
   });
 
   it('a plain advance whose BEGIN fails still throws (no landing contract)', () => {
