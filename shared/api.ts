@@ -12401,9 +12401,9 @@ export const LANE_NOT_READY_REASONS = ['no-lane-state', 'not-checked', 'check-fa
 export type LaneNotReadyReason = (typeof LANE_NOT_READY_REASONS)[number];
 
 /** The cap words `ccd caps` advertises for the account subs (N4; spec §13): `account-v2` is the first wave's write
- *  subs, advertised by the box task that ships them (A16); each later wave appends its own word. Accounts plan Task
- *  A12 reads `account-v2` for `connect.accountOps`. */
-export const ACCOUNT_CAPS = ['account-v2'] as const;
+ *  subs, advertised by the box task that ships them (A16); each later wave appends its own word (`account-auth-v1`, A22's
+ *  sign-in sheet, D-7849). Accounts plan Task A12 reads `account-v2` for `connect.accountOps`. */
+export const ACCOUNT_CAPS = ['account-v2', 'account-auth-v1'] as const;
 export type AccountCap = (typeof ACCOUNT_CAPS)[number];
 
 /** `GET /api/accounts`'s `connect` (spec §12.6, §13.1; D-5511), what the screen needs to offer an act and why it cannot: whether the fleet can run the account subs
@@ -12964,9 +12964,9 @@ export interface AccountRevokeAckBody { laneId: string; kind: AtProviderKind }
 // APPENDED at the foot, never inserted above: README and the frozen spec and plan corpus cite this file by line.
 
 /** The cap word the sign-in routes gate on (N4; D-7750 (10), D-7793 (1)): `account-auth-v1`, which A20's `ccd caps`
- *  advertises. HELD OUT of {@link ACCOUNT_CAPS} until the screen that runs a sign-in ships (A22): `connect.caps` names
- *  only `ACCOUNT_CAPS`' words, and the connect sheet opens on the first provider method it does not narrow, so offering
- *  this word before the sheet can run Mint or Sign in would open the Anthropic sheet on a method it cannot run. */
+ *  advertises. Held out of {@link ACCOUNT_CAPS} until the screen that runs a sign-in shipped; A22's sheet runs Mint and
+ *  Sign in, so it is `ACCOUNT_CAPS`' second word (D-7849 (1)) and `connect.caps` offers it, and the Anthropic sheet
+ *  opens on Mint, the first method of the provider table it does not narrow. */
 export const ACCOUNT_AUTH_CAP = 'account-auth-v1';
 
 /** The words the sign-in routes (`server/src/accounts/routes.ts`) answer of their own, each with its one status in

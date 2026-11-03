@@ -2,6 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
+import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { LinearConnectionView } from '../../../shared/linear';
@@ -391,6 +392,21 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     accountCredential: (id: string, body: AccountCredentialBody) =>
       postJson<AccountCredentialAnswer>(`/api/accounts/${encodeURIComponent(id)}/credential`, body),
     accountRevokeAck: (body: AccountRevokeAckBody) => postJson<{ ok: true }>('/api/accounts/revoke-ack', body),
+    /** Mint and Sign in (accounts plan Task A22, D-7849; spec §3.7, §3.8, §6.2, §6.3, §13.1): start an attempt (step-up),
+     *  read its status (polled by an open sheet only, never otherwise), send its one code (held for the request, kept
+     *  nowhere: no retry, no queue), cancel it; `set {stated}` for a minted lane's stated account; and N5's sign-out.
+     *  A refusal rejects with its `ApiError`, whose `error` word the sheet words, never its text. */
+    accountAuthStart: (id: string, body: AccountAuthStartBody) =>
+      postJson<AccountAuthStartAnswer>(`/api/accounts/${encodeURIComponent(id)}/auth/start`, body),
+    accountAuthStatus: (id: string) => getJson<AccountAuthStatusAnswer>(`/api/accounts/${encodeURIComponent(id)}/auth`),
+    accountAuthCode: (id: string, body: AccountAuthCodeBody) =>
+      postJson<{ ok: true }>(`/api/accounts/${encodeURIComponent(id)}/auth/code`, body),
+    accountAuthCancel: (id: string, body: AccountAuthCancelBody) =>
+      postJson<{ ok: true }>(`/api/accounts/${encodeURIComponent(id)}/auth/cancel`, body),
+    accountSet: (id: string, body: AccountSetBody) =>
+      postJson<AccountSwitchAnswer>(`/api/accounts/${encodeURIComponent(id)}/set`, body),
+    accountSignOut: (id: string) =>
+      postJson<AccountSignOutAnswer>(`/api/accounts/${encodeURIComponent(id)}/credential`, { signOut: true }),
     // `ProjectRow`, not a hand-written twin — the comment two lines up names
     // this exact failure mode, and F3's `readiness` is the field it predicted:
     // spelled inline here, this generic would have gone on declaring a shape
