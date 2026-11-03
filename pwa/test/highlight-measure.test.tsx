@@ -216,6 +216,36 @@ describe('R19: Stop during item 8', () => {
   }, 60_000);
 });
 
+describe('R19: item 1 times each distinct block once', () => {
+  it('a block the corpus repeats is counted as a repeat and left out of the warm times and the slowest list', async () => {
+    // DOC is read twice, so its two blocks are each seen twice. The first sight costs 10 ticks, a later one 500.
+    const seen: string[] = [];
+    const { deps, advance } = fakes();
+    // The cost lands between the post and the answer, where `timed` measures it.
+    const run: MeasureDeps = {
+      ...deps,
+      highlighter: (ms, boot) => {
+        const h = deps.highlighter(ms, boot);
+        return {
+          ...h,
+          highlight: async (r, o) => {
+            const out = await h.highlight(r, o);
+            if (r.code === SECRET) { seen.push(r.code); advance(seen.length === 1 ? 10 : 500); }
+            return out;
+          },
+        };
+      },
+    };
+    const r = await runHighlightMeasure(run, () => undefined);
+    const ts = r.item1.byGrammar.find((g) => g.grammar === 'typescript')!;
+    expect(ts).toMatchObject({ blocks: 2, repeats: 1 });
+    expect(ts.warmMs.max).toBeLessThan(100);
+    expect(r.item1.byGrammar.find((g) => g.grammar === 'json')).toMatchObject({ blocks: 2, repeats: 1 });
+    expect(r.item1.slowest.filter((s) => s.grammar === 'typescript').length).toBe(1);
+    expect(r.item1.slowest.every((s) => s.ms < 100)).toBe(true);
+  }, 60_000);
+});
+
 describe('R19: the page', () => {
   it('Start runs the measurement and shows its result as text, which Select result selects whole', async () => {
     const { deps } = fakes();

@@ -7,7 +7,8 @@
 // no clipboard (M7.12). The result names no project, path, file or code: a block is its grammar, its length, an
 // ordinal. Items, as section 7.8 numbers them:
 //   1. every block of the corpus, one per job, on a warm highlighter (MEASURE_DEADLINE_MS, no ceilings, none of part
-//      1's bounds): time by grammar; then each grammar's largest block first on a fresh highlighter (cold);
+//      1's bounds): time by grammar, each distinct block once (a repeat is the worker's cache hit: counted, not timed);
+//      then each grammar's largest block first on a fresh highlighter (cold);
 //   2. boot: a fresh highlighter's first call (which spawns) to its post (after `{ready}`): the page's first, cold;
 //      the cold-block highlighters of item 1, after a respawn;
 //   3. HTML characters per input character, by grammar, on the corpus (item 1's figures) and, on a highlighter of the
@@ -69,7 +70,11 @@ export interface MeasureDeps {
 
 export interface GrammarFigures {
   readonly grammar: string;
+  /** Every block of the grammar the corpus holds, repeats included. */
   readonly blocks: number;
+  /** Of those, the blocks whose (grammar name, text) an earlier block had: the worker answers them from its cache, so
+   *  `warmMs` and `slowest` count the other `blocks - repeats`. */
+  readonly repeats: number;
   readonly chars: number;
   readonly warmMs: { readonly p50: number; readonly p95: number; readonly max: number };
   readonly cold: { readonly chars: number; readonly ms: number } | null;
@@ -227,9 +232,11 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
     if (r.outcome.kind !== 'html') throw new Error(`The highlight worker did not answer (${r.outcome.kind}).`);
     if (coldMs === null) coldMs = round(r.postedAt - created);
   }
-  const stats = new Map<string, { ms: number[]; ratios: number[]; chars: number; notHtml: number; overCap: number; largest: string }>();
+  const stats = new Map<string, { blocks: number; repeats: number; ms: number[]; ratios: number[]; chars: number; notHtml: number; overCap: number; largest: string }>();
   const slowest: { grammar: string; chars: number; ms: number }[] = [];
   const kept: { raw: string; html: string }[] = [];
+  // The worker's cache is keyed by mode, language and text, so a block seen again is answered from it: timed once.
+  const seen = new Set<string>();
   let keptChars = 0;
   let blocks = 0;
   let page: Page | null = null;
@@ -242,10 +249,13 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
       blocks += 1;
       docCount += 1;
       codeChars += b.raw.length;
-      const s = stats.get(grammar) ?? { ms: [], ratios: [], chars: 0, notHtml: 0, overCap: 0, largest: '' };
+      const s = stats.get(grammar) ?? { blocks: 0, repeats: 0, ms: [], ratios: [], chars: 0, notHtml: 0, overCap: 0, largest: '' };
       stats.set(grammar, s);
       const r = await timed(deps, warm, b.lang, b.raw);
-      s.ms.push(r.ms);
+      const first = !seen.has(`${b.lang}\0${b.raw}`);
+      seen.add(`${b.lang}\0${b.raw}`);
+      s.blocks += 1;
+      if (first) s.ms.push(r.ms); else s.repeats += 1;
       s.chars += b.raw.length;
       if (b.raw.length > s.largest.length) s.largest = b.raw;
       const htmlChars = htmlCharsOf(r.outcome);
@@ -259,9 +269,11 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
         s.notHtml += 1;
         if (r.outcome.kind === 'too-large') s.overCap += 1;
       }
-      slowest.push({ grammar, chars: b.raw.length, ms: r.ms });
-      slowest.sort((x, y) => y.ms - x.ms);
-      slowest.length = Math.min(slowest.length, 20);
+      if (first) {
+        slowest.push({ grammar, chars: b.raw.length, ms: r.ms });
+        slowest.sort((x, y) => y.ms - x.ms);
+        slowest.length = Math.min(slowest.length, 20);
+      }
     }
     if (utf8ByteLength(text) <= DOCS_RENDER_GATE_BYTES && (page === null || codeChars > page.codeChars)) {
       page = { text, codeChars, blocks: docCount, link };
@@ -279,7 +291,7 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
     cold.set(grammar, { chars: s.largest.length, ms: r.ms });
   }
   const byGrammar: GrammarFigures[] = [...stats].map(([grammar, s]) => ({
-    grammar, blocks: s.ms.length, chars: s.chars,
+    grammar, blocks: s.blocks, repeats: s.repeats, chars: s.chars,
     warmMs: { p50: pct(s.ms, 0.5), p95: pct(s.ms, 0.95), max: pct(s.ms, 1) },
     cold: cold.get(grammar) ?? null,
     htmlRatio: { p95: pct(s.ratios, 0.95), max: pct(s.ratios, 1) },
