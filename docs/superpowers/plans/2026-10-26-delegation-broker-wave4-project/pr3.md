@@ -1,11 +1,15 @@
 # Wave 4, PR3: journal compaction (task note)
 
 This note is PR3's record for the wave's ledger pull request (Global Constraints, "Ledger edits"). The coordinator folds it into the
-plan and the programme ledger. The only authorized top-level plan edits in this PR are D-7869's definition placement and the
-pointer clause recording D-7015 and D-7016 as round-1 review departures; this PR does not edit the programme ledger.
+plan and the programme ledger. The authorized top-level plan edits in this PR are D-7869's and D-7878's definition placements,
+the pointer clause recording D-7015 and D-7016 as round-1 review departures, and fix-round-2 ruling 14389's explanatory rollback
+corrections (the arming summary and Q3). D-7022's definition stays unchanged for the coordinator's fold. This PR does not edit the programme ledger.
 
 ## Status
 
+- **Review fix round 2 (2026-11-03), ruling 14389:** F1–F3 and A1–A6 are scoped for the final review. Implementation and targeted
+  proofs are in progress below; no new-head full gates, commit, push or exact-head fast CI are claimed yet. Round 1's results
+  remain historical. The full server suite remains unrun locally and soaks remain waived, not passed.
 - **Review fix round 1 (2026-11-03), PR #2191:** published head `dbedeb85c` has its original exact-head fast CI GREEN. The
   watcher-port correction and delegation-method census correction are committed and verified; their historical reds remain below.
   The current round addresses F1–F4, A1 and A3–A5 from review 1384. Its 24 required F3 mutants and the separate retainedFrom
@@ -59,6 +63,8 @@ pointer clause recording D-7015 and D-7016 as round-1 review departures; this PR
     are zero without the mutation. No independent clone counter is claimed.
   - Phase B: startup reconstruction returns before the compaction-local readiness guard. W4-CM28 leaves that startup row green;
     a new real-lane row recovers into reconstruction during upkeep, at the compaction boundary, and reds the forbidden call.
+  - Review round 1: CM10's journal-first reorder reds C13's actual-J overlap assertion, not the anticipated sibling
+    `held-evidence-missing` refusal. Coordinator ruling 14306 accepted that measured oracle; the sibling refusal was not measured.
   - Review round 1: W4-C19 was only an assertion label inside `expectRetainedRows`, called by C17 and C30, not a selectable test.
     Coordinator ruling 14306 authorized one independently selectable C19 test, leaving that helper and C17/C30 unchanged. The
     added test checks carried evidence after compaction and after the actual open's step-0 repair. It first passed unchanged;
@@ -99,12 +105,14 @@ D-7869 is defined in the plan's Deviations found, not here: the floor guard read
 
 ### Conditional rollback (F2)
 
-D-7022's rollback is conditional, not a new record-grammar refusal. An older reader ignores the carried file. If a lease's creating
-`lease-created` record was cut, its journal-only recovery refuses `lease-proof` and the lane reconstructs. When no such record was
-cut, it can recover ready without carried records, and its repair can wipe and replay only the journal, dropping carried evidence
-from SQLite. Returning to this PR's build reads the carried file again and repairs that evidence into SQLite. The pre-compaction
-snapshot remains the restore point. The two W4-C30b journal-only stand-ins characterize both outcomes and the return path: outer
-exit 0, two passed, 73 skipped. They do not execute an old binary, and are not claimed as a RED-first behavior change.
+D-7022's rollback is conditional, not a new record-grammar refusal. An older reader ignores the carried file. Its journal-only
+recovery can refuse `lease-proof` for a cut `lease-created` record, or `held-evidence-missing` for a cut identity-candidate hold's
+first record; otherwise it can recover ready on the journal alone, and journal-only repair can drop carried evidence from SQLite.
+The refusal arms reconstruct. Returning to this PR's build reads the carried file again and repairs that evidence into SQLite.
+The pre-compaction snapshot remains the restore point when restored with this build's helper. Historically the two W4-C30b
+journal-only stand-ins covered the lease-proof and ready arms and return path: outer exit 0, two passed, 73 skipped. Fix round 2
+adds C30c for the third arm, an old bare identity candidate whose first record is carried only, then successful return to PR3.
+These are characterizations, do not execute an old binary, and are not claimed as RED-first behavior changes.
 
 ### Repair, snapshot parity and actual-J oracles (F4, A1, A4)
 
@@ -139,14 +147,14 @@ notice occurred. These 24 required F3 measurements are not a fresh full compacti
 | --- | --- | --- |
 | CM4 | C6 K1 | Open-lease/open-lineage correlation reason absent |
 | CM5 | C6 K4 | Active Workflow launch reason absent |
-| CM6 | C7 raw-lease window | Inclusive 10:24 boundary absent |
+| CM6: `delegation-compaction.ts`, K5's `return w !== undefined && t <= w[1];` → `return w !== undefined && t < w[1];` | C7 raw-lease window | Inclusive 10:24 boundary absent |
 | CM7 | C8 straddling pairs | Both carried Pres absent |
 | CM8 | C5 | Reconstructing planner enabled instead of disabled |
 | CM9 | C4b | Seven-day floor instead of ten-day floor |
 | CM10 | C13 | Actual-J overlap assertion false; no sibling refusal claimed |
-| CM11 | C15 | Short copy resolved instead of rejecting |
+| CM11: `delegation-checkpoint.ts`, `copySuffixLocked`'s `written !== size - offset` short-copy guard removed (journal, not carried) | C15 | Short copy resolved instead of rejecting |
 | CM12 | C11, journal-rename:before | Event IDs 212 instead of unchanged 474 |
-| CM14 | C12, journal-rename:after | Applier failure null |
+| CM14: `delegation-checkpoint.ts`, catch the `journal-rename:after` hook's error, set `renamed = false`, then rethrow | C12, journal-rename:after | Applier failure null |
 | CM15 | C16, below J past applied | `sequence-gap` instead of `carried-past-applied` |
 | CM17 | Added selectable C19 | Carried evidence rows deleted by contiguous delete through S |
 | CM18 | C18 | Actual-open step-0 repair report mismatch |
@@ -159,7 +167,7 @@ notice occurred. These 24 required F3 measurements are not a fresh full compacti
 | CM32 | C7b | Raw lease without activity loses its own window |
 | CM33 | C21 | Ended worker retired while its run is kept |
 | CM34 | C30 | Journal-only repair has 203 rows instead of retained evidence's 212 |
-| CM35 | C16, different overlap bytes | No `carried-past-journal` refusal |
+| CM35: `delegation-journal.ts`, overlap validation's `copy.length !== line.bytes.length` OR `!copy.every((b, i) => b === line.bytes[i])` → `false` | C16, different overlap bytes | No `carried-past-journal` refusal |
 | CM36 | C10 | Live Workflow launch map has two entries versus rebuilt one's one |
 
 The selectable C19 was first GREEN on current code (one passed, 75 skipped). CM17 then failed its own carried-row assertion;
@@ -177,6 +185,45 @@ shards (361 related, 127 untraced, 193 guards; overlapping reasons). This proves
 The older gates below keep their original bases and failures. Fresh round-1 full gates and exact-head fast CI belong to the
 new-head handoff, not to these targeted mutation results. No full local server suite, soak, live-data measurement, enqueue or
 merge is claimed.
+
+## Review fix round 2, 2026-11-03 (in progress)
+
+- **F1/F2:** the code comment, this note, spec and authorized plan explanations name all three old-reader outcomes: `lease-proof`
+  for a cut lease-created record, `held-evidence-missing` for a cut identity-candidate hold's first record, or ready on the journal
+  alone. C30c uses a bare candidate older than the floor, proves its first record is carried only, observes the hold refusal with
+  journal-only inputs and successful recovery/SQLite evidence on return to PR3. It passed with the two new guard rows (3 passed,
+  76 skipped); no old binary or RED-first behavior change is claimed. D-7022's definition stays untouched for the coordinator's fold.
+- **F3:** if a compaction is made at least ten days after the snapshot, then an older build's helper restores that snapshot, then
+  the operator returns to PR3, the leftover `delegation-carried.log` can refuse `carried-past-journal`: a carried sequence can be
+  beyond the restored journal's last sequence or have different bytes there. Restore with PR3's own helper, or move
+  `delegation-carried.log` aside before returning to PR3. No recovery behavior changes in this round.
+- **A1:** one real event-loop turn replaces two insufficient microtask hops. Removing only the actual-work drain now fails both
+  named `durability must not close ahead of the held producer` assertions (outer exit 1, 2 failed); the later producer rejection is
+  still recorded, not suppressed. SHA-identical saved-copy restoration and `cmp` 0 precede the restored GREEN (2 passed).
+- **A2:** C14b holds an admitted compaction at `compact-plan:after` and requires close after compaction. The issued queue-drain
+  mutant failed only C14b on completion order (`closed, compacted` versus `compacted, closed`), outer exit 1. Its early pending-close
+  assertion did not fire before the async writer close finished, so the private verifier's stricter assertion-message check marked
+  it invalid and stopped the sequence. Ruling 14404 accepts that completion-order RED, authorizes clearing only the stopped latch
+  and preserves the row unchanged. Restored C14b passed alone (1 passed, 78 skipped). The outer-drain-only mutant then failed
+  only its own `terminal close must wait for the outer sweep/emit tail` assertion; restored row passed (1 passed, 17 skipped).
+  Removing only the carried-write size check failed C15b because compaction resolved instead of rejecting `short-copy`; restored
+  row passed (1 passed, 78 skipped). All three REDs exited 1, restored GREENs exited 0, with no queue, timeout or import error.
+  Every saved-copy restoration was SHA-identical with `cmp` 0: watch SHA-256
+  `ec83b656ba1f983ccf55f4921f42bb96dacf6203f09c6baed6a872ab7fe4c9b2`, checkpoint SHA-256
+  `fd99be3c1bee34b2619053a1e705d9f534e564f4570d7605186b9eb0b0b0db3d`. A1 uses the same watch baseline. These targeted
+  measurements are not full-file gates. The admission guards back each other up; no independent per-admission mutant proof is
+  claimed. CM6/CM11/CM14/CM35's exact sites are spelled in the table above.
+- **A3:** distinguish the timer's abort from close's abort. The close row first failed its budget-warning and readiness assertions;
+  the genuine budget-cut row passed. The timer-origin flag preserves both genuine-cut effects without applying them to a close.
+- **A4:** sampler stops now run in `finally` around durability close. The row uses real writer close followed by an injected
+  rejection, observes both the real owned sampler and seam stop, and first failed both stop assertions. After A3/A4's fixes the
+  entire lane file passed 18. This is an intermediate full-file run, not the new-head final gate.
+- **A5/A6:** removeTemp's doc names the pre-carried-rename caller; D-7013 includes CM10; the sweep doc attaches to the method again;
+  both close docs explicitly say production `server.ts` onClose does not call/await `closeDelegation` today. The scope paragraph
+  names both D-7869 and D-7878, and the new head must carry the corrected Ledger-Edit reason. Ruling 14389 confirms the applier
+  admission guard inside the close-latch consent. Round 1's A2/A6 remain deferred to the fold.
+
+Rider (coordinator rulings 14297 and fix round 2): an old-build-visible mechanism so an older build always refuses after a compaction needs a record-grammar change, so it is not PR3's; with it, the production shutdown awaiting closeDelegation, and recovery's handling of a stale carried file after an older helper's restore.
 
 ## Phase B verification
 

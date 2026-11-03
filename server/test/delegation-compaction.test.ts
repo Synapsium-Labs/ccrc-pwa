@@ -411,7 +411,7 @@ interface Rig {
   store: CoordStore;
   clock: { ms: number };
   /** `fault`: throw at `<edge>:<when>` once. `hold`: await this promise at `<edge>:<when>`. */
-  ctl: { fault: string | null; hold: { at: string; gate: Promise<void> } | null };
+  ctl: { fault: string | null; hold: { at: string; gate: Promise<void>; entered?: () => void } | null };
   log: string[];
   deps: (over?: Partial<DelegationDurabilityDeps>) => DelegationDurabilityDeps;
   open: (over?: Partial<DelegationDurabilityDeps>) => Promise<DelegationDurability>;
@@ -442,7 +442,7 @@ function rig(opts: { dir?: string } = {}): Rig {
   let n = 0;
   const onEdge = async (edge: DelegationDurabilityEdge, when: 'before' | 'after'): Promise<void> => {
     const at = `${edge}:${when}`;
-    if (ctl.hold !== null && ctl.hold.at === at) { const g = ctl.hold.gate; ctl.hold = null; await g; }
+    if (ctl.hold !== null && ctl.hold.at === at) { const held = ctl.hold; ctl.hold = null; held.entered?.(); await held.gate; }
     if (ctl.fault === at) { ctl.fault = null; throw new InjectedFault(`injected at ${at}`); }
   };
   const deps = (over: Partial<DelegationDurabilityDeps> = {}): DelegationDurabilityDeps => ({
@@ -764,6 +764,59 @@ describe('Task 3.3: compactJournal, the crash-safe rewrite inside the serial que
     expect(dur.state().phase).toBe('ready');
   });
 
+  it('W4-C14b: terminal durability close drains compaction already admitted to the queue', async () => {
+    const { r, dur } = await fixture();
+    let entered!: () => void;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    r.ctl.hold = { at: 'compact-plan:after', gate, entered };
+    const order: string[] = [];
+    const compacting = dur.compactJournal(NOW, DELEGATION_RETENTION_FLOOR_MS).then((out) => { order.push('compacted'); return out; });
+    await held;
+    let closed = false;
+    const closing = dur.close().then(() => { closed = true; order.push('closed'); });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect.soft(closed, 'terminal durability close must wait for the admitted queue').toBe(false);
+    } finally {
+      release();
+      await Promise.allSettled([compacting, closing]);
+    }
+    expect((await compacting).kind).toBe('compacted');
+    await closing;
+    expect(order).toEqual(['compacted', 'closed']);
+    expect((await recoverDelegationFromFiles(nodeDelegationFilePort, r.dir)).failure).toBeNull();
+    await expect(apply(dur, [sessionStart(NOW + MIN)])).rejects.toThrow('closed');
+  });
+
+  it('W4-C15b: a short carried write refuses short-copy before either rename, removes its temp and remains ready', async () => {
+    const { r, dur } = await fixture();
+    const journal = journalOf(r.dir);
+    const carried = carriedOf(r.dir);
+    await dur.close();
+    const shortPort: DelegationFilePort = {
+      ...quickPort,
+      createTemp: async (p) => {
+        const h = await quickPort.createTemp(p);
+        if (!p.endsWith(`${DELEGATION_CARRIED_FILE}.tmp`)) return h;
+        let first = true;
+        return { write: async (b) => { if (first) { first = false; return h.write(b.subarray(0, b.length - 1)); } return h.write(b); }, sync: () => h.sync(), close: () => h.close() };
+      },
+    };
+    const renaming = vi.spyOn(shortPort, 'rename'); // Call through; neither live file may be replaced on this pre-rename failure.
+    const d = await r.open({ port: shortPort });
+    await expect(d.compactJournal(NOW, DELEGATION_RETENTION_FLOOR_MS)).rejects.toMatchObject({ code: 'short-copy' });
+    expect(renaming).not.toHaveBeenCalled();
+    expect(journalOf(r.dir)).toEqual(journal);
+    expect(carriedOf(r.dir)).toEqual(carried);
+    expect(existsSync(path.join(r.dir, `${DELEGATION_CARRIED_FILE}.tmp`))).toBe(false);
+    expect(d.failure()).toBeNull();
+    expect(d.state().phase).toBe('ready');
+    await apply(d, [sessionStart(NOW + MIN)]);
+    expect((await d.recover()).failure).toBeNull();
+  });
+
   it('W4-C15: a short copy refuses short-copy: the journal byte-identical, recovery required after the carried rename (D-7015)', async () => {
     const { r, dur } = await fixture();
     const journal = journalOf(r.dir);
@@ -993,6 +1046,35 @@ describe('Task 3.4: delegation_events retention, and a repair that deletes inste
     expect(returned.failure()).toBeNull();
     expect(countRows(r.db)).toBe(evidenceOf(returned).evidence.total);
     expect(carried.filter((record) => record.entry.kind === 'evidence-accepted').every((record) => rowSequences(r.db).includes(record.sequence))).toBe(true);
+  });
+
+  it('W4-C30c: journal-only rollback refuses held-evidence-missing for an old bare identity candidate; return to PR3 recovers', async () => {
+    const r = rig();
+    const dur = await r.open();
+    const candidate = bareTool(D0, 'agent-rollback-candidate');
+    await apply(dur, [candidate, ...Array.from({ length: 20 }, (_, i) => sessionStart(D0 + MIN + i * 1000))]);
+    await apply(dur, Array.from({ length: 10 }, (_, i) => sessionStart(D0 + 11 * DAY + i * MIN)));
+    const first = recordsOf(journalOf(r.dir)).find((record) => record.entry.kind === 'evidence-accepted' && record.entry.event.eventId === candidate.eventId)!;
+    expect(dur.state().checkpoint.pruningHolds).toContainEqual({ journalId: first.journalId, reason: 'identity-candidate', ownerId: encodedOf('agent', 'agent-rollback-candidate') });
+    expect((await dur.compactJournal(NOW, DELEGATION_RETENTION_FLOOR_MS)).kind).toBe('compacted');
+    const carried = linesOf(carriedOf(r.dir));
+    expect(carried.some((record) => record.journalId === first.journalId)).toBe(true);
+    expect(recordsOf(journalOf(r.dir)).some((record) => record.journalId === first.journalId)).toBe(false);
+    await dur.close();
+    const saved = path.join(r.dir, 'carried.saved');
+    renameSync(path.join(r.dir, DELEGATION_CARRIED_FILE), saved);
+    try {
+      const old = await recoverDelegationFromFiles(nodeDelegationFilePort, r.dir);
+      expect(old.failure?.code).toBe('held-evidence-missing');
+      expect(old.state.phase).toBe('reconstructing');
+    } finally {
+      renameSync(saved, path.join(r.dir, DELEGATION_CARRIED_FILE));
+    }
+    const returned = await r.open();
+    expect(returned.failure()).toBeNull();
+    expect(returned.state().phase).toBe('ready');
+    expect(countRows(r.db)).toBe(evidenceOf(returned).evidence.total);
+    expect(rowSequences(r.db)).toContain(first.sequence);
   });
 
   it('W4-C30: after a compaction a heal replays the carried evidence, and so does a wipe; a second full repair wipes nothing', async () => {

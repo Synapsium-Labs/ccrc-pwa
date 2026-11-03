@@ -151,15 +151,15 @@ describe('D-7878: terminal delegation shutdown', () => {
     let closed = false;
     const closing = w.watcher.closeDelegation().then(() => { closed = true; });
     try {
-      await Promise.resolve();
-      await Promise.resolve();
+      await new Promise<void>((resolve) => setImmediate(resolve)); // Exhaust the close continuation, not just two microtask hops.
       expect.soft(closingDurable, 'durability must not close ahead of the held producer').not.toHaveBeenCalled();
       expect.soft(closed, 'terminal close must remain pending').toBe(false);
     } finally {
       release();
-      await actual;
-      await closing;
+      await Promise.allSettled([actual, closing]);
     }
+    await actual;
+    await closing;
     expect(closingDurable).toHaveBeenCalledTimes(1);
     const lines = warn.mock.calls.map((c) => String(c[0]));
     expect(lines.some((line) => line.startsWith('ccrc-server: delegation pass slow:'))).toBe(true);
@@ -176,6 +176,98 @@ describe('D-7878: terminal delegation shutdown', () => {
     expect(d.commitMeasures().writes).toBe(writes);
     expect(readFileSync(path.join(w.home, '.ccrc', DELEGATION_CHECKPOINT_FILE))).toEqual(checkpoint);
     expect(warn.mock.calls).toHaveLength(logCount);
+  });
+
+  it('waits for the outer sweep result and its real emit tail before terminal close', async () => {
+    const w = world();
+    const lane = (w.watcher as unknown as { delegationLane(): { sweep(...args: unknown[]): Promise<boolean> } }).delegationLane();
+    const original = lane.sweep.bind(lane);
+    let entered!: () => void;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(lane, 'sweep').mockImplementation(async (...args) => {
+      const ran = await original(...args); // The real pass has settled; only the outer result/emit continuation remains.
+      entered();
+      await gate;
+      return ran;
+    });
+    const sweeping = pass(w, AT + MIN);
+    await held;
+    const emitted = vi.spyOn(w.coord, 'delegationRunStamps'); // Call through to the real SQLite read in emitDelegation.
+    let closed = false;
+    const closing = w.watcher.closeDelegation().then(() => { closed = true; });
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect.soft(closed, 'terminal close must wait for the outer sweep/emit tail').toBe(false);
+      expect(emitted).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await Promise.allSettled([sweeping, closing]);
+    }
+    await sweeping;
+    await closing;
+    expect(emitted).toHaveBeenCalledTimes(1);
+    const emittedCount = emitted.mock.calls.length;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(emitted).toHaveBeenCalledTimes(emittedCount);
+  });
+
+  it.each(['close', 'budget'] as const)('%s abort: only a real budget cut warns and marks the lane not ready', async (abort) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const warn = vi.spyOn(console, 'warn');
+    const w = world();
+    await pass(w, AT + MIN);
+    const lane = (w.watcher as unknown as { delegationLane(): { applier(): Promise<DelegationDurability | null>; notReady: boolean } }).delegationLane();
+    expect(lane.notReady).toBe(false);
+    const original = lane.applier.bind(lane);
+    let entered!: () => void;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(lane, 'applier').mockImplementation(async () => {
+      const durable = await original();
+      entered();
+      await gate;
+      return durable;
+    });
+    const sweeping = pass(w, AT + 2 * MIN);
+    await held;
+    let closing: Promise<void> | undefined;
+    try {
+      if (abort === 'close') closing = w.watcher.closeDelegation();
+      else await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);
+      await sweeping;
+      expect.soft(warn.mock.calls.filter((c) => String(c[0]).includes('outran its')), 'only a timeout writes the budget-cut warning')
+        .toHaveLength(abort === 'budget' ? 1 : 0);
+      expect.soft(lane.notReady, 'a terminal close does not change readiness').toBe(abort === 'budget');
+    } finally {
+      release();
+      await (closing ?? w.watcher.closeDelegation());
+    }
+    expect(lane.notReady).toBe(abort === 'budget');
+  });
+
+  it('stops both stall samplers even when the real writer close rejects', async () => {
+    const w = world();
+    await pass(w, AT + MIN); // Starts the lane-owned production sampler.
+    const lane = (w.watcher as unknown as { delegationLane(): { sampler: { stop(): void } } }).delegationLane();
+    const ownedStop = vi.spyOn(lane.sampler, 'stop');
+    const seamStop = vi.fn();
+    w.watcher.setDelegationSeams({ loopTurn: async () => {}, loopDelay: { startPass() {}, stretch: () => 0, pass: () => ({ max: 0, p99: 0 }), stop: seamStop } });
+    const d = (await w.watcher.delegationApplier())!;
+    const writer = (d as unknown as { writer: { close(): Promise<void> } }).writer;
+    const close = writer.close.bind(writer);
+    vi.spyOn(writer, 'close').mockImplementation(async () => { await close(); throw new Error('writer close refused (fixture)'); });
+    try {
+      await expect(w.watcher.closeDelegation()).rejects.toThrow('writer close refused (fixture)');
+      expect.soft(ownedStop, 'the owned sampler stops after a writer-close rejection').toHaveBeenCalledTimes(1);
+      expect.soft(seamStop, 'the seam sampler stops after a writer-close rejection').toHaveBeenCalledTimes(1);
+    } finally {
+      lane.sampler.stop(); // Release the real interval even against the pre-fix close; do not hide either assertion above.
+      worlds.splice(worlds.indexOf(w), 1);
+      w.coord.db.close();
+    }
   });
 });
 

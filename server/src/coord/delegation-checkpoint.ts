@@ -2571,9 +2571,10 @@ export class DelegationDurability {
    * the carried rename is attempted, a failure fails the applier: a later compaction can drop old carried evidence, so the live indexes may
    * be ahead of disk even while the journal is byte-identical. Recovery over the files is the one source of truth. A SQLite failure at
    * `events-delete` fails nothing: it marks the projection stale, and the repair's step 0 finishes the job.
-   * D-7022 rollback is conditional, not a grammar refusal: an older reader ignores the carried file. A cut lease-created record makes
-   * it refuse `lease-proof`; without one it can recover ready on the journal alone, and its repair can wipe and replay that journal alone.
-   * On return this build reads the carried evidence again and repairs it into SQLite. The pre-compaction snapshot remains the restore point.
+   * D-7022 rollback is conditional, not a grammar refusal: an older reader ignores the carried file. A cut lease-created record can
+   * refuse `lease-proof`, or a cut identity-candidate hold's first record can refuse `held-evidence-missing`; otherwise recovery can be
+   * ready on the journal alone, and its repair can wipe and replay that journal alone. On return this build reads the carried evidence
+   * again and repairs it into SQLite. The pre-compaction snapshot remains the restore point when restored with this build's helper.
    */
   compactJournal(nowMs: number, floorMs: number): Promise<DelegationCompactionOutcome> {
     return this.enqueue(async () => {
@@ -2939,7 +2940,8 @@ export class DelegationDurability {
     }
   }
 
-  /** D-7878: latch before draining the admitted queue; a late producer must not reopen the journal writer. */
+  /** D-7878: latch before draining the admitted queue; a late producer must not reopen the journal writer.
+   *  Production `server.ts` onClose does not await the watcher's closeDelegation today; that integration remains a rider. */
   close(): Promise<void> {
     return this.closing ??= this.queue.then(() => this.writer.close());
   }

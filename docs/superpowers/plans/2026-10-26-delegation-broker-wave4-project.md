@@ -38,7 +38,7 @@ These rulings bind this plan. Each is defined in "## Deviations found".
 - **D-7001: the checkpoint is bounded by retiring ended rows behind the compaction cut point S.** A row is retired only when every journal record naming it is at or below S and no lease, lineage edge or hold names it. This amends wave-3 decision O4 beyond D-6268, which retired zero-delta Bash rows only. Implemented by PR3 (Task 3.5).
 - **D-7002: the programme is reshaped.** Waves 6 and 7 (spec stages 5 and 6: lease audit and clean) are dropped. The orphan-tree lane (#1252) owns the cleanup of these trees and must skip an adopted lease; that skip is wave 5's to build. Wave 4's gate is 2 days with no displayed row the operator flags as wrong; wave 5's gate is 3 days (both amend spec §7's "7 days"). The frame's `backlog` member is dropped, because every wave-4 lease is `not-due` and it could only read 0 (amends spec §5.8).
 - **D-7021: compaction carries the records still needed.** On `main` leases are never released, so a pure prefix cut frees nearly nothing. The cut point S is set by the floor and the checkpoint anchor; every record at or below S that a carry rule still needs is copied verbatim into a second durable file, `delegation-carried.log`, and C1 retires a row only when no retained record names it. Implemented by PR3 (Tasks 3.2 to 3.6).
-- **D-7022: compaction is armed on landing.** The daily trigger runs from the first ready pass after PR3 is live; there is no marker. The operator accepted the rollback cost: after a compaction, a build without PR3 leaves the delegation lane `reconstructing` until a pre-compaction snapshot is restored (the snapshot `ccrc update` takes before installing PR3 is one).
+- **D-7022: compaction is armed on landing.** The daily trigger runs from the first ready pass after PR3 is live; there is no marker. The rollback cost is conditional: an older build ignores carried evidence and can refuse `lease-proof` for a cut `lease-created` record, or `held-evidence-missing` for a cut identity-candidate hold's first record; otherwise it can recover ready on the journal alone, and journal-only repair can discard carried evidence from SQLite. Returning to PR3 reads and repairs carried evidence. A pre-compaction snapshot is a restore point (the snapshot `ccrc update` takes before installing PR3 is one).
 - **D-7023: the frame's shape.** The departures from spec §5.8 that PR1 lists ("Shape decisions") are accepted, with D-6999's implementation note.
 - **D-7024: C1 retires ended activities only.** Sessions and attempts are not retired in wave 4; they go to the rider.
 - **Lean scope.** Wave 4 is exactly four pull requests:
@@ -1212,10 +1212,11 @@ The operator ruled each question below on 2026-10-26; the text is the ruled desi
   what the gate's rows show.
 
 **Q3: rollback, and arming (ruled: D-7022, armed on landing).**
-- A build without PR3 ignores `delegation-carried.log`, so after a compaction its recovery refuses `held-evidence-missing` and
-  the delegation lane stays `reconstructing`, until a snapshot restore. That includes the unattended `ccrc-update-watchdog`
-  rollback and a `ccrc rollback` to a kept version. Only the delegation lane is affected; the server runs, and PR1 withdraws
-  the frame (W4-W8), so the PWA reads "unavailable".
+- A build without PR3 ignores `delegation-carried.log`. After compaction, recovery can refuse `lease-proof` for a cut
+  `lease-created` record, or `held-evidence-missing` for a cut identity-candidate hold's first record; otherwise it can recover
+  ready on the journal alone, and journal-only repair can discard carried evidence from SQLite. This includes an unattended
+  `ccrc-update-watchdog` rollback or `ccrc rollback` to a kept version. In the refusal arms only the delegation lane reconstructs:
+  the server runs, PR1 withdraws the frame (W4-W8), and the PWA reads "unavailable". Returning to PR3 reads and repairs carried evidence.
 - The way back is a restore of a pre-compaction snapshot (Task 3.6), which discards everything the lane recorded since that
   snapshot. The PR body says both.
 - **Ruled (D-7022): PR3 ships ARMED.** The daily trigger (Task 3.7) runs from the first ready pass after the build is live,

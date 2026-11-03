@@ -804,7 +804,7 @@ export interface DelegationFilePort {
   listDir(dir: string): Promise<string[] | null>;
   /** A file's size and modification time, or null when it does not exist (a proven ENOENT); any other failure throws. */
   statFile(path: string): Promise<{ size: number; mtimeMs: number } | null>;
-  /** Removes one of the compaction's two temp files (`<carried>.tmp`, `<journal>.tmp`) after a failure before the journal's rename, best
+  /** Removes one of the compaction's two temp files (`<carried>.tmp`, `<journal>.tmp`) after a failure before the carried file's rename, best
    *  effort; an absent file is not an error. It refuses any name that is not a `.tmp`, and its one caller passes those two names only. */
   removeTemp(path: string): Promise<void>;
 }

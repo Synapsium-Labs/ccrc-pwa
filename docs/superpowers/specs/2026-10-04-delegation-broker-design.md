@@ -559,9 +559,12 @@ hooks never delete; no session invokes these verbs and no skill names them.
   before the journal, so a crash between the two leaves a valid retained set; every reader of the retained
   set reads the carried file first. `delegation_events` follows the journal: its cut rows are deleted in
   chunks, and a repair deletes rows below the journal's first sequence that are not carried evidence before
-  anything else, never a wipe. Compaction runs from the first ready pass with no marker (D-7022); a build
-  without it, rolled back to after a compaction, stays `reconstructing` until a pre-compaction snapshot is
-  restored.
+  anything else, never a wipe. Compaction runs from the first ready pass with no marker (D-7022). An older
+  build ignores carried evidence: after compaction it can refuse `lease-proof` for a cut `lease-created`
+  record, or `held-evidence-missing` for a cut identity-candidate hold's first record; otherwise it can
+  recover ready on the journal alone, and journal-only repair can discard carried evidence from SQLite.
+  The refusal arms stay `reconstructing`. Returning to this build reads and repairs carried evidence;
+  restoring a pre-compaction snapshot with this build's helper discards evidence recorded since it.
 - **Retirement behind the cut (amended 2026-10-26, operator rulings D-7001, D-7024; wave 4):** after a cut
   is durable, an ended activity that no lease or lineage edge names, whose identity record no hold names and
   that no retained record (carried or above S) names leaves the checkpoint with its natural-key mapping and

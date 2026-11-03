@@ -1933,10 +1933,10 @@ export class FleetWatcher {
     return this.delegationLaneMemo;
   }
 
-  /** One pass of the delegation lane. PUBLIC for the reason `sweepNames` is: `tick()` dispatches it with `void`, so a test that awaits
-   *  `tick()` has not awaited it. A no-op without a coordination database, inside the census cadence, or while a pass is running. */
   private readonly delegationSweeps = new Set<Promise<void>>();
   private delegationClosing: Promise<void> | null = null;
+  /** One pass of the delegation lane. PUBLIC for the reason `sweepNames` is: `tick()` dispatches it with `void`, so a test that awaits
+   *  `tick()` has not awaited it. A no-op without a coordination database, inside the census cadence, or while a pass is running. */
   sweepDelegation(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<void> {
     if (this.delegationClosing !== null) return Promise.resolve();
     const run = this.delegationLane().sweep(sessions, records).then((ran) => { if (ran) this.emitDelegation(sessions); })
@@ -2018,7 +2018,8 @@ export class FleetWatcher {
     this.delegationLane().setSeams(seams);
   }
 
-  /** D-7878: terminal awaited quiescence, including budget-cut work and the sweep/emit tail; synchronous `stop()` only stops cadence. */
+  /** D-7878: terminal awaited quiescence, including budget-cut work and the sweep/emit tail; synchronous `stop()` only stops cadence.
+   *  Production `server.ts` onClose does not call this today; awaiting it there is a rider, not a shipped shutdown guarantee. */
   closeDelegation(): Promise<void> {
     const closing = this.delegationLane().close(); // Latch admission even when the lane has never opened its applier.
     return this.delegationClosing ??= Promise.all([closing, Promise.allSettled([...this.delegationSweeps])]).then(() => undefined);
@@ -10362,9 +10363,10 @@ class DelegationLane {
     this.closing = Promise.resolve().then(async () => {
       await Promise.allSettled([...this.running.values()]);
       await this.opening?.catch(() => undefined);
-      await this.durable?.close();
-      this.sampler?.stop();                                              // D-5832: the lane's own stall sampler has no closed-lane interval
-      this.seams.loopDelay?.stop();                                      // a seam-supplied sampler is stopped like the lane's own
+      try { await this.durable?.close(); } finally {
+        this.sampler?.stop();                                            // D-5832: the lane's own stall sampler has no closed-lane interval
+        this.seams.loopDelay?.stop();                                    // a seam-supplied sampler is stopped like the lane's own
+      }
     });
     for (const controller of this.running.keys()) controller.abort();
     return this.closing;
@@ -10687,7 +10689,8 @@ class DelegationLane {
     this.passCensus = census;                                            // wave 4: what `projection()` projects
     const ac = new AbortController();
     const cut = new Promise<'cut'>((resolve) => { ac.signal.addEventListener('abort', () => resolve('cut'), { once: true }); });
-    const timer = setTimeout(() => ac.abort(), DELEGATION_PASS_BUDGET_MS);
+    let budgetCut = false;
+    const timer = setTimeout(() => { if (!ac.signal.aborted) { budgetCut = true; ac.abort(); } }, DELEGATION_PASS_BUDGET_MS);
     timer.unref();
     const pass: LanePass = {
       now, signal: ac.signal, census, sessions, records, capability: delegationCapabilityState(this.deps.fleetState?.ccdVerbs), pending: [], settle: [], completed: [],
@@ -10698,7 +10701,7 @@ class DelegationLane {
     work.catch(() => undefined);                                         // a late rejection of a cut pass is not an unhandled one
     try {
       const outcome = await Promise.race([work, cut]);
-      if (outcome === 'cut') {
+      if (outcome === 'cut' && budgetCut) {
         console.warn(`ccrc-server: a delegation pass outran its ${DELEGATION_PASS_BUDGET_MS} ms budget and was cut; its late answers are discarded`);
         // R109 (re-review N3): cut before the owners (in the projects-root resolution or the evidence load), it listed no one: the lane is
         // NOT READY, at once, so the next pass to reach the owners moves the ready instant past a session only this pass's census named.
