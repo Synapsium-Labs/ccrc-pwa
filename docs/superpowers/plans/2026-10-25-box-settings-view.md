@@ -569,10 +569,68 @@ symbol. The line numbers below are from `408d93806`: use them to find each place
   - No coord.db column. Additive.
 - **D-6917.** The Box settings card under Settings › Updates, read-only, rendered from the section's one poll, with one
   guarded reader (`boxSettingsOf`), total text tables, and C7 rows in the ring-context map.
-- **D-6918.** The growth waiver for `ccd/ccrc`, if the PR takes it past +40. Otherwise "spare, unused".
-- **D-6919.** Spare, for a departure found while executing. If unused, it says "spare, unused".
+- **D-6918.** The growth waiver for `ccd/ccrc`: `server/test/growth-waivers/D-6918-ccd-ccrc.json`, `maxDelta` 215. The PR
+  measures +193 net code lines (+185 for the verb and the resolvers, +8 for the timer's install and uninstall rows).
+- **D-6919.** The clip's ellipsis is ASCII `...`, and the order is: `_upd_redact`, then the ASCII spelling of `—`, `…` and
+  `→`, then every other byte outside printable ASCII to `?`, then the cut to 477 bytes plus `...` (480 at most), then the
+  JSON escape. The spec asked for both a `…` ending and a printable-ASCII validator, which cannot both hold;
+  `_upd_json_str`'s precedent spells it `...`.
 - **D-7861.** The coordinator's scope ruling of 2026-11-03 (corrections, item 1). The snapshot carries the spec's seven
-  named settings as its own ordered literal. Each of the seven must appear once in `CCRC_SETTINGS`, and the snapshot
-  lists exactly the seven. The rest of the 87-name `CCRC_SETTINGS` list is out of scope.
-- **D-7862.** Spare, for a departure found while executing. If unused, it says "spare, unused".
-- **D-7863.** Spare, for a departure found while executing. If unused, it says "spare, unused".
+  named settings as its own ordered literal (`BOX_SETTINGS_KEYS` in `ccd/ccrc` and in `shared/api.ts`). Each of the seven
+  appears once in `CCRC_SETTINGS`, and the snapshot lists exactly the seven. The rest of the 87-name `CCRC_SETTINGS` list is
+  out of scope.
+- **D-7862.** The verb's `withData` counts the backups that hold a regular, non-symlink `coord.db` (spec §2.3), not
+  `_bak_snap_class`'s answer: that classifier starts node and fully verifies each dir that holds one, and the verb runs every
+  five minutes. The count is display-only; no keep, thin or prune decision reads it. A sidecar-only snapshot and a symlinked
+  `coord.db` are not counted. Recorded as legitimately different at the line, and `ccrc-update-flip-backups`' coord.db pin
+  names the one site.
+- **D-7863.** `boxSettingsView` answers `unreadable` for a node the server has not read since it started. The spec's failure
+  list is closed and has no "not read yet" word, and the server could not read it.
+
+## As built (2026-11-03)
+
+- **Deviations.** D-6914 to D-6917 as planned. D-6918 used (above). D-6919, D-7862 and D-7863 used for the three departures
+  above. D-7861 as written.
+- **Task 1's acts and their suites, unchanged and green:** the health gate, `ccrc-update-flip-backups` (W24-H1 to H4) and
+  `ccrc-update-phases`; the models advance, `ccrc-models-advance`; the deadline, `ccrc-update-flip-backups` (W24-D) and
+  `update-watchdog-revert`; the release base, `ccrc-update-fetch` and `ccrc-update-flip-backups` (W24-U); the keeps,
+  `ccrc-update-kept`, `ccrc-update-flip-backups` and `ccrc-versions-warn-arms`. The characterization pins are in
+  `server/test/ccrc-settings-carveouts.test.ts`, each with a delete or reorder mutant.
+- **Resolvers.** Two carve-outs, as corrections item 3 says: `_upd_health_s` out of `_upd_gate`, and `_models_budget` out of
+  `_models_advance_budget_secs`. The deadline reuses `_upd_deadline_ms`, and the base URL `_upd_release_base`. The keeps got
+  `_bak_keep` and `_ver_keep`, one-line resolvers their acts now call, so each default is spelled once; `_bak_data_keep` is
+  reused. A budget over 3600 reads `refused` with a sentence saying the step uses 3600; the act's clamp stays silent.
+- **Strings.** `_upd_json_str` is not extended: its body is SHA-pinned by `ccrc-sweep-deliberate-stop`. The 480-byte helper
+  is a new `_set_text`/`_set_json` pair beside the verb, which ARCH-67 can fold in with it. A refused keep's sentence is
+  built by `_keep_why` from the value `_upd_redact` returns, because `_keep_why` cuts at 32 characters, and a cut made
+  before redaction could keep part of a long home path.
+- **The URL.** `_upd_url_origin` runs `_upd_redact`, keeps the scheme, cuts the authority at the first `/`, `?` or `#`, and
+  drops everything up to its last `@`, since a host holds none (a security review of an interim commit: `_upd_redact`
+  keeps some token-only userinfo whole).
+- **The write.** A failed `--write` exits 1, so the timer unit reads failed and doctor can name it; a run that answered
+  exits 0. SIGTERM runs the EXIT chain, which removes the temp file; pinned.
+- **macOS.** `du -sb` is GNU, so backups read `unmeasured` there; the timer is Linux only (spec D6).
+- **deploy.sh.** It does not place the watchdog's pair, so the settings pair joins `DEPLOY_SH_WITHHOLDS.units` with its own
+  reason. `TimeoutStartSec=120` on the service: the verb's `du` and `df` are bounded at 20 s and 10 s.
+- **Census C4.** No row was needed: `cmd_settings` dispatches by a literal `case`, and the variable-key list is still its two
+  rows. The census regex is lifted into `server/test/ccrcSettingsLine.ts`, which `ccrc-settings-census` and
+  `ccrc-update-flip-backups` import. `ccrc-settings-verb`, `graph-knobs` and `testbox-knobs` still carry their own copy, for
+  ARCH-06.
+- **Growth.** `ccd/ccrc` +193 (waiver D-6918); `server/src/watch.ts` +7 (the lane field, one call at the end of
+  `sweepThenProject`, the getter beside `currentCollectCounts`); `server/src/update/routes.ts` +3;
+  `server/src/update/inventory.ts` 0; `server/src/coord/store.ts` and `pwa/src/lib/api.ts` untouched.
+- **Rings.** `server/src/update/boxSettings.ts` measures L1 (imports `shared/` only), and `server/src/update/boxSettingsLane.ts`
+  measures L4. `pwa/src/fleet/boxSettingsWords.ts` is L1 and `pwa/src/fleet/BoxSettingsCard.tsx` L4, both in the C7 cell of
+  the 08-10 ring-context map.
+- **The lane.** Built as a small class held by FleetWatcher, not on #1390's beat idiom (its `TmpCensusBeat` has a clock of
+  its own). It takes the inventory run's own io, store and outcomes at the call, with no clock, flag or throttle. It runs at
+  the end of `sweepThenProject`, after the resolve, push and dispatch, so a stalled read (bounded at 10 s) never delays the
+  control plane. `update-projection`'s planted-throw case now counts only the resolve warning, since the dispatch run's
+  own warning lands inside the run.
+- **The parser** is strict on purpose: an unknown key at any level is `malformed`, so a writer that adds a field bumps `v`.
+- **The card** reads the poll the section already holds. The disk line uses the fleet's `humanBytes` (decimal units), and
+  the age text uses `elapsedWords` with the device's clock, while `stale` is the server's.
+- **Doctor.** `_check_services`' known units gain `ccrc-settings.timer` with its own sentence, hand-kept until ARCH-69.
+- **The mutation table** (each run on the working tree from a saved copy, restored and checked by `cmp`, the tree clean
+  after): M1 to M10 all killed. M6 was run as two mutants, M6a (no cap check) and M6b (`unknown` folded into
+  `not-supported`). M8 changed every `90` in `_upd_health_s`, the sentences included.
