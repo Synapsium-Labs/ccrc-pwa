@@ -169,6 +169,10 @@ const codeOnly = (f: string): string => readFileSync(f, 'utf8')
 describe('centralised-update wave 14: the halt rule, the move predicates and the Ack gate are declared once', () => {
   const DETACH_DEF = /^\s*(?:export\s+)?(?:const|let|var)\s+DETACH_CAP\b/m;
   const DETACH_LITERAL = /(['"])detach\1/;
+  // The docs reader's worker runner (pwa/src/lib/markdownRunner.ts, docs W5h-a) has an option of its own spelled
+  // 'detach': `abortRunning: 'terminate' | 'detach'`, how an aborted job leaves its worker. It is another word, not a
+  // copy of the update cap, so a code line that names `abortRunning` is not read for the cap's word. Only that line.
+  const capLines = (code: string): string => code.split('\n').filter((l) => !/\babortRunning\b/.test(l)).join('\n');
 
   it('CONTROL: the walk sees every root; the patterns see a declaration and a quoted copy, not a re-export or prose', () => {
     for (const r of ROOTS) expect(sources(r).length, rel(r)).toBeGreaterThan(0);
@@ -176,11 +180,16 @@ describe('centralised-update wave 14: the halt rule, the move predicates and the
     expect(DETACH_DEF.test('export { DETACH_CAP };'), 'a re-export declares nothing').toBe(false);
     expect(DETACH_LITERAL.test("caps.includes('detach')")).toBe(true);
     expect(DETACH_LITERAL.test('carries no `detach` cap'), 'a backticked prose mention').toBe(false);
+    // The runner's own option is set aside, line by line; a cap copy in the same file is still seen.
+    expect(ALL.map(rel)).toContain('pwa/src/lib/markdownRunner.ts');
+    expect(DETACH_LITERAL.test(codeOnly(path.join(ccrcRoot, 'pwa/src/lib/markdownRunner.ts'))), 'the runner spells its option').toBe(true);
+    expect(DETACH_LITERAL.test(capLines("if (abortRunning === 'detach') {\n  abortRunning: 'detach',")), 'the option is set aside').toBe(false);
+    expect(DETACH_LITERAL.test(capLines("if (abortRunning === 'detach') {\ncaps.includes('detach')")), 'a cap copy beside it is not').toBe(true);
   });
 
   it('DETACH_CAP is declared, and the word quoted, in shared/update-move.ts alone — dispatch.ts re-exports it', () => {
     expect(ALL.filter((f) => DETACH_DEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/update-move.ts']);
-    expect(ALL.filter((f) => DETACH_LITERAL.test(codeOnly(f))).map(rel)).toEqual(['shared/update-move.ts']);
+    expect(ALL.filter((f) => DETACH_LITERAL.test(capLines(codeOnly(f)))).map(rel)).toEqual(['shared/update-move.ts']);
   });
 
   it('each L0 predicate is declared in shared/update-move.ts alone', () => {
