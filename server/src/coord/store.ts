@@ -1982,7 +1982,7 @@ export class CoordStore {
       if (!n.ok) return { ok: false, kind: 'run-unreadable', detail: n.detail };
       runs.push({ id: n.value, sessionId: r.sessionId, claimedBy: r.claimedBy,
         state: isRunState(r.state) ? r.state : 'unknown', openedAt: r.openedAt,
-        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor });
+        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor, dispatchStartedAt: r.dispatchStartedAt });
     }
     return { ok: true, runs };
   }
@@ -2007,7 +2007,7 @@ export class CoordStore {
     return this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
       'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state, sessionId, claimedBy, ' +
-      `openedAt, sessionBornAt, sessionBornFor FROM runs WHERE ${where} ORDER BY id`,
+      `openedAt, sessionBornAt, sessionBornFor, dispatchStartedAt FROM runs WHERE ${where} ORDER BY id`,
     ).all(...(column === 'either' ? [id, id] : [id])) as unknown as SeriesRow[];
   }
 
@@ -9733,6 +9733,20 @@ export class CoordStore {
       throw new DelegationModelError('unreadable-row', 'delegation_events: MAX(journalSequence) is not an integer');
     }
     return { count: r.n, maxSequence: r.m };
+  }
+
+  /** The retained evidence below a cut; the unique journalSequence index bounds both retention statements. */
+  countDelegationEventsAtOrBelow(sequence: number): number {
+    const r = this.db.prepare('SELECT COUNT(*) AS n FROM delegation_events WHERE journalSequence <= ?').get(sequence) as { n: unknown };
+    if (typeof r.n !== 'number' || !Number.isSafeInteger(r.n)) throw new DelegationModelError('unreadable-row', 'delegation_events: COUNT(*) is not an integer');
+    return r.n;
+  }
+
+  /** One atomic, bounded delete; carried sequences sit outside the gap the caller supplies. */
+  deleteDelegationEventsBetween(afterExclusive: number, throughInclusive: number, limit: number): number {
+    return tx(this.db, () => Number(this.db.prepare(
+      'DELETE FROM delegation_events WHERE id IN (SELECT id FROM delegation_events WHERE journalSequence > ? AND journalSequence <= ? ORDER BY journalSequence LIMIT ?)',
+    ).run(afterExclusive, throughInclusive, limit).changes));
   }
 
   /**

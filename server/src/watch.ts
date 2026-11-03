@@ -81,10 +81,14 @@ import type { MeasuredDirectoryRead } from './io.js';
 import { TmpCensusBeat } from './tmpSweepLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
 import { PressureLane } from './pressureLane.js';
+import { BackupLane } from './backupLane.js';
+import type { BackupHealth } from '../../shared/backup.js';
 import { TestboxLane } from './testboxLane.js';
 import type { HostPressureHealth } from '../../shared/pressure.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
+import { DELEGATION_RETENTION_FLOOR_MS } from './coord/delegation-journal.js';
+import { delegationCompactionLine } from './coord/delegation-compaction.js';
 import { nodeDelegationFilePort } from './coord/delegation-file-port.js';
 import {
   DelegationIngestError, delegationBucketDurabilityOf, delegationBucketUtcHour, ingestAndApplyDelegationBucket, readDelegationBucket,
@@ -1061,10 +1065,12 @@ export class FleetWatcher {
    *  `undefined` until the first sweep lands — the same contract every other
    *  `currentX()` on this class already has, and the route turns it into a
    *  `readiness: null` on the wire rather than omitting the key. */
-  /** The disk alarm (D-6615) and the tmp sweep census lane (D-6624): each holds its clock and its memory. */
+  /** The disk alarm (D-6615) and the tmp sweep census lane (D-6624): each holds its memory, and each clock is its row (D-7895). */
   private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
   /** The host-pressure beat (#1170): its last reading classifies a stalled link. */
   private readonly pressureLane = new PressureLane(() => this.deps);
+  /** The backup-health beat (D-7858): the last read of the backup state files, judged when the block is read. */
+  private readonly backupLane = new BackupLane(() => this.deps);
   /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
   readonly testboxLane = new TestboxLane(() => this.deps);
   private readonly tmpCensus = new TmpCensusBeat(() => this.deps);
@@ -1947,10 +1953,16 @@ export class FleetWatcher {
     return this.delegationLaneMemo;
   }
 
+  private readonly delegationSweeps = new Set<Promise<void>>();
+  private delegationClosing: Promise<void> | null = null;
   /** One pass of the delegation lane. PUBLIC for the reason `sweepNames` is: `tick()` dispatches it with `void`, so a test that awaits
    *  `tick()` has not awaited it. A no-op without a coordination database, inside the census cadence, or while a pass is running. */
   sweepDelegation(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<void> {
-    return this.delegationLane().sweep(sessions, records).then((ran) => { if (ran) this.emitDelegation(sessions); });
+    if (this.delegationClosing !== null) return Promise.resolve();
+    const run = this.delegationLane().sweep(sessions, records).then((ran) => { if (ran) this.emitDelegation(sessions); })
+      .finally(() => { this.delegationSweeps.delete(run); });
+    this.delegationSweeps.add(run);
+    return run;
   }
 
   private lastDelegationJson: string | null = null;
@@ -2010,6 +2022,10 @@ export class FleetWatcher {
   pressure(linkUp: boolean): HostPressureHealth | null { return this.pressureLane.block(linkUp); }
   /** The host-pressure beat (#1170). PUBLIC for the reason `sweepDisk` is: `tick()` dispatches it with `void`. */
   async sweepPressure(): Promise<void> { await this.pressureLane.sweep(); }
+  /** `FleetHealth.backup` (D-7858); `null` before the first read landed (absence is UNKNOWN). */
+  backup(): BackupHealth | null { return this.backupLane.block(); }
+  /** The backup-health beat (D-7858). PUBLIC for the reason `sweepDisk` is: `tick()` dispatches it with `void`. */
+  async sweepBackup(): Promise<void> { await this.backupLane.sweep(); }
 
   /** What the lane last concluded, for tests and diagnostics: nothing here is wire. */
   delegationReport() {
@@ -2026,9 +2042,11 @@ export class FleetWatcher {
     this.delegationLane().setSeams(seams);
   }
 
-  /** Closes the delegation applier's journal descriptor, if it was ever opened (tests only: no production code calls it, so in production the lane's unref'd sampler interval lives for the process). */
+  /** D-7878: terminal awaited quiescence, including budget-cut work and the sweep/emit tail; synchronous `stop()` only stops cadence.
+   *  Production `server.ts` onClose does not call this today; awaiting it there is a rider, not a shipped shutdown guarantee. */
   closeDelegation(): Promise<void> {
-    return this.delegationLaneMemo === null ? Promise.resolve() : this.delegationLaneMemo.close();
+    const closing = this.delegationLane().close(); // Latch admission even when the lane has never opened its applier.
+    return this.delegationClosing ??= Promise.all([closing, Promise.allSettled([...this.delegationSweeps])]).then(() => undefined);
   }
 
   /** Whether `tick()`'s registry read listed. The health reads it as of the request: an unreadable registry is an unmeasured basis. */
@@ -2345,10 +2363,11 @@ export class FleetWatcher {
     return Promise.allSettled(started).then(() => undefined);
   }
 
-  /** The STALE-ARCHIVE ARM (D-6643, fleet disk retention spec §2.7.5): `StaleArchiveBeat` holds the clock, the memory and the
-   *  pass. Hourly, one pass at a time, on the tick's rows and listing; SHADOW until `$REG/stale-archive-live`. */
+  /** The STALE-ARCHIVE ARM (D-6643, fleet disk retention spec §2.7.5): `StaleArchiveBeat` holds the memory and the pass, the
+   *  `staleArchive` row the clock and the single flight (D-7895). Hourly, one pass at a time, on the tick's rows and listing;
+   *  SHADOW until `$REG/stale-archive-live`. */
   async sweepStaleArchive(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
-    await this.staleArchive.sweep(records, names);
+    await this.runLane('staleArchive', () => this.staleArchive.pass(records, names));
   }
 
   /** At an unattended act (the stop-done lane's, hibernation's): the registry record read AGAIN and the frame's row
@@ -2432,14 +2451,16 @@ export class FleetWatcher {
       // The disk alarm (D-6615) is gated HERE too, above the registry read's fail-shut return, because it reads no
       // registry: a full disk is exactly when the registry read fails, and the one alarm must still sound. NEVER
       // awaited: a `statfs` of a stalled volume is what hangs (the agent bounds each root, the link bounds the request),
-      // and the dialog detector must not wait behind it. Own clock (`DiskAlarmLane`).
+      // and the dialog detector must not wait behind it. Its clock is the `diskAlarm` row (D-7895).
       void this.sweepDisk().catch(() => { /* one bad sweep must not kill the poll */ });
       // The host-pressure beat (#1170), above the fail-shut return for the same reason: a thrash is when that read fails.
       void this.sweepPressure();
+      // The backup-health beat (D-7858) reads no registry either, so it sits with the two above and never waits behind it.
+      void this.sweepBackup();
       // The test box's poll (D-7411), above the fail-shut return too: it lists the registry itself. Own clock, never awaited.
       void this.testboxLane.sweep();
       // The tmp sweep's census (D-6624) sits beside it for the same reason: a file read, and the holders are wanted
-      // exactly when the registry read fails. Own clock (`TmpCensusBeat`), never awaited.
+      // exactly when the registry read fails. Its clock is the `tmpCensus` row (D-7895), never awaited.
       void this.sweepTmpSweepCensus().catch(() => { /* one bad sweep must not kill the poll */ });
 
       // The server-caps beat (D-5232's mechanism, Task 9b) sits BESIDE the inventory lane, never inside it: that lane
@@ -7183,13 +7204,13 @@ export class FleetWatcher {
     }
   }
 
-  /** The disk alarm (D-6615, spec §2.5): `DiskAlarmLane` holds the pass. PUBLIC for the reason `sweepReadiness` is: `tick()`
-   *  dispatches it with `void`, so a test that awaits `tick()` has not awaited this. */
-  async sweepDisk(): Promise<void> { await this.diskAlarm.sweep(); }
+  /** The disk alarm (D-6615, spec §2.5): `DiskAlarmLane` holds the pass, the `diskAlarm` row its cadence (D-7895). PUBLIC for
+   *  the reason `sweepReadiness` is: `tick()` dispatches it with `void`, so a test that awaits `tick()` has not awaited this. */
+  async sweepDisk(): Promise<void> { await this.runLane('diskAlarm', () => this.diskAlarm.pass()); }
 
-  /** The tmp sweep's census (D-6624, spec §2.1): `TmpCensusBeat` holds the pass, on the last good registry listing. PUBLIC for
-   *  the reason `sweepDisk` is. */
-  async sweepTmpSweepCensus(): Promise<void> { await this.tmpCensus.sweep(this.registryIds); }
+  /** The tmp sweep's census (D-6624, spec §2.1): `TmpCensusBeat` holds the pass, on the last good registry listing, and the
+   *  `tmpCensus` row its cadence (D-7895). PUBLIC for the reason `sweepDisk` is. */
+  async sweepTmpSweepCensus(): Promise<void> { await this.runLane('tmpCensus', () => this.tmpCensus.pass(this.registryIds)); }
 
   /**
    * F3: the program-ready preconditions, measured once per lane tick and
@@ -9625,12 +9646,13 @@ export const DELEGATION_PASS_SLOW_PREFIX = 'ccrc-server: delegation pass slow:';
 export const DELEGATION_PASS_SLOW_KEYS = [
   'block', 'cut', 'total', 'other',
   'blockCpu', 'stallMax', 'stallP99', 'cpuThread',
-  'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile',
+  'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile',
   'pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
   'attempts', 'leases', 'intervals', 'absence', 'repair',
   'rewrite', 'rewrites', 'rewriteEvents', 'projectDelta', 'projectFull', 'deltaRows',
   'trees', 'treesPastWait', 'win', 'winLost', 'winHeld', 'winHeldNull', 'evidence', 'activities', 'pointMetas',
   'cpSessions', 'cpAttempts', 'cpLeases', 'openLeases', 'cpLineage', 'cpIntervals', 'cpCursors', 'cpBytes', 'encodes', 'retired', 'pendingBash', 'cpCandidates',
+  'cutRecords', 'cutBytes', 'carried', 'carriedBytes', 'eventsCut', 'rowsRetired',
   'ownerCount', 'pendingOwners', 'staged', 'appended',
   'claimants', 'launches', 'pathMap', 'droppedKeys',
   'markPaths', 'markIds', 'lostProjects', 'lostPrefixes', 'lossy', 'droppedMeasured',
@@ -9678,7 +9700,7 @@ const LANE_CPU_KEYS = [
 ] as const satisfies readonly (readonly [DelegationPassSlowKey, DelegationPassSlowKey])[];
 /** D-5692, D-5832: the phases `block` sums (the lane's own work and writes). */
 const LANE_BLOCK_KEYS = [
-  'noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
+  'noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'compact', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
 ] as const satisfies readonly DelegationPassSlowKey[];
 /** D-5832: the three stretches of the pass the stall is read in, in order. */
 type LaneStretch = 'stallFlush' | 'stallMid' | 'stallRepair';
@@ -10086,6 +10108,8 @@ export function delegationPassWindowsOf(
 }
 
 class DelegationLane {
+  private closing: Promise<void> | null = null;
+  private readonly running = new Map<AbortController, Promise<unknown>>();
   private durable: DelegationDurability | null = null;
   private opening: Promise<DelegationDurability | null> | null = null;
   /** The lane has tried to open the applier: from then on a health is reported (absence before that reads as unknown). */
@@ -10180,8 +10204,8 @@ class DelegationLane {
   private droppedAdded = 0;
   private droppedPeak = 0;
   private seams: DelegationLaneSeams = {};
-  private lastPruneHour = -1;
-  private lastRetireHour = -1;
+  private lastUpkeepHour = -1;
+  private lastCompactDay = -1;
   private cursorsPruned = 0;
   private warnedUnparseableCursors = false;
   private evidenceLoaded = false;
@@ -10284,7 +10308,7 @@ class DelegationLane {
     this.stall().startPass();                                            // D-5832: a new pass-wide histogram; the sampler starts with the lane's first pass
     return t;
   }
-  /** D-5692: the applier's open options with the projection port's four calls timed (`rewritten`); the port itself is called as before. The
+  /** D-5692: the applier's open options with the projection port's six calls timed (`rewritten`); the port itself is called as before. The
    *  port is wrapped here, not where the lane names the store, because the lane's contact with the store is pinned to those lines. */
   private timedPort(deps: Parameters<typeof DelegationDurability.open>[0]): Parameters<typeof DelegationDurability.open>[0] {
     const port = deps.projection;
@@ -10294,9 +10318,11 @@ class DelegationLane {
       projectChanged: (prior, next) => this.rewritten(() => port.projectChanged(prior, next), 1, 0, (r) => r.mode === 'delta' ? r.rows : null),
       insertEvents: (rows) => this.rewritten(() => port.insertEvents(rows), 0, rows.length),
       eventStats: () => this.rewritten(() => port.eventStats(), 0, 0),
+      countEventsAtOrBelow: (s) => this.rewritten(() => port.countEventsAtOrBelow(s), 0, 0),
+      deleteEventsBetween: (a, b, n) => this.rewritten(() => port.deleteEventsBetween(a, b, n), 0, 0),
     } };
   }
-  /** D-5692: times one call of the coordination store's port (`project`, `projectChanged`, `insertEvents`, `eventStats`) as `rewrite`, in the CURRENT pass's
+  /** D-5692: times one call of the coordination store's port (projection, events and retention) as `rewrite`, in the CURRENT pass's
    *  record, and returns or throws exactly what `fn` does. `rewrite` OVERLAPS the phase that made the call (flush, repair, a lease, ...),
    *  which holds it too, so it is never summed into `block`. */
   private rewritten<T>(fn: () => T, projects: number, events: number, delta?: (result: T) => number | null): T {
@@ -10343,7 +10369,7 @@ class DelegationLane {
       const whole = stall.pass();
       f.stallMax = whole.max; f.stallP99 = whole.p99;
       f.block = block; f.cut = pass.signal.aborted ? 1 : 0; f.total = total;
-      f.other = Math.max(0, total - sum(['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'reconcile']) - (ms.get('yields') ?? 0));
+      f.other = Math.max(0, total - sum(['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile']) - (ms.get('yields') ?? 0));
       f.blockCpu = LANE_BLOCK_KEYS.reduce((n, k) => n + (t.cpu.get(k) ?? 0), 0) / 1000;
       if (t.cpuThread !== null) f.cpuThread = t.cpuThread ? 1 : 0;
       for (const [k, name] of LANE_CPU_KEYS) { const us = t.cpu.get(k); if (us !== undefined) f[name] = us / 1000; }
@@ -10376,12 +10402,19 @@ class DelegationLane {
 
   setSeams(seams: DelegationLaneSeams): void { this.seams = seams; }
 
-  /** Closes the applier's journal descriptor, if it was ever opened (tests only: nothing in production calls closeDelegation). */
-  async close(): Promise<void> {
-    this.sampler?.stop();                                                // D-5832: the lane's own stall sampler (its interval is unref'd, but a closed lane has none)
-    this.seams.loopDelay?.stop();   // a seam-supplied sampler is stopped too, deliberately: a test's sampler is stopped like the lane's own
-    await this.opening?.catch(() => undefined);
-    await this.durable?.close();
+  /** D-7878: close admission before aborting reads; drain actual producers, including their finally/log tails, before the applier. */
+  close(): Promise<void> {
+    if (this.closing !== null) return this.closing;
+    this.closing = Promise.resolve().then(async () => {
+      await Promise.allSettled([...this.running.values()]);
+      await this.opening?.catch(() => undefined);
+      try { await this.durable?.close(); } finally {
+        this.sampler?.stop();                                            // D-5832: the lane's own stall sampler has no closed-lane interval
+        this.seams.loopDelay?.stop();                                    // a seam-supplied sampler is stopped like the lane's own
+      }
+    });
+    for (const controller of this.running.keys()) controller.abort();
+    return this.closing;
   }
 
   private evidenceHorizon(): string | null {
@@ -10585,6 +10618,7 @@ class DelegationLane {
   /** The applier, opened once. A recovery that FAILED is still an applier (it reports `failure()` and refuses to apply); only an IO
    *  error that stopped the open itself leaves none, and the next pass tries again. */
   applier(): Promise<DelegationDurability | null> {
+    if (this.closing !== null && this.opening === null) return Promise.resolve(null);
     if (this.opening === null) {
       const coord = this.deps.coord;
       this.opening = (async (): Promise<DelegationDurability | null> => {
@@ -10597,6 +10631,8 @@ class DelegationLane {
               projectChanged: (prior, next) => coord.projectDelegationCheckpointChanges(prior, next),
               insertEvents: (rows) => coord.insertDelegationEvents(rows),
               eventStats: () => coord.delegationEventStats(),
+              countEventsAtOrBelow: (s) => coord.countDelegationEventsAtOrBelow(s),
+              deleteEventsBetween: (a, b, n) => coord.deleteDelegationEventsBetween(a, b, n),
             },
             now: () => Date.now(), monotonicMs: () => this.mono(), randomUUID: () => randomUUID(), warn: (m) => console.warn(m),
           }));
@@ -10677,6 +10713,7 @@ class DelegationLane {
 
   /** True iff a pass ran (wave 4: the watcher projects only after one). */
   async sweep(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<boolean> {
+    if (this.closing !== null) return false;
     if (this.deps.coord === undefined) return false;                     // no coordination database, no lane
     // SINGLE FLIGHT (M5/M6) and the cadence are the `delegation` row's: a call beside a pass, or inside the cadence, is refused.
     const run = this.lanes.run('delegation', () => this.pass(records, sessions));
@@ -10686,6 +10723,7 @@ class DelegationLane {
   }
 
   private async pass(records: readonly LaneRecord[], sessions: readonly LaneSession[]): Promise<void> {
+    if (this.closing !== null) return;
     const now = Date.now();
     const census = this.census();
     if (census === null) {                                               // no census yet: wait, and keep the cadence unspent
@@ -10696,17 +10734,19 @@ class DelegationLane {
     this.passCensus = census;                                            // wave 4: what `projection()` projects
     const ac = new AbortController();
     const cut = new Promise<'cut'>((resolve) => { ac.signal.addEventListener('abort', () => resolve('cut'), { once: true }); });
-    const timer = setTimeout(() => ac.abort(), DELEGATION_PASS_BUDGET_MS);
+    let budgetCut = false;
+    const timer = setTimeout(() => { if (!ac.signal.aborted) { budgetCut = true; ac.abort(); } }, DELEGATION_PASS_BUDGET_MS);
     timer.unref();
     const pass: LanePass = {
       now, signal: ac.signal, census, sessions, records, capability: delegationCapabilityState(this.deps.fleetState?.ccdVerbs), pending: [], settle: [], completed: [],
       seq: ++this.passSeq, reachedOwners: false,
     };
-    const work = this.run(pass).then(() => 'done' as const);
+    const work = this.run(pass).then(() => 'done' as const).finally(() => { this.running.delete(ac); });
+    this.running.set(ac, work);                                          // D-7878: LaneRunner owns only the budgeted race, not this late work.
     work.catch(() => undefined);                                         // a late rejection of a cut pass is not an unhandled one
     try {
       const outcome = await Promise.race([work, cut]);
-      if (outcome === 'cut') {
+      if (outcome === 'cut' && budgetCut) {
         console.warn(`ccrc-server: a delegation pass outran its ${DELEGATION_PASS_BUDGET_MS} ms budget and was cut; its late answers are discarded`);
         // R109 (re-review N3): cut before the owners (in the projects-root resolution or the evidence load), it listed no one: the lane is
         // NOT READY, at once, so the next pass to reach the owners moves the ready instant past a session only this pass's census named.
@@ -10815,16 +10855,9 @@ class DelegationLane {
       await this.turn(pass, 'stallMid');
       if (pass.signal.aborted) return;
 
-      // The upkeep: retention, and the hour that was never closed. One checkpoint-only change over the INTERVALS, and only when there is
-      // something to do (the same array comes back otherwise). Cursors are never in it. It also collapses attempts that repeat one decision
-      // (D-6191: the earliest row of each key stays), by a second checkpoint-only change, and makes no change when none repeat.
+      // D-6191: collapse attempts that repeat one decision; interval, cursor and zero-delta retention share the prune door below.
       const endUpkeep = this.phase(pass, 'upkeep');
       try {
-        if (upkeepDelegationIntervals(durable.state().checkpoint.observationIntervals, pass.now).changed) {
-          try {
-            await durable.applyCheckpointChange((cp) => ({ ...cp, observationIntervals: upkeepDelegationIntervals(cp.observationIntervals, pass.now).intervals }));
-          } catch (err) { console.warn(`ccrc-server: delegation interval upkeep failed: ${err instanceof Error ? err.message : String(err)}`); }
-        }
         if (collapseDelegationAttempts(durable.state().checkpoint.attempts).removed > 0) {
           try {
             let removed = 0;
@@ -10839,7 +10872,10 @@ class DelegationLane {
       } finally { endUpkeep(); }
       if (pass.signal.aborted) return;
       const endPrune = this.phase(pass, 'prune');
-      try { await this.pruneCursors(pass, durable); await this.retireZeroDelta(pass, durable); } finally { endPrune(); }
+      try { await this.upkeep(pass, durable); } finally { endPrune(); }
+      if (pass.signal.aborted) return;
+      const endCompact = this.phase(pass, 'compact');
+      try { await this.compact(pass, durable); } finally { endCompact(); }
       await this.turn(pass, null);                                      // D-5835: turn 2, before the reconcile (which writes `reconciledAt` before its first check)
       if (pass.signal.aborted) return;
 
@@ -10852,6 +10888,21 @@ class DelegationLane {
       if (this.passTiming === t) this.passTiming = null;
       await this.passLine(pass, t);
     }
+  }
+
+  /** D-7022: armed on landing; spend the UTC day before the queued attempt, including one that rejects. */
+  private async compact(pass: LanePass, durable: DelegationDurability): Promise<void> {
+    const day = Math.floor(laneHourOf(pass.now) / (24 * DELEGATION_HOUR_MS));
+    if (pass.signal.aborted || !durable.pruningEnabled() || day === this.lastCompactDay) return;
+    this.lastCompactDay = day;
+    try {
+      const out = await durable.compactJournal(pass.now, DELEGATION_RETENTION_FLOOR_MS);
+      if (out.kind === 'compacted') {
+        for (const [k, n] of [['cutRecords', out.plan.cutRecords], ['cutBytes', out.plan.cutBytes], ['carried', out.plan.carried.length],
+          ['carriedBytes', out.plan.carriedBytes], ['eventsCut', out.eventsDeleted], ['rowsRetired', out.retired]] as const) this.size(pass, k, n);
+        console.warn(delegationCompactionLine(out.plan, out));
+      } else if (out.plan !== null && out.reason !== 'not-ready') console.warn(delegationCompactionLine(out.plan, out));
+    } catch (err) { console.warn(`ccrc-server: delegation compaction failed: ${err instanceof Error ? err.message : String(err)}`); }
   }
 
   /** M-1: the lane no longer vouches for its last counts: the breaker reads unmeasured and the counts read 0 until a reconcile. */
@@ -10874,37 +10925,27 @@ class DelegationLane {
     this.projectsRoot = resolved === null || resolved === '' ? DELEGATION_ROOT_UNMEASURED : resolved;
   }
 
-  /**
-   * Cursor retention (R58, D-4654): at most once per UTC hour, and only when the planner finds something to drop, ask the applier to
-   * retire the cursors past the retention. The plan made HERE is only the decision to ask; the applier decides again, under its lock, on
-   * its own rows, and a cursor whose hour is not on file is kept. Cursors are never touched through a checkpoint-only change.
-   */
-  private async pruneCursors(pass: LanePass, durable: DelegationDurability): Promise<void> {
+  /** D-4654, D-6268: one builder door for retention. Intervals are checked every pass; cursor and zero-delta work spends its hour before
+   *  the attempt (N6), even on failure. The applier decides again under its lock; idle passes never enter the door. */
+  private async upkeep(pass: LanePass, durable: DelegationDurability): Promise<void> {
     const hour = laneHourOf(pass.now);
-    if (hour === this.lastPruneHour) return;
+    const hourly = hour !== this.lastUpkeepHour;
     const cp = durable.state().checkpoint;
-    const plan = planDelegationCursorRetention(cp.bucketCursors, cp.observationIntervals, pass.now);
-    if (plan.unparseable.length > 0 && !this.warnedUnparseableCursors) {
-      this.warnedUnparseableCursors = true;
-      console.warn(`ccrc-server: ${plan.unparseable.length} delegation bucket cursor(s) name no hour and are kept: ${plan.unparseable.slice(0, 3).map((c) => JSON.stringify(c.bucket)).join(', ')}`);
+    const intervals = upkeepDelegationIntervals(cp.observationIntervals, pass.now).changed;
+    if (!hourly && !intervals) return;
+    if (hourly) {
+      this.lastUpkeepHour = hour;
+      const plan = planDelegationCursorRetention(cp.bucketCursors, cp.observationIntervals, pass.now);
+      if (plan.unparseable.length > 0 && !this.warnedUnparseableCursors) {
+        this.warnedUnparseableCursors = true;
+        console.warn(`ccrc-server: ${plan.unparseable.length} delegation bucket cursor(s) name no hour and are kept: ${plan.unparseable.slice(0, 3).map((c) => JSON.stringify(c.bucket)).join(', ')}`);
+      }
     }
-    // The hour is spent BEFORE the attempt (N6): a prune that failed is retried at most once per UTC hour, like one that succeeded, and
-    // not on every pass (each attempt is a planner run, a commit attempt and a warning line).
-    this.lastPruneHour = hour;
-    if (plan.drop.length > 0) {
-      try { this.cursorsPruned += (await durable.pruneBucketCursors(pass.now)).dropped; }
-      catch (err) { console.warn(`ccrc-server: the delegation cursor retention failed: ${err instanceof Error ? err.message : String(err)}`); }
-    }
-  }
-
-  /** D-6268: the zero-delta retirement, at most once per UTC hour. The applier decides, under its lock, on its own rows and facts; an idle
-   *  door writes nothing and encodes nothing. The hour is spent BEFORE the attempt (N6), so a failure is retried at most once an hour. */
-  private async retireZeroDelta(pass: LanePass, durable: DelegationDurability): Promise<void> {
-    const hour = laneHourOf(pass.now);
-    if (hour === this.lastRetireHour) return;
-    this.lastRetireHour = hour;
-    try { this.size(pass, 'retired', (await durable.retireZeroDeltaBashActivities()).retired); }
-    catch (err) { console.warn(`ccrc-server: the delegation zero-delta retirement failed: ${err instanceof Error ? err.message : String(err)}`); }
+    try {
+      const out = await durable.upkeep({ nowMs: pass.now, intervals, cursors: hourly, zeroDelta: hourly });
+      this.cursorsPruned += out.cursorsDropped;
+      if (hourly) this.size(pass, 'retired', out.retired);
+    } catch (err) { console.warn(`ccrc-server: delegation upkeep failed: ${err instanceof Error ? err.message : String(err)}`); }
   }
 
   /** Who died since the last pass, by what this process watched: a parent first seen DEAD is not a fresh death (a restart is not a mass-death

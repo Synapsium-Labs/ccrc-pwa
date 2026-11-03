@@ -23,6 +23,7 @@ import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
 } from '../docs/failures';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
+import type { SecretSaveAnswer } from '../../../shared/ledgers';
 
 /** `GET`/`POST /api/coord/roll-idle`'s answer (D-7453). */
 export interface RollIdleView {
@@ -870,6 +871,16 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  screen reads nothing off the answer but its arrival, and a write whose answer was unreadable is shown as sent
      *  only after the next read of the digest says `corrected`. */
     correctDigest: (body: DigestCorrectBody) => postJson<DigestCorrectAnswer>('/api/digest/correct', body),
+    /** `PUT /api/items/:id/secret` (desktop-polish PL6): a secret item's value, sent once to its own route, which stores it
+     *  in its protected slot and ticks the item with "set, when, the last four". The value rides only in this body, and the
+     *  answer carries the slot's state, never the value. A refusal (`step-up-required`, `not-open`, `bad-slot`, …) rejects
+     *  with an `ApiError` like every non-2xx, and nothing is stored. Session-gated with a step-up when armed. */
+    saveItemSecret: async (id: number, value: string): Promise<SecretSaveAnswer> =>
+      (await request(`/api/items/${id}/secret`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ value }),
+      })).json() as Promise<SecretSaveAnswer>,
     /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last seven days, and
      *  each programme's Goals, as the `waiting` frame carries them. The screen reads it again when the tab regains focus
      *  (review 1336: a quiet fleet sends no frame when an item crosses its 30 minutes). Session-gated when armed. */

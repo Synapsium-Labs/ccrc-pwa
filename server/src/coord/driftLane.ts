@@ -88,7 +88,7 @@ async function pass(d: DriftLaneDeps, now: number): Promise<void> {
     if (mark.kind !== 'child') continue;
     // The worker's incarnation, from the birth the run its mark names recorded: a reused name has no ghost parent (ARCH-62).
     const minting = d.coord.run(mark.runId);
-    const incarnation = incarnationOf(sessionId, childBirthOf(minting, sessionId));
+    const incarnation = incarnationOf(sessionId, childBirthOf(minting, sessionId), minting.ok ? minting.run : null);
     // heldFor's parent, read the same way: a series this process cannot represent yields the parent its open binding
     // proves, or none (as before the fold); the pass goes on, and says so.
     const { parent: parentId, series } = d.coord.bindingsOf(sessionId).parent(minting.ok && minting.run !== null ? minting.run.claimedBy : null, incarnation);

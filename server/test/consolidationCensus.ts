@@ -583,10 +583,35 @@ export function laneClockFields(root: string = REPO): CensusSite[] {
   return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'FleetWatcher' && LANE_CLOCK_NAMES.includes(f.name)).map((f) => siteAt(w, f.line));
 }
 
-/** `DelegationLane#lastSweepAt`, a cadence clock in a class another series held: reported by name, and empty since it became the `delegation` row (D-5862). */
+/** The disk-retention beats' old throttle clocks and single-flight guard, by file, class and name (GitHub #1391): the
+ *  consolidation (#1279) moved them out of `FleetWatcher` with their clocks, and D-7895 made each a row of `LANE_SCHEDULE`. */
+export const BEAT_CLOCK_FIELDS: ReadonlyArray<{ readonly file: string; readonly cls: string; readonly names: readonly string[] }> = [
+  { file: 'server/src/diskAlarmLane.ts', cls: 'DiskAlarmLane', names: ['lastSweep'] },
+  { file: 'server/src/tmpSweepLane.ts', cls: 'TmpCensusBeat', names: ['last'] },
+  { file: 'server/src/staleArchiveBeat.ts', cls: 'StaleArchiveBeat', names: ['last', 'sweeping'] },
+];
+
+/** The cadence clocks and guards kept in classes other than `FleetWatcher`, which `laneClockShapes` does not scan: reported by
+ *  name, and empty since each became a row. `DelegationLane#lastSweepAt` is the `delegation` row (D-5862); the three beats of
+ *  `BEAT_CLOCK_FIELDS` are the `diskAlarm`, `tmpCensus` and `staleArchive` rows (D-7895). In a beat's class this also reports
+ *  a numeric field nobody named that is compared as `<now> - this.X <op> CONST` (`laneClockShapes`' query), so a clock that
+ *  comes back under a new name is seen. */
 export function laneClockReported(root: string = REPO): CensusSite[] {
+  const out: CensusSite[] = [];
   const w = watcherFacts(root);
-  return w === null ? [] : w.facts.fields.filter((f) => f.cls === 'DelegationLane' && f.name === 'lastSweepAt').map((f) => siteAt(w, f.line));
+  if (w !== null) out.push(...w.facts.fields.filter((f) => f.cls === 'DelegationLane' && f.name === 'lastSweepAt').map((f) => siteAt(w, f.line)));
+  for (const beat of BEAT_CLOCK_FIELDS) {
+    const b = watcherFacts(root, beat.file);
+    if (b === null) continue;
+    const own = b.facts.fields.filter((f) => f.cls === beat.cls);
+    const numeric = new Set(own.filter((f) => f.numeric).map((f) => f.name));
+    const lines = new Set([
+      ...own.filter((f) => beat.names.includes(f.name)).map((f) => f.line),
+      ...b.facts.comparisons.filter((c) => c.cls === beat.cls && numeric.has(c.field) && c.other !== 'other').map((c) => c.line),
+    ]);
+    out.push(...[...lines].sort((x, y) => x - y).map((line) => siteAt(b, line)));
+  }
+  return out;
 }
 
 /** Numeric fields of `FleetWatcher` that are compared with a constant and are NOT a lane's throttle: `lastStallJudgedAt` is

@@ -43,7 +43,7 @@ import path from 'node:path';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
-import { buildDist, openApp, removeDist, seedStripExpanded, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { openApp, seedStripExpanded, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
 import { seventeenLanes } from '../test/seventeenLanes';
 import { FLYOUT_CLOSE_MS, FLYOUT_OPEN_MS, foldShown, LANE_CARD_MIN, rowFit } from '../src/fleet/stripFold';
@@ -168,7 +168,7 @@ let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
@@ -176,7 +176,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await server?.close();
-  removeDist(dist);
 });
 
 /** Open the app and wait until the desk bar, all seventeen cards and its New session door are in place. The strip folds by

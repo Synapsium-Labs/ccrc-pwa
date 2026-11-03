@@ -14,7 +14,9 @@
 #                       suites (the `fast-plan` job, .github/ci/fast-plan.mjs),
 #                       and the agent and pwa tests the change can reach
 #                       (.github/ci/reach.mjs). No browser suite, node floor,
-#                       perf leg or macOS leg. The required check names all
+#                       perf leg or macOS leg. A docs-only change (D-7868) also
+#                       skips the agent tests, the pwa typecheck, the pwa build
+#                       and Storybook, by step. The required check names all
 #                       report, over what ran. The `full-ci` label (read when a
 #                       run starts: a label starts none), a head branch under
 #                       `train/`, or a change to shared infrastructure (under
@@ -28,7 +30,13 @@
 #                       full-suite. ONE exception (the owner's ruling of
 #                       2026-11-02): the browser shards skip their tests when
 #                       no file in the group can reach them, a docs-only
-#                       group above all (reach.mjs `queueScope`). The
+#                       group above all (reach.mjs `queueScope`). And a
+#                       DOCS-ONLY group (every file under docs/, none of them
+#                       infrastructure: reach.mjs `docsOnly`; D-7868, the
+#                       operator's direction of 2026-11-03) runs the server
+#                       tests a pull request runs for its change (the fast
+#                       plan), skips the node floor's and the agent's tests by
+#                       step, and runs the pwa suite in full. The
 #                       required checks carry the browser suite (`test (pwa)`)
 #                       and the node floor (`test (server)`) here, so their red
 #                       stops the merge; the perf legs stay advisory. Nothing
@@ -392,7 +400,9 @@ jobs:
           INPUT_WORKERS: ${{ github.event_name == 'workflow_dispatch' && inputs.workers || '' }}
           PIPELINE_CHANGED: ${{ steps.pipeline.outputs.changed }}
           FLOOR: ${{ steps.floor.outputs.run }}
-          BASE: ${{ format('origin/{0}', github.base_ref) }}
+          # A pull request's base, or the merge queue's base sha: a docs-only group selects from it as a pull request
+          # does, and reach.mjs's `--ask fast` answers true for it (D-7868).
+          BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || format('origin/{0}', github.base_ref) }}
         run: |
           args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --base "$BASE" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
           if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ] || [ "$FULL_LABEL" = true ]; then args+=(--input-mode full); fi
@@ -531,7 +541,8 @@ jobs:
       - name: Plan
         id: plan
         env:
-          BASE_REF: ${{ github.base_ref }}
+          # A pull request's base, or the merge queue's base sha for a docs-only group (D-7868).
+          BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || format('origin/{0}', github.base_ref) }}
           FALLBACK_MATRIX: ${{ needs.select.outputs.server_matrix }}
           FALLBACK_COUNT: ${{ needs.select.outputs.count }}
           # The map's selection for the changed paths vitest cannot follow (a script, a fixture, Python): a JSON list,
@@ -539,7 +550,7 @@ jobs:
           UNTRACED: ${{ needs.select.outputs.untraced }}
         run: |
           printf '%s' "$UNTRACED" > "$RUNNER_TEMP/untraced.json"
-          mb=$(git merge-base "origin/$BASE_REF" HEAD)
+          mb=$(git merge-base "$BASE" HEAD)
           (cd server && ./node_modules/.bin/vitest list --filesOnly --changed "$mb" --json > "$RUNNER_TEMP/related.json") || { rm -f "$RUNNER_TEMP/related.json"; echo "::warning::vitest list failed; the fast plan falls back"; }
           args=(--repo "$GITHUB_WORKSPACE" --base "$mb" --related "$RUNNER_TEMP/related.json" --untraced "$RUNNER_TEMP/untraced.json" --fallback-matrix "$FALLBACK_MATRIX" --fallback-count "$FALLBACK_COUNT")
           if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi
@@ -861,8 +872,18 @@ jobs:
           FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') || startsWith(github.head_ref, 'train/') }}
         run: node .github/ci/reach.mjs --pkg agent --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"
 
+      # A docs-only merge-queue group skips the agent tests (reach.mjs `queueScope`, QUEUE_DOCS_ONLY; D-7868, the
+      # operator's direction of 2026-11-03): no agent test reads docs/. By STEP, as the browser leg's queue ask is, so
+      # `test (agent)` still reports success; any other group runs them.
+      - name: Can this merge-queue group reach the agent tests?
+        id: queue-reach
+        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'
+        env:
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+        run: node .github/ci/reach.mjs --pkg agent --event merge_group --base "$QUEUE_BASE"
+
       - name: Test
-        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && steps.queue-reach.outputs.skip != 'true'
         working-directory: ${{ matrix.package }}
         run: ./node_modules/.bin/vitest run
 
@@ -985,10 +1006,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      # A docs-only pull request skips the pwa typecheck, the palette check and the Storybook build: docs/ is foreign to
+      # them (reach.mjs FOREIGN `pwa-build`; D-7868, the operator's direction of 2026-11-03). By STEP: the job
+      # still runs and reports success. Only a pull request asks; the merge queue and main run them whatever changed.
+      - name: Can this change reach the pwa build?
+        id: reach
+        if: env.CCRC_LEG == 'run' && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') || startsWith(github.head_ref, 'train/') }}
+        run: node .github/ci/reach.mjs --pkg pwa-build --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"
       # '22', as `deps` and the server shards: the trees' cache key names the
       # node version setup-node resolves, so another string would always miss.
       - uses: actions/setup-node@v7
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         with:
           node-version: '22'
           cache: npm
@@ -1001,22 +1032,22 @@ jobs:
       # The same restored install, ui included, before the typecheck, for the
       # shards' reason above.
       - uses: ./.github/actions/server-deps
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         with:
           platform: linux
 
       - name: Typecheck
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
         run: ./node_modules/.bin/tsc --noEmit
 
       - name: Typecheck @ccrc/ui (incl. .storybook and stories)
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: ui
         run: ./node_modules/.bin/tsc --noEmit
 
       - name: Generated palettes match their seeds
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: ui
         run: npm run themes:check
 
@@ -1027,7 +1058,7 @@ jobs:
       # `storybook-a11y` job below, which is not required; this step stays
       # because it is the cheap half and it runs under a required check.
       - name: Storybook builds (the one surface that renders the components)
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: ui
         run: npm run build-storybook
 
@@ -1109,12 +1140,26 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v7
+          # Full depth: the reach step below diffs the pull request from its merge base.
+          fetch-depth: 0
+      # A docs-only pull request skips the Storybook render and axe runs: docs/ is foreign to
+      # them (reach.mjs FOREIGN `pwa-build`; D-7868, the operator's direction of 2026-11-03). By STEP: the job
+      # still runs and reports success. Only a pull request asks; the merge queue and main run them whatever changed.
+      - name: Can this change reach the pwa build?
+        id: reach
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') || startsWith(github.head_ref, 'train/') }}
+        run: node .github/ci/reach.mjs --pkg pwa-build --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"
+      - if: steps.reach.outputs.skip != 'true'
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: ui/package-lock.json
-      - working-directory: ui
+      - if: steps.reach.outputs.skip != 'true'
+        working-directory: ui
         run: ../.github/ci/bounded.sh 180 npm ci
       # Chromium only, plus its system libraries (`install-deps`): a bare
       # runner has none of the shared libraries headless chromium links
@@ -1128,7 +1173,8 @@ jobs:
       # stalled mirror once held this step to the job limit), and the browser
       # download runs under bounded.sh (its own deadline and one retry,
       # D-7689). The step's limit is the backstop.
-      - working-directory: ui
+      - if: steps.reach.outputs.skip != 'true'
+        working-directory: ui
         timeout-minutes: 12
         run: |
           ../.github/ci/apt-bounded.sh 240 ./node_modules/.bin/playwright install-deps chromium
@@ -1137,9 +1183,11 @@ jobs:
       # build is Refined (STORYBOOK_SKIN unset, `resolveSkin` of undefined) and
       # the second opens every story in Instrument. The catalogue's ids and
       # these runs are pinned equal by server/test/ci-pipeline.test.ts.
-      - working-directory: ui
+      - if: steps.reach.outputs.skip != 'true'
+        working-directory: ui
         run: npm run build-storybook -- --quiet
-      - working-directory: ui
+      - if: steps.reach.outputs.skip != 'true'
+        working-directory: ui
         run: STORYBOOK_SKIN=instrument npm run build-storybook -- --quiet -o storybook-static-instrument
       # Served as static files rather than `storybook dev`: the dev server
       # compiles on demand, so a slow first story reads as a timeout. `vite
@@ -1148,16 +1196,18 @@ jobs:
       # because `localhost` may resolve to ::1 and the wait below asks
       # 127.0.0.1. The background process outlives this step, which is what
       # the wait is for.
-      - working-directory: ui
+      - if: steps.reach.outputs.skip != 'true'
+        working-directory: ui
         run: |
           ./node_modules/.bin/vite preview --outDir storybook-static --host 127.0.0.1 --port 6006 --strictPort &
           ./node_modules/.bin/vite preview --outDir storybook-static-instrument --host 127.0.0.1 --port 6007 --strictPort &
           ./node_modules/.bin/wait-on tcp:127.0.0.1:6006 tcp:127.0.0.1:6007 -t 60000
       # One axe run per skin. The second runs even when the first fails
       # (`!cancelled()`), so a red Refined run never hides Instrument's result.
-      - working-directory: ui
+      - if: steps.reach.outputs.skip != 'true'
+        working-directory: ui
         run: npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6006
-      - if: ${{ !cancelled() }}
+      - if: ${{ !cancelled() && steps.reach.outputs.skip != 'true' }}
         working-directory: ui
         run: npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6007
 
@@ -1204,8 +1254,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
+        # Full depth: the reach step below diffs the pull request from its merge base.
+        with:
+          fetch-depth: 0
+      # A docs-only pull request skips the provenance check, the install and the vite build: docs/ is foreign to
+      # them (reach.mjs FOREIGN `pwa-build`; D-7868, the operator's direction of 2026-11-03). By STEP: the job
+      # still runs and reports success. Only a pull request asks; the merge queue and main run them whatever changed.
+      - name: Can this change reach the pwa build?
+        id: reach
+        if: env.CCRC_LEG == 'run' && github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') || startsWith(github.head_ref, 'train/') }}
+        run: node .github/ci/reach.mjs --pkg pwa-build --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"
       - uses: actions/setup-node@v7
-        if: env.CCRC_LEG == 'run'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         with:
           # '22' here for consistency with the server shards, not because
           # anything checks it. This job runs `npm run build` in pwa/ and
@@ -1231,7 +1294,7 @@ jobs:
       # `npm pack`, `openssl`, `gh` and pwa's lock. No `continue-on-error`: an
       # attestation outage reds the job and the remedy is a re-run. Then pwa's
       # `npm audit signatures` checks every registry signature after the install.
-      - if: env.CCRC_LEG == 'run'
+      - if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash .github/ci/library-provenance.sh
@@ -1243,21 +1306,21 @@ jobs:
       # that same `tsc --noEmit` on every run, so the second copy here bought
       # nothing but a duplicate (D-6770). Exactly one pwa typecheck runs per CI
       # run, in that job.
-      - if: env.CCRC_LEG == 'run'
+      - if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: ui
         run: ../.github/ci/bounded.sh 180 npm ci
-      - if: env.CCRC_LEG == 'run'
+      - if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
         run: ../.github/ci/bounded.sh 180 npm ci
-      - if: env.CCRC_LEG == 'run'
+      - if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
         run: ../.github/ci/bounded.sh 180 npm audit signatures
-      - if: env.CCRC_LEG == 'run'
+      - if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
         run: ./node_modules/.bin/vite build
       # The build is only proven by its output existing. A green build step with
       # no artifact is the failure this repo has already shipped once.
-      - if: env.CCRC_LEG == 'run'
+      - if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         run: test -f server/dist-pwa/index.html
 
   # THE REAL-BROWSER LEG (native Docs reader spec 2026-10-01 §5.7, U4). pwa's
@@ -1384,7 +1447,9 @@ jobs:
   # stable promotion, and in the merge queue `test (server)` refuses its red
   # (operator ruling 2026-10-28). Its only job-level `if:` is `!cancelled()`, so a failed
   # `needs:` never skips it: it skips by STEP on a refresh, a rebuild, a fast
-  # pull request (operator ruling 2026-10-28: the merge queue runs it), or a
+  # pull request (operator ruling 2026-10-28: the merge queue runs it), a
+  # docs-only merge-queue group (select's `fast` there; D-7868, the operator's
+  # direction of 2026-11-03: docs cannot change runtime compatibility), or a
   # pull request that changed none of its inputs (D-6771), like the required
   # legs, because a job skipped by `if:` reads as red in full-suite. Default
   # checkout depth: nothing on its list reads the commit range.
@@ -1401,7 +1466,7 @@ jobs:
     # list runs in seconds. 30 is a deadline, not an estimate.
     timeout-minutes: 30
     env:
-      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true'))) && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true')) || (github.event_name == 'merge_group' && needs.select.outputs.fast == 'true')) && 'skip' || 'run' }}
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'

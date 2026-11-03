@@ -9,6 +9,7 @@ import { isNodeRole } from '../../shared/node-role.js';
 import { isReleaseSourceName } from '../../shared/release-notes.js';
 import { SPAWN_STALL_MS, type NodeRole } from '../../shared/api.js';
 import { DISPATCH_ABANDON_DEFAULT_MS } from '../../shared/dispatch-abandon.js';
+import { backupStaleHoursOf } from '../../shared/backup.js';
 import type { FingerprintAnswer } from './accounts/mask.js';
 import { DEPS_SHED_AFTER_HOURS_DEFAULT, DEPS_SHED_PER_PASS_DEFAULT } from './depsShed.js';
 
@@ -221,6 +222,10 @@ export interface CcrcConfig {
    *  console's own stalled threshold, itself at or above the `ws-add` ceiling), else `DISPATCH_ABANDON_DEFAULT_MS`; a
    *  value set and refused says so once at load. */
   dispatchAbandonMs: number;
+  /** D-7858: `CCRC_BACKUP_STALE_HOURS`, how old the fleet box's last successful backup may be before the backup block
+   *  reads `stale`. A whole number from 1 to `BACKUP_STALE_HOURS_MAX`, else `BACKUP_STALE_HOURS_DEFAULT` (36), read by
+   *  `backupStaleHoursOf` (shared/backup.ts), the decider's own vocabulary. */
+  backupStaleHours: number;
   /**
    * Stage 3a's session gate — is it ARMED? `false` is the shipped default and
    * the whole deploy story: with the flag off `server/src/auth/gate.ts`'s one
@@ -548,6 +553,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     updateDeadlineMs: Number.isSafeInteger(deadlineNum) && deadlineNum > 0 ? deadlineNum : DEFAULT_UPDATE_DEADLINE_MS,
     depsShed: depsShedConfigOf(env),
     dispatchAbandonMs,
+    backupStaleHours: backupStaleHoursOf(env.CCRC_BACKUP_STALE_HOURS),
     // The auth keys. Task 5 added ONLY the ones the gate itself consumes (the
     // plan parks config in Task 10, but there is no gating a route on a key
     // that does not exist); Task 8 adds `rpId`/`origin`/`passkeysPath`; Task 10

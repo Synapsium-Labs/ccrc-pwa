@@ -16,7 +16,8 @@ const meta = {
           + 'second one’s comment pointing at the first. A glyph AND a short word, '
           + 'deliberately: an icon-only gear would be exactly as undiscoverable as the '
           + 'AccountsStrip tap target D-161 found was the only door to /accounts. '
-          + '`aria-label` is required, because neither door’s own word says what is behind it.',
+          + '`aria-label` is required, because neither door’s own word says what is behind it, '
+          + 'and it begins with that word, so a voice user saying what they see reaches the door.',
       },
     },
   },
@@ -27,9 +28,9 @@ type Story = StoryObj<typeof meta>;
 
 /** The door to /accounts. Its name says both halves of the screen — sign-in
  *  and accounts — because "Account" alone is what the strip already failed to
- *  communicate. */
+ *  communicate, and it starts with "Account", the word on the door (D-7897). */
 export const Account: Story = {
-  args: { glyph: <Icon name="key-round" />, children: 'Account', 'aria-label': 'Your sign-in and accounts' },
+  args: { glyph: <Icon name="key-round" />, children: 'Account', 'aria-label': 'Account — your sign-in and accounts' },
 };
 
 /** The door to /settings. The name begins with the visible word, so a voice
@@ -47,10 +48,10 @@ export const Settings: Story = {
  *  `.shell-nav`'s `--bg-surface` in the desktop sidebar — and the token
  *  contract measures all four pairs rather than picking one. */
 export const InAHeaderGroup: Story = {
-  args: { glyph: <Icon name="key-round" />, children: 'Account', 'aria-label': 'Your sign-in and accounts' },
+  args: { glyph: <Icon name="key-round" />, children: 'Account', 'aria-label': 'Account — your sign-in and accounts' },
   render: () => (
     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--sp-2)' }}>
-      <Door glyph={<Icon name="key-round" />} aria-label="Your sign-in and accounts">Account</Door>
+      <Door glyph={<Icon name="key-round" />} aria-label="Account — your sign-in and accounts">Account</Door>
       <Door glyph={<Icon name="settings" />} aria-label="Settings — updates and notifications">Settings</Door>
     </div>
   ),

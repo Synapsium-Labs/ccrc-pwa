@@ -4787,6 +4787,9 @@ _check_graphify() {
   local gfx_gate=", gate on"
   [ ! -e "$HOME/.ccrc/graph-gate-off" ] \
     || gfx_gate=", gate off (operator file \$HOME/.ccrc/graph-gate-off)"
+  # D-7876: the last pass, also on every verdict line, set by (6) from the census: its status, how long it ran
+  # (finished - started), and for a deferred-pressure pass its run and its reason. Empty with no readable census.
+  local gfx_lastpass=""
 
   local -a gfx_install_fail=() gfx_probe_fail=() gfx_store_fail=() gfx_excludes_fail=() gfx_links_fail=()
   local -a gfx_census_fail=() gfx_census_warn=() gfx_disk_fail=() gfx_disk_warn=() gfx_disk_unread_warn=()
@@ -4861,7 +4864,8 @@ _check_graphify() {
   fi
 
   # The rendered units (spec §5.2, §8 row 2; Linux, where they are systemd units): the installed timer's
-  # OnUnitActiveSec= and the service's TimeoutStartSec= against what `_inst_graph_timer`/`_inst_graph_service`
+  # OnUnitInactiveSec= (D-7876; a timer still on OnUnitActiveSec= has none, and is told to update) and the service's
+  # TimeoutStartSec= against what `_inst_graph_timer`/`_inst_graph_service`
   # (GR8, D-7354) render from the current settings. Rendered into a scratch directory in a subshell, with the
   # settings read above (INST_GRAPH_LIB set, so the renderer does not re-read them); the doctor never writes a unit.
   if [ "${CCD_OS:-linux}" != darwin ] && [ "$gfx_lib" -eq 1 ] && [ -n "${BOX_TREE_DIR:-}" ]; then
@@ -4872,7 +4876,7 @@ _check_graphify() {
               _inst_graph_timer "$BOX_TREE_DIR/deploy/systemd/ccd-graph-sweep.timer" "$gfx_tmp/ccd-graph-sweep.timer" \
                 && _inst_graph_service "$BOX_TREE_DIR/deploy/systemd/ccd-graph-sweep.service" "$gfx_tmp/ccd-graph-sweep.service"
             ) >/dev/null 2>&1; then
-        for gfx_u in ccd-graph-sweep.timer:OnUnitActiveSec ccd-graph-sweep.service:TimeoutStartSec; do
+        for gfx_u in ccd-graph-sweep.timer:OnUnitInactiveSec ccd-graph-sweep.service:TimeoutStartSec; do
           gfx_d="${gfx_u#*:}"; gfx_u="${gfx_u%%:*}"
           [ -f "$gfx_udir/$gfx_u" ] || continue
           gfx_have="" gfx_want=""
@@ -5017,6 +5021,22 @@ _check_graphify() {
     local status finished
     status="$(jq -r '.passes[-1].status // empty' "$census" 2>/dev/null)"
     finished="$(jq -r '.passes[-1].finished // empty' "$census" 2>/dev/null)"
+    # D-7876: the ticket's "show the last run, its duration, and whether it was skipped". A deferral is the sweep doing
+    # what CCRC_GRAPH_PRESSURE_MAX asks, so it is shown, never a finding; a stamp that does not parse (or runs
+    # backwards) leaves the duration unknown rather than guessed. Fractional seconds are dropped before jq parses one.
+    local gfx_lp gfx_lst="" gfx_ld="" gfx_ln="" gfx_lsince="" gfx_lwhy=""
+    gfx_lp="$(jq -r 'def e: try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null;
+      .passes[-1] | ((.finished // "" | e) as $f | (.started // "" | e) as $s
+        | if $f == null or $s == null or $f < $s then "" else (($f - $s) | floor | tostring) end) as $d
+      | [.status // "", $d, ((.deferrals // 1) | tostring), (.deferred_since // ""),
+         ((.reason // "") | gsub("[\n\t\u001f]"; " "))]
+      | join("\u001f")' "$census" 2>/dev/null)" || gfx_lp=""
+    IFS=$'\037' read -r gfx_lst gfx_ld gfx_ln gfx_lsince gfx_lwhy <<< "$gfx_lp"
+    if [ -n "$gfx_lst" ]; then
+      if [ -n "$gfx_ld" ]; then gfx_lastpass=", last pass $gfx_lst in $gfx_ld s"; else gfx_lastpass=", last pass $gfx_lst, duration unknown"; fi
+      [ "$gfx_lst" != deferred-pressure ] \
+        || gfx_lastpass+=" ($gfx_ln deferred in a row${gfx_lsince:+ since $gfx_lsince}${gfx_lwhy:+: $gfx_lwhy})"
+    fi
     case "$status" in
       probed-zero)
         gfx_census_fail+=("the last graph-sweep pass ended $status")
@@ -5277,8 +5297,8 @@ _check_graphify() {
   _gfx_v() {
     local cls="$1" fix="$2"; shift 2
     [ "$#" -gt 0 ] || return 0
-    if [ "$cls" = FAIL ]; then _dr_fail graphify "$(_dr_join "$@")$gfx_gate" "$fix"; rc=1
-    else _dr_warn graphify "$(_dr_join "$@")$gfx_gate" "$fix"; [ "$rc" -eq 1 ] || rc=2
+    if [ "$cls" = FAIL ]; then _dr_fail graphify "$(_dr_join "$@")$gfx_lastpass$gfx_gate" "$fix"; rc=1
+    else _dr_warn graphify "$(_dr_join "$@")$gfx_lastpass$gfx_gate" "$fix"; [ "$rc" -eq 1 ] || rc=2
     fi
   }
   _gfx_v FAIL "run: ccrc install — it provisions the engine venv, stamps the pin, and converges every rostered home's skill" \
@@ -5326,7 +5346,7 @@ _check_graphify() {
   if [ "$rc" -ne 0 ]; then
     return "$rc"
   fi
-  _dr_pass graphify "engine $pin, skills converged, census ok$gfx_gate"
+  _dr_pass graphify "engine $pin, skills converged, census ok$gfx_lastpass$gfx_gate"
 }
 
 # ── graphify-path: what a session runs when it types `graphify` (R3) ──────

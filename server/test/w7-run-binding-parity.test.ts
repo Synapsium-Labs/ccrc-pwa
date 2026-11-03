@@ -42,6 +42,8 @@ function serverRun(r: FixtureRun, mark: Mark, earlier: 'stamped' | 'unstamped'):
     // The minting run carries this occupant's birth; a run opened for an earlier occupant carries that one's, or none.
     sessionBornAt: minted ? openedAt(r.id) : before && earlier === 'stamped' ? openedAt(r.id) : null,
     sessionBornFor: minted || (before && earlier === 'stamped') ? ID : null,
+    // Read only for an unborn incarnation with an open minting run, which no fixture here builds.
+    dispatchStartedAt: null,
   };
 }
 

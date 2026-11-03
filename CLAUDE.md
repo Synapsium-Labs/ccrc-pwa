@@ -134,8 +134,8 @@ real values: `deploy/reference-fleet.md` (gitignored).
   coordinator or child — runs the mutating `ccrc account` subs (`add`, `auth-start`, `auth-code`, `auth-cancel`, `set`,
   `check`, `enable`, `disable`, `credential`, `remove`, `seed`), `openrouter-management` with any sub (`ceiling`
   included), `ccd-account-auth` or `ccd account-pane`; reads `~/.cc-secrets/`, `~/.ccrc/auth-scratch/`,
-  `~/.ccrc/codex/*/runtime.env`, `~/.ccrc/agent.env`, the Linear slot store `~/.ccrc/linear/` or the legacy
-  `~/.ccrc/linear.key` (D-7675); writes under `~/.cc-sessions/.auth/` or `~/.cc-sessions/.accounts/`; or prints the
+  `~/.ccrc/codex/*/runtime.env`, `~/.ccrc/agent.env`, the Linear slot store `~/.ccrc/linear/`, the legacy
+  `~/.ccrc/linear.key` (D-7675) or the operator's secret slots `~/.ccrc/operator-secrets/` (D-7714); writes under `~/.cc-sessions/.auth/` or `~/.cc-sessions/.accounts/`; or prints the
   whole environment (bare `env`, `printenv`). They are the operator's, from
   the PWA's Accounts screen or their own shell. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
   spawn in `~/.cc-sessions/account-deny.settings.json`, the session hook's account arm refuses the path-qualified,
@@ -299,7 +299,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   D-7870, `docs/superpowers/plans/2026-11-02-ci-queue-browser-docs-skip.md`): the browser shards skip their
   tests, by step, when no file in the group can reach them (`reach.mjs` `queueScope`, the browser package's FOREIGN
   list, `docs/` among it), so a docs-only group skips them and `test (pwa)` reads the shards' success. `docs/` stays
-  reachable for the pwa suite, which renders it. The queue is the
+  reachable for the pwa suite, which renders it. **A docs-only change** (non-empty, every file under `docs/` and none
+  of them infrastructure: `reach.mjs` `docsOnly`; a root `.md` is not one; D-7868, the operator's direction of
+  2026-11-03) runs only what can see it: in the queue, the server tests a pull request runs for it (the fast plan, from
+  the queue's base), no node floor or agent tests, and the pwa suite whole; on a pull request without `full-ci`, no
+  agent tests, pwa typecheck, pwa build or Storybook. Every skip is by step, so the required checks still report. The queue is the
   safety net for everything the fast run leaves out, so nobody bypasses it: an admin merge that skips the queue
   (`gh pr merge --admin`; the ruleset's admin bypass allows it) lands on the fast run only, so never use it. **The macOS legs** (`test-macos`, `probe-macos`)
   live in `.github/workflows/macos.yml`, off the merge path and off the push to `main` (2026-11-02): the daily run calls them (their nightly run), a dispatched
@@ -540,8 +544,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   route's literal. So does `POST /api/digest/correct` (coordinator-first routing D-5300): it queues the operator's
   correction of a digest line as durable system mail to that line's coordinator, consults no box token, is
   session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/programmes/:slug/goals`,
-  `POST /api/items/:id/tick` and `POST /api/items/:id/dismiss`, consult no box token either: the tick queues the operator's
-  answer as system mail to the programme's coordinator in the move's own transaction, and every one is session-gated when armed. They are
+  `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss` and `PUT /api/items/:id/secret` (plan PL6), consult no box token
+  either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
+  the secret door stores a pasted value in its protected slot and ticks with "set" and when, and the last four characters
+  only for a value at the masker's 20-byte floor or longer, behind a step-up,
+  and every one is session-gated when armed. They are
   registered by `registerLedgerOperatorRoutes` in `server/src/coord/ledgersRoutes.ts`, called from `server.ts`; the census reads
   that file as a lane source of its own and keeps their names in a hand-kept `LEDGER_OPERATOR_DOORS`, checked against it in both
   directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code

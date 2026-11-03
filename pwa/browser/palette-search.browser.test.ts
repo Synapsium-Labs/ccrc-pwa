@@ -14,7 +14,7 @@ import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { fleetSession } from '../test/fleetFixture';
 import { resolveChrome } from './harness';
-import { buildDist, openApp, removeDist, serveDist, type AppFixture, type DistServer } from './app';
+import { openApp, serveDist, sharedDist, type AppFixture, type DistServer } from './app';
 
 const FIRST = fleetSession({
   id: 'project-a-one', project: 'project-a', workdir: '/w/project-a', name: 'first', workspace: 'ws-a', bucket: 'attention',
@@ -42,7 +42,7 @@ let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
@@ -50,7 +50,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await server?.close();
-  removeDist(dist);
 });
 
 async function openFleet(page: Page): Promise<void> {

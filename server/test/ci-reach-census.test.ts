@@ -11,6 +11,12 @@
  * docs/ (markdown-guard, markdown-parse, docs-markdown), and the browser tests
  * read nothing under it, which is what lets docs/ be foreign to `browser` and
  * never to `pwa` (the queue's browser skip, the owner's ruling of 2026-11-02).
+ *
+ * D-7868 (the operator's direction of 2026-11-03): docs/ is foreign to the agent tests and to `pwa-build` (the pwa
+ * typecheck, the pwa build and Storybook), so a docs-only change skips them. The agent trees are scanned for a docs/
+ * read like any other foreign one, and from the repository root below; the pwa build's inputs (the source trees it
+ * compiles, the test and browser trees its typecheck includes, and its tsconfig, vite and Storybook configs) are
+ * scanned for any path that resolves under docs/.
  */
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
@@ -23,10 +29,10 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 /** Each scanned tree, and the reach package whose tests it holds. pwa/test is the pwa suite's; the browser leg's
  *  share of it is `browserImports()`, scanned below. */
 const TREES: Array<{ dir: string; pkgs: string[] }> = [
-  { dir: 'pwa/src', pkgs: ['pwa', 'browser'] },
+  { dir: 'pwa/src', pkgs: ['pwa', 'browser', 'pwa-build'] },
   { dir: 'pwa/test', pkgs: ['pwa'] },
-  { dir: 'pwa/browser', pkgs: ['pwa', 'browser'] },
-  { dir: 'ui/src', pkgs: ['pwa', 'browser'] },
+  { dir: 'pwa/browser', pkgs: ['pwa', 'browser', 'pwa-build'] },
+  { dir: 'ui/src', pkgs: ['pwa', 'browser', 'pwa-build'] },
   { dir: 'agent/src', pkgs: ['agent'] },
   { dir: 'agent/test', pkgs: ['agent'] },
 ];
@@ -82,6 +88,23 @@ function browserImports(): string[] {
   return [...seen].sort();
 }
 
+// A tsconfig's text without its comments: line and block comments outside strings (a glob like src/** is a string).
+function stripJsonComments(text: string): string {
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      out += text.slice(i, j + 1); i = j; continue;
+    }
+    if (c === '/' && text[i + 1] === '/') { while (i < text.length && text[i] !== '\n') i++; out += '\n'; continue; }
+    if (c === '/' && text[i + 1] === '*') { const end = text.indexOf('*/', i + 2); i = end < 0 ? text.length : end + 1; continue; }
+    out += c;
+  }
+  return out;
+}
+
 /** Every finding of `files` whose target `pkg` would skip on: a read the reach list does not know about. */
 function offendersOf(files: string[], pkgs: string[]): string[] {
   const offenders: string[] = [];
@@ -134,19 +157,70 @@ describe('the reach list follows what the tests read across trees', () => {
   // either tree from disk by a ROOT-relative path (no `..` segment, so the scan above cannot see it) must go red here.
   // The server suite needs no such census: it is selected from a strace of each test (openat, stat, getdents64), so
   // a server test that reads pwa/src from disk carries those paths in its map record.
-  it('agent: no fs path names pwa/ or ui/ from the repository root', () => {
+  // docs/ too since D-7868: a docs-only change skips the agent tests, so one that reads docs/ by a root-relative path
+  // must go red here as well.
+  it('agent: no fs path names pwa/, ui/ or docs/ from the repository root', () => {
     const offenders: string[] = [];
     for (const dir of ['agent/src', 'agent/test']) {
       for (const file of walk(path.join(ROOT, dir))) {
         const text = readFileSync(file, 'utf8');
         for (const m of text.matchAll(/path\.(?:join|resolve)\(([^;]*?)\)/gs)) {
           const segs = [...m[1].matchAll(/'([^'\n]*)'|"([^"\n]*)"/g)].map((x) => x[1] ?? x[2]);
-          if (segs.some((g) => g === 'pwa' || g === 'ui' || /^(?:pwa|ui)\//.test(g))) offenders.push(`${path.relative(ROOT, file)}: ${m[0].slice(0, 80)}`);
+          if (segs.some((g) => g === 'pwa' || g === 'ui' || g === 'docs' || /^(?:pwa|ui|docs)\//.test(g))) offenders.push(`${path.relative(ROOT, file)}: ${m[0].slice(0, 80)}`);
         }
-        for (const m of text.matchAll(/['"`](?:pwa|ui)\/(?:src|test|browser|public)\b[^'"`\n]*['"`]/g)) offenders.push(`${path.relative(ROOT, file)}: ${m[0]}`);
+        for (const m of text.matchAll(/['"`](?:(?:pwa|ui)\/(?:src|test|browser|public)\b|docs\/)[^'"`\n]*['"`]/g)) offenders.push(`${path.relative(ROOT, file)}: ${m[0]}`);
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('agent: its vitest config and setup files name no docs/ path (D-7868)', () => {
+    const cfg = path.join(ROOT, 'agent', 'vitest.config.ts');
+    const list = /setupFiles:\s*\[([^\]]*)\]/.exec(readFileSync(cfg, 'utf8'))?.[1] ?? '';
+    const setups = [...list.matchAll(/['"]([^'"]+)['"]/g)].map((m) => path.resolve(ROOT, 'agent', m[1]!));
+    // Guard the guard: the config names its two setup files.
+    expect(setups.map((f) => path.relative(ROOT, f)).sort()).toEqual(['agent/test/contain-path.setup.ts', 'server/test/git-env.setup.mjs']);
+    for (const f of [cfg, ...setups]) {
+      const docs = targetsOf(f).filter((t) => t === 'docs' || t.startsWith('docs/'));
+      expect(docs, `${path.relative(ROOT, f)} reads docs/, so a docs-only change could change what the agent tests see`).toEqual([]);
+      expect(readFileSync(f, 'utf8'), path.relative(ROOT, f)).not.toMatch(/['"`]docs\//);
+    }
+  });
+
+  // The pwa build's inputs (D-7868): `pwa-static` typechecks pwa (src, test, browser, spike, its two configs and
+  // ../shared) and ui (src, .storybook, vite.config.ts), checks the palettes and builds Storybook; `build-pwa` runs the
+  // vite build; `storybook-a11y` builds and renders the stories. DERIVED: every tsconfig, vite config and Storybook
+  // config file in pwa/ and ui/, and every tree a tsconfig includes, is read here.
+  it('pwa-build: no tsconfig, vite or Storybook config, and nothing a tsconfig includes, names a path under docs/', () => {
+    const configs = ['pwa', 'ui'].flatMap((pkg) => readdirSync(path.join(ROOT, pkg))
+      .filter((n) => /^(?:tsconfig[\w.-]*\.json|vite[\w.-]*\.config\.[mc]?[tj]s|vitest[\w.-]*\.config\.[mc]?[tj]s)$/.test(n))
+      .map((n) => path.join(ROOT, pkg, n)));
+    configs.push(...walk(path.join(ROOT, 'ui', '.storybook')));
+    expect(configs.map((f) => path.relative(ROOT, f)), 'the config walk went blind').toEqual(expect.arrayContaining(
+      ['pwa/tsconfig.json', 'pwa/vite.config.ts', 'ui/tsconfig.json', 'ui/.storybook/main.ts']));
+    const underDocs = (t: string): boolean => t === 'docs' || t.startsWith('docs/') || t.startsWith(`docs${path.sep}`);
+    for (const f of configs) {
+      const rel = path.relative(ROOT, f);
+      expect(targetsOf(f).filter(underDocs), `${rel} names a path under docs/`).toEqual([]);
+      if (!f.endsWith('.json')) continue;
+      // A tsconfig's include, files and extends: each resolves outside docs/, and each included tree imports nothing
+      // under it (a type-only or raw import of a document would put docs/ into the typecheck).
+      const json = JSON.parse(stripJsonComments(readFileSync(f, 'utf8'))) as
+        { include?: string[]; files?: string[]; extends?: string };
+      const entries = [...(json.include ?? []), ...(json.files ?? []), ...(json.extends ? [json.extends] : [])];
+      for (const e of entries) {
+        const target = path.relative(ROOT, path.resolve(path.dirname(f), e.replace(/\/?\*.*$/, '') || '.'));
+        expect(underDocs(target), `${rel} includes ${e}, under docs/`).toBe(false);
+        const dir = path.join(ROOT, target);
+        if (!existsSync(dir) || !statSync(dir).isDirectory() || target === 'pwa' || target === 'ui') continue;
+        for (const file of walk(dir)) {
+          for (const m of readFileSync(file, 'utf8').matchAll(RELATIVE_IMPORT)) {
+            const to = path.relative(ROOT, path.resolve(path.dirname(file), m[1]!));
+            expect(underDocs(to), `${path.relative(ROOT, file)} imports ${m[1]}, under docs/`).toBe(false);
+          }
+        }
+      }
+    }
   });
 
   it('sees the two reads that motivated the list (a pane fixture and laneSchedule.ts)', () => {

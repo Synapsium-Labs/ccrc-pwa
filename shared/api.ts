@@ -12555,11 +12555,11 @@ export const ACCOUNT_CLI_ONLY_VERBS: Readonly<Record<string, string>> = Object.f
 export const ACCOUNT_DENY_SUBS: readonly string[] =
   'add|auth-start|auth-code|auth-cancel|set|check|enable|disable|credential|remove|seed|openrouter-management'.split('|');
 
-/** The account paths the guard covers (spec §3.1; the Linear slot store and legacy key, D-7675), `~`-anchored: Read (and
- *  Bash) of the first six, writes under the last two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
+/** The account paths the guard covers (spec §3.1; the Linear slot store and legacy key, D-7675; the operator's pasted
+ *  secrets, programme ledgers plan PL6), `~`-anchored: Read (and Bash) of the first seven, writes under the last two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
  *  and `~/.cc-sessions/<id>.wrapper`; a read of `.accounts/<id>.json` (spec §3.1 lists writes only) or `~/.ccrc/linear.json` is not refused. */
 export const ACCOUNT_SECRET_PATHS: readonly string[] =
-  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key'];
+  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**'];
 export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
 
 /** The Linear MCP tools no fleet session may call (D-7674, #1444 spec §11): every Linear act goes through `ccrc-api linear`
@@ -13044,4 +13044,17 @@ export interface AccountSignOutAnswer {
   readonly ok: true;
   readonly signOut: 'removed' | 'absent';
   readonly lane: LaneWire;
+}
+
+/** `FleetHealth`'s backup block (D-7858), at the foot as an interface merge, the disk block's rule, so no line cited
+ *  above moves. */
+import type { BackupHealth } from './backup.js';
+export interface FleetHealth {
+  /**
+   * The fleet box's backup health (`BackupHealth`): the status the decider judged from the backup state files on the
+   * last read, the last success, failure, skip and warning, and the staleness. Optional for the absence-permits reason:
+   * an older server, an agent without the `backup` op, or no read yet omits it. Read it through `readBackupHealth`
+   * alone; absent reads as UNKNOWN, never as a healthy backup and never as an alarm.
+   */
+  backup?: BackupHealth;
 }

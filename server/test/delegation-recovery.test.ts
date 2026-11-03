@@ -86,7 +86,7 @@ import * as checkpointNs from '../src/coord/delegation-checkpoint.js';
 import type { DelegationApplyOutcome } from '../src/coord/delegation-checkpoint.js';
 import * as modelNs from '../src/coord/delegation-model.js';
 import { oldRuleCheckpoint } from './delegationOldRuleFixture.js';
-import { parsedFile } from './scan/symbols.js';
+import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
 
 // A pass-through of the journal's append planner that a test can switch to "skip everything". `createLease` calls the planner after its
 // own checks, so no real input makes the planner skip the entry it was handed; this is the only way to reach that branch (fix round 1, M6).
@@ -116,6 +116,8 @@ function delegationProjectionPortOfStore(store: CoordStore): DelegationProjectio
     projectChanged: (prior, next) => store.projectDelegationCheckpointChanges(prior, next),
     insertEvents: (rows) => store.insertDelegationEvents(rows),
     eventStats: () => store.delegationEventStats(),
+    countEventsAtOrBelow: (s) => store.countDelegationEventsAtOrBelow(s),
+    deleteEventsBetween: (a, b, n) => store.deleteDelegationEventsBetween(a, b, n),
   };
 }
 
@@ -578,6 +580,7 @@ function spyPort(log: string[], inner: DelegationFilePort = nodeDelegationFilePo
     // MUST 1's boot report: two reads of the tail quarantine, not logged (no read is), so every write-order row is unchanged
     listDir: (d) => inner.listDir(d),
     statFile: (p) => inner.statFile(p),
+    removeTemp: async (p) => { log.push(`removeTemp:${path.basename(p)}`); await inner.removeTemp(p); },
     openRead: async (p) => {
       const h = await inner.openRead(p);
       if (h === null) return null;
@@ -1051,6 +1054,8 @@ function harness(opts: { dir?: string; store?: CoordStore } = {}): Harness {
     projectChanged: (prior, next) => { log.push('projectChanged'); return real.projectChanged(prior, next); },
     insertEvents: (rows) => { log.push(`insertEvents:${rows.length}`); return real.insertEvents(rows); },
     eventStats: () => real.eventStats(),
+    countEventsAtOrBelow: (s) => real.countEventsAtOrBelow(s),
+    deleteEventsBetween: (a, b, n) => real.deleteEventsBetween(a, b, n),
   };
   const deps = (over: Partial<DelegationDurabilityDeps> = {}): DelegationDurabilityDeps => ({
     dir, projection, port: spyPort(log), now: () => clock.ms, randomUUID: () => { uuidCalls.n++; return uuids.shift() ?? `generated-${uuidCalls.n}`; }, ...over,
@@ -1751,6 +1756,7 @@ describe('D-4655: a torn journal tail heals itself (the one named exception to t
         openRead: async (p) => { read(`openRead:${path.basename(p)}`); return inner.openRead(p); },
         listDir: async (d) => { read(`listDir:${path.basename(d)}`); return inner.listDir(d); },
         statFile: async (p) => { read(`statFile:${path.basename(p)}`); return inner.statFile(p); },
+        removeTemp: async (p) => { mutate(`removeTemp:${path.basename(p)}`); await inner.removeTemp(p); },
       };
       return { port, ops, count: () => n };
     }
@@ -2057,7 +2063,7 @@ describe('D-4655: a torn journal tail heals itself (the one named exception to t
       return {
         openAppend: alive(inner.openAppend), createTemp: alive(inner.createTemp), rename: alive(inner.rename), fsyncDir: alive(inner.fsyncDir),
         readFile: alive(inner.readFile), openRead: alive(inner.openRead), mkdirp: alive(inner.mkdirp), fsyncFile: alive(inner.fsyncFile),
-        listDir: alive(inner.listDir), statFile: alive(inner.statFile),
+        listDir: alive(inner.listDir), statFile: alive(inner.statFile), removeTemp: alive(inner.removeTemp),
         truncate: alive(async (p: string, len: number) => { await inner.truncate(p, len); dead = true; throw new SimulatedCrash('killed after the cut'); }),
       };
     };
@@ -2662,7 +2668,7 @@ describe('SQLite is repaired from the checkpoint and the journal (ruling R20)', 
     expect(statsOf(rolledStore)).toEqual({ count: 3, maxSequence: 3 });
     const port = delegationProjectionPortOfStore(rolledStore);
     const inserted: number[] = [];
-    const spy: DelegationProjectionPort = { project: (cp) => port.project(cp), projectChanged: (prior, next) => port.projectChanged(prior, next), eventStats: () => port.eventStats(), insertEvents: (rows) => { inserted.push(rows.length); return port.insertEvents(rows); } };
+    const spy: DelegationProjectionPort = { project: (cp) => port.project(cp), projectChanged: (prior, next) => port.projectChanged(prior, next), eventStats: () => port.eventStats(), countEventsAtOrBelow: (s) => port.countEventsAtOrBelow(s), deleteEventsBetween: (a, b, n) => port.deleteEventsBetween(a, b, n), insertEvents: (rows) => { inserted.push(rows.length); return port.insertEvents(rows); } };
     const report = await repairDelegationProjection({
       projection: spy, checkpoint: (await harness({ dir: h.dir }).open()).state().checkpoint,
       journal: () => (async function* () { for (const r of parseDelegationJournal(new Uint8Array(readFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE))))) yield r; })(),
@@ -2683,7 +2689,7 @@ describe('SQLite is repaired from the checkpoint and the journal (ruling R20)', 
     let ticks = 0;
     const timer = setInterval(() => { ticks++; }, 0);
     await repairDelegationProjection({
-      projection: { project: (cp) => port.project(cp), projectChanged: (prior, next) => port.projectChanged(prior, next), eventStats: () => port.eventStats(), insertEvents: (rows) => { sizes.push(rows.length); return port.insertEvents(rows); } },
+      projection: { project: (cp) => port.project(cp), projectChanged: (prior, next) => port.projectChanged(prior, next), eventStats: () => port.eventStats(), countEventsAtOrBelow: (s) => port.countEventsAtOrBelow(s), deleteEventsBetween: (a, b, n) => port.deleteEventsBetween(a, b, n), insertEvents: (rows) => { sizes.push(rows.length); return port.insertEvents(rows); } },
       checkpoint: dur.state().checkpoint, chunkSize: 10,
       journal: () => (async function* () { for (const r of parseDelegationJournal(new Uint8Array(readFileSync(path.join(h.dir, DELEGATION_JOURNAL_FILE))))) yield r; })(),
     });
@@ -2792,6 +2798,12 @@ describe('the repair reads the journal as few times as it can (fix round 1, M3)'
         return { inserted, duplicate: rows.length - inserted, conflicts: [] };
       },
       eventStats: () => ({ count: held.size, maxSequence: held.size === 0 ? null : Math.max(...held) }),
+      countEventsAtOrBelow: (s) => [...held].filter((n) => n <= s).length,
+      deleteEventsBetween: (a, b, limit) => {
+        const cut = [...held].filter((s) => s > a && s <= b).sort((x, y) => x - y).slice(0, limit);
+        for (const s of cut) held.delete(s);
+        return cut.length;
+      },
     };
     return { port, calls, sequences: () => [...held].sort((a, b) => a - b) };
   }
@@ -3134,10 +3146,27 @@ describe('no-compaction / hold table (W3-M38): holds are computed and tested, an
     // outside the heal, or a rename of anything but the two temp files each turn them red.
     it('the journal module has no method that could rewrite it: its ONLY truncate is the port member the tail heal calls, and the writer has none', () => {
       const j = code('delegation-journal.ts');
-      const p = stripComments(parsedFile('server/src/coord/delegation-file-port.ts').text);
-      const port = parsedFile('server/src/coord/delegation-file-port.ts').bindings.find((b) => b.name === 'nodeDelegationFilePort')!.init;
+      const parsedPort = parsedFile('server/src/coord/delegation-file-port.ts');
+      const p = stripComments(parsedPort.text);
+      const port = parsedPort.bindings.find((b) => b.name === 'nodeDelegationFilePort')!.init;
+      // wave 4 (D-7021): exempt exactly this whole named method, not the adapter. Its exact body pins the .tmp refusal BEFORE unlink,
+      // absence tolerance and propagation of every other error; the caller's two-name closed list is pinned below (W4-CM16).
+      const removeTemp = [
+        '',
+        '  removeTemp: async (p) => {',
+        "    if (!p.endsWith('.tmp')) throw new Error(`removeTemp removes a compaction temp file only, not ${p}`);",
+        '    try { await fsp.unlink(p); } catch (err) { if (!isEnoent(err)) throw err; }',
+        '  },',
+        '',
+      ].join('\n');
+      expect(port.match(/^  removeTemp:/gm), 'exactly one named method').toHaveLength(1);
+      expect(port.split(removeTemp), 'exactly one whole method with the guarded failure contract').toHaveLength(2);
+      expect(p.split(removeTemp), 'exactly one exemption in the whole source').toHaveLength(2);
       expect(j).not.toMatch(/ftruncate|\bunlink\(|\brm\(|\.writeFile\(|\bcreateWriteStream\(|O_TRUNC\b.*journal/i);
-      expect(p).not.toMatch(/ftruncate|\bunlink\(|\brm\(|\.writeFile\(|\bcreateWriteStream\(|O_TRUNC\b.*journal/i);
+      expect(p.replace(removeTemp, ''), 'every byte outside that one method keeps the original prohibition').not.toMatch(/ftruncate|\bunlink\(|\brm\(|\.writeFile\(|\bcreateWriteStream\(|O_TRUNC\b.*journal/i);
+      expect(parsedPort.calls.filter((c) => c.name === 'unlink').map((c) => `${c.callee}(${c.args.map((a) => a.text).join(', ')})`), 'one unlink: removeTemp\'s node adapter').toEqual(['fsp.unlink(p)']);
+      expect(parsedPort.calls.filter((c) => c.callee === 'p.endsWith').map((c) => c.args.map((a) => a.text)), 'and its guard').toEqual([['.tmp']]);
+      expect(`${j}\n${p}`.match(/\btruncate\b/g), 'the port member, its node adapter and the adapter\'s fsp call: three words, no more').toHaveLength(3);
       expect(j.match(/\btruncate\b/g), 'the port member: one word in the journal').toHaveLength(1);
       expect(p.match(/\btruncate\b/g), "its node adapter and the adapter's fsp call: two words in the port file").toHaveLength(2);
       expect(j).toMatch(/^  truncate\(path: string, length: number\): Promise<void>;$/m);
@@ -3151,9 +3180,20 @@ describe('no-compaction / hold table (W3-M38): holds are computed and tested, an
     });
     it('the checkpoint module cuts the journal in ONE place (the heal, at the plan\'s offset), renames only its two temp files, and opens the journal only for append or read', () => {
       const c = code('delegation-checkpoint.ts');
-      expect(c.match(/\.rename\(/g), 'the checkpoint temp file and the quarantine temp file').toEqual(['.rename(', '.rename(']);
+      // wave 4 (D-7021): the compaction's two renames join the checkpoint's and the quarantine's, each of a temp onto its own file, the carried
+      // file's FIRST (a crash between them leaves a valid retained set)
+      expect(c.match(/\.rename\(/g), 'the checkpoint, quarantine, carried and journal temp files').toEqual(['.rename(', '.rename(', '.rename(', '.rename(']);
       expect(c).toMatch(/this\.port\.rename\(this\.tempPath, this\.checkpointPath\)/);
       expect(c).toMatch(/this\.port\.rename\(temp, kept\)/);
+      // the compaction's renames and temp removals, read from the parse by symbol (ARCH-06): the carried file's rename comes first, and
+      // `removeTemp` names the two temps and nothing else (W4-CM16)
+      const CHECKPOINT_TS = 'server/src/coord/delegation-checkpoint.ts';
+      const compact = symbolOf(CHECKPOINT_TS, 'DelegationDurability.compactJournal');
+      const argsOf = (callee: string): string[] => callsIn(compact).filter((x) => x.callee === callee).map((x) => x.args.map((a) => a.text).join(', '));
+      expect(argsOf('this.port.rename'), 'the carried file, then the journal').toEqual(['carriedTemp, this.carriedPath', 'journalTemp, this.journalPath']);
+      expect(argsOf('this.port.removeTemp')).toEqual(['carriedTemp', 'journalTemp']);
+      expect(parsedFile(CHECKPOINT_TS).bindings.filter((b) => b.start >= compact.start && b.end <= compact.end && /Temp$/.test(b.name)).map((b) => `${b.name} = ${b.init}`))
+        .toEqual(['carriedTemp = `${this.carriedPath}.tmp`', 'journalTemp = `${this.journalPath}.tmp`']);
       expect(c).toMatch(/const temp = `\$\{kept\}\.tmp`;/);
       expect(c).toMatch(/const kept = path\.join\(this\.deps\.dir, DELEGATION_TORN_DIR, plan\.name\);/);
       expect(c).not.toMatch(/unlink|\.writeFile\(|rmSync/);
@@ -3216,7 +3256,7 @@ describe('the pure/impure split is explicit, and nothing pure mints an ID or rea
       const imports = [...pure.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1]);
       expect(imports.sort()).toEqual(file === 'delegation-journal.ts'
         ? ['../../../shared/api.js', './delegation-model.js']
-        : ['../../../shared/api.js', './delegation-journal.js', './delegation-model.js', 'node:path']);
+        : ['../../../shared/api.js', './delegation-compaction.js', './delegation-journal.js', './delegation-model.js', 'node:path']);
     });
     it(`${file}: no randomness and no clock anywhere in the module (they are injected)`, () => {
       const src = strip(readFileSync(path.join(dir, file), 'utf8'));
@@ -3911,6 +3951,8 @@ describe('D-5836 R2: every case where the per-pass repair must still take the FU
       },
       insertEvents: (rows) => { h.log.push(`insertEvents:${rows.length}`); return real.insertEvents(rows); },
       eventStats: () => { if (ctl.failStats) throw new Error('eventStats failed (fixture)'); return real.eventStats(); },
+      countEventsAtOrBelow: (s) => real.countEventsAtOrBelow(s),
+      deleteEventsBetween: (a, b, n) => real.deleteEventsBetween(a, b, n),
     };
     const over = {
       projection, monotonicMs: () => vclock.ms,
@@ -4631,7 +4673,7 @@ describe('run 762: the zero-delta Bash retirement door, its lease guard and its 
 
   // ── RB18: the one code that deletes ─────────────────────────────────────────────────────────────────────────────────
 
-  it('RB18: the builder\'s only code that deletes a mapping entry or an activity row is retireZeroDeltaBash (a census of code lines, by enclosing method)', () => {
+  it('RB18: the builder\'s only code that deletes a mapping entry or an activity row is retireZeroDeltaBash, and since wave 4 retireBehindCut (C1, D-7001) (a census of code lines, by enclosing method)', () => {
     const file = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord', 'delegation-checkpoint.ts');
     let method = '(file)';
     let inClass = false;
@@ -4647,7 +4689,7 @@ describe('run 762: the zero-delta Bash retirement door, its lease guard and its 
       if (/delete this\.mapping\[|this\.activities\.delete\(/.test(l)) hits.push(method);
       if (/^}/.test(l)) { inClass = false; method = '(file)'; }
     }
-    expect([...new Set(hits)], 'the methods whose code deletes from the mapping or the activities').toEqual(['retireZeroDeltaBash']);
+    expect([...new Set(hits)], 'the methods whose code deletes from the mapping or the activities').toEqual(['retireZeroDeltaBash', 'retireBehindCut']);
   });
 
   // ── RB20: the fault matrix ──────────────────────────────────────────────────────────────────────────────────────────
@@ -4720,6 +4762,8 @@ describe('run 762: the zero-delta Bash retirement door, its lease guard and its 
       projectChanged: (prior, next) => { const r = real.projectChanged(prior, next); modes.push(`projectChanged:${r.mode}`); return r; },
       insertEvents: (rows) => real.insertEvents(rows),
       eventStats: () => real.eventStats(),
+      countEventsAtOrBelow: (s) => real.countEventsAtOrBelow(s),
+      deleteEventsBetween: (a, b, n) => real.deleteEventsBetween(a, b, n),
     };
     const dur = await h.open({ projection });
     expect(dur.failure()).toBeNull();
@@ -5160,6 +5204,8 @@ describe('run 762: workflow runs end on their task notification, start-less stop
       },
       insertEvents: (rows) => real.insertEvents(rows),
       eventStats: () => real.eventStats(),
+      countEventsAtOrBelow: (s) => real.countEventsAtOrBelow(s),
+      deleteEventsBetween: (a, b, n) => real.deleteEventsBetween(a, b, n),
     };
     return { projection, calls, restore: (): void => full.mockRestore() };
   }

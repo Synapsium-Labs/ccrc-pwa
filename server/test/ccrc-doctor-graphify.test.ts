@@ -483,6 +483,39 @@ describe('ccrc doctor: graphify', () => {
     expect(lineFor(runDoctor(home).stdout, 'graphify')).toMatch(/^PASS graphify:/);
   });
 
+  // D-7876: every graphify verdict line names the last pass's status and duration (finished - started, from the
+  // census), and a deferred-pressure pass's run and reason; a deferral is reported, never a finding of its own, and no
+  // census (a fresh box) or a stamp that does not parse leaves the duration out rather than guessing it.
+  const censusOf = (home: string, pass: Record<string, unknown>): void =>
+    writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{ pin: '0.9.9', repos: [], ...pass }] }));
+  it('the PASS line names the last pass\'s status and how long it ran (D-7876)', () => {
+    const home = healthy('ccrc-doctor-gfx-last-ok-'); graphifyHealthy(home);
+    censusOf(home, { started: isoAgo(100), finished: isoAgo(58), status: 'ok' });
+    expect(lineFor(runDoctor(home).stdout, 'graphify')).toBe('PASS graphify: engine 0.9.9, skills converged, census ok, last pass ok in 42 s, gate on');
+  });
+  it('a deferred-pressure last pass is shown with its run and its reason, and is not a finding (D-7876)', () => {
+    const home = healthy('ccrc-doctor-gfx-last-deferred-'); graphifyHealthy(home);
+    const since = isoAgo(1800);
+    censusOf(home, { started: isoAgo(5), finished: isoAgo(4), status: 'deferred-pressure', deferrals: 3, deferred_since: since,
+      reason: 'host memory pressure (avg10) is 72.50, above CCRC_GRAPH_PRESSURE_MAX=60, so the pass is deferred to the timer\'s next firing' });
+    const r = runDoctor(home);
+    expect(gfxVerdicts(r.stdout)).toEqual([
+      'PASS graphify: engine 0.9.9, skills converged, census ok, last pass deferred-pressure in 1 s (3 deferred in a row since '
+        + `${since}: host memory pressure (avg10) is 72.50, above CCRC_GRAPH_PRESSURE_MAX=60, so the pass is deferred to the timer's next firing), gate on`,
+    ]);
+  });
+  it('a WARN or FAIL line carries the last pass too, and a stamp that does not parse says the duration is unknown (D-7876)', () => {
+    const home = healthy('ccrc-doctor-gfx-last-fail-'); graphifyHealthy(home);
+    censusOf(home, { started: 's', finished: 'f', status: 'probed-zero' });
+    const line = lineFor(runDoctor(home).stdout, 'graphify');
+    expect(line).toBe('FAIL graphify: the last graph-sweep pass ended probed-zero, last pass probed-zero, duration unknown, gate on');
+  });
+  it('no census: no last-pass words at all (a fresh box, D-1061)', () => {
+    const home = healthy('ccrc-doctor-gfx-last-none-'); graphifyHealthy(home);
+    rmSync(join(home, '.ccrc', 'graph-sweep.json'));
+    expect(lineFor(runDoctor(home).stdout, 'graphify')).toBe('PASS graphify: engine 0.9.9, skills converged, census ok, gate on');
+  });
+
   it('WARNs when the last pass finished long enough ago that the timer looks stopped', () => {
     const home = healthy('ccrc-doctor-gfx-census-stale-'); graphifyHealthy(home);
     // 60 minutes ago — over 3x the sweep timer's 15-minute interval (45 min).
@@ -512,14 +545,14 @@ describe('ccrc doctor: graphify', () => {
   };
   it('a census 2700 s old is inside three of the timer\'s cycles: the PASS, byte for byte (C8b)', () => {
     const out = runDoctor(censusAged('ccrc-doctor-gfx-census-2700-', 2700)).stdout;
-    expect(lineFor(out, 'graphify'), out).toBe('PASS graphify: engine 0.9.9, skills converged, census ok, gate on');
+    expect(lineFor(out, 'graphify'), out).toBe('PASS graphify: engine 0.9.9, skills converged, census ok, last pass ok in 0 s, gate on');
   });
   it('a census 2701 s old is past three of the timer\'s cycles: the WARN and its remedy, byte for byte (C8b)', () => {
     const out = runDoctor(censusAged('ccrc-doctor-gfx-census-2701-', 2701)).stdout;
     const lines = out.split('\n');
     const i = lines.findIndex((l) => l.startsWith('WARN graphify: '));
     expect(lines.slice(i, i + 2), out).toEqual([
-      'WARN graphify: the last graph-sweep pass finished 45 minutes ago — the timer may not be firing, gate on',
+      'WARN graphify: the last graph-sweep pass finished 45 minutes ago — the timer may not be firing, last pass ok in 0 s, gate on',
       '  remedy: check the timer: systemctl --user status ccd-graph-sweep.timer (and journalctl --user -u ccd-graph-sweep.service -n 20)',
     ]);
     expect(lines.filter((l) => /^(WARN|FAIL) graphify: /.test(l)), out).toHaveLength(1);
@@ -534,7 +567,7 @@ describe('ccrc doctor: graphify', () => {
     out.split(home).join('<home>').split('\n').filter((l, i, all) => /^(PASS|WARN|FAIL) graphify: /.test(l)
       || (/^ {2}remedy: /.test(l) && /^(WARN|FAIL) graphify: /.test(all[i - 1] ?? '')));
   const STALE = (minutes: number): string[] => [
-    `WARN graphify: the last graph-sweep pass finished ${minutes} minutes ago — the timer may not be firing, gate on`,
+    `WARN graphify: the last graph-sweep pass finished ${minutes} minutes ago — the timer may not be firing, last pass ok in 0 s, gate on`,
     '  remedy: check the timer: systemctl --user status ccd-graph-sweep.timer (and journalctl --user -u ccd-graph-sweep.service -n 20)',
   ];
   it.each([[2700, null], [2701, 45], [9000, 150]])('an unreadable ccd-graph-sweep.timer leaves graphify\'s bound at 3 x CCRC_GRAPH_REFRESH_SECS over a census %i s old (GR7)', (age, minutes) => {
@@ -542,7 +575,7 @@ describe('ccrc doctor: graphify', () => {
     writeShippedTimer(join(home, 'ccrc'), 'ccd-graph-sweep.timer', null);
     const r = runDoctor(home);
     expect(graphifyLines(r.stdout, home), r.stdout).toEqual(minutes === null
-      ? ['PASS graphify: engine 0.9.9, skills converged, census ok, gate on'] : STALE(minutes));
+      ? ['PASS graphify: engine 0.9.9, skills converged, census ok, last pass ok in 0 s, gate on'] : STALE(minutes));
     expect(r.stderr).not.toMatch(/integer (?:expression )?expected|syntax error|unbound variable/);
   });
   it('a check table sourced with no BOX_TREE_DIR still measures the census bound from the setting (GR7)', () => {
@@ -556,7 +589,7 @@ describe('ccrc doctor: graphify', () => {
     writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_GRAPH_REFRESH_SECS=600\n');
     const r = runDoctor(home);
     expect(graphifyLines(r.stdout, home), r.stdout).toEqual(minutes === null
-      ? ['PASS graphify: engine 0.9.9, skills converged, census ok, gate on'] : STALE(minutes));
+      ? ['PASS graphify: engine 0.9.9, skills converged, census ok, last pass ok in 0 s, gate on'] : STALE(minutes));
   });
 
   // D-1454 — A REFUSED BUILD IS A FINDING FOR AN OPERATOR, NOT A ROW NOBODY READS.
@@ -801,21 +834,34 @@ describe('ccrc doctor: graphify, revision 2 (GR7, D-7353)', () => {
     writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_GRAPH_REFRESH_SECS=600\nCCRC_GRAPH_BUDGET=2\n');
     const before = [readFileSync(timer, 'utf8'), readFileSync(service, 'utf8')];
     const r = runCheck(home, 'linux');
-    const line = gfxVerdicts(r.stdout).find((l) => l.includes('OnUnitActiveSec'));
+    const line = gfxVerdicts(r.stdout).find((l) => l.includes('OnUnitInactiveSec'));
     expect(line, r.stdout + r.stderr).toMatch(/^WARN graphify:/);
-    expect(line).toContain('OnUnitActiveSec=15min');
-    expect(line).toContain('OnUnitActiveSec=10min');
+    expect(line).toContain('OnUnitInactiveSec=15min');
+    expect(line).toContain('OnUnitInactiveSec=10min');
     expect(line).toContain('TimeoutStartSec=5400');
     expect(line).toContain('TimeoutStartSec=3000');
     expect(remedyOf(r.stdout, line)).toContain('run `ccrc update` to apply');
     expect([readFileSync(timer, 'utf8'), readFileSync(service, 'utf8')], 'the doctor wrote a unit').toEqual(before);
   });
+  // D-7876: the doctor compares the key the renderer now writes, OnUnitInactiveSec=. A box whose installed timer still
+  // carries the old OnUnitActiveSec= line has no OnUnitInactiveSec= at all, and is told to run `ccrc update`; the
+  // mutant half: the comparison reverted to OnUnitActiveSec= would read that old line and say nothing.
+  it('an installed timer still on OnUnitActiveSec= WARNs that it has no OnUnitInactiveSec= line (D-7876)', () => {
+    const home = healthy('ccrc-doctor-gfx2-drift-oldkey-'); graphifyHealthy(home); linkRenderTools(home);
+    const { timer } = installUnits(home);
+    writeFileSync(timer, readFileSync(timer, 'utf8').replace(/^OnUnitInactiveSec=/m, 'OnUnitActiveSec='));
+    const r = runCheck(home, 'linux');
+    const line = gfxVerdicts(r.stdout).find((l) => l.includes('ccd-graph-sweep.timer'));
+    expect(line, r.stdout + r.stderr).toMatch(/^WARN graphify:/);
+    expect(line).toContain('the installed ccd-graph-sweep.timer says OnUnitInactiveSec=(none), but the current graph settings render OnUnitInactiveSec=15min');
+    expect(remedyOf(r.stdout, line)).toContain('run `ccrc update` to apply');
+  });
   it('installed units that match the render say nothing; on darwin the arm is silent', () => {
     const home = healthy('ccrc-doctor-gfx2-drift-ok-'); graphifyHealthy(home); linkRenderTools(home);
     installUnits(home);
-    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, gate on']);
+    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, last pass ok in 0 s, gate on']);
     writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_GRAPH_REFRESH_SECS=600\n');
-    expect(gfxVerdicts(runCheck(home, 'darwin').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, gate on']);
+    expect(gfxVerdicts(runCheck(home, 'darwin').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, last pass ok in 0 s, gate on']);
   });
 
   // §8 row 3: the store root missing, unwritable, or without its marker.
@@ -882,7 +928,7 @@ describe('ccrc doctor: graphify, revision 2 (GR7, D-7353)', () => {
     expect(lineFor(runDoctor(home).stdout, 'graphify')).toMatch(/^PASS graphify:/);
     // The same healthy published build on the fleet's platform: the Linux-only sizing arm reads its measured peak.
     stubSliceSystemctl(home, SLICE_LOADED);
-    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, gate on']);
+    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, last pass ok in 0 s, gate on']);
   });
   it('an excluded repository, or one with no trees, is not asked for a build', () => {
     const home = healthy('ccrc-doctor-gfx2-excluded-'); graphifyHealthy(home);
@@ -929,7 +975,7 @@ describe('ccrc doctor: graphify, revision 2 (GR7, D-7353)', () => {
     plantBuild(home, KEY, { last_full_at: isoAgo(86400) });
     expect(lineFor(runDoctor(home).stdout, 'graphify')).toMatch(/^PASS graphify:/);
     stubSliceSystemctl(home, SLICE_LOADED);
-    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, gate on']);
+    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, last pass ok in 0 s, gate on']);
   });
 
   // §8 rows 8 and 9: real per-tree directories (migration pending), and dangling links.
@@ -961,7 +1007,7 @@ describe('ccrc doctor: graphify, revision 2 (GR7, D-7353)', () => {
     expect(line).toContain('ccrctests.slice is not loaded, so graph builds are refused until it is installed');
     expect(gfxVerdicts(runCheck(home, 'darwin').stdout).find((l) => l.includes('ccrctests.slice'))).toBeUndefined();
     stubSliceSystemctl(home, SLICE_LOADED);
-    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, gate on']);
+    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, last pass ok in 0 s, gate on']);
   });
 
   // §8 row 12: the sizing (decision G5), and N29's sizing half.
@@ -974,7 +1020,7 @@ describe('ccrc doctor: graphify, revision 2 (GR7, D-7353)', () => {
     expect(line).toMatch(/^WARN graphify:/);
     expect(line).toContain(`${KEY}'s last full build peaked at 5000000 KiB, above 75% of the tests slice's MemoryMax=6442450944 (6291456 KiB)`);
     writeCensus(home, [[fullRow('rebuilt', 4_000_000)]]);
-    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, gate on']);
+    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, last pass ok in 0 s, gate on']);
   });
   it('N29: an OOM-killed last full attempt never leaves the sizing arm green, even under a later fresh row', () => {
     const home = healthy('ccrc-doctor-gfx2-oom-'); graphifyHealthy(home);
@@ -991,7 +1037,7 @@ describe('ccrc doctor: graphify, revision 2 (GR7, D-7353)', () => {
     const line = gfxVerdicts(runCheck(home, 'linux').stdout).find((l) => l.includes('peak unmeasured'));
     expect(line).toMatch(/^WARN graphify:/);
     expect(line).toContain(KEY);
-    expect(gfxVerdicts(runCheck(home, 'darwin').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, gate on']);
+    expect(gfxVerdicts(runCheck(home, 'darwin').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, last pass ok in 0 s, gate on']);
   });
 
   it('with no rebuilt row in the census, the sizing reads the served full build\'s meta: a null peak WARNs, a large one names both numbers', () => {
@@ -1006,7 +1052,7 @@ describe('ccrc doctor: graphify, revision 2 (GR7, D-7353)', () => {
     line = gfxVerdicts(runCheck(home, 'linux').stdout).find((l) => l.includes('MemoryMax'));
     expect(line).toContain(`${KEY}'s last full build peaked at 5000000 KiB, above 75% of the tests slice's MemoryMax=6442450944 (6291456 KiB)`);
     plantBuild(home, KEY, { peak_mem_kb: null, kind: 'incremental' });
-    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, gate on']);
+    expect(gfxVerdicts(runCheck(home, 'linux').stdout)).toEqual(['PASS graphify: engine 0.9.9, skills converged, census ok, last pass ok in 0 s, gate on']);
   });
 
   // §8 row 13 and plan finding 1: the backoff WARN, with the shrink remedy; N28's doctor half.

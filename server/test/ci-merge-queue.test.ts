@@ -17,12 +17,17 @@
  *     queue would let the queue merge a tree nobody tested. The one leg that
  *     may skip its tests in the queue is the browser suite, by STEP, on
  *     reach.mjs's answer for the group's change (the owner's ruling of
- *     2026-11-02): its ask is the only other place the event is named.
+ *     2026-11-02): its ask is the only other place the event is named. And a
+ *     DOCS-ONLY group (D-7868, the operator's direction of 2026-11-03) skips
+ *     the agent tests by STEP, on the agent's own queue ask, and the node
+ *     floor's by its leg switch, on select's `fast`; the select and fast-plan
+ *     steps read the queue's base. Each of those shapes is allowed whole here.
  *  4. A queue run runs the FULL server suite and a pull request runs the light
  *     selection (operator ruling 2026-10-25, which replaced 2026-09-28's "a
  *     queue run runs what a pull request runs"): the header's mode table says
  *     so, `decideMode` agrees for every input, and the queue never answers
- *     `selected`.
+ *     `selected` but for a docs-only group (D-7868), which runs what a pull
+ *     request runs for its change.
  *  5. The selector and the verdict agree on which triggers may never answer
  *     `tests: none` — derived from `on:`, so a trigger added to one module's
  *     pull-request arm and not the other's reds here.
@@ -122,14 +127,23 @@ const PIPELINE_STEP_LINES = [
 
 /** The browser leg's merge-queue ask (the owner's ruling of 2026-11-02): a STEP of `browser-pwa`, never a job-level
  *  condition, that asks reach.mjs whether the group's change can reach the browser tests. It may skip only the browser
- *  leg's own later steps (ci-pipeline.test.ts evaluates that), so its lines are allowed there and nowhere else.
- *  TRANSITIONAL (2026-11-02): allowed, not yet required, until the rules-only pull request lands it; the pull request
- *  after that requires it. */
+ *  leg's own later steps (ci-pipeline.test.ts evaluates that), so its lines are allowed there and nowhere else. */
 const QUEUE_BROWSER_ASK_LINES = [
   "        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'",
   '          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}',
   '        run: node .github/ci/reach.mjs --pkg browser --event merge_group --base "$QUEUE_BASE"',
 ];
+
+/** The docs-only queue group's shapes (D-7868, the operator's direction of 2026-11-03), allowed whole in the required
+ *  closure: the agent's queue ask (a STEP of `test`, as the browser leg's is), the node floor's leg switch (one env
+ *  line, which skips by step on select's `fast`), and the queue's base in select's Select step and fast-plan's Plan
+ *  step (the pipeline step's own BASE line, already allowed above). None is a job-level condition. */
+const QUEUE_AGENT_ASK_LINES = [
+  "        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'",
+  '          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}',
+  '        run: node .github/ci/reach.mjs --pkg agent --event merge_group --base "$QUEUE_BASE"',
+];
+const QUEUE_FLOOR_LEG_LINE = "      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true')) || (github.event_name == 'merge_group' && needs.select.outputs.fast == 'true')) && 'skip' || 'run' }}";
 
 describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s shape)', () => {
   it('triggers on merge_group, beside pull_request', () => {
@@ -187,18 +201,26 @@ describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s 
     const QUEUE_REFUSAL = /^ {6}- name: [^\n]+\n {8}if: github\.event_name == 'merge_group' && needs\.[a-z-]+\.result != 'success'\n {8}run: exit 1\n/gm;
     const refusals: string[] = [];
     let browserAsk = 0;
+    let agentAsk = 0;
+    let floorLeg = 0;
     for (const id of req) {
       const text = (all.get(id) ?? []).join('\n') + '\n';
       for (const m of text.match(QUEUE_REFUSAL) ?? []) refusals.push(`${id}: ${/needs\.([a-z-]+)\./.exec(m)?.[1]}`);
-      const asks = (l: string): boolean => id === 'browser-pwa' && QUEUE_BROWSER_ASK_LINES.includes(l);
-      browserAsk += (all.get(id) ?? []).filter(asks).length;
+      const asks = (l: string): boolean => (id === 'browser-pwa' && QUEUE_BROWSER_ASK_LINES.includes(l))
+        || (id === 'test' && QUEUE_AGENT_ASK_LINES.includes(l)) || (id === 'node-floor' && l === QUEUE_FLOOR_LEG_LINE);
+      browserAsk += id === 'browser-pwa' ? (all.get(id) ?? []).filter(asks).length : 0;
+      agentAsk += id === 'test' ? (all.get(id) ?? []).filter(asks).length : 0;
+      floorLeg += id === 'node-floor' ? (all.get(id) ?? []).filter(asks).length : 0;
       const code = text.replace(QUEUE_REFUSAL, '').split('\n').filter((l) => !/^\s*#/.test(l) && !PIPELINE_STEP_LINES.includes(l) && !asks(l)).join('\n');
       expect(code, `\`${id}\` mentions merge_group — a required leg skipped by if: reports as PASSING, and the queue would merge an untested tree`)
         .not.toContain('merge_group');
     }
     expect(refusals.sort(), 'the queue-only refusals are exactly the browser suite and the node floor').toEqual(['pwa: browser-pwa', 'server: node-floor']);
-    // The browser ask is whole or absent (TRANSITIONAL: absent until the rules-only pull request lands it).
-    expect([0, QUEUE_BROWSER_ASK_LINES.length], 'browser-pwa carries part of the merge-queue ask').toContain(browserAsk);
+    // The browser ask is there, whole, once.
+    expect(browserAsk, 'browser-pwa does not carry the whole merge-queue ask exactly once').toBe(QUEUE_BROWSER_ASK_LINES.length);
+    // The docs-only shapes are whole (D-7868): the agent's ask, and the floor's one leg line.
+    expect(agentAsk, 'test (agent) carries part of the docs-only merge-queue ask').toBe(QUEUE_AGENT_ASK_LINES.length);
+    expect(floorLeg, 'node-floor carries no docs-only leg switch').toBe(1);
   });
 
   it('runs the full suite where a pull request runs the light one: the mode table has the row, and decideMode agrees for every input', () => {
@@ -212,8 +234,22 @@ describe('ci.yml and the merge queue (landing-order stage 2, on CI selection\'s 
       for (const fullGreen of [false, true]) {
         expect(decideMode({ event: 'merge_group', inputMode, fullGreen }).tests, `inputMode=${inputMode} fullGreen=${fullGreen}: a queue run must be full`)
           .toBe('full');
+        expect(decideMode({ event: 'merge_group', inputMode, fullGreen, queueDocsOnly: false }).tests).toBe('full');
+        // The one exception (D-7868): a docs-only group runs the selection a pull request runs for its change.
+        expect(decideMode({ event: 'merge_group', inputMode, fullGreen, queueDocsOnly: true }).tests, `inputMode=${inputMode}: a docs-only group`)
+          .toBe('selected');
       }
     }
+    // The invariant refuses a queue selection, but for a docs-only group; and never lets one answer none.
+    expect(modeInvariantViolation('merge_group', undefined, 'selected')).toMatch(/merge_group answered tests: selected/);
+    expect(modeInvariantViolation('merge_group', undefined, 'selected', true)).toBeNull();
+    expect(modeInvariantViolation('merge_group', undefined, 'none', true)).toMatch(/tests: none/);
+    // The docs-only flag reaches nothing but the queue.
+    for (const event of ['pull_request', 'schedule', 'workflow_dispatch', 'push']) {
+      expect(decideMode({ event, fullGreen: false, queueDocsOnly: true }), event).toEqual(decideMode({ event, fullGreen: false }));
+    }
+    // The header says so, beside the full row.
+    expect(header.join('\n')).toMatch(/DOCS-ONLY group/);
   });
 
   it('keeps the full shard matrix on the queue path: server-shard is not narrowed by anything but select\'s own outputs, and a queue run is never skipped by the light rule', () => {
