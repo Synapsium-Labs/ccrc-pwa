@@ -26,6 +26,7 @@ import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
+import { PROVIDERS } from '../../shared/providers';
 
 const THEMES = [PHOSPHOR, 'light'];
 const SKINS = [REFINED, INSTRUMENT];
@@ -246,9 +247,11 @@ describe('the Add account door and the connect sheet at every width and skin (D-
         await page.waitForSelector('[data-frame="method"]');
         const m = await page.evaluate(() => [...document.querySelectorAll<HTMLInputElement>('input[name="acct-method"]')]
           .map((r) => ({ value: r.value, checked: r.checked, disabled: r.disabled })));
-        expect(m.map((r) => r.value), 'the radio follows the provider table').toEqual(['login', 'paste', 'setup-token']);
+        // The order is read from the table, never restated here: Mint first since accounts plan Task A20 (Q1).
+        const table: readonly string[] = PROVIDERS.anthropic.connect;
+        expect(m.map((r) => r.value), 'the radio follows the provider table').toEqual([...table]);
         expect(m.find((r) => r.value === 'paste')).toEqual({ value: 'paste', checked: true, disabled: false });
-        expect(m.filter((r) => r.disabled).map((r) => r.value)).toEqual(['login', 'setup-token']);
+        expect(m.filter((r) => r.disabled).map((r) => r.value)).toEqual(table.filter((v) => v !== 'paste'));
         await step(page, 'method frame');
 
         // A refused paste: the sentence, and the field empty.

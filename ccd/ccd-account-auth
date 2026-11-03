@@ -53,6 +53,33 @@ CCRC_ACCOUNTS_JSON="$HOME/.ccrc/accounts.json"
 : "${CCRC_AUTH_PUMP_GRACE:=10}"
 : "${CCRC_AUTH_SCRIPT:=script}"
 
+# ── the attempt (accounts plan Task A20; D-5514, D-5515) ─────────────────
+# `ccrc account auth-start` runs this helper in a transient user unit with
+# `--attempt <attemptId>`, the 32-hex id the server generated. The id is
+# echoed into every status file this run writes, so the server can tell this
+# attempt's file from an earlier one's, or from one somebody else wrote.
+#
+# A PANE METHOD (setup-token, openai-login) needs a pty, and in an attempt its
+# pane is on the lane's OWN tmux server, `tmux -L ccrc-auth-<id>`, started
+# inside the unit, never on the fleet's shared server: the agent's tmux grant
+# names subcommands on the default socket only, so no drawer, `ptyOpen` or
+# `send-keys` can reach it. The unit's copy of this helper is the OUTER half:
+# it makes the pane, waits for it and cleans up. The copy in the pane is the
+# INNER half, marked by `CCRC_AUTH_IN_PANE=1`, and it is the one that runs the
+# sign-in and writes the status file while it lives.
+#
+# IN AN ATTEMPT THE CREDENTIAL LANDS IN SCRATCH, never in the lane: the minted
+# token in `~/.ccrc/auth-scratch/<id>/minted.env`, and a re-auth's or a
+# switch's sign-in in `~/.ccrc/auth-scratch/<id>/config` (outside every agent
+# read root). `ccrc account set --method … --attempt` then checks it and
+# installs it under the lane's lock, and only a passing check reaches `done`.
+AUTH_ATTEMPT=''
+AUTH_IN_PANE="${CCRC_AUTH_IN_PANE:-}"
+# 1 for the two pane methods: their terminal states kill the private server.
+AUTH_PANE_ARM=0
+# This file's own path, for the pane's command line (set in `_auth_main`).
+AUTH_SELF=''
+
 # ── platform ──────────────────────────────────────────────────────────────
 # A LOCAL COPY, deliberately, and it is `session-hook.sh`'s situation exactly:
 # this file is exec'd by tmux with no ccd to source (sourcing ccd RUNS ccd's
@@ -261,6 +288,24 @@ AUTH_SECRET_WRITTEN=0
 # terminal state of `_auth_setup_token`; without this flag the backstop would
 # stamp `failed: the mint exited 143` and break the contract it exists to keep.
 AUTH_EXPIRED=0
+# THE CANCEL TRAP NEVER RUNS ITS WORK INSIDE A TIMED `read`. The pump spends
+# nearly all of a sign-in in `read -t`, so that is where `auth-cancel`'s TERM
+# (or the pane's HUP) nearly always lands, and bash runs a trap from inside
+# that builtin with its timeout still armed. A subshell the trap forks
+# inherits the armed timeout: when the deadline passes while the publish's
+# `( jq … > tmp )` runs, the child either crashes (SIGBUS, measured) or jumps
+# back into the pump loop as a CLONE of this helper, still holding the code
+# channel, and `cancelled` is never written. The status file then says
+# `waiting-code` after a cancel was accepted, and the lane reads as a sign-in
+# in progress until the attempt ages out. MEASURED on bash 5.3 with a 10 ms
+# tick (`ccd-account-auth.test.ts`): the publish done from the trap itself
+# lost the write on 21 of 30 signals; deferred, on none. So while a timed read
+# is in flight (`AUTH_IN_READ`), the trap only records the signal, and
+# `_auth_read` runs `_auth_cancelled` the moment the read returns, from
+# ordinary control flow. Everywhere else the trap runs it at once, as it
+# always did.
+AUTH_IN_READ=0
+AUTH_SIGNALLED=0
 
 _auth_publish() {   # -> $AUTH_DIR/$AUTH_ID.json
   local tmp
@@ -275,8 +320,10 @@ _auth_publish() {   # -> $AUTH_DIR/$AUTH_ID.json
   ( umask 077
     jq -cn --arg state "$AUTH_STATE" --arg url "$AUTH_URL" \
            --arg userCode "$AUTH_CODE" --arg error "$AUTH_ERROR" \
+           --arg attemptId "$AUTH_ATTEMPT" \
            --arg updatedAt "$(date -u +%FT%TZ)" \
       '{state:$state, updatedAt:$updatedAt}
+       + (if $attemptId == "" then {} else {attemptId:$attemptId} end)
        + (if $url == "" then {} else {url:$url} end)
        + (if $userCode == "" then {} else {userCode:$userCode} end)
        + (if $error == "" then {} else {error:$error} end)' > "$tmp"
@@ -293,10 +340,46 @@ _auth_die() {   # <reason> — the file says failed, stderr says why, exit 1
   AUTH_STATE=failed; AUTH_ERROR="$1"
   _auth_publish || true
   echo "$SELF: $1" >&2
+  _auth_cleanup
   exit 1
 }
 
-_auth_cancelled() {   # the trap. `tmux kill-session` sends SIGHUP to the pane.
+# EVERY TERMINAL STATE CLEANS UP (D-5515): the lane's scratch directory goes,
+# with whatever credential an attempt left in it, and a pane method's private
+# tmux server is killed by name. tmux daemonises its server, so the unit's end
+# is not trusted to take it. The INNER half in the pane does not kill its own
+# server (its outer half does, once the pane has ended), and `login` has no
+# pane, so it touches no tmux at all.
+_auth_cleanup() {
+  [[ -n "$AUTH_ID" ]] || return 0
+  rm -rf -- "${SCRATCH_ROOT:?}/$AUTH_ID" 2>/dev/null
+  if (( AUTH_PANE_ARM )) && [[ -z "$AUTH_IN_PANE" ]]; then
+    tmux -L "ccrc-auth-$AUTH_ID" kill-server >/dev/null 2>&1
+  fi
+  return 0
+}
+
+_auth_end() {   # <done|expired> <rc> — a terminal state that is not a refusal
+  _auth_state "$1"
+  _auth_cleanup
+  exit "$2"
+}
+
+_auth_on_signal() {   # the trap: HUP, INT and TERM. A timed read defers it (see AUTH_IN_READ).
+  if (( AUTH_IN_READ )); then AUTH_SIGNALLED=1; return 0; fi
+  _auth_cancelled
+}
+
+_auth_read() {   # <read's own arguments…> — `IFS= read`, with the cancel trap held until it returns
+  local r=0
+  AUTH_IN_READ=1
+  IFS= read "$@" || r=$?
+  AUTH_IN_READ=0
+  (( ! AUTH_SIGNALLED )) || _auth_cancelled
+  return "$r"
+}
+
+_auth_cancelled() {   # the cancel. `tmux kill-session` sends SIGHUP to the pane.
   AUTH_STATE=cancelled; AUTH_ERROR=''
   _auth_publish || true
   # AND IT CLOSES THE CHANNEL (D-2737). This trap used to `exit 0` straight past
@@ -305,6 +388,7 @@ _auth_cancelled() {   # the trap. `tmux kill-session` sends SIGHUP to the pane.
   # one of them. The FIFOs are the worse half: they sit inside $HOME, and a
   # recursive reader that does not skip devices blocks on them for ever.
   _auth_close_pipes
+  _auth_cleanup
   exit 0
 }
 
@@ -492,7 +576,7 @@ _auth_open_pipes() {
   # business. A previous run killed mid-flight leaves its FIFOs behind, and
   # `mkfifo` on an existing path fails — so the removal is not tidiness, it is
   # what makes a retry possible at all.
-  rm -f -- "$AUTH_RUN/in" "$AUTH_RUN/out" "$AUTH_RUN/in.child" 2>/dev/null
+  rm -f -- "$AUTH_RUN/in" "$AUTH_RUN/out" "$AUTH_RUN/in.child" "$AUTH_RUN/code-sent" 2>/dev/null
   mkfifo -m 600 "$AUTH_RUN/in"       || return 1
   mkfifo -m 600 "$AUTH_RUN/out"      || return 1
   mkfifo -m 600 "$AUTH_RUN/in.child" || return 1
@@ -524,7 +608,7 @@ _auth_close_pipes() {
   # it still swallows a "bad file descriptor" from closing an fd a failed
   # `_auth_open_pipes` never opened, which is all it was ever for.
   { exec 7<&-; exec 8<&-; exec 9<&-; } 2>/dev/null
-  rm -f -- "$AUTH_RUN/in" "$AUTH_RUN/out" "$AUTH_RUN/in.child" 2>/dev/null
+  rm -f -- "$AUTH_RUN/in" "$AUTH_RUN/out" "$AUTH_RUN/in.child" "$AUTH_RUN/code-sent" 2>/dev/null
 }
 
 # ── the pump ──────────────────────────────────────────────────────────────
@@ -534,14 +618,26 @@ _auth_close_pipes() {
 # edit can put a token on a stream by accident: a line that carried one is
 # consumed here and the caller is told to stop.
 _auth_write_secret() {   # <token> — 0600, tmp + rename, and nothing is echoed
-  local tok="$1" tmp
-  mkdir -p "$SECRETS_DIR" || return 1
-  chmod 700 "$SECRETS_DIR" || return 1
-  tmp="$SECRETS_DIR/.$AUTH_ID-oauth.env.$$.tmp"
+  local tok="$1" tmp dest="$SECRETS_DIR/$AUTH_ID-oauth.env" dir name
+  # IN AN ATTEMPT THE TOKEN GOES TO SCRATCH, NOT TO THE LANE (D-5514): the
+  # lane's own `<id>-oauth.env` is kept until `ccrc account set --method
+  # setup-token` has probed the new one, so a refused or abandoned mint leaves
+  # the lane byte-identical. Outside an attempt (`ccd account-pane`, the
+  # wave-1 path) the token goes straight to the lane's file, as it always did.
+  [[ -z "$AUTH_ATTEMPT" ]] || dest="$SCRATCH_ROOT/$AUTH_ID/minted.env"
+  dir="${dest%/*}"; name="${dest##*/}"
+  mkdir -p "$dir" || return 1
+  chmod 700 "$dir" || return 1
+  tmp="$dir/.$name.$$.tmp"
   ( umask 077; printf 'export CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$tok" > "$tmp" ) \
     || { rm -f -- "$tmp"; return 1; }
   chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
-  mv -f -- "$tmp" "$SECRETS_DIR/$AUTH_ID-oauth.env" || { rm -f -- "$tmp"; return 1; }
+  # The lane's own file is spelled out on its `mv`: `roster-bash.test.ts` pins it as one of five writers of the name.
+  if [[ -n "$AUTH_ATTEMPT" ]]; then
+    mv -f -- "$tmp" "$dest" || { rm -f -- "$tmp"; return 1; }
+  else
+    mv -f -- "$tmp" "$SECRETS_DIR/$AUTH_ID-oauth.env" || { rm -f -- "$tmp"; return 1; }
+  fi
 }
 
 # TWO SPELLINGS, deliberately. `setup-token` prints the export line, and
@@ -561,9 +657,13 @@ _auth_capture_token() {   # <clean line> -> 0 when the line carried a token (cap
   tok="${tok%\"}"; tok="${tok#\"}"
   tok="${tok%\'}"; tok="${tok#\'}"
   [[ -n "$tok" ]] || return 1
-  _auth_write_secret "$tok" || _auth_die "could not write $SECRETS_DIR/$AUTH_ID-oauth.env"
+  _auth_write_secret "$tok" || _auth_die "could not write the captured token for $AUTH_ID"
   AUTH_SECRET_WRITTEN=1
-  printf '[token captured to ~/.cc-secrets/%s-oauth.env]\n' "$AUTH_ID"
+  if [[ -n "$AUTH_ATTEMPT" ]]; then
+    printf '[token captured; ccrc checks it before it is installed]\n'
+  else
+    printf '[token captured to ~/.cc-secrets/%s-oauth.env]\n' "$AUTH_ID"
+  fi
   return 0
 }
 
@@ -691,8 +791,8 @@ _auth_forward_code() {   # the operator's code: in on fd 7, out on fd 9, never o
   # the operator reads the URL. Without the peek this call spends a whole TICK
   # blocked on fd 7 every time round the loop, which halves the rate at which
   # the child's stream reaches the pane for the entire minutes-long wait.
-  IFS= read -t 0 -u 7 2>/dev/null || return 0
-  IFS= read -r -t "$CCRC_AUTH_TICK" -u 7 code || return 0
+  _auth_read -t 0 -u 7 2>/dev/null || return 0
+  _auth_read -r -t "$CCRC_AUTH_TICK" -u 7 code || return 0
   [[ -n "$code" ]] || return 0
   # NOTHING NAMED THE CODE REACHES A STREAM. It goes down fd 9 and nowhere
   # else; the pane and the transcript get the substitution line instead — the
@@ -777,7 +877,7 @@ _auth_pump() {   # the one loop: the child's stream out, the operator's code in
       return 0
     fi
     line=''
-    IFS= read -r -t "$CCRC_AUTH_TICK" -u 8 line; rc=$?
+    _auth_read -r -t "$CCRC_AUTH_TICK" -u 8 line; rc=$?
     if (( rc == 0 )); then
       _auth_line "$pending$line" "$shown"; pending=''; shown=''
     elif (( rc > 128 )); then
@@ -832,13 +932,24 @@ _auth_login() {   # `auth login --claudeai` — no pane, no pty, no script(1)
   # `setup-token` takes the same shape for the mirror reason (a wrapper's
   # export would overwrite ITS scratch dir); the rule both obey is one rule:
   # run the upstream launcher, and set the dir this method wants.
-  local cfg rc
+  local cfg rc into=lane
   cfg="$(_ccrc_cfg_dir "$AUTH_ID")"
   # `_ccrc_cfg_dir` has NO default arm (shared/generate.mjs), so an id it does
   # not know echoes nothing rather than guessing a home.
   [[ -n "$cfg" ]] || _auth_die "no config dir for $AUTH_ID in the roster"
   [[ -n "${CCRC_UPSTREAM:-}" ]] || _auth_die 'the roster names no upstream account'
   [[ -x "$WRAPPER_DIR/$CCRC_UPSTREAM" ]] || _auth_die "launcher-absent: $WRAPPER_DIR/$CCRC_UPSTREAM"
+  # A LANE THAT ALREADY HOLDS A CREDENTIAL SIGNS IN INTO SCRATCH (D-5514; spec
+  # §9's Sign in again and Switch to sign-in). Its own `.credentials.json`, or
+  # its token, stays until the new sign-in has been checked and installed under
+  # the lane's lock, so a refused, cancelled or expired attempt leaves it
+  # byte-identical. A lane with neither (a fresh add) signs in where it lives,
+  # which is the path OA1a measured.
+  if [[ -n "$AUTH_ATTEMPT" ]] && { [[ -e "$cfg/.credentials.json" || -L "$cfg/.credentials.json" ]] || _auth_token_lane; }; then
+    into=scratch
+    cfg="$SCRATCH_ROOT/$AUTH_ID/config"
+    mkdir -p -m 0700 "$SCRATCH_ROOT" "$SCRATCH_ROOT/$AUTH_ID" || _auth_die "cannot create $SCRATCH_ROOT/$AUTH_ID"
+  fi
   mkdir -p "$cfg" || _auth_die "cannot create $cfg"
   _auth_open_pipes || _auth_die 'cannot create the auth pipes'
   _auth_state starting
@@ -855,10 +966,11 @@ _auth_login() {   # `auth login --claudeai` — no pane, no pty, no script(1)
   # branch on — a bounded call that expired is a different fact from one that
   # failed, and collapsing them would tell an operator to retype a code into a
   # process that is gone.
-  if (( rc == 124 || AUTH_EXPIRED )); then _auth_state expired; exit 1; fi
+  if (( rc == 124 || AUTH_EXPIRED )); then _auth_end expired 1; fi
   (( rc == 0 )) || _auth_die "the sign-in exited $rc"
   [[ -r "$cfg/.credentials.json" ]] || _auth_die "the sign-in reported success but wrote no $cfg/.credentials.json"
-  _auth_state done
+  [[ "$into" == lane ]] || _auth_install login
+  _auth_end done 0
 }
 _auth_setup_token() {   # `claude setup-token` — an Ink TUI, so a pane and a pty
   local scratch rc argv=()
@@ -874,8 +986,11 @@ _auth_setup_token() {   # `claude setup-token` — an Ink TUI, so a pane and a p
     || _auth_die "pane-unsupported-here: $CCRC_AUTH_SCRIPT is not on this box, so a pty-bound mint cannot run (use --method login or paste)"
   # A THROWAWAY dir: setup-token stores nothing and needs no account state, and
   # a scratch dir carries no settings.json — so no ccrc hook can fire from this
-  # pane.
-  scratch="$SCRATCH_ROOT/$AUTH_ID"
+  # pane. `<id>/config`, every scratch config dir's one spelling (A20): under
+  # `~/.ccrc/auth-scratch`, outside every agent read root, and deleted on every
+  # terminal state.
+  scratch="$SCRATCH_ROOT/$AUTH_ID/config"
+  mkdir -p -m 0700 "$SCRATCH_ROOT" "$SCRATCH_ROOT/$AUTH_ID" || _auth_die "cannot create $SCRATCH_ROOT/$AUTH_ID"
   mkdir -p "$scratch" || _auth_die "cannot create $scratch"
   _auth_open_pipes || _auth_die 'cannot create the auth pipes'
   _auth_state starting
@@ -888,14 +1003,15 @@ _auth_setup_token() {   # `claude setup-token` — an Ink TUI, so a pane and a p
   _auth_pump
   wait "$child"; rc=$?
   _auth_close_pipes
-  if (( rc == 124 || AUTH_EXPIRED )); then _auth_state expired; exit 1; fi
+  if (( rc == 124 || AUTH_EXPIRED )); then _auth_end expired 1; fi
   (( rc == 0 )) || _auth_die "the mint exited $rc"
   # A MINT THAT PRINTED NOTHING IS NOT A SUCCESS. `AUTH_SECRET_WRITTEN` is
   # declared with the other AUTH_* globals and written only by
   # `_auth_capture_token`; without this line an exit-0 run that showed no
   # token would stamp `done` over a lane that has no credential.
   (( AUTH_SECRET_WRITTEN )) || _auth_die 'the mint exited 0 but printed no token'
-  _auth_state done
+  [[ -z "$AUTH_ATTEMPT" ]] || _auth_install setup-token
+  _auth_end done 0
 }
 _auth_openai_login() {   # `<launcher> login` — somebody else's program, under a pty
   # A CODEX LANE'S LAUNCHER IS CCRC'S, so the argument below is not about it,
@@ -1079,13 +1195,13 @@ _auth_openai_login() {   # `<launcher> login` — somebody else's program, under
   _auth_pump
   wait "$child"; rc=$?
   _auth_close_pipes
-  if (( rc == 124 || AUTH_EXPIRED )); then _auth_state expired; exit 1; fi
+  if (( rc == 124 || AUTH_EXPIRED )); then _auth_end expired 1; fi
   (( rc == 0 )) || _auth_die "the launcher's login exited $rc"
   # NO CREDENTIAL ASSERTION HERE, unlike login and setup-token, and the absence
   # is the point: ccrc does not know where this launcher keeps its credential
   # and must not pretend to. The health probe is what measures whether the lane
   # actually works.
-  _auth_state done
+  _auth_end done 0
 }
 _auth_openai_login_codex() {   # `ccrc codex login <id>` — ccrc's own verb over the lane's auth library, under a pty
   # CCRC IS THIS LANE'S LAUNCHER, so the external arm's argument is inverted
@@ -1147,12 +1263,12 @@ _auth_openai_login_codex() {   # `ccrc codex login <id>` — ccrc's own verb ove
   _auth_close_pipes
   [[ -r "$rcf" ]] && IFS= read -r vrc <"$rcf"
   rm -f -- "$rcf" 2>/dev/null
-  if (( rc == 124 || AUTH_EXPIRED )); then _auth_state expired; exit 1; fi
+  if (( rc == 124 || AUTH_EXPIRED )); then _auth_end expired 1; fi
   [[ -n "$vrc" ]] \
     || _auth_die "ccrc codex login $AUTH_ID reported no exit status ($CCRC_AUTH_SCRIPT exited $rc), so the lane is not known to be signed in"
   [[ "$vrc" == 0 ]] \
     || _auth_die "ccrc codex login $AUTH_ID exited $vrc (its reason is the last line in this pane)"
-  _auth_state done
+  _auth_end done 0
 }
 _auth_user_code() {   # <clean line> — the launcher's DEVICE CODE, published on purpose
   # The spec says out loud that this value is not a secret and is shown —
@@ -1169,18 +1285,133 @@ _auth_user_code() {   # <clean line> — the launcher's DEVICE CODE, published o
   _auth_publish || echo "$SELF: could not publish $AUTH_DIR/$AUTH_ID.json" >&2
 }
 
+# ── what an attempt reads off the roster ──────────────────────────────────
+# A TOKEN LANE is one whose roster entry names an `exec.secretsFile` (A1: the
+# roster has no method field; `secretsFile` present is what makes an Anthropic
+# lane a token lane). Read with jq, `_auth_exec_kind`'s precedent for a fact
+# the projection does not carry. A roster that cannot be read is refused, never
+# guessed at: guessing "sign-in lane" would sign a token lane in over its own
+# config dir.
+_auth_token_lane() {   # -> 0 when AUTH_ID's roster entry names a secretsFile
+  local out
+  out="$(jq -rs --arg id "$AUTH_ID" \
+    'if length == 1 and (.[0] | type) == "object"
+     then [.[0] | .accounts[]? | objects | select(.id == $id) | .exec | objects | .secretsFile | strings]
+          | if length > 0 then "token" else "sign-in" end
+     else error("not one roster object") end' "$CCRC_ACCOUNTS_JSON" 2>/dev/null)" \
+    || _auth_die "roster-unreadable: $CCRC_ACCOUNTS_JSON could not be read as one roster object, so ccrc cannot tell whether $AUTH_ID is a token lane"
+  [[ "$out" == token ]]
+}
+
+# ── the install: ccrc checks the captured credential, then puts it in ──────
+# THE HELPER CALLS IT, NOT `auth-code` (D-7750 (2)): the code reaches this
+# process's FIFO and `auth-code` returns; the exchange ends here, in the unit,
+# and this is the process that knows when. `ccrc account set --method <m>
+# --attempt <a>` probes the credential the attempt left in scratch and installs
+# it under the lane's lock, or refuses with a code and writes nothing. The code
+# is the only part of its answer that reaches the status file: every sentence
+# the sheet shows comes from a code.
+_auth_install() {   # <setup-token|login> — returns on an install, _auth_die on a refusal
+  local out='' rc=0 code=''
+  printf '[checking the new credential before it is installed]\n'
+  out="$("$WRAPPER_DIR/ccrc" account set --id "$AUTH_ID" --method "$1" --attempt "$AUTH_ATTEMPT" </dev/null 2>/dev/null)" || rc=$?
+  (( rc == 0 )) && return 0
+  code="$(jq -r '.error // empty' <<<"$out" 2>/dev/null)" || code=''
+  [[ "$code" =~ ^[a-z][a-z0-9-]{0,63}$ ]] || code=install-failed
+  _auth_die "$code"
+}
+
+# ── the pane, on the lane's private tmux server (D-5515) ────────────────────
+_auth_read_state() {   # -> this attempt's state from the status file, or nothing
+  jq -r --arg a "$AUTH_ATTEMPT" 'select(.attemptId == $a) | .state // empty' \
+    "$AUTH_DIR/$AUTH_ID.json" 2>/dev/null
+}
+
+_auth_outer_settle() {   # <the state to publish if the pane left none> — never returns
+  local st='' i
+  # The pane's helper writes its own terminal state as it ends; a moment's grace
+  # lets a trap that is still running finish its write before this one reads.
+  for (( i = 0; i < 30; i++ )); do
+    st="$(_auth_read_state)"
+    case "$st" in done|failed|expired|cancelled) break ;; esac
+    sleep 0.1
+  done
+  case "$st" in
+    done) _auth_cleanup; exit 0 ;;
+    failed|expired|cancelled) _auth_cleanup; exit 1 ;;
+  esac
+  # ONE WRITER, STILL: the pane has ended, so nothing else writes this file now.
+  AUTH_STATE="$1"; AUTH_ERROR=''
+  [[ "$1" != failed ]] || AUTH_ERROR='the auth pane ended without a terminal state'
+  _auth_publish || true
+  _auth_cleanup
+  [[ "$1" == cancelled ]] && exit 0
+  exit 1
+}
+
+_auth_outer_cancelled() {   # the outer half's trap: `auth-cancel` stops the unit
+  # Killing the private server SIGHUPs the pane, whose own trap publishes
+  # `cancelled`; this half then cleans up after it.
+  tmux -L "ccrc-auth-$AUTH_ID" kill-server >/dev/null 2>&1
+  _auth_outer_settle cancelled
+}
+
+_auth_pane_outer() {   # <method> — the unit's half of a pane method: make the pane, wait for it, clean up
+  local method="$1" sock="ccrc-auth-$AUTH_ID" sess="cc-auth-$AUTH_ID" cmd='' t0 bound
+  local secs=${CCRC_AUTH_TIMEOUT%%.*} grace=${CCRC_AUTH_PUMP_GRACE%%.*}
+  [[ $secs  =~ ^[0-9]+$ ]] || secs=600
+  [[ $grace =~ ^[0-9]+$ ]] || grace=10
+  command -v tmux >/dev/null 2>&1 \
+    || _auth_die "pane-unsupported-here: tmux is not on this box, so a pty-bound sign-in has no pane to run in"
+  trap '_auth_outer_cancelled' HUP INT TERM
+  # `starting` with the attempt id FIRST, so `auth-start` can return before the
+  # pane exists; the pane's helper writes every state after this one.
+  _auth_state starting
+  # `%q`, every word: tmux hands this string to a shell. `-f /dev/null`: the
+  # lane's own server reads no tmux.conf, so no hook of the fleet's runs in it.
+  printf -v cmd 'exec env CCRC_AUTH_IN_PANE=1 %q %q %q --attempt %q' \
+    "$AUTH_SELF" "$AUTH_ID" "$method" "$AUTH_ATTEMPT"
+  tmux -L "$sock" -f /dev/null new-session -d -s "$sess" -x 120 -y 40 "$cmd" >/dev/null 2>&1 \
+    || _auth_die "could not create the auth pane $sess on the private tmux socket $sock"
+  # Past the child's deadline and the pump's grace, with room for the install's probe after a late code; still
+  # under the unit's RuntimeMaxSec=660 at the defaults (600 + 20 + 30).
+  bound=$(( secs + 2 * grace + 30 )); t0=$SECONDS
+  while tmux -L "$sock" has-session -t "=$sess" >/dev/null 2>&1; do
+    if (( SECONDS - t0 >= bound )); then
+      tmux -L "$sock" kill-server >/dev/null 2>&1
+      _auth_outer_settle expired
+    fi
+    sleep "$CCRC_AUTH_TICK"
+  done
+  _auth_outer_settle failed
+}
+
 _auth_main() {
-  [[ $# -eq 2 ]] || die "usage: $SELF <id> <login|setup-token|openai-login>"
+  [[ $# -eq 2 || ( $# -eq 4 && "$3" == --attempt ) ]] \
+    || die "usage: $SELF <id> <login|setup-token|openai-login> [--attempt <attemptId>]"
   AUTH_ID="$1"
   # BEFORE any path is built from it — the rule ccd states in its R-3 block
   # ("a dot-leading project aliases EVERY `$REG/.<name>.<dot-free-suffix>`
   # file ccd owns") and applies at every id-minting site. The class is
   # `shared/roster.ts`'s ID_RE, which is where every rostered id comes from.
   [[ "$AUTH_ID" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "bad id: $AUTH_ID"
-  local method="$2"
+  local method="$2" src="${BASH_SOURCE[0]}" dir=.
+  if [[ $# -eq 4 ]]; then
+    # The server's attempt id, `shared/account-argv.ts`'s ATTEMPT_ID_RE.
+    [[ "$4" =~ ^[0-9a-f]{32}$ ]] || die "bad attempt: want 32 lowercase hex characters"
+    AUTH_ATTEMPT="$4"
+  fi
+  [[ "$src" == */* ]] && dir="${src%/*}"
+  AUTH_SELF="$(cd -- "$dir" && pwd -P)/${src##*/}"
   _auth_load_roster
   _auth_rostered "$AUTH_ID" || die "unknown-account: $AUTH_ID"
-  trap '_auth_cancelled' HUP INT TERM
+  case "$method" in setup-token|openai-login) AUTH_PANE_ARM=1 ;; esac
+  # AN ATTEMPT'S PANE METHOD, OUTSIDE ITS PANE: this is the unit's copy, so it
+  # makes the pane on the lane's private server and waits for it.
+  if [[ -n "$AUTH_ATTEMPT" && -z "$AUTH_IN_PANE" ]] && (( AUTH_PANE_ARM )); then
+    _auth_pane_outer "$method"
+  fi
+  trap '_auth_on_signal' HUP INT TERM
   case "$method" in
     login)        _auth_login ;;
     setup-token)  _auth_setup_token ;;

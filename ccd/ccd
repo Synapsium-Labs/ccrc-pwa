@@ -9152,6 +9152,9 @@ EOF
   # `account-v2` (N4, D-7734): this box's `ccrc account` carries W2a's write subs (paste validate-first, `set`,
   # Remove's pre-check and discard; accounts plan Task A16), so the server offers them. Later waves add their own words.
   echo account-v2
+  # `account-auth-v1` (N4, D-7734; accounts plan Task A20): `ccrc account auth-start|auth-code|auth-cancel`, the
+  # detached attempt on the lane's private tmux socket, `set --method` and `credential --sign-out` are on this box.
+  echo account-auth-v1
   # `pools-v1` says THIS copy of ccd honours project pool tags. What that
   # means AS OF THIS COMMIT, stated so later waves cannot read it as more:
   # it reads `$POOLS_DIR/<project>` (Task 1), and `_pool_ok` (Task 2) is now
@@ -9759,14 +9762,15 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
   # full-screen TUI that produces ZERO BYTES without a tty (measured
   # 2026-09-07, CC 2.1.263), has no home without this verb.
   #
-  # `_tmux_new_session`, NEVER `_spawn`. Two separate reasons, and both matter:
+  # A PANE ON THE LANE'S OWN SERVER, NEVER `_spawn` (and, since accounts plan
+  # Task A20, never `_tmux_new_session` either: that one places the fleet's
+  # shared server, and this pane is on `-L ccrc-auth-<id>`, below). Two
+  # separate reasons for not spawning, and both matter:
   # `_spawn_start` reads wrapper/workdir/uuid out of the registry and dies with
   # `incomplete registry for '<id>'` for an id that names an ACCOUNT rather
   # than a session; and `_spawn_settle` drives `_accept_first_run_prompts`,
   # which presses Down and Enter into the pane. A sign-in a robot answers is a
-  # sign-in that was dismissed. Through `_tmux_new_session` the pane also lands
-  # in ccrc-tmux-server.scope like every other, which is the whole argument
-  # that function's own header makes.
+  # sign-in that was dismissed.
   #
   # FLAG-ANCHORED, exactly as `cmd_coord_pause` above: `--id` is not a
   # confirmation token, it is the verb's whole argument surface, and a
@@ -9798,13 +9802,19 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
     esac
   done
   _is_valid_wrapper "$id" || die "unknown-account: $id (no roster entry claims it)"
-  local pane; pane="cc-auth-$id"
+  # THE LANE'S OWN TMUX SERVER, `-L ccrc-auth-<id>` (accounts plan Task A20,
+  # D-5515), never the fleet's shared one: the agent's tmux grant names
+  # subcommands on the default socket only, so no drawer, `ptyOpen` or
+  # `send-keys` can reach a pane here. `-f /dev/null`: it reads no tmux.conf, so
+  # no fleet hook runs in it. The socket is per lane, so two lanes' sign-ins
+  # never share a server.
+  local pane sock; pane="cc-auth-$id"; sock="ccrc-auth-$id"
   if (( cancel )); then
     # `null`, not a refusal: "there is no pane" is the state --cancel exists to
     # reach, so reaching it is success. The caller that wants to know whether it
     # killed anything reads the field.
-    if tmux has-session -t "$(_tmux_at "$pane")" 2>/dev/null; then
-      tmux kill-session -t "$(_tmux_at "$pane")" || die "could not kill $pane"
+    if tmux -L "$sock" -f /dev/null has-session -t "$(_tmux_at "$pane")" 2>/dev/null; then
+      tmux -L "$sock" -f /dev/null kill-session -t "$(_tmux_at "$pane")" || die "could not kill $pane"
       printf '{"cancelled":%s}\n' "$(_json_str "$pane")"
     else
       printf '{"cancelled":null}\n'
@@ -9825,10 +9835,14 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
   # and tmux itself is the backstop there: `new-session -d -s <name>` on a
   # live name exits non-zero with `duplicate session`, which the `||` below
   # turns into a refusal rather than a second helper.
-  ! tmux has-session -t "$(_tmux_at "$pane")" 2>/dev/null \
+  ! tmux -L "$sock" -f /dev/null has-session -t "$(_tmux_at "$pane")" 2>/dev/null \
     || die "auth-in-progress: $pane is already running (ccd account-pane --id $id --cancel to stop it)"
-  _tmux_new_session -d -s "$pane" -x 120 -y 40 \
-    "exec '$HOME/.local/bin/ccd-account-auth' '$id' '$method'" \
+  # NOT `_tmux_new_session`, which places the SHARED server in its capped scope:
+  # this server is the lane's own and ends with its one pane. `CCRC_AUTH_IN_PANE`
+  # tells the helper it is the pane's copy, so it leaves the server to end with
+  # the pane rather than kill it from inside.
+  tmux -L "$sock" -f /dev/null new-session -d -s "$pane" -x 120 -y 40 \
+    "exec env CCRC_AUTH_IN_PANE=1 '$HOME/.local/bin/ccd-account-auth' '$id' '$method'" \
     || die "could not create $pane"
   # `_json_str` for both, though both are already constrained — the id by the
   # regex above and the method by the `case` — because the tree's rule is that

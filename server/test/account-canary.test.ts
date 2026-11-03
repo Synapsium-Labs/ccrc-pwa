@@ -51,6 +51,7 @@ import type { RunningAgent } from '../../agent/src/server.js';
 import type { ConnectedFleet } from '../src/remote/client.js';
 import { SECRET_MASK } from '../../shared/api.js';
 import { HAVE_FLOCK, NODE_ID, boxEnv, laneBox } from './laneStateFixture.js';
+import { ATTEMPT, CODE, authBox, ccrcAuth, reapAll, scrollbacks, waitQuiet, waitState } from './authAttemptFixture.js';
 import { bootAgent, connectToAgent } from './remoteHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -402,4 +403,39 @@ describe('the canary: a pasted token is found only in its 0600 secret file (spec
     expect(sent[0]).toContain(SECRET_MASK);
     expect(leaksNone(sent[0]!, key)).toBe(true);
   }, 400_000);
+});
+
+// THE MINTED TOKEN'S CANARY AND THE PRIVATE SOCKET (accounts plan Task A20; D-5515, D-7750). A mint's pane is on the
+// lane's own tmux server, `-L ccrc-auth-<id>`, not the fleet's, so a canary scan of the shared server alone would never
+// look at the one pane that printed the token. Every socket in the fixture is read, the private one by name, from the
+// scrollback taken before the attempt's terminal state kills that server; the token's canary is in none of them after
+// the helper's blanking. The box half only: `authAttemptFixture.ts`'s tmux stand-in keeps a scrollback per socket.
+describe('the canary reaches every tmux socket (A20)', () => {
+  const homes: string[] = [];
+  afterEach(() => { for (const h of homes.splice(0)) reapAll(h); });
+
+  it('the minted token\'s canary is in no tmux scrollback of any socket in the fixture, the private `-L ccrc-auth-<id>` one included', async () => {
+    const minted = `GOOD-canary-a20-${randomBytes(12).toString('hex')}`;
+    const home = authBox('ccrc-canary-a20-', { mint: minted });
+    homes.push(home);
+    // The shared server is in the fixture too, with a pane of its own, so "every socket" is more than one.
+    mkdirSync(path.join(home, 'fake-tmux', 'default'), { recursive: true });
+    writeFileSync(path.join(home, 'fake-tmux', 'default', 'scrollback'), 'a session pane\n');
+    const start = ccrcAuth(home, ['account', 'auth-start', '--id', 'lane-b', '--method', 'setup-token', '--attempt', ATTEMPT]);
+    expect(start.code, start.stdout + start.stderr).toBe(0);
+    expect(await waitState(home, 'lane-b', ['waiting-code'])).toBe('waiting-code');
+    expect(ccrcAuth(home, ['account', 'auth-code', '--id', 'lane-b', '--attempt', ATTEMPT], `${CODE}\n`).code).toBe(0);
+    expect(await waitState(home, 'lane-b', ['done', 'failed'])).toBe('done');
+    await waitQuiet(home);
+    const panes = scrollbacks(home);
+    expect(Object.keys(panes).sort()).toEqual(['ccrc-auth-lane-b', 'default']);
+    // The private pane was captured, and it is the one that saw the mint: the substitution line is there.
+    expect(panes['ccrc-auth-lane-b']).toContain('[token captured; ccrc checks it before it is installed]');
+    for (const [sock, text] of Object.entries(panes)) {
+      expect(text.includes(minted), `the minted token reached the scrollback of socket ${sock}`).toBe(false);
+      expect(text.includes(CODE), `the code reached the scrollback of socket ${sock}`).toBe(false);
+    }
+    // And it is where the lane's key belongs.
+    expect(readFileSync(path.join(home, '.cc-secrets', 'lane-b-oauth.env'), 'utf8')).toBe(`export CLAUDE_CODE_OAUTH_TOKEN=${minted}\n`);
+  }, 90_000);
 });

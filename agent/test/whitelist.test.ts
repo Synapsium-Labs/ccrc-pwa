@@ -133,6 +133,27 @@ describe('whitelist.checkPath', () => {
     }
   });
 
+  it('`checkPath(…, "read")` refuses `~/.ccrc/auth-scratch/<id>/config` and its `.credentials.json`', async () => {
+    // Accounts plan Task A20 (D-5514): a re-auth or a method switch signs in, or mints, into
+    // `~/.ccrc/auth-scratch/<id>`, and the new credential sits there until `ccrc account set --method` has checked
+    // it. That directory is outside every read root by construction (`checkPath` reads `~/.cc-sessions/**` and every
+    // `~/.claude*` directory), so no `read` frame can lift a sign-in that is not yet the lane's. Seeded on disk, so
+    // the refusal is the whitelist's and not a missing file's.
+    seed();
+    const cfg = { home, projectsRoot };
+    const scratch = path.join(home, '.ccrc', 'auth-scratch', 'lane-a');
+    mkdirSync(path.join(scratch, 'config'), { recursive: true });
+    writeFileSync(path.join(scratch, 'config', '.credentials.json'), '{}');
+    writeFileSync(path.join(scratch, 'minted.env'), 'export X=1\n');
+    for (const p of [scratch, path.join(scratch, 'config'), path.join(scratch, 'config', '.credentials.json'),
+      path.join(scratch, 'minted.env')]) {
+      expect(await checkPath(p, cfg, 'read'), `${p} must NOT be readable`).toBeNull();
+      expect(await checkPath(p, cfg, 'write'), `${p} must NOT be writable`).toBeNull();
+    }
+    // The control: the lane's OWN config dir is a read root, which is why the scratch must not be named like one.
+    expect(await checkPath(path.join(home, '.claude-acme', 'settings.json'), cfg, 'read')).not.toBeNull();
+  });
+
   it('the pool projection is READ-ONLY to the agent — a write frame cannot forge membership', async () => {
     seed();
     const cfg = { home, projectsRoot };
