@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { collectOrphanTree } from '../src/coord/collectOrphanTree.js';
 import { OrphanTreeSweep, type OrphanSweepDeps } from '../src/orphanTreeSweep.js';
 import {
-  ORPHAN_LICENCE_MS, ORPHAN_CENSUS_MS, ORPHAN_CENSUS_PRESSURE_MS, ORPHAN_RETRY_MS, orphanCensusRetryMono, orphanInsideVerdict, orphanLicence,
+  ORPHAN_LICENCE_MS, ORPHAN_CENSUS_MS, ORPHAN_CENSUS_PRESSURE_MS, ORPHAN_RETRY_MS, orphanCensusRetryAt, orphanCensusDue, orphanInsideVerdict, orphanLicence,
   orphanCoordinatorSet, orphanTruncatedRow, orphanTruncatedWaitMs, parseOrphanAudit, parseOrphanCensus,
 } from '../src/orphanTreeLane.js';
 import { readDiskHealth } from '../../shared/disk.js';
@@ -38,6 +38,7 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
   // Registry rows by id: true = workspace (the default), false = plain session / main checkout, null = unreadable, 'throw' = the read throws.
   const wsKinds = new Map<string, boolean | null | 'throw'>();
   const ok = (stdout: string): CcdResult => ({ ran: true, ok: true, stdout, stderr: '', killed: false, signal: null });
+  let pressure = false;
   const deps: OrphanSweepDeps = {
     io: { readdirMeasured: async () => ({ ok: true, entries: [...markers] }) } as unknown as OrphanSweepDeps['io'],
     registryDir: '/reg',
@@ -64,7 +65,7 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
     queue: { run: (_k, fn) => fn() },
     mono: () => mono,
     epochNow: () => 1,
-    pressure: () => false,
+    pressure: () => pressure,
     record: (title, body) => { feed.push({ title, body }); },
     isWorkspace: async (id) => { const k = wsKinds.has(id) ? wsKinds.get(id)! : true; if (k === 'throw') throw new Error('row unreadable'); return k; },
     coordinators: () => { if (!coordsReadable) throw new Error('store unreadable'); return coordinators; },
@@ -77,6 +78,7 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
     advance: (ms: number): void => { mono += ms; },
     truncate: (v: boolean): void => { truncated = v; },
     garbled: (v: boolean): void => { garbled = v; },
+    pressured: (v: boolean): void => { pressure = v; },
     censusTakes: (ms: number): void => { censusTakesMs = ms; },
     coordinators, wsKinds, unreadable: (v: boolean): void => { coordsReadable = !v; },
     addInside: (p: string, cls: string, audit: Record<string, unknown>, inside: string): string => { const h = hexOf(p); trees.set(h, { cls, audit, inside }); return h; },
@@ -108,8 +110,17 @@ describe('L1: the readers and the licence', () => {
   it('the back-off doubles from ORPHAN_RETRY_MS and stops at the pass cadence; the retry instant is the wait after now', () => {
     expect([1, 2, 3, 4, 5, 6, 7, 40].map((s) => orphanTruncatedWaitMs(s, ORPHAN_CENSUS_MS) / MIN)).toEqual([15, 30, 60, 120, 240, 360, 360, 360]);
     expect([1, 2, 3, 4].map((s) => orphanTruncatedWaitMs(s, ORPHAN_CENSUS_PRESSURE_MS) / MIN)).toEqual([15, 30, 60, 60]);
-    expect(orphanCensusRetryMono(10 * HOUR, ORPHAN_CENSUS_MS, ORPHAN_RETRY_MS)).toBe(10 * HOUR - ORPHAN_CENSUS_MS + ORPHAN_RETRY_MS);
-    expect(orphanCensusRetryMono(10 * HOUR, HOUR, 30 * MIN)).toBe(9 * HOUR + 30 * MIN);
+    expect(orphanCensusRetryAt(10 * HOUR, ORPHAN_RETRY_MS)).toEqual({ kind: 'at', mono: 10 * HOUR + ORPHAN_RETRY_MS });
+    expect(orphanCensusRetryAt(10 * HOUR, 30 * MIN)).toEqual({ kind: 'at', mono: 10 * HOUR + 30 * MIN });
+    for (const pressure of [false, true]) {
+      expect(orphanCensusDue(null, 0, pressure)).toBe(true);
+      expect(orphanCensusDue({ kind: 'at', mono: 100 }, 99, pressure), `at, 1 ms before, pressure ${pressure}`).toBe(false);
+      expect(orphanCensusDue({ kind: 'at', mono: 100 }, 100, pressure), `at, on time, pressure ${pressure}`).toBe(true);
+    }
+    expect(orphanCensusDue({ kind: 'after', mono: 100 }, 100 + ORPHAN_CENSUS_MS - 1, false)).toBe(false);
+    expect(orphanCensusDue({ kind: 'after', mono: 100 }, 100 + ORPHAN_CENSUS_MS, false)).toBe(true);
+    expect(orphanCensusDue({ kind: 'after', mono: 100 }, 100 + ORPHAN_CENSUS_PRESSURE_MS - 1, true)).toBe(false);
+    expect(orphanCensusDue({ kind: 'after', mono: 100 }, 100 + ORPHAN_CENSUS_PRESSURE_MS, true)).toBe(true);
   });
 });
 
@@ -323,6 +334,55 @@ describe('gates', () => {
     expect(r.calls.filter((c) => c[1] === '--orphan-hex'), 'a due tree in memory is not audited either').toHaveLength(audits);
     r.truncate(false); r.advance(ORPHAN_RETRY_MS); await r.sweep.pass();
     expect(r.feed.filter((f) => f.title === 'orphan worktree left')).toHaveLength(1);
+  });
+
+  // #1565 (D-7864; review 990 F1): a pending retry is a due instant, so a later pass's pressure never moves it.
+  const arms: ReadonlyArray<readonly [string, (r: ReturnType<typeof rig>) => void]> = [
+    ['truncated', (r) => r.truncate(true)],
+    ['unreadable', (r) => r.garbled(true)],
+  ];
+
+  it('pressure rising over a pending retry does not shorten it', async () => {
+    for (const [arm, set] of arms) {
+      const r = rig();
+      r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+      set(r);
+      await r.sweep.pass();
+      expect(censuses(r), arm).toBe(1);
+      r.pressured(true);
+      r.advance(ORPHAN_RETRY_MS - 1); await r.sweep.pass();
+      expect(censuses(r), `${arm}: 1 ms before the retry`).toBe(1);
+      r.advance(1); await r.sweep.pass();
+      expect(censuses(r), `${arm}: at the retry`).toBe(2);
+    }
+  });
+
+  it('pressure clearing over a pending retry does not lengthen it', async () => {
+    for (const [arm, set] of arms) {
+      const r = rig();
+      r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+      r.pressured(true);
+      set(r);
+      await r.sweep.pass();
+      expect(censuses(r), arm).toBe(1);
+      r.pressured(false);
+      r.advance(ORPHAN_RETRY_MS - 1); await r.sweep.pass();
+      expect(censuses(r), `${arm}: 1 ms before the retry`).toBe(1);
+      r.advance(1); await r.sweep.pass();
+      expect(censuses(r), `${arm}: at the retry`).toBe(2);
+    }
+  });
+
+  it('after a whole census the cadence is the reading pass\'s: rising pressure brings the next census to an hour', async () => {
+    const r = rig();
+    r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    await r.sweep.pass();
+    expect(censuses(r)).toBe(1);
+    r.pressured(true);
+    r.advance(ORPHAN_CENSUS_PRESSURE_MS - 1); await r.sweep.pass();
+    expect(censuses(r)).toBe(1);
+    r.advance(1); await r.sweep.pass();
+    expect(censuses(r)).toBe(2);
   });
 
   it('the classes ccd reports and the lane never audits stay unaudited', async () => {
