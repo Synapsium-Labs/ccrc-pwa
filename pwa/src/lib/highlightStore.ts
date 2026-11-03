@@ -341,6 +341,9 @@ export function createHighlightStore(
   /** `job` was posted: its worker time starts, and the worker-time ceiling's timer runs for what is left. */
   function onPosted(job: Job): void {
     if (jobs.get(job.key) !== job) return;
+    // The runner posts the next job in the tick it ends the last one, before that job's answer reaches `answered`:
+    // the job still in `posted` has ended at this instant, so its time is counted and its timer stopped here.
+    if (posted !== null) stopClock(posted.job);
     const timer = ceilingsOn
       ? clock.setTimer(() => {
         if (posted?.job !== job) return;

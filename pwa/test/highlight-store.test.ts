@@ -4,7 +4,8 @@
 // The React side (`CodeBlock` on the store) is Task 6's and Task 7's.
 import { describe, expect, it } from 'vitest';
 import type { Root as HastRoot } from 'hast';
-import type { Highlighter, HighlighterStatus, HighlightOutcome, HighlightRequest } from '../src/lib/highlightProtocol';
+import type { Highlighter, HighlighterStatus, HighlightJob, HighlightOutcome, HighlightRequest } from '../src/lib/highlightProtocol';
+import { createHighlighter, type WorkerLike } from '../src/lib/markdownRunner';
 import {
   UNREQUESTED_ENTRY, blockKey, codeBlocksOf, createHighlightStore, type HighlightClock, type HighlightEntry,
   type HighlightStoreOptions,
@@ -472,6 +473,41 @@ describe('one ceiling wins before any listener runs (decision 4)', () => {
     expect(store.peek(first).kind).toBe('html');
     expect(h.calls).toHaveLength(1);
     expect(store.peek(late)).toEqual({ kind: 'skipped', ceiling: 'page-worker-time' });
+  });
+});
+
+describe('L3-1: the worker-time ceiling counts a run of back-to-back jobs (the real runner)', () => {
+  /** The real runner answers a job, then posts the next queued one in the same tick, before the store hears the
+   *  first answer: the store's `onPosted(next)` runs before `answered(previous)`. */
+  class Worker implements WorkerLike<HighlightJob> {
+    onmessage: ((e: { data: unknown }) => void) | null = null;
+    onerror: ((e: unknown) => void) | null = null;
+    onmessageerror: ((e: unknown) => void) | null = null;
+    readonly posts: HighlightJob[] = [];
+    postMessage(job: HighlightJob): void { this.posts.push(job); }
+    terminate(): void {}
+  }
+
+  it('five 700 ms jobs answered back to back: the fifth is skipped by page-worker-time 200 ms into its run', async () => {
+    const clock = fakeClock();
+    const worker = new Worker();
+    const highlighter = createHighlighter({ spawn: () => worker, setTimer: clock.setTimer, clearTimer: clock.clearTimer });
+    const store = createHighlightStore(highlighter, { mode: 'docs' }, clock);
+    const raws = ['a', 'b', 'c', 'd', 'e'];
+    store.seed(raws.map((raw) => ({ lang: 'python', raw })));
+    const ks = raws.map((raw) => { const k = store.keyOf('python', raw); if (k.kind !== 'key') throw new Error('no key'); return k.key; });
+    for (const k of ks) store.request(k);
+    worker.onmessage?.({ data: { ready: true } });
+    for (let i = 1; i <= 4; i += 1) {
+      clock.advance(700);
+      worker.onmessage?.({ data: { id: i, result: { kind: 'html', html: OK, mode: 'block' } } });
+      await flush();
+    }
+    expect(kinds(store, ks)).toEqual(['html', 'html', 'html', 'html', 'pending']);
+    clock.advance(250);
+    await flush();
+    expect(store.peek(ks[4]!)).toEqual({ kind: 'skipped', ceiling: 'page-worker-time' });
+    expect(store.settled()).toBe(true);
   });
 });
 
