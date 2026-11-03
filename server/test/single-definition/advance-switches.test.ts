@@ -963,7 +963,7 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
       'server/src/tmpSweepLane.ts': lines('server/src/tmpSweepLane.ts'),
       'server/src/staleArchiveBeat.ts': lines('server/src/staleArchiveBeat.ts'),
     }, 'a beat\'s clock or guard is a row of LANE_SCHEDULE (#1391); no new one').toEqual({
-      'server/src/diskAlarmLane.ts': ['if (this.lastSweep !== 0 && now - this.lastSweep < DISK_SWEEP_MS) return;'],
+      'server/src/diskAlarmLane.ts': [],
       'server/src/tmpSweepLane.ts': ['if (this.last !== 0 && now - this.last < TMP_SWEEP_CENSUS_MS) return;'],
       'server/src/staleArchiveBeat.ts': [
         'private sweeping = false;',

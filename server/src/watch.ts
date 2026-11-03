@@ -1063,7 +1063,7 @@ export class FleetWatcher {
    *  `undefined` until the first sweep lands — the same contract every other
    *  `currentX()` on this class already has, and the route turns it into a
    *  `readiness: null` on the wire rather than omitting the key. */
-  /** The disk alarm (D-6615) and the tmp sweep census lane (D-6624): each holds its clock and its memory. */
+  /** The disk alarm (D-6615) and the tmp sweep census lane (D-6624): each holds its memory; the disk alarm's clock is its row. */
   private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
   /** The host-pressure beat (#1170): its last reading classifies a stalled link. */
   private readonly pressureLane = new PressureLane(() => this.deps);
@@ -2440,7 +2440,7 @@ export class FleetWatcher {
       // The disk alarm (D-6615) is gated HERE too, above the registry read's fail-shut return, because it reads no
       // registry: a full disk is exactly when the registry read fails, and the one alarm must still sound. NEVER
       // awaited: a `statfs` of a stalled volume is what hangs (the agent bounds each root, the link bounds the request),
-      // and the dialog detector must not wait behind it. Own clock (`DiskAlarmLane`).
+      // and the dialog detector must not wait behind it. Its clock is the `diskAlarm` row (D-7895).
       void this.sweepDisk().catch(() => { /* one bad sweep must not kill the poll */ });
       // The host-pressure beat (#1170), above the fail-shut return for the same reason: a thrash is when that read fails.
       void this.sweepPressure();
@@ -7193,9 +7193,9 @@ export class FleetWatcher {
     }
   }
 
-  /** The disk alarm (D-6615, spec §2.5): `DiskAlarmLane` holds the pass. PUBLIC for the reason `sweepReadiness` is: `tick()`
-   *  dispatches it with `void`, so a test that awaits `tick()` has not awaited this. */
-  async sweepDisk(): Promise<void> { await this.diskAlarm.sweep(); }
+  /** The disk alarm (D-6615, spec §2.5): `DiskAlarmLane` holds the pass, the `diskAlarm` row its cadence (D-7895). PUBLIC for
+   *  the reason `sweepReadiness` is: `tick()` dispatches it with `void`, so a test that awaits `tick()` has not awaited this. */
+  async sweepDisk(): Promise<void> { await this.runLane('diskAlarm', () => this.diskAlarm.pass()); }
 
   /** The tmp sweep's census (D-6624, spec §2.1): `TmpCensusBeat` holds the pass, on the last good registry listing. PUBLIC for
    *  the reason `sweepDisk` is. */

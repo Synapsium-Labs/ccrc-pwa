@@ -146,6 +146,10 @@ export const LANDING_CHECKS_BEAT_MS = 30_000;
  *  look keeps the fleet frame's `landing` within one tick of the `probe` file. The pass's read deadline is half of it. */
 export const LANDING_RADAR_SWEEP_MS = 60_000;
 
+/** The disk alarm's clock (D-6615, spec §2.5): one `statfs` pass a minute. Declared here, the L0 table, which cannot
+ *  import an L4 file; `diskAlarmLane.ts` re-exports it (D-7895). */
+export const DISK_SWEEP_MS = 60_000;
+
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
 
@@ -159,7 +163,7 @@ export type LaneName =
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -278,6 +282,12 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'rollIdle', cadenceMs: HIBERNATE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
     derivedFrom: { name: 'sleepIdleHours', reason: 'the roll shares hibernation\'s gate and its clock' },
   },
+  // The disk-retention beats (D-7895, GitHub #1391): each kept a `Date.now()` throttle in its own class after the
+  // consolidation moved it out of the watcher (#1279), and each is a row now, on the monotonic clock (OA-C4 (a), #803),
+  // with the flight it had. Their verdicts keep reading the wall clock. The disk alarm (D-6615) starts due, lets passes
+  // overlap as it always has (a pass spends its minute before it awaits anything), and never rejects, so no row warns;
+  // `tick` dispatches it above the registry read's fail-shut return.
+  { name: 'diskAlarm', cadenceMs: DISK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
 ];
 
 export function laneRow(name: string): LaneRow {

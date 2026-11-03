@@ -2,7 +2,10 @@
 // the watcher fires from `tick()`. The sweeps' decisions are pinned by `disk-sweep`, `disk-notice` and `fleet-health`;
 // this file pins what those leave open and a move of the sweeps out of `watch.ts` could lose: when each is due, on which
 // clock, and that a coord-less server stamps nothing. Green on the old code, and the move changes only where the
-// clocks live.
+// clocks live. D-7895 (GitHub #1391) then made each beat a `LANE_SCHEDULE` row, which moves its clock from the wall
+// clock to the watcher's monotonic one (OA-C4 (a), #803): those rows drive `Deps.monotonicMs` and freeze or step the
+// wall clock, and each beat has a MUTANT row, its own row with the cadence halved (and, for the stale-archive arm, its
+// single flight removed), that the same trace tells apart.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -15,7 +18,8 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import type { Deps } from '../src/server.js';
-import { CHILD_RECLAIM_SWEEP_MS } from '../src/laneSchedule.js';
+import { CHILD_RECLAIM_SWEEP_MS, DISK_SWEEP_MS, laneRow, type LaneRow } from '../src/laneSchedule.js';
+import { LaneRunner } from '../src/laneRunner.js';
 import { STALE_ARCHIVE_SWEEP_MS } from '../src/coord/staleArchive.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -25,21 +29,66 @@ afterEach(() => { vi.useRealTimers(); });
 const deadRunner: Runner = async () => ({ ran: true, code: 1, stdout: '', stderr: '' });
 const MINUTE = 60_000;
 
-describe('the disk alarm beat (D-6615): the wall clock, one pass a minute, the first at once', () => {
-  it('measures on the first call, holds a call inside the minute, and measures again at the minute', async () => {
+/** A beat's cadence trace on a `LaneRunner` over `row` alone, on a monotonic clock moved by hand: the passes counted after
+ *  the first call, after a call 1 ms short of `cadence`, and after a call at it. The real row answers `[1, 1, 2]`. */
+async function cadenceTrace(row: LaneRow, cadence: number): Promise<number[]> {
+  let mono = 5_000;
+  let passes = 0;
+  const runner = new LaneRunner({ wall: () => 0, mono: () => mono }, [row]);
+  const counts: number[] = [];
+  for (const at of [5_000, 5_000 + cadence - 1, 5_000 + cadence]) {
+    mono = at;
+    await runner.run(row.name, () => { passes++; });
+    counts.push(passes);
+  }
+  return counts;
+}
+
+describe('the disk alarm beat (D-6615, D-7895): the `diskAlarm` row, the monotonic clock, one pass a minute, the first at once', () => {
+  function build(): { watcher: FleetWatcher; reads: () => number; setMono: (n: number) => void } {
+    let reads = 0;
+    let mono = 5_000;
+    const io: FleetIO = { ...localIO, statfsMeasured: async (): Promise<MeasuredDisk> => { reads++; return { ok: false, reason: 'unreadable' }; } };
+    const watcher = new FleetWatcher({ ...testDeps(), io, monotonicMs: () => mono }, new Bus());
+    return { watcher, reads: () => reads, setMono: (n) => { mono = n; } };
+  }
+
+  it('measures on the first call, holds a call inside the minute, and measures again at the minute, on the monotonic clock', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(1_000_000);
-    let reads = 0;
-    const io: FleetIO = { ...localIO, statfsMeasured: async (): Promise<MeasuredDisk> => { reads++; return { ok: false, reason: 'unreadable' }; } };
-    const watcher = new FleetWatcher({ ...testDeps(), io }, new Bus());
+    const { watcher, reads, setMono } = build();
     await watcher.sweepDisk();
-    expect(reads).toBe(1);
-    vi.setSystemTime(1_000_000 + MINUTE - 1);
+    expect(reads(), 'the first call measures, though the monotonic reading is below the cadence').toBe(1);
+    setMono(5_000 + DISK_SWEEP_MS - 1);
     await watcher.sweepDisk();
-    expect(reads, 'a call 1 ms short of the cadence is held').toBe(1);
-    vi.setSystemTime(1_000_000 + MINUTE);
+    expect(reads(), 'a call 1 ms short of the cadence is held').toBe(1);
+    setMono(5_000 + DISK_SWEEP_MS);
     await watcher.sweepDisk();
-    expect(reads, 'the cadence elapsed').toBe(2);
+    expect(reads(), 'the cadence elapsed on the monotonic clock, the wall clock frozen').toBe(2);
+  });
+
+  it('a wall clock stepped forward never measures early, and one stepped back never holds the beat', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(10_000_000);
+    const { watcher, reads, setMono } = build();
+    await watcher.sweepDisk();
+    vi.setSystemTime(10_000_000 + 10 * DISK_SWEEP_MS);
+    await watcher.sweepDisk();
+    expect(reads(), 'a wall step forward ran the beat early').toBe(1);
+    vi.setSystemTime(10_000_000 - 3_600_000);
+    setMono(5_000 + DISK_SWEEP_MS);
+    await watcher.sweepDisk();
+    expect(reads(), 'a wall step back held the beat past its cadence').toBe(2);
+  });
+
+  it('the row is the 60 s, overlapping, catch-free row, and its cadence keeps its value', () => {
+    expect(DISK_SWEEP_MS).toBe(60_000);
+    expect(laneRow('diskAlarm')).toMatchObject({ cadenceMs: DISK_SWEEP_MS, clock: 'mono', flight: 'none', warnKey: null, derivedFrom: null });
+  });
+
+  it('MUTANT: the row with its cadence halved runs a second pass inside the minute, and the trace tells it apart', async () => {
+    expect(await cadenceTrace(laneRow('diskAlarm'), DISK_SWEEP_MS)).toEqual([1, 1, 2]);
+    expect(await cadenceTrace({ ...laneRow('diskAlarm'), cadenceMs: DISK_SWEEP_MS / 2 }, DISK_SWEEP_MS)).not.toEqual([1, 1, 2]);
   });
 });
 
