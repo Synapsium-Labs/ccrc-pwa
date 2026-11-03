@@ -795,6 +795,10 @@ export const CCD_ARGV = {
    *  two-member union, the on|off vocabulary is ccd's, and the flag LEADS, where the agent's two-token grant expects it.
    *  `ccd testbox-remote` is `$REG/testbox-remote-live`'s one shell writer. */
   testboxRemote: (state: 'on' | 'off') => argv(['testbox-remote', '--state', state]),
+  /** The pane-scope stop's switch writer (D-7902) — `testboxRemote`'s shape: `state` is a two-member union, the
+   *  live|shadow vocabulary is ccd's, and the flag LEADS, where the agent's two-token grant expects it.
+   *  `ccd pane-scope-stop` is `$REG/pane-scope-stop-live`'s one shell writer. */
+  paneScopeStop: (state: 'live' | 'shadow') => argv(['pane-scope-stop', '--state', state]),
   /** The project pool tag's two writers (account pools, spec §5.4.2). TWO
    *  ENTRIES, not one builder taking `pool: string | null` — the `start`/
    *  `enable` rule above: the project-pool route picks between two words rather
@@ -1462,6 +1466,8 @@ export const CCD_CAN = {
   coordPause: verbRow('coord-pause'), reclaimPause: capRow(RECLAIM_PAUSE_CAP),
   // A new verb: `ccd caps` names it, and a box whose list lacks it is refused 501 rather than sent a usage error.
   testboxRemote: verbRow('testbox-remote'),
+  // D-7902: a new verb, gated as `testboxRemote` is.
+  paneScopeStop: verbRow('pane-scope-stop'),
   projectPoolSet: verbRow('project-pool'), projectPoolClear: verbRow('project-pool'),
   projectAddClone: verbRow('project-add'), projectAddEmpty: verbRow('project-add'),
   route: capRow(ROUTE_CAP), routeApply: capRow(ROUTE_APPLY_CAP), routeSet: capRow(ROUTE_CAP),
