@@ -42,6 +42,7 @@ import {
 import { READER_FALLBACK_NOTE, type ReaderHiddenChar } from './reader/readerText';
 import { leafName } from './docsTree';
 import { copyText } from './share';
+import { READER_BODY, usePublishExportBody } from './exportBody';
 
 type LinkBase = Omit<DocLinkContextValue, 'urls'>;
 
@@ -118,6 +119,13 @@ function outcomeReason(o: Exclude<ReaderRenderOutcome, { kind: 'rendered' | 'tim
 
 /** A Markdown body in the rich reader. `MarkdownBody` answers the two byte kinds that are not Markdown before it mounts
  *  this, so `null` here has one meaning: that answer was not Markdown, and the caller has shown it already. */
+/** Tells Export that the reader frame shows this body (refinement (a)). Mounted in the frame's arm only, so a fallback's
+ *  plain view publishes its own body in its place. */
+function ReaderShown(): null {
+  usePublishExportBody(READER_BODY);
+  return null;
+}
+
 export function ReaderFrame(p: ReaderFrameProps): ReactNode {
   const src = useMemo(() => docMarkdownSource(p.show), [p.show]);
   if (src.kind !== 'markdown') return null;
@@ -366,6 +374,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
           {state.s !== 'ready' && <p className="doc-formatting">{DOC_FORMATTING}</p>}
           <div className="docs-reader" ref={hostRef} />
           {sheets}
+          <ReaderShown />
         </>
       );
   }

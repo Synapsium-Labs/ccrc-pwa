@@ -38,6 +38,7 @@ import { DocImage } from './DocImage';
 import { DocLink, DocLinkContext, type DocLinkContextValue } from './DocLink';
 import { detachUrls } from './docsLinks';
 import { showBytes } from './objectUrls';
+import { GATE_BODY, usePublishExportBody, type ExportBody } from './exportBody';
 
 /** The components a Docs body renders with (spec 4.10): the shared code, pre and table, and the Docs `a` and `img`,
  *  which are the only way a URL from the document reaches the DOM. */
@@ -103,6 +104,7 @@ export function docsPlainNote(o: Exclude<ParseOutcome, { kind: 'tree' }>): strin
 /** A document shown as plain text: the note line, then `action` when given (absent = no action), then the text
  *  verbatim in `<pre className="doc-plain">`. */
 export function DocPlain(p: { readonly text: string; readonly note: string; readonly action?: ReactNode }): ReactNode {
+  usePublishExportBody(useMemo<ExportBody>(() => ({ kind: 'plain', text: p.text, note: p.note }), [p.text, p.note]));
   return (
     <>
       <p className="doc-plain-note">{p.note}</p>
@@ -151,12 +153,15 @@ export interface DocMarkdownProps {
  *  at once with the tree's code blocks in document order (so `settled()` is false from the first commit while any is
  *  unanswered), published for the leaf's actions (Export) and released when the tree goes. A body that fell back to
  *  plain text never mounts it, so it publishes no store that would never settle. */
-function DocTree(p: { readonly tree: HastRoot; readonly link: Omit<DocLinkContextValue, 'urls'> }): ReactNode {
+function DocTree(p: { readonly tree: HastRoot; readonly text: string; readonly link: Omit<DocLinkContextValue, 'urls'> }): ReactNode {
   const detached = useMemo(() => detachUrls(p.tree), [p.tree]);
   // Seeded from the tree that RENDERS (no url transform runs on Docs, so the `pre` element a block receives as `node` is
   // the very object seeded as its `at`): the page's ceilings answer for each drawn copy (review 1364 F1).
   const store = useDocsHighlightStore(useMemo(() => codeBlocksOf(detached.tree), [detached]));
   const ctx = useMemo<DocLinkContextValue>(() => ({ ...p.link, urls: detached.urls }), [p.link, detached]);
+  // What this body shows, for Export (refinement (h)): the very tree, map and link context drawn here.
+  usePublishExportBody(useMemo<ExportBody>(
+    () => ({ kind: 'tree', text: p.text, tree: detached.tree, urls: detached.urls, link: p.link }), [p.text, detached, p.link]));
   return (
     <DocLinkContext value={ctx}>
       <PreHighlightContext value={store}>
@@ -185,7 +190,7 @@ function DocParse(p: DocMarkdownProps & {
   if (shown.kind === 'tree') {
     return (
       <RenderBoundary where="doc body" resetKey={p.pinKey} fallback={() => <DocPlain text={p.text} note={DOC_BODY_FALLBACK_NOTE} />}>
-        <DocTree tree={shown.tree} link={p.link} />
+        <DocTree tree={shown.tree} text={p.text} link={p.link} />
       </RenderBoundary>
     );
   }
@@ -207,6 +212,7 @@ export function DocMarkdown(p: DocMarkdownProps): ReactNode {
   const bytes = useMemo(() => utf8ByteLength(p.text), [p.text]);
   const [choice, setChoice] = useState<Choice>(() => (bytes > DOCS_RENDER_GATE_BYTES ? 'ask' : 'format'));
   const [attempt, setAttempt] = useState(0);
+  usePublishExportBody(choice === 'ask' ? GATE_BODY : null);
   if (choice === 'ask') {
     return (
       <div className="doc-gate">

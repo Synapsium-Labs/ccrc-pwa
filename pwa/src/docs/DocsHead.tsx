@@ -27,6 +27,9 @@ import { DocsPageLink } from './DocsTreeView';
 import type { DocsNotOk } from './failures';
 import { copyText, shareTargetFor, type ShareOpened } from './share';
 import { ShareSheet } from './ShareSheet';
+import type { ExportBody } from './exportBody';
+import type { ExportAssets } from './export/exportAssets';
+import type { HighlightStore } from '../lib/highlightStore';
 import { pinCommit, pinFor, samePin, type DocsVisit, type FileSlot, type Freshness } from './useDocsVisit';
 
 type Leaf = DocsPageLocation & { kind: 'path' };
@@ -455,6 +458,16 @@ export function DocsHead(p: {
   readonly page: DocsPageLocation; readonly visit: DocsVisit; readonly tree: DocsTreeOk | null;
   /** The pin a raster leaf's own image settled at (`DocsScreen`'s); absent or `null`, none has. */
   readonly leafImage?: DocPin | null;
+  /** What the leaf's body shows, published for Export (`docs/exportBody.ts`); absent or `null`: nothing yet. */
+  readonly exportBody?: ExportBody | null;
+  /** The page's or text leaf's highlight store (W5h-a's `publish` slot); absent or `null`: none published. */
+  readonly pageStore?: HighlightStore | null;
+  /** The visit's image registry (refinement (g)); absent or `null`: none. */
+  readonly exportAssets?: ExportAssets | null;
+  /** The reader is off on this page, so Export can save the plain view (refinement (a)). */
+  readonly plainView?: boolean;
+  /** Turns the reader off on this page (refinement (a)); absent or `null`: the screen offers no plain view. */
+  readonly onPlainView?: (() => void) | null;
 }): ReactNode {
   const { page, visit, tree } = p;
   const slow = useNow(30_000, tree !== null);
