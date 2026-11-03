@@ -10,7 +10,7 @@ import type {
   AgentReady,
   AgentReq,
   CapsReq,
-  DiskReq, PressureReq,
+  DiskReq, PressureReq, BackupReq,
   ExecReq,
   PtyData,
   PtyExit,
@@ -35,7 +35,7 @@ import type {
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
 import {
-  ACCOUNT_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP, DISK_OP, PRESSURE_OP,
+  ACCOUNT_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP, DISK_OP, PRESSURE_OP, BACKUP_OP,
   TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, type TestboxReq, type TestboxToolsSyncReq,
   TOKEN_SYNC_SPAWN_TIMEOUT_MS, UPDATE_OP, UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine,
   inFlightBusyDetail, isClaimCode, isReadFromRange, isUpdateLockHeldLine, lockHeldBusyDetail, tokenSyncSpawnArgv, updateLauncherPath,
@@ -45,6 +45,7 @@ import {
 import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
 import { measureDisk, type DiskSeams } from './disk.js';
 import { measurePressure, type PressureSeams } from './pressure.js';
+import { measureBackup, type BackupSeams } from './backup.js';
 import { measureTestbox, syncTestboxTools, type TestboxOpSeams } from './testboxOp.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
@@ -93,6 +94,7 @@ export interface AgentOpts {
   spawnAccount?: AccountOpSpawn; // default makeAccountOpSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `account` op's ONLY spawn
   diskSeams?: Partial<DiskSeams>; // default realDiskSeams() — tests inject the statfs/stat/mountinfo reads; the `disk` op's ONLY disk reads
   pressureSeams?: Partial<PressureSeams>; // default: the two /proc/pressure files — tests inject the text (#1170)
+  backupSeams?: Partial<BackupSeams>; // default: this process's environment — tests inject CCRC_BACKUP_STATE_DIR (D-7858)
   testboxSeams?: Partial<TestboxOpSeams>; // default realTestboxSeams() — tests inject the agent's PATH and the clock (D-7411)
 }
 
@@ -453,6 +455,7 @@ interface ConnCtx {
   spawnAccount: AccountOpSpawn;
   diskSeams: Partial<DiskSeams>;
   pressureSeams: Partial<PressureSeams>;
+  backupSeams: Partial<BackupSeams>;
   testboxSeams: Partial<TestboxOpSeams>;
 }
 
@@ -695,6 +698,12 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       send(ws, ok(req.id, { ...measurePressure(ctx.pressureSeams) }));
       return;
     }
+    case 'backup': {
+      // D-7858. No argument (`validateReq` refuses a frame that carries one); the directory is this process's own
+      // setting (D-7859). Every fault is an `unreadable` answer, never a throw and never an absent file.
+      send(ws, ok(req.id, { ...measureBackup(ctx.backupSeams) }));
+      return;
+    }
     case 'testbox': {
       // Test box plan TB9 (D-7411). No argument (`validateReq` refuses a frame that carries one). The fourth class of
       // wire-triggered spawn outside the exec whitelist (agent/CLAUDE.md, D-7430): `systemctl --user show-environment`,
@@ -905,6 +914,11 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | Acco
       // #1170: no argument, the `disk` op's rule. Any extra field is malformed (`bad-request`), and nothing is read.
       if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op')) return null;
       return { t: 'req', id, op: 'pressure' } satisfies PressureReq;
+    }
+    case 'backup': {
+      // D-7858: no argument, the `disk` op's rule. Any extra field is malformed (`bad-request`), and nothing is read.
+      if (Object.keys(msg).some((k) => k !== 't' && k !== 'id' && k !== 'op')) return null;
+      return { t: 'req', id, op: 'backup' } satisfies BackupReq;
     }
     case 'testbox': {
       // TB9 (D-7411): no argument, the `disk` op's rule. Any extra field is malformed (`bad-request`), nothing runs.
@@ -1243,6 +1257,7 @@ function handleConnection(
     spawnAccount: opts.spawnAccount,
     diskSeams: opts.diskSeams,
     pressureSeams: opts.pressureSeams,
+    backupSeams: opts.backupSeams,
     testboxSeams: opts.testboxSeams,
   };
 
@@ -1289,11 +1304,11 @@ function handleConnection(
       // (box-token lifecycle spec 4.4), `account` (accounts spec §13.2, whose
       // remote arm sends a secret only to an agent that names it here) and `disk`
       // (fleet disk retention spec §2.5, D-6614: it takes no field), `pressure`
-      // (#1170) and `testbox`/`testbox-tools-sync` (test box plan TB9, D-7411,
-      // D-7555: no field either). It is required in `ReadyFrame`, so it cannot
+      // (#1170), `testbox`/`testbox-tools-sync` (test box plan TB9, D-7411,
+      // D-7555: no field either) and `backup` (D-7858, no field). It is required in `ReadyFrame`, so it cannot
       // be dropped silently.
       const frame: ReadyFrame = {
-        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP],
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, BACKUP_OP],
       };
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
@@ -1391,6 +1406,7 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     spawnAccount: rawOpts.spawnAccount ?? makeAccountOpSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
     diskSeams: rawOpts.diskSeams ?? {},
     pressureSeams: rawOpts.pressureSeams ?? {},
+    backupSeams: rawOpts.backupSeams ?? {},
     testboxSeams: rawOpts.testboxSeams ?? {},
   };
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
