@@ -22,6 +22,7 @@
 // (D-4962) and W3 (D-4963) lower it again.
 import { describe, it, expect, afterAll } from 'vitest';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
@@ -173,11 +174,11 @@ const tickEnv = (home: string, shims: string): NodeJS.ProcessEnv => {
   return { ...contained, PATH: `${shims}:${contained['PATH'] ?? ''}` };
 };
 const supervise = (home: string, shims: string): SpawnSyncReturns<string> =>
-  spawnSync('bash', ['-c', `source "${CCD}"; ${supervisePrelude()}cmd_supervise ${ID}`],
+  spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${supervisePrelude()}cmd_supervise ${ID}`],
     { encoding: 'utf8', cwd: home, timeout: 60000, env: tickEnv(home, shims) });
 /** `type -t` of each word, from a shell that sourced ccd under the run's PATH. */
 const typesOf = (home: string, shims: string, words: readonly string[]): Map<string, string> => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; for w in "$@"; do printf '%s\\t%s\\n' "$w" "$(type -t -- "$w")"; done`,
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; for w in "$@"; do printf '%s\\t%s\\n' "$w" "$(type -t -- "$w")"; done`,
     'types', ...words], { encoding: 'utf8', cwd: home, timeout: 60000, env: tickEnv(home, shims) });
   return new Map((r.stdout ?? '').split('\n').filter(Boolean).map((l) => l.split('\t') as [string, string]));
 };
