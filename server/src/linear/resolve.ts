@@ -63,7 +63,7 @@ export async function resolveTitle(ref: string, ticket: LinearRef | null, deps: 
   // 3. The routed slot's key, read now from its file. No usable key: `not-configured`, answered with no call, so
   // nothing is asked of the rate service either.
   const key = await readLinearSlotKey(deps.ccrcDir, slot);
-  const net = { fetch: deps.fetch, timeoutMs: deps.timeoutMs };
+  const net = { fetch: deps.fetch, timeoutMs: deps.timeoutMs, now: deps.now };
   let look: LinearLookup;
   if (key.kind !== 'key') {
     look = await lookupLinearIssue(ticket, key, net);

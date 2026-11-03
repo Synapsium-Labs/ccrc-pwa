@@ -5,9 +5,10 @@
  * instance with the outer limiter `server.ts` registers (for the rows that need a clock or many sessions).
  *
  * NOTHING HERE IS RECORDED. The answers below are written from the spec's shapes (§4.1, §4.4, §4.5, §5.4) and the
- * operation table's documents; the coordinator's FX capture (D-7684) has not run, so no `X-Complexity`, header value
- * or error code here stands for one Linear sent. Fixture vocabulary only: workspaces `ws-a` and `ws-b`, team keys
- * `AAA` and `BBB`, keys of the shape `lin_api_fixture…`, fixed UUIDs, sessions `project-a-…`.
+ * operation table's documents, so no `X-Complexity`, header value or error code here stands for one Linear sent; a row
+ * that needs what Linear answered passes a `respond` built from the FX capture's recordings (`linearRecorded.ts`).
+ * Fixture vocabulary only: workspaces `ws-a` and `ws-b`, team keys `AAA` and `BBB`, keys of the shape
+ * `lin_api_fixture…`, fixed UUIDs, sessions `project-a-…`.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';

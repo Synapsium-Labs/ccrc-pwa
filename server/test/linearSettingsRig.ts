@@ -5,9 +5,10 @@
  * new routes). The services come from `linearServicesFake`, the Linear stand-in from `linearProxyRig.ts`'s
  * `linearStandIn`, which answers each fixed document in the shape the spec gives it.
  *
- * NOTHING HERE IS RECORDED. The coordinator's FX capture (D-7684) has not run, so no answer here stands for one Linear
- * sent, and no `X-Complexity` or header value is spelled. Fixture vocabulary only: workspaces `ws-a` and `ws-b`, team
- * keys `AAA` and `BBB`, keys of the shape `lin_api_fixture…`.
+ * NOTHING HERE IS RECORDED. No answer here stands for one Linear sent, and no `X-Complexity` or header value is
+ * spelled; a row that needs a recorded answer passes a `respond` built from the FX capture's recordings
+ * (`linearRecorded.ts`). Fixture vocabulary only: workspaces `ws-a` and `ws-b`, team keys `AAA` and `BBB`, keys of the
+ * shape `lin_api_fixture…`.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';

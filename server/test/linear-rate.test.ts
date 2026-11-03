@@ -281,17 +281,36 @@ describe("Linear's own refusal closes the slot until its wait (spec §6.7)", () 
     }
   });
 
-  it('with no Retry-After it is closed for sixty seconds (the reset header is not read until its unit is recorded)', async () => {
+  it('with no Retry-After it is closed until X-RateLimit-Requests-Reset, an epoch in milliseconds (FX), and for sixty seconds with neither', async () => {
+    // A mutant that reads the millisecond epoch as seconds (or as a wait) holds it to 3,600 s, so the slot is still
+    // closed at +90 s and this row is red.
     const r = await rig();
-    r.answer(linearAnswer({ ok: false, status: 429, headers: { 'x-ratelimit-requests-reset': String(T0 + HOUR) }, json: async () => ({}) }));
+    r.answer(linearAnswer({ ok: false, status: 429, headers: { 'x-ratelimit-requests-reset': String(T0 + 90_000) }, json: async () => ({}) }));
     await resolve(r);
     r.answer(issueOk());
-    r.clock.now += 59_000;
+    r.clock.now += 89_000;
     expect(body(await resolve(r))).toMatchObject({ reason: 'rate-limited' });
     expect(r.calls.n).toBe(1);
     r.clock.now += 1_000;
     expect(body(await resolve(r))).toMatchObject({ source: 'linear' });
     expect(r.calls.n).toBe(2);
+
+    // RATELIMITED on a 200: the same reset rule, and the Check again is refused locally with the time left.
+    r.answer(linearAnswer({ ok: true, status: 200, headers: { 'x-ratelimit-requests-reset': String(r.clock.now + 30_000) }, json: async () => RATELIMITED_ERRORS }));
+    expect(body(await resolve(r))).toMatchObject({ reason: 'rate-limited' });
+    expect(r.calls.n).toBe(3);
+    const refused = await check(r);
+    expect(body(refused)).toMatchObject({ error: 'rate-limited', detail: 'linear', retryAfterS: 30 });
+    expect(refused.headers['retry-after']).toBe('30');
+    r.clock.now += 30_000;
+
+    r.answer(linearAnswer({ ok: false, status: 429, json: async () => ({}) }));
+    await resolve(r);
+    r.answer(issueOk());
+    r.clock.now += 59_000;
+    expect(body(await resolve(r))).toMatchObject({ reason: 'rate-limited' });
+    r.clock.now += 1_000;
+    expect(body(await resolve(r))).toMatchObject({ source: 'linear' });
   });
 
   it('a Retry-After of 99,999 seconds is held to 3,600', async () => {
