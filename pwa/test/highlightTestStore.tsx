@@ -41,6 +41,7 @@ export function syncTestStore(mode: 'docs' | 'chat' = 'chat'): HighlightStore & 
         ? { kind: 'html', mode: 'block', checked }
         : { kind: 'plain', first: html.length > MD_HIGHLIGHT_MAX_HTML_CHARS ? { kind: 'too-large' } : { kind: 'malformed' }, retry: null };
     } catch (e) {
+      // Not `highlightJob.ts`'s `errorName` (private to the worker's closure), and only the Error case matters here.
       entry = { kind: 'plain', first: { kind: 'threw', error: e instanceof Error ? e.name : typeof e }, retry: null };
     }
     kept.set(key, entry);

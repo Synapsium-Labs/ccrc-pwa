@@ -23,7 +23,10 @@ import {
 /** What an answer needs of highlight.js: `getLanguage` and `highlight`. A test hands in a fake. */
 export type HighlightInstance = Pick<HighlightApi, 'getLanguage' | 'highlight'>;
 
-/** The name of whatever was thrown: `name` for an error (a `DOMException` included), else its `typeof`. */
+/** The name of whatever was thrown: `name` for an error (a `DOMException` included), else its `typeof`. A copy of
+ *  `markdownParse.ts#errorName` and `readerRenderJob.ts#errorName`, on purpose: importing either would pull the
+ *  parse worker's modules (unified, the shared Markdown library) into this worker's closure, which M4.H3 holds to
+ *  first-party highlight files, and `markdownParse.ts` is held byte-identical. */
 function errorName(e: unknown): string {
   if (typeof e === 'object' && e !== null && 'name' in e && typeof e.name === 'string') return e.name;
   return typeof e;
