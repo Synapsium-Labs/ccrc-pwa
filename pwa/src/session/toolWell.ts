@@ -5,7 +5,7 @@
 // module only decides it.
 //
 // Pure and L1: its imports are pure helpers. Whether a grammar is registered is the caller's to say
-// (`lib/markdown.tsx#isRegisteredGrammar`, handed in as `isRegistered`), because an L1 module may not load a `.tsx`.
+// (`lib/highlightNames.ts#isRegisteredGrammar`, handed in as `isRegistered`), because an L1 module may not load a `.tsx`.
 //
 // The input is the call's compact JSON as the server cut it (4000 characters, so a long input arrives TRUNCATED and
 // does not parse). A text that does not parse is `plain`: it is never repaired and no prefix is retried, because a

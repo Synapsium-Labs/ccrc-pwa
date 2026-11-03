@@ -231,6 +231,10 @@ const CONTROLS: Record<string, string> = {
     + 'the two sheets that drew it were drawing the same button down to the '
     + 'parenthesised count (`OtherPoolsDisclosure`). The rule it leans on is '
     + 'unchanged; what is gone is the second copy of the markup.',
+  'accounts/RunFrame.tsx <a> (computed)':
+    'VARIANT buttonVariants. The sign-in URL card\'s Open ↗ (accounts plan Task A22, D-7849): the primary at ≥900 (52px, '
+    + '`acct-open-primary`) and the ghost below 900 (`GHOST_ANCHOR`). An anchor, not a button, because it opens the '
+    + 'sign-in page in a new tab; the styling is the button\'s, whose base carries `min-h-tap`.',
   'fleet/CollectLaneSection.tsx <a> (computed)':
     'VARIANT buttonVariants. The paused Cleanup pause card\'s one resume door, '
     + 'a link to Runs that stands alone in the card foot, so it wears the ghost '
@@ -430,6 +434,9 @@ const CONTROLS: Record<string, string> = {
   'docs/DocsHead.tsx <button> docs-crumbs-more': "TOKEN. The phone's leading … in the crumbs, which opens the full path.",
   'docs/DocsHead.tsx <button> docs-fresh': "TOKEN. The freshness chip at the truth line's end, which fetches from origin.",
   'docs/DocsHead.tsx <button> docs-copy': 'TOKEN. Copy commit, on the truth line.',
+  'docs/DocsHead.tsx <button> docs-action docs-share':
+    "TOKEN. Share (spec 4.16), after View on GitHub: a <button> wearing the header's link-action class, `.docs-action`, "
+    + 'whose rule carries the floor.',
   'docs/DocsHead.tsx <a> docs-action': 'TOKEN. View on GitHub and Open committed version, standalone links in the header.',
   'docs/DocsIndexView.tsx <button> docs-row': 'TOKEN. A project row of the Docs index, one button per row (spec 4.4).',
   'docs/DocsTreeView.tsx <button> docs-row': 'TOKEN. A section or entry row of a Docs directory, the same rule.',

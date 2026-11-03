@@ -30,6 +30,7 @@ import type { CollectLaneJournal } from './collectLane.js';
 import type { LocalUpdateSpawn, SendUpdateOp } from './update/converge.js';
 import type { AccountAudit } from './accounts/audit.js';
 import type { AccountOps } from './accounts/ops.js';
+import type { AuthAttempts } from './accounts/attempts.js';
 import type { FetchLike } from './linear/client.js';
 import type { LinearJournal } from './linear/journal.js';
 import type { LinearWritePolicy } from './linear/policy.js';
@@ -197,6 +198,9 @@ export interface Deps {
    *  whose check counts as its slot's refresh). Absent (a test, a script): those routes answer `linear-unavailable`
    *  before any Linear call (D-7684). `server.ts` never builds a default. */
   linearRefresher?: LinearRefresher;
+  /** The in-memory sign-in attempts (accounts plan Task A21, D-7793): a test's store over its own clock. Absent (production):
+   *  `buildServer` makes one per server on the real clock, and disarms its timers when the server closes. */
+  authAttempts?: AuthAttempts;
 }
 
 /** D-7579 (increment 7, WP2): `Deps` with `coord` narrowed to the watcher's one store port, `WatcherCoordPort`. From

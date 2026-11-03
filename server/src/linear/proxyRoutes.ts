@@ -167,9 +167,12 @@ interface WriteRecord {
   fields: string[];
 }
 
-/** The changed fields a write names, from its validated body (the journal's closed list orders them). */
-const writeFields = (input: LinearOpInput): string[] =>
-  (input.op === 'create' ? ['team', ...Object.keys(input.fields)] : Object.keys(input.fields));
+/** The changed fields a write names, from its validated body (the journal's closed list orders them). A create's
+ *  `requestId` changes no field of the issue, so it is not one (`LINEAR_JOURNAL_FIELDS`). */
+const writeFields = (input: LinearOpInput): string[] => {
+  const named = Object.keys(input.fields).filter((f) => f !== 'requestId');
+  return input.op === 'create' ? ['team', ...named] : named;
+};
 
 /** The record of a slot's teams with their ids, from the store read the call was routed against. */
 function slotTeams(store: Extract<LinearStoreRead, { kind: 'listed' }>, slot: LinearRouteSlot): { id: string; key: string; name: string }[] {
@@ -355,7 +358,7 @@ export function registerLinearProxyRoutes(app: FastifyInstance, deps: LinearProx
     /** One Linear call with the key just read, counted for the settle. */
     const send = async (key: string, document: string, variables: Record<string, unknown>): Promise<LinearCall> => {
       spent += 1;
-      const r = await callLinear(key, document, variables, { fetch: deps.fetch, timeoutMs: deps.timeoutMs });
+      const r = await callLinear(key, document, variables, { fetch: deps.fetch, timeoutMs: deps.timeoutMs, now });
       if (!r.ok && r.reason === 'rate-limited') closeForS = r.retryAfterS;
       return r;
     };

@@ -1,5 +1,6 @@
 import { createHistogram, performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
+import type { WatcherDeps } from './deps.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
 import { readRadarPass } from './coord/lineageRead.js';
@@ -7,6 +8,7 @@ import { radarRowsOf, sessionLandingsOf } from './coord/radar.js';
 import { askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { buildFleetReadModel, type FleetReadModel } from './fleetReadModel.js';
+import { mapBounded } from './bounded.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools,
@@ -149,7 +151,7 @@ import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
 import { readAiTitle } from './transcript/title.js';
 import {
-  toRunSummary, type CoordStore, type MarkReleaseNotifiedResult,
+  toRunSummary, type MarkReleaseNotifiedResult,
   type OpenSibling, type RunRow,
 } from './coord/store.js';
 import { renderMailNudge } from './coord/envelope.js';
@@ -307,6 +309,11 @@ export type CollectSlot =
  *  answer; only the first tick waits, and the first tick's busy->idle pushes
  *  are already suppressed, so what this delays is one frame at boot. */
 export const HEADS_BOOT_WAIT_MS = 2_500;
+
+/** How many panes `detectDialogs` captures at once (desktop polish C3, D-6435). Its own bound, not
+ *  `REGISTRY_ROW_CONCURRENCY`: a capture spawns a tmux process on the fleet box, a registry row reads files. A bound,
+ *  not a cadence, so it sits here rather than in `laneSchedule.ts` (D-7159). EXPORTED for its suite. */
+export const DIALOG_CAPTURE_CONCURRENCY = 8;
 
 /** The mirror lane's cadence, the census's and the readiness lane's live in `laneSchedule.ts`; the suites and `index.ts`
  *  import the two exported ones from here. */
@@ -1396,7 +1403,7 @@ export class FleetWatcher {
    *  `buildServer` (`watcher.questions`), so the routes and the watcher reach the same instance. Never module scope. */
   readonly questions: Questions;
 
-  constructor(private deps: Deps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
+  constructor(private deps: WatcherDeps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     // W3 Q3f (D-7030): the doors' sink, this watcher's: the door cores push through `pushOne` as the lapse sinks do, and
     // read the two pane-edge facts a door-in needs (the painted dialog, the child's project) at the call, never copied.
     this.questions = createQuestions(deps, { heldFor, doors: {
@@ -1760,7 +1767,7 @@ export class FleetWatcher {
    *
    * The send starts only AFTER the mark committed, is `void`ed and is never retried
    * (D-3295): at most once, because a repeated "vX is out" is the noise the persisted
-   * mark exists to stop, and a missed one is still shown by the banner and the settings screen.
+   * mark exists to stop, and a missed one is still shown by the fleet's update line and the settings screen.
    *
    * Sessionless (D-3296): no `sessionId`, no presence gate, no `NotifyLog` or feed record —
    * `pushOne` is about a session and this is about the fleet. A server-role process only: the push
@@ -1814,7 +1821,7 @@ export class FleetWatcher {
     const tag = n.tag;
     const sending = sender.notify(payload);
     void sending.catch((e: unknown) => {
-      console.warn(`ccrc-server: update: the release push for ${tag} did not send (${e instanceof Error ? e.message : String(e)}) — it is not retried; the banner and the settings screen still show the release`);
+      console.warn(`ccrc-server: update: the release push for ${tag} did not send (${e instanceof Error ? e.message : String(e)}) — it is not retried; the fleet's update line and the settings screen still show the release`);
     });
     return { did: 'pushed', tag, payload };
   }
@@ -2063,8 +2070,9 @@ export class FleetWatcher {
 
   /** The child marks off the last LISTED registry read, for `GET /api/runs`'s
    *  reclaim chip (wave 5), or null when no tick has listed one. In memory, and
-   *  the reason is cost: a route-time `readRegistry` is ~721 agent-WS operations
-   *  per board load in remote mode. */
+   *  the reason is cost: a route-time `readRegistry` on a 24-session fleet is a
+   *  floor of 97 agent-WS operations [registry-read-census:fleet] per board load
+   *  in remote mode, before the other listed fields. */
   currentChildMarks(): ReadonlyMap<string, ChildMark> | null {
     return this.childMarks;
   }
@@ -2432,12 +2440,14 @@ export class FleetWatcher {
         void this.serverCapsNow();
       }
 
-      // Read once, share with the two lanes that would otherwise each read it
-      // again on EVERY tick (detectDialogs, sweepHookStates) — in remote mode
-      // every readRegistry() field is its own agent-WS round trip, so this is
-      // the difference between one registry read and two, every 2s, forever.
-      // sweepTasks/sweepPr below are NOT included: both throttle to their own
-      // slower clock and skip the read entirely on most ticks already.
+      // Read once. The lanes that choose their rows from the registry are
+      // handed it: detectDialogs and sweepHookStates take its records, and the
+      // lanes that take a model take it (sweepTasks and sweepPr included, through
+      // `fleetFor`, D-5864), so they do not list again; in remote mode every
+      // readRegistry() field is its own agent-WS round trip. Some lanes still list
+      // the registry themselves on purpose, each for its own reason recorded at
+      // its call site: sweepDivergences, the mail lane's `mailPass`, the temp-root
+      // collector, sweepOrphanTrees, the lifecycle mirror and the snapshot re-check.
       //
       // `readRegistryMeasured`, not `readRegistry` (blocking review findings
       // 1/3): the old `[]`-on-unlistable signature made a single dropped
@@ -2541,9 +2551,10 @@ export class FleetWatcher {
       //
       // It NARROWS that window; it does not close it. The sweep reads a
       // session's hookstate at time s and `detectDialogs` captures its pane at
-      // time c, sequentially, each capture an agent round trip in remote mode —
-      // so for the last session of eight, c-s is a couple of hundred ms of a
-      // 2000 ms tick. A `session-hook.sh` write landing inside (s, c) still
+      // time c. The captures go out `DIALOG_CAPTURE_CONCURRENCY` at a time
+      // (D-6435), so for the last of N sessions c-s is about ceil(N/8) capture
+      // rounds plus the usage sweep's, in remote mode, not N round trips. A
+      // `session-hook.sh` write landing inside (s, c) still
       // yields a menu with no envelope, and therefore an action-less ask push.
       // What covers the residue is `actionlessAsks` in `detectDialogs` below:
       // the latch remembers that push and amends it when the envelope turns up.
@@ -3045,9 +3056,9 @@ export class FleetWatcher {
    *  not serially after it, so this tick still costs no extra round trip. It
    *  prevents pool-marker cost from multiplying the remote client's
    *  15-second default by project population (D-2465/D-2478). It does NOT
-   *  restore a two-second whole-tick cadence: the serial `readRegistryMeasured`
-   *  above runs first and can still cost roughly one default timeout per
-   *  session (D-2479). Closing that older reader is outside this wave.
+   *  restore a two-second whole-tick cadence: `readRegistryMeasured` above runs
+   *  first, no longer serially (D-6388: `REGISTRY_ROW_CONCURRENCY` rows at once),
+   *  and can still cost roughly one default timeout per 8 sessions (D-2479).
    *
    *  Both FleetIO implementations fold read failures into measured return
    *  values, so no catch is needed here. `project-pools-read.test.ts` pins cost,
@@ -6821,7 +6832,7 @@ export class FleetWatcher {
   }
 
   /** The stall rows among one run's events, parsed. A detail this build cannot name is skipped (`parseStallDetail`). */
-  private stallNoticesOf(events: ReturnType<CoordStore['runEvents']>): StallNotice[] {
+  private stallNoticesOf(events: ReturnType<WatcherCoordPort['runEvents']>): StallNotice[] {
     const notices: StallNotice[] = [];
     for (const e of events) {
       const parsed = parseStallDetail(e.detail);
@@ -8983,13 +8994,24 @@ export class FleetWatcher {
     const recs = records ?? await readRegistry(this.deps.io, this.deps.cfg);
     // D-5925: the boot's snapshot of held rows, read before this tick's `sweepApprovals` can lapse any of them.
     if (!this.primed) this.questions.loadReseed();
-    for (const r of recs) {
-      const paneAt = Date.now();
-      const pane = await this.deps.tmux.capture(r.id);
+    // D-6435: every pane is captured first, at most DIALOG_CAPTURE_CONCURRENCY at once, then read in registry order.
+    // No loop body writes to a pane. A capture that rejects (no Runner does) is settled and rethrown at its own row.
+    // The trade: every row's body runs after ALL captures finish, so of N registry rows an EARLIER row is judged on an
+    // older pane than under the serial loop: row 0 waits about ceil(N / DIALOG_CAPTURE_CONCURRENCY) - 1 capture rounds,
+    // the last round's rows about none, and no row waits when N <= DIALOG_CAPTURE_CONCURRENCY. The values per pane are
+    // unchanged, and the next tick reconciles.
+    const caps = await mapBounded(recs, DIALOG_CAPTURE_CONCURRENCY, async (r) => {
+      const at = Date.now();
+      try { return { at, pane: await this.deps.tmux.capture(r.id), doneAt: Date.now() }; } catch (err) { return { at, err }; }
+    });
+    for (const [i, r] of recs.entries()) {
+      const cap = caps[i]!;
+      if ('err' in cap) throw cap.err;
+      const { at: paneAt, pane } = cap;
       // The look is published once for the session's feed (ARCH-52): an open session's stream reads the pane from here,
       // not from a capture of its own. The `dialog` / `dialog_cleared` frames this sweep used to emit were dropped by
       // every stream (it frames its own reading), so they are gone with the second copy.
-      this.bus.emit(`pane:${r.id}`, { at: paneAt, doneAt: Date.now(), pane });
+      this.bus.emit(`pane:${r.id}`, { at: paneAt, doneAt: cap.doneAt, pane });
       // Same capture feeds the statusline read — no extra tmux call. FOUR
       // conditions, four outcomes (D-2012, corrected by Finding 3 of the
       // fix round below — the three-outcome version this replaced treated
@@ -9295,7 +9317,7 @@ export class FleetWatcher {
     this.runLaneSync('digestBeat', () => this.digestBeat(coord, now));
   }
 
-  private digestBeat(coord: CoordStore, now: number): void {
+  private digestBeat(coord: WatcherCoordPort, now: number): void {
     try {
       const hour = readDigestHour(this.deps.cfg.ccrcDir);
       const day = digestDayFor(now, hour);
@@ -10330,7 +10352,7 @@ class DelegationLane {
     } catch { /* diagnostics only: a line that cannot be built is not written, and `run` settles as it would have */ }
   }
 
-  constructor(private readonly deps: Deps, private readonly census: () => DelegationCensusPass | null, private readonly lanes: LaneRunner) {}
+  constructor(private readonly deps: WatcherDeps, private readonly census: () => DelegationCensusPass | null, private readonly lanes: LaneRunner) {}
 
   /** R103 (review F3): an unlistable registry stops `tick()` before the census and before this lane's pass (its fail-shut return), so
    *  nothing is listed while it lasts: it is "no census", and marks the lane NOT READY. The first pass after it sets the ready instant. */

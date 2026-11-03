@@ -12,8 +12,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fastSelection, relatedFromVitestList, guardTests, parseUntraced, scanShape, scansSourceTree, treeScanners, GUARD_TESTS, PIN_MAP_CARRIED, SCANNER_MAX_MS, TREE_READER, SESSION_HOOK_TRIGGERS } from '../../.github/ci/fast-plan.mjs';
-import { liveTestFiles, vitestFollows } from '../../.github/ci/select-tests.mjs';
-import { untracedOutput } from '../../.github/ci/select.mjs';
+import { liveTestFiles, selectIgnoringUncertainty, selectTests, vitestFollows } from '../../.github/ci/select-tests.mjs';
+import { untracedOutput, untracedSelection } from '../../.github/ci/select.mjs';
+import type { TestMap, TestRecord } from '../../.github/ci/testmap.mjs';
 import { globBase, mergeScans, parseScanLines, readTreeScanners, rootOf, wrapListers } from '../../.github/ci/tree-scanners.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -380,6 +381,41 @@ describe('the untraced half: what the map selects for the paths vitest cannot fo
     expect(() => parseUntraced('full')).toThrow(/cannot bound/);
     expect(() => parseUntraced('')).toThrow(/no untraced/);
     expect(() => parseUntraced('{"a":1}')).toThrow(/not an array/);
+  });
+
+  // D-7780: a test that failed under the trace (vitest exited non-zero, or timed out) is judged by what it recorded on
+  // the fast path, never selected for every doc; a `.git` reader and the floor's unknowns still are. The queue's and the refresh's selections are unchanged.
+  describe('an unknown trace in the untraced half (D-7780)', () => {
+    const rec = (o: Partial<TestRecord>): TestRecord => ({ read: [], probed: [], listed: [], subtree: [], git: false, unknown: false, ...o });
+    const map: TestMap = {
+      format: 1, sha: 'a'.repeat(40), baseline: { read: [], probed: [], listed: [], subtree: [], git: false },
+      tests: {
+        'server/test/tick-equivalence.test.ts': rec({ unknown: true, why: 'vitest exited 1', read: ['ccd/ccd', 'ccd/lib/transcript.jq'] }),
+        'server/test/linked.test.ts': rec({ unknown: true, why: 'timeout after 1560s', subtree: ['deploy'] }),
+        'server/test/installer.test.ts': rec({ unknown: true, why: 'vitest exited 1', git: true }),
+        'server/test/history-reader.test.ts': rec({ git: true }),
+        'server/test/floor.test.ts': rec({ unknown: true, why: 'floor: git is false' }),
+      },
+    };
+    const liveTests = Object.keys(map.tests);
+    const untraced = (...paths: string[]) => untracedSelection({ map, changes: paths.map((p) => ({ status: 'M' as const, path: p, symlink: false })), liveTests, existsAt: () => true });
+
+    it('a doc change leaves a failed trace that never read it to the queue; a .git reader and a floor unknown still run', () => {
+      expect(untraced('docs/superpowers/plans/x.md')).toEqual(['server/test/floor.test.ts', 'server/test/history-reader.test.ts', 'server/test/installer.test.ts']);
+    });
+
+    it('a change to a path the unknown trace recorded still selects it, by its read and by its linked subtree', () => {
+      expect(untraced('ccd/ccd')).toEqual(['server/test/floor.test.ts', 'server/test/history-reader.test.ts', 'server/test/installer.test.ts', 'server/test/tick-equivalence.test.ts']);
+      expect(untraced('deploy/x.sh')).toEqual(['server/test/floor.test.ts', 'server/test/history-reader.test.ts', 'server/test/installer.test.ts', 'server/test/linked.test.ts']);
+    });
+
+    it('the refresh\'s and the queue\'s selections still select every unknown trace on any change (rule 2)', () => {
+      const changes = [{ status: 'M' as const, path: 'docs/superpowers/plans/x.md', symlink: false }];
+      const retrace = selectIgnoringUncertainty({ map, changes, liveTests, existsAt: () => true });
+      expect(retrace.mode === 'selected' && retrace.tests.map((t) => t.file).sort()).toEqual([...liveTests].sort());
+      const queue = selectTests({ map, changes, liveTests, existsAt: () => true });
+      expect(queue.mode === 'selected' && queue.tests.map((t) => t.file).sort()).toEqual([...liveTests].sort());
+    });
   });
 });
 

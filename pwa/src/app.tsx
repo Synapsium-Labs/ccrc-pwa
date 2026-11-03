@@ -31,11 +31,13 @@ import { AccountsScreen } from './screens/AccountsScreen';
 import { ArchiveScreen } from './screens/ArchiveScreen';
 import { DigestScreen } from './screens/DigestScreen';
 import { DocsScreen } from './screens/DocsScreen';
+import { HighlightMeasure } from './screens/HighlightMeasure';
 import { MailScreen } from './screens/MailScreen';
 import { RunsScreen } from './screens/RunsScreen';
 import { SessionScreen } from './screens/SessionScreen';
 import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
 import { SettingsScreen } from './screens/settings/SettingsFrame';
+import { ItemRouteAt, WaitingRoute } from './ledgers/WaitingRoutes';
 import { ShellFrame } from './skins/frame';
 import { SKIN_SETS } from './skins';
 import { useFleetStore } from './stores/fleet';
@@ -154,10 +156,16 @@ export function App(): ReactNode {
     <SettingsScreen />
   ) : route === 'digest' ? (
     <DigestScreen day={digestDay} />
+  ) : route === 'measure-highlighting' ? (
+    <HighlightMeasure />
   ) : route === 'docs' ? (
     // NOT keyed: one mount spans one Docs visit (its listings, its auto-refresh set, its image queue), across every
     // page, ref and view the visit opens.
     <DocsScreen path={path} search={search} />
+  ) : route === 'waiting' ? (
+    <WaitingRoute />
+  ) : route === 'item' ? (
+    <ItemRouteAt param={at!.param} />
   ) : (
     <div className="shell-placeholder">
       <p className="shell-placeholder-mark" aria-hidden="true">

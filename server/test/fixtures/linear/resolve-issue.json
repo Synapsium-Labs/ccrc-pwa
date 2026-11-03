@@ -1,0 +1,109 @@
+{
+  "name": "resolve-issue",
+  "documentSource": "code",
+  "document": "query ResolveIssue($id: String!) { issue(id: $id) { id identifier team { id key } } }",
+  "variables": {
+    "id": "AAA-7"
+  },
+  "requestBody": "{\"query\":\"query ResolveIssue($id: String!) { issue(id: $id) { id identifier team { id key } } }\",\"variables\":{\"id\":\"AAA-7\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631376864,
+  "receivedAtMs": 1793631377067,
+  "sentAt": "2026-11-02T14:56:16.864+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:17 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "151"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "3"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999997"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634977436"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634977436"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "issue": {
+        "id": "00000000-0006-4000-8000-000000000002",
+        "identifier": "AAA-7",
+        "team": {
+          "id": "00000000-0001-4000-8000-000000000001",
+          "key": "AAA"
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"issue\":{\"id\":\"00000000-0006-4000-8000-000000000002\",\"identifier\":\"AAA-7\",\"team\":{\"id\":\"00000000-0001-4000-8000-000000000001\",\"key\":\"AAA\"}}}}\n"
+}

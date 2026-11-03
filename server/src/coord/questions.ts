@@ -53,6 +53,7 @@ import { approvalClass, rootsForChild } from './approvalguard.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import type { ApprovalSigner, rulingsAllowedHere } from './approvalsign.js';
 import type { heldFor } from './heldFor.js';
+import type { WatcherCoordPort } from './ports.js';
 import { decideApprovalLapse, decideAskLapse, decideDeferredApprovalPush, type AskLapse, type QuestionHoldPhase } from './questionPolicy.js';
 import type { ReclaimDeps } from './reclaim.js';
 import { redactCommand, redactedStored } from './redact.js';
@@ -167,7 +168,7 @@ export function heldForDrift(store: Pick<CoordStore, 'driftHeldQuestions'>): Ret
 /** What a `Questions` instance is made from: the composition's own store (`Deps.coord`) and, for the hold's claimant
  *  rule (Q3d), the composition's `io`, `cfg` and `tmux`, read at the call, never copied. */
 export interface QuestionsDeps {
-  readonly coord?: CoordStore | undefined;
+  readonly coord?: WatcherCoordPort | undefined;
   readonly io?: ReclaimDeps['io'];
   readonly cfg?: ReclaimDeps['cfg'];
   readonly tmux?: ReclaimDeps['tmux'];
@@ -332,7 +333,7 @@ export interface ApprovalRaiseRequest {
  *  outer ring at runtime. `coord`, `io`, `cfg` and `tmux` are the server's, for `readRegistry`, `heldFor`,
  *  `rootsForChild` and `queueSystemMail`. */
 export interface ApprovalRaiseDeps {
-  readonly coord: CoordStore;
+  readonly coord: WatcherCoordPort;
   readonly io: ReclaimDeps['io'];
   readonly cfg: ReclaimDeps['cfg'];
   readonly tmux: ReclaimDeps['tmux'];
@@ -403,7 +404,7 @@ export type ClaimantDoorDeps = Pick<ApprovalRaiseDeps, 'coord' | 'io' | 'cfg' | 
  *  marking) are closures there, so this file imports no outer ring at runtime. `coord` is the server's, and may be
  *  absent: the operator's press goes through plain on a box with no coordination store. */
 export interface OperatorDoorDeps {
-  readonly coord: CoordStore | undefined;
+  readonly coord: WatcherCoordPort | undefined;
   readonly io: ReclaimDeps['io'];
   readonly cfg: ReclaimDeps['cfg'];
   readonly notice: NoticeSink;

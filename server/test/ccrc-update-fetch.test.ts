@@ -1394,23 +1394,29 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\nunsigned\n`);
   });
 
-  it('FULL flavour: a verified update writes a one-line marker; an --allow-unsigned one writes `unsigned` on line 2', () => {
+  // Two cases, one FULL-flavour update each: as one case the two real installs measured 21.06 s on a CI shard
+  // against the 20 s default and timed out (2026-11-03). Each gets the 40 s its single-install neighbours use.
+  const markerSha = 'newsha0000000000000000000000000000000001';
+
+  it('FULL flavour: a verified update writes a one-line marker', () => {
     const home = freshUpdateBox('ccrc-update-prov-marker-');
     plantOldBox(home, { version: 'v1.0.0' });
     plantCoordDb(home);
-    const sha = 'newsha0000000000000000000000000000000001';
-    packRelease(home, fullTree(home, { version: 'v2.0.0', sha }), { tag: 'v2.0.0' });
-    let r = runUpdate(home);
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: markerSha }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\n`);
-    const home2 = freshUpdateBox('ccrc-update-prov-marker-unsigned-');
-    plantOldBox(home2, { version: 'v1.0.0' });
-    plantCoordDb(home2);
-    packRelease(home2, fullTree(home2, { version: 'v2.0.0', sha }), { tag: 'v2.0.0', bundle: false });
-    r = runUpdate(home2, ['--allow-unsigned']);
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${markerSha}\n`);
+  }, 40_000);
+
+  it('FULL flavour: an --allow-unsigned update writes `unsigned` on line 2 of the marker', () => {
+    const home = freshUpdateBox('ccrc-update-prov-marker-unsigned-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: markerSha }), { tag: 'v2.0.0', bundle: false });
+    const r = runUpdate(home, ['--allow-unsigned']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(readFileSync(join(home2, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\nunsigned\n`);
-  });
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${markerSha}\nunsigned\n`);
+  }, 40_000);
 
   it('verification runs AFTER sha256sum -c (a tampered tarball never reaches the verifier) and BEFORE tar -x (§18 "verification precedes extraction")', () => {
     const home = freshUpdateBox('ccrc-update-prov-order-');

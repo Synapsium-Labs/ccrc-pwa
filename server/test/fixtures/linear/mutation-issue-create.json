@@ -1,0 +1,142 @@
+{
+  "name": "mutation-issue-create",
+  "documentSource": "code",
+  "document": "mutation IssueCreate($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title description priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } } }",
+  "variables": {
+    "input": {
+      "teamId": "00000000-0001-4000-8000-000000000001",
+      "title": "FX capture parent issue",
+      "description": "Parent issue created by the FX fixture capture.\n\n— written by a ccrc fleet session",
+      "priority": 3,
+      "stateId": "00000000-0002-4000-8000-000000000002",
+      "labelIds": [
+        "00000000-0003-4000-8000-000000000001"
+      ],
+      "assigneeId": "00000000-0005-4000-8000-000000000001"
+    }
+  },
+  "requestBody": "{\"query\":\"mutation IssueCreate($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier title description priority createdAt updatedAt team { key } state { name type } assignee { name } labels(first: 50) { nodes { name } } project { name } parent { identifier } } } }\",\"variables\":{\"input\":{\"teamId\":\"00000000-0001-4000-8000-000000000001\",\"title\":\"FX capture parent issue\",\"description\":\"Parent issue created by the FX fixture capture.\\n\\n— written by a ccrc fleet session\",\"priority\":3,\"stateId\":\"00000000-0002-4000-8000-000000000002\",\"labelIds\":[\"00000000-0003-4000-8000-000000000001\"],\"assigneeId\":\"00000000-0005-4000-8000-000000000001\"}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631360662,
+  "receivedAtMs": 1793631361834,
+  "sentAt": "2026-11-02T14:56:00.662+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:02 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "503"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "11"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999989"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634961762"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634961762"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "issueCreate": {
+        "success": true,
+        "issue": {
+          "id": "00000000-0006-4000-8000-000000000001",
+          "identifier": "AAA-6",
+          "title": "FX capture parent issue",
+          "description": "Parent issue created by the FX fixture capture.\n\n— written by a ccrc fleet session",
+          "priority": 3,
+          "createdAt": "2026-11-02T14:56:01.781Z",
+          "updatedAt": "2026-11-02T14:56:01.781Z",
+          "team": {
+            "key": "AAA"
+          },
+          "state": {
+            "name": "Todo",
+            "type": "unstarted"
+          },
+          "assignee": {
+            "name": "User A"
+          },
+          "labels": {
+            "nodes": [
+              {
+                "name": "Bug"
+              }
+            ]
+          },
+          "project": null,
+          "parent": null
+        }
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"issueCreate\":{\"success\":true,\"issue\":{\"id\":\"00000000-0006-4000-8000-000000000001\",\"identifier\":\"AAA-6\",\"title\":\"FX capture parent issue\",\"description\":\"Parent issue created by the FX fixture capture.\\n\\n— written by a ccrc fleet session\",\"priority\":3,\"createdAt\":\"2026-11-02T14:56:01.781Z\",\"updatedAt\":\"2026-11-02T14:56:01.781Z\",\"team\":{\"key\":\"AAA\"},\"state\":{\"name\":\"Todo\",\"type\":\"unstarted\"},\"assignee\":{\"name\":\"User A\"},\"labels\":{\"nodes\":[{\"name\":\"Bug\"}]},\"project\":null,\"parent\":null}}}}\n"
+}

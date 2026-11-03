@@ -1,0 +1,167 @@
+{
+  "name": "read-statuses",
+  "documentSource": "code",
+  "document": "query Statuses($filter: WorkflowStateFilter) { workflowStates(filter: $filter, first: 250) { nodes { id name type team { key } } } }",
+  "variables": {
+    "filter": {
+      "team": {
+        "id": {
+          "eq": "00000000-0001-4000-8000-000000000001"
+        }
+      }
+    }
+  },
+  "requestBody": "{\"query\":\"query Statuses($filter: WorkflowStateFilter) { workflowStates(filter: $filter, first: 250) { nodes { id name type team { key } } } }\",\"variables\":{\"filter\":{\"team\":{\"id\":{\"eq\":\"00000000-0001-4000-8000-000000000001\"}}}}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631312600,
+  "receivedAtMs": 1793631312831,
+  "sentAt": "2026-11-02T14:55:12.600+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:55:13 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "757"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "601"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999399"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793634913194"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793634913194"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "data": {
+      "workflowStates": {
+        "nodes": [
+          {
+            "id": "00000000-0002-4000-8000-000000000001",
+            "name": "In Review",
+            "type": "started",
+            "team": {
+              "key": "AAA"
+            }
+          },
+          {
+            "id": "00000000-0002-4000-8000-000000000002",
+            "name": "Todo",
+            "type": "unstarted",
+            "team": {
+              "key": "AAA"
+            }
+          },
+          {
+            "id": "00000000-0002-4000-8000-000000000003",
+            "name": "Duplicate",
+            "type": "duplicate",
+            "team": {
+              "key": "AAA"
+            }
+          },
+          {
+            "id": "00000000-0002-4000-8000-000000000004",
+            "name": "Backlog",
+            "type": "backlog",
+            "team": {
+              "key": "AAA"
+            }
+          },
+          {
+            "id": "00000000-0002-4000-8000-000000000005",
+            "name": "Done",
+            "type": "completed",
+            "team": {
+              "key": "AAA"
+            }
+          },
+          {
+            "id": "00000000-0002-4000-8000-000000000006",
+            "name": "In Progress",
+            "type": "started",
+            "team": {
+              "key": "AAA"
+            }
+          },
+          {
+            "id": "00000000-0002-4000-8000-000000000007",
+            "name": "Canceled",
+            "type": "canceled",
+            "team": {
+              "key": "AAA"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"workflowStates\":{\"nodes\":[{\"id\":\"00000000-0002-4000-8000-000000000001\",\"name\":\"In Review\",\"type\":\"started\",\"team\":{\"key\":\"AAA\"}},{\"id\":\"00000000-0002-4000-8000-000000000002\",\"name\":\"Todo\",\"type\":\"unstarted\",\"team\":{\"key\":\"AAA\"}},{\"id\":\"00000000-0002-4000-8000-000000000003\",\"name\":\"Duplicate\",\"type\":\"duplicate\",\"team\":{\"key\":\"AAA\"}},{\"id\":\"00000000-0002-4000-8000-000000000004\",\"name\":\"Backlog\",\"type\":\"backlog\",\"team\":{\"key\":\"AAA\"}},{\"id\":\"00000000-0002-4000-8000-000000000005\",\"name\":\"Done\",\"type\":\"completed\",\"team\":{\"key\":\"AAA\"}},{\"id\":\"00000000-0002-4000-8000-000000000006\",\"name\":\"In Progress\",\"type\":\"started\",\"team\":{\"key\":\"AAA\"}},{\"id\":\"00000000-0002-4000-8000-000000000007\",\"name\":\"Canceled\",\"type\":\"canceled\",\"team\":{\"key\":\"AAA\"}}]}}}\n"
+}

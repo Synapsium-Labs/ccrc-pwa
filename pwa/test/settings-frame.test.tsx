@@ -230,7 +230,7 @@ describe('the provider: reads made once (spec §4.4)', () => {
     const files = readdirSync(dir).filter((f) => /\.tsx?$/.test(f));
     expect(files).toContain('SettingsDataProvider.tsx');
     expect(files.length).toBeGreaterThanOrEqual(9);
-    const READS = new Set(['useUpdatesView', 'useStallWatchView', 'useCollectLaneView', 'useTestboxView', 'useLinearConnection', 'readAuthStatus', 'pushEnabled', 'pushSupported']);
+    const READS = new Set(['useUpdatesView', 'useStallWatchView', 'useCollectLaneView', 'useTestboxView', 'useLinearWorkspaces', 'readAuthStatus', 'pushEnabled', 'pushSupported']);
     /** The value names a file imports (a `type` import reads nothing). */
     const imported = (text: string): string[] => [...text.matchAll(/^import \{([^}]*)\} from '[^']+';/gm)]
       .flatMap((m) => m[1]!.split(',').map((n) => n.trim()).filter((n) => n !== '' && !n.startsWith('type ')))
@@ -239,7 +239,7 @@ describe('the provider: reads made once (spec §4.4)', () => {
     expect(importers).toEqual(['SettingsDataProvider.tsx']);
     // And the cards outside the directory take the frame's poll rather than reading their own.
     for (const f of [path.join('screens', 'StallWatchSection.tsx'), path.join('fleet', 'CollectLaneSection.tsx'), path.join('screens', 'LinearSection.tsx'), path.join('fleet', 'TestBoxSection.tsx')]) {
-      expect(readFileSync(path.join(SRC, f), 'utf8'), f).not.toMatch(/\buse(StallWatchView|CollectLaneView|LinearConnection|TestboxView)\(/);
+      expect(readFileSync(path.join(SRC, f), 'utf8'), f).not.toMatch(/\buse(StallWatchView|CollectLaneView|LinearWorkspaces|LinearConnection|TestboxView)\(/);
     }
   });
 });

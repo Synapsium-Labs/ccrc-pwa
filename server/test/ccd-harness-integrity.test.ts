@@ -138,6 +138,8 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   // The redactor census's fixture function: a python table in a bash heredoc, which the scanner must name.
   'census-w5/redactors.test.ts': ['_fx_py'],
   'collectFixture.ts': ['_t'],
+  // The guard seam's BASH_ENV function: the rewritten guard line calls it once per read (delegation broker wave 4, PR4).
+  'hookGuardSeam.ts': ['_w4_seam'],
   'pool-name-parity.test.ts': ['_doctor_omits'],
   'pools-existence-pairing.test.ts': ['_fixture_latest', '_fixture_message', '_fixture_mixed', '_fixture_reader',
     '_fixture_unrelated'],

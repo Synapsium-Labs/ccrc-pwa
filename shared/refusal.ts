@@ -42,7 +42,7 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
+import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from './api.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
 import type { ItemMoveRefusal } from './ledgers.js';
@@ -154,7 +154,9 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The Linear proxy's routes (#1444, spec §6.8): their fourteen words of their own.
   | LinearProxyRefusal
   // The write routes (accounts plan Task A17, D-7739): their words of their own.
-  | AccountWriteRefusal;
+  | AccountWriteRefusal
+  // The sign-in routes (accounts plan Task A21, D-7793): their nine words of their own.
+  | AccountAuthRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -225,6 +227,14 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'not-discardable': 409, 'lane-exists': 409, 'config-dir-exists': 409, 'live-sessions': 409, 'sleeping-sessions': 409,
   'upstream': 409, 'last-home-able': 409, 'auth-in-progress': 409, 'not-a-token-lane': 409, 'duplicate-id': 409,
   'token-unverified': 503,
+  // The sign-in routes (accounts plan Task A21, D-7793): CHOSEN, not measured — new words, on the write routes' rule. 400
+  // for a code the operator can paste again, 403 for a session that did not start the attempt (never 401: it is signed
+  // in), 409 for an attempt or a lane whose state refuses the act now, and 501 for a node that cannot run a sign-in at
+  // all, the status `unsupported` answers.
+  'bad-code': 400, 'not-your-attempt': 403,
+  'code-already-sent': 409, 'no-auth-attempt': 409, 'auth-url-untrusted': 409, 'method-unmeasured': 409, 'node-changed': 409,
+  'not-a-sign-in-lane': 409,
+  'auth-unsupported-here': 501,
   // The Linear routes (named workspaces S4, S4b): CHOSEN, not measured — new words. 400 for what the caller sent
   // (a ref with no text or over its cap, a key the shape rule refuses, a key Linear rejected or forbade: all things the
   // operator can fix and none a fault of the box), 409 for a check with no usable stored key, and 503 for Linear

@@ -1058,7 +1058,10 @@ failed with its word), whether a rotation is owed and why, whether the fleet con
 generation, its transport (`http` said as unencrypted), the previous and retired values still presented, the
 proof that the retired value is refused, a boot recovery, a token-file finding from the last re-read, an
 alert after three failures in a row or a stall (a failed mint, a rotation owed for a day), and **Rotate now**
-(`POST /api/token/rotate`, session-only). Settings then has
+(`POST /api/token/rotate`, session-only). A **Linear** card follows it (#1444): the Linear keys ccrc holds, one per
+workspace, each row with its workspace's name, teams, key tail and last check, **Add a workspace** to add a key, and
+the older single key as a legacy row; every session reaches Linear through these keys alone, by way of `ccrc-api
+linear` (below), and never signs in to Linear itself. Settings then has
 a further section, **Notifications**: the push bell for this browser (the same
 toggle as the fleet header's) and **Release notifications** — `on my channel`, `stable only` or `off`, written
 as the fleet intent's `notify` through `POST /api/updates/intent`. Settings then has a further section, **Stall watch**
@@ -1276,8 +1279,8 @@ when the recorded role is `fleet`) — on macOS it tails the LaunchAgent's `~/.c
 passed through. `ccrc uninstall` takes the box off ccrc and leaves reinstall safe: it refuses while live sessions
 exist, and while an update holds `~/.ccrc/update.lock` or that lock cannot be measured (`--force` passes both;
 D-3453), removes the units (every enabled `ccrc-codex-usage@<id>.timer` disabled first, while its template is still on
-disk; another tool's `ccgpt-usage@` units are never touched), ccrc's managed settings.json hook entries (per-file
-backup; unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts inside
+disk; another tool's `ccgpt-usage@` units are never touched), ccrc's own hook command from settings.json (per-file
+backup; each entry keeps its matcher and every other hook), marker-verified wrappers only, ccrc's own artifacts inside
 `~/.cc-sessions` file-by-file, `~/ccrc`, a staged `~/ccrc.new` link (D-3452), every kept tree under `~/ccrc-versions`
 and a leftover `~/ccrc.migrating`, and the installed executables — and preserves `~/.ccrc` (less the node's
 install-state files — `installed`, `node-id`, `ccrc-caps`, `floor`, `previous`, `install-step`, `update.json`,
@@ -1891,9 +1894,10 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   in its `settings.json`, then the session-hook and skill installers run against that one home. Nothing after
   the roster entry rolls back; the cure for a failure there is `ccrc install`, which converges the same home.
   `--hue` is one of `cyan`, `violet`, `blue`, `magenta`, `amber`, `green`. `--method` says how the credential
-  arrives: an `anthropic` lane defaults to `login` — no key file; the credential is the `.credentials.json`
-  Claude Code writes in the config dir — and also takes `paste` or `setup-token`, a long-lived OAuth token
-  kept in `~/.cc-secrets/<id>-oauth.env`. `openrouter` and `compatible` are key lanes, the key kept in
+  arrives: an `anthropic` lane defaults to `setup-token` (Mint, the long-lived token, since the accounts plan's
+  Task A20) — a token lane whose `~/.cc-secrets/<id>-oauth.env` is minted afterwards by `auth-start --method
+  setup-token`, or piped in at once with `--credential -` — and also takes `login` — no key file; the credential
+  is the `.credentials.json` Claude Code writes in the config dir — or `paste`, a token piped in. `openrouter` and `compatible` are key lanes, the key kept in
   `~/.cc-secrets/<id>-<provider>.env`; `compatible` requires `--base-url`, and `openrouter` defaults to its own
   endpoint. `--models` is a key lane's four-alias map — `opus`, `sonnet`, `haiku` and `subagent`, all four
   required, and refused on an `anthropic` lane. `add` refuses a `selectable` list: add the account first, then
@@ -1930,12 +1934,28 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
 - **Signing a lane in.** A `login` lane's credential is Claude Code's own: run the lane's wrapper
   `~/.local/bin/<id>` and `/login`, and Claude Code writes `.credentials.json` into that lane's config dir. A
   `paste` or `setup-token` lane's credential is a long-lived OAuth token — the one Claude Code's `setup-token`
-  prints — piped to `--credential -`, and `credential` replaces it later. The helpers on the box that drive
-  the same acts without a terminal are `ccd-account-auth <id> <login|setup-token|openai-login>` and
-  `ccd account-pane --id <id> --method setup-token`, which runs that helper's mint in tmux session
-  `cc-auth-<id>` (`--cancel` stops it) and writes the token straight to `~/.cc-secrets/<id>-oauth.env`. The
-  helper publishes its state and the sign-in URL — never the credential — to `~/.cc-sessions/.auth/<id>.json`,
-  and takes the code pasted back through the FIFO beside it, `~/.cc-sessions/.auth/<id>.run/in`.
+  prints — piped to `--credential -`, and `credential` replaces it later. **Without a terminal**, the server's
+  sign-in runs `auth-start --id <id> --method login|setup-token|openai-login --attempt <32 hex>`: it launches
+  `ccd-account-auth <id> <method> --attempt <a>` as a transient user service (`ccrc-auth-<id>-<first 8 of a>`,
+  `RuntimeMaxSec=660`, `MemoryMax=512M`; never a scope, so the helper outlives its caller) and returns as soon as
+  the helper's status file `~/.cc-sessions/.auth/<id>.json` names that attempt. The helper publishes its state, the
+  sign-in URL and the attempt id there — never the credential. The pty methods take a pane on the lane's own
+  tmux server, `tmux -L ccrc-auth-<id>`, inside that unit, which the agent's tmux grant cannot reach.
+  `auth-code --id --attempt` writes the code from stdin, once (`code-already-sent` after), into the FIFO
+  `~/.cc-sessions/.auth/<id>.run/in` and never onto an argv; `auth-cancel --id --attempt` stops the unit, or refuses `auth-cancel-failed` and leaves everything when the
+  user manager cannot stop it. Both verbs default `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` before they ask
+  the manager, since the agent spawns them with only `HOME`, `PATH` and `LANG`. A lane
+  that already holds a credential signs in, or mints, into `~/.ccrc/auth-scratch/<id>` (outside every agent read
+  root), and the helper hands it to `set --method setup-token|login --attempt <a>`, which probes it and, only once
+  it passes, installs it under the lane lock: a re-mint into `<id>-oauth.env`, a Sign in again into the config
+  dir, and a switch also sets or clears the roster's `exec.secretsFile` and rewrites the wrapper and `accounts.sh`.
+  A refused, cancelled or expired attempt leaves the lane as it was, and every attempt's end kills its tmux server
+  and deletes its scratch. Every mint records `mintedAt` in the lane state; a paste clears it. `credential --id <id>
+  --sign-out` runs `claude auth logout` in that lane's config dir and removes its `.credentials.json` (whether that
+  ends the sign-in at Anthropic is unmeasured). A macOS node refuses `auth-start` with `auth-unsupported-here`
+  (reason `darwin-arm-absent`) until its launchd arm ships. `ccd account-pane --id <id> --method setup-token`, the
+  wave-1 path, runs the same helper on the same private socket (`--cancel` stops it) and writes the token straight to
+  `~/.cc-secrets/<id>-oauth.env`.
 - **`declare`** records a launcher somebody else wrote — `candidates` lists them — as an `external` entry with
   `homeAble: false` and `telemetry: "none"` (default suffix `.<id>`), also switched off. ccrc never writes,
   moves or removes that launcher.
@@ -3819,7 +3839,7 @@ honest boundary — this section covers only what that one does not: the install
 lane and the skills' client, the PWA surfaces, the disaster-recovery drill, the
 Build 4 dogfood runbook, cross-repo programmes, and workspace holds.
 
-**All four skills ship to every rostered account's config dir.** The
+**All five skills ship to every rostered account's config dir.** The
 coordinator's protocol is now a trio: its worker counterpart is the
 `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, nineteen clauses pinned by
 `server/test/worker-skill.test.ts`), and its reviewer counterpart is the
@@ -3852,6 +3872,9 @@ A fourth skill, `ccrc-history` (`ccd/history-skill/`, installed by `ccd/install-
 rides the same two lanes into the same homes and teaches a session the `ccrc history` recall verbs
 ("Session history", below). It points into no other skill's tree, so it has no place in that order,
 and its MIT notice, `LICENSE.lossless-claw`, is copied into every home beside its `SKILL.md`.
+A fifth, `ccrc-linear` (`ccd/linear-skill/`, installed by `ccd/install-linear-skill.sh`, #1444), rides the same lanes
+into the same homes and teaches every session the `ccrc-api linear` verbs (below); like the history skill it points
+into no other skill's tree, and doctor's `skills` check and `ccrc doctor --fix` cover it too.
 
 **None of the three role skills (`ccrc-coordinator`, `ccrc-worker` and `ccrc-reviewer`; not `ccrc-history`) is a subagent's to load, and the hook now enforces it (D-4934).** Each skill's
 description says "Never use it inside a subagent": a session started by another session's Agent tool or a
@@ -3879,6 +3902,16 @@ tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
 `POST /api/runs/:id/abandon`, `POST /api/claims/:id/break`,
 `POST /api/runs/:id/reclaim`) have no verb in it, by decision.
+**The `linear` group** (`linear workspaces|teams|issue|comments|search|statuses|projects|labels|users|create|update|comment`,
+#1444) is how every session works with Linear, in every workspace the operator has added a key for in Settings → Linear:
+the server holds the keys and calls Linear through its proxy routes, so no session signs in to Linear, holds a key or
+uses a Linear MCP tool, a connector or `curl` for it. Each verb carries the pane's identity in its query, free text
+travels only in a `--json` body, `<REF>` must be an identifier such as `AAA-12` before anything is sent, and every verb
+but `workspaces` takes `--workspace`. The fifth installed skill, `ccrc-linear` (`ccd/linear-skill/`, installed by
+`ccd/install-linear-skill.sh` into every rostered home whatever the session's role, on the same two lanes as the other
+four), is its reference: the verbs, the bodies, the answers with Linear's own text fenced under `untrusted`, and every
+refusal with its remedy. The coordinator, worker and reviewer skills each point at it, and every fleet session's
+account deny file refuses the claude.ai Linear connector's tools.
 `ccrc install` and `ccrc update` place it on every role except `server`,
 whose box hosts no sessions, and `deploy/deploy.sh`'s agent arm installs it
 beside `ccd`, as the fallback. The token it reads is the server's to place:
@@ -6240,7 +6273,7 @@ things:
   is a two-parent merge whose second parent is on the base, and whose tree equals what `merge-tree` gives for its
   parents. The walk stops at the first step that is not such a merge, after at most eight steps.
 
-It writes four JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project>/`:
+It writes five JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project>/`:
 
 | file | what it holds |
 |---|---|
@@ -6248,57 +6281,72 @@ It writes four JSON files, each `"v": 1`, under `~/.cc-sessions/landing/<project
 | `main-health` | `green`, `red` or `unmeasured`, with the required names, the failing ones and those not yet proven |
 | `<id>.lineage` | one registry row's branch tip and its proven chain of clean base merges |
 | `enabled` | the mirror of the conf's `lineage=on`, with its own time |
+| `lander` | the mirror of the conf's `lander=coordinator`, with its own time. The probe removes it on a project's pause, for an invalid conf, a conf whose `lander` is not `coordinator`, a project that is not a main checkout and a landing directory with no conf. When `landing/` or the project's directory under it is a symlink, the probe writes and removes nothing there, so a file already behind the symlink stays; nothing reads it yet, and the reader stage 5's landing line adds in a later wave must treat such a file as absent (D-7647) |
 
-Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That
-covers a failed fetch or gh call, a git child past its deadline (`timeout`), and an error before the first write.
-A child the project budget cut says `why: budget`, and so does a step the spent budget kept from starting. That
-happens at each of these: the scratch's `init`, the fetch URL's `ls-remote --get-url`, the fetch itself and the
-fetched base's `rev-parse` (in `probe` and `main-health`); every `merge-tree` of a head or a pair (in `probe`); the
-forge reads behind the base's checks (the rules, the branch view, the check runs and the status, in `main-health`);
-and the lineage walk, which checks the budget before each step and says `budget` for its `rev-list`, `merge-base`,
+Anything the probe cannot measure is written as `unmeasured` with a why, and never as clean or green. That covers a
+failed fetch or gh call, a git child past its deadline (`timeout`), and an error before the first write. A child the
+project budget cut says `why: budget`, and so does a step the spent budget kept from starting. That happens at each of
+these: the scratch's `init`, the fetch URL's `ls-remote --get-url`, the fetch itself and the fetched base's
+`rev-parse` (in `probe` and `main-health`); every `merge-tree` of a head or a pair (in `probe`); the forge reads
+behind the base's checks (the rules, the branch view, the check runs and the status, in `main-health`); and the
+lineage walk, which checks the budget before each step and says `budget` for its `rev-list`, `merge-base`,
 `merge-tree` and tree reads (in a lineage file). A budget cut on the first read of `remote.origin.url`, whether the
 read itself was cut or `store.before`'s count had already spent the budget, writes `probe` `repo-unreadable`,
 `main-health` `fetch-failed`, and the lineage files `repo-unreadable` as the lineage pass decides them (below).
-`fetch-failed` also covers a scratch, alternates or refspec failure before the first write, since the probe's set
-has no closer word. A failed or cut fetch, or an error before the first write, rewrites `probe`, `main-health` and
-the project's lineage files, so none of them keeps an older measurement, with three exceptions. When the registry
-cannot be listed, no lineage file is written or removed. A row is held, and its file left as it was, when its
-registry `.project` or `.branch` exists but cannot be read, or when its `.branch` starts with `ws/` but does not
-name a well-formed branch after it (corrupt registry content, such as a NUL byte, `ws/a~0` or `ws/a.lock`); each
-case logs its own `lineage-skip:` line. And a signal leaves the lineage files as they were only when it is recorded
-before the last read checkpoint the tick's route passes through. Recorded later on a failed or cut fetch, or when no
-GitHub repository could be read from the origin URL, it lets the rewrite and the removal of stale files finish. On a measured
-base, rows rewritten before a later row's walk checkpoint raises stay rewritten. The before-first-write fallback
-raises at no checkpoint, so it always finishes. On every route, `probe` and `main-health` are this tick's by the
-time the lineage files are written; a signal at the fetch's own checkpoint, before any write, leaves the old ones
-standing and runs no fallback. On a measured base, a row the tick could not decide keeps its last lineage file,
-with that file's own `at`: when the budget ran out after the fetch, or when one row's read timed out, was killed or
-answered anything but a sha (rc 0) or rc 1. On a failed or cut fetch, when no GitHub repository could
-be read from the origin URL, or in the before-first-write fallback, such a row with an old file is rewritten unmeasured with
-`tip: null`. The last file also stands when the tick never reached the project, when the registry could not be
-listed, and, on every route, when the row is held. rc 1 is git's answer that
-the ref is not there: a missing ref, and also one git itself ignores as broken or cannot read. That row is decided,
-its file is removed, and stage 4 reads the absence as `lineage-unmeasured`. For a
-kept file, stage 4 compares its tip with the live tip. In `probe`, a null `store.after` or `scratch.sizeKiB` means
-that figure was not measured on that tick, for example because the tick was interrupted or the count failed.
+`fetch-failed` also covers an error before the first write (a scratch that cannot be made, or a refspec the git door
+refuses), since the probe's set has no closer word; a failure to write the scratch's alternates file is the failed
+fetch's own `fetch-failed`. A failed or cut fetch, or an error before the first write, rewrites `probe`, `main-health`
+and the project's lineage files, so none of them keeps an older measurement, with three exceptions. When the registry
+cannot be listed, no lineage file is written or removed. A row is held, and its file left as it was, when its registry
+`.project` or `.branch` exists but cannot be read, or when its `.branch` starts with `ws/` but does not name a
+well-formed branch after it (corrupt registry content, such as a NUL byte, `ws/a~0` or `ws/a.lock`, or a name git
+allows but the probe's narrower grammar does not, such as `ws/a+b`); each case logs its own `lineage-skip:` line. And
+a signal leaves the lineage files as they were only when it is recorded before the last read checkpoint the tick's
+route passes through. Recorded later on a failed or cut fetch, or when no GitHub repository could be read from the
+origin URL, it lets the rewrite and the removal of stale files finish. On a measured base, rows rewritten before a
+later row's walk checkpoint raises stay rewritten. The before-first-write fallback raises at no checkpoint, so it
+always finishes. On every route, `probe` and `main-health` are this tick's by the time the lineage files are written;
+a signal at the fetch's own checkpoint, before any write, leaves the old ones standing and runs no fallback. On a
+measured base, a row the tick could not decide keeps its last lineage file, with that file's own `at`: when the budget
+ran out after the fetch, or when one row's read timed out, was killed or answered anything but a sha (rc 0) or rc 1.
+On a failed or cut fetch, when no GitHub repository could be read from the origin URL, or in the before-first-write
+fallback, such a row with an old file is rewritten unmeasured with `tip: null`. The last file also stands when the
+tick never reached the project, when the registry could not be listed, and, on every route, when the row is held. rc 1
+is git's answer that the ref is not there: a missing ref, and also one git itself ignores as broken or cannot read.
+That row is decided, its file is removed, and stage 4 reads the absence as `lineage-unmeasured`. For a kept file,
+stage 4 compares its tip with the live tip. In `probe`, a null `store.after` or `scratch.sizeKiB` means that figure
+was not measured on that tick, for example because the tick was interrupted or the count failed.
 
-`enabled` is reconciled in one pass at the start of every tick that runs, before any project is measured. It is
-written for a valid conf with `lineage=on`, an unpaused project and a real main checkout, and removed in every other
-case. Its writes are therefore as far apart as the tick starts, whatever the order or budgets of the projects. Every
-removal first checks that `~/.cc-sessions/landing/` and the project's directory are real, owned directories.
+**The order.** Each tick measures the projects least recently measured first: it orders them by the modification time
+of each one's `probe`, a project with none first and ties by name. So a project the tick budget left unstarted (the
+journal's `tick-budget: <project> not started`), which keeps its older `probe` or still has none, is ordered on the
+next tick before every project whose `probe` that tick rewrote. It is not promised to be first: a project with an
+older `probe` or none, including a paused one the tick then skips, sorts ahead of it.
+
+The two mirrors, `enabled` and `lander`, are reconciled in one pass at the start of every tick that runs, before any
+project is measured. `enabled` is written for a valid conf with `lineage=on`, and `lander` for a valid conf with
+`lander=coordinator` whatever `lineage` says, each only for an unpaused project with a real main checkout, and each is
+removed in every other case. Their writes are therefore as far apart as the tick starts, whatever the order or budgets
+of the projects. Every removal first checks that `~/.cc-sessions/landing/` and the project's directory are real, owned
+directories.
 
 **The conf.** UTF-8 `key=value` lines, with no spaces around `=`; blank lines and `#` lines are ignored. There are
-two keys: `base`, a branch name that defaults to `main`, and `lineage`, `on` or `off`, which defaults to `off`. An
-empty conf turns the radar on with lineage off. A repeated or unknown key, a bad value, or a conf that is not a
-regular UTF-8 file makes the project `conf-invalid`, and so does a `base` the git door would refuse. That project is not measured, its `enabled` is removed, and the
-journal names the reason (never the bytes).
+three keys: `base`, a branch name that defaults to `main`; `lineage`, `on` or `off`, which defaults to `off`; and
+`lander`, `coordinator` or `none`, which defaults to `none` and says who lands the project's PRs. A probe older than
+this key reads a conf that names it as `unknown-key` and stops measuring that project. That same conf-invalid answer
+also makes it remove `enabled`, so writing `lander=` early turns off the project's lineage acceptance too. Write
+`lander=` only once the box runs this probe. An empty conf turns the radar on with lineage off. A repeated or unknown
+key, a bad value, or a conf that is not a regular UTF-8 file makes the project `conf-invalid`, and so does a `base`
+the git door would refuse. That project is not measured, its `enabled` and `lander` are removed, and the journal names
+the reason (never the bytes).
 
 **The pauses.** The operator writes both by hand, and the tree has no writer for either:
 - `~/.cc-sessions/land-probe-paused` stops the whole tick before its lock.
 - `~/.cc-sessions/landing/<project>/paused` stops one project.
 
-A paused project is not measured, and its `enabled` is removed, so a pause stops acceptance as well as measurement.
-`ccrc uninstall` removes the units, the binary and every `enabled` file.
+A paused project is not measured, and its `enabled` and `lander` are removed, so a pause stops acceptance and the
+landing line's declaration as well as measurement.
+`ccrc uninstall` removes the units, the binary and every `enabled` and `lander` file.
 
 **Read-only, by code.** The fetch and every `merge-tree` object go into a per-tick bare scratch repository under
 the temp root. That repository borrows the project's object store as an alternate. It is removed on every exit path,
@@ -7103,7 +7151,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
 | `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
 | `pr-open --session <id> …` · `pr-state --session <id>\|--project <p> [--pr <n>]` | open the workspace's PR — the one PR write; read PR state, per workspace or one PR by number |
-| `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane, on the box (the agent grants no `account-pane`) |
+| `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane on the lane's own tmux server (`-L ccrc-auth-<id>`), on the box (the agent grants no `account-pane`) |
 | `caps` · `version` | the verbs this copy implements; this box's build stamp |
 
 `ws-rm`, `ws-gc` and `ws-attic --drop` cross no wire (the agent grants none of
@@ -7819,8 +7867,12 @@ carrier, adoption, retention, promotion or cleanup. This section records what th
 in `ccd caps`. `session-hook.sh` appends one line per delegation-relevant hook event to that directory's hourly bucket
 `<YYYYMMDDHH>.spool` (a strict UTF-8 JSON line plus LF, under 4096 bytes where bash is built for glibc Linux and OSTYPE reads `linux-gnu*`, else 1008, D-5436; a
 `listing` of git admin-record names rides a Bash call that names a worktree, and is the first field dropped to fit). The hook never makes the directory, never
-prunes outside its own, and keeps its own buckets for about 24 hours. The directory of a session that is removed, or never runs again, is not pruned by anything in
-this wave. On the server the watcher's delegation lane, once per census cadence and never awaited by the poll, lists each live session's
+prunes outside its own, and keeps its own buckets for about 24 hours. The directory of a session that is removed is pruned at a later
+spawn of any session (`_delegation_spool_prune_absent` in `ccd`, after `_delegation_spool_dir`; operator ruling 2026-10-14), at most
+eight directories a spawn: only when no `~/.cc-sessions/<id>.*` entry of any type stands and the directory holds nothing but regular
+`<YYYYMMDDHH>.spool` buckets, each older than 24 hours by name and by mtime (an empty directory needs its own mtime 24 hours old). It is renamed aside, checked again, and moved back if the
+owner reappeared or a bucket arrived; a session respawned in that instant skips the events of that instant, which the census backstops.
+No verb, timer or server delete exists for it. On the server the watcher's delegation lane, once per census cadence and never awaited by the poll, lists each live session's
 directory, reads the buckets as bounded byte ranges (the existing `readFrom` request with an optional `maxBytes` of at most 262144; an
 agent that answers without `dataB64` is unmeasured, never rebuilt from text) and applies them durably in this order: the journal
 `~/.ccrc/delegation-events.log` is appended and fsynced, then `~/.ccrc/delegation-checkpoint.json` is replaced atomically, then
@@ -7856,9 +7908,13 @@ and an unmeasured hour is final: it is never read later as empty.
   unreadable registration, a home or roster it cannot read, a spool root that is a symlink or unsearchable, and a directory that exists
   but is unreadable; it WARNs for a running session whose own directory does not exist yet (the session is not observed until its next
   spawn: nothing is lost by waiting, and `ccd stop` then `ccd start` observes it now at the cost of an in-flight turn) and for a
-  `WorktreeCreate` or `WorktreeRemove` hook that is not ccrc's (ccrc never registers either). The check writes nothing. `ccrc doctor --fix`
-  runs only the shipped `install-session-hooks.sh`, refuses a home whose `settings.json` has an entry mixing ccrc's hook with another
-  command (the installer's sweep would drop it), leaves every foreign registration byte for byte, and makes no spool directory.
+  `WorktreeCreate` or `WorktreeRemove` hook that is not ccrc's (ccrc never registers either); and it WARNs for a home whose
+  `settings.json` `env` sets `BASH_MAX_TIMEOUT_MS` or `BASH_DEFAULT_TIMEOUT_MS`, naming the home and the key, never the value: the
+  delegation broker's twenty-minute rung-4 margin assumes Claude Code's ten-minute Bash ceiling, and changing the margin is a code change
+  (it does not read a project's own `.claude/settings.json` or the environment ccd spawns sessions with). The check writes nothing.
+  `ccrc doctor --fix` runs only the shipped `install-session-hooks.sh`, which removes only ccrc's own hook command from an entry,
+  keeping the entry's matcher and every other hook (an entry that mixes ccrc's hook with another command keeps the other command),
+  and backs up the file first; it leaves every foreign registration byte for byte, and makes no spool directory.
 - **`ccrc coordination-snapshot`** (above, under "The maintenance verbs") is how the journal and checkpoint are backed up, validated
   and restored as one set with `coord.db`.
 - **The torn-tail heal.** A crash in the middle of an append leaves at most one partial line after the journal's last newline. At

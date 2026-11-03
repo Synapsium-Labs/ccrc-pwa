@@ -53,6 +53,8 @@ export interface LinearSlotCheckOpts {
   rate: LinearRateService;
   fetch?: FetchLike;
   timeoutMs?: number;
+  /** The clock a rate-limited answer's reset time is read against (spec §6.7). */
+  now?: () => number;
 }
 
 /**
@@ -79,7 +81,7 @@ export async function checkLinearKeyThrough(
   let second: LinearRateGrant | null = null;
   let moreRefused: { detail: LinearRateRefusal; retryAfterS: number } | undefined;
   const check = await checkLinearKey(readKey, {
-    fetch: o.fetch, timeoutMs: o.timeoutMs,
+    fetch: o.fetch, timeoutMs: o.timeoutMs, now: o.now,
     mayAskMore: () => {
       const t = o.rate.take({ lane: o.lane, slot: o.slot, calls: 1 });
       if (t.ok) second = t.grant;
@@ -270,7 +272,7 @@ export class LinearRefresher {
   private async refresh(ref: LinearSlotRef): Promise<void> {
     const { ccrcDir } = this.opts;
     const checked = await checkLinearSlot({
-      ccrcDir, slot: ref, lane: 'floor', rate: this.opts.rate, fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs,
+      ccrcDir, slot: ref, lane: 'floor', rate: this.opts.rate, fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs, now: this.now,
     });
     if (checked.kind === 'refused') return;
     const v = checked.check;
@@ -323,7 +325,7 @@ export class LinearRefresher {
         } else if (d !== digest) return;
         const t = rate.take({ lane: 'floor', slot: ref, calls: 1 });
         if (!t.ok) return;
-        const call = await callLinear(k.key, LINEAR_DIRECTORY_DOCUMENTS[kind], { after }, { fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs });
+        const call = await callLinear(k.key, LINEAR_DIRECTORY_DOCUMENTS[kind], { after }, { fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs, now: this.now });
         rate.settle(t.grant, oneCallOutcome(call));
         if (!call.ok) return;
         const p = readLinearDirectoryPage(kind, call.body);

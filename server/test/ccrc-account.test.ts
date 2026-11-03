@@ -385,10 +385,10 @@ describe('deploy/account-op.mjs: the one writer of this verb\'s stdout', () => {
     expect(got).toEqual(want);
     // The composition is what the op prints, so the columns are measured
     // through it rather than beside it — but the ORDER of a connect list is
-    // offer order (§4.2: anthropic's `login` is "(default)", and `check-add`
-    // takes `P.connect[0]` when `--method` is absent), so it is compared as a
-    // sequence and never as a set.
-    expect((got['anthropic'] as { connect: string[] }).connect[0]).toBe('login');
+    // offer order (Q1: anthropic's Mint is the default since accounts plan Task
+    // A20, and `check-add` takes `P.connect[0]` when `--method` is absent), so
+    // it is compared as a sequence and never as a set.
+    expect((got['anthropic'] as { connect: string[] }).connect[0]).toBe('setup-token');
   });
 });
 
@@ -1584,7 +1584,9 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     // spells out as legal. It resolves to a plan, and `baseUrl` is null in it.
     const home = box('ccrc-account-add-login-');
     seedBoxRoster(home, FIXTURE_ROSTER);
-    const r = checkAdd(home, { '--provider': 'anthropic', '--base-url': null });
+    // `--method login` NAMED: since accounts plan Task A20 the table's first member, and so the default, is
+    // `setup-token` (Q1), which `ccrc-account-auth-start.test.ts` measures.
+    const r = checkAdd(home, { '--provider': 'anthropic', '--base-url': null, '--method': 'login' });
     expect(r.code, r.stderr).toBe(0);
     const plan = JSON.parse(r.stdout)['plan'] as Record<string, unknown>;
     expect(plan['method']).toBe('login');
@@ -2253,7 +2255,7 @@ function plantInstallers(home: string): void {
   mkdirSync(d, { recursive: true });
   for (const n of ['install-session-hooks.sh', 'install-coordinator-skill.sh',
     'install-worker-skill.sh', 'install-reviewer-skill.sh', 'install-graphify-skill.sh',
-    'install-history-skill.sh']) {
+    'install-history-skill.sh', 'install-linear-skill.sh']) {
     writeFileSync(join(d, n),
       `#!/bin/sh\nprintf '%s %s\\n' "${n}" "$*" >> "$HOME/installer-calls"\nexit 0\n`,
       { mode: 0o755 });
@@ -2388,7 +2390,7 @@ describe('ccrc account add: the ordered write', () => {
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
     plantInstallers(home);
-    const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
+    const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic', '--method', 'login',
       '--label', 'lab·dev0', '--hue', 'amber']);
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
@@ -2747,12 +2749,14 @@ describe('ccd/ccrc: no refusal sentence may begin with a flag', () => {
     for (const [i, raw] of lines.entries()) {
       if (!raw.includes('_acct_refuse')) continue;
       if (/^\s*#/.test(raw)) continue;            // prose about the function
-      if (/^_acct_refuse\(\)/.test(raw)) continue; // its definition
+      if (/^_acct_refuse(_reason)?\(\)/.test(raw)) continue; // its definition, and its with-a-reason twin's
       mentions++;
       // THE DETAIL MUST BE ONE DOUBLE-QUOTED WORD, and that is half the check:
       // an unquoted detail would word-split into `$4`, `$5`… and arrive at
-      // `account-op.mjs` as a mis-spelled key for the same reason.
-      const m = /_acct_refuse\s+[0-9]+\s+[a-z][a-z0-9-]*\s+"(.*)$/.exec(raw);
+      // `account-op.mjs` as a mis-spelled key for the same reason. The twin
+      // (accounts plan Task A20) carries a reason word between the code and it.
+      const m = /_acct_refuse\s+[0-9]+\s+[a-z][a-z0-9-]*\s+"(.*)$/.exec(raw)
+        ?? /_acct_refuse_reason\s+[0-9]+\s+[a-z][a-z0-9-]*\s+[a-z][a-z0-9-]*\s+"(.*)$/.exec(raw);
       expect(m, `ccd/ccrc:${i + 1} calls _acct_refuse in a shape this scan cannot `
         + 'read, so the rule below went unmeasured on it. Either put the call on '
         + 'one line as `_acct_refuse <exit> <code> "<detail>"`, or teach this scan '
@@ -2903,6 +2907,7 @@ describe('ccrc account add: the new home, provisioned', () => {
       `install-reviewer-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
       `install-graphify-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
       `install-history-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
+      `install-linear-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
     ]);
   });
 
@@ -2923,7 +2928,7 @@ describe('ccrc account add: the new home, provisioned', () => {
     expect(existsSync(join(home, '.claude-lab-dev0', 'settings.json'))).toBe(false);
     // The step still RAN — it decided to write nothing, which is a different
     // thing from being skipped, and the installers still got their home.
-    expect(installerCalls(home).length).toBe(6);
+    expect(installerCalls(home).length).toBe(7);   // the session hooks and six skill installers, ccrc-linear's included
   });
 
   it('an operator\'s own settings.json survives byte-identically outside the managed keys', () => {
@@ -3032,7 +3037,7 @@ describe('ccrc account add: the new home, provisioned', () => {
     symlinkSync(join(REPO, 'ccd', 'install-session-hooks.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'));
     for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh',
-      'install-reviewer-skill.sh', 'install-graphify-skill.sh', 'install-history-skill.sh']) {
+      'install-reviewer-skill.sh', 'install-graphify-skill.sh', 'install-history-skill.sh', 'install-linear-skill.sh']) {
       writeFileSync(join(home, '.cc-sessions', n), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     }
     const r = run(home, addArgs(), `${CANARY}\n`);
@@ -3330,7 +3335,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
     // the WROTE token: this lane has an endpoint, so the merge produced a file.
     expect(j['provisioned']).toEqual([
       'settings-env', 'session-hooks', 'coordinator-skill', 'worker-skill',
-      'reviewer-skill', 'graphify-skill', 'history-skill',
+      'reviewer-skill', 'graphify-skill', 'history-skill', 'linear-skill',
     ]);
   });
 
@@ -3365,7 +3370,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
     expect(existsSync(join(home, '.claude-lab-dev0', 'settings.json'))).toBe(false);
     expect(oneObject(r)['provisioned']).toEqual([
       'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill',
-      'reviewer-skill', 'graphify-skill', 'history-skill',
+      'reviewer-skill', 'graphify-skill', 'history-skill', 'linear-skill',
     ]);
   });
 
@@ -3384,7 +3389,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       + '_acct_operator_steps lab-dev0\n_acct_operator_steps lab-dev0\n'
       + 'printf \'%s %s\\n\' "${#ACCT_PROVISIONED[@]}" "${#ACCT_OPERATOR_STEPS[@]}"');
     expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout.trim()).toBe('7 2');
+    expect(r.stdout.trim()).toBe('8 2');   // settings-env, the session hooks and six skill installers
   });
 
   it('all four of the provisioning refusals end in the one clause the caller built (D-2128)', () => {
@@ -3745,7 +3750,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       expect(r.code, r.stderr).toBe(0);
       expect(oneObject(r)['provisioned']).toEqual([
         'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill',
-        'reviewer-skill', 'graphify-skill', 'history-skill',
+        'reviewer-skill', 'graphify-skill', 'history-skill', 'linear-skill',
       ]);
       // The bytes are untouched — the converge arm returns before the backup, so
       // this is also the idempotence claim `_acct_settings_env` makes for itself.
@@ -5438,7 +5443,7 @@ describe('ccrc account remove', () => {
     writeFileSync(offMarker(home, 'alt-max'), '');
     writeFileSync(join(home, '.cc-sessions', 'alt-max.hookstate.json'), '{}'); writeFileSync(join(home, '.cc-sessions', 'alt-max.turn.json'), '{}');
     const cfg = join(home, '.claude-alt-max');
-    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify', 'ccrc-history']) {
+    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify', 'ccrc-history', 'ccrc-linear']) {
       mkdirSync(join(cfg, 'skills', skill), { recursive: true });
     }
     mkdirSync(join(cfg, 'projects'), { recursive: true });
@@ -5473,7 +5478,7 @@ describe('ccrc account remove', () => {
     const cfg = join(home, '.claude-alt-max');
     expect(readFileSync(join(cfg, 'projects', 'CANARY.jsonl'), 'utf8'))
       .toBe('the operator history\n');
-    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify', 'ccrc-history']) {
+    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify', 'ccrc-history', 'ccrc-linear']) {
       expect(existsSync(join(cfg, 'skills', skill)), skill).toBe(false);
     }
     const settings = JSON.parse(readFileSync(join(cfg, 'settings.json'), 'utf8'));

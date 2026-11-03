@@ -12,6 +12,7 @@ import { pathToFileURL } from 'node:url';
 
 /** @typedef {import('./testmap.mjs').DepRecord} DepRecord */
 /** @typedef {import('./testmap.mjs').TestMap} TestMap */
+/** @typedef {import('./testmap.mjs').TestRecord} TestRecord */
 /** @typedef {{ status: 'A'|'M'|'D', path: string, symlink: boolean }} Change */
 /** @typedef {{ mode: 'selected', tests: Array<{ file: string, rule: 1|2|3|4|5|6, path: string }>, queued?: { unmapped: string[], uncertain: string[], why: Record<string, string> } } | { mode: 'full', reason: string }} Selection */
 
@@ -338,19 +339,28 @@ export function selectTests({ map, changes, liveTests, existsAt, staleChanges, q
 
 /** The selection a refresh retraces from: the full trigger and the per-file rules, but NOT the uncertain-means-full
  *  answer — a refresh is what makes the uncertain records certain again, so it asks `uncertainTests` for them itself.
- *  @param {{ map: TestMap, changes: Change[], liveTests: string[], existsAt: (ref: string, p: string) => boolean }} args
+ *
+ *  `unknownByRecord` (the fast pull request's untraced half only, select.mjs `untracedSelection`): which unknown
+ *  records are judged by rules 3-6 over what their trace did record, as an uncertain record is on a pull request,
+ *  instead of by rule 2's "always". select.mjs hands in the ones that FAILED under the trace (testmap.mjs
+ *  FAILED_UNDER_TRACE); a test that reads `.git` stays rule 2 whatever it answers. What such a trace read and did not
+ *  record is left to the merge queue's full run (D-7780). Null (the default): every unknown is rule 2. A predicate,
+ *  not an import, so this module keeps no import of its own (ci-pipeline.test.ts runs it copied alone).
+ *  @param {{ map: TestMap, changes: Change[], liveTests: string[], existsAt: (ref: string, p: string) => boolean, unknownByRecord?: ((rec: TestRecord) => boolean) | null }} args
  *  @returns {Selection} */
-export function selectIgnoringUncertainty({ map, changes, liveTests, existsAt }) {
+export function selectIgnoringUncertainty({ map, changes, liveTests, existsAt, unknownByRecord = null }) {
   const full = fullTrigger(changes, map.baseline);
   if (full) return { mode: 'full', reason: full };
-  return { mode: 'selected', tests: selectAmong({ map, sha: map.sha, changes, files: liveTests, existsAt }) };
+  return { mode: 'selected', tests: selectAmong({ map, sha: map.sha, changes, files: liveTests, existsAt, unknownByRecord }) };
 }
 
 /** The per-file rules (spec §6.2) over `files`, for `changes` made since `sha` (the commit the records were traced at).
  *  `queueRunsUnmapped`: a test the map has no entry for is selected only when the change touches it (selectTests).
- *  @param {{ map: TestMap, sha: string, changes: Change[], files: string[], existsAt: (ref: string, p: string) => boolean, queueRunsUnmapped?: boolean }} args
+ *  `unknownByRecord`: an unknown record it answers true for, that does not read `.git`, is judged by rules 3-6 over
+ *  its recorded part (selectIgnoringUncertainty).
+ *  @param {{ map: TestMap, sha: string, changes: Change[], files: string[], existsAt: (ref: string, p: string) => boolean, queueRunsUnmapped?: boolean, unknownByRecord?: ((rec: TestRecord) => boolean) | null }} args
  *  @returns {Array<{ file: string, rule: 1|2|3|4|5|6, path: string }>} */
-function selectAmong({ map, sha, changes, files, existsAt, queueRunsUnmapped = false }) {
+function selectAmong({ map, sha, changes, files, existsAt, queueRunsUnmapped = false, unknownByRecord = null }) {
   // Precompute once per change, not once per test x change.
   const changed = [...changes].sort((a, b) => a.path.localeCompare(b.path));
   const changedByPath = new Map(changed.map((c) => [c.path, c]));
@@ -380,7 +390,7 @@ function selectAmong({ map, sha, changes, files, existsAt, queueRunsUnmapped = f
     // Rule 2 — ALWAYS: an unknown trace, or a test that reads `.git` (spec
     // §5.2: it reads the whole tracked tree or its history, so every change
     // is potentially relevant to it).
-    if (rec.unknown || rec.git) {
+    if (rec.git || (rec.unknown && !(unknownByRecord && unknownByRecord(rec)))) {
       selected.push({ file, rule: 2, path: file });
       continue;
     }

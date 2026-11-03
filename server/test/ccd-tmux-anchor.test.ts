@@ -124,8 +124,12 @@ describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
     // DISPLACES the harness's poisoned tmux (create-if-absent, so it is not
     // re-planted by the next `sh()`). `unset` again inside the shim: belt and
     // braces against a caller that forgets the env.
+    // A CALLER'S OWN SERVER OPTIONS ARE FOLDED ONTO THIS RUN'S SOCKET: the sign-in pane's verb names the lane's
+    // private server (`-L ccrc-auth-<id> -f /dev/null`, accounts plan Task A20), and the anchor question this suite
+    // asks is about the target, not the socket, so its calls land here like every other.
     fs.writeFileSync(path.join(harnessBin(h.home), 'tmux'),
-      `#!/bin/sh\nunset TMUX TMUX_PANE TMUX_TMPDIR\nexec '${REAL_TMUX}' -L '${SOCK}' -f /dev/null "$@"\n`,
+      `#!/bin/sh\nunset TMUX TMUX_PANE TMUX_TMPDIR\nwhile [ "$1" = -L ] || [ "$1" = -f ]; do shift 2; done\n`
+      + `exec '${REAL_TMUX}' -L '${SOCK}' -f /dev/null "$@"\n`,
       { mode: 0o755 });
   });
   afterAll(() => {

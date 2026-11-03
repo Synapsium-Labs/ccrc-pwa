@@ -22,7 +22,7 @@ import { readFileSync, appendFileSync, mkdirSync, writeFileSync, existsSync } fr
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { readMap } from './testmap.mjs';
+import { readMap, FAILED_UNDER_TRACE } from './testmap.mjs';
 import { readChanges, liveTestFiles, unsafeTestPaths, gitExistsAt, selectTests, gitStaleChanges, selectIgnoringUncertainty, uncertainTests, vitestFollows, RULE_NAMES } from './select-tests.mjs';
 import { planShards, planTraceBatch, toMatrix, PROFILES } from './shards.mjs';
 
@@ -148,14 +148,25 @@ function liveTestsOrRefuse(repoDir) {
  *   `retrace` is what a REFRESH traces from: the selection without its uncertain-means-full answer, and the uncertain
  *   records themselves.
  */
+/** A record the trace wrote unknown because the test FAILED under it (vitest exited non-zero, or the per-file deadline
+ *  killed it): its read set is what the run reached, not nothing. @param {import('./testmap.mjs').TestRecord} rec */
+const failedUnderTrace = (rec) => FAILED_UNDER_TRACE.test(rec.why ?? '');
+
 /** The map's selection for the changed paths vitest cannot relate (`vitestFollows` false): the test files, sorted, or
  *  `'full'` when the map cannot bound them (one of them is a full trigger: the baseline reads it). No such path: `[]`.
+ *  A test that FAILED under the trace (its trace exited non-zero or timed out) is judged by what its trace recorded,
+ *  not selected always (D-7780, `unknownByRecord`): a change to a path it recorded reading, or under a directory it
+ *  linked, still selects it; one it never recorded (a doc, a PWA file, another test's fixture) leaves it to the merge
+ *  queue's full run, as an all-TypeScript change already does. A test that reads `.git` (the installer, updater and
+ *  doctor suites copy the tree) and the floor's unknowns are still selected always. Measured 2026-11-02 over the 309
+ *  fast runs of 2026-10-30 to 11-02: 268 changed such a path, and each ran the ten failed-under-trace suites (the five
+ *  tick-diet equivalence suites, about 1,730 s of the 1,900 s, two of them ten-minute shards of their own).
  *  @param {{ map: TestMap, changes: import('./select-tests.mjs').Change[], liveTests: string[], existsAt: (ref: string, p: string) => boolean }} args
  *  @returns {string[] | 'full'} */
 export function untracedSelection({ map, changes, liveTests, existsAt }) {
   const unfollowed = changes.filter((c) => !vitestFollows(c.path));
   if (unfollowed.length === 0) return [];
-  const sel = selectIgnoringUncertainty({ map, changes: unfollowed, liveTests, existsAt });
+  const sel = selectIgnoringUncertainty({ map, changes: unfollowed, liveTests, existsAt, unknownByRecord: failedUnderTrace });
   if (sel.mode === 'full') return 'full';
   return [...new Set(sel.tests.map((t) => t.file))].sort();
 }

@@ -362,6 +362,7 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   mkdirSync(join(reg, 'worker-skill'), { recursive: true });
   mkdirSync(join(reg, 'reviewer-skill'), { recursive: true });
   mkdirSync(join(reg, 'history-skill'), { recursive: true });
+  mkdirSync(join(reg, 'linear-skill'), { recursive: true });
   // The compaction card's helper (compaction-card spec §2): `_inst_files`
   // places it, so `_uninst_cc_sessions` is the sweep that must remove it.
   writeFileSync(join(reg, 'compact-card.mjs'), '// fixture helper\n', { mode: 0o644 });
@@ -372,6 +373,7 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   writeFileSync(join(reg, 'install-worker-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-reviewer-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-history-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
+  writeFileSync(join(reg, 'install-linear-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   // graphify Task 3: `_inst_graphify_skill` stages this beside the other four
   // installers, the same lane `_uninst_cc_sessions` must remove it from.
   writeFileSync(join(reg, 'install-graphify-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
@@ -385,6 +387,7 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   writeFileSync(join(reg, 'reviewer-skill', 'SKILL.md'), '# the reviewer skill\n');
   writeFileSync(join(reg, 'history-skill', 'SKILL.md'), '# the history skill\n');
   writeFileSync(join(reg, 'history-skill', 'LICENSE.lossless-claw'), 'fixture licence\n');
+  writeFileSync(join(reg, 'linear-skill', 'SKILL.md'), '# the linear skill\n');
   // Two account homes. claude9: one managed entry per event shape the
   // installer writes, one unmanaged entry, a CUSTOM statusLine. claude8:
   // no managed entry at all, hand-formatted.
@@ -759,8 +762,8 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(r.code, r.stderr).toBe(0);
     for (const f of ['session-hook.sh', 'install-session-hooks.sh', 'notify.sh', 'compact-card.mjs',
       'install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh',
-      'install-graphify-skill.sh', 'install-history-skill.sh', 'child-deny.settings.json', 'account-deny.settings.json',
-      'coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill']) {
+      'install-graphify-skill.sh', 'install-history-skill.sh', 'install-linear-skill.sh', 'child-deny.settings.json',
+      'account-deny.settings.json', 'coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill', 'linear-skill']) {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} survived`).toBe(false);
     }
     for (const f of ['alpha.uuid', 'coordinator-paused', 'mail-disabled',
@@ -803,6 +806,29 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(lstatSync(keep('proj-b/enabled')).isSymbolicLink(), 'the symlink named enabled was removed').toBe(true);
     expect(readFileSync(join(home, 'elsewhere', 'target'), 'utf8'), 'the symlink was followed').toBe('not ours\n');
     expect(existsSync(join(home, 'elsewhere', 'proj-c', 'enabled')), 'a symlinked project directory was followed').toBe(true);
+  });
+
+  it('~/.cc-sessions: the lander mirror goes with enabled, under the same rules (landing order wave 5d)', () => {
+    const home = mkTmp('ccrc-uninst-lander-');
+    plantInstalledBox(home);
+    const land = join(home, '.cc-sessions', 'landing');
+    const keep = (rel: string): string => join(land, rel);
+    for (const d of ['proj-a', 'proj-a/sub', 'proj-b']) mkdirSync(keep(d), { recursive: true });
+    writeFileSync(keep('proj-a/lander'), '{"v":1,"project":"proj-a","lander":"coordinator","at":"2026-10-31T09:00:00Z"}\n');
+    writeFileSync(keep('proj-a/enabled'), '{"v":1}\n');
+    writeFileSync(keep('proj-a/probe'), '{"v":1}\n');
+    writeFileSync(keep('proj-a/sub/lander'), 'deeper\n');
+    mkdirSync(join(home, 'elsewhere'), { recursive: true });
+    writeFileSync(join(home, 'elsewhere', 'target'), 'not ours\n');
+    symlinkSync(join(home, 'elsewhere', 'target'), keep('proj-b/lander'));
+    writeFileSync(keep('lander'), 'stray\n');
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(keep('proj-a/lander')), 'the lander mirror survived').toBe(false);
+    expect(existsSync(keep('proj-a/enabled'))).toBe(false);
+    for (const rel of ['proj-a/probe', 'proj-a/sub/lander', 'lander']) expect(existsSync(keep(rel)), rel).toBe(true);
+    expect(lstatSync(keep('proj-b/lander')).isSymbolicLink()).toBe(true);
+    expect(readFileSync(join(home, 'elsewhere', 'target'), 'utf8')).toBe('not ours\n');
   });
 
   it('~/.cc-sessions: a landing directory that is itself a symlink is not followed (landing order wave 3b)', () => {

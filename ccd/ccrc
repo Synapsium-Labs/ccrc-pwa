@@ -1976,7 +1976,7 @@ ACCT_SECRETS_DIR="$HOME/.cc-secrets"
 # here plus one arm in the case below, and `ccrc-account.test.ts`'s
 # "both directions" case reads this line out of the source and fails on either
 # half alone.
-ACCT_SUBS="add candidates check credential declare disable enable remove roster seed set"
+ACCT_SUBS="add auth-cancel auth-code auth-start candidates check credential declare disable enable remove roster seed set"
 
 # ── THE PASSPHRASE SECRET, WHICH THIS FILE NEVER READS ────────────────────
 # `~/.ccrc/auth.scrypt` — the scrypt line the server's session gate verifies a
@@ -2488,8 +2488,14 @@ already running).
             stderr, and the credential only ever on stdin (--credential -).
             Writes ~/.ccrc/accounts.json, a 0600 file under ~/.cc-secrets
             and each account's own settings.json; every lane it connects is
-            left DISABLED until you enable it. Run it with no subcommand to
-            see which subcommands this build has
+            left DISABLED until you enable it. "add --provider anthropic"
+            with no --method mints (setup-token, a long-lived token) rather
+            than signs in; pass --method login for a sign-in lane.
+            auth-start|auth-code|auth-cancel --id --attempt run a sign-in
+            detached, the code arriving once on stdin; "set --method
+            setup-token|login --attempt" installs what it captured, and
+            "credential --sign-out" signs a lane out. Run it with no
+            subcommand to see which subcommands this build has
   memory    census every (home, project) memory pair on this box: one line
             per pair naming its home, project slug and state — converged or
             forked — then a summary count. Read-only unless [--apply] is
@@ -7544,7 +7550,8 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   # BEFORE REVIEWER: the worker skill points at ../ccrc-coordinator/references/…, and
   # the reviewer skill points into the same tree (`_inst_skills`, :6841-6844).
   for n in install-session-hooks.sh install-coordinator-skill.sh \
-           install-worker-skill.sh install-reviewer-skill.sh install-graphify-skill.sh install-history-skill.sh; do
+           install-worker-skill.sh install-reviewer-skill.sh install-graphify-skill.sh install-history-skill.sh \
+           install-linear-skill.sh; do
     [ -x "$HOME/.cc-sessions/$n" ] \
       || _acct_refuse 1 provision-failed "the installer $HOME/.cc-sessions/$n is missing or not executable, so this lane's home cannot be converged — and 'ccrc install' is what places it there. $stands"
     bash "$HOME/.cc-sessions/$n" --homes "$dir" \
@@ -7741,7 +7748,7 @@ _acct_add() {
   # `secretsfile` IS READ AND NOT YET USED, said out loud rather than left for a
   # reader to notice: what the `add-entry` refusal below names is
   # `ACCT_SECRET_WRITTEN`, a MEASUREMENT, and Task 26's answer needs this one.
-  local secretsfile="" envvar="" nfield=0 fld
+  local secretsfile="" envvar="" nfield=0 fld planmethod=""
   ACCT_BASE_URL_RESOLVED=""; ACCT_MODELS_RESOLVED="{}"; ACCT_SECRET_WRITTEN=""
   while IFS= read -r -d '' fld; do
     case "$nfield" in
@@ -7749,14 +7756,15 @@ _acct_add() {
       1) envvar="$fld" ;;
       2) ACCT_BASE_URL_RESOLVED="$fld" ;;
       3) ACCT_MODELS_RESOLVED="$fld" ;;
+      4) planmethod="$fld" ;;
     esac
     nfield=$((nfield + 1))
   done < <(ACCT_PLAN="$plan" node -e '
     const p = JSON.parse(process.env.ACCT_PLAN).plan;
     process.stdout.write([p.secretsFile ?? "", p.envVar ?? "", p.baseUrl ?? "",
-      JSON.stringify(p.models ?? {})].map((x) => x + "\0").join(""));
+      JSON.stringify(p.models ?? {}), p.method ?? ""].map((x) => x + "\0").join(""));
   ')
-  [ "$nfield" -eq 4 ] \
+  [ "$nfield" -eq 5 ] \
     || _acct_refuse 1 internal-plan "could not read the checked plan back — this is a bug in ccrc, not a fact about your box, and nothing was written"
 
   # ── 1. THE SECRET, for a token lane only ────────────────────────────────
@@ -7768,16 +7776,23 @@ _acct_add() {
   # `ccd account-pane --id <id> --method setup-token` (Task 50) — both of which
   # ARE on the box. The sentence is written for the finished system because a
   # remedy the operator reads a month from now should name the verb they have.
-  if [ -n "$envvar" ]; then
+  # A MINT WITH NO TOKEN YET IS A LANE, NOT A REFUSAL (accounts plan Task A20, Q1): `setup-token` is the Anthropic
+  # table's first member and so `check-add`'s default, and its token is minted AFTER the add, by `auth-start
+  # --method setup-token` into scratch and installed by `set --method setup-token` once its probe passes. So a
+  # setup-token add without `--credential` writes the token lane with no key file yet (the wrapper sources it only
+  # when it is readable) and leaves it off; with `--credential -` it is a pasted token, validated first as before.
+  if [ -n "$envvar" ] && [ -z "$ACCT_CRED_SPELLING" ] && [ "$planmethod" = setup-token ]; then
+    :
+  elif [ -n "$envvar" ]; then
     [ -n "$ACCT_CRED_SPELLING" ] \
-      || _acct_refuse 2 credential-required "provider \"$ACCT_PROVIDER\" with method \"${ACCT_METHOD:-paste}\" is a token lane and needs the key: pass --credential - and pipe it in. Nothing was written."
+      || _acct_refuse 2 credential-required "provider \"$ACCT_PROVIDER\" with method \"${planmethod:-paste}\" is a token lane and needs the key: pass --credential - and pipe it in. Nothing was written."
     _acct_read_credential "$ACCT_CRED_SPELLING"
     # PASTE VALIDATES FIRST (spec §6.3): an Anthropic token is probed before any byte of the lane is written.
     [ "$envvar" != CLAUDE_CODE_OAUTH_TOKEN ] || _acct_token_probe "$ACCT_ID" "Nothing was written."
     _acct_write_secret "$ACCT_ID" "$ACCT_PROVIDER" "$envvar"
   else
     [ -z "$ACCT_CRED_SPELLING" ] \
-      || _acct_refuse 2 credential-not-managed "provider \"$ACCT_PROVIDER\" with method \"${ACCT_METHOD:-login}\" keeps its credential in the config directory Claude Code writes, so there is no file for --credential to fill. Run 'ccrc account auth-start --id $ACCT_ID --method login' after this. Nothing was written."
+      || _acct_refuse 2 credential-not-managed "provider \"$ACCT_PROVIDER\" with method \"${planmethod:-login}\" keeps its credential in the config directory Claude Code writes, so there is no file for --credential to fill. Run 'ccrc account auth-start --id $ACCT_ID --method login' after this. Nothing was written."
   fi
 
   # ── 2. THE SWITCH, OFF ──────────────────────────────────────────────────
@@ -8305,10 +8320,15 @@ _acct_enable() {   # [--id X] [--force]
 # is measured by `check`, so it refuses `not-a-token-lane`. `--placement full|overflow`: whether fresh sessions may
 # be placed on the lane (`homeAble`), under the placement lock, refused `last-home-able` for the only placeable lane.
 _acct_set() {
-  local id="" stated=0 placement="" v="" was_placeable=0 f="" done_note=""
+  local id="" stated=0 placement="" v="" was_placeable=0 f="" done_note="" method="" attempt=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
+      --method=setup-token|--method=login) method="${1#*=}" ;;
+      --method) { [ "${2:-}" = setup-token ] || [ "${2:-}" = login ]; } || _acct_refuse 2 bad-value "the flag --method takes setup-token or login. Nothing was written."; method="$2"; shift ;;
+      --method=*) _acct_refuse 2 bad-value "the flag --method takes setup-token or login. Nothing was written." ;;
+      --attempt=*) attempt="${1#*=}" ;;
+      --attempt) [ $# -ge 2 ] || _acct_refuse 2 missing-value "the flag --attempt takes a value. Nothing was written."; attempt="$2"; shift ;;
       --id=*) id="${1#*=}" ;;
       --id) [ $# -ge 2 ] || _acct_refuse 2 missing-value "the flag --id takes a value. Nothing was written."; id="$2"; shift ;;
       --stated=-) stated=1 ;;
@@ -8316,11 +8336,19 @@ _acct_set() {
       --stated=*) _acct_refuse 2 stated-not-stdin "the flag --stated takes exactly \"-\" and reads the words from stdin: on an argv they would be readable by every process on this box. Nothing was written." ;;
       --placement=overflow|--placement=full) placement="${1#*=}" ;;
       --placement) { [ "${2:-}" = overflow ] || [ "${2:-}" = full ]; } || _acct_refuse 2 bad-value "the flag --placement takes overflow or full. Nothing was written."; placement="$2"; shift ;;
-      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated - and --placement overflow|full" ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated -, --placement overflow|full and --method setup-token|login --attempt <attemptId>" ;;
     esac
     shift
   done
   _acct_id_or_refuse "$id"
+  if [ -n "$method" ] || [ -n "$attempt" ]; then
+    { [ -n "$method" ] && [ -n "$attempt" ]; } \
+      || _acct_refuse 2 missing-value "the flags --method and --attempt come together: the method is installed from what that sign-in attempt captured. Nothing was written."
+    { [ "$stated" -eq 0 ] && [ -z "$placement" ]; } \
+      || _acct_refuse 2 bad-argument "the flag --method is its own act and takes no --stated or --placement beside it. Nothing was written."
+    _acct_set_method "$id" "$method" "$attempt"
+    return 0
+  fi
   [ "$stated" -eq 1 ] || [ -n "$placement" ] \
     || _acct_refuse 2 missing-value "ccrc account set needs --stated - or --placement overflow|full. Nothing was written."
   _acct_known_or_refuse "$id"
@@ -9086,11 +9114,12 @@ _acct_remove_home_preflight() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
 # roster is not touched, one 0600 file is replaced through the writer `add`
 # already uses, and the answer names the panes still holding the old token.
 _acct_credential() {
-  local id="" cred="" v="" flag=""
+  local id="" cred="" v="" flag="" signout=0
   while [ $# -gt 0 ]; do
     flag="${1%%=*}"
     case "$1" in
       -h|--help) usage; exit 0 ;;
+      --sign-out) signout=1; shift; continue ;;
       --id|--credential)
         [ $# -ge 2 ] \
           || _acct_refuse 2 missing-value "the flag $1 takes a value and nothing followed it on the command line. Nothing was written."
@@ -9116,6 +9145,12 @@ _acct_credential() {
     shift
   done
   _acct_id_or_refuse "$id"
+  if [ "$signout" -eq 1 ]; then
+    [ -z "$cred" ] \
+      || _acct_refuse 2 bad-argument "the flag --sign-out signs the lane's sign-in out and reads no credential, so it does not take --credential. Nothing was written."
+    _acct_credential_sign_out "$id"
+    return 0
+  fi
   _acct_lane_lock "$id" "Nothing was written."
   _acct_sweep_secret_temps "$id"
   _acct_lane "$id"
@@ -9217,8 +9252,10 @@ _acct_credential() {
   [ "$ACCT_SECRET_ENV" != CLAUDE_CODE_OAUTH_TOKEN ] || _acct_token_probe "$id" "Nothing was written: the old credential file stands."
   # A verdict measured on the old secret says nothing about this one (D-5755
   # (12)), and it is dropped BEFORE the write, so a write that refuses or a TERM
-  # after the rename fails safe: the lane reads Not checked either way.
-  _acct_lane_state "$id" --clear check
+  # after the rename fails safe: the lane reads Not checked either way. A PASTE CLEARS `mintedAt` too (accounts plan
+  # Task A20): the token in the file is no longer the one a mint recorded, so Expiring would be about a token that
+  # is gone.
+  _acct_lane_state "$id" --clear check --clear mintedAt
   _acct_write_secret "$id" "$ACCT_PROVIDER" "$ACCT_SECRET_ENV"
   _acct_live "$id"
 
@@ -9265,20 +9302,22 @@ console.log(verifyMarker(readFileSync(filePath, "utf8")));
 }
 
 ACCT_SIGNOUT=""
-_acct_sign_out() {   # <id> <cfgdir> -> ACCT_SIGNOUT
-  local id="$1" cfg="$2" cred="$2/.credentials.json"
+_acct_sign_out() {   # <id> <cfgdir> [<what-still-stands>] -> ACCT_SIGNOUT
+  # The third argument is what a refusal says still stands: `remove`'s own sentences when it is absent, and
+  # `credential --sign-out`'s (N5, D-7749) when that verb calls this for a lane that stays.
+  local id="$1" cfg="$2" cred="$2/.credentials.json" st="${3:-}"
   ACCT_SIGNOUT=absent
   { [ -e "$cred" ] || [ -L "$cred" ]; } || return 0
   { [ -f "$cred" ] && [ ! -L "$cred" ]; } \
-    || _acct_refuse 1 credential-conflict "$cred is not a regular credential file, so ccrc will not ask a launcher to rewrite it or remove it. The roster entry is already gone, the projection no longer names $id, and the config directory remains. Move that object aside or remove it by hand."
+    || _acct_refuse 1 credential-conflict "$cred is not a regular credential file, so ccrc will not ask a launcher to rewrite it or remove it. ${st:-The roster entry is already gone, the projection no longer names $id, and the config directory remains.} Move that object aside or remove it by hand."
   CLAUDE_CONFIG_DIR="$cfg" _plat_timeout "$ACCT_DEADLINE" \
     "$WRAPPER_BIN_DIR/$ACCT_UPSTREAM_ID" auth logout >/dev/null 2>&1 || :
   if [ -e "$cred" ] || [ -L "$cred" ]; then
     rm -f -- "$cred" \
-      || _acct_refuse 1 artifact-remove "could not sign account $id out: $cred remains. The roster entry is already gone, the projection no longer names $id, and the config directory around the credential was deliberately kept."
+      || _acct_refuse 1 artifact-remove "could not sign account $id out: $cred remains. ${st:-The roster entry is already gone, the projection no longer names $id, and the config directory around the credential was deliberately kept.}"
   fi
   { [ ! -e "$cred" ] && [ ! -L "$cred" ]; } \
-    || _acct_refuse 1 artifact-remove "$cred remains after sign-out cleanup. The roster entry is already gone, the projection no longer names $id, and the config directory was deliberately kept."
+    || _acct_refuse 1 artifact-remove "$cred remains after sign-out cleanup. ${st:-The roster entry is already gone, the projection no longer names $id, and the config directory was deliberately kept.}"
   ACCT_SIGNOUT=removed
 }
 
@@ -9292,7 +9331,7 @@ _acct_unprovision() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
   if [ -d "$cfg/skills" ]; then
     real="$(realpath "$cfg/skills" 2>/dev/null)" \
       || _acct_refuse 1 skills-unreadable "could not resolve $cfg/skills, so no skill can be removed safely. $stands"
-    for name in ccrc-coordinator ccrc-worker ccrc-reviewer graphify ccrc-history; do
+    for name in ccrc-coordinator ccrc-worker ccrc-reviewer graphify ccrc-history ccrc-linear; do
       { [ -e "$real/$name" ] || [ -L "$real/$name" ]; } || continue
       if [ -L "$real/$name" ] || [ -f "$real/$name" ]; then
         rm -f -- "$real/$name" \
@@ -9769,7 +9808,14 @@ _acct_remove() {
     { [ -e "$lane_state" ] || [ -L "$lane_state" ]; } && kept+=("$lane_state") || removed+=("$lane_state")
   fi
   # Every removal deletes the lane's sign-in scratch (spec §3.9; A16). A link is removed, never followed.
+  # THE LANE'S PRIVATE AUTH SERVER GOES WITH ITS SCRATCH (D-5515): remove refused a sign-in in flight above, so
+  # whatever is left on `-L ccrc-auth-<id>` belongs to no attempt. tmux daemonises its server, so it is killed by name,
+  # and only on a lane a sign-in ever ran on: every attempt writes its status file, so a lane without one has no
+  # server to kill, and tmux is not asked.
   f="$HOME/.ccrc/auth-scratch/$id"
+  if [ -e "$_SVC_REG/.auth/$id.json" ] || [ -e "$f" ]; then
+    tmux -L "ccrc-auth-$id" kill-server >/dev/null 2>&1
+  fi
   if [ -e "$f" ] || [ -L "$f" ]; then
     rm -rf -- "$f" 2>/dev/null
     { [ -e "$f" ] || [ -L "$f" ]; } && kept+=("$f") || removed+=("$f")
@@ -10446,22 +10492,35 @@ _acct_note_cap() {   # <note> -> the note, or its first $ACCT_NOTE_MAX character
 # `~/.ccrc/auth-scratch` (outside every agent read root), which goes when the probe ends. A 401 refuses
 # `key-rejected` and an unreachable or unreadable answer `token-unverified`, both with nothing written: the field
 # comes back empty. Only `ok` returns. The verdict is the check's own classifier, so the two never disagree.
-_acct_token_probe() {   # <id> <what-still-stands> -> 0, or refuses
+#
+# A SIGN-IN IS PROBED THE SAME WAY (accounts plan Task A20, D-7750): given a config directory, the probe runs in it
+# with no token in its environment, so what answers is the `.credentials.json` a re-auth or a switch signed into
+# scratch, before `set --method login` moves it into the lane.
+_acct_token_probe() {   # <id> <what-still-stands> [<config dir holding a sign-in>] -> 0, or refuses
   local -; set +x +a
-  local id="$1" stands="$2" root="$HOME/.ccrc/auth-scratch" dir="" out="" rc=0 row="" verdict=""
+  local id="$1" stands="$2" signin="${3:-}" root="$HOME/.ccrc/auth-scratch" dir="" out="" rc=0 row="" verdict=""
+  local what="token"
+  [ -z "$signin" ] || what="sign-in"
   _acct_upstream_id "$stands"
   _acct_probe_deadline
   mkdir -p -m 0700 "$root" "$CCRC_PROBE_DIR" \
-    || _acct_refuse 1 probe-cwd "cannot create $root (0700) or $CCRC_PROBE_DIR, so the token cannot be checked before it is saved. $stands"
+    || _acct_refuse 1 probe-cwd "cannot create $root (0700) or $CCRC_PROBE_DIR, so the $what cannot be checked before it is saved. $stands"
   _acct_backup_exclude "$root"
-  rm -rf -- "$root/.$id-probe."*   # one a SIGKILL left; this lane's lock is held, so none is running
-  dir="$(mktemp -d "$root/.$id-probe.XXXXXX")" \
-    || _acct_refuse 1 probe-cwd "cannot create a probe directory under $root, so the token cannot be checked before it is saved. $stands"
-  _acct_own_temp "$dir"
-  out="$(cd "$CCRC_PROBE_DIR" && CLAUDE_CONFIG_DIR="$dir" CLAUDE_CODE_OAUTH_TOKEN="$ACCT_CREDENTIAL" \
-    CLAUDE_CODE_MAX_RETRIES=0 _plat_timeout "$ACCT_DEADLINE" "$WRAPPER_BIN_DIR/$ACCT_UPSTREAM_ID" \
-      -p "Reply with the single word ok." --output-format json --max-turns 1 2>/dev/null)"; rc=$?
-  rm -rf -- "$dir"
+  if [ -n "$signin" ]; then
+    # `unset` inside the substitution's subshell, never `env -u`: `_plat_timeout` is a function, which env cannot run.
+    out="$(cd "$CCRC_PROBE_DIR" && unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN && CLAUDE_CONFIG_DIR="$signin" \
+      CLAUDE_CODE_MAX_RETRIES=0 _plat_timeout "$ACCT_DEADLINE" "$WRAPPER_BIN_DIR/$ACCT_UPSTREAM_ID" \
+        -p "Reply with the single word ok." --output-format json --max-turns 1 2>/dev/null)"; rc=$?
+  else
+    rm -rf -- "$root/.$id-probe."*   # one a SIGKILL left; this lane's lock is held, so none is running
+    dir="$(mktemp -d "$root/.$id-probe.XXXXXX")" \
+      || _acct_refuse 1 probe-cwd "cannot create a probe directory under $root, so the token cannot be checked before it is saved. $stands"
+    _acct_own_temp "$dir"
+    out="$(cd "$CCRC_PROBE_DIR" && CLAUDE_CONFIG_DIR="$dir" CLAUDE_CODE_OAUTH_TOKEN="$ACCT_CREDENTIAL" \
+      CLAUDE_CODE_MAX_RETRIES=0 _plat_timeout "$ACCT_DEADLINE" "$WRAPPER_BIN_DIR/$ACCT_UPSTREAM_ID" \
+        -p "Reply with the single word ok." --output-format json --max-turns 1 2>/dev/null)"; rc=$?
+    rm -rf -- "$dir"
+  fi
   if [ "$rc" -eq 124 ]; then
     row="$(printf '' | _acct_node classify --source probe --exit 124 --timed-out true --deadline "$ACCT_DEADLINE")"
   else
@@ -10470,8 +10529,8 @@ _acct_token_probe() {   # <id> <what-still-stands> -> 0, or refuses
   verdict="$(jq -r '.verdict // empty' <<<"$row" 2>/dev/null)" || verdict=""
   case "$verdict" in
     ok) return 0 ;;
-    auth-dead) ACCT_CREDENTIAL=""; _acct_refuse 1 key-rejected "That token was refused (HTTP 401). $stands" ;;
-    *) ACCT_CREDENTIAL=""; _acct_refuse 1 token-unverified "Anthropic didn't answer ($verdict${verdict:+, }exit $rc), so the token could not be checked: $stands Try again." ;;
+    auth-dead) ACCT_CREDENTIAL=""; _acct_refuse 1 key-rejected "That $what was refused (HTTP 401). $stands" ;;
+    *) ACCT_CREDENTIAL=""; _acct_refuse 1 token-unverified "Anthropic didn't answer ($verdict${verdict:+, }exit $rc), so the $what could not be checked: $stands Try again." ;;
   esac
 }
 
@@ -10598,6 +10657,375 @@ _acct_check() {
   printf '%s\n' "$ACCT_OUT"
 }
 
+# ── THE SIGN-IN ON THE BOX: auth-start, auth-code, auth-cancel, the install and the sign-out ──────────────────────
+# Accounts plan Task A20 (spec §3.5, §3.7, §3.9, §6.2, §6.3, §9; D-5514, D-5515, D-7749, D-7750).
+#
+# `auth-start` launches `ccd-account-auth` DETACHED, as a transient user SERVICE and never a scope: a scope runs in
+# the caller's own process tree, so the agent's sub would block on a 600 s helper and its timeout would kill the
+# helper mid-flow. It returns as soon as the helper's status file names this attempt, well under 5 s. `auth-code`
+# relays the operator's one-time code into the helper's FIFO, once, and never onto an argv. `auth-cancel` stops the
+# attempt's unit. The credential an attempt captures lands in `~/.ccrc/auth-scratch/<id>`, outside every agent read
+# root, and the helper hands it to `set --method … --attempt`, which probes it and installs it under the lane lock:
+# the lane's old credential stands until that probe has passed, so a refused, cancelled or expired attempt leaves the
+# lane byte-identical. `credential --sign-out` is N5's sign-out act: `claude auth logout` in the lane's config dir.
+ACCT_AUTH_DIR="$_SVC_REG/.auth"
+ACCT_SCRATCH_ROOT="$HOME/.ccrc/auth-scratch"
+# How long `auth-start` waits for the helper to name its attempt. The spec's bound is 5 s (§3.5); the knob is for the
+# harness and refuses anything that is not whole seconds from 1 to 30.
+: "${CCRC_AUTH_START_WAIT:=5}"
+
+_acct_refuse_reason() {   # <class> <code> <reason> <detail> — `_acct_refuse` with a machine-readable reason beside the code
+  local envelope rc
+  envelope="$(_acct_node refuse --code "$2" --reason "$3" --detail "$4")"; rc=$?
+  [ "$rc" -eq 0 ] \
+    || _ccrc_die "could not print a refusal envelope for \"$2\" (deploy/account-op.mjs exited $rc): $4"
+  printf '%s\n' "$envelope"
+  exit "$1"
+}
+
+ACCT_AUTH_ID=""; ACCT_AUTH_METHOD=""; ACCT_AUTH_ATTEMPT=""
+_acct_auth_flags() {   # <verb> <takes --method: 0|1> [args…] -> ACCT_AUTH_ID, ACCT_AUTH_METHOD, ACCT_AUTH_ATTEMPT, or refuses
+  local verb="$1" takes="$2" v="" flag="" takes_line="--id and --attempt"
+  shift 2
+  [ "$takes" -eq 0 ] || takes_line="--id, --method and --attempt"
+  ACCT_AUTH_ID=""; ACCT_AUTH_METHOD=""; ACCT_AUTH_ATTEMPT=""
+  while [ $# -gt 0 ]; do
+    flag="${1%%=*}"
+    case "$flag" in
+      -h|--help) usage; exit 0 ;;
+      --id|--attempt) : ;;
+      --method) [ "$takes" -eq 1 ] || _acct_refuse 2 unknown-argument "ccrc account $verb has no argument \"$1\" - it takes $takes_line" ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account $verb has no argument \"$1\" - it takes $takes_line" ;;
+    esac
+    if [ "$1" = "$flag" ]; then
+      [ $# -ge 2 ] \
+        || _acct_refuse 2 missing-value "the flag $1 takes a value and nothing followed it on the command line. Nothing was written."
+      v="$2"; shift
+    else
+      v="${1#*=}"
+    fi
+    [ -n "$v" ] \
+      || _acct_refuse 2 missing-value "the flag $flag was given an empty value: give it a value, or leave it off. Nothing was written."
+    case "$flag" in
+      --id) ACCT_AUTH_ID="$v" ;;
+      --method) ACCT_AUTH_METHOD="$v" ;;
+      --attempt) ACCT_AUTH_ATTEMPT="$v" ;;
+    esac
+    shift
+  done
+  _acct_id_or_refuse "$ACCT_AUTH_ID"
+  [ "$takes" -eq 0 ] || [ -n "$ACCT_AUTH_METHOD" ] \
+    || _acct_refuse 2 missing-value "ccrc account $verb needs --method login|setup-token|openai-login. Nothing was written."
+  [ -n "$ACCT_AUTH_ATTEMPT" ] \
+    || _acct_refuse 2 missing-value "ccrc account $verb needs --attempt <attemptId>, the 32 hex characters the server generated for this sign-in. Nothing was written."
+  [[ "$ACCT_AUTH_ATTEMPT" =~ ^[0-9a-f]{32}$ ]] \
+    || _acct_refuse 2 bad-attempt "the flag --attempt takes 32 lowercase hex characters, the id the server generated for this sign-in. Nothing was written."
+}
+
+ACCT_AUTH_STATE=""; ACCT_AUTH_FOR=""
+_acct_auth_read() {   # <id> -> ACCT_AUTH_STATE and ACCT_AUTH_FOR (the attempt the status file names); both empty when absent
+  local f="$ACCT_AUTH_DIR/$1.json" st="" at=""
+  ACCT_AUTH_STATE=""; ACCT_AUTH_FOR=""
+  { [ -f "$f" ] && [ ! -L "$f" ]; } || return 0
+  # Two words on two lines, each held to its grammar here: the file is writable by any fleet-user process.
+  { IFS= read -r st; IFS= read -r at; } < <(jq -r '(.state // "" | tostring), (.attemptId // "" | tostring)' "$f" 2>/dev/null)
+  [[ "$st" =~ ^[a-z][a-z-]{0,31}$ ]] && ACCT_AUTH_STATE="$st"
+  [[ "$at" =~ ^[0-9a-f]{32}$ ]] && ACCT_AUTH_FOR="$at"
+  return 0
+}
+
+_acct_auth_unit() { printf 'ccrc-auth-%s-%s' "$1" "${2:0:8}"; }   # <id> <attempt> — the attempt's transient unit
+
+# `_acct_auth_stop <unit>` -> 0 it was stopped, 3 it is not loaded (it had ended), 1 it COULD NOT BE STOPPED: no user
+# manager answered, or `stop` failed for another reason. THE BUS DEFAULTS FIRST (`_svc_have_user_manager`'s contract):
+# the agent spawns these verbs with exactly {HOME, PATH, LANG}, and `systemctl --user` finds no manager without them.
+# 5 is systemctl's "not loaded", which is what a `--collect` unit is once it has ended.
+_acct_auth_stop() {
+  local rc=0
+  _codex_bus_defaults
+  _svc_have_user_manager || return 1
+  systemctl --user stop "$1.service" >/dev/null 2>&1 || rc=$?
+  case "$rc" in 0) return 0 ;; 5) return 3 ;; *) return 1 ;; esac
+}
+
+_acct_auth_start() {
+  _acct_auth_flags auth-start 1 "$@"
+  local id="$ACCT_AUTH_ID" method="$ACCT_AUTH_METHOD" a="$ACCT_AUTH_ATTEMPT" unit="" bin="$WRAPPER_BIN_DIR/ccd-account-auth"
+  local wait="$CCRC_AUTH_START_WAIT" i=0 rc=0 live=""
+  case "$method" in
+    login|setup-token|openai-login) : ;;
+    openrouter-pkce) _acct_refuse 1 method-not-supported "the openrouter-pkce sign-in is not in this build: it runs no helper and lands with its own wave. Nothing was started." ;;
+    *) _acct_refuse 2 bad-method "the flag --method takes login, setup-token or openai-login. Nothing was started." ;;
+  esac
+  # A DARWIN NODE BEFORE ITS ARM (D-5557): every method here launches the helper in a transient unit, and macOS has no
+  # `systemd-run`. Refused before anything is read, locked or spawned. A35 replaces this refusal behind its switch.
+  [ "$CCD_OS" != darwin ] \
+    || _acct_refuse_reason 1 auth-unsupported-here darwin-arm-absent "a sign-in on a macOS fleet node needs the launchd arm, which this build does not carry, so the $method sign-in cannot run here. Paste works on this node. Nothing was started."
+  { [[ "$wait" =~ ^[0-9]+$ ]] && [ "$wait" -ge 1 ] && [ "$wait" -le 30 ]; } \
+    || _acct_refuse 2 bad-deadline "CCRC_AUTH_START_WAIT must be whole seconds from 1 to 30. Nothing was started."
+  _acct_known_or_refuse "$id"
+  _acct_lane_lock "$id" "Nothing was started."
+  _acct_lane "$id"
+  case "$method" in
+    login|setup-token)
+      { [ "$ACCT_KIND" = generated ] && [ "$ACCT_PROVIDER" = anthropic ]; } \
+        || _acct_refuse 1 method-not-supported "lane $id is not a ccrc-generated Anthropic lane (kind ${ACCT_KIND:-unknown}, provider ${ACCT_PROVIDER:-none}), so the $method sign-in is not its own. Nothing was started." ;;
+    openai-login)
+      { [ "$ACCT_KIND" = codex ] || [ "$ACCT_KIND" = external ]; } \
+        || _acct_refuse 1 method-not-supported "lane $id is not a Codex or external lane, so the ChatGPT login is not its own. Nothing was started." ;;
+  esac
+  # FAIL CLOSED: a measure that did not answer is not "idle".
+  live="$(_acct_node auth-live --id "$id")" \
+    || _acct_refuse 1 auth-unmeasured "this box could not tell whether a sign-in for lane $id is already running, so none was started. Nothing was written."
+  [ "$live" = idle ] \
+    || _acct_refuse 1 auth-in-progress "a sign-in for lane $id is already running; cancel it first, or wait for it to end. Nothing was started."
+  [ -x "$bin" ] \
+    || _acct_refuse 1 helper-absent "$bin is not installed, so there is no sign-in helper to start. Run 'ccrc install' (or 'ccrc update') to place it. Nothing was started."
+  command -v systemd-run >/dev/null 2>&1 \
+    || _acct_refuse_reason 1 auth-unsupported-here no-systemd-run "systemd-run is not on this box, so the sign-in cannot run detached from this verb. Nothing was started."
+  # THE USER BUS, then the manager asked over it (D-3483's one probe): without `XDG_RUNTIME_DIR` and
+  # `DBUS_SESSION_BUS_ADDRESS`, which the agent's {HOME, PATH, LANG} spawn never carries, `systemd-run --user` finds none.
+  _codex_bus_defaults
+  _svc_have_user_manager \
+    || _acct_refuse_reason 1 auth-unsupported-here no-user-manager "no systemd user manager answered at $XDG_RUNTIME_DIR, so the sign-in cannot run detached from this verb. Nothing was started."
+  # AN EARLIER ATTEMPT'S LEFTOVERS: no attempt is live (measured above, under the lane lock), so whatever is on the
+  # lane's private socket or in its scratch belongs to none, and a new attempt must not inherit it.
+  tmux -L "ccrc-auth-$id" kill-server >/dev/null 2>&1
+  rm -rf -- "${ACCT_SCRATCH_ROOT:?}/$id"
+  unit="$(_acct_auth_unit "$id" "$a")"
+  # `{ACCT_LANE_LOCK_FD}>&-`: the unit is the user manager's child, never this verb's, and the lane lock stays this
+  # verb's alone. PATH and LANG are this verb's own (the agent's spawn hands it exactly HOME, PATH and LANG), so the
+  # helper finds node, jq and flock where this verb found them. The helper's stdout is its transcript, which carries
+  # the sign-in URL: it goes nowhere, so no journal keeps it.
+  systemd-run --user --unit="$unit" --collect -p RuntimeMaxSec=660 -p MemoryMax=512M -p StandardOutput=null \
+    --setenv=PATH="$PATH" ${LANG:+--setenv=LANG="$LANG"} \
+    "$bin" "$id" "$method" --attempt "$a" </dev/null >/dev/null 2>&1 {ACCT_LANE_LOCK_FD}>&- || rc=$?
+  [ "$rc" -eq 0 ] \
+    || _acct_refuse 1 auth-start-failed "systemd-run could not start $unit (exit $rc), so the sign-in did not start. Nothing was written."
+  for (( i = 0; i < wait * 10; i++ )); do
+    _acct_auth_read "$id"
+    [ "$ACCT_AUTH_FOR" = "$a" ] && [ -n "$ACCT_AUTH_STATE" ] && break
+    sleep 0.1
+  done
+  if [ "$ACCT_AUTH_FOR" != "$a" ]; then
+    _acct_auth_stop "$unit" || [ $? -eq 3 ] \
+      || _acct_refuse 1 auth-start-unanswered "the sign-in helper did not report attempt $a within $wait s, and $unit could not be stopped: it ends on its own within 660 s, and auth-cancel can be retried. Nothing was signed in."
+    _acct_refuse 1 auth-start-unanswered "the sign-in helper did not report attempt $a within $wait s, so $unit was stopped. Nothing was signed in."
+  fi
+  [ "$ACCT_AUTH_STATE" != failed ] \
+    || _acct_refuse 1 auth-failed "the sign-in helper stopped as soon as it started; its reason is in $ACCT_AUTH_DIR/$id.json. Nothing was signed in."
+  _acct_read_op "The sign-in is running as $unit; only this report failed." \
+    auth-answer --verb start --id "$id" --attempt "$a" --method "$method" --state "$ACCT_AUTH_STATE" --unit "$unit"
+  printf '%s\n' "$ACCT_OUT"
+}
+
+_acct_auth_code() {
+  local -; set +x
+  _acct_auth_flags auth-code 0 "$@"
+  local id="$ACCT_AUTH_ID" a="$ACCT_AUTH_ATTEMPT" code="" fd="" rc=0 run="" mark=""
+  local LC_ALL=C bad=$'[\x01-\x1f\x7f]'
+  # THE BYTES FIRST, before anything about the lane is read (D-5514): the route checked the code's shape, and this
+  # verb checks it again for what it can carry. Read whole from stdin with the builtin, never onto an argv: a NUL
+  # ends bash's read, so a code that held one is marked and refused; one trailing LF is the pipe's and is dropped.
+  IFS= read -r -d '' -n 8194 code && code="$code"$'\x01'
+  code="${code%$'\n'}"
+  if [ -z "$code" ] || [ "${#code}" -gt 8192 ] || [[ "$code" =~ $bad ]]; then
+    code=""
+    _acct_refuse 2 bad-code "the code on stdin is empty, over 8 KiB, or carries a control byte, so it was not sent. Nothing was written."
+  fi
+  _acct_known_or_refuse "$id"
+  _acct_auth_read "$id"
+  [ "$ACCT_AUTH_FOR" = "$a" ] \
+    || { code=""; _acct_refuse 1 no-auth-attempt "no sign-in attempt $a is running for lane $id, so there is nothing to send this code to. Nothing was sent."; }
+  case "$ACCT_AUTH_STATE" in
+    starting|url|waiting-code) : ;;
+    exchanging|done) code=""; _acct_refuse 1 code-already-sent "attempt $a already has its code, and a code works once. Start the sign-in again for a fresh one. Nothing was sent." ;;
+    *) code=""; _acct_refuse 1 no-auth-attempt "sign-in attempt $a for lane $id has ended (${ACCT_AUTH_STATE:-unknown}), so there is nothing to send this code to. Nothing was sent." ;;
+  esac
+  _acct_lane_lock "$id" "Nothing was sent."
+  run="$ACCT_AUTH_DIR/$id.run"
+  # THE FIFO THE HELPER OWNS, and nothing else: a regular file planted at that name would keep the code on disk.
+  { [ -p "$run/in" ] && [ -O "$run/in" ]; } \
+    || { code=""; _acct_refuse 1 no-auth-attempt "attempt $a has no code channel at $run/in, so the code was not sent. Nothing was written."; }
+  # ONE CODE PER ATTEMPT: the marker is made with noclobber (O_EXCL), so of two racing sends exactly one goes on.
+  mark="$run/code-sent"
+  ( set -C; : > "$mark" ) 2>/dev/null \
+    || { code=""; _acct_refuse 1 code-already-sent "attempt $a already has its code, and a code works once. Start the sign-in again for a fresh one. Nothing was sent."; }
+  # READ-WRITE, SO THE OPEN NEVER BLOCKS: the helper holds the FIFO open read-write too, so the line waits in the pipe
+  # until it reads it. The builtin `printf` writes it: no process is spawned, so the code is on no argv.
+  if exec {fd}<>"$run/in"; then
+    printf '%s\n' "$code" >&"$fd" || rc=$?
+    exec {fd}>&-
+  else
+    rc=1
+  fi
+  code=""
+  if [ "$rc" -ne 0 ]; then
+    rm -f -- "${mark:?}"
+    _acct_refuse 1 code-not-sent "the code could not be written to attempt $a's channel, so it was not sent; sending it again is safe."
+  fi
+  _acct_read_op "The code was sent to attempt $a; only this report failed." \
+    auth-answer --verb code --id "$id" --attempt "$a"
+  printf '%s\n' "$ACCT_OUT"
+}
+
+_acct_auth_cancel() {
+  _acct_auth_flags auth-cancel 0 "$@"
+  local id="$ACCT_AUTH_ID" a="$ACCT_AUTH_ATTEMPT" unit="" stopped=false rc=0
+  _acct_known_or_refuse "$id"
+  _acct_lane_lock "$id" "Nothing was stopped."
+  unit="$(_acct_auth_unit "$id" "$a")"
+  # A NO-OP FOR A UNIT THAT HAS ALREADY ENDED (the server issues this at the attempt's `expiresAt`). Stopping the unit
+  # TERMs everything in it, the pipe arm's helper included, and the helper's own trap writes `cancelled`. FAIL CLOSED:
+  # a stop that did not happen leaves the server and the scratch alone, so a live helper is never told it was cancelled
+  # while it can still take a code and install. A box with no systemctl, or a darwin node, never started a unit.
+  if [ "$CCD_OS" != darwin ] && command -v systemctl >/dev/null 2>&1; then
+    _acct_auth_stop "$unit" || rc=$?
+    [ "$rc" -ne 1 ] \
+      || _acct_refuse 1 auth-cancel-failed "the systemd user manager could not stop $unit, so attempt $a may still be running; its private server and scratch were left as they are. Cancelling again is safe."
+    [ "$rc" -ne 0 ] || stopped=true
+  fi
+  _acct_auth_read "$id"
+  if [ "$ACCT_AUTH_FOR" = "$a" ]; then
+    # This attempt is the lane's last: its private server and its scratch go, whatever the helper managed (D-5515).
+    tmux -L "ccrc-auth-$id" kill-server >/dev/null 2>&1
+    rm -rf -- "${ACCT_SCRATCH_ROOT:?}/$id"
+  fi
+  _acct_read_op "Attempt $a was stopped; only this report failed." \
+    auth-answer --verb cancel --id "$id" --attempt "$a" --unit "$unit" --stopped "$stopped" --state "${ACCT_AUTH_STATE:-none}"
+  printf '%s\n' "$ACCT_OUT"
+}
+
+# ── `set --method setup-token|login --attempt <a>`: the one writer of a lane's method (spec §9, §13.3) ─────────────
+# The roster has no method field: a token lane is one whose entry names `exec.secretsFile` (A1). So this verb is the
+# one place that sets or clears it, regenerates `accounts.sh` and the lane's wrapper, and moves the credential in.
+# The helper calls it on a sign-in's success, with the attempt that captured the credential, and it refuses unless
+# the status file names that attempt. Each arm probes the new credential first and changes nothing until it passes.
+_acct_method_converge() {   # <what-still-stands> — accounts.sh and the wrappers, after the roster changed
+  ( _inst_accounts_sh ) >&2 \
+    || _acct_refuse 1 accounts-sh "regenerating \$HOME/.ccrc/accounts.sh from the roster failed - read the lines above. $1 Run 'ccrc install' once the cause is fixed."
+  ( cmd_wrappers ) >&2 \
+    || _acct_refuse 1 wrapper-converge "the wrapper converge refused - read the lines above. $1 Run 'ccrc wrappers' once the cause is fixed."
+}
+
+_acct_install_minted() {   # <id> <scratch dir> <what-still-stands>
+  local -; set +x +a
+  local id="$1" f="$2/minted.env" stands="$3" line="" tok="" want=""
+  local LC_ALL=C bad=$'[\x01-\x20\x7f]'
+  { [ -f "$f" ] && [ ! -L "$f" ] && [ -O "$f" ]; } \
+    || _acct_refuse 1 no-credential "the sign-in left no minted token in its scratch directory, so there is nothing to install. $stands"
+  IFS= read -r line < "$f" || :
+  tok="${line#export CLAUDE_CODE_OAUTH_TOKEN=}"; line=""
+  if [ "$tok" = "${tok#export }" ] && [ "${#tok}" -ge 20 ] && [ "${#tok}" -le 8192 ] && [[ ! "$tok" =~ $bad ]]; then
+    ACCT_CREDENTIAL="$tok"
+  else
+    tok=""
+    _acct_refuse 1 no-credential "the minted token in the sign-in's scratch directory is not one token line, so it was not installed. $stands"
+  fi
+  tok=""
+  _acct_token_probe "$id" "$stands"
+  _acct_secret_tag anthropic CLAUDE_CODE_OAUTH_TOKEN
+  want="${ACCT_SECRETS_DIR#"$HOME/"}/$id-$ACCT_SECRET_TAG.env"
+  if [ -n "$ACCT_SECRETS" ]; then
+    # MINT A NEW TOKEN (spec §9 row 2), or the first mint of a token lane: installed through `credential`'s writer,
+    # the old `<id>-oauth.env` standing until the rename.
+    [ "$ACCT_SECRETS" = "$want" ] \
+      || { ACCT_CREDENTIAL=""; _acct_refuse 1 secrets-path-unmanaged "lane $id's roster entry names \$HOME/$ACCT_SECRETS, and this verb writes \$HOME/$want. $stands"; }
+    _acct_lane_state "$id" --clear check
+    _acct_write_secret "$id" anthropic CLAUDE_CODE_OAUTH_TOKEN
+    _acct_lane_state "$id" --minted-at now
+  else
+    # SWITCH TO A LONG-LIVED TOKEN (spec §9, the sign-in -> token row): the token file first, inert until the roster
+    # names it; then the roster, accounts.sh and the wrapper. `.credentials.json` stays until Sign the old sign-in out.
+    _acct_write_secret "$id" anthropic CLAUDE_CODE_OAUTH_TOKEN
+    _acct_write_op "The token file $ACCT_SECRET_WRITTEN was written, and no roster entry names it yet, so nothing sources it: lane $id is still a sign-in lane." \
+      set-method --file "$(_acct_roster_path)" --id "$id" --method setup-token
+    _acct_method_converge "The roster now names $ACCT_SECRET_WRITTEN for lane $id, and the lane's sign-in still stands."
+    _acct_lane_state "$id" --clear check --minted-at now
+  fi
+  rm -f -- "${f:?}"
+}
+
+_acct_install_sign_in() {   # <id> <scratch dir> <what-still-stands>
+  local id="$1" cred="$2/config/.credentials.json" stands="$3" dest="" tmp="" want=""
+  { [ -f "$cred" ] && [ ! -L "$cred" ] && [ -O "$cred" ]; } \
+    || _acct_refuse 1 no-credential "the sign-in left no .credentials.json in its scratch config directory, so there is nothing to install. $stands"
+  if [ -n "$ACCT_SECRETS" ]; then
+    _acct_secret_tag anthropic CLAUDE_CODE_OAUTH_TOKEN
+    want="${ACCT_SECRETS_DIR#"$HOME/"}/$id-$ACCT_SECRET_TAG.env"
+    [ "$ACCT_SECRETS" = "$want" ] \
+      || _acct_refuse 1 secrets-path-unmanaged "lane $id's roster entry names \$HOME/$ACCT_SECRETS, and this verb manages \$HOME/$want, so the switch would leave a token file behind. $stands"
+  fi
+  _acct_token_probe "$id" "$stands" "$2/config"
+  _acct_cfg_dir "$id" "$stands"
+  { [ -d "$ACCT_CFG_DIR" ] && [ ! -L "$ACCT_CFG_DIR" ]; } \
+    || _acct_refuse 1 config-dir-absent "lane $id's config directory $ACCT_CFG_DIR is not a directory, so the sign-in has nowhere to go. $stands"
+  dest="$ACCT_CFG_DIR/.credentials.json"
+  # A copy beside the destination, then a rename over it: the old credential stands until the rename.
+  tmp="$ACCT_CFG_DIR/.credentials.json.tmp.$$"
+  _acct_own_temp "$tmp"
+  if ! ( umask 077; cp -- "$cred" "$tmp" ) || ! chmod 600 "$tmp" || ! mv -f -- "$tmp" "$dest"; then
+    rm -f -- "${tmp:?}"
+    _acct_refuse 1 credential-write "could not move the new sign-in into $dest. $stands"
+  fi
+  if [ -n "$ACCT_SECRETS" ]; then
+    # SWITCH TO SIGN-IN (spec §9, the token -> sign-in row): the sign-in is in, so the token goes, in this order.
+    _acct_write_op "The sign-in was installed in $dest; the roster still names $ACCT_SECRETS, so sessions still source the token." \
+      set-method --file "$(_acct_roster_path)" --id "$id" --method login
+    _acct_method_converge "The sign-in was installed in $dest and the roster no longer names $ACCT_SECRETS."
+    rm -f -- "${ACCT_SECRETS_DIR:?}/$id-$ACCT_SECRET_TAG.env"
+    _acct_lane_state "$id" --clear check --clear mintedAt
+  else
+    _acct_lane_state "$id" --clear check
+  fi
+  rm -rf -- "${2:?}/config"
+}
+
+_acct_set_method() {   # <id> <setup-token|login> <attempt>
+  local id="$1" method="$2" a="$3" stands="Nothing was written: lane $1 is as it was."
+  [[ "$a" =~ ^[0-9a-f]{32}$ ]] \
+    || _acct_refuse 2 bad-attempt "the flag --attempt takes 32 lowercase hex characters. $stands"
+  _acct_known_or_refuse "$id"
+  _acct_lane_lock "$id" "$stands"
+  _acct_sweep_secret_temps "$id"
+  _acct_lane "$id"
+  { [ "$ACCT_KIND" = generated ] && [ "$ACCT_PROVIDER" = anthropic ]; } \
+    || _acct_refuse 1 method-not-supported "lane $id is not a ccrc-generated Anthropic lane, so it has no method to set. $stands"
+  _acct_auth_read "$id"
+  [ "$ACCT_AUTH_FOR" = "$a" ] \
+    || _acct_refuse 1 no-auth-attempt "set --method installs what sign-in attempt $a captured, and lane $id's sign-in status names ${ACCT_AUTH_FOR:-no attempt}. $stands"
+  case "$method" in
+    setup-token) _acct_install_minted "$id" "$ACCT_SCRATCH_ROOT/$id" "$stands" ;;
+    login) _acct_install_sign_in "$id" "$ACCT_SCRATCH_ROOT/$id" "$stands" ;;
+  esac
+  _acct_read_op "Lane $id's new credential was installed; only this report failed." \
+    set-done --file "$(_acct_roster_path)" --id "$id"
+  printf '%s\n' "$ACCT_OUT"
+}
+
+# ── `credential --sign-out` (N5, D-7749) ──────────────────────────────────────────────────────────────────────────
+# `claude auth logout` in that lane's config directory, then its `.credentials.json` removed: `remove`'s own sign-out
+# step, for a lane that stays. Whether a logout ends the sign-in at Anthropic, and what a live session does after it,
+# were NOT measured (OA1's record: G23 and §9), so the answer says what was done on this box and nothing about the
+# provider.
+_acct_credential_sign_out() {   # <id>
+  local id="$1" stands="Lane $1, its roster entry and its config directory are unchanged."
+  _acct_known_or_refuse "$id"
+  _acct_lane_lock "$id" "Nothing was written."
+  _acct_lane "$id"
+  { [ "$ACCT_KIND" = generated ] && [ "$ACCT_PROVIDER" = anthropic ]; } \
+    || _acct_refuse 1 not-a-sign-in-lane "lane $id is not a ccrc-generated Anthropic lane, so it has no Claude sign-in for this verb to sign out. Nothing was written."
+  _acct_cfg_dir "$id" "Nothing was written."
+  _acct_upstream_id "Nothing was written."
+  _acct_auth_deadline
+  _acct_sign_out "$id" "$ACCT_CFG_DIR" "$stands"
+  # A sign-in lane's last check measured the sign-in that is now gone; a token lane's measured its token, which stays.
+  [ -n "$ACCT_SECRETS" ] || _acct_lane_state "$id" --clear check
+  _acct_read_op "Lane $id was signed out; only this report failed." \
+    auth-answer --verb sign-out --id "$id" --sign-out "$ACCT_SIGNOUT"
+  printf '%s\n' "$ACCT_OUT"
+}
+
 cmd_account() {
   local sub="${1:-}"
   [ $# -gt 0 ] && shift
@@ -10706,6 +11134,18 @@ cmd_account() {
       ;;
     remove)
       _acct_remove "$@"
+      return 0
+      ;;
+    auth-start)
+      _acct_auth_start "$@"
+      return 0
+      ;;
+    auth-code)
+      _acct_auth_code "$@"
+      return 0
+      ;;
+    auth-cancel)
+      _acct_auth_cancel "$@"
       return 0
       ;;
     *) _acct_refuse 1 internal-no-arm "ccrc account lists \"$sub\" as implemented and has no arm for it — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;
@@ -19061,8 +19501,9 @@ _inst_hooks() {
 # installed tree by relative path (`../ccrc-coordinator/references/…`, both
 # skills side by side under one config dir) — and the reviewer skill, third,
 # points into the same tree.
-# The history skill, fourth (ccrc history spec 2026-10-05 §8.5), points into
-# no other skill's tree, so its place at the end is a grouping, not an order.
+# The history skill, fourth (ccrc history spec 2026-10-05 §8.5), and the Linear
+# skill, fifth (#1444, spec 2026-10-31 §11), point into no other skill's tree,
+# so their place at the end is a grouping, not an order.
 #
 # ITS FAILURE IS FATAL, exactly as `_inst_hooks`' is. Each installer converges
 # per home, backs up what it is about to replace and rolls back a swap it could
@@ -19076,13 +19517,13 @@ _inst_skills() {
   if [ "$INST_ROLE" = server ]; then echo "install: skills: skipped — a server-role box hosts no sessions"; return 0; fi
   local tree="$BOX_TREE_DIR" name
   mkdir -p "$HOME/.cc-sessions" || _ccrc_die "cannot create \$HOME/.cc-sessions"
-  for name in coordinator-skill worker-skill reviewer-skill history-skill; do
+  for name in coordinator-skill worker-skill reviewer-skill history-skill linear-skill; do
     _inst_tree_copy "$tree/ccd/$name" "$HOME/.cc-sessions/$name"
     _inst_atomic "$tree/ccd/install-$name.sh" "$HOME/.cc-sessions/install-$name.sh" 755
     CCRC_SKILL_SRC="$HOME/.cc-sessions/$name" bash "$HOME/.cc-sessions/install-$name.sh" \
       || _ccrc_die "install-$name.sh refused — read its lines above; it converges one account's skill directory at a time and rolls back a swap it could not finish, so no home was left without the skill it already had"
   done
-  echo "install: skills: ccrc-coordinator, ccrc-worker, ccrc-reviewer and ccrc-history in each account's skills directory"
+  echo "install: skills: ccrc-coordinator, ccrc-worker, ccrc-reviewer, ccrc-history and ccrc-linear in each account's skills directory"
 }
 
 # The graphify skill is NOT one of _inst_skills' names on purpose (spec §B):
@@ -27274,30 +27715,32 @@ _uninst_cc_sessions() {
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/compact-card.mjs" "$reg/approval-verify.mjs" "$reg/lib/transcript.jq" "$reg/lib/carry-dedupe.py" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
-    "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" \
+    "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" "$reg/install-linear-skill.sh" \
     "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \
     "$reg/account-deny.settings.json" \
     || _ccrc_die "removing ccrc's files under $reg failed"
   rmdir -- "$reg/lib" 2>/dev/null || true   # the transcript reader's directory, empty once its file is gone
-  # The conflict radar's opt-in mirror (landing order wave 3b): `$reg/landing/<project>/enabled`, the one file the probe
-  # writes that a LATER reader trusts (spec 5.4). With the probe gone nothing refreshes it, so it goes with the install.
-  # ONLY a regular file named `enabled`, ONE level under a real (not symlinked) `landing` directory, in a real project
-  # directory: a symlink named `enabled` is not ours to follow, and `probe`, `main-health` and the lineage files are
+  # The conflict radar's two mirrors (landing order wave 3b, and wave 5d's `lander`): `$reg/landing/<project>/enabled` and
+  # `lander`, the two files the probe writes that a LATER reader trusts (spec 5.4, 5.5). With the probe gone nothing
+  # refreshes them, so they go with the install.
+  # ONLY a regular file named `enabled` or `lander`, ONE level under a real (not symlinked) `landing` directory, in a real project
+  # directory: a symlink named `enabled` or `lander` is not ours to follow, and `probe`, `main-health` and the lineage files are
   # measurements the operator may still read, so they stay.
   local land="$reg/landing" ldir lfile
   if [ -d "$land" ] && [ ! -L "$land" ]; then
     for ldir in "$land"/*/; do
       ldir="${ldir%/}"
       { [ -d "$ldir" ] && [ ! -L "$ldir" ]; } || continue
-      lfile="$ldir/enabled"
-      if [ -f "$lfile" ] && [ ! -L "$lfile" ]; then
-        rm -f -- "$lfile" || _ccrc_die "removing the radar's opt-in mirror $lfile failed"
-      fi
+      for lfile in "$ldir/enabled" "$ldir/lander"; do
+        if [ -f "$lfile" ] && [ ! -L "$lfile" ]; then
+          rm -f -- "$lfile" || _ccrc_die "removing the radar's opt-in mirror $lfile failed"
+        fi
+      done
     done
   fi
-  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" \
+  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" "$reg/linear-skill" \
     || _ccrc_die "removing the skill trees under $reg failed"
-  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's and accounts' deny files, the four skill trees, the conflict radar's opt-in mirrors); the registry rows and operator switches stay"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's and accounts' deny files, the five skill trees, the conflict radar's opt-in mirrors); the registry rows and operator switches stay"
 }
 
 # ── _uninst_graphify_skills — the per-home graphify skill directories ─────

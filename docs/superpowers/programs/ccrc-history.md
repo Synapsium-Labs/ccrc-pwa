@@ -27,7 +27,49 @@ Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-quiet-ridge`   Workspace: **a 
 each box that hosts sessions, and gives a session a way to recall what it compacted away: a per-box SQLite store
 (node:sqlite + FTS5) fed by a sole-writer indexer from hook spool lines, a DAG of summaries (native leaves first,
 session-written leaves in W3), and a `ccrc history` CLI plus a skill. Modelled on lossless-claw (MIT), ported rather
-than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W4 ship at all.
+than depended on (spec §11–§12). The operator's conditional skip ruling of 2026-11-02 removes the full W2 replay
+and live A/B evaluation from the progress path; it is not a W2 PASS. W3/W4 still need accepted plans, independent
+review and their own safety and activation checks, as recorded in the current route below.
+
+## Current checkpoint — 2026-11-02
+
+The latest accepted state is recorded here and in the live run board; older dated completion-plan and operational
+measurements below are history, not authority to repeat their actions. The operator directed **skip evaluation unless
+it is genuinely needed to progress**. The full W2 benefit study is not needed for the next design/build decision, so
+its seven-day observation and replay are **not scheduled; W2 is not run, not passed**. No benefit, uptake or fabrication
+result is inferred. The focused W3 steering spike remains necessary before activation; ordinary tests, independent
+review, W1 integrity/acceptance and W4's approved-addendum/export requirements remain. The two capped drafts and the
+separately refused runbook correction remain held; this ruling does not reset a cap or recover a refusal. Test-only
+#2063 merged at the exact reviewed head, and run 1320 is now **done/released**, with MERGED mail sent before close.
+Run 1022 remains planned, open and undispatched to preserve continuity.
+
+### Current route — supersedes evaluation dependencies in the dated completion plan
+
+1. **Do not launch the full W2 study to unlock building.** Its replay, assignment, seven-day window, scoring and
+   W2-PASS dependency are waived as prerequisites to further approved design/build. Do not create a passing verdict,
+   lower `decideGate`'s thresholds, change runtime defaults, pin updates or spend on evaluation because of this
+   ruling. The built instruments remain available, unchanged. Any later evaluation must identify a concrete
+   unresolved decision and use only the evidence needed for it; this is not standing authority for new live acts
+   or model-backed spend.
+2. **W3: resolve its plan, then build and review.** The held #1876 draft is not implementation authority; its
+   existing cap and outstanding findings still need disposition, not a fresh run that evades them. The next accepted
+   plan must cite this ruling rather than require W2 PASS. Preserve the focused spike in spec §7.5: output headroom,
+   compliance, compaction duration and echo overhead. It gates reliance/activation of steering, not the start of a
+   seven-day A/B. Per-backend bars and arming remain the operator's; native fallback remains available.
+3. **W4: approve the missing contract, then build and review.** The operator-approved addendum must still settle
+   parent linkage, subagent boundary handling, `touched` output/ranking and cap/growth policy. W2 PASS is no longer
+   its prerequisite. B4 must be live before subagent capture, and parent-link coverage and resource-bound checks
+   remain. Neither W4 design approval nor activation is implied by skipping W2.
+4. **Close real residuals, not an unrun experiment.** Reconcile W1 acceptance/integrity and recorded misses, complete
+   programme-owned residuals, and retain deferred follow-ups while ticket filing is postponed. Keep run 1022 open
+   until an authorised continuity-preserving successor/disposition; do not cycle held runs or repeat the completed
+   #2063 mail/close. The separate ledger PR still needs its own review, checks and landing proof.
+
+**Authority boundary.** This later operator ruling overrides the W2-PASS prerequisite to progress in spec
+§§10.2–10.6, the W2 decisions and CP-40–CP-73; it does not rewrite the scientific pass criteria or waive feature-specific
+safety, acceptance, approval, privacy or irreversible-act boundaries. The old pass/fail completion branches do not
+classify this new **evaluation-not-run** path. Their historical task lists and estimates are not the current schedule.
+No live-state cleanup is performed on the assumption that evaluation artefacts are absent.
 
 ## Waves
 
@@ -40,7 +82,7 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 | 5 | W1-B4 "sole-copy export" (ruled Q6, e) | fleet | #623 | **merged** 2026-10-19 04:14Z as `ad65fb394` at head `2eca753d7` (run 587; reviews 614, 621, 623, 624 and 625; four fix rounds); **live on every session-hosting node before the earliest W1-k date, at the latest 2026-12-19** |
 | 5h-1 | B4's export hardening ("Owed from B4", items 1–8): the check after a bind in bounded, resumable batches, with doctor's rule for a check that cannot finish; a carried segment that counts only when whole and this store's; a vanished segment that re-arms the check; replay that marks by the last carrier; `expand`'s variants and `ENTRY_UPSERT`'s tie; the history-off advice for a carry; B4's errata | fleet | #737 | **merged** 2026-10-20 12:58Z as `3af16cf97` at head `adcea723e` (run 626; reviews 644, 675, 689 and 700; three fix rounds) |
 | 5h-2 | B2's owed items 1–5 ("Owed from B2") and B3's errata ("Owed from B3"): the named value class widened (the `Bearer` and box-token header classes stay as they are), with stored text re-cleaned as a sweep phase; the relay's look-behind window; the op marker's identity; `lag-high`'s remedy; the errata. B2's item 6 stays later | fleet | #1010 | **merged** 2026-10-21 15:39Z as `02d75ae5f` at head `90bfaadf9` (run 702; reviews 711, 721, 725, 744, 749 and 753; five fix rounds) |
-| 6 | W2: the replay eval and its gate (ruled Q7, Q14), in ten PRs on two lanes (rows below; W2-5b split in two, S1; W2-7 added by the operator's ruling R-B1); the W2 decisions document is the authority | fleet + deploy | — | the build is complete with W2-7's merge, the last of its ten PRs; the window waits on the operator's acts (decisions §5); the completion plan of 2026-10-25 (below) orders what is left |
+| 6 | W2: the replay eval and its gate (ruled Q7, Q14), in ten PRs on two lanes (rows below; W2-5b split in two, S1; W2-7 added by the operator's ruling R-B1) | fleet + deploy | — | build complete; full replay/live A/B **not run, not scheduled** under the conditional skip ruling of 2026-11-02; no W2 PASS or measured benefit; current route above supersedes the former evaluation prerequisite |
 | W2-1 | the recall-off verb and its generation checks, the per-tick presence record, the exports the deploy lane reads | fleet | #1105 | **merged** 2026-10-22 02:23Z as `cd622b2f6` at head `69105d4f9` (run 755; reviews 761 and 763; one fix round) |
 | W2-2a | the as-of cut | fleet | #1126 | **merged** 2026-10-22 15:55Z as `ecbab815e` at head `d119d6e90` (run 764; reviews 778 and 791; one fix round) |
 | W2-2b | the headless seam | fleet | #1154 | **merged** 2026-10-23 11:50Z as `92dac5764` at head `42c9aaf24` (run 809; reviews 829 and 849; one fix round) |
@@ -56,10 +98,92 @@ than depended on (spec §11–§12). A replay eval (W2) decides whether W3 and W
 | W1-fix (CP-39b) | a sidecar over 8 MiB (`SIDECAR_READ_WHOLE_MAX`) is captured by the streamed arm, which reads into one reused piece | fleet | #1561 | **merged** 2026-10-26 12:55Z as `f70956cc3` at head `bb917402a`, release v0.0.725 (run 973; reviews 979 and 987; one fix round) |
 | W1-fix (CP-39c) | the export pass runs on its own slice of the run budget, and the check after a bind on a slice of its own | fleet | #1577 | **merged** 2026-10-26 as `ce7b94dab`, release v0.0.728 (run 982; review 999; accepted with no fix round); its live check passed on 2026-10-27 on v0.0.745: export due 0 and overdue 0 (597 due before), health PASS (§8) |
 | W1-fix (CP-39d) | grep drives each referrer arm from its scope; the sweep reads a registered session's mid-turn growth within a tick; W1-b's and W1-f's measures; the sweep's carried review items | fleet | #1693 | **merged** 2026-10-27 21:11Z as `5377d23c1` at head `a8e707cff`, release v0.0.767 (run 1039; reviews 1065 and 1088; one fix round); the final W2 release carries it (CP-35) |
-| 7 | W3: steering (session-written leaves) | fleet (hook) | — | only if the operator records the W2 gate as passed |
-| 8 | W4: subagents and `touched` | fleet | — | only if the operator records the W2 gate as passed, and never before wave 5 is live |
+| 22 | Conditional W3 steering plan and W4 addendum; preparation only | docs; no implementation | #1876 | **held/unaccepted**, draft; run 1190 awaiting-review, review rounds 3/3; no cap lift or implementation authority |
+| 23 | Seven-day W2 authority amendment and start checklist | docs; no runtime/default change | #1969 | **held/unaccepted**, draft; run 1233 awaiting-review, review rounds 3/3; no cap lift; the full study is no longer on the progress path under the later conditional skip ruling |
+| 24 | Prospective seven-day live-runbook amendment | docs; no live act | #1975 | **held/unaccepted**, draft; run 1236 awaiting-review, review rounds 1/3; review 1238 closed/read, bounded correction not sent after routing refusal; no study start now owed |
+| 25 | Incremental-ingestion semantic/restart and prepared-line regression coverage | one test file; unchanged runtime | #2063 | **merged** 2026-11-01 19:04:40Z as `a3d7ed1e2d7d1b8c65459c326b2352cda7ea2791`, exact reviewed head `67038e4a3706a556c03b76fa2e22c3668bbc0fd2`; run 1320 **done/released**, item 1/1, review rounds 1/3; review 1321 done/released; accepted MERGED mail preceded final close |
+| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; accepted plan/review still required; focused steering spike and per-backend operator arming retained |
+| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; approved addendum, accepted plan/review and B4 live still required |
 
 ## Decisions & deviations
+
+### Latest rulings and evidence — 2026-10-30 to 2026-11-02
+
+- **Conditional evaluation skip, operator ruling 2026-11-02.** Skip evaluation unless genuinely needed to progress.
+  The current assessment reads spec §10.2's exact-match/fabrication/uptake gate separately from §7.5's steering
+  spike and §10.4's additive subagent/`touched` scope. W2 supplies benefit evidence, not a mechanism required to
+  build either feature. The full replay and seven-day A/B therefore leave the progress path, with no PASS, FAIL,
+  fabricated verdict or claim of improved active-context fidelity. W3's focused spike remains necessary before
+  activation because fixture tests cannot establish real summary headroom, model compliance or compaction cost.
+  W4 keeps its addendum, linkage/resource checks and live sole-copy export prerequisite. This is the reason for
+  retaining those checks, not a new blanket observation period. The current route above records the limited
+  override of historical PASS dependencies. No cap lift, refusal recovery or acceptance of held drafts follows.
+- **Earlier seven-day observation, operator ruling 2026-10-30.** Superseded as a scheduled prerequisite by the
+  conditional skip ruling above. If that same W2 study is later expressly resumed, do not silently change its
+  scoring contract: explicitly set `window_plan.planned_days=7` in every signed
+  or superseding draft, and schedule `window.end_ms = window.start_ms + 604800000`. Setup and pilot do not count.
+  Retain `lookback_days=14` for the retrospective census and recompute Q18 with seven planned days. The existing
+  positive-integer duration contract already represents seven days; fourteen is a default, not a minimum. No runtime
+  or default-change release is needed merely to select seven. Validator tolerance does not authorise an eighth
+  scheduled day. Preserve sampling, pilot, statistical/quality/PASS bars, budget, private signing, privacy and freeze
+  conditions. If seven days cannot meet them, halt for operator disposition; do not extend or lower a gate.
+- **Held drafts are not accepted work.** Runs 1190 and 1233 remain at their three-review caps. General directions
+  to progress the programme do not lift those caps, accept their drafts or authorise W3/W4 implementation. Run 1022
+  stays open and undispatched. Current PR metadata independently confirms #1876, #1969 and #1975 remain open drafts.
+- **Review 1238/run 1236, not acceptance.** The exact reviewer fingerprint was accepted at close before report
+  read. Uphold three bounded corrections: distinguish pre-start finalisation from at/after an invalid or unestablished
+  signed start, which halts for operator disposition; preserve separately applicable added-node census/registry
+  checks before power consumes those nodes without introducing universal act 11; attribute private record/readback
+  confirmations to the operator when that is the evidence, never to an independent coordinator measurement. No new
+  post-start recovery, disclosure or closure policy is selected. Other majority-refuted variants are dropped. Extra
+  reviewer test execution outside the named set and the disclosed protocol departures are retained limitations, not
+  authorised execution or green evidence. The attempted effort-routing act answered
+  `{"ok":false,"error":"registry-unreadable","file":"class"}`. It stopped there: no accepted routing change,
+  work advance or correction mail. The correction remains unsent; do not retry it or send at the old effort as a
+  workaround without specific recovery authority.
+- **Research follow-ups and filing.** External research is complete; no external repository was executed, imported
+  or made a dependency. Five local enhancement drafts cover recall guidance/source references, metric distinctions,
+  incremental-ingest evidence, recovery states/summary lineage, and bounded additive retrieval before context
+  rewriting. Filing was explicitly postponed on 2026-11-01; no ticket was created or changed. Do not resume access
+  investigation or invent a substitute tracker. These follow-ups add no W2 prerequisite or experiment authority.
+- **Run 1320/review 1321: accept the bounded test-only deliverable for landing.** A read-only audit of committed
+  main established existing identity/cursor/tail-proof/rescan and cross-pass pairing mechanisms, not a runtime bug.
+  The independent wave adds one-shot versus actual writer-reopen semantic coverage and exact prepared-line offset
+  counts for append, unchanged revisit and deliberate tail-proof failure. Only `server/test/history-ingest.test.ts`
+  changes (+218/-0); no runtime, schema, dependency or evaluation record changes. The exact worker handoff was
+  server-verified before settling the one item. A NEW review run closed at the exact reviewed fingerprint before
+  its immutable report was read. It is done/released; no reuse for a later tip.
+- **Review 1321 evidence and limits.** Three fresh held-out lenses and the prescribed refuters returned no surviving
+  critical/important finding, no unverified lens and no unexamined finding. The important oracle-scope finding was
+  refuted by the required majority. Its refuters lacked the temporary plan path: retain that limitation, do not
+  claim they read the plan or that uncertainty proves conformance, and do not override the prescribed majority with
+  a newly invented gate. The specification lens and whole-branch mapping separately cover the explicit bounded
+  task list. Six distinct minor advisories remain: broad transaction/O1-O4 labels; no-delete assertions not comparing
+  surrogate row identities; no direct canonical-blob assertion after the rewrite; an empty variant comparison in
+  the equivalence case; the oracle's bounded column subset; and close-on-reopen-error hygiene. They do not alone
+  require a fix round or a new exhaustive whole-database oracle.
+- **Verification is scoped evidence.** The reviewer independently ran the focused group (3 passed), whole affected
+  file (229 passed) and separate test-project typecheck (exit 0) through the test launcher. The reproduction lens's
+  two expressly allowed test runs are disclosed. Exact-tip fast CI selected and executed the affected file in a
+  server shard; the required summaries succeeded at capture. Browser/PWA test steps and macOS were skipped, not
+  passed executions. No full-suite green, pre-change runtime defect or live evaluation result is claimed. A failed
+  non-required external review-gate app had inaccessible details: unverified evidence, neither waived nor a proven
+  product defect. Those are review-time evidence limits, not a claim that skipped legs executed. Fresh repository
+  rules, reviews, comments/threads/alerts, checks, exact head and landing-line gates governed the later enqueue.
+- **Exact-head landing, independently measured 2026-11-02.** The accepted advance to merging pinned run 1320's
+  landing entry to the reviewed head. The complete fresh verdict selected the native queue; the separate required
+  checks gate then exited zero, and the landing line was unpaused with the matching pinned entry. The normal
+  exact-head enqueue was followed by an actual `QUEUED` entry, not merely armed auto-merge. GitHub now reads #2063
+  `MERGED`, at head `67038e4a3706a556c03b76fa2e22c3668bbc0fd2`, merged 2026-11-01 19:04:40Z as
+  `a3d7ed1e2d7d1b8c65459c326b2352cda7ea2791`; the separate workspace PR measurement agrees. No repeat enqueue is
+  owed. The worker's MERGED mail was accepted before final close; the server then accepted run 1320's exact
+  merged-phase fingerprint and returned `done` with `released:true`. A separate read confirms its own terminal
+  row. Reclamation was queued, later projected deferred under a hold: cleanup is not claimed complete and is not
+  a session's manual act. No repeat mail, enqueue or close is owed. No live evaluation start, rollout, PASS or
+  programme completion follows from this test-only merge. The earlier required-check results for this ledger PR
+  are not evidence for its amended head; fresh checks and landing gates are still required for the ledger itself.
+
+### Earlier dated rulings
 
 - **Operator rulings 2026-10-05** (spec §15.1): Q1 fixed root + `db/` symlink; Q2 spool on PostCompact, Stop,
   SessionStart(startup|resume|clear); Q3 many fleet and many server boxes (one store per session-hosting box, none on
@@ -1731,6 +1855,17 @@ holds over an earlier one for the same item.
 
 ## Carried constraints
 
+- **Current ruling and holds override historical action lists.** The full W2 benefit study is not run or
+  scheduled under the conditional skip ruling of 2026-11-02; it is no longer a prerequisite to progress. No cap
+  lift for runs 1190/1233, no retry of run 1236's refused correction and no acceptance of their drafts are
+  established. Do not manufacture account/model/node/budget, pilot, signing, pin, start or PASS evidence. A later
+  necessary check must name the unresolved decision and the minimum relevant evidence, not resurrect the full
+  study by default. Feature-specific tests/review, W3's activation spike, W4's addendum/export and W1 integrity
+  remain. Archive fidelity is not proof of active-context semantic fidelity.
+- **Ledger and feature separation.** Programme status belongs on a `ledger/ccrc-history` branch/PR, never inside
+  #2063 or the old coordinator branch. Close a producer only after exact-head merge proof, and send its MERGED mail
+  before close can reclaim its child. Keep run 1022 open. Do not turn the held preparation drafts into successors
+  or dispatch new work merely to avoid their caps/refusal.
 - **Order.** Part A merged first (#300), then B1 (#315), then B2 (#404), then B3 (#425), then B4 (#623), then 5h-1
   (#737), then 5h-2 (#1010), then W2-1 (#1105), which builds on them and on W2-3 (#856) and W2-4 (#826). W2-2a (fleet
   lane) and W2-5a (deploy lane) built on W2-1 alongside each other, on disjoint files, and both merged (#1126, #1134).
@@ -1851,4 +1986,25 @@ holds over an earlier one for the same item.
 
 ## Next-wave brief
 
-No build wave is dispatched next. The programme waits on the operator's acts for W2's live evaluation (CP-04, CP-05 and CP-31, as "Waiting on you" says, then acts 5 and 6 on the final W2 release, the release whose history code is v0.0.767's, rolled onto the fleet box first if it is not on it, then Stage 4's acts), run by the runbook (#1622). After the rollout the coordinator re-measures W1-b and W1-f read-only, outside an FTS re-derivation generation or reported apart from it, and W1-e over a week. The replay driver's carries from review 1030 and `lib.mjs`'s from review 1088 wait until W2 closes; the sweep's and `recall.mjs`'s from reviews 1065 and 1088 wait for the next wave that edits each file; the re-derivation's cost is backlog after W2 (Carried constraints). Earlier briefs, run 864's, run 851's and run 954's among them, are in this file's history.
+1. Apply the conditional skip ruling and current route at the top of this ledger. Do not start full W2 replay,
+   pilot/assignment or a seven-day observation to unlock W3/W4. Record **evaluation not run**, never W2 PASS or
+   FAIL. Do not lower scoring thresholds or change shipped evaluation code. Keep W3's focused pre-activation spike,
+   W4's approved-addendum/export requirements, ordinary tests, independent reviews and W1 integrity obligations.
+2. Preserve the capped/unaccepted preparation in #1876 and #1969, and the unsent correction for #1975 after its
+   refused routing act. No implicit cap reset, accepted draft or refusal recovery. W2-only amendments are no longer
+   needed for the waived study; disposition of their PRs/runs is separate from this ruling. W3's accepted plan and
+   W4's approved addendum must reflect the new progress route without evading outstanding findings.
+3. Test-only #2063 and run 1320 are complete: independently proven exact-head merge, accepted MERGED mail before
+   accepted final close, `done/released` and a separately read terminal row. Review 1321 is also done/released.
+   Do not repeat enqueue, mail, close or review, or read the worker diff in the coordinator. Retain the minor
+   advisories and evidence limits. Keep 1022 open. Finish the separate ledger PR only through its own fresh review,
+   checks and repository landing gates; no ledger merge is yet proven.
+4. Keep the five research enhancement drafts unfiled while filing is postponed. Do not repeat completed research
+   or access investigations. Further audit/design work starts with current-code and in-flight-work evidence. A
+   proposed evaluation must name what decision cannot otherwise progress and its smallest sufficient check;
+   do not invent a blanket observation prerequisite or new live/model-backed experiment authority.
+
+Earlier dated completion plans, diagrams, estimates and briefs remain historical records. The current route replaces
+their pass/fail-only sequencing with an explicit evaluation-not-run path. Existing W1 acceptance/integrity and
+feature-specific safety obligations are not silently waived. This checkpoint is not a live rollout, start, verdict,
+programme completion percentage or completion-date claim.

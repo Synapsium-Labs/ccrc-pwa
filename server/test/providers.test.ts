@@ -143,7 +143,8 @@ describe('the provider table is derived, never re-listed', () => {
     // refuse `--method setup-token` — a value spec:413 documents — everywhere at
     // once. §4.2's cell (spec:272, :275) writes the prefixed spelling; §5:413,
     // §5:419 and §6:507-508 write these, and §6:543 says what the prefix meant.
-    expect(PROVIDERS.anthropic.connect).toEqual(['login', 'paste', 'setup-token']);
+    // Mint first since accounts plan Task A20 (Q1: the long-lived token is the default).
+    expect(PROVIDERS.anthropic.connect).toEqual(['setup-token', 'login', 'paste']);
     expect(PROVIDERS.openrouter.connect).toEqual(['pkce', 'paste']);
     expect(PROVIDERS.compatible.connect).toEqual(['paste']);
     // Not `pane:login`: §4.2's cell and §6's method name are two different
@@ -154,10 +155,10 @@ describe('the provider table is derived, never re-listed', () => {
     for (const p of PROVIDER_IDS) {
       for (const m of PROVIDERS[p].connect) expect(m, p).not.toContain('pane:');
     }
-    // …and the first member is the default the connect door opens on (§4.2
-    // spells anthropic's `login` "(default)"), which is what `check-add` reads
-    // when `--method` is absent.
-    expect(PROVIDERS.anthropic.connect[0]).toBe('login');
+    // …and the first member is the default the connect door opens on, which is
+    // what `check-add` reads when `--method` is absent: Mint since Q1 (spec
+    // §6.1, accounts plan Task A20), where §4.2 once spelled `login` "(default)".
+    expect(PROVIDERS.anthropic.connect[0]).toBe('setup-token');
   });
 
   it('the doctor vocabulary is a closed list with a type over it', () => {

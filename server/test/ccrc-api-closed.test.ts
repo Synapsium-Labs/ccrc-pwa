@@ -18,7 +18,8 @@ import { mkTmp } from './tmpHelpers.js';
 const root = path.join(import.meta.dirname, '..', '..');
 const corpusFiles = (): string[] => {
   const out: string[] = [];
-  for (const dir of ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill', 'ccd/history-skill']) {
+  // `ccd/linear-skill` (#1444, spec 2026-10-31 §11): its worked examples are executable, so each must map to a row.
+  for (const dir of ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill', 'ccd/history-skill', 'ccd/linear-skill']) {
     const walk = (d: string): void => {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
         const p = path.join(d, e.name);
@@ -143,6 +144,13 @@ describe('the corpora no longer invoke curl', () => {
       'claims.take',
       'landing.show',
       'ledger.allocate',
+      'linear.comment',
+      'linear.create',
+      'linear.issue',
+      'linear.labels',
+      'linear.search',
+      'linear.statuses',
+      'linear.update',
       'mail.send',
       'peers.list',
       'runs.list',
