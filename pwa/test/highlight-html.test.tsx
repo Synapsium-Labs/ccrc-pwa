@@ -7,7 +7,7 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { HLJS } from '../src/lib/highlightGrammars';
-import { HIGHLIGHT_NAME_SET, isRegisteredGrammar } from '../src/lib/highlightNames';
+import { HIGHLIGHT_GRAMMARS, HIGHLIGHT_NAME_SET, isRegisteredGrammar } from '../src/lib/highlightNames';
 import { checkHighlightHtml, codeBlocksOf, isCheckedHighlightHtml } from '../src/lib/highlightStore';
 import { HighlightedCode } from '../src/lib/markdown';
 import { parseMarkdown } from '../src/lib/markdownParse';
@@ -29,6 +29,42 @@ describe('M4.H14: what the check accepts', () => {
       }
     }
     expect(seen).toBeGreaterThan(30);
+  });
+
+  // D-7758's condition: real highlight.js 11.12 output of every registered grammar, with the multi-class sub-scope forms
+  // (`hljs-title class_`, `hljs-title function_`, ...), passes the check. One sample per grammar, chosen to make it emit
+  // its titles, calls and constants; the test names the forms it must have seen so that it cannot pass vacuously.
+  const SAMPLES: Readonly<Record<string, string>> = {
+    bash: 'name=$(echo "a b")\nif [ -f "$name" ]; then\n  cat "$name" | grep -v x\nfi\nfunction f() { return 0; }',
+    css: '@media (min-width: 40em) {\n  .a > b:hover::before { color: #fff; margin: 0 auto !important; }\n}',
+    diff: '--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,2 @@\n-const a = 1;\n+const a = 2;\n context',
+    dockerfile: 'FROM node:22 AS build\nRUN apt-get install -y a && echo "b"\nCOPY . /app\nCMD ["node", "x.js"]',
+    go: 'package main\n\nimport "fmt"\n\ntype S struct{ A int }\n\nfunc (s *S) M() int { return s.A }\n\nfunc main() { fmt.Println(1) }',
+    javascript: 'class A extends B {\n  static C = 1;\n  m(x) { return f(x) + this.n; }\n}\nfunction g() { return new A(); }\nconst PI = 3;',
+    json: '{"a": [1, 2.5e3, true, null], "b": {"c": "d\\n"}}',
+    markdown: '# Title\n\n* item **bold** and `code`\n\n> quote\n\n[link](https://a.example)\n\n```ts\nconst a = 1;\n```',
+    php: '<?php\nclass A extends B {\n  const C = 1;\n  function foo($x) { return bar($x) . self::C; }\n}\nfoo(1);\n$y = new A();',
+    python: 'class A(B):\n    X = 1\n    def foo(self, y):\n        return bar(y) + self.X\n\n@dec\ndef main():\n    print(A().foo(1))',
+    rust: 'use std::fmt;\nstruct S;\nimpl T for S {\n    fn f(&self) -> u8 { g::<u8>(1) }\n}\nfn main() { let x: u8 = 1; println!("{}", x); }',
+    sql: "SELECT a, COUNT(*) AS n FROM t WHERE b > 1 AND c = 'x' GROUP BY a ORDER BY n DESC;\nCREATE TABLE u (id INT PRIMARY KEY);",
+    typescript: 'interface I { a: number }\nclass A extends B implements I {\n  constructor(private x: string) { super(); }\n  m<T>(y: T): T { return f(y); }\n}\nfunction g(): void { new A("a"); }\nconst PI = 3;',
+    xml: '<?xml version="1.0"?>\n<a b="c"><!-- d --><e f=\'g\'>text &amp; more</e><![CDATA[x]]></a>',
+    yaml: 'a: 1\nb:\n  - c\n  - d: "e"\nf: &x [1, 2]\ng: *x\n# comment\nh: |\n  text',
+  };
+
+  it('real output of every registered grammar passes, and the corpus emits the multi-class sub-scope forms', () => {
+    expect(Object.keys(SAMPLES).sort()).toEqual([...HIGHLIGHT_GRAMMARS]);
+    const multi = new Set<string>();
+    for (const [lang, code] of Object.entries(SAMPLES)) {
+      const html = colour(lang, code);
+      expect(html, lang).toContain('<span class="hljs-');
+      expect(checkHighlightHtml(html), lang).not.toBeNull();
+      for (const m of html.matchAll(/class="(hljs-[^"]* [^"]*)"/g)) multi.add(m[1]!);
+    }
+    for (const form of [
+      'hljs-title class_', 'hljs-title class_ inherited__', 'hljs-title function_', 'hljs-title function_ invoke__',
+      'hljs-variable constant_',
+    ]) expect([...multi], form).toContain(form);
   });
 
   it('a language-NAME wrapper for every registered name and alias, and the two real subLanguage shapes', () => {
