@@ -3184,8 +3184,8 @@ export class CoordStore {
     if (this.landingFence === 'restart') return { ok: false, error: 'landing-fenced', recovery: 'restart' };
     let held: LandingJournalSnapshot | null = null;
     // Which database step a throw interrupted: a failed read or BEGIN is db-unavailable, a failed record db-apply, a
-    // failed COMMIT db-commit.
-    let phase: 'read' | 'apply' | 'commit' = 'read';
+    // failed COMMIT db-commit. (Asserted, not annotated: the closure's assignments are invisible to narrowing.)
+    let phase = 'read' as 'read' | 'apply' | 'commit';
     // Called with the fence OPEN, a failed replay closes it (the more severe restart fence a boundary proof sets stays).
     const wasOpen = this.landingFence === null;
     const refuse = (f: LandingInfrastructureFailure): LandingJournalReplay => {
