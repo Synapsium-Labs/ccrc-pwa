@@ -1079,6 +1079,121 @@ const CORPUS: readonly Case[] = [
     why: 'as R8-X1c-ctrl: X keeps demo-v\'s stamp after the older build rebinds it to W, so X reads unbound for W',
     residual: 'inherited',
   },
+  // The follow-up's rows (D6 gap 1 and the residual gap-2 shapes): one per residual, each with the worker's minting run
+  // still open, naming the worker and carrying a dispatch start, while its birth cannot be placed.
+  {
+    shape: 'M-G1: an unplaceable worker (its minting run re-dispatched, no birth recorded yet) under a reused name, an earlier occupant\'s run still open',
+    round: 'follow-up (gap 1)',
+    build: () => {
+      const f = new Fixture();
+      const ghost = f.open('ghost', 'coord-gone', t(0) - 100);
+      f.mint(ghost, t(0));
+      const live = f.open('live', 'coord-live', t(4) - 100);
+      f.mint(live, t(4));
+      f.dispatchStarted(live, t(5));
+      return { f, mark: live, coords: ['coord-gone', 'coord-live'] };
+    },
+    base: { parent: 'coord-live', claimants: ['coord-live', 'coord-gone'], card: 'live', childIds: { 'coord-gone': ['ghost'], 'coord-live': ['live'] }, held: 'released:coord-live:parent-not-live' },
+    head: { parent: 'coord-live', claimants: ['coord-live'], card: 'live', childIds: { 'coord-gone': [], 'coord-live': ['live'] }, held: 'released:coord-live:parent-not-live' },
+    verdict: 'better',
+    why: 'D6 gap 1: the earlier occupant\'s run carries its own birth, older than the open minting run\'s dispatch start and claimed by another coordinator, so it no longer binds: coord-gone stops listing the live worker as its child and stops claiming it',
+  },
+  {
+    shape: 'M-W: a later wave bound while the minting run\'s birth cannot be placed, an older build\'s unstamped run of an earlier occupant with the highest id',
+    round: 'follow-up (gap 2)',
+    build: () => {
+      const f = new Fixture();
+      const m = f.open('M', 'coord-1', t(5) - 1000);
+      f.mint(m, t(5) - 500);
+      f.dispatchStarted(m, t(5));
+      const v = f.open('V', 'coord-1', t(6));
+      f.bind(v);
+      const g = f.open('G', 'coord-ghost', t(5) - 1000);
+      f.bindAs(g, null);
+      return { f, mark: m, coords: ['coord-1', 'coord-ghost'], wave: v };
+    },
+    base: { parent: 'coord-ghost', claimants: ['coord-ghost', 'coord-1'], card: 'G', childIds: { 'coord-1': ['M', 'V'], 'coord-ghost': ['G'] }, held: 'released:operator:run-other-programme', stamp: null },
+    head: { parent: 'coord-1', claimants: ['coord-1'], card: 'V', childIds: { 'coord-1': ['M', 'V'], 'coord-ghost': [] }, held: 'released:coord-1:parent-not-live', stamp: null },
+    verdict: 'better',
+    why: 'gap 2 with the minting run open: the wave still records no birth (the stamp is unchanged), but the open minting run wins, so the older build\'s unstamped run, opened before the dispatch start by another coordinator, is undecided instead of the ghost parent',
+  },
+  {
+    shape: 'M-A: the adopted arm, the earlier occupant\'s open run holding the HIGHER id, then the adopter\'s later wave',
+    round: 'follow-up (adopted arm)',
+    build: () => {
+      const f = new Fixture();
+      const adopting = f.open('adopting', 'coord-live', t(0));
+      const wave2 = f.open('wave2', 'coord-live', t(3));
+      const earlier = f.open('earlier', 'coord-gone', t(0) + 1000);
+      f.mint(earlier, t(1));
+      f.adopt(adopting, t(2));
+      f.bind(wave2);
+      return { f, mark: adopting, coords: ['coord-live', 'coord-gone'], wave: wave2 };
+    },
+    base: { parent: 'coord-gone', claimants: ['coord-gone', 'coord-live'], card: 'earlier', childIds: { 'coord-live': ['adopting', 'wave2'], 'coord-gone': ['earlier'] }, held: 'released:operator:run-other-programme', stamp: 'T1 for demo-w' },
+    head: { parent: 'coord-live', claimants: ['coord-live'], card: 'wave2', childIds: { 'coord-live': ['adopting', 'wave2'], 'coord-gone': [] }, held: 'released:coord-live:parent-not-live', stamp: 'T1 for demo-w' },
+    verdict: 'better',
+    why: 'D-6993 under D6 gap 1: the adopting run is open, so the earlier occupant\'s run (its own birth, older than the adoption\'s dispatch start, another coordinator) no longer binds; wave2 carries the earlier occupant\'s birth (the stamp is unchanged) but opened after the dispatch start, so it still binds',
+  },
+  {
+    shape: 'M-R3: a cross-build rollback, the minting run R open and redrawn, with three open waves from different coordinators',
+    round: 'follow-up (rollback)',
+    build: () => {
+      const f = new Fixture();
+      const r = f.open('R', 'coord-live', t(1) - 100);
+      f.mint(r, t(1));
+      const wa = f.open('WA', 'coord-gone', t(1) + 100);
+      f.bind(wa);
+      const w3 = f.open('W3', 'coord-third', t(1) + 200);
+      f.bind(w3);
+      f.redraw(r, t(4));
+      return { f, mark: r, coords: ['coord-live', 'coord-gone', 'coord-third'] };
+    },
+    base: { parent: 'coord-third', claimants: ['coord-third', 'coord-gone', 'coord-live'], card: 'W3', childIds: { 'coord-live': ['R'], 'coord-gone': ['WA'], 'coord-third': ['W3'] }, held: 'released:operator:run-other-programme' },
+    head: { parent: 'coord-live', claimants: ['coord-live'], card: 'R', childIds: { 'coord-live': ['R'], 'coord-gone': [], 'coord-third': [] }, held: 'released:coord-live:parent-not-live' },
+    verdict: 'better',
+    why: 'the two waves bound to the occupant before the redraw carry its birth, older than R\'s new dispatch start, and other coordinators claim them, so the open minting run R wins: coord-live is the parent and neither ghost coordinator lists the worker',
+  },
+  {
+    shape: 'M-X: a leftover birth for another session on a wave opened after the dispatch start, the minting run re-dispatched, an earlier occupant\'s run open',
+    round: 'follow-up (leftover birth)',
+    build: () => {
+      const f = new Fixture();
+      const g = f.open('G', 'coord-gone', t(0) - 50);
+      f.bindAs(g, null);
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.dispatchStarted(m, t(2));
+      const my = f.open('MY', 'coord-y', t(0) - 100);
+      f.mint(my, t(0), 'demo-y');
+      const v = f.open('V', 'coord-x', t(3));
+      f.bind(v, 'demo-y');
+      f.olderMove(v, W);
+      return { f, mark: m, coords: ['coord-a', 'coord-x', 'coord-gone'], wave: v };
+    },
+    base: { parent: 'coord-x', claimants: ['coord-x', 'coord-a', 'coord-gone'], card: 'V', childIds: { 'coord-a': ['M'], 'coord-x': ['V'], 'coord-gone': ['G'] }, held: 'released:operator:run-other-programme', stamp: 'T0 for demo-y' },
+    head: { parent: 'coord-x', claimants: ['coord-x', 'coord-a'], card: 'V', childIds: { 'coord-a': ['M'], 'coord-x': ['V'], 'coord-gone': [] }, held: 'released:operator:run-other-programme', stamp: 'T0 for demo-y' },
+    verdict: 'better',
+    why: 'the earlier occupant\'s unstamped run G, opened before the dispatch start by another coordinator, is undecided; V keeps demo-y\'s leftover birth but opened after the dispatch start, so the rule binds it (a birth recorded for another session is never read as this worker\'s)',
+  },
+  {
+    shape: 'M-M: another coordinator\'s wave bound before a same-id re-mint whose bind is not recorded yet (the minting run open)',
+    round: 'follow-up (re-mint)',
+    build: () => {
+      const f = new Fixture();
+      const m = f.open('M', 'coord-a', t(1) - 100);
+      f.mint(m, t(1));
+      f.dispatchStarted(m, t(2));
+      const v = f.open('V', 'coord-b', t(3));
+      f.bind(v);
+      f.dispatchStarted(m, t(4));
+      return { f, mark: m, coords: ['coord-a', 'coord-b'], wave: v };
+    },
+    base: { parent: 'coord-b', claimants: ['coord-b', 'coord-a'], card: 'V', childIds: { 'coord-a': ['M'], 'coord-b': ['V'] }, held: 'released:operator:run-other-programme', stamp: null },
+    head: { parent: 'coord-a', claimants: ['coord-a'], card: 'M', childIds: { 'coord-a': ['M'], 'coord-b': [] }, held: 'released:coord-a:parent-not-live', stamp: null },
+    verdict: 'better',
+    why: 'V was bound to the occupant of the dispatch before the re-mint: opened before M\'s new dispatch start, unstamped and claimed by another coordinator, it is undecided, so coord-b is no longer the parent of the re-minted worker',
+  },
 ];
 
 const EXPECT: 'base' | 'head' = process.env['BINDING_CORPUS_EXPECT'] === 'base' ? 'base' : 'head';
