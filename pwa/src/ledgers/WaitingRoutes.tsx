@@ -1,6 +1,7 @@
 // The two ladder arms of the Waiting on you routes (desktop-polish PL5a, D-7712): `/waiting`, the combined list, and
-// `/waiting/<id>`, one item. They are the only readers of the fleet store and the router in this directory: the screens
-// they render (`WaitingScreen`, `ItemView`) take everything as props. Ring L4: no decision is made here that the words
+// `/waiting/<id>`, one item. The screens they render (`WaitingScreen`, `ItemView`) take everything as props. The programme
+// view (`ProgrammeScreen`, PL5b) reads the store and the router itself, as a screen of its own, through the hooks and the
+// back button this file exports (`useHeard`, `useUnavailable`, `Back`). Ring L4: no decision is made here that the words
 // or the server did not make (a tick's order and refusals are the server's, the labels are `ledgerWords.ts`'s).
 //
 // THE CLOCK IS READ FRESH ON EVERY RENDER, never ticked (the rollup's rule, `useRollupClock`): an age is the screen's own
@@ -33,7 +34,7 @@ const WAITING_PATH: string = ROUTES.find((r) => r.id === 'waiting')?.path ?? '/'
 export const itemPath = (id: number): string => `${WAITING_PATH}/${id}`;
 
 /** The rows and runs this page has heard, or `null` for each it has not: see the file's header. */
-function useHeard(store: FleetStore): { sessions: readonly FleetSession[] | null; runs: readonly RunSummary[] | null } {
+export function useHeard(store: FleetStore): { sessions: readonly FleetSession[] | null; runs: readonly RunSummary[] | null } {
   const sessions = store((s) => s.sessions);
   const fleetFrameSeen = store((s) => s.fleetFrameSeen);
   const runs = store((s) => s.runs);
@@ -44,7 +45,7 @@ function useHeard(store: FleetStore): { sessions: readonly FleetSession[] | null
 /** With no list yet, ask for it once on arrival, and say so when this box has none to give: a box with no coordination
  *  database sends no `waiting` frame and answers the read `not-configured`, so waiting for a first update would be for
  *  good. Any other failure (offline, refused) changes nothing: the page keeps waiting, and a focus asks again. */
-function useUnavailable(store: FleetStore, listed: boolean): string | null {
+export function useUnavailable(store: FleetStore, listed: boolean): string | null {
   const [unavailable, setUnavailable] = useState<string | null>(null);
   useEffect(() => {
     if (listed) return undefined;
@@ -75,8 +76,9 @@ export function ItemRouteAt({ param, store = useFleetStore }: { param: string | 
   return param !== null && Number.isSafeInteger(id) ? <ItemRoute key={id} id={id} store={store} /> : <ItemGone />;
 }
 
-function Back(): ReactNode {
-  return <BackButton className="wl-back" aria-label="Back to Waiting on you" onClick={() => navigate(WAITING_PATH)}>‹</BackButton>;
+/** The page's way back: to the list by default, or to `to` under `label` (the programme view goes back to the fleet). */
+export function Back({ to = WAITING_PATH, label = 'Back to Waiting on you' }: { to?: string; label?: string }): ReactNode {
+  return <BackButton className="wl-back" aria-label={label} onClick={() => navigate(to)}>‹</BackButton>;
 }
 
 function ItemGone(): ReactNode {

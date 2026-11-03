@@ -655,6 +655,8 @@ export class FleetWatcher {
   private lastJson: string | null = null;
   /** The fleet the last `fleet` broadcast carried — `lastJson`, unserialised. */
   private lastFleet: FleetSession[] | null = null;
+  /** D-6436: whether the latest tick listed the registry, and when its read began; written by `tick()` alone. */
+  private registryTick: { listed: boolean; at: number } | null = null;
   /** Last-reported dialog id per session id. */
   private dialogIds = new Map<string, string>();
   /**
@@ -1870,6 +1872,14 @@ export class FleetWatcher {
     return this.lastFleet;
   }
 
+  /** The fleet as a CURRENT registry listing (D-6436): `currentFleet()` with `listedAt`, when the latest tick's read
+   *  began, or null unless that tick listed and a fleet has been broadcast. `lastFleet` alone is kept through an
+   *  unlistable tick and moves only when its JSON does, so it cannot say this. `GET /api/projects` reads it. */
+  currentFleetListing(): { sessions: FleetSession[]; listedAt: number } | null {
+    const t = this.registryTick;
+    return t !== null && t.listed && this.lastFleet !== null ? { sessions: this.lastFleet, listedAt: t.at } : null;
+  }
+
   /** Last-seen statuslines — passed into a one-shot fleet assembly (REST +
    *  initial /ws/fleet push) so model/effort/ultracode/branch show immediately,
    *  same reasoning as currentPending(). */
@@ -2440,6 +2450,7 @@ export class FleetWatcher {
         void this.serverCapsNow();
       }
 
+      const listedAt = Date.now();   // D-6436: when this tick's registry read began (`registryTick.at`)
       // Read once. The lanes that choose their rows from the registry are
       // handed it: detectDialogs and sweepHookStates take its records, and the
       // lanes that take a model take it (sweepTasks and sweepPr included, through
@@ -2498,6 +2509,7 @@ export class FleetWatcher {
         ?.catch(() => { /* one bad sweep must not kill the poll */ });
       this.noteDelegationRegistry(registryRead.listed);
       if (!registryRead.listed) {
+        this.registryTick = { listed: false, at: listedAt };            // D-6436: `lastFleet` is kept, but not as a listing
         this.withdrawDelegation();                                      // wave 4: no lane runs below, so the frame is withdrawn here
         // Retain, don't erase, at fleet scale: `this.hookStates`/
         // `this.taskProgress`/`this.prevStatus`/`this.lastJson` are all left
@@ -2923,6 +2935,7 @@ export class FleetWatcher {
       // suppress a run transition from reaching an already-connected client.
       this.emitRuns(sessions);
       const json = JSON.stringify(sessions);
+      this.registryTick = { listed: true, at: listedAt };               // D-6436: `lastFleet` reflects this listing either way
       if (json === this.lastJson) return;
       this.lastJson = json;
       this.lastFleet = sessions;

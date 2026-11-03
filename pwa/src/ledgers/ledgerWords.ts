@@ -7,7 +7,7 @@
 // An item's state is its `state` column only (plan PL5b R2): `Came back` is an OPEN item whose latest coordinator move was
 // a return, read from its history, never from a field that keeps the last round's value.
 import type { FleetSession, RunSummary } from '../../../shared/api';
-import { orderItems, waitingCount, type ItemKind, type ItemView } from '../../../shared/ledgers';
+import { orderItems, waitingCount, type ItemKind, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { operatorAsk } from '../fleet/rollup';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { boundOpenRun, claimedRunsOf, isRunClosed } from '../fleet/runWords';
@@ -86,6 +86,22 @@ export function questionRows(sessions: readonly FleetSession[], runs: readonly R
 export const waitingTotal = (items: readonly ItemView[], questions: readonly QuestionRow[]): number =>
   waitingCount(items) + questions.length;
 
+/** The chip's number for `program`, off what the fleet store holds: "waiting on you" as spec §2 defines it once, the programme's
+ *  open items (sent-back ones included, one being checked not) plus the questions its sessions ask, summed by `waitingTotal`,
+ *  the one sum the combined list, the navigation badge and the programme view's heading (`groupByProgramme`'s `waiting`) read
+ *  too, so a programme never reads one number on its box and another on its view (ruling 14290). Zero until the list AND the
+ *  fleet frame have landed (`sessions`, as the navigation badge gates them): "not heard yet" draws no chip rather than a guess. `runs` may be `null` (no runs frame yet): a question's programme is then
+ *  unknown, so it counts for no programme. */
+export function programmeWaitingCount(
+  view: WaitingView | null, sessions: readonly FleetSession[] | null, runs: readonly RunSummary[] | null, program: string,
+): number {
+  if (view === null || sessions === null) return 0;
+  return waitingTotal(
+    view.items.filter((i) => i.program === program),
+    questionRows(sessions, runs ?? []).filter((q) => q.program === program),
+  );
+}
+
 /** The runs of one programme that are still open (`isRunClosed`, the runs board's own predicate), which is what keeps its
  *  coordinator waiting on the operator's tick and refuses a dismiss. The list's wave label and `programmeIsLive` both read
  *  this ONE measurement, so no screen filters runs for openness of its own. */
@@ -124,7 +140,7 @@ export function groupByProgramme(items: readonly ItemView[], questions: readonly
       ...asks.map((question): Row => ({ kind: 'question', question })),
       ...mine.filter((i) => !isBlocking(i)).map((item): Row => ({ kind: 'item', item })),
     ];
-    groups.push({ program, rows, blocking: mine.some(isBlocking), waiting: waitingCount(mine) + asks.length });
+    groups.push({ program, rows, blocking: mine.some(isBlocking), waiting: waitingTotal(mine, asks) });
   }
   const key = (g: ProgrammeGroup): string => g.program ?? '￿';
   return groups.sort((a, b) => Number(b.blocking) - Number(a.blocking) || key(a).localeCompare(key(b)));

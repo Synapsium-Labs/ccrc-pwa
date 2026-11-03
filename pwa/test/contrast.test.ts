@@ -2329,6 +2329,18 @@ describe('the programme box\'s hues (Task G2)', () => {
     for (const key of programmeRules) expect(report.uncovered, key).not.toContain(key);
   });
 
+  // Desktop-polish PL5b: the waiting chip states its own ground and ink, so it is one pair in every palette whatever the hue.
+  it('measures the waiting chip, ink on the surface, in every palette (the door and the plain count share the rule)', () => {
+    const key = '.pg-waiting, .pg-waiting-plain';
+    const rows = rowsFor(key);
+    expect(rows, key).toHaveLength(THEME_COUNT);
+    for (const row of rows) {
+      expect(row.detail, row.label).toBe('var(--ink-primary) on var(--bg-surface)');
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(report.uncovered, key).not.toContain(key);
+  });
+
   it('tints only the kicker: every other band of the box sits on the card surface', () => {
     const tinted = rulesOf(ROOT, 'src/fleet/programmeBox.css')
       .filter((r) => /-tint\b/.test(bgOf(r.body) ?? ''))
@@ -2381,6 +2393,43 @@ describe('the Waiting on you pills and the item band (desktop-polish PL5a)', () 
       expect(rows, key).toHaveLength(THEME_COUNT);
       for (const row of rows) {
         expect(row.detail, row.label).toBe('var(--pg-ink) on var(--pg-tint)');
+        expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  // Desktop-polish PL5b (D-7713): the programme view's head and cards, Goals, and the chip on the programme box. Every pair is
+  // measured through the stylesheet in every palette: the name on the surface in each hue, the Goals text on the card and on
+  // the "In short" box, a pending change on the attention tint.
+  it('measures the programme view\'s pairs, and Goals\', in every palette, through the stylesheet', () => {
+    const ink = 'var(--ink-primary) on var(--bg-surface)';
+    const muted = 'var(--ink-secondary) on var(--bg-surface)';
+    const attention = 'var(--status-attention-text) on var(--status-attention-tint)';
+    for (const [key, pair] of [
+      ['.pv-head .pv-title [in .pv-head]', ink],
+      ['.pv-head .pv-sub [in .pv-head]', muted],
+      ['.pv-card .pv-h [in .pv-card]', muted],
+      ['.pv-card .pv-none [in .pv-card]', ink],
+      ['.pg-goals .pg-goals-title, .pg-goals .pg-goals-label [in .pg-goals]', muted],
+      ['.pg-goals .pg-goals-short', 'var(--ink-primary) on var(--bg-raised)'],
+      ['.pg-goals .pg-goals-mod > .pg-goals-pending', attention],
+    ] as const) {
+      const rows = rowsFor(key);
+      expect(rows, key).toHaveLength(THEME_COUNT);
+      for (const row of rows) {
+        expect(row.detail, row.label).toBe(pair);
+        expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it('measures the programme\'s name on the surface in each hue, in every palette', () => {
+    for (const h of HUES) {
+      const key = `.pv-head .pv-kicker [in .pv-head] [as .pv-head[data-hue='${h}']]`;
+      const rows = rowsFor(key);
+      expect(rows, key).toHaveLength(THEME_COUNT);
+      for (const row of rows) {
+        expect(row.detail, row.label).toBe('var(--pg-ink) on var(--bg-surface)');
         expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
       }
     }

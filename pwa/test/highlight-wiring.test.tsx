@@ -47,6 +47,9 @@ describe('M4.H16: plain first frame on the Docs side', () => {
     expect(pre.textContent).toBe('const a = 1;');
     expect(container.querySelector('[class^="hljs-"]')).toBeNull();
     expect(container.querySelector('.code-block-lang')?.textContent).toBe('TypeScript');
+    // The block's request is sent from an effect React may run after the plain frame is drawn; `release()` answers only
+    // what is already waiting, so wait for the request first, or a request that lands after it is held for good.
+    await waitFor(() => expect(docs.calls).toHaveLength(1));
     await act(async () => { docs.release(); });
     await waitFor(() => expect(container.querySelector('article .hljs-keyword')?.textContent).toBe('const'));
     expect(pre.textContent).toBe('const a = 1;');
@@ -57,6 +60,7 @@ describe('M4.H16: plain first frame on the Docs side', () => {
     const { container } = textLeaf(inThreadContext(docs), 'const b = 2;');
     await waitFor(() => expect(container.querySelector('.docs-leaf .code-block code.hljs')?.textContent).toBe('const b = 2;'));
     expect(container.querySelector('.docs-leaf [class^="hljs-"]')).toBeNull();
+    await waitFor(() => expect(docs.calls).toHaveLength(1));
     await act(async () => { docs.release(); });
     await waitFor(() => expect(container.querySelector('.docs-leaf .hljs-keyword')?.textContent).toBe('const'));
   });
@@ -92,6 +96,7 @@ describe('the Export hand-off: the store is published with its settled()', () =>
     const k = store.keyOf('ts', 'const a = 1;');
     expect(k.kind).toBe('key');
     expect(store.settled()).toBe(false);
+    await waitFor(() => expect(docs.calls).toHaveLength(1));
     await act(async () => { docs.release(); });
     await waitFor(() => expect(store.settled()).toBe(true));
     expect(store.peek((k as { key: string }).key).kind).toBe('html');
@@ -129,6 +134,7 @@ describe('the Export hand-off: the store is published with its settled()', () =>
     await waitFor(() => expect(published.at(-1)).toBeTruthy());
     const store = published.at(-1)!;
     expect(store.settled()).toBe(false);
+    await waitFor(() => expect(docs.calls).toHaveLength(1));
     await act(async () => { docs.release(); });
     await waitFor(() => expect(store.settled()).toBe(true));
   });

@@ -266,7 +266,8 @@ describe('graph settings: _graph_knobs reads them through _ccrc_knob, _gr_knobs 
     const settings = m ? m[1].split(' ').filter((w) => w !== '') : [];
     expect(settings.filter((s) => s.startsWith('CCRC_GRAPH_')), 'the graph keys of CCRC_SETTINGS').toEqual(SPEC_KEYS);
     // GR2's count, held as it was: the test box keys TB1 appends after these (D-7403) are counted by testbox-knobs.test.ts.
-    expect(settings.filter((s) => !s.startsWith('CCRC_TESTBOX_')), 'counted exit: CCRC_SETTINGS 21 -> 43 (wave 29 added four)').toHaveLength(43);
+    // D-7857 adds CCRC_CARRY_COPY_WARN_BYTES, outside the graph and test box keys: 43 -> 44.
+    expect(settings.filter((s) => !s.startsWith('CCRC_TESTBOX_')), 'counted exit: CCRC_SETTINGS 21 -> 43 (wave 29 added four), 44 with D-7857').toHaveLength(44);
     expect(raw(box()).map((f) => f[0])).toEqual(SPEC_KEYS);
   });
 

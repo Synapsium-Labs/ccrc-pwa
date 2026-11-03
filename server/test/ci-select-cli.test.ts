@@ -142,7 +142,7 @@ function parseGithubOutput(text: string): Record<string, string> {
   return out;
 }
 
-type RunOpts = { event: string; inputMode?: string; selection?: 'shadow' | 'enforce'; fullGreen?: 'true' | 'false'; mapFile?: string; base?: string; timesFile?: string; traceList?: string; floorList?: string; floorStatic?: string };
+type RunOpts = { event: string; inputMode?: string; selection?: 'shadow' | 'enforce'; fullGreen?: 'true' | 'false'; mapFile?: string; base?: string; timesFile?: string; traceList?: string; floorList?: string; floorStatic?: string; workers?: string };
 
 function runSelect(repo: string, opts: RunOpts) {
   const io = mkTmp('ccrc-ci-select-io-');
@@ -165,6 +165,7 @@ function runSelect(repo: string, opts: RunOpts) {
   if (opts.traceList) args.push('--trace-list', opts.traceList);
   if (opts.floorList) args.push('--floor-list', opts.floorList);
   if (opts.floorStatic) args.push('--floor-static', opts.floorStatic);
+  if (opts.workers) args.push('--workers', opts.workers);
 
   let status = 0;
   let stderr = '';
@@ -394,6 +395,33 @@ describe('select.mjs CLI — pull_request', () => {
     const badBase = runSelect(repo, { event: 'merge_group', selection: 'enforce', mapFile, base: '0'.repeat(40) });
     expect(badBase.status).toBe(0);
     expect(badBase.outputs.tests, 'an undiffable group').toBe('full');
+  });
+
+  it("--workers 4 plans a full dispatch's server shards at 4 workers, and nothing else's: the macOS legs, a pull request, a queue run and a schedule keep 2", () => {
+    const { repo, mapFile } = buildMainFixture();
+    const dispatch = runSelect(repo, { event: 'workflow_dispatch', inputMode: 'full', selection: 'enforce', mapFile, workers: '4' });
+    expect(dispatch.status).toBe(0);
+    expectValidMatrix(dispatch.outputs.server_matrix, 4);
+    expectValidMatrix(dispatch.outputs.macos_matrix, 2);
+    expect(dispatch.summary).toContain('4 vitest workers');
+    // The same tests run: only the workers moved.
+    const plain = runSelect(repo, { event: 'workflow_dispatch', inputMode: 'full', selection: 'enforce', mapFile });
+    expect(dispatch.outputs.count).toBe(plain.outputs.count);
+    expect(uniqueFilesInMatrix(dispatch.outputs.server_matrix)).toEqual(uniqueFilesInMatrix(plain.outputs.server_matrix));
+    for (const [event, inputMode] of [['pull_request', undefined], ['merge_group', undefined], ['schedule', undefined]] as const) {
+      const other = runSelect(repo, { event, inputMode, selection: 'enforce', mapFile, workers: '4' });
+      expect(other.status, event).toBe(0);
+      expectValidMatrix(other.outputs.server_matrix, 2);
+      expect(other.summary, event).not.toContain('4 vitest workers');
+    }
+  });
+
+  it('--workers on a dispatch with a count the input does not offer fails the job, writing no matrix', () => {
+    const { repo, mapFile } = buildMainFixture();
+    const bad = runSelect(repo, { event: 'workflow_dispatch', inputMode: 'full', selection: 'enforce', mapFile, workers: '3' });
+    expect(bad.status).not.toBe(0);
+    expect(bad.stderr).toMatch(/2 or 4/);
+    expect(bad.outputs.server_matrix).toBeUndefined();
   });
 
   it('a directory a test linked whole: a change under it selects the test, and the table names rule 6 SUBTREE', () => {

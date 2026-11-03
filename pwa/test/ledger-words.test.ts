@@ -2,7 +2,7 @@
 // what it pins; the screen's and the routes' tests read the same words through their components.
 import { describe, expect, it } from 'vitest';
 import {
-  groupByProgramme, itemPills, openRunsOf, programmeIsLive, questionRows, waitingTotal, type QuestionRow,
+  groupByProgramme, itemPills, openRunsOf, programmeIsLive, programmeWaitingCount, questionRows, waitingTotal, type QuestionRow,
 } from '../src/ledgers/ledgerWords';
 import { isWaitingView } from '../src/ledgers/waitingView';
 import { fleetSession } from './fleetFixture';
@@ -120,5 +120,41 @@ describe('isWaitingView', () => {
       { items: [], cleared: 'x', goals: [] }, { items: [], cleared: [], goals: null }]) {
       expect(isWaitingView(bad), JSON.stringify(bad)).toBe(false);
     }
+  });
+});
+
+// PL5b: the programme box's chip. Its number is `programmeWaitingCount`, decided here once and the same sum the programme view's
+// heading reads (`groupByProgramme`'s `waiting`): the programme's open items plus its sessions' questions (ruling 14290).
+describe('programmeWaitingCount (the chip\'s count)', () => {
+  const runs = [runRow({ id: 1, program: 'prog-a', state: 'working', sessionId: 'project-a-ask' })];
+  const asker = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question', bucketSince: NOW - MIN });
+  const sessions = withRunBinding([asker], runs);
+  const view = waitingView({
+    items: [
+      itemView({ id: 1, program: 'prog-a' }),
+      itemView({ id: 2, program: 'prog-a', state: 'checking', tickedAt: NOW - MIN }),
+      itemView({ id: 3, program: 'prog-a', state: 'open', history: [
+        { at: NOW - 30 * MIN, act: 'raise', note: null }, { at: NOW - 5 * MIN, act: 'return', note: 'not yet' }] }),
+      itemView({ id: 4, program: 'prog-b' }),
+    ],
+  });
+  it('counts the programme\'s open items and its sessions\' questions: a sent-back item included, one being checked not', () => {
+    expect(programmeWaitingCount(view, sessions, runs, 'prog-a')).toBe(2 + 1);
+    expect(programmeWaitingCount(view, sessions, runs, 'prog-b')).toBe(1);
+  });
+  it('is the programme view\'s heading figure: the group\'s `waiting` is the same number', () => {
+    const group = groupByProgramme(view.items, questionRows(sessions, runs)).find((g) => g.program === 'prog-a')!;
+    expect(programmeWaitingCount(view, sessions, runs, 'prog-a')).toBe(group.waiting);
+    expect(programmeWaitingCount(view, sessions, runs, 'prog-b')).toBe(groupByProgramme(view.items, questionRows(sessions, runs)).find((g) => g.program === 'prog-b')!.waiting);
+  });
+  it('a question of another programme, or of none, is not this programme\'s', () => {
+    expect(programmeWaitingCount(waitingView(), sessions, runs, 'prog-b')).toBe(0);
+    expect(programmeWaitingCount(waitingView(), sessions, [], 'prog-a')).toBe(0); // runs unheard: its programme is unknown
+  });
+  it('is zero for a programme with nothing open, and until the list and the fleet frame have both been heard', () => {
+    expect(programmeWaitingCount(view, sessions, runs, 'prog-c')).toBe(0);
+    expect(programmeWaitingCount(null, sessions, runs, 'prog-a')).toBe(0);
+    expect(programmeWaitingCount(view, null, runs, 'prog-a')).toBe(0);
+    expect(programmeWaitingCount(waitingView({ items: [itemView({ state: 'done', closedAt: NOW })] }), [], [], 'prog-a')).toBe(0);
   });
 });

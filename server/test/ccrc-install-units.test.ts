@@ -905,6 +905,8 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       '--user enable --now ccd-land-probe.timer',
       // test box TB11 (D-7413): the durations timer, on the radar's gate and idiom.
       '--user enable --now ccd-testbox-times.timer',
+      // D-7857: the carry dedupe timer, on the radar's gate and idiom.
+      '--user enable --now ccd-carry-dedupe.timer',
       '--user enable --now ccd-account-health.timer',
       // spec 2026-09-07 §C: a FOURTH enable, role-gated exactly as the sweep's
       // and degrading rather than dying for the same reason.

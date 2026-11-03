@@ -31,6 +31,16 @@ describe('vocabulary', () => {
     expect([...OPEN_ITEM_STATES]).toEqual(['open', 'checking']);
   });
 
+  it('OPEN_ITEM_STATES is what the table leaves: the states some row\'s `from` names, in ITEM_STATES order (F4)', () => {
+    const left = ITEM_STATES.filter((s) => Object.values(EXPECTED).some((row) => row.from.includes(s)));
+    expect([...OPEN_ITEM_STATES]).toEqual(left);
+    // and every state the table leaves is a state an item can still be moved out of
+    for (const s of ITEM_STATES) {
+      const movable = ACTS.some((a) => ITEM_TRANSITIONS[a].from.includes(s));
+      expect(OPEN_ITEM_STATES.includes(s), s).toBe(movable);
+    }
+  });
+
   it('exports the bounds with the plan\'s values', () => {
     expect(CLEARED_WINDOW_MS).toBe(7 * 24 * 3600 * 1000);
     expect(SOON_LABEL_MAX).toBe(40);
@@ -116,6 +126,12 @@ describe('orderItems', () => {
     expect(orderItems(items).map((i) => i.id)).toEqual([5, 4, 2, 3, 1]);
     expect(items.map((i) => i.id), 'does not mutate its input').toEqual(before);
   });
+
+  it('breaks a tie on needed-by, state and raisedAt by id, whatever the input order (F2)', () => {
+    const items = [item(9, 'open', 'soon', 10), item(3, 'open', 'soon', 10), item(7, 'open', 'soon', 10)];
+    expect(orderItems(items).map((i) => i.id)).toEqual([3, 7, 9]);
+    expect(orderItems([...items].reverse()).map((i) => i.id)).toEqual([3, 7, 9]);
+  });
 });
 
 describe('waitingCount', () => {
@@ -138,6 +154,18 @@ describe('programmeWaitsOn', () => {
     ['active work beats merging', [r('working', 'work'), r('merging', 'work')], 'work'],
     ['dispatched work is active', [r('dispatched', 'work')], 'work'],
     ['only terminal runs', [r('done', 'work'), r('failed', 'review')], 'ended'],
+    // review 1323 F1: the priority, pinned with mixed rows
+    ['work awaiting review beats a merging run', [r('awaiting-review', 'work'), r('merging', 'work')], 'review'],
+    ['active work beats an active review', [r('working', 'review'), r('working', 'work')], 'work'],
+    ['a run of state unknown (work) is active', [r('unknown', 'work')], 'work'],
+    ['a merging review run is the merge queue', [r('merging', 'review')], 'merge-queue'],
+    ['done and failed runs are ended', [r('done', 'work'), r('failed', 'work')], 'ended'],
+    // review 1323 R1: `ended` is exactly "no run outside done and failed"; any other open run reads `work`
+    ['a closing work run is open, so work', [r('closing', 'work')], 'work'],
+    ['a closing review run is open, so work', [r('closing', 'review')], 'work'],
+    ['an active run of kind unknown is open, so work', [r('working', 'unknown')], 'work'],
+    ['a review run awaiting its own review is open, so work', [r('awaiting-review', 'review')], 'work'],
+    ['a closing run beside terminal ones is still open', [r('done', 'work'), r('closing', 'work')], 'work'],
   ];
   for (const [name, runs, want] of cases) {
     it(`${name} -> ${want}`, () => { expect(programmeWaitsOn(runs)).toBe(want); });

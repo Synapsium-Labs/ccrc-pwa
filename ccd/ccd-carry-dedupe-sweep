@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# ccd-carry-dedupe-sweep — `ccd carry-dedupe --identical-only` once a day, in SHADOW until the operator arms it, and a
+# dated summary line of what it found (#317; D-7857). A oneshot on its own daily timer (ccd-carry-dedupe.timer).
+#
+# WHY. A swap carry COPIES the transcript and never removes the source, and a sidecar carry that cannot link copies
+# too, so every account a session passed through keeps a full stale copy (#317 measured about 120 GiB on one box).
+# `ccd carry-dedupe` collects them, one uuid at a time, behind its keeper rules and its proofs, and changes nothing
+# without `--apply`. Nothing ran it on a schedule, and nothing said how much it would reclaim. This sweep is that
+# schedule and that figure; `ccrc doctor`'s `carry-copies` check reads the figure.
+#
+# WHAT IT RUNS. `ccd carry-dedupe --identical-only`: only copies byte-identical to the keeper's are candidates, the
+# narrowest of the verb's modes (a proved copy that is not identical is left and counted NONIDENT). This script decides
+# nothing about a copy: the keeper, the proof, the refusals and the swap.log line are all the verb's (ccd/ccd's
+# `cmd_carry_dedupe` and `ccd/lib/carry-dedupe.py`), and it never passes `--uuid` or `--min-age-hours`, so the verb's
+# own 24-hour recent window holds.
+#
+# SHADOW, THEN LIVE. Without `--apply` the verb is a dry run and changes nothing; `--apply` is added ONLY when the
+# marker below exists. NOTHING IN THIS TREE WRITES THAT FILE: the operator arms the sweep by hand, after reading a week
+# of shadow lines in the record, as with the pane-scope sweep's `scope-sweep-live`. The one line of shell that reads it
+# is below; `single-definition/switches-history.test.ts` pins that.
+#
+# THE RECORD, `$REG/carry-dedupe-record`, dot-free on purpose: `_reg_purge <id>` removes every `$REG/<id>.<field>`
+# with one dot after the id, so a name such as `carry-dedupe.record` is the field `record` of a session id `carry-dedupe`
+# (a project `carry`, slug `dedupe`) and would go with it; its temporary has two dots after its prefix for the same reason,
+# and no leading dot, so it aliases none of ccd's dot-prefixed registry files. One line per run, appended:
+#   <YYYY-MM-DD HH:MM:SS> mode=<shadow|live> rc=<n> uuids=<n> copies=<n> <reclaimable|reclaimed>=<bytes> refused=<n> by=<word:n,…|->
+# where the figures are the verb's own `total:` line (`reclaimable` in shadow, `reclaimed` live) and `by` counts the
+# REFUSED column of its table per word, in the order first seen. A run whose output carries no `total:` line records
+#   <YYYY-MM-DD HH:MM:SS> mode=<shadow|live> rc=<n> unmeasured=no-total
+# and exits non-zero, so the unit's failure is visible too. The record keeps its last RECORD_KEEP lines: it is rewritten
+# to a temporary beside it and renamed over it, so a reader sees the old record or the new one, never part of one.
+#
+# ON MACOS there is no timer (systemd only), so nothing runs this there; run by hand it works the same.
+set -uo pipefail
+
+PROG=ccd-carry-dedupe-sweep
+REG="$HOME/.cc-sessions"
+RECORD="$REG/carry-dedupe-record"
+RECORD_KEEP=400
+CCD="$HOME/.local/bin/ccd"
+_say() { printf '%s: %s\n' "$PROG" "$1" >&2; }
+
+[ -d "$REG" ] || { _say "no session registry at ~/.cc-sessions — no carry to collect, nothing recorded"; exit 0; }
+[ -x "$CCD" ] || { _say "no ccd at ~/.local/bin/ccd — re-run ccrc install; nothing recorded"; exit 1; }
+
+MODE=shadow
+[ -e "$REG/carry-dedupe-live" ] && MODE=live
+args=(carry-dedupe --identical-only)
+[ "$MODE" = live ] && args+=(--apply)
+
+out="$("$CCD" "${args[@]}")"; rc=$?
+
+# The verb's table rows end in the REFUSED column (`-` or a DEDUPE_REFUSALS word); its total line closes the output.
+total=""; by=""; line=""; w=""
+declare -A seen=()
+declare -a order=()
+while IFS= read -r line; do
+  if [[ "$line" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\ .*\ ([a-z][a-z-]*)$ ]]; then
+    w="${BASH_REMATCH[1]}"
+    [ -n "${seen[$w]+x}" ] || order+=("$w")
+    seen[$w]=$(( ${seen[$w]:-0} + 1 ))
+  elif [[ "$line" =~ ^total:\ (0|[1-9][0-9]{0,15})\ uuid\(s\),\ (0|[1-9][0-9]{0,15})\ copies,\ (0|[1-9][0-9]{0,18})\ bytes\ (reclaimable|reclaimed),\ (0|[1-9][0-9]{0,15})\ refused$ ]]; then
+    total="uuids=${BASH_REMATCH[1]} copies=${BASH_REMATCH[2]} ${BASH_REMATCH[4]}=${BASH_REMATCH[3]} refused=${BASH_REMATCH[5]}"
+  fi
+done <<<"$out"
+for w in "${order[@]}"; do by+="${by:+,}$w:${seen[$w]}"; done
+
+stamp="$(printf '%(%Y-%m-%d %H:%M:%S)T' -1)"
+if [ -n "$total" ]; then
+  entry="$stamp mode=$MODE rc=$rc $total by=${by:--}"
+else
+  entry="$stamp mode=$MODE rc=$rc unmeasured=no-total"
+  [ "$rc" -ne 0 ] || rc=1
+fi
+
+tmp="$(mktemp "$REG/carry-dedupe-record.tmp.XXXXXX")" || { _say "cannot write the record beside $RECORD; previous record retained"; exit 1; }
+{ if [ -f "$RECORD" ]; then tail -n "$(( RECORD_KEEP - 1 ))" -- "$RECORD"; fi; printf '%s\n' "$entry"; } > "$tmp" \
+  && mv -f -- "$tmp" "$RECORD" \
+  || { rm -f -- "$tmp"; _say "cannot replace $RECORD; previous record retained"; exit 1; }
+_say "$entry"
+exit "$rc"

@@ -69,6 +69,26 @@
 .pg-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pg-prog { margin-left: auto; display: flex; align-items: center; gap: var(--sp-1); flex: none; }
 .pg-count { white-space: nowrap; }
+/* The waiting chip (desktop-polish PL5b): "N waiting on you", a `Door` to the programme's view. It is NOT tinted and not the
+   hue's text: it states its own ground and ink (`--bg-surface` under `--ink-primary`, the page's own pair), with the hue as its
+   non-text outline, so the audit measures one pair in every palette whatever the programme's hue. Never wider than its words
+   ("99+ waiting on you" is the widest it prints): it does not shrink, and the kicker wraps before it would overflow. A slug the
+   programme view would refuse is told as the same count in a plain span (`.pg-waiting-plain`), not a door: a class worn by a
+   design-system component is worn by nothing else (`hook-class-collision.test.ts`). */
+.pg-waiting,
+.pg-waiting-plain {
+  flex: none;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--pg);
+  border-radius: var(--r-full);
+  background: var(--bg-surface);
+  color: var(--ink-primary);
+  white-space: nowrap;
+}
+/* The Door's 44 px tap floor is for a finger. With a mouse the chip is as tall as its line, so the kicker keeps its height. */
+@media (pointer: fine) {
+  .pg-waiting { min-height: 0; padding-block: 1px; }
+}
 /* The bar is a picture of the count beside it, never the only cue: a non-text rule in the hue. */
 .pg-bar { width: 56px; height: 4px; border-radius: 2px; background: var(--edge-strong); overflow: hidden; }
 .pg-bar > i { display: block; height: 100%; background: currentColor; }

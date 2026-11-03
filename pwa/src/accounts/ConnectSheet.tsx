@@ -22,28 +22,30 @@
 // the result frame. Every deadline reads the attempt's `expiresAt`, the last one the server answered. Cancel is in every
 // frame while the attempt is live. Each terminal state says what did not happen, from a code: the helper's state or a
 // route's word. Offline mid-attempt, the run frame shows only the sentence with the last-known deadline: no URL, no code
-// field, no Send, and no poll. The code lives only in the code field's DOM node and the one request.
+// field, no Send, and no poll. The code lives only in the code field's DOM node and the one request. The attempt itself
+// is `useSignInAttempt`'s (Task A23, D-7871 (2)), which the method switch sheet runs too; this file holds the add, the
+// check, the result and the sentences a new lane's terminal states say.
+//
+// RESUME (Task A23, D-7871 (2); spec §6.2): opened with `resume`, the sheet adopts the attempt the server holds for this
+// session on a lane it added, at the run frame, and the first poll brings back the URL and the code field.
 //
 // ANNOUNCEMENTS (spec §12.4). One live region per sheet: a step change is announced politely (`role="status"`), and a
 // terminal state (refused, outcome unknown, done) as an alert (`role="alert"`). A frame that only re-renders announces
 // nothing: an announcement is written by a transition, never by a render.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { Button, ListRow, Sheet } from '@ccrc/ui';
-import { authCodeShapeOk, type AuthStatusState } from '../../../shared/accounts';
-import type { AccountAddAnswer, AccountAuthStartAnswer, AccountAuthStatusAnswer, AccountsConnect, LaneWire, RosterWire } from '../../../shared/api';
+import { Button, ListRow } from '@ccrc/ui';
+import { AccountSheet, type Announcement } from './AccountSheet';
+import type { AccountAddAnswer, AccountsConnect, LaneWire, RosterWire } from '../../../shared/api';
 import type { ConnectMethod } from '../../../shared/providers';
 import type { Hue } from '../../../shared/roster';
 import { ApiError, api } from '../lib/api';
 import {
   ADD_LANE, ADD_REFUSED, DOOR_META, FRAME_SAID, PICK_ANOTHER_NAME, STEP_UP_AGAIN, PROVIDER_ROWS, DOOR_WORD, LEDGER, NEEDS_APP_UPDATE, OUTCOME_UNKNOWN, TOKEN_CLEARED, TOKEN_FIELD_LABEL,
   READ_AGAIN, addRefusal, configDirFoundText, laneActRefusal, notFoundAfterUnknown, resultDone, stillUnknownAfterUnknown,
-  ADD_AND_SIGN_IN, CANCEL_SIGN_IN, CODE_NOTICE, DISCARD_LANE, DONE, SIGN_IN_END, SIGN_IN_LEDGER, SIGN_OUT_RESTART,
-  STEP_UP_AGAIN_DISCARD, STEP_UP_AGAIN_SIGN_OUT, START_AGAIN, cancelRefused, discardedDone, removeRefusal, removeUnknown,
-  signInFailed, signInOffline, signInStartRefusal, signOutConfirm, signOutRefused, statedRefused, STEP_UP_AGAIN_ADD, KEEP_IT,
-  type SignInEndKind,
+  ADD_AND_SIGN_IN, DISCARD_LANE, DONE, SIGN_IN_LEDGER, SIGN_OUT_RESTART,
+  STEP_UP_AGAIN_DISCARD, STEP_UP_AGAIN_SIGN_OUT, START_AGAIN, discardedDone, removeRefusal, removeUnknown,
+  signOutConfirm, signOutRefused, statedRefused, STEP_UP_AGAIN_ADD, KEEP_IT,
 } from '../fleet/accountWords';
-import { CodeField } from './CodeField';
-import { usePoll } from '../lib/usePoll';
 import { CompromiseSteps } from './CompromiseSteps';
 import { ConfirmItsYou } from './ConfirmItsYou';
 import { CopyCommand } from '../fleet/TroubleCard';
@@ -52,41 +54,24 @@ import { MethodFrame } from './MethodFrame';
 import { NameFrame, type ConfigDirFound } from './NameFrame';
 import { ProviderFrame } from './ProviderFrame';
 import { ResultFrame } from './ResultFrame';
-import { Countdown, RunFrame, UrlCard, type LedgerLine } from './RunFrame';
+import { RunFrame, type LedgerLine } from './RunFrame';
 import { SecretField, type SecretFieldHandle } from './SecretField';
 import { useStepUp, type StepUp, type StepUpDeps } from './useStepUp';
 import {
-  defaultHue, isSignInMethod, methodChoices, providerChoices, readStatus, readStatusRefusal, secretShapeOk, sheetRuns,
-  type DoorProvider, type SignInMethod, type SignInReading,
+  defaultHue, isSignInMethod, methodChoices, providerChoices, secretShapeOk, sheetRuns, type DoorProvider,
 } from './connectFlow';
+import { SignInLive, newLaneEnd, useSignInAttempt, wordOf, type Attempt, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
 import type { ProviderRow } from '../../../shared/providers';
 import '../fleet/fleet.css';
 
 type Frame = 'provider' | 'name' | 'method' | 'run' | 'result';
-type Announcement = { readonly kind: 'status' | 'alert'; readonly text: string };
 
 /** The routes the sheet calls, injectable so a test drives a fake box. */
 export type ConnectClient = Pick<typeof api, 'accountAdd' | 'accountCheck' | 'accountEnable'>;
 /** The sign-in's routes (Task A22), injectable the same way: the attempt, `set {stated}`, the sign-out and discard. */
-export type SignInClient = Pick<typeof api,
-  'accountAuthStart' | 'accountAuthStatus' | 'accountAuthCode' | 'accountAuthCancel' | 'accountSet' | 'accountSignOut' | 'accountRemove'>;
+export type SignInClient = SignInRoutes & Pick<typeof api, 'accountSet' | 'accountSignOut' | 'accountRemove'>;
 
-/** How often an open sheet reads a live attempt's status (spec §6.2 step 5). */
-export const AUTH_POLL_MS = 1500;
-
-/** A live attempt as this sheet holds it: the server's id and deadline (the LAST one it answered), the state the helper
- *  last published, the URL and host the server accepted (kept once seen), and whether its one code went. */
-interface Attempt {
-  readonly attemptId: string;
-  readonly method: SignInMethod;
-  readonly expiresAt: number;
-  readonly state: AuthStatusState | null;
-  readonly url: string | null;
-  readonly host: string | null;
-  readonly codeSent: boolean;
-}
-type RunAct = (act: () => Promise<unknown>) => Promise<'done' | 'step-up'>;
-const plainRun: RunAct = async (act) => { await act(); return 'done'; };
+export { AUTH_POLL_MS } from './useSignInAttempt';
 
 export interface ConnectSheetProps {
   open: boolean;
@@ -105,40 +90,9 @@ export interface ConnectSheetProps {
   stepUpDeps?: StepUpDeps;
   /** The provider table the method radio reads its order from; the real one by default. */
   table?: Readonly<Record<DoorProvider, Pick<ProviderRow, 'connect'>>>;
-}
-
-/** The `error` word an `ApiError` carries, or `undefined` for a request that never completed. */
-function wordOf(err: unknown): string | undefined {
-  if (!(err instanceof ApiError)) return undefined;
-  const b = err.body;
-  const v = typeof b === 'object' && b !== null ? (b as Record<string, unknown>)['error'] : undefined;
-  return typeof v === 'string' ? v : undefined;
-}
-
-/** A refusal's body field when it is a string, or `undefined`. The words file holds it to a plain word before it
- *  prints it (`signInStartRefusal`). */
-function fieldOf(err: unknown, k: string): string | undefined {
-  if (!(err instanceof ApiError)) return undefined;
-  const b = err.body;
-  const v = typeof b === 'object' && b !== null ? (b as Record<string, unknown>)[k] : undefined;
-  return typeof v === 'string' ? v : undefined;
-}
-
-/** The poll of a live attempt and its deadline: mounted only while the attempt is live and the screen is online, so a
- *  closed sheet, an ended attempt or an offline screen reads nothing. */
-function AuthWatch({ id, client, expiresAt, onOutcome, onExpired }: {
-  id: string; client: SignInClient; expiresAt: number;
-  onOutcome: (o: { ok: true; raw: unknown } | { ok: false; err: unknown }) => void;
-  onExpired: () => void;
-}): ReactNode {
-  usePoll({ pollMs: AUTH_POLL_MS, request: () => client.accountAuthStatus(id), onOutcome });
-  const expired = useRef(onExpired);
-  expired.current = onExpired;
-  useEffect(() => {
-    const t = setTimeout(() => expired.current(), Math.max(0, expiresAt - Date.now()));
-    return () => clearTimeout(t);
-  }, [expiresAt]);
-  return null;
+  /** Opened to resume (Task A23, D-7871 (2)): the lane this session added and the attempt the server holds for it. The
+   *  sheet starts at the run frame with that attempt, and starts nothing. */
+  resume?: { readonly id: string; readonly held: HeldAttempt };
 }
 
 /** The step-up for the frame that shows it. Mounted only while that frame is drawn and the screen is online, so the
@@ -156,18 +110,20 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
   const client = props.client ?? api;
   const sc: SignInClient = props.signInClient ?? api;
   const blocked = offline !== null;
+  const resumed = props.resume;
 
-  const [frame, setFrame] = useState<Frame>('provider');
-  const [provider, setProvider] = useState<DoorProvider | null>(null);
-  const [id, setId] = useState('');
+  const [frame, setFrame] = useState<Frame>(resumed !== undefined ? 'run' : 'provider');
+  const [provider, setProvider] = useState<DoorProvider | null>(resumed !== undefined ? 'anthropic' : null);
+  const [id, setId] = useState(resumed?.id ?? '');
   const [label, setLabel] = useState('');
   const [hue, setHue] = useState<Hue>(() => defaultHue(roster));
   const [found, setFound] = useState<ConfigDirFound | null>(null);
   const [adopt, setAdopt] = useState(false);
-  const [picked, setPicked] = useState<ConnectMethod | null>(null);
+  const [picked, setPicked] = useState<ConnectMethod | null>(resumed?.held.method ?? null);
   const [hasSecret, setHasSecret] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [ledger, setLedger] = useState<LedgerLine[]>([]);
+  const [ledger, setLedger] = useState<LedgerLine[]>(() =>
+    (resumed !== undefined ? [{ text: SIGN_IN_LEDGER.waiting, at: Date.now() }] : []));
   const [lane, setLane] = useState<LaneWire | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
   const [on, setOn] = useState(false);
@@ -175,22 +131,11 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
   /** An outcome unknown whose re-read failed too: the run frame holds Read again until a read lands. */
   const [unread, setUnread] = useState(false);
   const [said, setSaid] = useState<Announcement | null>(null);
-  // The sign-in (Task A22). `att` is the live attempt (null once it ended or before it began); `end` the terminal
-  // sentence; `lapsed` a step-up the server refused, so the next gate shows the step whatever the store's stamp says.
-  const [att, setAttState] = useState<Attempt | null>(null);
-  const attRef = useRef<Attempt | null>(null);
-  const putAtt = (a: Attempt | null): void => { attRef.current = a; setAttState(a); };
-  const [end, setEnd] = useState<string | null>(null);
-  const [endNotice, setEndNotice] = useState<string | null>(null);
+  // The sign-in (Task A22): the attempt, its terminal sentence and its step-up are `useSignInAttempt`'s (below).
   const [discarded, setDiscarded] = useState(false);
-  const [lapsed, setLapsed] = useState(false);
-  const [codeKey, setCodeKey] = useState(0);
-  const [codeNotice, setCodeNotice] = useState<string | null>(null);
-  const [cancelling, setCancelling] = useState(false);
   const [wrongOpen, setWrongOpen] = useState(false);
   const [statedBusy, setStatedBusy] = useState(false);
   const [statedNotice, setStatedNotice] = useState<string | null>(null);
-  const codeNoticeId = useId();
   const secret = useRef<SecretFieldHandle>(null);
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
@@ -207,7 +152,8 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
   const settle = (text: string): void => setLedger((l) => [...l.slice(0, -1), { text, at: Date.now() }]);
 
   const choices = provider === null ? null : methodChoices(provider, connect, props.table);
-  const method = picked !== null && choices?.choices.some((c) => c.value === picked && c.narrowed === null)
+  // A resumed attempt's method is the one it runs, whatever the radio would offer now.
+  const method = picked !== null && (resumed !== undefined || choices?.choices.some((c) => c.value === picked && c.narrowed === null))
     ? picked : choices?.selected ?? null;
 
   const check = async (): Promise<void> => {
@@ -240,6 +186,26 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
     alert(refused ?? resultDone(id, false));
   };
 
+  /** The helper says `done`: the lane holds its credential, so the check runs (spec §6.2 step 8) into the result. */
+  const signedIn = async (a: Attempt): Promise<void> => {
+    settle(a.method === 'login' ? SIGN_IN_LEDGER.signedIn : SIGN_IN_LEDGER.minted);
+    setBusy(true);
+    await check();
+    if (live.current) setBusy(false);
+  };
+  const s = useSignInAttempt({
+    id, client: sc, blocked, write, settle, status, alert, endText: newLaneEnd(id),
+    onStart: () => { setWrongOpen(false); setFrame('run'); },
+    onDone: (a) => { void signedIn(a); },
+  });
+  // Resume (D-7871 (2)): the held attempt is adopted once, on the sheet's first mount.
+  const adopted = useRef(false);
+  useEffect(() => {
+    if (adopted.current || resumed === undefined) return;
+    adopted.current = true;
+    s.resume(resumed.held);
+  });
+
   /** The add's answer never came: re-read, and resume where the reconciled roster says. Never a second add. */
   const reconcile = async (): Promise<void> => {
     write(OUTCOME_UNKNOWN);
@@ -266,7 +232,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
     if (readRoster().some((r) => r.id === id)) {
       write(LEDGER.found(id));
       // The lane exists: a sign-in lane resumes at its sign-in (spec §6.2 step 4), a pasted one at its check.
-      if (isSignInMethod(method)) await startSignIn(method); else await check();
+      if (isSignInMethod(method)) await s.start(method); else await check();
       return;
     }
     const text = notFoundAfterUnknown(id);
@@ -320,7 +286,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
       }
       if (got.answer !== null) {
         settle(LEDGER.added(id));
-        if (signIn) await startSignIn(method); else await check();
+        if (signIn) await s.start(method); else await check();
         return;
       }
       const word = wordOf(failure);
@@ -396,164 +362,6 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
 
   // ── The sign-in (Task A22, D-7849) ──────────────────────────────────────────────────────────────────────────────
 
-  /** A terminal state: its sentence replaces the running line, the attempt is forgotten (its poll unmounts), and the
-   *  state is announced as an alert. */
-  const finish = (text: string): void => {
-    putAtt(null);
-    settle(text);
-    setEnd(text);
-    setEndNotice(null);
-    setCodeNotice(null);
-    alert(text);
-  };
-  const endOf = (k: SignInEndKind, failure?: string): string => (k === 'failed' ? signInFailed(failure) : SIGN_IN_END[k](id));
-
-  /** `auth/start` (spec §6.2 step 4), once. `runAct` is a mounted gate's (Start again), which shows the step itself on a
-   *  `step-up-required`; the start right after the add is sent plainly, its step-up just taken. */
-  const startSignIn = async (m: SignInMethod, runAct: RunAct = plainRun): Promise<void> => {
-    putAtt(null);
-    setEnd(null);
-    setEndNotice(null);
-    setCodeNotice(null);
-    setWrongOpen(false);
-    setFrame('run');
-    write(SIGN_IN_LEDGER.starting);
-    status(SIGN_IN_LEDGER.starting);
-    const got: { a: AccountAuthStartAnswer | null } = { a: null };
-    let failure: unknown = null;
-    let outcome: 'done' | 'step-up' = 'done';
-    try {
-      outcome = await runAct(async () => { got.a = await sc.accountAuthStart(id, { method: m }); });
-    } catch (e) {
-      failure = e;
-    }
-    if (!live.current) return;
-    const fresh = (attemptId: string, expiresAt: number): Attempt =>
-      ({ attemptId, method: m, expiresAt, state: null, url: null, host: null, codeSent: false });
-    if (outcome === 'step-up') { setLapsed(true); finish(signInStartRefusal(id, 'step-up-required', undefined)); return; }
-    if (got.a !== null) {
-      setLapsed(false);
-      setCodeKey((k) => k + 1);
-      putAtt(fresh(got.a.attemptId, got.a.expiresAt));
-      return;
-    }
-    const word = wordOf(failure);
-    const body = failure instanceof ApiError && typeof failure.body === 'object' && failure.body !== null
-      ? failure.body as Record<string, unknown> : {};
-    // The box may have started it: the server kept the attempt and answered its id, so the sheet polls it (D-7793 (2)).
-    const { attemptId: keptId, expiresAt: keptUntil } = body;
-    if (word === 'outcome-unknown' && typeof keptId === 'string' && typeof keptUntil === 'number') {
-      settle(SIGN_IN_LEDGER.startUnknown);
-      status(SIGN_IN_LEDGER.startUnknown);
-      setCodeKey((k) => k + 1);
-      putAtt(fresh(keptId, keptUntil));
-      return;
-    }
-    if (word === undefined || word === 'outcome-unknown') { finish(SIGN_IN_END.unknown(id)); return; }
-    if (word === 'step-up-required') setLapsed(true);
-    finish(signInStartRefusal(id, word, fieldOf(failure, 'reason')));
-  };
-
-  /** The helper says `done`: the lane holds its credential, so the check runs (spec §6.2 step 8) into the result. */
-  const signedIn = async (a: Attempt): Promise<void> => {
-    putAtt(null);
-    settle(a.method === 'login' ? SIGN_IN_LEDGER.signedIn : SIGN_IN_LEDGER.minted);
-    setBusy(true);
-    await check();
-    if (live.current) setBusy(false);
-  };
-
-  /** One reading of the attempt: still live (the ledger and the cards follow the state), done, or ended. */
-  const apply = (a: Attempt, r: SignInReading, next: Attempt): void => {
-    if (r.kind === 'done') { void signedIn(next); return; }
-    if (r.kind === 'end') { finish(endOf(r.end, r.failure)); return; }
-    const before = a.url !== null;
-    putAtt(next);
-    // The URL arrived: the sheet now waits on the operator (the amber pulse), and says so once.
-    if (!before && next.url !== null && !next.codeSent) {
-      settle(SIGN_IN_LEDGER.waiting);
-      status(SIGN_IN_LEDGER.waiting);
-    }
-  };
-
-  const onStatus = (o: { ok: true; raw: unknown } | { ok: false; err: unknown }): void => {
-    const a = attRef.current;
-    if (a === null || !live.current) return;
-    if (!o.ok) {
-      const r = readStatusRefusal(wordOf(o.err), Date.now(), a.expiresAt);
-      if (r !== null) apply(a, r, a);
-      return;
-    }
-    const ans = o.raw as AccountAuthStatusAnswer;
-    if (typeof ans !== 'object' || ans === null || typeof ans.state !== 'string') return;
-    const url = typeof ans.url === 'string' && typeof ans.host === 'string' ? ans.url : a.url;
-    const host = typeof ans.url === 'string' && typeof ans.host === 'string' ? ans.host : a.host;
-    const next: Attempt = {
-      ...a, state: ans.state, url, host, expiresAt: typeof ans.expiresAt === 'number' ? ans.expiresAt : a.expiresAt,
-    };
-    apply(a, readStatus(ans.state, a.codeSent, typeof ans.failure === 'string' ? ans.failure : undefined), next);
-  };
-
-  /** The deadline passed with the attempt still live (spec §6.2's Expired, at `expiresAt`). */
-  const onExpired = (): void => {
-    const a = attRef.current;
-    if (a !== null && Date.now() >= a.expiresAt) finish(SIGN_IN_END.expired(id));
-  };
-
-  /**
-   * Send code (spec §3.7): the one code, once. A code off its method's shape is never sent. The attempt's own `codeSent`
-   * is the latch: the field's is only for one mount, and a remount (offline and back, the sheet closed and reopened) must
-   * not offer a second send.
-   */
-  const sendCode = async (code: string): Promise<void> => {
-    const a = attRef.current;
-    if (a === null || blocked || a.codeSent) return;
-    if (!authCodeShapeOk(code, a.method)) {
-      setCodeNotice(CODE_NOTICE.shape);
-      setCodeKey((k) => k + 1);
-      return;
-    }
-    putAtt({ ...a, codeSent: true });
-    setCodeNotice(null);
-    settle(SIGN_IN_LEDGER.exchanging);
-    status(SIGN_IN_LEDGER.exchanging);
-    try {
-      await sc.accountAuthCode(id, { attemptId: a.attemptId, code });
-    } catch (e) {
-      if (!live.current || attRef.current === null) return;
-      const word = wordOf(e);
-      // It went, or may have: a second code would be refused, so none is offered and the poll says what happened.
-      if (word === undefined || word === 'outcome-unknown') { setCodeNotice(CODE_NOTICE.unknown); return; }
-      if (word === 'code-already-sent') return;
-      if (word === 'node-changed') { finish(SIGN_IN_END['node-changed'](id)); return; }
-      if (word === 'no-auth-attempt') { finish(endOf(Date.now() >= a.expiresAt ? 'expired' : 'lost')); return; }
-      // Nothing was sent: a fresh field for the next paste.
-      putAtt({ ...attRef.current, codeSent: false });
-      settle(SIGN_IN_LEDGER.waiting);
-      setCodeNotice(word === 'bad-code' ? CODE_NOTICE.shape : word === 'not-your-attempt' ? CODE_NOTICE.notYours
-        : word === 'unmeasured' ? CODE_NOTICE.unmeasured : CODE_NOTICE.refused(word));
-      setCodeKey((k) => k + 1);
-    }
-  };
-
-  /** Cancel (spec §6.2): present while the attempt is live. A cancel the box could not carry out leaves it standing. */
-  const cancel = async (): Promise<void> => {
-    const a = attRef.current;
-    if (a === null || blocked || cancelling) return;
-    setCancelling(true);
-    try {
-      await sc.accountAuthCancel(id, { attemptId: a.attemptId });
-      if (live.current) finish(SIGN_IN_END.cancelled(id));
-    } catch (e) {
-      if (!live.current) return;
-      const word = wordOf(e);
-      if (word === 'no-auth-attempt') finish(endOf(Date.now() >= a.expiresAt ? 'expired' : 'lost'));
-      else setCodeNotice(cancelRefused(word));
-    } finally {
-      if (live.current) setCancelling(false);
-    }
-  };
-
   /** Discard this lane (spec §6.2): one tap with step-up, from a terminal state, for the lane this sheet added. */
   const discard = async (stepUp: StepUp): Promise<void> => {
     if (blocked || busy) return;
@@ -566,15 +374,15 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
       failure = e;
     }
     if (!live.current) return;
-    if (outcome === 'step-up') setEndNotice(STEP_UP_AGAIN_DISCARD);
+    if (outcome === 'step-up') s.setEndNotice(STEP_UP_AGAIN_DISCARD);
     else if (failure === null) {
       write(discardedDone(id));
       setDiscarded(true);
-      setEndNotice(null);
+      s.setEndNotice(null);
       alert(discardedDone(id));
     } else {
       const text = removeRefusal(id, wordOf(failure)) ?? removeUnknown(id);
-      setEndNotice(text);
+      s.setEndNotice(text);
       alert(text);
     }
     await refresh();
@@ -608,7 +416,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
       setOn(false);
       setNotice(null);
       write(SIGN_IN_LEDGER.signedOut(id, removed));
-      await startSignIn(method, stepUp.runAct);
+      await s.start(method, stepUp.runAct);
     } finally {
       if (live.current) setBusy(false);
     }
@@ -631,7 +439,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
     }
   };
 
-  const freshUntil = lapsed ? null : connect?.stepUpFreshUntil ?? null;
+  const freshUntil = s.lapsed ? null : connect?.stepUpFreshUntil ?? null;
   const runs = provider !== null && method !== null && sheetRuns(provider, method);
 
   const back: FootAct = { label: 'Back', onClick: () => { setFrame('name'); setNotice(null); status(FRAME_SAID.name); } };
@@ -689,36 +497,16 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
       );
       break;
     case 'run':
-      if (att !== null && isSignInMethod(method)) {
-        // A live attempt (spec §6.2 steps 4–7). Offline: the sentence with the last-known deadline, and nothing to act on
-        // but a Cancel the screen refuses.
-        const waiting = att.url !== null && !att.codeSent;
-        body = (
-          <RunFrame lines={ledger} live waiting={waiting && !blocked}>
-            {!blocked && <AuthWatch id={id} client={sc} expiresAt={att.expiresAt} onOutcome={onStatus} onExpired={onExpired} />}
-            {blocked ? (
-              <p className="acct-offline" data-sign-in-offline="true">{signInOffline(att.expiresAt)}</p>
-            ) : (
-              <>
-                {att.url !== null && att.host !== null && !att.codeSent && <UrlCard url={att.url} host={att.host} method={att.method} />}
-                {att.url !== null && (
-                  <CodeField key={codeKey} onSend={(c) => { void sendCode(c); }} disabled={att.codeSent}
-                    describedBy={codeNotice !== null ? codeNoticeId : undefined} />
-                )}
-                {codeNotice !== null && <p className="acct-notice" id={codeNoticeId}>{codeNotice}</p>}
-                <Countdown expiresAt={att.expiresAt} waiting={waiting} />
-              </>
-            )}
-            <FrameFoot quiet={[{ label: CANCEL_SIGN_IN, onClick: () => { void cancel(); }, disabled: blocked || cancelling }]} />
-          </RunFrame>
-        );
+      if (s.att !== null && isSignInMethod(method)) {
+        // A live attempt (spec §6.2 steps 4–7): `SignInLive`, the switch sheet's too.
+        body = <SignInLive s={s} att={s.att} id={id} client={sc} blocked={blocked} ledger={ledger} />;
         break;
       }
-      if (end !== null && isSignInMethod(method)) {
+      if (s.end !== null && isSignInMethod(method)) {
         // A terminal state of the sign-in (spec §6.2): what did not happen, then Start again or Discard this lane.
         body = (
           <RunFrame lines={ledger} live={busy}>
-            {endNotice !== null && <p className="acct-notice">{endNotice}</p>}
+            {s.endNotice !== null && <p className="acct-notice">{s.endNotice}</p>}
             {discarded ? (
               <FrameFoot primary={{ label: DONE, onClick: onClose }} />
             ) : !blocked ? (
@@ -728,7 +516,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
                     <ConfirmItsYou stepUp={stepUp} subject="the fleet's accounts" />
                     <FrameFoot
                       quiet={[{ label: DISCARD_LANE, onClick: () => { void discard(stepUp); }, disabled: busy || stepUp.needed }]}
-                      primary={{ label: START_AGAIN, onClick: () => { void startSignIn(method, stepUp.runAct); }, disabled: busy || stepUp.needed, busy }}
+                      primary={{ label: START_AGAIN, onClick: () => { void s.start(method, stepUp.runAct); }, disabled: busy || stepUp.needed, busy }}
                     />
                   </>
                 )}
@@ -796,17 +584,12 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
   }
 
   return (
-    <Sheet open={open} onClose={onClose} title="Add account" eyebrow={provider === null ? undefined : PROVIDER_ROWS[provider].name} size="md">
-      <div className="acct-connect" data-frame={frame}>
-        {/* One live region per sheet (spec §12.4): a step change is polite, a terminal state an alert. */}
-        <div className="sr-only">
-          <p role="status" data-testid="connect-status">{said?.kind === 'status' ? said.text : ''}</p>
-          <p role="alert" data-testid="connect-alert">{said?.kind === 'alert' ? said.text : ''}</p>
-        </div>
-        {offline !== null && <p className="acct-offline">{offline}</p>}
-        {body}
-      </div>
-    </Sheet>
+    <AccountSheet
+      open={open} onClose={onClose} title="Add account" eyebrow={provider === null ? undefined : PROVIDER_ROWS[provider].name}
+      frame={frame} said={said} offline={offline} testIds="connect"
+    >
+      {body}
+    </AccountSheet>
   );
 }
 

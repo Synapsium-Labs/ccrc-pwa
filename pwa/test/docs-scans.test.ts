@@ -354,7 +354,9 @@ function readerScan(base: string): { files: string[]; hits: ReaderHit[]; uses: s
   return { files, hits: found.flatMap((f) => f.hits), uses: found.flatMap((f) => f.uses) };
 }
 
-describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', () => {
+// Each planted case copies and re-scans the whole of pwa/src (the ReaderFrame case three times); on a loaded merge-queue
+// runner that has passed vitest's 5 s default, so the clause gives its cases 30 s, as clause W5h-a's do.
+describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', { timeout: 30_000 }, () => {
   const copies: string[] = [];
   afterAll(() => {
     for (const dir of copies) rmSync(dir, { recursive: true, force: true });
@@ -928,7 +930,8 @@ function shareDoorScan(base: string): { files: string[]; uses: string[] } {
   return { files, uses: uses.map((u) => `${u.file} ${u.door}`) };
 }
 
-describe('clause W5 Share: one share door, and one clipboard writer under pwa/src/docs (M4.SH7; M4.T7 Share clause)', () => {
+// Its planted cases copy the whole of pwa/src too, so it takes the same 30 s bound.
+describe('clause W5 Share: one share door, and one clipboard writer under pwa/src/docs (M4.SH7; M4.T7 Share clause)', { timeout: 30_000 }, () => {
   const copies: string[] = [];
   afterAll(() => {
     for (const dir of copies) rmSync(dir, { recursive: true, force: true });
