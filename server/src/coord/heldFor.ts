@@ -27,6 +27,7 @@ import { childBirthOf } from './childSpent.js';
 import { bindingOf, boundRunsOf, hasOwnerlessUndecidedOpen, incarnationOf, type Incarnation } from './runBinding.js';
 import { claimantMeasuredDead, measureClaimant, type ReclaimDeps } from './reclaim.js';
 import type { SessionBindings } from './bindingReads.js';
+import type { WatcherCoordPort } from './ports.js';
 
 export type HeldFor =
   | { readonly kind: 'not-a-child' }
@@ -39,7 +40,7 @@ export type HeldFor =
  *  open run whose stored wave this build cannot represent still fails the hold closed, as it did before the count moved
  *  onto the series. */
 function openBindingCount(
-  coord: ReclaimDeps['coord'], childId: string, incarnation: Incarnation, series: ReturnType<SessionBindings['parent']>['series'],
+  coord: WatcherCoordPort, childId: string, incarnation: Incarnation, series: ReturnType<SessionBindings['parent']>['series'],
 ): number {
   const sib = coord.bindingsOf(childId).worker({ incarnation });
   if (!sib.ok) throw new Error(`heldFor: ${sib.detail}`);
@@ -47,8 +48,8 @@ function openBindingCount(
 }
 
 export async function heldFor(
-  deps: ReclaimDeps, childId: string, mark: ChildMark, recs: readonly Pick<SessionRecord, 'id' | 'archivedAt' | 'stopped'>[],
-  nowMs: number,
+  deps: Omit<ReclaimDeps, 'coord'> & { coord: WatcherCoordPort }, childId: string, mark: ChildMark,
+  recs: readonly Pick<SessionRecord, 'id' | 'archivedAt' | 'stopped'>[], nowMs: number,
 ): Promise<HeldFor> {
   const notAChild = { kind: 'not-a-child' } as const;
   if (mark.kind !== 'child') return notAChild;

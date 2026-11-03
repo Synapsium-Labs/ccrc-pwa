@@ -339,18 +339,23 @@ export const SETTINGS_CARDS = {
     },
     // Box token's purpose line names the rotation interval, so it is built beside the card from the interval
     // constant (`SecuritySection.tsx`'s `BOX_TOKEN_TEXT.purpose`); only its scope is here.
-    // The Linear card (named workspaces S4b) follows Box token: the key is a credential this box holds, so its scope
-    // is the box's, and it sits after the reserved "Recent account changes" slot and Box token so adding it moves
-    // neither. Its body, the state sentences and the controls are `LinearSection.tsx`'s.
+    // The Linear card (named workspaces S4b; one key per workspace since #1444, spec §10.2) follows Box token: the keys
+    // are credentials this box holds, so its scope is the box's, and it sits after the reserved "Recent account
+    // changes" slot and Box token so adding it moves neither. Its body, the state sentences and the controls are
+    // `LinearSection.tsx`'s.
     linear: {
       scope: SETTINGS_SCOPE.box, title: 'Linear',
-      purpose: 'Connect Linear so a ticket you paste into a new session shows its real title. Without it the title is read from what you paste.',
+      purpose: 'Linear keys let every session on this fleet read and write Linear through ccrc, and show real ticket titles. Add one key for each Linear workspace. Sessions never see a key.',
     },
   },
 } as const satisfies Record<SettingsSectionId, Record<string, SettingsCardText>>;
 
 /** Box token's head without its purpose line (above). */
 export const BOX_TOKEN_CARD = { scope: SETTINGS_SCOPE.box, title: 'Box token' } as const;
+
+/** The Linear card's note under its Add a workspace field (#1444, spec §10.2): the read-access note the one-key card's
+ *  not-connected sentence carried, now about what a session may do with a key. */
+export const LINEAR_READ_ONLY_NOTE = 'A read-only key lets sessions read but not write.';
 
 /** The sign-in gate card's words per state, and the banner every Settings page shows while the gate is off and the
  *  page was reached from another machine (spec §5.5). The gate has no control here: it is set on the server (§1.4). */

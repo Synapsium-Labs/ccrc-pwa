@@ -805,6 +805,29 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(existsSync(join(home, 'elsewhere', 'proj-c', 'enabled')), 'a symlinked project directory was followed').toBe(true);
   });
 
+  it('~/.cc-sessions: the lander mirror goes with enabled, under the same rules (landing order wave 5d)', () => {
+    const home = mkTmp('ccrc-uninst-lander-');
+    plantInstalledBox(home);
+    const land = join(home, '.cc-sessions', 'landing');
+    const keep = (rel: string): string => join(land, rel);
+    for (const d of ['proj-a', 'proj-a/sub', 'proj-b']) mkdirSync(keep(d), { recursive: true });
+    writeFileSync(keep('proj-a/lander'), '{"v":1,"project":"proj-a","lander":"coordinator","at":"2026-10-31T09:00:00Z"}\n');
+    writeFileSync(keep('proj-a/enabled'), '{"v":1}\n');
+    writeFileSync(keep('proj-a/probe'), '{"v":1}\n');
+    writeFileSync(keep('proj-a/sub/lander'), 'deeper\n');
+    mkdirSync(join(home, 'elsewhere'), { recursive: true });
+    writeFileSync(join(home, 'elsewhere', 'target'), 'not ours\n');
+    symlinkSync(join(home, 'elsewhere', 'target'), keep('proj-b/lander'));
+    writeFileSync(keep('lander'), 'stray\n');
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(keep('proj-a/lander')), 'the lander mirror survived').toBe(false);
+    expect(existsSync(keep('proj-a/enabled'))).toBe(false);
+    for (const rel of ['proj-a/probe', 'proj-a/sub/lander', 'lander']) expect(existsSync(keep(rel)), rel).toBe(true);
+    expect(lstatSync(keep('proj-b/lander')).isSymbolicLink()).toBe(true);
+    expect(readFileSync(join(home, 'elsewhere', 'target'), 'utf8')).toBe('not ours\n');
+  });
+
   it('~/.cc-sessions: a landing directory that is itself a symlink is not followed (landing order wave 3b)', () => {
     const home = mkTmp('ccrc-uninst-landing-link-');
     plantInstalledBox(home);

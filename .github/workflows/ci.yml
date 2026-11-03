@@ -33,8 +33,10 @@
 #                       bypass actor's direct merge (`gh pr merge --admin`):
 #                       the required checks it needs are the fast run's, so it
 #                       lands only what that run tested (README, "CI").
-#   push to main        the macOS legs only, in macos.yml (operator ruling
-#                       2026-10-28): off the merge path, coalesced, advisory.
+#   push to main        nothing: no ci.yml run, and since 2026-11-02 no macOS
+#                       run either (macos.yml); the daily run below is where
+#                       the macOS legs run, off the merge path (operator
+#                       rulings 2026-10-28 and 2026-11-02).
 #   schedule (3-hourly) refresh  — re-trace the tests every merge since the
 #                       last refresh affected and update the map. No test legs.
 #                       Not a push trigger: a refresh per merge held 8-15 runner
@@ -430,8 +432,8 @@ jobs:
         # pinned equal to `engines.node` by ci-pipeline.test.ts.
         node: ['22', '22.16.0']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -1134,8 +1136,8 @@ jobs:
         run: npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6007
 
   # THE macOS LEGS live in macos.yml (operator ruling 2026-10-28): off the merge
-  # path, on every push to main there, and called from here on the daily,
-  # dispatched and called full runs. `macos` runs the test-macos shards on
+  # path, never on a push to main (2026-11-02), and called from here on the daily
+  # (their nightly run), dispatched and called full runs. `macos` runs the test-macos shards on
   # select's matrix, and `full-suite` needs it (design 2026-09-23 ruling 6);
   # `macos-probe` runs probe-macos on the daily run only, and nothing needs it.
   # Never on a pull request or a merge-queue run.
