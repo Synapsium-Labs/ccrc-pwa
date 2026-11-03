@@ -4,11 +4,18 @@
 // method switch sheet (A23) list them the same way, so the list and its restarts live here once.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, RESET_LIST } from '@ccrc/ui';
-import type { FleetSession } from '../../../shared/api';
+import { isArchivedRow, type FleetSession } from '../../../shared/api';
 import { RESTART, RESTARTED, RESTART_FAILED } from '../fleet/accountWords';
+import { presenceOf } from '../fleet/presence';
 import { sessionLabel } from '../fleet/sessionLabel';
 
 export type RestartState = 'busy' | 'done' | 'failed';
+
+/** The sessions to list: those the server reads alive on lane `id` (`presenceOf`, D-7181), not archived. A sleeper holds
+ *  no credential in a running process, and wakes onto the new one. */
+export function restartableOn(sessions: readonly FleetSession[], id: string): string[] {
+  return sessions.filter((s) => s.wrapper === id && !isArchivedRow(s) && presenceOf(s) === 'alive').map((s) => s.id);
+}
 
 /** Each listed session's restart, and the act: stop, then ensure; a second tap while one runs, or after it is done,
  *  sends nothing. */

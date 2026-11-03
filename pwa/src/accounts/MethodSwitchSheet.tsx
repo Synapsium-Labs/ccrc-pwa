@@ -19,7 +19,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, TextLink } from '@ccrc/ui';
 import { AccountSheet, type Announcement } from './AccountSheet';
-import { isArchivedRow, type AccountsConnect, type LaneWire, type RosterWire } from '../../../shared/api';
+import type { AccountsConnect, LaneWire, RosterWire } from '../../../shared/api';
 import type { AccountStateWord } from '../../../shared/accounts';
 import { api } from '../lib/api';
 import { openExternal } from '../lib/markdown';
@@ -32,11 +32,10 @@ import {
   revokeOldTail, signOldOutDanger, signOldOutRefused, statedRefused, switchEnd, switchIntro, switchLedger,
   switchRestartLead, switchTitle,
 } from '../fleet/accountWords';
-import { presenceOf } from '../fleet/presence';
 import { CompromiseSteps } from './CompromiseSteps';
 import { GuardedAct, RevokeItem } from './RemoveSheet';
 import { StatedField } from './ResultFrame';
-import { RestartList, useRestarts } from './RestartList';
+import { RestartList, restartableOn, useRestarts } from './RestartList';
 import { RunFrame, type LedgerLine } from './RunFrame';
 import type { SignInMethod } from './connectFlow';
 import { SignInLive, useSignInAttempt, wordOf, type Attempt, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
@@ -104,8 +103,7 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
   const settle = (text: string): void => setLedger((l) => [...l.slice(0, -1), { text, at: Date.now() }]);
   const status = (text: string): void => setSaid({ kind: 'status', text });
   const alert = (text: string): void => setSaid({ kind: 'alert', text });
-  const liveOn = (): string[] =>
-    sessions.filter((s) => s.wrapper === id && !isArchivedRow(s) && presenceOf(s) === 'alive').map((s) => s.id);
+  const liveOn = (): string[] => restartableOn(sessions, id);
 
   /** The helper's `done`: the box has switched the lane (only a passing probe reaches it, A20). Then a fresh check. */
   const switched = async (a: Attempt): Promise<void> => {
@@ -138,10 +136,11 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
     onStart: () => setPhase('run'),
     onDone: (a) => { void switched(a); },
   });
-  const adopted = useRef(false);
+  // Resume (D-7871 (2)): the held attempt is taken up once, on the sheet's first mount.
+  const resumedOnce = useRef(false);
   useEffect(() => {
-    if (adopted.current || props.resume === undefined) return;
-    adopted.current = true;
+    if (resumedOnce.current || props.resume === undefined) return;
+    resumedOnce.current = true;
     s.resume(props.resume);
   });
 
@@ -206,7 +205,7 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
   } else if (phase === 'run' && s.att !== null) {
     body = <SignInLive s={s} att={s.att} id={id} client={client} blocked={offline} ledger={ledger} />;
   } else if (phase === 'run' && s.end === null) {
-    // The start is in flight, or a resumed attempt is being adopted.
+    // The start is in flight, or a resumed attempt is being taken up.
     body = <RunFrame lines={ledger} live />;
   } else if (phase === 'run') {
     // A terminal state: what did not happen, then Start again (behind the step-up) or Close.

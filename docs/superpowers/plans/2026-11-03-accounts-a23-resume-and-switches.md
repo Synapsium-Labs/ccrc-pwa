@@ -45,6 +45,8 @@
   - `server/test/account-routes-auth.test.ts`: the starting session alone is told the id and method.
   - `pwa/test/sign-in-sheet.test.tsx`: its no-duration source scan now covers the new files.
   - `pwa/test/fleet-pieces.test.tsx`: its banner-module scan now reads `accounts/` too.
+  - `server/test/hibernate-census.test.ts`: the presence reader that lists a lane's sessions for Restart is now `RestartList.tsx`, which both sheets call, and no longer `ReplaceSheet.tsx`.
+  - `server/test/collect-lane-l0.test.ts` and `server/test/peers-claims-l0.test.ts`: their pin of `shared/api.ts`'s import lines now reads the `accounts.js` type import with `AuthMethod`. It is still one type-only line.
 - Unchanged and green:
   - `pwa/test/sign-in-sheet.test.tsx`, `connect-sheet.test.tsx` and `replace-token.test.tsx` all pass over the moved code.
   - `pwa/browser/sign-in-sheet.browser.test.ts` and `connect-sheet.browser.test.ts`.
@@ -96,7 +98,7 @@ Each ✓ checks these things:
      - **On a phone's other views**, at the top of the detail pane (`AuthResumeInDetail`, mounted by `app.tsx`). The stack holds none there, so the fleet column that the phone hides holds no second copy (`useResumeInStack`, which reads `shellViewOf`, the view `app.tsx` now reads too).
      A phone's session view is one viewport tall, so while the banner shows, the detail pane becomes that viewport's column and the chat takes the rest at the column's full width. Step 4 measured a 19px sideways scroll at 360 before the width was set. The minutes are read from `expiresAt`, rounded up, on a 15 s clock, and the banner leaves at the deadline. Continue opens `/accounts?resume=<id>`, which opens its sheet once per value, as soon as the store's answer holds the attempt, and the query is dropped when that sheet closes. The card's line ("A sign-in is waiting for its code" with Continue and Cancel) shows for the same attempts: this session's, in `waiting-code`. A sheet closed on the Accounts screen re-reads the accounts answer, so the banner appears without waiting for the 20 s poll.
   4. **Shared pieces, written once.**
-     - The lane's sessions with Restart (`RestartList`, `useRestarts`) moved out of the replace sheet. A19's tests pin it unchanged.
+     - The lane's sessions with Restart (`RestartList`, `useRestarts`, and `restartableOn`, the one presence read that lists them) moved out of the replace sheet. A19's tests pin it unchanged.
      - The account sheets' shell (`AccountSheet`) is shared because the markup census reads the two sheets' identical shells as a component nobody wrote.
      - `StatedField` is exported with a default text.
      - `GuardedAct` takes a `ghost` variant, for the plain sign-out.

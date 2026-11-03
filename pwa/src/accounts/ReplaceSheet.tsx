@@ -15,7 +15,7 @@
 // marked revoked". The compromise disclosure closes the sheet (spec §3.11).
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, Sheet, TextLink } from '@ccrc/ui';
-import { isArchivedRow, type AccountsConnect, type RosterWire } from '../../../shared/api';
+import type { AccountsConnect, RosterWire } from '../../../shared/api';
 import { api } from '../lib/api';
 import { openExternal } from '../lib/markdown';
 import { ensureSession } from '../session/useEnsure';
@@ -25,9 +25,8 @@ import {
   TOKEN_CLEARED_REPLACE, addRefusal, laneActRefusal, replaceIntro, replaceLedger, replaceRefusal, replaceUnknown,
   restartLead, revokeOldLead, revokeOldTail,
 } from '../fleet/accountWords';
-import { presenceOf } from '../fleet/presence';
 import { CompromiseSteps } from './CompromiseSteps';
-import { RestartList, useRestarts } from './RestartList';
+import { RestartList, restartableOn, useRestarts } from './RestartList';
 import { GuardedAct, RevokeItem, refusalWordOf } from './RemoveSheet';
 import { RunFrame, type LedgerLine } from './RunFrame';
 import { SecretField, type SecretFieldHandle } from './SecretField';
@@ -82,8 +81,7 @@ export function ReplaceSheet(props: ReplaceSheetProps): ReactNode {
 
   const write = (text: string): void => setLedger((l) => [...l, { text, at: Date.now() }]);
   const settle = (text: string): void => setLedger((l) => [...l.slice(0, -1), { text, at: Date.now() }]);
-  const liveOn = (): string[] =>
-    sessions.filter((s) => s.wrapper === id && !isArchivedRow(s) && presenceOf(s) === 'alive').map((s) => s.id);
+  const liveOn = (): string[] => restartableOn(sessions, id);
 
   const check = async (): Promise<void> => {
     setChecking(true);
