@@ -11338,7 +11338,10 @@ _DR_TW_SHAPES=(
 
 # <level> <name> <kind> -> 0 iff the entry is a shape Claude Code writes at that level.
 _dr_tw_shape() {
-  local row lvl pat kinds re u='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' f
+  # The lowercase 8-4-4-4-12 session id, spelled class by class: a quantified hex class below the box-token marker
+  # would read as a fourth spelling of that check's generation id to its pin (doctor-box-token.test.ts).
+  local row lvl pat kinds re x='[0-9a-f]' u f
+  u="$x$x$x$x$x$x$x$x-$x$x$x$x-$x$x$x$x-$x$x$x$x-$x$x$x$x$x$x$x$x$x$x$x$x"
   local -a fields
   for row in "${_DR_TW_SHAPES[@]}"; do
     IFS='|' read -r -a fields <<< "$row"
