@@ -25,7 +25,7 @@ import { FleetChromeProvider } from './fleet/FleetChrome';
 import { FleetFlows, useFleetFlows } from './fleet/FleetFlows';
 import { useAuthLost } from './lib/auth';
 import { navigate, useLocation } from './lib/router';
-import { matchRoute, sessionPath, shellViewOf } from './lib/routes';
+import { isProgrammeSlug, matchRoute, sessionPath, shellViewOf } from './lib/routes';
 import { useSkin } from './lib/skin';
 import { AuthResumeInDetail } from './accounts/AuthResumeBanner';
 import { AccountsScreen } from './screens/AccountsScreen';
@@ -38,6 +38,7 @@ import { RunsScreen } from './screens/RunsScreen';
 import { SessionScreen } from './screens/SessionScreen';
 import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
 import { SettingsScreen } from './screens/settings/SettingsFrame';
+import { ProgrammeScreen } from './ledgers/ProgrammeScreen';
 import { ItemRouteAt, WaitingRoute } from './ledgers/WaitingRoutes';
 import { ShellFrame } from './skins/frame';
 import { SKIN_SETS } from './skins';
@@ -168,6 +169,10 @@ export function App(): ReactNode {
     <WaitingRoute />
   ) : route === 'item' ? (
     <ItemRouteAt param={at!.param} />
+  ) : route === 'programme' && isProgrammeSlug(at!.param!) ? (
+    // Keyed by the slug: one programme's Goals read never shows under another's name. A slug the server would refuse
+    // (`shapeProgramSlug`) falls to the placeholder below, as an unknown path does.
+    <ProgrammeScreen key={at!.param} slug={at!.param!} />
   ) : (
     <div className="shell-placeholder">
       <p className="shell-placeholder-mark" aria-hidden="true">
