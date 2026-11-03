@@ -609,7 +609,7 @@ symbol. The line numbers below are from `408d93806`: use them to find each place
   keeps some token-only userinfo whole).
 - **The write.** A failed `--write` exits 1, so the timer unit reads failed and doctor can name it; a run that answered
   exits 0. SIGTERM runs the EXIT chain, which removes the temp file; pinned.
-- **macOS.** `du -sb` is GNU, so backups read `unmeasured` there; the timer is Linux only (spec D6).
+- **macOS.** The backups size goes through `_plat_bytes` (the platform shim), so macOS measures apparent bytes too; the timer is Linux only (spec D6).
 - **deploy.sh.** It does not place the watchdog's pair, so the settings pair joins `DEPLOY_SH_WITHHOLDS.units` with its own
   reason. `TimeoutStartSec=120` on the service: the verb's `du` and `df` are bounded at 20 s and 10 s.
 - **Census C4.** No row was needed: `cmd_settings` dispatches by a literal `case`, and the variable-key list is still its two

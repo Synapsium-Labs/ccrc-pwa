@@ -26068,11 +26068,14 @@ _set_json() {
   s="${s//"$bs"/"$bs$bs"}"; s="${s//"$q"/"$bs$q"}"
   printf '"%s"' "$s"
 }
-# `_set_du <dir>` — the bytes under <dir>, `du -sb` under the box's deadline and at the lowest priority; rc 1 when it could not say.
+# `_set_du <dir>` — the apparent bytes under <dir>, from the platform block's `_plat_bytes` (GNU `du -sb` on Linux, find and awk on macOS,
+# where BSD `du` has no `-b`), under the box's 20 s deadline and at the lowest priority; rc 1 when it could not say. `_plat_timeout`
+# runs a program and never a shell function, so the deadline wraps a child bash that carries the two shim functions (`declare -f`) and
+# the platform word, with the file's `pipefail`, which `_plat_bytes` relies on for an honest status.
 _set_du() {
-  local out
-  if command -v nice >/dev/null 2>&1; then out="$(_plat_timeout 20 nice -n 19 du -sb -- "$1" 2>/dev/null)" || return 1
-  else out="$(_plat_timeout 20 du -sb -- "$1" 2>/dev/null)" || return 1; fi
+  local out nicer=()
+  command -v nice >/dev/null 2>&1 && nicer=(nice -n 19)
+  out="$(_plat_timeout 20 ${nicer[@]+"${nicer[@]}"} "$BASH" -c "set -o pipefail; CCD_OS=$CCD_OS; $(declare -f _plat_mktemp _plat_bytes); _plat_bytes \"\$1\"" _ "$1" 2>/dev/null)" || return 1
   out="${out%%[[:space:]]*}"
   [[ "$out" =~ ^[0-9]{1,15}$ ]] || return 1
   printf '%s' "$out"

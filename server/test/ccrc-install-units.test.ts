@@ -1035,9 +1035,10 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(timer.filter((l) => l.startsWith('WantedBy=')), 'WantedBy').toEqual(['WantedBy=timers.target']);
     const every = timer.filter((l) => l.startsWith('OnUnitActiveSec='));
     expect(every, 'one OnUnitActiveSec line').toHaveLength(1);
-    const m = /^OnUnitActiveSec=(\d+)s$/.exec(every[0]!);
+    // Spelled as the other timers spell a period (`5min`, census-w8's convergent spellings), read in seconds here.
+    const m = /^OnUnitActiveSec=(\d+)(s|min|h)$/.exec(every[0]!);
     expect(m, every[0]).not.toBeNull();
-    expect(Number(m![1])).toBe(BOX_SETTINGS_TIMER_S);
+    expect(Number(m![1]) * { s: 1, min: 60, h: 3600 }[m![2] as 's' | 'min' | 'h']).toBe(BOX_SETTINGS_TIMER_S);
     const unit = readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-settings.service'), 'utf8').split('\n');
     expect(unit.filter((l) => l.startsWith('Type='))).toEqual(['Type=oneshot']);
     expect(unit.filter((l) => l.startsWith('ExecStart='))).toEqual([
