@@ -2096,7 +2096,7 @@ export const MIGRATIONS: readonly string[] = [
   `
   CREATE TABLE landing_subjects (
     id            INTEGER PRIMARY KEY CHECK (typeof(id) = 'integer' AND id BETWEEN 1 AND 9007199254740991),
-    project       TEXT    NOT NULL CHECK (typeof(project) = 'text' AND project = trim(project) AND length(project) > 0),
+    project       TEXT    NOT NULL CHECK (typeof(project) = 'text' AND project = trim(project, ' ' || char(9) || char(10) || char(13)) AND length(project) > 0),
     pr            INTEGER NOT NULL CHECK (typeof(pr) = 'integer' AND pr BETWEEN 1 AND 9007199254740991),
     bindingKind   TEXT    NOT NULL CHECK (bindingKind IN ('run', 'no-run')),
     observedRunId INTEGER CHECK (observedRunId IS NULL OR (typeof(observedRunId) = 'integer' AND observedRunId BETWEEN 1 AND 9007199254740991)),
@@ -2111,7 +2111,7 @@ export const MIGRATIONS: readonly string[] = [
       AND json_type(creationClaim, '$.at') IS 'integer'
       AND json_extract(creationClaim, '$.at') BETWEEN 0 AND 9007199254740991
       AND json_type(creationClaim, '$.setBy') IS 'text'
-      AND json_extract(creationClaim, '$.setBy') = trim(json_extract(creationClaim, '$.setBy'))
+      AND json_extract(creationClaim, '$.setBy') = trim(json_extract(creationClaim, '$.setBy'), ' ' || char(9) || char(10) || char(13))
       AND length(json_extract(creationClaim, '$.setBy')) > 0
       AND json_type(creationClaim, '$.pinnedSha') IS 'text'
       AND length(json_extract(creationClaim, '$.pinnedSha')) = 40
@@ -2124,7 +2124,7 @@ export const MIGRATIONS: readonly string[] = [
     subjectId INTEGER PRIMARY KEY REFERENCES landing_subjects(id) CHECK (typeof(subjectId) = 'integer' AND subjectId BETWEEN 1 AND 9007199254740991),
     afterIds  TEXT    NOT NULL CHECK (CASE WHEN json_valid(afterIds) THEN json_type(afterIds) = 'array' ELSE 0 END),
     fixesMain INTEGER NOT NULL CHECK (typeof(fixesMain) = 'integer' AND fixesMain IN (0, 1)),
-    setBy     TEXT    NOT NULL CHECK (typeof(setBy) = 'text' AND setBy = trim(setBy) AND length(setBy) > 0),
+    setBy     TEXT    NOT NULL CHECK (typeof(setBy) = 'text' AND setBy = trim(setBy, ' ' || char(9) || char(10) || char(13)) AND length(setBy) > 0),
     seq       INTEGER NOT NULL CHECK (typeof(seq) = 'integer' AND seq BETWEEN 1 AND 9007199254740991)
   );
   CREATE TABLE landing_journal_cursor (
@@ -2133,7 +2133,7 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE TABLE landing_projection_witness (
     entryId       INTEGER PRIMARY KEY REFERENCES landing_entries(id) ON DELETE CASCADE CHECK (typeof(entryId) = 'integer' AND entryId BETWEEN 1 AND 9007199254740991),
-    project       TEXT    NOT NULL CHECK (typeof(project) = 'text' AND project = trim(project) AND length(project) > 0),
+    project       TEXT    NOT NULL CHECK (typeof(project) = 'text' AND project = trim(project, ' ' || char(9) || char(10) || char(13)) AND length(project) > 0),
     pr            INTEGER NOT NULL CHECK (typeof(pr) = 'integer' AND pr BETWEEN 1 AND 9007199254740991),
     observedSeq   INTEGER NOT NULL CHECK (typeof(observedSeq) = 'integer' AND observedSeq BETWEEN 0 AND 9007199254740991),
     runId         INTEGER NOT NULL CHECK (typeof(runId) = 'integer' AND runId BETWEEN 1 AND 9007199254740991),

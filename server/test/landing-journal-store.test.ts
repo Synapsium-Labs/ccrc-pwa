@@ -400,18 +400,21 @@ describe('replay after a database-only restore', () => {
   it('allocator-reserves-recovered-subject-ids', () => {
     const { f, snap0, b } = history();
     const r = restore(f, snap0);
-    const next = create(r, 9);
-    expect(next).toMatchObject({ ok: true });
-    expect((next as { entry: { id: number } }).entry.id).toBeGreaterThan(b);
-    expect(facts(r).nextId).toBe((next as { entry: { id: number } }).entry.id + 1);
+    // the allocator never hands out a recovered subject's id, though no projection holds it ...
+    expect(facts(r).nextId).toBeGreaterThan(b);
+    // ... and while any recovery is unresolved in the project a new entry is refused outright
+    expect(create(r, 9)).toEqual({ ok: false, error: 'landing-recovery-unresolved' });
   });
 
   it('recovered duplicates and unresolved sources refuse by their own word', () => {
-    const { f, snap0, a } = history();
+    const { f, snap0, a, b } = history();
     const r = restore(f, snap0);
     expect(create(r, 1)).toEqual({ ok: false, error: 'landing-entry-exists' });
     expect(order(r, 1, { afterIds: [] })).toEqual({ ok: false, error: 'landing-recovery-unresolved' });
     rawProjection(r, a, 1);
+    // b (pr 2) is still unresolved, so the whole project line is held even for a source that is resolved now
+    expect(order(r, 1, { afterIds: [] })).toEqual({ ok: false, error: 'landing-recovery-unresolved' });
+    rawProjection(r, b, 2);
     expect(order(r, 1, { afterIds: [] })).toMatchObject({ ok: true });
   });
 

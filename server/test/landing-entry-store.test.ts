@@ -359,10 +359,13 @@ describe('the strict row reader (landing order wave 5f): landingEntryFactsOfRow'
   });
   it('the retained text fields must be readable: hashes, setter, project, base and kind together', () => {
     for (const over of [{ pinnedSha: 'abc' }, { pinnedSha: HEX.toUpperCase() }, { handoffCommit: 'g'.repeat(40) }, { setBy: '' }, { setBy: ' x' },
-      { project: '' }, { baseSha: HEX }, { state: 'ejected', ejectionKind: 'new-head', baseSha: null }]) {
+      { project: '' }, { baseSha: 'not-hex' }, { baseSha: HEX.toUpperCase() }, { baseSha: 'a'.repeat(39) }]) {
       expect(landingEntryFactsOfRow(row(over)).projection, JSON.stringify(over)).toEqual({ kind: 'unreadable' });
     }
     expect(landingEntryFactsOfRow(row({ state: 'ejected', ejectionKind: 'new-head', baseSha: HEX, ejections: 1 })).projection.kind).toBe('readable');
+    // a lone baseSha or a lone ejectionKind is no longer a reason: only a non-null baseSha must be lowercase 40-hex
+    expect(landingEntryFactsOfRow(row({ baseSha: HEX })).projection.kind).toBe('readable');
+    expect(landingEntryFactsOfRow(row({ state: 'ejected', ejectionKind: 'new-head', baseSha: null, ejections: 1 })).projection.kind).toBe('readable');
   });
   it('quarantine: only the literal unknown state with exactly the stale-episode-head marker is readable', () => {
     expect(landingEntryFactsOfRow(row({ state: 'unknown', quarantineKind: 'stale-episode-head' })).projection)

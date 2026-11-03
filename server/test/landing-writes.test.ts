@@ -69,9 +69,16 @@ describe('decideLandingMutation: the source', () => {
     expect(refused(order(1, { fixesMain: true }), f)).toBe('landing-projection-unreadable');
     expect(refused(order(1, { afterIds: [] }), f)).toBe('landing-projection-unreadable');
   });
-  it('unrelated unresolved recovery does not refuse a write that does not reach it', () => {
+  it('ANY unresolved recovery in the project refuses an order write, even one that does not reach it', () => {
     const f = facts({ entries: [e(1), e(2)], recovery: [recovered(150, 50, MISSING)] });
-    expect(ok(order(1, { afterIds: [102] }), f)).toMatchObject({ kind: 'order' });
+    expect(refused(order(1, { afterIds: [102] }), f)).toBe('landing-recovery-unresolved');
+    expect(refused(order(1, { fixesMain: true }), f)).toBe('landing-recovery-unresolved');
+  });
+  it('the source checks keep their own words ahead of the project-wide recovery refusal', () => {
+    const rec = [recovered(150, 50, MISSING)];
+    expect(refused(order(9, { afterIds: [] }), facts({ entries: [e(1)], recovery: rec }))).toBe('landing-entry-missing');
+    expect(refused(order(1, { afterIds: [] }), facts({ entries: [e(1, { state: 'unknown' })], unreadableProjection: [101], recovery: rec })))
+      .toBe('landing-projection-unreadable');
   });
 });
 
@@ -108,11 +115,26 @@ describe('decideLandingMutation: targets and graph', () => {
     expect(refused(order(1, { afterIds: [102] }), facts({ entries: [e(1), e(2, { afterIds: [500] })], foreign: [500] }))).toBe('landing-after-cross-project');
   });
   it('unreadable-reachable-dependencies-refuse', () => {
-    // the display afterIds [] of an unreadable row hides an edge back to the source
-    const f = facts({ entries: [e(1), e(2, { state: 'unknown' })], unreadableDeps: [102] });
+    // the unreadable row's raw stored edges close a cycle back to the source (101); its display afterIds [] hides it, and
+    // the independent dependency fact says unreadable, so the walk must refuse rather than treat it as a leaf
+    const f = facts({ entries: [e(1), e(2, { state: 'unknown', afterIds: [101] })], unreadableDeps: [102] });
     expect(refused(order(1, { afterIds: [102] }), f)).toBe('landing-dependencies-unreadable');
+    // reached only transitively through a readable node
+    const via = facts({ entries: [e(1), e(2, { afterIds: [103] }), e(3, { state: 'unknown', afterIds: [101] })], unreadableDeps: [103] });
+    expect(refused(order(1, { afterIds: [102] }), via)).toBe('landing-dependencies-unreadable');
     // an unreadable row that is NOT reached does not matter
     expect(ok(order(1, { afterIds: [] }), f)).toMatchObject({ kind: 'noop' });
+  });
+  it('a recovered node reached only transitively refuses recovery-unresolved', () => {
+    const f = facts({ entries: [e(1), e(2, { afterIds: [107] })], recovery: [recovered(107, 7, MISSING)] });
+    expect(refused(order(1, { afterIds: [102] }), f)).toBe('landing-recovery-unresolved');
+  });
+  it('a fixesMain-only patch on a source whose current edges cycle back is refused landing-cycle, even unchanged', () => {
+    const f = facts({ entries: [e(1, { afterIds: [102] }), e(2, { afterIds: [101] })] });
+    expect(refused(order(1, { fixesMain: true }), f)).toBe('landing-cycle');
+    expect(refused(order(1, { fixesMain: false }), f)).toBe('landing-cycle');
+    // sending afterIds that break the cycle together with fixesMain succeeds
+    expect(ok(order(1, { afterIds: [], fixesMain: true }), f)).toMatchObject({ kind: 'order', after: [], fixesMain: true });
   });
   it('readable-unknown-state-is-traversable', () => {
     const f = facts({ entries: [e(1), e(2, { state: 'unknown', afterIds: [103] }), e(3)], quarantined: [102] });
@@ -158,6 +180,13 @@ describe('decideLandingMutation: creation', () => {
   });
   it('entry-exists: a recovered subject with no projection', () => {
     expect(refused(create(9), facts({ entries: [], recovery: [recovered(109, 9, MISSING)] }))).toBe('landing-entry-exists');
+  });
+  it('any unresolved recovery in the project refuses creation of another entry', () => {
+    const f = facts({ entries: [e(1)], recovery: [recovered(150, 50, MISSING)] });
+    expect(refused(create(5), f)).toBe('landing-recovery-unresolved');
+    // a duplicate keeps its own word
+    expect(refused(create(1), f)).toBe('landing-entry-exists');
+    expect(refused(create(50), f)).toBe('landing-entry-exists');
   });
   it('id-overflow', () => {
     expect(refused(create(5), facts({ entries: [], nextId: null }))).toBe('landing-id-overflow');

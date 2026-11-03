@@ -5,14 +5,14 @@
 //
 // Refusal order for both commands (first match wins):
 //   1. an identity conflict listed in this project's recovery       -> landing-identity-conflict
-//   2. entry: the (project, pr) already has a projection or a recovered subject -> landing-entry-exists;
-//      then `nextId` null -> landing-id-overflow.
+//   2. entry: the (project, pr) already has a projection or a recovered subject -> landing-entry-exists; otherwise any
+//      unresolved recovery listed in the project -> landing-recovery-unresolved; then `nextId` null -> landing-id-overflow.
 //   3. order: the source is looked up by (project, pr). Absent from the projections: a recovered subject of that
 //      (project, pr) is landing-recovery-unresolved (never entry-missing), otherwise landing-entry-missing. A
-//      projection that is not `readable` is landing-projection-unreadable (a display placeholder is never journalled);
-//      a source (or a directly named target) that is itself a listed recovery subject is landing-recovery-unresolved.
-//      Recovery is refused only where the write REACHES it (the source and the targets it names): another unresolved
-//      subject elsewhere in the project holds the line, not this write.
+//      projection that is not `readable` is landing-projection-unreadable (a display placeholder is never journalled).
+//      Then ANY unresolved recovery listed in the project refuses the write landing-recovery-unresolved, whether or not
+//      the write reaches that subject: a project identity conflict refuses identity-conflict, every other unresolved
+//      recovery holds the whole line.
 //   4. each named target, in order: absent from both inventories -> landing-after-missing; a known id of another
 //      project -> landing-after-cross-project; a listed recovery subject -> landing-recovery-unresolved (its
 //      projection is unmeasured, so it is neither absent nor satisfied).
@@ -20,9 +20,9 @@
 //      independent `dependencies` fact says, never the display `[]`): a node that is not a known entry is
 //      after-missing / after-cross-project / recovery-unresolved like a direct target; unreadable dependencies ->
 //      landing-dependencies-unreadable; reaching the source (self-edge included) -> landing-cycle. The source's own old
-//      edges are never walked, so a cycle through it can be repaired, and a visited set lets an old cycle that does not
-//      touch the source pass. A readable unknown-state (quarantined) target is traversable. A node the walk reaches
-//      that is a listed recovery subject is refused too (conservative: its edges are unmeasured).
+//      edges are never walked when afterIds is sent, so a cycle through it can be repaired; a patch that omits afterIds
+//      keeps the current edges and is walked, so a source-reaching cycle is refused even unchanged. A visited set lets
+//      an old cycle that does not touch the source pass. A readable unknown-state (quarantined) target is traversable.
 //   6. the current association of the source and every named target comes from `facts.coordinators`; missing or
 //      unreadable -> run-unreadable. A binding is never read from a historical id.
 //   7. an effective no-op (the same resulting afterIds and fixesMain) -> {kind:'noop'}, appending nothing.
@@ -91,6 +91,7 @@ export function decideLandingMutation(command: LandingAuthorityCommand, facts: L
 
   if (command.kind === 'entry') {
     if (facts.entries.some(byKey) || listed.some(byKey)) return refuse('landing-entry-exists');
+    if (listed.length > 0) return refuse('landing-recovery-unresolved');
     if (facts.nextId === null) return refuse('landing-id-overflow');
     return { ok: true, mutation: { ...command, id: facts.nextId } };
   }
@@ -100,7 +101,7 @@ export function decideLandingMutation(command: LandingAuthorityCommand, facts: L
   const sourceRead = facts.projections.find((p) => p.id === source.id);
   if (sourceRead === undefined || sourceRead.value.kind !== 'readable') return refuse('landing-projection-unreadable');
   const inRecovery = (id: number): boolean => listed.some((x) => x.id === id);
-  if (inRecovery(source.id)) return refuse('landing-recovery-unresolved');
+  if (listed.length > 0) return refuse('landing-recovery-unresolved');
 
   const depsOf = (id: number): { kind: 'readable'; afterIds: number[] } | { kind: 'unreadable' } =>
     facts.dependencies.find((d) => d.id === id)?.value ?? { kind: 'unreadable' };

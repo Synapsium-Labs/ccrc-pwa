@@ -153,6 +153,12 @@ describe('landing_subjects constraints', () => {
     ['claim pinnedSha short', { creationSeq: '1', creationClaim: `'${JSON.stringify({ at: 1, setBy: 'a', pinnedSha: 'a'.repeat(39), handoffCommit: HEX })}'` }],
     ['claim handoffCommit non-hex', { creationSeq: '1', creationClaim: `'${JSON.stringify({ at: 1, setBy: 'a', pinnedSha: HEX, handoffCommit: 'g'.repeat(40) })}'` }],
     ['claim handoffCommit missing', { creationSeq: '1', creationClaim: `'${JSON.stringify({ at: 1, setBy: 'a', pinnedSha: HEX })}'` }],
+    ['claim at past the safe range', { creationSeq: '1', creationClaim: `'${JSON.stringify({ at: 9007199254740992, setBy: 'a', pinnedSha: HEX, handoffCommit: HEX })}'` }],
+    ['claim at a JSON string', { creationSeq: '1', creationClaim: `'${JSON.stringify({ at: '5', setBy: 'a', pinnedSha: HEX, handoffCommit: HEX })}'` }],
+    ['claim setBy with a trailing LF', { creationSeq: '1', creationClaim: `'${JSON.stringify({ at: 1, setBy: 'a\n', pinnedSha: HEX, handoffCommit: HEX })}'` }],
+    ['claim setBy with a leading tab', { creationSeq: '1', creationClaim: `'${JSON.stringify({ at: 1, setBy: '\ta', pinnedSha: HEX, handoffCommit: HEX })}'` }],
+    ['project with a trailing LF', { project: "'a' || char(10)" }], ['project with a leading tab', { project: "char(9) || 'a'" }],
+    ['project with a trailing CR', { project: "'a' || char(13)" }], ['project of only LF', { project: 'char(10)' }],
   ])('refuses %s', (why, over) => {
     const db = fresh('ccrc-mig-5f-s-bad-');
     refuses(db, subj(over), why);
@@ -191,6 +197,8 @@ describe('landing_authority constraints', () => {
     refuses(db, auth({ subjectId: '2', fixesMain: '2' }), 'fixesMain 2');
     refuses(db, auth({ subjectId: '2', setBy: "''" }), 'empty setBy');
     refuses(db, auth({ subjectId: '2', setBy: "' x'" }), 'untrimmed setBy');
+    refuses(db, auth({ subjectId: '2', setBy: "'x' || char(10)" }), 'setBy with a trailing LF');
+    refuses(db, auth({ subjectId: '2', setBy: "char(9) || 'x'" }), 'setBy with a leading tab');
     refuses(db, auth({ subjectId: '2', seq: '0' }), 'seq 0');
     refuses(db, auth({ subjectId: '2', seq: '9007199254740992' }), 'seq past safe');
     db.close();
@@ -222,6 +230,8 @@ describe('landing_projection_witness constraints', () => {
     refuses(db, wit({ entryId: '0' }), 'entryId 0');
     refuses(db, wit({ project: "''" }), 'empty project');
     refuses(db, wit({ project: "'p '" }), 'untrimmed project');
+    refuses(db, wit({ project: "'p' || char(10)" }), 'project with a trailing LF');
+    refuses(db, wit({ project: "char(9) || 'p'" }), 'project with a leading tab');
     refuses(db, wit({ pr: '0' }), 'pr 0');
     refuses(db, wit({ observedSeq: '-1' }), 'observedSeq negative');
     refuses(db, wit({ observedSeq: '9007199254740992' }), 'observedSeq past safe');

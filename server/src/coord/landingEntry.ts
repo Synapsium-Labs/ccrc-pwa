@@ -138,9 +138,8 @@ export function landingEntryFactsOfRow(row: Record<string, unknown>): LandingEnt
   };
   const marker = row.quarantineKind;
   const stateOk = wordOk ? absent(marker) : row.state === 'unknown' && marker === 'stale-episode-head';
-  const baseOk = absent(row.baseSha) || typeof row.baseSha === 'string';
-  const consistent = baseOk && absent(row.baseSha) === absent(row.ejectionKind);
-  const readable = stateOk && kindOk && consistent && afterIds !== null && fixesOk && pinnedAt !== null
+  const baseOk = absent(row.baseSha) || hash40(row.baseSha);
+  const readable = stateOk && kindOk && baseOk && afterIds !== null && fixesOk && pinnedAt !== null
     && ejections !== null && id !== null && pr !== null && runIdOk && nonblank(row.project) && hash40(row.pinnedSha)
     && hash40(row.handoffCommit) && nonblank(row.setBy);
   return {
