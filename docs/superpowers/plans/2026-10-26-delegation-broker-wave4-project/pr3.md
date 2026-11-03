@@ -397,3 +397,53 @@ W3-M38 is to read: "Add a journal rewrite, truncate, rename or remove caller oth
 carry rule", with its rows `delegation-wave3.integration.test.ts`'s closed list and W4-C6..C8.
 
 CI fix (14267): the store's delegation-method census goes from seven to nine with this PR's two retention methods; PR4's run read had made it seven after this plan was written.
+
+## Round 1: terminal delegation shutdown (rulings 14343 and 14346)
+
+D-7878 is defined in the top-level wave 4 plan's deviations section.
+
+The fast CI run 41641540300 on `c63dc457704f2377ca76ab20b96cad9c73859134` is RED. Shard `server 5/12` passed assertions in all 50 files (4,527 passed, 10 skipped), but two unhandled `EnvironmentTeardownError: [vitest-worker]: Closing rpc while "onUserConsoleLog" was pending` rejections attributed to `push-copy.test.ts` failed it; that file passed 85 assertions. The aggregate server check refused the failed prerequisite. Passing assertions do not erase these errors.
+
+Three sequential, isolated tip diagnostics at that commit each passed all 85 push-copy assertions, with outer exit 0, in 114.350 s, 77.405 s and 96.563 s. All logged checkpoint-rename ENOENT details in trailing file contexts; none reproduced the RPC rejection or an unhandled-error block. One baseline at immutable main `ecba5ee6f85b18a4a7d40e9f8f33e1c00b67b9a4` passed 85/85, outer exit 0, in 45.953 s. It too logged checkpoint-rename ENOENT details, but no RPC rejection or unhandled block. All four ran through `ccrc test --local`, alone, with one worker, a fixture HOME and contained `gh`. No queue/wait notice appeared. The borrowed dependency symlink was removed before the detached baseline worktree was removed.
+
+### Log counts and their boundary
+
+These are nonexclusive counts of log lines, not distinct failed operations. The common measurable boundary is the first file-only context after the final named-test context; it is **not** a timestamp of last-test completion.
+
+| File-scope tail | Checkpoint ENOENT detail | Durable application failed | Upkeep failure | Compaction |
+|---|---:|---:|---:|---:|
+| Main baseline | 2 | 1 | 0 | 0 |
+| Tip diagnostic 1 | 3 | 1 | 1 | 0 |
+
+Main's streams were merged: both ENOENT details preceded the file reporter marker, and all four category counts strictly after that marker were zero. Main had no `unknown test` headers. Tip diagnostic 1 had three such headers, but its stdout and stderr were captured separately: their ordering against stdout's file reporter marker is **unmeasured**, not zero. No fourth tip diagnostic was run to repair that capture limitation. These results establish an inherited fixture-ownership gap, not main-red, an exact RPC reproduction, a load-flake classification, or a completed fix.
+
+The accepted correction is terminal awaited close, including budget-cut actual work and finally/log tails, plus explicit teardown ownership in push-copy's two factories. The lane drain retains non-blocking tick delivery, staged flushes, normal logs and crash ordering. Consent covers only the named lifecycle regions of `watch.ts`; the push-copy single-path claim was acquired before editing.
+
+### Repair and RED → GREEN
+
+Before production edits, both deterministic held-producer rows failed: durability closed while real upkeep or daily compaction was still held, and the close boundary did not include the slow-pass diagnostic tail. The selected run exited 1 with two failed rows and twelve intentionally unselected rows. After the repair, all fourteen lane rows passed. The held calls use real files and SQLite, call through to actual upkeep or compaction after release, and observe normal warnings without suppressing them. The compaction-held row exercises the daily call and its `nothing-to-cut` log; the existing compaction suite covers real cuts and crash ordering.
+
+`DelegationLane.close` latches admission before aborting reads, drains actual runs rather than their budgeted races, then closes durability and stops samplers. The watcher owns the outer sweep/emit tail too. Durability's close latches before draining its admitted queue, rejecting later producers so the journal writer cannot reopen. Repeated close is idempotent. Push-copy's two factories register every watcher in a file-local list; teardown calls `stop` and awaits `closeDelegation` before fixture removal. Tick, synchronous stop, staged flushes, warning wording and compaction ordering are unchanged.
+
+Fresh gates through single-definition, each isolated through `ccrc test --local` with one worker, fixture HOME, contained `gh` and a full foreground allowance:
+
+| Gate | Result | Duration |
+|---|---|---:|
+| Held-upkeep / held-compaction before repair | RED: both failed as intended | 3.820 s |
+| Compaction lane, full file | 14/14 passed | 14.468 s |
+| Push-copy, three sequential runs | 85/85 each, outer exit 0 each | 57.635 / 46.616 / 48.283 s |
+| Compaction | 76/76 passed | 69.452 s |
+| Recovery | 448/448 passed | 439.367 s |
+| Pass timing | 88/88 passed | 127.293 s |
+| Wave-3 integration, first run | RED: 33 passed, one exact-text census failed | 85.059 s |
+| Wave-3 integration, full rerun | 34/34 passed | 76.743 s |
+| Delegation watch, full file | 304/304 passed | 380.412 s |
+| Coordination snapshot | 1,018/1,018 passed | 56.972 s |
+| Delta applier | 26/26 passed | 24.912 s |
+| Single-definition, 20 files | 1,047/1,047 passed | 27.154 s |
+
+The integration census rejected a combined close-and-store-presence condition. The new close guard was separated from the unchanged store-presence line; the census was not edited, and behavior did not change. Its full rerun passed. Gates earlier in the table preceded that equivalent source-line split; later gates include it.
+
+The complete captures of all three post-fix push-copy runs contain zero checkpoint ENOENT details, durable-application failure lines, upkeep-failure lines, RPC teardown errors, unhandled blocks, `unknown test` headers or file-only stderr contexts after the final named context. Each contains 31 existing budget-cut warnings within named contexts: close aborts active reads through the existing warning path, not a log-suppression change. No queue/wait notice appeared. These are occurrence counts, not distinct-operation counts; stdout/stderr ordering is not inferred.
+
+An armed growth-check run passed 47/47 but measured the preceding committed HEAD, not these uncommitted changes. It is not repair-growth evidence: the scoped repair must be committed and the armed gate rerun before the remaining static gates. Exact-new-head CI is still pending. The full server suite was not run locally; soaks remain waived, not passed.

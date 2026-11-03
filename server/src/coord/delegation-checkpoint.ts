@@ -1980,6 +1980,7 @@ export class DelegationDurability {
   /** D-7021: the journal's first sequence (what the repair's step 0 deletes below), or null when there is no journal. */
   private retainedFrom: number | null = null;
   private queue: Promise<unknown> = Promise.resolve();
+  private closing: Promise<void> | null = null;
   private writer: DelegationJournalWriter;
   private builder = DelegationCheckpointBuilder.from(emptyDelegationCheckpoint());
   private eventIds = new Set<string>();
@@ -2056,6 +2057,7 @@ export class DelegationDurability {
   pruningEnabled(): boolean { return this.current.phase === 'ready' && this.failureNow === null; }
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    if (this.closing !== null) return Promise.reject(new Error('the delegation applier is closed'));
     const run = this.queue.then(task);
     this.queue = run.catch(() => undefined);
     return run;
@@ -2937,8 +2939,9 @@ export class DelegationDurability {
     }
   }
 
-  async close(): Promise<void> {
-    await this.enqueue(async () => { await this.writer.close(); });
+  /** D-7878: latch before draining the admitted queue; a late producer must not reopen the journal writer. */
+  close(): Promise<void> {
+    return this.closing ??= this.queue.then(() => this.writer.close());
   }
 }
 

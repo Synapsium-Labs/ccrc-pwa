@@ -6,7 +6,7 @@ import type { DelegationEventEnvelopeV1 } from '../../shared/api.js';
 import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
-import { FleetWatcher } from '../src/watch.js';
+import { DELEGATION_PASS_BUDGET_MS, FleetWatcher } from '../src/watch.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import {
@@ -37,6 +37,7 @@ const worlds: Array<{ watcher: FleetWatcher; coord: CoordStore }> = [];
 afterEach(async () => {
   for (const w of worlds.splice(0)) { await w.watcher.closeDelegation(); w.coord.db.close(); }
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function world(legacy = false) {
@@ -113,6 +114,70 @@ const slowFields = (line: string): Record<string, number> => Object.fromEntries(
   [...line.matchAll(/ ([a-zA-Z]+)=(\d+)/g)].map((m) => [m[1]!, Number(m[2])]),
 );
 const compactSizes = ['cutRecords', 'cutBytes', 'carried', 'carriedBytes', 'eventsCut', 'rowsRetired'];
+
+describe('D-7878: terminal delegation shutdown', () => {
+  // Removing the actual-work drain closes the real applier while one of these producers is still held.
+  it.each(['upkeep', 'compactJournal'] as const)('drains budget-cut %s and its log tail before terminal close', async (method) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const warn = vi.spyOn(console, 'warn'); // Call through: normal diagnostics are part of the owned tail.
+    const w = world(true);
+    const d = (await w.watcher.delegationApplier())!;
+    await seedCompaction(d);
+    await d.applyAccepted({ accepted: [], cursor: cursor(AT - 49 * HOUR), interval: interval(AT - 200 * HOUR) });
+    let entered!: () => void;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let actual!: Promise<unknown>;
+    const original = d[method].bind(d);
+    if (method === 'upkeep') {
+      const upkeep = original as DelegationDurability['upkeep'];
+      vi.spyOn(d, 'upkeep').mockImplementation((request) => {
+        actual = (async () => { entered(); await gate; return upkeep(request); })();
+        return actual as ReturnType<DelegationDurability['upkeep']>;
+      });
+    } else {
+      const compact = original as DelegationDurability['compactJournal'];
+      vi.spyOn(d, 'compactJournal').mockImplementation((now, floor) => {
+        actual = (async () => { entered(); await gate; return compact(now, floor); })();
+        return actual as ReturnType<DelegationDurability['compactJournal']>;
+      });
+    }
+    const sweeping = pass(w, AT + MIN);
+    await held;
+    await vi.advanceTimersByTimeAsync(DELEGATION_PASS_BUDGET_MS + 1);
+    await sweeping; // The budgeted pass and the watcher's emit tail ended, but the real producer has not.
+    const closingDurable = vi.spyOn(d, 'close');
+    let closed = false;
+    const closing = w.watcher.closeDelegation().then(() => { closed = true; });
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect.soft(closingDurable, 'durability must not close ahead of the held producer').not.toHaveBeenCalled();
+      expect.soft(closed, 'terminal close must remain pending').toBe(false);
+    } finally {
+      release();
+      await actual;
+      await closing;
+    }
+    expect(closingDurable).toHaveBeenCalledTimes(1);
+    const lines = warn.mock.calls.map((c) => String(c[0]));
+    expect(lines.some((line) => line.startsWith('ccrc-server: delegation pass slow:'))).toBe(true);
+    if (method === 'compactJournal') expect(lines.some((line) => line.startsWith('ccrc-server: delegation compaction:'))).toBe(true);
+    const checkpoint = readFileSync(path.join(w.home, '.ccrc', DELEGATION_CHECKPOINT_FILE));
+    const writes = d.commitMeasures().writes;
+    const passes = w.watcher.delegationReport().passes;
+    const logCount = warn.mock.calls.length;
+    await pass(w, AT + 24 * HOUR);
+    await expect(d.upkeep({ nowMs: AT + 24 * HOUR, intervals: true, cursors: true, zeroDelta: true })).rejects.toThrow('closed');
+    await w.watcher.closeDelegation();
+    expect(closingDurable).toHaveBeenCalledTimes(1);
+    expect(w.watcher.delegationReport().passes).toBe(passes);
+    expect(d.commitMeasures().writes).toBe(writes);
+    expect(readFileSync(path.join(w.home, '.ccrc', DELEGATION_CHECKPOINT_FILE))).toEqual(checkpoint);
+    expect(warn.mock.calls).toHaveLength(logCount);
+  });
+});
 
 describe('Task 3.7: daily compaction through the real lane', () => {
   it('W4-C28: spends one UTC day before the attempt and tries again only on the next day', async () => {

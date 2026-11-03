@@ -1935,8 +1935,14 @@ export class FleetWatcher {
 
   /** One pass of the delegation lane. PUBLIC for the reason `sweepNames` is: `tick()` dispatches it with `void`, so a test that awaits
    *  `tick()` has not awaited it. A no-op without a coordination database, inside the census cadence, or while a pass is running. */
+  private readonly delegationSweeps = new Set<Promise<void>>();
+  private delegationClosing: Promise<void> | null = null;
   sweepDelegation(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<void> {
-    return this.delegationLane().sweep(sessions, records).then((ran) => { if (ran) this.emitDelegation(sessions); });
+    if (this.delegationClosing !== null) return Promise.resolve();
+    const run = this.delegationLane().sweep(sessions, records).then((ran) => { if (ran) this.emitDelegation(sessions); })
+      .finally(() => { this.delegationSweeps.delete(run); });
+    this.delegationSweeps.add(run);
+    return run;
   }
 
   private lastDelegationJson: string | null = null;
@@ -2012,9 +2018,10 @@ export class FleetWatcher {
     this.delegationLane().setSeams(seams);
   }
 
-  /** Closes the delegation applier's journal descriptor, if it was ever opened (tests only: no production code calls it, so in production the lane's unref'd sampler interval lives for the process). */
+  /** D-7878: terminal awaited quiescence, including budget-cut work and the sweep/emit tail; synchronous `stop()` only stops cadence. */
   closeDelegation(): Promise<void> {
-    return this.delegationLaneMemo === null ? Promise.resolve() : this.delegationLaneMemo.close();
+    const closing = this.delegationLane().close(); // Latch admission even when the lane has never opened its applier.
+    return this.delegationClosing ??= Promise.all([closing, Promise.allSettled([...this.delegationSweeps])]).then(() => undefined);
   }
 
   /** Whether `tick()`'s registry read listed. The health reads it as of the request: an unreadable registry is an unmeasured basis. */
@@ -10055,6 +10062,8 @@ export function delegationPassWindowsOf(
 }
 
 class DelegationLane {
+  private closing: Promise<void> | null = null;
+  private readonly running = new Map<AbortController, Promise<unknown>>();
   private durable: DelegationDurability | null = null;
   private opening: Promise<DelegationDurability | null> | null = null;
   /** The lane has tried to open the applier: from then on a health is reported (absence before that reads as unknown). */
@@ -10347,12 +10356,18 @@ class DelegationLane {
 
   setSeams(seams: DelegationLaneSeams): void { this.seams = seams; }
 
-  /** Closes the applier's journal descriptor, if it was ever opened (tests only: nothing in production calls closeDelegation). */
-  async close(): Promise<void> {
-    this.sampler?.stop();                                                // D-5832: the lane's own stall sampler (its interval is unref'd, but a closed lane has none)
-    this.seams.loopDelay?.stop();   // a seam-supplied sampler is stopped too, deliberately: a test's sampler is stopped like the lane's own
-    await this.opening?.catch(() => undefined);
-    await this.durable?.close();
+  /** D-7878: close admission before aborting reads; drain actual producers, including their finally/log tails, before the applier. */
+  close(): Promise<void> {
+    if (this.closing !== null) return this.closing;
+    this.closing = Promise.resolve().then(async () => {
+      await Promise.allSettled([...this.running.values()]);
+      await this.opening?.catch(() => undefined);
+      await this.durable?.close();
+      this.sampler?.stop();                                              // D-5832: the lane's own stall sampler has no closed-lane interval
+      this.seams.loopDelay?.stop();                                      // a seam-supplied sampler is stopped like the lane's own
+    });
+    for (const controller of this.running.keys()) controller.abort();
+    return this.closing;
   }
 
   private evidenceHorizon(): string | null {
@@ -10556,6 +10571,7 @@ class DelegationLane {
   /** The applier, opened once. A recovery that FAILED is still an applier (it reports `failure()` and refuses to apply); only an IO
    *  error that stopped the open itself leaves none, and the next pass tries again. */
   applier(): Promise<DelegationDurability | null> {
+    if (this.closing !== null && this.opening === null) return Promise.resolve(null);
     if (this.opening === null) {
       const coord = this.deps.coord;
       this.opening = (async (): Promise<DelegationDurability | null> => {
@@ -10650,6 +10666,7 @@ class DelegationLane {
 
   /** True iff a pass ran (wave 4: the watcher projects only after one). */
   async sweep(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<boolean> {
+    if (this.closing !== null) return false;
     if (this.deps.coord === undefined) return false;                     // no coordination database, no lane
     // SINGLE FLIGHT (M5/M6) and the cadence are the `delegation` row's: a call beside a pass, or inside the cadence, is refused.
     const run = this.lanes.run('delegation', () => this.pass(records, sessions));
@@ -10659,6 +10676,7 @@ class DelegationLane {
   }
 
   private async pass(records: readonly LaneRecord[], sessions: readonly LaneSession[]): Promise<void> {
+    if (this.closing !== null) return;
     const now = Date.now();
     const census = this.census();
     if (census === null) {                                               // no census yet: wait, and keep the cadence unspent
@@ -10675,7 +10693,8 @@ class DelegationLane {
       now, signal: ac.signal, census, sessions, records, capability: delegationCapabilityState(this.deps.fleetState?.ccdVerbs), pending: [], settle: [], completed: [],
       seq: ++this.passSeq, reachedOwners: false,
     };
-    const work = this.run(pass).then(() => 'done' as const);
+    const work = this.run(pass).then(() => 'done' as const).finally(() => { this.running.delete(ac); });
+    this.running.set(ac, work);                                          // D-7878: LaneRunner owns only the budgeted race, not this late work.
     work.catch(() => undefined);                                         // a late rejection of a cut pass is not an unhandled one
     try {
       const outcome = await Promise.race([work, cut]);
