@@ -7186,11 +7186,13 @@ and an unmeasured hour is final: it is never read later as empty.
   unreadable registration, a home or roster it cannot read, a spool root that is a symlink or unsearchable, and a directory that exists
   but is unreadable; it WARNs for a running session whose own directory does not exist yet (the session is not observed until its next
   spawn: nothing is lost by waiting, and `ccd stop` then `ccd start` observes it now at the cost of an in-flight turn) and for a
-  `WorktreeCreate` or `WorktreeRemove` hook that is not ccrc's (ccrc never registers either). The check writes nothing. `ccrc doctor --fix`
-  runs only the shipped `install-session-hooks.sh`, refuses a home whose `settings.json` has an entry mixing ccrc's hook with another
-  command (an installer from before its per-hook sweep dropped such an entry whole; the installer now removes only ccrc's own command
-  from a group, keeping the group's matcher and every foreign hook, and backs up the file first), leaves every foreign registration
-  byte for byte, and makes no spool directory.
+  `WorktreeCreate` or `WorktreeRemove` hook that is not ccrc's (ccrc never registers either); and it WARNs for a home whose
+  `settings.json` `env` sets `BASH_MAX_TIMEOUT_MS` or `BASH_DEFAULT_TIMEOUT_MS`, naming the home and the key, never the value: the
+  delegation broker's twenty-minute rung-4 margin assumes Claude Code's ten-minute Bash ceiling, and raising the margin is a code change
+  (it does not read a project's own `.claude/settings.json` or the environment ccd spawns sessions with). The check writes nothing.
+  `ccrc doctor --fix` runs only the shipped `install-session-hooks.sh`, which removes only ccrc's own hook command from an entry,
+  keeping the entry's matcher and every other hook (an entry that mixes ccrc's hook with another command keeps the other command),
+  and backs up the file first; it leaves every foreign registration byte for byte, and makes no spool directory.
 - **`ccrc coordination-snapshot`** (above, under "The maintenance verbs") is how the journal and checkpoint are backed up, validated
   and restored as one set with `coord.db`.
 - **The torn-tail heal.** A crash in the middle of an append leaves at most one partial line after the journal's last newline. At
