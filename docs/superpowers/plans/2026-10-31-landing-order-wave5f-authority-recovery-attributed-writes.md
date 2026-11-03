@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Execution hold:** This is the consolidated publication-review draft, not approval or a dispatch brief. One independent whole-plan review is complete, with partial source corroboration disclosed below; publication checks and the operator's reading of the exact CLAUDE.md amendments remain prerequisites. Tasks 1–4 execute serially only after the plan is published and dispatched. No implementation or operator approval is implied by this document; issued planning deviations are defined below.
+> **Execution status:** Published for dispatch as run 1312. The operator read and approved the exact CLAUDE.md amendments A and B on 2026-11-03 (programme ledger, Decisions, 2026-11-03 06:27). Amendment B's unchanged context line was re-based onto `main` the same day; the line it replaces and the words it inserts did not change. One independent whole-plan review is complete, with partial source corroboration disclosed below. Tasks 1–4 execute serially. This document claims no implementation; issued planning deviations are defined below.
 
 **Goal:** Recover the landing line's authoritative decisions after database-only restore, add two attributed token-gated writes, and close the carried pin/reader/wire/instruction gaps without inventing measured state.
 
@@ -588,7 +588,7 @@ Record source-derived final census totals, actual store/routes net code-line del
 
 ## Operator text and census supplement
 
-This section is a proposed instruction amendment, not approval to edit `CLAUDE.md`. The operator must read the exact blocks before implementation dispatch. No other instruction text changes. The executor compares these before-blocks with its fresh base; a mismatch is reported, not silently rebased into a different instruction.
+The operator read and approved both blocks below on 2026-11-03 (programme ledger, Decisions, 2026-11-03 06:27). Tasks 1 and 2 apply them byte for byte, and the coordinator compares the PR's `CLAUDE.md` diff with them before landing. No other instruction text changes. The executor compares these before-blocks with its fresh base; a mismatch is reported, not silently rebased into a different instruction.
 
 ### Exact CLAUDE amendment A — authority recovery without fabricated pins
 
@@ -632,7 +632,7 @@ Task 2 replaces this exact contiguous span in the first, token-gated part of the
 
 ```text
   `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations`, `GET /api/ledger`, `GET /api/landing` and the approvals lane's
-  six (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key`, `POST /api/approvals/:id/rule`,
+  four (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key` and
 ```
 
 **After**
@@ -640,8 +640,12 @@ Task 2 replaces this exact contiguous span in the first, token-gated part of the
 ```text
   `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations`, `GET /api/ledger`, `GET /api/landing`,
   `POST /api/landing/entries` and `POST /api/landing/order` (setter attribution, not coordinator authorisation), and the approvals lane's
-  six (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key`, `POST /api/approvals/:id/rule`,
+  four (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key` and
 ```
+
+Re-based on 2026-11-03 onto `main` at `be6cd1048`. When this plan was drafted, the second line of both blocks began
+`six (` and named two more approvals routes; #2084 retired them. That line is context and stays byte-identical to
+`main`. The replaced first line and the inserted second line are unchanged, and they are the text the operator approved.
 
 The existing continuation says these routes `all call requireMailToken`; keep it. The new doors do not join `SESSION_ONLY`, `UNGATED`, or the dual-credential `EXEMPT-BUT-AUTHENTICATED` class. No route path is split across physical lines.
 
@@ -936,11 +940,12 @@ The reviewer identified two nonblocking execution cautions: the existing append 
 - Approved stage-5 scope and retained safeguards; this consolidated draft records proposed implementation decisions inside that scope.
 - Missing projections are visible recovery, never fabricated no-run pins. Identity alone does not resolve known association contradictions.
 - No test pass, mutation kill, tracked implementation or 5f dispatch is claimed by this planning pass. The twelve issued planning deviations are defined above, not reserved for future execution.
+- The operator approved the exact CLAUDE.md amendments A and B on 2026-11-03.
 
 ### Waiting on You
 
-- Read the exact proposed CLAUDE.md amendments before implementation dispatch. They are not yet approved.
-- Publication gates still precede dispatch. The completed whole-plan review has partial source corroboration, not blanket executable acceptance; this draft is not an implementation licence.
+- Nothing before dispatch. At landing, the coordinator compares the PR's `CLAUDE.md` diff with amendments A and B, and
+  a difference goes to you before the PR is enqueued.
 
 ### Later
 
