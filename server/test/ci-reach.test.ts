@@ -12,10 +12,21 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as reach from '../../.github/ci/reach.mjs';
 import { skipsTests, scopeOf, prScope, fastRun, QUEUE_ONLY, FOREIGN, alwaysRunPwaTests } from '../../.github/ci/reach.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const REACH = path.join(ROOT, '.github', 'ci', 'reach.mjs');
+
+// TRANSITIONAL (2026-11-02). The queue's browser skip (the owner's ruling of 2026-11-02) lands in three pull
+// requests, because a pull request that changes a rules file (.github/**, CLAUDE.md) may change nothing else: first
+// these pins and the census, while reach.mjs has no queue arm; then the rules-only pull request (reach.mjs, ci.yml,
+// CLAUDE.md); then a pull request that deletes every PRE-SKIP arm below and `queueSkip` with it. Until then each case
+// accepts exactly one of the two WHOLE shapes and never a mix: reach.mjs's `queueScope` and QUEUE_SKIPPABLE, and docs/
+// foreign to `browser`, all three or none of them.
+const queueSkip = typeof (reach as Record<string, unknown>)['queueScope'] === 'function';
+const queueScope = (pkg: string, changed: string[]): string =>
+  ((reach as Record<string, unknown>)['queueScope'] as (p: string, c: string[]) => string)(pkg, changed);
 
 describe('skipsTests: a package skips its tests only when EVERY changed file is foreign to it', () => {
   it('agent: a change only under pwa/ or ui/ skips; one under agent/, shared/, server/ or the root runs', () => {
@@ -26,18 +37,35 @@ describe('skipsTests: a package skips its tests only when EVERY changed file is 
     expect(skipsTests('agent', ['install.sh'])).toBe(false);
   });
 
-  it('pwa and browser: a change only under agent/, server/, ccd/ or deploy/ skips; docs/, shared/, ui/ and the root run', () => {
+  it('pwa and browser: a change only under agent/, server/, ccd/ or deploy/ skips; shared/, ui/ and the root run', () => {
     for (const pkg of ['pwa', 'browser']) {
       expect(skipsTests(pkg, ['agent/src/a.ts', 'server/src/b.ts', 'ccd/ccd', 'deploy/x.sh'])).toBe(true);
       // what the pwa tests read out of server/ still reaches them (the census pins the list)
       expect(skipsTests(pkg, ['server/src/laneSchedule.ts'])).toBe(false);
       expect(skipsTests(pkg, ['server/test/fixtures/panes/ask-user-question-real.txt'])).toBe(false);
       expect(skipsTests(pkg, ['agent/src/a.ts', 'server/test/fixtures/panes/x.txt'])).toBe(false);
-      expect(skipsTests(pkg, ['server/src/b.ts', 'docs/superpowers/specs/x.md'])).toBe(false); // pwa tests render docs
       expect(skipsTests(pkg, ['shared/docs.ts'])).toBe(false);
       expect(skipsTests(pkg, ['ui/src/a.tsx'])).toBe(false);
       expect(skipsTests(pkg, ['README.md'])).toBe(false);
     }
+  });
+
+  it('docs/ reaches the pwa suite, which renders it; the browser tests read nothing under it (owner ruling 2026-11-02)', () => {
+    expect(skipsTests('pwa', ['server/src/b.ts', 'docs/superpowers/specs/x.md'])).toBe(false);
+    expect(skipsTests('pwa', ['docs/superpowers/specs/x.md'])).toBe(false);
+    expect(FOREIGN.pwa).not.toContain('docs/');
+    if (!queueSkip) {
+      // PRE-SKIP arm (transitional): docs/ reaches every pwa-side package, as on main before the ruling.
+      expect(FOREIGN.browser).not.toContain('docs/');
+      expect(skipsTests('browser', ['server/src/b.ts', 'docs/superpowers/specs/x.md'])).toBe(false);
+      return;
+    }
+    expect(FOREIGN.browser).toContain('docs/');
+    expect(skipsTests('browser', ['server/src/b.ts', 'docs/superpowers/specs/x.md'])).toBe(true);
+    expect(skipsTests('browser', ['docs/superpowers/specs/x.md', 'docs/design/a.png'])).toBe(true);
+    // a directory, not a name prefix
+    expect(skipsTests('browser', ['docs-extra/a.md'])).toBe(false);
+    expect(skipsTests('browser', ['docs/a.md', 'pwa/src/a.ts'])).toBe(false);
   });
 
   it('fails safe: an empty change, an unknown package, or a path outside every list runs the tests', () => {
@@ -265,5 +293,97 @@ describe('the fast run (operator ruling 2026-10-28): an ordinary pull request ru
     expect(ask('pull_request', 'false', '.github/workflows/ci.yml')).toBe('fast=false\n');
     expect(ask('merge_group', 'false', 'pwa/src/a.ts')).toBe('fast=false\n');
     expect(ask('schedule', 'false', 'pwa/src/a.ts')).toBe('fast=false\n');
+  });
+});
+
+// The queue's browser skip (the owner's ruling of 2026-11-02, reversing 2026-10-25's "the queue runs every test" for
+// the browser shards only): in a merge-queue run the browser leg asks reach.mjs of the group's whole change and skips
+// its tests when no file in it can reach them. Every other package runs every test in the queue.
+describe('the queue\'s browser skip (owner ruling 2026-11-02): a merge-queue group that cannot reach the browser tests skips them', () => {
+  const run = (args: string[], changed: string[] | null): string => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-reach-queue-'));
+    const list = path.join(dir, 'changed.txt');
+    const out = path.join(dir, 'output.txt');
+    if (changed !== null) writeFileSync(list, changed.join('\n') + '\n');
+    writeFileSync(out, '');
+    execFileSync('node', [REACH, ...args, '--changed-file', list], { env: { ...process.env, GITHUB_OUTPUT: out }, encoding: 'utf8' });
+    return readFileSync(out, 'utf8');
+  };
+  const skipOf = (text: string): string => /^skip=(.*)$/m.exec(text)?.[1] ?? '';
+
+  it('queueScope: skip only for the browser leg, and only when every file of the group is foreign to it', () => {
+    if (!queueSkip) {
+      // PRE-SKIP arm (transitional): reach.mjs has no queue arm at all.
+      expect(Object.keys(reach)).not.toContain('QUEUE_SKIPPABLE');
+      return;
+    }
+    expect((reach as Record<string, unknown>)['QUEUE_SKIPPABLE']).toEqual(['browser']);
+    expect(queueScope('browser', ['docs/superpowers/plans/x.md'])).toBe('skip');
+    expect(queueScope('browser', ['docs/a.md', 'docs/design/b.png', 'server/src/c.ts'])).toBe('skip');
+    for (const reaching of ['pwa/src/a.ts', 'ui/src/b.tsx', 'shared/api.ts', 'README.md', 'server/test/fixtures/panes/x.txt', '.github/workflows/ci.yml']) {
+      expect(queueScope('browser', ['docs/a.md', reaching]), reaching).toBe('all');
+    }
+    // fails safe: an empty change, an unknown package, and every other package run every test
+    expect(queueScope('browser', [])).toBe('all');
+    expect(queueScope('browser', ['', '  '])).toBe('all');
+    expect(queueScope('nope', ['docs/a.md'])).toBe('all');
+    expect(queueScope('pwa', ['docs/a.md'])).toBe('all');
+    expect(queueScope('pwa', ['agent/src/a.ts'])).toBe('all'); // a pull request would skip it; the queue never does
+    expect(queueScope('agent', ['pwa/src/a.ts'])).toBe('all');
+  });
+
+  it('the CLI: a docs-only merge_group skips the browser tests; a group that reaches them, or any other package, runs them', () => {
+    const docsOnly = run(['--pkg', 'browser', '--event', 'merge_group'], ['docs/superpowers/plans/x.md']);
+    if (!queueSkip) {
+      // PRE-SKIP arm (transitional): the queue runs every test.
+      expect(skipOf(docsOnly)).toBe('false');
+      return;
+    }
+    expect(docsOnly).toMatch(/^skip=true$/m);
+    expect(docsOnly).toMatch(/^scope=skip$/m);
+    expect(skipOf(run(['--pkg', 'browser', '--event', 'merge_group'], ['docs/a.md', 'pwa/src/a.ts']))).toBe('false');
+    expect(skipOf(run(['--pkg', 'pwa', '--event', 'merge_group'], ['docs/a.md']))).toBe('false');
+    expect(skipOf(run(['--pkg', 'agent', '--event', 'merge_group'], ['pwa/src/a.ts']))).toBe('false');
+    // a label never reaches a queue run, and asks for more tests, never fewer
+    expect(skipOf(run(['--pkg', 'browser', '--event', 'merge_group', '--full-label', 'false'], ['docs/a.md']))).toBe('true');
+    // only the queue and a pull request skip: the same docs-only change elsewhere runs the browser tests
+    for (const event of ['schedule', 'workflow_dispatch', 'workflow_call', 'push', '']) {
+      expect(skipOf(run(['--pkg', 'browser', '--event', event], ['docs/a.md'])), event).toBe('false');
+    }
+  });
+
+  it('the CLI fails safe in the queue: a group it cannot diff runs the browser tests', () => {
+    const missing = run(['--pkg', 'browser', '--event', 'merge_group'], null);
+    expect(skipOf(missing)).toBe('false');
+    if (queueSkip) expect(missing).toMatch(/^scope=all$/m);
+  });
+
+  it('diffs the group from --base (the queue\'s base sha) to HEAD, every commit in it', () => {
+    const git = (cwd: string, ...a: string[]): string => execFileSync('git', a, {
+      cwd, encoding: 'utf8',
+      env: { PATH: process.env.PATH ?? '', HOME: cwd, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+    });
+    const commit = (repo: string, file: string, msg: string): void => {
+      mkdirSync(path.join(repo, path.dirname(file)), { recursive: true });
+      writeFileSync(path.join(repo, file), `${msg}\n`);
+      git(repo, 'add', '-A');
+      git(repo, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', msg);
+    };
+    const group = (files: string[]): string => {
+      const repo = mkdtempSync(path.join(tmpdir(), 'ccrc-reach-queue-git-'));
+      git(repo, 'init', '-q', '-b', 'main');
+      commit(repo, 'pwa/src/a.ts', 'base');
+      const base = git(repo, 'rev-parse', 'HEAD').trim();
+      files.forEach((f, i) => commit(repo, f, `entry ${i}`)); // one commit per queued pull request
+      const out = path.join(repo, '..', `out-${path.basename(repo)}.txt`);
+      writeFileSync(out, '');
+      execFileSync('node', [REACH, '--pkg', 'browser', '--event', 'merge_group', '--base', base], {
+        cwd: repo, env: { ...process.env, GITHUB_OUTPUT: out }, encoding: 'utf8',
+      });
+      return skipOf(readFileSync(out, 'utf8'));
+    };
+    expect(group(['docs/superpowers/plans/x.md', 'docs/superpowers/specs/y.md'])).toBe(queueSkip ? 'true' : 'false');
+    // an earlier entry of the same group that reaches the browser tests runs them for the whole group
+    expect(group(['pwa/src/b.ts', 'docs/superpowers/plans/x.md'])).toBe('false');
   });
 });

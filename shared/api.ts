@@ -12373,7 +12373,7 @@ export const ACCOUNT_OP_KILL_GRACE_MS = 5_000;
 /** The most a sub's stdout may carry before the answer is cut and refused (spec §13.2's 8 MiB cap). */
 export const ACCOUNT_OP_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
 
-import type { AccountStateAnswer, AuthStatusState, LaneState } from './accounts.js';
+import type { AccountStateAnswer, AuthMethod, AuthStatusState, LaneState } from './accounts.js';
 /** One lane on `GET /api/accounts`'s `lanes` (spec §3.4, §13.1; D-5517; accounts plan Task A12), keyed by lane id and
  *  read from `~/.cc-sessions/.accounts/<id>.json`. ONLY for a reader with the session verdict (D-5511): a dark gate's
  *  reader gets today's three fields and nothing else, and an armed gate refuses a box token before the handler. Never
@@ -12995,11 +12995,18 @@ export const AUTH_UNSUPPORTED_REASONS = ['darwin-arm-absent', 'no-systemd-run', 
 
 /** `LaneWire`'s in-flight sign-in (spec §6.2, §13.1), from the server's in-memory attempt: its last state the server
  *  read, the first instant it is no longer live, and whether THIS session started it (the resume banner's question).
+ *  For the starting session only, also the attempt's id and method (accounts plan Task A23, D-7871 (1)): the resumed
+ *  sheet sends its code (`auth/code {attemptId}`) and checks the code's shape and the URL card's words by method. The
+ *  id is no capability: `auth/code` still takes the code from the starting session alone (`not-your-attempt`).
  *  Absent when the server holds no attempt for the lane. Never persisted by `offline.ts`. An interface merge at the
  *  foot, so no line cited above moves. */
 export interface LaneWire {
-  authAttempt?: { state: AuthStatusState; expiresAt: number; mine: boolean };
+  authAttempt?: LaneAuthAttempt;
 }
+/** `LaneWire.authAttempt`: what every reader with the session verdict sees, and for the starting session the id and
+ *  method too (D-7871 (1)). */
+export type LaneAuthAttempt = { state: AuthStatusState; expiresAt: number }
+  & ({ mine: true; attemptId: string; method: AuthMethod } | { mine: false });
 
 /** `POST /api/accounts/:id/auth/start`'s body: the method (`AUTH_METHODS`). */
 export interface AccountAuthStartBody { method: string }

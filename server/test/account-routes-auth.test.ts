@@ -194,8 +194,13 @@ describe('`LaneWire.authAttempt` (spec §6.2\'s resume)', () => {
     const other = await fresh(r.app);
     expect((await lanesOf(r, starter))[LANE]?.authAttempt).toBeUndefined();
     const a = await startAttempt(r, starter);
-    expect((await lanesOf(r, starter))[LANE]?.authAttempt).toEqual({ state: 'starting', expiresAt: a.expiresAt, mine: true });
+    // The starting session alone is told the attempt's id and method, which its resumed sheet sends the code with
+    // (D-7871 (1)); another session's answer carries neither.
+    expect((await lanesOf(r, starter))[LANE]?.authAttempt).toEqual({
+      state: 'starting', expiresAt: a.expiresAt, mine: true, attemptId: a.attemptId, method: 'login',
+    });
     expect((await lanesOf(r, other))[LANE]?.authAttempt).toEqual({ state: 'starting', expiresAt: a.expiresAt, mine: false });
+    expect(JSON.stringify((await lanesOf(r, other))[LANE])).not.toContain(a.attemptId);
     // The state is the last one the server read.
     r.status({ state: 'waiting-code', updatedAt: iso(T0), attemptId: a.attemptId, url: LOGIN_URL });
     await get(r, `/api/accounts/${LANE}/auth`, starter);

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
+import { mapBounded } from './bounded.js';
 import type { ProjectedHome } from '../../shared/api.js';
 import { inRoster, type AccountDef, type Roster } from '../../shared/roster.js';
 import { poolEligible, poolUndecidable } from './poolrule.js';
@@ -448,6 +449,9 @@ export async function readLaneStates(io: FleetIO, cfg: CcrcConfig): Promise<Lane
   return { lanes, disabled };
 }
 
+/** `readLimits`' file reads in flight at once (D-6436), through `bounded.ts`'s pool. */
+export const LIMITS_READ_CONCURRENCY = 8;
+
 export async function readLimits(
   io: FleetIO,
   cfg: CcrcConfig,
@@ -491,10 +495,18 @@ export async function readLimits(
     }))).filter((w): w is string => w !== null),
   );
   const out: Record<string, AccountLimits> = {};
-  for (const n of names.filter((n) => n.endsWith('.json') && !n.startsWith('.'))) {
+  // D-6436 (desktop polish C4): the files are read through the one bounded pool, not one round trip after another;
+  // the loop below still settles them in listing order. A read that rejects is handed to its own row's `catch`,
+  // exactly where the serial read's rejection landed, never to the whole map.
+  const jsonNames = names.filter((n) => n.endsWith('.json') && !n.startsWith('.'));
+  const reads = await mapBounded(jsonNames, LIMITS_READ_CONCURRENCY, (n) => io.readFile(path.join(cfg.limitsDir, n))
+    .then((content) => ({ content }), (err: unknown) => ({ err })));
+  for (const [i, n] of jsonNames.entries()) {
     const wrapper = n.slice(0, -'.json'.length);
     try {
-      const content = await io.readFile(path.join(cfg.limitsDir, n));
+      const read = reads[i]!;
+      if ('err' in read) throw read.err;
+      const content = read.content;
       if (content === null) throw new Error('missing');
       const raw = JSON.parse(content) as Record<string, unknown>;
       const ts = numOrNull(raw.ts);

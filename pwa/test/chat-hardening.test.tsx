@@ -719,6 +719,8 @@ describe('W5h-a: chat highlighting', () => {
       expect(container.querySelector('code.hljs')?.textContent).toBe('const a = 1;');
       expect(container.querySelector('[class^="hljs-"]')).toBeNull();
       expect(container.querySelector('.code-block-lang')?.textContent).toBe('TypeScript');
+      // The request is sent from an effect that may run after the plain frame; `release()` answers only what waits.
+      await waitFor(() => expect(chat.calls).toHaveLength(1));
       await act(async () => { chat.release(); });
       await waitFor(() => expect(container.querySelector('code.hljs .hljs-keyword')?.textContent).toBe('const'));
       expect(container.querySelector('code.hljs')?.textContent).toBe('const a = 1;');

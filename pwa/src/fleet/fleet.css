@@ -4229,3 +4229,58 @@ button.proj-card-pool::before {
   color: var(--ink-primary);
   overflow-wrap: anywhere;
 }
+
+/* THE RESUME BANNER (accounts plan Task A23, D-7871 (3); spec §6.2): one line and Continue, in flow, never over the
+   composer or the tab bar. The fleet's banner stack places it on a desk and on a phone's fleet view; on a phone's
+   other views it is the detail pane's first child. The ground is the notice's own pair (`--ink-primary` on
+   `--bg-surface`), so the contrast gate measures no new pair. */
+.auth-resume {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  color: var(--ink-primary);
+}
+.auth-resume-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+  margin: 0;
+  font: var(--weight-medium) var(--fs-sm) / var(--lh-normal) var(--family-ui);
+  overflow-wrap: anywhere;
+}
+.auth-resume-continue { flex: none; }
+/* On a phone's detail pane it sits above the screen with the page's own side gutter. */
+.shell-detail > .auth-resume { margin: calc(var(--sp-2) + var(--safe-top)) var(--sp-4) var(--sp-2); }
+/* A phone's session view is one viewport tall (`.chat`'s 100dvh), so a banner above it would push the composer off the
+   bottom. With the banner there, the pane is the viewport's column and the chat takes what is left. */
+@media (max-width: 899.98px) {
+  .shell-detail:has(> .auth-resume):has(> .chat) {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+  }
+  .shell-detail:has(> .auth-resume) > .auth-resume { flex: none; }
+  /* `width`: a column's item with auto side margins (`.chat`'s centring) is sized to its content, not stretched. */
+  .shell-detail:has(> .auth-resume) > .chat {
+    flex: 1 1 auto;
+    width: 100%;
+    height: auto;
+    min-height: 0;
+  }
+}
+
+/* The lane card's line for the same attempt, with Continue and Cancel (spec §6.2). */
+.acct-resume-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  font: var(--weight-medium) var(--fs-sm) / var(--lh-normal) var(--family-ui);
+}
+.acct-resume-line > span { flex: 1 1 12rem; min-width: 0; }

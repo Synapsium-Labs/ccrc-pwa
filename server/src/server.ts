@@ -54,7 +54,7 @@ import { answerAsk, type AskDeps } from './inject/ask.js';
 import { measuredIdentity, readRegistryMeasured, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
-import { listProjects, type CcdResult } from './lifecycle.js';
+import { FLEET_ROWS_MAX_AGE_MS, fleetRowsUsable, listProjects, ProjectWalkCache, type CcdResult } from './lifecycle.js';
 import { projectReadiness } from './readiness.js';
 import { sessionCommands } from './commands.js';
 import { CLIP_MIME, CLIP_NAME_RE, clipPath, clipStem, isSafeSessionId, stageUpload } from './clip.js';
@@ -2813,6 +2813,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // that arm means "not swept yet" and nothing else. Same shape of reasoning
   // as D-1024: the arm is kept because a build that could not express it could
   // never report the day it becomes reachable.
+  // D-6436: the route's one walk cache; the registry half comes from the watcher's listed tick while it is current.
+  const projectWalk = new ProjectWalkCache();
   app.get('/api/projects', async (req, reply) => {
     // `?class=` (routing spec, slice 4, Task 6): the placement FORECAST by
     // class, so a caller can ask "who could take this project running that
@@ -2833,7 +2835,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'class: not in the vocabulary' });
       }
     }
-    const listed = await listProjects(deps.io, deps.cfg);
+    const rows = fleetRowsUsable(watcher?.currentFleetListing() ?? null, Date.now(), FLEET_ROWS_MAX_AGE_MS) ?? undefined;
+    const listed = await listProjects(deps.io, deps.cfg, rows, projectWalk);
     // The pool half, composed HERE and never inside `listProjects`: that is the
     // fleet read (a readdir of the projects root unioned with registry
     // workdirs) and this is policy off the registry, exactly the split

@@ -177,7 +177,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import type { LandingEntry } from './landingLine.js';",
       "import type { NodeRole } from './node-role.js';",
       // The sign-in's state words (accounts plan Task A21) join the same import-free `accounts.ts` line: no new import.
-      "import type { AccountStateAnswer, AuthStatusState, LaneState } from './accounts.js';",
+      "import type { AccountStateAnswer, AuthMethod, AuthStatusState, LaneState } from './accounts.js';",
       "import type { DiskHealth } from './disk.js';",
       "import { parseReapCrumb, type ReapCrumb } from './reapcrumb.js';",
       "import type { HostPressureHealth } from './pressure.js';",
