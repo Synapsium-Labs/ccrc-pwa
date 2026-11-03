@@ -710,7 +710,9 @@ function highlightWorkerUrlSites(source: string, file: string): string[] {
   return sites;
 }
 
-describe('clause W5h-a: highlight.js stays in the worker, one checked sink, no test seam in pwa/src (M4.H4, M4.H15, M4.H17)', () => {
+// Each planted case copies and re-scans the whole of pwa/src; under a loaded box that has passed vitest's 5 s default,
+// so the clause gives its cases 30 s (a slow scan is not a wrong one).
+describe('clause W5h-a: highlight.js stays in the worker, one checked sink, no test seam in pwa/src (M4.H4, M4.H15, M4.H17)', { timeout: 30_000 }, () => {
   const copies: string[] = [];
   afterAll(() => { for (const dir of copies) rmSync(dir, { recursive: true, force: true }); });
   /** A fresh copy of `pwa/src` with `edit` applied to one file (created when absent); returns the copy's base. */
