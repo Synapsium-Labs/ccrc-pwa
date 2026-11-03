@@ -4,7 +4,7 @@
 // Fixture HOMEs only (`healthy()`); the check runs alone, sourced, under TZ=UTC so the swap.log stamps this file writes
 // are the ones its 7-day window reads. Every threshold edge has its pair: AT the bound is a PASS, one byte past is a WARN,
 // so a `>=` mutant and an off-by-one in either figure each red a row.
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,8 +17,12 @@ installDoctorHooks();
 const U1 = 'c3a10e57-5555-4bcc-b60b-0cfc0dc3d199';
 const U2 = 'd4b20f68-6666-4ccd-a71c-1dfd1ed4e2aa';
 const DAY = 86_400_000;
-/** swap.log's stamp for `msAgo` ago, in UTC (the check runs under TZ=UTC). */
-const stamp = (msAgo: number): string => new Date(Date.now() - msAgo).toISOString().replace('T', ' ').slice(0, 19);
+/** One clock read per test: every fixture line and every expected stamp is `msAgo` before this same instant, so a second
+ *  boundary crossed between writing the fixture and building the expectation cannot split them. */
+let now = Date.now();
+beforeEach(() => { now = Date.now(); });
+/** swap.log's stamp for `msAgo` before the test's fixed `now`, in UTC (the check runs under TZ=UTC). */
+const stamp = (msAgo: number): string => new Date(now - msAgo).toISOString().replace('T', ' ').slice(0, 19);
 const first = (msAgo: number, bytes: number | '?', cause = 'exdev-no-root'): string =>
   `${stamp(msAgo)} sidecar ${U1} -> /w/.claude-lane-a/projects/-w-project-a/${U1} (copy: ${cause} ${bytes} bytes)`;
 const merged = (msAgo: number, copies: Array<[string, number, number]>): string =>
