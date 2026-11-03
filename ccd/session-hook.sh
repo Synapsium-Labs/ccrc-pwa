@@ -1558,7 +1558,7 @@ _hook_compact_pre() {
   # ONE `find`, two subjects: an unconsumed canonical set inside the window, and
   # a young PostCompact claim, which is the same evidence one settlement step
   # later — a compaction whose set has already been claimed is still in flight.
-  if [ -n "$(find "$REG" -maxdepth 1 \( -name "$id.compactset" -o -name ".$id.compactpost.*.claim" \) -mmin "-$mins" 2>/dev/null)" ]; then
+  if [ -n "$(find "$REG" -maxdepth 1 \( -name "$id.compactset" -o -name ".$id.compactpost.*.claim" \) -mmin "-$mins" 2>/dev/null)" ]; then  # @anchor compact-pre-overlap-find
     CS_SCOPE="ambiguous"; CS_TRANSCRIPT=""; CS_AGENT=""; ovl="true"
   fi
   # ITEM 3 (r3 R1), and the first of this section's three: `find` ran between
@@ -1583,7 +1583,7 @@ _hook_compact_pre() {
     [[ -n "$cand" ]] || continue
     suffix="${cand##*/}"; suffix="${suffix#".$id."}"
     _hook_family_sweepable "$suffix" || continue
-    rm -f "$cand" 2>/dev/null || true
+    rm -f "$cand" 2>/dev/null || true  # @anchor compact-sweep-rm
   done <<<"$aged"
   at=$(_hook_epoch_ms)
   nonce="compact-${at}-${$}-${RANDOM}-${RANDOM}"
@@ -1955,7 +1955,7 @@ _hook_compact_post() {
   # spelled in the DIRECTION that attributes nothing: anything but a `files`
   # that is absent, or an array every element of which is an object with a
   # non-empty string `path`, sets `norm`.
-  if [[ -n "$snap" ]]; then
+  if [[ -n "$snap" ]]; then  # @anchor compact-post-norm
     if (( aged )); then
       norm="null"
     elif jq -e '.overlap == true' "$snap" >/dev/null 2>&1; then
