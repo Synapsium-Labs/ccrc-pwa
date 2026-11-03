@@ -1,4 +1,4 @@
-// Moving between items, and the recommended option on a decide item (desktop-polish PL9, D-7896; spec §2 "Moving between
+// Moving between items, and the recommended option on a decide item (desktop-polish PL9; spec §2 "Moving between
 // items" and §3.2 "The recommendation", D23 and D24), measured in a real Chrome over the production build. The jsdom suites
 // (test/waiting-routes.test.tsx, item-view.test.tsx, ledger-words.test.ts) pin the markup, the order and the words; this file
 // holds what they cannot: at 360, 390, 900, 1280 and 1920 in both skins, the way back is drawn (Step 0 measured it hidden from

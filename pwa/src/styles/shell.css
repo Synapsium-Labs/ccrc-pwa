@@ -81,7 +81,7 @@
 @media (min-width: 900px) {
   .app-shell {
     /* The list column's width, defined once: the frame's own sidebar track below, and the list the Waiting on you item
-       page keeps beside an open item (desktop-polish PL9, D-7896, `ledgers.css`'s `.wl-route[data-beside='list']`), which
+       page keeps beside an open item (desktop-polish PL9, `ledgers.css`'s `.wl-route[data-beside='list']`), which
        is the same master-detail shape drawn inside the pane. A skin that sets its own sidebar track keeps it. */
     --shell-list-col: clamp(300px, 25vw, 380px);
     display: grid;

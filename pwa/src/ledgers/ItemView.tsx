@@ -215,7 +215,7 @@ const NOTE_JOIN = '\n\nNote: ';
 const OWN = 'own';
 const OWN_WORD = 'Your own answer';
 
-/** An option's row text: the option's words, and on the one its raiser recommends the "Recommended" mark (plan PL9, D-7896;
+/** An option's row text: the option's words, and on the one its raiser recommends the "Recommended" mark (plan PL9;
  *  spec §3.2, D24). The mark is words, never colour alone, and it sits inside the option's own label, so it names that option. */
 function OptionText({ text, recommended }: { text: string; recommended: boolean }): ReactNode {
   if (!recommended) return text;

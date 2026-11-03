@@ -264,7 +264,7 @@ describe('the item view', () => {
   });
 });
 
-describe('the recommendation on a decide item (plan PL9, D-7896; spec §3.2, D24)', () => {
+describe('the recommendation on a decide item (plan PL9; spec §3.2, D24)', () => {
   const WHY = 'Keeping the order lands the reviewed waves first; the library first would hold two reviews for a week.';
   const decide = (over: Partial<ReturnType<typeof itemView>> = {}) =>
     itemView({ kind: 'decide', options: ['Library first', 'Keep the order', 'Split the wave'], recommended: 1, recommendedWhy: WHY, ...over });

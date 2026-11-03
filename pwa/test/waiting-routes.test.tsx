@@ -204,7 +204,7 @@ describe('the routes\' own paths', () => {
   });
 });
 
-describe('moving between items (plan PL9, D-7896; spec §2 "Moving between items", D23)', () => {
+describe('moving between items (plan PL9; spec §2 "Moving between items", D23)', () => {
   // prog-b holds the blocking item, so it sorts first: the combined list draws 3, 2, then 4, 1.
   const ITEMS = [
     itemView({ id: 1, program: 'prog-a', neededBy: 'later', title: 'One' }),

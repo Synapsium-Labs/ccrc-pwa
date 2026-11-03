@@ -30,7 +30,7 @@ export const CLEARED_HEADING = 'Recently cleared';
 export const EMPTY_WORD = 'Nothing needs you.';
 export const NO_FRAME_WORD = 'Waiting for the first update from the server…';
 export const NO_PROGRAMME_WORD = 'Not in a programme';
-/** A decide item's recommended option (plan PL9, D-7896; spec §3.2, D24): the mark on it, and the heading of its reasons. */
+/** A decide item's recommended option (plan PL9; spec §3.2, D24): the mark on it, and the heading of its reasons. */
 export const RECOMMENDED_WORD = 'Recommended';
 export const RECOMMENDED_WHY_HEADING = 'Why it is recommended';
 
@@ -187,7 +187,7 @@ export function ageWords(at: number, now: number): string {
   return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
 }
 
-// ── moving between items (plan PL9, D-7896; spec §2 "Moving between items", D23) ───────────────────────────────────────────
+// ── moving between items (plan PL9; spec §2 "Moving between items", D23) ───────────────────────────────────────────
 //
 // An opened item steps to the previous and next item OF THE LIST IT WAS OPENED FROM, in that list's own order and filter. There
 // is ONE ORDER: `groupByProgramme`'s groups, which the combined list, its side rail's filter and the programme view all draw, read

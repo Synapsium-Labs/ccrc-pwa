@@ -35,7 +35,7 @@ export interface WaitingScreenProps {
   /** Told the filter's programme when the operator picks one in the side rail (`null` for every programme, and for the sessions
    *  in no programme, which no item can be opened from), so the route can keep it in the URL. */
   readonly onFilter?: (programme: string | null) => void;
-  /** Opens an item, naming the list it is opened from (plan PL9, D-7896): the item's previous and next follow that list. */
+  /** Opens an item, naming the list it is opened from (plan PL9): the item's previous and next follow that list. */
   readonly onOpenItem: (id: number, list: ItemList) => void;
   readonly onOpenSession: (id: string) => void;
 }
@@ -93,7 +93,7 @@ function QuestionButton({ q, now, onOpen }: { q: QuestionRow; now: number; onOpe
 }
 
 /** One programme's rows: its items and its sessions' questions, as the list and the programme view both draw them, and as
- *  the list beside an open item draws them, with that item marked current (plan PL9, D-7896). */
+ *  the list beside an open item draws them, with that item marked current (plan PL9). */
 export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = null }: {
   rows: readonly Row[]; now: number; onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null;
 }): ReactNode {
@@ -107,7 +107,7 @@ export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = nul
 }
 
 /** One programme's block of a list: its heading in its hue, and its rows. The combined list draws one per group, and so does
- *  the list beside an open item (plan PL9, D-7896), which passes the open item as `currentId`. */
+ *  the list beside an open item (plan PL9), which passes the open item as `currentId`. */
 export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null }: {
   group: ProgrammeGroup; runs: readonly RunSummary[] | null; hue: string | null; now: number;
   onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null;

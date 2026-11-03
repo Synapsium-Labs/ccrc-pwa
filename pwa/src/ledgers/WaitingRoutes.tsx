@@ -33,13 +33,13 @@ import './ledgers.css';
 /** The list's path, read off the `waiting` row of the route table: this file spells no path of its own. */
 const WAITING_PATH: string = ROUTES.find((r) => r.id === 'waiting')?.path ?? '/';
 
-/** The item path's query naming the list it was opened from (plan PL9, D-7896), and the combined list's query naming its side
+/** The item path's query naming the list it was opened from (plan PL9), and the combined list's query naming its side
  *  rail's filter: both ride the URL, so a reload or a shared link keeps them. */
 export const FROM_QUERY = 'from';
 export const PROGRAMME_FILTER_QUERY = 'programme';
 
 /** The one builder of an item's path, `/waiting/<id>`, which the `item` row of the route table parses, with `?from=` naming the
- *  list it is opened from (plan PL9, D-7896). The combined list, unfiltered, is the default and writes no query. */
+ *  list it is opened from (plan PL9). The combined list, unfiltered, is the default and writes no query. */
 export const itemPath = (id: number, list: ItemList = COMBINED_LIST): string =>
   `${WAITING_PATH}/${id}${list.at === 'waiting' && list.programme === null ? '' : `?${new URLSearchParams({ [FROM_QUERY]: fromWord(list) })}`}`;
 
@@ -74,7 +74,7 @@ export function useUnavailable(store: FleetStore, listed: boolean): string | nul
 }
 
 /** `/waiting`, with the side rail's filter read from and written to its URL (`?programme=`), so the way back from an item
- *  opened under the filter lands on the filtered list (plan PL9, D-7896). */
+ *  opened under the filter lands on the filtered list (plan PL9). */
 export function WaitingRoute({ store = useFleetStore }: { store?: FleetStore }): ReactNode {
   const view = store((s) => s.waiting);
   const { sessions, runs } = useHeard(store);
@@ -108,7 +108,7 @@ function useOpenedFrom(): ItemList {
   return listOfFromWord(new URLSearchParams(search).get(FROM_QUERY));
 }
 
-/** The item's way back to the list it was opened from, AT EVERY WIDTH (plan PL9, D-7896; spec §2, D23): labelled with that
+/** The item's way back to the list it was opened from, AT EVERY WIDTH (plan PL9; spec §2, D23): labelled with that
  *  list's name, and not the shell's back chevron, which a desk hides because the fleet beside the pane is the way out of a
  *  screen; the fleet is not the way back to this list. */
 function ListBack({ list, runs }: { list: ItemList; runs: readonly RunSummary[] | null }): ReactNode {
@@ -141,7 +141,7 @@ function ItemNav({ list, place, runs }: { list: ItemList; place: ItemPlace | nul
   );
 }
 
-/** The width from which the list an item was opened from stays beside it (plan PL9, D-7896; spec §2, D23): the shell's own
+/** The width from which the list an item was opened from stays beside it (plan PL9; spec §2, D23): the shell's own
  *  list column (`--shell-list-col`, shell.css) beside the item, which still has room for its card. Below it the item is alone
  *  with its way back and its steps. Mounted by the query, as the frame mounts its width-gated parts, never hidden by CSS. */
 export const BESIDE_QUERY = '(min-width: 1280px)';

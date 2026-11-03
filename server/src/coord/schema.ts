@@ -2064,7 +2064,7 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE programs ADD COLUMN inShortAt INTEGER;
   `,
   // ── 38: user_version 37 -> 38 ─────────────────────────────────────────────
-  // A decide item's recommendation (plan PL9, D-7896, spec 2026-10-31 §3.2, D24): `operator_items.recommended` is the
+  // A decide item's recommendation (plan PL9, spec 2026-10-31 §3.2, D24): `operator_items.recommended` is the
   // 0-based index into `options` of the option the raiser recommends, and `operator_items.recommendedWhy` says why it beats
   // each alternative. Their ONE writer is `raiseItem` (`ledgersStore.ts`), from a body `parseRaise` has checked: both set on
   // a `decide` item, both NULL on every other kind. Their readers are `itemById` and `itemsFor`, and the console reads them

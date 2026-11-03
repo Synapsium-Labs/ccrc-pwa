@@ -133,7 +133,7 @@
 .wi-card .wi-hint { margin: 0; font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .wi-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
 
-/* A decide item's recommended option (desktop-polish PL9, D-7896; spec §3.2, D24). The mark is the word "Recommended", inside
+/* A decide item's recommended option (desktop-polish PL9; spec §3.2, D24). The mark is the word "Recommended", inside
    the option's own row, on the accent tint the Settings palette chooser draws its chosen card on (ink on `--accent-tint`), so
    it adds no new pair; the row's own edge turns to the accent (a non-text edge). The reasons sit above the choices, on the card's
    surface with an accent rule, so they are read before the pick. Nothing is read out of colour alone. */
@@ -148,7 +148,7 @@
   background: var(--bg-surface); color: var(--ink-primary); min-width: 0;
 }
 
-/* Moving between items (desktop-polish PL9, D-7896; spec §2, D23). The strip above an item: its way back to the list it was opened
+/* Moving between items (desktop-polish PL9; spec §2, D23). The strip above an item: its way back to the list it was opened
    from, and the position with Previous and Next. Every control is a design-system button (`min-h-tap`, the 44 px floor under a
    coarse pointer), visible at every width: the shell hides only the back chevron, and this is not one. */
 .wi-nav {

@@ -2376,7 +2376,7 @@ describe('the Waiting on you pills and the item band (desktop-polish PL5a)', () 
       ['.wi-act .wi-refusal', dead],
       [".wi-act .wi-status[data-stale='true']", dead],
       ['.wi-act .wi-status', 'var(--status-busy-text) on var(--accent-tint)'],
-      // Desktop-polish PL9 (D-7896): the "Recommended" mark on a decide item's option, its reasons, and the item strip's position.
+      // Desktop-polish PL9: the "Recommended" mark on a decide item's option, its reasons, and the item strip's position.
       ['.wi-act .wi-rec', 'var(--ink-primary) on var(--accent-tint)'],
       ['.wi-act .wi-why-rec', 'var(--ink-primary) on var(--bg-surface)'],
       ['.wi-nav .wi-pos', 'var(--ink-secondary) on var(--bg-page)'],

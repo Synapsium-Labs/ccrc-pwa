@@ -150,7 +150,7 @@ export function ProgrammeScreen({ slug, store = useFleetStore }: { slug: string;
   const held = view?.goals.find((g) => g.program === slug) ?? null;
   const heldItems = new Set<number>([...(view?.items ?? NO_ITEMS), ...(view?.cleared ?? NO_ITEMS)].map((i) => i.id));
   const hue = fleetHues(heard).get(slug) ?? 'none';
-  // The list an item opened here names, so its way back and its steps stay in this programme (plan PL9, D-7896).
+  // The list an item opened here names, so its way back and its steps stay in this programme (plan PL9).
   const list: ItemList = { at: 'programme', programme: slug };
   return (
     <div className="wl pv" data-program={slug} data-hue={hue}>

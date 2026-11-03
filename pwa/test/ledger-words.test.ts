@@ -160,7 +160,7 @@ describe('programmeWaitingCount (the chip\'s count)', () => {
   });
 });
 
-// ── moving between items (plan PL9, D-7896; spec §2 "Moving between items", D23) ──────────────────────────────────────────
+// ── moving between items (plan PL9; spec §2 "Moving between items", D23) ──────────────────────────────────────────
 describe('the list an item was opened from rides the URL as one word', () => {
   const LISTS: readonly (readonly [string, ItemList])[] = [
     ['waiting', { at: 'waiting', programme: null }],
