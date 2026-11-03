@@ -30,6 +30,7 @@ import { CoordStore } from './coord/store.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from './coord/updateintentlog.js';
 import { collectLaneJournalAt, defaultCollectLaneJournalPath } from './coord/collectLaneJournal.js';
+import { operatorSecretRows, withOperatorSecretRows } from './coord/ledgersSecrets.js';
 import { readLocalCcdCaps } from './localcaps.js';
 import { localUpdateSpawnFor } from './update/converge.js';
 import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
@@ -40,7 +41,7 @@ import { allowAll } from './linear/policyPoint.js';
 import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
 import { accountOpsFor } from './accounts/ops.js';
-import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf } from './accounts/mask.js';
+import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf, fingerprintGeneration, fingerprintRow } from './accounts/mask.js';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -332,7 +333,13 @@ const masker = new SecretMasker({
   token: () => mailToken.currentValue(),
   requestRekey: async () => {
     const r = await deps.accountOps?.run('roster', null, {});
-    return r?.kind === 'exited' && r.code === 0 ? fingerprintAnswerOf(r.stdout) : null;
+    const fromBox = r?.kind === 'exited' && r.code === 0 ? fingerprintAnswerOf(r.stdout) : null;
+    // The operator's pasted secrets (plan PL6) are held here, not on the box, so the box's answer never carries them: their
+    // rows are re-keyed under the current token beside it, or a rotation would leave them stale (and the re-key retrying).
+    const token = mailToken.currentValue();
+    if (token === null || token === '') return fromBox;
+    const rows = await operatorSecretRows(cfg.ccrcDir, (laneId, value) => fingerprintRow(token, laneId, value));
+    return withOperatorSecretRows(fromBox, fingerprintGeneration(token), rows);
   },
 });
 deps.masker = masker;

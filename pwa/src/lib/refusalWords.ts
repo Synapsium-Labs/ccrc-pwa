@@ -516,7 +516,7 @@ export function refusalText<K extends string>(err: unknown, table: Readonly<Reco
  */
 export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'programme-ended' | 'programme-unclaimed' | 'not-open' | 'duplicate' | 'programme-live' | 'use-secret-route'
-  | 'bad-request' | 'too-large' | 'unknown-item' | 'not-configured', string
+  | 'not-a-secret-item' | 'bad-slot' | 'bad-request' | 'too-large' | 'unknown-item' | 'not-configured', string
 >> = {
   'programme-ended': 'This programme has no open run, so no coordinator is waiting for this. Dismiss the item instead.',
   'programme-unclaimed': 'This programme has an open run, but no coordinator holds it, so nobody would see your tick. Abandon that run from the Runs screen first, or wait for a coordinator to take it.',
@@ -524,6 +524,9 @@ export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'duplicate': 'An earlier reply for this item is still waiting for the coordinator, so a second one was not sent.',
   'programme-live': 'Dismiss is only for a programme with no open run, and this one still has one.',
   'use-secret-route': 'This item asks for a secret. A secret is given on its own panel, never by marking the item done.',
+  // The secret's own route (plan PL6).
+  'not-a-secret-item': 'This item does not ask for a secret.',
+  'bad-slot': 'This item names a place for the secret that the box will not use. Ask the coordinator to raise it again.',
   'bad-request': `The server did not accept that answer. An answer is between 1 and ${ANSWER_MAX} characters; shorten it and try again.`,
   'too-large': 'That answer, with its note, is too long to send to the coordinator. Shorten it and try again.',
   'unknown-item': 'The server has no such item any more. The list will update.',

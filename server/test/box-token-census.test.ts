@@ -265,7 +265,8 @@ const TOKEN_DOORS = ['/api/token/rotate'];
  *  and called from `server.ts` beside `/api/digest/correct`, so `SESSION_ONLY` cannot see them, for the kickoff route's
  *  reason. Hand-kept for the NAMES only: the ledgers describe below derives the same set from the file and compares in both
  *  directions, so a route there cannot join or leave without this literal moving. */
-const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/programmes/:slug/goals', '/api/items/:id/tick', '/api/items/:id/dismiss'];
+// …and the secret's own route (plan PL6), a credential act: the account gate with a step-up, still no box token.
+const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/programmes/:slug/goals', '/api/items/:id/tick', '/api/items/:id/dismiss', '/api/items/:id/secret'];
 
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS];

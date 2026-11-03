@@ -134,6 +134,9 @@ export const LEDGER_ROUTE_REFUSALS = {
   programmeEnded: 'programme-ended', programmeUnclaimed: 'programme-unclaimed', useSecretRoute: 'use-secret-route',
   // …and the tick's mail past the mail body cap (review 1335 F6): the generic `too-large` word, 413, its status declared with the generic ones.
   tooLarge: 'too-large',
+  // The secret's own route (plan PL6): an item that is not a secret item (`not-a-secret-item`), and a stored programme or slot
+  // name that fails its shape when the route re-checks both before building any path (`bad-slot`).
+  notSecretItem: 'not-a-secret-item', badSlot: 'bad-slot',
 } as const;
 export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
 
@@ -282,6 +285,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The operator's routes (plan PL4): CHOSEN, not measured. 409 for each: the item's programme is in a state the tick cannot
   // act in, or the item is of a kind whose door is another route; none is a fault in what the operator sent.
   [LEDGER_ROUTE_REFUSALS.programmeEnded]: 409, [LEDGER_ROUTE_REFUSALS.programmeUnclaimed]: 409, [LEDGER_ROUTE_REFUSALS.useSecretRoute]: 409,
+  // The secret's route (plan PL6): CHOSEN, not measured. 409 for both: the item is of a kind this door does not take, or names a
+  // slot this server will not build a path from; neither is a fault in the value the operator sent.
+  [LEDGER_ROUTE_REFUSALS.notSecretItem]: 409, [LEDGER_ROUTE_REFUSALS.badSlot]: 409,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
   // for a call that names more than one, or names an issue that now lives in another team; 403 for the policy point's

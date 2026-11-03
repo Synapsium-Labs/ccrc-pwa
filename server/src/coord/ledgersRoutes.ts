@@ -7,7 +7,8 @@
 // 400 lines (ARCH-01, `growth-check`).
 //
 // The OPERATOR'S routes (plan PL4) are in the same file, registered by `registerLedgerOperatorRoutes` from `server.ts`
-// beside `/api/digest/correct`: session-gated only (they sit behind the auth gate when it is armed), no box token. They are
+// beside `/api/digest/correct`: session-gated only (they sit behind the auth gate when it is armed), no box token. One of them,
+// `PUT /api/items/:id/secret` (plan PL6), is a credential act and takes the account gate with a step-up as well. They are
 // the doors `box-token-census.test.ts` names as session-only, and they decide nothing themselves: a move is `nextItemState`'s,
 // the stale label is `itemIsStale`'s (L1, `shared/ledgers.ts`), and ONE builder, `viewOfItem`, makes an `ItemView` for the
 // routes of both lanes and for the `/ws/fleet` frame.
@@ -26,14 +27,16 @@ import type { NoticeSink } from '../notice.js';
 import { refuseRoute } from '../refuse.js';
 import { LEDGER_ROUTE_REFUSALS } from '../../../shared/refusal.js';
 import {
-  ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, SOON_LABEL_MAX,
-  isSlotSlug, isSpecPath, itemIsStale, nextItemState, tickMailLeftBehind, type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy,
-  type WaitingView,
+  ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, SECRET_VALUE_MAX, SOON_LABEL_MAX,
+  isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, secretAnswer, secretTailOf, tickMailLeftBehind,
+  type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy, type SecretUnmasked, type WaitingView,
 } from '../../../shared/ledgers.js';
 import type { CoordStore, ItemEventRow, ItemRow } from './store.js';
 import { itemMailSubject, tickMail } from './ledgersMail.js';
 import { OUTSTANDING_DELIVERY_STATES } from '../../../shared/api.js';
 import { insertSystemMailTx } from './rundefsTx.js';
+import { credentialBodyRoute, type AccountGate } from '../accounts/gate.js';
+import { operatorSlotNamesValid, readOperatorSecretMeta, writeOperatorSecret, type OperatorSecretMeta } from './ledgersSecrets.js';
 
 /** What the coordinator routes need. `requireMailToken` and `requireAttribution` are `registerCoordRoutes`'s own closures,
  *  handed in rather than rebuilt, so the gate and the sender check are one implementation for every lane. */
@@ -47,6 +50,8 @@ export interface LedgerCoordinatorDeps {
   /** The coordinator's presence as the server last measured it (`coordinatorPresenceIn` over the fleet frame it last
    *  broadcast and the ids of the registry listing it last took), for an item's stale label and for the duplicate guard. */
   presenceOf: (sessionId: string) => CoordinatorPresence;
+  /** A secret item's slot state for its view (plan PL6): the coordinator learns only that it is set. */
+  secretOf: SecretMetaOf;
 }
 
 /** The PWA route a blocking item's push opens on tap: the Waiting on you list (`pwa/src/lib/routes.ts`'s `waiting` row). */
@@ -58,13 +63,19 @@ const RETURN_NOTE_MAX = 600;
 /** The sentence of one In short copy (spec §4). */
 const IN_SHORT_MAX = 1200;
 
-/** One item as the console reads it, with the stale verdict its builder measured. `secretSet` is `null` until PL6 stores one. */
-export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale: boolean): ItemView {
+/** A slot's metadata (plan PL6), or `null` when it holds none: `readOperatorSecretMeta` over the server's `ccrcDir`. */
+export type SecretMetaOf = (program: string, slot: string) => OperatorSecretMeta | null;
+const NO_SECRETS: SecretMetaOf = () => null;
+
+/** One item as the console reads it, with the stale verdict its builder measured and, for a secret item, its slot's state
+ *  (never the value: the metadata holds none). */
+export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale: boolean, secret: OperatorSecretMeta | null = null): ItemView {
   return {
     id: row.id, program: row.program, runId: row.runId, kind: row.kind, title: row.title, why: row.why, how: row.how,
     options: row.options, neededBy: row.neededBy, soonLabel: row.soonLabel, state: row.state, stale,
     raisedAt: row.raisedAt, tickedAt: row.tickedAt, closedAt: row.closedAt, answer: row.answer, note: row.note,
-    secretSlot: row.secretSlot, secretSet: null,
+    secretSlot: row.secretSlot,
+    secretSet: secret === null ? null : { at: secret.setAt, tail: secret.tail, masked: secret.masked, ...(secret.why === undefined ? {} : { why: secret.why }) },
     history: events.map((e) => ({ at: e.at, act: e.act, note: e.note })),
   };
 }
@@ -73,7 +84,9 @@ export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale:
  *  `/ws/fleet` frame all come through here, so a label cannot differ between them. It MEASURES the inputs of `itemIsStale`
  *  (the newest tick mail's delivery state, the coordinator's presence) and hands them to that L1 decider; it decides
  *  nothing itself. Only a `checking` item is measured: an item with no coordinator at all reads `absent`. */
-export function viewOfItem(coord: CoordStore, row: ItemRow, now: number, presenceOf: (sessionId: string) => CoordinatorPresence): ItemView {
+export function viewOfItem(
+  coord: CoordStore, row: ItemRow, now: number, presenceOf: (sessionId: string) => CoordinatorPresence, secretOf: SecretMetaOf = NO_SECRETS,
+): ItemView {
   let stale = false;
   if (row.state === 'checking') {
     const coordinator = coord.programmeCoordinator(row.program);
@@ -85,17 +98,20 @@ export function viewOfItem(coord: CoordStore, row: ItemRow, now: number, presenc
       coordinator: coordinator === null ? 'absent' : presenceOf(coordinator),
     });
   }
-  return itemViewOf(row, coord.itemHistory(row.id), stale);
+  const secret = row.kind === 'secret' && row.secretSlot !== null ? secretOf(row.program, row.secretSlot) : null;
+  return itemViewOf(row, coord.itemHistory(row.id), stale, secret);
 }
 
 /** What waits on the operator, whole: every programme's open and checking items, the Recently cleared trail, and goals for
  *  each programme that holds an item or a spec pin (slug order). The read route and the live frame both answer this. */
-export function waitingViewOf(coord: CoordStore, now: number, presenceOf: (sessionId: string) => CoordinatorPresence): WaitingView {
+export function waitingViewOf(
+  coord: CoordStore, now: number, presenceOf: (sessionId: string) => CoordinatorPresence, secretOf: SecretMetaOf = NO_SECRETS,
+): WaitingView {
   const { open, cleared } = coord.itemsFor(null, now);
   const programmes = [...new Set([...open.map((i) => i.program), ...cleared.map((i) => i.program), ...coord.pinnedProgrammes()])].sort();
   return {
-    items: open.map((r) => viewOfItem(coord, r, now, presenceOf)),
-    cleared: cleared.map((r) => viewOfItem(coord, r, now, presenceOf)),
+    items: open.map((r) => viewOfItem(coord, r, now, presenceOf, secretOf)),
+    cleared: cleared.map((r) => viewOfItem(coord, r, now, presenceOf, secretOf)),
     goals: programmes.map((p) => coord.goalsFor(p)),
   };
 }
@@ -235,7 +251,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
     if (!owns(coord, reply, who.byId, slug)) return;
     const { open, cleared } = coord.itemsFor(slug, deps.now());
-    return reply.code(200).send({ ok: true, items: [...open, ...cleared].map((r) => viewOfItem(coord, r, deps.now(), deps.presenceOf)) });
+    return reply.code(200).send({ ok: true, items: [...open, ...cleared].map((r) => viewOfItem(coord, r, deps.now(), deps.presenceOf, deps.secretOf)) });
   });
 
   // ── one item: confirm, send back, withdraw, and the blocking switch ─────────────────────────────────────────────────
@@ -417,6 +433,12 @@ export interface LedgerOperatorDeps {
   bus: Bus;
   now: () => number;
   presenceOf: (sessionId: string) => CoordinatorPresence;
+  /** The account gate (D-5511): the secret's route is a credential act, so it asks for a step-up first (plan PL6). */
+  gate: AccountGate;
+  /** Where the operator-secret slots live (`cfg.ccrcDir`, `coord/ledgersSecrets.ts`). */
+  ccrcDir: string;
+  /** The egress masker's one registration of a server-held secret (`SecretMasker.ingestSecret`). */
+  registerSecret: (laneId: string, value: string) => 'masked' | SecretUnmasked;
 }
 
 /** The tick's words to the operator, and the reasons behind the two programme refusals. */
@@ -424,12 +446,57 @@ const PROGRAMME_ENDED_SENTENCE = 'the programme has no open run, so no coordinat
 const PROGRAMME_UNCLAIMED_SENTENCE =
   'the programme\'s open run has no coordinator to mail: end that run with the operator\'s abandon door first (a dismiss is refused while it is open)';
 
+/** The secret route's body cap: a value of `SECRET_VALUE_MAX` characters JSON-escaped, with room to spare (plan PL6). On the
+ *  secret's route the body IS the secret, so its body errors are fixed words (`credentialBodyRoute`). */
+const SECRET_BODY_LIMIT = 16384;
+
 export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerOperatorDeps): void {
   const bad = (reply: FastifyReply, detail: string) => refuseRoute(reply, 'bad-request', { detail });
   const itemIdOf = (req: FastifyRequest): number | null => {
     const raw = (req.params as { id: string }).id;
     return /^[1-9][0-9]{0,15}$/.test(raw) ? Number(raw) : null;
   };
+  const secretOf: SecretMetaOf = (program, slot) => readOperatorSecretMeta(deps.ccrcDir, program, slot);
+
+  /**
+   * WHAT A TICK NEEDS, once for both doors (the tick and the secret's route): the programme's coordinator, the tick's mail,
+   * and no outstanding earlier tick of the item. Synchronous: it reads and decides nothing it does not answer. Sends the
+   * refusal and answers null, or answers the coordinator and the mail ready to queue.
+   */
+  const tickPlan = (coord: CoordStore, reply: FastifyReply, item: ItemRow, answer: string | null):
+    { coordinator: string; mail: { subject: string; body: string } } | null => {
+    const coordinator = coord.programmeCoordinator(item.program);
+    if (coordinator === null) {
+      void (coord.programmeHasOpenRun(item.program)
+        ? refuseRoute(reply, LEDGER_ROUTE_REFUSALS.programmeUnclaimed, { detail: PROGRAMME_UNCLAIMED_SENTENCE })
+        : refuseRoute(reply, LEDGER_ROUTE_REFUSALS.programmeEnded, { detail: PROGRAMME_ENDED_SENTENCE }));
+      return null;
+    }
+    const mail = tickMail(item, answer);
+    if (!mail.ok) {
+      void refuseRoute(reply, LEDGER_ROUTE_REFUSALS.tooLarge, { detail: `the mail to the coordinator would be ${mail.bytes} bytes, past the ${mail.limit} byte cap` });
+      return null;
+    }
+    // The newest tick mail of this item, whoever it went to and whatever run it rode (review 1335 F2): one still outstanding
+    // blocks a second, so a takeover cannot queue it twice either. Except one left behind (review 1336 F1): its recipient is
+    // no longer the coordinator and reads dead or absent, so nothing will ever acknowledge it.
+    const earlier = coord.newestTickMail(mail.subject);
+    if (earlier !== null && OUTSTANDING_DELIVERY_STATES.includes(earlier.state)
+      && !tickMailLeftBehind({ recipient: earlier.toId, coordinator, recipientPresence: deps.presenceOf(earlier.toId) })) {
+      void refuseRoute(reply, 'duplicate', { detail: `an earlier tick of this item went to ${earlier.toId}, which has not acknowledged it` });
+      return null;
+    }
+    return { coordinator, mail: { subject: mail.subject, body: mail.body } };
+  };
+
+  /** The tick with its mail, in one transaction (`tickWithMail` re-decides the move inside it). The mail rides NO run (review
+   *  1335 F1): the run it would ride is the one the coordinator closes when the wave ends, and `closeRun` parks every
+   *  unacknowledged mail of the run it closes. System mail to a literal session id with no run is deliverable whatever the
+   *  runs do (the digest's correction is the same shape). */
+  const tickNow = (coord: CoordStore, id: number, answer: string | null, plan: { coordinator: string; mail: { subject: string; body: string } }, now: number) =>
+    coord.tickWithMail(id, answer, now, () => insertSystemMailTx(coord, null, {
+      fromId: 'operator', toId: plan.coordinator, runId: null, kind: 'answer', subject: plan.mail.subject, body: plan.mail.body,
+    }));
 
   // NO AWAIT in the two moves below, deliberately: the handlers are synchronous, so the state they read (the item, the
   // programme's runs, the outstanding mail) is the state they write against; `tickWithMail` and `moveItem` re-decide inside
@@ -439,7 +506,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   app.get('/api/waiting', (_req, reply) => {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
-    return reply.code(200).send({ ok: true, waiting: waitingViewOf(coord, deps.now(), deps.presenceOf) });
+    return reply.code(200).send({ ok: true, waiting: waitingViewOf(coord, deps.now(), deps.presenceOf, secretOf) });
   });
 
   app.get('/api/programmes/:slug/goals', (req, reply) => {
@@ -473,34 +540,13 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       answer = text(given, ANSWER_MAX);
       if (answer === null) return bad(reply, `a ${item.kind} item needs an answer of 1 to ${ANSWER_MAX} characters`);
     }
-    const coordinator = coord.programmeCoordinator(item.program);
-    if (coordinator === null) {
-      return coord.programmeHasOpenRun(item.program)
-        ? refuseRoute(reply, LEDGER_ROUTE_REFUSALS.programmeUnclaimed, { detail: PROGRAMME_UNCLAIMED_SENTENCE })
-        : refuseRoute(reply, LEDGER_ROUTE_REFUSALS.programmeEnded, { detail: PROGRAMME_ENDED_SENTENCE });
-    }
-    const mail = tickMail(item, answer);
-    if (!mail.ok) {
-      return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.tooLarge, { detail: `the mail to the coordinator would be ${mail.bytes} bytes, past the ${mail.limit} byte cap` });
-    }
-    // The newest tick mail of this item, whoever it went to and whatever run it rode (review 1335 F2): one still outstanding
-    // blocks a second, so a takeover cannot queue it twice either. Except one left behind (review 1336 F1): its recipient is
-    // no longer the coordinator and reads dead or absent, so nothing will ever acknowledge it.
-    const earlier = coord.newestTickMail(mail.subject);
-    if (earlier !== null && OUTSTANDING_DELIVERY_STATES.includes(earlier.state)
-      && !tickMailLeftBehind({ recipient: earlier.toId, coordinator, recipientPresence: deps.presenceOf(earlier.toId) })) {
-      return refuseRoute(reply, 'duplicate', { detail: `an earlier tick of this item went to ${earlier.toId}, which has not acknowledged it` });
-    }
+    const plan = tickPlan(coord, reply, item, answer);
+    if (plan === null) return reply;
     const now = deps.now();
-    // The mail rides NO run (review 1335 F1): the run it would ride is the one the coordinator closes when the wave ends, and
-    // `closeRun` parks every unacknowledged mail of the run it closes. System mail to a literal session id with no run is
-    // deliverable whatever the runs do (the digest's correction is the same shape).
-    const res = coord.tickWithMail(id, answer, now, () => insertSystemMailTx(coord, null, {
-      fromId: 'operator', toId: coordinator, runId: null, kind: 'answer', subject: mail.subject, body: mail.body,
-    }));
+    const res = tickNow(coord, id, answer, plan, now);
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${id} cannot be ticked from here` });
     deps.bus.emit('waiting');
-    return reply.code(200).send({ ok: true, item: viewOfItem(coord, res.item, now, deps.presenceOf) });
+    return reply.code(200).send({ ok: true, item: viewOfItem(coord, res.item, now, deps.presenceOf, secretOf) });
   });
 
   app.post('/api/items/:id/dismiss', (req, reply) => {
@@ -515,6 +561,61 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const res = coord.moveItem(id, 'dismiss', 'operator', {}, now, { programmeHasOpenRun: coord.programmeHasOpenRun(item.program) });
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${id} cannot be dismissed from here` });
     deps.bus.emit('waiting');
-    return reply.code(200).send({ ok: true, item: viewOfItem(coord, res.item, now, deps.presenceOf) });
+    return reply.code(200).send({ ok: true, item: viewOfItem(coord, res.item, now, deps.presenceOf, secretOf) });
+  });
+
+  /**
+   * `PUT /api/items/:id/secret` (plan PL6, spec §5): the operator pastes a secret straight into its slot. A CREDENTIAL ACT, so
+   * the account gate runs FIRST, with a step-up, before the body is read: refused while sign-in is not armed (`auth-off`),
+   * from a plain-HTTP origin (`insecure-origin`) and without a recent step-up; it never falls back to an unconfirmed save.
+   * Then the item: a secret item (`not-a-secret-item`), open (`not-open`), whose programme and slot pass their shapes
+   * (`bad-slot`, re-checked before any path is built); the value, 1 to `SECRET_VALUE_MAX` characters and bytes; the tick's
+   * preconditions (its coordinator, its mail, no outstanding earlier tick), checked BEFORE the write so a refused tick stores
+   * nothing; the write and the masker's registration (`writeOperatorSecret`); then the tick, with the answer
+   * `secretAnswer` builds: set, the time and the tail, NEVER the value.
+   *
+   * THE VALUE GOES NOWHERE ELSE. Not into a refusal, a detail, a log line, the item, the mail or the answer: every refusal
+   * below is a fixed word with a fixed detail, a write failure included, and `Cache-Control: no-store` is on every answer.
+   * The route awaits the write, so the tick re-reads the item and its preconditions after it; `tickWithMail` re-decides the
+   * move inside its own transaction. A tick refused after the write (the coordinator went in between) answers its word, and
+   * the slot keeps the value: saving again replaces it.
+   */
+  app.put('/api/items/:id/secret', credentialBodyRoute(SECRET_BODY_LIMIT), async (req, reply) => {
+    if (!deps.gate(req, reply, { cap: null, stepUp: true }).pass) return reply;
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    const id = itemIdOf(req);
+    if (id === null) return bad(reply, 'the item id is a positive integer');
+    const item = coord.itemById(id);
+    if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
+    if (item.kind !== 'secret') return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notSecretItem, { detail: `item ${id} does not ask for a secret` });
+    const verdict = nextItemState(item.state, 'tick', 'operator', { programmeHasOpenRun: false });
+    if (!verdict.ok) return refuseRoute(reply, verdict.why, { detail: `item ${id} is ${item.state}, not open` });
+    const slot = item.secretSlot;
+    if (slot === null || !operatorSlotNamesValid(item.program, slot)) {
+      return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badSlot, { detail: `item ${id} names a slot this server will not store a secret in` });
+    }
+    const body: unknown = req.body;
+    const value = typeof body === 'object' && body !== null && !Array.isArray(body) ? (body as Body)['value'] : undefined;
+    if (!isSecretValue(value)) return bad(reply, `the value is 1 to ${SECRET_VALUE_MAX} characters`);
+    if (tickPlan(coord, reply, item, secretAnswer({ setAt: deps.now(), tail: secretTailOf(value) })) === null) return reply;
+    const setAt = deps.now();
+    let meta: OperatorSecretMeta;
+    try {
+      meta = await writeOperatorSecret(deps.ccrcDir, item.program, slot, value, setAt, deps.registerSecret);
+    } catch {
+      return refuseRoute(reply, 'write-failed', { detail: 'the secret could not be stored; nothing was sent to the coordinator' });
+    }
+    const answer = secretAnswer({ setAt: meta.setAt, tail: meta.tail });
+    const fresh = coord.itemById(id);
+    if (fresh === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
+    const plan = tickPlan(coord, reply, fresh, answer);
+    if (plan === null) return reply;
+    const res = tickNow(coord, id, answer, plan, setAt);
+    if (!res.ok) return refuseRoute(reply, res.why, { detail: `the secret was stored, but item ${id} cannot be ticked from here` });
+    deps.bus.emit('waiting');
+    return reply.code(200).send({
+      ok: true, secret: meta, item: viewOfItem(coord, res.item, setAt, deps.presenceOf, secretOf),
+    });
   });
 }

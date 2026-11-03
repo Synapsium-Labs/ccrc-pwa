@@ -251,10 +251,10 @@ describe('the item view', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('a secret item has no input and no tick here (the paste panel is a later wave)', () => {
+  it('a secret item has no text input and no tick: its one field is the secret panel\'s password field (plan PL6, item-secret.test.tsx)', () => {
     show(itemView({ kind: 'secret', title: 'Paste the publish token', secretSlot: 'npm-token' }));
     expect(screen.queryByRole('textbox')).toBeNull();
-    expect(document.querySelector('input[type="password"]')).toBeNull();
+    expect(document.querySelectorAll('input[type="password"]')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Mark done' })).toBeNull();
   });
 

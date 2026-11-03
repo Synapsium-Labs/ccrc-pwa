@@ -38,11 +38,14 @@
  * box token's history.
  *
  * This module is the one reader and writer of `secret_fingerprints`, and the table is never served. The server never
- * holds a lane secret.
+ * holds a lane secret. It does hold the operator's pasted secrets (plan PL6, `coord/ledgersSecrets.ts`): `ingestSecret`
+ * fingerprints one of them here, and their lanes (`operator-secret:<programme>:<slot>`) are kept through a roster reload
+ * by `reloadRoster`'s `keep` and re-keyed after a rotation by the re-key's answer (`withOperatorSecretRows`).
  */
 import { createHash, createHmac, type Hash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { SECRET_MASK, SECRET_MASK_TOO_LARGE } from '../../../shared/api.js';
+import type { SecretUnmasked } from '../../../shared/ledgers.js';
 import {
   RUN_MAX_BYTES, RUN_MIN_BYTES, ROW_END, ROW_INDENT, SHAPE_STARTED, SHAPES, TOKEN_RUN, leadingRun, matchesShape, origin,
   rowTextEnd, shapeSpans, spanIn, spliceMasked, viewOf, walkStrings, type View,
@@ -392,6 +395,27 @@ export class SecretMasker {
       for (const r of answer.rows) if (validRow(r)) ins.run(r.laneId, r.fp, cur.gen, r.len, at);
     });
     return true;
+  }
+
+  /**
+   * Registers ONE secret this server holds itself (an operator-secret slot, plan PL6; spec §5), fingerprinted here under the
+   * CURRENT box token and written through `ingest`, the table's one writer. It answers what happened, never a silent skip
+   * (Review Focus 2): `masked`, or why not: the unpadded value is under `RUN_MIN_BYTES` (`too-short`) or over
+   * `RUN_MAX_BYTES` (`too-long`), or there is no token, no table or the table stayed busy (`unregistered`). Never throws,
+   * and the value is never logged or kept: only its HMAC and byte length are stored.
+   */
+  ingestSecret(laneId: string, secret: string): 'masked' | SecretUnmasked {
+    this.syncKeys();
+    const cur = this.keys[0];
+    const row = fingerprintRow(cur?.token ?? '', laneId, secret);
+    if (row.len < RUN_MIN_BYTES) return 'too-short';
+    if (row.len > RUN_MAX_BYTES) return 'too-long';
+    if (cur === undefined || this.db === null) return 'unregistered';
+    try {
+      return this.ingest({ gen: cur.gen, rows: [row] }) ? 'masked' : 'unregistered';
+    } catch {
+      return 'unregistered';
+    }
   }
 
   /** Deletes every row of every lane outside `keep` (a lane the roster no longer has, or one whose entry holds no

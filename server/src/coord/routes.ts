@@ -105,6 +105,7 @@ import {
 } from './questions.js';
 import { noticeSink, type NoticeSink } from '../notice.js';
 import { registerLedgerCoordinatorRoutes } from './ledgersRoutes.js';
+import { readOperatorSecretMeta } from './ledgersSecrets.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import {
   APPROVALS_DISABLED_FILE, loadOrCreateApprovalSigner, rulingsAllowedHere, serverApprovalsDisabled, type ApprovalSigner,
@@ -4335,7 +4336,7 @@ export function registerCoordRoutes(
   // (a lane source of its own for `box-token-census.test.ts`); the gate and the sender check are this function's own.
   registerLedgerCoordinatorRoutes(app, {
     coord: deps.coord, requireMailToken, requireAttribution, notice, bus, now: () => Date.now(),
-    presenceOf,
+    presenceOf, secretOf: (program, slot) => readOperatorSecretMeta(deps.cfg.ccrcDir, program, slot),
   });
 
   return { withAbandon, withSweepAbandon, serial: (fn) => coordMutex.run(fn) };
