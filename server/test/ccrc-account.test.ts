@@ -2924,7 +2924,7 @@ describe('ccrc account add: the new home, provisioned', () => {
     expect(existsSync(join(home, '.claude-lab-dev0', 'settings.json'))).toBe(false);
     // The step still RAN — it decided to write nothing, which is a different
     // thing from being skipped, and the installers still got their home.
-    expect(installerCalls(home).length).toBe(6);
+    expect(installerCalls(home).length).toBe(7);   // the session hooks and six skill installers, ccrc-linear's included
   });
 
   it('an operator\'s own settings.json survives byte-identically outside the managed keys', () => {
@@ -3385,7 +3385,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       + '_acct_operator_steps lab-dev0\n_acct_operator_steps lab-dev0\n'
       + 'printf \'%s %s\\n\' "${#ACCT_PROVISIONED[@]}" "${#ACCT_OPERATOR_STEPS[@]}"');
     expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout.trim()).toBe('7 2');
+    expect(r.stdout.trim()).toBe('8 2');   // settings-env, the session hooks and six skill installers
   });
 
   it('all four of the provisioning refusals end in the one clause the caller built (D-2128)', () => {
