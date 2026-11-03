@@ -23,6 +23,14 @@
          the bundle loads and paint the page background immediately. Values
          mirror --bg-page in tokens.css (which can't be loaded yet). -->
     <style>
+      /* The cascade-layer order, stated before any built stylesheet loads: the
+         first @layer the document meets fixes it. A chunk shared by the entry
+         and a lazily loaded one (Export's builder) carries @ccrc/ui's component
+         rules in a sheet Vite links ahead of index.css, and would open
+         `@layer components` first, ranking it below base and utilities. The
+         order is ui/src/styles/theme.css's own @layer statement;
+         test/layer-order.test.ts holds this line equal to it (D-7891). */
+      @layer theme, base, components, utilities;
       html {
         background: #0b0d0c;
       }
