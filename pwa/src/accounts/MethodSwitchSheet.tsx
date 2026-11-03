@@ -3,7 +3,10 @@
 // SWITCH TO A LONG-LIVED TOKEN (a sign-in lane: the fold's act, and the primary fix of a Signed-out sign-in lane). The
 // sheet runs Mint on the existing lane (`auth/start {method: 'setup-token'}`): the box mints into scratch, probes the
 // token and, only once it passes, switches the lane under its lock (A20); the poll's `done` means it did. A refused,
-// cancelled or expired attempt changes nothing, and each terminal state says so. Then a fresh check; the stated
+// cancelled or expired attempt changes nothing, and each terminal state says so; that the lane still uses its old
+// credential is said only where `oldCredentialOf` allows it (D-7872 (10), the operator's option-1 ruling: a passing
+// check newer than any sign-out this app knows of), and the neutral words are said everywhere else, the intro and the
+// both-held line included. Then a fresh check; the stated
 // identity, with the sign-in's readable email as its default text; the lane's sessions with one-tap Restart, since a
 // running session started without the token; and last, **Sign the old sign-in out** (N5): a plain button once no
 // listed session predates the switch, and before then the danger confirm, because the OA1 record did not measure what
@@ -19,7 +22,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, TextLink } from '@ccrc/ui';
 import { AccountSheet, type Announcement } from './AccountSheet';
-import type { AccountsConnect, LaneWire, RosterWire } from '../../../shared/api';
+import type { AccountsConnect, AccountUsage, LaneWire, RosterWire } from '../../../shared/api';
 import type { AccountStateWord } from '../../../shared/accounts';
 import { api } from '../lib/api';
 import { openExternal } from '../lib/markdown';
@@ -30,14 +33,15 @@ import {
   SIGN_IN_LEDGER, SIGN_OLD_OUT, SIGN_OLD_OUT_ANYWAY, START_SWITCH_AGAIN, STATE_LAMPS, STEP_UP_AGAIN_SIGN_OLD_OUT,
   SWITCH_CLOSE_TOKEN, SWITCH_START, atProviderWords, bothHeld, identityLine, laneActRefusal, restartLead, revokeOldLead,
   revokeOldTail, signOldOutDanger, signOldOutRefused, statedRefused, switchEnd, switchIntro, switchLedger,
-  switchRestartLead, switchTitle,
+  switchRestartLead, switchTitle, type OldCredential,
 } from '../fleet/accountWords';
 import { CompromiseSteps } from './CompromiseSteps';
 import { GuardedAct, RevokeItem } from './RemoveSheet';
 import { StatedField } from './ResultFrame';
 import { RestartList, restartableOn, useRestarts } from './RestartList';
 import { RunFrame, type LedgerLine } from './RunFrame';
-import type { SignInMethod } from './connectFlow';
+import { oldCredentialOf, type SignInMethod } from './connectFlow';
+import { signOutOf } from './signOuts';
 import { SignInLive, useSignInAttempt, wordOf, type Attempt, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
 import type { StepUp, StepUpDeps } from './useStepUp';
 import '../fleet/fleet.css';
@@ -58,6 +62,8 @@ export interface MethodSwitchSheetProps {
   roster: readonly RosterWire[];
   /** The lane as the screen read it when the sheet opened: the sign-in's readable email, the stated identity's default. */
   lane: LaneWire | undefined;
+  /** The lane's telemetry row: its 401 marker is one of the facts `oldCredentialOf` reads (D-7872 (10)). */
+  usage?: Pick<AccountUsage, 'authDead'> | null;
   refresh: () => Promise<'ok' | 'error'>;
   /** The attempt the server holds for this session on this lane, to continue at its code (D-7871 (2)). */
   resume?: HeldAttempt;
@@ -96,6 +102,8 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
   /** The sign-in's readable email, read once, when the sheet opened: the stated identity's default (spec §9). */
   const [oldIdentity] = useState<string>(() =>
     (props.lane?.identity !== undefined && props.lane.identitySource !== 'stated' ? props.lane.identity : ''));
+  /** What the sheet may say of the credential the lane switches from, read once, when it opened (D-7872 (10)). */
+  const [old] = useState<OldCredential>(() => oldCredentialOf(props.lane, props.usage, signOutOf(id)));
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
 
@@ -132,7 +140,7 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
 
   const s = useSignInAttempt({
     id, client, blocked: offline, write, settle, status, alert,
-    endText: (k, failure) => switchEnd(id, to, k, failure),
+    endText: (k, failure) => switchEnd(id, to, k, failure, old),
     onStart: () => setPhase('run'),
     onDone: (a) => { void switched(a); },
   });
@@ -194,7 +202,7 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
   if (phase === 'intro') {
     body = (
       <div className="acct-frame" data-frame="switch">
-        <p className="acct-field-note">{switchIntro(id, to)}</p>
+        <p className="acct-field-note">{switchIntro(id, to, old)}</p>
         <p className="acct-field-note">{METHOD_LINES[to].line}</p>
         <GuardedAct
           blocked={offline} freshUntil={freshUntil} deps={deps} label={SWITCH_START[to]} variant="primary"
@@ -248,7 +256,7 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
               <section className="acct-remove-block" data-sign-old-out={signedOut !== null ? 'done' : predating > 0 ? 'danger' : 'plain'}>
                 {signedOut === null ? (
                   <>
-                    <p className="acct-field-note">{bothHeld(id)}</p>
+                    <p className="acct-field-note">{bothHeld(id, old)}</p>
                     {predating > 0 && !confirming && (
                       <div className="acct-actions">
                         <Button variant="danger-ghost" disabled={offline} onClick={() => setConfirming(true)}>{SIGN_OLD_OUT}</Button>

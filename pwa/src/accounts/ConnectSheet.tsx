@@ -60,6 +60,7 @@ import { useStepUp, type StepUp, type StepUpDeps } from './useStepUp';
 import {
   defaultHue, isSignInMethod, methodChoices, providerChoices, secretShapeOk, sheetRuns, type DoorProvider,
 } from './connectFlow';
+import { noteSignOut } from './signOuts';
 import { SignInLive, WrongAccountAct, newLaneEnd, useSignInAttempt, wordOf, type Attempt, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
 import type { ProviderRow } from '../../../shared/providers';
 import '../fleet/fleet.css';
@@ -411,6 +412,8 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
         alert(text);
         return;
       }
+      // The sheets opened on this lane later must not say it keeps its old sign-in on the check from before (D-7872 (10)).
+      noteSignOut(id, lane?.check?.at);
       setLane(null);
       setLatency(null);
       setOn(false);

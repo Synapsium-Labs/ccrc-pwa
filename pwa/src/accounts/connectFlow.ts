@@ -9,7 +9,7 @@ import { isAccountStdin } from '../../../shared/account-argv';
 import { PROVIDERS, type ConnectMethod, type ProviderRow } from '../../../shared/providers';
 import { HUES, newLaneIdProblem, newLaneLabelProblem, type Hue } from '../../../shared/roster';
 import type { AccountsConnect, AccountUsage, LaneWire, RosterWire } from '../../../shared/api';
-import { NEEDS_FLEET_UPDATE, PROVIDER_ROWS, type SignInEndKind } from '../fleet/accountWords';
+import { NEEDS_FLEET_UPDATE, PROVIDER_ROWS, type OldCredential, type SignInEndKind } from '../fleet/accountWords';
 import { AUTH_TERMINAL_STATES, type AuthStatusState } from '../../../shared/accounts';
 
 /** The providers the door offers, in its order (spec §5: three rows, no "Other"; `compatible` stays CLI in v1): the
@@ -194,19 +194,31 @@ export function isPastAdding(lane: LaneWire | undefined, usage: Pick<AccountUsag
 }
 
 /** A sign-out this app ran on a lane with N5's sign-out (D-7872 (2)), and the last check of the lane it knew of then
- *  (`checkAt`, the box's clock, so it is only ever compared with another of the box's times). */
+ *  (`checkAt`, the box's clock, so it is only ever compared with another of the box's times). Kept by `signOuts.ts`. */
 export interface SignOutRecord { readonly checkAt?: number }
 
-/** Whether the lane has no credential now, so a re-auth's words may not say it keeps its old one (D-7872 (2)). The lane
- *  says so itself with the box's `no-credential` word. Otherwise only a sign-out this app ran says so (`signedOut`),
- *  until the lane shows a passing check newer than the last one known at the sign-out: the box clears a sign-in lane's
- *  check when it signs it out, so that check is the first record of a credential going back in. Every other lane keeps
- *  the credential it has, working or not. */
-export function laneHasNoCredential(lane: LaneWire | undefined, signedOut: SignOutRecord | undefined): boolean {
-  if (lane?.notReadyReason === 'no-credential') return true;
-  if (signedOut === undefined) return false;
+/**
+ * WHAT A SHEET MAY SAY ABOUT A LANE'S OLD CREDENTIAL (D-7872 (10), the operator's option-1 ruling of 2026-11-03): the
+ * one rule, read by every account sheet that speaks of it (the re-auth sheet's intro, endings and refused starts; the
+ * method switch sheet's intro, endings and both-held line). After a sign-out the box clears the lane's check and nothing
+ * else, and the server never reports `no-credential`, so a signed-out lane reads like one never checked.
+ *  - `signed-out`: certain. The box says so itself (`no-credential`), or the sheet asking just ran the sign-out and had
+ *    the box's answer (`signedOutHere`).
+ *  - `kept`: the lane shows a passing check, newer than any sign-out this app knows of (`signOut`), with no 401 marker
+ *    after it (`usage.authDead`: the provider refused it since, which a sign-out elsewhere also causes).
+ *  - `unsure` everywhere else: never checked, a check that failed or was cleared, a 401, a sign-out this app ran on the
+ *    lane as last read, or one it forgot on a reload. Its words are true whether or not the lane holds a credential.
+ */
+export function oldCredentialOf(
+  lane: LaneWire | undefined,
+  usage: Pick<AccountUsage, 'authDead'> | null | undefined,
+  signOut: SignOutRecord | undefined,
+  signedOutHere = false,
+): OldCredential {
+  if (signedOutHere || lane?.notReadyReason === 'no-credential') return 'signed-out';
   const c = lane?.check;
-  return !(c?.verdict === 'ok' && (signedOut.checkAt === undefined || c.at > signedOut.checkAt));
+  if (c?.verdict !== 'ok' || usage?.authDead === true) return 'unsure';
+  return signOut?.checkAt === undefined || c.at > signOut.checkAt ? 'kept' : 'unsure';
 }
 
 /** The method a lane switches TO from its fold (spec §4.4, §9; Q1): a sign-in lane to the long-lived token, a token lane

@@ -36,6 +36,7 @@ OA1's record (`2026-11-01-accounts-oa1-record.md`) is applied where this task re
 - `pwa/src/fleet/accountWords.ts`: every sentence the re-auth says. The switch words (`SWITCH_TO_TOKEN`, `SWITCH_TO_SIGN_IN`, `CLOSE`, `START_SWITCH_AGAIN`, `SWITCH_START`) are A23's and are reused, not defined again.
 - `pwa/src/fleet/fleet.css`: the card's acts. Below 900 they stack, the primary first; at 900 and up they share a row.
 - `pwa/src/lib/api.ts` is unchanged. A22 already added every route this task calls.
+- Fix round 4 (D-7872 (10), the operator's option 1): `oldCredentialOf` in `connectFlow.ts` replaces `laneHasNoCredential`, and the re-auth and method switch sheets word the old credential from it. The new `pwa/src/accounts/signOuts.ts` holds the app's sign-out record, which the re-auth sheet and the connect sheet's sign-out both write. The screen hands both sheets the lane's telemetry row. `pwa/browser/reauth-sheet.browser.test.ts` serves the run's one shared build (`sharedDist`), as main's browser files now do.
 
 **Tests:**
 - New: `pwa/test/reauth-sheet.test.tsx`. It covers:
@@ -51,11 +52,12 @@ OA1's record (`2026-11-01-accounts-oa1-record.md`) is applied where this task re
   - the two switch acts opening A23's switch sheet, never this one;
   - Continue on a re-auth's attempt reopening the re-auth sheet at its code field with no new start: on a checked lane, and on a Signed-out sign-in lane with no check (the 401 marker alone, the common Sign in again case); `resumeSheetFor`'s rule and `isPastAdding`'s.
 - New: `pwa/browser/reauth-sheet.browser.test.ts` (Step 4).
+- New in fix round 4: `pwa/test/reauth-wording.test.tsx`, the ruling per sheet. The rule itself and every word built on it. The re-auth sheet on both methods: a fresh lane with a passing check (keeps), a never-checked lane (neutral intro, cancel and refused start), a lane signed out elsewhere (a 401 after its passing check, or its check cleared: neutral), after a sign-out in this sheet (signed out), resumed after an unmount on the lane as last read and as read again (neutral, never keeps), then a newer passing check (keeps), and resumed after a simulated reload (neutral). The switch sheet: a fresh lane (keeps, in the intro, a cancel and the both-held line), a never-checked lane (neutral in all three), the Signed-out card's case and a token lane signed out elsewhere (neutral), a sign-out the app ran (neutral) and the box's `no-credential` (signed out). The connect sheet: its Sign this lane out and start again is recorded, so a re-auth opened later on the lane as last read is neutral. `reauth-sheet` and `method-switch` now give a passing check to the lanes whose cases say the lane keeps what it has, and the cases the ruling changed now expect the neutral words.
 - Extended: the no-duration source scan in `sign-in-sheet.test.tsx` and the no-storage scan in `auth-resume-banner.test.tsx` now cover `ReauthSheet.tsx`.
 - Unchanged and green: A23's `method-switch` and `auth-resume-banner`, and `sign-in-sheet`, `replace-token`, `remove-sheet`, `accounts-trouble`, `connect-sheet`, `accounts-screen`, `account-knob`, `code-field`, `fleet-pieces` and `markup-census`. Their fixtures that advertise `account-v2` alone still see A19's paste arm.
 - `server/test/hibernate-census.test.ts` is unchanged: the re-auth sheet reads presence through A23's `RestartList.tsx` (`restartableOn`), the census's one row for the restart list.
 
-**Mutation table (run):**
+**Mutation table (run), fix rounds 1 to 3.** Its rows name the tests as they were then. Round 4 renamed the ones whose words the ruling changed, and replaced `laneHasNoCredential` with `oldCredentialOf`; its own table follows this one.
 
 | Mutant | Suite | Red |
 |---|---|---|
@@ -78,6 +80,27 @@ OA1's record (`2026-11-01-accounts-oa1-record.md`) is applied where this task re
 | the check from before the sign-out retires it (no `checkAt` comparison) | reauth-sheet | "Sign in again opened later on the lane it signed out …" and "the rule: …" |
 
 Every case was also run green against the unmutated tree.
+
+**Mutation table (run), fix round 4 (D-7872 (10)).** Each mutant was run against `reauth-wording`, `reauth-sheet` and `method-switch`; all 16 went red.
+
+| Mutant | Suite | Red |
+|---|---|---|
+| `kept` on any passing check (no comparison with the sign-out's check) | reauth-wording, reauth-sheet | "a sign-out this app knows of: neutral until a newer passing check …", "resumed after the sheet unmounts …", "after a sign-out this app ran …", "signed out there, a re-auth opened later … is neutral", "Sign in again opened later on the lane it signed out never says it keeps one …" and the rule |
+| the 401 marker not read | reauth-wording | the rule, both methods' "a lane signed out elsewhere …", and the switch's "the Signed-out card's primary …" |
+| any check verdict read as passing | reauth-wording, reauth-sheet | the rule, in both files |
+| the sheet's own sign-out not certain (`signedOutHere` ignored) | reauth-wording, reauth-sheet | "after a sign-out in this sheet, its endings say the lane is signed out …" and round 2's five "after the sign-out" endings |
+| the box's `no-credential` not read | reauth-wording, reauth-sheet | the rule, the switch's "… the box's no-credential: signed out", and both methods' "the intro, a cancel, an expiry and a refused start each say … is signed out" |
+| a known sign-out makes a later sheet say signed out (round 3's behaviour) | reauth-wording, reauth-sheet | "resumed after the sheet unmounts …", "signed out there, a re-auth opened later …", "signed out in one sheet and resumed in a fresh one, its cancel claims nothing …" and the rule |
+| `unsure` worded as `kept` (`oldCredentialLine`) | reauth-wording, reauth-sheet | the words case, every never-checked, signed-out-elsewhere, unmount and reload case, the switch's neutral cases, and "a cancelled re-auth on a Signed-out lane installs nothing …" |
+| `unsure` intro worded as `kept` (`reauthIntro`) | reauth-wording, reauth-sheet | the words case, both methods' never-checked and signed-out-elsewhere cases, and "Sign in again opened later …" |
+| the connect sheet's sign-out not recorded | reauth-wording | "signed out there, a re-auth opened later on the lane as last read is neutral, never keeps" |
+| the switch sheet ignores the 401 marker | reauth-wording | "the Signed-out card's primary (a 401 after the passing check) …" |
+| the switch sheet ignores the app's sign-outs | reauth-wording | "after a sign-out this app ran, on the lane as last read: neutral …" |
+| the re-auth sheet ignores the app's sign-outs on mount | reauth-wording, reauth-sheet | "resumed after the sheet unmounts …", "signed out there …" and "Sign in again opened later …" |
+| the re-auth sheet's sign-out not passed as its own (`signedOutHere`) | reauth-wording, reauth-sheet | "after a sign-out in this sheet …" and round 2's five endings |
+| the re-auth sheet's sign-out not recorded | reauth-wording, reauth-sheet | "after a sign-out in this sheet …" (the record), "resumed after the sheet unmounts …" and "Sign in again opened later …" |
+| the both-held line always `kept` | reauth-wording | "a never-checked lane: neutral in the intro, a cancel and the both-held line" |
+| the re-auth intro always `kept` | reauth-wording, reauth-sheet | both methods' never-checked and signed-out-elsewhere cases, the unmount and connect-sheet cases, and both methods' no-credential intros |
 
 **Per width × skin × mode (Step 4):** `pwa/browser/reauth-sheet.browser.test.ts` runs in a real Chrome over the production build. The fleet's routes are answered by its fixture: lane-a is a signed-out sign-in lane, lane-b a signed-out token lane, and lane-c a minted token about 11 months old with one live session.
 
@@ -118,7 +141,7 @@ Each ✓ checks these things:
      - the lane's own `notReadyReason` of `no-credential`, the box's word, wherever the wire carries it;
      - the sign-outs this app ran, kept beside the sheet in the app's memory with the last check the sheet knew of then (the box's clock). A sheet opened later on that lane says it is signed out: Continue on the banner, which mounts a fresh sheet with `resume`, and Sign in again on the card, before or after the screen reads the lanes again. That lasts until the lane shows a passing check newer than that one, which is the first record of a credential going back in, or until this app installs one.
 
-     A lane with its credential, working or not (a 401, a check that failed, no check), keeps the untouched wording. The Remove sheet removes the lane with its credential, so there is no card left to sign in again on. **Known limit:** the app's memory is lost on a reload, or on another device. A sheet opened there on a lane an earlier sheet signed out says the old credential is untouched, until the server reports `no-credential` on the wire (a follow-up on the server and box, outside this PR).
+     The Remove sheet removes the lane with its credential, so there is no card left to sign in again on. **Superseded by (10):** this round said a lane with a 401, a failed check or no check keeps its old credential, and a reload or another device lost the app's sign-out record, so a sheet there said the old credential was untouched on a lane that had none. The operator ruled option 1 on 2026-11-03, and (10) is the rule now.
   3. **The ending** is the same for every re-auth (spec §9). It shows:
      - the install line;
      - the restart list, listing the sessions live on the lane when the helper said `done`;
@@ -140,3 +163,13 @@ Each ✓ checks these things:
      - a word other than Off, since the marker that holds an added lane off is gone.
 
      A held check alone (this task's first cut) missed the marker-only Signed-out lane, legacy lanes and lanes a live session's 401 signed out. Its resume opened the connect sheet, with Discard this lane on a lane that has sessions (fix round 1). The one gap left: a lane that is Off on the fleet host, with neither a check nor the 401 marker, re-authenticated from its fold. It resumes in the connect sheet, whose sentences are a new lane's. The server's discard verdict still refuses that lane unless `add` made it, it was never turned on and no session runs on it.
+
+  10. **What a sheet may say about the old credential: one rule, the operator's option 1 (fix round 4, ruled 2026-11-03).** After a sign-out the box clears the lane's check and nothing else, and the server never reports `no-credential`, so a signed-out lane looks like one never checked. Several sheets said "keeps its old sign-in" on lanes with none: the re-auth sheet after a remount or a reload, the method switch sheet, and a re-auth opened after the connect sheet's Sign this lane out and start again. The ruling: wherever the app cannot be sure the lane still holds a credential, the words must be true either way; "keeps its old sign-in" (or token) is said only on a lane with a passing check newer than any sign-out the app knows of. The precise signed-out words come with the box and server fix (#2234).
+     - **The rule is one function**, `oldCredentialOf(lane, usage, signOut, signedOutHere)` in `connectFlow.ts`, which answers `kept`, `signed-out` or `unsure`:
+       - `signed-out` only where it is certain: the box's own `no-credential`, or the sheet that just ran the sign-out and had the box's answer;
+       - `kept` only on a passing check, with no 401 marker after it (`usage.authDead`, which a sign-out elsewhere also causes), newer than the last check known at any sign-out this app ran;
+       - `unsure` everywhere else: never checked, a failed or cleared check, a 401, a sign-out an earlier sheet ran on the lane as last read, and anything a reload forgot.
+     - **Its words** (`accountWords.ts`): `unsure` says "lane-a has no checked sign-in, so whether it still has one isn't known." in an intro, and "Nothing was installed." where an ending said "Nothing changed: lane-a keeps its old sign-in." (`oldCredentialLine`). `lost` asks for a check of whether the lane has a working credential, not of "which credential works". `signed-out` keeps (2)'s sentence.
+     - **Every sheet that speaks of the old credential reads it**: the re-auth sheet's intro, every ending and every refused start; the method switch sheet's intro, every ending and its both-held line ("If lane-a still has its old sign-in on the fleet host, sign it out here." unless `kept`). The screen hands both sheets the lane's telemetry row for the 401 marker. The trouble card and the resume banner say nothing of the old credential, so they are unchanged. A19's paste sheet speaks of a token lane, whose token N5's sign-out does not remove, so it is unchanged too.
+     - **The sign-out record** moves to `pwa/src/accounts/signOuts.ts`, the app's memory only (the no-storage scan covers it). The re-auth sheet's and the connect sheet's Sign this lane out and start again both write it, with the last check known then. It no longer makes a later sheet say "signed out": the lane may have been signed in elsewhere since, so a later sheet on the lane as last read says the neutral words, until a passing check newer than the sign-out retires the record.
+

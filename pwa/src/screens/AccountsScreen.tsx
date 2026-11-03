@@ -753,6 +753,7 @@ export function AccountsScreen(): ReactNode {
           connect={connect}
           blocked={blocked}
           lane={lanes?.[reauthing.id]}
+          usage={accounts?.find((x) => x.wrapper === reauthing.id) ?? null}
           roster={roster}
           refresh={refreshAccounts}
           {...(reauthing.resume !== undefined ? { resume: reauthing.resume } : {})}
@@ -772,6 +773,7 @@ export function AccountsScreen(): ReactNode {
           blocked={blocked}
           roster={roster}
           lane={lanes?.[switching.id]}
+          usage={accounts?.find((x) => x.wrapper === switching.id) ?? null}
           refresh={refreshAccounts}
           {...(switching.resume !== undefined ? { resume: switching.resume } : {})}
         />
