@@ -3,6 +3,7 @@
 // ccd-limits.test.ts does, so nothing here can touch the real registry.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, SCAN_LOOKBACK_LINES, seedAccountsSh, plantPoolEpoch, type CcdHarness } from './ccdWsHelpers.js';
@@ -1841,7 +1842,7 @@ describe('ws-add: --title, --wrapper and the named marker', () => {
 
     it('as the FINAL token it refuses with the usage line rather than hanging', () => {
       h.makeRepo('demo');
-      const r = spawnSync('bash', ['-c', 'source "$NWS_SRC"; eval "$NWS_SNIP"'], { encoding: 'utf8', cwd: h.home, timeout: 30_000,
+      const r = spawnSyncGroup('bash', ['-c', 'source "$NWS_SRC"; eval "$NWS_SNIP"'], { encoding: 'utf8', cwd: h.home, timeout: 30_000,
         env: { ...ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }), NWS_SRC: CCD, NWS_SNIP: `${WS_ADD} cmd_ws_add demo eng-1234 --title` } });
       expect(r.status, 'a valueless --title ran past the wall clock').toBe(1);
       expect(r.stderr).toContain('usage: ccd ws-add');
@@ -2043,7 +2044,7 @@ describe('ws-add: --title, --wrapper and the named marker', () => {
 
       it('as the FINAL token it refuses with the usage line rather than hanging', () => {
         h.makeRepo('demo');
-        const r = spawnSync('bash', ['-c', 'source "$NWS_SRC"; eval "$NWS_SNIP"'], { encoding: 'utf8', cwd: h.home, timeout: 30_000,
+        const r = spawnSyncGroup('bash', ['-c', 'source "$NWS_SRC"; eval "$NWS_SNIP"'], { encoding: 'utf8', cwd: h.home, timeout: 30_000,
           env: { ...ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }), NWS_SRC: CCD, NWS_SNIP: `${WS_ADD} cmd_ws_add demo eng-1234 --wrapper` } });
         expect(r.status, 'a valueless --wrapper ran past the wall clock').toBe(1);
         expect(r.stderr).toContain('usage: ccd ws-add');
