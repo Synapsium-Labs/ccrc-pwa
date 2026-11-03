@@ -74,6 +74,8 @@ describe('stop sends --surface before the id (spec §2.3, §2.4)', () => {
       // `cmd_stop`'s own `_lc_done` is the first lifecycle emit in this
       // process, so `_lc_obs`'s once-per-process pane probe comes first.
       `tmux list-panes -a -F #{session_name} #{pane_pid}`,
+      // D-7902: the pane's scope is read before the unit is stopped and the pane killed.
+      `tmux list-panes -t =cc-${ID}: -F #{pane_pid}`,
       `systemctl --user disable --now claude-session@${ID}`,
       `tmux kill-session -t =cc-${ID}:`,
     ]);
@@ -92,6 +94,7 @@ describe('stop sends --surface before the id (spec §2.3, §2.4)', () => {
     expect(r.stdout.trim()).toBe('stopped claude-a-demo');
     expect(asManagerCalls(h.calls())).toEqual([
       `tmux list-panes -a -F #{session_name} #{pane_pid}`,
+      'tmux list-panes -t =cc-claude-a-demo: -F #{pane_pid}',
       'systemctl --user disable --now claude-session@claude-a-demo',
       'tmux kill-session -t =cc-claude-a-demo:',
     ]);

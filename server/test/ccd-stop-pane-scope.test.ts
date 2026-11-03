@@ -5,14 +5,17 @@
  * whatever the agent started in the background keeps running in the pane's transient scope
  * (`app-claude\x2dsession.slice/tmux-spawn-<uuid>.scope`) until the scope sweep finds it, hours later. Now
  * `ccd stop` and `ccd hibernate` (which the stop-done lane composes, and the roll) read the pane's scope before the
- * kill, wait for the main process to exit and a grace (`PANE_SCOPE_STOP_GRACE_S`), and then, only when
- * `$REG/pane-scope-stop-live` stands, run `systemctl --user stop --no-block <unit>`. Without the switch the same run
+ * kill and hand the rest to a detached `_pane_scope_reap`, so the verb never waits: it waits for the main process to
+ * exit and a grace (`PANE_SCOPE_STOP_GRACE_S`), and then, only when `$REG/pane-scope-stop-live` stands, runs
+ * `systemctl --user stop --no-block <unit>`. Without the switch the same run
  * logs `would stop` and stops nothing. A scope that holds another live pane, a unit that is not a tmux pane scope, and
  * one outside the session slice are never stopped.
  *
  * FIXTURE ONLY: HOME is the harness's (`makeCcdHarness`); `tmux` and `systemctl` are PROGRAMS on PATH
  * (`stubContainedTool`), as `scope-sweep.test.ts` stubs them; `/proc` and `/sys/fs/cgroup` are planted trees behind
- * `_panescope_proc_root` and `_panescope_cgroup_root`; the grace is logged through `_pane_scope_sleep`, never waited.
+ * `_panescope_proc_root` and `_panescope_cgroup_root`; the grace is logged through `_pane_scope_sleep`, never waited;
+ * and the detach (`_pane_scope_detach`) runs the reap inline, logged, except in the cases that measure the real detach
+ * against the harness's recording `systemd-run`.
  * The one real process is a background `sleep` this file starts, and the stub `systemctl` kills only the pids this
  * file lists as its own (`killable`), never a planted one.
  */
@@ -107,10 +110,12 @@ fi
 exit 0
 `;
 
-/** The seams every snippet sets: the planted trees and a logged grace. */
-const SEAMS = `_panescope_proc_root() { printf '%s' "$HOME/fx/proc"; }
+/** The seams every snippet sets: the planted trees, a logged grace, and the detach run inline. */
+const TREES = `_panescope_proc_root() { printf '%s' "$HOME/fx/proc"; }
   _panescope_cgroup_root() { printf '%s' "$HOME/fx/cg"; }
   _pane_scope_sleep() { echo "grace $1" >> "$HOME/ccd-calls"; }`;
+const SEAMS = `${TREES}
+  _pane_scope_detach() { echo "detach $*" >> "$HOME/ccd-calls"; "$@"; }`;
 
 /** The session's live pane: main pid `MAIN` in `cg` (default: its own pane scope under the session slice). */
 const pane = (cg: string = `${SLICE}/${UNIT}`): void => {
@@ -157,11 +162,13 @@ describe('ccd stop, armed: the pane scope goes, and with it what the session lef
     const at = (re: RegExp): number => c.findIndex((l) => re.test(l));
     const read = at(new RegExp(`^tmux list-panes -t =cc-${ID}: -F #\\{pane_pid\\}$`));
     const kill = at(/^tmux kill-session /);
+    const detach = at(new RegExp(`^detach _pane_scope_reap ${ID} ${MAIN} /`));
     const grace = at(/^grace 10$/);
     const stopAt = at(/^systemctl --user stop --no-block /);
-    expect([read, kill, grace, stopAt].every((i) => i >= 0), c.join('\n')).toBe(true);
+    expect([read, kill, detach, grace, stopAt].every((i) => i >= 0), c.join('\n')).toBe(true);
     expect(read).toBeLessThan(kill);
-    expect(kill).toBeLessThan(grace);
+    expect(kill).toBeLessThan(detach);
+    expect(detach).toBeLessThan(grace);
     expect(grace).toBeLessThan(stopAt);
   });
 
@@ -254,12 +261,14 @@ describe('only a tmux pane scope under the session slice is ever stopped', () =>
     expect(scopeLines()).toEqual([expect.stringContaining(`pane-scope ${ID}: held ccrc-tmux-server.scope: not a tmux pane scope`)]);
   });
 
-  it('a tmux pane scope outside the session slice: never stopped', () => {
+  it('a tmux pane scope outside the session slice: never stopped, never waited on, and no line (it is no ccd pane scope)', () => {
     const cg = `/user.slice/user-1000.slice/user@1000.service/app.slice/${UNIT}`;
     pane(cg); plantCgroup(cg, [MAIN, realSleep()]); arm();
     stop();
     expect(stops()).toEqual([]);
-    expect(scopeLines()).toEqual([expect.stringContaining(`pane-scope ${ID}: held ${UNIT}: not in the session slice`)]);
+    expect(h.calls()).not.toContain('grace 10');
+    expect(h.calls().filter((l) => l.startsWith('tmux list-panes -a')).length, 'only the lifecycle probe lists every pane').toBeLessThanOrEqual(1);
+    expect(scopeLines()).toEqual([]);
   });
 
   it('no cgroup to read (macOS, a tmux without systemd, a pid already gone): nothing captured, no grace, no line', () => {
@@ -319,15 +328,49 @@ describe('hibernation stops the pane scope too, and the wake gets a fresh one', 
   });
 });
 
+describe('the verb never waits: the reap runs in its own transient unit', () => {
+  /** The real `_pane_scope_detach`, on the Linux arm, against the harness's recording `systemd-run` (rc 0). */
+  const real = (env: NodeJS.ProcessEnv = {}): string => h.sh(`${TREES}\n CCD_OS=linux; cmd_stop ${ID}`, { SYSTEMD_RUN_RC: '0', ...env });
+  const runs = (): string[] => {
+    const p = path.join(h.home, 'systemd-run-calls');
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter((l) => l !== '') : [];
+  };
+
+  it('ccd stop answers at once: one systemd-run that sources ccd and calls the reap with the id, the pid and the cgroup, single-quoted', () => {
+    pane(); plantCgroup(`${SLICE}/${UNIT}`, [MAIN]); arm();
+    expect(real()).toContain(`stopped ${ID}`);
+    expect(h.calls(), 'the verb waited the grace itself').not.toContain('grace 10');
+    expect(stops(), 'the verb stopped the scope itself').toEqual([]);
+    const r = runs();
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatch(/^--user --collect --quiet bash -c source '\/[^']+\/ccd\/ccd' && '_pane_scope_reap' /);
+    expect(r[0]).toContain(` '${ID}' '${MAIN}' '${SLICE}/${UNIT}'`);
+  });
+
+  it('a dispatch the service manager refuses is held, named, and the verb still answers stopped', () => {
+    pane(); plantCgroup(`${SLICE}/${UNIT}`, [MAIN]); arm();
+    expect(real({ SYSTEMD_RUN_RC: '1' })).toContain(`stopped ${ID}`);
+    expect(scopeLines()).toEqual([expect.stringContaining(`pane-scope ${ID}: held ${UNIT}: its delayed stop could not be started (rc 1)`)]);
+  });
+
+  it('a word outside the charset (a quote, a space, a dollar) is never placed in the string: nothing is dispatched', () => {
+    expect(() => h.sh(`_pane_scope_detach _pane_scope_reap "a'b" 1 /x`)).toThrow();
+    expect(() => h.sh('_pane_scope_detach _pane_scope_reap \'a$b\' 1 /x')).toThrow();
+    expect(() => h.sh('_pane_scope_detach _pane_scope_reap \'a b\' 1 /x')).toThrow();
+    expect(runs()).toEqual([]);
+  });
+});
+
 describe('what this does not touch', () => {
   it('the swap is not a stop: cmd_swap and the swap dispatch never reach the pane-scope stop', () => {
     const body = h.sh('type cmd_swap; type _dispatch_swap');
     expect(body).not.toContain('_pane_scope_stop');
+    expect(body).not.toContain('_pane_scope_reap');
     expect(body).not.toContain('_pane_scope_of');
   });
 
   it('the stop reads no panescope marker: the scope comes from the live pane, through the helper the marker\'s writer calls', () => {
-    const body = h.sh('type _pane_scope_stop; type _pane_scope_of; type _panescope_record');
+    const body = h.sh('type _pane_scope_stop; type _pane_scope_reap; type _pane_scope_of; type _panescope_record');
     expect(body).toMatch(/_panescope_record[\s\S]*_pane_scope_of/);
     expect(body).not.toMatch(/_reg_get\w*\s+\S+\s+panescope/);
   });
