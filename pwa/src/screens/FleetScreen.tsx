@@ -6,7 +6,7 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import {
-  ATTENTION_DOT, BareRow, BuildLine, Button, Skeleton,
+  ATTENTION_DOT, BareRow, BuildLine, Button, Skeleton, useNow,
 } from '@ccrc/ui';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner, fleetHostBannerShows } from '../fleet/FleetHostBanner';
@@ -21,6 +21,7 @@ import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
 import { SubstrateBanner, substrateBannerShows } from '../fleet/SubstrateBanner';
 import { PasskeyNotice, passkeyNoticeShows, usePasskeyStatus } from '../fleet/PasskeyNotice';
 import { BannerStack } from '../fleet/BannerStack';
+import { AuthResumeBanner, authResumeBannerShows, useResumeInStack } from '../accounts/AuthResumeBanner';
 import { fleetSummary } from '../fleet/fleetSummary';
 import { poolLagText } from '../fleet/poolLag';
 import { runsLineLabel, waitingOnYou } from '../fleet/navBadges';
@@ -389,6 +390,10 @@ export function FleetBanners(): ReactNode {
   const stale = updates.view !== null && updates.failure !== null;
   // The passkey notice's posture, read once here for the stack's predicate and the notice alike.
   const passkeyStatus = usePasskeyStatus();
+  // The resume banner's reading (accounts plan Task A23, D-7871 (3)): the lanes the store's one accounts read holds.
+  const lanes = useStore((s) => s.lanes);
+  const resumeNow = useNow(15_000);
+  const resumeHere = useResumeInStack();
   return (
     <BannerStack
       items={[
@@ -454,6 +459,11 @@ export function FleetBanners(): ReactNode {
         // the one most likely to have a gate armed and no passkey on it yet. Outside `showAccounts` too — that
         // flag is about which surface owns the accounts STRIP (top bar vs fleet list), and this is not it.
         { id: 'passkey', shows: passkeyNoticeShows(passkeyStatus), node: <PasskeyNotice status={passkeyStatus} /> },
+        // A sign-in this session started that waits for its code (spec §6.2): pinned, so a deadline is never folded.
+        // A phone's other views place it in the detail pane instead (`AuthResumeInDetail`), so the hidden column holds none.
+        // Its slot is in the stack only while it applies, as each store notice's is: it holds no state a fold must keep.
+        ...(resumeHere && authResumeBannerShows(lanes, resumeNow)
+          ? [{ id: 'resume' as const, shows: true, node: <AuthResumeBanner lanes={lanes} /> }] : []),
       ]}
     />
   );

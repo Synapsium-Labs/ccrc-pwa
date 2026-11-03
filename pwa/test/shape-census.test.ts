@@ -266,13 +266,15 @@ const REGISTERED: Record<string, string> = {
   // and seeds the copies it is closest to, and the two it is not close enough
   // to cluster on their own. Same argument for both.
   // The theme picker's head left it when Theme became a preview grid (settings Task R2e, D-5503).
-  ['chat.css .term-confirm + fleet.css .child-reclaim-status '
+  ['chat.css .term-confirm + fleet.css .acct-url-acts + fleet.css .child-reclaim-status '
     + '+ fleet.css .settings-release-head']:
     'DIFFERENT THINGS. Wrapping flex with a min-width floor and a centred cross '
     + 'axis — the same idiom as the actions rows above, in three parts of the '
     + 'tree. The terminal drawer\'s ^C confirm (the consequence, then `send ^C` '
     + 'and `cancel`, in the key bar\'s place) joined it in stage 1 of the '
-    + 'every-width drawer; it shares the layout glue and nothing it means.',
+    + 'every-width drawer; it shares the layout glue and nothing it means. The '
+    + 'sign-in URL card\'s link row (Copy link, Open ↗ and the host, accounts '
+    + 'Task A22, D-7849) joined it the same way: layout glue, nothing it means.',
   'chat.css .term-keys-seq + fleet.css .child-reclaim-banner .child-reclaim-item':
     'DIFFERENT THINGS. Four declarations of wrapping flex with a min-width '
     + 'floor — the same idiom as the actions rows above, in a different part '

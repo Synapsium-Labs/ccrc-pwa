@@ -4,7 +4,7 @@
 // audits of one UNCHANGED token stand at least `ORPHAN_LICENCE_MS` apart and the arming marker stands. Every doubt keeps
 // the tree. The L3 executor (`coord/collectOrphanTree.ts`) asks ccd; the L4 driver (`orphanTreeSweep.ts`) holds the
 // memory and the timer; neither decides anything this file decides.
-import type { DiskOrphanTrees } from '../../shared/disk.js';
+import type { DiskHealth, DiskOrphanTrees } from '../../shared/disk.js';
 import { isRegistryId, type OrphanToken } from '../../shared/api.js';
 
 /** The census runs this often, and hourly while the fleet is in pressure mode. */
@@ -203,9 +203,6 @@ export function orphanFeedRow(hex: string, cls: OrphanClass, o: OrphanOutcome): 
 export const orphanTruncatedWaitMs = (streak: number, censusMs: number): number =>
   Math.min(ORPHAN_RETRY_MS * 2 ** (streak - 1), censusMs);
 
-/** The `lastCensus` that makes the next census due `waitMs` after now, at a cadence of `censusMs` (`orphanCensusDue`). */
-export const orphanCensusRetryMono = (nowMono: number, censusMs: number, waitMs: number): number => nowMono - censusMs + waitMs;
-
 /** #1565 (D-6988): the row for a truncated census. The answer carries only `truncated`, so the row cannot say which of
  *  ccd's bounds stopped it; the rows seen and the seconds the call took let a reader tell, and ccd's bounds are not
  *  copied here. */
@@ -231,9 +228,25 @@ export interface OrphanTreeMemory {
 
 export type OrphanMemory = ReadonlyMap<string, OrphanTreeMemory>;
 
-/** The next census is due at once before the first, else after the interval (shorter under pressure). */
-export const orphanCensusDue = (lastMono: number | null, nowMono: number, pressure: boolean): boolean =>
-  lastMono === null || nowMono - lastMono >= (pressure ? ORPHAN_CENSUS_PRESSURE_MS : ORPHAN_CENSUS_MS);
+/** When the next census is due (D-7864; #1565, review 990 F1). `after`: the instant of the last whole census, and the
+ *  next is due one cadence later at the READING pass's cadence, so pressure shortens it. `at`: a pending retry's due
+ *  instant, stored apart from any cadence, so a later pass's pressure never shortens it (or moves it at all). */
+export type OrphanCensusNext =
+  | { readonly kind: 'after'; readonly mono: number }
+  | { readonly kind: 'at'; readonly mono: number };
+
+/** Whether the lane is in pressure mode (D-7865; #1565): the disk alarm's held block says a filesystem is critical.
+ *  `null` is UNKNOWN (the alarm has not swept yet) and reads as no pressure: the 6 h side, which fails toward keeping. */
+export const orphanPressure = (block: Pick<DiskHealth, 'pressure'> | null): boolean => block?.pressure === true;
+
+/** The next census is due at once before the first; after a whole census, one cadence later (shorter under pressure);
+ *  on a pending retry, at its stored instant whatever the pressure. */
+export const orphanCensusDue = (next: OrphanCensusNext | null, nowMono: number, pressure: boolean): boolean =>
+  next === null
+  || (next.kind === 'at' ? nowMono >= next.mono : nowMono - next.mono >= (pressure ? ORPHAN_CENSUS_PRESSURE_MS : ORPHAN_CENSUS_MS));
+
+/** A pending retry `waitMs` after now: the unreadable arm's flat `ORPHAN_RETRY_MS` and the truncated arm's back-off. */
+export const orphanCensusRetryAt = (nowMono: number, waitMs: number): OrphanCensusNext => ({ kind: 'at', mono: nowMono + waitMs });
 
 /** The population after a census. A truncated one adds nothing and drops nothing ("the lane audits nothing new that
  *  pass"); a whole one keeps the memory of every tree it still lists and forgets the rest. */

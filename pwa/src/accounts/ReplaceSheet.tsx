@@ -14,20 +14,19 @@
 // tick is recorded with no value (N6). Leaving it unticked is allowed, and the record line then says "old token not
 // marked revoked". The compromise disclosure closes the sheet (spec §3.11).
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Button, RESET_LIST, Sheet, TextLink } from '@ccrc/ui';
-import { isArchivedRow, type AccountsConnect, type RosterWire } from '../../../shared/api';
+import { Button, Sheet, TextLink } from '@ccrc/ui';
+import type { AccountsConnect, RosterWire } from '../../../shared/api';
 import { api } from '../lib/api';
 import { openExternal } from '../lib/markdown';
 import { ensureSession } from '../session/useEnsure';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
-  DONE, LEDGER, NEW_TOKEN_LABEL, REPLACE_SAVE, RESTART, RESTARTED, RESTART_FAILED, REVOKED_OLD, REVOKE_PAGES, STEP_UP_AGAIN_REPLACE,
+  DONE, LEDGER, NEW_TOKEN_LABEL, REPLACE_SAVE, REVOKED_OLD, REVOKE_PAGES, STEP_UP_AGAIN_REPLACE,
   TOKEN_CLEARED_REPLACE, addRefusal, laneActRefusal, replaceIntro, replaceLedger, replaceRefusal, replaceUnknown,
   restartLead, revokeOldLead, revokeOldTail,
 } from '../fleet/accountWords';
-import { presenceOf } from '../fleet/presence';
-import { sessionLabel } from '../fleet/sessionLabel';
 import { CompromiseSteps } from './CompromiseSteps';
+import { RestartList, restartableOn, useRestarts } from './RestartList';
 import { GuardedAct, RevokeItem, refusalWordOf } from './RemoveSheet';
 import { RunFrame, type LedgerLine } from './RunFrame';
 import { SecretField, type SecretFieldHandle } from './SecretField';
@@ -72,7 +71,7 @@ export function ReplaceSheet(props: ReplaceSheetProps): ReactNode {
   const [checking, setChecking] = useState(false);
   /** The sessions live on the lane when the new token was saved: the ones still holding the old token. */
   const [onOld, setOnOld] = useState<readonly string[]>([]);
-  const [restarts, setRestarts] = useState<Readonly<Record<string, 'busy' | 'done' | 'failed'>>>({});
+  const { restarts, restart } = useRestarts(client.stop, ensure, blocked !== null);
   const secret = useRef<SecretFieldHandle>(null);
   /** One replacement at a time: a second tap in the same frame, before the phase has re-rendered, sends nothing. */
   const sending = useRef(false);
@@ -82,8 +81,7 @@ export function ReplaceSheet(props: ReplaceSheetProps): ReactNode {
 
   const write = (text: string): void => setLedger((l) => [...l, { text, at: Date.now() }]);
   const settle = (text: string): void => setLedger((l) => [...l.slice(0, -1), { text, at: Date.now() }]);
-  const liveOn = (): string[] =>
-    sessions.filter((s) => s.wrapper === id && !isArchivedRow(s) && presenceOf(s) === 'alive').map((s) => s.id);
+  const liveOn = (): string[] => restartableOn(sessions, id);
 
   const check = async (): Promise<void> => {
     setChecking(true);
@@ -146,23 +144,9 @@ export function ReplaceSheet(props: ReplaceSheetProps): ReactNode {
     await check();
   };
 
-  /** One session restarted onto the new token: the existing stop, then ensure. */
-  const restart = async (sid: string): Promise<void> => {
-    if (blocked !== null || restarts[sid] === 'busy' || restarts[sid] === 'done') return;
-    setRestarts((r) => ({ ...r, [sid]: 'busy' }));
-    try {
-      await client.stop(sid);
-      await ensure(sid);
-      if (live.current) setRestarts((r) => ({ ...r, [sid]: 'done' }));
-    } catch {
-      if (live.current) setRestarts((r) => ({ ...r, [sid]: 'failed' }));
-    }
-  };
-
   const freshUntil = connect?.stepUpFreshUntil ?? null;
   const deps = props.stepUpDeps ?? NO_DEPS;
   const page = REVOKE_PAGES['claude-code-settings'];
-  const byId = new Map(sessions.map((s) => [s.id, s]));
 
   return (
     <Sheet open={open} onClose={onClose} title={`Replace ${id}'s token`} eyebrow="replace token" size="md">
@@ -184,33 +168,11 @@ export function ReplaceSheet(props: ReplaceSheetProps): ReactNode {
         {phase !== 'paste' && <RunFrame lines={ledger} live={phase === 'saving' || checking} />}
         {phase === 'saved' && (
           <>
-            {onOld.length > 0 && (
-              <section className="acct-remove-block" aria-label={restartLead(onOld.length)}>
-                <p className="acct-field-note">{restartLead(onOld.length)}</p>
-                <ul className={RESET_LIST}>
-                  {onOld.map((sid) => {
-                    const s = byId.get(sid);
-                    const r = restarts[sid];
-                    return (
-                      <li key={sid} className="acct-remove-session" data-restart={r}>
-                        <span className="acct-remove-name">{s === undefined ? sid : sessionLabel(s)}</span>
-                        {r === 'done' ? <span className="acct-session-word">{RESTARTED}</span> : (
-                          <>
-                            {r === 'failed' && <span className="acct-session-word">{RESTART_FAILED}</span>}
-                            <Button
-                              variant="ghost" size="fit" disabled={blocked !== null || r === 'busy'} aria-busy={r === 'busy' || undefined}
-                              onClick={() => { void restart(sid); }}
-                            >
-                              {RESTART}
-                            </Button>
-                          </>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            )}
+            {/* One-tap Restart for each session still on the old token (one stop, then ensure). */}
+            <RestartList
+              ids={onOld} lead={restartLead(onOld.length)} sessions={sessions} restarts={restarts} blocked={blocked !== null}
+              onRestart={(sid) => { void restart(sid); }}
+            />
             <p className="acct-result-line">
               {revokeOldLead}{' '}
               <TextLink href={page.href} onClick={(e) => openExternal(e, page.href)}>{page.label}</TextLink>

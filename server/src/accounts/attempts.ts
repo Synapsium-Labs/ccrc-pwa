@@ -118,12 +118,15 @@ export class AuthAttempts {
     }
   }
 
-  /** `LaneWire.authAttempt` for lane `laneId` as `sessionIdHash` reads it (`mine` only for the starting session), or
-   *  undefined when the server holds none. */
+  /** `LaneWire.authAttempt` for lane `laneId` as `sessionIdHash` reads it (`mine` only for the starting session, which
+   *  alone is also told the attempt's id and method, D-7871 (1)), or undefined when the server holds none. */
   wireOf(laneId: string, sessionIdHash: string | null): LaneWire['authAttempt'] {
     const a = this.get(laneId);
     if (a === undefined) return undefined;
-    return { state: a.state, expiresAt: a.expiresAt, mine: sessionIdHash !== null && sessionIdHash === a.sessionIdHash };
+    const mine = sessionIdHash !== null && sessionIdHash === a.sessionIdHash;
+    return mine
+      ? { state: a.state, expiresAt: a.expiresAt, mine: true, attemptId: a.attemptId, method: a.method }
+      : { state: a.state, expiresAt: a.expiresAt, mine: false };
   }
 
   /** Disarms every timer (the server's close). */

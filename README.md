@@ -4490,7 +4490,7 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its nineteen
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its twenty
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
 shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), nineteen clauses,
@@ -4713,9 +4713,15 @@ fourteen-rung ladder or mints a token, and `ccd ws-orphan --expect <token> --tre
 names it or a path inside it, nothing holds it, and nothing in it has changed for 7 days. The server is the only
 composer of `ws-orphan`, and a child's deny list names the verb.
 The lane (`server/src/orphanTreeLane.ts`, `coord/collectOrphanTree.ts`, `orphanTreeSweep.ts`, the wiring in
-`orphanTreeBeat.ts`, the cadence the `orphanTrees` row of `LANE_SCHEDULE`) takes a census every 6 hours (hourly in pressure mode), audits at most 2 trees per
+`orphanTreeBeat.ts`, the cadence the `orphanTrees` row of `LANE_SCHEDULE`) takes a census every 6 hours (hourly in pressure mode,
+which is the disk alarm's `critical`; before the alarm's first sweep the lane reads no pressure), audits at most 2 trees per
 pass (4 under pressure) and acts at most once per pass fleet-wide, only on two audits of one unchanged token at least an
-hour apart. It needs `orphan-v1` from ccd and is stopped by `reclaim-paused`.
+hour apart. It needs `orphan-v1` from ccd and is stopped by `reclaim-paused`. A census that meets its bound (`truncated`)
+audits nothing that pass, writes one `orphan census truncated` row with the rows it saw and the seconds it took, and is
+asked again after 15 minutes, the wait doubling with each truncated census in a row up to the cadence and reset by a
+whole one; an unreadable census is asked again after 15 minutes. A pending retry is a fixed instant that a later change of
+pressure does not move. The count of truncated censuses lives in the server's memory, so a restart starts it over, which
+costs at most a few bounded census walks in the hours after it (#1565).
 
 It ships in **shadow**: it records `orphan worktree would be removed` in the feed and runs no verb until the operator
 touches `$REG/orphan-tree-live` by hand. A tree whose HEAD is on no remote is `orphan worktree left` until
