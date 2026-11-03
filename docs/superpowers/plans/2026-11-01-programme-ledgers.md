@@ -51,7 +51,7 @@
 
 ## Landing order
 
-PL1 → PL2 → PL3 → PL4 → PL5a → PL5b → PL6 → PL7 → PL8. PL6 also waits for the Linear central-key plan's LK6 to merge (both edit `ACCOUNT_SECRET_PATHS` and the hook's account arm; rebase onto it, never edit around it). PL8 is GATED on that plan's LK1, LK2, LK11 and LK12 being merged; its Step 0 re-plans against them.
+PL1 → PL2 → PL3 → PL4 → PL5a → PL5b → PL6 → PL7 → PL8, with PL9 (operator steer of 2026-11-03) free to land before or after PL8. PL6 also waits for the Linear central-key plan's LK6 to merge (both edit `ACCOUNT_SECRET_PATHS` and the hook's account arm; rebase onto it, never edit around it). PL8 is GATED on that plan's LK1, LK2, LK11 and LK12 being merged; its Step 0 re-plans against them.
 
 ---
 
@@ -287,6 +287,35 @@ These add `shared/ledgers.ts` and `server/test/ledgers-policy.test.ts` to PL5b's
 - [ ] **Step 4: Run** — PASS.
 - [ ] **Step 5: Commit** `feat(linear): sign in with Linear beside a pasted key`.
 
+### Task PL9: moving between items, and a recommended option on every Decide item (D-7896)
+
+Operator steer of 2026-11-03, spec §2 "Moving between items" and §3.2 "The recommendation" (D23, D24).
+
+**Files (confirm at Step 0 on `origin/main`):**
+- Modify: `shared/ledgers.ts` (the item wire gains `recommended: number | null` and `recommendedWhy: string | null`; a bound `RECOMMEND_WHY_MAX = 2000`), the coordination store and migration for the two columns (a new `user_version` step; never edit an applied one), `server/src/coord/ledgersRoutes.ts` (`parseRaise` refuses a `decide` item without both, or with an index outside its options; a non-decide item carries neither), `ccd/coordinator-skill/SKILL.md` clause 20 (one sentence added, below), `server/test/coordinator-skill.test.ts`
+- Modify: `pwa/src/ledgers/ItemView.tsx` (the recommended option marked, its reasons shown beside the choices before the pick), `pwa/src/ledgers/WaitingRoutes.tsx` and `ProgrammeScreen.tsx` (the way back at every width; previous and next with the position, in the order and filter of the list it was opened from; the list beside the item on a wide screen), the words file for the new strings
+- Test: `server/test/ledgers-routes.test.ts` (or its owner at Step 0), `pwa/test/item-view.test.tsx`, `pwa/test/waiting-routes.test.tsx`, a browser file for the item view at 360, 390, 900, 1280 and 1920
+
+**Interfaces:**
+- The raise body gains `recommended` (the 0-based index of an option) and `recommendedWhy`. Both are required for `decide`, and both are refused on any other kind.
+- Previous and next: an item opened from a list carries that list's identity in the URL, for example `?from=waiting` or `?from=programme:<slug>`, so a reload or a shared link keeps the order. One function computes the neighbours from the same list function that draws the list. There is no second ordering.
+- Clause 20 gains, after "saying what, how and why,": "and a `decide` item names the option this session recommends and why it beats each alternative,".
+
+- [ ] **Step 1: Write the failing tests:**
+  - `a decide item without a recommendation is refused`;
+  - `a recommendation naming no listed option is refused`;
+  - `a do item carrying a recommendation is refused`;
+  - `the item view marks the recommended option and shows its reasons`;
+  - `an item raised before the rule draws as before`;
+  - `previous and next follow the list it was opened from`;
+  - `the first item has no previous and the last no next`;
+  - `the way back is visible at phone width`;
+  - `on a wide screen the list stays beside the item`.
+- [ ] **Step 2: Run** — FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** — PASS, plus the whole pwa/browser suite through `ccrc test`, with `full-ci` on the PR (the item view's layout changes).
+- [ ] **Step 5: Commit** `feat(ledgers): move between items, and a recommended option on every decide item`.
+
 ## Deviations found
 
 Block D-7708 to D-7716, issued 2026-11-01 by the allocator to the coordinator (`desktop-polish: programme ledgers, Goals and Waiting on you (PL1 to PL8)`), one number per task:
@@ -305,6 +334,7 @@ Block D-7708 to D-7716, issued 2026-11-01 by the allocator to the coordinator (`
 - **D-7714** (PL6): secrets pasted into the console, kept in operator-secret slots.
 - **D-7715** (PL7): coordinator-skill clause 20.
 - **D-7716** (PL8): Linear sign-in beside a pasted key.
+- **D-7896** (PL9): moving between items, and a recommended option with its reasons on every Decide item. Issued 2026-11-03 by the allocator to the coordinator, for the operator's steer that day (spec D23, D24).
 
 A further departure found during a task is named by slug in the worker's report; the coordinator allocates for it.
 
