@@ -946,16 +946,20 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
     const shapes = laneClockShapes().map((x) => x.text.trim());
     expect(shapes, 'no lane clock outside runLane').toEqual([
       // Nothing remains in `FleetWatcher`. Four lanes that landed on main while this ratchet was in review kept clocks of their
-      // own, and the consolidation (GitHub #1279) moved them out: the orphan-worktree lane (D-6631) is the `orphanTrees` row now,
-      // and the stale-archive arm (D-6643), the disk alarm (D-6615) and the tmp sweep census (D-6624) keep their wall-clock
-      // throttles in `StaleArchiveBeat`, `DiskAlarmLane` and `TmpCensusBeat`. Making those three rows is a follow-up (#1391; the
-      // rows are monotonic, so it changes their clock); the next test names them. This list only shrinks.
+      // own, and the consolidation (GitHub #1279) moved them out: the orphan-worktree lane (D-6631) is the `orphanTrees` row, and
+      // the stale-archive arm (D-6643), the disk alarm (D-6615) and the tmp sweep census (D-6624) are the `staleArchive`,
+      // `diskAlarm` and `tmpCensus` rows since D-7895 (#1391), which moved their clocks to the monotonic one; the next test
+      // keeps their classes at none. This list only shrinks.
     ]);
   });
 
-  // The three wall-clock throttles the `laneClockShapes` census cannot see (it scans `FleetWatcher` only), named so they stay bound
-  // (GitHub #1391, the follow-up that makes them rows and so changes their clock). This list only shrinks.
-  it('the three beat classes keep exactly their three throttle lines and the one single-flight guard, #1391', () => {
+  // The three wall-clock throttles the `laneClockShapes` census cannot see (it scans `FleetWatcher` only) were pinned here by
+  // line until D-7895 (GitHub #1391) made them rows of `LANE_SCHEDULE`. The pin list is empty, and it may only shrink, so it
+  // stays at 0: `laneClockReported` names the beats' old fields, and any clock their classes compare with a constant, and
+  // reports none; the line scan below stays as its second reading.
+  it('the three beat classes keep no throttle clock and no single-flight guard: their cadences are rows (#1391, D-7895), 0 left', async () => {
+    const { laneClockReported } = await import('../consolidationCensus.js');
+    expect(text(laneClockReported()), 'a beat\'s clock or guard is a row of LANE_SCHEDULE (#1391); no new one').toEqual([]);
     const lines = (f: string): string[] => readFileSync(path.join(ccrcRoot, f), 'utf8').split('\n')
       .map((l) => l.trim()).filter((l) => /now - this\.\w+ < \w+|this\.sweeping\b|private sweeping\b/.test(l));
     expect({
@@ -979,7 +983,7 @@ describe('one lane schedule (ARCH-68): LANE_SCHEDULE and runLane (D-5862)', () =
 
   it('the delegation lane keeps no clock or guard of its own: its cadence and single flight are the `delegation` row', async () => {
     const { laneClockReported } = await import('../consolidationCensus.js');
-    expect(laneClockReported(), 'DelegationLane#lastSweepAt is a row of LANE_SCHEDULE').toEqual([]);
+    expect(laneClockReported(), 'DelegationLane#lastSweepAt and the three beats\' clocks are rows of LANE_SCHEDULE').toEqual([]);
   });
 
   it('no throttle reads the wall clock: every row of LANE_SCHEDULE is monotonic (OA-C4, ruled (a) on #803), 0 wall rows', async () => {
