@@ -3040,12 +3040,18 @@ export class CoordStore {
             this.db.prepare('INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) ' +
               'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(reserved, row.project, landing.pr, landing.head, landing.handoffCommit, runId, pinned, causedBy, Date.now());
           } else if (landing.kind === 'pin' && decision.act === 'repin') {
+            // A verified re-pin also clears the stale-head marker (a quarantined row re-pins only on a readable projection).
             this.db.prepare('UPDATE landing_entries SET pinnedSha = ?, handoffCommit = ?, runId = ?, state = ?, baseSha = NULL, ' +
-              'ejectionKind = NULL, pinnedAt = ? WHERE id = ?').run(landing.head, landing.handoffCommit, runId, pinned, Date.now(), decision.id);
+              'ejectionKind = NULL, quarantineKind = NULL, pinnedAt = ? WHERE id = ?').run(landing.head, landing.handoffCommit, runId, pinned, Date.now(), decision.id);
             entryId = decision.id;
           } else if (decision.act === 'eject') {
-            this.db.prepare('UPDATE landing_entries SET state = ?, baseSha = ?, ejectionKind = ?, ejections = ejections + 1 WHERE id = ?')
-              .run(ejected, decision.base, decision.kind, decision.id);
+            // The count is the decider's (bounded at the safe-integer ceiling), never `ejections + 1` in SQL.
+            this.db.prepare('UPDATE landing_entries SET state = ?, baseSha = ?, ejectionKind = ?, ejections = ? WHERE id = ?')
+              .run(ejected, decision.base, decision.kind, decision.ejections, decision.id);
+          } else if (decision.act === 'quarantine') {
+            // A stale entry head is not an ejection: only the state and its one marker move (no base, count or notice).
+            this.db.prepare("UPDATE landing_entries SET state = 'unknown', quarantineKind = 'stale-episode-head' WHERE id = ?").run(decision.id);
+            return { ...adv, landing: { kind: 'kept' as const, state: 'unknown' as const } };
           }
           if (landing.kind === 'pin') {
             // The witness of this verified pin, bound to the subject's latest observation (0 when it has none): the ONLY writer.

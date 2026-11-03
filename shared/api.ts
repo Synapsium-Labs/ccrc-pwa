@@ -15,7 +15,7 @@ import type { BoxTokenView } from './box-token.js';
 import type { WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
-import type { LandingEntry } from './landingLine.js';
+import type { LandingWrite } from './landingLine.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -12721,9 +12721,10 @@ export type DeadCause = typeof DEAD_CAUSES[number];
 export interface AdvanceOk {
   ok: true; run: RunSummary; checksMail?: typeof CHECKS_MAIL_TOKEN; verifiedHead?: string;
   /** Landing order wave 5e (D-7627): what the landing line recorded for this advance. `kind` is the store's
-   *  `LandingWrite` word (`none`, `no-pr`, `no-episode`, `no-entry`, `kept`, `pinned`, `ejected`); `entry` is present
-   *  for `pinned` and `ejected` only. ADDITIVE and optional: an older server's answer carries none. */
-  landing?: { kind: string; entry?: LandingEntry };
+   *  `LandingWrite` word and the answer is exactly that union (`shared/landingLine.ts`): `kept` carries its `state`,
+   *  `pinned` its `entry` and `created`, `ejected` its `entry`, the rest nothing. ADDITIVE and optional: an older
+   *  server's answer carries none. */
+  landing?: LandingWrite;
 }
 
 /** How far ahead of the reader's clock a radar file's own `at` may read and still be trusted (D-7475). */

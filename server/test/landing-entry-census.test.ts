@@ -61,8 +61,21 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(outside[0]!.source.replace(/\s+/g, ' ')).toMatch(/VALUES \(\?, \?, \?, \?, \?, NULL, 'pinned', \?, \?\)/);
   });
 
-  it('advanceLanding owns pin, repin and ejection on landing_entries and the one witness write; replay owns neither', () => {
-    expect(allWrites(/^landing_entries$/).filter(inWriter).map((q) => q.verb).sort()).toEqual(['INSERT', 'UPDATE', 'UPDATE']);
+  it('quarantineKind has one writer, advanceLanding: the quarantine UPDATE marks it and the verified re-pin clears it (5f Task 3)', () => {
+    const marks = writes(/\bquarantineKind\b/i);
+    expect(marks.map((q) => q.verb), 'the quarantine UPDATE and the re-pin UPDATE').toEqual(['UPDATE', 'UPDATE']);
+    expect(marks.filter((q) => !inWriter(q)).map((q) => `${q.file}:${q.text}`)).toEqual([]);
+    const flat = marks.map((q) => q.source.replace(/\s+/g, ' '));
+    expect(flat.filter((t) => /quarantineKind = 'stale-episode-head'/.test(t))).toHaveLength(1);
+    expect(flat.filter((t) => /quarantineKind = NULL/.test(t))).toHaveLength(1);
+    // the decision is made in the pure decider and acted on inside the one writer: nothing else calls it
+    const calls = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'decideLandingWrite').map((c) => ({ file: f, start: c.start })));
+    expect(calls).toHaveLength(1);
+    expect(calls.every(inWriter)).toBe(true);
+  });
+
+  it('advanceLanding owns pin, repin, ejection and quarantine on landing_entries and the one witness write; replay owns neither', () => {
+    expect(allWrites(/^landing_entries$/).filter(inWriter).map((q) => q.verb).sort()).toEqual(['INSERT', 'UPDATE', 'UPDATE', 'UPDATE']);
     const witness = allWrites(/^landing_projection_witness$/);
     expect(witness.length).toBe(1);
     expect(witness.every(inWriter)).toBe(true);

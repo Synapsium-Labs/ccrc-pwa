@@ -4,7 +4,10 @@
 // what to write, and `CoordStore.advanceLanding` (L3) is the one writer.
 
 /** An entry's state. `unknown` is schema.ts's designated we-do-not-know member: a row this build cannot read. The
- *  decider treats it as not in the line, and no writer ever stores it. */
+ *  decider treats it as not in the line. Exactly one writer ever stores it (wave 5f): `CoordStore.advanceLanding`'s
+ *  measured stale-episode-head quarantine, a retreat whose entry names a head other than the episode's, which marks the
+ *  row `unknown` together with `quarantineKind: 'stale-episode-head'`. Only a later VERIFIED pin of a row whose
+ *  retained fields are all readable clears that marker; any other `unknown` row is never re-pinned. */
 export const LANDING_ENTRY_STATE = {
   pinned: 'waiting in the line at its pinned head',
   ejected: 'sent back from the line for a fix round',
@@ -47,6 +50,15 @@ export interface LandingEntry {
   /** Epoch ms of the (re-)pin; a re-pin moves the entry to the back (D-7617). */
   pinnedAt: number;
 }
+
+/** What the landing line recorded for one advance, as the store answers it and the advance's 200 body carries it
+ *  (`AdvanceOk.landing`). `no-pr`, `no-episode` and `no-entry` are in-process words, never wire refusal codes.
+ *  `kept` names the state of the row the advance left untouched, `unknown` after a stale-head quarantine included. */
+export type LandingWrite =
+  | { kind: 'none' } | { kind: 'no-pr' } | { kind: 'no-episode' } | { kind: 'no-entry' }
+  | { kind: 'kept'; state: LandingEntryState }
+  | { kind: 'pinned'; entry: LandingEntry; created: boolean }
+  | { kind: 'ejected'; entry: LandingEntry };
 
 /** The project's two booleans (spec §5.5 Data): the line is paused while either is set. `CoordStore.readLanding`
  *  answers this. */

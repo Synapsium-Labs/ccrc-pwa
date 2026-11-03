@@ -63,7 +63,7 @@ const IMPORTS = [
   "import type { WorkflowView } from './workflows.js';",
   "import type { WaitingView } from './ledgers.js';",
   "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
-  "import type { LandingEntry } from './landingLine.js';",
+  "import type { LandingWrite } from './landingLine.js';",
   "import type { NodeRole } from './node-role.js';",
   // The sign-in's state words (accounts plan Task A21) join the same import-free `accounts.ts` line: no new import.
   "import type { AccountStateAnswer, AuthMethod, AuthStatusState, LaneState } from './accounts.js';",

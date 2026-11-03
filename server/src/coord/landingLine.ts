@@ -56,11 +56,15 @@ export function landingEjectionAsk(entry: LandingEntry): LandingEjectionAsk {
   const at = `${entry.project} #${entry.pr}`;
   const who = entry.runId === null ? `${at} (no run)` : `run ${entry.runId}, ${at}`;
   const base = entry.baseSha === null ? 'unrecorded' : entry.baseSha.slice(0, 12);
+  const tail = 'The line holds nothing back; you decide whether it lands again, is fixed by hand or is withdrawn.';
+  // A bare retreat names neither a kind nor a base: say so plainly rather than "unrecorded against base unrecorded".
+  const what = entry.baseSha === null && entry.ejectionKind === null
+    ? 'returned from merging to working a second time; no ejection kind or base was recorded. '
+    : `ejected from the landing line a second time (${entry.ejectionKind ?? 'unrecorded'} against base ${base}). `;
   return {
     due: true,
     tag: `landing-ejected-${entry.project}-${entry.pr}`,
     title: `Landing: ${at} ejected twice`,
-    body: `${who}: ejected from the landing line a second time (${entry.ejectionKind ?? 'unrecorded'} against base ${base}). `
-      + 'The line holds nothing back; you decide whether it lands again, is fixed by hand or is withdrawn.',
+    body: `${who}: ${what}${tail}`,
   };
 }

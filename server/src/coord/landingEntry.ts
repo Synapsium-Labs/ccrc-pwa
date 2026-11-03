@@ -5,8 +5,8 @@ import type { RunState } from '../../../shared/api.js';
 import type { ChecksMode } from '../../../shared/landing.js';
 import { isLandingEjectionKind, isLandingEntryState } from '../../../shared/landingLine.js';
 import type {
-  LandingAuthority, LandingEjectionKind, LandingEntry, LandingEntryState, LandingHistoricalBinding, LandingIdentity,
-  LandingJournalRecord, LandingMutationCode, LandingRecovery, LandingRecoverySubject, LandingSubjectRef,
+  LandingAuthority, LandingEjectionKind, LandingEntry, LandingHistoricalBinding, LandingIdentity,
+  LandingJournalRecord, LandingMutationCode, LandingRecovery, LandingRecoverySubject, LandingSubjectRef, LandingWrite,
 } from '../../../shared/landingLine.js';
 import type { LandingAuthorityCommand, LandingMutationDecision, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
 
@@ -18,17 +18,20 @@ export type LandingAdvance =
 
 /** What the line recorded, as the store answers it and the advance's 200 body carries it (D-7627). `no-pr`,
  *  `no-episode` and `no-entry` are in-process words, never wire refusal codes (D-7619). */
-export type LandingWrite =
-  | { kind: 'none' } | { kind: 'no-pr' } | { kind: 'no-episode' } | { kind: 'no-entry' }
-  | { kind: 'kept'; state: LandingEntryState }
-  | { kind: 'pinned'; entry: LandingEntry; created: boolean }
-  | { kind: 'ejected'; entry: LandingEntry };
+// The union is defined ONCE, in the import-free L0 vocabulary `shared/landingLine.ts` (`AdvanceOk.landing` is the same
+// type); this is its type-only re-export for the store.
+export type { LandingWrite };
 
 /** The composite's decision: a write that touches no row, or the one statement to run. */
 export type LandingWriteDecision =
   | { act: 'none'; write: Extract<LandingWrite, { kind: 'none' | 'no-pr' | 'no-episode' | 'no-entry' | 'kept' }> }
   | { act: 'insert' } | { act: 'repin'; id: number }
-  | { act: 'eject'; id: number; base: string | null; kind: LandingEjectionKind | null };
+  /** `ejections` is the count the row takes: one more than it had, but never past the safe-integer ceiling the strict
+   *  reader can still read (a row at the ceiling keeps its count; the retreat is still an ejection). */
+  | { act: 'eject'; id: number; base: string | null; kind: LandingEjectionKind | null; ejections: number }
+  /** A retreat whose entry names a head other than the episode's: the row is marked `unknown` with its one marker, and
+   *  nothing else about it moves (no base, no count, no notice). */
+  | { act: 'quarantine'; id: number };
 
 /** advanceAct's choice: to 'merging' with a verdict → pin (head = measured.branchTip, pr = measured.prNumber ?? null);
  *  to 'working' → retreat (the parsed ejection or null); anything else → plain. */
@@ -46,13 +49,18 @@ export function landingAdvanceOf(f: { to: RunState; measured: { branchTip: strin
  *  `current` is the row for (project, `pin.pr`) on a pin, or for (project, `episode.pr`) on a retreat; null means no
  *  such row. D-7618 (advances the line does not place) and D-7617 (a re-pin moves to the back). */
 export function decideLandingWrite(f: { landing: LandingAdvance; from: RunState; runId: number;
-  current: LandingEntry | null; projection: LandingProjectionRead | null; episode: { pr: number | null } | null }): LandingWriteDecision {
+  current: LandingEntry | null; projection: LandingProjectionRead | null; episode: { pr: number | null; head: string } | null }): LandingWriteDecision {
   const { landing, current } = f;
   if (landing.kind === 'plain') return { act: 'none', write: { kind: 'none' } };
   if (landing.kind === 'pin') {
     if (landing.pr === null) return { act: 'none', write: { kind: 'no-pr' } };
     if (current === null) return { act: 'insert' };
     if (current.state === 'pinned' || current.state === 'ejected') return { act: 'repin', id: current.id };
+    // Wave 5f: `projection` is the single row reader's verdict on `current`. A quarantined row (literal unknown with exactly
+    // the stale-head marker and every retained field readable) re-pins; every other unknown row stays kept.
+    if (current.state === 'unknown' && f.projection?.kind === 'readable' && f.projection.quarantine === 'stale-episode-head') {
+      return { act: 'repin', id: current.id };
+    }
     return { act: 'none', write: { kind: 'kept', state: current.state } };
   }
   if (f.from !== 'merging') return { act: 'none', write: { kind: 'none' } };
@@ -60,7 +68,14 @@ export function decideLandingWrite(f: { landing: LandingAdvance; from: RunState;
   if (f.episode.pr === null) return { act: 'none', write: { kind: 'no-pr' } };
   if (current === null) return { act: 'none', write: { kind: 'no-entry' } };
   if (current.runId !== f.runId || current.state !== 'pinned') return { act: 'none', write: { kind: 'kept', state: current.state } };
-  return { act: 'eject', id: current.id, base: landing.ejection?.base ?? null, kind: landing.ejection?.kind ?? null };
+  // Wave 5f: an owned, pinned entry whose head is not the episode's head is stale, so nothing about its ejection is known:
+  // it is quarantined (no ejection, base, count or notice), and an unreadable projection is kept, never rewritten.
+  if (current.pinnedSha !== f.episode.head) {
+    if (f.projection?.kind !== 'readable') return { act: 'none', write: { kind: 'kept', state: current.state } };
+    return { act: 'quarantine', id: current.id };
+  }
+  return { act: 'eject', id: current.id, base: landing.ejection?.base ?? null, kind: landing.ejection?.kind ?? null,
+    ejections: current.ejections >= Number.MAX_SAFE_INTEGER ? current.ejections : current.ejections + 1 };
 }
 
 const isPositiveSafe = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n > 0;

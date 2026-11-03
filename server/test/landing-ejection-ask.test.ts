@@ -71,8 +71,9 @@ async function scenario(o: { visible?: boolean } = {}) {
       payload: { to, fingerprint, ...extra } });
   const toMerging = async () => { expect((await post('awaiting-review')).statusCode).toBe(200); return post('merging'); };
   const eject = () => post('working', { ejection: { base: 'b'.repeat(40), kind: 'new-head' } });
+  const bareRetreat = () => post('working');
   const asks = () => notifyLog.catchUp(notifyLog.epoch, 0).events.filter((x) => x.title.startsWith('Landing: '));
-  return { app, coord, id: opened.id, post, toMerging, eject, asks, push };
+  return { app, coord, id: opened.id, post, toMerging, eject, bareRetreat, asks, push };
 }
 
 let app: FastifyInstance | undefined;
@@ -122,5 +123,28 @@ describe('the second ejection raises one operator notice (D-7624)', () => {
     expect((await toMerging()).statusCode).toBe(200); expect((await eject()).statusCode).toBe(200);
     expect(asks()).toHaveLength(1);
     expect(push.notify).not.toHaveBeenCalled();
+  });
+});
+
+describe('a bare second retreat raises one honest notice (wave 5f Task 3)', () => {
+  it('two bare retreats raise ONE ask whose body says no kind or base was recorded, never "unrecorded against base unrecorded"', async () => {
+    const { app: a, id, toMerging, bareRetreat, asks, push } = await scenario(); app = a;
+    expect((await toMerging()).statusCode).toBe(200); expect((await bareRetreat()).statusCode).toBe(200);
+    expect(asks()).toHaveLength(0);
+    expect((await toMerging()).statusCode).toBe(200); expect((await bareRetreat()).statusCode).toBe(200);
+    expect(asks()).toHaveLength(1);
+    expect(asks()[0]).toMatchObject({ kind: 'run', runId: id, title: 'Landing: demo #7 ejected twice',
+      body: `run ${id}, demo #7: returned from merging to working a second time; no ejection kind or base was recorded. The line holds nothing back; you decide whether it lands again, is fixed by hand or is withdrawn.` });
+    expect(asks()[0]!.body).not.toContain('unrecorded against base unrecorded');
+    expect(push.notify).toHaveBeenCalledTimes(1);
+    expect(push.notify.mock.calls[0]![0]).toMatchObject({ tag: 'landing-ejected-demo-7' });
+  });
+
+  it('CONTROL: a named second ejection keeps its named copy', async () => {
+    const { app: a, id, toMerging, eject, asks } = await scenario(); app = a;
+    expect((await toMerging()).statusCode).toBe(200); expect((await eject()).statusCode).toBe(200);
+    expect((await toMerging()).statusCode).toBe(200); expect((await eject()).statusCode).toBe(200);
+    expect(asks()).toHaveLength(1);
+    expect(asks()[0]!.body).toBe(`run ${id}, demo #7: ejected from the landing line a second time (new-head against base ${'b'.repeat(12)}). The line holds nothing back; you decide whether it lands again, is fixed by hand or is withdrawn.`);
   });
 });

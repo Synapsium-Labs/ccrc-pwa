@@ -6,6 +6,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { LandingAdvance } from '../src/coord/landingEntry.js';
 import { landingEntryFactsOfRow, landingEntryOfRow } from '../src/coord/landingEntry.js';
+import { landingOrder } from '../src/coord/landingLine.js';
 import type { LandingEjectionKind } from '../../shared/landingLine.js';
 import { mergingAtDetail } from '../../shared/landing.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -383,5 +384,145 @@ describe('the strict row reader (landing order wave 5f): landingEntryFactsOfRow'
     const before = JSON.stringify(r);
     landingEntryFactsOfRow(r);
     expect(JSON.stringify(r)).toBe(before);
+  });
+});
+
+describe('stale episode-head quarantine and bounded verified re-pin (landing order wave 5f, Task 3)', () => {
+  const HEAD3 = '9'.repeat(40);
+  const COLS = 'id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, afterIds, fixesMain, setBy, pinnedAt, quarantineKind';
+  const raw = (): Record<string, unknown>[] => coord.db.prepare(`SELECT ${COLS} FROM landing_entries ORDER BY id`).all() as Record<string, unknown>[];
+  const rawCount = (table: string): number => (coord.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+  /** A run at merging whose entry names the run but whose stored head is no longer the episode head. */
+  const atStale = (): number => {
+    const id = atMerging();
+    coord.db.prepare('UPDATE landing_entries SET pinnedSha = ? WHERE pr = 7').run(HEAD2);
+    return id;
+  };
+  /** The run after a stale retreat: working, its entry quarantined. */
+  const quarantined = (): number => {
+    const id = atStale();
+    const r = coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() });
+    if (!r.ok || r.landing.kind !== 'kept') throw new Error('fixture quarantine refused');
+    step(id, 'awaiting-review');
+    return id;
+  };
+  const repin = (id: number, head: string = HEAD3) =>
+    coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin(head) });
+
+  it.each([['explicit', eject()], ['bare', eject(null)]])('stale episode head quarantines older pin (%s retreat)', (_n, landing) => {
+    const id = atStale();
+    const before = raw();
+    const staleRetreat = coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing });
+    expect(staleRetreat).toMatchObject({ ok: true, from: 'merging', to: 'working', landing: { kind: 'kept', state: 'unknown' } });
+    expect(coord.run(id)).toMatchObject({ ok: true, run: { state: 'working' } });
+    const rawAfterRetreat = raw();
+    expect(rawAfterRetreat).toEqual([{ ...before[0], state: 'unknown', quarantineKind: 'stale-episode-head' }]);
+    // no ejection: the count, base and kind are what they were, and the entry is in no line
+    expect(rawAfterRetreat[0]).toMatchObject({ ejections: 0, baseSha: null, ejectionKind: null, pinnedSha: HEAD2, runId: id });
+    const facts = landingFactsOf(coord, P);
+    expect(landingOrder(facts.entries, facts.flags).order).toEqual([]);
+    expect(landingOrder(facts.entries, facts.flags)).toMatchObject({ paused: false, head: null });
+  });
+
+  it('a pinned row whose projection is unreadable is kept at a stale head: never ejected, never rewritten to mint the marker', () => {
+    const id = atStale();
+    coord.db.prepare("UPDATE landing_entries SET handoffCommit = 'not-a-hash' WHERE pr = 7").run();
+    const before = raw();
+    expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
+      .toMatchObject({ ok: true, to: 'working', landing: { kind: 'kept', state: 'pinned' } });
+    expect(raw()).toEqual(before);
+  });
+
+  it('stale quarantine can verified-repin', () => {
+    const id = quarantined();
+    const witnessBefore = coord.db.prepare('SELECT entryId, runId, pinnedSha, handoffCommit FROM landing_projection_witness').all();
+    expect(witnessBefore).toEqual([expect.objectContaining({ pinnedSha: HEAD })]);
+    const before = raw()[0]!;
+    const verifiedRepin = repin(id);
+    expect(verifiedRepin).toMatchObject({ ok: true, to: 'merging', landing: { kind: 'pinned', created: false,
+      entry: { id: before.id, state: 'pinned', pinnedSha: HEAD3, runId: id, ejections: 0, baseSha: null, ejectionKind: null } } });
+    const rawRepin = raw()[0]!;
+    expect(rawRepin.quarantineKind).toBeNull();
+    expect(rawRepin).toMatchObject({ state: 'pinned', pinnedSha: HEAD3, handoffCommit: HC, runId: id, ejections: 0, baseSha: null, ejectionKind: null });
+    expect(rawRepin.pinnedAt).toBeGreaterThanOrEqual(before.pinnedAt as number);
+    // the projection, the episode and the witness agree, in the same commit
+    expect(coord.currentEpisode(id)).toMatchObject({ head: HEAD3, pr: 7 });
+    expect(coord.db.prepare('SELECT entryId, project, pr, runId, pinnedSha, handoffCommit FROM landing_projection_witness').all())
+      .toEqual([{ entryId: before.id, project: P, pr: 7, runId: id, pinnedSha: HEAD3, handoffCommit: HC }]);
+    // and it is in the line again
+    const facts = landingFactsOf(coord, P);
+    expect(landingOrder(facts.entries, facts.flags)).toMatchObject({ head: expect.objectContaining({ pr: 7, pinnedSha: HEAD3 }) });
+  });
+
+  it.each(['unknown', 'later'])('unmarked unknown is not a sanctioned quarantine (%s)', (state) => {
+    const id = atReview();
+    insertRaw(7, state, null);
+    const before = raw();
+    expect(repin(id)).toMatchObject({ ok: true, to: 'merging', landing: { kind: 'kept', state: 'unknown' } });
+    expect(raw()).toEqual(before);
+    expect(before[0]).toMatchObject({ state, quarantineKind: null });
+  });
+
+  it.each(['-1', '4611686018427387904'])('unreadable quarantine counter cannot repin (ejections %s)', (bad) => {
+    const id = quarantined();
+    coord.db.exec(`UPDATE landing_entries SET ejections = ${bad}`);
+    const dump = (): string => JSON.stringify(coord.db.prepare(`SELECT ${COLS.replace('ejections', 'CAST(ejections AS TEXT) AS ejections')} FROM landing_entries`).all());
+    const before = dump();
+    expect(repin(id)).toMatchObject({ ok: true, to: 'merging', landing: { kind: 'kept', state: 'unknown' } });
+    expect(dump()).toBe(before);
+    expect(JSON.parse(before)[0].quarantineKind).toBe('stale-episode-head');
+  });
+
+  it('unreadable quarantine dependencies cannot repin', () => {
+    const id = quarantined();
+    coord.db.exec("UPDATE landing_entries SET afterIds = 'nope'");
+    const before = raw();
+    const authorities = rawCount('landing_authority');
+    const subjects = rawCount('landing_subjects');
+    expect(repin(id)).toMatchObject({ ok: true, to: 'merging', landing: { kind: 'kept', state: 'unknown' } });
+    expect(raw()).toEqual(before);
+    expect(rawCount('landing_authority')).toBe(authorities);
+    expect(rawCount('landing_subjects')).toBe(subjects);
+  });
+
+  it('quarantine repin preserves authoritative order', () => {
+    const id = atReview();
+    insertRaw(9, 'pinned', null, HEAD2, 3);
+    const other = (coord.db.prepare('SELECT id FROM landing_entries WHERE pr = 9').get() as { id: number }).id;
+    expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }).ok).toBe(true);
+    coord.db.exec('UPDATE landing_entries SET ejections = 1 WHERE pr = 7');
+    const written = coord.writeLandingAuthority({ kind: 'order', project: P, pr: 7, setBy: 'coord-b', afterIds: [other], fixesMain: true }, 5000);
+    expect(written.ok).toBe(true);
+    coord.db.prepare('UPDATE landing_entries SET pinnedSha = ? WHERE pr = 7').run(HEAD2);
+    expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
+      .toMatchObject({ ok: true, landing: { kind: 'kept', state: 'unknown' } });
+    step(id, 'awaiting-review');
+    const authority = coord.db.prepare('SELECT subjectId, afterIds, fixesMain, setBy, seq FROM landing_authority').all();
+    expect(authority).toHaveLength(1);
+    const r = repin(id);
+    expect(r).toMatchObject({ ok: true, landing: { kind: 'pinned', created: false,
+      entry: { state: 'pinned', pinnedSha: HEAD3, afterIds: [other], fixesMain: true, setBy: 'coord-b', ejections: 1 } } });
+    expect(coord.db.prepare('SELECT subjectId, afterIds, fixesMain, setBy, seq FROM landing_authority').all()).toEqual(authority);
+    expect(lineEntries().find((e) => e.pr === 7)).toMatchObject({ afterIds: [other], fixesMain: true, setBy: 'coord-b', ejections: 1 });
+  });
+});
+
+describe('the ejection count is bounded at the safe-integer ceiling (landing order wave 5f, Task 3)', () => {
+  const rawEjections = (): string => (coord.db.prepare('SELECT CAST(ejections AS TEXT) AS e FROM landing_entries').get() as { e: string }).e;
+  it('MAX_SAFE_INTEGER ejections stay unchanged and the retreat still moves the run', () => {
+    const id = atMerging();
+    coord.db.exec(`UPDATE landing_entries SET ejections = ${Number.MAX_SAFE_INTEGER}`);
+    const r = coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() });
+    expect(r).toMatchObject({ ok: true, from: 'merging', to: 'working', landing: { kind: 'ejected',
+      entry: { state: 'ejected', baseSha: BASE, ejectionKind: 'conflict', ejections: Number.MAX_SAFE_INTEGER } } });
+    expect(rawEjections()).toBe(String(Number.MAX_SAFE_INTEGER));
+    expect(coord.run(id)).toMatchObject({ ok: true, run: { state: 'working' } });
+  });
+  it('CONTROL: MAX_SAFE_INTEGER - 1 increments exactly once', () => {
+    const id = atMerging();
+    coord.db.exec(`UPDATE landing_entries SET ejections = ${Number.MAX_SAFE_INTEGER - 1}`);
+    expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
+      .toMatchObject({ ok: true, landing: { kind: 'ejected', entry: { state: 'ejected', ejections: Number.MAX_SAFE_INTEGER } } });
+    expect(rawEjections()).toBe(String(Number.MAX_SAFE_INTEGER));
   });
 });
