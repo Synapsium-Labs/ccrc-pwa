@@ -166,6 +166,20 @@ describe('M4.H20: the worker-side LRU', () => {
     for (const code of ['w0', 'w1', 'w2', 'w3', 'w0']) posts(b, { id: 23, lang: 'ts', code });
     expect(byWeight.calls).toEqual(['w0', 'w1', 'w2', 'w3', 'w0']);
   });
+
+  it('the default cache keeps what weighs under its character bound (the other half of the bound)', () => {
+    // One answer a character short of the bound stays held: the second post of its code makes no second call.
+    const one = fake(() => 'x'.repeat(HIGHLIGHT_CACHE_MAX_CHARS - 1));
+    const a = createHighlightAnswerer(one.h);
+    for (const id of [25, 26]) posts(a, { id, lang: 'ts', code: 'big' });
+    expect(one.calls).toEqual(['big']);
+    // Four answers of a quarter of the bound each (together at most the bound) all stay held, the first included.
+    const quarter = Math.floor(HIGHLIGHT_CACHE_MAX_CHARS / 4);
+    const four = fake(() => 'x'.repeat(quarter));
+    const b = createHighlightAnswerer(four.h);
+    for (const code of ['w0', 'w1', 'w2', 'w3', 'w0', 'w1', 'w2', 'w3']) posts(b, { id: 27, lang: 'ts', code });
+    expect(four.calls).toEqual(['w0', 'w1', 'w2', 'w3']);
+  });
 });
 
 describe('the worker\'s instance strips xml\'s script and style sub-languages (kept, section 4.9)', () => {
