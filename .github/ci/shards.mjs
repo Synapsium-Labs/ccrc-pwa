@@ -52,6 +52,10 @@ export function durationsFromVitestJson(report, repoRoot) {
 
 /** @type {Record<string, ShardProfile>} */
 export const PROFILES = {
+  // 2 workers, not the runner's 4 vCPU: measured 2026-11-03 (#2169, full-mode dispatches through serverProfile), 4
+  // workers on 6 shards cut the shard runner-minutes by about a third but failed 6 of 24 shard jobs on three tests that
+  // never failed at 2 (20-second test and hook timeouts in the tree-reading suites, and a timing assertion), 3 of the 5
+  // re-run failed again, and the slowest leg took 23.6 of its 30 minutes. At 2: 1 of 60 jobs failed, green on a re-run.
   linux: { targetMs: 240_000, min: 1, max: 12, workers: 2, defaultMs: 5000 },
   // A fast pull request (fast-plan.mjs, operator ruling 2026-10-28): half the full run's target, so the related
   // tests and the guard suites finish inside the fast run's ~5 minutes; one file longer than that still takes its own.
@@ -71,6 +75,33 @@ export const PROFILES = {
   // traced. The refresh keeps `trace`, unchanged.
   traceRebuild: { targetMs: 2_400_000, min: 1, max: 24, workers: 2, defaultMs: 5000, scale: 6 },
 };
+
+/** The vitest workers a manual dispatch may ask each server shard for (ci.yml's `workers` input). */
+export const DISPATCH_WORKERS = [2, 4];
+
+/**
+ * The profile the full server plan is packed with. A `workflow_dispatch` that passes `workers` (2 or 4) plans the
+ * shards at that many vitest workers each, for measuring how the suite runs at 4 on a 4-vCPU runner against today's
+ * 2. The cap scales down with it, so the run keeps the profile's worker slots (`max · workers`, 24) on fewer runners:
+ * the full suite outgrows the cap at either count (about 39 shards' worth at 2, 20 at 4, from the 2026-11-03
+ * durations), so at the same cap 4 workers would only half-fill 12 shards, never the plan they would replace.
+ * Every other field is `PROFILES.linux`'s, so the same tests run and only the shard count and the workers move.
+ * Any other event keeps the profile, whatever is passed: a pull request, a queue run, a push, a schedule and a call
+ * (a called run's event is its caller's, but ci.yml passes no workers for one: `workflow_call` declares no such
+ * input). A dispatch asking for a count the input does not offer is refused.
+ *
+ * @param {string} event @param {string | undefined} workers
+ * @returns {ShardProfile}
+ */
+export function serverProfile(event, workers) {
+  if (event !== 'workflow_dispatch' || workers === undefined || workers === '') return PROFILES.linux;
+  const n = Number(workers);
+  if (!DISPATCH_WORKERS.includes(n)) {
+    throw new Error(`shards.mjs: a dispatch may ask for ${DISPATCH_WORKERS.join(' or ')} workers per server shard, not ${JSON.stringify(workers)}`);
+  }
+  if (n === PROFILES.linux.workers) return PROFILES.linux;
+  return { ...PROFILES.linux, workers: n, max: Math.max(1, Math.floor((PROFILES.linux.max * PROFILES.linux.workers) / n)) };
+}
 
 /** The median of the known durations; `defaultMs` when none are known. */
 function medianMs(durations, defaultMs) {

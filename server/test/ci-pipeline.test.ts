@@ -521,6 +521,28 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
     }
   });
 
+  it("a dispatch can ask for 2 or 4 vitest workers per server shard; select passes it on a dispatch alone, and the shards read the matrix's workers", () => {
+    const src = read(CI);
+    const on = section(src, 'on');
+    const dispatch = /^ {2}workflow_dispatch:\n((?: {4}.*\n)*)/m.exec(on)?.[1] ?? '';
+    expect(dispatch).toMatch(/^ {6}workers:\n(?: {8}.*\n)*? {8}type: choice\n {8}options: \['2', '4'\]\n {8}default: '2'$/m);
+    // A called run (release-stable) declares no workers input, so it always plans at the profile's.
+    const call = /^ {2}workflow_call:\n((?: {4}.*\n)*)/m.exec(on)?.[1] ?? '';
+    expect(call).not.toMatch(/^ {6}workers:/m);
+    const sel = step(job('select'), 'Select');
+    expect(sel).toContain("INPUT_WORKERS: ${{ github.event_name == 'workflow_dispatch' && inputs.workers || '' }}");
+    expect(sel).toContain('if [ -n "$INPUT_WORKERS" ]; then args+=(--workers "$INPUT_WORKERS"); fi');
+    expect(step(job('server-shard'), 'Test')).toContain('WORKERS: ${{ matrix.workers }}');
+    // A 2-worker and a 4-worker dispatch on the same ref run side by side: GitHub keeps one pending run per group.
+    const g = /^ {2}group: (.*)$/m.exec(section(src, 'concurrency'))?.[1] ?? '';
+    expect(g).toContain("inputs.workers && format('-w{0}', inputs.workers) || ''");
+    // A 4-worker run's file times are measured four to a runner: they never become the durations every other run
+    // packs its 2-worker shards by.
+    const timesIf = jobKey(job('times-build'), 'if');
+    expect(timesIf).toContain("inputs.workers != '4'");
+    expect(timesIf).toContain("needs.select.outputs.tests == 'full' && github.ref == 'refs/heads/main'");
+  });
+
   it('CCRC_SELECTION is defined exactly once, at the top level, and select reads it', () => {
     const src = read(CI);
     const defs = src.match(/^\s*CCRC_SELECTION:.*$/gm) ?? [];

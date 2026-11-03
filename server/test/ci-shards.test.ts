@@ -19,6 +19,7 @@ import {
   planShards,
   toMatrix,
   PROFILES,
+  serverProfile,
 } from '../../.github/ci/shards.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -96,6 +97,56 @@ describe('PROFILES', () => {
       trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6, budgetMs: 2_700_000 },
       traceRebuild: { targetMs: 2_400_000, min: 1, max: 24, workers: 2, defaultMs: 5000, scale: 6 },
     });
+  });
+});
+
+describe("serverProfile: a dispatch's workers input, and only a dispatch's", () => {
+  it('a workflow_dispatch that asks for 4 workers plans the server shards at 4 under half the cap: the same 24 worker slots on half the runners', () => {
+    expect(serverProfile('workflow_dispatch', '4')).toEqual({ ...PROFILES.linux, workers: 4, max: 6 });
+    expect(serverProfile('workflow_dispatch', '2')).toEqual(PROFILES.linux);
+  });
+
+  it('when the suite outgrows the cap at both counts (the case today), 4 workers still plan half the shards, each with the same load', () => {
+    // 384 files of 45 s: 17,280,000 ms. Uncapped that is 36 shards at 2 workers and 18 at 4; the caps make it 12 and 6.
+    const files = Array.from({ length: 384 }, (_, i) => `server/test/g${String(i).padStart(3, '0')}.test.ts`);
+    const durations = Object.fromEntries(files.map((f) => [f, 45_000]));
+    const two = planShards(files, durations, serverProfile('workflow_dispatch', '2'));
+    const four = planShards(files, durations, serverProfile('workflow_dispatch', '4'));
+    expect(two).toHaveLength(12);
+    expect(four).toHaveLength(6);
+    const perWorker = (plan: typeof two) => Math.max(...plan.map((s) => s.files.length * 45_000 / s.workers));
+    expect(perWorker(four)).toBe(perWorker(two));
+    expect(four.flatMap((s) => s.files).sort()).toEqual([...files].sort());
+  });
+
+  it('a dispatch with no workers input keeps the profile', () => {
+    for (const workers of [undefined, '']) expect(serverProfile('workflow_dispatch', workers)).toBe(PROFILES.linux);
+  });
+
+  it('a pull request, a queue run, a push, a schedule or a call keeps the profile\'s workers whatever is passed', () => {
+    for (const event of ['pull_request', 'merge_group', 'push', 'schedule', 'workflow_call', '']) {
+      expect(serverProfile(event, '4'), event).toBe(PROFILES.linux);
+    }
+  });
+
+  it('a dispatch asking for a count the input does not offer is refused, never planned', () => {
+    for (const workers of ['3', '8', '0', 'four']) {
+      expect(() => serverProfile('workflow_dispatch', workers), workers).toThrow(/2 or 4/);
+    }
+  });
+
+  it('at 4 workers the same durations plan about half the shards they plan at 2', () => {
+    // 96 files of 20 s: 1,920,000 ms. At 2 workers ceil(1,920,000 / 2 / 240,000) = 4 shards; at 4, 2.
+    const files = Array.from({ length: 96 }, (_, i) => `server/test/f${String(i).padStart(2, '0')}.test.ts`);
+    const durations = Object.fromEntries(files.map((f) => [f, 20_000]));
+    const two = planShards(files, durations, serverProfile('workflow_dispatch', '2'));
+    const four = planShards(files, durations, serverProfile('workflow_dispatch', '4'));
+    expect(two).toHaveLength(4);
+    expect(four).toHaveLength(2);
+    expect(four.every((s) => s.workers === 4)).toBe(true);
+    // The same files run either way: none dropped, none doubled.
+    expect(four.flatMap((s) => s.files).sort()).toEqual(two.flatMap((s) => s.files).sort());
+    expect(four.flatMap((s) => s.files).sort()).toEqual([...files].sort());
   });
 });
 

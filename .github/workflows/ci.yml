@@ -52,7 +52,8 @@
 #   schedule (daily)    full     — every leg, macOS included (called from macos.yml), plus a traced
 #                       rebuild of the map. Skipped when main's head already
 #                       carries a green `full-suite`.
-#   workflow_dispatch   full (default) or rebuild.
+#   workflow_dispatch   full (default) or rebuild; `workers` (2 or 4) sets the
+#                       vitest workers per server shard for that run alone.
 #   workflow_call       the mode the caller passes — release-stable.yml's
 #                       gate runs `full` here before it promotes.
 # While CCRC_SELECTION (below) says `shadow`, `selected` mode computes and
@@ -134,6 +135,14 @@ on:
         type: choice
         options: [full, rebuild, refresh]
         default: full
+      # The vitest workers each server shard runs (select.mjs, shards.mjs serverProfile): 2 is PROFILES.linux's, 4
+      # measures the suite on all four of the runner's vCPUs, under half the shard cap. A dispatch alone reads it;
+      # every other trigger, and a call (which declares no such input), plans at the profile's.
+      workers:
+        description: 'Vitest workers per server shard: 2 (the profile) or 4 (fewer, fuller shards).'
+        type: choice
+        options: ['2', '4']
+        default: '2'
   workflow_call:
     inputs:
       mode:
@@ -174,8 +183,13 @@ env:
 # one even with `cancel-in-progress: false`: a queue run in a shared group
 # could lose its checks, and the queue would remove the entry. Nothing cancels
 # one either — `cancel-in-progress` stays the pull_request event alone.
+#
+# A dispatch's `workers` input (2 or 4) is in its group too, so a 2-worker and a
+# 4-worker full run of the same ref run side by side instead of one replacing
+# the other's pending run. No other trigger has the input, so their groups keep
+# their names.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('queue-{0}', github.run_id) || (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh') && 'refresh' || format('{0}-{1}-{2}', inputs.mode || 'full', github.event_name, github.ref_name) }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('queue-{0}', github.run_id) || (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh') && 'refresh' || format('{0}-{1}-{2}{3}', inputs.mode || 'full', github.event_name, github.ref_name, inputs.workers && format('-w{0}', inputs.workers) || '') }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -373,6 +387,9 @@ jobs:
           FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') || startsWith(github.head_ref, 'train/') }}
           INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 */3 * * *' && 'refresh') || '' }}
           FULL_GREEN: ${{ steps.green.outputs.full_green || 'false' }}
+          # A dispatch's workers input; empty for every other trigger (a called run's event is its caller's, but its
+          # inputs carry no workers).
+          INPUT_WORKERS: ${{ github.event_name == 'workflow_dispatch' && inputs.workers || '' }}
           PIPELINE_CHANGED: ${{ steps.pipeline.outputs.changed }}
           FLOOR: ${{ steps.floor.outputs.run }}
           BASE: ${{ format('origin/{0}', github.base_ref) }}
@@ -380,6 +397,7 @@ jobs:
           args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --base "$BASE" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
           if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ] || [ "$FULL_LABEL" = true ]; then args+=(--input-mode full); fi
           if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi
+          if [ -n "$INPUT_WORKERS" ]; then args+=(--workers "$INPUT_WORKERS"); fi
           # D-7747: the SCHEDULED refresh traces nothing when main's head is the newest map's own commit (no merge since
           # it); a dispatch with mode refresh passes no flag, so it always refreshes.
           if [ "$EVENT" = schedule ] && [ "$INPUT_MODE" = refresh ]; then args+=(--skip-unmoved true); fi
@@ -1639,10 +1657,12 @@ jobs:
 
   # The per-file durations the shard planner packs by, from the untraced
   # full run's JSON reports, published as the `testtimes` artifact. Only on
-  # main: select reads durations only from trusted main runs anyway.
+  # main: select reads durations only from trusted main runs anyway. Never from
+  # a dispatch at 4 workers: its file times are measured four to a runner, and
+  # every other run packs its 2-worker shards by these durations.
   times-build:
     needs: [select, server-shard]
-    if: always() && needs.select.outputs.tests == 'full' && github.ref == 'refs/heads/main' && (needs.server-shard.result == 'success' || needs.server-shard.result == 'failure')
+    if: always() && needs.select.outputs.tests == 'full' && github.ref == 'refs/heads/main' && inputs.workers != '4' && (needs.server-shard.result == 'success' || needs.server-shard.result == 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
