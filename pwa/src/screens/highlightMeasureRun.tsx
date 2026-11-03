@@ -10,7 +10,8 @@
 //      1's bounds): time by grammar; then each grammar's largest block first on a fresh highlighter (cold);
 //   2. boot: a fresh highlighter's first call (which spawns) to its post (after `{ready}`): the page's first, cold;
 //      the cold-block highlighters of item 1, after a respawn;
-//   3. HTML characters per input character, by grammar, on the corpus (item 1's figures) and the crafted shapes;
+//   3. HTML characters per input character, by grammar, on the corpus (item 1's figures) and, on a highlighter of the
+//      measurement-only deadline of its own, the crafted shapes; an answer over the HTML cap gives its `htmlChars`;
 //   4. checking and inserting DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS of real answers through the one sink, and layout;
 //   5. the largest real page within the render gate, through `DocMarkdown`: plain first frame to last block coloured;
 //   6. part 1's crafted shapes under the SHIPPED deadline: outcome, time, the longest main-thread frame gap;
@@ -319,9 +320,18 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
       root5.unmount();
     }
   }
-  // Items 6 and 3 (crafted): the shipped deadline.
-  const item6: MeasureResult['item6'][number][] = [];
+  // Item 3, the crafted shapes: section 7.8 runs items 1 to 5 on the measurement-only deadline, so a shape past the
+  // shipped deadline is timed and its ratio read, not cut off (item 6, next, is the shipped deadline's).
   const crafted: { shape: string; ratio: number | null; overCap: boolean }[] = [];
+  const measured = deps.highlighter(MEASURE_DEADLINE_MS);
+  for (const s of CRAFTED_SHAPES) {
+    progress(`Item 3: ${s.name}`);
+    const r = await timed(deps, measured, s.lang, s.code);
+    const chars = htmlCharsOf(r.outcome);
+    crafted.push({ shape: s.name, ratio: chars === null ? null : round(chars / s.code.length), overCap: r.outcome.kind === 'too-large' });
+  }
+  // Item 6: the same shapes under the SHIPPED deadline.
+  const item6: MeasureResult['item6'][number][] = [];
   const shipped = deps.highlighter(HIGHLIGHT_BLOCK_DEADLINE_MS);
   for (const s of CRAFTED_SHAPES) {
     progress(`Item 6: ${s.name}`);
@@ -329,8 +339,6 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
     const gap = await longestGap(deps, job);
     const r = await job;
     item6.push({ shape: s.name, grammar: s.lang, chars: s.code.length, outcome: r.outcome.kind, ms: r.ms, longestFrameGapMs: gap });
-    const chars = htmlCharsOf(r.outcome);
-    crafted.push({ shape: s.name, ratio: chars === null ? null : round(chars / s.code.length), overCap: r.outcome.kind === 'too-large' });
   }
   // Item 7: eight crafted blocks under the shipped ceilings, none of part 1's bounds.
   progress('Item 7');

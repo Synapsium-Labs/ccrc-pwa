@@ -12,7 +12,7 @@ import { parseMarkdown } from '../src/lib/markdownParse';
 import type { WorkerLike } from '../src/lib/markdownRunner';
 import { HighlightMeasure } from '../src/screens/HighlightMeasure';
 import {
-  MEASURE_CANDIDATE_DEBOUNCES, MEASURE_SETTLE_CADENCES_MS, MEASURE_TEXT, formatMeasureResult, runHighlightMeasure, type MeasureDeps,
+  CRAFTED_SHAPES, MEASURE_CANDIDATE_DEBOUNCES, MEASURE_DEADLINE_MS, MEASURE_SETTLE_CADENCES_MS, MEASURE_TEXT, formatMeasureResult, runHighlightMeasure, type MeasureDeps,
 } from '../src/screens/highlightMeasureRun';
 import { entry, fakeLoaders, fileResponse, okTree, treeOk } from './docsFixtures';
 import { inThreadHighlighter } from './highlightTestStore';
@@ -144,6 +144,18 @@ describe('R19: what the figures keep', () => {
     expect(rust.ratio).toBeGreaterThanOrEqual(8);
     expect(rust.overCap).toBe(true);
     expect(r.item3.crafted.filter((c) => c.overCap).length).toBe(1);
+  }, 60_000);
+});
+
+describe('R19: item 3\'s crafted shapes run under the measurement-only deadline', () => {
+  it('a shape the shipped deadline cuts off still gives its ratio, and item 6 still reports the cut', async () => {
+    const asked: number[] = [];
+    const { deps } = fakes({ highlighter: (ms) => { asked.push(ms); return fakes().deps.highlighter(ms); } });
+    const r = await runHighlightMeasure(deps, () => undefined);
+    // The fake answers every shape in kind under the measurement deadline and `timeout` under the shipped one.
+    expect(r.item3.crafted.map((c) => c.ratio)).toEqual(CRAFTED_SHAPES.map(() => 2));
+    expect(r.item6.map((s) => s.outcome)).toEqual(CRAFTED_SHAPES.map(() => 'timeout'));
+    expect(asked).toContain(MEASURE_DEADLINE_MS);
   }, 60_000);
 });
 
