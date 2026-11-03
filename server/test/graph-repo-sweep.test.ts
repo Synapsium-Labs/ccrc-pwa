@@ -1400,6 +1400,114 @@ describe('excluded, no-source, the fetch', () => {
   });
 });
 
+// ── the store's checkout borrows the source's objects (D-7791) ────────────
+// `git clone --shared` of a SHALLOW source goes over upload-pack: it drops --shared without a word, writes no
+// alternates, copies the objects of the source's branch heads only, and exits 0. A source ref under refs/remotes/
+// that is not a branch head was never copied, and the copy never sees a later fetch, so every pass failed at setup
+// with "cannot move the store's checkout". These rows reproduce that state in the fixture store.
+describe('D-7791 — the store\'s checkout borrows the source\'s objects, shallow source or not', () => {
+  const alternatesOf = (ck: string): string[] => {
+    const f = path.join(ck, '.git', 'objects', 'info', 'alternates');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter((l) => l !== '') : [];
+  };
+  const packsOf = (ck: string): string[] => {
+    const d = path.join(ck, '.git', 'objects', 'pack');
+    return fs.existsSync(d) ? fs.readdirSync(d).filter((n) => n.endsWith('.pack')) : [];
+  };
+  /** An upstream and a `--depth 1` clone of it under the projects root, its local branch left behind by a fetch. */
+  function shallowRepo(): { upstream: string; repo: string } {
+    const upstream = j('upstream');
+    fs.mkdirSync(upstream);
+    execFileSync('git', ['init', '-q', '-b', 'main', upstream]);
+    commit(upstream, { 'a.py': 'x = 1\n' }, 'one');
+    commit(upstream, { 'lib/b.py': 'y = 2\n' }, 'two');
+    const repo = j('projects', 'project-a');
+    git(j('projects'), 'clone', '-q', '--depth', '1', `file://${upstream}`, repo);
+    git(repo, 'checkout', '-q', '-b', 'lane-a');            // the checked-out branch is not the source ref
+    commit(upstream, { 'c.py': 'z = 3\n' }, 'three');
+    git(repo, 'fetch', '-q', 'origin', 'main');              // origin/main moves past every local branch head
+    expect(fs.existsSync(path.join(repo, '.git', 'shallow')), 'the fixture source is shallow').toBe(true);
+    expect(git(repo, 'rev-parse', 'refs/remotes/origin/main')).not.toBe(git(repo, 'rev-parse', 'refs/heads/main'));
+    return { upstream, repo };
+  }
+
+  it('a shallow source whose source ref is no branch head builds; its checkout borrows by alternates and mirrors the shallow file', { timeout: T }, () => {
+    const { upstream, repo } = shallowRepo();
+    const healthy = makeRepo('project-b');
+    const r = sweep(INCR);
+    expect(r.status, r.stderr).toBe(0);
+    const tip = git(upstream, 'rev-parse', 'HEAD');
+    expect(rowOf(repo), JSON.stringify(rowOf(repo))).toMatchObject({ outcome: 'rebuilt', ref: 'refs/remotes/origin/main', tip, served: tip, fail: '' });
+    const ck = checkoutOf(repo);
+    expect(alternatesOf(ck)).toEqual([path.join(sourceOf(repo), 'objects')]);
+    expect(packsOf(ck), 'no object is copied').toEqual([]);
+    expect(fs.readFileSync(path.join(ck, '.git', 'shallow'), 'utf8')).toBe(fs.readFileSync(path.join(sourceOf(repo), 'shallow'), 'utf8'));
+    expect(git(ck, 'rev-parse', 'HEAD')).toBe(tip);
+    // the healthy repository of the same pass is unaffected
+    expect(rowOf(healthy)).toMatchObject({ outcome: 'rebuilt', tip: git(healthy, 'rev-parse', 'HEAD') });
+    expect(alternatesOf(checkoutOf(healthy, 'project-b'))).toEqual([path.join(sourceOf(healthy), 'objects')]);
+    expect(fs.existsSync(path.join(checkoutOf(healthy, 'project-b'), '.git', 'shallow')), 'a full source gets no shallow file').toBe(false);
+    // a later fetch is seen at once: the next tip builds, and the diff from the built commit is answered
+    const moved = commit(upstream, { 'd.py': 'w = 4\n' }, 'four');
+    git(repo, 'fetch', '-q', 'origin', 'main');
+    sweep(INCR);
+    expect(rowOf(repo), JSON.stringify(rowOf(repo))).toMatchObject({ outcome: 'refreshed', kind: 'incremental', tip: moved, changed_files: 1 });
+    expect(fs.readFileSync(path.join(ck, '.git', 'shallow'), 'utf8')).toBe(fs.readFileSync(path.join(sourceOf(repo), 'shallow'), 'utf8'));
+  });
+
+  it('a checkout that borrows nothing (a plain copy, the box\'s broken state) is made again and builds; a borrowing one is kept', { timeout: T }, () => {
+    const repo = published();
+    const healthy = makeRepo('project-b');
+    sweep();
+    const ck = checkoutOf(repo);
+    const kept = checkoutOf(healthy, 'project-b');
+    fs.writeFileSync(path.join(kept, '.git', 'kept-marker'), '');
+    // what a shallow source's `clone --shared` left on the box: a full object copy, no alternates, no index
+    fs.rmSync(ck, { recursive: true, force: true });
+    git(keyDir(repo), 'clone', '-q', '--no-local', '--no-checkout', '--no-tags', '--', sourceOf(repo), ck);
+    expect(alternatesOf(ck)).toEqual([]);
+    expect(packsOf(ck).length).toBeGreaterThan(0);
+    const tip = bump(repo);
+    bump(healthy);
+    sweep();
+    expect(rowOf(repo), JSON.stringify(rowOf(repo))).toMatchObject({ outcome: 'rebuilt', tip, served: tip, fail: '' });
+    expect(alternatesOf(ck)).toEqual([path.join(sourceOf(repo), 'objects')]);
+    expect(packsOf(ck), 'the copied objects are gone').toEqual([]);
+    expect(rowOf(healthy).outcome).toBe('rebuilt');
+    expect(fs.existsSync(path.join(kept, '.git', 'kept-marker')), 'a borrowing checkout is never made again').toBe(true);
+  });
+
+  // The checkouts the old code made from a full source are on the box today: `clone --shared` wrote an absolute
+  // alternates line naming the source's objects, plus refs and a branch HEAD the new code never writes. They borrow,
+  // so they are kept as they are.
+  it('a checkout the old `git clone --shared` made from a full source is kept and builds', { timeout: T }, () => {
+    const repo = published();
+    const ck = checkoutOf(repo);
+    fs.rmSync(ck, { recursive: true, force: true });
+    git(keyDir(repo), 'clone', '--shared', '--no-checkout', '--no-tags', '-q', '--', sourceOf(repo), ck);
+    const before = alternatesOf(ck);
+    expect(before, 'the old clone borrows by alternates').toHaveLength(1);
+    expect(fs.existsSync(path.join(sourceOf(repo), 'shallow')), 'the fixture source is full').toBe(false);
+    fs.writeFileSync(path.join(ck, '.git', 'kept-marker'), '');
+    const tip = bump(repo);
+    sweep();
+    expect(rowOf(repo), JSON.stringify(rowOf(repo))).toMatchObject({ tip, served: tip, fail: '' });
+    expect(['rebuilt', 'refreshed']).toContain(rowOf(repo).outcome);
+    expect(fs.existsSync(path.join(ck, '.git', 'kept-marker')), 'an old shared clone is never made again').toBe(true);
+    expect(alternatesOf(ck)).toEqual(before);
+    expect(git(ck, 'rev-parse', 'HEAD')).toBe(tip);
+  });
+
+  it('a checkout that cannot move says git\'s own first line in the row\'s reason', { timeout: T }, () => {
+    const repo = published();
+    fs.writeFileSync(path.join(checkoutOf(repo), '.git', 'index.lock'), '');
+    const tip = bump(repo);
+    sweep();
+    expect(rowOf(repo)).toMatchObject({ outcome: 'failed', fail: 'setup' });
+    expect(why(rowOf(repo))).toMatch(new RegExp(`^cannot move the store's checkout of ${rowOf(repo).repo_key} to ${tip.slice(0, 12)}: fatal: Unable to create '.*index\\.lock': File exists\\.$`));
+  });
+});
+
 // ── the real ccrc test (ccd/ccrc-test), on whatever host this is ──────────
 describe('the real ccd/ccrc-test runs the build (D-7356)', () => {
   const realStatus = (): { line: string; rc: number } => {
