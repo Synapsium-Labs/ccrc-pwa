@@ -117,8 +117,6 @@ function outcomeReason(o: Exclude<ReaderRenderOutcome, { kind: 'rendered' | 'tim
   }
 }
 
-/** A Markdown body in the rich reader. `MarkdownBody` answers the two byte kinds that are not Markdown before it mounts
- *  this, so `null` here has one meaning: that answer was not Markdown, and the caller has shown it already. */
 /** Tells Export that the reader frame shows this body (refinement (a)). Mounted in the frame's arm only, so a fallback's
  *  plain view publishes its own body in its place. */
 function ReaderShown(): null {
@@ -126,6 +124,8 @@ function ReaderShown(): null {
   return null;
 }
 
+/** A Markdown body in the rich reader. `MarkdownBody` answers the two byte kinds that are not Markdown before it mounts
+ *  this, so `null` here has one meaning: that answer was not Markdown, and the caller has shown it already. */
 export function ReaderFrame(p: ReaderFrameProps): ReactNode {
   const src = useMemo(() => docMarkdownSource(p.show), [p.show]);
   if (src.kind !== 'markdown') return null;
