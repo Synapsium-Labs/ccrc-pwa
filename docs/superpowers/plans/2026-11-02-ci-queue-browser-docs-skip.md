@@ -9,17 +9,16 @@ cannot reach them, decided by `.github/ci/reach.mjs` with a browser-package rule
 runs every test" **for the browser shards only**. Every other leg still runs every test in the queue. The pwa unit
 suite renders `docs/`, so `docs/` stays off the pwa suite's FOREIGN list.
 
-- **D-TBD-queue-browser-skip (2026-11-02)** — in `merge_group`, the browser shards skip their tests, by step, when no
+- **D-7870 (2026-11-02)** — in `merge_group`, the browser shards skip their tests, by step, when no
   file in the group can reach the browser package (`reach.mjs` `queueScope`, the browser package's FOREIGN list with
   `docs/` added to it), and `test (pwa)` reads a deliberate skip as the shards' success and a failed or cancelled shard
   as a failure; `docs/` stays reachable for the pwa unit suite, which renders it. Every other leg still runs every test
   in the queue. Owner ruling 2026-11-02, reversing the operator's ruling of 2026-10-25 ("the queue runs every test")
   for the browser shards only.
 
-**The number is not issued yet.** The session that wrote this note could not reach the allocator (`POST
-/api/ledger/deviations`, box token) and its brief named no block, so the entry carries the repo's placeholder, and
-`server/test/dtbd.test.ts` keeps this pull request and the rules-only one that cites it red until the coordinator
-issues a number and it replaces `D-TBD-queue-browser-skip` on both branches, before either merges.
+**The number.** The session that wrote this note could not reach the allocator (`POST /api/ledger/deviations`,
+box token), so it carried the repo's placeholder. The desktop-polish coordinator issued D-7870 for it on 2026-11-03, and
+the placeholder was replaced on both branches before either merged.
 
 ## The change
 
