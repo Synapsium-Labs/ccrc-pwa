@@ -7,7 +7,7 @@
 // An item's state is its `state` column only (plan PL5b R2): `Came back` is an OPEN item whose latest coordinator move was
 // a return, read from its history, never from a field that keeps the last round's value.
 import type { FleetSession, RunSummary } from '../../../shared/api';
-import { orderItems, waitingCount, type ItemKind, type ItemView } from '../../../shared/ledgers';
+import { orderItems, waitingCount, type ItemKind, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { operatorAsk } from '../fleet/rollup';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { boundOpenRun, claimedRunsOf, isRunClosed } from '../fleet/runWords';
@@ -85,6 +85,12 @@ export function questionRows(sessions: readonly FleetSession[], runs: readonly R
  *  checked is the coordinator's, so it does not count (spec §2). */
 export const waitingTotal = (items: readonly ItemView[], questions: readonly QuestionRow[]): number =>
   waitingCount(items) + questions.length;
+
+/** What the programme box's chip counts (spec §3: "N waiting on you"): this programme's OPEN items, a sent-back one included
+ *  and one the coordinator is checking not. Zero while no list has been heard: the chip is an addition, and "not heard
+ *  yet" draws nothing rather than a guess. The box draws the chip only above zero, so this is the whole decision. */
+export const programmeWaitingCount = (view: WaitingView | null, program: string): number =>
+  view === null ? 0 : waitingCount(view.items.filter((i) => i.program === program));
 
 /** The runs of one programme that are still open (`isRunClosed`, the runs board's own predicate), which is what keeps its
  *  coordinator waiting on the operator's tick and refuses a dismiss. The list's wave label and `programmeIsLive` both read

@@ -49,7 +49,7 @@ function RowMeta({ pills, when }: { pills: readonly Pill[]; when: string }): Rea
   );
 }
 
-function ItemRow({ item, now, onOpen }: { item: ItemView; now: number; onOpen: (id: number) => void }): ReactNode {
+export function ItemRow({ item, now, onOpen }: { item: ItemView; now: number; onOpen: (id: number) => void }): ReactNode {
   const note = cameBackNote(item);
   const back = cameBack(item);
   const meta = item.state === 'checking' && item.tickedAt !== null ? `ticked ${ageWords(item.tickedAt, now)}` : `raised ${ageWords(item.raisedAt, now)}`;
@@ -69,7 +69,7 @@ function ItemRow({ item, now, onOpen }: { item: ItemView; now: number; onOpen: (
   );
 }
 
-function QuestionButton({ q, now, onOpen }: { q: QuestionRow; now: number; onOpen: (id: string) => void }): ReactNode {
+export function QuestionButton({ q, now, onOpen }: { q: QuestionRow; now: number; onOpen: (id: string) => void }): ReactNode {
   return (
     <li>
       <BareRow className="wl-item wl-question" data-session={q.sessionId} data-state="question" data-needed="soon"

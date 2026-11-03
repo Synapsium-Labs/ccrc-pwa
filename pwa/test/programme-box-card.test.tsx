@@ -13,8 +13,9 @@ import { api } from '../src/lib/api';
 import { resetAcks } from '../src/lib/seen';
 import { setSkin } from '../src/lib/skin';
 import { SKIN_SETS } from '../src/skins';
-import { createFleetStore } from '../src/stores/fleet';
+import { createFleetStore, useFleetStore } from '../src/stores/fleet';
 import { renderFleet } from './fleetHost';
+import { itemView, waitingView } from './ledgersFixture';
 import { withRunBinding } from './runBindingFixture';
 import { HOUR, MIN, NOW, answeredByCoordinator, asking, run, sess } from './rollupFixture';
 
@@ -65,6 +66,7 @@ beforeEach(() => {
   resetAcks();
 });
 afterEach(() => {
+  act(() => useFleetStore.setState({ waiting: null }));
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -508,5 +510,81 @@ describe.each([REFINED, INSTRUMENT] as const)('the box\'s fold in the %s fleet l
     act(() => { vi.advanceTimersByTime(46_000); });
     expect(boxOf(document)?.getAttribute('data-state')).toBe('stalled');
     expect(boxOf(document)?.querySelector('.pg-moved')?.textContent).toBe('no move 2h');
+  });
+});
+
+// PL5b: the chip on the programme box. "N waiting on you" beside the title, only when N is above zero, and a door to the
+// programme's view. The list is the fleet store's `waiting` (one list for every reader); the box reads its programme's count.
+describe('the waiting chip on a programme box (PL5b)', () => {
+  const OPEN = (n: number, program = 'port-api') =>
+    Array.from({ length: n }, (_v, i) => itemView({ id: 100 + i, program, title: `Item ${i}` }));
+  const withList = (items: ReturnType<typeof itemView>[]): void => {
+    act(() => useFleetStore.setState({ waiting: waitingView({ items }) }));
+  };
+  const chip = (c: Element): HTMLElement | null => c.querySelector<HTMLElement>('.pg-kicker .pg-waiting');
+
+  it('shows "N waiting on you" after the title when the programme has N open items', () => {
+    withList(OPEN(3));
+    const { sessions, runs } = fleet();
+    const kicker = drawCard(sessions, runs, 'project-c').querySelector('.pg-kicker')!;
+    const c = chip(kicker)!;
+    expect(c.textContent).toContain('3 waiting on you');
+    const title = kicker.querySelector('.pg-title')!;
+    expect(title.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('draws no chip at zero: no list yet, a list without this programme, or nothing but items being checked or done', () => {
+    const { sessions, runs } = fleet();
+    expect(chip(drawCard(sessions, runs, 'project-c'))).toBeNull(); // no list heard
+    cleanup();
+    withList(OPEN(2, 'another-programme'));
+    expect(chip(drawCard(sessions, runs, 'project-c'))).toBeNull();
+    cleanup();
+    withList([itemView({ id: 1, program: 'port-api', state: 'checking', tickedAt: NOW }), itemView({ id: 2, program: 'port-api', state: 'done', closedAt: NOW })]);
+    expect(chip(drawCard(sessions, runs, 'project-c'))).toBeNull();
+    cleanup();
+    withList([]);
+    expect(chip(drawCard(sessions, runs, 'project-c'))).toBeNull();
+  });
+
+  it('counts only its own programme\'s open items', () => {
+    withList([...OPEN(2), ...OPEN(5, 'another-programme')]);
+    const { sessions, runs } = fleet();
+    expect(chip(drawCard(sessions, runs, 'project-c'))!.textContent).toContain('2 waiting on you');
+  });
+
+  it('follows the list: the chip appears, changes and goes when the count does', () => {
+    const { sessions, runs } = fleet();
+    const c = drawCard(sessions, runs, 'project-c');
+    expect(chip(c)).toBeNull();
+    withList(OPEN(1));
+    expect(chip(c)!.textContent).toContain('1 waiting on you');
+    withList(OPEN(4));
+    expect(chip(c)!.textContent).toContain('4 waiting on you');
+    withList([]);
+    expect(chip(c)).toBeNull();
+  });
+
+  it('is a door: a labelled button that opens the programme\'s view and nothing else on the box', () => {
+    withList(OPEN(3));
+    const { sessions, runs } = fleet();
+    const c = drawCard(sessions, runs, 'project-c');
+    const door = within(c).getByRole('button', { name: /3 waiting on you/ });
+    expect(door.classList.contains('pg-waiting')).toBe(true);
+    expect(door.getAttribute('aria-label')).toMatch(/port the api/i);
+    expect(c.querySelectorAll('.pg-waiting')).toHaveLength(1);
+    history.replaceState(null, '', '/');
+    fireEvent.click(door);
+    expect(location.pathname).toBe('/programmes/port-api');
+    expect(within(c).getByRole('button', { name: '2 more workers · 1 working' }).getAttribute('aria-expanded')).toBe('false');
+    history.replaceState(null, '', '/');
+  });
+
+  it('prints its widest count as "99+", the one width the layout is measured at', () => {
+    withList(OPEN(250));
+    const { sessions, runs } = fleet();
+    const c = chip(drawCard(sessions, runs, 'project-c'))!;
+    expect(c.textContent).toContain('99+ waiting on you');
+    expect(c.textContent).not.toContain('250');
   });
 });

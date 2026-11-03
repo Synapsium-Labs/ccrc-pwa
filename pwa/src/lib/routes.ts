@@ -56,6 +56,9 @@ export const ROUTES: readonly Route[] = [
   // Waiting on you (desktop-polish PL5a, D-7712): the combined list, and one item under it by its numeric id.
   { id: 'waiting', pattern: /^\/waiting\/?$/, title: 'Waiting on you', top: true, path: '/waiting' },
   { id: 'item', pattern: /^\/waiting\/(\d+)\/?$/, title: 'Item', top: false, path: null },
+  // The programme view (desktop-polish PL5b, D-7713): one programme by slug, opened from the chip on its box. A page under the
+  // fleet, with no place of its own and no "Go to" row, so it has no path to offer.
+  { id: 'programme', pattern: /^\/programmes\/([a-z0-9][a-z0-9-]*)\/?$/, title: 'Programme', top: false, path: null },
 ];
 
 /** The one builder of a session's path, `/s/<id>`, which the `session` row above parses (D-7189). It encodes every
@@ -63,6 +66,12 @@ export const ROUTES: readonly Route[] = [
  *  path is the id itself (`w7-session-path.test.ts`). */
 export function sessionPath(id: string): string {
   return `/s/${encodeURIComponent(id)}`;
+}
+
+/** The one builder of a programme's path, `/programmes/<slug>`, which the `programme` row above parses. A slug the row's
+ *  pattern takes (lower-case letters, digits and dashes, as every programme slug is) is its own encoding. */
+export function programmePath(slug: string): string {
+  return `/programmes/${encodeURIComponent(slug)}`;
 }
 
 /** The accounts route's one query (T2c, D-6329): a lane card is a per-row door to its lane, so it rides a query on the

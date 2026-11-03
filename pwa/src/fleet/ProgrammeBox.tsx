@@ -7,12 +7,22 @@
 // members that ask the operator, handed in (`statusGroups.ts`'s `statusView`), so it does not fold, has no footer and
 // no far-worker line, and its kicker names the project, which no card is there to say.
 //
+// The waiting chip (desktop-polish PL5b, D-7713) sits after the title: "N waiting on you", only above zero, a `Door` to the
+// programme's view. It reads its programme's count off the fleet store's one `waiting` list, on a leaf of its own as the
+// movement readout does (the selector returns the NUMBER, so a frame that changes no count renders nothing), and it takes
+// no prop: the card's memo holds, and neither skin's list passes it anything.
+//
 // The movement readout ticks on its own leaf (`Movement`), as the folded header's `LastActive` does, so the card's
 // memo (C9, D-6441) holds: the card never re-renders for the time.
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
-import { BareRow, Icon, useNow } from '@ccrc/ui';
+import { BareRow, Door, Icon, useNow } from '@ccrc/ui';
 import type { RunSummary } from '../../../shared/api';
+import { programmeWaitingCount } from '../ledgers/ledgerWords';
+import { navigate } from '../lib/router';
+import { programmePath } from '../lib/routes';
+import { useFleetStore } from '../stores/fleet';
+import { badgePrint } from './navBadges';
 import { fleetRowKey, type FleetRow } from './nestFleet';
 import {
   footerWords, movementWords, progressWords, type BoxState, type ProgHue, type ProgrammeBoxView, type Tray,
@@ -26,6 +36,22 @@ function Movement({ view, state, nowMs }: { view: ProgrammeBoxView; state: BoxSt
   const tick = useNow(30_000, nowMs === undefined && view.lastMoveAt !== null);
   const words = movementWords(view, state, nowMs ?? tick);
   return words === '' ? null : <span className="pg-moved" data-state={state}>{words}</span>;
+}
+
+/** The chip's words, "N waiting on you": the figure is the navigation badges' own print (`badgePrint`, one cap, "99+"), so the
+ *  widest chip is a known width and the layout is measured with it. */
+const waitingChipWords = (count: number): string => `${badgePrint(count)} waiting on you`;
+
+/** The chip: nothing at zero (and while no list has been heard), else the count in words, and a way into the programme. */
+function WaitingChip({ slug, title }: { slug: string; title: string }): ReactNode {
+  const count = useFleetStore((s) => programmeWaitingCount(s.waiting, slug));
+  if (count === 0) return null;
+  const words = waitingChipWords(count);
+  return (
+    <Door className="pg-waiting" glyph="›" aria-label={`${words}: open ${title}`} onClick={() => navigate(programmePath(slug))}>
+      {words}
+    </Door>
+  );
 }
 
 export function ProgrammeBox({ view, state, tray, drawRow, drawAbroad, hueOf, onToggleChildren, nowMs, mode }: {
@@ -55,6 +81,7 @@ export function ProgrammeBox({ view, state, tray, drawRow, drawAbroad, hueOf, on
         <span className="pg-word">Programme</span>
         <span className="pg-sep" aria-hidden="true">·</span>
         <span className="pg-title">{view.lead.title}</span>
+        <WaitingChip slug={view.lead.slug} title={view.lead.title} />
         {view.more > 0 && <span className="pg-also">{`+ ${view.more} more`}</span>}
         {mode !== undefined && (
           <>

@@ -37,6 +37,7 @@ import { RunsScreen } from './screens/RunsScreen';
 import { SessionScreen } from './screens/SessionScreen';
 import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
 import { SettingsScreen } from './screens/settings/SettingsFrame';
+import { ProgrammeScreen } from './ledgers/ProgrammeScreen';
 import { ItemRouteAt, WaitingRoute } from './ledgers/WaitingRoutes';
 import { ShellFrame } from './skins/frame';
 import { SKIN_SETS } from './skins';
@@ -166,6 +167,9 @@ export function App(): ReactNode {
     <WaitingRoute />
   ) : route === 'item' ? (
     <ItemRouteAt param={at!.param} />
+  ) : route === 'programme' ? (
+    // Keyed by the slug: one programme's Goals read never shows under another's name.
+    <ProgrammeScreen key={at!.param} slug={at!.param!} />
   ) : (
     <div className="shell-placeholder">
       <p className="shell-placeholder-mark" aria-hidden="true">

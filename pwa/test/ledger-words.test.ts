@@ -2,7 +2,7 @@
 // what it pins; the screen's and the routes' tests read the same words through their components.
 import { describe, expect, it } from 'vitest';
 import {
-  groupByProgramme, itemPills, openRunsOf, programmeIsLive, questionRows, waitingTotal, type QuestionRow,
+  groupByProgramme, itemPills, openRunsOf, programmeIsLive, programmeWaitingCount, questionRows, waitingTotal, type QuestionRow,
 } from '../src/ledgers/ledgerWords';
 import { isWaitingView } from '../src/ledgers/waitingView';
 import { fleetSession } from './fleetFixture';
@@ -120,5 +120,27 @@ describe('isWaitingView', () => {
       { items: [], cleared: 'x', goals: [] }, { items: [], cleared: [], goals: null }]) {
       expect(isWaitingView(bad), JSON.stringify(bad)).toBe(false);
     }
+  });
+});
+
+// PL5b: the programme box's chip. Its count is decided here, once; the box draws it (`programme-box-card.test.tsx`).
+describe('programmeWaitingCount (the chip\'s count)', () => {
+  const view = waitingView({
+    items: [
+      itemView({ id: 1, program: 'prog-a' }),
+      itemView({ id: 2, program: 'prog-a', state: 'checking', tickedAt: NOW - MIN }),
+      itemView({ id: 3, program: 'prog-a', state: 'open', history: [
+        { at: NOW - 30 * MIN, act: 'raise', note: null }, { at: NOW - 5 * MIN, act: 'return', note: 'not yet' }] }),
+      itemView({ id: 4, program: 'prog-b' }),
+    ],
+  });
+  it('counts the programme\'s open items, a sent-back one included and one being checked not', () => {
+    expect(programmeWaitingCount(view, 'prog-a')).toBe(2);
+    expect(programmeWaitingCount(view, 'prog-b')).toBe(1);
+  });
+  it('is zero for a programme with nothing open, and while no list has been heard', () => {
+    expect(programmeWaitingCount(view, 'prog-c')).toBe(0);
+    expect(programmeWaitingCount(null, 'prog-a')).toBe(0);
+    expect(programmeWaitingCount(waitingView({ items: [itemView({ state: 'done', closedAt: NOW })] }), 'prog-a')).toBe(0);
   });
 });

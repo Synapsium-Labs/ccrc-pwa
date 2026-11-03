@@ -146,3 +146,24 @@ describe('Goals: Changed since approval', () => {
     expect(screen.queryByText(/Until it merges/)).toBeNull();
   });
 });
+
+describe('Goals: a change that came from an item (PL5b)', () => {
+  const hrefOf = (id: number): string | null => (id === 7 ? '/waiting/7' : null);
+
+  it('links the change to its item through the path the screen hands in, as a click within the app', () => {
+    render(<GoalsPanel goals={goals({ modifications: [mod(2, { itemId: 7 })] })} homeProject="project-a" itemHref={hrefOf} />);
+    const link = screen.getByRole('link', { name: 'Open the item' });
+    expect(link.getAttribute('href')).toBe('/waiting/7');
+    expect(fireEvent.click(link)).toBe(false);
+    expect(location.pathname).toBe('/waiting/7');
+  });
+
+  it('draws no link when the change has no item, when no path is handed in, or when the screen has no page for it', () => {
+    const view = goals({ modifications: [mod(3, { itemId: null }), mod(2, { itemId: 9 })] });
+    render(<GoalsPanel goals={view} homeProject="project-a" itemHref={hrefOf} />);
+    expect(screen.queryByRole('link', { name: 'Open the item' })).toBeNull();
+    cleanup();
+    render(<GoalsPanel goals={goals({ modifications: [mod(2, { itemId: 7 })] })} homeProject="project-a" />);
+    expect(screen.queryByRole('link', { name: 'Open the item' })).toBeNull();
+  });
+});

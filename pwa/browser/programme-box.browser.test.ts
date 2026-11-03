@@ -8,6 +8,12 @@
 // and a session in no programme. Instrument is put in its project mode (`GROUP_MODE_KEY`), where it draws the same
 // project cards as Refined.
 //
+// PL5b (D-7713): the waiting chip rides the same fixture. `billing` holds 100 open items, so its chip prints its WIDEST
+// figure, "99+ waiting on you" (the cap every badge reads); `search-index` holds 3; `port-api` holds only an item being
+// checked, so it has no chip. Every width, skin and palette below measures the chip as drawn: inside its box, with the kicker
+// not overflowing, at 4.5:1, and at the 44 px tap floor under a coarse pointer. The chip opens the programme view
+// (`/programmes/<slug>`), measured at the same widths: no sideways scroll, no page error, its name on the surface in the hue.
+//
 // MUTATION TABLE (plan Task G2 Step 8; RUN, this file alone, each mutant restored from a saved copy, sha checked): see
 // the PR body; the decider's and the card's mutants are in test/programme-box*.test.ts*.
 //
@@ -45,6 +51,31 @@ const run = (program: string, title: string, project: string, claimedBy: string,
   childReclaim: null, reviewCap: null,
 });
 
+const MIN = 60_000;
+const item = (id: number, program: string, over: object = {}): object => ({
+  id, program, runId: null, kind: 'do', title: `Item ${id} title`, why: 'Why this is needed, in a plain sentence that may run long enough to wrap on a phone.',
+  how: ['Open Settings.', 'Set it to Live.'], options: null, neededBy: 'soon', soonLabel: null, state: 'open', stale: false,
+  raisedAt: NOW - 20 * MIN, tickedAt: null, closedAt: null, answer: null, note: null, secretSlot: null, secretSet: null,
+  history: [{ at: NOW - 20 * MIN, act: 'raise', note: null }], ...over,
+});
+const GOALS = {
+  program: 'billing', specPath: 'docs/superpowers/specs/2026-10-31-billing-design.md',
+  inShort: 'Move billing onto the new ledger, one wave at a time, without a day of double entry.', inShortAt: NOW - 3 * 24 * 60 * MIN,
+  modifications: [
+    { id: 2, at: NOW - 60 * MIN, text: 'Dropped the old export, which nothing reads.', ruling: 'ledger entry 41', itemId: 3, pr: 77, merged: false },
+    { id: 1, at: NOW - 5 * 24 * 60 * MIN, text: 'Added a second wave for the invoices.', ruling: null, itemId: null, pr: 70, merged: true },
+  ],
+};
+const WAITING = {
+  // 100 open items for `billing` (the chip's widest figure), 3 for `search-index`, and one being checked for `port-api`.
+  items: [
+    ...Array.from({ length: 100 }, (_v, i) => item(1 + i, 'billing', { title: `Billing item ${i + 1}` })),
+    ...[201, 202, 203].map((id) => item(id, 'search-index')),
+    item(301, 'port-api', { state: 'checking', tickedAt: NOW - 5 * MIN }),
+  ],
+  cleared: [], goals: [GOALS],
+};
+
 const SESSIONS = [
   session('billing-coord', 'project-a', 'working', 'busy', { role: 'coordinator' }),
   session('billing-w1', 'project-a', 'attention', 'idle', { role: 'child', ...asking }),
@@ -71,9 +102,11 @@ const FIXTURE: AppFixture = {
   api: {
     '/api/accounts': { accounts: [], projected: null, roster: [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false }] },
     '/api/runs': RUNS, '/api/claims': [],
+    '/api/waiting': { ok: true, waiting: WAITING },
+    '/api/programmes/billing/goals': { ok: true, goals: GOALS },
   },
   // The fleet frame of a current server: each worker carries the run binding over RUNS (D-7182, C7d).
-  fleetFrames: [{ type: 'fleet', sessions: withRunBinding(SESSIONS as never[], RUNS as never[]) }, { type: 'runs', runs: RUNS }],
+  fleetFrames: [{ type: 'fleet', sessions: withRunBinding(SESSIONS as never[], RUNS as never[]) }, { type: 'runs', runs: RUNS }, { type: 'waiting', waiting: WAITING }],
 };
 
 const SKINS = [REFINED, INSTRUMENT] as const;
@@ -117,6 +150,9 @@ interface BoxMeasure {
   readonly kickerRatio: number;
   readonly tray: string[];
   readonly state: string | null;
+  /** The waiting chip, or null when the box draws none: its words, its ink on its ground, and whether it sits wholly inside
+   *  the box with the kicker not overflowing. */
+  readonly chip: { readonly text: string; readonly ratio: number; readonly fits: boolean } | null;
 }
 
 /** Every box on the page: its hue, its left rule's colour beside the computed `--prog-<hue>`, the kicker's measured
@@ -137,11 +173,25 @@ const measureBoxes = (): BoxMeasure[] => {
     const kicker = box.querySelector<HTMLElement>('.pg-kicker')!;
     const k = getComputedStyle(kicker);
     const [a, b] = [lum(rgb(k.color)), lum(rgb(k.backgroundColor))].sort((x, y) => y - x);
+    const chipEl = kicker.querySelector<HTMLElement>('.pg-waiting');
+    let chip: BoxMeasure['chip'] = null;
+    if (chipEl !== null) {
+      const c = getComputedStyle(chipEl);
+      const [ca, cb] = [lum(rgb(c.color)), lum(rgb(c.backgroundColor))].sort((x, y) => y - x);
+      const at = chipEl.getBoundingClientRect();
+      const frame = box.getBoundingClientRect();
+      chip = {
+        // The door's decorative glyph (aria-hidden) leads its words: the words are what the chip says.
+        text: (chipEl.textContent ?? '').replace(/^›/, ''), ratio: (ca! + 0.05) / (cb! + 0.05),
+        fits: at.left >= frame.left - 0.5 && at.right <= frame.right + 0.5 && kicker.scrollWidth <= kicker.clientWidth + 1,
+      };
+    }
     return {
       hue, title: kicker.querySelector('.pg-title')?.textContent ?? '', rule: getComputedStyle(box).borderLeftColor, hueColour,
       kickerRatio: (a! + 0.05) / (b! + 0.05),
       tray: [...box.querySelectorAll('.pg-tray .sess-label')].map((e) => e.textContent ?? ''),
       state: box.getAttribute('data-state'),
+      chip,
     };
   });
 };
@@ -165,6 +215,15 @@ describe.each(SKINS)('the programme box in %s', (skin) => {
           for (const b of boxes) {
             expect(b.rule, `${b.title}: the left rule is the computed --prog-${b.hue}`).toBe(b.hueColour);
             expect(b.kickerRatio, `${b.title}: the kicker's text on its band`).toBeGreaterThanOrEqual(4.5);
+          }
+          // PL5b: the chip, at its widest on `billing`, and none where nothing waits on the operator.
+          expect(boxes.map((b) => [b.title, b.chip?.text ?? null])).toEqual([
+            ['Billing rework', '99+ waiting on you'], ['Search index', '3 waiting on you'], ['Port the API', null],
+          ]);
+          for (const b of boxes) {
+            if (b.chip === null) continue;
+            expect(b.chip.fits, `${b.title}: the chip sits inside the box and the kicker does not overflow`).toBe(true);
+            expect(b.chip.ratio, `${b.title}: the chip's text on its ground`).toBeGreaterThanOrEqual(4.5);
           }
           const billing = boxes[0]!;
           expect(billing.state).toBe('needs');
@@ -193,6 +252,7 @@ describe.each(SKINS)('the programme box in %s', (skin) => {
           });
           return {
             foot: [...box.querySelectorAll('.pg-foot button')].map(h),
+            chips: [...document.querySelectorAll('section.pg-box .pg-waiting')].map((el) => ({ h: h(el), w: Math.round(el.getBoundingClientRect().width) })),
             rows: [...box.querySelectorAll('.pg-tray .sess-line')].map(h),
             actions,
           };
@@ -201,6 +261,11 @@ describe.each(SKINS)('the programme box in %s', (skin) => {
         expect(m.rows.length, `${width}: the asking worker is drawn`).toBe(1);
         expect(m.actions.length, `${width}: its ⋯ is drawn`).toBe(1);
         for (const v of [...m.foot, ...m.rows]) expect(v, `${width}px`).toBeGreaterThanOrEqual(44);
+        expect(m.chips.length, `${width}: the two chips are drawn`).toBe(2);
+        for (const c of m.chips) {
+          expect(c.h, `${width}px: the chip, tall`).toBeGreaterThanOrEqual(44);
+          expect(c.w, `${width}px: the chip, wide`).toBeGreaterThanOrEqual(44);
+        }
         for (const a of m.actions) {
           expect(a.h, `${width}px: the ⋯ hit area, tall`).toBeGreaterThanOrEqual(44);
           expect(a.w, `${width}px: the ⋯ hit area, wide`).toBeGreaterThanOrEqual(44);
@@ -211,4 +276,74 @@ describe.each(SKINS)('the programme box in %s', (skin) => {
       }
     }
   });
+});
+
+// PL5b: the chip is a door. Tapping it opens the programme's view, laid out as the prototype's view 2: no sideways scroll at
+// any width, no page error, Goals beside this programme's share of the list, the programme's name in its hue on the surface.
+describe.each(SKINS)('the programme view, opened from the chip in %s', (skin) => {
+  for (const theme of THEMES) {
+    for (const width of WIDTHS) {
+      it(`at ${width} (${theme}): the chip opens /programmes/billing, with Goals, its items and question, and no sideways scroll`, async () => {
+        const { ctx, page, errors } = await open(skin, theme, width);
+        try {
+          await page.click('section.pg-box[data-hue="cyan"] .pg-waiting');
+          await page.waitForSelector('.pv', { timeout: 10_000 });
+          await page.waitForSelector('.pg-goals .pg-goals-text', { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          expect(new URL(page.url()).pathname).toBe('/programmes/billing');
+          const shots = process.env['CCRC_SHOTS'];
+          if (shots !== undefined && shots !== '') await page.screenshot({ path: `${shots}/view-${skin}-${theme}-${width}.png` });
+          const m = await page.evaluate(() => {
+            const rgb = (s: string): number[] => (s.match(/[\d.]+/g) ?? []).map(Number);
+            const lum = ([r, g, b]: number[]): number => {
+              const ch = (v: number): number => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+              return 0.2126 * ch(r!) + 0.7152 * ch(g!) + 0.0722 * ch(b!);
+            };
+            const ratio = (el: Element): number => {
+              const k = getComputedStyle(el);
+              let bg = k.backgroundColor;
+              for (let n: Element | null = el; n !== null && /rgba\(.*,\s*0\)$|transparent/.test(bg); n = n.parentElement) bg = getComputedStyle(n).backgroundColor;
+              const [a, b] = [lum(rgb(k.color)), lum(rgb(bg))].sort((x, y) => y - x);
+              return (a! + 0.05) / (b! + 0.05);
+            };
+            const kicker = document.querySelector('.pv-head .pv-kicker')!;
+            const hueProbe = document.createElement('span');
+            hueProbe.style.color = 'var(--prog-cyan)';
+            document.querySelector('.pv-head')!.appendChild(hueProbe);
+            const hueColour = getComputedStyle(hueProbe).color;
+            hueProbe.remove();
+            return {
+              sideScroll: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+              title: document.querySelector('.pv-head .pv-title')?.textContent ?? '',
+              heading: document.querySelector('.pv-card .pv-h')?.textContent ?? '',
+              rows: document.querySelectorAll('.pv .wl-item').length,
+              nameRatio: ratio(kicker), nameColour: getComputedStyle(kicker).color, hueColour,
+              pending: document.querySelector('.pg-goals-pending')?.textContent ?? '',
+              pendingRatio: ratio(document.querySelector('.pg-goals-pending')!),
+              inShortRatio: ratio(document.querySelector('.pg-goals-text')!),
+              specLink: document.querySelector('.pg-goals-open a')?.getAttribute('href') ?? '',
+              itemLink: document.querySelector('.pg-goals-item a')?.getAttribute('href') ?? '',
+              overflowing: [...document.querySelectorAll<HTMLElement>('.pv, .pv-two, .pv-card, .pg-goals')].filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.className),
+            };
+          });
+          expect(m.sideScroll, 'sideways scroll').toBe(0);
+          expect(m.overflowing, 'a panel wider than its frame').toEqual([]);
+          expect(m.title).toBe('Billing rework');
+          // The view counts what the combined list counts: the 100 open items and the asking worker's question.
+          expect(m.heading).toBe('Waiting on you · 101');
+          expect(m.rows, 'every open item of the programme is a row, and the question').toBe(101);
+          expect(m.nameColour, 'the name is drawn in the programme\'s hue').toBe(m.hueColour);
+          expect(m.nameRatio, 'the name on the surface').toBeGreaterThanOrEqual(4.5);
+          expect(m.inShortRatio).toBeGreaterThanOrEqual(4.5);
+          expect(m.pending).toBe('spec update pending (PR #77)');
+          expect(m.pendingRatio, 'a pending change on the attention tint').toBeGreaterThanOrEqual(4.5);
+          expect(m.specLink).toBe('/docs/project-a/specs/2026-10-31-billing-design.md');
+          expect(m.itemLink, 'the change that came from item 3 links to it').toBe('/waiting/3');
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      });
+    }
+  }
 });
