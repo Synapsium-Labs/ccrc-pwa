@@ -1202,6 +1202,16 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
       expect(body('_bak_prune'), '_bak_prune').toMatch(/^ +_bak_keepset(\s|$)/m);
       expect(src.split('[ -f "$d/coord.db" ]').length - 1, 'a bare coord.db test would discard a sidecar-only snapshot').toBe(0);
       expect(src.split('_bak_snap_class "$d"').length - 1, 'the classifier is asked in one place').toBe(1);
+      // The one other place a backup dir's coord.db is named by a variable path is `ccrc settings`' display-only `withData` count
+      // (D-6914): a regular, non-symlink file, read by no keep, thin or prune decision, so not worth `_bak_snap_class`'s node run. It is
+      // named here so a second copy, in a decision path or anywhere else, reds: exactly one assignment, inside `cmd_settings`, under
+      // a comment that records the reason, and exactly one test of it.
+      expect(src.split('="$d/coord.db"').length - 1, 'one variable spelling of a backup dir\'s coord.db').toBe(1);
+      const settingsBody = body('cmd_settings');
+      expect(settingsBody, 'and it is inside cmd_settings').toContain('db="$d/coord.db"');
+      expect(settingsBody, 'under a comment recording D-6914 and the reason').toMatch(/# LEGITIMATELY DIFFERENT \(D-6914;[\s\S]*display-only count[\s\S]*\n +db="\$d\/coord\.db"/);
+      expect(src.split('[ -f "$db" ]').length - 1, 'and it is tested once').toBe(1);
+      expect(body('_bak_snap_class'), '_bak_snap_class does not spell it').not.toContain('/coord.db');
     });
 
     it('_bak_gc and _bak_prune spell no keep clause of their own: each calls _bak_removable, and the filter is written once (R14(a), D-5318)', () => {

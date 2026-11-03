@@ -244,7 +244,7 @@ describe('ccrc settings: nothing private reaches the output or the file', () => 
     expect(readFileSync(join(home, '.ccrc', 'box-settings.json'), 'utf8')).not.toContain(home);
   });
 
-  it.each([['CCRC_BACKUP_KEEP', ''], ['CCRC_BACKUP_DATA_KEEP', ''], ['CCRC_VERSIONS_KEEP', '']])(
+  it.each(['CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP'])(
     'a refused %s holding a path under a HOME of 40+ characters shows no part of the home path (the keep sentence cuts at 32 before it redacts)', (key) => {
       const home = boxWith(`ccrc-sv-long-home-${'p'.repeat(40)}-`);
       expect(home.length, 'the fixture HOME is long').toBeGreaterThan(40);
@@ -422,7 +422,7 @@ describe('ccrc settings: the backups and the disk', () => {
     expect(ok.disk.state).toBe('ok');
   });
 
-  it.each([['12 digits stay a safe integer', '999999999999', true], ['13 digits could pass 2^53 and are refused', '8790000000000', false]])(
+  it.each([['12 digits stay a safe integer', '999999999999', true], ['13 digits are refused: the conservative bound, though this sample is below 2^53', '8790000000000', false]])(
     'a df reporting %s', (_w, blocks, ok) => {
       const home = boxWith('ccrc-sv-df-');
       const stubs = stubDir(home, { df: `#!/bin/sh\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/fixture ${blocks} 1 ${blocks} 1%% /\\n"\n` });
@@ -630,6 +630,25 @@ describe.skipIf(FLOCK === '')('ccrc settings is read-only', () => {
     expect(readFileSync(lock, 'utf8')).toBe(lockBefore);
     expect(free(), 'still held by its holder alone').toBe(false);
   }, 30_000);
+
+  it('the withData count is read only where the backups object is emitted, so no decision path can borrow it', () => {
+    const body = /^cmd_settings\(\) \{[\s\S]*?\n\}$/m.exec(SRC)?.[0] ?? '';
+    const lines = body.split('\n').filter((l) => !/^\s*#/.test(l));
+    const uses = lines.filter((l) => /\bbd\b/.test(l));
+    expect(uses.map((l) => l.trim().replace(/\s+/g, ' '))).toEqual([
+      'local bj bk=0 bd=0 bb d db bwhy=""',
+      'if [ -f "$db" ] && [ ! -L "$db" ]; then bd=$((bd + 1)); fi',
+      'bj="{\\"state\\":\\"$s_ok\\",\\"kept\\":$bk,\\"withData\\":$bd,\\"bytes\\":$bb}"',
+      'tx+="backups: kept $bk, $bd with coordination data, $bb bytes"$\'\\n\'',
+    ]);
+    // ... and those lines sit between the backups block's start and the disk block's: nothing before or after reads it.
+    const first = body.indexOf('local bj bk=0');
+    const last = body.indexOf('local dj dfo');
+    expect(first).toBeGreaterThan(0);
+    expect(last).toBeGreaterThan(first);
+    expect(body.slice(0, first)).not.toMatch(/\bbd\b/);
+    expect(body.slice(last)).not.toMatch(/\bbd\b/);
+  });
 
   it('the verb names no prune, no lock and no ccd verb in its body', () => {
     const body = /^cmd_settings\(\) \{[\s\S]*?\n\}$/m.exec(SRC)?.[0] ?? '';

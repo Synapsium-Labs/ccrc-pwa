@@ -26158,7 +26158,11 @@ cmd_settings() {
   elif [ -d "$BOX_BACKUP_ROOT" ] && [ -r "$BOX_BACKUP_ROOT" ] && [ -x "$BOX_BACKUP_ROOT" ]; then
     _bak_list; bk=${#BAK_DIRS[@]}
     for d in ${BAK_DIRS[@]+"${BAK_DIRS[@]}"}; do
-      db="$d/coord.db"   # a regular file only: spelled through a variable, as the keep-set's own coord.db test is the one bare spelling (its pin)
+      # LEGITIMATELY DIFFERENT (D-6914; ccrc-update-flip-backups' coord.db pin names this site). `withData` is a display-only count of the
+      # backups that hold a regular, non-symlink coord.db, as spec 2.3 defines it. No keep, thin or prune decision reads it, so it does not
+      # ask `_bak_snap_class`, which starts node and fully verifies every dir that holds a coord.db (this runs every five minutes). A
+      # sidecar-only snapshot, and a symlinked coord.db (which `_bak_thin`'s pre-filter does see as present), are deliberately not counted.
+      db="$d/coord.db"
       if [ -f "$db" ] && [ ! -L "$db" ]; then bd=$((bd + 1)); fi
     done
     bb="$(_set_du "$BOX_BACKUP_ROOT")" || bwhy="~/ccrc-backups could not be measured (du did not answer in time, or failed)"
