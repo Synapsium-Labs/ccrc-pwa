@@ -52,7 +52,10 @@ import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate } from '../src/lib/router';
 import { renderSettings } from './settingsHost';
-import { draftOf, entry, failedAnswer, fakeLoaders, fileResponse, holder, okTree, treeOk, type FakeLoaders } from './docsFixtures';
+import { COMMIT_A, SERVED, draftOf, entry, failedAnswer, fakeLoaders, fileResponse, holder, okTree, pageAt, treeOk, type FakeLoaders } from './docsFixtures';
+import { ExportSheet } from '../src/docs/ExportSheet';
+import { EXPORT_TEXT } from '../src/docs/docsText';
+import type { ExportRequest } from '../src/docs/export/exportInput';
 
 const read = (...seg: string[]): string =>
   readFileSync(path.join(import.meta.dirname, '..', 'src', ...seg), 'utf8');
@@ -1181,6 +1184,20 @@ describe('Export: .docs-export on .docs-action, and the export sheet’s Save an
     expect(exportButton).toHaveClass('docs-action', 'docs-export');
     fireEvent.click(exportButton);
     expect(await screen.findByRole('button', { name: /^Save / })).toHaveClass('min-h-tap');
+  });
+
+  it('draws Retry, in the sheet’s no-start arm, with the same floor class', async () => {
+    const page = pageAt('/docs/demo/specs/a.md');
+    if (page.kind !== 'path') throw new Error('fixture: not a leaf');
+    const request: ExportRequest = {
+      page, tree: treeOk(), assets: null, readAt: 0,
+      source: {
+        kind: 'plain', show: fileResponse('# A').show, body: { kind: 'plain', text: '# A', note: 'a note' },
+        pin: { kind: 'committed', commit: COMMIT_A, servedRef: SERVED, section: 'specs', path: 'a.md' },
+      },
+    };
+    render(<ExportSheet request={request} onClose={() => {}} load={() => Promise.reject(new TypeError('chunk'))} />);
+    expect(await screen.findByRole('button', { name: EXPORT_TEXT.retry })).toHaveClass('min-h-tap');
   });
 });
 
