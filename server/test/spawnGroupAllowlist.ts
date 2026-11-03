@@ -21,7 +21,6 @@ export const SPAWN_GROUP_ALLOWLIST: readonly AllowedTimedSpawn[] = [
   { file: 'ccd-account-auth.test.ts', command: "'bash'", count: 6 },
   { file: 'ccd-child-reclaim-entry.test.ts', command: "'bash'", count: 1 },
   { file: 'ccd-child-reclaim-entry.test.ts', command: 'o.entry ?? de.entry', count: 1 },
-  { file: 'ccd-child-reclaim-hardening.test.ts', command: "'bash'", count: 2 },
   { file: 'ccd-crosspool.test.ts', command: "'bash'", count: 1 },
   { file: 'ccd-id-cap.test.ts', command: "'bash'", count: 1 },
   { file: 'ccd-lifecycle-emit.test.ts', command: "'bash'", count: 1 },
