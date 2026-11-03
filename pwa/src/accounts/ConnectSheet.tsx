@@ -441,11 +441,12 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
     const body = failure instanceof ApiError && typeof failure.body === 'object' && failure.body !== null
       ? failure.body as Record<string, unknown> : {};
     // The box may have started it: the server kept the attempt and answered its id, so the sheet polls it (D-7793 (2)).
-    if (word === 'outcome-unknown' && typeof body['attemptId'] === 'string' && typeof body['expiresAt'] === 'number') {
+    const { attemptId: keptId, expiresAt: keptUntil } = body;
+    if (word === 'outcome-unknown' && typeof keptId === 'string' && typeof keptUntil === 'number') {
       settle(SIGN_IN_LEDGER.startUnknown);
       status(SIGN_IN_LEDGER.startUnknown);
       setCodeKey((k) => k + 1);
-      putAtt(fresh(body['attemptId'], body['expiresAt']));
+      putAtt(fresh(keptId, keptUntil));
       return;
     }
     if (word === undefined || word === 'outcome-unknown') { finish(SIGN_IN_END.unknown(id)); return; }
