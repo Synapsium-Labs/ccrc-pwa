@@ -1717,18 +1717,25 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
     }, 120_000);
 
     // W4-H4 (wave 4 PR4 Task 4.1, kept by D-7019): whatever the gate's form, a FIFO at the bucket's name is never opened
-    // for the append, which would block the hook past its bound.
+    // for the append, which would block the hook past its bound. A run whose pane lookup went unanswered never reached the
+    // append, so it proves nothing: it is replayed, as `run` does, and the row requires an answered one (review 1365, F4).
     it('W4-H4: a FIFO at the bucket\'s name is never opened: the hook exits 0 within its bound, writes nothing, and the FIFO stays a FIFO', () => {
       const name = `${new Date().toISOString().slice(0, 13).replace(/[-T]/g, '')}.spool`;
       execFileSync('mkfifo', [path.join(ownerDir(), name)]);
-      const r = spawnSync('bash', [HOOK], {
-        input: JSON.stringify(pre('Agent', {})), encoding: 'utf8', env: hookEnv(), timeout: 10_000, killSignal: 'SIGKILL',
-      });
-      expect(r.signal, 'the hook blocked opening the FIFO and was killed at the bound').toBeNull();
-      expect(r.status).toBe(0);
+      let answered = false;
+      for (let attempt = 0; attempt < 5 && !answered; attempt += 1) {
+        const was = records(tmuxAnswered()).length;
+        const r = spawnSync('bash', [HOOK], {
+          input: JSON.stringify(pre('Agent', {})), encoding: 'utf8', env: hookEnv(), timeout: 10_000, killSignal: 'SIGKILL',
+        });
+        expect(r.signal, 'the hook blocked opening the FIFO and was killed at the bound').toBeNull();
+        expect(r.status).toBe(0);
+        answered = records(tmuxAnswered()).length > was;
+      }
+      expect(answered, 'a run whose pane lookup was answered, so it reached the append').toBe(true);
       expect(fs.lstatSync(path.join(ownerDir(), name)).isFIFO()).toBe(true);
       expect(fs.readdirSync(ownerDir())).toEqual([name]);
-    }, 30_000);
+    }, 90_000);
   });
 
   describe('prune: the owner\'s buckets older than 24 hours, once an hour, inside its own directory (W3-M06)', () => {

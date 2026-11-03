@@ -1630,11 +1630,11 @@ describe('8. the closed scope census', () => {
     // R55 is lifted (PR4 Task 4.5b, W4-D5): the mixed-group reader the fixer refused with is gone, from both files
     expect((checks + ccrcSrc).match(/^_dh_mixed_events\(\) *\{/gm), 'R55 is lifted: the mixed-group reader is gone').toBeNull();
     // THE FIXER: the shipped installer, once, with exactly `--homes <dirs>`, and the readers it uses today. `install`, a second script, `rm`,
-    // `eval`, `sh -c` and every redirection to a file are each outside this list.
+    // `eval`, `sh -c` and every redirection to a file are each outside this list. So is `command -v jq` since R55 was lifted (review
+    // 1365, F7): the mixed-group reader was its only caller.
     const fixBody = shellBody(checks, '_fix_delegation-hooks');
     const FIXER: CommandRules = {
       local: true, echo: true, return: true, read: true, '[': true, continue: true, _skills_roster_rows: true, _dr_join: true,
-      command: (a) => a.length === 2 && a[0] === '-v' && a[1] === 'jq',
       '"${BASH:-bash}"': (a) => a.length === 3 && a[0] === '"$inst"' && a[1] === '--homes' && a[2] === '"${dirs[@]}"',
     };
     expect(commandsOutside(fixBody, FIXER), 'the fixer runs something that is not the shipped installer or a reader').toEqual([]);

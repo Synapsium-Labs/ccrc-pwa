@@ -4225,11 +4225,11 @@ CCRC_DOCTOR_CHECKS=(delegation-hooks)
       const before = readFileSync(f);
       const r = runDoctor(home, ['doctor', '--fix']);
       expect(r.stdout).not.toMatch(R55_REFUSAL);
-      const after = readFileSync(f);
-      expect(after.toString('utf8')).toContain('their-object-hook');
-      // what the installer makes of a shape that is not valid settings is its own business; whenever it replaced the file,
-      // the original is in the backup, byte for byte
-      if (Buffer.compare(after, before) !== 0) expect(Buffer.compare(backupOf(home), before), 'the backup is not the original bytes').toBe(0);
+      // the home is handed to the installer (review 1365, F3), which rewrites it: measured, it turns the object into an array,
+      // keeping the other command and dropping the object's keys, and it backs the original up first, byte for byte
+      expect(r.stdout).toMatch(FIXED('claude'));
+      expect(readFileSync(f, 'utf8')).toContain('their-object-hook');
+      expect(Buffer.compare(backupOf(home), before), 'the backup is not the original bytes').toBe(0);
     });
 
     it('W4-D5 N5: an event key `*` is never glob-expanded or word-split: no line names a file a glob would match, and the other command under `*` is kept', () => {
