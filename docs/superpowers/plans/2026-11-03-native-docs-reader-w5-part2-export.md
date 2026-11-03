@@ -4225,8 +4225,9 @@ Issued at the run's opening as one block, 7879 to 7894: the first eight to the d
 - **D-7888 (2026-11-03)** — publish-forwards-outward (found in Task 6). `DocsScreen`'s nested `HighlighterContext` value's `publish` sets the page store and then forwards to the outer context's `publish`, memoised on the outer value. The plan wrote `publish: setPageStore`, which reds the base guard `highlight-wiring`'s "a text leaf publishes its one-block store the same way" (it renders `DocsScreen` under its own outer `publish`). Production is unchanged: nothing above `DocsScreen` provides `publish`. Task 6 (W5X-T8-M10 re-spelled on it).
 - **D-7889 (2026-11-03)** — export-links-in-control-census (found in Task 7). `control-census.test.ts` gains a second entry, `docs/export/exportMarkdown.tsx <a> (none)` (INLINE, beside `DocLink`'s), for the links `EXPORT_COMPONENTS.a` draws into the saved file; the plan's Scope allowed one entry (Task 8's button) and Task 5's guard list did not run the census. W5X-T5-M14.
 - **D-7890 (2026-11-03)** — export-sheet-key-prefix (found in Task 8). `DocsHead#exportKeyOf` prefixes its key with `export`: the plan's key equalled `shareKeyOf`'s for the updating state and a shared pin, and the two sheets are siblings, so React warned of duplicate keys. Task 8 (W5X-T8-M14 pins the key).
+- **D-7891 (2026-11-03)** — layer-order-first (found in Task 13). `pwa/index.html`'s pre-paint `<style>` opens with the cascade-layer order, `@layer theme, base, components, utilities;`, and `pwa/test/layer-order.test.ts` holds it equal to `ui/src/styles/theme.css`'s own `@layer` statement and ahead of every stylesheet link, the module entry and every other `@layer` use. Export's lazily loaded builder makes the bundler emit a chunk shared with the entry (the Markdown pipeline and @ccrc/ui's components, with their CSS); Vite links that chunk's sheet before `index.css`, so it opened `@layer components` before `theme.css`'s statement and ranked components below base and utilities. The reset's `border: 0 solid` then beat every ui component rule, in the shipped build as well. The base built one sheet and no shared chunk. The PR's first CI run caught it in the browser leg (`tool-well-colour`, `ask-inline`); `build.cssCodeSplit: false` was measured not to fix it. Departs from the plan's file list (`index.html` was not in it). Coordinator ruling of 2026-11-03. Task 13 (W5X-T13-M1).
 
-Issued and unused: 7891 to 7894.
+Issued and unused: 7892 to 7894.
 
 ## Where things stand
 
@@ -4273,6 +4274,8 @@ Measured at the end state (Task 13, 2026-11-03), every run through `ccrc test`, 
 | `pwa/browser/docs-export.browser.test.ts` | 1 | 17 | 0 | 0 |
 | `pwa/browser/reader-frame.browser.test.ts` | 1 | 24 | 0 | 0 |
 | `pwa/browser/docs-headers.browser.test.ts` | 1 | 13 | 0 | 0 |
+| `pwa/browser`, the whole suite in four chunks, after D-7891 | 46 | 1650 | 2 | 76 |
+| `pwa/test/layer-order.test.ts` and every test that reads `index.html` (`shell-csp`, `skin-identity`, `fonts`, `theme-catalogue`, `skin-boot`, `browser-dist`, `reader-built`, `contrast`), after D-7891 | 9 | 454 | 0 | 0 |
 | `server`, the whole suite in 22 chunks, `typecheck-tests` alone | 1299 | 67644 | 55 | 192 |
 
 The `pwa` suite and the three browser files were green on their first run, and none needed a re-run. The browser files ran locally, desktop Chromium, headless: a pull request's fast run skips `browser (pwa)`, which first runs in the merge queue.
@@ -4283,9 +4286,11 @@ The `server` suite was not green on this box. This branch changes no file under 
 - `typecheck-tests` (2): the `agent` package was not installed in this workspace at first; once installed, the same two cases failed with `tsc` killed by the test slice's memory cap (three OOM kills, `MemoryMax=6G`), its file list read empty;
 - `ccd-docs-fetch` (4, lock age), `ccd-tool-adj` (1, the OOM score), `ccrc-containment` (1, the loopback curl front), `child-reclaim-paused-at-server` (1), `platform-hazards` (1, R14(i) under `C.UTF-8`), `testbox-box-package` (1, a group-writable tree) and `tmp-sweep` (1, FAILS CLOSED).
 
-The pull request's own CI, whose full run `ui/package.json` triggers, runs the `server` suite on a quiet runner and is the arbiter for these files.
+The pull request's own CI is the arbiter for these files. Its first run, a full run (`ui/package.json` triggers one), at the first results commit, was green in every `server` shard, `test (server)`, `test (pwa)` and `test (agent)`.
 
-The whole mutation table: 103 rows (the last occurrence of each id), run one at a time in the workspace, each through `ccrc test` under a 600 s bound, each restored from a saved copy with its sha256 checked and `git status --porcelain` unchanged after every row. Every row went red. Two rows carried a word for their `new` text (W5X-T2-M2 `(removed)`, which made the module fail to parse, and W5X-T6-M5 `removed`); both were corrected to the empty string and re-run alone, red. Ten rows went red in more tests than they stated at their task, each time a case a later task or Task 12's fix wave added for what the row mutates: W5X-T2-M2, W5X-T3-M4, W5X-T3-M5, W5X-T3-M7, W5X-T5-M3, W5X-T5-M4, W5X-T5-M7, W5X-T5-M13, W5X-T8-M10 and W5X-T8-M14. Each is restated below as measured, its `end` naming the extra cases; they are corrections of the predictions, not departures. No row went red in fewer tests than it stated. W5X-T11-M4 and W5X-T11-M5 (D-7887's two config lines) fail their suites at import, as recorded. Rows measured above prediction at their own task were accepted by the coordinator on 2026-11-03: W5X-T5-M7 (W5h-a's planted copies of `pwa/src` also red), W5X-T8-M2 (two slash replace-navigation cases and the symlink leaf) and W5X-T10-M5 (the same four planted copies).
+That run was red in both `browser (pwa)` shards, in `tool-well-colour` (16 of 16) and `ask-inline`, which this wave's three named browser files do not cover: the cascade-layer inversion that D-7891 fixes. Only the three named browser files had run locally before it. After the fix, the whole browser suite ran locally (above): `tool-well-colour` 16 and `ask-inline` green. `accounts-cards` failed once at load on a bundler panic (`Rolldown panicked … index out of bounds`) and `refined-phone` failed one case, and both were green alone. `session-header` failed two cases at 900 px (a header 200.8 px tall against an accepted 188) with and without D-7891's line; the first CI run passed that file on the merge ref, which carries `main`'s later header changes (#2226), so its local red is the branch's older base on this box, and the PR's CI decides it.
+
+The whole mutation table: 103 rows (the last occurrence of each id), run one at a time in the workspace, each through `ccrc test` under a 600 s bound, each restored from a saved copy with its sha256 checked and `git status --porcelain` unchanged after every row. Every row went red. Two rows carried a word for their `new` text (W5X-T2-M2 `(removed)`, which made the module fail to parse, and W5X-T6-M5 `removed`); both were corrected to the empty string and re-run alone, red. Ten rows went red in more tests than they stated at their task, each time a case a later task or Task 12's fix wave added for what the row mutates: W5X-T2-M2, W5X-T3-M4, W5X-T3-M5, W5X-T3-M7, W5X-T5-M3, W5X-T5-M4, W5X-T5-M7, W5X-T5-M13, W5X-T8-M10 and W5X-T8-M14. Each is restated below as measured, its `end` naming the extra cases; they are corrections of the predictions, not departures. No row went red in fewer tests than it stated. W5X-T11-M4 and W5X-T11-M5 (D-7887's two config lines) fail their suites at import, as recorded. Rows measured above prediction at their own task were accepted by the coordinator on 2026-11-03: W5X-T5-M7 (W5h-a's planted copies of `pwa/src` also red), W5X-T8-M2 (two slash replace-navigation cases and the symlink leaf) and W5X-T10-M5 (the same four planted copies). W5X-T13-M1 (D-7891) was measured after the table, the same way: 2 of 3 pin cases red, and `tool-well-colour` 16 of 16 red in the browser leg.
 
 ### Mutation rows
 
@@ -4454,6 +4459,11 @@ Task 12:
 {"id": "W5X-T12-F1", "spec": "M4.EX1", "pkg": "pwa", "file": "src/docs/export/buildExport.tsx", "old": "  ? (asset.src.startsWith(SVG_DATA_PREFIX) ? asset.src : null)", "new": "  ? asset.src", "tests": ["test/docs-export.test.tsx"], "red": "Tests  1 failed | 51 passed (52) ; buildExport: one React <html>, inert by construction (spec 4.17; M4.EX1-EX4, M4.EX7, M4.EX10, M4.EX18) > an SVG registry src that is not the", "end": "1 failed (of 56) at the end state"}
 ```
 
+Task 13:
+
+```json
+{"id": "W5X-T13-M1", "spec": "D-7891", "pkg": "pwa", "file": "index.html", "old": "      @layer theme, base, components, utilities;\n", "new": "", "tests": ["test/layer-order.test.ts", "browser/tool-well-colour.browser.test.ts"], "red": "layer-order: 2 failed (of 3): index.html's first <style> opens with that same statement, before any rule; the statement comes before every stylesheet link, the module entry and every other @layer use. tool-well-colour (browser leg): 16 failed (of 16): an expanded Bash card shows its command and output in palette hues on the well (every skin, palette and width)", "end": "as red: measured at the end state"}
+```
 
 ### Measurements
 
@@ -4479,7 +4489,7 @@ Task 12:
 - The pop-out loop's comment says the size estimate can be high or low, and that the loop keeps the inlined images a prefix and the file under budget (Task 12, F5).
 - The Export closure scan (M4.EX17) filters highlight modules through one helper, which both the real tree and the planted cases call, so a planted module reds it (Task 12, M6).
 - The browser leg serves two refresh-free string pages, `meta-click` and `control-click`, so the form-submit and link channels are clicked, never skipped. Its meta-only case excludes `/favicon.ico` by name: Chrome asks for the icon of the page a named navigation lands on.
-- Rows beyond the plan's table: the CSP re-tokenising case (W5X-T5-M13), every Export scan arm's planted control (Task 10's fix round), every `exportStateFor` arm (Task 12, F4), and the two D-7887 config lines (removing either fails its suite at import).
+- Rows beyond the plan's table: the CSP re-tokenising case (W5X-T5-M13), every Export scan arm's planted control (Task 10's fix round), every `exportStateFor` arm (Task 12, F4), the two D-7887 config lines (removing either fails its suite at import), and D-7891's line (W5X-T13-M1).
 - W5X-T8-M5's `old` was extended by the adjacent line of the arm it targets, so it matches once.
 
 ### Carried, not fixed
