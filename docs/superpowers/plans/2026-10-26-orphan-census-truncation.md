@@ -14,7 +14,7 @@
 
 - **Server side only.** Do not touch `ccd/ccd`: open PR #1404 moves the census verb (`WS_ORPHAN_CENSUS_ROWS=4096; WS_ORPHAN_CENSUS_S=60`, `ccd/ccd:16608`). The census document does not change either, because a new field there would collide with #1404.
 - **Wave 1 touches neither `server/src/watch.ts` nor `server/src/orphanTreeBeat.ts`** (Coordinator ruling 1). Another wave holds `watch.ts` under a live claim, and the beat's pressure line is wave 2's.
-- **In wave 2, `server/src/watch.ts` is touched in exactly one line**, the `orphanBeat` field at `watch.ts:1021`. There is no other route. `Deps` (`server/src/deps.ts`) has no disk field, and the disk alarm is a private `FleetWatcher` field (`watch.ts:1088`). It is a soak-watched file, so the change must have zero net growth (`growth-check.test.ts` lists it at :61).
+- **In wave 2, `server/src/watch.ts` is touched in exactly one line**, the `orphanBeat` field at `watch.ts:988` (re-measured at wave 2's base `408d93806`). There is no other route. `WatcherDeps` (`server/src/deps.ts`) has no disk field, and the disk alarm is a private `FleetWatcher` field (`watch.ts:1057`). It is a soak-watched file, so the change must have zero net growth (`growth-check.test.ts` lists it at :61).
 - Ring rules: decisions live in `orphanTreeLane.ts` (L1, pure, no IO, no clock). The sweep and beat only wire them (L4). Log lines are `console.warn('ccrc-server: …')` and never `req.log`.
 - No overloaded null at a seam. A `null` disk block means unknown. It folds to "no pressure" in ONE named L1 function, because the lane treats unknown and not-critical alike: the slower 6 h cadence is the fail-toward-keeping side.
 - No change to the wire. `DiskOrphanTrees` (`shared/disk.ts:126-129`) is counts only (`byClass`, `byOutcome`), so it has no slot for a census outcome. `health()` is left as it is (see Scope item 4).
@@ -36,7 +36,7 @@
 - A whole census after a run of truncated ones resets the back-off, so the next truncation is asked again after 15 min. Pinned by the reset row.
 - A truncated census after a whole one: earlier outcomes must not be re-said or forgotten, and `health()` must not drop to null. Pinned by `a truncated census keeps the memory it learned before`.
 - The disk alarm has not swept yet (`block()` is null) or reads unmeasured: the lane must stay on the 6 h cadence unless a held `critical` stands. Pinned by the `orphanPressure` unit rows.
-- Pressure flips between a truncated census and its retry. The retry instant is computed with that pass's `censusMs`. This was already true of the unreadable arm (`:123`) and is accepted, not fixed: the disk level is debounced, and the worst case is pressure→clear, a retry that waits 5 h 15 min instead of 15 min. It is called out in the PR body.
+- Pressure flips between a truncated (or unreadable) census and its retry. Review 990's F1 found that the retry was stored as `now - censusMs + waitMs` with the writing pass's cadence and read back with the reading pass's, so rising pressure re-asked at once and clearing pressure waited 5 h 15 min instead of 15 min. **Fixed in wave 2** (D-7864): a pending retry is a due instant (`OrphanCensusNext`, kind `at`) stored apart from the cadence, so a later pass's pressure never moves it; only the regular cadence after a whole census (kind `after`) follows the reading pass's pressure. Pinned by a row for each direction, for both arms, and a row that the regular cadence still shortens under pressure.
 - The beat ignores its port, or `watch.ts` passes `() => false` again. Pinned by the beat test and the `watch.ts` source pin in Task 2.
 
 ---
@@ -173,24 +173,24 @@ git commit -m "fix(orphan-lane): a truncated census retries on a back-off and wr
 
 ### Wave 2 (Task 2): Pressure reads the disk alarm's critical state
 
-This task is wave 2 (Coordinator ruling 1). It is not part of wave 1's commits or gates, and it is dispatched once the live claim on `server/src/watch.ts` is released. Its anchors are at `ea1e84c09`; re-read them at wave 2's base.
+This task is wave 2 (Coordinator ruling 1). It is not part of wave 1's commits or gates, and it is dispatched once the live claim on `server/src/watch.ts` is released. Its anchors were taken at `ea1e84c09`; review 990's F4 found them drifted, and they are re-measured below at wave 2's base `408d93806` (the brief's). Wave 2 also carries review 990's F1 fix as its first commit (D-7864; see As built).
 
 **Files:**
-- Modify: `server/src/orphanTreeLane.ts` (a new L1 function beside `orphanCensusDue`, `:213-215`)
-- Modify: `server/src/orphanTreeBeat.ts:19` (constructor), `:32` (`pressure: () => false`)
-- Modify: `server/src/watch.ts:1021` (ONE line, net zero, no new import: `watch.ts` imports only `OrphanTreeBeat` from the lane's files, at `:238`)
-- Modify: `README.md:4545-4548` (the lane paragraph)
-- Test: `server/test/orphan-tree-lane.test.ts` (rig `:59`), Create: `server/test/orphan-tree-beat.test.ts`
+- Modify: `server/src/orphanTreeLane.ts` (a new L1 function beside `orphanCensusDue`, `:235-236` at the base)
+- Modify: `server/src/orphanTreeBeat.ts:19` (constructor), `:32` (`pressure: () => false`), `:13` (the `DiskOrphanTrees` type import)
+- Modify: `server/src/watch.ts:988` (ONE line, net zero, no new import: `watch.ts` imports only `OrphanTreeBeat` from the lane's files, at `:251`, and `DiskAlarmLane` at `:81`)
+- Modify: `README.md:4714-4717` (the lane paragraph; its section starts at `:4706`)
+- Test: `server/test/orphan-tree-lane.test.ts` (rig `:27`, its pressure port `:67`), Create: `server/test/orphan-tree-beat.test.ts`
 
 **Interfaces:**
-- Consumes: `DiskHealth` from `shared/disk.ts:132-142` (`pressure: boolean`), `DiskAlarmLane.block(): DiskHealth | null`
+- Consumes: `DiskHealth` from `shared/disk.ts:132-142` (`pressure: boolean`), `DiskAlarmLane.block(): DiskHealth | null` (`diskAlarmLane.ts:26`)
 - Produces:
   - `orphanPressure(block: Pick<DiskHealth, 'pressure'> | null): boolean` in `orphanTreeLane.ts`, which returns `block?.pressure === true`. Its doc comment says: null is unknown and reads as no pressure, the 6 h side, which fails toward keeping.
-  - `new OrphanTreeBeat(deps: () => Deps, mono: () => number, diskBlock: () => Pick<DiskHealth, 'pressure'> | null)`. The third parameter is REQUIRED, so leaving it out is a compile error. The sweep's port becomes `pressure: () => orphanPressure(this.diskBlock())`.
+  - `new OrphanTreeBeat(deps: () => Pick<WatcherDeps, …>, mono: () => number, diskBlock: () => Pick<DiskHealth, 'pressure'> | null)`. The third parameter is REQUIRED, so leaving it out is a compile error. The sweep's port becomes `pressure: () => orphanPressure(this.diskBlock())`.
 
 - [ ] **Step 1: Write the failing tests**
 
-In `orphan-tree-lane.test.ts`, the rig gets `let pressure = false;`, `pressure: () => pressure` at `:59` and a returned helper `pressured: (v: boolean): void => { pressure = v; }`. Import `ORPHAN_CENSUS_PRESSURE_MS`, `ORPHAN_AUDITS_PER_PASS`, `ORPHAN_AUDITS_PER_PASS_PRESSURE` and `orphanPressure`.
+In `orphan-tree-lane.test.ts`, the rig gets `let pressure = false;`, `pressure: () => pressure` at `:67` and a returned helper `pressured: (v: boolean): void => { pressure = v; }`. Import `ORPHAN_CENSUS_PRESSURE_MS`, `ORPHAN_AUDITS_PER_PASS`, `ORPHAN_AUDITS_PER_PASS_PRESSURE` and `orphanPressure`.
 
 ```ts
 it('under pressure the census is hourly, and not otherwise', async () => {
@@ -215,13 +215,15 @@ it('orphanPressure is true only on a held pressure block; null is unknown and re
 });
 ```
 
-`server/test/orphan-tree-beat.test.ts` (new): it builds `new OrphanTreeBeat(() => fakeDeps, () => mono, () => block)`, where `block` is `null`, `{ pressure: false }` or `{ pressure: true }`. `fakeDeps` is `as unknown as Deps` with `coord: {}`, `cfg: { registryDir: '/reg' }`, `io.readdirMeasured` returning no markers, `fleetState: { ccdVerbs: ['orphan-v1', 'reclaim-pause-v1', 'actor-flags-v1'] }`, `queue: { run: (_k, fn) => fn() }`, `fleetIdentity: undefined`, and `runCcd` answering `ws-audit --orphans` with `{ mode: 'orphans', truncated: false, rows: [] }` while counting the calls. An empty census writes no row, so `notifyLog` is never reached.
+`server/test/orphan-tree-beat.test.ts` (new): it builds `new OrphanTreeBeat(() => fakeDeps, () => mono, () => block)`, where `block` is `null`, `{ pressure: false }` or `{ pressure: true }`. `fakeDeps` is cast `as unknown as` the beat's first parameter's return type (a `Pick<WatcherDeps, …>` since #2153) with `coord: {}`, `cfg: { registryDir: '/reg' }`, `io.readdirMeasured` returning no markers, `fleetState: { ccdVerbs: ['orphan-v1', 'reclaim-pause-v1', 'actor-flags-v1'] }`, `queue: { run: (_k, fn) => fn() }`, `fleetIdentity: undefined`, and `runCcd` answering `ws-audit --orphans` with `{ mode: 'orphans', truncated: false, rows: [] }` while counting the calls. An empty census writes no row, so `notifyLog` is never reached.
 
 ```ts
 it('the beat hands its pressure port to the sweep', async () => { /* {pressure:true}: pass, mono += ORPHAN_CENSUS_PRESSURE_MS, pass → 2 censuses; {pressure:false} and null → 1 */ });
 it('watch.ts builds the beat with the disk alarm\'s pressure', () => {
-  const src = readFileSync(new URL('../src/watch.ts', import.meta.url), 'utf8');
-  expect(src).toMatch(/new OrphanTreeBeat\([^\n]*,\s*\(\) => this\.diskAlarm\.block\(\)\)/);
+  // Built on server/test/scan (parsedFile), never readFileSync plus a regex: the ARCH-06 ratchet in
+  // single-definition/advance-switches.test.ts never lets a literal source-pin ceiling rise.
+  // The parsed watch.ts has one `new OrphanTreeBeat(`, and inside it a call whose callee is `this.diskAlarm.block`,
+  // which is the constructor's last argument.
 });
 ```
 
@@ -232,7 +234,7 @@ Expected: FAIL. `orphanPressure` is not exported, the beat test reads 1 census u
 
 - [ ] **Step 3: Implement**
 
-Add `orphanPressure` to `orphanTreeLane.ts`. In the beat, add a third constructor parameter `private readonly diskBlock: () => Pick<DiskHealth, 'pressure'> | null` (a type-only import of `DiskHealth` from `shared/disk.js`, beside the existing `DiskOrphanTrees` import at `:13`), and pass `pressure: () => orphanPressure(this.diskBlock())` in place of `() => false` at `:32`. In `watch.ts:1021`, make the field read `new OrphanTreeBeat(() => this.deps, () => this.childReclaimLaneNow().monoMs, () => this.diskAlarm.block())` on the same single line. The thunk is lazy, so `diskAlarm` being declared later (`:1088`) is fine. Run `growth-check.test.ts` to confirm the delta is 0.
+Add `orphanPressure` to `orphanTreeLane.ts`. In the beat, add a third constructor parameter `private readonly diskBlock: () => Pick<DiskHealth, 'pressure'> | null` (a type-only import of `DiskHealth` from `shared/disk.js`, beside the existing `DiskOrphanTrees` import at `:13`), and pass `pressure: () => orphanPressure(this.diskBlock())` in place of `() => false` at `:32`. In `watch.ts:988`, make the field read `new OrphanTreeBeat(() => this.deps, () => this.childReclaimLaneNow().monoMs, () => this.diskAlarm.block())` on the same single line. The thunk is lazy, so `diskAlarm` being declared later (`:1057`) is fine. Run `growth-check.test.ts` to confirm the delta is 0.
 
 Update the README paragraph to say that pressure mode is the disk alarm's `critical`, and that a truncated census audits nothing, writes one `orphan census truncated` row and is asked again on the back-off (15 minutes, doubling to the 6 hour cadence, reset by a whole census; wave 1). Keep the paragraph's line count where you can, and run the README citation and docs-parity tests named below.
 
@@ -266,6 +268,13 @@ Wave 1 was issued D-6987 to D-6990 at dispatch (run 986).
 - **D-6988** — the truncated census's feed row, `orphan census truncated`, and its `console.warn`. One per truncated census, with the rows seen, the seconds the census call took (read off the monotonic clock inside the queued call, before and after) and the wait before the next ask. ccd's row and time bounds are not copied into the server.
 - **D-6989** — the unreadable census's flat `ORPHAN_RETRY_MS` retry, unchanged in behaviour, now computed by the shared `orphanCensusRetryMono` and pinned by a row of its own.
 - **D-6990** — spare, unused.
+
+Wave 2 was issued D-7864 to D-7867 at dispatch (run 992).
+
+- **D-7864** — review 990's F1: the census's pending retry is a due instant stored apart from the cadence. `OrphanCensusNext` is `{ kind: 'after', mono }` (the last whole census, due one cadence later at the READING pass's cadence, so pressure still shortens it) or `{ kind: 'at', mono }` (a pending retry's instant, which no later pass's pressure moves). `orphanCensusDue` reads it, `orphanCensusRetryAt(nowMono, waitMs)` writes an `at` for both the unreadable arm and the truncated arm, and `orphanCensusRetryMono` is removed. One reading decided here: the ruling says pressure "can only lengthen a pending retry, never shorten it"; the instant does not move at all, which never shortens it and also cures the old clearing case (a 15 min retry that waited 5 h 15 min). A back-off already written under the 6 h cap is therefore not cut short by pressure that rises after it.
+- **D-7865** — pressure wired: `orphanPressure(block)` in `orphanTreeLane.ts` (`block?.pressure === true`; `null` is unknown and reads as no pressure, the 6 h side), and `OrphanTreeBeat`'s required third constructor port `diskBlock`, which `watch.ts` fills with `() => this.diskAlarm.block()` in its one construction line.
+- **D-7866** — review 990's F3, ruled by the coordinator: the truncated streak stays in the sweep's memory and is not persisted. A restart starts the streak over, which costs at most the bounded walks review 990 counted (six in the first 7 h 45 min after a restart, on a box whose every census truncates). Said in the README lane paragraph and the PR body.
+- **D-7867** — spare, unused.
 
 ## Coordinator rulings (2026-10-26)
 
@@ -307,3 +316,13 @@ The worker applies these rulings to this plan as its second commit and records e
 - **Red first:** 5 of the 42 rows failed before the implementation: the L1 row, the back-off, the reset, the interleave and the feed row. The unreadable row, the memory row and the health row passed at once, because they pin behaviour that already stood (the flat unreadable retry, and `return` before any offers).
 - **Mutation rows:** twelve mutants, each made on the source, run alone with `orphan-tree-lane.test.ts` and restored from a saved copy checked with `cmp`. All twelve were killed: the truncated `lastCensus` back to `now`; the back-off flat; the cap removed; the reset removed; the unreadable arm adding to the streak; the unreadable arm clearing it; the unreadable `lastCensus` back to `now`; `d.record` deleted; `console.warn` deleted; the row ignoring `rowsSeen`; `askedAt` read after the call; and the truncated arm taking `this.rows = c.rows`. The last one SURVIVED the first round, because the memory row's truncated census listed the same single tree. The row now adds a second tree before the truncated pass, and the mutant is killed.
 - **No departure** from the ruled plan, so D-6990 stays unused.
+
+### Wave 2, as built (run 992)
+
+- **Order, as the brief set it:** review 990's F1 first (D-7864), then the plan's Task 2 (D-7865) in two commits (the lane and the beat, then the one `watch.ts` line with its source pin, held until the advisory claim on `watch.ts` answered), then the README paragraph and this plan (F3, F4).
+- **F1 (D-7864):** `lastCensus: number | null` became `nextCensus: OrphanCensusNext | null`. A whole census stores `{ kind: 'after', mono: now }`; the unreadable and truncated arms store `orphanCensusRetryAt(now, waitMs)`, an `at`. `orphanCensusDue` reads an `after` against the reading pass's cadence and an `at` against its instant alone. `orphanCensusRetryMono` is gone; its L1 row now pins `orphanCensusRetryAt` and both kinds of `orphanCensusDue` at the boundary, under both pressures. New rows: pressure rising over a pending retry does not shorten it, and pressure clearing does not lengthen it, each for the truncated and the unreadable arm; and the regular cadence after a whole census still drops to an hour when pressure rises. Red first: 3 rows (the L1 row, rising, clearing); the whole-census row passed, as it pins standing behaviour. Five mutants, all killed: `at` read like `after`; `orphanCensusRetryAt` writing an `after`; the truncated arm storing an `after`; the unreadable arm storing an `after`; `orphanCensusDue` ignoring pressure for an `after`.
+- **Task 2 (D-7865):** `orphanPressure` beside `orphanCensusDue`; `OrphanTreeBeat`'s required third parameter `diskBlock: () => Pick<DiskHealth, 'pressure'> | null`, read on every pass; the rig's pressure knob with the plan's hourly, 4-or-2 and `orphanPressure` rows; review 990's F2 row (under pressure the truncated back-off runs 15, 30, 60, then 60 min, so the arm caps with the pass's own `censusMs`). The new `orphan-tree-beat.test.ts` drives the real beat over a fake `WatcherDeps` pick: the port reaches the sweep (`true` gives two censuses an hour apart, `false` and `null` one), and it is read on every pass, not once. Mutants, all killed: the beat's port back to `() => false`; `orphanPressure` as `block !== null`; the sweep's `orphanCensusDue` passing `false`; the audits always 2; the truncated arm capping with `ORPHAN_CENSUS_MS`.
+- **The `watch.ts` line and its pin:** the `orphanBeat` field gains `() => this.diskAlarm.block()` as its third argument, on the same line (net zero, no new import; growth-check armed reads 0). Its pin in `orphan-tree-beat.test.ts` uses `parsedFile` from `server/test/scan/symbols.ts`: the one `new OrphanTreeBeat(` in `watch.ts` holds a call whose callee is `this.diskAlarm.block`, and that call is the constructor's last argument; the file never spells `readFileSync`, so the ARCH-06 ratchet's counts do not move. Red before the line changed; the mutant `() => null` reds it. The claim on `watch.ts` was another wave's (box settings, advisory), whose holder consented to this one line.
+- **F3 (D-7866):** the streak stays in memory, as ruled. The README lane paragraph and the PR body say a restart starts it over, at the cost of a few bounded walks.
+- **F4:** the wave-2 anchors above are re-measured at `408d93806`, the Review Focus bullet on pressure flips says F1 is fixed, and the source-pin sketch in Task 2 is rewritten for `server/test/scan`.
+- **D-7867** stays unused.
