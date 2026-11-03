@@ -506,6 +506,25 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     expect(doc.querySelector('title')?.textContent).toBe(HOSTILE_H1);
   });
 
+  it('a git failure the tree carries (its detail and path) is nowhere in the finished file, text or attributes (M4.EX5)', async () => {
+    const STDERR = 'fatal: unsafe repository /repo/home-x/user-x/secret-stderr-head (owned by someone else)';
+    const drafts: DraftsFacts[] = [
+      { state: 'unreadable', branch: 'main', worktree: '/repo/home-x/user-x/wt-x', step: 'status', detail: STDERR },
+      { state: 'unreadable', branch: 'main', worktree: null, step: 'worktree-list', detail: STDERR },
+      { state: 'ambiguous', branch: 'main', candidates: ['/repo/home-x/user-x/wt-x', '/repo/home-x/user-x/wt-y'] },
+      { state: 'untrusted', branch: 'main', worktree: '/repo/home-x/user-x/wt-x', why: 'dubious-ownership' },
+    ];
+    for (const d of drafts) {
+      const tree = treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: d });
+      const url = '/docs/demo/specs/a.md?ref=main';
+      const provenance = exportProvenance({ tree, page: leafAt(url), pin: committedPin('a.md'), show: null, exportedAt: NOW, readAt: NOW, plainView: false });
+      const { text } = await built(inputOf(treeBody('# A\n\ntext\n', tree, url), { provenance }), WIDE);
+      for (const leak of ['secret-stderr-head', 'unsafe repository', 'fatal:', 'home-x', 'user-x', 'wt-x', 'wt-y', '/repo/']) {
+        expect(text, `${d.state}: ${leak}`).not.toContain(leak);
+      }
+    }
+  });
+
   it('an SVG leaf is exactly one img of a data:image/ URL, never markup (M4.EX2)', async () => {
     const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" onload="fetch(\'https://a.example/o\')">'
       + '<script>fetch("https://a.example/s")</script><image href="https://a.example/i.png"/></svg>');
