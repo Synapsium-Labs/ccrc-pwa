@@ -808,6 +808,37 @@ describe('W5h-a: the highlighter (createWorkerRunner with a ready handshake and 
     expect(a.value).toEqual({ kind: 'worker-failed', error: 'error' });
   });
 
+  it('L2-1: a ready worker is not failed by its own boot budget (ready() clears the boot timer)', async () => {
+    const { hl, clock, workers, spawn } = hlHarness();
+    void hl.status();
+    workers[0]!.ready();
+    clock.advance(HIGHLIGHT_BOOT_BUDGET_MS - 100);
+    const a = trackHl(hl.highlight(req('a'), {}));
+    expect(workers[0]!.posts).toHaveLength(1);
+    clock.advance(200);
+    workers[0]!.answer(1, HTML('A'));
+    await flush();
+    expect(a.value).toEqual({ kind: 'html', html: 'A', mode: 'block' });
+    expect(workers[0]!.terminated).toBe(0);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("L2-1: a boot failure's timer dies with its worker (drop() clears the boot timer)", async () => {
+    const { hl, clock, workers } = hlHarness();
+    const a = trackHl(hl.highlight(req('a'), {}));
+    clock.advance(100);
+    workers[0]!.fail();
+    await flush();
+    expect(a.value).toEqual({ kind: 'worker-failed', error: 'error' });
+    clock.advance(100);
+    void hl.highlight(req('b'), {});
+    expect(workers).toHaveLength(2);
+    clock.advance(HIGHLIGHT_BOOT_BUDGET_MS + 50 - 200);
+    await flush();
+    expect(workers[1]!.terminated).toBe(0);
+    expect(hl.status()).toBe('live');
+  });
+
   it('M4.H7: after {ready}, a job that never answers times out at the deadline, terminate once, the next job respawns', async () => {
     const { hl, clock, workers, spawn } = hlHarness();
     const a = trackHl(hl.highlight(req('a'), {}));
