@@ -493,8 +493,9 @@ describe('a door runs its command, through this layer', () => {
     for (const name of ['Updates', 'Appearance', 'Notifications', 'Automation', 'Security']) {
       expect(screen.getByRole('option', { name: new RegExp(`^Go to Settings › ${name}`) })).toBeTruthy();
     }
-    // Settings itself, then its five pages: nothing for the catch-all row, whose title is also Settings.
-    expect(screen.getAllByRole('option', { name: /^Go to Settings/ })).toHaveLength(6);
+    expect(screen.getByRole('option', { name: /^Go to Settings › Measure highlighting/ })).toBeTruthy();
+    // Settings itself, its five pages and R19's measurement page (W5h-a): nothing for the catch-all row.
+    expect(screen.getAllByRole('option', { name: /^Go to Settings/ })).toHaveLength(7);
   });
 
   it('a Go to door navigates as the palette would, and carries its id as data-command', () => {

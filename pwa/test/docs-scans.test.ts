@@ -567,6 +567,319 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
 });
 
 // ---------------------------------------------------------------------------------------------------------------
+// Clause W5h-a (native Docs reader, W5h-a Task 8; base spec 2026-10-01 section 4.10's Guards; M4.H4, M4.H15's scan
+// half, M4.H17's seam half, M7.11's literal count). Across `pwa/src` (and, for the first bullet's specifier half,
+// `ui/src`, which pwa reaches through the `@/` alias), read with TypeScript's parser:
+//   - a `highlight.js` specifier (any import or export form, `import()` and `import('x').T` included; matched as the
+//     path segment `highlight.js` in the raw specifier and in a relative one's normalized target, so a path into
+//     `node_modules` counts too) sits only in `lib/highlightGrammars.ts`, and nowhere in `ui/src`;
+//     `lib/highlightGrammars` is imported only by `lib/highlightJob.ts`, `lib/highlightJob` only by
+//     `lib/markdownHighlightWorker.ts`, and `lib/markdownHighlightWorker` by nothing (it is spawned by URL), so no
+//     main-thread module reaches highlight.js (M4.H4; the built half is `markdown-worker-built.test.ts`'s);
+//   - nothing imports a module under `pwa/test`, the test store above all (M4.H17);
+//   - the NAME `dangerouslySetInnerHTML` appears in code only once: as the JSX attribute in `lib/markdown.tsx`'s
+//     `HighlightedCode`, whose value is `{ __html: <name>.html }` for a `<name>` that function passes to
+//     `isCheckedHighlightHtml` (M4.H15). Every other spelling is a hit: a JSX attribute, a property name (identifier,
+//     string literal, template literal or computed, so a JSX spread or a props object given to `createElement`), a
+//     shorthand property, an element-access argument, a property access. A comment is not code. Export's `<style>`
+//     exception joins this clause, with its planted control, when Export lands;
+//   - exactly one `new URL(<string ending in markdownHighlightWorker or markdownHighlightWorker.ts>)` in `pwa/src`,
+//     in `markdownRunner.ts#spawnHighlightWorker`, in any quoting or line layout (M7.11).
+// NOT EXHAUSTIVE. Known evasions: a specifier, a property name or a worker URL built at run time (concatenation, a
+// template with a substitution, a variable); `require`, `eval`, or a re-export of highlight.js from outside `pwa/src`
+// and `ui/src` (`shared/`); HTML written through the DOM (`innerHTML`, `outerHTML`, `insertAdjacentHTML`: none in
+// `pwa/src`, which review lens 1 reads for); a checked value's `html` read through an alias before the sink. The
+// behavioural halves are `highlight-html.test.tsx` (a forged value renders plain) and `highlight-wiring.test.tsx`
+// (the context's default is production).
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Each link of the highlight worker's chain, base-relative without an extension, and the one file that may import it
+ *  (`null`: none may). */
+const HIGHLIGHT_CHAIN: ReadonlyArray<readonly [string, string | null]> = [
+  ['src/lib/highlightGrammars', 'src/lib/highlightJob.ts'],
+  ['src/lib/highlightJob', 'src/lib/markdownHighlightWorker.ts'],
+  ['src/lib/markdownHighlightWorker', null],
+];
+const HLJS_HOME = 'src/lib/highlightGrammars.ts';
+
+/** The segment `highlight.js` in a path or a bare specifier: `highlight.js`, `highlight.js/lib/core`, a path into `node_modules`. */
+const HLJS_SEGMENT = /(?:^|\/)highlight\.js(?:\/|$)/;
+
+/** Whether a specifier written in `file` names highlight.js: as written, or as the path it resolves to when relative. */
+function namesHighlightJs(file: string, specifier: string): boolean {
+  if (HLJS_SEGMENT.test(specifier)) return true;
+  return specifier.startsWith('.') && HLJS_SEGMENT.test(path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier)));
+}
+
+/** The name of the function declaration around a node, `(none)` when there is none. */
+function enclosingFunction(n: ts.Node): ts.FunctionDeclaration | undefined {
+  let fn: ts.Node | undefined = n.parent;
+  while (fn !== undefined && !ts.isFunctionDeclaration(fn)) fn = fn.parent;
+  return fn;
+}
+const functionName = (fn: ts.FunctionDeclaration | undefined): string => fn?.name?.text ?? '(none)';
+
+const SINK_NAME = 'dangerouslySetInnerHTML';
+const isSinkText = (n: ts.Node | undefined): boolean => n !== undefined && (ts.isIdentifier(n) || isPlainString(n)) && n.text === SINK_NAME;
+/** Whether a property name (identifier, string, template, or computed over one) spells the sink's name. */
+const isSinkPropertyName = (n: ts.PropertyName): boolean => ts.isComputedPropertyName(n) ? isSinkText(unwrap(n.expression)) : isSinkText(n);
+
+/** Whether a node spells the sink's name in a position that names a property. */
+function namesSink(n: ts.Node): boolean {
+  if (ts.isJsxAttribute(n)) return isSinkText(n.name);
+  if (ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n) || ts.isMethodDeclaration(n)) return isSinkPropertyName(n.name);
+  if (ts.isElementAccessExpression(n)) return isSinkText(unwrap(n.argumentExpression));
+  if (ts.isPropertyAccessExpression(n)) return isSinkText(n.name);
+  return false;
+}
+
+/** Where a sink is and whether it has the one allowed shape: `<file> <function> ok|bad`. */
+function sinkVerdict(attr: ts.JsxAttribute, file: string): string {
+  const fn = enclosingFunction(attr);
+  const expr = attr.initializer !== undefined && ts.isJsxExpression(attr.initializer) ? attr.initializer.expression : undefined;
+  let ok = false;
+  if (fn !== undefined && expr !== undefined && ts.isObjectLiteralExpression(expr) && expr.properties.length === 1) {
+    const prop = expr.properties[0]!;
+    if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name) && prop.name.text === '__html'
+      && ts.isPropertyAccessExpression(prop.initializer) && prop.initializer.name.text === 'html'
+      && ts.isIdentifier(prop.initializer.expression)) {
+      const held = prop.initializer.expression.text;
+      const look = (n: ts.Node): void => {
+        if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'isCheckedHighlightHtml'
+          && n.arguments.length === 1 && ts.isIdentifier(n.arguments[0]!) && (n.arguments[0] as ts.Identifier).text === held) ok = true;
+        ts.forEachChild(n, look);
+      };
+      look(fn);
+    }
+  }
+  return `${file} ${functionName(fn)} ${ok ? 'ok' : 'bad'}`;
+}
+
+/** The highlight.js specifier hits in one module (`<file> highlight.js:import`), whichever the file's home. */
+function highlightSpecifierHits(sf: ts.SourceFile, file: string): string[] {
+  return moduleUses(sf).filter((use) => namesHighlightJs(file, use.specifier)).map(() => `${file} highlight.js:import`);
+}
+
+/** The findings in one module: its forbidden imports (`<file> <rule>`) and its sinks. */
+function scanHighlightFile(source: string, file: string): { hits: string[]; sinks: string[] } {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const hits: string[] = file === HLJS_HOME ? [] : highlightSpecifierHits(sf, file);
+  const sinks: string[] = [];
+  for (const use of moduleUses(sf)) {
+    if (namesHighlightJs(file, use.specifier)) continue;
+    const target = relativeTarget(file, use.specifier);
+    if (target === undefined) continue;
+    if (target === 'test' || target.startsWith('test/')) hits.push(`${file} test:import`);
+    for (const [module, home] of HIGHLIGHT_CHAIN) {
+      if (target === module && file !== home) hits.push(`${file} ${module.slice('src/lib/'.length)}:import`);
+    }
+  }
+  const visit = (n: ts.Node): void => {
+    if (namesSink(n)) sinks.push(ts.isJsxAttribute(n) ? sinkVerdict(n, file) : `${file} ${functionName(enclosingFunction(n))} bad`);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return { hits, sinks };
+}
+
+/** Where `ui/src` is, which pwa reaches through the `@/` alias: no file there may name highlight.js. */
+const UI_SRC_DIR = path.join(PWA, '..', 'ui', 'src');
+
+/** The scan over every `.ts` and `.tsx` file under `<base>/src`, named relative to `base`, and over `uiSrc` (named `ui/src/...`). */
+function highlightScan(base: string, uiSrc: string = UI_SRC_DIR): { files: string[]; hits: string[]; sinks: string[] } {
+  const files = sourceFiles(path.join(base, 'src')).map((f) => path.relative(base, f).split(path.sep).join('/'));
+  const found = files.map((rel) => scanHighlightFile(readFileSync(path.join(base, ...rel.split('/')), 'utf8'), rel));
+  const uiHits = sourceFiles(uiSrc).flatMap((f) => {
+    const rel = `ui/src/${path.relative(uiSrc, f).split(path.sep).join('/')}`;
+    const sf = ts.createSourceFile(rel, readFileSync(f, 'utf8'), ts.ScriptTarget.Latest, true, f.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    return highlightSpecifierHits(sf, rel);
+  });
+  return { files, hits: [...found.flatMap((f) => f.hits), ...uiHits], sinks: found.flatMap((f) => f.sinks) };
+}
+
+/** The enclosing function of each `new URL(<string ending in markdownHighlightWorker[.ts]>)` in one module, `<file> <function>`. */
+function highlightWorkerUrlSites(source: string, file: string): string[] {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const sites: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isNewExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'URL' && n.arguments?.[0] !== undefined
+      && isPlainString(n.arguments[0]) && /markdownHighlightWorker(?:\.ts)?$/.test(n.arguments[0].text)) sites.push(`${file} ${functionName(enclosingFunction(n))}`);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return sites;
+}
+
+// Each planted case copies and re-scans the whole of pwa/src; under a loaded box that has passed vitest's 5 s default,
+// so the clause gives its cases 30 s (a slow scan is not a wrong one).
+describe('clause W5h-a: highlight.js stays in the worker, one checked sink, no test seam in pwa/src (M4.H4, M4.H15, M4.H17)', { timeout: 30_000 }, () => {
+  const copies: string[] = [];
+  afterAll(() => { for (const dir of copies) rmSync(dir, { recursive: true, force: true }); });
+  /** A fresh copy of `pwa/src` with `edit` applied to one file (created when absent); returns the copy's base. */
+  function planted(rel: string, edit: (old: string) => string): string {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'docs-scans-w5ha-'));
+    copies.push(dir);
+    cpSync(SRC_DIR, path.join(dir, 'src'), { recursive: true });
+    const file = path.join(dir, ...rel.split('/'));
+    let old = '';
+    try { old = readFileSync(file, 'utf8'); } catch { /* a new file */ }
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, edit(old));
+    return dir;
+  }
+  const append = (text: string) => (old: string): string => old + text;
+  /** A fresh copy of `ui/src` with `edit` applied to one file (created when absent); returns the copy's `src` directory. */
+  function plantedUi(rel: string, edit: (old: string) => string): string {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'docs-scans-w5ha-ui-'));
+    copies.push(dir);
+    cpSync(UI_SRC_DIR, path.join(dir, 'src'), { recursive: true });
+    const file = path.join(dir, 'src', ...rel.split('/'));
+    let old = '';
+    try { old = readFileSync(file, 'utf8'); } catch { /* a new file */ }
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, edit(old));
+    return path.join(dir, 'src');
+  }
+
+  it('M4.H4: highlight.js and the worker chain sit only in their homes across pwa/src', () => {
+    const { files, hits } = highlightScan(PWA);
+    expect(files).toEqual(expect.arrayContaining(['src/lib/highlightGrammars.ts', 'src/lib/highlightJob.ts', 'src/lib/markdown.tsx']));
+    expect(readFileSync(path.join(SRC_DIR, 'lib', 'highlightGrammars.ts'), 'utf8')).toContain("from 'highlight.js/lib/core'");
+    expect(hits.filter((h) => !h.endsWith('test:import'))).toEqual([]);
+  });
+
+  it('M4.H17: nothing under pwa/src imports from pwa/test', () => {
+    expect(highlightScan(PWA).hits.filter((h) => h.endsWith('test:import'))).toEqual([]);
+  });
+
+  it('M4.H15: exactly one sink in pwa/src, the checked one in HighlightedCode', () => {
+    expect(highlightScan(PWA).sinks).toEqual(['src/lib/markdown.tsx HighlightedCode ok']);
+  });
+
+  it('M4.H4 planted: highlight.js imported in lib/markdown.tsx is red', () => {
+    const dir = planted('src/lib/markdown.tsx', append("\nimport plantedHljs from 'highlight.js/lib/core';\nexport const plantedH = plantedHljs;\n"));
+    expect(highlightScan(dir).hits).toEqual(['src/lib/markdown.tsx highlight.js:import']);
+  });
+
+  it('M4.H4 planted: highlightGrammars imported in DocsLeaf, and the worker entry imported by the runner, are red', () => {
+    const leaf = planted('src/docs/DocsLeaf.tsx', append("\nimport { HLJS as plantedG } from '../lib/highlightGrammars';\nexport const plantedGr = plantedG;\n"));
+    expect(highlightScan(leaf).hits).toEqual(['src/docs/DocsLeaf.tsx highlightGrammars:import']);
+    const runner = planted('src/lib/markdownRunner.ts', append("\nimport './markdownHighlightWorker';\n"));
+    expect(highlightScan(runner).hits).toEqual(['src/lib/markdownRunner.ts markdownHighlightWorker:import']);
+  });
+
+  it('M4.H17 planted: the test store imported from pwa/src is red', () => {
+    const dir = planted('src/lib/markdown.tsx', append("\nimport { SYNC_HIGHLIGHT } from '../../test/highlightTestStore';\nexport const plantedSync = SYNC_HIGHLIGHT;\n"));
+    expect(highlightScan(dir).hits).toEqual(['src/lib/markdown.tsx test:import']);
+  });
+
+  it('M4.H15 planted: a second sink under lib/ or under docs/export/ is red', () => {
+    const lib = planted('src/lib/markdown.tsx', append('\nexport function PlantedSink(p: { h: string }) { return <i dangerouslySetInnerHTML={{ __html: p.h }} />; }\n'));
+    expect(highlightScan(lib).sinks).toEqual(['src/lib/markdown.tsx HighlightedCode ok', 'src/lib/markdown.tsx PlantedSink bad']);
+    const exp = planted('src/docs/export/buildExport.tsx', append("export function Planted() { return <style dangerouslySetInnerHTML={{ __html: 'a{}' }} />; }\n"));
+    expect(highlightScan(exp).sinks).toContain('src/docs/export/buildExport.tsx Planted bad');
+  });
+
+  it('M4.H15 planted: the sink fed the raw string, unchecked, is red', () => {
+    const dir = planted('src/lib/markdown.tsx', (old) => old.replace('__html: checked.html', '__html: raw'));
+    expect(highlightScan(dir).sinks).toEqual(['src/lib/markdown.tsx HighlightedCode bad']);
+  });
+
+  it('M4.H15 planted: the sink name in a JSX spread is red', () => {
+    const dir = planted('src/lib/markdown.tsx', append('\nexport function PlantedSpread(p: { h: string }) { return <i {...{ dangerouslySetInnerHTML: { __html: p.h } }} />; }\n'));
+    expect(highlightScan(dir).sinks).toEqual(['src/lib/markdown.tsx HighlightedCode ok', 'src/lib/markdown.tsx PlantedSpread bad']);
+  });
+
+  it('M4.H15 planted: the sink name in a props object given to createElement is red', () => {
+    const dir = planted('src/lib/markdown.tsx', append("\nexport function PlantedCreate(p: { h: string }) { return createElement('i', { dangerouslySetInnerHTML: { __html: p.h } }); }\n"));
+    expect(highlightScan(dir).sinks).toEqual(['src/lib/markdown.tsx HighlightedCode ok', 'src/lib/markdown.tsx PlantedCreate bad']);
+  });
+
+  it('M4.H15 planted: the sink name as an element-access key, a string key, a computed key or a shorthand is red; a comment is not', () => {
+    const access = planted('src/lib/markdown.tsx', append("\nexport function PlantedAccess(p: { h: string }) { const props: Record<string, unknown> = {}; props['dangerouslySetInnerHTML'] = { __html: p.h }; return props; }\n"));
+    expect(highlightScan(access).sinks).toEqual(['src/lib/markdown.tsx HighlightedCode ok', 'src/lib/markdown.tsx PlantedAccess bad']);
+    const str = planted('src/lib/markdown.tsx', append("\nexport function PlantedString(p: { h: string }) { return { 'dangerouslySetInnerHTML': { __html: p.h } }; }\n"));
+    expect(highlightScan(str).sinks).toEqual(['src/lib/markdown.tsx HighlightedCode ok', 'src/lib/markdown.tsx PlantedString bad']);
+    const computed = planted('src/lib/markdown.tsx', append('\nexport function PlantedComputed(p: { h: string }) { return { [`dangerouslySetInnerHTML`]: { __html: p.h } }; }\n'));
+    expect(highlightScan(computed).sinks).toEqual(['src/lib/markdown.tsx HighlightedCode ok', 'src/lib/markdown.tsx PlantedComputed bad']);
+    const short = planted('src/lib/markdown.tsx', append('\nexport function PlantedShort(p: { h: string }) { const dangerouslySetInnerHTML = { __html: p.h }; return { dangerouslySetInnerHTML }; }\n'));
+    expect(highlightScan(short).sinks).toEqual(['src/lib/markdown.tsx HighlightedCode ok', 'src/lib/markdown.tsx PlantedShort bad']);
+    const comment = planted('src/lib/markdown.tsx', append("\n// dangerouslySetInnerHTML is named only in this comment, and in 'dangerouslySetInnerHTML' text.\nexport const plantedText = 'dangerouslySetInnerHTML';\n"));
+    expect(highlightScan(comment).sinks).toEqual(['src/lib/markdown.tsx HighlightedCode ok']);
+  });
+
+  it('M4.H4 planted: highlight.js reached by a path into node_modules, or imported anywhere in ui/src, is red', () => {
+    const rel = planted('src/lib/markdown.tsx', append("\nimport plantedPath from '../../node_modules/highlight.js/lib/core';\nexport const plantedP = plantedPath;\n"));
+    expect(highlightScan(rel).hits).toEqual(['src/lib/markdown.tsx highlight.js:import']);
+    const bare = planted('src/lib/markdown.tsx', append("\nexport { default as plantedBare } from '../../node_modules/highlight.js';\n"));
+    expect(highlightScan(bare).hits).toEqual(['src/lib/markdown.tsx highlight.js:import']);
+    const ui = plantedUi('lib/plantedHighlight.ts', append("import plantedUi from 'highlight.js/lib/core';\nexport const plantedU = plantedUi;\n"));
+    expect(highlightScan(PWA, ui).hits).toEqual(['ui/src/lib/plantedHighlight.ts highlight.js:import']);
+    const uiDyn = plantedUi('index.ts', append("\nexport const plantedLoad = () => import('highlight.js/lib/languages/xml');\n"));
+    expect(highlightScan(PWA, uiDyn).hits).toEqual(['ui/src/index.ts highlight.js:import']);
+  });
+
+  it('M7.11: pwa/src holds exactly one new URL for the highlight worker, in spawnHighlightWorker, whatever its quoting or layout', () => {
+    const sites = sourceFiles(SRC_DIR).flatMap((f) => highlightWorkerUrlSites(readFileSync(f, 'utf8'), path.relative(PWA, f).split(path.sep).join('/')));
+    expect(sites).toEqual(['src/lib/markdownRunner.ts spawnHighlightWorker']);
+    expect(highlightWorkerUrlSites("export const p = () => new Worker(new URL('./markdownHighlightWorker.ts', import.meta.url));", 'x.ts')).toEqual(['x.ts (none)']);
+    expect(highlightWorkerUrlSites('export function f() { return new Worker(new URL(\n  "./markdownHighlightWorker", import.meta.url)); }', 'x.ts')).toEqual(['x.ts f']);
+    expect(highlightWorkerUrlSites("new URL('./markdownWorker.ts', import.meta.url);", 'x.ts')).toEqual([]);
+  });
+});
+
+// Clause W5h-a, M7.12 (base spec 2026-10-01 section 7.10): R19's page only reads. In its two modules, read with
+// TypeScript's parser: no `.refresh(` call, no `fetch(` (bare or as a member), no `localStorage`, `sessionStorage` or
+// `indexedDB`, no `clipboard` member, no import of `lib/storage`, every member read of the `api` import is `docs`, and
+// neither production highlighter singleton (`docsHighlighter`, `chatHighlighter`) is named: every worker the page uses is
+// one it spawns and ends itself (a fix round of the same task).
+// NOT EXHAUSTIVE: a call through an alias (`const r = loaders.refresh`), a computed member, and anything reached
+// through `any` or `eval` are not seen; the driver's own test asserts the fake loaders' `refresh` is never called.
+const MEASURE_MODULES: readonly string[] = ['src/screens/HighlightMeasure.tsx', 'src/screens/highlightMeasureRun.tsx'];
+
+function measureFindings(source: string, file: string): string[] {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const out: string[] = [];
+  for (const use of moduleUses(sf)) if (relativeTarget(file, use.specifier) === 'src/lib/storage') out.push(`${file} storage`);
+  const visit = (n: ts.Node): void => {
+    if (ts.isCallExpression(n)) {
+      const callee = unwrap(n.expression);
+      if (memberName(callee) === 'refresh') out.push(`${file} refresh`);
+      if ((ts.isIdentifier(callee) && callee.text === 'fetch') || memberName(callee) === 'fetch') out.push(`${file} fetch`);
+    }
+    if (ts.isIdentifier(n) && ['localStorage', 'sessionStorage', 'indexedDB'].includes(n.text)) out.push(`${file} storage`);
+    if (ts.isIdentifier(n) && ['docsHighlighter', 'chatHighlighter'].includes(n.text) && !out.includes(`${file} singleton`)) out.push(`${file} singleton`);
+    if ((ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) && memberName(n) === 'clipboard') out.push(`${file} clipboard`);
+    if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'api' && n.name.text !== 'docs') out.push(`${file} api`);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+describe('clause W5h-a, M7.12: R19\'s measurement page only reads', () => {
+  const read = (rel: string): string => readFileSync(path.join(PWA, ...rel.split('/')), 'utf8');
+
+  it('its two modules make no refresh, no fetch of their own, no storage, no clipboard, and read only api.docs', () => {
+    expect(read('src/screens/HighlightMeasure.tsx')).toContain('api.docs');
+    expect(MEASURE_MODULES.flatMap((f) => measureFindings(read(f), f))).toEqual([]);
+  });
+
+  it.each([
+    ['a refresh call', 'export const planted = (l: { refresh(p: string): void }) => l.refresh("x");', 'refresh'],
+    ['a fetch of its own', "export const planted = () => fetch('/api/x');", 'fetch'],
+    ['a storage write', "export const planted = () => localStorage.setItem('k', 'v');", 'storage'],
+    ['a clipboard write', "export const planted = () => navigator.clipboard.writeText('x');", 'clipboard'],
+    ['another api read', "import { api } from '../lib/api';\nexport const planted = () => api.sessions;", 'api'],
+    ['the storage owner', "import { pageStorage } from '../lib/storage';\nexport const planted = pageStorage;", 'storage'],
+    ['a production highlighter singleton', "import { docsHighlighter } from '../lib/markdownRunner';\nexport const planted = docsHighlighter;", 'singleton'],
+  ])('planted: %s in the run module is red', (_name, text, rule) => {
+    const file = 'src/screens/highlightMeasureRun.tsx';
+    expect(measureFindings(`${read(file)}\n${text}\n`, file)).toEqual([`${file} ${rule}`]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
 // Clause W5 Share (M4.SH7; spec 2026-10-01 4.5, 4.16): one share door, and one clipboard writer under pwa/src/docs.
 // Across `pwa/src`, a call of `share` on the bare `navigator` (`navigator.share(…)`, `navigator?.share(…)`,
 // `navigator['share'](…)`,
