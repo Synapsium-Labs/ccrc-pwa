@@ -1329,14 +1329,15 @@ containment**): `CCRC_TEST_SLICE_MEMORY_MAX`, `CCRC_TEST_SLICE_SWAP_MAX`, `CCRC_
 `CCRC_TEST_SLICE_CPU_QUOTA`, `CCRC_TEST_SLICE_IO_WEIGHT`, `CCRC_TEST_HEAVY_SLOTS` and `CCRC_TEST_WIDE_FILES` hold for
 the whole box, so they are read from `ccrc.env` alone (the reader's `file` mode), and `CCRC_TEST_PRESSURE_MAX` the same
 way as the rest; a value that is not its shape keeps its default and warns.
-Twenty-two are the graph sweep's (graph revision 2, D-7348; see **The sweep** under "Graph layer"): `CCRC_GRAPH_STORE`,
+Twenty-three are the graph sweep's (graph revision 2, D-7348; see **The sweep** under "Graph layer"): `CCRC_GRAPH_STORE`,
 `CCRC_GRAPH_SOURCE_REF`, `CCRC_GRAPH_REPOS_EXCLUDE`, `CCRC_GRAPH_REFRESH_SECS`, `CCRC_GRAPH_FETCH_SECS`,
 `CCRC_GRAPH_FULL_REBUILD_SECS`, `CCRC_GRAPH_INCREMENTAL_MAX_FILES` (box-wide default 0: every refresh is a full build,
 OA-GR2, D-7634), `CCRC_GRAPH_FULL_FAIL_MAX`, `CCRC_GRAPH_FAIL_BACKOFF_SECS`, `CCRC_GRAPH_BUDGET`,
 `CCRC_GRAPH_BUILD_TIMEOUT`, `CCRC_GRAPH_SLOT_WAIT_SECS`, `CCRC_GRAPH_BUILD_NICE`, `CCRC_GRAPH_MAX_WORKERS`,
 `CCRC_GRAPH_MAX_SHRINK_PCT`, `CCRC_GRAPH_KEEP_BUILDS`, `CCRC_GRAPH_BUILD_GRACE_SECS`, `CCRC_GRAPH_MIGRATE_BUDGET`,
-`CCRC_GRAPH_HOOKSTATE_FRESH_SECS`, `CCRC_GRAPH_GATE_MAX_DIFF_PCT`, `CCRC_GRAPH_GATE_MAX_DENIALS` and
-`CCRC_GRAPH_CARD_DIFF_LIST_MAX`. `_graph_knobs` reads them and `ccd/graph-resolve` checks each against its shape; a
+`CCRC_GRAPH_HOOKSTATE_FRESH_SECS`, `CCRC_GRAPH_GATE_MAX_DIFF_PCT`, `CCRC_GRAPH_GATE_MAX_DENIALS`,
+`CCRC_GRAPH_CARD_DIFF_LIST_MAX` and `CCRC_GRAPH_PRESSURE_MAX` (default 60, 0 off: the host pressure above which a pass
+is deferred, D-7876). `_graph_knobs` reads them and `ccd/graph-resolve` checks each against its shape; a
 value that is not its shape keeps its default and warns with the key, the value and where it came from, so a typo never
 removes a bound. The sweep's unit sets no environment, so on the fleet box `ccrc.env` is where they go. Four are
 rendered into the sweep's units by `ccrc install`/`update` and `deploy.sh agent` (`CCRC_GRAPH_REFRESH_SECS` into the
@@ -6138,13 +6139,19 @@ queries/denials, `nullPeerRead` (every row carrying no `ccrcPeerReads` field at 
 proves the hook shipped), `heldN` and `coTenantN` among the roll-ups. It is the instrument the R4 and R7
 adoption readings are taken from; nothing in this repository writes it, ships it, or tests it.
 
-**The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`, `OnUnitActiveSec=` rendered
-from `CCRC_GRAPH_REFRESH_SECS`, default `15min`), builds **one graph per repository** (graph revision 2, D-7350). A
+**The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`, `OnUnitInactiveSec=` rendered
+from `CCRC_GRAPH_REFRESH_SECS`, default `15min`: the period is counted from the END of the previous pass, so passes
+never run back to back, D-7876), builds **one graph per repository** (graph revision 2, D-7350). A
 pass takes its own flock (a second entrant is `pass-locked`), then reads the pause file:
 `touch ~/.ccrc/graph-sweep-paused` makes every pass `paused` before any fetch, store write or build, and nothing in
 ccrc removes it — not the sweep, not `ccrc install`/`update`, not `deploy.sh agent`, though those enable and start the
 timer (D-7365); only you do, with `rm`. The pass then loads its library from the shipped tree (`ccd/ccrc`'s body and
-`ccd/graph-resolve`, which owns the store, the repository key and the source ref), creates or checks the store
+`ccd/graph-resolve`, which owns the store, the repository key and the source ref) and reads the host's pressure (PSI
+memory and cpu, `some avg10`, the reading `ccrc test` queues on): above `CCRC_GRAPH_PRESSURE_MAX` (default 60; 0 turns
+it off) the pass ends `deferred-pressure` with the reading as its reason, in the census and the journal, before any
+fetch, store write or build, and the timer tries again one period later; a run of deferred passes is one census entry
+whose `deferrals` counts them, so the earlier passes' rows (and every repository's backoff) stay in the census. The
+pause file is read first and wins. The pass then creates or checks the store
 (`CCRC_GRAPH_STORE`, default `~/.ccrc/graphs`, always used as its realpath and refused inside `~/projects` or
 `~/worktrees`), and groups every tree under `~/projects` and `~/worktrees` by the realpath of its git common dir: one
 repository each, keyed `<basename of the main checkout>-<8 hex of the common dir's digest>`. Per repository it keeps a
@@ -6157,7 +6164,8 @@ operator ruled after the measured one-day incremental gap of 10.26%, OA-GR2, D-7
 `CCRC_GRAPH_FAIL_BACKOFF_SECS` between attempts. A build runs through `ccd/graph-build`, the only caller of the engine,
 inside `ccrc test --local --heavy` (the tests slice and its heavy queue: it waits at most `CCRC_GRAPH_SLOT_WAIT_SECS`
 for a slot, runs at `nice` `CCRC_GRAPH_BUILD_NICE` with `CCRC_GRAPH_MAX_WORKERS` workers, and is stopped after
-`CCRC_GRAPH_BUILD_TIMEOUT`), so the sweep's unit no longer carries the build's memory. A build is staged in
+`CCRC_GRAPH_BUILD_TIMEOUT`), so the sweep's unit no longer carries the build's memory; the unit's own
+`MemorySwapMax=512M` (D-7876) makes a sweep that reaches its `MemoryMax=6G` fail rather than swap without limit. A build is staged in
 `<repo-key>/staging/`, checked (the corpus guard, and a graph that shrank by more than `CCRC_GRAPH_MAX_SHRINK_PCT` is
 refused), and published read-only as `<repo-key>/builds/<commit12>-<pin>-<UTC time>/`; `current` then names it in one
 rename, so a session never reads a half-written graph. The unit's `TimeoutStartSec=` is rendered as
@@ -6168,7 +6176,9 @@ and removing a stray `.graphifyignore` an old per-tree sweep generated, are the 
 tree; `graphify update .` run through the link fails with `EACCES` and changes nothing shared, while
 `graphify save-result` writes to `graphify-out/memory/`, which links to the repository's writable `memory/`. A
 repository named in `CCRC_GRAPH_REPOS_EXCLUDE` gets no graph. The census, `~/.ccrc/graph-sweep.json`, keeps the last 10
-passes; a pass status is one of `ok · paused · failed · probed-zero · no-trees-configured · pass-locked`, and each pass
+passes; a pass status is one of `ok · paused · failed · probed-zero · no-trees-configured · pass-locked ·
+deferred-pressure`, and `ccrc doctor`'s graphify line names the last pass's status and duration, and the reason a
+deferred one gives (D-7876); each pass
 holds one `repos[]` row per repository with its outcome (`fresh · refreshed · rebuilt · skipped-budget ·
 skipped-slots · skipped-backoff · refused-by-guard · refused-shrink · timed-out · oom-killed · failed · no-source ·
 excluded`; `failed` names its `fail` class), the build's duration, peak memory and CPU, and each row is also printed

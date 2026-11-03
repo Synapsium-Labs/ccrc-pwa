@@ -84,6 +84,8 @@ function sweep(env: NodeJS.ProcessEnv = {}): Run {
   Object.assign(e, {
     HOME: home, PATH: `${j('bin')}:${process.env['PATH'] ?? ''}`, PYTHONPATH: STUB, PYTHONDONTWRITEBYTECODE: '1',
     GRAPH_STUB_RECORD: j('record.jsonl'), CCRC_GRAPH_FETCH_SECS: '0',
+    // D-7876: a fixture root with no pressure files, so the host the suite runs on never defers a pass.
+    CCRC_PROC_ROOT: j('proc'),
   });
   for (const [k, v] of Object.entries(env)) { if (v === undefined) delete e[k]; else e[k] = v; }
   const r = spawnSync('bash', [j('.local', 'bin', 'ccd-graph-sweep')], { encoding: 'utf8', env: e, timeout: 120_000 });

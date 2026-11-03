@@ -83,8 +83,9 @@ export function ddnsTranscriptCadences(root: string = REPO): TranscriptCadenceSi
   return out;
 }
 
-/** Every distinct cadence line (`OnUnitActiveSec=…` or `OnCalendar=…`, leading whitespace dropped, as
- *  `_timer_period_s` reads one) over the `.timer` files `deploy/systemd/` holds at run time, sorted. */
+/** Every distinct cadence line (`OnUnitActiveSec=…`, `OnUnitInactiveSec=…` (D-7876) or `OnCalendar=…`, leading
+ *  whitespace dropped, as `_timer_period_s` reads one) over the `.timer` files `deploy/systemd/` holds at run time,
+ *  sorted. */
 export function timerSpellings(root: string = REPO): string[] {
   const dir = path.join(root, 'deploy', 'systemd');
   const seen = new Set<string>();
@@ -92,7 +93,7 @@ export function timerSpellings(root: string = REPO): string[] {
   for (const name of readdirSync(dir).filter((n) => n.endsWith('.timer'))) {
     for (const raw of linesOf(path.join(dir, name))) {
       const line = raw.replace(/^\s+/, '');
-      if (/^(?:OnUnitActiveSec|OnCalendar)=/.test(line)) seen.add(line);
+      if (/^(?:OnUnitActiveSec|OnUnitInactiveSec|OnCalendar)=/.test(line)) seen.add(line);
     }
   }
   return [...seen].sort();

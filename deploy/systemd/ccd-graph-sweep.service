@@ -14,3 +14,7 @@ TimeoutStartSec=5400
 # set per box by CCRC_SESSION_SLICE_MEMORY_MAX in ~/.ccrc/ccrc.env and rendered
 # into app-claude-session.slice.d/limits.conf) the two caps sum to it plus 6G.
 MemoryMax=6G
+# Finite (D-7876): under MemorySwapMax=infinity a pass at the cap swapped without limit (2.7G of swap beside 4.5G of
+# memory in the 2026-10-27 thrash) instead of failing. The builds run in ccrctests.slice, under its own caps; this
+# caps the sweep's own git, jq and bookkeeping, so a pass that reaches MemoryMax fails cleanly.
+MemorySwapMax=512M
