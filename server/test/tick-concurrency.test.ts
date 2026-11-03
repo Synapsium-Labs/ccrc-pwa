@@ -412,11 +412,11 @@ describe('the capture pass of one tick (D-6435)', () => {
     expect(taskReads(await r.during(() => r.tick())).length).toBeGreaterThan(0);
   }, 60_000);
 
-  // An unlistable tick returns before every lane, so it stamps none of them: a lane that was due stays due. Kicked once,
-  // then an outage tick, then a listed tick inside TASK_SWEEP_MS with NO second kick: the task lane still sweeps. A task
-  // sweep moved above the unlistable return would stamp the lane on the outage tick (the lane runner stamps before the
-  // body runs, and `tasksPass` then returns on the unlisted model), and this listed tick would read no task file
-  // (review 1377, F1).
+  // An unlistable tick returns before every lane below the registry read, so it stamps none of them: a lane that was
+  // due stays due. Kicked once, then an outage tick, then a listed tick inside TASK_SWEEP_MS with NO second kick: the
+  // task lane still sweeps. A task sweep moved above the unlistable return would stamp the lane on the outage tick (the
+  // lane runner stamps before the body runs, and `tasksPass` then returns on the unlisted model), and this listed tick
+  // would read no task file (review 1377, F1).
   it('a lane due before an unlistable tick is still due on the next listed tick', async () => {
     const r = rig();
     await primed(r);
