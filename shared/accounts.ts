@@ -364,3 +364,87 @@ export function kindCodeOf(provider: string | undefined, kind: string | undefine
   const key = `${provider}/${kind}`;
   return Object.prototype.hasOwnProperty.call(KIND_CODES, key) ? KIND_CODES[key as keyof typeof KIND_CODES] : null;
 }
+
+// ── What the operator is asked to open (N2 `auth-url-allowlist`, D-7792; spec §3.7, §3.8; accounts plan Task A21) ──
+
+/** The sign-in methods `POST /api/accounts/:id/auth/start` takes (spec §13.1), the verb's `--method` words. */
+export const AUTH_METHODS = ['login', 'setup-token', 'openai-login', 'openrouter-pkce'] as const;
+export type AuthMethod = (typeof AUTH_METHODS)[number];
+
+/** The states the sign-in helper publishes in `~/.cc-sessions/.auth/<id>.json` (`ccd-account-auth`'s `_auth_state`,
+ *  `_auth_end` and its two terminal assignments), in the order a sign-in moves through them. A state off this list is
+ *  a file somebody else wrote. */
+export const AUTH_STATUS_STATES = ['starting', 'url', 'waiting-code', 'exchanging', 'done', 'failed', 'expired', 'cancelled'] as const;
+export type AuthStatusState = (typeof AUTH_STATUS_STATES)[number];
+/** The states after which the helper writes nothing more. */
+export const AUTH_TERMINAL_STATES: readonly AuthStatusState[] = ['done', 'failed', 'expired', 'cancelled'];
+
+/** The helper's own bound on one attempt (`CCRC_AUTH_TIMEOUT`'s default in `ccd-account-auth`, 600 s): the latest an
+ *  attempt's `expiresAt` can be. The helper publishes no provider expiry, so this bound is the earlier of the two. */
+export const AUTH_HELPER_BOUND_MS = 600_000;
+
+/**
+ * THE EXACT HOSTS a sign-in URL may name, per method (N2, D-7792), from OA1b's record of 2026-11-01: an exact match on
+ * the host the server parsed, never a suffix, so `evilclaude.com` and `claude.com.example.invalid` are refused.
+ *  - `login` and `setup-token`: measured, both `https://claude.com/cai/oauth/authorize`.
+ *  - `openai-login`: NOT measured (the provider refused the device-code request that day), so the list is empty and
+ *    the route refuses to start one (`method-unmeasured`) until a box run measures the host and it is added here.
+ *  - `openrouter-pkce`: never read from the status file (spec §3.8); its own wave checks the URL the verb answers.
+ */
+export const AUTH_URL_HOSTS: Readonly<Record<AuthMethod, readonly string[]>> = {
+  'login': ['claude.com'],
+  'setup-token': ['claude.com'],
+  'openai-login': [],
+  'openrouter-pkce': [],
+};
+
+/**
+ * The shape of the code the operator pastes, per method (spec §3.7), checked by the route before the code is sent.
+ *  - `login`: measured (OA1b): 48 alphanumerics, `#`, then 43 base64url characters.
+ *  - `setup-token`: NOT measured (OA1b's record: pending the operator's approval of that step), so it keeps the spec's
+ *    provisional shape, which both measured `login` samples also match. Tighten it when the box run measures it.
+ *  - `openai-login`: a device sign-in has no code to paste; `null` refuses every one.
+ *  - `openrouter-pkce`: its own wave's.
+ */
+export const AUTH_CODE_SHAPES: Readonly<Record<AuthMethod, RegExp | null>> = {
+  'login': /^[A-Za-z0-9]{48}#[A-Za-z0-9_-]{43}$/,
+  'setup-token': /^[A-Za-z0-9._#-]{8,512}$/,
+  'openai-login': null,
+  'openrouter-pkce': null,
+};
+
+/** The shape of the device code a status file may carry, per method (spec §3.8): `null` means no `userCode` is
+ *  expected, so a file that carries one is refused. The Codex `userCode` is NOT measured (OA1b), so it is `null` too. */
+export const AUTH_USER_CODE_SHAPES: Readonly<Record<AuthMethod, RegExp | null>> = {
+  'login': null,
+  'setup-token': null,
+  'openai-login': null,
+  'openrouter-pkce': null,
+};
+
+/** The longest sign-in URL the server reads from a status file. */
+export const AUTH_URL_MAX = 4096;
+
+/** A sign-in URL the server parsed and accepted: the URL as the parser spelled it, and the host the label shows. */
+export interface AuthUrlAccepted { readonly href: string; readonly host: string }
+
+/**
+ * N2's URL check (D-7792; spec §3.8). Pure. `text` is the status file's `url`, which any fleet-user process can write.
+ * Accepted only when it is a string of printable, unspaced characters within {@link AUTH_URL_MAX}, parses as a URL,
+ * is `https:`, carries no user name, password or explicit port, and names a host in the method's exact list. The
+ * answer's `host` is the parsed URL's `hostname`, never a slice of the file's text, and `href` the parser's spelling.
+ */
+export function authUrlVerdict(text: unknown, method: AuthMethod): AuthUrlAccepted | null {
+  if (typeof text !== 'string' || text.length === 0 || text.length > AUTH_URL_MAX || /[\u0000- \u007f-\u009f]/.test(text)) return null;
+  let url: URL;
+  try { url = new URL(text); } catch { return null; }
+  if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.port !== '') return null;
+  if (!AUTH_URL_HOSTS[method].includes(url.hostname)) return null;
+  return { href: url.href, host: url.hostname };
+}
+
+/** Whether `code` may be sent for `method`: its measured (or provisional) shape, {@link AUTH_CODE_SHAPES}. Pure. */
+export function authCodeShapeOk(code: unknown, method: AuthMethod): code is string {
+  const shape = AUTH_CODE_SHAPES[method];
+  return shape !== null && typeof code === 'string' && shape.test(code);
+}

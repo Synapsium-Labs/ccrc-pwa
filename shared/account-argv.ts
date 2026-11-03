@@ -116,6 +116,9 @@ export const ACCOUNT_SUB_ARGV: Readonly<Record<AccountSub, SubSpec>> = Object.fr
     fields: {
       method: { flag: '--method', rule: e('mint') }, retire: { flag: '--retire', rule: { kind: 'flag' } },
       liveAck: { flag: '--live-ack', rule: { kind: 'flag' } },
+      // N5's sign-out act (D-7749; accounts plan Task A21): `claude auth logout` in the lane's config dir. It reads no
+      // stdin, and the verb refuses it beside `--credential`.
+      signOut: { flag: '--sign-out', rule: { kind: 'flag' } },
     },
   },
   'remove': {

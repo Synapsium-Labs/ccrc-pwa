@@ -218,7 +218,7 @@ interface Rig {
 }
 
 const refusingGate: AccountGate = (_req, reply) => { void reply.code(403).send({ ok: false, error: 'auth-off' }); return { pass: false }; };
-const passingGate: AccountGate = () => ({ pass: true, actor: actorOf('a test phone', '') });
+const passingGate: AccountGate = () => ({ pass: true, actor: actorOf('a test phone', ''), sessionIdHash: '' });
 
 let open: FastifyInstance | null = null;
 afterEach(async () => { await open?.close(); open = null; });

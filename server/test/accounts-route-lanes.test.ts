@@ -168,8 +168,11 @@ describe('GET /api/accounts: lanes and connect (D-5511, D-5517)', () => {
 describe('connect.caps (D-7740)', () => {
   it('is the advertised words this server knows, in its order; no evidence is none', () => {
     const at = { origin: 'https' as const, stepUpFreshUntil: null };
-    expect(accountsConnect({ ...at, ccdVerbs: ['ws-new', 'account-v2', 'account-auth-v1'] }))
-      .toEqual({ accountOps: 'available', gate: 'armed', origin: 'https', caps: ['account-v2'] });
+    // `account-auth-v1` joined `ACCOUNT_CAPS` with the sign-in routes (A21, D-7793); `account-codex-v1` is a later wave's.
+    expect(accountsConnect({ ...at, ccdVerbs: ['ws-new', 'account-codex-v1', 'account-auth-v1', 'account-v2'] }))
+      .toEqual({ accountOps: 'available', gate: 'armed', origin: 'https', caps: ['account-v2', 'account-auth-v1'] });
+    expect(accountsConnect({ ...at, ccdVerbs: ['account-auth-v1'] }))
+      .toEqual({ accountOps: 'unsupported', gate: 'armed', origin: 'https', caps: ['account-auth-v1'] });
     expect(accountsConnect({ ...at, ccdVerbs: null })).toEqual({ accountOps: 'unsupported', gate: 'armed', origin: 'https', caps: [] });
     expect(accountsConnect({ ...at, ccdVerbs: ['ws-new'] }).caps).toEqual([]);
   });
