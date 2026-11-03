@@ -21,6 +21,7 @@ import type { PushPayload } from '../src/push.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okRun } from './coordReadHelpers.js';
+import { callsIn, symbolOf } from './scan/symbols.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
@@ -320,12 +321,10 @@ describe('revivable: "reads live" is the park arm\'s own predicate', () => {
   it('the revive calls lifecycleIsDead, and server/src defines no other lifecycle-dead predicate', () => {
     const code = (f: string): string => readFileSync(f, 'utf8').split('\n')
       .map((l) => (/^\s*(\*|\/\*|\/\/)/.test(l) ? '' : l)).join('\n');
-    const revive = code(path.join(ccrcRoot, 'server/src/coord/mailRevive.ts'));
-    expect(revive).toMatch(/\blifecycleIsDead\(sessionLifecycle\(row\)\)/);
-    // No lifecycle word spelled in the revive's code: a hand list of the dead words would be a second predicate.
-    for (const w of ["'stopped'", "'orphan'", "'never-started'", "'running'", "'restarting'"]) {
-      expect(revive, w).not.toContain(w);
-    }
+    // The decider's calls, read off the symbol scan: exactly the lifecycle word and the park arm's own predicate. A
+    // hand list of the dead words (`.includes`, a comparison chain) would drop `lifecycleIsDead` from this set.
+    const calls = callsIn(symbolOf('server/src/coord/mailRevive.ts', 'revivable')).map((c) => c.callee).sort();
+    expect(calls).toEqual(['lifecycleIsDead', 'sessionLifecycle']);
     const files: string[] = [];
     const walk = (dir: string): void => {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
