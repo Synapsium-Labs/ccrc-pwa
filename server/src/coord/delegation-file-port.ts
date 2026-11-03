@@ -52,4 +52,8 @@ export const nodeDelegationFilePort: DelegationFilePort = {
   statFile: async (p) => {
     try { const st = await fsp.stat(p); return { size: st.size, mtimeMs: st.mtimeMs }; } catch (err) { if (isEnoent(err)) return null; throw err; }
   },
+  removeTemp: async (p) => {
+    if (!p.endsWith('.tmp')) throw new Error(`removeTemp removes a compaction temp file only, not ${p}`);
+    try { await fsp.unlink(p); } catch (err) { if (!isEnoent(err)) throw err; }
+  },
 };
