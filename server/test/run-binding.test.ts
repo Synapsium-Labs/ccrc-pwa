@@ -32,6 +32,36 @@ describe('Incarnation', () => {
   });
 });
 
+describe('the open minting run wins', () => {
+  const D = BORN + 100;
+  const minting = (over: Partial<{ sessionId: string | null; claimedBy: string | null; state: BindingRun['state']; dispatchStartedAt: number | null }> = {}) =>
+    ({ sessionId: 'demo-w', claimedBy: 'coord-1', state: 'dispatched' as const, dispatchStartedAt: D, ...over });
+  const unplaceable = { kind: 'unplaceable', detail: 'no birth' } as const;
+  it('an unplaceable incarnation carries the minting run only while it is open, names the session and records a dispatch start', () => {
+    expect(incarnationOf('demo-w', unplaceable, minting())).toMatchObject({ kind: 'unborn', why: 'unplaceable', mint: { claimedBy: 'coord-1', dispatchStartedAt: D } });
+    for (const over of [{ state: 'done' as const }, { sessionId: 'demo-x' }, { sessionId: null }, { dispatchStartedAt: null }]) {
+      expect(incarnationOf('demo-w', unplaceable, minting(over)), JSON.stringify(over)).not.toHaveProperty('mint');
+    }
+    expect(incarnationOf('demo-w', unplaceable)).not.toHaveProperty('mint');
+    expect(incarnationOf('demo-w', { kind: 'at', ms: BORN }, minting())).toEqual(bornIncarnation('demo-w', BORN));
+  });
+  it('a run opened before the start, claimed by another coordinator and carrying an older birth of this session does not bind', () => {
+    const inc = incarnationOf('demo-w', unplaceable, minting());
+    const ghost = { claimedBy: 'coord-gone', openedAt: D - 50, sessionBornAt: D - 10, sessionBornFor: 'demo-w' };
+    expect(bindsRun(inc, run(ghost))).toBe('unbound');
+    // Each clause alone keeps the id-string rule.
+    expect(bindsRun(inc, run({ ...ghost, openedAt: D }))).toBe('bound');
+    expect(bindsRun(inc, run({ ...ghost, claimedBy: 'coord-1' }))).toBe('bound');
+    expect(bindsRun(inc, run({ ...ghost, sessionBornAt: null, sessionBornFor: null }))).toBe('bound');
+    expect(bindsRun(inc, run({ ...ghost, sessionBornFor: 'demo-y' }))).toBe('bound');
+    expect(bindsRun(inc, run({ ...ghost, sessionBornAt: D }))).toBe('bound');
+    expect(bindsRun(inc, run({ ...ghost, sessionId: 'demo-x' }))).toBe('unbound');
+    // Without an open minting run the same row binds, as before the rule.
+    expect(bindsRun(incarnationOf('demo-w', unplaceable, minting({ state: 'done' })), run(ghost))).toBe('bound');
+    expect(bindsRun(unbornIncarnation('demo-w', 'not-a-child'), run(ghost))).toBe('bound');
+  });
+});
+
 describe('runNamesSession', () => {
   it('is the id-string rule alone: the same id yes, another id or no worker no, a birth never read', () => {
     expect(runNamesSession({ sessionId: 'demo-w' }, 'demo-w')).toBe(true);

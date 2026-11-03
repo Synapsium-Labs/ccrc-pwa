@@ -57,7 +57,7 @@ export async function heldFor(
   // The child's incarnation, from the birth the run the mark names recorded (ARCH-62, #797; D6 of D-5920): a reused
   // workspace name never inherits a run opened for the occupant before it, so no ghost coordinator is the parent.
   const minting = coord.run(mark.runId);
-  const incarnation = incarnationOf(childId, childBirthOf(minting, childId));
+  const incarnation = incarnationOf(childId, childBirthOf(minting, childId), minting.ok ? minting.run : null);
   // An unstamped run opened before the birth and then bound to it is undecidable, not a ghost: the minting run's own
   // claimant keeps the hold (the dup arm, a wave N >= 2 run planned before wave 1 was dispatched). A series this process
   // cannot represent still yields the parent its open binding proves, or none, as before the fold (ruling (a)).

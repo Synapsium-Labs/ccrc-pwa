@@ -78,6 +78,11 @@ no case differs: the stamp is the merge base's, and all 53 cases give the merge 
 
 Each is a corpus case marked `residual: 'inherited'`, whose answer is the same on the merge base and on this PR.
 
+Since D-7877 (`docs/superpowers/plans/2026-11-03-binding-minting-run-wins.md`) the open minting run wins for an
+`unplaceable` child, and two of the residuals below are closed: the adopted arm with the earlier occupant's open run
+holding the higher id, and the cross-build rollback with the minting run still open. Their corpus cases now answer better
+than the merge base; the others below are still residuals.
+
 - **GAP 1 (unplaceable).** An earlier occupant's run is still open and the live occupant's minting run, whose birth
   cannot be placed, is done. By the id-string rule the earlier occupant's run is the worker's open run: its claimant is
   the parent, the card shows it, and its coordinator's `childIds` list it. The same rule lists an earlier occupant's open

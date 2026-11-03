@@ -32,12 +32,25 @@ import type { ChildBirth } from './childSpent.js';
  *     `CoordStore.bindSession` records the occupant's birth on a later wave it binds (`stampOccupantBirth`), so a run
  *     bound to the live worker is `bound` and a run bound to an earlier occupant is `unbound`, whatever its `openedAt`;
  *     the undecidable arm is left for rows bound before the stamp. An `unborn` session that reuses a name keeps the
- *     id-string rule (gap 1 of #1407, tracked in #1532). One LEGACY exception, accepted and pinned
- *     (`run-binding-bound-birth.test.ts`): migration 16's backfill dated every bound run to its OWN `dispatchStartedAt`,
- *     later waves included, so for a worker alive across that migration the newest placeable birth of its id can be a
- *     backfilled wave-N row rather than its minting run. A wave bound after this build is then stamped with that
+ *     id-string rule (gap 1 of #1407, tracked in #1532), except under THE OPEN MINTING RUN WINS below. One LEGACY
+ *     exception, accepted and pinned (`run-binding-bound-birth.test.ts`): migration 16's backfill dated every bound run
+ *     to its OWN `dispatchStartedAt`, later waves included, so for a worker alive across that migration the newest
+ *     placeable birth of its id can be a backfilled wave-N row rather than its minting run. A wave bound after this build is then stamped with that
  *     wave-N instant and reads `unbound` for the live occupant, as the backfilled wave-N row itself already does. The
  *     columns cannot tell a backfilled wave-N row from a minting run, so the stamp does not guess; such workers age out.
+ *
+ * THE OPEN MINTING RUN WINS (D-7877, #1532). A child whose birth cannot be placed (`unplaceable`) while the run its mark
+ * names is still open, still names it and records a dispatch start is that run's occupant, minted at or after that start:
+ * the adopted arm (D-6993), a re-dispatch whose bind is not recorded yet, a same-id redraw by an older build. Its
+ * incarnation carries the run (`OpenMint`), and a run naming the session does NOT bind when all four hold: it opened
+ * before that start, another coordinator claims it, and it carries a birth recorded for THIS session that is older than
+ * the start. That run was bound to an earlier occupant of the name, so it is no parent, claimant or child of the live
+ * one. Every other run keeps the id-string rule, each clause for a reason the probe corpus measured: a run opened after
+ * the start can carry an earlier occupant's birth (the stamp is the merge base's, the newest placeable birth on record)
+ * and is still this occupant's; the minting run itself and the minter's own waves share its claimant; a run with no
+ * birth, or one recorded for another session, cannot be told from the live occupant's pre-planned wave (P10, P6d), so
+ * reading it by `openedAt` alone made shapes worse than the id-string rule. No stamp is written and no column is read
+ * that was not read before; a coordinator, a manual workspace, an unreadable mark and a closed minting run are as before.
  *
  * TWO QUERIES, NAMED. `newest` is the newest run that binds the incarnation in ANY state (the card's `session.run`);
  * `open` is the newest that is not terminal (`session.openRun`). A state this build cannot name counts as open, as
@@ -50,9 +63,13 @@ declare const incarnationBrand: unique symbol;
 /** Why an incarnation has no birth: no marker names a minting run, or the marker's run could not place one. */
 export type UnbornWhy = 'not-a-child' | 'unplaceable';
 
+/** The open minting run of an `unplaceable` worker, as the binding reads it (THE OPEN MINTING RUN WINS, above): the
+ *  coordinator that claims it and the instant its dispatch started. Built only by `incarnationOf`. */
+export interface OpenMint { readonly claimedBy: string | null; readonly dispatchStartedAt: number }
+
 type IncarnationShape =
   | { readonly kind: 'born'; readonly sessionId: string; readonly bornAt: number }
-  | { readonly kind: 'unborn'; readonly sessionId: string; readonly why: UnbornWhy };
+  | { readonly kind: 'unborn'; readonly sessionId: string; readonly why: UnbornWhy; readonly mint?: OpenMint };
 
 /** A worker session's incarnation: the session id plus the birth of its current occupant. Built only by the three
  *  constructors below, so a bare id string cannot stand in for one. */
@@ -64,9 +81,30 @@ export const bornIncarnation = (sessionId: string, bornAt: number): Incarnation 
 export const unbornIncarnation = (sessionId: string, why: UnbornWhy): Incarnation =>
   ({ kind: 'unborn', sessionId, why }) as Incarnation;
 
-/** The incarnation of a child whose minting run answered `birth` (`childBirthOf`). */
-export const incarnationOf = (sessionId: string, birth: ChildBirth): Incarnation =>
-  birth.kind === 'at' ? bornIncarnation(sessionId, birth.ms) : unbornIncarnation(sessionId, 'unplaceable');
+/** The minting run's columns `incarnationOf` reads: `CoordStore.run`'s row satisfies it structurally. */
+export interface MintingRun {
+  readonly sessionId: string | null;
+  readonly claimedBy: string | null;
+  readonly state: RunState;
+  readonly dispatchStartedAt: number | null;
+}
+
+/** The open mint of `sessionId`, when `minting` is open, still names the session and records a dispatch start. */
+function openMintOf(sessionId: string, minting: MintingRun | null): OpenMint | null {
+  if (minting === null || !runNamesSession(minting, sessionId) || minting.dispatchStartedAt === null) return null;
+  if (!isOpen(minting)) return null;
+  return { claimedBy: minting.claimedBy, dispatchStartedAt: minting.dispatchStartedAt };
+}
+
+/** The incarnation of a child whose minting run answered `birth` (`childBirthOf`). `minting` is that run's row (`null`
+ *  when it could not be read or is absent): when the birth cannot be placed and the run is still open, names the child
+ *  and records a dispatch start, the incarnation carries it, and the open minting run wins over the id-string rule. */
+export const incarnationOf = (sessionId: string, birth: ChildBirth, minting: MintingRun | null = null): Incarnation => {
+  if (birth.kind === 'at') return bornIncarnation(sessionId, birth.ms);
+  const mint = openMintOf(sessionId, minting);
+  if (mint === null) return unbornIncarnation(sessionId, 'unplaceable');
+  return ({ kind: 'unborn', sessionId, why: 'unplaceable', mint }) as Incarnation;
+};
 
 /** The columns of a run the binding reads: `CoordStore.bindingRunsOf`'s row, and satisfied structurally by `RunRow`. */
 export interface BindingRun {
@@ -87,10 +125,22 @@ export type RunBinds = 'bound' | 'unbound' | 'undecidable';
  *  decision that must tell one occupant of a reused name from another reads the series through `bindingOf` instead. */
 export const runNamesSession = (run: { readonly sessionId: string | null }, sessionId: string): boolean => run.sessionId === sessionId;
 
+/** THE OPEN MINTING RUN WINS, for a run that names the session (the rule above): a run opened before the open mint's
+ *  dispatch start, claimed by another coordinator and carrying a birth recorded for this session that is older than that
+ *  start is an earlier occupant's, so it does not bind. Every other run keeps the id-string rule. */
+function bindsUnderOpenMint(sessionId: string, mint: OpenMint, run: BindingRun): RunBinds {
+  const at = mint.dispatchStartedAt;
+  const earlierOccupant = run.openedAt < at && run.claimedBy !== mint.claimedBy
+    && run.sessionBornAt !== null && run.sessionBornFor === sessionId && run.sessionBornAt < at;
+  return earlierOccupant ? 'unbound' : 'bound';
+}
+
 /** Whether `run` is bound to `incarnation`, by the rules above. */
 export function bindsRun(incarnation: Incarnation, run: BindingRun): RunBinds {
   if (!runNamesSession(run, incarnation.sessionId)) return 'unbound';
-  if (incarnation.kind === 'unborn') return 'bound';
+  if (incarnation.kind === 'unborn') {
+    return incarnation.mint === undefined ? 'bound' : bindsUnderOpenMint(incarnation.sessionId, incarnation.mint, run);
+  }
   if (run.sessionBornAt !== null) {
     return run.sessionBornFor === incarnation.sessionId && run.sessionBornAt === incarnation.bornAt ? 'bound' : 'unbound';
   }
@@ -99,7 +149,7 @@ export function bindsRun(incarnation: Incarnation, run: BindingRun): RunBinds {
 
 const binds = (incarnation: Incarnation, run: BindingRun): boolean => bindsRun(incarnation, run) === 'bound';
 
-export const isOpen = (run: BindingRun): boolean => !(TERMINAL_RUN_STATES as readonly RunState[]).includes(run.state);
+export const isOpen = (run: Pick<BindingRun, 'state'>): boolean => !(TERMINAL_RUN_STATES as readonly RunState[]).includes(run.state);
 
 /** The two named queries over one incarnation: the newest bound run in any state, and the newest open one. */
 export interface SessionBinding {
