@@ -412,6 +412,25 @@ describe('the capture pass of one tick (D-6435)', () => {
     expect(taskReads(await r.during(() => r.tick())).length).toBeGreaterThan(0);
   }, 60_000);
 
+  // An unlistable tick returns before every lane, so it stamps none of them: a lane that was due stays due. Kicked once,
+  // then an outage tick, then a listed tick inside TASK_SWEEP_MS with NO second kick: the task lane still sweeps. A task
+  // sweep moved above the unlistable return would stamp the lane on the outage tick (the lane runner stamps before the
+  // body runs, and `tasksPass` then returns on the unlisted model), and this listed tick would read no task file
+  // (review 1377, F1).
+  it('a lane due before an unlistable tick is still due on the next listed tick', async () => {
+    const r = rig();
+    await primed(r);
+    r.w.kick('tasks');
+    r.unlist(true);
+    r.setMono(r.mono() + 2000);
+    const outage = await r.during(() => r.tick());
+    expect(taskReads(outage), 'CONTROL: the outage tick reads no task file').toEqual([]);
+    r.unlist(false);
+    r.setMono(r.mono() + 2000);
+    const listed = await r.during(() => r.tick());
+    expect(taskReads(listed).length, 'the first listed tick after the outage sweeps the tasks it owed').toBeGreaterThan(0);
+  }, 60_000);
+
   // The rejection arm. No production Runner rejects, but a fake can; `detectDialogs` settles such a capture and rethrows it
   // at its own row. Observed by calling the private `detectDialogs` through a cast (as dialog.test.ts does with its
   // sweeps), not through `tick()`, which logs a lane error and so would hide the rejection. Row 5's capture rejects; the
