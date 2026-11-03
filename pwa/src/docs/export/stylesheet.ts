@@ -2,8 +2,9 @@
 // Export; refinements (b), (c), (d)). Derived, never typed twice: @ccrc/ui's tokens (every palette block, so the
 // exporter's palette applies in the file) and its prose rules (the Markdown body, code blocks, tables and the hljs
 // colours, which left chat.css for @ccrc/ui), then the export's own chrome. Each is read as text at build time through
-// Vite's `?raw` (vite.config.ts lets `.css?raw` through under vitest too), less its comments and its `@font-face`
-// blocks: a face names a font file by `url()`, which the export's CSP refuses and M4.EX2 forbids, so the token stacks
+// Vite's `?raw` (vite.config.ts lets `.css?raw` through under vitest too; the reads of @ccrc/ui's two sheets also rely on
+// the `server.fs.allow` entry for `../ui` in vite.config.ts and vitest.browser.config.ts), less its comments and its
+// `@font-face` blocks: a face names a font file by `url()`, which the export's CSP refuses and M4.EX2 forbids, so the token stacks
 // fall back to system faces. `EXPORT_CSS` holds no `</style`, no `@import` and no `url(` (docs-export.test.tsx).
 //
 // Ring L1: pure; three build-time texts.
