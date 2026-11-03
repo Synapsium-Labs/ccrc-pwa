@@ -628,6 +628,23 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     expect(job).not.toHaveBeenCalled();
   });
 
+  it("a later copy of one block that the page skipped is drawn plain by its own pre, and counted once as a page ceiling (M4.EX18)", async () => {
+    const probe = treeBody('```bash\necho one\n```\n\n```bash\necho one\n```\n');
+    const second = codeBlocksOf(probe.tree)[1]?.at;
+    if (second === undefined) throw new Error('fixture: no second block');
+    const store: HighlightStore = { ...syncTestStore('docs'), copySkip: (at) => (at === second ? 'page-output' : null) };
+    const { doc, result } = await built(inputOf({ ...probe, store }));
+    const codes = [...doc.querySelectorAll('article pre code')];
+    expect(codes).toHaveLength(2);
+    expect(codes[0]?.querySelector('span')).not.toBeNull();
+    expect(codes[1]?.querySelector('span')).toBeNull();
+    const labels = [...doc.querySelectorAll('.code-block-lang')].map((l) => l.textContent ?? '');
+    expect(labels[1]?.endsWith('(page highlighting limit)')).toBe(true);
+    expect(labels[0]?.endsWith('(page highlighting limit)')).toBe(false);
+    expect(doc.querySelector('meta[name="ccrc:plain-page-ceiling"]')?.getAttribute('content')).toBe('1');
+    expect(result.notes.some((n) => n.startsWith('1 code block left plain'))).toBe(true);
+  });
+
   it("a worker's hostile HTML is refused on receipt, and a forged plain string is drawn as text: either way plain, counted failed (M4.EX18)", async () => {
     const hostile: Highlighter = {
       highlight: async () => ({ kind: 'html', html: '<img src=x onerror=alert(1)>', mode: 'block' }),
