@@ -9381,8 +9381,11 @@ _check_oom-policy() {
 # predates this code has none until its next real spawn, the census backstops the evidence meanwhile, and nothing is
 # lost by waiting. The remedy says so, and names the one operation that observes it now: stop and start the session
 # through ccd, which resumes its conversation but ends an in-flight turn; (c) a session the service manager would not
-# answer for (its directory was not measured). A FAIL is never hidden behind a WARN: both print, FAIL lines first, and
-# the return code is the worst class printed.
+# answer for (its directory was not measured); (d) a home whose `settings.json` `env` sets `BASH_MAX_TIMEOUT_MS` or
+# `BASH_DEFAULT_TIMEOUT_MS` to anything but null or `""`: the delegation broker's rung-4 margin (twenty minutes,
+# `DELEGATION_EVIDENCE_MARGIN_MS`) assumes Claude Code's ten-minute Bash ceiling. Only the key name and the home are
+# printed. NOT measured: a project's own `.claude/settings.json`, and the environment ccd spawns sessions with. A FAIL is
+# never hidden behind a WARN: both print, FAIL lines first, and the return code is the worst class printed.
 # SKIP: a `server`-role box (D-3111: it hosts no sessions and converges nothing per account), a box with no roster
 # (`wrappers` owns that), and a box none of whose rostered homes exist here (the installer `continue`s past those too).
 #
@@ -9397,8 +9400,8 @@ _check_oom-policy() {
 # PER HOME, AND NEVER PRINTED. The "managed" test is the installer's own
 # (`contains("/session-hook.sh")` on a hook's command), spelled again because a doctor run cannot import it; PreToolUse
 # must carry matcher `*`, because an entry for one tool name does not reach the delegation tools. The settings file's
-# other keys (an `env` block can hold a token) and the hook commands never reach an output line: the lines name homes
-# and events only. No `jq` on PATH is a FAIL, not a pass over a file nobody read.
+# values (an `env` block can hold a token) and the hook commands never reach an output line: the lines name homes, events
+# and, for WARN (d), the two Bash-timeout KEY NAMES, never a value. No `jq` on PATH is a FAIL, not a pass over a file nobody read.
 #
 # NO MUTATION. The spool directory is measured with `-e`/`-d`/`-L`/`-r`/`-x` and never created, chmodded or removed;
 # a foreign entry is never edited; only the `--fix` arm writes, and it writes through the shipped installer.
@@ -9476,7 +9479,7 @@ _check_delegation-hooks() {
   want_json="[$want_json]"
 
   local id suffix dir f homes=0 out line kind name why said why_not=""
-  local -a unread=() missing=() ownworktree=() foreign=() spool_bad=() spool_none=() spool_unasked=()
+  local -a unread=() missing=() ownworktree=() foreign=() spool_bad=() spool_none=() spool_unasked=() timeout_set=()
   while IFS=$'\t' read -r id suffix; do
     [ -n "$id" ] || continue
     dir="$HOME/$suffix"
@@ -9510,22 +9513,27 @@ _check_delegation-hooks() {
           (("WorktreeCreate", "WorktreeRemove") as $e | ($h[$e] // []) as $a
             | ([$a | cmds] as $c
               | (if ($c | any(. == "own")) then "OWN\t" + $e else empty end),
-                (if ($a | type) != "array" or ($c | any(. == "other")) then "FOREIGN\t" + $e else empty end)))
+                (if ($a | type) != "array" or ($c | any(. == "other")) then "FOREIGN\t" + $e else empty end))),
+          # The Bash ceiling (Task 4.5b): a KEY NAME only, never its value, for a key set (not null, not "") in an env OBJECT.
+          ((.[0].env // null) | if type == "object" then ("BASH_MAX_TIMEOUT_MS", "BASH_DEFAULT_TIMEOUT_MS") as $k
+            | select(has($k) and .[$k] != null and .[$k] != "") | "TIMEOUT\t" + $k else empty end)
       end' "$f" 2>/dev/null)"; rc=$?
     if [ "$rc" -ne 0 ]; then unread+=("$id: settings.json is not valid JSON"); continue; fi
     if [ "$out" = DOCS ]; then unread+=("$id: settings.json is empty or holds more than one JSON document"); continue; fi
     if [ "$out" = SHAPE ]; then unread+=("$id: settings.json does not hold hooks as an object"); continue; fi
-    local miss="" fgn="" own=""
+    local miss="" fgn="" own="" tmo=""
     while IFS=$'\t' read -r kind name; do
       case "$kind" in
         MISSING) miss="${miss:+$miss, }$name" ;;
         FOREIGN) fgn="${fgn:+$fgn }$name" ;;
         OWN) own="${own:+$own }$name" ;;
+        TIMEOUT) tmo="${tmo:+$tmo, }$name" ;;
       esac
     done <<< "$out"
     [ -z "$miss" ] || missing+=("$id: $miss")
     [ -z "$own" ] || ownworktree+=("$id: $own")
     [ -z "$fgn" ] || foreign+=("$id: $fgn")
+    [ -z "$tmo" ] || timeout_set+=("$id: $tmo")
   done <<< "$rows"
   if [ "$homes" -eq 0 ]; then
     _dr_skip delegation-hooks "none of the roster's config directories exist on this box, so there is no hook registration to measure"
@@ -9613,7 +9621,7 @@ _check_delegation-hooks() {
   fi
   if [ "${#ownworktree[@]}" -gt 0 ]; then
     _dr_fail delegation-hooks "ccrc's own session hook is registered under an event it never registers — a registered hook for WorktreeCreate or WorktreeRemove replaces Claude Code's own worktree handling: $(_dr_join "${ownworktree[@]}")" \
-      "run 'ccrc doctor --fix' (it removes ccrc's own entry from every event; an entry of its own that names another command is kept, but an entry shared with ccrc's hook is not, so --fix refuses a home that has one: move the other command into an entry of its own first)"
+      "run 'ccrc doctor --fix' (it removes ccrc's own hook from every event it never registers, and keeps every other command, whether in an entry of its own or in an entry it shares with ccrc's hook)"
     worst=1
   fi
   if [ "${#spool_bad[@]}" -gt 0 ]; then
@@ -9656,6 +9664,12 @@ _check_delegation-hooks() {
       "ask the manager by hand ($(_svc_status_hint "claude-session@${spool_unasked[0]}.service")) and re-run ccrc doctor"
     [ "$worst" -eq 1 ] || worst=2
   fi
+  if [ "${#timeout_set[@]}" -gt 0 ]; then
+    n=${#timeout_set[@]}; s="homes set"; [ "$n" -eq 1 ] && s="home sets"
+    _dr_warn delegation-hooks "$n rostered $s Claude Code's Bash timeout in settings.json env: $(_dr_join "${timeout_set[@]}")" \
+      "remove the key from that home's env: the delegation broker's rung-4 margin (twenty minutes) assumes Claude Code's ten-minute Bash ceiling, so a raised ceiling can let rung 4 link a tree to the wrong session; raising the margin is a code change"
+    [ "$worst" -eq 1 ] || worst=2
+  fi
   if [ "$worst" -eq 0 ]; then
     _dr_pass delegation-hooks "$homes/$homes rostered homes register all ${#want[@]} hook events the shipped installer writes; no running session lacks its delegation spool directory ($rows_read registry rows read, $rows_ok with a directory)"
   fi
@@ -9665,58 +9679,25 @@ _check_delegation-hooks() {
 # The cure `ccrc doctor --fix` runs for `delegation-hooks` (FAIL only, R-C8): the SHIPPED installer, `$CCRC_HERE/
 # install-session-hooks.sh`, into every rostered home that exists on this box — the tree the check measured, never a
 # copy of its logic, so this is not a second hook installer. The installer validates before it writes, backs up what it
-# replaces, swaps managed entries only (ccrc's own hook under a Worktree event included) and leaves every foreign entry of its
+# replaces, removes only ccrc's own hook command from an entry (ccrc's own hook under a Worktree event included) and leaves every foreign entry of its
 # own (a `WorktreeCreate` hook naming another command included) byte-identical; a home it refuses (invalid JSON) stays a FAIL on
 # the re-measurement, which is the verdict. It creates no spool directory: that is ccd's, at spawn.
 #
-# ONE HOME IT DOES NOT HAND TO THE INSTALLER (R55, coordinator 5180). The installer's sweep (`JQ_UNMANAGED`) drops a whole
-# entry when ANY hook in it names `/session-hook.sh`, so an entry that carries ccrc's hook AND another command loses the
-# other command — under every event, on `ccrc install` and `ccrc update` as well as here. This fixer is the first
-# `doctor --fix` path into that drop, and "never removes or rewrites a foreign registration" (5151) binds it: before a
-# home goes to the installer its settings.json is read for any such mixed entry, under any event. A home that has one is
-# REFUSED (its file untouched, byte for byte), the refusal names the event and the manual step, and the other homes are
-# fixed as before. A settings.json jq cannot read is left to the installer, which refuses it in its own words.
-# The test MIRRORS the installer's own sweep (Task 14 re-review 2, N4): `map(...)` and `any(...)` iterate an event value and
-# a `hooks` list whatever their JSON type, so an object-shaped value or `hooks` (not valid Claude Code settings, but what
-# the sweep would still walk) is walked here too, and a mixed entry there is refused like any other.
-_dh_mixed_events() {   # <settings.json> -> the events (one per line) holding an entry that mixes ccrc's hook with another command
-  jq -r '
-    (.hooks // {}) | if type == "object" then to_entries[] else empty end
-    | select(any(.value[]?; type == "object"
-        and ([(.hooks // [])[]? | type == "object" and ((.command // "") | tostring | contains("/session-hook.sh"))] as $o
-          | ($o | any) and ($o | any(not)))))
-    | .key' "$1" 2>/dev/null
-}
-
+# R55 IS LIFTED (delegation broker wave 4, PR4 Task 4.5b). The installer's sweep (`JQ_UNMANAGED`, PR4 Task 4.5a, option B)
+# removes only ccrc's own hook command from an entry and keeps the entry's matcher and every other hook, so an entry that
+# mixes ccrc's hook with another command is handed to the installer like any other: the other command survives, and the
+# installer backs the file up before it writes. No home is refused for a mixed entry any more.
 _fix_delegation-hooks() {
-  local inst="$CCRC_HERE/install-session-hooks.sh" roster="$HOME/.ccrc/accounts.json" rows id suffix dir said n=0 list="" mixed evs verb e refused=0
-  local -a dirs=() evarr=()
+  local inst="$CCRC_HERE/install-session-hooks.sh" roster="$HOME/.ccrc/accounts.json" rows id suffix dir said n=0 list=""
+  local -a dirs=()
   rows="$(_skills_roster_rows "$roster")" || { echo "FIX delegation-hooks: refused — \$HOME/.ccrc/accounts.json could not be read as a roster"; return 1; }
   while IFS=$'\t' read -r id suffix; do
     [ -n "$id" ] || continue
     dir="$HOME/$suffix"
     [ -d "$dir" ] || continue
-    if [ -f "$dir/settings.json" ] && [ -r "$dir/settings.json" ] && command -v jq >/dev/null 2>&1; then
-      mixed="$(_dh_mixed_events "$dir/settings.json")"
-      if [ -n "$mixed" ]; then
-        # One event per line, read as lines (N5: never word-split or glob-expanded, so a key like `*` names itself).
-        evarr=()
-        while IFS= read -r e; do [ -n "$e" ] && evarr+=("$e"); done <<< "$mixed"
-        if [ "${#evarr[@]}" -eq 1 ]; then
-          evs="${evarr[0]}"; verb="holds"; said="under $evs"
-        else
-          # N6: "WorktreeCreate and Stop hold", "A, B and C hold"
-          evs=""; for e in "${evarr[@]:0:${#evarr[@]}-1}"; do evs="${evs:+$evs, }$e"; done
-          evs="$evs and ${evarr[${#evarr[@]}-1]}"; verb="hold"; said="under each of $evs"
-        fi
-        echo "FIX delegation-hooks: refused — $id: $evs $verb an entry that mixes ccrc's session hook with another command, and the sweep that --fix, ccrc install and ccrc update run removes the whole entry that carries ccrc's hook, other commands included; move the other command into an entry of its own $said, then re-run ccrc doctor --fix"
-        refused=1; continue
-      fi
-    fi
     dirs+=("$dir"); n=$((n + 1)); list="$list${list:+, }$id"
   done <<< "$rows"
   if [ "$n" -eq 0 ]; then
-    [ "$refused" -eq 1 ] && return 1
     echo "FIX delegation-hooks: nothing to cure — no rostered home exists on this box"; return 0
   fi
   # The interpreter running THIS file, as `_fix_skills` runs its installers.
@@ -9724,7 +9705,6 @@ _fix_delegation-hooks() {
     echo "FIX delegation-hooks: refused — $inst said: ${said##*$'\n'}"; return 1
   fi
   echo "FIX delegation-hooks: re-ran the shipped tree's install-session-hooks.sh into $n home(s): $list"
-  [ "$refused" -eq 0 ] || return 1
 }
 
 # ── update-sweep: the last update's supervisor sweep, as its report recorded it ──
