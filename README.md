@@ -689,7 +689,9 @@ verb writes two ccrc-owned files and prints the rest:
   Deleting `exposure.env` and restarting `ccrc.service` takes the box dark again — and disarms the
   gate it armed, so stop Caddy first.
 - **`~/.ccrc/Caddyfile`**, regenerated whole on every run: the host, the
-  chosen `bind` if any, and `reverse_proxy 127.0.0.1:<CCRC_PORT>`, nothing else. Stock Caddy's automatic
+  chosen `bind` if any, and `reverse_proxy 127.0.0.1:<CCRC_PORT>`, nothing else. It needs no `encode` line: the
+  PWA's build writes a Brotli and a gzip copy beside each script and stylesheet under `/assets/`, and the server
+  sends whichever the browser's `Accept-Encoding` takes. Stock Caddy's automatic
   HTTPS does the certificate through the standard ACME challenges
   (HTTP-01/TLS-ALPN-01) — which is why **a router forwarding ports 80 and 443
   to the box is a prerequisite** the verb states loudly and nothing on the box
