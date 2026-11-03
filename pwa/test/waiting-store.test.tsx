@@ -167,6 +167,8 @@ describe('one read in flight at a time (review 1359 F12d)', () => {
     expect(load).toHaveBeenCalledTimes(1);
     await act(async () => { first.release(answer(1)); });
     expect(store.getState().waiting?.items[0]?.id).toBe(1);
+    // Joined, not queued: nothing starts a second read behind the first once it has come back.
+    expect(load).toHaveBeenCalledTimes(1);
     vis.mockRestore();
   });
 

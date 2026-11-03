@@ -88,7 +88,8 @@ function Panel({ item, programmeLive, onTick, onDismiss }: Pick<ItemViewProps, '
   const answer: string | null = choice === null ? null : decide && noteText !== '' ? `${choice}${NOTE_JOIN}${noteText}` : choice;
   const tooLong = answer !== null && answer.length > ANSWER_MAX;
   const needsAnswer = decide || item.kind === 'value';
-  const ready = !needsAnswer || (answer !== null && answer !== '' && !tooLong);
+  // A decision is an option, or own text that is not empty: a note alone is not one (it would send the coordinator "Note: …" with no choice).
+  const ready = !needsAnswer || (choice !== null && choice !== '' && !tooLong);
 
   const run = async (act: () => Promise<void>): Promise<void> => {
     setBusy(true);

@@ -9,10 +9,10 @@ import { BareRow } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import { WAITS_ON_WORDS, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { fleetHues } from '../fleet/programmeBoxes';
-import { isRunClosed, programmeTitle, programWave } from '../fleet/runWords';
+import { programmeTitle, programWave } from '../fleet/runWords';
 import {
   CLEARED_HEADING, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
-  ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, programmeIsLive, questionRows, summaryCounts, summaryWords,
+  ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, openRunsOf, programmeIsLive, questionRows, summaryCounts, summaryWords,
   type Pill, type ProgrammeGroup, type QuestionRow,
 } from './ledgerWords';
 import './ledgers.css';
@@ -90,7 +90,7 @@ function Group({ group, runs, hue, now, props }: {
 }): ReactNode {
   const heard = runs ?? NO_RUNS;
   const title = group.program === null ? NO_PROGRAMME_WORD : programmeTitle(group.program, heard);
-  const open = group.program === null ? [] : heard.filter((r) => r.program === group.program && !isRunClosed(r));
+  const open = group.program === null ? [] : openRunsOf(group.program, heard);
   const wave = open.length === 0 ? null : programWave(open);
   // A programme with no open run is shown as ended (spec §3.4); not on runs that have not been heard.
   const ended = group.program !== null && !programmeIsLive(group.program, runs);

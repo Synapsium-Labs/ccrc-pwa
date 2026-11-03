@@ -119,6 +119,13 @@ describe('the Waiting on you list', () => {
     expect(screen.getByText('Nothing needs you.')).toBeTruthy();
   });
 
+  it('a list with items waits for the fleet frame too: its rows are not shown without the sessions\' questions', () => {
+    open({ view: waitingView({ items: [itemView({ id: 1, title: 'An item on the list' })] }), sessions: null });
+    expect(screen.getByRole('status').textContent).toMatch(/first update/i);
+    expect(screen.queryByText('An item on the list')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
   it('says why no list will come, in place of the waiting line', () => {
     open({ view: null, unavailable: 'This box has no coordination database, so there is no Waiting on you list here.' });
     expect(screen.getByRole('alert').textContent).toMatch(/no coordination database/);

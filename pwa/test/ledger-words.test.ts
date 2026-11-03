@@ -2,7 +2,7 @@
 // what it pins; the screen's and the routes' tests read the same words through their components.
 import { describe, expect, it } from 'vitest';
 import {
-  groupByProgramme, itemPills, programmeIsLive, questionRows, waitingTotal, type QuestionRow,
+  groupByProgramme, itemPills, openRunsOf, programmeIsLive, questionRows, waitingTotal, type QuestionRow,
 } from '../src/ledgers/ledgerWords';
 import { isWaitingView } from '../src/ledgers/waitingView';
 import { fleetSession } from './fleetFixture';
@@ -86,6 +86,18 @@ describe('itemPills (the spec: a needed-by label whatever the state)', () => {
   it('a sent-back blocking item says Came back and still says Blocking', () => {
     const back = itemView({ neededBy: 'blocking', history: [{ at: 1, act: 'raise', note: null }, { at: 2, act: 'return', note: 'no' }] });
     expect(itemPills(back).map((p) => p.word)).toEqual(['Came back', 'Blocking']);
+  });
+});
+
+describe('openRunsOf (the one measurement the wave label and the liveness both read)', () => {
+  it('is the programme\'s open runs: its own, and not a closed one', () => {
+    const runs = [
+      runRow({ id: 1, program: 'prog-a', state: 'working' }), runRow({ id: 2, program: 'prog-a', state: 'done' }),
+      runRow({ id: 3, program: 'prog-b', state: 'working' }), runRow({ id: 4, program: 'prog-a', state: 'planned' }),
+    ];
+    expect(openRunsOf('prog-a', runs).map((r) => r.id)).toEqual([1, 4]);
+    expect(openRunsOf('prog-c', runs)).toEqual([]);
+    expect(programmeIsLive('prog-a', runs)).toBe(openRunsOf('prog-a', runs).length > 0);
   });
 });
 

@@ -10,7 +10,7 @@ import type { FleetSession, RunSummary } from '../../../shared/api';
 import { orderItems, waitingCount, type ItemKind, type ItemView } from '../../../shared/ledgers';
 import { operatorAsk } from '../fleet/rollup';
 import { sessionLabel } from '../fleet/sessionLabel';
-import { boundOpenRun, claimedRunsOf, programsWithOpenRun } from '../fleet/runWords';
+import { boundOpenRun, claimedRunsOf, isRunClosed } from '../fleet/runWords';
 
 /** An item kind in the operator's words (plan PL5a). A session's own question is `QUESTION_WORD`, not an item kind. */
 export const KIND_WORD: Readonly<Record<ItemKind, string>> = {
@@ -86,11 +86,16 @@ export function questionRows(sessions: readonly FleetSession[], runs: readonly R
 export const waitingTotal = (items: readonly ItemView[], questions: readonly QuestionRow[]): number =>
   waitingCount(items) + questions.length;
 
-/** Whether a programme has an open run (the runs board's own reader, `programsWithOpenRun`), which is what keeps its
- *  coordinator waiting on the operator's tick and refuses a dismiss. `null` runs (no runs frame yet) is live: a run this
- *  page has not heard of counts as open, so no screen calls a programme ended, or offers a dismiss, on a guess. */
+/** The runs of one programme that are still open (`isRunClosed`, the runs board's own predicate), which is what keeps its
+ *  coordinator waiting on the operator's tick and refuses a dismiss. The list's wave label and `programmeIsLive` both read
+ *  this ONE measurement, so no screen filters runs for openness of its own. */
+export const openRunsOf = (program: string, runs: readonly RunSummary[]): RunSummary[] =>
+  runs.filter((r) => r.program === program && !isRunClosed(r));
+
+/** Whether a programme has an open run. `null` runs (no runs frame yet) is live: a run this page has not heard of counts as
+ *  open, so no screen calls a programme ended, or offers a dismiss, on a guess. */
 export const programmeIsLive = (program: string, runs: readonly RunSummary[] | null): boolean =>
-  runs === null || programsWithOpenRun(runs).has(program);
+  runs === null || openRunsOf(program, runs).length > 0;
 
 /** One line of the list: an item, or a session's question. */
 export type Row = { readonly kind: 'item'; readonly item: ItemView } | { readonly kind: 'question'; readonly question: QuestionRow };

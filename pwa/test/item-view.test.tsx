@@ -61,6 +61,19 @@ describe('the item view', () => {
     await waitFor(() => expect(onTick).toHaveBeenCalledWith('Library first\n\nNote: Mind the lane flag.'));
   });
 
+  it('"Your own answer" left empty is no decision: a note alone does not enable Mark done', () => {
+    const { onTick } = show(itemView({ kind: 'decide', options: ['Library first'] }));
+    const done = screen.getByRole('button', { name: 'Mark done' }) as HTMLButtonElement;
+    fireEvent.click(screen.getByRole('radio', { name: 'Your own answer' }));
+    fireEvent.change(screen.getByRole('textbox', { name: /note to the coordinator/i }), { target: { value: 'just a note' } });
+    expect(done.disabled).toBe(true);
+    fireEvent.click(done);
+    expect(onTick).not.toHaveBeenCalled();
+    // …and blank own text, however many spaces, is still no decision.
+    fireEvent.change(screen.getByRole('textbox', { name: /your own answer/i }), { target: { value: '   ' } });
+    expect(done.disabled).toBe(true);
+  });
+
   it('an own answer and a note go together, and a blank note adds nothing', async () => {
     const { onTick } = show(itemView({ kind: 'decide', options: ['Library first'] }));
     fireEvent.click(screen.getByRole('radio', { name: 'Your own answer' }));

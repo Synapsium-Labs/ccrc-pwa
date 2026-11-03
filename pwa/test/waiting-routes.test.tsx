@@ -7,8 +7,9 @@ import { api } from '../src/lib/api';
 import { createFleetStore } from '../src/stores/fleet';
 import { ROUTES, matchRoute } from '../src/lib/routes';
 import { ItemRoute, ItemRouteAt, WaitingRoute, itemPath } from '../src/ledgers/WaitingRoutes';
+import { refetchWaiting } from '../src/ledgers/waitingStore';
 import { fleetSession } from './fleetFixture';
-import { itemView, runRow, waitingView } from './ledgersFixture';
+import { MIN, NOW, itemView, runRow, waitingView } from './ledgersFixture';
 
 const makeSocket = (): WebSocket => ({ close() {}, set onopen(_v: unknown) {}, set onmessage(_v: unknown) {}, set onclose(_v: unknown) {}, set onerror(_v: unknown) {} }) as unknown as WebSocket;
 const mk = () => createFleetStore({ makeSocket });
@@ -77,6 +78,28 @@ describe('ItemRoute', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     await waitFor(() => expect(location.pathname).toBe('/waiting'));
     expect(dismiss).toHaveBeenCalledWith(3);
+    expect(api.waiting).toHaveBeenCalledTimes(1); // the re-read after the move
+  });
+
+  it('a tick\'s re-read starts after a focus read already on the wire, so the list shows the tick', async () => {
+    const store = mk();
+    const open = itemView({ id: 7 });
+    const checking = itemView({ id: 7, state: 'checking', tickedAt: NOW - MIN });
+    act(() => store.setState({ waiting: waitingView({ items: [open] }) }));
+    let release!: (v: { ok: true; waiting: ReturnType<typeof waitingView> }) => void;
+    const first = new Promise<{ ok: true; waiting: ReturnType<typeof waitingView> }>((r) => { release = r; });
+    const read = vi.spyOn(api, 'waiting').mockReturnValueOnce(first)
+      .mockResolvedValueOnce({ ok: true, waiting: waitingView({ items: [checking] }) });
+    const tick = vi.spyOn(api, 'tickItem').mockResolvedValue({ ok: true, item: checking });
+    render(<ItemRoute id={7} store={store} />);
+    void refetchWaiting(store, api.waiting, true); // the focus read, on the wire and not yet answered
+    fireEvent.click(screen.getByRole('button', { name: 'Mark done' }));
+    await waitFor(() => expect(tick).toHaveBeenCalledTimes(1));
+    await act(async () => { await Promise.resolve(); });
+    expect(read).toHaveBeenCalledTimes(1); // the tick's read waits behind it
+    await act(async () => { release({ ok: true, waiting: waitingView({ items: [open] }) }); });
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(store.getState().waiting?.items[0]?.state).toBe('checking'));
   });
 
   it('finds a recently cleared item, and says so when the list does not hold it', () => {
