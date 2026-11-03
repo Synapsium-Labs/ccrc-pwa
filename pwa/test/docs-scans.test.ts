@@ -1247,6 +1247,28 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
     expect(grammars.files).toContain('src/lib/highlightGrammars.ts');
   });
 
+  it('M4.EX2 planted (pure source): the sink arm, outerHTML and document.writeln each report their rule', () => {
+    const f = 'src/docs/export/exportMarkdown.tsx';
+    expect(exportInertHits('export const planted = () => <p dangerouslySetInnerHTML={{ __html: "x" }} />;', f)).toContain(`${f} sink`);
+    expect(exportInertHits('export const planted = (e: Element) => { e.outerHTML = "x"; };', f)).toContain(`${f} outerHTML`);
+    expect(exportInertHits("export const planted = () => document.writeln('x');", f)).toContain(`${f} document.writeln`);
+  });
+
+  it('M4.EX16 planted (pure source): the sheet, new File and createObjectURL arms each report their rule', () => {
+    const sheet = 'src/docs/ExportSheet.tsx';
+    expect(exportUses('export const planted = (e: Element) => e.innerHTML;', sheet)).toContain(`${sheet} innerHTML`);
+    expect(exportUses("export const planted = () => document.write('x');", sheet)).toContain(`${sheet} document.write`);
+    expect(exportUses('export const Planted = () => <div srcDoc="x" />;', 'src/docs/DocsHead.tsx')).toContain('src/docs/DocsHead.tsx srcDoc');
+    expect(exportUses("export const planted = () => new File(['x'], 'x');", 'src/docs/export/filename.ts')).toContain('src/docs/export/filename.ts new File');
+    expect(exportUses("export const planted = () => URL.createObjectURL(new Blob(['x']));", 'src/docs/DocsHead.tsx'))
+      .toContain('src/docs/DocsHead.tsx createObjectURL');
+  });
+
+  it('M4.EX17 planted: the highlight worker module in a file the builder reaches is red', () => {
+    const worker = closureFrom(planted('src/docs/export/exportMarkdown.tsx', "\nimport { plantedW as plantedWorker } from '../../lib/markdownHighlightWorker';\nexport const plantedX = plantedWorker;\n"), 'src/docs/export/buildExport');
+    expect(worker.files).toContain('src/lib/markdownHighlightWorker.ts');
+  });
+
   it('M4.T7 Export clause: the badge scan reads the export files and finds no draft state', () => {
     const { files, hits } = scanTree([DOCS_DIR, DOCS_SCREEN], PWA);
     expect(files).toEqual(expect.arrayContaining(['src/docs/export/provenance.ts', 'src/docs/export/buildExport.tsx', 'src/docs/ExportSheet.tsx']));
