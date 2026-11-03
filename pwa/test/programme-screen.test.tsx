@@ -112,6 +112,13 @@ describe('the programme view: Goals', () => {
     expect(screen.queryByText('The list\'s copy.')).toBeNull();
   });
 
+  it('draws only a view that is this programme\'s: another programme\'s answer is a failed read', async () => {
+    vi.spyOn(api, 'goals').mockResolvedValue({ ok: true, goals: goals({ program: 'prog-b', inShort: 'Another programme\'s summary.' }) });
+    render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    expect((await screen.findByRole('alert')).textContent).toBe('Goals could not be read.');
+    expect(screen.queryByText('Another programme\'s summary.')).toBeNull();
+  });
+
   it('says it is reading until Goals arrive, never "no spec is pinned yet"', async () => {
     vi.spyOn(api, 'goals').mockReturnValue(new Promise(() => {}));
     render(<ProgrammeScreen slug="prog-a" store={heard()} />);
@@ -215,6 +222,14 @@ describe('the programme view: when nothing needs the operator', () => {
     expect(says(heard({ runs: runs('awaiting-review') }))).toContain(`Nothing needs you. Waiting on: ${WAITS_ON_WORDS.review}`);
     expect(says(heard({ runs: runs('merging') }))).toContain(`Nothing needs you. Waiting on: ${WAITS_ON_WORDS['merge-queue']}`);
     expect(says(heard({ runs: runs('planned') }))).toContain(`Nothing needs you. Waiting on: ${WAITS_ON_WORDS['next-wave']}`);
+  });
+
+  it('reads only this programme\'s runs: another programme\'s working run changes nothing', () => {
+    const store = heard({ runs: [
+      runRow({ id: 1, program: 'prog-a', state: 'planned' }), runRow({ id: 2, program: 'prog-b', state: 'working' }),
+      runRow({ id: 3, program: 'prog-c', state: 'awaiting-review' }),
+    ] });
+    expect(says(store)).toContain(`Nothing needs you. Waiting on: ${WAITS_ON_WORDS['next-wave']}`);
   });
 
   it('a programme with no open run says that, in the same sentence', () => {
