@@ -520,7 +520,8 @@ _gs_prepare() {   # <common dir> -> 0 ready (CUR set) / 1 the row is ended
   if [ -d "$ck/.git" ] && ! _gs_borrows "$ck" "$c/objects"; then rm -rf -- "$ck"; fi
   if [ ! -d "$ck/.git" ]; then
     rm -rf -- "$ck"
-    if ! mkdir -p -- "$ck" || ! _gs_git "$ck" init -q -b graph-store >/dev/null 2>&1 \
+    if ! mkdir -p -- "$ck" || ! _gs_git "$ck" init -q >/dev/null 2>&1 \
+       || ! _gs_git "$ck" symbolic-ref HEAD refs/heads/graph-store >/dev/null 2>&1 \
        || ! mkdir -p -- "$ck/.git/objects/info" || ! printf '%s\n' "$c/objects" > "$ck/.git/objects/info/alternates"; then
       rm -rf -- "$ck"; _gs_end failed setup "cannot make the store's shared clone of $c"; return 1
     fi
@@ -538,10 +539,11 @@ _gs_prepare() {   # <common dir> -> 0 ready (CUR set) / 1 the row is ended
   grep -qxF '/.graphifyignore' "$ck/.git/info/exclude" 2>/dev/null \
     || { mkdir -p -- "$ck/.git/info" && printf '%s\n' '/.graphifyignore' >> "$ck/.git/info/exclude"; } \
     || { _gs_end failed setup "cannot exclude the generated .graphifyignore in the store's checkout"; return 1; }
-  # git's own first line goes into the reason (D-7791): a discarded stderr hid the cause for days.
+  # git's own first line goes into the reason (D-7791): a discarded stderr hid the cause for days. It goes through
+  # ccd/ccrc's `_upd_redact` (sourced with the body), the one log-line redactor, so this box's home reads `~`.
   if ! err="$(_gs_git "$ck" checkout -q --detach --force "$GR_SOURCE_COMMIT" 2>&1 >/dev/null)" \
      || ! err="$(_gs_git "$ck" clean -ffdxq -e /.graphifyignore 2>&1 >/dev/null)"; then
-    err="${err%%$'\n'*}"; err="${err//"$HOME"/\~}"
+    err="$(_upd_redact "${err%%$'\n'*}")"
     _gs_end failed setup "cannot move the store's checkout of $key to ${GR_SOURCE_COMMIT:0:12}${err:+: $err}"; return 1
   fi
   if ! _gs_noise "$ck" "$raw"; then K_KIND["$key"]=full; _gs_end refused-by-guard - "$GS_WHY"; return 1; fi

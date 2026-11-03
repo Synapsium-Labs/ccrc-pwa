@@ -177,7 +177,8 @@ Per repository the store holds one checkout, made once by the sweep (D-7791: `gi
 not `git clone --shared`; see the last bullet):
 
 ```
-git -C <store>/<repo-key>/checkout/<repo-name> init -q -b graph-store
+git -C <store>/<repo-key>/checkout/<repo-name> init -q
+git -C <checkout> symbolic-ref HEAD refs/heads/graph-store   # not `init -b`, which needs git 2.28
 printf '%s\n' '<realpath of common dir>/objects' > <checkout>/.git/objects/info/alternates
 git -C <checkout> config gc.auto 0
 git -C <checkout> config core.hooksPath /dev/null
@@ -204,9 +205,10 @@ git -C <checkout> clean -ffdxq -e /.graphifyignore
   `refs/remotes/` that is not also a branch head was never copied, and no later fetch reaches the copy, so every
   pass failed at setup. The checkout moves by commit id and every history question goes to the common dir, so it
   needs no refs. On every pass the sweep makes the checkout again when none of its alternates lines resolves to the
-  common dir's objects (which also drops such a copy's objects), and mirrors `<common dir>/shallow` into the
+  common dir's objects (which also drops such a copy's objects); one the old `clone --shared` made from a full
+  source borrows already and is kept. It mirrors `<common dir>/shallow` into the
   checkout's `.git/shallow` (or removes it for a full source). A checkout that cannot move puts git's first error
-  line in the row's reason.
+  line in the row's reason, through ccd/ccrc's `_upd_redact`.
 - **Nothing else writes there.** Sessions are never pointed at it. `checkout --force` plus `clean -ffdx` before
   every build makes it exactly the tracked files at the commit, so untracked and ignored files cannot be ingested.
   The generated `.graphifyignore` (the tracked-noise list: `ccd/graph-noise.default.list` plus the operator's

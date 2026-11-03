@@ -1477,6 +1477,27 @@ describe('D-7791 — the store\'s checkout borrows the source\'s objects, shallo
     expect(fs.existsSync(path.join(kept, '.git', 'kept-marker')), 'a borrowing checkout is never made again').toBe(true);
   });
 
+  // The checkouts the old code made from a full source are on the box today: `clone --shared` wrote an absolute
+  // alternates line naming the source's objects, plus refs and a branch HEAD the new code never writes. They borrow,
+  // so they are kept as they are.
+  it('a checkout the old `git clone --shared` made from a full source is kept and builds', { timeout: T }, () => {
+    const repo = published();
+    const ck = checkoutOf(repo);
+    fs.rmSync(ck, { recursive: true, force: true });
+    git(keyDir(repo), 'clone', '--shared', '--no-checkout', '--no-tags', '-q', '--', sourceOf(repo), ck);
+    const before = alternatesOf(ck);
+    expect(before, 'the old clone borrows by alternates').toHaveLength(1);
+    expect(fs.existsSync(path.join(sourceOf(repo), 'shallow')), 'the fixture source is full').toBe(false);
+    fs.writeFileSync(path.join(ck, '.git', 'kept-marker'), '');
+    const tip = bump(repo);
+    sweep();
+    expect(rowOf(repo), JSON.stringify(rowOf(repo))).toMatchObject({ tip, served: tip, fail: '' });
+    expect(['rebuilt', 'refreshed']).toContain(rowOf(repo).outcome);
+    expect(fs.existsSync(path.join(ck, '.git', 'kept-marker')), 'an old shared clone is never made again').toBe(true);
+    expect(alternatesOf(ck)).toEqual(before);
+    expect(git(ck, 'rev-parse', 'HEAD')).toBe(tip);
+  });
+
   it('a checkout that cannot move says git\'s own first line in the row\'s reason', { timeout: T }, () => {
     const repo = published();
     fs.writeFileSync(path.join(checkoutOf(repo), '.git', 'index.lock'), '');
