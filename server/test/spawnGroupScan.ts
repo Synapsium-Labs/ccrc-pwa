@@ -123,9 +123,10 @@ export function commandKind(p: ParsedFile, text: string, at: number, hops = 0): 
   return callKind(t);
 }
 
-/** A program found by a call: a python lookup is an interpreter; `command -v X` inside it names X (`spawnSync('sh', ['-c', 'command -v bash'])…`); a
- *  lookup of one literal (`which('bash')`, `realPath('python3')`) names that literal; a path join is a shell when its
- *  last literal names one (`join(bin, 'bash')`) and a script otherwise; anything else is a script. */
+/** A program found by a call: a python lookup is an interpreter; `command -v X` inside it names X
+ *  (`spawnSync('sh', ['-c', 'command -v bash'])…`); a lookup of one literal (`which('bash')`, `realPath('python3')`)
+ *  names that literal; a path join is a shell when its last literal names one (`join(bin, 'bash')`) and a script
+ *  otherwise; anything else is a script. */
 const callKind = (t: string): SpawnCommandKind => {
   // A python interpreter found by a lookup (`pythonOrSkip()`, `canonicalPython3()`): an interpreter, like node.
   if (/^[\w$.]*python\w*\(\s*\)$/i.test(t)) return 'plain';
