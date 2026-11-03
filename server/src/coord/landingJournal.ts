@@ -75,6 +75,7 @@ class Refusal extends Error {
   constructor(readonly word: LandingJournalIoFailure) { super(word); }
 }
 
+// `ops` is a TEST SEAM (fault injection and observation of the open flags): production passes only `ccrcDir`.
 export function createLandingJournal(ccrcDir: string, ops: LandingJournalFsOps = NODE_FS): LandingJournalPort {
   const leafPath = path.join(ccrcDir, LANDING_JOURNAL_BASENAME);
   const issued = new WeakMap<LandingJournalSnapshot, Evidence>();
@@ -120,7 +121,7 @@ export function createLandingJournal(ccrcDir: string, ops: LandingJournalFsOps =
   };
 
   /** The parent path still denotes the retained parent descriptor's directory. */
-  const parentUnchanged = (ev: Evidence): boolean => {
+  const parentUnchanged = (ev: { readonly parent: Ident }): boolean => {
     const fd = ops.openSync(ccrcDir, OPEN_DIR);
     try { return sameIdent(identOf(fd).id, ev.parent); } finally { close(fd); }
   };
@@ -164,6 +165,9 @@ export function createLandingJournal(ccrcDir: string, ops: LandingJournalFsOps =
         const parent = identOf(parentFd);
         if (!parent.isDir) throw new Refusal('unreadable');
         const leaf = openLeaf(OPEN_LEAF);
+        if (leaf !== null) leafFd = leaf.fd;
+        // the pathname still denotes the retained parent, so the leaf's absence or presence was measured in THAT directory
+        if (!parentUnchanged({ parent: parent.id })) throw new Refusal('unreadable');
         let ev: Evidence;
         let result: LandingJournalRead;
         if (leaf === null) {
@@ -172,7 +176,6 @@ export function createLandingJournal(ccrcDir: string, ops: LandingJournalFsOps =
           issued.set(snapshot, ev);
           result = { ok: true, kind: 'absent', snapshot };
         } else {
-          leafFd = leaf.fd;
           const bytes = readAll(leafFd);
           let body: string;
           try { body = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); } catch { throw new Refusal('unreadable'); }
@@ -235,6 +238,8 @@ export function createLandingJournal(ccrcDir: string, ops: LandingJournalFsOps =
           if (ev.leaf !== null && !readAll(fd).equals(ev.bytes)) return fail('changed');
         } catch (err) {
           if (errnoOf(err) === 'EEXIST') return fail('changed');
+          const code = errnoOf(err);
+          if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') return fail('unwritable');
           return fail(err instanceof Refusal ? err.word : 'unreadable');
         }
         // 3. one record, short writes continued

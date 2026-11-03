@@ -9,6 +9,7 @@ import {
   statSync, symlinkSync, writeFileSync, writeSync,
 } from 'node:fs';
 import path from 'node:path';
+import type { BigIntStats } from 'node:fs';
 import type { LandingJournalRecord, LandingSubjectRef } from '../../shared/landingLine.js';
 import { parseLandingJournal } from '../src/coord/landingJournalPolicy.js';
 import { createLandingJournal, type LandingJournalFsOps } from '../src/coord/landingJournal.js';
@@ -214,6 +215,8 @@ interface Call { op: string; path?: string; flags?: number; fd?: number; label?:
 const recording = (fault: Partial<{
   openSync: LandingJournalFsOps['openSync']; writeSync: LandingJournalFsOps['writeSync'];
   fsyncSync: (fd: number, real: () => void, label: string) => void;
+  fstatSync: (fd: number, real: () => BigIntStats, label: string) => BigIntStats;
+  readSync: (fd: number, real: () => number, label: string) => number;
 }> = {}): { ops: LandingJournalFsOps; calls: Call[] } => {
   const calls: Call[] = [];
   const labelOf = new Map<number, string>();
@@ -227,8 +230,10 @@ const recording = (fault: Partial<{
       call.fd = fd;
       return fd;
     },
-    fstatSync: (fd, o) => fstatSync(fd, o),
-    readSync: (fd, buf, off, len, pos) => readSync(fd, buf, off, len, pos),
+    fstatSync: (fd, o) => (fault.fstatSync !== undefined
+      ? fault.fstatSync(fd, () => fstatSync(fd, o), labelOf.get(fd) ?? '') : fstatSync(fd, o)),
+    readSync: (fd, buf, off, len, pos) => (fault.readSync !== undefined
+      ? fault.readSync(fd, () => readSync(fd, buf, off, len, pos), labelOf.get(fd) ?? '') : readSync(fd, buf, off, len, pos)),
     writeSync(fd, buf, off, len) {
       calls.push({ op: 'write', fd, label: labelOf.get(fd) });
       return fault.writeSync !== undefined ? fault.writeSync(fd, buf, off, len) : writeSync(fd, buf, off, len);
@@ -242,6 +247,26 @@ const recording = (fault: Partial<{
   };
   return { ops, calls };
 };
+
+/** Every descriptor a call log opened was closed exactly once, and nothing else was closed. */
+const expectBalanced = (calls: Call[]): void => {
+  const open = new Set<number>();
+  for (const c of calls) {
+    if (c.op === 'open' && c.fd !== undefined) open.add(c.fd);
+    if (c.op === 'close') {
+      expect(open.has(c.fd as number), `close of fd ${String(c.fd)} that is open`).toBe(true);
+      open.delete(c.fd as number);
+    }
+  }
+  expect([...open], 'descriptors left open').toEqual([]);
+};
+
+/** A child that opens a writer on the FIFO from 2 s on, repeatedly, so a BLOCKING reader open is released in bounded time
+ *  (a synchronous open of a FIFO with no writer cannot be rescued by a vitest timeout). */
+const spawnFifoWriter = (leaf: string) => spawn(process.execPath, ['-e',
+  "const fs = require('node:fs'); let n = 0; setTimeout(() => { const t = setInterval(() => { " +
+  "try { fs.closeSync(fs.openSync(process.argv[1], fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)); } catch {} " +
+  "if (++n > 12) clearInterval(t); }, 250); }, 2000);", leaf], { stdio: 'ignore' });
 
 describe('the journal adapter read (shared contract §2)', () => {
   it('leaf ENOENT with a measured parent is absent, and reading creates nothing', () => {
@@ -321,29 +346,92 @@ describe('the journal adapter read (shared contract §2)', () => {
   it.skipIf(!LINUX)('nonregular-journal-refuses', () => {
     const f = fx();
     execFileSync('mkfifo', [f.leaf]);
-    const r = createLandingJournal(f.dir).read();
-    expect(r.ok).toBe(false);
+    const child = spawnFifoWriter(f.leaf);
+    try {
+      const t0 = Date.now();
+      const { ops, calls } = recording();
+      expect(createLandingJournal(f.dir, ops).read()).toEqual({ ok: false, error: 'unreadable' });
+      expect(Date.now() - t0, 'the read waited for a writer').toBeLessThan(1000);
+      expectBalanced(calls);
+    } finally {
+      child.kill();
+    }
   });
 
   it.skipIf(!LINUX)('fifo-journal-refuses-without-blocking', () => {
     const f = fx();
     execFileSync('mkfifo', [f.leaf]);
-    const { ops, calls } = recording();
-    // The fixture opener observes the flags: a blocking open of a FIFO waits for a writer for ever.
-    expect(createLandingJournal(f.dir, ops).read()).toEqual({ ok: false, error: 'unreadable' });
-    const leafOpens = calls.filter((c) => c.op === 'open' && c.path === f.leaf);
-    expect(leafOpens.length).toBeGreaterThan(0);
-    for (const c of leafOpens) expect((c.flags ?? 0) & FS.O_NONBLOCK, 'the leaf open is nonblocking').toBe(FS.O_NONBLOCK);
-    // Real control: a blocking open would be ended by this child after 3 s, so the elapsed time is the red.
-    const unblock = "const fs = require('node:fs'); setTimeout(() => { try { fs.closeSync(fs.openSync(process.argv[1], " +
-      'fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)); } catch {} }, 3000);';
-    const child = spawn(process.execPath, ['-e', unblock, f.leaf], { stdio: 'ignore' });
+    // The writer child is started BEFORE the read: were the open blocking, the child would release it after about 2 s and the
+    // elapsed time (and the flag check) turn red, instead of the event loop hanging for ever.
+    const child = spawnFifoWriter(f.leaf);
     try {
       const t0 = Date.now();
-      expect(createLandingJournal(f.dir).read()).toEqual({ ok: false, error: 'unreadable' });
-      expect(Date.now() - t0, 'the read waited for a writer').toBeLessThan(1500);
+      const { ops, calls } = recording();
+      expect(createLandingJournal(f.dir, ops).read()).toEqual({ ok: false, error: 'unreadable' });
+      expect(Date.now() - t0, 'the read waited for a writer').toBeLessThan(1000);
+      // The fixture opener observes the flags too.
+      const leafOpens = calls.filter((c) => c.op === 'open' && c.path === f.leaf);
+      expect(leafOpens.length).toBeGreaterThan(0);
+      for (const c of leafOpens) expect((c.flags ?? 0) & FS.O_NONBLOCK, 'the leaf open is nonblocking').toBe(FS.O_NONBLOCK);
+      expectBalanced(calls);
     } finally {
       child.kill();
+    }
+  });
+
+  it('a nonregular leaf (injected fstat) is unreadable and closes its descriptors', () => {
+    const f = planted(LINE);
+    const { ops, calls } = recording({
+      fstatSync: (_fd, real, label) => {
+        const st = real();
+        if (label !== f.leaf) return st;
+        return { dev: st.dev, ino: st.ino, size: st.size, isFile: () => false, isDirectory: () => false } as unknown as BigIntStats;
+      },
+    });
+    expect(createLandingJournal(f.dir, ops).read()).toEqual({ ok: false, error: 'unreadable' });
+    expectBalanced(calls);
+  });
+
+  it('invalid UTF-8, a directory and a throwing read each close every descriptor', () => {
+    const bad8 = planted(Buffer.from([0x7b, 0xff, 0xfe, 0x0a]));
+    const a = recording();
+    expect(createLandingJournal(bad8.dir, a.ops).read()).toEqual({ ok: false, error: 'unreadable' });
+    expectBalanced(a.calls);
+
+    const dir = fx();
+    mkdirSync(dir.leaf);
+    const b = recording();
+    expect(createLandingJournal(dir.dir, b.ops).read()).toEqual({ ok: false, error: 'unreadable' });
+    expectBalanced(b.calls);
+
+    const thrown = planted(LINE);
+    const c = recording({ readSync: (_fd, _real, label) => { if (label === thrown.leaf) throw Object.assign(new Error('x'), { code: 'EIO' }); return 0; } });
+    expect(createLandingJournal(thrown.dir, c.ops).read()).toEqual({ ok: false, error: 'unreadable' });
+    expectBalanced(c.calls);
+  });
+
+  it('a parent swapped while the leaf is opened is unreadable, whether the leaf is present or absent', () => {
+    for (const present of [true, false]) {
+      const f = fx();
+      const dir = path.join(f.dir, 'sub');
+      mkdirSync(dir);
+      if (present) writeFileSync(path.join(dir, 'landing.log'), LINE);
+      let swapped = false;
+      const swap = (): void => {
+        if (swapped) return;
+        swapped = true;
+        renameSync(dir, path.join(f.dir, 'sub-moved'));
+        mkdirSync(dir);
+      };
+      const { ops, calls } = recording({
+        openSync: (p, flags, mode) => {
+          if (p !== path.join(dir, 'landing.log')) return openSync(p, flags, mode);
+          try { return openSync(p, flags, mode); } finally { swap(); }
+        },
+      });
+      expect(createLandingJournal(dir, ops).read(), present ? 'present leaf' : 'absent leaf').toEqual({ ok: false, error: 'unreadable' });
+      expect(swapped).toBe(true);
+      expectBalanced(calls);
     }
   });
 });
@@ -610,5 +698,68 @@ describe('the append (shared contract §2)', () => {
     expect(j.append(r.snapshot, REC2)).toMatchObject({ ok: false, error: 'changed', mayApply: true });
     expect(readFileSync(f.leaf, 'utf8')).toBe(`${LINE}${LINE}`);
     r.snapshot.release();
+  });
+});
+
+describe('the append: descriptor balance and open failures', () => {
+  it('a successful read-release and a successful append close every descriptor', () => {
+    const f = planted(LINE);
+    const a = recording();
+    const ja = createLandingJournal(f.dir, a.ops);
+    const ra = ja.read();
+    if (!ra.ok) throw new Error('read');
+    expect(ja.append(ra.snapshot, REC2)).toEqual({ ok: true });
+    expectBalanced(a.calls);
+  });
+
+  it('a failed append (fsync failure) closes every descriptor', () => {
+    const f = planted(LINE);
+    const { ops, calls } = recording({ fsyncSync: (_fd, real, label) => { if (label === f.leaf) throw Object.assign(new Error('x'), { code: 'EIO' }); real(); } });
+    const j = createLandingJournal(f.dir, ops);
+    const r = j.read();
+    if (!r.ok) throw new Error('read');
+    expect(j.append(r.snapshot, REC2)).toMatchObject({ ok: false, error: 'durability', mayApply: true });
+    expectBalanced(calls);
+  });
+
+  it('a changed append (replacement) closes every descriptor', () => {
+    const f = planted(LINE);
+    const { ops, calls } = recording();
+    const j = createLandingJournal(f.dir, ops);
+    const r = j.read();
+    if (!r.ok) throw new Error('read');
+    renameSync(f.leaf, path.join(f.dir, 'old.log'));
+    writeFileSync(f.leaf, LINE);
+    expect(j.append(r.snapshot, REC2)).toMatchObject({ ok: false, error: 'changed', mayApply: true });
+    expectBalanced(calls);
+  });
+
+  it('EACCES, EPERM and EROFS opening an existing journal for append are unwritable, with mayApply', () => {
+    for (const code of ['EACCES', 'EPERM', 'EROFS']) {
+      const f = planted(LINE);
+      const { ops, calls } = recording({
+        openSync: (p, flags, mode) => {
+          if (p === f.leaf && (flags & FS.O_APPEND) !== 0) throw Object.assign(new Error('x'), { code });
+          return openSync(p, flags, mode);
+        },
+      });
+      const j = createLandingJournal(f.dir, ops);
+      const r = j.read();
+      if (!r.ok) throw new Error('read');
+      expect(j.append(r.snapshot, REC2), code).toEqual({ ok: false, error: 'unwritable', mayApply: true });
+      expect(readFileSync(f.leaf, 'utf8')).toBe(LINE);
+      expectBalanced(calls);
+    }
+  });
+});
+
+describe('the parser: pinned edge words', () => {
+  it('a record missing v is a version failure', () => {
+    const { v: _v, ...noV } = entry(1, 1);
+    expect(parseLandingJournal(text(noV))).toEqual(bad('version', 1));
+  });
+
+  it('a whitespace-only tail with no newline is torn', () => {
+    expect(parseLandingJournal(`${JSON.stringify(entry(1, 1))}\n  `)).toEqual(bad('torn', 2));
   });
 });
