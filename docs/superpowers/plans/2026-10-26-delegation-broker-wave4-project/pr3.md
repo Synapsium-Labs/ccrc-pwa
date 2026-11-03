@@ -7,9 +7,12 @@ corrections (the arming summary and Q3). D-7022's definition stays unchanged for
 
 ## Status
 
-- **Review fix round 2 (2026-11-03), ruling 14389:** F1–F3 and A1–A6 are scoped for the final review. Implementation and targeted
-  proofs are in progress below; no new-head full gates, commit, push or exact-head fast CI are claimed yet. Round 1's results
-  remain historical. The full server suite remains unrun locally and soaks remain waived, not passed.
+- **Review fix round 2 (2026-11-03), ruling 14389:** F1–F3 and A1–A6 are implemented at `395ab628d`, with the targeted proofs below.
+  The armed growth, lane, three push-copy runs and compaction gates passed. Recovery is locally RED: its exhaustive halves cover
+  all 448 physical rows, with O5 and O1 timeout-only reds carried under rulings 14429 and 14440 after tip/main comparisons.
+  Its gate still requires exact-head fast CI to select and pass the file. All other named local gates passed, including the
+  remaining static checks and ledger preflight below. The final note commit, push and exact-head CI are pending.
+  Round 1's results remain historical. The full server suite remains unrun locally and soaks remain waived, not passed.
 - **Review fix round 1 (2026-11-03), PR #2191:** published head `dbedeb85c` has its original exact-head fast CI GREEN. The
   watcher-port correction and delegation-method census correction are committed and verified; their historical reds remain below.
   The current round addresses F1–F4, A1 and A3–A5 from review 1384. Its 24 required F3 mutants and the separate retainedFrom
@@ -224,6 +227,111 @@ merge is claimed.
   admission guard inside the close-latch consent. Round 1's A2/A6 remain deferred to the fold.
 
 Rider (coordinator rulings 14297 and fix round 2): an old-build-visible mechanism so an older build always refuses after a compaction needs a record-grammar change, so it is not PR3's; with it, the production shutdown awaiting closeDelegation, and recovery's handling of a stale carried file after an older helper's restore.
+
+### Round-2 final-gate campaign at `395ab628d`
+
+Each suite runs alone through `ccrc test --local`, with one worker, fixture HOME, contained `gh`, disk/resource/claim preflights,
+a 600 s foreground tool allowance and no wrapper deadline. No test-control setting or row timeout was changed.
+
+| Gate | Outer exit | Result | Outer duration |
+| --- | --- | --- | ---: |
+| Armed growth (`GROWTH_CHECK=1`) | 0 | 47 passed; watch 5,861 → 5,898 (+37 / +40), store +10; no waiver | 7.537 s |
+| Compaction lane | 0 | 18 passed | 47.198 s |
+| Push-copy, three sequential runs | 0 / 0 / 0 | 85 passed each | 115.605 / 122.491 / 121.324 s |
+| Compaction | 0 | 79 passed | 139.269 s |
+| Recovery, unchanged full file | 1 | 447 passed, one O5 timeout; locally RED | 652.103 s |
+| Coordination snapshot | 0 | 1,018 passed; slice-wide memory notice below | 118.172 s |
+| Wave-3 integration | 0 | 34 passed | 114.749 s |
+| Pass timing | 0 | 88 passed | 212.394 s |
+| Delegation watch, complete file | 0 | 304 passed; background move recorded below | 814.029 s |
+| Delta applier | 0 | 26 passed | 54.152 s |
+| Coordination store | 0 | 269 passed; two slice-wide OOM kills reported, exit 0 | 525.076 s |
+| Single-definition, 20 files | 0 | 1,047 passed | 26.470 s |
+| Rings plus coordination-policy rings, 12 files | 0 | 138 passed | 13.665 s |
+| Deviation references, after fetching main | 0 | 31 passed | 8.631 s |
+| Deviation placeholders | 0 | 1 passed | 0.382 s |
+| Ledger guard preflight | 0 | Both-number HEAD trailer parsed; authorized top-level plan edit covered | 0.036 s |
+
+The complete watcher run started at 17:51:22.112926 UTC and ended at 18:04:56.141691 UTC on 2026-11-03. At 600 s the tool
+moved this owned invocation to the background. Ruling 14446 extended 14419's wait protocol to this and later long gates: no
+second copy or other suite ran while it remained active. Its terminal notification and capture establish outer exit 0 and all
+304 passed. The 40-minute stop and two-half fallback were not needed. Default summary, verbatim:
+
+```text
+ Test Files  1 passed (1)
+      Tests  304 passed (304)
+   Start at  17:51:22
+   Duration  813.70s (transform 1.43s, setup 5ms, import 1.90s, tests 811.68s, environment 0ms)
+```
+
+The snapshot gate's stderr reported `ccrc test: the test slice's memory cap killed a process during this run
+(MemoryMax=6G, CCRC_TEST_SLICE_MEMORY_MAX; 2 OOM kill(s) in ccrctests.slice); exit 0`. Its measured outer exit was 0 and all
+1,018 assertions passed. This is a slice-wide notice, not attribution to this invocation; no process was investigated or stopped
+and no test-control setting changed. The notice and the O1 comparison were reported in mail 14444. The later store run,
+18:06:05.407359–18:14:50.482981 UTC, reported the same two-kill slice-wide notice with outer exit 0 and all 269 assertions passed;
+that notice likewise does not attribute a killed process to this invocation. No queue/wait notice appeared in these gates.
+
+The final static checks ran after the suites above, one at a time: single-definition at 18:15:22.833783 UTC, rings at
+18:15:59.299221 UTC, deviation references after fetching main at 18:16:36.778318 UTC, and placeholders at 18:16:49.144620 UTC.
+The ledger preflight at 18:21:26.666092–18:21:26.702188 UTC parsed the required reason naming both D-7869 and D-7878.
+These note-only verification updates change no production or test source. Exact-new-head CI remains pending.
+
+The full recovery run started at 16:40:38.430841 UTC and ended at 16:51:30.533480 UTC on 2026-11-03. The tool automatically
+moved it to the background after its foreground allowance; the owned invocation was left running and its eventual outer exit was
+measured. This was not a wrapper deadline or a stopped run. Its default summary remains:
+
+```text
+ Test Files  1 failed (1)
+      Tests  1 failed | 447 passed (448)
+   Start at  16:40:38
+   Duration  651.79s (transform 681ms, setup 6ms, import 906ms, tests 650.76s, environment 0ms)
+```
+
+The sole failure was O5's `SQLite is untouched at every edge before the directory fsync completes`, whose only stderr error was
+`Error: Test timed out in 20000ms.` The physical row reported 21.276488 s. Rulings 14423 and 14429 authorized the unchanged
+isolated comparisons below, then two exhaustive halves rather than another full-file run.
+
+| Isolated O5 | Commit | Outer exit | Row duration | Outer duration | Pre-run load1 | UTC start–end |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| Tip | `395ab628d` | 0 | 18.126894 s | 20.021 s | 7.53 | 16:59:46.325935–17:00:06.347186 |
+| Parent | `8a255e4bf` | 1 | 21.194438 s | 23.311 s | 6.63 | 17:00:53.559012–17:01:16.869688 |
+| Main | `665239802` | 1 | 21.057234 s | 23.191 s | 7.88 | 17:05:43.999481–17:06:07.191012 |
+
+Each comparison selected exactly that row and skipped 447. Parent and main had the same 20 s timeout only. The tip passed but
+was not under the earlier 10 s criterion; no load-flake classification is claimed. Main met ruling 14429(a)'s fixed duration
+comparison, so its existing per-row bound was reported as main-red and carried, not changed. The executable round-2 watch changes
+are not invoked by this matrix; the checkpoint and journal changes in this round are comments only.
+
+The two half selectors were anchored alternations of unique full physical names, balanced by the full run's measured durations.
+Both Python and JavaScript selection checks were made before execution. Actual executed-name multisets, not just planned names,
+prove 224 + 224 = 448, with zero overlap or omission. The authorized half-1 repeat selected exactly the same 224 names.
+
+| Recovery measurement | Outer exit | Passed / failed / intentionally skipped | Sole failed row | Row duration | Outer duration | Pre-run load1 | UTC start–end |
+| --- | ---: | --- | --- | ---: | ---: | ---: | --- |
+| Half 1 | 1 | 223 / 1 / 224 | O5 directory-fsync matrix | 20.054374 s | 421.047 s | 5.92 | 17:08:10.933961–17:15:11.991514 |
+| Half 1, authorized once-alone repeat | 1 | 223 / 1 / 224 | Same O5 row | 20.379590 s | 427.992 s | 7.79 | 17:15:53.424903–17:23:01.417580 |
+| Half 2 | 1 | 223 / 1 / 224 | D-4658's O1 batch-door crash row | 20.040970 s | 427.739 s | 8.39 | 17:23:18.003304–17:30:25.742851 |
+
+Every RED above was timeout-only at the unchanged 20 s bound. O1's new timeout was reported before further tests. Ruling 14440
+required that row alone once at tip and once at main, expressly not another half-2 run:
+
+| Isolated O1 | Commit | Outer exit | Row duration | Outer duration | Pre-run load1 | UTC start–end |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| Tip | `395ab628d` | 1 | 21.155043 s | 22.358 s | 6.30 | 17:35:50.808590–17:36:13.166786 |
+| Main | `f39f74ec4` | 1 | 20.075640 s | 21.746 s | 9.00 | 17:40:47.401327–17:41:09.147627 |
+
+Both selected only O1 and skipped 447; each had only `Error: Test timed out in 20000ms.` in stderr. The tip/main row-duration
+ratio is 1.053767, below 1.5, so O1 is carried at its existing bound under 14440. The JSON failure text contains Vitest's
+`STACK_TRACE_ERROR`; the timeout classification comes from the captured stderr, not a fabricated JSON message. An initial
+read-only evidence extractor assumed the status word `pending` rather than the reporter's actual `skipped` and stopped before
+writing or cleanup; correcting the extraction did not rerun a test. All three comparison worktrees were inspected clean and
+had their borrowed dependency symlink removed before worktree removal (each exit 0). No real queue/wait notice appeared;
+skipped test titles containing “queued” are not runner notices.
+
+Recovery is **not locally green**. Rulings 14429 and 14440 carry its two timeout-only rows after those comparisons; the gate
+also requires the exact-head fast CI to select and pass `delegation-recovery.test.ts`. Omission or RED goes to the coordinator
+before wave-done. The original 652 s RED and all half/comparison exits remain part of this record. The full server suite remains
+unrun locally; soaks remain waived, not passed.
 
 ## Phase B verification
 
