@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import { detachUrls } from '../src/docs/docsLinks';
@@ -27,23 +27,17 @@ import { parseMarkdown } from '../src/lib/markdownParse';
 import { COMMIT_A, SERVED, entry, pageAt, treeOk } from '../test/docsFixtures';
 import { resolveChrome, startOrigins, type OriginHit, type Origins } from './harness';
 
-// This config reads no `vite.config.ts`, so Vite's file-system fence refuses `@ccrc/ui`'s `.css?raw`. The stylesheet module
-// is replaced by one that reads the same three files from disk and strips them as `exportStylesheetPart` does, so the file
-// under test still carries the real stylesheet text.
-vi.mock('../src/docs/export/stylesheet', async () => {
-  const { readFileSync } = await import('node:fs');
-  const read = (rel: string): string => readFileSync(new URL(rel, import.meta.url), 'utf8');
-  const part = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, '').replace(/@font-face\s*\{[^}]*\}/g, '').trim();
-  const parts = ['../../ui/src/styles/tokens.css', '../../ui/src/components/prose.css', '../src/docs/export/export.css'].map((f) => part(read(f)));
-  return { exportStylesheetPart: part, EXPORT_CSS: parts.join('\n') };
-});
-
 const SETTLE_MS = 1500;
 const COOKIE = { name: 'ccrc_demo', value: 'a' } as const;
-type Build = 'production' | 'construction' | 'meta' | 'control';
-const BUILDS: readonly Build[] = ['production', 'construction', 'meta', 'control'];
+type Build = 'production' | 'construction' | 'meta' | 'control' | 'meta-click' | 'control-click';
+const BUILDS: readonly Build[] = ['production', 'construction', 'meta', 'control', 'meta-click', 'control-click'];
+/** The two refresh-free string pages, the only ones whose planted button and link are still on the page when they are
+ *  clicked (every other raw corpus carries a `meta refresh 0`, which leaves for B first). */
+const CLICK_BUILDS: readonly Build[] = ['meta-click', 'control-click'];
 /** The channels that fetch, by the path each plants on B; and the two that navigate. */
+/** The fetch-type channels that need no click, each of which the control must reach for the meta build's closure to mean something. */
 const FETCH_PATHS = ['/img.png', '/raw-img.png', '/import.css', '/bg.png', '/prefetch', '/preload', '/sheet.css', '/object', '/embed', '/iframe', '/form'];
+const CLICK_PATHS_FREE = FETCH_PATHS.filter((p) => p !== '/form');
 const NAVIGATION_PATHS = ['/refresh', '/planted'];
 /** What Chrome asks of a page a navigation landed on (its icon): a consequence of the navigation, not a channel of the file. */
 const LANDING_PATHS = ['/favicon.ico'];
@@ -54,10 +48,10 @@ let dir: string;
 const html: Partial<Record<Build, string>> = {};
 
 /** The hostile corpus, every channel aimed at `b`, as raw HTML (a string page's body) and as Markdown (the export's). */
-function corpus(b: string): { raw: string; markdown: string; heading: string } {
-  const heading = `Report </title><meta http-equiv="refresh" content="0;url=${b}/refresh">`;
+function corpus(b: string, refresh = true): { raw: string; markdown: string; heading: string } {
+  const heading = refresh ? `Report </title><meta http-equiv="refresh" content="0;url=${b}/refresh">` : 'Report';
   const raw = [
-    `<meta http-equiv="refresh" content="0;url=${b}/refresh">`,
+    ...(refresh ? [`<meta http-equiv="refresh" content="0;url=${b}/refresh">`] : []),
     `<img src="${b}/raw-img.png" alt="r">`,
     `<style>@import url(${b}/import.css); body { background: url(${b}/bg.png) }</style>`,
     `<link rel="prefetch" href="${b}/prefetch"><link rel="preload" href="${b}/preload" as="image"><link rel="stylesheet" href="${b}/sheet.css">`,
@@ -101,8 +95,8 @@ const EMPTY_STORE: HighlightStore = {
 };
 
 /** The corpus interpolated into a string page, with or without the production CSP meta. */
-function stringPage(b: string, meta: boolean): string {
-  const { raw, heading } = corpus(b);
+function stringPage(b: string, meta: boolean, refresh = true): string {
+  const { raw, heading } = corpus(b, refresh);
   const csp = meta ? `<meta http-equiv="Content-Security-Policy" content="${DOCS_EXPORT_CSP}">` : '';
   return `<!doctype html><html><head><meta charset="utf-8">${csp}<title>${heading}</title></head>`
     + `<body><h1>${heading}</h1><img src="${b}/img.png" alt="img">${raw}</body></html>`;
@@ -118,6 +112,8 @@ beforeAll(async () => {
   html.construction = prod.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, '');
   html.meta = stringPage(o.b, true);
   html.control = stringPage(o.b, false);
+  html['meta-click'] = stringPage(o.b, true, false);
+  html['control-click'] = stringPage(o.b, false, false);
   dir = mkdtempSync(path.join(tmpdir(), 'ccrc-export-b9-'));
   for (const n of BUILDS) writeFileSync(path.join(dir, `${n}.html`), html[n] ?? '');
   browser = await chromium.launch({ executablePath, headless: true, args: ['--disable-features=LocalNetworkAccessChecks'] });
@@ -129,18 +125,18 @@ afterAll(async () => {
   if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
 });
 
-/** Opens `build` top-level from `where`, clicks the planted link and button if they exist, waits, and answers every hit
- *  any origin received meanwhile. */
-async function openAndWatch(build: Build, where: 'file' | 'a'): Promise<OriginHit[]> {
+/** Opens `build` top-level from `where`, clicks `click` when given (one click a page: a submit leaves it), waits, and answers every hit any origin received meanwhile. A click build
+ *  clicks the planted button and link, and a missing element FAILS (it never skips): a click that did not happen would
+ *  leave the channel it carries unproven. */
+async function openAndWatch(build: Build, where: 'file' | 'a', click: '#planted-submit' | '#planted' | null = null): Promise<OriginHit[]> {
   const ctx = await browser.newContext();
   await ctx.addCookies([{ ...COOKIE, url: o.a }]);
   const tab = await ctx.newPage();
   const from = o.hits.length;
   const url = where === 'file' ? pathToFileURL(path.join(dir, `${build}.html`)).href : `${o.a}/export/${build}.html`;
   await tab.goto(url, { waitUntil: 'load' }).catch(() => undefined);
-  for (const id of ['#planted-submit', '#planted']) {
-    if (await tab.locator(id).count().catch(() => 0) > 0) await tab.locator(id).click({ timeout: 2000 }).catch(() => undefined);
-  }
+  if (CLICK_BUILDS.includes(build) !== (click !== null)) throw new Error(`${build}: a click build names its click, and no other does`);
+  if (click !== null) await tab.locator(click).click({ timeout: 5000, noWaitAfter: true }); // a missing element fails here, it never skips
   await tab.waitForTimeout(SETTLE_MS);
   await ctx.close();
   return o.hits.slice(from);
@@ -148,7 +144,6 @@ async function openAndWatch(build: Build, where: 'file' | 'a'): Promise<OriginHi
 
 const onB = (hits: readonly OriginHit[]): OriginHit[] => hits.filter((h) => h.origin === 'b');
 const onApi = (hits: readonly OriginHit[]): OriginHit[] => hits.filter((h) => h.origin === 'a' && h.path.startsWith('/api/'));
-const fetchType = (h: OriginHit): boolean => FETCH_PATHS.some((p) => h.path.startsWith(p));
 
 describe('M5.B9: the hostile export opened top-level (spec 2026-10-01 5.8)', () => {
   it('the production file holds none of the corpus as an element (the precondition of what follows)', () => {
@@ -170,12 +165,34 @@ describe('M5.B9: the hostile export opened top-level (spec 2026-10-01 5.8)', () 
 
   it.each(['file', 'a'] as const)('meta only (a string page under the meta), opened from %s: every fetch-type channel closed; only navigation, by name', async (where) => {
     const hits = await openAndWatch('meta', where);
-    expect(onB(hits).filter((h) => ![...NAVIGATION_PATHS, ...LANDING_PATHS].some((p) => h.path.startsWith(p)))).toEqual([]);
+    expect(onB(hits).filter((h) => !NAVIGATION_PATHS.some((p) => h.path.startsWith(p)) && !LANDING_PATHS.some((p) => h.path.startsWith(p)))).toEqual([]);
     expect(onApi(hits)).toEqual([]);
   });
 
-  it.each(['file', 'a'] as const)('CONTROL: the string page with no meta, opened from %s, reaches B on a fetch-type channel', async (where) => {
+  it.each(['file', 'a'] as const)('meta only, refresh-free, the form submitted, opened from %s: nothing reaches B', async (where) => {
+    const hits = await openAndWatch('meta-click', where, '#planted-submit');
+    expect(onB(hits)).toEqual([]);
+    expect(onApi(hits)).toEqual([]);
+  });
+
+  it.each(['file', 'a'] as const)('meta only, refresh-free, the link clicked, opened from %s: only that navigation reaches B, by name', async (where) => {
+    const hits = await openAndWatch('meta-click', where, '#planted');
+    expect(onB(hits).filter((h) => !LANDING_PATHS.some((p) => h.path.startsWith(p))).map((h) => h.path)).toEqual(['/planted']);
+    expect(onApi(hits)).toEqual([]);
+  });
+
+  it.each(['file', 'a'] as const)('CONTROL: the string page with no meta, opened from %s, reaches B on every fetch-type channel that needs no click', async (where) => {
     const hits = await openAndWatch('control', where);
-    expect(onB(hits).some(fetchType)).toBe(true);
+    expect(CLICK_PATHS_FREE.filter((p) => !onB(hits).some((h) => h.path.startsWith(p)))).toEqual([]);
+  });
+
+  it.each(['file', 'a'] as const)('CONTROL: the refresh-free string page with no meta, the form submitted, opened from %s, reaches B on /form', async (where) => {
+    const hits = await openAndWatch('control-click', where, '#planted-submit');
+    expect(onB(hits).some((h) => h.path.startsWith('/form'))).toBe(true);
+  });
+
+  it.each(['file', 'a'] as const)('CONTROL: the same page, the link clicked, opened from %s, reaches B on /planted', async (where) => {
+    const hits = await openAndWatch('control-click', where, '#planted');
+    expect(onB(hits).some((h) => h.path.startsWith('/planted'))).toBe(true);
   });
 });

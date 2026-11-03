@@ -10,6 +10,12 @@ import { defineConfig } from 'vitest/config';
 import { SlowFirstSequencer } from './browser/slowFirst.js';
 
 export default defineConfig({
+  // This config is a standalone defineConfig: it does not inherit vite.config.ts, so the allow list is stated again here.
+  // pwa has no workspace root above it, so the dev server and vitest would allow pwa/ alone, and @ccrc/ui resolves
+  // through its symlink to ../ui: a `?raw` read of its stylesheets (docs/export/stylesheet.ts) is refused outside
+  // the allow list. Setting `allow` replaces the default, so '.' keeps pwa's own root. The production build is not
+  // affected.
+  server: { fs: { allow: ['.', '../ui'] } },
   test: {
     include: ['browser/**/*.browser.test.{ts,tsx}'],
     environment: 'jsdom',
