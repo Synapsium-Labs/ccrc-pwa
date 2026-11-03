@@ -13045,3 +13045,16 @@ export interface AccountSignOutAnswer {
   readonly signOut: 'removed' | 'absent';
   readonly lane: LaneWire;
 }
+
+/** `FleetHealth`'s backup block (D-7858), at the foot as an interface merge, the disk block's rule, so no line cited
+ *  above moves. */
+import type { BackupHealth } from './backup.js';
+export interface FleetHealth {
+  /**
+   * The fleet box's backup health (`BackupHealth`): the status the decider judged from the backup state files on the
+   * last read, the last success, failure, skip and warning, and the staleness. Optional for the absence-permits reason:
+   * an older server, an agent without the `backup` op, or no read yet omits it. Read it through `readBackupHealth`
+   * alone; absent reads as UNKNOWN, never as a healthy backup and never as an alarm.
+   */
+  backup?: BackupHealth;
+}

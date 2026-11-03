@@ -81,6 +81,8 @@ import type { MeasuredDirectoryRead } from './io.js';
 import { TmpCensusBeat } from './tmpSweepLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
 import { PressureLane } from './pressureLane.js';
+import { BackupLane } from './backupLane.js';
+import type { BackupHealth } from '../../shared/backup.js';
 import { TestboxLane } from './testboxLane.js';
 import type { HostPressureHealth } from '../../shared/pressure.js';
 import type { DiskHealth } from '../../shared/disk.js';
@@ -1065,6 +1067,8 @@ export class FleetWatcher {
   private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
   /** The host-pressure beat (#1170): its last reading classifies a stalled link. */
   private readonly pressureLane = new PressureLane(() => this.deps);
+  /** The backup-health beat (D-7858): the last read of the backup state files, judged when the block is read. */
+  private readonly backupLane = new BackupLane(() => this.deps);
   /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
   readonly testboxLane = new TestboxLane(() => this.deps);
   private readonly tmpCensus = new TmpCensusBeat(() => this.deps);
@@ -2010,6 +2014,10 @@ export class FleetWatcher {
   pressure(linkUp: boolean): HostPressureHealth | null { return this.pressureLane.block(linkUp); }
   /** The host-pressure beat (#1170). PUBLIC for the reason `sweepDisk` is: `tick()` dispatches it with `void`. */
   async sweepPressure(): Promise<void> { await this.pressureLane.sweep(); }
+  /** `FleetHealth.backup` (D-7858); `null` before the first read landed (absence is UNKNOWN). */
+  backup(): BackupHealth | null { return this.backupLane.block(); }
+  /** The backup-health beat (D-7858). PUBLIC for the reason `sweepDisk` is: `tick()` dispatches it with `void`. */
+  async sweepBackup(): Promise<void> { await this.backupLane.sweep(); }
 
   /** What the lane last concluded, for tests and diagnostics: nothing here is wire. */
   delegationReport() {
@@ -2436,6 +2444,8 @@ export class FleetWatcher {
       void this.sweepDisk().catch(() => { /* one bad sweep must not kill the poll */ });
       // The host-pressure beat (#1170), above the fail-shut return for the same reason: a thrash is when that read fails.
       void this.sweepPressure();
+      // The backup-health beat (D-7858) reads no registry either, so it sits with the two above and never waits behind it.
+      void this.sweepBackup();
       // The test box's poll (D-7411), above the fail-shut return too: it lists the registry itself. Own clock, never awaited.
       void this.testboxLane.sweep();
       // The tmp sweep's census (D-6624) sits beside it for the same reason: a file read, and the holders are wanted

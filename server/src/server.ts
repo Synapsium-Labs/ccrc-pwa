@@ -1289,6 +1289,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const disk = watcher?.disk() ?? undefined;
     // The host's PSI and the link's classification by it (#1170). Local mode has no link: it is always up.
     const psi = watcher?.pressure(deps.cfg.fleetMode !== 'remote' || deps.fleetState?.connected === true) ?? undefined;
+    // The fleet box's backup health (D-7858), judged now from the last read. Absent before one landed: UNKNOWN.
+    const backup = watcher?.backup() ?? undefined;
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       // The two stamps: with a coordination database, the inventory's rows —
       // re-measured every minute by `sweepInventory`, superseded rows excluded
@@ -1314,6 +1316,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         ...(archivedHeld ? { archivedHeld } : {}),
         ...(disk ? { disk } : {}),
         ...(psi ? { psi } : {}),
+        ...(backup ? { backup } : {}),
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1338,6 +1341,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       ...(archivedHeld ? { archivedHeld } : {}),
       ...(disk ? { disk } : {}),
       ...(psi ? { psi } : {}),
+      ...(backup ? { backup } : {}),
     };
   });
 
