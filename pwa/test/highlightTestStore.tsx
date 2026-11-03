@@ -10,14 +10,17 @@
 //   - `withSyncStore(node, store?)`: a `PreHighlightContext` provider, for a `CodeBlock` or a renderer drawn directly.
 //   - `inThreadHighlighter({hold})`: a `Highlighter` that answers through the worker's own answerer in-thread, one
 //     microtask later, or when the test calls `release()`; `inThreadContext(...)`: production stores over two of them,
-//     so a test runs the real store, its ceilings and its check, and waits for the colours.
+//     on a frozen clock unless the case hands one in, so a test runs the real store, its counting ceilings and its
+//     check, and waits for the colours.
 // This file is under `pwa/test`; nothing under `pwa/src` imports it (M4.H17, `docs-scans.test.ts`).
 import type { ReactNode } from 'react';
 import { HLJS } from '../src/lib/highlightGrammars';
 import { createHighlightAnswerer } from '../src/lib/highlightJob';
 import type { Highlighter, HighlighterStatus, HighlightOutcome, HighlightReply, HighlightRequest } from '../src/lib/highlightProtocol';
-import { HighlighterContext, createProductionStore, type HighlighterContextValue } from '../src/lib/highlighterContext';
-import { UNREQUESTED_ENTRY, blockKey, checkHighlightHtml, type HighlightEntry, type HighlightStore } from '../src/lib/highlightStore';
+import { HighlighterContext, type HighlighterContextValue } from '../src/lib/highlighterContext';
+import {
+  UNREQUESTED_ENTRY, blockKey, checkHighlightHtml, createHighlightStore, type HighlightClock, type HighlightEntry, type HighlightStore,
+} from '../src/lib/highlightStore';
 import { PreHighlightContext } from '../src/lib/markdown';
 import { MD_HIGHLIGHT_MAX_HTML_CHARS } from '../src/lib/markdownLimits';
 
@@ -105,14 +108,18 @@ export const SYNC_HIGHLIGHT: HighlighterContextValue = {
   docs: inThreadHighlighter(), chat: inThreadHighlighter(), createStore: (_h, mode) => syncTestStore(mode),
 };
 
-/** Production stores over in-thread highlighters (by default two fresh ones), and, when given, a `publish` slot. */
+/** A clock that stands still: `now` is 0 and its timers never fire, so the page worker-time ceiling (3 000 ms of wall
+ *  time in production) cannot trip in a rendered case on a loaded box. A case that measures the ceiling passes its own. */
+export const FROZEN_CLOCK: HighlightClock = { now: () => 0, setTimer: () => 0, clearTimer: () => undefined };
+
+/** Production stores (part 1's bounds and the ceilings on) over in-thread highlighters (by default two fresh ones), on
+ *  `clock` (by default `FROZEN_CLOCK`), and, when given, a `publish` slot. */
 export function inThreadContext(
   docs: Highlighter = inThreadHighlighter(), chat: Highlighter = inThreadHighlighter(),
-  publish?: (store: HighlightStore | null) => void,
+  publish?: (store: HighlightStore | null) => void, clock: HighlightClock = FROZEN_CLOCK,
 ): HighlighterContextValue {
-  return publish === undefined
-    ? { docs, chat, createStore: createProductionStore }
-    : { docs, chat, createStore: createProductionStore, publish };
+  const createStore = (h: Highlighter, mode: 'docs' | 'chat'): HighlightStore => createHighlightStore(h, { mode }, clock);
+  return publish === undefined ? { docs, chat, createStore } : { docs, chat, createStore, publish };
 }
 
 export function withSyncHighlight(node: ReactNode): ReactNode {
