@@ -1055,13 +1055,16 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(bound).toHaveLength(1);
     expect(Number(bound[0]!.slice('TimeoutStartSec='.length))).toBeGreaterThan(30);
     expect(Number(bound[0]!.slice('TimeoutStartSec='.length))).toBeLessThan(BOX_SETTINGS_TIMER_S);
-    // The comment's arithmetic: du 20 s and df 10 s, each through `_plat_timeout`, which adds its TERM-to-KILL grace (default 3 s,
-    // clamped to 2..8): 26 s by default and 36 s at worst, never "thirty" (review 1385 A2).
+    // The comment's arithmetic: du 20 s then df 10 s, each through `_plat_timeout`, which cannot return before its seconds plus the
+    // TERM-to-KILL grace (default 3 s, clamped to 2..8): 30 s before any grace, 36 s at the default and 46 s at the clamp (review
+    // 1396 F3, correcting review 1385 A2's 26 and 36).
     const prose = unit.filter((l) => l.startsWith('#')).join(' ');
-    expect(prose).toContain('about 26 seconds by default');
+    expect(prose).toContain('30 s before any grace, 36 s at the default grace and 46 s at the clamp');
     expect(prose).toContain('CCD_TIMEOUT_KILL_AFTER');
-    expect(prose).toContain('36 at the worst');
+    expect(prose).not.toContain('about 26 seconds');
     expect(prose).not.toContain('worst case is thirty seconds');
+    // A shell-only export is not the timer's (review 1396 F10): the comment never says the two runs resolve the same values.
+    expect(prose).not.toContain('resolve the same values');
     // The PATH is prepended in ExecStart, never set; no environment of its own (W24-P5 pins the CCRC_ half).
     expect(unit.some((l) => l.startsWith('Environment=') || l.startsWith('EnvironmentFile='))).toBe(false);
   });

@@ -165,8 +165,9 @@ describe('ccrc settings: a refused value reads refused, with the act\'s own sent
   it('CCRC_UPDATE_DEADLINE_MS=6e5: refused; the sentence gives the plain reading AS the plain reading, beside the min and max the acts read (F2)', () => {
     const d = json(boxWith('ccrc-sv-rf5-'), { CCRC_UPDATE_DEADLINE_MS: '6e5' });
     expect(rowOf(d, 'CCRC_UPDATE_DEADLINE_MS')).toEqual({ key: 'CCRC_UPDATE_DEADLINE_MS', state: 'refused', value: '6e5', from: 'environment',
-      why: 'CCRC_UPDATE_DEADLINE_MS is not a positive whole number of milliseconds in canonical digits (at most 15, no lead zero), so its plain reading is 900000; the backup prune reads the min and the watchdog the max, shown on the deadline line' });
+      why: 'CCRC_UPDATE_DEADLINE_MS is not a positive whole number of milliseconds in canonical digits (at most 15, no lead zero), so its plain reading is 900000; the backup prune and the watchdog read the min and the max, which ccrc settings prints' });
     expect(rowOf(d, 'CCRC_UPDATE_DEADLINE_MS').why, 'no act reads the plain form').not.toContain('the acts read');
+    expect(rowOf(d, 'CCRC_UPDATE_DEADLINE_MS').why, 'the card has no deadline line (review 1396 F2)').not.toContain('deadline line');
     expect(d.deadline.plainMs).toBe(900000);
     expect(d.deadline.minMs, 'min is 0 when a reading cannot be decided').toBe(0);
   });
@@ -207,10 +208,10 @@ describe('ccrc settings: a ccrc.env the reader cannot take is unmeasured, never 
     }
   });
 
-  // Each platform's own reader (`_ccrc_knob`): systemd's names only the key on the bad line; on macOS the launchd job sources
-  // the whole file with bash, so the shell reader refuses every key that job reads, CCRC_BACKUP_DATA_KEEP among them (as CI's
-  // macOS leg measured on this row).
-  it('an inner CR makes only the keys the file names unmeasured', () => {
+  // Each platform's own reader (`_ccrc_knob`). On Linux the systemd reader makes only the key on the bad line unmeasured. On macOS the
+  // launchd job sources the whole file with bash, so the shell reader refuses the backup keys that job reads: here CCRC_BACKUP_KEEP and
+  // CCRC_BACKUP_DATA_KEEP, which the file never names (as CI's macOS leg measured on this row); CCRC_VERSIONS_KEEP stays ok on both.
+  it('an inner CR: on Linux only the key on that line is unmeasured, on macOS the two backup keys the launchd job reads', () => {
     const d = json(boxWith('ccrc-sv-cr-', 'CCRC_BACKUP_KEEP=5\rjunk\nNOTE=1\n'));
     expect(rowOf(d, 'CCRC_BACKUP_KEEP').state).toBe('unmeasured');
     expect(d.settings.filter((s) => s.state === 'unmeasured').map((s) => s.key))
@@ -387,6 +388,10 @@ describe('ccrc settings: _upd_url_origin', () => {
       return { code: r.status, out: r.stdout };
     };
     for (const u of ['tok/abc@m', 'https://deploy:s3cr/et@mirror.example.invalid/r', 'https://u:pw@host:99/p@q']) expect(rc(u), u).toEqual({ code: 1, out: '' });
+    // Review 1396 F1: whitespace, or another byte `_upd_redact` starts a token at, in the RAW value: rc 1, nothing printed. Before the
+    // fix the first three printed `https://u:p h`, `https://u:p<TAB>h` and `https://user h`.
+    for (const u of ['https://u:p w@h/r', 'https://u:p\tw@h/r', 'https://user name:pw@h/r', 'https://u:p\nw@h/r', 'https://u:p"w@h/r',
+      "https://u:p'w@h/r", 'https://u:p<w@h/r', 'https://u:p(w@h/r', 'https://u:p`w@h/r', 'https://h/r x']) expect(rc(u), JSON.stringify(u)).toEqual({ code: 1, out: '' });
     for (const u of ['https://h/p', 'h/p', 'http://h:8080/a']) expect(rc(u).code, u).toBe(0);
   });
 });
@@ -402,6 +407,10 @@ describe('ccrc settings: a release base whose userinfo survives the redaction re
     'tok/abc@m',
     'https://u:pw@host:99/p@q',
     'https://u:p@[::1]:8080/x?y=z@w#f',
+    // Review 1396 F1: a userinfo that holds whitespace; the real verb recorded `custom https://deploy:pa mirror.example.invalid`.
+    'https://deploy:pa ss@mirror.example.invalid/r',
+    'https://deploy:pa\tss@mirror.example.invalid/r',
+    'https://deploy name:pw@mirror.example.invalid/r',
   ])('%s reads exactly `custom`, in the JSON, the file and the human form', (url) => {
     const home = boxWith('ccrc-sv-url-at-');
     const r = settings(home, ['--json', '--write'], { CCRC_RELEASE_BASE_URL: url });
@@ -707,9 +716,11 @@ describe('ccrc settings --write: the file', () => {
 
   // The two SIGTERM rows are ordered by a handshake the test controls, never a sleep (fix round 1b): the stubbed step marks
   // `$HOME/hs/<name>-ready` once the temp file stands, then waits for `$HOME/hs/release`, which the test writes only after the
-  // signal is sent; `<name>-done` says the step (orphaned or not) has finished. Bash may act on the signal at once, or only once its
-  // foreground child returns; both orders are covered, and neither depends on how long anything takes. A stub acts only on the temp
-  // file and is the real command otherwise. D-7875 records what is promised.
+  // signal is sent; `<name>-done` says the step (orphaned or not) has finished. The `mv` may finish after the EXIT chain has run (the
+  // chain runs on the signal and the step it was waiting on can outlive it), and nothing here depends on how long anything takes. A
+  // stub acts only on the temp file and is the real command otherwise. D-7875 records what is promised. What each row guards (review
+  // 1396 F7): the chmod row guards the EXIT chain (with `_tmp_guard` gone its temp file stays); the rename row pins only "no temp
+  // file, never partial", because a rename that finishes consumes the temp file itself, so it stays green without the chain.
   const gated = (name: string): string => `#!/bin/sh\ncase "$*" in *box-settings.json.tmp.*) ;; *) exec ${REAL(name)} "$@" ;; esac\n`
     + `: > "$HOME/hs/${name}-ready"\ni=0\nwhile [ ! -e "$HOME/hs/release" ] && [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done\n`
     + `${REAL(name)} "$@"; rc=$?\n: > "$HOME/hs/${name}-done"\nexit "$rc"\n`;

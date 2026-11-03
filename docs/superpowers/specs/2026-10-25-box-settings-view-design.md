@@ -1,6 +1,6 @@
 # Box settings in the console
 
-**Spec** · 2026-10-25 · Status: Draft, revision 3 · Owner: the coordinator · Issue: #1417 · Related:
+**Spec** · 2026-10-25 · Status: Draft, revision 4 · Owner: the coordinator · Issue: #1417 · Related:
 `docs/superpowers/plans/2026-10-23-centralised-update-w24-settings-live-in-ccrc-config.md` (#1237),
 `docs/superpowers/specs/2026-09-20-centralised-update-management-design.md`,
 `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`,
@@ -28,6 +28,9 @@ the new timer on every Linux box, the five-minute cadence, and the new verb.
 - Revision 2 folded in an adversarial design review: two critical findings, five important and seven minor.
 - Revision 3 aligns the design with the DDD/Clean/SOLID refactor in flight: the rings, decide-in-L1, the shared
   kernels, refusal and wire totality, and the bash anti-corruption layer. Four Opus lenses checked it, each verified.
+- Revision 4 (2026-11-03, the coordinator's ruling on review 1396, F8; plan D-7874): §2.4's closed list of failure words
+  gains an eighth, `unmeasured`, for a node the server holds no read of since it started. `unreadable` stays only for a
+  read that was tried and failed. The build carried the word before the spec did; this revision makes the spec true.
 
 Changes from either revision are marked "(review)" or "(refactor)".
 
@@ -183,6 +186,8 @@ after `sweepInventory`), using that sweep's caps and node ids. It has no clock, 
 **Where the reads are kept.** The last read per node is lane state that FleetWatcher owns, never module scope.
 - On each inventory run, the read for each node the sweep reached is overwritten.
 - A node the sweep could not reach keeps its last read, so its age grows into `stale`.
+- A node the server has not read since it started holds no read, and answers `unmeasured` (revision 4). A read that was
+  tried and failed answers its own word, never `unmeasured`.
 - An entry whose node id is no longer in `coord.nodes()`, after a rekey or a removal, is dropped.
 
 **How it is served.** `GET /api/updates` joins the held read into each node's `NodeWire.settings` through
@@ -199,6 +204,7 @@ read every sweep with the other caps.
 |---|---|---|
 | A node whose measured caps lack `settings` (an older build, or macOS) | `not-supported` | "This box's build does not report its settings" |
 | A node whose caps could not be measured this sweep | `caps-unmeasured` | "This box's capabilities could not be read, so its settings were not read" |
+| The server holds no read of this node since it started (revision 4) | `unmeasured` | "Not read since the server started." |
 | No file | `absent` | "Not measured on this box yet" |
 | A valid document, `at` within 15 minutes of the request | `ok`, `stale: false` | The values |
 | A valid document, older than 15 minutes, including a node the sweep could not reach | `ok`, `stale: true` | The values, labelled "measured 42m ago" in a warning tone |
@@ -206,6 +212,10 @@ read every sweep with the other caps.
 | A file over the cap, not regular, or not valid v1 | `too-large`, `unreadable` or `malformed` | "Could not be read", with that word |
 | A field this console's build does not recognise (a new word, or the wrong shape) | read as `unrecognised` | "This box's settings came in a form this console does not read" |
 | A server that predates this field | the field is missing | "This server does not report box settings" |
+
+The reader's failure words are a closed list of eight: `not-supported`, `caps-unmeasured`, `unmeasured`, `absent`,
+`clock-ahead`, `too-large`, `unreadable` and `malformed` (`unmeasured` since revision 4). The console reads any other word
+as unrecognised.
 
 ### 2.5 The card
 

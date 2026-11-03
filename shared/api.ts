@@ -9819,7 +9819,7 @@ export function isRequestKind(v: unknown): v is RequestKind {
  *
  *  ITS TWO FAILURE WORDS ARE `ReadFailure`'s (`shared/agent-protocol.ts`),
  *  widened by `ok` and `malformed`. The union predates this file's type-only
- *  `ReadFailure` import, which carries the box settings' failure words (D-6914;
+ *  `ReadFailure` import, which carries the box settings' failure words (D-6916;
  *  it is erased, and `peers-claims-l0.test.ts` pins the import list); it stays
  *  DERIVED from the array rather than restated beside it, and
  *  `update-states.test.ts` holds `Exclude<StampRead, 'ok' | 'malformed'>`

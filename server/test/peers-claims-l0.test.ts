@@ -165,7 +165,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
     // a type from the import-free landingLine.ts. The operator's waiting frame (programme ledgers PL4) a thirteenth, a type from
     // ledgers.ts, which imports from api.ts only types and the run-state list: the import is erased, so nothing cycles.
     // The fleet health's backup block (D-7858) a fourteenth, a type from the import-free backup.ts. The box settings' failure
-    // words (D-6914) a fifteenth, the `ReadFailure` type from agent-protocol.ts, which does import values from api.ts at run
+    // words (D-6916) a fifteenth, the `ReadFailure` type from agent-protocol.ts, which does import values from api.ts at run
     // time: no cycle forms because this file's import is `import type`, erased at compile; and single-definition forbids
     // restating the absent/unreadable pair.
     const lines = readFileSync(apiPath, 'utf8').split('\n');

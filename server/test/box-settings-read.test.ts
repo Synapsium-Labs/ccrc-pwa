@@ -130,7 +130,8 @@ describe('parseBoxSettings: the corpus, each file with its verdict', () => {
 
   // Linux only: the snapshot is written only on Linux (the timer is Linux's, spec D6), and the ok corpus is that writer's output. On
   // macOS `_ccrc_knob` reads ccrc.env by a different rule on purpose (launchd sources the whole file with bash, so one line that is
-  // not a plain NAME=value makes every key unmeasured), so the same scenario prints a different, correct, document there.
+  // not a plain NAME=value makes the keys that job reads unmeasured, not only the key on that line), so the same scenario prints a
+  // different, correct, document there.
   it.skipIf(process.platform === 'darwin')('a fixture a bash writer made is what the verb prints now: the corpus regenerates from the real verb (the deferred Task 1 row)', () => {
     const write = process.env['BOX_SETTINGS_FIXTURES'] === 'write';
     for (const s of SCENARIOS) {
@@ -474,6 +475,20 @@ describe('the lane: what each node\'s read comes to', () => {
     const locked = (): never => { throw new Error('database is locked'); };
     await expect(lane.run(deps(dir), locked, [measuredOutcome(SERVER_LABEL, 'n1')])).resolves.toBeUndefined();
     expect(lane.held().get('n1')).toEqual(first);
+  });
+
+  it('a FIRST read that throws stores unreadable, never nothing: the read was tried and failed (D-7874, review 1396 F12)', async () => {
+    const dir = ccrcWith('bsr-lane-throw-first-', { file: okText() });
+    const lane = new BoxSettingsLane();
+    const bad: FleetIO = { ...localIO, lstatMeasured: () => { throw new Error('boom'); } };
+    await expect(lane.run(deps(dir, bad), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')])).resolves.toBeUndefined();
+    expect(lane.held().get('n1')).toEqual({ read: { state: 'unreadable' } });
+    expect(boxSettingsView(lane.held().get('n1'), 0).state, 'the view answers the tried read, not unmeasured').toBe('unreadable');
+    // A later good read replaces it, and a throw after that keeps the good one (the fail-toward-keeping row above).
+    await lane.run(deps(dir), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')]);
+    expect(lane.held().get('n1')!.read.state).toBe('ok');
+    await lane.run(deps(dir, bad), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')]);
+    expect(lane.held().get('n1')!.read.state).toBe('ok');
   });
 
   it('asking what it holds issues no read: the read happens on a run, never between runs', async () => {

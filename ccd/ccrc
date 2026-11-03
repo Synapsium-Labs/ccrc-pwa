@@ -2943,9 +2943,14 @@ _upd_redact() {
 # of those lands INSIDE it, so a prefix of the credential would print. So when an '@' is left ANYWHERE in the value after the redaction
 # and the scheme, the host cannot be told from a credential: it prints NOTHING and answers rc 1 (the caller shows `custom` alone). A host
 # never holds '@', so the only cost is a path, a query or a fragment that holds one, which then shows no host (less, never more).
+# The same holds, rc 1 and nothing printed, when the RAW value (before `_upd_redact`) holds whitespace or another byte that starts a
+# token for `_upd_redact` ('"', "'", '<', '(' or a backtick; review 1396 F1): its token rule then begins a new token inside the
+# userinfo, consumes that token's '@', and a prefix of the credential is left with no '@' to show it (`https://u:p w@h/r` read
+# `https://u:p h`). A URL never holds one raw, so nothing a valid base shows is lost.
 # rc 0 otherwise, printing the origin (empty for an empty value).
 _upd_url_origin() {
-  local s sre='^[A-Za-z][A-Za-z0-9+.-]*://' scheme="" LC_ALL=C
+  local s sre='^[A-Za-z][A-Za-z0-9+.-]*://' scheme="" bre='[[:space:]"'"'"'<(`]' LC_ALL=C
+  if [[ "${1:-}" =~ $bre ]]; then return 1; fi
   s="$(_upd_redact "${1:-}")"
   if [[ "$s" =~ $sre ]]; then scheme="${BASH_REMATCH[0]}"; s="${s#"$scheme"}"; fi
   case "$s" in *@*) return 1 ;; esac
@@ -26079,13 +26084,16 @@ cmd_backup() {
 # CCRC_SETTINGS. Three states: `ok` (the act would use the value), `refused` (it would refuse it, fall back or clamp: the value shown
 # is what was written) and `unmeasured` (the reader could not decide it: a ccrc.env it cannot read is never "unset", D-6365).
 # The release base is shown as `default`, or `custom` with its scheme and host only (`_upd_url_origin`), or `custom` alone when an '@' is
-# left in it after the redaction (D-7873). Every value and sentence is redacted (`_upd_redact`), turned to printable ASCII and cut at 480
-# bytes, so no home path or userinfo is recorded. ONE accepted residual (review 1385, A13): a REFUSED numeric key whose raw value is a URL
-# keeps its query string (`?token=…`), because `_upd_redact` does not cover queries (its OUT OF SCOPE note); the fold belongs to ARCH-67.
+# left in it after the redaction or the value holds whitespace or another byte that starts a token for `_upd_redact` (D-7873). Every
+# value and sentence is redacted (`_upd_redact`), turned to printable ASCII and cut at 480 bytes, so no home path is recorded, and no
+# part of the release base's userinfo. ONE accepted residual (review 1385 A13, widened by review 1396 F4): a REFUSED numeric key records
+# its raw value, in `value` and in its sentence, through `_upd_redact` alone, so a URL written there by mistake keeps its query string
+# (`?token=…`, which `_upd_redact` does not cover: its OUT OF SCOPE note) and a userinfo that holds a raw '/', '?' or '#' (its KNOWN
+# LIMITS). It needs an operator error on a numeric key; the fold belongs to ARCH-67.
 # READ-ONLY: it never prunes, never takes update.lock and writes nothing but its own file, by temp and rename with the writers'
 # idiom (`_tmp_guard`, so a die or a SIGTERM through the EXIT chain leaves no `.tmp.$$`); it sets no trap of its own. What a SIGTERM
-# leaves (D-7875): before the rename, the last good file; during the rename itself (bash may wait for its foreground `mv`), the last
-# good file or the whole new one, never a partial one. It answers rc 0 whenever it answered; a write that fails is a die (rc 1),
+# leaves (D-7875): before the rename, the last good file; during the rename itself (the `mv` may finish after the EXIT chain has run),
+# the last good file or the whole new one, never a partial one. It answers rc 0 whenever it answered; a write that fails is a die (rc 1),
 # never a half-written file. `--from timer` records `reader: timer`
 # for the timer's own run, else `shell`: an interactive run can disagree with the card, and says so.
 BOX_SETTINGS_KEYS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S)
@@ -26166,12 +26174,12 @@ cmd_settings() {
       CCRC_UPDATE_DEADLINE_MS)
         # In THIS shell, so KNOB, KNOB_FROM and KNOB_WHY of the plain reading survive; rc 1 with a KNOB_WHY is the file that cannot be
         # read (unmeasured), rc 1 without one is a value that is not canonical digits (refused: the sentence gives the plain reading, 900000, AS
-        # the plain reading; `_bak_gc` reads the min and the watchdog the max, which the deadline line shows).
+        # the plain reading; `_bak_gc` and the watchdog read the min and the max, which `ccrc settings` prints).
         val="$(_upd_deadline_ms)" || :
         _upd_deadline_ms >/dev/null; rc=$?
         if [ "$rc" -ne 0 ]; then
           if [ -n "$KNOB_WHY" ]; then rc=2; why="$KNOB_WHY"
-          else rc=1; why="CCRC_UPDATE_DEADLINE_MS is not a positive whole number of milliseconds in canonical digits (at most 15, no lead zero), so its plain reading is $val; the backup prune reads the min and the watchdog the max, shown on the deadline line"; fi
+          else rc=1; why="CCRC_UPDATE_DEADLINE_MS is not a positive whole number of milliseconds in canonical digits (at most 15, no lead zero), so its plain reading is $val; the backup prune and the watchdog read the min and the max, which ccrc settings prints"; fi
         fi ;;
       CCRC_RELEASE_BASE_URL)
         _upd_release_base >/dev/null 2>&1 || { rc=2; why="$KNOB_WHY"; }

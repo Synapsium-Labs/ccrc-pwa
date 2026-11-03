@@ -569,9 +569,9 @@ symbol. The line numbers below are from `408d93806`: use them to find each place
   - No coord.db column. Additive.
 - **D-6917.** The Box settings card under Settings › Updates, read-only, rendered from the section's one poll, with one
   guarded reader (`boxSettingsOf`), total text tables, and C7 rows in the ring-context map.
-- **D-6918.** The growth waiver for `ccd/ccrc`: `server/test/growth-waivers/D-6918-ccd-ccrc.json`, `maxDelta` 200, the
-  measured delta. The PR measures +200 net code lines: +188 for the verb and the resolvers (at `0cd610500`), +5 for the
-  timer's install and uninstall rows, and +7 for review 1385's fix round.
+- **D-6918.** The growth waiver for `ccd/ccrc`: `server/test/growth-waivers/D-6918-ccd-ccrc.json`, `maxDelta` 201, the
+  measured delta. The PR measures +201 net code lines: +188 for the verb and the resolvers (at `0cd610500`), +5 for the
+  timer's install and uninstall rows, +7 for review 1385's fix round, and +1 for review 1396's (D-7873's whitespace rule).
 - **D-6919.** The clip's ellipsis is ASCII `...`, and the order is: `_upd_redact`, then the ASCII spelling of `—`, `…` and
   `→`, then every other byte outside printable ASCII to `?`, then the cut to 477 bytes plus `...` (480 at most), then the
   JSON escape. The spec asked for both a `…` ending and a printable-ASCII validator, which cannot both hold;
@@ -593,24 +593,37 @@ symbol. The line numbers below are from `408d93806`: use them to find each place
   anywhere in the value, the release-base row records `custom` alone, with no host. Before this, the authority was cut at the
   first `/`, `?` or `#` and then stripped to its last `@`, so a userinfo holding a raw `/`, `?` or `#` (which `_upd_redact`
   leaves whole) left a prefix of the credential in the snapshot. A mirror URL that holds an `@` in its path or query shows
-  less (`custom`), never more.
+  less (`custom`), never more. Extended by the coordinator's ruling of 2026-11-03 on review 1396 (F1): if the raw value,
+  before `_upd_redact`, holds whitespace or another byte that starts a token for `_upd_redact` (`"`, `'`, `<`, `(` or a
+  backtick), the row records `custom` alone too. `_upd_redact`'s token rule starts a new token there, consumes that token's
+  `@`, and a prefix of the credential was left with no `@` to show it (`https://u:p w@h/r` read `https://u:p h`). A URL
+  never holds one raw, so no valid base shows less.
 - **D-7874.** The coordinator's ruling of 2026-11-03 (review 1385; supersedes D-7863's reading). The reader's failure
   vocabulary gains `unmeasured`: the server holds no read of this node since it started. `unreadable` stays only for a read
   that was tried and failed. This is the "unmeasured is not unset" rule (D-6365) and the rule against an overloaded value at a
-  seam. The shared map, `boxSettingsView`, the card's word table ("Not read since the server started") and the
-  both-directions tests carry it.
+  seam. The shared map, `boxSettingsView`, the card's word table ("Not read since the server started.") and the
+  both-directions tests carry it. It amends spec §2.4's list, which now holds eight words (revision note there, review 1396
+  F8). A first read that throws stores `unreadable`, a read that was tried and failed, not nothing (review 1396 F12).
 - **D-7875.** What an interrupted write keeps (fix round 1b, from the full CI run on `8ffc4f78f`, where the old SIGTERM row
   lost a race to its own two-second `mv` stub). Spec §2.1 says an interrupted write "keeps the last good file". That holds for
   a die and for a SIGTERM that lands before the rename. A SIGTERM that lands during the rename itself may leave the whole new
-  file instead, because bash can wait for its foreground `mv` before it acts on the signal, and a rename is atomic. So the
-  promise is: no temp file stays, and the file is the last good one or the whole new one, never partial. The two rows that pin
-  it (`ccrc-settings-verb`, SIGTERM before and during the rename) are ordered by a handshake the test controls, not a sleep.
+  file instead, because the `mv` may finish after the EXIT chain has run, and a rename is atomic. So the promise is: no temp
+  file stays, and the file is the last good one or the whole new one, never partial. The two rows that pin it
+  (`ccrc-settings-verb`, SIGTERM before and during the rename) are ordered by a handshake the test controls, not a sleep. The
+  chmod row (before the rename) guards the EXIT chain; the rename row pins "no temp file, never partial" only, because a
+  rename that finishes consumes the temp file itself (review 1396 F7).
+- **D-7899.** The coordinator's ruling of 2026-11-03 (review 1396, F12). The lane departs from coordinator correction 5,
+  which built it "constructed with `() => this.deps`". Its constructor takes nothing, and each `run()` takes the sweep's own
+  ios, `ccrcDir`, live node list and outcomes. So the read and the caps it checks are always the same sweep's, and the lane
+  holds no reference to deps that could go stale between sweeps (the As built note on the lane says so too).
+- **D-7900.** Spare, unused.
 
 ## As built (2026-11-03)
 
 - **Deviations.** D-6914 to D-6917 as planned. D-6918 used (above). D-6919, D-7862 and D-7863 used for the three departures
   above; D-7863 is superseded by D-7874. D-7861 as written. D-7873 and D-7874 are the coordinator's fix-round rulings on
-  review 1385; D-7875 records what an interrupted write keeps (fix round 1b).
+  review 1385; D-7875 records what an interrupted write keeps (fix round 1b). D-7899 records the lane's departure from
+  correction 5 (review 1396); D-7900 is spare, unused.
 - **Task 1's acts and their suites, unchanged and green:** the health gate, `ccrc-update-flip-backups` (W24-H1 to H4) and
   `ccrc-update-phases`; the models advance, `ccrc-models-advance`; the deadline, `ccrc-update-flip-backups` (W24-D) and
   `update-watchdog-revert`; the release base, `ccrc-update-fetch` and `ccrc-update-flip-backups` (W24-U); the keeps,
@@ -626,21 +639,25 @@ symbol. The line numbers below are from `408d93806`: use them to find each place
   before redaction could keep part of a long home path.
 - **The URL.** `_upd_url_origin` runs `_upd_redact` and keeps the scheme. If an `@` is still left in the value, the row
   reads `custom` alone (D-7873); otherwise the authority is cut at the first `/`, `?` or `#`. An interim strip to the last
-  `@` after the cut still leaked a credential prefix when the userinfo held a raw `/`, `?` or `#` (review 1385, F1).
+  `@` after the cut still leaked a credential prefix when the userinfo held a raw `/`, `?` or `#` (review 1385, F1). A raw
+  value that holds whitespace or another byte `_upd_redact` starts a token at reads `custom` alone too (D-7873, review 1396 F1).
 - **The write.** A failed `--write` exits 1 and leaves no half file; a run that answered exits 0. SIGTERM runs the EXIT
   chain, which removes the temp file. Before the rename the last good file is kept; during the rename the file is the last good
-  one or the whole new one, never partial (D-7875). Both are pinned by handshake rows, measured 20 runs green in a row. Doctor knows only the timer (spec D9, section 4), so a writer that fails every
+  one or the whole new one, never partial (D-7875). Both rows are ordered by a handshake, measured 20 runs green in a row;
+  the chmod row guards the EXIT chain, and the rename row pins only "no temp file, never partial" (review 1396 F7). Doctor
+  knows only the timer (spec D9, section 4), so a writer that fails every
   run is not a doctor line: the card's stale label, after 15 minutes, is the surface.
 - **macOS.** The backups size goes through `_plat_bytes` (the platform shim), so macOS measures apparent bytes too; the timer is Linux only (spec D6).
 - **deploy.sh.** It does not place the watchdog's pair, so the settings pair joins `DEPLOY_SH_WITHHOLDS.units` with its own
   reason. `TimeoutStartSec=120` on the service: the verb's `du` and `df` are bounded at 20 s and 10 s, each through
-  `_plat_timeout`, which adds the TERM-to-KILL grace (`CCD_TIMEOUT_KILL_AFTER`, 3 s by default, 8 s at most), so about 26 s
-  by default and 36 s at worst, before the knob reads.
+  `_plat_timeout`, which cannot return before its seconds plus the TERM-to-KILL grace (`CCD_TIMEOUT_KILL_AFTER`, 3 s by
+  default, clamped to 2 to 8 s). One after the other, that is 30 s before any grace, (20+3)+(10+3) = 36 s at the default grace
+  and (20+8)+(10+8) = 46 s at the clamp, before the knob reads (review 1396 F3, correcting A2's figures).
 - **Census C4.** No row was needed: `cmd_settings` dispatches by a literal `case`, and the variable-key list is still its two
   rows. The census regex is lifted into `server/test/ccrcSettingsLine.ts`, which `ccrc-settings-census` and
-  `ccrc-update-flip-backups` import. `ccrc-settings-verb`, `graph-knobs` and `testbox-knobs` still carry their own copy, for
-  ARCH-06.
-- **Growth.** `ccd/ccrc` +200 (waiver D-6918); `server/src/watch.ts` +7 (the lane field, one call at the end of
+  `ccrc-update-flip-backups` import. `ccrc-settings-verb`, `ccrc-settings-lib`, `graph-knobs` and `testbox-knobs` still carry
+  their own copy, for ARCH-06; merging them is not this wave's (review 1396 F12).
+- **Growth.** `ccd/ccrc` +201 (waiver D-6918); `server/src/watch.ts` +7 (the lane field, one call at the end of
   `sweepThenProject`, the getter beside `currentCollectCounts`); `server/src/update/routes.ts` +3;
   `server/src/update/inventory.ts` 0; `server/src/coord/store.ts` and `pwa/src/lib/api.ts` untouched.
 - **Rings.** `server/src/update/boxSettings.ts` measures L1 (imports `shared/` only), and `server/src/update/boxSettingsLane.ts`
@@ -650,7 +667,8 @@ symbol. The line numbers below are from `408d93806`: use them to find each place
   its own). It takes the inventory run's own io, store and outcomes at the call, with no clock, flag or throttle. It only
   reads and stores: the caps gate (`boxSettingsGate`) and what a read comes to (`boxSettingsReadOf`, holding the parse) are
   pure deciders in `boxSettings.ts` (review 1385, A11). A node the server has not read since it started reads `unmeasured`
-  (D-7874). It runs at
+  (D-7874); a first read that throws stores `unreadable` (review 1396 F12). The constructor takes nothing, a departure from
+  correction 5 (D-7899). It runs at
   the end of `sweepThenProject`, after the resolve, push and dispatch, so a stalled read (bounded at 10 s) never delays the
   control plane. `update-projection`'s planted-throw case now counts only the resolve warning, since the dispatch run's
   own warning lands inside the run.

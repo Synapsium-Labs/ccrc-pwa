@@ -1041,8 +1041,8 @@ _check_services() {
           # it acts only on the day a self-update dies mid-install, and on that
           # day nothing else is left on the box to measure the update.
           ccrc-update-watchdog.timer) why="a server self-update that dies mid-install is never measured or reverted — ccrc.service restart-loops a half-replaced tree into the start limit" ;;
-          # D-6915: the box settings timer (hand-kept here until ARCH-69 derives this list). Quiet when stopped — the console
-          # keeps showing the last record it read, marked stale after 15 minutes, so only the card's age says the figures stopped moving.
+          # D-6915: the box settings timer (hand-kept here until ARCH-69 derives this list). When it is stopped this arm WARNs,
+          # naming it: the console keeps showing the last record it read, which the card marks stale after 15 minutes.
           ccrc-settings.timer) why="ccrc-settings.timer no longer rewrites ~/.ccrc/box-settings.json, so the console keeps showing the last settings it read, marked stale after 15 minutes" ;;
           *) why="the job it fires is not running" ;;
         esac

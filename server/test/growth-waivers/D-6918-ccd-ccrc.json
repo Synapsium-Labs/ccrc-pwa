@@ -1,7 +1,7 @@
 {
   "file": "ccd/ccrc",
-  "maxDelta": 200,
+  "maxDelta": 201,
   "d": "D-6918",
-  "reason": "box settings view wave 1: ccrc settings, the read-only verb that prints and records what the box's seven settings resolve to (cmd_settings and its string, du, df and URL helpers), and the four resolvers carved out of their acts (_upd_health_s, _models_budget, _bak_keep, _ver_keep), measured +200 net code lines against the merge-base: +188 for the verb and the resolvers, +5 for the timer's install and uninstall rows, +7 for review 1385's fix round (D-7873's URL rule, the marked clamp cut, the human source words)",
+  "reason": "box settings view wave 1: ccrc settings, the read-only verb that prints and records what the box's seven settings resolve to (cmd_settings and its string, du, df and URL helpers), and the four resolvers carved out of their acts (_upd_health_s, _models_budget, _bak_keep, _ver_keep), measured +201 net code lines against the merge-base: +188 for the verb and the resolvers, +5 for the timer's install and uninstall rows, +7 for review 1385's fix round (D-7873's URL rule, the marked clamp cut, the human source words), +1 for review 1396's (D-7873's whitespace rule)",
   "added": "2026-11-03"
 }

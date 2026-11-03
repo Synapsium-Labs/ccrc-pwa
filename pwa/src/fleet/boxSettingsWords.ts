@@ -28,7 +28,7 @@ export const BOX_SETTINGS_READ_TEXT: Readonly<Record<BoxSettingsFailure | 'not-r
   'not-supported': "This box's build does not report its settings.",
   'caps-unmeasured': "This box's capabilities could not be read, so its settings were not read.",
   absent: 'Not measured on this box yet.',
-  unmeasured: 'Not read since the server started',
+  unmeasured: 'Not read since the server started.',
   unreadable: 'Could not be read (unreadable).',
   'too-large': 'Could not be read (too-large).',
   malformed: 'Could not be read (malformed).',

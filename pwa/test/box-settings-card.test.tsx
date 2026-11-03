@@ -190,7 +190,7 @@ describe('Box settings card: every way a node can have nothing to show (D-6917)'
 
   it('a node the server has not read since it started says so, and that is not the word for a read that failed (D-7874)', () => {
     renderCard([fleet({ state: 'unmeasured' })]);
-    expect(within(block('fleet')).getByText('Not read since the server started')).toBeInTheDocument();
+    expect(within(block('fleet')).getByText('Not read since the server started.')).toBeInTheDocument();
     expect(BOX_SETTINGS_READ_TEXT.unmeasured).not.toBe(BOX_SETTINGS_READ_TEXT.unreadable);
     expect(boxSettingsOf({ settings: { state: 'unmeasured' } })).toEqual({ state: 'unmeasured' });
   });

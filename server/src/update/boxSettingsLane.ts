@@ -3,16 +3,20 @@
 // answer per node. It ONLY asks and stores: every judgement is `boxSettings.ts`'s (L1) — the caps gate (`boxSettingsGate`), what a
 // read comes to (`boxSettingsReadOf`, which holds the parse) and how old a document reads (`boxSettingsView`, at serve time). The lane
 // picks the io, applies the read's deadline and stores what the decider answered. FleetWatcher owns one and calls `run()` once,
-// inside the `inventory` LANE_SCHEDULE row's run, right after the sweep.
+// inside the `inventory` LANE_SCHEDULE row's run, last in `sweepThenProject`: after the sweep, the resolve, the push and the
+// dispatch, so a stalled read never delays the control plane.
 //
-// NO CLOCK, FLAG OR THROTTLE OF ITS OWN (spec D4, the plan's coordinator correction 5): the sweep hands it the `InventoryDeps` parts
+// NO CLOCK, FLAG OR THROTTLE OF ITS OWN (spec D4, the plan's coordinator correction 5, as D-7899 departs from it: the constructor
+// takes nothing, where the correction built it with `() => this.deps`): the sweep hands it the `InventoryDeps` parts
 // it built (its two ios and `ccrcDir`), the nodes the sweep just wrote and the sweep's own outcomes, so the read and the caps it
 // checks are the same sweep's; it reads no clock (the view ages a document at serve time), and `held()` issues no read, so nothing is
 // read between runs. The only state is the map below, on the instance (never module scope), so two servers in one process never
 // share a read.
 //
 // FAIL TOWARD KEEPING: a node the sweep did not reach (unreachable, refused, a throw) keeps its last read, which the view then ages
-// into `stale`; a read that throws changes nothing; an id no longer in the node list (a rekey, a removal) is dropped after the run.
+// into `stale`; a read that throws keeps the last read, and a FIRST read that throws stores `unreadable` (a read was tried and
+// failed, so it is never `unmeasured`, D-7874; review 1396 F12); an id no longer in the node list (a rekey, a removal) is dropped
+// after the run.
 // It never throws into the sweep and it never logs: the card is its only surface.
 import path from 'node:path';
 import { NODE_FILES } from '../../../shared/agent-protocol.js';
@@ -59,7 +63,9 @@ export class BoxSettingsLane {
         try {
           this.reads.set(o.nodeId, { read: await readBoxSettings(io, inv.ccrcDir, node) });
         } catch {
-          // Keep the last held read: a read that could not be made says nothing new.
+          // Keep the last held read: a read that could not be made says nothing new. With none held, the read was still tried and
+          // failed, which is `unreadable`, never the view's `unmeasured` (D-7874).
+          if (!this.reads.has(o.nodeId)) this.reads.set(o.nodeId, { read: { state: 'unreadable' } });
         }
       }));
       for (const id of [...this.reads.keys()]) if (!nodes.some((n) => n.nodeId === id)) this.reads.delete(id);

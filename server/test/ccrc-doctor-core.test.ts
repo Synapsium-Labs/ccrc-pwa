@@ -1612,8 +1612,8 @@ describe('ccrc doctor: services knows about the update-watchdog timer', () => {
 
 
 describe('ccrc doctor: services knows about the box settings timer', () => {
-  // D-6915: `ccrc-settings.timer` joins `known`, hand-kept until ARCH-69 derives the list. A stopped timer is quiet:
-  // the console keeps showing the last record it read, marked stale after 15 minutes, so only the card's age says the figures stopped moving.
+  // D-6915: `ccrc-settings.timer` joins `known`, hand-kept until ARCH-69 derives the list. A stopped timer WARNs, naming the
+  // unit: the console keeps showing the last record it read, which the card marks stale after 15 minutes.
   itLinux('warns, naming the unit, when the settings timer is installed and stopped', () => {
     const home = healthy('ccrc-doctor-services-settings-');
     writeUnitFile(home, 'ccrc-settings.timer');

@@ -54,7 +54,7 @@ const DECLARATIONS: readonly string[] = [
   '^export interface CollectLaneConfirmRequired\\b',
 ];
 
-/** `peers-claims-l0.test.ts`'s fifteen lines (the eleventh is the host-pressure block, #1170, the twelfth the landing line's entry, the thirteenth the programme ledgers' waiting frame, the fourteenth the backup block, D-7858, the fifteenth the box settings' `ReadFailure`, D-6914). The block adds none. */
+/** `peers-claims-l0.test.ts`'s fifteen lines (the eleventh is the host-pressure block, #1170, the twelfth the landing line's entry, the thirteenth the programme ledgers' waiting frame, the fourteenth the backup block, D-7858, the fifteenth the box settings' `ReadFailure`, D-6916). The block adds none. */
 const IMPORTS = [
   "import type { Hue, RosterKindWire } from './roster.js';",
   "import type { AccountPoolWire } from './poolrule.js';",
