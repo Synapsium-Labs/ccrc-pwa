@@ -99,6 +99,7 @@ import type { RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
+import { REVIVABLE_PARK_ERRORS, REVIVE_SKIPPED_SUBJECT_HEADS } from './mailRevive.js';
 import {
   DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
@@ -1304,6 +1305,22 @@ export type RequeueRole =
   | { role: 'coordinator'; program: string }
   | { role: 'worker'; runId: number };
 
+/** One heir `reviveParkedDeliveries` queued (D-5914): `from` is the parked delivery it revives, `heir` the new one. */
+export interface RevivedDelivery { readonly from: number; readonly heir: number; readonly mailId: number; readonly toId: string }
+/** `reviveParkedDeliveries`'s answer: every heir it queued, `[]` for none. Typed, never `void`. */
+export interface ReviveParkedResult { readonly revived: readonly RevivedDelivery[] }
+
+/** What an heir is rendered from: the mail's own columns and its run's (`queueHeir`). Selected by the re-queue and
+ *  the revive alike, through `HEIR_SOURCE_COLUMNS` below, so the two selects cannot disagree about an envelope. */
+interface HeirSource {
+  mailId: number; fromId: string; kind: string; subject: string; body: string;
+  artifacts: string; runId: number; program: string; wave: number; waveOf: number | null;
+}
+const HEIR_SOURCE_COLUMNS =
+  'm.id AS mailId, m.fromId AS fromId, m.kind AS kind, m.subject AS subject, ' +
+  'm.body AS body, m.artifacts AS artifacts, m.runId AS runId, ' +
+  'rr.program AS program, rr.wave AS wave, rr.waveOf AS waveOf';
+
 /** `?,?,?` for an `IN (...)` bound to a JS array (D-1141). `node:sqlite` has no
  *  array bind, so the list has to be BUILT — and a built SQL fragment is exactly
  *  where a value would slip into the statement text. One home, and it can emit
@@ -1405,9 +1422,20 @@ export const MAIL_CHILD_RECLAIMED_ERROR = 'child workspace reclaimed';
 const DELIBERATE_CANCEL_ERRORS_SQL =
   `('${MAIL_RUN_CLOSED_ERROR}','${MAIL_RECLAIM_CANCELLED_ERROR}','${MAIL_REBIND_SUPERSEDED_ERROR}','${MAIL_CHILD_RECLAIMED_ERROR}')`;
 
+/** D-5914 (spec 2026-10-20 §3.2, #125): THE ONE "this park has an heir" fragment. A delivery some later delivery
+ *  names as its parent (`revivedFrom`, migration 40) is not abandoned: its heir carries the attention now, and counts
+ *  while it is outstanding as any queued mail does. Keyed on `revivedFrom`, never on `mailId`/`toId`:
+ *  `repointCoordinatorMail` rewrites an heir's `toId` when a coordinator is displaced, and a clause keyed on the
+ *  recipient would lose the repointed heir and count the parent again beside it. Read in one place,
+ *  `ABANDONED_PARK_SQL` below (`AND NOT` it), which `reviveParkedDeliveries` composes, so the read's "retired by an
+ *  heir" and the revive's "no heir yet" are one spelling and cannot drift. `d` is the caller's `mail_deliveries`
+ *  alias; `h` is this fragment's own. Served by the partial index `mail_deliveries_by_revived`. */
+const HAS_HEIR_SQL = 'EXISTS (SELECT 1 FROM mail_deliveries h WHERE h.revivedFrom = d.id)';
+
 /** The ABANDONMENT half of the predicate below, lifted into its own name because
- *  it is about to have a second reader: `requeueAbandonedMail`
- *  selects exactly the rows a mailbox shows as an abandoned park, and a re-queue
+ *  it has readers beyond it: `requeueAbandonedMail` selects exactly the rows a
+ *  mailbox shows as an abandoned park, `reviveParkedDeliveries` (D-5914) selects
+ *  the lifecycle parks among them, and a re-queue
  *  that respelled these clauses would drift from the thing it is meant to
  *  mirror — the same argument `DELIBERATE_CANCEL_ERRORS_SQL` above makes about
  *  its two literals, one level up. Pinned by `single-definition.test.ts`'s
@@ -1421,7 +1449,8 @@ const DELIBERATE_CANCEL_ERRORS_SQL =
 const ABANDONED_PARK_SQL =
   "(d.state = 'rejected' " +
   `AND COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
-  `AND COALESCE(rr.state, '') NOT IN ${TERMINAL_RUN_STATES_SQL})`;
+  `AND COALESCE(rr.state, '') NOT IN ${TERMINAL_RUN_STATES_SQL} ` +
+  `AND NOT ${HAS_HEIR_SQL})`;
 
 /**
  * The READ-side "still needs a human's attention" predicate (fix, review
@@ -2561,9 +2590,7 @@ export class CoordStore {
     const scope = role.role === 'coordinator' ? 'rr.program = ?' : 'm.runId = ?';
     const scopeArg: string | number = role.role === 'coordinator' ? role.program : role.runId;
     const rows = this.db.prepare(
-      'SELECT m.id AS mailId, m.fromId AS fromId, m.kind AS kind, m.subject AS subject, ' +
-      'm.body AS body, m.artifacts AS artifacts, m.runId AS runId, ' +
-      'rr.program AS program, rr.wave AS wave, rr.waveOf AS waveOf ' +
+      `SELECT ${HEIR_SOURCE_COLUMNS} ` +
       'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       'JOIN runs rr ON rr.id = m.runId ' +
       `WHERE ${source} AND d.toId IN (${placeholders(displaced.length)}) ` +
@@ -2571,33 +2598,10 @@ export class CoordStore {
       'AND NOT EXISTS (SELECT 1 FROM mail_deliveries x ' +
       `WHERE x.mailId = m.id AND x.toId = ? AND x.state IN ${OUTSTANDING_STATES_SQL}) ` +
       'GROUP BY m.id ORDER BY MIN(d.id)',
-    ).all(...displaced, scopeArg, to) as {
-      mailId: number; fromId: string; kind: string; subject: string; body: string;
-      artifacts: string; runId: number; program: string; wave: number; waveOf: number | null;
-    }[];
-    for (const r of rows) {
-      const delivery = this.queueDelivery(r.mailId, to, '');
-      // THE RESULT IS READ, NOT DROPPED. Task 24 gave `setDeliveryEnvelope` a
-      // `SetEnvelopeResult` precisely because "a writer whose safety rests on its
-      // two callers' shape breaks silently the day a third one appears" — this IS
-      // that third caller, and TypeScript does not complain about a discarded
-      // return, so dropping it here would re-mint the defect one task after it was
-      // fixed. Same handling as the other two: unstampable is a bug, not a state.
-      const stamped = this.setDeliveryEnvelope(delivery.id, renderEnvelope({
-        id: delivery.id, fromId: r.fromId, toId: to, runId: r.runId,
-        program: r.program, wave: r.wave, waveOf: r.waveOf,
-        // Narrowed the way `hydrateMail` narrows it, not cast: `kind` is a
-        // CLOSED union and `'unknown'` is a real member. The branch is dead in
-        // practice (`insertMail`'s parameter is already `MailKind`), and a cast
-        // would have been this method quietly asserting what it did not check.
-        kind: isMailKind(r.kind) ? r.kind : 'unknown',
-        subject: r.subject, body: r.body,
-        artifacts: JSON.parse(r.artifacts) as string[],
-      }));
-      if (!stamped.ok) {
-        throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
-      }
-    }
+    ).all(...displaced, scopeArg, to) as unknown as HeirSource[];
+    // A re-queue's heir names no parent (`revivedFrom` NULL): the corpse's park stays abandoned on the corpse's own
+    // mailbox, exactly as before D-5914. Only a revive retires its parent.
+    for (const r of rows) this.queueHeir(r, to, null);
     // THE PREDECESSOR'S ROWS, PARKED — worker only. The coordinator arm's
     // source rows are already terminal (`ABANDONED_PARK_SQL`), and arm (c) of
     // `reclaimProgram`'s ruling says a park is never moved or reopened; this
@@ -2638,6 +2642,85 @@ export class CoordStore {
       "state = 'rejected', rejectCode = 'undeliverable', lastError = ?", [MAIL_REBIND_SUPERSEDED_ERROR], 'outstanding',
       `toId IN (${placeholders(displaced.length)}) AND mailId IN (${placeholders(mailIds.length)})`,
       [...displaced, ...mailIds]) };
+  }
+
+  /**
+   * The ONE heir loop body (D-5914), extracted from `requeueAbandonedMail` so the revive below shares it: a NEW delivery
+   * of `r`'s mail to `to`, with its own envelope rendered now that its id exists (`queueDelivery(…, '')` ->
+   * `renderEnvelope` -> `setDeliveryEnvelope`, the pair `routes.ts` and `rundefsTx.ts` use), naming `revivedFrom` as
+   * its parent (NULL for a re-queue, the parked delivery's id for a revive). Answers the heir's id. Like
+   * `requeueAbandonedMail`, it reaches delivery rows only through `queueDelivery` and `setDeliveryEnvelope`.
+   */
+  private queueHeir(r: HeirSource, to: string, revivedFrom: number | null): number {
+    const delivery = this.queueDelivery(r.mailId, to, '', revivedFrom);
+    // THE RESULT IS READ, NOT DROPPED. Task 24 gave `setDeliveryEnvelope` a
+    // `SetEnvelopeResult` precisely because "a writer whose safety rests on its
+    // two callers' shape breaks silently the day a third one appears" — this IS
+    // that third caller, and TypeScript does not complain about a discarded
+    // return, so dropping it here would re-mint the defect one task after it was
+    // fixed. Same handling as the other two: unstampable is a bug, not a state.
+    const stamped = this.setDeliveryEnvelope(delivery.id, renderEnvelope({
+      id: delivery.id, fromId: r.fromId, toId: to, runId: r.runId,
+      program: r.program, wave: r.wave, waveOf: r.waveOf,
+      // Narrowed the way `hydrateMail` narrows it, not cast: `kind` is a
+      // CLOSED union and `'unknown'` is a real member. The branch is dead in
+      // practice (`insertMail`'s parameter is already `MailKind`), and a cast
+      // would have been this method quietly asserting what it did not check.
+      kind: isMailKind(r.kind) ? r.kind : 'unknown',
+      subject: r.subject, body: r.body,
+      artifacts: JSON.parse(r.artifacts) as string[],
+    }));
+    if (!stamped.ok) {
+      throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
+    }
+    return delivery.id;
+  }
+
+  /**
+   * D-5914 (spec 2026-10-20 §3.1, #125): a parked mail comes back with its recipient. Each delivery below gets ONE heir,
+   * a new delivery of the same mail to the same recipient naming it in `revivedFrom`; the parked row itself is never
+   * written (no terminal row goes back to `queued`, which `mail-hardening.test.ts`'s writer scan holds), and its
+   * retirement is derived in the read (`HAS_HEIR_SQL`). A delivery qualifies when all of these hold:
+   *  - it is an abandoned park: `ABANDONED_PARK_SQL`, composed rather than respelled, which carries the open-run clause
+   *    (`COALESCE(rr.state, '')` against the terminal run states), the deliberate-cancel exclusion and `NOT HAS_HEIR_SQL`
+   *    (a parent is revived once; a heir that parks again is its own parent, revived once in its turn);
+   *  - it was rejected `undeliverable` with a `lastError` in `REVIVABLE_PARK_ERRORS` (`coord/mailRevive.ts`: the
+   *    lifecycle park and the two legacy live-recipient parks; never #853's 24 h reject, the replay ceiling or a purged
+   *    recipient);
+   *  - it is CURRENT: its mail was sent at or after its run's `dispatchedAt` (`m.at >= rr.dispatchedAt`, both the
+   *    server's clock; a delivery row has no time of its own). A run never dispatched revives nothing;
+   *  - it is not a system nudge: its subject starts with none of `REVIVE_SKIPPED_SUBJECT_HEADS`;
+   *  - a ROLE-addressed mail is revived only to the session that still holds the role on its run (D-7901): a
+   *    coordinator report only to `rr.claimedBy`, a worker brief only to `rr.sessionId`. A displaced chair or a
+   *    rebound worker that comes back is not the role any more; `requeueAbandonedMail` already handed the role's mail
+   *    to its successor, and a revive to the corpse would deliver it twice;
+   *  - its recipient is in `liveIds`, the ids the mail pass read live this tick (`coord/mailRevive.ts#revivable`).
+   *
+   * One transaction, so a sweep racing another sees each parent with or without its heir, never half. Answers every
+   * heir it queued, in parent-id order; `[]` when nothing qualified. Never `void`.
+   */
+  reviveParkedDeliveries(liveIds: readonly string[]): ReviveParkedResult {
+    if (liveIds.length === 0) return { revived: [] };
+    const heads = REVIVE_SKIPPED_SUBJECT_HEADS;
+    return tx(this.db, () => {
+      const rows = this.db.prepare(
+        `SELECT d.id AS deliveryId, d.toId AS toId, ${HEIR_SOURCE_COLUMNS} ` +
+        'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+        'JOIN runs rr ON rr.id = m.runId ' +
+        `WHERE ${ABANDONED_PARK_SQL} AND d.rejectCode = 'undeliverable' ` +
+        `AND d.lastError IN (${placeholders(REVIVABLE_PARK_ERRORS.length)}) ` +
+        'AND m.at >= rr.dispatchedAt ' +
+        `AND NOT (${heads.map(() => 'substr(m.subject, 1, length(?)) = ?').join(' OR ')}) ` +
+        "AND (m.toId != 'coordinator' OR d.toId = rr.claimedBy) " +
+        "AND (m.toId != 'worker' OR d.toId = rr.sessionId) " +
+        `AND d.toId IN (${placeholders(liveIds.length)}) ` +
+        'ORDER BY d.id',
+      ).all(...REVIVABLE_PARK_ERRORS, ...heads.flatMap((h) => [h, h]), ...liveIds) as unknown as
+        (HeirSource & { deliveryId: number; toId: string })[];
+      return { revived: rows.map((r) => ({
+        from: r.deliveryId, heir: this.queueHeir(r, r.toId, r.deliveryId), mailId: r.mailId, toId: r.toId,
+      })) };
+    });
   }
 
   /**
@@ -6212,10 +6295,12 @@ export class CoordStore {
     ).get(fromId, now - 3_600_000) as { n: number }).n;
   }
 
-  queueDelivery(mailId: number, toId: string, envelope: string): { id: number } {
+  /** A new `queued` delivery. `revivedFrom` (D-5914, migration 40) is the parked delivery this one revives, written
+   *  here at INSERT and never updated; only `queueHeir`, for `reviveParkedDeliveries`, passes one. */
+  queueDelivery(mailId: number, toId: string, envelope: string, revivedFrom: number | null = null): { id: number } {
     const res = this.db.prepare(
-      'INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (?, ?, ?, ?)',
-    ).run(mailId, toId, 'queued', envelope);
+      'INSERT INTO mail_deliveries (mailId, toId, state, envelope, revivedFrom) VALUES (?, ?, ?, ?, ?)',
+    ).run(mailId, toId, 'queued', envelope, revivedFrom);
     return { id: Number(res.lastInsertRowid) };
   }
 
@@ -6258,8 +6343,9 @@ export class CoordStore {
    * them a re-render: the ingress route in `routes.ts`, the system-mail queue
    * in `rundefsTx.ts` (which has called it since Build 7 — this sentence said
    * "the ingress route ONLY" for two builds while it did: D-1426), and
-   * `requeueAbandonedMail` in this file, which renders the heir's own envelope
-   * for a second delivery of one mail. Pinned by `single-definition.test.ts`'s
+   * `queueHeir` in this file, the heir loop body `requeueAbandonedMail` and
+   * `reviveParkedDeliveries` share (D-5914), which renders the heir's own
+   * envelope for a second delivery of one mail. Pinned by `single-definition.test.ts`'s
    * "setDeliveryEnvelope names every caller it has", which derives the caller
    * set from `server/src` rather than reading this sentence. It exists to
    * close a bug fix-round finding 5 / D-41 named: the envelope's own `ack:`
@@ -6275,14 +6361,15 @@ export class CoordStore {
    * and this method never re-derives its argument — it only stores what the
    * caller already computed.
    *
-   * GUARDED. The three direct callers expand to SIX reachable paths, all in
+   * GUARDED. The three direct callers expand to SEVEN reachable paths, all in
    * the same transaction as their `queueDelivery`: the mail route's send `tx`,
    * the system-mail queue's own `tx` and the stall watch's (`queueSystemMail`
    * and `queueStallNotice`, each around `rundefsTx.ts`'s `insertSystemMailTx`),
    * `dispatchRun`'s dispatch `tx` through
    * `markDispatched` -> `bindSession` -> `requeueAbandonedMail`,
-   * `reclaimProgram`'s `tx`, and the open route's post-hold `tx` through
-   * `setSession` -> `bindSession` (D-2505). `tx` is `BEGIN IMMEDIATE` over a
+   * `reclaimProgram`'s `tx`, the open route's post-hold `tx` through
+   * `setSession` -> `bindSession` (D-2505), and the mail sweep's revive
+   * (`reviveParkedDeliveries`'s own `tx`, D-5914). `tx` is `BEGIN IMMEDIATE` over a
    * synchronous `DatabaseSync`, so those paths see no concurrent writer and
    * the row this stamps is provably `'queued'`. The `state NOT IN
    * ${TERMINAL_DELIVERY_SQL}` guard and the result union still refuse and expose

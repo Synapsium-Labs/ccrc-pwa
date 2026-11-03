@@ -383,6 +383,32 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
     expect(body).toMatch(/WHERE \$\{guardSql\} AND \(\$\{where\}\)/);
   });
 
+  it('the revive writes no delivery row but its heir: revivedFrom is set at INSERT, by queueDelivery alone (D-5914)', () => {
+    // The revive's guard is that it writes NOTHING to the parked row (a terminal row going back to `queued` is the
+    // invariant the one-statement case above holds) and mints its heir through the ordinary insert. So `revivedFrom`
+    // has exactly one writer statement, an INSERT in `queueDelivery`, and no prepared statement in `store.ts` UPDATEs
+    // it, which would be a parent or heir rewritten after the fact.
+    const code = blankComments(storeSrc).join('\n');
+    const inserts = [...code.matchAll(/INSERT INTO mail_deliveries \(([^)]*)\)/g)].map((m) => m[1]!);
+    expect(inserts.length, 'no delivery INSERT found in store.ts at all').toBeGreaterThanOrEqual(1);
+    expect(inserts.filter((cols) => cols.includes('revivedFrom'))).toHaveLength(1);
+    const sigOf = (at: number): string => {
+      const line = code.slice(0, at).split('\n').length;   // the blanked text keeps every line, not every offset
+      for (let i = line - 1; i > 0; i--) { const m = SIG.exec(srcLines[i - 1]!); if (m) return m[1]!; }
+      return '';
+    };
+    const at = code.search(/INSERT INTO mail_deliveries \([^)]*revivedFrom/);
+    expect(sigOf(at)).toBe('queueDelivery');
+    expect(/SET[^`'"]*\brevivedFrom\s*=/.test(code), 'a statement UPDATEs revivedFrom').toBe(false);
+    // …and the revive itself reaches delivery rows only through `queueHeir` (no `writeDeliver*` call of its own).
+    const from = srcLines.findIndex((l) => l.startsWith('  reviveParkedDeliveries('));
+    const to = srcLines.findIndex((l, i) => i > from && /^ {2}\}/.test(l));
+    expect(from, 'reviveParkedDeliveries is gone').toBeGreaterThan(0);
+    const body = blankComments(srcLines.slice(from, to + 1).join('\n')).join('\n');
+    expect(body).toMatch(/this\.queueHeir\(/);
+    expect(body).not.toMatch(/this\.writeDeliver(?:y|ies)\(|UPDATE mail_deliveries/);
+  });
+
   it('no delivery-row writer returns void, and CLAUDE.md says so (D-5997)', () => {
     // THE OTHER HALF OF THE SENTENCE, as a mechanism: every method that calls
     // the one writer is derived from source, and none may return `void`, so a

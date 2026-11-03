@@ -6876,8 +6876,14 @@ export interface RunSummary {
   dispatchedAt: number | null;
   closedAt: number | null;
   handoffCommit: string | null;
+  /** The run's work items as the COORDINATOR has settled them (`itemTally`): `done` counts items acked `done`, which
+   *  the coordinator does only after a verified advance, so a wave in progress reads `0/N` by design however far its
+   *  branch has moved (spec 2026-10-20 §3.3, D-5914). It is not a measure of branch progress or of the worker's life;
+   *  the branch fingerprint the coordinator re-measures is. */
   items: RunItemTally;
-  /** Unacked mail addressed to this run's session. */
+  /** Unacked mail addressed to this run's session: every outstanding delivery, plus every abandoned park on the open run
+   *  that no later delivery revives (`ABANDONED_PARK_SQL`, `coord/store.ts`). A revived park is counted once, as its
+   *  outstanding heir, and not at all once that heir is acked (D-5914). */
   unreadMail: number;
 
   /**

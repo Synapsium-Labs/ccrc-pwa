@@ -2159,6 +2159,25 @@ export const MIGRATIONS: readonly string[] = [
     CHECK (quarantineKind IS NULL OR (quarantineKind = 'stale-episode-head' AND state = 'unknown'));
   INSERT INTO landing_journal_cursor (id, appliedSeq) VALUES (1, 0);
   `,
+  // ── 40: user_version 39 -> 40 ─────────────────────────────────────────────
+  // A revived park's heir names its parent (D-5914, D-7901; spec 2026-10-20 §3.2, #125). `revivedFrom` is the id of
+  // the `rejected` delivery a later delivery of the same mail was queued to replace, once that parked row's recipient
+  // read live again. Its ONE writer is `CoordStore.queueDelivery`, called with a parent only by
+  // `reviveParkedDeliveries`; it is written at INSERT and never updated. Its readers are `HAS_HEIR_SQL` in `store.ts`,
+  // the one fragment both `ABANDONED_PARK_SQL` (a parent with an heir is not abandoned) and the revive's own select (no
+  // heir yet) read. NULL is "this row revives nothing", which every row before this entry is. The partial index serves
+  // that `EXISTS` lookup and holds only heirs.
+  //
+  // ONE NULLABLE COLUMN AND ONE PARTIAL INDEX, NOTHING ELSE: an older build opening a file at `user_version 40` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the column, and inserts with it NULL. It then
+  // counts a revived parent beside its heir again, which is #125's old reading and nothing worse. Every earlier entry
+  // is frozen. RE-MEASURE the slot before the PR and before merge (it must print 39 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail_deliveries ADD COLUMN revivedFrom INTEGER;
+  CREATE INDEX mail_deliveries_by_revived ON mail_deliveries(revivedFrom) WHERE revivedFrom IS NOT NULL;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
