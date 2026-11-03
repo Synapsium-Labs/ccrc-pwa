@@ -270,23 +270,36 @@ function HeadItem({ section, mode, setSize, posInSet, folded, tabStop, onToggle,
       className={cn('wb-side-head', FOCUS_RING)}
       onClick={onToggle}
     >
+      {/* THE SPACES BETWEEN THE SPANS ARE WORDS' EDGES (WCAG 2.5.3, D-7897). Each one
+          is a whitespace-only text node between flex items, which a flex container
+          never draws, but it is what keeps `Working` and `2` two words when the head's
+          text is read as text: without it the drawn label runs together as `Working2`,
+          a word its name does not hold. The name is the whole title (the pool chip is
+          on the head, so it is said) and the counts; never the `+`. */}
       <span className="wb-side-fold" aria-hidden="true">{folded ? '▸' : '▾'}</span>
+      {' '}
       {section.lamp ? <StatusDot status={section.lamp} /> : null}
-      <span className="wb-side-title">
-        <span id={labelId} className="wb-side-label" data-mono={mode === 'projects' ? 'true' : undefined}>
+      {' '}
+      <span id={labelId} className="wb-side-title">
+        <span className="wb-side-label" data-mono={mode === 'projects' ? 'true' : undefined}>
           {section.label}
         </span>
         {section.pool ? (
-          <Chip className="wb-side-pool">
-            <span className="wb-side-clip">{section.pool}</span>
-          </Chip>
+          <>
+            {' '}
+            <Chip className="wb-side-pool">
+              <span className="wb-side-clip">{section.pool}</span>
+            </Chip>
+          </>
         ) : null}
       </span>
+      {' '}
       <span id={countsId} className="wb-side-counts">
-        {section.waiting > 0 ? <CountBadge>{`${section.waiting} waiting`}</CountBadge> : null}
+        {section.waiting > 0 ? <><CountBadge>{`${section.waiting} waiting`}</CountBadge>{' '}</> : null}
         <span className="wb-side-total">
           {section.total}
-          <span className="sr-only"> total</span>
+          {' '}
+          <span className="sr-only">total</span>
         </span>
       </span>
       {creates ? (

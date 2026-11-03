@@ -21,6 +21,7 @@ import { PALETTE_MOTION_VARS, VAUL_MOTION } from '../../ui/src/lib/motion';
 import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
 import { TEST_ROSTER } from './rosterFixture';
+import { labelInName, shownText } from './labelInName';
 
 // (pointer: fine), as header.test.tsx stubs it: the header binds the physical
 // Escape key only where a fine pointer says a keyboard is likely.
@@ -749,6 +750,17 @@ describe('the top search finds sessions (D-6714)', () => {
     const worker = screen.getByRole('option', { name: 'first, project-a' });
     expect(screen.getByRole('option', { name: 'lead, coordinator, project-a' })).toBeTruthy();
     expect(worker.getAttribute('aria-label') ?? '').not.toContain('coordinator');
+  });
+
+  it('each session option shows its title and group as separate words, both in its name (label in name, D-7897)', () => {
+    render(<CommandLayer openNewSession={vi.fn()} />);
+    openPalette();
+    type('project-a');
+    // Drawn side by side with nothing between, `first` and `project-a` would read as the one word `firstproject`.
+    for (const name of ['first, project-a', 'lead, coordinator, project-a']) {
+      const option = screen.getByRole('option', { name });
+      expect(labelInName(shownText(option), name), `"${shownText(option)}" in "${name}"`).toBe(true);
+    }
   });
 
   it("the first level's placeholder is COMMAND_FIELD_WORDS and its empty text SEARCH_EMPTY; a page keeps its own placeholder", () => {
