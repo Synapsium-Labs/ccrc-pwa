@@ -704,7 +704,8 @@ describe('the console history has a door a thumb can reach', () => {
     expect(door.closest('.term-keys'), 'the history door left the key bar entirely').not.toBeNull();
     // …and every sequence cap DID stay in a half, so this is a split and not
     // a bar that lost its keys.
-    const esc = screen.getByRole('button', { name: 'Escape' });
+    // The cap's name now leads with its legend, "esc" (label in name, D-7897).
+    const esc = screen.getByRole('button', { name: 'Esc (Escape)' });
     expect(esc.closest('.term-keys-seq')).not.toBeNull();
   });
 
@@ -2447,7 +2448,8 @@ describe('the drawer’s other two frames', () => {
     vi.stubGlobal('fetch', jsonFetch(200, OK_HISTORY));
     const { ws } = mountDrawer();
     ws.sent.length = 0;
-    const esc = screen.getByRole('button', { name: 'Escape' });
+    // The cap's name now leads with its legend, "esc" (label in name, D-7897).
+    const esc = screen.getByRole('button', { name: 'Esc (Escape)' });
 
     // `fireEvent` returns false when the handler called `preventDefault`.
     expect(fireEvent.pointerDown(esc, { pointerId: 1, isPrimary: true, button: 0 }),

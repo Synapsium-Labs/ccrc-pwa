@@ -166,12 +166,14 @@ describe('TerminalDrawer wiring', () => {
 describe('TerminalDrawer quick keys', () => {
   it('the Esc keycap sends {type:"input",data:"\\x1b"}', () => {
     const { ws } = opened();
-    fireEvent.click(screen.getByRole('button', { name: 'Escape' }));
+    // The cap's name now leads with its legend, "esc" (label in name, D-7897).
+    fireEvent.click(screen.getByRole('button', { name: 'Esc (Escape)' }));
     expect(ws.lastFrame()).toEqual({ type: 'input', data: '\x1b' });
   });
 
   it.each([
-    ['Escape', '\x1b'],
+    // The cap's name now leads with its legend, "esc" (label in name, D-7897).
+    ['Esc (Escape)', '\x1b'],
     ['Arrow up', '\x1b[A'],
     ['Arrow down', '\x1b[B'],
     ['Arrow left', '\x1b[D'],
