@@ -307,6 +307,9 @@ export interface HighlightStore {
   subscribe(key?: string): (listener: () => void) => () => void;
   settled(): boolean;
   evictUnreferenced(): void;
+  /** How many rows the store keeps per map, entries, cached `subscribe(key)` functions and listener Sets. The test
+   *  seam for M4.C5's retention (review 1364 F2): no production caller reads it. */
+  retainedKeys(): { readonly entries: number; readonly subscribers: number; readonly listeners: number };
   releaseAll(): void;
 }
 
@@ -553,7 +556,13 @@ export function createHighlightStore(
           listeners.set(key, held);
         }
         held.add(l);
-        return () => { listeners.get(key)?.delete(l); };
+        return () => {
+          // The key's Set goes with its last listener, so a key nobody listens to keeps no row (review 1364 F2).
+          const now = listeners.get(key);
+          if (now === undefined) return;
+          now.delete(l);
+          if (now.size === 0) listeners.delete(key);
+        };
       };
       subscribers.set(key, fn);
     }
@@ -576,12 +585,22 @@ export function createHighlightStore(
   }
 
   function evictUnreferenced(): void {
-    for (const key of [...entries.keys()]) {
-      if (refs.has(key) || seeded.has(key) || shownKeys.has(key)) continue;
-      entries.delete(key);
+    const referenced = (key: string): boolean => refs.has(key) || seeded.has(key) || shownKeys.has(key);
+    for (const key of [...entries.keys()]) if (!referenced(key)) entries.delete(key);
+    // A key whose blocks only ever showed it, or never requested it, has no entry, but `subscribe(key)` cached a function
+    // for it and a listener made a Set: both go by their own key sets (review 1364 F2). A Set that still holds a live
+    // listener stays with its function. In the hooks' order none is live here: this runs in the message's effect after
+    // every child's effects, and a child's `useSyncExternalStore` unsubscribes in its cleanup, which React runs for the
+    // whole tree before any effect of the new commit.
+    for (const key of new Set([...subscribers.keys(), ...listeners.keys()])) {
+      if (referenced(key) || (listeners.get(key)?.size ?? 0) > 0) continue;
       listeners.delete(key);
       subscribers.delete(key);
     }
+  }
+
+  function retainedKeys(): { readonly entries: number; readonly subscribers: number; readonly listeners: number } {
+    return { entries: entries.size, subscribers: subscribers.size, listeners: listeners.size };
   }
 
   function releaseAll(): void {
@@ -594,6 +613,6 @@ export function createHighlightStore(
 
   return {
     mode: options.mode, debounceMs, keyOf: (lang, raw) => blockKey(lang, raw, part1), seed, peek, copySkip, request, show,
-    subscribe, settled, evictUnreferenced, releaseAll,
+    subscribe, settled, evictUnreferenced, retainedKeys, releaseAll,
   };
 }

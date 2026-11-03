@@ -187,6 +187,61 @@ describe('M4.H11: a content-keyed store', () => {
     expect(store.peek(b).kind).toBe('pending');
   });
 
+  describe('M4.C5 (F2): a chat store keeps no row for a key no block references', () => {
+    /** One mounted block's hooks, in React's order for a changed key: the old key's subscription, show and request
+     *  end (cleanups), the new key is subscribed and shown, requested at once only the first time (the debounce
+     *  window otherwise), then the message's store evicts. */
+    function streamingFence(store: ReturnType<typeof setup>['store'], text: (n: number) => string, settles: number) {
+      let end: (() => void)[] = [];
+      for (let n = 1; n <= settles; n += 1) {
+        for (const f of end.reverse()) f();
+        const k = store.keyOf('ts', text(n));
+        if (k.kind !== 'key') throw new Error('no key');
+        end = [store.subscribe(k.key)(() => undefined), store.show(k.key)];
+        if (n === 1) end.push(store.request(k.key));
+        store.evictUnreferenced();
+      }
+      return end;
+    }
+
+    it('a fence that grows over many settles leaves a constant number of rows, not one per settle', () => {
+      const { store } = setup({ mode: 'chat' });
+      streamingFence(store, (n) => 'x'.repeat(n), 40);
+      const kept = store.retainedKeys();
+      expect(kept.entries).toBeLessThanOrEqual(2);
+      expect(kept.subscribers).toBeLessThanOrEqual(2);
+      expect(kept.listeners).toBeLessThanOrEqual(2);
+    });
+
+    it('unsubscribing the last listener of a key drops its listener Set at once, before any eviction', () => {
+      const { store, key } = setup({ mode: 'chat' });
+      const a = key('ts', 'a');
+      const off1 = store.subscribe(a)(() => undefined);
+      const off2 = store.subscribe(a)(() => undefined);
+      expect(store.retainedKeys().listeners).toBe(1);
+      off1();
+      expect(store.retainedKeys().listeners).toBe(1);
+      off2();
+      expect(store.retainedKeys().listeners).toBe(0);
+      // The cached function stays until eviction, and a later subscription starts a fresh Set that is notified.
+      let heard = 0;
+      store.subscribe(a)(() => { heard += 1; });
+      store.request(a);
+      expect(heard).toBeGreaterThan(0);
+    });
+
+    it('an unreferenced key that still has a live listener keeps its rows until the listener goes', () => {
+      const { store, key } = setup({ mode: 'chat' });
+      const a = key('ts', 'a');
+      const offA = store.subscribe(a)(() => undefined);
+      store.evictUnreferenced();
+      expect(store.retainedKeys()).toEqual({ entries: 0, subscribers: 1, listeners: 1 });
+      offA();
+      store.evictUnreferenced();
+      expect(store.retainedKeys()).toEqual({ entries: 0, subscribers: 0, listeners: 0 });
+    });
+  });
+
   it('keyOf: a key, or why the block can never be requested, in BASE\'s order; part 1\'s bounds only with part1', () => {
     expect(blockKey('ts', 'a')).toEqual({ kind: 'key', key: 'ts\u0000a' });
     expect(blockKey('nope', 'a')).toEqual({ kind: 'unregistered' });

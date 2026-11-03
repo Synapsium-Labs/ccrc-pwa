@@ -11,12 +11,13 @@ import { DOC_BODY_FALLBACK_NOTE, DocMarkdown } from '../src/docs/DocMarkdown';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import { HIGHLIGHTER_DEFAULT, HighlighterContext, createProductionStore, type HighlighterContextValue } from '../src/lib/highlighterContext';
 import type { HighlightStore } from '../src/lib/highlightStore';
+import { ChatMarkdown } from '../src/lib/markdown';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { chatHighlighter, docsHighlighter, type MarkdownParser } from '../src/lib/markdownRunner';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { HLJS } from '../src/lib/highlightGrammars';
 import type { Highlighter, HighlightOutcome, HighlightRequest } from '../src/lib/highlightProtocol';
-import { HIGHLIGHT_BLOCK_DEADLINE_MS, MD_HIGHLIGHT_MAX_HTML_CHARS } from '../src/lib/markdownLimits';
+import { HIGHLIGHT_BLOCK_DEADLINE_MS, HIGHLIGHT_STREAM_DEBOUNCE_MS, MD_HIGHLIGHT_MAX_HTML_CHARS } from '../src/lib/markdownLimits';
 import { entry, fakeLoaders, fileResponse, okTree, treeOk } from './docsFixtures';
 import { inThreadContext, inThreadHighlighter } from './highlightTestStore';
 
@@ -210,5 +211,39 @@ describe('M4.H17: the seam\'s default is production', () => {
     expect(HIGHLIGHTER_DEFAULT.chat).toBe(chatHighlighter);
     expect(HIGHLIGHTER_DEFAULT.createStore).toBe(createProductionStore);
     expect(HIGHLIGHTER_DEFAULT.publish).toBeUndefined();
+  });
+});
+
+describe('M4.C5 (F2): a chat message\'s store keeps no row for the keys a growing fence passed through', () => {
+  it('after many settles the store holds a constant number of rows, and none for the keys it never requested', () => {
+    vi.useFakeTimers();
+    try {
+      const chat = inThreadHighlighter({ hold: true });
+      const base = inThreadContext(inThreadHighlighter(), chat);
+      const stores: HighlightStore[] = [];
+      const ctx: HighlighterContextValue = {
+        ...base,
+        createStore: (h, mode) => {
+          const s = base.createStore(h, mode);
+          stores.push(s);
+          return s;
+        },
+      };
+      const text = (n: number): string => `\`\`\`ts\nconst a = ${'1 + '.repeat(n)}1`;
+      const r = render(under(ctx, <ChatMarkdown text={text(1)} />));
+      for (let n = 2; n <= 40; n += 1) {
+        r.rerender(under(ctx, <ChatMarkdown text={text(n)} />));
+        act(() => { vi.advanceTimersByTime(HIGHLIGHT_STREAM_DEBOUNCE_MS - 1); });
+      }
+      // Only the first key was ever requested: the debounce never let the others through.
+      expect(chat.calls).toHaveLength(1);
+      expect(stores).toHaveLength(1);
+      const kept = stores[0]!.retainedKeys();
+      expect(kept.entries).toBeLessThanOrEqual(2);
+      expect(kept.subscribers).toBeLessThanOrEqual(2);
+      expect(kept.listeners).toBeLessThanOrEqual(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
