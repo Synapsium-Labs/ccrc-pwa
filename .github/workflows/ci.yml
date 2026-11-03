@@ -25,11 +25,15 @@
 #                       "what a pull request runs"): every server shard, the
 #                       agent, pwa and browser tests and the node floor, in a
 #                       concurrency group of its own; no macOS leg and no
-#                       full-suite. The required checks carry the browser
-#                       suite (`test (pwa)`) and the node floor (`test
-#                       (server)`) here, so their red stops the merge; the perf
-#                       legs stay advisory. Nothing reaches main through the
-#                       queue without it. The one way around the queue is a
+#                       full-suite. ONE exception (the owner's ruling of
+#                       2026-11-02): the browser shards skip their tests when
+#                       no file in the group can reach them, a docs-only
+#                       group above all (reach.mjs `queueScope`). The
+#                       required checks carry the browser suite (`test (pwa)`)
+#                       and the node floor (`test (server)`) here, so their red
+#                       stops the merge; the perf legs stay advisory. Nothing
+#                       reaches main through the queue without it. The one
+#                       way around the queue is a
 #                       bypass actor's direct merge (`gh pr merge --admin`):
 #                       the required checks it needs are the fast run's, so it
 #                       lands only what that run tested (README, "CI").
@@ -1018,7 +1022,11 @@ jobs:
   # In the merge queue it also carries the browser suite (operator ruling
   # 2026-10-28), for the node floor's reason in `server` above: a fast pull
   # request skips it, so the queue's run is its only one before the merge.
-  # Elsewhere the browser suite stays advisory.
+  # Elsewhere the browser suite stays advisory. A group that cannot reach the
+  # browser tests skips them by STEP (the owner's ruling of 2026-11-02), so
+  # its shards report success and this refusal passes; a shard that failed or
+  # was cancelled still fails it, and so would one skipped by `if:`, which
+  # browser-pwa never carries (pinned by ci-pipeline.test.ts).
   pwa:
     name: test (pwa)
     needs: [pwa-shard, pwa-static, browser-pwa]
@@ -1300,9 +1308,24 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') || startsWith(github.head_ref, 'train/') }}
         run: node .github/ci/reach.mjs --pkg browser --event pull_request --base "origin/$BASE_REF" --full-label "$FULL_LABEL"
+      # The queue's browser skip (the owner's ruling of 2026-11-02, reversing
+      # 2026-10-25's "the queue runs every test" for the browser shards only):
+      # a merge-queue run asks the same question of the group's whole change,
+      # from the queue's base to its head, and skips the tests when no file in
+      # it can reach them (reach.mjs `queueScope`; docs/ is foreign to the
+      # browser tests and never to the pwa suite). A step of its own, so the
+      # pull request's question above is unchanged. The job still runs and
+      # reports success, so `test (pwa)`'s queue refusal passes on a deliberate
+      # skip and still fails on a red or cancelled shard.
+      - name: Can this merge-queue group reach the browser tests?
+        id: queue-reach
+        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'
+        env:
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+        run: node .github/ci/reach.mjs --pkg browser --event merge_group --base "$QUEUE_BASE"
 
       - uses: actions/setup-node@v7
-        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && steps.queue-reach.outputs.skip != 'true'
         with:
           node-version: '22'
           cache: npm
@@ -1312,19 +1335,19 @@ jobs:
             pwa/package-lock.json
             ui/package-lock.json
       - name: Install
-        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && steps.queue-reach.outputs.skip != 'true'
         working-directory: pwa
         run: ../.github/ci/bounded.sh 180 npm ci
       # BEFORE the browser config runs, for the test matrix's reason above: pwa
       # reads @ccrc/ui as SOURCE, and the leg's imports reach it (lib/router.ts,
       # through DocImage), which resolves only from ui's own node_modules.
       - name: Install @ccrc/ui
-        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && steps.queue-reach.outputs.skip != 'true'
         working-directory: ui
         run: ../.github/ci/bounded.sh 180 npm ci
       # Local binary, never npx (see the test matrix above).
       - name: Test
-        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
+        if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true' && steps.queue-reach.outputs.skip != 'true'
         working-directory: pwa
         run: ./node_modules/.bin/vitest run --config vitest.browser.config.ts --shard=${{ matrix.shard }}/${{ matrix.total }}
 

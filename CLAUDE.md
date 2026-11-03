@@ -294,7 +294,12 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `shadow`, a full-run PR's selection is only reported and every server test runs. **A merge-queue run** (`merge_group`) is the FULL run (operator ruling 2026-10-25, replacing 2026-09-28's "what a pull
   request runs"): every server shard, the agent, pwa and browser tests and the node floor, in a concurrency group of its own, and never the
   macOS legs or `full-suite`; there `test (pwa)` refuses a red browser suite and `test (server)` a red node floor
-  (step-level, merge_group-only refusals), so both gate the merge, and the perf legs stay advisory. The queue is the
+  (step-level, merge_group-only refusals), so both gate the merge, and the perf legs stay advisory. **One exception**
+  (the owner's ruling of 2026-11-02, reversing 2026-10-25's "the queue runs every test" for the browser shards only;
+  D-7870, `docs/superpowers/plans/2026-11-02-ci-queue-browser-docs-skip.md`): the browser shards skip their
+  tests, by step, when no file in the group can reach them (`reach.mjs` `queueScope`, the browser package's FOREIGN
+  list, `docs/` among it), so a docs-only group skips them and `test (pwa)` reads the shards' success. `docs/` stays
+  reachable for the pwa suite, which renders it. The queue is the
   safety net for everything the fast run leaves out, so nobody bypasses it: an admin merge that skips the queue
   (`gh pr merge --admin`; the ruleset's admin bypass allows it) lands on the fast run only, so never use it. **The macOS legs** (`test-macos`, `probe-macos`)
   live in `.github/workflows/macos.yml`, off the merge path and off the push to `main` (2026-11-02): the daily run calls them (their nightly run), a dispatched
