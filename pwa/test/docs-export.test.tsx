@@ -582,6 +582,29 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     expect(cut.doc.querySelector('.ccrc-export-missing')?.textContent).toBe(EXPORT_MISSING_SENTENCE['over-size']);
   });
 
+  it('when the estimate runs low (a long image title), the loop pops the last images until the file fits, and the result stays a prefix (M4.EX7)', async () => {
+    const assets = createExportAssets();
+    loaded(assets, 'x.png', BIG(3000));
+    loaded(assets, 'y.png', BIG(3000));
+    loaded(assets, 'z.png', BIG(10));
+    const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'x.png'), entry('specs', 'y.png'), entry('specs', 'z.png')] });
+    const title = 't'.repeat(400);
+    const body = treeBody(`![x](x.png) ![y](y.png "${title}") ![z](z.png)\n`, tree);
+    const all = await built(inputOf(body, { assets }), WIDE);
+    expect(all.doc.querySelectorAll('img')).toHaveLength(3);
+    // Every image's data URL is admitted by the estimate (it counts the src only), but the title makes the real file bigger.
+    const limits: ExportLimits = { maxBytes: all.result.size - 1, imageWaitMs: 20 };
+    const cut = await built(inputOf(body, { assets }), limits);
+    expect(cut.result.size).toBeLessThanOrEqual(limits.maxBytes);
+    const imgs = [...cut.doc.querySelectorAll('img')].map((i) => i.getAttribute('alt'));
+    const missed = [...cut.doc.querySelectorAll('.ccrc-export-missing')].map((s) => s.getAttribute('aria-label'));
+    expect(imgs.length).toBeLessThan(3);
+    expect(['x', 'y', 'z'].slice(0, imgs.length)).toEqual(imgs);
+    expect(missed).toEqual(['x', 'y', 'z'].slice(imgs.length));
+    expect(cut.doc.querySelector('.ccrc-export-missing')?.textContent).toBe(EXPORT_MISSING_SENTENCE['over-size']);
+    expect(cut.result.notes).toContain(`${3 - imgs.length} image${3 - imgs.length === 1 ? '' : 's'} not included.`);
+  });
+
   it('never cuts the body: over the limit it drops colouring, says so and asks nothing; still over, too large (M4.EX7)', async () => {
     const store = syncTestStore('docs');
     // Twenty coloured lines: their spans outweigh the colouring-dropped line the plain file gains.

@@ -262,7 +262,9 @@ export async function buildExport(input: ExportInput, limits: ExportLimits = LIM
     estimate += d.src.length;
   }
   file = fileOf(input, kept, coloured);
-  // The estimate leaves out a few bytes of markup per image: take the last one back out until the file fits.
+  // The estimate counts each `src` and nothing else, so it can run high (a placeholder is wider than a bare `<img>`) or low
+  // (a long image title, a draft caption). Whichever way it erred, this keeps the result a prefix of the images and under
+  // budget: take the last one back out until the file fits.
   while (file.length > limits.maxBytes && inlined.length > 0) {
     kept.set(inlined.pop()!, missing('over-size'));
     file = fileOf(input, kept, coloured);
