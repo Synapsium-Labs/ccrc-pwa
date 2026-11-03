@@ -12,21 +12,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import * as reach from '../../.github/ci/reach.mjs';
-import { skipsTests, scopeOf, prScope, fastRun, QUEUE_ONLY, FOREIGN, alwaysRunPwaTests } from '../../.github/ci/reach.mjs';
+import { skipsTests, scopeOf, prScope, queueScope, fastRun, docsOnly, QUEUE_ONLY, QUEUE_SKIPPABLE, QUEUE_DOCS_ONLY, FOREIGN, alwaysRunPwaTests } from '../../.github/ci/reach.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const REACH = path.join(ROOT, '.github', 'ci', 'reach.mjs');
-
-// TRANSITIONAL (2026-11-02). The queue's browser skip (the owner's ruling of 2026-11-02) lands in three pull
-// requests, because a pull request that changes a rules file (.github/**, CLAUDE.md) may change nothing else: first
-// these pins and the census, while reach.mjs has no queue arm; then the rules-only pull request (reach.mjs, ci.yml,
-// CLAUDE.md); then a pull request that deletes every PRE-SKIP arm below and `queueSkip` with it. Until then each case
-// accepts exactly one of the two WHOLE shapes and never a mix: reach.mjs's `queueScope` and QUEUE_SKIPPABLE, and docs/
-// foreign to `browser`, all three or none of them.
-const queueSkip = typeof (reach as Record<string, unknown>)['queueScope'] === 'function';
-const queueScope = (pkg: string, changed: string[]): string =>
-  ((reach as Record<string, unknown>)['queueScope'] as (p: string, c: string[]) => string)(pkg, changed);
 
 describe('skipsTests: a package skips its tests only when EVERY changed file is foreign to it', () => {
   it('agent: a change only under pwa/ or ui/ skips; one under agent/, shared/, server/ or the root runs', () => {
@@ -54,12 +43,6 @@ describe('skipsTests: a package skips its tests only when EVERY changed file is 
     expect(skipsTests('pwa', ['server/src/b.ts', 'docs/superpowers/specs/x.md'])).toBe(false);
     expect(skipsTests('pwa', ['docs/superpowers/specs/x.md'])).toBe(false);
     expect(FOREIGN.pwa).not.toContain('docs/');
-    if (!queueSkip) {
-      // PRE-SKIP arm (transitional): docs/ reaches every pwa-side package, as on main before the ruling.
-      expect(FOREIGN.browser).not.toContain('docs/');
-      expect(skipsTests('browser', ['server/src/b.ts', 'docs/superpowers/specs/x.md'])).toBe(false);
-      return;
-    }
     expect(FOREIGN.browser).toContain('docs/');
     expect(skipsTests('browser', ['server/src/b.ts', 'docs/superpowers/specs/x.md'])).toBe(true);
     expect(skipsTests('browser', ['docs/superpowers/specs/x.md', 'docs/design/a.png'])).toBe(true);
@@ -312,12 +295,7 @@ describe('the queue\'s browser skip (owner ruling 2026-11-02): a merge-queue gro
   const skipOf = (text: string): string => /^skip=(.*)$/m.exec(text)?.[1] ?? '';
 
   it('queueScope: skip only for the browser leg, and only when every file of the group is foreign to it', () => {
-    if (!queueSkip) {
-      // PRE-SKIP arm (transitional): reach.mjs has no queue arm at all.
-      expect(Object.keys(reach)).not.toContain('QUEUE_SKIPPABLE');
-      return;
-    }
-    expect((reach as Record<string, unknown>)['QUEUE_SKIPPABLE']).toEqual(['browser']);
+    expect(QUEUE_SKIPPABLE).toEqual(['browser']);
     expect(queueScope('browser', ['docs/superpowers/plans/x.md'])).toBe('skip');
     expect(queueScope('browser', ['docs/a.md', 'docs/design/b.png', 'server/src/c.ts'])).toBe('skip');
     for (const reaching of ['pwa/src/a.ts', 'ui/src/b.tsx', 'shared/api.ts', 'README.md', 'server/test/fixtures/panes/x.txt', '.github/workflows/ci.yml']) {
@@ -333,14 +311,9 @@ describe('the queue\'s browser skip (owner ruling 2026-11-02): a merge-queue gro
   });
 
   it('the CLI: a docs-only merge_group skips the browser tests; a group that reaches them, or any other package, runs them', () => {
-    const docsOnly = run(['--pkg', 'browser', '--event', 'merge_group'], ['docs/superpowers/plans/x.md']);
-    if (!queueSkip) {
-      // PRE-SKIP arm (transitional): the queue runs every test.
-      expect(skipOf(docsOnly)).toBe('false');
-      return;
-    }
-    expect(docsOnly).toMatch(/^skip=true$/m);
-    expect(docsOnly).toMatch(/^scope=skip$/m);
+    const docsGroup = run(['--pkg', 'browser', '--event', 'merge_group'], ['docs/superpowers/plans/x.md']);
+    expect(docsGroup).toMatch(/^skip=true$/m);
+    expect(docsGroup).toMatch(/^scope=skip$/m);
     expect(skipOf(run(['--pkg', 'browser', '--event', 'merge_group'], ['docs/a.md', 'pwa/src/a.ts']))).toBe('false');
     expect(skipOf(run(['--pkg', 'pwa', '--event', 'merge_group'], ['docs/a.md']))).toBe('false');
     expect(skipOf(run(['--pkg', 'agent', '--event', 'merge_group'], ['pwa/src/a.ts']))).toBe('false');
@@ -355,7 +328,7 @@ describe('the queue\'s browser skip (owner ruling 2026-11-02): a merge-queue gro
   it('the CLI fails safe in the queue: a group it cannot diff runs the browser tests', () => {
     const missing = run(['--pkg', 'browser', '--event', 'merge_group'], null);
     expect(skipOf(missing)).toBe('false');
-    if (queueSkip) expect(missing).toMatch(/^scope=all$/m);
+    expect(missing).toMatch(/^scope=all$/m);
   });
 
   it('diffs the group from --base (the queue\'s base sha) to HEAD, every commit in it', () => {
@@ -382,7 +355,7 @@ describe('the queue\'s browser skip (owner ruling 2026-11-02): a merge-queue gro
       });
       return skipOf(readFileSync(out, 'utf8'));
     };
-    expect(group(['docs/superpowers/plans/x.md', 'docs/superpowers/specs/y.md'])).toBe(queueSkip ? 'true' : 'false');
+    expect(group(['docs/superpowers/plans/x.md', 'docs/superpowers/specs/y.md'])).toBe('true');
     // an earlier entry of the same group that reaches the browser tests runs them for the whole group
     expect(group(['pwa/src/b.ts', 'docs/superpowers/plans/x.md'])).toBe('false');
   });
@@ -394,8 +367,6 @@ describe('the queue\'s browser skip (owner ruling 2026-11-02): a merge-queue gro
 // no node floor or agent tests (`skip`), the pwa suite whole (`all`). On a pull request, docs/ is foreign to the agent
 // tests and to `pwa-build` (the pwa typecheck, build and Storybook), so they skip through `skipsTests`.
 describe('a docs-only change (D-7868): one predicate, and the queue and pull-request arms that use it', () => {
-  const { docsOnly, QUEUE_DOCS_ONLY } = reach as unknown as { docsOnly: (c: string[]) => boolean; QUEUE_DOCS_ONLY: Record<string, string> };
-
   it('docsOnly: true only for a non-empty change whose every file is a document under docs/', () => {
     expect(docsOnly(['docs/superpowers/specs/x.md'])).toBe(true);
     expect(docsOnly(['docs/superpowers/specs/x.md', 'docs/superpowers/plans/y.md', 'docs/design/z.png'])).toBe(true);
