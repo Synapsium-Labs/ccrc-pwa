@@ -26,6 +26,10 @@ export interface FleetNotice {
 export interface FleetState {
   sessions: FleetSession[];
   conn: 'connecting' | 'open' | 'down';
+  /** Whether the link has gone `down` since it was last `open`: set by a `down`, cleared by an `open`, and left as it is
+   *  by each `connecting` attempt between them, so a reader can tell an attempt during an outage from a cold start's
+   *  first one (an empty Fleet pane keeps saying "Reconnecting…" through the former). Initially false. */
+  linkLost: boolean;
   notices: FleetNotice[];
   /**
    * The account roster — `GET /api/accounts`'s `roster` field, id/label/hue/
@@ -508,6 +512,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       // snapshot replaces this one.
       sessions: snapshot?.sessions ?? [],
       conn: 'connecting',
+      linkLost: false,
       notices: [],
       feed: [],
       feedDropped: 0,
@@ -682,7 +687,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               set({ waiting: msg.waiting });
             }
           },
-          onState: (conn) => set({ conn }),
+          onState: (conn) => set(conn === 'connecting' ? { conn } : { conn, linkLost: conn === 'down' }),
           // `delegation` is per connection: a reconnect reads unavailable until the new server speaks.
           onOpen: () => { set({ delegation: null }); askCatchUp(); askDurableFeed(); },
           makeSocket: deps.makeSocket,
