@@ -132,8 +132,8 @@ on:
         options: [full, rebuild, refresh]
         default: full
       # The vitest workers each server shard runs (select.mjs, shards.mjs serverProfile): 2 is PROFILES.linux's, 4
-      # measures the suite on all four of the runner's vCPUs. A dispatch alone reads it; every other trigger, and a
-      # call (which declares no such input), plans at the profile's.
+      # measures the suite on all four of the runner's vCPUs, under half the shard cap. A dispatch alone reads it;
+      # every other trigger, and a call (which declares no such input), plans at the profile's.
       workers:
         description: 'Vitest workers per server shard: 2 (the profile) or 4 (fewer, fuller shards).'
         type: choice

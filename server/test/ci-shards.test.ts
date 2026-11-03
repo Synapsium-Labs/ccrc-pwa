@@ -101,9 +101,22 @@ describe('PROFILES', () => {
 });
 
 describe("serverProfile: a dispatch's workers input, and only a dispatch's", () => {
-  it('a workflow_dispatch that asks for 4 workers plans the server shards at 4; every other field is the profile\'s', () => {
-    expect(serverProfile('workflow_dispatch', '4')).toEqual({ ...PROFILES.linux, workers: 4 });
+  it('a workflow_dispatch that asks for 4 workers plans the server shards at 4 under half the cap: the same 24 worker slots on half the runners', () => {
+    expect(serverProfile('workflow_dispatch', '4')).toEqual({ ...PROFILES.linux, workers: 4, max: 6 });
     expect(serverProfile('workflow_dispatch', '2')).toEqual(PROFILES.linux);
+  });
+
+  it('when the suite outgrows the cap at both counts (the case today), 4 workers still plan half the shards, each with the same load', () => {
+    // 384 files of 45 s: 17,280,000 ms. Uncapped that is 36 shards at 2 workers and 18 at 4; the caps make it 12 and 6.
+    const files = Array.from({ length: 384 }, (_, i) => `server/test/g${String(i).padStart(3, '0')}.test.ts`);
+    const durations = Object.fromEntries(files.map((f) => [f, 45_000]));
+    const two = planShards(files, durations, serverProfile('workflow_dispatch', '2'));
+    const four = planShards(files, durations, serverProfile('workflow_dispatch', '4'));
+    expect(two).toHaveLength(12);
+    expect(four).toHaveLength(6);
+    const perWorker = (plan: typeof two) => Math.max(...plan.map((s) => s.files.length * 45_000 / s.workers));
+    expect(perWorker(four)).toBe(perWorker(two));
+    expect(four.flatMap((s) => s.files).sort()).toEqual([...files].sort());
   });
 
   it('a dispatch with no workers input keeps the profile', () => {

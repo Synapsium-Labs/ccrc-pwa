@@ -78,7 +78,10 @@ export const DISPATCH_WORKERS = [2, 4];
 /**
  * The profile the full server plan is packed with. A `workflow_dispatch` that passes `workers` (2 or 4) plans the
  * shards at that many vitest workers each, for measuring how the suite runs at 4 on a 4-vCPU runner against today's
- * 2; every other field is `PROFILES.linux`'s, so the same tests run and only the shard count and the workers move.
+ * 2. The cap scales down with it, so the run keeps the profile's worker slots (`max · workers`, 24) on fewer runners:
+ * the full suite outgrows the cap at either count (about 39 shards' worth at 2, 20 at 4, from the 2026-11-03
+ * durations), so at the same cap 4 workers would only half-fill 12 shards, never the plan they would replace.
+ * Every other field is `PROFILES.linux`'s, so the same tests run and only the shard count and the workers move.
  * Any other event keeps the profile, whatever is passed: a pull request, a queue run, a push, a schedule and a call
  * (a called run's event is its caller's, but ci.yml passes no workers for one: `workflow_call` declares no such
  * input). A dispatch asking for a count the input does not offer is refused.
@@ -92,7 +95,8 @@ export function serverProfile(event, workers) {
   if (!DISPATCH_WORKERS.includes(n)) {
     throw new Error(`shards.mjs: a dispatch may ask for ${DISPATCH_WORKERS.join(' or ')} workers per server shard, not ${JSON.stringify(workers)}`);
   }
-  return n === PROFILES.linux.workers ? PROFILES.linux : { ...PROFILES.linux, workers: n };
+  if (n === PROFILES.linux.workers) return PROFILES.linux;
+  return { ...PROFILES.linux, workers: n, max: Math.max(1, Math.floor((PROFILES.linux.max * PROFILES.linux.workers) / n)) };
 }
 
 /** The median of the known durations; `defaultMs` when none are known. */
