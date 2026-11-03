@@ -337,6 +337,65 @@ describe('select.mjs CLI — pull_request', () => {
     expect(queue.summary).toContain('- event: `merge_group`');
   });
 
+  // D-7868 (the operator's direction of 2026-11-03): a docs-only merge-queue group selects as a pull request does,
+  // from the queue's base sha (`--base`), and hands fast-plan the same `untraced` selection; any other group, or a
+  // queue run with no base to diff from, stays the full run.
+  function buildDocsFixture(extra?: string) {
+    const repo = initRepo();
+    writeFile(repo, 'docs/superpowers/plans/x.md', 'one\n');
+    writeFile(repo, 'src/foo.ts', 'export const foo = 1;\n');
+    writeFile(repo, 'server/test/reads-doc.test.ts', "it('r', () => {});\n");
+    writeFile(repo, 'server/test/reads-src.test.ts', "it('s', () => {});\n");
+    writeFile(repo, 'server/test/git.test.ts', "it('g', () => {});\n");
+    const baseSha = commitAll(repo, 'base');
+    writeFile(repo, 'docs/superpowers/plans/x.md', 'two\n');
+    commitAll(repo, 'queue entry 1: a doc');
+    writeFile(repo, 'docs/superpowers/specs/y.md', 'new\n');
+    commitAll(repo, 'queue entry 2: another doc');
+    if (extra) { writeFile(repo, extra, 'x\n'); commitAll(repo, `queue entry 3: ${extra}`); }
+    // Written after the commits, uncommitted, so the group's change is the queue entries alone.
+    const mapFile = writeMapFile(repo, {
+      format: 1, sha: baseSha, baseline: depRecord(),
+      tests: {
+        'server/test/reads-doc.test.ts': testRecord({ read: ['docs/superpowers/plans/x.md'] }),
+        'server/test/reads-src.test.ts': testRecord({ read: ['src/foo.ts'] }),
+        'server/test/git.test.ts': testRecord({ git: true }),
+      },
+    });
+    return { repo, mapFile, baseSha };
+  }
+
+  it('merge_group, a docs-only group with the queue\'s base: the selection and the untraced list a pull request gets (D-7868)', () => {
+    const { repo, mapFile, baseSha } = buildDocsFixture();
+    const queue = runSelect(repo, { event: 'merge_group', selection: 'enforce', mapFile, base: baseSha });
+    const pr = runSelect(repo, { event: 'pull_request', selection: 'enforce', mapFile, base: baseSha });
+    expect(queue.status, queue.stderr).toBe(0);
+    expect(queue.outputs.tests).toBe('selected');
+    expect(queue.outputs.fallback).toBe('');
+    expect(uniqueFilesInMatrix(queue.outputs.server_matrix)).toEqual(new Set(['test/reads-doc.test.ts', 'test/git.test.ts']));
+    expect(JSON.parse(queue.outputs.untraced!)).toEqual(['server/test/git.test.ts', 'server/test/reads-doc.test.ts']);
+    expect(queue.outputs.untraced).toBe(pr.outputs.untraced);
+    expect(queue.outputs.server_matrix).toBe(pr.outputs.server_matrix);
+    expect(queue.summary).toContain('- event: `merge_group`');
+  });
+
+  it('merge_group: a mixed group, a root file in it, or no base to diff from is the full run (D-7868)', () => {
+    for (const extra of ['src/foo.ts', 'README.md', 'docs/x/package.json']) {
+      const { repo, mapFile, baseSha } = buildDocsFixture(extra);
+      const queue = runSelect(repo, { event: 'merge_group', selection: 'enforce', mapFile, base: baseSha });
+      expect(queue.status, extra).toBe(0);
+      expect(queue.outputs.tests, extra).toBe('full');
+      expect(queue.outputs.count, extra).toBe('3');
+      expect(queue.outputs.untraced, extra).toBe('');
+    }
+    const { repo, mapFile } = buildDocsFixture();
+    const noBase = runSelect(repo, { event: 'merge_group', selection: 'enforce', mapFile });
+    expect(noBase.outputs.tests).toBe('full');
+    const badBase = runSelect(repo, { event: 'merge_group', selection: 'enforce', mapFile, base: '0'.repeat(40) });
+    expect(badBase.status).toBe(0);
+    expect(badBase.outputs.tests, 'an undiffable group').toBe('full');
+  });
+
   it('a directory a test linked whole: a change under it selects the test, and the table names rule 6 SUBTREE', () => {
     const repo = initRepo();
     writeFile(repo, 'lib/linked.sh', 'echo 1\n');

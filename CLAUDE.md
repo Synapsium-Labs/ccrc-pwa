@@ -299,7 +299,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   D-7870, `docs/superpowers/plans/2026-11-02-ci-queue-browser-docs-skip.md`): the browser shards skip their
   tests, by step, when no file in the group can reach them (`reach.mjs` `queueScope`, the browser package's FOREIGN
   list, `docs/` among it), so a docs-only group skips them and `test (pwa)` reads the shards' success. `docs/` stays
-  reachable for the pwa suite, which renders it. The queue is the
+  reachable for the pwa suite, which renders it. **A docs-only change** (non-empty, every file under `docs/` and none
+  of them infrastructure: `reach.mjs` `docsOnly`; a root `.md` is not one; D-7868, the operator's direction of
+  2026-11-03) runs only what can see it: in the queue, the server tests a pull request runs for it (the fast plan, from
+  the queue's base), no node floor or agent tests, and the pwa suite whole; on a pull request without `full-ci`, no
+  agent tests, pwa typecheck, pwa build or Storybook. Every skip is by step, so the required checks still report. The queue is the
   safety net for everything the fast run leaves out, so nobody bypasses it: an admin merge that skips the queue
   (`gh pr merge --admin`; the ruleset's admin bypass allows it) lands on the fast run only, so never use it. **The macOS legs** (`test-macos`, `probe-macos`)
   live in `.github/workflows/macos.yml`, off the merge path and off the push to `main` (2026-11-02): the daily run calls them (their nightly run), a dispatched
