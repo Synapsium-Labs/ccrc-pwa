@@ -620,7 +620,8 @@ function doorCounts(): Record<string, number> {
   return {
     wordmark: document.querySelectorAll('[data-wordmark], .wordmark').length,
     docs: count(/^Docs\b/),
-    accounts: count(/^(Accounts|Your sign-in and accounts)$/),
+    // The header door's name leads with its word, "Account" (label in name, D-7897).
+    accounts: count(/^(Accounts|Account — your sign-in and accounts)$/),
     settings: count(/^Settings\b/),
     inbox: count(/^Inbox\b/),
     mail: count(/^Mail\b/),
