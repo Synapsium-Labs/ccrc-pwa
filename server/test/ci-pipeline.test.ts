@@ -1630,12 +1630,6 @@ describe('the node-floor leg runs every history test file on the floor interpret
   });
 });
 
-/** TRANSITIONAL (2026-11-02; the queue's browser skip describe below says when it goes): whether `browser-pwa`
- *  carries the merge-queue ask (the owner's ruling of 2026-11-02) rather than the pull-request ask alone. */
-function browserQueueSkip(block: string): boolean {
-  return /^ {6}- name: Can this merge-queue group reach the browser tests\?$/m.test(block);
-}
-
 // ── the real-browser leg (native Docs reader spec 2026-10-01 §5.7) ──────────
 //
 // pwa's second vitest config, driving a real Chrome. Not a branch-protection
@@ -1661,18 +1655,15 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
 
   it('checks out, sets up Node 22, installs pwa with npm ci, and runs the browser config with the local vitest', () => {
     const s = steps(job('browser-pwa'));
-    // TRANSITIONAL (see browserQueueSkip below): the merge-queue ask is the third step once ci.yml carries it.
-    const queue = browserQueueSkip(job('browser-pwa'));
-    expect(s, `the browser leg has exactly ${queue ? 'seven' : 'six'} steps`).toHaveLength(queue ? 7 : 6);
+    expect(s, 'the browser leg has exactly seven steps (the two asks are the second and third)').toHaveLength(7);
     // A version pin is a deliberate edit, so a future bump reds it again
     // (D-6739: the pins name the majors #364 moved to).
     expect(s[0]).toMatch(/^ {6}- uses: actions\/checkout@v7\n/);
     expect(s[1]).toMatch(/^ {6}- name: Can this change reach the browser tests\?\n/);
-    const setup = queue ? 3 : 2;
-    if (queue) expect(s[2]).toMatch(/^ {6}- name: Can this merge-queue group reach the browser tests\?\n/);
-    expect(s[setup]).toMatch(/^ {6}- uses: actions\/setup-node@v7\n/);
-    expect(s[setup]).toMatch(/^ {10}node-version: '22'$/m);
-    expect(s[setup]).toMatch(/^ {10}cache-dependency-path: \|\n {12}pwa\/package-lock\.json\n {12}ui\/package-lock\.json$/m);
+    expect(s[2]).toMatch(/^ {6}- name: Can this merge-queue group reach the browser tests\?\n/);
+    expect(s[3]).toMatch(/^ {6}- uses: actions\/setup-node@v7\n/);
+    expect(s[3]).toMatch(/^ {10}node-version: '22'$/m);
+    expect(s[3]).toMatch(/^ {10}cache-dependency-path: \|\n {12}pwa\/package-lock\.json\n {12}ui\/package-lock\.json$/m);
     expect(step(job('browser-pwa'), 'Install')).toMatch(/^ {8}working-directory: pwa\n {8}run: \.\.\/\.github\/ci\/bounded\.sh 180 npm ci\n/m);
     // pwa reads @ccrc/ui as SOURCE and the leg's imports reach it, so ui is installed too, before the Test step.
     expect(step(job('browser-pwa'), 'Install @ccrc/ui')).toMatch(/^ {8}working-directory: ui\n {8}run: \.\.\/\.github\/ci\/bounded\.sh 180 npm ci\n/m);
@@ -1697,11 +1688,6 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
 // browser result of `success`, passes a deliberate skip and still refuses a shard that failed or was cancelled, and a
 // job skipped by `if:` too (browser-pwa carries no job-level `if:`, pinned above). Both halves are EVALUATED here,
 // on the workflow's own expressions, by a reader of the small grammar they use.
-//
-// TRANSITIONAL (2026-11-02). This lands in three pull requests, because a pull request that changes ci.yml may change
-// nothing else: first these pins, while ci.yml has no merge-queue ask; then ci.yml (with reach.mjs and CLAUDE.md)
-// alone; then a pull request that deletes every PRE-SKIP arm and `browserQueueSkip` with it. Until then each case
-// accepts exactly one of the two WHOLE shapes: the ask step and both gates on every later step, or neither.
 
 /** GitHub's value of `expr` in `ctx`: the `==`, `!=`, `&&`, `||`, `!` and parentheses over string literals and
  *  context paths that the workflow's `if:`s use. A path `ctx` does not hold reads as '' (a skipped step's output
@@ -1780,12 +1766,6 @@ describe('the queue\'s browser skip (owner ruling 2026-11-02): a deliberate skip
     expect(jobKey(b, 'if')).toBeNull();
     expect(b).not.toMatch(/continue-on-error/);
     const queueRun = (skip: string) => browserStepsRun({ 'env.CCRC_LEG': 'run', 'github.event_name': 'merge_group', 'steps.queue-reach.outputs.skip': skip });
-    if (!browserQueueSkip(b)) {
-      // PRE-SKIP arm (transitional): the queue runs every step but the pull request's ask, whatever changed.
-      expect(b, 'a gate on a merge-queue answer with no step that asks it').not.toContain('steps.queue-reach');
-      expect(queueRun('true')).toEqual(['actions/checkout@v7', 'actions/setup-node@v7', 'Install', 'Install @ccrc/ui', 'Test']);
-      return;
-    }
     const ask = step(b, 'Can this merge-queue group reach the browser tests?');
     expect(ask).toContain('        id: queue-reach\n');
     expect(ask).toContain("        if: env.CCRC_LEG == 'run' && github.event_name == 'merge_group'\n");
