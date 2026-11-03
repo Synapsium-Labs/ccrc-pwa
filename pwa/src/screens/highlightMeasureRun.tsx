@@ -75,6 +75,8 @@ export interface GrammarFigures {
   readonly htmlRatio: { readonly p95: number; readonly max: number };
   /** Blocks the worker did not answer as HTML (too large, threw, unregistered). */
   readonly notHtml: number;
+  /** Of those, the blocks answered `too-large`: their `htmlChars` are in `htmlRatio`, so its max is not censored at the cap. */
+  readonly overCap: number;
 }
 
 export interface MeasureResult {
@@ -84,7 +86,7 @@ export interface MeasureResult {
   readonly corpus: { readonly projects: number; readonly docs: number; readonly unreadDocs: number; readonly blocks: number };
   readonly item1: { readonly byGrammar: readonly GrammarFigures[]; readonly slowest: readonly { readonly grammar: string; readonly chars: number; readonly ms: number }[] };
   readonly item2: { readonly coldMs: number | null; readonly respawnMs: readonly number[] };
-  readonly item3: { readonly crafted: readonly { readonly shape: string; readonly ratio: number | null }[] };
+  readonly item3: { readonly crafted: readonly { readonly shape: string; readonly ratio: number | null; readonly overCap: boolean }[] };
   readonly item4: { readonly blocks: number; readonly htmlChars: number; readonly checkMs: number; readonly insertAndLayoutMs: number };
   readonly item5: { readonly blocks: number; readonly codeChars: number; readonly firstFrameToColouredMs: number | null };
   readonly item6: readonly { readonly shape: string; readonly grammar: string; readonly chars: number; readonly outcome: string; readonly ms: number; readonly longestFrameGapMs: number }[];
@@ -123,6 +125,13 @@ function pct(xs: readonly number[], p: number): number {
 const clockOf = (deps: MeasureDeps): HighlightClock => ({
   now: deps.now, setTimer: (fn, ms) => window.setTimeout(fn, ms), clearTimer: (h) => window.clearTimeout(h as number),
 });
+
+/** The HTML characters a worker's answer measured: an `html` answer's length, or a `too-large` answer's `htmlChars`
+ *  (section 4.9 sets the HTML cap from the highest ratio R19 measures, so an answer over the cap still counts);
+ *  `null` for every other answer. */
+function htmlCharsOf(o: HighlightOutcome): number | null {
+  return o.kind === 'html' ? o.html.length : o.kind === 'too-large' ? o.htmlChars : null;
+}
 
 /** One block posted; its outcome and its worker time, post to answer. */
 async function timed(deps: MeasureDeps, h: Highlighter, lang: string, code: string): Promise<{ outcome: HighlightOutcome; ms: number; postedAt: number }> {
@@ -214,7 +223,7 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
     if (r.outcome.kind !== 'html') throw new Error(`The highlight worker did not answer (${r.outcome.kind}).`);
     if (coldMs === null) coldMs = round(r.postedAt - created);
   }
-  const stats = new Map<string, { ms: number[]; ratios: number[]; chars: number; notHtml: number; largest: string }>();
+  const stats = new Map<string, { ms: number[]; ratios: number[]; chars: number; notHtml: number; overCap: number; largest: string }>();
   const slowest: { grammar: string; chars: number; ms: number }[] = [];
   const kept: { raw: string; html: string }[] = [];
   let keptChars = 0;
@@ -229,20 +238,22 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
       blocks += 1;
       docCount += 1;
       codeChars += b.raw.length;
-      const s = stats.get(grammar) ?? { ms: [], ratios: [], chars: 0, notHtml: 0, largest: '' };
+      const s = stats.get(grammar) ?? { ms: [], ratios: [], chars: 0, notHtml: 0, overCap: 0, largest: '' };
       stats.set(grammar, s);
       const r = await timed(deps, warm, b.lang, b.raw);
       s.ms.push(r.ms);
       s.chars += b.raw.length;
       if (b.raw.length > s.largest.length) s.largest = b.raw;
+      const htmlChars = htmlCharsOf(r.outcome);
+      if (htmlChars !== null && b.raw.length > 0) s.ratios.push(htmlChars / b.raw.length);
       if (r.outcome.kind === 'html') {
-        if (b.raw.length > 0) s.ratios.push(r.outcome.html.length / b.raw.length);
         if (keptChars + r.outcome.html.length <= DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS) {
           kept.push({ raw: b.raw, html: r.outcome.html });
           keptChars += r.outcome.html.length;
         }
       } else {
         s.notHtml += 1;
+        if (r.outcome.kind === 'too-large') s.overCap += 1;
       }
       slowest.push({ grammar, chars: b.raw.length, ms: r.ms });
       slowest.sort((x, y) => y.ms - x.ms);
@@ -269,6 +280,7 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
     cold: cold.get(grammar) ?? null,
     htmlRatio: { p95: pct(s.ratios, 0.95), max: pct(s.ratios, 1) },
     notHtml: s.notHtml,
+    overCap: s.overCap,
   }));
   // Item 4: check, insert and lay out a page's worth of real answers through the one sink.
   progress('Item 4');
@@ -309,7 +321,7 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
   }
   // Items 6 and 3 (crafted): the shipped deadline.
   const item6: MeasureResult['item6'][number][] = [];
-  const crafted: { shape: string; ratio: number | null }[] = [];
+  const crafted: { shape: string; ratio: number | null; overCap: boolean }[] = [];
   const shipped = deps.highlighter(HIGHLIGHT_BLOCK_DEADLINE_MS);
   for (const s of CRAFTED_SHAPES) {
     progress(`Item 6: ${s.name}`);
@@ -317,7 +329,8 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
     const gap = await longestGap(deps, job);
     const r = await job;
     item6.push({ shape: s.name, grammar: s.lang, chars: s.code.length, outcome: r.outcome.kind, ms: r.ms, longestFrameGapMs: gap });
-    crafted.push({ shape: s.name, ratio: r.outcome.kind === 'html' ? round(r.outcome.html.length / s.code.length) : null });
+    const chars = htmlCharsOf(r.outcome);
+    crafted.push({ shape: s.name, ratio: chars === null ? null : round(chars / s.code.length), overCap: r.outcome.kind === 'too-large' });
   }
   // Item 7: eight crafted blocks under the shipped ceilings, none of part 1's bounds.
   progress('Item 7');

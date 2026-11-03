@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createHighlightAnswerer } from '../src/lib/highlightJob';
-import type { HighlightJob, Highlighter } from '../src/lib/highlightProtocol';
+import type { HighlightJob, HighlightOutcome, Highlighter } from '../src/lib/highlightProtocol';
 import { HIGHLIGHT_BLOCK_DEADLINE_MS, HIGHLIGHT_BOOT_BUDGET_MS, HIGHLIGHT_PAGE_MAX_TIMEOUTS, HIGHLIGHT_PAGE_WORKER_MS } from '../src/lib/markdownLimits';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import type { WorkerLike } from '../src/lib/markdownRunner';
@@ -29,6 +29,18 @@ const timingOut = (): Highlighter => ({
   prewarm: () => undefined,
 });
 
+/** `h`, except that `answer` may replace its answer to a job (a `null` leaves the job to `h`). */
+const overriding = (h: Highlighter, answer: (r: { lang: string; code: string }) => HighlightOutcome | null): Highlighter => ({
+  highlight: async (r, o) => {
+    const a = answer(r);
+    if (a === null) return h.highlight(r, o);
+    o.onPosted?.();
+    return a;
+  },
+  status: () => h.status(),
+  prewarm: () => h.prewarm(),
+});
+
 function fakes(over: Partial<MeasureDeps> = {}) {
   const f = fakeLoaders({ tree: okTree(treeOk({ entries: [entry('specs', 'secret-plan.md'), entry('plans', 'b.md'), entry('specs', 'c.ts')] })), file: { s: 'ok', value: fileResponse(DOC) } });
   f.projects.mockResolvedValue({ s: 'ok', value: { ok: true, cacheAgeMs: null, index: { v: 1, verb: 'docs-index', ok: true, elapsedMs: 1, unlisted: 0, duplicates: [], projects: [{ project: 'demo', state: 'ready', github: null }] } } } as never);
@@ -38,7 +50,10 @@ function fakes(over: Partial<MeasureDeps> = {}) {
   const deps: MeasureDeps = {
     loaders: f.loaders,
     parse: async (src) => parseMarkdown(src, 'docs'),
-    highlighter: (deadlineMs) => (deadlineMs === HIGHLIGHT_BLOCK_DEADLINE_MS ? timingOut() : inThreadHighlighter()),
+    highlighter: (deadlineMs) => (deadlineMs === HIGHLIGHT_BLOCK_DEADLINE_MS
+      ? timingOut()
+      // A crafted shape (longer than 2000 characters) is answered in kind, not run through highlight.js in-thread.
+      : overriding(inThreadHighlighter(), (r) => (r.code.length > 2000 ? { kind: 'html', html: 'x'.repeat(2 * r.code.length) } : null))),
     now: () => (t += 1),
     frame: () => new Promise<number>((resolve) => { setTimeout(() => resolve(t), 0); }),
     sleep: async () => undefined,
@@ -47,7 +62,7 @@ function fakes(over: Partial<MeasureDeps> = {}) {
     hardwareConcurrency: 8,
     ...over,
   };
-  return { f, deps };
+  return { f, deps, advance: (n: number): void => { t += n; } };
 }
 
 describe('R19: the driver', () => {
@@ -101,6 +116,35 @@ describe('R19: the driver', () => {
     const { deps } = fakes({ signal: ctl.signal });
     await expect(runHighlightMeasure(deps, () => undefined)).rejects.toBeDefined();
   });
+});
+
+// A fix round of the whole-branch review (Task 10): R19's figures keep what the worker measured.
+describe('R19: what the figures keep', () => {
+  it('an answer over the HTML cap still gives its ratio, so the maximum is not censored at the cap, and the grammar says how many', async () => {
+    const { deps } = fakes({
+      highlighter: (ms) => overriding(
+        ms === HIGHLIGHT_BLOCK_DEADLINE_MS ? timingOut() : inThreadHighlighter(),
+        (r) => (r.code === SECRET ? { kind: 'too-large', htmlChars: 10 * r.code.length } : null),
+      ),
+    });
+    const r = await runHighlightMeasure(deps, () => undefined);
+    const ts = r.item1.byGrammar.find((g) => g.grammar === 'typescript')!;
+    expect(ts.htmlRatio.max).toBeGreaterThanOrEqual(10);
+    expect(ts).toMatchObject({ notHtml: 2, overCap: 2 });
+    expect(r.item1.byGrammar.find((g) => g.grammar === 'json')).toMatchObject({ overCap: 0 });
+  }, 60_000);
+
+  it('a crafted shape answered over the cap gives its ratio and is marked over the cap', async () => {
+    const over = (r: { lang: string; code: string }): HighlightOutcome | null => (r.code.length > 2000
+      ? (r.lang === 'rust' ? { kind: 'too-large', htmlChars: 8 * r.code.length } : { kind: 'html', html: 'x'.repeat(2 * r.code.length) })
+      : null);
+    const { deps } = fakes({ highlighter: () => overriding(inThreadHighlighter(), over) });
+    const r = await runHighlightMeasure(deps, () => undefined);
+    const rust = r.item3.crafted.find((c) => c.shape === 'rust-raw-string')!;
+    expect(rust.ratio).toBeGreaterThanOrEqual(8);
+    expect(rust.overCap).toBe(true);
+    expect(r.item3.crafted.filter((c) => c.overCap).length).toBe(1);
+  }, 60_000);
 });
 
 describe('R19: the page', () => {
