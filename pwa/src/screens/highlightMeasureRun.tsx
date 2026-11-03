@@ -317,7 +317,8 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
     try {
       root5.render(<HighlighterContext value={ctx}><DocMarkdown text={largest.text} pinKey="r19" parser={deps.parse} link={largest.link} /></HighlighterContext>);
       const first = await until(deps, () => deps.host.querySelector('article') !== null, MEASURE_DEADLINE_MS);
-      const coloured = await until(deps, () => (published as HighlightStore | null)?.settled() === true, MEASURE_DEADLINE_MS * 4);
+      // A page that never rendered (its parse past the normal budget shows the plain text, with no store) is not waited on again.
+      const coloured = first === null ? null : await until(deps, () => (published as HighlightStore | null)?.settled() === true, MEASURE_DEADLINE_MS * 4);
       firstFrameToColouredMs = first === null || coloured === null ? null : round(coloured - first);
     } finally {
       root5.unmount();

@@ -62,7 +62,7 @@ function fakes(over: Partial<MeasureDeps> = {}) {
     hardwareConcurrency: 8,
     ...over,
   };
-  return { f, deps, advance: (n: number): void => { t += n; } };
+  return { f, deps, advance: (n: number): void => { t += n; }, clock: (): number => t };
 }
 
 describe('R19: the driver', () => {
@@ -179,6 +179,28 @@ describe('R19: the measurement highlighters time a boot, the shipped ones keep t
     const caption = await waitFor(() => screen.getByText(MEASURE_TEXT.result), { timeout: 40_000 });
     const result = JSON.parse(caption.closest('figure')?.querySelector('pre')?.textContent ?? '{}') as { item2: { coldMs: number | null } };
     expect(result.item2.coldMs).toBeGreaterThanOrEqual(HIGHLIGHT_BOOT_BUDGET_MS);
+  }, 60_000);
+});
+
+describe('R19: item 5 and a page that never rendered', () => {
+  it('does not wait a second time for colours when the first wait found no article', async () => {
+    let parses = 0;
+    const { deps: base, advance, clock } = fakes();
+    // The corpus parses its two documents; item 5's DocMarkdown then gets a parse past its budget and shows plain text.
+    // A frame lets React and the timers run, and moves the counting clock on 5 s, so a 60 s wait ends in a dozen frames.
+    const deps: MeasureDeps = {
+      ...base,
+      parse: async (src, o) => ((parses += 1) <= 2 ? base.parse(src, o) : { kind: 'timeout', budgetMs: 1 }),
+      frame: () => new Promise<number>((resolve) => { setTimeout(() => { advance(5000); resolve(clock()); }, 0); }),
+    };
+    const at: number[] = [];
+    const lines: string[] = [];
+    const r = await runHighlightMeasure(deps, (line) => { lines.push(line); at.push(clock()); });
+    expect(r.item5.firstFrameToColouredMs).toBeNull();
+    const from = lines.indexOf('Item 5');
+    const waited = at[from + 1]! - at[from]!;
+    expect(lines[from + 1]).toMatch(/^Item 3/);
+    expect(waited, 'the first wait is 60 s; a second would add 240 s').toBeLessThan(100_000);
   }, 60_000);
 });
 
