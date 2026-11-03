@@ -13,6 +13,7 @@ import { NotifyLog } from '../src/notifylog.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { landingStoreOver } from './landingFixture.js';
 
 const TOKEN = 'f'.repeat(64);
 const PROJECT = 'demo';
@@ -49,7 +50,8 @@ async function scenario(o: { visible?: boolean } = {}) {
   const run: Runner = async (_c, args) => (args[0] !== 'pr-state'
     ? { ran: true, code: 0, stdout: '', stderr: '' }
     : { ran: true, code: 0, stdout: `${prLine()}\n`, stderr: '' });
-  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const dbPath = path.join(home, '.ccrc', 'coord.db');
+  const coord = landingStoreOver(openCoordDb(dbPath), dbPath);
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
   const push = { notify: vi.fn() };

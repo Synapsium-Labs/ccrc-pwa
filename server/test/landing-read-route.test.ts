@@ -13,17 +13,20 @@ import type { LandingEntry, LandingLineView } from '../../shared/landingLine.js'
 import { buildServer, type Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { createLandingJournal } from '../src/coord/landingJournal.js';
 import { landingOrder } from '../src/coord/landingLine.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { landingStoreOver } from './landingFixture.js';
 
 const TOKEN = 'f'.repeat(64);
 const tok = { 'x-ccrc-mail-token': TOKEN };
 
 const openApp = async (over: Partial<Deps> = {}) => {
   const home = mkTmp('ccrc-landing-read-');
-  const db = openCoordDb(path.join(home, '.ccrc', 'coord.db'));
-  const coord = new CoordStore(db);
+  const dbPath = path.join(home, '.ccrc', 'coord.db');
+  const db = openCoordDb(dbPath);
+  const coord = landingStoreOver(db, dbPath);
   const app = await buildServer({ ...testDeps(home), mailToken: TOKEN, coord, ...over });
   return { app, coord, db };
 };
@@ -100,7 +103,7 @@ describe('GET /api/landing', () => {
     const res = await read(app!, '?project=project-a');
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true, project: 'project-a', operatorPaused: false, mainRedHold: false,
-      entries: [], order: { paused: false, order: [], head: null } });
+      entries: [], order: { paused: false, order: [], head: null }, recovery: { subjects: [], hold: null } });
   });
 
   it('answers every entry of the project as the wire LandingEntry, shas byte for byte through the masking hook', async () => {
@@ -140,6 +143,47 @@ describe('GET /api/landing', () => {
     const body = (await read(app!, '?project=project-a')).json() as LandingLineView & { ok: true };
     expect(body.entries.map((e) => e.project)).toEqual(['project-a']);
     expect([body.operatorPaused, body.mainRedHold]).toEqual([false, false]);
+  });
+
+  it('a recovered subject with no projection holds the line: recovery is additive, the head is null and `held` names it', async () => {
+    seedEntry(db, A);
+    db.prepare("INSERT INTO landing_subjects (id, project, pr, bindingKind, observedRunId, observedSeq) VALUES (7, 'project-a', 40, 'no-run', NULL, 3)").run();
+    const body = (await read(app!, '?project=project-a')).json() as LandingLineView & { ok: true };
+    expect(body.recovery).toMatchObject({ hold: { reason: 'landing-recovery-unresolved', subjectIds: [7] },
+      subjects: [{ id: 7, project: 'project-a', pr: 40, projection: { kind: 'missing', association: 'unmeasured' }, authority: { kind: 'not-set' } }] });
+    expect(body.order).toEqual({ paused: false, order: [A], head: null, held: { reason: 'landing-recovery-unresolved', subjectIds: [7] } });
+    expect(body.entries).toEqual([A]);
+  });
+
+  it('a real pause keeps its `by` beside the recovery hold, and no flag is invented', async () => {
+    seedEntry(db, A); seedFlags(db, 'project-a', { operatorPaused: true, mainRedHold: false });
+    db.prepare("INSERT INTO landing_subjects (id, project, pr, bindingKind, observedRunId, observedSeq) VALUES (7, 'project-a', 40, 'no-run', NULL, 3)").run();
+    const body = (await read(app!, '?project=project-a')).json() as LandingLineView & { ok: true };
+    expect(body.order).toEqual({ paused: true, by: ['operator'], order: [A], held: { reason: 'landing-recovery-unresolved', subjectIds: [7] } });
+    expect([body.operatorPaused, body.mainRedHold]).toEqual([true, false]);
+  });
+
+  it('a fenced store answers 503 landing-fenced with its remedy, and no entry', async () => {
+    const home = mkTmp('ccrc-landing-fenced-');
+    const dbPath = path.join(home, '.ccrc', 'coord.db');
+    const coord = new CoordStore(openCoordDb(dbPath), { landingJournal: createLandingJournal(path.dirname(dbPath)) });
+    const w = await openApp({ coord });
+    try {
+      const res = await read(w.app, '?project=project-a');
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ ok: false, error: 'landing-fenced', recovery: 'replay' });
+    } finally { await w.app.close(); }
+  });
+
+  it('a store with no journal port answers 503 landing-journal-unavailable', async () => {
+    const home = mkTmp('ccrc-landing-noport-');
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const w = await openApp({ coord });
+    try {
+      const res = await read(w.app, '?project=project-a');
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ ok: false, error: 'landing-journal-unavailable', recovery: 'restart' });
+    } finally { await w.app.close(); }
   });
 
   it('trims the project as the ledger read does', async () => {

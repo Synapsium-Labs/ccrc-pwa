@@ -9,6 +9,7 @@ import { landingEntryFactsOfRow, landingEntryOfRow } from '../src/coord/landingE
 import type { LandingEjectionKind } from '../../shared/landingLine.js';
 import { mergingAtDetail } from '../../shared/landing.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { landingFactsOf, landingStoreOver } from './landingFixture.js';
 
 afterEach(() => { vi.useRealTimers(); removeTmpFixtures(); });
 
@@ -20,7 +21,11 @@ const BASE2 = 'e'.repeat(40);
 const P = 'project-a';
 
 let coord: CoordStore;
-beforeEach(() => { coord = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-landing-'), '.ccrc', 'coord.db'))); });
+const lineEntries = (project: string = P) => landingFactsOf(coord, project).entries;
+beforeEach(() => {
+  const dbPath = path.join(mkTmp('ccrc-landing-'), '.ccrc', 'coord.db');
+  coord = landingStoreOver(openCoordDb(dbPath), dbPath);
+});
 
 const pin = (head: string = HEAD, pr: number | null = 7): LandingAdvance =>
   ({ kind: 'pin', head, pr, mode: 'off', handoffCommit: HC });
@@ -59,11 +64,11 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     const id = atReview();
     const r = coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() });
     expect(r).toMatchObject({ ok: true, from: 'awaiting-review', to: 'merging', landing: { kind: 'pinned', created: true } });
-    expect(coord.landingEntries(P)).toEqual([{ id: expect.any(Number), project: P, pr: 7, pinnedSha: HEAD, handoffCommit: HC,
+    expect(lineEntries()).toEqual([{ id: expect.any(Number), project: P, pr: 7, pinnedSha: HEAD, handoffCommit: HC,
       runId: id, state: 'pinned', baseSha: null, ejectionKind: null, ejections: 0, afterIds: [], fixesMain: false,
       setBy: 'coordinator', pinnedAt: expect.any(Number) }]);
     expect(coord.currentEpisode(id)).toMatchObject({ head: HEAD, pr: 7, mode: 'off' });
-    expect(coord.landingEntries(P)[0]!.pinnedSha).toBe(coord.currentEpisode(id)!.head);
+    expect(lineEntries()[0]!.pinnedSha).toBe(coord.currentEpisode(id)!.head);
   });
 
   it('a refused edge writes no entry and no run row (no phantom)', () => {
@@ -71,7 +76,7 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     const before = countEvents(id);
     expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }))
       .toEqual({ ok: false, error: 'bad-transition', from: 'working', to: 'merging' });
-    expect(coord.landingEntries(P)).toEqual([]);
+    expect(lineEntries()).toEqual([]);
     expect(countEvents(id)).toBe(before);
   });
 
@@ -83,7 +88,8 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
   it('a throw in the entry write rolls the run\'s advance back', () => {
     const id = atReview();
     coord.db.exec("CREATE TRIGGER boom BEFORE INSERT ON landing_entries BEGIN SELECT RAISE(ABORT, 'boom'); END;");
-    expect(() => coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() })).toThrow(/boom/);
+    expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }))
+      .toMatchObject({ ok: false, error: 'landing-db-apply', mayApply: true, recovery: 'replay' });
     expect(coord.run(id)).toMatchObject({ ok: true, run: { state: 'awaiting-review' } });
     expect(coord.currentEpisode(id)).toBeNull();
   });
@@ -98,19 +104,19 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
   it('the next advance → merging re-pins the same row, keeps the count and clears the ejection', () => {
     const id = atMerging();
     coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() });
-    const firstId = coord.landingEntries(P)[0]!.id;
+    const firstId = lineEntries()[0]!.id;
     step(id, 'awaiting-review');
     const r = coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin(HEAD2) });
     expect(r).toMatchObject({ ok: true, landing: { kind: 'pinned', created: false,
       entry: { id: firstId, pinnedSha: HEAD2, state: 'pinned', baseSha: null, ejectionKind: null, ejections: 1 } } });
-    expect(coord.landingEntries(P)).toHaveLength(1);
+    expect(lineEntries()).toHaveLength(1);
   });
 
   it('a re-pin by another run hands the row over: its runId, head, handoffCommit and a later pinnedAt', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(1_784_600_000_000);
     const a = atMerging();
-    const first = coord.landingEntries(P)[0]!;
+    const first = lineEntries()[0]!;
     expect(first).toMatchObject({ runId: a, pinnedSha: HEAD, handoffCommit: HC, pinnedAt: 1_784_600_000_000 });
     coord.advanceLanding({ runId: a, to: 'working', causedBy: 'coordinator', landing: eject() });
     const opened = coord.openRun({ program: 'p', title: 't', project: P, wave: 2, waveOf: 2, claimedBy: 'coord-a' });
@@ -124,7 +130,7 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     const r = coord.advanceLanding({ runId: opened.id, to: 'merging', causedBy: 'coordinator',
       landing: { kind: 'pin', head: HEAD2, pr: 7, mode: 'off', handoffCommit: HC2 } });
     expect(r).toMatchObject({ ok: true, landing: { kind: 'pinned', created: false } });
-    const entries = coord.landingEntries(P);
+    const entries = lineEntries();
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ id: first.id, runId: opened.id, pinnedSha: HEAD2, handoffCommit: HC2,
       pinnedAt: 1_784_600_000_000 + 60_000, state: 'pinned', ejections: 1 });
@@ -163,7 +169,7 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     const id = atReview();
     expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin(HEAD, null) }))
       .toMatchObject({ ok: true, landing: { kind: 'no-pr' } });
-    expect(coord.landingEntries(P)).toEqual([]);
+    expect(lineEntries()).toEqual([]);
     expect(coord.currentEpisode(id)).toMatchObject({ pr: null });
   });
 
@@ -172,16 +178,16 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     insertRaw(7, state, null);
     expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }))
       .toMatchObject({ ok: true, to: 'merging', landing: { kind: 'kept', state } });
-    expect(coord.landingEntries(P)[0]).toMatchObject({ pinnedSha: HEAD2, state });
+    expect(lineEntries()[0]).toMatchObject({ pinnedSha: HEAD2, state });
   });
 
   it('a pin onto a row this build cannot read keeps it untouched, and the run still advances (the rollback case)', () => {
     const id = atReview();
     insertRaw(7, 'later', null);
-    expect(coord.landingEntries(P)[0]).toMatchObject({ state: 'unknown', pinnedSha: HEAD2 });
+    expect(lineEntries()[0]).toMatchObject({ state: 'unknown', pinnedSha: HEAD2 });
     expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }))
       .toMatchObject({ ok: true, from: 'awaiting-review', to: 'merging', landing: { kind: 'kept', state: 'unknown' } });
-    expect(coord.landingEntries(P)).toEqual([expect.objectContaining({ pr: 7, state: 'unknown', pinnedSha: HEAD2, runId: null, ejections: 0 })]);
+    expect(lineEntries()).toEqual([expect.objectContaining({ pr: 7, state: 'unknown', pinnedSha: HEAD2, runId: null, ejections: 0 })]);
     expect(coord.db.prepare('SELECT state FROM landing_entries WHERE pr = 7').get()).toEqual({ state: 'later' });
   });
 
@@ -193,7 +199,7 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     coord.advance(id, 'merging', 'coordinator', mergingAtDetail(HEAD, 7, 'off'));
     expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
       .toMatchObject({ ok: true, from: 'merging', to: 'working', landing: { kind: 'kept', state: 'pinned' } });
-    expect(coord.landingEntries(P)).toEqual([expect.objectContaining({ pr: 7, state: 'pinned', runId: other.id, pinnedSha: HEAD2,
+    expect(lineEntries()).toEqual([expect.objectContaining({ pr: 7, state: 'pinned', runId: other.id, pinnedSha: HEAD2,
       baseSha: null, ejectionKind: null, ejections: 0 })]);
   });
 
@@ -203,7 +209,7 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     coord.advance(id, 'merging', 'coordinator', mergingAtDetail(HEAD, 7, 'off'));
     expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
       .toMatchObject({ ok: true, from: 'merging', to: 'working', landing: { kind: 'kept', state } });
-    expect(coord.landingEntries(P)).toEqual([expect.objectContaining({ pr: 7, state, runId: id, pinnedSha: HEAD2,
+    expect(lineEntries()).toEqual([expect.objectContaining({ pr: 7, state, runId: id, pinnedSha: HEAD2,
       baseSha: null, ejectionKind: null, ejections: 0 })]);
   });
 
@@ -213,7 +219,7 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     coord.advance(id, 'merging', 'coordinator', mergingAtDetail(HEAD, 7, 'off'));
     expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
       .toMatchObject({ ok: true, landing: { kind: 'no-entry' } });
-    expect(coord.landingEntries(P)).toEqual([expect.objectContaining({ pr: 8, state: 'pinned', ejections: 0 })]);
+    expect(lineEntries()).toEqual([expect.objectContaining({ pr: 8, state: 'pinned', ejections: 0 })]);
   });
 
   it('a retreat from merging with no episode is no-episode, apart from no-pr, and writes nothing', () => {
@@ -222,7 +228,7 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     expect(coord.currentEpisode(id)).toBeNull();
     expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
       .toMatchObject({ ok: true, to: 'working', landing: { kind: 'no-episode' } });
-    expect(coord.landingEntries(P)).toEqual([]);
+    expect(lineEntries()).toEqual([]);
   });
 
   it('a pin on an advance not to merging is a programming error: it throws and writes nothing', () => {
@@ -230,16 +236,16 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     const before = countEvents(id);
     expect(() => coord.advanceLanding({ runId: id, to: 'awaiting-review', causedBy: 'coordinator', landing: pin() })).toThrow();
     expect(coord.run(id)).toMatchObject({ ok: true, run: { state: 'working' } });
-    expect(coord.landingEntries(P)).toEqual([]);
+    expect(lineEntries()).toEqual([]);
     expect(countEvents(id)).toBe(before);
   });
 
   it('landingProject reads absent as clear and any non-zero as set', () => {
-    expect(coord.landingProject(P)).toEqual({ operatorPaused: false, mainRedHold: false });
+    expect(landingFactsOf(coord, P).flags).toEqual({ operatorPaused: false, mainRedHold: false });
     coord.db.prepare('INSERT INTO landing_projects (project, operatorPaused, mainRedHold) VALUES (?, 1, 0)').run(P);
-    expect(coord.landingProject(P)).toEqual({ operatorPaused: true, mainRedHold: false });
+    expect(landingFactsOf(coord, P).flags).toEqual({ operatorPaused: true, mainRedHold: false });
     coord.db.prepare('UPDATE landing_projects SET operatorPaused = 0, mainRedHold = 7').run();
-    expect(coord.landingProject(P)).toEqual({ operatorPaused: false, mainRedHold: true });
+    expect(landingFactsOf(coord, P).flags).toEqual({ operatorPaused: false, mainRedHold: true });
   });
 
   it('landingEntries reads a word this build cannot name as unknown, and orders by pinnedAt then id', () => {
@@ -253,7 +259,7 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     raw(2, { state: 'ejected', ejectionKind: 'sideways' });
     raw(3, { afterIds: 'nope' });
     raw(4, { afterIds: '[3,4]', fixesMain: 1 });
-    expect(coord.landingEntries(P).map((e) => [e.pr, e.state, e.ejectionKind, e.afterIds, e.fixesMain])).toEqual([
+    expect(lineEntries().map((e) => [e.pr, e.state, e.ejectionKind, e.afterIds, e.fixesMain])).toEqual([
       [1, 'unknown', null, [], false], [2, 'unknown', null, [], false], [3, 'unknown', null, [], false],
       [4, 'pinned', null, [3, 4], true]]);
     coord.db.exec('DELETE FROM landing_entries');
@@ -261,7 +267,29 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     raw(11, {}, 2);
     coord.db.prepare("INSERT INTO landing_entries (project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) " +
       "VALUES ('project-b', 12, ?, ?, NULL, 'pinned', 'operator', 1)").run(HEAD, HC);
-    expect(coord.landingEntries(P).map((e) => e.pr)).toEqual([11, 10]);
+    expect(lineEntries().map((e) => e.pr)).toEqual([11, 10]);
+  });
+});
+
+describe('oversized INTEGERs through the store (landing order wave 5f, setReadBigInts on every landing SELECT)', () => {
+  const BIG = '4611686018427387904';
+  it('an oversized fixesMain reads unknown through the store without throwing', () => {
+    insertRaw(7, 'pinned', null);
+    coord.db.exec(`UPDATE landing_entries SET fixesMain = ${BIG}`);
+    expect(lineEntries()).toEqual([expect.objectContaining({ pr: 7, state: 'unknown', fixesMain: false })]);
+  });
+  it.each(['pinnedAt', 'ejections'])('an oversized %s does not throw, reads unknown and is not mutated by a pin or a retreat', (col) => {
+    const id = atReview();
+    insertRaw(7, 'pinned', id, HEAD2);
+    coord.db.exec(`UPDATE landing_entries SET ${col} = ${BIG}`);
+    const dump = (): string => JSON.stringify(coord.db.prepare('SELECT CAST(id AS TEXT) AS id, pinnedSha, runId, state, CAST(ejections AS TEXT) AS e, CAST(pinnedAt AS TEXT) AS p FROM landing_entries').all());
+    const before = dump();
+    expect(lineEntries()).toEqual([expect.objectContaining({ pr: 7, state: 'unknown' })]);
+    expect(coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: pin() }))
+      .toMatchObject({ ok: true, landing: { kind: 'kept', state: 'unknown' } });
+    expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
+      .toMatchObject({ ok: true, landing: { kind: 'kept', state: 'unknown' } });
+    expect(dump()).toBe(before);
   });
 });
 

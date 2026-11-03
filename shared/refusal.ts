@@ -45,6 +45,7 @@ import type { ClaimRefusal } from './box-token.js';
 import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from './api.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
+import type { LandingInfrastructureCode, LandingMutationCode } from './landingLine.js';
 import type { ItemMoveRefusal } from './ledgers.js';
 
 /**
@@ -161,7 +162,22 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The write routes (accounts plan Task A17, D-7739): their words of their own.
   | AccountWriteRefusal
   // The sign-in routes (accounts plan Task A21, D-7793): their nine words of their own.
-  | AccountAuthRefusal;
+  | AccountAuthRefusal
+  // The landing line's guarded entrances (wave 5f): the infrastructure words and the mutation words, one closed family.
+  | LandingInfrastructureCode | LandingMutationCode;
+
+/** The landing family's statuses, declared once (wave 5f, shared contract §5): every infrastructure word is 503, a
+ *  missing thing 404, a refused graph or identity 409, an unreadable dependency 503. Spread into `REFUSAL_STATUS` and
+ *  `ADVANCE_REJECT_STATUS`; chosen, not measured: new words. */
+export const LANDING_REFUSAL_STATUS: Readonly<Record<LandingInfrastructureCode | LandingMutationCode, number>> = {
+  'landing-journal-unavailable': 503, 'landing-journal-unreadable': 503, 'landing-journal-invalid': 503, 'landing-journal-missing': 503,
+  'landing-journal-cursor': 503, 'landing-journal-changed': 503, 'landing-journal-durability': 503, 'landing-journal-append': 503,
+  'landing-db-unavailable': 503, 'landing-db-apply': 503, 'landing-db-commit': 503, 'landing-fenced': 503,
+  'landing-projection-unreadable': 503,
+  'landing-entry-exists': 409, 'landing-entry-missing': 404, 'landing-after-missing': 409, 'landing-after-cross-project': 409,
+  'landing-cycle': 409, 'landing-dependencies-unreadable': 503, 'landing-recovery-unresolved': 409, 'landing-identity-conflict': 409,
+  'landing-id-overflow': 409, 'landing-sequence-overflow': 409,
+};
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -305,6 +321,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'policy-unavailable': 503, 'journal-unavailable': 503,
   'linear-unauthorised': 502,
   'linear-invalid': 422,
+  ...LANDING_REFUSAL_STATUS,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */
@@ -333,11 +350,14 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
  *  GitHub #550). They travel in a `reject` object, never an `error` key, so they are neither `RouteRefusal`s nor
  *  `OpenRunConflict`s. `unknown-run` and `bad-session` are not `RunRefuseCode`s: the route sent them as bare literals. */
 export type AdvanceRejectCode = 'unknown-run' | 'bad-session'
-  | Extract<RunRefuseCode, 'bad-transition' | 'not-dispatched' | 'review-in-flight' | 'cap-concurrency' | 'ejection-not-merging'>;
+  | Extract<RunRefuseCode, 'bad-transition' | 'not-dispatched' | 'review-in-flight' | 'cap-concurrency' | 'ejection-not-merging'>
+  // The landing line's closed code family (wave 5f): what `advanceLanding` answers when the line refuses or fails.
+  | LandingInfrastructureCode | LandingMutationCode;
 
 /** Each one's status, measured from the advance route's inline sends on landing day, never chosen: 404 for the one
  *  absent run, 409 for every refusal of a run that exists. */
 export const ADVANCE_REJECT_STATUS: Readonly<Record<AdvanceRejectCode, number>> = {
   'unknown-run': 404, 'bad-transition': 409, 'not-dispatched': 409, 'review-in-flight': 409,
   'cap-concurrency': 409, 'bad-session': 409, 'ejection-not-merging': 409,   // D-7619: chosen, not measured — the family's 409
+  ...LANDING_REFUSAL_STATUS,
 };

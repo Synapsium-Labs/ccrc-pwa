@@ -43,7 +43,7 @@ import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
 import { doneRejectionMail } from './closeDecide.js';
-import { advanceGate, advanceRequest, type AdvanceBody } from './advance.js';
+import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
@@ -1854,6 +1854,8 @@ export function registerCoordRoutes(
     }
     const landing = landingAdvanceOf({ to, measured: verdict?.measured ?? null, mode: episodeMode, handoffCommit: claim.handoffCommit, ejection });
     const adv = coord.advanceLanding({ runId: id, to, causedBy: 'coordinator', landing });
+    const landingReject = adv.ok ? null : landingAdvanceReject(adv);
+    if (landingReject !== null) return refuseAdvance(reply, { reject: landingReject });
     if (!adv.ok) return adv.error === 'ejection-not-merging'
       ? refuseAdvance(reply, { reject: { code: adv.error, from: adv.from } }) : reply.code(409).send({ ok: false, reject: adv });
     // D-7624: the second ejection of an entry is one operator notice, never a refusal. The written row's count reaching 2 is
@@ -3778,9 +3780,10 @@ export function registerCoordRoutes(
       return refuseRoute(reply, 'bad-request', { detail: 'the landing line is per-project — ?project= is required' });
     }
     const project = q.project.trim();
-    const entries = deps.coord.landingEntries(project);
-    const flags = deps.coord.landingProject(project);
-    const view: LandingLineView = { project, ...flags, entries, order: landingOrder(entries, flags) };
+    const read = deps.coord.readLanding(project);
+    if (!read.ok) { const { ok: _ok, error, ...extra } = read; return refuseRoute(reply, error, extra); }
+    const { entries, flags, recovery } = read.facts;
+    const view: LandingLineView = { project, ...flags, entries, order: landingOrder(entries, flags, recovery), recovery };
     return reply.code(200).send({ ok: true, ...view });
   });
 

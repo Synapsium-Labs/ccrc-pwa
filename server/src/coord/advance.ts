@@ -2,7 +2,8 @@ import { IDLE_RUN_STATES, isRegistryId, isRunState, transitionsFor } from '../..
 import type { RunKind, RunState } from '../../../shared/api.js';
 import { isHead40 } from '../../../shared/landing.js';
 import { isLandingEjectionKind } from '../../../shared/landingLine.js';
-import type { LandingEjectionKind } from '../../../shared/landingLine.js';
+import type { LandingEjectionKind, LandingInfrastructureCode, LandingInfrastructureFailure, LandingMutationCode } from '../../../shared/landingLine.js';
+import { LANDING_REFUSAL_STATUS } from '../../../shared/refusal.js';
 
 /**
  * `POST /api/runs/:id/advance`'s ordered gates, decided (D-6733, audit ticket ARCH-33, GitHub
@@ -48,7 +49,19 @@ export type AdvanceReject =
   | { code: 'bad-transition'; from: RunState; to: RunState }
   | { code: 'review-in-flight'; reviewRunId: number }
   | { code: 'ejection-not-merging'; from: RunState }   // D-7619: the route's 409 shape for the one refusal of the landing line
-  | { code: 'cap-concurrency'; limit: number; running: number };
+  | { code: 'cap-concurrency'; limit: number; running: number }
+  // Landing order wave 5f: the line's infrastructure failures keep their recovery remedy, `mayApply` and typed invalid
+  // metadata; the three mutation words an advance can meet carry nothing else.
+  | ({ code: LandingInfrastructureCode } & Omit<LandingInfrastructureFailure, 'error'>)
+  | { code: Extract<LandingMutationCode, 'landing-recovery-unresolved' | 'landing-identity-conflict' | 'landing-id-overflow'> };
+
+/** The reject `advanceLanding`'s own refusal or failure becomes: its `error` as `code`, every other field kept whole
+ *  (`recovery`, `mayApply`, `invalid`); null when the answer is not a landing-family word. Pure. */
+export function landingAdvanceReject(adv: { error: string }): AdvanceReject | null {
+  if (!(adv.error in LANDING_REFUSAL_STATUS)) return null;
+  const { ok: _ok, error, ...rest } = adv as { ok?: unknown; error: string };
+  return { code: error, ...rest } as AdvanceReject;
+}
 
 /** One refusal: the bare shape `error`, the unreadable store's `error` with its detail, or a `reject`. */
 export type AdvanceRefusal =

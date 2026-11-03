@@ -5,9 +5,12 @@ import type { RunState } from '../../../shared/api.js';
 import type { ChecksMode } from '../../../shared/landing.js';
 import { isLandingEjectionKind, isLandingEntryState } from '../../../shared/landingLine.js';
 import type {
-  LandingEjectionKind, LandingEntry, LandingEntryState, LandingHistoricalBinding, LandingIdentity, LandingRecovery,
-  LandingRecoverySubject, LandingSubjectRef,
+  LandingAuthority, LandingEjectionKind, LandingEntry, LandingEntryState, LandingHistoricalBinding, LandingIdentity,
+  LandingJournalRecord, LandingMutationCode, LandingRecovery, LandingRecoverySubject, LandingSubjectRef,
 } from '../../../shared/landingLine.js';
+import type { LandingAuthorityCommand, LandingMutationDecision, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
+// The strict journal parser, re-exported so the store (whose imports are fenced) reaches it through this one L1 module.
+export { parseLandingJournal } from './landingJournalPolicy.js';
 
 /** What the route asks the line to do with one advance, built by `landingAdvanceOf` from the target alone. */
 export type LandingAdvance =
@@ -45,7 +48,7 @@ export function landingAdvanceOf(f: { to: RunState; measured: { branchTip: strin
  *  `current` is the row for (project, `pin.pr`) on a pin, or for (project, `episode.pr`) on a retreat; null means no
  *  such row. D-7618 (advances the line does not place) and D-7617 (a re-pin moves to the back). */
 export function decideLandingWrite(f: { landing: LandingAdvance; from: RunState; runId: number;
-  current: LandingEntry | null; episode: { pr: number | null } | null }): LandingWriteDecision {
+  current: LandingEntry | null; projection: LandingProjectionRead | null; episode: { pr: number | null } | null }): LandingWriteDecision {
   const { landing, current } = f;
   if (landing.kind === 'plain') return { act: 'none', write: { kind: 'none' } };
   if (landing.kind === 'pin') {
@@ -238,4 +241,135 @@ export function landingFlagsOfRow(row: Record<string, unknown> | undefined): { o
   const set = (v: unknown): boolean => v !== 0 && v !== 0n;
   return row === undefined ? { operatorPaused: false, mainRedHold: false }
     : { operatorPaused: set(row.operatorPaused), mainRedHold: set(row.mainRedHold) };
+}
+
+// ── Landing order wave 5f: the guarded read's fold, the hold gate and the journal record (shared contract §4, §6) ──
+
+/** Every landing row the store read, as values (a SELECT with `setReadBigInts(true)`, so no INTEGER is rounded). */
+export interface LandingStoreRows {
+  entries: Record<string, unknown>[];
+  subjects: Record<string, unknown>[];
+  authorities: Record<string, unknown>[];
+  witnesses: Record<string, unknown>[];
+  flags: Record<string, unknown> | undefined;
+  /** `{id, claimedBy}` of the runs this project's entries name. */
+  runs: Record<string, unknown>[];
+}
+
+const json = (v: unknown): unknown => { try { return typeof v === 'string' ? JSON.parse(v) : undefined; } catch { return undefined; } };
+const UNREADABLE: LandingReadResult = { ok: false, error: 'landing-projection-unreadable', recovery: 'restart' };
+
+/** The recovered subjects, from the overlay tables; null when a row is not what the SQL constraints promise. */
+function subjectsOf(rows: LandingStoreRows): LandingRecoverySubjectFact[] | null {
+  const out: LandingRecoverySubjectFact[] = [];
+  for (const s of rows.subjects) {
+    const id = safeIntOf(s.id, 1); const pr = safeIntOf(s.pr, 1); const observedSeq = safeIntOf(s.observedSeq, 1);
+    if (id === null || pr === null || observedSeq === null || !nonblank(s.project)) return null;
+    const run = absent(s.observedRunId) ? null : safeIntOf(s.observedRunId, 1);
+    let binding: LandingHistoricalBinding;
+    if (s.bindingKind === 'no-run' && absent(s.observedRunId)) binding = { kind: 'no-run' };
+    else if (s.bindingKind === 'run' && run !== null) binding = { kind: 'run', observedRunId: run };
+    else return null;
+    let creation: LandingRecoverySubject['creation'] = { kind: 'not-recorded' };
+    if (!absent(s.creationSeq)) {
+      const seq = safeIntOf(s.creationSeq, 1); const c = json(s.creationClaim) as Record<string, unknown> | undefined;
+      if (seq === null || typeof c !== 'object' || c === null || safeIntOf(c.at, 0) === null || !nonblank(c.setBy) || !hash40(c.pinnedSha) || !hash40(c.handoffCommit)) return null;
+      creation = { kind: 'recorded', seq, claim: { at: c.at as number, setBy: c.setBy, pinnedSha: c.pinnedSha, handoffCommit: c.handoffCommit } };
+    }
+    let authority: LandingRecoverySubject['authority'] = { kind: 'not-set' };
+    const a = rows.authorities.find((x) => safeIntOf(x.subjectId, 1) === id);
+    if (a !== undefined) {
+      const afterIds = afterIdsOf(a.afterIds); const seq = safeIntOf(a.seq, 1); const fixes = safeIntOf(a.fixesMain, 0);
+      if (afterIds === null || seq === null || fixes === null || fixes > 1 || !nonblank(a.setBy)) return null;
+      const value: LandingAuthority = { afterIds, fixesMain: fixes === 1, setBy: a.setBy, seq };
+      authority = { kind: 'set', value };
+    }
+    out.push({ id, project: s.project, pr, binding, observedSeq, creation, authority });
+  }
+  return out;
+}
+
+/**
+ * One project's coherent facts (shared contract §4). The authority overlay of a subject whose identity matches a
+ * projection EXACTLY replaces that row's `afterIds`, `fixesMain` and `setBy` before the single row reader sees it. An
+ * invalid id or pr in ANY row, or an overlay row that is not what its constraints promise, refuses the whole snapshot.
+ * `nextId` is the one allocator's answer: MAX(projection ids, subject ids) + 1, null when that would overflow.
+ */
+export function landingFactsOf(project: string, rows: LandingStoreRows): LandingReadResult {
+  const subjects = subjectsOf(rows);
+  if (subjects === null) return UNREADABLE;
+  const all: LandingEntryFacts[] = [];
+  const mine: { facts: LandingEntryFacts; row: Record<string, unknown> }[] = [];
+  const ids: number[] = subjects.map((s) => s.id);
+  const foreign = new Set<number>(subjects.filter((s) => s.project !== project).map((s) => s.id));
+  for (const row of rows.entries) {
+    const id = safeIntOf(row.id, 1); const pr = safeIntOf(row.pr, 1);
+    if (id === null || pr === null || typeof row.project !== 'string') return UNREADABLE;
+    ids.push(id);
+    const subject = subjects.find((s) => s.id === id && s.project === row.project && s.pr === pr);
+    const set = subject?.authority.kind === 'set' ? subject.authority.value : null;
+    const facts = landingEntryFactsOfRow(set === null ? row
+      : { ...row, afterIds: JSON.stringify(set.afterIds), fixesMain: set.fixesMain ? 1 : 0, setBy: set.setBy });
+    all.push(facts);
+    if (row.project === project) mine.push({ facts, row }); else foreign.add(id);
+  }
+  const witnesses: LandingProjectionWitness[] = [];
+  for (const w of rows.witnesses) {
+    const id = safeIntOf(w.entryId, 1); const pr = safeIntOf(w.pr, 1); const observedSeq = safeIntOf(w.observedSeq, 0); const runId = safeIntOf(w.runId, 1);
+    if (id !== null && pr !== null && observedSeq !== null && runId !== null && nonblank(w.project) && hash40(w.pinnedSha) && hash40(w.handoffCommit)) {
+      witnesses.push({ id, project: w.project, pr, observedSeq, runId, pinnedSha: w.pinnedSha, handoffCommit: w.handoffCommit });
+    }
+  }
+  const max = ids.reduce((m, n) => Math.max(m, n), 0);
+  const coordinators: LandingMutationFacts['coordinators'] = mine.map(({ facts, row }) => {
+    const id = facts.entry.id;
+    if (absent(row.runId)) return { id, value: { kind: 'no-run' as const } };
+    const runId = safeIntOf(row.runId, 1);
+    const run = runId === null ? undefined : rows.runs.find((r) => safeIntOf(r.id, 1) === runId);
+    const claimedBy = run?.claimedBy;
+    const ok = runId !== null && run !== undefined && (claimedBy === null || typeof claimedBy === 'string');
+    return { id, value: ok ? { kind: 'run' as const, runId, claimedBy: claimedBy as string | null } : { kind: 'unreadable' as const } };
+  });
+  return { ok: true, facts: {
+    project, flags: landingFlagsOfRow(rows.flags), entries: mine.map((m) => m.facts.entry),
+    recovery: landingRecoveryOf(project, { subjects, projections: all, witnesses }),
+    projections: mine.map((m) => ({ id: m.facts.entry.id, value: m.facts.projection })),
+    dependencies: mine.map((m) => ({ id: m.facts.entry.id, value: m.facts.dependencies })),
+    nextId: max + 1 > Number.MAX_SAFE_INTEGER ? null : max + 1, foreignIds: [...foreign], coordinators,
+  } };
+}
+
+export type LandingHoldGate =
+  | { ok: true; own: LandingRecoverySubject | null }
+  | { ok: false; error: Extract<LandingMutationCode, 'landing-recovery-unresolved' | 'landing-identity-conflict'> };
+
+/**
+ * Whether a pin or retreat may go ahead while recovery holds the project (shared contract §6). A hold is refused to every
+ * retreat and every pin, with ONE bounded exception: a pin may resolve its OWN subject's missing projection, or its
+ * exact-identity association mismatch while that projection is readable. An identity collision anywhere in the project
+ * has no exception and answers its own word.
+ */
+export function landingHoldGate(recovery: LandingRecovery, kind: 'pin' | 'retreat', key: { project: string; pr: number },
+  projection: LandingProjectionRead | null): LandingHoldGate {
+  if (recovery.hold === null) return { ok: true, own: null };
+  if (recovery.subjects.some((s) => s.projection.kind === 'identity-conflict')) return { ok: false, error: 'landing-identity-conflict' };
+  const own = kind === 'pin' ? recovery.subjects.find((s) => s.project === key.project && s.pr === key.pr) : undefined;
+  if (own !== undefined && (own.projection.kind === 'missing' || (own.projection.kind === 'association-unmeasured' && projection?.kind === 'readable'))) {
+    return { ok: true, own };
+  }
+  return { ok: false, error: 'landing-recovery-unresolved' };
+}
+
+/** The journal record one decided (non-noop) mutation becomes. An order's source binding is its CURRENT projection's. */
+export function landingRecordOf(command: LandingAuthorityCommand,
+  mutation: Extract<Extract<LandingMutationDecision, { ok: true }>['mutation'], { kind: 'entry' | 'order' }>,
+  facts: LandingMutationFacts, seq: number, at: number): LandingJournalRecord {
+  if (mutation.kind === 'entry') {
+    return { v: 1, seq, at, setBy: mutation.setBy, subject: { id: mutation.id, project: mutation.project, pr: mutation.pr, binding: { kind: 'no-run' } },
+      kind: 'entry', claim: { pinnedSha: mutation.pinnedSha, handoffCommit: mutation.handoffCommit } };
+  }
+  const c = facts.coordinators.find((x) => x.id === mutation.entry.id)?.value;
+  const binding: LandingHistoricalBinding = c?.kind === 'run' ? { kind: 'run', observedRunId: c.runId } : { kind: 'no-run' };
+  return { v: 1, seq, at, setBy: command.setBy, subject: { id: mutation.entry.id, project: mutation.entry.project, pr: mutation.entry.pr, binding },
+    kind: 'order', after: mutation.after, fixesMain: mutation.fixesMain };
 }

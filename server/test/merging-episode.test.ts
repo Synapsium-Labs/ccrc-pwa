@@ -12,6 +12,7 @@ import { CoordStore } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { landingFactsOf, landingStoreOver } from './landingFixture.js';
 import { okRun } from './coordReadHelpers.js';
 import { CHECKS_MAIL_TOKEN, readMergingAtDetail } from '../../shared/landing.js';
 
@@ -62,7 +63,8 @@ async function scenario(o: Opts = {}) {
     if (o.unlistable) lost = true;
     return { ran: true, code: 0, stdout: `${prLine(pr, TIP)}\n`, stderr: '' };
   };
-  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const dbPath = path.join(home, '.ccrc', 'coord.db');
+  const coord = landingStoreOver(openCoordDb(dbPath), dbPath);
   const base = testDeps(home, run);
   const verbs = o.verbs === undefined ? ['pr-state', 'pr-landing-v1'] : o.verbs;
   const deps = { ...base, mailToken: TOKEN, coord, cfg: { ...base.cfg, projectsRoot: gitRoot(TIP) },
@@ -243,7 +245,7 @@ describe('the landing entry (landing order wave 5e)', () => {
   it('the advance to merging pins one entry at the verified head', async () => {
     const s = await scenario({ markers: LIVE }); app = s.app;
     expect((await s.toMerging()).statusCode).toBe(200);
-    expect(s.coord.landingEntries(PROJECT)).toEqual([expect.objectContaining({
+    expect(landingFactsOf(s.coord, PROJECT).entries).toEqual([expect.objectContaining({
       pr: 7, pinnedSha: TIP, handoffCommit: TIP, state: 'pinned', runId: s.id, ejections: 0 })]);
     expect(readMergingAtDetail(mergingRows(s.details())[0]!.detail!)!.head).toBe(TIP);
   });
@@ -252,14 +254,14 @@ describe('the landing entry (landing order wave 5e)', () => {
     const s = await scenario({ markers: LIVE }); app = s.app;
     expect((await s.post('awaiting-review')).statusCode).toBe(200);
     expect((await s.post('merging', OTHER_TIP)).statusCode).toBe(409);
-    expect(s.coord.landingEntries(PROJECT)).toEqual([]);
+    expect(landingFactsOf(s.coord, PROJECT).entries).toEqual([]);
   });
 
   it('merging → working with an ejection ejects the entry', async () => {
     const s = await scenario({ markers: LIVE }); app = s.app;
     await s.toMerging();
     expect((await eject(s)).statusCode).toBe(200);
-    expect(s.coord.landingEntries(PROJECT)).toEqual([expect.objectContaining({
+    expect(landingFactsOf(s.coord, PROJECT).entries).toEqual([expect.objectContaining({
       state: 'ejected', baseSha: OTHER_TIP, ejectionKind: 'dequeued', ejections: 1 })]);
   });
 
