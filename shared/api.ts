@@ -11288,6 +11288,11 @@ export const SERVER_CAPS_FILE = 'server-caps';
  *  turns its arm off within this lease on a `server` or `both` node (an older server never rewrites the file). */
 export const SERVER_CAPS_LEASE_S = 180;
 
+/** The period, in seconds, of the box settings timer: `deploy/systemd/ccrc-settings.timer`'s `OnUnitActiveSec` (D-6915), which a
+ *  test reads back from the unit file. The record `ccrc settings --write` leaves in `~/.ccrc/box-settings.json` is as old as this
+ *  at most while the timer runs, so a reader that judges one stale does so in multiples of it. */
+export const BOX_SETTINGS_TIMER_S = 300;
+
 /** One word's grammar. The file is three `\n`-terminated lines: `at <1–11 digits>` (unix seconds, the writer's
  *  clock), `caps` followed by zero or more words separated by single spaces, `end`. */
 const SERVER_CAP_WORD_RE = /^[a-z0-9-]{1,64}$/;

@@ -1171,6 +1171,9 @@ export const UNIT_FILES: Array<[string, string]> = [
   // server's own deadline covers. The fleet describe asserts its absence.
   ['ccrc-update-watchdog.service', 'deploy/systemd/ccrc-update-watchdog.service'],
   ['ccrc-update-watchdog.timer', 'deploy/systemd/ccrc-update-watchdog.timer'],
+  // D-6915: the box settings pair, placed on EVERY Linux role (the first pair that is), so no role's loop skips it.
+  ['ccrc-settings.service', 'deploy/systemd/ccrc-settings.service'],
+  ['ccrc-settings.timer', 'deploy/systemd/ccrc-settings.timer'],
   ['claude-session@.service.d/limits.conf', 'deploy/systemd/claude-session@.service.d/limits.conf'],
   [`${SLICE_DIR}/limits.conf`, 'deploy/systemd/app-claude-session.slice.d/limits.conf'],
   // D-5241: the victim policy's two OOMPolicy=continue scope drop-ins, every role, Linux only, beside the two above.

@@ -1,0 +1,8 @@
+[Unit]
+Description=Record what this box's settings resolve to, for the console to read
+[Timer]
+OnBootSec=120s
+OnUnitActiveSec=300s
+AccuracySec=30s
+[Install]
+WantedBy=timers.target

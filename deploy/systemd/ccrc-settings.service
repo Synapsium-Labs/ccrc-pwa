@@ -1,0 +1,25 @@
+[Unit]
+Description=Write ~/.ccrc/box-settings.json: what this box's settings resolve to
+[Service]
+Type=oneshot
+# user units carry no ~/.local/bin on PATH (measured, ccrc-models.service),
+# but a bare `Environment=PATH=` REPLACES the manager's PATH rather than
+# extending it. Prepend instead, in the start command below, so the verb
+# sees the same PATH every other ccrc unit on this box sees (the watchdog's
+# idiom, D-3282). The unit sets no `Environment=` and reads no
+# `EnvironmentFile=` on purpose: the verb reads each setting itself,
+# environment first, then ~/.ccrc/ccrc.env, so a timer run and a shell run
+# resolve the same values (W24-P5).
+# A oneshot has NO start timeout by default (systemd.service(5), TimeoutStartSec=),
+# and while this unit runs its timer starts no second instance. The verb's own
+# worst case is thirty seconds (`du` bounded at 20, `df` at 10), so a hang past
+# 120 is a wedge: systemd stops the cgroup, and the next tick measures again.
+# The bound sits well under the 300-second period, so a wedge never skips a tick.
+TimeoutStartSec=120
+# A restore or rollback onto a release older than this unit runs THAT
+# release's spine, which neither knows nor removes this pair, so the timer
+# stays enabled over a tree with no `settings` verb. Skip there: an
+# ExecCondition rc of 1-254 skips the run and does not mark the unit failed.
+# %h/ccrc is the tree ~/.local/bin/ccrc execs.
+ExecCondition=/bin/sh -c 'grep -q "^cmd_settings()" %h/ccrc/ccd/ccrc'
+ExecStart=/bin/sh -c 'PATH="%h/.local/bin:$$PATH" exec %h/.local/bin/ccrc settings --write --from timer'

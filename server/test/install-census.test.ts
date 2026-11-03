@@ -1605,7 +1605,11 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
   // deploy.sh to place one, telling them to remove it from this list).
   const DEPLOY_SH_WITHHOLDS = {
     bins: ['ccd-update-sync'],
-    units: ['ccd-update-sync.service', 'ccd-update-sync.timer', 'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer'],
+    // The settings pair (D-6915) is withheld for its own reason, not update-sync's: it is ccrc's install spine's,
+    // placed on every Linux role and enabled by `_inst_enable`, while deploy.sh places no timer of the update lane's
+    // kind and writes no install record, so a deploy.sh-placed tree would run a timer over no `ccrc install` act.
+    units: ['ccd-update-sync.service', 'ccd-update-sync.timer', 'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer',
+      'ccrc-settings.service', 'ccrc-settings.timer'],
   } as const;
 
   it('every binary _inst_bins places, deploy.sh places too (except DEPLOY_SH_WITHHOLDS.bins)', () => {

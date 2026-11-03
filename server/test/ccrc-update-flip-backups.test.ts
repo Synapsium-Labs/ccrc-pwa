@@ -2824,7 +2824,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       });
 
       it('W24-P5: no unit or detached argv carries a CCRC_ setting, so the reader\'s file read is the only source', () => {
-        for (const unit of ['ccrc-update-watchdog.service', 'ccrc-models.service']) {
+        for (const unit of ['ccrc-update-watchdog.service', 'ccrc-models.service', 'ccrc-settings.service']) {
           const text = readFileSync(join(REPO, 'deploy', 'systemd', unit), 'utf8');
           expect(text, unit).not.toMatch(/^EnvironmentFile=/m);
           expect(text.split('\n').filter((l) => /^Environment=.*CCRC_/.test(l)), unit).toEqual([]);

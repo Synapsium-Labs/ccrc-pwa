@@ -1826,8 +1826,10 @@ CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback versions t
 
 # The words only a LINUX install can do: detach (W4). `--detach` hands the run
 # to a transient unit (`_svc_run_detached`), and `_upd_detach_os_check`
-# refuses it on Darwin (decision 17), so a Darwin install never claims it.
-CCRC_CAP_WORDS_LINUX=(detach)
+# refuses it on Darwin (decision 17), so a Darwin install never claims it. `settings` (D-6915) says this tree writes
+# `~/.ccrc/box-settings.json`: its timer is a systemd unit, which `_inst_units_darwin` places none of, so a Darwin
+# install never claims it either.
+CCRC_CAP_WORDS_LINUX=(detach settings)
 
 # ── _ccrc_cap_words — what THIS ccrc can do on THIS os, one word per line ──
 # The ONE list: `_inst_caps` writes it into ~/.ccrc/ccrc-caps (after the `os`
@@ -18414,6 +18416,11 @@ _inst_units() {
     _inst_atomic "$tree/deploy/systemd/ccrc-update-watchdog.service" "$dir/ccrc-update-watchdog.service" 644
     _inst_atomic "$tree/deploy/systemd/ccrc-update-watchdog.timer" "$dir/ccrc-update-watchdog.timer" 644
   fi
+  # D-6915: the box settings pair, on EVERY Linux role (outside the gates above and below it) — the first pair that is.
+  # `ccrc settings --write` records what the box's seven settings resolve to, which the console reads from any node,
+  # a server-role box included. The Darwin arm returned at the top of this function and places no timer at all.
+  _inst_atomic "$tree/deploy/systemd/ccrc-settings.service" "$dir/ccrc-settings.service" 644
+  _inst_atomic "$tree/deploy/systemd/ccrc-settings.timer" "$dir/ccrc-settings.timer" 644
   _inst_atomic "$tree/deploy/systemd/claude-session@.service.d/limits.conf" \
     "$dir/claude-session@.service.d/limits.conf" 644
   # The slice drop-in is RENDERED, not copied: its two limits are the box's own (`_inst_slice_limits`, D-7296).
@@ -18866,6 +18873,10 @@ _inst_enable() {
   # over the actor that bounds a FUTURE update — doctor's `services` check
   # names the stopped timer (`known`). No restart: a oneshot holds no code.
   [ "$INST_ROLE" = fleet ] || _inst_enable_timer update-watchdog ccrc-update-watchdog.timer
+  # D-6915: UNGATED — the first timer here that runs on every Linux role, on `_inst_units`' own ungated placement of its
+  # files. The same DEGRADE-rather-than-die idiom: a record of the box's settings is a reading, and an install that
+  # converged must not be failed over it. doctor's `services` check names a stopped timer. No restart: a oneshot holds no code.
+  _inst_enable_timer settings ccrc-settings.timer
   # Plan 3a Task 6: the Codex lanes' usage timers, converged to exactly the
   # roster's codex set, after daemon-reload read the template `_inst_units`
   # placed. `_inst_codex_usage` says why each of its acts, and why none of
@@ -27541,7 +27552,8 @@ _uninst_units() {
       ccd-account-health.timer ccd-account-health.service \
       ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service \
       ccrc-models.timer ccrc-models.service \
-      ccrc-update-watchdog.timer ccrc-update-watchdog.service ccrctests.slice; do
+      ccrc-update-watchdog.timer ccrc-update-watchdog.service \
+      ccrc-settings.timer ccrc-settings.service ccrctests.slice; do
       [ -f "$dir/$u" ] || continue
       systemctl --user disable --now "$u" \
         || echo "uninstall: units: disable --now $u failed (continuing — the unit file is removed below; read: systemctl --user status $u)" >&2
@@ -27571,6 +27583,7 @@ _uninst_units() {
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \
     "$dir/ccrc-models.service" "$dir/ccrc-models.timer" \
     "$dir/ccrc-update-watchdog.service" "$dir/ccrc-update-watchdog.timer" \
+    "$dir/ccrc-settings.service" "$dir/ccrc-settings.timer" \
     "$dir/ccrc-codex-usage@.service" "$dir/ccrc-codex-usage@.timer" "$dir/ccrctests.slice" \
     || _ccrc_die "removing the unit files under $dir failed"
   rm -rf -- "$dir/claude-session@.service.d" "$slice" \
