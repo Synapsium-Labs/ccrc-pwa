@@ -13,7 +13,7 @@ import { programmeTitle, programWave } from '../fleet/runWords';
 import {
   CLEARED_HEADING, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
   ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, openRunsOf, programmeIsLive, questionRows, summaryCounts, summaryWords,
-  type Pill, type ProgrammeGroup, type QuestionRow,
+  type Pill, type ProgrammeGroup, type QuestionRow, type Row,
 } from './ledgerWords';
 import './ledgers.css';
 
@@ -49,7 +49,7 @@ function RowMeta({ pills, when }: { pills: readonly Pill[]; when: string }): Rea
   );
 }
 
-export function ItemRow({ item, now, onOpen }: { item: ItemView; now: number; onOpen: (id: number) => void }): ReactNode {
+function ItemRow({ item, now, onOpen }: { item: ItemView; now: number; onOpen: (id: number) => void }): ReactNode {
   const note = cameBackNote(item);
   const back = cameBack(item);
   const meta = item.state === 'checking' && item.tickedAt !== null ? `ticked ${ageWords(item.tickedAt, now)}` : `raised ${ageWords(item.raisedAt, now)}`;
@@ -69,7 +69,7 @@ export function ItemRow({ item, now, onOpen }: { item: ItemView; now: number; on
   );
 }
 
-export function QuestionButton({ q, now, onOpen }: { q: QuestionRow; now: number; onOpen: (id: string) => void }): ReactNode {
+function QuestionButton({ q, now, onOpen }: { q: QuestionRow; now: number; onOpen: (id: string) => void }): ReactNode {
   return (
     <li>
       <BareRow className="wl-item wl-question" data-session={q.sessionId} data-state="question" data-needed="soon"
@@ -82,6 +82,19 @@ export function QuestionButton({ q, now, onOpen }: { q: QuestionRow; now: number
         <RowMeta pills={[{ tone: 'ask', word: QUESTION_PILL_WORD }]} when={q.at > 0 ? ageWords(q.at, now) : ''} />
       </BareRow>
     </li>
+  );
+}
+
+/** One programme's rows: its items and its sessions' questions, as the list and the programme view both draw them. */
+export function ItemRows({ rows, now, onOpenItem, onOpenSession }: {
+  rows: readonly Row[]; now: number; onOpenItem: (id: number) => void; onOpenSession: (id: string) => void;
+}): ReactNode {
+  return (
+    <ul className="wl-items">
+      {rows.map((row) => row.kind === 'item'
+        ? <ItemRow key={`i${row.item.id}`} item={row.item} now={now} onOpen={onOpenItem} />
+        : <QuestionButton key={`q${row.question.sessionId}`} q={row.question} now={now} onOpen={onOpenSession} />)}
+    </ul>
   );
 }
 
@@ -102,10 +115,30 @@ function Group({ group, runs, hue, now, props }: {
         {wave !== null && <span className="wl-gwave">{wave.waveOf === null ? `wave ${wave.wave}` : `wave ${wave.wave} of ${wave.waveOf}`}</span>}
         {ended && <span className="wl-gwave" data-ended="true">{WAITS_ON_WORDS.ended}</span>}
       </div>
-      <ul className="wl-items">
-        {group.rows.map((row) => row.kind === 'item'
-          ? <ItemRow key={`i${row.item.id}`} item={row.item} now={now} onOpen={props.onOpenItem} />
-          : <QuestionButton key={`q${row.question.sessionId}`} q={row.question} now={now} onOpen={props.onOpenSession} />)}
+      <ItemRows rows={group.rows} now={now} onOpenItem={props.onOpenItem} onOpenSession={props.onOpenSession} />
+    </section>
+  );
+}
+
+/** "Recently cleared": what the coordinator confirmed in the last seven days, each struck through with when. `where` names the
+ *  programme beside a row where the list holds several; a single programme's view leaves it out. Nothing is drawn for none. */
+export function ClearedTrail({ items, where, now }: {
+  items: readonly ItemView[]; where?: (item: ItemView) => string; now: number;
+}): ReactNode {
+  if (items.length === 0) return null;
+  return (
+    <section className="wl-cleared" aria-label={CLEARED_HEADING}>
+      <h3 className="wl-cleared-title">{CLEARED_HEADING}</h3>
+      <ul>
+        {items.map((c) => {
+          const tail = [where?.(c), c.closedAt === null ? undefined : `confirmed ${ageWords(c.closedAt, now)}`].filter((t) => t !== undefined);
+          return (
+            <li key={c.id} className="wl-cleared-row">
+              <span aria-hidden="true">✓ </span><s>{c.title}</s>
+              {tail.length === 0 ? '' : ` · ${tail.join(' · ')}`}
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
@@ -168,19 +201,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
             </div>
           </>
         )}
-      {view.cleared.length > 0 && (
-        <section className="wl-cleared" aria-label={CLEARED_HEADING}>
-          <h3 className="wl-cleared-title">{CLEARED_HEADING}</h3>
-          <ul>
-            {view.cleared.map((c) => (
-              <li key={c.id} className="wl-cleared-row">
-                <span aria-hidden="true">✓ </span><s>{c.title}</s>
-                {` · ${programmeTitle(c.program, heardRuns)}${c.closedAt === null ? '' : ` · confirmed ${ageWords(c.closedAt, now)}`}`}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <ClearedTrail items={view.cleared} now={now} where={(c) => programmeTitle(c.program, heardRuns)} />
     </div>
   );
 }

@@ -75,8 +75,9 @@ export function ItemRouteAt({ param, store = useFleetStore }: { param: string | 
   return param !== null && Number.isSafeInteger(id) ? <ItemRoute key={id} id={id} store={store} /> : <ItemGone />;
 }
 
-function Back(): ReactNode {
-  return <BackButton className="wl-back" aria-label="Back to Waiting on you" onClick={() => navigate(WAITING_PATH)}>‹</BackButton>;
+/** The page's way back: to the list by default, or to `to` under `label` (the programme view goes back to the fleet). */
+export function Back({ to = WAITING_PATH, label = 'Back to Waiting on you' }: { to?: string; label?: string }): ReactNode {
+  return <BackButton className="wl-back" aria-label={label} onClick={() => navigate(to)}>‹</BackButton>;
 }
 
 function ItemGone(): ReactNode {

@@ -16,7 +16,6 @@
 // (spec section 3), and names it only once the runs frame has landed; a programme is never called ended on runs not heard.
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { BackButton } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import {
   WAITS_ON_WORDS, programmeWaitsOn, type GoalsView, type ItemView, type WaitingView,
@@ -28,11 +27,9 @@ import { navigate } from '../lib/router';
 import { ROUTES, sessionPath } from '../lib/routes';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { GoalsPanel } from './GoalsPanel';
-import {
-  CLEARED_HEADING, EMPTY_WORD, NO_FRAME_WORD, ageWords, groupByProgramme, openRunsOf, programmeIsLive, questionRows,
-} from './ledgerWords';
-import { itemPath, useHeard, useUnavailable } from './WaitingRoutes';
-import { ItemRow, QuestionButton } from './WaitingScreen';
+import { EMPTY_WORD, NO_FRAME_WORD, groupByProgramme, openRunsOf, programmeIsLive, questionRows } from './ledgerWords';
+import { Back, itemPath, useHeard, useUnavailable } from './WaitingRoutes';
+import { ClearedTrail, ItemRows } from './WaitingScreen';
 import './ledgers.css';
 
 /** The fleet's own path, read off the `fleet` row of the route table: this file spells no path of its own. */
@@ -120,25 +117,9 @@ function WaitingCard({ slug, view, sessions, runs, unavailable, now }: {
         <p className="pv-none">{waitsOn === null ? EMPTY_WORD : `${EMPTY_WORD} Waiting on: ${waitsOn}`}</p>
       )}
       {group !== null && group.rows.length > 0 && (
-        <ul className="wl-items">
-          {group.rows.map((row) => row.kind === 'item'
-            ? <ItemRow key={`i${row.item.id}`} item={row.item} now={now} onOpen={(id) => navigate(itemPath(id))} />
-            : <QuestionButton key={`q${row.question.sessionId}`} q={row.question} now={now} onOpen={(id) => navigate(sessionPath(id))} />)}
-        </ul>
+        <ItemRows rows={group.rows} now={now} onOpenItem={(id) => navigate(itemPath(id))} onOpenSession={(id) => navigate(sessionPath(id))} />
       )}
-      {cleared.length > 0 && (
-        <section className="wl-cleared" aria-label={CLEARED_HEADING}>
-          <h3 className="wl-cleared-title">{CLEARED_HEADING}</h3>
-          <ul>
-            {cleared.map((c) => (
-              <li key={c.id} className="wl-cleared-row">
-                <span aria-hidden="true">✓ </span><s>{c.title}</s>
-                {c.closedAt === null ? '' : ` · confirmed ${ageWords(c.closedAt, now)}`}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      <ClearedTrail items={cleared} now={now} />
     </section>
   );
 }
@@ -159,7 +140,7 @@ export function ProgrammeScreen({ slug, store = useFleetStore }: { slug: string;
   return (
     <div className="wl pv" data-program={slug} data-hue={hue}>
       <header className="pv-head" data-hue={hue}>
-        <BackButton className="wl-back" aria-label="Back to Fleet" onClick={() => navigate(FLEET_PATH)}>‹</BackButton>
+        <Back to={FLEET_PATH} label="Back to Fleet" />
         <span className="pv-kicker">Programme</span>
         <h1 className="pv-title">{programmeTitle(slug, heard)}</h1>
         {wave !== null && <span className="pv-sub">{wave.waveOf === null ? `wave ${wave.wave}` : `wave ${wave.wave} of ${wave.waveOf}`}</span>}
