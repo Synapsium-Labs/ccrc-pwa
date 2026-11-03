@@ -26067,16 +26067,21 @@ _set_du() {
   printf '%s' "$out"
 }
 # `_set_df` — `<available bytes> <size bytes>` of the filesystem holding $HOME, from `df -Pk`; rc 1 when it could not say, or when a
-# figure would pass a safe integer (a 1 KiB block count of 14 digits or more).
+# figure would pass a safe integer (a 1 KiB block count of 13 digits or more: 12 digits times 1024 stays under 2^53 - 1).
 _set_df() {
   local out line re='^[^[:space:]]+[[:space:]]+([0-9]+)[[:space:]]+[0-9]+[[:space:]]+([0-9]+)[[:space:]]+[0-9]+%[[:space:]]'
   if command -v nice >/dev/null 2>&1; then out="$(_plat_timeout 10 nice -n 19 df -Pk -- "$HOME" 2>/dev/null)" || return 1
   else out="$(_plat_timeout 10 df -Pk -- "$HOME" 2>/dev/null)" || return 1; fi
   line="${out##*$'\n'}"
   [[ "$line" =~ $re ]] || return 1
-  [ "${#BASH_REMATCH[1]}" -le 13 ] && [ "${#BASH_REMATCH[2]}" -le 13 ] || return 1
+  [ "${#BASH_REMATCH[1]}" -le 12 ] && [ "${#BASH_REMATCH[2]}" -le 12 ] || return 1
   printf '%s %s' "$(( BASH_REMATCH[2] * 1024 ))" "$(( BASH_REMATCH[1] * 1024 ))"
 }
+
+# `_set_keep_why <KEY> <lowest>` — a refused keep's sentence, with the VALUE redacted first: `_keep_why` cuts a value at 32 characters
+# before any redactor sees it, so a path under a long HOME would leave a prefix of the home directory in it. `_keep_why` stays the one
+# builder of the sentence and only its input changes; the source phrase is the one `_keep_knob` already put on KEEP_WHY.
+_set_keep_why() { printf '%s, as set in %s' "$(_keep_why "$1" "$(_upd_redact "$KNOB")" "$2")" "${KEEP_WHY##*, as set in }"; }
 
 cmd_settings() {
   local json=0 write=0 k rc val st from why now sj="" tx="" sep="" dl_plain dl_min dl_max
@@ -26098,9 +26103,9 @@ cmd_settings() {
   for k in "${BOX_SETTINGS_KEYS[@]}"; do
     st="$s_ok"; val=""; why=""; rc=0
     case "$k" in
-      CCRC_BACKUP_KEEP)       _bak_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY" ;;
-      CCRC_BACKUP_DATA_KEEP)  _bak_data_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY" ;;
-      CCRC_VERSIONS_KEEP)     _ver_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY" ;;
+      CCRC_BACKUP_KEEP)       _bak_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY"; [ "$rc" -eq 0 ] || [ -z "$KNOB_FROM" ] || why="$(_set_keep_why CCRC_BACKUP_KEEP 0)" ;;
+      CCRC_BACKUP_DATA_KEEP)  _bak_data_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY"; [ "$rc" -eq 0 ] || [ -z "$KNOB_FROM" ] || why="$(_set_keep_why CCRC_BACKUP_DATA_KEEP 2)" ;;
+      CCRC_VERSIONS_KEEP)     _ver_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY"; [ "$rc" -eq 0 ] || [ -z "$KNOB_FROM" ] || why="$(_set_keep_why CCRC_VERSIONS_KEEP 0)" ;;
       CCRC_UPDATE_HEALTH_S)   _upd_health_s; rc=$?; val="$UPD_HEALTH_S"; why="$UPD_HEALTH_WHY" ;;
       CCRC_UPDATE_DEADLINE_MS)
         # In THIS shell, so KNOB, KNOB_FROM and KNOB_WHY of the plain reading survive; rc 1 with a KNOB_WHY is the file that cannot be
@@ -26147,13 +26152,14 @@ cmd_settings() {
   dl_plain="$(_upd_deadline_ms)" || :; dl_min="$(_upd_deadline_ms min)" || :; dl_max="$(_upd_deadline_ms max)" || :
   tx+="deadline: plain ${dl_plain} ms, min ${dl_min} ms, max ${dl_max} ms"$'\n'
   # ── the backups: the prune's own list, so a hand-made sibling is never counted; a root that cannot be listed is unmeasured, never 0
-  local bj bk=0 bd=0 bb d bwhy=""
+  local bj bk=0 bd=0 bb d db bwhy=""
   if [ ! -e "$BOX_BACKUP_ROOT" ] && [ ! -L "$BOX_BACKUP_ROOT" ]; then
     bb=0
   elif [ -d "$BOX_BACKUP_ROOT" ] && [ -r "$BOX_BACKUP_ROOT" ] && [ -x "$BOX_BACKUP_ROOT" ]; then
     _bak_list; bk=${#BAK_DIRS[@]}
     for d in ${BAK_DIRS[@]+"${BAK_DIRS[@]}"}; do
-      if [ -f "$d/coord.db" ] && [ ! -L "$d/coord.db" ]; then bd=$((bd + 1)); fi
+      db="$d/coord.db"   # a regular file only: spelled through a variable, as the keep-set's own coord.db test is the one bare spelling (its pin)
+      if [ -f "$db" ] && [ ! -L "$db" ]; then bd=$((bd + 1)); fi
     done
     bb="$(_set_du "$BOX_BACKUP_ROOT")" || bwhy="~/ccrc-backups could not be measured (du did not answer in time, or failed)"
   else
@@ -26423,14 +26429,14 @@ _bak_ours() {
   [ "$1" = "$UPD_BACKUP_DIR" ] || [ "$((10#${name//-/}))" -ge "$((10#${UPD_BAK_FLOOR//-/}))" ]
 }
 
-# `_bak_data_keep` — CCRC_BACKUP_DATA_KEEP (D-6347, D-6360): how many backups keep their coordination data set. `_keep_knob`'s
-# answer for that knob, default 3, lowest 2 (0 and 1 are refused, never clamped); `_ccrc_knob`'s header argues the read. rc 0 sets
-# BAK_DATA_KEEP (decimal); rc 1 sets BAK_DATA_KEEP_WHY to the refusal sentence. `_bak_thin` and wave 23's rows read these two names.
 # `_bak_keep` — CCRC_BACKUP_KEEP (D-6914): the one resolver of how many timestamped backups are kept, default 10. `_keep_knob`'s
 # answer for that knob, as `_bak_data_keep` is for the data set's: rc 0 sets KEEP (decimal) and KEEP_FROM; rc 1 sets KEEP_WHY.
 # `_bak_prune`, `_bak_gc` and `ccrc settings` read it here, so none of the three can read another default.
 _bak_keep() { _keep_knob CCRC_BACKUP_KEEP 10; }
 
+# `_bak_data_keep` — CCRC_BACKUP_DATA_KEEP (D-6347, D-6360): how many backups keep their coordination data set. `_keep_knob`'s
+# answer for that knob, default 3, lowest 2 (0 and 1 are refused, never clamped); `_ccrc_knob`'s header argues the read. rc 0 sets
+# BAK_DATA_KEEP (decimal); rc 1 sets BAK_DATA_KEEP_WHY to the refusal sentence. `_bak_thin` and wave 23's rows read these two names.
 _bak_data_keep() {
   _keep_knob CCRC_BACKUP_DATA_KEEP 3 2; local rc=$?; BAK_DATA_KEEP="$KEEP"; BAK_DATA_KEEP_WHY="$KEEP_WHY"; return "$rc"
 }

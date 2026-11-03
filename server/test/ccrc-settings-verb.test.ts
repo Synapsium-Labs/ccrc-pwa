@@ -244,6 +244,22 @@ describe('ccrc settings: nothing private reaches the output or the file', () => 
     expect(readFileSync(join(home, '.ccrc', 'box-settings.json'), 'utf8')).not.toContain(home);
   });
 
+  it.each([['CCRC_BACKUP_KEEP', ''], ['CCRC_BACKUP_DATA_KEEP', ''], ['CCRC_VERSIONS_KEEP', '']])(
+    'a refused %s holding a path under a HOME of 40+ characters shows no part of the home path (the keep sentence cuts at 32 before it redacts)', (key) => {
+      const home = boxWith(`ccrc-sv-long-home-${'p'.repeat(40)}-`);
+      expect(home.length, 'the fixture HOME is long').toBeGreaterThan(40);
+      const r = settings(home, ['--json', '--write'], { [key]: `${home}/backups` });
+      const row = rowOf(docOf(r), key);
+      expect(row.state).toBe('refused');
+      expect(row.value).toBe('~/backups');
+      expect(row.why).toMatch(new RegExp(`^${key}='~/backups' is not a whole number from [02] to 9999, as set in the environment$`));
+      for (const out of [r.stdout, readFileSync(join(home, '.ccrc', 'box-settings.json'), 'utf8'), settings(home, [], { [key]: `${home}/backups` }).stdout]) {
+        expect(out).not.toContain(home);
+        expect(out, 'no prefix of the home path').not.toContain(home.slice(0, 9));
+        for (let i = 0; i + 12 <= home.length; i++) expect(out, `a 12-character window of the home path at ${i}`).not.toContain(home.slice(i, i + 12));
+      }
+    });
+
   it('a path under the fixture HOME in the middle of a sentence comes out ~/..., and no fixture-HOME string is printed', () => {
     const home = boxWith('ccrc-sv-red2-');
     const r = settings(home, ['--json', '--write'], { CCRC_UPDATE_HEALTH_S: `${home}/deep/x` });
@@ -405,6 +421,20 @@ describe('ccrc settings: the backups and the disk', () => {
     expect(ok.backups.state).toBe('ok');
     expect(ok.disk.state).toBe('ok');
   });
+
+  it.each([['12 digits stay a safe integer', '999999999999', true], ['13 digits could pass 2^53 and are refused', '8790000000000', false]])(
+    'a df reporting %s', (_w, blocks, ok) => {
+      const home = boxWith('ccrc-sv-df-');
+      const stubs = stubDir(home, { df: `#!/bin/sh\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/fixture ${blocks} 1 ${blocks} 1%% /\\n"\n` });
+      const d = docOf(settings(home, ['--json'], {}, stubs)).disk;
+      if (ok) {
+        expect(d.state).toBe('ok');
+        expect(d.sizeBytes).toBe(Number(blocks) * 1024);
+        expect(Number.isSafeInteger(d.sizeBytes)).toBe(true);
+      } else {
+        expect(d.state).toBe('unmeasured');
+      }
+    });
 
   it('the disk is non-negative safe integers, available no more than the size', () => {
     const d = json(boxWith('ccrc-sv-disk-')).disk;
