@@ -9,7 +9,6 @@ import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from '
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
-import { CCD } from './ccdWsHelpers.js';
 
 removeTmpFixturesEachTest();
 
@@ -118,7 +117,10 @@ describe('ccd-carry-dedupe-sweep: the record line (D-7857)', () => {
     }
     // The registry row names the keeper's account, as the verb's shell half would pass it.
     const stdin = `A\tclaude\t${join(b.home, '.claude')}\nA\tlane-a\t${join(b.home, '.claude-lane-a')}\nO\t${uuid}\tclaude\trow\n`;
-    const p = spawnSync('python3', [PROGRAM, b.reg, '0', '-', '24', CCD, '1'], { input: stdin, encoding: 'utf8' });
+    // The program's fifth argument is the ccd it sources to ask the link route, which only a sidecar walk does: there is
+    // no sidecar here, so it names a path that does not exist, and the program never runs a ccd at all.
+    const p = spawnSync('python3', [PROGRAM, b.reg, '0', '-', '24', join(b.home, 'no-ccd'), '1'],
+      { input: stdin, encoding: 'utf8', env: { HOME: b.home, PATH: '/usr/bin:/bin', LANG: 'C' } });
     expect(p.status, p.stderr).toBe(0);
     expect(p.stdout).toMatch(new RegExp(`^total: 1 uuid\\(s\\), 2 copies, ${body.length} bytes reclaimable, 0 refused$`, 'm'));
     plant(b, p.stdout);
