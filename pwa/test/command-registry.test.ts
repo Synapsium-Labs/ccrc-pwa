@@ -205,7 +205,7 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // T3e (D-6385) adds `toggle-inspector`; every other command ranks as it did, so the table is read without it, and
     // the new command's own place is pinned in the empty list below.
     const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector');
-    // Desktop-polish PL5a adds `go-waiting` (a top route's door); the table is read without it, and its own place is below.
+    // Desktop-polish PL5a adds `go-waiting` (a top route's door); the table is read without it, and its own case is below.
     const rankedBefore = (q: string): string[] => ranked(q).filter((id) => id !== 'go-waiting');
     for (const [q, ids] of BEFORE) expect(rankedBefore(q), JSON.stringify(q)).toEqual(ids);
     // The command's own rank row: the one command whose title holds "inspector".
@@ -214,9 +214,12 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     const empty = rankCommands('', baseCommands()).map((c) => c.id);
     expect(empty.indexOf('toggle-inspector'), 'after the session commands, before Switch layout').toBe(empty.indexOf('session-pr') + 1);
     expect(empty[empty.indexOf('toggle-inspector') + 1]).toBe('switch-layout');
-    // Go to Waiting on you: found by its words, and in the registry because its route is `top`.
+  });
+
+  // Go to Waiting on you (desktop-polish PL5a): its own case, away from the lines other waves add to the one above.
+  it('Go to Waiting on you is found by its words, and is in the registry because its route is top', () => {
     expect(rankCommands('waiting', baseCommands()).map((c) => c.id)[0]).toBe('go-waiting');
-    expect(empty).toContain('go-waiting');
+    expect(rankCommands('', baseCommands()).map((c) => c.id)).toContain('go-waiting');
   });
 });
 
