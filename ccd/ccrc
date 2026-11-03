@@ -26054,8 +26054,10 @@ cmd_backup() {
 # bytes, so no home path or userinfo is recorded. ONE accepted residual (review 1385, A13): a REFUSED numeric key whose raw value is a URL
 # keeps its query string (`?token=…`), because `_upd_redact` does not cover queries (its OUT OF SCOPE note); the fold belongs to ARCH-67.
 # READ-ONLY: it never prunes, never takes update.lock and writes nothing but its own file, by temp and rename with the writers'
-# idiom (`_tmp_guard`, so a die or a SIGTERM through the EXIT chain leaves no `.tmp.$$`); it sets no trap of its own. It answers
-# rc 0 whenever it answered; a write that fails is a die (rc 1), never a half-written file. `--from timer` records `reader: timer`
+# idiom (`_tmp_guard`, so a die or a SIGTERM through the EXIT chain leaves no `.tmp.$$`); it sets no trap of its own. What a SIGTERM
+# leaves (D-7875): before the rename, the last good file; during the rename itself (bash may wait for its foreground `mv`), the last
+# good file or the whole new one, never a partial one. It answers rc 0 whenever it answered; a write that fails is a die (rc 1),
+# never a half-written file. `--from timer` records `reader: timer`
 # for the timer's own run, else `shell`: an interactive run can disagree with the card, and says so.
 BOX_SETTINGS_KEYS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S)
 BOX_SETTINGS_JSON="$HOME/.ccrc/box-settings.json"

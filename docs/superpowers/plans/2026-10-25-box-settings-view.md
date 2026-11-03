@@ -599,13 +599,18 @@ symbol. The line numbers below are from `408d93806`: use them to find each place
   that was tried and failed. This is the "unmeasured is not unset" rule (D-6365) and the rule against an overloaded value at a
   seam. The shared map, `boxSettingsView`, the card's word table ("Not read since the server started") and the
   both-directions tests carry it.
-- **D-7875.** Spare, unused.
+- **D-7875.** What an interrupted write keeps (fix round 1b, from the full CI run on `8ffc4f78f`, where the old SIGTERM row
+  lost a race to its own two-second `mv` stub). Spec §2.1 says an interrupted write "keeps the last good file". That holds for
+  a die and for a SIGTERM that lands before the rename. A SIGTERM that lands during the rename itself may leave the whole new
+  file instead, because bash can wait for its foreground `mv` before it acts on the signal, and a rename is atomic. So the
+  promise is: no temp file stays, and the file is the last good one or the whole new one, never partial. The two rows that pin
+  it (`ccrc-settings-verb`, SIGTERM before and during the rename) are ordered by a handshake the test controls, not a sleep.
 
 ## As built (2026-11-03)
 
 - **Deviations.** D-6914 to D-6917 as planned. D-6918 used (above). D-6919, D-7862 and D-7863 used for the three departures
   above; D-7863 is superseded by D-7874. D-7861 as written. D-7873 and D-7874 are the coordinator's fix-round rulings on
-  review 1385; D-7875 is spare, unused.
+  review 1385; D-7875 records what an interrupted write keeps (fix round 1b).
 - **Task 1's acts and their suites, unchanged and green:** the health gate, `ccrc-update-flip-backups` (W24-H1 to H4) and
   `ccrc-update-phases`; the models advance, `ccrc-models-advance`; the deadline, `ccrc-update-flip-backups` (W24-D) and
   `update-watchdog-revert`; the release base, `ccrc-update-fetch` and `ccrc-update-flip-backups` (W24-U); the keeps,
@@ -623,7 +628,8 @@ symbol. The line numbers below are from `408d93806`: use them to find each place
   reads `custom` alone (D-7873); otherwise the authority is cut at the first `/`, `?` or `#`. An interim strip to the last
   `@` after the cut still leaked a credential prefix when the userinfo held a raw `/`, `?` or `#` (review 1385, F1).
 - **The write.** A failed `--write` exits 1 and leaves no half file; a run that answered exits 0. SIGTERM runs the EXIT
-  chain, which removes the temp file; pinned. Doctor knows only the timer (spec D9, section 4), so a writer that fails every
+  chain, which removes the temp file. Before the rename the last good file is kept; during the rename the file is the last good
+  one or the whole new one, never partial (D-7875). Both are pinned by handshake rows, measured 20 runs green in a row. Doctor knows only the timer (spec D9, section 4), so a writer that fails every
   run is not a doctor line: the card's stale label, after 15 minutes, is the surface.
 - **macOS.** The backups size goes through `_plat_bytes` (the platform shim), so macOS measures apparent bytes too; the timer is Linux only (spec D6).
 - **deploy.sh.** It does not place the watchdog's pair, so the settings pair joins `DEPLOY_SH_WITHHOLDS.units` with its own

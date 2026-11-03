@@ -696,25 +696,49 @@ describe('ccrc settings --write: the file', () => {
     expect(readFileSync(file(home), 'utf8')).toBe('LAST-GOOD');
   });
 
-  it('SIGTERM while the write is in flight runs the EXIT chain: no temp file stays, the last good file is kept', async () => {
-    const home = boxWith('ccrc-sv-w8-');
+  // The two SIGTERM rows are ordered by a handshake the test controls, never a sleep (fix round 1b): the stubbed step marks
+  // `$HOME/hs/<name>-ready` once the temp file stands, then waits for `$HOME/hs/release`, which the test writes only after the
+  // signal is sent; `<name>-done` says the step (orphaned or not) has finished. Bash may act on the signal at once, or only once its
+  // foreground child returns; both orders are covered, and neither depends on how long anything takes. A stub acts only on the temp
+  // file and is the real command otherwise. D-7875 records what is promised.
+  const gated = (name: string): string => `#!/bin/sh\ncase "$*" in *box-settings.json.tmp.*) ;; *) exec ${REAL(name)} "$@" ;; esac\n`
+    + `: > "$HOME/hs/${name}-ready"\ni=0\nwhile [ ! -e "$HOME/hs/release" ] && [ "$i" -lt 600 ]; do sleep 0.05; i=$((i + 1)); done\n`
+    + `${REAL(name)} "$@"; rc=$?\n: > "$HOME/hs/${name}-done"\nexit "$rc"\n`;
+  const until = async (p: string): Promise<boolean> => {
+    const deadline = Date.now() + 30_000;
+    while (!existsSync(p) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    return existsSync(p);
+  };
+  async function termDuring(name: 'chmod' | 'mv'): Promise<string> {
+    const home = boxWith(`ccrc-sv-w8${name}-`);
+    mkdirSync(join(home, 'hs'));
     writeFileSync(file(home), 'LAST-GOOD');
-    // `mv` waits two seconds first, so the temp file stands while the signal lands.
-    const stubs = stubDir(home, { mv: `#!/bin/sh\nsleep 2\nexec ${REAL('mv')} "$@"\n` });
+    const stubs = stubDir(home, { [name]: gated(name) });
     const child = spawn(BASH, [CCRC, 'settings', '--write'], { env: envOf(home, {}, stubs), stdio: 'ignore', detached: true });
     children.push(child);
     const closed = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => { child.on('close', (c, s) => resolve([c, s])); });
-    const deadline = Date.now() + 20_000;
-    while (tmps(home).length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    expect(await until(join(home, 'hs', `${name}-ready`)), `the stubbed ${name} was reached`).toBe(true);
     expect(tmps(home), 'the temp file stood while the write was in flight').toHaveLength(1);
     child.kill('SIGTERM');
+    writeFileSync(join(home, 'hs', 'release'), '');
     await closed;
-    expect(tmps(home), 'the EXIT chain ran on SIGTERM').toEqual([]);
-    // The stub `mv` is orphaned for a moment and then finds no temp file: the last good file is whole.
-    await new Promise((r) => setTimeout(r, 2500));
-    expect(readFileSync(file(home), 'utf8')).toBe('LAST-GOOD');
-    expect(tmps(home)).toEqual([]);
-  }, 40_000);
+    expect(await until(join(home, 'hs', `${name}-done`)), `the stubbed ${name} finished`).toBe(true);
+    expect(tmps(home), 'no temp file stays').toEqual([]);
+    return readFileSync(file(home), 'utf8');
+  }
+
+  it('SIGTERM before the rename runs the EXIT chain: no temp file stays, the last good file is kept', async () => {
+    expect(await termDuring('chmod')).toBe('LAST-GOOD');
+  }, 60_000);
+
+  it('SIGTERM during the rename: no temp file stays, and the file is the last good one or the whole new one, never partial', async () => {
+    const got = await termDuring('mv');
+    if (got !== 'LAST-GOOD') {
+      const doc = JSON.parse(got) as { v: number; settings: unknown[] };
+      expect(doc.v).toBe(1);
+      expect(doc.settings).toHaveLength(7);
+    }
+  }, 60_000);
 });
 
 describe.skipIf(FLOCK === '')('ccrc settings is read-only', () => {
