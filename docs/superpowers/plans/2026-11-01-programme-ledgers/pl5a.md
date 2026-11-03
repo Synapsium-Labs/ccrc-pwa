@@ -192,3 +192,44 @@ restored from a saved copy and its sha256 checked equal). All 3 killed.
 | P2 | the app bar keeps 12px tab padding at 900 with six tabs (the old layout) | `refined-bar.browser.test.ts`: refined, light, 900px, mouse (+7) | `fe9b5f8b9ab2` |
 | P3 | the phone header drops the Waiting door (the old door count) | `refined-phone.browser.test.ts`: refined, light, 360px (+5) | `e226b7a9b062` |
 
+
+## Fix round 5 (review 1374: the 900px bar with the Waiting count drawn)
+
+Review 1374 found what round 3 missed: its fit was measured with no waiting view in the bar test's fixture, so the Waiting tab
+drew no count badge. The badge shows whenever anything waits on the operator (the common case), and at 900px `+ New session`
+was cut again, in both palettes and under both pointers. Sent back and fixed; the rules did not move (no door or tab below a
+finger's square under a coarse pointer, nothing hidden or truncated to make it fit).
+
+- **Red first.** `pwa/browser/refined-bar.browser.test.ts` now serves a waiting view of a hundred open items, so with the
+  twelve sessions that ask the operator the Waiting tab counts 112 and prints its widest badge, "99+" (`badgePrint` caps at 99;
+  the badge is 31.8px wide). The test waits for that badge before it measures. With the round 3 stylesheet this fails at 900px
+  (4 of 16 cases: both palettes, mouse and touch), at 930, 960 and 1280 it passes. The file's "tightest case" comment now says so.
+- **The room.** Under 1000px the tabs' side padding is 6px (it was 8 from round 3, 12 before) and the bar line's gap is 12px (16
+  above). That gives back 24 + 8 = 32px, in `pwa/src/skins/refined/refined.css`. The touch check now covers every tab as well as
+  every door (each at least 44 x 44); the narrowest tab (Fleet, Docs) is 47.6px wide.
+- **Measured in Chrome, "99+" badge drawn** (the room between the tabs and the doors beyond their 16px gap, negative when the
+  line overruns; New session cut when negative): at 900px, round 3's rule: 20.8px past the frame; this round: 11.2px free. At
+  930px: round 3: 9.2px free; this round: 41.2px free. (At 960px 39.2 before, 71.2 after; at 1280px unchanged, 311.2.) The Waiting
+  tab is 152.1px wide at 900 (156.1 with 8px padding).
+- **A1.** `pwa/browser/refined-phone.browser.test.ts` now names the row's doors in order, `go-waiting go-inbox go-runs go-docs
+  go-settings`, beside the count of parts, so a different door in Waiting's place no longer passes. The phone fixture serves no
+  waiting view, so no phone Waiting badge is drawn there; the phone badge sits on the glyph's corner and does not change the
+  row's fit, and the phone figures of round 3 stand (360px: 18px free; 390px: 32px free).
+
+Departure for the ledger to number, restated (still `pl5a-phone-door`, the figures now with the Waiting badge present):
+
+- `pl5a-phone-door`: the Waiting on you door joins the phone header's row as a fifth door (the wordmark and five 44px squares)
+  and the app bar keeps its six tabs; stylesheet rules make them fit. App bar at 900px with the "99+" badge: the line ran 20.8px
+  past its frame with round 3's rule (8px tab padding, 16px gap) and now has 11.2px free (6px padding, 12px gap, under 1000px);
+  at 930px 9.2px free became 41.2px. Phone row: 360px 18px free, 390px 32px free (doors 4px apart under 380px). **Rejected
+  alternative:** moving Waiting on you to the phone's overflow place (the Settings page or a menu) would have kept the row at
+  four doors, but the Waiting list is the operator's one place to find what waits on them, and a phone must keep it one tap away
+  like Inbox and Runs.
+
+Mutants of this round (each run on the working tree against its browser file, then restored from a saved copy and its sha256
+checked equal). Both killed.
+
+| # | Mutant | Red cases | sha256 of the file, before and after (equal) |
+|---|---|---|---|
+| Q1 | the room recovery undone: round 3's rule (8px tab padding, no gap rule) under 1000px | `refined-bar.browser.test.ts`: the four 900px cases (4 of 16) | `refined.css` `49ffcf3cb000` |
+| Q2 | a different door (`go-accounts`) in Waiting's place, six parts kept | `refined-phone.browser.test.ts`: "the doors are go-accounts go-inbox go-runs go-docs go-settings" (6 of 41) | `PhoneHeader.tsx` `e226b7a9b062` |

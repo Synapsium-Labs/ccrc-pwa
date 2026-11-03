@@ -147,6 +147,9 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
           const rr = row.getBoundingClientRect();
           const parts = [row.querySelector<HTMLElement>('[data-wordmark]')!, ...row.querySelectorAll<HTMLElement>('[data-command]')];
           if (parts.length !== 6) out.push(`the row holds ${parts.length} parts, not the wordmark and five doors`);
+          // Named, not only counted (desktop-polish PL5a, review 1374 A1): a different door in Waiting's place would pass the count.
+          const doors = parts.slice(1).map((d) => d.getAttribute('data-command'));
+          if (doors.join(' ') !== 'go-waiting go-inbox go-runs go-docs go-settings') out.push(`the doors are ${doors.join(' ')}`);
           const mid = (el: HTMLElement): number => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
           const line = mid(parts.at(-1)!);
           for (const p of parts) {
