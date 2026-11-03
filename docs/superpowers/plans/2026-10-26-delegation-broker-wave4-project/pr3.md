@@ -5,9 +5,10 @@ plan and the programme ledger; this PR edits neither.
 
 ## Status
 
-- **Production continuation (2026-11-03):** main is merged at `b1ede05b4`. The retained Task 3.6 implementation and watch
-  re-points are present; their current verification is recorded below. Tasks 3.6 and 3.7 are no longer held. Final tip gates and
-  the fresh PWA measurement are still pending; this is not a final handoff.
+- **Production continuation (2026-11-03):** main is merged through `85270c001`. The retained Task 3.6 implementation and watch
+  re-points are present; their current verification is recorded below. Tasks 3.6 and 3.7 are no longer held. The refreshed PWA
+  measurement and the named server gates have verdicts; the rings gate found two missing watcher-port members. The scoped
+  type-only correction is included under D-7869; its post-commit gates are pending. This is not a final handoff.
 - **Historical Phase A** (no edit to `watch.ts`, `store.ts`, `mail-routes.test.ts`, `delegation-wave3.integration.test.ts` or
   `delegation-watch.test.ts`): Task 3.2 (the planner), Task 3.3 (`compactJournal`, the carried file, recovery's carried rules),
   Task 3.4's checkpoint half (the delete walk, the repair's step 0, the retained reader in the repair), Task 3.5 (C1) and Task 3.1's
@@ -67,6 +68,11 @@ plan and the programme ledger; this PR edits neither.
     measurement. There is no second file read, no changed retained-set membership, and no weakening of byte-for-byte validation.
 - **D-7015** — `unused`
 - **D-7016** — `unused`
+- **D-7869** — `watcher-port-retention-members`: main narrowed the watcher's store port in #2031 and #2059 after PR3 branched.
+  PR3 adds its two synchronous retention methods, `countDelegationEventsAtOrBelow` and `deleteDelegationEventsBetween`, to the
+  existing sorted `WatcherCoordMember` union in `server/src/coord/ports.ts`, as that file requires for a newly reached member.
+  The full rings gate first measured both missing-member failures in `rings/watcher-store-port.test.ts`: the scanner's typecheck
+  and the exact reached-member census. The correction changes no guard, other member or port, and adds no cast or fallback.
 
 ## Phase B verification
 
@@ -177,7 +183,7 @@ W4-C23–C27 and the counted-schema/compacted thinning composition. `suffixAfter
 
 The mutation helper for Python modules cannot compile the JavaScript or TypeScript modules here. The specifically authorized
 scratch-copy method was used instead: one source copy on the measured root filesystem, sequential runs through the test runner,
-fixture HOME and poisoned `gh`, one worker, a measured process cap and a 120 s kill-after bound. Each original file was saved
+fixture HOME and poisoned `gh`, one worker, a measured process cap and a 120 s deadline with `--kill-after=5s`. Each original file was saved
 before mutation and restored with a SHA-256 check; the tracked sources retained their original hashes throughout.
 
 | Mutant | Expected row that went red | Observed failure |
@@ -191,8 +197,95 @@ before mutation and restored with a SHA-256 check; the tracked sources retained 
 Each mutant exited 1 with exactly its named assertion failed, not an import error or timeout. The restored snapshot group passed
 12/12, and the restored daily-compaction group passed 7/7, both with outer exit 0. The latter covers same-day spending, next-day
 retry, rejection, startup and boundary reconstruction, actual compacting-pass sizes and accepted timestamps, and both skip-line
-forms. Final tip gates and the fresh PWA measurement remain pending. The full server suite remains unrun; no final suite or
+forms. Those measurements precede the final-base campaign below. The full server suite remains unrun; no whole-suite or
 wave-done claim is made here. Soaks were waived, not passed.
+
+### Final-base campaign at `85270c001`
+
+The second main merge absorbs #2171's documentation-only ledger fold. Every normal suite ran alone through `ccrc test`, with
+one worker, fixture HOME, contained `gh`, resource and claim checks, and no wrapper deadline. After an incomplete sequential
+measurement reached the tool's bound, every later gate received its own foreground tool call with the full 600 s allowance.
+
+| Gate | Outer exit | Result |
+| --- | --- | --- |
+| Delegation compaction | 0 | 64 passed |
+| Delegation recovery, standalone rerun | 0 | 448 passed; 08:50:50.274–08:57:36.477 UTC |
+| Delegation watch | 0 / 0 | The exhaustive halves measured at `b1ede05b4`, 135 + 169 passed, carried by the documentation-only ruling below |
+| Delegation pass timing | 0 | 88 passed |
+| Wave-3 integration | 0 | 34 passed |
+| Coordination snapshot | 0 | 1,016 passed |
+| Delegation delta applier | 0 | 26 passed |
+| Update flip / backups | 0 | 334 passed |
+| Update phases | 0 | 250 passed, 8 skipped |
+| Mail routes | 0 | 59 passed |
+| Single-definition selection | 0 | 1,047 passed across 20 files, including its pin |
+| Full rings plus coordination-policy rings | 1 | 136 passed, 2 failed across 12 files; missing watcher-port members below |
+| Armed growth (`GROWTH_CHECK=1`) | 0 | 47 passed |
+| Complete real-lane compaction/upkeep | 0 | 12 passed |
+| Refreshed, unfiltered PWA | 0 | 403 files passed; 12,382 tests passed, 3 skipped; no unhandled errors |
+
+The first final-base recovery attempt started at 08:34:59.526 UTC after the 45.21 s compaction command in the same tool call.
+The call reached 600 s before recovery produced a verdict; its managed task was stopped, with no JSON or measured outer exit,
+and the following timing command never started. This was a measurement error, not a recovery test failure. The coordinator
+licensed one standalone rerun, with a finite two-half fallback only if needed. The standalone run above passed, so no recovery
+split was made. Its default summary was `Test Files  1 passed (1)` and `Tests  448 passed (448)`.
+
+The coordinator accepted the earlier watch halves at this base only if a whole-tree diff listed documentation alone. The actual
+command `git diff --name-only b1ede05b4 85270c001` exited 0 and its complete output was:
+
+```text
+docs/superpowers/plans/2026-10-26-delegation-broker-wave4-project.md
+docs/superpowers/plans/2026-10-26-delegation-broker-wave4-project/pr3.md
+```
+
+No watch rerun was made under that ruling. The earlier late full-file JSON still does not establish an outer exit; the two
+exhaustive halves do.
+
+#### PWA: retain the stale-install red, then the authorized remeasurement
+
+The first fresh PWA run at this base, 08:20:04.532–08:27:02.768 UTC, exited 1. Its default summary was:
+
+```text
+ Test Files  11 failed | 392 passed (403)
+      Tests  4 failed | 12233 passed | 16 skipped (12253)
+Type Errors  no errors
+     Errors  22 errors
+```
+
+The four failed assertions were two highlight-registry mismatches (`highlight-names.test.ts`, including an unresolved `json5`)
+and two missing installed package/asset reads (`reader-pin.test.ts`). Nine more suites failed: `fonts-built`,
+`markdown-worker-built`, `reader-assets`, `reader-bridge`, `reader-built`, `reader-images`, `reader-policy`, `reader-render-job`
+and `w7-storage-keys`; their output reported missing shared-renderer entry points, including both build failures. The 22
+unhandled errors were four `vaul` `getTranslate` exceptions in `sheet-desktop-arm` / `sheet-handle-only`, twelve missing-module
+source errors and six related source-type errors in the reader bridge. The summary's `Type Errors  no errors` did not erase
+those unhandled source errors. No installed launcher or Vitest file was inspected.
+
+The coordinator ruled this a stale install and licensed exactly `npm ci` in `ui`, then `pwa`, followed by one unfiltered
+remeasurement. Both dependency directories were real directories, not links; both installs exited 0 and tracked status stayed
+empty. Audit output reported UI 31 findings (4 low, 25 moderate, 2 high), PWA 12 (3 low, 8 moderate, 1 high). No audit repair,
+lockfile edit, forced install or source repair was attempted.
+
+The authorized remeasurement, 08:46:08.096–08:50:23.580 UTC, exited 0 in 255.48 s. Default summary:
+
+```text
+ Test Files  403 passed (403)
+      Tests  12382 passed | 3 skipped (12385)
+Type Errors  no errors
+```
+
+There was no `Errors` line or unhandled block. This is the PWA gate's accepted evidence; the earlier red remains recorded.
+
+#### Watcher-port integration gap
+
+The full rings gate found two failures in `rings/watcher-store-port.test.ts`: its typecheck reports the new
+`countDelegationEventsAtOrBelow` and `deleteDelegationEventsBetween` calls missing from `WatcherCoordPort`, and its exact
+reach census reports those same two missing members, with no gone members. This is PR3's integration gap with main's narrowed
+store port, not a main-red claim. The coordinator authorized exactly those two existing method names, sorted, in the single
+`WatcherCoordMember` union in `server/src/coord/ports.ts`, preserving the port and the guard, and issued D-7869. The additional
+single-file claim was accepted before editing. The measured census is the RED oracle. This correction and the note are committed
+together; the isolated census, full rings selection, server typecheck, tests-inclusive typecheck and deviation references must
+then pass. The coordinator carries the already-green base gates only if the whole-tree diff from `85270c001` names these two
+files alone; that proof is required with the handoff.
 
 ## W3-M38, amended (for the wave-3 plan, plan :991)
 
