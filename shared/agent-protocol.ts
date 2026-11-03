@@ -171,6 +171,13 @@ export const POOL_EPOCH_FILE_NAME = 'pool-epoch';
  * `ccd/ccd-tmp-sweep` replaces whole each pass. The server's census lane reads it on its own tick
  * (`server/src/tmpSweep.ts` parses it), so the inventory sweep's `MEASURED_FILE_KEYS` leaves it out too: it has its own
  * reader, and its size (a thousand `moved` rows) is past the inventory's 64 KiB file cap.
+ *
+ * `boxSettings` (`box-settings.json`, box settings view, D-6916) is the eleventh: what `ccrc settings --write` records every five
+ * minutes, the seven named settings as the box resolves them. It holds no secret by construction: the verb's strings pass through
+ * `_upd_redact` (userinfo and the home prefix become `~/`), print as ASCII and stop at 480 bytes, the release base shows only its
+ * scheme and host, and the seven settings are counts, seconds, milliseconds and that URL, never a key, token or path. The server's
+ * box-settings lane reads it on the inventory's own run (`server/src/update/boxSettingsLane.ts`), so the sweep's
+ * `MEASURED_FILE_KEYS` leaves it out too: it has its own reader and its own parse.
  */
 export const CCRC_DIR_NAME = '.ccrc';
 export const NODE_FILES = {
@@ -178,9 +185,10 @@ export const NODE_FILES = {
   nodeId: 'node-id', report: 'update.json', projection: 'update-intent',
   tokenGeneration: 'box-token-generation',
   tmpSweep: 'tmp-sweep.json',
+  boxSettings: 'box-settings.json',
 } as const;
 export type NodeFileKey = keyof typeof NODE_FILES;
-/** The ten names as one list, DERIVED — the agent's admission set and every
+/** The eleven names as one list, DERIVED — the agent's admission set and every
  *  scan over it read this, never a restatement. */
 export const NODE_FILE_BASENAMES: readonly string[] = Object.values(NODE_FILES);
 

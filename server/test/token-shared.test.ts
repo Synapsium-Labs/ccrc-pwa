@@ -138,9 +138,9 @@ describe('the token-sync op words (spec §4.4)', () => {
 });
 
 describe('the ninth node file (spec 4.5, §8 "No secret in the agent\'s read grant")', () => {
-  it('NODE_FILES.tokenGeneration is box-token-generation, and the derived list carries ten names (the tenth is the tmp sweep census, D-6624)', () => {
+  it('NODE_FILES.tokenGeneration is box-token-generation, and the derived list carries eleven names (the tenth is the tmp sweep census, D-6624; the eleventh is the box settings record, D-6916)', () => {
     expect(NODE_FILES.tokenGeneration).toBe('box-token-generation');
-    expect(NODE_FILE_BASENAMES).toHaveLength(10);
+    expect(NODE_FILE_BASENAMES).toHaveLength(11);
     expect(NODE_FILE_BASENAMES).toContain('box-token-generation');
   });
 

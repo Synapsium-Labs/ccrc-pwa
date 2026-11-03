@@ -67,6 +67,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ccrcSettingsNames } from './ccrcSettingsLine.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
@@ -111,10 +112,7 @@ const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&'
 function settingsLines(): string[] {
   return FILES.flatMap((f) => CODE[f].split('\n').filter((l) => /^\s*CCRC_SETTINGS\+?=/.test(l)));
 }
-const SETTINGS: string[] = (() => {
-  const m = /^CCRC_SETTINGS=\(([^)]*)\)$/m.exec(CODE['ccd/ccrc']);
-  return m ? m[1].split(' ').filter((w) => w !== '') : [];
-})();
+const SETTINGS: string[] = ccrcSettingsNames(CODE['ccd/ccrc']) ?? [];
 
 type EnvOnlyClass = 'call-bound' | 'fixture-path' | 'per-run' | 'rollout' | 'handshake' | 'constant' | 'tuning';
 /** D-6588's 42 environment-only names and D-6921's one. Each is a reasoned

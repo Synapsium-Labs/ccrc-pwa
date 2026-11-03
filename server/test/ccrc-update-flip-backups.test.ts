@@ -11,6 +11,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync, lstatSync, chmodSync, readdirSync, appendFileSync, rmSync, symlinkSync, openSync, closeSync, constants as fsConstants } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { ccrcSettingsNames } from './ccrcSettingsLine.js';
 import { assertNoRealTool, CONTAINED_TOOLS } from './containedTools.js';
 import { itLinux } from './platformFixtures.js';
 import { installVersionedTree, keepDigest } from './installTreeFixture.js';
@@ -2843,8 +2844,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
 
   describe('W24: ccrc reads its own settings through _ccrc_knob — the environment, else the box\'s ccrc.env, else the default (D-6587, D-6589)', () => {
     /** D-6588's names, parsed from ccd/ccrc's one CCRC_SETTINGS line and never typed here; with no such line every row reds by this name. */
-    const SETTINGS: readonly string[] = /^CCRC_SETTINGS=\(([A-Z0-9_ ]+)\)$/m.exec(readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'))?.[1]?.split(' ')
-      ?? ['CCRC_SETTINGS_LINE_MISSING'];
+    const SETTINGS: readonly string[] = ccrcSettingsNames(readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8')) ?? ['CCRC_SETTINGS_LINE_MISSING'];
     const KEEPS = SETTINGS.filter((k) => k.endsWith('_KEEP'));
     const ECHO = 'echo "rc $? val ${KNOB} from ${KNOB_FROM} why ${KNOB_WHY}"';
     const KEEP_ECHO = 'echo "rc $? keep ${KEEP} why ${KEEP_WHY}"';
