@@ -628,6 +628,7 @@ same, and shows as `absent`.
 | `bad-transition` | `to` is not reachable from the run's current state |
 | `review-in-flight` | a non-terminal review run already names this work run — on an OPEN, a second reviewer for one wave; on an ADVANCE to `working`, a send-back while its review is still open. Close the review run first (body `{"state":"failed"}` if it died — no fingerprint needed), then retry. |
 | `cap-review-rounds` | on an OPEN of a review run: the work run already has three review runs, in any state. The server raised one ask to the operator carrying the run, its round count and the last review's open findings (the refusal body carries the same under `ask`). Do not retry the open and do not look for another way to start a review: the operator lifts the cap per run, and a further open then succeeds. Meanwhile rule on the findings you already hold. |
+| `ejection-not-merging` | on an ADVANCE to `working` whose body carries `ejection`, from a run not at `merging`: an ejection rides only the `merging → working` edge, so a run at `dispatched` or `awaiting-review` answers this code, while the edge gate's `bad-transition` (a run at `working`, among others), a review in flight and, from `awaiting-review`, the dispatch cap answer first, each with its own code. The server recorded nothing: the run and its landing entry are unchanged. Do not retry with the body and send no `fix-round` mail; re-read the run, and a run no longer at `merging` gets no ejection: report it to the operator (SKILL.md step 6). |
 | `stale-review` | the reviewed branch's live tip is not the `reviewedTip` the report describes — the worker pushed after wave-done, or the report is about an older tip. Do not rule on it: close the review run with body `{"state":"failed"}` (no fingerprint needed), mail the worker the code and detail verbatim, and open a fresh review run against the live tip once its re-measured wave-done arrives. (A malformed `reviewedTip` reaching the verifier directly also answers this code, but the close route refuses that shape as `bad-request` first.) |
 | `report-unreadable` | the report path the reviewer named cannot be opened — absent or unreadable. Close the review run with body `{"state":"failed"}` (no fingerprint needed) and open a new one; the reviewer's clause 7 says the report is written by temp-then-rename, so a half-written file is never the cause. |
 | `lineage-unmeasured` | in a project the operator opted in to the radar's lineage, the live tip is not the claim and the radar has not yet measured the clean merges between them. It is a wait, not a refusal: the server has already mailed the claim's sender, which re-sends the same claim unchanged after the radar's next tick, at most twice. Re-sending means repeating the call that answered it, the same advance or the same close, so a re-sent `wave-done` that reaches you with the run already at `awaiting-review` is not a fresh wave-done and needs no new review run. The advance and the work close mail the worker, and the review close mails the reviewer. You send no `rejected:` mail for it, and you act only when the sender reports it. `detail` says why (`not-yet-measured`, `lineage-stale`, `older-than-the-live-tip` and the like). |
@@ -800,9 +801,10 @@ the worker's fingerprint exactly as the worker reports it.
    and `landedInTrain: true` on the PR's row of `ccd pr-state --session
    <sessionId>` (a merge train landed its work through a train PR and closed
    it; ccd sets it only when that train PR is MERGED and its record lists the
-   PR at exactly this head, so a label alone reads `trainUnproven`, or
-   `trainUnread` while ccd has not read the train record yet — read again
-   later, never treat either as merged — and you never name a label) — the
+   PR at exactly this head, so a label alone reads `trainUnproven` when ccd read
+   that record and it proves nothing, which is reported as not merged, or
+   `trainUnread` when ccd could not read it, which is unmeasured and is read
+   again later; never treat either as merged, and you never name a label) — the
    coordinator lands every PR with
    `--match-head-commit <handoffCommit>`, by the route §5b reads from the
    repository's own rules, for exactly this reason (`--admin` and GitHub API
@@ -896,13 +898,18 @@ the worker's fingerprint exactly as the worker reports it.
    the PR's checks, which ran on a different commit and can read green —
    `gh run list --event merge_group --json databaseId,headBranch,conclusion`
    finds it by its `headBranch` (`gh-readonly-queue/<base>/pr-<pr>-…`) and
-   `gh run view <id> --log-failed` says why, while
-   `gh pr view <pr> --json mergeStateStatus` answers a conflict. Then either
+   `gh run view <id> --log-failed` says why, and a conflict is measured as
+   SKILL.md step 6 measures it: after one `git fetch origin`, `git merge-tree
+   --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1
+   with a tree id on its first line, then the conflicted paths. Then either
    enqueue it again exactly as above — the landing verdict (§5b) again first,
-   then the checks, then the read-back — or
-   send the owning worker a fix round on the `merging → working` edge
-   (SKILL.md step 6's send-back; its fresh wave-done gets a fresh review run,
-   and a fresh `merging`). Closing before the landing would hand a PR still
+   then the checks, then the read-back — or send the owning worker a fix round
+   on the `merging → working` edge in one of the two report-less forms of
+   SKILL.md step 6's send-back (its fresh wave-done gets a fresh review run,
+   and a fresh `merging`). A dequeue that neither a re-enqueue nor one of
+   those two forms answers, a requested change or a cause you could not read
+   among them, is a stop for the operator and no report-less round (SKILL.md
+   step 6). Closing before the landing would hand a PR still
    in the queue to a reclaim: nothing could then tell you of its dequeue, and
    no worker would be left to fix it. A coordinator whose own workspace
    carries a programme-wave hold or the child marker — a self-claimed run's,
@@ -1241,9 +1248,11 @@ decides what this session does, and nothing else does:
   `STOP not-at-head: the PR is CLOSED`. Before you report that stop, prove the
   landing as step 3 does: CLOSED, `headRefOid` equal to `handoffCommit`, and
   `landedInTrain: true` on the PR's row of `ccd pr-state --session
-  <sessionId>`. Where that proof holds, the PR landed, as on this line; where
-  it does not (`trainUnproven`, `trainUnread`, no row, or another head), the
-  stop stands.
+  <sessionId>`. Where that proof holds, the PR landed, as on this line. Where it
+  does not, the stop stands: `trainUnproven`, no row or another head is reported
+  as that stop at once, while `trainUnread` means ccd could not read the train
+  record (no time left in its budget, a timeout, GitHub unreachable), so read
+  the row once more and report the stop if it still reads `trainUnread`.
 - `WAIT pending: <names>` — a reported required check is still running. Wait
   in the foreground, `gh pr checks <pr> --required --watch`, again if the call
   times out while a reported required check is still pending, then run the
@@ -1274,7 +1283,8 @@ decides what this session does, and nothing else does:
 - `RED <names>` — a required check is red on the head, each name with its
   kind. If it is the PR's own, that is the existing fix-round rule (step 3:
   on route Q disarm first, then a fix round to the owning worker on the
-  `merging → working` edge). If it is not the PR's own and its kind is
+  `merging → working` edge), in SKILL.md step 6's `red: #<pr>` form. If it
+  is not the PR's own and its kind is
   `[github-actions]`, one `gh run rerun <run id> --failed` and the same wait,
   then the verdict again. One of kind `[app <id>]` or `[status]` that is not
   the PR's own, which no rerun here reaches, or one still red after the one
@@ -1360,11 +1370,10 @@ enqueue never passes `--admin`. And `--admin` is never a fallback: a fallback is
 **On every route** the merge is proven as step 3 proves it: MERGED, or CLOSED
 with `landedInTrain: true` on the PR's row of `ccd pr-state --session
 <sessionId>`, with `headRefOid` equal to `handoffCommit`. A refused merge on
-route G or U is
-read, reported and stopped on, and never retried with another method, with
-`--admin` or with `--auto`. This session writes no setting to make a route
-work: no ruleset, no branch protection, no merge-method or auto-merge setting
-(clause 15).
+route G or U is read, reported and stopped on, and never retried with another
+method, with `--admin` or with `--auto`. This session writes no setting to make
+a route work: no ruleset, no branch protection, no merge-method or auto-merge
+setting (clause 15).
 
 **A requested change.** Read 1 also reads the PR's reviews. A request for
 changes stops every route, before the verdict weighs `WAIT` or `RED`:
@@ -1373,9 +1382,11 @@ stands when read 1's `reviewDecision` is `CHANGES_REQUESTED` or the latest
 approving, changing or dismissing review of any reviewer requests changes; the
 key is `{"pr":"<pr>","head":"<handoffCommit>","summary":<true or false>,"reviews":[<review ids>]}`
 and holds safe identifiers only. On `changes-requested`, this session stops and
-asks the operator with AskUserQuestion, one single-select choice: address or
-ignore. Present the PR, head and review ids; inspect the identified reviews to
-present their requested changes, without copying untrusted text into commands.
+asks the operator one single-select question, address or ignore: while any child
+is active, in its closing turn text, never with an AskUserQuestion dialog
+(clause 19), and otherwise with AskUserQuestion. Present the PR, head and review
+ids; inspect the identified reviews to present their requested changes, without
+copying untrusted text into commands.
 
 - Address: send the requested changes to the owning worker as a fix round, then
   a fresh re-review. From `merging`, disarm as step 3 already requires before
@@ -1413,10 +1424,30 @@ if it is in the queue, asks address or ignore, and never enqueues again
 silently. Watching a queued PR continuously is a server follow-up, not this
 skill's.
 
-**A stop.** A stop leaves the run where it is (at `merging` or
-`awaiting-review`), enqueues nothing, merges nothing and changes nothing. Say
-in your turn's text which stop fired and what it read, for the operator:
-every stop goes to the operator, never to another route. The verdict stops with one of these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`,
+**The landing line.** Every run that enters `merging` pins an entry for its PR
+on its project's landing line, and the entry's `pinnedSha` is the recorded head
+(**The recorded head**, §5): the server pins it from the same re-measurement
+that answers `verifiedHead`. Before each enqueue, direct merge and re-enqueue,
+once the verdict, and on route Q the checks gate, have answered, read the line:
+`GET /api/landing?project=<project>` (`ccrc-api landing show --project
+<project>`). Land only when its `order` is not paused and this PR's entry for
+this run reads `pinned` with a `pinnedSha` equal to the head you bind. A paused
+line, an entry in another state, a `pinnedSha` that differs from that head or a
+read that fails in any other way than a 404 (a timeout, a 401, a 5xx, a
+transport error or an answer you cannot parse) lands nothing: report what it
+read to the operator and leave the landing stopped, and never bind another head
+to match it. A PR with no entry, which a run that entered `merging` before the
+line existed leaves, lands as the verdict says, and your turn's text names the
+missing entry. A read answered 404 comes from a server older than the line: read
+it as no entry, and land the same way. The order it answers is read and not yet
+acted on: which entry lands next is the line's head, a later stage's.
+
+**A stop.** A stop enqueues nothing and merges nothing. It leaves the run where
+it is (at `merging` or `awaiting-review`) and changes nothing, with one
+exception, the new-head route below. Say in your turn's text which stop fired
+and what it read, for the operator: every stop goes to the operator, and only
+that exception goes on to the new-head route as well. The verdict stops with one
+of these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`,
 `unknown-rule-type`, `method-set-empty`, `rebase-only`,
 `queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`,
 `unverifiable`, `not-reported`, `changes-requested`, `approval-missing`. A
@@ -1425,20 +1456,64 @@ the operator's to decide, as **A requested change** above says. Four stops no
 read decides are yours to name: `red-unreachable` (above), `verdict-unread`
 (above), `checks-gate-unread` (step 3) and `github-refused`, a merge GitHub
 refused for a rule it enforces at merge and this session does not verify —
-reviews, signatures, deployments, code scanning, required workflows — which
-this session never works around. Not a stop: a required check red on the head
-that is the PR's own; that goes to the fix-round rule, on route G exactly as
-on route Q. A `red-unreachable` whose red is `main`'s own, already fixed on
-`main`, needs a new head, and its report names that route: a fix round to the
-owning worker on the `merging → working` edge (on route Q disarm first) for one
-clean merge of `main` and nothing else, then a review run scoped to that merge
-alone. The one rerun the RED bullet allows does not clear a red that is
-`main`'s own, and no close and reopen does either: the verdict calls a required
-name red while any completed run of it on the head failed, a later green run of
-it included (D-7495; judging only the newest run would loosen the gate, which
-is the operator's to decide), a rerun replays its run's original merge commit,
-and a close and reopen of the PR can race GitHub's recompute of the merge ref.
-The report of the stop names the new-head route above, not a rerun.
+reviews, signatures, deployments, code scanning, required workflows — which this
+session never works around. Not a stop: a required check red on the head that is
+the PR's own; that goes to the fix-round rule, on route G exactly as on route Q.
+A `red-unreachable` whose red is `main`'s own and already fixed on `main` needs
+a new head, and this session takes the new-head route itself (D-7588). It
+disarms first on route Q, then sends a fix round to the owning worker on the
+`merging → working` edge, in SKILL.md step 6's `ejected: new-head:#<pr>` form,
+which records the base on the advance, for one clean merge of `main` and nothing
+else, then dispatches a review run whose brief names that merge commit as the
+change under review; the reviewer still reads the whole diff (reviewer clause
+5). Show both facts with reads you can type, after one `git fetch origin`:
+read that one required name on a `main` sha with `gh api --paginate
+'repos/{owner}/{repo}/commits/<sha>/check-runs'` and `gh api --paginate
+'repos/{owner}/{repo}/commits/<sha>/status'`, judged as read 5 judges it: red
+when a completed run of it concluded other than success, neutral or skipped, or
+a status of it reads failure or error; passing only when neither is red, none is
+pending, and a run of it or a success status reports it. The red is `main`'s own
+when that name reads red on a commit that `git rev-list --first-parent
+--max-count=20 <handoffCommit>..origin/main` lists, read newest first and
+stopping at the first red (first parents only, so the branch commits of a PR
+merged into `main` are never read as `main`'s own), and it is already fixed on
+`main` when that name reads passing on `main`'s current tip (`git rev-parse
+origin/main`) from a merge-queue run. A passing read on `main`'s tip counts only
+when at least one check run of that name concluded success in a merge-queue run:
+the check run's `check_suite.id`, from the check-runs read, equals the
+`check_suite_id` of a workflow run on that sha whose `event` reads
+`merge_group`, from `gh api --paginate
+'repos/{owner}/{repo}/actions/runs?head_sha=<sha>'`. No other run counts: the
+fields these reads return cannot tell a scheduled or dispatched full run from a
+refresh run, and a refresh run runs no test legs yet reports the required
+summaries green. Where none of those commits shows that name red, or that name
+does not read passing on `main`'s current tip from a merge-queue run (red,
+pending, not reported, unread, reported only by a status, passing only from
+another run, or a tip with no merge-queue run, as a merge that bypassed the
+queue leaves), the stop stands and goes to the operator as every other stop
+does. Send the new-head round only when, after the same fetch, `git merge-tree
+--write-tree --name-only --no-messages origin/main <handoffCommit>` exits 0:
+exit 1 (a conflict) or any other answer leaves the stop standing for the
+operator. The one rerun the RED bullet allows does not clear a red that is
+`main`'s own, and no close and reopen does either: a rerun replays its run's
+original merge commit, which still carries `main`'s red, and a close and reopen
+of the PR can race GitHub's recompute of the merge ref. Where you take the
+route, say so in your turn's text with the reads that showed it.
+
+**The latest attempt decides** (D-7546, which amends the strict reading of
+D-7495). The verdict judges the latest attempt of each required name, which is
+GitHub's own merge rule and all read 5 lists: `commits/<sha>/check-runs` with no
+`filter` answers only the newest run of each name, so a name that failed and
+then passed on a rerun of the same head reads passing. So a red that the one
+rerun the RED bullet allows turns green is cleared. A red that no rerun reaches,
+or one still red after that rerun, stays the stop `red-unreachable`. Before each
+enqueue, direct merge and re-enqueue, read every attempt as well, with `gh api
+--paginate
+'repos/{owner}/{repo}/commits/<handoffCommit>/check-runs?filter=all'`, and name
+in your turn's text, apart from the verdict's line, each check name of which any
+completed run concluded other than success, neutral or skipped, or none. That
+line is a report: it is never a stop and decides nothing, and a read of it that
+fails is named as unread and is no stop either.
 
 ## 6 — Final merge
 
@@ -1510,7 +1585,8 @@ coordinated a run, so its workspace is cleaned up by a human. No
 `childReclaimWhy` at all means the child was eligible but the hand-off did
 not start; it is reached regardless. **A review run's reviewer
 is a child too, but it is kept while the run it reviewed is open**: its
-clips directory holds the report you cite by path in every `fix-round` mail.
+clips directory holds the report you cite by path in every `fix-round` mail
+sent on a review report (a report-less round, SKILL.md step 6, cites none).
 If the run it reviewed is still open when the review run closes, that close
 releases the reviewer and answers `review-report-live`; if the reviewed run
 is by then already terminal, the review close finishes the reviewer
@@ -1633,14 +1709,16 @@ route-parity suite binds each registration to this corpus from the commit that r
 
 ## The ask lane — pre-empting a child's question (Tasks 9-11)
 
-Clause 11 is what licenses this: `POST /api/asks/:id/answer` is the one route that types into
-a child's pane, and this session never does it by any other means. All three routes in the
-lane are named here — a coordinator IS a parent and calls all three, so this is the truthful
-entry, not an invitation like the operator-only doors above.
+Clause 11 is what licenses this: `"$API" asks answer`, which sends `POST /api/questions/:id/rule`
+(id `ask-<n>`), is the one call that types into a child's pane, and this session never does it by
+any other means. All three routes in the lane are named here — a coordinator IS a parent and
+calls all three, so this is the truthful entry, not an invitation like the operator-only doors
+above.
 The client sends `asks answer` and `asks release` to the question door family's claimant pair,
-`POST /api/questions/:id/rule` and `POST /api/questions/:id/release` (id `ask-<n>`), when the
-server advertises `questions-v1`, and to `POST /api/asks/:id/answer` and `/release` otherwise;
-both answer through the same core, refusal for refusal, and the commands below do not change.
+`POST /api/questions/:id/rule` and `POST /api/questions/:id/release` (id `ask-<n>`), with the
+row's kind added for you; the commands below do not change. A box whose server is older than the
+family is refused by the client before anything is sent (`no-questions-door`): nothing was
+answered, so say so to the operator rather than retrying.
 
 **A cross-project coordinator receives its children's questions** (the operator's ruling of
 2026-10-18, D-5530). A child's question is held for the recorded claimant of the child's run
@@ -1752,19 +1830,18 @@ Clause 11 licenses this too. A child's permission prompt reaches you as mail (su
 (D-5530), with the command fenced as untrusted data, the server's class, the window's end in
 UTC and the ready-to-run commands. Three routes are yours, each through the client:
 
-- `POST /api/approvals/:id/rule` — allow once (an `ordinary` row only) or deny, with a reason
-  the child reads. The mailed command reads your reason through a quoted heredoc and builds the
-  body with jq, so type the reason on its own line and nothing in it is run (D-5489).
-- `POST /api/approvals/:id/release` — hand it over: the operator is notified at once, and it is
-  final.
+- `POST /api/questions/:id/rule` (`"$API" approvals rule <id>`, id `approval-<n>` on the wire) —
+  allow once (an `ordinary` row only) or deny, with a reason the child reads. The mailed command
+  reads your reason through a quoted heredoc and builds the body with jq, so type the reason on
+  its own line and nothing in it is run (D-5489).
+- `POST /api/questions/:id/release` (`"$API" approvals release <id>`) — hand it over: the
+  operator is notified at once, and it is final.
 - `GET /api/approvals/:id` (`"$API" approvals show <id>`) — the row, redacted, for the claimant
   it was held for; anyone else is `403`.
 
-The client sends `approvals rule` and `approvals release` to the question door family's
-claimant pair, `POST /api/questions/:id/rule` and `POST /api/questions/:id/release` (id
-`approval-<n>`), when the server advertises `questions-v1`, and to the rule and release routes
-above otherwise; both answer through the same core, refusal for refusal, and the mailed commands
-do not change.
+The first two are the question door family's claimant pair, the same doors as the ask lane's;
+the client adds the row's kind, and the mailed commands do not change. A box whose server is
+older than the family is refused by the client before anything is sent (`no-questions-door`).
 
 A ruling after the window is refused `hook-gone`: the child's hook has returned and the
 operator has the prompt. Any other caller is `403 not-parent`, wherever it sits. The other

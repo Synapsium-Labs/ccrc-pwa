@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, ghPoisonAt, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghPoisonAt, ghContainedEnv, type CcdHarness } from './ccdWsHelpers.js';
 import { makeLandFixture, holdLandLock, lockHeld, pidGone, until, PROBE, type LandFixture, type CheckRun } from './ccdLandProbeFixture.js';
 
 let h: CcdHarness;
@@ -1847,6 +1847,23 @@ describe('ccd-land-probe: a registry the probe cannot read decides no row (fix r
     expect(fx.exists(`${ALPHA}.lineage`), 'the old file of a row with no .branch').toBe(false);
     expect(m.stderr).not.toContain('lineage-skip');
   });
+
+  it('1171-a the two lineage-skip lines stay apart: an unreadable row and two malformed rows (one a git-valid name the grammar does not hold, ws/gamma+b) log one line each, every held file byte-identical', { timeout: 120_000 }, () => {
+    const GAMMA = 'lane-a-proj-a-gamma';
+    const old = seeded([ALPHA, BETA, GAMMA]);
+    fs.writeFileSync(path.join(fx.reg, `${ALPHA}.branch`), 'ws/alpha\nws/other\n');   // unreadable (two lines)
+    fs.writeFileSync(path.join(fx.reg, `${BETA}.branch`), 'ws/beta~0\n');             // malformed: a revision expression
+    fs.writeFileSync(path.join(fx.reg, `${GAMMA}.branch`), 'ws/gamma+b\n');           // malformed by the grammar, valid to git
+    const m = fx.run();
+    expect(m.status).toBe(0);
+    expect(fx.readJson('probe').state).toBe('measured');
+    unchanged(old, 'measured tick');
+    const skip = (t: string): string[] => lines(m.stderr).filter((l) => l === `land-probe: lineage-skip: ${t}`);
+    expect(skip('a registry row could not be read'), 'the unreadable line, once').toHaveLength(1);
+    expect(skip(MALFORMED), 'the malformed line, once for two rows').toHaveLength(1);
+    expect(lines(m.stderr).filter((l) => l.startsWith('land-probe: lineage-skip: ')), 'exactly the two lines').toHaveLength(2);
+    said(m.stderr, MALFORMED, [ALPHA, BETA, GAMMA], 'measured tick');
+  });
 });
 
 describe('ccd-land-probe: a failure never leaves an old record (fix round 1, review 1109 F6, A3, A5, A12)', () => {
@@ -2004,5 +2021,251 @@ describe('ccd-land-probe: every removal of enabled checks $REG/landing/ itself (
     expect(fx.run().status).toBe(0);
     for (const f of files) expect(fs.readFileSync(f, 'utf8'), f).toBe('{}\n');
     expect(ls(path.join(target, 'proj-a'))).toEqual(['enabled']);
+  });
+});
+
+describe('ccd-land-probe: the lander key and its mirror (landing order wave 5d)', () => {
+  const LANDER_KEYS = ['v', 'project', 'lander', 'at'];
+  const arm = (text = 'lander=coordinator\n'): void => {
+    fx.conf(fx.project, text);
+    expect(fx.run().status).toBe(0);
+  };
+
+  it('K1 lander=coordinator is accepted and mirrored, whatever lineage says', { timeout: 60_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, 'lander=coordinator\n');
+    const r = fx.run();
+    expect(r.status).toBe(0);
+    expect(r.stderr).not.toContain('conf-invalid');
+    const doc = fx.readJson('lander');
+    expect(Object.keys(doc)).toEqual(LANDER_KEYS);
+    expect(doc).toMatchObject({ v: 1, project: 'proj-a', lander: 'coordinator' });
+    expect(Math.abs(Date.parse(doc.at) - Date.now())).toBeLessThan(60_000);
+    expect(fx.exists('enabled')).toBe(false);           // lineage defaults to off
+    expect(fx.exists('probe')).toBe(true);              // the key changes no measurement
+    arm('lineage=on\nlander=coordinator\n');
+    expect(fx.readJson('lander').at).toBe(fx.readJson('enabled').at);   // one pass, one time
+    arm('lineage=off\nlander=coordinator\n');
+    expect(fx.exists('lander')).toBe(true);
+    expect(fx.exists('enabled')).toBe(false);
+  });
+
+  it('K1b the pass takes one time for both mirrors of a project, whatever the clock resolution', () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, 'lineage=on\nlander=coordinator\n');
+    // The embedded program, imported (not run: __name__ is not __main__) in a python3 -I child whose HOME is the fixture's.
+    // now_iso is replaced by a fake that answers a DIFFERENT string on every call, so the one-second resolution of the real
+    // clock cannot hide a second call: a mirror that takes its own time reads a later string, and the count rises.
+    const src = fs.readFileSync(PROBE, 'utf8');
+    const program = src.slice(src.indexOf("<<'PY'\n") + "<<'PY'\n".length, src.lastIndexOf('\nPY'));
+    const progFile = path.join(h.home, 'program-k1b.py');
+    fs.writeFileSync(progFile, program);
+    const driver = 'import json, sys\nns = {"__name__": "probe"}\nexec(compile(open(sys.argv[1]).read(), "probe", "exec"), ns)\n'
+      + 'calls = []\n'
+      + 'def fake_now():\n    calls.append(1)\n    return "2000-01-01T00:00:%02dZ" % len(calls)\n'
+      + 'ns["now_iso"] = fake_now\n'
+      + 'ns["reconcile_enabled"]([sys.argv[2]])\n'
+      + 'print(json.dumps(len(calls)))\n';
+    const out = execFileSync('python3', ['-I', '-c', driver, progFile, fx.project], {
+      encoding: 'utf8', cwd: h.home,
+      env: ghContainedEnv(h.home, { PATH: process.env['PATH'] ?? '', HOME: h.home }, { systemd: true, tmux: true, net: true }),
+    });
+    const first = '2000-01-01T00:00:01Z';
+    expect(fx.readJson('enabled').at).toBe(first);
+    expect(fx.readJson('lander').at).toBe(first);
+    expect(fx.readJson('enabled').at).toBe(fx.readJson('lander').at);
+    expect(JSON.parse(out), 'now_iso was called once for the one project').toBe(1);
+  });
+
+  it('A1 the key changes no measurement: probe and main-health are equal, lander=coordinator or lander=none', { timeout: 120_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.addHead(2, { 'b.txt': 'b\n' });
+    fx.addRow('lane-a-proj-a-alpha', 'ws/alpha');
+    fx.stubChecks({ rules: [REQ_RULE([{ context: 'ci/test' }])], runs: [run(1, 'ci/test', 'completed', 'success')] });
+    // Wall-clock derived and so masked: `at` in both documents (now_iso), and `elapsedMs` in probe (the project's spent
+    // time). Everything else, the store counts and the scratch size included, is compared whole.
+    const measured = (): { probe: any; health: any } => {
+      const probe = fx.readJson('probe');
+      const health = fx.readJson('main-health');
+      expect(Object.keys(probe), 'probe has its keys').toEqual(
+        ['v', 'project', 'at', 'state', 'base', 'heads', 'headsCut', 'pairs', 'pairHeads', 'pairsCut', 'store', 'scratch', 'elapsedMs']);
+      expect(Object.keys(health), 'main-health has its keys').toEqual(['v', 'project', 'at', 'sha', 'state', 'required', 'failing', 'pending']);
+      expect(probe.state).toBe('measured');
+      expect(probe.heads).toHaveLength(2);
+      expect(health.state).toBe('green');
+      expect(typeof probe.at).toBe('string');
+      expect(typeof health.at).toBe('string');
+      expect(typeof probe.elapsedMs).toBe('number');
+      delete probe.at; delete probe.elapsedMs; delete health.at;
+      return { probe, health };
+    };
+    fx.conf(fx.project, 'lander=coordinator\n');
+    expect(fx.run().status).toBe(0);
+    expect(fx.exists('lander')).toBe(true);
+    const withKey = measured();
+    fx.conf(fx.project, 'lander=none\n');
+    expect(fx.run().status).toBe(0);
+    expect(fx.exists('lander')).toBe(false);
+    const without = measured();
+    expect(without.probe).toEqual(withKey.probe);
+    expect(without.health).toEqual(withKey.health);
+  });
+
+  it('K2 lander=none, and no lander key at all, write no marker and remove a standing one', { timeout: 120_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    for (const text of ['lander=none\n', '', 'lineage=on\n', 'lineage=on\nlander=none\n']) {
+      arm();
+      expect(fx.exists('lander'), text).toBe(true);
+      fx.conf(fx.project, text);
+      const r = fx.run();
+      expect(r.status, text).toBe(0);
+      expect(r.stderr, text).not.toContain('conf-invalid');
+      expect(fx.exists('lander'), text).toBe(false);
+      expect(fx.exists('enabled'), text).toBe(text.includes('lineage=on'));
+      expect(fx.exists('probe'), text).toBe(true);
+    }
+  });
+
+  it('K3 any other value is conf-invalid: bad-value, and removes both mirrors', { timeout: 180_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    for (const v of ['Coordinator', 'coordinator ', '', 'on', 'yes', 'operator', 'coordinator\r']) {
+      arm('lineage=on\nlander=coordinator\n');
+      expect(fx.exists('lander'), JSON.stringify(v)).toBe(true);
+      fx.conf(fx.project, `lineage=on\nlander=${v}\n`);
+      const r = fx.run();
+      expect(r.status).toBe(0);
+      expect(r.stderr, JSON.stringify(v)).toContain('conf-invalid proj-a: bad-value');
+      expect(fx.exists('lander'), JSON.stringify(v)).toBe(false);
+      expect(fx.exists('enabled'), JSON.stringify(v)).toBe(false);
+    }
+  });
+
+  it('K4 a repeated lander is conf-invalid: repeated-key, and removes the marker', { timeout: 90_000 }, () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    for (const text of ['lander=coordinator\nlander=coordinator\n', 'lander=none\nlander=coordinator\n']) {
+      arm();
+      fx.conf(fx.project, text);
+      const r = fx.run();
+      expect(r.status).toBe(0);
+      expect(r.stderr, text).toContain('conf-invalid proj-a: repeated-key');
+      expect(fx.exists('lander'), text).toBe(false);
+    }
+  });
+
+  it('K5 an unknown key beside lander is still unknown-key, and removes the marker', () => {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    arm();
+    fx.conf(fx.project, 'lander=coordinator\nbogus=1\n');
+    const r = fx.run();
+    expect(r.stderr).toContain('conf-invalid proj-a: unknown-key');
+    expect(fx.exists('lander')).toBe(false);
+  });
+
+  it('K6 removal reaches every other case in the same pass: paused, not a checkout, a conf removed, a directory with no conf; lineage=off keeps it', { timeout: 90_000 }, () => {
+    const plant = (name: string): string => {
+      const d = path.join(fx.reg, 'landing', name);
+      fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(d, 'lander'), '{}\n');
+      return path.join(d, 'lander');
+    };
+    const off = makeLandFixture(h, { project: 'proj-off', slug: 'o/off' });
+    const gone = makeLandFixture(h, { project: 'proj-gone', slug: 'o/gone' });
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf('proj-a', 'lander=coordinator\n');
+    fx.pause('project');
+    fx.conf('proj-off', 'lineage=off\nlander=coordinator\n');
+    fx.conf('proj-nocheckout', 'lander=coordinator\n');
+    fx.conf('proj-gone', 'lander=coordinator\n');
+    expect(fx.run().status).toBe(0);
+    expect(gone.exists('lander')).toBe(true);
+    fs.rmSync(gone.confPath());
+    const files = ['proj-a', 'proj-nocheckout', 'orphan'].map(plant);
+    expect(fx.run().status).toBe(0);
+    for (const f of files) expect(fs.existsSync(f), f).toBe(false);
+    expect(gone.exists('lander'), 'a removed conf').toBe(false);
+    expect(off.readJson('lander')).toMatchObject({ v: 1, project: 'proj-off', lander: 'coordinator' });
+  });
+
+  /** A `$REG/landing` that is a symlink to a target outside the fixture-owned real directory, the target seeded with
+   *  `proj-a/lander`, `orphan/lander` and `proj-a/enabled` of known bytes; the probe runs once with `conf`. */
+  function symlinkedLanding(conf: string): { files: Record<string, string>; before: string[]; after: () => string[]; target: string } {
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    fx.conf(fx.project, conf);
+    const target = path.join(h.home, 'landing-target');
+    const files: Record<string, string> = {
+      'proj-a/lander': '{"seed":"proj-a lander"}\n', 'orphan/lander': '{"seed":"orphan lander"}\n', 'proj-a/enabled': '{"seed":"proj-a enabled"}\n',
+    };
+    for (const [rel, bytes] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(target, rel)), { recursive: true });
+      fs.writeFileSync(path.join(target, rel), bytes);
+    }
+    const tree = (): string[] => (fs.readdirSync(target, { recursive: true }) as string[]).map(String).sort();
+    fs.mkdirSync(fx.reg, { recursive: true });
+    fs.symlinkSync(target, path.join(fx.reg, 'landing'));
+    return { files, before: tree(), after: tree, target };
+  }
+  function expectTargetUntouched(s: ReturnType<typeof symlinkedLanding>, why: string): void {
+    // The exact recursive listing: nothing added (no mirror, no .lp.* temp file, no probe), nothing removed.
+    expect(s.after(), `${why}: the listing`).toEqual(s.before);
+    expect(s.before).toEqual(['orphan', 'orphan/lander', 'proj-a', 'proj-a/enabled', 'proj-a/lander']);
+    for (const [rel, bytes] of Object.entries(s.files)) expect(fs.readFileSync(path.join(s.target, rel), 'utf8'), `${why}: ${rel}`).toBe(bytes);
+  }
+
+  it('K7 a landing directory that is a symlink keeps the lander files in its target (the removal arm: lander=none)', () => {
+    const s = symlinkedLanding('lander=none\n');
+    expect(fx.run().status).toBe(0);
+    expectTargetUntouched(s, 'lander=none');
+  });
+
+  it('K7b a landing directory that is a symlink is not written through (the write arm: lander=coordinator beside lineage=on)', () => {
+    const s = symlinkedLanding('lineage=on\nlander=coordinator\n');
+    const r = fx.run();
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('skip landing: not a real directory owned by this user');
+    expectTargetUntouched(s, 'lander=coordinator');
+    expect(fs.lstatSync(path.join(fx.reg, 'landing')).isSymbolicLink()).toBe(true);
+  });
+});
+
+describe('ccd-land-probe: the tick measures the least recently measured project first (review 1125 N6, D-7268)', () => {
+  const order = (stderr: string): string[] =>
+    [...stderr.matchAll(/^land-probe: unmeasured (proj-[ab]) main-health /gm)].map((x) => x[1]);
+
+  it('N6-a an older probe goes first whatever the names, and a project with no probe goes before both', { timeout: 120_000 }, () => {
+    const b = makeLandFixture(h, { project: 'proj-b', slug: 'o/r2' });
+    fx.addHead(1, { 'a.txt': 'a\n' });
+    b.addHead(1, { 'b.txt': 'b\n' });
+    fx.conf('proj-a', '');
+    fx.conf('proj-b', '');
+    const t1 = fx.run();
+    expect(t1.status).toBe(0);
+    expect(order(t1.stderr), 'tick 1: neither has a probe, so by name').toEqual(['proj-a', 'proj-b']);
+    const past = new Date(Date.now() - 3_600_000);
+    fs.utimesSync(path.join(b.landDir, 'probe'), past, past);
+    const t2 = fx.run();
+    expect(t2.status).toBe(0);
+    expect(order(t2.stderr), 'tick 2: proj-b\'s probe is older').toEqual(['proj-b', 'proj-a']);
+    fs.rmSync(path.join(fx.landDir, 'probe'));
+    const t3 = fx.run();
+    expect(t3.status).toBe(0);
+    expect(order(t3.stderr), 'tick 3: proj-a has no probe').toEqual(['proj-a', 'proj-b']);
+  });
+
+  it('N6-b a project the tick budget left unstarted is measured first on the next tick', { timeout: 180_000 }, () => {
+    const b = makeLandFixture(h, { project: 'proj-b', slug: 'o/r2' });
+    for (let n = 1; n <= 6; n++) fx.addHead(n, { [`f${n}.txt`]: 'x\n' });
+    b.addHead(1, { 'b.txt': 'b\n' });
+    fx.conf('proj-a', '');
+    fx.conf('proj-b', '');
+    expect(fx.run().status).toBe(0);
+    fx.wrapGit('case " $* " in *" merge-tree "*) sleep 6;; esac');
+    const t2 = fx.run({ CCD_LAND_PROBE_TICK_BUDGET: '30' });
+    expect(t2.status).toBe(0);
+    expect(t2.stderr, 'tick 2 left proj-b unstarted').toContain('land-probe: tick-budget: proj-b not started');
+    const before = fs.statSync(path.join(b.landDir, 'probe'));
+    const t3 = fx.run({ CCD_LAND_PROBE_TICK_BUDGET: '30' });
+    expect(t3.status).toBe(0);
+    expect(t3.stderr, 'tick 3 starts with proj-b').not.toContain('land-probe: tick-budget: proj-b not started');
+    expect(fs.statSync(path.join(b.landDir, 'probe')).mtimeMs, 'proj-b\'s probe was rewritten').toBeGreaterThan(before.mtimeMs);
   });
 });

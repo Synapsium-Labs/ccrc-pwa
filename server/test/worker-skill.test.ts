@@ -67,7 +67,7 @@ const CONTRACT = [
   "Remote control is decided at your creation, not by you: dispatched workers spawn WITHOUT it (the 2026-08-13 ruling, task #37 — landed), declared by the dispatch path at `ws-add --no-rc` and stamped as the registry's `rc` field, while `~/.ccrc/remote-control` still governs every non-dispatched session on this box. Neither file is yours to write.",
   "Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.",
   "When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts — but weigh that answer by your SessionStart card: only `fresh` licenses taking it as read, while `N commits behind HEAD`, `not an ancestor of HEAD` (the graph was built on a tree yours cannot reach, so it describes code you do not have), `freshness unmeasured`, or no freshness clause at all makes every query answer a LEAD to verify by opening the file it names. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.",
-  "When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session's pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child's reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator's; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.",
+  "When a child of yours asks a question, you may answer it — `\"$API\" asks answer` is the one call that does, and this session never types into another session's pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child's reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator's; decline it with `\"$API\" asks release` so their notification fires at once rather than waiting out the window.",
   "Route your own subagents by the shape of their task, from `../ccrc-coordinator/references/routing-matrix.md`, and never let one inherit your model: name the class on every Agent call (an Agent-tool subagent runs at your own effort) — implementation from a spec'd plan on Sonnet at high, the per-task reviewer of a spec'd task on Sonnet at high (the held-out panel is the gate), review with judgement and adversarial verification on Opus at high, scouts and transcription-grade edits on Haiku, and Fable never as a fan-out worker. A subagent effort the brief names governs over that default.",
   "Your wave-done body opens with two signal lines the server parses, before any prose and before the fingerprint: `suite: green|red|unrun` says whether the whole suite passed on its FIRST full run after this wave's implementation was complete (red stays red however many fix rounds followed; unrun when no full run happened), and, only when a check failed, `failure: shallow|ceiling|unclear` names the kind — shallow for tests missed or a plan half-followed, ceiling for an ambiguity you could not resolve, a design flaw or a debug that survived two attempts, unclear otherwise. The suite line is never omitted.",
   // Landing-order wave 1 (spec 2026-09-23 §5.1). The probe's exit code alone
@@ -356,6 +356,35 @@ describe('the worker skill: its contract', () => {
     // skill's own trigger word for word, so the description excludes it in so many words.
     expect(fm.toLowerCase()).toContain(
       'never use it inside a subagent — a session started by another session\'s agent tool or a workflow agent() call is a subagent, whatever its brief names, and returns its report to its parent without acking, claiming or sending mail.');
+  });
+
+  it('reads a fix-round mail with no report in its two forms: an ejection under clause 16, a red the PR owns with no absorb (landing order wave 5b; review 1302 F2)', () => {
+    const text = skill.replace(/\s+/g, ' ');
+    expect(text).toContain('A `fix-round` mail whose first line reads `ejected: dequeued:#<pr>` or `ejected: new-head:#<pr>` has no report and no `artifacts`: it is clause 16\'s ejection, and its three body lines are your whole brief.');
+    expect(text).toContain('Absorb the `base:` sha with `git merge`, then fix only the `paths:` it names; on `ejected: new-head:#<pr>` the merge is the whole round, with nothing else in it.');
+    expect(text).toContain('If the new-head merge does not apply cleanly, run `git merge --abort`, push nothing (clause 9) and ask, as clause 5 says: resolving a conflict is not that round\'s work.');
+    expect(text).toContain('A `fix-round` mail whose first line reads `red: #<pr>` has no report, no `artifacts` and no `base:`: its `checks:` line is your whole brief, so fix the named checks on this branch.');
+    expect(text).toContain('It licenses no absorb: clause 16\'s first two triggers still apply to it, and its third does not.');
+    expect(text).toContain('naming this run): usually a review run read your wave and the coordinator ruled.');
+    expect(text).toContain('Report a FRESH wave-done as for any fix round.');
+    expect(text, 'a new-head round again fixes its checks too (review 1302)').not.toContain('then fix only the `paths:` or `checks:` it names');
+  });
+
+  it('pins the whole fix-round bullet, from its heading to the end of the file, so no sentence can widen a report-less round (review 1303 F2; the fix-round pin)', () => {
+    const from = skill.indexOf('- **A `fix-round` mail arrives**');
+    expect(from, 'the worker skill lost its fix-round bullet').toBeGreaterThanOrEqual(0);
+    const whole = [
+      '- **A `fix-round` mail arrives** (kind `status`, from the coordinator, naming this run): usually a review run read your wave and the coordinator ruled.',
+      'The report at the path in the mail\'s `artifacts` — plus the rulings in its body — is your brief for the fix round.',
+      'Ack it (clause 3), fix on this workspace\'s own branch (clause 2), and report a FRESH wave-done fingerprint (clause 9); never re-send the old numbers.',
+      'A `fix-round` mail whose first line reads `ejected: dequeued:#<pr>` or `ejected: new-head:#<pr>` has no report and no `artifacts`: it is clause 16\'s ejection, and its three body lines are your whole brief.',
+      'Absorb the `base:` sha with `git merge`, then fix only the `paths:` it names; on `ejected: new-head:#<pr>` the merge is the whole round, with nothing else in it.',
+      'If the new-head merge does not apply cleanly, run `git merge --abort`, push nothing (clause 9) and ask, as clause 5 says: resolving a conflict is not that round\'s work.',
+      'A `fix-round` mail whose first line reads `red: #<pr>` has no report, no `artifacts` and no `base:`: its `checks:` line is your whole brief, so fix the named checks on this branch.',
+      'It licenses no absorb: clause 16\'s first two triggers still apply to it, and its third does not.',
+      'Report a FRESH wave-done as for any fix round.',
+    ].join(' ');
+    expect(skill.slice(from).replace(/\s+/g, ' ').trim()).toBe(whole);
   });
 });
 

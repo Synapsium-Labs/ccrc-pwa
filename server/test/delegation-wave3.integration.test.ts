@@ -1118,26 +1118,51 @@ function commandsOutside(body: string, rules: CommandRules): string[] {
   return [...bad, ...writes.map((w) => `a write: ${w}`)];
 }
 
+/** Wave 4 PR2's PWA files: the only ones that may name the broker. PR2 creates exactly the first and edits the rest. */
+const W4_PWA_FILES = [
+  'pwa/src/fleet/delegationWords.ts',
+  'pwa/src/stores/fleet.ts', 'pwa/src/fleet/nestFleet.ts', 'pwa/src/fleet/fleetTree.ts', 'pwa/src/fleet/rollup.ts',
+  'pwa/src/fleet/ProjectCard.tsx', 'pwa/src/fleet/FleetCards.tsx', 'pwa/src/fleet/sessionFacts.ts',
+  'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/fleet/SessionLine.tsx', 'pwa/src/screens/SessionScreen.tsx',
+] as const;
+
 describe('8. the closed scope census', () => {
-  it('no new PWA source, state or frame: measured against main, the PWA holds no name of the broker and the frame union is exactly main\'s seven', () => {
+  it('the wave-4 shape: the frame union is main\'s seven plus `delegation`, and the broker\'s words appear only in PR2\'s named PWA files', () => {
     const ui = [...filesUnder('pwa/src', /\.(ts|tsx|css|html|js)$/), ...filesUnder('ui/src', /\.(ts|tsx|css|html|js)$/)];
     expect(ui.length, 'the scan reached the PWA').toBeGreaterThan(200);
     // NAMES. A stem of the family at the start of a word in any path segment: main has none (`archiveReleased.ts` is not one: the stem
     // must start the word), so a new `leaseRows.ts` or `DelegationRows.tsx` is a file wave 3 may not add.
     const FAMILY_NAME = /(?:^|[^A-Za-z])(?:delegat|lease|spool|carrier|adopt|retain|dispos|cleanup)/i;
-    expect(ui.filter((f) => f.split('/').some((seg) => FAMILY_NAME.test(seg))), 'a PWA file named for the broker').toEqual([]);
-    // CONTENT, in two parts, both measured on origin/main at 0b3ff2f62 (the merge base). Stems main never names are allowed nowhere...
-    const NEVER = /delegation|disposition|\bspool|cleanup(?:Due|State|Population|Evidence|Queue|Token)|auditToken|explicitIntent|coordinatorIntent|stageGate/i;
+    // Wave 4: PR2 adds exactly one file named for the broker, its words module; on PR1's branch it does not exist, so the same
+    // allow-list text is green on both branches.
+    const named = ui.filter((f) => f !== 'pwa/src/fleet/delegationWords.ts');
+    expect(named.filter((f) => f.split('/').some((seg) => FAMILY_NAME.test(seg))), 'a PWA file named for the broker').toEqual([]);
+    // CONTENT, in three parts, measured on origin/main at 0b3ff2f62 (the merge base). `delegation` is wave 4's frame word: allowed in
+    // PR2's named files only...
+    const W4_WORD = /delegation/i;
+    expect(pwaWordOffenders(ui, read, W4_WORD, W4_PWA_FILES), 'a PWA file outside PR2\'s list that names the broker').toEqual([]);
+    const other: Record<string, string> = { 'pwa/src/fleet/Other.tsx': "export const k = 'delegation';\n" };
+    expect(pwaWordOffenders(Object.keys(other), (f) => other[f]!, W4_WORD, W4_PWA_FILES), 'CONTROL: a file outside the list is red').toEqual(
+      ['pwa/src/fleet/Other.tsx']);
+    // ...the stems main never names are allowed nowhere...
+    const NEVER = /disposition|\bspool|cleanup(?:Due|State|Population|Evidence|Queue|Token)|auditToken|explicitIntent|coordinatorIntent|stageGate/i;
     expect(pwaWordOffenders(ui, read, NEVER, []), 'a PWA file that names the broker').toEqual([]);
     // ...and the stems main already uses in other senses (the update lease, a roster `adopt`, CSS `retain`, a `carrier` in account copy)
     // are allowed in exactly the files main has them in. A new file that names one is a new PWA source to look at.
     // R80 N3: re-measured with comments stripped, so each list holds the files whose CODE names the word (a comment no longer counts).
     const MAIN_HAS: ReadonlyArray<[string, RegExp, readonly string[]]> = [
-      ['lease', /\bleases?\b|\blease[A-Z]\w*/, ['pwa/src/fleet/HaltBanner.tsx', 'pwa/src/fleet/updateHalt.ts']],
+      // wave 4: PR2's rows name the frame's `leases`, in its named files only
+      ['lease', /\bleases?\b|\blease[A-Z]\w*/, ['pwa/src/fleet/HaltBanner.tsx', 'pwa/src/fleet/updateHalt.ts', ...W4_PWA_FILES]],
       // `workspaceAddWords.ts` joined the list with the named-workspace add: its refusal text for an account that cannot take the
       // session names ccd's own remedy ("adopt them there with: ccd start ..."), the worktree-onto-an-account sense `ccd` has always
       // used. It is user-facing copy, a string and no identifier, and no part of the delegation broker's adoption.
-      ['adopt', /\badopt\w*/i, ['pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/workspaceAddWords.ts', 'pwa/src/screens/settings/SecuritySection.tsx']],
+      // `ConnectSheet.tsx` and `accountWords.ts` joined it with the connect sheet's "Use what's there" (accounts A18): the roster
+      // `adopt` of the account add, the add route's existing `adopt?: true` field (a lane taking a config folder already on the
+      // box), its state flag and its one status line. No part of the delegation broker's adoption either.
+      ['adopt', /\badopt\w*/i, [
+        'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/workspaceAddWords.ts', 'pwa/src/screens/settings/SecuritySection.tsx',
+        'pwa/src/accounts/ConnectSheet.tsx', 'pwa/src/fleet/accountWords.ts',
+      ]],
       ['retain', /\bretain\w*/i, []],
       ['carrier', /\bcarrier\w*/i, ['pwa/src/fleet/AccountPoolSheet.tsx']],
       ['cleanup', /\bcleanup[A-Z]\w*/, ['pwa/src/fleet/SessionMeta.tsx']],
@@ -1155,7 +1180,7 @@ describe('8. the closed scope census', () => {
     const adopt = MAIN_HAS.find(([w]) => w === 'adopt')!;
     expect(pwaWordOffenders(Object.keys(fake), (f) => fake[f]!, adopt[1], adopt[2]), 'comments are green; an identifier, or a string, is red').toEqual(
       ['pwa/src/x/url.ts', 'pwa/src/x/id.ts']);
-    // FRAMES. The union is exactly main's seven, and every arm is written inline: a named `interface DelegationRowsFrame` joined by `|`
+    // FRAMES. The union is exactly main's seven plus wave 4's `delegation`, and every arm is written inline: a named `interface DelegationRowsFrame` joined by `|`
     // would have no `{ type: '...' }` for a parse to see, so each arm is required to open with a brace.
     const api = read('shared/api.ts');
     const at = api.indexOf('export type FleetMsg =');
@@ -1172,9 +1197,11 @@ describe('8. the closed scope census', () => {
     arms.push(union.slice(armStart));
     const armsTrimmed = arms.map((a) => a.trim()).filter((a) => a !== '');
     expect(armsTrimmed.filter((a) => !a.startsWith('{')), 'every FleetMsg arm is an inline object type').toEqual([]);
-    expect(armsTrimmed.map((a) => /^\{\s*type:\s*'([a-z-]+)'/.exec(a)?.[1]), 'the frame union is exactly main\'s seven').toEqual(
-      ['hello', 'fleet', 'notice', 'runs', 'coord', 'divergence', 'pools']);
-    for (const f of filesUnder('server/src', /\.ts$/)) expect(code(read(f)), f).not.toMatch(/\b(type|t):\s*'delegation'/);
+    expect(armsTrimmed.map((a) => /^\{\s*type:\s*'([a-z-]+)'/.exec(a)?.[1]), 'the frame union is main\'s seven plus `delegation` and the programme ledgers\' `waiting`').toEqual(
+      ['hello', 'fleet', 'notice', 'runs', 'coord', 'divergence', 'pools', 'delegation', 'waiting']);
+    // the frame's literal is the socket's alone (a subset, so this is green before the socket sends it and on PR2's branch)
+    const literal = filesUnder('server/src', /\.ts$/).filter((f) => /\b(type|t):\s*'delegation'/.test(code(read(f))));
+    expect(literal.filter((f) => f !== 'server/src/server.ts'), 'a server file outside the socket that writes the frame').toEqual([]);
     // the one wire exposure is a member of the health route's answer, which the PWA does not read
     expect(read('shared/api.ts')).toMatch(/delegation\?: DelegationObservationHealth/);
   });
@@ -1609,7 +1636,6 @@ describe('8. the closed scope census', () => {
       systemctl: (a) => a[0] === '--user' && a[1] === 'is-active',
     };
     expect(commandsOutside(shellBody(checks, '_check_delegation-hooks'), READERS), 'the check runs something that is not a reader').toEqual([]);
-    expect(commandsOutside(shellBody(checks, '_dh_mixed_events'), { jq: (a) => a[0] === '-r' }), 'the mixed-group reader').toEqual([]);
     // the readers it calls: the installer's event list (a file read), the roster read (one node program, with no write in it), the
     // joiner, and the four one-line verdict printers, which are pinned whole
     expect(commandsOutside(shellBody(checks, '_dh_events'), { local: true, '[': true, read: true, return: true, printf: true }), '_dh_events').toEqual([]);
@@ -1630,16 +1656,18 @@ describe('8. the closed scope census', () => {
     // only read (a file, `systemctl --user is-active` or a `.svcfailed` stamp) or print; they are not pinned here by digest, because every
     // unrelated doctor wave edits them.
     const ccrcSrc = read('ccd/ccrc');
-    for (const fn of ['_fix_delegation-hooks', '_check_delegation-hooks', '_dh_mixed_events', '_dh_events', '_dr_join']) {
+    for (const fn of ['_fix_delegation-hooks', '_check_delegation-hooks', '_dh_events', '_dr_join']) {
       const defs = (checks.match(new RegExp(`^${fn}\\(\\) *\\{`, 'gm')) ?? []).length + (ccrcSrc.match(new RegExp(`^${fn}\\(\\) *\\{`, 'gm')) ?? []).length;
       expect(defs, `${fn} is defined exactly once across ccd/ccrc-doctor-checks and ccd/ccrc`).toBe(1);
     }
+    // R55 is lifted (PR4 Task 4.5b, W4-D5): the mixed-group reader the fixer refused with is gone, from both files
+    expect((checks + ccrcSrc).match(/^_dh_mixed_events\(\) *\{/gm), 'R55 is lifted: the mixed-group reader is gone').toBeNull();
     // THE FIXER: the shipped installer, once, with exactly `--homes <dirs>`, and the readers it uses today. `install`, a second script, `rm`,
-    // `eval`, `sh -c` and every redirection to a file are each outside this list.
+    // `eval`, `sh -c` and every redirection to a file are each outside this list. So is `command -v jq` since R55 was lifted (review
+    // 1365, F7): the mixed-group reader was its only caller.
     const fixBody = shellBody(checks, '_fix_delegation-hooks');
     const FIXER: CommandRules = {
-      local: true, echo: true, return: true, read: true, '[': true, continue: true, _skills_roster_rows: true, _dh_mixed_events: true, _dr_join: true,
-      command: (a) => a.length === 2 && a[0] === '-v' && a[1] === 'jq',
+      local: true, echo: true, return: true, read: true, '[': true, continue: true, _skills_roster_rows: true, _dr_join: true,
       '"${BASH:-bash}"': (a) => a.length === 3 && a[0] === '"$inst"' && a[1] === '--homes' && a[2] === '"${dirs[@]}"',
     };
     expect(commandsOutside(fixBody, FIXER), 'the fixer runs something that is not the shipped installer or a reader').toEqual([]);
@@ -1655,13 +1683,14 @@ describe('8. the closed scope census', () => {
     expect(assigns.filter((a) => a.name === 'inst').map((a) => `${a.declared ? 'local ' : ''}${a.name}=${a.value}`), '`inst` is assigned once, by `local`')
       .toEqual(['local inst="$CCRC_HERE/install-session-hooks.sh"']);
     expect([...new Set(assigns.filter((a) => a.prefixOf === null).map((a) => a.name))].sort(), 'the names the fixer assigns').toEqual(
-      ['dir', 'dirs', 'evarr', 'evs', 'inst', 'list', 'mixed', 'n', 'refused', 'roster', 'rows', 'said', 'verb'].sort());
+      ['dir', 'dirs', 'inst', 'list', 'n', 'roster', 'rows', 'said'].sort());
     // R80 N6: the `local inst=` line comes BEFORE the installer call (not necessarily first)
     const instAt = raw.indexOf('local inst="$CCRC_HERE/install-session-hooks.sh"');
     expect(instAt, 'the fixer names the shipped installer').toBeGreaterThan(-1);
     expect(instAt, 'before the installer call').toBeLessThan(raw.indexOf('"${BASH:-bash}" "$inst"'));
-    // it refuses a home with a mixed hook group before the installer could touch it (R55), and removes nothing itself
-    expect(raw).toContain('_dh_mixed_events');
+    // R55 is lifted (PR4 Task 4.5b): the fixer hands every rostered home to the installer, whose option-B sweep keeps foreign
+    // hooks, and it removes nothing itself
+    expect(raw).not.toContain('_dh_mixed_events');
   });
 
   it('the lane\'s in-memory structures are not durable state: the lane class opens no file and no SQLite handle of its own', () => {
@@ -1680,7 +1709,8 @@ describe('8. the closed scope census', () => {
       'eventStats: () => coord.delegationEventStats(),',
       'countEventsAtOrBelow: (s) => coord.countDelegationEventsAtOrBelow(s),',
       'deleteEventsBetween: (a, b, n) => coord.deleteDelegationEventsBetween(a, b, n),',
-      'if (this.deps.coord === undefined) return;',
+      // wave 4 (PR1 Task 1.3): `sweep` answers whether a pass ran, so the watcher projects only after one
+      'if (this.deps.coord === undefined) return false;',
     ]);
     expect(lane).toMatch(/private readonly dropped = new Map/);
     expect(lane).toMatch(/pathsByProject = new Map/);

@@ -272,12 +272,8 @@ describe('canonical coordination id route census', () => {
       { method: 'GET', routePath: '/api/runs/:id/items' },
       { method: 'POST', routePath: '/api/claims/:id/release' },
       { method: 'POST', routePath: '/api/claims/:id/break' },
-      { method: 'POST', routePath: '/api/asks/:id/answer' },
-      { method: 'POST', routePath: '/api/asks/:id/release' },
       // coordinator-first routing, plan Task 16 (D-5298): the approvals lane's four id routes.
       { method: 'GET', routePath: '/api/approvals/:id/ruling' },
-      { method: 'POST', routePath: '/api/approvals/:id/rule' },
-      { method: 'POST', routePath: '/api/approvals/:id/release' },
       { method: 'GET', routePath: '/api/approvals/:id' },
       // W3 Q3f (D-7030): the question door family, on `parseQuestionId`, registered after the approvals lane.
       { method: 'POST', routePath: '/api/questions/:id/answer' },

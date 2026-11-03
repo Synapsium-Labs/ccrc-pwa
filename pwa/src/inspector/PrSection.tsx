@@ -6,7 +6,8 @@
 // over "No PR" would only repeat it (desktop polish T3d, D-6334).
 import type { ReactNode } from 'react';
 import { commandDoor } from '../command/door';
-import { PrKeycap, hasPrCap } from '../session/PrKeycap';
+import { PrKeycap } from '../session/PrKeycap';
+import { hasPrCap } from '../session/prCap';
 import { InspectorSection } from './InspectorSection';
 import { useInspectorSession } from './useInspectorSession';
 

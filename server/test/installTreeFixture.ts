@@ -56,6 +56,12 @@ export const TREE_FILES = [
   // D-7298: the `ccrc test` wrapper, which doctor's closing `test-slice` check asks for the slice and
   // the queue (`$CCRC_HERE/ccrc-test --status`). A real tree has it: `_inst_tree` rsyncs `ccd/` whole.
   'ccd/ccrc-test',
+  // D-7354, D-7360: the graph resolver, which `ccrc install`/`update` (the sweep units' renderers and the store's
+  // creation) and `ccrc uninstall` (the marked store) source from beside ccrc. A real tree has it: `ccd/` is rsynced whole.
+  'ccd/graph-resolve',
+  // D-7353: the engine wrapper, which doctor's closing graphify check runs as `graph-build --probe` from beside
+  // ccrc (`$CCRC_HERE/graph-build`) and FAILs by name when absent. A real tree has it: `ccd/` is rsynced whole.
+  'ccd/graph-build',
   // The GPT lane's five common executables, COPIED from the repository: the
   // two `.py` files (Plan 2a, placed since Plan 2b-1), and the runtime builder
   // and launcher. Plan 2b-2 wrote each of those two unplaced, then added both
@@ -270,7 +276,7 @@ export const TREE_FILES = [
   // `$CCRC_HERE/../deploy/` to measure what is (not) there. Without it in the
   // tree, that check would report a bug in ccrc on every fixture box.
   'deploy/gen-auth-hash.mjs',
-  // ── The four SKILL TREES and their four installers (worker-skill Task 4,
+  // ── The five SKILL TREES and their five installers (worker-skill Task 4,
   // reviewer-skill Task 10). `_inst_skills` places each tree into
   // `~/.cc-sessions/` and then RUNS the installer it just placed beside it,
   // so all eight are read out of the tree this fixture builds. They are
@@ -282,10 +288,12 @@ export const TREE_FILES = [
   'ccd/worker-skill',
   'ccd/reviewer-skill',
   'ccd/history-skill',
+  'ccd/linear-skill',
   'ccd/install-coordinator-skill.sh',
   'ccd/install-worker-skill.sh',
   'ccd/install-reviewer-skill.sh',
   'ccd/install-history-skill.sh',
+  'ccd/install-linear-skill.sh',
   // graphify Task 3: `_inst_graphify_skill` stages this beside the other three
   // installers, through the same `_inst_atomic`. It ships alone — no
   // `ccd/graphify-skill` tree — because its SRC is assembled from the

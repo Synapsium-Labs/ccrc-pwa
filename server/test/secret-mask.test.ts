@@ -852,9 +852,9 @@ describe('the review findings: every egress of session text is masked (D-5995)',
     } finally { await f.close(); }
   });
 
-  it('GET /api/digest and GET /api/ledger are masked like their siblings, as one frame each', () => {
+  it('GET /api/digest, GET /api/ledger and GET /api/landing are masked like their siblings, as one frame each', () => {
     // the one answer hook masks both (D-5995)
-    for (const p of ['/api/digest', '/api/ledger']) expect(answerMasked('GET', p), p).toBe(true);
+    for (const p of ['/api/digest', '/api/ledger', '/api/landing']) expect(answerMasked('GET', p), p).toBe(true);
   });
 
   // Review 951 F1: the review cap's ask carries the last review-done's summary and its report path, session-derived
@@ -1151,6 +1151,9 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/runs/:id/items': /items: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
     '/api/coord/shadow-journal': /rows: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(deps\.coord\.shadowVerdicts/,
     '/api/feed': /events: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
+    // The sign-in's status (accounts plan Task A21, D-7792): the helper's file is session-writable, so after N2 the answer
+    // is masked and one the mask changed is refused `auth-url-untrusted`.
+    '/api/accounts/:id/auth': /authAnswerMasked\(verdict\.answer, deps\.mask\)/,
   };
   /** Carries no session-derived text: path → why. */
   const EXEMPT: Record<string, string> = {
@@ -1177,6 +1180,20 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/docs/:project/file': 'repository content, not session text',
     '/api/linear/connection': "the Linear connection's state: organisation and user names, the key's last four characters, the check time; never the key",
     '/api/linear/resolve': "the operator's own typed name, its derived slug, and a Linear issue title; no session text",
+    // The Settings list (#1444, plan task LK11, spec §10.2): what the slot records and the legacy pair hold, read from the
+    // store, no session text; never a key or its digest (`linear-key-containment.test.ts`). Its acts are POSTs and a DELETE.
+    '/api/linear/workspaces': "each slot's workspace name, URL key, user, team keys and names, key tail, check time and view state, and the legacy row's view; never a key or its digest",
+    // The Linear proxy's reads (#1444, spec §5.4): what Linear holds, read with the key ccrc holds, every free text
+    // fenced under `untrusted` and every name cleaned; never the key or its digest (the containment census,
+    // `linear-key-containment.test.ts`). Its writes are POSTs, which this sweep does not read.
+    '/api/linear/proxy/workspaces': "the slots' workspace names, URL keys, team keys and view states; never a key",
+    '/api/linear/proxy/teams': "a workspace's team keys and names, from its record; never a key",
+    '/api/linear/proxy/issues/:id': "one Linear issue, its text under untrusted; never the key",
+    '/api/linear/proxy/issues/:id/comments': "an issue's comments, each body under untrusted; never the key",
+    '/api/linear/proxy/statuses': "a workspace's workflow state names and ids",
+    '/api/linear/proxy/projects': "a workspace's project names and ids",
+    '/api/linear/proxy/labels': "a workspace's label names and ids",
+    '/api/linear/proxy/users': "a workspace's user names and ids, never an email address",
   };
 
   it('every GET route and websocket is masked by the hook, masked inline, or exempt with a reason', () => {

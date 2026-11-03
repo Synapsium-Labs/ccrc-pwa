@@ -1769,6 +1769,28 @@ die() { echo "ccd: $*" >&2; exit 1; }
 # (`-e` is false for a DANGLING symlink, so that case reports as missing —
 # which is what it is: the roster the link names is not there.)
 CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
+# ── THE NAMES `accounts.sh` DEFINES, ONCE (D-7717) ──────────────────────────
+# Every variable and function shared/generate.mjs emits. `_roster_reread_check`
+# unsets exactly these, in its validating subshell and then in this shell, so a
+# projection that no longer defines one of them cannot leave the old value
+# standing ("UNSET IS NOT EMPTY", `_wrapper_rostered_now`'s "UNSET FIRST").
+# `server/test/ccd-supervise-roster-reread.test.ts` holds both lists equal to
+# what the generator writes, so a field added there reds here until it is named.
+_CCD_ROSTER_VARS=(CCRC_ACCOUNTS CCRC_HOME_ABLE CCRC_MEASURED CCRC_ANTHROPIC_BACKEND CCRC_SUBAGENT_CLASSES CCRC_CODEX_BACKEND CCRC_UPSTREAM)
+_CCD_ROSTER_FNS=(_ccrc_cfg_dir _ccrc_id_wrapper _ccrc_dir_id _ccrc_label _ccrc_hue _ccrc_pool _ccrc_secrets_file _ccrc_auth_dir)
+# The fingerprint is the file's BYTES, read with builtins: no `stat`, no hash,
+# so the check `cmd_supervise` makes every loop costs no fork (the tick budget,
+# ccd-tick-budget.test.ts, is exact). The file is a few KB. `-f` first, as the
+# ladder below does, because `read` opens by name and blocks forever on a FIFO.
+# rc 1 when there is nothing to read (absent, not a regular file, unreadable,
+# empty): every one of those is a roster `_roster_reread_check` refuses anyway.
+# A NUL ends the read early; the generator never writes one.
+_roster_fp_to() {   # var -> var = the bytes of accounts.sh; rc 1 when there are none to read
+  local __rf_v=""
+  [[ -f "$CCRC_ACCOUNTS_SH" && -r "$CCRC_ACCOUNTS_SH" ]] || return 1
+  { IFS= read -r -d '' __rf_v < "$CCRC_ACCOUNTS_SH"; } 2>/dev/null || :
+  [[ -n "$__rf_v" ]] && printf -v "$1" '%s' "$__rf_v"
+}
 [[ -e "$CCRC_ACCOUNTS_SH" ]] \
   || die "no account roster at $CCRC_ACCOUNTS_SH — generate it from ~/.ccrc/accounts.json (deploy/deploy.sh, or \`ccrc install\`)"
 # D-2377: `-e` and `-r` are not enough on their own — neither is false for a
@@ -1806,6 +1828,15 @@ CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # convention to copy. source=/dev/null is shellcheck's own idiom for a path it
 # cannot follow: this one is generated at deploy time and has no in-repo
 # counterpart to check against (shared/generate.mjs emits it).
+#
+# THE BYTES ARE READ BEFORE THE `source`, NEVER AFTER IT (D-7717). They are the
+# fingerprint `_roster_reread_check` compares against, once per `cmd_supervise`
+# loop. Read first, a write that lands between the read and the `source` leaves
+# a fingerprint OLDER than what was sourced, so the next loop sees a change and
+# re-reads: one harmless extra re-read. Read after, the same write would leave
+# a fingerprint that matches a file this process never sourced, and the change
+# would be missed for the life of the supervisor.
+_roster_fp_to _CCD_ROSTER_FP || _CCD_ROSTER_FP=""
 # shellcheck source=/dev/null
 source "$CCRC_ACCOUNTS_SH" \
   || die "account roster unreadable: $CCRC_ACCOUNTS_SH — regenerate it from ~/.ccrc/accounts.json"
@@ -5626,6 +5657,54 @@ _gh_repo_slug() {   # main-checkout path -> OWNER/NAME, or non-zero
   printf '%s\n' "$rest"
 }
 
+_gh_fail_reason() {   # gh's stderr text -> ONE word on stdout: unauthenticated | rate-limit | offline | unavailable | truncated | error
+  # The one `case` that decides what a gh failure IS: `_gh_pr_list` and `_pr_state_by_pr` both name a failure through it.
+  case "$1" in
+    *"gh auth login"*|*"not logged in"*|*"HTTP 401"*) printf '%s\n' unauthenticated ;;
+    *"rate limit"*|*"HTTP 403"*)                      printf '%s\n' rate-limit ;;
+    *"dial tcp"*|*"no such host"*|*"proxyconnect"*)   printf '%s\n' offline ;;
+    # GITHUB'S OWN 5xx. Measured 2026-08-26 against a live fleet repo with
+    # several thousand PRs of history — the slug is operator residue and
+    # stays out of this tree. The 100-PR `statusCheckRollup` window
+    # `_gh_pr_list` sends answers
+    # `HTTP 504: We couldn't respond to your request in time. …
+    # (https://api.github.com/graphql)` after 11.2 s, on 3/3 attempts — a
+    # standing property of that repo's PR history, not a blip. It went out as
+    # `error`, which the cap renders "GitHub could not be read." and which
+    # reached a coordinator as `pr-unmeasurable` with nothing in it to act on.
+    #
+    # It is a different FACT from every arm above and from the default: the
+    # token is fine, DNS resolved, the request arrived — the far side could
+    # not finish it. That distinction is the whole of what a reader needs,
+    # because it says the same query will fail the same way and the remedy is
+    # to ask GitHub for less, not to go and check `gh auth` on the box.
+    #
+    # Matched on the CODE and never on the prose, which is GitHub's to reword
+    # whenever it likes. All four of 500/502/503/504 are here because an
+    # outage emits them interchangeably and an arm that knows only the one
+    # code we happened to catch is an arm that lapses at the next one.
+    *"HTTP 500"*|*"HTTP 502"*|*"HTTP 503"*|*"HTTP 504"*) printf '%s\n' unavailable ;;
+    # A BODY THAT STARTED AND STOPPED. Same repo, same day, the same query at
+    # `--limit 50`: `unexpected end of JSON input` — Go's decoder meeting EOF
+    # mid-value, so gh was being answered and the answer ran out. rc 1 and an
+    # empty stdout, indistinguishable from the 504 at the exit code, and a
+    # different thing entirely.
+    #
+    # Not `unavailable`: nothing here says the far side is unwell, and unlike
+    # a 504 an identical retry may simply succeed. Not `error`: "the answer
+    # was cut off" IS a shape, and it is the one shape in this case statement
+    # that says the read was interrupted rather than refused — which is the
+    # difference between waiting and narrowing the question.
+    *"unexpected end of JSON input"*|*"unexpected EOF"*) printf '%s\n' truncated ;;
+    # Still the default, and still `error` — the honest name for a fault with
+    # no known shape. Every arm above it earned its token by being MEASURED
+    # against a live repo; inventing a sixth classification from a string
+    # nobody has seen would put a confident sentence on the phone about a
+    # condition nobody diagnosed, which is the failure `error` exists to avoid.
+    *)                                                printf '%s\n' error ;;
+  esac
+}
+
 _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
                   # the answer object instead and returns non-zero. NEVER
                   # partially prints.
@@ -5670,7 +5749,7 @@ _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
   #
   # The window and the classification are still shared, and they are the halves
   # that made one reader worth having: one place decides what "100 PRs, all
-  # states" means and one `case` decides what a failure IS. A caller still
+  # states" means and one `case` (`_gh_fail_reason`) decides what a failure IS. A caller still
   # cannot invent a fifth failure vocabulary or a different window by calling
   # this differently.
   local repo="$1" head="${2:-}" errf out rc err fields="$PR_JSON_FIELDS"
@@ -5684,50 +5763,7 @@ _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
   if (( rc != 0 )); then
     # `gh auth status` is NOT probed first: it is another network call on the
     # unhappy path. The stderr we already have is the cheaper signal.
-    case "$err" in
-      *"gh auth login"*|*"not logged in"*|*"HTTP 401"*) printf '{"phase":"unknown","reason":"unauthenticated"}\n' ;;
-      *"rate limit"*|*"HTTP 403"*)                      printf '{"phase":"unknown","reason":"rate-limit"}\n' ;;
-      *"dial tcp"*|*"no such host"*|*"proxyconnect"*)   printf '{"phase":"unknown","reason":"offline"}\n' ;;
-      # GITHUB'S OWN 5xx. Measured 2026-08-26 against a live fleet repo with
-      # several thousand PRs of history — the slug is operator residue and
-      # stays out of this tree. The 100-PR `statusCheckRollup` window this
-      # function sends answers
-      # `HTTP 504: We couldn't respond to your request in time. …
-      # (https://api.github.com/graphql)` after 11.2 s, on 3/3 attempts — a
-      # standing property of that repo's PR history, not a blip. It went out as
-      # `error`, which the cap renders "GitHub could not be read." and which
-      # reached a coordinator as `pr-unmeasurable` with nothing in it to act on.
-      #
-      # It is a different FACT from every arm above and from the default: the
-      # token is fine, DNS resolved, the request arrived — the far side could
-      # not finish it. That distinction is the whole of what a reader needs,
-      # because it says the same query will fail the same way and the remedy is
-      # to ask GitHub for less, not to go and check `gh auth` on the box.
-      #
-      # Matched on the CODE and never on the prose, which is GitHub's to reword
-      # whenever it likes. All four of 500/502/503/504 are here because an
-      # outage emits them interchangeably and an arm that knows only the one
-      # code we happened to catch is an arm that lapses at the next one.
-      *"HTTP 500"*|*"HTTP 502"*|*"HTTP 503"*|*"HTTP 504"*) printf '{"phase":"unknown","reason":"unavailable"}\n' ;;
-      # A BODY THAT STARTED AND STOPPED. Same repo, same day, the same query at
-      # `--limit 50`: `unexpected end of JSON input` — Go's decoder meeting EOF
-      # mid-value, so gh was being answered and the answer ran out. rc 1 and an
-      # empty stdout, indistinguishable from the 504 at the exit code, and a
-      # different thing entirely.
-      #
-      # Not `unavailable`: nothing here says the far side is unwell, and unlike
-      # a 504 an identical retry may simply succeed. Not `error`: "the answer
-      # was cut off" IS a shape, and it is the one shape in this case statement
-      # that says the read was interrupted rather than refused — which is the
-      # difference between waiting and narrowing the question.
-      *"unexpected end of JSON input"*|*"unexpected EOF"*) printf '{"phase":"unknown","reason":"truncated"}\n' ;;
-      # Still the default, and still `error` — the honest name for a fault with
-      # no known shape. Every arm above it earned its token by being MEASURED
-      # against a live repo; inventing a sixth classification from a string
-      # nobody has seen would put a confident sentence on the phone about a
-      # condition nobody diagnosed, which is the failure `error` exists to avoid.
-      *)                                                printf '{"phase":"unknown","reason":"error"}\n' ;;
-    esac
+    printf '{"phase":"unknown","reason":"%s"}\n' "$(_gh_fail_reason "$err")"
     return 1
   fi
   printf '%s\n' "$out"
@@ -5947,6 +5983,34 @@ def label_names(r):
         ls = ls.get('nodes')
     return [l.get('name') for l in ls if isinstance(l, dict)] if isinstance(ls, list) else []
 
+def train_flags(r):
+    """(landedInTrain, trainUnproven, trainUnread) of one row: the ONE judge of a train claim (D-7362, D-7378)."""
+    claim = labelled(r)
+    key = (str(r.get('number')), r.get('headRefOid'))
+    landed = claim and key in TRAIN_PROOFS
+    unproven = claim and not landed and key in TRAIN_REFUSED
+    return landed, unproven, claim and not landed and not unproven
+
+def train_cand(r):
+    """A labelled row's (number, 40-hex head), shapes anchored, or None. Never a proof."""
+    n, head = r.get('number'), r.get('headRefOid')
+    if (labelled(r) and isinstance(n, int) and not isinstance(n, bool) and 0 < n < 10 ** 10
+            and isinstance(head, str) and re.fullmatch(r'[0-9a-f]{40}', head)):
+        return n, head
+    return None
+
+def view_in():
+    """`gh pr view`'s body as one dict, or None when it is not one JSON object."""
+    try:
+        v = json.loads(sys.stdin.read())
+    except Exception:
+        return None
+    return v if isinstance(v, dict) else None
+
+def base_ok(b):
+    """A base ref name in `_ws_train_keyable`'s grammar: no space, no backslash, no leading dash."""
+    return isinstance(b, str) and re.fullmatch(r'[A-Za-z0-9._/-]+', b) is not None and not b.startswith('-')
+
 def annotate(rows, main, tip, branch, base_short):
     out = [r for r in rows if isinstance(r, dict)]
     for r, ours in zip(out, ours_of(main, tip, [r.get('headRefOid') for r in out])):
@@ -5959,11 +6023,7 @@ def annotate(rows, main, tip, branch, base_short):
         # was read and failed is `trainUnproven`, which reads as closed; one
         # whose record was NOT read is `trainUnread`, which reads as
         # unmeasured (D-7378) — never closed, so nothing ends on it.
-        claim = labelled(r)
-        key = (str(r.get('number')), r.get('headRefOid'))
-        r['landedInTrain'] = claim and key in TRAIN_PROOFS
-        r['trainUnproven'] = claim and not r['landedInTrain'] and key in TRAIN_REFUSED
-        r['trainUnread'] = claim and not r['landedInTrain'] and not r['trainUnproven']
+        r['landedInTrain'], r['trainUnproven'], r['trainUnread'] = train_flags(r)
     return out
 
 def bound(r, branch, base_short):
@@ -6648,14 +6708,53 @@ elif mode == 'train-cands':
     # shell can anchor both before either reaches an argv. Never a proof.
     (branch, base_short) = sys.argv[2:4]
     for r in rows_in() or []:
-        if not isinstance(r, dict) or not labelled(r):
-            continue
-        n, head = r.get('number'), r.get('headRefOid')
-        if (isinstance(n, int) and not isinstance(n, bool) and 0 < n < 10 ** 10
-                and isinstance(head, str) and re.fullmatch(r'[0-9a-f]{40}', head)
-                and r.get('headRefName') == branch and r.get('baseRefName') == base_short
+        c = train_cand(r) if isinstance(r, dict) else None
+        if (c and r.get('headRefName') == branch and r.get('baseRefName') == base_short
                 and r.get('isCrossRepository') is False):
-            sys.stdout.write('%d\t%s\n' % (n, head))
+            sys.stdout.write('%d\t%s\n' % c)
+
+elif mode == 'by-pr-cand':
+    # `pr-state --pr`'s train candidate from a view body: `<head>\t<base>`, both anchored; never a proof.
+    r = view_in()
+    c = train_cand(r) if r else None
+    if c and c[0] == int(sys.argv[2]) and r.get('isCrossRepository') is False and base_ok(r.get('baseRefName')):
+        sys.stdout.write('%s\t%s\n' % (c[1], r['baseRefName']))
+
+elif mode == 'by-pr':
+    # `pr-state --pr`'s ONE line: a verdict ('absent' or a reason) reads no stdin, '' parses the view body.
+    n, verdict = int(sys.argv[2]), sys.argv[3]
+    line = {'number': n, 'state': 'unmeasured', 'reason': None, 'headRefOid': None, 'baseRefName': None,
+            'isCrossRepository': None, 'mergedAt': None, 'mergeCommit': None, 'landedInTrain': False,
+            'trainUnproven': False, 'trainUnread': False, 'train': None, 'trainMergeCommit': None}
+    r = view_in() if verdict == '' else None
+    if verdict == 'absent':
+        line['state'] = 'absent'
+    elif verdict:
+        line['reason'] = verdict
+    elif r is None or type(r.get('number')) is not int or r['number'] != n:
+        line['reason'] = 'unreadable'
+    else:
+        st, head, mc, at = r.get('state'), r.get('headRefOid'), r.get('mergeCommit'), r.get('mergedAt')
+        oid = mc.get('oid') if isinstance(mc, dict) else None
+        if not (st in ('OPEN', 'MERGED', 'CLOSED') and isinstance(head, str) and re.fullmatch(r'[0-9a-f]{40}', head)
+                and base_ok(r.get('baseRefName')) and isinstance(r.get('isCrossRepository'), bool)
+                and isinstance(r.get('labels'), list)
+                and (at is None or (isinstance(at, str) and re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z', at)))
+                and (mc is None or (isinstance(oid, str) and re.fullmatch(r'[0-9a-f]{40}', oid)))
+                and (st != 'MERGED' or (at is not None and oid is not None))):
+            line['reason'] = 'missing-field'
+        else:
+            line.update(headRefOid=head, baseRefName=r['baseRefName'], isCrossRepository=r['isCrossRepository'],
+                        mergedAt=at, mergeCommit=oid)
+            landed, unproven, unread = train_flags(r)
+            line['state'] = {'OPEN': 'open', 'MERGED': 'merged', 'CLOSED': 'closed'}[st]
+            if landed:
+                proof = TRAIN_PROOFS[(str(n), head)]
+                line.update(state='merged', landedInTrain=True, train=int(proof[0]), trainMergeCommit=proof[1])
+            elif unproven or unread:
+                line.update(reason='train-unproven' if unproven else 'train-unread', state='unmeasured',
+                            trainUnproven=unproven, trainUnread=unread)
+    sys.stdout.write(json.dumps(line, separators=(',', ':')) + '\n')
 
 elif mode == 'bind':
     # `pr-landing`'s binding (spec 3.3): `annotate` then `pick` over the ONE row a GraphQL alias answered, in a
@@ -7694,7 +7793,12 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # `git worktree remove` collects the store WITH the tree (un-ignored, it wedges
   # ws-rm/ws-reap/ws-gc — none pass --force), and so a SIGKILL-orphaned
   # .graphifyignore can never make a workspace unremovable.
+  # Graph revision 2 (D-7350, spec §6.1): the NO-SLASH line too, because a
+  # tree's graphify-out becomes a LINK to the repository's shared graph, and the
+  # slash-only line does not ignore a symlink. (ccd does not source ccrc, so this
+  # is the second writer of these lines beside ccrc's _graph_exclude_common.)
   grep -qxF 'graphify-out/' "$common/info/exclude" 2>/dev/null || echo 'graphify-out/' >> "$common/info/exclude"
+  grep -qxF 'graphify-out' "$common/info/exclude" 2>/dev/null || echo 'graphify-out' >> "$common/info/exclude"
   grep -qxF '.graphifyignore' "$common/info/exclude" 2>/dev/null || echo '.graphifyignore' >> "$common/info/exclude"
   # Regenerable build output a project's own tooling writes straight into the
   # workspace (`npm install`, `cdk synth`) is W-pattern by location — it dies
@@ -9045,6 +9149,12 @@ EOF
   # Same channel, same argument, as the three tokens above; and the same
   # obligation, which is the list named in the comment beside `stop-surface`.
   echo account-v1
+  # `account-v2` (N4, D-7734): this box's `ccrc account` carries W2a's write subs (paste validate-first, `set`,
+  # Remove's pre-check and discard; accounts plan Task A16), so the server offers them. Later waves add their own words.
+  echo account-v2
+  # `account-auth-v1` (N4, D-7734; accounts plan Task A20): `ccrc account auth-start|auth-code|auth-cancel`, the
+  # detached attempt on the lane's private tmux socket, `set --method` and `credential --sign-out` are on this box.
+  echo account-auth-v1
   # `pools-v1` says THIS copy of ccd honours project pool tags. What that
   # means AS OF THIS COMMIT, stated so later waves cannot read it as more:
   # it reads `$POOLS_DIR/<project>` (Task 1), and `_pool_ok` (Task 2) is now
@@ -9161,6 +9271,7 @@ EOF
   # it lands in the project or slug slot and is refused there; trailing, it would be dropped unread and the workspace
   # created on the least-loaded lane with exit 0 — so the caps gate is the control and the leading position the defence.
   echo pr-landing-v1   # `ccd pr-landing`: the checks lane's read-only PR read; sent only behind this word
+  echo pr-state-pr-v1   # `ccd pr-state --project <p> --pr <n>`: one PR by number; sent only behind this word
   echo ws-title-v1; echo ws-wrapper-v1; echo ws-title   # the verb itself (S9), which the server offers Rename on; it rides here, not in the list above
   echo refusal-v1   # #560: `_lc_refuse` prints `ccd-refusal: <act> <word>` on stderr before its die; the server reads it first and keeps its prose matchers as the fallback
   echo swap-busy-v1; echo hibernate  # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word; `hibernate` (D-5242) is a verb, sent only behind `verbSupported`
@@ -9651,14 +9762,15 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
   # full-screen TUI that produces ZERO BYTES without a tty (measured
   # 2026-09-07, CC 2.1.263), has no home without this verb.
   #
-  # `_tmux_new_session`, NEVER `_spawn`. Two separate reasons, and both matter:
+  # A PANE ON THE LANE'S OWN SERVER, NEVER `_spawn` (and, since accounts plan
+  # Task A20, never `_tmux_new_session` either: that one places the fleet's
+  # shared server, and this pane is on `-L ccrc-auth-<id>`, below). Two
+  # separate reasons for not spawning, and both matter:
   # `_spawn_start` reads wrapper/workdir/uuid out of the registry and dies with
   # `incomplete registry for '<id>'` for an id that names an ACCOUNT rather
   # than a session; and `_spawn_settle` drives `_accept_first_run_prompts`,
   # which presses Down and Enter into the pane. A sign-in a robot answers is a
-  # sign-in that was dismissed. Through `_tmux_new_session` the pane also lands
-  # in ccrc-tmux-server.scope like every other, which is the whole argument
-  # that function's own header makes.
+  # sign-in that was dismissed.
   #
   # FLAG-ANCHORED, exactly as `cmd_coord_pause` above: `--id` is not a
   # confirmation token, it is the verb's whole argument surface, and a
@@ -9690,13 +9802,19 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
     esac
   done
   _is_valid_wrapper "$id" || die "unknown-account: $id (no roster entry claims it)"
-  local pane; pane="cc-auth-$id"
+  # THE LANE'S OWN TMUX SERVER, `-L ccrc-auth-<id>` (accounts plan Task A20,
+  # D-5515), never the fleet's shared one: the agent's tmux grant names
+  # subcommands on the default socket only, so no drawer, `ptyOpen` or
+  # `send-keys` can reach a pane here. `-f /dev/null`: it reads no tmux.conf, so
+  # no fleet hook runs in it. The socket is per lane, so two lanes' sign-ins
+  # never share a server.
+  local pane sock; pane="cc-auth-$id"; sock="ccrc-auth-$id"
   if (( cancel )); then
     # `null`, not a refusal: "there is no pane" is the state --cancel exists to
     # reach, so reaching it is success. The caller that wants to know whether it
     # killed anything reads the field.
-    if tmux has-session -t "$(_tmux_at "$pane")" 2>/dev/null; then
-      tmux kill-session -t "$(_tmux_at "$pane")" || die "could not kill $pane"
+    if tmux -L "$sock" -f /dev/null has-session -t "$(_tmux_at "$pane")" 2>/dev/null; then
+      tmux -L "$sock" -f /dev/null kill-session -t "$(_tmux_at "$pane")" || die "could not kill $pane"
       printf '{"cancelled":%s}\n' "$(_json_str "$pane")"
     else
       printf '{"cancelled":null}\n'
@@ -9717,10 +9835,14 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
   # and tmux itself is the backstop there: `new-session -d -s <name>` on a
   # live name exits non-zero with `duplicate session`, which the `||` below
   # turns into a refusal rather than a second helper.
-  ! tmux has-session -t "$(_tmux_at "$pane")" 2>/dev/null \
+  ! tmux -L "$sock" -f /dev/null has-session -t "$(_tmux_at "$pane")" 2>/dev/null \
     || die "auth-in-progress: $pane is already running (ccd account-pane --id $id --cancel to stop it)"
-  _tmux_new_session -d -s "$pane" -x 120 -y 40 \
-    "exec '$HOME/.local/bin/ccd-account-auth' '$id' '$method'" \
+  # NOT `_tmux_new_session`, which places the SHARED server in its capped scope:
+  # this server is the lane's own and ends with its one pane. `CCRC_AUTH_IN_PANE`
+  # tells the helper it is the pane's copy, so it leaves the server to end with
+  # the pane rather than kill it from inside.
+  tmux -L "$sock" -f /dev/null new-session -d -s "$pane" -x 120 -y 40 \
+    "exec env CCRC_AUTH_IN_PANE=1 '$HOME/.local/bin/ccd-account-auth' '$id' '$method'" \
     || die "could not create $pane"
   # `_json_str` for both, though both are already constrained — the id by the
   # regex above and the method by the `case` — because the tree's rule is that
@@ -11325,22 +11447,26 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
     "$baseShort" "$tip" "$ahead" "$dirty" "$tmpl" "$REG" "$answeredAt"
 }
 
-cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <project>
+cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <project> [--pr <n>]
   # A CONSTANT NUMBER OF gh CALLS PER REPO, never one per session — one for
   # `--session`, three for `--project` (the rows, the rollups, and the merge
-  # queue read `_pr_queue_stamp` makes), and no number moves when a project
-  # grows a ninth workspace. The budget argument (8 projects x 1 call / 120 s
+  # queue read `_pr_queue_stamp` makes), and one for `--project <p> --pr <n>`
+  # (`_pr_state_by_pr`'s `gh pr view`, under PR_GH_VIEW_TIMEOUT), plus, only when
+  # that PR is CLOSED with the train label and has no kept proof, the train
+  # record's reads inside PR_STATE_TRAIN_TIMEOUT — and no number moves when a
+  # project grows a ninth workspace. The budget argument (8 projects x 1 call / 120 s
   # ~ 5 % of the GraphQL allowance) survives tripling and would not survive
-  # going per session, and `pr-timeout-budget.test.ts` sums the three calls'
+  # going per session, and `pr-timeout-budget.test.ts` sums each form's calls'
   # timeouts against the server's outer bound on this verb. Read-only apart
-  # from the three registry fields it persists so a ccrc restart degrades to
-  # honest stale.
-  [[ $# -eq 2 ]] || die "usage: ccd pr-state --session <id> | ccd pr-state --project <project>"
+  # from the three registry fields `--session`/`--project` persist, so a ccrc restart degrades to
+  # honest stale, and the kept train proofs and tried lines a train claim's record writes (`--session` and `--pr`).
+  [[ $# -eq 4 && $1 == --project && $3 == --pr ]] && { _pr_state_by_pr "$2" "$4"; return; }
+  [[ $# -eq 2 ]] || die "usage: ccd pr-state --session <id> | ccd pr-state --project <project> [--pr <n>]"
   local mode=$1 arg=$2
   case "$mode" in
     --session) [[ $arg =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id" ;;
     --project) [[ $arg =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project" ;;
-    *)         die "usage: ccd pr-state --session <id> | ccd pr-state --project <project>" ;;
+    *)         die "usage: ccd pr-state --session <id> | ccd pr-state --project <project> [--pr <n>]" ;;
   esac
 
   local -a ids=()
@@ -11565,18 +11691,29 @@ import json, os, sys, tempfile, time
 mode = sys.argv[1]
 NAME_MAX, LIST_MAX = 120, 32
 
-def doc(fd):
+def docs(fd):
+    """Every JSON value on fd, in order: `gh api --paginate` prints one per page, run together (review 1109). None when
+    the fd is empty or anything on it is not JSON: a rule set read in part could miss a required name."""
     try:
         with open('/dev/fd/%d' % fd) as f:
-            raw = f.read().strip()
+            raw = f.read()
     except OSError:
         return None
-    if not raw:
-        return None
-    try:
-        return json.loads(raw)
-    except Exception:
-        return None
+    dec, out, i, n = json.JSONDecoder(), [], 0, len(raw)
+    while True:
+        while i < n and raw[i] in ' \t\r\n':
+            i += 1
+        if i >= n:
+            return out or None
+        try:
+            v, i = dec.raw_decode(raw, i)
+        except Exception:
+            return None
+        out.append(v)
+
+def doc(fd):
+    vals = docs(fd)
+    return vals[0] if vals is not None and len(vals) == 1 else None
 
 def is_int(v):
     return isinstance(v, int) and not isinstance(v, bool)
@@ -11619,9 +11756,10 @@ if mode == 'rows':
                                  for i in range(k)]) + '\n')
 
 elif mode == 'names-rules':
-    d = doc(4)
-    if not isinstance(d, list):
+    pages = docs(4)
+    if pages is None or not all(isinstance(pg, list) for pg in pages):
         sys.exit(1)
+    d = [r for pg in pages for r in pg]
     names, pins = [], []
     for r in d:
         if isinstance(r, dict) and r.get('type') == 'required_status_checks':
@@ -11797,8 +11935,8 @@ PY
 }
 
 _pr_landing_rules() {   # project repo base [rest] -> the rules document, ONE JSON line, always
-  # Cache hit: no gh call. Miss: the rules read (`rules/branches/<base>`) and the public branch view
-  # (`branches/<base>`), each under its own timeout, both plain GETs. A read failure is a miss and is never cached.
+  # Cache hit: no gh call. Miss: the rules read (`rules/branches/<base>`, every page: one holds 30 rules, review 1109)
+  # and the public branch view (`branches/<base>`), each under its own timeout, both plain GETs; a failure is a miss, never cached.
   # A fourth argument of `0` forbids the REST reads: a miss then answers rules-unread (nothing cached), so the caller
   # can keep one call's worst path at 6 + 4 + 4 s whatever number of bases are bound.
   local project="$1" repo="$2" base="$3" rest="${4:-1}" cache got r="" p="" enc="_"
@@ -11810,7 +11948,7 @@ _pr_landing_rules() {   # project repo base [rest] -> the rules document, ONE JS
     printf '%s\n' "$got"; return 0
   fi
   if [[ "$rest" == 1 && "$base" =~ ^[A-Za-z0-9._/-]+$ && "$base" != -* ]]; then
-    r=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/rules/branches/$enc" 2>/dev/null) || r=""
+    r=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/rules/branches/$enc" --paginate 2>/dev/null) || r=""
     p=$(_plat_timeout "$PR_LANDING_REST_TIMEOUT" gh api "repos/$repo/branches/$enc" 2>/dev/null) || p=""
     r=$(_pr_landing_py names-rules 4<<<"$r" 2>/dev/null) || r=""
     p=$(_pr_landing_py names-protection 4<<<"$p" 2>/dev/null) || p=""
@@ -23882,8 +24020,22 @@ _child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, lea
 # THE ID is the registry's own shape and never dot-leading: `.` and `..` would name the spool root or the registry itself,
 # and a dot-leading name is one the hook refuses to write for. Mode is set with `chmod -- 0700 <dir>` (the operand last
 # after `--`, D-3510), so a directory an older ccd or an operator widened is private again at the next spawn.
-# NOTHING PURGES IT in this wave: the hook prunes only a LIVE owner's own buckets (at its next write), so a removed owner, or one whose
-# session never runs again, keeps its last 24 to 25 hourly buckets and this directory for good; the spool is evidence the server may not have read yet.
+# A SPAWN PRUNES ABSENT OWNERS (operator ruling 2026-10-14; `_delegation_spool_prune_absent`, called right after this function): the
+# hook prunes only a LIVE owner's own buckets (at its next write), so a removed owner's last 24 to 25 hourly buckets and directory stand
+# until a spawn of ANY session removes them, at most DSP_PRUNE_MAX directories a spawn. A directory goes only when the registry is
+# readable and searchable and no link stands at `$REG/delegation` or the spool root; its id is in the spawn grammar and is not the
+# spawning id; NO `$REG/<id>.*` entry of any type stands (a partly purged row, an orphaned `joined` field and a dotted sibling id all
+# keep it); and it is a directory the prune can read and search (an unreadable one would glob as empty), holding only regular,
+# non-link `<10 digits>.spool` buckets, each older than the cutoff hour (now minus 24 h, UTC, compared as the hook's
+# `_hook_spool_prune` compares) by name and 24 h old by mtime, or, holding none, is itself 24 h old by mtime. It is renamed
+# to `.prune.<id>.<pid>`, checked again, and only then emptied by name (`rm -f --` each bucket, `rmdir --` the directory: never a `-r`);
+# a check that now fails moves it back when `<id>` is absent, or leaves it, and the next spawn takes a leftover `.prune.<id>.<pid>`
+# under the same rules (a dot-leading name is never an owner: this function refuses one). THE WINDOW LEFT: a purged id respawned
+# between the rename and the move back skips that instant's events (the census backstops them), and a move back that failed leaves
+# a running session with no spool directory, which the doctor's WARN for that case reports. Two spawns at once: one that has
+# removed a renamed directory's buckets but not yet the directory leaves it EMPTY with a fresh mtime, so a second spawn listing it
+# as a leftover fails the check and moves it back. That absent owner's empty directory reappears and goes about 24 h later; no
+# evidence is lost.
 _delegation_spool_dir() {   # id -> 0 the owner's directory stands, private | 1 not made (warned, or refused for the id): a failure never fails a spawn
   local LC_ALL=C id="${1-}" base="$REG/delegation" d
   [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
@@ -23894,6 +24046,39 @@ _delegation_spool_dir() {   # id -> 0 the owner's directory stands, private | 1 
     echo "ccd: warn: $id's delegation spool directory $d could not be made a private directory — spawning without it; the delegation hook skips until a later spawn makes it" >&2
     return 1
   fi
+}
+DSP_PRUNE_MAX=8   # owner directories removed per spawn, at most; the rest wait for the next spawn
+_dsp_old_absent() {   # <id> <dir> <cutoff YYYYMMDDHH> <now s> -> 0 iff the owner's row is gone and the dir holds only
+                      #   regular <10 digits>.spool buckets, each older than the cutoff by name and 24 h by mtime; sets DSP_OLD=(paths)
+  local LC_ALL=C id="$1" d="$2" cut="$3" now="$4" e b m=""; DSP_OLD=()
+  [[ -d "$d" && -r "$d" && -x "$d" && ! -L "$d" ]] || return 1   # unreadable: its glob would read empty, so never eligible
+  e=("$REG/$id".*); (( ${#e[@]} == 0 )) || return 1
+  for e in "$d"/*; do
+    b="${e##*/}"
+    [[ "$b" =~ ^[0-9]{10}\.spool$ && -f "$e" && ! -L "$e" ]] && (( 10#${b%.spool} < 10#$cut )) || return 1
+    DSP_OLD+=("$e")
+  done
+  if (( ${#DSP_OLD[@]} )); then m=$(_plat_mtime "${DSP_OLD[@]}" 2>/dev/null) || return 1; else m=$(_plat_mtime "$d" 2>/dev/null) || return 1; fi
+  for b in $m; do [[ "$b" =~ ^[0-9]+$ ]] && (( now - b >= 86400 )) || return 1; done
+}
+_delegation_spool_prune_absent() {   # <spawning id> -> rc 0 always; removes up to DSP_PRUNE_MAX absent owners' spool dirs
+  local LC_ALL=C self="${1-}" root="$REG/delegation/spool" now="" cut="" d b id t n=0 dg=0 ng=0
+  [[ -d "$REG" && -r "$REG" && -x "$REG" && ! -L "$REG/delegation" && ! -L "$root" && -d "$root" ]] || return 0
+  shopt -q dotglob && dg=1; shopt -q nullglob && ng=1; shopt -s dotglob nullglob
+  for d in "$root"/*; do
+    (( n < DSP_PRUNE_MAX )) || break; b="${d##*/}"; id="$b"; t="$root/.prune.$b.$$"
+    [[ "$b" =~ ^\.prune\.(.+)\.[0-9]+$ ]] && { id="${BASH_REMATCH[1]}"; t="$d"; }
+    [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && "$id" != "$self" ]] || continue
+    [[ -n "$now" ]] || { _now_s_to now; TZ=UTC0 printf -v cut '%(%Y%m%d%H)T' "$(( now - 86400 ))"; }
+    if _dsp_old_absent "$id" "$d" "$cut" "$now" && { [[ "$t" == "$d" ]] || _plat_mv_notdir "$d" "$t" 2>/dev/null; } \
+       && _dsp_old_absent "$id" "$t" "$cut" "$now"; then
+      (( ${#DSP_OLD[@]} == 0 )) || rm -f -- "${DSP_OLD[@]}" 2>/dev/null
+      rmdir -- "$t" 2>/dev/null && n=$(( n + 1 ))
+    elif [[ -d "$t" && ! -L "$t" && ! -e "$root/$id" && ! -L "$root/$id" ]]; then
+      _plat_mv_notdir "$t" "$root/$id" 2>/dev/null
+    fi
+  done
+  (( dg )) || shopt -u dotglob; (( ng )) || shopt -u nullglob   # rc 0 on both arms: the function's rc 0
 }
 
 # ── THE CHILD'S SPAWN RECORD (spec §6.6, plan Task 15, D-5299, D-5391) ─────
@@ -24556,6 +24741,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # THE OWNER'S DELEGATION SPOOL DIRECTORY (delegation broker wave 3, `_delegation_spool_dir`): made here, once per spawn, for every
   # session and not only a child; a failure has already warned and never refuses the spawn.
   _delegation_spool_dir "$id" || true
+  _delegation_spool_prune_absent "$id" || true   # the absent-owner prune (ruling 2026-10-14): rc 0 always, silent
   # D-5241: the tool-child priority, on both spawn lines for `$tmpenv`'s reason.
   local adjenv; adjenv=$(_tool_adj_env)
   # D-6636: the session's OWN temp root, exported on both spawn lines (they splice `$resenv`) so an agent that later
@@ -26253,6 +26439,75 @@ _route_pending_word() { local __w; _route_pending_word_to __w "$@"; printf '%s' 
 # D-4963 (tick-diet spec §6.4): the printing form of the home read, renamed in place as its out-var form above (D-5270: raw stdout drops the fallback's newline).
 _home_measured() { local __hmw_v __hmw_rc; _home_measured_to __hmw_v "$@"; __hmw_rc=$?; printf '%s' "$__hmw_v"; return "$__hmw_rc"; }
 
+# ── A RUNNING SUPERVISOR PICKS UP A NEW OR REMOVED LANE (D-7717) ───────────
+# `accounts.sh` is sourced once, at module top level, and `cmd_supervise` lives
+# for weeks. Before this, a lane `ccrc account add` rostered joined swap
+# rotation only when each supervisor next restarted, and a removed lane stayed
+# a rotation candidate in every running one. Restarting them is not the answer:
+# a restart is an actor on every unit, and this change adds none.
+#
+# THIS IS A DEPARTURE, and a bounded one. `_wrapper_rostered_now`'s rule is "A
+# SUBSHELL, NEVER A RE-SOURCE INTO THIS SHELL" and "UNSET FIRST". Both of its
+# reasons are kept:
+#   - "sourcing it mid-run would let a generator change redefine a function
+#     this verb is in the middle of using": the re-source happens only at the
+#     LOOP BOUNDARY, before the probe and before any tick helper runs, so no
+#     roster function is mid-use when it is replaced.
+#   - "an inherited CCRC_ACCOUNTS survives a projection that no longer defines
+#     it": the new bytes are VALIDATED FIRST, in a subshell that unsets every
+#     name the generator defines (`_CCD_ROSTER_VARS`, `_CCD_ROSTER_FNS`) before
+#     it evaluates them. They must evaluate with rc 0 and leave a non-empty
+#     indexed `CCRC_ACCOUNTS`, an indexed `CCRC_HOME_ABLE` (which `_is_home_able`
+#     reads bare under `set -u`) and the functions `_ccrc_cfg_dir`,
+#     `_ccrc_label` and `_ccrc_hue`. Only then are the same names unset in THIS
+#     shell and the same bytes evaluated here.
+#
+# THE BYTES VALIDATED ARE THE BYTES APPLIED. Both evaluations take the
+# fingerprint string, not the file, so a write that lands between the
+# validation and the re-source cannot put an unvalidated roster into the
+# supervisor. Both run inside `_roster_eval`, at the same function depth, so a
+# hand-edited file that says `declare -a CCRC_ACCOUNTS=(…)` — a LOCAL at that
+# depth, gone on return — fails the validation exactly as it would have emptied
+# the roster here.
+#
+# A REFUSED FILE KEEPS THE OLD ROSTER and warns ONCE per distinct content
+# (`_CCD_ROSTER_REFUSED`), not once a loop: a broken projection under 60
+# supervisors would otherwise write 12 lines a second into the journal. A later
+# good file is applied as usual. The roster is never emptied.
+#
+# `_cfg_dir_to`'s per-process memo assumed "the roster is sourced once"; it is
+# dropped on every re-source, or a removed lane would keep answering its old
+# config directory.
+#
+# No `systemctl`, no `launchctl`, no `tmux`: nothing here restarts a unit or
+# touches a pane. Only `cmd_supervise` calls this; every other verb is short
+# and keeps its one startup snapshot (and `_wrapper_rostered_now` for the
+# writes that must re-ask).
+_CCD_ROSTER_REFUSED=""   # "x" + the bytes last refused ("x" alone: nothing could be read); "" = none refused
+_roster_eval() { eval "$1"; }   # bytes -> their rc, evaluated in THIS shell one function deep (see above)
+_roster_reread_check() {   # [id] -> re-reads accounts.sh into this shell iff its bytes changed and pass validation
+  local fp="" who="${1:+$1: }"
+  _roster_fp_to fp || fp=""   # "" (nothing readable) is never evaluated from the file: it fails validation below
+  [[ ( -n "$fp" && "$fp" == "$_CCD_ROSTER_FP" ) || "x$fp" == "$_CCD_ROSTER_REFUSED" ]] && return 0
+  if ! (
+    unset -v "${_CCD_ROSTER_VARS[@]}"; unset -f "${_CCD_ROSTER_FNS[@]}"
+    { _roster_eval "$fp"; } >/dev/null 2>&1 || exit 1
+    declare -p CCRC_ACCOUNTS 2>/dev/null | grep -q '^declare -a ' || exit 1
+    (( ${#CCRC_ACCOUNTS[@]} > 0 )) || exit 1
+    declare -p CCRC_HOME_ABLE 2>/dev/null | grep -q '^declare -a ' || exit 1
+    declare -F _ccrc_cfg_dir _ccrc_label _ccrc_hue >/dev/null 2>&1 || exit 1
+  ); then
+    _CCD_ROSTER_REFUSED="x$fp"
+    echo "ccd: warn: ${who}account roster $CCRC_ACCOUNTS_SH changed and is refused: it must be a readable regular file that sources cleanly to a non-empty CCRC_ACCOUNTS, a CCRC_HOME_ABLE and _ccrc_cfg_dir/_ccrc_label/_ccrc_hue — keeping the roster this supervisor holds (${CCRC_ACCOUNTS[*]}); regenerate it: ccrc install" >&2
+    return 0
+  fi
+  unset -v "${_CCD_ROSTER_VARS[@]}"; unset -f "${_CCD_ROSTER_FNS[@]}"
+  { _roster_eval "$fp"; } >/dev/null 2>&1 \
+    || echo "ccd: warn: ${who}account roster re-read returned non-zero in this shell after it validated" >&2
+  _CCD_CFG_DIR_MEMO=(); _CCD_ROSTER_FP=$fp; _CCD_ROSTER_REFUSED=""
+  echo "ccd: ${who}account roster re-read — lanes now: ${CCRC_ACCOUNTS[*]}" >&2
+}
+
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
   local id="${1:?usage: ccd supervise <id>}"
   # ── THE START LIMIT, ON A MANAGER THAT HAS NONE ────────────────────────
@@ -26441,6 +26696,7 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   local CCD_TICK_CTX=1   # the tick context: dynamically scoped like CCD_IN_UNIT, never exported, never argv; cmd_ensure never sees it (spec §6.2)
   while :; do
     _now_s_to t0   # D-4961: the clock seam — fork-free under bash 5 ($EPOCHSECONDS)
+    _roster_reread_check "$id"   # D-7717: the loop boundary — no roster function is mid-use here; fork-free when unchanged
     _session_probe "$id"
     case "$PROBE_VERDICT" in
       gone) break ;;   # the ONLY exit — a session tmux itself pronounced dead (D-310)
@@ -40838,11 +41094,12 @@ _authdead_clear_on_spawn() {   # wrapper — `_spawn_settle`'s rc-0 half for the
 # of EITHER kind is read instead, so that a PR re-enqueued after a removal reads
 # as queued again. The REASON is what tells a landing from a dequeue (landing-
 # order wave 3d): GitHub records a removal with reason `merged` at every
-# successful queue merge, at or one second before the PR reads MERGED (16 of 16
-# queue merges, measured 2026-10-21), so the add is never the last act of a
-# landed PR. `reason` is a free-form String with no documented values; the
-# exact text `merged` is the one this reads, and any other value, null or a
-# type GitHub did not promise keeps the answers this block gave before it.
+# successful queue merge, within a second of the merge, either side (22 of 22
+# queue merges measured 2026-10-21, D-6216), so a landed PR's last act is that
+# removal, or, until the removal is recorded, the add. `reason` is a free-form
+# String with no documented values; the exact text `merged` is the one this
+# reads, and any other value, null or a type GitHub did not promise keeps the
+# answers this block gave before it.
 #
 # WHAT IT ANSWERS, per full line, in the additive `queue` field:
 #   queued      the PR is OPEN and has a queue entry now
@@ -41009,6 +41266,49 @@ for raw in sys.stdin.read().split('\n'):
     else:
         sys.stdout.write(raw + '\n')
 PY
+}
+
+# ── `ccd pr-state --project <p> --pr <n>`: ONE pull request by number, no workspace (landing order wave 5c) ──
+# Five words: open | merged | closed | unmeasured | absent. `absent` is GitHub's definite answer ONLY (rc 1 and "Could
+# not resolve to a PullRequest"); every other failure is `unmeasured` with a closed reason, and `_gh_fail_reason` names
+# the gh failures. The line is `_pr_py by-pr`'s alone, failure lines included. A PR CLOSED with the train label is
+# never a bare `closed`: its proof enters at `_ws_train_record` (the entry `pr-train-prove` uses), not at
+# `_pr_train_proofs`, because the form has no workspace branch for `train-cands` to bind (D-7595). The base it keys the
+# proof by is GitHub's: A GitHub-sourced base name, anchored to `_ws_train_keyable`'s grammar (no backslash, space or
+# leading dash, so `awk -v` escape processing cannot alter it), reaches python3's and awk's argv; it never reaches gh or
+# a shell (the PR-lifecycle spec's "No GitHub-sourced string is ever placed in a prompt, an argv, or a shell", departed
+# from for this one anchored string, D-7595 (b)).
+# The absent test (rc 1 and `Could not resolve to a PullRequest`) is GitHub's definite word that no pull request has
+# that number, whatever else the number names, so an issue number with that answer reads `absent`. Any other rc-1 text,
+# `is not a pull request` included (which `_ws_train_record` also accepts), reads `unmeasured` with `_gh_fail_reason`'s
+# word (`error` for that text).
+PR_GH_VIEW_TIMEOUT=6
+PR_VIEW_FIELDS=number,state,headRefOid,baseRefName,isCrossRepository,mergedAt,mergeCommit,labels
+
+_pr_state_by_pr() {   # project number -> ONE JSON line: one PR by number, no workspace (landing order wave 5c)
+  local project="$1" n="$2" main repo out rc errf err="" h="" b="" trc
+  [[ "$project" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project"
+  _pr_num_valid "$n" || die "bad pr number"
+  main="$PROJECTS_ROOT/$project"
+  repo=$(_gh_repo_slug "$main") || { _pr_py by-pr "$n" no-remote </dev/null; return 0; }
+  errf=$(_plat_mktemp 2>/dev/null) || errf=""
+  out=$(_plat_timeout "$PR_GH_VIEW_TIMEOUT" gh pr view "$n" --repo "$repo" --json "$PR_VIEW_FIELDS" 2>"${errf:-/dev/null}"); rc=$?
+  [[ -n "$errf" ]] && { err=$(cat "$errf" 2>/dev/null); rm -f "$errf"; }
+  if (( rc == 124 )); then _pr_py by-pr "$n" timeout </dev/null; return 0; fi
+  if (( rc != 0 )); then
+    if (( rc == 1 )) && [[ "$err" == *"Could not resolve to a PullRequest"* ]]; then _pr_py by-pr "$n" absent </dev/null
+    else _pr_py by-pr "$n" "$(_gh_fail_reason "$err")" </dev/null; fi
+    return 0
+  fi
+  local _PR_TRAIN_PROOFS="" _PR_TRAIN_REFUSED=""
+  IFS=$'\t' read -r h b < <(printf '%s' "$out" | _pr_py by-pr-cand "$n")
+  if [[ -n "$h" && -n "$b" ]]; then
+    local _PR_TRAIN_DEADLINE=$(( SECONDS + PR_STATE_TRAIN_TIMEOUT ))
+    _ws_train_record "$main" "$repo" "$n" "$h" "$b" 1 < /dev/null; trc=$?
+    (( trc == 0 )) && _PR_TRAIN_PROOFS="$n $h $_WS_TRAIN_NUM $_WS_TRAIN_MERGE"
+    (( trc == 1 )) && _PR_TRAIN_REFUSED="$n $h"
+  fi
+  printf '%s' "$out" | _pr_py by-pr "$n" ""
 }
 
 # ── DOCS: the four docs verbs (spec 2026-10-01 §2) ──────────────────────────

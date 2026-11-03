@@ -12,16 +12,17 @@
 // pins every node that names OPTION_FORMS, exactly (review 1143 F4): the target of its one module-level assignment, and
 // git_check's two reads (a subscript's value and an `in` comparator). The node kinds it counts are these: a Name in any
 // context, an argument (`ast.arg`), an import alias (its `asname`, or a part of its dotted name), a def, async def or
-// class name, an except name, a global or nonlocal, a call's keyword, an attribute, a match capture (`MatchAs` and
-// `MatchStar`), a mapping pattern's rest, a class pattern's keyword attribute (`MatchClass.kwd_attrs`, review 1158 F1)
-// and a type parameter. So a rebinding, a store, a delete, a method call, a copy, an alias (`x = OPTION_FORMS`) or a
-// class pattern (`case object(OPTION_FORMS=t)`) is a fourth entry, and a read respelled in git_check changes the
-// entries. The KNOWN LIMIT is what names the table only as a string, which the census does not read; each of these was
-// planted beside the table and measured green on R5b (fix round 5): a lookup through an object's own method with the
-// name as a string (`type(m).__getattribute__(m, 'OPTION_FORMS')`, on the module that `sys.modules` holds), the same
-// lookup with the name built from pieces (`'OPTION' + '_FORMS'`), and a refused builtin reached as an attribute of the
-// builtins module instead of as a bare name (`sys.modules['builtins'].globals()` and `.getattr(...)`). The behaviour that
-// matters is held by the self-test below, which runs git_check's verdicts, and by the behaviour suite.
+// class name, an except name, a global or nonlocal, a keyword (an `ast.keyword`: a call's, or a class statement's), an
+// attribute, a match capture (`MatchAs` and `MatchStar`), a mapping pattern's rest, a class pattern's keyword attribute
+// (`MatchClass.kwd_attrs`, review 1158 F1) and a type parameter. So a rebinding, a store, a delete, a method call, a
+// copy, an alias (`x = OPTION_FORMS`) or a class pattern (`case object(OPTION_FORMS=t)`) is a fourth entry, and a read
+// respelled in git_check changes the entries. The KNOWN LIMIT is what names the table only as a string, which the
+// census does not read; each of these was planted beside the table and measured green on R5b (fix round 5): a lookup
+// through an object's own method with the name as a string (`type(m).__getattribute__(m, 'OPTION_FORMS')`, on the
+// module that `sys.modules` holds), the same lookup with the name built from pieces (`'OPTION' + '_FORMS'`), and a
+// refused builtin reached as an attribute of the builtins module instead of as a bare name
+// (`sys.modules['builtins'].globals()` and `.getattr(...)`). The behaviour that matters is held by the self-test below,
+// which runs git_check's verdicts, and by the behaviour suite.
 //
 // WHERE THE PLANTING EVIDENCE IS. This file plants nothing. A pin is a request until a planted violation turns it red,
 // and that evidence is the mutation rows (one planted violation each, measured one at a time on the final files, the
@@ -357,6 +358,26 @@ describe('ccd-land-probe: the literal source pins', () => {
     expect(sites.sort()).toEqual(['fetch_into_scratch', 'fetch_into_scratch', 'fetch_into_scratch', 'fetch_into_scratch',
       'finish_probe', 'merge_answer', 'open_heads', 'probe_project', 'probe_project', 'qualifying', 'read_checks',
       'store_counts', 'walk_lineage', 'walk_lineage', 'walk_lineage']);
+  });
+
+  it("review 1171's wording says what the code does: the held grammar, the tip-null routes, the fallback's fetch-failed, the no-checkpoint cases", () => {
+    const ROOT = path.resolve(path.dirname(PROBE), '..');
+    const flat = (s: string): string => s.replace(/\n[ \t]*(?:#[ \t]?)?[ \t]*/g, ' ').replace(/ {2,}/g, ' ');
+    const probe = flat(src);
+    expect(probe).toContain('and also a name git allows that the grammar does not hold, such as `ws/a+b`');
+    expect(probe).not.toContain('corrupt registry content, a shape git forbids in a ref name)');
+    expect(probe).toContain('With an old file it is rewritten unmeasured with tip null on every route that has no measured base: a failed or timed-out fetch');
+    expect(probe).toContain('one the project budget cut, a slug that is None, and the before-first-write fallback.');
+    expect(probe).not.toContain('on a failed fetch, and in the before-first-write fallback, it is rewritten unmeasured with tip null');
+    expect(probe).toContain('4. For each conf, least recently measured first (tick_order');
+    const readme = flat(fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8'));
+    expect(readme).toContain('or a name git allows but the probe\'s narrower grammar does not, such as `ws/a+b`');
+    expect(readme).not.toContain('a scratch, alternates or refspec failure before the first write');
+    expect(readme).toContain('a failure to write the scratch\'s alternates file is the failed fetch\'s own `fetch-failed`');
+    expect(readme).toContain('**The order.** Each tick measures the projects least recently measured first');
+    const doctor = flat(fs.readFileSync(path.join(ROOT, 'ccd', 'ccrc-doctor-checks'), 'utf8'));
+    expect(doctor).toContain('when every open PR is cross-repository (the probe drops those heads), when the PR list failed, or when the project budget is already spent');
+    expect(doctor).not.toContain('zero open PRs, or the PR list failed');
   });
 });
 

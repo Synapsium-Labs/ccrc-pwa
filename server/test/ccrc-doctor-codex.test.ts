@@ -3360,8 +3360,8 @@ describe('ccrc doctor: box-token', () => {
 // and the end-to-end case below proves the two agree by running the REAL installer into a fixture home. Doctor reads
 // the registration and never prints the file: the cases that plant a secret-looking key assert it never surfaces.
 describe('ccrc doctor: delegation-hooks', () => {
-  /** The own-hook FAIL's remedy (R55): true of what the installer's sweep does, which drops a WHOLE entry that carries ccrc's hook. */
-  const OWN_REMEDY_TEXT = "  remedy: run 'ccrc doctor --fix' (it removes ccrc's own entry from every event; an entry of its own that names another command is kept, but an entry shared with ccrc's hook is not, so --fix refuses a home that has one: move the other command into an entry of its own first)";
+  /** The own-hook FAIL's remedy (W4-D5, option B): true of what the installer's sweep does now, which removes only ccrc's own hook. */
+  const OWN_REMEDY_TEXT = "  remedy: run 'ccrc doctor --fix' (it removes ccrc's own hook from every event it never registers, and keeps every other command, whether in an entry of its own or in an entry it shares with ccrc's hook)";
   const THEIRS = (name: string) => ({ type: 'command', command: `bash "$HOME/bin/${name}.sh"` });
   const SHAPE_REMEDY_TEXT = '  remedy: fix what is named (check with: ls -l $HOME/<home>/settings.json) — this is a mode or shape problem, not a missing registration, and doctor never prints the file';
   /** `_check_delegation-hooks` alone, as `cmd_doctor` runs it (`runHistoryCheck`'s shape). */
@@ -3929,6 +3929,81 @@ describe('ccrc doctor: delegation-hooks', () => {
     });
   });
 
+  // Delegation broker wave 4, PR4 Task 4.5b: the delegation broker's rung-4 margin (twenty minutes) assumes Claude Code's
+  // ten-minute Bash ceiling, so a home that raises the ceiling in its settings.json `env` is a WARN. The line names the home and
+  // the KEY, never the value (an `env` block can hold a token). Fixture assertions on the text and the class; no timing.
+  describe('the Bash ceiling (W4-D1..D4)', () => {
+    const CEILING_REMEDY = "  remedy: remove the key from that home's env: the delegation broker's rung-4 margin (twenty minutes) assumes Claude Code's ten-minute Bash ceiling, so a changed ceiling breaks that assumption and can let rung 4 link a tree to the wrong session; changing the margin is a code change";
+    const ceilingLine = (n: number, homes: string): string =>
+      `WARN delegation-hooks: ${n} rostered ${n === 1 ? 'home sets' : 'homes set'} Claude Code's Bash timeout in settings.json env: ${homes}`;
+    const withEnv = (prefix: string, env: unknown): string => {
+      const home = dhBox(prefix);
+      plantHookRegistration(home, '.claude', { extra: { env } });
+      return home;
+    };
+
+    it('W4-D1: env.BASH_MAX_TIMEOUT_MS is a WARN naming the home and the key, with the remedy, rc 2 and no PASS line', () => {
+      const r = runDh(withEnv('ccrc-doctor-dh-ceiling-max-', { BASH_MAX_TIMEOUT_MS: '1800000' }));
+      expect(verdicts(r)).toEqual([ceilingLine(1, 'claude: BASH_MAX_TIMEOUT_MS')]);
+      expect(remedyOf(r, /^WARN /)).toBe(CEILING_REMEDY);
+      expect(lines(r).filter((l) => l.startsWith('PASS '))).toEqual([]);
+      expect(r.code).toBe(2);
+    });
+
+    it('W4-D2: env.BASH_DEFAULT_TIMEOUT_MS is the same WARN, and both keys in one home are ONE line naming both', () => {
+      const one = runDh(withEnv('ccrc-doctor-dh-ceiling-default-', { BASH_DEFAULT_TIMEOUT_MS: '900000' }));
+      expect(verdicts(one)).toEqual([ceilingLine(1, 'claude: BASH_DEFAULT_TIMEOUT_MS')]);
+      expect(one.code).toBe(2);
+      const both = runDh(withEnv('ccrc-doctor-dh-ceiling-both-', { BASH_DEFAULT_TIMEOUT_MS: '900000', BASH_MAX_TIMEOUT_MS: '1800000' }));
+      expect(verdicts(both)).toEqual([ceilingLine(1, 'claude: BASH_MAX_TIMEOUT_MS, BASH_DEFAULT_TIMEOUT_MS')]);
+      expect(both.code).toBe(2);
+    });
+
+    it('W4-D2: two homes are one WARN in roster order, with the plural wording', () => {
+      const home = twoHomes('ccrc-doctor-dh-ceiling-two-');
+      plantHookRegistration(home, '.claude', { extra: { env: { BASH_MAX_TIMEOUT_MS: '1800000' } } });
+      plantHookRegistration(home, '.lane-a', { extra: { env: { BASH_DEFAULT_TIMEOUT_MS: '900000' } } });
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([ceilingLine(2, 'claude: BASH_MAX_TIMEOUT_MS; lane-a: BASH_DEFAULT_TIMEOUT_MS')]);
+      expect(r.code).toBe(2);
+    });
+
+    it('W4-D3: a value, numeric or token-shaped, is printed on no line, while the key it belongs to is', () => {
+      const NUM = '1800000';
+      const TOKEN = 'sk-ant-fixture-0xDEADBEEF';
+      const r = runDh(withEnv('ccrc-doctor-dh-ceiling-secret-', { BASH_MAX_TIMEOUT_MS: NUM, BASH_DEFAULT_TIMEOUT_MS: TOKEN }));
+      // the WARN is there (an empty answer would pass the absence checks below vacuously)
+      expect(r.stdout).toMatch(/^WARN delegation-hooks: .*BASH_MAX_TIMEOUT_MS, BASH_DEFAULT_TIMEOUT_MS$/m);
+      expect(r.stdout + r.stderr).not.toContain(NUM);
+      expect(r.stdout + r.stderr).not.toContain(TOKEN);
+      expect(r.stdout + r.stderr).not.toContain('0xDEADBEEF');
+    });
+
+    it.each<[string, unknown]>([
+      ['an env that is a string', 'BASH_MAX_TIMEOUT_MS=1800000'],
+      ['an env that is an array', ['BASH_MAX_TIMEOUT_MS']],
+      ['an env that is null', null],
+      ['a key set to ""', { BASH_MAX_TIMEOUT_MS: '' }],
+      ['a key set to null', { BASH_DEFAULT_TIMEOUT_MS: null }],
+      ['an env with neither key', { CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000' }],
+    ])('W4-D4: %s gives no ceiling WARN, and the PASS line is unchanged', (_name, env) => {
+      const r = runDh(withEnv('ccrc-doctor-dh-ceiling-none-', env));
+      expect(lines(r)).toEqual([
+        `PASS delegation-hooks: 1/1 rostered homes register all ${events.length} hook events the shipped installer writes; no running session lacks its delegation spool directory (0 registry rows read, 0 with a directory)`]);
+      expect(r.code).toBe(0);
+    });
+
+    it('the ceiling WARN never hides a FAIL: a missing registration is FAIL first, then the WARN, rc 1', () => {
+      const home = dhBox('ccrc-doctor-dh-ceiling-fail-');
+      plantHookRegistration(home, '.claude', { omit: ['Stop'], extra: { env: { BASH_MAX_TIMEOUT_MS: '1800000' } } });
+      const r = runDh(home);
+      expect(verdicts(r)).toEqual([
+        'FAIL delegation-hooks: the shipped hook registration is missing from 1 rostered home: claude: Stop',
+        ceilingLine(1, 'claude: BASH_MAX_TIMEOUT_MS')]);
+      expect(r.code).toBe(1);
+    });
+  });
+
   describe('several defects at once', () => {
     it('a FAIL is never hidden behind a WARN: FAIL lines first, then WARN lines, each followed by its own remedy, rc 1', () => {
       const home = twoHomes('ccrc-doctor-dh-mixed-');
@@ -4086,38 +4161,54 @@ CCRC_DOCTOR_CHECKS=(delegation-hooks)
       onlyThisCheck(home);
       return { home, f };
     };
-    const REFUSAL = (ev: string): RegExp => new RegExp(
-      `^FIX delegation-hooks: refused — claude: ${ev} holds an entry that mixes ccrc's session hook with another command, and the sweep that --fix, ccrc install and ccrc update run removes the whole entry that carries ccrc's hook, other commands included; move the other command into an entry of its own under ${ev}, then re-run ccrc doctor --fix$`, 'm');
+    // W4-D5 (PR4 Task 4.5b): R55 is lifted. The installer's option-B sweep (Task 4.5a) removes only ccrc's own hook command from an
+    // entry and keeps every other hook, so --fix hands a mixed home to the installer like any other. These rows keep the R55 rows'
+    // inputs and their independent invariants; only the obsolete refusal is replaced by what the installer now does.
+    /** The R55 refusal, in any of its forms (one event or several): it must not be printed any more. */
+    const R55_REFUSAL = /^FIX delegation-hooks: refused — [^\n]*mixes ccrc's session hook with another command/m;
+    const FIXED = (homes: string, n = 1): RegExp =>
+      new RegExp(`^FIX delegation-hooks: re-ran the shipped tree's install-session-hooks\\.sh into ${n} home\\(s\\): ${homes}$`, 'm');
+    /** The one backup the installer made of the default home's settings.json before it replaced it (`cp -a` into
+     *  `$HOME/ccrc-backups/<YYYYmmdd-HHMMSS>/<home dir>.settings.json`), as bytes. */
+    const backupOf = (home: string): Buffer => {
+      const root = join(home, 'ccrc-backups');
+      expect(existsSync(root), 'the installer made no backup directory').toBe(true);
+      const stamps = readdirSync(root);
+      expect(stamps, 'one backup run').toHaveLength(1);
+      return readFileSync(join(root, stamps[0]!, '.claude.settings.json'));
+    };
+    const verdictClasses = (out: string): string[] =>
+      out.split('\n').filter((l) => /^(PASS|FAIL|WARN) delegation-hooks: /.test(l)).map((l) => l.split(':')[0]!);
 
-    it('REFUSES a home whose Worktree entry mixes ccrc\'s hook with another command: the file is byte-identical, the remedy names the event and the manual step, and the check still shows FAIL then WARN', () => {
+    it('W4-D5: a home whose Worktree entry mixes ccrc\'s hook with another command is handed to the installer: its own hook is swept, the other command kept, the original backed up byte for byte, and the foreign WARN still stands', () => {
       const { home, f } = mixedHome('ccrc-doctor-dh-fix-mixed-worktree-', 'WorktreeCreate');
       const before = readFileSync(f);
       const r = runDoctor(home, ['doctor', '--fix']);
-      expect(r.stdout).toMatch(REFUSAL('WorktreeCreate'));
-      expect(Buffer.compare(readFileSync(f), before), 'the settings file changed').toBe(0);
-      const ls = r.stdout.split('\n');
-      // as measured, then as re-measured after the refused fix: FAIL then WARN both times
-      expect(ls.filter((l) => /^(FAIL|WARN) delegation-hooks: /.test(l)).map((l) => l.split(':')[0])).toEqual(
-        ['FAIL delegation-hooks', 'WARN delegation-hooks', 'FAIL delegation-hooks', 'WARN delegation-hooks']);
+      expect(r.stdout).not.toMatch(R55_REFUSAL);
+      expect(r.stdout).toMatch(FIXED('claude'));
+      expect(Buffer.compare(backupOf(home), before), 'the backup is not the original bytes').toBe(0);
+      // measured: FAIL (ccrc's own hook under a Worktree event) then WARN (the other command); re-measured: the WARN alone
+      expect(verdictClasses(r.stdout)).toEqual(['FAIL delegation-hooks', 'WARN delegation-hooks', 'WARN delegation-hooks']);
       expect(r.stdout).toMatch(/^WARN delegation-hooks: WorktreeCreate is registered/m);
-      expect(r.code).toBe(1);
-      // …and the other command is still there, in the entry it was planted in.
-      expect(JSON.stringify(JSON.parse(readFileSync(f, 'utf8')).hooks.WorktreeCreate)).toContain('their-shared-hook');
+      expect(JSON.parse(readFileSync(f, 'utf8')).hooks.WorktreeCreate).toEqual([{ hooks: [THEIRS('their-shared-hook')] }]);
     });
 
-    it('REFUSES a home whose NON-Worktree entry mixes ccrc\'s hook with another command too (5180): byte-identical, and the remedy names that event', () => {
+    it('W4-D5: a home whose NON-Worktree entry mixes ccrc\'s hook with another command (5180) is fixed too: the other command is kept, the original backed up, and no line names it', () => {
       const { home, f } = mixedHome('ccrc-doctor-dh-fix-mixed-stop-', 'Stop', { omit: ['SessionEnd'] });
       const before = readFileSync(f);
       const r = runDoctor(home, ['doctor', '--fix']);
-      expect(r.stdout).toMatch(REFUSAL('Stop'));
-      expect(Buffer.compare(readFileSync(f), before), 'the settings file changed').toBe(0);
-      // the check is unchanged for an approved event: it names the missing registration, and nothing about the mixed entry
+      expect(r.stdout).not.toMatch(R55_REFUSAL);
+      expect(r.stdout).toMatch(FIXED('claude'));
+      expect(Buffer.compare(backupOf(home), before), 'the backup is not the original bytes').toBe(0);
       expect(r.stdout).toMatch(/^FAIL delegation-hooks: the shipped hook registration is missing from 1 rostered home: claude: SessionEnd$/m);
-      expect(r.stdout).not.toMatch(/^(FAIL|WARN) delegation-hooks: [^\n]*their-shared-hook/m);
+      expect(r.stdout).toMatch(/^PASS delegation-hooks: /m);   // the re-measurement
+      expect(JSON.stringify(JSON.parse(readFileSync(f, 'utf8')).hooks.Stop)).toContain('their-shared-hook');
+      // the check never prints a hook command, before or after the fix
+      expect(r.stdout).not.toMatch(/^(FAIL|WARN|PASS) delegation-hooks: [^\n]*their-shared-hook/m);
     });
 
     // Task 14 re-review 2: N4 (shapes the installer's sweep walks although they are not valid settings), N5 (an event key is never
-    // word-split or globbed), N6 (several events: "A and B hold ... under each of A and B").
+    // word-split or globbed), N6 (several events in one home). Their inputs are kept; what they assert is now the installer's keep.
     const reshaped = (prefix: string, shape: (j: { hooks: Record<string, unknown> }) => void): { home: string; f: string } => {
       const { home, f } = mixedHome(prefix, 'SessionEnd');
       const j = JSON.parse(readFileSync(f, 'utf8'));
@@ -4129,15 +4220,19 @@ CCRC_DOCTOR_CHECKS=(delegation-hooks)
     it.each<[string, string, (j: { hooks: Record<string, unknown> }) => void]>([
       ['an object-shaped `hooks` list', 'Stop', (j) => { j.hooks.Stop = [{ hooks: { a: { type: 'command', command: installerHook().command }, b: THEIRS('their-object-hook') } }]; }],
       ['an object-shaped Worktree event value', 'WorktreeCreate', (j) => { j.hooks.WorktreeCreate = { x: { hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-object-hook')] } }; }],
-    ])('N4: REFUSES %s that mixes ccrc\'s hook with another command (the sweep would walk it): byte-identical', (_name, ev, shape) => {
+    ])('W4-D5 N4: %s that mixes ccrc\'s hook with another command is not refused, and the other command is never dropped', (_name, ev, shape) => {
       const { home, f } = reshaped(`ccrc-doctor-dh-fix-shape-${ev}-`, shape);
       const before = readFileSync(f);
       const r = runDoctor(home, ['doctor', '--fix']);
-      expect(r.stdout).toMatch(REFUSAL(ev));
-      expect(Buffer.compare(readFileSync(f), before), 'the settings file changed').toBe(0);
+      expect(r.stdout).not.toMatch(R55_REFUSAL);
+      // the home is handed to the installer (review 1365, F3), which rewrites it: measured, it turns the object into an array,
+      // keeping the other command and dropping the object's keys, and it backs the original up first, byte for byte
+      expect(r.stdout).toMatch(FIXED('claude'));
+      expect(readFileSync(f, 'utf8')).toContain('their-object-hook');
+      expect(Buffer.compare(backupOf(home), before), 'the backup is not the original bytes').toBe(0);
     });
 
-    it('N5: an event key `*` is named as itself, never glob-expanded or word-split', () => {
+    it('W4-D5 N5: an event key `*` is never glob-expanded or word-split: no line names a file a glob would match, and the other command under `*` is kept', () => {
       const { home, f } = reshaped('ccrc-doctor-dh-fix-star-', (j) => {
         j.hooks['*'] = [{ hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-star-hook')] }];
         delete j.hooks.SessionEnd;                                               // a defect, so the check FAILs and --fix runs
@@ -4145,31 +4240,42 @@ CCRC_DOCTOR_CHECKS=(delegation-hooks)
       writeFileSync(join(home, 'aa.txt'), 'a file a glob would name');
       const before = readFileSync(f);
       const r = runDoctor(home, ['doctor', '--fix']);
-      expect(r.stdout).toMatch(/^FIX delegation-hooks: refused — claude: \* holds an entry that mixes ccrc's session hook with another command, .*an entry of its own under \*, then re-run ccrc doctor --fix$/m);
-      expect(Buffer.compare(readFileSync(f), before)).toBe(0);
+      expect(r.stdout).not.toMatch(R55_REFUSAL);
+      expect(r.stdout).toMatch(FIXED('claude'));
+      expect(r.stdout + r.stderr).not.toContain('aa.txt');
+      expect(JSON.stringify(JSON.parse(readFileSync(f, 'utf8')).hooks['*'])).toContain('their-star-hook');
+      expect(Buffer.compare(backupOf(home), before), 'the backup is not the original bytes').toBe(0);
     });
 
-    it('N6: several mixed events are named together, with the plural verb: "A and B hold ... under each of A and B"', () => {
+    it('W4-D5 N6: several mixed events in one home are all handled in ONE installer run: both other commands kept, one backup, and ccrc\'s own Worktree hook swept', () => {
       const { home, f } = reshaped('ccrc-doctor-dh-fix-two-', (j) => {
         j.hooks.Stop = [{ hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-stop-hook')] }];
         j.hooks.WorktreeCreate = [{ hooks: [{ type: 'command', command: installerHook().command }, THEIRS('their-wt-hook')] }];
       });
-      const order = Object.keys(JSON.parse(readFileSync(f, 'utf8')).hooks).filter((k) => k === 'Stop' || k === 'WorktreeCreate');
-      const named = `${order[0]} and ${order[1]}`;
+      const before = readFileSync(f);
       const r = runDoctor(home, ['doctor', '--fix']);
-      expect(r.stdout).toContain(`FIX delegation-hooks: refused — claude: ${named} hold an entry that mixes ccrc's session hook with another command`);
-      expect(r.stdout).toContain(`move the other command into an entry of its own under each of ${named}, then re-run ccrc doctor --fix`);
+      expect(r.stdout).not.toMatch(R55_REFUSAL);
+      expect(r.stdout.match(/^FIX delegation-hooks: /gm), 'one fix line').toHaveLength(1);
+      expect(r.stdout).toMatch(FIXED('claude'));
+      expect(Buffer.compare(backupOf(home), before), 'the backup is not the original bytes').toBe(0);
+      const after = JSON.parse(readFileSync(f, 'utf8'));
+      expect(JSON.stringify(after.hooks.Stop)).toContain('their-stop-hook');
+      expect(after.hooks.WorktreeCreate).toEqual([{ hooks: [THEIRS('their-wt-hook')] }]);
+      // the own-hook FAIL is measured once, before the fix; the re-measurement keeps only the foreign WARN
+      expect(r.stdout.match(/^FAIL delegation-hooks: ccrc's own session hook/gm)).toHaveLength(1);
+      expect(verdictClasses(r.stdout).slice(-1)).toEqual(['WARN delegation-hooks']);
     });
 
-    it('refuses only the mixed home: another home is fixed as before', () => {
+    it('W4-D5: a mixed home no longer holds another home back: both are handed to the installer in one run', () => {
       const { home, f } = mixedHome('ccrc-doctor-dh-fix-mixed-one-home-', 'PostToolUse', { omit: ['SessionEnd'] });
       writeRoster(home, [UPSTREAM, { id: 'lane-a', exec: { kind: 'generated' }, telemetry: 'anthropic' } as RosterEntry]);
       mkdirSync(join(home, '.lane-a'), { recursive: true });
       const before = readFileSync(f);
       const r = runDoctor(home, ['doctor', '--fix']);
-      expect(r.stdout).toMatch(REFUSAL('PostToolUse'));
-      expect(r.stdout).toMatch(/^FIX delegation-hooks: re-ran the shipped tree's install-session-hooks\.sh into 1 home\(s\): lane-a$/m);
-      expect(Buffer.compare(readFileSync(f), before)).toBe(0);
+      expect(r.stdout).not.toMatch(R55_REFUSAL);
+      expect(r.stdout).toMatch(FIXED('claude, lane-a', 2));
+      expect(Buffer.compare(backupOf(home), before), 'the backup is not the original bytes').toBe(0);
+      expect(JSON.stringify(JSON.parse(readFileSync(f, 'utf8')).hooks.PostToolUse)).toContain('their-shared-hook');
       const fixed = JSON.parse(readFileSync(join(home, '.lane-a', 'settings.json'), 'utf8'));
       expect(Object.keys(fixed.hooks).sort()).toEqual([...installerEvents()].sort());
     });
@@ -5925,7 +6031,7 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
 
   it('the doctor reads no stats file larger than stats.py\'s READ_MAX, spelled the same', () => {
     const py = [...readFileSync(join(REPO, 'ccd', 'codexbridge', 'stats.py'), 'utf8').matchAll(/^READ_MAX = ([^#\n]+?)\s+#/gm)];
-    const sh = [...readFileSync(CHECKS_SRC, 'utf8').matchAll(/^\s*local read_max=\$\(\( ([^)]+?) \)\) /gm)];
+    const sh = [...readFileSync(CHECKS_SRC, 'utf8').matchAll(/^\s*local read_max=\$\(\( ([^)]+?) \)\)$/gm)];
     expect(py).toHaveLength(1);
     expect(sh).toHaveLength(1);
     expect(sh[0][1]).toBe(py[0][1]);
@@ -5934,11 +6040,281 @@ describeCodex('ccrc doctor: codex, the drift row on a direct lane (codex bridge 
   // Fix round 2, R5: the most names a bridge writes is known.KNOWN's family count times NAMES_MAX plus `overflow`.
   it('the doctor bounds a file\'s names by stats.py\'s NAMES_MAX and known.KNOWN\'s families, counted the same', () => {
     const { namesMax, families } = bridgeBounds();
-    const sh = [...readFileSync(CHECKS_SRC, 'utf8').matchAll(/^\s*local read_max=.* names_max=(\d+) families=(\d+) /gm)];
+    const sh = [...readFileSync(CHECKS_SRC, 'utf8').matchAll(/^\s*local names_max=(\d+) families=(\d+) /gm)];
     expect(sh).toHaveLength(1);
     expect(new Set(families).size).toBe(families.length);
     expect(Number(sh[0][1])).toBe(namesMax);
     expect(Number(sh[0][2])).toBe(families.length);
+  });
+
+  // D-7677: the store row, beside the drift row on a direct lane, reads the stats file's `store` entry through the
+  // same reader (`_dr_cx_stats_read`). The fixture lanes run no tier, so every WARN below is read off a bridge that is
+  // not running: the row names the LAST process, the one that wrote the file (it is asked before `_dr_cx_tiers`
+  // measures the bridge), and the next start's entry clears it.
+  describe('the store row (D-7677)', () => {
+    const AT = 1767225600;   // 2026-01-01T00:00:00.000Z
+    const AT_ISO = '2026-01-01T00:00:00.000Z';
+    const COPY = 'reasoning.sqlite.damaged-20260101T000000Z';
+    const STORE_LINE = /the bridge's reasoning store is switched off|found its reasoning store damaged|a set-aside copy of the lane's reasoning store/;
+    const DISABLED = (id: string, reason: string, at: string, copy = ''): string =>
+      `WARN codex: ${id}: the bridge's reasoning store is switched off for the rest of its last process (${reason}, since ${at}): every request that process answers is answered without the model's earlier reasoning replayed${copy} (names only, never content).`;
+    const COPY_CLAUSE = (found: string, file: string): string => `; at its start it had set its damaged store (${found}) aside as ${file}`;
+    const DISABLED_FIX = (id: string): string =>
+      `  remedy: restart the lane's bridge so its start check runs again: ccrc codex stop ${id}, then ccrc codex start ${id} (a bridge that is not running needs the start alone, which every session launch runs too); the stop drains the bridge, so a request in flight gets DRAIN_S (ccd/codexbridge/server.py) to finish and one still open then is cut with an error that Claude Code sends again. At the start a damaged store is set aside and a fresh one made, and this line clears once the new process writes its stats file, before it serves`;
+    const SET_ASIDE = (id: string, found: string, file: string): string =>
+      `WARN codex: ${id}: at its start the bridge found its reasoning store damaged (${found}) and set it aside as ${file}, starting a fresh store; only the model's earlier reasoning was lost.`;
+    const SET_ASIDE_FIX = (dir: string, file: string): string =>
+      `  remedy: nothing to repair: the bridge serves from its fresh store. Read the copy, ${dir}/${file}, if the damage needs explaining, then delete it with its -wal and -shm (rm -f -- ${dir}/${file} ${dir}/${file}-wal ${dir}/${file}-shm), and this line clears; the bridge keeps only the newest copy, and ccrc never deletes one for you`;
+    // Fix round 4, G1: a copy found on disk in every case but a `set-aside` entry naming it (an `ok` entry after a
+    // restart, a `disabled` one, an entry naming another file) is NEUTRAL: it never says the bridge serves from a
+    // fresh store. `found` is said only when the entry's copy is this one; a `disabled` entry adds its pointer.
+    const NEUTRAL = (id: string, file: string, found = '', disabled = false): string =>
+      `WARN codex: ${id}: a set-aside copy of the lane's reasoning store, ${file}, is in the lane directory${found === '' ? '' : ` (set aside at a start that found the store damaged: ${found})`}${disabled ? '; the line above names the store\'s own repair' : ''}.`;
+    const NEUTRAL_FIX = (dir: string, file: string): string =>
+      `  remedy: read the copy, ${dir}/${file}, if the damage needs explaining, then delete it with its -wal and -shm (rm -f -- ${dir}/${file} ${dir}/${file}-wal ${dir}/${file}-shm), and this line clears; the bridge keeps only the newest copy, and ccrc never deletes one for you`;
+    // Fix round 3, F4: a newer build's store is never checked or touched, so a restart is not its remedy.
+    const NEWER_FIX = (id: string, dir: string): string =>
+      `  remedy: a newer build of the bridge wrote this reasoning store (its user_version is above USER_VERSION in ccd/codexbridge/store.py), and a restart does not change it: the start never checks or touches a newer store. Run that build again (ccrc update --to <its version>, or ccrc rollout --to <its version> across the fleet), or stop the lane (ccrc codex stop ${id}), move ${dir}/reasoning.sqlite and its -wal and -shm aside by hand, then start it again (ccrc codex start ${id}): the bridge makes a fresh store, without the model's earlier reasoning — ccrc never moves it for you`;
+    /** Lane `id`'s stats file as its bridge writes it, with `events` passed to the real `Stats.store_event`. */
+    const writeStore = async (home: string, id: string,
+      events: ReadonlyArray<{ reason: string; found?: string; file?: string }>): Promise<string> => {
+      const file = statsFile(home, id);
+      const ops = [
+        { op: 'stats-open', path: file, lane: id },
+        ...events.map((e) => ({ op: 'stats-call', method: 'store_event', args: [e.reason],
+          kwargs: { ...(e.found === undefined ? {} : { found: e.found }), ...(e.file === undefined ? {} : { file: e.file }), now: AT } })),
+        { op: 'stats-call', method: 'flush', kwargs: { force: true } },
+      ];
+      const r = await runBridgeDriver(home, { ops });
+      expect(r.timedOut, r.stderr).toBe(false);
+      const lines = driverLines(r.stdout);
+      expect(lines.map((l) => l['op']), `${r.stdout}\n${r.stderr}`).toEqual(ops.map((o) => o.op));
+      for (const l of lines) expect(l['raised'], JSON.stringify(l)).toBeUndefined();
+      return file;
+    };
+    const storeOf = (file: string): unknown => (JSON.parse(readFileSync(file, 'utf8')) as { store?: unknown }).store;
+    /** The line `line` exactly once, with `fix` as its remedy. */
+    const expectOnce = (stdout: string, line: string, fix: string): void => {
+      const re = new RegExp(`^${reEsc(line)}$`, 'm');
+      expect(stdout, stdout).toMatch(re);
+      expect(remedyAfter(stdout, re)).toBe(fix);
+      expect(stdout.split('\n').filter((l) => STORE_LINE.test(l))).toHaveLength(1);
+    };
+    /** Fix round 4, G1: a `disabled` entry with a copy on disk prints exactly two store lines, in this order: the
+     *  entry's `disabled` WARN with the restart remedy, then the NEUTRAL copy line, which never says "fresh store". */
+    const expectDisabledThenCopy = (stdout: string, disabled: string, disabledFix: string, copy: string, copyFix: string): void => {
+      expect(stdout.split('\n').filter((l) => STORE_LINE.test(l)), stdout).toEqual([disabled, copy]);
+      expect(remedyAfter(stdout, new RegExp(`^${reEsc(disabled)}$`, 'm'))).toBe(disabledFix);
+      const copyRe = new RegExp(`^${reEsc(copy)}$`, 'm');
+      expect(remedyAfter(stdout, copyRe)).toBe(copyFix);
+      const ls = stdout.split('\n');
+      const i = ls.findIndex((l) => copyRe.test(l));
+      expect(`${ls[i]}\n${ls[i + 1]}`).not.toContain('fresh store');
+    };
+
+    // (a) A bridge from before the entry writes no `store` key: no row, never read as `ok` or as anything else.
+    // (b) A fresh `Stats` writes `ok`: no row.
+    it('a stats file with no store entry, or an ok one, has no store row', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-none-', ['codex-a', 'codex-b']);
+      for (const id of ['codex-a', 'codex-b']) plantDirectLane(home, id);
+      const a = await writeStore(home, 'codex-a', [{ reason: 'store:DatabaseError' }]);
+      const doc = JSON.parse(readFileSync(a, 'utf8')) as Record<string, unknown>;
+      delete doc['store'];
+      plantStats(a, JSON.stringify(doc));
+      const b = await writeStore(home, 'codex-b', []);
+      expect(storeOf(b)).toEqual({ state: 'ok', reason: null, at: null, setAside: null });
+      const r = runDoctor(home);
+      expect(r.stdout, r.stdout).not.toMatch(STORE_LINE);
+      for (const id of ['codex-a', 'codex-b']) {
+        expect(lineFor(r.stdout, 'codex') ?? '', r.stdout).toMatch(new RegExp(`^PASS codex: .*${reEsc(id)} \\(ports \\d+\\/\\d+, direct mode, `));
+      }
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // (c) A store disabled by a request: the WARN with its reason and time, and the restart remedy.
+    it('a disabled store warns with its reason, and the remedy restarts the bridge', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-disabled-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const file = await writeStore(home, 'codex-a', [{ reason: 'store:DatabaseError' }]);
+      expect(storeOf(file)).toEqual({ state: 'disabled', reason: 'store:DatabaseError', at: AT_ISO, setAside: null });
+      const r = runDoctor(home);
+      expectOnce(r.stdout, DISABLED('codex-a', 'store:DatabaseError', AT_ISO), DISABLED_FIX('codex-a'));
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // (d) A set-aside that failed after its renames names its copy (D-7676): the WARN names it too. The copy is then
+    // always on disk (store.py names it only once its rename succeeded), so it is planted here, and the real output is
+    // pinned: the `disabled` WARN with the restart remedy, then the NEUTRAL copy line (fix round 4, G1).
+    it('a failed set-aside that named its copy warns as disabled, naming the copy, and its copy line is neutral', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-failed-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const file = await writeStore(home, 'codex-a', [{ reason: 'store:set-aside-failed', found: 'integrity-check', file: COPY }]);
+      expect(storeOf(file)).toMatchObject({ state: 'disabled', reason: 'store:set-aside-failed', setAside: { found: 'integrity-check', file: COPY } });
+      const dir = laneDir(home, 'codex-a');
+      writeFileSync(join(dir, COPY), 'fixture\n', { mode: 0o600 });
+      const r = runDoctor(home);
+      expectDisabledThenCopy(r.stdout,
+        DISABLED('codex-a', 'store:set-aside-failed', AT_ISO, COPY_CLAUSE('integrity-check', COPY)), DISABLED_FIX('codex-a'),
+        NEUTRAL('codex-a', COPY, 'integrity-check', true), NEUTRAL_FIX(dir, COPY));
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // Fix round 4, G1: a store disabled at runtime, with an older copy still on disk, prints the same two lines; the
+    // entry names no copy, so the copy line says no `found`.
+    it('a store disabled at runtime with an older copy on disk warns as disabled, and its copy line is neutral', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-disabled-copy-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const file = await writeStore(home, 'codex-a', [{ reason: 'store:OperationalError' }]);
+      expect(storeOf(file)).toEqual({ state: 'disabled', reason: 'store:OperationalError', at: AT_ISO, setAside: null });
+      const dir = laneDir(home, 'codex-a');
+      writeFileSync(join(dir, COPY), 'fixture\n', { mode: 0o600 });
+      const r = runDoctor(home);
+      expectDisabledThenCopy(r.stdout,
+        DISABLED('codex-a', 'store:OperationalError', AT_ISO), DISABLED_FIX('codex-a'),
+        NEUTRAL('codex-a', COPY, '', true), NEUTRAL_FIX(dir, COPY));
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // (e) A set-aside whose copy is still in the lane directory: the WARN names it, and the remedy is to delete it.
+    // (f) The same once the copy is deleted: no row.
+    it('a set-aside warns while its copy is in the lane directory, and clears once the copy is deleted', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-aside-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const file = await writeStore(home, 'codex-a', [{ reason: 'store:set-aside', found: 'DatabaseError', file: COPY }]);
+      expect(storeOf(file)).toMatchObject({ state: 'set-aside', reason: 'store:set-aside', setAside: { found: 'DatabaseError', file: COPY } });
+      const copy = join(laneDir(home, 'codex-a'), COPY);
+      writeFileSync(copy, 'fixture\n', { mode: 0o600 });
+      const r = runDoctor(home);
+      expectOnce(r.stdout, SET_ASIDE('codex-a', 'DatabaseError', COPY), SET_ASIDE_FIX(laneDir(home, 'codex-a'), COPY));
+      noRunnerBugLine(r.stdout, 'codex');
+      rmSync(copy);
+      const again = runDoctor(home);
+      expect(again.stdout, again.stdout).not.toMatch(STORE_LINE);
+      expect(lineFor(again.stdout, 'codex') ?? '', again.stdout).toMatch(/^PASS codex: /);
+      noRunnerBugLine(again.stdout, 'codex');
+    });
+
+    // (g) A lane switched back to litellm keeps its stats file and the entry its last bridge wrote: no bridge runs
+    // there, so the entry is no row of that lane's. Lane b, direct, with the same entry, still warns.
+    it('a litellm lane has no store row', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-litellm-', ['codex-a', 'codex-b']);
+      plantDirectLane(home, 'codex-b');
+      for (const id of ['codex-a', 'codex-b']) await writeStore(home, id, [{ reason: 'store:DatabaseError' }]);
+      const r = runDoctor(home);
+      expectOnce(r.stdout, DISABLED('codex-b', 'store:DatabaseError', AT_ISO), DISABLED_FIX('codex-b'));
+      expect(r.stdout).not.toMatch(/codex-a: the bridge's reasoning store/);
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // (h) No `Stats` writes a value outside NAME_RE, so these files are planted by hand: every value outside it, and a
+    // copy name that is not a bare name of store.py's shape, prints `unrecognised`, and no byte of it reaches the
+    // output. A set-aside whose copy name is not of that shape has nothing to check, so it has no row.
+    it('every value the row prints is bounded, else unrecognised', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-bounded-', ['codex-a', 'codex-b']);
+      for (const id of ['codex-a', 'codex-b']) plantDirectLane(home, id);
+      const sentinels = ['fx-sentinel value with spaces', 'fx-sentinel\nWARN codex: forged line', `fx-sentinel-${'x'.repeat(64)}`,
+        '../fx-sentinel.damaged-20260101T000000Z'];
+      const base = { version: 1, since: AT_ISO, startedAt: AT_ISO, updatedAt: AT_ISO, routes: {}, refusals: {}, outcomes: {},
+        names: {}, unexplained: {}, usageHeaders: null, lastUpstreamRequestId: null };
+      plantStats(statsFile(home, 'codex-a'), JSON.stringify({ ...base, lane: 'codex-a', store: {
+        state: 'disabled', reason: sentinels[0], at: sentinels[1], setAside: { at: AT_ISO, found: sentinels[2], file: sentinels[3] } } }));
+      // The copy the sentinel names, planted where `..` would reach it: the row never checks a path from the file.
+      writeFileSync(join(laneDir(home, 'codex-b'), '..', 'fx-sentinel.damaged-20260101T000000Z'), 'fixture\n', { mode: 0o600 });
+      plantStats(statsFile(home, 'codex-b'), JSON.stringify({ ...base, lane: 'codex-b', store: {
+        state: 'set-aside', reason: 'store:set-aside', at: AT_ISO, setAside: { at: AT_ISO, found: 'integrity-check', file: sentinels[3] } } }));
+      const r = runDoctor(home);
+      expectOnce(r.stdout, DISABLED('codex-a', 'unrecognised', 'unrecognised', COPY_CLAUSE('unrecognised', 'unrecognised')), DISABLED_FIX('codex-a'));
+      expect(r.stdout).not.toContain('fx-sentinel');
+      expect(r.stdout).not.toMatch(/codex-b: at its start the bridge/);
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // Fix round 3, F4: `store:newer-version` names what wrote the store, and its remedy is that build, or a hand move.
+    it('a store a newer build wrote warns as disabled, and its remedy is that build, never a restart', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-newer-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      await writeStore(home, 'codex-a', [{ reason: 'store:newer-version' }]);
+      const r = runDoctor(home);
+      expectOnce(r.stdout, DISABLED('codex-a', 'store:newer-version', AT_ISO), NEWER_FIX('codex-a', laneDir(home, 'codex-a')));
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // Fix round 3, F2: the entry is per process, so a restart writes `ok` while the copy stays. The copy is found on
+    // disk, so its WARN lasts until it is deleted; with no entry naming it, the line is NEUTRAL and says no `found`.
+    it('a copy still in the lane directory after a restart warns, though the entry reads ok', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-restarted-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const file = await writeStore(home, 'codex-a', []);
+      expect(storeOf(file)).toEqual({ state: 'ok', reason: null, at: null, setAside: null });
+      const dir = laneDir(home, 'codex-a');
+      const older = 'reasoning.sqlite.damaged-20251231T235959Z';
+      for (const f of [older, COPY, `${COPY}-wal`, `${COPY}-shm`]) writeFileSync(join(dir, f), 'fixture\n', { mode: 0o600 });
+      const r = runDoctor(home);
+      // The newest copy by its stamp is the one named; its -wal and -shm are not copies of their own.
+      expectOnce(r.stdout, NEUTRAL('codex-a', COPY), NEUTRAL_FIX(dir, COPY));
+      noRunnerBugLine(r.stdout, 'codex');
+      for (const f of [older, COPY, `${COPY}-wal`, `${COPY}-shm`]) rmSync(join(dir, f));
+      const again = runDoctor(home);
+      expect(again.stdout, again.stdout).not.toMatch(STORE_LINE);
+      noRunnerBugLine(again.stdout, 'codex');
+    });
+
+    // Fix round 3, F2/F3: only the store's OWN copy shape counts — keyed on lane.json's `bridgeFiles.store`, a regular
+    // file, never a symlink: another file's copy, a short stamp, a suffix and a symlink are no copy, so no row.
+    it('a look-alike that is not the store\'s copy, or a symlink of its shape, has no store row', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-lookalike-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      await writeStore(home, 'codex-a', []);
+      const dir = laneDir(home, 'codex-a');
+      for (const f of ['bridge.stats.json.damaged-20260101T000000Z', 'other.sqlite.damaged-20260101T000000Z',
+        'reasoning.sqlite.damaged-2026010T000000Z', 'reasoning.sqlite.damaged-20260101T00000Z',
+        `${COPY}-x`, `${COPY}-wal`, `x${COPY}`]) {
+        writeFileSync(join(dir, f), 'fixture\n', { mode: 0o600 });
+      }
+      const target = join(home, 'elsewhere-copy');
+      writeFileSync(target, 'fixture\n', { mode: 0o600 });
+      symlinkSync(target, join(dir, COPY));
+      const r = runDoctor(home);
+      expect(r.stdout, r.stdout).not.toMatch(STORE_LINE);
+      expect(lineFor(r.stdout, 'codex') ?? '', r.stdout).toMatch(/^PASS codex: /);
+      noRunnerBugLine(r.stdout, 'codex');
+    });
+
+    // Fix round 3, F3: the copy's name shape, end to end. A REAL copy, made by the store's own set-aside at a start
+    // (store.py's DAMAGED_STAMP), is named by the doctor's WARN and removed by the lane's reap, so a change of that
+    // stamp that the doctor and `_codex_reap_files` do not follow reds this case.
+    it('a copy the store itself set aside is named by the WARN and reaped with the lane', async () => {
+      const home = await healthyCodexBox('ccrc-doctor-codex-store-real-', ['codex-a']);
+      plantDirectLane(home, 'codex-a');
+      const dir = laneDir(home, 'codex-a');
+      const store = join(dir, (JSON.parse(readFileSync(join(dir, 'lane.json'), 'utf8')) as
+        { bridgeFiles: Record<string, string> }).bridgeFiles['store']);
+      const ops = [
+        { op: 'store-damage', path: store, how: 'not-a-database' },
+        { op: 'stats-open', path: statsFile(home, 'codex-a'), lane: 'codex-a' },
+        { op: 'store-open', path: store, stats: true },
+        { op: 'stats-call', method: 'flush', kwargs: { force: true } },
+      ];
+      const run = await runBridgeDriver(home, { ops });
+      expect(run.timedOut, run.stderr).toBe(false);
+      const lines = driverLines(run.stdout);
+      expect(lines.map((l) => l['op']), `${run.stdout}\n${run.stderr}`).toEqual(ops.map((o) => o.op));
+      expect(lines[2]['disabled'], JSON.stringify(lines[2])).toBeNull();
+      const copies = readdirSync(dir).filter((n) => n.startsWith(`${store.slice(dir.length + 1)}.damaged-`));
+      expect(copies).toHaveLength(1);
+      const copy = copies[0]!;
+      const found = (lines[0]['probe'] as { raised: string }).raised;
+      const r = runDoctor(home);
+      expectOnce(r.stdout, SET_ASIDE('codex-a', found, copy), SET_ASIDE_FIX(dir, copy));
+      noRunnerBugLine(r.stdout, 'codex');
+      // The reap removes with `rm` and `rmdir`, which the doctor's contained PATH holds only when linked in.
+      for (const bin of ['rm', 'rmdir']) linkReal(home, bin);
+      const reap = spawnSync(BASH, ['-c', `. ${JSON.stringify(join(home, 'ccrc', 'ccd', 'ccrc'))}; _codex_reap_files codex-a; echo "rc=$?"`],
+        { env: doctorEnv(home), encoding: 'utf8' });
+      expect(reap.stdout, reap.stderr).toBe('rc=0\n');
+      expect(existsSync(join(dir, copy))).toBe(false);
+      expect(existsSync(dir), existsSync(dir) ? readdirSync(dir).join(' ') : '').toBe(false);
+    });
   });
 });
 

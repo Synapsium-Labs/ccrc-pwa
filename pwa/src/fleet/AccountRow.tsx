@@ -68,10 +68,13 @@ function Gauge({ label, value, rolledOver, off = false }: {
  *  both are fed from the same source (`useAccountUsage`) for the same reason.
  *
  *  A lane the health probe CONDEMNED is rendered here rather than removed
- *  upstream, and it says so in `AccountsScreen`'s own words ("sign-in expired
- *  on the fleet host") through `AccountsScreen`'s own `data-disabled`
- *  attribute — the second vocabulary this file is careful not to invent, for
- *  the same reason `Gauge` shares `windowReading`. The row stays TAPPABLE:
+ *  upstream, and it says so in the lanes strip's words ("sign-in expired on
+ *  the fleet host", `SIGN_IN_EXPIRED`) through `AccountsScreen`'s own
+ *  `data-disabled` attribute — the second vocabulary this file is careful not
+ *  to invent, for the same reason `Gauge` shares `windowReading`. The Accounts
+ *  screen itself now draws its one state word (Signed out, accounts plan Task
+ *  A2, D-7718); a picker row is a choice of target, not that card, so it keeps
+ *  the strip's sentence and no lamp. The row stays TAPPABLE:
  *  a measurement can be wrong, and the manual swap it feeds accepts the target
  *  regardless (see `disabledWrappers`), so removing the affordance would only
  *  hide the one destination a bad probe run left. `condemned` is the single

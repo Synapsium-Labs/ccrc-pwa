@@ -59,8 +59,10 @@ export interface AccountGateAsk {
   stepUp?: boolean;
 }
 
-/** `pass: false` means the gate has answered the request and the handler stops. */
-export type AccountGateAnswer = { pass: true; actor: AccountActor } | { pass: false };
+/** `pass: false` means the gate has answered the request and the handler stops. A pass carries the session's whole
+ *  `idHash` beside the actor, for the one route family that binds an act to the session that started it (the sign-in's
+ *  attempt, spec §3.7; accounts plan Task A21). It is a hash of the cookie the gate verified, never the cookie. */
+export type AccountGateAnswer = { pass: true; actor: AccountActor; sessionIdHash: string } | { pass: false };
 
 export type AccountGate = (req: FastifyRequest, reply: FastifyReply, ask: AccountGateAsk) => AccountGateAnswer;
 
@@ -104,6 +106,7 @@ export function createAccountGate(deps: AccountGateDeps): AccountGate {
       return { pass: false };
     }
     if (ask.stepUp === true && deps.stepUp.requireRecentAssertion()(req, reply)) return { pass: false };
-    return { pass: true, actor: actorOf(decision.device, sessionIdHash(token)) };
+    const idHash = sessionIdHash(token);
+    return { pass: true, actor: actorOf(decision.device, idHash), sessionIdHash: idHash };
   };
 }

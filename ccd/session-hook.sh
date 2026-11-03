@@ -422,17 +422,17 @@ _hook_graph_card() {
     # its census carries one — a session that knows the tree was REFUSED does
     # not go hunting for a graph that is never going to appear. The census is
     # `{passes:[…]}`, last 10, newest LAST.
-    # A pass holding `repos[]` (graph revision 2 spec §7, D-7351) is read by the
+    # The pass's `repos[]` (graph revision 2 spec §7, D-7351) is read by the
     # repository: the row whose `source` is the realpath of this tree's common
-    # dir, so every worktree and the main checkout share it. A pass of the old
-    # shape, which the sweep writes until its rewrite (GR4), is still read by
-    # path, so a tree the old sweep refused keeps its reason meanwhile.
+    # dir, so every worktree and the main checkout share it. A last pass with
+    # no `repos[]` (one the sweep stopped before any repository, or none at
+    # all) says nothing about this tree, so it gives no line (GR7, D-7353: the
+    # per-tree arm kept for the sweep's rewrite is retired with it, GR4 being live).
     gcd=$(git -C "$GM_CWD" rev-parse --git-common-dir 2>/dev/null) || gcd=""
     [ -z "$gcd" ] || src=$(cd -- "$GM_CWD" >/dev/null 2>&1 && cd -- "$gcd" >/dev/null 2>&1 && pwd -P) || src=""
-    row=$(jq -r --arg p "$GM_CWD" --arg s "$src" \
+    row=$(jq -r --arg s "$src" \
       '(.passes // []) | last | (. // {})
-       | if has("repos") then [(.repos // [])[] | select($s != "" and .source == $s)]
-         else (.trees // []) | map(select(.path == $p)) end
+       | [(.repos // [])[] | select($s != "" and .source == $s)]
        | map(select((.reason // "") != ""))
        | if length == 0 then empty else (.[0].outcome + ": " + .[0].reason) end' \
       "$HOME/.ccrc/graph-sweep.json" 2>/dev/null) || row=""
@@ -3737,9 +3737,9 @@ fi
 # PRUNE: the first write of an hour (the bucket did not exist) removes this owner's regular `<10 digits>.spool` files older than the
 # cutoff hour (24 hours before now) from THIS directory and nothing else, by exact names it listed from it. That is at most once an
 # hour per owner without any state to keep; two first writers racing both prune, harmlessly. It is the one fork on this path (one
-# `rm`, and only when a stale bucket exists). THE HOOK PRUNES ONLY A LIVE OWNER, FROM ITS OWN WRITE: a removed owner, or one whose
-# session never runs again, keeps its last 24 to 25 hourly buckets for good, because nothing in wave 3 removes them (no ccd purge,
-# no server delete); the plan's "hooks retain only their own 24-hour buckets" holds for an owner that keeps writing.
+# `rm`, and only when a stale bucket exists). THE HOOK PRUNES ONLY A LIVE OWNER, FROM ITS OWN WRITE: a removed owner's last 24 to 25
+# hourly buckets and its directory stand until a later spawn of any session removes them, once its registry row is gone and every
+# bucket is past its day (ccd's `_delegation_spool_prune_absent`, which states the rule); the server never deletes them.
 #
 # SessionStart `compact` is recorded here, before the hook's one early exit below (it used to exit in its arm; `sessend` carries it).
 DSP_LIST_NAMES=256 DSP_NAME_BYTES=64
@@ -4896,7 +4896,8 @@ fi
 # (`ccrc account <ACCTV>` in `fmatch` and, for a `$VAR` program naming `ccrc`, `xmatch`; `ccd account-pane`; the
 # `ccd-account-auth` program, never a file merely named like it), read as written and as bash runs it (`norm`), and
 # `apmatch`: a Bash call naming a secret or scratch path (`~/.cc-secrets`, `~/.ccrc/auth-scratch`,
-# `~/.ccrc/codex/<x>/runtime.env`, `~/.ccrc/agent.env`), a write under `~/.cc-sessions/.auth` or `.accounts`, and a
+# `~/.ccrc/codex/<x>/runtime.env`, `~/.ccrc/agent.env`, D-7675's Linear slot store `~/.ccrc/linear/` and legacy key
+# `~/.ccrc/linear.key`), a write under `~/.cc-sessions/.auth` or `.accounts`, and a
 # bare `env` or `printenv` (alone, `-0` or `--null`; never with an operand, so `env FOO=1 ccd swap-self …` and
 # `printenv TMUX` pass); and `acctpath` for Read, Grep, Glob and the edit tools. A child's `deny` mode answers the same
 # category beside its own. `class` mode gains only the verb rows (the classifier's `FORBIDDEN_PATTERNS` hold the same).
@@ -5046,7 +5047,7 @@ def pnorm: (if startswith("~/") then ($ENV.HOME // "~") + .[1:] else . end)
   | if startswith("/") then "/" + (split("/") | reduce .[] as $s ([]; if $s == "" or $s == "." then .
       elif $s == ".." then .[:-1] else . + [$s] end) | join("/")) else . end;
 def edittool: . == "Write" or . == "Edit" or . == "MultiEdit" or . == "NotebookEdit";
-def ASEC: "(?:" + DANC + "\\.cc-secrets(?![A-Za-z0-9_.-])|" + DANC + "\\.ccrc" + SEPP + "(?:auth-scratch(?![A-Za-z0-9_.-])|agent\\.env(?![A-Za-z0-9_.-])|codex" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "runtime\\.env(?![A-Za-z0-9_.-])))";
+def ASEC: "(?:" + DANC + "\\.cc-secrets(?![A-Za-z0-9_.-])|" + DANC + "\\.ccrc" + SEPP + "(?:auth-scratch(?![A-Za-z0-9_.-])|agent\\.env(?![A-Za-z0-9_.-])|linear(?:\\.key)?(?![A-Za-z0-9_.-])|codex" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "runtime\\.env(?![A-Za-z0-9_.-])))";
 def AWD: DANC + "\\.cc-sessions" + SEPP + "\\.(?:auth|accounts)(?![A-Za-z0-9_.-])";
 def ENVP: "(?:[(`{]|\\$\\()";
 def ENVB: "^" + SP + "*(?:" + ENVP + SP + "*){0,4}(?:[A-Za-z_][A-Za-z0-9_]{0,63}=" + NS + "*" + SP + "+){0,8}(?:exec" + SP + "+)?(?:" + NS + "*/)?(?:env|printenv)(?:" + SP + "+(?:-0|--null))*" + SP + "*[)`}]{0,4}" + SP + "*$";
@@ -5056,7 +5057,7 @@ def apmatch:
   (select(test(ASEC)) | "account\ta secret or scratch path of a fleet account"),
   (select(test(AWD) and (hbt(SEG; BWR; AWD) or findw(AWD) or xargsw(AWD))) | "account\ta write under the account state directories"),
   (select(test("env") and (test(ENVS) or any(split(SEG; null)[]; test(ENVB) or (test(BSHC) and (sub(BSHC; "") | test(ENVB)))))) | "account\tprinting the whole environment");
-def APSEC: "/\\.cc-secrets(?:/|$)|/\\.ccrc/auth-scratch(?:/|$)|/\\.ccrc/codex/[^/]+/runtime\\.env$|/\\.ccrc/agent\\.env$";
+def APSEC: "/\\.cc-secrets(?:/|$)|/\\.ccrc/auth-scratch(?:/|$)|/\\.ccrc/codex/[^/]+/runtime\\.env$|/\\.ccrc/agent\\.env$|/\\.ccrc/linear(?:/|$)|/\\.ccrc/linear\\.key$";
 def APWD: "/\\.cc-sessions/\\.(?:auth|accounts)(?:/|$)";
 def acctpath($t; $i):
   if ($t | edittool) then first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(APSEC) or test(APWD)) | "account\ta write to an account path")
@@ -5108,7 +5109,8 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]
     # THE ACCOUNT ARM ON EVERY OTHER SESSION (D-6202): the account verbs, paths and bare `env`/`printenv` only.
     amode=account
     [[ "$apf" == *account* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
-       || "$apf" == *runtime.env* || "$apf" == *.auth* || "$apf" == *printenv* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+       || "$apf" == *runtime.env* || "$apf" == *.auth* || "$apf" == *.ccrc*linear* || "$apf" == *printenv* \
+       || "$apf" =~ $APF_ENV_RE ]] || apf=""
   fi
 fi
 # The deny file is read once here, by a bounded builtin read, and its text passed as `--arg deny` (D-6066). Read by jq's
@@ -5869,7 +5871,10 @@ if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi
 # A REGULAR FILE OR NOTHING, as the spool block's append (its D-4418 rule;
 # spec §5.1): the line DIRECTLY above the write
 # refuses a symlink, dangling or not, a FIFO and any other node, so a FIFO that
-# stands at scope/<id> when the test runs never blocks the `>` open. The tests
+# stands at scope/<id> when the test runs never blocks the `>` open. It names
+# each refused type POSITIVELY, as `_hook_join_record`'s entry guard (D-5434):
+# "absent or regular" is two reads, and a marker created or removed between
+# them made that form refuse a plain write. The tests
 # are builtin, here and on the early line below the event `case`, and bash has
 # no O_NOFOLLOW or O_NONBLOCK redirection, so what is left is a node swapped in
 # AFTER the test: it is opened, a link followed, a FIFO blocking until Claude
@@ -5893,7 +5898,7 @@ _hook_history_scope() {   # -> scope/<id> = "<scope> <psid> <ms>" when decided; 
   scope="${CS_SCOPE-}"
   [[ -n "$scope" ]] || return 0
   ms=$(_hook_epoch_ms)
-  [[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0
+  if [[ -L "$f" || -d "$f" || -p "$f" || -S "$f" || -b "$f" || -c "$f" ]]; then return 0; fi
   { printf '%s %s %s\n' "$scope" "$psid" "$ms" > "$f"; } 2>/dev/null
   return 0
 }

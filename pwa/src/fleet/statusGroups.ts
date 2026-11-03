@@ -154,7 +154,8 @@ export interface StatusBox {
 export interface StatusViewGroup {
   readonly id: StatusGroupId;
   readonly label: string;
-  /** In `boxOrder`, the tree's card order within a rank. */
+  /** In `boxOrder`: by rank, then the longest quiet first among boxes whose move is known; a box with an unknown move keeps
+   *  the tree's card order within its rank. */
   readonly boxes: readonly StatusBox[];
   /** The rows in no programme, in `sortFleet`'s order. */
   readonly sessions: readonly FleetSession[];
@@ -186,8 +187,10 @@ const rowSession = (r: FleetRow): FleetSession | null => (r.kind === 'session' ?
 /** The Status view's groups, every one in the fixed order, an empty one kept with a count of 0 (the view decides
  *  whether to show it). `tree` is the fleet's cards (`fleetTree`). A box's move is its runs' (`runLastMove`) and its state
  *  is `boxState`'s over `clock`, as on its project card (Task G1c, D-7380), so Programmes runs stalled first, then moving
- *  and paused in the tree's card order, the longest quiet first; with no `clock` no box stalls or pauses. `selectedId` is the session the operator has open: a member keeps its
- *  place in its box's tray while open, by `foldChildren`'s own rule (G3's Step 0 ruling), and makes the box need nothing.
+ *  and paused, and within a rank the longest quiet first among boxes whose move is known (`boxOrder`; a box with an unknown
+ *  move keeps the tree's card order within its rank), as Needs you does its boxes; with no `clock` no box stalls or pauses. `selectedId` is the session the operator
+ *  has open: a member keeps its place in its box's tray while open, by `foldChildren`'s own rule (G3's Step 0 ruling), and
+ *  makes the box need nothing.
  *  `coordOf` and `frameSeen` are what the orphan marker reads (`orphanNote`): a coordinator they measure dead keeps none
  *  of its workers. */
 export function statusView(

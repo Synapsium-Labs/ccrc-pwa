@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   BASH, CCRC_SRC, HAVE_FLOCK, NODE_ID, boxEnv, ccrcIn, laneBox, laneState, laneStateDir, laneStatePath, modeOf,
 } from './laneStateFixture.js';
@@ -67,6 +68,29 @@ describe('the backfill (G35)', () => {
     expect(r.out).toBe('install: lane-state: wrote 0, kept 0, 2 not written\n');
     expect(r.err).toContain("lane claude's state file");
     expect(r.err).toContain("lane lane-b's state file");
+  });
+
+  // THE SEED FOR LANES THAT MISS IT (accounts plan Task A13; G1, D-7731): the same spine step seeds every lane whose
+  // `.claude.json` exists without `hasCompletedOnboarding`, and leaves a lane already seeded byte for byte.
+  it('`ccrc update` seeds a lane whose `.claude.json` lacks the onboarding flag, and leaves a seeded lane\'s file byte-identical', () => {
+    const home = laneBox('ccrc-lane-backfill-seed-');
+    writeFileSync(join(home, '.claude.json'), '{"numStartups":3}\n', { mode: 0o600 });
+    mkdirSync(join(home, '.claude-lane-b'), { recursive: true });
+    const seeded = '{ "hasCompletedOnboarding": true,   "theme": "light" }\n';
+    writeFileSync(join(home, '.claude-lane-b', '.claude.json'), seeded, { mode: 0o600 });
+
+    const r = backfill(home);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toBe('install: lane-state: wrote 2, kept 0\ninstall: lane-seed: seeded 1\n');
+    expect(JSON.parse(readFileSync(join(home, '.claude.json'), 'utf8')))
+      .toEqual({ numStartups: 3, hasCompletedOnboarding: true, theme: 'dark' });
+    expect(readFileSync(join(home, '.claude-lane-b', '.claude.json'), 'utf8')).toBe(seeded);
+    expect(typeof laneState(home, 'claude')!['seedVerifiedAt']).toBe('string');
+    expect(laneState(home, 'claude')).not.toHaveProperty('check');
+    expect(laneState(home, 'lane-b')).not.toHaveProperty('seedVerifiedAt');
+
+    // A second run seeds nothing and says nothing more.
+    expect(backfill(home).out).toBe('install: lane-state: wrote 0, kept 2\n');
   });
 
   it('runs in the install spine `ccrc update` runs, after the wrappers and before the completed-install record', () => {

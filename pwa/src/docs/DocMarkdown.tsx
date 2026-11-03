@@ -18,11 +18,13 @@
 // `doc-plain`, `doc-plain-note`, `doc-plain-action`.
 import { useMemo, useState, type ReactNode } from 'react';
 import type { Components } from 'react-markdown';
-import type { Element as HastElement, Root as HastRoot } from 'hast';
+import type { Root as HastRoot } from 'hast';
 import { PROSE, cn } from '@ccrc/ui';
 import type { DocsShowOk } from '../../../shared/docs';
 import { RenderBoundary } from '../components/RenderBoundary';
 import { PreHighlightContext, SHARED_COMPONENTS } from '../lib/markdown';
+import { useDocsHighlightStore } from '../lib/highlighterContext';
+import { codeBlocksOf } from '../lib/highlightStore';
 import { utf8ByteLength } from '../lib/markdownGuard';
 import {
   CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, DOCS_PARSE_BUDGET_LARGE_MS, DOCS_PARSE_BUDGET_MS,
@@ -143,15 +145,21 @@ export interface DocMarkdownProps {
 }
 
 /** A parsed tree on the page: detached ONCE per tree (the memo is keyed by the tree object), then rendered with
- *  `DOC_COMPONENTS` and no url transform, under the page's link context and highlight budget. Lives inside the
- *  doc-body boundary, so a throw from `renderHast` or from any component it draws is the boundary's. */
+ *  `DOC_COMPONENTS` and no url transform, under the page's link context and highlight store. Lives inside the
+ *  doc-body boundary, so a throw from `renderHast` or from any component it draws is the boundary's. The page's
+ *  highlight store (section 4.10 "The store") is made here, so it lives with the tree: one per settled tree, seeded
+ *  at once with the tree's code blocks in document order (so `settled()` is false from the first commit while any is
+ *  unanswered), published for the leaf's actions (Export) and released when the tree goes. A body that fell back to
+ *  plain text never mounts it, so it publishes no store that would never settle. */
 function DocTree(p: { readonly tree: HastRoot; readonly link: Omit<DocLinkContextValue, 'urls'> }): ReactNode {
   const detached = useMemo(() => detachUrls(p.tree), [p.tree]);
+  // Seeded from the tree that RENDERS (no url transform runs on Docs, so the `pre` element a block receives as `node` is
+  // the very object seeded as its `at`): the page's ceilings answer for each drawn copy (review 1364 F1).
+  const store = useDocsHighlightStore(useMemo(() => codeBlocksOf(detached.tree), [detached]));
   const ctx = useMemo<DocLinkContextValue>(() => ({ ...p.link, urls: detached.urls }), [p.link, detached]);
-  const budget = useMemo(() => (pre: HastElement): boolean => detached.urls.get(pre)?.highlight !== false, [detached]);
   return (
     <DocLinkContext value={ctx}>
-      <PreHighlightContext value={budget}>
+      <PreHighlightContext value={store}>
         {/* `PROSE` is @ccrc/ui's prose hook class (`msg-assist`, whose rules live in its prose.css), named through the
             export rather than spelled: main's design-system boundary refuses a hand-written owned class. An <article>,
             not `Prose`'s <div>, so the document keeps its landmark; the rendered classes are unchanged. */}
@@ -172,8 +180,8 @@ function DocParse(p: DocMarkdownProps & {
     () => (outcome?.kind === 'worker-unavailable' && p.bytes <= CHAT_SYNC_MAX_BYTES ? parseMarkdown(p.text, 'docs') : null),
     [outcome, p.text, p.bytes],
   );
-  if (pending || outcome === null) return <p className="doc-formatting">{DOC_FORMATTING}</p>;
-  const shown = inThread ?? outcome;
+  const shown = pending || outcome === null ? null : inThread ?? outcome;
+  if (shown === null) return <p className="doc-formatting">{DOC_FORMATTING}</p>;
   if (shown.kind === 'tree') {
     return (
       <RenderBoundary where="doc body" resetKey={p.pinKey} fallback={() => <DocPlain text={p.text} note={DOC_BODY_FALLBACK_NOTE} />}>

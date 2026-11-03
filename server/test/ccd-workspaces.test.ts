@@ -462,6 +462,20 @@ describe('ws-add', () => {
     expect(() => h.git(wt, 'check-ignore', '-q', 'graphify-out')).not.toThrow();
   });
 
+  // Graph revision 2 (D-7350, spec §6.1): a tree's graphify-out becomes a LINK to its repository's shared graph, and
+  // the slash-only line above does not ignore a symlink (`git status` lists it, `git worktree remove` refuses the
+  // tree). ws-add writes the no-slash line too, once.
+  it('ws-add excludes graphify-out with no slash, so a graphify-out LINK is ignored', () => {
+    const main = makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    const lines = excludeOf(main).split('\n');
+    expect(lines.filter((l) => l === 'graphify-out')).toHaveLength(1);
+    const wt = path.join(home, 'worktrees', 'demo', 'quiet-mesa');
+    fs.symlinkSync(path.join(home, 'graph-store-current'), path.join(wt, 'graphify-out'));
+    expect(() => h.git(wt, 'check-ignore', '-q', 'graphify-out')).not.toThrow();
+    expect(h.git(wt, 'status', '--porcelain')).toBe('');
+  });
+
   // Measured live on the fleet: a workspace whose `node_modules` is a SYMLINK
   // to a shared cache (an operator's way to skip a fresh `npm install` per
   // workspace) left `ws-rm` permanently refusing with `dirty-tree`, because a

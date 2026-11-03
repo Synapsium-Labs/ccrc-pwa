@@ -1,9 +1,10 @@
 [Unit]
-Description=Per-tree AST graph refresh sweep (graphify, spec 2026-08-27)
+Description=Repository graph refresh sweep: one graph per repository, built in the store (graphify, graph revision 2)
 [Service]
 Type=oneshot
 ExecStart=%h/.local/bin/ccd-graph-sweep
-# budget 8 x 600s builds + probe overhead; a pass past this is wedged, not slow
+# Rendered by ccrc install/update and deploy.sh agent as CCRC_GRAPH_BUDGET x (CCRC_GRAPH_SLOT_WAIT_SECS +
+# CCRC_GRAPH_BUILD_TIMEOUT) + 600 (D-7354); this is the default, 4 x (600 + 600) + 600. A pass past it is wedged, not slow.
 TimeoutStartSec=5400
 # 6G, raised from 4G (2026-10-05). The sweep builds one tree at a time. On
 # the reference fleet a ~52k-node tree's rebuild peaked at 2.6G and 3.3G when

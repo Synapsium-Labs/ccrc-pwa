@@ -121,6 +121,10 @@ export interface OpenedApp {
   settleApi(capMs: number): Promise<void>;
   /** Stop parking and answer whatever is parked. Waits for nothing, so a failed attempt's cleanup cannot hang. */
   releaseApi(): void;
+  /** Take the network away, as a dropped link does: from now on every `/api` request fails as a disconnected one
+   *  (`internetdisconnected`) and every socket closes, the ones already open now and each new one as it opens. The
+   *  page itself was already served, so the app stays up on what it holds: an offline cell's shape. Test code only. */
+  cut(): void;
 }
 
 /** One entry of `OpenedApp.events`. `fulfil-start` is logged when a request's answer is due (it then counts as in
@@ -158,9 +162,12 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
   // `null` until `holdApi`: then each request waits here for its turn (a flush or the release).
   let parked: { readonly turn: () => void; readonly started: Promise<void> }[] | null = null;
   const settled = new Set<() => void>();
+  // `cut()`'s switch: once set, nothing answers again for this context.
+  let offline = false;
   await ctx.route('**/api/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     log({ kind: 'intercept', path: pathname });
+    if (offline) { await route.abort('internetdisconnected'); return; }
     const body = Object.hasOwn(fixture.api, pathname) ? fixture.api[pathname] : {};
     let begun = (): void => undefined;
     if (parked !== null) {
@@ -185,6 +192,7 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
   const sockets = new Map<string, WebSocketRoute[]>();
   await ctx.routeWebSocket(/\/ws\//, (ws) => {
     const pathname = new URL(ws.url()).pathname;
+    if (offline) { void ws.close(); return; }
     sockets.set(pathname, [...(sockets.get(pathname) ?? []), ws]);
     ws.onClose(() => { sockets.set(pathname, (sockets.get(pathname) ?? []).filter((x) => x !== ws)); });
     const frames = pathname === '/ws/fleet' ? fixture.fleetFrames : (fixture.socketFrames?.[pathname] ?? []);
@@ -228,6 +236,10 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
         settled.add(check);
         check();
       });
+    },
+    cut: () => {
+      offline = true;
+      for (const open of sockets.values()) for (const ws of open) void ws.close();
     },
     releaseApi: () => {
       const due = parked ?? [];

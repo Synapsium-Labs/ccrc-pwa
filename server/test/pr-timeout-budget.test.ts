@@ -119,6 +119,43 @@ describe('pr-state fits inside the bound that kills it', () => {
   });
 });
 
+describe('pr-state --project <p> --pr <n> fits inside the bound that kills it (landing order wave 5c)', () => {
+  const CALLS = ['PR_GH_VIEW_TIMEOUT', 'PR_STATE_TRAIN_TIMEOUT'] as const;
+  const helper = (): string => {
+    const src = ccdSource();
+    const start = src.indexOf('\n_pr_state_by_pr()');
+    expect(start, '_pr_state_by_pr moved').toBeGreaterThan(0);
+    return src.slice(start, src.indexOf('\n}\n', start));
+  };
+
+  it('the one view call plus the train budget leave the reserve', () => {
+    const secs = CALLS.map((c) => ccdSeconds(c));
+    secs.forEach((s, i) => expect(s, `${CALLS[i]} read as zero`).toBeGreaterThan(0));
+    const sum = secs.reduce((a, b) => a + b, 0);
+    expect(sum).toBeLessThanOrEqual((verbTimeoutMs('pr-state') / 1000) * (1 - LOCAL_LOOP_RESERVE));
+  });
+
+  it('one bounded gh call, and the train deadline set once from PR_STATE_TRAIN_TIMEOUT', () => {
+    const body = helper();
+    expect([...body.matchAll(/_plat_timeout "\$PR_GH_VIEW_TIMEOUT" gh pr view /g)].length).toBe(1);
+    expect([...body.matchAll(/_plat_timeout [^\n]* gh /g)].length, 'a gh call this pin does not count').toBe(1);
+    expect(body).toContain('local _PR_TRAIN_DEADLINE=$(( SECONDS + PR_STATE_TRAIN_TIMEOUT ))');
+    expect(body).toContain('_ws_train_record "$main" "$repo" "$n" "$h" "$b" 1');
+  });
+
+  it('the pr-state header names the form in its gh-call budget', () => {
+    const src = ccdSource();
+    const start = src.indexOf('\ncmd_pr_state()');
+    const header = src.slice(start, src.indexOf('[[ $# -eq 4 && $1 == --project && $3 == --pr ]]', start));
+    expect(header).toContain('and one for `--project <p> --pr <n>`');
+    expect(header).toContain('PR_GH_VIEW_TIMEOUT');
+  });
+
+  it('the view call alone is under the bound', () => {
+    expect(ccdSeconds('PR_GH_VIEW_TIMEOUT')).toBeLessThan(verbTimeoutMs('pr-state') / 1000);
+  });
+});
+
 describe('pr-landing fits inside the bound that kills it (D-6784)', () => {
   // `cmd_pr_landing` makes one GraphQL call and, at most, two REST reads (the base's rules and its protection) for
   // ONE uncached base: the loop over bases spends a single REST budget, and `ccd-pr-landing.test.ts` pins the cap with

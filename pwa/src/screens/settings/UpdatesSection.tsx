@@ -33,6 +33,7 @@ import {
 import { bannerRelease } from '../../fleet/releaseWaiting';
 import { WhatsNewSheet, whatsNewReleases } from '../../fleet/WhatsNewSheet';
 import { haltingNodes, updateAllHaltedText } from '../../fleet/updateHalt';
+import { AUTO_LABELS, CHANNEL_SENTENCES } from './updatesWords';
 import '../../fleet/fleet.css';
 
 // ── The Updates section (spec §13; programme wave 3 Task 7) ──────────────────
@@ -58,24 +59,10 @@ import '../../fleet/fleet.css';
 // the platform supplies the group's role, its name (the legend), arrow-key
 // movement and the checked state.
 
-/** The channel labels (settings spec §11.2: the old "Stable — releases promoted after they've baked" became the label
- *  "Stable" with its note), one radio row each. The name stays for its importers. */
-export const CHANNEL_SENTENCES: Record<UpdateChannel, string> = {
-  stable: 'Stable',
-  dev: 'Dev',
-};
-
 /** Each channel's note, under its option (spec §5.1). */
 export const CHANNEL_NOTES: Record<UpdateChannel, string> = {
   stable: 'Releases promoted only after they have baked.',
   dev: 'Every merge that changes the build, minutes after it lands.',
-};
-
-/** The auto-install choices (`AutoMode`, W2) in spec §11.2's words. The wire's values do not change. */
-export const AUTO_LABELS: Record<AutoMode, string> = {
-  off: 'Off',
-  stable: 'On the Stable channel only',
-  channel: 'On any channel',
 };
 
 /** Each auto-install choice's note, under its option (spec §5.1). */

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import type { HookStateRawRead } from './hookstate.js';
-import type { CoordStatus, Dialog, Divergence, FleetSession, RunSummary, SessionStreamMsg, ProjectPoolsWire } from '../../shared/api.js';
+import type { CoordStatus, DelegationProjectionWire, Dialog, Divergence, FleetSession, RunSummary, SessionStreamMsg, ProjectPoolsWire } from '../../shared/api.js';
 
 export interface Notice { message: string }
 
@@ -28,7 +28,8 @@ export interface HookReading { readonly at: number; readonly uuid: string; reado
  * Events: 'fleet' (FleetSession[]), 'notice' ({message}), 'runs' (RunSummary[],
  * Build 7 — see `FleetWatcher.emitRuns`), 'coord' (CoordStatus, Build 4 — see
  * `FleetWatcher.emitCoord`), 'session:<id>' (SessionStreamMsg), 'answered:<id>' (Dialog | null),
- * 'pane:<id>' / 'hook:<id>' (the watcher's per-tick readings, for a session's feed).
+ * 'pane:<id>' / 'hook:<id>' (the watcher's per-tick readings, for a session's feed), 'waiting' (no payload: the
+ * programme ledgers changed, PL3; the live frame's listener re-reads the list, PL4).
  */
 export class Bus extends EventEmitter {
   constructor() {
@@ -52,6 +53,10 @@ export class Bus extends EventEmitter {
   override emit(event: 'coord', coord: CoordStatus): boolean;
   override emit(event: 'divergence', divergences: Divergence[]): boolean;
   override emit(event: 'pools', pools: ProjectPoolsWire): boolean;
+  /** Wave 4 (delegation broker): `null` WITHDRAWS the frame (the lane can no longer project). */
+  override emit(event: 'delegation', delegation: DelegationProjectionWire | null): boolean;
+  /** Programme ledgers (PL3): an item, the spec pin or a modification was written. No payload; a listener re-reads. */
+  override emit(event: 'waiting'): boolean;
   override emit(event: SessionEventName, msg: SessionStreamMsg): boolean;
   override emit(event: AnsweredEventName, next: Dialog | null): boolean;
   override emit(event: PaneEventName, reading: PaneReading): boolean;
@@ -66,6 +71,8 @@ export class Bus extends EventEmitter {
   override on(event: 'coord', listener: (coord: CoordStatus) => void): this;
   override on(event: 'divergence', listener: (divergences: Divergence[]) => void): this;
   override on(event: 'pools', listener: (pools: ProjectPoolsWire) => void): this;
+  override on(event: 'delegation', listener: (delegation: DelegationProjectionWire | null) => void): this;
+  override on(event: 'waiting', listener: () => void): this;
   override on(event: SessionEventName, listener: (msg: SessionStreamMsg) => void): this;
   override on(event: AnsweredEventName, listener: (next: Dialog | null) => void): this;
   override on(event: PaneEventName, listener: (reading: PaneReading) => void): this;
@@ -80,6 +87,8 @@ export class Bus extends EventEmitter {
   override off(event: 'coord', listener: (coord: CoordStatus) => void): this;
   override off(event: 'divergence', listener: (divergences: Divergence[]) => void): this;
   override off(event: 'pools', listener: (pools: ProjectPoolsWire) => void): this;
+  override off(event: 'delegation', listener: (delegation: DelegationProjectionWire | null) => void): this;
+  override off(event: 'waiting', listener: () => void): this;
   override off(event: SessionEventName, listener: (msg: SessionStreamMsg) => void): this;
   override off(event: AnsweredEventName, listener: (next: Dialog | null) => void): this;
   override off(event: PaneEventName, listener: (reading: PaneReading) => void): this;

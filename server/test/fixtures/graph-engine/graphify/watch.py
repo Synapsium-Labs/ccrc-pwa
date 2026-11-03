@@ -18,9 +18,17 @@
 #                            True) | raise (raise an exception)
 #   GRAPH_STUB_ALLOC_MB      the forked worker allocates and touches this many MiB before it exits
 #   GRAPH_STUB_EXTRA_SOURCES a JSON list of extra source_file values, one node each (the saved-result rows)
+# and, for the sweep's rows (server/test/graph-repo-sweep.test.ts, D-7350):
+#   GRAPH_STUB_MODE          also sigkill (the process kills itself with SIGKILL after its worker ran), nostamp
+#                            (write graph.json without built_at_commit), garbage (write a graph.json that does not
+#                            parse, its stamp intact)
+#   GRAPH_STUB_STAMP         the built_at_commit to write instead of `git rev-parse HEAD`
+#   GRAPH_STUB_SLEEP_S       sleep this many seconds after the worker, before writing (a wedged build)
 import json
 import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 from graphify import _record
@@ -69,7 +77,11 @@ def _impl(watch_path, changed_paths, follow_symlinks, force, no_cluster, acquire
                 f.write(''.join(str(p) + '\n' for p in changed_paths))
     rec['worker_pid'] = _worker()
     _record.append(rec)
+    if os.environ.get('GRAPH_STUB_SLEEP_S'):
+        time.sleep(float(os.environ['GRAPH_STUB_SLEEP_S']))
     mode = os.environ.get('GRAPH_STUB_MODE', '')
+    if mode == 'sigkill':
+        os.kill(os.getpid(), signal.SIGKILL)
     if mode == 'raise':
         raise RuntimeError('stub engine failure')
     if mode == 'false':
@@ -80,7 +92,10 @@ def _impl(watch_path, changed_paths, follow_symlinks, force, no_cluster, acquire
 
     root = Path.cwd().resolve() if not Path(watch_path).is_absolute() else Path(watch_path).resolve()
     tracked = [p for p in _git('ls-files', '-z').decode().split('\0') if p]
-    corpus = {p for p in tracked if _OUT_NAME not in Path(p).parts[:-1]}
+    # the scan root's .graphifyignore applies, as the engine's detect() applies it (the stub's own reading of it)
+    from graphify.detect import ignored, rules
+    rs = rules(root)
+    corpus = {p for p in tracked if _OUT_NAME not in Path(p).parts[:-1] and not ignored(p, rs)}
     graph = out / 'graph.json'
     nodes = {}
     if changed_paths is not None and graph.exists():
@@ -105,9 +120,14 @@ def _impl(watch_path, changed_paths, follow_symlinks, force, no_cluster, acquire
     ordered = [nodes[k] for k in sorted(nodes)]
     links = [{'source': a['id'], 'target': b['id'], 'source_file': a['source_file']} for a, b in zip(ordered, ordered[1:])]
     data = {'directed': False, 'nodes': ordered, 'links': links, 'hyperedges': [],
-            'built_at_commit': _git('rev-parse', 'HEAD').decode().strip()}
+            'built_at_commit': os.environ.get('GRAPH_STUB_STAMP') or _git('rev-parse', 'HEAD').decode().strip()}
+    if mode == 'nostamp':
+        del data['built_at_commit']
     out.mkdir(parents=True, exist_ok=True)
-    graph.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+    text = json.dumps(data, indent=2, ensure_ascii=False) + '\n'
+    if mode == 'garbage':
+        text = '{"nodes": [ not json,\n  "built_at_commit": "%s"\n' % data['built_at_commit']
+    graph.write_text(text)
     return True
 
 

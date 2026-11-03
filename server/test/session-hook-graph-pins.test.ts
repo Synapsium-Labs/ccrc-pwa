@@ -88,10 +88,14 @@ const plantGraph = (tree: string, built: string, content: GraphContent = GRAPH):
   fs.writeFileSync(path.join(out, '.graphify_engine'), `${PIN}\n`);
 };
 
-/** One census pass, written by the sweep's OWN writer (`_gs_row`, `_gs_finish`
- *  lifted out of ccd/ccd-graph-sweep), so the hook's reader is pinned against
- *  the schema the sweep really writes. The lifted text goes into a driver
- *  file; the rows travel as arguments. */
+/** One census pass, written by the sweep's OWN writer (`_gs_emit`, `_gs_row`,
+ *  `_gs_finish` and the sweep's `declare -A K_…` lines, lifted out of
+ *  ccd/ccd-graph-sweep), so the hook's reader is pinned against the row object
+ *  the sweep really builds: a rename of one of `_gs_emit`'s field names reds
+ *  these rows. The lifted text goes into a driver file; the rows travel as
+ *  arguments. Since the repository sweep (GR4, D-7350) a row is one
+ *  repository's: each row below is given by the tree it is about, and its
+ *  `source` is the realpath of that tree's common dir. */
 const sweepPass = (rows: { path: string; outcome: string; reason: string }[]): void => {
   const src = fs.readFileSync(SWEEP, 'utf8');
   const lift = (name: string): string => {
@@ -99,16 +103,38 @@ const sweepPass = (rows: { path: string; outcome: string; reason: string }[]): v
     expect(m, `ccd-graph-sweep no longer defines ${name}()`).not.toBeNull();
     return m![0];
   };
+  // The sweep's own per-repository state declarations, verbatim (`_gs_emit` reads them as associative arrays).
+  const declares = (): string[] => {
+    const d = src.split('\n').filter((l) => /^declare -A K_/.test(l));
+    expect(d.length, 'ccd-graph-sweep no longer declares its K_* state').toBeGreaterThan(0);
+    return d;
+  };
+  // The sweep's own top-level counter initialisers, verbatim (`GS_LINKED=0 …`, `GS_MDONE=0 …`), so a counter
+  // `_gs_emit` reads cannot be renamed or added without this driver following; each one it reads must be among them.
+  const counters = (): string[] => {
+    const c = src.split('\n').filter((l) => /^GS_[A-Z]+=0 /.test(l));
+    const set = new Set(c.flatMap((l) => [...l.matchAll(/(GS_[A-Z]+)=/g)].map((m) => m[1])));
+    for (const v of new Set([...lift('_gs_emit').matchAll(/\$\{?(GS_[A-Z_]+)/g)].map((m) => m[1]))) {
+      expect(set.has(v!), `ccd-graph-sweep no longer initialises ${v} at the top level`).toBe(true);
+    }
+    return c;
+  };
   const driver = path.join(home, 'sweep-pass.sh');
   fs.writeFileSync(driver, [
     'set -uo pipefail',
     'CENSUS="$HOME/.ccrc/graph-sweep.json"',
     'STARTED="2026-10-29T00:00:00Z"', `PIN="${PIN}"`, 'ROWS=()',
-    lift('_gs_row'), lift('_gs_finish'),
-    'while [ "$#" -gt 0 ]; do _gs_row "$1" "$2" "$3" 0; shift 3; done',
+    ...declares(), ...counters(),
+    lift('_gs_row'), lift('_gs_finish'), lift('_gs_emit'),
+    'n=0',
+    'while [ "$#" -gt 0 ]; do n=$((n+1)); K_RK["k$n"]=project-a-0123abcd; K_COMMON["k$n"]="$1"; K_OUTCOME["k$n"]="$2"; K_REASON["k$n"]="$3"; _gs_emit "k$n" >/dev/null; shift 3; done',
     '_gs_finish ok 0',
   ].join('\n'));
-  execFileSync('bash', [driver, ...rows.flatMap((r) => [r.path, r.outcome, r.reason])],
+  const source = (tree: string): string => {
+    const gitDir = path.join(tree, '.git');
+    return fs.existsSync(gitDir) ? fs.realpathSync(gitDir) : gitDir;
+  };
+  execFileSync('bash', [driver, ...rows.flatMap((r) => [source(r.path), r.outcome, r.reason])],
     { env: { ...process.env, HOME: home }, encoding: 'utf8' });
 };
 

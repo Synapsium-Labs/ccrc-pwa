@@ -134,7 +134,7 @@ describe("one 'tmux unreachable' sentence (design-system wave)", () => {
       'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/ArchiveSheet.tsx',
       // D-5545: the fleet row's and the header's facts are decided in `sessionFacts.ts` now, not `SessionMeta.tsx`.
       'pwa/src/fleet/sessionFacts.ts', 'pwa/src/screens/SessionScreen.tsx',
-      'pwa/src/session/SessionFlows.tsx', 'pwa/src/session/PrSheet.tsx', // W2 Task S2d: the ⋯ menu moved there
+      'pwa/src/session/sessionMenu.ts', 'pwa/src/session/PrSheet.tsx', // W2 Task S2d: the ⋯ menu moved there; its items to sessionMenu.ts (D-7573)
     ]) {
       expect(readFileSync(path.join(ccrcRoot, f), 'utf8'), f)
         .toMatch(/substrateFaultT(ext|itle)\(/);
@@ -527,12 +527,13 @@ describe('one eligibility rule and one answer body for the parent and the operat
   });
 
   // W7 C7p (D-7194): the operator's ask answer is the family's `POST /api/questions/:id/answer` since
-  // `/api/sessions/:id/ask` was retired, so the operator side reads that handler.
+  // `/api/sessions/:id/ask` was retired, so the operator side reads that handler. K5 Q3l: the parent's answer is the
+  // family's `POST /api/questions/:id/rule` before `/api/asks/:id/answer` is retired, so the parent side reads that one.
   it('both answer routes read their body with readAskAnswer and neither respells the index check', () => {
     const operator = between('POST /api/questions/:id/answer', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
       "app.post('/api/questions/:id/answer'", "app.post('/api/questions/:id/rule'");
-    const parent = between('POST /api/asks/:id/answer', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
-      "app.post('/api/asks/:id/answer'", "app.post('/api/asks/:id/release'");
+    const parent = between('POST /api/questions/:id/rule', stallCode(path.join(ccrcRoot, 'server/src/coord/routes.ts')),
+      "app.post('/api/questions/:id/rule'", "app.post('/api/questions/:id/release'");
     for (const [name, code] of [['operator', operator], ['parent', parent]] as const) {
       expect(code, name).toMatch(/\breadAskAnswer\(/);
       expect(code, name).not.toMatch(INDEX_CHECK);
@@ -1179,6 +1180,38 @@ describe('the state word, the roster reload and the lanes wire each have one hom
 });
 
 
+// D-7718 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A2). APPENDED. The kind chip has one list,
+// `KIND_CODES`, beside the state word in `shared/accounts.ts`; the screen's words (the lamp, the trouble order, the
+// roll-up, the trouble sentences) have one home in `pwa/src/fleet/accountWords.ts`; the lamp and the trouble card one
+// in `pwa/src/fleet/TroubleCard.tsx`. The chip words themselves are spelled once. `sourceAt`, which speaks a held
+// source again at the screen's instant, lives beside `stateWordFor` and its spellings (D-7718 (10)).
+describe('the kind chip, the lamp and the trouble card each have one home (D-7718)', () => {
+  const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function|class)\\s+${c}\\b|\\btype\\s+${c}\\s*=|\\binterface\\s+${c}\\b`);
+  it('CONTROL: the pattern sees a declaration and passes over a use', () => {
+    expect(decl('KIND_CODES').test('export const KIND_CODES = {')).toBe(true);
+    expect(decl('KIND_CODES').test('for (const code of Object.values(KIND_CODES))')).toBe(false);
+  });
+  it('the kind codes are declared once, in shared/accounts.ts, and each chip word is spelled there alone', () => {
+    for (const c of ['KIND_CODES', 'KindCode', 'kindCodeOf', 'sourceAt', 'SourceResets']) {
+      expect(holders(decl(c)), c).toEqual(['shared/accounts.ts']);
+    }
+    for (const w of ["'claude · sign-in'", "'claude · token'", "'chatgpt · codex'", "'openrouter · key'", "'compatible · key'"]) {
+      expect(holders(new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))), w).toEqual(['shared/accounts.ts']);
+    }
+  });
+  it("the screen's words and the card's parts each live in one file", () => {
+    for (const c of ['STATE_LAMPS', 'TROUBLE_WORDS', 'TroubleWord', 'troubleFirst', 'rollUp', 'laneAnswerOf', 'cardLines',
+      'identityLine', 'troubleCopy', 'TroubleCopy', 'offAlso', 'fixCommands', 'NO_LANE_STATE_SOURCE', 'WEEKLY_ONLY']) {
+      expect(holders(decl(c)), c).toEqual(['pwa/src/fleet/accountWords.ts']);
+    }
+    for (const c of ['StateLamp', 'CopyCommand', 'TroubleCard', 'COPY_FAILED']) {
+      expect(holders(decl(c)), c).toEqual(['pwa/src/fleet/TroubleCard.tsx']);
+    }
+  });
+});
+
+
 // D-5513, D-5622 (plan docs/superpowers/plans/2026-10-18-accounts-connect.md, Task A8). APPENDED. The agent's typed
 // `account` op: the argv builder and its bounds have one home in `shared/account-argv.ts`, which BOTH `AccountOps`
 // arms call; the op's wire vocabulary and the node-id grammar one home in `shared/agent-protocol.ts`; the agent's
@@ -1602,11 +1635,16 @@ describe('the question doors: one reader, one core per principal, the old doors 
   /** The aliases (eight at W3 Q3f; W7 C7p, D-7194, retires the four operator ones one per commit), each with the refusal words its front ladder may spell (its 400 and, for an operator door, its
    *  404), and the reader that must come before its core call when it reads an ask's answer. */
   const ALIASES: ReadonlyArray<readonly [file: string, route: string, words: readonly string[], reader: string | null]> = [
-    ['server/src/coord/routes.ts', '/api/asks/:id/answer', ['bad-request'], 'readAskAnswer('],
-    ['server/src/coord/routes.ts', '/api/asks/:id/release', ['bad-request'], null],
-    ['server/src/coord/routes.ts', '/api/approvals/:id/rule', ['bad-request'], null],
-    ['server/src/coord/routes.ts', '/api/approvals/:id/release', ['bad-request'], null],
+    // K5 Q3l (D-7324) retired the four claimant aliases one per commit; none is left.
   ];
+
+  it('the eight old answer doors are retired: none is registered (W7 C7p, D-7194; K5 Q3l, D-7324)', () => {
+    const OLD = ['/api/sessions/:id/ask', '/api/sessions/:id/dialog', '/api/sessions/:id/dialog/text', '/api/sessions/:id/dialog/multi',
+      '/api/asks/:id/answer', '/api/asks/:id/release', '/api/approvals/:id/rule', '/api/approvals/:id/release'];
+    const code = ['server/src/coord/routes.ts', 'server/src/server.ts'].map((f) => stallCode(path.join(ccrcRoot, f))).join('\n');
+    expect(code, 'the files were read').toMatch(/app\.post\('\/api\/questions\/:id\/rule'/);
+    expect(OLD.filter((r) => code.includes(`app.post('${r}'`)), 'an old answer door still registered').toEqual([]);
+  });
 
   it.each(ALIASES.map((a) => [`POST ${a[1]}`, a] as const))('%s is an alias: its front ladder, then one call into a core', async (_n, [file, route, words, reader]) => {
     const { QUESTION_STORE_METHODS } = await import('../census-w3/questions.js');

@@ -98,12 +98,12 @@ describe('approvalInputs: one map per Questions instance (W3 Q3e)', () => {
       const minted = await f.request(requestBody(hookInput({ command: 'rm -rf build' })));
       expect(minted.statusCode).toBe(201);
       const id = (minted.json() as { id: number }).id;
-      const allow = { fromId: PARENT, fromUuid: uuidOf(PARENT), verdict: 'allow', reason: 'a cleanup inside your worktree' };
-      const onB = await b.inject({ method: 'POST', url: `/api/approvals/${id}/rule`, headers: TOK, payload: allow });
+      const allow = { kind: 'approval', fromId: PARENT, fromUuid: uuidOf(PARENT), verdict: 'allow', reason: 'a cleanup inside your worktree' };
+      const onB = await b.inject({ method: 'POST', url: `/api/questions/approval-${id}/rule`, headers: TOK, payload: allow });
       expect(onB.statusCode).toBe(409);
       expect(onB.body).toBe('{"ok":false,"error":"guard-escalate"}');
       // App A, which minted it, still holds the input: its allow is ruled.
-      expect((await f.app.inject({ method: 'POST', url: `/api/approvals/${id}/rule`, headers: TOK, payload: allow })).json())
+      expect((await f.app.inject({ method: 'POST', url: `/api/questions/approval-${id}/rule`, headers: TOK, payload: allow })).json())
         .toEqual({ ok: true, state: 'allowed' });
     } finally { await b.close(); await f.close(); }
   });

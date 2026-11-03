@@ -112,9 +112,9 @@ const openApp = async (home: string, run: Runner, over: Partial<Deps> = {}) => {
 
 const answer = (app: FastifyInstance, id: number | string, body: Record<string, unknown>,
                 headers: Record<string, string> = TOK) =>
-  app.inject({ method: 'POST', url: `/api/asks/${id}/answer`, headers, payload: body });
+  app.inject({ method: 'POST', url: `/api/questions/ask-${id}/rule`, headers, payload: { kind: 'ask', ...body } });
 
-describe('POST /api/asks/:id/answer', () => {
+describe('POST /api/questions/ask-<n>/rule (the parent\'s answer)', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
@@ -366,13 +366,13 @@ describe('POST /api/asks/:id/answer', () => {
  * the store's own `declineAsk` CAS (`'held' -> 'declined'`, D-5289) — a decline that
  * finds nothing held refuses `not-held` rather than pretending to succeed.
  */
-describe('POST /api/asks/:id/release', () => {
+describe('POST /api/questions/ask-<n>/release (the parent\'s decline)', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
   const release = (id: number | string, body: Record<string, unknown>,
                    headers: Record<string, string> = TOK) =>
-    app!.inject({ method: 'POST', url: `/api/asks/${id}/release`, headers, payload: body });
+    app!.inject({ method: 'POST', url: `/api/questions/ask-${id}/release`, headers, payload: { kind: 'ask', ...body } });
 
   /** Same shape as `buildServer`'s own third argument (`fleetws.test.ts`'s
    *  idiom): the `FleetWatcher` is constructed FIRST, sharing the one `deps`
@@ -774,8 +774,8 @@ describe('POST /api/questions/session-<id>/answer {kind:\'ask\'} — closes the 
     // find nothing to take, and say why (D-5289: `already-answered`, no
     // longer folded onto `not-held`).
     const parent = await app!.inject({
-      method: 'POST', url: `/api/asks/${id}/answer`, headers: TOK,
-      payload: { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [0] },
+      method: 'POST', url: `/api/questions/ask-${id}/rule`, headers: TOK,
+      payload: { kind: 'ask', fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [0] },
     });
     expect(parent.statusCode).toBe(409);
     expect(parent.json()).toEqual({ ok: false, error: 'already-answered' });
@@ -988,9 +988,10 @@ describe('late answer wins; declined (D-5289)', () => {
     (w as unknown as { primed: boolean }).primed = true;
     return { coord, w, id, sent, calls };
   };
+  // K5 Q3l (D-7728): the parent's answer and decline through the question door family, the same claimant core.
   const by = (id: number, verb: 'answer' | 'release', extra: Record<string, unknown> = {}) =>
-    app!.inject({ method: 'POST', url: `/api/asks/${id}/${verb}`, headers: TOK,
-      payload: { fromId: MESA, fromUuid: MESA_UUID, ...extra } });
+    app!.inject({ method: 'POST', url: `/api/questions/ask-${id}/${verb === 'answer' ? 'rule' : 'release'}`, headers: TOK,
+      payload: { kind: 'ask', fromId: MESA, fromUuid: MESA_UUID, ...extra } });
 
   it('the release route leaves the row declined and pushes at once', async () => {
     const { coord, id, sent } = await setup(Date.now());

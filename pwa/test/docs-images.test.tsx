@@ -18,7 +18,9 @@ import { parseMarkdown } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
 import { DocImage, DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
 import { DocLink, DocLinkContext, type DocLinkContextValue } from '../src/docs/DocLink';
-import { detachUrls, docsLocation, imagePinFor, type ImagePin } from '../src/docs/docsLinks';
+import {
+  detachUrls, docsLocation, imagePinFor, type ImagePin,
+} from '../src/docs/docsLinks';
 import {
   DOC_IMAGE_REFUSED_SENTENCE, DOC_IMAGE_TEXT, DOCS_SHOW_NOT_SVG, failureSentence, fillSentence, kib, slotSentence,
   type DocImageRefusal,

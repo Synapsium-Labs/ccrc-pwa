@@ -1,0 +1,9 @@
+# Run %i's cleanup (D-7406, D-7409; spec §2.2 "Cleanup"): root, outside the run's sandbox and after it. The report is
+# collected to results/<run-id>/ and the run directory removed; %i is a run number or `install`. RuntimeMaxSec= is in
+# ccrc-testbox-clean@.service.d/50-ccrc-testbox.conf. No environment file (D-7451).
+[Unit]
+Description=ccrc test box: clean %i
+
+[Service]
+Type=exec
+ExecStart=@@TREE@@/deploy/testbox/bin/clean @@ROOT@@/specs/%i

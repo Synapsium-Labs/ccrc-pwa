@@ -126,7 +126,7 @@ describe('select today: a fresh, a missing and a stale map (characterization)', 
     const r = runSelect(repo, ['--event', 'pull_request', '--map', map]);
     expect(r.outputs.tests).toBe('selected');
     expect(r.outputs.count).toBe('1');
-    expect(r.summary).toMatch(/older than 3 h/);
+    expect(r.summary).toMatch(/older than 5 h/);
   });
 
   it('a refresh with no durations traces the whole selection, every file once, in at most eight shards', () => {
@@ -296,11 +296,11 @@ describe('select warns when the map is old', () => {
     return runSelect(repo, ['--event', 'pull_request', '--map', map, '--now', now.toISOString(), ...extra]);
   }
 
-  it('a map built more than three hours ago is reported in the step summary and as a warning annotation', () => {
-    const r = withBuiltAt(4 * HOUR);
-    expect(r.summary).toMatch(/map is 4 h old/);
-    expect(r.summary).toMatch(/older than 3 h/);
-    expect(r.stdout).toMatch(/::warning::.*map is 4 h old/);
+  it('a map built more than five hours ago is reported in the step summary and as a warning annotation', () => {
+    const r = withBuiltAt(6 * HOUR);
+    expect(r.summary).toMatch(/map is 6 h old/);
+    expect(r.summary).toMatch(/older than 5 h/);
+    expect(r.stdout).toMatch(/::warning::.*map is 6 h old/);
     expect(r.outputs.tests).toBe('selected');
   });
 
@@ -420,5 +420,124 @@ describe('the order a refresh traces in', () => {
     ] };
     const order = refreshPriority(repo, map as never, [], selection as never, [{ file: 'server/test/z.test.ts', tracedAt: null }]);
     expect(order).toEqual(['server/test/c.test.ts', 'server/test/z.test.ts', 'server/test/b.test.ts', 'server/test/a.test.ts']);
+  });
+});
+
+// D-7747: the refresh runs every three hours, and the SCHEDULED one (ci.yml passes `--skip-unmoved true` on the refresh
+// cron alone) traces nothing when main's head is the newest map's own commit. A dispatch passes no flag and refreshes.
+describe('a scheduled refresh skips when main has not moved since the newest map (D-7747)', () => {
+  // The map is at HEAD and has no entry for b, so a refresh that runs traces b (a new test).
+  function atHead(extra: Record<string, unknown> = {}) {
+    const { repo, headSha } = fixture();
+    const map = writeMap(repo, mapOf(headSha, { 'server/test/a.test.ts': rec({ read: ['src/foo.ts'], tracedAt: headSha }) }, extra));
+    return { repo, headSha, map };
+  }
+
+  it('the map is at main\'s head: nothing is traced, and the summary says why', () => {
+    const { repo, headSha, map } = atHead();
+    const r = runSelect(repo, ['--event', 'schedule', '--input-mode', 'refresh', '--map', map, '--skip-unmoved', 'true']);
+    expect(r.outputs.trace).toBe('refresh');
+    expect(r.outputs.trace_count).toBe('0');
+    expect(JSON.parse(r.outputs.trace_matrix).include).toEqual([]);
+    expect(r.summary).toContain(`refresh skipped: main has not moved since the newest map (\`${headSha}\`)`);
+  });
+
+  it('the same map without the flag (a dispatch) refreshes: the new test is traced', () => {
+    const { repo, map } = atHead();
+    const r = runSelect(repo, ['--event', 'workflow_dispatch', '--input-mode', 'refresh', '--map', map]);
+    expect(r.outputs.trace_count).toBe('1');
+    expect(r.summary).not.toContain('refresh skipped');
+  });
+
+  it('main moved past the map: the flag changes nothing, and the merge is traced', () => {
+    const { repo, baseSha } = fixture();
+    const map = writeMap(repo, mapOf(baseSha, { 'server/test/a.test.ts': rec({ read: ['src/foo.ts'] }), 'server/test/b.test.ts': rec() }));
+    const r = runSelect(repo, ['--event', 'schedule', '--input-mode', 'refresh', '--map', map, '--skip-unmoved', 'true']);
+    expect(r.outputs.trace_count).toBe('1');
+    expect(r.summary).not.toContain('refresh skipped');
+  });
+
+  it('no map: the flag changes nothing, and every test is traced', () => {
+    const { repo } = fixture();
+    const r = runSelect(repo, ['--event', 'schedule', '--input-mode', 'refresh', '--map', path.join(repo, 'absent.json'), '--skip-unmoved', 'true']);
+    expect(Number(r.outputs.trace_count)).toBeGreaterThan(0);
+  });
+
+  it('an old map of a main that has not moved is current, not stale: no warning on the refresh or on a pull request', () => {
+    const now = new Date('2026-10-26T12:00:00Z');
+    const { repo, map } = atHead({ builtAt: new Date(now.getTime() - 10 * 3_600_000).toISOString() });
+    const refresh = runSelect(repo, ['--event', 'schedule', '--input-mode', 'refresh', '--map', map, '--skip-unmoved', 'true', '--now', now.toISOString()]);
+    expect(refresh.stdout).not.toMatch(/::warning::/);
+    git(repo, ['checkout', '-q', '-b', 'pr']);
+    writeFile(repo, 'src/bar.ts', 'export const bar = 1;\n');
+    commitAll(repo, 'the PR change');
+    const pr = runSelect(repo, ['--event', 'pull_request', '--base', 'main', '--map', map, '--now', now.toISOString()]);
+    expect(pr.summary).not.toMatch(/older than/);
+    expect(pr.stdout).not.toMatch(/::warning::/);
+  });
+
+  it('an old map that main has moved past is still reported', () => {
+    const now = new Date('2026-10-26T12:00:00Z');
+    const { repo, baseSha } = fixture();
+    const map = writeMap(repo, mapOf(baseSha, { 'server/test/a.test.ts': rec({ read: ['src/foo.ts'] }), 'server/test/b.test.ts': rec() },
+      { builtAt: new Date(now.getTime() - 10 * 3_600_000).toISOString() }));
+    const r = runSelect(repo, ['--event', 'schedule', '--input-mode', 'refresh', '--map', map, '--skip-unmoved', 'true', '--now', now.toISOString()]);
+    expect(r.stdout).toMatch(/::warning::.*map is 10 h old \(older than 5 h\)/);
+  });
+});
+
+// D-7748: the daily (and dispatched) rebuild traces the whole suite over its own, wider profile; the refresh keeps
+// `trace` (8 shards, 45-minute budget), so a refresh costs what it did.
+describe('a rebuild plans its trace shards by traceRebuild, a refresh by trace (D-7748)', () => {
+  const MIN = 60_000;
+
+  it('traceRebuild: the trace cost model, planned to 40 minutes a shard, at most 24 shards', () => {
+    expect(PROFILES.traceRebuild).toMatchObject({ targetMs: 40 * MIN, min: 1, max: 24, workers: PROFILES.trace.workers, scale: PROFILES.trace.scale });
+    expect(PROFILES.traceRebuild.targetMs, 'planned under the refresh\'s per-shard budget').toBeLessThanOrEqual(PROFILES.trace.budgetMs!);
+  });
+
+  it('a suite the old profile packed into 8 shards past their budget gets enough shards to stay inside 40 planned minutes', () => {
+    const { repo } = fixture();
+    const durations: Record<string, number> = {};
+    for (let i = 0; i < 60; i++) {
+      const f = `server/test/r${String(i).padStart(2, '0')}.test.ts`;
+      writeFile(repo, f, `it('${i}', () => {});\n`);
+      durations[f] = 4 * MIN;
+    }
+    commitAll(repo, 'sixty four-minute tests');
+    const times = path.join(repo, '..', `times-${path.basename(repo)}.json`);
+    writeFileSync(times, JSON.stringify(durations));
+    // With the fixture's a and b (no duration: the median, 4 min), 62 files · 4 min · 6 / 2 = 744 planned minutes:
+    // ceil(744 / 40) = 19 shards, against 8 of 93 before. Files do not divide, so LPT holds a shard within one file
+    // (12 planned minutes) of the target.
+    const r = runSelect(repo, ['--event', 'workflow_dispatch', '--input-mode', 'rebuild', '--times', times]);
+    expect(r.outputs.trace).toBe('rebuild');
+    const rows = JSON.parse(r.outputs.trace_matrix).include as Array<{ files: string }>;
+    expect(rows).toHaveLength(19);
+    for (const row of rows) expect(row.files.split(' ').length * 4 * 6 / 2, row.files).toBeLessThanOrEqual(40 + 12);
+    expect(rows.flatMap((x) => x.files.split(' ')).length).toBe(Number(r.outputs.trace_count));
+  });
+
+  it('a refresh over the same suite still plans at most 8 shards, each inside the 45-minute budget', () => {
+    const { repo, baseSha } = fixture();
+    const durations: Record<string, number> = {};
+    const tests: Record<string, unknown> = {};
+    for (let i = 0; i < 60; i++) {
+      const f = `server/test/r${String(i).padStart(2, '0')}.test.ts`;
+      writeFile(repo, f, `it('${i}', () => {});\n`);
+      durations[f] = 4 * MIN;
+      tests[f] = rec({ read: ['src/foo.ts'] });
+    }
+    const base2 = commitAll(repo, 'sixty four-minute tests');
+    writeFile(repo, 'src/foo.ts', 'export const foo = 3;\n');
+    commitAll(repo, 'every test reads this');
+    void baseSha;
+    const times = path.join(repo, '..', `times-${path.basename(repo)}.json`);
+    writeFileSync(times, JSON.stringify(durations));
+    const map = writeMap(repo, mapOf(base2, tests));
+    const r = runSelect(repo, ['--event', 'schedule', '--input-mode', 'refresh', '--map', map, '--times', times]);
+    const rows = JSON.parse(r.outputs.trace_matrix).include as Array<{ files: string }>;
+    expect(rows.length).toBeLessThanOrEqual(8);
+    for (const row of rows) expect(row.files.split(' ').length * 4 * 6 / 2, row.files).toBeLessThanOrEqual(45);
   });
 });

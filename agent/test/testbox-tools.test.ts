@@ -242,7 +242,7 @@ function writeManifest(tree: string): void {
 }
 
 /** The release payload, the update tests' FULL shape: the checkout's ccd/, shared/ and deploy/ (no mail token),
- *  install.sh, server/'s manifests, the shipped stamp and the MANIFEST. */
+ *  install.sh, server/'s and agent/'s manifests, the shipped stamp and the MANIFEST. */
 function releaseTree(dir: string, version: string, sha: string): string {
   const tree = path.join(dir, `payload-${version}-${sha.slice(0, 6)}`);
   cpSync(path.join(REPO, 'ccd'), path.join(tree, 'ccd'), { recursive: true });
@@ -251,6 +251,8 @@ function releaseTree(dir: string, version: string, sha: string): string {
   copyFileSync(path.join(REPO, 'install.sh'), path.join(tree, 'install.sh'));
   mkdirSync(path.join(tree, 'server'), { recursive: true });
   for (const f of ['package.json', 'package-lock.json']) copyFileSync(path.join(REPO, 'server', f), path.join(tree, 'server', f));
+  mkdirSync(path.join(tree, 'agent'), { recursive: true });
+  for (const f of ['package.json', 'package-lock.json']) copyFileSync(path.join(REPO, 'agent', f), path.join(tree, 'agent', f));
   writeFileSync(path.join(tree, 'build.json'), `{"sha":"${sha}","ref":"release","builtAt":"2026-10-29T00:00:00Z","dirty":false,"version":"${version}"}\n`);
   writeManifest(tree);
   return tree;
@@ -566,15 +568,20 @@ describe('tools-sync on a fixture box laid out as TB7\'s bootstrap leaves it (D-
     const apt = readFileSync(path.join(path.dirname(b.root), 'apt-argv'), 'utf8').trim().split('\n');
     expect(apt).toEqual(['-q update', '-q install -y --no-install-recommends libnss3 libgbm1',
       '-q install -y --no-install-recommends --allow-downgrades python3=3.12.3-0ubuntu2 git=1:2.43.0-1ubuntu7 tmux=3.4-1ubuntu0.1 strace jq']);
-    // 6. The set, the release's server/ production dependencies, the two switches and the takeover file.
+    // 6. The set, the release's server/ and agent/ production dependencies (the test service imports ws, D-7568), the
+    // two switches and the takeover file.
     const set = linkOf(path.join(b.tools, 'current'));
     expect(set).toMatch(/^sets\/s\.[A-Za-z0-9]{8}$/);
     expect(realpathSync(path.join(b.tools, 'current', 'node'))).toBe(realpathSync(path.join(nodeDir, 'bin', 'node')));
     expect(realpathSync(path.join(b.tools, 'current', 'chrome'))).toBe(realpathSync(path.join(b.tools, 'chrome', NEW.chrome, 'chrome-linux64', 'chrome')));
     expect(parseVersions(readFileSync(path.join(b.tools, 'current', 'versions'), 'utf8'))).toEqual(NEW);
     expect(linkOf(path.join(b.tools, 'release', 'installed'))).toBe(NEW_TAG);
-    expect(readFileSync(path.join(W.log, 'npm-argv'), 'utf8').trim().split('\n').at(-1)).toMatch(/\/release\/\.stage\.[^/]+\/tree\/server\tci --omit=dev --ignore-scripts --no-audit --no-fund$/);
+    const npmArgv = readFileSync(path.join(W.log, 'npm-argv'), 'utf8').trim().split('\n').slice(-2);
+    expect(npmArgv[0]).toMatch(/\/release\/\.stage\.[^/]+\/tree\/server\tci --omit=dev --ignore-scripts --no-audit --no-fund$/);
+    expect(npmArgv[1]).toMatch(/\/release\/\.stage\.[^/]+\/tree\/agent\tci --omit=dev --ignore-scripts --no-audit --no-fund$/);
     expect(existsSync(path.join(b.tools, 'release', NEW_TAG, 'server', 'node_modules', '.fixture-ci'))).toBe(true);
+    expect(existsSync(path.join(b.tools, 'release', NEW_TAG, 'agent', 'node_modules', '.fixture-ci'))).toBe(true);
+    expect((lstatSync(path.join(b.tools, 'release', NEW_TAG, 'agent', 'node_modules')).mode & 0o022)).toBe(0);
     expect((lstatSync(path.join(b.tools, 'release', NEW_TAG, 'ccd', 'ccrc')).mode & 0o022)).toBe(0);
     expect(readFileSync(path.join(b.tools, 'takeover'), 'utf8')).toBe(`previous\t${BOOT_TAG}\nrelease\t${NEW_TAG}\n`);
     expect(report(b)).toMatchObject({ result: 'ok', release: NEW_TAG, takeover: true, nodeChanged: true });
@@ -1675,9 +1682,14 @@ const envModeReads = (t: string): string[] =>
     || (/_ccrc_knob CCRC_RELEASE_BASE_URL\b/.test(l) && !/ file\b/.test(l)) || /\$\{?CCRC_RELEASE_BASE_URL\b/.test(l));
 const boxEnvAssignments = (t: string): string[] => shellCode(t).filter((l) => /\bBOX_ENV_FILE=/.test(l));
 
+/** D-7568, named exception: TB7's installer checks its staging tree's MANIFEST in phase 1, as plan task TB7 requires
+ *  (the first release is trusted on its transport checksum and its MANIFEST, D-7424), through ccd/ccrc's own
+ *  `_plat_sha256_check`. That one line, and no other, is not a copy of the tools sync's verification. */
+const INSTALLER_MANIFEST_CHECK = 'deploy/testbox/install.sh: ( cd "$STAGING" && _plat_sha256_check MANIFEST ) >/dev/null 2>&1 || refuse "the staging tree does not match its MANIFEST"';
+
 describe('counted exits (D-7408, D-7457)', () => {
-  it('copies of the provenance verification logic outside ccd/ccrc and deploy/verify-provenance.mjs: 0', async () => {
-    expect(provenanceCopies(boxFiles())).toEqual([]);
+  it('copies of the provenance verification logic outside ccd/ccrc and deploy/verify-provenance.mjs: 0 (TB7\'s installer MANIFEST line the one named exception, D-7568)', async () => {
+    expect(provenanceCopies(boxFiles())).toEqual([INSTALLER_MANIFEST_CHECK]);
   });
   it('mutation: a sums check of its own in the tools script is counted', async () => {
     const t = read('deploy/testbox/bin/tools-sync').replace('_upd_fetch 0 >/dev/null', '( cd "$stage" && sha256sum -c SHA256SUMS )');

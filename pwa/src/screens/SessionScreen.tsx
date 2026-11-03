@@ -41,6 +41,7 @@ import { SessionFlows, type SessionActions } from '../session/SessionFlows';
 import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
 import { liveStatus } from '../session/liveStatus';
 import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
+import { liveActivitiesOf, readDelegation } from '../fleet/delegationWords';
 import { sessionFacts } from '../fleet/sessionFacts';
 import { coordinatorPresence } from '../fleet/presence';
 import { orphanGuidance } from '../fleet/orphanWords';
@@ -214,6 +215,8 @@ export function SessionScreen({
   });
   const fleetRuns = useFleet((s) => s.runs);
   const fleetFrameSeen = useFleet((s) => s.fleetFrameSeen);
+  // Delegation broker wave 4 (R9): the header's chip reads the same activities as the card's.
+  const delegation = useFleet((s) => s.delegation);
 
   const kbInset = useKeyboardInsets();
   const { busy: restarting, ensure: ensureNow } = useEnsure();
@@ -324,6 +327,7 @@ export function SessionScreen({
     workingOn: coordination?.workingOn ?? null,
     coordinator: presence,
     coordinatorTitle: parentId === null || presence === null ? null : orphanGuidance(parentId, presence),
+    delegated: delegation === null ? null : liveActivitiesOf(live.id, readDelegation(delegation)),
   });
 
   // Routing slice 6, Task 4: once `live.route` rides the wire, the pickers'

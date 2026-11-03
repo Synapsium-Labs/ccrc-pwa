@@ -57,6 +57,7 @@ _svc_have_user_manager	C2
 _svc_run_supervised	C2
 _launchd_class	C2
 die	K
+_roster_fp_to	C1
 _rc_enabled	C2
 _lane_enabled	C1
 _authdead	C1
@@ -137,6 +138,7 @@ _transcript_path	C3
 _ws_stash_count	C4
 _ws_ignored_digest	C4
 _gh_repo_slug	C4
+_gh_fail_reason	C4
 _gh_pr_list	C4
 _gh_pr_checks	C4
 _gh_rows_ok	C4
@@ -387,6 +389,8 @@ _resume_env	C2
 _tool_adj_env	C2
 _child_tmpdir	C4
 _delegation_spool_dir	C5
+_dsp_old_absent	C5
+_delegation_spool_prune_absent	C5
 _child_spawn_compose	C5
 _account_spawn_compose	C2
 _ws_tmproot_witness_file	C4
@@ -433,6 +437,8 @@ _route_effort_for	C1
 _route_wanted	C3
 _route_pending_word	C3
 _home_measured	C1
+_roster_eval	C1
+_roster_reread_check	C1
 cmd_supervise	C2
 _sanitize_anthropic	C1
 _transcript_matches	C1
@@ -696,6 +702,7 @@ _authdead_clear_on_spawn	C1
 _gh_pr_queue	C4
 _pr_queue_stamp	C4
 _pr_queue_py	C4
+_pr_state_by_pr	C4
 _docs_max_bytes_ok	C9
 _docs_redact_cli	C9
 _docs_front	C9

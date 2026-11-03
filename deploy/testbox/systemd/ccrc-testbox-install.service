@@ -1,0 +1,26 @@
+# A pristine install (D-7407, D-7409; spec §2.2 "Pristine installs", §2.3): `npm ci` from one key's inputs alone, as
+# the install user, with the prepare's network (loopback and the proxy, whose address is in
+# ccrc-testbox-install.service.d/50-ccrc-testbox.conf with User= and RuntimeMaxSec=) and the run caps (its slice).
+# The privileged first step makes `install/run`; the privileged last step, on success, moves the build's node_modules
+# to pristine/<key>, root's. No environment file: every value comes from specs/install (D-7451).
+[Unit]
+Description=ccrc test box: a pristine install
+
+[Service]
+Type=exec
+User=ccrc-tb-install
+Slice=ccrc-testbox-install.slice
+ExecStartPre=+@@TREE@@/deploy/testbox/bin/install-pre @@ROOT@@/specs/install
+ExecStart=@@TREE@@/deploy/testbox/bin/runner @@ROOT@@/specs/install
+ExecStartPost=+@@TREE@@/deploy/testbox/bin/install-post @@ROOT@@/specs/install
+StandardOutput=truncate:@@ROOT@@/out/install/stdout
+StandardError=truncate:@@ROOT@@/out/install/stderr
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/32 ::1/128
+ProtectProc=invisible
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+RemoveIPC=yes
+ProtectSystem=strict
+ReadWritePaths=@@ROOT@@/install/run

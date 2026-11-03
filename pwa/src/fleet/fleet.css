@@ -2155,7 +2155,8 @@ button.proj-card-pool::before {
    open — the same call RunsScreen makes when it leaves the in-flight run row
    inert. It still clears the row height the settled rows keep, so a spawn
    arriving does not make the card jump. */
-.proj-pending {
+.proj-pending,
+.proj-work {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
@@ -2185,6 +2186,41 @@ button.proj-card-pool::before {
   font-family: var(--family-mono);
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
+}
+
+/* Delegated work and its worktrees (delegation broker wave 4): a nested line of words, in the pending row's own rule
+   above (the same inert line: never a tap surface, and nothing in wave 4 acts on one). The chips are words in a
+   currentColor frame, the .sess-workson idiom, so nothing is read out of colour. Neutral class names: this sheet names
+   no broker word. */
+/* A row WRAPS: on a narrow column (the desk's fleet list at 1280, a phone) its chips drop under its words rather than
+   squeezing the words to nothing and pushing past the card's edge; the words keep one line and end in an ellipsis. */
+.proj-nest > .proj-work {
+  flex: 1;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.proj-work-parts {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.proj-work-parts > *:not(:first-child)::before {
+  content: '·';
+  margin: 0 var(--sp-1);
+  color: var(--ink-tertiary);
+}
+.proj-work-chip {
+  flex: none;
+  padding: 0 var(--sp-1);
+  border: 1px solid currentColor;
+  border-radius: var(--r-sm);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
 }
 
 /* F4 (cross-repo): the sentence under a rule-3 orphan. NOT a tap surface and
@@ -2243,7 +2279,8 @@ button.proj-card-pool::before {
 /* D-6088: a coordinator's folded workers (`.proj-children-toggle`) are the same disclosure a third time. */
 .proj-released-toggle,
 .proj-archived-toggle,
-.proj-children-toggle {
+.proj-children-toggle,
+.proj-group-toggle {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
@@ -2373,6 +2410,241 @@ button.proj-card-pool::before {
   color: var(--ink-secondary);
   cursor: pointer;
 }
+
+/* — One state word per lane (accounts plan Task A2, D-7718; spec 2026-10-18 accounts-connect §4) —
+   A lane card (`data-state` names its word) is its own ground, so every ink inside it below names it and the contrast
+   gate measures each pair on the card's ground and on the Signed-out card's. */
+.accounts-row[data-state] {
+  color: var(--ink-primary);
+  background: var(--bg-surface);
+}
+/* THE LOUD STATE IS ACHROMATIC (spec §4.1): a Signed-out Refined card takes a 2px `--ink-primary` left rail on
+   `--bg-raised`, and its word goes semibold. No colour token, no red. A border rather than an inset shadow, so it
+   survives forced colours and never meets the arrived lane's accent edge. Scoped to the Refined list (A4 owns
+   Instrument's table, where the rail is selection's). */
+.accounts-row[data-state].acct-rail {
+  background: var(--bg-raised);
+  border-left: 2px solid var(--ink-primary);
+}
+.accounts-row[data-state].acct-rail .acct-lamp-word { font-weight: var(--weight-semibold); }
+/* The roll-up opens the page: a measured sentence, in the UI face, on the page's own ground. */
+.accounts-rollup {
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-primary);
+  background: var(--bg-page);
+}
+/* Line 1: the id chip, the label (ellipsised, never wrapping the head), the lamp at the right. */
+.accounts-row-head { min-width: 0; }
+.acct-card-id {
+  flex: none;
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  font-weight: var(--weight-semibold);
+}
+.acct-card-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acct-lamp {
+  display: inline-flex;
+  flex: none;
+  align-items: baseline;
+  gap: var(--sp-1);
+  margin-left: auto;
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+}
+/* The lamp's ink, per word (spec §4.1's Loudness column). Signed in's glyph is the busy hue with NO glow (ruled
+   2026-10-18): no shadow, no animation. The glyph is a character at the word's size, so it takes the hue's TEXT token,
+   `--status-busy-text`, which holds 4.5:1 on the card and on the raised ground in every palette, where the dot token
+   `--status-busy` (a 3:1 mark) does not (D-7718). Rate-limited and Expiring carry the attention hue the same way. */
+.accounts-row[data-state] .acct-lamp-word,
+.accounts-row[data-state] .acct-lamp-glyph { color: var(--ink-primary); }
+.accounts-row[data-state] .acct-lamp[data-state='off'] .acct-lamp-word,
+.accounts-row[data-state] .acct-lamp[data-state='off'] .acct-lamp-glyph,
+.accounts-row[data-state] .acct-lamp[data-state='inconclusive'] .acct-lamp-word,
+.accounts-row[data-state] .acct-lamp[data-state='inconclusive'] .acct-lamp-glyph { color: var(--ink-secondary); }
+.accounts-row[data-state] .acct-lamp[data-state='not-checked'] .acct-lamp-word,
+.accounts-row[data-state] .acct-lamp[data-state='not-checked'] .acct-lamp-glyph { color: var(--ink-tertiary); }
+.accounts-row[data-state] .acct-lamp[data-state='signed-in'] .acct-lamp-glyph { color: var(--status-busy-text); }
+.accounts-row[data-state] .acct-lamp[data-state='rate-limited'] .acct-lamp-glyph,
+.accounts-row[data-state] .acct-lamp[data-state='expiring'] .acct-lamp-glyph { color: var(--status-attention-text); }
+/* Not checked's dashed slot: the glyph sits in a dashed frame, a reading that is absent rather than a dot. */
+.acct-lamp[data-state='not-checked'] .acct-lamp-glyph {
+  padding: 0 2px;
+  border: 1px dashed var(--edge-strong);
+  border-radius: var(--r-sm);
+}
+/* Line 2: the kind chip, the identity line (ellipsised), the pool chip. Wraps only between whole items. */
+.accounts-row-kind,
+.acct-knob {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  min-width: 0;
+}
+.accounts-row[data-state] .acct-kind-chip {
+  flex: none;
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
+}
+.accounts-row[data-state] .acct-identity {
+  flex: 1 1 12ch;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--family-ui);
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
+}
+/* The state's source and its age: a sentence, in the UI face; the usage age stays mono (`.accounts-fresh`). */
+.accounts-row[data-state] .accounts-state-source {
+  margin: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
+}
+.accounts-row[data-state] .acct-weekly-only {
+  grid-column: 2 / -1;
+  font-family: var(--family-ui);
+  font-size: var(--fs-2xs);
+  color: var(--ink-tertiary);
+}
+/* The trouble card's body (spec §4.2): what is wrong, its effect and its fix, in sans; the command in mono. */
+.acct-trouble { display: grid; gap: var(--sp-1); margin: var(--sp-1) 0; }
+.accounts-row[data-state] .acct-trouble-wrong,
+.acct-notice,
+.acct-offline {
+  margin: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-sm);
+  color: var(--ink-primary);
+}
+.accounts-row[data-state] .acct-trouble-effect,
+.accounts-row[data-state] .acct-trouble-lead,
+.accounts-row[data-state] .acct-fix-hold,
+.accounts-row[data-state] .acct-knob-reason {
+  margin: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-secondary);
+}
+.acct-fix-command { display: grid; gap: var(--sp-1); }
+.acct-fix-row,
+.acct-secret-row { display: flex; gap: var(--sp-2); align-items: stretch; min-width: 0; }
+.accounts-row[data-state] .acct-fix-field,
+.acct-door-reason .acct-fix-field {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: var(--tap-min);
+  display: flex;
+  align-items: center;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-sm);
+  font-family: var(--family-mono);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+  user-select: all;
+  -webkit-user-select: all;
+  color: var(--ink-primary);
+  background: var(--bg-page);
+}
+.acct-fix-copy { flex: none; width: auto; min-height: var(--tap-min); }
+/* At a phone's width the command takes the whole row and Copy sits under it, full width. */
+@media (max-width: 480px) {
+  .acct-fix-row { flex-direction: column; }
+  .accounts-row[data-state] .acct-fix-field { flex: none; }
+  .acct-fix-copy { width: 100%; }
+}
+
+/* The kill switch row (spec §10; accounts plan Task A14, D-7732): the switch, its sentence and Check on one wrapping
+   line, the reason on a line of its own beneath them, never beside the knob. The switch is drawn as the option row's
+   box is (`--ink-secondary` frame, `--accent` once on, `--ink-disabled` when it cannot move); its name is the
+   sentence beside it and its `aria-label`. */
+/* Its shape is `.accounts-row-kind`'s (the group above); here only its place on the card. */
+.acct-knob { margin: var(--sp-1) 0 0; }
+.acct-switch {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.acct-switch:disabled { cursor: default; }
+.acct-switch-track {
+  display: block;
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border: 1.5px solid var(--ink-secondary);
+  border-radius: var(--r-full);
+  background: transparent;
+}
+.acct-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: var(--r-full);
+  background: var(--ink-secondary);
+}
+.acct-switch[aria-checked='true'] .acct-switch-track { border-color: var(--accent); background: var(--accent); }
+.acct-switch[aria-checked='true'] .acct-switch-thumb { left: auto; right: 2px; background: var(--ink-on-accent); }
+.acct-switch:disabled .acct-switch-track { border-color: var(--ink-disabled); background: transparent; }
+.acct-switch:disabled .acct-switch-thumb { background: var(--ink-disabled); }
+.accounts-row[data-state] .acct-knob-state {
+  flex: 1 1 14ch;
+  min-width: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-primary);
+}
+.acct-check, .acct-check-again, .acct-knob-move { flex: none; min-height: var(--tap-min); }
+.acct-check-again { justify-self: start; }
+/* The reason's ink and type are the trouble sentences' (the group above); here only its own line. */
+.acct-knob-reason { flex: 1 0 100%; }
+
+/* The Move sessions sheet (spec §4.5; accounts plan Task A3), inside <Sheet>'s panel: one row per session, its name on
+   the left and its outcome word right-aligned. The word never truncates: at a phone's width the name gives way and
+   wraps, the word does not. The list is `RESET_LIST`; the target sentence is `.sheet-copy`; the progress line is the live
+   count, in primary ink. */
+.move-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: var(--tap-min);
+  padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--edge-subtle);
+}
+.move-name { display: grid; min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
+.move-project { font-family: var(--family-mono); font-size: var(--fs-2xs); color: var(--ink-secondary); }
+.move-word {
+  flex: none;
+  max-width: 60%;
+  text-align: right;
+  font-size: var(--fs-meta);
+  color: var(--ink-secondary);
+}
+.move-progress { margin: var(--sp-2) 0; font-size: var(--fs-meta); color: var(--ink-primary); }
+.move-progress:empty { display: none; }
 
 /* — Your sign-in, which is NOT one of your accounts (D-161) —
    The passkey block and the session block used to be `.accounts-row` with an
@@ -3669,6 +3941,9 @@ button.proj-card-pool::before {
     overflow: hidden;
     overflow-wrap: anywhere;
   }
+  /* The Accounts card at a laptop's width and wider (accounts plan Task A2, D-7718; spec §12.1): its two meters sit
+     side by side. */
+  .accounts-row[data-state] .acct-rows { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: var(--sp-4); }
 }
 
 /* The banner stack's slot (W2 Task S2c, BannerStack.tsx): no box of its own, so a sticky banner inside it stays
@@ -3682,4 +3957,225 @@ button.proj-card-pool::before {
   display: flex;
   justify-content: flex-end;
   margin-bottom: var(--sp-2);
+}
+
+/* — The Add account door and the connect sheet (accounts plan Task A18, D-5522, D-7740; spec §5, §12.1–§12.4) —
+   The door is one per width: on a phone the lane list's last row, a `ListRow` at the skin's own row height (52px in
+   Refined, 44px in Instrument, `--row-h`), the word and its meta on one line that wraps only between them; at ≥900 a
+   secondary button in the page header. Narrowed, it stays where it is in the secondary ink (a word that must still read,
+   so never the disabled ink, which no text pair clears), with its reason beneath. */
+.acct-door {
+  flex-wrap: wrap;
+  column-gap: var(--sp-3);
+  row-gap: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-ui);
+  color: var(--ink-primary);
+}
+.acct-door-meta {
+  min-width: 0;
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
+}
+.acct-door[data-narrowed='true'],
+.acct-door[data-narrowed='true'] .acct-door-meta,
+.acct-door-action[data-narrowed='true'] { color: var(--ink-secondary); cursor: default; }
+.acct-door-reason { display: grid; gap: var(--sp-1); min-width: 0; }
+/* The sheet's body: every frame a stack, nothing wider than the sheet at 360. */
+.acct-connect,
+.acct-frame { display: grid; gap: var(--sp-3); min-width: 0; }
+.acct-field,
+.acct-secret { display: grid; gap: var(--sp-1); min-width: 0; }
+.acct-field > label,
+.acct-secret > label {
+  font-family: var(--family-mono);
+  font-size: var(--fs-meta);
+  font-weight: var(--weight-medium);
+  color: var(--ink-secondary);
+}
+/* The sheet's field notes, a narrowed row's reason and the door's reason: the trouble card's meta sentence style, kept
+   as a rule of its own because those rules are scoped under `.accounts-row[data-state]` and these sit in the sheet or
+   under the page header, outside any card. They may carry a long unbroken name, so they wrap anywhere. */
+.acct-field-note,
+.acct-narrowed,
+.acct-door-reason > p,
+.acct-door-reason .acct-fix-hold {
+  margin-block: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-secondary);
+  overflow-wrap: anywhere;
+}
+.acct-narrowed { display: block; }
+/* The derived config folder and wrapper: one mono line, ellipsised at a phone's width (spec §12.3). */
+.acct-derived {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  color: var(--ink-secondary);
+}
+/* The hue: six swatches in one row, each cell 44px, a worn hue ringed and still selectable. */
+.acct-hues { grid-template-columns: repeat(6, minmax(var(--tap-min), 1fr)); column-gap: var(--sp-1); }
+.acct-hues > legend { grid-column: 1 / -1; }
+.acct-hue { gap: var(--sp-1); min-width: var(--tap-min); }
+.acct-hue-body { display: inline-flex; align-items: center; }
+.acct-swatch {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+}
+.acct-swatch[data-worn='true'] { box-shadow: 0 0 0 2px var(--bg-raised), 0 0 0 3px var(--edge-strong); }
+/* Pick another name or Use what's there. */
+.acct-found {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+}
+/* The method radio: the name over its consequence line, and the reason a narrowed method gives. */
+.acct-methods { row-gap: var(--sp-2); }
+.acct-method-body { display: grid; gap: 2px; min-width: 0; }
+.acct-method-name { font-weight: var(--weight-medium); color: var(--ink-primary); }
+.acct-method-line { font-size: var(--fs-meta); color: var(--ink-secondary); }
+/* A frame's foot: the quiet acts, then the primary; a full-width primary takes its own line on a phone. */
+.acct-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* The step ledger: mono, a clock per line; only the running line breathes (the box is working). */
+.acct-ledger {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--family-mono);
+  font-size: var(--fs-sm);
+  color: var(--ink-primary);
+}
+.acct-ledger > li {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: var(--sp-2);
+}
+/* The running line's dot: the living process, the only glow here (spec §12.3). */
+.acct-ledger-dot {
+  width: var(--sp-2);
+  height: var(--sp-2);
+  border-radius: var(--r-full);
+  background: transparent;
+}
+.acct-ledger > li[data-live='true'] .acct-ledger-dot { background: var(--status-busy); animation: var(--animate-breathe); }
+@media (prefers-reduced-motion: reduce) {
+  .acct-ledger > li[data-live='true'] .acct-ledger-dot { animation: none; }
+}
+.acct-ledger-clock { flex: none; font-size: var(--fs-2xs); color: var(--ink-secondary); }
+.acct-ledger-text { min-width: 0; overflow-wrap: anywhere; }
+/* The result: a register, not a celebration. */
+.acct-result-word {
+  margin: 0;
+  font-family: var(--family-mono);
+  font-size: var(--fs-base);
+  font-weight: var(--weight-medium);
+  color: var(--ink-primary);
+}
+.acct-result-line {
+  margin: 0;
+  font-family: var(--family-ui);
+  font-size: var(--fs-sm);
+  color: var(--ink-secondary);
+}
+
+/* — Remove, Discard, Replace token and the compromise disclosure (accounts plan Task A19, D-7742; spec §9, §11, §3.11) —
+   The fold's two acts sit under the knob row and wrap at a phone's width. In the sheets, every block is a stack that is
+   never wider than the panel at 360: a session row keeps its act right-aligned and lets the name wrap, the ledger's
+   lines are mono and wrap anywhere (box paths), and the revoke row is the checklist item under its sentence. */
+.acct-fold {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  margin: var(--sp-1) 0 0;
+}
+.acct-fold > button,
+.acct-trouble-replace { flex: none; min-height: var(--tap-min); }
+.acct-trouble-replace { justify-self: start; }
+.acct-remove-block,
+.acct-removal-section,
+.acct-revoke { display: grid; gap: var(--sp-1); min-width: 0; }
+.acct-remove-session {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: var(--tap-min);
+  border-bottom: 1px solid var(--edge-subtle);
+}
+.acct-remove-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--family-ui);
+  font-size: var(--fs-sm);
+  color: var(--ink-primary);
+}
+.acct-session-word {
+  flex: none;
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-secondary);
+}
+/* A ledger section's heading: the sheet's own ink and face, a step heavier. */
+.acct-removal-head { margin: 0; font-size: var(--fs-sm); font-weight: var(--weight-medium); }
+.acct-removal-lines {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xs);
+  color: var(--ink-primary);
+  overflow-wrap: anywhere;
+}
+.acct-at-provider { display: grid; gap: var(--sp-1); min-width: 0; padding: var(--sp-1) 0; }
+/* The compromise disclosure: closed by default, its summary a 44px row in the sheet's ink. */
+.acct-compromise {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+}
+.acct-compromise > summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  cursor: pointer;
+  font-family: var(--family-ui);
+  font-size: var(--fs-sm);
+  font-weight: var(--weight-medium);
+  color: var(--ink-primary);
+}
+.acct-compromise-steps {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding-inline-start: var(--sp-4);
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-primary);
+  overflow-wrap: anywhere;
 }

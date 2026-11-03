@@ -1,0 +1,88 @@
+{
+  "name": "error-401-invalid-key",
+  "documentSource": "code",
+  "document": "query KeyCheck($after: String) { viewer { name } organization { id name urlKey } teams(first: 250, after: $after) { nodes { id key name } pageInfo { hasNextPage endCursor } } }",
+  "variables": {
+    "after": null
+  },
+  "requestBody": "{\"query\":\"query KeyCheck($after: String) { viewer { name } organization { id name urlKey } teams(first: 250, after: $after) { nodes { id key name } pageInfo { hasNextPage endCursor } } }\",\"variables\":{\"after\":null}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631412703,
+  "receivedAtMs": 1793631413938,
+  "sentAt": "2026-11-02T14:56:52.703+00:00",
+  "status": 401,
+  "statusLine": "HTTP/2 401 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:54 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "289"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "errors": [
+      {
+        "message": "Authentication required, not authenticated",
+        "extensions": {
+          "type": "authentication error",
+          "code": "AUTHENTICATION_ERROR",
+          "statusCode": 401,
+          "userError": true,
+          "userPresentableMessage": "You need to authenticate to access this operation.",
+          "meta": {},
+          "http": {
+            "status": 401
+          }
+        }
+      }
+    ]
+  },
+  "bodyRaw": "{\"errors\":[{\"message\":\"Authentication required, not authenticated\",\"extensions\":{\"type\":\"authentication error\",\"code\":\"AUTHENTICATION_ERROR\",\"statusCode\":401,\"userError\":true,\"userPresentableMessage\":\"You need to authenticate to access this operation.\",\"meta\":{},\"http\":{\"status\":401}}}]}\n",
+  "note": "A well-formed bogus key (the key prefix and 40 random alphanumerics), never a real one."
+}

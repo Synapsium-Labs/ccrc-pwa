@@ -892,11 +892,16 @@ describe('graphQueries — the read counter the console can see', () => {
 // nobody asked.
 describe('the SessionStart graph card', () => {
   /** THE CENSUS FIXTURE IS WRITTEN BY THE SWEEP'S OWN WRITER (D-1337).
-   *  `_gs_row` and `_gs_finish` are lifted verbatim out of ccd/ccd-graph-sweep
-   *  and run in a bash subshell against this fixture HOME, because the hook is
-   *  a SECOND, hand-rolled reader of that schema (`.passes[].trees[]` carrying
-   *  `path`/`outcome`/`reason`) with nothing importable to couple it to the
-   *  writer — the shape D-306 is the scar from. Hand-written JSON here would
+   *  `_gs_emit` (the one builder of a row's JSON), `_gs_row`, `_gs_finish` and
+   *  the sweep's `declare -A K_…` lines are lifted verbatim out of
+   *  ccd/ccd-graph-sweep and run from a driver file against this fixture HOME,
+   *  the rows travelling as arguments, because the hook is
+   *  a SECOND, hand-rolled reader of that schema (since graph revision 2's
+   *  repository sweep, D-7350: `.passes[].repos[]`, one row per repository
+   *  carrying `source`/`outcome`/`reason`) with nothing importable to couple it
+   *  to the writer — the shape D-306 is the scar from. A row is given here by the
+   *  tree it is about and written for that tree's repository: `source` is the
+   *  realpath of its common dir, the key the hook selects by. Hand-written JSON here would
    *  let a `reason` -> `why` rename leave every suite green while the shipped
    *  card went permanently silent on the no-graph path. install-session-hooks
    *  .test.ts derives its event list from the hook's own `case` block for
@@ -915,16 +920,31 @@ describe('the SessionStart graph card', () => {
    *  it. Call twice for two passes; the hook reads the LAST. */
   const sweepPass = (rows: { path: string; outcome: string; reason: string }[]): void => {
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
-    const script = [
+    const declares = fs.readFileSync(SWEEP, 'utf8').split('\n').filter((l) => /^declare -A K_/.test(l));
+    expect(declares.length, 'ccd-graph-sweep no longer declares its K_* state').toBeGreaterThan(0);
+    // The sweep's own top-level counter initialisers, verbatim (`GS_LINKED=0 …`, `GS_MDONE=0 …`): every counter
+    // `_gs_emit` reads must be among them, so a rename or a new counter cannot leave this driver behind.
+    const counters = fs.readFileSync(SWEEP, 'utf8').split('\n').filter((l) => /^GS_[A-Z]+=0 /.test(l));
+    const initialised = new Set(counters.flatMap((l) => [...l.matchAll(/(GS_[A-Z]+)=/g)].map((m) => m[1])));
+    for (const v of new Set([...liftFn('_gs_emit').matchAll(/\$\{?(GS_[A-Z_]+)/g)].map((m) => m[1]))) {
+      expect(initialised.has(v!), `ccd-graph-sweep no longer initialises ${v} at the top level`).toBe(true);
+    }
+    const driver = path.join(home, 'sweep-pass.sh');
+    fs.writeFileSync(driver, [
       'set -uo pipefail',
       'CENSUS="$HOME/.ccrc/graph-sweep.json"',
       'STARTED="2026-09-02T00:00:00Z"', 'PIN="0.9.9"', 'ROWS=()',
-      liftFn('_gs_row'), liftFn('_gs_finish'),
-      'while [ "$#" -gt 0 ]; do _gs_row "$1" "$2" "$3" 0; shift 3; done',
+      ...declares, ...counters,
+      liftFn('_gs_row'), liftFn('_gs_finish'), liftFn('_gs_emit'),
+      'n=0',
+      'while [ "$#" -gt 0 ]; do n=$((n+1)); K_RK["k$n"]=project-a-0123abcd; K_COMMON["k$n"]="$1"; K_OUTCOME["k$n"]="$2"; K_REASON["k$n"]="$3"; _gs_emit "k$n" >/dev/null; shift 3; done',
       '_gs_finish ok 0',
-    ].join('\n');
-    execFileSync('bash', ['-c', script, 'sweep',
-      ...rows.flatMap((r) => [r.path, r.outcome, r.reason])],
+    ].join('\n'));
+    const source = (tree: string): string => {
+      const gitDir = path.join(tree, '.git');
+      return fs.existsSync(gitDir) ? fs.realpathSync(gitDir) : gitDir;
+    };
+    execFileSync('bash', [driver, ...rows.flatMap((r) => [source(r.path), r.outcome, r.reason])],
       { env: { ...process.env, HOME: home }, encoding: 'utf8' });
   };
 
@@ -1211,21 +1231,45 @@ describe('the SessionStart graph card', () => {
     // execFileSync THROWS on a non-zero exit, so a green run is the exit-0
     // assertion — the contract this whole file lives under.
     //
-    // The census row is what makes the `[ -d "$cwd" ]` guard MEASURABLE. With
-    // nothing seeded, deleting that guard is invisible: the no-graph branch is
-    // taken anyway, the census read finds no file, and the card stays silent —
-    // the same green. Seeded with a row FOR THIS PATH, a hook that skipped the
-    // directory check would print the sweep's line about a directory that is
-    // not there, and this assertion goes red.
+    // A census is present, so the no-graph branch has a file to read. Until GR7
+    // (D-7353) this row seeded a per-tree row FOR THIS PATH, which made the
+    // `[ -d "$cwd" ]` guard measurable through the hook's old-shape arm (read by
+    // path). That arm is retired with the sweep's rewrite live (GR4): the hook
+    // reads only repository rows, matched by the realpath of the tree's common
+    // dir, which a directory that is not there cannot have. The guard's own
+    // effect on the census line is therefore no longer observable here; the row
+    // keeps the exit-0-and-silent contract.
     const gone = path.join(home, 'gone');
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     fs.writeFileSync(path.join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({
-      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [
-        { path: gone, outcome: 'never-built', reason: 'no exclude entry', duration_ms: 3 },
-      ] }],
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', repos: [] }],
     })); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so this subject's own silence is what is measured
     expect(run({ hook_event_name: 'SessionStart', cwd: gone })).toBe('');
     expect(readState().state).toBe('done');
+  });
+
+  // GR7 (D-7353): the per-tree arm the hook kept while the sweep still wrote the
+  // old shape (GR4-interim) is retired. A last pass with no `repos[]` says
+  // nothing about this tree, so the card gives no census line: neither one the
+  // sweep ended before any repository (`paused`, `pass-locked`, `failed`) nor a
+  // pass of the retired per-tree shape that names THIS PATH, which the old arm
+  // read by path and printed. That second census is the retirement's proof, and
+  // the one per-tree spelling left in the tree (graph-r2-consumers names it).
+  it('a last pass with no repos[] gives no census line, even an old-shape row for this path', () => {
+    const tree = path.join(home, 'tree');
+    gitTree(tree, 1); fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-basin.child'), '');   // a child row: the D-5301 role subject is silent, so this subject's own silence is what is measured
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const census = path.join(home, '.ccrc', 'graph-sweep.json');
+    fs.writeFileSync(census, JSON.stringify({
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'paused' }],
+    }));
+    expect(run({ hook_event_name: 'SessionStart', cwd: tree }), 'a pass ended before any repository').toBe('');
+    fs.writeFileSync(census, JSON.stringify({
+      passes: [{ started: 'x', finished: 'x', pin: '0.9.9', status: 'ok', trees: [
+        { path: tree, outcome: 'refused', reason: 'no exclude entry', duration_ms: 3 },
+      ] }],
+    }));
+    expect(run({ hook_event_name: 'SessionStart', cwd: tree }), 'a retired per-tree row for this path').toBe('');
   });
 
   it('exits 0 and still prints a card when the tree is not a git repo', () => {
@@ -10504,8 +10548,8 @@ describe('history scope marker: PreCompact records whose context is compacting (
     const fnLines = fnCode.split('\n');
     const w = fnLines.findIndex((l) => l.includes('> "$f"; } 2>/dev/null'));
     expect(w, 'no marker write').toBeGreaterThan(0);
-    expect(fnLines[w - 1]!.trim(), 'the regular-file test sits directly above the write, builtins only')
-      .toBe('[[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0');
+    expect(fnLines[w - 1]!.trim(), 'the regular-file test sits directly above the write, builtins only (D-5434\'s positive form, W4)')
+      .toBe('if [[ -L "$f" || -d "$f" || -p "$f" || -S "$f" || -b "$f" || -c "$f" ]]; then return 0; fi');
     // Either spelling of the directory: Task 9 re-points these lines to its HISTORY_SCOPE_DIR constant.
     const notLinkedScope = /&& ! -L "(?:\$HOME\/\.ccrc\/history\/scope|\$HISTORY_SCOPE_DIR)" \]\]/;
     expect(gate, 'the gate refuses a symlinked scope/').toMatch(notLinkedScope);
@@ -11462,4 +11506,37 @@ describe('the cheap PostToolUse arm forks exactly this (D-6929)', () => {
     process.env['CCRC_HOOK_UNDER_PIN'] = copy;
     try { expect(forksOf()).toEqual({ ...EXPECTED_FORKS, '(subshell)': EXPECTED_FORKS['(subshell)']! + 1 }); } finally { delete process.env['CCRC_HOOK_UNDER_PIN']; }
   }, 60_000);
+});
+// ── W4-H6, W4-H7 (delegation broker wave 4, PR4 Task 4.1): the scope marker's guard refuses only a POSITIVE non-regular
+// type, as D-5434's form in `_hook_join_record`. APPENDED, with NO new import line (the citation census cites this file by
+// line): the seam is loaded by a dynamic import, and the helpers are this describe's own, over the module-level fixture.
+describe('W4-H: the scope marker\'s guard refuses only a positive non-regular type (D-5434\'s form)', () => {
+  const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+  const marker = (): string => path.join(home, '.ccrc', 'history', 'scope', 'demo-quiet-basin');
+  const plant = (): void => {
+    fs.mkdirSync(path.dirname(marker()), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
+  };
+  const pre = (transcript: string): object => ({ ...preCompact(home, transcript, 'manual'), session_id: SID });
+
+  it('W4-H6: a marker created between any two of the guard\'s reads is still written: main <psid> <ms>', async () => {
+    const { seamHook, seamEnv, seamCount } = await import('./hookGuardSeam.js');
+    plant();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const { file, reads } = seamHook(home, '_hook_history_scope', 'f');
+    for (let k = 1; k <= reads; k += 1) {
+      fs.rmSync(marker(), { force: true }); fs.rmSync(path.join(home, 'w4-seam-n'), { force: true });
+      const r = spawnSync('bash', [file], {
+        input: JSON.stringify(pre(transcript)), encoding: 'utf8', env: hookEnv({ ...HISTORY_HOOK_SCRUB, ...seamEnv(home, k) }), timeout: 60_000,
+      });
+      expect(r.status, `k=${k}: exit 0`).toBe(0);
+      expect(seamCount(home), `k=${k}: the seam fired at read ${k}`).toBeGreaterThanOrEqual(k);
+      expect(fs.readFileSync(marker(), 'utf8'), `k=${k}: the marker reads main <psid> <ms>`).toMatch(new RegExp(`^main ${SID} \\d+\\n$`));
+    }
+  }, 120_000);
+
+  it('W4-H7: the scope guard tests a positive type (-L -d -p -S -b -c) and returns 0; no two-read shape stands before the write', async () => {
+    const { guardPin } = await import('./hookGuardSeam.js');
+    expect(guardPin('_hook_history_scope', 'f', 'return 0')).toEqual([]);
+  });
 });

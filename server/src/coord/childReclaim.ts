@@ -2,7 +2,7 @@ import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { RunCcd } from './ports.js';
+import type { RunCcd, WatcherCoordPort } from './ports.js';
 import type { Viewers } from '../viewer.js';
 import type { NotifyLog } from '../notifylog.js';
 import { CCD_ARGV, RECLAIM_CAP, RECLAIM_STALE_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
@@ -1067,7 +1067,7 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
  * failure with a detail. What it cannot name (a bug) rejects, and the close
  * route's port logs it; the sweep reaches the child either way.
  */
-export async function reclaimChild(deps: ChildReclaimDeps, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {
+export async function reclaimChild(deps: Omit<ChildReclaimDeps, 'coord'> & { coord: WatcherCoordPort }, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {
   return retireAct(childReclaimRetirePort(deps, req), CHILD_SPENT_RETIRE, req);
 }
 
@@ -1122,7 +1122,7 @@ function childReclaimDisabledDetailOf(reading: MarkerState | RetireRejected, whe
 
 /** The executor's read of `child-reclaim-disabled` at decide (step 2b'): one plain listing of its own, worded by
  *  `childReclaimDisabledDetailOf`. */
-async function childReclaimDisabledDetail(deps: ChildReclaimDeps, when: string): Promise<string | null> {
+async function childReclaimDisabledDetail(deps: Omit<ChildReclaimDeps, 'coord'> & { coord: WatcherCoordPort }, when: string): Promise<string | null> {
   let reading: MarkerState | RetireRejected;
   try {
     reading = await childReclaimDisabledRead(deps.io, deps.cfg.registryDir);
@@ -1142,7 +1142,7 @@ export interface ChildSpentActSwitches {
 /** Step 6's reader: the one listing the act already takes, read for both markers (no second registry read). It reads
  *  `readdirMeasured` (D-5969's ratchet: a listing whose failure decides reads the measured listing), collapsed here to
  *  the same `null` the plain listing gave, so an absent or unreadable registry is `unmeasurable` for both markers. */
-async function childSpentActSwitches(deps: ChildReclaimDeps): Promise<ChildSpentActSwitches> {
+async function childSpentActSwitches(deps: Omit<ChildReclaimDeps, 'coord'> & { coord: WatcherCoordPort }): Promise<ChildSpentActSwitches> {
   let names: readonly string[] | null;
   try {
     const listed = await deps.io.readdirMeasured(deps.cfg.registryDir);
@@ -1203,7 +1203,7 @@ export async function childReclaimRowListing(
  *  cancel). Never on a refusal or a failure: the child is still there and may
  *  still read its mail. A throw here is logged, never allowed to turn a
  *  finished reclaim into a rejection. */
-function childReclaimCancelMail(deps: ChildReclaimDeps, sessionId: string, why: 'reclaimed' | 'gone'): void {
+function childReclaimCancelMail(deps: Omit<ChildReclaimDeps, 'coord'> & { coord: WatcherCoordPort }, sessionId: string, why: 'reclaimed' | 'gone'): void {
   try {
     deps.coord.cancelDeliveriesTo(sessionId);
   } catch (err) {
@@ -1246,7 +1246,7 @@ function childReclaimRefusal(req: ChildReclaimRequest, token: ChildReclaimToken,
  *  resumable when it names a breadcrumb phase, or `unreadable`. So no exit-1
  *  document, a token-bearing one included, is ever spent (spec §5.7, §5.9). */
 async function childReclaimAudit(
-  deps: ChildReclaimDeps, req: ChildReclaimRequest,
+  deps: Omit<ChildReclaimDeps, 'coord'> & { coord: WatcherCoordPort }, req: ChildReclaimRequest,
 ): Promise<ChildReclaimAuditRead | ChildReclaimAuditUnmeasured> {
   const argv = CCD_ARGV.wsReclaimAudit(req.sessionId, req.deferExpired, req.stale);
   if (!ccdCan(deps.fleetState, 'wsReclaimAudit')) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
@@ -1261,7 +1261,7 @@ async function childReclaimAudit(
  *  merely in step 4: this is the scope `verb-gate.test.ts` reads for
  *  `ws-reclaim`'s gate, and the one line that must never run without it. */
 async function childReclaimAct(
-  deps: ChildReclaimDeps, req: ChildReclaimRequest, token: string,
+  deps: Omit<ChildReclaimDeps, 'coord'> & { coord: WatcherCoordPort }, req: ChildReclaimRequest, token: string,
 ): Promise<ChildReclaimVerbRead | 'unsupported'> {
   if (!ccdCan(deps.fleetState, 'wsReclaim')) return 'unsupported';
   const argv = CCD_ARGV.wsReclaim(token, req.runId, req.sessionId, req.deferExpired,
@@ -1386,7 +1386,7 @@ export function childReclaimReleaseActor(runId: number, program: string): string
  * itself.
  */
 export async function releaseRetiredChildHold(
-  deps: ChildReclaimDeps, req: ChildReclaimReleaseRequest,
+  deps: Omit<ChildReclaimDeps, 'coord'> & { coord: WatcherCoordPort }, req: ChildReclaimReleaseRequest,
 ): Promise<ChildReclaimReleaseOutcome> {
   const { sessionId, runId, reason, program, accountedRunId } = req;
 
@@ -1660,7 +1660,7 @@ export function childReclaimFeedSkips(o: Exclude<ChildReclaimOutcome, { kind: 'g
  * writer's own sentence, and the ring is flushed after its record.
  */
 function recordChildReclaimFeed(
-  deps: ChildReclaimDeps, o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>, req: ChildReclaimRequest,
+  deps: Omit<ChildReclaimDeps, 'coord'> & { coord: WatcherCoordPort }, o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>, req: ChildReclaimRequest,
 ): void {
   // Through the funnel (`notice.ts`, D-5859), `'record-only'`: every reclaim lands in the feed; no push per reap.
   notify(deps, { kind: 'run', sessionId: o.sessionId, runId: o.runId,
@@ -1679,7 +1679,7 @@ export const CHILD_RECLAIM_KEPT_FEED_TITLE = 'child reclaim kept';
  * handed, and the row says what the attention item says.
  */
 export function recordChildReclaimKeptFeed(
-  deps: Pick<ChildReclaimDeps, 'coord' | 'notifyLog'>, a: ChildReclaimKeptAttention,
+  deps: Omit<Pick<ChildReclaimDeps, 'coord' | 'notifyLog'>, 'coord'> & { coord: WatcherCoordPort }, a: ChildReclaimKeptAttention,
 ): void {
   // Through the funnel (`notice.ts`, D-5859), `'record-only'`: recorded whatever the presence, never pushed.
   notify(deps, { kind: 'run', sessionId: a.sessionId, runId: a.runId,
@@ -1694,7 +1694,7 @@ export function recordChildReclaimKeptFeed(
  * alone, in `recordChildReclaimKeptFeed`'s idiom: `kind: 'run'`, recorded and never pushed.
  */
 export function recordChildReclaimKeptReason(
-  deps: Pick<ChildReclaimDeps, 'coord' | 'notifyLog'>, limiter: KeptReasonLimiter,
+  deps: Omit<Pick<ChildReclaimDeps, 'coord' | 'notifyLog'>, 'coord'> & { coord: WatcherCoordPort }, limiter: KeptReasonLimiter,
   i: ChildReclaimSweepInput, v: ChildReclaimSweepVerdict,
 ): void {
   const reason = keptReasonOf(i, v);
@@ -1727,7 +1727,7 @@ export function childReclaimLeafKeptFeedBody(k: ChildReclaimLeafKept): string {
  * once per source row, per process.
  */
 export function recordChildReclaimLeafKeptFeed(
-  deps: Pick<ChildReclaimDeps, 'coord' | 'notifyLog'>, k: ChildReclaimLeafKept,
+  deps: Omit<Pick<ChildReclaimDeps, 'coord' | 'notifyLog'>, 'coord'> & { coord: WatcherCoordPort }, k: ChildReclaimLeafKept,
 ): void {
   // Through the funnel (`notice.ts`, D-5859), `'record-only'`: recorded whatever the presence, never pushed.
   notify(deps, { kind: 'run', sessionId: k.item.sessionId, runId: k.item.runId,
@@ -2409,7 +2409,7 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
  * act only. The executor writes the feed row (notice home `executor`).
  */
 export function childReclaimRetirePort(
-  deps: ChildReclaimDeps, req: ChildReclaimRequest,
+  deps: Omit<ChildReclaimDeps, 'coord'> & { coord: WatcherCoordPort }, req: ChildReclaimRequest,
 ): RetireActPort<ChildReclaimRequest, ChildSpentFacts, ChildReclaimOutcome> {
   const { sessionId, runId } = req;
   return {

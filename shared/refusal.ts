@@ -42,9 +42,10 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { AccountGateRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
+import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from './api.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
+import type { ItemMoveRefusal } from './ledgers.js';
 
 /**
  * The named workspace create's own words (named workspaces S5): decided by `planCreate` (`server/src/workspaceCreate.ts`,
@@ -53,6 +54,21 @@ import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
  */
 export const WS_CREATE_REFUSALS = ['bad-project', 'name-too-long', 'bad-name', 'bad-wrapper', 'id-too-long'] as const;
 export type WsCreateRefusal = (typeof WS_CREATE_REFUSALS)[number];
+
+/**
+ * The Linear proxy's own words (#1444, spec §6.8): the twelve `/api/linear/proxy/*` routes (`linear/proxyRoutes.ts`)
+ * answer them through `refuseRoute` with a computed word (the router's, the operation table's, a Linear answer's), so
+ * they are a typed vocabulary of their own rather than `GenericRefusal`s, whose "still sent" scan reads only literal
+ * words at a send. The words the proxy shares with older routes (`unauthenticated`, the attribution three,
+ * `bad-request`, `not-found`, `not-configured`, `rate-limited`, `timeout`, `unreachable`, `malformed`,
+ * `linear-unavailable`) keep their one row elsewhere in the table.
+ */
+export const LINEAR_PROXY_REFUSALS = [
+  'bad-field', 'team-unknown', 'workspace-unknown', 'name-unknown', 'team-ambiguous', 'workspace-required', 'name-ambiguous',
+  'issue-moved', 'policy-denied', 'policy-unavailable', 'journal-unavailable', 'linear-unauthorised', 'linear-forbidden',
+  'linear-invalid',
+] as const;
+export type LinearProxyRefusal = (typeof LINEAR_PROXY_REFUSALS)[number];
 
 /**
  * The workspace rename's own words (named workspaces S9, `POST /api/sessions/:id/title`), decided from ccd's refusal
@@ -94,10 +110,32 @@ export const GENERIC_REFUSALS = [
   'unknown-session', 'unmeasured', 'unrouteable-record', 'unsupported', 'unsupported-type',
   // The Linear routes (named workspaces S4 and S4b): the preview read's two and the connection routes' six.
   'bad-ref', 'ref-too-long', 'bad-key', 'key-rejected', 'key-forbidden', 'not-connected', 'unreachable', 'timeout', 'malformed',
+  // The Linear routes with no rate service to ask (#1444, D-7684): nothing calls Linear.
+  'linear-unavailable',
+  // The Settings add (#1444, spec §10.1): the key's workspace already has a slot, and `replace` was not sent.
+  'workspace-exists',
   // The named workspace create (named workspaces S5): ccd's three refusals, mapped by the route.
   'slug-taken', 'bad-slug', 'account-refused',
 ] as const;
 export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
+
+/**
+ * The programme ledgers' coordinator routes' own words (plan PL3): a coordinator acting outside its programme, a spec pin
+ * the Docs reader could not safely link, and an In short outside its bounds. Declared once, here, and spelled by the
+ * routes through this table (the idiom of `SWAP_REFUSALS` and `ARCHIVE_REFUSALS`), so no code is spelled a second time
+ * and the coord code-word census (`mail-routes.test.ts`) has no literal of theirs to find. An item move's four words
+ * (`unknown-item`, `wrong-actor`, `not-open`, `programme-live`) are `shared/ledgers.ts`'s `ItemMoveRefusal`, below.
+ */
+export const LEDGER_ROUTE_REFUSALS = {
+  notYourProgramme: 'not-your-programme', badSpecPath: 'bad-spec-path', badInShort: 'bad-in-short',
+  // The operator's routes (plan PL4): a tick when the programme has no open run (`programme-ended`: dismiss the item), when its
+  // only open run has no claimant (`programme-unclaimed`: abandon that run, a dismiss is refused `programme-live`), and a tick of
+  // a secret item (`use-secret-route`: the value goes to its own route, never the tick).
+  programmeEnded: 'programme-ended', programmeUnclaimed: 'programme-unclaimed', useSecretRoute: 'use-secret-route',
+  // …and the tick's mail past the mail body cap (review 1335 F6): the generic `too-large` word, 413, its status declared with the generic ones.
+  tooLarge: 'too-large',
+} as const;
+export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
@@ -108,7 +146,17 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The question door family (W3 Q3f, D-7030): its one word of its own, `kind-mismatch`.
   | QuestionDoorRefusal
   // The dead-dispatch switch door (D-7319): its one word of its own, `state-unreadable`.
-  | DispatchAbandonRefusal;
+  | DispatchAbandonRefusal
+  // The programme ledgers' coordinator routes (plan PL3): an item move's four words, declared once in `ledgers.ts`.
+  | ItemMoveRefusal | LedgerRouteRefusal
+  // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
+  | AccountRouteRefusal
+  // The Linear proxy's routes (#1444, spec §6.8): their fourteen words of their own.
+  | LinearProxyRefusal
+  // The write routes (accounts plan Task A17, D-7739): their words of their own.
+  | AccountWriteRefusal
+  // The sign-in routes (accounts plan Task A21, D-7793): their nine words of their own.
+  | AccountAuthRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -166,6 +214,27 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // answers, and never 401: the credential is fine, the box's own origin is not, and a 401 with a verdict would raise
   // the PWA's login screen, which no passphrase could clear. Its other four words are defined above.
   'insecure-origin': 403,
+  // The lane routes (accounts plan Task A14, D-7732): CHOSEN, not measured — new words. 409 for a lane the box's state
+  // refuses to act on now (the lock held, the last placeable lane, a verb's own refusal: the request was well formed),
+  // and 502 for an outcome the server could not learn, the status `fleetFailed` answers for a fleet that did not
+  // answer, because the box may have acted and the cure is the re-read, never the caller's retry.
+  'lane-busy': 409, 'last-enabled-home': 409, 'lane-act-refused': 409, 'outcome-unknown': 502,
+  // The write routes (accounts plan Task A17, D-7739): CHOSEN, not measured — new words, on the lane routes' rule. 400
+  // for what the operator can retype (a secret's bytes, the typed confirm, the stated account), 409 for a lane the box's
+  // state refuses to act on now, and 503 for a provider that did not answer the probe (`unreachable`'s status: a retry
+  // may help, and nothing was saved).
+  'key-charset': 400, 'confirm-mismatch': 400, 'bad-stated': 400,
+  'not-discardable': 409, 'lane-exists': 409, 'config-dir-exists': 409, 'live-sessions': 409, 'sleeping-sessions': 409,
+  'upstream': 409, 'last-home-able': 409, 'auth-in-progress': 409, 'not-a-token-lane': 409, 'duplicate-id': 409,
+  'token-unverified': 503,
+  // The sign-in routes (accounts plan Task A21, D-7793): CHOSEN, not measured — new words, on the write routes' rule. 400
+  // for a code the operator can paste again, 403 for a session that did not start the attempt (never 401: it is signed
+  // in), 409 for an attempt or a lane whose state refuses the act now, and 501 for a node that cannot run a sign-in at
+  // all, the status `unsupported` answers.
+  'bad-code': 400, 'not-your-attempt': 403,
+  'code-already-sent': 409, 'no-auth-attempt': 409, 'auth-url-untrusted': 409, 'method-unmeasured': 409, 'node-changed': 409,
+  'not-a-sign-in-lane': 409,
+  'auth-unsupported-here': 501,
   // The Linear routes (named workspaces S4, S4b): CHOSEN, not measured — new words. 400 for what the caller sent
   // (a ref with no text or over its cap, a key the shape rule refuses, a key Linear rejected or forbade: all things the
   // operator can fix and none a fault of the box), 409 for a check with no usable stored key, and 503 for Linear
@@ -174,6 +243,12 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'bad-ref': 400, 'ref-too-long': 400, 'bad-key': 400, 'key-rejected': 400, 'key-forbidden': 400,
   'not-connected': 409,
   'unreachable': 503, 'timeout': 503, 'malformed': 503,
+  // The Linear routes with no rate service (#1444, D-7684): CHOSEN — 503, the box's composition is missing a service
+  // it needs, which is the box's fault and not the caller's, the status `unavailable` answers.
+  'linear-unavailable': 503,
+  // The Settings add (#1444, spec §10.1): the status the spec gives it — 409, the request was well-formed and the box's
+  // state (a slot already holding the workspace) refused it, until the operator confirms the replace.
+  'workspace-exists': 409,
   // The named workspace create (named workspaces S5): CHOSEN — 400 for a name, project or wrapper the operator can
   // retype, 409 for a slug already in use and an account ccd will not place this workspace on (the request was
   // well-formed; the box's state refused it). A missing ccd cap answers the existing `unsupported` (501).
@@ -198,6 +273,27 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The dead-dispatch switch door (D-7319): CHOSEN, not measured — a new word. 503, the status the other `-unreadable`
   // words answer: the switch's one row could not be read, which is the box's fault and not the operator's.
   'state-unreadable': 503,
+  // The programme ledgers' coordinator routes (plan PL3): CHOSEN, not measured — new words. 403 for a coordinator acting
+  // outside its programme (the family of `not-owner` and `not-parent`), 400 for what the caller sent (the spec path and
+  // the In short copy), and an item move's four words from `shared/ledgers.ts`: 404 for an item that is not there, 409 for
+  // an item that is not in a state the move starts from, for the wrong actor and for a programme still running.
+  [LEDGER_ROUTE_REFUSALS.notYourProgramme]: 403, [LEDGER_ROUTE_REFUSALS.badSpecPath]: 400, [LEDGER_ROUTE_REFUSALS.badInShort]: 400,
+  'unknown-item': 404, 'not-open': 409, 'wrong-actor': 409, 'programme-live': 409,
+  // The operator's routes (plan PL4): CHOSEN, not measured. 409 for each: the item's programme is in a state the tick cannot
+  // act in, or the item is of a kind whose door is another route; none is a fault in what the operator sent.
+  [LEDGER_ROUTE_REFUSALS.programmeEnded]: 409, [LEDGER_ROUTE_REFUSALS.programmeUnclaimed]: 409, [LEDGER_ROUTE_REFUSALS.useSecretRoute]: 409,
+  // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
+  // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
+  // for a call that names more than one, or names an issue that now lives in another team; 403 for the policy point's
+  // deny and Linear's own 403; 503 for a policy or a journal that could not answer, the box's fault; 502 for a stored key
+  // Linear rejected (the box's key is bad, never the caller's request); 422 for an input Linear refused.
+  'bad-field': 400,
+  'team-unknown': 404, 'workspace-unknown': 404, 'name-unknown': 404,
+  'team-ambiguous': 409, 'workspace-required': 409, 'name-ambiguous': 409, 'issue-moved': 409,
+  'policy-denied': 403, 'linear-forbidden': 403,
+  'policy-unavailable': 503, 'journal-unavailable': 503,
+  'linear-unauthorised': 502,
+  'linear-invalid': 422,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */
@@ -226,11 +322,11 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
  *  GitHub #550). They travel in a `reject` object, never an `error` key, so they are neither `RouteRefusal`s nor
  *  `OpenRunConflict`s. `unknown-run` and `bad-session` are not `RunRefuseCode`s: the route sent them as bare literals. */
 export type AdvanceRejectCode = 'unknown-run' | 'bad-session'
-  | Extract<RunRefuseCode, 'bad-transition' | 'not-dispatched' | 'review-in-flight' | 'cap-concurrency'>;
+  | Extract<RunRefuseCode, 'bad-transition' | 'not-dispatched' | 'review-in-flight' | 'cap-concurrency' | 'ejection-not-merging'>;
 
 /** Each one's status, measured from the advance route's inline sends on landing day, never chosen: 404 for the one
  *  absent run, 409 for every refusal of a run that exists. */
 export const ADVANCE_REJECT_STATUS: Readonly<Record<AdvanceRejectCode, number>> = {
   'unknown-run': 404, 'bad-transition': 409, 'not-dispatched': 409, 'review-in-flight': 409,
-  'cap-concurrency': 409, 'bad-session': 409,
+  'cap-concurrency': 409, 'bad-session': 409, 'ejection-not-merging': 409,   // D-7619: chosen, not measured — the family's 409
 };

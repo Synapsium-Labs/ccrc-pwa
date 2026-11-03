@@ -552,6 +552,13 @@ export const CCD_ARGV = {
                    ...(slug === null ? [] : [slug]), ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
+  /** Landing order wave 5c (spec §5.5 "Landed state is PR-keyed"): one PR's state by number, with no workspace binding.
+   *  Sent only behind `PR_STATE_PR_CAP` (`CCD_CAN`'s `capRow`): an older ccd dies on this form's arity. The pr is refused
+   *  here as `prLanding` refuses its pairs. */
+  prStatePr: (p: string, pr: number | string) => {
+               if (!PR_NUMBER_RE.test(String(pr))) throw new Error('CCD_ARGV.prStatePr: a pr number is a positive integer with no leading zero');
+               return argv(['pr-state', '--project', p, '--pr', String(pr)]);
+             },
   // D-7378: the bounded train prover the PR sweep runs after `pr-state --project` when a line read `train-unread`.
   prTrainProve: (p: string)    => argv(['pr-train-prove', '--project', p]),
   /** D-6784: the checks lane's read. One call names 1 to 16 `<id>:<pr>` pairs (ccd refuses more, and refuses the
@@ -563,7 +570,7 @@ export const CCD_ARGV = {
                if (new Set(sessions.map(({ id }) => id)).size !== sessions.length) throw new Error('CCD_ARGV.prLanding: a session id appears once per call');
                return argv(['pr-landing', '--project', p, '--sessions', sessions.map(({ id, pr }) => {
                  if (!/^[A-Za-z0-9._][A-Za-z0-9._-]*$/.test(id)) throw new Error('CCD_ARGV.prLanding: a session id is letters, digits, dot, dash and underscore only, and does not start with a dash');
-                 if (!/^[1-9][0-9]{0,8}$/.test(String(pr))) throw new Error('CCD_ARGV.prLanding: a pr number is a positive integer with no leading zero');
+                 if (!PR_NUMBER_RE.test(String(pr))) throw new Error('CCD_ARGV.prLanding: a pr number is a positive integer with no leading zero');
                  return `${id}:${String(pr)}`;
                }).join(',')]);
              },
@@ -1149,6 +1156,15 @@ export const DOCS_CAP = 'docs-v1';
  *  asks it before every audit and again in the act's own scope (`verb-gate.test.ts`, `collect-temp-root.test.ts`). */
 export const COLLECT_CAP = 'collect-v1';
 
+/** The `ccd caps` token that says `pr-state` takes `--project <p> --pr <n>` (landing order wave 5c; spec §5.5
+ *  "Landed state is PR-keyed"). Spelled ONCE in `server/src`; ccd's echo and `ccdCapTokens.ts` are the other two
+ *  spellings, held equal by `ccd-archive.test.ts`'s `toContain`. READ IT THROUGH `ccdCan(state, 'prStatePr')`:
+ *  an older ccd dies on the arity of the new form, and `verbSupported(['pr-state'])` permits on every box. */
+export const PR_STATE_PR_CAP = 'pr-state-pr-v1';
+/** A pr number: a positive integer with no leading zero, at most nine digits. Module-local; `prLanding`'s pair check and
+ *  `prStatePr` read it, so the grammar is defined once. */
+const PR_NUMBER_RE = /^[1-9][0-9]{0,8}$/;
+
 /** The `ccd caps` token that says this box's ccd has the orphan lane (fleet disk retention spec 2026-10-23 section 2.3,
  *  D-6629): `ws-audit --orphans`, `ws-audit --orphan-hex <hex>` and `ws-orphan --expect <token> --tree-hex <hex>`, one ccd
  *  inode. Spelled ONCE in `server/src`; ccd's `echo orphan-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which
@@ -1315,7 +1331,7 @@ export const CCD_CAN = {
   // Named workspaces: `wsAddNamed` is `ws-add` with FLAGS, so the row is ungated like `wsAdd` and `planCreate` asks the
   // flag tokens (`WS_TITLE_CAP`, `WS_WRAPPER_CAP`) with `capSupported`. `ws-title` is a verb `ccd caps` lists by name.
   wsAddNamed: 'none', wsTitle: verbRow(WS_TITLE_VERB),
-  prStateSession: verbRow('pr-state'), prStateProject: verbRow('pr-state'), prOpen: verbRow('pr-open'),
+  prStateSession: verbRow('pr-state'), prStateProject: verbRow('pr-state'), prStatePr: capRow(PR_STATE_PR_CAP), prOpen: verbRow('pr-open'),
   prLanding: capRow('pr-landing-v1'),
   prTrainProve: verbRow('pr-train-prove'),
   wsArchive: verbRow('ws-archive'), wsRestore: verbRow('ws-restore'),

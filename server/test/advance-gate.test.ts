@@ -153,8 +153,22 @@ describe('advanceRequest — the body, then the target (ARCH-33)', () => {
 
   it('accepts a shaped body and hands back the id, the target and the fingerprint', () => {
     expect(advanceRequest('12', { to: 'merging', fingerprint: { ...FP, prNumber: 3 } }))
-      .toStrictEqual({ ok: true, req: { id: 12, to: 'merging', fingerprint: { ...FP, prNumber: 3 } } });
+      .toStrictEqual({ ok: true, req: { id: 12, to: 'merging', fingerprint: { ...FP, prNumber: 3 }, ejection: null } });
   });
+
+  it('reads an ejection on a retreat to working', () => {
+    expect(advanceRequest('1', { to: 'working', fingerprint: FP, ejection: { base: 'd'.repeat(40), kind: 'dequeued' } } as never))
+      .toStrictEqual({ ok: true, req: { id: 1, to: 'working', fingerprint: FP, ejection: { base: 'd'.repeat(40), kind: 'dequeued' } } });
+  });
+
+  it.each([
+    ['an ejection on merging', { to: 'merging', fingerprint: FP, ejection: { base: 'd'.repeat(40), kind: 'conflict' } }],
+    ['a 39-hex base', { to: 'working', fingerprint: FP, ejection: { base: 'd'.repeat(39), kind: 'conflict' } }],
+    ['an upper-case base', { to: 'working', fingerprint: FP, ejection: { base: 'D'.repeat(40), kind: 'conflict' } }],
+    ['an unknown kind', { to: 'working', fingerprint: FP, ejection: { base: 'd'.repeat(40), kind: 'sideways' } }],
+    ['a null ejection', { to: 'working', fingerprint: FP, ejection: null }],
+    ['a string ejection', { to: 'working', fingerprint: FP, ejection: 'conflict' }],
+  ])('refuses %s as bad-request', (_n, body) => { expect(advanceRequest('1', body as never)).toStrictEqual(bad); });
 
   it.each(['1.0', '01', '0', 'x', String(Number.MAX_SAFE_INTEGER + 1)])('refuses the run id %s as bad-request', (id) => {
     expect(advanceRequest(id, { to: 'working', fingerprint: FP })).toStrictEqual(bad);

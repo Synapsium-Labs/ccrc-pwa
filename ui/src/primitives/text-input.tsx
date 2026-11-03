@@ -20,7 +20,7 @@
 // entry in this app sits on this one token — `.caps-input`'s comment makes the
 // same point about the runs board. A `size="sm"` prop here would be a loaded
 // gun pointed at mobile.
-import type { InputHTMLAttributes, ReactNode } from 'react';
+import type { InputHTMLAttributes, ReactNode, Ref } from 'react';
 import { cn } from '../lib/cn';
 import { FOCUS_RING } from '../lib/focus';
 
@@ -98,6 +98,9 @@ export const TEXT_INPUT_STACKED =
 
 export interface TextInputProps extends InputHTMLAttributes<HTMLInputElement> {
   className?: string;
+  /** React 19 passes `ref` as a prop; the spread hands it to the <input>, as `Button`'s does. The connect sheet's secret
+   *  field holds its own value by it (D-7740). */
+  ref?: Ref<HTMLInputElement>;
 }
 
 export function TextInput({ className, type = 'text', ...props }: TextInputProps): ReactNode {

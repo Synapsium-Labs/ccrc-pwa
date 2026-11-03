@@ -832,8 +832,12 @@ if [ "$TARGET" = "agent" ]; then
   # ~/.ccrc/ccrc.env, else the template's 24G and 6G — on the box, never from this machine's config. A value it cannot
   # use keeps the one the installed drop-in carries, so a typo never shrinks a tuned box. Paths reach the
   # child as arguments; the `-c` string is fixed. A box that sets neither key gets the template byte for byte.
+  # The graph sweep's two units are rendered the same way (D-7354): `_graph_units service|timer <template> <dest>` calls
+  # `_inst_graph_service` or `_inst_graph_timer`, which read the period and the start timeout from the box's graph
+  # settings; a box that sets none gets the templates byte for byte.
   AGENT_BUILD_CMD='_unit_atomic() { cp -- "$1" "$2.incoming.$$" || return 1; chmod 644 "$2.incoming.$$" || return 1; mv -f -- "$2.incoming.$$" "$2" || return 1; rm -f -- "$2.incoming."*; }
 _slice_limits_unit() { bash -c ". \"\$1\" || exit 1; _inst_slice_limits \"\$2\" \"\$3\"" slice-limits ~/ccrc/ccd/ccrc "$1" "$2"; }
+_graph_units() { bash -c ". \"\$1\" || exit 1; _inst_graph_\$2 \"\$3\" \"\$4\"" graph-units ~/ccrc/ccd/ccrc "$1" "$2" "$3"; }
 cd ~/ccrc/agent && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user \
     && _unit_atomic ~/ccrc/deploy/ccrc-agent.service ~/.config/systemd/user/ccrc-agent.service \
@@ -853,8 +857,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.service ~/.config/systemd/user/ccd-pool-sync.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.timer ~/.config/systemd/user/ccd-pool-sync.timer \
-    && _unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/.config/systemd/user/ccd-graph-sweep.service \
-    && _unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/ccd-graph-sweep.timer \
+    && _graph_units service ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/.config/systemd/user/ccd-graph-sweep.service \
+    && _graph_units timer ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/ccd-graph-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-account-health.service ~/.config/systemd/user/ccd-account-health.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-account-health.timer ~/.config/systemd/user/ccd-account-health.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-telemetry-keepalive.service ~/.config/systemd/user/ccd-telemetry-keepalive.service \
@@ -983,10 +987,21 @@ cd ~/ccrc/agent && npm ci && npm run build \
   rsync -az --delete -e "${SSH[*]}" ccd/history-skill/ "$BOX":.cc-sessions/history-skill/
   install_atomic ccd/install-history-skill.sh .cc-sessions/install-history-skill.sh 755
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-history-skill.sh'
+  # THE LINEAR SKILL SHIPS FIFTH (#1444, spec 2026-10-31 §11). Every session's,
+  # whatever its role, as the history skill is, and like it the skill points
+  # into no other skill's tree, so this place is a grouping, not an ordering
+  # rule: it needs only the roster its installer sources, which lands above.
+  # Like the notes above, this comment deliberately does NOT spell this skill's
+  # directory name with a trailing slash: install-linear-skill.test.ts locates
+  # the rsync by the FIRST line in the arm that contains that spelling.
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/linear-skill'
+  rsync -az --delete -e "${SSH[*]}" ccd/linear-skill/ "$BOX":.cc-sessions/linear-skill/
+  install_atomic ccd/install-linear-skill.sh .cc-sessions/install-linear-skill.sh 755
+  "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-linear-skill.sh'
   # graphify Task 10 (O3/O6b): the assembled-SRC skill installer, AFTER all
-  # four roster-reading skill arms above (spec §B: its SRC is the INSTALLED
+  # five roster-reading skill arms above (spec §B: its SRC is the INSTALLED
   # package, never vendored, which is what makes it a plain `install_atomic` +
-  # remote run rather than the rsync-a-tree-then-run shape its four
+  # remote run rather than the rsync-a-tree-then-run shape its five
   # neighbours need).
   #
   # R-8 (fix round, F1): GATED on ~/.ccrc/graphify.pin existing on the box —

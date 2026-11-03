@@ -21,13 +21,12 @@ import type {
 import { AUTO_MODES, FLEET_SCOPE, NOTIFY_MODES, UPDATE_GATE_CAP } from '../../shared/api';
 import { LOOPBACK_HOSTS } from '../../shared/base-url';
 import {
-  AUTO_LABELS,
   AUTO_NOTES,
   autoGateMissing,
   CHANNEL_NOTES,
-  CHANNEL_SENTENCES,
   UNCONFIRMED_TEXT,
 } from '../src/screens/settings/UpdatesSection';
+import { AUTO_LABELS, CHANNEL_SENTENCES } from '../src/screens/settings/updatesWords';
 import { NOTIFY_LABELS } from '../src/screens/settings/NotificationsSection';
 import { unarmedExposure } from '../src/screens/settings/SignInGateCard';
 import { renderSettings } from './settingsHost';
@@ -2387,13 +2386,13 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(rows).toEqual(['updates', 'appearance', 'notifications', 'automation', 'security']);
   });
 
-  it('LOADING state: the Automation page is Stall watch, Temp root collector, Dispatches that never came back, Cleanup pause, then Roll idle sessions (D-7453), each a card under the page heading', async () => {
+  it('LOADING state: the Automation page is Stall watch, Temp root collector, Dispatches that never came back, Cleanup pause, Roll idle sessions (D-7453), then Test box (D-7412), each a card under the page heading', async () => {
     vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
     vi.spyOn(api, 'dispatchAbandon').mockReturnValue(new Promise(() => {}));
     await mount(swView());
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Automation']);
     expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent))
-      .toEqual([STALL_SECTION_TEXT.title, 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Roll idle sessions']);
+      .toEqual([STALL_SECTION_TEXT.title, 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Roll idle sessions', 'Test box']);
   });
 
   it('LANDED state (api.updates answered, so the Box token card renders): it renders on the Security page', async () => {

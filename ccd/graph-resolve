@@ -185,6 +185,10 @@ _gr_store_init() {
   printf '%s\n' "$r"
 }
 
+# ── _gr_store_marked — rc 0 when the root `_gr_store` resolved (GR_STORE) carries the marker ──
+# The one test of the marker outside `_gr_store_init`: `ccrc uninstall` removes a store only when it passes (D-7354).
+_gr_store_marked() { [ -n "${GR_STORE:-}" ] && [ -f "$GR_STORE/.ccrc-graph-store" ]; }
+
 # ── _gr_repo_key <common dir> — `<basename of the main checkout>-<first 8 hex of sha256(realpath(common dir))>` ──
 # The digest is of the realpath string, without a newline, so every worktree of one repository (they share the
 # common dir) and its main checkout get one key. The main checkout is the common dir's parent when the common dir is

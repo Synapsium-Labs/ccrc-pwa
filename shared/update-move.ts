@@ -73,3 +73,10 @@ export function agentPredatesUpdateOp(agentOps: readonly string[] | null): boole
 export function stampUnread(stampRead: string, currentVersion: string | null): boolean {
   return stampRead !== 'ok' || (currentVersion !== null && !isReleaseTag(currentVersion));
 }
+
+/** D-7680, D-7681: a release an UPDATE can move a node to — a catalogue row listed with its provenance bundle and not
+ *  yanked (spec §12's apply rule, D-3395). `moveRefusal`'s `unknown-tag` for an update is its negation; the apply
+ *  route asks it before its on-demand catalogue poll, and the PWA's skew banner before it offers a move. */
+export function updateTargetListed(row: { bundleListed: boolean; yanked: boolean } | undefined): boolean {
+  return row !== undefined && row.bundleListed === true && row.yanked === false;
+}

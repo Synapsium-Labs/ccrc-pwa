@@ -46,7 +46,9 @@ describe('the asks table', () => {
     // accounts plan Task A7), MIGRATIONS[26] (the mail_deliveries park
     // columns, D-5838), MIGRATIONS[27] (`secret_fingerprints`, D-5513,
     // accounts plan Task A10) and MIGRATIONS[28] (`feed_events.dedupe_key`,
-    // D-5860). Only MIGRATIONS[20] and MIGRATIONS[24]
+    // D-5860), and since then MIGRATIONS[29] to MIGRATIONS[36], the last being the programme ledgers' operator_items,
+    // operator_item_events and programme_modifications tables with the spec pin on programs (PL2). Only
+    // MIGRATIONS[20] and MIGRATIONS[24]
     // touch the asks table. This test asserts "no migration after the one it
     // knows about has changed the asks table's columns", not anything about
     // any of the twelve. The total is not pinned: the asks migration is found

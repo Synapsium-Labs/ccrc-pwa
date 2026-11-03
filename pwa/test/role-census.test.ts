@@ -224,10 +224,20 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.pool-new-label': META,
     '.acct-disclosure': META,
     '.pool-note': META,
-    '.proj-pending': META,
+    '.proj-pending, .proj-work': META,
     '.fleet-archived-row, .fleet-runs-row': META,
     '.archive-size': META,
     '.accounts-projection': META,
+    // The Accounts card's state words (accounts plan Task A2, D-7718): the roll-up, the lamp and the trouble sentences.
+    '.accounts-rollup': META,
+    '.acct-lamp': META,
+    // The kill switch row (accounts plan Task A14, D-7732): the reason beneath the knob joins the trouble sentences.
+    '.accounts-row[data-state] .acct-trouble-effect, .accounts-row[data-state] .acct-trouble-lead, .accounts-row[data-state] .acct-fix-hold, .accounts-row[data-state] .acct-knob-reason': META,
+    // …and its sentence beside the knob.
+    '.accounts-row[data-state] .acct-knob-state': META,
+    // The Move sessions sheet (accounts plan Task A3): each session's outcome word and the live progress line.
+    '.move-word': META,
+    '.move-progress': META,
     '.mail-dropped': META,
     '.mail-row .mail-body': META,
     '.run-row .run-state': META,
@@ -242,6 +252,16 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.settings-theme-name': UI,
     '.update-indicator-door': META,
     '.update-indicator-stale': META,
+    // The Add account door and the connect sheet (accounts plan Task A18, D-7740): the door's word (a row's label), the
+    // field labels, the field notes with a narrowed row's and the door's reason, and a method's consequence line.
+    '.acct-door': UI,
+    '.acct-field > label, .acct-secret > label': META,
+    '.acct-field-note, .acct-narrowed, .acct-door-reason > p, .acct-door-reason .acct-fix-hold': META,
+    '.acct-method-line': META,
+    // Remove and Replace token (accounts plan Task A19, D-7742): a session's restart word, and the compromise
+    // disclosure's steps.
+    '.acct-session-word': META,
+    '.acct-compromise-steps': META,
   },
   'shell.css': {
     '.shell-accounts .account-gauge-label': META,

@@ -16,6 +16,7 @@
 // field"). The shape moves, the ground stays.
 import type { ReactNode } from 'react';
 import type { SpawnChip } from './spawnWords';
+import { unmeasuredTitle } from './unmeasuredWords';
 import './fleet.css';
 
 /** The last spawn's verdict, as the fleet card and the run row both draw it.
@@ -41,10 +42,6 @@ export function LastSpawnChip({ chip }: { chip: SpawnChip | null }): ReactNode {
  *  parsed — the same small, honest register `.sess-held` keeps next door. It
  *  heals on its own the moment a later sweep measures clean. An empty list
  *  renders nothing: "nothing was unreadable" is not a fact worth a chip. */
-/** The unmeasured registry's sentence — ONE spelling for this chip and the row's `unreadable` marker (D-5545). */
-export const unmeasuredTitle = (fields: readonly string[]): string =>
-  `registry ${fields.join('/')} temporarily unreadable — retrying`;
-
 export function UnmeasuredChip({ fields }: { fields: readonly string[] }): ReactNode {
   if (fields.length === 0) return null;
   return (

@@ -1,0 +1,4 @@
+# The pristine install's slice (D-7409; spec §2.2 "the same caps"): the per-run MemoryMax=, MemorySwapMax= and
+# CPUQuota=, from the installer's drop-in, ccrc-testbox-install.slice.d/50-ccrc-testbox.conf.
+[Unit]
+Description=ccrc test box: the pristine install

@@ -13,7 +13,8 @@ import {
   isDialogMultiIndexes, isDialogText, QUESTION_DOOR_REFUSALS, type DialogMulti, type DialogMultiRefuseCode, type DialogRefuseCode,
   type DialogTabRefuseCode, type DialogTextRefuseCode, type QuestionDoorRefusal,
 } from '../../../shared/api';
-import { ApiError, failedTo, sendErrorText } from '../lib/api';
+import { ApiError } from '../lib/apiError';
+import { failedTo, sendErrorText } from '../lib/refusalWords';
 import { commitWord } from './askLive';
 
 /** The held line of an ask surface's header (D-6325, R4): said while a coordinator holds the question, so the operator

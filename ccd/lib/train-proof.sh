@@ -265,13 +265,13 @@ cmd_pr_train_prove() {   # ccd pr-train-prove --project <project> [--max <K>]
 # @ccd-lib:trainrecord
 # THE TRAIN PROOF'S TIME BUDGETS (D-7362), in seconds: the most one verb may
 # spend on train records, over every member it proves, each gh call bounded by
-# what is left (never more than `PR_GH_TIMEOUT`). The proof is computed in ONE
-# place (`_pr_train_proofs` -> `_ws_train_record`) and every reader takes its
-# answer, so the budgets are the only per-verb difference:
+# what is left (never more than `PR_GH_TIMEOUT`). The proof is made by `_ws_train_record`, entered through `_pr_train_proofs` for a workspace's rows and directly by `pr-train-prove` and `pr-state --pr`; the verdict is `_pr_py`'s one `train_flags` judge,
+# so the budgets are the only per-verb difference:
 #   pr-state --session  PR_STATE_TRAIN_TIMEOUT (inside the 25 s bound, beside its one rows call)
 #   pr-state --project  0 — the sweep has no room (`pr-timeout-budget.test.ts`) and reads proofs a
 #                       `--session` read, an audit or `pr-train-prove` already made and kept; a
 #                       labelled member with no kept proof reads `train-unread` (D-7378), unmeasured
+#   pr-state --pr       PR_STATE_TRAIN_TIMEOUT, beside its one `gh pr view` (PR_GH_VIEW_TIMEOUT), keeping its proofs
 #   pr-train-prove      PR_TRAIN_PROVE_TIMEOUT over at most PR_TRAIN_PROVE_MAX members, its own verb and
 #                       its own server row, run by the 120 s sweep after `pr-state --project` (D-7378)
 #   pr-landing          PR_LANDING_TRAIN_TIMEOUT, beside its GraphQL and REST reads, keeping nothing
@@ -498,7 +498,7 @@ _ws_train_record() {   # main repo number headOid baseShort [keep] -> 0 with the
 }
 
 _pr_train_proofs() {   # main repo branch baseShort keep rows -> _PR_TRAIN_PROOFS (the lines `_pr_py` hands python), _PR_TRAIN_REFUSED (`<n> <head>` per member whose record was READ and failed) and _PR_TRAIN_FAILS (`<n> <rc> <sentence>` per refused member). Called directly, never in $(…)
-  # THE ONE PLACE `landedInTrain` IS DECIDED (D-7362). Every reader of a train
+  # THE ONE PLACE a workspace's train candidates are proved (D-7362); `pr-state --pr` proves its one PR through `_ws_train_record` directly (D-7595). Every reader of a train
   # landing — `pr-state`'s phase and the archive trigger it feeds, the landing
   # lane's merged notice, the queue word, the cleanup audit and the reap —
   # runs the rows through here before `_pr_py` annotates them, and `annotate`

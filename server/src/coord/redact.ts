@@ -11,7 +11,7 @@
  * one place.
  */
 import { credentialMaskSource } from '../../../shared/api.js';
-import { EGRESS_MASK, redact } from '../../../shared/redact.js';
+import { EGRESS_MASK, redact, redactCount, type RedactCount, type RedactProfile } from '../../../shared/redact.js';
 
 /** The one mask. */
 export const REDACTED = EGRESS_MASK;
@@ -29,6 +29,12 @@ const SHAPES = { genericSk: credentialMaskSource('genericSk'), jwt: credentialMa
 /** Masks every token-shaped string in `text` (the shapes `shared/redact.mjs` lists). */
 export function redactCommand(text: string): string {
   return redact('egress', text, SHAPES);
+}
+
+/** A shaped profile over `text`, over the same two shapes, with the count of the spans it masked (#1444, spec §13.4):
+ *  how the Linear operation table runs its prose profile without a second reader of the credential shapes. */
+export function redactShapedCount(profile: Exclude<RedactProfile, 'docs'>, text: string): RedactCount {
+  return redactCount(profile, text, SHAPES);
 }
 
 /** `text` cut to at most `maxBytes` UTF-8 bytes, never inside a character. */

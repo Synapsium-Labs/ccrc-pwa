@@ -1,6 +1,6 @@
 // Docs W5 part 1, Task 6: the docs link policy (spec 2026-10-01 4.11; refinements (n), (o), (q)). `detachUrls` returns
 // a copy of a parsed tree with every `html-url-attributes` property moved into a WeakMap (it never writes its input),
-// numbers the images and records each `pre`'s highlight decision; `DocLink` is the only thing that puts an `href` in
+// numbers the images (from W5h-a it decides nothing about highlighting: the page's highlight store does); `DocLink` is the only thing that puts an `href` in
 // the DOM, from `docLinkTarget`'s one decision: a doc link in-app at the page's ref with `view` dropped (M4.U3), an
 // external link opened on tap only (M4.U4), a fragment scrolled inside the article with no history entry (M4.U7), an
 // in-repo file outside the sections through `githubBlobUrl`, and an inert span for everything else. `docsLocation` is
@@ -14,7 +14,9 @@ import { SHARED_COMPONENTS } from '../src/lib/markdown';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
 import { DocLink, DocLinkContext, type DocLinkContextValue } from '../src/docs/DocLink';
-import { detachUrls, docLinkTarget, docsLocation, type Detached } from '../src/docs/docsLinks';
+import {
+  detachUrls, docLinkTarget, docsLocation, type Detached,
+} from '../src/docs/docsLinks';
 import { DOCS_HEAD_TEXT, DOC_LINK_INERT_SENTENCE, DOC_LINK_OUTSIDE_PAGE, type DocLinkInertReason } from '../src/docs/docsText';
 import { pageAt, treeOk } from './docsFixtures';
 
@@ -152,9 +154,9 @@ describe('detachUrls: a copy with every URL moved into the map (spec 4.11; refin
     const imgs = elements(d.tree).filter((e) => e.tagName === 'img');
     expect(imgs.map((e) => [e.properties['alt'], d.urls.get(e)?.imageIndex, d.urls.get(e)?.attrs['src']]))
       .toEqual([['a', 0, 'a.png'], ['b', 1, 'b.png'], ['c', 2, 'c.png']]);
-    expect(imgs.every((e) => !Object.hasOwn(e.properties, 'src') && d.urls.get(e)?.highlight === null)).toBe(true);
+    expect(imgs.every((e) => !Object.hasOwn(e.properties, 'src'))).toBe(true);
     const a = elements(d.tree).find((e) => e.tagName === 'a')!;
-    expect(d.urls.get(a)).toEqual({ attrs: { href: 'd.md' }, imageIndex: null, highlight: null });
+    expect(d.urls.get(a)).toEqual({ attrs: { href: 'd.md' }, imageIndex: null });
     expect(elements(d.tree).filter((e) => e.tagName === 'p' || e.tagName === 'li').some((e) => d.urls.has(e))).toBe(false);
   });
 

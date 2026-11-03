@@ -1,7 +1,7 @@
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { RunCcd } from './ports.js';
+import type { RunCcd, WatcherCoordPort } from './ports.js';
 import { cutShort } from '../lifecycle.js';
 import type { SessionRecord } from '../registry.js';
 import type { TurnVerdict } from './archiveDoor.js';
@@ -466,7 +466,7 @@ async function spawnFresh(
  * brief. The coordinator's next dispatch of the run resumes the bound workspace through the resume arm below.
  */
 export function bindReturnedChild(
-  coord: CoordStore, b: { runId: number; sessionId: string; claimedBy: string; startedAt: number },
+  coord: WatcherCoordPort, b: { runId: number; sessionId: string; claimedBy: string; startedAt: number },
 ): { ok: true } | { ok: false; why: string } {
   const read = coord.run(b.runId);
   if (!read.ok) return { ok: false, why: `the run could not be read (${read.detail})` };

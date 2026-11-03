@@ -8,8 +8,9 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { SECRET_MASK, type AccountsResponse } from '../../shared/api.js';
+import { ACCOUNT_AUTH_CAP, ACCOUNT_CAPS, SECRET_MASK, type AccountsResponse } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
+import { accountsConnect } from '../src/accounts/lanes.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import type { PtyLike } from '../src/pty.js';
 import { testDeps } from './helpers.js';
@@ -75,7 +76,7 @@ describe('GET /api/accounts: lanes and connect (D-5511, D-5517)', () => {
     expect(Date.now() - t0).toBeLessThan(2_000);   // the FIFO at gpt's name is never waited on
     expect(res.statusCode).toBe(200);
     const body = res.json() as AccountsResponse;
-    expect(body.connect).toEqual({ accountOps: 'unsupported', gate: 'armed', origin: 'loopback' });
+    expect(body.connect).toEqual({ accountOps: 'unsupported', gate: 'armed', origin: 'loopback', caps: [] });
     const lanes = body.lanes!;
     // One lane per rostered account, whatever its file says.
     expect(Object.keys(lanes).sort()).toEqual(body.roster.map((r) => r.id).sort());
@@ -159,5 +160,20 @@ describe('GET /api/accounts: lanes and connect (D-5511, D-5517)', () => {
         await w.app.close();
       }
     }
+  });
+});
+
+// D-7740: `connect.caps` names the account cap words the fleet advertises that this server's `ACCOUNT_CAPS` knows, so
+// the connect sheet narrows each method by its own word (N4) and a word a later wave has not added is never offered.
+describe('connect.caps (D-7740)', () => {
+  it('is the advertised words this server knows, in its order; no evidence is none', () => {
+    const at = { origin: 'https' as const, stepUpFreshUntil: null };
+    // `account-auth-v1` gates the sign-in routes (A21) but is held out of `ACCOUNT_CAPS` until the screen that runs a
+    // sign-in ships (A22, D-7793 (1)): offered now, it would open the Anthropic sheet on Mint, which the sheet cannot run.
+    expect(accountsConnect({ ...at, ccdVerbs: ['ws-new', 'account-v2', 'account-auth-v1'] }))
+      .toEqual({ accountOps: 'available', gate: 'armed', origin: 'https', caps: ['account-v2'] });
+    expect(ACCOUNT_CAPS as readonly string[]).not.toContain(ACCOUNT_AUTH_CAP);
+    expect(accountsConnect({ ...at, ccdVerbs: null })).toEqual({ accountOps: 'unsupported', gate: 'armed', origin: 'https', caps: [] });
+    expect(accountsConnect({ ...at, ccdVerbs: ['ws-new'] }).caps).toEqual([]);
   });
 });

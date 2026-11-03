@@ -17,13 +17,12 @@
 // the screen around them always describe one fleet.
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
-import { fleetTree } from './fleetTree';
+import { fleetTree, unplacedActivities } from './fleetTree';
 import { ProjectCard } from './ProjectCard';
 import { isRunClosed } from './runWords';
 import { useFolded, useRollupPrefs } from './foldState';
 import { useHoldView } from './useHoldView';
-import { useRollupClock } from './useRollupClock';
-import { markerState } from './coordWords';
+import { useBoxClock } from './useBoxClock';
 import { cardBoxes, foldedCard } from './programmeBoxes';
 import { prunePrefs, rollupFleet, toggleChildren, toggleProject } from './rollup';
 import type { FleetSession } from '../../../shared/api';
@@ -44,6 +43,9 @@ export function FleetCards({ selectedId, onOpen }: {
   const roster = useStore((s) => s.roster);
   const pools = useStore((s) => s.pools);
   const fleetFrameSeen = useStore((s) => s.fleetFrameSeen);
+  // Delegation broker wave 4: the `delegation` frame, `null` when unavailable — never defaulted to an empty one, so
+  // an older server's screen claims nothing (spec §5.13).
+  const delegation = useStore((s) => s.delegation);
   // The unseen watermark, subscribed as `FleetScreen` subscribes it (seen.ts publishes; no re-read of storage).
   const acks = useSyncExternalStore(subscribeAcks, acksSnapshot);
   const flows = useFleetFlows();
@@ -61,25 +63,23 @@ export function FleetCards({ selectedId, onOpen }: {
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
   // D-6088: the rollup's per-device preferences, and the clock its 30-minute window reads: one timer, for the next window
-  // end or box stall boundary (`useRollupClock`), and the rollup reads `roll.now` only when it is rebuilt. A folded
+  // end or box stall boundary (`useBoxClock`), and the rollup reads `roll.now` only when it is rebuilt. A folded
   // card's "active … ago" runs its own 30 s interval (`ProjectCardHead`'s `LastActive`), so a quiet fleet runs that,
   // and no one-second timer.
   const [rollupPrefs, updateRollup] = useRollupPrefs();
-  // Task G1b (D-7380, D-7373, D-7376): a programme box's threshold is the stall watch's own quiet time (the runs frame's,
-  // read once in the store), its pause the coord frame's, and its clock this one: the timer also wakes when a box
-  // crosses its threshold (`nextStallBoundary`). The cards are handed the time read when `next` last moved (`boxNow`):
-  // with the same runs, quiet time and pause no box crosses between two moves of `next`, so that time reads every box's
-  // state as the real time would, and a memo'd card's props change only at a boundary or with a frame (C9).
-  const stallQuietMs = useStore((s) => s.stallQuietMs);
-  const coordPaused = useStore((s) => markerState(s.coord?.pause) === 'set');
-  const roll = useRollupClock(sessions, activeRuns, stallQuietMs, coordPaused);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.next` stands for `roll.now`, as for the rollup below.
-  const boxNow = useMemo(() => roll.now, [roll.next, activeRuns, stallQuietMs, coordPaused]);
+  // Task G1b, G1d (D-7380, D-7373, D-7376): a programme box's threshold is the stall watch's own quiet time (the runs frame's,
+  // read once in the store), its pause the coord frame's, and its clock this one, the hook the Status view reads too: the
+  // timer also wakes when a box crosses its threshold (`nextStallBoundary`). The cards are handed the time read when `next`
+  // last moved (`boxNow`): with the same runs, quiet time and pause no box crosses between two moves of `next`, so that time
+  // reads every box's state as the real time would, and a memo'd card's props change only at a boundary or with a frame (C9).
+  const { roll, boxNow, stallQuietMs, coordPaused } = useBoxClock(useStore, sessions, activeRuns);
   // The tree the cards draw, once, and its rollup over the same groups (D-6088). Memoised (C9): the rollup reads the
   // time when it is rebuilt, which is on a new tree, a new preference or selection, or a move of `roll.next` (a window's
   // end, or a box's stall boundary, where the rollup is rebuilt to the same answer: harmless, one rebuild a boundary).
   const tree = useMemo(
-    () => fleetTree(sessions, projects.knownProjects, activeRuns, acks), [sessions, projects.knownProjects, activeRuns, acks]);
+    () => fleetTree(sessions, projects.knownProjects, activeRuns, acks, delegation),
+    [sessions, projects.knownProjects, activeRuns, acks, delegation]);
+  const unplaced = useMemo(() => unplacedActivities(sessions, delegation), [sessions, delegation]);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.next` stands for `roll.now`: it moves only at a boundary.
   const rollup = useMemo(() => rollupFleet(tree, rollupPrefs, roll.now, selectedId), [tree, rollupPrefs, selectedId, roll.next]);
   // Rule 4's reset: a stored ▾ made in the other activity class, or an open worker line whose coordinator left, is
@@ -132,7 +132,12 @@ export function FleetCards({ selectedId, onOpen }: {
   const coordOf = useCallback((id: string): FleetSession | null => byId.get(id) ?? null, [byId]);
 
   return (
-    <div className="fleet-list" ref={listRef}>
+    <div
+      className="fleet-list"
+      ref={listRef}
+      data-delegation={delegation === null ? 'unavailable' : 'measured'}
+      data-delegation-unplaced={unplaced > 0 ? unplaced : undefined}
+    >
       {tree.map((g) => (
         <ProjectCard
           key={g.project}
@@ -209,6 +214,9 @@ export function FleetCards({ selectedId, onOpen }: {
           archivedOpen={folded.has(`${g.project}::archived`)}
           /* The same inversion, for the Released fold (workspace lifecycle spec §5.1). */
           releasedOpen={folded.has(`${g.project}::released`)}
+          /* The same inversion, for the delegation broker's two groups (wave 4): both start closed. */
+          offlineOpen={folded.has(`${g.project}::offline-coordinator`)}
+          unownedOpen={folded.has(`${g.project}::unowned`)}
           onArchiveReleased={flows.openArchiveAll}
           archivingReleased={archiveAll.archiving.has(g.project)}
         />

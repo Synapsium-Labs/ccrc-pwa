@@ -1,8 +1,15 @@
 import { createHash } from 'node:crypto';
-import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
+import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
+import type { GoalsView, ItemAct, ItemActor } from '../../../shared/ledgers.js';
+import * as ledgers from './ledgersStore.js';
+import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
+export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
+import { decideLandingWrite, landingEntryOfRow, landingFlagsOfRow } from './landingEntry.js';
+import type { LandingAdvance, LandingWrite } from './landingEntry.js';
+import type { LandingEntry, LandingEntryState } from '../../../shared/landingLine.js';
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { renderEnvelope } from './envelope.js';
@@ -12,6 +19,7 @@ import { decideAllocation } from './ledger.js';
 // policy — the house port pattern. This read exists to feed that policy and
 // nothing else, so the shape it returns is the policy's to define.
 import type { CoordPlacementStamp } from './placement.js';
+import type { DelegationProjectionRun } from './delegation-projection.js';
 import type { LastRun } from './released.js';
 import type { BindingRun, Incarnation } from './runBinding.js';
 import { boundRows, openRows, type SeriesRow } from './bindingRows.js';
@@ -67,7 +75,7 @@ import {
 import { bodyDigest } from '../../../shared/mark.mjs';
 // Fix round 1, item 5 (ruling A): the same tag comparator every other
 // ordering in this design uses — never `publishedAt` — for `newestUnyankedStable`.
-import { newestTag } from '../../../shared/semver.js';
+import { isNewerTag, newestTag } from '../../../shared/semver.js';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import type { RollSettingsRead } from './rollTarget.js';
 import {
@@ -143,7 +151,7 @@ import {
   type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind,
   type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
   type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
-  type WorkItemState, type LastReviewReport,
+  type WorkItemState, type LastReviewReport, type RunRefuseCode,
 } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
@@ -254,6 +262,13 @@ export type AdvanceResult =
   /** `closeRun`'s compare-and-set (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): the run's `claimedBy`
    *  is no longer the id the caller expected — a successor took the programme — so nothing was written. */
   | { ok: false; error: 'claimant-changed'; claimedBy: string | null };
+
+/** `advanceLanding`'s answer: an `AdvanceResult` that carries what the landing line recorded when it succeeded, and
+ *  the one refusal of its own (D-7619), which the route sends on `reject.code`. */
+export type LandingAdvanceResult =
+  | (Extract<AdvanceResult, { ok: true }> & { landing: LandingWrite })
+  | Exclude<AdvanceResult, { ok: true }>
+  | { ok: false; error: Extract<RunRefuseCode, 'ejection-not-merging'>; from: RunState };
 
 /** `setAccountPools`'s answer (T6-R4, fix round 1; `error`'s vocabulary moved
  *  to `shared/api.ts`'s `SetAccountPoolsRefuseCode` in fix round 2 — see C1
@@ -474,7 +489,8 @@ export type ReleaseLeaseResult =
   | { ok: false; why: 'stale-report'; updateStartedAt: number };
 
 export type SettleNodeResult =
-  | { ok: true; clearedRequest: boolean }
+  /** D-7678: `keptRequest` — a request written beside the running lease survived it (see `settleNode`). */
+  | { ok: true; clearedRequest: boolean; keptRequest: boolean }
   | { ok: false; why: 'unknown-node' }
   | { ok: false; why: 'superseded'; supersededBy: string }
   | { ok: false; why: 'halted'; state: 'failed' | 'reverted' }
@@ -855,6 +871,11 @@ export type StallObservation =
  *  (a run not idle and not terminal); `episode` is the checks lane's (a run waiting at `merging` whose current episode
  *  is `episode`, PR landing in ccrc stage 1). */
 export type ObservationPredicate = { readonly kind: 'active' } | { readonly kind: 'episode'; readonly episode: number };
+
+/** `delegationRunStamps`' answer: every stamp, or the one reason none is given (all-or-failure). */
+export type DelegationRunStampsResult =
+  | { ok: true; runs: DelegationProjectionRun[] }
+  | { ok: false; kind: 'run-unreadable'; detail: string };
 
 export type CoordPlacementStampsResult =
   | { ok: true; stamps: CoordPlacementStamp[] }
@@ -2940,6 +2961,77 @@ export class CoordStore {
     });
   }
 
+  /**
+   * The landing line's one composite write (landing order wave 5e, D-7614): the run's advance and its line entry in ONE
+   * `tx()`, the way `dispatchRun` and `closeRun` compose theirs. It is the ONE writer of `landing_entries.pinnedSha`
+   * and `.ejections`. It decides the edge first, so a refused advance writes no entry and no event; it builds the
+   * `merging-at:` detail itself from the same head it writes as `pinnedSha`, so the two cannot disagree. The choice of
+   * what to write is `decideLandingWrite`'s (L1). The advance is never refused on the line's account (D-7618), and an
+   * ejection body on a run not at `merging` is the one refusal of its own (D-7619). A `LandingAdvance` that pairs
+   * wrongly with `to` is a programming error and throws, rolling everything back.
+   */
+  advanceLanding(input: { runId: number; to: RunState; causedBy: string; landing: LandingAdvance }): LandingAdvanceResult {
+    const { runId, to, causedBy, landing } = input;
+    return tx(this.db, () => {
+      const row = this.db.prepare('SELECT state, kind, project FROM runs WHERE id = ?').get(runId) as
+        { state: string; kind: string; project: string } | undefined;
+      if (!row) return { ok: false as const, error: 'unknown-run' as const };
+      const from = isRunState(row.state) ? row.state : 'unknown';
+      const kind = isRunKind(row.kind) ? row.kind : 'unknown';
+      if (!(transitionsFor(kind)[from] as readonly string[]).includes(to)) {
+        return { ok: false as const, error: 'bad-transition' as const, from, to };
+      }
+      if ((landing.kind === 'pin') !== (to === 'merging') || (landing.kind === 'retreat' && to !== 'working')) {
+        throw new Error(`advanceLanding: a ${landing.kind} advance does not pair with a move to ${to}`);
+      }
+      if (landing.kind === 'retreat' && landing.ejection !== null && from !== 'merging') {
+        return { ok: false as const, error: 'ejection-not-merging' as const, from };
+      }
+      const episode = landing.kind === 'retreat' ? this.currentEpisode(runId) : null;
+      const pr = landing.kind === 'pin' ? landing.pr : episode?.pr ?? null;
+      const current = pr === null ? null : this.landingEntryOf(row.project, pr);
+      const decision = decideLandingWrite({ landing, from, runId, current, episode });
+      const adv = this.advanceInner(runId, to, causedBy,
+        landing.kind === 'pin' ? mergingAtDetail(landing.head, landing.pr, landing.mode) : undefined);
+      if (!adv.ok) return adv;
+      if (decision.act === 'none') return { ...adv, landing: decision.write };
+      const pinned: LandingEntryState = 'pinned';
+      const ejected: LandingEntryState = 'ejected';
+      if (landing.kind === 'pin' && decision.act === 'insert') {
+        this.db.prepare('INSERT INTO landing_entries (project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(row.project, landing.pr, landing.head, landing.handoffCommit, runId, pinned, causedBy, Date.now());
+      } else if (landing.kind === 'pin' && decision.act === 'repin') {
+        this.db.prepare('UPDATE landing_entries SET pinnedSha = ?, handoffCommit = ?, runId = ?, state = ?, baseSha = NULL, ' +
+          'ejectionKind = NULL, pinnedAt = ? WHERE id = ?').run(landing.head, landing.handoffCommit, runId, pinned, Date.now(), decision.id);
+      } else if (decision.act === 'eject') {
+        this.db.prepare('UPDATE landing_entries SET state = ?, baseSha = ?, ejectionKind = ?, ejections = ejections + 1 WHERE id = ?')
+          .run(ejected, decision.base, decision.kind, decision.id);
+      }
+      const entry = pr === null ? null : this.landingEntryOf(row.project, pr);
+      if (entry === null) throw new Error('advanceLanding: the entry it just wrote reads back absent');
+      return { ...adv, landing: decision.act === 'eject' ? { kind: 'ejected' as const, entry }
+        : { kind: 'pinned' as const, entry, created: decision.act === 'insert' } };
+    });
+  }
+
+  /** One entry by (project, pr), read through `landingEntryOfRow`; null when there is none. */
+  private landingEntryOf(project: string, pr: number): LandingEntry | null {
+    const row = this.db.prepare('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, ' +
+      'afterIds, fixesMain, setBy, pinnedAt FROM landing_entries WHERE project = ? AND pr = ?').get(project, pr);
+    return row === undefined ? null : landingEntryOfRow(row);
+  }
+
+  /** A project's landing line, oldest pin first (`pinnedAt`, then `id`). An unreadable row reads `unknown`, never absent. */
+  landingEntries(project: string): LandingEntry[] {
+    return this.db.prepare('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, ' +
+      'afterIds, fixesMain, setBy, pinnedAt FROM landing_entries WHERE project = ? ORDER BY pinnedAt, id').all(project).map(landingEntryOfRow);
+  }
+
+  /** A project's two line flags. An absent row, which nothing seeds, reads both clear. */
+  landingProject(project: string): { operatorPaused: boolean; mainRedHold: boolean } {
+    return landingFlagsOfRow(this.db.prepare('SELECT operatorPaused, mainRedHold FROM landing_projects WHERE project = ?').get(project));
+  }
+
   /** Review findings 8/14: every `queued` or `delivered`-but-unacked delivery
    *  of this run's OWN mail, parked `rejected('undeliverable')` — the same
    *  typed park `sweepMail` already uses for a delivery that cannot be
@@ -3453,6 +3545,31 @@ export class CoordStore {
       stamps.push({ id: id.value, sessionId: r.sessionId, claimedBy: r.claimedBy, coordProject: r.coordProject });
     }
     return { ok: true, stamps };
+  }
+
+  /**
+   * Delegation broker wave 4 (PR1): the `delegation` frame's R9 read, `coordPlacementStamps`' narrow sibling and legitimately
+   * different from it: R9 asks whose run was live at an instant, so it needs each run's interval (`openedAt`, `closedAt`) and every
+   * claimed run, stamped or not. Five columns over the open runs and the newest `closedLimit` closed ones; never `runs()`' per-row
+   * hydration (a periodic lane must not pay it). Same clamp, same `persistedInt` proof and the same ALL-OR-FAILURE rule.
+   */
+  delegationRunStamps(closedLimit?: number): DelegationRunStampsResult {
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, sessionId, claimedBy, CAST(openedAt AS TEXT) AS openedText, CAST(closedAt AS TEXT) AS closedText ' +
+      `FROM runs WHERE state NOT IN ${TERMINAL_RUN_STATES_SQL} OR id IN ` +
+      `(SELECT id FROM runs WHERE state IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id DESC LIMIT ?) ORDER BY id`,
+    ).all(clampMailLimit(closedLimit ?? 500)) as unknown as { idText: string; sessionId: string | null; claimedBy: string | null; openedText: string; closedText: string | null }[];
+    const runs: DelegationProjectionRun[] = [];
+    for (const r of rows) {
+      const id = persistedInt(r.idText, 'run id');
+      const opened = persistedInt(r.openedText, 'openedAt');
+      const closed = r.closedText === null ? null : persistedInt(r.closedText, 'closedAt');
+      if (!id.ok || !opened.ok || (closed !== null && !closed.ok)) {
+        return { ok: false, kind: 'run-unreadable', detail: [id, opened, closed].flatMap((x) => (x !== null && !x.ok ? [x.detail] : [])).join('; ') };
+      }
+      runs.push({ id: id.value, sessionId: r.sessionId, claimedBy: r.claimedBy, openedAt: opened.value, closedAt: closed === null ? null : closed.value });
+    }
+    return { ok: true, runs };
   }
 
   /**
@@ -8107,7 +8224,7 @@ export class CoordStore {
   }
 
   /** held -> declined, CAS (D-5289). The parent's OWN release (`POST
-   *  /api/asks/:id/release`), and a different fact from the lapse
+   *  /api/questions/ask-<n>/release`), and a different fact from the lapse
    *  (`releaseAsk` above, the sweep's): the parent handed the question over,
    *  so the row is terminal and its later answer is refused `declined`, where
    *  a lapsed row stays answerable until a principal acts. Same "did THIS call
@@ -8375,7 +8492,7 @@ export class CoordStore {
     });
   }
 
-  /** The claimant's hand-over (`POST /api/approvals/:id/release`): `held` -> `declined` (D-5289's word, D-5440). */
+  /** The claimant's hand-over (`POST /api/questions/approval-<n>/release`): `held` -> `declined` (D-5289's word, D-5440). */
   declineApproval(id: number, by: string, now: number): boolean {
     const res = this.db.prepare(
       "UPDATE approvals SET state = 'declined', ruledAt = ?, answeredBy = ? WHERE id = ? AND state = 'held'",
@@ -9005,20 +9122,36 @@ export class CoordStore {
     return { ok: false, why: 'stale-report', updateStartedAt: row.updateStartedAt! };
   }
 
-  /** Convergence (§10): the row back to `idle` and its request cleared — the
-   *  only path besides `ack` that clears one. Refused on a HALTED row
-   *  (`failed`/`reverted` wait for the operator's `ack`); takes the same
-   *  identity guard as `releaseLease` (C33, D-3405). */
+  /** Convergence (§10): the row back to `idle` and the request THIS lease served cleared — the only path besides
+   *  `ack` that clears one. Refused on a HALTED row (`failed`/`reverted` wait for the operator's `ack`); takes the
+   *  same identity guard as `releaseLease` (C33, D-3405).
+   *
+   *  D-7678: a request written BESIDE the running lease is kept — the row was busy, the lease is dated, the
+   *  request is later than the lease's start — because the lease could not have served it: it is the operator's
+   *  newer tap, waiting its turn, and the dispatcher moves it next. D-7688: only an UPDATE strictly newer than the
+   *  lease's target, and than what the row now runs, is such a tap. A tag at or below either is one the settled
+   *  move already delivers or passes, so the dispatcher could only refuse it `not-newer` — and on a fleet row that
+   *  refusal holds every server move `waiting-for-fleet` until an ack, the very split the keep exists to close.
+   *  `isNewerTag` is not SQL, so the keep is decided here, in JS, inside the same IMMEDIATE transaction as the
+   *  write. Both times are this server's own ms clock (`requestNode`'s `at`, `dispatchNode`'s `startedAt`), so no
+   *  cross-box ordering is involved. Every other request is cleared exactly as before: one the lease served (its
+   *  own tag, or written before the lease started or in its millisecond), one beside a lease nothing dated, and a
+   *  met request on an idle row (the dispatcher's `met:` settle). `keptRequest` says which. */
   settleNode(nodeId: string, detail: string, expectedStartedAt: number | null): SettleNodeResult {
     return tx(this.db, (): SettleNodeResult => {
       const had = this.requestedTagOf(nodeId) !== null;
+      const kept = this.requestOutlivesLease(nodeId);
+      const keep = kept ? 1 : 0;
       const res = this.db.prepare(
-        "UPDATE nodes SET updateState = 'idle', updateDetail = ?, requestedTag = NULL, requestedKind = NULL, " +
-        'requestedAt = NULL WHERE nodeId = ? AND supersededBy IS NULL ' +
+        "UPDATE nodes SET updateState = 'idle', updateDetail = ?, " +
+        'requestedTag = CASE WHEN ? = 1 THEN requestedTag ELSE NULL END, ' +
+        'requestedKind = CASE WHEN ? = 1 THEN requestedKind ELSE NULL END, ' +
+        'requestedAt = CASE WHEN ? = 1 THEN requestedAt ELSE NULL END ' +
+        'WHERE nodeId = ? AND supersededBy IS NULL ' +
         `AND updateState NOT IN ${HALTED_UPDATE_SQL} ` +
         'AND (? IS NULL OR updateStartedAt IS NULL OR updateStartedAt IS ?)',
-      ).run(detail, nodeId, expectedStartedAt, expectedStartedAt);
-      if (Number(res.changes) > 0) return { ok: true, clearedRequest: had };
+      ).run(detail, keep, keep, keep, nodeId, expectedStartedAt, expectedStartedAt);
+      if (Number(res.changes) > 0) return { ok: true, clearedRequest: had && !kept, keptRequest: had && kept };
       const row = this.nodeLeaseRow(nodeId);
       if (row === null) return { ok: false, why: 'unknown-node' };
       if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
@@ -9071,14 +9204,10 @@ export class CoordStore {
    *  stands until convergence (`settleNode`) or the operator (`ackNode`)
    *  clears it — a refusal or a drop never does (decision 7). Writes the three
    *  request columns and nothing else, on a LIVE row. THIS WRITER does not
-   *  refuse a row that holds a lease — it is written beside it. But `settleNode`
-   *  clears the request columns UNCONDITIONALLY the moment that lease settles
-   *  (it does not read them first), so a request written beside a row's OWN
-   *  held lease is not "waiting its turn": it is erased under the operator's
-   *  own newer tap the instant the running move finishes. That is why the
-   *  routes never write one there — the single-node route refuses a busy named
-   *  node `409 busy` (D-3386), and `{all: true}`'s `requestAll` skips a node
-   *  whose own lease is busy before it ever calls this writer (D-3406). The
+   *  refuse a row that holds a lease — it is written beside it, and since D-7678
+   *  `settleNode` KEEPS a request written after that lease started for an update
+   *  newer than its target (D-7688; it clears only the request the lease served), so `{all: true}`'s `requestAll` writes one beside a busy row and reports it `queued`. The
+   *  single-node route still refuses a busy named node `409 busy` (D-3386). The
    *  previous request is read inside the same IMMEDIATE transaction only to
    *  REPORT it (`replaced`); the write's own `WHERE` is the guard. `at` is the
    *  caller's clock: a value that is not a non-negative safe integer throws,
@@ -9255,6 +9384,28 @@ export class CoordStore {
     if (r === undefined) return null;
     return { updateState: isUpdateState(r.updateState) ? r.updateState : 'unknown',
              updateStartedAt: r.updateStartedAt, updateDetail: r.updateDetail, supersededBy: r.supersededBy };
+  }
+
+  /** D-7678/D-7688: whether `settleNode` keeps this row's request — a busy row with a dated lease, a request written
+   *  after the lease started, and an UPDATE strictly newer than the lease's target and than every version the row
+   *  now reads (`currentVersion`, `highestVersion`: the measurement the settle follows). A tag that is not a
+   *  release tag is never newer, so it is cleared. Read inside `settleNode`'s transaction. */
+  private requestOutlivesLease(nodeId: string): boolean {
+    const r = this.db.prepare(
+      'SELECT updateState, updateTarget, updateStartedAt, requestedTag, requestedKind, requestedAt, currentVersion, highestVersion ' +
+      'FROM nodes WHERE nodeId = ?',
+    ).get(nodeId) as {
+      updateState: string; updateTarget: string | null; updateStartedAt: number | null; requestedTag: string | null;
+      requestedKind: string | null; requestedAt: number | null; currentVersion: string | null; highestVersion: string | null;
+    } | undefined;
+    if (r === undefined || (SETTLED_UPDATE_STATES as readonly string[]).includes(r.updateState)) return false;
+    if (r.requestedKind !== 'update' || r.requestedAt === null || r.updateStartedAt === null || r.requestedAt <= r.updateStartedAt) return false;
+    const tag = r.requestedTag;
+    if (!isReleaseTag(tag) || !isReleaseTag(r.updateTarget) || !isNewerTag(tag, r.updateTarget)) return false;
+    for (const v of [r.currentVersion, r.highestVersion]) {
+      if (isReleaseTag(v) && !isNewerTag(tag, v)) return false;
+    }
+    return true;
   }
 
   /** Whether a request was outstanding, for `clearedRequest` — a report,
@@ -9691,6 +9842,57 @@ export class CoordStore {
     if (done.kind !== 'appended') return done;
     return { kind: 'written', generation: done.generation, before: done.before, journalBefore: done.journalBefore,
       after: this.collectLaneRow(), journalAfter: journal.read() };
+  }
+
+  // ── programme ledgers (plan PL2) ────────────────────────────────────────────────────────────────────────────────────
+  //
+  // The SQL lives in `ledgersStore.ts` (ARCH-01: this file takes delegates, not the god-file's next 150 lines). The moves are
+  // decided by `nextItemState` and written by that module's `moveItemInTx`, the only writer of `operator_items.state`.
+
+  /** The coordinator raises an item (open, with its `raise` event). Returns the new id. */
+  raiseItem(input: RaiseItemInput, now: number): number { return ledgers.raiseItem(this.db, input, now); }
+  itemById(id: number): ItemRow | null { return ledgers.itemById(this.db, id); }
+  /** The items still waiting and those cleared inside the 7-day window; `program === null` means every programme. */
+  itemsFor(program: string | null, now: number): { open: ItemRow[]; cleared: ItemRow[] } { return ledgers.itemsFor(this.db, program, now); }
+  /** One move of one item, atomic with its event; the decider is `nextItemState`. */
+  moveItem(id: number, act: ItemAct, actor: ItemActor, fields: { answer?: string | null; note?: string | null }, now: number, ctx: { programmeHasOpenRun: boolean }): ItemMoveResult { return ledgers.moveItem(this.db, id, act, actor, fields, now, ctx); }
+  /** The operator's tick and its mail in ONE transaction (the pattern of `correctWithMail`): a throw from `queue` rolls the move back, and `queue` must open no transaction (`tx` does not nest). */
+  tickWithMail<T>(id: number, answer: string | null, now: number, queue: (item: ItemRow) => T) { return ledgers.tickWithMail(this.db, id, answer, now, queue); }
+  setBlocking(id: number, blocking: boolean, now: number) { return ledgers.setBlocking(this.db, id, blocking, now); }
+  itemHistory(id: number): ItemEventRow[] { return ledgers.itemHistory(this.db, id); }
+  setSpecPin(program: string, specPath: string, inShort: string, now: number): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now); }
+  addModification(program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null }, now: number): number { return ledgers.addModification(this.db, program, m, now); }
+  markModificationsMerged(program: string, pr: number, mergedAt: number): number { return ledgers.markModificationsMerged(this.db, program, pr, mergedAt); }
+  goalsFor(program: string): GoalsView { return ledgers.goalsFor(this.db, program); }
+  /** The newest tick mail of an item by its subject, whoever it went to, or null (the duplicate guard's and the stale label's one reader, plan PL4). */
+  newestTickMail(subject: string): { state: MailDeliveryState; toId: string } | null { return ledgers.newestTickMail(this.db, subject); }
+  pinnedProgrammes(): string[] { return ledgers.pinnedProgrammes(this.db); }
+
+  /** Whether the programme has a run that is not `done` or `failed`; `planned` counts as open. This is
+   *  `programOpenRunCount`'s question, and the one the operator's dismiss asks (spec §3.4). */
+  programmeHasOpenRun(program: string): boolean {
+    return this.programOpenRunCount(program) > 0;
+  }
+
+  /** The `claimedBy` of the programme's lowest-id run that is not `done` or `failed` and was claimed by someone, or
+   *  null when it has none. A run no one claimed (`reconstruct` writes those) names no coordinator, as `openRun`'s own
+   *  arbitration also skips it. */
+  programmeCoordinator(program: string): string | null {
+    const r = this.db.prepare(
+      `SELECT claimedBy FROM runs WHERE program = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} AND claimedBy IS NOT NULL ORDER BY id LIMIT 1`,
+    ).get(program) as { claimedBy: string } | undefined;
+    return r?.claimedBy ?? null;
+  }
+
+  /** True iff a non-terminal run of the programme is claimed by `sessionId`: the coordinator's right to write the
+   *  programme's items, pin and modifications (spec §3.4). A session that claims only a closed run has none. It asks
+   *  the binding's one view (`bindingsOf(...).claimant()`, ARCH-42/62) rather than reading `claimedBy` a
+   *  second time. That reader is all-or-failure (D-2545); an unreadable series THROWS here, never reads as `false`, so
+   *  a coordinator with a row this box cannot represent is never told "not your programme". */
+  claimsProgramme(sessionId: string, program: string): boolean {
+    const open = this.bindingsOf(sessionId).claimant();
+    if (!open.ok) throw new Error(`claimsProgramme: ${open.detail}`);
+    return open.siblings.some((r) => r.program === program);
   }
 }
 

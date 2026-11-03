@@ -1,19 +1,26 @@
 // The fleet tree (D-5527): ONE pure model decides each row's CARD and its
 // PARENT, for both skins. Neutral fixture names only (public repo).
 import { describe, expect, it } from 'vitest';
-import type { FleetSession, RunSummary } from '../../shared/api';
+import type { DelegationProjectionWire, FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
-import { cardsOf, coordinationLine, coordinationOf as coordinationOfTree, fleetTree as fleetTreeOf, workingOn } from '../src/fleet/fleetTree';
+import { cardsOf, coordinationLine, coordinationOf as coordinationOfTree, fleetTree as fleetTreeOf, unplacedActivities, workingOn } from '../src/fleet/fleetTree';
 import { withRunBinding } from './runBindingFixture';
+import { fingerprint, recording, type Recorded } from './characterise';
+import { STATE_WORD } from '../src/fleet/sessionFacts';
+import { childOfRunLabel } from '../src/fleet/runWords';
+import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
+import { creatorChip, inferredChip } from '../src/fleet/delegationWords';
+
+/** W4-U0: every `fleetTree` call this file's cases make, recorded (see `characterise.ts`). */
+const treeCalls: Recorded<Parameters<typeof fleetTreeOf>>[] = [];
+const recordedTree = recording(fleetTreeOf, treeCalls);
 
 // The tree and the header as a current server feeds them (D-7182, C7d): each session carries the run binding the server
 // sends over the runs the case hands them (`runBindingFixture.ts`). Every assertion below reads the real model.
 const fleetTree = (sessions: FleetSession[], projects: readonly string[], rs: readonly RunSummary[]): ReturnType<typeof fleetTreeOf> =>
-  fleetTreeOf(withRunBinding(sessions, rs), projects, rs);
+  recordedTree(withRunBinding(sessions, rs), projects, rs);
 const coordinationOf = (s: FleetSession, sessions: readonly FleetSession[], rs: readonly RunSummary[]): ReturnType<typeof coordinationOfTree> =>
   coordinationOfTree(withRunBinding([s], rs)[0]!, withRunBinding(sessions, rs), rs);
-import { STATE_WORD } from '../src/fleet/sessionFacts';
-import { childOfRunLabel } from '../src/fleet/runWords';
 
 const COORD = 'lane-a-project-a';
 
@@ -53,7 +60,7 @@ const runs = [
 /** `[card, [[id, depth], …]]` per card, in display order. */
 const shape = (sessions: FleetSession[], rs: RunSummary[] = runs) =>
   fleetTree(sessions, [], rs).map((g) => [g.project, g.rows.map((r) =>
-    r.kind === 'session' ? [r.session.id, r.depth] : [`spawn:${r.run.id}`, r.depth])] as const);
+    r.kind === 'session' ? [r.session.id, r.depth] : r.kind === 'pending' ? [`spawn:${r.run.id}`, r.depth] : [r.kind, r.depth])] as const);
 
 describe('fleetTree — a coordinator\'s workspaces nest under it across projects (D-5527)', () => {
   it('a cross-project child nests under its coordinator, on the coordinator\'s card, when the server placed it there', () => {
@@ -265,5 +272,129 @@ describe('the header title for a review run', () => {
     const review = run({ id: 42, kind: 'review', reviews: 41, sessionId: 'lane-b-project-b-quiet-river' });
     const c = coordinationOf(crossChild('project-a'), [coordinator, crossChild('project-a')], [review])!;
     expect(coordinationLine(c).title).toMatch(/^this workspace reviews one wave of Port the API/);
+  });
+});
+
+// Delegation broker wave 4, PR2 Task 2.5: each delegation row on ONE card. Every case calls the UNRECORDED
+// `fleetTreeOf`, so W4-U0's fingerprints below stay exactly what main produced.
+describe('fleetTree — delegation rows land on their parent\'s card (delegation broker wave 4)', () => {
+  const coordA = fleetSession({ id: 'coord-a', project: 'project-a', workspace: null, workdir: '/work/project-a' });
+  const mainB = fleetSession({ id: 'main-b', project: 'project-b', workspace: null, workdir: '/work/project-b' });
+  /** `[card, [row ids]]`, in group order. */
+  const ids = (groups: ReturnType<typeof fleetTreeOf>) => groups.map((g) => [g.project, g.rows.map((r) =>
+    r.kind === 'session' ? r.session.id : r.kind === 'lease' ? `lease:${r.lease.leaseId}` : r.kind === 'activity'
+      ? `activity:${r.activity.activityId}` : r.kind === 'unowned' ? `unowned:${r.item.adminRecord}`
+        : r.kind === 'delegation-group' ? `group:${r.group}` : r.kind)] as const);
+  const count = (groups: ReturnType<typeof fleetTreeOf>, pred: (r: (typeof groups)[number]['rows'][number]) => boolean) =>
+    groups.reduce((n, g) => n + g.rows.filter(pred).length, 0);
+
+  it('W4-U20: a worktree in project-b whose parent lives in project-a lands on project-a\'s card, nested', () => {
+    const w = frame({ leases: [lease({ leaseId: 'l-b', project: 'project-b', parentId: 'coord-a',
+      canonicalPath: '/work/project-b/.claude/worktrees/agent-b1' })] });
+    const tree = ids(fleetTreeOf([coordA, mainB], [], [], {}, w));
+    expect(tree).toEqual([['project-a', ['coord-a', 'lease:l-b']], ['project-b', ['main-b']]]);
+  });
+
+  it('W4-U21: an unowned tree of a project nothing else names creates that project\'s card, holding only the group', () => {
+    const w = frame({ unowned: [unowned({ project: 'project-c', adminRecord: 'u-c' })] });
+    const tree = ids(fleetTreeOf([coordA], [], [], {}, w));
+    expect(tree).toEqual([['project-a', ['coord-a']], ['project-c', ['group:unowned', 'unowned:u-c']]]);
+  });
+
+  it('W4-U22: one worktree is drawn on exactly one card', () => {
+    const w = frame({ leases: [
+      lease({ leaseId: 'l-b', project: 'project-b', parentId: 'coord-a' }),
+      lease({ leaseId: 'l-gone', project: 'project-b', parentId: 'coord-gone' }),
+      lease({ leaseId: 'l-a', project: 'project-a', parentId: 'main-b' }),
+    ] });
+    const groups = fleetTreeOf([coordA, mainB], ['project-a', 'project-b'], [], {}, w);
+    for (const id of ['l-b', 'l-gone', 'l-a']) {
+      expect(count(groups, (r) => r.kind === 'lease' && r.lease.leaseId === id), id).toBe(1);
+    }
+    // A parent the fleet does not carry: the worktree renders on its own project, in the offline group.
+    expect(ids(groups).find(([p]) => p === 'project-b')![1]).toEqual(['main-b', 'lease:l-a', 'group:offline-coordinator', 'lease:l-gone']);
+  });
+
+  it('W4-U36: an activity whose parent the fleet does not carry is on no card (the wire gives it no project)', () => {
+    const w = frame({ activities: [activity({ activityId: 'a-gone', parentId: 'coord-gone' })] });
+    const groups = fleetTreeOf([coordA, mainB], [], [], {}, w);
+    expect(count(groups, (r) => r.kind === 'activity')).toBe(0);
+    expect(unplacedActivities([coordA, mainB], w)).toBe(1);
+    expect(unplacedActivities([coordA, mainB], null)).toBe(0);
+    expect(unplacedActivities([coordA], frame({ activities: [activity({ parentId: 'coord-a' })] }))).toBe(0);
+  });
+
+  // Review 1029's F2: the reader at the tree's own seam. The members arrive as the socket parses them, objects with
+  // words this build has never heard of and a field it does not know, never normalized before `fleetTree`.
+  it('W4-U7b: the tree reads the frame through readDelegation: future words re-filed, every member kept, none running', () => {
+    const future = {
+      asOf: '2026-10-26T10:10:00.000Z',
+      activities: [
+        { ...activity({ activityId: 'a-group' }), group: 'future-group', futureField: 1 },
+        { ...activity({ activityId: 'a-words' }), placement: 'future-placement', liveness: 'future-liveness' },
+      ],
+      leases: [
+        { ...lease({ leaseId: 'l-raw', sourceKind: 'raw' }), group: 'future-group', liveness: 'future-liveness', workspace: 'future-workspace' },
+        { ...lease({ leaseId: 'l-agent', adminRecord: 'agent-a2', canonicalPath: '/work/project-a/.claude/worktrees/agent-a2' }),
+          workspace: 'future-workspace' },
+      ],
+      unowned: [{ ...unowned({ adminRecord: 'u-future' }), workspace: 'future-workspace' }],
+    } as unknown as DelegationProjectionWire;
+    const groups = fleetTreeOf([coordA, mainB], [], [], {}, future);
+    expect(ids(groups)).toEqual([
+      ['project-a', ['coord-a', 'activity:a-words', 'lease:l-agent',
+        'group:offline-coordinator', 'lease:l-raw', 'activity:a-group', 'group:unowned', 'unowned:u-future']],
+      ['project-b', ['main-b']],
+    ]);
+    const rows = groups.flatMap((g) => g.rows);
+    expect(rows.flatMap((r) => (r.kind === 'delegation-group' ? [[r.group, r.count]] : []))).toEqual([['offline-coordinator', 2], ['unowned', 1]]);
+    const acts = new Map(rows.flatMap((r) => (r.kind === 'activity' ? [[r.activity.activityId, r.activity] as const] : [])));
+    const trees = new Map(rows.flatMap((r) => (r.kind === 'lease' ? [[r.lease.leaseId, r.lease] as const] : [])));
+    const items = rows.flatMap((r) => (r.kind === 'unowned' ? [r.item] : []));
+    expect([acts.size, trees.size, items.length], 'every member is kept, once').toEqual([2, 2, 1]);
+    expect(acts.get('a-group')).toMatchObject({ group: 'offline-coordinator', liveness: 'live', futureField: 1 });
+    expect(acts.get('a-words')).toMatchObject({ group: 'parent', placement: 'row', liveness: 'unmeasured' });
+    expect(trees.get('l-raw')).toMatchObject({ group: 'offline-coordinator', liveness: 'unmeasured', workspace: 'unmeasured' });
+    expect(trees.get('l-agent')).toMatchObject({ group: 'parent', liveness: 'live', workspace: 'unmeasured' });
+    expect(items).toMatchObject([{ adminRecord: 'u-future', workspace: 'unmeasured' }]);
+    // Only what the server measured live reads live: no future word becomes "running".
+    const live = [...acts.values(), ...trees.values()].filter((m) => m.liveness === 'live');
+    expect(live.map((m) => ('activityId' in m ? m.activityId : m.leaseId))).toEqual(['a-group', 'l-agent']);
+    // The raw tree keeps both of its chips, whatever its other words; the agent one wears neither.
+    const raw = trees.get('l-raw')!;
+    expect(inferredChip(raw)?.text).toBe('inferred');
+    expect(creatorChip(raw)?.title).toContain(TOOL_USE_ID);
+    expect(inferredChip(trees.get('l-agent')!)).toBeNull();
+  });
+});
+
+describe('W4-U0: today\'s tree, characterised before delegation rows (delegation broker wave 4)', () => {
+  it('every fixture set above renders the JSON captured on main', () => {
+    expect(treeCalls.length).toBeGreaterThan(0);
+    expect(treeCalls.map((c) => fingerprint(c.json))).toMatchInlineSnapshot(`
+      [
+        "7238fc1ccb39cd91",
+        "2dcc8e7db34b6972",
+        "c2b1c4fbc383efa3",
+        "afec98f7add32b4a",
+        "afec98f7add32b4a",
+        "7abe92f21eb047dc",
+        "3b0c6bc57e68b73e",
+        "495e11812fac1dfd",
+        "5c64241582b713b0",
+        "1fecb6a5645e7e8e",
+        "ae77e22eac7c913b",
+        "10e24e1975059fe1",
+        "a3d43382df21dd42",
+      ]
+    `);
+  });
+
+  it('W4-U19 (rule 6): every input above with no frame renders the identical JSON', () => {
+    expect(treeCalls.length).toBeGreaterThan(0);
+    for (const c of treeCalls) {
+      const [sessions, projects, runs, acks] = c.args;
+      expect(JSON.stringify(fleetTreeOf(sessions, projects, runs, acks, null))).toBe(c.json);
+    }
   });
 });

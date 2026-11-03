@@ -19,6 +19,12 @@
 # passes `save: 'true'`: it installs on a miss and writes the cache, and every
 # other job restores what it wrote. macOS installs as before (the trees hold
 # platform binaries, and no Linux job can write them).
+#
+# EVERY INSTALL HAS A DEADLINE (D-7689). Composite steps cannot take
+# `timeout-minutes`, so each command carries its own: apt through
+# .github/ci/apt-bounded.sh, npm ci and brew through .github/ci/bounded.sh,
+# each at most twice; a stalled cache restore is a miss after
+# SEGMENT_DOWNLOAD_TIMEOUT_MINS (set by the calling workflow).
 name: server-deps
 description: System packages plus npm ci in server/, agent/, pwa/ and ui/ — what any server test file may need — restored from the run's cache on Linux.
 
@@ -93,9 +99,18 @@ runs:
         path: ${{ runner.temp }}/ccrc-debs
         key: ${{ steps.key.outputs.apt }}
 
+    # PRESENT FIRST (D-7686). The ubuntu-24.04 image ships all four (the deps
+    # job's own log: "tmux is already the newest version", and so on for
+    # each), so on today's image no apt runs at all — and no job waits on a
+    # mirror. Measured before this: every Linux job ran `apt-get update`
+    # (nothing is ever downloaded, so the packages entry was never written and
+    # every restore missed), and when the image's first mirror stopped
+    # answering, the update stalled to the job limit.
+    #
     # The hit arm installs the downloaded packages with dpkg and no
     # `apt-get update`; if that fails for any reason the miss arm runs, so the
-    # cache can only ever save time.
+    # cache can only ever save time. The miss arm runs through apt-bounded.sh:
+    # a deadline per attempt and one retry, so a stalled mirror costs minutes.
     - name: Install system dependencies (linux)
       id: apt
       if: inputs.platform == 'linux'
@@ -103,10 +118,17 @@ runs:
       env:
         HIT: ${{ steps.debs.outputs.cache-hit }}
       run: |
+        missing=""
+        for bin in tmux jq strace python3; do command -v "$bin" > /dev/null || missing="$missing $bin"; done
+        if [ -z "$missing" ]; then
+          echo "server-deps: tmux, jq, strace and python3 are in the image; no apt"
+          exit 0
+        fi
+        echo "server-deps: not in the image:$missing"
         if [ "$HIT" = true ] && sudo dpkg -i --skip-same-version "$RUNNER_TEMP"/ccrc-debs/*.deb; then
           exit 0
         fi
-        sudo apt-get update && sudo apt-get install -y tmux jq strace python3
+        .github/ci/apt-bounded.sh 180 sh -c 'apt-get update && apt-get install -y tmux jq strace python3'
         mkdir -p "$RUNNER_TEMP/ccrc-debs"
         cp /var/cache/apt/archives/*.deb "$RUNNER_TEMP/ccrc-debs/" 2>/dev/null || true
         if compgen -G "$RUNNER_TEMP/ccrc-debs/*.deb" > /dev/null; then echo "have=true" >> "$GITHUB_OUTPUT"; fi
@@ -134,13 +156,13 @@ runs:
     - name: Install system dependencies (macos)
       if: inputs.platform == 'macos'
       shell: bash
-      run: brew install bash tmux flock jq coreutils
+      run: .github/ci/bounded.sh 300 brew install bash tmux flock jq coreutils
 
     - name: Install server
       if: steps.trees.outputs.cache-hit != 'true'
       shell: bash
       working-directory: server
-      run: npm ci
+      run: ../.github/ci/bounded.sh 180 npm ci
 
     # server/test/typecheck-tests.test.ts spawns tsc against agent/'s own
     # tests-inclusive project too (`agentRoot` resolved two levels up) — a
@@ -150,7 +172,7 @@ runs:
       if: steps.trees.outputs.cache-hit != 'true'
       shell: bash
       working-directory: agent
-      run: npm ci
+      run: ../.github/ci/bounded.sh 180 npm ci
 
     # Same cross-package need, for pwa: typecheck-tests.test.ts also spawns
     # tsc against `pwa/tsconfig.json` (pwaRoot, resolved the same way as
@@ -163,7 +185,7 @@ runs:
       if: steps.trees.outputs.cache-hit != 'true'
       shell: bash
       working-directory: pwa
-      run: npm ci
+      run: ../.github/ci/bounded.sh 180 npm ci
 
     # AND ui, because installing pwa is not enough. pwa consumes @ccrc/ui as
     # SOURCE (`exports['.']` points at `src/index.ts`), so the tsc spawned
@@ -180,7 +202,7 @@ runs:
       if: steps.trees.outputs.cache-hit != 'true'
       shell: bash
       working-directory: ui
-      run: npm ci
+      run: ../.github/ci/bounded.sh 180 npm ci
 
     - name: Keep the installed trees (linux)
       if: inputs.platform == 'linux' && inputs.save == 'true' && steps.trees.outputs.cache-hit != 'true'

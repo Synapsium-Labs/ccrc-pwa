@@ -20,6 +20,7 @@ import type { WorkflowView } from '../../../shared/workflows';
 import { api, ApiError, sendErrorText, type Api } from '../lib/api';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
+import { isLocalDivider } from '../session/localDivider';
 
 /** A staged image handed to send(). The path is what the server/dispatch see;
  *  the preview URL is carried only so the optimistic bubble can render the
@@ -243,11 +244,6 @@ const localDivider = (text: string): ChatEvent => {
   localSeq += 1;
   return { kind: 'system', uuid: `local-${localSeq}`, ts: new Date().toISOString(), text };
 };
-/** A divider this store minted, stamped with the PHONE's clock — never a
- *  transcript time. Exported so every reader of event time skips it the same
- *  way (`newestTranscriptTs` here, the quiet-gap divider in `ChatList`). */
-export const isLocalDivider = (e: ChatEvent): boolean =>
-  e.kind === 'system' && e.uuid.startsWith('local-');
 
 /** Append `incoming` to `existing`, skipping events already present. */
 function dedupeAppend(existing: ChatEvent[], incoming: ChatEvent[]): ChatEvent[] {

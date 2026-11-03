@@ -172,7 +172,7 @@ describe('POST /api/approvals — the request (spec §6.3 server steps 1 and 2)'
   });
 });
 
-describe('POST /api/approvals/:id/rule — the claimant rules, and the server signs (spec §6.3 server steps 5 and 6)', () => {
+describe('POST /api/questions/approval-<n>/rule — the claimant rules, and the server signs (spec §6.3 server steps 5 and 6)', () => {
   it('a parent allows an ordinary row: the stored ruling verifies with the public key and names row, session, agent, digest, nonce', async () => {
     f = await standardFixture();
     const { id, body } = await ask(f);
@@ -581,8 +581,8 @@ describe('POST /api/approvals — the raise ladder and its input map (W3 Q3e cha
     const other = await buildServer(f.deps, new Bus(), new FleetWatcher(f.deps, new Bus(), 10_000));
     try {
       const rule = (rid: number, verdict: 'allow' | 'deny') => other.inject({
-        method: 'POST', url: `/api/approvals/${rid}/rule`, headers: TOK,
-        payload: { fromId: PARENT, fromUuid: uuidOf(PARENT), verdict, reason: `${verdict} by the fixture` },
+        method: 'POST', url: `/api/questions/approval-${rid}/rule`, headers: TOK,
+        payload: { kind: 'approval', fromId: PARENT, fromUuid: uuidOf(PARENT), verdict, reason: `${verdict} by the fixture` },
       });
       expect((await rule(id, 'allow')).json()).toMatchObject({ error: 'guard-escalate' });
       expect((await rule(second, 'deny')).json()).toEqual({ ok: true, state: 'denied' });
@@ -597,8 +597,8 @@ describe('POST /api/approvals — the raise ladder and its input map (W3 Q3e cha
     const other = await buildServer(f.deps, new Bus());
     try {
       const res = await other.inject({
-        method: 'POST', url: `/api/approvals/${id}/rule`, headers: TOK,
-        payload: { fromId: PARENT, fromUuid: uuidOf(PARENT), verdict: 'allow', reason: 'allow by the fixture' },
+        method: 'POST', url: `/api/questions/approval-${id}/rule`, headers: TOK,
+        payload: { kind: 'approval', fromId: PARENT, fromUuid: uuidOf(PARENT), verdict: 'allow', reason: 'allow by the fixture' },
       });
       expect(res.json()).toMatchObject({ error: 'guard-escalate' });
     } finally { await other.close(); }

@@ -1,7 +1,7 @@
 // One decision, shared by the Settings sections that read a route of their own (the stall-watch section and the temp
 // root collector section, path-identity spec 2026-10-12 §5.7): which failed read means "not available on this
 // server". Pure; it imports only the client's error class.
-import { ApiError } from './api';
+import { ApiError } from './apiError';
 import { isRecord } from './wire';
 
 /** Why a Settings section's read produced no view. `not-configured` is a server with nothing to offer for that

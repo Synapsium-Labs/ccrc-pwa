@@ -1,6 +1,6 @@
 // The Docs link policy (spec 2026-10-01 4.10 "Highlighting" and 4.11; W5 part 1 Task 6). `detachUrls` takes every
 // URL out of a parsed tree before it renders, so no URL-bearing attribute reaches the DOM except through `DocLink` and
-// `DocImage`, and records the page highlight budget's decision for each `pre`; `docLinkTarget` is the one decision
+// `DocImage`; `docLinkTarget` is the one decision
 // `DocLink` renders; `imagePinFor` is the one pin rule for a page's images (W5 part 1 Task 7); `docsLocation` is the
 // one builder of a page location a Docs view links to (refinement (q)). Pure: no React state or hook (`imagePinFor`
 // asks the visit's pure `pinFor` for the page's own pin), no DOM, no module state, and no input is ever written.
@@ -13,21 +13,16 @@ import {
   admitDraft, docsPageUrl, entryView, githubBlobUrl, isDocsBareRef, isDocsProject, resolveDocRef,
   type DocPin, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs';
-import { codeLanguage, inMarkdownPageBudget, inScanPageBudget } from '../lib/markdown';
-import {
-  DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS,
-} from '../lib/markdownLimits';
 import { DOC_LINK_INERT_SENTENCE, type DocLinkInertReason } from './docsText';
 import type { DocLinkContextValue } from './DocLink';
 import { pinFor } from './useDocsVisit';
 
 /** What `detachUrls` recorded for one element of the copy. `attrs` holds every URL property moved off it (empty when it
  *  carried none), keyed by its hast property name, its value as text. `imageIndex: null` means the element is not an
- *  `img`; `highlight: null` means it is not a `pre`. */
+ *  `img`. */
 export interface DetachedUrls {
   readonly attrs: Readonly<Record<string, string>>;
   readonly imageIndex: number | null;
-  readonly highlight: boolean | null;
 }
 
 /** A detached copy: the tree to render, the map its elements' URLs and decisions live in (keyed by the COPY's
@@ -59,41 +54,12 @@ function urlText(value: unknown): string | null {
   return null;
 }
 
-/** The characters of text under `pre`'s `code` children (spec 4.10: `pre > code`), in UTF-16 code units as `CodeBlock`
- *  measures a block. Iterative. */
-function preCodeChars(pre: HastElement): number {
-  let chars = 0;
-  const stack: RootContent[] = pre.children.filter((c) => c.type === 'element' && c.tagName === 'code');
-  while (stack.length > 0) {
-    const node = stack.pop()!;
-    if (node.type === 'text') chars += node.value.length;
-    else if (node.type === 'element') for (const c of node.children) stack.push(c);
-  }
-  return chars;
-}
-
-/** The class of `pre`'s first `code` child, as `CodeBlock` reads it: hast holds `className` as an array of strings, joined
- *  with a space here; `''` when there is no `code` child or it has no class. */
-function preCodeClass(pre: HastElement): string {
-  const code = pre.children.find((c): c is HastElement => c.type === 'element' && c.tagName === 'code');
-  const cls = code?.properties.className;
-  return Array.isArray(cls) ? cls.map((v) => String(v)).join(' ') : typeof cls === 'string' ? cls : '';
-}
-
 /** A copy of `tree` with every URL moved out (spec 4.11; refinement (n)). Iteratively, in document pre-order: the root
  *  and every element are copied (text, comment and doctype nodes are shared, untouched); every `URL_KEYS` property of
- *  an element is deleted from its copy and recorded in `urls` under the copy; `img` elements are numbered 0..n-1;
- *  and each `pre` records the page highlight budget's decision: the `pre > code` text of every block so far, this one
- *  included, is summed, and the block is `highlight: true` while the sum is at most `DOCS_HIGHLIGHT_PAGE_MAX_CHARS`,
- *  `false` from the block that passes it on, for every later block too. A second sum, of the blocks whose language
- *  `inScanPageBudget` names (`typescript`, `javascript` and `rust`, and any grammar whose sub-language chain reaches them:
- *  none today, `xml` being registered without its script and style sub-languages; aliases included), has its own budget,
- *  `DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS`: a block of those grammars is `false` from the one that passes it, and a block
- *  of any other grammar is never refused by it (review 450 F1). A third sum, of the blocks whose language `inMarkdownPageBudget`
- *  names (`markdown` and its aliases, `md` among them, which are outside the scan set), has its own budget,
- *  `DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`, and refuses only markdown blocks the same way (review 450 F1). An element with nothing to record has no
+ *  an element is deleted from its copy and recorded in `urls` under the copy; `img` elements are numbered 0..n-1. An element with nothing to record has no
  *  entry. Never writes `tree`, so a kept outcome can be detached again, and part 2's Export reuses the copy and its
- *  map (a second detach of the copy finds no URL). */
+ *  map (a second detach of the copy finds no URL).
+ *  From W5h-a it decides nothing about highlighting: the page's highlight store does (`lib/highlightStore.ts`). */
 export function detachUrls(tree: HastRoot): Detached {
   const urls = new WeakMap<HastElement, DetachedUrls>();
   const root: HastRoot = { ...tree, children: [] };
@@ -103,9 +69,6 @@ export function detachUrls(tree: HastRoot): Detached {
     for (let i = from.length - 1; i >= 0; i--) stack.push({ node: from[i]!, to });
   };
   let images = 0;
-  let codeChars = 0;
-  let scanChars = 0;
-  let markdownChars = 0;
   schedule(tree.children, root.children);
   while (stack.length > 0) {
     const { node, to } = stack.pop()!;
@@ -127,20 +90,8 @@ export function detachUrls(tree: HastRoot): Detached {
       imageIndex = images;
       images += 1;
     }
-    let highlight: boolean | null = null;
-    if (node.tagName === 'pre') {
-      const chars = preCodeChars(node);
-      codeChars += chars;
-      const language = codeLanguage(preCodeClass(node));
-      const scan = inScanPageBudget(language);
-      if (scan) scanChars += chars;
-      const md = inMarkdownPageBudget(language);
-      if (md) markdownChars += chars;
-      highlight = codeChars <= DOCS_HIGHLIGHT_PAGE_MAX_CHARS && (!scan || scanChars <= DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS)
-        && (!md || markdownChars <= DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS);
-    }
-    if (Object.keys(attrs).length > 0 || imageIndex !== null || highlight !== null) {
-      urls.set(copy, { attrs, imageIndex, highlight });
+    if (Object.keys(attrs).length > 0 || imageIndex !== null) {
+      urls.set(copy, { attrs, imageIndex });
     }
     to.push(copy);
     schedule(node.children, copy.children);

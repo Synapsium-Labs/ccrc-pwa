@@ -39,8 +39,8 @@ import {
   chmodSync, closeSync, constants as fsConstants, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync,
   readSync, renameSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
-import { basename, isAbsolute, join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { basename, dirname, isAbsolute, join } from 'node:path';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 // FIVE CONSTANTS, IMPORTED AND NEVER RE-SPELLED (D-2004, D-2021, D-2022). They
 // are the constants `rosterFromJson` itself decides with, so `check-add`
 // refusing a hue, a label, a model id or a model map the writer would then
@@ -134,9 +134,11 @@ const PROVIDER_BASE_URL = {
 };
 
 /** Offer order, and the first member is the default the connect door opens on —
- *  which is also what `check-add` uses when `--method` is absent. */
+ *  which is also what `check-add` uses when `--method` is absent. Anthropic's is
+ *  Mint first (Q1, accounts plan Task A20), so a bare `add --provider anthropic`
+ *  makes a token lane whose token `auth-start --method setup-token` then mints. */
 const PROVIDER_CONNECT = {
-  anthropic: ['login', 'paste', 'setup-token'],
+  anthropic: ['setup-token', 'login', 'paste'],
   openrouter: ['pkce', 'paste'],
   compatible: ['paste'],
   openai: ['openai-login'],
@@ -600,7 +602,8 @@ function declaredEntry(a) {
  *  array — `candidates` (Task 21) is the first, and declaring the shape now is
  *  what keeps that task from rewriting this parser. */
 const OPS = {
-  refuse: { keys: ['code', 'detail'], repeat: [] },
+  // `reason` (accounts plan Task A20): a word beside the code, for a refusal whose code covers more than one cause.
+  refuse: { keys: ['code', 'detail', 'reason'], repeat: [] },
   providers: { keys: [], repeat: [] },
   roster: { keys: ['file'], repeat: [] },
   // TSV on stdout rather than JSON, and `lane`'s reason: the caller is bash,
@@ -614,7 +617,7 @@ const OPS = {
   // own.
   candidates: { keys: ['name', 'bytes'], repeat: ['name', 'bytes'] },
   'check-add': {
-    keys: ['file', 'id', 'provider', 'label', 'hue', 'suffix', 'base-url', 'models', 'method'],
+    keys: ['file', 'id', 'provider', 'label', 'hue', 'suffix', 'base-url', 'models', 'method', 'home', 'adopt'],
     repeat: [],
   },
   // ONE key carries the whole request, because `check-add` already resolved it:
@@ -686,7 +689,7 @@ const OPS = {
   // always had.
   drop: { keys: ['file', 'id', 'stands'], repeat: [] },
   removed: {
-    keys: ['file', 'id', 'rehomed', 'kept', 'removed', 'operator-step'],
+    keys: ['file', 'id', 'rehomed', 'kept', 'removed', 'operator-step', 'kind', 'provider', 'secret-env', 'secrets'],
     repeat: ['rehomed', 'kept', 'removed', 'operator-step'],
   },
   // `--stands` here is `drop`'s key at a second address and for its reason: a
@@ -701,7 +704,7 @@ const OPS = {
   // the JSON-shaped position this file owns. `measured` is a separate key from
   // the list itself precisely so an EMPTY list and an UNMEASURED one are two
   // argv shapes rather than one.
-  rotated: { keys: ['id', 'measured', 'live'], repeat: ['live'] },
+  rotated: { keys: ['id', 'measured', 'live', 'file'], repeat: ['live'] },
   // THE ONE OP THAT READS STDIN, and the header's "no secret ever reaches this
   // file" rule survives intact — what arrives is a LAUNCHER's own diagnostic
   // JSON (`{"loggedIn":…}`, `{"type":"result",…}`) and never a credential.
@@ -712,16 +715,43 @@ const OPS = {
   // `note` REPEATS — `candidates`' pair at a fourth address and for its reason:
   // one JSON blob on argv would put a value bash built with `printf` back into
   // the JSON-shaped position this file owns.
-  health: { keys: ['id', 'row', 'limits-touched', 'note'], repeat: ['note'] },
+  // `seed-answer` is the `seed` op's own answer from the step `check` runs after its probe turn (accounts plan Task
+  // A13, D-7731), carried as `seed: {verifiedAt, trustCopied}`, or `seed: {verifiedAt: null, error}` on a refusal.
+  health: {
+    keys: ['id', 'row', 'limits-touched', 'note', 'seed-answer'],
+    repeat: ['note'],
+  },
   // THE LANE-STATE FILE'S ONE WRITER (accounts plan Task A11; D-5517, D-5518,
   // D-5755). `opLaneState` below states the shape. Every `ccrc account` verb
   // and `ccd-account-health` call this op, and nothing else writes the file.
   'lane-state': {
-    keys: ['id', 'mode', 'check-verdict', 'check-at', 'key-hash', 'retired-key-hash', 'clear'], repeat: [],
+    keys: [
+      'id', 'mode', 'check-verdict', 'check-at', 'key-hash', 'retired-key-hash', 'clear',
+      'identity', 'identity-source', 'last-run-at', 'seed-verified-at', 'added-at', 'enabled-at', 'minted-at',
+    ],
+    // `--clear` repeats (accounts plan Task A20): a paste over a minted token drops `check` and `mintedAt` at once.
+    repeat: ['clear'],
   },
+  // THE FIRST-RUN SEED (accounts plan Task A13; spec §6.2 step 9, G1; D-5518, D-7731). `opSeed` below states it.
+  seed: { keys: ['file', 'id', 'when'], repeat: [] },
+  // ENABLE'S READINESS (accounts plan Task A13; spec §10, G19; D-7731). `opReady` below states it. Read-only.
+  ready: { keys: ['file', 'id'], repeat: [] },
   // THE ROSTER HALF OF `ccrc codex switch` (codex-bridge Stage 2, Task 12; spec D20): a codex lane's mode, written
   // through `writeRoster`, the one writer. Silent on success, like `drop`. Its arm says why the default is DELETED.
   'codex-mode': { keys: ['file', 'id', 'bridge'], repeat: [] },
+  // Accounts plan Task A16 (D-7735).
+  'set-placement': { keys: ['file', 'id', 'placement'], repeat: [] },
+  'set-done': { keys: ['file', 'id'], repeat: [] },
+  // Accounts plan Task A20 (D-7750): the method switch's roster write, the sign-in-in-flight measure `auth-start`
+  // shares with `pre-remove`, and the answers of the sign-in verbs.
+  'set-method': { keys: ['file', 'id', 'method'], repeat: [] },
+  'auth-live': { keys: ['id'], repeat: [] },
+  'auth-answer': { keys: ['verb', 'id', 'attempt', 'method', 'state', 'unit', 'stopped', 'sign-out'], repeat: [] },
+  'pre-remove': {
+    keys: ['file', 'id', 'mode', 'live', 'live-measured', 'sleeping', 'archived', 'other-home-able', 'upstream',
+      'disabled', 'rehome-sleeping'],
+    repeat: ['live', 'sleeping', 'archived'],
+  },
 };
 
 /** THE VERDICT TABLE, and the only copy of it in the tree. §8 puts the
@@ -1250,12 +1280,102 @@ const LANE_STATE_FIELDS = [
   'check', 'identity', 'identitySource', 'keyHint', 'keySource', 'keyHash', 'keyLimit', 'limitReset',
   'keyExpiresAt', 'retiredKeyHash', 'validatedAt', 'credit', 'mintedAt', 'seedVerifiedAt', 'lastRunAt',
   'fleetIdentity',
+  // The box's own two (accounts plan Task A16, D-7735 (5)): when `add` made the lane and when `enable` last switched
+  // it on, which is what Discard's "never enabled" reads. The server's reader names neither and drops both.
+  'addedAt', 'enabledAt',
 ];
-/** The fields `--clear` may drop. */
-const LANE_STATE_CLEARABLE = ['check'];
+/** The fields `--clear` may drop: a check that no longer measures the lane's credential, and a mint time that no
+ *  longer names the token in its file (accounts plan Task A20). */
+const LANE_STATE_CLEARABLE = ['check', 'mintedAt'];
+/** A run's or a seed's time (accounts plan Task A13, D-7731): UTC to the second, or to the millisecond, which is
+ *  what this writer stamps, because a seed verified in the same second as the run it follows must still read as
+ *  after it (`seedVerifiedAt > lastRunAt`, spec §10). `shared/accounts.ts`'s `ISO_RE` reads both forms. */
+const ISO_MS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
+/** How an identity was learned: read off the provider (`auth status`), or stated by the operator. The words are
+ *  `shared/accounts.ts`'s `LANE_IDENTITY_SOURCES`; `ccrc-account-check-seed.test.ts` pins the two equal. */
+const LANE_IDENTITY_SOURCES = ['measured', 'stated'];
+/** The most an identity may hold, and the characters it may not: `shared/accounts.ts`'s `LANE_IDENTITY_MAX` and
+ *  `UNPRINTABLE_RE`, so the box never writes an identity the server's reader would drop. The C0 bytes and DEL are
+ *  `LABEL_UNSAFE_RE`'s, imported (D-2022); this adds C1, the line and paragraph separators and the format characters. */
+const LANE_IDENTITY_MAX = 120;
+const LANE_IDENTITY_MORE_UNPRINTABLE_RE = /[\u0080-\u009f\u2028\u2029\p{Cf}]/u;
+const identityUnprintable = (v) => LABEL_UNSAFE_RE.test(v) || LANE_IDENTITY_MORE_UNPRINTABLE_RE.test(v);
+
+/** `--last-run-at now` stamps this process's clock; any other value is a time in `ISO_MS_RE`'s form. */
+function laneTimeOf(v) {
+  if (v === 'now') return new Date().toISOString();
+  return ISO_MS_RE.test(v) && Number.isFinite(Date.parse(v)) ? v : null;
+}
 
 function laneStateDir(home) {
   return join(home, '.cc-sessions', '.accounts');
+}
+
+/** THE WRITE ITSELF, shared by the `lane-state` op and the `seed` op's record of `seedVerifiedAt` (accounts plan Task
+ *  A13, D-7731), so the file keeps one writer. `set` holds the fields this call changes, `clear` the one it drops.
+ *  Answers `null`, or `[code, detail]` for the caller to refuse with. */
+function laneStateWrite(home, id, mode, set, clear) {
+  const dir = laneStateDir(home);
+  const file = join(dir, `${id}.json`);
+  process.umask(0o077);
+  try {
+    mkdirSync(dir, { recursive: true });
+    const d = lstatSync(dir);
+    if (!d.isDirectory()) {
+      return ['lane-state-dir', `${dir} is not a directory, so no lane state can be written there. Move it aside.`];
+    }
+    if ((d.mode & 0o077) !== 0) chmodSync(dir, 0o700);
+  } catch (e) {
+    return ['lane-state-dir', `cannot prepare ${dir} (0700): ${e.message}`];
+  }
+
+  let current = null;
+  try {
+    const f = lstatSync(file);
+    if (mode === 'if-absent') return null;
+    if (!f.isFile()) {
+      return ['lane-state-unreadable', `${file} is not a regular file, so its fields cannot be kept. Move it aside.`];
+    }
+    if (mode === 'merge') {
+      let parsed;
+      try { parsed = JSON.parse(readFileSync(file, 'utf8')); } catch { parsed = null; }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return ['lane-state-unreadable',
+          `${file} is not a JSON object, so the fields it holds cannot be kept through this write. `
+          + 'Move it aside; the next account verb writes a new one.'];
+      }
+      current = parsed;
+    }
+  } catch (e) {
+    if (e.code !== 'ENOENT') {
+      return ['lane-state-unreadable', `${file} could not be read: ${e.message}`];
+    }
+  }
+
+  const next = {};
+  if (mode === 'merge' && current !== null) {
+    for (const k of LANE_STATE_FIELDS) if (Object.hasOwn(current, k)) next[k] = current[k];
+  }
+  for (const c of [].concat(clear ?? [])) delete next[c];
+  Object.assign(next, set);
+  next.fleetIdentity = readNodeIdentity(home);
+
+  const tmp = join(dir, `.${id}.json.tmp.${process.pid}.${randomBytes(6).toString('hex')}`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify(next)}\n`, { flag: 'wx' });
+    if (mode === 'if-absent') {
+      // NO-CLOBBER, NOT CHECK-THEN-RENAME: `link` refuses an existing name, so
+      // a verb that wrote this lane's file after the check above keeps it.
+      try { linkSync(tmp, file); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+      unlinkSync(tmp);
+    } else {
+      renameSync(tmp, file);
+    }
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* never created, or already renamed */ }
+    return ['lane-state-write', `writing ${file} failed: ${e.message}`];
+  }
+  return null;
 }
 
 function opLaneState(a) {
@@ -1290,9 +1410,42 @@ function opLaneState(a) {
       return 2;
     }
   }
-  if (a['clear'] !== undefined && (!LANE_STATE_CLEARABLE.includes(a['clear']) || verdict !== undefined)) {
+  const clears = a['clear'] ?? [];
+  if (clears.some((c) => !LANE_STATE_CLEARABLE.includes(c))
+      || (clears.includes('check') && verdict !== undefined)
+      || (clears.includes('mintedAt') && a['minted-at'] !== undefined)) {
     refuse('bad-argv', `--clear takes ${LANE_STATE_CLEARABLE.join(', ')}, and not with the field it clears`);
     return 2;
+  }
+  if ((a['identity'] === undefined) !== (a['identity-source'] === undefined)) {
+    refuse('bad-argv', '--identity and --identity-source come together: an identity with no source is not a reading');
+    return 2;
+  }
+  if (a['identity'] === '-') {
+    // `ccrc account set --stated -` (accounts plan Task A16): the operator's words arrive on stdin, never on an argv.
+    let v = '';
+    try { v = readFileSync(0, 'utf8'); } catch { v = ''; }
+    a['identity'] = v.endsWith('\n') ? v.slice(0, -1) : v;
+  }
+  if (a['identity'] !== undefined) {
+    const v = a['identity'];
+    if (v.trim() === '' || v.length > LANE_IDENTITY_MAX || identityUnprintable(v)
+        || !LANE_IDENTITY_SOURCES.includes(a['identity-source'])) {
+      refuse('bad-argv', `--identity must be 1 to ${LANE_IDENTITY_MAX} printable characters, and --identity-source `
+        + `one of ${LANE_IDENTITY_SOURCES.join(', ')}`);
+      return 2;
+    }
+  }
+  const times = {};
+  for (const [k, field] of [['last-run-at', 'lastRunAt'], ['seed-verified-at', 'seedVerifiedAt'],
+    ['added-at', 'addedAt'], ['enabled-at', 'enabledAt'], ['minted-at', 'mintedAt']]) {
+    if (a[k] === undefined) continue;
+    const t = laneTimeOf(a[k]);
+    if (t === null || (k === 'seed-verified-at' && a[k] === 'now')) {
+      refuse('bad-argv', `--${k} must be a UTC time to the second or the millisecond${k === 'seed-verified-at' ? '' : ', or now'}`);
+      return 2;
+    }
+    times[field] = t;
   }
   if (mode === 'delete' && Object.keys(a).some((k) => k !== 'id' && k !== 'mode')) {
     refuse('bad-argv', 'lane-state --mode delete takes no field');
@@ -1315,72 +1468,616 @@ function opLaneState(a) {
     return 0;
   }
 
-  process.umask(0o077);
+  const set = { ...times };
+  if (verdict !== undefined) set.check = { verdict, at };
+  if (a['key-hash'] !== undefined) set.keyHash = a['key-hash'];
+  if (a['retired-key-hash'] !== undefined) set.retiredKeyHash = a['retired-key-hash'];
+  if (a['identity'] !== undefined) {
+    set.identity = a['identity'];
+    set.identitySource = a['identity-source'];
+  }
+  const failed = laneStateWrite(home, id, mode, set, clears);
+  if (failed !== null) { refuse(failed[0], failed[1]); return 1; }
+  return 0;
+}
+
+/** ── THE FIRST-RUN SEED (accounts plan Task A13; spec §6.2 step 9, G1; D-5518, D-7731) ──
+ *  One lane's `.claude.json`, made to carry what Claude Code's first-run wizard and its trust dialogs would otherwise
+ *  stop a session for. It runs no Claude Code. In order:
+ *   - `hasCompletedOnboarding: true`, and a `theme` when the file has none (the upstream lane's, else `dark`);
+ *   - the trust flags (`hasTrustDialogAccepted`, `hasClaudeMdExternalIncludes*`) that the upstream lane's
+ *     `.claude.json` already holds as `true`, project by project. Only those keys, only `true` values: a flag the
+ *     upstream has not accepted is never written, and no other project field is copied;
+ *   - then the file is read back and every value set here is verified, and `verifiedAt` is stamped after that read.
+ *  OA1a measured (2026-11-01, D-7731) that a sign-in lane's file exists before its first check, written by `auth
+ *  login`, and that the probe turn does not add `hasCompletedOnboarding`: so the seed writes it itself. A token lane
+ *  (paste, setup-token) was not measured and may reach its first check with no file, so an absent file is created,
+ *  0600, in a config directory that exists; a missing directory is refused, never made.
+ *  `--when unseeded` is `ccrc install`'s and `ccrc update`'s form: a lane with no file, or whose file already holds
+ *  the onboarding flag, is skipped and its file is left byte for byte.
+ *  NOTHING CHANGED, NOTHING WRITTEN: a file that already holds every value is not rewritten. A write is a temp in the
+ *  same directory renamed over the file, and the file's bytes are compared with the ones read just before the
+ *  rename, so a Claude Code run that wrote the file meanwhile is not overwritten: the seed starts over, at most
+ *  three times, then refuses `seed-raced`. */
+const SEED_FILE_NAME = '.claude.json';
+const SEED_FILE_MAX = 16 * 1024 * 1024;
+const SEED_TRIES = 3;
+const SEED_THEME_DEFAULT = 'dark';
+const isTrustFlag = (k) => k === 'hasTrustDialogAccepted' || k.startsWith('hasClaudeMdExternalIncludes');
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/** `{kind: 'absent'}`, `{kind: 'read', bytes, json, mode}`, or `{kind: 'refused', detail}`. */
+function readClaudeJson(file) {
+  let st;
   try {
-    mkdirSync(dir, { recursive: true });
-    const d = lstatSync(dir);
-    if (!d.isDirectory()) {
-      refuse('lane-state-dir', `${dir} is not a directory, so no lane state can be written there. Move it aside.`);
-      return 1;
-    }
-    if ((d.mode & 0o077) !== 0) chmodSync(dir, 0o700);
+    st = lstatSync(file);
   } catch (e) {
-    refuse('lane-state-dir', `cannot prepare ${dir} (0700): ${e.message}`);
+    return e.code === 'ENOENT' ? { kind: 'absent' } : { kind: 'refused', detail: `${file} could not be read: ${e.message}` };
+  }
+  if (!st.isFile()) return { kind: 'refused', detail: `${file} is not a regular file` };
+  if (st.size > SEED_FILE_MAX) return { kind: 'refused', detail: `${file} is larger than ${SEED_FILE_MAX} bytes` };
+  let bytes;
+  try { bytes = readFileSync(file, 'utf8'); } catch (e) { return { kind: 'refused', detail: `${file} could not be read: ${e.message}` }; }
+  let json = null;
+  try { json = JSON.parse(bytes); } catch { json = null; }
+  if (!isPlainObject(json)) return { kind: 'refused', detail: `${file} is not a JSON object` };
+  return { kind: 'read', bytes, json, mode: st.mode & 0o777 };
+}
+
+/** The seeded copy of `json`, and the trust flags it copied as `[project, flag]` pairs. */
+function seededOf(json, upstream) {
+  const next = structuredClone(json);
+  next.hasCompletedOnboarding = true;
+  if (typeof next.theme !== 'string') {
+    next.theme = upstream !== null && typeof upstream.theme === 'string' ? upstream.theme : SEED_THEME_DEFAULT;
+  }
+  const copied = [];
+  const from = upstream !== null && isPlainObject(upstream.projects) ? upstream.projects : {};
+  for (const [project, entry] of Object.entries(from)) {
+    if (!isPlainObject(entry)) continue;
+    const flags = Object.keys(entry).filter((k) => isTrustFlag(k) && entry[k] === true);
+    if (flags.length === 0) continue;
+    if (next.projects === undefined) next.projects = {};
+    if (!isPlainObject(next.projects)) break;
+    if (next.projects[project] === undefined) next.projects[project] = {};
+    const mine = next.projects[project];
+    if (!isPlainObject(mine)) continue;
+    for (const f of flags) {
+      if (mine[f] === true) continue;
+      mine[f] = true;
+      copied.push([project, f]);
+    }
+  }
+  return { next, copied };
+}
+
+/** The lane's `.claude.json` and its trust source, from the roster. Claude Code keeps the file in `$CLAUDE_CONFIG_DIR`
+ *  when that is set, which every generated and declared launcher sets, and in `$HOME` when it is not, which is the
+ *  upstream lane's plain `claude`. So the upstream lane's file is `$HOME/.claude.json`, the trust source of every
+ *  other lane, whose own file is `$HOME/<configDirSuffix>/.claude.json`. */
+function seedPathsOf(home, acct) {
+  const e = isPlainObject(acct['exec']) ? acct['exec'] : {};
+  const up = join(home, SEED_FILE_NAME);
+  if (e['kind'] === 'upstream') return { file: up, upstream: null };
+  const suffix = acct['configDirSuffix'];
+  if (typeof suffix !== 'string' || suffix === '' || suffix !== basename(suffix) || suffix.startsWith('..')) return null;
+  return { file: join(home, suffix, SEED_FILE_NAME), upstream: up };
+}
+
+/** The roster entry `--file`/`--id` name, or `null` once refused. */
+function rosterEntryOf(a, op) {
+  for (const k of ['file', 'id']) {
+    if (a[k] === undefined) { refuse('bad-argv', `${op} needs --${k}`); return null; }
+  }
+  const json = readRoster(a['file']);
+  if (json === null) return null;
+  const acct = json['accounts'].find((x) => isPlainObject(x) && x['id'] === a['id']);
+  if (acct === undefined) {
+    refuse('unknown-id', `no account "${a['id']}" in ${a['file']} — 'ccrc account roster' lists what is there`);
+    return null;
+  }
+  return acct;
+}
+
+function opSeed(a) {
+  process.on('SIGTERM', () => { process.exitCode = 143; });
+  const when = a['when'] ?? 'always';
+  if (when !== 'always' && when !== 'unseeded') { refuse('bad-argv', '--when must be always or unseeded'); return 2; }
+  const acct = rosterEntryOf(a, 'seed');
+  if (acct === null) return 1;
+  const home = process.env.HOME ?? '';
+  if (!isAbsolute(home)) { refuse('bad-argv', 'HOME is not an absolute path'); return 2; }
+  const paths = seedPathsOf(home, acct);
+  if (paths === null) {
+    refuse('seed-no-config-dir', `lane ${a['id']} names no config directory, so it has no .claude.json to seed. Nothing was written.`);
     return 1;
   }
+  const { file } = paths;
+  let upstream = null;
+  let trustSource = 'none';
+  if (paths.upstream !== null) {
+    const u = readClaudeJson(paths.upstream);
+    trustSource = u.kind === 'read' ? 'read' : u.kind === 'absent' ? 'absent' : 'unreadable';
+    if (u.kind === 'read') upstream = u.json;
+  }
 
-  let current = null;
-  try {
-    const f = lstatSync(file);
-    if (mode === 'if-absent') return 0;
-    if (!f.isFile()) {
-      refuse('lane-state-unreadable', `${file} is not a regular file, so its fields cannot be kept. Move it aside.`);
+  const dir = dirname(file);
+  for (let attempt = 1; attempt <= SEED_TRIES; attempt += 1) {
+    const cur = readClaudeJson(file);
+    if (cur.kind === 'refused') {
+      refuse('seed-unreadable', `${cur.detail}, so it cannot be seeded without losing what it holds. Move it aside, then check the lane again.`);
       return 1;
     }
-    if (mode === 'merge') {
-      let parsed;
-      try { parsed = JSON.parse(readFileSync(file, 'utf8')); } catch { parsed = null; }
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        refuse('lane-state-unreadable',
-          `${file} is not a JSON object, so the fields it holds cannot be kept through this write. `
-          + 'Move it aside; the next account verb writes a new one.');
+    if (when === 'unseeded' && cur.kind === 'absent') { out({ ok: true, skipped: 'absent' }); return 0; }
+    if (when === 'unseeded' && cur.json.hasCompletedOnboarding === true) { out({ ok: true, skipped: 'seeded' }); return 0; }
+    if (cur.kind === 'absent') {
+      let d = null;
+      try { d = statSync(dir); } catch { d = null; }
+      if (d === null || !d.isDirectory()) {
+        refuse('seed-no-config-dir', `${dir} is not a directory, so the lane has no config directory to seed. Nothing was written.`);
         return 1;
       }
-      current = parsed;
     }
-  } catch (e) {
-    if (e.code !== 'ENOENT') {
-      refuse('lane-state-unreadable', `${file} could not be read: ${e.message}`);
+    const base = cur.kind === 'read' ? cur.json : {};
+    const { next, copied } = seededOf(base, upstream);
+    const created = cur.kind === 'absent';
+    const written = created || JSON.stringify(next) !== JSON.stringify(base);
+    if (written) {
+      const tmp = join(dir, `.${SEED_FILE_NAME}.ccrc-seed.${process.pid}.${randomBytes(6).toString('hex')}`);
+      try {
+        writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+        chmodSync(tmp, cur.kind === 'read' ? cur.mode : 0o600);
+        const now = readClaudeJson(file);
+        const same = cur.kind === 'absent' ? now.kind === 'absent' : now.kind === 'read' && now.bytes === cur.bytes;
+        if (!same) { unlinkSync(tmp); continue; }
+        renameSync(tmp, file);
+      } catch (e) {
+        try { unlinkSync(tmp); } catch { /* never created, or already renamed */ }
+        refuse('seed-write', `writing ${file} failed: ${e.message}. The file is as it was.`);
+        return 1;
+      }
+    }
+    const back = readClaudeJson(file);
+    const ok = back.kind === 'read' && back.json.hasCompletedOnboarding === true && typeof back.json.theme === 'string'
+      && copied.every(([p, f]) => isPlainObject(back.json.projects) && isPlainObject(back.json.projects[p])
+        && back.json.projects[p][f] === true);
+    if (!ok) {
+      refuse('seed-unverified', `${file} did not read back with the first-run flags set, so the seed is not verified. Check the lane again.`);
       return 1;
     }
+    const projects = new Set(copied.map(([p]) => p));
+    const verifiedAt = new Date().toISOString();
+    // THE RECORD IS ADVISORY, as every verb's lane-state write is (D-5755): the seed stands, and `recorded` says so.
+    const failed = laneStateWrite(home, a['id'], 'merge', { seedVerifiedAt: verifiedAt }, undefined);
+    if (failed !== null) process.stderr.write(`${SELF}: the seed of lane ${a['id']} is not recorded: ${failed[1]} (${failed[0]})\n`);
+    out({ ok: true, id: a['id'], created, written, trustCopied: projects.size, trustSource, verifiedAt, recorded: failed === null });
+    return 0;
   }
+  refuse('seed-raced', `${file} kept changing while it was being seeded (a Claude Code run was writing it), so it was left as it was. Check the lane again once it is quiet.`);
+  return 1;
+}
 
-  const next = {};
-  if (mode === 'merge' && current !== null) {
-    for (const k of LANE_STATE_FIELDS) if (Object.hasOwn(current, k)) next[k] = current[k];
+/** ── ENABLE'S READINESS (accounts plan Task A13; spec §10, G19; D-7731) ──────────────────────────────────────
+ *  Read-only. `enable` asks this before it touches the marker, and answers `not-ready` unless the lane-state file
+ *  records all three of spec §10's conditions. The first that fails is the reason, in this order:
+ *   - `no-lane-state`: no readable file (a lane from before the backfill, or a file moved aside);
+ *   - `not-checked`: no check recorded (a backfilled legacy lane): "Check it once to turn it on";
+ *   - `check-failed`: the last check's verdict is not `ok`;
+ *   - `no-credential`: the roster names a secrets file and it is missing or empty, or, for a sign-in lane (an
+ *     Anthropic lane with no secrets file), the lane state holds no identity read off the provider, which `check`
+ *     writes only when the lane's own `auth status` said it is signed in. A lane whose credential ccrc does not read
+ *     (codex, a declared launcher) has its passing last check as the record;
+ *   - `seed-unverified`: no seed verified strictly after the last run (`seedVerifiedAt > lastRunAt`).
+ *  Same-uid writable, so an accident guard and never a lock (spec §3.4). The answer's `reason` is the word A14 shows. */
+const LANE_STATE_READ_MAX = 64 * 1024;
+
+function opReady(a) {
+  const acct = rosterEntryOf(a, 'ready');
+  if (acct === null) return 1;
+  const id = a['id'];
+  if (id === '' || id !== basename(id) || id.startsWith('.')) {
+    refuse('bad-argv', 'ready needs an --id that names a lane-state file'); return 2;
   }
-  if (a['clear'] !== undefined) delete next[a['clear']];
-  if (verdict !== undefined) next.check = { verdict, at };
-  if (a['key-hash'] !== undefined) next.keyHash = a['key-hash'];
-  if (a['retired-key-hash'] !== undefined) next.retiredKeyHash = a['retired-key-hash'];
-  next.fleetIdentity = readNodeIdentity(home);
-
-  const tmp = join(dir, `.${id}.json.tmp.${process.pid}.${randomBytes(6).toString('hex')}`);
+  const home = process.env.HOME ?? '';
+  if (!isAbsolute(home)) { refuse('bad-argv', 'HOME is not an absolute path'); return 2; }
+  // WHERE THE LANE KEEPS ITS CREDENTIAL. A secrets file named by the roster is measured now; an Anthropic lane with
+  // none is a sign-in lane, whose record is the identity `check` read off its own `auth status`; any other lane
+  // (codex, a declared launcher) keeps its credential where ccrc does not read it, and its passing check is the record.
+  const e = isPlainObject(acct['exec']) ? acct['exec'] : {};
+  const provider = e['provider'] ?? (e['kind'] === 'external' || e['kind'] === 'codex' ? null : 'anthropic');
+  let cred = 'held-elsewhere';
+  if (typeof e['secretsFile'] === 'string' && e['secretsFile'] !== '') {
+    let st = null;
+    try { st = statSync(join(home, e['secretsFile'])); } catch { st = null; }
+    cred = st !== null && st.isFile() && st.size > 0 ? 'present' : 'absent';
+  } else if (provider === 'anthropic') {
+    cred = 'recorded';
+  }
+  const notReady = (reason, detail) => {
+    out({ ok: false, error: 'not-ready', reason, detail });
+    process.stderr.write(`${SELF}: ${detail} (not-ready)\n`);
+    return 1;
+  };
+  const again = `Check it once to turn it on: ccrc account check --id ${id}. Nothing was written.`;
+  const file = join(laneStateDir(home), `${id}.json`);
+  let st = null;
   try {
-    writeFileSync(tmp, `${JSON.stringify(next)}\n`, { flag: 'wx' });
-    if (mode === 'if-absent') {
-      // NO-CLOBBER, NOT CHECK-THEN-RENAME: `link` refuses an existing name, so
-      // a verb that wrote this lane's file after the check above keeps it.
-      try { linkSync(tmp, file); } catch (e) { if (e.code !== 'EEXIST') throw e; }
-      unlinkSync(tmp);
-    } else {
-      renameSync(tmp, file);
+    const f = lstatSync(file);
+    if (f.isFile() && f.size <= LANE_STATE_READ_MAX) st = JSON.parse(readFileSync(file, 'utf8'));
+  } catch { st = null; }
+  if (!isPlainObject(st)) {
+    return notReady('no-lane-state', `lane ${id} has no lane-state file this box can read, so nothing records that it is signed in, set up and checked. ${again}`);
+  }
+  const check = isPlainObject(st.check) ? st.check : null;
+  if (check === null || typeof check.verdict !== 'string') {
+    return notReady('not-checked', `lane ${id} has not been checked since this box began recording checks, so nothing records that it can take a session. ${again}`);
+  }
+  if (check.verdict !== 'ok') {
+    return notReady('check-failed', `Not ready: the last check of lane ${id} didn't pass (${CHECK_VERDICT_RE.test(check.verdict) ? check.verdict : 'unreadable'}). Check it first: ccrc account check --id ${id}. Nothing was written.`);
+  }
+  if (cred === 'absent' || (cred === 'recorded' && !(st.identitySource === 'measured' && typeof st.identity === 'string'))) {
+    return notReady('no-credential', cred === 'absent'
+      ? `Not ready: lane ${id}'s credential file is missing or empty. Give it a credential, then check it. Nothing was written.`
+      : `Not ready: no check of lane ${id} has read a signed-in account from it. Sign it in, then check it: ccrc account check --id ${id}. Nothing was written.`);
+  }
+  const seed = typeof st.seedVerifiedAt === 'string' && ISO_MS_RE.test(st.seedVerifiedAt) ? Date.parse(st.seedVerifiedAt) : NaN;
+  const run = typeof st.lastRunAt === 'string' && ISO_MS_RE.test(st.lastRunAt) ? Date.parse(st.lastRunAt) : NaN;
+  if (!(seed > run)) {
+    return notReady('seed-unverified', `Not ready: lane ${id}'s first-run setup was not verified after its last run, so its sessions could stop on Claude Code's first-run wizard. Check it again, which sets it up: ccrc account check --id ${id}. Nothing was written.`);
+  }
+  out({ ok: true, id, ready: true });
+  return 0;
+}
+
+/** ── ACCOUNTS PLAN TASK A16: THE BOX HALF OF W2a (D-5513, D-5518, N3 = D-7733, N4 = D-7734; as built D-7735) ────
+ *  Re-add safety, `set`, Remove's pre-check and gate, the provider ledger, and the lane-secret fingerprints. */
+
+/** The default config directory (G4): `.claude-<id>`, or `.<id>` when the id already starts `claude-`, so a lane
+ *  `claude-a` is `.claude-a` and never `.claude-claude-a`. `_acct_add_parse` spells the same rule in bash, and
+ *  `ccrc-account.test.ts` holds the two equal. */
+function defaultSuffixOf(id) {
+  return id.startsWith('claude-') ? `.${id}` : `.claude-${id}`;
+}
+
+/** What an existing config directory holds (G20), measured without reading a credential: signed in when its
+ *  `.credentials.json` is there, and the account its `.claude.json` names, when it names a printable one. */
+function configDirFound(dir) {
+  let signedIn = false;
+  try { lstatSync(join(dir, '.credentials.json')); signedIn = true; } catch { signedIn = false; }
+  let identity = null;
+  const cj = readClaudeJson(join(dir, SEED_FILE_NAME));
+  if (cj.kind === 'read' && isPlainObject(cj.json.oauthAccount)) {
+    const e = cj.json.oauthAccount.emailAddress;
+    if (typeof e === 'string' && e.trim() !== '' && e.length <= LANE_IDENTITY_MAX && !identityUnprintable(e)) identity = e;
+  }
+  return { signedIn, identity };
+}
+
+/** `config-dir-exists` (G20): a re-added id must not inherit the old lane's sign-in, transcripts or settings
+ *  silently, so an existing `$HOME/<suffix>` refuses with what it holds unless `--adopt` is given. Class 1: a fact
+ *  about the box, not about argv. */
+function configDirTakenClass(home, suffix, id) {
+  const dir = join(home, suffix);
+  try { lstatSync(dir); } catch (e) { return e.code === 'ENOENT' ? 0 : configDirRefusal(dir, id, null); }
+  return configDirRefusal(dir, id, configDirFound(dir));
+}
+
+function configDirRefusal(dir, id, found) {
+  const what = found === null ? 'could not be measured'
+    : found.signedIn ? `is signed in${found.identity === null ? '' : ` as ${found.identity}`}`
+      : `is signed out${found.identity === null ? '' : ` (it last named ${found.identity})`}`;
+  const detail = `${dir} already exists and ${what}, so a new lane "${id}" would inherit its sign-in, transcripts `
+    + 'and settings. Pass --adopt to take it over as it is, or pick another id or --suffix. Nothing was written.';
+  out({ ok: false, error: 'config-dir-exists', detail, found });
+  process.stderr.write(`${SELF}: ${detail} (config-dir-exists)\n`);
+  return 1;
+}
+
+/** ── THE LANE-SECRET FINGERPRINTS (D-5996, D-6057 (9)) ────────────────────────────────────────────────────────
+ *  `{gen, rows: [{laneId, fp, len}]}`, where `fp` is HMAC-SHA256(box token, "ccrc-secret-fp-v1\0" ‖ secret) over the
+ *  secret with its trailing `=` stripped, `len` that stripped secret's UTF-8 byte length (20 to 8192), and `gen` the
+ *  token's generation id. `server/src/accounts/mask.ts` is the other half (`fingerprintRow`,
+ *  `fingerprintGeneration`, `fingerprintAnswerOf`); `ccrc-account-paste.test.ts` holds the two equal. The box token is
+ *  `~/.cc-secrets/ccrc-mail.token`, read by `extractToken`'s rule (`server/src/coord/token.ts`): the first line that
+ *  is neither blank nor a `#` comment, with every space removed. No token, no fingerprints: the field is left out. */
+const FP_DOMAIN = 'ccrc-secret-fp-v1\0';
+const FP_GEN_DOMAIN = 'ccrc-secret-fp-gen-v1\0';
+const FP_LEN_MIN = 20;
+const FP_LEN_MAX = 8192;
+const SMALL_FILE_MAX = 64 * 1024;
+
+/** A small regular file's text, never through a symlink, or `null`. */
+function readSmallFile(p) {
+  let fd;
+  try {
+    fd = openSync(p, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW);
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > SMALL_FILE_MAX) return null;
+    const buf = Buffer.alloc(SMALL_FILE_MAX + 1);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    return n > SMALL_FILE_MAX ? null : buf.subarray(0, n).toString('utf8');
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) { try { closeSync(fd); } catch { /* closed */ } }
+  }
+}
+
+function boxTokenOf(home) {
+  const raw = readSmallFile(join(home, '.cc-secrets', 'ccrc-mail.token'));
+  if (raw === null) return null;
+  for (const line of raw.split(/\r?\n/)) {
+    const t = line.trim();
+    if (t === '' || t.startsWith('#')) continue;
+    const v = t.replace(/\s+/g, '');
+    return v === '' ? null : v;
+  }
+  return null;
+}
+
+/** One word of bash, as `printf %q` writes it (`_acct_write_secret`) or bare (`ccd-account-auth`'s capture): a
+ *  backslash escapes the next byte, `'…'` is literal, `$'…'` is ANSI-C and `"…"` is double-quoted. `null` when the
+ *  word does not close. */
+function unquoteWord(s) {
+  const C = { n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', v: '\v', '\\': '\\', "'": "'", '"': '"', '?': '?' };
+  let o = '';
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === '\\') { if (i + 1 >= s.length) return null; o += s[i + 1]; i += 2; continue; }
+    if (c === "'") { const j = s.indexOf("'", i + 1); if (j < 0) return null; o += s.slice(i + 1, j); i = j + 1; continue; }
+    if (c === '$' && s[i + 1] === "'") {
+      i += 2;
+      for (;;) {
+        if (i >= s.length) return null;
+        const d = s[i];
+        if (d === "'") { i += 1; break; }
+        if (d !== '\\') { o += d; i += 1; continue; }
+        const e = s[i + 1];
+        const oct = /^[0-7]{1,3}/.exec(s.slice(i + 1));
+        const hex = e === 'x' ? /^[0-9A-Fa-f]{1,2}/.exec(s.slice(i + 2)) : null;
+        if (oct !== null) { o += String.fromCharCode(parseInt(oct[0], 8)); i += 1 + oct[0].length; } else if (hex !== null) { o += String.fromCharCode(parseInt(hex[0], 16)); i += 2 + hex[0].length; } else if (e !== undefined && Object.hasOwn(C, e)) { o += C[e]; i += 2; } else { o += d; i += 1; }
+      }
+      continue;
     }
-  } catch (e) {
-    try { unlinkSync(tmp); } catch { /* never created, or already renamed */ }
-    refuse('lane-state-write', `writing ${file} failed: ${e.message}`);
+    if (c === '"') {
+      i += 1;
+      for (;;) {
+        if (i >= s.length) return null;
+        const d = s[i];
+        if (d === '"') { i += 1; break; }
+        if (d === '\\' && '"\\$`'.includes(s[i + 1] ?? '')) { o += s[i + 1]; i += 2; continue; }
+        o += d; i += 1;
+      }
+      continue;
+    }
+    o += c; i += 1;
+  }
+  return o;
+}
+
+/** The value a lane's secrets file exports as `envVar`, or `null`. The file is read, never sourced. */
+function envSecretOf(home, rel, envVar) {
+  const raw = readSmallFile(join(home, rel));
+  if (raw === null) return null;
+  for (const line of raw.split('\n')) {
+    const m = /^export ([A-Z_][A-Z0-9_]*)=(.*)$/.exec(line);
+    if (m !== null && m[1] === envVar) return unquoteWord(m[2]);
+  }
+  return null;
+}
+
+/** The fingerprints of every lane secret the roster names, keyed with this box's token, or `undefined`. */
+function fingerprintsOf(home, json) {
+  const token = boxTokenOf(home);
+  if (token === null || !isPlainObject(json) || !Array.isArray(json['accounts'])) return undefined;
+  const rows = [];
+  for (const acct of json['accounts']) {
+    if (!isPlainObject(acct) || !isPlainObject(acct['exec'])) continue;
+    const e = acct['exec'];
+    if (e['kind'] !== 'generated' || typeof e['secretsFile'] !== 'string') continue;
+    const envVar = PROVIDER_ENV_VAR[e['provider'] ?? 'anthropic'];
+    if (typeof envVar !== 'string') continue;
+    const secret = envSecretOf(home, e['secretsFile'], envVar);
+    if (secret === null) continue;
+    const bare = secret.replace(/=+$/, '');
+    const len = Buffer.byteLength(bare, 'utf8');
+    if (len < FP_LEN_MIN || len > FP_LEN_MAX) continue;
+    rows.push({ laneId: acct['id'], fp: createHmac('sha256', token).update(FP_DOMAIN, 'utf8').update(bare, 'utf8').digest('hex'), len });
+  }
+  const gen = createHash('sha256').update(FP_GEN_DOMAIN).update(token, 'utf8').digest('hex').slice(0, 16);
+  return { gen, rows };
+}
+
+/** What every answer that carries the roster carries beside it (spec §3.9, §13.2): the node that built it, and the
+ *  lane-secret fingerprints when this box has a token to key them with. */
+function rosterFields(json) {
+  const home = process.env.HOME ?? '';
+  const fingerprints = isAbsolute(home) ? fingerprintsOf(home, json) : undefined;
+  return { roster: json, fleetIdentity: readNodeIdentity(home), ...(fingerprints === undefined ? {} : { fingerprints }) };
+}
+
+/** ── WHAT IS STILL VALID AT THE PROVIDER (spec §11.3) ─────────────────────────────────────────────────────────
+ *  `remove`'s `atProvider` ledger, one row per credential kind: whether the credential outlives the lane at its
+ *  provider, and which page revokes it (a word the sheet maps to its link, never a URL from the box). A sign-in
+ *  lane's row follows OA1's G23 record (2026-11-01): whether `claude auth logout` ends the sign-in at Anthropic was
+ *  NOT measured, so it says `unmeasured`, never `ended` and never `still-valid`. */
+const AT_PROVIDER = {
+  'anthropic-token': { state: 'still-valid', revokeAt: 'claude-code-settings' },
+  'anthropic-sign-in': { state: 'unmeasured', revokeAt: 'claude-account-settings' },
+  'openrouter-key': { state: 'still-valid', revokeAt: 'openrouter-keys' },
+  'api-key': { state: 'still-valid', revokeAt: null },
+  codex: { state: 'still-valid', revokeAt: 'chatgpt-settings' },
+};
+
+/** The credential kind of a removed lane, from the fields `lane` answered for it before the drop. */
+function credentialKindOf(kind, provider, secretEnv, secrets) {
+  if (kind === 'codex') return 'codex';
+  if (kind === 'external' || kind === undefined) return null;
+  if (secrets === undefined || secrets === '') return provider === 'anthropic' ? 'anthropic-sign-in' : null;
+  if (secretEnv === 'CLAUDE_CODE_OAUTH_TOKEN') return 'anthropic-token';
+  if (secretEnv === 'ANTHROPIC_AUTH_TOKEN') return provider === 'openrouter' ? 'openrouter-key' : 'api-key';
+  return null;
+}
+
+/** ── A SIGN-IN IN FLIGHT (spec §3.9) ──────────────────────────────────────────────────────────────────────────
+ *  `ccd-account-auth`'s status file, `~/.cc-sessions/.auth/<id>.json`, in a state that is not terminal and written
+ *  within the attempt's bound (`RuntimeMaxSec=660`, D-5515): a file a killed helper left `starting` an hour ago is no
+ *  attempt. A20 adds the attempt id; this reads only the state and its time. */
+const AUTH_LIVE_STATES = ['starting', 'url', 'waiting-code', 'exchanging'];
+const AUTH_ATTEMPT_MAX_MS = 660_000;
+
+function authInProgressOf(home, id) {
+  const raw = readSmallFile(join(home, '.cc-sessions', '.auth', `${id}.json`));
+  if (raw === null) return false;
+  let j = null;
+  try { j = JSON.parse(raw); } catch { j = null; }
+  if (!isPlainObject(j) || !AUTH_LIVE_STATES.includes(j.state)) return false;
+  const at = typeof j.updatedAt === 'string' ? Date.parse(j.updatedAt) : NaN;
+  return Number.isFinite(at) && Date.now() - at <= AUTH_ATTEMPT_MAX_MS;
+}
+
+/** A lane-state file as an object, or `null`. */
+function laneStateOf(home, id) {
+  const raw = readSmallFile(join(laneStateDir(home), `${id}.json`));
+  if (raw === null) return null;
+  try { const j = JSON.parse(raw); return isPlainObject(j) ? j : null; } catch { return null; }
+}
+
+/** ── REMOVE'S PRE-CHECK AND GATE (spec §11.1, §11.2, §11.5; N3) ──────────────────────────────────────────────
+ *  Bash measures the rows (`_acct_live`: live by pane, sleeping by `.hibernated`, archived by `.archived`) and the
+ *  placeable lanes; this decides. `--mode check` is `remove --dry-run`: it refuses nothing, writes nothing and
+ *  answers what the sheet shows. `remove` and `discard` are silent when they may go on, and refuse, in this order:
+ *  `auth-in-progress`, `sleeping-sessions` (unless `--rehome-sleeping true`, the CLI's, which no route sends), and,
+ *  for `discard`, `not-discardable`. A lane is discardable only when `add` made it on this build (`addedAt`), no
+ *  `enable` ever switched it on (`enabledAt`), its marker still holds it off, it is not upstream, and it has no live,
+ *  sleeping or archived session. */
+function opPreRemove(a) {
+  for (const k of ['file', 'id', 'mode', 'live-measured', 'other-home-able', 'upstream', 'disabled']) {
+    if (a[k] === undefined) { refuse('bad-argv', `pre-remove needs --${k}`); return 2; }
+  }
+  const mode = a['mode'];
+  if (!['check', 'remove', 'discard'].includes(mode)) { refuse('bad-argv', '--mode must be check, remove or discard'); return 2; }
+  const bool = (k) => (a[k] === 'true' ? true : a[k] === 'false' ? false : null);
+  for (const k of ['live-measured', 'upstream', 'disabled']) {
+    if (bool(k) === null) { refuse('bad-argv', `--${k} must be true or false`); return 2; }
+  }
+  if (a['rehome-sleeping'] !== undefined && a['rehome-sleeping'] !== 'true') { refuse('bad-argv', '--rehome-sleeping takes true'); return 2; }
+  if (!/^[0-9]{1,4}$/.test(a['other-home-able'])) { refuse('bad-argv', '--other-home-able must be a count'); return 2; }
+  const json = readRoster(a['file']);
+  if (json === null) return 1;
+  const id = a['id'];
+  const home = process.env.HOME ?? '';
+  if (!isAbsolute(home)) { refuse('bad-argv', 'HOME is not an absolute path'); return 2; }
+  const live = bool('live-measured') ? (a['live'] ?? []) : null;
+  const sleeping = a['sleeping'] ?? [];
+  const archived = a['archived'] ?? [];
+  const st = laneStateOf(home, id);
+  const authInProgress = authInProgressOf(home, id);
+  const neverEnabled = st !== null && typeof st.addedAt === 'string' && st.enabledAt === undefined;
+  const discardable = neverEnabled && bool('disabled') && !bool('upstream') && live !== null && live.length === 0
+    && sleeping.length === 0 && archived.length === 0;
+  if (mode === 'check') {
+    out({
+      ok: true, id, dryRun: true, live: live === null ? null : live.length, sleeping, archived: archived.length,
+      upstream: bool('upstream'), otherHomeAble: Number(a['other-home-able']), authInProgress, discardable,
+      at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'), fleetIdentity: readNodeIdentity(home),
+    });
+    return 0;
+  }
+  const say = (code, detail, extra = {}) => {
+    out({ ok: false, error: code, detail, ...extra });
+    process.stderr.write(`${SELF}: ${detail} (${code})\n`);
+    return 1;
+  };
+  if (authInProgress) {
+    return say('auth-in-progress', `a sign-in for lane ${id} is in progress. Cancel the sign-in first, then remove the lane. Nothing was written.`);
+  }
+  if (sleeping.length > 0 && a['rehome-sleeping'] !== 'true') {
+    return say('sleeping-sessions', `lane ${id} has ${sleeping.length} sleeping session(s): ${sleeping.join(', ')}. `
+      + 'Removing the lane would move them to the upstream lane, where they would wake. Wake and move each one first, '
+      + 'or pass --rehome-sleeping to move them as they are. Nothing was written.', { sleeping });
+  }
+  if (mode === 'discard' && !discardable) {
+    const why = st === null || typeof st.addedAt !== 'string' ? 'this box has no record of adding it'
+      : st.enabledAt !== undefined ? 'it was switched on once' : !bool('disabled') ? 'it is switched on'
+        : bool('upstream') ? 'it is the upstream lane' : 'it has sessions';
+    return say('not-discardable', `lane ${id} cannot be discarded: ${why}. Remove it instead, which asks for its id. Nothing was written.`);
+  }
+  return 0;
+}
+
+/** `set --placement` (G5): `full` makes the lane home-able, `overflow` takes it out of fresh placement. Silent. */
+function opSetPlacement(a) {
+  const acct = rosterEntryOf(a, 'set-placement');
+  if (acct === null) return 1;
+  const p = a['placement'];
+  if (p !== 'overflow' && p !== 'full') { refuse('bad-argv', '--placement must be overflow or full'); return 2; }
+  const json = readRoster(a['file']);
+  if (json === null) return 1;
+  const homeAble = p === 'full';
+  if (acct['homeAble'] === homeAble) return 0;
+  const next = { ...json, accounts: json['accounts'].map((x) => (isPlainObject(x) && x['id'] === a['id'] ? { ...x, homeAble } : x)) };
+  const admits = rosterAdmits(next, `setting lane "${a['id']}"'s placement to ${p} would make ${a['file']} unparseable: `);
+  if (admits !== 0) return admits;
+  return writeRoster(a['file'], next, 'the roster was unchanged') ? 0 : 1;
+}
+
+/** A lane's secrets file, relative to HOME: the one template `check-add` and the method switch share, and the name
+ *  `_acct_write_secret` and `ccd-account-auth`'s capture write (the three writers `ccd-account-auth.test.ts` pins). */
+function secretsFileOf(id, provider) {
+  const secretTag = PROVIDER_DEPLOY[provider]?.envVar === 'CLAUDE_CODE_OAUTH_TOKEN' ? 'oauth' : provider;
+  return `.cc-secrets/${id}-${secretTag}.env`;
+}
+
+/** ── THE METHOD SWITCH'S ROSTER WRITE (accounts plan Task A20; spec §9, §13.3; D-7750) ───────────────────────────
+ *  The roster has no method field (A1): an Anthropic lane is a token lane when `exec.secretsFile` is present. So
+ *  `setup-token` names the lane's `.cc-secrets/<id>-oauth.env` (the one spelling `check-add` and `_acct_write_secret`
+ *  share) and `login` drops it. Only a generated Anthropic lane has a method to switch. Silent on success. */
+function opSetMethod(a) {
+  const acct = rosterEntryOf(a, 'set-method');
+  if (acct === null) return 1;
+  const m = a['method'];
+  if (m !== 'setup-token' && m !== 'login') { refuse('bad-argv', '--method must be setup-token or login'); return 2; }
+  const e = isPlainObject(acct['exec']) ? acct['exec'] : {};
+  if (e['kind'] !== 'generated' || (e['provider'] ?? 'anthropic') !== 'anthropic') {
+    refuse('method-not-supported', `lane "${a['id']}" is not a generated Anthropic lane, so it has no method to switch`);
     return 1;
   }
+  const json = readRoster(a['file']);
+  if (json === null) return 1;
+  const exec = { ...e };
+  if (m === 'setup-token') exec['secretsFile'] = secretsFileOf(a['id'], 'anthropic');
+  else delete exec['secretsFile'];
+  const next = { ...json, accounts: json['accounts'].map((x) => (isPlainObject(x) && x['id'] === a['id'] ? { ...x, exec } : x)) };
+  const admits = rosterAdmits(next, `switching lane "${a['id']}" to ${m} would make ${a['file']} unparseable: `);
+  if (admits !== 0) return admits;
+  return writeRoster(a['file'], next, 'the roster was unchanged') ? 0 : 1;
+}
+
+/** ── THE SIGN-IN VERBS' ANSWERS (accounts plan Task A20; D-5514, D-5515, D-7749, D-7750) ─────────────────────────
+ *  One shape per verb, each carrying `fleetIdentity` (D-5518): `auth-start` the attempt, its method, the state the
+ *  helper first reported and the unit it runs in; `auth-code` that the code went (never the code); `auth-cancel` the
+ *  unit and whether a stop landed; `credential --sign-out` what the sign-out found on this box. */
+const AUTH_ANSWER_VERBS = ['start', 'code', 'cancel', 'sign-out'];
+function opAuthAnswer(a) {
+  const verb = a['verb'];
+  if (!AUTH_ANSWER_VERBS.includes(verb) || a['id'] === undefined) {
+    refuse('bad-argv', `auth-answer needs --verb ${AUTH_ANSWER_VERBS.join('|')} and --id`);
+    return 2;
+  }
+  if (verb !== 'sign-out' && !/^[0-9a-f]{32}$/.test(a['attempt'] ?? '')) {
+    refuse('bad-argv', 'auth-answer needs --attempt, 32 lowercase hex characters');
+    return 2;
+  }
+  const home = process.env.HOME ?? '';
+  const base = { ok: true, id: a['id'] };
+  let body;
+  if (verb === 'start') body = { ...base, attemptId: a['attempt'], method: a['method'], state: a['state'], unit: a['unit'] };
+  else if (verb === 'code') body = { ...base, attemptId: a['attempt'], sent: true };
+  else if (verb === 'cancel') body = { ...base, attemptId: a['attempt'], unit: a['unit'], stopped: a['stopped'] === 'true', state: a['state'] };
+  else body = { ...base, signOut: a['sign-out'] };
+  out({ ...body, fleetIdentity: readNodeIdentity(home) });
   return 0;
 }
 
@@ -1414,11 +2111,31 @@ function main(argv) {
     // `fleetIdentity` (spec §13.3's `roster --json` row; D-5518): the node
     // that read this roster, so the server's `reloadRoster` (A12) can refuse a
     // roster that came from another box. `null` when the node-id is not known.
-    out({ ok: true, roster: json, fleetIdentity: readNodeIdentity(process.env.HOME ?? '') });
+    out({ ok: true, ...rosterFields(json) });
     return 0;
   }
 
   if (op === 'lane-state') return opLaneState(a);
+  if (op === 'pre-remove') return opPreRemove(a);
+  if (op === 'set-placement') return opSetPlacement(a);
+  if (op === 'set-method') return opSetMethod(a);
+  if (op === 'auth-live') {
+    if (a['id'] === undefined) { refuse('bad-argv', 'auth-live needs --id'); return 2; }
+    const home = process.env.HOME ?? '';
+    if (!isAbsolute(home)) { refuse('bad-argv', 'HOME is not an absolute path'); return 2; }
+    process.stdout.write(`${authInProgressOf(home, a['id']) ? 'live' : 'idle'}\n`);
+    return 0;
+  }
+  if (op === 'auth-answer') return opAuthAnswer(a);
+  if (op === 'set-done') {
+    if (rosterEntryOf(a, 'set-done') === null) return 1;
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    out({ ok: true, id: a['id'], ...rosterFields(json) });
+    return 0;
+  }
+  if (op === 'seed') return opSeed(a);
+  if (op === 'ready') return opReady(a);
 
   if (op === 'check-add') {
     // EVERY REFUSAL IN THIS ARM FIRES BEFORE ANY CALLER HAS WRITTEN A BYTE, and
@@ -1506,7 +2223,11 @@ function main(argv) {
     // here: `??` catches only `undefined`, which is the whole of D-2148's
     // second half — this line used to emit `"configDirSuffix": ""` into the
     // plan for `--suffix ''`.
-    const suffix = a['suffix'] ?? `.claude-${id}`;
+    const suffix = a['suffix'] ?? defaultSuffixOf(id);
+    if (a['adopt'] !== undefined && a['adopt'] !== 'true') {
+      refuse('bad-argv', `check-add takes --adopt true or nothing, and got ${JSON.stringify(a['adopt'])}`);
+      return 2;
+    }
 
     // ── THE PROVIDER, AND WHICH VERB OWNS IT ────────────────────────────────
     // The "is it a provider at all" half is `providerKnownClass` above, shared
@@ -1767,6 +2488,10 @@ function main(argv) {
     // account, whichever verb is asking.
     const free = suffixFreeClass(accounts, suffix, a['file']);
     if (free !== 0) return free;
+    if (a['home'] !== undefined && a['adopt'] !== 'true') {
+      const taken = configDirTakenClass(a['home'], suffix, id);
+      if (taken !== 0) return taken;
+    }
 
     // ── WHAT TASKS 24 AND 25 WRITE FROM ─────────────────────────────────────
     // The RESOLVED plan, computed once, here, so no later step re-derives a
@@ -1800,7 +2525,6 @@ function main(argv) {
     // above uses: a lane exporting `CLAUDE_CODE_OAUTH_TOKEN` holds an OAuth
     // token and its file is `<id>-oauth.env`; an api-key lane's file is
     // `<id>-<provider>.env`, which is §4.3's own spelling.
-    const secretTag = P.envVar === 'CLAUDE_CODE_OAUTH_TOKEN' ? 'oauth' : provider;
     const plan = {
       id,
       provider,
@@ -1809,7 +2533,7 @@ function main(argv) {
       configDirSuffix: suffix,
       method,
       baseUrl: resolvedBaseUrl,
-      secretsFile: isToken && P.envVar !== null ? `.cc-secrets/${id}-${secretTag}.env` : null,
+      secretsFile: isToken && P.envVar !== null ? secretsFileOf(id, provider) : null,
       envVar: isToken ? P.envVar : null,
       // The PARSED object, not the string bash handed over — `add-entry`
       // writes it into the roster and Task 25 hands it to jq with
@@ -2042,7 +2766,7 @@ function main(argv) {
       disabled: a['disabled'] === 'true',
       provisioned: a['provisioned'] ?? [],
       'operator-steps': a['operator-step'] ?? [],
-      roster: json,
+      ...rosterFields(json),
     });
     return 0;
   }
@@ -2396,14 +3120,16 @@ function main(argv) {
         `${a['file']} still carries account "${a['id']}", so this run cannot report it removed`);
       return 1;
     }
+    const kind = credentialKindOf(a['kind'], a['provider'], a['secret-env'], a['secrets']);
     out({
       ok: true,
       id: a['id'],
-      roster: json,
+      ...rosterFields(json),
       rehomed: a['rehomed'] ?? [],
       kept: a['kept'] ?? [],
       removed: a['removed'] ?? [],
       'operator-steps': a['operator-step'] ?? [],
+      ...(a['kind'] === undefined ? {} : { atProvider: kind === null ? [] : [{ kind, ...AT_PROVIDER[kind] }] }),
     });
     return 0;
   }
@@ -2442,6 +3168,14 @@ function main(argv) {
         + 'ccrc, not a fact about your box');
       return 2;
     }
+    // Accounts plan Task A16: with `--file`, the answer carries the roster, the node and the fingerprints, so the
+    // server reloads the rotated lane's fingerprint from it (D-5996).
+    let withRoster = {};
+    if (a['file'] !== undefined) {
+      const json = readRoster(a['file']);
+      if (json === null) return 1;
+      withRoster = rosterFields(json);
+    }
     out({
       ok: true,
       id: a['id'],
@@ -2450,6 +3184,7 @@ function main(argv) {
       // so they are decided once, here, from a flag bash had to set on purpose
       // — never inferred from an empty list.
       live: a['measured'] === 'true' ? (a['live'] ?? []) : null,
+      ...withRoster,
     });
     return 0;
   }
@@ -2516,12 +3251,23 @@ function main(argv) {
     // one fact this flag exists to report.
     const limitsTouched = boolFlagClass(a, 'limits-touched');
     if (limitsTouched === null) return 2;
+    // THE SEED'S HALF OF THE ANSWER (accounts plan Task A13; spec §6.2 step 9; D-7731): present only when the run
+    // reached the seed step, which follows the probe turn. Absent on a short-circuited run, which ran nothing.
+    let seed;
+    if (a['seed-answer'] !== undefined) {
+      let j = null;
+      try { j = JSON.parse(a['seed-answer']); } catch { j = null; }
+      seed = isPlainObject(j) && j.ok === true && typeof j.verifiedAt === 'string' && Number.isInteger(j.trustCopied)
+        ? { verifiedAt: j.verifiedAt, trustCopied: j.trustCopied }
+        : { verifiedAt: null, error: isPlainObject(j) && typeof j.error === 'string' && CHECK_VERDICT_RE.test(j.error) ? j.error : 'seed-failed' };
+    }
     out({
       ok: true,
       id: a['id'],
       health: row,
       limitsTouched: limitsTouched,
       notes: a['note'] ?? [],
+      ...(seed !== undefined ? { seed } : {}),
     });
     return 0;
   }
@@ -2543,6 +3289,12 @@ function main(argv) {
   if (a['code'] === undefined || a['detail'] === undefined) {
     refuse('bad-argv', 'refuse needs --code and --detail');
     return 2;
+  }
+  if (a['reason'] !== undefined) {
+    if (!/^[a-z][a-z0-9-]{0,63}$/.test(a['reason'])) { refuse('bad-argv', '--reason must be a word'); return 2; }
+    out({ ok: false, error: a['code'], reason: a['reason'], detail: a['detail'] });
+    process.stderr.write(`${SELF}: ${a['detail']} (${a['code']}: ${a['reason']})\n`);
+    return 0;
   }
   refuse(a['code'], a['detail']);
   return 0;

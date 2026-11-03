@@ -50,13 +50,17 @@ export function lanesWire(
 
 /** `GET /api/accounts`'s `connect` (spec §12.6, §13.1; D-5511): whether the fleet advertises the account subs
  *  (`account-v2` in its measured caps; no evidence is `unsupported`), the gate (only a session reader is ever sent
- *  this, so it is `armed`), `cfg.origin`'s class, and this session's step-up freshness, absent when there is none. */
+ *  this, so it is `armed`), `cfg.origin`'s class, this session's step-up freshness, absent when there is none, and
+ *  which of `ACCOUNT_CAPS` the fleet advertises, in that list's order (D-7740): the connect sheet narrows each provider
+ *  and method by the word it needs (N4), so a word this server's list does not name is never offered. */
 export function accountsConnect(o: {
   ccdVerbs: readonly string[] | null; origin: AccountOriginClass; stepUpFreshUntil: number | null;
 }): AccountsConnect {
-  const accountOps = o.ccdVerbs !== null && o.ccdVerbs.includes(ACCOUNT_CAPS[0]) ? 'available' : 'unsupported';
+  const caps = o.ccdVerbs === null ? [] : ACCOUNT_CAPS.filter((c) => o.ccdVerbs!.includes(c));
+  const accountOps = caps.includes(ACCOUNT_CAPS[0]) ? 'available' : 'unsupported';
   return {
     accountOps, gate: 'armed', origin: o.origin,
     ...(o.stepUpFreshUntil !== null ? { stepUpFreshUntil: o.stepUpFreshUntil } : {}),
+    caps,
   };
 }

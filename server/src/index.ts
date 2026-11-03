@@ -35,6 +35,10 @@ import { localUpdateSpawnFor } from './update/converge.js';
 import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
+import { LinearJournal } from './linear/journal.js';
+import { allowAll } from './linear/policyPoint.js';
+import { LinearRateService } from './linear/rate.js';
+import { LinearRefresher } from './linear/refresher.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf } from './accounts/mask.js';
 import { randomUUID } from 'node:crypto';
@@ -274,6 +278,14 @@ const tokenDriver = new BoxTokenDriver({
   bothWriter: tokenBoot.bothWriterArmed ? fileBothRoleWriter(tokenStore.paths) : null,
 }, tokenBoot);
 deps.tokenDriver = tokenDriver;
+// The ONE Linear rate service (D-7670, R4; spec §6.7, #1444), on the wall clock: every caller of Linear asks it before
+// each call, so nothing else holds a bucket. Its state lives in memory and starts each lane at a quarter on a restart.
+const linearRate = new LinearRateService(Date.now);
+deps.linearRate = linearRate;
+// The ONE background refresher (D-7668; spec §4.3), over the same rate service: it alone asks Linear for a slot's teams
+// after a routing miss, a slot at a time, on each slot's floor, never inside a request.
+const linearRefresher = new LinearRefresher({ ccrcDir: cfg.ccrcDir, rate: linearRate });
+deps.linearRefresher = linearRefresher;
 
 // The account audit (D-5516) over the one coord.db, and the ONE `AccountOps` arm (spec §13.2, G13), chosen by
 // `cfg.fleetMode` ONLY: in remote mode the local spawner is never constructed, so `ccrc account` can never run on
@@ -281,6 +293,11 @@ deps.tokenDriver = tokenDriver;
 // routes (A14 onward).
 const accountAudit = new AccountAudit(coord.db);
 deps.accountAudit = accountAudit;
+// The Linear write journal (D-7671) over the same coord.db, its one instance, and the policy point's default (D-7672):
+// both handed to the proxy and Settings routes that journal and ask (LK9, LK11; #1444).
+const linearJournal = new LinearJournal(coord.db);
+deps.linearJournal = linearJournal;
+deps.linearPolicy = allowAll;
 // Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
 // roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown
 // runs the `roster` sub and writes a `reconcile` row. `masker` is read only when an answer lands, after it exists.
@@ -321,9 +338,10 @@ const masker = new SecretMasker({
 deps.masker = masker;
 push?.setMasker(masker);
 // The audit's 365-day retention, at boot and then daily on its own unref'd timer. Not a lane in `watch.ts`'s
-// coordination sweeps, which another branch holds (D-5620).
+// coordination sweeps, which another branch holds (D-5620). The Linear journal's 365 days ride the same beat (D-7671).
 accountAudit.sweep(Date.now());
-setInterval(() => accountAudit.sweep(Date.now()), 86_400_000).unref();
+linearJournal.sweep(Date.now());
+setInterval(() => { accountAudit.sweep(Date.now()); linearJournal.sweep(Date.now()); }, 86_400_000).unref();
 
 const app = await buildServer(deps, bus, watcher);
 watcher.start();

@@ -379,9 +379,12 @@ describe('ccd/ccd', () => {
     // here for the same reason, and `_sync_uuid` by calling it before a live uuid rotation: neither CAN die
     // (the `cmd_route` call sits in the same plain `( … )` subshell, and `ccd-operator-choice.test.ts`'s
     // live-rotation cases pin that an unreadable or refused choice never stops the synchronisation).
+    // `_pr_state_by_pr` joined them with the PR-keyed `pr-state --project <p> --pr <n>` (landing order wave 5c): it
+    // `die`s on a bad project or pr number, before any read or gh call, and `cmd_pr_state`'s early dispatch calls it
+    // plainly, never inside `$( )`, so its `die` ends the verb.
     expect([...fatal].filter((f) => f.startsWith('_')).sort())
       .toEqual(['_account_still_rostered', '_lc_refuse', '_operator_choice_keep', '_operator_choice_promote',
-        '_route_argv_check', '_route_argv_write', '_route_seed_default', '_spawn', '_spawn_start',
+        '_pr_state_by_pr', '_route_argv_check', '_route_argv_write', '_route_seed_default', '_spawn', '_spawn_start',
         '_supervised_start', '_swap_refuse', '_sync_uuid', '_ws_collect_audit_contained', '_ws_expire_audit_contained',
         '_ws_expire_refuse_return', '_ws_loose_audit_contained', '_ws_loose_census', '_ws_loose_collect', '_ws_loose_route',
         '_ws_orphan_audit', '_ws_orphan_census', '_ws_reap_lock_run', '_ws_title', '_ws_title_check']);

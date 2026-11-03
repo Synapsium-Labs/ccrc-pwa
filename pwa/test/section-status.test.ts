@@ -17,6 +17,7 @@ const settings = (over: Partial<SettingsView> = {}): SettingsView => ({
   stall: { view: stallView('log'), failure: null, reload: noop, settle: noop },
   collect: { view: collectView('live'), failure: null, reload: noop, settle: noop },
   dispatchAbandon: { view: null, failure: null, reload: noop, settle: noop },
+  testbox: { view: null, failure: null, reload: noop },
   linear: { view: null, failure: null, reload: noop, settle: noop },
   pause: { kind: 'read', marker: 'clear' },
   auth: { kind: 'read', status: { authed: true, passkeysEnrolled: 2, mode: 'passphrase' } },

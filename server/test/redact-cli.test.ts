@@ -85,6 +85,7 @@ describe('shared/redact-cli.mjs: the docs profile, one JSON string per line (D-7
   it.each([
     ['no argv', []],
     ['--profile egress (it needs caller shapes)', ['--profile', 'egress']],
+    ['--profile linear-egress (it needs caller shapes too, #1444)', ['--profile', 'linear-egress']],
     ['an unknown profile', ['--profile', 'nope']],
     ['a profile name that is an Object property', ['--profile', 'constructor']],
     ['a third argument', ['--profile', 'docs', 'x']],

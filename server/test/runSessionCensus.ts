@@ -143,6 +143,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (the birth test of bindsRun)" },
   { file: 'server/src/coord/runBinding.ts', text: 'r.claimedBy === minter',
     why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (parentOrMinter: an undecided run of the minting claimant)" },
+  { file: 'server/src/coord/runBinding.ts', text: 'r.claimedBy === sessionId',
+    why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (claimantAt: a run the session claims itself is no coordinator of its own)" },
   { file: 'server/src/coord/runBinding.ts', text: 'r.claimedBy === coordinatorId',
     why: "the binding module's own rule, the one place a run is told to bind a session: this is the decider the other sites route through (childrenOf: the runs a coordinator claims)" },
   { file: 'server/src/coord/stall.ts', text: "hook.sessionId === ''",

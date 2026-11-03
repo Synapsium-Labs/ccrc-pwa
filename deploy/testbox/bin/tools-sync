@@ -26,8 +26,8 @@
 #   5. python3, git and tmux at the measured versions, strace and jq at the distribution's, through the package
 #      manager and its own signature check (never an option that skips it), from the spec's OS mirror (D-7423);
 #   6. the new set staged whole (a directory of links under `<tools>/sets/`) and the verified release copied to
-#      `<tools>/release/<tag>` (root's, no group or other write) with its server/ production dependencies installed
-#      (`npm ci --omit=dev --ignore-scripts`, through the proxy); then `<tools>/current` switched to the new set in one
+#      `<tools>/release/<tag>` (root's, no group or other write) with its server/ and agent/ production dependencies
+#      installed (`npm ci --omit=dev --ignore-scripts`, through the proxy); then `<tools>/current` switched to the new set in one
 #      rename, then `<tools>/release/installed` switched to the new tree in one rename (D-7424), then the takeover file
 #      written for the service (D-7426). Both trees are complete before either name moves, so a failure at any step
 #      leaves `current` and the installed release as they were.
@@ -327,15 +327,18 @@ _tbt_make_set() {   # -> TBT_NEW_SET under <tools>/sets, a directory of links na
     || { TBT_WHY="cannot write $d/versions"; return 1; }
   TBT_NEW_SET="${d##*/}"
 }
-_tbt_place_release() {   # <stage>/release -> <tools>/release/<tag>, root's, with server/'s production dependencies
+_tbt_place_release() {   # <stage>/release -> <tools>/release/<tag>, root's, with server/'s and agent/'s production dependencies
   local src="$1/release" dst="$TBT_TOOLS/release/$TBT_REL" st bin="$TBT_TOOLS/sets/$TBT_NEW_SET/bin"
   st="$(mktemp -d "$TBT_TOOLS/release/.stage.XXXXXX")" || { TBT_WHY="cannot create a staging directory under $TBT_TOOLS/release"; return 1; }
   mv -- "$src" "$st/tree" && chmod -R go-w "$st/tree" || { rm -rf -- "$st"; TBT_WHY="cannot stage the verified tree"; return 1; }
-  if [ -f "$st/tree/server/package.json" ]; then
-    ( cd "$st/tree/server" && PATH="$bin:$PATH" npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 ) \
-      || { rm -rf -- "$st"; TBT_WHY="npm ci --omit=dev --ignore-scripts failed in the release's server/"; return 1; }
-    chmod -R go-w "$st/tree/server"
-  fi
+  # server/ for the verifier, agent/ for the test service (agent/src/testbox/main.ts imports ws; a bare import in
+  # agent/dist resolves from agent/node_modules, D-7568). --ignore-scripts leaves node-pty unbuilt, which it never loads.
+  for pkg in server agent; do
+    [ -f "$st/tree/$pkg/package.json" ] || continue
+    ( cd "$st/tree/$pkg" && PATH="$bin:$PATH" npm ci --omit=dev --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 ) \
+      || { rm -rf -- "$st"; TBT_WHY="npm ci --omit=dev --ignore-scripts failed in the release's $pkg/"; return 1; }
+    chmod -R go-w "$st/tree/$pkg"
+  done
   if [ -e "$dst" ] || [ -L "$dst" ]; then rm -rf -- "$dst"; fi
   mv -- "$st/tree" "$dst" || { rm -rf -- "$st"; TBT_WHY="cannot place $dst"; return 1; }
   rm -rf -- "$st"

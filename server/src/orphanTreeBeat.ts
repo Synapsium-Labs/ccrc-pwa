@@ -3,7 +3,7 @@
 // decisions are `orphanTreeLane.ts`'s and every ccd call is `coord/collectOrphanTree.ts`'s; this builds the sweep from the
 // watcher's ports, on first use. The cadence is the `orphanTrees` row of `LANE_SCHEDULE`, run by `FleetWatcher.runLane`.
 // Shadow until `orphan-tree-live` stands.
-import type { Deps } from './deps.js';
+import type { WatcherDeps } from './deps.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import { notify } from './notice.js';
 import { orphanCoordinatorSet } from './orphanTreeLane.js';
@@ -16,7 +16,7 @@ export class OrphanTreeBeat {
   private sweep: OrphanTreeSweep | null = null;
 
   /** `mono` is the watcher's monotonic clock reading, the one the lane's rows throttle on. */
-  constructor(private readonly deps: () => Deps, private readonly mono: () => number) {}
+  constructor(private readonly deps: () => Pick<WatcherDeps, 'coord' | 'io' | 'cfg' | 'runCcd' | 'fleetState' | 'queue' | 'fleetIdentity' | 'notifyLog'>, private readonly mono: () => number) {}
 
   /** The `disk` block's `orphanTrees`, or null before the lane's first census. */
   health(): DiskOrphanTrees | null { return this.sweep?.health() ?? null; }
