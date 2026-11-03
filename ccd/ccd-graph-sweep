@@ -340,6 +340,20 @@ _gs_git() {   # <work dir> <git args…>
     -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE GIT_TERMINAL_PROMPT=0 git -C "$d" "$@"
 }
 
+# The store's checkout borrows from a common dir when one line of its alternates resolves to that common dir's
+# objects directory (a relative line is relative to the checkout's own objects directory, as git reads it).
+_gs_borrows() {   # <checkout> <objects dir> -> 0 borrows / 1 does not
+  local alt="$1/.git/objects/info/alternates" want line got
+  [ -f "$alt" ] || return 1
+  want="$(cd -P -- "$2" 2>/dev/null && pwd -P)" || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; /*) ;; *) line="$1/.git/objects/$line" ;; esac
+    got="$(cd -P -- "$line" 2>/dev/null && pwd -P)" || continue
+    [ "$got" != "$want" ] || return 0
+  done < "$alt"
+  return 1
+}
+
 _gs_iso() { jq -rn --argjson s "$1" '$s | todate'; }   # <epoch seconds> -> ISO 8601 UTC, on either userland
 
 _gs_common() {   # <tree> -> the realpath of its git common dir, or nothing (rc 1)
@@ -448,7 +462,7 @@ _gs_noise() {   # <checkout> <repository name> -> 0 written (GS_DIGEST) / 1 refu
 # generated filter written, because the filter's digest is one input of the decision. A failure here ends the
 # repository's row (`failed`, `fail: setup`, or `no-source`); nothing is built.
 _gs_prepare() {   # <common dir> -> 0 ready (CUR set) / 1 the row is ended
-  local c="$1" key name raw kd ck fh age b=""
+  local c="$1" key name raw kd ck fh age b="" err=""
   if ! _gr_repo_key "$c" >/dev/null; then
     CUR="unkeyed:$c"; K_ORDER+=("$CUR"); K_COMMON["$CUR"]="$c"; K_RK["$CUR"]=""
     _gs_end failed setup "$GR_WHY"; return 1
@@ -497,14 +511,26 @@ _gs_prepare() {   # <common dir> -> 0 ready (CUR set) / 1 the row is ended
   if ! _gr_source_ref "$c" >/dev/null; then _gs_end no-source - "${GR_WHY#no-source: }"; return 1; fi
   K_TIP["$key"]="$GR_SOURCE_COMMIT"; K_REF["$key"]="$GR_SOURCE_REF"
   # The shared clone (spec §2.2): a separate repository borrowing the main repository's objects, so it appears in no
-  # `git worktree list`; it never runs gc and runs no hooks.
+  # `git worktree list`; it never runs gc and runs no hooks. It is `git init` plus one alternates line, never
+  # `git clone --shared` (D-7791): a clone of a SHALLOW source goes over upload-pack, drops --shared without a word,
+  # copies the objects of the source's branch heads only and exits 0, so a source ref under refs/remotes/ was never
+  # in it and no later fetch ever reached it. The checkout needs no refs: it moves by commit id, and every history
+  # question goes to the common dir. A checkout that does not borrow from this common dir's objects (such a copy,
+  # made before D-7791) is made again, which also drops its copied objects.
+  if [ -d "$ck/.git" ] && ! _gs_borrows "$ck" "$c/objects"; then rm -rf -- "$ck"; fi
   if [ ! -d "$ck/.git" ]; then
     rm -rf -- "$ck"
-    if ! env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
-        -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE GIT_TERMINAL_PROMPT=0 \
-        git clone --shared --no-checkout --no-tags -q -- "$c" "$ck" >/dev/null 2>&1; then
+    if ! mkdir -p -- "$ck" || ! _gs_git "$ck" init -q -b graph-store >/dev/null 2>&1 \
+       || ! mkdir -p -- "$ck/.git/objects/info" || ! printf '%s\n' "$c/objects" > "$ck/.git/objects/info/alternates"; then
       rm -rf -- "$ck"; _gs_end failed setup "cannot make the store's shared clone of $c"; return 1
     fi
+  fi
+  # A shallow source's graft list is mirrored on every pass (a depth fetch changes it), so a walk in the checkout
+  # stops where the source's does instead of meeting a missing parent; a full source leaves none.
+  if [ -f "$c/shallow" ]; then
+    cp -f -- "$c/shallow" "$ck/.git/shallow" || { _gs_end failed setup "cannot mirror $key's shallow list into the store's checkout"; return 1; }
+  else
+    rm -f -- "$ck/.git/shallow"
   fi
   if ! _gs_git "$ck" config gc.auto 0 || ! _gs_git "$ck" config core.hooksPath /dev/null; then
     _gs_end failed setup "cannot configure the store's checkout of $key"; return 1
@@ -512,9 +538,11 @@ _gs_prepare() {   # <common dir> -> 0 ready (CUR set) / 1 the row is ended
   grep -qxF '/.graphifyignore' "$ck/.git/info/exclude" 2>/dev/null \
     || { mkdir -p -- "$ck/.git/info" && printf '%s\n' '/.graphifyignore' >> "$ck/.git/info/exclude"; } \
     || { _gs_end failed setup "cannot exclude the generated .graphifyignore in the store's checkout"; return 1; }
-  if ! _gs_git "$ck" checkout -q --detach --force "$GR_SOURCE_COMMIT" >/dev/null 2>&1 \
-     || ! _gs_git "$ck" clean -ffdxq -e /.graphifyignore >/dev/null 2>&1; then
-    _gs_end failed setup "cannot move the store's checkout of $key to ${GR_SOURCE_COMMIT:0:12}"; return 1
+  # git's own first line goes into the reason (D-7791): a discarded stderr hid the cause for days.
+  if ! err="$(_gs_git "$ck" checkout -q --detach --force "$GR_SOURCE_COMMIT" 2>&1 >/dev/null)" \
+     || ! err="$(_gs_git "$ck" clean -ffdxq -e /.graphifyignore 2>&1 >/dev/null)"; then
+    err="${err%%$'\n'*}"; err="${err//"$HOME"/\~}"
+    _gs_end failed setup "cannot move the store's checkout of $key to ${GR_SOURCE_COMMIT:0:12}${err:+: $err}"; return 1
   fi
   if ! _gs_noise "$ck" "$raw"; then K_KIND["$key"]=full; _gs_end refused-by-guard - "$GS_WHY"; return 1; fi
   K_DIGEST["$key"]="$GS_DIGEST"
