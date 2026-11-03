@@ -50,7 +50,7 @@ not the ledger. Times are UTC, 2026-11-02.
 says. `pwa/test/command-layer.test.tsx`, also named in the leave, needed no change. After review 1359 (F11) `routes.ts` and
 `app.tsx` carry only what the leave named: the two route rows, the two ladder arms (the item's arm is `ItemRouteAt`, which
 derives the id) and one import. `itemPath` and the id derivation live in `pwa/src/ledgers/WaitingRoutes.tsx`. The go-waiting
-assertions of `command-registry.test.ts` are one `it` of their own (F10).
+assertions of `command-registry.test.ts` are one `it` of their own (F10). `pwa/test/app.test.tsx` rewrote one assertion: see `pl5a-item-route-unsafe-id` below.
 
 ## Mutants
 
@@ -142,3 +142,29 @@ round's cases. All 27 killed.
 | N18 | F8: unheard runs read as an ended programme | Dismiss is offered only once the runs frame says the programme has no open run (+7) | `386f334728b5` |
 | N19 | F11: the item arm is not keyed by its id | ItemRouteAt keys the item by its id, so a typed answer does not follow the operator to the next  | `c3163185f40d` |
 | N20 | F12c: the list's path is not the route row's | Dismiss calls the route, reads the list again and goes back to the list (+2) | `c3163185f40d` |
+
+## Fix round 2 (review 1362)
+
+F1: on a Decide item, Mark done is ready only with a decision (an option, or own text that is not empty), so a note alone no
+longer sends `Note: ...` with no choice. F2: `openRunsOf` in `ledgerWords.ts` is the one measurement of a programme's open runs,
+read by the list's wave label and by `programmeIsLive`; no open-run filter is left in `pwa/src/ledgers`. F3: accepted and
+declared below. F4: the comment word on `command-registry.test.ts` line 208 is restored. F5: tests pin the call sites (the hook
+joins the read on the wire; a dismiss re-reads the list; a tick's re-read starts after a focus read already on the wire). F6: a
+list with items waits for the fleet frame.
+
+Departure for the ledger to number, new in this round:
+
+- `pl5a-item-route-unsafe-id`: `/waiting/<digits past the safe integers>` names no item, so the item arm (`ItemRouteAt`) now says "That item is not on the list any more." where it used to fall through to the shell placeholder; the `app.test.tsx` assertion that expected the placeholder was rewritten to expect that sentence (moving the id derivation out of `app.tsx`, ruling 11, made it so).
+
+Mutants of this round (the review's E1, E2a, E2b and E3b, and the cases for F1 and F2), each run on the committed tree against
+the named suites, then restored from a saved copy and its sha256 checked equal. All 7 killed.
+
+| # | Mutant | Red case (first) | sha256 of the file, before and after (equal) |
+|---|---|---|---|
+| S1 | F1: a note alone makes a Decide item ready (the composed string is tested, not the choice) | "Your own answer" left empty is no decision: a note alone does not enable Mark done | `c3e74002f96e` |
+| S2 | F2: openRunsOf counts a closed run (the wave label and the liveness both read it) | Dismiss is offered only once the runs frame says the programme has no open run (+4) | `65ddd48f1a14` |
+| S3 | F2: programmeIsLive stops reading openRunsOf | a programme with no open run is marked ended, and one with a run, or whose runs are unheard, is not (+1) | `65ddd48f1a14` |
+| E1 | F5 E1: the hook's refetch no longer joins the read on the wire | a tab that becomes visible and focused reads once | `6e9ab5bb14dc` |
+| E2a | F5 E2a: the post-tick re-read joins a read that predates the move | a tick's re-read starts after a focus read already on the wire, so the list shows the tick | `c3163185f40d` |
+| E2b | F5 E2b: the re-read after a dismiss is deleted | Dismiss calls the route, reads the list again and goes back to the list | `c3163185f40d` |
+| E3b | F6 E3b: a list with items is shown before the fleet frame, without its questions | a list with items waits for the fleet frame too: its rows are not shown without the sessions' questi | `395a5ecd848a` |
