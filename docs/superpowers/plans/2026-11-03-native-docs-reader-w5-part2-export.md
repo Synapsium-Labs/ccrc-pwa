@@ -4211,7 +4211,7 @@ describe('M5.B9: the hostile export opened top-level (spec 2026-10-01 5.8)', () 
 
 ## Deviations found
 
-Issued at the run's opening as one block, D-7879 to D-7894: the first eight to the departing refinements, then the departures found while executing, in the order found.
+Issued at the run's opening as one block, 7879 to 7894: the first eight to the departing refinements, then the departures found while executing, in the order found.
 
 - **D-7879 (2026-11-03)** — export-plain-view (refinement (a)). On a Markdown leaf the reader frame shows, Export reads "Export (plain view)" and its tap switches that page to the plain view, which Export then saves; leaving the page brings the reader back, on a later return too. Departs from §4.17's "When it is offered" (no reader case), §4.17's "Export makes no docs request" and Figure 2's "no docs request, no re-parse, no highlighting" (the switch makes one parse, one highlight pass and one read per image, once per page), and §4.13's "Until W8, every page uses the plain pipeline", which W8a made untrue; the operator ruled Q1 A on 2026-11-03. Tasks 6 and 8 (W5X-T6-M5, W5X-T8-M12), timed in Task 11.
 - **D-7880 (2026-11-03)** — export-prose-from-ui (refinement (b)). The Markdown rules are not moved to `lib/markdown.css`: @ccrc/ui's `prose.css` already holds them, and the export's stylesheet includes it; M4.EX14's guard becomes a derivation test (`EXPORT_CSS` equals tokens, prose and `export.css`, each less its comments and `@font-face` blocks). Departs from §4.14's move and M4.S1's "re-keyed to `markdown.css`". The export's article carries `msg-assist` on the Markdown arm and a text leaf with a grammar only, as the page draws it. Task 2 (W5X-T2-M1).
