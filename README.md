@@ -6615,6 +6615,20 @@ resume-retry, including an external-provider wrapper that execs Claude Code. Dep
 existing panes. Assignment and any subsequent removal take effect at each session's NEXT ordinary start; no
 forced fleet restart is part of this change. An aggregate slice `MemoryHigh` must never return.
 
+### A deliberate stop's pane scope (D-7902)
+
+The sweep above collects what a dead pane left behind hours later; a stop ccd makes ON PURPOSE takes it down at once.
+`ccd stop`, and `ccd hibernate` (which the stop-done lane and the coordinator roll compose), read the session's pane and
+its scope from the live pane's `/proc/<pid>/cgroup` before the kill, then, once the main process has exited and a
+ten-second grace has passed, run `systemctl --user stop --no-block <unit>` — only for a `tmux-spawn-*.scope` whose parent
+is the session slice, only while something is still in it, and never while another live tmux pane has its process in it
+or below it. Every outcome is one `pane-scope <id>: …` line in `~/.cc-sessions/swap.log` (`stopped`, `would stop`,
+`held … : <why>`, `nothing left in …`). The auto-swap's restart is not a stop and never reaches it, and
+`KillMode=process` is unchanged. **It ships shadowed:** without `~/.cc-sessions/pane-scope-stop-live` each stop only
+logs `would stop <unit> (<n> processes)`. The operator arms it in Settings › Automation › Stop leftovers
+(`POST /api/coord/pane-scope-stop`, session-only, which runs `ccd pane-scope-stop --state live|shadow`, the marker's
+one writer); `ccrc doctor`'s `pane-scope-stop` check names the mode.
+
 ### Swap-carry copies and the dedupe sweep
 
 A swap carry copies the session's transcript to the destination account and never removes the source, and a sidecar
