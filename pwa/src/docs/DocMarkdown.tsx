@@ -153,7 +153,9 @@ export interface DocMarkdownProps {
  *  plain text never mounts it, so it publishes no store that would never settle. */
 function DocTree(p: { readonly tree: HastRoot; readonly link: Omit<DocLinkContextValue, 'urls'> }): ReactNode {
   const detached = useMemo(() => detachUrls(p.tree), [p.tree]);
-  const store = useDocsHighlightStore(useMemo(() => codeBlocksOf(p.tree), [p.tree]));
+  // Seeded from the tree that RENDERS (no url transform runs on Docs, so the `pre` element a block receives as `node` is
+  // the very object seeded as its `at`): the page's ceilings answer for each drawn copy (review 1364 F1).
+  const store = useDocsHighlightStore(useMemo(() => codeBlocksOf(detached.tree), [detached]));
   const ctx = useMemo<DocLinkContextValue>(() => ({ ...p.link, urls: detached.urls }), [p.link, detached]);
   return (
     <DocLinkContext value={ctx}>

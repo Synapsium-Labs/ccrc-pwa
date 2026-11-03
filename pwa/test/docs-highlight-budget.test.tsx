@@ -16,7 +16,8 @@ import { HighlighterContext, createProductionStore } from '../src/lib/highlighte
 import { codeBlocksOf, type HighlightStore } from '../src/lib/highlightStore';
 import { PreHighlightContext, SHARED_COMPONENTS } from '../src/lib/markdown';
 import {
-  DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS,
+  DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS,
+  DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS,
   MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_HTML_CHARS,
 } from '../src/lib/markdownLimits';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
@@ -24,6 +25,7 @@ import { renderHast } from '../src/lib/renderHast';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import { DocMarkdown } from '../src/docs/DocMarkdown';
 import { treeOk } from './docsFixtures';
+import type { HighlightOutcome } from '../src/lib/highlightProtocol';
 import { inThreadContext, inThreadHighlighter, type InThreadHighlighter } from './highlightTestStore';
 
 afterEach(cleanup);
@@ -417,4 +419,71 @@ describe('D-7574: the Docs page hands detachUrls the real highlight-budget langu
     expect(labels.slice(-2)).toEqual(['Markdown', 'YAML']);
     expect([...markdown.container.querySelectorAll('.code-block')].at(-1)!.querySelectorAll('.hljs-comment')).toHaveLength(1);
   }, 120000);
+});
+
+// F1 (review 1364): the page ceilings count every DRAWN copy of a shared block. One job still serves the key; each copy
+// is drawn from the key's entry until a ceiling, and a copy past it is plain and labelled as skipped by it. Rendered
+// through `DocMarkdown`: the copies the store seeded are the `pre` elements `CodeBlock` receives as `node`.
+describe('F1: a page of copies of one block, the ceilings counting every drawn copy (end to end through DocMarkdown)', () => {
+  /** A highlighter that answers every request with `html` at once, in kind: the case measures the count, not the grammar. */
+  const answering = (html: string): InThreadHighlighter => {
+    const h: InThreadHighlighter = {
+      calls: [],
+      signals: [],
+      state: 'live',
+      highlight(request, o) {
+        h.calls.push(request);
+        h.signals.push(o.signal);
+        o.onPosted?.();
+        return Promise.resolve<HighlightOutcome>({ kind: 'html', html, mode: 'block' });
+      },
+      status: () => h.state,
+      prewarm: () => undefined,
+      release: () => undefined,
+    };
+    return h;
+  };
+  /** Per copy: whether it draws spans, and its label. */
+  const read = (c: HTMLElement): { coloured: boolean[]; labels: string[] } => ({
+    coloured: [...c.querySelectorAll('.code-block')].map((b) => b.querySelector('code.hljs span[class^="hljs-"]') !== null),
+    labels: [...c.querySelectorAll('.code-block-lang')].map((l) => l.textContent ?? ''),
+  });
+
+  it('the HTML ceiling: copies of one fence whose HTML together passes the page cap are coloured up to it, the rest are plain and say so; one job', async () => {
+    const html = `<span class="hljs-keyword">${'x'.repeat(MD_HIGHLIGHT_MAX_HTML_CHARS - 40)}</span>`;
+    expect(html.length).toBeLessThan(DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS);
+    const fit = Math.floor(DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS / html.length);
+    const n = fit + 3;
+    const { container, docs } = await drawn(root(Array.from({ length: n }, () => fence('import a\n'))), answering(html));
+    expect(docs.calls).toHaveLength(1);
+    const { coloured, labels } = read(container);
+    expect(coloured).toEqual([...rep(true, fit), ...rep(false, n - fit)]);
+    expect(labels).toEqual([...rep('Python', fit), ...rep('Python · not highlighted (page highlighting limit)', n - fit)]);
+    for (const code of [...container.querySelectorAll('pre > code')].slice(fit)) expect(code.textContent).toBe('import a');
+    // The inserted HTML is within the ceiling: the characters the drawn copies carry.
+    const inserted = [...container.querySelectorAll('pre > code.hljs')].slice(0, fit).reduce((sum, c) => sum + c.innerHTML.length, 0);
+    expect(inserted).toBeLessThanOrEqual(DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS);
+  }, 60000);
+
+  it('the input ceiling: copies of one fence whose raw text together passes the page cap are coloured up to it, the rest are plain and say so; one job', async () => {
+    const raw = body(MD_HIGHLIGHT_BLOCK_MAX_CHARS + 1, 0);
+    const fit = Math.floor(DOCS_HIGHLIGHT_PAGE_MAX_CHARS / MD_HIGHLIGHT_BLOCK_MAX_CHARS);
+    const n = fit + 2;
+    const { container, docs } = await drawn(root(Array.from({ length: n }, () => fence(raw))));
+    expect(docs.calls).toHaveLength(1);
+    const { coloured, labels } = read(container);
+    expect(coloured).toEqual([...rep(true, fit), ...rep(false, n - fit)]);
+    expect(labels).toEqual([...rep('Python', fit), ...rep('Python · not highlighted (page highlighting limit)', n - fit)]);
+  }, 60000);
+
+  it('the scan budget: copies of one typescript fence past the scan sum are plain and keep the bare label (part 1\'s ceiling is not the page\'s)', async () => {
+    const raw = filler(MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS);
+    const fit = Math.floor(DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS / MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS);
+    const n = fit + 2;
+    const { container, docs } = await drawn(root(Array.from({ length: n }, () => block(['language-ts'], raw))), answering('<span class="hljs-comment">c</span>'));
+    expect(docs.calls).toHaveLength(1);
+    const { coloured, labels } = read(container);
+    expect(coloured).toEqual([...rep(true, fit), ...rep(false, n - fit)]);
+    expect(labels).toEqual(rep('TypeScript', n));
+  }, 60000);
 });

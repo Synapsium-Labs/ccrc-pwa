@@ -51,7 +51,7 @@ export function syncTestStore(mode: 'docs' | 'chat' = 'chat'): HighlightStore & 
     return entry;
   };
   return {
-    mode, debounceMs: 0, keyOf: (lang, raw) => blockKey(lang, raw), seed: () => undefined, peek,
+    mode, debounceMs: 0, keyOf: (lang, raw) => blockKey(lang, raw), seed: () => undefined, peek, copySkip: () => null,
     request: (key) => { requests.push(key); return () => undefined; }, show: () => () => undefined,
     subscribe: () => NO_SUBSCRIPTION, settled: () => true, evictUnreferenced: () => undefined,
     releaseAll: () => undefined, requests,

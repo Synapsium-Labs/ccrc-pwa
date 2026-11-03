@@ -16,6 +16,7 @@
 import Markdown, { defaultUrlTransform, type Options as MarkdownOptions } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
+import type { Element as HastElement } from 'hast';
 import React, {
   createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode,
 } from 'react';
@@ -24,6 +25,7 @@ import { LANG_LABEL, codeLanguage } from './highlightNames';
 import { HighlighterContext, useChatHighlightStore } from './highlighterContext';
 import {
   UNREQUESTED_ENTRY, blockKey, isCheckedHighlightHtml, type BlockKey, type HighlightEntry, type HighlightStore,
+  type SkipCeiling,
 } from './highlightStore';
 import {
   CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN,
@@ -118,6 +120,18 @@ export function useHighlightRequest(store: HighlightStore | null, key: string | 
   }, [store, key]);
 }
 
+/** The entry a COPY draws when the page's ceiling skipped it (review 1364 F1): one frozen `skipped` entry per ceiling,
+ *  made on first use, so a render allocates nothing. */
+const COPY_SKIPPED = new Map<SkipCeiling, HighlightEntry>();
+function copySkippedEntry(ceiling: SkipCeiling): HighlightEntry {
+  let entry = COPY_SKIPPED.get(ceiling);
+  if (entry === undefined) {
+    entry = Object.freeze({ kind: 'skipped', ceiling } as const);
+    COPY_SKIPPED.set(ceiling, entry);
+  }
+  return entry;
+}
+
 /** What a block's label says (section 4.10's table): the language, then why a registered block is not coloured. */
 export function codeBlockLabel(label: string, raw: string, answer: BlockKey, entry: HighlightEntry): string {
   const kib = `${label} · not highlighted (${Math.ceil(raw.length / 1024)} KiB)`;
@@ -163,8 +177,11 @@ export const PreHighlightContext = createContext<HighlightStore | null>(null);
 
 /** Fenced code: language label + copy bar over the well. The bar is a SIBLING above the scrolling <pre>, never an
  *  overlay. It makes no highlight.js call: it reads its entry in the store, plain until the worker's answer is
- *  `html` (the plain first frame, section 4.10), and its label says why a registered block is not coloured. */
-export function CodeBlock({ children }: { children?: ReactNode }): ReactNode {
+ *  `html` (the plain first frame, section 4.10), and its label says why a registered block is not coloured. `at`,
+ *  when given, is this copy's `pre` element (react-markdown's `node`): a Docs page's store may have skipped THIS copy
+ *  of a shared block (`copySkip`), and then the copy draws plain under that ceiling's label although it still shows
+ *  and requests its key, sharing the one job. */
+export function CodeBlock({ children, at }: { children?: ReactNode; at?: object }): ReactNode {
   const store = useContext(PreHighlightContext);
   const [copied, setCopied] = useState(false);
   const codeEl = React.Children.toArray(children).find(React.isValidElement) as
@@ -176,7 +193,9 @@ export function CodeBlock({ children }: { children?: ReactNode }): ReactNode {
   const raw = nodeText(children).replace(/\n$/, '');
   const answer = useMemo(() => (store === null ? blockKey(lang, raw) : store.keyOf(lang, raw)), [store, lang, raw]);
   const key = answer.kind === 'key' ? answer.key : null;
-  const entry = useHighlightEntry(store, key);
+  const keyEntry = useHighlightEntry(store, key);
+  const copySkipped = store === null || at === undefined ? null : store.copySkip(at);
+  const entry = copySkipped === null ? keyEntry : copySkippedEntry(copySkipped);
   useHighlightRequest(store, key);
   const onCopy = useCallback(() => {
     void navigator.clipboard?.writeText(raw).then(() => {
@@ -206,8 +225,8 @@ export function TableWrap({ children }: { children?: ReactNode }): ReactNode {
 }
 
 /** Fenced code through `CodeBlock`, which reads the store `PreHighlightContext` carries. */
-function SharedPre({ children }: { children?: ReactNode }): ReactNode {
-  return <CodeBlock>{children}</CodeBlock>;
+function SharedPre({ children, node }: { children?: ReactNode; node?: HastElement }): ReactNode {
+  return <CodeBlock at={node}>{children}</CodeBlock>;
 }
 
 /** A GFM task-list checkbox's accessible name, by its state. remark-gfm emits the box bare (no `<label>`), so without

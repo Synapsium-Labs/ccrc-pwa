@@ -7,8 +7,14 @@
 //     per-block bounds. `store.keyOf` applies it with the store's own `part1`; `CodeBlock` and the seeding walk both
 //     ask it, so they never disagree.
 //   - `seed(blocks)`, a Docs page's or a text leaf's, once, at creation: every requestable block, in document order,
-//     a key that several blocks share counted once; the input ceiling and (until W5h-b) part 1's scan and markdown
-//     page budgets apply here, so a key past one is `skipped` from the first commit, whatever order effects run in.
+//     each OCCURRENCE counted, a key that several blocks share included (review 1364 F1: every drawn copy inserts the
+//     key's HTML, so every copy counts); the input ceiling and (until W5h-b) part 1's scan and markdown page budgets
+//     apply here. The first occurrence of a key decides its entry: past a ceiling, the key is `skipped` from the first
+//     commit, whatever order effects run in. A LATER occurrence past a ceiling, of a key whose first occurrence was
+//     admitted, is a skipped COPY: `copySkip(at)` names the ceiling for the copy's own `at`, the `pre` element, and
+//     the copy draws plain while its earlier siblings are coloured. One job still serves the key.
+//   - `copySkip(at)` is synchronous and never requests: the page ceiling that skipped this drawn copy, or `null` when
+//     the copy draws its key's entry. A chat store, and a block with no `at`, answer `null`.
 //   - `peek(key)` is synchronous and never requests; it returns the same entry object until that entry changes, and
 //     one shared frozen `unrequested` entry for a key it has not seen (useSyncExternalStore's contract).
 //   - `request(key)` adds a reference and asks the highlighter once per key; its release drops the reference, and
@@ -19,7 +25,10 @@
 //     the key it requested, so a block in chat's debounce window, showing a key it has not requested yet, is waiting.
 //   - On receipt, in this order (the W5h-a plan's refinement (e)): an answer longer than MD_HIGHLIGHT_MAX_HTML_CHARS
 //     is `too-large`; one the check refuses is `malformed`; on a Docs store, one that would take the page's HTML past
-//     DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS is `skipped` by that ceiling. Only `checkHighlightHtml` makes a
+//     DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS is `skipped` by that ceiling, counted per drawn copy: each admitted copy of the
+//     key adds the answer's length, in document order; the first copy that would pass the ceiling, and every later copy
+//     of the key, is a skipped copy (the verdicts are recorded before the entry is set), and the ceiling latches. When
+//     the FIRST copy is the one that passes, the entry is skipped. Only `checkHighlightHtml` makes a
 //     `CheckedHighlightHtml`, a frozen `{html}` this module records in a private WeakSet; the sink inserts only a
 //     value `isCheckedHighlightHtml` accepts.
 //   - A first answer of `timeout` or `too-large` on a block longer than HIGHLIGHT_LINE_RETRY_UNITS is retried once,
@@ -171,10 +180,13 @@ export function blockKey(lang: string, raw: string, part1 = true): BlockKey {
   return { kind: 'key', key: `${lang}\u0000${raw}` };
 }
 
-/** One code block as `CodeBlock` reads it: its language and its text with one trailing newline stripped. */
+/** One code block as `CodeBlock` reads it: its language and its text with one trailing newline stripped. `at`, when
+ *  given, is the copy's identity: the `pre` element the block is drawn from (what `codeBlocksOf` sets), which is the
+ *  `node` the block receives, so the page's ceilings can answer for this copy (`copySkip`). */
 export interface CodeBlockText {
   readonly lang: string;
   readonly raw: string;
+  readonly at?: object;
 }
 
 /** Every text node under `node`, in document order (what `CodeBlock`'s `nodeText` flattens). Iterative. */
@@ -196,7 +208,8 @@ function preCodeClass(pre: HastElement): string {
   return Array.isArray(cls) ? cls.map((v) => String(v)).join(' ') : typeof cls === 'string' ? cls : '';
 }
 
-/** The seeding walk (section 4.10 "Seeding"): every `pre` of a parsed tree, in document order, iteratively. */
+/** The seeding walk (section 4.10 "Seeding"): every `pre` of a parsed tree, in document order, iteratively, each with
+ *  its own element as `at`. */
 export function codeBlocksOf(tree: HastRoot): CodeBlockText[] {
   const out: CodeBlockText[] = [];
   const stack: RootContent[] = [...tree.children].reverse();
@@ -204,7 +217,7 @@ export function codeBlocksOf(tree: HastRoot): CodeBlockText[] {
     const n = stack.pop()!;
     if (n.type !== 'element') continue;
     if (n.tagName === 'pre') {
-      out.push({ lang: codeLanguage(preCodeClass(n)), raw: textOf(n).replace(/\n$/, '') });
+      out.push({ lang: codeLanguage(preCodeClass(n)), raw: textOf(n).replace(/\n$/, ''), at: n });
       continue;
     }
     for (let k = n.children.length - 1; k >= 0; k -= 1) stack.push(n.children[k]!);
@@ -243,6 +256,8 @@ export type HighlightEntry =
 export const UNREQUESTED_ENTRY: HighlightEntry = Object.freeze({ kind: 'unrequested' } as const);
 const PENDING: HighlightEntry = Object.freeze({ kind: 'pending' } as const);
 const REFUSED: RetryOutcome = Object.freeze({ kind: 'refused' } as const);
+/** The copies of a key the store never seeded: one. */
+const ONE_COPY: readonly object[] = Object.freeze([Object.freeze({})]);
 
 /** A failure outcome as the entry records it. */
 function causeOf(o: Exclude<HighlightOutcome, { kind: 'html' }>): PlainCause {
@@ -282,6 +297,9 @@ export interface HighlightStore {
   keyOf(lang: string, raw: string): BlockKey;
   seed(blocks: readonly CodeBlockText[]): void;
   peek(key: string): HighlightEntry;
+  /** The page ceiling that skipped this drawn copy of a block (the `pre` element a block was seeded with, `at`), or
+   *  `null` when the copy draws its key's entry. Synchronous; never requests. A chat store always answers `null`. */
+  copySkip(at: object): SkipCeiling | null;
   request(key: string): () => void;
   /** A mounted block shows `key` (from its first commit, before any debounced request); the release ends that. A
    *  chat store's `settled()` reads shown keys as well as requested ones (refinement (r)). */
@@ -311,6 +329,10 @@ export function createHighlightStore(
   const refs = new Map<string, number>();
   const shownKeys = new Map<string, number>();
   const seeded = new Set<string>();
+  /** Per seeded key, its admitted copies in document order (a block with no `at` is a placeholder), for the output count. */
+  const admitted = new Map<string, object[]>();
+  /** The page ceiling that skipped a drawn copy, by the copy's `at`. */
+  const copySkips = new WeakMap<object, SkipCeiling>();
   const jobs = new Map<string, Job>();
   const listeners = new Map<string, Set<() => void>>();
   const subscribers = new Map<string, (listener: () => void) => () => void>();
@@ -323,6 +345,7 @@ export function createHighlightStore(
   let posted: { readonly job: Job; readonly at: number; readonly timer: unknown } | null = null;
 
   const peek = (key: string): HighlightEntry => entries.get(key) ?? UNREQUESTED_ENTRY;
+  const copySkip = (at: object): SkipCeiling | null => copySkips.get(at) ?? null;
 
   function set(key: string, entry: HighlightEntry): void {
     entries.set(key, entry);
@@ -418,14 +441,26 @@ export function createHighlightStore(
       const checked = checkHighlightHtml(o.html);
       if (checked === null) {
         failure = { kind: 'malformed' };
-      } else if (docs && ceilingsOn && outputChars + o.html.length > DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS) {
-        close('page-output');
-        set(key, job.first === null ? { kind: 'skipped', ceiling: 'page-output' } : { kind: 'plain', first: job.first, retry: REFUSED });
-        return;
       } else {
-        outputChars += o.html.length;
-        checkCeilings();
-        set(key, { kind: 'html', mode: o.mode, checked });
+        // Every admitted copy of the key inserts this HTML again, so each adds its length (a key never seeded is one copy).
+        const copies = admitted.get(key) ?? ONE_COPY;
+        const capped = docs && ceilingsOn;
+        let fitted = 0;
+        while (fitted < copies.length && (!capped || outputChars + o.html.length <= DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS)) {
+          outputChars += o.html.length;
+          fitted += 1;
+        }
+        if (fitted === copies.length) {
+          checkCeilings();
+          set(key, { kind: 'html', mode: o.mode, checked });
+          return;
+        }
+        // The copies from `fitted` on pass the page HTML ceiling: skipped copies, their verdicts recorded before the
+        // entry is set (the key's listeners re-render every copy). The first copy passing leaves the entry skipped.
+        if (fitted > 0) for (let i = fitted; i < copies.length; i += 1) copySkips.set(copies[i]!, 'page-output');
+        close('page-output');
+        if (fitted > 0) set(key, { kind: 'html', mode: o.mode, checked });
+        else set(key, job.first === null ? { kind: 'skipped', ceiling: 'page-output' } : { kind: 'plain', first: job.first, retry: REFUSED });
         return;
       }
     }
@@ -444,16 +479,27 @@ export function createHighlightStore(
     let markdown = 0;
     for (const b of blocks) {
       const k = blockKey(b.lang, b.raw, part1);
-      if (k.kind !== 'key' || seeded.has(k.key)) continue;
-      seeded.add(k.key);
+      if (k.kind !== 'key') continue;
       const inScan = part1 && inScanPageBudget(b.lang);
       const inMarkdown = part1 && inMarkdownPageBudget(b.lang);
+      // Every occurrence counts: each drawn copy inserts the key's text and HTML again (review 1364 F1).
       input += b.raw.length;
       if (inScan) scan += b.raw.length;
       if (inMarkdown) markdown += b.raw.length;
-      if (ceilingsOn && input > DOCS_HIGHLIGHT_PAGE_MAX_CHARS) entries.set(k.key, { kind: 'skipped', ceiling: 'page-input' });
-      else if (inScan && scan > DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS) entries.set(k.key, { kind: 'skipped', ceiling: 'part1-scan' });
-      else if (inMarkdown && markdown > DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS) entries.set(k.key, { kind: 'skipped', ceiling: 'part1-markdown' });
+      const past: SkipCeiling | null = ceilingsOn && input > DOCS_HIGHLIGHT_PAGE_MAX_CHARS ? 'page-input'
+        : inScan && scan > DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS ? 'part1-scan'
+          : inMarkdown && markdown > DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS ? 'part1-markdown' : null;
+      if (!seeded.has(k.key)) {
+        seeded.add(k.key);
+        if (past !== null) entries.set(k.key, { kind: 'skipped', ceiling: past });
+        else admitted.set(k.key, [b.at ?? {}]);
+        continue;
+      }
+      // A later occurrence. A key whose first occurrence was skipped is skipped for every copy.
+      const copies = admitted.get(k.key);
+      if (copies === undefined) continue;
+      if (past === null) copies.push(b.at ?? {});
+      else if (b.at !== undefined) copySkips.set(b.at, past);
     }
   }
 
@@ -547,7 +593,7 @@ export function createHighlightStore(
   }
 
   return {
-    mode: options.mode, debounceMs, keyOf: (lang, raw) => blockKey(lang, raw, part1), seed, peek, request, show,
+    mode: options.mode, debounceMs, keyOf: (lang, raw) => blockKey(lang, raw, part1), seed, peek, copySkip, request, show,
     subscribe, settled, evictUnreferenced, releaseAll,
   };
 }

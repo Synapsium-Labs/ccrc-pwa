@@ -207,13 +207,15 @@ describe('M4.H11: a content-keyed store', () => {
 });
 
 describe('M4.H12: page ceilings and settled()', () => {
-  it('the input ceiling skips at seed, in document order, a shared key counted once', () => {
+  it('the input ceiling skips at seed, in document order, a shared key counted at each occurrence (F1)', () => {
     const { store, key } = setup();
     const blocks = Array.from({ length: 9 }, (_, i) => ({ lang: 'python', raw: py(60000, `b${i}`) }));
     expect(8 * 60000).toBeLessThanOrEqual(DOCS_HIGHLIGHT_PAGE_MAX_CHARS);
+    // The repeat of b0 is the third occurrence in the sum: eight occurrences (b0, b1, b0, b2 .. b6) fit, b7 passes.
     store.seed([...blocks.slice(0, 2), blocks[0]!, ...blocks.slice(2)]);
     const keys = blocks.map((b) => key(b.lang, b.raw));
-    expect(kinds(store, keys)).toEqual([...Array(8).fill('unrequested'), 'skipped']);
+    expect(kinds(store, keys)).toEqual([...Array(7).fill('unrequested'), 'skipped', 'skipped']);
+    expect(store.peek(keys[7]!)).toEqual({ kind: 'skipped', ceiling: 'page-input' });
     expect(store.peek(keys[8]!)).toEqual({ kind: 'skipped', ceiling: 'page-input' });
   });
 
@@ -228,6 +230,141 @@ describe('M4.H12: page ceilings and settled()', () => {
     for (let i = 0; i <= fit; i += 1) await answer(i, HTML(big));
     expect(kinds(store, ks)).toEqual([...Array(fit).fill('html'), 'skipped', 'skipped']);
     expect(store.peek(ks[fit]!)).toEqual({ kind: 'skipped', ceiling: 'page-output' });
+  });
+
+  // F1 (review 1364): a page's ceilings count every DRAWN copy of a shared key. One job still serves the key; the store
+  // answers each copy's verdict (`copySkip`), keyed by the copy's own `at`.
+  describe('F1: the page ceilings count every drawn copy of a shared key', () => {
+    const copiesOf = (n: number): object[] => Array.from({ length: n }, () => ({}));
+    const verdicts = (store: { copySkip(at: object): unknown }, ats: object[]): unknown[] => ats.map((at) => store.copySkip(at));
+
+    it('OUTPUT: copies of one block are drawn until the page HTML cap, the first copy past it and every later one are skipped, one job, the store latched', async () => {
+      const { h, store, key, answer } = setup();
+      const html = `<span class="hljs-a">${'x'.repeat(MD_HIGHLIGHT_MAX_HTML_CHARS - 40)}</span>`;
+      expect(html.length).toBeLessThan(DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS);
+      const fit = Math.floor(DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS / html.length);
+      expect(fit).toBeGreaterThan(1);
+      const ats = copiesOf(fit + 2);
+      store.seed(ats.map((at) => ({ lang: 'python', raw: 'same', at })));
+      const k = key('python', 'same');
+      expect(verdicts(store, ats)).toEqual(ats.map(() => null));
+      store.request(k);
+      store.request(k);
+      await answer(0, HTML(html));
+      expect(h.calls).toHaveLength(1);
+      expect(store.peek(k)).toMatchObject({ kind: 'html', mode: 'block' });
+      expect(verdicts(store, ats)).toEqual([...Array(fit).fill(null), 'page-output', 'page-output']);
+      const other = key('python', 'other');
+      store.request(other);
+      expect(store.peek(other)).toEqual({ kind: 'skipped', ceiling: 'page-output' });
+      expect(h.calls).toHaveLength(1);
+    });
+
+    it('OUTPUT: the verdicts are readable when the key\'s listeners run (recorded before the entry is set)', async () => {
+      const { store, key, answer } = setup();
+      const html = `<span class="hljs-a">${'x'.repeat(MD_HIGHLIGHT_MAX_HTML_CHARS - 40)}</span>`;
+      const fit = Math.floor(DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS / html.length);
+      const ats = copiesOf(fit + 1);
+      store.seed(ats.map((at) => ({ lang: 'python', raw: 'same', at })));
+      const k = key('python', 'same');
+      let seen: unknown = 'never';
+      store.subscribe(k)(() => { if (store.peek(k).kind === 'html') seen = store.copySkip(ats[fit]!); });
+      store.request(k);
+      await answer(0, HTML(html));
+      expect(seen).toBe('page-output');
+    });
+
+    it('OUTPUT: when the first copy is the one that passes, the entry itself is skipped (as before), and no copy verdict is needed', async () => {
+      const { store, key, answer } = setup();
+      const html = `<span class="hljs-a">${'x'.repeat(MD_HIGHLIGHT_MAX_HTML_CHARS - 40)}</span>`;
+      const fit = Math.floor(DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS / html.length);
+      const fill = Array.from({ length: fit }, (_, i) => key('python', `fill${i}`));
+      const ats = copiesOf(2);
+      store.seed([...fill.map((_, i) => ({ lang: 'python', raw: `fill${i}` })), ...ats.map((at) => ({ lang: 'python', raw: 'late', at }))]);
+      for (const k of fill) store.request(k);
+      for (let i = 0; i < fit; i += 1) await answer(i, HTML(html));
+      const late = key('python', 'late');
+      store.request(late);
+      await answer(fit, HTML(html));
+      expect(store.peek(late)).toEqual({ kind: 'skipped', ceiling: 'page-output' });
+    });
+
+    it('OUTPUT: a line retry\'s html answer counts every copy too', async () => {
+      const { h, store, key, answer } = setup();
+      const raw = 'a\n'.repeat(HIGHLIGHT_LINE_RETRY_UNITS);
+      const html = `<span class="hljs-a">${'x'.repeat(MD_HIGHLIGHT_MAX_HTML_CHARS - 40)}</span>`;
+      const fit = Math.floor(DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS / html.length);
+      const ats = copiesOf(fit + 1);
+      store.seed(ats.map((at) => ({ lang: 'python', raw, at })));
+      const k = key('python', raw);
+      store.request(k);
+      await answer(0, TIMEOUT);
+      expect(h.calls[1]!.req.mode).toBe('line');
+      await answer(1, HTML(html, 'line'));
+      expect(store.peek(k)).toMatchObject({ kind: 'html', mode: 'line' });
+      expect(verdicts(store, ats)).toEqual([...Array(fit).fill(null), 'page-output']);
+    });
+
+    it('INPUT: copies of one block are admitted until their combined length passes the page input ceiling, then skipped as copies; the key is still requestable, one job (part1 off: no per-block bound applies)', async () => {
+      const { h, store, key, answer } = setup({ mode: 'docs', part1: false });
+      const raw = py(MD_HIGHLIGHT_BLOCK_MAX_CHARS, 'same');
+      const fit = Math.floor(DOCS_HIGHLIGHT_PAGE_MAX_CHARS / raw.length);
+      expect(fit).toBeGreaterThan(1);
+      const ats = copiesOf(fit + 2);
+      store.seed(ats.map((at) => ({ lang: 'python', raw, at })));
+      const k = key('python', raw);
+      expect(verdicts(store, ats)).toEqual([...Array(fit).fill(null), 'page-input', 'page-input']);
+      expect(store.peek(k)).toBe(UNREQUESTED_ENTRY);
+      store.request(k);
+      store.request(k);
+      await answer(0, HTML(OK));
+      expect(h.calls).toHaveLength(1);
+      expect(store.peek(k).kind).toBe('html');
+    });
+
+    it('INPUT: the same with part 1 on (the block is within every per-block bound of its grammar)', () => {
+      const { store } = setup();
+      const raw = py(MD_HIGHLIGHT_BLOCK_MAX_CHARS, 'same');
+      const fit = Math.floor(DOCS_HIGHLIGHT_PAGE_MAX_CHARS / raw.length);
+      const ats = copiesOf(fit + 1);
+      store.seed(ats.map((at) => ({ lang: 'python', raw, at })));
+      expect(verdicts(store, ats)).toEqual([...Array(fit).fill(null), 'page-input']);
+    });
+
+    it('SCAN: copies of one typescript block count in part 1\'s scan sum too: the first copy past it is skipped by part1-scan', () => {
+      const { store, key } = setup();
+      const raw = py(MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS, 'same');
+      const fit = Math.floor(DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS / raw.length);
+      expect((fit + 2) * raw.length).toBeLessThanOrEqual(DOCS_HIGHLIGHT_PAGE_MAX_CHARS);
+      const ats = copiesOf(fit + 2);
+      store.seed(ats.map((at) => ({ lang: 'typescript', raw, at })));
+      expect(verdicts(store, ats)).toEqual([...Array(fit).fill(null), 'part1-scan', 'part1-scan']);
+      expect(store.peek(key('typescript', raw))).toBe(UNREQUESTED_ENTRY);
+    });
+
+    it('MARKDOWN: copies of one markdown block count in part 1\'s markdown sum too', () => {
+      const { store } = setup();
+      const raw = py(MD_HIGHLIGHT_BLOCK_MAX_CHARS, 'same');
+      const fit = Math.floor(DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS / raw.length);
+      const ats = copiesOf(fit + 1);
+      store.seed(ats.map((at) => ({ lang: 'markdown', raw, at })));
+      expect(verdicts(store, ats)).toEqual([...Array(fit).fill(null), 'part1-markdown']);
+    });
+
+    it('a key whose first occurrence is past a ceiling is skipped as an entry from the first commit, and no copy verdict is recorded', () => {
+      const { store, key } = setup();
+      const fillers = Array.from({ length: Math.floor(DOCS_HIGHLIGHT_PAGE_MAX_CHARS / MD_HIGHLIGHT_BLOCK_MAX_CHARS) }, (_, i) => ({ lang: 'python', raw: py(MD_HIGHLIGHT_BLOCK_MAX_CHARS, `f${i}`) }));
+      const ats = copiesOf(2);
+      store.seed([...fillers, ...ats.map((at) => ({ lang: 'python', raw: 'late', at }))]);
+      expect(store.peek(key('python', 'late'))).toEqual({ kind: 'skipped', ceiling: 'page-input' });
+      expect(verdicts(store, ats)).toEqual([null, null]);
+    });
+
+    it('a chat store, and a copy never seeded, answer null', () => {
+      const { store } = setup({ mode: 'chat' });
+      expect(store.copySkip({})).toBeNull();
+      expect(setup().store.copySkip({})).toBeNull();
+    });
   });
 
   it('the timeout ceiling: at HIGHLIGHT_PAGE_MAX_TIMEOUTS timeouts every unanswered key is skipped, the running job detached', async () => {
@@ -536,6 +673,10 @@ describe('codeBlocksOf: the seeding walk', () => {
       { type: 'element', tagName: 'blockquote', properties: {}, children: [code(['x', 'language-md', 'language-ts'], 'b')] },
       code(undefined, 'c\n'),
     ] } as unknown as HastRoot;
-    expect(codeBlocksOf(tree)).toEqual([{ lang: 'ts', raw: 'a\n' }, { lang: 'md', raw: 'b' }, { lang: '', raw: 'c' }]);
+    expect(codeBlocksOf(tree).map(({ lang, raw }) => ({ lang, raw }))).toEqual([{ lang: 'ts', raw: 'a\n' }, { lang: 'md', raw: 'b' }, { lang: '', raw: 'c' }]);
+    // Each block names its own `pre` element as `at`: the copy's identity (F1).
+    const pres = [tree.children[0], (tree.children[1] as { children: unknown[] }).children[0], tree.children[2]];
+    expect(codeBlocksOf(tree).map((b) => b.at)).toEqual(pres);
+    codeBlocksOf(tree).forEach((b, i) => expect(b.at).toBe(pres[i]));
   });
 });
