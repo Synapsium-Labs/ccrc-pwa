@@ -124,13 +124,17 @@ describe('M4.H14: what the check refuses (each leaves the block plain)', () => {
 });
 
 describe('M4.H14: the check is one linear pass', () => {
+  // One counted step covers at most 7 characters: a loop turn counts 1, and it consumes `</span>` (7) at most; an entity
+  // is 6 at most, an opener 21 or more for 1 plus its class length (6 at least), and any other turn 1 character.
+  const MOST_CHARS_PER_STEP = 7;
   const steps = (html: string): number => {
     const s = { n: 0 };
     checkHighlightHtml(html, s);
     return s.n;
   };
   it.each([
-    ['unterminated span openers', (n: number) => '<span class="hljs-'.repeat(n)],
+    // n well-formed openers, then one unterminated: the walk reaches the end before the check answers null.
+    ['unterminated span openers', (n: number) => '<span class="hljs-a">'.repeat(n) + '<span class="hljs-'],
     ['valid but never closed spans', (n: number) => '<span class="hljs-a">'.repeat(n)],
     ['plain text', (n: number) => 'a'.repeat(n * 20)],
     ['balanced spans', (n: number) => '<span class="hljs-a">b</span>'.repeat(n)],
@@ -140,6 +144,9 @@ describe('M4.H14: the check is one linear pass', () => {
     expect(steps(small)).toBeLessThanOrEqual(2 * small.length);
     expect(steps(big)).toBeLessThanOrEqual(2.05 * steps(small) + 64);
     expect(big.length).toBeGreaterThan(1.9 * small.length);
+    // From below, so a pass that skips its walk (a regex deciding first) cannot hide behind the upper bounds.
+    expect(steps(small)).toBeGreaterThanOrEqual(small.length / MOST_CHARS_PER_STEP);
+    expect(steps(big)).toBeGreaterThanOrEqual(1.9 * steps(small));
   });
 });
 
