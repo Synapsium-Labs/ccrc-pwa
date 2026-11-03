@@ -296,7 +296,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   macOS legs or `full-suite`; there `test (pwa)` refuses a red browser suite and `test (server)` a red node floor
   (step-level, merge_group-only refusals), so both gate the merge, and the perf legs stay advisory. **One exception**
   (the owner's ruling of 2026-11-02, reversing 2026-10-25's "the queue runs every test" for the browser shards only;
-  D-number pending, `docs/superpowers/plans/2026-11-02-ci-queue-browser-docs-skip.md`): the browser shards skip their
+  D-TBD-queue-browser-skip, `docs/superpowers/plans/2026-11-02-ci-queue-browser-docs-skip.md`): the browser shards skip their
   tests, by step, when no file in the group can reach them (`reach.mjs` `queueScope`, the browser package's FOREIGN
   list, `docs/` among it), so a docs-only group skips them and `test (pwa)` reads the shards' success. `docs/` stays
   reachable for the pwa suite, which renders it. The queue is the
