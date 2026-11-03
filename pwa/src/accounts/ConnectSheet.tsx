@@ -500,10 +500,14 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
     if (a !== null && Date.now() >= a.expiresAt) finish(SIGN_IN_END.expired(id));
   };
 
-  /** Send code (spec §3.7): the one code, once. A code off its method's shape is never sent. */
+  /**
+   * Send code (spec §3.7): the one code, once. A code off its method's shape is never sent. The attempt's own `codeSent`
+   * is the latch: the field's is only for one mount, and a remount (offline and back, the sheet closed and reopened) must
+   * not offer a second send.
+   */
   const sendCode = async (code: string): Promise<void> => {
     const a = attRef.current;
-    if (a === null || blocked) return;
+    if (a === null || blocked || a.codeSent) return;
     if (!authCodeShapeOk(code, a.method)) {
       setCodeNotice(CODE_NOTICE.shape);
       setCodeKey((k) => k + 1);
@@ -698,7 +702,8 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
               <>
                 {att.url !== null && att.host !== null && !att.codeSent && <UrlCard url={att.url} host={att.host} method={att.method} />}
                 {att.url !== null && (
-                  <CodeField key={codeKey} onSend={(c) => { void sendCode(c); }} describedBy={codeNotice !== null ? codeNoticeId : undefined} />
+                  <CodeField key={codeKey} onSend={(c) => { void sendCode(c); }} disabled={att.codeSent}
+                    describedBy={codeNotice !== null ? codeNoticeId : undefined} />
                 )}
                 {codeNotice !== null && <p className="acct-notice" id={codeNoticeId}>{codeNotice}</p>}
                 <Countdown expiresAt={att.expiresAt} waiting={waiting} />

@@ -431,6 +431,39 @@ describe('offline (spec §12.5)', () => {
     await settle();
     expect(screen.getByLabelText(CODE_FIELD_LABEL)).toBeInTheDocument();
   });
+
+  it('a code already sent stays sent across a remount: offline and back, or the sheet closed and reopened, offers no second Send', async () => {
+    const b = fakeBox();
+    const { rerender } = sheet(b);
+    await start();
+    waitingCode(b);
+    await poll();
+    paste('Q'.repeat(30));
+    fireEvent.click(screen.getByRole('button', { name: SEND_CODE }));
+    await settle();
+    expect(b.sc.accountAuthCode).toHaveBeenCalledTimes(1);
+    // Offline unmounts the field; back online it mounts again, and the attempt's own latch keeps it shut.
+    rerender({ offline: "You're offline: nothing was sent. Read 5 s ago." });
+    expect(screen.queryByLabelText(CODE_FIELD_LABEL)).toBeNull();
+    rerender({ offline: null });
+    await settle();
+    expect(screen.getByLabelText(CODE_FIELD_LABEL)).toBeDisabled();
+    expect(screen.getByRole('button', { name: SEND_CODE })).toBeDisabled();
+    paste('R'.repeat(30));
+    fireEvent.click(screen.getByRole('button', { name: SEND_CODE }));
+    fireEvent.keyDown(screen.getByLabelText(CODE_FIELD_LABEL), { key: 'Enter' });
+    await settle();
+    // Closed and reopened: the same.
+    rerender({ open: false });
+    await settle();
+    rerender({ open: true });
+    await settle();
+    expect(screen.getByLabelText(CODE_FIELD_LABEL)).toBeDisabled();
+    paste('S'.repeat(30));
+    fireEvent.keyDown(screen.getByLabelText(CODE_FIELD_LABEL), { key: 'Enter' });
+    await settle();
+    expect(b.sc.accountAuthCode).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('announcements (spec §12.4)', () => {
