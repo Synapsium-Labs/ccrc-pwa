@@ -81,6 +81,22 @@ export function laneParam(search: string): string | null {
   return id === null || id === '' ? null : id;
 }
 
+/** The accounts route's resume query (accounts plan Task A23, D-7871; spec §6.2): `/accounts?resume=<id>` opens the
+ *  sheet of the sign-in this session started on lane `<id>`, at its code field. Only a shortcut: the attempt itself is
+ *  read from `GET /api/accounts`, never from the URL or storage. */
+export const ACCOUNTS_RESUME_QUERY = 'resume';
+
+/** The one builder of `/accounts?resume=<id>`; `resumeParam` is its one reader. */
+export function accountsResumeHref(wrapper: string): string {
+  return `/accounts?${new URLSearchParams({ [ACCOUNTS_RESUME_QUERY]: wrapper }).toString()}`;
+}
+
+/** The lane id in the resume query, or null when it is absent or empty. */
+export function resumeParam(search: string): string | null {
+  const id = new URLSearchParams(search).get(ACCOUNTS_RESUME_QUERY);
+  return id === null || id === '' ? null : id;
+}
+
 export interface RouteMatch {
   readonly route: Route;
   /** The pattern's first capture, decoded: the session id on `/s/:id`; null where the pattern captures nothing. */
@@ -94,6 +110,14 @@ export function matchRoute(path: string): RouteMatch | null {
     if (m !== null) return { route, param: m[1] === undefined ? null : decodeURIComponent(m[1]) };
   }
   return null;
+}
+
+/** The frame's view for a path (the phone swap, `shell.css`): `fleet` on the fleet route and on a path outside the
+ *  table (its placeholder), `session` for anything the detail pane shows. `app.tsx` hands it to the frame, and the
+ *  resume banner reads it to place its one instance (accounts plan Task A23, D-7871 (3)). */
+export function shellViewOf(path: string): 'fleet' | 'session' {
+  const id = matchRoute(path)?.route.id ?? null;
+  return id === null || id === 'fleet' ? 'fleet' : 'session';
 }
 
 /** The top route a path is on or under: `/settings/updates` is under Settings, `/docs/a/b` is Docs, a session is

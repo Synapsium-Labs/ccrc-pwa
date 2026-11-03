@@ -240,8 +240,11 @@ describe('the URL card (spec §6.2 step 5, §12.4)', () => {
 describe('the deadline has one source (spec §3.7)', () => {
   it('the countdown reads `expiresAt` and no duration is hard-coded', async () => {
     // The sources that draw or decide a sign-in name no duration: every deadline is the attempt's `expiresAt`.
+    // `useSignInAttempt.tsx` runs the attempt for both sheets, and the switch sheet and the resume banner read the same
+    // deadline (Task A23, D-7871).
     const files = ['src/accounts/ConnectSheet.tsx', 'src/accounts/RunFrame.tsx', 'src/accounts/CodeField.tsx',
-      'src/accounts/ResultFrame.tsx', 'src/accounts/connectFlow.ts', 'src/fleet/accountWords.ts'];
+      'src/accounts/ResultFrame.tsx', 'src/accounts/connectFlow.ts', 'src/fleet/accountWords.ts',
+      'src/accounts/useSignInAttempt.tsx', 'src/accounts/MethodSwitchSheet.tsx', 'src/accounts/AuthResumeBanner.tsx'];
     for (const f of files) {
       const src = readFileSync(path.join(__dirname, '..', f), 'utf8');
       expect(src, f).not.toMatch(/\b600\b|600_?000|\b10\s*min|ten minutes|AUTH_HELPER_BOUND_MS/i);

@@ -28,18 +28,29 @@
 // Instrument's list column holds this route's list (A4). It narrows in place with its reason, and opens the connect
 // sheet (`accounts/ConnectSheet.tsx`). OFFLINE (spec §12.5) is the store's own reading (`conn === 'down'`), never
 // `navigator.onLine`: every act on the screen (the door, Check, the knob) is refused with one sentence and the read-line.
+//
+// RESUME AND THE METHOD SWITCHES (accounts plan Task A23, D-7871; spec §6.2, §9, §4.2, §4.4). A lane whose sign-in THIS
+// session started waits for its code: its card says so with Continue and Cancel, and `/accounts?resume=<id>` (the
+// app-level banner's Continue) opens the sheet that continues it at the code field: the method switch sheet for a
+// switch, the connect sheet for a lane it added (`resumeSheetFor`). A sign-in lane's fold offers Switch to a long-lived
+// token, which is also a Signed-out sign-in lane's primary fix (Q1); a token lane's fold offers Switch to sign-in. Both
+// run only on a fleet that advertises the sign-in's cap word (`account-auth-v1`).
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { isArchivedRow, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
+import { ACCOUNT_AUTH_CAP, isArchivedRow, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
 import type { AccountStateAnswer } from '../../../shared/accounts';
 import type { AccountPoolWire } from '../../../shared/poolrule';
 import { Button, PageScaffold, Skeleton, toast, useDesk, useNow } from '@ccrc/ui';
 import { AddAccountDoor, ConnectSheet, DoorReason } from '../accounts/ConnectSheet';
 import { RemoveSheet } from '../accounts/RemoveSheet';
 import { ReplaceSheet } from '../accounts/ReplaceSheet';
+import { MethodSwitchSheet } from '../accounts/MethodSwitchSheet';
+import { heldAttemptOf, resumeSheetFor, switchTargetOf, type SignInMethod } from '../accounts/connectFlow';
+import { wordOf, type HeldAttempt } from '../accounts/useSignInAttempt';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
 import { cardLines, connectBlock, DOOR_NARROWED, doorNarrowing, identityLine, isTrouble, kindChipWords, laneAnswerOf, notReadyWords, offAlso, offlineRefusal, PASTE_A_TOKEN, REMOVE_ACT, REPLACE_TOKEN, rollUp, troubleCopy, troubleFirst, WEEKLY_ONLY } from '../fleet/accountWords';
+import { CANCEL_SIGN_IN, CONTINUE, RESUME_CARD_LINE, SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, cancelRefused } from '../fleet/accountWords';
 import { StateLamp, TroubleCard } from '../fleet/TroubleCard';
 import { AccountKnob, useLaneActs } from '../fleet/AccountKnob';
 import { presenceOf } from '../fleet/presence';
@@ -47,7 +58,7 @@ import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { navigate, useLocation } from '../lib/router';
-import { laneParam, sessionPath } from '../lib/routes';
+import { laneParam, resumeParam, sessionPath } from '../lib/routes';
 import { backToFleet } from '../command/door';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -229,7 +240,8 @@ export function AccountsScreen(): ReactNode {
   // until then): an arrival at mount finds no row, and the same effect finishes the job when the poll brings it.
   // `arrivedAt` holds the last lane arrived at, so each value scrolls once and a re-render never moves focus again;
   // a second `?lane=` on the same mount is a new value and arrives once. An unknown lane arrives nowhere.
-  const lane = laneParam(useLocation().search);
+  const search = useLocation().search;
+  const lane = laneParam(search);
   const laneRowExists = lane !== null && accounts != null && order.includes(lane);
   const rowRefs = useRef(new Map<string, HTMLElement>());
   const arrivedAt = useRef<string | null>(null);
@@ -327,6 +339,49 @@ export function AccountsScreen(): ReactNode {
   const openRemove = (id: string): void => setRemoving({ id, gen: ++sheetGen.current });
   const openReplace = (id: string): void => setReplacing({ id, gen: ++sheetGen.current });
   const readRoster = (): readonly RosterWire[] => useFleetStore.getState().roster;
+
+  // The method switches and resume (accounts plan Task A23, D-7871): the switch sheet, and the connect sheet reopened on
+  // an attempt this session started on a lane it added. Each keyed per opening, as above.
+  const canSwitch = connect?.caps?.includes(ACCOUNT_AUTH_CAP) === true;
+  const [switching, setSwitching] = useState<{ id: string; to: SignInMethod; gen: number; resume?: HeldAttempt } | null>(null);
+  const [resumingConnect, setResumingConnect] = useState<{ id: string; held: HeldAttempt; gen: number } | null>(null);
+  const openSwitch = (id: string, to: SignInMethod, resume?: HeldAttempt): void =>
+    setSwitching({ id, to, gen: ++sheetGen.current, ...(resume !== undefined ? { resume } : {}) });
+  /** Continue: the sheet that runs this session's attempt on lane `id`, at its code field (spec §6.2). */
+  const openResume = (id: string): void => {
+    const held = heldAttemptOf(lanes?.[id], Date.now());
+    if (held === null) return;
+    const kind = roster.find((r) => r.id === id)?.kind;
+    if (resumeSheetFor(kind, held.method) === 'switch') openSwitch(id, held.method, held);
+    else setResumingConnect({ id, held, gen: ++sheetGen.current });
+  };
+  // `/accounts?resume=<id>` (the banner's Continue): opens once per value, as soon as the store's answer holds the
+  // attempt; the attempt is read from that answer, never from the URL.
+  const resumeId = resumeParam(search);
+  const resumeHeld = resumeId !== null && heldAttemptOf(lanes?.[resumeId], now) !== null;
+  const resumedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (resumeId === null) { resumedFor.current = null; return; }
+    if (!resumeHeld || resumedFor.current === resumeId) return;
+    resumedFor.current = resumeId;
+    openResume(resumeId);
+  });
+  /** A sheet opened by the resume query, closed: the query goes, so a re-render never reopens it. */
+  const dropResume = (): void => { if (resumeParam(location.search) !== null) navigate('/accounts', { replace: true }); };
+  /** Cancel, from the card: the attempt ends at the box, then the screen reads the lanes again. */
+  const [cancellingAuth, setCancellingAuth] = useState<string | null>(null);
+  const cancelAttempt = async (id: string, attemptId: string): Promise<void> => {
+    if (cancellingAuth !== null) return;
+    setCancellingAuth(id);
+    try {
+      await api.accountAuthCancel(id, { attemptId });
+    } catch (e) {
+      const word = wordOf(e);
+      if (word !== 'no-auth-attempt') toast(cancelRefused(word), 'error');
+    }
+    await refreshAccounts();
+    setCancellingAuth(null);
+  };
 
   return (
     // The page scaffold (D-5102). The body's grid keeps the old screen's rhythm, --sp-3 between blocks.
@@ -430,6 +485,11 @@ export function AccountsScreen(): ReactNode {
           const canAct = connect !== null && blocked === null && inRoster;
           // An Anthropic lane on a long-lived token: its credential act is Replace token (spec §4.4, §9).
           const tokenLane = entry?.provider === 'anthropic' && entry.kind === 'token';
+          // The method switch its fold offers (spec §4.4, §9; Q1), on a fleet that runs a sign-in (Task A23, D-7871).
+          const switchTo = canSwitch ? switchTargetOf(entry) : null;
+          // This session's attempt on the lane, waiting for its code (spec §6.2): the card's resume line.
+          const held = heldAttemptOf(laneWire, now);
+          const waitingCode = held !== null && laneWire?.authAttempt?.state === 'waiting-code';
           return (
             <section
               key={wrapper}
@@ -493,7 +553,23 @@ export function AccountsScreen(): ReactNode {
                   replace={canAct && tokenLane && (answer.word === 'signed-out' || answer.word === 'expiring')
                     ? { label: answer.word === 'signed-out' ? PASTE_A_TOKEN : REPLACE_TOKEN, onOpen: () => openReplace(wrapper) }
                     : undefined}
+                  switchTo={canAct && switchTo === 'setup-token' && answer.word === 'signed-out'
+                    ? { label: SWITCH_TO_TOKEN, onOpen: () => openSwitch(wrapper, 'setup-token') }
+                    : undefined}
                 />
+              )}
+              {waitingCode && held !== null && (
+                <div className="acct-resume-line" data-resume={wrapper}>
+                  <span>{RESUME_CARD_LINE}</span>
+                  <Button variant="primary" size="fit" disabled={blocked !== null} onClick={() => openResume(wrapper)}>{CONTINUE}</Button>
+                  <Button
+                    variant="ghost" size="fit" disabled={blocked !== null || cancellingAuth !== null}
+                    aria-busy={cancellingAuth === wrapper || undefined}
+                    onClick={() => { void cancelAttempt(wrapper, held.attemptId); }}
+                  >
+                    {CANCEL_SIGN_IN}
+                  </Button>
+                </div>
               )}
 
               {/* `off` greys the meters' fills while each keeps its frozen
@@ -534,6 +610,15 @@ export function AccountsScreen(): ReactNode {
                   the knob row's reason (offline, or the server's own). */}
               {connect !== null && inRoster && (
                 <div className="acct-fold">
+                  {switchTo === 'setup-token' && (
+                    <Button
+                      variant="ghost" size="fit" disabled={!canAct}
+                      aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                      onClick={() => openSwitch(wrapper, 'setup-token')}
+                    >
+                      {SWITCH_TO_TOKEN}
+                    </Button>
+                  )}
                   {tokenLane && (
                     <Button
                       variant="ghost" size="fit" disabled={!canAct}
@@ -541,6 +626,15 @@ export function AccountsScreen(): ReactNode {
                       onClick={() => openReplace(wrapper)}
                     >
                       {REPLACE_TOKEN}
+                    </Button>
+                  )}
+                  {switchTo === 'login' && (
+                    <Button
+                      variant="ghost" size="fit" disabled={!canAct}
+                      aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                      onClick={() => openSwitch(wrapper, 'login')}
+                    >
+                      {SWITCH_TO_SIGN_IN}
                     </Button>
                   )}
                   <Button
@@ -575,7 +669,8 @@ export function AccountsScreen(): ReactNode {
       <ConnectSheet
         key={connectGen}
         open={connectOpen}
-        onClose={() => setConnectOpen(false)}
+        // Closed mid-sign-in, the attempt keeps running on the box: a fresh read lets the resume banner say so now.
+        onClose={() => { setConnectOpen(false); void refreshAccounts(); }}
         roster={roster}
         connect={connect}
         offline={offline}
@@ -606,6 +701,35 @@ export function AccountsScreen(): ReactNode {
           blocked={blocked}
           roster={roster}
           refresh={refreshAccounts}
+        />
+      )}
+
+      {switching !== null && (
+        <MethodSwitchSheet
+          key={`switch-${switching.gen}`}
+          id={switching.id}
+          to={switching.to}
+          open
+          onClose={() => { setSwitching(null); dropResume(); void refreshAccounts(); }}
+          connect={connect}
+          blocked={blocked}
+          roster={roster}
+          lane={lanes?.[switching.id]}
+          refresh={refreshAccounts}
+          {...(switching.resume !== undefined ? { resume: switching.resume } : {})}
+        />
+      )}
+      {resumingConnect !== null && (
+        <ConnectSheet
+          key={`resume-${resumingConnect.gen}`}
+          open
+          onClose={() => { setResumingConnect(null); dropResume(); void refreshAccounts(); }}
+          roster={roster}
+          connect={connect}
+          offline={offline}
+          refresh={refreshAccounts}
+          readRoster={readRoster}
+          resume={{ id: resumingConnect.id, held: resumingConnect.held }}
         />
       )}
 
