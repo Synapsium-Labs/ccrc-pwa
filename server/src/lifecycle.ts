@@ -177,9 +177,15 @@ export function fleetRowsUsable(
  * never kept, so the next request walks again. Pools, limits, shares, readiness and repo cells are never cached
  * here, so a pool write shows on the next request.
  *
- * Kept on purpose, and said once: an entry under the root whose listing failed is left out of a kept walk as it is
- * left out of today's one answer (`readdir` cannot tell a plain file from a dropped read), so such a gap lasts up to
- * the TTL rather than one request.
+ * Only what was MEASURED is kept (review 1375, F2): a probe that could not answer keeps its row for that request, as
+ * D-5967 says, but its verdict is not kept, and a walk with such a slot is not kept either. Each walk and probe is
+ * stamped when it STARTS, and its result replaces a kept one only over an older stamp (F3), so an older listing that
+ * finishes last never overwrites a newer one; freshness is measured from that start.
+ *
+ * Kept on purpose, and said once:
+ * - an entry under the root whose listing failed is left out of a kept walk as it is left out of today's one answer
+ *   (`readdir` cannot tell a plain file from a dropped read), so such a gap lasts up to the TTL rather than one request;
+ * - there is no single flight: k cold requests that overlap each walk, so together they may hold 8 x k reads.
  */
 export class ProjectWalkCache {
   private walk: { at: number; rows: readonly ProjectRow[] } | null = null;
@@ -197,8 +203,14 @@ export class ProjectWalkCache {
     return this.walk !== null && this.fresh(this.walk.at) ? this.walk.rows : null;
   }
 
-  keepWalk(rows: readonly ProjectRow[]): void {
-    this.walk = { at: this.now(), rows };
+  /** The stamp a walk or probe takes when it starts, for `keepWalk`/`keepProbe`. */
+  stamp(): number {
+    return this.now();
+  }
+
+  /** Keeps a walk that started at `startedAt`, unless the kept one started later. */
+  keepWalk(rows: readonly ProjectRow[], startedAt: number): void {
+    if (this.walk === null || startedAt > this.walk.at) this.walk = { at: startedAt, rows };
   }
 
   /** A workdir's kept verdict while it is fresh, else null. */
@@ -207,25 +219,57 @@ export class ProjectWalkCache {
     return v !== undefined && this.fresh(v.at) ? v.linked : null;
   }
 
-  keepProbe(workdir: string, linked: boolean): void {
+  /** Keeps a MEASURED verdict from a probe that started at `startedAt`, unless the kept one started later. */
+  keepProbe(workdir: string, linked: boolean, startedAt: number): void {
     for (const [k, v] of this.probes) if (!this.fresh(v.at)) this.probes.delete(k);
-    this.probes.set(workdir, { at: this.now(), linked });
+    const kept = this.probes.get(workdir);
+    if (kept === undefined || startedAt > kept.at) this.probes.set(workdir, { at: startedAt, linked });
   }
 }
 
+/** `isLinkedWorktree`'s answer, and whether it was MEASURED (review 1375, F2). */
+type LinkProbe = 'linked' | 'not-linked' | 'unmeasured';
+
+/** Asks `isLinkedWorktree` itself, unchanged, so D-5967's rule keeps one writer, through a view of `io` whose two reads
+ *  go to the measured calls (`readdirMeasured`, `lstatMeasured`) and note any failure that is not a proven absence.
+ *  `linked` is exactly `isLinkedWorktree`'s true; otherwise a noted failure answers `unmeasured`, which keeps the row
+ *  for this request as `isLinkedWorktree` does, and which `ProjectWalkCache` never keeps. Each read is still one
+ *  request. */
+const probeLinkedWorktree = async (io: FleetIO, workdir: string, names?: string[] | null): Promise<LinkProbe> => {
+  let unmeasured = false;
+  const note = (r: { ok: true } | { ok: false; reason: string }): void => { if (!r.ok && r.reason !== 'absent') unmeasured = true; };
+  const view = Object.assign(Object.create(io) as FleetIO, {
+    readdir: async (p: string): Promise<string[] | null> => {
+      const r = await io.readdirMeasured(p);
+      note(r);
+      return r.ok ? [...r.entries] : null;
+    },
+    lstatMeasured: async (p: string) => {
+      const r = await io.lstatMeasured(p);
+      note(r);
+      return r;
+    },
+  });
+  if (await isLinkedWorktree(view, workdir, names)) return 'linked';
+  return unmeasured ? 'unmeasured' : 'not-linked';
+};
+
 /** The root walk: one slot per entry (its listing, then its probe), at most `PROJECT_WALK_CONCURRENCY` in flight, the
- *  answer in the listing's order whatever order the reads finish in. Null when the root itself could not be listed. */
-const walkRoot = async (io: FleetIO, cfg: CcrcConfig): Promise<ProjectRow[] | null> => {
+ *  answer in the listing's order whatever order the reads finish in. Null when the root itself could not be listed;
+ *  `measured` is false when any slot's probe could not answer (its row is kept, the walk is not cached). */
+const walkRoot = async (io: FleetIO, cfg: CcrcConfig): Promise<{ rows: ProjectRow[]; measured: boolean } | null> => {
   const names = await io.readdir(cfg.projectsRoot);
   if (names === null) return null;
+  let measured = true;
   const rows = await mapBounded(names.filter((n) => !n.startsWith('.')), PROJECT_WALK_CONCURRENCY, async (name) => {
     const workdir = path.join(cfg.projectsRoot, name);
     const entries = await io.readdir(workdir);
     if (entries === null) return null; // not a directory — skip
-    if (await isLinkedWorktree(io, workdir, entries)) return null;
-    return { name, workdir };
+    const probe = await probeLinkedWorktree(io, workdir, entries);
+    if (probe === 'unmeasured') measured = false;
+    return probe === 'linked' ? null : { name, workdir };
   });
-  return rows.filter((r): r is ProjectRow => r !== null);
+  return { rows: rows.filter((r): r is ProjectRow => r !== null), measured };
 };
 
 /**
@@ -258,9 +302,10 @@ export async function listProjects(
 ): Promise<{ roots: string[]; projects: ProjectRow[]; registry: 'listed' | 'unlistable' }> {
   let walked = cache?.keptWalk() ?? null;
   if (walked === null) {
+    const startedAt = cache?.stamp();
     const fresh = await walkRoot(io, cfg);
-    if (fresh !== null) cache?.keepWalk(fresh);
-    walked = fresh ?? [];
+    if (fresh !== null && fresh.measured && startedAt !== undefined) cache?.keepWalk(fresh.rows, startedAt);
+    walked = fresh?.rows ?? [];
   }
   const byWorkdir = new Map<string, ProjectRow>(walked.map((r) => [r.workdir, r]));
   let source: readonly ProjectSourceRow[];
@@ -279,9 +324,10 @@ export async function listProjects(
   const linked = await mapBounded(candidates, PROJECT_WALK_CONCURRENCY, async (workdir) => {
     const kept = cache?.keptProbe(workdir) ?? null;
     if (kept !== null) return kept;
-    const verdict = await isLinkedWorktree(io, workdir);
-    cache?.keepProbe(workdir, verdict);
-    return verdict;
+    const startedAt = cache?.stamp();
+    const probe = await probeLinkedWorktree(io, workdir);
+    if (probe !== 'unmeasured' && startedAt !== undefined) cache?.keepProbe(workdir, probe === 'linked', startedAt);
+    return probe === 'linked';   // an unmeasured probe keeps the row, as `isLinkedWorktree` does (D-5967)
   });
   const isLinked = new Map(candidates.map((w, i) => [w, linked[i]!]));
   for (const rec of source) {

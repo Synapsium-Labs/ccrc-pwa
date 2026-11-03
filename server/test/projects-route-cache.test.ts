@@ -20,9 +20,15 @@ import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 interface Req { op: string; path: string }
-interface Gate { pending: (() => void)[] }
+/** Holds calls until the driver releases them. `open` makes it sticky: once set, a call passes at once, so a late
+ *  call can never park forever. `holds`, when given, picks which calls wait at all (every call by default). */
+interface Gate { pending: (() => void)[]; open?: boolean; holds?: (op: string, p: string) => boolean }
+/** Opens a gate for good and lets every parked call go. */
+const openGate = (g: Gate): void => { g.open = true; g.pending.splice(0).forEach((go) => { go(); }); };
 interface CountingOptions {
   gate?: Gate;
+  /** Paths whose next `lstatMeasured` answers `unmeasured` (an agent that could not ask); each fires once. */
+  lstatUnmeasuredOnce?: Set<string>;
   /** A request's delay, from its path and its issue index (0 for the first request this io saw). */
   delayMs?: (p: string, index: number) => number;
   /** Directories whose listing fails (`readdir` null, `readdirMeasured` unreadable). Mutable between requests. */
@@ -46,11 +52,13 @@ const countingIO = (opts: CountingOptions = {}) => {
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       try {
-        if (opts.gate !== undefined) await new Promise<void>((go) => { opts.gate!.pending.push(go); });
+        const gate = opts.gate;
+        if (gate !== undefined && !gate.open && (gate.holds?.(op, p) ?? true)) await new Promise<void>((go) => { gate.pending.push(go); });
         else if (opts.delayMs !== undefined) {
           const ms = opts.delayMs(p, index);
           await new Promise<void>((go) => { setTimeout(go, ms); });
         }
+        if (op === 'lstatMeasured' && opts.lstatUnmeasuredOnce?.delete(p)) return { ok: false, reason: 'unmeasured' };
         if (opts.unlistable?.has(p)) {
           if (op === 'readdir') return null;
           if (op === 'readdirMeasured') return { ok: false, reason: 'unreadable' };
@@ -253,6 +261,35 @@ describe('the registry half comes from the watcher only while its listing is cur
     } finally { await r.app.close(); }
   });
 
+  it('an empty listed fleet: the route answers listed and lists the registry no more than from a full one', async () => {
+    // Review 1375, F4: with zero sessions "no session field read" is vacuous, so this counts listings of the
+    // registry DIRECTORY itself (the pools and limits reads list it too, so it is counted against a full listing).
+    fakeDate(T0);
+    const f = projectsFixture('ccrc-projects-empty-listing-');
+    const c = countingIO();
+    const r = await routeRig(f, c);
+    const registryListings = (): number => c.requests
+      .filter((q) => (q.op === 'readdir' || q.op === 'readdirMeasured') && q.path === f.cfg.registryDir).length;
+    try {
+      r.state.listing = { sessions: await fixtureRows(f), listedAt: T0 - 1 };
+      c.reset();
+      await r.get();
+      const fromRows = registryListings();
+      r.state.listing = null;
+      c.reset();
+      await r.get();
+      expect(registryListings(), 'control: the route\'s own read lists the registry once more').toBeGreaterThan(fromRows);
+      r.state.listing = { sessions: [], listedAt: T0 - 1 };
+      c.reset();
+      const body = await r.get();
+      expect(registryListings(), 'an empty listing is still a listing').toBe(fromRows);
+      expect(body.registry).toBe('listed');
+      expect(relative(f.home, body).projects, 'the root walk alone').toEqual([
+        { name: 'alpha', workdir: 'projects/alpha' }, { name: 'plain', workdir: 'projects/plain' },
+      ]);
+    } finally { await r.app.close(); }
+  });
+
   it('the watcher answers a listing after a listed tick, none after an unlistable one, and stamps when its read began', async () => {
     fakeDate(T0);
     const f = projectsFixture('ccrc-projects-watcher-');
@@ -304,18 +341,25 @@ describe('the walk is concurrent and bounded, and its answer is today\'s (D-6436
   ];
 
   it('the second readdir is issued before the first resolves', async () => {
+    // Conditions, not ticks (review 1375, F1): wait until the root listing is the one call out, let it alone go,
+    // then wait until the entries are being listed. The gate stays closed, so no entry listing has answered while
+    // they are counted; then it opens for good, so no later call can park.
     const f = wide('ccrc-projects-concurrent-');
     const gate: Gate = { pending: [] };
     const c = countingIO({ gate });
     const p = listProjects(c.io, f.cfg, await fixtureRows(f));
-    const settle = () => new Promise<void>((go) => { setTimeout(go, 0); });
-    await settle();
-    expect(c.requests).toEqual([{ op: 'readdir', path: f.root }]);
-    gate.pending.splice(0).forEach((go) => { go(); });
-    await settle();
-    const entryListings = c.requests.filter((q) => q.op === 'readdir' && path.dirname(q.path) === f.root);
-    expect(entryListings.length, 'several entries are listed while none has answered').toBeGreaterThan(1);
-    for (let spin = 0; spin < 1000 && gate.pending.length > 0; spin += 1) { gate.pending.splice(0).forEach((go) => { go(); }); await settle(); }
+    try {
+      await vi.waitFor(() => { expect(gate.pending).toHaveLength(1); }, { timeout: 10_000 });
+      expect(c.requests).toEqual([{ op: 'readdir', path: f.root }]);
+      gate.pending.splice(0).forEach((go) => { go(); });
+      const entryListings = () => c.requests.filter((q) => q.op === 'readdir' && path.dirname(q.path) === f.root);
+      await vi.waitFor(() => {
+        expect(entryListings().length, 'several entries are listed while none has answered').toBeGreaterThan(1);
+      }, { timeout: 10_000 });
+      expect(entryListings()).toHaveLength(gate.pending.length);
+    } finally {
+      openGate(gate);
+    }
     await p;
   });
 
@@ -379,6 +423,65 @@ describe('the walk cache (D-6436)', () => {
       vi.setSystemTime(T0 + 1);
       expect(relative(f.home, await r.get()), 'the next request walks the root').toEqual(RECORDED);
     } finally { await r.app.close(); }
+  });
+
+  it('an unmeasured probe is not served from the cache on the next request', async () => {
+    // Review 1375, F2: only a MEASURED verdict is kept. The answer to the request that met the unmeasured probe is
+    // today's: the row stays (D-5967). The next request, inside the TTL, asks that workdir again and nothing else.
+    const f = projectsFixture('ccrc-projects-unmeasured-probe-');
+    let now = T0;
+    const cache = new ProjectWalkCache(() => now);
+    const gitOf = path.join(f.away, 'linked-two', '.git');
+    const c = countingIO({ lstatUnmeasuredOnce: new Set([gitOf]) });
+    const first = await listProjects(c.io, f.cfg, undefined, cache);
+    expect(relative(f.home, first).projects, 'an unmeasured probe keeps the row')
+      .toContainEqual({ name: 'linked-two', workdir: 'elsewhere/linked-two' });
+    now = T0 + 1;
+    c.reset();
+    const second = await listProjects(c.io, f.cfg, undefined, cache);
+    expect(c.requests.filter((q) => q.op === 'lstatMeasured'), 'that probe alone is asked again')
+      .toEqual([{ op: 'lstatMeasured', path: gitOf }]);
+    expect(relative(f.home, second)).toEqual(RECORDED);
+  });
+
+  it('a walk with an unmeasured slot is not kept', async () => {
+    const f = projectsFixture('ccrc-projects-unmeasured-slot-');
+    let now = T0;
+    const cache = new ProjectWalkCache(() => now);
+    const c = countingIO({ lstatUnmeasuredOnce: new Set([path.join(f.root, 'linked', '.git')]) });
+    const first = await listProjects(c.io, f.cfg, undefined, cache);
+    expect(relative(f.home, first).projects, 'an unmeasured slot keeps the row')
+      .toContainEqual({ name: 'linked', workdir: 'projects/linked' });
+    now = T0 + 1;
+    c.reset();
+    const second = await listProjects(c.io, f.cfg, undefined, cache);
+    expect(c.requests.filter((q) => q.op === 'readdir' && q.path === f.root), 'the root is walked again').toHaveLength(1);
+    expect(relative(f.home, second)).toEqual(RECORDED);
+  });
+
+  it('an older walk finishing last never replaces a newer one', async () => {
+    // Review 1375, F3: each walk is stamped when it STARTS, and a result is kept only over an older stamp.
+    const f = projectsFixture('ccrc-projects-walk-order-');
+    let now = T0;
+    const cache = new ProjectWalkCache(() => now);
+    const gate: Gate = { pending: [], holds: (op, p) => op === 'readdir' && path.dirname(p) === f.root };
+    const older = listProjects(countingIO({ gate }).io, f.cfg, [], cache);
+    try {
+      // the older walk has listed the root and holds its entries
+      await vi.waitFor(() => { expect(gate.pending.length).toBeGreaterThan(0); }, { timeout: 10_000 });
+      dir(path.join(f.root, 'newcomer'), 'main');
+      now = T0 + 1;
+      const newer = await listProjects(countingIO().io, f.cfg, [], cache);
+      expect(newer.projects.map((p) => p.name)).toContain('newcomer');
+    } finally {
+      openGate(gate);
+    }
+    expect((await older).projects.map((p) => p.name), 'the older listing finishes last').not.toContain('newcomer');
+    now = T0 + 2;
+    const c = countingIO();
+    const kept = await listProjects(c.io, f.cfg, [], cache);
+    expect(walkReads(f, c.requests), 'served from the cache').toEqual([]);
+    expect(kept.projects.map((p) => p.name), 'the newer walk is the one kept').toContain('newcomer');
   });
 
   it('a pool write shows on the next request', async () => {
