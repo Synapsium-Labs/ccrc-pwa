@@ -12,8 +12,8 @@ import { fleetHues } from '../fleet/programmeBoxes';
 import { programmeTitle, programWave } from '../fleet/runWords';
 import {
   CLEARED_HEADING, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
-  ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, openRunsOf, programmeIsLive, questionRows, summaryCounts, summaryWords,
-  type Pill, type ProgrammeGroup, type QuestionRow, type Row,
+  COMBINED_LIST, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, listGroups, openRunsOf, programmeIsLive, questionRows,
+  summaryCounts, summaryWords, type ItemList, type Pill, type ProgrammeGroup, type QuestionRow, type Row,
 } from './ledgerWords';
 import './ledgers.css';
 
@@ -29,7 +29,14 @@ export interface WaitingScreenProps {
   readonly unavailable?: string | null;
   /** The page clock, epoch ms: every age is read against it, so the screen reads no clock of its own. */
   readonly now: number;
-  readonly onOpenItem: (id: number) => void;
+  /** The side rail's filter as the URL names it (a programme's slug, plan PL9): what the list shows on arrival, so the way back
+   *  from an item opened under the filter lands on the filtered list. Absent or `null`: every programme. */
+  readonly programme?: string | null;
+  /** Told the filter's programme when the operator picks one in the side rail (`null` for every programme, and for the sessions
+   *  in no programme, which no item can be opened from), so the route can keep it in the URL. */
+  readonly onFilter?: (programme: string | null) => void;
+  /** Opens an item, naming the list it is opened from (plan PL9, D-7896): the item's previous and next follow that list. */
+  readonly onOpenItem: (id: number, list: ItemList) => void;
   readonly onOpenSession: (id: string) => void;
 }
 
@@ -49,14 +56,14 @@ function RowMeta({ pills, when }: { pills: readonly Pill[]; when: string }): Rea
   );
 }
 
-function ItemRow({ item, now, onOpen }: { item: ItemView; now: number; onOpen: (id: number) => void }): ReactNode {
+function ItemRow({ item, now, onOpen, current }: { item: ItemView; now: number; onOpen: (id: number) => void; current: boolean }): ReactNode {
   const note = cameBackNote(item);
   const back = cameBack(item);
   const meta = item.state === 'checking' && item.tickedAt !== null ? `ticked ${ageWords(item.tickedAt, now)}` : `raised ${ageWords(item.raisedAt, now)}`;
   return (
     <li>
       <BareRow className="wl-item" data-item={item.id} data-state={item.state} data-needed={item.neededBy}
-               onClick={() => onOpen(item.id)}>
+               {...(current ? { 'aria-current': 'page' as const } : {})} onClick={() => onOpen(item.id)}>
         <span className="wl-kind">{KIND_WORD[item.kind]}</span>
         <span className="wl-main">
           <span className="wl-what">{item.title}</span>
@@ -85,21 +92,25 @@ function QuestionButton({ q, now, onOpen }: { q: QuestionRow; now: number; onOpe
   );
 }
 
-/** One programme's rows: its items and its sessions' questions, as the list and the programme view both draw them. */
-export function ItemRows({ rows, now, onOpenItem, onOpenSession }: {
-  rows: readonly Row[]; now: number; onOpenItem: (id: number) => void; onOpenSession: (id: string) => void;
+/** One programme's rows: its items and its sessions' questions, as the list and the programme view both draw them, and as
+ *  the list beside an open item draws them, with that item marked current (plan PL9, D-7896). */
+export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = null }: {
+  rows: readonly Row[]; now: number; onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null;
 }): ReactNode {
   return (
     <ul className="wl-items">
       {rows.map((row) => row.kind === 'item'
-        ? <ItemRow key={`i${row.item.id}`} item={row.item} now={now} onOpen={onOpenItem} />
+        ? <ItemRow key={`i${row.item.id}`} item={row.item} now={now} onOpen={onOpenItem} current={row.item.id === currentId} />
         : <QuestionButton key={`q${row.question.sessionId}`} q={row.question} now={now} onOpen={onOpenSession} />)}
     </ul>
   );
 }
 
-function Group({ group, runs, hue, now, props }: {
-  group: ProgrammeGroup; runs: readonly RunSummary[] | null; hue: string | null; now: number; props: WaitingScreenProps;
+/** One programme's block of a list: its heading in its hue, and its rows. The combined list draws one per group, and so does
+ *  the list beside an open item (plan PL9, D-7896), which passes the open item as `currentId`. */
+export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null }: {
+  group: ProgrammeGroup; runs: readonly RunSummary[] | null; hue: string | null; now: number;
+  onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null;
 }): ReactNode {
   const heard = runs ?? NO_RUNS;
   const title = group.program === null ? NO_PROGRAMME_WORD : programmeTitle(group.program, heard);
@@ -115,7 +126,7 @@ function Group({ group, runs, hue, now, props }: {
         {wave !== null && <span className="wl-gwave">{wave.waveOf === null ? `wave ${wave.wave}` : `wave ${wave.wave} of ${wave.waveOf}`}</span>}
         {ended && <span className="wl-gwave" data-ended="true">{WAITS_ON_WORDS.ended}</span>}
       </div>
-      <ItemRows rows={group.rows} now={now} onOpenItem={props.onOpenItem} onOpenSession={props.onOpenSession} />
+      <ItemRows rows={group.rows} now={now} onOpenItem={onOpenItem} onOpenSession={onOpenSession} currentId={currentId} />
     </section>
   );
 }
@@ -146,7 +157,11 @@ export function ClearedTrail({ items, where, now }: {
 
 export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const { view, sessions, runs, now } = props;
-  const [filter, setFilter] = useState<string>(ALL_KEY);
+  const [filter, setFilterState] = useState<string>(props.programme ?? ALL_KEY);
+  const setFilter = (key: string): void => {
+    setFilterState(key);
+    props.onFilter?.(key === ALL_KEY || key === NO_PROGRAMME_KEY ? null : key);
+  };
   if (view === null || sessions === null) {
     return (
       <div className="wl">
@@ -162,7 +177,11 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const groups = groupByProgramme(view.items, questions);
   const hues = fleetHues(heardRuns);
   const filtered = filter !== ALL_KEY && groups.some((g) => keyOf(g.program) === filter);
-  const shown = filtered ? groups.filter((g) => keyOf(g.program) === filter) : groups;
+  // The list an item opens from: the filter's programme, or the combined list (the sessions in no programme hold no item).
+  const list: ItemList = filtered && filter !== NO_PROGRAMME_KEY ? { at: 'waiting', programme: filter } : COMBINED_LIST;
+  // What is drawn is that list's groups (`listGroups`, the one reader the item's steps use too); the questions-only group of
+  // sessions in no programme is the one filter no item list names.
+  const shown = filtered && filter === NO_PROGRAMME_KEY ? groups.filter((g) => g.program === null) : listGroups(list, groups);
   const words = summaryWords(summaryCounts(view.items, questions));
   const empty = groups.length === 0;
   return (
@@ -194,7 +213,8 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
               </nav>
               <div className="wl-groups">
                 {shown.map((g) => (
-                  <Group key={keyOf(g.program)} group={g} runs={runs} now={now} props={props}
+                  <ListGroup key={keyOf(g.program)} group={g} runs={runs} now={now}
+                             onOpenItem={(id) => props.onOpenItem(id, list)} onOpenSession={props.onOpenSession}
                          hue={g.program === null ? null : hues.get(g.program) ?? null} />
                 ))}
               </div>

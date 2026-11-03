@@ -21,6 +21,8 @@ export interface ItemRow {
   id: number; program: string; runId: number | null; raisedBy: string; kind: ItemKind; title: string; why: string;
   how: string[]; options: string[] | null; neededBy: NeededBy; soonLabel: string | null; secretSlot: string | null;
   state: ItemState; answer: string | null; note: string | null; raisedAt: number; tickedAt: number | null; closedAt: number | null;
+  /** A decide item's recommended option and why (plan PL9); NULL for every other kind and for an item raised before it. */
+  recommended: number | null; recommendedWhy: string | null;
 }
 /** One move of one item. `act` is an `ItemAct` or `raise`, `block`, `unblock`. */
 export interface ItemEventRow {
@@ -30,17 +32,19 @@ export interface ItemEventRow {
 export type ItemMoveResult =
   | { ok: true; item: ItemRow }
   | { ok: false; why: ItemMoveRefusal };
-/** What the coordinator gives when it raises an item. */
+/** What the coordinator gives when it raises an item. The recommendation (plan PL9) is optional here and stored NULL when it
+ *  is left out: the route (`parseRaise`) is what requires it of a decide item and refuses it on any other kind. */
 export interface RaiseItemInput {
   program: string; runId: number | null; raisedBy: string; kind: ItemKind; title: string; why: string;
   how: string[]; options: string[] | null; neededBy: NeededBy; soonLabel: string | null; secretSlot: string | null;
+  recommended?: number | null; recommendedWhy?: string | null;
 }
 /** The table's row before the JSON columns are parsed. */
 type ItemRowRaw = Omit<ItemRow, 'how' | 'options'> & { how: string; options: string | null };
 
 const ITEM_COLS =
   'id, program, runId, raisedBy, kind, title, why, how, options, neededBy, soonLabel, secretSlot, state, answer, note, ' +
-  'raisedAt, tickedAt, closedAt';
+  'raisedAt, tickedAt, closedAt, recommended, recommendedWhy';
 
 /** The row's JSON `string[]` columns are written by `raiseItem` alone, from a typed array, so a value that does not
  *  parse as one is a corrupt file, not a distinction to fold: it throws, naming the item, rather than reading as an
@@ -56,6 +60,7 @@ function itemRowOf(r: ItemRowRaw): ItemRow {
     why: r.why, how: list(r.how, 'how'), options: r.options === null ? null : list(r.options, 'options'),
     neededBy: r.neededBy, soonLabel: r.soonLabel, secretSlot: r.secretSlot, state: r.state,
     answer: r.answer, note: r.note, raisedAt: r.raisedAt, tickedAt: r.tickedAt, closedAt: r.closedAt,
+    recommended: r.recommended, recommendedWhy: r.recommendedWhy,
   };
 }
 
@@ -73,9 +78,10 @@ export function raiseItem(db: DatabaseSync, input: RaiseItemInput, now: number):
   return tx(db, () => {
     const res = db.prepare(
       'INSERT INTO operator_items (program, runId, raisedBy, kind, title, why, how, options, neededBy, soonLabel, ' +
-      "secretSlot, state, raisedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+      "secretSlot, state, raisedAt, recommended, recommendedWhy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)",
     ).run(input.program, input.runId, input.raisedBy, input.kind, input.title, input.why, JSON.stringify(input.how),
-      input.options === null ? null : JSON.stringify(input.options), input.neededBy, input.soonLabel, input.secretSlot, now);
+      input.options === null ? null : JSON.stringify(input.options), input.neededBy, input.soonLabel, input.secretSlot, now,
+      input.recommended ?? null, input.recommendedWhy ?? null);
     const id = Number(res.lastInsertRowid);
     writeItemEvent(db, id, now, 'raise', 'coordinator', null);
     return id;

@@ -184,7 +184,8 @@ describe('the Waiting on you list', () => {
   it('a tapped item opens it', () => {
     const { onOpenItem } = open({ view: waitingView({ items: [itemView({ id: 7, title: 'Pick one' })] }) });
     fireEvent.click(screen.getByRole('button', { name: /Pick one/ }));
-    expect(onOpenItem).toHaveBeenCalledWith(7);
+    // The list it was opened from rides along (plan PL9, D-7896): the combined list, unfiltered.
+    expect(onOpenItem).toHaveBeenCalledWith(7, { at: 'waiting', programme: null });
   });
 
   it('the summary counts items by state', () => {

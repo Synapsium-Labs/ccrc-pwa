@@ -38,8 +38,18 @@ describe('raising and reading an item (plan PL2)', () => {
       id, program: 'prog-a', runId, raisedBy: 'lane-a', kind: 'decide', title: 'Turn on the setting',
       why: 'The wave needs it.', how: ['Pick one'], options: ['yes', 'no'], neededBy: 'blocking', soonLabel: null,
       secretSlot: null, state: 'open', answer: null, note: null, raisedAt: NOW, tickedAt: null, closedAt: null,
+      recommended: null, recommendedWhy: null,
     } satisfies ItemRow);
     expect(s.itemById(id + 1)).toBeNull();
+  });
+
+  it('a decide item keeps the option its raiser recommends and why (plan PL9), and an item raised without one reads null', () => {
+    const s = mk();
+    const id = raise(s, { kind: 'decide', options: ['yes', 'no'], recommended: 1, recommendedWhy: 'No costs nothing now.' });
+    expect(s.itemById(id)).toMatchObject({ recommended: 1, recommendedWhy: 'No costs nothing now.' });
+    expect(s.itemsFor('prog-a', NOW).open[0]).toMatchObject({ recommended: 1, recommendedWhy: 'No costs nothing now.' });
+    const before = raise(s, { kind: 'decide', options: ['yes', 'no'] });
+    expect(s.itemById(before)).toMatchObject({ recommended: null, recommendedWhy: null });
   });
 
   it('a secret item keeps its slot and no options', () => {

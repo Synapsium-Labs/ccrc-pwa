@@ -1,7 +1,7 @@
 // The two ladder arms of the Waiting on you routes (desktop-polish PL5a, D-7712): `WaitingRoute` and `ItemRoute` read the
 // fleet store, call the api, and navigate; the screens they render take props only. The store is the test's own.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ApiError } from '../src/lib/apiError';
 import { api } from '../src/lib/api';
 import { createFleetStore } from '../src/stores/fleet';
@@ -201,5 +201,150 @@ describe('the routes\' own paths', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /your value/i }), { target: { value: 'typed on one' } });
     view.rerender(<ItemRouteAt param="2" store={store} />);
     expect((screen.getByRole('textbox', { name: /your value/i }) as HTMLInputElement).value).toBe('');
+  });
+});
+
+describe('moving between items (plan PL9, D-7896; spec §2 "Moving between items", D23)', () => {
+  // prog-b holds the blocking item, so it sorts first: the combined list draws 3, 2, then 4, 1.
+  const ITEMS = [
+    itemView({ id: 1, program: 'prog-a', neededBy: 'later', title: 'One' }),
+    itemView({ id: 2, program: 'prog-b', neededBy: 'soon', title: 'Two' }),
+    itemView({ id: 3, program: 'prog-b', neededBy: 'blocking', title: 'Three' }),
+    itemView({ id: 4, program: 'prog-a', neededBy: 'soon', title: 'Four' }),
+  ];
+  const rig = () => {
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({ items: ITEMS, cleared: [itemView({ id: 9, state: 'done', title: 'Nine' })] }) }));
+    return store;
+  };
+  /** Open item `id` at `url`, as a reload or a shared link would. */
+  const openAt = (url: string, id: number) => {
+    history.replaceState(null, '', url);
+    render(<ItemRouteAt param={String(id)} store={rig()} />);
+    return screen.getByRole('navigation', { name: 'Between items' });
+  };
+  const here = (): string => location.pathname + location.search;
+
+  it('previous and next follow the list it was opened from: the combined list', () => {
+    const nav = openAt('/waiting/2', 2);
+    expect(within(nav).getByText('2 of 4')).toBeTruthy();
+    fireEvent.click(within(nav).getByRole('button', { name: 'Next item' }));
+    expect(here()).toBe('/waiting/4');
+    fireEvent.click(within(nav).getByRole('button', { name: 'Previous item' }));
+    expect(here()).toBe('/waiting/3');
+    fireEvent.click(within(nav).getByRole('button', { name: 'Back to Waiting on you' }));
+    expect(here()).toBe('/waiting');
+  });
+
+  it('previous and next follow the list it was opened from: one programme\'s view, and the way back returns to it', () => {
+    const nav = openAt(`/waiting/4?from=${encodeURIComponent('programme:prog-a')}`, 4);
+    expect(within(nav).getByText('1 of 2')).toBeTruthy();
+    fireEvent.click(within(nav).getByRole('button', { name: 'Next item' }));
+    expect(location.pathname).toBe('/waiting/1');
+    expect(new URLSearchParams(location.search).get('from')).toBe('programme:prog-a');
+    fireEvent.click(within(nav).getByRole('button', { name: /^Back to / }));
+    expect(here()).toBe('/programmes/prog-a');
+  });
+
+  it('previous and next follow the list it was opened from: the side rail\'s filter to one programme', () => {
+    const nav = openAt(`/waiting/3?from=${encodeURIComponent('waiting:prog-b')}`, 3);
+    expect(within(nav).getByText('1 of 2')).toBeTruthy();
+    fireEvent.click(within(nav).getByRole('button', { name: 'Next item' }));
+    expect(location.pathname).toBe('/waiting/2');
+    expect(new URLSearchParams(location.search).get('from')).toBe('waiting:prog-b');
+    fireEvent.click(within(nav).getByRole('button', { name: 'Back to Waiting on you' }));
+    expect(location.pathname).toBe('/waiting');
+    expect(new URLSearchParams(location.search).get('programme')).toBe('prog-b');
+  });
+
+  it('the first item has no previous and the last no next', () => {
+    const first = openAt('/waiting/3', 3);
+    expect((within(first).getByRole('button', { name: 'Previous item' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(first).getByRole('button', { name: 'Next item' }) as HTMLButtonElement).disabled).toBe(false);
+    cleanup();
+    const last = openAt('/waiting/1', 1);
+    expect((within(last).getByRole('button', { name: 'Next item' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(last).getByText('4 of 4')).toBeTruthy();
+  });
+
+  it.each(['programme:prog-a', 'programme:../x', 'nonsense'])('an unknown or stale from (%s) falls back to the combined list', (from) => {
+    const nav = openAt(`/waiting/2?from=${encodeURIComponent(from)}`, 2);
+    expect(within(nav).getByText('2 of 4')).toBeTruthy();
+    fireEvent.click(within(nav).getByRole('button', { name: 'Back to Waiting on you' }));
+    expect(here()).toBe('/waiting');
+  });
+
+  it('the way back is a labelled control at every width, never the chevron the desk shell hides', () => {
+    const nav = openAt('/waiting/2', 2);
+    const back = within(nav).getByRole('button', { name: 'Back to Waiting on you' });
+    expect(back.textContent).toContain('Waiting on you');
+    expect(back.classList.contains('back-btn')).toBe(false); // shell.css hides `.shell-detail .back-btn` at 900 and up
+  });
+
+  it('an item no list holds (recently cleared) keeps its way back, with no position and no steps', () => {
+    const nav = openAt('/waiting/9', 9);
+    expect(within(nav).getByRole('button', { name: 'Back to Waiting on you' })).toBeTruthy();
+    expect(within(nav).queryByText(/ of /)).toBeNull();
+    expect(within(nav).queryByRole('button', { name: 'Next item' })).toBeNull();
+  });
+
+  it('an item that is gone keeps its way back too', () => {
+    history.replaceState(null, '', '/waiting/77');
+    render(<ItemRouteAt param="77" store={rig()} />);
+    expect(screen.getByText('That item is not on the list any more.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Waiting on you' }));
+    expect(here()).toBe('/waiting');
+  });
+
+  /** A screen `width` wide, as the media queries the page asks read it. */
+  const widthIs = (width: number) => vi.stubGlobal('matchMedia', (q: string) => {
+    const min = /min-width:\s*(\d+)px/.exec(q);
+    return { matches: min !== null && width >= Number(min[1]), media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false };
+  });
+
+  it('on a wide screen the list stays beside the item: the list it was opened from, the open item marked', () => {
+    widthIs(1280);
+    openAt(`/waiting/2?from=${encodeURIComponent('waiting:prog-b')}`, 2);
+    const beside = screen.getByRole('complementary', { name: 'The list beside this item' });
+    const rows = within(beside).getAllByRole('button').filter((b) => b.hasAttribute('data-item'));
+    expect(rows.map((r) => r.getAttribute('data-item'))).toEqual(['3', '2']); // prog-b's share, in the list's order
+    expect(rows.find((r) => r.getAttribute('aria-current') === 'page')?.getAttribute('data-item')).toBe('2');
+    fireEvent.click(rows[0]!);
+    expect(location.pathname).toBe('/waiting/3');
+    expect(new URLSearchParams(location.search).get('from')).toBe('waiting:prog-b');
+  });
+
+  it('the combined list beside an item is every programme\'s share, in the combined order', () => {
+    widthIs(1920);
+    openAt('/waiting/4', 4);
+    const beside = screen.getByRole('complementary', { name: 'The list beside this item' });
+    expect(within(beside).getAllByRole('button').filter((b) => b.hasAttribute('data-item')).map((r) => r.getAttribute('data-item')))
+      .toEqual(['3', '2', '4', '1']);
+  });
+
+  it.each([390, 900, 1279])('at %ipx the item is alone, with its way back and its steps', (width) => {
+    widthIs(width);
+    const nav = openAt('/waiting/2', 2);
+    expect(screen.queryByRole('complementary', { name: 'The list beside this item' })).toBeNull();
+    expect(within(nav).getByRole('button', { name: 'Back to Waiting on you' })).toBeTruthy();
+    expect(within(nav).getByText('2 of 4')).toBeTruthy();
+  });
+
+  it('the combined list opens an item with its side rail\'s filter in the link, and keeps the filter in its own URL', () => {
+    history.replaceState(null, '', '/waiting');
+    render(<WaitingRoute store={rig()} />);
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Programmes' })).getByRole('button', { name: /prog-a/ }));
+    expect(here()).toBe('/waiting?programme=prog-a');
+    fireEvent.click(screen.getByRole('button', { name: /Four/ }));
+    expect(location.pathname).toBe('/waiting/4');
+    expect(new URLSearchParams(location.search).get('from')).toBe('waiting:prog-a');
+  });
+
+  it('the combined list reads its filter back from its URL, as the way back leaves it', () => {
+    history.replaceState(null, '', '/waiting?programme=prog-b');
+    render(<WaitingRoute store={rig()} />);
+    expect(screen.queryByRole('button', { name: /Four/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /Two/ })).toBeTruthy();
   });
 });

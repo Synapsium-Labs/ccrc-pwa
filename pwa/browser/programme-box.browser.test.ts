@@ -341,7 +341,7 @@ describe.each(SKINS)('the programme view, opened from the chip in %s', (skin) =>
           expect(m.pending).toBe('spec update pending (PR #77)');
           expect(m.pendingRatio, 'a pending change on the attention tint').toBeGreaterThanOrEqual(4.5);
           expect(m.specLink).toBe('/docs/project-a/specs/2026-10-31-billing-design.md');
-          expect(m.itemLink, 'the change that came from item 3 links to it').toBe('/waiting/3');
+          expect(m.itemLink, 'the change that came from item 3 links to it').toBe('/waiting/3?from=programme%3Abilling'); // naming this view as the list it came from (plan PL9, D-7896)
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();

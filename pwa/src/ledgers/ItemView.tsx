@@ -19,7 +19,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, RadioFieldset, TextInput } from '@ccrc/ui';
 import {
-  ANSWER_MAX, SECRET_VALUE_MAX, WAITS_ON_WORDS, isSecretValue, type ItemView as ItemWire, type SecretSaveAnswer,
+  ANSWER_MAX, SECRET_VALUE_MAX, WAITS_ON_WORDS, isSecretValue, recommendationOf, type ItemView as ItemWire, type SecretSaveAnswer,
   type SecretUnmasked, SECRET_TAIL_MIN,
 } from '../../../shared/ledgers';
 import type { AuthStatus } from '../../../shared/api';
@@ -31,7 +31,7 @@ import { ApiError } from '../lib/apiError';
 import { readAuthStatus } from '../lib/auth';
 import { onPageHidden } from '../lib/pageClock';
 import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
-import { ageWords, itemPills, KIND_WORD } from './ledgerWords';
+import { ageWords, itemPills, KIND_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING } from './ledgerWords';
 import './ledgers.css';
 
 export interface ItemViewProps {
@@ -215,6 +215,18 @@ const NOTE_JOIN = '\n\nNote: ';
 const OWN = 'own';
 const OWN_WORD = 'Your own answer';
 
+/** An option's row text: the option's words, and on the one its raiser recommends the "Recommended" mark (plan PL9, D-7896;
+ *  spec §3.2, D24). The mark is words, never colour alone, and it sits inside the option's own label, so it names that option. */
+function OptionText({ text, recommended }: { text: string; recommended: boolean }): ReactNode {
+  if (!recommended) return text;
+  return (
+    <span className="wi-opt-text" data-recommended="true">
+      {text}
+      <span className="wi-rec">{RECOMMENDED_WORD}</span>
+    </span>
+  );
+}
+
 /** One labelled line of text, with a hint under it. */
 function Field({ label, value, onChange, maxLength, hint }: {
   label: string; value: string; onChange: (v: string) => void; maxLength: number; hint?: string;
@@ -239,6 +251,9 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
 
   const options = item.options ?? [];
   const decide = item.kind === 'decide';
+  // The one reader of the two fields: an item raised before the rule, or from a server before it, has none and draws as before.
+  const rec = recommendationOf(item);
+  const whyId = useId();
   // What the operator chose or typed, trimmed; `null` while a decide has no choice yet. `''` is a field left empty.
   const choice: string | null = decide
     ? (pick === OWN ? own.trim() : pick === null ? null : options[Number(pick.slice(1))] ?? null)
@@ -267,8 +282,20 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
       {ended && <p className="wi-hint">{WAITS_ON_WORDS.ended}</p>}
       {mayTick && decide && (
         <>
+          {/* The reasons come BEFORE the choices and describe them, so they are read before the pick; nothing is picked for
+              the operator, who may take any option or write their own. */}
+          {rec !== null && (
+            <section className="wi-why-rec" aria-label={RECOMMENDED_WHY_HEADING}>
+              <h3 className="wi-h">{RECOMMENDED_WHY_HEADING}</h3>
+              <p id={whyId} className="wi-text">{rec.why}</p>
+            </section>
+          )}
           <RadioFieldset legend="Your decision" name={`item-${item.id}`} optionClassName="wi-opt"
-                         options={[...options.map((o, i) => ({ value: `o${i}`, label: o })), { value: OWN, label: OWN_WORD }]}
+                         {...(rec === null ? {} : { describedBy: whyId })}
+                         options={[
+                           ...options.map((o, i) => ({ value: `o${i}`, label: <OptionText text={o} recommended={rec?.index === i} /> })),
+                           { value: OWN, label: OWN_WORD },
+                         ]}
                          value={pick} onPick={setPick} />
           {pick === OWN && <Field label={OWN_WORD} value={own} onChange={setOwn} maxLength={ANSWER_MAX - noteCost} />}
           <Field label="Note to the coordinator (optional)" value={note} onChange={setNote}

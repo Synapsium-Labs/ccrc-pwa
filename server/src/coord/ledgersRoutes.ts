@@ -27,7 +27,8 @@ import type { NoticeSink } from '../notice.js';
 import { refuseRoute } from '../refuse.js';
 import { LEDGER_ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusal.js';
 import {
-  ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, SECRET_VALUE_MAX, SOON_LABEL_MAX,
+  ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
+  SOON_LABEL_MAX,
   isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, secretAnswer, secretTailOf, tickMailLeftBehind,
   type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy, type SecretUnmasked, type WaitingView,
 } from '../../../shared/ledgers.js';
@@ -74,7 +75,8 @@ const NO_SECRETS: SecretMetaOf = () => null;
 export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale: boolean, secret: OperatorSecretMeta | null = null): ItemView {
   return {
     id: row.id, program: row.program, runId: row.runId, kind: row.kind, title: row.title, why: row.why, how: row.how,
-    options: row.options, neededBy: row.neededBy, soonLabel: row.soonLabel, state: row.state, stale,
+    options: row.options, recommended: row.recommended, recommendedWhy: row.recommendedWhy,
+    neededBy: row.neededBy, soonLabel: row.soonLabel, state: row.state, stale,
     raisedAt: row.raisedAt, tickedAt: row.tickedAt, closedAt: row.closedAt, answer: row.answer, note: row.note,
     secretSlot: row.secretSlot,
     secretSet: secret === null ? null : { at: secret.setAt, tail: secret.tail, masked: secret.masked, ...(secret.why === undefined ? {} : { why: secret.why }) },
@@ -132,6 +134,7 @@ const identityOf = (src: unknown): { byId: string; byUuid: string } | null =>
 /** The first violation in a raise body, or the fields ready to store. Bounds are PL1's constants. */
 function parseRaise(b: Body):
   { ok: true; v: { runId: number | null; kind: ItemKind; title: string; why: string; how: string[]; options: string[] | null;
+    recommended: number | null; recommendedWhy: string | null;
     neededBy: NeededBy; soonLabel: string | null; secretSlot: string | null } } | { ok: false; detail: string } {
   const no = (detail: string) => ({ ok: false, detail }) as const;
   const kind = ITEM_KINDS.find((k) => k === b['kind']);
@@ -159,6 +162,23 @@ function parseRaise(b: Body):
   } else if (options !== null) {
     return no('only a decide item carries options');
   }
+  // The recommendation (plan PL9, spec §3.2, D24): a decide item names the option its raiser recommends, by its 0-based index
+  // among the options, and why it beats each alternative. Both are required of a decide item; a null is "not given", so on
+  // any other kind null is the same as leaving them out, and anything else is refused.
+  const given = (v: unknown): boolean => v !== undefined && v !== null;
+  let recommended: number | null = null;
+  let recommendedWhy: string | null = null;
+  if (kind === 'decide') {
+    const index = b['recommended'];
+    if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= (options as string[]).length) {
+      return no(`a decide item names the option it recommends: recommended is the 0-based index of one of its ${(options as string[]).length} options`);
+    }
+    recommended = index;
+    recommendedWhy = text(b['recommendedWhy'], RECOMMEND_WHY_MAX);
+    if (recommendedWhy === null) return no(`a decide item says why it recommends that option: recommendedWhy is 1 to ${RECOMMEND_WHY_MAX} characters`);
+  } else if (given(b['recommended']) || given(b['recommendedWhy'])) {
+    return no('only a decide item carries a recommendation (recommended and recommendedWhy)');
+  }
   let secretSlot: string | null = null;
   if (b['secretSlot'] !== undefined && b['secretSlot'] !== null) {
     if (typeof b['secretSlot'] !== 'string') return no('secretSlot is a slug');
@@ -180,7 +200,7 @@ function parseRaise(b: Body):
     runId = posInt(b['runId']);
     if (runId === null) return no('runId is a positive integer when given');
   }
-  return { ok: true, v: { runId, kind, title, why, how: how as string[], options, neededBy, soonLabel, secretSlot } };
+  return { ok: true, v: { runId, kind, title, why, how: how as string[], options, recommended, recommendedWhy, neededBy, soonLabel, secretSlot } };
 }
 
 export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: LedgerCoordinatorDeps): void {

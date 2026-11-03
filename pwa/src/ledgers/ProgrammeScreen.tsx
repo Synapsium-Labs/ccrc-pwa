@@ -28,7 +28,7 @@ import { navigate } from '../lib/router';
 import { ROUTES, sessionPath } from '../lib/routes';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { GoalsPanel } from './GoalsPanel';
-import { EMPTY_WORD, NO_FRAME_WORD, groupByProgramme, openRunsOf, questionRows } from './ledgerWords';
+import { EMPTY_WORD, NO_FRAME_WORD, groupByProgramme, listGroups, openRunsOf, questionRows, type ItemList } from './ledgerWords';
 import { Back, itemPath, useHeard, useUnavailable } from './WaitingRoutes';
 import { ClearedTrail, ItemRows } from './WaitingScreen';
 import './ledgers.css';
@@ -82,8 +82,8 @@ function waitsOnSentence(waitsOn: WaitsOn | null): string {
 }
 
 /** The cards' left column: Goals, or the word for why there are none to show. */
-function GoalsCard({ read, held, homeProject, heldItems }: {
-  read: GoalsRead; held: GoalsView | null; homeProject: string | null; heldItems: ReadonlySet<number>;
+function GoalsCard({ read, held, homeProject, heldItems, list }: {
+  read: GoalsRead; held: GoalsView | null; homeProject: string | null; heldItems: ReadonlySet<number>; list: ItemList;
 }): ReactNode {
   // The frame's copy for THIS programme wins whenever the frame has one: the frame is re-sent on every spec pin, change and merge,
   // so it is never older than the one fetch. The fetch answers only for a programme the frame does not list (a programme with a
@@ -99,13 +99,13 @@ function GoalsCard({ read, held, homeProject, heldItems }: {
       </section>
     );
   }
-  return <GoalsPanel goals={goals} homeProject={homeProject} itemHref={(id) => (heldItems.has(id) ? itemPath(id) : null)} />;
+  return <GoalsPanel goals={goals} homeProject={homeProject} itemHref={(id) => (heldItems.has(id) ? itemPath(id, list) : null)} />;
 }
 
 /** The right column: this programme's open items and its sessions' questions, or what the programme waits on instead. */
-function WaitingCard({ slug, view, sessions, runs, unavailable, now }: {
+function WaitingCard({ slug, view, sessions, runs, unavailable, now, list }: {
   slug: string; view: WaitingView | null; sessions: readonly FleetSession[] | null; runs: readonly RunSummary[] | null;
-  unavailable: string | null; now: number;
+  unavailable: string | null; now: number; list: ItemList;
 }): ReactNode {
   if (view === null || sessions === null) {
     return (
@@ -118,7 +118,8 @@ function WaitingCard({ slug, view, sessions, runs, unavailable, now }: {
     );
   }
   const heard = runs ?? NO_RUNS;
-  const group = groupByProgramme(view.items, questionRows(sessions, heard)).find((g) => g.program === slug) ?? null;
+  // This programme's group as its view draws it (`listGroups`), the one reader the item's previous and next read too.
+  const group = listGroups(list, groupByProgramme(view.items, questionRows(sessions, heard)))[0] ?? null;
   const waiting = group?.waiting ?? 0;
   const cleared = view.cleared.filter((c) => c.program === slug);
   // What the programme waits on, over ALL its runs: `programmeWaitsOn` leaves the finished ones out itself.
@@ -130,7 +131,7 @@ function WaitingCard({ slug, view, sessions, runs, unavailable, now }: {
         <p className="pv-none">{waitsOnSentence(waitsOn)}</p>
       )}
       {group !== null && group.rows.length > 0 && (
-        <ItemRows rows={group.rows} now={now} onOpenItem={(id) => navigate(itemPath(id))} onOpenSession={(id) => navigate(sessionPath(id))} />
+        <ItemRows rows={group.rows} now={now} onOpenItem={(id) => navigate(itemPath(id, list))} onOpenSession={(id) => navigate(sessionPath(id))} />
       )}
       <ClearedTrail items={cleared} now={now} />
     </section>
@@ -149,6 +150,8 @@ export function ProgrammeScreen({ slug, store = useFleetStore }: { slug: string;
   const held = view?.goals.find((g) => g.program === slug) ?? null;
   const heldItems = new Set<number>([...(view?.items ?? NO_ITEMS), ...(view?.cleared ?? NO_ITEMS)].map((i) => i.id));
   const hue = fleetHues(heard).get(slug) ?? 'none';
+  // The list an item opened here names, so its way back and its steps stay in this programme (plan PL9, D-7896).
+  const list: ItemList = { at: 'programme', programme: slug };
   return (
     <div className="wl pv" data-program={slug} data-hue={hue}>
       <header className="pv-head" data-hue={hue}>
@@ -159,9 +162,9 @@ export function ProgrammeScreen({ slug, store = useFleetStore }: { slug: string;
       </header>
       <div className="pv-two">
         <div className="pv-card">
-          <GoalsCard read={read} held={held} homeProject={homeProjectOf(slug, heard)} heldItems={heldItems} />
+          <GoalsCard read={read} held={held} homeProject={homeProjectOf(slug, heard)} heldItems={heldItems} list={list} />
         </div>
-        <WaitingCard slug={slug} view={view} sessions={sessions} runs={runs} unavailable={unavailable} now={Date.now()} />
+        <WaitingCard slug={slug} view={view} sessions={sessions} runs={runs} unavailable={unavailable} now={Date.now()} list={list} />
       </div>
     </div>
   );

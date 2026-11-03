@@ -263,3 +263,70 @@ describe('the item view', () => {
     expect(document.body.textContent).not.toMatch(/ending ab12/);
   });
 });
+
+describe('the recommendation on a decide item (plan PL9, D-7896; spec §3.2, D24)', () => {
+  const WHY = 'Keeping the order lands the reviewed waves first; the library first would hold two reviews for a week.';
+  const decide = (over: Partial<ReturnType<typeof itemView>> = {}) =>
+    itemView({ kind: 'decide', options: ['Library first', 'Keep the order', 'Split the wave'], recommended: 1, recommendedWhy: WHY, ...over });
+
+  it('the item view marks the recommended option and shows its reasons beside the choices, before the pick', () => {
+    show(decide());
+    const marks = screen.getAllByText('Recommended');
+    expect(marks).toHaveLength(1);
+    // The mark is inside the recommended option's own row, so it names that option and no other.
+    expect(marks[0]!.closest('label')?.textContent).toContain('Keep the order');
+    expect(screen.getByRole('radio', { name: /Keep the order/ }).closest('label')?.querySelector('[data-recommended="true"]')).not.toBeNull();
+    expect(screen.getByRole('radio', { name: /Library first/ }).closest('label')?.querySelector('[data-recommended]')).toBeNull();
+    // The choices name the reasons as their description, so a screen reader hears why beside them.
+    const group = screen.getByRole('group', { name: 'Your decision' });
+    expect(document.getElementById(group.getAttribute('aria-describedby') ?? '')?.textContent).toContain(WHY);
+    // The reasons are on screen before anything is picked, in the decision's panel, and nothing is picked for the operator.
+    const why = screen.getByRole('region', { name: 'Why it is recommended' });
+    expect(why.textContent).toContain(WHY);
+    expect(screen.getByRole('group', { name: 'Your decision' }).closest('section')?.contains(why)).toBe(true);
+    expect(screen.getAllByRole('radio').some((r) => (r as HTMLInputElement).checked)).toBe(false);
+    expect((screen.getByRole('button', { name: 'Mark done' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('the operator may still pick another option, and the answer is that option\'s words alone', async () => {
+    const { onTick } = show(decide());
+    fireEvent.click(screen.getByRole('radio', { name: /Split the wave/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Mark done' }));
+    await waitFor(() => expect(onTick).toHaveBeenCalledWith('Split the wave'));
+    cleanup();
+    const second = show(decide());
+    fireEvent.click(screen.getByRole('radio', { name: /Keep the order/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Mark done' }));
+    await waitFor(() => expect(second.onTick).toHaveBeenCalledWith('Keep the order')); // never "Keep the order Recommended"
+  });
+
+  it('or write their own', async () => {
+    const { onTick } = show(decide());
+    fireEvent.click(screen.getByRole('radio', { name: 'Your own answer' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Your own answer' }), { target: { value: 'Neither: wait a week' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark done' }));
+    await waitFor(() => expect(onTick).toHaveBeenCalledWith('Neither: wait a week'));
+  });
+
+  it('an item raised before the rule draws as before: no mark and no reasons', () => {
+    show(decide({ recommended: null, recommendedWhy: null }));
+    expect(screen.queryByText('Recommended')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Why it is recommended' })).toBeNull();
+    expect(screen.getAllByRole('radio').map((r) => r.closest('label')?.textContent)).toEqual(['Library first', 'Keep the order', 'Split the wave', 'Your own answer']);
+  });
+
+  it('an item from a server before PL9, which sends neither field, draws as before too', () => {
+    const { recommended: _r, recommendedWhy: _w, ...older } = decide();
+    show(older as ReturnType<typeof itemView>);
+    expect(screen.queryByText('Recommended')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Why it is recommended' })).toBeNull();
+  });
+
+  it('a long reason and six options all draw, the mark on the sixth', () => {
+    const six = ['One', 'Two', 'Three', 'Four', 'Five', 'Six'];
+    show(decide({ options: six, recommended: 5, recommendedWhy: 'x'.repeat(2000) }));
+    expect(screen.getAllByRole('radio')).toHaveLength(7);
+    expect(screen.getByText('Recommended').closest('label')?.textContent).toContain('Six');
+    expect(screen.getByRole('region', { name: 'Why it is recommended' }).textContent).toContain('x'.repeat(2000));
+  });
+});

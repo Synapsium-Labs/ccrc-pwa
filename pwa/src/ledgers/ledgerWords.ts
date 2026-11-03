@@ -6,7 +6,7 @@
 //
 // An item's state is its `state` column only (plan PL5b R2): `Came back` is an OPEN item whose latest coordinator move was
 // a return, read from its history, never from a field that keeps the last round's value.
-import type { FleetSession, RunSummary } from '../../../shared/api';
+import { shapeProgramSlug, type FleetSession, type RunSummary } from '../../../shared/api';
 import { orderItems, waitingCount, type ItemKind, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { operatorAsk } from '../fleet/rollup';
 import { sessionLabel } from '../fleet/sessionLabel';
@@ -30,6 +30,9 @@ export const CLEARED_HEADING = 'Recently cleared';
 export const EMPTY_WORD = 'Nothing needs you.';
 export const NO_FRAME_WORD = 'Waiting for the first update from the server…';
 export const NO_PROGRAMME_WORD = 'Not in a programme';
+/** A decide item's recommended option (plan PL9, D-7896; spec §3.2, D24): the mark on it, and the heading of its reasons. */
+export const RECOMMENDED_WORD = 'Recommended';
+export const RECOMMENDED_WHY_HEADING = 'Why it is recommended';
 
 /** What a pill's colour means; a pill always says it in words too, so no state is read out of colour alone. */
 export type PillTone = 'blocking' | 'soon' | 'later' | 'checking' | 'stale' | 'bounced' | 'ask';
@@ -183,3 +186,74 @@ export function ageWords(at: number, now: number): string {
   const h = Math.floor(m / 60);
   return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
 }
+
+// ── moving between items (plan PL9, D-7896; spec §2 "Moving between items", D23) ───────────────────────────────────────────
+//
+// An opened item steps to the previous and next item OF THE LIST IT WAS OPENED FROM, in that list's own order and filter. There
+// is ONE ORDER: `groupByProgramme`'s groups, which the combined list, its side rail's filter and the programme view all draw, read
+// through `listGroups`; the neighbours are read off those same groups, so no second ordering exists to drift from the drawn one.
+// A session's question is a row of the list but not an item (it opens its session), so the steps go from item to item.
+
+/** The list an item was opened from: the combined list, unfiltered (`programme: null`) or filtered by its side rail to one
+ *  programme, or one programme's own view. */
+export type ItemList =
+  | { readonly at: 'waiting'; readonly programme: string | null }
+  | { readonly at: 'programme'; readonly programme: string };
+
+/** The combined list, unfiltered: where an item opened with no list, or with one this page cannot read, steps and goes back. */
+export const COMBINED_LIST: ItemList = { at: 'waiting', programme: null };
+
+const isSlug = (s: string): boolean => { const shaped = shapeProgramSlug(s); return shaped.ok && shaped.slug === s; };
+
+/** The list as one word for the item's URL (`?from=`), so a reload or a shared link keeps it: `waiting`, `waiting:<slug>`,
+ *  `programme:<slug>`. A slug never holds `:` (`shapeProgramSlug`), so the word reads back unambiguously. */
+export function fromWord(list: ItemList): string {
+  if (list.at === 'programme') return `programme:${list.programme}`;
+  return list.programme === null ? 'waiting' : `waiting:${list.programme}`;
+}
+
+/** The list a `from` word names, or the combined list for a word that names none (absent, unknown or malformed). */
+export function listOfFromWord(word: string | null): ItemList {
+  if (word === 'waiting') return COMBINED_LIST;
+  const m = word === null ? null : /^(waiting|programme):([^:]+)$/.exec(word);
+  if (m === null || !isSlug(m[2]!)) return COMBINED_LIST;
+  return m[1] === 'programme' ? { at: 'programme', programme: m[2]! } : { at: 'waiting', programme: m[2]! };
+}
+
+/** THE GROUPS A LIST DRAWS, in its order, from `groupByProgramme`'s: every group for the combined list; the programme's own group
+ *  for its filter or its view. A filter to a programme with no group draws every group (the side rail offers only programmes that
+ *  have one, so this is a stale link); a programme's view draws none, and says what the programme waits on instead. */
+export function listGroups(list: ItemList, groups: readonly ProgrammeGroup[]): readonly ProgrammeGroup[] {
+  if (list.programme === null) return groups;
+  const mine = groups.filter((g) => g.program === list.programme);
+  return mine.length > 0 || list.at === 'programme' ? mine : groups;
+}
+
+/** Where an item sits in a list: the list it was resolved to, its 0-based index among the list's items, how many items the list
+ *  holds, and the ids either side (`null` past either end). */
+export interface ItemPlace {
+  readonly list: ItemList;
+  readonly index: number;
+  readonly total: number;
+  readonly prev: number | null;
+  readonly next: number | null;
+}
+
+/** The item's place in the list it was opened from, read off the groups that list draws (`listGroups`). A list that does not
+ *  hold the item (a stale link: an item of another programme, or a programme with no items now) falls back to the combined list;
+ *  `null` when that does not hold it either (an item recently cleared, or gone), which has a way back and no steps. */
+export function itemPlace(id: number, list: ItemList, groups: readonly ProgrammeGroup[]): ItemPlace | null {
+  // A list naming a programme with no group is stale whatever it draws: it resolves to the combined list, so the way back never
+  // returns to a filter the side rail no longer offers.
+  const named = list.programme === null || groups.some((g) => g.program === list.programme) ? list : COMBINED_LIST;
+  const tries = named.programme === null ? [named] : [named, COMBINED_LIST];
+  for (const l of tries) {
+    const ids = listGroups(l, groups).flatMap((g) => g.rows).flatMap((r) => (r.kind === 'item' ? [r.item.id] : []));
+    const index = ids.indexOf(id);
+    if (index >= 0) return { list: l, index, total: ids.length, prev: ids[index - 1] ?? null, next: ids[index + 1] ?? null };
+  }
+  return null;
+}
+
+/** "3 of 6": the place as the operator reads it. */
+export const placeWords = (place: ItemPlace): string => `${place.index + 1} of ${place.total}`;
