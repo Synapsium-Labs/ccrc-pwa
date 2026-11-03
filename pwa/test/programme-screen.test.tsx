@@ -176,6 +176,15 @@ describe('the programme view: its share of the list', () => {
     expect(screen.queryByText('Another programme\'s item')).toBeNull();
   });
 
+  it('a programme that leads the combined list (a blocking item) does not take this view\'s rows', () => {
+    const lead = [itemView({ id: 30, program: 'prog-a', title: 'Mine', neededBy: 'later' }),
+      itemView({ id: 31, program: 'prog-b', title: 'Blocks another programme', neededBy: 'blocking' })];
+    render(<ProgrammeScreen slug="prog-a" store={heard({ waiting: waitingView({ items: lead }) })} />);
+    expect(screen.getByRole('button', { name: /Mine/ })).toBeTruthy();
+    expect(screen.queryByText('Blocks another programme')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Waiting on you · 1' })).toBeTruthy();
+  });
+
   it('counts a session\'s question of this programme beside the items, and lists it', () => {
     const asker = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'Keep the old flag?', bucketSince: NOW - 6 * MIN });
     const runs = [runRow({ id: 1, program: 'prog-a', state: 'working', sessionId: 'project-a-ask', claimedBy: 'project-a-coord' })];
