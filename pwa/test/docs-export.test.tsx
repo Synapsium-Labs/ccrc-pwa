@@ -13,7 +13,7 @@ import {
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import { detachUrls } from '../src/docs/docsLinks';
 import {
-  DOC_LINK_INERT_SENTENCE, ENTRY_BADGE_TEXT, EXPORT_MISSING_SENTENCE, EXPORT_PLAIN_SENTENCE, EXPORT_TEXT, fillSentence,
+  DOC_IMAGE_TEXT, DOC_LINK_INERT_SENTENCE, ENTRY_BADGE_TEXT, EXPORT_MISSING_SENTENCE, EXPORT_PLAIN_SENTENCE, EXPORT_TEXT, fillSentence,
 } from '../src/docs/docsText';
 import { buildExport, type ExportBodyInput, type ExportInput, type ExportLimits, type ExportResult } from '../src/docs/export/buildExport';
 import { exportColouring, type ExportColouring } from '../src/docs/export/colouring';
@@ -643,6 +643,42 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     expect(labels[0]?.endsWith('(page highlighting limit)')).toBe(false);
     expect(doc.querySelector('meta[name="ccrc:plain-page-ceiling"]')?.getAttribute('content')).toBe('1');
     expect(result.notes.some((n) => n.startsWith('1 code block left plain'))).toBe(true);
+  });
+
+  it('a draft image is captioned "draft", and the banner of a draft file says how many uncommitted images it embeds (spec 4.17 "The banner", "Images")', async () => {
+    const tree = treeOk({
+      entries: [entry('specs', 'a.md', { draft: draftOf('modified') }), entry('specs', 'x.png', { draft: draftOf('modified') }),
+        entry('specs', 'y.png')],
+      drafts: holder(),
+    });
+    const url = '/docs/demo/specs/a.md?ref=main';
+    const page = leafAt(url);
+    const pin = pinFor(tree, page);
+    const xPin = pinFor(tree, leafAt('/docs/demo/specs/x.png?ref=main'));
+    if (pin === null || xPin === null) throw new Error('fixture');
+    expect(xPin.kind).toBe('draft');
+    const provenance = exportProvenance({ tree, page, pin, show: null, exportedAt: NOW, readAt: NOW, plainView: true });
+    const assets = createExportAssets();
+    const raster = { s: 'loaded', asset: { kind: 'raster', bytes: PNG, mime: 'image/png' } } as const;
+    assets.track(docsApi.file('demo', xPin)).report(raster);
+    const yPin = pinFor(tree, leafAt('/docs/demo/specs/y.png?ref=main'));
+    if (yPin === null) throw new Error('fixture');
+    assets.track(docsApi.file('demo', yPin)).report(raster);
+    const { doc } = await built(inputOf(treeBody('![x](x.png) ![y](y.png)\n', tree, url), { provenance, assets }), WIDE);
+    expect(doc.querySelectorAll('article img')).toHaveLength(2);
+    const captions = [...doc.querySelectorAll('.ccrc-export-caption')];
+    expect(captions.map((c) => c.textContent)).toEqual([DOC_IMAGE_TEXT.draft]);
+    expect(captions[0]?.previousElementSibling?.getAttribute('alt')).toBe('x');
+    const banner = doc.querySelector('.ccrc-export-draft')?.textContent ?? '';
+    expect(banner.endsWith(fillSentence(EXPORT_TEXT.bannerImages, { k: 1, s: '' }))).toBe(true);
+    const noImages = await built(inputOf(treeBody('# A\n', tree, url), { provenance }), WIDE);
+    expect(noImages.doc.querySelector('.ccrc-export-draft')?.textContent).not.toContain('uncommitted image');
+  });
+
+  it('a draft raster leaf carries the "draft" caption after its image', async () => {
+    const { doc } = await built(inputOf({ kind: 'image', alt: 'x.png', draft: true, image: { kind: 'raster', bytes: PNG, mime: 'image/png' } }));
+    expect(doc.querySelector('.ccrc-export-caption')?.textContent).toBe(DOC_IMAGE_TEXT.draft);
+    expect(doc.querySelector('img')?.nextElementSibling?.className).toBe('ccrc-export-caption');
   });
 
   it("a worker's hostile HTML is refused on receipt, and a forged plain string is drawn as text: either way plain, counted failed (M4.EX18)", async () => {
