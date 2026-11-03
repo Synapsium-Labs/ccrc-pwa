@@ -288,6 +288,24 @@ AUTH_SECRET_WRITTEN=0
 # terminal state of `_auth_setup_token`; without this flag the backstop would
 # stamp `failed: the mint exited 143` and break the contract it exists to keep.
 AUTH_EXPIRED=0
+# THE CANCEL TRAP NEVER RUNS ITS WORK INSIDE A TIMED `read`. The pump spends
+# nearly all of a sign-in in `read -t`, so that is where `auth-cancel`'s TERM
+# (or the pane's HUP) nearly always lands, and bash runs a trap from inside
+# that builtin with its timeout still armed. A subshell the trap forks
+# inherits the armed timeout: when the deadline passes while the publish's
+# `( jq … > tmp )` runs, the child either crashes (SIGBUS, measured) or jumps
+# back into the pump loop as a CLONE of this helper, still holding the code
+# channel, and `cancelled` is never written. The status file then says
+# `waiting-code` after a cancel was accepted, and the lane reads as a sign-in
+# in progress until the attempt ages out. MEASURED on bash 5.3 with a 10 ms
+# tick (`ccd-account-auth.test.ts`): the publish done from the trap itself
+# lost the write on 21 of 30 signals; deferred, on none. So while a timed read
+# is in flight (`AUTH_IN_READ`), the trap only records the signal, and
+# `_auth_read` runs `_auth_cancelled` the moment the read returns, from
+# ordinary control flow. Everywhere else the trap runs it at once, as it
+# always did.
+AUTH_IN_READ=0
+AUTH_SIGNALLED=0
 
 _auth_publish() {   # -> $AUTH_DIR/$AUTH_ID.json
   local tmp
@@ -347,7 +365,21 @@ _auth_end() {   # <done|expired> <rc> — a terminal state that is not a refusal
   exit "$2"
 }
 
-_auth_cancelled() {   # the trap. `tmux kill-session` sends SIGHUP to the pane.
+_auth_on_signal() {   # the trap: HUP, INT and TERM. A timed read defers it (see AUTH_IN_READ).
+  if (( AUTH_IN_READ )); then AUTH_SIGNALLED=1; return 0; fi
+  _auth_cancelled
+}
+
+_auth_read() {   # <read's own arguments…> — `IFS= read`, with the cancel trap held until it returns
+  local r=0
+  AUTH_IN_READ=1
+  IFS= read "$@" || r=$?
+  AUTH_IN_READ=0
+  (( ! AUTH_SIGNALLED )) || _auth_cancelled
+  return "$r"
+}
+
+_auth_cancelled() {   # the cancel. `tmux kill-session` sends SIGHUP to the pane.
   AUTH_STATE=cancelled; AUTH_ERROR=''
   _auth_publish || true
   # AND IT CLOSES THE CHANNEL (D-2737). This trap used to `exit 0` straight past
@@ -759,8 +791,8 @@ _auth_forward_code() {   # the operator's code: in on fd 7, out on fd 9, never o
   # the operator reads the URL. Without the peek this call spends a whole TICK
   # blocked on fd 7 every time round the loop, which halves the rate at which
   # the child's stream reaches the pane for the entire minutes-long wait.
-  IFS= read -t 0 -u 7 2>/dev/null || return 0
-  IFS= read -r -t "$CCRC_AUTH_TICK" -u 7 code || return 0
+  _auth_read -t 0 -u 7 2>/dev/null || return 0
+  _auth_read -r -t "$CCRC_AUTH_TICK" -u 7 code || return 0
   [[ -n "$code" ]] || return 0
   # NOTHING NAMED THE CODE REACHES A STREAM. It goes down fd 9 and nowhere
   # else; the pane and the transcript get the substitution line instead — the
@@ -845,7 +877,7 @@ _auth_pump() {   # the one loop: the child's stream out, the operator's code in
       return 0
     fi
     line=''
-    IFS= read -r -t "$CCRC_AUTH_TICK" -u 8 line; rc=$?
+    _auth_read -r -t "$CCRC_AUTH_TICK" -u 8 line; rc=$?
     if (( rc == 0 )); then
       _auth_line "$pending$line" "$shown"; pending=''; shown=''
     elif (( rc > 128 )); then
@@ -1379,7 +1411,7 @@ _auth_main() {
   if [[ -n "$AUTH_ATTEMPT" && -z "$AUTH_IN_PANE" ]] && (( AUTH_PANE_ARM )); then
     _auth_pane_outer "$method"
   fi
-  trap '_auth_cancelled' HUP INT TERM
+  trap '_auth_on_signal' HUP INT TERM
   case "$method" in
     login)        _auth_login ;;
     setup-token)  _auth_setup_token ;;

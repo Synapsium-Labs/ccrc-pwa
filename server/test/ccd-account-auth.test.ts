@@ -537,6 +537,39 @@ describe('ccd-account-auth — the two states only a live run can show', () => {
       child.kill('SIGKILL');
     }
   }, 60_000);
+
+  // A SIGNAL THAT LANDS INSIDE THE PUMP'S TIMED `read` STILL ENDS `cancelled`, every time. The pump spends almost all
+  // of a sign-in in `read -t`, so that is where a cancel's TERM nearly always arrives. bash (5.2 and later) runs a
+  // trap from inside that builtin with its timeout still armed, and a subshell the trap forks inherits it: the
+  // publish's `( jq … > tmp )` then either crashes or jumps back into the pump loop as a clone of the helper, so
+  // `cancelled` is never written and the status file keeps saying `waiting-code` after the cancel was accepted.
+  // A tick of 10 ms puts the read's deadline inside the trap's own publish, which is the window. MEASURED on bash 5.3
+  // with the trap doing the publish itself: 21 of these 30 rounds lost the write, so a regression is red here.
+  it('publishes cancelled for every signal that lands inside the pump\'s timed read', async () => {
+    plantLauncher('claude', LOGIN_REPLAY);
+    const lost: string[] = [];
+    for (let round = 0; round < 30; round++) {
+      fs.rmSync(path.join(REG(h.home), '.auth', 'claude-a.json'), { force: true });
+      const child = spawn('bash', [HELPER, 'claude-a', 'login'], {
+        cwd: h.home,
+        env: ghContainedEnv(h.home,
+          { ...process.env, HOME: h.home, CCRC_AUTH_TICK: '0.01', CCRC_AUTH_TIMEOUT: '30',
+            CLAUDE_CODE_OAUTH_TOKEN: PARENT_TOKEN },
+          { systemd: true, tmux: true }),
+        stdio: 'ignore', detached: true,
+      });
+      try {
+        expect(await waitForState('claude-a', 'waiting-code', 20_000)).toBe('waiting-code');
+        await settle(round % 7);
+        child.kill('SIGTERM');
+        const got = await waitForState('claude-a', 'cancelled', 5_000);
+        if (got !== 'cancelled') lost.push(`round ${round}: ${got}`);
+      } finally {
+        try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* gone */ }
+      }
+    }
+    expect(lost, 'a signal inside the timed read lost the cancelled write').toEqual([]);
+  }, 300_000);
 });
 
 describe('ccd-account-auth — the code goes down the pipe, and ccrc holds nothing', () => {
