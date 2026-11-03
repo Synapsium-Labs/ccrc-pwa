@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { OrphanTreeBeat } from '../src/orphanTreeBeat.js';
 import { ORPHAN_CENSUS_PRESSURE_MS } from '../src/orphanTreeLane.js';
+import { parsedFile } from './scan/symbols.js';
 
 type Block = { pressure: boolean } | null;
 type Deps = ReturnType<ConstructorParameters<typeof OrphanTreeBeat>[0]>;
@@ -46,5 +47,16 @@ describe('the orphan-tree beat and the disk alarm', () => {
     expect(h.censuses()).toBe(1);
     h.set({ pressure: true }); h.advance(ORPHAN_CENSUS_PRESSURE_MS); await h.beat.pass();
     expect(h.censuses()).toBe(2);
+  });
+
+  it("watch.ts builds the beat with the disk alarm's block", () => {
+    const p = parsedFile('server/src/watch.ts');
+    const at = p.text.indexOf('new OrphanTreeBeat(');
+    expect(at, 'one construction').toBeGreaterThan(-1);
+    expect(p.text.indexOf('new OrphanTreeBeat(', at + 1), 'only one construction').toBe(-1);
+    const end = p.text.indexOf(';', at);
+    const block = p.calls.find((c) => c.start > at && c.end < end && c.callee === 'this.diskAlarm.block');
+    expect(block, 'the third thunk calls this.diskAlarm.block()').toBeDefined();
+    expect(p.text.slice(block!.end, end).replace(/\s/g, ''), 'it is the last argument').toBe(')');
   });
 });
