@@ -70,7 +70,7 @@
 // THE PLACEHOLDER DOOR (D-161). With no lane to show the strip is exactly one `go-accounts` door and never renders
 // nothing. As a full-width readout of meters the strip read as DATA rather than navigation, so an operator hunting for
 // the passkey enrolment button on the screen behind it never found it. FleetScreen's header now carries a named
-// control ("Your sign-in and accounts"), and PasskeyNotice is a third route in the one posture that most needs it, but
+// control ("Account — your sign-in and accounts"), and PasskeyNotice is a third route in the one posture that most needs it, but
 // the state the strip used to bail out on entirely (every lane markered `-disabled`, or no poll landed or succeeded
 // yet) is exactly the state the Accounts screen exists to explain (its bespoke "<home-able accounts>, all disabled"
 // copy, see homeAbleLabelList in lib/accounts.ts). So the link stays mounted, with a quiet placeholder body, instead

@@ -121,6 +121,7 @@ const BAD: Record<string, string> = {
   CCRC_GRAPH_GATE_MAX_DIFF_PCT: '25%',
   CCRC_GRAPH_GATE_MAX_DENIALS: 'three',
   CCRC_GRAPH_CARD_DIFF_LIST_MAX: '020',
+  CCRC_GRAPH_PRESSURE_MAX: '101',
 };
 const GOOD: Record<string, string> = {
   CCRC_GRAPH_STORE: '/srv/graphs',
@@ -145,6 +146,7 @@ const GOOD: Record<string, string> = {
   CCRC_GRAPH_GATE_MAX_DIFF_PCT: '0',
   CCRC_GRAPH_GATE_MAX_DENIALS: '0',
   CCRC_GRAPH_CARD_DIFF_LIST_MAX: '0',
+  CCRC_GRAPH_PRESSURE_MAX: '0',
 };
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -260,13 +262,16 @@ const KNOWN: Record<(typeof SCANNED)[number], string[]> = {
 };
 
 describe('graph settings: _graph_knobs reads them through _ccrc_knob, _gr_knobs validates them (D-7348, spec §5)', () => {
-  it('CCRC_SETTINGS holds the 22 graph keys of spec §5.4, in its order, and _graph_knobs prints one line per key in that order', () => {
-    expect(SPEC_KEYS).toHaveLength(22);
+  it('CCRC_SETTINGS holds the 23 graph keys of spec §5.4, in its order, and _graph_knobs prints one line per key in that order', () => {
+    // 22 -> 23: CCRC_GRAPH_PRESSURE_MAX, the pass's host-pressure limit (D-7876).
+    expect(SPEC_KEYS).toHaveLength(23);
     const m = /^CCRC_SETTINGS=\(([^)]*)\)$/m.exec(read('ccd/ccrc'));
     const settings = m ? m[1].split(' ').filter((w) => w !== '') : [];
     expect(settings.filter((s) => s.startsWith('CCRC_GRAPH_')), 'the graph keys of CCRC_SETTINGS').toEqual(SPEC_KEYS);
     // GR2's count, held as it was: the test box keys TB1 appends after these (D-7403) are counted by testbox-knobs.test.ts.
-    expect(settings.filter((s) => !s.startsWith('CCRC_TESTBOX_')), 'counted exit: CCRC_SETTINGS 21 -> 43 (wave 29 added four)').toHaveLength(43);
+    // D-7857 adds CCRC_CARRY_COPY_WARN_BYTES, outside the graph and test box keys: 43 -> 44; D-7876 adds
+    // CCRC_GRAPH_PRESSURE_MAX, a graph key: 44 -> 45.
+    expect(settings.filter((s) => !s.startsWith('CCRC_TESTBOX_')), 'counted exit: CCRC_SETTINGS 21 -> 43 (wave 29 added four), 44 with D-7857, 45 with D-7876').toHaveLength(45);
     expect(raw(box()).map((f) => f[0])).toEqual(SPEC_KEYS);
   });
 

@@ -452,6 +452,30 @@ describe('the lane schedule census (D-5862)', () => {
     expect(laneClockReported(tree).map((x) => x.line)).toEqual([21]);
   });
 
+  it('FIXTURE: a disk-retention beat\'s named clock and guard, and an unnamed clock its class compares with a constant, are reported (D-7895)', () => {
+    const beats = mkdtempSync(path.join(tmpdir(), 'consolidation-census-beats-'));
+    try {
+      mkdirSync(path.join(beats, 'server/src'), { recursive: true });
+      writeFileSync(path.join(beats, 'server/src/staleArchiveBeat.ts'), [
+        'export class StaleArchiveBeat {',
+        '  private last = 0;',                                                    // 2: a named clock
+        '  private sweeping = false;',                                            // 3: a named guard
+        '  private lastRun: number | null = null;',                               // 4: an unnamed nullable clock: its comparison is the site
+        '  private label = \'\';',                                                // 5: neither
+        '  m(now: number): void {',
+        '    if (this.lastRun !== null && now - this.lastRun < SWEEP_MS) return;', // 7: the unnamed clock's shape
+        '    if (now - other.last < SWEEP_MS) return;',                           // 8: another object: not seen
+        '  }',
+        '}',
+        'class Elsewhere { private last = 0; m(now: number): void { if (now - this.last < SWEEP_MS) return; } }', // 11: another class
+      ].join('\n'));
+      writeFileSync(path.join(beats, 'server/src/diskAlarmLane.ts'), 'export class DiskAlarmLane {\n  private lastSweep = 0;\n}\n');
+      const disk = 'server/src/diskAlarmLane.ts';
+      const stale = 'server/src/staleArchiveBeat.ts';
+      expect(laneClockReported(beats).map((x) => [x.file, x.line])).toEqual([[disk, 2], [stale, 2], [stale, 3], [stale, 7]]);
+    } finally { rmSync(beats, { recursive: true, force: true }); }
+  });
+
   it('FIXTURE: the structural query finds an unnamed clock compared with a constant, the exempt gap rule and another object aside', async () => {
     expect(laneClockShapes(tree).map((x) => x.line)).toEqual([10, 11, 12, 13, 15, 16]);
   });
@@ -472,7 +496,7 @@ describe('the lane schedule census (D-5862)', () => {
     const fields = laneClockFields();
     show('laneClockFields', fields);
     expect(fields).toEqual([]);
-    expect(laneClockReported(), 'DelegationLane#lastSweepAt is the `delegation` row of LANE_SCHEDULE').toEqual([]);
+    expect(laneClockReported(), 'DelegationLane#lastSweepAt and the three disk-retention beats\' clocks are rows of LANE_SCHEDULE').toEqual([]);
     expect(declaredDerivations()).toHaveLength(3);
   });
 });

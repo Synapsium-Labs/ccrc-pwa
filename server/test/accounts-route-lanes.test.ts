@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { SECRET_MASK, type AccountsResponse } from '../../shared/api.js';
+import { ACCOUNT_AUTH_CAP, ACCOUNT_CAPS, SECRET_MASK, type AccountsResponse } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
 import { accountsConnect } from '../src/accounts/lanes.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
@@ -168,8 +168,14 @@ describe('GET /api/accounts: lanes and connect (D-5511, D-5517)', () => {
 describe('connect.caps (D-7740)', () => {
   it('is the advertised words this server knows, in its order; no evidence is none', () => {
     const at = { origin: 'https' as const, stepUpFreshUntil: null };
-    expect(accountsConnect({ ...at, ccdVerbs: ['ws-new', 'account-v2', 'account-auth-v1'] }))
-      .toEqual({ accountOps: 'available', gate: 'armed', origin: 'https', caps: ['account-v2'] });
+    // `account-auth-v1` gates the sign-in routes (A21) and was held out of `ACCOUNT_CAPS` until the screen that runs a
+    // sign-in shipped (D-7793 (1)); A22's sheet runs Mint and Sign in, so it is offered (D-7849 (1)), in the list's order.
+    expect(accountsConnect({ ...at, ccdVerbs: ['ws-new', 'account-auth-v1', 'account-v2'] }))
+      .toEqual({ accountOps: 'available', gate: 'armed', origin: 'https', caps: ['account-v2', 'account-auth-v1'] });
+    expect(ACCOUNT_CAPS as readonly string[]).toContain(ACCOUNT_AUTH_CAP);
+    // A fleet that advertises the sign-in word alone still has no account ops, and offers only that word.
+    expect(accountsConnect({ ...at, ccdVerbs: ['account-auth-v1'] }))
+      .toEqual({ accountOps: 'unsupported', gate: 'armed', origin: 'https', caps: ['account-auth-v1'] });
     expect(accountsConnect({ ...at, ccdVerbs: null })).toEqual({ accountOps: 'unsupported', gate: 'armed', origin: 'https', caps: [] });
     expect(accountsConnect({ ...at, ccdVerbs: ['ws-new'] }).caps).toEqual([]);
   });

@@ -27,6 +27,7 @@ import { childBirthOf } from './childSpent.js';
 import { bindingOf, boundRunsOf, hasOwnerlessUndecidedOpen, incarnationOf, type Incarnation } from './runBinding.js';
 import { claimantMeasuredDead, measureClaimant, type ReclaimDeps } from './reclaim.js';
 import type { SessionBindings } from './bindingReads.js';
+import type { WatcherCoordPort } from './ports.js';
 
 export type HeldFor =
   | { readonly kind: 'not-a-child' }
@@ -39,7 +40,7 @@ export type HeldFor =
  *  open run whose stored wave this build cannot represent still fails the hold closed, as it did before the count moved
  *  onto the series. */
 function openBindingCount(
-  coord: ReclaimDeps['coord'], childId: string, incarnation: Incarnation, series: ReturnType<SessionBindings['parent']>['series'],
+  coord: WatcherCoordPort, childId: string, incarnation: Incarnation, series: ReturnType<SessionBindings['parent']>['series'],
 ): number {
   const sib = coord.bindingsOf(childId).worker({ incarnation });
   if (!sib.ok) throw new Error(`heldFor: ${sib.detail}`);
@@ -47,8 +48,8 @@ function openBindingCount(
 }
 
 export async function heldFor(
-  deps: ReclaimDeps, childId: string, mark: ChildMark, recs: readonly Pick<SessionRecord, 'id' | 'archivedAt' | 'stopped'>[],
-  nowMs: number,
+  deps: Omit<ReclaimDeps, 'coord'> & { coord: WatcherCoordPort }, childId: string, mark: ChildMark,
+  recs: readonly Pick<SessionRecord, 'id' | 'archivedAt' | 'stopped'>[], nowMs: number,
 ): Promise<HeldFor> {
   const notAChild = { kind: 'not-a-child' } as const;
   if (mark.kind !== 'child') return notAChild;
@@ -56,7 +57,7 @@ export async function heldFor(
   // The child's incarnation, from the birth the run the mark names recorded (ARCH-62, #797; D6 of D-5920): a reused
   // workspace name never inherits a run opened for the occupant before it, so no ghost coordinator is the parent.
   const minting = coord.run(mark.runId);
-  const incarnation = incarnationOf(childId, childBirthOf(minting, childId));
+  const incarnation = incarnationOf(childId, childBirthOf(minting, childId), minting.ok ? minting.run : null);
   // An unstamped run opened before the birth and then bound to it is undecidable, not a ghost: the minting run's own
   // claimant keeps the hold (the dup arm, a wave N >= 2 run planned before wave 1 was dispatched). A series this process
   // cannot represent still yields the parent its open binding proves, or none, as before the fold (ruling (a)).

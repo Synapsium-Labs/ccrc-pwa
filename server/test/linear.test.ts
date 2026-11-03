@@ -23,6 +23,7 @@ import { LINEAR_FAILURES } from '../../shared/linear.js';
 import { WS_TITLE_MAX_BYTES } from '../../shared/slug.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { RATELIMITED_ERRORS, linearAnswer } from './linearFetchFake.js';
+import { linearRecord, recordedAnswer, recordedHeader } from './linearRecorded.js';
 import { linearServicesFake } from './linearServicesFake.js';
 import { resolveTitle } from '../src/linear/resolve.js';
 
@@ -132,6 +133,18 @@ describe('lookupLinearIssue', () => {
       .resolves.toMatchObject({ ok: false, reason: 'not-found' });
   });
 
+  it('answers not-found for Linear\'s recorded answer to a missing issue: INPUT_ERROR "Entity not found: Issue", data null (FX)', async () => {
+    // FX recorded a missing issue as an `errors` answer on a 200 with `data` null, never `data.issue === null`. It was
+    // recorded for the issue read's document; the title lookup asks the same `issue(id:)` field.
+    const rec = linearRecord('error-not-found');
+    expect([rec.status, (rec.body as { data: unknown }).data]).toEqual([200, null]);
+    const { f } = spyFetch(recordedAnswer('error-not-found'));
+    expect(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f })).toEqual({ ok: false, reason: 'not-found', keyDigest: valueDigestHex(KEY) });
+    // Its message names no identity, but it is never forwarded either.
+    const r = await lookupLinearIssue(REF, HAVE_KEY, { fetch: spyFetch(recordedAnswer('error-not-found')).f });
+    expect(JSON.stringify(r)).not.toContain('Entity not found');
+  });
+
   it('answers not-found for a title that is blank once sanitised — nothing to name it with', async () => {
     for (const title of ['   ', '\t\n', '\u0000\u0007']) {
       const { f } = spyFetch(okBody('ENG-1234', title));
@@ -201,13 +214,40 @@ describe('lookupLinearIssue', () => {
     }
   });
 
-  it('does not read the reset header until its unit is recorded from a fixture (plan build note, LK2)', async () => {
-    // A millisecond epoch read as seconds would be held to 3,600; until the reset header's unit is recorded, the wait
-    // with no Retry-After is the sixty-second fallback.
-    for (const reset of ['1800000000000', '1800000000', '42']) {
-      const { f } = spyFetch(linearAnswer({ ok: false, status: 429, headers: { 'X-RateLimit-Requests-Reset': reset }, json: async () => ({}) }));
-      expect(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f }), reset).toMatchObject({ reason: 'rate-limited', retryAfterS: 60 });
+  it('with no Retry-After, the wait is X-RateLimit-Requests-Reset minus now: an epoch in MILLISECONDS (FX), held to 1 to 3,600 s', async () => {
+    // FX recorded the reset headers as absolute Unix times in milliseconds, a rolling hour after each send
+    // (`fixtures/linear/README.md`; linear-fixtures.test.ts holds it on every recording). A millisecond epoch read as
+    // seconds, or as a wait, is held to 3,600 and turns the 90-second row red.
+    const NOW = linearRecord('key-check-page-1').receivedAtMs;
+    const cases: [Record<string, string>, number][] = [
+      [{ 'X-RateLimit-Requests-Reset': String(NOW + 90_000) }, 90],
+      [{ 'X-RateLimit-Requests-Reset': String(NOW + 90_001) }, 91],
+      [{ 'X-RateLimit-Requests-Reset': String(NOW + 1_000) }, 1],
+      [{ 'X-RateLimit-Requests-Reset': String(NOW) }, 1],
+      [{ 'X-RateLimit-Requests-Reset': String(NOW - 5_000) }, 1],
+      [{ 'X-RateLimit-Requests-Reset': String(NOW + 99_999_000) }, 3600],
+      // The recorded value itself: a rolling hour after its own send, so the most a wait can be.
+      [{ 'X-RateLimit-Requests-Reset': recordedHeader(linearRecord('key-check-page-1'), 'x-ratelimit-requests-reset')! }, 3600],
+      // Not a non-negative integer: no reset at all, so the sixty-second fallback.
+      [{ 'X-RateLimit-Requests-Reset': '1.8e12' }, 60], [{ 'X-RateLimit-Requests-Reset': '-1' }, 60],
+      [{ 'X-RateLimit-Requests-Reset': 'Wed, 21 Oct 2026 07:28:00 GMT' }, 60],
+      // Retry-After, when Linear sends it, wins over the reset time.
+      [{ 'Retry-After': '30', 'X-RateLimit-Requests-Reset': String(NOW + 90_000) }, 30],
+      // The complexity window's reset is not the one read (spec §6.7 names the requests header).
+      [{ 'X-RateLimit-Complexity-Reset': String(NOW + 90_000) }, 60],
+    ];
+    for (const [headers, wait] of cases) {
+      const { f } = spyFetch(linearAnswer({ ok: false, status: 429, headers, json: async () => ({}) }));
+      expect(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f, now: () => NOW }), JSON.stringify(headers))
+        .toMatchObject({ reason: 'rate-limited', retryAfterS: wait });
     }
+  });
+
+  it('the constructed rate-limited answer (Linear\'s published page, never recorded) is read with its Retry-After', async () => {
+    const r = linearRecord('error-429-ratelimited-constructed');
+    const { f } = spyFetch(recordedAnswer('error-429-ratelimited-constructed'));
+    expect(await lookupLinearIssue(REF, HAVE_KEY, { fetch: f, now: () => r.receivedAtMs }))
+      .toMatchObject({ reason: 'rate-limited', retryAfterS: Number(recordedHeader(r, 'retry-after')) });
   });
 
   it('a GraphQL errors array with another code, or none, is still unreachable', async () => {

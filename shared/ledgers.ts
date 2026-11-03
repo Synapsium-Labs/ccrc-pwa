@@ -10,10 +10,10 @@
 // never compares states itself. The one rule the table cannot carry is the programme context: the
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
-import { ACTIVE_RUN_STATES, type RunKind, type RunState } from './api.js';
+import { ACTIVE_RUN_STATES, TERMINAL_RUN_STATES, type MailDeliveryState, type Presence, type RunKind, type RunState } from './api.js';
 
-/** What the operator is asked to do. `value` and `secret` take something back; `secret` never
- *  through the item's answer (spec §5). */
+/** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
+ *  `secret`'s value goes to its slot, never through the answer (spec §5). */
 export type ItemKind = 'decide' | 'do' | 'value' | 'secret';
 const ITEM_KIND_MAP: Record<ItemKind, true> = { decide: true, do: true, value: true, secret: true };
 export const ITEM_KINDS = Object.keys(ITEM_KIND_MAP) as readonly ItemKind[];
@@ -24,9 +24,6 @@ const ITEM_STATE_MAP: Record<ItemState, true> = {
   open: true, checking: true, done: true, withdrawn: true, dismissed: true,
 };
 export const ITEM_STATES = Object.keys(ITEM_STATE_MAP) as readonly ItemState[];
-/** The states an item still waits in. Derived from nothing else: it is the pair the transition table
- *  leaves by `confirm`, `return`, `withdraw` and `dismiss`. */
-export const OPEN_ITEM_STATES: readonly ItemState[] = ['open', 'checking'];
 
 /** `blocking` = work has stopped on it; `soon` carries a short label; `later` is the rest. */
 export type NeededBy = 'blocking' | 'soon' | 'later';
@@ -53,6 +50,13 @@ export const ITEM_TRANSITIONS: Readonly<Record<ItemAct, {
   withdraw: { actor: 'coordinator', from: ['open', 'checking'], to: 'withdrawn' },
   dismiss: { actor: 'operator', from: ['open', 'checking'], to: 'dismissed' },
 };
+
+/** The states an item still waits in: the states some row of `ITEM_TRANSITIONS` leaves, in `ITEM_STATES` order
+ *  (today `open` and `checking`). Derived from the table, so a state the table can still move an item out of
+ *  is never missing from it. */
+export const OPEN_ITEM_STATES: readonly ItemState[] = ITEM_STATES.filter(
+  (s) => Object.values(ITEM_TRANSITIONS).some((row) => row.from.includes(s)),
+);
 
 /** Why a move of one item is refused (the decider's three, and `unknown-item` for an id the store holds no row for).
  *  Declared once here so the store's answers and, in PL3 and PL4, the routes' typed refusals read the same words. */
@@ -84,7 +88,7 @@ export function nextItemState(
   return { ok: true, to: row.to };
 }
 
-/** One item as the console shows it. `stale` is always `false` until the server computes it (PL4). */
+/** One item as the console shows it. `stale` is the server's verdict (`itemIsStale`, below): a label only. */
 export interface ItemView {
   id: number;
   program: string;
@@ -104,7 +108,9 @@ export interface ItemView {
   answer: string | null;
   note: string | null;
   secretSlot: string | null;
-  secretSet: { at: number; tail: string; masked: boolean } | null;
+  /** The slot's state (plan PL6), read from its metadata file: when it was set, its tail (`secretTailOf`) and whether the
+   *  egress masker knows it. `why` says why it does not, and is absent when it does (or from a server before PL6). */
+  secretSet: { at: number; tail: string; masked: boolean; why?: SecretUnmasked } | null;
   history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null }[];
 }
 
@@ -125,9 +131,6 @@ export interface WaitingView {
   cleared: ItemView[];
   goals: GoalsView[];
 }
-
-/** The live frame: additive on the fleet socket, no `FLEET_PROTO` bump. */
-export type WaitingFrame = { type: 'waiting'; waiting: WaitingView };
 
 const NEEDED_BY_RANK: Readonly<Record<NeededBy, number>> = { blocking: 0, soon: 1, later: 2 };
 const STATE_RANK: Readonly<Record<ItemState, number>> = {
@@ -158,7 +161,11 @@ export const WAITS_ON_KINDS = Object.keys(WAITS_ON_MAP) as readonly WaitsOn[];
 
 /**
  * Priority: any active work run -> `work`; any work run awaiting review or any active review run ->
- * `review`; any `merging` run -> `merge-queue`; any `planned` run -> `next-wave`; else `ended`.
+ * `review`; any `merging` run -> `merge-queue`; any `planned` run -> `next-wave`; any other run that is
+ * still open (a `closing` run, a run of kind `unknown`, a review run awaiting its own review) -> `work`;
+ * else `ended`. `ended` means exactly what the store's `programmeHasOpenRun` means: no run outside
+ * `TERMINAL_RUN_STATES`, so the panel never says "the programme has no open run" while a dismiss is
+ * refused `programme-live` (review 1323 R1).
  */
 export function programmeWaitsOn(runs: readonly { state: RunState; kind: RunKind }[]): WaitsOn {
   const active = (r: { state: RunState }) => (ACTIVE_RUN_STATES as readonly RunState[]).includes(r.state);
@@ -167,6 +174,7 @@ export function programmeWaitsOn(runs: readonly { state: RunState; kind: RunKind
     || (r.kind === 'review' && active(r)))) return 'review';
   if (runs.some((r) => r.state === 'merging')) return 'merge-queue';
   if (runs.some((r) => r.state === 'planned')) return 'next-wave';
+  if (runs.some((r) => !(TERMINAL_RUN_STATES as readonly RunState[]).includes(r.state))) return 'work';
   return 'ended';
 }
 
@@ -184,6 +192,75 @@ export function isSlotSlug(s: string): boolean {
   return typeof s === 'string' && SLOT_SLUG_RE.test(s);
 }
 
+// ── secrets pasted into the console (plan PL6, spec §5) ────────────────────────────────────────────────────────────
+
+/** The directory under `~/.ccrc` that holds the operator-secret slots (`server/src/coord/ledgersSecrets.ts`); the account deny
+ *  rules name the same directory (`ACCOUNT_SECRET_PATHS`, `shared/api.ts`), and `account-deny.test.ts` holds the two equal. */
+export const OPERATOR_SECRETS_DIR = 'operator-secrets';
+/** The egress masker's lane prefix of an operator-secret slot (`operator-secret:<programme>:<slot>`). The slot store names
+ *  its lanes with it, and the masker's roster prune (`SecretMasker.retain`) never deletes a lane that carries it: those lanes
+ *  are this server's own, not the roster's (review 1389 F1). */
+export const OPERATOR_SECRET_LANE_PREFIX = 'operator-secret:';
+
+/** The longest secret the console takes, in characters and in UTF-8 bytes alike (the masker's longest run is 8192 bytes,
+ *  so a value inside this bound is never too long for it). */
+export const SECRET_VALUE_MAX = 8192;
+/** The shortest value whose tail is shown, in UTF-8 BYTES after any trailing `=`, counted as the egress masker counts a
+ *  secret: its floor, `RUN_MIN_BYTES` (`server/src/accounts/shapes.ts`), which `ledgers-secrets.test.ts` holds equal to this
+ *  (review 1389 A1). Below it no character of the value leaves the server: the masker cannot catch such a value in outgoing
+ *  text, and four characters of it are a fifth or more of it. */
+export const SECRET_TAIL_MIN = 20;
+/** How many characters the tail shows. */
+export const SECRET_TAIL_CHARS = 4;
+
+/** Why the egress masker does not know a saved secret (Review Focus 2: never a silent skip). `too-short`: under the
+ *  masker's 20-byte floor (after any trailing `=`); `too-long`: past its 8192-byte run; `unregistered`: the masker could
+ *  not take it (no box token yet, or coord.db stayed busy). */
+export type SecretUnmasked = 'too-short' | 'too-long' | 'unregistered';
+const SECRET_UNMASKED_MAP: Record<SecretUnmasked, true> = { 'too-short': true, 'too-long': true, unregistered: true };
+export const SECRET_UNMASKED_WHYS = Object.keys(SECRET_UNMASKED_MAP) as readonly SecretUnmasked[];
+export function isSecretUnmasked(v: unknown): v is SecretUnmasked {
+  return typeof v === 'string' && (SECRET_UNMASKED_WHYS as readonly string[]).includes(v);
+}
+
+/** UTF-8 bytes of a string, counted without an encoder (this file imports nothing). A lone surrogate counts 3, as an
+ *  encoder writes U+FFFD for it. */
+export function utf8Bytes(s: string): number {
+  let n = 0;
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!;
+    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+  }
+  return n;
+}
+
+/** Whether a pasted value is one the console takes: 1 to `SECRET_VALUE_MAX` characters and UTF-8 bytes. */
+export function isSecretValue(v: unknown): v is string {
+  return typeof v === 'string' && v.length >= 1 && v.length <= SECRET_VALUE_MAX && utf8Bytes(v) <= SECRET_VALUE_MAX;
+}
+
+/** The last `SECRET_TAIL_CHARS` characters (code points, so a surrogate pair is never split) of a value of at least
+ *  `SECRET_TAIL_MIN` bytes, its trailing `=` set aside as the masker sets it aside; `''` for a shorter one, whose tail is
+ *  never shown. */
+export function secretTailOf(value: string): string {
+  if (utf8Bytes(value.replace(/=+$/, '')) < SECRET_TAIL_MIN) return '';
+  return Array.from(value).slice(-SECRET_TAIL_CHARS).join('');
+}
+
+/** THE ANSWER A SECRET ITEM'S TICK CARRIES to the coordinator (spec §5: set, the time and the last four, never the value):
+ *  `set <ISO time> ending <tail>`, or `set <ISO time>` when no tail is shown. */
+export function secretAnswer(s: { setAt: number; tail: string }): string {
+  const at = new Date(s.setAt).toISOString();
+  return s.tail === '' ? `set ${at}` : `set ${at} ending ${s.tail}`;
+}
+
+/** What `PUT /api/items/:id/secret` answers on success: the slot's state and the ticked item, never the value. */
+export interface SecretSaveAnswer {
+  readonly ok: true;
+  readonly secret: { readonly setAt: number; readonly tail: string; readonly masked: boolean; readonly why?: SecretUnmasked };
+  readonly item: ItemView;
+}
+
 const SPEC_PREFIX = 'docs/superpowers/specs/';
 /** A spec path the PWA may turn into a Docs link: under the specs directory, Markdown, no parent
  *  hop, no empty segment, not absolute, at most 200 characters. */
@@ -198,9 +275,81 @@ export function isSpecPath(p: string): boolean {
 
 /** "Recently cleared" keeps seven days (spec D13). */
 export const CLEARED_WINDOW_MS = 7 * 24 * 3600 * 1000;
+/** How long a tick's mail may stay not acknowledged before the item says "ticked; coordinator not responding" (plan PL4). A
+ *  label only: no push and no stall arm hang off it (spec §3.3, D19). */
+export const TICK_UNANSWERED_MS = 30 * 60 * 1000;
 export const SOON_LABEL_MAX = 40;
 export const ITEM_TITLE_MAX = 140;
 export const ITEM_TEXT_MAX = 2000;
 export const ITEM_STEPS_MAX = 12;
 export const ITEM_OPTIONS_MAX = 6;
 export const ANSWER_MAX = 2000;
+
+/** The coordinator's presence as an item's label reads it. `unmeasured` says the server has no reading to give (no fleet
+ *  frame or registry listing yet, an id the registry lists but the frame lacks, or the session's own presence is a doubt): it
+ *  is never `dead`, so a doubt cannot label an item. */
+export type CoordinatorPresence = 'alive' | 'dead' | 'absent' | 'unmeasured';
+const COORDINATOR_PRESENCE_MAP: Record<CoordinatorPresence, true> = { alive: true, dead: true, absent: true, unmeasured: true };
+export const COORDINATOR_PRESENCES = Object.keys(COORDINATOR_PRESENCE_MAP) as readonly CoordinatorPresence[];
+
+/**
+ * The coordinator's presence from what the server last measured: the fleet frame it broadcast and the ids of its last good
+ * registry listing, read from the listing's raw `*.uuid` names (refused ids included). A `dead` row is `dead`; `alive` and
+ * `asleep` (hibernated, woken by mail) are `alive`; a doubt, or a row from a server that predates `presence`, is `unmeasured`;
+ * an id the frame lacks is `absent` only when the listing is known and does not hold it either, and `unmeasured` when the
+ * listing holds it (a refused id, or a row the registry could not assemble, is in no fleet row) or when no listing has landed
+ * yet.
+ *
+ * WHY THIS IS NOT `measureClaimant` (the one dead predicate, D-5290; "legitimately different", review 1335 F4): that function
+ * is async, a fresh registry read and a tmux verdict, and an item's view must be built SYNCHRONOUSLY (`viewOfItem`: the
+ * routes' call-order pin forbids an await between an item read and its write, and the frame builds the same view). Every arm
+ * here agrees with that predicate's ladder (`readSession`, which the frame's `presence` is) except that a frame cannot see a
+ * fresh tmux verdict; and the one arm the two would otherwise disagree on, an id the frame lacks, is closed above: the
+ * listing's names hold a row the registry could not assemble as well as a refused one, where `measureClaimant` answers
+ * `unmeasurable`.
+ */
+export function coordinatorPresenceIn(
+  fleet: readonly { id: string; presence?: Presence }[] | null, registryIds: ReadonlySet<string> | null, id: string,
+): CoordinatorPresence {
+  if (fleet === null) return 'unmeasured';
+  const row = fleet.find((s) => s.id === id);
+  if (row === undefined) return registryIds === null || registryIds.has(id) ? 'unmeasured' : 'absent';
+  switch (row.presence) {
+    case 'dead': return 'dead';
+    case 'alive': case 'asleep': return 'alive';
+    default: return 'unmeasured';
+  }
+}
+
+/** The newest tick mail's delivery state, or `none` when no tick mail was ever queued for the item. */
+export type TickMailState = MailDeliveryState | 'none';
+
+/** What `itemIsStale` is decided from, all of it measured by the caller: the item's state and tick time, the clock, the
+ *  newest tick mail's delivery state (whoever it was addressed to), and the coordinator's presence. */
+export interface StaleInputs {
+  state: ItemState;
+  tickedAt: number | null;
+  now: number;
+  mail: TickMailState;
+  coordinator: CoordinatorPresence;
+}
+
+/** ItemView.stale (spec §3.3, plan PL4): a CHECKING item whose coordinator reads dead or absent, or whose newest tick mail is
+ *  not acknowledged `TICK_UNANSWERED_MS` after the tick. Only `acked` counts as heard (review 1335 F2): a mail still `queued`,
+ *  `rejected`, `unknown`, delivered but not acknowledged, or missing altogether (`none`) is not, whoever it went to, so a
+ *  takeover that left the old coordinator's mail unread is labelled too. `unmeasured` is a doubt, not a finding, so it never
+ *  labels. Every other state is never stale. */
+export function itemIsStale(i: StaleInputs): boolean {
+  if (i.state !== 'checking') return false;
+  if (i.coordinator === 'dead' || i.coordinator === 'absent') return true;
+  return i.mail !== 'acked' && i.tickedAt !== null && i.now - i.tickedAt >= TICK_UNANSWERED_MS;
+}
+
+/** Whether an outstanding tick mail has been left behind (review 1336 F1): it went to a session that is no longer the
+ *  programme's coordinator AND that session reads `dead` or `absent`. Such a mail can never be acknowledged by its recipient
+ *  (the ack route takes only the recipient's own), and nothing re-addresses a mail to a literal session id, so it must not
+ *  hold the operator's next tick of a sent-back item. A recipient that is still the coordinator, or that reads `alive` or
+ *  `unmeasured`, keeps blocking: a live displaced coordinator must not get a second mail beside the new one. */
+export function tickMailLeftBehind(i: { recipient: string; coordinator: string; recipientPresence: CoordinatorPresence }): boolean {
+  return i.recipient !== i.coordinator && (i.recipientPresence === 'dead' || i.recipientPresence === 'absent');
+}

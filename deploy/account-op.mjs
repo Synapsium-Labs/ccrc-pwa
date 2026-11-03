@@ -134,9 +134,11 @@ const PROVIDER_BASE_URL = {
 };
 
 /** Offer order, and the first member is the default the connect door opens on —
- *  which is also what `check-add` uses when `--method` is absent. */
+ *  which is also what `check-add` uses when `--method` is absent. Anthropic's is
+ *  Mint first (Q1, accounts plan Task A20), so a bare `add --provider anthropic`
+ *  makes a token lane whose token `auth-start --method setup-token` then mints. */
 const PROVIDER_CONNECT = {
-  anthropic: ['login', 'paste', 'setup-token'],
+  anthropic: ['setup-token', 'login', 'paste'],
   openrouter: ['pkce', 'paste'],
   compatible: ['paste'],
   openai: ['openai-login'],
@@ -600,7 +602,8 @@ function declaredEntry(a) {
  *  array — `candidates` (Task 21) is the first, and declaring the shape now is
  *  what keeps that task from rewriting this parser. */
 const OPS = {
-  refuse: { keys: ['code', 'detail'], repeat: [] },
+  // `reason` (accounts plan Task A20): a word beside the code, for a refusal whose code covers more than one cause.
+  refuse: { keys: ['code', 'detail', 'reason'], repeat: [] },
   providers: { keys: [], repeat: [] },
   roster: { keys: ['file'], repeat: [] },
   // TSV on stdout rather than JSON, and `lane`'s reason: the caller is bash,
@@ -724,9 +727,10 @@ const OPS = {
   'lane-state': {
     keys: [
       'id', 'mode', 'check-verdict', 'check-at', 'key-hash', 'retired-key-hash', 'clear',
-      'identity', 'identity-source', 'last-run-at', 'seed-verified-at', 'added-at', 'enabled-at',
+      'identity', 'identity-source', 'last-run-at', 'seed-verified-at', 'added-at', 'enabled-at', 'minted-at',
     ],
-    repeat: [],
+    // `--clear` repeats (accounts plan Task A20): a paste over a minted token drops `check` and `mintedAt` at once.
+    repeat: ['clear'],
   },
   // THE FIRST-RUN SEED (accounts plan Task A13; spec §6.2 step 9, G1; D-5518, D-7731). `opSeed` below states it.
   seed: { keys: ['file', 'id', 'when'], repeat: [] },
@@ -738,6 +742,11 @@ const OPS = {
   // Accounts plan Task A16 (D-7735).
   'set-placement': { keys: ['file', 'id', 'placement'], repeat: [] },
   'set-done': { keys: ['file', 'id'], repeat: [] },
+  // Accounts plan Task A20 (D-7750): the method switch's roster write, the sign-in-in-flight measure `auth-start`
+  // shares with `pre-remove`, and the answers of the sign-in verbs.
+  'set-method': { keys: ['file', 'id', 'method'], repeat: [] },
+  'auth-live': { keys: ['id'], repeat: [] },
+  'auth-answer': { keys: ['verb', 'id', 'attempt', 'method', 'state', 'unit', 'stopped', 'sign-out'], repeat: [] },
   'pre-remove': {
     keys: ['file', 'id', 'mode', 'live', 'live-measured', 'sleeping', 'archived', 'other-home-able', 'upstream',
       'disabled', 'rehome-sleeping'],
@@ -1275,8 +1284,9 @@ const LANE_STATE_FIELDS = [
   // it on, which is what Discard's "never enabled" reads. The server's reader names neither and drops both.
   'addedAt', 'enabledAt',
 ];
-/** The fields `--clear` may drop. */
-const LANE_STATE_CLEARABLE = ['check'];
+/** The fields `--clear` may drop: a check that no longer measures the lane's credential, and a mint time that no
+ *  longer names the token in its file (accounts plan Task A20). */
+const LANE_STATE_CLEARABLE = ['check', 'mintedAt'];
 /** A run's or a seed's time (accounts plan Task A13, D-7731): UTC to the second, or to the millisecond, which is
  *  what this writer stamps, because a seed verified in the same second as the run it follows must still read as
  *  after it (`seedVerifiedAt > lastRunAt`, spec §10). `shared/accounts.ts`'s `ISO_RE` reads both forms. */
@@ -1346,7 +1356,7 @@ function laneStateWrite(home, id, mode, set, clear) {
   if (mode === 'merge' && current !== null) {
     for (const k of LANE_STATE_FIELDS) if (Object.hasOwn(current, k)) next[k] = current[k];
   }
-  if (clear !== undefined) delete next[clear];
+  for (const c of [].concat(clear ?? [])) delete next[c];
   Object.assign(next, set);
   next.fleetIdentity = readNodeIdentity(home);
 
@@ -1400,7 +1410,10 @@ function opLaneState(a) {
       return 2;
     }
   }
-  if (a['clear'] !== undefined && (!LANE_STATE_CLEARABLE.includes(a['clear']) || verdict !== undefined)) {
+  const clears = a['clear'] ?? [];
+  if (clears.some((c) => !LANE_STATE_CLEARABLE.includes(c))
+      || (clears.includes('check') && verdict !== undefined)
+      || (clears.includes('mintedAt') && a['minted-at'] !== undefined)) {
     refuse('bad-argv', `--clear takes ${LANE_STATE_CLEARABLE.join(', ')}, and not with the field it clears`);
     return 2;
   }
@@ -1425,7 +1438,7 @@ function opLaneState(a) {
   }
   const times = {};
   for (const [k, field] of [['last-run-at', 'lastRunAt'], ['seed-verified-at', 'seedVerifiedAt'],
-    ['added-at', 'addedAt'], ['enabled-at', 'enabledAt']]) {
+    ['added-at', 'addedAt'], ['enabled-at', 'enabledAt'], ['minted-at', 'mintedAt']]) {
     if (a[k] === undefined) continue;
     const t = laneTimeOf(a[k]);
     if (t === null || (k === 'seed-verified-at' && a[k] === 'now')) {
@@ -1463,7 +1476,7 @@ function opLaneState(a) {
     set.identity = a['identity'];
     set.identitySource = a['identity-source'];
   }
-  const failed = laneStateWrite(home, id, mode, set, a['clear']);
+  const failed = laneStateWrite(home, id, mode, set, clears);
   if (failed !== null) { refuse(failed[0], failed[1]); return 1; }
   return 0;
 }
@@ -2010,6 +2023,64 @@ function opSetPlacement(a) {
   return writeRoster(a['file'], next, 'the roster was unchanged') ? 0 : 1;
 }
 
+/** A lane's secrets file, relative to HOME: the one template `check-add` and the method switch share, and the name
+ *  `_acct_write_secret` and `ccd-account-auth`'s capture write (the three writers `ccd-account-auth.test.ts` pins). */
+function secretsFileOf(id, provider) {
+  const secretTag = PROVIDER_DEPLOY[provider]?.envVar === 'CLAUDE_CODE_OAUTH_TOKEN' ? 'oauth' : provider;
+  return `.cc-secrets/${id}-${secretTag}.env`;
+}
+
+/** ── THE METHOD SWITCH'S ROSTER WRITE (accounts plan Task A20; spec §9, §13.3; D-7750) ───────────────────────────
+ *  The roster has no method field (A1): an Anthropic lane is a token lane when `exec.secretsFile` is present. So
+ *  `setup-token` names the lane's `.cc-secrets/<id>-oauth.env` (the one spelling `check-add` and `_acct_write_secret`
+ *  share) and `login` drops it. Only a generated Anthropic lane has a method to switch. Silent on success. */
+function opSetMethod(a) {
+  const acct = rosterEntryOf(a, 'set-method');
+  if (acct === null) return 1;
+  const m = a['method'];
+  if (m !== 'setup-token' && m !== 'login') { refuse('bad-argv', '--method must be setup-token or login'); return 2; }
+  const e = isPlainObject(acct['exec']) ? acct['exec'] : {};
+  if (e['kind'] !== 'generated' || (e['provider'] ?? 'anthropic') !== 'anthropic') {
+    refuse('method-not-supported', `lane "${a['id']}" is not a generated Anthropic lane, so it has no method to switch`);
+    return 1;
+  }
+  const json = readRoster(a['file']);
+  if (json === null) return 1;
+  const exec = { ...e };
+  if (m === 'setup-token') exec['secretsFile'] = secretsFileOf(a['id'], 'anthropic');
+  else delete exec['secretsFile'];
+  const next = { ...json, accounts: json['accounts'].map((x) => (isPlainObject(x) && x['id'] === a['id'] ? { ...x, exec } : x)) };
+  const admits = rosterAdmits(next, `switching lane "${a['id']}" to ${m} would make ${a['file']} unparseable: `);
+  if (admits !== 0) return admits;
+  return writeRoster(a['file'], next, 'the roster was unchanged') ? 0 : 1;
+}
+
+/** ── THE SIGN-IN VERBS' ANSWERS (accounts plan Task A20; D-5514, D-5515, D-7749, D-7750) ─────────────────────────
+ *  One shape per verb, each carrying `fleetIdentity` (D-5518): `auth-start` the attempt, its method, the state the
+ *  helper first reported and the unit it runs in; `auth-code` that the code went (never the code); `auth-cancel` the
+ *  unit and whether a stop landed; `credential --sign-out` what the sign-out found on this box. */
+const AUTH_ANSWER_VERBS = ['start', 'code', 'cancel', 'sign-out'];
+function opAuthAnswer(a) {
+  const verb = a['verb'];
+  if (!AUTH_ANSWER_VERBS.includes(verb) || a['id'] === undefined) {
+    refuse('bad-argv', `auth-answer needs --verb ${AUTH_ANSWER_VERBS.join('|')} and --id`);
+    return 2;
+  }
+  if (verb !== 'sign-out' && !/^[0-9a-f]{32}$/.test(a['attempt'] ?? '')) {
+    refuse('bad-argv', 'auth-answer needs --attempt, 32 lowercase hex characters');
+    return 2;
+  }
+  const home = process.env.HOME ?? '';
+  const base = { ok: true, id: a['id'] };
+  let body;
+  if (verb === 'start') body = { ...base, attemptId: a['attempt'], method: a['method'], state: a['state'], unit: a['unit'] };
+  else if (verb === 'code') body = { ...base, attemptId: a['attempt'], sent: true };
+  else if (verb === 'cancel') body = { ...base, attemptId: a['attempt'], unit: a['unit'], stopped: a['stopped'] === 'true', state: a['state'] };
+  else body = { ...base, signOut: a['sign-out'] };
+  out({ ...body, fleetIdentity: readNodeIdentity(home) });
+  return 0;
+}
+
 function main(argv) {
   const op = argv[2];
   if (op === undefined || !Object.hasOwn(OPS, op)) {
@@ -2047,6 +2118,15 @@ function main(argv) {
   if (op === 'lane-state') return opLaneState(a);
   if (op === 'pre-remove') return opPreRemove(a);
   if (op === 'set-placement') return opSetPlacement(a);
+  if (op === 'set-method') return opSetMethod(a);
+  if (op === 'auth-live') {
+    if (a['id'] === undefined) { refuse('bad-argv', 'auth-live needs --id'); return 2; }
+    const home = process.env.HOME ?? '';
+    if (!isAbsolute(home)) { refuse('bad-argv', 'HOME is not an absolute path'); return 2; }
+    process.stdout.write(`${authInProgressOf(home, a['id']) ? 'live' : 'idle'}\n`);
+    return 0;
+  }
+  if (op === 'auth-answer') return opAuthAnswer(a);
   if (op === 'set-done') {
     if (rosterEntryOf(a, 'set-done') === null) return 1;
     const json = readRoster(a['file']);
@@ -2445,7 +2525,6 @@ function main(argv) {
     // above uses: a lane exporting `CLAUDE_CODE_OAUTH_TOKEN` holds an OAuth
     // token and its file is `<id>-oauth.env`; an api-key lane's file is
     // `<id>-<provider>.env`, which is §4.3's own spelling.
-    const secretTag = P.envVar === 'CLAUDE_CODE_OAUTH_TOKEN' ? 'oauth' : provider;
     const plan = {
       id,
       provider,
@@ -2454,7 +2533,7 @@ function main(argv) {
       configDirSuffix: suffix,
       method,
       baseUrl: resolvedBaseUrl,
-      secretsFile: isToken && P.envVar !== null ? `.cc-secrets/${id}-${secretTag}.env` : null,
+      secretsFile: isToken && P.envVar !== null ? secretsFileOf(id, provider) : null,
       envVar: isToken ? P.envVar : null,
       // The PARSED object, not the string bash handed over — `add-entry`
       // writes it into the roster and Task 25 hands it to jq with
@@ -3210,6 +3289,12 @@ function main(argv) {
   if (a['code'] === undefined || a['detail'] === undefined) {
     refuse('bad-argv', 'refuse needs --code and --detail');
     return 2;
+  }
+  if (a['reason'] !== undefined) {
+    if (!/^[a-z][a-z0-9-]{0,63}$/.test(a['reason'])) { refuse('bad-argv', '--reason must be a word'); return 2; }
+    out({ ok: false, error: a['code'], reason: a['reason'], detail: a['detail'] });
+    process.stderr.write(`${SELF}: ${a['detail']} (${a['code']}: ${a['reason']})\n`);
+    return 0;
   }
   refuse(a['code'], a['detail']);
   return 0;

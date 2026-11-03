@@ -32,7 +32,7 @@ import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { GROUP_MODE_KEY } from '../src/skins/instrument/FleetTable';
 import { withRunBinding } from '../test/runBindingFixture';
-import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 
 const SKINS = [REFINED, INSTRUMENT] as const;
 /** The two Phosphor palettes, one per mode. */
@@ -122,7 +122,7 @@ let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
@@ -130,7 +130,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await server?.close();
-  removeDist(dist);
 });
 
 /** These cases measure the project cards, which Instrument draws in its project mode (D-5473): seed that mode before

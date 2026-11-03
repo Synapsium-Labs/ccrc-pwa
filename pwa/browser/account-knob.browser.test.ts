@@ -19,7 +19,7 @@ import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { fleetSession } from '../test/fleetFixture';
-import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 
 const THEMES = [PHOSPHOR, 'light'];
 const SKINS = [REFINED, INSTRUMENT];
@@ -66,7 +66,7 @@ let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
@@ -74,7 +74,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await server?.close();
-  removeDist(dist);
 });
 
 const go = (page: Page, to: string): Promise<void> => page.evaluate((path) => {
@@ -206,8 +205,12 @@ describe('the kill switch row at every width and skin (D-7732)', () => {
         // It opens the Move sessions sheet for lane-d.
         await page.locator(".accounts-row[data-lane='lane-d'] .acct-knob-move").click();
         await page.locator('.sheet-panel[data-state="open"]').waitFor({ timeout: 10_000 });
-        const sm: SheetMeasured = await page.evaluate(() => {
+        const sm: SheetMeasured = await page.evaluate(async () => {
           const panel = document.querySelector<HTMLElement>('.sheet-panel')!;
+          // Measured at rest, as move-sessions.browser.test.ts measures the same sheet. `data-state="open"` lands as the
+          // entrance starts, and a box read through the moving panel's fractional translate comes back a float32 ulp
+          // short: a 44px row measured 43.99997 mid-slide while its layout height (`offsetHeight`) stayed 44.
+          await Promise.all(panel.getAnimations().map((a) => a.finished.catch(() => undefined)));
           const r = panel.getBoundingClientRect();
           return {
             title: panel.querySelector('.sheet-title')?.textContent ?? '',

@@ -105,11 +105,11 @@ describe('the index and the section routes', () => {
     expect(within(index()).getAllByRole('link')).toHaveLength(5);
   });
 
-  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its six cards)', () => {
+  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its seven cards)', () => {
     pendingReads();
     renderSettings('automation');
     const levels = screen.getAllByRole('heading').map((h) => Number(h.tagName.slice(1)));
-    expect(levels).toEqual([1, 2, 3, 3, 3, 3, 3, 3]);
+    expect(levels).toEqual([1, 2, 3, 3, 3, 3, 3, 3, 3]);
   });
 });
 
@@ -230,7 +230,7 @@ describe('the provider: reads made once (spec §4.4)', () => {
     const files = readdirSync(dir).filter((f) => /\.tsx?$/.test(f));
     expect(files).toContain('SettingsDataProvider.tsx');
     expect(files.length).toBeGreaterThanOrEqual(9);
-    const READS = new Set(['useUpdatesView', 'useStallWatchView', 'useCollectLaneView', 'useTestboxView', 'useLinearConnection', 'readAuthStatus', 'pushEnabled', 'pushSupported']);
+    const READS = new Set(['useUpdatesView', 'useStallWatchView', 'useCollectLaneView', 'useTestboxView', 'useLinearWorkspaces', 'readAuthStatus', 'pushEnabled', 'pushSupported']);
     /** The value names a file imports (a `type` import reads nothing). */
     const imported = (text: string): string[] => [...text.matchAll(/^import \{([^}]*)\} from '[^']+';/gm)]
       .flatMap((m) => m[1]!.split(',').map((n) => n.trim()).filter((n) => n !== '' && !n.startsWith('type ')))
@@ -239,7 +239,7 @@ describe('the provider: reads made once (spec §4.4)', () => {
     expect(importers).toEqual(['SettingsDataProvider.tsx']);
     // And the cards outside the directory take the frame's poll rather than reading their own.
     for (const f of [path.join('screens', 'StallWatchSection.tsx'), path.join('fleet', 'CollectLaneSection.tsx'), path.join('screens', 'LinearSection.tsx'), path.join('fleet', 'TestBoxSection.tsx')]) {
-      expect(readFileSync(path.join(SRC, f), 'utf8'), f).not.toMatch(/\buse(StallWatchView|CollectLaneView|LinearConnection|TestboxView)\(/);
+      expect(readFileSync(path.join(SRC, f), 'utf8'), f).not.toMatch(/\buse(StallWatchView|CollectLaneView|LinearWorkspaces|LinearConnection|TestboxView)\(/);
     }
   });
 });
@@ -292,7 +292,7 @@ describe('the cards: scope and purpose, in order (spec §3.3)', () => {
     updates: ['Fleet version', 'Nodes', 'Update policy'],
     appearance: ['Layout and theme'],
     notifications: ['Push notifications', 'Release announcements'],
-    automation: ['Stall watch', 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Roll idle sessions', 'Test box'],
+    automation: ['Stall watch', 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Roll idle sessions', 'Backups', 'Test box'],
     security: ['Sign-in gate', 'Box token', 'Linear'],
   };
   const SCOPES: readonly string[] = Object.values(SETTINGS_SCOPE);

@@ -213,6 +213,8 @@ export const TREE_FILES = [
   'ccd/ccd-land-probe',
   // Test box TB11 (D-7413): the durations fetch, placed by `_inst_bins` on the radar's non-Darwin, every-ROLE arm.
   'ccd/ccd-testbox-times',
+  // D-7857: the carry dedupe sweep, placed by `_inst_bins` on the radar's non-Darwin, every-ROLE arm.
+  'ccd/ccd-carry-dedupe-sweep',
   // D-5241: the tool-child priority's shell prefix, placed by `_inst_bins` on
   // the same non-Darwin, every-ROLE arm as the sweep above.
   'ccd/ccd-tool-adj',
@@ -276,7 +278,7 @@ export const TREE_FILES = [
   // `$CCRC_HERE/../deploy/` to measure what is (not) there. Without it in the
   // tree, that check would report a bug in ccrc on every fixture box.
   'deploy/gen-auth-hash.mjs',
-  // ── The four SKILL TREES and their four installers (worker-skill Task 4,
+  // ── The five SKILL TREES and their five installers (worker-skill Task 4,
   // reviewer-skill Task 10). `_inst_skills` places each tree into
   // `~/.cc-sessions/` and then RUNS the installer it just placed beside it,
   // so all eight are read out of the tree this fixture builds. They are
@@ -288,10 +290,12 @@ export const TREE_FILES = [
   'ccd/worker-skill',
   'ccd/reviewer-skill',
   'ccd/history-skill',
+  'ccd/linear-skill',
   'ccd/install-coordinator-skill.sh',
   'ccd/install-worker-skill.sh',
   'ccd/install-reviewer-skill.sh',
   'ccd/install-history-skill.sh',
+  'ccd/install-linear-skill.sh',
   // graphify Task 3: `_inst_graphify_skill` stages this beside the other three
   // installers, through the same `_inst_atomic`. It ships alone — no
   // `ccd/graphify-skill` tree — because its SRC is assembled from the

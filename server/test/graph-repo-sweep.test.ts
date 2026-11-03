@@ -87,6 +87,9 @@ const sweepEnv = (env: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => {
   Object.assign(e, {
     HOME: home, PATH: `${j('bin')}:${process.env['PATH'] ?? ''}`, PYTHONPATH: STUB, PYTHONDONTWRITEBYTECODE: '1',
     GRAPH_STUB_RECORD: j('record.jsonl'), CCRC_GRAPH_FETCH_SECS: '0',
+    // D-7876: the pass reads the host's pressure under CCRC_PROC_ROOT; a fixture root, empty unless a row plants
+    // pressure files, so the host the suite runs on never defers a row's pass.
+    CCRC_PROC_ROOT: j('proc'),
   });
   for (const [k, v] of Object.entries(env)) { if (v === undefined) delete e[k]; else e[k] = v; }
   return e;
@@ -105,7 +108,10 @@ interface Row {
   cpu_ms: number | null; full_failures: number; full_failed_at: string; nodes: number; edges: number;
   linked: number; migrate: { done: number; pending: number; refused: unknown[] };
 }
-interface Pass { started: string; finished: string; pin: string; status: string; reason?: string; repos: Row[] }
+interface Pass {
+  started: string; finished: string; pin: string; status: string; reason?: string; deferrals?: number; deferred_since?: string;
+  repos: Row[];
+}
 const census = (): { passes: Pass[] } => JSON.parse(fs.readFileSync(j('.ccrc', 'graph-sweep.json'), 'utf8'));
 const lastPass = (): Pass => census().passes.at(-1)!;
 const sourceOf = (repo: string): string => fs.realpathSync(path.join(repo, '.git'));
@@ -313,6 +319,135 @@ describe('the pass: library, lock, pause file, census (spec §5.2, §7; N25, D-7
     expect(lastPass().reason).toMatch(/is inside ~\/projects, which the sweep and ccd enumerate$/);
     expect(fs.existsSync(j('projects', 'graphs'))).toBe(false);
     expect(fs.existsSync(path.join(repo, 'graphify-out'))).toBe(false);
+  });
+});
+
+// ── D-7876: the host's pressure defers a pass ─────────────────────────────
+/** The fixture PROC_ROOT's PSI files, in the kernel's shape: `some` then `full`, each with avg10. null leaves the
+ *  resource's file out (a kernel without it). */
+function psi(memory: string | null, cpu: string | null = null): void {
+  const dir = j('proc', 'pressure');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [r, v] of [['memory', memory], ['cpu', cpu]] as const) {
+    const f = path.join(dir, r);
+    if (v === null) { fs.rmSync(f, { force: true }); continue; }
+    fs.writeFileSync(f, `some avg10=${v} avg60=0.00 avg300=0.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=1\n`);
+  }
+}
+describe('D-7876 — a pass under host pressure is deferred-pressure, journalled, and builds nothing', () => {
+  /** The pause row's box: a repository with an origin, so a fetch would leave FETCH_HEAD behind. */
+  const withOrigin = (): string => {
+    const repo = makeRepo();
+    const origin = j('origin.git');
+    execFileSync('git', ['clone', '-q', '--bare', repo, origin]);
+    git(repo, 'remote', 'add', 'origin', origin);
+    return repo;
+  };
+  const SAID = (r: string, v: string, max: string): string => `host ${r} pressure (avg10) is ${v}, above CCRC_GRAPH_PRESSURE_MAX=${max}`;
+
+  it('memory pressure above the limit: deferred-pressure with its reason, on stderr, before any fetch, store write or build', { timeout: T }, () => {
+    const repo = withOrigin();
+    psi('72.50', '1.00');
+    const r = sweep({ CCRC_GRAPH_PRESSURE_MAX: '60', CCRC_GRAPH_FETCH_SECS: '900' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(lastPass().status).toBe('deferred-pressure');
+    expect(lastPass().reason).toBe(`${SAID('memory', '72.50', '60')}, so the pass is deferred to the timer's next firing`);
+    expect(lastPass().deferrals).toBe(1);
+    expect(lastPass().repos).toEqual([]);
+    expect(r.stderr).toContain(`graph-sweep: deferred-pressure: ${SAID('memory', '72.50', '60')}`);
+    expect(fs.existsSync(STORE()), 'no store write').toBe(false);
+    expect(fs.existsSync(path.join(repo, '.git', 'FETCH_HEAD')), 'no fetch').toBe(false);
+    expect(testCalls(), 'no build, no status call').toEqual([]);
+    expect(records(), 'the engine was never imported').toEqual([]);
+    expect(fs.existsSync(path.join(repo, 'graphify-out')), 'no link').toBe(false);
+  });
+
+  it('CPU pressure above the limit defers too (the reading `ccrc test` queues on: memory, then cpu)', { timeout: T }, () => {
+    makeRepo();
+    psi(null, '88.00');
+    sweep({ CCRC_GRAPH_PRESSURE_MAX: '60' });
+    expect(lastPass().status).toBe('deferred-pressure');
+    expect(lastPass().reason).toContain(SAID('cpu', '88.00', '60'));
+    expect(testCalls()).toEqual([]);
+  });
+
+  it('below the limit, and at it, the pass builds', { timeout: T }, () => {
+    const repo = makeRepo();
+    psi('10.00', '60.00');
+    const r = sweep({ CCRC_GRAPH_PRESSURE_MAX: '60' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(lastPass().status).toBe('ok');
+    expect(rowOf(repo).outcome).toBe('rebuilt');
+    expect(r.stderr).not.toContain('deferred-pressure');
+  });
+
+  it('0 turns the check off: a pass under any pressure builds', { timeout: T }, () => {
+    const repo = makeRepo();
+    psi('99.00', '99.00');
+    const r = sweep({ CCRC_GRAPH_PRESSURE_MAX: '0' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(lastPass().status).toBe('ok');
+    expect(rowOf(repo).outcome).toBe('rebuilt');
+  });
+
+  it('unset, the limit is the default 60, read through the one settings reader (ccrc.env too)', { timeout: T }, () => {
+    const repo = makeRepo();
+    psi('61.00');
+    sweep();
+    expect(lastPass().status).toBe('deferred-pressure');
+    expect(lastPass().reason).toContain(SAID('memory', '61.00', '60'));
+    fs.writeFileSync(j('.ccrc', 'ccrc.env'), 'CCRC_GRAPH_PRESSURE_MAX=70\n');
+    sweep();
+    expect(lastPass().status).toBe('ok');
+    expect(rowOf(repo).outcome).toBe('rebuilt');
+  });
+
+  it('no pressure files (macOS, or a kernel without PSI): nothing to read, so the pass runs', { timeout: T }, () => {
+    const repo = makeRepo();
+    sweep({ CCRC_GRAPH_PRESSURE_MAX: '1' });
+    expect(lastPass().status).toBe('ok');
+    expect(rowOf(repo).outcome).toBe('rebuilt');
+  });
+
+  it('the pause file keeps its precedence: paused, never deferred-pressure', { timeout: T }, () => {
+    makeRepo();
+    psi('99.00');
+    fs.writeFileSync(j('.ccrc', 'graph-sweep-paused'), '');
+    sweep({ CCRC_GRAPH_PRESSURE_MAX: '60' });
+    expect(lastPass().status).toBe('paused');
+    expect(fs.existsSync(j('.ccrc', 'graph-sweep-paused')), 'the hold stays').toBe(true);
+  });
+
+  it('a run of deferred passes is ONE census entry counting them, so the passes before it (and their rows) stay', { timeout: T }, () => {
+    const repo = published();
+    const built = rowOf(repo);
+    psi('90.00');
+    sweep({ CCRC_GRAPH_PRESSURE_MAX: '60' });
+    const first = lastPass();
+    expect([first.deferrals, first.deferred_since]).toEqual([1, first.started]);
+    sleep(1100);
+    for (let i = 0; i < 11; i++) sweep({ CCRC_GRAPH_PRESSURE_MAX: '60' });
+    let passes = census().passes;
+    expect(passes.map((p) => p.status)).toEqual(['ok', 'deferred-pressure']);
+    expect(passes[1]!.deferrals).toBe(12);
+    expect(passes[1]!.deferred_since, 'the run keeps its first pass\'s start').toBe(first.started);
+    expect(passes[1]!.started, 'started and finished stay the latest pass\'s own').not.toBe(first.started);
+    expect(rowOf(repo, passes[0]!), 'the published pass\'s row is still in the census').toEqual(built);
+    psi('1.00');
+    sweep({ CCRC_GRAPH_PRESSURE_MAX: '60' });
+    psi('90.00');
+    sweep({ CCRC_GRAPH_PRESSURE_MAX: '60' });
+    passes = census().passes;
+    expect(passes.map((p) => [p.status, p.deferrals ?? null])).toEqual([
+      ['ok', null], ['deferred-pressure', 12], ['ok', null], ['deferred-pressure', 1]]);
+  });
+
+  it('one reader: the sweep and `ccrc test` both read pressure through ccd/ccrc\'s _psi_over', () => {
+    const code = (f: string): string => fs.readFileSync(path.join(REPO, 'ccd', f), 'utf8').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code('ccd-graph-sweep')).toMatch(/_psi_over "\$\{GK\[CCRC_GRAPH_PRESSURE_MAX\]\}" CCRC_GRAPH_PRESSURE_MAX/);
+    expect(code('ccrc-test')).toMatch(/_tpressure\(\) \{ _psi_over "\$1" CCRC_TEST_PRESSURE_MAX; \}/);
+    for (const f of ['ccd-graph-sweep', 'ccrc-test']) expect(code(f), `${f} parses no PSI file itself`).not.toMatch(/avg10=/);
+    expect(code('ccrc')).toMatch(/^_psi_over\(\) \{/m);
   });
 });
 
@@ -1397,6 +1532,114 @@ describe('excluded, no-source, the fetch', () => {
     sweep({ CCRC_GRAPH_FETCH_SECS: '900' });
     expect(rowOf(repo).outcome).toBe('fresh');
     expect(why(rowOf(repo))).toBe('fetch of origin main failed; using the refs this box has');
+  });
+});
+
+// ── the store's checkout borrows the source's objects (D-7791) ────────────
+// `git clone --shared` of a SHALLOW source goes over upload-pack: it drops --shared without a word, writes no
+// alternates, copies the objects of the source's branch heads only, and exits 0. A source ref under refs/remotes/
+// that is not a branch head was never copied, and the copy never sees a later fetch, so every pass failed at setup
+// with "cannot move the store's checkout". These rows reproduce that state in the fixture store.
+describe('D-7791 — the store\'s checkout borrows the source\'s objects, shallow source or not', () => {
+  const alternatesOf = (ck: string): string[] => {
+    const f = path.join(ck, '.git', 'objects', 'info', 'alternates');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter((l) => l !== '') : [];
+  };
+  const packsOf = (ck: string): string[] => {
+    const d = path.join(ck, '.git', 'objects', 'pack');
+    return fs.existsSync(d) ? fs.readdirSync(d).filter((n) => n.endsWith('.pack')) : [];
+  };
+  /** An upstream and a `--depth 1` clone of it under the projects root, its local branch left behind by a fetch. */
+  function shallowRepo(): { upstream: string; repo: string } {
+    const upstream = j('upstream');
+    fs.mkdirSync(upstream);
+    execFileSync('git', ['init', '-q', '-b', 'main', upstream]);
+    commit(upstream, { 'a.py': 'x = 1\n' }, 'one');
+    commit(upstream, { 'lib/b.py': 'y = 2\n' }, 'two');
+    const repo = j('projects', 'project-a');
+    git(j('projects'), 'clone', '-q', '--depth', '1', `file://${upstream}`, repo);
+    git(repo, 'checkout', '-q', '-b', 'lane-a');            // the checked-out branch is not the source ref
+    commit(upstream, { 'c.py': 'z = 3\n' }, 'three');
+    git(repo, 'fetch', '-q', 'origin', 'main');              // origin/main moves past every local branch head
+    expect(fs.existsSync(path.join(repo, '.git', 'shallow')), 'the fixture source is shallow').toBe(true);
+    expect(git(repo, 'rev-parse', 'refs/remotes/origin/main')).not.toBe(git(repo, 'rev-parse', 'refs/heads/main'));
+    return { upstream, repo };
+  }
+
+  it('a shallow source whose source ref is no branch head builds; its checkout borrows by alternates and mirrors the shallow file', { timeout: T }, () => {
+    const { upstream, repo } = shallowRepo();
+    const healthy = makeRepo('project-b');
+    const r = sweep(INCR);
+    expect(r.status, r.stderr).toBe(0);
+    const tip = git(upstream, 'rev-parse', 'HEAD');
+    expect(rowOf(repo), JSON.stringify(rowOf(repo))).toMatchObject({ outcome: 'rebuilt', ref: 'refs/remotes/origin/main', tip, served: tip, fail: '' });
+    const ck = checkoutOf(repo);
+    expect(alternatesOf(ck)).toEqual([path.join(sourceOf(repo), 'objects')]);
+    expect(packsOf(ck), 'no object is copied').toEqual([]);
+    expect(fs.readFileSync(path.join(ck, '.git', 'shallow'), 'utf8')).toBe(fs.readFileSync(path.join(sourceOf(repo), 'shallow'), 'utf8'));
+    expect(git(ck, 'rev-parse', 'HEAD')).toBe(tip);
+    // the healthy repository of the same pass is unaffected
+    expect(rowOf(healthy)).toMatchObject({ outcome: 'rebuilt', tip: git(healthy, 'rev-parse', 'HEAD') });
+    expect(alternatesOf(checkoutOf(healthy, 'project-b'))).toEqual([path.join(sourceOf(healthy), 'objects')]);
+    expect(fs.existsSync(path.join(checkoutOf(healthy, 'project-b'), '.git', 'shallow')), 'a full source gets no shallow file').toBe(false);
+    // a later fetch is seen at once: the next tip builds, and the diff from the built commit is answered
+    const moved = commit(upstream, { 'd.py': 'w = 4\n' }, 'four');
+    git(repo, 'fetch', '-q', 'origin', 'main');
+    sweep(INCR);
+    expect(rowOf(repo), JSON.stringify(rowOf(repo))).toMatchObject({ outcome: 'refreshed', kind: 'incremental', tip: moved, changed_files: 1 });
+    expect(fs.readFileSync(path.join(ck, '.git', 'shallow'), 'utf8')).toBe(fs.readFileSync(path.join(sourceOf(repo), 'shallow'), 'utf8'));
+  });
+
+  it('a checkout that borrows nothing (a plain copy, the box\'s broken state) is made again and builds; a borrowing one is kept', { timeout: T }, () => {
+    const repo = published();
+    const healthy = makeRepo('project-b');
+    sweep();
+    const ck = checkoutOf(repo);
+    const kept = checkoutOf(healthy, 'project-b');
+    fs.writeFileSync(path.join(kept, '.git', 'kept-marker'), '');
+    // what a shallow source's `clone --shared` left on the box: a full object copy, no alternates, no index
+    fs.rmSync(ck, { recursive: true, force: true });
+    git(keyDir(repo), 'clone', '-q', '--no-local', '--no-checkout', '--no-tags', '--', sourceOf(repo), ck);
+    expect(alternatesOf(ck)).toEqual([]);
+    expect(packsOf(ck).length).toBeGreaterThan(0);
+    const tip = bump(repo);
+    bump(healthy);
+    sweep();
+    expect(rowOf(repo), JSON.stringify(rowOf(repo))).toMatchObject({ outcome: 'rebuilt', tip, served: tip, fail: '' });
+    expect(alternatesOf(ck)).toEqual([path.join(sourceOf(repo), 'objects')]);
+    expect(packsOf(ck), 'the copied objects are gone').toEqual([]);
+    expect(rowOf(healthy).outcome).toBe('rebuilt');
+    expect(fs.existsSync(path.join(kept, '.git', 'kept-marker')), 'a borrowing checkout is never made again').toBe(true);
+  });
+
+  // The checkouts the old code made from a full source are on the box today: `clone --shared` wrote an absolute
+  // alternates line naming the source's objects, plus refs and a branch HEAD the new code never writes. They borrow,
+  // so they are kept as they are.
+  it('a checkout the old `git clone --shared` made from a full source is kept and builds', { timeout: T }, () => {
+    const repo = published();
+    const ck = checkoutOf(repo);
+    fs.rmSync(ck, { recursive: true, force: true });
+    git(keyDir(repo), 'clone', '--shared', '--no-checkout', '--no-tags', '-q', '--', sourceOf(repo), ck);
+    const before = alternatesOf(ck);
+    expect(before, 'the old clone borrows by alternates').toHaveLength(1);
+    expect(fs.existsSync(path.join(sourceOf(repo), 'shallow')), 'the fixture source is full').toBe(false);
+    fs.writeFileSync(path.join(ck, '.git', 'kept-marker'), '');
+    const tip = bump(repo);
+    sweep();
+    expect(rowOf(repo), JSON.stringify(rowOf(repo))).toMatchObject({ tip, served: tip, fail: '' });
+    expect(['rebuilt', 'refreshed']).toContain(rowOf(repo).outcome);
+    expect(fs.existsSync(path.join(ck, '.git', 'kept-marker')), 'an old shared clone is never made again').toBe(true);
+    expect(alternatesOf(ck)).toEqual(before);
+    expect(git(ck, 'rev-parse', 'HEAD')).toBe(tip);
+  });
+
+  it('a checkout that cannot move says git\'s own first line in the row\'s reason', { timeout: T }, () => {
+    const repo = published();
+    fs.writeFileSync(path.join(checkoutOf(repo), '.git', 'index.lock'), '');
+    const tip = bump(repo);
+    sweep();
+    expect(rowOf(repo)).toMatchObject({ outcome: 'failed', fail: 'setup' });
+    expect(why(rowOf(repo))).toMatch(new RegExp(`^cannot move the store's checkout of ${rowOf(repo).repo_key} to ${tip.slice(0, 12)}: fatal: Unable to create '.*index\\.lock': File exists\\.$`));
   });
 });
 

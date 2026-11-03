@@ -75,11 +75,13 @@ export function FleetHead(
                   as undiscoverable as the strip, which is the defect. The
                   accessible name names both halves of the screen — sign-in and
                   accounts — because "Account" alone is what the strip already
-                  failed to communicate. */}
+                  failed to communicate. It begins with the visible word, like
+                  the settings door below, so a voice user saying "Account"
+                  reaches it (WCAG 2.5.3, D-7897). */}
               <Door
                 className="accounts-door"
                 glyph="🔑"
-                aria-label="Your sign-in and accounts"
+                aria-label="Account — your sign-in and accounts"
                 onClick={() => navigate('/accounts')}
               >
                 Account

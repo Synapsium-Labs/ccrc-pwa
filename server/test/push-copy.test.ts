@@ -35,6 +35,15 @@ const fleetState = (over: Partial<FleetState> = {}): FleetState =>
 
 const dir = async () => mkdtemp(path.join(tmpdir(), 'push-copy-'));
 
+// D-7878: these factories own their watchers; drain them before tmpHelpers removes their homes.
+const watchers: FleetWatcher[] = [];
+afterEach(async () => {
+  for (const w of watchers.splice(0)) {
+    w.stop();
+    await w.closeDelegation();
+  }
+});
+
 /** Per-session bookkeeping `markIdle` and the tmux runner both need: the pid
  *  the live-status file is keyed by, and the wrapper config dir it lives
  *  under. */
@@ -175,6 +184,7 @@ function watcher(opts: {
   // ~/.ccrc — never read by a local-mode tick, but a fixture has no business
   // naming it.
   const w = new FleetWatcher(deps, new Bus(), 10_000, path.join(home, 'state-cache.json'));
+  watchers.push(w);
   return {
     home,
     coord,
@@ -578,6 +588,7 @@ describe('ask notifications carry actions only where the route would accept them
       ...testDeps(home, runner), push: push as never,
       ...(coord ? { coord } : {}), ...(opts.notifyLog ? { notifyLog: opts.notifyLog } : {}),
     }, new Bus(), 10_000, path.join(home, 'state-cache.json'));
+    watchers.push(w);
     return {
       sent,
       tick: () => w.tick(),

@@ -1,7 +1,8 @@
-// A bounded least-recently-used cache (desktop polish Task C7): the one highlighter (`markdown.tsx#boundedHighlight`)
-// keeps what highlight.js answered in one, so a block drawn again (a row that renders again, the same fence in another
-// message, a Docs page reopened) is not highlighted again. Bounded twice: by its number of entries and by the total
-// weight of its values, and an entry heavier than the whole weight bound is never kept.
+// A bounded least-recently-used cache (desktop polish Task C7; moved off the main thread by native Docs reader W5h-a): the
+// highlight worker (`highlightJob.ts#createHighlightAnswerer`) keeps what highlight.js answered in one, so a block drawn
+// again (a row that renders again, the same fence in another message, a Docs page reopened) is not highlighted again.
+// Bounded twice: by its number of entries and by the total weight of its values, and an entry heavier than the whole
+// weight bound is never kept.
 //
 // L1: imports nothing.
 
@@ -21,8 +22,9 @@ export interface Lru<V> {
 
 /** Every cache `createLru` has made. They are module-scope caches that live as long as the page, so in production,
  *  where each module is evaluated once, holding them keeps nothing alive that would otherwise be freed. Under the dev
- *  server's hot reload, a module that makes one (`markdown.tsx`) can be evaluated again on its own: it makes a new
- *  cache, and the old one stays reachable from here, entries and all, until the page reloads. */
+ *  server's hot reload, a module that makes one (`highlightJob.ts`, or `markdown.tsx` until W5h-a's Task 6) can be
+ *  evaluated again on its own: it makes a new cache, and the old one stays reachable from here, entries and all, until
+ *  the page reloads. */
 const MADE = new Set<Lru<unknown>>();
 
 /** Empty every cache `createLru` has made. TEST ISOLATION ONLY: `pwa/test/setup.ts`'s shared `afterEach` calls it, so

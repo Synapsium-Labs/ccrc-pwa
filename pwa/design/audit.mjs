@@ -1274,13 +1274,34 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: "a ledger section's mono lines, and the sleeping session ids (RemoveSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
-  '.acct-compromise > summary': {
+  '.acct-compromise > summary, .acct-grants > summary': {
     under: ['var(--bg-sheet)'],
-    why: "the compromise disclosure's summary, in a result frame (CompromiseSteps.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+    why: "the compromise disclosure's summary, in a result frame (CompromiseSteps.tsx), and the sign-in URL card's \"What this grants\" (RunFrame.tsx's UrlCard, Task A22), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
   '.acct-compromise-steps': {
     under: ['var(--bg-sheet)'],
     why: "the compromise disclosure's steps, in a result frame (CompromiseSteps.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  // ── accounts plan Task A22 (D-7849): Mint and Sign in ──────────────────
+  '.acct-url-host': {
+    under: ['var(--bg-sheet)'],
+    why: "the server's host in mono beside Open, and in the phone's private-tab line (RunFrame.tsx's UrlCard), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-grant-list': {
+    under: ['var(--bg-sheet)'],
+    why: "the scopes in \"What this grants\" (RunFrame.tsx's UrlCard), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-grant-mark': {
+    under: ['var(--bg-sheet)'],
+    why: "the Remote Control mark beside its scope (RunFrame.tsx's UrlCard), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-countdown': {
+    under: ['var(--bg-sheet)'],
+    why: "the sign-in's countdown (RunFrame.tsx's Countdown), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  ".acct-countdown[data-wait='true']": {
+    under: ['var(--bg-sheet)'],
+    why: "the countdown in amber while the sign-in waits on the operator (RunFrame.tsx's Countdown), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
 };
 
@@ -1481,7 +1502,7 @@ export function audit(root = PWA_ROOT) {
    *      .keycap`'s ground was exactly that, and threw);
    *    * a rule with a SELF_GROUNDED_EXEMPT reason is exempt wherever it is
    *      reached, not only when route 1 reaches it. */
-  const contextsFor = (base) => {
+  const contextsOf = (base) => {
     const vars = localVars(base.body);
     const out = [{ suffix: '', vars, rule: base }];
     // Each variant gets its own context, AND variants that qualify the base's
@@ -1540,6 +1561,17 @@ export function audit(root = PWA_ROOT) {
       if (g.names.length > 1) out.push({ ...g, suffix: ` [as ${g.names.join(' + ')}]` });
     }
     return out;
+  };
+
+  /** `contextsOf`, worked out once per base. It reads only this audit's fixed
+   *  inputs (the rules, the self-grounded set, the registries), so a second call
+   *  for the same rule returns the same contexts — and the passes below ask for
+   *  153 distinct bases 471 times, each answer a scan of every rule. Callers
+   *  only read the contexts; none of them mutates one. */
+  const contextsMemo = new Map();
+  const contextsFor = (base) => {
+    if (!contextsMemo.has(base)) contextsMemo.set(base, contextsOf(base));
+    return contextsMemo.get(base);
   };
 
   /** Measure one ink against one ground, in both themes. The single place a

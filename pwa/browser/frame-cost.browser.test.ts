@@ -41,8 +41,8 @@ import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import {
-  backlogFrame, buildDist, countRenders, fleetApi, fleetFixture, fleetFrame, fleetFrameAt, FIXTURE_NOW_MS, frameCost, INFLIGHT_CAP_MS, longTranscript, medianOf,
-  openApp, QUIET_CAP_MS, removeDist, serveDist, SPAN_SLACK_MS, summarize, type AppFixture, type AppView, type DistServer, type FrameCostRecord,
+  backlogFrame, countRenders, fleetApi, fleetFixture, fleetFrame, fleetFrameAt, FIXTURE_NOW_MS, frameCost, INFLIGHT_CAP_MS, longTranscript, medianOf,
+  openApp, QUIET_CAP_MS, serveDist, sharedDist, SPAN_SLACK_MS, summarize, type AppFixture, type AppView, type DistServer, type FrameCostRecord,
   type HarnessEvent, type OpenedApp,
 } from './app';
 
@@ -108,7 +108,7 @@ let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true }); // never with RENDER_ARGS: the cost cases run on a stock Chrome
 }, 180_000);
@@ -116,7 +116,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await server?.close();
-  removeDist(dist);
 });
 
 // ---- readiness -----------------------------------------------------------------------------------------------------

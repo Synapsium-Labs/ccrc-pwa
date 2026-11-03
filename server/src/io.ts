@@ -6,6 +6,8 @@ import type { ReadFailure, TestboxOpReply, TestboxToolsSyncReply } from '../../s
 import type { DiskMeasured } from '../../shared/disk.js';
 import { measureDisk } from '../../agent/src/disk.js';
 import { measurePressure } from '../../agent/src/pressure.js';
+import { measureBackup } from '../../agent/src/backup.js';
+import type { BackupRead } from '../../shared/backup.js';
 import { measureTestbox, syncTestboxTools } from '../../agent/src/testboxOp.js';
 import type { HostPsi } from '../../shared/pressure.js';
 import { isReadFromRange, LANE_STATE_DIR_NAME, laneStateOpenHolds } from '../../shared/agent-protocol.js';
@@ -254,6 +256,12 @@ export interface FleetIO {
    *  op, a kernel with no PSI): never a stall. `unanswered` is an ask the link or the agent failed (a timeout, a
    *  disconnect, an error reply, a malformed one): the evidence of a stall. Neither is ever a reading of zero. */
   pressureMeasured(): Promise<MeasuredPressure>;
+  /** The backup state files (D-7858), as the `backup` op reads them. Takes nothing: the adapter reads the directory ITS
+   *  box's reader is configured with (D-7859). Failure contract: never rejects. A read fault is not a failure here: it
+   *  is a `BackupRead` of `unreadable`, which the decider judges. `unsupported` is an agent too old to list the op
+   *  (never sent it); `unanswered` an ask the link or the agent failed, or a reply in no shape `readBackupRead` knows.
+   *  Neither is ever a read. */
+  backupMeasured(): Promise<MeasuredBackup>;
   /** The fleet host's `testbox` op (test box plan TB9, D-7411): its measured tools and the box's status answer, or the
    *  op's typed failure. Takes nothing: the adapter reads ITS box's test box settings.
    *  Failure contract: never rejects. `no-op` is an agent too old to list the op (never sent it); `unanswered` is an
@@ -273,6 +281,11 @@ export type MeasuredTestbox =
 export type TestboxSyncAsked =
   | { ok: true; reply: TestboxToolsSyncReply }
   | { ok: false; reason: 'no-op' | 'unanswered' };
+
+/** The `backup` read as a seam answers it (D-7858), or why there is none. */
+export type MeasuredBackup =
+  | { ok: true; read: BackupRead }
+  | { ok: false; reason: 'unsupported' | 'unanswered' };
 
 /** The `pressure` reading as a seam answers it (#1170), or why there is none. */
 export type MeasuredPressure =
@@ -505,6 +518,11 @@ export const localIO: FleetIO = {
   // `unsupported`, never a stall, so a local fleet never reads its own missing /proc as host pressure.
   pressureMeasured: async () => {
     try { return { ok: true, psi: measurePressure() }; } catch { return { ok: false, reason: 'unsupported' }; }
+  },
+
+  // The agent's own `backup` body on this box (D-7858): this process's `CCRC_BACKUP_STATE_DIR` (D-7859). It never throws.
+  backupMeasured: async () => {
+    try { return { ok: true, read: measureBackup() }; } catch { return { ok: false, reason: 'unanswered' }; }
   },
 
   // The agent's own op bodies on this box (D-7411), as `statfsMeasured` calls `measureDisk`; neither ever rejects.

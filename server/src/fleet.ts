@@ -17,7 +17,8 @@ import { RADAR_PROBE_FRESH_S, freshWithin, sessionBucket, sessionLifecycle, sess
 import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
-import type { ApprovalRow, AskRow, CoordStore } from './coord/store.js';
+import type { ApprovalRow, AskRow } from './coord/store.js';
+import type { WatcherCoordPort } from './coord/ports.js';
 // Task 3: the pure board-placement decision (Task 2) — this file supplies its
 // ONE port (`stampOf`) from a `coord.db` read, placement.ts itself imports
 // nothing from here. D-2921 moved the fold that BUILDS that port into
@@ -202,7 +203,7 @@ function fleetWithCoordinator(row: AskRow | null, nowMs: number, approval: Appro
 
 /** `coord.heldApprovalsFor`'s guarded whole-frame read, `readCurrentAsks`' twin: a broken store degrades every row's
  *  approval source to none (Needs-you, the safe direction), never a throw out of `assembleFleet`. */
-function readHeldApprovals(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, ApprovalRow> {
+function readHeldApprovals(coord: WatcherCoordPort | undefined, childIds: readonly string[]): Map<string, ApprovalRow> {
   if (!coord || childIds.length === 0) return new Map();
   try {
     const read = currentFor(coord, childIds, 'approval');
@@ -232,7 +233,7 @@ function readHeldApprovals(coord: CoordStore | undefined, childIds: readonly str
  * near-identical lines a second, burying the one warn that names the real
  * cause" the reviewer measured is gone by construction, not by an
  * extra dedup flag. */
-function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, AskRow> {
+function readCurrentAsks(coord: WatcherCoordPort | undefined, childIds: readonly string[]): Map<string, AskRow> {
   if (!coord || childIds.length === 0) return new Map();
   try {
     const read = currentFor(coord, childIds, 'ask');
@@ -295,7 +296,7 @@ type CoordPlacementsRead = { ok: true; stampOf: StampLookup } | { ok: false };
  * alone would bounce every worker between cards at the close-then-open wave
  * boundary, one of the four defects this design exists to end.
  */
-function readCoordPlacements(coord: CoordStore | undefined, sessionCount: number): CoordPlacementsRead {
+function readCoordPlacements(coord: WatcherCoordPort | undefined, sessionCount: number): CoordPlacementsRead {
   if (!coord || sessionCount === 0) return { ok: true, stampOf: emptyCoordPlacements() };
   try {
     const read = coord.coordPlacementStamps();
@@ -321,7 +322,7 @@ type ReleasedRead = { ok: true; lookup: ReleasedLookup } | { ok: false };
  * synchronous `node:sqlite` throw is caught, never thrown out of `assembleFleet`, and answers `{ ok: false }`,
  * which makes every row's `releasedFrom` null this tick — doubt leaves every row where it was.
  */
-function readReleased(coord: CoordStore | undefined, sessionIds: readonly string[]): ReleasedRead {
+function readReleased(coord: WatcherCoordPort | undefined, sessionIds: readonly string[]): ReleasedRead {
   if (!coord || sessionIds.length === 0) return { ok: true, lookup: foldLastRuns([], [], []) };
   try {
     const read = coord.lastRunBySession(sessionIds);
@@ -343,7 +344,7 @@ function readReleased(coord: CoordStore | undefined, sessionIds: readonly string
  * once per row's read, never thrown out of `assembleFleet`, and answers null for that row this tick (`SessionRun`'s contract:
  * doubt leaves the row where it was).
  */
-function readSessionRun(coord: CoordStore | undefined, r: { id: string; child: SessionRecord['child'] }): SessionRunRead {
+function readSessionRun(coord: WatcherCoordPort | undefined, r: { id: string; child: SessionRecord['child'] }): SessionRunRead {
   const none: SessionRunRead = { ok: true, run: null, openRun: null };
   if (!coord) return none;
   try {
@@ -560,7 +561,7 @@ export async function assembleFleet(
    * state reads this assembly already does per row, and paid only when a
    * `coord` is actually passed.
    */
-  coord?: CoordStore,
+  coord?: WatcherCoordPort,
   /** Fresh per-session usage readings (routing slice 0, the watcher's usage
    *  lane), same pattern as `hookStates`: absent on a cold start and in every
    *  older test, which is why the field defaults to null. */

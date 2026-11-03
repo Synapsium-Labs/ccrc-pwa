@@ -240,11 +240,14 @@ export function CommandPalette({
                 onClick={() => onRun(o.id)}
                 className={cn(LIST_ROW, 'px-2', i === at && PALETTE_ACTIVE)}
               >
+                {/* A SPACE BETWEEN THE TITLE AND THE GROUP (WCAG 2.5.3, D-7897): a flex row
+                    never draws a whitespace-only text node, but without one the row's text
+                    reads `firstproject-a`, a word its name (`first, project-a`) does not hold. */}
                 <span className="min-w-0 flex-1 truncate font-ui text-base text-ink-primary">{o.title}</span>
                 {o.group !== undefined
-                  ? <span className="flex-none font-mono text-xs text-ink-tertiary">{o.group}</span>
+                  ? <>{' '}<span className="flex-none font-mono text-xs text-ink-tertiary">{o.group}</span></>
                   : null}
-                {o.keys !== undefined && o.keys.length > 0 ? <KeyHint keys={o.keys} hideOnTouch /> : null}
+                {o.keys !== undefined && o.keys.length > 0 ? <>{' '}<KeyHint keys={o.keys} hideOnTouch /></> : null}
               </div>
             ))}
           </div>

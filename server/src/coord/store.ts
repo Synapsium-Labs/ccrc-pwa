@@ -1982,7 +1982,7 @@ export class CoordStore {
       if (!n.ok) return { ok: false, kind: 'run-unreadable', detail: n.detail };
       runs.push({ id: n.value, sessionId: r.sessionId, claimedBy: r.claimedBy,
         state: isRunState(r.state) ? r.state : 'unknown', openedAt: r.openedAt,
-        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor });
+        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor, dispatchStartedAt: r.dispatchStartedAt });
     }
     return { ok: true, runs };
   }
@@ -2007,7 +2007,7 @@ export class CoordStore {
     return this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
       'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state, sessionId, claimedBy, ' +
-      `openedAt, sessionBornAt, sessionBornFor FROM runs WHERE ${where} ORDER BY id`,
+      `openedAt, sessionBornAt, sessionBornFor, dispatchStartedAt FROM runs WHERE ${where} ORDER BY id`,
     ).all(...(column === 'either' ? [id, id] : [id])) as unknown as SeriesRow[];
   }
 
@@ -9735,6 +9735,20 @@ export class CoordStore {
     return { count: r.n, maxSequence: r.m };
   }
 
+  /** The retained evidence below a cut; the unique journalSequence index bounds both retention statements. */
+  countDelegationEventsAtOrBelow(sequence: number): number {
+    const r = this.db.prepare('SELECT COUNT(*) AS n FROM delegation_events WHERE journalSequence <= ?').get(sequence) as { n: unknown };
+    if (typeof r.n !== 'number' || !Number.isSafeInteger(r.n)) throw new DelegationModelError('unreadable-row', 'delegation_events: COUNT(*) is not an integer');
+    return r.n;
+  }
+
+  /** One atomic, bounded delete; carried sequences sit outside the gap the caller supplies. */
+  deleteDelegationEventsBetween(afterExclusive: number, throughInclusive: number, limit: number): number {
+    return tx(this.db, () => Number(this.db.prepare(
+      'DELETE FROM delegation_events WHERE id IN (SELECT id FROM delegation_events WHERE journalSequence > ? AND journalSequence <= ? ORDER BY journalSequence LIMIT ?)',
+    ).run(afterExclusive, throughInclusive, limit).changes));
+  }
+
   /**
    * The projection as a checkpoint, for a DRIFT CHECK: what SQLite says, in the shape the checkpoint has. Every table is
    * read through its typed reader, so an unknown enum word, a malformed list or a wrong storage class throws an
@@ -9850,6 +9864,9 @@ export class CoordStore {
   addModification(program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null }, now: number): number { return ledgers.addModification(this.db, program, m, now); }
   markModificationsMerged(program: string, pr: number, mergedAt: number): number { return ledgers.markModificationsMerged(this.db, program, pr, mergedAt); }
   goalsFor(program: string): GoalsView { return ledgers.goalsFor(this.db, program); }
+  /** The newest tick mail of an item by its subject, whoever it went to, or null (the duplicate guard's and the stale label's one reader, plan PL4). */
+  newestTickMail(subject: string): { state: MailDeliveryState; toId: string } | null { return ledgers.newestTickMail(this.db, subject); }
+  pinnedProgrammes(): string[] { return ledgers.pinnedProgrammes(this.db); }
 
   /** Whether the programme has a run that is not `done` or `failed`; `planned` counts as open. This is
    *  `programOpenRunCount`'s question, and the one the operator's dismiss asks (spec §3.4). */

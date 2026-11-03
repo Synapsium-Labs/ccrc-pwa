@@ -53,9 +53,11 @@ const ROOT = path.resolve(here, '..', '..');
  *  over the limit now fails its row. */
 const GROWTH_ARMED = true;
 
-/** The union of spec §5.2 and the ARCH-01 ticket. */
+/** The union of spec §5.2 and the ARCH-01 ticket, plus the library ccd/ccd loads at its foot (D-6913), held by the same
+ *  limit and waiver ledger as ccd/ccd once its move had landed. */
 const GROWTH_FILES = [
   'ccd/ccd',
+  'ccd/lib/disk-retention.sh',
   'ccd/ccrc',
   'ccd/session-hook.sh',
   'server/src/watch.ts',
@@ -656,6 +658,29 @@ describe('growthCheck: the reviewed waiver ledger (D-6223)', () => {
       .toBe('ccd/ccd grew by 60 net code lines, over its ledger max of 50 under D-6223');
     expect(overLine(['ccd/ccd'], [], (f) => f, growthVerdicts([row(60)], ['ccd/ccd'], [], null, [], [w()]).flatMap((v) => (v.waiver ? [v.waiver] : []))))
       .toBe('ccd/ccd (waived: D-6223, max 60, ledger entry added 2026-10-21)');
+  });
+
+  it('ccd/lib/disk-retention.sh is held like ccd/ccd: listed, measured, refused over the limit, passed only by an added waiver (D-6913)', () => {
+    const lib = 'ccd/lib/disk-retention.sh';
+    // The library ccd/ccd loads at its foot is listed, and the bash stripper measures it as code, not as nothing.
+    expect(GROWTH_FILES as readonly string[]).toContain(lib);
+    expect(codeLines(lib, readFileSync(path.join(ROOT, lib), 'utf8'))).toBeGreaterThan(0);
+    const delta = GROWTH_LIMIT + 1;
+    const row: GrowthRow = { file: lib, base: 1000, head: 1000 + delta, delta, atBoth: true };
+    expect(growthOver([row], [])).toEqual([lib]);
+    const [refused] = growthVerdicts([row], [lib], [], null, [], []);
+    expect({ fails: refused!.fails, why: refused!.why }, 'no waiver')
+      .toEqual({ fails: true, why: `${lib} grew by ${delta} net code lines, over the limit of ${GROWTH_LIMIT}` });
+    // A waiver for the library parses against the listed files, and only one the diff itself adds passes the row.
+    const parsed = parseWaiverFiles(ledger(waiver({ file: lib, maxDelta: delta })), GROWTH_FILES, today);
+    expect(parsed.problems).toEqual([]);
+    const added = waiversAdded([], parsed.entries);
+    expect(added.map((w) => w.file)).toEqual([lib]);
+    const [waived] = growthVerdicts([row], [lib], [], null, [], added);
+    expect({ fails: waived!.fails, title: waived!.title }, 'an added waiver covering the delta')
+      .toEqual({ fails: false, title: `${lib}: delta +${delta} (GROWTH_OVER, waived: D-6223, max ${delta})` });
+    // The same waiver already on the merge-base waives nothing.
+    expect(growthVerdicts([row], [lib], [], null, [], waiversAdded(parsed.entries, parsed.entries))[0]!.fails, 'a waiver on the base').toBe(true);
   });
 
   it('the armed path, end to end: only an entry the PR\'s own diff adds waives, and only up to its maxDelta', () => {

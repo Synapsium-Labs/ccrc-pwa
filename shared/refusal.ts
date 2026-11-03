@@ -42,7 +42,7 @@
  *     `refuseOversizedClaim`, not the table.
  */
 import type { ClaimRefusal } from './box-token.js';
-import type { AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
+import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from './api.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
 import type { ItemMoveRefusal } from './ledgers.js';
@@ -128,6 +128,17 @@ export type GenericRefusal = (typeof GENERIC_REFUSALS)[number];
  */
 export const LEDGER_ROUTE_REFUSALS = {
   notYourProgramme: 'not-your-programme', badSpecPath: 'bad-spec-path', badInShort: 'bad-in-short',
+  // The operator's routes (plan PL4): a tick when the programme has no open run (`programme-ended`: dismiss the item), when its
+  // only open run has no claimant (`programme-unclaimed`: abandon that run, a dismiss is refused `programme-live`), and a tick of
+  // a secret item (`use-secret-route`: the value goes to its own route, never the tick).
+  programmeEnded: 'programme-ended', programmeUnclaimed: 'programme-unclaimed', useSecretRoute: 'use-secret-route',
+  // …and the tick's mail past the mail body cap (review 1335 F6): the generic `too-large` word, 413, its status declared with the generic ones.
+  tooLarge: 'too-large',
+  // The secret's own route (plan PL6): an item that is not a secret item (`not-a-secret-item`), and a stored programme or slot
+  // name that fails its shape when the route re-checks both before building any path (`bad-slot`).
+  notSecretItem: 'not-a-secret-item', badSlot: 'bad-slot',
+  // …and every failure AFTER the value is in its slot (review 1389 F3): the value is stored, the item is not ticked.
+  storedNotTicked: 'stored-not-ticked',
 } as const;
 export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
 
@@ -148,7 +159,9 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The Linear proxy's routes (#1444, spec §6.8): their fourteen words of their own.
   | LinearProxyRefusal
   // The write routes (accounts plan Task A17, D-7739): their words of their own.
-  | AccountWriteRefusal;
+  | AccountWriteRefusal
+  // The sign-in routes (accounts plan Task A21, D-7793): their nine words of their own.
+  | AccountAuthRefusal;
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -219,6 +232,14 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'not-discardable': 409, 'lane-exists': 409, 'config-dir-exists': 409, 'live-sessions': 409, 'sleeping-sessions': 409,
   'upstream': 409, 'last-home-able': 409, 'auth-in-progress': 409, 'not-a-token-lane': 409, 'duplicate-id': 409,
   'token-unverified': 503,
+  // The sign-in routes (accounts plan Task A21, D-7793): CHOSEN, not measured — new words, on the write routes' rule. 400
+  // for a code the operator can paste again, 403 for a session that did not start the attempt (never 401: it is signed
+  // in), 409 for an attempt or a lane whose state refuses the act now, and 501 for a node that cannot run a sign-in at
+  // all, the status `unsupported` answers.
+  'bad-code': 400, 'not-your-attempt': 403,
+  'code-already-sent': 409, 'no-auth-attempt': 409, 'auth-url-untrusted': 409, 'method-unmeasured': 409, 'node-changed': 409,
+  'not-a-sign-in-lane': 409,
+  'auth-unsupported-here': 501,
   // The Linear routes (named workspaces S4, S4b): CHOSEN, not measured — new words. 400 for what the caller sent
   // (a ref with no text or over its cap, a key the shape rule refuses, a key Linear rejected or forbade: all things the
   // operator can fix and none a fault of the box), 409 for a check with no usable stored key, and 503 for Linear
@@ -263,6 +284,15 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // an item that is not in a state the move starts from, for the wrong actor and for a programme still running.
   [LEDGER_ROUTE_REFUSALS.notYourProgramme]: 403, [LEDGER_ROUTE_REFUSALS.badSpecPath]: 400, [LEDGER_ROUTE_REFUSALS.badInShort]: 400,
   'unknown-item': 404, 'not-open': 409, 'wrong-actor': 409, 'programme-live': 409,
+  // The operator's routes (plan PL4): CHOSEN, not measured. 409 for each: the item's programme is in a state the tick cannot
+  // act in, or the item is of a kind whose door is another route; none is a fault in what the operator sent.
+  [LEDGER_ROUTE_REFUSALS.programmeEnded]: 409, [LEDGER_ROUTE_REFUSALS.programmeUnclaimed]: 409, [LEDGER_ROUTE_REFUSALS.useSecretRoute]: 409,
+  // The secret's route (plan PL6): CHOSEN, not measured. 409 for both: the item is of a kind this door does not take, or names a
+  // slot this server will not build a path from; neither is a fault in the value the operator sent.
+  [LEDGER_ROUTE_REFUSALS.notSecretItem]: 409, [LEDGER_ROUTE_REFUSALS.badSlot]: 409,
+  // CHOSEN, not measured: 503, as `write-failed`. The box failed partway (a write, an fsync, the tick's transaction); the value
+  // the operator sent is stored, and saving it again finishes the act.
+  [LEDGER_ROUTE_REFUSALS.storedNotTicked]: 503,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
   // for a call that names more than one, or names an issue that now lives in another team; 403 for the policy point's

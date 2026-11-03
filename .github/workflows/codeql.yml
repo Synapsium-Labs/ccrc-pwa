@@ -1,0 +1,103 @@
+# CODE SCANNING, as an advanced setup (D-7744, 2026-11-02). GitHub's default
+# setup analysed every push to main as well as every pull request: about 900
+# runner minutes a day for the pushes alone, because each push to main builds
+# a full overlay-base database (about 29 minutes for javascript-typescript),
+# and each of those databases (about 1.5 GB) was saved to the Actions cache,
+# which kept the repository's cache over its 10 GB limit. This workflow scans
+#   - every pull request to main, as default setup did: an overlay analysis
+#     on the newest overlay-base database of main (about 6 minutes), superseded
+#     runs cancelled;
+#   - main once a day (schedule), which builds the overlay-base database the
+#     pull requests analyse against, and then deletes the older ones (`prune`).
+#     Its cache key differs from default setup's, so until the first run on
+#     main a pull request finds no base and runs a full analysis (about 10
+#     minutes for javascript-typescript);
+#   - on demand (workflow_dispatch).
+# It does NOT run on a push to main: a merge is scanned as a pull request
+# before it lands, and main itself within a day of it.
+#
+# Nor in the merge queue. No ruleset or branch protection requires a CodeQL
+# check or code-scanning results (the required checks are ci.yml's build-pwa
+# and test legs), so a scan there would gate nothing; and outside a pull
+# request the action builds no overlay, so each queue group would cost a full
+# analysis (about 10 minutes for javascript-typescript; about 570 runner minutes
+# a day at the queue's measured 57 runs a day) and decide nothing. If a rule
+# ever requires CodeQL results, add `merge_group:` to `on:` so the queue reports
+# the same `Analyze (<language>)` checks a pull request does.
+#
+# The languages, query suite and runner are default setup's as it was
+# configured when this replaced it; the category keeps default setup's
+# `/language:<language>`, so the alerts it found stay the same alerts.
+name: codeql
+
+permissions:
+  contents: read
+
+on:
+  # The default activity types (opened, synchronize, reopened), as default setup.
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+# A pull request's newer push cancels its older scan; anything else runs to the end, one at a time per ref.
+concurrency:
+  group: codeql-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    # A full analysis of main took at most 33 minutes under default setup; a pull request's, about 6 to 9.
+    timeout-minutes: 45
+    # security-events: write — the upload of the results. (`actions: read` is
+    # needed only in a private repository; the cache needs no grant.)
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
+
+  # THE CACHE KEEPS ONE overlay-base database per language: the one the daily
+  # scan just saved. A pull request restores only the newest, so every older
+  # one is dead weight until the cache's 7-day idle eviction; at one a day that
+  # is still about seven of them, about 10 GB. Runs only after every language
+  # analysed and saved (`needs`), on main, so a failed scan deletes nothing.
+  prune:
+    name: prune overlay-base caches
+    needs: analyze
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # actions: write — deleting a cache entry.
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Delete all but the newest overlay-base database of each language
+        run: |
+          set -euo pipefail
+          # Key: codeql-overlay-base-database-<v>-<hash>-<language>-<codeql version>-<sha>-<run>-<attempt>.
+          gh cache list --ref refs/heads/main --key codeql-overlay-base-database- \
+            --sort created_at --order desc --limit 100 --json id,key \
+            --jq '.[] | "\(.id) \(.key | split("-") | .[6]) \(.key)"' > caches.txt
+          cat caches.txt
+          awk 'seen[$2]++ { print $1 }' caches.txt | while read -r id; do
+            gh cache delete "$id"
+            echo "deleted $id"
+          done

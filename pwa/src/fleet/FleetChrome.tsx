@@ -18,6 +18,7 @@ import { useProjectRows, type ProjectRowsPlane } from './useProjectRows';
 import { useActionsSheet, type ActionsSheet } from './useActionsSheet';
 import { useArchiveAll, type ArchiveAllPlane } from './ArchiveAllPlane';
 import type { FleetStore } from '../stores/fleet';
+import { useWaitingRefetch } from '../ledgers/waitingStore';
 
 export interface FleetChrome {
   /** The store the planes and the sheets act on (the app's, or a test's). */
@@ -56,6 +57,8 @@ export function FleetChromeProvider({ store, children }: { store: FleetStore; ch
   const projects = useProjectRows(pools, store.getState().setProjects);
   const actions = useActionsSheet(sessions);
   const archiveAll = useArchiveAll(store);
+  // ONE refetch of the Waiting on you list for the whole shell, on focus and visibility (desktop-polish PL5a, review 1336).
+  useWaitingRefetch(store);
   const [archiveAllFor, setArchiveAllFor] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [addWorkspaceFor, setAddWorkspaceFor] = useState<string | null>(null);
@@ -75,4 +78,12 @@ export function useFleetChrome(): FleetChrome {
   const chrome = useContext(FleetChromeContext);
   if (chrome === null) throw new Error('FleetChrome is not mounted');
   return chrome;
+}
+
+/** The shell's one health poll for a reader that may render where no provider is mounted (D-7860: Settings' quiet
+ *  Backups line, whose page a test may mount alone). Inside a provider it is `useFleetChrome().health`; outside one it
+ *  is `undefined`, which such a reader says as "not known yet". A part that needs the chrome's planes or sheets asks
+ *  `useFleetChrome()`, which throws instead. */
+export function useChromeHealthIfMounted(): FleetHealth | null | undefined {
+  return useContext(FleetChromeContext)?.health;
 }

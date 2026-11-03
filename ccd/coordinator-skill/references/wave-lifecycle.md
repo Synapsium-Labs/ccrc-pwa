@@ -1495,12 +1495,25 @@ does. Send the new-head round only when, after the same fetch, `git merge-tree
 --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 0:
 exit 1 (a conflict) or any other answer leaves the stop standing for the
 operator. The one rerun the RED bullet allows does not clear a red that is
-`main`'s own, and no close and reopen does either: the verdict calls a required
-name red while any completed run of it on the head failed, a later green run of
-it included (D-7495; judging only the newest run would loosen the gate, which is
-the operator's to decide), a rerun replays its run's original merge commit, and
-a close and reopen of the PR can race GitHub's recompute of the merge ref. Where
-you take the route, say so in your turn's text with the reads that showed it.
+`main`'s own, and no close and reopen does either: a rerun replays its run's
+original merge commit, which still carries `main`'s red, and a close and reopen
+of the PR can race GitHub's recompute of the merge ref. Where you take the
+route, say so in your turn's text with the reads that showed it.
+
+**The latest attempt decides** (D-7546, which amends the strict reading of
+D-7495). The verdict judges the latest attempt of each required name, which is
+GitHub's own merge rule and all read 5 lists: `commits/<sha>/check-runs` with no
+`filter` answers only the newest run of each name, so a name that failed and
+then passed on a rerun of the same head reads passing. So a red that the one
+rerun the RED bullet allows turns green is cleared. A red that no rerun reaches,
+or one still red after that rerun, stays the stop `red-unreachable`. Before each
+enqueue, direct merge and re-enqueue, read every attempt as well, with `gh api
+--paginate
+'repos/{owner}/{repo}/commits/<handoffCommit>/check-runs?filter=all'`, and name
+in your turn's text, apart from the verdict's line, each check name of which any
+completed run concluded other than success, neutral or skipped, or none. That
+line is a report: it is never a stop and decides nothing, and a read of it that
+fails is named as unread and is no stop either.
 
 ## 6 — Final merge
 

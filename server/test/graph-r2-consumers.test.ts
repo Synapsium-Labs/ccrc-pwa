@@ -286,7 +286,10 @@ const TREE_WRITES = [
  *  checkout's generated filter and exclude line, staging, the stamp's temp, meta.json, the build's publish, settings.json),
  *  the log, and the pass lock. Harvested on GR4's tip; a write through a NEW variable shows up here. GR6 (D-7352,
  *  D-7666) adds the migration's store writes (the repository's memory/, the store's .trash, an excluded repository's
- *  source file) and spec §9.2's collection across the store (a .trash entry's removal, the collect-since clock). */
+ *  source file) and spec §9.2's collection across the store (a .trash entry's removal, the collect-since clock).
+ *  D-7791 adds the store checkout's own making (`init` into "$ck", its alternates line), the removal of one that
+ *  borrows nothing, and the mirrored shallow list (a `cp` counts both its operands, so the source's own
+ *  "$c/shallow" is listed though it is only read). */
 const OTHER_WRITES_BASE = [
   "_gs_finish > \"$tmp\"",
   "_gs_finish rm \"$tmp\"",
@@ -311,6 +314,13 @@ const OTHER_WRITES_BASE = [
   "_gs_prepare > \"$kd/source\"",
   "_gs_prepare rm \"$ck\"",
   "_gs_prepare rm \"$ck\"",
+  "_gs_prepare mkdir \"$ck\"",
+  "_gs_prepare > \"$ck/.git/objects/info/alternates\"",
+  "_gs_prepare mkdir \"$ck/.git/objects/info\"",
+  "_gs_prepare rm \"$ck\"",
+  "_gs_prepare cp \"$c/shallow\"",
+  "_gs_prepare cp \"$ck/.git/shallow\"",
+  "_gs_prepare rm \"$ck/.git/shallow\"",
   "_gs_prepare >> \"$ck/.git/info/exclude\"",
   "_gs_prepare mkdir \"$ck/.git/info\"",
   "_gs_rmtree chmod u+w",

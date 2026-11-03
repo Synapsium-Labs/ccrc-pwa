@@ -38,6 +38,7 @@ import {
   type WorkbenchSessionItem,
   type WorkbenchSidebarProps,
 } from '@ccrc/ui';
+import { labelInName, shownText } from './labelInName';
 
 afterEach(cleanup);
 
@@ -152,6 +153,24 @@ describe('the flat tree: roles, levels, expanded and selected', () => {
     expect(name).toContain('2 waiting');
     expect(name).not.toContain('New session');
     expect(name).not.toContain('+');
+  });
+
+  it('a section head\'s name holds every word it shows, in order and spaced: its pool too (label in name, D-7897)', () => {
+    setup();
+    // The pool chip is on the head, so it is in the head's name; and no two drawn spans run together into one word.
+    expect(item('project-a')).toHaveAccessibleName('project-a pool-a 2 waiting 5 total');
+    expect(labelInName(shownText(item('project-a')), 'project-a pool-a 2 waiting 5 total')).toBe(true);
+    expect(item('project-b')).toHaveAccessibleName('project-b 1 total');
+    expect(labelInName(shownText(item('project-b')), 'project-b 1 total')).toBe(true);
+  });
+
+  it('a status head\'s name holds every word it shows, in order and spaced (label in name, D-7897)', () => {
+    setup({
+      mode: 'status',
+      sections: [{ id: 'needs', label: 'Needs you', lamp: 'attention', waiting: 1, total: 2, items: [lane({ id: 'tabs-w2', status: 'attention' })] }],
+    });
+    expect(item('Needs you')).toHaveAccessibleName('Needs you 1 waiting 2 total');
+    expect(labelInName(shownText(item('Needs you')), 'Needs you 1 waiting 2 total')).toBe(true);
   });
 
   it('every lamp carries its word: the row names its state from content', () => {

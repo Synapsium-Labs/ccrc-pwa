@@ -62,6 +62,14 @@ describe('the account argv builder: no free argv (spec §13.2)', () => {
     expect(buildAccountArgv('enable', '--force', {}, false)).toEqual({ ok: false, why: 'bad-id' });
   });
 
+  it('the sign-out act is a bare `--sign-out` on `credential`, and takes only `true` (N5, D-7749; A21)', () => {
+    expect(buildAccountArgv('credential', LANE, { signOut: 'true' }, false))
+      .toEqual({ ok: true, argv: ['account', 'credential', `--id=${LANE}`, '--sign-out'] });
+    for (const v of ['false', 'yes', '--credential=-']) {
+      expect(buildAccountArgv('credential', LANE, { signOut: v }, false), v).toEqual({ ok: false, why: 'bad-field' });
+    }
+  });
+
   it('refuses ../ in a label, a model id and the lane id', () => {
     expect(build('add', { label: '../x' })).toEqual({ ok: false, why: 'bad-field' });
     expect(build('add', { label: 'a/../b' })).toEqual({ ok: false, why: 'bad-field' });

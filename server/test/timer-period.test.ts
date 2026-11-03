@@ -76,6 +76,11 @@ describe('_timer_period_s: the spellings the shipped timers use', () => {
     ['OnUnitActiveSec=1h', 3600],
     ['OnUnitActiveSec=4h', 14400],
     ['OnCalendar=*:0/5', 300],
+    // D-7876: the graph sweep's timer counts its period from the end of the previous run, so its cadence line is
+    // `OnUnitInactiveSec=`; the gap between the end of one run and the start of the next is the same one number.
+    ['OnUnitInactiveSec=15min', 900],
+    ['OnUnitInactiveSec=90s', 90],
+    ['OnUnitInactiveSec=1h', 3600],
   ];
   for (const [line, seconds] of rows) {
     it(`\`${line}\` is ${seconds}`, () => expectPeriod(period(timer(line)), seconds));
@@ -84,7 +89,7 @@ describe('_timer_period_s: the spellings the shipped timers use', () => {
   // Every file the directory holds, at run time: a new shipped timer is covered the day it lands. The answer each
   // file means is computed here from its one cadence line, by a table this file owns, never by the reader under test.
   const meaning = (value: string): number => {
-    const u = /^OnUnitActiveSec=(\d+)(s|min|h)$/.exec(value);
+    const u = /^OnUnit(?:Active|Inactive)Sec=(\d+)(s|min|h)$/.exec(value);
     if (u) return Number(u[1]) * { s: 1, min: 60, h: 3600 }[u[2] as 's' | 'min' | 'h'];
     const c = /^OnCalendar=\*:0\/(\d+)$/.exec(value);
     if (c) return Number(c[1]) * 60;
@@ -92,7 +97,7 @@ describe('_timer_period_s: the spellings the shipped timers use', () => {
   };
   for (const name of readdirSync(UNITS).filter((n) => n.endsWith('.timer')).sort()) {
     it(`the shipped ${name} answers the period its cadence line means`, () => {
-      const lines = readFileSync(join(UNITS, name), 'utf8').split('\n').filter((l) => /^(OnUnitActiveSec|OnCalendar)=/.test(l));
+      const lines = readFileSync(join(UNITS, name), 'utf8').split('\n').filter((l) => /^(OnUnitActiveSec|OnUnitInactiveSec|OnCalendar)=/.test(l));
       expect(lines, `${name} holds one cadence line`).toHaveLength(1);
       expectPeriod(period(join(UNITS, name)), meaning(lines[0]!));
     });
@@ -133,6 +138,11 @@ describe('_timer_period_s: everything else is refused, rc 1, one line why, nothi
     expectRefused(period(timer('OnCalendar=*:0/5', 'OnCalendar=*:0/5'))));
   it('one of each is refused', () =>
     expectRefused(period(timer('OnUnitActiveSec=15min', 'OnCalendar=*:0/5'))));
+  it('an `OnUnitActiveSec=` beside an `OnUnitInactiveSec=` is refused (two cadence lines, D-7876)', () =>
+    expectRefused(period(timer('OnUnitActiveSec=15min', 'OnUnitInactiveSec=15min'))));
+  for (const spelling of ['OnUnitInactiveSec=0s', 'OnUnitInactiveSec=015min', 'OnUnitInactiveSec=15m', 'OnUnitInactiveSec=1.5h']) {
+    it(`\`${spelling}\` is refused, as its OnUnitActiveSec= spelling is (D-7876)`, () => expectRefused(period(timer(spelling))));
+  }
   for (const spelling of ['OnUnitActiveSec=60', 'OnUnitActiveSec=1.5h', 'OnCalendar=daily']) {
     it(`\`${spelling}\` is refused (a spelling no shipped file uses)`, () => expectRefused(period(timer(spelling))));
   }

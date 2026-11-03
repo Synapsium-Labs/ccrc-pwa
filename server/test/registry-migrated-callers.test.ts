@@ -151,7 +151,8 @@ describe('fleet, projects and peers report what they could not measure (spec §2
     const { ws, frames } = await openSocket(app);
     // `runs` is chained after the fleet decision in ONE `.then`, so once it has arrived no cold `fleet` can follow.
     await vi.waitFor(() => expect(frames.map((f) => f.type)).toContain('runs'), { timeout: 3000 });
-    expect(frames.map((f) => f.type)).toEqual(['hello', 'runs']);
+    // The programme ledgers' `waiting` frame (plan PL4) follows `runs` on a box with a coordination database: not this case's subject.
+    expect(frames.map((f) => f.type).filter((t) => t !== 'waiting')).toEqual(['hello', 'runs']);
     ws.close();
   });
 

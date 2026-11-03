@@ -104,10 +104,10 @@ function scanModule(source: string, fileName: string): ModuleScan {
  * Walks the closure from ROOTS: the files reached, and every specifier that is neither a closure file nor allowed.
  * `read` answers a file's source (the real file by default; a case passes a reader that appends to one).
  */
-function closure(read: (file: string) => string = (f) => readFileSync(f, 'utf8')): { files: string[]; refused: string[] } {
+function closure(read: (file: string) => string = (f) => readFileSync(f, 'utf8'), roots: readonly string[] = ROOTS, allowed: ReadonlySet<string> = ALLOWED_PACKAGES): { files: string[]; refused: string[] } {
   const seen = new Set<string>();
   const refused: string[] = [];
-  const todo = ROOTS.map((r) => path.join(LIB, r));
+  const todo = roots.map((r) => path.join(LIB, r));
   while (todo.length > 0) {
     const file = todo.pop()!;
     if (seen.has(file)) continue;
@@ -120,7 +120,7 @@ function closure(read: (file: string) => string = (f) => readFileSync(f, 'utf8')
         const target = resolveRelative(file, spec);
         if (target === undefined) refused.push(`${rel}: ${spec}`);
         else todo.push(target);
-      } else if (!ALLOWED_PACKAGES.has(spec)) refused.push(`${rel}: ${spec}`);
+      } else if (!allowed.has(spec)) refused.push(`${rel}: ${spec}`);
     }
   }
   return { files: [...seen].map((f) => path.relative(PWA, f).split(path.sep).join('/')).sort(), refused };
@@ -139,7 +139,7 @@ describe('the parse worker closure', () => {
 });
 
 const PINS: Readonly<Record<string, string>> = {
-  'hast-util-to-jsx-runtime': '2.3.6',
+  'hast-util-to-jsx-runtime': '2.3.7',
   'html-url-attributes': '3.0.1',
   'remark-parse': '11.0.0',
   'remark-rehype': '11.1.2',
@@ -282,5 +282,55 @@ describe('W8a Task 4: the reader\'s render job is a lazily loaded chunk', () => 
     expect(staticImports).toEqual([]);
     expect(dynamicCalls.filter((c) => c === './readerRenderJob')).toHaveLength(1);
     expect(dynamicCalls).toEqual(['./readerRenderJob']);
+  });
+});
+
+// Docs W5h-a Task 3 (base spec 2026-10-01 section 4.10's Guards, M4.H3): the highlight worker's closure. From its two
+// roots it reaches only first-party lib files, and of packages only `highlight.js/lib/core` and the 15 language modules
+// part 1 registers; React, unified and the full `highlight.js` entry are refused (planted). The parse worker's closure
+// above is unchanged, and highlight.js is still its planted refusal (T11 review 1-1's case). The message tokens are
+// M4.H3's other half, in `markdown-runner.test.ts`'s source pins.
+const HIGHLIGHT_ROOTS: readonly string[] = ['markdownHighlightWorker.ts', 'highlightGrammars.ts'];
+const HIGHLIGHT_LANGUAGES: readonly string[] = [
+  'bash', 'typescript', 'javascript', 'json', 'python', 'css', 'xml', 'yaml', 'markdown', 'diff', 'sql', 'dockerfile',
+  'rust', 'go', 'php',
+];
+const HIGHLIGHT_PACKAGES: ReadonlySet<string> = new Set([
+  'highlight.js/lib/core', ...HIGHLIGHT_LANGUAGES.map((l) => `highlight.js/lib/languages/${l}`),
+]);
+
+describe('M4.H3: the highlight worker closure', () => {
+  const { files, refused } = closure(undefined, HIGHLIGHT_ROOTS, HIGHLIGHT_PACKAGES);
+
+  it('is exactly the highlight worker\'s lib files', () => {
+    expect(files).toEqual([
+      'src/lib/highlightCache.ts', 'src/lib/highlightGrammars.ts', 'src/lib/highlightJob.ts',
+      'src/lib/highlightProtocol.ts', 'src/lib/markdownHighlightWorker.ts', 'src/lib/markdownLimits.ts',
+    ]);
+  });
+
+  it('imports nothing but highlight.js/lib/core and the 15 language modules', () => {
+    expect(refused).toEqual([]);
+  });
+
+  it('planted: react and unified in the closure are refused', () => {
+    const { refused: r } = closure(appendTo('highlightJob.ts', [
+      "import { createElement } from 'react';",
+      "import { unified } from 'unified';",
+      'export const plantedPair = [createElement, unified];',
+    ].join('\n')), HIGHLIGHT_ROOTS, HIGHLIGHT_PACKAGES);
+    expect(r).toEqual(expect.arrayContaining(['src/lib/highlightJob.ts: react', 'src/lib/highlightJob.ts: unified']));
+  });
+
+  it('planted: the full highlight.js entry is refused', () => {
+    const { refused: r } = closure(appendTo('highlightGrammars.ts', "import plantedAll from 'highlight.js';\nexport const plantedEntry = plantedAll;"),
+      HIGHLIGHT_ROOTS, HIGHLIGHT_PACKAGES);
+    expect(r).toContain('src/lib/highlightGrammars.ts: highlight.js');
+  });
+
+  it('planted: highlightGrammars imported by the parse worker is refused in the parse closure', () => {
+    const { files: f, refused: r } = closure(appendTo('markdownWorker.ts', "import { HLJS } from './highlightGrammars';\nexport const plantedH = HLJS;"));
+    expect(f).toContain('src/lib/highlightGrammars.ts');
+    expect(r).toContain('src/lib/highlightGrammars.ts: highlight.js/lib/core');
   });
 });

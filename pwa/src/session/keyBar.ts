@@ -41,9 +41,16 @@ export const KEY_SEQ: Readonly<Record<KeyName, string>> = {
 export const PASTE_OPEN = '\x1b[200~';
 export const PASTE_CLOSE = '\x1b[201~';
 
-/** Each key's mono keycap legend (DIRECTION) and the name assistive tech reads. */
+/** Each key's mono keycap legend (DIRECTION) and the name assistive tech reads.
+ *
+ *  THE NAME HOLDS THE LEGEND'S WORDS (WCAG 2.5.3, D-7897): a voice user says the
+ *  cap they see, so `esc` must be a word of the name, and `Escape` is a
+ *  different word. A shortened legend therefore LEADS its name and the key is
+ *  spelled out after it in parentheses (`Esc (Escape)`); a glyph legend (`↑`,
+ *  `⏎`) has no words to hold, and `^C` is already the `C` of `Control C`.
+ *  `label-in-name.test.ts` holds every row to it. */
 export const KEY_CAP: Readonly<Record<KeyName, { legend: string; label: string }>> = {
-  esc: { legend: 'esc', label: 'Escape' },
+  esc: { legend: 'esc', label: 'Esc (Escape)' },
   up: { legend: '↑', label: 'Arrow up' },
   down: { legend: '↓', label: 'Arrow down' },
   left: { legend: '←', label: 'Arrow left' },
@@ -55,8 +62,8 @@ export const KEY_CAP: Readonly<Record<KeyName, { legend: string; label: string }
   tab: { legend: 'tab', label: 'Tab' },
   shiftTab: { legend: '⇧tab', label: 'Shift Tab' },
   space: { legend: 'space', label: 'Space' },
-  pgUp: { legend: 'PgUp', label: 'Page up' },
-  pgDn: { legend: 'PgDn', label: 'Page down' },
+  pgUp: { legend: 'PgUp', label: 'PgUp (Page up)' },
+  pgDn: { legend: 'PgDn', label: 'PgDn (Page down)' },
   ctrlU: { legend: '^U', label: 'Control U' },
   ctrlO: { legend: '^O', label: 'Control O' },
   ctrlR: { legend: '^R', label: 'Control R' },

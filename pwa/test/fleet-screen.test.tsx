@@ -306,6 +306,87 @@ describe('FleetScreen', () => {
     expect(screen.getByText('ProjectC')).toBeInTheDocument();
   });
 
+  // An empty pane through an outage: the socket's reconnect loop reads `connecting` for each attempt and `down` when it
+  // closes, and on a real network an attempt to an unreachable host stays `connecting` for seconds. The pane keeps
+  // saying the link is down for the whole outage, the attempt's state whatever it is.
+  describe('the offline banner on an empty pane through an outage', () => {
+    const offlineBanner = (): HTMLElement | null =>
+      screen.queryAllByRole('status').find((el) => el.textContent === 'Reconnecting…') ?? null;
+    /** The page's `online` event: the store nudges its socket, which starts the next attempt at once. */
+    const nextAttempt = (): void => { act(() => { window.dispatchEvent(new Event('online')); }); };
+
+    it("keeps 'Reconnecting…' in both `down` and each later `connecting` attempt, and drops it on `open`", () => {
+      const store = makeLiveStore();
+      renderFleet(<FleetScreen store={store} />);
+      act(() => {
+        latestFleetSocket().open();
+        latestFleetSocket().message({ type: 'fleet', sessions: [] });
+      });
+      expect(store.getState().conn).toBe('open');
+      expect(offlineBanner()).toBeNull();
+
+      act(() => { latestFleetSocket().drop(); });
+      expect(store.getState().conn).toBe('down');
+      expect(offlineBanner(), 'down').not.toBeNull();
+
+      nextAttempt();
+      expect(store.getState().conn).toBe('connecting');
+      expect(store.getState().sessions).toEqual([]);
+      expect(offlineBanner(), 'the attempt after the loss').not.toBeNull();
+      expect(screen.queryByText('Last known state — connecting…')).toBeNull();
+
+      // The attempt fails and the next one starts: still said.
+      act(() => { latestFleetSocket().drop(); });
+      expect(offlineBanner(), 'down again').not.toBeNull();
+      nextAttempt();
+      expect(store.getState().conn).toBe('connecting');
+      expect(offlineBanner(), 'the second attempt').not.toBeNull();
+
+      // The link is back: the banner goes, and a later attempt is a fresh outage's again.
+      act(() => { latestFleetSocket().open(); });
+      expect(store.getState().conn).toBe('open');
+      expect(offlineBanner()).toBeNull();
+      store.getState().disconnect();
+    });
+
+    it('a cold start that has not yet failed shows no banner, as before', () => {
+      const store = makeLiveStore();
+      renderFleet(<FleetScreen store={store} />);
+      expect(store.getState().conn).toBe('connecting');
+      expect(offlineBanner()).toBeNull();
+      expect(screen.queryByText('Last known state — connecting…')).toBeNull();
+      expect(screen.getAllByRole('status', { name: 'Loading' })).toHaveLength(3);
+      store.getState().disconnect();
+    });
+
+    it("a cold start whose first attempt failed keeps 'Reconnecting…' through the next attempt", () => {
+      const store = makeLiveStore();
+      renderFleet(<FleetScreen store={store} />);
+      act(() => { latestFleetSocket().drop(); });
+      expect(store.getState().conn).toBe('down');
+      expect(offlineBanner()).not.toBeNull();
+      nextAttempt();
+      expect(store.getState().conn).toBe('connecting');
+      expect(offlineBanner()).not.toBeNull();
+      store.getState().disconnect();
+    });
+
+    it("with sessions held, an attempt after the loss still says 'Last known state — connecting…' and only that", () => {
+      const store = makeLiveStore();
+      renderFleet(<FleetScreen store={store} />);
+      act(() => { latestFleetSocket().open(); });
+      seed(store, { sessions: [session()] });
+      act(() => { latestFleetSocket().drop(); });
+      expect(offlineBanner()).not.toBeNull();
+      expect(screen.queryByText('Last known state — connecting…')).toBeNull();
+      nextAttempt();
+      expect(store.getState().conn).toBe('connecting');
+      expect(screen.getByText('Last known state — connecting…')).toBeInTheDocument();
+      expect(offlineBanner()).toBeNull();
+      store.getState().disconnect();
+    });
+  });
+
   it('renders the first-run block when the fleet is empty and connected', () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);

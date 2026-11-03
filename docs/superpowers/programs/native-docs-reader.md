@@ -1,7 +1,7 @@
 # Program: native-docs-reader
 
 Spec: `docs/superpowers/specs/2026-10-01-native-docs-reader-design.md` (approved 2026-10-01)
-Plans: W1 `docs/superpowers/plans/2026-10-01-native-docs-reader-w1-ccd-reads-docs.md`; W2 `docs/superpowers/plans/2026-10-06-native-docs-reader-w2-grants-and-adapter.md`; W8a `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`
+Plans: W1 `docs/superpowers/plans/2026-10-01-native-docs-reader-w1-ccd-reads-docs.md`; W2 `docs/superpowers/plans/2026-10-06-native-docs-reader-w2-grants-and-adapter.md`; W8a `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`; W5 Export `docs/superpowers/plans/2026-11-03-native-docs-reader-w5-part2-export.md`
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-canyon`   Workspace: a fresh child per wave
 
 **What this program is.** ccrc gains its own session-gated Docs reader for each install's own project docs:
@@ -22,8 +22,8 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | 2 | grants and adapter: agent grants, `DOCS_CAP` and builders, runner budgets, `server/src/docs/{policy,ports,ccdsource}.ts`, the docs ring guard | #319 | **merged** 2026-10-09 (`5a6e5d3d7`). Run 315: review 317, then three fix rounds (two defects, then the one-reader scan), a merge of `main` after ccrc-history B1 landed, and closure review 343. Run 315 closed done |
 | 3 | routes: `server/src/docs/{routes,hooks,lane,cache}.ts`, registration, dark rollout, R1/R2 | #339 | **merged** 2026-10-09 (`f4d75a741`). Run 342: review 361, one fix round, scoped re-review 364 clean. After the merge, the operator runs the dark rollout, fleet first, then R2 and R1 (§7.8). Both gate W5's merge |
 | 4 | PWA foundation: markdown extraction, `RenderBoundary`, chat hardening (U3), `docs-sw` | #381 | **merged** 2026-10-13 (`baba5c1bc`). Run 367: review 408 (12 findings, one critical: the built worker chunk could not load in a browser worker), one fix round, scoped re-review 412 (8 minor, carried to W5). Nine deviations, 4768 to 4776; 4777 to 4783 unspent. Run 367 closed done after W5's run opened |
-| 5 | Docs screen, plus Share and Export (see Decisions, 2026-10-06); plain, plus `<br>` as a line break in the docs profile (2026-10-12). Split into two runs (operator, 2026-10-13). Part 2 splits again, into Share and Export (operator, 2026-10-15) | #627 (part 1; superseded #402) | **part 1 (the Docs screen):** **merged** 2026-10-19 (`9b18fb0cd`) through #627, which landed run 413's work (#402, block 4917 to 4932) reconciled with `main` and through the merge gate (R2 and R1 pass, spec §7.8); #402 closed as superseded. Run 413 is still open and waits for the operator's abandon from the console. It shipped with its current bounds and carries the crafted-input freeze (operator, 2026-10-15). **Part 2, Share:** planned after part 1's review, dispatched after part 1 merges, in parallel with W5h. Plan `docs/superpowers/plans/2026-11-02-native-docs-reader-w5-part2-share.md` (written and approved by the operator 2026-11-02). **Part 2, Export:** dispatched after W5h-a and Share merge; it does not wait for W5h-b |
-| 5h-a | highlighting off the main thread, the worker path: a separate highlight worker for chat, Docs pages, text leaves and Export; the store; the main-thread check of the worker's HTML; the measurement page; the new constants at provisional starting values. Part 1's bounds stay in force beside it (see Decisions, 2026-10-15) | — | after W5 part 1 merges, in parallel with Share and before Export. Its spec amendment goes first. Once it is deployed, the operator opens the measurement page once on the phone. Plan `docs/superpowers/plans/2026-11-02-native-docs-reader-w5h-a-highlight-worker.md` (written and approved by the operator 2026-11-02) |
+| 5 | Docs screen, plus Share and Export (see Decisions, 2026-10-06); plain, plus `<br>` as a line break in the docs profile (2026-10-12). Split into two runs (operator, 2026-10-13). Part 2 splits again, into Share and Export (operator, 2026-10-15) | #627 (part 1; superseded #402) | **part 1 (the Docs screen):** **merged** 2026-10-19 (`9b18fb0cd`) through #627, which landed run 413's work (#402, block 4917 to 4932) reconciled with `main` and through the merge gate (R2 and R1 pass, spec §7.8); #402 closed as superseded. Run 413 was ended on 2026-11-03: the console offered no way to abandon that one run, so the coordinator closed it as an abandon at the operator's request. It shipped with its current bounds and carries the crafted-input freeze (operator, 2026-10-15). **Part 2, Share:** planned after part 1's review, dispatched after part 1 merges, in parallel with W5h. Plan `docs/superpowers/plans/2026-11-02-native-docs-reader-w5-part2-share.md` (written and approved by the operator 2026-11-02). Dispatched 2026-11-02 as run 1350 (block 7767 to 7779; 7767 to 7774 defined, 7775 to 7779 unused). **Merged** 2026-11-03 (`5d48c8157`) through #2145, at head `1ff85fcb4`, after review runs 1356 and 1358 and one fix round; run 1350 closed done. **Part 2, Export:** dispatched after W5h-a and Share merge; it does not wait for W5h-b. Run 1368 opened 2026-11-03 (planned) to keep the programme active. Plan `docs/superpowers/plans/2026-11-03-native-docs-reader-w5-part2-export.md` (13 tasks; written and reviewed 2026-11-03, approved by the operator the same day with every recommendation) |
+| 5h-a | highlighting off the main thread, the worker path: a separate highlight worker for chat, Docs pages, text leaves and Export; the store; the main-thread check of the worker's HTML; the measurement page; the new constants at provisional starting values. Part 1's bounds stay in force beside it (see Decisions, 2026-10-15) | — | after W5 part 1 merges, in parallel with Share and before Export. Its spec amendment goes first. Once it is deployed, the operator opens the measurement page once on the phone. Plan `docs/superpowers/plans/2026-11-02-native-docs-reader-w5h-a-highlight-worker.md` (written and approved by the operator 2026-11-02). Dispatched 2026-11-02 as run 1319 (block 7751 to 7766; 7751 to 7763 defined, 7764 to 7766 unused). **Merged** 2026-11-03 (`408d93806`) through #2161, at head `dcf2b9ecb`, after review runs 1364 and 1366 and one fix round; run 1319 closed done |
 | 5h-b | the measured values, then, in a commit of its own, all of part 1's main-thread highlight bounds retire: the word, line and whitespace bounds, the per-grammar block caps for typescript/javascript and rust, and the scan and markdown page budgets, with their mutation rows re-pointed. The xml strip and the 64 KiB and 512 KiB caps stay | — | after the operator's phone measurement. Export and W7 do not wait for it; W8 does (amended 2026-10-15; W5h) |
 | 5b | parity, server half: sections `vision` and `promise`, per-doc history (`docs-log`), page key `at=<sha>` (rich-docs spec 2026-10-12) | — | after W5 (operator, 2026-10-13) |
 | 6 | mockups | — | after W5 |
@@ -31,8 +31,84 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12). It inherits W5h's highlight worker and rules on the colouring divergences W5h records (2026-10-15) | #2037 (W8a plan), #2061 (W8a) | proposed; after W5b, W6, W7, library v1 and W5h-b (amended 2026-10-15; W5h). Library v1 is met: `@synapsium-labs/docserver` 1.0.0 was released on 2026-10-31. Split by the operator on 2026-10-31: **W8a**, the frame core, now, beside W5h-a and Share (plan `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`, approved by the operator on 2026-11-01 and merged in #2037). **W8a accepted** on 2026-11-01 at `4d62121a7`: run 1315, PR #2061, review runs 1316, 1317 and 1318 with two fix rounds, block 7691 to 7707 all defined, landing through the merge queue. Its residue goes to W8b; **W8b**, the version menu and "changes since", after W5b; W7 last |
 
 ## Decisions & deviations
+- **2026-11-03 (evening): the operator approves the Export plan with every recommendation; run 413 ends (operator, coordinator).**
+  - **Answers.**
+    - Q1, A: on a page the reader frame shows, the button reads "Export (plain view)", and its tap switches that page to the plain view and exports it (refinement (a)).
+    - Q2: no build version in the provenance for now; the `generator` meta carries the format's version.
+    - Q3: the export keeps the exporter's palette, any of the twelve.
+    - Q4: on an image page whose image failed to load, Export shows disabled, reading "Image not loaded".
+    - Q5: one `exports` line in `ui/package.json` for prose.css.
+    - Q6: one run.
+  - **The departures stay plan-only.** The approval asked for no spec amendment, so (a), (b), (c), (e), (f), (g), (h) and (w) are numbered at the run's opening and recorded in the plan's Deviations found, not written into the spec.
+  - **Run 413 ends.** The console offered no way to abandon that one run. At the operator's request, the coordinator closed it through its own close route as an abandon (state failed): its work landed through #627 on 2026-10-19, and #402 itself never merged. The server queued the child's reclaim, which pins every commit before it removes anything. Run 1368 keeps the programme open.
+  - **Test timing (coordinator, #2192, merged as `eba3f63cb`).** Two docs-reader test faults dequeued or reddened other programmes' pull requests:
+    - the `docs-scans` clauses W8a and W5 Share copy the whole of `pwa/src` per planted case and passed vitest's 5 s default on a loaded runner; they now take the 30 s bound clause W5h-a has;
+    - five cases released a held in-thread highlighter after waiting on the DOM, before the block's request had been posted, so a late request was held for good; they now wait for the request first.
+- **2026-11-03 (later): Export is planned, waiting for the operator's approval (coordinator).**
+  - **The plan.** `docs/superpowers/plans/2026-11-03-native-docs-reader-w5-part2-export.md`: 13 tasks (11 build tasks, a held-out review, a close), written at `main` `ee7a9c44f`. Rev 1 was drafted just after W5h-a merged.
+  - **Reviewed.** Three Opus lenses (spec, grounding, execution), with a Sonnet refuter per finding, upheld 12 findings, three of them important:
+    - the reader-path option understated its cost;
+    - one expected line number was wrong;
+    - one predicted red was wrong.
+    A scoped re-check confirmed the fixes and found three more, one important: a build branch that would have broken five planted scan cases. All are fixed. The author also re-opened one refuted finding and planned it: Export's wait ending at the worker-time ceiling.
+  - **Departures.** Eight departures, refinements (a), (b), (c), (e), (f), (g), (h) and (w), so the run needs a block of at least 14 numbers at its opening. The largest is (a): on a leaf the reader frame shows, Export switches that page to the plain view and saves it. That costs one parse, one highlight pass and one docs read per image, against §4.17's "no docs request, no re-parse, no highlighting".
+  - **Questions for the operator (Q1 to Q6)** are in the plan's "Waiting on you", each with a recommendation:
+    - the reader path;
+    - the build version;
+    - the palette;
+    - a failed raster image;
+    - prose.css's subpath;
+    - one run or two.
+
+- **2026-11-03: W5h-a is accepted and merged, and Export's run is opened (coordinator).**
+  - **Review round 1 (run 1364, tip `518e42a14`).** Four important findings and seven advisory notes. The important ones:
+    - a page of repeated identical blocks bypassed the page HTML ceiling, because each key was counted once while each copy inserted its HTML;
+    - a chat store kept subscriber and listener rows for keys that no block referenced;
+    - the Docs store moved into `DocTree` without a number;
+    - `detach()`'s clock stop was pinned by no test.
+    Fix round 1 fixed all eleven items: D-7762 (the ceilings count each drawn copy, one job per key), D-7763 (the store's move stands), and the rest without numbers.
+  - **Review round 2 (run 1366, tip `dcf2b9ecb`).** The code was clean: every round-1 item was verified, and all 16 new mutation rows were measured red at their recorded counts. The two plan-text findings are fixed in this ledger PR rather than by a third push and review. Refinement (j) is marked a departure (D-7762), and D-7762 names the spec sentences it departs from and its consequence for Export. Spec §4.10, §4.4 and §1 are amended in place for D-7762 and D-7763. Two minor test gaps are carried to W5h-b.
+  - **CI on the PR.** One load timeout (`ccrc-update-fetch`) was re-run by the coordinator. Two closed censuses in other programmes' suites went red on this wave's words. The update move's `'detach'` census got an exemption, D-7761, narrowed to `markdownRunner.ts`'s `abortRunning` lines. Delegation wave 3's `retain` census was met by renaming the test seam to `heldKeys`. Both were misses of the wave's own server runs.
+  - **Ruling: a review child may install packages.** A fresh review workspace has no `node_modules`. It may run `npm ci` in its own `server/`, `pwa/`, `agent/` and `ui/`, and nowhere else, because the workspace is reclaimed when the review run closes. Measured 2026-11-03: 91 GB free, and about 0.5 GB per install.
+  - **Export's run (1368, planned)** is opened so that the programme stays active whatever happens to run 413. Export's plan inputs:
+    - D-7762 (read `copySkip` for each drawn copy);
+    - D-7763 (a fallback body publishes no store);
+    - D-7755 (the `publish` slot's holder);
+    - M4.SH3's and M4.SH8's Export halves;
+    - Share's carried notice after a double tap and a cancelled native sheet.
+- **2026-11-03: Share is accepted and merged (coordinator).**
+  - **Review round 2 (run 1358, tip `1ff85fcb4`).** All nine items from round 1 were done, and each was measured (the two `canShare` rows red through their own tests; W5S-T4-M5 reds 4 of 101). Every suite was green at the tip, and nothing outside round 1's items changed. The six findings were in the plan's text, not in shipped behaviour. The reviewer refuted its findings by measuring them rather than with Sonnet refuters; the coordinator accepted that, because every finding was taken.
+  - **Landed as reviewed.** #2145 merged through the queue as `5d48c8157`, from the exact head both reviews read. The plan-text findings are fixed in this ledger PR instead of a third push and review:
+    - D-7774's rationale now says that the key closes the sheet on a page, commit or opened-pin change, and that everything else the target reads updates the open sheet in place;
+    - row W5S-T5-M5 is restated at 4 failed at the end state;
+    - rows W5S-T9-M4 and M5 are in the table's form;
+    - the fix-round re-run line names `deviation-refs` and `dtbd`;
+    - Task 5's Decision (2) carries a "superseded in fix round 1" note.
+  - **Ruling: W5S-T9-M5's `Boolean(...)` mutation stands.** It reds the same single test as dropping `=== true`.
+  - **Carried, from Share:** a double tap followed by a cancelled native sheet leaves tap 2's "Sharing did not finish" notice standing. The notice is true, and Copy link still works. It goes to Export's run or a later polish.
+- **2026-11-02 (later): both waves are dispatched, the copy check gains U+2028 and U+2029, and the rulings made while the waves run (operator, coordinator).**
+  - **The copy check (operator).** U+2028 and U+2029 join the copy check, with the four classes of the entry below. The copy check flags them, and the library's link classifier refuses them in an href. This needs one more library change, which ships in the same batched release. Then ccrc moves its pin, and spec §4.4's copy-check sentence lists the new classes.
+  - **Dispatch (coordinator).** #2124 merged as `9c484ef45`.
+    - W5h-a: run 1319, block 7751 to 7766. The first six numbers go to its refinements (a), (b), (e), (f), (h) and (q), in that order.
+    - Share: run 1350, opened as wave 10, block 7767 to 7779. The first six go to (a), (b), (c), (e), (f) and (i).
+  - **Ruling (W5h-a, deviation 7757): part 1's test cases over the HTML cap.**
+    - The problem: Task 6's migrated suites hold 64 KiB blocks whose highlighted HTML (313 090 to 1 719 411 characters) exceeds the 262 144 cap the operator kept.
+    - The ruling: those cases assert part 1's decision (the block is admitted and requested) and the outcome that ships (plain, "not highlighted (output too large)"), never an exact HTML length. Each suite keeps one coloured case under the cap.
+    - Rejected: a test-only cap override, and shrunken inputs.
+    - Cost if wrong: W5h-b revisits these cases when it sets the measured cap.
+  - **Ruling (W5h-a, deviation 7758): the store's class check admits highlight.js's own scope classes only.** Task 5's review tightened it from "a first `hljs-` token, then anything". The worker names a test proving that real highlight.js 11.12 output from all 15 grammars passes, the multi-class sub-scopes included, so that W8's version bump goes red instead of silently turning blocks plain.
+  - **Rulings: mutation rows measured above the plan's prediction.** These are W5h-a's T3-M6, T7-M1 and T7-M4, and Share's T2-M1, T5-M1 and T5-M4. Each is restated at its measured count. Every extra red is the same guard, or a later fix-wave test aimed at the mutated line. They correct predictions, so they take no number.
+  - **Share's review (run 1356, tip `ba06f4cdd`).**
+    - One important finding: no test pinned `webShareUsable`'s arm where `canShare` answers true. Measured: with that arm replaced by `return false`, 343 tests stayed green.
+    - Sent back for one fix round: two cases with their mutation rows; deviation 7774 (the open sheet's target is recomputed while the sheet is open, against refinement (n)'s text); and five minor fixes.
+    - One advisory is carried: a double tap followed by a cancelled native sheet leaves tap 2's notice standing. The notice is true, and Copy link still works.
+  - **Ruling: deviation 7773 amends the spec in place.** Share's Task 9 review found that after a same-blob re-list, a file slot that had settled with no answer it can show kept its old pin, so Share read "Updating to" until Retry. Such a slot is ready at `pinFor`'s pin, as a failed raster image settles Share (the operator's approval of 2026-11-02). §4.16's "When Share is not offered" and M4.EX12 now say so, marked "(amended 2026-11-02; Share, deviation 7773)". Cost if wrong: Share links the tree's commit for a leaf that showed nothing, which is what View on GitHub already does.
+  - **Shared files and claims.** The claim service allows one holder per path, so the briefs' "take your claims" could not hold for both waves on a shared file.
+    - W5h-a holds the claims on `DocsLeaf.tsx`, `DocsScreen.tsx`, `docs-screen.test.tsx` and `docs-scans.test.ts`. Share edited those files inside its plan's hunks, under the briefs' written leave.
+    - The coordinator also gave the desktop-polish programme written leave for one-line additions under W5h-a's claim: the architecture spec's C5 cell, the end of the route table, the ladder after `docs`, and their tests. Each is placed apart from W5h-a's edits.
+    - Lesson for the next parallel briefs: name which wave holds each shared claim, and say that the other edits under written leave.
 - **2026-11-02: W5h-a and Share are planned, and the copy check's extension waits for one batched library release (operator, coordinator).**
-  - **The copy check (operator).** Answering W8a's open question (the entry below), the operator ruled that the copy check also flags U+200E, U+200F, U+061C and the tag characters U+E0000-E007F. The library carries it (Synapsium-Labs/docserver#78, its ledger's C103); its link classifier refuses the same characters in an href. The operator then held the release: the remaining items are built first, and the library's changes ship in one release. ccrc then moves its pin, and spec §4.4's copy-check sentence lists the four new classes. Until then the reader flags the spec's §4.4 set. Still open: whether U+2028 and U+2029 join the set.
+  - **The copy check (operator).** Answering W8a's open question (the entry below), the operator ruled that the copy check also flags U+200E, U+200F, U+061C and the tag characters U+E0000-E007F. The library carries it (Synapsium-Labs/docserver#78, its ledger's C103); its link classifier refuses the same characters in an href. The operator then held the release: the remaining items are built first, and the library's changes ship in one release. ccrc then moves its pin, and spec §4.4's copy-check sentence lists the four new classes. Until then the reader flags the spec's §4.4 set. U+2028 and U+2029 join the set as well (operator, later on 2026-11-02; the entry above).
   - **The plans (coordinator).** W5h-a: `docs/superpowers/plans/2026-11-02-native-docs-reader-w5h-a-highlight-worker.md` (11 tasks). Share: `docs/superpowers/plans/2026-11-02-native-docs-reader-w5-part2-share.md` (10 tasks). Both were written at `main` `02622053c` from the spec, re-grounding earlier drafts of 2026-10-15 to 10-17 that predate #627 and #2061. Each was read by three Opus lenses with a Sonnet refuter per lens, fixed, and re-read (Share: 11 findings; W5h-a: 21; none critical). Their departures are numbered when their runs open.
   - **Ruling: M4.SH3's and M4.SH8's Export halves move to Export.** Share cannot test an Export control before Export exists. §7.7's W5 Share and W5 Export rows, and the Export bullet in the next-wave brief below, now say so (amended 2026-11-02). Cost if wrong: none; Export's plan carries them.
   - **Ruling: R19's item 8 runs over three fixed settle cadences** (50, 100 and 250 ms) instead of "chat's own": `main` has no fixed chat settle cadence, since chat re-renders as stream frames arrive. W5h-b sets `HIGHLIGHT_STREAM_DEBOUNCE_MS` from that table. A departure, the W5h-a plan's refinement (q). Cost if wrong: W5h-b picks a debounce for a cadence chat does not have; the page can be re-run.
@@ -330,7 +406,21 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
   - N1's docstring nits.
 - **U5:** the private vulnerability report is not filed yet. The spec's one-line mention is public since #301.
 
-## Next-wave brief (W5h-a and Share), after W5 part 1 merges
+## Next-wave brief (Export), after W5h-a and Share merged
+
+The operator approved the plan on 2026-11-03 with every recommendation (Q1 A, one run). Run 1368 dispatches once the plan is on `main`.
+- **Plan:** `docs/superpowers/plans/2026-11-03-native-docs-reader-w5-part2-export.md`, Tasks 1 to 13, in order. It reads W5h-a's store by `peek` and, for each drawn copy, `copySkip` (D-7762). It holds the `publish` slot (D-7755), and treats a fallback body's `publish(null)` as a body with no highlighting to wait for (D-7763). It adds Export's clause through Share's seam.
+- **Deviations:** at least 14 numbers, minted at the run's opening, for (a), (b), (c), (e), (f), (g), (h) and (w) in that order; the rest are for departures found while executing.
+- **Lessons the brief carries:**
+  - the close runs the whole `server` suite in pieces, because other programmes' closed censuses reach PWA words;
+  - the browser files run locally, because the PR's CI skips them;
+  - unused issued numbers are written without the prefix;
+  - a review child may run `npm ci` in its own `server/`, `pwa/`, `agent/` and `ui/`;
+  - a test that holds the in-thread highlighter waits for the request before `release()`, because a code block posts it from an effect React may run after the plain frame (#2192);
+  - a `docs-scans` describe that copies `pwa/src` carries `{ timeout: 30_000 }` (#2192; the plan's own clause already does).
+- **Parallel work:** no other Docs wave runs beside Export. Its census and scan files are shared with other programmes; each edit is one entry or an appended describe.
+
+## Next-wave brief (W5h-a and Share), after W5 part 1 merges (done: both merged 2026-11-03)
 
 W8a is accepted (2026-11-01, #2061). W8b follows W5b, and starts from the W8a residue in Carried constraints.
 

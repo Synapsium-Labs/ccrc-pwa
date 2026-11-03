@@ -15,7 +15,7 @@ import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { ABANDON_COPY } from '../src/fleet/AbandonSheet';
 import { RECLAIM_COPY } from '../src/fleet/ResumeSheet';
 import { resolveChrome } from './harness';
-import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 
 const SKINS = [REFINED, INSTRUMENT] as const;
 /** The two Phosphor palettes, one per mode. */
@@ -92,7 +92,7 @@ let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
@@ -100,7 +100,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await server?.close();
-  removeDist(dist);
 });
 
 /** Open the app at `route` in `view`, every refusing POST answered at 502 with the word, and wait for the shell to

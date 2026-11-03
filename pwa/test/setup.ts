@@ -72,7 +72,7 @@ import { useFleetStore } from '../src/stores/fleet';
 //
 // (4) THE HIGHLIGHT CACHE IS EMPTIED AFTER EVERY TEST (desktop polish Task C7).
 //
-// `boundedHighlight` keeps highlight.js's markup in a module-scope cache that lives as long as the page. Across tests
+// The highlight worker's answerer (`highlightJob.ts`) keeps highlight.js's markup in a bounded cache, and a test builds one in-thread (`markdown-highlight-worker.test.ts`, the test store's `inThreadHighlighter`). Across tests
 // that is a leak: a suite that counts `hljs.highlight`'s calls, or mocks what it answers, would be served markup an
 // earlier test cached. `clearEveryLru` empties every cache `createLru` made. It is test isolation only, and production
 // never calls it. `highlightCache.ts` imports nothing, so this hook loads no renderer and no file's own `vi.mock` of

@@ -13,7 +13,8 @@ const linesOf = (m: ConnectMethod): { name: string; line: string | null } =>
  * THE ORDER AND THE DEFAULT ARE THE CALLER'S `choices`, which `methodChoices` read from `PROVIDERS[provider].connect`:
  * nothing here restates either. A method whose cap word the fleet does not advertise narrows in place with its reason.
  * `children` is what the chosen method asks for below the radio (the paste method's secret field, Confirm it's you and
- * the primary), drawn by the sheet so the field's lifetime is the frame's.
+ * the primary), drawn by the sheet so the field's lifetime is the frame's. Mint and Sign in (Task A22, D-7849) ask for
+ * nothing here: their primary adds the lane and starts the sign-in, and the run frame takes it from there.
  */
 export function MethodFrame({ choices, selected, onSelect, children }: {
   choices: readonly Choice<ConnectMethod>[];

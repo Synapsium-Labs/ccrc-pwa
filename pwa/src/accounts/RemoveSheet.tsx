@@ -69,7 +69,7 @@ const NO_DEPS: StepUpDeps = {};
 /** An act that needs a fresh step-up (spec §3.2): Confirm it's you while the stamp has lapsed, then the act's one
  *  button. While the screen cannot act (`blocked`), the button is drawn disabled and no step-up is fetched. */
 export function GuardedAct({ blocked, freshUntil, deps = NO_DEPS, label, variant, disabled, busy, onAct }: {
-  blocked: boolean; freshUntil: number | null; deps?: StepUpDeps; label: string; variant: 'primary' | 'danger';
+  blocked: boolean; freshUntil: number | null; deps?: StepUpDeps; label: string; variant: 'primary' | 'danger' | 'ghost';
   disabled: boolean; busy: boolean; onAct: (stepUp: StepUp) => void;
 }): ReactNode {
   if (blocked) return <div className="acct-actions"><Button variant={variant} disabled>{label}</Button></div>;

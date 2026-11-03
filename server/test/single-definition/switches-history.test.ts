@@ -769,3 +769,39 @@ describe('ccrc history W2-6 Task 4: turnsOf is declared in the gate alone, and t
     expect(lines(COUNTER).filter((l) => CALLS_IT.test(l))).toHaveLength(1);
   });
 });
+
+// D-7857. `$REG/carry-dedupe-live` arms `ccd-carry-dedupe-sweep`'s `--apply`: without it every daily pass is a dry run of
+// `ccd carry-dedupe --identical-only`. Like `scope-sweep-live` the operator touches it by hand, so the ONE line of shell
+// that READS it is the sweep's own; `ccrc doctor`'s carry-copies check names it only inside its remedy sentence, which
+// tells the operator how to arm it, and no TypeScript and no other file under ccd/ or deploy/ names it on a code line.
+// APPENDED, for the reason the stall-watch blocks above state.
+describe('the carry dedupe sweep: its arming file has one reader and no writer in the tree (D-7857)', () => {
+  const NAME = 'carry-dedupe-live';
+  const SWEEP = 'ccd/ccd-carry-dedupe-sweep';
+  const DOCTOR = 'ccd/ccrc-doctor-checks';
+  const linesOf = (f: string): string[] => codeLines(BASH.find((x) => rel(x) === f) ?? '').filter((l) => l.includes(NAME));
+
+  it('two shell holders: the sweep, whose one line is the read, and the doctor, whose one line is its remedy sentence', () => {
+    expect(holdersOf(NAME), 'a line of shell other than the sweep and the doctor names it — a writer, or a second reader').toEqual([SWEEP, DOCTOR]);
+    expect(linesOf(SWEEP)).toEqual(['[ -e "$REG/carry-dedupe-live" ] && MODE=live']);
+    const doc = linesOf(DOCTOR);
+    expect(doc).toHaveLength(1);
+    expect(doc[0], 'the doctor names the marker only inside its remedy string').toMatch(/^\s*local arm="read the record first [^"]*touch \$rd\/carry-dedupe-live[^"]*"$/);
+    // THE READERS: a test of the marker's existence (`[ -e`, `[ -f`, `test -e`, `[[ -e`) appears on one line in the tree.
+    const READ = /(?:\[\[?|\btest)\s+-[efs]\s+"?[^"\s]*carry-dedupe-live/;
+    expect(READ.test(linesOf(SWEEP)[0]!), 'CONTROL: the pattern sees the sweep\'s read').toBe(true);
+    expect(BASH.filter((f) => codeLines(f).some((l) => READ.test(l))).map(rel)).toEqual([SWEEP]);
+  });
+
+  it('no TypeScript names it, and no other file under ccd/ or deploy/ names it on a code line', () => {
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel)).toEqual([]);
+    const nonShell = (dir: string): string[] => readdirSync(dir).flatMap((e) => {
+      const p = path.join(dir, e);
+      return statSync(p).isDirectory() ? nonShell(p) : (BASH.includes(p) || p.endsWith('.md') ? [] : [p]);
+    });
+    const others = bashRoots.flatMap(nonShell);
+    expect(others.map(rel), 'the walk reached the sweep\'s unit file').toContain('deploy/systemd/ccd-carry-dedupe.service');
+    expect(others.filter((f) => readFileSync(f, 'utf8').split('\n')
+      .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes(NAME))).map(rel)).toEqual([]);
+  });
+});

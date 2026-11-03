@@ -7,20 +7,22 @@
 // gates on `hljs.getLanguage(lang)` and falls back to plain text, so a missing
 // grammar looks exactly like a code block that chose not to be highlighted.
 // These read the DOM, so that difference cannot hide.
+// From W5h-a the gate is `highlightNames.ts#isRegisteredGrammar` and the colours come from the highlight worker (here the synchronous test store).
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { MessageBubble } from '../src/session/MessageBubble';
+import { withSyncHighlight } from './highlightTestStore';
 
 afterEach(cleanup);
 
 const fenced = (lang: string, code: string): HTMLElement => {
-  const { container } = render(
+  const { container } = render(withSyncHighlight(
     <MessageBubble
       id="s"
       event={{ kind: 'assistant', uuid: 'a1', ts: '2026-07-21T20:00:00Z',
                text: `\`\`\`${lang}\n${code}\n\`\`\`` }}
     />,
-  );
+  ));
   return container;
 };
 

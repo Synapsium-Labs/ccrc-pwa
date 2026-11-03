@@ -39,9 +39,13 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
   // make `expect(r.stderr).toBe('')` below unsatisfiable for a reason that
   // has nothing to do with this verb. The scope-placement half is
   // `ccd-tmux-server.test.ts`'s subject and is asserted there.
+  // THE LANE'S PRIVATE SOCKET (accounts plan Task A20): every call this verb
+  // makes leads with `-L ccrc-auth-<id> -f /dev/null`, and the recorder logs the
+  // whole argv, then reads the subcommand after those server options.
   fs.writeFileSync(path.join(stub, 'tmux'),
     '#!/bin/sh\n'
     + 'echo "tmux $*" >> "$HOME/ccd-calls"\n'
+    + 'while [ "$1" = -L ] || [ "$1" = -f ]; do shift 2; done\n'
     + 'case "$1" in\n'
     + '  new-session)   : > "$HOME/pane-up" ;;\n'
     + '  kill-session)  [ -e "$HOME/pane-up" ] || exit 1; rm -f "$HOME/pane-up" ;;\n'
@@ -92,7 +96,7 @@ describe('ccd account-pane — the argv contract', () => {
     // rather than on an empty call log, because ccd's own source-time preamble
     // is free to shell out and this test is not about that.
     expect(h.calls().join('\n')).not.toContain('cc-auth-');
-    expect(h.calls().filter((c) => c.startsWith('tmux new-session'))).toEqual([]);
+    expect(h.calls().filter((c) => c.includes(' new-session '))).toEqual([]);
   });
 
   it('refuses a method it does not implement', () => {
@@ -108,10 +112,14 @@ describe('ccd account-pane — the pane', () => {
     expect(r.stderr).toBe('');
     expect(r.code).toBe(0);
     expect(JSON.parse(r.stdout)).toEqual({ pane: 'cc-auth-claude-a', method: 'setup-token' });
-    const newSession = h.calls().filter((c) => c.startsWith('tmux new-session'));
+    const newSession = h.calls().filter((c) => c.includes(' new-session '));
     expect(newSession).toHaveLength(1);
+    // On the lane's OWN server, never the fleet's shared one (D-5515), and the
+    // helper told it is the pane's copy.
     expect(newSession[0]).toBe(
-      `tmux new-session -d -s cc-auth-claude-a -x 120 -y 40 exec '${h.home}/.local/bin/ccd-account-auth' 'claude-a' 'setup-token'`);
+      `tmux -L ccrc-auth-claude-a -f /dev/null new-session -d -s cc-auth-claude-a -x 120 -y 40 exec env CCRC_AUTH_IN_PANE=1 '${h.home}/.local/bin/ccd-account-auth' 'claude-a' 'setup-token'`);
+    // Every tmux call this verb made names the private socket.
+    expect(h.calls().filter((c) => c.startsWith('tmux ') && !c.startsWith('tmux -L ccrc-auth-claude-a '))).toEqual([]);
   });
 
   it('presses NO key into the pane it just made', () => {
@@ -128,7 +136,7 @@ describe('ccd account-pane — the pane', () => {
     const again = runCcd('account-pane', '--id', 'claude-a', '--method', 'setup-token');
     expect(again.code).toBe(1);
     expect(again.stderr).toContain('auth-in-progress: cc-auth-claude-a');
-    expect(h.calls().filter((c) => c.startsWith('tmux new-session'))).toHaveLength(1);
+    expect(h.calls().filter((c) => c.includes(' new-session '))).toHaveLength(1);
   });
 
   it('--cancel kills the pane, and says so when there was none', () => {
@@ -136,7 +144,7 @@ describe('ccd account-pane — the pane', () => {
     const killed = runCcd('account-pane', '--id', 'claude-a', '--cancel');
     expect(killed.code).toBe(0);
     expect(JSON.parse(killed.stdout)).toEqual({ cancelled: 'cc-auth-claude-a' });
-    expect(h.calls()).toContain('tmux kill-session -t =cc-auth-claude-a:');
+    expect(h.calls()).toContain('tmux -L ccrc-auth-claude-a -f /dev/null kill-session -t =cc-auth-claude-a:');
     const none = runCcd('account-pane', '--id', 'claude-a', '--cancel');
     expect(none.code).toBe(0);
     expect(JSON.parse(none.stdout)).toEqual({ cancelled: null });
@@ -156,10 +164,17 @@ describe('ccd account-pane — the structural guards', () => {
   const executable = (body: string): string =>
     body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 
-  it('goes through _tmux_new_session and never through _spawn', () => {
+  it('makes its pane on the lane\'s private server, never the shared one and never through _spawn', () => {
     const body = /\ncmd_account_pane\(\) \{[\s\S]*?\n\}\n/.exec(src);
     expect(body, 'ccd/ccd has no cmd_account_pane').toBeTruthy();
-    expect(body![0]).toContain('_tmux_new_session -d -s "$pane" -x 120 -y 40');
+    expect(body![0]).toContain('tmux -L "$sock" -f /dev/null new-session -d -s "$pane" -x 120 -y 40');
+    expect(body![0]).toContain('sock="ccrc-auth-$id"');
+    // `_tmux_new_session` places the fleet's SHARED server; this pane is not on it (accounts plan Task A20).
+    expect(executable(body![0])).not.toContain('_tmux_new_session');
+    // No tmux call in the verb on the default socket.
+    for (const l of executable(body![0]).split('\n').filter((x) => /\btmux /.test(x))) {
+      expect(l, `a tmux call on the shared server: ${l.trim()}`).toContain('tmux -L "$sock"');
+    }
     expect(executable(body![0]), 'the auth pane must never be a _spawn — see the header')
       .not.toMatch(/_spawn(_start|_settle)?\b/);
     expect(executable(body![0]), 'this verb sends no keys').not.toContain('send-keys');

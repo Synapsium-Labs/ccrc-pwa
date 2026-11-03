@@ -146,6 +146,19 @@ export const LANDING_CHECKS_BEAT_MS = 30_000;
  *  look keeps the fleet frame's `landing` within one tick of the `probe` file. The pass's read deadline is half of it. */
 export const LANDING_RADAR_SWEEP_MS = 60_000;
 
+/** The disk alarm's clock (D-6615, spec §2.5): one `statfs` pass a minute. Declared here, the L0 table, which cannot
+ *  import an L4 file; `diskAlarmLane.ts` re-exports it (D-7895). */
+export const DISK_SWEEP_MS = 60_000;
+
+/** The tmp sweep census lane's clock (D-6624, spec §2.1): the census is read and its mail queued every 5 minutes. Declared
+ *  here for the reason `DISK_SWEEP_MS` is; `tmpSweepLane.ts` re-exports it (D-7895). */
+export const TMP_SWEEP_CENSUS_MS = 5 * 60_000;
+
+/** The stale-archive arm's cadence (D-6643, spec §2.7.5): hourly, which is also the gap between the two sightings a row
+ *  needs. Declared here for the reason `DISK_SWEEP_MS` is (the L0 table imports no L3 file); `coord/staleArchive.ts`
+ *  re-exports it (D-7895). */
+export const STALE_ARCHIVE_SWEEP_MS = 60 * 60_000;
+
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
 
@@ -159,7 +172,7 @@ export type LaneName =
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -278,6 +291,18 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'rollIdle', cadenceMs: HIBERNATE_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
     derivedFrom: { name: 'sleepIdleHours', reason: 'the roll shares hibernation\'s gate and its clock' },
   },
+  // The disk-retention beats (D-7895, GitHub #1391): each kept a `Date.now()` throttle in its own class after the
+  // consolidation moved it out of the watcher (#1279), and each is a row now, on the monotonic clock (OA-C4 (a), #803),
+  // with the flight it had. Their verdicts keep reading the wall clock. The disk alarm (D-6615) starts due, lets passes
+  // overlap as it always has (a pass spends its minute before it awaits anything), and never rejects, so no row warns;
+  // `tick` dispatches it above the registry read's fail-shut return.
+  { name: 'diskAlarm', cadenceMs: DISK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  // The tmp sweep census (D-6624) starts due as it always has, lets passes overlap, and its pass never rejects; `tick`
+  // dispatches it beside the disk alarm, on the last good registry listing.
+  { name: 'tmpCensus', cadenceMs: TMP_SWEEP_CENSUS_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  // The stale-archive arm (D-6643) starts due and keeps one pass at a time: its `sweeping` guard is this row's `skip`, with no
+  // stuck-run age (a pass in flight was never abandoned). Its pass catches its own failure with its own sentence, so no warnKey.
+  { name: 'staleArchive', cadenceMs: STALE_ARCHIVE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
 ];
 
 export function laneRow(name: string): LaneRow {

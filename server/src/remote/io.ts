@@ -1,9 +1,10 @@
 import {
-  DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_OP_REQUEST_MS, TESTBOX_TOOLS_SYNC_OP, isReadFromRange, readTestboxOpReply,
+  BACKUP_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_OP_REQUEST_MS, TESTBOX_TOOLS_SYNC_OP, isReadFromRange, readTestboxOpReply,
   readTestboxToolsSyncReply, type TailData, type TailReset,
 } from '../../../shared/agent-protocol.js';
 import { readDiskMeasured } from '../../../shared/disk.js';
 import { readHostPsi } from '../../../shared/pressure.js';
+import { readBackupRead } from '../../../shared/backup.js';
 import type { FleetIO, ReadFailure } from '../io.js';
 import type { FleetClient } from './client.js';
 
@@ -252,6 +253,18 @@ export function createIo(client: FleetClient): FleetIO {
       try {
         const psi = readHostPsi(await client.request({ t: 'req', op: PRESSURE_OP }));
         return psi === null ? { ok: false, reason: 'unanswered' } : { ok: true, psi };
+      } catch {
+        return { ok: false, reason: 'unanswered' };
+      }
+    },
+
+    /** The agent's `backup` op (D-7858). An agent whose `ready.ops` does not name it is never sent it: `unsupported`.
+     *  Anything the link or the agent failed, or a reply in no shape `readBackupRead` knows, is `unanswered`. */
+    async backupMeasured() {
+      if (!(client.state.agentOps ?? []).includes(BACKUP_OP)) return { ok: false, reason: 'unsupported' };
+      try {
+        const read = readBackupRead(await client.request({ t: 'req', op: BACKUP_OP }));
+        return read === null ? { ok: false, reason: 'unanswered' } : { ok: true, read };
       } catch {
         return { ok: false, reason: 'unanswered' };
       }

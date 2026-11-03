@@ -98,7 +98,7 @@ export function laneBox(prefix: string, roster: unknown = FIXTURE_ROSTER): strin
   const reg = join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
   for (const n of ['install-session-hooks.sh', 'install-coordinator-skill.sh', 'install-worker-skill.sh',
-    'install-reviewer-skill.sh', 'install-graphify-skill.sh', 'install-history-skill.sh']) {
+    'install-reviewer-skill.sh', 'install-graphify-skill.sh', 'install-history-skill.sh', 'install-linear-skill.sh']) {
     writeFileSync(join(reg, n),
       `#!/bin/sh\nprintf '%s %s\\n' "${n}" "$*" >> "$HOME/installer-calls"\n`
       + `[ "${n}" = install-session-hooks.sh ] && [ -f "$HOME/slow-installer" ] && sleep 3\nexit 0\n`,

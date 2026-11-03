@@ -36,6 +36,7 @@ import { sanitizeTitle } from '../../../shared/slug.js';
 import { cleanName } from '../../../shared/unprintable.js';
 import { valueDigestHex } from '../token/files.js';
 import type { LinearKeyRead } from './connection.js';
+import { linearErrorOf } from './ops.js';
 
 /** Linear's API origin. */
 export const LINEAR_API_ORIGIN = 'https://api.linear.app';
@@ -106,16 +107,23 @@ const headerCount = (headers: { get(name: string): string | null }, name: string
   return /^[0-9]+$/.test(raw) ? Number(raw) : null;
 };
 
+/** Seconds held to the bounds `Retry-After` is held to. */
+const heldWait = (s: number): number => Math.min(LINEAR_RETRY_AFTER_MAX_S, Math.max(LINEAR_RETRY_AFTER_MIN_S, s));
+
 /**
- * How long a rate-limited answer says to wait: `Retry-After`, held to 1 to 3,600 seconds, else sixty seconds.
- * `X-RateLimit-Requests-Reset` is NOT read yet: whether it is a wait or a reset time, and in which unit, is recorded
- * from a fixture first (spec §6.7; the plan's build note for this task), so until then a missing `Retry-After` is the
- * fallback, never a guess at that header's unit.
+ * How long a rate-limited answer says to wait (spec §6.7): `Retry-After`, else `X-RateLimit-Requests-Reset`, else sixty
+ * seconds, each held to 1 to 3,600 seconds. THE RESET HEADER IS A TIME, NOT A WAIT: the FX capture recorded it as an
+ * absolute Unix time in MILLISECONDS, a rolling hour after each send (`server/test/fixtures/linear/README.md`; Linear's
+ * page says "UTC epoch milliseconds" too), so the wait is that time minus `nowMs`, rounded up to whole seconds. A reset
+ * already past is the shortest wait, one second. The complexity window's reset is not read: the spec names the
+ * requests header, and on every recording the two are the same rolling hour.
  */
-const waitOf = (headers: { get(name: string): string | null }): number => {
+const waitOf = (headers: { get(name: string): string | null }, nowMs: number): number => {
   const after = headerCount(headers, 'retry-after');
-  return after === null ? LINEAR_RATE_LIMITED_FALLBACK_S
-    : Math.min(LINEAR_RETRY_AFTER_MAX_S, Math.max(LINEAR_RETRY_AFTER_MIN_S, after));
+  if (after !== null) return heldWait(after);
+  const resetMs = headerCount(headers, 'x-ratelimit-requests-reset');
+  if (resetMs !== null) return heldWait(Math.ceil((resetMs - nowMs) / 1000));
+  return LINEAR_RATE_LIMITED_FALLBACK_S;
 };
 
 /** Linear's refusal of a request over its limit: an `errors` entry whose `extensions.code` is `RATELIMITED`. */
@@ -134,11 +142,15 @@ export type LinearCall =
   | { ok: false; reason: 'rate-limited'; retryAfterS: number }
   | { ok: false; reason: Exclude<LinearFailure, 'not-configured' | 'not-found' | 'rate-limited'> };
 
+/** The seams of one Linear call: the network, the deadline, and the clock a rate-limited answer's reset time is read
+ *  against. Absent in production (`fetch`, eight seconds, `Date.now`). */
+export interface LinearNet { fetch?: FetchLike; timeoutMs?: number; now?: () => number }
+
 export async function callLinear(
   token: string,
   query: string,
   variables: Record<string, unknown>,
-  deps: { fetch?: FetchLike; timeoutMs?: number },
+  deps: LinearNet,
 ): Promise<LinearCall> {
   const doFetch: FetchLike = deps.fetch ?? ((url, init) => fetch(url, init));
   const ac = new AbortController();
@@ -163,7 +175,7 @@ export async function callLinear(
     // RATE-LIMITED (spec §6.7): a 429, or an `errors` entry with the `RATELIMITED` code whatever the status (Linear
     // refuses over its limit on a 200 and a 400 too). Its own arm, carrying the wait, so the caller can close the
     // slot until then; it is not a credential fault, and a title still degrades to the offline one.
-    const limited = (): LinearCall => ({ ok: false, reason: 'rate-limited', retryAfterS: waitOf(res.headers) });
+    const limited = (): LinearCall => ({ ok: false, reason: 'rate-limited', retryAfterS: waitOf(res.headers, (deps.now ?? Date.now)()) });
     if (res.status === 429) return limited();
 
     let body: unknown;
@@ -207,7 +219,7 @@ export async function callLinear(
 export async function lookupLinearIssue(
   ref: LinearTicket,
   key: LinearKeyRead,
-  deps: { fetch?: FetchLike; timeoutMs?: number } = {},
+  deps: LinearNet = {},
 ): Promise<LinearLookup> {
   if (key.kind !== 'key') return { ok: false, reason: 'not-configured', key: key.kind };
 
@@ -225,13 +237,17 @@ export async function lookupLinearIssue(
   const body = call.body;
 
   if (!isRecord(body)) return fail('malformed');
+  // A missing issue is an `errors` answer with `data` null (the FX capture: INPUT_ERROR "Entity not found: Issue"),
+  // read through the operation table's closed error table, never by its message here.
+  if (linearErrorOf(body)?.word === 'not-found') return fail('not-found');
   const data = body['data'];
   if (!isRecord(data) || !('issue' in data)) return fail('malformed');
   const issue = data['issue'];
 
-  // GraphQL answers 200 with an `errors` array. A missing issue arrives as
-  // `data.issue === null`, which is NOT an error condition on the wire; both
-  // have to be read, and they mean different things to the operator.
+  // GraphQL answers 200 with an `errors` array. Linear answers a missing issue
+  // with the error above (FX), but an answer of this shape, `data.issue ===
+  // null`, is read as not-found too; with errors beside it, it is Linear's
+  // refusal of the query, not a missing issue.
   if (issue === null) {
     const errors = body['errors'];
     return fail(Array.isArray(errors) && errors.length > 0 ? 'unreachable' : 'not-found');
@@ -257,9 +273,9 @@ export async function lookupLinearIssue(
   };
 }
 
-/** The most teams one page of the key check asks for (spec §4.1). The FX capture records this page's `X-Complexity`, and
- *  the spec's rule is that it stays under `LINEAR_QUOTA.maxQueryComplexity`: a page that would not is lowered HERE, in
- *  this constant, never at run time. */
+/** The most teams one page of the key check asks for (spec §4.1). The FX capture recorded this page's `X-Complexity` as
+ *  628 (both pages: the cost follows `first: 250`, not the teams), under `LINEAR_QUOTA.maxQueryComplexity`; a page that
+ *  would not be is lowered HERE, in this constant, never at run time, and re-captured. */
 export const LINEAR_TEAM_PAGE_SIZE = 250;
 
 /**
@@ -340,7 +356,7 @@ const readTeams = (v: unknown): { teams: LinearTeam[]; next: string | null } | n
   return { teams, next: cursor };
 };
 
-async function askKeyPage(key: string, after: string | null, deps: { fetch?: FetchLike; timeoutMs?: number }): Promise<KeyPage> {
+async function askKeyPage(key: string, after: string | null, deps: LinearNet): Promise<KeyPage> {
   const call = await callLinear(key, KEY_CHECK_QUERY, { after }, deps);
   if (!call.ok) return call;
   const body = call.body;
@@ -373,9 +389,9 @@ async function askKeyPage(key: string, after: string | null, deps: { fetch?: Fet
  */
 export async function checkLinearKey(
   readKey: () => Promise<LinearKeyRead>,
-  deps: { fetch?: FetchLike; timeoutMs?: number; mayAskMore?: () => boolean } = {},
+  deps: LinearNet & { mayAskMore?: () => boolean } = {},
 ): Promise<LinearKeyCheck> {
-  const net = { fetch: deps.fetch, timeoutMs: deps.timeoutMs };
+  const net: LinearNet = { fetch: deps.fetch, timeoutMs: deps.timeoutMs, now: deps.now };
   const k1 = await readKey();
   if (k1.kind !== 'key') return { ok: false, reason: 'key-changed', keyDigest: null, pagesSent: 0 };
   const keyDigest = valueDigestHex(k1.key);
@@ -411,7 +427,7 @@ export async function checkLinearKey(
  */
 export async function verifyLinearKey(
   key: string,
-  deps: { fetch?: FetchLike; timeoutMs?: number } = {},
+  deps: LinearNet = {},
 ): Promise<LinearVerify> {
   const keyDigest = valueDigestHex(key);
   const p = await askKeyPage(key, null, deps);

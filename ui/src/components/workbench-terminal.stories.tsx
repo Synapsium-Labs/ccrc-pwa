@@ -9,7 +9,7 @@ import {
 
 /** The app's key row, in its order: what a phone needs most comes first. */
 const KEYS: WorkbenchKey[] = [
-  { id: 'esc', legend: 'esc', label: 'Escape' },
+  { id: 'esc', legend: 'esc', label: 'Esc (Escape)' },
   { id: 'ctrl', legend: 'ctrl', label: 'Ctrl — latches for the next key', latch: true },
   { id: 'ctrl-c', legend: '^C', label: 'Control C' },
   { id: 'tab', legend: 'tab', label: 'Tab' },
@@ -19,8 +19,8 @@ const KEYS: WorkbenchKey[] = [
   { id: 'down', legend: '↓', label: 'Arrow down' },
   { id: 'right', legend: '→', label: 'Arrow right' },
   { id: 'enter', legend: '⏎', label: 'Enter' },
-  { id: 'pgup', legend: 'PgUp', label: 'Page up' },
-  { id: 'pgdn', legend: 'PgDn', label: 'Page down' },
+  { id: 'pgup', legend: 'PgUp', label: 'PgUp (Page up)' },
+  { id: 'pgdn', legend: 'PgDn', label: 'PgDn (Page down)' },
   { id: 'ctrl-d', legend: '^D', label: 'Control D' },
   { id: 'ctrl-u', legend: '^U', label: 'Control U' },
   { id: 'ctrl-o', legend: '^O', label: 'Control O' },

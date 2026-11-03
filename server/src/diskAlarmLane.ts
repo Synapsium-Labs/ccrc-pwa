@@ -2,7 +2,9 @@
 // alarm's beat. It asks the fleet io what the work filesystems read, folds the answer through the pure decider
 // (`disk.ts`: `diskVerdict`, `diskMarkFate`, `diskNotice`, and the two block builders), keeps the open episode's durable mark
 // (`diskepisode.ts`) and sends the notice through the funnel; every decision is `disk.ts`'s. `watch.ts` owns one of these and
-// calls `sweep()` from its tick, ABOVE the registry read's fail-shut return: a full disk is exactly when that read fails.
+// runs `pass()` from its tick, ABOVE the registry read's fail-shut return: a full disk is exactly when that read fails. The
+// cadence is the `diskAlarm` row of `LANE_SCHEDULE`, run by `FleetWatcher.runLane` on the monotonic clock (D-7895); the
+// pass's verdicts keep reading the wall clock.
 import type { DiskHealth } from '../../shared/disk.js';
 import type { WatcherDeps } from './deps.js';
 import { diskBlockOf, diskMarkFate, diskNotice, diskVerdict, unmeasuredDiskBlock, type DiskVerdict } from './disk.js';
@@ -10,12 +12,10 @@ import { clearDiskEpisode, readDiskEpisode, writeDiskEpisode } from './diskepiso
 import type { MeasuredDisk } from './io.js';
 import { notify } from './notice.js';
 
-/** The disk alarm's clock (D-6615, spec §2.5): one `statfs` pass a minute. */
-export const DISK_SWEEP_MS = 60_000;
+/** The disk alarm's clock (D-6615, spec §2.5): declared in `laneSchedule.ts` with the watcher's other cadences (D-7895). */
+export { DISK_SWEEP_MS } from './laneSchedule.js';
 
 export class DiskAlarmLane {
-  /** The wall clock the pass last started on (0: never). A pass spends its minute before it awaits anything. */
-  private lastSweep = 0;
   private state: DiskVerdict | null = null;
   private held: DiskHealth | null = null;
 
@@ -26,14 +26,12 @@ export class DiskAlarmLane {
   block(): DiskHealth | null { return this.held; }
 
   /**
-   * One pass, throttled on its own clock. A read that could not be taken leaves the decider's memory alone and holds an
-   * `unmeasured` (or standing `warn`/`critical`) block. Never rejects on a failed read; PUBLIC through the watcher for the
-   * reason `sweepReadiness` is: `tick()` dispatches it with `void`.
+   * One pass. The caller holds the cadence (the `diskAlarm` row). A read that could not be taken leaves the decider's memory
+   * alone and holds an `unmeasured` (or standing `warn`/`critical`) block. Never rejects on a failed read; reached through
+   * the watcher's `sweepDisk` for the reason `sweepReadiness` is public: `tick()` dispatches it with `void`.
    */
-  async sweep(): Promise<void> {
+  async pass(): Promise<void> {
     const now = Date.now();
-    if (this.lastSweep !== 0 && now - this.lastSweep < DISK_SWEEP_MS) return;
-    this.lastSweep = now;
     const d = this.deps();
     let read: MeasuredDisk;
     try { read = await d.io.statfsMeasured(); } catch { read = { ok: false, reason: 'unreadable' }; }

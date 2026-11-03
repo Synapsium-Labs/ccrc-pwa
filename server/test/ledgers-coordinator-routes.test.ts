@@ -183,7 +183,7 @@ describe('POST /api/programmes/:slug/items (plan PL3)', () => {
     const r = await rig();
     const id = await raise(r, { neededBy: 'blocking', soonLabel: null, runId: r.runA });
     expect(r.sent).toHaveLength(1);
-    expect(r.sent[0]).toMatchObject({ title: 'Waiting on you', body: 'Turn on the setting', tag: `item-${id}` });
+    expect(r.sent[0]).toMatchObject({ title: 'Waiting on you', body: 'Turn on the setting', tag: `item-${id}`, url: '/waiting' }); // a tap opens the list (review 1331 F1)
   });
 
   it('a blocking raise and a block still push while the operator views the raising coordinator (F1: the notice is not a run notice of that session)', async () => {
@@ -350,7 +350,7 @@ describe('POST /api/items/:id/blocking (plan PL3, review 1329 F1)', () => {
     expect(r.waiting()).toBe(1);
     expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: true })).statusCode).toBe(200);
     expect(r.sent).toHaveLength(1);
-    expect(r.sent[0]).toMatchObject({ title: 'Waiting on you', body: 'Turn on the setting', tag: `item-${id}` });
+    expect(r.sent[0]).toMatchObject({ title: 'Waiting on you', body: 'Turn on the setting', tag: `item-${id}`, url: '/waiting' }); // a tap opens the list (review 1331 F1)
     expect(r.waiting()).toBe(2);   // a change to blocking emits once (review 1332 F2)
     // already blocking: ok, no second push, no second emit
     expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: true })).statusCode).toBe(200);

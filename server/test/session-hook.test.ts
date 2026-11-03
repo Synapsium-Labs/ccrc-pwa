@@ -5690,8 +5690,8 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
   // non-empty string `path` | measured as NO set — `measure` runs without
   // `--set`, so `scope`/`cited`/`setSize` **and all six provenance fields**
   // are null". Only the first disjunct was implemented. The `norm` decision
-  // (`ccd/session-hook.sh:1619-1632`) consults `aged`, `.overlap` and
-  // `NORMAL_PROVENANCE`, and `NORMAL_PROVENANCE` (`ccd/session-hook.sh:2348`)
+  // (`ccd/session-hook.sh#@compact-post-norm`) consults `aged`, `.overlap` and
+  // `NORMAL_PROVENANCE`, and `NORMAL_PROVENANCE` (`ccd/session-hook.sh#NORMAL_PROVENANCE`)
   // validates trigger/scope/agent/transcript/parentLive/liveAgents/cwd/built
   // and never looks at `files` — so a set carrying valid provenance and ONE
   // malformed entry was passed with `--set` and the record committed
@@ -6652,7 +6652,7 @@ describe('the compaction card — every canonical write is on the list (spec §5
    *    renumbering, so citations to (3)–(16) stay true; this list simply does
    *    not carry it, and the equality is over (1) and (3)–(17).
    *  - Entry (17) was on NO §5 entry and IS produced by the filter:
-   *    `_reg_generation_read`'s `link "$p" "$al"` (`ccd/ccd:1870`), the
+   *    `_reg_generation_read`'s `link "$p" "$al"` (`ccd/ccd#_reg_generation_read`), the
    *    ccd-side twin of entry (16)'s hook-side generation-read alias, a `link`
    *    whose SOURCE names canonical. §5 enumerated the hook's and not ccd's;
    *    fix round 1 ADDED it there (D-2757), so the list below is now the
@@ -7183,7 +7183,7 @@ describe.skipIf(process.platform === 'darwin')('the compaction card — the firs
   }, 60_000);
 
   // THE RESIDUE SCENARIO (closing gate I1). The sweep loop's per-iteration
-  // `rm -f "$cand"` (`ccd/session-hook.sh:1458`) is the one member of this
+  // `rm -f "$cand"` (`ccd/session-hook.sh#@compact-sweep-rm`) is the one member of this
   // section neither scenario above can see: both leave the registry free of
   // AGED family residue, so `$aged` is empty, the loop body never runs, and a
   // child that costs one `execve` per swept candidate contributes nothing to
@@ -7196,7 +7196,8 @@ describe.skipIf(process.platform === 'darwin')('the compaction card — the firs
   // is one fork for two candidates, and it is the obvious optimisation here —
   // so the property worth pinning is that the count RISES WITH THE WORK.
   // The residue is `.stage` temp family, deliberately not `compactpost.*.claim`:
-  // the overlap `find` at `:1433` reads that second name, and although it
+  // the overlap `find` (`ccd/session-hook.sh#@compact-pre-overlap-find`)
+  // reads that second name, and although it
   // reads it YOUNG-only and aged residue could not flip the verdict, a fixture
   // whose planted file is also an input to the scope decision would couple two
   // measurements that have no business being coupled.
@@ -10548,8 +10549,8 @@ describe('history scope marker: PreCompact records whose context is compacting (
     const fnLines = fnCode.split('\n');
     const w = fnLines.findIndex((l) => l.includes('> "$f"; } 2>/dev/null'));
     expect(w, 'no marker write').toBeGreaterThan(0);
-    expect(fnLines[w - 1]!.trim(), 'the regular-file test sits directly above the write, builtins only')
-      .toBe('[[ ! -L "$f" && ( -f "$f" || ! -e "$f" ) ]] || return 0');
+    expect(fnLines[w - 1]!.trim(), 'the regular-file test sits directly above the write, builtins only (D-5434\'s positive form, W4)')
+      .toBe('if [[ -L "$f" || -d "$f" || -p "$f" || -S "$f" || -b "$f" || -c "$f" ]]; then return 0; fi');
     // Either spelling of the directory: Task 9 re-points these lines to its HISTORY_SCOPE_DIR constant.
     const notLinkedScope = /&& ! -L "(?:\$HOME\/\.ccrc\/history\/scope|\$HISTORY_SCOPE_DIR)" \]\]/;
     expect(gate, 'the gate refuses a symlinked scope/').toMatch(notLinkedScope);
@@ -11506,4 +11507,37 @@ describe('the cheap PostToolUse arm forks exactly this (D-6929)', () => {
     process.env['CCRC_HOOK_UNDER_PIN'] = copy;
     try { expect(forksOf()).toEqual({ ...EXPECTED_FORKS, '(subshell)': EXPECTED_FORKS['(subshell)']! + 1 }); } finally { delete process.env['CCRC_HOOK_UNDER_PIN']; }
   }, 60_000);
+});
+// ── W4-H6, W4-H7 (delegation broker wave 4, PR4 Task 4.1): the scope marker's guard refuses only a POSITIVE non-regular
+// type, as D-5434's form in `_hook_join_record`. APPENDED, with NO new import line (the citation census cites this file by
+// line): the seam is loaded by a dynamic import, and the helpers are this describe's own, over the module-level fixture.
+describe('W4-H: the scope marker\'s guard refuses only a positive non-regular type (D-5434\'s form)', () => {
+  const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
+  const marker = (): string => path.join(home, '.ccrc', 'history', 'scope', 'demo-quiet-basin');
+  const plant = (): void => {
+    fs.mkdirSync(path.dirname(marker()), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(home, '.ccrc', 'compact-card-off'), '');
+  };
+  const pre = (transcript: string): object => ({ ...preCompact(home, transcript, 'manual'), session_id: SID });
+
+  it('W4-H6: a marker created between any two of the guard\'s reads is still written: main <psid> <ms>', async () => {
+    const { seamHook, seamEnv, seamCount } = await import('./hookGuardSeam.js');
+    plant();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')] });
+    const { file, reads } = seamHook(home, '_hook_history_scope', 'f');
+    for (let k = 1; k <= reads; k += 1) {
+      fs.rmSync(marker(), { force: true }); fs.rmSync(path.join(home, 'w4-seam-n'), { force: true });
+      const r = spawnSync('bash', [file], {
+        input: JSON.stringify(pre(transcript)), encoding: 'utf8', env: hookEnv({ ...HISTORY_HOOK_SCRUB, ...seamEnv(home, k) }), timeout: 60_000,
+      });
+      expect(r.status, `k=${k}: exit 0`).toBe(0);
+      expect(seamCount(home), `k=${k}: the seam fired at read ${k}`).toBeGreaterThanOrEqual(k);
+      expect(fs.readFileSync(marker(), 'utf8'), `k=${k}: the marker reads main <psid> <ms>`).toMatch(new RegExp(`^main ${SID} \\d+\\n$`));
+    }
+  }, 120_000);
+
+  it('W4-H7: the scope guard tests a positive type (-L -d -p -S -b -c) and returns 0; no two-read shape stands before the write', async () => {
+    const { guardPin } = await import('./hookGuardSeam.js');
+    expect(guardPin('_hook_history_scope', 'f', 'return 0')).toEqual([]);
+  });
 });

@@ -51,6 +51,7 @@ import type { RunningAgent } from '../../agent/src/server.js';
 import type { ConnectedFleet } from '../src/remote/client.js';
 import { SECRET_MASK } from '../../shared/api.js';
 import { HAVE_FLOCK, NODE_ID, boxEnv, laneBox } from './laneStateFixture.js';
+import { ATTEMPT, CODE, authBox, ccrcAuth, reapAll, scrollbacks, waitQuiet, waitState } from './authAttemptFixture.js';
 import { bootAgent, connectToAgent } from './remoteHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -112,6 +113,13 @@ const file = join(home, '.ccrc', 'accounts.json');
 const roster = JSON.parse(readFileSync(file, 'utf8'));
 const node = readFileSync(join(home, '.ccrc', 'node-id'), 'utf8').trim();
 const answer = (o) => { process.stdout.write(JSON.stringify(o) + '\\n'); };
+// The sign-in verbs (A21): the start names the route's attempt; the code is read from stdin and ECHOED on stderr.
+const attempt = (rest.find((a) => a.startsWith('--attempt=')) ?? '').slice(10);
+if (sub === 'auth-start') { answer({ ok: true, id, attemptId: attempt, method: 'login', state: 'starting', unit: 'u', fleetIdentity: node }); process.exit(0); }
+if (sub === 'auth-code') {
+  process.stderr.write('stub verb: the code on my stdin is ' + readFileSync(0, 'utf8') + '\\n');
+  answer({ ok: true, id, attemptId: attempt, sent: true, fleetIdentity: node }); process.exit(0);
+}
 if (secret.startsWith('NOPE-')) { answer({ ok: false, error: 'key-rejected', detail: 'refused: ' + secret }); process.exit(1); }
 if (sub === 'add') {
   roster.accounts.push({ id, label: 'lane·p', configDirSuffix: '.claude-' + id, homeAble: true, hue: 'amber', telemetry: 'anthropic',
@@ -227,7 +235,7 @@ async function openBox(arm: 'local' | 'agent', verb: 'real' | 'stub' = 'real'): 
   const deps: Deps = {
     cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIOFor(cfg.home), queue: new KeyedQueue(),
     coord, mailToken: BOX_TOKEN, spawnPty: stubPty, masker, accountAudit: audit, accountOps,
-    fleetState: { ccdVerbs: ['account-v2'] } as unknown as FleetState,
+    fleetState: { ccdVerbs: ['account-v2', 'account-auth-v1'] } as unknown as FleetState,
     fleetIdentity: { current: () => ({ kind: 'known', connectionEpoch: 1, nodeId: NODE_ID, measuredAt: 0 }) } as unknown as FleetIdentityCell,
   };
   const app = await buildServer(deps, new Bus());
@@ -402,4 +410,59 @@ describe('the canary: a pasted token is found only in its 0600 secret file (spec
     expect(sent[0]).toContain(SECRET_MASK);
     expect(leaksNone(sent[0]!, key)).toBe(true);
   }, 400_000);
+});
+
+// THE CODE'S CANARY (accounts plan Task A21, D-7793; spec §3.7, §16): the one-time code goes through
+// `POST /api/accounts/:id/auth/code` on the real server, gate and step-up, the real reconciling wrapper and each arm, to
+// a stub verb that ECHOES IT ON STDERR. It must then be nowhere: no answer, no captured write, no coord.db row and no
+// file of the HOME (the server holds it for one request; the verb writes it once into the helper's FIFO, which the
+// stub does not have).
+describe('the canary reaches the code relay (A21)', () => {
+  it.each(['local', 'agent'] as const)('a code sent through `auth/code` over the %s arm, to a verb that echoes it, is in no answer, row, write or file', async (arm) => {
+    const b = await openBox(arm, 'stub');
+    const start = await ask(b, '/api/accounts/lane-b/auth/start', { method: 'login' });
+    expect(start.status, JSON.stringify(start.json)).toBe(200);
+    // The measured `login` shape, unique to the run: 48 alphanumerics, `#`, 43 base64url characters.
+    const code = `${randomBytes(24).toString('hex')}#${randomBytes(32).toString('base64url').slice(0, 43)}`;
+    const sent = await ask(b, '/api/accounts/lane-b/auth/code', { attemptId: start.json['attemptId'], code });
+    expect(sent.status, JSON.stringify(sent.json)).toBe(200);
+    expectOnlyInTheSecretFile(b, code, 'nowhere');
+    const rows = b.coord.db.prepare("SELECT act, outcome FROM account_events WHERE act != 'reconcile' ORDER BY id").all();
+    expect(rows).toEqual([{ act: 'auth-start', outcome: 'ok' }, { act: 'auth-code', outcome: 'ok' }]);
+  }, 120_000);
+});
+
+// THE MINTED TOKEN'S CANARY AND THE PRIVATE SOCKET (accounts plan Task A20; D-5515, D-7750). A mint's pane is on the
+// lane's own tmux server, `-L ccrc-auth-<id>`, not the fleet's, so a canary scan of the shared server alone would never
+// look at the one pane that printed the token. Every socket in the fixture is read, the private one by name, from the
+// scrollback taken before the attempt's terminal state kills that server; the token's canary is in none of them after
+// the helper's blanking. The box half only: `authAttemptFixture.ts`'s tmux stand-in keeps a scrollback per socket.
+describe('the canary reaches every tmux socket (A20)', () => {
+  const homes: string[] = [];
+  afterEach(() => { for (const h of homes.splice(0)) reapAll(h); });
+
+  it('the minted token\'s canary is in no tmux scrollback of any socket in the fixture, the private `-L ccrc-auth-<id>` one included', async () => {
+    const minted = `GOOD-canary-a20-${randomBytes(12).toString('hex')}`;
+    const home = authBox('ccrc-canary-a20-', { mint: minted });
+    homes.push(home);
+    // The shared server is in the fixture too, with a pane of its own, so "every socket" is more than one.
+    mkdirSync(path.join(home, 'fake-tmux', 'default'), { recursive: true });
+    writeFileSync(path.join(home, 'fake-tmux', 'default', 'scrollback'), 'a session pane\n');
+    const start = ccrcAuth(home, ['account', 'auth-start', '--id', 'lane-b', '--method', 'setup-token', '--attempt', ATTEMPT]);
+    expect(start.code, start.stdout + start.stderr).toBe(0);
+    expect(await waitState(home, 'lane-b', ['waiting-code'])).toBe('waiting-code');
+    expect(ccrcAuth(home, ['account', 'auth-code', '--id', 'lane-b', '--attempt', ATTEMPT], `${CODE}\n`).code).toBe(0);
+    expect(await waitState(home, 'lane-b', ['done', 'failed'])).toBe('done');
+    await waitQuiet(home);
+    const panes = scrollbacks(home);
+    expect(Object.keys(panes).sort()).toEqual(['ccrc-auth-lane-b', 'default']);
+    // The private pane was captured, and it is the one that saw the mint: the substitution line is there.
+    expect(panes['ccrc-auth-lane-b']).toContain('[token captured; ccrc checks it before it is installed]');
+    for (const [sock, text] of Object.entries(panes)) {
+      expect(text.includes(minted), `the minted token reached the scrollback of socket ${sock}`).toBe(false);
+      expect(text.includes(CODE), `the code reached the scrollback of socket ${sock}`).toBe(false);
+    }
+    // And it is where the lane's key belongs.
+    expect(readFileSync(path.join(home, '.cc-secrets', 'lane-b-oauth.env'), 'utf8')).toBe(`export CLAUDE_CODE_OAUTH_TOKEN=${minted}\n`);
+  }, 90_000);
 });

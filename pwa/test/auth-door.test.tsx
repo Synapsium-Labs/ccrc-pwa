@@ -55,6 +55,7 @@ import { renderSettings } from './settingsHost';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
 import { TEST_ROSTER } from './rosterFixture';
+import { labelInName, shownText } from './labelInName';
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -184,13 +185,16 @@ describe('the durable door to /accounts (D-161)', () => {
     stubFetch({ authed: true, passkeysEnrolled: 1, mode: 'passphrase' });
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
-    const door = screen.getByRole('button', { name: 'Your sign-in and accounts' });
+    // Its name now leads with the word it shows, "Account" (label in name, D-7897).
+    const door = screen.getByRole('button', { name: 'Account — your sign-in and accounts' });
     // In the header's control cluster, beside the mail badge and the bell —
     // not somewhere down the list where it would be a second strip.
     expect(door.closest('.fleet-head-right')).not.toBeNull();
     // NOT icon-only. An unlabelled glyph would be exactly as undiscoverable as
     // the strip this exists to replace, which is the whole defect.
     expect(door.textContent).toMatch(/account/i);
+    // And a voice user saying that word reaches it: the word is in the name.
+    expect(labelInName(shownText(door), door.getAttribute('aria-label') ?? '')).toBe(true);
     fireEvent.click(door);
     expect(location.pathname).toBe('/accounts');
   });
@@ -204,7 +208,8 @@ describe('the durable door to /accounts (D-161)', () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     act(() => { store.setState({ conn: 'open', sessions: [] }); });
-    expect(screen.getByRole('button', { name: 'Your sign-in and accounts' })).toBeInTheDocument();
+    // Its name now leads with the word it shows, "Account" (label in name, D-7897).
+    expect(screen.getByRole('button', { name: 'Account — your sign-in and accounts' })).toBeInTheDocument();
   });
 });
 

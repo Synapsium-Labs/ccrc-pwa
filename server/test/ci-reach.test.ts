@@ -12,7 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { skipsTests, scopeOf, prScope, fastRun, QUEUE_ONLY, FOREIGN, alwaysRunPwaTests } from '../../.github/ci/reach.mjs';
+import { skipsTests, scopeOf, prScope, queueScope, fastRun, docsOnly, QUEUE_ONLY, QUEUE_SKIPPABLE, QUEUE_DOCS_ONLY, FOREIGN, alwaysRunPwaTests } from '../../.github/ci/reach.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const REACH = path.join(ROOT, '.github', 'ci', 'reach.mjs');
@@ -26,18 +26,29 @@ describe('skipsTests: a package skips its tests only when EVERY changed file is 
     expect(skipsTests('agent', ['install.sh'])).toBe(false);
   });
 
-  it('pwa and browser: a change only under agent/, server/, ccd/ or deploy/ skips; docs/, shared/, ui/ and the root run', () => {
+  it('pwa and browser: a change only under agent/, server/, ccd/ or deploy/ skips; shared/, ui/ and the root run', () => {
     for (const pkg of ['pwa', 'browser']) {
       expect(skipsTests(pkg, ['agent/src/a.ts', 'server/src/b.ts', 'ccd/ccd', 'deploy/x.sh'])).toBe(true);
       // what the pwa tests read out of server/ still reaches them (the census pins the list)
       expect(skipsTests(pkg, ['server/src/laneSchedule.ts'])).toBe(false);
       expect(skipsTests(pkg, ['server/test/fixtures/panes/ask-user-question-real.txt'])).toBe(false);
       expect(skipsTests(pkg, ['agent/src/a.ts', 'server/test/fixtures/panes/x.txt'])).toBe(false);
-      expect(skipsTests(pkg, ['server/src/b.ts', 'docs/superpowers/specs/x.md'])).toBe(false); // pwa tests render docs
       expect(skipsTests(pkg, ['shared/docs.ts'])).toBe(false);
       expect(skipsTests(pkg, ['ui/src/a.tsx'])).toBe(false);
       expect(skipsTests(pkg, ['README.md'])).toBe(false);
     }
+  });
+
+  it('docs/ reaches the pwa suite, which renders it; the browser tests read nothing under it (owner ruling 2026-11-02)', () => {
+    expect(skipsTests('pwa', ['server/src/b.ts', 'docs/superpowers/specs/x.md'])).toBe(false);
+    expect(skipsTests('pwa', ['docs/superpowers/specs/x.md'])).toBe(false);
+    expect(FOREIGN.pwa).not.toContain('docs/');
+    expect(FOREIGN.browser).toContain('docs/');
+    expect(skipsTests('browser', ['server/src/b.ts', 'docs/superpowers/specs/x.md'])).toBe(true);
+    expect(skipsTests('browser', ['docs/superpowers/specs/x.md', 'docs/design/a.png'])).toBe(true);
+    // a directory, not a name prefix
+    expect(skipsTests('browser', ['docs-extra/a.md'])).toBe(false);
+    expect(skipsTests('browser', ['docs/a.md', 'pwa/src/a.ts'])).toBe(false);
   });
 
   it('fails safe: an empty change, an unknown package, or a path outside every list runs the tests', () => {
@@ -265,5 +276,220 @@ describe('the fast run (operator ruling 2026-10-28): an ordinary pull request ru
     expect(ask('pull_request', 'false', '.github/workflows/ci.yml')).toBe('fast=false\n');
     expect(ask('merge_group', 'false', 'pwa/src/a.ts')).toBe('fast=false\n');
     expect(ask('schedule', 'false', 'pwa/src/a.ts')).toBe('fast=false\n');
+  });
+});
+
+// The queue's browser skip (the owner's ruling of 2026-11-02, reversing 2026-10-25's "the queue runs every test" for
+// the browser shards only): in a merge-queue run the browser leg asks reach.mjs of the group's whole change and skips
+// its tests when no file in it can reach them. Every other package runs every test in the queue.
+describe('the queue\'s browser skip (owner ruling 2026-11-02): a merge-queue group that cannot reach the browser tests skips them', () => {
+  const run = (args: string[], changed: string[] | null): string => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-reach-queue-'));
+    const list = path.join(dir, 'changed.txt');
+    const out = path.join(dir, 'output.txt');
+    if (changed !== null) writeFileSync(list, changed.join('\n') + '\n');
+    writeFileSync(out, '');
+    execFileSync('node', [REACH, ...args, '--changed-file', list], { env: { ...process.env, GITHUB_OUTPUT: out }, encoding: 'utf8' });
+    return readFileSync(out, 'utf8');
+  };
+  const skipOf = (text: string): string => /^skip=(.*)$/m.exec(text)?.[1] ?? '';
+
+  it('queueScope: skip only for the browser leg, and only when every file of the group is foreign to it', () => {
+    expect(QUEUE_SKIPPABLE).toEqual(['browser']);
+    expect(queueScope('browser', ['docs/superpowers/plans/x.md'])).toBe('skip');
+    expect(queueScope('browser', ['docs/a.md', 'docs/design/b.png', 'server/src/c.ts'])).toBe('skip');
+    for (const reaching of ['pwa/src/a.ts', 'ui/src/b.tsx', 'shared/api.ts', 'README.md', 'server/test/fixtures/panes/x.txt', '.github/workflows/ci.yml']) {
+      expect(queueScope('browser', ['docs/a.md', reaching]), reaching).toBe('all');
+    }
+    // fails safe: an empty change, an unknown package, and every other package run every test
+    expect(queueScope('browser', [])).toBe('all');
+    expect(queueScope('browser', ['', '  '])).toBe('all');
+    expect(queueScope('nope', ['docs/a.md'])).toBe('all');
+    expect(queueScope('pwa', ['docs/a.md'])).toBe('all');
+    expect(queueScope('pwa', ['agent/src/a.ts'])).toBe('all'); // a pull request would skip it; the queue never does
+    expect(queueScope('agent', ['pwa/src/a.ts'])).toBe('all');
+  });
+
+  it('the CLI: a docs-only merge_group skips the browser tests; a group that reaches them, or any other package, runs them', () => {
+    const docsGroup = run(['--pkg', 'browser', '--event', 'merge_group'], ['docs/superpowers/plans/x.md']);
+    expect(docsGroup).toMatch(/^skip=true$/m);
+    expect(docsGroup).toMatch(/^scope=skip$/m);
+    expect(skipOf(run(['--pkg', 'browser', '--event', 'merge_group'], ['docs/a.md', 'pwa/src/a.ts']))).toBe('false');
+    expect(skipOf(run(['--pkg', 'pwa', '--event', 'merge_group'], ['docs/a.md']))).toBe('false');
+    expect(skipOf(run(['--pkg', 'agent', '--event', 'merge_group'], ['pwa/src/a.ts']))).toBe('false');
+    // a label never reaches a queue run, and asks for more tests, never fewer
+    expect(skipOf(run(['--pkg', 'browser', '--event', 'merge_group', '--full-label', 'false'], ['docs/a.md']))).toBe('true');
+    // only the queue and a pull request skip: the same docs-only change elsewhere runs the browser tests
+    for (const event of ['schedule', 'workflow_dispatch', 'workflow_call', 'push', '']) {
+      expect(skipOf(run(['--pkg', 'browser', '--event', event], ['docs/a.md'])), event).toBe('false');
+    }
+  });
+
+  it('the CLI fails safe in the queue: a group it cannot diff runs the browser tests', () => {
+    const missing = run(['--pkg', 'browser', '--event', 'merge_group'], null);
+    expect(skipOf(missing)).toBe('false');
+    expect(missing).toMatch(/^scope=all$/m);
+  });
+
+  it('diffs the group from --base (the queue\'s base sha) to HEAD, every commit in it', () => {
+    const git = (cwd: string, ...a: string[]): string => execFileSync('git', a, {
+      cwd, encoding: 'utf8',
+      env: { PATH: process.env.PATH ?? '', HOME: cwd, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+    });
+    const commit = (repo: string, file: string, msg: string): void => {
+      mkdirSync(path.join(repo, path.dirname(file)), { recursive: true });
+      writeFileSync(path.join(repo, file), `${msg}\n`);
+      git(repo, 'add', '-A');
+      git(repo, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', msg);
+    };
+    const group = (files: string[]): string => {
+      const repo = mkdtempSync(path.join(tmpdir(), 'ccrc-reach-queue-git-'));
+      git(repo, 'init', '-q', '-b', 'main');
+      commit(repo, 'pwa/src/a.ts', 'base');
+      const base = git(repo, 'rev-parse', 'HEAD').trim();
+      files.forEach((f, i) => commit(repo, f, `entry ${i}`)); // one commit per queued pull request
+      const out = path.join(repo, '..', `out-${path.basename(repo)}.txt`);
+      writeFileSync(out, '');
+      execFileSync('node', [REACH, '--pkg', 'browser', '--event', 'merge_group', '--base', base], {
+        cwd: repo, env: { ...process.env, GITHUB_OUTPUT: out }, encoding: 'utf8',
+      });
+      return skipOf(readFileSync(out, 'utf8'));
+    };
+    expect(group(['docs/superpowers/plans/x.md', 'docs/superpowers/specs/y.md'])).toBe('true');
+    // an earlier entry of the same group that reaches the browser tests runs them for the whole group
+    expect(group(['pwa/src/b.ts', 'docs/superpowers/plans/x.md'])).toBe('false');
+  });
+});
+
+// A DOCS-ONLY CHANGE (D-7868, the operator's direction of 2026-11-03) runs only the checks that can see it. One
+// predicate, `docsOnly`: a non-empty change whose every file is under docs/ and is no infrastructure file. In the
+// merge queue, `queueScope` answers per leg from QUEUE_DOCS_ONLY: the server tests a pull request runs (`selected`),
+// no node floor or agent tests (`skip`), the pwa suite whole (`all`). On a pull request, docs/ is foreign to the agent
+// tests and to `pwa-build` (the pwa typecheck, build and Storybook), so they skip through `skipsTests`.
+describe('a docs-only change (D-7868): one predicate, and the queue and pull-request arms that use it', () => {
+  it('docsOnly: true only for a non-empty change whose every file is a document under docs/', () => {
+    expect(docsOnly(['docs/superpowers/specs/x.md'])).toBe(true);
+    expect(docsOnly(['docs/superpowers/specs/x.md', 'docs/superpowers/plans/y.md', 'docs/design/z.png'])).toBe(true);
+    expect(docsOnly([' docs/a.md ', ''])).toBe(true); // blank lines from a diff are no file
+    // a root file is NOT docs-only: about 40 server suites read them
+    for (const root of ['README.md', 'CLAUDE.md', 'CONTRIBUTING.md', 'SECURITY.md']) expect(docsOnly([root]), root).toBe(false);
+    // docs/ plus any other file is mixed, whatever the other file is
+    for (const other of ['pwa/src/a.ts', 'server/src/b.ts', 'README.md', '.github/workflows/ci.yml', 'agent/src/c.ts', 'ccd/ccd', 'shared/api.ts']) {
+      expect(docsOnly(['docs/a.md', other]), other).toBe(false);
+    }
+    // a path that only starts like docs/ is not under it
+    expect(docsOnly(['docsite/a.md'])).toBe(false);
+    expect(docsOnly(['pwa/src/docs/a.ts'])).toBe(false);
+    // infrastructure under docs/ is infrastructure (select-tests.mjs infraTrigger)
+    for (const infra of ['docs/x/package.json', 'docs/x/package-lock.json', 'docs/tsconfig.json', 'docs/vitest.config.ts', 'docs/.npmrc']) {
+      expect(docsOnly([infra]), infra).toBe(false);
+      expect(docsOnly(['docs/a.md', infra]), infra).toBe(false);
+    }
+    // an empty change, or one with no file in it, is never docs-only: everything runs
+    expect(docsOnly([])).toBe(false);
+    expect(docsOnly(['', '  '])).toBe(false);
+  });
+
+  it('queueScope: a docs-only group selects the server tests and skips the node floor and agent tests; pwa runs whole', () => {
+    expect(QUEUE_DOCS_ONLY).toEqual({ server: 'selected', 'node-floor': 'skip', agent: 'skip' });
+    const docs = ['docs/superpowers/plans/x.md', 'docs/superpowers/specs/y.md'];
+    expect(queueScope('server', docs)).toBe('selected');
+    expect(queueScope('node-floor', docs)).toBe('skip');
+    expect(queueScope('agent', docs)).toBe('skip');
+    expect(queueScope('pwa', docs), 'the pwa suite renders docs/').toBe('all');
+    expect(queueScope('browser', docs), "#2177's browser skip is kept").toBe('skip');
+    expect(queueScope('pwa-build', docs), 'the queue runs the pwa build checks whatever changed').toBe('all');
+    expect(queueScope('nope', docs)).toBe('all');
+  });
+
+  it('queueScope: a mixed group, a root file, infrastructure under docs/ and an empty group run as today (all)', () => {
+    for (const changed of [['docs/a.md', 'pwa/src/a.ts'], ['docs/a.md', 'server/src/b.ts'], ['README.md'], ['docs/a.md', 'CLAUDE.md'],
+      ['docs/a.md', '.github/workflows/ci.yml'], ['docs/x/package.json'], [], ['', ' ']]) {
+      for (const pkg of ['server', 'node-floor', 'agent', 'pwa']) expect(queueScope(pkg, changed), `${pkg} ${JSON.stringify(changed)}`).toBe('all');
+    }
+  });
+
+  it('a pull request: docs/ is foreign to the agent tests and to pwa-build, never to pwa; pwa-build claims nothing wider', () => {
+    expect(FOREIGN.agent).toContain('docs/');
+    expect(FOREIGN['pwa-build']).toEqual(['docs/']);
+    for (const pkg of ['agent', 'pwa-build']) {
+      expect(prScope(pkg, ['docs/superpowers/specs/x.md']), pkg).toBe('skip');
+      for (const reaching of ['README.md', 'CLAUDE.md', 'shared/api.ts', '.github/workflows/ci.yml', 'docs/x/package.json']) {
+        expect(prScope(pkg, ['docs/a.md', reaching]), `${pkg} ${reaching}`).toBe('all');
+      }
+      expect(prScope(pkg, [])).toBe('all');
+    }
+    for (const reaching of ['pwa/src/a.ts', 'ui/src/b.tsx', 'pwa/vite.config.ts', 'ui/.storybook/main.ts', 'server/src/c.ts']) {
+      expect(prScope('pwa-build', ['docs/a.md', reaching]), reaching).toBe('all');
+    }
+    expect(prScope('pwa', ['docs/a.md'])).toBe('all');
+  });
+
+  const ask = (args: string[], changed: string[] | null): string => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ccrc-reach-docs-'));
+    const list = path.join(dir, 'changed.txt');
+    const out = path.join(dir, 'output.txt');
+    if (changed !== null) writeFileSync(list, changed.join('\n') + '\n');
+    writeFileSync(out, '');
+    execFileSync('node', [REACH, ...args, '--changed-file', list], { env: { ...process.env, GITHUB_OUTPUT: out }, encoding: 'utf8' });
+    return readFileSync(out, 'utf8');
+  };
+
+  it('--ask fast: a docs-only merge-queue group is fast (the pull request\'s server selection); a mixed or undiffable one is not', () => {
+    expect(ask(['--ask', 'fast', '--event', 'merge_group'], ['docs/superpowers/plans/x.md'])).toBe('fast=true\n');
+    expect(ask(['--ask', 'fast', '--event', 'merge_group'], ['docs/a.md', 'pwa/src/a.ts'])).toBe('fast=false\n');
+    expect(ask(['--ask', 'fast', '--event', 'merge_group'], ['README.md'])).toBe('fast=false\n');
+    expect(ask(['--ask', 'fast', '--event', 'merge_group'], [])).toBe('fast=false\n');
+    expect(ask(['--ask', 'fast', '--event', 'merge_group'], null)).toBe('fast=false\n');
+    // the pull request's answer for the same change is unchanged: an ordinary change is fast
+    expect(ask(['--ask', 'fast', '--event', 'pull_request', '--full-label', 'false'], ['docs/a.md'])).toBe('fast=true\n');
+    expect(ask(['--ask', 'fast', '--event', 'schedule'], ['docs/a.md'])).toBe('fast=false\n');
+  });
+
+  it('the CLI: a docs-only merge-queue group skips the agent tests; a mixed group, or pwa, runs them', () => {
+    const skipOf = (t: string): string => /^skip=(.*)$/m.exec(t)?.[1] ?? '';
+    const docs = ask(['--pkg', 'agent', '--event', 'merge_group'], ['docs/superpowers/plans/x.md']);
+    expect(docs).toMatch(/^skip=true$/m);
+    expect(docs).toMatch(/^scope=skip$/m);
+    expect(skipOf(ask(['--pkg', 'agent', '--event', 'merge_group'], ['docs/a.md', 'agent/src/a.ts']))).toBe('false');
+    expect(skipOf(ask(['--pkg', 'agent', '--event', 'merge_group'], ['docs/a.md', 'pwa/src/a.ts']))).toBe('false');
+    expect(skipOf(ask(['--pkg', 'agent', '--event', 'merge_group'], null))).toBe('false');
+    const pwa = ask(['--pkg', 'pwa', '--event', 'merge_group'], ['docs/a.md']);
+    expect(skipOf(pwa)).toBe('false');
+    expect(pwa).toMatch(/^scope=all$/m);
+    // the queue never hands a leg `selected`: that is the server's, carried by select.mjs and fast-plan
+    expect(ask(['--pkg', 'server', '--event', 'merge_group'], ['docs/a.md'])).toMatch(/^scope=all$/m);
+    // a docs-only pull request skips the pwa build checks; the full-ci label or a train/ branch runs them
+    expect(skipOf(ask(['--pkg', 'pwa-build', '--event', 'pull_request', '--full-label', 'false'], ['docs/a.md']))).toBe('true');
+    expect(skipOf(ask(['--pkg', 'pwa-build', '--event', 'pull_request', '--full-label', 'true'], ['docs/a.md']))).toBe('false');
+    expect(skipOf(ask(['--pkg', 'agent', '--event', 'pull_request', '--full-label', 'true'], ['docs/a.md']))).toBe('false');
+  });
+
+  it('--ask fast diffs the group from --base (the queue\'s base sha) to HEAD, every entry of it', () => {
+    const git = (cwd: string, ...a: string[]): string => execFileSync('git', a, {
+      cwd, encoding: 'utf8',
+      env: { PATH: process.env.PATH ?? '', HOME: cwd, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+    });
+    const fastOf = (files: string[]): string => {
+      const repo = mkdtempSync(path.join(tmpdir(), 'ccrc-reach-docs-git-'));
+      git(repo, 'init', '-q', '-b', 'main');
+      const commit = (file: string, msg: string): void => {
+        mkdirSync(path.join(repo, path.dirname(file)), { recursive: true });
+        writeFileSync(path.join(repo, file), `${msg}\n`);
+        git(repo, 'add', '-A');
+        git(repo, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', msg);
+      };
+      commit('pwa/src/a.ts', 'base');
+      const base = git(repo, 'rev-parse', 'HEAD').trim();
+      files.forEach((f, i) => commit(f, `entry ${i}`));
+      const out = path.join(repo, '..', `out-${path.basename(repo)}.txt`);
+      writeFileSync(out, '');
+      execFileSync('node', [REACH, '--ask', 'fast', '--event', 'merge_group', '--base', base], {
+        cwd: repo, env: { ...process.env, GITHUB_OUTPUT: out }, encoding: 'utf8',
+      });
+      return readFileSync(out, 'utf8');
+    };
+    expect(fastOf(['docs/superpowers/plans/x.md', 'docs/superpowers/specs/y.md'])).toBe('fast=true\n');
+    expect(fastOf(['README.md', 'docs/superpowers/plans/x.md'])).toBe('fast=false\n');
   });
 });

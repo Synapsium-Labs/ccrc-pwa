@@ -824,7 +824,8 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       for (let j = i; j >= 0; j--) { const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(src[j]!); if (m) return m[1]!; }
       return '';
     };
-    const STOP = /tmux kill-session|_svc_stop "claude-session@|bootout .*claude-session@|_ws_unsupervise "/;
+    // `tmux -L "$sock" -f /dev/null kill-session` is the account pane's own server (accounts plan Task A20).
+    const STOP = /tmux (-L "\$sock" -f \/dev\/null )?kill-session|_svc_stop "claude-session@|bootout .*claude-session@|_ws_unsupervise "/;
     const live = (l: string): boolean => !/^\s*#/.test(l);
     const stoppers = new Set(src.flatMap((l, i) => (live(l) && STOP.test(l) ? [owner(i)] : [])));
     expect([...stoppers].sort(), 'a function that stops a session is in neither list').toEqual([...KEEPS, ...Object.keys(ENDS)].sort());
@@ -881,7 +882,7 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       for (let j = i; j >= 0; j--) { const m = /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(src[j]!); if (m) return m[1]!; }
       return '';
     };
-    const SPAWN = /tmux new-session|_tmux_new_session |new-window|respawn-pane/;
+    const SPAWN = /tmux (-L "\$sock" -f \/dev\/null )?new-session|_tmux_new_session |new-window|respawn-pane/;
     const owners = new Set(src.flatMap((l, i) => (!/^\s*#/.test(l) && SPAWN.test(l) ? [owner(i)] : [])));
     expect([...owners].sort(), 'a function creates a pane outside _spawn_start').toEqual([...SPAWNS, ...Object.keys(EXCEPTIONS)].sort());
   });

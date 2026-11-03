@@ -173,10 +173,13 @@ and `ccrc uninstall` source it. The session hook does not: it learns everything 
 
 ### 2.2 The checkout of main
 
-Per repository the store holds one checkout, made once by the sweep:
+Per repository the store holds one checkout, made once by the sweep (D-7791: `git init` plus one alternates line,
+not `git clone --shared`; see the last bullet):
 
 ```
-git clone --shared --no-checkout --no-tags -q <realpath of common dir> <store>/<repo-key>/<repo-name>
+git -C <store>/<repo-key>/checkout/<repo-name> init -q
+git -C <checkout> symbolic-ref HEAD refs/heads/graph-store   # not `init -b`, which needs git 2.28
+printf '%s\n' '<realpath of common dir>/objects' > <checkout>/.git/objects/info/alternates
 git -C <checkout> config gc.auto 0
 git -C <checkout> config core.hooksPath /dev/null
 ```
@@ -196,6 +199,16 @@ git -C <checkout> clean -ffdxq -e /.graphifyignore
 - **Why it is safe to borrow objects.** The checkout only ever checks out a commit the main repository's source
   ref names at that moment, which the main repository's `gc` cannot prune. The clone itself never runs `gc`
   (`gc.auto 0`) and runs no hooks.
+- **Why not `git clone --shared` (D-7791).** For a local source that is SHALLOW (`<common dir>/shallow` exists),
+  `git clone` leaves its local path and clones over upload-pack, where `--shared` does nothing: it writes no
+  alternates, copies the objects of the source's branch heads only, and exits 0. A source ref under
+  `refs/remotes/` that is not also a branch head was never copied, and no later fetch reaches the copy, so every
+  pass failed at setup. The checkout moves by commit id and every history question goes to the common dir, so it
+  needs no refs. On every pass the sweep makes the checkout again when none of its alternates lines resolves to the
+  common dir's objects (which also drops such a copy's objects); one the old `clone --shared` made from a full
+  source borrows already and is kept. It mirrors `<common dir>/shallow` into the
+  checkout's `.git/shallow` (or removes it for a full source). A checkout that cannot move puts git's first error
+  line in the row's reason, through ccd/ccrc's `_upd_redact`.
 - **Nothing else writes there.** Sessions are never pointed at it. `checkout --force` plus `clean -ffdx` before
   every build makes it exactly the tracked files at the commit, so untracked and ignored files cannot be ingested.
   The generated `.graphifyignore` (the tracked-noise list: `ccd/graph-noise.default.list` plus the operator's
@@ -522,6 +535,7 @@ sweep rewrites it every pass.
 | `CCRC_GRAPH_GATE_MAX_DIFF_PCT` | 25 | The gate arms when the files differing between the graph's commit and `HEAD` are at most this share of the graph's `files`. Replaces the hook's hard-coded `GRAPH_GATE_MAX_BEHIND=10` (`session-hook.sh:2376`). |
 | `CCRC_GRAPH_GATE_MAX_DENIALS` | 3 | Replaces the hard-coded `GRAPH_GATE_MAX_DENIALS=3` (`session-hook.sh:2377`). |
 | `CCRC_GRAPH_CARD_DIFF_LIST_MAX` | 20 | Changed files the card names before it gives the rest as a count. |
+| `CCRC_GRAPH_PRESSURE_MAX` | 60 | Added by D-7876 (2026-11-03). A pass is `deferred-pressure`, before any fetch, store write or build, while the host's memory or CPU pressure (PSI `some avg10`, in percent) is above this; 0 turns the check off. |
 
 Retired: `CCRC_GRAPH_STALE_ESCAPE_COMMITS`, `CCRC_GRAPH_STALE_ESCAPE_SECS` (builds never touch a session's tree, so
 there is no idle gate on builds and no escape hatch from one).

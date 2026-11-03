@@ -195,7 +195,7 @@ CCRC_DOCTOR_CHECKS=(
   caddyfile
   cert
   name
-  disk box-settings   # one line, as `flock timeout`: _check_box-settings is at the END of this file
+  disk box-settings carry-copies   # one line, as `flock timeout`: _check_box-settings and then _check_carry-copies are at the END of this file
   wrappers
   skills
   accounts
@@ -3343,7 +3343,7 @@ _fix_wrappers() {
 
 # ── skills — every rostered home carries the SHIPPED skills ────────────────
 # Release/rollout design §6. Compares each home's installed
-# ccrc-coordinator/worker/reviewer/history against the TREE (`$BOX_TREE_DIR/ccd/
+# ccrc-coordinator/worker/reviewer/history/linear against the TREE (`$BOX_TREE_DIR/ccd/
 # <name>-skill`), the thing the build stamp names — not against the
 # `.cc-sessions` placed copy: on 2026-09-17 both were stale while the tree
 # on the box was current, and eighteen reviewers read an old clause. Homes
@@ -3365,7 +3365,7 @@ _check_skills() {
   local tree="$BOX_TREE_DIR/ccd" name notree=""
   # EVERY missing one, in one line (R19, D-3112): the first-only probe sent an
   # operator back once per missing directory.
-  for name in coordinator-skill worker-skill reviewer-skill history-skill; do
+  for name in coordinator-skill worker-skill reviewer-skill history-skill linear-skill; do
     [ -d "$tree/$name" ] || notree="$notree${notree:+, }$tree/$name"
   done
   if [ -n "$notree" ]; then
@@ -3407,7 +3407,7 @@ _check_skills() {
     dir="$HOME/$suffix"
     [ -d "$dir" ] || continue
     homes=$((homes + 1))
-    for name in coordinator-skill worker-skill reviewer-skill history-skill; do
+    for name in coordinator-skill worker-skill reviewer-skill history-skill linear-skill; do
       installed="ccrc-${name%-skill}"
       if [ ! -d "$dir/skills/$installed" ]; then
         stale+=("$id: $installed missing"); continue
@@ -3420,7 +3420,7 @@ _check_skills() {
     return 3
   fi
   if [ "${#stale[@]}" -eq 0 ]; then
-    _dr_pass skills "$homes/$homes homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer and ccrc-history"
+    _dr_pass skills "$homes/$homes homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer, ccrc-history and ccrc-linear"
     return 0
   fi
   # THE HEADLINE (R19, validated 2026-09-19, D-3112): an entry is "<id>: <skill>
@@ -3441,7 +3441,7 @@ _check_skills() {
   # `pool-name-parity.test.ts` pins. `ccrc doctor --fix` runs exactly this
   # remedy (`_fix_skills`, D-3113).
   _dr_fail skills "${#stale[@]} skill(s) in the rostered homes differ from the shipped tree or are missing from their home: $(_dr_join "${stale[@]}")" \
-    "run 'ccrc doctor --fix' (the shipped tree's installers into every rostered home), or 'ccrc update' (re-places the tree and re-runs them) — or by hand: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/ccrc/ccd/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/ccrc/ccd/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/ccrc/ccd/install-reviewer-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/history-skill\" bash \"\$HOME/ccrc/ccd/install-history-skill.sh\""
+    "run 'ccrc doctor --fix' (the shipped tree's installers into every rostered home), or 'ccrc update' (re-places the tree and re-runs them) — or by hand: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/ccrc/ccd/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/ccrc/ccd/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/ccrc/ccd/install-reviewer-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/history-skill\" bash \"\$HOME/ccrc/ccd/install-history-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/linear-skill\" bash \"\$HOME/ccrc/ccd/install-linear-skill.sh\""
   return 1
 }
 
@@ -3475,7 +3475,7 @@ _fix_skills() {
     [ -n "$id" ] || continue
     dir="$HOME/$suffix"
     [ -d "$dir" ] || continue
-    for name in coordinator worker reviewer history; do
+    for name in coordinator worker reviewer history linear; do
       # The interpreter running THIS file, not whatever `bash` PATH resolves to —
       # doctor runs under a contained PATH in tests and under an operator's PATH
       # on a box, and the installer is bash either way.
@@ -4787,6 +4787,9 @@ _check_graphify() {
   local gfx_gate=", gate on"
   [ ! -e "$HOME/.ccrc/graph-gate-off" ] \
     || gfx_gate=", gate off (operator file \$HOME/.ccrc/graph-gate-off)"
+  # D-7876: the last pass, also on every verdict line, set by (6) from the census: its status, how long it ran
+  # (finished - started), and for a deferred-pressure pass its run and its reason. Empty with no readable census.
+  local gfx_lastpass=""
 
   local -a gfx_install_fail=() gfx_probe_fail=() gfx_store_fail=() gfx_excludes_fail=() gfx_links_fail=()
   local -a gfx_census_fail=() gfx_census_warn=() gfx_disk_fail=() gfx_disk_warn=() gfx_disk_unread_warn=()
@@ -4861,7 +4864,8 @@ _check_graphify() {
   fi
 
   # The rendered units (spec §5.2, §8 row 2; Linux, where they are systemd units): the installed timer's
-  # OnUnitActiveSec= and the service's TimeoutStartSec= against what `_inst_graph_timer`/`_inst_graph_service`
+  # OnUnitInactiveSec= (D-7876; a timer still on OnUnitActiveSec= has none, and is told to update) and the service's
+  # TimeoutStartSec= against what `_inst_graph_timer`/`_inst_graph_service`
   # (GR8, D-7354) render from the current settings. Rendered into a scratch directory in a subshell, with the
   # settings read above (INST_GRAPH_LIB set, so the renderer does not re-read them); the doctor never writes a unit.
   if [ "${CCD_OS:-linux}" != darwin ] && [ "$gfx_lib" -eq 1 ] && [ -n "${BOX_TREE_DIR:-}" ]; then
@@ -4872,7 +4876,7 @@ _check_graphify() {
               _inst_graph_timer "$BOX_TREE_DIR/deploy/systemd/ccd-graph-sweep.timer" "$gfx_tmp/ccd-graph-sweep.timer" \
                 && _inst_graph_service "$BOX_TREE_DIR/deploy/systemd/ccd-graph-sweep.service" "$gfx_tmp/ccd-graph-sweep.service"
             ) >/dev/null 2>&1; then
-        for gfx_u in ccd-graph-sweep.timer:OnUnitActiveSec ccd-graph-sweep.service:TimeoutStartSec; do
+        for gfx_u in ccd-graph-sweep.timer:OnUnitInactiveSec ccd-graph-sweep.service:TimeoutStartSec; do
           gfx_d="${gfx_u#*:}"; gfx_u="${gfx_u%%:*}"
           [ -f "$gfx_udir/$gfx_u" ] || continue
           gfx_have="" gfx_want=""
@@ -5017,6 +5021,22 @@ _check_graphify() {
     local status finished
     status="$(jq -r '.passes[-1].status // empty' "$census" 2>/dev/null)"
     finished="$(jq -r '.passes[-1].finished // empty' "$census" 2>/dev/null)"
+    # D-7876: the ticket's "show the last run, its duration, and whether it was skipped". A deferral is the sweep doing
+    # what CCRC_GRAPH_PRESSURE_MAX asks, so it is shown, never a finding; a stamp that does not parse (or runs
+    # backwards) leaves the duration unknown rather than guessed. Fractional seconds are dropped before jq parses one.
+    local gfx_lp gfx_lst="" gfx_ld="" gfx_ln="" gfx_lsince="" gfx_lwhy=""
+    gfx_lp="$(jq -r 'def e: try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null;
+      .passes[-1] | ((.finished // "" | e) as $f | (.started // "" | e) as $s
+        | if $f == null or $s == null or $f < $s then "" else (($f - $s) | floor | tostring) end) as $d
+      | [.status // "", $d, ((.deferrals // 1) | tostring), (.deferred_since // ""),
+         ((.reason // "") | gsub("[\n\t\u001f]"; " "))]
+      | join("\u001f")' "$census" 2>/dev/null)" || gfx_lp=""
+    IFS=$'\037' read -r gfx_lst gfx_ld gfx_ln gfx_lsince gfx_lwhy <<< "$gfx_lp"
+    if [ -n "$gfx_lst" ]; then
+      if [ -n "$gfx_ld" ]; then gfx_lastpass=", last pass $gfx_lst in $gfx_ld s"; else gfx_lastpass=", last pass $gfx_lst, duration unknown"; fi
+      [ "$gfx_lst" != deferred-pressure ] \
+        || gfx_lastpass+=" ($gfx_ln deferred in a row${gfx_lsince:+ since $gfx_lsince}${gfx_lwhy:+: $gfx_lwhy})"
+    fi
     case "$status" in
       probed-zero)
         gfx_census_fail+=("the last graph-sweep pass ended $status")
@@ -5277,8 +5297,8 @@ _check_graphify() {
   _gfx_v() {
     local cls="$1" fix="$2"; shift 2
     [ "$#" -gt 0 ] || return 0
-    if [ "$cls" = FAIL ]; then _dr_fail graphify "$(_dr_join "$@")$gfx_gate" "$fix"; rc=1
-    else _dr_warn graphify "$(_dr_join "$@")$gfx_gate" "$fix"; [ "$rc" -eq 1 ] || rc=2
+    if [ "$cls" = FAIL ]; then _dr_fail graphify "$(_dr_join "$@")$gfx_lastpass$gfx_gate" "$fix"; rc=1
+    else _dr_warn graphify "$(_dr_join "$@")$gfx_lastpass$gfx_gate" "$fix"; [ "$rc" -eq 1 ] || rc=2
     fi
   }
   _gfx_v FAIL "run: ccrc install — it provisions the engine venv, stamps the pin, and converges every rostered home's skill" \
@@ -5326,7 +5346,7 @@ _check_graphify() {
   if [ "$rc" -ne 0 ]; then
     return "$rc"
   fi
-  _dr_pass graphify "engine $pin, skills converged, census ok$gfx_gate"
+  _dr_pass graphify "engine $pin, skills converged, census ok$gfx_lastpass$gfx_gate"
 }
 
 # ── graphify-path: what a session runs when it types `graphify` (R3) ──────
@@ -8834,11 +8854,13 @@ _check_scope-sweep() {
 # a signal recorded after the last forge checkpoint but before this tick's main-health write still leaves this tick's
 # verdict, beside a `probe` with the interim figures, because no checkpoint runs between them. A signal recorded before the
 # last checkpoint ahead of the tick's first `probe` write leaves the previous complete record; when there are zero open
-# PRs, or the PR list failed, no checkpoint runs between the base rev-parse and that write, so a signal recorded after the
-# base rev-parse's checkpoint leaves this tick's `probe` with the interim figures, beside the previous main-health. One
-# recorded after the nulling test leaves the measured record whole. That is what it shows during every running tick too,
-# bounded by the next tick and by the stale arm. Telling an interrupted tick from a running one needs an explicit marker, which is a later wave's
-# to add if a reader needs it.
+# PRs, when every open PR is cross-repository (the probe drops those heads), when the PR list failed, or when the
+# project budget is already spent (each merge-tree then answers budget without starting a child), no checkpoint runs
+# between the base rev-parse and that write, so a signal recorded after the base rev-parse's checkpoint leaves this
+# tick's `probe` with the interim figures, beside the previous main-health. One recorded after the nulling test leaves
+# the measured record whole. That is what it shows during every running tick too, bounded by the next tick and by the
+# stale arm. Telling an interrupted tick from a running one needs an explicit marker, which is a later wave's to add if
+# a reader needs it.
 # A red base is likewise a fact about the repository, and the PASS line says "red". The PASS line per project reads
 # `<project>: N heads, M conflicting with <base>, <base> green; store +K objects, scratch S KiB this tick`: the store figure is
 # the change in the project's object count over its last tick (the probe's scratch is meant to keep it at +0, spec 12).
@@ -10323,8 +10345,11 @@ _check_oom-policy() {
 # predates this code has none until its next real spawn, the census backstops the evidence meanwhile, and nothing is
 # lost by waiting. The remedy says so, and names the one operation that observes it now: stop and start the session
 # through ccd, which resumes its conversation but ends an in-flight turn; (c) a session the service manager would not
-# answer for (its directory was not measured). A FAIL is never hidden behind a WARN: both print, FAIL lines first, and
-# the return code is the worst class printed.
+# answer for (its directory was not measured); (d) a home whose `settings.json` `env` sets `BASH_MAX_TIMEOUT_MS` or
+# `BASH_DEFAULT_TIMEOUT_MS` to anything but null or `""`: the delegation broker's rung-4 margin (twenty minutes,
+# `DELEGATION_EVIDENCE_MARGIN_MS`) assumes Claude Code's ten-minute Bash ceiling. Only the key name and the home are
+# printed. NOT measured: a project's own `.claude/settings.json`, and the environment ccd spawns sessions with. A FAIL is
+# never hidden behind a WARN: both print, FAIL lines first, and the return code is the worst class printed.
 # SKIP: a `server`-role box (D-3111: it hosts no sessions and converges nothing per account), a box with no roster
 # (`wrappers` owns that), and a box none of whose rostered homes exist here (the installer `continue`s past those too).
 #
@@ -10339,8 +10364,8 @@ _check_oom-policy() {
 # PER HOME, AND NEVER PRINTED. The "managed" test is the installer's own
 # (`contains("/session-hook.sh")` on a hook's command), spelled again because a doctor run cannot import it; PreToolUse
 # must carry matcher `*`, because an entry for one tool name does not reach the delegation tools. The settings file's
-# other keys (an `env` block can hold a token) and the hook commands never reach an output line: the lines name homes
-# and events only. No `jq` on PATH is a FAIL, not a pass over a file nobody read.
+# values (an `env` block can hold a token) and the hook commands never reach an output line: the lines name homes, events
+# and, for WARN (d), the two Bash-timeout KEY NAMES, never a value. No `jq` on PATH is a FAIL, not a pass over a file nobody read.
 #
 # NO MUTATION. The spool directory is measured with `-e`/`-d`/`-L`/`-r`/`-x` and never created, chmodded or removed;
 # a foreign entry is never edited; only the `--fix` arm writes, and it writes through the shipped installer.
@@ -10418,7 +10443,7 @@ _check_delegation-hooks() {
   want_json="[$want_json]"
 
   local id suffix dir f homes=0 out line kind name why said why_not=""
-  local -a unread=() missing=() ownworktree=() foreign=() spool_bad=() spool_none=() spool_unasked=()
+  local -a unread=() missing=() ownworktree=() foreign=() spool_bad=() spool_none=() spool_unasked=() timeout_set=()
   while IFS=$'\t' read -r id suffix; do
     [ -n "$id" ] || continue
     dir="$HOME/$suffix"
@@ -10452,22 +10477,27 @@ _check_delegation-hooks() {
           (("WorktreeCreate", "WorktreeRemove") as $e | ($h[$e] // []) as $a
             | ([$a | cmds] as $c
               | (if ($c | any(. == "own")) then "OWN\t" + $e else empty end),
-                (if ($a | type) != "array" or ($c | any(. == "other")) then "FOREIGN\t" + $e else empty end)))
+                (if ($a | type) != "array" or ($c | any(. == "other")) then "FOREIGN\t" + $e else empty end))),
+          # The Bash ceiling (Task 4.5b): a KEY NAME only, never its value, for a key set (not null, not "") in an env OBJECT.
+          ((.[0].env // null) | if type == "object" then ("BASH_MAX_TIMEOUT_MS", "BASH_DEFAULT_TIMEOUT_MS") as $k
+            | select(has($k) and .[$k] != null and .[$k] != "") | "TIMEOUT\t" + $k else empty end)
       end' "$f" 2>/dev/null)"; rc=$?
     if [ "$rc" -ne 0 ]; then unread+=("$id: settings.json is not valid JSON"); continue; fi
     if [ "$out" = DOCS ]; then unread+=("$id: settings.json is empty or holds more than one JSON document"); continue; fi
     if [ "$out" = SHAPE ]; then unread+=("$id: settings.json does not hold hooks as an object"); continue; fi
-    local miss="" fgn="" own=""
+    local miss="" fgn="" own="" tmo=""
     while IFS=$'\t' read -r kind name; do
       case "$kind" in
         MISSING) miss="${miss:+$miss, }$name" ;;
         FOREIGN) fgn="${fgn:+$fgn }$name" ;;
         OWN) own="${own:+$own }$name" ;;
+        TIMEOUT) tmo="${tmo:+$tmo, }$name" ;;
       esac
     done <<< "$out"
     [ -z "$miss" ] || missing+=("$id: $miss")
     [ -z "$own" ] || ownworktree+=("$id: $own")
     [ -z "$fgn" ] || foreign+=("$id: $fgn")
+    [ -z "$tmo" ] || timeout_set+=("$id: $tmo")
   done <<< "$rows"
   if [ "$homes" -eq 0 ]; then
     _dr_skip delegation-hooks "none of the roster's config directories exist on this box, so there is no hook registration to measure"
@@ -10555,7 +10585,7 @@ _check_delegation-hooks() {
   fi
   if [ "${#ownworktree[@]}" -gt 0 ]; then
     _dr_fail delegation-hooks "ccrc's own session hook is registered under an event it never registers — a registered hook for WorktreeCreate or WorktreeRemove replaces Claude Code's own worktree handling: $(_dr_join "${ownworktree[@]}")" \
-      "run 'ccrc doctor --fix' (it removes ccrc's own entry from every event; an entry of its own that names another command is kept, but an entry shared with ccrc's hook is not, so --fix refuses a home that has one: move the other command into an entry of its own first)"
+      "run 'ccrc doctor --fix' (it removes ccrc's own hook from every event it never registers, and keeps every other command, whether in an entry of its own or in an entry it shares with ccrc's hook)"
     worst=1
   fi
   if [ "${#spool_bad[@]}" -gt 0 ]; then
@@ -10598,6 +10628,12 @@ _check_delegation-hooks() {
       "ask the manager by hand ($(_svc_status_hint "claude-session@${spool_unasked[0]}.service")) and re-run ccrc doctor"
     [ "$worst" -eq 1 ] || worst=2
   fi
+  if [ "${#timeout_set[@]}" -gt 0 ]; then
+    n=${#timeout_set[@]}; s="homes set"; [ "$n" -eq 1 ] && s="home sets"
+    _dr_warn delegation-hooks "$n rostered $s Claude Code's Bash timeout in settings.json env: $(_dr_join "${timeout_set[@]}")" \
+      "remove the key from that home's env: the delegation broker's rung-4 margin (twenty minutes) assumes Claude Code's ten-minute Bash ceiling, so a changed ceiling breaks that assumption and can let rung 4 link a tree to the wrong session; changing the margin is a code change"
+    [ "$worst" -eq 1 ] || worst=2
+  fi
   if [ "$worst" -eq 0 ]; then
     _dr_pass delegation-hooks "$homes/$homes rostered homes register all ${#want[@]} hook events the shipped installer writes; no running session lacks its delegation spool directory ($rows_read registry rows read, $rows_ok with a directory)"
   fi
@@ -10607,58 +10643,25 @@ _check_delegation-hooks() {
 # The cure `ccrc doctor --fix` runs for `delegation-hooks` (FAIL only, R-C8): the SHIPPED installer, `$CCRC_HERE/
 # install-session-hooks.sh`, into every rostered home that exists on this box — the tree the check measured, never a
 # copy of its logic, so this is not a second hook installer. The installer validates before it writes, backs up what it
-# replaces, swaps managed entries only (ccrc's own hook under a Worktree event included) and leaves every foreign entry of its
+# replaces, removes only ccrc's own hook command from an entry (ccrc's own hook under a Worktree event included) and leaves every foreign entry of its
 # own (a `WorktreeCreate` hook naming another command included) byte-identical; a home it refuses (invalid JSON) stays a FAIL on
 # the re-measurement, which is the verdict. It creates no spool directory: that is ccd's, at spawn.
 #
-# ONE HOME IT DOES NOT HAND TO THE INSTALLER (R55, coordinator 5180). The installer's sweep (`JQ_UNMANAGED`) drops a whole
-# entry when ANY hook in it names `/session-hook.sh`, so an entry that carries ccrc's hook AND another command loses the
-# other command — under every event, on `ccrc install` and `ccrc update` as well as here. This fixer is the first
-# `doctor --fix` path into that drop, and "never removes or rewrites a foreign registration" (5151) binds it: before a
-# home goes to the installer its settings.json is read for any such mixed entry, under any event. A home that has one is
-# REFUSED (its file untouched, byte for byte), the refusal names the event and the manual step, and the other homes are
-# fixed as before. A settings.json jq cannot read is left to the installer, which refuses it in its own words.
-# The test MIRRORS the installer's own sweep (Task 14 re-review 2, N4): `map(...)` and `any(...)` iterate an event value and
-# a `hooks` list whatever their JSON type, so an object-shaped value or `hooks` (not valid Claude Code settings, but what
-# the sweep would still walk) is walked here too, and a mixed entry there is refused like any other.
-_dh_mixed_events() {   # <settings.json> -> the events (one per line) holding an entry that mixes ccrc's hook with another command
-  jq -r '
-    (.hooks // {}) | if type == "object" then to_entries[] else empty end
-    | select(any(.value[]?; type == "object"
-        and ([(.hooks // [])[]? | type == "object" and ((.command // "") | tostring | contains("/session-hook.sh"))] as $o
-          | ($o | any) and ($o | any(not)))))
-    | .key' "$1" 2>/dev/null
-}
-
+# R55 IS LIFTED (delegation broker wave 4, PR4 Task 4.5b). The installer's sweep (`JQ_UNMANAGED`, PR4 Task 4.5a, option B)
+# removes only ccrc's own hook command from an entry and keeps the entry's matcher and every other hook, so an entry that
+# mixes ccrc's hook with another command is handed to the installer like any other: the other command survives, and the
+# installer backs the file up before it writes. No home is refused for a mixed entry any more.
 _fix_delegation-hooks() {
-  local inst="$CCRC_HERE/install-session-hooks.sh" roster="$HOME/.ccrc/accounts.json" rows id suffix dir said n=0 list="" mixed evs verb e refused=0
-  local -a dirs=() evarr=()
+  local inst="$CCRC_HERE/install-session-hooks.sh" roster="$HOME/.ccrc/accounts.json" rows id suffix dir said n=0 list=""
+  local -a dirs=()
   rows="$(_skills_roster_rows "$roster")" || { echo "FIX delegation-hooks: refused — \$HOME/.ccrc/accounts.json could not be read as a roster"; return 1; }
   while IFS=$'\t' read -r id suffix; do
     [ -n "$id" ] || continue
     dir="$HOME/$suffix"
     [ -d "$dir" ] || continue
-    if [ -f "$dir/settings.json" ] && [ -r "$dir/settings.json" ] && command -v jq >/dev/null 2>&1; then
-      mixed="$(_dh_mixed_events "$dir/settings.json")"
-      if [ -n "$mixed" ]; then
-        # One event per line, read as lines (N5: never word-split or glob-expanded, so a key like `*` names itself).
-        evarr=()
-        while IFS= read -r e; do [ -n "$e" ] && evarr+=("$e"); done <<< "$mixed"
-        if [ "${#evarr[@]}" -eq 1 ]; then
-          evs="${evarr[0]}"; verb="holds"; said="under $evs"
-        else
-          # N6: "WorktreeCreate and Stop hold", "A, B and C hold"
-          evs=""; for e in "${evarr[@]:0:${#evarr[@]}-1}"; do evs="${evs:+$evs, }$e"; done
-          evs="$evs and ${evarr[${#evarr[@]}-1]}"; verb="hold"; said="under each of $evs"
-        fi
-        echo "FIX delegation-hooks: refused — $id: $evs $verb an entry that mixes ccrc's session hook with another command, and the sweep that --fix, ccrc install and ccrc update run removes the whole entry that carries ccrc's hook, other commands included; move the other command into an entry of its own $said, then re-run ccrc doctor --fix"
-        refused=1; continue
-      fi
-    fi
     dirs+=("$dir"); n=$((n + 1)); list="$list${list:+, }$id"
   done <<< "$rows"
   if [ "$n" -eq 0 ]; then
-    [ "$refused" -eq 1 ] && return 1
     echo "FIX delegation-hooks: nothing to cure — no rostered home exists on this box"; return 0
   fi
   # The interpreter running THIS file, as `_fix_skills` runs its installers.
@@ -10666,7 +10669,6 @@ _fix_delegation-hooks() {
     echo "FIX delegation-hooks: refused — $inst said: ${said##*$'\n'}"; return 1
   fi
   echo "FIX delegation-hooks: re-ran the shipped tree's install-session-hooks.sh into $n home(s): $list"
-  [ "$refused" -eq 0 ] || return 1
 }
 
 # ── update-sweep: the last update's supervisor sweep, as its report recorded it ──
@@ -11187,4 +11189,105 @@ _check_box-settings() {
     return 2
   fi
   _dr_pass box-settings "$(_upd_redact "the box's ccrc.env sets ${set:-$none}${unset:+; not set there, so the default applies unless the environment sets it:$unset}")"
+}
+
+# ── carry-copies ──────────────────────────────────────────────────────────
+# WHAT THE SWAP CARRY COPIED, AND WHAT THE DEDUPE SWEEP COULD RECLAIM — READ, NEVER RE-DERIVED (#317; D-7857). Two
+# figures, each from the file its writer keeps; this check walks no account root and asks no verb:
+#   * COPIED IN THE LAST 7 DAYS, from swap.log: a first sidecar carry that could not hardlink logs
+#     `sidecar <uuid> -> <dst> (copy: <cause> <bytes> bytes)` (`?` for a size ccd could not measure, and a bare
+#     `(copy)` before D-4501: both counted, neither sized), and a merge appends `, copy: <cause> <F> files <B> bytes` per
+#     cause to its `(merged …)` verdict. ccd/ccd writes that grammar (D-4500, D-4501); `deploy/measure-continuity.py`
+#     reads the same two forms. The window is the line's own local-time stamp against now less 7 days.
+#   * RECLAIMABLE, from the latest line of `ccd-carry-dedupe-sweep`'s record, `~/.cc-sessions/carry-dedupe-record`:
+#     `<stamp> mode=<shadow|live> rc=<n> uuids=<n> copies=<n> <reclaimable|reclaimed>=<bytes> refused=<n> by=<…>`, or
+#     `<stamp> mode=<…> rc=<n> unmeasured=no-total`. A shadow line's `reclaimable` is what an armed sweep would free.
+# WARN when either figure is over CCRC_CARRY_COPY_WARN_BYTES (ccrc.env, read through `_ccrc_knob` in `file` mode;
+# default 10737418240, 10 GiB, a neutral round figure and no measurement of any box), and when the latest record says
+# the sweep did not measure or exited non-zero; PASS with both figures otherwise. The remedy for a shadow sweep is the
+# operator's: read the record, then arm the sweep. This check never writes the marker. Nothing here is a FAIL: copies
+# are a runtime cost, and `ccrc install` ends with doctor. SKIP on a `server`-role box (no sessions, no carry) and
+# where there is no session registry. Appended at the END of this file, for `_check_timeout`'s reason.
+_check_carry-copies() {
+  local rd="~/.cc-sessions" _srv_role="" reg log rec thr now cutoff out fb fn mb mf un line last="" copied detail rnote="" rbytes=0 m
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip carry-copies "this box records CCRC_ROLE=server, so it runs no session and no swap carry"; return 3
+  fi
+  reg="$HOME/.cc-sessions"   # the bare directory, never `.cc-sessions/<name>` on a code line: pool-name-parity.test.ts pins those
+  if [ ! -d "$reg" ]; then
+    _dr_skip carry-copies "no session registry at ~/.cc-sessions, so there is no swap carry to size"; return 3
+  fi
+  if ! _ccrc_knob CCRC_CARRY_COPY_WARN_BYTES 10737418240 file; then
+    _dr_warn carry-copies "$KNOB_WHY" "rewrite that line of ~/.ccrc/ccrc.env as a plain CCRC_CARRY_COPY_WARN_BYTES=<bytes> line (deploy/ccrc.env.example shows it)"
+    return 2
+  fi
+  thr="$KNOB"
+  if ! [[ "$thr" =~ ^[123456789][0123456789]{0,17}$ ]]; then
+    _dr_warn carry-copies "CCRC_CARRY_COPY_WARN_BYTES must be a whole number of bytes from 1 to 18 digits — got '$thr' in ~/.ccrc/ccrc.env, so neither figure is judged" \
+      "set CCRC_CARRY_COPY_WARN_BYTES=<bytes> in ~/.ccrc/ccrc.env (default 10737418240, 10 GiB), or remove the line"
+    return 2
+  fi
+  now="$(printf '%(%s)T' -1)"
+  cutoff="$(printf '%(%Y-%m-%d %H:%M:%S)T' "$(( now - 7 * 86400 ))")"
+  log="$reg/swap.log"
+  fb=0 fn=0 mb=0 mf=0 un=0
+  if [ -f "$log" ]; then
+    if ! out="$(LC_ALL=C awk -v c="$cutoff" '
+        /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9] sidecar / && substr($0, 1, 19) >= c {
+          if (match($0, /\(copy: [a-z][a-z-]* [0-9]+ bytes\)$/)) { split(substr($0, RSTART, RLENGTH), a, " "); fb += a[3]; fn++ }
+          else if ($0 ~ /\(copy: [a-z][a-z-]* \? bytes\)$/ || $0 ~ /\(copy\)$/) un++
+          else if ($0 ~ /\(merged \+/) {
+            t = $0
+            while (match(t, /, copy: [a-z][a-z-]* [0-9]+ files [0-9]+ bytes/)) { split(substr(t, RSTART, RLENGTH), a, " "); mf += a[4]; mb += a[6]; t = substr(t, RSTART + RLENGTH) }
+          }
+        }
+        END { printf "%.0f %.0f %.0f %.0f %.0f\n", fb, fn, mb, mf, un }' "$log" 2>/dev/null)" \
+       || ! [[ "$out" =~ ^([0-9]+)\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)$ ]]; then
+      _dr_warn carry-copies "swap.log at $rd/swap.log could not be read, so the carry's copies are unmeasured" \
+        "check the file is readable (ls -l $rd/swap.log), then re-run ccrc doctor"
+      return 2
+    fi
+    fb=${BASH_REMATCH[1]} fn=${BASH_REMATCH[2]} mb=${BASH_REMATCH[3]} mf=${BASH_REMATCH[4]} un=${BASH_REMATCH[5]}
+  fi
+  copied=$(( fb + mb ))
+  detail="$copied bytes ($(_dr_gib "$copied")) copied by swap carries in the last 7 days (first carries $fn, $fb bytes; merged files $mf, $mb bytes"
+  [ "$un" = 0 ] || detail+="; unsized first carries $un"
+  detail+=")"
+  [ -f "$log" ] || detail="no swap.log yet, so no swap carry has copied anything"
+  rec="$reg/carry-dedupe-record"
+  if [ -f "$rec" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do [ -z "$line" ] || last="$line"; done < "$rec"
+  fi
+  local S='([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2})' N='(0|[1-9][0-9]{0,18})'
+  local arm="read the record first ($rd/carry-dedupe-record, one line a day, mode=shadow until armed); when its shadow lines read right, arm the sweep: touch $rd/carry-dedupe-live, and its next daily pass runs ccd carry-dedupe --identical-only --apply"
+  if [ ! -f "$rec" ] || [ -z "$last" ]; then
+    if [ "${CCD_OS:-linux}" = darwin ]; then rnote="no dedupe sweep runs on this box (its timer is systemd-only)"
+    else rnote="the dedupe sweep has not recorded a pass yet (ccd-carry-dedupe.timer runs it daily)"; fi
+  elif [[ "$last" =~ ^${S}\ mode=(shadow|live)\ rc=${N}\ unmeasured=no-total$ ]]; then
+    _dr_warn carry-copies "$detail; the dedupe sweep's latest pass (${BASH_REMATCH[1]}, mode ${BASH_REMATCH[2]}) did not measure: the verb printed no total (rc ${BASH_REMATCH[3]})" \
+      "journalctl --user -u ccd-carry-dedupe.service; then systemctl --user start ccd-carry-dedupe.service and re-run ccrc doctor"
+    return 2
+  elif [[ "$last" =~ ^${S}\ mode=(shadow|live)\ rc=${N}\ uuids=${N}\ copies=${N}\ (reclaimable|reclaimed)=${N}\ refused=${N}\ by=([a-z][a-z-]*:[0-9]+(,[a-z][a-z-]*:[0-9]+)*|-)$ ]]; then
+    m=("${BASH_REMATCH[@]}")   # 1 stamp, 2 mode, 3 rc, 4 uuids, 5 copies, 6 kind, 7 bytes, 8 refused, 9 by
+    rnote="the dedupe sweep's latest pass (${m[1]}, mode ${m[2]}): ${m[7]} bytes ($(_dr_gib "${m[7]}")) ${m[6]} across ${m[4]} uuid(s) held on two or more accounts, ${m[8]} refused$( [ "${m[9]}" = - ] || printf ' (%s)' "${m[9]}" )"
+    if [ "${m[3]}" != 0 ]; then
+      _dr_warn carry-copies "$detail; $rnote, and it exited ${m[3]}" \
+        "journalctl --user -u ccd-carry-dedupe.service names the uuid it could not handle; then systemctl --user start ccd-carry-dedupe.service and re-run ccrc doctor"
+      return 2
+    fi
+    [ "${m[6]}" = reclaimable ] && rbytes="${m[7]}"
+  else
+    _dr_warn carry-copies "$detail; the latest line of $rd/carry-dedupe-record is not a line the sweep writes, so what it could reclaim is unmeasured" \
+      "let the sweep append a fresh line: systemctl --user start ccd-carry-dedupe.service; then re-run ccrc doctor"
+    return 2
+  fi
+  if (( copied > thr || rbytes > thr )); then
+    if [ "${m[2]:-}" = live ]; then
+      arm="the sweep is armed, so these copies are new since its last pass: each (copy: <cause> …) line in $rd/swap.log names why that carry could not hardlink; read them, and the record ($rd/carry-dedupe-record)"
+    fi
+    _dr_warn carry-copies "$detail; $rnote — over the warn bound of $thr bytes ($(_dr_gib "$thr"), CCRC_CARRY_COPY_WARN_BYTES)" "$arm"
+    return 2
+  fi
+  _dr_pass carry-copies "$detail; $rnote (warn bound $thr bytes)"
 }

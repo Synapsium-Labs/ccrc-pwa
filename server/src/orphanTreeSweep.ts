@@ -16,9 +16,9 @@ import {
 } from './coord/collectOrphanTree.js';
 import {
   ORPHAN_AUDITS_PER_PASS, ORPHAN_AUDITS_PER_PASS_PRESSURE, ORPHAN_CENSUS_MS, ORPHAN_CENSUS_PRESSURE_MS, ORPHAN_QUEUE_KEY,
-  ORPHAN_RETRY_MS, isAuditedClass, orphanPathOfHex, orphanCensusDue, orphanCensusRetryMono, orphanTruncatedRow, orphanTruncatedWaitMs, orphanGoesWithRow, orphanHeldBack, orphanInsideVerdict, orphanFeedRow, orphanFoldAudit, orphanFoldJob, orphanOffers, orphanPopulate,
+  ORPHAN_RETRY_MS, isAuditedClass, orphanPathOfHex, orphanCensusDue, orphanCensusRetryAt, orphanTruncatedRow, orphanTruncatedWaitMs, orphanGoesWithRow, orphanHeldBack, orphanInsideVerdict, orphanFeedRow, orphanFoldAudit, orphanFoldJob, orphanOffers, orphanPopulate,
   orphanRemember, orphanRescueArmed, orphanTreesHealth,
-  type OrphanFold, type OrphanMemory, type OrphanRow, type OrphanTreeMemory,
+  type OrphanCensusNext, type OrphanFold, type OrphanMemory, type OrphanRow, type OrphanTreeMemory,
 } from './orphanTreeLane.js';
 import type { DiskOrphanTrees } from '../../shared/disk.js';
 
@@ -44,7 +44,7 @@ export interface OrphanSweepDeps {
 export class OrphanTreeSweep {
   private memory: OrphanMemory = new Map();
   private rows: readonly OrphanRow[] = [];
-  private lastCensus: number | null = null;
+  private nextCensus: OrphanCensusNext | null = null;
   private sweeping = false;
   private removed = 0;
   private measured = false;
@@ -120,23 +120,23 @@ export class OrphanTreeSweep {
       return;
     }
     const rescueArmed = orphanRescueArmed(sw);
-    if (orphanCensusDue(this.lastCensus, d.mono(), pressure)) {
+    if (orphanCensusDue(this.nextCensus, d.mono(), pressure)) {
       let askedAt = 0;
       const c = await d.queue.run(ORPHAN_QUEUE_KEY, () => { askedAt = d.mono(); return censusOrphans(this.ccd()); });
       if (c.kind === 'not-asked') return;
       const now = d.mono();
-      if (c.kind === 'unreadable') { this.lastCensus = orphanCensusRetryMono(now, censusMs, ORPHAN_RETRY_MS); return; }
+      if (c.kind === 'unreadable') { this.nextCensus = orphanCensusRetryAt(now, ORPHAN_RETRY_MS); return; }
       if (c.truncated) {
         this.truncatedStreak += 1;
         const waitMs = orphanTruncatedWaitMs(this.truncatedStreak, censusMs);
-        this.lastCensus = orphanCensusRetryMono(now, censusMs, waitMs);
+        this.nextCensus = orphanCensusRetryAt(now, waitMs);
         const row = orphanTruncatedRow(c.rows.length, now - askedAt, waitMs);
         console.warn(`ccrc-server: ${row.title}: ${row.body}`);
         d.record(row.title, row.body);
         return;
       }
       this.truncatedStreak = 0;
-      this.lastCensus = now;
+      this.nextCensus = { kind: 'after', mono: now };
       this.rows = c.rows;
       const coords = this.coordinators();
       await this.readWsKinds(c.rows);
