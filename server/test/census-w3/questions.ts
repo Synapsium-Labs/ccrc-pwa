@@ -135,10 +135,6 @@ export type QuestionDoorTag = 'claimant' | 'operator' | 'navigation';
 /** The question doors by path, each with its principal. A POST whose path has a question door's shape and is not a
  *  row here is reported `untagged`, and the census test reds. */
 export const QUESTION_DOOR_TAGS: Readonly<Record<string, QuestionDoorTag>> = {
-  '/api/asks/:id/answer': 'claimant',
-  '/api/asks/:id/release': 'claimant',
-  '/api/approvals/:id/rule': 'claimant',
-  '/api/approvals/:id/release': 'claimant',
   // W7 C7p (D-7194): `/api/sessions/:id/ask`, `/dialog`, `/dialog/text` and `/dialog/multi` retired; the family's
   // `/answer` below answers them.
   '/api/sessions/:id/dialog/tab': 'navigation',

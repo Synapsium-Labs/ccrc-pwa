@@ -14,8 +14,11 @@ import {
 } from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DocsLeaf } from '../src/docs/DocsLeaf';
+import { DocsAssetContext } from '../src/docs/DocImage';
+import { createFetchQueue } from '../src/docs/fetchQueue';
+import type { ReaderDeps } from '../src/docs/ReaderFrame';
 import { pinFor, type DocsVisit } from '../src/docs/useDocsVisit';
-import { DOCS_FAILURE_SENTENCE, DOCS_PAGE_INVALID_SENTENCE } from '../src/docs/docsText';
+import { DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, fillSentence, shortCommit } from '../src/docs/docsText';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
@@ -23,9 +26,10 @@ import { parseMarkdown } from '../src/lib/markdownParse';
 import { docsRunner, type MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
 import {
-  BLOB_1, COMMIT_A, COMMIT_B, FP_1, RAN, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, fileResponse, holder,
+  BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, RAN, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, fileResponse, holder,
   okRefresh, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
 } from './docsFixtures';
+import { withSyncHighlight } from './highlightTestStore';
 
 /** Parses in this thread, as the worker would. */
 const parser: MarkdownParser = async (src) => parseMarkdown(src, 'docs');
@@ -548,7 +552,8 @@ describe('the leaf by content class (M5.3, leaf-routing half)', () => {
       'x.ts': fileAs('x.ts', 'const a: number = 1;', 'text'),
       'x.txt': fileAs('x.txt', 'plain words', 'text'),
     });
-    const { container } = open('/docs/demo/specs/x.ts', f);
+    navigate('/docs/demo/specs/x.ts');
+    const { container } = render(withSyncHighlight(<Routed loaders={f.loaders} />));
     await waitFor(() => expect(container.querySelector('.docs-leaf .code-block')).not.toBeNull());
     expect(container.querySelector('.code-block-lang')?.textContent).toBe('TypeScript');
     expect(container.querySelector('.code-block code.hljs .hljs-keyword')?.textContent).toBe('const');
@@ -1147,5 +1152,284 @@ describe("Review 439 F23: a direct load's #fragment survives the linked-worktree
     await waitFor(() => expect(container.querySelector('article li#user-content-fn-1')).not.toBeNull());
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     expect(scroll).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---- W5 Share, Task 4: a raster leaf's own image reports the pin it settled at ------------------------------------
+
+describe("W5 Share: a raster leaf's own image reports the pin it settled at (spec 4.3 item 5, 4.16; refinement (f))", () => {
+  const visitOf = (tree: DocsTreeOk, file: DocsVisit['file']): DocsVisit => ({
+    tree: { s: 'ok', answer: treeResponse(tree), receivedAt: 0 }, file, freshness: { s: 'idle' }, updatedTo: null,
+    pendingFragment: null, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(),
+    setFragment: vi.fn(),
+  });
+
+  /** `url`'s leaf alone, under the assets context the screen gives it, with `listen` as its leaf-image listener. */
+  function leafAlone(url: string, tree: DocsTreeOk, f: FakeLoaders, listen: (pin: DocPin | null) => void,
+    file: DocsVisit['file'] = { s: 'none' }): ReturnType<typeof render> {
+    const page = pageAt(url);
+    if (page.kind !== 'path') throw new Error('fixture: not a leaf');
+    const assets = { loaders: f.loaders, queue: createFetchQueue(), onDraftAsset: () => {} };
+    return render(
+      <DocsAssetContext value={assets}>
+        <DocsLeaf visit={visitOf(tree, file)} tree={tree} page={page} parser={parser} onLeafImage={listen} />
+      </DocsAssetContext>,
+    );
+  }
+
+  const RASTER = treeOk({ entries: [entry('specs', 'x.png')] });
+  const RASTER_URL = '/docs/demo/specs/x.png';
+
+  it("reports the leaf's pin once its bytes are shown, and null when it unmounts", async () => {
+    const f = fakeLoaders({ tree: okTree(RASTER) });
+    f.raster.mockResolvedValue(okPng());
+    const seen = vi.fn();
+    const view = leafAlone(RASTER_URL, RASTER, f, seen);
+    const pin = pinFor(RASTER, pageAt(RASTER_URL));
+    await waitFor(() => expect(seen).toHaveBeenLastCalledWith(pin));
+    expect(seen.mock.calls.every(([p]) => p === null || JSON.stringify(p) === JSON.stringify(pin))).toBe(true);
+    view.unmount();
+    expect(seen).toHaveBeenLastCalledWith(null);
+  });
+
+  it('reports nothing while the image loads', async () => {
+    const f = fakeLoaders({ tree: okTree(RASTER) });
+    f.raster.mockImplementation(() => new Promise<never>(() => {}));
+    const seen = vi.fn();
+    leafAlone(RASTER_URL, RASTER, f, seen);
+    await waitFor(() => expect(f.raster).toHaveBeenCalled());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(seen.mock.calls.filter(([p]) => p !== null)).toEqual([]);
+  });
+
+  it('a failed load settles it too: the pin is reported, as a failed read settles any leaf (refinement (f))', async () => {
+    const f = fakeLoaders({ tree: okTree(RASTER) });
+    f.raster.mockResolvedValue({ s: 'unreachable' });
+    const seen = vi.fn();
+    leafAlone(RASTER_URL, RASTER, f, seen);
+    await waitFor(() => expect(seen).toHaveBeenLastCalledWith(pinFor(RASTER, pageAt(RASTER_URL))));
+  });
+
+  it('an image inside a Markdown document reports nothing', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'x.png')] });
+    const pin = pinFor(tree, pageAt('/docs/demo/specs/a.md'));
+    if (pin === null) throw new Error('fixture: no pin');
+    const f = fakeLoaders({ tree: okTree(tree) });
+    f.raster.mockResolvedValue(okPng());
+    const seen = vi.fn();
+    const { container } = leafAlone('/docs/demo/specs/a.md', tree, f, seen,
+      { s: 'ok', pin, answer: fileResponse('![x](x.png)\n'), receivedAt: 0 });
+    await waitFor(() => expect(container.querySelector('img')).not.toBeNull());
+    expect(seen.mock.calls.filter(([p]) => p !== null)).toEqual([]);
+  });
+});
+
+
+// ---- W5 Share, Task 6: Share on the Docs screen -----------------------------------------------------------------
+
+describe('W5 Share on the Docs screen (spec 4.5, 4.16; M4.SH8 Share half, M4.EX12 Share half, M4.SH1 raster clause)', () => {
+  const GH = 'https://github.com/example-org/example-repo';
+  const shareButton = (): HTMLElement | null => screen.queryByRole('button', { name: DOCS_HEAD_TEXT.share });
+  const updatingTo = (commit: string): string => fillSentence(DOCS_HEAD_TEXT.shareUpdating, { short: shortCommit(commit) });
+  const sheetUrl = (): string | null | undefined => document.querySelector('.docs-share-url')?.textContent;
+  function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+    let resolve: (v: T) => void = () => {};
+    const promise = new Promise<T>((r) => { resolve = r; });
+    return { promise, resolve };
+  }
+  /** A committed answer for `a.md` at `commit`, of blob `blob`, its h1 `heading`. */
+  function answerAt(commit: string, blob: string, heading: string, over: Partial<DocsFileResponse['show']> = {}): DocsFileAnswer {
+    const r = fileResponse(`# ${heading}\n`);
+    return { s: 'ok', value: { ...r, show: { ...r.show, commit, blob, onRef: 'contains', ...over } } };
+  }
+
+  /** The loading state held honestly: the leaf's image request has been made and its effects have run, the loader's
+   *  promise has neither resolved nor rejected, and Share is still disabled, reading "Updating to <short>…". */
+  async function expectSharePausedWhileImageLoads(f: { raster: { mock: { calls: unknown[] } } }, commit: string): Promise<void> {
+    await waitFor(() => expect(f.raster.mock.calls.length).toBeGreaterThan(0));
+    await act(async () => {});
+    expect(screen.getByRole('button', { name: updatingTo(commit) })).toBeDisabled();
+    expect(shareButton()).toBeNull();
+  }
+
+  it('no Share on the index (M4.SH8)', async () => {
+    openIndex();
+    await waitFor(() => expect(mainRowNames().length).toBeGreaterThan(0));
+    expect(document.querySelector('.docs-share')).toBeNull();
+  });
+
+  it('no Share in frame=full; the same page inline has it (M4.SH8)', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'm.html')] });
+    const files = { 'm.html': fileAs('m.html', '<p>a</p>', 'html') };
+    open('/docs/demo/specs/m.html?ref=main&frame=full', byPath(tree, files));
+    expect(await screen.findByRole('link', { name: DOCS_HEAD_TEXT.github })).toBeInTheDocument();
+    expect(document.querySelector('.docs-share')).toBeNull();
+    cleanup();
+    open('/docs/demo/specs/m.html?ref=main', byPath(tree, files));
+    expect(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeEnabled();
+  });
+
+  it('hidden while the tree slot is loading (M4.SH8)', async () => {
+    const f = fakeLoaders();
+    f.tree.mockImplementation(() => new Promise<never>(() => {}));
+    open('/docs/demo/specs/a.md', f);
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(f.tree).toHaveBeenCalled();
+    expect(document.querySelector('.docs-share')).toBeNull();
+  });
+
+  it("a leaf's actions read View on GitHub, Share, Open committed version, in that order (M4.SH8)", async () => {
+    const tree = treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holder() });
+    open('/docs/demo/specs/a.md?ref=main', fakeLoaders({ tree: okTree(tree) }));
+    expect(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeEnabled();
+    const actions = [...document.querySelectorAll('.docs-actions .docs-action')].map((e) => e.textContent);
+    expect(actions).toEqual([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.openCommitted]);
+  });
+
+  it('the project page carries View on GitHub and Share, through root (M4.SH8)', async () => {
+    open('/docs/demo', fakeLoaders());
+    expect(await screen.findByRole('link', { name: DOCS_HEAD_TEXT.github })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share }));
+    await waitFor(() => expect(sheetUrl()).toBe(`${GH}/tree/${COMMIT_A}`));
+  });
+
+  it('a tree moved to C2 while the file is at C1 disables Share, reading Updating to; the C2 answer enables it, and the link names C2 (M4.EX12)', async () => {
+    const f = fakeLoaders({ tree: okTree(treeOk()) });
+    const later = deferred<DocsFileAnswer>();
+    f.file.mockImplementation(async (_project: string, pin: DocPin) =>
+      (pin.kind === 'committed' && pin.commit === COMMIT_B ? later.promise : answerAt(COMMIT_A, BLOB_1, 'A')));
+    f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(treeOk({
+      commit: COMMIT_B, entries: [entry('specs', 'a.md', { committed: { kind: 'file', blob: BLOB_2, size: 100 } })],
+    }))));
+    const { container } = open('/docs/demo/specs/a.md', f);
+    await screen.findByRole('heading', { name: 'A' });
+    expect(shareButton()).toBeEnabled();
+    fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+    expect(await screen.findByRole('button', { name: updatingTo(COMMIT_B) })).toBeDisabled();
+    await act(async () => { later.resolve(answerAt(COMMIT_B, BLOB_2, 'B')); });
+    await screen.findByRole('heading', { name: 'B' });
+    fireEvent.click(shareButton() as HTMLElement);
+    await waitFor(() => expect(sheetUrl()).toBe(`${GH}/blob/${COMMIT_B}/docs/superpowers/specs/a.md`));
+  });
+
+  it("a same-blob re-list: Share links C2 with no second read, and the sheet says nothing of C1's onRef (refinement (a))", async () => {
+    const f = fakeLoaders({ tree: okTree(treeOk()) });
+    f.file.mockResolvedValue(answerAt(COMMIT_A, BLOB_1, 'A', { onRef: 'not-contained' }));
+    f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(treeOk({ commit: COMMIT_B }))));
+    const { container } = open('/docs/demo/specs/a.md', f);
+    await screen.findByRole('heading', { name: 'A' });
+    fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+    await waitFor(() => expect(container.querySelector('code.docs-truth-commit')?.getAttribute('title')).toBe(COMMIT_B));
+    await waitFor(() => expect(shareButton()).toBeEnabled());
+    fireEvent.click(shareButton() as HTMLElement);
+    await waitFor(() => expect(sheetUrl()).toBe(`${GH}/blob/${COMMIT_B}/docs/superpowers/specs/a.md`));
+    expect(document.querySelector('.docs-share-sheet')?.textContent).not.toContain('GitHub may stop serving it');
+    expect(f.file).toHaveBeenCalledTimes(1);
+  });
+
+  it('a raster leaf: Share waits for its image, then links the pin the image loaded (M4.SH1, M4.EX12; refinement (f))', async () => {
+    const f = fakeLoaders({ tree: okTree(treeOk({ entries: [entry('specs', 'x.png')] })) });
+    const image = deferred<DocsRasterAnswer>();
+    f.raster.mockImplementation(() => image.promise);
+    open('/docs/demo/specs/x.png', f);
+    expect(await screen.findByRole('button', { name: updatingTo(COMMIT_A) })).toBeDisabled();
+    await expectSharePausedWhileImageLoads(f, COMMIT_A);
+    await act(async () => { image.resolve(okPng()); });
+    await waitFor(() => expect(shareButton()).toBeEnabled());
+    fireEvent.click(shareButton() as HTMLElement);
+    await waitFor(() => expect(sheetUrl()).toBe(`${GH}/blob/${COMMIT_A}/docs/superpowers/specs/x.png`));
+  });
+
+  it('a ref-view raster leaf that opens a draft: Share waits for the drafted image, then sends the committed permalink at C with the drafts note', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'x.png', { draft: draftOf('modified') })], drafts: holder() });
+    const f = fakeLoaders({ tree: okTree(tree) });
+    const image = deferred<DocsRasterAnswer>();
+    f.raster.mockImplementation(() => image.promise);
+    open('/docs/demo/specs/x.png?ref=main', f);
+    expect(await screen.findByRole('button', { name: updatingTo(COMMIT_A) })).toBeDisabled();
+    await waitFor(() => expect(f.raster).toHaveBeenCalled());
+    expect(f.raster.mock.calls[0]?.[1]?.kind).toBe('draft');
+    await expectSharePausedWhileImageLoads(f, COMMIT_A);
+    await act(async () => { image.resolve(okPng()); });
+    await waitFor(() => expect(shareButton()).toBeEnabled());
+    fireEvent.click(shareButton() as HTMLElement);
+    await waitFor(() => expect(sheetUrl()).toBe(`${GH}/blob/${COMMIT_A}/docs/superpowers/specs/x.png`));
+    expect(document.querySelector('.docs-share-sheet')?.textContent).toContain('Drafts are not included');
+  });
+
+  it('the same raster leaf at view=committed: Share waits for the committed image, then sends the permalink with the not-included note', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'x.png', { draft: draftOf('modified') })], drafts: holder() });
+    const f = fakeLoaders({ tree: okTree(tree) });
+    const image = deferred<DocsRasterAnswer>();
+    f.raster.mockImplementation(() => image.promise);
+    open('/docs/demo/specs/x.png?ref=main&view=committed', f);
+    await expectSharePausedWhileImageLoads(f, COMMIT_A);
+    expect(f.raster.mock.calls[0]?.[1]?.kind).toBe('committed');
+    await act(async () => { image.resolve(okPng()); });
+    await waitFor(() => expect(shareButton()).toBeEnabled());
+    fireEvent.click(shareButton() as HTMLElement);
+    await waitFor(() => expect(sheetUrl()).toBe(`${GH}/blob/${COMMIT_A}/docs/superpowers/specs/x.png`));
+    expect(document.querySelector('.docs-share-sheet')?.textContent)
+      .toContain('Uncommitted changes in main checkout are not included.');
+  });
+
+  // The two lifetime cases leave the sheet open across a change after which Share is ready AT ONCE, so an unkeyed
+  // ShareAction (same position, `open` still true) would show the sheet again straight away: only the key closes it.
+  it('a sheet left open closes when the page changes, even to a page whose Share is ready at once (refinement (n))', async () => {
+    open('/docs/demo/specs/a.md', fakeLoaders());
+    fireEvent.click(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    act(() => { navigate('/docs/demo/specs'); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(sheetUrl()).toBeUndefined();
+  });
+
+  it('a sheet left open closes when a re-list moves the served commit (refinement (n))', async () => {
+    const f = fakeLoaders();
+    f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(treeOk({ commit: COMMIT_B }))));
+    const { container } = open('/docs/demo/specs', f);
+    fireEvent.click(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share }));
+    await waitFor(() => expect(sheetUrl()).toBe(`${GH}/tree/${COMMIT_A}/docs/superpowers/specs`));
+    // fireEvent.click dispatches no pointerdown, so the sheet's press-outside dismissal never runs here.
+    fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+    await waitFor(() => expect(container.querySelector('code.docs-truth-commit')?.getAttribute('title')).toBe(COMMIT_B));
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(sheetUrl()).toBeUndefined();
+  });
+
+  it('Share reads the visit, not the body: the reader frame gives the link the plain view gives (W8a)', async () => {
+    const reader = { render: vi.fn(() => new Promise<never>(() => {})), mount: vi.fn(), images: vi.fn() } as unknown as ReaderDeps;
+    const f = fakeLoaders();
+    navigate('/docs/demo/specs/a.md');
+    render(<DocsScreen path={location.pathname} search={location.search} loaders={f.loaders} parser={parser} reader={reader} />);
+    await waitFor(() => expect(reader.render).toHaveBeenCalled());
+    await waitFor(() => expect(shareButton()).toBeEnabled());
+    fireEvent.click(shareButton() as HTMLElement);
+    await waitFor(() => expect(sheetUrl()).toBe(`${GH}/blob/${COMMIT_A}/docs/superpowers/specs/a.md`));
+  });
+
+  it('no refusal on the screen says Export while no page offers it (refinement (c))', async () => {
+    open('/docs/demo', fakeLoaders({ tree: okTree({ ...treeOk(), github: { state: 'none' } }) }));
+    fireEvent.click(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share }));
+    expect(await screen.findByText('No GitHub link for this project.')).toBeInTheDocument();
+    expect(document.querySelector('.docs-share-sheet')?.textContent).not.toContain('Export');
+  });
+
+  it('a leaf whose read settled unreachable, then a same-blob re-list to C2: Share is enabled, not stuck Updating, and links C2', async () => {
+    const f = fakeLoaders({ tree: okTree(treeOk()) });
+    f.file.mockResolvedValue({ s: 'unreachable' });
+    f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(treeOk({ commit: COMMIT_B }))));
+    const { container } = open('/docs/demo/specs/a.md', f);
+    await waitFor(() => expect(f.file).toHaveBeenCalled());
+    await waitFor(() => expect(shareButton()).toBeEnabled());
+    fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+    await waitFor(() => expect(container.querySelector('code.docs-truth-commit')?.getAttribute('title')).toBe(COMMIT_B));
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(shareButton()).toBeEnabled();
+    expect(screen.queryByRole('button', { name: updatingTo(COMMIT_B) })).toBeNull();
+    fireEvent.click(shareButton() as HTMLElement);
+    await waitFor(() => expect(sheetUrl()).toBe(`${GH}/blob/${COMMIT_B}/docs/superpowers/specs/a.md`));
   });
 });

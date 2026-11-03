@@ -32,7 +32,7 @@
  *  (`watch.ts`) reading
  *  would suggest — so a window under that gives a just-idle parent no turn at
  *  all. CEILING: every second here is latency the operator pays on the asks
- *  the parent declines, which is why `POST /api/asks/:id/release` exists — a
+ *  the parent declines, which is why the claimant's release (`POST /api/questions/ask-<n>/release`) exists — a
  *  parent that answers "not mine" fires the push at once, so only a parent
  *  that has genuinely gone quiet ever costs the full window.
  *

@@ -34,7 +34,7 @@ _gr_shape() {   # <KEY> -> the class
     CCRC_GRAPH_SLOT_WAIT_SECS|CCRC_GRAPH_BUILD_GRACE_SECS|CCRC_GRAPH_HOOKSTATE_FRESH_SECS) echo secs ;;
     CCRC_GRAPH_FETCH_SECS) echo secs0 ;;
     CCRC_GRAPH_MAX_WORKERS) echo workers ;;
-    CCRC_GRAPH_MAX_SHRINK_PCT|CCRC_GRAPH_GATE_MAX_DIFF_PCT) echo pct ;;
+    CCRC_GRAPH_MAX_SHRINK_PCT|CCRC_GRAPH_GATE_MAX_DIFF_PCT|CCRC_GRAPH_PRESSURE_MAX) echo pct ;;
     CCRC_GRAPH_BUILD_NICE) echo nice ;;
     CCRC_GRAPH_FULL_FAIL_MAX|CCRC_GRAPH_BUDGET|CCRC_GRAPH_KEEP_BUILDS) echo count1 ;;
     CCRC_GRAPH_INCREMENTAL_MAX_FILES|CCRC_GRAPH_MIGRATE_BUDGET|CCRC_GRAPH_GATE_MAX_DENIALS|CCRC_GRAPH_CARD_DIFF_LIST_MAX) echo count0 ;;
@@ -184,6 +184,10 @@ _gr_store_init() {
   GR_STORE="$r"
   printf '%s\n' "$r"
 }
+
+# ── _gr_store_marked — rc 0 when the root `_gr_store` resolved (GR_STORE) carries the marker ──
+# The one test of the marker outside `_gr_store_init`: `ccrc uninstall` removes a store only when it passes (D-7354).
+_gr_store_marked() { [ -n "${GR_STORE:-}" ] && [ -f "$GR_STORE/.ccrc-graph-store" ]; }
 
 # ── _gr_repo_key <common dir> — `<basename of the main checkout>-<first 8 hex of sha256(realpath(common dir))>` ──
 # The digest is of the realpath string, without a newline, so every worktree of one repository (they share the

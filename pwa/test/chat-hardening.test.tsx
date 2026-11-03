@@ -4,8 +4,9 @@
 // `Worker`, so the real `chatRunner` answers `worker-unavailable`; a case that needs a tree from the worker path
 // spies `chatRunner.parse` (ChatMarkdown's default parser reads it at call time) and answers with `parseMarkdown`,
 // the function the worker runs. `message-links.test.tsx` runs beside this file, UNMODIFIED.
+import { StrictMode, type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MessageBubble } from '../src/session/MessageBubble';
@@ -15,9 +16,12 @@ import { chatRunner } from '../src/lib/markdownRunner';
 import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
 import { keystrokeParts, utf8ByteLength } from '../src/lib/markdownGuard';
 import {
-  CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_KEYSTROKE_MAX_CHARS, MD_MAX_CONTAINER_DEPTH,
-  MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH,
+  CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, HIGHLIGHT_STREAM_DEBOUNCE_MS, MD_KEYSTROKE_MAX_CHARS,
+  MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH,
 } from '../src/lib/markdownLimits';
+import { HighlighterContext, createProductionStore, type HighlighterContextValue } from '../src/lib/highlighterContext';
+import type { HighlightStore } from '../src/lib/highlightStore';
+import { inThreadContext, inThreadHighlighter } from './highlightTestStore';
 import { CHAT_CORPUS } from './markdownCorpus';
 
 afterEach(() => {
@@ -689,5 +693,203 @@ describe("W5 bound 2-2 reaches chat: the parse's element count includes the chip
     expect(plainOf(container)?.textContent).toBe(text);
     expect(noteOf(container)).toBe(chatPlainNote({ kind: 'too-wide', elements: 1 + 400 * 64 }));
     expect(container.querySelectorAll('kbd')).toHaveLength(0);
+  });
+});
+
+// Docs W5h-a Task 7 (base spec 2026-10-01 section 4.12 "Chat highlighting"; M4.C4, M4.C5, M4.H19 chat half). Chat's
+// code is coloured off the main thread, through one store per message on chat's own highlighter. These run the real
+// store over in-thread highlighters that answer only when the test releases them (`highlightTestStore.tsx`).
+describe('W5h-a: chat highlighting', () => {
+  const FENCE = '```ts\nconst a = 1;\n```';
+  /** A message of about `bytes` UTF-8 bytes: prose, then the fence. */
+  const message = (bytes: number): string => `${'word '.repeat(Math.max(0, Math.floor((bytes - FENCE.length - 2) / 5)))}\n\n${FENCE}`;
+  const under = (ctx: HighlighterContextValue, node: ReactNode): ReactNode => <HighlighterContext value={ctx}>{node}</HighlighterContext>;
+  const shape = (c: HTMLElement): string[] =>
+    [...c.querySelectorAll('.code-block')].map((b) => [...b.querySelectorAll('*')].filter((e) => !e.className.toString().startsWith('hljs-')).map((e) => e.tagName + '.' + e.className).join(' '));
+
+  it('M4.C4: a 1 000 B and a 5 000 B message render the fence plain first, same layout and text, then coloured', async () => {
+    vi.spyOn(chatRunner, 'parse').mockImplementation(async (src, o) => parseMarkdown(src, o.profile));
+    for (const bytes of [1000, 5000]) {
+      const chat = inThreadHighlighter({ hold: true });
+      const text = message(bytes);
+      expect(utf8ByteLength(text) > CHAT_SYNC_MAX_BYTES).toBe(bytes === 5000);
+      const { container, unmount } = render(under(inThreadContext(inThreadHighlighter(), chat), bubble(text)));
+      await waitFor(() => expect(container.querySelector('.code-block code.hljs')).not.toBeNull());
+      const first = shape(container);
+      expect(container.querySelector('code.hljs')?.textContent).toBe('const a = 1;');
+      expect(container.querySelector('[class^="hljs-"]')).toBeNull();
+      expect(container.querySelector('.code-block-lang')?.textContent).toBe('TypeScript');
+      // The request is sent from an effect that may run after the plain frame; `release()` answers only what waits.
+      await waitFor(() => expect(chat.calls).toHaveLength(1));
+      await act(async () => { chat.release(); });
+      await waitFor(() => expect(container.querySelector('code.hljs .hljs-keyword')?.textContent).toBe('const'));
+      expect(container.querySelector('code.hljs')?.textContent).toBe('const a = 1;');
+      expect(shape(container)).toEqual(first);
+      unmount();
+    }
+  });
+
+  it('M4.C4: with no Worker the fence stays plain with its bare label, and nothing is queued', () => {
+    const chat = inThreadHighlighter();
+    chat.state = 'worker-unavailable';
+    const { container } = render(under(inThreadContext(inThreadHighlighter(), chat), bubble(message(1000))));
+    expect(container.querySelector('code.hljs')?.textContent).toBe('const a = 1;');
+    expect(container.querySelector('[class^="hljs-"]')).toBeNull();
+    expect(container.querySelector('.code-block-lang')?.textContent).toBe('TypeScript');
+    expect(chat.calls).toHaveLength(0);
+  });
+
+  it('M4.C5: a growing fence is requested at once on its first render, then only once its text holds still', () => {
+    vi.useFakeTimers();
+    try {
+      const chat = inThreadHighlighter({ hold: true });
+      const ctx = inThreadContext(inThreadHighlighter(), chat);
+      const r = render(under(ctx, bubble('```ts\nconst a', true)));
+      expect(chat.calls.map((c) => c.code)).toEqual(['const a']);
+      r.rerender(under(ctx, bubble('```ts\nconst a = 1', true)));
+      expect(chat.signals[0]?.aborted).toBe(true);
+      act(() => { vi.advanceTimersByTime(HIGHLIGHT_STREAM_DEBOUNCE_MS - 1); });
+      r.rerender(under(ctx, bubble('```ts\nconst a = 12', true)));
+      act(() => { vi.advanceTimersByTime(HIGHLIGHT_STREAM_DEBOUNCE_MS - 1); });
+      expect(chat.calls).toHaveLength(1);
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(chat.calls.map((c) => c.code)).toEqual(['const a', 'const a = 12']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('M4.C5: once the fence closes, later settles, a re-render and a Copy tap add no request for it', () => {
+    vi.useFakeTimers();
+    try {
+      const chat = inThreadHighlighter({ hold: true });
+      const ctx = inThreadContext(inThreadHighlighter(), chat);
+      const closed = '```ts\nconst a = 12\n```';
+      const r = render(under(ctx, bubble('```ts\nconst a = 12', true)));
+      r.rerender(under(ctx, bubble(closed, true)));
+      r.rerender(under(ctx, bubble(`${closed}\n\nDone`, true)));
+      r.rerender(under(ctx, bubble(`${closed}\n\nDone.`, false)));
+      act(() => { vi.advanceTimersByTime(10 * HIGHLIGHT_STREAM_DEBOUNCE_MS); });
+      fireEvent.click(screen.getByRole('button', { name: 'Copy code' }));
+      expect(chat.calls.map((c) => c.code)).toEqual(['const a = 12']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('M4.C5: after each commit the message\'s store evicts what no block references', async () => {
+    const evictions = vi.fn();
+    const stores: HighlightStore[] = [];
+    const ctx: HighlighterContextValue = {
+      ...inThreadContext(),
+      createStore: (h, mode) => {
+        const s = createProductionStore(h, mode);
+        const spied = { ...s, evictUnreferenced: () => { evictions(); s.evictUnreferenced(); } };
+        stores.push(spied);
+        return spied;
+      },
+    };
+    const r = render(under(ctx, bubble('```ts\nx\n```')));
+    const store = stores[0]!;
+    const oldKey = store.keyOf('ts', 'x');
+    expect(oldKey.kind).toBe('key');
+    const k = (oldKey as { key: string }).key;
+    await waitFor(() => expect(store.peek(k).kind).toBe('html'));
+    const before = evictions.mock.calls.length;
+    r.rerender(under(ctx, bubble('```ts\nxy\n```')));
+    expect(before).toBeGreaterThan(0);
+    expect(evictions.mock.calls.length).toBeGreaterThan(before);
+    // The superseded key's coloured entry is gone, not merely unreferenced.
+    expect(store.peek(k).kind).toBe('unrequested');
+  });
+
+  it('M4.C5: on the async path, the commit of the new tree evicts the superseded round\'s keys', async () => {
+    const calls = deferChatParses();
+    const stores: HighlightStore[] = [];
+    const ctx: HighlighterContextValue = {
+      ...inThreadContext(),
+      createStore: (h, mode) => {
+        const s = createProductionStore(h, mode);
+        stores.push(s);
+        return s;
+      },
+    };
+    const pad = `${'word '.repeat(1000)}\n\n`;
+    const first = `${pad}\`\`\`ts\nx\n\`\`\``;
+    expect(utf8ByteLength(first)).toBeGreaterThan(CHAT_SYNC_MAX_BYTES);
+    const r = render(under(ctx, bubble(first)));
+    await answer(calls, 0);
+    const store = stores[0]!;
+    const k = (store.keyOf('ts', 'x') as { key: string }).key;
+    await waitFor(() => expect(store.peek(k).kind).toBe('html'));
+    r.rerender(under(ctx, bubble(`${pad}\`\`\`ts\nxy\n\`\`\``)));
+    await answer(calls, 1);
+    await waitFor(() => expect(r.container.textContent).toContain('xy'));
+    expect(store.peek(k).kind).toBe('unrequested');
+  });
+
+  it('M4.C5: under StrictMode\'s double effects, a block\'s first fence is requested at once and stays pending', () => {
+    vi.useFakeTimers();
+    try {
+      const chat = inThreadHighlighter({ hold: true });
+      const stores: HighlightStore[] = [];
+      const ctx: HighlighterContextValue = {
+        ...inThreadContext(inThreadHighlighter(), chat),
+        createStore: (h, mode) => {
+          const s = createProductionStore(h, mode);
+          stores.push(s);
+          return s;
+        },
+      };
+      render(<StrictMode>{under(ctx, bubble('```ts\nconst a', true))}</StrictMode>);
+      const key = stores.map((x) => x.keyOf('ts', 'const a')).find((x) => x.kind === 'key') as { key: string };
+      expect(chat.calls.map((c) => c.code)).toContain('const a');
+      // No timer has advanced: the key is already requested and in flight on the live store.
+      expect(stores.some((x) => x.peek(key.key).kind === 'pending')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refinement (r): in the debounce window the block shows its new key, so the message\'s store is not settled', async () => {
+    vi.useFakeTimers();
+    try {
+      const chat = inThreadHighlighter({ hold: true });
+      const stores: HighlightStore[] = [];
+      const ctx: HighlighterContextValue = {
+        ...inThreadContext(inThreadHighlighter(), chat),
+        createStore: (h, mode) => {
+          const s = createProductionStore(h, mode);
+          stores.push(s);
+          return s;
+        },
+      };
+      const r = render(under(ctx, bubble('```ts\nconst a', true)));
+      await act(async () => { chat.release(); });
+      // The message's stores, read together (a store a part no longer renders holds no key and reads settled).
+      const settled = (): boolean => stores.length > 0 && stores.every((x) => x.settled());
+      expect(settled()).toBe(true);
+      r.rerender(under(ctx, bubble('```ts\nconst a = 1', true)));
+      expect(settled()).toBe(false);
+      act(() => { vi.advanceTimersByTime(HIGHLIGHT_STREAM_DEBOUNCE_MS - 1); });
+      expect(chat.calls).toHaveLength(1);
+      expect(settled()).toBe(false);
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(chat.calls.map((c) => c.code)).toEqual(['const a', 'const a = 1']);
+      await act(async () => { chat.release(); });
+      expect(settled()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('M4.H19 (chat half): chat\'s requests go to the chat highlighter, never the Docs one, and chat prewarms it on mount', () => {
+    const docs = inThreadHighlighter({ hold: true });
+    const chat = inThreadHighlighter({ hold: true });
+    const prewarm = vi.spyOn(chat, 'prewarm');
+    render(under(inThreadContext(docs, chat), bubble(message(1000))));
+    expect(chat.calls).toHaveLength(1);
+    expect(docs.calls).toHaveLength(0);
+    expect(prewarm).toHaveBeenCalled();
   });
 });

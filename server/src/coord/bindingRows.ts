@@ -30,6 +30,7 @@ export interface SeriesRow {
   readonly openedAt: number;
   readonly sessionBornAt: number | null;
   readonly sessionBornFor: string | null;
+  readonly dispatchStartedAt: number | null;
 }
 
 const incarnationFor = (sessionId: string, incarnation: Incarnation | undefined): Incarnation =>
@@ -38,7 +39,7 @@ const incarnationFor = (sessionId: string, incarnation: Incarnation | undefined)
 /** The series as `BindingRun`s; a state this build cannot name reads `unknown`, as every session-keyed reader reads it. */
 const runsOf = (rows: readonly SeriesRow[]): BindingRun[] => rows.map((r, i) => ({
   id: i + 1, sessionId: r.sessionId, claimedBy: r.claimedBy, state: isRunState(r.state) ? r.state : 'unknown',
-  openedAt: r.openedAt, sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor,
+  openedAt: r.openedAt, sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor, dispatchStartedAt: r.dispatchStartedAt,
 }));
 
 /** The raw rows of the runs that bind `sessionId`'s incarnation, by id: in any state, or only the open ones. */

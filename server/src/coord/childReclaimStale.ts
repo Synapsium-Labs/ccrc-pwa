@@ -25,6 +25,7 @@ import {
 } from '../childReclaimSweep.js';
 import { CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, readSwitches } from '../../../shared/switches.js';
 import type { CoordStore } from './store.js';
+import type { WatcherCoordPort } from './ports.js';
 import { queueSystemMail } from './rundefsTx.js';
 import { readCoordinatorOfRun } from './bindingReads.js';
 import type { ChildReclaimDeps, ChildReclaimRequest } from './childReclaim.js';
@@ -243,7 +244,7 @@ export function childStaleMail(a: {
 /** The executor's step after a stale-arm reclaim finished: tell the coordinator, or, with nobody to tell, record it.
  *  Never throws: a reclaim that finished stays finished. */
 export async function childReclaimStaleTold(
-  deps: Pick<ChildReclaimDeps, 'coord' | 'runCcd' | 'fleetState' | 'notifyLog'>, req: ChildReclaimRequest,
+  deps: Omit<Pick<ChildReclaimDeps, 'coord' | 'runCcd' | 'fleetState' | 'notifyLog'>, 'coord'> & { coord: WatcherCoordPort }, req: ChildReclaimRequest,
 ): Promise<void> {
   const ask = req.stale;
   if (ask === undefined || !isRegistryId(req.sessionId)) return;

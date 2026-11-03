@@ -1495,12 +1495,25 @@ does. Send the new-head round only when, after the same fetch, `git merge-tree
 --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 0:
 exit 1 (a conflict) or any other answer leaves the stop standing for the
 operator. The one rerun the RED bullet allows does not clear a red that is
-`main`'s own, and no close and reopen does either: the verdict calls a required
-name red while any completed run of it on the head failed, a later green run of
-it included (D-7495; judging only the newest run would loosen the gate, which is
-the operator's to decide), a rerun replays its run's original merge commit, and
-a close and reopen of the PR can race GitHub's recompute of the merge ref. Where
-you take the route, say so in your turn's text with the reads that showed it.
+`main`'s own, and no close and reopen does either: a rerun replays its run's
+original merge commit, which still carries `main`'s red, and a close and reopen
+of the PR can race GitHub's recompute of the merge ref. Where you take the
+route, say so in your turn's text with the reads that showed it.
+
+**The latest attempt decides** (D-7546, which amends the strict reading of
+D-7495). The verdict judges the latest attempt of each required name, which is
+GitHub's own merge rule and all read 5 lists: `commits/<sha>/check-runs` with no
+`filter` answers only the newest run of each name, so a name that failed and
+then passed on a rerun of the same head reads passing. So a red that the one
+rerun the RED bullet allows turns green is cleared. A red that no rerun reaches,
+or one still red after that rerun, stays the stop `red-unreachable`. Before each
+enqueue, direct merge and re-enqueue, read every attempt as well, with `gh api
+--paginate
+'repos/{owner}/{repo}/commits/<handoffCommit>/check-runs?filter=all'`, and name
+in your turn's text, apart from the verdict's line, each check name of which any
+completed run concluded other than success, neutral or skipped, or none. That
+line is a report: it is never a stop and decides nothing, and a read of it that
+fails is named as unread and is no stop either.
 
 ## 6 — Final merge
 
@@ -1696,14 +1709,16 @@ route-parity suite binds each registration to this corpus from the commit that r
 
 ## The ask lane — pre-empting a child's question (Tasks 9-11)
 
-Clause 11 is what licenses this: `POST /api/asks/:id/answer` is the one route that types into
-a child's pane, and this session never does it by any other means. All three routes in the
-lane are named here — a coordinator IS a parent and calls all three, so this is the truthful
-entry, not an invitation like the operator-only doors above.
+Clause 11 is what licenses this: `"$API" asks answer`, which sends `POST /api/questions/:id/rule`
+(id `ask-<n>`), is the one call that types into a child's pane, and this session never does it by
+any other means. All three routes in the lane are named here — a coordinator IS a parent and
+calls all three, so this is the truthful entry, not an invitation like the operator-only doors
+above.
 The client sends `asks answer` and `asks release` to the question door family's claimant pair,
-`POST /api/questions/:id/rule` and `POST /api/questions/:id/release` (id `ask-<n>`), when the
-server advertises `questions-v1`, and to `POST /api/asks/:id/answer` and `/release` otherwise;
-both answer through the same core, refusal for refusal, and the commands below do not change.
+`POST /api/questions/:id/rule` and `POST /api/questions/:id/release` (id `ask-<n>`), with the
+row's kind added for you; the commands below do not change. A box whose server is older than the
+family is refused by the client before anything is sent (`no-questions-door`): nothing was
+answered, so say so to the operator rather than retrying.
 
 **A cross-project coordinator receives its children's questions** (the operator's ruling of
 2026-10-18, D-5530). A child's question is held for the recorded claimant of the child's run
@@ -1815,19 +1830,18 @@ Clause 11 licenses this too. A child's permission prompt reaches you as mail (su
 (D-5530), with the command fenced as untrusted data, the server's class, the window's end in
 UTC and the ready-to-run commands. Three routes are yours, each through the client:
 
-- `POST /api/approvals/:id/rule` — allow once (an `ordinary` row only) or deny, with a reason
-  the child reads. The mailed command reads your reason through a quoted heredoc and builds the
-  body with jq, so type the reason on its own line and nothing in it is run (D-5489).
-- `POST /api/approvals/:id/release` — hand it over: the operator is notified at once, and it is
-  final.
+- `POST /api/questions/:id/rule` (`"$API" approvals rule <id>`, id `approval-<n>` on the wire) —
+  allow once (an `ordinary` row only) or deny, with a reason the child reads. The mailed command
+  reads your reason through a quoted heredoc and builds the body with jq, so type the reason on
+  its own line and nothing in it is run (D-5489).
+- `POST /api/questions/:id/release` (`"$API" approvals release <id>`) — hand it over: the
+  operator is notified at once, and it is final.
 - `GET /api/approvals/:id` (`"$API" approvals show <id>`) — the row, redacted, for the claimant
   it was held for; anyone else is `403`.
 
-The client sends `approvals rule` and `approvals release` to the question door family's
-claimant pair, `POST /api/questions/:id/rule` and `POST /api/questions/:id/release` (id
-`approval-<n>`), when the server advertises `questions-v1`, and to the rule and release routes
-above otherwise; both answer through the same core, refusal for refusal, and the mailed commands
-do not change.
+The first two are the question door family's claimant pair, the same doors as the ask lane's;
+the client adds the row's kind, and the mailed commands do not change. A box whose server is
+older than the family is refused by the client before anything is sent (`no-questions-door`).
 
 A ruling after the window is refused `hook-gone`: the child's hook has returned and the
 operator has the prompt. Any other caller is `403 not-parent`, wherever it sits. The other

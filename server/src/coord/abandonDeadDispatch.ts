@@ -44,8 +44,7 @@ import type { FleetIO } from '../io.js';
 import type { SessionVerdict } from '../exec.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { RunCcd } from './ports.js';
-import type { CoordStore } from './store.js';
+import type { RunCcd, WatcherCoordPort } from './ports.js';
 import type { CloseOutcome, SweepCloseGuard } from './close.js';
 import type { DeadCoordinatorStop } from '../deadCoordinator.js';
 import { closeRefusalOf } from './archiveDoor.js';
@@ -75,7 +74,7 @@ export const DISPATCH_ABANDON_PER_PASS = 20;
 /** The executor's ports (L2, declared by this consumer). `serial` is the coordination serialiser's sweep handle, and
  *  the abandon it hands in is the ONLY way this file ends a run. */
 export interface AbandonDeadDispatchDeps {
-  coord: CoordStore;
+  coord: WatcherCoordPort;
   io: FleetIO;
   cfg: CcrcConfig;
   /** D-7563: the one child's pane, asked only when exactly one row's marker names the run. */
@@ -83,7 +82,7 @@ export interface AbandonDeadDispatchDeps {
   /** D-7563: the child bind gate's reads (its `pr-state`), asked only for a run the verdict would bind. */
   runCcd: RunCcd;
   fleetState?: FleetState | undefined;
-  serial: <T>(coord: CoordStore, fn: (
+  serial: <T>(coord: WatcherCoordPort, fn: (
     abandon: (runId: number, claimedBy: string, guard: SweepCloseGuard['stillCrashed']) => Promise<CloseOutcome>,
   ) => Promise<T>) => Promise<T>;
   now: () => number;

@@ -1278,10 +1278,12 @@ export type RegistryRead =
  * fleet was one agent round trip per row: 92 serial rounds on the fleet box at a live round of 55 to 85 ms (measured:
  * `peers list` took 4.9 to 8.4 s). Step 0 measured it again: 102 listed rows, a whole-registry read route at 5.9 to
  * 9.9 s, median 7.0 s (about 69 ms per row); on the 80-row counting fixture 81 gated rounds became 11 and 2512
- * requests became 849. At 8 rows in flight the same read is about 12 rounds, about 1 s (derived, not
- * measured). 8 is the plan's figure, not a tuned one. The agent link is one WebSocket and a row puts only its listed
- * fields on it together, so the requests in flight are bounded by 8 rows x the 37 fields a row can read (296 at the
- * very most, typically about a hundred), not by 8. The row count is the lever: it cuts the rounds by a factor of 8,
+ * requests became 849. At 8 rows in flight the same 102 rows are 14 rounds (the listing, then
+ * ceil(102 / 8) = 13 row rounds), about 1.0 s at the measured median of about 69 ms a round: derived, not
+ * measured, and it assumes a round of 8 rows costs what one serial row's round did. 8 is the plan's figure, not a
+ * tuned one. The agent link is one WebSocket and a row puts only its listed fields on it together, so the requests
+ * in flight are bounded by 8 rows x the 37 fields a row can read (296 at the very most, typically about a hundred),
+ * not by 8. The row count is the lever: it cuts the rounds by a factor of 8,
  * while one row's field reads stay together in one round.
  *
  * Only ROWS are under this bound; a row's own field reads are NOT. Every `mapBounded` call builds its own limiter, so
@@ -1513,14 +1515,14 @@ export const UNMEASURED_ASK_AT = -1;
  * IT IS THE CALLER'S JOB TO TELL THE TWO REFUSALS APART (whole-branch review
  * M2). A caller that hands this value straight to `takeAskForAnswer` gets
  * `ask-moved` back, which is a TRUE statement about the CAS and a FALSE one
- * about the world: nothing moved, a read failed. `POST /api/asks/:id/answer`
+ * about the world: nothing moved, a read failed. `POST /api/questions/ask-<n>/rule`
  * therefore compares against `UNMEASURED_ASK_AT` first and answers
  * `child-unmeasurable`. `server.ts`'s operator route does not need to: a
  * lost CAS never refuses the operator there, so the distinction changes
  * nothing it does.
  *
  * ONE definition for both callers of this guard — `coord/routes.ts`'s
- * `POST /api/asks/:id/answer` and the operator's ask (`server.ts`'s `POST
+ * `POST /api/questions/ask-<n>/rule` (the parent's answer) and the operator's ask (`server.ts`'s `POST
  * /api/sessions/:id/ask` until W7 C7p, `POST /api/questions/session-<id>/
  * answer` since, both through `coord/questions.ts`) — deliberately: both already close over the SAME
  * `Deps` object (`registerCoordRoutes(app, deps, ...)` passes `buildServer`'s
@@ -1539,7 +1541,7 @@ export async function freshAskAt(io: FleetIO, cfg: CcrcConfig, childId: string):
     // An id `isRegistryId` refuses (spec §2.3) is a child this box did not
     // measure, exactly as the two above: it answers as they do, by design.
     // Its pins are `readSessionRecord`'s zero-listing case and, end to end,
-    // `POST /api/asks/:id/answer`'s `child-unmeasurable` for a stored
+    // `POST /api/questions/ask-<n>/rule`'s `child-unmeasurable` for a stored
     // non-registry `childId`.
     case 'bad-id': return UNMEASURED_ASK_AT;
     default: {

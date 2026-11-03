@@ -18,6 +18,9 @@
 // `account-health.test.ts` builds one (a stubbed `curl` first on PATH; the endpoint is never reached); the account
 // verbs in `laneStateFixture.ts`'s `laneBox`, as `ccrc-account-kill.test.ts` and `ccrc-account-lock.test.ts` drive
 // them. Nothing here runs ccd, `ccrc account …` or `ccd-account-health` against the live `$HOME`.
+//
+// EVERY `enable` HERE CARRIES `--force` (accounts plan Task A13, D-7731): the marker is this file's subject, and
+// `enable`'s readiness question, which `--force` skips and nothing else, is `ccrc-account-enable-ready.test.ts`'s.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -25,7 +28,7 @@ import path from 'node:path';
 import { makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  BASH, CANARY, HAVE_FLOCK, REPO, boxEnv, ccrcIn, laneBox, seedRoster, type Result,
+  BASH, CANARY, HAVE_FLOCK, NODE_ID, REPO, boxEnv, ccrcIn, laneBox, seedRoster, type Result,
 } from './laneStateFixture.js';
 
 /** The plan's lane vocabulary: one upstream and two generated Anthropic token lanes. */
@@ -498,8 +501,11 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
     expect(r.code, r.stderr).toBe(0);
     expect(isEmptyRegular(sw(home, 'lane-c'))).toBe(true);
     expect(report(home, r)).toBe(`${JSON.stringify({ ok: true, id: 'lane-c', disabled: true,
-      provisioned: ['settings-env', 'session-hooks', 'coordinator-skill', 'worker-skill', 'reviewer-skill', 'graphify-skill', 'history-skill'],
-      'operator-steps': OPERATOR_STEPS_C, roster: { version: 1, accounts: [...ROSTER.accounts, ENTRY_C] } })}\n`);
+      provisioned: ['settings-env', 'session-hooks', 'coordinator-skill', 'worker-skill', 'reviewer-skill', 'graphify-skill', 'history-skill',
+        'linear-skill'],
+      'operator-steps': OPERATOR_STEPS_C, roster: { version: 1, accounts: [...ROSTER.accounts, ENTRY_C] },
+      // Accounts plan Task A16: the node beside the roster, so the server reloads it; no box token, no fingerprints.
+      fleetIdentity: NODE_ID })}\n`);
   });
 
   it('`declare` leaves the declared lane switched off: an empty regular marker, and its `declared` report byte for byte', () => {
@@ -594,7 +600,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
   it('`enable` removes a regular marker and answers its `switched` report', () => {
     const home = box('ccrc-markers-enable-');
     fs.writeFileSync(sw(home), '');
-    const r = run(home, ['account', 'enable', '--id', 'lane-a']);
+    const r = run(home, ['account', 'enable', '--id', 'lane-a', '--force']);
     expect(r.code, r.stderr).toBe(0);
     expect(report(home, r)).toBe('{"ok":true,"id":"lane-a","disabled":false}\n');
     expect(fs.existsSync(sw(home))).toBe(false);
@@ -605,7 +611,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
     const target = path.join(home, 'outside-the-registry');
     fs.writeFileSync(target, 'untouched');
     fs.symlinkSync(target, sw(home));
-    const r = run(home, ['account', 'enable', '--id', 'lane-a']);
+    const r = run(home, ['account', 'enable', '--id', 'lane-a', '--force']);
     expect(r.code, r.stderr).toBe(0);
     expect(fs.readdirSync(reg(home))).not.toContain('lane-a-disabled');
     expect(fs.readFileSync(target, 'utf8')).toBe('untouched');
@@ -617,7 +623,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
   it('`enable` refuses a directory at the marker path (`marker-conflict`) and leaves it', () => {
     const home = box('ccrc-markers-enable-dir-');
     fs.mkdirSync(sw(home));
-    const r = run(home, ['account', 'enable', '--id', 'lane-a']);
+    const r = run(home, ['account', 'enable', '--id', 'lane-a', '--force']);
     expect(r.code).toBe(1);
     expect(report(home, r)).toBe(ENABLE_CONFLICT);
     expect(fs.lstatSync(sw(home)).isDirectory()).toBe(true);
@@ -636,7 +642,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
   it('`enable` refuses a FIFO at the marker path (`marker-conflict`) and leaves it', () => {
     const home = box('ccrc-markers-enable-fifo-');
     fifo(home);
-    const r = run(home, ['account', 'enable', '--id', 'lane-a']);
+    const r = run(home, ['account', 'enable', '--id', 'lane-a', '--force']);
     expect(r.code).toBe(1);
     expect(report(home, r)).toBe(ENABLE_CONFLICT);
     expect(fs.lstatSync(sw(home)).isFIFO()).toBe(true);
@@ -645,7 +651,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
   it('`enable` refuses a socket at the marker path (`marker-conflict`) and leaves it, where the box can make one', (ctx) => {
     const home = box('ccrc-markers-enable-sock-');
     if (!socket(home)) ctx.skip();
-    const r = run(home, ['account', 'enable', '--id', 'lane-a']);
+    const r = run(home, ['account', 'enable', '--id', 'lane-a', '--force']);
     expect(r.code).toBe(1);
     expect(report(home, r)).toBe(ENABLE_CONFLICT);
     expect(fs.lstatSync(sw(home)).isSocket()).toBe(true);
@@ -655,7 +661,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
     const home = box('ccrc-markers-enable-rmfail-');
     fs.writeFileSync(sw(home), '');
     onSwitch(home, 'rm', 'exit 1');
-    const r = run(home, ['account', 'enable', '--id', 'lane-a']);
+    const r = run(home, ['account', 'enable', '--id', 'lane-a', '--force']);
     expect(r.code).toBe(1);
     expect(report(home, r)).toBe(refusal('marker-write',
       'could not remove $HOME/.cc-sessions/lane-a-disabled, so the account\'s switch state was left unchanged. Nothing was written.'));
@@ -666,7 +672,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
     const home = box('ccrc-markers-enable-rmnoop-');
     fs.writeFileSync(sw(home), '');
     onSwitch(home, 'rm', 'exit 0');
-    const r = run(home, ['account', 'enable', '--id', 'lane-a']);
+    const r = run(home, ['account', 'enable', '--id', 'lane-a', '--force']);
     expect(r.code).toBe(1);
     expect(report(home, r)).toBe(refusal('marker-write',
       '$HOME/.cc-sessions/lane-a-disabled remains after removal, so the account\'s switch state was left unchanged. Nothing was written.'));
@@ -675,8 +681,10 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
 
   /** `remove`'s `removed` report for lane-a, with `removed` as given. */
   const removedReport = (removed: string[]): string => `${JSON.stringify({ ok: true, id: 'lane-a',
-    roster: { version: 1, accounts: ROSTER.accounts.filter((a) => a.id !== 'lane-a') },
-    rehomed: [], kept: [], removed, 'operator-steps': [] })}\n`;
+    roster: { version: 1, accounts: ROSTER.accounts.filter((a) => a.id !== 'lane-a') }, fleetIdentity: NODE_ID,
+    rehomed: [], kept: [], removed, 'operator-steps': [],
+    // Accounts plan Task A16 (spec §11.3): lane-a holds a token, which stays valid at Anthropic until revoked.
+    atProvider: [{ kind: 'anthropic-token', state: 'still-valid', revokeAt: 'claude-code-settings' }] })}\n`;
 
   it('`remove` lists the marker in `removed` at its place in the loop: limits file, marker, hookstate, turn marker', () => {
     const home = box('ccrc-markers-remove-');
@@ -751,7 +759,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
       ['add', ADD_C, `${CANARY}\n`],
       ['declare', ['account', 'declare', '--id', 'lane-d', '--provider', 'openai', '--label', 'lane·d', '--hue', 'violet'], ''],
       ['disable', ['account', 'disable', '--id', 'lane-a'], ''],
-      ['enable', ['account', 'enable', '--id', 'lane-a'], ''],
+      ['enable', ['account', 'enable', '--id', 'lane-a', '--force'], ''],
       ['remove', ['account', 'remove', '--id', 'lane-c'], ''],
     ] as const) {
       const r = run(home, [...args], stdin);
@@ -954,13 +962,14 @@ describe('the disabled switch is never projected from the roster (D-7048)', () =
       const r = spawnSync(BASH, ['-c', 'umask 022; exec "$@"', '_', BASH, ccrcIn(home), ...args], { env: boxEnv(home), encoding: 'utf8', input: stdin });
       return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
     };
-    // `ccrc account set` is not a verb on this tree: it refuses, and the switch stands.
+    // `ccrc account set` (accounts plan Task A16) with nothing to set refuses, and the switch stands.
     const set = run(['account', 'set', '--id', 'lane-b']);
     expect(set.code).toBe(2);
-    expect(JSON.parse(set.stdout)).toMatchObject({ ok: false, error: 'unknown-subcommand' });
+    expect(JSON.parse(set.stdout)).toMatchObject({ ok: false, error: 'missing-value' });
+    expect(run(['account', 'set', '--id', 'lane-b', '--placement', 'full']).code).toBe(0);
     expect(run(['account', 'check', '--id', 'lane-b']).code).toBe(0);
     expect(run(['account', 'disable', '--id', 'lane-b']).code).toBe(0);
-    expect(run(['account', 'enable', '--id', 'lane-b']).code).toBe(0);
+    expect(run(['account', 'enable', '--id', 'lane-b', '--force']).code).toBe(0);
     // `add` regenerates `accounts.sh` and converges the wrappers (`install: accounts.sh: generated …`).
     const add = run(['account', 'add', '--id', 'lane-d', '--provider', 'compatible', '--label', 'lane-d·x', '--hue', 'amber',
       '--base-url', 'https://orchard-api/v1', '--credential', '-'], `${CANARY}\n`);

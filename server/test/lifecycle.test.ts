@@ -92,7 +92,8 @@ async function makeApp(
     // unconditionally, so a watcher stub missing either throws inside the
     // route rather than answering `unmeasured`. Empty map: no test in this
     // file measures a repo, only that the key is present and defaulted.
-    ? ({ currentReadiness: () => opts.readiness, currentProjectRepos: () => new Map(), stop: () => {}, serverCapsSettled: async () => {} } as never)
+    // D-6436: and `currentFleetListing()`, null here (no listing), so the route reads the registry itself as before.
+    ? ({ currentReadiness: () => opts.readiness, currentProjectRepos: () => new Map(), currentFleetListing: () => null, stop: () => {}, serverCapsSettled: async () => {} } as never)
     : undefined;
   const app = await buildServer({
     cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
@@ -1023,10 +1024,28 @@ describe('GET /api/projects — the program-ready readiness', () => {
 
 describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
   // Its L0 ring is held by server/test/rings/shared-imports.test.ts (D-6045).
-  it('declares the five graphify classes', () => {
-    const names = LIFECYCLE.map((c) => c.name).sort();
-    for (const n of ['workspace-graph-store', 'project-graph-store', 'graph-corpus-filter',
-      'graph-build-lock', 'graph-sweep-census']) expect(names).toContain(n);
+  // Graph revision 2 GR8 (D-7354; spec §10): the six repository-store classes replace the per-tree ones, whose paths
+  // nothing writes any more. Counted exit: graph classes 5 -> 6.
+  it('declares the six graphify classes of spec §10, and none of the four retired ones', () => {
+    const graph = LIFECYCLE.filter((c) => c.name.startsWith('graph-') || c.name.endsWith('-graph-store'));
+    // The root is pinned too, so each declaration is held to the layout ccd-graph-sweep writes (the checkout sits
+    // under <key>/checkout/, D-7664).
+    expect(graph.map((c) => [c.name, c.pattern, c.root])).toEqual([
+      ['graph-repo-build', 'E', '<store>/<repo-key>/builds/'],
+      ['graph-repo-checkout', 'O', '<store>/<repo-key>/checkout/<repo-name>/'],
+      ['graph-repo-memory', 'O', '<store>/<repo-key>/memory/'],
+      ['graph-staging', 'E', '<store>/<repo-key>/staging/'],
+      ['graph-tree-link', 'W', '<tree>/graphify-out (a symlink to <store>/<repo-key>/current)'],
+      ['graph-sweep-census', 'R', '~/.ccrc/graph-sweep.json'],
+    ]);
+    for (const c of graph) {
+      expect(c.collector, `${c.name} is collected`).toBeTruthy();
+      expect(c.ruling, `${c.name} needs no ruling`).toBeNull();
+    }
+    const names = LIFECYCLE.map((c) => c.name);
+    for (const n of ['workspace-graph-store', 'project-graph-store', 'graph-corpus-filter', 'graph-build-lock']) {
+      expect(names, `${n} is retired`).not.toContain(n);
+    }
   });
   it('every collector-less class carries a non-empty operator ruling', () => {
     for (const c of LIFECYCLE.filter((c) => c.collector === null)) {
@@ -1114,7 +1133,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
   // policy's containment row for `node_modules` — it has no class of its own and "dies with" its workspace.
   it('characterization: the manifest\'s classes, and no class of its own for a workspace\'s node_modules (D-7278)', () => {
     expect(LIFECYCLE.map((c) => c.name)).toEqual([
-      'workspace-graph-store', 'project-graph-store', 'graph-corpus-filter', 'graph-build-lock', 'graph-sweep-census',
+      'graph-repo-build', 'graph-repo-checkout', 'graph-repo-memory', 'graph-staging', 'graph-tree-link', 'graph-sweep-census',
       'claude-tmp-session-dirs', 'tmp-sweep-census', 'child-tmp-roots', 'ccd-orphan-worktrees', 'agent-worktrees',
       'cc-tmp-loose-entries', 'child-workspaces', 'workspace-dependency-dirs', 'scope-sweep-verdicts', 'project-pool-tag', 'history-store',
       'history-migration-snapshot', 'history-store-id', 'history-spool', 'history-journal', 'history-switches',
@@ -1122,6 +1141,8 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
       'history-recall-off', 'server-test-run-dirs', 'archived-workspaces',
       // Test box TB11 (D-7413): the fleet host's four test box classes.
       'testbox-token', 'testbox-push-key', 'testbox-times', 'testbox-runs-log',
+      // D-7857: the carry dedupe sweep's record.
+      'carry-dedupe-record',
     ]);
     // D-7278 (the intended change): the one class the ruling took out of containment.
     expect(LIFECYCLE.filter((c) => c.root.includes('node_modules')).map((c) => c.name)).toEqual(['workspace-dependency-dirs']);

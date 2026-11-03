@@ -707,7 +707,7 @@ describe("coord/routes.ts POST /api/coord/collect-lane: recorded always, never p
     });
 });
 
-describe("coord/routes.ts POST /api/asks/:id/answer (the parent's answer): recorded always, never pushed (D-5851)", () => {
+describe("coord/routes.ts POST /api/questions/ask-<n>/rule (the parent's answer): recorded always, never pushed (D-5851)", () => {
   const QUESTION = { question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] };
   const ASK_KEY = askKey({ questions: [QUESTION] })!;
   const ASK_PANE = 'Which colour?\n❯ 1. Red\n  2. Blue\nEnter to select\n';
@@ -740,8 +740,8 @@ describe("coord/routes.ts POST /api/asks/:id/answer (the parent's answer): recor
         dialogId: 'dlg-1', question: QUESTION.question, options: QUESTION.options.map((o) => o.label), now });
       if (fail) rec.archiveThrowsOn('every');
       const at = rec.mark();
-      const res = await app.inject({ method: 'POST', url: `/api/asks/${id}/answer`, headers: { 'x-ccrc-mail-token': TOKEN },
-        payload: { fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [1] } });
+      const res = await app.inject({ method: 'POST', url: `/api/questions/ask-${id}/rule`, headers: { 'x-ccrc-mail-token': TOKEN },
+        payload: { kind: 'ask', fromId: PARENT, fromUuid: PARENT_UUID, optionIndexes: [1] } });
       return { home, rec, res, calls: rec.since(at), id };
     } finally { await app.close(); }
   };
@@ -778,7 +778,7 @@ describe("coord/routes.ts POST /api/asks/:id/answer (the parent's answer): recor
 });
 
 // Written natively (band 3: the approval path).
-describe("coord/routes.ts POST /api/approvals/:id/rule (the ruling's journal row): recorded always, never pushed (D-5851)",
+describe("coord/routes.ts POST /api/questions/approval-<n>/rule (the ruling's journal row): recorded always, never pushed (D-5851)",
   () => {
     let fx: Approvals | undefined;
     afterEach(async () => { if (fx) await fx.close(); fx = undefined; });

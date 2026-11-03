@@ -12,13 +12,13 @@ import type { ReactNode } from 'react';
 import { Button, CountBadge, Door, Icon, Wordmark } from '@ccrc/ui';
 import { commandDoor } from '../../command/door';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
-import { badgePrint, INBOX_BADGE_UNIT, RUNS_BADGE_UNIT, useNavBadges } from '../../fleet/navBadges';
+import { badgePrint, INBOX_BADGE_UNIT, RUNS_BADGE_UNIT, WAITING_BADGE_UNIT, useNavBadges } from '../../fleet/navBadges';
 import { NotificationBell } from '../../fleet/NotificationBell';
 import { useLocation } from '../../lib/router';
 import { matchRoute, ROUTES } from '../../lib/routes';
 
 /** The bar's places, in its order (spec §5.3): each is a `ROUTES` id. */
-export const TAB_IDS = ['fleet', 'inbox', 'runs', 'accounts', 'docs'] as const;
+export const TAB_IDS = ['fleet', 'waiting', 'inbox', 'runs', 'accounts', 'docs'] as const;
 type TabId = (typeof TAB_IDS)[number];
 
 function Tab({ id, here, count, word }: { id: TabId; here: boolean; count: number; word: string }): ReactNode {
@@ -40,9 +40,10 @@ function Tab({ id, here, count, word }: { id: TabId; here: boolean; count: numbe
 export function AppBar(): ReactNode {
   const { path } = useLocation();
   const here = matchRoute(path)?.route.id ?? null;
-  const { waiting, runsNeedYou } = useNavBadges();
+  const { waiting, runsNeedYou, waitingItems } = useNavBadges();
   const badge = (id: TabId): { count: number; word: string } =>
-    id === 'inbox' ? { count: waiting ?? 0, word: INBOX_BADGE_UNIT } : id === 'runs' ? { count: runsNeedYou ?? 0, word: RUNS_BADGE_UNIT } : { count: 0, word: '' };
+    id === 'inbox' ? { count: waiting ?? 0, word: INBOX_BADGE_UNIT } : id === 'runs' ? { count: runsNeedYou ?? 0, word: RUNS_BADGE_UNIT }
+      : id === 'waiting' ? { count: waitingItems ?? 0, word: WAITING_BADGE_UNIT } : { count: 0, word: '' };
   return (
     <>
       <div className="ref-bar">

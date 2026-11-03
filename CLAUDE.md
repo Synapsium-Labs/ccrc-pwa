@@ -134,8 +134,9 @@ real values: `deploy/reference-fleet.md` (gitignored).
   coordinator or child — runs the mutating `ccrc account` subs (`add`, `auth-start`, `auth-code`, `auth-cancel`, `set`,
   `check`, `enable`, `disable`, `credential`, `remove`, `seed`), `openrouter-management` with any sub (`ceiling`
   included), `ccd-account-auth` or `ccd account-pane`; reads `~/.cc-secrets/`, `~/.ccrc/auth-scratch/`,
-  `~/.ccrc/codex/*/runtime.env` or `~/.ccrc/agent.env`; writes under `~/.cc-sessions/.auth/` or
-  `~/.cc-sessions/.accounts/`; or prints the whole environment (bare `env`, `printenv`). They are the operator's, from
+  `~/.ccrc/codex/*/runtime.env`, `~/.ccrc/agent.env`, the Linear slot store `~/.ccrc/linear/`, the legacy
+  `~/.ccrc/linear.key` (D-7675) or the operator's secret slots `~/.ccrc/operator-secrets/` (D-7714); writes under `~/.cc-sessions/.auth/` or `~/.cc-sessions/.accounts/`; or prints the
+  whole environment (bare `env`, `printenv`). They are the operator's, from
   the PWA's Accounts screen or their own shell. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
   spawn in `~/.cc-sessions/account-deny.settings.json`, the session hook's account arm refuses the path-qualified,
   quoted and `$VAR` forms, and the classifier marks the verbs forbidden, so no approval can rule one. It is an
@@ -272,7 +273,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   2026-10-25's light run: builders run scoped tests before pushing and every PR gets two reviews): every typecheck,
   `build-pwa`, the static checks, the server tests vitest relates to the change from its merge base, the traced map's
   selection for every changed path vitest's import graph cannot follow (select's `untraced`: ccd scripts, Python,
-  JSON/SQL fixtures; `vitestFollows` in select-tests.mjs), the guard suites that scan the whole tree or the diff
+  JSON/SQL fixtures; `vitestFollows` in select-tests.mjs; a test that failed under the trace is judged there by what it
+  recorded, not always, D-7780), the guard suites that scan the whole tree or the diff
   (censuses, single-definition, deviation-refs, growth-check, ownership, rings, ccd-contexts, dtbd, `typecheck-tests`,
   `oss-metadata`, the `*-pin` suites less `PIN_MAP_CARRIED`, and every test whose source runs `git ls-files`,
   `git diff` or `git merge-base` itself: `TREE_READER`; and every test that lists a source tree itself — `server/src`,
@@ -292,13 +294,23 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `shadow`, a full-run PR's selection is only reported and every server test runs. **A merge-queue run** (`merge_group`) is the FULL run (operator ruling 2026-10-25, replacing 2026-09-28's "what a pull
   request runs"): every server shard, the agent, pwa and browser tests and the node floor, in a concurrency group of its own, and never the
   macOS legs or `full-suite`; there `test (pwa)` refuses a red browser suite and `test (server)` a red node floor
-  (step-level, merge_group-only refusals), so both gate the merge, and the perf legs stay advisory. The queue is the
+  (step-level, merge_group-only refusals), so both gate the merge, and the perf legs stay advisory. **One exception**
+  (the owner's ruling of 2026-11-02, reversing 2026-10-25's "the queue runs every test" for the browser shards only;
+  D-7870, `docs/superpowers/plans/2026-11-02-ci-queue-browser-docs-skip.md`): the browser shards skip their
+  tests, by step, when no file in the group can reach them (`reach.mjs` `queueScope`, the browser package's FOREIGN
+  list, `docs/` among it), so a docs-only group skips them and `test (pwa)` reads the shards' success. `docs/` stays
+  reachable for the pwa suite, which renders it. **A docs-only change** (non-empty, every file under `docs/` and none
+  of them infrastructure: `reach.mjs` `docsOnly`; a root `.md` is not one; D-7868, the operator's direction of
+  2026-11-03) runs only what can see it: in the queue, the server tests a pull request runs for it (the fast plan, from
+  the queue's base), no node floor or agent tests, and the pwa suite whole; on a pull request without `full-ci`, no
+  agent tests, pwa typecheck, pwa build or Storybook. Every skip is by step, so the required checks still report. The queue is the
   safety net for everything the fast run leaves out, so nobody bypasses it: an admin merge that skips the queue
   (`gh pr merge --admin`; the ruleset's admin bypass allows it) lands on the fast run only, so never use it. **The macOS legs** (`test-macos`, `probe-macos`)
-  live in `.github/workflows/macos.yml`, off the merge path: every push to `main` runs them (one run at a time, the newest
-  pending), and the daily run calls them; a red one is a failing run on `main`, never a PR's or a queue entry's. **A merge
-  to `main`** starts no `ci.yml` run: an **hourly** `refresh` run (cron plus `workflow_dispatch -f mode=refresh`, one concurrency
-  group so runs coalesce) re-traces the tests every merge since the last refresh affected and updates the map, running
+  live in `.github/workflows/macos.yml`, off the merge path and off the push to `main` (2026-11-02): the daily run calls them (their nightly run), a dispatched
+  or called full run (release-stable's gate) runs the tests, and `gh workflow run macos.yml` runs both on demand; a red
+  one is a failing run on `main`, never a PR's or a queue entry's. **CodeQL** is an advanced setup (`.github/workflows/codeql.yml`, D-7744), not GitHub's default setup: it scans every pull request to `main` and `main` once a day, never a push to `main` and never the merge queue, and it feeds no required check. **A merge
+  to `main`** starts no `ci.yml` run: a `refresh` run **every three hours** (cron plus `workflow_dispatch -f mode=refresh`, one concurrency
+  group so runs coalesce; the scheduled one traces nothing when `main` has not moved since the newest map, D-7747) re-traces the tests every merge since the last refresh affected and updates the map, running
   no test legs and reporting newly failing or timed-out tests as a warning and a job summary, never a red job (D-6769).
   **Daily**, on `main`, every leg runs in full, macOS included, and the map is rebuilt — skipped when `main`'s
   head already has a green `full-suite` job from a trusted run (a daily or manual full run on `main`, or a stable
@@ -351,7 +363,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `BuildLine`, and doctor's `skills` check (every home vs the shipped tree; `ccrc doctor --fix` cures it, D-3113).
   The control plane's per-node inventory — every node's measured stamp, install state, provenance, caps and
   resolved desired tag, re-measured every minute — is read at `GET /api/updates` (session-gated), and
-  `/api/fleet/health`'s `builds` is a view of it. The PWA's one tap (`POST /api/updates/apply` or
+  `/api/fleet/health`'s `build` word is decided from it (the `builds` pair was retired in wave 33). The PWA's one tap (`POST /api/updates/apply` or
   `POST /api/updates/rollback`) ends in the same `ccrc update --to <tag>` or `ccrc rollback --to <tag>` on the
   node, run `--detach --from pwa` — the fleet node's through the agent's `update` op, the server node's spawned
   locally, one node at a time and fleet first, a `failed`/`reverted` row halting the rest until `ack` — and
@@ -486,13 +498,19 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   proceeds). `coord-pause-route.test.ts`'s `UNGATED` set pins all four in both directions, and with `CCRC_AUTH`
   armed all four still sit behind the session gate (`auth/gate.ts`'s NOT-EXEMPT note: gating them there
   "strengthens D-282 rather than reversing it"). Those prefixes are the bulk of the box-token surface, not the
-  whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): `POST
-  /api/asks/:id/answer`, `POST /api/asks/:id/release`, the question door family's claimant pair `POST
+  whole of it (D-1148, correcting a "whole box-token surface" claim this file carried for one wave): the
+  question door family's claimant pair `POST
   /api/questions/:id/rule` and `POST /api/questions/:id/release` (W3 Q3f, D-7030), `POST /api/claims`, `POST
   /api/claims/:id/release`,
   `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations`, `GET /api/ledger`, `GET /api/landing` and the approvals lane's
-  six (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key`, `POST /api/approvals/:id/rule`,
-  `POST /api/approvals/:id/release` and `GET /api/approvals/:id`, coordinator-first routing D-5298) all call
+  four (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key` and
+  `GET /api/approvals/:id`, coordinator-first routing D-5298) and the programme ledgers' coordinator routes (plan PL3; their handlers
+  are in `server/src/coord/ledgersRoutes.ts`, a lane source of its own for the census, registered from `registerCoordRoutes`:
+  `POST /api/programmes/:slug/items`, `GET /api/programmes/:slug/items`, `POST /api/items/:id/confirm`,
+  `POST /api/items/:id/return`, `POST /api/items/:id/withdraw`, `POST /api/items/:id/blocking`,
+  `POST /api/programmes/:slug/spec`, `POST /api/programmes/:slug/modifications` and
+  `POST /api/programmes/:slug/modifications/merged`; each is attribution-checked, then ownership-checked by
+  `claimsProgramme`, and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
   caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`
@@ -525,7 +543,15 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   registered in `server.ts` for the kickoff route's reason, so `box-token-census.test.ts` names it beside that
   route's literal. So does `POST /api/digest/correct` (coordinator-first routing D-5300): it queues the operator's
   correction of a digest line as durable system mail to that line's coordinator, consults no box token, is
-  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
+  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/programmes/:slug/goals`,
+  `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss` and `PUT /api/items/:id/secret` (plan PL6), consult no box token
+  either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
+  the secret door stores a pasted value in its protected slot and ticks with "set" and when, and the last four characters
+  only for a value at the masker's 20-byte floor or longer, behind a step-up,
+  and every one is session-gated when armed. They are
+  registered by `registerLedgerOperatorRoutes` in `server/src/coord/ledgersRoutes.ts`, called from `server.ts`; the census reads
+  that file as a lane source of its own and keeps their names in a hand-kept `LEDGER_OPERATOR_DOORS`, checked against it in both
+  directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
   the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
   the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which
   the census reads as a lane source of its own and checks against `CODE_DOORS` and `TOKEN_DOORS` in both directions.
@@ -568,7 +594,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate) — which is the
   documented recovery for an already-retired program.
 - The coordinator is an ordinary fleet session running the `ccrc-coordinator` skill
-  (`ccd/coordinator-skill/SKILL.md`); its nineteen clauses are pinned VERBATIM by
+  (`ccd/coordinator-skill/SKILL.md`); its twenty clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES
   (`$REG/coordinator-paused`, `$REG/mail-disabled`). `mail-disabled` has **no writer in the tree** — touch/rm by
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by

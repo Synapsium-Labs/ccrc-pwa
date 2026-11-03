@@ -22,9 +22,10 @@ import { readFileSync, appendFileSync, mkdirSync, writeFileSync, existsSync } fr
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { readMap } from './testmap.mjs';
+import { readMap, FAILED_UNDER_TRACE } from './testmap.mjs';
 import { readChanges, liveTestFiles, unsafeTestPaths, gitExistsAt, selectTests, gitStaleChanges, selectIgnoringUncertainty, uncertainTests, vitestFollows, RULE_NAMES } from './select-tests.mjs';
-import { planShards, planTraceBatch, toMatrix, PROFILES } from './shards.mjs';
+import { planShards, planTraceBatch, toMatrix, PROFILES, serverProfile } from './shards.mjs';
+import { queueScope } from './reach.mjs';
 
 /** @typedef {import('./testmap.mjs').TestMap} TestMap */
 /** @typedef {import('./select-tests.mjs').Selection} Selection */
@@ -40,25 +41,28 @@ import { planShards, planTraceBatch, toMatrix, PROFILES } from './shards.mjs';
  * misconfigured caller gets the SAFE answer, never a silent no-op.
  *
  * Order is significant, and matches the contract's own listing:
- *   1. `merge_group`                             -> full / none, whatever the change: the queue is where the whole
- *                                                 suite runs (operator ruling 2026-10-25, which replaced 2026-09-28's
- *                                                 "a queue run runs what a pull request runs").
+ *   1. `merge_group`                             -> full / none: the queue is where the whole suite runs (operator
+ *                                                 ruling 2026-10-25, which replaced 2026-09-28's "a queue run runs
+ *                                                 what a pull request runs"). ONE exception, `queueDocsOnly` (D-7868,
+ *                                                 the operator's direction of 2026-11-03): a docs-only group
+ *                                                 (reach.mjs `queueScope('server', …)` answers `selected`) answers
+ *                                                 selected / none, the selection a pull request runs for it.
  *   1b. `pull_request`                           -> selected / none — or full / none with `inputMode === 'full'`,
  *                                                 which ci.yml passes when the change touches `.github/` (a
  *                                                 plain-bash check, so a PR cannot talk its own selector out of a
  *                                                 full run) or the PR carries the `full-ci` label.
- *   2. `inputMode === 'refresh'`                 -> none / refresh (ci.yml passes it on the hourly schedule, and a
+ *   2. `inputMode === 'refresh'`                 -> none / refresh (ci.yml passes it on the refresh schedule, and a
  *                                                 manual dispatch can; D-6769)
  *   3. `schedule`                                -> fullGreen ? none/none/skip : full/rebuild
  *   4. `inputMode === 'full'`                    -> full / none
  *   5. `inputMode === 'rebuild'`                  -> none / rebuild
  *   6. anything else                              -> full / none
  *
- * @param {{ event: string, inputMode?: string, fullGreen: boolean }} args
+ * @param {{ event: string, inputMode?: string, fullGreen: boolean, queueDocsOnly?: boolean }} args
  * @returns {ModeDecision}
  */
-export function decideMode({ event, inputMode, fullGreen }) {
-  if (event === 'merge_group') return { tests: 'full', trace: 'none', skip: false };
+export function decideMode({ event, inputMode, fullGreen, queueDocsOnly = false }) {
+  if (event === 'merge_group') return { tests: queueDocsOnly ? 'selected' : 'full', trace: 'none', skip: false };
   if (event === 'pull_request') {
     return inputMode === 'full'
       ? { tests: 'full', trace: 'none', skip: false }
@@ -84,15 +88,17 @@ export function decideMode({ event, inputMode, fullGreen }) {
 /**
  * What a trigger can never answer (ruling T2), checked on decideMode's answer before anything runs: a pull
  * request, and a merge-queue run (landing-order wave 2), always runs server tests (never `none`), a
- * merge-queue run never a SELECTION (operator ruling 2026-10-25: the queue runs everything), and a
+ * merge-queue run never a SELECTION (operator ruling 2026-10-25: the queue runs everything) unless its group is
+ * docs-only (`queueDocsOnly`, D-7868), and a
  * schedule, a refresh push or a rebuild never runs a
  * per-file SELECTION (they run everything or nothing). A violation is a bug in this module; the CLI refuses it.
  * @param {string} event @param {string | undefined} inputMode @param {'selected'|'full'|'none'} tests
+ * @param {boolean} [queueDocsOnly]
  * @returns {string | null}
  */
-export function modeInvariantViolation(event, inputMode, tests) {
+export function modeInvariantViolation(event, inputMode, tests, queueDocsOnly = false) {
   if ((event === 'pull_request' || event === 'merge_group') && tests === 'none') return `a ${event} answered tests: none`;
-  if (event === 'merge_group' && tests === 'selected') return 'a merge_group answered tests: selected';
+  if (event === 'merge_group' && tests === 'selected' && !queueDocsOnly) return 'a merge_group answered tests: selected';
   if (tests === 'selected' && (event === 'schedule' || (event === 'push' && !inputMode) || inputMode === 'refresh' || inputMode === 'rebuild')) {
     return `a ${inputMode === 'rebuild' || inputMode === 'refresh' ? inputMode : event} answered tests: selected`;
   }
@@ -148,14 +154,25 @@ function liveTestsOrRefuse(repoDir) {
  *   `retrace` is what a REFRESH traces from: the selection without its uncertain-means-full answer, and the uncertain
  *   records themselves.
  */
+/** A record the trace wrote unknown because the test FAILED under it (vitest exited non-zero, or the per-file deadline
+ *  killed it): its read set is what the run reached, not nothing. @param {import('./testmap.mjs').TestRecord} rec */
+const failedUnderTrace = (rec) => FAILED_UNDER_TRACE.test(rec.why ?? '');
+
 /** The map's selection for the changed paths vitest cannot relate (`vitestFollows` false): the test files, sorted, or
  *  `'full'` when the map cannot bound them (one of them is a full trigger: the baseline reads it). No such path: `[]`.
+ *  A test that FAILED under the trace (its trace exited non-zero or timed out) is judged by what its trace recorded,
+ *  not selected always (D-7780, `unknownByRecord`): a change to a path it recorded reading, or under a directory it
+ *  linked, still selects it; one it never recorded (a doc, a PWA file, another test's fixture) leaves it to the merge
+ *  queue's full run, as an all-TypeScript change already does. A test that reads `.git` (the installer, updater and
+ *  doctor suites copy the tree) and the floor's unknowns are still selected always. Measured 2026-11-02 over the 309
+ *  fast runs of 2026-10-30 to 11-02: 268 changed such a path, and each ran the ten failed-under-trace suites (the five
+ *  tick-diet equivalence suites, about 1,730 s of the 1,900 s, two of them ten-minute shards of their own).
  *  @param {{ map: TestMap, changes: import('./select-tests.mjs').Change[], liveTests: string[], existsAt: (ref: string, p: string) => boolean }} args
  *  @returns {string[] | 'full'} */
 export function untracedSelection({ map, changes, liveTests, existsAt }) {
   const unfollowed = changes.filter((c) => !vitestFollows(c.path));
   if (unfollowed.length === 0) return [];
-  const sel = selectIgnoringUncertainty({ map, changes: unfollowed, liveTests, existsAt });
+  const sel = selectIgnoringUncertainty({ map, changes: unfollowed, liveTests, existsAt, unknownByRecord: failedUnderTrace });
   if (sel.mode === 'full') return 'full';
   return [...new Set(sel.tests.map((t) => t.file))].sort();
 }
@@ -232,6 +249,15 @@ function computeRealSelection(repoDir, mapFile, liveTests, baseRef) {
   }
 }
 
+/** The checked-out commit's sha, '' when git cannot say. @param {string} repoDir @returns {string} */
+function headSha(repoDir) {
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, stdio: 'pipe' }).toString().trim();
+  } catch {
+    return '';
+  }
+}
+
 /** The commit time of `sha` in ms, 0 when git does not know it (so an unknown stamp sorts as the oldest).
  *  @param {string} repoDir @param {string} sha */
 function commitTimeMs(repoDir, sha) {
@@ -268,16 +294,32 @@ export function refreshPriority(repoDir, map, liveTests, selection, uncertain) {
   return [...all].sort((a, b) => rank(a) - rank(b) || (rank(a) === 1 ? stampTime(a) - stampTime(b) : 0) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
-/** The map's age warning: the map is older than `thresholdMs` (3 h: the refresh is hourly, so a map this old means
- *  refreshes are not finishing). Aged by the time it was built, else by its commit's time. Null when it is not old.
+/** The map's age warning: the map is older than `thresholdMs` (5 h: the refresh runs every three hours and takes up
+ *  to about an hour, so a map this far behind means refreshes are not finishing; D-7747). Aged by the time it was
+ *  built, else by its commit's time. Null when it is not old, and null when main has not moved past it (`unseen` 0):
+ *  a refresh that finds main where the map is skips, so an old map of an unchanged main is current, not stale.
  *  @param {TestMap} map @param {number} nowMs @param {number} commitMs the map commit's time, 0 when unknown
- *  @param {number} [thresholdMs] @returns {string | null} */
-export function staleMapWarning(map, nowMs, commitMs, thresholdMs = 3 * 3_600_000) {
+ *  @param {number} [thresholdMs] @param {number | null} [unseen] the commits on main after the map's sha, null when
+ *  unknown @returns {string | null} */
+export function staleMapWarning(map, nowMs, commitMs, thresholdMs = 5 * 3_600_000, unseen = null) {
+  if (unseen === 0) return null;
   const builtMs = map.builtAt ? Date.parse(map.builtAt) : commitMs;
   if (!builtMs) return null;
   const age = nowMs - builtMs;
   if (age <= thresholdMs) return null;
-  return `the map is ${Math.floor(age / 3_600_000)} h old (older than ${thresholdMs / 3_600_000} h): the hourly refresh is not finishing, so selection leans on a stale map`;
+  return `the map is ${Math.floor(age / 3_600_000)} h old (older than ${thresholdMs / 3_600_000} h): the refresh is not finishing, so selection leans on a stale map`;
+}
+
+/** How many commits `mainRef` has after `sha`; null when git cannot say (either is unknown here).
+ *  @param {string} repoDir @param {string} sha @param {string | undefined} mainRef @returns {number | null} */
+export function commitsAfter(repoDir, sha, mainRef) {
+  if (!sha || !mainRef) return null;
+  try {
+    const n = Number(execFileSync('git', ['rev-list', '--count', `${sha}..${mainRef}`], { cwd: repoDir, stdio: 'pipe' }).toString().trim());
+    return Number.isInteger(n) ? n : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Markdown for `$GITHUB_STEP_SUMMARY` (spec §6.4's reason table, plus the
@@ -367,6 +409,20 @@ function floorListHit(floorListFile, selection) {
   return listed.some((f) => chosen.has(`server/${f}`) || chosen.has(f));
 }
 
+/** Whether a merge-queue group is docs-only (D-7868): reach.mjs `queueScope('server', …)` over the group's change,
+ *  `base` (the queue's base sha) to HEAD. Undiffable, or no base: false, the full run.
+ *  @param {string} repoDir @param {string | undefined} base @returns {boolean} */
+function queueGroupDocsOnly(repoDir, base) {
+  if (!base) return false;
+  try {
+    const from = execFileSync('git', ['merge-base', base, 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).trim();
+    const changed = execFileSync('git', ['diff', '--name-only', '--no-renames', from, 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).split('\n');
+    return queueScope('server', changed) === 'selected';
+  } catch {
+    return false;
+  }
+}
+
 /** A pull request's changed paths from its merge base, for `untracedOutput` when the map gave no answer; null when
  *  they cannot be read (the safe answer then is `full`). @param {string} repoDir @param {string | undefined} base */
 function prChangedPaths(repoDir, base) {
@@ -401,13 +457,17 @@ function main() {
     }
   }
 
-  const decide = decideMode({ event, inputMode, fullGreen });
-  const violation = modeInvariantViolation(event, inputMode, decide.tests);
+  // A docs-only merge-queue group selects as a pull request does, from the queue's base (D-7868).
+  const queueDocsOnly = event === 'merge_group' && queueGroupDocsOnly(repoDir, opt.base);
+  const decide = decideMode({ event, inputMode, fullGreen, queueDocsOnly });
+  const violation = modeInvariantViolation(event, inputMode, decide.tests, queueDocsOnly);
   if (violation) throw new Error(`select.mjs: ${violation} — refusing (ruling T2)`);
   const liveTestsAll = liveTestsOrRefuse(repoDir);
 
   const needsRealSelection = decide.tests === 'selected' || decide.trace === 'refresh';
-  const realSel = needsRealSelection ? computeRealSelection(repoDir, mapFile, liveTestsAll, event === 'pull_request' ? opt.base : undefined) : null;
+  // The change a selection diffs from its base: a pull request's, or a docs-only queue group's (D-7868).
+  const byChange = event === 'pull_request' || queueDocsOnly;
+  const realSel = needsRealSelection ? computeRealSelection(repoDir, mapFile, liveTestsAll, byChange ? opt.base : undefined) : null;
 
   let testsOut = decide.tests;
   let fallback = '';
@@ -444,6 +504,13 @@ function main() {
     testFileList = [...liveTestsAll];
   }
 
+  // D-7747: a SCHEDULED refresh (`--skip-unmoved true`, which ci.yml passes on the refresh cron alone) traces nothing
+  // when main's head is the newest map's own commit: nothing merged since that map, so a refresh would only re-trace
+  // what it left unknown or deferred, and those stay selected (an unknown test always runs; a deferred one carries
+  // its stamp, and a change to what it read makes it uncertain). A dispatched refresh never passes the flag: it forces.
+  const mainSha = opt['skip-unmoved'] === 'true' && decide.trace === 'refresh' && realSel?.map ? headSha(repoDir) : '';
+  const unmoved = mainSha !== '' && mainSha === realSel.map.sha;
+
   /** @type {string[]} */
   let traceList;
   /** @type {import('./shards.mjs').ShardPlan | null} */
@@ -451,6 +518,9 @@ function main() {
   /** @type {string[]} */
   let deferred = [];
   if (decide.trace === 'none') {
+    traceList = [];
+  } else if (decide.trace === 'refresh' && unmoved) {
+    // D-7747: the scheduled refresh found main where the newest map is: no merge since, so nothing is traced.
     traceList = [];
   } else if (decide.trace === 'refresh') {
     // The candidates in priority order, as many as the trace shards' budget holds (planTraceBatch); the rest wait
@@ -472,14 +542,18 @@ function main() {
   // full run.
   const macosProfile = event !== 'pull_request' && testsOut === 'full' ? PROFILES.macosFull : PROFILES.macosSelected;
 
-  const serverPlan = planShards(testFileList, durations, PROFILES.linux);
+  // A dispatch's `workers` input (2 or 4) plans the server shards at that many vitest workers; every other event
+  // keeps PROFILES.linux (serverProfile). Resolved before anything is written, so a refused count writes no matrix.
+  const linuxProfile = serverProfile(event, opt.workers);
+  const serverPlan = planShards(testFileList, durations, linuxProfile);
   const macosPlan = planShards(testFileList, durations, macosProfile);
   // `durations ?? {}`, never null: trace-run.mjs takes an exact list and has
   // no --shard, so the trace plan must always be a real partition (LPT at
   // defaultMs when no duration is known), never the fallback that hands every
   // shard every file plus a vitest `i/n`.
-  // A refresh's plan came from planTraceBatch above, bounded.
-  tracePlan ??= planShards(traceList, durations ?? {}, PROFILES.trace);
+  // A refresh's plan came from planTraceBatch above, bounded; a rebuild's is the whole suite over its own, wider
+  // profile (D-7748).
+  tracePlan ??= planShards(traceList, durations ?? {}, PROFILES.traceRebuild);
 
   // What this run MEANT to trace, for map-build: a refresh writes every one of
   // these that left no record as unknown instead of carrying its old entry.
@@ -512,12 +586,14 @@ function main() {
     map_sha: mapSha,
     fallback,
     queued_count: String(queued ? queued.unmapped.length + queued.uncertain.length : 0),
-    untraced: untracedOutput({ isPr: event === 'pull_request', untraced: realSel?.untraced, changedPaths: event === 'pull_request' ? prChangedPaths(repoDir, opt.base) : null }),
+    untraced: untracedOutput({ isPr: byChange, untraced: realSel?.untraced, changedPaths: byChange ? prChangedPaths(repoDir, opt.base) : null }),
   });
 
   /** @type {string[]} */
   const notes = [];
-  if (decide.trace === 'refresh') {
+  if (unmoved) {
+    notes.push(`refresh skipped: main has not moved since the newest map (\`${mainSha}\`), so nothing is traced; a dispatch with mode \`refresh\` forces one`);
+  } else if (decide.trace === 'refresh') {
     notes.push(`refresh: ${traceList.length} test(s) traced this run, bounded to ${PROFILES.trace.budgetMs / 60_000} min per trace shard`);
     if (deferred.length > 0) notes.push(`deferred to a later refresh: ${deferred.length} test(s), carried with the stamp they have`);
     if (traceList.length === 0 && deferred.length > 0) {
@@ -537,8 +613,15 @@ function main() {
     const total = queued.unmapped.length + queued.uncertain.length;
     if (total > 0) process.stdout.write(`::notice::this light run left ${total} server test(s) to the merge queue's full run (${queued.unmapped.length} unmapped, ${queued.uncertain.length} uncertain); the step summary lists them\n`);
   }
+  if (linuxProfile !== PROFILES.linux) {
+    notes.push(`server shards planned at ${linuxProfile.workers} vitest workers each (this dispatch's workers input; the profile's is ${PROFILES.linux.workers})`);
+  }
   const nowMs = opt.now ? Date.parse(opt.now) : Date.now();
-  const mapAge = realSel?.map ? staleMapWarning(realSel.map, nowMs, commitTimeMs(repoDir, realSel.map.sha)) : null;
+  // Main's head, where this run can name it: a pull request's base, or the checked-out main of a refresh.
+  const mainRef = event === 'pull_request' ? opt.base : decide.trace === 'refresh' ? 'HEAD' : undefined;
+  const mapAge = realSel?.map
+    ? staleMapWarning(realSel.map, nowMs, commitTimeMs(repoDir, realSel.map.sha), undefined, commitsAfter(repoDir, realSel.map.sha, mainRef))
+    : null;
   if (mapAge) {
     notes.push(`**warning: ${mapAge}**`);
     process.stdout.write(`::warning::${mapAge}\n`);

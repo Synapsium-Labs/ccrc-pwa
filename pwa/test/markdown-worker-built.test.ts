@@ -7,7 +7,7 @@
 // character references and needs a `tree` that decoded them. At the base of this fix the chunk carried
 // `decode-named-character-reference`'s `browser` entry, whose `document.createElement` at module load threw before
 // `onmessage` was assigned.
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -141,4 +141,150 @@ describe('the built markdownWorker chunk draws a raw <br> as a br element in the
     expect(chat.load).toBe('ok');
     expect(chat.replies).toEqual([{ id: 7, outcome: paragraph({ type: 'text', value: '<br>' }) }]);
   }, 120_000);
+});
+
+// Docs W8a Task 4 (A6, M8.21): the reader's render job is its own lazily loaded chunk. Only the built output shows it:
+// the shared Markdown library's renderer (markdown-it, named by the string it puts in an error message) is in exactly
+// one emitted file, `readerRenderJob-*.js`, never in the worker entry, which reaches that file through one dynamic
+// import; and both load, and answer a render job, in a plain node child with no DOM globals.
+const RENDER_LOADER = `
+import { pathToFileURL } from 'node:url';
+const [chunk, mode, src] = process.argv.slice(1);
+const replies = [];
+globalThis.self = { postMessage: (r) => replies.push(r) };
+const report = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+try {
+  const m = await import(pathToFileURL(chunk).href);
+  if (mode === 'chunk') {
+    m.answerRenderJob({ id: 9, kind: 'render', src }, (r) => replies.push(r));
+  } else {
+    if (typeof self.onmessage !== 'function') { report({ load: 'no-onmessage' }); process.exit(0); }
+    self.onmessage({ data: { id: 9, kind: 'render', src } });
+    // The reply comes after the chunk's dynamic import and the render: wait for it, not for a fixed time.
+    const deadline = Date.now() + 30000;
+    while (replies.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    if (replies.length === 0) { report({ load: 'no-reply', document: typeof document }); process.exit(0); }
+  }
+} catch (e) {
+  report({ load: 'threw', name: e?.name, message: String(e?.message).slice(0, 200), document: typeof document });
+  process.exit(0);
+}
+report({ load: 'ok', document: typeof document, window: typeof window, replies });
+`;
+
+describe('the built render job is its own lazily loaded worker chunk (W8a Task 4)', () => {
+  const SRC = '# T\n\nsome text\n\n![a](a.png)\n';
+  const assets = (): string => path.join(out, 'assets');
+  const marker = (): string =>
+    (JSON.parse(readFileSync(path.join(PWA, 'node_modules', 'markdown-it', 'package.json'), 'utf8')) as { name: string }).name;
+  const answer = (chunkFile: string, mode: 'chunk' | 'worker') => {
+    const stdout = execFileSync(
+      process.execPath,
+      ['--input-type=module', '-e', RENDER_LOADER, path.join(assets(), chunkFile), mode, SRC],
+      { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '' }, timeout: 60_000 },
+    );
+    return JSON.parse(stdout.trim().split('\n').at(-1)!) as {
+      load: string; document?: string; window?: string; name?: string; message?: string;
+      replies?: { id: number; outcome: { kind: string; images?: string[]; result?: { html: string; meta: { title: string | null } } } }[];
+    };
+  };
+
+  it('exactly one emitted chunk holds the renderer, it is not the worker entry, and the entry imports it lazily', () => {
+    const files = readdirSync(assets()).filter((n) => n.endsWith('.js'));
+    const holders = files.filter((n) => readFileSync(path.join(assets(), n), 'utf8').includes(marker()));
+    expect(holders).toHaveLength(1);
+    expect(holders[0]).toMatch(/^readerRenderJob-[\w-]+\.js$/);
+    const entry = files.find((n) => /^markdownWorker-[\w-]+\.js$/.test(n));
+    expect(entry).toBeDefined();
+    const entryText = readFileSync(path.join(assets(), entry!), 'utf8');
+    expect(entryText).not.toContain(marker());
+    expect(entryText).toMatch(/import\(\s*[`'"]\.\/readerRenderJob-[\w-]+\.js[`'"]\s*\)/);
+    expect(entryText).not.toMatch(/\bfrom\s*[`'"]\.\/readerRenderJob-/);
+  });
+
+  it('the render chunk imports with no DOM and answers a render job rendered', () => {
+    const chunk = readdirSync(assets()).find((n) => /^readerRenderJob-[\w-]+\.js$/.test(n));
+    expect(chunk).toBeDefined();
+    const result = answer(chunk!, 'chunk');
+    expect(result).toMatchObject({ load: 'ok', document: 'undefined', window: 'undefined' });
+    expect(result.replies).toHaveLength(1);
+    expect(result.replies![0]!.id).toBe(9);
+    expect(result.replies![0]!.outcome.kind).toBe('rendered');
+    expect(result.replies![0]!.outcome.result?.html).toContain('data-line=');
+    expect(result.replies![0]!.outcome.result?.meta.title).toBe('T');
+    expect(result.replies![0]!.outcome.images).toEqual(['a.png']);
+  }, 90_000);
+
+  it('the worker entry answers a render message by loading the chunk, with no DOM', () => {
+    const entry = readdirSync(assets()).find((n) => /^markdownWorker-[\w-]+\.js$/.test(n));
+    expect(entry).toBeDefined();
+    const result = answer(entry!, 'worker');
+    expect(result).toMatchObject({ load: 'ok', document: 'undefined', window: 'undefined' });
+    expect(result.replies).toHaveLength(1);
+    expect(result.replies![0]!.id).toBe(9);
+    expect(result.replies![0]!.outcome.kind).toBe('rendered');
+  }, 90_000);
+});
+
+// Docs W5h-a Task 8 (base spec 2026-10-01 section 7.10's M7.11 and section 4.10's M4.H4, built half; the W5h-a
+// plan's refinement (f)). The production build emits the highlight worker as its own chunk; a plain node child with no
+// DOM loads it, sees `{ready: true}`, and gets spans for a typescript job; the built `sw.js` precaches it beside the
+// parse worker's chunk; highlight.js core (named by a string from its language-not-found message) is in that chunk
+// and in the reader's render chunk (the shared Markdown library's own colouring, A6 and A22), and in no other emitted
+// file, so in no main-thread chunk. (The count of the `new URL(...)` literal that spawns it is an AST scan in
+// `docs-scans.test.ts`'s W5h-a clause, which needs no build.)
+const HL_LOADER = `
+import { pathToFileURL } from 'node:url';
+const [chunk] = process.argv.slice(1);
+const replies = [];
+globalThis.self = { postMessage: (r) => replies.push(r) };
+const report = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+try {
+  await import(pathToFileURL(chunk).href);
+} catch (e) {
+  report({ load: 'threw', name: e?.name, message: String(e?.message).slice(0, 200), document: typeof document });
+  process.exit(0);
+}
+if (typeof self.onmessage !== 'function') { report({ load: 'no-onmessage', replies }); process.exit(0); }
+const ready = replies.splice(0);
+self.onmessage({ data: { id: 3, lang: 'typescript', code: 'const a: number = 1;' } });
+report({ load: 'ok', document: typeof document, window: typeof window, ready, replies });
+`;
+
+describe('the built highlight worker chunk (W5h-a: M7.11, M4.H4 built half)', () => {
+  const assets = (): string => path.join(out, 'assets');
+  const MARKER = 'did you forget to load/include a language module?';
+  const precached = (): string[] => {
+    const manifest = /precacheAndRoute\(\[(.*?)\],/s.exec(readFileSync(path.join(out, 'sw.js'), 'utf8'));
+    expect(manifest, 'sw.js calls precacheAndRoute with a manifest').not.toBeNull();
+    return [...manifest![1]!.matchAll(/url:"([^"]+)"/g)].map((m) => m[1]!);
+  };
+
+  it('M7.11: exactly one markdownHighlightWorker chunk; it loads with no DOM, says ready, and answers a typescript job with spans', () => {
+    const chunks = readdirSync(assets()).filter((n) => /^markdownHighlightWorker-[\w-]+\.js$/.test(n));
+    expect(chunks).toHaveLength(1);
+    const stdout = execFileSync(process.execPath, ['--input-type=module', '-e', HL_LOADER, path.join(assets(), chunks[0]!)],
+      { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '' }, timeout: 60_000 });
+    const result = JSON.parse(stdout.trim().split('\n').at(-1)!) as {
+      load: string; document?: string; window?: string; ready?: unknown[];
+      replies?: { id: number; result: { kind: string; mode?: string; html?: string } }[];
+    };
+    expect(result).toMatchObject({ load: 'ok', document: 'undefined', window: 'undefined', ready: [{ ready: true }] });
+    expect(result.replies).toHaveLength(1);
+    expect(result.replies![0]).toMatchObject({ id: 3, result: { kind: 'html', mode: 'block' } });
+    expect(result.replies![0]!.result.html).toContain('<span class="hljs-keyword">const</span>');
+  }, 90_000);
+
+  it('M7.11: sw.js precaches the highlight worker chunk beside the parse worker\'s', () => {
+    const urls = precached();
+    expect(urls.filter((u) => /^assets\/markdownHighlightWorker-[\w-]+\.js$/.test(u))).toHaveLength(1);
+    expect(urls.filter((u) => /^assets\/markdownWorker-[\w-]+\.js$/.test(u))).toHaveLength(1);
+  });
+
+  it('M4.H4 (built): highlight.js core is in the highlight worker\'s chunk, may be in the reader\'s render chunk, and is in no other file', () => {
+    const files = readdirSync(assets()).filter((n) => n.endsWith('.js'));
+    const holders = files.filter((n) => readFileSync(path.join(assets(), n), 'utf8').includes(MARKER));
+    expect(holders.filter((n) => /^markdownHighlightWorker-[\w-]+\.js$/.test(n))).toHaveLength(1);
+    expect(holders.filter((n) => !/^(?:markdownHighlightWorker|readerRenderJob)-[\w-]+\.js$/.test(n))).toEqual([]);
+  });
 });

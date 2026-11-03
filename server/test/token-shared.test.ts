@@ -382,8 +382,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(HOLDERS_MESSAGE, 'a missing holder').toMatch(/missing[^]*(moved|changed value)/);
   });
 
-  it('the holders across shared, server/src, pwa/src and agent/src are exactly the seven separate seven-day quantities', () => {
-    // A weekly interval anywhere else must import the one in shared/box-token.ts. These seven are separate
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the eight separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These eight are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
     // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
     // (R81), and it does not import the token interval. The review-child ceiling (D-5942) is the separate quantity
@@ -391,6 +391,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // accounts word's signed-in window (D-6058 (3), (6)) is the accounts spec's own 7 d since the last good check (§4.1),
     // a separate quantity that does not import the token interval. The stale arm's idle span (D-6639) is the separate quantity
     // spec 2026-10-23-fleet-disk-retention-design §2.7.3 (rulings G2) chose: seven days, the expiry horizon, which ccd's WS_STALE_IDLE_S measures on the box.
+    // The programme ledgers' "Recently cleared" trail (spec 2026-10-31-programme-ledgers-design D13, ruled in by the
+    // coordinator for PL1) is a separate quantity too: seven days of cleared items, unrelated to token rotation.
     expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
       'server/src/childReclaimSweep.ts:CHILD_STALE_IDLE_MS',
@@ -399,6 +401,7 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
       'shared/accounts.ts:SIGNED_IN_WITHIN_MS',
       'shared/api.ts:LEDGER_STALE_MS',
       'shared/box-token.ts:TOKEN_ROTATION_INTERVAL_MS',
+      'shared/ledgers.ts:CLEARED_WINDOW_MS',
     ]);
   });
 });

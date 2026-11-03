@@ -4,6 +4,7 @@ import { lifecycleInputFor } from '../fleet.js';
 import type { FleetIO } from '../io.js';
 import { fieldMeasured, readSessionRecord } from '../registry.js';
 import type { CoordStore } from './store.js';
+import type { WatcherCoordPort } from './ports.js';
 import { isRegistryId, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
 import { readSession, type SessionFacts } from '../sessionReading.js';
 import type { ClaimantDeadCause } from '../deadCoordinator.js';
@@ -117,7 +118,7 @@ export type ClaimantVerdict =
  * supervisor is in the middle of bringing back.
  */
 export async function measureClaimant(
-  deps: ReclaimDeps, id: string, nowMs: number,
+  deps: Omit<ReclaimDeps, 'coord'> & { coord: WatcherCoordPort }, id: string, nowMs: number,
 ): Promise<ClaimantVerdict> {
   // The ladder is `readSession`'s (ARCH-47); this door keeps only its FAIL-SHUT POLICY over a fresh one-row read at the
   // act (D-1144): `dead` proceeds, so doubt is never `dead`, and a hibernated claimant is alive as any live one (D-5242).

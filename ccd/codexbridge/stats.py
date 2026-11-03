@@ -10,10 +10,23 @@ THE FILE, VERSION 1 (`bridge.stats.json` in the lane directory; the name is `lan
    "routes": {"<route>/<model>": {"requests", "bytesPerToken", "promptTokensMax", "promptTokensLast"}},
    "refusals": {"<route>/<model>": {"tokens", "window", "at", "estimated": true}},
    "outcomes": {"<key>": n}, "names": {"<family>": {"<name>": n}}, "unexplained": {"<family>": ["<name>", ...]},
-   "usageHeaders": {"at", "values": {...}} or null, "lastUpstreamRequestId": <id> or null}
+   "usageHeaders": {"at", "values": {...}} or null, "lastUpstreamRequestId": <id> or null,
+   "store": {"state": "ok" | "set-aside" | "disabled", "reason": <outcome name> or null, "at": <time> or null,
+             "setAside": null or {"at", "found": "integrity-check" | <exception class name>,
+                                  "file": <copy's basename>}}}
 `since` is the file's first start, carried across restarts; `startedAt` is this process's. `promptTokensMax` is the
 largest upstream `input_tokens` of a reply the model accepted (the caller reports only those); a refusal's `tokens`
 is D24's estimate, so it says `estimated: true`. Times are ISO-8601 UTC with milliseconds.
+
+THE STORE ENTRY (D-7677) is the reasoning store's state for THIS process only: reset to STORE_OK at construction and
+never carried from a loaded file (the store's `outcomes` counts are, as every count is). `set-aside` says D-7676's
+start check set a damaged store aside and made a fresh one (`setAside` says when, what it found and the copy's
+basename); `disabled` says the store answers as empty for the rest of the process, `reason` the outcome that did it,
+and outranks `set-aside` when both happened (a fresh store that later failed: `setAside` keeps its record); a
+set-aside that failed after its renames is `disabled` as `store:set-aside-failed` with `setAside` naming the copy. One
+writer, `store_event`, the store's callback. A file written before the entry existed has no `store` key: that means
+the bridge predates it, never `ok`. The constructor's state is flushed before the server binds its port
+(`server.serve`), so the file describes this process from its first moment.
 
 NOTHING HERE HOLDS CONTENT. A name is bounded by NAME_RE (else `unrecognised`), at most NAMES_MAX per family (then
 `overflow`); a header's value is never kept, except an `x-codex-` header's, for the usage poller, and only when it has
@@ -44,7 +57,9 @@ lock and writes it outside it, under a second lock, so a slow fsync never stalls
 another write is in flight writes nothing (its changes stay dirty for the next one), a forced one waits for it. No
 method raises into a request: a malformed argument is ignored (a headers argument that is not a mapping of headers,
 or a header item that is not a (name, value) pair, counts nothing; a byte count that is not an int moves no ratio), and
-a `now` that is not a finite number in range reads as the wall clock.
+a `now` that is not a finite number in range reads as the wall clock. A store event makes the next flush call write
+at once too, whatever FLUSH_S says (D-7677: a store disabled by a request is written at the next flush, which is that
+request's own unless another write is in flight, then the next one's; nothing is lost).
 
 Every constant is read when it is used, so the test driver's `consts` reach it.
 """
@@ -58,7 +73,7 @@ import threading
 import time
 from typing import Dict, Mapping, Optional
 
-from . import count, errors, known
+from . import count, errors, known, store
 
 VERSION = 1
 FAMILIES = tuple(known.KNOWN)  # the ten D3 families, in the plan's order; spelled once, in known.KNOWN
@@ -90,6 +105,8 @@ UNKNOWN_FAMILY = "stats:unknown-family"
 # client went away before its answer was written is counted CLIENT_GONE, never `5xx` (the 7-day watch's upstream
 # failure rate); one the drain cut is counted `drain-cut` alone, by the drain, and nothing else.
 CLIENT_GONE = "client-gone"
+# D-7677: the store entry as construction leaves it (copied, never shared).
+STORE_OK = {"state": "ok", "reason": None, "at": None, "setAside": None}
 
 
 def _iso(t: float) -> str:
@@ -156,7 +173,7 @@ class Stats:
         self._lock = threading.RLock()
         self._write_lock = threading.Lock()  # one write at a time, held without self._lock (flush)
         self._dirty = False
-        self._retry = False
+        self._retry = False  # the next flush writes whatever FLUSH_S says: after a failed write, or a store event
         self._last_flush = None  # type: Optional[float]
         started = _iso(time.time())
         # D-6821: `usageHeaders` and `lastUpstreamRequestId` are null until a first value, and
@@ -164,7 +181,7 @@ class Stats:
         self._doc = {
             "version": VERSION, "lane": lane, "since": started, "startedAt": started, "updatedAt": started,
             "routes": {}, "refusals": {}, "outcomes": {}, "names": {}, "unexplained": {}, "usageHeaders": None,
-            "lastUpstreamRequestId": None,
+            "lastUpstreamRequestId": None, "store": dict(STORE_OK),
         }  # type: dict
         if self._load():
             self.flush(force=True)
@@ -296,6 +313,30 @@ class Stats:
         with self._lock:
             self._count(key)
 
+    def store_event(self, reason: str, found: Optional[str] = None, file: Optional[str] = None, *,
+                    now: Optional[float] = None) -> None:
+        """The reasoning store's callback (D-7677): count `reason` as `outcome` does, and set this process's store
+        entry. `store.SET_ASIDE` records `found` and `file` (each bounded by NAME_RE, `file` a basename, never a path)
+        in `setAside`, and sets `state` unless the store is already disabled; any other reason disables, and records
+        `setAside` too when it names a `file` (`store.SET_ASIDE_FAILED` after its renames). `now` is
+        optional, the wall clock."""
+        with self._lock:
+            self._count(reason)
+            self._retry = True  # the next flush writes at once, whatever FLUSH_S says (the module docstring)
+            entry = self._doc["store"]
+            at = _stamp(now)
+            if reason == store.SET_ASIDE or file is not None:  # a set-aside, or a failed one that named its copy
+                name = file if isinstance(file, str) and "/" not in file else None  # a basename, never a path
+                entry["setAside"] = {"at": at, "found": _bounded(found), "file": _bounded(name)}
+            if reason == store.SET_ASIDE:
+                if entry["state"] == "disabled":
+                    return
+                entry["state"] = "set-aside"
+            else:
+                entry["state"] = "disabled"
+            entry["reason"] = _bounded(reason)
+            entry["at"] = at
+
     def _route(self, route: str, model: str) -> dict:
         routes = self._doc["routes"]
         key = self._slot(routes, _route_key(route, model))
@@ -403,8 +444,9 @@ class Stats:
 
     def flush(self, *, force: bool = False) -> bool:
         """Write the file when something changed, at most every FLUSH_S (a forced flush, and the first call after a
-        failed one, write at once). True when it wrote; a failure is counted and kept for the next call, never
-        raised. The write runs outside self._lock; an unforced flush while another write is in flight returns False."""
+        failed one or a store event, write at once). True when it wrote; a failure is counted and kept for the next
+        call, never raised. The write runs outside self._lock; an unforced flush while another write is in flight
+        returns False."""
         if not self._write_lock.acquire(blocking=force):
             return False
         try:
@@ -418,6 +460,7 @@ class Stats:
                 self._doc["updatedAt"] = _iso(time.time())
                 data = json.dumps(self._doc, sort_keys=True, separators=(",", ":")).encode("utf-8")
                 self._dirty = False  # a change made during the write sets it again
+                self._retry = False  # so does a store event, and a failure below (cleared here, never after the write)
             try:
                 self._write(data)
             except Exception:  # a full disk, a removed directory: counted, retried at the next call
@@ -427,7 +470,6 @@ class Stats:
                 return False
             with self._lock:
                 self._last_flush = tick
-                self._retry = False
             return True
         finally:
             self._write_lock.release()

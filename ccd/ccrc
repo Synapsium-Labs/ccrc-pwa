@@ -1351,9 +1351,11 @@ _launchd_class() {
 # `_svc_*`/`_plat_*`, because it is no platform verb: both userlands read the
 # same file the same way (`macos-platform.test.ts` refuses such a name here).
 #
-# A CADENCE LINE is exactly `OnUnitActiveSec=<n>s|min|h` or `OnCalendar=*:0/<n>`
-# (every <n> minutes, <n> dividing the hour, so the gap between firings is one
-# number). Every other key (`OnBootSec=`, `OnActiveSec=`, `AccuracySec=`,
+# A CADENCE LINE is exactly `OnUnitActiveSec=<n>s|min|h`,
+# `OnUnitInactiveSec=<n>s|min|h` (the period counted from the END of the last
+# run, the graph sweep's since D-7876: the gap between a run's end and the next
+# start is the one number) or `OnCalendar=*:0/<n>` (every <n> minutes, <n>
+# dividing the hour, so the gap between firings is one number). Every other key (`OnBootSec=`, `OnActiveSec=`, `AccuracySec=`,
 # `Persistent=`, `RandomizedDelaySec=`, `Unit=` and the `[Unit]`/`[Install]`
 # keys), each comment and each blank is IGNORED, never refused: they sit beside
 # the period in 13 of the 14 shipped files. Anything else is refused, rc 1 with
@@ -1367,20 +1369,41 @@ _timer_period_s() {   # <timer-file>
   fi
   while IFS= read -r line || [ -n "$line" ]; do
     line="${line#"${line%%[![:space:]]*}"}"
-    case "$line" in OnUnitActiveSec=*|OnCalendar=*) hit="$line"; n=$((n + 1)) ;; esac
+    case "$line" in OnUnitActiveSec=*|OnUnitInactiveSec=*|OnCalendar=*) hit="$line"; n=$((n + 1)) ;; esac
   done < "$f"
   if [ "$n" -ne 1 ]; then
-    printf '%s\n' "$PROG: cannot read a timer period from $f: $n cadence lines (OnUnitActiveSec= or OnCalendar=), not one" >&2; return 1
+    printf '%s\n' "$PROG: cannot read a timer period from $f: $n cadence lines (OnUnitActiveSec=, OnUnitInactiveSec= or OnCalendar=), not one" >&2; return 1
   fi
-  if [[ "$hit" =~ ^OnUnitActiveSec=([1-9][0-9]{0,5})(s|min|h)$ ]]; then
-    case "${BASH_REMATCH[2]}" in
-      s) echo "${BASH_REMATCH[1]}" ;; min) echo $((BASH_REMATCH[1] * 60)) ;; h) echo $((BASH_REMATCH[1] * 3600)) ;;
+  if [[ "$hit" =~ ^OnUnit(Active|Inactive)Sec=([1-9][0-9]{0,5})(s|min|h)$ ]]; then
+    case "${BASH_REMATCH[3]}" in
+      s) echo "${BASH_REMATCH[2]}" ;; min) echo $((BASH_REMATCH[2] * 60)) ;; h) echo $((BASH_REMATCH[2] * 3600)) ;;
     esac
   elif [[ "$hit" =~ ^OnCalendar=\*:0/([1-9][0-9]?)$ ]] && [ $((60 % BASH_REMATCH[1])) -eq 0 ]; then
     echo $((BASH_REMATCH[1] * 60))
   else
-    printf '%s\n' "$PROG: cannot read a timer period from $f: its cadence line is not OnUnitActiveSec=<n>s|min|h or OnCalendar=*:0/<n>" >&2; return 1
+    printf '%s\n' "$PROG: cannot read a timer period from $f: its cadence line is not OnUnitActiveSec=<n>s|min|h, OnUnitInactiveSec=<n>s|min|h or OnCalendar=*:0/<n>" >&2; return 1
   fi
+}
+
+# ── _psi_over <max> <knob> — the host's pressure above <max> (D-7876) ─────
+# The one reader of the host's pressure, moved here from `ccrc test` (its heavy
+# queue's `_tpressure`) so the graph sweep, which sources this body, reads it the
+# same way: PSI `some avg10` (percent) of memory, then cpu, from
+# `$CCRC_PROC_ROOT/pressure/` (default /proc, a fixture root in the suites). rc 0
+# when one is above <max>, with PRESSURE_SAID naming the resource, the reading
+# and <knob>=<max>; rc 1 otherwise, including no readable file at all (macOS, a
+# kernel without PSI): an unread pressure never holds anything back. The caller
+# decides that 0 is off.
+_psi_over() {   # <max> <knob> -> 0 while memory or cpu pressure is above <max>; PRESSURE_SAID says which
+  local max="$1" knob="$2" root="${CCRC_PROC_ROOT:-/proc}" r v
+  PRESSURE_SAID=""
+  for r in memory cpu; do
+    [ -r "$root/pressure/$r" ] || continue
+    v=$(awk '$1 == "some" { for (i = 2; i <= NF; i++) if ($i ~ /^avg10=/) { sub(/^avg10=/, "", $i); print $i; exit } }' "$root/pressure/$r" 2>/dev/null)
+    [ -n "$v" ] || continue
+    if awk -v v="$v" -v m="$max" 'BEGIN { exit !(v + 0 > m + 0) }'; then PRESSURE_SAID="host $r pressure (avg10) is $v, above $knob=$max"; return 0; fi
+  done
+  return 1
 }
 
 # `_timer_period_words <seconds> noun|adj` — that period in a transcript's
@@ -1976,7 +1999,7 @@ ACCT_SECRETS_DIR="$HOME/.cc-secrets"
 # here plus one arm in the case below, and `ccrc-account.test.ts`'s
 # "both directions" case reads this line out of the source and fails on either
 # half alone.
-ACCT_SUBS="add candidates check credential declare disable enable remove roster"
+ACCT_SUBS="add auth-cancel auth-code auth-start candidates check credential declare disable enable remove roster seed set"
 
 # ── THE PASSPHRASE SECRET, WHICH THIS FILE NEVER READS ────────────────────
 # `~/.ccrc/auth.scrypt` — the scrypt line the server's session gate verifies a
@@ -2488,8 +2511,14 @@ already running).
             stderr, and the credential only ever on stdin (--credential -).
             Writes ~/.ccrc/accounts.json, a 0600 file under ~/.cc-secrets
             and each account's own settings.json; every lane it connects is
-            left DISABLED until you enable it. Run it with no subcommand to
-            see which subcommands this build has
+            left DISABLED until you enable it. "add --provider anthropic"
+            with no --method mints (setup-token, a long-lived token) rather
+            than signs in; pass --method login for a sign-in lane.
+            auth-start|auth-code|auth-cancel --id --attempt run a sign-in
+            detached, the code arriving once on stdin; "set --method
+            setup-token|login --attempt" installs what it captured, and
+            "credential --sign-out" signs a lane out. Run it with no
+            subcommand to see which subcommands this build has
   memory    census every (home, project) memory pair on this box: one line
             per pair naming its home, project slug and state — converged or
             forked — then a summary count. Read-only unless [--apply] is
@@ -7001,14 +7030,20 @@ _acct_read_credential() {   # <spelling> — sets ACCT_CREDENTIAL, or refuses
     || _acct_refuse 2 credential-not-stdin "the --credential flag takes exactly one spelling, \"-\", which reads the secret from stdin. A value given here would sit in this process's argv, which is world-readable on this box for as long as the process lives. Nothing was written."
   [ -t 0 ] \
     && _acct_refuse 2 credential-needs-a-pipe "the --credential - flag reads the secret from a PIPE, and stdin here is a terminal. This verb does not prompt: it is driven by the server, and a prompt would have no echo discipline and no interrupt handling. Pipe the secret in, or use 'ccrc passwd' for the one secret this box does prompt for. Nothing was written."
-  local v=""
-  IFS= read -r v
-  # `read` returns 1 at EOF with no delimiter, which is the ordinary shape of a
-  # one-line pipe with no trailing newline — so the RETURN CODE is not the test.
-  # The VALUE is.
-  [ -n "${v//[[:space:]]/}" ] \
+  # THE BYTES ARE CHECKED BEFORE ANY CONSUMER SEES THEM (spec §3.3, `key-charset`; accounts plan Task A16). The
+  # whole of stdin is read, not its first line, so a value carrying a newline cannot pass as its first line. One
+  # trailing LF is a pipe's (`echo`, `printf '%s\n'`) and is dropped; any other C0 byte, DEL, a NUL (the `-d ''`
+  # read stops at it, so a first read that returns 0 found one, or hit the bound), or more than 8 KiB refuses.
+  local key="" LC_ALL=C bad=$'[\x01-\x1f\x7f]'
+  if IFS= read -r -d '' -n 8194 key; then key="$key"$'\x01'; fi
+  key="${key%$'\n'}"
+  if [ "${#key}" -gt 8192 ] || [[ "$key" =~ $bad ]]; then
+    key=""
+    _acct_refuse 2 key-charset "the credential on stdin carries a control byte (a newline inside it, a NUL, another C0 byte or DEL) or is longer than 8 KiB. No key or token holds those bytes, and a consumer could misread them. Nothing was written."
+  fi
+  [ -n "${key//[[:space:]]/}" ] \
     || _acct_refuse 2 credential-empty "the --credential - flag was given and stdin carried nothing. This verb fails closed rather than writing a credential file with an empty value in it, which would be a lane holding a key that decides nothing. Nothing was written."
-  ACCT_CREDENTIAL="$v"
+  ACCT_CREDENTIAL="$key"
 }
 
 # ── THE SECRETS-FILE NAME, DERIVED ONCE IN BASH (Task 28) ─────────────────
@@ -7197,7 +7232,7 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
 # shape library alone. Everything that needs the roster or the provider table is
 # `check-add`'s, in node, on the same exit-code table.
 ACCT_ID=""; ACCT_PROVIDER=""; ACCT_LABEL=""; ACCT_HUE=""; ACCT_SUFFIX=""
-ACCT_BASE_URL=""; ACCT_MODELS=""; ACCT_METHOD=""; ACCT_CRED_SPELLING=""
+ACCT_BASE_URL=""; ACCT_MODELS=""; ACCT_METHOD=""; ACCT_CRED_SPELLING=""; ACCT_ADOPT=""
 _acct_add_parse() {
   _acct_shape
   local flag="" v=""
@@ -7205,6 +7240,8 @@ _acct_add_parse() {
     flag="${1%%=*}"
     case "$1" in
       -h|--help) usage; exit 0 ;;
+      # G20 (accounts plan Task A16): take over a config directory that already exists, as it is.
+      --adopt) ACCT_ADOPT=1; shift; continue ;;
       --id|--provider|--label|--hue|--suffix|--base-url|--models|--method|--credential)
         [ $# -ge 2 ] \
           || _acct_refuse 2 missing-value "the flag $1 takes a value and nothing followed it on the command line. Nothing was written."
@@ -7274,7 +7311,11 @@ _acct_add_parse() {
   # note); the agreement between the two is measured, not asserted, by
   # `ccrc-account.test.ts`'s "`_acct_add_parse` and `check-add` default the
   # config dir to the same string".
-  [ -n "$ACCT_SUFFIX" ] || ACCT_SUFFIX=".claude-$ACCT_ID"
+  # G4 (accounts plan Task A16): an id that already starts `claude-` is `.<id>`, never `.claude-claude-…`.
+  # `defaultSuffixOf` in `deploy/account-op.mjs` is the same rule.
+  if [ -z "$ACCT_SUFFIX" ]; then
+    case "$ACCT_ID" in claude-*) ACCT_SUFFIX=".$ACCT_ID" ;; *) ACCT_SUFFIX=".claude-$ACCT_ID" ;; esac
+  fi
   # THE READ ROOT, NOT A STYLE RULE. `underClaudeGlob`
   # (agent/src/whitelist.ts:48-53) admits only $HOME/.claude*, and every server
   # read of a lane's transcripts and statusline goes through `configDirFor`. A
@@ -7532,7 +7573,8 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   # BEFORE REVIEWER: the worker skill points at ../ccrc-coordinator/references/…, and
   # the reviewer skill points into the same tree (`_inst_skills`, :6841-6844).
   for n in install-session-hooks.sh install-coordinator-skill.sh \
-           install-worker-skill.sh install-reviewer-skill.sh install-graphify-skill.sh install-history-skill.sh; do
+           install-worker-skill.sh install-reviewer-skill.sh install-graphify-skill.sh install-history-skill.sh \
+           install-linear-skill.sh; do
     [ -x "$HOME/.cc-sessions/$n" ] \
       || _acct_refuse 1 provision-failed "the installer $HOME/.cc-sessions/$n is missing or not executable, so this lane's home cannot be converged — and 'ccrc install' is what places it there. $stands"
     bash "$HOME/.cc-sessions/$n" --homes "$dir" \
@@ -7689,7 +7731,8 @@ _acct_add() {
   local plan rc=0
   plan="$(_acct_node check-add \
     --file "$(_acct_roster_path)" --id "$ACCT_ID" --provider "$ACCT_PROVIDER" \
-    --label "$ACCT_LABEL" --hue "$ACCT_HUE" --suffix "$ACCT_SUFFIX" \
+    --label "$ACCT_LABEL" --hue "$ACCT_HUE" --suffix "$ACCT_SUFFIX" --home "$HOME" \
+    ${ACCT_ADOPT:+--adopt true} \
     ${ACCT_BASE_URL:+--base-url "$ACCT_BASE_URL"} \
     ${ACCT_MODELS:+--models "$ACCT_MODELS"} \
     ${ACCT_METHOD:+--method "$ACCT_METHOD"})" || rc=$?
@@ -7728,7 +7771,7 @@ _acct_add() {
   # `secretsfile` IS READ AND NOT YET USED, said out loud rather than left for a
   # reader to notice: what the `add-entry` refusal below names is
   # `ACCT_SECRET_WRITTEN`, a MEASUREMENT, and Task 26's answer needs this one.
-  local secretsfile="" envvar="" nfield=0 fld
+  local secretsfile="" envvar="" nfield=0 fld planmethod=""
   ACCT_BASE_URL_RESOLVED=""; ACCT_MODELS_RESOLVED="{}"; ACCT_SECRET_WRITTEN=""
   while IFS= read -r -d '' fld; do
     case "$nfield" in
@@ -7736,14 +7779,15 @@ _acct_add() {
       1) envvar="$fld" ;;
       2) ACCT_BASE_URL_RESOLVED="$fld" ;;
       3) ACCT_MODELS_RESOLVED="$fld" ;;
+      4) planmethod="$fld" ;;
     esac
     nfield=$((nfield + 1))
   done < <(ACCT_PLAN="$plan" node -e '
     const p = JSON.parse(process.env.ACCT_PLAN).plan;
     process.stdout.write([p.secretsFile ?? "", p.envVar ?? "", p.baseUrl ?? "",
-      JSON.stringify(p.models ?? {})].map((x) => x + "\0").join(""));
+      JSON.stringify(p.models ?? {}), p.method ?? ""].map((x) => x + "\0").join(""));
   ')
-  [ "$nfield" -eq 4 ] \
+  [ "$nfield" -eq 5 ] \
     || _acct_refuse 1 internal-plan "could not read the checked plan back — this is a bug in ccrc, not a fact about your box, and nothing was written"
 
   # ── 1. THE SECRET, for a token lane only ────────────────────────────────
@@ -7755,14 +7799,23 @@ _acct_add() {
   # `ccd account-pane --id <id> --method setup-token` (Task 50) — both of which
   # ARE on the box. The sentence is written for the finished system because a
   # remedy the operator reads a month from now should name the verb they have.
-  if [ -n "$envvar" ]; then
+  # A MINT WITH NO TOKEN YET IS A LANE, NOT A REFUSAL (accounts plan Task A20, Q1): `setup-token` is the Anthropic
+  # table's first member and so `check-add`'s default, and its token is minted AFTER the add, by `auth-start
+  # --method setup-token` into scratch and installed by `set --method setup-token` once its probe passes. So a
+  # setup-token add without `--credential` writes the token lane with no key file yet (the wrapper sources it only
+  # when it is readable) and leaves it off; with `--credential -` it is a pasted token, validated first as before.
+  if [ -n "$envvar" ] && [ -z "$ACCT_CRED_SPELLING" ] && [ "$planmethod" = setup-token ]; then
+    :
+  elif [ -n "$envvar" ]; then
     [ -n "$ACCT_CRED_SPELLING" ] \
-      || _acct_refuse 2 credential-required "provider \"$ACCT_PROVIDER\" with method \"${ACCT_METHOD:-paste}\" is a token lane and needs the key: pass --credential - and pipe it in. Nothing was written."
+      || _acct_refuse 2 credential-required "provider \"$ACCT_PROVIDER\" with method \"${planmethod:-paste}\" is a token lane and needs the key: pass --credential - and pipe it in. Nothing was written."
     _acct_read_credential "$ACCT_CRED_SPELLING"
+    # PASTE VALIDATES FIRST (spec §6.3): an Anthropic token is probed before any byte of the lane is written.
+    [ "$envvar" != CLAUDE_CODE_OAUTH_TOKEN ] || _acct_token_probe "$ACCT_ID" "Nothing was written."
     _acct_write_secret "$ACCT_ID" "$ACCT_PROVIDER" "$envvar"
   else
     [ -z "$ACCT_CRED_SPELLING" ] \
-      || _acct_refuse 2 credential-not-managed "provider \"$ACCT_PROVIDER\" with method \"${ACCT_METHOD:-login}\" keeps its credential in the config directory Claude Code writes, so there is no file for --credential to fill. Run 'ccrc account auth-start --id $ACCT_ID --method login' after this. Nothing was written."
+      || _acct_refuse 2 credential-not-managed "provider \"$ACCT_PROVIDER\" with method \"${planmethod:-login}\" keeps its credential in the config directory Claude Code writes, so there is no file for --credential to fill. Run 'ccrc account auth-start --id $ACCT_ID --method login' after this. Nothing was written."
   fi
 
   # ── 2. THE SWITCH, OFF ──────────────────────────────────────────────────
@@ -7826,7 +7879,7 @@ _acct_add() {
   _acct_operator_steps "$ACCT_ID"
   # THE LANE STATE, FRESH (accounts plan Task A11): a new lane's state starts
   # over, so a stale file under a re-used id lends it nothing.
-  _acct_lane_state "$ACCT_ID" --mode fresh
+  _acct_lane_state "$ACCT_ID" --mode fresh --added-at now
 
   # ── 7. THE ANSWER ───────────────────────────────────────────────────────
   # `${arr[@]+"${arr[@]}"}` — this tree's empty-array idiom under `set -u`
@@ -8125,7 +8178,7 @@ _acct_own_temp() {   # <path> — this verb's temp, removed by the TERM trap
 
 _acct_on_term() {    # the TERM trap `cmd_account` installs
   local t=""
-  for t in ${ACCT_OWN_TEMPS[@]+"${ACCT_OWN_TEMPS[@]}"}; do rm -f -- "$t" 2>/dev/null; done
+  for t in ${ACCT_OWN_TEMPS[@]+"${ACCT_OWN_TEMPS[@]}"}; do rm -rf -- "$t" 2>/dev/null; done   # -r: the paste probe's directory (A16)
   exit 143
 }
 
@@ -8219,12 +8272,51 @@ _acct_marker_lock() {   # <what-still-stands> -> lock held on ACCT_MARKER_LOCK_F
     || _acct_refuse 1 marker-lock "cannot lock $lock, so the account placement floor was left unchanged. $stands"
 }
 
-_acct_enable() {   # [--id X]
-  local marker="" rc=0
-  _acct_one_id enable "$@"
+# ── the first-run seed (accounts plan Task A13; spec §6.2 step 9, G1; D-5518, D-7731) ──
+# `deploy/account-op.mjs`'s `seed` op states what it writes, verifies and
+# records (`seedVerifiedAt`). Inside `check` it follows the probe turn: OA1a
+# measured that a sign-in lane's `.claude.json` exists before the first check
+# and that the probe does not add `hasCompletedOnboarding`, so there is no
+# headless first run before it. The run is recorded first (`lastRunAt`), so a
+# seed that then refuses leaves the lane "not verified after its last run". A
+# refusal is the answer's `seed.error`, its sentence the op's stderr line; the
+# check's verdict stands, and `enable` stays not-ready.
+_acct_check_seed() {   # <id> -> ACCT_SEED_OUT, the seed op's answer
+  _acct_lane_state "$1" --last-run-at now
+  ACCT_SEED_OUT="$(_acct_node seed --file "$(_acct_roster_path)" --id "$1")"
+}
+
+# `ccrc account seed --id X` (spec §13.3, G1): the same step on its own, a CLI
+# verb and never an agent sub. It runs no Claude Code.
+_acct_seed() {   # [--id X]
+  _acct_one_id seed "$@"
   _acct_id_or_refuse "$ACCT_ONE_ID"
   _acct_known_or_refuse "$ACCT_ONE_ID"
   _acct_lane_lock "$ACCT_ONE_ID" "Nothing was written."
+  _acct_read_op "The lane's .claude.json is as it was, or seeded and not recorded." \
+    seed --file "$(_acct_roster_path)" --id "$ACCT_ONE_ID"
+  printf '%s\n' "$ACCT_OUT"
+}
+
+_acct_enable() {   # [--id X] [--force]
+  local marker="" rc=0 force=0 a=""
+  # `--force` IS THE CLI'S ALONE (spec §10, G19): the agent's argv builder
+  # (`shared/account-argv.ts`) has no field that becomes it, so no route sends
+  # it. It skips the readiness question and nothing else.
+  local -a rest=()
+  for a in "$@"; do
+    if [ "$a" = --force ]; then force=1; else rest+=("$a"); fi
+  done
+  _acct_one_id enable ${rest[@]+"${rest[@]}"}
+  _acct_id_or_refuse "$ACCT_ONE_ID"
+  _acct_known_or_refuse "$ACCT_ONE_ID"
+  _acct_lane_lock "$ACCT_ONE_ID" "Nothing was written."
+  # READINESS UNDER THE LANE'S LOCK, BEFORE THE PLACEMENT LOCK: a `check` on
+  # this lane cannot rewrite the lane state between the question and the flip.
+  # The `ready` op reads the lane state, and the credential where the roster
+  # says the lane keeps it (spec §10, G19); a refusal is its envelope, at 1.
+  [ "$force" -eq 1 ] \
+    || _acct_read_op "Nothing was written." ready --file "$(_acct_roster_path)" --id "$ACCT_ONE_ID"
   _acct_marker_lock "Nothing was written."
   # Membership may have changed while this process waited for a removal.
   _acct_known_or_refuse "$ACCT_ONE_ID"
@@ -8239,9 +8331,79 @@ _acct_enable() {   # [--id X]
     6) _acct_refuse 1 marker-write "could not remove $marker, so the account's switch state was left unchanged. Nothing was written." ;;
     *) _acct_refuse 1 marker-write "$marker remains after removal, so the account's switch state was left unchanged. Nothing was written." ;;
   esac
-  _acct_lane_state "$ACCT_ONE_ID"
+  _acct_lane_state "$ACCT_ONE_ID" --enabled-at now
   _acct_read_op "The marker for account $ACCT_ONE_ID was removed and the lane is switched on. Only this report failed." \
     switched --id "$ACCT_ONE_ID" --disabled false
+  printf '%s\n' "$ACCT_OUT"
+}
+
+# ── `ccrc account set` (G5; spec §6.3, §8.4; accounts plan Task A16, D-7735) ─────────────────────────────────
+# `--stated -`: the account the operator says a token lane approves, 1 to 120 characters on stdin (never argv: it
+# names a person), with no control byte, into the lane state as `identitySource: stated`. A sign-in lane's identity
+# is measured by `check`, so it refuses `not-a-token-lane`. `--placement full|overflow`: whether fresh sessions may
+# be placed on the lane (`homeAble`), under the placement lock, refused `last-home-able` for the only placeable lane.
+_acct_set() {
+  local id="" stated=0 placement="" v="" was_placeable=0 f="" done_note="" method="" attempt=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --method=setup-token|--method=login) method="${1#*=}" ;;
+      --method) { [ "${2:-}" = setup-token ] || [ "${2:-}" = login ]; } || _acct_refuse 2 bad-value "the flag --method takes setup-token or login. Nothing was written."; method="$2"; shift ;;
+      --method=*) _acct_refuse 2 bad-value "the flag --method takes setup-token or login. Nothing was written." ;;
+      --attempt=*) attempt="${1#*=}" ;;
+      --attempt) [ $# -ge 2 ] || _acct_refuse 2 missing-value "the flag --attempt takes a value. Nothing was written."; attempt="$2"; shift ;;
+      --id=*) id="${1#*=}" ;;
+      --id) [ $# -ge 2 ] || _acct_refuse 2 missing-value "the flag --id takes a value. Nothing was written."; id="$2"; shift ;;
+      --stated=-) stated=1 ;;
+      --stated) [ "${2:-}" = - ] || _acct_refuse 2 stated-not-stdin "the flag --stated takes exactly \"-\" and reads the words from stdin: on an argv they would be readable by every process on this box. Nothing was written."; stated=1; shift ;;
+      --stated=*) _acct_refuse 2 stated-not-stdin "the flag --stated takes exactly \"-\" and reads the words from stdin: on an argv they would be readable by every process on this box. Nothing was written." ;;
+      --placement=overflow|--placement=full) placement="${1#*=}" ;;
+      --placement) { [ "${2:-}" = overflow ] || [ "${2:-}" = full ]; } || _acct_refuse 2 bad-value "the flag --placement takes overflow or full. Nothing was written."; placement="$2"; shift ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated -, --placement overflow|full and --method setup-token|login --attempt <attemptId>" ;;
+    esac
+    shift
+  done
+  _acct_id_or_refuse "$id"
+  if [ -n "$method" ] || [ -n "$attempt" ]; then
+    { [ -n "$method" ] && [ -n "$attempt" ]; } \
+      || _acct_refuse 2 missing-value "the flags --method and --attempt come together: the method is installed from what that sign-in attempt captured. Nothing was written."
+    { [ "$stated" -eq 0 ] && [ -z "$placement" ]; } \
+      || _acct_refuse 2 bad-argument "the flag --method is its own act and takes no --stated or --placement beside it. Nothing was written."
+    _acct_set_method "$id" "$method" "$attempt"
+    return 0
+  fi
+  [ "$stated" -eq 1 ] || [ -n "$placement" ] \
+    || _acct_refuse 2 missing-value "ccrc account set needs --stated - or --placement overflow|full. Nothing was written."
+  _acct_known_or_refuse "$id"
+  _acct_lane_lock "$id" "Nothing was written."
+  _acct_lane "$id"
+  if [ "$stated" -eq 1 ]; then
+    { [ -n "$ACCT_SECRETS" ] || [ "$ACCT_PROVIDER" != anthropic ]; } \
+      || _acct_refuse 1 not-a-token-lane "lane $id is a sign-in lane, whose account is read off the provider by 'ccrc account check', so a stated one would only contradict it. Nothing was written."
+    local LC_ALL=C bad=$'[\x01-\x1f\x7f]'
+    IFS= read -r -d '' -n 8194 v && v="$v"$'\x01'
+    v="${v%$'\n'}"
+    { [[ ! "$v" =~ $bad ]] && [ -n "${v//[[:space:]]/}" ]; } \
+      || _acct_refuse 2 bad-stated "the stated account on stdin is empty or carries a control byte. Give 1 to 120 printable characters. Nothing was written."
+    printf '%s' "$v" | _acct_write_op "Nothing was written." lane-state --id "$id" --identity - --identity-source stated \
+      || exit $?
+    v=""; done_note="The stated account was recorded. "
+  fi
+  if [ -n "$placement" ]; then
+    _acct_marker_lock "${done_note}Nothing else was written."
+    if [ "$placement" = overflow ]; then
+      _acct_placeable
+      for f in ${ACCT_PLACEABLE[@]+"${ACCT_PLACEABLE[@]}"}; do [ "$f" = "$id" ] && was_placeable=1; done
+      if [ "$was_placeable" -eq 1 ]; then
+        _acct_placeable "$id"
+        [ "${#ACCT_PLACEABLE[@]}" -gt 0 ] \
+          || _acct_refuse 1 last-home-able "lane $id is the only lane fresh sessions can be placed on, so taking it out of placement would leave them nowhere. ${done_note}Nothing else was written."
+      fi
+    fi
+    _acct_write_op "${done_note}Nothing else was written." set-placement --file "$(_acct_roster_path)" --id "$id" --placement "$placement"
+    _acct_projection "The roster records lane $id's placement as $placement."
+  fi
+  _acct_read_op "The change was written; only this report failed." set-done --file "$(_acct_roster_path)" --id "$id"
   printf '%s\n' "$ACCT_OUT"
 }
 
@@ -8769,6 +8931,7 @@ _acct_upstream_id() {   # <what-still-stands> -> ACCT_UPSTREAM_ID
 # that comment names, not a precedent.
 ACCT_LIVE_MEASURED=false
 ACCT_LIVE_IDS=()
+ACCT_ASLEEP_IDS=(); ACCT_ARCHIVED_IDS=()
 # WHICH QUESTION WENT UNANSWERED. `ACCT_LIVE_MEASURED` goes false for three
 # unrelated conditions — the registry could not be listed, a `.wrapper` exists
 # and cannot be read, tmux could not be asked — and one refusal asserting the
@@ -8785,6 +8948,7 @@ _acct_live() {   # <id>
   ACCT_LIVE_MEASURED=true
   ACCT_LIVE_IDS=()
   ACCT_LIVE_WHY=""
+  ACCT_ASLEEP_IDS=(); ACCT_ARCHIVED_IDS=()
   # `-e` FIRST, and the three arms are the three conditions the header names.
   # An absent registry falls through both branches with `rows` empty, which is
   # the measured `[]`; anything that exists but cannot be listed and entered
@@ -8842,6 +9006,12 @@ _acct_live() {   # <id>
     return 0
   fi
   [ "${#rows[@]}" -gt 0 ] || return 0
+  # N3 (D-7733): a row with no pane is asleep (`.hibernated`, D-5242) or archived (`.archived`), counted apart from the
+  # live ones, because `remove` would rehome a sleeping row onto upstream, where it would wake.
+  for sid in "${rows[@]}"; do
+    if [ -e "$reg/$sid.hibernated" ] || [ -L "$reg/$sid.hibernated" ]; then ACCT_ASLEEP_IDS+=("$sid")
+    elif [ -f "$reg/$sid.archived" ]; then ACCT_ARCHIVED_IDS+=("$sid"); fi
+  done
   # ── A NON-ZERO tmux IS NOT AUTOMATICALLY AN UNANSWERED QUESTION ──────────
   # MEASURED: `tmux list-sessions` exits 1 when NO SERVER IS RUNNING, which is
   # the ordinary state of a box whose sessions have all been stopped — not a
@@ -8878,6 +9048,16 @@ _acct_live() {   # <id>
   for sid in "${rows[@]}"; do
     n="cc-$sid"; n="${n//[.:]/_}"; case $'\n'"$names"$'\n' in *$'\n'"$n"$'\n'*) ACCT_LIVE_IDS+=("$sid") ;; esac
   done
+  # A row with a pane is live, whatever else its files say.
+  local -a keep=()
+  for sid in ${ACCT_ASLEEP_IDS[@]+"${ACCT_ASLEEP_IDS[@]}"}; do
+    case " ${ACCT_LIVE_IDS[*]-} " in *" $sid "*) ;; *) keep+=("$sid") ;; esac
+  done
+  ACCT_ASLEEP_IDS=(${keep[@]+"${keep[@]}"}); keep=()
+  for sid in ${ACCT_ARCHIVED_IDS[@]+"${ACCT_ARCHIVED_IDS[@]}"}; do
+    case " ${ACCT_LIVE_IDS[*]-} " in *" $sid "*) ;; *) keep+=("$sid") ;; esac
+  done
+  ACCT_ARCHIVED_IDS=(${keep[@]+"${keep[@]}"})
   return 0
 }
 
@@ -8957,11 +9137,12 @@ _acct_remove_home_preflight() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
 # roster is not touched, one 0600 file is replaced through the writer `add`
 # already uses, and the answer names the panes still holding the old token.
 _acct_credential() {
-  local id="" cred="" v="" flag=""
+  local id="" cred="" v="" flag="" signout=0
   while [ $# -gt 0 ]; do
     flag="${1%%=*}"
     case "$1" in
       -h|--help) usage; exit 0 ;;
+      --sign-out) signout=1; shift; continue ;;
       --id|--credential)
         [ $# -ge 2 ] \
           || _acct_refuse 2 missing-value "the flag $1 takes a value and nothing followed it on the command line. Nothing was written."
@@ -8987,6 +9168,12 @@ _acct_credential() {
     shift
   done
   _acct_id_or_refuse "$id"
+  if [ "$signout" -eq 1 ]; then
+    [ -z "$cred" ] \
+      || _acct_refuse 2 bad-argument "the flag --sign-out signs the lane's sign-in out and reads no credential, so it does not take --credential. Nothing was written."
+    _acct_credential_sign_out "$id"
+    return 0
+  fi
   _acct_lane_lock "$id" "Nothing was written."
   _acct_sweep_secret_temps "$id"
   _acct_lane "$id"
@@ -9084,15 +9271,19 @@ _acct_credential() {
   # one value in this run that must never be read for a request the box was
   # going to refuse anyway.
   _acct_read_credential "$cred"                # -> ACCT_CREDENTIAL, or refuses
+  # VALIDATE FIRST (accounts plan Task A16): the old file stands, and so does its check, until the new token passes.
+  [ "$ACCT_SECRET_ENV" != CLAUDE_CODE_OAUTH_TOKEN ] || _acct_token_probe "$id" "Nothing was written: the old credential file stands."
   # A verdict measured on the old secret says nothing about this one (D-5755
   # (12)), and it is dropped BEFORE the write, so a write that refuses or a TERM
-  # after the rename fails safe: the lane reads Not checked either way.
-  _acct_lane_state "$id" --clear check
+  # after the rename fails safe: the lane reads Not checked either way. A PASTE CLEARS `mintedAt` too (accounts plan
+  # Task A20): the token in the file is no longer the one a mint recorded, so Expiring would be about a token that
+  # is gone.
+  _acct_lane_state "$id" --clear check --clear mintedAt
   _acct_write_secret "$id" "$ACCT_PROVIDER" "$ACCT_SECRET_ENV"
   _acct_live "$id"
 
   # `${arr[@]+"${arr[@]}"}` — this tree's empty-array idiom under `set -u`.
-  local -a args=(--id "$id" --measured "$ACCT_LIVE_MEASURED")
+  local -a args=(--id "$id" --measured "$ACCT_LIVE_MEASURED" --file "$(_acct_roster_path)")
   local sid=""
   for sid in ${ACCT_LIVE_IDS[@]+"${ACCT_LIVE_IDS[@]}"}; do args+=(--live "$sid"); done
   # CAPTURED WITH THIS SITE'S OWN CLAUSE (D-2130, D-2135), not passed straight
@@ -9134,20 +9325,22 @@ console.log(verifyMarker(readFileSync(filePath, "utf8")));
 }
 
 ACCT_SIGNOUT=""
-_acct_sign_out() {   # <id> <cfgdir> -> ACCT_SIGNOUT
-  local id="$1" cfg="$2" cred="$2/.credentials.json"
+_acct_sign_out() {   # <id> <cfgdir> [<what-still-stands>] -> ACCT_SIGNOUT
+  # The third argument is what a refusal says still stands: `remove`'s own sentences when it is absent, and
+  # `credential --sign-out`'s (N5, D-7749) when that verb calls this for a lane that stays.
+  local id="$1" cfg="$2" cred="$2/.credentials.json" st="${3:-}"
   ACCT_SIGNOUT=absent
   { [ -e "$cred" ] || [ -L "$cred" ]; } || return 0
   { [ -f "$cred" ] && [ ! -L "$cred" ]; } \
-    || _acct_refuse 1 credential-conflict "$cred is not a regular credential file, so ccrc will not ask a launcher to rewrite it or remove it. The roster entry is already gone, the projection no longer names $id, and the config directory remains. Move that object aside or remove it by hand."
+    || _acct_refuse 1 credential-conflict "$cred is not a regular credential file, so ccrc will not ask a launcher to rewrite it or remove it. ${st:-The roster entry is already gone, the projection no longer names $id, and the config directory remains.} Move that object aside or remove it by hand."
   CLAUDE_CONFIG_DIR="$cfg" _plat_timeout "$ACCT_DEADLINE" \
     "$WRAPPER_BIN_DIR/$ACCT_UPSTREAM_ID" auth logout >/dev/null 2>&1 || :
   if [ -e "$cred" ] || [ -L "$cred" ]; then
     rm -f -- "$cred" \
-      || _acct_refuse 1 artifact-remove "could not sign account $id out: $cred remains. The roster entry is already gone, the projection no longer names $id, and the config directory around the credential was deliberately kept."
+      || _acct_refuse 1 artifact-remove "could not sign account $id out: $cred remains. ${st:-The roster entry is already gone, the projection no longer names $id, and the config directory around the credential was deliberately kept.}"
   fi
   { [ ! -e "$cred" ] && [ ! -L "$cred" ]; } \
-    || _acct_refuse 1 artifact-remove "$cred remains after sign-out cleanup. The roster entry is already gone, the projection no longer names $id, and the config directory was deliberately kept."
+    || _acct_refuse 1 artifact-remove "$cred remains after sign-out cleanup. ${st:-The roster entry is already gone, the projection no longer names $id, and the config directory was deliberately kept.}"
   ACCT_SIGNOUT=removed
 }
 
@@ -9161,7 +9354,7 @@ _acct_unprovision() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
   if [ -d "$cfg/skills" ]; then
     real="$(realpath "$cfg/skills" 2>/dev/null)" \
       || _acct_refuse 1 skills-unreadable "could not resolve $cfg/skills, so no skill can be removed safely. $stands"
-    for name in ccrc-coordinator ccrc-worker ccrc-reviewer graphify ccrc-history; do
+    for name in ccrc-coordinator ccrc-worker ccrc-reviewer graphify ccrc-history ccrc-linear; do
       { [ -e "$real/$name" ] || [ -L "$real/$name" ]; } || continue
       if [ -L "$real/$name" ] || [ -f "$real/$name" ]; then
         rm -f -- "$real/$name" \
@@ -9205,9 +9398,41 @@ _acct_remove_census() {   # <id> <clause> [<after-wait>]
   exit 1
 }
 
+# ── REMOVE'S PRE-CHECK AND GATE (spec §11.1, §11.5; accounts plan Task A16, N3 = D-7733) ─────────────────
+# Bash measures, `pre-remove` decides. The census: live rows by pane, sleeping and archived rows by their files
+# (`_acct_live`), the lanes still placeable without this one, whether it is upstream and whether its marker holds it
+# off. `--dry-run` takes no lock, writes nothing and refuses nothing a removal would: it answers the measurements
+# and exits. The gate runs inside the removal, under both locks and after the live census.
+_acct_remove_facts_args() {   # <id> -> ACCT_REMOVE_ARGS
+  local id="$1" s="" up=false off=false
+  _acct_live "$id"
+  _acct_placeable "$id"
+  [ "$ACCT_KIND" != upstream ] || up=true
+  [ ! -f "$_SVC_REG/$id-disabled" ] || off=true
+  ACCT_REMOVE_ARGS=(--file "$(_acct_roster_path)" --id "$id" --live-measured "$ACCT_LIVE_MEASURED"
+    --other-home-able "${#ACCT_PLACEABLE[@]}" --upstream "$up" --disabled "$off")
+  for s in ${ACCT_LIVE_IDS[@]+"${ACCT_LIVE_IDS[@]}"}; do ACCT_REMOVE_ARGS+=(--live "$s"); done
+  for s in ${ACCT_ASLEEP_IDS[@]+"${ACCT_ASLEEP_IDS[@]}"}; do ACCT_REMOVE_ARGS+=(--sleeping "$s"); done
+  for s in ${ACCT_ARCHIVED_IDS[@]+"${ACCT_ARCHIVED_IDS[@]}"}; do ACCT_REMOVE_ARGS+=(--archived "$s"); done
+}
+
+_acct_remove_precheck() {   # <id> — answers and exits
+  _acct_lane "$1"
+  _acct_remove_facts_args "$1"
+  _acct_read_op "Nothing was written." pre-remove "${ACCT_REMOVE_ARGS[@]}" --mode check
+  printf '%s\n' "$ACCT_OUT"
+  exit 0
+}
+
+_acct_remove_gate() {   # <id> <remove|discard> <rehome-sleeping 0|1> — refuses, or returns 0
+  _acct_remove_facts_args "$1"
+  [ "$3" -eq 0 ] || ACCT_REMOVE_ARGS+=(--rehome-sleeping true)
+  _acct_write_op "Nothing was written." pre-remove "${ACCT_REMOVE_ARGS[@]}" --mode "$2"
+}
+
 _acct_remove() {
   local id="" v="" flag="" item="" sid="" field="" f="" model="" stands="" modelfiles="" lane_dir="" tier="" unit="" port="" q=0 usage_note=""
-  local keepcred=0 seen_id=0 seen_keep=0 was_placeable=0 rc=0 already=0
+  local keepcred=0 seen_id=0 seen_keep=0 was_placeable=0 rc=0 already=0 mode=remove dry=0 rehome_sleeping=0
   local -a rehomed=() rehomed_fields=() kept=() removed=() operator_steps=() lane_before=() lane_left=()
   while [ $# -gt 0 ]; do
     flag="${1%%=*}"
@@ -9227,7 +9452,15 @@ _acct_remove() {
         [ "$seen_keep" -eq 0 ] \
           || _acct_refuse 2 duplicate-argument "the singular flag --keep-credential was given more than once. Nothing was written."
         seen_keep=1; keepcred=1; shift; continue ;;
-      *) _acct_refuse 2 unknown-argument "ccrc account remove has no argument \"$1\" - it takes --id and optional --keep-credential" ;;
+      # Accounts plan Task A16 (D-7735): `discard` (spec §11.5), the pre-check (`--dry-run`, spec §11.1) and N3's
+      # CLI-only `--rehome-sleeping` (D-7733). No route sends the last or `--keep-credential`.
+      --mode=remove|--mode=discard) mode="${1#*=}"; shift; continue ;;
+      --mode) { [ "${2:-}" = remove ] || [ "${2:-}" = discard ]; } \
+          || _acct_refuse 2 bad-value "the flag --mode takes remove or discard. Nothing was written."
+        mode="$2"; shift 2; continue ;;
+      --dry-run) dry=1; shift; continue ;;
+      --rehome-sleeping) rehome_sleeping=1; shift; continue ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account remove has no argument \"$1\" - it takes --id and optional --mode remove|discard, --dry-run, --rehome-sleeping and --keep-credential" ;;
     esac
     [ -n "$v" ] \
       || _acct_refuse 2 missing-value "the flag --id was given an empty value. Give it an account id. Nothing was written."
@@ -9236,6 +9469,7 @@ _acct_remove() {
   done
 
   _acct_id_or_refuse "$id"
+  [ "$dry" -eq 0 ] || _acct_remove_precheck "$id"
   _acct_lane_lock "$id" "Nothing was written."
   _acct_sweep_secret_temps "$id"
   _acct_lane "$id"
@@ -9250,6 +9484,7 @@ _acct_remove() {
   _acct_remove_home_preflight "$id" "Nothing was written."
   _acct_marker_lock "Nothing was written."
   _acct_remove_census "$id" "Nothing was written."
+  _acct_remove_gate "$id" "$mode" "$rehome_sleeping"
 
   # Validate the shared auth deadline before the first mutation, but only when
   # this run will actually invoke logout for a login credential.
@@ -9595,7 +9830,20 @@ _acct_remove() {
     _acct_lane_state "$id" --mode delete
     { [ -e "$lane_state" ] || [ -L "$lane_state" ]; } && kept+=("$lane_state") || removed+=("$lane_state")
   fi
-  local -a args=(--file "$(_acct_roster_path)" --id "$id")
+  # Every removal deletes the lane's sign-in scratch (spec §3.9; A16). A link is removed, never followed.
+  # THE LANE'S PRIVATE AUTH SERVER GOES WITH ITS SCRATCH (D-5515): remove refused a sign-in in flight above, so
+  # whatever is left on `-L ccrc-auth-<id>` belongs to no attempt. tmux daemonises its server, so it is killed by name,
+  # and only on a lane a sign-in ever ran on: every attempt writes its status file, so a lane without one has no
+  # server to kill, and tmux is not asked.
+  f="$HOME/.ccrc/auth-scratch/$id"
+  if [ -e "$_SVC_REG/.auth/$id.json" ] || [ -e "$f" ]; then
+    tmux -L "ccrc-auth-$id" kill-server >/dev/null 2>&1
+  fi
+  if [ -e "$f" ] || [ -L "$f" ]; then
+    rm -rf -- "$f" 2>/dev/null
+    { [ -e "$f" ] || [ -L "$f" ]; } && kept+=("$f") || removed+=("$f")
+  fi
+  local -a args=(--file "$(_acct_roster_path)" --id "$id" --kind "$ACCT_KIND" --provider "$ACCT_PROVIDER" --secret-env "$ACCT_SECRET_ENV" --secrets "$ACCT_SECRETS")
   for f in ${rehomed[@]+"${rehomed[@]}"}; do args+=(--rehomed "$f"); done
   for f in ${kept[@]+"${kept[@]}"}; do args+=(--kept "$f"); done
   for f in ${removed[@]+"${removed[@]}"}; do args+=(--removed "$f"); done
@@ -9926,9 +10174,12 @@ _acct_auth_why() {   # <rc> <id> <question> <what-the-verdict-beside-it-is> -> o
 ACCT_WHY_AUTH="The verdict below is the probe's."
 ACCT_WHY_PROBE="There is nothing below it to ask: the probe is the LAST question about this account, so the unknown verdict beside this note is what a question nobody could put leaves behind rather than anything measured about the lane."
 
-_acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to ACCT_NOTES
+_acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; ACCT_AUTH_BODY; may append to ACCT_NOTES
   local id="$1" out="" rc=0 row="" crc=0 before="" after=""
   ACCT_HEALTH=""
+  # THE BODY, KEPT FOR THE IDENTITY (accounts plan Task A13; spec §3.4): `check` reads the signed-in account out of
+  # it. Never kept from a run the deadline killed, whose body is whatever it had flushed.
+  ACCT_AUTH_BODY=""
   _acct_auth_deadline
   # THE CHEAP QUESTION IS BRACKETED TOO (D-2273). This line runs the LANE'S OWN
   # launcher with the lane's own config dir - the identical mechanism the probe
@@ -9944,6 +10195,7 @@ _acct_auth_status() {   # <id> -> ACCT_HEALTH (a HealthRow) or ""; may append to
   out="$(_plat_timeout "$ACCT_DEADLINE" "$WRAPPER_BIN_DIR/$id" auth status --json 2>/dev/null)"; rc=$?
   after="$(_acct_limits_stamp "$id")"
   [ "$before" = "$after" ] || ACCT_LIMITS_TOUCHED=true
+  [ "$rc" -eq 124 ] || ACCT_AUTH_BODY="$out"
   if [ "$rc" -eq 124 ]; then
     # rc 124 is `_plat_timeout`'s own report of expiry (:406-411), and it is a
     # THIRD thing again: neither an answer nor a parse failure. The body is
@@ -10257,6 +10509,54 @@ _acct_note_cap() {   # <note> -> the note, or its first $ACCT_NOTE_MAX character
     "${n:0:$ACCT_NOTE_MAX}" "$ACCT_NOTE_MAX"
 }
 
+# ── VALIDATE FIRST (spec §6.3; accounts plan Task A16, D-7735) ───────────────────────────────────────────
+# The candidate in ACCT_CREDENTIAL is probed BEFORE any byte of it is written: one turn through the upstream
+# launcher with the candidate in the probe's environment, and a config directory of its own under
+# `~/.ccrc/auth-scratch` (outside every agent read root), which goes when the probe ends. A 401 refuses
+# `key-rejected` and an unreachable or unreadable answer `token-unverified`, both with nothing written: the field
+# comes back empty. Only `ok` returns. The verdict is the check's own classifier, so the two never disagree.
+#
+# A SIGN-IN IS PROBED THE SAME WAY (accounts plan Task A20, D-7750): given a config directory, the probe runs in it
+# with no token in its environment, so what answers is the `.credentials.json` a re-auth or a switch signed into
+# scratch, before `set --method login` moves it into the lane.
+_acct_token_probe() {   # <id> <what-still-stands> [<config dir holding a sign-in>] -> 0, or refuses
+  local -; set +x +a
+  local id="$1" stands="$2" signin="${3:-}" root="$HOME/.ccrc/auth-scratch" dir="" out="" rc=0 row="" verdict=""
+  local what="token"
+  [ -z "$signin" ] || what="sign-in"
+  _acct_upstream_id "$stands"
+  _acct_probe_deadline
+  mkdir -p -m 0700 "$root" "$CCRC_PROBE_DIR" \
+    || _acct_refuse 1 probe-cwd "cannot create $root (0700) or $CCRC_PROBE_DIR, so the $what cannot be checked before it is saved. $stands"
+  _acct_backup_exclude "$root"
+  if [ -n "$signin" ]; then
+    # `unset` inside the substitution's subshell, never `env -u`: `_plat_timeout` is a function, which env cannot run.
+    out="$(cd "$CCRC_PROBE_DIR" && unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN && CLAUDE_CONFIG_DIR="$signin" \
+      CLAUDE_CODE_MAX_RETRIES=0 _plat_timeout "$ACCT_DEADLINE" "$WRAPPER_BIN_DIR/$ACCT_UPSTREAM_ID" \
+        -p "Reply with the single word ok." --output-format json --max-turns 1 2>/dev/null)"; rc=$?
+  else
+    rm -rf -- "$root/.$id-probe."*   # one a SIGKILL left; this lane's lock is held, so none is running
+    dir="$(mktemp -d "$root/.$id-probe.XXXXXX")" \
+      || _acct_refuse 1 probe-cwd "cannot create a probe directory under $root, so the token cannot be checked before it is saved. $stands"
+    _acct_own_temp "$dir"
+    out="$(cd "$CCRC_PROBE_DIR" && CLAUDE_CONFIG_DIR="$dir" CLAUDE_CODE_OAUTH_TOKEN="$ACCT_CREDENTIAL" \
+      CLAUDE_CODE_MAX_RETRIES=0 _plat_timeout "$ACCT_DEADLINE" "$WRAPPER_BIN_DIR/$ACCT_UPSTREAM_ID" \
+        -p "Reply with the single word ok." --output-format json --max-turns 1 2>/dev/null)"; rc=$?
+    rm -rf -- "$dir"
+  fi
+  if [ "$rc" -eq 124 ]; then
+    row="$(printf '' | _acct_node classify --source probe --exit 124 --timed-out true --deadline "$ACCT_DEADLINE")"
+  else
+    row="$(printf '%s' "$out" | _acct_node classify --source probe --exit "$rc")"
+  fi
+  verdict="$(jq -r '.verdict // empty' <<<"$row" 2>/dev/null)" || verdict=""
+  case "$verdict" in
+    ok) return 0 ;;
+    auth-dead) ACCT_CREDENTIAL=""; _acct_refuse 1 key-rejected "That $what was refused (HTTP 401). $stands" ;;
+    *) ACCT_CREDENTIAL=""; _acct_refuse 1 token-unverified "Anthropic didn't answer ($verdict${verdict:+, }exit $rc), so the $what could not be checked: $stands Try again." ;;
+  esac
+}
+
 _acct_check() {
   local id="" v="" flag=""
   while [ $# -gt 0 ]; do
@@ -10332,9 +10632,12 @@ _acct_check() {
   # it, and it told them not to make the repair. Both paths now end in a helper
   # that asks the flag, and neither asserts what the other measured.
   local stands=""
+  ACCT_SEED_OUT=""
   if [ -z "$ACCT_HEALTH" ]; then
     _acct_probe "$id"
     stands="$(_acct_probe_stands)"
+    # THE SEED STEP, IN-VERB AND AFTER THE PROBE TURN (accounts plan Task A13).
+    _acct_check_seed "$id"
   else
     stands="$(_acct_quick_stands)"
   fi
@@ -10349,7 +10652,17 @@ _acct_check() {
   if [ -n "$verdict" ] && [ -n "$at" ]; then
     _acct_lane_state "$id" --check-verdict "$verdict" --check-at "$at"
   fi
+  # THE IDENTITY, READ OFF THE LANE'S OWN `auth status` (accounts plan Task A13;
+  # spec §3.4): a sign-in lane only, the Anthropic lane whose roster entry names
+  # no secrets file. A token lane's `auth status` cannot name the account the
+  # token was approved as, so nothing is recorded for it. Its own write, so an
+  # identity the writer refuses costs only itself.
+  local email=""
+  [ "$ACCT_PROVIDER" != anthropic ] || [ -n "$ACCT_SECRETS" ] \
+    || email="$(jq -r 'select(.loggedIn == true) | .email | strings' <<<"$ACCT_AUTH_BODY" 2>/dev/null)" || email=""
+  [ -z "$email" ] || _acct_lane_state "$id" --identity "$email" --identity-source measured
   local -a args=(--id "$id" --row "$ACCT_HEALTH" --limits-touched "$ACCT_LIMITS_TOUCHED")
+  [ -z "$ACCT_SEED_OUT" ] || args+=(--seed-answer "$ACCT_SEED_OUT")
   local n=""
   for n in ${ACCT_NOTES[@]+"${ACCT_NOTES[@]}"}; do args+=(--note "$(_acct_note_cap "$n")"); done
   # `_acct_read_op`, NOT `_acct_answer` AND NOT BARE `_acct_node` (D-2210,
@@ -10364,6 +10677,375 @@ _acct_check() {
   # the one that ships, and the answer is printed here because a read op leaves
   # the body in `ACCT_OUT` rather than on stdout.
   _acct_read_op "$stands" health "${args[@]}"
+  printf '%s\n' "$ACCT_OUT"
+}
+
+# ── THE SIGN-IN ON THE BOX: auth-start, auth-code, auth-cancel, the install and the sign-out ──────────────────────
+# Accounts plan Task A20 (spec §3.5, §3.7, §3.9, §6.2, §6.3, §9; D-5514, D-5515, D-7749, D-7750).
+#
+# `auth-start` launches `ccd-account-auth` DETACHED, as a transient user SERVICE and never a scope: a scope runs in
+# the caller's own process tree, so the agent's sub would block on a 600 s helper and its timeout would kill the
+# helper mid-flow. It returns as soon as the helper's status file names this attempt, well under 5 s. `auth-code`
+# relays the operator's one-time code into the helper's FIFO, once, and never onto an argv. `auth-cancel` stops the
+# attempt's unit. The credential an attempt captures lands in `~/.ccrc/auth-scratch/<id>`, outside every agent read
+# root, and the helper hands it to `set --method … --attempt`, which probes it and installs it under the lane lock:
+# the lane's old credential stands until that probe has passed, so a refused, cancelled or expired attempt leaves the
+# lane byte-identical. `credential --sign-out` is N5's sign-out act: `claude auth logout` in the lane's config dir.
+ACCT_AUTH_DIR="$_SVC_REG/.auth"
+ACCT_SCRATCH_ROOT="$HOME/.ccrc/auth-scratch"
+# How long `auth-start` waits for the helper to name its attempt. The spec's bound is 5 s (§3.5); the knob is for the
+# harness and refuses anything that is not whole seconds from 1 to 30.
+: "${CCRC_AUTH_START_WAIT:=5}"
+
+_acct_refuse_reason() {   # <class> <code> <reason> <detail> — `_acct_refuse` with a machine-readable reason beside the code
+  local envelope rc
+  envelope="$(_acct_node refuse --code "$2" --reason "$3" --detail "$4")"; rc=$?
+  [ "$rc" -eq 0 ] \
+    || _ccrc_die "could not print a refusal envelope for \"$2\" (deploy/account-op.mjs exited $rc): $4"
+  printf '%s\n' "$envelope"
+  exit "$1"
+}
+
+ACCT_AUTH_ID=""; ACCT_AUTH_METHOD=""; ACCT_AUTH_ATTEMPT=""
+_acct_auth_flags() {   # <verb> <takes --method: 0|1> [args…] -> ACCT_AUTH_ID, ACCT_AUTH_METHOD, ACCT_AUTH_ATTEMPT, or refuses
+  local verb="$1" takes="$2" v="" flag="" takes_line="--id and --attempt"
+  shift 2
+  [ "$takes" -eq 0 ] || takes_line="--id, --method and --attempt"
+  ACCT_AUTH_ID=""; ACCT_AUTH_METHOD=""; ACCT_AUTH_ATTEMPT=""
+  while [ $# -gt 0 ]; do
+    flag="${1%%=*}"
+    case "$flag" in
+      -h|--help) usage; exit 0 ;;
+      --id|--attempt) : ;;
+      --method) [ "$takes" -eq 1 ] || _acct_refuse 2 unknown-argument "ccrc account $verb has no argument \"$1\" - it takes $takes_line" ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account $verb has no argument \"$1\" - it takes $takes_line" ;;
+    esac
+    if [ "$1" = "$flag" ]; then
+      [ $# -ge 2 ] \
+        || _acct_refuse 2 missing-value "the flag $1 takes a value and nothing followed it on the command line. Nothing was written."
+      v="$2"; shift
+    else
+      v="${1#*=}"
+    fi
+    [ -n "$v" ] \
+      || _acct_refuse 2 missing-value "the flag $flag was given an empty value: give it a value, or leave it off. Nothing was written."
+    case "$flag" in
+      --id) ACCT_AUTH_ID="$v" ;;
+      --method) ACCT_AUTH_METHOD="$v" ;;
+      --attempt) ACCT_AUTH_ATTEMPT="$v" ;;
+    esac
+    shift
+  done
+  _acct_id_or_refuse "$ACCT_AUTH_ID"
+  [ "$takes" -eq 0 ] || [ -n "$ACCT_AUTH_METHOD" ] \
+    || _acct_refuse 2 missing-value "ccrc account $verb needs --method login|setup-token|openai-login. Nothing was written."
+  [ -n "$ACCT_AUTH_ATTEMPT" ] \
+    || _acct_refuse 2 missing-value "ccrc account $verb needs --attempt <attemptId>, the 32 hex characters the server generated for this sign-in. Nothing was written."
+  [[ "$ACCT_AUTH_ATTEMPT" =~ ^[0-9a-f]{32}$ ]] \
+    || _acct_refuse 2 bad-attempt "the flag --attempt takes 32 lowercase hex characters, the id the server generated for this sign-in. Nothing was written."
+}
+
+ACCT_AUTH_STATE=""; ACCT_AUTH_FOR=""
+_acct_auth_read() {   # <id> -> ACCT_AUTH_STATE and ACCT_AUTH_FOR (the attempt the status file names); both empty when absent
+  local f="$ACCT_AUTH_DIR/$1.json" st="" at=""
+  ACCT_AUTH_STATE=""; ACCT_AUTH_FOR=""
+  { [ -f "$f" ] && [ ! -L "$f" ]; } || return 0
+  # Two words on two lines, each held to its grammar here: the file is writable by any fleet-user process.
+  { IFS= read -r st; IFS= read -r at; } < <(jq -r '(.state // "" | tostring), (.attemptId // "" | tostring)' "$f" 2>/dev/null)
+  [[ "$st" =~ ^[a-z][a-z-]{0,31}$ ]] && ACCT_AUTH_STATE="$st"
+  [[ "$at" =~ ^[0-9a-f]{32}$ ]] && ACCT_AUTH_FOR="$at"
+  return 0
+}
+
+_acct_auth_unit() { printf 'ccrc-auth-%s-%s' "$1" "${2:0:8}"; }   # <id> <attempt> — the attempt's transient unit
+
+# `_acct_auth_stop <unit>` -> 0 it was stopped, 3 it is not loaded (it had ended), 1 it COULD NOT BE STOPPED: no user
+# manager answered, or `stop` failed for another reason. THE BUS DEFAULTS FIRST (`_svc_have_user_manager`'s contract):
+# the agent spawns these verbs with exactly {HOME, PATH, LANG}, and `systemctl --user` finds no manager without them.
+# 5 is systemctl's "not loaded", which is what a `--collect` unit is once it has ended.
+_acct_auth_stop() {
+  local rc=0
+  _codex_bus_defaults
+  _svc_have_user_manager || return 1
+  systemctl --user stop "$1.service" >/dev/null 2>&1 || rc=$?
+  case "$rc" in 0) return 0 ;; 5) return 3 ;; *) return 1 ;; esac
+}
+
+_acct_auth_start() {
+  _acct_auth_flags auth-start 1 "$@"
+  local id="$ACCT_AUTH_ID" method="$ACCT_AUTH_METHOD" a="$ACCT_AUTH_ATTEMPT" unit="" bin="$WRAPPER_BIN_DIR/ccd-account-auth"
+  local wait="$CCRC_AUTH_START_WAIT" i=0 rc=0 live=""
+  case "$method" in
+    login|setup-token|openai-login) : ;;
+    openrouter-pkce) _acct_refuse 1 method-not-supported "the openrouter-pkce sign-in is not in this build: it runs no helper and lands with its own wave. Nothing was started." ;;
+    *) _acct_refuse 2 bad-method "the flag --method takes login, setup-token or openai-login. Nothing was started." ;;
+  esac
+  # A DARWIN NODE BEFORE ITS ARM (D-5557): every method here launches the helper in a transient unit, and macOS has no
+  # `systemd-run`. Refused before anything is read, locked or spawned. A35 replaces this refusal behind its switch.
+  [ "$CCD_OS" != darwin ] \
+    || _acct_refuse_reason 1 auth-unsupported-here darwin-arm-absent "a sign-in on a macOS fleet node needs the launchd arm, which this build does not carry, so the $method sign-in cannot run here. Paste works on this node. Nothing was started."
+  { [[ "$wait" =~ ^[0-9]+$ ]] && [ "$wait" -ge 1 ] && [ "$wait" -le 30 ]; } \
+    || _acct_refuse 2 bad-deadline "CCRC_AUTH_START_WAIT must be whole seconds from 1 to 30. Nothing was started."
+  _acct_known_or_refuse "$id"
+  _acct_lane_lock "$id" "Nothing was started."
+  _acct_lane "$id"
+  case "$method" in
+    login|setup-token)
+      { [ "$ACCT_KIND" = generated ] && [ "$ACCT_PROVIDER" = anthropic ]; } \
+        || _acct_refuse 1 method-not-supported "lane $id is not a ccrc-generated Anthropic lane (kind ${ACCT_KIND:-unknown}, provider ${ACCT_PROVIDER:-none}), so the $method sign-in is not its own. Nothing was started." ;;
+    openai-login)
+      { [ "$ACCT_KIND" = codex ] || [ "$ACCT_KIND" = external ]; } \
+        || _acct_refuse 1 method-not-supported "lane $id is not a Codex or external lane, so the ChatGPT login is not its own. Nothing was started." ;;
+  esac
+  # FAIL CLOSED: a measure that did not answer is not "idle".
+  live="$(_acct_node auth-live --id "$id")" \
+    || _acct_refuse 1 auth-unmeasured "this box could not tell whether a sign-in for lane $id is already running, so none was started. Nothing was written."
+  [ "$live" = idle ] \
+    || _acct_refuse 1 auth-in-progress "a sign-in for lane $id is already running; cancel it first, or wait for it to end. Nothing was started."
+  [ -x "$bin" ] \
+    || _acct_refuse 1 helper-absent "$bin is not installed, so there is no sign-in helper to start. Run 'ccrc install' (or 'ccrc update') to place it. Nothing was started."
+  command -v systemd-run >/dev/null 2>&1 \
+    || _acct_refuse_reason 1 auth-unsupported-here no-systemd-run "systemd-run is not on this box, so the sign-in cannot run detached from this verb. Nothing was started."
+  # THE USER BUS, then the manager asked over it (D-3483's one probe): without `XDG_RUNTIME_DIR` and
+  # `DBUS_SESSION_BUS_ADDRESS`, which the agent's {HOME, PATH, LANG} spawn never carries, `systemd-run --user` finds none.
+  _codex_bus_defaults
+  _svc_have_user_manager \
+    || _acct_refuse_reason 1 auth-unsupported-here no-user-manager "no systemd user manager answered at $XDG_RUNTIME_DIR, so the sign-in cannot run detached from this verb. Nothing was started."
+  # AN EARLIER ATTEMPT'S LEFTOVERS: no attempt is live (measured above, under the lane lock), so whatever is on the
+  # lane's private socket or in its scratch belongs to none, and a new attempt must not inherit it.
+  tmux -L "ccrc-auth-$id" kill-server >/dev/null 2>&1
+  rm -rf -- "${ACCT_SCRATCH_ROOT:?}/$id"
+  unit="$(_acct_auth_unit "$id" "$a")"
+  # `{ACCT_LANE_LOCK_FD}>&-`: the unit is the user manager's child, never this verb's, and the lane lock stays this
+  # verb's alone. PATH and LANG are this verb's own (the agent's spawn hands it exactly HOME, PATH and LANG), so the
+  # helper finds node, jq and flock where this verb found them. The helper's stdout is its transcript, which carries
+  # the sign-in URL: it goes nowhere, so no journal keeps it.
+  systemd-run --user --unit="$unit" --collect -p RuntimeMaxSec=660 -p MemoryMax=512M -p StandardOutput=null \
+    --setenv=PATH="$PATH" ${LANG:+--setenv=LANG="$LANG"} \
+    "$bin" "$id" "$method" --attempt "$a" </dev/null >/dev/null 2>&1 {ACCT_LANE_LOCK_FD}>&- || rc=$?
+  [ "$rc" -eq 0 ] \
+    || _acct_refuse 1 auth-start-failed "systemd-run could not start $unit (exit $rc), so the sign-in did not start. Nothing was written."
+  for (( i = 0; i < wait * 10; i++ )); do
+    _acct_auth_read "$id"
+    [ "$ACCT_AUTH_FOR" = "$a" ] && [ -n "$ACCT_AUTH_STATE" ] && break
+    sleep 0.1
+  done
+  if [ "$ACCT_AUTH_FOR" != "$a" ]; then
+    _acct_auth_stop "$unit" || [ $? -eq 3 ] \
+      || _acct_refuse 1 auth-start-unanswered "the sign-in helper did not report attempt $a within $wait s, and $unit could not be stopped: it ends on its own within 660 s, and auth-cancel can be retried. Nothing was signed in."
+    _acct_refuse 1 auth-start-unanswered "the sign-in helper did not report attempt $a within $wait s, so $unit was stopped. Nothing was signed in."
+  fi
+  [ "$ACCT_AUTH_STATE" != failed ] \
+    || _acct_refuse 1 auth-failed "the sign-in helper stopped as soon as it started; its reason is in $ACCT_AUTH_DIR/$id.json. Nothing was signed in."
+  _acct_read_op "The sign-in is running as $unit; only this report failed." \
+    auth-answer --verb start --id "$id" --attempt "$a" --method "$method" --state "$ACCT_AUTH_STATE" --unit "$unit"
+  printf '%s\n' "$ACCT_OUT"
+}
+
+_acct_auth_code() {
+  local -; set +x
+  _acct_auth_flags auth-code 0 "$@"
+  local id="$ACCT_AUTH_ID" a="$ACCT_AUTH_ATTEMPT" code="" fd="" rc=0 run="" mark=""
+  local LC_ALL=C bad=$'[\x01-\x1f\x7f]'
+  # THE BYTES FIRST, before anything about the lane is read (D-5514): the route checked the code's shape, and this
+  # verb checks it again for what it can carry. Read whole from stdin with the builtin, never onto an argv: a NUL
+  # ends bash's read, so a code that held one is marked and refused; one trailing LF is the pipe's and is dropped.
+  IFS= read -r -d '' -n 8194 code && code="$code"$'\x01'
+  code="${code%$'\n'}"
+  if [ -z "$code" ] || [ "${#code}" -gt 8192 ] || [[ "$code" =~ $bad ]]; then
+    code=""
+    _acct_refuse 2 bad-code "the code on stdin is empty, over 8 KiB, or carries a control byte, so it was not sent. Nothing was written."
+  fi
+  _acct_known_or_refuse "$id"
+  _acct_auth_read "$id"
+  [ "$ACCT_AUTH_FOR" = "$a" ] \
+    || { code=""; _acct_refuse 1 no-auth-attempt "no sign-in attempt $a is running for lane $id, so there is nothing to send this code to. Nothing was sent."; }
+  case "$ACCT_AUTH_STATE" in
+    starting|url|waiting-code) : ;;
+    exchanging|done) code=""; _acct_refuse 1 code-already-sent "attempt $a already has its code, and a code works once. Start the sign-in again for a fresh one. Nothing was sent." ;;
+    *) code=""; _acct_refuse 1 no-auth-attempt "sign-in attempt $a for lane $id has ended (${ACCT_AUTH_STATE:-unknown}), so there is nothing to send this code to. Nothing was sent." ;;
+  esac
+  _acct_lane_lock "$id" "Nothing was sent."
+  run="$ACCT_AUTH_DIR/$id.run"
+  # THE FIFO THE HELPER OWNS, and nothing else: a regular file planted at that name would keep the code on disk.
+  { [ -p "$run/in" ] && [ -O "$run/in" ]; } \
+    || { code=""; _acct_refuse 1 no-auth-attempt "attempt $a has no code channel at $run/in, so the code was not sent. Nothing was written."; }
+  # ONE CODE PER ATTEMPT: the marker is made with noclobber (O_EXCL), so of two racing sends exactly one goes on.
+  mark="$run/code-sent"
+  ( set -C; : > "$mark" ) 2>/dev/null \
+    || { code=""; _acct_refuse 1 code-already-sent "attempt $a already has its code, and a code works once. Start the sign-in again for a fresh one. Nothing was sent."; }
+  # READ-WRITE, SO THE OPEN NEVER BLOCKS: the helper holds the FIFO open read-write too, so the line waits in the pipe
+  # until it reads it. The builtin `printf` writes it: no process is spawned, so the code is on no argv.
+  if exec {fd}<>"$run/in"; then
+    printf '%s\n' "$code" >&"$fd" || rc=$?
+    exec {fd}>&-
+  else
+    rc=1
+  fi
+  code=""
+  if [ "$rc" -ne 0 ]; then
+    rm -f -- "${mark:?}"
+    _acct_refuse 1 code-not-sent "the code could not be written to attempt $a's channel, so it was not sent; sending it again is safe."
+  fi
+  _acct_read_op "The code was sent to attempt $a; only this report failed." \
+    auth-answer --verb code --id "$id" --attempt "$a"
+  printf '%s\n' "$ACCT_OUT"
+}
+
+_acct_auth_cancel() {
+  _acct_auth_flags auth-cancel 0 "$@"
+  local id="$ACCT_AUTH_ID" a="$ACCT_AUTH_ATTEMPT" unit="" stopped=false rc=0
+  _acct_known_or_refuse "$id"
+  _acct_lane_lock "$id" "Nothing was stopped."
+  unit="$(_acct_auth_unit "$id" "$a")"
+  # A NO-OP FOR A UNIT THAT HAS ALREADY ENDED (the server issues this at the attempt's `expiresAt`). Stopping the unit
+  # TERMs everything in it, the pipe arm's helper included, and the helper's own trap writes `cancelled`. FAIL CLOSED:
+  # a stop that did not happen leaves the server and the scratch alone, so a live helper is never told it was cancelled
+  # while it can still take a code and install. A box with no systemctl, or a darwin node, never started a unit.
+  if [ "$CCD_OS" != darwin ] && command -v systemctl >/dev/null 2>&1; then
+    _acct_auth_stop "$unit" || rc=$?
+    [ "$rc" -ne 1 ] \
+      || _acct_refuse 1 auth-cancel-failed "the systemd user manager could not stop $unit, so attempt $a may still be running; its private server and scratch were left as they are. Cancelling again is safe."
+    [ "$rc" -ne 0 ] || stopped=true
+  fi
+  _acct_auth_read "$id"
+  if [ "$ACCT_AUTH_FOR" = "$a" ]; then
+    # This attempt is the lane's last: its private server and its scratch go, whatever the helper managed (D-5515).
+    tmux -L "ccrc-auth-$id" kill-server >/dev/null 2>&1
+    rm -rf -- "${ACCT_SCRATCH_ROOT:?}/$id"
+  fi
+  _acct_read_op "Attempt $a was stopped; only this report failed." \
+    auth-answer --verb cancel --id "$id" --attempt "$a" --unit "$unit" --stopped "$stopped" --state "${ACCT_AUTH_STATE:-none}"
+  printf '%s\n' "$ACCT_OUT"
+}
+
+# ── `set --method setup-token|login --attempt <a>`: the one writer of a lane's method (spec §9, §13.3) ─────────────
+# The roster has no method field: a token lane is one whose entry names `exec.secretsFile` (A1). So this verb is the
+# one place that sets or clears it, regenerates `accounts.sh` and the lane's wrapper, and moves the credential in.
+# The helper calls it on a sign-in's success, with the attempt that captured the credential, and it refuses unless
+# the status file names that attempt. Each arm probes the new credential first and changes nothing until it passes.
+_acct_method_converge() {   # <what-still-stands> — accounts.sh and the wrappers, after the roster changed
+  ( _inst_accounts_sh ) >&2 \
+    || _acct_refuse 1 accounts-sh "regenerating \$HOME/.ccrc/accounts.sh from the roster failed - read the lines above. $1 Run 'ccrc install' once the cause is fixed."
+  ( cmd_wrappers ) >&2 \
+    || _acct_refuse 1 wrapper-converge "the wrapper converge refused - read the lines above. $1 Run 'ccrc wrappers' once the cause is fixed."
+}
+
+_acct_install_minted() {   # <id> <scratch dir> <what-still-stands>
+  local -; set +x +a
+  local id="$1" f="$2/minted.env" stands="$3" line="" tok="" want=""
+  local LC_ALL=C bad=$'[\x01-\x20\x7f]'
+  { [ -f "$f" ] && [ ! -L "$f" ] && [ -O "$f" ]; } \
+    || _acct_refuse 1 no-credential "the sign-in left no minted token in its scratch directory, so there is nothing to install. $stands"
+  IFS= read -r line < "$f" || :
+  tok="${line#export CLAUDE_CODE_OAUTH_TOKEN=}"; line=""
+  if [ "$tok" = "${tok#export }" ] && [ "${#tok}" -ge 20 ] && [ "${#tok}" -le 8192 ] && [[ ! "$tok" =~ $bad ]]; then
+    ACCT_CREDENTIAL="$tok"
+  else
+    tok=""
+    _acct_refuse 1 no-credential "the minted token in the sign-in's scratch directory is not one token line, so it was not installed. $stands"
+  fi
+  tok=""
+  _acct_token_probe "$id" "$stands"
+  _acct_secret_tag anthropic CLAUDE_CODE_OAUTH_TOKEN
+  want="${ACCT_SECRETS_DIR#"$HOME/"}/$id-$ACCT_SECRET_TAG.env"
+  if [ -n "$ACCT_SECRETS" ]; then
+    # MINT A NEW TOKEN (spec §9 row 2), or the first mint of a token lane: installed through `credential`'s writer,
+    # the old `<id>-oauth.env` standing until the rename.
+    [ "$ACCT_SECRETS" = "$want" ] \
+      || { ACCT_CREDENTIAL=""; _acct_refuse 1 secrets-path-unmanaged "lane $id's roster entry names \$HOME/$ACCT_SECRETS, and this verb writes \$HOME/$want. $stands"; }
+    _acct_lane_state "$id" --clear check
+    _acct_write_secret "$id" anthropic CLAUDE_CODE_OAUTH_TOKEN
+    _acct_lane_state "$id" --minted-at now
+  else
+    # SWITCH TO A LONG-LIVED TOKEN (spec §9, the sign-in -> token row): the token file first, inert until the roster
+    # names it; then the roster, accounts.sh and the wrapper. `.credentials.json` stays until Sign the old sign-in out.
+    _acct_write_secret "$id" anthropic CLAUDE_CODE_OAUTH_TOKEN
+    _acct_write_op "The token file $ACCT_SECRET_WRITTEN was written, and no roster entry names it yet, so nothing sources it: lane $id is still a sign-in lane." \
+      set-method --file "$(_acct_roster_path)" --id "$id" --method setup-token
+    _acct_method_converge "The roster now names $ACCT_SECRET_WRITTEN for lane $id, and the lane's sign-in still stands."
+    _acct_lane_state "$id" --clear check --minted-at now
+  fi
+  rm -f -- "${f:?}"
+}
+
+_acct_install_sign_in() {   # <id> <scratch dir> <what-still-stands>
+  local id="$1" cred="$2/config/.credentials.json" stands="$3" dest="" tmp="" want=""
+  { [ -f "$cred" ] && [ ! -L "$cred" ] && [ -O "$cred" ]; } \
+    || _acct_refuse 1 no-credential "the sign-in left no .credentials.json in its scratch config directory, so there is nothing to install. $stands"
+  if [ -n "$ACCT_SECRETS" ]; then
+    _acct_secret_tag anthropic CLAUDE_CODE_OAUTH_TOKEN
+    want="${ACCT_SECRETS_DIR#"$HOME/"}/$id-$ACCT_SECRET_TAG.env"
+    [ "$ACCT_SECRETS" = "$want" ] \
+      || _acct_refuse 1 secrets-path-unmanaged "lane $id's roster entry names \$HOME/$ACCT_SECRETS, and this verb manages \$HOME/$want, so the switch would leave a token file behind. $stands"
+  fi
+  _acct_token_probe "$id" "$stands" "$2/config"
+  _acct_cfg_dir "$id" "$stands"
+  { [ -d "$ACCT_CFG_DIR" ] && [ ! -L "$ACCT_CFG_DIR" ]; } \
+    || _acct_refuse 1 config-dir-absent "lane $id's config directory $ACCT_CFG_DIR is not a directory, so the sign-in has nowhere to go. $stands"
+  dest="$ACCT_CFG_DIR/.credentials.json"
+  # A copy beside the destination, then a rename over it: the old credential stands until the rename.
+  tmp="$ACCT_CFG_DIR/.credentials.json.tmp.$$"
+  _acct_own_temp "$tmp"
+  if ! ( umask 077; cp -- "$cred" "$tmp" ) || ! chmod 600 "$tmp" || ! mv -f -- "$tmp" "$dest"; then
+    rm -f -- "${tmp:?}"
+    _acct_refuse 1 credential-write "could not move the new sign-in into $dest. $stands"
+  fi
+  if [ -n "$ACCT_SECRETS" ]; then
+    # SWITCH TO SIGN-IN (spec §9, the token -> sign-in row): the sign-in is in, so the token goes, in this order.
+    _acct_write_op "The sign-in was installed in $dest; the roster still names $ACCT_SECRETS, so sessions still source the token." \
+      set-method --file "$(_acct_roster_path)" --id "$id" --method login
+    _acct_method_converge "The sign-in was installed in $dest and the roster no longer names $ACCT_SECRETS."
+    rm -f -- "${ACCT_SECRETS_DIR:?}/$id-$ACCT_SECRET_TAG.env"
+    _acct_lane_state "$id" --clear check --clear mintedAt
+  else
+    _acct_lane_state "$id" --clear check
+  fi
+  rm -rf -- "${2:?}/config"
+}
+
+_acct_set_method() {   # <id> <setup-token|login> <attempt>
+  local id="$1" method="$2" a="$3" stands="Nothing was written: lane $1 is as it was."
+  [[ "$a" =~ ^[0-9a-f]{32}$ ]] \
+    || _acct_refuse 2 bad-attempt "the flag --attempt takes 32 lowercase hex characters. $stands"
+  _acct_known_or_refuse "$id"
+  _acct_lane_lock "$id" "$stands"
+  _acct_sweep_secret_temps "$id"
+  _acct_lane "$id"
+  { [ "$ACCT_KIND" = generated ] && [ "$ACCT_PROVIDER" = anthropic ]; } \
+    || _acct_refuse 1 method-not-supported "lane $id is not a ccrc-generated Anthropic lane, so it has no method to set. $stands"
+  _acct_auth_read "$id"
+  [ "$ACCT_AUTH_FOR" = "$a" ] \
+    || _acct_refuse 1 no-auth-attempt "set --method installs what sign-in attempt $a captured, and lane $id's sign-in status names ${ACCT_AUTH_FOR:-no attempt}. $stands"
+  case "$method" in
+    setup-token) _acct_install_minted "$id" "$ACCT_SCRATCH_ROOT/$id" "$stands" ;;
+    login) _acct_install_sign_in "$id" "$ACCT_SCRATCH_ROOT/$id" "$stands" ;;
+  esac
+  _acct_read_op "Lane $id's new credential was installed; only this report failed." \
+    set-done --file "$(_acct_roster_path)" --id "$id"
+  printf '%s\n' "$ACCT_OUT"
+}
+
+# ── `credential --sign-out` (N5, D-7749) ──────────────────────────────────────────────────────────────────────────
+# `claude auth logout` in that lane's config directory, then its `.credentials.json` removed: `remove`'s own sign-out
+# step, for a lane that stays. Whether a logout ends the sign-in at Anthropic, and what a live session does after it,
+# were NOT measured (OA1's record: G23 and §9), so the answer says what was done on this box and nothing about the
+# provider.
+_acct_credential_sign_out() {   # <id>
+  local id="$1" stands="Lane $1, its roster entry and its config directory are unchanged."
+  _acct_known_or_refuse "$id"
+  _acct_lane_lock "$id" "Nothing was written."
+  _acct_lane "$id"
+  { [ "$ACCT_KIND" = generated ] && [ "$ACCT_PROVIDER" = anthropic ]; } \
+    || _acct_refuse 1 not-a-sign-in-lane "lane $id is not a ccrc-generated Anthropic lane, so it has no Claude sign-in for this verb to sign out. Nothing was written."
+  _acct_cfg_dir "$id" "Nothing was written."
+  _acct_upstream_id "Nothing was written."
+  _acct_auth_deadline
+  _acct_sign_out "$id" "$ACCT_CFG_DIR" "$stands"
+  # A sign-in lane's last check measured the sign-in that is now gone; a token lane's measured its token, which stays.
+  [ -n "$ACCT_SECRETS" ] || _acct_lane_state "$id" --clear check
+  _acct_read_op "Lane $id was signed out; only this report failed." \
+    auth-answer --verb sign-out --id "$id" --sign-out "$ACCT_SIGNOUT"
   printf '%s\n' "$ACCT_OUT"
 }
 
@@ -10450,8 +11132,18 @@ cmd_account() {
       _acct_enable "$@"
       return 0
       ;;
+    seed)
+      # `check` runs the same step after its probe turn; this is the CLI verb
+      # `ccrc install` and `ccrc update` share with it (spec §13.3, G1). Every
+      # path inside `_acct_seed` exits.
+      _acct_seed "$@"
+      ;;
     disable)
       _acct_disable "$@"
+      return 0
+      ;;
+    set)
+      _acct_set "$@"
       return 0
       ;;
     declare)
@@ -10465,6 +11157,18 @@ cmd_account() {
       ;;
     remove)
       _acct_remove "$@"
+      return 0
+      ;;
+    auth-start)
+      _acct_auth_start "$@"
+      return 0
+      ;;
+    auth-code)
+      _acct_auth_code "$@"
+      return 0
+      ;;
+    auth-cancel)
+      _acct_auth_cancel "$@"
       return 0
       ;;
     *) _acct_refuse 1 internal-no-arm "ccrc account lists \"$sub\" as implemented and has no arm for it — this is a bug in ccrc, not a fact about your box, and nothing was written" ;;
@@ -13380,25 +14084,25 @@ _codex_tier_stale() {   # <id> <tier>
 
 # The FILE half of `_acct_remove`'s codex arms (Task 8; spec §9's reap, Plan 2b-1 carry-forward
 # 8): removes EXACTLY the lane's generated state under `~/.ccrc/codex/<id>/`:
-# lane.json, runtime.env, litellm.yaml and the `.prev` the litellm op keeps
-# beside it, every tier's `.started`/`.pid` (litellm, shim and bridge, each
-# `<tier>.started` and `<tier>.pid`, through `$CODEX_TIERS`), the bridge's
-# markers, stats file, store and recordings directory (below), `.lock`, the
+# lane.json, runtime.env, litellm.yaml and the `.prev` the litellm op keeps beside it, every tier's
+# `.started`/`.pid` (litellm, shim and bridge, each `<tier>.started` and `<tier>.pid`, through `$CODEX_TIERS`),
+# the bridge's markers, stats file, store and recordings directory (below), `.lock`, the
 # file `_codex_lock` takes its per-lane `flock` on, and any `runtime.env.tmp.*` leftover an interrupted
 # `_codex_runtime_env_ensure` mint left behind (its `mktemp` name is random,
 # so this is a GLOB, not a fixed name — a key-bearing tmp file left by a
 # killed mint must not survive account removal, and its presence must not
-# make the directory's final `rmdir` silently fail). Then it removes the
-# directory, only if that left it empty. It NEVER removes the logs
-# (`~/.ccrc/logs/codex/<id>/`) or the OAuth directory, which is a credential
-# ccrc never obtained, and it leaves any other file in the directory alone.
+# make the directory's final `rmdir` silently fail), and by a GLOB on the same line the store's set-aside copy
+# (D-7676), `<store>.damaged-<8 digits>T<6 digits>Z` (store.py's DAMAGED_STAMP) with `-wal`, `-shm` or neither,
+# keyed on the store's OWN name, only once lane.json named it and it passed the bare-name check, never a bare
+# `*.damaged-*`: it holds the account's encrypted reasoning, as the store does. Then it removes the directory, only if
+# that left it empty. It NEVER removes the logs (`~/.ccrc/logs/codex/<id>/`) or the OAuth directory, which is a
+# credential ccrc never obtained, and it leaves any other file in the directory alone.
 # It needs no roster row, only a well-formed id: account removal reaps a lane
 # whose row may already be gone. It stops nothing: the stop arm runs
 # `_codex_lock` → `_codex_stop_lane` → `_codex_unlock` before the roster drop,
-# and this file half runs AFTER it — a pidfile removed under a live tier is a
-# handle lost for good.
+# and this file half runs AFTER it — a pidfile removed under a live tier is a handle lost for good.
 _codex_reap_files() {   # <id>
-  local id="${1:-}" dir f t rc=0 had_nullglob=0 rec=''
+  local id="${1:-}" dir f t rc=0 had_nullglob=0 rec='' st='' d='[0-9]'
   # The bridge's markers (codex-bridge Stage 2, Task 11), which an operator touches and no ccrc code writes; then
   # liveprobe.count and its tmp, and the stats file's tmp (below), which a killed write_count or stats flush leaves.
   local -a names=(lane.json runtime.env litellm.yaml litellm.yaml.prev .lock
@@ -13429,12 +14133,12 @@ _codex_reap_files() {   # <id>
       [[ "${bf[$t]}" =~ ^[A-Za-z0-9._-]+$ ]] && [ "${bf[$t]}" != . ] && [ "${bf[$t]}" != .. ] || bf[$t]=''
     done
     [ -z "${bf[0]}" ] || names+=("${bf[0]}" "${bf[0]}.tmp")
-    [ -z "${bf[1]}" ] || names+=("${bf[1]}" "${bf[1]}-wal" "${bf[1]}-shm")
+    [ -z "${bf[1]}" ] || { names+=("${bf[1]}" "${bf[1]}-wal" "${bf[1]}-shm"); st="${bf[1]}"; }
     rec="${bf[2]}"
   fi
   shopt -q nullglob && had_nullglob=1
   shopt -s nullglob
-  tmps=("$dir"/runtime.env.tmp.*)
+  tmps=("$dir"/runtime.env.tmp.*); [ -z "$st" ] || tmps+=("$dir/$st".damaged-${d}${d}${d}${d}${d}${d}${d}${d}T${d}${d}${d}${d}${d}${d}Z{,-wal,-shm})
   [ "$had_nullglob" -eq 1 ] || shopt -u nullglob
   for f in "${names[@]}"; do
     { [ -e "$dir/$f" ] || [ -L "$dir/$f" ]; } || continue
@@ -14680,13 +15384,13 @@ _codex_cmd_status() {   # <id> <1 = --json>
     fi
     # `bridge` (codex-bridge Stage 2, Task 11): the bridge's non-secret stats
     # file, named by lane.json's `bridgeFiles.stats` — its time, last upstream
-    # request id, refusals, outcomes and unexplained names; null when lane.json
+    # request id, refusals, outcomes, unexplained names and `store` entry (D-7677: null when the file has none, a bridge that predates it, never `ok`); null when lane.json
     # names none, or the file is absent or not one JSON object.
     sf="$(jq -r 'if type == "object" then (.bridgeFiles.stats // empty | strings) else empty end' "$d/lane.json" 2>/dev/null)" || sf=''
     if [[ "$sf" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$sf" != . ] && [ "$sf" != .. ] && [ -f "$d/$sf" ]; then
       stats="$(jq -cs 'if length == 1 and (.[0] | type) == "object" then .[0]
           | {statsAt: (.updatedAt // null), lastUpstreamRequestId: (.lastUpstreamRequestId // null),
-             refusals: (.refusals // null), outcomes: (.outcomes // null), unexplained: (.unexplained // null)}
+             refusals: (.refusals // null), outcomes: (.outcomes // null), unexplained: (.unexplained // null), store: (.store // null)}
           else null end' "$d/$sf" 2>/dev/null)" || stats=null
       [ -n "$stats" ] || stats=null
     fi
@@ -16547,6 +17251,38 @@ _inst_slice_limits() {   # <template> <dest>
   rm -f -- "$out"
 }
 
+# ── THE GRAPH SWEEP'S UNITS ARE RENDERED FROM THE GRAPH SETTINGS (graph revision 2 GR8, D-7354; spec §5.2) ──
+# `deploy/systemd/ccd-graph-sweep.{timer,service}` are templates whose `OnUnitInactiveSec=` (the period counted from
+# the end of the previous pass, D-7876) and `TimeoutStartSec=` are the defaults. Both lanes render them through the two functions below, as the slice drop-in above is: `_inst_units`
+# calls them, and deploy.sh's agent lane through its `_graph_units`, which sources the shipped ccrc on the box. The
+# values are `_gr_knobs`' (ccd/graph-resolve, sourced from beside this file: GRAPH_LIB is CCRC_HERE), so a value of
+# the wrong shape keeps its default with a WARN. Unset, each renders its template's bytes (900 s is `15min`;
+# 4 x (600 + 600) + 600 is 5400). A change takes effect at the next install, update or agent deploy.
+_inst_graph_lib() {   # load the resolver once and read the graph settings into GK; WARN each kept default
+  [ -n "${INST_GRAPH_LIB:-}" ] && return 0
+  declare -F _gr_knobs >/dev/null || . "$CCRC_HERE/graph-resolve" || _ccrc_die "cannot load $CCRC_HERE/graph-resolve"
+  _gr_knobs || _ccrc_die "${GK_WARN[*]}"; INST_GRAPH_LIB=1
+  local w; for w in ${GK_WARN[@]+"${GK_WARN[@]}"}; do echo "$PROG: graphify: WARN: $w" >&2; done
+}
+# _inst_graph_render <template> <dest> <directive> <value> — <template> with its one <directive>= line set to <value>,
+# installed through `_inst_atomic` at 644; a template without exactly one such line dies with nothing replaced.
+_inst_graph_render() {
+  local out="$2.tmp.r$$"
+  [ -f "$1" ] || _ccrc_die "the shipped tree has no $1 — is this a complete ccrc tree? (re-run after: bash install.sh)"
+  if ! LC_ALL=C awk -v d="$3=" -v v="$4" 'index($0, d) == 1 { print d v; n++; next } { print } END { exit (n == 1) ? 0 : 3 }' "$1" > "$out"; then
+    rm -f -- "$out"; _ccrc_die "could not render $2 from $1 (it must carry exactly one $3= line) — nothing at that path was replaced"
+  fi
+  _inst_atomic "$out" "$2" 644; rm -f -- "$out"
+}
+_inst_graph_timer() {   # <template> <dest>: OnUnitInactiveSec= is CCRC_GRAPH_REFRESH_SECS, whole minutes as `<n>min`
+  _inst_graph_lib; local s="${GK[CCRC_GRAPH_REFRESH_SECS]}"
+  if [ $((s % 60)) -eq 0 ]; then s="$((s / 60))min"; else s="${s}s"; fi
+  _inst_graph_render "$1" "$2" OnUnitInactiveSec "$s"
+}
+_inst_graph_service() {   # <template> <dest>: TimeoutStartSec= is BUDGET x (SLOT_WAIT_SECS + BUILD_TIMEOUT) + 600
+  _inst_graph_lib; _inst_graph_render "$1" "$2" TimeoutStartSec "$((GK[CCRC_GRAPH_BUDGET] * (GK[CCRC_GRAPH_SLOT_WAIT_SECS] + GK[CCRC_GRAPH_BUILD_TIMEOUT]) + 600))"
+}
+
 # ── _inst_tree_copy — `_inst_atomic` for a DIRECTORY ─────────────────────
 # `_inst_atomic` is single-file by construction (one `cmp`, one `cp`, one
 # `chmod`, one `mv`), and a skill is a DIRECTORY: a `SKILL.md` beside a
@@ -16885,6 +17621,7 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
     # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` and in `_uninst_wrappers`' exclusion `case`, equally.
     _inst_atomic "$tree/ccd/ccd-land-probe" "$bin/ccd-land-probe" 755
     _inst_atomic "$tree/ccd/ccd-testbox-times" "$bin/ccd-testbox-times" 755   # the test box's durations (D-7413), on the radar's terms
+    _inst_atomic "$tree/ccd/ccd-carry-dedupe-sweep" "$bin/ccd-carry-dedupe-sweep" 755   # the daily carry dedupe, shadowed (D-7857), on the radar's terms
     # D-5241: the tool-child priority's prefix, which `ccd`'s `_spawn_start`
     # names in CLAUDE_CODE_SHELL_PREFIX on Linux only — so systemd only here
     # too: macOS has no /proc/self/oom_score_adj to raise. Every role, on the
@@ -16928,9 +17665,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-land-probe, no ccd-testbox-times, no ccd-tool-adj, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note} (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep, no ccd-tmp-sweep, no ccd-scope-sweep, no ccd-land-probe, no ccd-testbox-times, no ccd-carry-dedupe-sweep, no ccd-tool-adj, no ccd-history-sweep, no ccd-pool-sync and no ccd-update-sync — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-tool-adj, ccd-pool-sync, ccd-update-sync${hist_bin}${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-pool-sync, ccd-update-sync${hist_bin}${api_bin}${lane_bins} and the ccrc launcher in \$HOME/.local/bin${lane_note}"
   fi
 }
 
@@ -17584,8 +18321,9 @@ _inst_units() {
   # box runs no per-tree AST sweep at all, so its unit files stay off it
   # entirely (`_inst_enable`'s own gate on the ENABLE side matches this one).
   if [ "$INST_ROLE" != server ]; then
-    _inst_atomic "$tree/deploy/systemd/ccd-graph-sweep.service" "$dir/ccd-graph-sweep.service" 644
-    _inst_atomic "$tree/deploy/systemd/ccd-graph-sweep.timer" "$dir/ccd-graph-sweep.timer" 644
+    # Rendered, not copied: the period and the start timeout are the box's graph settings (D-7354, above).
+    _inst_graph_service "$tree/deploy/systemd/ccd-graph-sweep.service" "$dir/ccd-graph-sweep.service"
+    _inst_graph_timer "$tree/deploy/systemd/ccd-graph-sweep.timer" "$dir/ccd-graph-sweep.timer"
     _inst_atomic "$tree/deploy/systemd/ccd-usage-sweep.service" "$dir/ccd-usage-sweep.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-usage-sweep.timer" "$dir/ccd-usage-sweep.timer" 644
     # The temp-dir reaper's pair, role-gated for its own reason rather than by
@@ -17611,6 +18349,10 @@ _inst_units() {
     # The test box durations timer's pair (D-7413): the fleet host's gh fetches them for its own `ccrc test`, so `!= server`.
     _inst_atomic "$tree/deploy/systemd/ccd-testbox-times.service" "$dir/ccd-testbox-times.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-testbox-times.timer" "$dir/ccd-testbox-times.timer" 644
+    # The carry dedupe sweep's pair (D-7857): it collects the stale copies swap carries leave on the account roots of
+    # this box's sessions, and a server box runs none, so `!= server`.
+    _inst_atomic "$tree/deploy/systemd/ccd-carry-dedupe.service" "$dir/ccd-carry-dedupe.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-carry-dedupe.timer" "$dir/ccd-carry-dedupe.timer" 644
     # The account-health probe's pair, role-gated for its own reason rather than
     # by imitation: a server box holds no wrapper HOMEs and no ~/.cc-secrets, so
     # there is no credential on it to measure.
@@ -18084,6 +18826,7 @@ _inst_enable() {
   # operator opts a project in with a conf under ~/.ccrc/landing/.
   [ "$INST_ROLE" = server ] || _inst_enable_timer land-probe ccd-land-probe.timer
   [ "$INST_ROLE" = server ] || _inst_enable_timer testbox-times ccd-testbox-times.timer   # a reading; with no test box URL it fetches nothing
+  [ "$INST_ROLE" = server ] || _inst_enable_timer carry-dedupe ccd-carry-dedupe.timer   # housekeeping, a dry run until the operator arms it
   # Same gate, same DEGRADE-rather-than-die idiom as the sweep above it: a
   # health probe is a reading, not the guardrail `ccd-cap-scopes.timer` is, so a
   # systemd that will not take this one timer must not turn an otherwise
@@ -18787,8 +19530,9 @@ _inst_hooks() {
 # installed tree by relative path (`../ccrc-coordinator/references/…`, both
 # skills side by side under one config dir) — and the reviewer skill, third,
 # points into the same tree.
-# The history skill, fourth (ccrc history spec 2026-10-05 §8.5), points into
-# no other skill's tree, so its place at the end is a grouping, not an order.
+# The history skill, fourth (ccrc history spec 2026-10-05 §8.5), and the Linear
+# skill, fifth (#1444, spec 2026-10-31 §11), point into no other skill's tree,
+# so their place at the end is a grouping, not an order.
 #
 # ITS FAILURE IS FATAL, exactly as `_inst_hooks`' is. Each installer converges
 # per home, backs up what it is about to replace and rolls back a swap it could
@@ -18802,13 +19546,13 @@ _inst_skills() {
   if [ "$INST_ROLE" = server ]; then echo "install: skills: skipped — a server-role box hosts no sessions"; return 0; fi
   local tree="$BOX_TREE_DIR" name
   mkdir -p "$HOME/.cc-sessions" || _ccrc_die "cannot create \$HOME/.cc-sessions"
-  for name in coordinator-skill worker-skill reviewer-skill history-skill; do
+  for name in coordinator-skill worker-skill reviewer-skill history-skill linear-skill; do
     _inst_tree_copy "$tree/ccd/$name" "$HOME/.cc-sessions/$name"
     _inst_atomic "$tree/ccd/install-$name.sh" "$HOME/.cc-sessions/install-$name.sh" 755
     CCRC_SKILL_SRC="$HOME/.cc-sessions/$name" bash "$HOME/.cc-sessions/install-$name.sh" \
       || _ccrc_die "install-$name.sh refused — read its lines above; it converges one account's skill directory at a time and rolls back a swap it could not finish, so no home was left without the skill it already had"
   done
-  echo "install: skills: ccrc-coordinator, ccrc-worker, ccrc-reviewer and ccrc-history in each account's skills directory"
+  echo "install: skills: ccrc-coordinator, ccrc-worker, ccrc-reviewer, ccrc-history and ccrc-linear in each account's skills directory"
 }
 
 # The graphify skill is NOT one of _inst_skills' names on purpose (spec §B):
@@ -19001,23 +19745,37 @@ _inst_graph_noise() {
   echo "install: graphify: default noise list converged ($dest/_default.list)"
 }
 
+# ── _graph_exclude_common <common dir> — the graph's exclude lines, ccrc's one writer of them (graph revision 2, D-7350) ──
+# `graphify-out/` (a tree's old per-tree directory), `graphify-out` with NO slash (the link: spec §6.1 measured that the
+# slash-only line does not ignore a symlink, so `git status` lists it and `git worktree remove` refuses the tree) and
+# `.graphifyignore`, each appended to <common dir>/info/exclude when absent. Prints how many it added. Called by
+# `_inst_graph_excludes` below and by ccd-graph-sweep before it links a repository's trees.
+_graph_exclude_common() {   # <common dir>
+  local c="$1" l n=0
+  mkdir -p "$c/info" || return 1
+  for l in 'graphify-out/' 'graphify-out' '.graphifyignore'; do
+    grep -qxF -- "$l" "$c/info/exclude" 2>/dev/null || { printf '%s\n' "$l" >> "$c/info/exclude" || return 1; n=$((n+1)); }
+  done
+  echo "$n"
+}
 _inst_graph_excludes() {
   [ "$INST_ROLE" = server ] && return 0
-  local roots=("$HOME/projects" "$HOME/worktrees") root d common n=0
+  local roots=("$HOME/projects" "$HOME/worktrees") root d common added n=0
   for root in "${roots[@]}"; do
     [ -d "$root" ] || continue
     for d in "$root"/*/ "$root"/*/*/; do
       [ -d "$d" ] || continue
       git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1 || continue
       common=$(git -C "$d" rev-parse --path-format=absolute --git-common-dir) || continue
-      mkdir -p "$common/info"
-      grep -qxF 'graphify-out/' "$common/info/exclude" 2>/dev/null \
-        || { echo 'graphify-out/' >> "$common/info/exclude"; n=$((n+1)); }
-      grep -qxF '.graphifyignore' "$common/info/exclude" 2>/dev/null \
-        || echo '.graphifyignore' >> "$common/info/exclude"
+      added=$(_graph_exclude_common "$common") || continue
+      [ "${added:-0}" -eq 0 ] || n=$((n+1))
     done
   done
-  echo "install: graphify: exclude lines converged (graphify-out/, .graphifyignore; $n new)"
+  echo "install: graphify: exclude lines converged (graphify-out/, graphify-out, .graphifyignore; $n new)"
+  # D-7360: the store root and its marker, through the resolver's one creator; a root it refuses is a WARN (the
+  # doctor FAILs it), never a failed install.
+  _inst_graph_lib
+  if _gr_store_init >/dev/null; then echo "install: graphify: graph store converged ($GR_STORE)"; else echo "$PROG: graphify: WARN: $GR_WHY" >&2; fi
 }
 
 # ── _inst_ws_build_excludes — converge node_modules/cdk.out excludes ──────
@@ -19256,6 +20014,20 @@ _inst_lane_state() {
   [ "$busy" -eq 0 ] || tail=", $busy left to the account verb acting on it"
   [ "$failed" -eq 0 ] || tail="$tail, $failed not written"
   echo "install: lane-state: wrote $wrote, kept $kept$tail"
+  # THE FIRST-RUN SEED FOR LANES THAT MISS IT (accounts plan Task A13; G1,
+  # D-7731): a lane whose `.claude.json` exists without the onboarding flag is
+  # seeded under its lock (`seed --when unseeded`); one with no file has never
+  # run and its first check seeds it, and a seeded one is left byte for byte.
+  # Advisory, as above; silent when nothing was seeded.
+  local -a lk=() seeded=()
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    ! command -v flock >/dev/null 2>&1 || lk=(flock -n -E 75 "$locks/$id.lock")
+    case "$(${lk[@]+"${lk[@]}"} node "$op" seed --file "$HOME/.ccrc/accounts.json" --id "$id" --when unseeded)" in
+      *'"verifiedAt"'*) seeded+=("$id") ;;
+    esac
+  done <<<"$listed"
+  [ "${#seeded[@]}" -eq 0 ] || echo "install: lane-seed: seeded ${#seeded[@]}"
 }
 
 # ── _inst_installed — the completed-install record, the spine's LAST write ─
@@ -20870,7 +21642,7 @@ _upd_rerun_hint() {
 # name outside it, and the census (ccrc-settings-census.test.ts) derives from it, never from a copy. The fleet box's sweeps
 # read the last four names too (wave 29, D-6981; D-7500), through ccd/lib/ccrc-settings.sh, which `node deploy/gen-settings-lib.mjs`
 # regenerates after any edit to this line, to `_ccrc_knob` or to the `_box_*` model.
-CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_SESSION_SLICE_MEMORY_MAX CCRC_SESSION_SLICE_SWAP_MAX CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX CCRC_GRAPH_STORE CCRC_GRAPH_SOURCE_REF CCRC_GRAPH_REPOS_EXCLUDE CCRC_GRAPH_REFRESH_SECS CCRC_GRAPH_FETCH_SECS CCRC_GRAPH_FULL_REBUILD_SECS CCRC_GRAPH_INCREMENTAL_MAX_FILES CCRC_GRAPH_FULL_FAIL_MAX CCRC_GRAPH_FAIL_BACKOFF_SECS CCRC_GRAPH_BUDGET CCRC_GRAPH_BUILD_TIMEOUT CCRC_GRAPH_SLOT_WAIT_SECS CCRC_GRAPH_BUILD_NICE CCRC_GRAPH_MAX_WORKERS CCRC_GRAPH_MAX_SHRINK_PCT CCRC_GRAPH_KEEP_BUILDS CCRC_GRAPH_BUILD_GRACE_SECS CCRC_GRAPH_MIGRATE_BUDGET CCRC_GRAPH_HOOKSTATE_FRESH_SECS CCRC_GRAPH_GATE_MAX_DIFF_PCT CCRC_GRAPH_GATE_MAX_DENIALS CCRC_GRAPH_CARD_DIFF_LIST_MAX CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS CCRC_TESTBOX_URL CCRC_TESTBOX_TOKEN_FILE CCRC_TESTBOX_GIT_URL_BASE CCRC_TESTBOX_GIT_KEY CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE CCRC_TESTBOX_RECONNECT_DEADLINE CCRC_TESTBOX_LOST_RUN CCRC_TESTBOX_QUEUE_LIMIT CCRC_TESTBOX_QUEUE_WAIT CCRC_TESTBOX_BUDGET CCRC_TESTBOX_DENY_GLOBS CCRC_TESTBOX_POLL CCRC_TESTBOX_FALLBACK_INSTALL CCRC_TESTBOX_TIMES CCRC_TESTBOX_RUNS CCRC_TESTBOX_WORKERS CCRC_TESTBOX_RUN_TMPDIR CCRC_TESTBOX_RUN_MEMORY_MAX CCRC_TESTBOX_RUN_SWAP_MAX CCRC_TESTBOX_RUN_CPU_QUOTA CCRC_TESTBOX_ROOT CCRC_TESTBOX_REPOS CCRC_TESTBOX_FETCH_EVERY CCRC_TESTBOX_RETENTION CCRC_TESTBOX_PRISTINE_KEEP CCRC_TESTBOX_PRISTINE_RETRY CCRC_TESTBOX_REPORT_MAX CCRC_TESTBOX_TOOLS_DIR CCRC_TESTBOX_OS_MIRROR CCRC_TESTBOX_EGRESS_ALLOW CCRC_TESTBOX_PUSH_USER CCRC_TESTBOX_ENV_FORWARD CCRC_TESTBOX_RUN_USER_PREFIX CCRC_TESTBOX_REGISTRY_PROXY CCRC_TESTBOX_REGISTRY_UPSTREAM CCRC_TESTBOX_TMPFS CCRC_TESTBOX_LOG_TAIL CCRC_TESTBOX_SESSION_RUNS CCRC_TESTBOX_SERVICE_USER CCRC_TESTBOX_LISTEN CCRC_TESTBOX_SERVICE_TOKEN_FILE CCRC_TESTBOX_UNIT_MAX)
+CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_SESSION_SLICE_MEMORY_MAX CCRC_SESSION_SLICE_SWAP_MAX CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX CCRC_GRAPH_STORE CCRC_GRAPH_SOURCE_REF CCRC_GRAPH_REPOS_EXCLUDE CCRC_GRAPH_REFRESH_SECS CCRC_GRAPH_FETCH_SECS CCRC_GRAPH_FULL_REBUILD_SECS CCRC_GRAPH_INCREMENTAL_MAX_FILES CCRC_GRAPH_FULL_FAIL_MAX CCRC_GRAPH_FAIL_BACKOFF_SECS CCRC_GRAPH_BUDGET CCRC_GRAPH_BUILD_TIMEOUT CCRC_GRAPH_SLOT_WAIT_SECS CCRC_GRAPH_BUILD_NICE CCRC_GRAPH_MAX_WORKERS CCRC_GRAPH_MAX_SHRINK_PCT CCRC_GRAPH_KEEP_BUILDS CCRC_GRAPH_BUILD_GRACE_SECS CCRC_GRAPH_MIGRATE_BUDGET CCRC_GRAPH_HOOKSTATE_FRESH_SECS CCRC_GRAPH_GATE_MAX_DIFF_PCT CCRC_GRAPH_GATE_MAX_DENIALS CCRC_GRAPH_CARD_DIFF_LIST_MAX CCRC_GRAPH_PRESSURE_MAX CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS CCRC_TESTBOX_URL CCRC_TESTBOX_TOKEN_FILE CCRC_TESTBOX_GIT_URL_BASE CCRC_TESTBOX_GIT_KEY CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE CCRC_TESTBOX_RECONNECT_DEADLINE CCRC_TESTBOX_LOST_RUN CCRC_TESTBOX_QUEUE_LIMIT CCRC_TESTBOX_QUEUE_WAIT CCRC_TESTBOX_BUDGET CCRC_TESTBOX_DENY_GLOBS CCRC_TESTBOX_POLL CCRC_TESTBOX_FALLBACK_INSTALL CCRC_TESTBOX_TIMES CCRC_TESTBOX_RUNS CCRC_TESTBOX_WORKERS CCRC_TESTBOX_RUN_TMPDIR CCRC_TESTBOX_RUN_MEMORY_MAX CCRC_TESTBOX_RUN_SWAP_MAX CCRC_TESTBOX_RUN_CPU_QUOTA CCRC_TESTBOX_ROOT CCRC_TESTBOX_REPOS CCRC_TESTBOX_FETCH_EVERY CCRC_TESTBOX_RETENTION CCRC_TESTBOX_PRISTINE_KEEP CCRC_TESTBOX_PRISTINE_RETRY CCRC_TESTBOX_REPORT_MAX CCRC_TESTBOX_TOOLS_DIR CCRC_TESTBOX_OS_MIRROR CCRC_TESTBOX_EGRESS_ALLOW CCRC_TESTBOX_PUSH_USER CCRC_TESTBOX_ENV_FORWARD CCRC_TESTBOX_RUN_USER_PREFIX CCRC_TESTBOX_REGISTRY_PROXY CCRC_TESTBOX_REGISTRY_UPSTREAM CCRC_TESTBOX_TMPFS CCRC_TESTBOX_LOG_TAIL CCRC_TESTBOX_SESSION_RUNS CCRC_TESTBOX_SERVICE_USER CCRC_TESTBOX_LISTEN CCRC_TESTBOX_SERVICE_TOKEN_FILE CCRC_TESTBOX_UNIT_MAX CCRC_CARRY_COPY_WARN_BYTES)
 
 # ── _ccrc_knob <KEY> <default> [file] — ONE reader for every setting (D-6587) ──
 # The process environment, else ~/.ccrc/ccrc.env alone, else <default>: wave 23's `_bak_data_keep` read with its knob made
@@ -26284,6 +27056,7 @@ cmd_uninstall() {
   _uninst_wrappers
   _uninst_cc_sessions
   _uninst_graphify_skills
+  _uninst_graph_store
   _uninst_tree_bins
   _uninst_keep_asides
   [ "$purge" -eq 1 ] && _uninst_purge "$purge_memory" "$purge_history"
@@ -26310,6 +27083,26 @@ cmd_uninstall() {
       echo "uninstall: $(_uninst_history_kept_line)"
     fi
   fi
+}
+
+# ── _uninst_graph_store — the graph store, only with its marker, and the in-tree links into it (D-7354; spec §9.2) ──
+# The root is resolved through `_gr_knobs`/`_gr_store` (ccd/graph-resolve) before anything is touched; one without the
+# `.ccrc-graph-store` marker is left in place and named, so a typo never deletes someone else's directory. The links
+# are the `graphify-out` symlinks under the two roots the exclude writer walks whose target is inside the store; a
+# link it cannot find dangles harmlessly (it is ignored). Published builds are read-only, so the store is made
+# writable before it is removed. Runs before `_uninst_tree_bins`, which removes the tree the resolver is read from.
+_uninst_graph_store() {
+  local s l n=0
+  [ -f "$CCRC_HERE/graph-resolve" ] || { echo "uninstall: graphify: no graph resolver beside ccrc — no graph store to remove"; return 0; }
+  _inst_graph_lib; _gr_store >/dev/null || { echo "uninstall: graphify: $GR_WHY — nothing removed"; return 0; }
+  s="$GR_STORE"
+  [ -e "$s" ] || { echo "uninstall: graphify: no graph store at $s"; return 0; }
+  _gr_store_marked || { echo "uninstall: graphify: $s has no graph-store marker — left in place"; return 0; }
+  for l in "$HOME/projects"/*/graphify-out "$HOME/projects"/*/*/graphify-out "$HOME/worktrees"/*/graphify-out "$HOME/worktrees"/*/*/graphify-out; do
+    [ -L "$l" ] && [[ "$(readlink -- "$l")" == "$s"/* ]] && rm -f -- "$l" && n=$((n+1))
+  done
+  chmod -R -- u+w "$s" 2>/dev/null; rm -rf -- "$s" || _ccrc_die "removing the graph store $s failed"
+  echo "uninstall: graphify: the graph store $s removed, and $n link(s) into it"
 }
 
 # ── ccrc's usage INSTANCES, on the way out (Plan 3a Task 7; spec §13) ─────
@@ -26520,6 +27313,7 @@ _uninst_units() {
       ccd-history-sweep.timer ccd-history-sweep.service \
       ccd-scope-sweep.timer ccd-scope-sweep.service \
       ccd-land-probe.timer ccd-land-probe.service ccd-testbox-times.timer ccd-testbox-times.service \
+      ccd-carry-dedupe.timer ccd-carry-dedupe.service \
       ccd-account-health.timer ccd-account-health.service \
       ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service \
       ccrc-models.timer ccrc-models.service \
@@ -26549,6 +27343,7 @@ _uninst_units() {
     "$dir/ccd-history-sweep.service" "$dir/ccd-history-sweep.timer" \
     "$dir/ccd-scope-sweep.service" "$dir/ccd-scope-sweep.timer" \
     "$dir/ccd-land-probe.service" "$dir/ccd-land-probe.timer" "$dir/ccd-testbox-times.service" "$dir/ccd-testbox-times.timer" \
+    "$dir/ccd-carry-dedupe.service" "$dir/ccd-carry-dedupe.timer" \
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \
     "$dir/ccrc-models.service" "$dir/ccrc-models.timer" \
@@ -26910,7 +27705,7 @@ _uninst_wrappers() {
     # launcher (the fleet box's copy was removed by Plan 4), which the marker test
     # below already keeps, and nothing here places it (D-3478). `ccd-update-sync`
     # joins on the same terms as the timer-bound binary from programme wave 4.
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-land-probe|ccd-testbox-times|ccd-tool-adj|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex|ccrc-api) continue ;; esac
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-tmp-sweep|ccd-scope-sweep|ccd-land-probe|ccd-testbox-times|ccd-carry-dedupe-sweep|ccd-tool-adj|ccd-history-sweep|ccd-pool-sync|ccd-update-sync|ccgpt-runtime|ccrc-codex|ccrc-api) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -26951,30 +27746,32 @@ _uninst_cc_sessions() {
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/compact-card.mjs" "$reg/approval-verify.mjs" "$reg/lib/transcript.jq" "$reg/lib/carry-dedupe.py" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
-    "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" \
+    "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" "$reg/install-linear-skill.sh" \
     "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \
     "$reg/account-deny.settings.json" \
     || _ccrc_die "removing ccrc's files under $reg failed"
   rmdir -- "$reg/lib" 2>/dev/null || true   # the transcript reader's directory, empty once its file is gone
-  # The conflict radar's opt-in mirror (landing order wave 3b): `$reg/landing/<project>/enabled`, the one file the probe
-  # writes that a LATER reader trusts (spec 5.4). With the probe gone nothing refreshes it, so it goes with the install.
-  # ONLY a regular file named `enabled`, ONE level under a real (not symlinked) `landing` directory, in a real project
-  # directory: a symlink named `enabled` is not ours to follow, and `probe`, `main-health` and the lineage files are
+  # The conflict radar's two mirrors (landing order wave 3b, and wave 5d's `lander`): `$reg/landing/<project>/enabled` and
+  # `lander`, the two files the probe writes that a LATER reader trusts (spec 5.4, 5.5). With the probe gone nothing
+  # refreshes them, so they go with the install.
+  # ONLY a regular file named `enabled` or `lander`, ONE level under a real (not symlinked) `landing` directory, in a real project
+  # directory: a symlink named `enabled` or `lander` is not ours to follow, and `probe`, `main-health` and the lineage files are
   # measurements the operator may still read, so they stay.
   local land="$reg/landing" ldir lfile
   if [ -d "$land" ] && [ ! -L "$land" ]; then
     for ldir in "$land"/*/; do
       ldir="${ldir%/}"
       { [ -d "$ldir" ] && [ ! -L "$ldir" ]; } || continue
-      lfile="$ldir/enabled"
-      if [ -f "$lfile" ] && [ ! -L "$lfile" ]; then
-        rm -f -- "$lfile" || _ccrc_die "removing the radar's opt-in mirror $lfile failed"
-      fi
+      for lfile in "$ldir/enabled" "$ldir/lander"; do
+        if [ -f "$lfile" ] && [ ! -L "$lfile" ]; then
+          rm -f -- "$lfile" || _ccrc_die "removing the radar's opt-in mirror $lfile failed"
+        fi
+      done
     done
   fi
-  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" \
+  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" "$reg/history-skill" "$reg/linear-skill" \
     || _ccrc_die "removing the skill trees under $reg failed"
-  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's and accounts' deny files, the four skill trees, the conflict radar's opt-in mirrors); the registry rows and operator switches stay"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the children's and accounts' deny files, the five skill trees, the conflict radar's opt-in mirrors); the registry rows and operator switches stay"
 }
 
 # ── _uninst_graphify_skills — the per-home graphify skill directories ─────
@@ -27163,7 +27960,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-telemetry-keepalive" "$HOME/.local/bin/ccd-account-auth" \
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
     "$HOME/.local/bin/ccd-tmp-sweep" "$HOME/.local/bin/ccd-scope-sweep" "$HOME/.local/bin/ccd-pool-sync" \
-    "$HOME/.local/bin/ccd-land-probe" "$HOME/.local/bin/ccd-testbox-times" \
+    "$HOME/.local/bin/ccd-land-probe" "$HOME/.local/bin/ccd-testbox-times" "$HOME/.local/bin/ccd-carry-dedupe-sweep" \
     "$HOME/.local/bin/ccd-tool-adj" \
     "$HOME/.local/bin/ccd-history-sweep" \
     "$HOME/.local/bin/ccd-update-sync" \
@@ -27180,7 +27977,7 @@ _uninst_tree_bins() {
   rmdir -- "$HOME/.local/libexec/ccrc/shared" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc/lib" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
@@ -27572,7 +28369,8 @@ _test_knobs() {
 # environment, so a test's fixture environment is the only one it sees). `file` is the doctor's: ccrc.env alone, which is
 # what the sweep's unit reads. The defaults are neutral, no box's measurements; three are the sweep's own today
 # (BUILD_TIMEOUT 600, MAX_WORKERS 4, HOOKSTATE_FRESH_SECS 1800). REPOS_EXCLUDE's default is the empty string, spelled `''`
-# so the settings census reads it as a default.
+# so the settings census reads it as a default. INCREMENTAL_MAX_FILES is 0, not spec §5.4's 200: the operator ruled a
+# full build on every refresh box-wide (OA-GR2, D-7634), after the measured one-day incremental gap of 10.26%.
 _graph_knobs() {   # [file]
   local m="${1:-}"
   _ccrc_knob CCRC_GRAPH_STORE "$HOME/.ccrc/graphs" ${m:+"$m"}; _test_knob_say CCRC_GRAPH_STORE "$HOME/.ccrc/graphs" $?
@@ -27581,7 +28379,7 @@ _graph_knobs() {   # [file]
   _ccrc_knob CCRC_GRAPH_REFRESH_SECS 900 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_REFRESH_SECS 900 $?
   _ccrc_knob CCRC_GRAPH_FETCH_SECS 900 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FETCH_SECS 900 $?
   _ccrc_knob CCRC_GRAPH_FULL_REBUILD_SECS 86400 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FULL_REBUILD_SECS 86400 $?
-  _ccrc_knob CCRC_GRAPH_INCREMENTAL_MAX_FILES 200 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_INCREMENTAL_MAX_FILES 200 $?
+  _ccrc_knob CCRC_GRAPH_INCREMENTAL_MAX_FILES 0 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_INCREMENTAL_MAX_FILES 0 $?
   _ccrc_knob CCRC_GRAPH_FULL_FAIL_MAX 2 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FULL_FAIL_MAX 2 $?
   _ccrc_knob CCRC_GRAPH_FAIL_BACKOFF_SECS 21600 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_FAIL_BACKOFF_SECS 21600 $?
   _ccrc_knob CCRC_GRAPH_BUDGET 4 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_BUDGET 4 $?
@@ -27597,6 +28395,9 @@ _graph_knobs() {   # [file]
   _ccrc_knob CCRC_GRAPH_GATE_MAX_DIFF_PCT 25 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_GATE_MAX_DIFF_PCT 25 $?
   _ccrc_knob CCRC_GRAPH_GATE_MAX_DENIALS 3 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_GATE_MAX_DENIALS 3 $?
   _ccrc_knob CCRC_GRAPH_CARD_DIFF_LIST_MAX 20 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_CARD_DIFF_LIST_MAX 20 $?
+  # D-7876: a pass is deferred while the host's memory or CPU pressure (PSI some avg10, percent) is above this; 0 is off.
+  # 60 leaves an ordinary busy box alone (a stall on more than half of the last ten seconds is thrash, not load).
+  _ccrc_knob CCRC_GRAPH_PRESSURE_MAX 60 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_PRESSURE_MAX 60 $?
 }
 _usage_test_paragraph() {
   printf '\n%s' \

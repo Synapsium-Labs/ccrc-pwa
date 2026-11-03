@@ -2330,15 +2330,8 @@ The allocator issued the contiguous block D-6999..D-7022 to this wave, and D-702
 - **D-7008** — `unused`
 - **D-7009** — `unused`
 - **D-7010** — `unused`
-- **D-7011** — `unused`
-- **D-7012** — `unused`
-- **D-7013** — `unused`
-- **D-7014** — `unused`
-- **D-7015** — `unused`
-- **D-7016** — `unused`
-- **D-7017** — `unused`
-- **D-7018** — `unused`
-- **D-7019** — `unused`
+- D-7011 to D-7016 are PR3's, and are defined in its departures note, `2026-10-26-delegation-broker-wave4-project/pr3.md`, not here (one definition per number). D-7015 and D-7016 are recorded there as `unused`.
+- D-7017, D-7018 and D-7019 are PR4's, and are defined in its departures note, `2026-10-26-delegation-broker-wave4-project/pr4.md`, not here (one definition per number). D-7019 records the coordinator's ruling on PR4's sync with `main`: `main` had landed #1883 (D-7448) and #1607 over Tasks 4.1 and 4.2, so PR4 keeps `main`'s spool guard and race rows.
 - **D-7020** — `unused`
 - **D-7021** — `carried-record-compaction-and-retained-c1-predicate` (operator ruling 2026-10-26; programme ledger: a second durable file and journal compaction are the operator's): on `main` leases are never released, so their holds are permanent and a pure prefix cut frees nearly nothing. The cut point S is set by the 10-day floor and the checkpoint anchor only, and every record at or below S that a carry rule (K1-K6, PR3 Task 3.2) still needs is copied verbatim into a second durable file, `delegation-carried.log`, read before the journal by one reader of the retained set. C1 (D-7001) then retires a row only when no RETAINED record (carried or above S) names it, and drops a retired run's Workflow launch-index entry with it.
 - **D-7022** — `compaction-armed-on-landing` (operator ruling 2026-10-26, against the coordinator's proposal of a marker; O3 snapshot contents are the operator's): PR3 ships armed. The daily compaction runs from the first ready pass after the build is live, with no marker or switch. A rollback past PR3 after a compaction leaves the delegation lane `reconstructing` until a pre-compaction snapshot is restored, which discards what the lane recorded since that snapshot; the snapshot `ccrc update` takes before installing PR3 is the restore point. The operator accepted that cost; PR3's body and the release's notes state it.

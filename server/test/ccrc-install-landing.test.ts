@@ -156,8 +156,9 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // history spec §9.5: `ccd-history-sweep` joins on the timer-bound names' terms, behind its role gate (this install is `both`).
         // landing order wave 3b: `ccd-land-probe` joins on the reaper's terms (every role), and this set is the mutation site for its line.
         // test box TB11 (D-7413): `ccd-testbox-times` joins on the radar's terms, and this set is the mutation site for its line.
+        // D-7857: `ccd-carry-dedupe-sweep` joins on the same terms.
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-history-sweep',
-           'ccd-land-probe', 'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-testbox-times', 'ccd-tmp-sweep', 'ccd-tool-adj', 'ccd-update-sync', 'ccd-usage-sweep',
+           'ccd-land-probe', 'ccd-pool-sync', 'ccd-carry-dedupe-sweep', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-testbox-times', 'ccd-tmp-sweep', 'ccd-tool-adj', 'ccd-update-sync', 'ccd-usage-sweep',
            'ccd-usage-sweep.py', 'ccrc', 'ccrc-api', 'graphify', ...GPT_LANE_BINS].sort());
   });
 
@@ -311,12 +312,12 @@ describe('ccrc install: all four skills reach every rostered account', () => {
     expect(skillBox.r.stdout).toMatch(/^install: skills: /m);
   });
 
-  it('lands ALL FOUR skills in every account config dir the roster names', () => {
+  it('lands ALL FIVE skills in every account config dir the roster names', () => {
     const { home } = skillBox;
     for (const d of ROSTER_DIRS) {
       for (const [name, src] of [
         ['ccrc-coordinator', 'coordinator-skill'], ['ccrc-worker', 'worker-skill'],
-        ['ccrc-reviewer', 'reviewer-skill'], ['ccrc-history', 'history-skill'],
+        ['ccrc-reviewer', 'reviewer-skill'], ['ccrc-history', 'history-skill'], ['ccrc-linear', 'linear-skill'],
       ] as const) {
         const md = join(home, d, 'skills', name, 'SKILL.md');
         expect(existsSync(md), `${d}: ${name} never reached this home`).toBe(true);
@@ -347,7 +348,7 @@ describe('ccrc install: all four skills reach every rostered account', () => {
     // whichever lane converged it — which is what makes the installers' own
     // `CCRC_SKILL_SRC` default correct on a self-installed box.
     const { home } = skillBox;
-    for (const name of ['coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill']) {
+    for (const name of ['coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill', 'linear-skill']) {
       const staged = join(home, '.cc-sessions', name);
       expect(existsSync(staged), `${name} was never staged in ~/.cc-sessions`).toBe(true);
       expect(readFileSync(join(staged, 'SKILL.md')))
@@ -407,10 +408,12 @@ describe('ccrc install: all four skills reach every rostered account', () => {
       join(home, '.claude', 'skills', 'ccrc-reviewer', 'SKILL.md'),
       join(home, '.claude', 'skills', 'ccrc-history', 'SKILL.md'),
       join(home, '.claude', 'skills', 'ccrc-history', 'LICENSE.lossless-claw'),
+      join(home, '.claude', 'skills', 'ccrc-linear', 'SKILL.md'),
       join(home, '.cc-sessions', 'coordinator-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'worker-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'reviewer-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'history-skill', 'SKILL.md'),
+      join(home, '.cc-sessions', 'linear-skill', 'SKILL.md'),
     ];
     const before = watched.map((p) => [statSync(p).ino, mtime(p)]);
     const r = runInstall(home);
@@ -988,6 +991,7 @@ describe('ccrc install: running the WHOLE verb twice', () => {
       join(home, '.cc-sessions', 'install-worker-skill.sh'),
       join(home, '.cc-sessions', 'install-reviewer-skill.sh'),
       join(home, '.cc-sessions', 'install-history-skill.sh'),
+      join(home, '.cc-sessions', 'install-linear-skill.sh'),
       // graphify Task 3: staged beside them, through the same `_inst_atomic`.
       join(home, '.cc-sessions', 'install-graphify-skill.sh'),
       // …and the four staged skill TREES, which are not `_inst_atomic`
@@ -998,6 +1002,7 @@ describe('ccrc install: running the WHOLE verb twice', () => {
       join(home, '.cc-sessions', 'worker-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'reviewer-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'history-skill', 'SKILL.md'),
+      join(home, '.cc-sessions', 'linear-skill', 'SKILL.md'),
       join(home, '.tmux.conf'),
       join(home, '.claude', 'statusline-command.sh'),
       // THE JOB FILES THIS PLATFORM ACTUALLY HAS. `UNIT_FILES` is systemd's

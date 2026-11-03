@@ -1905,7 +1905,8 @@ follows only by the operator's ruling, and LiteLLM's removal is Stage 4.
 Every entry carries the number the controller issued (D-6410 to D-6431 at plan time, D-6804 to D-6839 for wave 1,
 D-6862 to D-6907 and D-6921 for wave 2, D-6944 to D-6963 for wave 3, D-6994 to D-6998 for the follow-up to the
 suite's macOS failures, D-7083 to D-7089, D-7093, D-7094, D-7119 and D-7120 for what the first live step, the flip and the rollout measured,
-and D-7143 and D-7144 for the tool-change blocks honoured and the second lane's switch). A further
+D-7143 and D-7144 for the tool-change blocks honoured and the second lane's switch, and D-7676 and D-7677 for the
+reasoning store's start check and its state in the stats file). A further
 departure found while executing is written `D-TBD-<slug>` and named in the task's report.
 
 ### D-6410 — `end_turn:false` is continued upstream, never `pause_turn`
@@ -4137,3 +4138,261 @@ departure found while executing is written `D-TBD-<slug>` and named in the task'
   first window carried a by-value tool addition the bridge then dropped (D-7143). The unserved gap grows with the
   box's load, and Claude Code meets it with `CLAUDE_CODE_MAX_RETRIES=2`: a longer gap under heavier load could exhaust
   those retries for a request sent inside it. The flip back is `ccrc codex switch lane-a litellm`.
+
+### D-7676 — the reasoning store is checked at start, and a damaged store is set aside and started fresh
+
+- **Departs from:** Task 4's "THE STORE NEVER FAILS A REQUEST" as built: any exception inside the store disabled it
+  for the life of the process, so a store that was already damaged when the bridge started was disabled at its first
+  write and every request after it was answered without the model's earlier reasoning replayed, until someone
+  restarted the bridge on a repaired file. Nothing in the plan checked the file at start.
+- **What changed:** `ReasoningStore.__init__` (`ccd/codexbridge/store.py`), once the file is created and the schema
+  ensured on the constructing thread, runs `PRAGMA integrity_check` on that connection when the store is not disabled
+  and its `user_version` is `USER_VERSION`; healthy is exactly one row, `ok`. Damage is an `integrity_check` answer
+  other than that, or an `sqlite3.DatabaseError` whose class is exactly `sqlite3.DatabaseError` (never a subclass)
+  raised while opening, reading `user_version`, ensuring the schema or checking. `OperationalError` (locked, busy, I/O,
+  read-only), `IntegrityError` and every other subclass keep the old behaviour: the store is disabled as `store:<class
+  name>` and the file is left as it is. A newer store (`store:newer-version`) is never checked and never touched. A
+  damaged store is set aside: the constructing thread's connection is closed without a checkpoint (so, on Python 3.12
+  and later, a damaged WAL is never folded into the copy; an older Python's close may checkpoint the damaged WAL into
+  the copy, which stays openable but has no separate `-wal`), the file is renamed to `<path>.damaged-<UTC stamp
+  YYYYmmddTHHMMSSZ>` and its `-wal` and `-shm`, when present, to the same name with those suffixes, so the copy stays
+  openable as one database and no damaged WAL is left at `<path>-wal` for the fresh store; only then every older copy in
+  the directory, with its siblings, is removed (a failed removal is ignored), and the fresh store is made by the first
+  start's own path (`_create`, then `_conn`). The set-aside is reported once to the store's callback as
+  `store:set-aside`, with what was found (`integrity-check` or the exception class name) and the copy's basename. A
+  set-aside that cannot finish (a rename's `OSError`, the fresh store failing) disables the store as
+  `store:set-aside-failed`; when the file had already been renamed, that one report also carries what was found and the
+  copy's basename (D-7677 records them in `setAside`), so the copy is never left unnamed. Nothing raises, and nothing
+  else changes at runtime: a failure after the start still disables the store for the process, and the next start's
+  check is what repairs a store damaged while running.
+  - `integrity_check`, not `quick_check` (fix round 1, from a held-out review): `quick_check` counts an index's
+    entries but never compares them with the table. A torn copy whose table page is from after an `INSERT OR REPLACE`
+    (the store's own write: the row is deleted and inserted under a new rowid, so the count is unchanged) and whose
+    primary-key index page is from before it passes `quick_check` as `ok`; the first `get` of that key then raises
+    exactly `sqlite3.DatabaseError` (`database disk image is malformed`), the store is disabled for the process, and
+    every restart repeats it without setting it aside. `integrity_check` reports it (`row N missing from index
+    sqlite_autoindex_reasoning_1`). Measured on both lanes' live stores (45 and 54 MB, warm cache): `quick_check` 9 to
+    12 ms, `integrity_check` 10 to 13 ms.
+  - The classes, measured on the fixtures (Python 3.14.4, sqlite 3.46.1): a file whose bytes are not sqlite's raises
+    exactly `sqlite3.DatabaseError` (`file is not a database`) at `PRAGMA user_version`; a torn primary-key index (the
+    index page written back as it stood before three later rows) raises nothing at `user_version` or at either check,
+    which answers it in rows (`quick_check` exactly `wrong # of entries in index sqlite_autoindex_reasoning_1`, the
+    incident's text); the equal-count tear above raises nothing, `quick_check` answers `ok` and `integrity_check`
+    answers rows naming the row missing from the index; an index page filled with 0xff raises nothing at
+    `user_version` or at `quick_check`, which answers it in rows, while `integrity_check` raises exactly
+    `sqlite3.DatabaseError`, which the start reads as damage too (`found` is then `DatabaseError`); a store another
+    connection holds exclusively raises `sqlite3.OperationalError` (`database is locked`).
+  - The close before the renames passes `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE` (Python 3.12's `setconfig`, when present;
+    below 3.12 the close may checkpoint, see Cost if wrong): measured, a plain last close checkpoints a damaged store's
+    WAL into the file and deletes it, so the copy would lose its WAL. A connection `_conn` refuses is closed the same
+    way. With the WAL left at `<path>-wal` instead, sqlite deletes it when the fresh, empty file is first opened
+    (measured), so the row is never replayed, but the copy loses it.
+  - One write the order leaves: `_conn`'s `PRAGMA journal_mode = WAL` runs before the check, so a damaged store in
+    rollback-journal mode is switched to WAL (its header written) before it is set aside.
+
+  Pins, in `server/test/codex-bridge-store.test.ts`'s "the start check" block: CONTROL (a healthy store with a row
+  survives a restart, no copy, the entry `ok`); NOT A DATABASE (set aside, the copy 0600 from a 0644 plant and byte for
+  byte the planted file, the fresh store serving, `store:set-aside` counted once, `found` the measured class);
+  DAMAGED INDEX OR PAGE (both shapes set aside, `found` `integrity-check` for the stale index and `DatabaseError` for
+  the 0xff page, their rows not answered); EQUAL COUNT (the equal-count tear: `quick_check` `ok`, `integrity_check`
+  not; set aside with `found` `integrity-check`, the fresh store serving); the WAL case (the copy's `-wal` is the
+  damaged one's byte for byte, and the copy with it still answers the row; the fresh store not answering it is
+  sqlite's own doing, which deletes a WAL left beside a 0-byte database at its first open, and the case says so);
+  RETENTION (two damaged starts, an older copy and a stray sibling planted: only the newest copy is left, and two
+  names outside the shape stay); LOCKED (`store:OperationalError`, no copy, the file's inode and bytes unchanged);
+  SET-ASIDE FAILS (the first `os.rename` fails with EACCES: `store:set-aside-failed`, the request still built, the
+  file unchanged, `setAside` null); SET-ASIDE FAILS AFTER ITS RENAMES (the fresh store's `os.open` fails: disabled as
+  `store:set-aside-failed`, the entry's `setAside` naming the copy and `found`). The WAL case and RETENTION skip only
+  on a measured python3 below 3.12 (the driver's `store-caps` op answers its `sys.version_info[:2]` beside
+  `noCkptClose`), since their fixture's WAL is checkpointed there; fix round 2: a probe that failed (an import failure,
+  a timeout, a renamed op) skips nothing, and "the capability probe answers" (a case of its own, run wherever python3
+  runs) is red unless the probe line exists, did not raise, names the version, and says `noCkptClose` on 3.12 and
+  later. DAMAGED INDEX OR PAGE takes the 0xff page's expected `found` from the probe (`raised`, else
+  `integrity-check`), as NOT A DATABASE does, since which SQLite raises there is that SQLite's choice; its pin on the
+  page is that `integrity_check` did not answer `ok`. The newer-version case also checks that no copy is made. Rows, each restored
+  from a saved copy with sha256 compared: the check's call replaced by an `ok` answer, DAMAGED INDEX OR PAGE, the WAL
+  case and RETENTION red (`stale-index: expected { items: [], phase: null } to be null`); `integrity_check` swapped
+  back to `quick_check`, EQUAL COUNT red (`expected 'store:DatabaseError' to be null`) and DAMAGED INDEX OR PAGE red
+  on the 0xff page's `found` (the stale index stays green: `quick_check` sees its count); the failed set-aside's
+  detail dropped, SET-ASIDE FAILS AFTER ITS RENAMES red (`expected null to deeply equal { Object (at, found, ...)
+  }`); the driver made to report no no-checkpoint close, the WAL case and RETENTION skipped and the other 24 green
+  (fix round 2: now the capability case red, `{"noCkptClose":false,"op":"store-caps","python":[3,14]}: expected false
+  to be true`, and the WAL case and RETENTION run; the op renamed, the capability case red and neither skipped);
+  the exact-class test
+  widened to every `DatabaseError`, LOCKED red (`expected null to be 'store:OperationalError'`); the sibling renames
+  skipped, the WAL case and RETENTION red; the retention call removed, RETENTION red (`expected [ …(2) ] to have a
+  length of 1 but got 2`); the unchecked close made a plain close, the WAL case and RETENTION red; the set-aside's own
+  reason replaced by a re-raise, SET-ASIDE FAILS red (`expected 'store:PermissionError' to be
+  'store:set-aside-failed'`).
+
+  Fix round 3 (a final held-out review): removing the lane reaps the copy. `_codex_reap_files` (`ccd/ccrc`) removed
+  lane.json's store with its `-wal`/`-shm` but no `<store>.damaged-<stamp>` copy, so the lane directory outlived a
+  removed account holding that account's encrypted reasoning. The `runtime.env.tmp.*` glob line now also globs the
+  copy's exact shape, `<store>.damaged-` + 8 digits + `T` + 6 digits + `Z` with `-wal`, `-shm` or neither, keyed on
+  the store's own name from lane.json and only once that name passed the bare-name check (never a bare
+  `*.damaged-*`), with the same `rm -f` and `lane-unwritable` handling; `ccd/ccrc` is 27695 lines before and after.
+  Pins: in `server/test/ccrc-codex-bridge.test.ts`, "removal reaps the store's set-aside copy with its -wal and -shm,
+  and leaves a look-alike" (the copy and both siblings reaped and the directory removed; another file's copy, a short
+  stamp, a suffix, a prefix and a bare `reasoning.sqlite.damaged-` all left); and, end to end through the driver, in
+  `server/test/ccrc-doctor-codex.test.ts`'s store row block, "a copy the store itself set aside is named by the WARN
+  and reaped with the lane": a real set-aside (`store-damage` `not-a-database`, then a store open with the stats
+  callback and a forced flush) makes the copy under store.py's DAMAGED_STAMP, the doctor's WARN names it with the
+  probe's `found`, and `_codex_reap_files` removes it and the directory, so a change of that stamp the doctor and the
+  reap do not follow reds it. Rows, each restored from a saved copy with sha256 compared: the copy's glob made never to
+  fire, the reap case red (the copy and both siblings left); the glob keyed on any prefix, the reap case red (three
+  look-alikes reaped). The end-to-end case, with the previous doctor and `ccd/ccrc` swapped in, was red at the reap
+  (the copy left). DAMAGED INDEX OR PAGE pins, for the stale index, `integrity_check`'s rows naming
+  `sqlite_autoindex_reasoning_1`; for the 0xff page only that `integrity_check` did not answer exactly `ok`. It no
+  longer pins `quick_check` for either: the pull request's first CI run, on the Linux runner's SQLite, answered `ok`
+  to `quick_check` on the stale index (and on the WAL case's), while `integrity_check` named the index, so whether
+  `quick_check` counts an index's entries depends on the SQLite. That is a second, measured reason for the start
+  check to run `integrity_check`: on that SQLite, `quick_check` would have missed the incident's own shape.
+- **Why:** On 2026-10-28 the fleet box moved to a new machine and each lane's directory was carried over with its
+  `reasoning.sqlite`. Both lanes' stores arrived damaged: `PRAGMA quick_check` on them as they stood answered
+  `wrong # of entries in index sqlite_autoindex_reasoning_1`, a torn primary-key index, which fits a live sqlite file
+  copied while it was being written (how it was copied was not measured). Each bridge started on its damaged store,
+  met an `sqlite3.DatabaseError` at its first write and disabled its store; both lanes then ran for about six hours
+  with no reasoning replayed, until both bridges were restarted by hand on a hand-repaired store. `quick_check` on the
+  live stores (47 to 55 MB) took 8 to 10 ms, and `integrity_check` 10 to 13 ms on the 45 and 54 MB stores, so the
+  check costs nothing a start notices. The store holds only replay
+  material, so starting it fresh loses nothing a request needs; the one copy is kept for the operator to read.
+  The subclasses are left out because each names a condition of the moment (a lock another process holds, an I/O
+  error, a read-only file), not of the file, and setting aside a healthy store behind a lock would discard it.
+- **Cost if wrong:** A store that `integrity_check` passes but that fails at its first write is still disabled for
+  the process, as before (the stats entry of D-7677 says so). A store damaged in a way sqlite reports only as a subclass
+  (an I/O error on a bad sector, say) is never set aside, and stays disabled at every start until it is repaired by
+  hand. A damaged store that is set aside loses its replay rows: the requests after the start replay nothing older
+  than the start, which is what a disabled store gave anyway. Keeping one copy bounds the disk to one store's size
+  beside the live one. On Python below 3.12 the close before the renames may checkpoint the damaged WAL into the copy:
+  the copy stays openable but has no separate `-wal`, and what the WAL held is folded into a file already damaged.
+  A set-aside whose renames succeeded but whose fresh store failed leaves the copy, named in the stats entry; the next
+  start makes a fresh store at the path, so that copy stays until a later set-aside replaces it.
+
+### D-7677 — the store's state for this process is written to the stats file
+
+- **Departs from:** Task 5's "THE FILE, VERSION 1", which had no field for the store: a disabled store was counted
+  only in the cumulative `outcomes` (`store:<class name>`), which a reader cannot tell from a disable that happened
+  days ago in another process.
+- **What changed:** The stats document (still version 1: the field is additive) gains `"store": {"state": "ok" |
+  "set-aside" | "disabled", "reason", "at", "setAside": null | {"at", "found", "file"}}`
+  (`ccd/codexbridge/stats.py`). It describes this process only: it is reset to `{"state": "ok", "reason": null,
+  "at": null, "setAside": null}` at construction and never carried from a loaded file, unlike `outcomes`, which stay
+  cumulative. `disabled` outranks `set-aside` in `state` when both happen (a fresh store that later failed), and
+  `setAside` keeps its record. One writer, `Stats.store_event(reason, found=None, file=None)`, sets the entry and
+  counts `reason` in `outcomes` as `outcome()` does; `serve()` (`ccd/codexbridge/server.py`) passes it to the
+  `ReasoningStore` as its callback, and forces a stats flush after the store is built and before the server binds
+  its port, so the file describes this process from its first moment. A reader of an older file finds no `store`
+  key, which means the bridge predates the entry, never `ok`. The doctor's row that reads the entry landed in this pull
+  request (below). `file` is kept only as a basename (a value
+  with a `/` is `unrecognised`), since NAME_RE alone admits a path. Fix round 1: `store_event` makes the next flush
+  write at once, whatever `FLUSH_S` says (the one-shot a failed write already used), so a store disabled at the first
+  request is written at the next flush, which is that request's own unless another write is in flight, then the next
+  one's (an unforced flush that finds the write lock held returns before it reads the one-shot; nothing is lost), not
+  `FLUSH_S` later behind the pre-bind flush's time; the one-shot is cleared
+  when a flush serialises the document, never after its write, so an event made while a write is in flight survives
+  it. A `store:set-aside-failed` that names a copy (D-7676) records `setAside` (`at`, `found`, `file`) while `state`
+  is `disabled`.
+
+  Pins, in `server/test/codex-bridge-count-stats.test.ts`'s "the store entry" block: the entry reset at construction
+  while a planted file's outcomes are carried; a set-aside recorded and counted through `store_event`; `disabled`
+  outranking `set-aside` in either order with `setAside` kept; a `found` or `file` outside the bounds written
+  `unrecognised`; a failed set-aside naming its copy (`disabled`, `setAside` recorded); a store event making the next
+  unforced flush write inside `FLUSH_S` while a plain count does not; an event made during a write in flight still
+  making the next unforced flush write; and the first stats-file case's key list now holding `store`. In
+  `server/test/codex-bridge-server.test.ts`, "the stats file describes this process before its first request": a healthy
+  start and a damaged one, each reading the file before any request, and a store disabled at the first request (a file
+  swapped in under it: `store:replaced`) in the file right after that request with `FLUSH_S` at 600. Rows, each restored
+  from a saved copy with sha256 compared: the one-shot removed from `store_event`, the server case red (`expected { at:
+  null, reason: null, …(2) } to match object { state: 'disabled', …(2) }`) and both flush cases red (`expected false to
+  be true`); the one-shot cleared after the write instead, the in-flight case red; the failed set-aside's `setAside`
+  dropped, the failed set-aside case red; the entry dropped from the constructor, five stats cases red; the loaded entry
+  carried in `_load`, the reset case red; the outranking guard removed, the either-order case red (`disabled-first`);
+  the basename guard removed, the bounds case red; the pre-bind flush removed, both pre-bind server cases red (`expected
+  '2026-01-01T00:00:00.000Z' not to be '2026-01-01T00:00:00.000Z'`).
+
+  The doctor's store row (`ccd/ccrc-doctor-checks`, `_dr_cx_store`), called from `_dr_cx_lane` beside the drift row
+  and, like it, on a `direct` lane only. It reads the stats file through `_dr_cx_stats_read`, the one reader the drift
+  row now shares (lane.json's `bridgeFiles.stats`, a regular file and not a symlink, at most READ_MAX), and bounds
+  every value it prints through `_dr_cx_bound`, whose `name_re` is stats.py's NAME_RE (the existing pin now reads it
+  there), else `unrecognised`. No `store` key, an `ok` entry, or a file the reader cannot read as the bridge's (the
+  drift row's unmeasured WARN names that) is no line. `disabled` is a WARN: "the bridge's reasoning store is switched
+  off for the rest of its last process (<reason>, since <at>): every request that process answers is answered without
+  the model's earlier reasoning replayed", adding "; at its start it had set its damaged store (<found>) aside as
+  <file>" when the entry carries a `setAside` record, and "(names only, never content)". Its remedy is `ccrc codex
+  stop <id>`, then `ccrc codex start <id>` (the start alone when the bridge is not running): the stop drains the bridge
+  (a request in flight gets DRAIN_S to finish, one still open then is cut with an error Claude Code sends again), the
+  start's check sets a damaged store aside, and the line clears when the new process writes its entry, before it binds
+  its port. `set-aside` is a WARN only while the copy `setAside.file` names is in the lane directory: "at its start the
+  bridge found its reasoning store damaged (<found>) and set it aside as <file>, starting a fresh store; only the
+  model's earlier reasoning was lost", with the remedy to read the copy if needed and delete it with its `-wal` and
+  `-shm`, which clears the line. The copy is checked only when its name is a bare name in store.py's shape
+  (`<name>.damaged-<YYYYmmddTHHMMSSZ>`); any other value is `unrecognised` and checks nothing. Whether the bridge runs
+  is not measured for this row: it is asked before `_dr_cx_tiers` measures the tiers, and asking it there would be new
+  I/O, so the WARN names the LAST process, the one that wrote the file, and holds for a stopped bridge until its next
+  start. Pins, in `server/test/ccrc-doctor-codex.test.ts`'s "the store row (D-7677)" block, each file written by the
+  real `Stats` through the driver unless named: no `store` key (planted by removing it) and `ok`, no line; `disabled`,
+  the WARN with its reason and time; a `store:set-aside-failed` naming its copy, the WARN naming it; `set-aside` with
+  the copy present, the WARN, then no line once the copy is deleted; a litellm lane with a `disabled` entry, no line,
+  beside a direct lane that warns; and hand-planted values outside the bound, each `unrecognised` with no byte of them
+  printed, and a set-aside naming a path, no line. Rows, each restored from a saved copy with sha256 compared: the
+  row's call removed from `_dr_cx_lane`, five cases red (the `disabled`, failed set-aside, set-aside, litellm and bounds
+  cases); the copy-exists test removed, the set-aside case red at the deleted copy; the bound removed, the bounds case
+  red.
+
+  Fix round 2: `ccrc codex status <id> --json` (`ccd/ccrc`, `_codex_cmd_status`) projects the entry as `bridge.store`,
+  `null` when the file has no `store` key (a bridge that predates it, never `ok`), on the projection's existing line.
+  Pins, in `server/test/ccrc-codex-bridge.test.ts`: "status --json names the mode and the bridge's stats" now expects
+  `store: null` in its exact `bridge` object (its file has no entry), and "status --json names the stats file's store
+  entry under bridge.store" reads a planted `disabled` entry with a `setAside` record back unchanged, then `null` with
+  the key removed. Row, restored from a saved copy with sha256 compared: the projection's `store` removed, both cases
+  red (`expected { …(5) } to deeply equal { …(6) }`; `expected undefined to deeply equal { state: 'disabled', …(3) }`).
+
+  Fix round 3 (a final held-out review), replacing the `set-aside` arm above: the entry is per process, so a restart
+  wrote `ok` and cleared the copy's WARN while the copy stayed. The row now finds the copy ON DISK, whatever the entry
+  says: a regular file, never a symlink, in the lane directory named `<store>.damaged-<8 digits>T<6 digits>Z`, keyed on
+  lane.json's `bridgeFiles.store` (a bare name, else no copy is looked for), its `-wal`/`-shm` not counted, the newest
+  such name the one named. While one exists the row WARNs, with the same remedy: "at its start the bridge found its
+  reasoning store damaged (<found>) and set it aside as <copy>, …" when the entry's `setAside.file` is that copy, else
+  "at an earlier start the bridge set a damaged reasoning store aside as <copy>, and the copy is still in the lane
+  directory (what was found is not in the stats file, whose entry describes only the bridge's last process); only the
+  model's earlier reasoning was lost." The `disabled` WARN stays entry-driven, and a stats file that is absent or
+  unreadable as the bridge's is still no line. `store:newer-version` has its own remedy: a newer build wrote the store
+  and a restart does not change it, so run that build again (`ccrc update --to <its version>`, or `ccrc rollout --to
+  <its version>`), or stop the lane, move the store and its `-wal`/`-shm` aside by hand, and start it again. Pins, in
+  the store row block: "a store a newer build wrote warns as disabled, and its remedy is that build, never a restart";
+  "a copy still in the lane directory after a restart warns, though the entry reads ok" (an older copy and the newest
+  copy's `-wal`/`-shm` planted beside it: the newest is named, once; no line once they are deleted); "a look-alike that
+  is not the store's copy, or a symlink of its shape, has no store row" (another file's copy, `bridge.stats.json`'s
+  included, short stamps, a suffix, a prefix, and a symlink at the copy's own name); the set-aside case above, whose
+  entry names the copy, keeps its `found`; and the end-to-end case of D-7676's fix round 3. With the previous doctor
+  and `ccd/ccrc` swapped in, the newer-version, restart and end-to-end cases were red. Rows, each restored from a saved copy with
+  sha256 compared: the on-disk look removed, the set-aside, restart and end-to-end cases red; the store-name key
+  replaced by any prefix, the look-alike case red; the symlink test removed, the look-alike case red; the
+  newer-version special case removed, the newer-version case red (`expected '  remedy: restart the lane\'s bridge …'
+  to be '  remedy: a newer build of the bridge…'`).
+
+  Fix round 4 (a re-review), replacing fix round 3's two copy-line forms: the copy line printed under a `disabled`
+  entry said "starting a fresh store" and "nothing to repair: the bridge serves from its fresh store" beneath the
+  `disabled` WARN, whose remedy is a restart. A `store:set-aside-failed` that names its copy always has that copy on
+  disk (store.py names it only after its rename succeeded), so that case printed both lines, and its pin, which never
+  planted the copy, checked one. The descriptive form, with its "nothing to repair" remedy, is now printed only when
+  the entry's `state` is `set-aside` and its `setAside.file` is that copy. Every other case (an `ok` entry after a
+  restart, `disabled`, an entry naming another file) gets the NEUTRAL line: "a set-aside copy of the lane's reasoning
+  store, <copy>, is in the lane directory", adding " (set aside at a start that found the store damaged: <found>)"
+  when the entry's `setAside.file` is that copy and "; the line above names the store's own repair" under `disabled`;
+  its remedy is to read the copy if the damage needs explaining, then delete it with its `-wal` and `-shm`, which
+  clears the line. It never says the bridge serves from a fresh store. Pins, in the store row block: the failed
+  set-aside case now plants the copy and pins exactly two store lines in order, the `disabled` WARN with the restart
+  remedy, then the neutral copy line with its `found` and the pointer, with no "fresh store" in the copy line or its
+  remedy; "a store disabled at runtime with an older copy on disk warns as disabled, and its copy line is neutral"
+  (`store:OperationalError`, `setAside` null), the same two lines with no `found`; and the restart case now expects
+  the neutral line. With the previous doctor, all three were red. Rows, each restored from a saved copy with sha256
+  compared: the `state` condition removed (the descriptive form whenever the entry names the copy), the failed
+  set-aside case red; the `found` clause made unconditional, the runtime-disabled and restart cases red; the
+  `disabled` pointer removed, both two-line cases red.
+- **Why:** The 2026-10-28 incident of D-7676: both lanes' stores were disabled for about six hours and nothing told
+  the operator. The only trace was a `store:DatabaseError` count among the cumulative outcomes, and the doctor said
+  nothing. A per-process entry, written before the first request, is what a reader can rule on.
+- **Cost if wrong:** One more forced write of the stats file at each start, before the port is bound (the file is a
+  few kilobytes). A reader that took the absence of `store` for `ok` would read an older bridge as healthy; the
+  docstring's schema listing says it is not.

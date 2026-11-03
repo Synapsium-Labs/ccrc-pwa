@@ -724,6 +724,19 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
   },
+  // The Move sessions sheet (accounts plan Task A3): its session rows and the progress line sit in .sheet-panel.
+  '.move-project': {
+    under: ['var(--bg-sheet)'],
+    why: "the Move sessions sheet's project line under each session's name (MoveSessionsSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). .move-list, .move-row and .move-name paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.move-word': {
+    under: ['var(--bg-sheet)'],
+    why: "the Move sessions sheet's outcome word at the right of each session row (MoveSessionsSheet.tsx), on .sheet-panel's var(--bg-sheet), the same ground and reasoning as .move-project",
+  },
+  '.move-progress': {
+    under: ['var(--bg-sheet)'],
+    why: "the Move sessions sheet's live progress line (MoveSessionsSheet.tsx), a direct child of the sheet body on .sheet-panel's var(--bg-sheet), the same ground and reasoning as .move-project",
+  },
   '.route-field-label': {
     under: ['var(--bg-sheet)'],
     why: 'the new-session sheet\'s routing row (routing spec, slice 4, Task 6) sits directly in .sheet-panel, same as .pool-note above. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
@@ -947,9 +960,22 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the emptied card's own sentence about where its work went (spec §6, board-placement wave 2), same ground and register as .proj-abroad-line above — both sit directly on .proj-card-body's ground. Its selector names no ancestor, so no route could ground it",
   },
-  '.proj-released-toggle, .proj-archived-toggle, .proj-children-toggle': {
+  // ── delegated work and its worktrees on a project card (delegation broker wave 4, PR2) ──────────────────────
+  '.proj-pending, .proj-work': {
     under: ['var(--bg-surface)'],
-    why: "the card's fold toggles (workspace lifecycle spec §5.1), and since D-6088 the coordinator's folded-workers line, which sits in .proj-card-body on the same card ground; rekeyed when that selector joined the rule. Siblings of .proj-card-body inside the card, on the card's own ground. ONE rule since both became <BareRow>: they had declared the same seven declarations as each other as well as the six the component carries, and this key moved with them — a rule key is `<basename> <selector>`, so merging two selectors rekeys, which the gate said out loud rather than passing quietly. Neither sets a background of its own and the selector names no ancestor, so no route could ground it",
+    why: "the pending spawn's row and, since delegation broker wave 4, a delegated activity's, worktree's or unowned tree's line: one rule, the same inert nested line in .proj-nest inside .proj-card-body, on the card ground. Neither is ever a selected row, and the selector names no ancestor, so no route could ground it. Registered when the second selector joined the rule (`.proj-pending` alone had been a grandfathered blind spot)",
+  },
+  '.proj-work-parts > *:not(:first-child)::before': {
+    under: ['var(--bg-surface)'],
+    why: "the middot between the cells of a .proj-work line, the .proj-pending-meta separator's twin on the same card ground. Registered separately for the reason the .auth-block-sub entry states",
+  },
+  '.proj-work-chip': {
+    under: ['var(--bg-surface)'],
+    why: "the inferred chip and the creating Bash call's chip on a raw worktree's line (D-6999), words in a currentColor frame like .sess-workson, on the same card ground; it paints no background of its own",
+  },
+  '.proj-released-toggle, .proj-archived-toggle, .proj-children-toggle, .proj-group-toggle': {
+    under: ['var(--bg-surface)'],
+    why: "the card's fold toggles (workspace lifecycle spec §5.1), and since D-6088 the coordinator's folded-workers line, which sits in .proj-card-body on the same card ground; rekeyed when that selector joined the rule. Siblings of .proj-card-body inside the card, on the card's own ground. Rekeyed again when the delegation broker's two group headers (wave 4) joined it: the same disclosure, on the same ground. ONE rule since both became <BareRow>: they had declared the same seven declarations as each other as well as the six the component carries, and this key moved with them — a rule key is `<basename> <selector>`, so merging two selectors rekeys, which the gate said out loud rather than passing quietly. Neither sets a background of its own and the selector names no ancestor, so no route could ground it",
   },
   '.proj-released-heading, .proj-released-note': {
     under: ['var(--bg-surface)'],
@@ -1186,6 +1212,96 @@ export const INHERITED_GROUNDS = {
   '.settings-when': {
     under: ['var(--bg-surface)'],
     why: "a Settings card's when-line (\"when you would change it\"), the tertiary step under a control's notes. Every section page's cards are @ccrc/ui's Section, whose card paints --bg-surface (SECTION_CARD's bg-surface), and the line sits directly inside it; its selector names no painted ancestor",
+  },  // ── accounts plan Task A18 (D-7740): the Add account door and the connect sheet ──────────────────
+  '.acct-door': {
+    under: ['var(--bg-page)'],
+    why: "the Add account door on a phone (ConnectSheet.tsx's AddAccountDoor), the lane list's last row: a ListRow with a transparent fill in .accounts-list, on the Accounts page's body, which paints nothing of its own over the page's var(--bg-page) (PageScaffold); the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-door-meta': {
+    under: ['var(--bg-page)'],
+    why: "the door's meta line (Anthropic · OpenAI · OpenRouter), inside the same row, on the Accounts page's body, which paints nothing of its own over the page's var(--bg-page) (PageScaffold); the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  ".acct-door[data-narrowed='true'], .acct-door[data-narrowed='true'] .acct-door-meta, .acct-door-action[data-narrowed='true']": {
+    under: ['var(--bg-page)'],
+    why: "the narrowed door in its disabled ink: the phone row in .accounts-list, or the header action in PageScaffold's head (bg-page, PAGE_HEAD), on the Accounts page's body, which paints nothing of its own over the page's var(--bg-page) (PageScaffold); the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-field > label, .acct-secret > label': {
+    under: ['var(--bg-sheet)'],
+    why: "the connect sheet's field labels (NameFrame.tsx, SecretField.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-field-note, .acct-narrowed, .acct-door-reason > p, .acct-door-reason .acct-fix-hold': {
+    under: ['var(--bg-sheet)', 'var(--bg-page)'],
+    why: "the connect sheet's field notes and a narrowed provider's or method's reason (NameFrame.tsx, ProviderFrame.tsx, MethodFrame.tsx) inside <Sheet>'s .sheet-panel, which paints var(--bg-sheet), and the Add account door's reason (DoorReason) on the Accounts page's var(--bg-page); none of the frames or the reason's box paints a background, and the selector names no painted ancestor, so the auditor cannot recover either ground from CSS alone",
+  },
+  '.acct-derived': {
+    under: ['var(--bg-sheet)'],
+    why: "the derived config folder and wrapper under the Name field (NameFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-method-name': {
+    under: ['var(--bg-sheet)'],
+    why: "a method's name in the method radio (MethodFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-method-line': {
+    under: ['var(--bg-sheet)'],
+    why: "a method's consequence line in the method radio (MethodFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-ledger': {
+    under: ['var(--bg-sheet)'],
+    why: "the Run frame's step ledger (RunFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-ledger-clock': {
+    under: ['var(--bg-sheet)'],
+    why: "each ledger line's clock (RunFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-result-word': {
+    under: ['var(--bg-sheet)'],
+    why: "the Result frame's state word (ResultFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-result-line': {
+    under: ['var(--bg-sheet)'],
+    why: "the Result frame's identity and latency lines (ResultFrame.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  // ── accounts plan Task A19 (D-7742): Remove, Discard, Replace token and the compromise disclosure ──────────────────
+  '.acct-remove-name': {
+    under: ['var(--bg-sheet)'],
+    why: "a session's name in the remove sheet's live list and the replace sheet's restart list (RemoveSheet.tsx, ReplaceSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-session-word': {
+    under: ['var(--bg-sheet)'],
+    why: "a session's restart word in the replace sheet (ReplaceSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-removal-lines': {
+    under: ['var(--bg-sheet)'],
+    why: "a ledger section's mono lines, and the sleeping session ids (RemoveSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-compromise > summary, .acct-grants > summary': {
+    under: ['var(--bg-sheet)'],
+    why: "the compromise disclosure's summary, in a result frame (CompromiseSteps.tsx), and the sign-in URL card's \"What this grants\" (RunFrame.tsx's UrlCard, Task A22), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-compromise-steps': {
+    under: ['var(--bg-sheet)'],
+    why: "the compromise disclosure's steps, in a result frame (CompromiseSteps.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  // ── accounts plan Task A22 (D-7849): Mint and Sign in ──────────────────
+  '.acct-url-host': {
+    under: ['var(--bg-sheet)'],
+    why: "the server's host in mono beside Open, and in the phone's private-tab line (RunFrame.tsx's UrlCard), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-grant-list': {
+    under: ['var(--bg-sheet)'],
+    why: "the scopes in \"What this grants\" (RunFrame.tsx's UrlCard), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-grant-mark': {
+    under: ['var(--bg-sheet)'],
+    why: "the Remote Control mark beside its scope (RunFrame.tsx's UrlCard), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-countdown': {
+    under: ['var(--bg-sheet)'],
+    why: "the sign-in's countdown (RunFrame.tsx's Countdown), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  ".acct-countdown[data-wait='true']": {
+    under: ['var(--bg-sheet)'],
+    why: "the countdown in amber while the sign-in waits on the operator (RunFrame.tsx's Countdown), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
 };
 
@@ -1386,7 +1502,7 @@ export function audit(root = PWA_ROOT) {
    *      .keycap`'s ground was exactly that, and threw);
    *    * a rule with a SELF_GROUNDED_EXEMPT reason is exempt wherever it is
    *      reached, not only when route 1 reaches it. */
-  const contextsFor = (base) => {
+  const contextsOf = (base) => {
     const vars = localVars(base.body);
     const out = [{ suffix: '', vars, rule: base }];
     // Each variant gets its own context, AND variants that qualify the base's
@@ -1445,6 +1561,17 @@ export function audit(root = PWA_ROOT) {
       if (g.names.length > 1) out.push({ ...g, suffix: ` [as ${g.names.join(' + ')}]` });
     }
     return out;
+  };
+
+  /** `contextsOf`, worked out once per base. It reads only this audit's fixed
+   *  inputs (the rules, the self-grounded set, the registries), so a second call
+   *  for the same rule returns the same contexts — and the passes below ask for
+   *  153 distinct bases 471 times, each answer a scan of every rule. Callers
+   *  only read the contexts; none of them mutates one. */
+  const contextsMemo = new Map();
+  const contextsFor = (base) => {
+    if (!contextsMemo.has(base)) contextsMemo.set(base, contextsOf(base));
+    return contextsMemo.get(base);
   };
 
   /** Measure one ink against one ground, in both themes. The single place a

@@ -1158,6 +1158,224 @@ describe('history ingest: chunk writes in-process (plan task 19)', () => {
   });
 });
 
+// Coverage for the existing contract of §9.2 steps 3-4 (identity-proven cursor resume, a full idempotent rescan that deletes
+// nothing, the cursor and chunk persisted together, tool pairing across passes) and §9.11 O1-O4. No runtime changed: these
+// cases pass on the code as it stands.
+describe('incremental transcript regression (spec §9.2 steps 3-4, §9.11 O1-O4)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  let S: IxSweep;
+  beforeAll(async () => { ({ sweep: S } = await IX.api()); });
+
+  type Prepare = (lines: { at: number; bytes: Buffer }[], ...rest: unknown[]) => unknown;
+  /** `ctx` with its parser seam wrapped: every call is forwarded to the real prepareLines and the byte offset of every
+   *  line it was handed is recorded, in call order. It observes the rows prepared, not the reads a bind makes. */
+  const observed = (ctx: IxCtx): { ctx: IxCtx; calls: number[][]; flat: () => number[]; reset: () => void } => {
+    const real = ctx.prepareLines as unknown as Prepare;
+    const calls: number[][] = [];
+    const wrapped = { ...ctx, prepareLines: (lines: { at: number; bytes: Buffer }[], ...rest: unknown[]): unknown => {
+      calls.push(lines.map((l) => l.at));
+      return real(lines, ...rest);
+    } } as unknown as IxCtx;
+    return { ctx: wrapped, calls, flat: () => calls.flat(), reset: () => { calls.length = 0; } };
+  };
+  /** The byte offset at which each line of `text` starts. */
+  const offsetsOf = (text: string): number[] => {
+    const out: number[] = [];
+    let at = 0;
+    for (const line of text.split('\n').slice(0, -1)) { out.push(at); at += Buffer.byteLength(line) + 1; }
+    return out;
+  };
+  const hex = (b: Uint8Array): string => Buffer.from(b).toString('hex');
+
+  /** What a store holds about one transcript, as sorted semantic tuples. Left out on purpose: surrogate row ids, the
+   *  fixture root's paths, and ingest-time metadata (first_seen_ms, mtime_ns, struct_rank_ns, struct_file_id, file ids).
+   *  entries.api_block_index is pass-local by design (sweep.mjs, nextBlockIndex), so the rows here carry distinct request
+   *  ids and the field is read as stored, never normalised. */
+  const semantic = (db: DatabaseSync): { entries: string[]; variants: string[]; memberships: string[] } => {
+    const body = (z: Uint8Array | null): string => (z === null ? '<tombstone>' : brotliDecompressSync(z).toString('utf8'));
+    const entries = (db.prepare(`SELECT t.cc_session_uuid AS tu, e.uuid AS uuid, e.type AS type, e.role AS role, e.parent_uuid AS parent,
+        e.provenance AS prov, e.parse_state AS ps, e.request_id AS rid, e.api_block_index AS abi, e.msg_id AS mid, e.ts_ms AS ts,
+        b.sha256 AS sha, b.z AS z FROM entries e JOIN transcripts t ON t.transcript_pk = e.transcript_pk
+        JOIN blobs b ON b.blob_id = e.blob_id`).all() as Record<string, unknown>[])
+      .map((r) => JSON.stringify([r['tu'], r['uuid'], r['type'], r['role'], r['parent'], r['prov'], r['ps'], r['rid'], r['abi'], r['mid'], r['ts'],
+        hex(r['sha'] as Uint8Array), body(r['z'] as Uint8Array | null)])).sort();
+    const variants = (db.prepare(`SELECT e.uuid AS uuid, v.cause AS cause, b.sha256 AS sha, b.z AS z FROM entry_variants v
+        JOIN entries e ON e.entry_id = v.entry_id JOIN blobs b ON b.blob_id = v.blob_id`).all() as Record<string, unknown>[])
+      .map((r) => JSON.stringify([r['uuid'], r['cause'], hex(r['sha'] as Uint8Array), body(r['z'] as Uint8Array | null)])).sort();
+    const memberships = (db.prepare(`SELECT e.uuid AS uuid, m.line AS line, f.source_key AS sk FROM memberships m
+        JOIN entries e ON e.entry_id = m.entry_id JOIN ingest_files f ON f.file_id = m.file_id`).all() as Record<string, unknown>[])
+      .map((r) => JSON.stringify([r['uuid'], r['sk'] === '' ? 'live' : 'other', r['line']])).sort();
+    return { entries, variants, memberships };
+  };
+
+  it('Case 1: a transcript ingested in two passes across a writer close and reopen stores what the same bytes store in one pass, and a repeat adds nothing', async () => {
+    const { store, lib } = await IX.api();
+    const USE_ID = 'toolu_01INCR';
+    const root = IX.user(IX.uuidN(1), null, 'incremental root prompt', 1);
+    const use = IX.assistant(IX.uuidN(2), IX.uuidN(1), [{ type: 'tool_use', id: USE_ID, name: 'Bash', input: { command: 'ccrc history grep widget' } }], 2);
+    const result = IX.user(IX.uuidN(3), IX.uuidN(2), [{ type: 'tool_result', tool_use_id: USE_ID, content: 'widget found' }], 3);
+    const next = IX.assistant(IX.uuidN(4), IX.uuidN(3), [{ type: 'text', text: 'done' }], 4);
+    const head = IX.jsonl([root, use]);                                    // pass 1 ends between the tool_use and its result
+    const tail = IX.jsonl([result, next, root]);                           // pass 2: the result, the next turn, an identical duplicate of the root row
+    const whole = head + tail;
+    const run = async (db: DatabaseSync, ids: IxIds, box: HistoryBox, p: string): Promise<IxFileResult> => {
+      const r = await S.ingestPath(db, S.makeIngestCtx(box.home, box.homes, Date.now(), ids), { path: p, uuid: IX.U, home: box.homes[0]! }, S.newBudget());
+      return r!;
+    };
+
+    // The one-shot oracle: the final bytes, one pass.
+    const boxA = IX.newBox('ccrc-hist-incr-one-');
+    const pA = IX.plantCopy(boxA.homes[0]!, IX.U, whole);
+    const a = await IX.openFixtureStore(boxA);
+    let one: ReturnType<typeof semantic>;
+    try {
+      const r = await run(a.db, a.ids, boxA, pA);
+      expect(r.atEof).toBe(true);
+      expect(r.offset).toBe(Buffer.byteLength(whole));
+      expect(r.newEntries).toBe(4);
+      one = semantic(a.db);
+    } finally { closeWriter(a.db); }
+
+    // The same final bytes, the first part ingested, the writer closed and reopened, the rest appended and ingested.
+    const boxB = IX.newBox('ccrc-hist-incr-two-');
+    const pB = IX.plantCopy(boxB.homes[0]!, IX.U, head);
+    const b = await IX.openFixtureStore(boxB);
+    let db = b.db;
+    try {
+      const r1 = await run(db, b.ids, boxB, pB);
+      expect(r1.offset).toBe(Buffer.byteLength(head));
+      expect(IX.count(db, 'entries')).toBe(2);
+      const inode = fs.statSync(pB).ino;
+      closeWriter(db);
+      db = store.openWriter(lib.historyPaths(boxB.home).dbFile);            // an actual reopen: a new connection on the file
+      expect(IX.cursorOf(db, r1.fileId), 'the cursor persisted across the close').toBe(Buffer.byteLength(head));
+      fs.appendFileSync(pB, tail);
+      expect(fs.statSync(pB).ino, 'CONTROL: an append, not a rewrite').toBe(inode);
+      expect(fs.readFileSync(pB).equals(Buffer.from(whole)), 'the incremental file holds exactly the one-shot bytes').toBe(true);
+      expect(fs.readFileSync(pA).equals(fs.readFileSync(pB))).toBe(true);
+      const r2 = await run(db, b.ids, boxB, pB);
+      expect(r2.fileId).toBe(r1.fileId);
+      expect(r2.atEof).toBe(true);
+      expect(r2.offset).toBe(Buffer.byteLength(whole));
+      expect(r2.newEntries, 'the duplicate row is no new entry').toBe(2);
+      expect(IX.cursorOf(db, r2.fileId)).toBe(Buffer.byteLength(whole));
+      const two = semantic(db);
+
+      expect(two.entries).toEqual(one.entries);
+      expect(two.variants).toEqual(one.variants);
+      expect(two.memberships).toEqual(one.memberships);
+      // CONTROLS that the oracle is not empty and that the pair crossed the pass: the result row is a recall echo only if the
+      // tool_use written in pass 1 was found in the store, and the duplicate keeps its first position (memberships keep min(line)).
+      expect(two.entries).toHaveLength(4);
+      const prov = (db.prepare('SELECT uuid, provenance FROM entries ORDER BY uuid').all() as { uuid: string; provenance: string }[]).map((r) => r.provenance);
+      expect(prov).toEqual(['operator', 'model', 'recall-echo', 'model']);
+      expect(two.memberships).toContain(JSON.stringify([IX.uuidN(1), 'live', 0]));
+      expect(IX.count(db, 'memberships')).toBe(4);
+
+      // A repeat adds no entry and no membership, and moves nothing in the oracle.
+      const before = { entries: IX.count(db, 'entries'), memberships: IX.count(db, 'memberships'), blobs: IX.count(db, 'blobs') };
+      const r3 = await run(db, b.ids, boxB, pB);
+      expect(r3.newEntries).toBe(0);
+      expect({ entries: IX.count(db, 'entries'), memberships: IX.count(db, 'memberships'), blobs: IX.count(db, 'blobs') }).toEqual(before);
+      expect(semantic(db)).toEqual(two);
+
+      // SENSITIVITY: the oracle tells an altered body, an altered parent and a moved membership offset from the one-shot store.
+      const resultBlob = (db.prepare('SELECT blob_id AS id, z, raw_len AS len FROM blobs WHERE blob_id = (SELECT blob_id FROM entries WHERE uuid = ?)').get(IX.uuidN(3)) as
+        { id: number; z: Uint8Array; len: number });
+      const altered = brotliCompressSync(Buffer.from(brotliDecompressSync(resultBlob.z).toString('utf8').replace('widget found', 'widget lost!')));
+      const mutations: [string, string, unknown[], string, unknown[], keyof ReturnType<typeof semantic>][] = [
+        ['body', 'UPDATE blobs SET z = ? WHERE blob_id = ?', [altered, resultBlob.id], 'UPDATE blobs SET z = ? WHERE blob_id = ?', [resultBlob.z, resultBlob.id], 'entries'],
+        ['parent', 'UPDATE entries SET parent_uuid = ? WHERE uuid = ?', [IX.uuidN(1), IX.uuidN(3)], 'UPDATE entries SET parent_uuid = ? WHERE uuid = ?', [IX.uuidN(2), IX.uuidN(3)], 'entries'],
+        ['membership offset', 'UPDATE memberships SET line = line + 1 WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [IX.uuidN(4)],
+          'UPDATE memberships SET line = line - 1 WHERE entry_id = (SELECT entry_id FROM entries WHERE uuid = ?)', [IX.uuidN(4)], 'memberships'],
+      ];
+      for (const [name, apply, applyArgs, revert, revertArgs, table] of mutations) {
+        db.prepare(apply).run(...(applyArgs as never[]));
+        expect(semantic(db)[table], `the oracle sees an altered ${name}`).not.toEqual(one[table]);
+        db.prepare(revert).run(...(revertArgs as never[]));
+        expect(semantic(db)[table], `CONTROL: the ${name} change is undone`).toEqual(one[table]);
+      }
+    } finally { closeWriter(db); }
+  });
+
+  for (const n of [3, 17]) {
+    it(`Case 2 (${n} lines): an append prepares only the new row, a revisit none, and a rewritten cursor-tail line a rescan of exactly the file's lines from zero`, async () => {
+      const box = IX.newBox(`ccrc-hist-incr-prep${n}-`);
+      const rowText = (i: number, word = 'line'): IxRow => IX.user(IX.uuidN(i), i === 1 ? null : IX.uuidN(i - 1), `${word} ${String(i).padStart(2, '0')}`, i);
+      const rows: IxRow[] = [];
+      for (let i = 1; i <= n; i += 1) rows.push(rowText(i));
+      const prefix = IX.jsonl(rows);
+      const p = IX.plantCopy(box.homes[0]!, IX.U, prefix);
+      const { db, ids } = await IX.openFixtureStore(box);
+      try {
+        const obs = observed(S.makeIngestCtx(box.home, box.homes, Date.now(), ids));
+        const f = { path: p, uuid: IX.U, home: box.homes[0]! };
+        const ingest = async (): Promise<IxFileResult> => (await S.ingestPath(db, obs.ctx, f, S.newBudget()))!;
+
+        // The prefix: the seam is connected to real execution when what it saw is what was stored.
+        const r0 = await ingest();
+        expect(obs.flat(), 'every line of the prefix was prepared, at its own byte offset').toEqual(offsetsOf(prefix));
+        expect(obs.flat()).toHaveLength(n);
+        expect(IX.count(db, 'entries')).toBe(n);
+        expect(IX.count(db, 'memberships')).toBe(n);
+        expect(IX.cursorOf(db, r0.fileId)).toBe(Buffer.byteLength(prefix));
+
+        // An ordinary append prepares that one row and moves the cursor to the end.
+        obs.reset();
+        const added = IX.jsonl([rowText(n + 1)]);
+        fs.appendFileSync(p, added);
+        const r1 = await ingest();
+        expect(obs.flat(), 'only the appended row was prepared').toEqual([Buffer.byteLength(prefix)]);
+        expect(r1.fileId).toBe(r0.fileId);
+        expect(r1.newEntries).toBe(1);
+        expect(IX.cursorOf(db, r1.fileId)).toBe(fs.statSync(p).size);
+        expect(IX.count(db, 'entries')).toBe(n + 1);
+
+        // A revisit of an unchanged file prepares nothing and changes nothing.
+        obs.reset();
+        const r2 = await ingest();
+        expect(obs.calls, 'no row is prepared').toEqual([]);
+        expect(r2.newEntries).toBe(0);
+        expect(IX.cursorOf(db, r2.fileId)).toBe(fs.statSync(p).size);
+        expect(IX.count(db, 'entries')).toBe(n + 1);
+        expect(IX.count(db, 'memberships')).toBe(n + 1);
+
+        // A same-length rewrite of the cursor-tail line, in place (same inode, first line untouched): the tail proof fails, so the
+        // file is rescanned from zero and every line of the file as it now stands is prepared.
+        obs.reset();
+        const whole = prefix + added;
+        const tailAt = offsetsOf(whole)[n]!;
+        const tailOld = Buffer.from(IX.jsonl([rowText(n + 1)]));
+        const tailNew = Buffer.from(IX.jsonl([rowText(n + 1, 'LINE')]));
+        expect(tailNew.length, 'CONTROL: the rewrite keeps the length').toBe(tailOld.length);
+        expect(tailNew.equals(tailOld)).toBe(false);
+        const inode = fs.statSync(p).ino;
+        const fd = fs.openSync(p, 'r+');
+        try { fs.writeSync(fd, tailNew, 0, tailNew.length, tailAt); } finally { fs.closeSync(fd); }
+        expect(fs.statSync(p).ino).toBe(inode);
+        const nowText = fs.readFileSync(p, 'utf8');
+        expect(nowText.split('\n')[0]).toBe(whole.split('\n')[0]);
+        const r3 = await ingest();
+        expect(obs.flat(), 'a full rescan from zero: exactly the current file\'s line offsets').toEqual(offsetsOf(nowText));
+        expect(obs.flat()).toHaveLength(n + 1);
+        expect(r3.fileId, 'the same file row, rescanned, not retired').toBe(r0.fileId);
+        expect(r3.atEof).toBe(true);
+        expect(IX.cursorOf(db, r3.fileId)).toBe(fs.statSync(p).size);
+        // Nothing was deleted and nothing duplicated: the same n + 1 identities, each membership at its line's byte offset.
+        expect(IX.count(db, 'entries')).toBe(n + 1);
+        expect(IX.count(db, 'memberships')).toBe(n + 1);
+        const at = offsetsOf(nowText);
+        const memberships = (db.prepare('SELECT e.uuid AS uuid, m.line AS line FROM memberships m JOIN entries e ON e.entry_id = m.entry_id ORDER BY m.line').all() as { uuid: string; line: number }[])
+          .map((r) => [r.uuid, r.line]);
+        expect(memberships).toEqual(at.map((offset, i) => [IX.uuidN(i + 1), offset]));
+        // The rewritten body is the one change: the first body stays the entry's, the new one is a second variant, and no other row has one.
+        expect(IX.count(db, 'entry_variants', `entry_id = (SELECT entry_id FROM entries WHERE uuid = '${IX.uuidN(n + 1)}')`)).toBe(2);
+        expect(IX.count(db, 'entry_variants')).toBe(2);
+      } finally { closeWriter(db); }
+    });
+  }
+});
+
 interface IxSweep {
   recordTick(db: DatabaseSync, ctx: IxCtx, ing: IxTickResult | null): void;
   backfillEpochFacts(db: DatabaseSync, ctx: IxCtx): void;

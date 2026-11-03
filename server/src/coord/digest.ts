@@ -16,6 +16,7 @@ import {
   DIGEST_REFUSALS, DRIFT_KINDS,
   type DigestAnswer, type DigestCorrectBody, type DriftKind, type DriftLine, type DigestLine, type DigestLineKind, type DigestRowKind, type DigestTotals,
 } from '../../../shared/api.js';
+import type { WatcherCoordPort } from './ports.js';
 import { redactCommand } from './redact.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import type { ApprovalRow, AskRow, CoordStore } from './store.js';
@@ -105,7 +106,7 @@ export type DigestBuilt = Pick<DigestAnswer, 'totals' | 'byCoordinator' | 'lines
 /** The digest over `[dayStartMs, dayEndMs)`: one line per coordinator decision, in time order (ties by table, then
  *  id), the totals, and each coordinator's count. Pure over the store's reads. `ageEndMs` is where a drift line's age
  *  stops: the window's end by default; a caller reading a window that has not closed yet passes `now`. */
-export function buildDigest(store: CoordStore, dayStartMs: number, dayEndMs: number, ageEndMs = dayEndMs):
+export function buildDigest(store: WatcherCoordPort, dayStartMs: number, dayEndMs: number, ageEndMs = dayEndMs):
   { ok: true; digest: DigestBuilt } | { ok: false; detail: string } {
   // D-7026: both tables through `coord/questions.ts`, the asks first; a refusal of either is the refusal.
   const decided = decidedIn(store, { fromMs: dayStartMs, toMs: dayEndMs });
@@ -151,7 +152,7 @@ export function buildDigest(store: CoordStore, dayStartMs: number, dayEndMs: num
 
 /** The drift section (D-5923): the findings open at the window's end, never counted into `decisions`. An unreadable
  *  table leaves the section out (absence permits) and never fails the digest, which is about decisions. */
-function driftSection(store: CoordStore, dayEndMs: number, ageEndMs: number): DigestBuilt['drift'] | null {
+function driftSection(store: WatcherCoordPort, dayEndMs: number, ageEndMs: number): DigestBuilt['drift'] | null {
   const read = store.driftFindingsOpenAt(dayEndMs);
   if (!read.ok) return null;
   const totals = Object.fromEntries(DRIFT_KINDS.map((k) => [k, 0])) as Record<DriftKind, number>;

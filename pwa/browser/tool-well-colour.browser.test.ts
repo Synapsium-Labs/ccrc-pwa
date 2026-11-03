@@ -75,6 +75,8 @@ describe('an expanded Bash card shows its command and output in palette hues on 
         expect(await rawCard.locator('.well').first().textContent()).toBe('literalinput');
         await card.locator('.tool-row').click();
         await expect.poll(() => card.locator('.well').count()).toBe(2);
+        // From W5h-a the well is plain first and coloured when the highlight worker answers.
+        await card.locator('.well .hljs-string').first().waitFor({ timeout: 20_000 });
         const m = await card.evaluate((element, hueTokens) => {
           const wells = [...element.querySelectorAll<HTMLElement>('.well')];
           const probe = document.createElement('span');

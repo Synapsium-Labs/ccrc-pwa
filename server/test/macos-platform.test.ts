@@ -258,7 +258,10 @@ describe('no call site outside the platform block runs a GNU-only command bare',
    *  name kept here after its GNU-only calls are gone. */
   const unowned: Record<string, string> = {
     'ccclip': 'a template-less `mktemp -t ccclip`',
-    'ccd-graph-sweep': '`stat -c %Y`/`stat -c %s`, `date +%s%3N`, a bare `timeout` and a template-less `mktemp`',
+    // Graph revision 2 (D-7350): the repository sweep sources ccd/ccrc and uses its platform shims for stat, the
+    // clock, the rename and the link swap; what it still spells is GNU `timeout` (`--kill-after`), which spec §3.4
+    // fixes for the build's two bounds and the fetch's.
+    'ccd-graph-sweep': 'a bare `timeout`',
     // The telemetry keepalive (spec 2026-09-07 §C). Linux-only by PRODUCT
     // shape as well as userland — its timer never installs on the Darwin arm,
     // the same carve-out the sweep has — and its two GNU spellings are both

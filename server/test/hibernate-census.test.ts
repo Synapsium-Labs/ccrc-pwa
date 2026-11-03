@@ -182,6 +182,16 @@ const CENSUS: readonly Row[] = [
     why: 'counts the batch\'s rows the server reads alive (`presenceOf`, D-7181): a sleeper is not running' },
   { source: 'presence-reader', file: 'pwa/src/screens/AccountsScreen.tsx', hits: 1, stances: ['true-of-pane'],
     why: 'counts an account\'s sessions the server reads alive (`presenceOf`, D-7181): a sleeper is not running' },
+  { source: 'presence-reader', file: 'pwa/src/fleet/MoveSessionsSheet.tsx', hits: 1, stances: ['consults'],
+    why: 'the Move sessions sheet (D-7736) lists a lane\'s rows the server reads alive or `asleep` (`presenceOf`, '
+      + 'D-7181): a sleeper is listed so that it is named "refused: asleep" from the swap route\'s `409 hibernated`, '
+      + 'never moved or woken by the sheet' },
+  { source: 'presence-reader', file: 'pwa/src/accounts/RemoveSheet.tsx', hits: 1, stances: ['true-of-pane'],
+    why: 'the remove sheet (D-7742) lists the lane\'s sessions the server reads alive (`presenceOf`, D-7181) for its Move '
+      + 'buttons; a sleeper is not running, and the box\'s pre-check lists the sleeping ones apart, by id, for Wake and move' },
+  { source: 'presence-reader', file: 'pwa/src/accounts/RestartList.tsx', hits: 1, stances: ['true-of-pane'],
+    why: 'the replace and method switch sheets (D-7742, D-7871) offer Restart to the lane\'s sessions the server reads alive '
+      + '(`presenceOf`, D-7181): a sleeper holds no credential in a running process, and wakes onto the new one' },
   { source: 'presence-reader', file: 'pwa/src/fleet/startProgramPolicy.ts', hits: 3, stances: ['true-of-pane'],
     why: 'the live main checkout (alive or doubted), the started session and the live ids read the server\'s word '
       + '(`presenceOf`, D-7181): a sleeping session is not running, which is true of its pane' },

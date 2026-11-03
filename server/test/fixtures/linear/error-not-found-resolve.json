@@ -1,0 +1,122 @@
+{
+  "name": "error-not-found-resolve",
+  "documentSource": "code",
+  "document": "query ResolveIssue($id: String!) { issue(id: $id) { id identifier team { id key } } }",
+  "variables": {
+    "id": "AAA-999999"
+  },
+  "requestBody": "{\"query\":\"query ResolveIssue($id: String!) { issue(id: $id) { id identifier team { id key } } }\",\"variables\":{\"id\":\"AAA-999999\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631405681,
+  "receivedAtMs": 1793631405893,
+  "sentAt": "2026-11-02T14:56:45.681+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "date",
+      "Mon, 02 Nov 2026 14:56:46 GMT"
+    ],
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "content-length",
+      "270"
+    ],
+    [
+      "cf-ray",
+      "fixture-cf-ray"
+    ],
+    [
+      "cf-cache-status",
+      "DYNAMIC"
+    ],
+    [
+      "cache-control",
+      "private, no-cache, no-store, must-revalidate"
+    ],
+    [
+      "etag",
+      "W/\"fixture-etag\""
+    ],
+    [
+      "server",
+      "cloudflare"
+    ],
+    [
+      "vary",
+      "Accept-Encoding"
+    ],
+    [
+      "via",
+      "1.1 google"
+    ],
+    [
+      "alt-svc",
+      "h3=\":443\"; ma=86400"
+    ],
+    [
+      "x-complexity",
+      "3"
+    ],
+    [
+      "x-ratelimit-complexity-limit",
+      "3000000"
+    ],
+    [
+      "x-ratelimit-complexity-remaining",
+      "2999997"
+    ],
+    [
+      "x-ratelimit-complexity-reset",
+      "1793635006254"
+    ],
+    [
+      "x-ratelimit-requests-limit",
+      "2500"
+    ],
+    [
+      "x-ratelimit-requests-remaining",
+      "2499"
+    ],
+    [
+      "x-ratelimit-requests-reset",
+      "1793635006254"
+    ],
+    [
+      "x-request-id",
+      "fixture-request-id"
+    ]
+  ],
+  "body": {
+    "errors": [
+      {
+        "message": "Entity not found: Issue",
+        "path": [
+          "issue"
+        ],
+        "locations": [
+          {
+            "line": 1,
+            "column": 36
+          }
+        ],
+        "extensions": {
+          "type": "invalid input",
+          "code": "INPUT_ERROR",
+          "statusCode": 400,
+          "userError": true,
+          "userPresentableMessage": "Could not find referenced Issue."
+        }
+      }
+    ],
+    "data": null
+  },
+  "bodyRaw": "{\"errors\":[{\"message\":\"Entity not found: Issue\",\"path\":[\"issue\"],\"locations\":[{\"line\":1,\"column\":36}],\"extensions\":{\"type\":\"invalid input\",\"code\":\"INPUT_ERROR\",\"statusCode\":400,\"userError\":true,\"userPresentableMessage\":\"Could not find referenced Issue.\"}}],\"data\":null}\n",
+  "note": "The same missing issue through the resolve document."
+}

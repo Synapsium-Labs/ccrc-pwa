@@ -2,8 +2,10 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WsAudit } from '../../../shared/api';
+import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
+import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
+import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { RotateAnswer } from '../../../shared/box-token';
@@ -11,7 +13,7 @@ import type { ResolveRead } from '../fleet/workspaceNameWords';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
 import { questionAnswerRequest } from '../session/answerLifecycle';
-import { ANSWERED, answered, linearViewOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange } from './wireReaders';
+import { ANSWERED, answered, linearViewOf, linearWorkspacesOf, linearWorkspacesNotConnectedOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange, type LinearWorkspacesRead } from './wireReaders';
 import { TOKEN_ROTATE_PATH } from '../../../shared/box-token';
 import {
   DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, contentClass, docsApi, type DocsFileResponse, type DocsProjectsResponse,
@@ -21,6 +23,7 @@ import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
 } from '../docs/failures';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
+import type { SecretSaveAnswer } from '../../../shared/ledgers';
 
 /** `GET`/`POST /api/coord/roll-idle`'s answer (D-7453). */
 export interface RollIdleView {
@@ -344,12 +347,68 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     },
     disconnectLinear: async (): Promise<LinearConnectionView | 'unreadable'> =>
       linearViewOf(await (await request('/api/linear/connection', { method: 'DELETE', headers: { accept: 'application/json' } })).json().catch(() => null)),
+    /** The Settings card's four calls for workspace keys (#1444, spec §10.1, §10.2), beside the legacy row's four
+     *  above. Each answers the list, or `'unreadable'` for a 2xx whose body is not one (a write may have landed: the
+     *  card re-reads). A refusal rejects with its `ApiError` (`workspace-exists` names the workspace, `step-up-required`
+     *  …), except a check's 409 `not-connected`, whose list IS its answer. The key is only ever in the add's body. */
+    linearWorkspaces: async (): Promise<LinearWorkspacesRead | 'unreadable'> =>
+      linearWorkspacesOf(await (await request('/api/linear/workspaces', { headers: { accept: 'application/json' } })).json().catch(() => null)),
+    addLinearWorkspace: async (key: string, replace: boolean): Promise<LinearWorkspacesRead | 'unreadable'> =>
+      linearWorkspacesOf(await (await request('/api/linear/workspaces', jsonInit(replace ? { key, replace } : { key }))).json().catch(() => null)),
+    checkLinearWorkspace: async (id: string): Promise<LinearWorkspacesRead | 'unreadable'> => {
+      try {
+        return linearWorkspacesOf(await (await request(`/api/linear/workspaces/${encodeURIComponent(id)}/check`, jsonInit())).json().catch(() => null));
+      } catch (err) {
+        const list = linearWorkspacesNotConnectedOf(err);
+        if (list !== null) return list;
+        throw err;
+      }
+    },
+    removeLinearWorkspace: async (id: string): Promise<LinearWorkspacesRead | 'unreadable'> =>
+      linearWorkspacesOf(await (await request(`/api/linear/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { accept: 'application/json' } })).json().catch(() => null)),
 
     // `AccountsResponse`, not a restatement of it: this shape used to be
     // hand-written here, in the handler and in the route test, and the roster
     // field added in Stage 2a is exactly the kind of addition that lands in two
     // of three copies. The generic is the contract now.
     accounts: () => getJson<AccountsResponse>('/api/accounts'),
+    /** The lane routes (accounts plan Task A14, D-7732; spec §10, §13.1): Check, and the kill switch. `postJson`: a
+     *  refusal rejects with its `ApiError`, whose body's `error` word (and `reason`, `verbCode`) the screen words
+     *  (`laneActRefusal`), never its text. Check spends one test reply; neither switch probes. */
+    accountCheck: (id: string) => postJson<AccountCheckAnswer>(`/api/accounts/${encodeURIComponent(id)}/check`),
+    accountEnable: (id: string) => postJson<AccountSwitchAnswer>(`/api/accounts/${encodeURIComponent(id)}/enable`),
+    accountDisable: (id: string) => postJson<AccountSwitchAnswer>(`/api/accounts/${encodeURIComponent(id)}/disable`),
+    /** `POST /api/accounts` (accounts plan Task A18, D-7740; spec §6.3, §13.1): add a lane, with a pasted token in
+     *  `credential` for the paste method. The body is sent once and kept nowhere: no retry, no queue. A refusal rejects
+     *  with its `ApiError`, whose `error` word the connect sheet words (`addRefusal`), never its text. */
+    accountAdd: (body: AccountAddBody) => postJson<AccountAddAnswer>('/api/accounts', body),
+    /** Remove, Discard and Replace token (accounts plan Task A19, D-7742; spec §9, §11, §13.1). `accountRemoveCheck` is
+     *  remove's pre-check (`{mode:'check'}`, which changes nothing); `accountRemove` sends `{mode:'remove', confirmId}`
+     *  or `{mode:'discard'}`; `accountCredential` a replacement token by paste, sent once and kept nowhere;
+     *  `accountRevokeAck` the operator's tick, which carries the lane and the credential kind and no value (N6). A
+     *  refusal rejects with its `ApiError`, whose `error` word the sheet words, never its text. */
+    accountRemoveCheck: (id: string) =>
+      postJson<AccountRemoveCheckAnswer>(`/api/accounts/${encodeURIComponent(id)}/remove`, { mode: 'check' } satisfies AccountRemoveBody),
+    accountRemove: (id: string, body: Exclude<AccountRemoveBody, { mode: 'check' }>) =>
+      postJson<AccountRemoveAnswer>(`/api/accounts/${encodeURIComponent(id)}/remove`, body),
+    accountCredential: (id: string, body: AccountCredentialBody) =>
+      postJson<AccountCredentialAnswer>(`/api/accounts/${encodeURIComponent(id)}/credential`, body),
+    accountRevokeAck: (body: AccountRevokeAckBody) => postJson<{ ok: true }>('/api/accounts/revoke-ack', body),
+    /** Mint and Sign in (accounts plan Task A22, D-7849; spec §3.7, §3.8, §6.2, §6.3, §13.1): start an attempt (step-up),
+     *  read its status (polled by an open sheet only, never otherwise), send its one code (held for the request, kept
+     *  nowhere: no retry, no queue), cancel it; `set {stated}` for a minted lane's stated account; and N5's sign-out.
+     *  A refusal rejects with its `ApiError`, whose `error` word the sheet words, never its text. */
+    accountAuthStart: (id: string, body: AccountAuthStartBody) =>
+      postJson<AccountAuthStartAnswer>(`/api/accounts/${encodeURIComponent(id)}/auth/start`, body),
+    accountAuthStatus: (id: string) => getJson<AccountAuthStatusAnswer>(`/api/accounts/${encodeURIComponent(id)}/auth`),
+    accountAuthCode: (id: string, body: AccountAuthCodeBody) =>
+      postJson<{ ok: true }>(`/api/accounts/${encodeURIComponent(id)}/auth/code`, body),
+    accountAuthCancel: (id: string, body: AccountAuthCancelBody) =>
+      postJson<{ ok: true }>(`/api/accounts/${encodeURIComponent(id)}/auth/cancel`, body),
+    accountSet: (id: string, body: AccountSetBody) =>
+      postJson<AccountSwitchAnswer>(`/api/accounts/${encodeURIComponent(id)}/set`, body),
+    accountSignOut: (id: string) =>
+      postJson<AccountSignOutAnswer>(`/api/accounts/${encodeURIComponent(id)}/credential`, { signOut: true }),
     // `ProjectRow`, not a hand-written twin — the comment two lines up names
     // this exact failure mode, and F3's `readiness` is the field it predicted:
     // spelled inline here, this generic would have gone on declaring a shape
@@ -446,8 +505,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  and an absent `opts` both keep the ordinary `{wrapper}` request shape.
      *  Not a checkbox anywhere in the UI: it is what a
      *  pick made under `SwapSheet`'s "show other pools" disclosure sends, after
-     *  a confirm sentence that names the crossing. `{interrupt:true}` the same way (D-5240): ONLY when it is true, sent
-     *  only by `SwapSheet`'s "swap anyway", the second tap after the route answered `409 session-busy`. */
+     *  a confirm sentence that names the crossing, or by the Move sessions sheet for a target picked there (D-7736).
+     *  `{interrupt:true}` the same way (D-5240): ONLY when it is true, sent only after the route answered
+     *  `409 session-busy` — `SwapSheet`'s "swap anyway", the second tap, and the Move sessions sheet's "Also interrupt
+     *  busy ones" (D-7736), the second request for that session. */
     swap: (id: string, wrapper: string, opts?: { crossPool?: boolean; interrupt?: boolean }) =>
       post(`${sid(id)}/swap`, {
         wrapper,
@@ -810,6 +871,32 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  screen reads nothing off the answer but its arrival, and a write whose answer was unreadable is shown as sent
      *  only after the next read of the digest says `corrected`. */
     correctDigest: (body: DigestCorrectBody) => postJson<DigestCorrectAnswer>('/api/digest/correct', body),
+    /** `PUT /api/items/:id/secret` (desktop-polish PL6): a secret item's value, sent once to its own route, which stores it
+     *  in its protected slot and ticks the item with "set, when, the last four". The value rides only in this body, and the
+     *  answer carries the slot's state, never the value. A refusal (`step-up-required`, `not-open`, `bad-slot`, …) rejects
+     *  with an `ApiError` like every non-2xx, and nothing is stored. Session-gated with a step-up when armed. */
+    saveItemSecret: async (id: number, value: string): Promise<SecretSaveAnswer> =>
+      (await request(`/api/items/${id}/secret`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ value }),
+      })).json() as Promise<SecretSaveAnswer>,
+    /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last seven days, and
+     *  each programme's Goals, as the `waiting` frame carries them. The screen reads it again when the tab regains focus
+     *  (review 1336: a quiet fleet sends no frame when an item crosses its 30 minutes). Session-gated when armed. */
+    waiting: () => getJson<{ readonly ok: true; readonly waiting: WaitingView }>('/api/waiting'),
+    /** `POST /api/items/:id/tick` (PL4): the operator marks an item done. `answer` rides only for a `decide` or a `value`
+     *  item; a `do` item sends no body at all. A refusal (`programme-ended`, `not-open`, `duplicate`, …) rejects with an
+     *  `ApiError` like every non-2xx, and the item is unchanged. */
+    tickItem: (id: number, answer?: string) =>
+      postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/tick`, answer === undefined ? undefined : { answer }),
+    /** `GET /api/programmes/:slug/goals` (PL4; PL5b): one programme's Goals, the spec it pins, its "In short" and the dated
+     *  list of what changed since approval, as the `waiting` frame carries them. The programme view reads it on arrival.
+     *  Session-gated when armed; a programme the box knows nothing of answers an empty view, never a refusal. */
+    goals: (slug: string) =>
+      getJson<{ readonly ok: true; readonly goals: GoalsView }>(`/api/programmes/${encodeURIComponent(slug)}/goals`),
+    /** `POST /api/items/:id/dismiss` (PL4): refused `programme-live` while the programme has an open run. */
+    dismissItem: (id: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/dismiss`),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {

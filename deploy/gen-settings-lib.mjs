@@ -6,9 +6,10 @@
 // The ccd-* sweeps never source ccd/ccrc, so they read ~/.ccrc/ccrc.env through a library file. That file is a
 // GENERATED COPY, never a move and never a hand-kept second reader: ccd/ccrc keeps `_ccrc_knob` and the byte-wise model
 // it reads through exactly where they are (moving them would shift every line citation and slice that names them), and
-// this script copies the `BOX_ENV_FILE=` line, the `CCRC_SETTINGS=` line and the eight functions of that closure out of
-// it, in ccd/ccrc's order. server/test/ccrc-settings-lib.test.ts holds the committed file equal to what this writes.
-// Run it after any edit to those two lines, to `_ccrc_knob` or to a `_box_*` function below. It reads no environment.
+// this script copies the `CCD_OS` detection block, the `BOX_ENV_FILE=` line, the `CCRC_SETTINGS=` line and the eight
+// functions of that closure out of it, in ccd/ccrc's order. server/test/ccrc-settings-lib.test.ts holds the committed
+// file equal to what this writes. Run it after any edit to that block, to those two lines, to `_ccrc_knob` or to a
+// `_box_*` function below. It reads no environment.
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,11 +44,26 @@ const bodyOf = (lines, name) => {
   return lines.slice(starts[0], end + 1).join('\n');
 };
 
+/** ccd/ccrc's platform name, `CCD_OS=linux` through the `esac` that closes its detection. The reader branches on it
+ *  (`_box_unit_env`'s Darwin dispatch, `_ccrc_knob`'s backup-data arm), and a library that left it unnamed read every
+ *  file by the Linux rules on macOS. The block reads `$OSTYPE` and forks `uname` only when bash names no OS it knows. */
+const platformBlock = (lines) => {
+  oneLine(lines, /^CCD_OS=linux$/, 'CCD_OS=linux');
+  const start = lines.indexOf('CCD_OS=linux');
+  const end = lines.indexOf('esac', start);
+  if (end < 0 || lines[start + 1] !== 'case "${OSTYPE:-}" in') {
+    throw new Error('gen-settings-lib: ccd/ccrc\'s CCD_OS detection is not `CCD_OS=linux`, `case "${OSTYPE:-}" in` … `esac`');
+  }
+  return lines.slice(start, end + 1).join('\n');
+};
+
 /** The library's whole text, derived from ccd/ccrc's. */
 export function settingsLibText(ccrcText) {
   const lines = ccrcText.split('\n');
   return [
     ...HEADER,
+    platformBlock(lines),
+    '',
     oneLine(lines, /^BOX_ENV_FILE=/, 'BOX_ENV_FILE='),
     '',
     oneLine(lines, /^CCRC_SETTINGS=\(/, 'CCRC_SETTINGS=('),

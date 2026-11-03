@@ -302,14 +302,14 @@ describe('docs redactor: redactDocsText and DOCS_REDACT_RULES (row 62, the patte
   // Token bodies are built at run time so this public file never carries a contiguous token-shaped literal.
   const BODY24 = 'A1b2'.repeat(6);
 
-  it('declares four [pattern, suffix] rules, in order, each pure ASCII and valid under the u flag', () => {
-    expect(DOCS_REDACT_RULES).toHaveLength(4);
+  it('declares five [pattern, suffix] rules, in order, each pure ASCII and valid under the u flag (the fifth, #1444)', () => {
+    expect(DOCS_REDACT_RULES).toHaveLength(5);
     for (const [pattern, suffix] of DOCS_REDACT_RULES) {
       expect(/^[\x20-\x7e]+$/.test(pattern), pattern).toBe(true);
       expect(/^[\x20-\x7e]+$/.test(suffix), suffix).toBe(true);
       expect(() => new RegExp(pattern, 'gu')).not.toThrow();
     }
-    expect(DOCS_REDACT_RULES.map(([, suffix]) => suffix)).toEqual(['***@', '***', '***', 'Authorization: ***']);
+    expect(DOCS_REDACT_RULES.map(([, suffix]) => suffix)).toEqual(['***@', '***', '***', '***', 'Authorization: ***']);
   });
 
   it('never writes \\s: the whitespace class is the explicit ASCII one', () => {

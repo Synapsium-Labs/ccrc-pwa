@@ -385,10 +385,10 @@ describe('deploy/account-op.mjs: the one writer of this verb\'s stdout', () => {
     expect(got).toEqual(want);
     // The composition is what the op prints, so the columns are measured
     // through it rather than beside it — but the ORDER of a connect list is
-    // offer order (§4.2: anthropic's `login` is "(default)", and `check-add`
-    // takes `P.connect[0]` when `--method` is absent), so it is compared as a
-    // sequence and never as a set.
-    expect((got['anthropic'] as { connect: string[] }).connect[0]).toBe('login');
+    // offer order (Q1: anthropic's Mint is the default since accounts plan Task
+    // A20, and `check-add` takes `P.connect[0]` when `--method` is absent), so
+    // it is compared as a sequence and never as a set.
+    expect((got['anthropic'] as { connect: string[] }).connect[0]).toBe('setup-token');
   });
 });
 
@@ -1584,7 +1584,9 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     // spells out as legal. It resolves to a plan, and `baseUrl` is null in it.
     const home = box('ccrc-account-add-login-');
     seedBoxRoster(home, FIXTURE_ROSTER);
-    const r = checkAdd(home, { '--provider': 'anthropic', '--base-url': null });
+    // `--method login` NAMED: since accounts plan Task A20 the table's first member, and so the default, is
+    // `setup-token` (Q1), which `ccrc-account-auth-start.test.ts` measures.
+    const r = checkAdd(home, { '--provider': 'anthropic', '--base-url': null, '--method': 'login' });
     expect(r.code, r.stderr).toBe(0);
     const plan = JSON.parse(r.stdout)['plan'] as Record<string, unknown>;
     expect(plan['method']).toBe('login');
@@ -2004,7 +2006,8 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     seedBoxRoster(home, FIXTURE_ROSTER);
     // TWO IDS, NOT ONE: a pair of hard-coded `.claude-lab-dev0` constants would
     // agree with each other perfectly and mean nothing.
-    for (const id of ['lab-dev0', 'orchard-api']) {
+    // `claude-x` is G4's case (accounts plan Task A16): an id that already starts `claude-` is `.<id>`.
+    for (const id of ['lab-dev0', 'orchard-api', 'claude-x']) {
       const bash = sourceCall(home,
         `_acct_add_parse --id ${id} --provider compatible --label 'lab·dev0' --hue amber\n`
         + 'printf "SUFFIX=[%s]\\n" "$ACCT_SUFFIX"');
@@ -2012,7 +2015,7 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
       const node = checkAdd(home, { '--suffix': null, '--id': id });
       expect(node.code, node.stderr).toBe(0);
       const resolved = JSON.parse(node.stdout)['plan']['configDirSuffix'] as string;
-      expect(resolved).toBe(`.claude-${id}`);
+      expect(resolved).toBe(id.startsWith('claude-') ? `.${id}` : `.claude-${id}`);
       expect(bash.stdout, `_acct_add_parse and check-add disagree about the default for "${id}"`)
         .toContain(`SUFFIX=[${resolved}]`);
     }
@@ -2224,6 +2227,14 @@ function plantUpstream(home: string): void {
   writeFileSync(join(bin, 'claude'), 'PKnot-a-script\n', { mode: 0o755 });
 }
 
+/** The upstream launcher as a probe turn that passes (accounts plan Task A16): `credential` and an Anthropic paste
+ *  run one turn through it with the candidate token before they write, and these cases are about the write. It
+ *  records nothing, so the canary scans see no copy of the token. `ccrc-account-paste.test.ts` owns the refusals. */
+function plantPassingProbe(home: string): void {
+  writeFileSync(join(home, '.local', 'bin', 'claude'),
+    '#!/bin/sh\necho \'{"type":"result","subtype":"success","is_error":false,"result":"ok"}\'\nexit 0\n', { mode: 0o755 });
+}
+
 /** The six standalone installers, as ARGV RECORDERS at the installed path
  *  `_acct_provision` must reach them by. Recorders rather than the real
  *  scripts because five of the six need a box this fixture is not
@@ -2244,7 +2255,7 @@ function plantInstallers(home: string): void {
   mkdirSync(d, { recursive: true });
   for (const n of ['install-session-hooks.sh', 'install-coordinator-skill.sh',
     'install-worker-skill.sh', 'install-reviewer-skill.sh', 'install-graphify-skill.sh',
-    'install-history-skill.sh']) {
+    'install-history-skill.sh', 'install-linear-skill.sh']) {
     writeFileSync(join(d, n),
       `#!/bin/sh\nprintf '%s %s\\n' "${n}" "$*" >> "$HOME/installer-calls"\nexit 0\n`,
       { mode: 0o755 });
@@ -2379,7 +2390,7 @@ describe('ccrc account add: the ordered write', () => {
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
     plantInstallers(home);
-    const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
+    const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic', '--method', 'login',
       '--label', 'lab·dev0', '--hue', 'amber']);
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
@@ -2738,12 +2749,14 @@ describe('ccd/ccrc: no refusal sentence may begin with a flag', () => {
     for (const [i, raw] of lines.entries()) {
       if (!raw.includes('_acct_refuse')) continue;
       if (/^\s*#/.test(raw)) continue;            // prose about the function
-      if (/^_acct_refuse\(\)/.test(raw)) continue; // its definition
+      if (/^_acct_refuse(_reason)?\(\)/.test(raw)) continue; // its definition, and its with-a-reason twin's
       mentions++;
       // THE DETAIL MUST BE ONE DOUBLE-QUOTED WORD, and that is half the check:
       // an unquoted detail would word-split into `$4`, `$5`… and arrive at
-      // `account-op.mjs` as a mis-spelled key for the same reason.
-      const m = /_acct_refuse\s+[0-9]+\s+[a-z][a-z0-9-]*\s+"(.*)$/.exec(raw);
+      // `account-op.mjs` as a mis-spelled key for the same reason. The twin
+      // (accounts plan Task A20) carries a reason word between the code and it.
+      const m = /_acct_refuse\s+[0-9]+\s+[a-z][a-z0-9-]*\s+"(.*)$/.exec(raw)
+        ?? /_acct_refuse_reason\s+[0-9]+\s+[a-z][a-z0-9-]*\s+[a-z][a-z0-9-]*\s+"(.*)$/.exec(raw);
       expect(m, `ccd/ccrc:${i + 1} calls _acct_refuse in a shape this scan cannot `
         + 'read, so the rule below went unmeasured on it. Either put the call on '
         + 'one line as `_acct_refuse <exit> <code> "<detail>"`, or teach this scan '
@@ -2894,6 +2907,7 @@ describe('ccrc account add: the new home, provisioned', () => {
       `install-reviewer-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
       `install-graphify-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
       `install-history-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
+      `install-linear-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
     ]);
   });
 
@@ -2914,7 +2928,7 @@ describe('ccrc account add: the new home, provisioned', () => {
     expect(existsSync(join(home, '.claude-lab-dev0', 'settings.json'))).toBe(false);
     // The step still RAN — it decided to write nothing, which is a different
     // thing from being skipped, and the installers still got their home.
-    expect(installerCalls(home).length).toBe(6);
+    expect(installerCalls(home).length).toBe(7);   // the session hooks and six skill installers, ccrc-linear's included
   });
 
   it('an operator\'s own settings.json survives byte-identically outside the managed keys', () => {
@@ -2928,7 +2942,7 @@ describe('ccrc account add: the new home, provisioned', () => {
       env: { MY_OWN_KEY: 'kept', ANTHROPIC_BASE_URL: 'https://stale-endpoint/v1' },
       permissions: { allow: ['Bash(ls:*)'] },
     }, null, 2));
-    const r = run(home, addArgs(), `${CANARY}\n`);
+    const r = run(home, [...addArgs(), '--adopt'], `${CANARY}\n`);
     expect(r.code, r.stderr).toBe(0);
     const s = settingsAt(home, '.claude-lab-dev0');
     expect(s['statusLine']).toEqual({ type: 'command', command: 'bash "$HOME/mine.sh"' });
@@ -3023,7 +3037,7 @@ describe('ccrc account add: the new home, provisioned', () => {
     symlinkSync(join(REPO, 'ccd', 'install-session-hooks.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'));
     for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh',
-      'install-reviewer-skill.sh', 'install-graphify-skill.sh', 'install-history-skill.sh']) {
+      'install-reviewer-skill.sh', 'install-graphify-skill.sh', 'install-history-skill.sh', 'install-linear-skill.sh']) {
       writeFileSync(join(home, '.cc-sessions', n), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     }
     const r = run(home, addArgs(), `${CANARY}\n`);
@@ -3149,7 +3163,7 @@ describe('ccrc account add: a merge refusal names what still stands (D-2126)', (
     plantUpstream(home);
     plantInstallers(home);
     plantBadSettings(home);
-    const r = run(home, addArgs(), `${CANARY}\n`);
+    const r = run(home, [...addArgs(), '--adopt'], `${CANARY}\n`);
     expect(r.code, r.stderr).toBe(1);
     const j = oneObject(r);
     expect(j['error']).toBe('settings-invalid');
@@ -3177,7 +3191,7 @@ describe('ccrc account add: a merge refusal names what still stands (D-2126)', (
     // 3. THE DEAD END ITSELF, RUN rather than described. `ccrc account add` is
     //    still a refusal — the fix is a signpost, not a new door — and that is
     //    precisely why the sentence has to name `ccrc install` instead.
-    const again = run(home, addArgs(), `${CANARY}\n`);
+    const again = run(home, [...addArgs(), '--adopt'], `${CANARY}\n`);
     expect(again.code).toBe(1);
     expect(oneObject(again)['error']).toBe('duplicate-id');
   });
@@ -3191,7 +3205,7 @@ describe('ccrc account add: a merge refusal names what still stands (D-2126)', (
     plantInstallers(home);
     plantBadSettings(home);
     const r = run(home, ['account', 'add', '--id', 'lab-dev0', '--provider', 'anthropic',
-      '--label', 'lab·dev0', '--hue', 'amber']);
+      '--label', 'lab·dev0', '--hue', 'amber', '--adopt']);
     expect(r.code, r.stderr).toBe(1);
     const detail = oneObject(r)['detail'] as string;
     expect(detail).toContain('The roster entry was written and nothing rolls back');
@@ -3310,8 +3324,10 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
     plantUpstream(home);
     plantInstallers(home);
     const j = oneObject(run(home, addArgs(), `${CANARY}\n`));
+    // `fleetIdentity` since accounts plan Task A16, so the server reloads the roster from this answer (spec §13.2);
+    // `fingerprints` rides beside it only on a box with a token, and this fixture has none.
     expect(Object.keys(j).sort()).toEqual(
-      ['disabled', 'id', 'ok', 'operator-steps', 'provisioned', 'roster'].sort());
+      ['disabled', 'fleetIdentity', 'id', 'ok', 'operator-steps', 'provisioned', 'roster'].sort());
     expect(j['id']).toBe('lab-dev0');
     expect((j['roster'] as { accounts: unknown[] }).accounts.length).toBe(4);
     // Task 25's step list, now an answer key — the six installers plus the
@@ -3319,7 +3335,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
     // the WROTE token: this lane has an endpoint, so the merge produced a file.
     expect(j['provisioned']).toEqual([
       'settings-env', 'session-hooks', 'coordinator-skill', 'worker-skill',
-      'reviewer-skill', 'graphify-skill', 'history-skill',
+      'reviewer-skill', 'graphify-skill', 'history-skill', 'linear-skill',
     ]);
   });
 
@@ -3354,7 +3370,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
     expect(existsSync(join(home, '.claude-lab-dev0', 'settings.json'))).toBe(false);
     expect(oneObject(r)['provisioned']).toEqual([
       'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill',
-      'reviewer-skill', 'graphify-skill', 'history-skill',
+      'reviewer-skill', 'graphify-skill', 'history-skill', 'linear-skill',
     ]);
   });
 
@@ -3373,7 +3389,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       + '_acct_operator_steps lab-dev0\n_acct_operator_steps lab-dev0\n'
       + 'printf \'%s %s\\n\' "${#ACCT_PROVISIONED[@]}" "${#ACCT_OPERATOR_STEPS[@]}"');
     expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout.trim()).toBe('7 2');
+    expect(r.stdout.trim()).toBe('8 2');   // settings-env, the session hooks and six skill installers
   });
 
   it('all four of the provisioning refusals end in the one clause the caller built (D-2128)', () => {
@@ -3407,7 +3423,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       seedBoxRoster(home, FIXTURE_ROSTER);
       plantUpstream(home);
       plant(home);
-      const r = run(home, addArgs(), `${CANARY}\n`);
+      const r = run(home, [...addArgs(), '--adopt'], `${CANARY}\n`);
       expect(r.code, `${what}: ${r.stderr}`).toBe(1);
       const j = oneObject(r);
       expect(j['error'], what).toBe(err);
@@ -3730,11 +3746,11 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
         env: { ANTHROPIC_BASE_URL: 'https://orchard-api/v1', ANTHROPIC_API_KEY: '' },
       }, null, 2)}\n`;
       writeFileSync(join(cfg, 'settings.json'), already);
-      const r = run(home, addArgs(), `${CANARY}\n`);
+      const r = run(home, [...addArgs(), '--adopt'], `${CANARY}\n`);
       expect(r.code, r.stderr).toBe(0);
       expect(oneObject(r)['provisioned']).toEqual([
         'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill',
-        'reviewer-skill', 'graphify-skill', 'history-skill',
+        'reviewer-skill', 'graphify-skill', 'history-skill', 'linear-skill',
       ]);
       // The bytes are untouched — the converge arm returns before the backup, so
       // this is also the idempotence claim `_acct_settings_env` makes for itself.
@@ -3831,6 +3847,8 @@ const HOMEABLE = (
 });
 
 describe('ccrc account enable / disable', () => {
+  // `enable --force` IN THE MARKER CASES BELOW (accounts plan Task A13, D-7731): they pin the marker, and `enable`'s
+  // readiness question, which `--force` skips and nothing else, is `ccrc-account-enable-ready.test.ts`'s.
   it('disable writes ccd\'s marker and reports the measured state without requiring telemetry', () => {
     const home = box('ccrc-account-disable-');
     seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet', 'none')]);
@@ -3849,9 +3867,9 @@ describe('ccrc account enable / disable', () => {
     plantLauncher(home, 'alt-max');
     mkdirSync(join(home, '.cc-sessions'), { recursive: true });
     writeFileSync(offMarker(home, 'alt-max'), '');
-    expect(oneObject(run(home, ['account', 'enable', '--id', 'alt-max']))['disabled']).toBe(false);
+    expect(oneObject(run(home, ['account', 'enable', '--id', 'alt-max', '--force']))['disabled']).toBe(false);
     expect(existsSync(offMarker(home, 'alt-max'))).toBe(false);
-    const again = run(home, ['account', 'enable', '--id', 'alt-max']);
+    const again = run(home, ['account', 'enable', '--id', 'alt-max', '--force']);
     expect(again.code, again.stderr).toBe(0);
     expect(oneObject(again)['disabled']).toBe(false);
   });
@@ -3860,7 +3878,7 @@ describe('ccrc account enable / disable', () => {
     const home = box('ccrc-account-enable-marker-directory-');
     seedRosterJson(home, [UPSTREAM]);
     mkdirSync(offMarker(home, 'claude'), { recursive: true });
-    const r = run(home, ['account', 'enable', '--id', 'claude']);
+    const r = run(home, ['account', 'enable', '--id', 'claude', '--force']);
     expect(r.code).toBe(1);
     const j = oneObject(r);
     expect(j['error']).toBe('marker-conflict');
@@ -3890,7 +3908,7 @@ describe('ccrc account enable / disable', () => {
     mkdirSync(join(home, '.cc-sessions'), { recursive: true });
     writeFileSync(offMarker(home, 'alt-max'), '');
 
-    const r = run(home, ['account', 'enable', '--id', 'alt-max']);
+    const r = run(home, ['account', 'enable', '--id', 'alt-max', '--force']);
     expect(r.code).toBe(1);
     const j = oneObject(r);
     expect(j['error']).toBe('no-answer');
@@ -4057,7 +4075,8 @@ exec /bin/mkdir "$@"
     const home = box('ccrc-account-endis-argv-');
     seedRosterJson(home, [UPSTREAM]);
     for (const sub of ['enable', 'disable']) {
-      const unknown = run(home, ['account', sub, '--id', 'claude', '--force']);
+      // Not `--force`, which `enable` takes since A13 (CLI only, spec §10).
+      const unknown = run(home, ['account', sub, '--id', 'claude', '--yes']);
       expect(unknown.code, `${sub}: unknown flag`).toBe(2);
       expect(oneObject(unknown)['error'], `${sub}: unknown flag`).toBe('unknown-argument');
       for (const [idArgv, detail] of [
@@ -5424,7 +5443,7 @@ describe('ccrc account remove', () => {
     writeFileSync(offMarker(home, 'alt-max'), '');
     writeFileSync(join(home, '.cc-sessions', 'alt-max.hookstate.json'), '{}'); writeFileSync(join(home, '.cc-sessions', 'alt-max.turn.json'), '{}');
     const cfg = join(home, '.claude-alt-max');
-    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify', 'ccrc-history']) {
+    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify', 'ccrc-history', 'ccrc-linear']) {
       mkdirSync(join(cfg, 'skills', skill), { recursive: true });
     }
     mkdirSync(join(cfg, 'projects'), { recursive: true });
@@ -5459,7 +5478,7 @@ describe('ccrc account remove', () => {
     const cfg = join(home, '.claude-alt-max');
     expect(readFileSync(join(cfg, 'projects', 'CANARY.jsonl'), 'utf8'))
       .toBe('the operator history\n');
-    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify', 'ccrc-history']) {
+    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify', 'ccrc-history', 'ccrc-linear']) {
       expect(existsSync(join(cfg, 'skills', skill)), skill).toBe(false);
     }
     const settings = JSON.parse(readFileSync(join(cfg, 'settings.json'), 'utf8'));
@@ -7546,11 +7565,14 @@ describe('ccrc account: the roster transitions share one placement lock', () => 
     // of one roster colliding on one name.
     // THE LANE-STATE FILE'S WRITER IS NOT A ROSTER WRITER (accounts plan Task
     // A11): it writes `~/.cc-sessions/.accounts/<id>.json` and never the roster,
-    // so its own rename is cut out before the count.
-    const whole = readFileSync(join(REPO, 'deploy', 'account-op.mjs'), 'utf8');
-    const ls = whole.indexOf('function opLaneState(');
-    expect(ls, 'the lane-state writer moved: re-derive this cut').toBeGreaterThan(-1);
-    const src = whole.slice(0, ls) + whole.slice(whole.indexOf('\n}\n', ls) + 3);
+    // so its own rename is cut out before the count. Nor is the first-run seed
+    // (A13, D-7731), which writes a lane's `.claude.json`.
+    let src = readFileSync(join(REPO, 'deploy', 'account-op.mjs'), 'utf8');
+    for (const fn of ['function laneStateWrite(', 'function opSeed(']) {
+      const ls = src.indexOf(fn);
+      expect(ls, `${fn} moved: re-derive this cut`).toBeGreaterThan(-1);
+      src = src.slice(0, ls) + src.slice(src.indexOf('\n}\n', ls) + 3);
+    }
     const renames = [...src.matchAll(/\brenameSync\(/g)].length;
     expect(renames, `the roster is written from ${renames} places, not one`).toBe(1);
     expect(src, 'the temporary roster name carries nothing a reader of /proc could not derive')
@@ -7909,6 +7931,7 @@ const LANE_LINES = ['generated', 'anthropic', '.cc-secrets/alt-max-oauth.env',
 describe('ccrc account credential', () => {
   it('writes the secret 0600 into a 0700 directory, and prints nothing of it', () => {
     const home = box('ccrc-account-cred-write-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantTmux(home, []);
     const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
@@ -7949,6 +7972,7 @@ describe('ccrc account credential', () => {
     // file's own size), and `/dev/tty` is opened once and answers ENXIO, so
     // nothing is written there either.
     const home = box('ccrc-account-cred-shellsyntax-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantTmux(home, []);
     const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
@@ -7976,6 +8000,7 @@ describe('ccrc account credential', () => {
 
   it('lists the LIVE sessions on the lane, and only those', () => {
     const home = box('ccrc-account-cred-live-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantRow(home, 'orchard-api', { wrapper: 'alt-max' });   // live
     plantRow(home, 'lab-dev0', { wrapper: 'alt-max' });      // registered, pane gone
@@ -7992,6 +8017,7 @@ describe('ccrc account credential', () => {
     // this lane has nothing that could be live, so a tmux that cannot answer is
     // not a gap — and rotating a credential must not need a tmux server.
     const home = box('ccrc-account-cred-norows-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     // A REGISTRY WITH ROWS ON ANOTHER LANE, not an absent one: without this the
     // case would also pass on a verb that never read the registry at all.
@@ -8015,6 +8041,7 @@ describe('ccrc account credential', () => {
 
   it('answers live:null — never [] — when a row exists and tmux cannot be measured', () => {
     const home = box('ccrc-account-cred-notmux-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
     const r = run(home, ['account', 'credential', '--id', 'alt-max', '--credential', '-'],
@@ -8040,6 +8067,7 @@ describe('ccrc account credential', () => {
     // no rows at all. An operator who has just rotated a credential reads that
     // as "nothing to restart", which is the one thing it does not say.
     const home = box('ccrc-account-cred-regmode-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
     const reg = join(home, '.cc-sessions');
@@ -8076,6 +8104,7 @@ describe('ccrc account credential', () => {
     // has no third state to say it in (`--measured false` carries no ids by
     // contract, `account-op.mjs`'s `rotated`).
     const home = box('ccrc-account-cred-rowmode-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
     plantRow(home, 'lab-dev0', { wrapper: 'alt-max' });
@@ -8102,6 +8131,7 @@ describe('ccrc account credential', () => {
 
   it('answers live:null for a dangling wrapper link, never treating it as an absent field', () => {
     const home = box('ccrc-account-cred-row-dangling-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
     const wrapper = join(home, '.cc-sessions', 'orchard-api.wrapper');
@@ -8124,6 +8154,7 @@ describe('ccrc account credential', () => {
     // agent wire's `absent` marker draw on the server side (D-1396). So this
     // box still answers a MEASURED list, and the live pane is named in it.
     const home = box('ccrc-account-cred-rowbare-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [UPSTREAM, TOKEN_LANE]);
     plantRow(home, 'orchard-api', { wrapper: 'alt-max' });
     // A row with a `.uuid` and no `.wrapper` beside it at all.
@@ -8260,6 +8291,7 @@ describe('ccrc account credential', () => {
     // written `[ "$ACCT_KIND" = generated ]` would pass every other case in
     // this describe and refuse the one lane every fleet has.
     const home = box('ccrc-account-cred-upstream-');
+    plantPassingProbe(home);   // `credential` probes an Anthropic token before it writes (A16)
     seedRosterJson(home, [
       { ...UPSTREAM, exec: { kind: 'upstream', secretsFile: '.cc-secrets/claude-oauth.env' } }]);
     plantTmux(home, []);
@@ -11200,5 +11232,66 @@ describe('ccrc account: the runners check their final env for the user manager (
       /^ {2}const (e|merged) = (?:\{ \.\.\.)?buildEnv\(home\)(?:, \.\.\.extraEnv \})?;\n {2}assertManagerStandIns\(\1, home\);$/gm)];
     expect(checked.length, 'env(), run() and sourceRun() no longer each check what they build').toBe(3);
     expect(calls.length, `buildEnv( is called ${calls.length} times above this describe, and only 3 are checked`).toBe(3);
+  });
+});
+
+describe('ccrc account add: re-add safety (accounts plan Task A16; G4, G20)', () => {
+  it('an id starting `claude-` gets `.<id>`, never `.claude-claude-…`', () => {
+    const home = box('ccrc-account-a16-suffix-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    const r = run(home, addArgs({ '--id': 'claude-x' }), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(0);
+    const entry = (oneObject(r)['roster'] as { accounts: { id: string; configDirSuffix: string }[] }).accounts
+      .find((a) => a.id === 'claude-x');
+    expect(entry?.configDirSuffix).toBe('.claude-x');
+    expect(existsSync(join(home, '.claude-x'))).toBe(true);
+    expect(existsSync(join(home, '.claude-claude-x'))).toBe(false);
+    // A collision with a suffix the roster already holds is still refused.
+    const clash = checkAdd(home, { '--id': 'lab-dev1', '--suffix': '.claude-x' });
+    expect(clash.code).toBe(1);
+    expect(JSON.parse(clash.stdout)['error']).toBe('suffix-collision');
+  });
+
+  it('an existing config folder refuses `config-dir-exists` with what it measured, and `--adopt` proceeds', () => {
+    const home = box('ccrc-account-a16-cfgdir-');
+    seedBoxRoster(home, FIXTURE_ROSTER);
+    plantUpstream(home);
+    plantInstallers(home);
+    const cfg = join(home, '.claude-lab-dev0');
+    mkdirSync(cfg, { recursive: true });
+    writeFileSync(join(cfg, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'someone@example.invalid' } }));
+    writeFileSync(join(cfg, '.credentials.json'), '{"fixture":"not a credential"}', { mode: 0o600 });
+    const rosterBefore = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+
+    const r = run(home, addArgs(), `${CANARY}\n`);
+    expect(r.code, r.stderr).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('config-dir-exists');
+    expect(j['found']).toEqual({ signedIn: true, identity: 'someone@example.invalid' });
+    expect(j['detail']).toContain('signed in as someone@example.invalid');
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(rosterBefore);
+    expect(existsSync(join(home, '.cc-secrets', 'lab-dev0-compatible.env'))).toBe(false);
+    expect(existsSync(join(home, '.local', 'bin', 'lab-dev0'))).toBe(false);
+
+    // Signed out: the measurement says so.
+    rmSync(join(cfg, '.credentials.json'));
+    const out = oneObject(run(home, addArgs(), `${CANARY}\n`));
+    expect(out['found']).toEqual({ signedIn: false, identity: 'someone@example.invalid' });
+    expect(out['detail']).toContain('is signed out');
+
+    const adopt = run(home, [...addArgs(), '--adopt'], `${CANARY}\n`);
+    expect(adopt.code, adopt.stderr).toBe(0);
+    expect(readFileSync(join(cfg, '.claude.json'), 'utf8')).toContain('someone@example.invalid');
+  });
+
+  it('`ccd caps` lists `account-v2`', () => {
+    const home = box('ccrc-account-a16-caps-');
+    seedBoxRoster(home, FIXTURE_ROSTER);   // ccd sources the projection before any verb
+    const r = spawnSync(BASH, [CCD, 'caps'], { env: env(home), encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout.split('\n')).toContain('account-v2');
+    expect(r.stdout.split('\n')).toContain('account-v1');
   });
 });

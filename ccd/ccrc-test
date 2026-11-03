@@ -545,17 +545,9 @@ _theld() {   # -> how many slot files are held, at any index: a slot above a low
   done
   echo "$k"
 }
-_tpressure() {   # <max> -> 0 while memory or cpu pressure is above it; PRESSURE_SAID says which
-  local max="$1" r v
-  PRESSURE_SAID=""
-  for r in memory cpu; do
-    [ -r "$PROC_ROOT/pressure/$r" ] || continue
-    v=$(awk '$1 == "some" { for (i = 2; i <= NF; i++) if ($i ~ /^avg10=/) { sub(/^avg10=/, "", $i); print $i; exit } }' "$PROC_ROOT/pressure/$r" 2>/dev/null)
-    [ -n "$v" ] || continue
-    if awk -v v="$v" -v m="$max" 'BEGIN { exit !(v + 0 > m + 0) }'; then PRESSURE_SAID="host $r pressure (avg10) is $v, above CCRC_TEST_PRESSURE_MAX=$max"; return 0; fi
-  done
-  return 1
-}
+# The reading is ccrc's one pressure reader, `_psi_over` (D-7876: the graph sweep defers a pass on it too), under the
+# same CCRC_PROC_ROOT this file's PROC_ROOT is.
+_tpressure() { _psi_over "$1" CCRC_TEST_PRESSURE_MAX; }   # <max> -> 0 while memory or cpu pressure is above it; PRESSURE_SAID says which
 SLOT_FD=""; WAIT_FD=""; SLOT_FILE=""; WAIT_FILE=""
 _trelease() {
   [ -z "$SLOT_FILE" ] || rm -f -- "$SLOT_FILE.who"

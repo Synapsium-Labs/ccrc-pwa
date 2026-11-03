@@ -16,8 +16,9 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import {
   ACCOUNT_CLI_ONLY_VERBS, ACCOUNT_DENY_RULES, ACCOUNT_DENY_SUBS, ACCOUNT_READ_SUBS, ACCOUNT_SECRET_PATHS,
-  ACCOUNT_SUBS, ACCOUNT_WRITE_DIRS,
+  ACCOUNT_SUBS, ACCOUNT_WRITE_DIRS, LINEAR_MCP_DENY,
 } from '../../shared/api.js';
+import { OPERATOR_SECRETS_DIR } from '../../shared/ledgers.js';
 import { ACCOUNT_SUB_ARGV } from '../../shared/account-argv.js';
 import { approvalClass, rootsForChild, type ApprovalClass } from '../src/coord/approvalguard.js';
 
@@ -38,7 +39,9 @@ const classOf = (tool: string, input: Record<string, unknown>): ApprovalClass =>
 // segment is matched on its own, after a leading `VAR=value` assignment is stripped (3c: chained and env-prefixed forms
 // matched; a path-qualified one did not). `Read(…)` and `Edit(…)` rules are gitignore-style globs over a path, `~`
 // anchored: `**` any depth, `*` one segment. This reading is wider than Claude Code's (it also looks inside a `bash -c`
-// string), so a rule it lets through is one Claude Code lets through too.
+// string), so a rule it lets through is one Claude Code lets through too. An MCP rule (#1444 §11) names a server,
+// `mcp__<server>`, which refuses every tool that server offers (`mcp__<server>__<tool>`), or one tool by its whole
+// name; the server name is matched whole, so `mcp__s` does not refuse a tool of a server named `s2`.
 const segments = (cmd: string): string[] => {
   const inner = [...cmd.matchAll(/\b(?:bash|sh)\s+-c\s+(['"])(.*?)\1/g)].map((m) => m[2] as string);
   return [cmd, ...inner].flatMap((c) => c.split(/&&|\|\||;|\|/))
@@ -47,6 +50,12 @@ const segments = (cmd: string): string[] => {
 const glob = (g: string): RegExp =>
   new RegExp(`^${g.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '\u0000').replace(/\*/g, '[^/]*').replace(/\u0000/g, '.*')}$`);
 const ruleMatches = (rule: string, tool: string, input: Record<string, unknown>): boolean => {
+  const mcp = /^mcp__([A-Za-z0-9_-]+?)(?:__([A-Za-z0-9_-]+))?$/.exec(rule);
+  if (mcp !== null) {
+    const [, server, name] = mcp as unknown as [string, string, string | undefined];
+    const t = /^mcp__([A-Za-z0-9_-]+?)__([A-Za-z0-9_-]+)$/.exec(tool);
+    return t !== null && t[1] === server && (name === undefined || t[2] === name);
+  }
   const m = /^(Bash|Read|Edit)\((.*)\)$/.exec(rule);
   if (m === null) throw new Error(`a rule outside the grammar: ${rule}`);
   const [, kind, body] = m as unknown as [string, string, string];
@@ -102,6 +111,44 @@ describe('the managed account deny file (D-6202)', () => {
     for (const p of writes) expect(anyRule('Edit', { file_path: sample(p) }), p).toMatch(/^Edit\(/);
   });
 
+  it('the list refuses a Read of the Linear slot store and the legacy key (D-7675; #1444 §13.3)', () => {
+    expect(ACCOUNT_SECRET_PATHS).toEqual(expect.arrayContaining(['~/.ccrc/linear/**', '~/.ccrc/linear.key']));
+    expect(anyRule('Read', { file_path: '~/.ccrc/linear/x.key' })).toBe('Read(~/.ccrc/linear/**)');
+    expect(anyRule('Read', { file_path: '~/.ccrc/linear/x.json' })).toBe('Read(~/.ccrc/linear/**)');
+    expect(anyRule('Read', { file_path: '~/.ccrc/linear.key' })).toBe('Read(~/.ccrc/linear.key)');
+    // the legacy details file holds no key, and stays readable
+    expect(anyRule('Read', { file_path: '~/.ccrc/linear.json' })).toBeUndefined();
+  });
+
+  it('the list refuses a Read of the operator-secret slots (programme ledgers plan PL6, spec §5)', () => {
+    expect(ACCOUNT_SECRET_PATHS).toContain('~/.ccrc/operator-secrets/**');
+    // the same directory the store writes under (one name, two spellings held equal here)
+    expect(ACCOUNT_SECRET_PATHS).toContain(`~/.ccrc/${OPERATOR_SECRETS_DIR}/**`);
+    expect(anyRule('Read', { file_path: '~/.ccrc/operator-secrets/prog-a/x.secret' })).toBe('Read(~/.ccrc/operator-secrets/**)');
+    expect(anyRule('Read', { file_path: '~/.ccrc/operator-secrets/prog-a/x.json' })).toBe('Read(~/.ccrc/operator-secrets/**)');
+    // (a Bash read of it is the session hook's account arm, `session-hook-account-deny.test.ts`; the deny file has Read rules for paths)
+    // a sibling that only begins like it is not the store
+    expect(anyRule('Read', { file_path: '~/.ccrc/operator-secrets-notes.md' })).toBeUndefined();
+  });
+
+  it('the list refuses the claude.ai Linear connector\'s tools, by its prefix alone (D-7674; #1444 §11)', () => {
+    // The switch-over does not rest on the manual removal of the per-account MCP entries alone: every fleet session's
+    // deny file refuses the connector's tools. Its prefix names no workspace. A per-account server's name is the
+    // operator's and may name one, so this public tree cannot list it, and no server-name wildcard ships: whether the
+    // pinned Claude Code honours one is unmeasured in CF13's rig record, so those entries stay the rollout's manual step.
+    expect(LINEAR_MCP_DENY).toEqual(['mcp__claude_ai_Linear']);
+    expect(ACCOUNT_DENY_RULES.filter((r) => r.startsWith('mcp__'))).toEqual([...LINEAR_MCP_DENY]);
+    for (const r of LINEAR_MCP_DENY) expect(r, 'a wildcard rule shipped unmeasured').not.toContain('*');
+    for (const t of ['mcp__claude_ai_Linear__get_issue', 'mcp__claude_ai_Linear__save_comment', 'mcp__claude_ai_Linear__list_teams']) {
+      expect(anyRule(t, {}), t).toBe('mcp__claude_ai_Linear');
+    }
+    // nothing else is refused by it: another connector, a server whose name only begins the same, any non-MCP tool
+    for (const t of ['mcp__claude_ai_Gmail__search', 'mcp__claude_ai_LinearX__get_issue', 'mcp__claude_ai__Linear', 'Skill']) {
+      expect(anyRule(t, {}), t).toBeUndefined();
+    }
+    expect(anyRule('Read', { file_path: '~/.ccrc/linear.json' })).toBeUndefined();
+  });
+
   it('the list names every verb in ACCOUNT_CLI_ONLY_VERBS by its CLI spelling', () => {
     expect(Object.keys(ACCOUNT_CLI_ONLY_VERBS)).toEqual(expect.arrayContaining(['seed', 'openrouter-management ceiling', 'ccd-account-auth', 'ccd account-pane']));
     for (const [verb, cli] of Object.entries(ACCOUNT_CLI_ONLY_VERBS)) expect(bashDenied(`${cli} --x`), verb).toBeDefined();
@@ -138,6 +185,17 @@ describe('CLAUDE.md\'s SAFETY section (D-6202)', () => {
     ].filter((w) => !s.includes(w));
     expect(missing).toEqual([]);
     expect(s).toMatch(/accident guard/);
+  });
+  it('CLAUDE.md\'s SAFETY section names the Linear slot store and the legacy key among the paths a session never reads (D-7675)', () => {
+    const s = safety();
+    const at = s.indexOf('**Account management is never a session\'s**');
+    expect(at, 'the account-management bullet').toBeGreaterThanOrEqual(0);
+    const bullet = s.slice(at);
+    const end = bullet.indexOf('; writes under');
+    expect(end, 'the bullet\'s list of paths a session never reads').toBeGreaterThan(0);
+    const reads = bullet.slice(0, end);
+    expect(reads).toContain('`~/.ccrc/linear/`');
+    expect(reads).toContain('`~/.ccrc/linear.key`');
   });
   it('CLAUDE.md\'s SAFETY section says that switching accounts and the auto-swap are never refused', () => {
     expect(safety()).toMatch(/[Ss]witching\s+accounts\s+and\s+the\s+auto-swap\s+are\s+never\s+refused/);

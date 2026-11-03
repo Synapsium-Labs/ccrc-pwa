@@ -3,17 +3,17 @@ import type { CcrcConfig } from '../config.js';
 import type { ChildReclaimSiblingsRead } from '../childReclaimSweep.js';
 import { readSessionRecord, type SessionRecord } from '../registry.js';
 import { isRegistryId } from '../../../shared/api.js';
-import type { CoordStore } from './store.js';
+import type { WatcherCoordPort } from './ports.js';
 import { claimantStateOfRead, splitSiblings, type ClaimantState, type SiblingFact } from './staleSibling.js';
 
-export interface SiblingReadDeps { readonly coord: CoordStore; readonly io: FleetIO; readonly cfg: CcrcConfig }
+export interface SiblingReadDeps { readonly coord: WatcherCoordPort; readonly io: FleetIO; readonly cfg: CcrcConfig }
 
 /** A child's open sibling runs as the store holds them: the readable ones as facts, the unreadable ones by id. */
 type SiblingFacts =
   | { readonly ok: true; readonly facts: readonly SiblingFact[]; readonly unread: readonly { id: number; openedAt: number }[] }
   | { readonly ok: false; readonly detail: string };
 
-function siblingFacts(coord: CoordStore, sessionId: string): SiblingFacts {
+function siblingFacts(coord: WatcherCoordPort, sessionId: string): SiblingFacts {
   const sib = coord.bindingsOf(sessionId).worker();
   if (!sib.ok) return { ok: false, detail: sib.detail };
   const facts: SiblingFact[] = [];
@@ -69,7 +69,7 @@ export async function readChildSiblings(
  * Only a caller whose listing SUCCEEDED may pass it: a pass with records was handed a listed registry.
  */
 export function childSiblingsFromListing(
-  coord: CoordStore, sessionId: string, nowMs: number,
+  coord: WatcherCoordPort, sessionId: string, nowMs: number,
   records: readonly SessionRecord[], names: readonly string[],
 ): ChildReclaimSiblingsRead {
   const read = siblingFacts(coord, sessionId);

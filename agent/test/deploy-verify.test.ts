@@ -689,6 +689,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The test box durations timer's pair (test box TB11, D-7413), shipped the same way.
       'systemd/ccd-testbox-times.service',
       'systemd/ccd-testbox-times.timer',
+      // The carry dedupe sweep's pair (D-7857), shipped the same way.
+      'systemd/ccd-carry-dedupe.service',
+      'systemd/ccd-carry-dedupe.timer',
       // D-5241: the victim policy's two OOMPolicy=continue scope drop-ins.
       'systemd/tmux-spawn-.scope.d/50-oom-continue.conf',
       'systemd/ccrc-tmux-server.scope.d/50-oom-continue.conf',
@@ -715,6 +718,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'the conflict radar is not in the repo').toBe(true);
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-testbox-times')),
       'the test box durations fetch is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-carry-dedupe-sweep')),
+      'the carry dedupe sweep is not in the repo').toBe(true);
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-tool-adj')),
       'the tool-child priority prefix is not in the repo').toBe(true);
     expect(deploySh.split('\n').filter((l) => l.trim() === 'install_atomic ccd/ccd-tool-adj .local/bin/ccd-tool-adj 755'),
@@ -761,9 +766,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'ccrc-agent.service.d',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer',
-      // graphify Task 10 (O3/O6b): the sweep pair, installed the same way.
-      '_unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/.config/systemd/user/ccd-graph-sweep.service',
-      '_unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/ccd-graph-sweep.timer',
+      // graphify Task 10 (O3/O6b): the sweep pair — RENDERED from the box's graph settings since D-7354,
+      // through `_graph_units`, which sources the shipped ccrc the way `_slice_limits_unit` does.
+      '_graph_units service ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/.config/systemd/user/ccd-graph-sweep.service',
+      '_graph_units timer ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/ccd-graph-sweep.timer',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-account-health.service ~/.config/systemd/user/ccd-account-health.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-account-health.timer ~/.config/systemd/user/ccd-account-health.timer',
       // spec 2026-09-07 §C: the keepalive pair, installed the same way.
@@ -790,6 +796,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The test box durations timer's pair (test box TB11, D-7413), installed the same way.
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-testbox-times.service ~/.config/systemd/user/ccd-testbox-times.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-testbox-times.timer ~/.config/systemd/user/ccd-testbox-times.timer',
+      // The carry dedupe sweep's pair (D-7857), installed the same way.
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-carry-dedupe.service ~/.config/systemd/user/ccd-carry-dedupe.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-carry-dedupe.timer ~/.config/systemd/user/ccd-carry-dedupe.timer',
       // D-5241: the two scope drop-ins, the pane one in systemd's PREFIX form (trailing hyphen).
       'mkdir -p ~/.config/systemd/user/tmux-spawn-.scope.d ~/.config/systemd/user/ccrc-tmux-server.scope.d',
       '_unit_atomic ~/ccrc/deploy/systemd/tmux-spawn-.scope.d/50-oom-continue.conf ~/.config/systemd/user/tmux-spawn-.scope.d/50-oom-continue.conf',
@@ -858,6 +867,11 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(testboxTimesAt, 'the testbox-times timer is never enabled').toBeGreaterThan(reloadAt);
     expect(testboxTimesAt, 'the testbox-times timer is enabled after the agent restart')
       .toBeLessThan(restartLinks.findIndex((l) => l.includes('restart ccrc-agent.service')));
+    // The carry dedupe timer (D-7857), on the same daemon-reload and before the agent restart.
+    const carryDedupeAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-carry-dedupe.timer'));
+    expect(carryDedupeAt, 'the carry dedupe timer is never enabled').toBeGreaterThan(reloadAt);
+    expect(carryDedupeAt, 'the carry dedupe timer is enabled after the agent restart')
+      .toBeLessThan(restartLinks.findIndex((l) => l.includes('restart ccrc-agent.service')));
 
     // And structurally: the build ssh runs, THEN stamp_build, THEN the
     // restart ssh — three sequential top-level statements under
@@ -890,6 +904,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(deploySh).toContain('install_atomic ccd/ccd-scope-sweep .local/bin/ccd-scope-sweep 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-land-probe .local/bin/ccd-land-probe 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-testbox-times .local/bin/ccd-testbox-times 755');
+    expect(deploySh).toContain('install_atomic ccd/ccd-carry-dedupe-sweep .local/bin/ccd-carry-dedupe-sweep 755');
     expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
     expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
   });
@@ -1059,6 +1074,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // The slice drop-in is RENDERED on the box by the shipped ccd/ccrc's `_inst_slice_limits`
     // (D-7296), which `_slice_limits_unit` sources out of ~/ccrc, so the fixture tree carries it.
     cpSync(join(deployDir, '..', 'ccd', 'ccrc'), join(src, 'ccd', 'ccrc'));
+    // The graph sweep's units are rendered the same way (D-7354): `_graph_units` reaches `_inst_graph_lib`, which
+    // sources the resolver from beside that ccrc, so the fixture tree carries it too.
+    cpSync(join(deployDir, '..', 'ccd', 'graph-resolve'), join(src, 'ccd', 'graph-resolve'));
     const scriptPath = join(home, 'units.sh');
     writeFileSync(scriptPath, `${script}\n`);
 
@@ -1079,9 +1097,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // install-census.test.ts already holds every `_inst_units` unit to one of
     // deploy.sh's lanes, and this lane places units `_inst_units` does not.
     const unitRoot = /^(?:~|\$HOME)\/\.config\/systemd\/user\//;
-    // `_slice_limits_unit` places the slice drop-in the same way, rendered (D-7296); the fixture HOME
-    // has no ~/.ccrc/ccrc.env, so it must land as the template's own bytes, like every copy.
-    const landed: Array<[string, string]> = [...script.matchAll(/(?:^|&&)\s*(?:_unit_atomic|_slice_limits_unit)\s+(\S+)\s+(\S+)/gm)]
+    // `_slice_limits_unit` places the slice drop-in the same way, rendered (D-7296), and `_graph_units` the graph
+    // sweep's pair (D-7354), after its `service|timer` word; the fixture HOME has no ~/.ccrc/ccrc.env and no graph
+    // settings, so each must land as the template's own bytes, like every copy.
+    const landed: Array<[string, string]> = [...script.matchAll(/(?:^|&&)\s*(?:_unit_atomic|_slice_limits_unit|_graph_units\s+(?:service|timer))\s+(\S+)\s+(\S+)/gm)]
       .map((m) => {
         const from = m[1]!.replace(/^"|"$/g, '');
         const to = m[2]!.replace(/^"|"$/g, '');
@@ -1938,6 +1957,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The history skill's installer is the SIXTH roster reader (ccrc history W1-B2). It `source`s the same
       // generated file for the same reason: the roster is where it learns which config dirs exist at all.
       ['history skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-history-skill.sh'"],
+      // The Linear skill's installer is the SEVENTH (#1444, spec 2026-10-31 §11), for the same reason.
+      ['linear skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-linear-skill.sh'"],
     ] as const) {
       const runIdx = agentBranch.indexOf(invocation);
       expect(runIdx, `the agent branch no longer runs the ${what} installer (looked for: ${invocation})`)

@@ -4,7 +4,7 @@
 // (`diskepisode.ts`) and sends the notice through the funnel; every decision is `disk.ts`'s. `watch.ts` owns one of these and
 // calls `sweep()` from its tick, ABOVE the registry read's fail-shut return: a full disk is exactly when that read fails.
 import type { DiskHealth } from '../../shared/disk.js';
-import type { Deps } from './deps.js';
+import type { WatcherDeps } from './deps.js';
 import { diskBlockOf, diskMarkFate, diskNotice, diskVerdict, unmeasuredDiskBlock, type DiskVerdict } from './disk.js';
 import { clearDiskEpisode, readDiskEpisode, writeDiskEpisode } from './diskepisode.js';
 import type { MeasuredDisk } from './io.js';
@@ -19,7 +19,7 @@ export class DiskAlarmLane {
   private state: DiskVerdict | null = null;
   private held: DiskHealth | null = null;
 
-  constructor(private readonly deps: () => Pick<Deps, 'io' | 'cfg' | 'coord' | 'notifyLog' | 'push' | 'viewers'>) {}
+  constructor(private readonly deps: () => Pick<WatcherDeps, 'io' | 'cfg' | 'coord' | 'notifyLog' | 'push' | 'viewers'>) {}
 
   /** The block as the last pass held it, or `null` before the first: absence on the wire reads as UNKNOWN, never as a
    *  healthy disk. `holders` is empty here; the tmp census's are overlaid by the watcher. */

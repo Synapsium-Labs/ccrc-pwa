@@ -1769,6 +1769,28 @@ die() { echo "ccd: $*" >&2; exit 1; }
 # (`-e` is false for a DANGLING symlink, so that case reports as missing —
 # which is what it is: the roster the link names is not there.)
 CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
+# ── THE NAMES `accounts.sh` DEFINES, ONCE (D-7717) ──────────────────────────
+# Every variable and function shared/generate.mjs emits. `_roster_reread_check`
+# unsets exactly these, in its validating subshell and then in this shell, so a
+# projection that no longer defines one of them cannot leave the old value
+# standing ("UNSET IS NOT EMPTY", `_wrapper_rostered_now`'s "UNSET FIRST").
+# `server/test/ccd-supervise-roster-reread.test.ts` holds both lists equal to
+# what the generator writes, so a field added there reds here until it is named.
+_CCD_ROSTER_VARS=(CCRC_ACCOUNTS CCRC_HOME_ABLE CCRC_MEASURED CCRC_ANTHROPIC_BACKEND CCRC_SUBAGENT_CLASSES CCRC_CODEX_BACKEND CCRC_UPSTREAM)
+_CCD_ROSTER_FNS=(_ccrc_cfg_dir _ccrc_id_wrapper _ccrc_dir_id _ccrc_label _ccrc_hue _ccrc_pool _ccrc_secrets_file _ccrc_auth_dir)
+# The fingerprint is the file's BYTES, read with builtins: no `stat`, no hash,
+# so the check `cmd_supervise` makes every loop costs no fork (the tick budget,
+# ccd-tick-budget.test.ts, is exact). The file is a few KB. `-f` first, as the
+# ladder below does, because `read` opens by name and blocks forever on a FIFO.
+# rc 1 when there is nothing to read (absent, not a regular file, unreadable,
+# empty): every one of those is a roster `_roster_reread_check` refuses anyway.
+# A NUL ends the read early; the generator never writes one.
+_roster_fp_to() {   # var -> var = the bytes of accounts.sh; rc 1 when there are none to read
+  local __rf_v=""
+  [[ -f "$CCRC_ACCOUNTS_SH" && -r "$CCRC_ACCOUNTS_SH" ]] || return 1
+  { IFS= read -r -d '' __rf_v < "$CCRC_ACCOUNTS_SH"; } 2>/dev/null || :
+  [[ -n "$__rf_v" ]] && printf -v "$1" '%s' "$__rf_v"
+}
 [[ -e "$CCRC_ACCOUNTS_SH" ]] \
   || die "no account roster at $CCRC_ACCOUNTS_SH — generate it from ~/.ccrc/accounts.json (deploy/deploy.sh, or \`ccrc install\`)"
 # D-2377: `-e` and `-r` are not enough on their own — neither is false for a
@@ -1806,6 +1828,15 @@ CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # convention to copy. source=/dev/null is shellcheck's own idiom for a path it
 # cannot follow: this one is generated at deploy time and has no in-repo
 # counterpart to check against (shared/generate.mjs emits it).
+#
+# THE BYTES ARE READ BEFORE THE `source`, NEVER AFTER IT (D-7717). They are the
+# fingerprint `_roster_reread_check` compares against, once per `cmd_supervise`
+# loop. Read first, a write that lands between the read and the `source` leaves
+# a fingerprint OLDER than what was sourced, so the next loop sees a change and
+# re-reads: one harmless extra re-read. Read after, the same write would leave
+# a fingerprint that matches a file this process never sourced, and the change
+# would be missed for the life of the supervisor.
+_roster_fp_to _CCD_ROSTER_FP || _CCD_ROSTER_FP=""
 # shellcheck source=/dev/null
 source "$CCRC_ACCOUNTS_SH" \
   || die "account roster unreadable: $CCRC_ACCOUNTS_SH — regenerate it from ~/.ccrc/accounts.json"
@@ -7762,7 +7793,12 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # `git worktree remove` collects the store WITH the tree (un-ignored, it wedges
   # ws-rm/ws-reap/ws-gc — none pass --force), and so a SIGKILL-orphaned
   # .graphifyignore can never make a workspace unremovable.
+  # Graph revision 2 (D-7350, spec §6.1): the NO-SLASH line too, because a
+  # tree's graphify-out becomes a LINK to the repository's shared graph, and the
+  # slash-only line does not ignore a symlink. (ccd does not source ccrc, so this
+  # is the second writer of these lines beside ccrc's _graph_exclude_common.)
   grep -qxF 'graphify-out/' "$common/info/exclude" 2>/dev/null || echo 'graphify-out/' >> "$common/info/exclude"
+  grep -qxF 'graphify-out' "$common/info/exclude" 2>/dev/null || echo 'graphify-out' >> "$common/info/exclude"
   grep -qxF '.graphifyignore' "$common/info/exclude" 2>/dev/null || echo '.graphifyignore' >> "$common/info/exclude"
   # Regenerable build output a project's own tooling writes straight into the
   # workspace (`npm install`, `cdk synth`) is W-pattern by location — it dies
@@ -9113,6 +9149,12 @@ EOF
   # Same channel, same argument, as the three tokens above; and the same
   # obligation, which is the list named in the comment beside `stop-surface`.
   echo account-v1
+  # `account-v2` (N4, D-7734): this box's `ccrc account` carries W2a's write subs (paste validate-first, `set`,
+  # Remove's pre-check and discard; accounts plan Task A16), so the server offers them. Later waves add their own words.
+  echo account-v2
+  # `account-auth-v1` (N4, D-7734; accounts plan Task A20): `ccrc account auth-start|auth-code|auth-cancel`, the
+  # detached attempt on the lane's private tmux socket, `set --method` and `credential --sign-out` are on this box.
+  echo account-auth-v1
   # `pools-v1` says THIS copy of ccd honours project pool tags. What that
   # means AS OF THIS COMMIT, stated so later waves cannot read it as more:
   # it reads `$POOLS_DIR/<project>` (Task 1), and `_pool_ok` (Task 2) is now
@@ -9720,14 +9762,15 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
   # full-screen TUI that produces ZERO BYTES without a tty (measured
   # 2026-09-07, CC 2.1.263), has no home without this verb.
   #
-  # `_tmux_new_session`, NEVER `_spawn`. Two separate reasons, and both matter:
+  # A PANE ON THE LANE'S OWN SERVER, NEVER `_spawn` (and, since accounts plan
+  # Task A20, never `_tmux_new_session` either: that one places the fleet's
+  # shared server, and this pane is on `-L ccrc-auth-<id>`, below). Two
+  # separate reasons for not spawning, and both matter:
   # `_spawn_start` reads wrapper/workdir/uuid out of the registry and dies with
   # `incomplete registry for '<id>'` for an id that names an ACCOUNT rather
   # than a session; and `_spawn_settle` drives `_accept_first_run_prompts`,
   # which presses Down and Enter into the pane. A sign-in a robot answers is a
-  # sign-in that was dismissed. Through `_tmux_new_session` the pane also lands
-  # in ccrc-tmux-server.scope like every other, which is the whole argument
-  # that function's own header makes.
+  # sign-in that was dismissed.
   #
   # FLAG-ANCHORED, exactly as `cmd_coord_pause` above: `--id` is not a
   # confirmation token, it is the verb's whole argument surface, and a
@@ -9759,13 +9802,19 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
     esac
   done
   _is_valid_wrapper "$id" || die "unknown-account: $id (no roster entry claims it)"
-  local pane; pane="cc-auth-$id"
+  # THE LANE'S OWN TMUX SERVER, `-L ccrc-auth-<id>` (accounts plan Task A20,
+  # D-5515), never the fleet's shared one: the agent's tmux grant names
+  # subcommands on the default socket only, so no drawer, `ptyOpen` or
+  # `send-keys` can reach a pane here. `-f /dev/null`: it reads no tmux.conf, so
+  # no fleet hook runs in it. The socket is per lane, so two lanes' sign-ins
+  # never share a server.
+  local pane sock; pane="cc-auth-$id"; sock="ccrc-auth-$id"
   if (( cancel )); then
     # `null`, not a refusal: "there is no pane" is the state --cancel exists to
     # reach, so reaching it is success. The caller that wants to know whether it
     # killed anything reads the field.
-    if tmux has-session -t "$(_tmux_at "$pane")" 2>/dev/null; then
-      tmux kill-session -t "$(_tmux_at "$pane")" || die "could not kill $pane"
+    if tmux -L "$sock" -f /dev/null has-session -t "$(_tmux_at "$pane")" 2>/dev/null; then
+      tmux -L "$sock" -f /dev/null kill-session -t "$(_tmux_at "$pane")" || die "could not kill $pane"
       printf '{"cancelled":%s}\n' "$(_json_str "$pane")"
     else
       printf '{"cancelled":null}\n'
@@ -9786,10 +9835,14 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
   # and tmux itself is the backstop there: `new-session -d -s <name>` on a
   # live name exits non-zero with `duplicate session`, which the `||` below
   # turns into a refusal rather than a second helper.
-  ! tmux has-session -t "$(_tmux_at "$pane")" 2>/dev/null \
+  ! tmux -L "$sock" -f /dev/null has-session -t "$(_tmux_at "$pane")" 2>/dev/null \
     || die "auth-in-progress: $pane is already running (ccd account-pane --id $id --cancel to stop it)"
-  _tmux_new_session -d -s "$pane" -x 120 -y 40 \
-    "exec '$HOME/.local/bin/ccd-account-auth' '$id' '$method'" \
+  # NOT `_tmux_new_session`, which places the SHARED server in its capped scope:
+  # this server is the lane's own and ends with its one pane. `CCRC_AUTH_IN_PANE`
+  # tells the helper it is the pane's copy, so it leaves the server to end with
+  # the pane rather than kill it from inside.
+  tmux -L "$sock" -f /dev/null new-session -d -s "$pane" -x 120 -y 40 \
+    "exec env CCRC_AUTH_IN_PANE=1 '$HOME/.local/bin/ccd-account-auth' '$id' '$method'" \
     || die "could not create $pane"
   # `_json_str` for both, though both are already constrained — the id by the
   # regex above and the method by the `case` — because the tree's rule is that
@@ -23967,8 +24020,22 @@ _child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, lea
 # THE ID is the registry's own shape and never dot-leading: `.` and `..` would name the spool root or the registry itself,
 # and a dot-leading name is one the hook refuses to write for. Mode is set with `chmod -- 0700 <dir>` (the operand last
 # after `--`, D-3510), so a directory an older ccd or an operator widened is private again at the next spawn.
-# NOTHING PURGES IT in this wave: the hook prunes only a LIVE owner's own buckets (at its next write), so a removed owner, or one whose
-# session never runs again, keeps its last 24 to 25 hourly buckets and this directory for good; the spool is evidence the server may not have read yet.
+# A SPAWN PRUNES ABSENT OWNERS (operator ruling 2026-10-14; `_delegation_spool_prune_absent`, called right after this function): the
+# hook prunes only a LIVE owner's own buckets (at its next write), so a removed owner's last 24 to 25 hourly buckets and directory stand
+# until a spawn of ANY session removes them, at most DSP_PRUNE_MAX directories a spawn. A directory goes only when the registry is
+# readable and searchable and no link stands at `$REG/delegation` or the spool root; its id is in the spawn grammar and is not the
+# spawning id; NO `$REG/<id>.*` entry of any type stands (a partly purged row, an orphaned `joined` field and a dotted sibling id all
+# keep it); and it is a directory the prune can read and search (an unreadable one would glob as empty), holding only regular,
+# non-link `<10 digits>.spool` buckets, each older than the cutoff hour (now minus 24 h, UTC, compared as the hook's
+# `_hook_spool_prune` compares) by name and 24 h old by mtime, or, holding none, is itself 24 h old by mtime. It is renamed
+# to `.prune.<id>.<pid>`, checked again, and only then emptied by name (`rm -f --` each bucket, `rmdir --` the directory: never a `-r`);
+# a check that now fails moves it back when `<id>` is absent, or leaves it, and the next spawn takes a leftover `.prune.<id>.<pid>`
+# under the same rules (a dot-leading name is never an owner: this function refuses one). THE WINDOW LEFT: a purged id respawned
+# between the rename and the move back skips that instant's events (the census backstops them), and a move back that failed leaves
+# a running session with no spool directory, which the doctor's WARN for that case reports. Two spawns at once: one that has
+# removed a renamed directory's buckets but not yet the directory leaves it EMPTY with a fresh mtime, so a second spawn listing it
+# as a leftover fails the check and moves it back. That absent owner's empty directory reappears and goes about 24 h later; no
+# evidence is lost.
 _delegation_spool_dir() {   # id -> 0 the owner's directory stands, private | 1 not made (warned, or refused for the id): a failure never fails a spawn
   local LC_ALL=C id="${1-}" base="$REG/delegation" d
   [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
@@ -23979,6 +24046,39 @@ _delegation_spool_dir() {   # id -> 0 the owner's directory stands, private | 1 
     echo "ccd: warn: $id's delegation spool directory $d could not be made a private directory — spawning without it; the delegation hook skips until a later spawn makes it" >&2
     return 1
   fi
+}
+DSP_PRUNE_MAX=8   # owner directories removed per spawn, at most; the rest wait for the next spawn
+_dsp_old_absent() {   # <id> <dir> <cutoff YYYYMMDDHH> <now s> -> 0 iff the owner's row is gone and the dir holds only
+                      #   regular <10 digits>.spool buckets, each older than the cutoff by name and 24 h by mtime; sets DSP_OLD=(paths)
+  local LC_ALL=C id="$1" d="$2" cut="$3" now="$4" e b m=""; DSP_OLD=()
+  [[ -d "$d" && -r "$d" && -x "$d" && ! -L "$d" ]] || return 1   # unreadable: its glob would read empty, so never eligible
+  e=("$REG/$id".*); (( ${#e[@]} == 0 )) || return 1
+  for e in "$d"/*; do
+    b="${e##*/}"
+    [[ "$b" =~ ^[0-9]{10}\.spool$ && -f "$e" && ! -L "$e" ]] && (( 10#${b%.spool} < 10#$cut )) || return 1
+    DSP_OLD+=("$e")
+  done
+  if (( ${#DSP_OLD[@]} )); then m=$(_plat_mtime "${DSP_OLD[@]}" 2>/dev/null) || return 1; else m=$(_plat_mtime "$d" 2>/dev/null) || return 1; fi
+  for b in $m; do [[ "$b" =~ ^[0-9]+$ ]] && (( now - b >= 86400 )) || return 1; done
+}
+_delegation_spool_prune_absent() {   # <spawning id> -> rc 0 always; removes up to DSP_PRUNE_MAX absent owners' spool dirs
+  local LC_ALL=C self="${1-}" root="$REG/delegation/spool" now="" cut="" d b id t n=0 dg=0 ng=0
+  [[ -d "$REG" && -r "$REG" && -x "$REG" && ! -L "$REG/delegation" && ! -L "$root" && -d "$root" ]] || return 0
+  shopt -q dotglob && dg=1; shopt -q nullglob && ng=1; shopt -s dotglob nullglob
+  for d in "$root"/*; do
+    (( n < DSP_PRUNE_MAX )) || break; b="${d##*/}"; id="$b"; t="$root/.prune.$b.$$"
+    [[ "$b" =~ ^\.prune\.(.+)\.[0-9]+$ ]] && { id="${BASH_REMATCH[1]}"; t="$d"; }
+    [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && "$id" != "$self" ]] || continue
+    [[ -n "$now" ]] || { _now_s_to now; TZ=UTC0 printf -v cut '%(%Y%m%d%H)T' "$(( now - 86400 ))"; }
+    if _dsp_old_absent "$id" "$d" "$cut" "$now" && { [[ "$t" == "$d" ]] || _plat_mv_notdir "$d" "$t" 2>/dev/null; } \
+       && _dsp_old_absent "$id" "$t" "$cut" "$now"; then
+      (( ${#DSP_OLD[@]} == 0 )) || rm -f -- "${DSP_OLD[@]}" 2>/dev/null
+      rmdir -- "$t" 2>/dev/null && n=$(( n + 1 ))
+    elif [[ -d "$t" && ! -L "$t" && ! -e "$root/$id" && ! -L "$root/$id" ]]; then
+      _plat_mv_notdir "$t" "$root/$id" 2>/dev/null
+    fi
+  done
+  (( dg )) || shopt -u dotglob; (( ng )) || shopt -u nullglob   # rc 0 on both arms: the function's rc 0
 }
 
 # ── THE CHILD'S SPAWN RECORD (spec §6.6, plan Task 15, D-5299, D-5391) ─────
@@ -24641,6 +24741,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # THE OWNER'S DELEGATION SPOOL DIRECTORY (delegation broker wave 3, `_delegation_spool_dir`): made here, once per spawn, for every
   # session and not only a child; a failure has already warned and never refuses the spawn.
   _delegation_spool_dir "$id" || true
+  _delegation_spool_prune_absent "$id" || true   # the absent-owner prune (ruling 2026-10-14): rc 0 always, silent
   # D-5241: the tool-child priority, on both spawn lines for `$tmpenv`'s reason.
   local adjenv; adjenv=$(_tool_adj_env)
   # D-6636: the session's OWN temp root, exported on both spawn lines (they splice `$resenv`) so an agent that later
@@ -26338,6 +26439,75 @@ _route_pending_word() { local __w; _route_pending_word_to __w "$@"; printf '%s' 
 # D-4963 (tick-diet spec §6.4): the printing form of the home read, renamed in place as its out-var form above (D-5270: raw stdout drops the fallback's newline).
 _home_measured() { local __hmw_v __hmw_rc; _home_measured_to __hmw_v "$@"; __hmw_rc=$?; printf '%s' "$__hmw_v"; return "$__hmw_rc"; }
 
+# ── A RUNNING SUPERVISOR PICKS UP A NEW OR REMOVED LANE (D-7717) ───────────
+# `accounts.sh` is sourced once, at module top level, and `cmd_supervise` lives
+# for weeks. Before this, a lane `ccrc account add` rostered joined swap
+# rotation only when each supervisor next restarted, and a removed lane stayed
+# a rotation candidate in every running one. Restarting them is not the answer:
+# a restart is an actor on every unit, and this change adds none.
+#
+# THIS IS A DEPARTURE, and a bounded one. `_wrapper_rostered_now`'s rule is "A
+# SUBSHELL, NEVER A RE-SOURCE INTO THIS SHELL" and "UNSET FIRST". Both of its
+# reasons are kept:
+#   - "sourcing it mid-run would let a generator change redefine a function
+#     this verb is in the middle of using": the re-source happens only at the
+#     LOOP BOUNDARY, before the probe and before any tick helper runs, so no
+#     roster function is mid-use when it is replaced.
+#   - "an inherited CCRC_ACCOUNTS survives a projection that no longer defines
+#     it": the new bytes are VALIDATED FIRST, in a subshell that unsets every
+#     name the generator defines (`_CCD_ROSTER_VARS`, `_CCD_ROSTER_FNS`) before
+#     it evaluates them. They must evaluate with rc 0 and leave a non-empty
+#     indexed `CCRC_ACCOUNTS`, an indexed `CCRC_HOME_ABLE` (which `_is_home_able`
+#     reads bare under `set -u`) and the functions `_ccrc_cfg_dir`,
+#     `_ccrc_label` and `_ccrc_hue`. Only then are the same names unset in THIS
+#     shell and the same bytes evaluated here.
+#
+# THE BYTES VALIDATED ARE THE BYTES APPLIED. Both evaluations take the
+# fingerprint string, not the file, so a write that lands between the
+# validation and the re-source cannot put an unvalidated roster into the
+# supervisor. Both run inside `_roster_eval`, at the same function depth, so a
+# hand-edited file that says `declare -a CCRC_ACCOUNTS=(…)` — a LOCAL at that
+# depth, gone on return — fails the validation exactly as it would have emptied
+# the roster here.
+#
+# A REFUSED FILE KEEPS THE OLD ROSTER and warns ONCE per distinct content
+# (`_CCD_ROSTER_REFUSED`), not once a loop: a broken projection under 60
+# supervisors would otherwise write 12 lines a second into the journal. A later
+# good file is applied as usual. The roster is never emptied.
+#
+# `_cfg_dir_to`'s per-process memo assumed "the roster is sourced once"; it is
+# dropped on every re-source, or a removed lane would keep answering its old
+# config directory.
+#
+# No `systemctl`, no `launchctl`, no `tmux`: nothing here restarts a unit or
+# touches a pane. Only `cmd_supervise` calls this; every other verb is short
+# and keeps its one startup snapshot (and `_wrapper_rostered_now` for the
+# writes that must re-ask).
+_CCD_ROSTER_REFUSED=""   # "x" + the bytes last refused ("x" alone: nothing could be read); "" = none refused
+_roster_eval() { eval "$1"; }   # bytes -> their rc, evaluated in THIS shell one function deep (see above)
+_roster_reread_check() {   # [id] -> re-reads accounts.sh into this shell iff its bytes changed and pass validation
+  local fp="" who="${1:+$1: }"
+  _roster_fp_to fp || fp=""   # "" (nothing readable) is never evaluated from the file: it fails validation below
+  [[ ( -n "$fp" && "$fp" == "$_CCD_ROSTER_FP" ) || "x$fp" == "$_CCD_ROSTER_REFUSED" ]] && return 0
+  if ! (
+    unset -v "${_CCD_ROSTER_VARS[@]}"; unset -f "${_CCD_ROSTER_FNS[@]}"
+    { _roster_eval "$fp"; } >/dev/null 2>&1 || exit 1
+    declare -p CCRC_ACCOUNTS 2>/dev/null | grep -q '^declare -a ' || exit 1
+    (( ${#CCRC_ACCOUNTS[@]} > 0 )) || exit 1
+    declare -p CCRC_HOME_ABLE 2>/dev/null | grep -q '^declare -a ' || exit 1
+    declare -F _ccrc_cfg_dir _ccrc_label _ccrc_hue >/dev/null 2>&1 || exit 1
+  ); then
+    _CCD_ROSTER_REFUSED="x$fp"
+    echo "ccd: warn: ${who}account roster $CCRC_ACCOUNTS_SH changed and is refused: it must be a readable regular file that sources cleanly to a non-empty CCRC_ACCOUNTS, a CCRC_HOME_ABLE and _ccrc_cfg_dir/_ccrc_label/_ccrc_hue — keeping the roster this supervisor holds (${CCRC_ACCOUNTS[*]}); regenerate it: ccrc install" >&2
+    return 0
+  fi
+  unset -v "${_CCD_ROSTER_VARS[@]}"; unset -f "${_CCD_ROSTER_FNS[@]}"
+  { _roster_eval "$fp"; } >/dev/null 2>&1 \
+    || echo "ccd: warn: ${who}account roster re-read returned non-zero in this shell after it validated" >&2
+  _CCD_CFG_DIR_MEMO=(); _CCD_ROSTER_FP=$fp; _CCD_ROSTER_REFUSED=""
+  echo "ccd: ${who}account roster re-read — lanes now: ${CCRC_ACCOUNTS[*]}" >&2
+}
+
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
   local id="${1:?usage: ccd supervise <id>}"
   # ── THE START LIMIT, ON A MANAGER THAT HAS NONE ────────────────────────
@@ -26526,6 +26696,7 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   local CCD_TICK_CTX=1   # the tick context: dynamically scoped like CCD_IN_UNIT, never exported, never argv; cmd_ensure never sees it (spec §6.2)
   while :; do
     _now_s_to t0   # D-4961: the clock seam — fork-free under bash 5 ($EPOCHSECONDS)
+    _roster_reread_check "$id"   # D-7717: the loop boundary — no roster function is mid-use here; fork-free when unchanged
     _session_probe "$id"
     case "$PROBE_VERDICT" in
       gone) break ;;   # the ONLY exit — a session tmux itself pronounced dead (D-310)

@@ -16,7 +16,7 @@ export type AskResult = { ok: true } | { ok: false; error: AskRefuseCode };
  * D-5293: the body of an answer by option index, read ONCE for both routes
  * that press through `answerAsk`: the operator's ask (`POST /api/questions/
  * session-<id>/answer`, which replaced `server.ts`'s `POST /api/sessions/:id/ask`
- * in W7 C7p) and the parent's `POST /api/asks/:id/answer`
+ * in W7 C7p) and the parent's `POST /api/questions/ask-<n>/rule`
  * (`coord/routes.ts`). `optionIndexes` is an array of numbers (`answerAsk`
  * judges each one); `askKey`, when present, is a string. The operator's route
  * requires it; the parent's route compares it with the key its row was minted

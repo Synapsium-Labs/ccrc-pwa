@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccrc",
+  "maxDelta": 160,
+  "d": "D-7735",
+  "reason": "accounts plan Task A16, the box half of W2a: the validate-first byte read and token probe, add's --adopt and suffix rule, remove's --mode/--dry-run/--rehome-sleeping with its pre-check, gate and auth-scratch sweep, the sleeping and archived census in _acct_live, and the new set sub; the decisions live in deploy/account-op.mjs and bash measures and orders the steps, measured +146 net code lines against the merge-base",
+  "added": "2026-11-01"
+}

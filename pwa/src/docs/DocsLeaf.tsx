@@ -2,17 +2,18 @@
 // `contentClass(path)`. `markdown` is `DocMarkdown`; `raster` is ONE `DocImage` (its bytes through `loaders.raster`,
 // an object URL); `svg` is the same `data:` image Markdown gets, with Source and Download; `html` is the stand-in
 // until W6's mockup viewer (no frame of any kind); `text` is the file in `<pre class="doc-plain">`, or `CodeBlock`
-// when a registered grammar matches its extension; `other` is "No preview" and Download. A listed size over its
+// on a one-block highlight store (W5h-a) when a registered grammar matches its extension; `other` is "No preview" and Download. A listed size over its
 // class cap is the `too-large` sentence, and nothing was requested (the visit's `too-large` slot). The header and the
 // banners are `DocsScreen`'s (`DocsHead`, `DocsBanners`), above this body, so a file failure replaces only the body.
-import { useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Button } from '@ccrc/ui';
 import type { Element as HastElement } from 'hast';
-import hljs from 'highlight.js/lib/core';
 import { contentClass, docsApi, entryView, type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk } from '../../../shared/docs';
-import { CodeBlock } from '../lib/markdown';
+import { CodeBlock, PreHighlightContext } from '../lib/markdown';
+import { isRegisteredGrammar } from '../lib/highlightNames';
+import { useDocsHighlightStore } from '../lib/highlighterContext';
 import type { MarkdownParser } from '../lib/markdownRunner';
-import { DocImage, DocsAssetContext, svgDataUrl, type DocsAssetContextValue } from './DocImage';
+import { DocImage, DocsAssetContext, DocsLeafImageContext, svgDataUrl, type DocsAssetContextValue } from './DocImage';
 import { DocInLinkContext, DocLinkContext, fragmentTarget, type DocLinkContextValue } from './DocLink';
 import { DOC_NOT_UTF8_NOTE, DocMarkdown, DocPlain, docMarkdownSource } from './DocMarkdown';
 import { DocsFailureView } from './DocsFailureView';
@@ -21,6 +22,7 @@ import { DOCS_SHOW_NO_BYTES, DOCS_SHOW_NOT_SVG, DOCS_VIEW_TEXT, failureSentence,
 import { leafName } from './docsTree';
 import type { DocsNotOk } from './failures';
 import { downloadDocFile, showBytes } from './objectUrls';
+import { ReaderFrame, type ReaderDeps } from './ReaderFrame';
 import { pinFor, type DocsVisit, type FileSlot } from './useDocsVisit';
 
 type Leaf = DocsPageLocation & { kind: 'path' };
@@ -104,17 +106,27 @@ function SourceText(p: { readonly show: DocsShowOk }): ReactNode {
   return <pre className="doc-plain">{src.text}</pre>;
 }
 
-/** A `text` leaf (spec 4.4): highlighted through the shared `CodeBlock` (and every bound it applies: the size cap of
- *  its grammar, and the word, line and whitespace bounds) when a registered grammar knows the extension, else plain. */
+/** A `text` leaf (spec 4.4, "The text leaf"): when a registered grammar knows the extension (`highlightNames.ts`, never
+ *  highlight.js), the file is one `CodeBlock` on a one-block highlight store on the Docs highlighter, seeded with
+ *  that block when it is created, published for the leaf's actions and released on unmount; else plain. */
 function TextBody(p: { readonly show: DocsShowOk; readonly path: string }): ReactNode {
-  const src = docMarkdownSource(p.show);
-  if (src.kind === 'no-bytes') return <DocsFailureView answer={malformed(DOCS_SHOW_NO_BYTES)} />;
-  if (src.kind === 'not-utf8') return <DocPlain text={src.text} note={DOC_NOT_UTF8_NOTE} />;
+  const src = useMemo(() => docMarkdownSource(p.show), [p.show]);
   const name = leafName(p.path);
   // contentClass said `text`, so the extension is ASCII `a-z0-9` once lowered: `toLowerCase` lowers it the same way.
   const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
-  if (hljs.getLanguage(ext) === undefined) return <pre className="doc-plain">{src.text}</pre>;
-  return <CodeBlock><code className={'language-' + ext}>{src.text}</code></CodeBlock>;
+  const text = src.kind === 'markdown' && isRegisteredGrammar(ext) ? src.text : null;
+  const store = useDocsHighlightStore(useMemo(
+    () => (text === null ? null : [{ lang: ext, raw: text.replace(/\n$/, '') }]),
+    [ext, text],
+  ));
+  if (src.kind === 'no-bytes') return <DocsFailureView answer={malformed(DOCS_SHOW_NO_BYTES)} />;
+  if (src.kind === 'not-utf8') return <DocPlain text={src.text} note={DOC_NOT_UTF8_NOTE} />;
+  if (store === null) return <pre className="doc-plain">{src.text}</pre>;
+  return (
+    <PreHighlightContext value={store}>
+      <CodeBlock><code className={'language-' + ext}>{src.text}</code></CodeBlock>
+    </PreHighlightContext>
+  );
 }
 
 /** An `svg` leaf (spec 5.5): the bytes as the same `data:` image Markdown gets (never a `blob:`, never `/api/`),
@@ -155,21 +167,24 @@ const IGNORE_DRAFT_ASSET = (): void => {};
  *  leaf, and `DocImage` would push a duplicate entry and drop `view=committed`), so it renders inside
  *  `DocInLinkContext` as a bare `<img>` with no button to focus; and it is not counted as a drafted asset the page
  *  embeds. The Download button sits in the actions row under this body, so the in-link refusal (no action buttons) loses
- *  nothing. */
-function RasterBody(p: { readonly link: LinkBase; readonly name: string }): ReactNode {
+ *  nothing. Its one image reports the pin it settled at to `onLeafImage` (through `DocsLeafImageContext`), which Share
+ *  waits for (spec 4.16; refinement (f)); no image inside a document has that listener. */
+function RasterBody(p: {
+  readonly link: LinkBase; readonly name: string; readonly onLeafImage: ((pin: DocPin | null) => void) | null;
+}): ReactNode {
   const assets = useContext(DocsAssetContext);
   const own = useMemo<DocsAssetContextValue | null>(
     () => (assets === null ? null : { ...assets, onDraftAsset: IGNORE_DRAFT_ASSET }), [assets]);
   const node = useMemo<HastElement>(() => ({ type: 'element', tagName: 'img', properties: {}, children: [] }), []);
   const ctx = useMemo<DocLinkContextValue>(() => {
     const urls = new WeakMap<HastElement, DetachedUrls>();
-    urls.set(node, { attrs: { src: './' + encodeURIComponent(p.name) }, imageIndex: 0, highlight: null });
+    urls.set(node, { attrs: { src: './' + encodeURIComponent(p.name) }, imageIndex: 0 });
     return { ...p.link, urls };
   }, [p.link, p.name, node]);
   return (
     <div className="docs-raster">
       <DocsAssetContext value={own}>
-        <DocLinkContext value={ctx}><DocInLinkContext value={true}><DocImage node={node} alt={p.name} /></DocInLinkContext></DocLinkContext>
+        <DocLinkContext value={ctx}><DocInLinkContext value={true}><DocsLeafImageContext value={p.onLeafImage}><DocImage node={node} alt={p.name} /></DocsLeafImageContext></DocInLinkContext></DocLinkContext>
       </DocsAssetContext>
     </div>
   );
@@ -184,25 +199,45 @@ function bodyKeyOf(pin: DocPin, show: DocsShowOk, pinKey: string): string {
   return ['blob', show.blob, show.section, show.path].join('\u0000');
 }
 
-/** A Markdown leaf's body: `DocMarkdown` keyed by its bytes' identity, under the page's link context. */
-function MarkdownBody(p: { readonly show: DocsShowOk; readonly bodyKey: string; readonly link: LinkBase; readonly parser: MarkdownParser }): ReactNode {
+/** A Markdown leaf's body, keyed by its bytes' identity, under the page's link context: the rich reader (`ReaderFrame`,
+ *  which falls back to the plain view itself) when the page has one, else `DocMarkdown` as before (`reader === null`:
+ *  this browser has no worker, and the plain view is the only view). */
+function MarkdownBody(p: {
+  readonly show: DocsShowOk; readonly bodyKey: string; readonly link: LinkBase; readonly parser: MarkdownParser;
+  readonly reader: ReaderDeps | null; readonly pendingFragment: string | null; readonly onFragmentConsumed: () => void;
+}): ReactNode {
   const src = useMemo(() => docMarkdownSource(p.show), [p.show]);
   if (src.kind === 'no-bytes') return <DocsFailureView answer={malformed(DOCS_SHOW_NO_BYTES)} />;
   if (src.kind === 'not-utf8') return <DocPlain text={src.text} note={DOC_NOT_UTF8_NOTE} />;
-  return <DocMarkdown key={p.bodyKey} text={src.text} pinKey={p.bodyKey} parser={p.parser} link={p.link} />;
+  if (p.reader === null) {
+    return <DocMarkdown key={p.bodyKey} text={src.text} pinKey={p.bodyKey} parser={p.parser} link={p.link} />;
+  }
+  return (
+    <ReaderFrame
+      key={p.bodyKey} show={p.show} bodyKey={p.bodyKey} link={p.link} parser={p.parser} reader={p.reader}
+      pendingFragment={p.pendingFragment} onFragmentConsumed={p.onFragmentConsumed}
+    />
+  );
 }
 
 /** One leaf page's body (spec 4.4). `page` is a leaf of `tree` (`docsPathKind` said so); given anything else it
  *  renders nothing. */
 export function DocsLeaf(p: {
   readonly visit: DocsVisit; readonly tree: DocsTreeOk; readonly page: Leaf; readonly parser: MarkdownParser;
+  /** The rich reader's deps; absent or `null`, a Markdown leaf is the plain view alone. */
+  readonly reader?: ReaderDeps | null;
+  /** Where the leaf's own raster image reports the pin it settled at (Share waits for it, spec 4.16); absent or `null`,
+   *  nothing listens. */
+  readonly onLeafImage?: ((pin: DocPin | null) => void) | null;
 }): ReactNode {
   const { visit, tree, page, parser } = p;
+  const reader = p.reader ?? null;
   const root = useRef<HTMLDivElement | null>(null);
   const cls = contentClass(page.path);
   // Only a Markdown body has anchors; a fragment meant for any other leaf is spent as soon as that leaf is open.
   useFragmentScroll(root, cls === 'markdown' ? visit.pendingFragment : null, visit.setFragment);
   const { pendingFragment, setFragment } = visit;
+  const fragmentConsumed = useCallback(() => setFragment(null), [setFragment]);
   useEffect(() => {
     if (cls !== 'markdown' && pendingFragment !== null) setFragment(null);
   }, [cls, pendingFragment, setFragment]);
@@ -224,7 +259,7 @@ export function DocsLeaf(p: {
     const download = <DownloadButton project={page.project} pin={pin} name={name} />;
     const file = visit.file;
     if (cls === 'raster') {
-      body = <><RasterBody link={link} name={name} /><div className="docs-leaf-actions">{download}</div></>;
+      body = <><RasterBody link={link} name={name} onLeafImage={p.onLeafImage ?? null} /><div className="docs-leaf-actions">{download}</div></>;
     } else if (file.s === 'too-large') {
       body = <DocsFailureView answer={{ s: 'failed', body: { ok: false, failure: 'too-large', size: file.size, cap: file.cap } }} />;
     } else if (cls === 'other') {
@@ -253,7 +288,12 @@ export function DocsLeaf(p: {
       const pinKey = docsApi.file(page.project, file.pin);
       switch (cls) {
         case 'markdown':
-          body = <MarkdownBody show={show} bodyKey={bodyKeyOf(file.pin, show, pinKey)} link={link} parser={parser} />;
+          body = (
+            <MarkdownBody
+              show={show} bodyKey={bodyKeyOf(file.pin, show, pinKey)} link={link} parser={parser}
+              reader={reader} pendingFragment={pendingFragment} onFragmentConsumed={fragmentConsumed}
+            />
+          );
           break;
         case 'text':
           body = <TextBody show={show} path={page.path} />;

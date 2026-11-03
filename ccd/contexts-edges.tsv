@@ -148,6 +148,7 @@ _spawn_start -> _class_below
 _spawn_start -> _compact_lock_acquire
 _spawn_start -> _compact_lock_release
 _spawn_start -> _delegation_spool_dir
+_spawn_start -> _delegation_spool_prune_absent
 _spawn_start -> _is_anthropic_backend
 _spawn_start -> _lc_done
 _spawn_start -> _operator_choice_keep
@@ -427,6 +428,7 @@ cmd_supervise -> _auto_stale_check
 cmd_supervise -> _auto_swap_check
 cmd_supervise -> _ci_held_wait
 cmd_supervise -> _reg_set
+cmd_supervise -> _roster_reread_check
 cmd_supervise -> _route_apply_check
 cmd_supervise -> _session_probe
 cmd_supervise -> _substrate_clear

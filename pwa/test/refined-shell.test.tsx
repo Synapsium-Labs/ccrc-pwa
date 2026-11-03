@@ -17,6 +17,7 @@ import { REFINED } from '@ccrc/ui';
 import { declaredValues } from './cssRule';
 import { fleetSession } from './fleetFixture';
 import type { AccountUsage, NotifyEvent, RunSummary } from '../../shared/api';
+import { itemView, waitingView } from './ledgersFixture';
 
 vi.mock('../src/lib/routes', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/lib/routes')>();
@@ -61,7 +62,7 @@ function atWidth(width: number): void {
   });
 }
 
-const TAB_IDS = ['fleet', 'inbox', 'runs', 'accounts', 'docs'] as const;
+const TAB_IDS = ['fleet', 'waiting', 'inbox', 'runs', 'accounts', 'docs'] as const;
 const tabTitle = (id: string): string => ROUTES.find((r) => r.id === id)!.title;
 
 beforeEach(() => {
@@ -75,7 +76,7 @@ afterEach(() => {
   // The `api.accounts` spies the lanes-row cases add must not leak into the next case.
   vi.restoreAllMocks();
   act(() => { navigate('/'); });
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false, fleetFrameSeen: false }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], feed: [], runs: [], runsFrameSeen: false, fleetFrameSeen: false, waiting: null }));
 });
 
 const bar = (): HTMLElement => document.querySelector<HTMLElement>('header.shell-accounts')!;
@@ -83,7 +84,7 @@ const primary = (): HTMLElement => within(bar()).getByRole('navigation', { name:
 const tabs = (): HTMLElement[] => [...primary().querySelectorAll<HTMLElement>('[data-command^="go-"]')];
 
 describe('the app bar (W2 Task S4b)', () => {
-  it('the app bar renders the wordmark, the five tabs from ROUTES, the bell, search, settings and New session, in that order', () => {
+  it('the app bar renders the wordmark, the six tabs from ROUTES, the bell, search, settings and New session, in that order', () => {
     atWidth(1280);
     render(<App />);
     const b = bar();
@@ -165,6 +166,24 @@ describe('the app bar (W2 Task S4b)', () => {
     // At zero the tab is its word alone, with no badge printed.
     act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'held-child', bucket: 'working' })] }));
     expect(within(primary()).getByRole('button', { name: 'Inbox' })).toHaveTextContent(/^Inbox$/);
+  });
+
+  // Desktop-polish PL5a (D-7712): the Waiting on you tab counts open items plus the sessions' questions, never an item
+  // being checked, and prints nothing before the waiting frame has landed.
+  it("the Waiting on you tab's name says 'waiting on you' with the count of open items and questions, not checking", () => {
+    atWidth(900);
+    render(<App />);
+    const tab = (name: string) => within(primary()).getByRole('button', { name });
+    act(() => useFleetStore.setState({ conn: 'open', fleetFrameSeen: true, sessions: [fleetSession({ id: 'ask-a', bucket: 'attention' })] }));
+    // Before the waiting frame: not heard, so no badge.
+    expect(tab('Waiting on you')).toHaveTextContent(/^Waiting on you$/);
+    act(() => useFleetStore.setState({
+      waiting: waitingView({ items: [itemView({ id: 1 }), itemView({ id: 2 }), itemView({ id: 3, state: 'checking' })] }),
+    }));
+    expect(tab('Waiting on you, 3 waiting on you')).toHaveTextContent(/3$/); // 2 open items + 1 question
+    act(() => useFleetStore.setState({ waiting: waitingView({ items: [itemView({ id: 3, state: 'checking' })] }), sessions: [] }));
+    expect(tab('Waiting on you')).toHaveTextContent(/^Waiting on you$/);
+    act(() => useFleetStore.setState({ waiting: null }));
   });
 
   it("the Runs badge counts the open runs whose worker or coordinator needs you, and says nothing before the first runs frame", () => {

@@ -1,7 +1,7 @@
 import type { FleetIO, MeasuredDirectoryRead } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
-import type { CcdResult, RunCcd } from './ports.js';
+import type { CcdResult, RunCcd, WatcherCoordPort } from './ports.js';
 import type { CcdArgv } from '../ccdargv.js';
 import type { Viewers } from '../viewer.js';
 import type { NotifyLog } from '../notifylog.js';
@@ -94,14 +94,14 @@ const EXPIRE_ID_REFUSED = 'the server refused this session id: it is not a regis
 
 /** The executor: archive-expired's row of the one retire gate (`ARCHIVE_EXPIRED_RETIRE`), driven by the one executor
  *  loop over this file's port (`expireRetirePort`), in the order the header above gives (D-7169). */
-export async function expireArchived(deps: ExpireArchivedDeps, req: ExpireArchivedRequest): Promise<ExpireArchivedResult> {
+export async function expireArchived(deps: Omit<ExpireArchivedDeps, 'coord'> & { coord: WatcherCoordPort }, req: ExpireArchivedRequest): Promise<ExpireArchivedResult> {
   return retireAct(expireRetirePort(deps, req), ARCHIVE_EXPIRED_RETIRE, req);
 }
 
 /** The two switches, from ONE registry listing: `reclaim-paused` (or a listing that could not be taken, which cannot
  *  rule it out) is `paused`; otherwise whether `expire-lane-live` stands. A rejecting `readdirMeasured` is a listing
  *  that could not be taken, `unreadable`. */
-async function expirySwitches(deps: ExpireArchivedDeps): Promise<{ kind: 'paused'; detail: string } | { kind: 'clear'; live: boolean; childLive: boolean }> {
+async function expirySwitches(deps: Omit<ExpireArchivedDeps, 'coord'> & { coord: WatcherCoordPort }): Promise<{ kind: 'paused'; detail: string } | { kind: 'clear'; live: boolean; childLive: boolean }> {
   // D-5969 (ARCH-08b): the MEASURED listing; a rejecting port is `unreadable`, and the pause says which it was.
   let listed: MeasuredDirectoryRead;
   try { listed = await deps.io.readdirMeasured(deps.cfg.registryDir); } catch { listed = { ok: false, reason: 'unreadable' }; }
@@ -143,7 +143,7 @@ export function expiryReviewing(coord: Pick<CoordStore, 'runsNamingSession' | 'r
 /** The store's conjuncts for ONE row, AT THE ACT — the destructive-grade reads child reclamation's executor takes at
  *  its own (`bindingsOf`: the worker's and the claimant's open runs), then the review rule. Any read that fails is the store's
  *  failure: `ok:false`, and the act waits. */
-export function readExpiryStore(coord: CoordStore, id: string, child?: { readonly rowUuid: string | null }): ExpiryStoreRead {
+export function readExpiryStore(coord: WatcherCoordPort, id: string, child?: { readonly rowUuid: string | null }): ExpiryStoreRead {
   try {
     const bound = coord.bindingsOf(id);
     const worker = bound.worker();
@@ -163,7 +163,7 @@ export function readExpiryStore(coord: CoordStore, id: string, child?: { readonl
 
 /** A child that EVER coordinated is never taken (spec §4): the reclaim lane's own fence, over terminal runs too.
  *  A read that throws is `null` — doubt keeps. */
-export function childEverCoordinated(coord: CoordStore, id: string, rowUuid: string | null): boolean | null {
+export function childEverCoordinated(coord: WatcherCoordPort, id: string, rowUuid: string | null): boolean | null {
   try { return childReclaimHasCoordinated(coord, id, Date.now(), rowUuid); } catch { return null; }
 }
 
@@ -192,7 +192,7 @@ async function expireAudit(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fleetState
 
 /** The act — its own function, and the capability asked AGAIN inside it: this is the scope `verb-gate.test.ts` reads
  *  for `ws-expire`'s gate, and the one line that must never run without it. */
-async function expireAct(deps: ExpireArchivedDeps, sessionId: string, token: string, childOf?: number) {
+async function expireAct(deps: Omit<ExpireArchivedDeps, 'coord'> & { coord: WatcherCoordPort }, sessionId: string, token: string, childOf?: number) {
   if (!ccdCan(deps.fleetState, 'wsExpire')) return 'unsupported' as const;
   if (childOf !== undefined && !capSupported(deps.fleetState, EXPIRE_CHILD_CAP)) return 'unsupported' as const;
   const argv = CCD_ARGV.wsExpire(token, sessionId, sweepDec(deps.fleetState, 'expire sweep'), childOf);
@@ -279,7 +279,7 @@ export function expireFeedBody(r: ExpireArchivedResult, standing = false): strin
 /** ONE feed row for an outcome — written by the LANE, and only when the row's outcome CHANGED, so a refusal that
  *  stands is one row, not one a minute. `kind: 'run'` with no run: recorded, never pushed, in the unfiltered feed.
  *  A missing log degrades the record and never the act. */
-export function recordExpireFeed(deps: Pick<ExpireArchivedDeps, 'coord' | 'notifyLog'>, r: ExpireArchivedResult, standing = false): void {
+export function recordExpireFeed(deps: Omit<Pick<ExpireArchivedDeps, 'coord' | 'notifyLog'>, 'coord'> & { coord: WatcherCoordPort }, r: ExpireArchivedResult, standing = false): void {
   // Through the funnel (`notice.ts`, D-5859), `'record-only'`: recorded whatever the presence, never pushed.
   const title = r.child === true && r.kind === 'would-expire' ? 'archived child workspace would be cleaned up' : FEED_TITLE[r.kind];
   // The durable journal beside the feed row (D-6861): a marked child the verdict would take but for its arm, and only
@@ -433,7 +433,7 @@ export const ARCHIVE_EXPIRED_RETIRE: RetireReason<ExpireArchivedRequest, Archive
  * shadow, on an audit refusal only, after the archive-match check (D-7199). The lane writes the feed row.
  */
 export function expireRetirePort(
-  deps: ExpireArchivedDeps, req: ExpireArchivedRequest,
+  deps: Omit<ExpireArchivedDeps, 'coord'> & { coord: WatcherCoordPort }, req: ExpireArchivedRequest,
 ): RetireActPort<ExpireArchivedRequest, ArchiveExpiredFacts, ExpireArchivedResult> {
   const { sessionId, archivedAt, childOf } = req;
   const answer = expiryAnswerOf(req);

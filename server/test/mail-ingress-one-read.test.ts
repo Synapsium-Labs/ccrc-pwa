@@ -1,7 +1,8 @@
 // D-5863 (ARCH-09, #538): the mail ingress reads the registry once. Three
-// ladders in `coord/routes.ts` decide who a mail is from: `attributionVerdict`
-// (reached here through `POST /api/claims/:id/release`, whose only registry
-// read it is), `POST /api/mail` and `POST /api/mail/:id/ack`. Each listed the
+// ladders decide who a mail is from: `attributionVerdict` (reached here through
+// `POST /api/claims/:id/release`, whose only registry read it is; in
+// `coord/attribution.ts` since #1444 moved it out of `registerCoordRoutes`),
+// and `POST /api/mail` and `POST /api/mail/:id/ack` in `coord/routes.ts`. Each listed the
 // registry with `io.readdir` and then called `readRegistry`, which listed it
 // again.
 //
@@ -167,22 +168,24 @@ describe('one read: on a listable registry each ladder calls readRegistryMeasure
 // calls are pinned too, keyed on the parser (D-6114's scan/symbols.ts), never on
 // source text: one `readRegistryMeasured(`, no `readdir(`, no `readRegistry(`.
 const ROUTES = 'server/src/coord/routes.ts';
+const ATTRIBUTION = 'server/src/coord/attribution.ts';
 type Span = { start: number; end: number };
+type CallsOf = { calls: { callee: string; name: string | null; args: { kind: string; text: string }[];
+  start: number; end: number }[] };
 /** The callee names called inside each ladder: `attributionVerdict` by its
- *  symbol, each route by its own `app.post(<path>, …)` call. */
-const ladderCalls = (file: { calls: { callee: string; name: string | null; args: { kind: string; text: string }[];
-  start: number; end: number }[] }, attribution: Span | null): Record<string, string[]> => {
+ *  symbol in its own file, each route by its own `app.post(<path>, …)` call. */
+const ladderCalls = (file: CallsOf, attribution: { file: CallsOf; span: Span } | null): Record<string, string[]> => {
   const route = (p: string): Span => {
     const hits = file.calls.filter((c) => c.callee === 'app.post' && c.args[0]?.kind === 'string' && c.args[0].text === p);
     if (hits.length !== 1) throw new Error(`app.post('${p}') is registered ${hits.length} times`);
     return hits[0]!;
   };
-  const inside = (sp: Span): string[] =>
-    file.calls.filter((c) => c.start > sp.start && c.end <= sp.end && c.name !== null).map((c) => c.name!);
+  const inside = (sp: Span, f: CallsOf = file): string[] =>
+    f.calls.filter((c) => c.start > sp.start && c.end <= sp.end && c.name !== null).map((c) => c.name!);
   return {
     mail: inside(route('/api/mail')),
     ack: inside(route('/api/mail/:id/ack')),
-    ...(attribution ? { attribution: inside(attribution) } : {}),
+    ...(attribution ? { attribution: inside(attribution.span, attribution.file) } : {}),
   };
 };
 const holdsOneRead = (names: string[]): void => {
@@ -206,7 +209,7 @@ describe('one read, pinned on the parse: no ladder lists the registry beside its
   });
 
   const calls = (): Record<string, string[]> =>
-    ladderCalls(parsedFile(ROUTES), symbolOf(ROUTES, 'registerCoordRoutes.attributionVerdict'));
+    ladderCalls(parsedFile(ROUTES), { file: parsedFile(ATTRIBUTION), span: symbolOf(ATTRIBUTION, 'attributionVerdict') });
   for (const route of ['attribution', 'mail', 'ack'] as const) {
     it(`${route}: one readRegistryMeasured(, no readdir( and no readRegistry(`, () => {
       holdsOneRead(calls()[route]!);

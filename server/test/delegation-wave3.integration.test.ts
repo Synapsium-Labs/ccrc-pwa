@@ -1156,7 +1156,13 @@ describe('8. the closed scope census', () => {
       // `workspaceAddWords.ts` joined the list with the named-workspace add: its refusal text for an account that cannot take the
       // session names ccd's own remedy ("adopt them there with: ccd start ..."), the worktree-onto-an-account sense `ccd` has always
       // used. It is user-facing copy, a string and no identifier, and no part of the delegation broker's adoption.
-      ['adopt', /\badopt\w*/i, ['pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/workspaceAddWords.ts', 'pwa/src/screens/settings/SecuritySection.tsx']],
+      // `ConnectSheet.tsx` and `accountWords.ts` joined it with the connect sheet's "Use what's there" (accounts A18): the roster
+      // `adopt` of the account add, the add route's existing `adopt?: true` field (a lane taking a config folder already on the
+      // box), its state flag and its one status line. No part of the delegation broker's adoption either.
+      ['adopt', /\badopt\w*/i, [
+        'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/workspaceAddWords.ts', 'pwa/src/screens/settings/SecuritySection.tsx',
+        'pwa/src/accounts/ConnectSheet.tsx', 'pwa/src/fleet/accountWords.ts',
+      ]],
       ['retain', /\bretain\w*/i, []],
       ['carrier', /\bcarrier\w*/i, ['pwa/src/fleet/AccountPoolSheet.tsx']],
       ['cleanup', /\bcleanup[A-Z]\w*/, ['pwa/src/fleet/SessionMeta.tsx']],
@@ -1191,8 +1197,8 @@ describe('8. the closed scope census', () => {
     arms.push(union.slice(armStart));
     const armsTrimmed = arms.map((a) => a.trim()).filter((a) => a !== '');
     expect(armsTrimmed.filter((a) => !a.startsWith('{')), 'every FleetMsg arm is an inline object type').toEqual([]);
-    expect(armsTrimmed.map((a) => /^\{\s*type:\s*'([a-z-]+)'/.exec(a)?.[1]), 'the frame union is main\'s seven plus `delegation`').toEqual(
-      ['hello', 'fleet', 'notice', 'runs', 'coord', 'divergence', 'pools', 'delegation']);
+    expect(armsTrimmed.map((a) => /^\{\s*type:\s*'([a-z-]+)'/.exec(a)?.[1]), 'the frame union is main\'s seven plus `delegation` and the programme ledgers\' `waiting`').toEqual(
+      ['hello', 'fleet', 'notice', 'runs', 'coord', 'divergence', 'pools', 'delegation', 'waiting']);
     // the frame's literal is the socket's alone (a subset, so this is green before the socket sends it and on PR2's branch)
     const literal = filesUnder('server/src', /\.ts$/).filter((f) => /\b(type|t):\s*'delegation'/.test(code(read(f))));
     expect(literal.filter((f) => f !== 'server/src/server.ts'), 'a server file outside the socket that writes the frame').toEqual([]);
@@ -1597,7 +1603,6 @@ describe('8. the closed scope census', () => {
       systemctl: (a) => a[0] === '--user' && a[1] === 'is-active',
     };
     expect(commandsOutside(shellBody(checks, '_check_delegation-hooks'), READERS), 'the check runs something that is not a reader').toEqual([]);
-    expect(commandsOutside(shellBody(checks, '_dh_mixed_events'), { jq: (a) => a[0] === '-r' }), 'the mixed-group reader').toEqual([]);
     // the readers it calls: the installer's event list (a file read), the roster read (one node program, with no write in it), the
     // joiner, and the four one-line verdict printers, which are pinned whole
     expect(commandsOutside(shellBody(checks, '_dh_events'), { local: true, '[': true, read: true, return: true, printf: true }), '_dh_events').toEqual([]);
@@ -1618,16 +1623,18 @@ describe('8. the closed scope census', () => {
     // only read (a file, `systemctl --user is-active` or a `.svcfailed` stamp) or print; they are not pinned here by digest, because every
     // unrelated doctor wave edits them.
     const ccrcSrc = read('ccd/ccrc');
-    for (const fn of ['_fix_delegation-hooks', '_check_delegation-hooks', '_dh_mixed_events', '_dh_events', '_dr_join']) {
+    for (const fn of ['_fix_delegation-hooks', '_check_delegation-hooks', '_dh_events', '_dr_join']) {
       const defs = (checks.match(new RegExp(`^${fn}\\(\\) *\\{`, 'gm')) ?? []).length + (ccrcSrc.match(new RegExp(`^${fn}\\(\\) *\\{`, 'gm')) ?? []).length;
       expect(defs, `${fn} is defined exactly once across ccd/ccrc-doctor-checks and ccd/ccrc`).toBe(1);
     }
+    // R55 is lifted (PR4 Task 4.5b, W4-D5): the mixed-group reader the fixer refused with is gone, from both files
+    expect((checks + ccrcSrc).match(/^_dh_mixed_events\(\) *\{/gm), 'R55 is lifted: the mixed-group reader is gone').toBeNull();
     // THE FIXER: the shipped installer, once, with exactly `--homes <dirs>`, and the readers it uses today. `install`, a second script, `rm`,
-    // `eval`, `sh -c` and every redirection to a file are each outside this list.
+    // `eval`, `sh -c` and every redirection to a file are each outside this list. So is `command -v jq` since R55 was lifted (review
+    // 1365, F7): the mixed-group reader was its only caller.
     const fixBody = shellBody(checks, '_fix_delegation-hooks');
     const FIXER: CommandRules = {
-      local: true, echo: true, return: true, read: true, '[': true, continue: true, _skills_roster_rows: true, _dh_mixed_events: true, _dr_join: true,
-      command: (a) => a.length === 2 && a[0] === '-v' && a[1] === 'jq',
+      local: true, echo: true, return: true, read: true, '[': true, continue: true, _skills_roster_rows: true, _dr_join: true,
       '"${BASH:-bash}"': (a) => a.length === 3 && a[0] === '"$inst"' && a[1] === '--homes' && a[2] === '"${dirs[@]}"',
     };
     expect(commandsOutside(fixBody, FIXER), 'the fixer runs something that is not the shipped installer or a reader').toEqual([]);
@@ -1643,13 +1650,14 @@ describe('8. the closed scope census', () => {
     expect(assigns.filter((a) => a.name === 'inst').map((a) => `${a.declared ? 'local ' : ''}${a.name}=${a.value}`), '`inst` is assigned once, by `local`')
       .toEqual(['local inst="$CCRC_HERE/install-session-hooks.sh"']);
     expect([...new Set(assigns.filter((a) => a.prefixOf === null).map((a) => a.name))].sort(), 'the names the fixer assigns').toEqual(
-      ['dir', 'dirs', 'evarr', 'evs', 'inst', 'list', 'mixed', 'n', 'refused', 'roster', 'rows', 'said', 'verb'].sort());
+      ['dir', 'dirs', 'inst', 'list', 'n', 'roster', 'rows', 'said'].sort());
     // R80 N6: the `local inst=` line comes BEFORE the installer call (not necessarily first)
     const instAt = raw.indexOf('local inst="$CCRC_HERE/install-session-hooks.sh"');
     expect(instAt, 'the fixer names the shipped installer').toBeGreaterThan(-1);
     expect(instAt, 'before the installer call').toBeLessThan(raw.indexOf('"${BASH:-bash}" "$inst"'));
-    // it refuses a home with a mixed hook group before the installer could touch it (R55), and removes nothing itself
-    expect(raw).toContain('_dh_mixed_events');
+    // R55 is lifted (PR4 Task 4.5b): the fixer hands every rostered home to the installer, whose option-B sweep keeps foreign
+    // hooks, and it removes nothing itself
+    expect(raw).not.toContain('_dh_mixed_events');
   });
 
   it('the lane\'s in-memory structures are not durable state: the lane class opens no file and no SQLite handle of its own', () => {

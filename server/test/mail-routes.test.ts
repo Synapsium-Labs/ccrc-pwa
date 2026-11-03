@@ -6,6 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
+import { isItemMoveRefusal } from '../../shared/ledgers.js';
 import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
@@ -1040,8 +1041,12 @@ describe('the rejection table is total, in both directions', () => {
         || isDeadDispatchKebab(tok)
         // THE AUTOMATIC ROLL'S VERDICT (D-7452): `coord/rollTarget.ts` names its skip words, its opt-out suffix and its
         // actor as literals. A word names a skip in the lane's journal, never a `refused` or `reject.code`.
-        || isAutoRollKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word or automatic-roll word`).toBe(true);
+        || isAutoRollKebab(tok)
+        // THE PROGRAMME LEDGERS' ITEM MOVES (plan PL2): `coord/ledgersStore.ts` (behind `CoordStore`) answers a refused move of an operator item with
+        // `'unknown-item'`, `'wrong-actor'`, `'not-open'` or `'programme-live'`. The decider's words and the store's, one
+        // union in `shared/ledgers.ts`. Admitted through its exported guard, derived from `ITEM_MOVE_REFUSALS`, never NOT_CODES.
+        || isItemMoveRefusal(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word or item-move refusal`).toBe(true);
     }
   });
 });

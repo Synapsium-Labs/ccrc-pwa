@@ -228,7 +228,7 @@ const REGISTERED: Record<string, string> = {
     + 'layout glue that means nothing beyond itself. A constant for every '
     + 'common quadruple of utilities is a second spelling of Tailwind, and '
     + 'the registry would stop being able to tell the two apart.',
-  ['chat.css .compaction--sys .compaction-label + fleet.css .sess-subagent-name '
+  ['chat.css .compaction--sys .compaction-label + fleet.css .acct-card-label + fleet.css .sess-subagent-name '
     + '+ ui/workbench-account-row.css .wb-acct-row .wb-acct-name '
     + '+ ui/workbench-sidebar.css .wb-side .wb-side-clip '
     + '+ ui/workbench-sidebar.css .wb-side-agent .wb-side-name '
@@ -238,7 +238,9 @@ const REGISTERED: Record<string, string> = {
     + 'utility on it. The workbench sheets joined it when they were enrolled '
     + '(an account name, a chip\'s clipped text, an agent name, a tab title): '
     + 'each sits on a ground of its own and carries the idiom because a long '
-    + 'id must ellipsize there, not because they are one component.',
+    + 'id must ellipsize there, not because they are one component. The '
+    + 'Accounts card\'s label joined it with the state words (D-7718): a long '
+    + 'label gives way to the lamp on the card\'s first line.',
   'ui/workbench-account-row.css .wb-acct-head .wb-acct-lead + ui/workbench-sidebar.css .wb-side-row .wb-side-word':
     'DIFFERENT THINGS. The same `truncate` idiom as a shrinking flex item '
     + '(`flex: 0 1 auto` beside the four). One is the folded account line\'s '
@@ -264,13 +266,15 @@ const REGISTERED: Record<string, string> = {
   // and seeds the copies it is closest to, and the two it is not close enough
   // to cluster on their own. Same argument for both.
   // The theme picker's head left it when Theme became a preview grid (settings Task R2e, D-5503).
-  ['chat.css .term-confirm + fleet.css .child-reclaim-status '
+  ['chat.css .term-confirm + fleet.css .acct-url-acts + fleet.css .child-reclaim-status '
     + '+ fleet.css .settings-release-head']:
     'DIFFERENT THINGS. Wrapping flex with a min-width floor and a centred cross '
     + 'axis — the same idiom as the actions rows above, in three parts of the '
     + 'tree. The terminal drawer\'s ^C confirm (the consequence, then `send ^C` '
     + 'and `cancel`, in the key bar\'s place) joined it in stage 1 of the '
-    + 'every-width drawer; it shares the layout glue and nothing it means.',
+    + 'every-width drawer; it shares the layout glue and nothing it means. The '
+    + 'sign-in URL card\'s link row (Copy link, Open ↗ and the host, accounts '
+    + 'Task A22, D-7849) joined it the same way: layout glue, nothing it means.',
   'chat.css .term-keys-seq + fleet.css .child-reclaim-banner .child-reclaim-item':
     'DIFFERENT THINGS. Four declarations of wrapping flex with a min-width '
     + 'floor — the same idiom as the actions rows above, in a different part '

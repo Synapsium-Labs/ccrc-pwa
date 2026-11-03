@@ -3,6 +3,10 @@ import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readCheck
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
+import type { GoalsView, ItemAct, ItemActor } from '../../../shared/ledgers.js';
+import * as ledgers from './ledgersStore.js';
+import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
+export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 import { decideLandingWrite, landingEntryOfRow, landingFlagsOfRow } from './landingEntry.js';
 import type { LandingAdvance, LandingWrite } from './landingEntry.js';
 import type { LandingEntry, LandingEntryState } from '../../../shared/landingLine.js';
@@ -71,7 +75,7 @@ import {
 import { bodyDigest } from '../../../shared/mark.mjs';
 // Fix round 1, item 5 (ruling A): the same tag comparator every other
 // ordering in this design uses — never `publishedAt` — for `newestUnyankedStable`.
-import { newestTag } from '../../../shared/semver.js';
+import { isNewerTag, newestTag } from '../../../shared/semver.js';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import type { RollSettingsRead } from './rollTarget.js';
 import {
@@ -485,7 +489,8 @@ export type ReleaseLeaseResult =
   | { ok: false; why: 'stale-report'; updateStartedAt: number };
 
 export type SettleNodeResult =
-  | { ok: true; clearedRequest: boolean }
+  /** D-7678: `keptRequest` — a request written beside the running lease survived it (see `settleNode`). */
+  | { ok: true; clearedRequest: boolean; keptRequest: boolean }
   | { ok: false; why: 'unknown-node' }
   | { ok: false; why: 'superseded'; supersededBy: string }
   | { ok: false; why: 'halted'; state: 'failed' | 'reverted' }
@@ -1977,7 +1982,7 @@ export class CoordStore {
       if (!n.ok) return { ok: false, kind: 'run-unreadable', detail: n.detail };
       runs.push({ id: n.value, sessionId: r.sessionId, claimedBy: r.claimedBy,
         state: isRunState(r.state) ? r.state : 'unknown', openedAt: r.openedAt,
-        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor });
+        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor, dispatchStartedAt: r.dispatchStartedAt });
     }
     return { ok: true, runs };
   }
@@ -2002,7 +2007,7 @@ export class CoordStore {
     return this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
       'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state, sessionId, claimedBy, ' +
-      `openedAt, sessionBornAt, sessionBornFor FROM runs WHERE ${where} ORDER BY id`,
+      `openedAt, sessionBornAt, sessionBornFor, dispatchStartedAt FROM runs WHERE ${where} ORDER BY id`,
     ).all(...(column === 'either' ? [id, id] : [id])) as unknown as SeriesRow[];
   }
 
@@ -8219,7 +8224,7 @@ export class CoordStore {
   }
 
   /** held -> declined, CAS (D-5289). The parent's OWN release (`POST
-   *  /api/asks/:id/release`), and a different fact from the lapse
+   *  /api/questions/ask-<n>/release`), and a different fact from the lapse
    *  (`releaseAsk` above, the sweep's): the parent handed the question over,
    *  so the row is terminal and its later answer is refused `declined`, where
    *  a lapsed row stays answerable until a principal acts. Same "did THIS call
@@ -8487,7 +8492,7 @@ export class CoordStore {
     });
   }
 
-  /** The claimant's hand-over (`POST /api/approvals/:id/release`): `held` -> `declined` (D-5289's word, D-5440). */
+  /** The claimant's hand-over (`POST /api/questions/approval-<n>/release`): `held` -> `declined` (D-5289's word, D-5440). */
   declineApproval(id: number, by: string, now: number): boolean {
     const res = this.db.prepare(
       "UPDATE approvals SET state = 'declined', ruledAt = ?, answeredBy = ? WHERE id = ? AND state = 'held'",
@@ -9117,20 +9122,36 @@ export class CoordStore {
     return { ok: false, why: 'stale-report', updateStartedAt: row.updateStartedAt! };
   }
 
-  /** Convergence (§10): the row back to `idle` and its request cleared — the
-   *  only path besides `ack` that clears one. Refused on a HALTED row
-   *  (`failed`/`reverted` wait for the operator's `ack`); takes the same
-   *  identity guard as `releaseLease` (C33, D-3405). */
+  /** Convergence (§10): the row back to `idle` and the request THIS lease served cleared — the only path besides
+   *  `ack` that clears one. Refused on a HALTED row (`failed`/`reverted` wait for the operator's `ack`); takes the
+   *  same identity guard as `releaseLease` (C33, D-3405).
+   *
+   *  D-7678: a request written BESIDE the running lease is kept — the row was busy, the lease is dated, the
+   *  request is later than the lease's start — because the lease could not have served it: it is the operator's
+   *  newer tap, waiting its turn, and the dispatcher moves it next. D-7688: only an UPDATE strictly newer than the
+   *  lease's target, and than what the row now runs, is such a tap. A tag at or below either is one the settled
+   *  move already delivers or passes, so the dispatcher could only refuse it `not-newer` — and on a fleet row that
+   *  refusal holds every server move `waiting-for-fleet` until an ack, the very split the keep exists to close.
+   *  `isNewerTag` is not SQL, so the keep is decided here, in JS, inside the same IMMEDIATE transaction as the
+   *  write. Both times are this server's own ms clock (`requestNode`'s `at`, `dispatchNode`'s `startedAt`), so no
+   *  cross-box ordering is involved. Every other request is cleared exactly as before: one the lease served (its
+   *  own tag, or written before the lease started or in its millisecond), one beside a lease nothing dated, and a
+   *  met request on an idle row (the dispatcher's `met:` settle). `keptRequest` says which. */
   settleNode(nodeId: string, detail: string, expectedStartedAt: number | null): SettleNodeResult {
     return tx(this.db, (): SettleNodeResult => {
       const had = this.requestedTagOf(nodeId) !== null;
+      const kept = this.requestOutlivesLease(nodeId);
+      const keep = kept ? 1 : 0;
       const res = this.db.prepare(
-        "UPDATE nodes SET updateState = 'idle', updateDetail = ?, requestedTag = NULL, requestedKind = NULL, " +
-        'requestedAt = NULL WHERE nodeId = ? AND supersededBy IS NULL ' +
+        "UPDATE nodes SET updateState = 'idle', updateDetail = ?, " +
+        'requestedTag = CASE WHEN ? = 1 THEN requestedTag ELSE NULL END, ' +
+        'requestedKind = CASE WHEN ? = 1 THEN requestedKind ELSE NULL END, ' +
+        'requestedAt = CASE WHEN ? = 1 THEN requestedAt ELSE NULL END ' +
+        'WHERE nodeId = ? AND supersededBy IS NULL ' +
         `AND updateState NOT IN ${HALTED_UPDATE_SQL} ` +
         'AND (? IS NULL OR updateStartedAt IS NULL OR updateStartedAt IS ?)',
-      ).run(detail, nodeId, expectedStartedAt, expectedStartedAt);
-      if (Number(res.changes) > 0) return { ok: true, clearedRequest: had };
+      ).run(detail, keep, keep, keep, nodeId, expectedStartedAt, expectedStartedAt);
+      if (Number(res.changes) > 0) return { ok: true, clearedRequest: had && !kept, keptRequest: had && kept };
       const row = this.nodeLeaseRow(nodeId);
       if (row === null) return { ok: false, why: 'unknown-node' };
       if (row.supersededBy !== null) return { ok: false, why: 'superseded', supersededBy: row.supersededBy };
@@ -9183,14 +9204,10 @@ export class CoordStore {
    *  stands until convergence (`settleNode`) or the operator (`ackNode`)
    *  clears it — a refusal or a drop never does (decision 7). Writes the three
    *  request columns and nothing else, on a LIVE row. THIS WRITER does not
-   *  refuse a row that holds a lease — it is written beside it. But `settleNode`
-   *  clears the request columns UNCONDITIONALLY the moment that lease settles
-   *  (it does not read them first), so a request written beside a row's OWN
-   *  held lease is not "waiting its turn": it is erased under the operator's
-   *  own newer tap the instant the running move finishes. That is why the
-   *  routes never write one there — the single-node route refuses a busy named
-   *  node `409 busy` (D-3386), and `{all: true}`'s `requestAll` skips a node
-   *  whose own lease is busy before it ever calls this writer (D-3406). The
+   *  refuse a row that holds a lease — it is written beside it, and since D-7678
+   *  `settleNode` KEEPS a request written after that lease started for an update
+   *  newer than its target (D-7688; it clears only the request the lease served), so `{all: true}`'s `requestAll` writes one beside a busy row and reports it `queued`. The
+   *  single-node route still refuses a busy named node `409 busy` (D-3386). The
    *  previous request is read inside the same IMMEDIATE transaction only to
    *  REPORT it (`replaced`); the write's own `WHERE` is the guard. `at` is the
    *  caller's clock: a value that is not a non-negative safe integer throws,
@@ -9367,6 +9384,28 @@ export class CoordStore {
     if (r === undefined) return null;
     return { updateState: isUpdateState(r.updateState) ? r.updateState : 'unknown',
              updateStartedAt: r.updateStartedAt, updateDetail: r.updateDetail, supersededBy: r.supersededBy };
+  }
+
+  /** D-7678/D-7688: whether `settleNode` keeps this row's request — a busy row with a dated lease, a request written
+   *  after the lease started, and an UPDATE strictly newer than the lease's target and than every version the row
+   *  now reads (`currentVersion`, `highestVersion`: the measurement the settle follows). A tag that is not a
+   *  release tag is never newer, so it is cleared. Read inside `settleNode`'s transaction. */
+  private requestOutlivesLease(nodeId: string): boolean {
+    const r = this.db.prepare(
+      'SELECT updateState, updateTarget, updateStartedAt, requestedTag, requestedKind, requestedAt, currentVersion, highestVersion ' +
+      'FROM nodes WHERE nodeId = ?',
+    ).get(nodeId) as {
+      updateState: string; updateTarget: string | null; updateStartedAt: number | null; requestedTag: string | null;
+      requestedKind: string | null; requestedAt: number | null; currentVersion: string | null; highestVersion: string | null;
+    } | undefined;
+    if (r === undefined || (SETTLED_UPDATE_STATES as readonly string[]).includes(r.updateState)) return false;
+    if (r.requestedKind !== 'update' || r.requestedAt === null || r.updateStartedAt === null || r.requestedAt <= r.updateStartedAt) return false;
+    const tag = r.requestedTag;
+    if (!isReleaseTag(tag) || !isReleaseTag(r.updateTarget) || !isNewerTag(tag, r.updateTarget)) return false;
+    for (const v of [r.currentVersion, r.highestVersion]) {
+      if (isReleaseTag(v) && !isNewerTag(tag, v)) return false;
+    }
+    return true;
   }
 
   /** Whether a request was outstanding, for `clearedRequest` — a report,
@@ -9789,6 +9828,57 @@ export class CoordStore {
     if (done.kind !== 'appended') return done;
     return { kind: 'written', generation: done.generation, before: done.before, journalBefore: done.journalBefore,
       after: this.collectLaneRow(), journalAfter: journal.read() };
+  }
+
+  // ── programme ledgers (plan PL2) ────────────────────────────────────────────────────────────────────────────────────
+  //
+  // The SQL lives in `ledgersStore.ts` (ARCH-01: this file takes delegates, not the god-file's next 150 lines). The moves are
+  // decided by `nextItemState` and written by that module's `moveItemInTx`, the only writer of `operator_items.state`.
+
+  /** The coordinator raises an item (open, with its `raise` event). Returns the new id. */
+  raiseItem(input: RaiseItemInput, now: number): number { return ledgers.raiseItem(this.db, input, now); }
+  itemById(id: number): ItemRow | null { return ledgers.itemById(this.db, id); }
+  /** The items still waiting and those cleared inside the 7-day window; `program === null` means every programme. */
+  itemsFor(program: string | null, now: number): { open: ItemRow[]; cleared: ItemRow[] } { return ledgers.itemsFor(this.db, program, now); }
+  /** One move of one item, atomic with its event; the decider is `nextItemState`. */
+  moveItem(id: number, act: ItemAct, actor: ItemActor, fields: { answer?: string | null; note?: string | null }, now: number, ctx: { programmeHasOpenRun: boolean }): ItemMoveResult { return ledgers.moveItem(this.db, id, act, actor, fields, now, ctx); }
+  /** The operator's tick and its mail in ONE transaction (the pattern of `correctWithMail`): a throw from `queue` rolls the move back, and `queue` must open no transaction (`tx` does not nest). */
+  tickWithMail<T>(id: number, answer: string | null, now: number, queue: (item: ItemRow) => T) { return ledgers.tickWithMail(this.db, id, answer, now, queue); }
+  setBlocking(id: number, blocking: boolean, now: number) { return ledgers.setBlocking(this.db, id, blocking, now); }
+  itemHistory(id: number): ItemEventRow[] { return ledgers.itemHistory(this.db, id); }
+  setSpecPin(program: string, specPath: string, inShort: string, now: number): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now); }
+  addModification(program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null }, now: number): number { return ledgers.addModification(this.db, program, m, now); }
+  markModificationsMerged(program: string, pr: number, mergedAt: number): number { return ledgers.markModificationsMerged(this.db, program, pr, mergedAt); }
+  goalsFor(program: string): GoalsView { return ledgers.goalsFor(this.db, program); }
+  /** The newest tick mail of an item by its subject, whoever it went to, or null (the duplicate guard's and the stale label's one reader, plan PL4). */
+  newestTickMail(subject: string): { state: MailDeliveryState; toId: string } | null { return ledgers.newestTickMail(this.db, subject); }
+  pinnedProgrammes(): string[] { return ledgers.pinnedProgrammes(this.db); }
+
+  /** Whether the programme has a run that is not `done` or `failed`; `planned` counts as open. This is
+   *  `programOpenRunCount`'s question, and the one the operator's dismiss asks (spec §3.4). */
+  programmeHasOpenRun(program: string): boolean {
+    return this.programOpenRunCount(program) > 0;
+  }
+
+  /** The `claimedBy` of the programme's lowest-id run that is not `done` or `failed` and was claimed by someone, or
+   *  null when it has none. A run no one claimed (`reconstruct` writes those) names no coordinator, as `openRun`'s own
+   *  arbitration also skips it. */
+  programmeCoordinator(program: string): string | null {
+    const r = this.db.prepare(
+      `SELECT claimedBy FROM runs WHERE program = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} AND claimedBy IS NOT NULL ORDER BY id LIMIT 1`,
+    ).get(program) as { claimedBy: string } | undefined;
+    return r?.claimedBy ?? null;
+  }
+
+  /** True iff a non-terminal run of the programme is claimed by `sessionId`: the coordinator's right to write the
+   *  programme's items, pin and modifications (spec §3.4). A session that claims only a closed run has none. It asks
+   *  the binding's one view (`bindingsOf(...).claimant()`, ARCH-42/62) rather than reading `claimedBy` a
+   *  second time. That reader is all-or-failure (D-2545); an unreadable series THROWS here, never reads as `false`, so
+   *  a coordinator with a row this box cannot represent is never told "not your programme". */
+  claimsProgramme(sessionId: string, program: string): boolean {
+    const open = this.bindingsOf(sessionId).claimant();
+    if (!open.ok) throw new Error(`claimsProgramme: ${open.detail}`);
+    return open.siblings.some((r) => r.program === program);
   }
 }
 

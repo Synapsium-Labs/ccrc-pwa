@@ -5,7 +5,7 @@ import {
 import type { FleetIO } from '../io.js';
 import { parseJournalLine, type JournalRow } from './journalparse.js';
 import { childReclaimDoneHighWater, frameRead, lifecycleState, planSweep, shouldSweep } from './mirrorplan.js';
-import type { CoordStore } from './store.js';
+import type { WatcherCoordPort } from './ports.js';
 
 /**
  * L3. It EXECUTES `mirrorplan`'s decisions over `FleetIO` and writes them
@@ -28,7 +28,7 @@ import type { CoordStore } from './store.js';
 export interface MirrorDeps {
   readonly io: FleetIO;
   readonly registryDir: string;
-  readonly store: CoordStore;
+  readonly store: WatcherCoordPort;
   /** Re-read every sweep, not captured: the agent can reconnect with a
    *  different ccd under it, and a mirror that latched the boot-time answer
    *  would stay silent through a deploy that fixed exactly this. */

@@ -29,7 +29,10 @@ import { childrenOf, incarnationOf, unbornIncarnation, type Incarnation } from '
  *  that read can fail, and then the birth is unplaceable (`childBirthOf`'s own word), never an empty answer. */
 export function incarnationOfMark(port: Pick<BindingReadPort, 'run'>, sessionId: string, child: ChildMark): Incarnation {
   switch (child.kind) {
-    case 'child': return incarnationOf(sessionId, childBirthOf(port.run(child.runId), sessionId));
+    case 'child': {
+      const minting = port.run(child.runId);
+      return incarnationOf(sessionId, childBirthOf(minting, sessionId), minting.ok ? minting.run : null);
+    }
     case 'unreadable': return unbornIncarnation(sessionId, 'unplaceable');
     case 'none': return unbornIncarnation(sessionId, 'not-a-child');
   }

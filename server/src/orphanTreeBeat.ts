@@ -3,20 +3,21 @@
 // decisions are `orphanTreeLane.ts`'s and every ccd call is `coord/collectOrphanTree.ts`'s; this builds the sweep from the
 // watcher's ports, on first use. The cadence is the `orphanTrees` row of `LANE_SCHEDULE`, run by `FleetWatcher.runLane`.
 // Shadow until `orphan-tree-live` stands.
-import type { Deps } from './deps.js';
+import type { WatcherDeps } from './deps.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import { notify } from './notice.js';
-import { orphanCoordinatorSet } from './orphanTreeLane.js';
+import { orphanCoordinatorSet, orphanPressure } from './orphanTreeLane.js';
 import { OrphanTreeSweep } from './orphanTreeSweep.js';
 import { fieldMeasured, readSessionRecord } from './registry.js';
 import { childReclaimEverClaimedIds } from './coord/childReclaim.js';
-import type { DiskOrphanTrees } from '../../shared/disk.js';
+import type { DiskHealth, DiskOrphanTrees } from '../../shared/disk.js';
 
 export class OrphanTreeBeat {
   private sweep: OrphanTreeSweep | null = null;
 
-  /** `mono` is the watcher's monotonic clock reading, the one the lane's rows throttle on. */
-  constructor(private readonly deps: () => Deps, private readonly mono: () => number) {}
+  /** `mono` is the watcher's monotonic clock reading, the one the lane's rows throttle on. `diskBlock` is the disk alarm's
+   *  held block, read on every pass: its `pressure` is the lane's pressure mode (D-7865). */
+  constructor(private readonly deps: () => Pick<WatcherDeps, 'coord' | 'io' | 'cfg' | 'runCcd' | 'fleetState' | 'queue' | 'fleetIdentity' | 'notifyLog'>, private readonly mono: () => number, private readonly diskBlock: () => Pick<DiskHealth, 'pressure'> | null) {}
 
   /** The `disk` block's `orphanTrees`, or null before the lane's first census. */
   health(): DiskOrphanTrees | null { return this.sweep?.health() ?? null; }
@@ -29,7 +30,7 @@ export class OrphanTreeBeat {
     this.sweep ??= new OrphanTreeSweep({
       io: d.io, registryDir: d.cfg.registryDir, runCcd: d.runCcd, fleetState: d.fleetState,
       queue: d.queue, mono: this.mono,
-      epochNow: () => (this.deps().fleetIdentity ?? NO_FLEET_IDENTITY).epochNow(), pressure: () => false,
+      epochNow: () => (this.deps().fleetIdentity ?? NO_FLEET_IDENTITY).epochNow(), pressure: () => orphanPressure(this.diskBlock()),
       coordinators: () => { const c = orphanCoordinatorSet({ everClaimedIds: () => childReclaimEverClaimedIds(coord), openCoordinatorIds: () => coord.openCoordinatorIds() }); if (c === null) throw new Error('coordinator claims unreadable'); return c; },
       // A containing row that is no workspace (a plain session, a main checkout) is no nesting; an unreadable or absent row keeps the tree.
       isWorkspace: async (id) => {

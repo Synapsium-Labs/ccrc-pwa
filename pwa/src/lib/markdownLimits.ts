@@ -4,6 +4,7 @@
 // `DOCS_MAX_IMAGES_PER_PAGE` and `DOCS_STALE_MS` live in `shared/docs.ts`, never here.
 //
 // Imports nothing: the parse worker's closure reaches this file (`markdown-purity.test.ts`).
+// The highlight worker's closure reaches it too (W5h-a; `markdown-purity.test.ts`'s M4.H3 describe).
 
 /** Container markers (`>`, list markers and a footnote definition's `[^label]:`, Task 11's review 2-1) on one
  *  line; real docs and chat reach 2. */
@@ -170,3 +171,49 @@ export const DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS = 131072;
 /** The longest inline code span that can be a keystroke chord (W5 bound r11); a longer one is plain inline code,
  *  never trimmed or split. The longest chord of named keys is about 40 characters. */
 export const MD_KEYSTROKE_MAX_CHARS = 64;
+
+// ---------------------------------------------------------------------------------------------------------------
+// Highlighting off the main thread (base spec 2026-10-01 section 4.9's W5h rows and "Two more"; W5h-a). The first
+// seven are PROVISIONAL starting values: R19 measures them on the operator's phone (section 7.8) and W5h-b sets each
+// with its basis stated here. Section 4.9's table says what each bounds.
+
+/** PROVISIONAL (W5h-a; W5h-b sets it from R19). The worker time one block may take, from post to answer; its timer
+ *  starts only after the worker's ready handshake. An overrun terminates the highlight worker and leaves only that
+ *  block plain. Starting point: section 7.8's 750 ms. */
+export const HIGHLIGHT_BLOCK_DEADLINE_MS = 750;
+/** PROVISIONAL (W5h-a; W5h-b sets it from R19). From spawning a highlight worker to its `{ready: true}`; past it the
+ *  worker is terminated and the jobs waiting for it answer `worker-failed`. Measured in Node on a server CPU: 34 ms;
+ *  the W5h-a plan's starting point leaves a phone's chunk fetch, parse and grammar registration a wide margin. */
+export const HIGHLIGHT_BOOT_BUDGET_MS = 2000;
+/** PROVISIONAL (W5h-a; W5h-b sets it from R19). The summed post-to-answer worker time of one highlight store (a Docs
+ *  page, a text leaf, a chat message, a tool well); past it, every block not yet answered is skipped. Starting point:
+ *  section 7.8's 3 s. */
+export const HIGHLIGHT_PAGE_WORKER_MS = 3000;
+/** PROVISIONAL (W5h-a; W5h-b sets it from R19). The block timeouts one highlight store may take, each a worker
+ *  respawn; once reached, every block not yet answered is skipped. Starting point: section 7.8's 2. */
+export const HIGHLIGHT_PAGE_MAX_TIMEOUTS = 2;
+/** PROVISIONAL (W5h-a; W5h-b sets it from R19). The longest HTML one block's answer may carry, an absolute count for
+ *  every block, chat's included: the worker refuses a longer one before posting and the main thread re-checks it on
+ *  receipt. Starting point: section 7.8's 4 x MD_HIGHLIGHT_BLOCK_MAX_CHARS (ordinary output measured 2.90 HTML
+ *  characters per input character; desktop polish C7 measured a dense 64 KiB JSON block at about 858 000). */
+export const MD_HIGHLIGHT_MAX_HTML_CHARS = 262144;
+/** PROVISIONAL (W5h-a; W5h-b sets it from R19). The HTML one Docs page may insert from highlighting, summed over the
+ *  answers it received; past it the remaining blocks are skipped. Docs only. The W5h-a plan's starting point admits
+ *  M4.H2's eight 60 000-character blocks at 2.90 HTML characters per character (1 392 000) with half again to spare. */
+export const DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS = 2097152;
+/** PROVISIONAL (W5h-a; W5h-b sets it from R19). Chat only: a block whose text changed less than this long ago is not
+ *  requested yet, so a streaming block asks the worker when it pauses, not on every settle. The W5h-a plan's starting
+ *  point; R19's item 8 measures 0, 150, 250 and 400. */
+export const HIGHLIGHT_STREAM_DEBOUNCE_MS = 250;
+/** The line retry's unit (section 4.10 "The line retry", the shared library's C24): a block of at most this many
+ *  UTF-16 code units is never retried; a longer one is retried line by line, and one line longer than this answers
+ *  `line-too-long`. */
+export const HIGHLIGHT_LINE_RETRY_UNITS = 256;
+/** The entries one highlight worker's cache holds (desktop polish Task C7's bound, moved here from `markdown.tsx` by
+ *  W5h-a): chat's corpus highlights 33 blocks of at most 1 315 characters of markup each, so a long session's fences
+ *  fit many times over. */
+export const HIGHLIGHT_CACHE_MAX_ENTRIES = 256;
+/** The characters of markup one highlight worker's cache holds (C7's bound, moved here by W5h-a): a dense 64 KiB
+ *  JSON block comes out as about 858 000 characters, so four or so of those at once. The bound weighs the markup
+ *  only; a key is at most its markup plus a mode, a language and two separators. */
+export const HIGHLIGHT_CACHE_MAX_CHARS = 4000000;
