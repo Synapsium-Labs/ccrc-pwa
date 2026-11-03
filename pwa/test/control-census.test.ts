@@ -231,6 +231,10 @@ const CONTROLS: Record<string, string> = {
     + 'the two sheets that drew it were drawing the same button down to the '
     + 'parenthesised count (`OtherPoolsDisclosure`). The rule it leans on is '
     + 'unchanged; what is gone is the second copy of the markup.',
+  'accounts/RunFrame.tsx <a> (computed)':
+    'VARIANT buttonVariants. The sign-in URL card\'s Open ↗ (accounts plan Task A22, D-7849): the primary at ≥900 (52px, '
+    + '`acct-open-primary`) and the ghost below 900 (`GHOST_ANCHOR`). An anchor, not a button, because it opens the '
+    + 'sign-in page in a new tab; the styling is the button\'s, whose base carries `min-h-tap`.',
   'fleet/CollectLaneSection.tsx <a> (computed)':
     'VARIANT buttonVariants. The paused Cleanup pause card\'s one resume door, '
     + 'a link to Runs that stands alone in the card foot, so it wears the ghost '

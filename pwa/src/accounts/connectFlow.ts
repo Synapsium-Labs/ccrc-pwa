@@ -9,7 +9,8 @@ import { isAccountStdin } from '../../../shared/account-argv';
 import { PROVIDERS, type ConnectMethod, type ProviderRow } from '../../../shared/providers';
 import { HUES, newLaneIdProblem, newLaneLabelProblem, type Hue } from '../../../shared/roster';
 import type { AccountsConnect, RosterWire } from '../../../shared/api';
-import { NEEDS_FLEET_UPDATE, PROVIDER_ROWS } from '../fleet/accountWords';
+import { NEEDS_FLEET_UPDATE, PROVIDER_ROWS, type SignInEndKind } from '../fleet/accountWords';
+import type { AuthStatusState } from '../../../shared/accounts';
 
 /** The providers the door offers, in its order (spec §5: three rows, no "Other"; `compatible` stays CLI in v1): the
  *  keys of the rows' words, so the list and the rows cannot disagree. */
@@ -37,7 +38,11 @@ export const METHOD_CAP: Readonly<Record<ConnectMethod, string>> = {
 
 /** The provider and method pairs this build's sheet has steps for. Every other pair the fleet can run reads
  *  `NEEDS_APP_UPDATE` at its Continue rather than starting steps the sheet cannot finish. */
-const SHEET_RUNS: ReadonlySet<string> = new Set(['anthropic:paste']);
+const SHEET_RUNS: ReadonlySet<string> = new Set(['anthropic:paste', 'anthropic:setup-token', 'anthropic:login']);
+
+/** The methods this sheet runs as a sign-in (Task A22, D-7849): an attempt on the box, its URL, and a code pasted back. */
+export type SignInMethod = 'setup-token' | 'login';
+export const isSignInMethod = (m: ConnectMethod | null): m is SignInMethod => m === 'setup-token' || m === 'login';
 export const sheetRuns = (provider: DoorProvider, method: ConnectMethod): boolean => SHEET_RUNS.has(`${provider}:${method}`);
 
 /** One row of a choice: its value, and the reason it narrows in place (`null`: it may be chosen). */
@@ -95,4 +100,44 @@ export const labelProblem = newLaneLabelProblem;
  *  `key-charset`, `isAccountStdin`): 1 byte to 8 KiB of UTF-8, and no C0 byte or DEL. */
 export function secretShapeOk(v: string): boolean {
   return isAccountStdin(new TextEncoder().encode(v));
+}
+
+// ── The sign-in's decisions (accounts plan Task A22, D-7849; spec §3.7, §3.8, §6.2) ─────────────────────────────────
+
+/** Where a sign-in stands, read from one status answer or refusal: still running (`live`, with the state the helper
+ *  last published), signed in (`done`), or ended, with the terminal kind that says what did not happen. */
+export type SignInReading =
+  | { readonly kind: 'live'; readonly state: AuthStatusState }
+  | { readonly kind: 'done' }
+  | { readonly kind: 'end'; readonly end: SignInEndKind; readonly failure?: string };
+
+/** A status answer's reading (`GET …/auth`, spec §6.2). `failed` after the code went is the code refused (spec §6.2's
+ *  "Code refused"); before it, the helper stopped on its own. */
+export function readStatus(state: AuthStatusState, codeSent: boolean, failure: string | undefined): SignInReading {
+  switch (state) {
+    case 'done': return { kind: 'done' };
+    case 'expired': return { kind: 'end', end: 'expired' };
+    case 'cancelled': return { kind: 'end', end: 'cancelled' };
+    case 'failed': return codeSent ? { kind: 'end', end: 'code-refused' } : { kind: 'end', end: 'failed', ...(failure !== undefined ? { failure } : {}) };
+    default: return { kind: 'live', state };
+  }
+}
+
+/** A status read's refusal word (or `undefined` for a request that did not complete). `null`: the attempt stands and the
+ *  next poll asks again (`unmeasured`: the read failed, or the node is not known for a moment; no answer at all). An
+ *  attempt the server no longer holds ended at its deadline (`expired`) or somewhere else (`lost`): which, is read from
+ *  the LAST-KNOWN `expiresAt`, never from a duration. */
+export function readStatusRefusal(word: string | undefined, now: number, expiresAt: number): SignInReading | null {
+  if (word === 'auth-url-untrusted') return { kind: 'end', end: 'untrusted' };
+  if (word === 'node-changed') return { kind: 'end', end: 'node-changed' };
+  if (word === 'no-auth-attempt') return { kind: 'end', end: now >= expiresAt ? 'expired' : 'lost' };
+  return null;
+}
+
+/** The scopes the sign-in asks for, read from the URL the SERVER parsed and accepted (spec §6.2 step 5's "What this
+ *  grants"): the `scope` parameter's words, in its order, or none when it carries none. */
+export function grantScopes(url: string): string[] {
+  let scope: string | null = null;
+  try { scope = new URL(url).searchParams.get('scope'); } catch { scope = null; }
+  return scope === null ? [] : scope.split(/\s+/).filter((w) => w !== '');
 }

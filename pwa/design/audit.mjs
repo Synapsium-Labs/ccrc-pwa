@@ -1274,13 +1274,34 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: "a ledger section's mono lines, and the sleeping session ids (RemoveSheet.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
-  '.acct-compromise > summary': {
+  '.acct-compromise > summary, .acct-grants > summary': {
     under: ['var(--bg-sheet)'],
-    why: "the compromise disclosure's summary, in a result frame (CompromiseSteps.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+    why: "the compromise disclosure's summary, in a result frame (CompromiseSteps.tsx), and the sign-in URL card's \"What this grants\" (RunFrame.tsx's UrlCard, Task A22), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
   '.acct-compromise-steps': {
     under: ['var(--bg-sheet)'],
     why: "the compromise disclosure's steps, in a result frame (CompromiseSteps.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  // ── accounts plan Task A22 (D-7849): Mint and Sign in ──────────────────
+  '.acct-url-host': {
+    under: ['var(--bg-sheet)'],
+    why: "the server's host in mono beside Open, and in the phone's private-tab line (RunFrame.tsx's UrlCard), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-grant-list': {
+    under: ['var(--bg-sheet)'],
+    why: "the scopes in \"What this grants\" (RunFrame.tsx's UrlCard), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-grant-mark': {
+    under: ['var(--bg-sheet)'],
+    why: "the Remote Control mark beside its scope (RunFrame.tsx's UrlCard), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  '.acct-countdown': {
+    under: ['var(--bg-sheet)'],
+    why: "the sign-in's countdown (RunFrame.tsx's Countdown), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  ".acct-countdown[data-wait='true']": {
+    under: ['var(--bg-sheet)'],
+    why: "the countdown in amber while the sign-in waits on the operator (RunFrame.tsx's Countdown), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) and the URL card (.acct-url-card) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
 };
 

@@ -34,8 +34,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ACTIVE_RUN_STATES, IDLE_RUN_STATES, type RunState, type RunSummary } from '../../shared/api';
-import { BADGE_PRINT_CAP, badgePrint, runsLineLabel, runsNeedYou, waitingOnYou } from '../src/fleet/navBadges';
+import { BADGE_PRINT_CAP, badgePrint, runsLineLabel, runsNeedYou, waitingItemsCount, waitingOnYou } from '../src/fleet/navBadges';
 import { fleetSession } from './fleetFixture';
+import { itemView, waitingView } from './ledgersFixture';
 
 const SRC_DIR = path.join(import.meta.dirname, '..', 'src');
 
@@ -107,5 +108,29 @@ describe('the needs-you counts (T2d, D-6330)', () => {
       .filter(([f, text]) => f !== 'fleet/navBadges.ts' && (/\$\{\w*CAP\w*\}\+/i.test(text) || /['"`]99\+['"`]/.test(text)))
       .map(([f]) => f);
     expect(printing).toEqual([]);
+  });
+});
+
+// Desktop-polish PL5a (D-7712; spec §2): the Waiting on you door counts what needs the operator: the open items (sent
+// back ones included, they are open again) and the sessions asking a question. An item being checked is the
+// coordinator's, so it does not count. `null` before the waiting frame or the fleet frame: "not heard yet" is not zero.
+describe('the Waiting on you count (PL5a)', () => {
+  it('the nav badge counts open items plus question rows, not checking', () => {
+    const view = waitingView({
+      items: [itemView({ id: 1 }), itemView({ id: 2 }), itemView({ id: 3, state: 'checking' }), itemView({ id: 4, state: 'checking', stale: true })],
+    });
+    expect(waitingItemsCount(view, [attention('a'), attention('b'), idle('c')], [])).toBe(2 + 2);
+    expect(waitingItemsCount(view, [idle('c')], [])).toBe(2);
+  });
+
+  it('a sent-back item is open again and counts', () => {
+    const back = itemView({ id: 5, history: [{ at: 1, act: 'raise', note: null }, { at: 2, act: 'return', note: 'no' }] });
+    expect(waitingItemsCount(waitingView({ items: [back] }), [], [])).toBe(1);
+  });
+
+  it('null before the waiting frame; null before the fleet frame', () => {
+    expect(waitingItemsCount(null, [attention('a')], [])).toBeNull();
+    expect(waitingItemsCount(waitingView({ items: [itemView()] }), null, [])).toBeNull();
+    expect(waitingItemsCount(waitingView(), [], [])).toBe(0);
   });
 });
