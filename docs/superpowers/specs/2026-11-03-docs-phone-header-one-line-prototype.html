@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Docs header, one-line</title>
+<style>
+:root{
+  --bg:#eef0f3; --page:#ffffff; --ink:#1b1f24; --muted:#5d6670; --line:#d5dae0; --chip:#f2f4f7;
+  --accent:#2b62d9; --frame:#20242a; --ruler:#d9480f; --rulerbg:rgba(217,72,15,.08);
+  --topbar:#f7f8fa; --gap:rgba(43,98,217,.06); --ok:#2f9e44; --warn:#e8a317;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --serif:Georgia,"Times New Roman",serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#111418; --page:#1a1e23; --ink:#e6e9ed; --muted:#9aa4ae; --line:#323941; --chip:#242a31;
+    --accent:#7aa2ff; --frame:#000; --ruler:#ff8a4c; --rulerbg:rgba(255,138,76,.10);
+    --topbar:#20252b; --gap:rgba(122,162,255,.07);
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5}
+.wrap{max-width:1400px;margin:0 auto;padding:24px 16px 48px}
+h1.page{font-size:22px;margin:0 0 4px}
+p.lede{margin:0 0 24px;color:var(--muted);max-width:70ch}
+.frames{display:flex;gap:40px;flex-wrap:wrap;align-items:flex-start}
+.col{display:flex;flex-direction:column;gap:8px}
+.col h2{font-size:15px;margin:0}
+.col .sub{font-size:13px;color:var(--muted);margin:0;max-width:412px}
+.phone{position:relative;width:412px;height:880px;background:var(--page);border:10px solid var(--frame);border-radius:28px;overflow:hidden;flex:none}
+.phone.small{height:560px}
+.status{height:24px;background:var(--frame);color:#ccc;font-size:11px;display:flex;justify-content:space-between;padding:0 14px;align-items:center}
+.chrome{height:56px;background:var(--chip);border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 12px;gap:8px;font-size:13px;color:var(--muted)}
+.chrome .url{flex:1;background:var(--page);border-radius:20px;padding:6px 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vp{position:relative;height:calc(100% - 80px);overflow:hidden}
+/* ruler */
+.ruler{position:absolute;right:0;top:0;width:58px;border-left:2px solid var(--ruler);background:var(--rulerbg);z-index:5;pointer-events:none}
+.ruler span{position:absolute;bottom:4px;right:4px;left:4px;font:700 12px/1.2 var(--sans);color:var(--ruler);text-align:right}
+.ruler::after{content:"";position:absolute;left:-8px;bottom:-1px;width:58px;border-bottom:2px solid var(--ruler)}
+.tick{position:absolute;right:62px;font:10px/1 var(--mono);color:var(--ruler);z-index:5;background:var(--page);padding:0 2px}
+.gapband{background:repeating-linear-gradient(45deg,transparent 0 4px,var(--gap) 4px 8px)}
+/* console head, today */
+.btn44{min-width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;border:none;background:none;color:var(--ink);font-size:22px;padding:0;flex:none}
+.crumbrow{display:flex;flex-wrap:wrap;align-items:center;column-gap:4px}
+.crumb{min-height:44px;display:inline-flex;align-items:center;font:13px/1.25 var(--mono);color:var(--accent);text-decoration:underline}
+.crumb-here{font:13px/1.25 var(--mono);color:var(--ink);overflow-wrap:anywhere;width:100%;padding-left:48px}
+.truth{font:12px/1.5 var(--mono);color:var(--muted)}
+.truth .ctl{display:inline-flex;min-height:44px;align-items:center;color:var(--accent);text-decoration:underline}
+.acts{display:flex;flex-wrap:wrap;gap:4px 8px}
+.act{min-height:44px;display:inline-flex;align-items:center;padding:0 4px;color:var(--accent);text-decoration:underline;font-size:14px}
+/* frame (library) */
+.lib-bar{height:48px;background:var(--topbar);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:flex-end;gap:2px;padding:0 6px}
+.lib-bar .t{min-width:40px;height:40px;display:inline-flex;align-items:center;justify-content:center;font-size:15px;color:var(--muted);border-radius:8px}
+.doc{padding:0 16px;font-family:var(--serif)}
+.doc h1{font-size:32.8px;line-height:1.1;margin:0 0 16px;font-weight:600}
+.byline{font:12px/1.5 var(--sans);color:var(--muted);margin:0 0 12px}
+.inshort{border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:10px 12px;font:14px/1.5 var(--sans);margin:0 0 14px}
+.inshort b{display:block;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.doc p{font:16px/1.6 var(--serif);margin:0 0 12px}
+.fig{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:0 0 12px;font-family:var(--sans)}
+.fig .figbar{display:flex;gap:6px;justify-content:flex-end;padding:6px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+.fig .figbar span{border:1px solid var(--line);border-radius:6px;padding:2px 8px}
+.fig svg{display:block;width:100%;height:auto}
+.fig .cap{font:italic 13px/1.4 var(--sans);color:var(--muted);padding:6px 10px}
+/* AFTER head */
+.onerow{display:flex;align-items:center;height:44px;padding:0 4px 0 0;background:var(--page);border-bottom:1px solid var(--line)}
+.onerow .ttl{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;line-height:1.2}
+.onerow .ttl .p{font:11px/1.25 var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.onerow .ttl .n{font:600 14px/1.25 var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ico{width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;flex:none;color:var(--ink);position:relative}
+.ico svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.ico.on{background:var(--chip);border-radius:10px}
+.dot{position:absolute;top:10px;right:9px;width:7px;height:7px;border-radius:50%;background:var(--ok);border:1.5px solid var(--page)}
+.dot.stale{background:var(--warn)}
+/* menu */
+.scrim{position:absolute;inset:44px 0 0 0;background:rgba(0,0,0,.28)}
+.menu{position:absolute;top:44px;right:6px;left:42px;background:var(--page);border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);overflow:hidden;font-size:14px}
+.menu .row{display:flex;align-items:center;min-height:48px;padding:6px 14px;border-top:1px solid var(--line);gap:10px}
+.menu .row:first-child{border-top:none}
+.menu .row .k{flex:1;min-width:0}
+.menu .row .k small{display:block;color:var(--muted);font-size:12px}
+.menu .row .m{font:12px/1.4 var(--mono)}
+.menu .row .go{color:var(--accent);font-size:13px;white-space:nowrap}
+.menu .head{background:var(--chip);font-size:12px;color:var(--muted);min-height:32px}
+.legend{margin-top:32px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:24px}
+.legend section{background:var(--page);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.legend h3{margin:0 0 8px;font-size:15px}
+.legend ul{margin:0;padding-left:18px}
+.legend li{margin:0 0 6px;font-size:14px}
+table.px{border-collapse:collapse;font-size:13px;width:100%}
+table.px td,table.px th{border-top:1px solid var(--line);padding:4px 6px;text-align:left}
+table.px td.n,table.px th.n{text-align:right;font-family:var(--mono)}
+@media (max-width:480px){ .phone{transform:scale(.85);transform-origin:top left;margin-bottom:-130px;margin-right:-60px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 class="page">Docs header, one-line</h1>
+  <p class="lede">A 412 CSS px phone (Chrome on Android), a committed spec on the default branch. The orange bracket on each frame is the space above the document's title. Heights before are drawn from the measured map (CSS read at main, nothing rendered); heights after are the proposed CSS. The library's own bar is unchanged in both.</p>
+
+  <div class="frames">
+    <!-- BEFORE -->
+    <div class="col">
+      <h2>Before: today at main</h2>
+      <p class="sub">Console head (back, crumbs, truth line, actions) never scrolls away; then the library frame's bar.</p>
+      <div class="phone">
+        <div class="status"><span>9:41</span><span>5G ▮▮▮</span></div>
+        <div class="chrome"><span>⌂</span><span class="url">console / docs / project-a / specs / …</span><span>⋮</span></div>
+        <div class="vp">
+          <div class="ruler" style="height:341px"><span>341 px<br>above title</span></div>
+          <div class="tick" style="top:78px">78</div>
+          <div class="tick" style="top:192px">192</div>
+          <div class="tick" style="top:256px">256</div>
+          <!-- 8 pad -->
+          <div class="gapband" style="height:8px"></div>
+          <div style="padding:0 8px">
+            <!-- head bar 70 -->
+            <div style="height:70px;overflow:hidden">
+              <div class="crumbrow">
+                <button class="btn44">‹</button>
+                <span class="crumb">…</span><span style="color:var(--muted)">/</span><span class="crumb">specs</span><span style="color:var(--muted)">/</span>
+                <span class="crumb-here" style="margin-top:-18px">2026-10-20-path-identity-design.md</span>
+              </div>
+            </div>
+            <div class="gapband" style="height:8px"></div>
+            <!-- truth 106 -->
+            <div class="truth" style="height:106px;overflow:hidden">
+              origin/main · a1b2c3d <span class="ctl">copy commit</span> · default branch (origin/HEAD) · committed · 41.2 KiB · <span class="ctl">fetched 3m ago ↻</span>
+            </div>
+            <div class="gapband" style="height:8px"></div>
+            <!-- actions 44 -->
+            <div class="acts" style="height:44px">
+              <span class="act">View on GitHub</span><span class="act">Share</span><span class="act">Export (plain view)</span>
+            </div>
+            <div class="gapband" style="height:12px"></div>
+          </div>
+          <!-- frame -->
+          <div style="margin:0 8px;border:1px dashed var(--line);border-bottom:none">
+            <div class="gapband" style="height:8px"></div>
+            <div class="lib-bar"><span class="t">⌕</span><span class="t">Aa</span><span class="t">☰</span></div>
+            <div class="gapband" style="height:28px"></div>
+            <div class="doc">
+              <h1>Path identity design</h1>
+              <div class="byline">Spec · 20 Oct 2026 · 14 min read</div>
+              <div class="inshort"><b>In short</b>A path names one document at one ref, so a link means the same thing on every checkout.</div>
+              <p>Today a reader can reach the same file by two paths…</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AFTER -->
+    <div class="col">
+      <h2>After: one console row</h2>
+      <p class="sub">Back, section and title on one line, Share and Export as icons, everything else behind ⋯. The dot on ⋯ is freshness.</p>
+      <div class="phone">
+        <div class="status"><span>9:41</span><span>5G ▮▮▮</span></div>
+        <div class="chrome"><span>⌂</span><span class="url">console / docs / project-a / specs / …</span><span>⋮</span></div>
+        <div class="vp">
+          <div class="ruler" style="height:133px"><span>133 px</span></div>
+          <div class="tick" style="top:48px">48</div>
+          <div class="onerow">
+            <span class="ico" aria-label="Up one level" style="font-size:22px">‹</span>
+            <span class="ttl"><span class="p">specs /</span><span class="n">2026-10-20-path-identity-design.md</span></span>
+            <span class="ico" aria-label="Share"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg></span>
+            <span class="ico" aria-label="Export (plain view)"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg></span>
+            <span class="ico" aria-label="More: ref, freshness, GitHub"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg><span class="dot"></span></span>
+          </div>
+          <div class="gapband" style="height:4px"></div>
+          <div style="margin:0 8px;border:1px dashed var(--line);border-bottom:none">
+            <div class="gapband" style="height:8px"></div>
+            <div class="lib-bar"><span class="t">⌕</span><span class="t">Aa</span><span class="t">☰</span></div>
+            <div class="gapband" style="height:28px"></div>
+            <div class="doc">
+              <h1>Path identity design</h1>
+              <div class="byline">Spec · 20 Oct 2026 · 14 min read</div>
+              <div class="inshort"><b>In short</b>A path names one document at one ref, so a link means the same thing on every checkout.</div>
+              <p>Today a reader can reach the same file by two paths, and each one answers with its own copy.</p>
+              <div class="fig">
+                <div class="figbar"><span>▶ Play</span><span>⤢</span><span>Copy</span></div>
+                <svg viewBox="0 0 360 150" aria-label="Figure 1">
+                  <g font-family="system-ui,sans-serif" font-size="12" fill="currentColor">
+                    <rect x="14" y="20" width="96" height="40" rx="6" fill="none" stroke="currentColor" opacity=".7"/><text x="62" y="44" text-anchor="middle">Link</text>
+                    <rect x="132" y="20" width="96" height="40" rx="6" fill="none" stroke="currentColor" opacity=".7"/><text x="180" y="44" text-anchor="middle">Resolve ref</text>
+                    <rect x="250" y="20" width="96" height="40" rx="6" fill="none" stroke="currentColor" opacity=".7"/><text x="298" y="44" text-anchor="middle">Committed</text>
+                    <rect x="250" y="94" width="96" height="40" rx="6" fill="none" stroke="currentColor" opacity=".7"/><text x="298" y="118" text-anchor="middle">Draft</text>
+                    <path d="M110 40h22M228 40h22M228 50l22 60" stroke="currentColor" fill="none" opacity=".6"/>
+                  </g>
+                </svg>
+                <div class="cap">Figure 1. How a link resolves to one copy.</div>
+              </div>
+              <p>The resolver answers once, and the answer carries the ref it read.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MENU -->
+    <div class="col">
+      <h2>After: ⋯ open</h2>
+      <p class="sub">What the truth line and the actions row held, one row each. A draft or branch view adds its rows here; banners stay inline.</p>
+      <div class="phone small">
+        <div class="status"><span>9:41</span><span>5G ▮▮▮</span></div>
+        <div class="chrome"><span>⌂</span><span class="url">console / docs / project-a / specs / …</span><span>⋮</span></div>
+        <div class="vp">
+          <div class="onerow">
+            <span class="ico" style="font-size:22px">‹</span>
+            <span class="ttl"><span class="p">specs /</span><span class="n">2026-10-20-path-identity-design.md</span></span>
+            <span class="ico"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg></span>
+            <span class="ico"><svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg></span>
+            <span class="ico on"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg><span class="dot"></span></span>
+          </div>
+          <div class="scrim"></div>
+          <div class="menu" role="menu">
+            <div class="row head">specs / 2026-10-20-path-identity-design.md</div>
+            <div class="row"><span class="k"><span class="m">origin/main · a1b2c3d</span><small>default branch (origin/HEAD) · committed · 41.2 KiB</small></span><span class="go">Copy commit</span></div>
+            <div class="row"><span class="k">Fetched 3m ago<small>The list this page was read from</small></span><span class="go">↻ Refresh</span></div>
+            <div class="row"><span class="k">View on GitHub</span><span class="go">↗</span></div>
+            <div class="row"><span class="k">Share<small>Same as the share icon</small></span><span class="go">→</span></div>
+            <div class="row"><span class="k">Export (plain view)<small>Turns the reader off on this page first</small></span><span class="go">→</span></div>
+            <div class="row" style="color:var(--muted);font-size:12px">Draft or branch: + relation, draft badge, “GitHub's copy may differ”, Open committed version</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <section>
+      <h3>What moves where</h3>
+      <ul>
+        <li><b>Back + crumbs</b> (two lines, about 70 px) become one 44 px row: ‹, then a two-line label in the same row (section in 11 px mono, file name in 14 px, both ellipsised). The full path is the menu's first row; '…' crumb expansion is dropped on a phone.</li>
+        <li><b>Truth line</b> (about 106 px): ref, short commit, how the ref was chosen, source, size go to the ⋯ menu's first row with Copy commit. Freshness becomes a dot on ⋯ (green fresh, amber stale or failed); its refresh tap is a menu row.</li>
+        <li><b>Actions row</b> (44 px, more when it wraps): Share and Export become 44 px icon buttons on the head row; View on GitHub, 'GitHub's copy may differ' and Open committed version go to the menu.</li>
+        <li><b>Padding</b>: .docs-screen top padding 8 → 0 and the 12 px gap to the leaf → 4 on a phone with the reader shown.</li>
+        <li><b>'Formatting…'</b> overlays the frame host instead of taking a line, so the frame no longer jumps 28 px when ready.</li>
+        <li><b>Banners</b> (drafts, caveats) stay inline above the frame: they are warnings, and a menu would hide them.</li>
+        <li><b>Library chrome</b> is untouched: 8 body margin + 48 bar + 29 gap = 85 px, the bar still hides on scroll down. No library release needed.</li>
+        <li>Desktop (900 px and up) keeps today's head.</li>
+      </ul>
+    </section>
+    <section>
+      <h3>What it costs (px above the title)</h3>
+      <table class="px">
+        <tr><th></th><th class="n">Before</th><th class="n">After</th></tr>
+        <tr><td>Screen padding</td><td class="n">8</td><td class="n">0</td></tr>
+        <tr><td>Back + crumbs</td><td class="n">70</td><td class="n">44</td></tr>
+        <tr><td>Truth line + gaps</td><td class="n">122</td><td class="n">0</td></tr>
+        <tr><td>Actions</td><td class="n">44</td><td class="n">0</td></tr>
+        <tr><td>Gap to frame</td><td class="n">12</td><td class="n">4</td></tr>
+        <tr><td>Frame: margin + bar + gap</td><td class="n">85</td><td class="n">85</td></tr>
+        <tr><th>Total</th><th class="n">341</th><th class="n">133</th></tr>
+        <tr><td>Pinned while reading</td><td class="n">≈256</td><td class="n">48</td></tr>
+      </table>
+      <p style="font-size:13px;color:var(--muted);margin:8px 0 0">Code: DocsHead.tsx gains a phone branch (one row plus a menu component), docs.css phone rules, and a small 'more' menu with its own tests. A draft view still adds its banners. With a library option for the 29 px bar gap and the body margin (held release), 133 could drop to about 100.</p>
+    </section>
+    <section>
+      <h3>What the user loses</h3>
+      <ul>
+        <li>The ref and commit are no longer visible at a glance; one tap on ⋯ to see what is being read. The dot only says fresh or stale, not which ref.</li>
+        <li>A branch or draft view looks the same as main in the head; only the banners (kept) and the menu say so. A small 'branch' or 'draft' tag next to the section name could fix this at no height cost.</li>
+        <li>Export's visible states ('Export (plain view)', 'Formatting…', 'Updating to…') shrink to an icon with a disabled look; the words move to the accessible name and to the menu row, so a sighted user must open ⋯ to learn why it is greyed out.</li>
+        <li>View on GitHub costs one extra tap.</li>
+        <li>The file name is usually clipped (about 30 of 40 to 57 characters fit); the title below names the document anyway.</li>
+        <li>Two stacked tool rows remain (console 44 + library 48); this variant does not merge them.</li>
+      </ul>
+    </section>
+  </div>
+</div>
+</body>
+</html>

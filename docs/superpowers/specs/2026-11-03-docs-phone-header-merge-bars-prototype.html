@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Docs header, merge-bars</title>
+<style>
+:root{
+  --bg:#f3f2ef; --page:#ffffff; --ink:#1d1d1f; --muted:#6b6b70; --line:#dedcd6; --accent:#2f5fd0;
+  --chip:#eceae5; --bar:#f7f6f3; --libbar:#fbfaf7; --ruler:#d0457a; --ok:#2b8a3e; --warn:#b26a00;
+  --figure:#f0efe9; --shade:rgba(0,0,0,.35); --sheet:#ffffff; --cost:#fbe9ef;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#121214; --page:#1b1b1e; --ink:#ececee; --muted:#9a9aa2; --line:#33333a; --accent:#8fb0ff;
+    --chip:#2a2a30; --bar:#202024; --libbar:#1f1f23; --ruler:#ff7aa8; --ok:#5fd07a; --warn:#f0b44c;
+    --figure:#24242a; --shade:rgba(0,0,0,.6); --sheet:#232327; --cost:#3a2029;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:24px 16px 48px}
+h1.page{font-size:22px;margin:0 0 4px}
+p.lede{margin:0 0 20px;color:var(--muted);max-width:900px}
+.frames{display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start}
+.col h2{font-size:15px;margin:0 0 8px}
+.col .tag{font-size:13px;color:var(--muted);margin:0 0 10px;max-width:412px}
+.phone{position:relative;width:412px;height:880px;background:var(--page);border:1px solid var(--line);border-radius:28px;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.12)}
+.phone.small{height:560px}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+/* ruler */
+.ruler{position:absolute;left:0;top:0;width:6px;background:var(--ruler);opacity:.85;z-index:5}
+.ruler-label{position:absolute;left:10px;z-index:6;font:600 12px/1 system-ui;color:#fff;background:var(--ruler);padding:4px 7px;border-radius:4px;transform:translateY(-50%)}
+.firstline{position:absolute;left:0;right:0;border-top:2px dashed var(--ruler);z-index:4}
+/* BEFORE pieces */
+.blk{position:relative;border-bottom:1px dotted transparent}
+.blk .h{position:absolute;right:6px;top:2px;font:11px/1 system-ui;color:var(--ruler)}
+.gap{background:repeating-linear-gradient(45deg,transparent 0 4px,var(--cost) 4px 8px)}
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;padding:0 8px;gap:0 4px}
+.tap{min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center}
+.crumb{color:var(--accent);font-size:14px;min-height:44px;display:inline-flex;align-items:center;padding:0 4px}
+.here{font-size:13px;line-height:1.25;flex-basis:100%;padding-left:48px;overflow-wrap:anywhere}
+.truth{font-size:12px;line-height:1.5;padding:0 8px;color:var(--muted)}
+.truth .ctl{display:inline-flex;align-items:center;min-height:44px;color:var(--accent);text-decoration:underline}
+.acts{display:flex;gap:4px 8px;padding:0 8px;align-items:center}
+.acts a{min-height:44px;display:inline-flex;align-items:center;color:var(--accent);padding:0 4px;font-size:14px}
+.libbar{height:48px;background:var(--libbar);display:flex;align-items:center;justify-content:flex-end;gap:2px;padding:0 6px;border-bottom:1px solid var(--line)}
+.libbar span,.cbar .ic{min-width:40px;height:40px;display:inline-flex;align-items:center;justify-content:center;font-size:15px;color:var(--ink);border-radius:8px}
+.frameedge{position:absolute;left:8px;right:8px;border-left:1px solid var(--line);border-right:1px solid var(--line)}
+/* doc content */
+.doc{padding:0 16px}
+.doc h1{font-family:Georgia,"Times New Roman",serif;font-size:32.8px;line-height:1.1;margin:0 0 16px}
+.byline{font-size:13px;color:var(--muted);margin-bottom:12px}
+.facts{font-size:12.5px;border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:12px}
+.facts summary{cursor:pointer;color:var(--muted)}
+.facts dl{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:8px 0 2px}
+.facts dt{color:var(--muted)}
+.facts dd{margin:0;overflow-wrap:anywhere}
+.box{border-left:3px solid var(--accent);background:var(--chip);padding:8px 12px;border-radius:4px;font-size:14px;margin-bottom:12px}
+.doc p{margin:0 0 12px;font-size:15px}
+.fig{border:1px solid var(--line);border-radius:10px;background:var(--figure);padding:10px;margin-bottom:12px}
+.fig svg{display:block;width:100%;height:auto}
+.fig .cap{font-size:12px;font-style:italic;color:var(--muted);margin-top:6px}
+.fig .tools{font-size:11px;color:var(--muted);display:flex;gap:10px;margin-bottom:6px}
+/* AFTER */
+.cbar{height:44px;display:flex;align-items:center;gap:2px;padding:0 2px 0 0;background:var(--bar);border-bottom:1px solid var(--line)}
+.cbar .ttl{flex:1;min-width:0;display:flex;align-items:center;gap:6px;height:44px;padding:0 4px;font-weight:600;font-size:15px}
+.cbar .ttl b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none}
+.new{outline:2px solid var(--ruler);outline-offset:-2px;border-radius:8px}
+.prog{height:2px;background:var(--accent);width:6%}
+/* sheet & menu */
+.shade{position:absolute;inset:0;background:var(--shade);z-index:7}
+.menu{position:absolute;right:6px;top:46px;width:236px;background:var(--sheet);border:1px solid var(--line);border-radius:12px;z-index:8;box-shadow:0 8px 24px rgba(0,0,0,.25);overflow:hidden}
+.menu div{min-height:48px;display:flex;align-items:center;padding:0 14px;border-top:1px solid var(--line);font-size:15px}
+.menu div:first-child{border-top:0}
+.menu small{display:block;color:var(--muted);font-size:12px}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--sheet);border-radius:16px 16px 0 0;z-index:8;padding:8px 16px 16px;box-shadow:0 -8px 24px rgba(0,0,0,.25)}
+.grab{width:36px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 10px}
+.sheet h3{margin:0 0 4px;font-size:16px}
+.sheet .row{display:flex;justify-content:space-between;align-items:center;min-height:44px;border-top:1px solid var(--line);font-size:13px;gap:8px}
+.sheet .row span:first-child{color:var(--muted)}
+.btn{min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:10px;display:inline-flex;align-items:center;color:var(--accent);font-size:14px}
+/* notes */
+.notes{max-width:1000px;margin-top:32px}
+.notes h2{font-size:17px;margin:24px 0 8px}
+.notes ul{margin:0;padding-left:20px}
+.notes li{margin:6px 0}
+.notes code{font-size:13px;background:var(--chip);padding:1px 4px;border-radius:4px}
+table{border-collapse:collapse;font-size:14px;margin-top:8px}
+th,td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
+th{background:var(--chip)}
+@media (max-width:460px){ .phone{width:100%} }
+</style>
+</head>
+<body>
+<h1 class="page">Docs header, merge-bars</h1>
+<p class="lede">Variant: one bar, not two. On a phone the console draws a single 44 px bar (back, the document's title, a freshness dot, and a ⋯ menu), and the reader frame's own 48 px tool bar is switched off, with its tools (quick jump, Aa, Contents) carried in the console bar instead. The path, ref and freshness facts move into a details sheet that opens when you tap the title. Heights are taken from the measured map at main; nothing was rendered in a browser.</p>
+
+<div class="frames">
+
+<!-- ===================== BEFORE ===================== -->
+<div class="col">
+<h2>BEFORE: today at main (phone, 412 px)</h2>
+<p class="tag">About 341 px sit above the title, and the console's 256 px of it never scrolls away.</p>
+<div class="phone" aria-label="Before">
+  <div class="ruler" style="height:341px"></div>
+  <div class="ruler-label" style="top:170px">341 px above the first line</div>
+  <div class="firstline" style="top:341px"></div>
+
+  <div class="blk gap" style="height:8px"></div>
+  <div class="blk" style="height:70px">
+    <div class="crumbs">
+      <span class="tap" style="font-size:22px">‹</span>
+      <span class="crumb">…</span><span style="color:var(--muted)">/</span>
+      <span class="crumb">specs</span><span style="color:var(--muted)">/</span>
+      <span class="here mono">2026-11-03-path-identity-design.md</span>
+    </div>
+    <span class="h">≈70</span>
+  </div>
+  <div class="blk gap" style="height:8px"></div>
+  <div class="blk" style="height:106px">
+    <div class="truth mono">origin/main · a1b2c3d <span class="ctl">copy commit</span> · default branch (origin/HEAD) · committed · 41.2 KiB · <span class="ctl">fetched 3m ago ↻</span></div>
+    <span class="h">≈106</span>
+  </div>
+  <div class="blk gap" style="height:8px"></div>
+  <div class="blk" style="height:44px">
+    <div class="acts"><a>View on GitHub</a><a>Share</a><a>Export (plain view)</a></div>
+    <span class="h">44</span>
+  </div>
+  <div class="blk gap" style="height:12px"></div>
+  <!-- iframe -->
+  <div style="position:relative;margin:0 8px;border-top:1px solid var(--line)">
+    <div class="blk gap" style="height:8px"></div>
+    <div class="libbar"><span>⌕</span><span>Aa</span><span>☰</span></div>
+    <div class="blk gap" style="height:28px"><span class="h">29 gap</span></div>
+    <div class="doc">
+      <h1>Path identity design</h1>
+      <div class="byline">Spec · 2026-11-03 · 9 min read</div>
+      <div class="box"><b>In short.</b> A document is named by its path at a ref, never by the checkout that happened to serve it.</div>
+      <div class="fig">
+        <div class="tools"><span>Play</span><span>Animate edges</span><span>Full screen</span></div>
+        <svg viewBox="0 0 300 70" role="img" aria-label="Figure"><rect x="4" y="20" width="76" height="30" rx="6" fill="none" stroke="currentColor"/><text x="42" y="40" font-size="11" text-anchor="middle" fill="currentColor">path</text><path d="M80 35h40" stroke="currentColor"/><rect x="120" y="20" width="76" height="30" rx="6" fill="none" stroke="currentColor"/><text x="158" y="40" font-size="11" text-anchor="middle" fill="currentColor">ref</text><path d="M196 35h40" stroke="currentColor"/><rect x="236" y="20" width="60" height="30" rx="6" fill="none" stroke="currentColor"/><text x="266" y="40" font-size="11" text-anchor="middle" fill="currentColor">bytes</text></svg>
+        <div class="cap">Figure 1. How a path resolves.</div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ===================== AFTER ===================== -->
+<div class="col">
+<h2>AFTER: one bar (phone, 412 px)</h2>
+<p class="tag">About 81 px above the title (44 bar + 1 rule + 8 frame body margin + 28 reader top padding), or about 61 px once the library resets the body margin and trims its phone top padding to 16.</p>
+<div class="phone" aria-label="After">
+  <div class="ruler" style="height:81px"></div>
+  <div class="ruler-label" style="top:62px">81 px above the first line</div>
+  <div class="firstline" style="top:81px"></div>
+
+  <div class="cbar">
+    <span class="tap" style="font-size:22px" aria-label="Up to specs">‹</span>
+    <span class="ttl" aria-label="Path identity design, show details"><span class="dot" title="fetched 3m ago"></span><b>Path identity design</b></span>
+    <span class="ic new" title="Quick jump">⌕</span>
+    <span class="ic new" title="Reading settings">Aa</span>
+    <span class="ic new" title="Contents">☰</span>
+    <span class="ic" title="More">⋯</span>
+  </div>
+  <div class="prog new" title="progress line, now drawn by the console"></div>
+  <div style="position:relative">
+    <div class="blk gap" style="height:8px"><span class="h">8 body</span></div>
+    <div class="blk gap" style="height:28px"><span class="h">28 root pad</span></div>
+    <div class="doc">
+      <h1>Path identity design</h1>
+      <div class="byline">Spec · 2026-11-03 · 9 min read</div>
+      <div class="box"><b>In short.</b> A document is named by its path at a ref, never by the checkout that happened to serve it.</div>
+      <div class="fig">
+        <div class="tools"><span>Play</span><span>Animate edges</span><span>Full screen</span></div>
+        <svg viewBox="0 0 300 70" role="img" aria-label="Figure"><rect x="4" y="20" width="76" height="30" rx="6" fill="none" stroke="currentColor"/><text x="42" y="40" font-size="11" text-anchor="middle" fill="currentColor">path</text><path d="M80 35h40" stroke="currentColor"/><rect x="120" y="20" width="76" height="30" rx="6" fill="none" stroke="currentColor"/><text x="158" y="40" font-size="11" text-anchor="middle" fill="currentColor">ref</text><path d="M196 35h40" stroke="currentColor"/><rect x="236" y="20" width="60" height="30" rx="6" fill="none" stroke="currentColor"/><text x="266" y="40" font-size="11" text-anchor="middle" fill="currentColor">bytes</text></svg>
+        <div class="cap">Figure 1. How a path resolves.</div>
+      </div>
+      <p>The reader shows a document at one ref. Today a phone spends a third of its height saying where the document came from before it shows the document.</p>
+      <p>This spec separates the document's identity from the checkout that serves it, so a link means the same thing on every box and every branch.</p>
+      <p>Section 1 sets the vocabulary. Section 2 lists the three resolutions a host may offer, and section 3 records which one this host chose and why.</p>
+      <p>Each resolution is drawn as a figure and followed by a table of the decisions it implies.</p>
+    </div>
+  </div>
+  <div style="position:absolute;right:8px;bottom:12px;font-size:11px;color:var(--ruler);background:var(--page);padding:2px 6px;border-radius:4px">outlined = moved in from the reader's bar</div>
+</div>
+</div>
+
+<!-- ===================== MENU ===================== -->
+<div class="col">
+<h2>AFTER, ⋯ open</h2>
+<p class="tag">The actions row becomes a menu. Export keeps its state words as a second line.</p>
+<div class="phone small" aria-label="Menu open">
+  <div class="cbar">
+    <span class="tap" style="font-size:22px">‹</span>
+    <span class="ttl"><span class="dot"></span><b>Path identity design</b></span>
+    <span class="ic">⌕</span><span class="ic">Aa</span><span class="ic">☰</span><span class="ic" style="background:var(--chip)">⋯</span>
+  </div>
+  <div class="shade" style="top:45px"></div>
+  <div class="menu">
+    <div><span>View on GitHub<small>GitHub's copy may differ from this view</small></span></div>
+    <div>Share</div>
+    <div><span>Export<small>plain view: turns the reader off first</small></span></div>
+    <div><span>Document details<small>path, ref, commit, freshness</small></span></div>
+  </div>
+  <div class="doc" style="padding-top:36px;opacity:.5"><h1>Path identity design</h1></div>
+</div>
+</div>
+
+<!-- ===================== SHEET ===================== -->
+<div class="col">
+<h2>AFTER, title tapped</h2>
+<p class="tag">Everything the truth line held, nothing dropped, one tap away.</p>
+<div class="phone small" aria-label="Details sheet open">
+  <div class="cbar">
+    <span class="tap" style="font-size:22px">‹</span>
+    <span class="ttl"><span class="dot"></span><b>Path identity design</b></span>
+    <span class="ic">⌕</span><span class="ic">Aa</span><span class="ic">☰</span><span class="ic">⋯</span>
+  </div>
+  <div class="doc" style="padding-top:36px;opacity:.5"><h1>Path identity design</h1></div>
+  <div class="shade"></div>
+  <div class="sheet">
+    <div class="grab"></div>
+    <h3>Path identity design</h3>
+    <div class="row"><span>Path</span><span class="mono" style="overflow-wrap:anywhere;text-align:right">… / specs / 2026-11-03-path-identity-design.md</span></div>
+    <div class="row"><span>Ref</span><span class="mono">origin/main · default branch (origin/HEAD)</span></div>
+    <div class="row"><span>Commit</span><span class="mono">a1b2c3d</span><span class="btn">Copy</span></div>
+    <div class="row"><span>Source · size</span><span>committed · 41.2 KiB</span></div>
+    <div class="row"><span>Freshness</span><span style="color:var(--ok)">● fetched 3m ago</span><span class="btn">Re-list ↻</span></div>
+  </div>
+</div>
+</div>
+
+</div>
+
+<div class="notes">
+<h2>What moves where</h2>
+<ul>
+<li><b>Crumbs (≈70 px)</b> → the one bar: <code>‹</code> keeps "up one level"; the file-name crumb is replaced by the document's title on one line with an ellipsis; the full path goes to the details sheet.</li>
+<li><b>Truth line (≈106 px)</b> → a green, amber or red freshness dot beside the title, plus the details sheet opened by tapping the title (ref, how it was chosen, commit with Copy, source, size, freshness with Re-list). A draft or branch view adds an amber dot and a one-word chip ("draft", "branch") to the title, not a line.</li>
+<li><b>Actions row (44 to 92 px)</b> → the ⋯ menu: View on GitHub (with "may differ" as its second line), Share, Export (with its state words), Document details. "Updating to &lt;short&gt;…" shows as a spinner on ⋯ and as the menu items' second line, so it never wraps a row.</li>
+<li><b>The reader's own bar (48 + 29 px)</b> → off, through the library's existing host option <code>features.chrome.bar = false</code>. Its quick jump, Aa and Contents buttons move into the console bar; its running head is unneeded, because the console bar always shows the title; its 2 px progress line is drawn by the console under the bar.</li>
+<li><b>Banners</b> stay under the bar, unchanged; they are rare and they matter.</li>
+<li><b>"Formatting…"</b> becomes a thin indeterminate line in the progress line's place, so the frame no longer jumps 28 px when it is ready.</li>
+</ul>
+
+<h2>What the library needs, and whether its host adapters allow it today</h2>
+<table>
+<tr><th>Need</th><th>Allowed today (library 1.0.0)?</th><th>Cost</th></tr>
+<tr><td>Hide the reader's bar</td><td><b>Yes.</b> The host mount accepts <code>features</code> with <code>chrome: {bar, rail, settings}</code>, each defaulting to true; the library's own comment says "a host may build its own bar".</td><td>ccrc's bridge passes <code>features</code> for the first time: its adapter set is pinned at fourteen keys by a test, so it becomes fifteen, and its header comment changes.</td></tr>
+<tr><td>Open quick jump, Aa and Contents from the host's buttons</td><td><b>No.</b> Those tools live in the bar's tray, and no host-to-frame command opens them. With <code>chrome.bar = false</code>, quick jump is reachable only by keyboard, which a phone lacks.</td><td>A library change: host commands such as <code>open('jump' | 'settings' | 'contents')</code> over the frame protocol, plus a "tools available" report so the host shows only the buttons that exist (Outline on plans, the changes stepper). The library's release is held, so this waits for the next batched release.</td></tr>
+<tr><td>Progress for the console's line</td><td><b>No.</b> No scroll or progress signal crosses the bridge.</td><td>The same library change: a throttled progress report. Without it, the console drops the progress line.</td></tr>
+<tr><td>Facts inside the reader (alternative to the sheet)</td><td><b>No.</b> The reader has a facts panel built from the document's byline, but its seam (<code>facts.take/summary/block</code>) is for in-frame plugins, and the frame runs only library code.</td><td>Not proposed. The console sheet is cheaper and keeps the facts that ccrc measures in ccrc.</td></tr>
+<tr><td>Trim the top inset (8 px body margin, 28 px phone padding)</td><td><b>No.</b> No host option controls it.</td><td>A small library CSS change: about 81 → 61 px.</td></tr>
+</table>
+
+<h2>Shipping in two steps</h2>
+<ul>
+<li><b>Step 1, ccrc only (no library change).</b> One 44 px console bar with ‹, title, dot and ⋯, plus the details sheet. The reader's bar stays on, because hiding it now would strand quick jump. Above the title: 44 + 1 + 8 + 48 + 29 ≈ <b>130 px</b> (from 341), and the reader's 48 px still slides away on scroll down. That makes two bars, but the console bar is thin.</li>
+<li><b>Step 2, after the library's host commands land.</b> Pass <code>chrome.bar = false</code>, move ⌕, Aa and ☰ into the console bar, and draw progress: <b>81 px</b> (61 with the inset trim). One bar.</li>
+</ul>
+
+<h2>What it costs, and what the user loses</h2>
+<ul>
+<li><b>Loses: the bar hiding on scroll.</b> Today the reader's 48 px bar slides away while you read. The console bar stays at 44 px, because ccrc gets no scroll signal. While reading, the net is still about 44 px against today's 256 + 0, a large gain, but it is not zero.</li>
+<li><b>Loses: provenance at a glance.</b> Ref, commit and size are one tap away instead of always visible. The dot and the draft or branch chip keep the "is this current, is this a draft" signal on screen.</li>
+<li><b>Loses: one-tap GitHub, Share and Export.</b> Each is now two taps (⋯, then the item).</li>
+<li><b>Loses: the crumb trail.</b> "specs" as a tappable crumb is gone; ‹ goes up one level, and the full path is in the sheet. Jumping two levels up is now ‹ twice.</li>
+<li><b>Width:</b> ‹ (44) + ⌕ Aa ☰ ⋯ (4 × 40) leave about 200 px for the title, about 22 characters at 15 px. A long title ends in an ellipsis. The full title is the h1 directly below, and the sheet repeats it.</li>
+<li><b>Cost:</b> step 1 is a ccrc-only change (head, menu, sheet, CSS) with tests for the moved controls' accessible names. Step 2 needs a library change and a new release, which the operator is holding for a batch, plus the bridge's pinned adapter count going from fourteen to fifteen.</li>
+<li><b>Desktop is unchanged:</b> at 900 px and wider, the full truth line and the actions row stay as they are.</li>
+</ul>
+</div>
+</body>
+</html>

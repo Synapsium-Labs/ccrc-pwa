@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Docs header, scroll-away</title>
+<style>
+:root{
+  --bg:#f4f4f2; --ink:#1d1d1b; --muted:#66655f; --line:#d6d5cf; --phone:#fff; --bezel:#2a2a28;
+  --head:#fafaf8; --bar:#f0efe9; --accent:#2457c5; --gap:rgba(230,120,40,.16); --gapline:#d9822b;
+  --card:#f6f6f3; --menu:#fff; --ok:#2e7d4f; --rule:#c0392b;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#151514; --ink:#e9e8e3; --muted:#a3a29b; --line:#3a3a37; --phone:#1e1e1c; --bezel:#000;
+    --head:#232321; --bar:#2a2a27; --accent:#86a8ff; --gap:rgba(230,140,60,.18); --gapline:#e0954a;
+    --card:#262624; --menu:#2b2b29; --ok:#7fd1a0; --rule:#ff7a6b;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:24px 16px 64px}
+h1{font-size:22px;margin:0 0 4px}
+.lede{color:var(--muted);max-width:900px;margin:0 0 24px}
+.row{display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start}
+.col{display:flex;flex-direction:column;gap:8px;max-width:100%}
+.cap{font-weight:600}
+.cap small{display:block;font-weight:400;color:var(--muted);max-width:412px}
+.phone{position:relative;width:412px;max-width:100%;height:880px;background:var(--phone);border:10px solid var(--bezel);border-radius:28px;overflow:hidden;font-size:13px}
+.ruler{position:absolute;right:0;top:0;width:58px;border-left:2px solid var(--rule);color:var(--rule);font:600 11px/1.2 ui-monospace,monospace;padding:4px 4px;text-align:right;z-index:5;background:color-mix(in srgb,var(--phone) 80%,transparent)}
+.ruler::after{content:"";position:absolute;left:-8px;bottom:0;width:62px;border-bottom:2px solid var(--rule)}
+.status{height:24px;font:11px/24px ui-monospace,monospace;color:var(--muted);padding:0 14px;background:var(--phone)}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+.blk{position:relative;overflow:hidden}
+.gap{background:repeating-linear-gradient(45deg,var(--gap) 0 6px,transparent 6px 12px)}
+.lbl{position:absolute;left:4px;top:1px;font:10px/1 ui-monospace,monospace;color:var(--gapline)}
+.chead{background:var(--head);padding:0 8px}
+.hbar{display:flex;align-items:flex-start;gap:4px;padding-top:0}
+.tap{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;color:var(--accent)}
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:0 4px;width:340px}
+.crumbs .here{font:13px/1.25 ui-monospace,monospace;overflow-wrap:anywhere;width:100%;padding-bottom:6px}
+.truth{font:12px/18px ui-monospace,monospace;color:var(--muted)}
+.truth .ctl{display:inline-flex;align-items:center;min-height:44px;color:var(--accent);text-decoration:underline}
+.acts{display:flex;gap:4px 8px;flex-wrap:wrap}
+.acts a{min-height:44px;display:inline-flex;align-items:center;padding:0 4px;color:var(--accent);text-decoration:underline}
+.lbar{height:48px;background:var(--bar);display:flex;align-items:center;justify-content:space-between;padding:0 6px 0 12px;border-bottom:1px solid var(--line)}
+.lbar .rh{color:var(--muted);font-size:12px}
+.lbar .tools{display:flex;gap:2px}
+.lbar .tools span{min-width:40px;height:40px;display:inline-flex;align-items:center;justify-content:center;color:var(--ink)}
+.prog{height:2px;background:var(--accent)}
+.doc{padding:0 16px;font-family:Georgia,"Times New Roman",serif;font-size:16.5px;line-height:1.6}
+.doc h1{font-size:32.8px;line-height:1.1;margin:0 0 16px}
+.doc h2{font:600 20px/1.3 system-ui,sans-serif;margin:18px 0 8px}
+.doc p{margin:0 0 12px}
+.by{font:12px/1.5 system-ui,sans-serif;color:var(--muted);margin-bottom:12px}
+.short{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:15px}
+.short b{font-family:system-ui,sans-serif;font-size:12px;display:block;color:var(--muted)}
+.fig{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:10px;margin:8px 0 12px}
+.fig svg{width:100%;height:120px;display:block}
+.fig i{font-size:13px;color:var(--muted)}
+.fig .figtools{font:11px system-ui,sans-serif;color:var(--muted);display:flex;gap:10px;margin-bottom:6px}
+.pnav{position:absolute;left:0;right:0;bottom:0;height:56px;background:var(--head);border-top:1px solid var(--line);display:flex;justify-content:space-around;align-items:center;color:var(--muted);font-size:11px;z-index:4}
+.ghost{opacity:.35}
+.mech{max-width:900px}
+.mech h2{font-size:18px;margin:32px 0 8px}
+.mech ol,.mech ul{padding-left:20px}
+.mech li{margin-bottom:6px}
+code{font:13px ui-monospace,monospace;background:var(--card);padding:0 3px;border-radius:3px}
+table{border-collapse:collapse;margin:8px 0;max-width:100%;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top;font-size:14px}
+th{background:var(--card)}
+.slide{position:absolute;left:0;right:0;z-index:3;box-shadow:0 2px 8px rgba(0,0,0,.18)}
+.arrow{position:absolute;left:14px;font:600 11px ui-monospace,monospace;color:var(--accent);z-index:6}
+@media (max-width:460px){.phone{height:820px}}
+</style>
+</head>
+<body>
+<h1>Docs header, scroll-away</h1>
+<p class="lede">Angle: the head stays exactly as it is at the top of the document, but it is part of the page. It scrolls away with the first lines of the spec, so reading uses the full height below the status bar. Phone: 412 CSS px wide, about 880 px drawn. Heights follow the measured map (CSS at main and reader library 1.0.0). Nothing here was rendered on a device.</p>
+
+<div class="row">
+
+<!-- BEFORE, at open -->
+<div class="col">
+  <div class="cap">BEFORE, at open<small>Today. The console head is pinned (<code>flex: none</code>) above a frame that scrolls itself. About 341 px sit above the title.</small></div>
+  <div class="phone">
+    <div class="ruler" style="height:365px">341 px<br>above h1</div>
+    <div class="status">12:04 · Chrome</div>
+    <div class="blk gap" style="height:8px"></div>
+    <div class="chead">
+      <div class="hbar"><span class="tap">‹</span>
+        <div class="crumbs"><span class="tap">…</span>/<span class="tap">specs</span>/<span class="here">2026-11-03-path-identity-design.md</span></div></div>
+    </div>
+    <div class="blk gap" style="height:8px"><span class="lbl">8</span></div>
+    <div class="chead truth" style="height:106px">origin/main · a1b2c3d <span class="ctl">copy commit</span> · default branch (origin/HEAD) · committed · 41.2 KiB · <span class="ctl">fetched 3m ago ↻</span></div>
+    <div class="blk gap" style="height:8px"><span class="lbl">8</span></div>
+    <div class="chead acts" style="height:44px"><a>View on GitHub</a><a>Share</a><a>Export (plain view)</a></div>
+    <div class="blk gap" style="height:12px"><span class="lbl">12</span></div>
+    <div class="blk gap" style="height:8px"><span class="lbl">8 body margin</span></div>
+    <div class="lbar"><span class="rh"></span><span class="tools"><span>⌕</span><span>Aa</span><span>☰</span></span></div>
+    <div class="blk gap" style="height:28px"><span class="lbl">28 + 1 bar gap</span></div>
+    <div class="doc">
+      <h1>Path identity design</h1>
+      <div class="by">Spec · 3 Nov 2026</div>
+      <div class="short"><b>In short</b>A document is named by its project, its ref and its path, never by where a checkout happens to sit.</div>
+    </div>
+    <div class="pnav"><span>Fleet</span><span>Runs</span><span>Docs</span><span>More</span></div>
+  </div>
+</div>
+
+<!-- BEFORE, reading -->
+<div class="col">
+  <div class="cap">BEFORE, while reading<small>Scrolled into section 2. The library bar has hidden, but the console head never moves: about 256 px stay pinned, 304 px when the bar is back.</small></div>
+  <div class="phone">
+    <div class="ruler" style="height:280px">256 px<br>pinned</div>
+    <div class="status">12:05 · Chrome</div>
+    <div class="blk gap" style="height:8px"></div>
+    <div class="chead">
+      <div class="hbar"><span class="tap">‹</span>
+        <div class="crumbs"><span class="tap">…</span>/<span class="tap">specs</span>/<span class="here">2026-11-03-path-identity-design.md</span></div></div>
+    </div>
+    <div class="blk gap" style="height:8px"></div>
+    <div class="chead truth" style="height:106px">origin/main · a1b2c3d <span class="ctl">copy commit</span> · default branch (origin/HEAD) · committed · 41.2 KiB · <span class="ctl">fetched 3m ago ↻</span></div>
+    <div class="blk gap" style="height:8px"></div>
+    <div class="chead acts" style="height:44px"><a>View on GitHub</a><a>Share</a><a>Export (plain view)</a></div>
+    <div class="blk gap" style="height:12px"></div>
+    <div class="prog" style="width:38%"></div>
+    <div class="doc" style="padding-top:8px">
+      <h2>2. How a path is resolved</h2>
+      <p>The reader asks for a project label, a ref and a path. The server resolves the ref once, then reads the path at that commit.</p>
+      <div class="fig"><div class="figtools"><span>▶ Play</span><span>Full screen</span><span>Copy</span></div>
+        <svg viewBox="0 0 360 120" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.4"><rect x="8" y="40" width="88" height="36" rx="6"/><rect x="136" y="40" width="88" height="36" rx="6"/><rect x="264" y="40" width="88" height="36" rx="6"/><path d="M96 58h40M224 58h40"/></g><g font-size="12" fill="currentColor" font-family="system-ui"><text x="22" y="62">project</text><text x="160" y="62">ref</text><text x="290" y="62">path</text></g></svg>
+        <i>Figure 1. A path's identity.</i></div>
+      <p>A worktree</p>
+    </div>
+    <div class="pnav"><span>Fleet</span><span>Runs</span><span>Docs</span><span>More</span></div>
+  </div>
+</div>
+
+<!-- AFTER, reading -->
+<div class="col">
+  <div class="cap">AFTER, while reading<small>At open this design looks exactly like the first frame (341 px, unchanged by design). Once the reader scrolls, the console head goes up with the page, 1 px for 1 px, then the library bar hides as it does today. 0 px above the text.</small></div>
+  <div class="phone">
+    <div class="ruler" style="height:26px">0 px</div>
+    <div class="status">12:05 · Chrome</div>
+    <div class="prog" style="width:38%"></div>
+    <div class="doc" style="padding-top:8px">
+      <h2>2. How a path is resolved</h2>
+      <p>The reader asks for a project label, a ref and a path. The server resolves the ref once, then reads the path at that commit.</p>
+      <div class="fig"><div class="figtools"><span>▶ Play</span><span>Full screen</span><span>Copy</span></div>
+        <svg viewBox="0 0 360 120" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.4"><rect x="8" y="40" width="88" height="36" rx="6"/><rect x="136" y="40" width="88" height="36" rx="6"/><rect x="264" y="40" width="88" height="36" rx="6"/><path d="M96 58h40M224 58h40"/></g><g font-size="12" fill="currentColor" font-family="system-ui"><text x="22" y="62">project</text><text x="160" y="62">ref</text><text x="290" y="62">path</text></g></svg>
+        <i>Figure 1. A path's identity.</i></div>
+      <p>A worktree needs no root of its own. Its branch is a ref like any other, so the parent project's label serves it.</p>
+      <h2>3. What the link carries</h2>
+      <p>A link names the label, the path and, only when it is not the default, the ref. The served commit is printed on the page, so two readers can tell whether they saw the same bytes.</p>
+      <p>Drafts are badged and never linked anywhere durable.</p>
+    </div>
+    <div class="pnav"><span>Fleet</span><span>Runs</span><span>Docs</span><span>More</span></div>
+  </div>
+</div>
+
+<!-- AFTER, scroll up -->
+<div class="col">
+  <div class="cap">AFTER, a short scroll up<small>Mid-document, a scroll up brings back only the library's 48 px bar (today's behaviour). The console head returns only when the page is back at its top: it is page content, not a floating bar. 48 px above the text.</small></div>
+  <div class="phone">
+    <div class="ruler" style="height:74px">48 px</div>
+    <div class="status">12:06 · Chrome</div>
+    <div class="prog" style="width:36%"></div>
+    <div class="lbar"><span class="rh">§ 2 How a path is resolved</span><span class="tools"><span>⌕</span><span>Aa</span><span>☰</span></span></div>
+    <div class="doc" style="padding-top:8px">
+      <p>The reader asks for a project label, a ref and a path. The server resolves the ref once, then reads the path at that commit.</p>
+      <div class="fig"><div class="figtools"><span>▶ Play</span><span>Full screen</span><span>Copy</span></div>
+        <svg viewBox="0 0 360 120" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.4"><rect x="8" y="40" width="88" height="36" rx="6"/><rect x="136" y="40" width="88" height="36" rx="6"/><rect x="264" y="40" width="88" height="36" rx="6"/><path d="M96 58h40M224 58h40"/></g><g font-size="12" fill="currentColor" font-family="system-ui"><text x="22" y="62">project</text><text x="160" y="62">ref</text><text x="290" y="62">path</text></g></svg>
+        <i>Figure 1. A path's identity.</i></div>
+      <p>A worktree needs no root of its own. Its branch is a ref like any other, so the parent project's label serves it.</p>
+      <h2>3. What the link carries</h2>
+      <p>A link names the label, the path and, only when it is not the default, the ref.</p>
+    </div>
+    <div class="pnav"><span>Fleet</span><span>Runs</span><span>Docs</span><span>More</span></div>
+  </div>
+</div>
+
+<!-- Mid-scroll mechanism -->
+<div class="col">
+  <div class="cap">AFTER, mid-way (the mechanism)<small>Scrolled 140 px. The console head is an overlay on the host page, moved up by the frame's scroll position; the frame starts at the screen's top and its own content begins with a reserved inset the same height as the head. No menu is needed: nothing is hidden, only moved off screen.</small></div>
+  <div class="phone">
+    <div class="ruler" style="height:225px">201 px<br>(341 − 140)</div>
+    <div class="status">12:05 · Chrome</div>
+    <div style="position:relative;height:832px;overflow:hidden">
+      <div class="slide" style="top:-140px;background:var(--head)">
+        <div class="blk gap" style="height:8px"></div>
+        <div class="chead"><div class="hbar"><span class="tap">‹</span><div class="crumbs"><span class="tap">…</span>/<span class="tap">specs</span>/<span class="here">2026-11-03-path-identity-design.md</span></div></div></div>
+        <div class="blk" style="height:8px"></div>
+        <div class="chead truth" style="height:106px">origin/main · a1b2c3d <span class="ctl">copy commit</span> · default branch (origin/HEAD) · committed · 41.2 KiB · <span class="ctl">fetched 3m ago ↻</span></div>
+        <div class="blk" style="height:8px"></div>
+        <div class="chead acts" style="height:44px"><a>View on GitHub</a><a>Share</a><a>Export (plain view)</a></div>
+        <div class="blk" style="height:12px;background:var(--head)"></div>
+      </div>
+      <span class="arrow" style="top:96px">↑ translateY(−140px), driven by the frame's scroll</span>
+      <div style="height:116px"></div>
+      <div class="lbar"><span class="rh"></span><span class="tools"><span>⌕</span><span>Aa</span><span>☰</span></span></div>
+      <div class="blk gap" style="height:28px"><span class="lbl">28 + 1 bar gap</span></div>
+      <div class="doc">
+        <h1>Path identity design</h1>
+        <div class="by">Spec · 3 Nov 2026</div>
+        <div class="short"><b>In short</b>A document is named by its project, its ref and its path, never by where a checkout happens to sit.</div>
+        <p>This spec fixes how the reader names a document.</p>
+      </div>
+    </div>
+    <div class="pnav"><span>Fleet</span><span>Runs</span><span>Docs</span><span>More</span></div>
+  </div>
+</div>
+
+</div>
+
+<div class="mech">
+<h2>How it works with the reader frame</h2>
+<p>The reader is a separate document in a sandboxed iframe (<code>sandbox="allow-scripts"</code>, so an opaque origin). The console cannot read the frame's scroll position, and the frame's bridge today carries only <code>op</code>, <code>copy</code> and <code>changes</code> messages to the host. So this design needs one small library change, and the library's release is held.</p>
+<ol>
+<li><b>Library: a top inset.</b> A new mount option (for example <code>chrome.insetTop</code>, in px, updatable by the host) becomes extra top padding on the reader's root. The library's sticky bar sits after that space, so at open it shows below the console head and sticks to the frame's top once the inset has scrolled past. Its phone bar rule (<code>HIDE_AFTER</code> 300 px) counts from below the inset, so the bar does not hide while the head is still on screen.</li>
+<li><b>Library: a scroll signal.</b> The frame posts <code>{kind:'scroll', y}</code> over the existing port, at most once per animation frame, only while <code>y</code> is within the inset (plus one final message when it passes it, and one when it comes back). Mid-document scrolling sends nothing, so the port stays quiet.</li>
+<li><b>Console: the head becomes an overlay.</b> On a phone, when the page holds a reader, <code>.docs-screen</code> loses its padding, the frame fills the screen from the top, and the head block (crumbs, truth line, actions, banners) is absolutely positioned over the frame's top. A ResizeObserver measures it and sends its height as the inset, so a wrapping truth line or a banner simply makes the inset taller.</li>
+<li><b>Console: following the scroll.</b> On each scroll message the head gets <code>transform: translateY(-min(y, h))</code>. Past <code>h</code> it also gets <code>inert</code> and <code>visibility: hidden</code>, so focus and screen readers cannot land on controls that are off screen.</li>
+<li><b>Older library (absence permits).</b> If no inset option or scroll message exists, the console keeps today's pinned head. Nothing breaks; the design just does not engage.</li>
+<li><b>Also fixed on the way.</b> The 'Formatting…' line moves into the reserved inset area instead of pushing the frame down, so the 28 px jump at load goes away. The frame body's inferred 8 px default margin should be reset in the same library change.</li>
+</ol>
+
+<h2>What moves where</h2>
+<table>
+<tr><th>Part</th><th>Today</th><th>After</th></tr>
+<tr><td>Back, crumbs, truth line, actions (GitHub, Share, Export), banners</td><td>Pinned above the frame, about 256 px forever</td><td>Same content, same layout, overlaid on the frame's top and scrolled away with the document</td></tr>
+<tr><td>Library bar (search, Aa, contents)</td><td>Hides on scroll down, returns on scroll up</td><td>Unchanged, but starts below the head's inset</td></tr>
+<tr><td>'Formatting…' line</td><td>In flow, then removed (28 px jump)</td><td>Drawn inside the reserved inset; no jump</td></tr>
+</table>
+
+<h2>What it costs</h2>
+<ul>
+<li>A library change (inset option, scroll message, HIDE_AFTER offset, body margin), so it waits for the held library release, then a pin bump in the console.</li>
+<li>Console work: overlay layout on phones, a ResizeObserver, the scroll listener, inert handling, and a fallback for older libraries. Tests for each guard.</li>
+<li>Messages cross a port, so the head can trail the text by about one frame during a fast fling on a 120 Hz screen: a few px of visible lag at the head's lower edge.</li>
+</ul>
+
+<h2>What the user loses</h2>
+<ul>
+<li>At open, nothing is gained: about 341 px still sit above the title. This angle only helps once reading starts (0 to 48 px above the text, instead of 256 to 304).</li>
+<li>Mid-document, back, Share, GitHub and Export are not one tap away. The user scrolls to the top (or uses the phone's back gesture for back). A scroll up returns only the library bar.</li>
+<li>A swipe that starts on the head lands on the console page, not the frame, so dragging on the head does not scroll the document. The head is only on screen near the top, so this matters for the first swipe.</li>
+<li>Can be combined with a compact head (another variant) to also fix the open state.</li>
+</ul>
+</div>
+</body>
+</html>
