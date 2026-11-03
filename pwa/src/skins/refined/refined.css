@@ -216,6 +216,15 @@
   border-radius: 0;
   white-space: nowrap;
 }
+/* The Waiting on you tab (desktop-polish PL5a) is 127px wide, and the bar's line never wraps: under 1000px the tabs' side
+   padding is 8px, not 12, which gives back 48px over six tabs (measured at 900: the line ran 32px past its frame, `+ New
+   session` cut; at 930, 2px). The tabs stay the line's full height, so a finger still lands on each. */
+@media (max-width: 999px) {
+  .ref-tab {
+    padding-left: var(--sp-2);
+    padding-right: var(--sp-2);
+  }
+}
 /* The 2px the underline takes at the foot is given back at the head, so the current tab's word does not move. */
 .ref-tab[aria-current='page'] {
   padding-top: 2px;
@@ -278,6 +287,13 @@
   flex: none;
   align-items: center;
   gap: var(--sp-2);
+}
+/* Five doors (Waiting on you joined them, PL5a) and the wordmark need 326px with an 8px gap, and a 360 phone's row is 320:
+   the doors sit 4px apart there, each still a 44px square. From 381px the gap is 8px as before. */
+@media (max-width: 380px) {
+  .ref-phone-doors {
+    gap: var(--sp-1);
+  }
 }
 /* A finger's square: the glyph centred, the badge pinned to its corner so a three-digit count never widens the row.
    The badge starts at the glyph's middle, so a "99+" covers only the glyph's top-right corner (the glyph is the door's

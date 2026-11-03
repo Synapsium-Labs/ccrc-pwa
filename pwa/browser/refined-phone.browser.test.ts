@@ -146,7 +146,7 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
           const row = document.querySelector<HTMLElement>('.ref-phone-row')!;
           const rr = row.getBoundingClientRect();
           const parts = [row.querySelector<HTMLElement>('[data-wordmark]')!, ...row.querySelectorAll<HTMLElement>('[data-command]')];
-          if (parts.length !== 5) out.push(`the row holds ${parts.length} parts, not the wordmark and four doors`);
+          if (parts.length !== 6) out.push(`the row holds ${parts.length} parts, not the wordmark and five doors`);
           const mid = (el: HTMLElement): number => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
           const line = mid(parts.at(-1)!);
           for (const p of parts) {

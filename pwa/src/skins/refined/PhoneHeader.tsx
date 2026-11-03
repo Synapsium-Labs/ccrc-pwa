@@ -1,5 +1,5 @@
 // Refined's phone header (W2 Task S5, D-5471; spec §5.3, Fleet and Shell, phone rows), the fleet column's head on a
-// phone. One row: the wordmark, then four icon doors (Inbox, Runs, Docs, Settings), each a registry command
+// phone. One row: the wordmark, then five icon doors (Waiting on you, Inbox, Runs, Docs, Settings), each a registry command
 // (`commandDoor`, the plan's door table), each named by its word, a badged one by its count too ("Inbox, 2 waiting for
 // you", "Runs, 1 needs you": only what waits on the operator, T2d, D-6330).
 // Under it one mono readout, `fleetSummary`'s, and then the accounts strip: a group of lane cards (a row for each window
@@ -7,7 +7,7 @@
 // at the end of the strip, the `go-accounts` door. The strip folds to its freest four lanes with a "+n more" control
 // before All accounts (the fold is the strip's own, stripFold.ts); one tap shows the lanes it folds away in a panel.
 //
-// DOCS, NOT ACCOUNT, among the four doors: the strip's All accounts is the phone's `go-accounts` door, one tap away
+// DOCS, NOT ACCOUNT, among the five doors: the strip's All accounts is the phone's `go-accounts` door, one tap away
 // under the readout, and a phone must keep Docs within two taps (S17). The bell is Settings' (its notifications section
 // renders it), one tap from the Settings door. Every count comes from a shared function (`fleetSummary`,
 // `useNavBadges`, `poolLagText`); this file holds markup and its own class names only.
