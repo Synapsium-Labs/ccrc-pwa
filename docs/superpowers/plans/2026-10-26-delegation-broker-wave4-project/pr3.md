@@ -68,11 +68,7 @@ plan and the programme ledger; this PR edits neither.
     measurement. There is no second file read, no changed retained-set membership, and no weakening of byte-for-byte validation.
 - **D-7015** — `unused`
 - **D-7016** — `unused`
-- **D-7869** — `watcher-port-retention-members`: main narrowed the watcher's store port in #2031 and #2059 after PR3 branched.
-  PR3 adds its two synchronous retention methods, `countDelegationEventsAtOrBelow` and `deleteDelegationEventsBetween`, to the
-  existing sorted `WatcherCoordMember` union in `server/src/coord/ports.ts`, as that file requires for a newly reached member.
-  The full rings gate first measured both missing-member failures in `rings/watcher-store-port.test.ts`: the scanner's typecheck
-  and the exact reached-member census. The correction changes no guard, other member or port, and adds no cast or fallback.
+D-7869 is defined in the plan's Deviations found, not here: the floor guard reads definitions from top-level plans only (14240).
 
 ## Phase B verification
 
