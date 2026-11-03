@@ -12,6 +12,7 @@ import type {
 import { isDocsFailureWord, type DocsClientSlot } from './failures';
 import type { ImagePin } from './docsLinks';
 import type { ShareFields, ShareNote, ShareNoteLine, ShareRefusal } from './share';
+import type { ExportMissing, ExportPlain } from './export/policy';
 
 /** One sentence per docs failure word (spec 4.7), at least 20 characters each (M4.F1). */
 export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
@@ -603,3 +604,67 @@ export function closedWorktreeLabel(w: { readonly path: string; readonly class: 
       return DOCS_HEAD_TEXT.worktreeOther;
   }
 }
+
+// ===== Export (spec 4.7, 4.17; native Docs reader W5, Export) =====
+// Export's words: the sheet's own, the file's fixed sentences, the provenance's labels and the two closed maps. Every
+// `{field}` is a count, a commit, a closed label, a badge's text, a served ref or a time; never a path on the fleet box,
+// a failure's detail, or a document's text.
+
+/** The export sheet's own words and the sentences the file carries (spec 4.17). `{k}`/`{s}` count; `{error}` is an
+ *  error's `name` only. `banner` is spec 4.17's drafts banner, `{label}` the closed worktree label. */
+export const EXPORT_TEXT = {
+  title: 'Export',
+  building: 'Building…',
+  save: 'Save {name} ({size})',
+  couldNotStart: 'Export could not start ({error}).',
+  failed: 'Export failed ({error}).',
+  tooLarge: 'Too large to export; use Download.',
+  retry: 'Retry',
+  deferred: '{k} image{s} not loaded; tap Load image first.',
+  provenance: 'Where this copy came from',
+  notListed: 'not in this listing at {short}',
+  missing: '{k} image{s} not included.',
+  plainBlocks: '{k} code block{s} left plain: {sentence}.',
+  colouringDropped: 'Code colouring was dropped to fit the file size limit.',
+  draftNotIncluded: '{badge} in {label}; not included.',
+  plainView: "Docs' plain view; the rich view's layout is not kept.",
+  banner: 'Draft, not committed. This copy includes uncommitted changes from {label} on {branch}. Based on commit '
+    + '{commit} ({served}). It is not on GitHub. Content fingerprint sha256:{fp}. Read {time}.',
+  bannerImages: 'It embeds {k} uncommitted image{s}.',
+} as const;
+
+/** The provenance block's labels (spec 4.17 "Provenance"); the same facts are written as `ccrc:*` metas. */
+export const EXPORT_FACT = {
+  project: 'Project',
+  path: 'Path',
+  served: 'Served',
+  commit: 'Commit',
+  link: 'On GitHub',
+  committedLink: 'Committed version on GitHub',
+  noLink: 'No GitHub link',
+  source: 'Source',
+  exported: 'Exported',
+  view: 'View',
+} as const;
+
+/** A placeholder's sentence, one per class of missing image (spec 4.17; M4.EX5): closed, no `{field}`. */
+export const EXPORT_MISSING_SENTENCE: Record<ExportMissing, string> = {
+  'refused': 'Image not included: the page did not show it.',
+  'external': 'Image not included: it is on another site.',
+  'deferred': 'Image not included: it was not loaded on the page.',
+  'failed': 'Image not included: it did not load.',
+  'timed-out': 'Image not included: it was still loading.',
+  'over-size': 'Image not included: the file had no room left for it.',
+};
+
+/** Why a class of code block is plain (spec 4.17; M4.EX18): closed, no `{field}`; `EXPORT_TEXT.plainBlocks` puts the
+ *  count beside it. */
+export const EXPORT_PLAIN_SENTENCE: Record<ExportPlain, string> = {
+  'over-cap': 'over the block size limit',
+  'page-ceiling': 'past a page highlighting limit',
+  'timeout': 'highlighting took too long',
+  'too-large': 'highlighted output too large',
+  'failed': 'highlighting failed',
+  'no-worker': 'this browser has no highlight worker',
+  'part1-bounds': 'refused by the page highlight bounds',
+};
