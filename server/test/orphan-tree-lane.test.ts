@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { collectOrphanTree } from '../src/coord/collectOrphanTree.js';
 import { OrphanTreeSweep, type OrphanSweepDeps } from '../src/orphanTreeSweep.js';
 import {
-  ORPHAN_LICENCE_MS, ORPHAN_CENSUS_MS, ORPHAN_CENSUS_PRESSURE_MS, ORPHAN_RETRY_MS, orphanCensusRetryAt, orphanCensusDue, orphanInsideVerdict, orphanLicence,
+  ORPHAN_LICENCE_MS, ORPHAN_CENSUS_MS, ORPHAN_CENSUS_PRESSURE_MS, ORPHAN_RETRY_MS, ORPHAN_AUDITS_PER_PASS, ORPHAN_AUDITS_PER_PASS_PRESSURE, orphanPressure, orphanCensusRetryAt, orphanCensusDue, orphanInsideVerdict, orphanLicence,
   orphanCoordinatorSet, orphanTruncatedRow, orphanTruncatedWaitMs, parseOrphanAudit, parseOrphanCensus,
 } from '../src/orphanTreeLane.js';
 import { readDiskHealth } from '../../shared/disk.js';
@@ -275,6 +275,44 @@ describe('gates', () => {
       r.advance(1); await r.sweep.pass(); n += 1;
       expect(censuses(r), `at ${wait} min`).toBe(n);
     }
+  });
+
+  it('under pressure the truncated back-off stops at the hourly cadence: 15, 30, 60, then 60 min', async () => {
+    const r = rig(); r.pressured(true);
+    r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    r.truncate(true);
+    await r.sweep.pass();
+    expect(censuses(r)).toBe(1);
+    let n = 1;
+    for (const wait of [15, 30, 60, 60]) {
+      r.advance(wait * MIN - 1); await r.sweep.pass();
+      expect(censuses(r), `before ${wait} min`).toBe(n);
+      r.advance(1); await r.sweep.pass(); n += 1;
+      expect(censuses(r), `at ${wait} min`).toBe(n);
+    }
+  });
+
+  it('under pressure the census is hourly, and not otherwise', async () => {
+    for (const p of [true, false]) {
+      const r = rig(); r.pressured(p); r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+      await r.sweep.pass(); r.advance(ORPHAN_CENSUS_PRESSURE_MS); await r.sweep.pass();
+      expect(censuses(r), `pressure ${p}`).toBe(p ? 2 : 1);
+    }
+  });
+
+  it('under pressure a pass offers 4 learning audits, else 2', async () => {
+    for (const p of [true, false]) {
+      const r = rig(); r.pressured(p);
+      for (const c of 'abcde') r.add(`/p/.claude/worktrees/${c}`, 'claude', clean(c));
+      await r.sweep.pass();
+      expect(r.calls.filter((c) => c[1] === '--orphan-hex')).toHaveLength(p ? ORPHAN_AUDITS_PER_PASS_PRESSURE : ORPHAN_AUDITS_PER_PASS);
+    }
+  });
+
+  it('orphanPressure is true only on a held pressure block; null is unknown and reads as none', () => {
+    expect(orphanPressure(null)).toBe(false);
+    expect(orphanPressure({ pressure: false })).toBe(false);
+    expect(orphanPressure({ pressure: true })).toBe(true);
   });
 
   it('a whole census resets the back-off', async () => {

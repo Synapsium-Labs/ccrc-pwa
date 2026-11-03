@@ -4,7 +4,7 @@
 // audits of one UNCHANGED token stand at least `ORPHAN_LICENCE_MS` apart and the arming marker stands. Every doubt keeps
 // the tree. The L3 executor (`coord/collectOrphanTree.ts`) asks ccd; the L4 driver (`orphanTreeSweep.ts`) holds the
 // memory and the timer; neither decides anything this file decides.
-import type { DiskOrphanTrees } from '../../shared/disk.js';
+import type { DiskHealth, DiskOrphanTrees } from '../../shared/disk.js';
 import { isRegistryId, type OrphanToken } from '../../shared/api.js';
 
 /** The census runs this often, and hourly while the fleet is in pressure mode. */
@@ -234,6 +234,10 @@ export type OrphanMemory = ReadonlyMap<string, OrphanTreeMemory>;
 export type OrphanCensusNext =
   | { readonly kind: 'after'; readonly mono: number }
   | { readonly kind: 'at'; readonly mono: number };
+
+/** Whether the lane is in pressure mode (D-7865; #1565): the disk alarm's held block says a filesystem is critical.
+ *  `null` is UNKNOWN (the alarm has not swept yet) and reads as no pressure: the 6 h side, which fails toward keeping. */
+export const orphanPressure = (block: Pick<DiskHealth, 'pressure'> | null): boolean => block?.pressure === true;
 
 /** The next census is due at once before the first; after a whole census, one cadence later (shorter under pressure);
  *  on a pending retry, at its stored instant whatever the pressure. */
