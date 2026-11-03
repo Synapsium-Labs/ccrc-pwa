@@ -35,7 +35,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5c | 5, landed state | `ccd pr-state --project <p> --pr <n>`: its five words, its train proof and its capability token; the server's words, reader and capability-gated brand; wave 3d's F1 and F6 text and review 1109's paged rules read | ccd (fleet box first), server | wave 5a | — | merged 2026-10-31 (#2017 `a77811e5`; `docs/superpowers/plans/2026-10-30-landing-order-wave5c-pr-keyed-pr-state.md`, D-7593 to D-7599, and its departures note, D-7600 to D-7604; Decisions, 2026-10-31 07:06); reaches the fleet box with the next release the operator rolls out |
 | 5d | 5, the lander key | the radar's conf accepts `lander=coordinator` or `none`, mirrored to a marker the server reads; and D-7546's restatement, wave 5b's dropped Task 2 | ccd (fleet box first), skills | — | #2029 | run 1311 (the run's wave 17); review 1313 closed at `36f9897d2`, fix round 1 (Decisions, 2026-11-01 18:39); review 1327 closed at `40cfb6752`, fix round 2 (Decisions, 2026-11-02 22:35); review 1357 clean at `307e47b85`, accepted, departures D-7788 to D-7790 (Decisions, 2026-11-02 23:55); merged 2026-11-03 (`43e11b36`, release v0.0.921; Decisions, 2026-11-03 03:38), run 1311 closed done; plan `docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`, D-7635 to D-7647; the fleet box runs it (v0.0.926), and `lander=coordinator` is written for this project (Decisions, 2026-11-03 06:27) |
 | 5e | 5, the line's core | `landing_entries` and `landing_projects`, an entry pinned at `advance → merging`, the ejection that records its base, the second-ejection notice, the order and hold decider, and the coordinator's read of the line (`GET /api/landing`) | server, skills | wave 5a | — | merged 2026-10-31 (#2020 `4fc83e57`; `docs/superpowers/plans/2026-10-31-landing-order-wave5e-landing-line-core.md`, D-7610 to D-7627, and its departures note, D-7628 to D-7633; Decisions, 2026-10-31 15:17) |
-| 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | — | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); the operator approved its CLAUDE.md amendments (Decisions, 2026-11-03 06:27); run 1312 is dispatched once the plan is on `main` |
+| 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | — | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); the operator approved its CLAUDE.md amendments (Decisions, 2026-11-03 06:27); run 1312 dispatched 2026-11-03 before the plan reached `main`, on the operator's ruling (Decisions, 2026-11-03 16:14) |
 | 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | to plan |
 | 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan |
 | 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | — | to plan |
@@ -1854,6 +1854,22 @@ carries it (spec §5.1, amended 2026-09-24).
     Task 1 already names. The README's auth paragraph was restructured for the programme-ledger routes (#2100,
     #2108), so every count in the plan's source-derived baseline is re-measured before use. Another programme holds
     `README.md` under a claim, so the worker takes its own claims before it edits that file.
+- **2026-11-03 16:14 — run 1312 (5f) dispatched before its plan reached `main`, on the operator's ruling.**
+  - **This PR's landing stopped.** At `88ea95c58` three required checks passed and `test (server)` was red: one test
+    in `ccrc-update-fetch.test.ts` timed out at 20 s in `server 10/12`. It was not this docs-only PR's own, and the
+    same test failed the same way on another programme's docs-only ledger PR. The one rerun §5b allows went red the
+    same way, so the landing stopped (`red-unreachable`) and nothing was enqueued. The bounded wait was already spent
+    when the coordinator watched the checks once more; that watch broke §5b's rule, and it was reported.
+  - **The operator's ruling.** Wait for the CI fix and then land this PR; and dispatch run 1312 now, with the plan
+    read from this PR's head (`88ea95c58`, the plan's blob `e519df1c`).
+  - **The dispatch.** Run 1312 went to `ccrc-pwa-keen-mesa`, a fresh child from `main`, with five items (Tasks 1 to 4
+    and the gate) and the worker row's routing, unchanged from 5e: opus/high, sonnet/high subagents, workflow off,
+    compact 40. No execution block is reserved, so departures come back as `D-TBD`. The worker merges `main` once
+    the plan is there, before its gate, and sends no wave-done until then. The first send was refused `oversize` (the
+    brief and the kickoff prefix came to more than 8192 bytes), so the brief was condensed and sent again.
+  - **The CI break had passed by then.** `main` now carries `7daaf3792` (#2187): a docs-only change runs only the
+    checks that can see it, and pull-request runs since have been green. This PR is pushed again for a fresh run,
+    and lands through the queue if the verdict allows.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -2424,5 +2440,5 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   carried test gap (to 5i); departures D-7788 to D-7790. The plan is
   `docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`. The fleet box runs it
   (v0.0.926), and `lander=coordinator` is written for this project (Decisions, 2026-11-03 06:27).
-- **5f is approved for dispatch** (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, run 1312; Decisions, 2026-10-31 20:00 and 2026-11-03 06:27). The operator approved its exact `CLAUDE.md` amendments. The plan publishes with this ledger's PR, and run 1312 is dispatched once it is on `main`.
+- **5f is dispatched** (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, run 1312; Decisions, 2026-10-31 20:00, 2026-11-03 06:27 and 16:14). The operator approved its exact `CLAUDE.md` amendments. The plan publishes with this ledger's PR; the worker merges `main` once it is there, before its gate.
 - **5g to 5k follow in order**, each planned against `main` as it then stands. 5h also waits until the fleet box runs 5c.
