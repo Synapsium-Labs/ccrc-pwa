@@ -8,7 +8,7 @@ The first visibility release is designed in `docs/superpowers/specs/2026-11-02-d
 
 Separately, the operator authorized obtaining the exact previously refused test-launcher inspection request from retained evidence and preparing a precise safety-disposition request. That instruction does not authorize retrying the refused inspection, reading forbidden account/secret paths or weakening guards. The original nonzero test execution remains unresolved until causally explained and legitimately verified.
 
-PR3 retention/recovery, PR4 hook/installer/doctor production and verification, the detailed Wave 5 adoption/promotion plan and implementation, and ordinary lifecycle/review/CI/native-queue obligations remain outstanding. Existing ownership and worker holds are not released by the scope decision. Elapsed-time soaks remain waived, not passed.
+Wave 4 has since landed in full: PR4 #1619 and PR3 #2191 merged on 2026-11-03, and the wave 4 ledger fold is #2233. The Wave 5 adoption/promotion plan is proposed in #2167 and awaits the operator; its implementation, and the ordinary lifecycle, review, CI and native-queue obligations, remain outstanding. Existing ownership and worker holds are not released by the scope decision. Elapsed-time soaks remain waived, not passed.
 
 ## Current operator amendment — 2026-10-28
 
