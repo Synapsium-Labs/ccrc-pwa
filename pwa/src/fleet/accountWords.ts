@@ -805,3 +805,147 @@ export const compromiseSteps = {
     `On the rebuilt box: rotate the agent token${codex ? " and every Codex lane's gateway key" : ''}, then add each lane's `
     + 'credential again (Mint a new token, Sign in again, Mint a replacement).',
 } as const;
+
+// ── Mint a long-lived token and Sign in with Claude (accounts plan Task A22, D-7849; spec §6.1–§6.3, §12.3–§12.5) ─────
+// Every sentence the sign-in says. Each terminal state says what did NOT happen, and each is chosen by a code: the
+// helper's state, or a route's `error` word, never the response's text. NO DURATION IS WRITTEN HERE: every deadline,
+// countdown and offline sentence reads the attempt's `expiresAt` (spec §3.7, its one source).
+
+/** The sign-in methods' primary on the method frame: the lane is added, then the sign-in starts. */
+export const ADD_AND_SIGN_IN = 'Add lane and sign in';
+
+/** A wall-clock time as the sentences show it: 24-hour `HH:MM` on this device's clock. */
+export function clockHM(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** The countdown beside the code field: the deadline's clock and what is left of it, both read from `expiresAt`. */
+export function countdownWords(expiresAt: number, now: number): string {
+  const left = Math.max(0, Math.ceil((expiresAt - now) / 1000));
+  return `Expires at ${clockHM(expiresAt)} · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} left`;
+}
+
+/** Offline mid-attempt (spec §12.5): the time is the LAST-KNOWN `expiresAt`, never one computed from a duration. */
+export const signInOffline = (expiresAt: number): string =>
+  `The server isn't answering. The sign-in keeps running on the fleet host until ${clockHM(expiresAt)}. Reopen this when you're back online.`;
+
+/** The run frame's ledger for the sign-in (spec §6.2 steps 3–8). */
+export const SIGN_IN_LEDGER = {
+  creating: (id: string): string => `… creating ${id}`,
+  starting: '… starting the sign-in',
+  waiting: '… waiting for your code',
+  exchanging: '… exchanging the code',
+  signedIn: '✓ Signed in on the fleet host',
+  minted: '✓ Token minted and stored on the fleet host',
+  startUnknown: "… the fleet host didn't answer in time; reading the sign-in",
+  signedOut: (id: string, removed: boolean): string =>
+    (removed ? `✓ ${id} signed out on this box` : `✓ ${id} had no sign-in on this box to remove`),
+} as const;
+
+/** The URL card (spec §6.2 step 5, §6.3, §12.4). */
+export const OPEN_TO_SIGN_IN = 'Open claude.ai to sign in';
+export const OPEN_LINK = 'Open';
+export const COPY_LINK = 'Copy link';
+export const COPIED = 'Copied';
+/** Which account approves is the browser's claude.ai session (spec §6.3, §12.4): a private tab chooses another. */
+export const privateTabLine = (method: 'login' | 'setup-token'): string => (method === 'login'
+  ? 'Paste it into a private tab to sign in as a different account.'
+  : 'Paste it into a private tab to choose the account.');
+export const SIGN_IN_WITH = 'Sign in with the account this lane should use.';
+export const COME_BACK = 'Come back here to paste the code.';
+export const WHAT_THIS_GRANTS = 'What this grants';
+/** The scope Remote Control rides, marked in the disclosure (09-05 §12.6). */
+export const REMOTE_CONTROL_SCOPE = 'user:sessions:claude_code';
+export const REMOTE_CONTROL_MARK = 'Remote Control';
+export const CODE_FIELD_LABEL = 'Paste the code claude.ai shows you';
+export const SEND_CODE = 'Send code';
+export const CANCEL_SIGN_IN = 'Cancel';
+export const START_AGAIN = 'Start the sign-in again';
+
+/** The sign-in's terminal states (spec §6.2), each saying what did not happen. */
+export type SignInEndKind = 'expired' | 'code-refused' | 'untrusted' | 'cancelled' | 'unknown' | 'lost' | 'failed'
+  | 'node-changed';
+export const SIGN_IN_END: { readonly [K in Exclude<SignInEndKind, 'failed'>]: (id: string) => string } = {
+  expired: () => 'The sign-in timed out. Nothing was signed in. The lane exists and is off.',
+  'code-refused': () => "claude.ai didn't accept that code. Codes work once and expire quickly. Start the sign-in again for a fresh one.",
+  untrusted: () => "The sign-in link on the fleet host didn't look like claude.ai, so it isn't shown. Nothing was signed in. Start again, or check the fleet host.",
+  cancelled: () => 'Sign-in cancelled. Nothing was stored. The lane is still there, off.',
+  unknown: (id) => `The fleet host didn't answer in time, so whether the sign-in for ${id} started is unknown. Nothing was signed in here. Start the sign-in again.`,
+  lost: (id) => `The server no longer holds the sign-in for ${id}, so whether it finished is unknown. The lane is still there, off. Start the sign-in again.`,
+  'node-changed': () => 'The fleet host answering now is not the one the sign-in started on, so it was stopped. Nothing was signed in.',
+};
+/** The helper ended the attempt `failed` before any code was sent: its word when it gave a plain one. */
+export const signInFailed = (failure: string | undefined): string =>
+  `The sign-in stopped on the fleet host before a code was sent${failure !== undefined && CODE_RE.test(failure) ? ` (${failure})` : ''}. Nothing was signed in. The lane is still there, off.`;
+
+type SignInStartWord = Extract<RouteRefusal,
+  'auth-in-progress' | 'auth-unsupported-here' | 'method-unmeasured' | 'step-up-required' | 'lane-busy' | 'unmeasured'
+  | 'node-changed' | 'not-found' | 'unsupported' | 'insecure-origin' | 'auth-off' | 'unavailable'>;
+const SIGN_IN_START_TEXT: Readonly<Record<SignInStartWord, (id: string, reason: string | undefined) => string>> = {
+  'auth-in-progress': (id) => `A sign-in for ${id} is already running on the fleet host. Nothing new was started.`,
+  'auth-unsupported-here': (_id, reason) =>
+    `This fleet host can't run a sign-in${reason !== undefined ? ` (${reason})` : ''}. Nothing was started. Paste a token instead.`,
+  'method-unmeasured': () => "This sign-in hasn't been measured on a fleet host yet, so nothing was started.",
+  'step-up-required': () => "Confirm it's you again, then start the sign-in again. Nothing was started.",
+  'lane-busy': (id) => `${id} is busy with another account change. Nothing was started. Try again in a moment.`,
+  unmeasured: () => "The server can't tell which fleet host is answering right now, so nothing was started. Try again in a moment.",
+  'node-changed': () => SIGN_IN_END['node-changed'](''),
+  'not-found': (id) => `${id} is no longer on this box's roster.`,
+  unsupported: () => DOOR_NARROWED.unsupported.text,
+  'insecure-origin': () => "Accounts can't be changed over plain HTTP. Nothing was started.",
+  'auth-off': () => DOOR_NARROWED['gate-dark'].text,
+  unavailable: () => "The fleet host couldn't run it: nothing was started.",
+};
+/** A start refused with a word (spec §13.1's `auth/start` refusals), from the code alone. `reason` is the body's
+ *  `reason` (`auth-unsupported-here`), printed only when it is a plain word. */
+export function signInStartRefusal(id: string, word: string, reason: string | undefined): string {
+  const r = reason !== undefined && CODE_RE.test(reason) ? reason : undefined;
+  if (Object.hasOwn(SIGN_IN_START_TEXT, word)) return SIGN_IN_START_TEXT[word as SignInStartWord](id, r);
+  return CODE_RE.test(word) ? `The fleet host refused (${word}): the sign-in was not started.` : 'The fleet host refused: the sign-in was not started.';
+}
+
+/** `auth/code`'s answers that leave the attempt standing, each a notice under the code field. */
+export const CODE_NOTICE = {
+  shape: "That doesn't look like the code claude.ai shows. Nothing was sent: paste it again.",
+  notYours: 'This sign-in was started on another device, and only that device can send its code. Cancel it here, or finish it there.',
+  unknown: "The code may have reached the fleet host; waiting for its answer. It isn't sent again.",
+  unmeasured: "The server can't tell which fleet host is answering right now, so the code wasn't sent. Paste it again in a moment.",
+  refused: (word: string | undefined): string => (word !== undefined && CODE_RE.test(word)
+    ? `The fleet host refused (${word}): the code wasn't sent. Paste it again.`
+    : "The fleet host refused: the code wasn't sent. Paste it again."),
+} as const;
+
+/** Cancel was refused and the attempt stands, so Cancel stays. */
+export const cancelRefused = (word: string | undefined): string => (word !== undefined && CODE_RE.test(word)
+  ? `The fleet host couldn't stop the sign-in (${word}). Press Cancel again.`
+  : "The request didn't complete, so the sign-in may still be running. Press Cancel again.");
+
+/** The result frame's wrong-account act (spec §6.2 step 10, §12.4). */
+export const WRONG_ACCOUNT = 'Not the account you meant?';
+export const SIGN_OUT_RESTART = 'Sign this lane out and start again';
+export const signOutRefused = (id: string, word: string | undefined): string => (word !== undefined && CODE_RE.test(word)
+  ? `The fleet host refused (${word}): ${id} was not signed out, and no new sign-in was started.`
+  : `The request didn't complete, so whether ${id} was signed out is unknown. No new sign-in was started.`);
+export const STEP_UP_AGAIN_SIGN_OUT = "Confirm it's you again, then press it again. Nothing was signed out.";
+
+/** The mint's stated identity (spec §6.3, Q5): optional, 1 to 120 characters, saved with `set {stated}`. */
+export const STATED_LABEL = 'Which account did you just approve?';
+export const STATED_NOTE = "Optional. A long-lived token can't say which account approved it, so the lane shows what you write here.";
+export const SAVE_STATED = 'Save';
+export const STATED_PROBLEM = 'One line of text, at most 120 characters.';
+export const statedRefused = (word: string | undefined): string => (word !== undefined && CODE_RE.test(word)
+  ? `The fleet host refused (${word}): nothing was saved.`
+  : "The request didn't complete, so whether it was saved is unknown.");
+
+/** Discard after a terminal state (spec §6.2): its answer. */
+export const discardedDone = (id: string): string => `${id} is discarded.`;
+export const STEP_UP_AGAIN_DISCARD = "Confirm it's you again, then press it again. Nothing was discarded.";
+/** The add of a sign-in lane was refused `step-up-required` (spec §3.2). */
+export const STEP_UP_AGAIN_ADD = "Confirm it's you again, then add the lane again. Nothing was added.";
+/** What "Sign this lane out and start again" does, said before it runs (N5's sign-out, then a new attempt). On a token
+ *  lane the sign-out finds no sign-in, and the new mint's token replaces the lane's once it is approved. */
+export const signOutConfirm = (id: string, method: 'login' | 'setup-token'): string => (method === 'login'
+  ? `${id} is signed out on the fleet host, then a new sign-in starts. Sign in with the account you meant.`
+  : `A new mint starts for ${id}; its token replaces the lane's once you approve it with the account you meant.`);
+export const KEEP_IT = 'Keep it';

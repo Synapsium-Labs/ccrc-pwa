@@ -1,0 +1,69 @@
+# Accounts connect A22: Mint a long-lived token (the default) and Sign in with Claude
+
+**Goal:** plan Task A22 of `2026-10-18-accounts-connect.md` (spec §6.1–§6.3, §12.3–§12.5; D-5514, Q1). The connect sheet runs the two sign-in methods end to end over A21's routes: the lane is added with no credential, the sheet starts an attempt, shows the URL the server accepted with the code field, sends the one code, and on `done` runs the check into the result frame, which shows the identity, "Not the account you meant? Sign this lane out and start again", the mint's stated account, Turn it on, and the compromise disclosure for a token lane. `ACCOUNT_CAPS` gains `account-auth-v1`, which A21 held back for this task. OA1's record (`2026-11-01-accounts-oa1-record.md`) is applied where this task reads it: the sign-in host and the `login` code shape are measured; the setup-token code shape is pending, so the sheet checks the spec's provisional shape (`authCodeShapeOk`, A21's); G23 is unmeasured, so the sign-out says only what was done on the fleet host and nothing about the provider. §9, §3.3 and the Codex device code are not read by this task.
+
+**Before this change:** the connect sheet ran Anthropic Paste only (`sheetRuns`). `connect.caps` never named `account-auth-v1`, so Mint and Sign in were narrowed in place with "Needs a fleet update", and the sheet opened on Paste. The PWA had no client for the sign-in routes.
+
+**Change:**
+- `shared/api.ts`: `ACCOUNT_CAPS` is `['account-v2', 'account-auth-v1']` (an in-place edit; no line moves). `ACCOUNT_AUTH_CAP`'s comment and `server/src/accounts/routes.ts`'s say so.
+- `pwa/src/lib/api.ts`: `accountAuthStart`, `accountAuthStatus`, `accountAuthCode`, `accountAuthCancel`, `accountSet` and `accountSignOut` (`credential {signOut: true}`).
+- `pwa/src/accounts/connectFlow.ts`: the sheet runs `anthropic:setup-token` and `anthropic:login`; `isSignInMethod`, and the sign-in's pure decisions: `readStatus` (a status answer's reading), `readStatusRefusal` (a status read's refusal word) and `grantScopes` (the scopes of the URL the server accepted).
+- `pwa/src/accounts/CodeField.tsx` (new): the code field.
+- `pwa/src/accounts/RunFrame.tsx`: the waiting line's amber pulse (`data-wait`), `UrlCard` and `Countdown`.
+- `pwa/src/accounts/ResultFrame.tsx`: the sign-in part of the result (the wrong-account act the host draws, and the mint's stated account).
+- `pwa/src/accounts/ConnectSheet.tsx`: the sign-in flow (below), with its routes injectable as `signInClient`.
+- `pwa/src/accounts/MethodFrame.tsx`: its comment (the sign-in methods ask for nothing on the method frame).
+- `pwa/src/fleet/accountWords.ts`: every sentence the sign-in says, each terminal state's from its code.
+- `pwa/src/fleet/fleet.css`: the URL card, the countdown, the pulse, the grants disclosure, the code row and the wrong-account act.
+
+**Tests:**
+- New: `pwa/test/sign-in-sheet.test.tsx` (Mint the default when `account-auth-v1` is present; the add with no credential, then the start; the URL card per width and its truthful Copy; the untrusted answer; the countdown from `expiresAt` and the source scan; the expiry; each terminal state from its code; a refused start; a start whose answer was lost but whose attempt the server kept; Start again and Discard; Cancel in every non-terminal frame, and a cancel the box refused; offline mid-attempt; the live region; Mint end to end with the stated account and Turn it on; a code off its shape; Sign in end to end with the identity and the sign-out and restart), `pwa/test/code-field.test.tsx` (the field's attributes; a pasted code trimmed and sent once and the field disabled; Enter; the host's hold; never in a store or storage, nor in the markup), and `pwa/browser/sign-in-sheet.browser.test.ts` (Step 4's sixteen cells).
+- Extended: `server/test/accounts-route-lanes.test.ts` (`connect.caps` offers `account-auth-v1`, in `ACCOUNT_CAPS`' order, and a fleet advertising it alone still has no account ops).
+- Unchanged and green: `pwa/test/connect-sheet.test.tsx` and `pwa/browser/connect-sheet.browser.test.ts`, whose fixtures advertise `account-v2` alone, so Paste is still the default there with Mint and Sign in narrowed.
+
+**Mutation table (run):**
+
+| Mutant | Suite | Red |
+|---|---|---|
+| Sign in first in the radio (`PROVIDERS.anthropic.connect` reordered) | sign-in-sheet | "Mint is selected by default when `account-auth-v1` is present", and three walks that pick the default |
+| the link kept from the last answer after an untrusted one (`finish` keeps the attempt) | sign-in-sheet | "an `auth-url-untrusted` answer shows its sentence and no link", and four terminal-state cases |
+| a hard-coded 10-minute countdown (`Date.now() + 600_000` in `Countdown`) | sign-in-sheet | "the countdown reads `expiresAt` and no duration is hard-coded" (the source scan) |
+| Send stays enabled after a send | code-field | "a pasted code is trimmed and sent once; the field is disabled after Send", "a typed code is trimmed too…" |
+| the code field kept while offline | sign-in-sheet | "offline mid-attempt, …" |
+| the offline time computed as now + 10 min | sign-in-sheet | the same case |
+
+Every new case was also run green against the unmutated tree.
+
+**Per width × skin × mode (Step 4):** `pwa/browser/sign-in-sheet.browser.test.ts` measures this in a real Chrome over the production build, with the fleet's routes answered by its fixture. Each cell walks the mint: the method radio, the URL card, the countdown, the code field (with the keyboard up below 900), a terminal state (Cancel), then Start again, a code and `done` into the result frame.
+
+| | 360 | 390 | 1280 | 1920 |
+|---|---|---|---|---|
+| Refined · Phosphor & Ink (dark) | ✓ | ✓ | ✓ | ✓ |
+| Refined · Phosphor Daylight (light) | ✓ | ✓ | ✓ | ✓ |
+| Instrument · Phosphor & Ink (dark) | ✓ | ✓ | ✓ | ✓ |
+| Instrument · Phosphor Daylight (light) | ✓ | ✓ | ✓ | ✓ |
+
+Each ✓ checks these things:
+- The skin and theme drawn are the ones the cell names, and at every step nothing scrolls sideways, in the page or in the sheet.
+- The method radio follows the provider table, Mint first and checked, nothing narrowed (spec §20: drawn first, unlike mockup A11).
+- The URL card: below 900, Copy link is the primary at the card's full width and Open ↗ is secondary; at 1280 and 1920, Open is a primary at least 52px tall with the server's host (`claude.com`) in mono beside it on the same row, and Copy link secondary. The link opens in a new tab with `rel="noopener noreferrer"`.
+- The countdown is `--status-attention-text` while the sheet waits on the code, reads "Expires at HH:MM · M:SS left", and the waiting ledger line's dot runs an animation (the attention pulse).
+- At 360 and 390 with the keyboard up (the viewport cut to 508px tall), the focused code field and Send are both on screen, the field is mono at 16px or more (no iOS zoom) and at least 200px wide. This measurement found Send pushed below the field, off screen, when the row stacked at a phone's width; the field and Send now share one row at every width (D-7849 (10)).
+- A terminal state (Cancel): its sentence as the alert, Start the sign-in again and Discard this lane, and no link.
+- The result frame: Turn it on, the stated-account field, the wrong-account act and the compromise disclosure; the code is in no DOM node.
+
+## Decisions
+
+- **D-7849 (2026-11-01)** — `sign-in-sheet-as-built` (accounts plan Task A22; spec §6.1–§6.3, §3.7, §3.8, §12.3–§12.5; D-5514, Q1, N5): the as-built decisions of A22, and where it departs from the plan's wording.
+  1. **The cap.** `ACCOUNT_CAPS` gains `account-auth-v1` as its second word (D-7793 (1) held it for this task), so `connect.caps` offers it whenever the fleet advertises it, and the Anthropic sheet opens on Mint, the first method of the provider table it does not narrow. The word is appended in place: `ACCOUNT_CAPS[0]` (`account-v2`) still decides `connect.accountOps` and still gates the write routes.
+  2. **The add, then the start.** A sign-in lane is added with `method` and no credential (spec §6.2 step 3); the primary reads "Add lane and sign in". The start that follows the add is sent at once, plainly: the add's step-up was just taken. Every later start (Start the sign-in again; Sign this lane out and start again) runs through a mounted step-up gate's `runAct`. A start refused `step-up-required` ends with its sentence and marks the stamp lapsed, so the next gate shows the step whatever the store's `stepUpFreshUntil` still says. An add whose outcome is unknown re-reads the roster and, for a sign-in method, resumes at the start (step 4), never at a check.
+  3. **The poll.** `GET …/auth` is polled every 1.5 s (`AUTH_POLL_MS`) through the PWA's one poll primitive (`usePoll`), mounted only while an attempt is live, the sheet is open and the screen online: a terminal state, a closed sheet or an offline screen reads nothing. Each answer's `expiresAt` replaces the one held, so the countdown, the expiry and the offline sentence read the LAST-KNOWN deadline. A timer at that deadline ends the attempt as Expired if it is still live. The URL and host, once seen, are kept until the code goes.
+  4. **The terminal states, from codes.** `expired`, `cancelled` and `failed` are the helper's states; `failed` after the code went is "Code refused", and before it the helper stopped on its own, with its `failure` word when that is a plain word (never a sentence). A status read refused `auth-url-untrusted` is Link untrusted, `node-changed` a sentence of its own, and `no-auth-attempt` is Expired when the last-known deadline has passed and otherwise a new state, `lost` ("The server no longer holds the sign-in…": a server restart forgets its in-memory attempts). `unmeasured` and a read that did not complete leave the attempt standing. A start refused with a word says why from it (`auth-in-progress`, `auth-unsupported-here` with its `reason`, `method-unmeasured`, `lane-busy`, …); a start that did not complete is outcome unknown; a start answered `outcome-unknown` WITH the attempt's id and deadline (D-7793 (2)) is polled, not ended. Every terminal state offers Start the sign-in again and Discard this lane.
+  5. **The code.** The sheet checks the method's shape before sending (`authCodeShapeOk`, the route's own rule): `login`'s measured shape, and for the mint the spec's provisional shape, since OA1 has not measured the setup-token code. A code off its shape is never sent. One send per attempt: the field disables itself on Send. An answer that says nothing was sent (`bad-code`, `not-your-attempt`, `unmeasured`, another refusal) mounts a fresh field with its sentence; `outcome-unknown`, a request that did not complete and `code-already-sent` keep it sent, and the poll says what happened; `node-changed` and `no-auth-attempt` end the attempt.
+  6. **The URL card.** The host label is the server's `host` (N2's parse), never the URL's text. The desk primary keeps the spec's words, "Open claude.ai to sign in ↗", with the measured host (`claude.com`) beside it. "What this grants" lists the `scope` parameter of the URL the server accepted, with `user:sessions:claude_code` marked Remote Control; the disclosure is not drawn when the URL carries none. The phone line is per method: "…to sign in as a different account" (sign-in), "…to choose the account" (mint, spec §6.3).
+  7. **Cancel** is drawn while the attempt is live (starting, the URL and code, exchanging), and disabled while offline. A cancel refused with a word keeps the attempt and Cancel, with the sentence; `no-auth-attempt` ends it as Expired or lost. Once the helper says `done`, the sign-in is over and the check runs, which has no cancel route.
+  8. **Sign this lane out and start again** (spec §6.2 step 10) is two taps: the first reveals what it does with Confirm it's you when the stamp has lapsed (the challenge is fetched only once the step is shown), the second runs N5's sign-out (`credential {signOut: true}`) and then a new attempt of the same method. G23 is unmeasured, so neither the confirm nor the ledger says anything about the provider. It is offered for both methods, as the plan says: on a mint the sign-out finds no sign-in (`absent`), and the new mint's token replaces the lane's when it is installed, which the confirm says. It is offered until the lane is turned on: signing an on lane out would fail its sessions' next turn (the method switches and re-login are A23's).
+  9. **The stated account** (spec §6.3, Q5) is an optional field in the mint's result frame, held to the lane-state identity grammar (`isLaneIdentity`, 1 to 120 characters), saved with `set {stated}`; the identity line then reads "Approved as … · stated by you". It is never asked of a sign-in lane, whose `set {stated}` the server refuses (`not-a-token-lane`).
+  10. **The code row.** The code field and Send share one row at every width. Spec §12.1 has the code field stack full width at 360; Step 4's keyboard-up measurement showed that a stacked Send leaves the screen when the field is scrolled into view, so only the URL card's link controls stack.
+  11. **Discard this lane** after a terminal state runs `remove {mode: 'discard'}` behind the step-up; a refusal is worded by A19's `removeRefusal`, and a discard that did not answer says the outcome is unknown and reads the roster again.
+  12. **The run frame's ledger:** "… creating", "✓ created · off", "… starting the sign-in", then "… waiting for your code" (amber pulse) once the URL arrives, "… exchanging the code" (breathing), then "✓ Signed in on the fleet host" or "✓ Token minted and stored on the fleet host", and the check's own lines. Each step change is announced `role="status"`; each terminal state `role="alert"`, its sentence replacing the running line.

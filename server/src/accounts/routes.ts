@@ -589,8 +589,8 @@ function startStateOf(stdout: string, attemptId: string): AuthStatusState | null
   return typeof st === 'string' && (AUTH_STATUS_STATES as readonly string[]).includes(st) ? st as AuthStatusState : 'starting';
 }
 
-/** The cap word the sign-in subs need (N4, D-7734): `account-auth-v1`, which A20's `ccd caps` advertises. Held out of
- *  `ACCOUNT_CAPS`, so `connect.caps` does not offer it until the screen ships (D-7793 (1)). */
+/** The cap word the sign-in subs need (N4, D-7734): `account-auth-v1`, which A20's `ccd caps` advertises, and since A22's
+ *  sheet (D-7849 (1)) `ACCOUNT_CAPS`' second word, so `connect.caps` offers it (D-7793 (1)). */
 const AUTH_CAP = ACCOUNT_AUTH_CAP;
 
 /**
