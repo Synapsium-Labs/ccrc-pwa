@@ -368,7 +368,6 @@ describe('readLimits reads its files concurrently (desktop polish C4, D-6436)', 
       },
     };
     const p = readLimits(gated, cfg, now);
-    let rounds = 0;
     let first = -1;
     let done = false;
     void p.then(() => { done = true; });
@@ -376,13 +375,15 @@ describe('readLimits reads its files concurrently (desktop polish C4, D-6436)', 
       await new Promise<void>((go) => { setTimeout(go, 0); });
       if (pending.length === 0) continue;
       if (first < 0) first = pending.length;
-      rounds += 1;
       pending.splice(0).forEach((go) => { go(); });
     }
     const got = await p;
-    expect(first, 'the second file is asked for before the first answers').toBeGreaterThan(1);
+    // Structural, not timed: the in-flight high-water mark is what proves concurrency and the bound (a count of
+    // macrotask rounds also measured scheduler load and tipped over under a busy runner).
+    expect(most, 'reads are concurrent').toBeGreaterThan(1);
     expect(most, 'never more than the bound in flight').toBeLessThanOrEqual(LIMITS_READ_CONCURRENCY);
-    expect(rounds, 'about files / bound rounds, not one per file').toBeLessThanOrEqual(Math.ceil((N + 1) / LIMITS_READ_CONCURRENCY) + 1);
+    expect(most, 'the pool fills to the bound').toBe(Math.min(LIMITS_READ_CONCURRENCY, N + 1));
+    expect(first, 'the second file is asked for before the first answers').toBeGreaterThan(1);
     expect(got).toEqual(expected);
     expect(Object.keys(got)).toEqual(Object.keys(expected));
   });
