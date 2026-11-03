@@ -1,0 +1,22 @@
+# ccd-carry-dedupe.service - the swap carry's stale copies, collected once a day (#317; D-7857). One oneshot, fired by
+# ccd-carry-dedupe.timer: `ccd-carry-dedupe-sweep` runs `ccd carry-dedupe --identical-only`, a dry run unless the
+# operator has armed ~/.cc-sessions/carry-dedupe-live, and appends one dated line to ~/.cc-sessions/carry-dedupe.record.
+[Unit]
+Description=Collect the stale transcript and sidecar copies swap carries left behind (shadowed until the operator arms it)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ccd-carry-dedupe-sweep
+# The pass that first meets a neglected box is the expensive one: it hashes every same-size candidate copy (sha256, 1
+# MiB reads) across every account root, and #317 measured about 180 GiB of transcripts and sidecars on one box. At idle
+# IO that is an hour or more of wall clock. A pass past this is wedged, not slow; the record lands by rename, so a
+# killed pass leaves the previous one.
+TimeoutStartSec=4h
+# python3 over one uuid at a time: the largest working set is the keeper transcript's index (its message uuids and the
+# hashes of its other lines), which grows with the transcript, not with the box. Capped, and given a FINITE swap
+# allowance, so a sweep can never be the thing that OOMs or swaps out the fleet host (ccd-cap-scopes' own reason).
+MemoryMax=1G
+MemorySwapMax=256M
+# Idle CPU and idle IO: it reads the same disk every live session writes to, and reclaiming space is not urgent at the
+# scale of a day.
+Nice=19
+IOSchedulingClass=idle
