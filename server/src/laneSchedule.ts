@@ -150,6 +150,10 @@ export const LANDING_RADAR_SWEEP_MS = 60_000;
  *  import an L4 file; `diskAlarmLane.ts` re-exports it (D-7895). */
 export const DISK_SWEEP_MS = 60_000;
 
+/** The tmp sweep census lane's clock (D-6624, spec §2.1): the census is read and its mail queued every 5 minutes. Declared
+ *  here for the reason `DISK_SWEEP_MS` is; `tmpSweepLane.ts` re-exports it (D-7895). */
+export const TMP_SWEEP_CENSUS_MS = 5 * 60_000;
+
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
 
@@ -163,7 +167,7 @@ export type LaneName =
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -288,6 +292,9 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // overlap as it always has (a pass spends its minute before it awaits anything), and never rejects, so no row warns;
   // `tick` dispatches it above the registry read's fail-shut return.
   { name: 'diskAlarm', cadenceMs: DISK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  // The tmp sweep census (D-6624) starts due as it always has, lets passes overlap, and its pass never rejects; `tick`
+  // dispatches it beside the disk alarm, on the last good registry listing.
+  { name: 'tmpCensus', cadenceMs: TMP_SWEEP_CENSUS_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
 ];
 
 export function laneRow(name: string): LaneRow {

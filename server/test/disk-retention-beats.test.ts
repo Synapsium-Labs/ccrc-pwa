@@ -18,7 +18,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import type { Deps } from '../src/server.js';
-import { CHILD_RECLAIM_SWEEP_MS, DISK_SWEEP_MS, laneRow, type LaneRow } from '../src/laneSchedule.js';
+import { CHILD_RECLAIM_SWEEP_MS, DISK_SWEEP_MS, TMP_SWEEP_CENSUS_MS, laneRow, type LaneRow } from '../src/laneSchedule.js';
 import { LaneRunner } from '../src/laneRunner.js';
 import { STALE_ARCHIVE_SWEEP_MS } from '../src/coord/staleArchive.js';
 import { seedRoster, testDeps } from './helpers.js';
@@ -92,22 +92,51 @@ describe('the disk alarm beat (D-6615, D-7895): the `diskAlarm` row, the monoton
   });
 });
 
-describe('the tmp sweep census beat (D-6624): the wall clock, one pass in five minutes, the first at once', () => {
-  it('reads the census on the first call, holds a call inside five minutes, and reads again at five', async () => {
+describe('the tmp sweep census beat (D-6624, D-7895): the `tmpCensus` row, the monotonic clock, one pass in five minutes, the first at once', () => {
+  function build(): { watcher: FleetWatcher; reads: () => number; setMono: (n: number) => void } {
+    let reads = 0;
+    let mono = 5_000;
+    const io: FleetIO = { ...localIO, lstatMeasured: async (p) => { if (/tmp-sweep/.test(p)) reads++; return localIO.lstatMeasured(p); } };
+    const watcher = new FleetWatcher({ ...testDeps(), io, monotonicMs: () => mono }, new Bus());
+    return { watcher, reads: () => reads, setMono: (n) => { mono = n; } };
+  }
+
+  it('reads the census on the first call, holds a call inside five minutes, and reads again at five, on the monotonic clock', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(2_000_000);
-    let reads = 0;
-    const io: FleetIO = { ...localIO, lstatMeasured: async (p) => { if (/tmp-sweep/.test(p)) reads++; return localIO.lstatMeasured(p); } };
-    const watcher = new FleetWatcher({ ...testDeps(), io }, new Bus());
+    const { watcher, reads, setMono } = build();
     await watcher.sweepTmpSweepCensus();
-    const first = reads;
-    expect(first, 'the first call asks for the census file').toBe(1);
-    vi.setSystemTime(2_000_000 + 5 * MINUTE - 1);
+    expect(reads(), 'the first call asks for the census file, though the monotonic reading is below the cadence').toBe(1);
+    setMono(5_000 + TMP_SWEEP_CENSUS_MS - 1);
     await watcher.sweepTmpSweepCensus();
-    expect(reads, 'a call 1 ms short of five minutes is held').toBe(first);
-    vi.setSystemTime(2_000_000 + 5 * MINUTE);
+    expect(reads(), 'a call 1 ms short of five minutes is held').toBe(1);
+    setMono(5_000 + TMP_SWEEP_CENSUS_MS);
     await watcher.sweepTmpSweepCensus();
-    expect(reads, 'the cadence elapsed').toBe(2);
+    expect(reads(), 'the cadence elapsed on the monotonic clock, the wall clock frozen').toBe(2);
+  });
+
+  it('a wall clock stepped forward never reads early, and one stepped back never holds the beat', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(10_000_000);
+    const { watcher, reads, setMono } = build();
+    await watcher.sweepTmpSweepCensus();
+    vi.setSystemTime(10_000_000 + 10 * TMP_SWEEP_CENSUS_MS);
+    await watcher.sweepTmpSweepCensus();
+    expect(reads(), 'a wall step forward ran the beat early').toBe(1);
+    vi.setSystemTime(10_000_000 - 3_600_000);
+    setMono(5_000 + TMP_SWEEP_CENSUS_MS);
+    await watcher.sweepTmpSweepCensus();
+    expect(reads(), 'a wall step back held the beat past its cadence').toBe(2);
+  });
+
+  it('the row is the five-minute, overlapping, catch-free row, and its cadence keeps its value', () => {
+    expect(TMP_SWEEP_CENSUS_MS).toBe(5 * 60_000);
+    expect(laneRow('tmpCensus')).toMatchObject({ cadenceMs: TMP_SWEEP_CENSUS_MS, clock: 'mono', flight: 'none', warnKey: null, derivedFrom: null });
+  });
+
+  it('MUTANT: the row with its cadence halved runs a second pass inside five minutes, and the trace tells it apart', async () => {
+    expect(await cadenceTrace(laneRow('tmpCensus'), TMP_SWEEP_CENSUS_MS)).toEqual([1, 1, 2]);
+    expect(await cadenceTrace({ ...laneRow('tmpCensus'), cadenceMs: TMP_SWEEP_CENSUS_MS / 2 }, TMP_SWEEP_CENSUS_MS)).not.toEqual([1, 1, 2]);
   });
 });
 

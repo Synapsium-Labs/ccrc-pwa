@@ -1063,7 +1063,7 @@ export class FleetWatcher {
    *  `undefined` until the first sweep lands — the same contract every other
    *  `currentX()` on this class already has, and the route turns it into a
    *  `readiness: null` on the wire rather than omitting the key. */
-  /** The disk alarm (D-6615) and the tmp sweep census lane (D-6624): each holds its memory; the disk alarm's clock is its row. */
+  /** The disk alarm (D-6615) and the tmp sweep census lane (D-6624): each holds its memory, and each clock is its row (D-7895). */
   private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
   /** The host-pressure beat (#1170): its last reading classifies a stalled link. */
   private readonly pressureLane = new PressureLane(() => this.deps);
@@ -2449,7 +2449,7 @@ export class FleetWatcher {
       // The test box's poll (D-7411), above the fail-shut return too: it lists the registry itself. Own clock, never awaited.
       void this.testboxLane.sweep();
       // The tmp sweep's census (D-6624) sits beside it for the same reason: a file read, and the holders are wanted
-      // exactly when the registry read fails. Own clock (`TmpCensusBeat`), never awaited.
+      // exactly when the registry read fails. Its clock is the `tmpCensus` row (D-7895), never awaited.
       void this.sweepTmpSweepCensus().catch(() => { /* one bad sweep must not kill the poll */ });
 
       // The server-caps beat (D-5232's mechanism, Task 9b) sits BESIDE the inventory lane, never inside it: that lane
@@ -7197,9 +7197,9 @@ export class FleetWatcher {
    *  the reason `sweepReadiness` is: `tick()` dispatches it with `void`, so a test that awaits `tick()` has not awaited this. */
   async sweepDisk(): Promise<void> { await this.runLane('diskAlarm', () => this.diskAlarm.pass()); }
 
-  /** The tmp sweep's census (D-6624, spec §2.1): `TmpCensusBeat` holds the pass, on the last good registry listing. PUBLIC for
-   *  the reason `sweepDisk` is. */
-  async sweepTmpSweepCensus(): Promise<void> { await this.tmpCensus.sweep(this.registryIds); }
+  /** The tmp sweep's census (D-6624, spec §2.1): `TmpCensusBeat` holds the pass, on the last good registry listing, and the
+   *  `tmpCensus` row its cadence (D-7895). PUBLIC for the reason `sweepDisk` is. */
+  async sweepTmpSweepCensus(): Promise<void> { await this.runLane('tmpCensus', () => this.tmpCensus.pass(this.registryIds)); }
 
   /**
    * F3: the program-ready preconditions, measured once per lane tick and
