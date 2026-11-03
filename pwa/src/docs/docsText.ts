@@ -590,11 +590,11 @@ export function shareNoteSentence(line: ShareNoteLine): string {
   return fillSentence(SHARE_NOTE[line.note], line.fields);
 }
 
-/** A worktree as Share (and, later, Export) names it: the closed label of spec 4.17, "main checkout", "workspace
+/** A worktree as Share and Export name it: the closed label of spec 4.17, "main checkout", "workspace
  *  <last segment>" (class `workspace` only) or "another worktree" (refinement (b)). Never another segment of the path,
  *  which the truth line's `worktreeLabel` may show. The notes never leave the browser: `navigator.share` receives only
  *  `{url, title, text}`, Copy link writes only the URL, and the notes are drawn in the sheet alone. The label is closed
- *  so that the sheet never shows a fleet path, and so that Export, which will carry it in a file's provenance, inherits
+ *  so that the sheet never shows a fleet path, and so that Export, which carries it in a file's provenance, inherits
  *  the same closed words. A workspace path with no segment reads as another worktree, never as the path. */
 export function closedWorktreeLabel(w: { readonly path: string; readonly class: 'main' | 'workspace' | 'other' }): string {
   switch (w.class) {

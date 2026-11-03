@@ -1,7 +1,7 @@
 // The Docs header (spec 2026-10-01 4.4's layout, 4.5; W5 part 1 Task 10): back (up one level, never
 // `history.back()`: a deep link has no history), the crumbs (on a phone the last two behind a leading `…`), the truth
 // line (the served ref, the short commit with copy commit, how the ref was chosen, a leaf's source, badge and size,
-// and the freshness chip), the actions (View on GitHub, Share, Open committed version) and "Updated to <short>". A pure
+// and the freshness chip), the actions (View on GitHub, Share, Export, Open committed version) and "Updated to <short>". A pure
 // renderer of the page, the visit and the tree answer: it starts no request, and the chip's tap is the visit's
 // `refreshManual`. Every draft word is `entryView`'s through `ENTRY_BADGE_TEXT`, the one badge function the rows use
 // too (M4.T7). Share (spec 4.16) opens ShareSheet over shareTargetFor's answer and makes no request either; Export
