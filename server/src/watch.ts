@@ -8994,6 +8994,9 @@ export class FleetWatcher {
     if (!this.primed) this.questions.loadReseed();
     // D-6435: every pane is captured first, at most DIALOG_CAPTURE_CONCURRENCY at once, then read in registry order.
     // No loop body writes to a pane. A capture that rejects (no Runner does) is settled and rethrown at its own row.
+    // The trade: every row's body runs after ALL captures finish, so a later row is judged on a pane up to about
+    // ceil(N/8) capture rounds older than under the serial loop; the values per pane are unchanged, and the next tick
+    // reconciles.
     const caps = await mapBounded(recs, DIALOG_CAPTURE_CONCURRENCY, async (r) => {
       const at = Date.now();
       try { return { at, pane: await this.deps.tmux.capture(r.id), doneAt: Date.now() }; } catch (err) { return { at, err }; }
