@@ -12145,11 +12145,27 @@ MODELS_HOOK_S=5
 # box's ccrc.env, else 250 (an empty value too); a ccrc.env `_ccrc_knob` cannot read for it is 0, the step off for this run, said
 # on stderr; a whole number is itself, base 10 (`0250` is 250), 3600 at most; ANYTHING ELSE (`off`, `-1`) is 0 too (D-6266).
 _models_advance_budget_secs() {
-  local s; _ccrc_knob CCRC_MODELS_ADVANCE_BUDGET_S 250 && s="$KNOB" || { echo "$PROG: $KNOB_WHY, so the advance step is off for this run" >&2; s=0; }
-  case "$s" in *[!0-9]*) echo "$PROG: CCRC_MODELS_ADVANCE_BUDGET_S is not a whole number of seconds, so the advance step is off for this run" >&2; s=0 ;; esac
-  s="${s#"${s%%[!0]*}"}"; [ "${#s}" -le 4 ] || s=3600
-  s=$(( 10#${s:-0} )); [ "$s" -le 3600 ] || s=3600
-  printf '%s' "$s"
+  _models_budget; local rc=$?
+  [ "$rc" -ne 1 ] && [ "$rc" -ne 2 ] || echo "$PROG: $MODELS_BUDGET_WHY" >&2   # a clamp (rc 3) is silent, as it always was
+  printf '%s' "$MODELS_BUDGET_S"
+}
+
+# `_models_budget` — CCRC_MODELS_ADVANCE_BUDGET_S, the advance step's budget: the ONE resolver (D-6914). `_models_advance_budget_secs`
+# prints what it sets and `ccrc settings` shows it, so the view says what the step uses. Sets MODELS_BUDGET_S, the seconds the step
+# uses, and MODELS_BUDGET_WHY, a sentence without the `$PROG: ` lead, empty at rc 0; KNOB and KNOB_FROM are left as `_ccrc_knob` read
+# them. rc 0 the value is used as written (base 10); rc 1 not a whole number, 0 (the act prints the sentence on stderr); rc 2
+# `_ccrc_knob` could not measure it, 0 (the act prints it too); rc 3 a whole number over 3600, clamped to 3600, a case the act
+# never printed and still does not (the sentence is the verb's). The cap is decided by the digit count before any `$(( ))`.
+_models_budget() {
+  MODELS_BUDGET_S=0; MODELS_BUDGET_WHY=""
+  local s over=0
+  _ccrc_knob CCRC_MODELS_ADVANCE_BUDGET_S 250 || { MODELS_BUDGET_WHY="$KNOB_WHY, so the advance step is off for this run"; return 2; }
+  s="$KNOB"
+  case "$s" in *[!0-9]*) MODELS_BUDGET_WHY="CCRC_MODELS_ADVANCE_BUDGET_S is not a whole number of seconds, so the advance step is off for this run"; return 1 ;; esac
+  s="${s#"${s%%[!0]*}"}"; [ "${#s}" -le 4 ] || { s=3600; over=1; }
+  s=$(( 10#${s:-0} )); [ "$s" -le 3600 ] || { s=3600; over=1; }
+  MODELS_BUDGET_S="$s"
+  [ "$over" -eq 0 ] || { MODELS_BUDGET_WHY="CCRC_MODELS_ADVANCE_BUDGET_S='${KNOB:0:32}' is over 3600 seconds, so the advance step uses 3600"; return 3; }
 }
 
 # The canary's own deadline in seconds: `CCRC_MODELS_CANARY_S`, a whole number from 1 to 600, else 90 -
