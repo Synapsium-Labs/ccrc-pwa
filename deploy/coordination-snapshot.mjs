@@ -628,8 +628,10 @@ export function validateSidecars(fs, { checkpointBytes, journalPath, carriedPath
       const seq = record.sequence;
       if (last !== null && seq <= last) refuse('carried-order', `carried sequence ${seq} follows ${last}`);
       last = seq;
-      if (J === null || seq < J) held.delete(record.journalId);
-      else pending.set(seq, new Uint8Array(bytes));
+      if (J === null || seq < J) {
+        if (seq > applied) refuse('carried-past-applied', `carried sequence ${seq} is past the checkpoint's applied ${applied}`);
+        held.delete(record.journalId);
+      } else pending.set(seq, new Uint8Array(bytes));
     });
     carriedPresent = feedFile(fs, carriedPath, carried);
     try { carried.finish(); } catch (err) {

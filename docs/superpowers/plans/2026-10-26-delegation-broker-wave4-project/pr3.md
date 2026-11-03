@@ -1,14 +1,23 @@
 # Wave 4, PR3: journal compaction (task note)
 
 This note is PR3's record for the wave's ledger pull request (Global Constraints, "Ledger edits"). The coordinator folds it into the
-plan and the programme ledger; this PR edits neither.
+plan and the programme ledger. The only authorized top-level plan edits in this PR are D-7869's definition placement and the
+pointer clause recording D-7015 and D-7016 as round-1 review departures; this PR does not edit the programme ledger.
 
 ## Status
 
-- **Production continuation (2026-11-03):** main is merged through `85270c001`. The retained Task 3.6 implementation and watch
-  re-points are present; their current verification is recorded below. Tasks 3.6 and 3.7 are no longer held. The refreshed PWA
-  measurement and the named server gates have verdicts; the rings gate found two missing watcher-port members. The scoped
-  type-only correction is included under D-7869; its post-commit gates are pending. This is not a final handoff.
+- **Review fix round 1 (2026-11-03), PR #2191:** published head `dbedeb85c` has its original exact-head fast CI GREEN. The
+  watcher-port correction and delegation-method census correction are committed and verified; their historical reds remain below.
+  The current round addresses F1–F4, A1 and A3–A5 from review 1384. Its 24 required F3 mutants and the separate retainedFrom
+  wiring mutant have assertion RED → restored-row GREEN evidence. C19 was GREEN before its mutation. A4's actual-J kill is
+  accepted by coordinator ruling 14306; no sibling `held-evidence-missing` refusal is claimed. The new compaction file has 76
+  tests. The measurements here distinguish targeted proofs from full-file gates; the new-head handoff records this round's
+  fresh named gates and exact-head fast CI separately. This note is not itself a final handoff. The full server suite was not
+  run locally, and soaks remain waived, not passed.
+- **Production continuation, carried into review:** main is merged through `85270c001`. Tasks 3.6 and 3.7 and the watch re-points
+  are present. The earlier final-base gates, exhaustive watch halves and refreshed PWA run below are historical measurements,
+  not substitutes for round 1's new-head gates. D-7869's two-member port change, its definition placement and the nine-method
+  delegation census are the only subsequent integration corrections carried at `dbedeb85c`.
 - **Historical Phase A** (no edit to `watch.ts`, `store.ts`, `mail-routes.test.ts`, `delegation-wave3.integration.test.ts` or
   `delegation-watch.test.ts`): Task 3.2 (the planner), Task 3.3 (`compactJournal`, the carried file, recovery's carried rules),
   Task 3.4's checkpoint half (the delete walk, the repair's step 0, the retained reader in the repair), Task 3.5 (C1) and Task 3.1's
@@ -50,6 +59,11 @@ plan and the programme ledger; this PR edits neither.
     are zero without the mutation. No independent clone counter is claimed.
   - Phase B: startup reconstruction returns before the compaction-local readiness guard. W4-CM28 leaves that startup row green;
     a new real-lane row recovers into reconstruction during upkeep, at the compaction boundary, and reds the forbidden call.
+  - Review round 1: W4-C19 was only an assertion label inside `expectRetainedRows`, called by C17 and C30, not a selectable test.
+    Coordinator ruling 14306 authorized one independently selectable C19 test, leaving that helper and C17/C30 unchanged. The
+    added test checks carried evidence after compaction and after the actual open's step-0 repair. It first passed unchanged;
+    CM17's contiguous delete through S then failed its own `carried evidence survives compaction` assertion, and restored C19
+    passed. No empty C19 selection ran and no earlier C17 failure was relabeled as C19.
 - **D-7014** — `planner-and-applier-interface-details`: small departures from the plan's interface text.
   - The planner imports VALUES from `delegation-model.ts` as well as types (`parseDelegationInstant`, `encodeDelegationNaturalKey`,
     `DELEGATION_BASH_PENDING_MS`, and `isDelegationWorkerIndex`, moved into the model from the checkpoint so the planner's
@@ -66,9 +80,103 @@ plan and the programme ledger; this PR edits neither.
     `finish` accepts those totals. Counting only yielded carried records misses journal copies after a crash between the two renames.
     W4-C29's crash-window regression first measured 0 bytes/0 lines instead of 9,270 bytes/12 lines, then passed with the same-stream
     measurement. There is no second file read, no changed retained-set membership, and no weakening of byte-for-byte validation.
-- **D-7015** — `unused`
-- **D-7016** — `unused`
+- **D-7015** — `recover-after-carried-rename-failure`: review round 1 found that the plan's ready-preserving arm for every
+  pre-journal-rename failure is safe only for a first compaction. A later carried rename can drop old carried evidence while the
+  live event IDs, evidence index and builder facts still retain it. Once the carried rename is attempted, a failure fails the
+  applier and recovery over the files rebuilds those indexes; no parallel memory-prune recovery path is added. Failures before
+  the carried rename keep the original cleanup/ready arm. W4-C13c faults both sides of `carried-directory-fsync`, `writer-close`,
+  `journal-copy` and `journal-copy-fsync` during a second compaction, proves old evidence was dropped, requires reconstruction,
+  then compares the recovered checkpoint and indexes with fresh recovery. RED first: outer exit 1, all eight rows failed at
+  `the live indexes are no longer authoritative` (null failure). With the boundary corrected, the full compaction suite exited 0,
+  72/72 passed. W4-C11 and W4-C15 retain the unchanged-journal assertions but require recovery after the carried rename.
+- **D-7016** — `pruning-preview-keeps-wave3-collector`: `planPruning` continues feeding the logical retained set to the wave-3
+  `DelegationRetentionCollector` and `planDelegationPruning`, rather than invoking the compaction planner in dry-run mode as
+  Task 3.3 specified. Review round 1 records this departure without a code change; the preview's existing prefix-bound meaning
+  stays distinct from the compaction plan's carried-set rewrite. The existing post-compaction pruning row pins retained holds.
 D-7869 is defined in the plan's Deviations found, not here: the floor guard reads definitions from top-level plans only (14240).
+
+## Review fix round 1, 2026-11-03
+
+### Conditional rollback (F2)
+
+D-7022's rollback is conditional, not a new record-grammar refusal. An older reader ignores the carried file. If a lease's creating
+`lease-created` record was cut, its journal-only recovery refuses `lease-proof` and the lane reconstructs. When no such record was
+cut, it can recover ready without carried records, and its repair can wipe and replay only the journal, dropping carried evidence
+from SQLite. Returning to this PR's build reads the carried file again and repairs that evidence into SQLite. The pre-compaction
+snapshot remains the restore point. The two W4-C30b journal-only stand-ins characterize both outcomes and the return path: outer
+exit 0, two passed, 73 skipped. They do not execute an old binary, and are not claimed as a RED-first behavior change.
+
+### Repair, snapshot parity and actual-J oracles (F4, A1, A4)
+
+- C18 and C13b now use a call-through spy to observe the actual open's repair report on the same SQLite, without manual pre-repair
+  or a production accessor. They require `wipedAll: false` and the actual cut count as `prunedBelow`. The added throwing-store row
+  requires ready state, `projectionStale`, a warning, and deletion completed by the next repair. The targeted baseline passed four
+  rows. Dropping `retainedFrom` at the actual-open wiring then failed C18's repair-report assertion; restored C18 passed.
+- A1's two differential C23b rows, absent checkpoint and applied-zero checkpoint with carried evidence but no journal, first failed
+  because the snapshot helper accepted evidence that recovery refused. The helper now enforces `carried-past-applied` for logical
+  carried evidence consistently with recovery. The restored compacted-snapshot selection passed 14 rows, with 1,004 skipped;
+  this targeted proof is not the whole-file snapshot gate.
+- C13 compares carried sequences against the actual post-fault journal J, not the literal 1. CM10 coherently moves journal close,
+  suffix copy and journal rename before the carried rename. It failed `every carried line overlaps the actual journal`; restored
+  C13 passed. Coordinator ruling 14306 accepts this direct actual-J kill as A4's proof. The plan's anticipated sibling
+  `held-evidence-missing` refusal was not measured and is not claimed.
+
+### Bounded sequential mutation measurements (F3)
+
+The first retainedFrom wiring launch failed before the runner or Vitest: outer exit 125, no JSON report, with
+`timeout: fork system call failed: Resource temporarily unavailable`. It is a launch failure, not a mutation verdict. Its process
+count omitted threads, which `RLIMIT_NPROC` counts. The saved source was restored with matching SHA; no test ran on that attempt.
+Coordinator ruling 14301 authorized the retry with a same-subshell, count-only thread measurement and a cap of that count + 1,500.
+The retry failed C18 at its own assertion, then the restored row passed. The initial launch failure remains part of the record.
+
+Every row below ran sequentially in one scratch source tree, on the root filesystem proved by `df`, with fixture HOME and poisoned
+`gh`, one worker, a 180 s timeout and 10 s kill-after. Each mutant was made from its saved source, with baseline SHA checked before
+and after; finally restoration was byte-identical (`cmp` exit 0). Each RED had outer exit 1 and exactly one failed physical test;
+each restored GREEN had outer exit 0 and exactly one passed physical test. No import error, timeout, wrong-row failure or queue/wait
+notice occurred. These 24 required F3 measurements are not a fresh full compaction gate.
+
+| Mutant | Physical row | Intended observed RED, followed by restored GREEN |
+| --- | --- | --- |
+| CM4 | C6 K1 | Open-lease/open-lineage correlation reason absent |
+| CM5 | C6 K4 | Active Workflow launch reason absent |
+| CM6 | C7 raw-lease window | Inclusive 10:24 boundary absent |
+| CM7 | C8 straddling pairs | Both carried Pres absent |
+| CM8 | C5 | Reconstructing planner enabled instead of disabled |
+| CM9 | C4b | Seven-day floor instead of ten-day floor |
+| CM10 | C13 | Actual-J overlap assertion false; no sibling refusal claimed |
+| CM11 | C15 | Short copy resolved instead of rejecting |
+| CM12 | C11, journal-rename:before | Event IDs 212 instead of unchanged 474 |
+| CM14 | C12, journal-rename:after | Applier failure null |
+| CM15 | C16, below J past applied | `sequence-gap` instead of `carried-past-applied` |
+| CM17 | Added selectable C19 | Carried evidence rows deleted by contiguous delete through S |
+| CM18 | C18 | Actual-open step-0 repair report mismatch |
+| CM19 | C17 chunks | Deletes lack intervening event-loop turns |
+| CM21 | C21 | Activity named by K5-carried evidence retired |
+| CM23 | C11, journal-rename:before | Early retirement makes recovery refuse `identity-evidence` |
+| CM29 | C5 | Cut through 3 instead of checkpoint-bounded 1 |
+| CM30 | C6 K2 | Identity-candidate reason absent |
+| CM31 | C6 K3 | Active-identity reason absent |
+| CM32 | C7b | Raw lease without activity loses its own window |
+| CM33 | C21 | Ended worker retired while its run is kept |
+| CM34 | C30 | Journal-only repair has 203 rows instead of retained evidence's 212 |
+| CM35 | C16, different overlap bytes | No `carried-past-journal` refusal |
+| CM36 | C10 | Live Workflow launch map has two entries versus rebuilt one's one |
+
+The selectable C19 was first GREEN on current code (one passed, 75 skipped). CM17 then failed its own carried-row assertion;
+restored C19 was GREEN (one passed, 75 skipped), including the actual-open step-0 branch. Its measured-differently explanation
+is under D-7013. The added row does not replace or alter C17, C30 or their retained-row helper.
+
+### Carried integration corrections and verification limits (A5)
+
+The watcher-port correction's isolated census passed 22, the full rings selection passed 138 across 12 files, the server typecheck
+exited 0 and tests-inclusive typechecks passed 12. Deviation references passed 31 after D-7869's definition placement; dtbd passed
+one. The subsequent delegation-method census correction passed 269 store tests. Original fast CI at `dbedeb85c` completed GREEN:
+38 jobs succeeded or skipped; the required build and package summaries succeeded. Its fast planner selected 585 files across 12
+shards (361 related, 127 untraced, 193 guards; overlapping reasons). This proves that selection, not the full suite.
+
+The older gates below keep their original bases and failures. Fresh round-1 full gates and exact-head fast CI belong to the
+new-head handoff, not to these targeted mutation results. No full local server suite, soak, live-data measurement, enqueue or
+merge is claimed.
 
 ## Phase B verification
 

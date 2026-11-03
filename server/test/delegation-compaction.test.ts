@@ -3,9 +3,9 @@
 // The rows of the plan's "## PR3" Tasks 3.1 (the upkeep door, at the door; the lane's rows are delegation-compaction-lane.test.ts's),
 // 3.2 (the pure planner), 3.3 (the crash-safe rewrite), 3.4 (the delete and the repair's step 0) and 3.5 (C1). Every file is in a FIXTURE
 // directory and every SQLite is a fixture database: nothing here reads or writes the live `~/.ccrc`.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { openCoordDb } from '../src/coord/db.js';
@@ -50,6 +50,7 @@ import {
   type DelegationDurabilityDeps,
   type DelegationDurabilityEdge,
   type DelegationProjectionPort,
+  type DelegationProjectionRepairReport,
 } from '../src/coord/delegation-checkpoint.js';
 import {
   DELEGATION_CARRY_REASONS,
@@ -450,6 +451,18 @@ function rig(opts: { dir?: string } = {}): Rig {
   return { dir, db, store, clock, ctl, log, deps, open: async (over) => { const d = await DelegationDurability.open(deps(over)); opened.push(d); return d; } };
 }
 
+/** Observes the real repair performed by open, without repairing SQLite beforehand or substituting its arguments. */
+async function openWithRepair(r: Rig): Promise<{ dur: DelegationDurability; repair: DelegationProjectionRepairReport | null }> {
+  const repairing = vi.spyOn(DelegationDurability.prototype as unknown as { repairLocked(): Promise<DelegationProjectionRepairReport | null> }, 'repairLocked');
+  try {
+    const dur = await r.open();
+    expect(repairing).toHaveBeenCalledTimes(1);
+    return { dur, repair: await repairing.mock.results[0]!.value };
+  } finally {
+    repairing.mockRestore();
+  }
+}
+
 /** Applies events, each accepted one second after it was observed. */
 const apply = (dur: DelegationDurability, events: readonly DelegationEventEnvelopeV1[]) =>
   dur.applyAccepted({ accepted: events.map((event) => ({ event, acceptedAt: iso(Date.parse(event.observedAt) + 1000) })), cursor: null, interval: null });
@@ -578,7 +591,7 @@ describe('Task 3.3: compactJournal, the crash-safe rewrite inside the serial que
     expect(live.workflowLaunches.size, 'the active run\'s launch is still indexed, the held run\'s cut one is not').toBe(1);
   });
 
-  describe('W4-C11: a fault at any edge before the journal\'s rename leaves the journal byte-identical and the applier ready', () => {
+  describe('W4-C11: a fault before the journal\'s rename leaves it byte-identical; only a fault before the carried rename stays ready (D-7015)', () => {
     const EDGES = DELEGATION_COMPACTION_EDGES.slice(0, DELEGATION_COMPACTION_EDGES.indexOf('journal-copy-fsync') + 1);
     const cases = [...EDGES.flatMap((e) => [`${e}:before`, `${e}:after`]), 'journal-rename:before'];
     it.each(cases)('at %s', async (at) => {
@@ -590,9 +603,15 @@ describe('Task 3.3: compactJournal, the crash-safe rewrite inside the serial que
       r.ctl.fault = at;
       await expect(dur.compactJournal(NOW, DELEGATION_RETENTION_FLOOR_MS)).rejects.toBeInstanceOf(InjectedFault);
       expect(sha256(journalOf(r.dir)), 'the journal is byte-identical').toBe(sha256(journal));
-      expect(dur.failure(), 'the faulted applier is still ready').toBeNull();
-      expect(internals(dur).eventIds.size, 'eventIds is unchanged').toBe(ids);
-      expect(readdirSync(r.dir).filter((f) => f.endsWith('.tmp')), 'both temps are removed').toEqual([]);
+      expect(internals(dur).eventIds.size, 'eventIds is unchanged until recovery').toBe(ids);
+      if (cases.indexOf(at) < cases.indexOf('carried-rename:after')) {
+        expect(dur.failure(), 'a fault before the carried rename stays ready').toBeNull();
+        expect(readdirSync(r.dir).filter((f) => f.endsWith('.tmp')), 'both temps are removed').toEqual([]);
+      } else {
+        expect(dur.failure(), 'a fault after the carried rename requires recovery').not.toBeNull();
+        expect(dur.pruningEnabled()).toBe(false);
+        expect((await dur.recover()).failure).toBeNull();
+      }
       const fresh = await r.open({ projection: null });
       expect(fresh.failure()).toBeNull();
       expect(withoutRevision(fresh.state().checkpoint as DelegationCheckpointV1)).toBe(cp);
@@ -627,12 +646,14 @@ describe('Task 3.3: compactJournal, the crash-safe rewrite inside the serial que
   it('W4-C13: a crash between the two renames (a first compaction): every carried line is at or above J, matched and skipped; the checkpoint is unchanged', async () => {
     const { r, dur } = await fixture();
     const cp = withoutRevision(dur.state().checkpoint as DelegationCheckpointV1);
-    const journalLines = recordsOf(journalOf(r.dir)).length;
+    const journalRecords = recordsOf(journalOf(r.dir));
+    const journalLines = journalRecords.length;
     r.ctl.fault = 'carried-directory-fsync:after';
     await expect(dur.compactJournal(NOW, DELEGATION_RETENTION_FLOOR_MS)).rejects.toBeInstanceOf(InjectedFault);
     const carried = linesOf(carriedOf(r.dir));
+    const J = recordsOf(journalOf(r.dir))[0]!.sequence;
     expect(carried.length).toBeGreaterThan(0);
-    expect(carried.every((x) => x.sequence >= 1)).toBe(true);
+    expect(carried.every((x) => x.sequence >= J), 'every carried line overlaps the actual journal').toBe(true);
     const report = await recoverDelegationFromFiles(nodeDelegationFilePort, r.dir);
     expect(report.failure).toBeNull();
     expect(report.scanned, 'scanned counts journal lines only').toBe(journalLines);
@@ -674,11 +695,43 @@ describe('Task 3.3: compactJournal, the crash-safe rewrite inside the serial que
     const report = await recoverDelegationFromFiles(nodeDelegationFilePort, r.dir);
     expect(report.failure).toBeNull();
     expect(withoutRevision(report.state.checkpoint)).toBe(cp);
-    const repaired = await repairDelegationProjection({
-      projection: projectionOf(r.store), checkpoint: report.state.checkpoint, journal: () => retainedOf(r.dir), evidence: report.facts!.evidence,
-      retainedFrom: report.journal!.firstSequence,
+    const reopened = await openWithRepair(r);
+    expect(reopened.dur.failure()).toBeNull();
+    expect(reopened.repair).toMatchObject({ prunedBelow: droppedEvidence, wipedAll: false });
+    expect(countRows(r.db)).toBe(evidenceOf(reopened.dur).evidence.total);
+  });
+
+  describe('W4-C13c (D-7015): a second-compaction failure after the carried rename requires recovery', () => {
+    const edges = ['carried-directory-fsync', 'writer-close', 'journal-copy', 'journal-copy-fsync'];
+    it.each(edges.flatMap((edge) => [`${edge}:before`, `${edge}:after`]))('at %s', async (at) => {
+      const { r, dur } = await compacted();
+      await apply(dur, [notification(NOW + MIN, 'toolu_wa', 'task_a')]);
+      for (let d = 0; d < 3; d++) await apply(dur, Array.from({ length: 60 }, (_, i) => sessionStart(NOW + d * DAY + HOUR + i * 10_000)));
+      const oldCarried = linesOf(carriedOf(r.dir));
+      const journal = journalOf(r.dir);
+      r.ctl.fault = at;
+      await expect(dur.compactJournal(NOW + 3 * DAY + 2 * HOUR, 2 * DAY)).rejects.toBeInstanceOf(InjectedFault);
+      const newSequences = new Set(linesOf(carriedOf(r.dir)).map((record) => record.sequence));
+      expect(oldCarried.filter((record) => record.entry.kind === 'evidence-accepted' && !newSequences.has(record.sequence)).length,
+        'the second carried rename dropped old evidence').toBeGreaterThan(0);
+      expect(sha256(journalOf(r.dir)), 'the journal was not renamed').toBe(sha256(journal));
+      expect(dur.failure(), 'the live indexes are no longer authoritative').not.toBeNull();
+      expect(dur.state().phase).toBe('reconstructing');
+      expect(dur.pruningEnabled()).toBe(false);
+      const fresh = await r.open({ projection: null });
+      expect(fresh.failure()).toBeNull();
+      expect((await dur.recover()).failure).toBeNull();
+      expect(dur.state().phase).toBe('ready');
+      expect(withoutRevision(dur.state().checkpoint as DelegationCheckpointV1)).toBe(withoutRevision(fresh.state().checkpoint as DelegationCheckpointV1));
+      expect(internals(dur).eventIds).toEqual(internals(fresh).eventIds);
+      expect(evidenceOf(dur).evidence.total).toBe(evidenceOf(fresh).evidence.total);
+      const live = internals(dur).builder;
+      const rebuilt = internals(fresh).builder;
+      expect(live.computeHolds()).toEqual(rebuilt.computeHolds());
+      expect(live.candidates).toEqual(rebuilt.candidates);
+      expect(live.workflowLaunches).toEqual(rebuilt.workflowLaunches);
+      expect(live.bashCalls).toEqual(rebuilt.bashCalls);
     });
-    expect(repaired).toMatchObject({ prunedBelow: droppedEvidence, wipedAll: false });
   });
 
   it('W4-C14: an append queued during a compaction lands at head + 1 in the NEW journal, after it; so does a recovery, which reads it ready', async () => {
@@ -711,7 +764,7 @@ describe('Task 3.3: compactJournal, the crash-safe rewrite inside the serial que
     expect(dur.state().phase).toBe('ready');
   });
 
-  it('W4-C15: a short copy refuses short-copy: the journal byte-identical, the temp removed, the applier ready', async () => {
+  it('W4-C15: a short copy refuses short-copy: the journal byte-identical, recovery required after the carried rename (D-7015)', async () => {
     const { r, dur } = await fixture();
     const journal = journalOf(r.dir);
     const shortTemp: DelegationFilePort = {
@@ -728,8 +781,9 @@ describe('Task 3.3: compactJournal, the crash-safe rewrite inside the serial que
     await dur.close();
     await expect(d2.compactJournal(NOW, DELEGATION_RETENTION_FLOOR_MS)).rejects.toMatchObject({ code: 'short-copy' });
     expect(sha256(journalOf(r.dir))).toBe(sha256(journal));
-    expect(readdirSync(r.dir).filter((f) => f.endsWith('.tmp'))).toEqual([]);
-    expect(d2.failure()).toBeNull();
+    expect(d2.failure()).toMatchObject({ code: 'short-copy' });
+    expect(d2.state().phase).toBe('reconstructing');
+    expect((await d2.recover()).failure).toBeNull();
   });
 });
 
@@ -836,16 +890,61 @@ describe('Task 3.4: delegation_events retention, and a repair that deletes inste
     const J = report.journal!.firstSequence!;
     const cutEvidence = rowSequences(r.db).filter((seq) => seq < J).length - report.facts!.evidence.countAtOrBelow(J - 1);
     expect(cutEvidence).toBeGreaterThan(0);
-    const repaired = await repairDelegationProjection({
-      projection: projectionOf(r.store), checkpoint: report.state.checkpoint, journal: () => retainedOf(r.dir), evidence: report.facts!.evidence, retainedFrom: J,
-    });
-    expect(repaired).toMatchObject({ wipedAll: false, fullReplay: false, prunedBelow: cutEvidence });
-    expect(repaired.journalPasses).toBeLessThanOrEqual(1);
-    expect(countRows(r.db)).toBe(report.facts!.evidence.total);
-    // and the applier's own recovery reaches the same rows
-    const reopened = await r.open();
-    expect(reopened.failure()).toBeNull();
-    expect(countRows(r.db)).toBe(evidenceOf(reopened).evidence.total);
+    const reopened = await openWithRepair(r);
+    expect(reopened.dur.failure()).toBeNull();
+    expect(reopened.repair).toMatchObject({ wipedAll: false, fullReplay: false, prunedBelow: cutEvidence });
+    expect(reopened.repair!.journalPasses).toBeLessThanOrEqual(1);
+    expect(countRows(r.db)).toBe(evidenceOf(reopened.dur).evidence.total);
+  });
+
+  it('W4-C19: carried evidence rows survive compaction and the actual open\'s step-0 repair', async () => {
+    const compact = await compacted();
+    const carried = compact.out.plan.carriedEvidenceSequences;
+    expect(carried.length).toBeGreaterThan(0);
+    expect(carried.filter((seq) => !rowSequences(compact.r.db).includes(seq)), 'carried evidence survives compaction').toEqual([]);
+
+    const { r, dur } = await fixture();
+    r.ctl.fault = 'events-delete:before';
+    await expect(dur.compactJournal(NOW, DELEGATION_RETENTION_FLOOR_MS)).rejects.toBeInstanceOf(InjectedFault);
+    const J = recordsOf(journalOf(r.dir))[0]!.sequence;
+    const held = linesOf(carriedOf(r.dir)).filter((record) => record.sequence < J && record.entry.kind === 'evidence-accepted').map((record) => record.sequence);
+    expect(held.length).toBeGreaterThan(0);
+    const cutEvidence = rowSequences(r.db).filter((seq) => seq < J && !held.includes(seq)).length;
+    expect(cutEvidence).toBeGreaterThan(0);
+    const reopened = await openWithRepair(r);
+    expect(held.filter((seq) => !rowSequences(r.db).includes(seq)), 'carried evidence survives the actual open\'s step-0 repair').toEqual([]);
+    expect(reopened.dur.failure()).toBeNull();
+    expect(reopened.repair).toMatchObject({ wipedAll: false, fullReplay: false, prunedBelow: cutEvidence });
+  });
+
+  it('W4-C18b: a throwing store leaves the applier ready, marks the projection stale and warns; the next repair finishes the deletes', async () => {
+    const r = rig();
+    const base = projectionOf(r.store);
+    const warnings: string[] = [];
+    let throwing = false;
+    const projection: DelegationProjectionPort = {
+      ...base,
+      deleteEventsBetween: (after, through, limit) => {
+        if (throwing) throw new Error('fixture delete failed');
+        return base.deleteEventsBetween(after, through, limit);
+      },
+    };
+    const dur = await r.open({ projection, warn: (message) => warnings.push(message) });
+    await apply(dur, Array.from({ length: 7 }, (_, i) => sessionStart(D0 + i * MIN)));
+    await apply(dur, Array.from({ length: 10 }, (_, i) => sessionStart(D0 + 11 * DAY + i * MIN)));
+    throwing = true;
+    const out = await dur.compactJournal(NOW, DELEGATION_RETENTION_FLOOR_MS);
+    expect(out).toMatchObject({ kind: 'compacted', eventsDeleted: 0, retired: 0 });
+    expect(dur.failure()).toBeNull();
+    expect(dur.state().phase).toBe('ready');
+    expect((dur as unknown as { projectionStale: boolean }).projectionStale).toBe(true);
+    expect(warnings).toEqual(['ccrc-server: delegation compaction: the delegation_events delete failed, the repair finishes it: fixture delete failed']);
+    expect(countRows(r.db)).toBe(17);
+    throwing = false;
+    expect(await dur.repairProjection()).toMatchObject({ prunedBelow: 7, wipedAll: false });
+    expect((dur as unknown as { projectionStale: boolean }).projectionStale).toBe(false);
+    expect(countRows(r.db)).toBe(10);
+    expect(countRows(r.db)).toBe(evidenceOf(dur).evidence.total);
   });
 
   it('the pruning plan still locates carried holds after compaction', async () => {
@@ -856,6 +955,44 @@ describe('Task 3.4: delegation_events retention, and a repair that deletes inste
     const firstHeld = retained.find((r) => held.has(r.journalId))!;
     expect(firstHeld.sequence).toBeLessThan(dur.state().checkpoint.appliedJournalSequence);
     expect(await dur.planPruning(NOW, DELEGATION_RETENTION_FLOOR_MS)).toMatchObject({ enabled: true, prunableThroughSequence: firstHeld.sequence - 1 });
+  });
+
+  it.each([true, false])('W4-C30b: journal-only rollback stand-in with a cut lease-created record = %s', async (leased) => {
+    const r = rig();
+    const dur = await r.open();
+    await apply(dur, [subagentStart(D0, 'agent-rollback'), ...Array.from({ length: 20 }, (_, i) => sessionStart(D0 + MIN + i * 1000))]);
+    if (leased) {
+      r.clock.ms = D0 + HOUR;
+      expect((await dur.createLease({ activityId: activityIdOf(dur, 'agent', 'agent-rollback'), parentId: PARENT, parentIncarnation: INC,
+        project: 'project-a', adminRecord: 'wt-rollback', canonicalPath: '/work/project-a/.claude/worktrees/rollback', creationBase: null,
+        sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: iso(D0) })).kind).toBe('created');
+    }
+    await apply(dur, Array.from({ length: 10 }, (_, i) => sessionStart(D0 + 11 * DAY + i * MIN)));
+    const out = await dur.compactJournal(NOW, DELEGATION_RETENTION_FLOOR_MS);
+    expect(out.kind).toBe('compacted');
+    const carried = linesOf(carriedOf(r.dir));
+    expect(carried.some((record) => record.entry.kind === 'lease-created')).toBe(leased);
+    const saved = path.join(r.dir, 'carried.saved');
+    renameSync(path.join(r.dir, DELEGATION_CARRIED_FILE), saved);
+    // The old reader has no carried-file door. No new grammar is involved: absence gives its journal-only recovery and repair inputs.
+    const old = await recoverDelegationFromFiles(nodeDelegationFilePort, r.dir);
+    if (leased) {
+      expect(old.failure?.code).toBe('lease-proof');
+      expect(old.state.phase).toBe('reconstructing');
+    } else {
+      expect(old.failure).toBeNull();
+      expect(old.state.phase).toBe('ready');
+      const repaired = await repairDelegationProjection({ projection: projectionOf(r.store), checkpoint: old.state.checkpoint,
+        journal: async function* () { yield* recordsOf(journalOf(r.dir)); }, evidence: old.facts!.evidence });
+      expect(repaired.wipedAll, 'journal-only repair can discard carried evidence').toBe(true);
+      expect(countRows(r.db)).toBe(old.facts!.evidence.total);
+      expect(carried.filter((record) => record.entry.kind === 'evidence-accepted').every((record) => !rowSequences(r.db).includes(record.sequence))).toBe(true);
+    }
+    renameSync(saved, path.join(r.dir, DELEGATION_CARRIED_FILE));
+    const returned = await r.open();
+    expect(returned.failure()).toBeNull();
+    expect(countRows(r.db)).toBe(evidenceOf(returned).evidence.total);
+    expect(carried.filter((record) => record.entry.kind === 'evidence-accepted').every((record) => rowSequences(r.db).includes(record.sequence))).toBe(true);
   });
 
   it('W4-C30: after a compaction a heal replays the carried evidence, and so does a wipe; a second full repair wipes nothing', async () => {

@@ -493,6 +493,20 @@ describe('Task 3.6: compacted coordination snapshots', () => {
     expect(H.classify({ from: dir }).kind).toBe('v1');
   });
 
+  it.each(['absent', 'applied-zero'] as const)('W4-C23b: carried evidence without a journal and checkpoint %s refuses carried-past-applied in recovery and the helper', async (kind) => {
+    const home = mkHome();
+    const checkpoint = kind === 'absent' ? null : cpBytes(0, null);
+    setLive(home, { checkpoint, journal: null });
+    writeFileSync(liveFile(home, CARRIED_NAME), bytesOf(RA));
+    const server = await recoverDelegationFromFiles(nodeDelegationFilePort, liveDir(home));
+    expect(server.failure?.code).toBe('carried-past-applied');
+    expect(server.state.phase).toBe('reconstructing');
+    const helper = outcome(() => H.validateSidecars(H.realFs, {
+      checkpointBytes: checkpoint, carriedPath: liveFile(home, CARRIED_NAME), journalPath: liveFile(home, 'delegation-events.log'),
+    }));
+    expect(helper).toMatchObject({ ok: false, code: server.failure!.code });
+  });
+
   it('W4-C24: a suffix past applied plus one refuses sequence-gap in actual recovery and the helper', async () => {
     const checkpoint = encodeDelegationCheckpoint({ ...recoverDelegation(null, [RA]).state.checkpoint, revision: 1 });
     const { server, helper } = await retainedVerdicts({ checkpoint, carried: bytesOf(RA), journal: bytesOf(RC) });

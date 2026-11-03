@@ -2565,10 +2565,13 @@ export class DelegationDurability {
    *   9. `events-delete` (SQLite's cut rows, in the gaps between the carried evidence), then the retirement commit (C1, `retireBehindCut`).
    * The carried file is renamed FIRST: a crash between the two renames leaves it beside the uncut journal, its lines at or above the journal's
    * first sequence copies of journal lines that every reader matches and skips; renamed second, such a crash would lose the carried records.
-   * A failure before the journal's rename leaves the journal byte-identical: both temps are removed (best effort), the writer is replaced,
-   * nothing in memory has changed, and the applier stays ready; the outcome is a rejection. A failure at or after the rename fails the applier,
-   * which then re-recovers from whichever files the rename left (both are valid). A SQLite failure at `events-delete` fails nothing: it marks
-   * the projection stale, and the repair's step 0 finishes the job.
+   * D-7015: a failure before the carried rename removes both temps (best effort), replaces the writer and leaves the applier ready. Once
+   * the carried rename is attempted, a failure fails the applier: a later compaction can drop old carried evidence, so the live indexes may
+   * be ahead of disk even while the journal is byte-identical. Recovery over the files is the one source of truth. A SQLite failure at
+   * `events-delete` fails nothing: it marks the projection stale, and the repair's step 0 finishes the job.
+   * D-7022 rollback is conditional, not a grammar refusal: an older reader ignores the carried file. A cut lease-created record makes
+   * it refuse `lease-proof`; without one it can recover ready on the journal alone, and its repair can wipe and replay that journal alone.
+   * On return this build reads the carried evidence again and repairs it into SQLite. The pre-compaction snapshot remains the restore point.
    */
   compactJournal(nowMs: number, floorMs: number): Promise<DelegationCompactionOutcome> {
     return this.enqueue(async () => {
@@ -2582,12 +2585,14 @@ export class DelegationDurability {
         if (plan.cutThrough === 0) return { kind: 'skipped', reason: 'nothing-to-cut', plan };
         if (!plan.worthwhile) return { kind: 'skipped', reason: 'below-share', plan };
         await this.writeCarriedLocked(plan, carriedTemp);
-        await this.edge('carried-rename', () => this.port.rename(carriedTemp, this.carriedPath));
+        await this.edge('carried-rename', async () => {
+          renamed = true;                                   // D-7015: either file may now differ from the live indexes; re-recover on failure
+          await this.port.rename(carriedTemp, this.carriedPath);
+        });
         await this.edge('carried-directory-fsync', () => this.port.fsyncDir(this.deps.dir));
         await this.edge('writer-close', () => this.writer.close());
         await this.copySuffixLocked(plan.suffixOffset, journalTemp);
         await this.deps.onEdge?.('journal-rename', 'before');
-        renamed = true;                                     // from here on the journal may be the copy: a failure re-recovers
         await this.port.rename(journalTemp, this.journalPath);
         await this.deps.onEdge?.('journal-rename', 'after');
         await this.edge('journal-directory-fsync', () => this.port.fsyncDir(this.deps.dir));
