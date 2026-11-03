@@ -128,6 +128,31 @@ describe('the table', () => {
   });
 });
 
+describe('the worker parent', () => {
+  // The open minting run wins (runBinding.ts): an adopted worker whose earlier occupant's run, with the higher id, is
+  // still open reads the adopting run's claimant as its parent, so the lane finds no parent-mismatch for it.
+  it('an earlier occupant\'s open run does not mismatch a worker whose minting run is open and unplaceable', async () => {
+    const { db, coord, deps } = rig();
+    const open = (claimedBy: string, openedAt: number): number => {
+      const r = coord.openRun({ program: `program-${claimedBy}`, title: 'T', project: 'project-a', wave: 1, waveOf: 1, claimedBy });
+      if (!('id' in r)) throw new Error('fixture openRun refused');
+      db.prepare('UPDATE runs SET openedAt = ? WHERE id = ?').run(openedAt, r.id);
+      return r.id;
+    };
+    const adopting = open('coord-live', T0 - 3 * H);
+    const earlier = open('coord-gone', T0 - 3 * H + 1000);
+    coord.markDispatchStarted(earlier, T0 - 2 * H);
+    coord.setSession(earlier, 'demo-w', T0 - 2 * H);
+    coord.markDispatchStarted(adopting, T0 - H);
+    coord.setSession(adopting, 'demo-w', null);
+    await runDriftPass(deps([], { childMarks: new Map([['demo-w', { kind: 'child', runId: adopting }]]) }), T0);
+    expect(rows(coord).map((r) => r.key)).not.toContain('parent-mismatch:demo-w');
+    db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(adopting);
+    await runDriftPass(deps([], { childMarks: new Map([['demo-w', { kind: 'child', runId: adopting }]]) }), T0 + H);
+    expect(rows(coord).filter((r) => r.clearedAt === null).map((r) => r.key)).toContain('parent-mismatch:demo-w');
+  });
+});
+
 describe('the pushes', () => {
   it('the first armed pass sends one summary push, no per-item push, and spends no daily budget', async () => {
     const { coord, deps, quietRun, sent } = rig();
