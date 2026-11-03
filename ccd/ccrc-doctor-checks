@@ -185,7 +185,7 @@ CCRC_DOCTOR_CHECKS=(
   linger
   path
   services
-  scopes scope-sweep oom-policy land-probe   # one line, as `flock timeout`: _check_scope-sweep, _check_oom-policy and _check_land-probe are near the END of this file, before _check_delegation-hooks
+  scopes scope-sweep oom-policy land-probe pane-scope-stop   # one line, as `flock timeout`: _check_scope-sweep, _check_oom-policy and _check_land-probe are near the END of this file, before _check_delegation-hooks; _check_pane-scope-stop is at the very END (D-7902)
   config
   auth box-token   # one line, as `flock timeout`: _check_box-token is at the END of this file
   rc
@@ -11500,4 +11500,32 @@ _check_transcript_work() {
     return 0
   fi
   _dr_pass transcript_work "$detail, within the warn bound ($bounds)$largest_s"
+}
+
+# ── pane-scope-stop (D-7902) ──────────────────────────────────────────────
+# THE MODE OF A DELIBERATE STOP'S PANE-SCOPE STOP. `ccd stop` and `ccd hibernate` (the stop-done lane and the roll
+# included) stop the stopped session's own pane scope once its main process has exited, but only while
+# `$reg/pane-scope-stop-live` stands; absent, each stop logs a `pane-scope <id>: would stop …` line in `$reg/swap.log`
+# and stops nothing. This check names the mode and nothing else: it reads the marker (`-e` or `-L`, a dangling link
+# included) and never writes it; its writer is `ccd pane-scope-stop`, behind Settings › Automation. PASS in both modes:
+# shadow is how it ships. SKIP on Darwin (no cgroups, so no stop has a scope to take down), on a `server`-role box (no
+# session runs there) and with no registry (no session was ever started here). Appended at the END of this file, for `_check_timeout`'s reason (lines above are cited by number).
+_check_pane-scope-stop() {
+  local role="" reg="$HOME/.cc-sessions"   # the bare directory, never `.cc-sessions/<name>` on a code line: pool-name-parity.test.ts pins those
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    _dr_skip pane-scope-stop "pane scopes are a Linux mechanism — a stop on this box has none to take down"; return 3
+  fi
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$role" = server ]; then
+    _dr_skip pane-scope-stop "this box records CCRC_ROLE=server, so it runs no session and no stop"; return 3
+  fi
+  if [ ! -d "$reg" ]; then
+    _dr_skip pane-scope-stop "no session registry at ~/.cc-sessions, so no session has been started here to stop"; return 3
+  fi
+  if [ -e "$reg/pane-scope-stop-live" ] || [ -L "$reg/pane-scope-stop-live" ]; then
+    _dr_pass pane-scope-stop "live: a deliberate stop (ccd stop, hibernation, a finished worker) also stops the session's pane scope once its main process has exited; each stop is a pane-scope line in $reg/swap.log"
+  else
+    _dr_pass pane-scope-stop "shadow: a deliberate stop only logs the pane scope it would stop (pane-scope lines in $reg/swap.log); arm it in Settings › Automation"
+  fi
+  return 0
 }
