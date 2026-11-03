@@ -59,7 +59,7 @@ export function refusalWordOf(err: unknown): string | undefined {
 
 /** The step-up for the act that needs it, mounted only while that act is drawn and the screen can act, so the
  *  challenge is fetched when the step is SHOWN (`useStepUp`'s rule) and an offline sheet sends nothing. */
-function StepUpFor({ freshUntil, deps, children }: {
+export function StepUpFor({ freshUntil, deps, children }: {
   freshUntil: number | null; deps: StepUpDeps; children: (s: StepUp) => ReactNode;
 }): ReactNode {
   return children(useStepUp(freshUntil, deps));

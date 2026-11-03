@@ -1022,3 +1022,79 @@ export const signOldOutRefused = (id: string, word: string | undefined): string 
 export const bothHeld = (id: string): string =>
   `${id} holds both the new token and its old sign-in until you sign the old one out.`;
 export const SWITCH_CLOSE_TOKEN = "Sessions on this lane won't ask you to sign in again for about a year.";
+
+// ── Re-authenticate an existing Anthropic lane (accounts plan Task A38, D-7872; spec §9 rows 1, 2, §4.2, §4.4) ────────
+// Sign in again (a sign-in lane), Mint a new token (a token lane), and the Expiring (minted token) card's Replace token.
+// The lane already exists and keeps its method, so nothing here says it was created, is off, or can be discarded: every
+// terminal state says the old credential is untouched, from a code. The switches' words are A23's (above). NO DURATION
+// IS WRITTEN HERE either: every deadline reads `expiresAt`.
+
+/** The acts' words, on the trouble card and the fold (spec §4.2, §4.4). */
+export const SIGN_IN_AGAIN = 'Sign in again';
+export const MINT_NEW_TOKEN = 'Mint a new token';
+/** The re-auth sheet's way over to A19's paste arm, and the paste sheet's way back. */
+export const PASTE_INSTEAD = 'Paste a token instead';
+export const MINT_INSTEAD = 'Mint a new token instead';
+
+/** What a re-auth replaces, by the method it runs: a sign-in for `login`, a token for `setup-token`. */
+const credOf = (method: 'login' | 'setup-token'): string => (method === 'login' ? 'sign-in' : 'token');
+
+/** The sheet's title and eyebrow, by the method it runs. */
+export const reauthTitle = (id: string, method: 'login' | 'setup-token'): { title: string; eyebrow: string } => (method === 'login'
+  ? { title: `Sign ${id} in again`, eyebrow: 'sign in again' }
+  : { title: `Replace ${id}'s token`, eyebrow: 'mint a new token' });
+
+/** What happens, said before anything runs: the old credential stays until the new one passes (A20). */
+export const reauthIntro = (id: string, method: 'login' | 'setup-token'): string => (method === 'login'
+  ? `A new sign-in runs on the fleet host and is checked before it replaces the old one. Until it passes, ${id} keeps the sign-in it has.`
+  : `A new long-lived token is minted on the fleet host and checked before it replaces the old one. Until it passes, ${id} keeps the token it has.`);
+
+/** The confirm frame's primary. */
+export const reauthStart = (method: 'login' | 'setup-token'): string => (method === 'login' ? SWITCH_START.login : MINT_NEW_TOKEN);
+
+/** The sentence every refused, cancelled or expired attempt ends with. */
+export const credentialUntouched = (id: string, method: 'login' | 'setup-token'): string =>
+  `Nothing changed: ${id} keeps its old ${credOf(method)}.`;
+
+/** A re-auth's terminal states (spec §9: "A refused, cancelled or expired attempt says the old credential is
+ *  untouched"), each from its code. `lost` is the one state that cannot say so: whether the attempt finished is unknown. */
+export function reauthEnd(id: string, method: 'login' | 'setup-token', kind: SignInEndKind, failure?: string): string {
+  const untouched = credentialUntouched(id, method);
+  switch (kind) {
+    case 'expired': return `The sign-in timed out. ${untouched}`;
+    case 'code-refused':
+      return `claude.ai didn't accept that code. ${untouched} Codes work once and expire quickly. Start again for a fresh one.`;
+    case 'untrusted':
+      return `The sign-in link on the fleet host didn't look like claude.ai, so it isn't shown. ${untouched}`;
+    case 'cancelled': return `Cancelled. ${untouched}`;
+    case 'unknown':
+      return `The fleet host didn't answer in time, so whether a new sign-in started for ${id} is unknown. Its old ${credOf(method)} was not replaced here. Start again.`;
+    case 'lost':
+      return `The server no longer holds the sign-in for ${id}, so whether it finished is unknown. Check the lane to see which credential works.`;
+    case 'node-changed':
+      return `The fleet host answering now is not the one the sign-in started on, so it was stopped. ${untouched}`;
+    case 'failed':
+      return `The sign-in stopped on the fleet host before a code was sent${failure !== undefined && CODE_RE.test(failure) ? ` (${failure})` : ''}. ${untouched}`;
+  }
+}
+
+/** A start refused with a word: A22's sentence, then the old credential untouched. */
+export const reauthStartRefusal = (id: string, method: 'login' | 'setup-token', word: string, reason: string | undefined): string =>
+  `${signInStartRefusal(id, word, reason)} ${credentialUntouched(id, method)}`;
+
+/** The run frame's line once the helper says `done` (A20 installed it after its own check of the new credential). */
+export const reauthInstalled = (method: 'login' | 'setup-token'): string => (method === 'login'
+  ? '✓ New sign-in checked and installed on the fleet host'
+  : '✓ New token minted, checked and installed on the fleet host');
+
+/** The live sessions after it (spec §9): a token is read at a session's start, a sign-in at its next request. */
+export const reauthRestartLead = (n: number, method: 'login' | 'setup-token'): string => (method === 'setup-token'
+  ? `${plural(n, 'session')} on this lane ${n === 1 ? 'keeps' : 'keep'} the old credential until ${n === 1 ? 'it restarts' : 'they restart'}.`
+  : `${plural(n, 'session')} on this lane ${n === 1 ? 'picks' : 'pick'} up the new sign-in at ${n === 1 ? 'its' : 'their'} next request. Restart one if it's stuck on the old error.`);
+
+/** The identity read back differs from the one the lane had (spec §9 row 1): N5's sign-out, then a new attempt. G23 is
+ *  unmeasured (the OA1 record), so nothing is said about the provider. */
+export const REAUTH_WRONG = 'Not the account this lane had?';
+export const reauthWasLine = (old: string): string => `It had ${old}.`;
+export const reauthSignOutConfirm = (id: string): string =>
+  `${id} is signed out on the fleet host, then a new sign-in starts. Until you finish it, sessions on ${id} fail their next turn. Sign in with the account this lane should use.`;

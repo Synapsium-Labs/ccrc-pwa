@@ -7,7 +7,7 @@ import { Sheet } from '@ccrc/ui';
 /** What the live region says: a step change (`status`) or a terminal state (`alert`). */
 export type Announcement = { readonly kind: 'status' | 'alert'; readonly text: string };
 
-export function AccountSheet({ open, onClose, title, eyebrow, frame, said, offline, testIds, children }: {
+export function AccountSheet({ open, onClose, title, eyebrow, frame, said, offline, testIds, className, children }: {
   open: boolean;
   onClose: () => void;
   title: string;
@@ -19,11 +19,13 @@ export function AccountSheet({ open, onClose, title, eyebrow, frame, said, offli
   offline: string | null;
   /** The live region's test ids' prefix (`connect` → `connect-status`, `connect-alert`). */
   testIds: string;
+  /** A hook class beside `acct-connect`, naming the sheet (the re-auth sheet's `acct-reauth`, Task A38). */
+  className?: string;
   children: ReactNode;
 }): ReactNode {
   return (
     <Sheet open={open} onClose={onClose} title={title} eyebrow={eyebrow} size="md">
-      <div className="acct-connect" data-frame={frame}>
+      <div className={className === undefined ? 'acct-connect' : `acct-connect ${className}`} data-frame={frame}>
         {/* One live region per sheet (spec §12.4): a step change is polite, a terminal state an alert. */}
         <div className="sr-only">
           <p role="status" data-testid={`${testIds}-status`}>{said?.kind === 'status' ? said.text : ''}</p>

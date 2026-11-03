@@ -13,6 +13,11 @@
 // old token, which stays valid for up to a year, so the operator ticks "I revoked the old token" once they have, and the
 // tick is recorded with no value (N6). Leaving it unticked is allowed, and the record line then says "old token not
 // marked revoked". The compromise disclosure closes the sheet (spec §3.11).
+//
+// MINT BESIDE PASTE (accounts plan Task A38, D-7872; spec §9's token row: "mint again or paste"). Where the fleet can run
+// a mint (`account-auth-v1`), the screen hands this sheet `onMint`, and its paste frame opens with **Mint a new token
+// instead** above the field: the mint is the first way, the paste the second. The mint itself is the re-auth sheet's
+// (`ReauthSheet`), which the screen opens in this sheet's place, one sheet at a time.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, Sheet, TextLink } from '@ccrc/ui';
 import type { AccountsConnect, RosterWire } from '../../../shared/api';
@@ -21,7 +26,7 @@ import { openExternal } from '../lib/markdown';
 import { ensureSession } from '../session/useEnsure';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
-  DONE, LEDGER, NEW_TOKEN_LABEL, REPLACE_SAVE, REVOKED_OLD, REVOKE_PAGES, STEP_UP_AGAIN_REPLACE,
+  DONE, LEDGER, MINT_INSTEAD, NEW_TOKEN_LABEL, REPLACE_SAVE, REVOKED_OLD, REVOKE_PAGES, STEP_UP_AGAIN_REPLACE,
   TOKEN_CLEARED_REPLACE, addRefusal, laneActRefusal, replaceIntro, replaceLedger, replaceRefusal, replaceUnknown,
   restartLead, revokeOldLead, revokeOldTail,
 } from '../fleet/accountWords';
@@ -52,6 +57,8 @@ export interface ReplaceSheetProps {
   ensure?: (sessionId: string) => Promise<void>;
   stepUpDeps?: StepUpDeps;
   fleet?: FleetStore;
+  /** The mint arm (Task A38): present when the fleet can mint, it closes this sheet and opens the re-auth sheet's mint. */
+  onMint?: () => void;
 }
 
 type Phase = 'paste' | 'saving' | 'saved';
@@ -154,6 +161,11 @@ export function ReplaceSheet(props: ReplaceSheetProps): ReactNode {
         {blocked !== null && <p className="acct-offline">{blocked}</p>}
         {phase === 'paste' && (
           <>
+            {props.onMint !== undefined && (
+              <div className="acct-actions acct-mint-instead">
+                <Button variant="ghost" size="fit" disabled={blocked !== null} onClick={props.onMint}>{MINT_INSTEAD}</Button>
+              </div>
+            )}
             <p className="acct-field-note">{replaceIntro(id)}</p>
             {blocked === null && (
               <SecretField label={NEW_TOKEN_LABEL} handle={secret} onPresence={setHasSecret} />

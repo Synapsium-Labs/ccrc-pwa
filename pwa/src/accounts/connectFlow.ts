@@ -171,9 +171,14 @@ export function heldAttemptOf(
 }
 
 /** Which sheet continues an attempt (spec §9): `setup-token` on a sign-in lane and `login` on a token lane are the two
- *  method switches; the same method as the lane's is the connect sheet's sign-in of a lane it added. */
-export function resumeSheetFor(kind: RosterWire['kind'] | undefined, method: SignInMethod): 'switch' | 'connect' {
-  return (method === 'setup-token' && kind === 'sign-in') || (method === 'login' && kind === 'token') ? 'switch' : 'connect';
+ *  method switches. The same method as the lane's is a re-auth (Task A38, D-7872) on a lane that has been checked
+ *  (`checked`: the lane state holds a check, which a lane the connect sheet is still adding never has), and otherwise the
+ *  connect sheet's sign-in of a lane it added. */
+export function resumeSheetFor(
+  kind: RosterWire['kind'] | undefined, method: SignInMethod, checked = false,
+): 'switch' | 'reauth' | 'connect' {
+  if ((method === 'setup-token' && kind === 'sign-in') || (method === 'login' && kind === 'token')) return 'switch';
+  return checked ? 'reauth' : 'connect';
 }
 
 /** The method a lane switches TO from its fold (spec §4.4, §9; Q1): a sign-in lane to the long-lived token, a token lane
