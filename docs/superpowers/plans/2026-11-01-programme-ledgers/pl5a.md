@@ -117,11 +117,11 @@ round's cases. All 27 killed.
 |---|---|---|---|
 | R1 | M1: the nav badge counts checking items | the groups add up to the door count (+1) | `386f334728b5` |
 | R2 | M2: the stale label dropped | a checking item reads Checking… and a stale one reads ticked; coordinator not responding (+1) | `386f334728b5` |
-| R3 | M3: the focus refetch dropped | FleetChromeProvider reads GET /api/waiting when the tab regains focus (+2) | `938c1254abb8` |
+| R3 | M3: the focus refetch dropped | FleetChromeProvider reads GET /api/waiting when the tab regains focus (+2) | `6e9ab5bb14dc` |
 | R4 | M4: isBlocking ignores state | an item being checked is not blocking: its programme does not sort first and it does not lead it | `386f334728b5` |
 | R5 | M5: a secret item's answer reaches the DOM | never renders the answer of a secret item | `4ea76a9196d3` |
 | R6 | M6: the group's waiting count doubles its questions (the rail and its total) | a group counts its open items and its questions once each, and not what is being checked (+2) | `386f334728b5` |
-| R7 | M7: the refetch takes any answer for a list | takes exactly what the frame takes: a list of three arrays, and nothing else | `938c1254abb8` |
+| R7 | M7: the refetch takes any answer for a list | takes exactly what the frame takes: a list of three arrays, and nothing else | `6e9ab5bb14dc` |
 | N1 | F1: the Decide panel has no "Your own answer" option | an own answer and a note go together, and a blank note adds nothing (+2) | `4ea76a9196d3` |
 | N2 | F1: the note is dropped from the answer | a note to the coordinator rides inside the answer (+2) | `4ea76a9196d3` |
 | N3 | F1: the note has no maxLength of its own | the whole answer, note included, is held to the server's limit by maxLength and a visible count | `4ea76a9196d3` |
@@ -135,8 +135,8 @@ round's cases. All 27 killed.
 | N11 | F4: the programme-unclaimed sentence says dismiss | the programme-unclaimed sentence never says to dismiss: a dismiss is refused while its run is op | `6bfb579e5012` |
 | N12 | F4: a route code loses its sentence (unknown-item) | the sentence table is the routes' own codes, so a new code cannot slip by without a sentence | `6bfb579e5012` |
 | N13 | F4: /waiting never says this box has no list | says there is no list to wait for when this box has no coordination database | `c3163185f40d` |
-| N14 | F5: a focus read does not join the one on the wire | a tab that becomes visible and focused reads once (+1) | `938c1254abb8` |
-| N15 | F5: the re-read after a tick reuses the read already on the wire | a read asked for after a move starts after the one on the wire, so it sees the move | `938c1254abb8` |
+| N14 | F5: a focus read does not join the one on the wire | a tab that becomes visible and focused reads once (+1) | `6e9ab5bb14dc` |
+| N15 | F5: the re-read after a tick reuses the read already on the wire | a read asked for after a move starts after the one on the wire, so it sees the move | `6e9ab5bb14dc` |
 | N16 | F6: the stale sentence says the coordinator has not picked it up | a stale checking item says the coordinator is not responding, whatever made it stale | `4ea76a9196d3` |
 | N17 | F7: a checking item loses its needed-by pill | a checking item wears its state and its needed-by, and a stale one says so (+2) | `386f334728b5` |
 | N18 | F8: unheard runs read as an ended programme | Dismiss is offered only once the runs frame says the programme has no open run (+7) | `386f334728b5` |
