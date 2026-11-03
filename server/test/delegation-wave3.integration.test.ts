@@ -1571,7 +1571,6 @@ describe('8. the closed scope census', () => {
       systemctl: (a) => a[0] === '--user' && a[1] === 'is-active',
     };
     expect(commandsOutside(shellBody(checks, '_check_delegation-hooks'), READERS), 'the check runs something that is not a reader').toEqual([]);
-    expect(commandsOutside(shellBody(checks, '_dh_mixed_events'), { jq: (a) => a[0] === '-r' }), 'the mixed-group reader').toEqual([]);
     // the readers it calls: the installer's event list (a file read), the roster read (one node program, with no write in it), the
     // joiner, and the four one-line verdict printers, which are pinned whole
     expect(commandsOutside(shellBody(checks, '_dh_events'), { local: true, '[': true, read: true, return: true, printf: true }), '_dh_events').toEqual([]);
@@ -1592,15 +1591,17 @@ describe('8. the closed scope census', () => {
     // only read (a file, `systemctl --user is-active` or a `.svcfailed` stamp) or print; they are not pinned here by digest, because every
     // unrelated doctor wave edits them.
     const ccrcSrc = read('ccd/ccrc');
-    for (const fn of ['_fix_delegation-hooks', '_check_delegation-hooks', '_dh_mixed_events', '_dh_events', '_dr_join']) {
+    for (const fn of ['_fix_delegation-hooks', '_check_delegation-hooks', '_dh_events', '_dr_join']) {
       const defs = (checks.match(new RegExp(`^${fn}\\(\\) *\\{`, 'gm')) ?? []).length + (ccrcSrc.match(new RegExp(`^${fn}\\(\\) *\\{`, 'gm')) ?? []).length;
       expect(defs, `${fn} is defined exactly once across ccd/ccrc-doctor-checks and ccd/ccrc`).toBe(1);
     }
+    // R55 is lifted (PR4 Task 4.5b, W4-D5): the mixed-group reader the fixer refused with is gone, from both files
+    expect((checks + ccrcSrc).match(/^_dh_mixed_events\(\) *\{/gm), 'R55 is lifted: the mixed-group reader is gone').toBeNull();
     // THE FIXER: the shipped installer, once, with exactly `--homes <dirs>`, and the readers it uses today. `install`, a second script, `rm`,
     // `eval`, `sh -c` and every redirection to a file are each outside this list.
     const fixBody = shellBody(checks, '_fix_delegation-hooks');
     const FIXER: CommandRules = {
-      local: true, echo: true, return: true, read: true, '[': true, continue: true, _skills_roster_rows: true, _dh_mixed_events: true, _dr_join: true,
+      local: true, echo: true, return: true, read: true, '[': true, continue: true, _skills_roster_rows: true, _dr_join: true,
       command: (a) => a.length === 2 && a[0] === '-v' && a[1] === 'jq',
       '"${BASH:-bash}"': (a) => a.length === 3 && a[0] === '"$inst"' && a[1] === '--homes' && a[2] === '"${dirs[@]}"',
     };
@@ -1617,13 +1618,14 @@ describe('8. the closed scope census', () => {
     expect(assigns.filter((a) => a.name === 'inst').map((a) => `${a.declared ? 'local ' : ''}${a.name}=${a.value}`), '`inst` is assigned once, by `local`')
       .toEqual(['local inst="$CCRC_HERE/install-session-hooks.sh"']);
     expect([...new Set(assigns.filter((a) => a.prefixOf === null).map((a) => a.name))].sort(), 'the names the fixer assigns').toEqual(
-      ['dir', 'dirs', 'evarr', 'evs', 'inst', 'list', 'mixed', 'n', 'refused', 'roster', 'rows', 'said', 'verb'].sort());
+      ['dir', 'dirs', 'inst', 'list', 'n', 'roster', 'rows', 'said'].sort());
     // R80 N6: the `local inst=` line comes BEFORE the installer call (not necessarily first)
     const instAt = raw.indexOf('local inst="$CCRC_HERE/install-session-hooks.sh"');
     expect(instAt, 'the fixer names the shipped installer').toBeGreaterThan(-1);
     expect(instAt, 'before the installer call').toBeLessThan(raw.indexOf('"${BASH:-bash}" "$inst"'));
-    // it refuses a home with a mixed hook group before the installer could touch it (R55), and removes nothing itself
-    expect(raw).toContain('_dh_mixed_events');
+    // R55 is lifted (PR4 Task 4.5b): the fixer hands every rostered home to the installer, whose option-B sweep keeps foreign
+    // hooks, and it removes nothing itself
+    expect(raw).not.toContain('_dh_mixed_events');
   });
 
   it('the lane\'s in-memory structures are not durable state: the lane class opens no file and no SQLite handle of its own', () => {
