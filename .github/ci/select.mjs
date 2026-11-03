@@ -24,7 +24,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readMap, FAILED_UNDER_TRACE } from './testmap.mjs';
 import { readChanges, liveTestFiles, unsafeTestPaths, gitExistsAt, selectTests, gitStaleChanges, selectIgnoringUncertainty, uncertainTests, vitestFollows, RULE_NAMES } from './select-tests.mjs';
-import { planShards, planTraceBatch, toMatrix, PROFILES } from './shards.mjs';
+import { planShards, planTraceBatch, toMatrix, PROFILES, serverProfile } from './shards.mjs';
 
 /** @typedef {import('./testmap.mjs').TestMap} TestMap */
 /** @typedef {import('./select-tests.mjs').Selection} Selection */
@@ -518,7 +518,10 @@ function main() {
   // full run.
   const macosProfile = event !== 'pull_request' && testsOut === 'full' ? PROFILES.macosFull : PROFILES.macosSelected;
 
-  const serverPlan = planShards(testFileList, durations, PROFILES.linux);
+  // A dispatch's `workers` input (2 or 4) plans the server shards at that many vitest workers; every other event
+  // keeps PROFILES.linux (serverProfile). Resolved before anything is written, so a refused count writes no matrix.
+  const linuxProfile = serverProfile(event, opt.workers);
+  const serverPlan = planShards(testFileList, durations, linuxProfile);
   const macosPlan = planShards(testFileList, durations, macosProfile);
   // `durations ?? {}`, never null: trace-run.mjs takes an exact list and has
   // no --shard, so the trace plan must always be a real partition (LPT at
@@ -585,6 +588,9 @@ function main() {
     if (listed.length > QUEUED_LISTED) notes.push(`queued: ${listed.length - QUEUED_LISTED} more not listed`);
     const total = queued.unmapped.length + queued.uncertain.length;
     if (total > 0) process.stdout.write(`::notice::this light run left ${total} server test(s) to the merge queue's full run (${queued.unmapped.length} unmapped, ${queued.uncertain.length} uncertain); the step summary lists them\n`);
+  }
+  if (linuxProfile !== PROFILES.linux) {
+    notes.push(`server shards planned at ${linuxProfile.workers} vitest workers each (this dispatch's workers input; the profile's is ${PROFILES.linux.workers})`);
   }
   const nowMs = opt.now ? Date.parse(opt.now) : Date.now();
   // Main's head, where this run can name it: a pull request's base, or the checked-out main of a refresh.

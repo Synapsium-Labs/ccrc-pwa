@@ -72,6 +72,29 @@ export const PROFILES = {
   traceRebuild: { targetMs: 2_400_000, min: 1, max: 24, workers: 2, defaultMs: 5000, scale: 6 },
 };
 
+/** The vitest workers a manual dispatch may ask each server shard for (ci.yml's `workers` input). */
+export const DISPATCH_WORKERS = [2, 4];
+
+/**
+ * The profile the full server plan is packed with. A `workflow_dispatch` that passes `workers` (2 or 4) plans the
+ * shards at that many vitest workers each, for measuring how the suite runs at 4 on a 4-vCPU runner against today's
+ * 2; every other field is `PROFILES.linux`'s, so the same tests run and only the shard count and the workers move.
+ * Any other event keeps the profile, whatever is passed: a pull request, a queue run, a push, a schedule and a call
+ * (a called run's event is its caller's, but ci.yml passes no workers for one: `workflow_call` declares no such
+ * input). A dispatch asking for a count the input does not offer is refused.
+ *
+ * @param {string} event @param {string | undefined} workers
+ * @returns {ShardProfile}
+ */
+export function serverProfile(event, workers) {
+  if (event !== 'workflow_dispatch' || workers === undefined || workers === '') return PROFILES.linux;
+  const n = Number(workers);
+  if (!DISPATCH_WORKERS.includes(n)) {
+    throw new Error(`shards.mjs: a dispatch may ask for ${DISPATCH_WORKERS.join(' or ')} workers per server shard, not ${JSON.stringify(workers)}`);
+  }
+  return n === PROFILES.linux.workers ? PROFILES.linux : { ...PROFILES.linux, workers: n };
+}
+
 /** The median of the known durations; `defaultMs` when none are known. */
 function medianMs(durations, defaultMs) {
   const known = durations != null ? Object.values(durations).sort((a, b) => a - b) : [];
