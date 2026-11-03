@@ -23,8 +23,9 @@
 //   - `settled()`: a Docs store when every seeded key is `html`, `plain` or `skipped`; a chat store when no key a
 //     mounted block references is `unrequested` or `pending`, a block referencing the key it shows (`show`) as well as
 //     the key it requested, so a block in chat's debounce window, showing a key it has not requested yet, is waiting.
-//   - On receipt, in this order (the W5h-a plan's refinement (e)): an outcome `readHighlightOutcome` does not know (a
-//     reply from a worker of another chunk version) is `malformed`, never left pending; an answer longer than MD_HIGHLIGHT_MAX_HTML_CHARS
+//   - On receipt, in this order (the W5h-a plan's refinement (e)): an outcome `readHighlightOutcome` does not know is
+//     `malformed`, never left pending (the runner already answers a worker's unknown reply `worker-failed`,
+//     `malformed-reply`, so this arm is any other highlighter's); an answer longer than MD_HIGHLIGHT_MAX_HTML_CHARS
 //     is `too-large`; one the check refuses is `malformed`; on a Docs store, one that would take the page's HTML past
 //     DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS is `skipped` by that ceiling, counted per drawn copy: each admitted copy of the
 //     key adds the answer's length, in document order; the first copy that would pass the ceiling, and every later copy
@@ -163,18 +164,25 @@ export function isCheckedHighlightHtml(v: unknown): v is CheckedHighlightHtml {
 export function readHighlightOutcome(v: unknown): HighlightOutcome | null {
   if (typeof v !== 'object' || v === null) return null;
   const o = v as Readonly<Record<string, unknown>>;
-  switch (o.kind) {
-    case 'html': return typeof o.html === 'string' && (o.mode === 'block' || o.mode === 'line') ? { kind: 'html', html: o.html, mode: o.mode } : null;
-    case 'too-large': return typeof o.htmlChars === 'number' ? { kind: 'too-large', htmlChars: o.htmlChars } : null;
-    case 'line-too-long': return typeof o.chars === 'number' ? { kind: 'line-too-long', chars: o.chars } : null;
-    case 'threw': return typeof o.error === 'string' ? { kind: 'threw', error: o.error } : null;
-    case 'timeout': return typeof o.budgetMs === 'number' ? { kind: 'timeout', budgetMs: o.budgetMs } : null;
-    case 'worker-failed': return typeof o.error === 'string' ? { kind: 'worker-failed', error: o.error } : null;
-    case 'worker-unavailable': return { kind: 'worker-unavailable' };
-    case 'unregistered': return { kind: 'unregistered' };
-    default: return null;
-  }
+  return typeof o.kind === 'string' && Object.hasOwn(OUTCOME_READERS, o.kind)
+    ? OUTCOME_READERS[o.kind as HighlightOutcome['kind']](o)
+    : null;
 }
+
+/** One reader per arm of `HighlightOutcome`, keyed by its `kind`: an arm added to the union and missing here is a
+ *  compile error, so a new outcome is never read as unknown. */
+const OUTCOME_READERS: {
+  readonly [K in HighlightOutcome['kind']]: (o: Readonly<Record<string, unknown>>) => Extract<HighlightOutcome, { kind: K }> | null;
+} = {
+  html: (o) => (typeof o.html === 'string' && (o.mode === 'block' || o.mode === 'line') ? { kind: 'html', html: o.html, mode: o.mode } : null),
+  'too-large': (o) => (typeof o.htmlChars === 'number' ? { kind: 'too-large', htmlChars: o.htmlChars } : null),
+  'line-too-long': (o) => (typeof o.chars === 'number' ? { kind: 'line-too-long', chars: o.chars } : null),
+  threw: (o) => (typeof o.error === 'string' ? { kind: 'threw', error: o.error } : null),
+  timeout: (o) => (typeof o.budgetMs === 'number' ? { kind: 'timeout', budgetMs: o.budgetMs } : null),
+  'worker-failed': (o) => (typeof o.error === 'string' ? { kind: 'worker-failed', error: o.error } : null),
+  'worker-unavailable': () => ({ kind: 'worker-unavailable' }),
+  unregistered: () => ({ kind: 'unregistered' }),
+};
 
 // ---- Keys and the seeding walk ----
 

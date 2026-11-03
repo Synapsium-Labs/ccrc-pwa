@@ -207,10 +207,8 @@ describe('M4.H11: a content-keyed store', () => {
     it('a fence that grows over many settles leaves a constant number of rows, not one per settle', () => {
       const { store } = setup({ mode: 'chat' });
       streamingFence(store, (n) => 'x'.repeat(n), 40);
-      const kept = store.retainedKeys();
-      expect(kept.entries).toBeLessThanOrEqual(2);
-      expect(kept.subscribers).toBeLessThanOrEqual(2);
-      expect(kept.listeners).toBeLessThanOrEqual(2);
+      // The last key alone: shown and listened to, never requested, so no entry.
+      expect(store.retainedKeys()).toEqual({ entries: 0, subscribers: 1, listeners: 1 });
     });
 
     it('unsubscribing the last listener of a key drops its listener Set at once, before any eviction', () => {
