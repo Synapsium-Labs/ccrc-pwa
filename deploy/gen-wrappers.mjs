@@ -204,6 +204,9 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  `ccd-testbox-times`, the test box's daily durations fetch (D-7413), joins on
  *  the radar's terms: non-Darwin only, timer-run, no marker.
  *
+ *  `ccd-carry-dedupe-sweep`, the daily carry dedupe (D-7857), joins on the
+ *  radar's terms: non-Darwin only, timer-run, no marker.
+ *
  *  `ccd-tool-adj`, the tool-child priority's shell prefix (D-5241), joins on
  *  the same terms but for its runner: non-Darwin only, no marker, run by
  *  Claude Code through CLAUDE_CODE_SHELL_PREFIX rather than by a timer.
@@ -220,7 +223,7 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  happening to stay unmarked, which is the day this entry starts mattering
  *  and the reason it was added ahead of that day. */
 const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
-  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep', 'ccd-pool-sync', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-land-probe', 'ccd-testbox-times', 'ccd-tool-adj', 'ccd-update-sync', 'ccd-history-sweep',
+  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep', 'ccd-pool-sync', 'ccd-tmp-sweep', 'ccd-scope-sweep', 'ccd-land-probe', 'ccd-testbox-times', 'ccd-carry-dedupe-sweep', 'ccd-tool-adj', 'ccd-update-sync', 'ccd-history-sweep',
   // GPT-lane launcher and runtime builder, placed by _inst_bins since Plan 2b-2; ccgpt is not ours (D-3478).
   'ccrc-codex', 'ccgpt-runtime',
   // The closed client the role skills call, placed by _inst_bins since wave 17 (D-5313).

@@ -195,7 +195,7 @@ CCRC_DOCTOR_CHECKS=(
   caddyfile
   cert
   name
-  disk box-settings   # one line, as `flock timeout`: _check_box-settings is at the END of this file
+  disk box-settings carry-copies   # one line, as `flock timeout`: _check_box-settings and then _check_carry-copies are at the END of this file
   wrappers
   skills
   accounts
@@ -11169,4 +11169,105 @@ _check_box-settings() {
     return 2
   fi
   _dr_pass box-settings "$(_upd_redact "the box's ccrc.env sets ${set:-$none}${unset:+; not set there, so the default applies unless the environment sets it:$unset}")"
+}
+
+# ── carry-copies ──────────────────────────────────────────────────────────
+# WHAT THE SWAP CARRY COPIED, AND WHAT THE DEDUPE SWEEP COULD RECLAIM — READ, NEVER RE-DERIVED (#317; D-7857). Two
+# figures, each from the file its writer keeps; this check walks no account root and asks no verb:
+#   * COPIED IN THE LAST 7 DAYS, from swap.log: a first sidecar carry that could not hardlink logs
+#     `sidecar <uuid> -> <dst> (copy: <cause> <bytes> bytes)` (`?` for a size ccd could not measure, and a bare
+#     `(copy)` before D-4501: both counted, neither sized), and a merge appends `, copy: <cause> <F> files <B> bytes` per
+#     cause to its `(merged …)` verdict. ccd/ccd writes that grammar (D-4500, D-4501); `deploy/measure-continuity.py`
+#     reads the same two forms. The window is the line's own local-time stamp against now less 7 days.
+#   * RECLAIMABLE, from the latest line of `ccd-carry-dedupe-sweep`'s record, `~/.cc-sessions/carry-dedupe-record`:
+#     `<stamp> mode=<shadow|live> rc=<n> uuids=<n> copies=<n> <reclaimable|reclaimed>=<bytes> refused=<n> by=<…>`, or
+#     `<stamp> mode=<…> rc=<n> unmeasured=no-total`. A shadow line's `reclaimable` is what an armed sweep would free.
+# WARN when either figure is over CCRC_CARRY_COPY_WARN_BYTES (ccrc.env, read through `_ccrc_knob` in `file` mode;
+# default 10737418240, 10 GiB, a neutral round figure and no measurement of any box), and when the latest record says
+# the sweep did not measure or exited non-zero; PASS with both figures otherwise. The remedy for a shadow sweep is the
+# operator's: read the record, then arm the sweep. This check never writes the marker. Nothing here is a FAIL: copies
+# are a runtime cost, and `ccrc install` ends with doctor. SKIP on a `server`-role box (no sessions, no carry) and
+# where there is no session registry. Appended at the END of this file, for `_check_timeout`'s reason.
+_check_carry-copies() {
+  local rd="~/.cc-sessions" _srv_role="" reg log rec thr now cutoff out fb fn mb mf un line last="" copied detail rnote="" rbytes=0 m
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip carry-copies "this box records CCRC_ROLE=server, so it runs no session and no swap carry"; return 3
+  fi
+  reg="$HOME/.cc-sessions"   # the bare directory, never `.cc-sessions/<name>` on a code line: pool-name-parity.test.ts pins those
+  if [ ! -d "$reg" ]; then
+    _dr_skip carry-copies "no session registry at ~/.cc-sessions, so there is no swap carry to size"; return 3
+  fi
+  if ! _ccrc_knob CCRC_CARRY_COPY_WARN_BYTES 10737418240 file; then
+    _dr_warn carry-copies "$KNOB_WHY" "rewrite that line of ~/.ccrc/ccrc.env as a plain CCRC_CARRY_COPY_WARN_BYTES=<bytes> line (deploy/ccrc.env.example shows it)"
+    return 2
+  fi
+  thr="$KNOB"
+  if ! [[ "$thr" =~ ^[123456789][0123456789]{0,17}$ ]]; then
+    _dr_warn carry-copies "CCRC_CARRY_COPY_WARN_BYTES must be a whole number of bytes from 1 to 18 digits — got '$thr' in ~/.ccrc/ccrc.env, so neither figure is judged" \
+      "set CCRC_CARRY_COPY_WARN_BYTES=<bytes> in ~/.ccrc/ccrc.env (default 10737418240, 10 GiB), or remove the line"
+    return 2
+  fi
+  now="$(printf '%(%s)T' -1)"
+  cutoff="$(printf '%(%Y-%m-%d %H:%M:%S)T' "$(( now - 7 * 86400 ))")"
+  log="$reg/swap.log"
+  fb=0 fn=0 mb=0 mf=0 un=0
+  if [ -f "$log" ]; then
+    if ! out="$(LC_ALL=C awk -v c="$cutoff" '
+        /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9] sidecar / && substr($0, 1, 19) >= c {
+          if (match($0, /\(copy: [a-z][a-z-]* [0-9]+ bytes\)$/)) { split(substr($0, RSTART, RLENGTH), a, " "); fb += a[3]; fn++ }
+          else if ($0 ~ /\(copy: [a-z][a-z-]* \? bytes\)$/ || $0 ~ /\(copy\)$/) un++
+          else if ($0 ~ /\(merged \+/) {
+            t = $0
+            while (match(t, /, copy: [a-z][a-z-]* [0-9]+ files [0-9]+ bytes/)) { split(substr(t, RSTART, RLENGTH), a, " "); mf += a[4]; mb += a[6]; t = substr(t, RSTART + RLENGTH) }
+          }
+        }
+        END { printf "%.0f %.0f %.0f %.0f %.0f\n", fb, fn, mb, mf, un }' "$log" 2>/dev/null)" \
+       || ! [[ "$out" =~ ^([0-9]+)\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)$ ]]; then
+      _dr_warn carry-copies "swap.log at $rd/swap.log could not be read, so the carry's copies are unmeasured" \
+        "check the file is readable (ls -l $rd/swap.log), then re-run ccrc doctor"
+      return 2
+    fi
+    fb=${BASH_REMATCH[1]} fn=${BASH_REMATCH[2]} mb=${BASH_REMATCH[3]} mf=${BASH_REMATCH[4]} un=${BASH_REMATCH[5]}
+  fi
+  copied=$(( fb + mb ))
+  detail="$copied bytes ($(_dr_gib "$copied")) copied by swap carries in the last 7 days (first carries $fn, $fb bytes; merged files $mf, $mb bytes"
+  [ "$un" = 0 ] || detail+="; unsized first carries $un"
+  detail+=")"
+  [ -f "$log" ] || detail="no swap.log yet, so no swap carry has copied anything"
+  rec="$reg/carry-dedupe-record"
+  if [ -f "$rec" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do [ -z "$line" ] || last="$line"; done < "$rec"
+  fi
+  local S='([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2})' N='(0|[1-9][0-9]{0,18})'
+  local arm="read the record first ($rd/carry-dedupe-record, one line a day, mode=shadow until armed); when its shadow lines read right, arm the sweep: touch $rd/carry-dedupe-live, and its next daily pass runs ccd carry-dedupe --identical-only --apply"
+  if [ ! -f "$rec" ] || [ -z "$last" ]; then
+    if [ "${CCD_OS:-linux}" = darwin ]; then rnote="no dedupe sweep runs on this box (its timer is systemd-only)"
+    else rnote="the dedupe sweep has not recorded a pass yet (ccd-carry-dedupe.timer runs it daily)"; fi
+  elif [[ "$last" =~ ^${S}\ mode=(shadow|live)\ rc=${N}\ unmeasured=no-total$ ]]; then
+    _dr_warn carry-copies "$detail; the dedupe sweep's latest pass (${BASH_REMATCH[1]}, mode ${BASH_REMATCH[2]}) did not measure: the verb printed no total (rc ${BASH_REMATCH[3]})" \
+      "journalctl --user -u ccd-carry-dedupe.service; then systemctl --user start ccd-carry-dedupe.service and re-run ccrc doctor"
+    return 2
+  elif [[ "$last" =~ ^${S}\ mode=(shadow|live)\ rc=${N}\ uuids=${N}\ copies=${N}\ (reclaimable|reclaimed)=${N}\ refused=${N}\ by=([a-z][a-z-]*:[0-9]+(,[a-z][a-z-]*:[0-9]+)*|-)$ ]]; then
+    m=("${BASH_REMATCH[@]}")   # 1 stamp, 2 mode, 3 rc, 4 uuids, 5 copies, 6 kind, 7 bytes, 8 refused, 9 by
+    rnote="the dedupe sweep's latest pass (${m[1]}, mode ${m[2]}): ${m[7]} bytes ($(_dr_gib "${m[7]}")) ${m[6]} across ${m[4]} uuid(s) held on two or more accounts, ${m[8]} refused$( [ "${m[9]}" = - ] || printf ' (%s)' "${m[9]}" )"
+    if [ "${m[3]}" != 0 ]; then
+      _dr_warn carry-copies "$detail; $rnote, and it exited ${m[3]}" \
+        "journalctl --user -u ccd-carry-dedupe.service names the uuid it could not handle; then systemctl --user start ccd-carry-dedupe.service and re-run ccrc doctor"
+      return 2
+    fi
+    [ "${m[6]}" = reclaimable ] && rbytes="${m[7]}"
+  else
+    _dr_warn carry-copies "$detail; the latest line of $rd/carry-dedupe-record is not a line the sweep writes, so what it could reclaim is unmeasured" \
+      "let the sweep append a fresh line: systemctl --user start ccd-carry-dedupe.service; then re-run ccrc doctor"
+    return 2
+  fi
+  if (( copied > thr || rbytes > thr )); then
+    if [ "${m[2]:-}" = live ]; then
+      arm="the sweep is armed, so these copies are new since its last pass: each (copy: <cause> …) line in $rd/swap.log names why that carry could not hardlink; read them, and the record ($rd/carry-dedupe-record)"
+    fi
+    _dr_warn carry-copies "$detail; $rnote — over the warn bound of $thr bytes ($(_dr_gib "$thr"), CCRC_CARRY_COPY_WARN_BYTES)" "$arm"
+    return 2
+  fi
+  _dr_pass carry-copies "$detail; $rnote (warn bound $thr bytes)"
 }
