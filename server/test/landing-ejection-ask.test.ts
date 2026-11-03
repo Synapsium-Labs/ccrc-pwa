@@ -148,3 +148,19 @@ describe('a bare second retreat raises one honest notice (wave 5f Task 3)', () =
     expect(asks()[0]!.body).toBe(`run ${id}, demo #7: ejected from the landing line a second time (new-head against base ${'b'.repeat(12)}). The line holds nothing back; you decide whether it lands again, is fixed by hand or is withdrawn.`);
   });
 });
+
+describe('a stale-head quarantine is no ejection (wave 5f Task 3)', () => {
+  it.each([['named', true], ['bare', false]])('a %s retreat whose entry names another head quarantines it and raises no ask and no notice', async (_n, named) => {
+    const { app: a, coord, toMerging, eject, bareRetreat, asks, push } = await scenario(); app = a;
+    expect((await toMerging()).statusCode).toBe(200);
+    // one ejection already counted, so a retreat wrongly counted as the second would raise the ask
+    coord.db.prepare('UPDATE landing_entries SET pinnedSha = ?, ejections = 1 WHERE pr = 7').run('c'.repeat(40));
+    const res = await (named ? eject() : bareRetreat());
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, run: { state: 'working' }, landing: { kind: 'kept', state: 'unknown' } });
+    expect(coord.db.prepare('SELECT state, quarantineKind, ejections FROM landing_entries WHERE pr = 7').get())
+      .toEqual({ state: 'unknown', quarantineKind: 'stale-episode-head', ejections: 1 });
+    expect(asks()).toHaveLength(0);
+    expect(push.notify).not.toHaveBeenCalled();
+  });
+});

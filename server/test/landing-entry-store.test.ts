@@ -412,9 +412,14 @@ describe('stale episode-head quarantine and bounded verified re-pin (landing ord
   it.each([['explicit', eject()], ['bare', eject(null)]])('stale episode head quarantines older pin (%s retreat)', (_n, landing) => {
     const id = atStale();
     const before = raw();
+    const overlay = (): unknown[][] => ['landing_projection_witness', 'landing_authority', 'landing_subjects']
+      .map((t) => coord.db.prepare(`SELECT * FROM ${t} ORDER BY 1`).all());
+    const overlayBefore = overlay();
     const staleRetreat = coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing });
     expect(staleRetreat).toMatchObject({ ok: true, from: 'merging', to: 'working', landing: { kind: 'kept', state: 'unknown' } });
     expect(coord.run(id)).toMatchObject({ ok: true, run: { state: 'working' } });
+    // the quarantine moves the entry row alone: the witness, authority and subject rows are what they were, in full
+    expect(overlay()).toEqual(overlayBefore);
     const rawAfterRetreat = raw();
     expect(rawAfterRetreat).toEqual([{ ...before[0], state: 'unknown', quarantineKind: 'stale-episode-head' }]);
     // no ejection: the count, base and kind are what they were, and the entry is in no line
@@ -424,13 +429,20 @@ describe('stale episode-head quarantine and bounded verified re-pin (landing ord
     expect(landingOrder(facts.entries, facts.flags)).toMatchObject({ paused: false, head: null });
   });
 
-  it('a pinned row whose projection is unreadable is kept at a stale head: never ejected, never rewritten to mint the marker', () => {
+  it('a pinned row whose projection is unreadable at a stale head refuses the retreat: the run stays at merging, nothing is rewritten', () => {
     const id = atStale();
     coord.db.prepare("UPDATE landing_entries SET handoffCommit = 'not-a-hash' WHERE pr = 7").run();
     const before = raw();
+    const factsBefore = landingFactsOf(coord, P);
+    const orderBefore = landingOrder(factsBefore.entries, factsBefore.flags);
+    const eventsBefore = rawCount('run_events');
     expect(coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: eject() }))
-      .toMatchObject({ ok: true, to: 'working', landing: { kind: 'kept', state: 'pinned' } });
+      .toEqual({ ok: false, error: 'landing-projection-unreadable', recovery: 'restart' });
+    expect(coord.run(id)).toMatchObject({ ok: true, run: { state: 'merging' } });
+    expect(rawCount('run_events')).toBe(eventsBefore);
     expect(raw()).toEqual(before);
+    const factsAfter = landingFactsOf(coord, P);
+    expect(landingOrder(factsAfter.entries, factsAfter.flags)).toEqual(orderBefore);
   });
 
   it('stale quarantine can verified-repin', () => {

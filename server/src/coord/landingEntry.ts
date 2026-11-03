@@ -31,7 +31,10 @@ export type LandingWriteDecision =
   | { act: 'eject'; id: number; base: string | null; kind: LandingEjectionKind | null; ejections: number }
   /** A retreat whose entry names a head other than the episode's: the row is marked `unknown` with its one marker, and
    *  nothing else about it moves (no base, no count, no notice). */
-  | { act: 'quarantine'; id: number };
+  | { act: 'quarantine'; id: number }
+  /** A retreat whose owned, pinned entry names another head and cannot be read as a whole: the advance is refused before
+   *  the run moves, with the line's own typed infrastructure answer (nothing is rewritten, the run stays at `merging`). */
+  | { act: 'refuse'; failure: { ok: false; error: 'landing-projection-unreadable'; recovery: 'restart' } };
 
 /** advanceAct's choice: to 'merging' with a verdict → pin (head = measured.branchTip, pr = measured.prNumber ?? null);
  *  to 'working' → retreat (the parsed ejection or null); anything else → plain. */
@@ -69,9 +72,12 @@ export function decideLandingWrite(f: { landing: LandingAdvance; from: RunState;
   if (current === null) return { act: 'none', write: { kind: 'no-entry' } };
   if (current.runId !== f.runId || current.state !== 'pinned') return { act: 'none', write: { kind: 'kept', state: current.state } };
   // Wave 5f: an owned, pinned entry whose head is not the episode's head is stale, so nothing about its ejection is known:
-  // it is quarantined (no ejection, base, count or notice), and an unreadable projection is kept, never rewritten.
+  // it is quarantined (no ejection, base, count or notice). An unreadable projection is neither ejected nor rewritten to
+  // mint the marker, and the retreat is refused, so the run is not moved past an entry nobody can read.
   if (current.pinnedSha !== f.episode.head) {
-    if (f.projection?.kind !== 'readable') return { act: 'none', write: { kind: 'kept', state: current.state } };
+    if (f.projection?.kind !== 'readable') {
+      return { act: 'refuse', failure: { ok: false, error: 'landing-projection-unreadable', recovery: 'restart' } };
+    }
     return { act: 'quarantine', id: current.id };
   }
   return { act: 'eject', id: current.id, base: landing.ejection?.base ?? null, kind: landing.ejection?.kind ?? null,

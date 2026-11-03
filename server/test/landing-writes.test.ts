@@ -96,6 +96,11 @@ describe('decideLandingMutation: targets and graph', () => {
     const f = facts({ entries: [e(1)], recovery: [recovered(107, 7, MISSING)] });
     expect(refused(order(1, { afterIds: [107] }), f)).toBe('landing-recovery-unresolved');
   });
+  it('a target that is itself in recovery is refused by the project-wide rule, whether or not it is also a known entry', () => {
+    const f = facts({ entries: [e(1), e(7)], recovery: [recovered(107, 7, MISSING)] });
+    expect(refused(order(1, { afterIds: [107] }), f)).toBe('landing-recovery-unresolved');
+    expect(refused(order(1, { afterIds: [107], fixesMain: true }), f)).toBe('landing-recovery-unresolved');
+  });
   it('rejects-self-cycle', () => {
     expect(refused(order(1, { afterIds: [101] }), facts({ entries: [e(1)] }))).toBe('landing-cycle');
   });

@@ -101,7 +101,6 @@ export function decideLandingMutation(command: LandingAuthorityCommand, facts: L
   if (source === undefined) return refuse(listed.some(byKey) ? 'landing-recovery-unresolved' : 'landing-entry-missing');
   const sourceRead = facts.projections.find((p) => p.id === source.id);
   if (sourceRead === undefined || sourceRead.value.kind !== 'readable') return refuse('landing-projection-unreadable');
-  const inRecovery = (id: number): boolean => listed.some((x) => x.id === id);
   if (listed.length > 0) return refuse('landing-recovery-unresolved');
 
   const depsOf = (id: number): { kind: 'readable'; afterIds: number[] } | { kind: 'unreadable' } =>
@@ -115,10 +114,10 @@ export function decideLandingMutation(command: LandingAuthorityCommand, facts: L
 
   const known = new Map(facts.entries.map((e) => [e.id, e] as const));
   const foreign = new Set(facts.foreignIds);
-  /** A node the graph names must be a known entry of this project and not an unresolved recovery subject. */
+  /** A node the graph names must be a known entry of this project (an unresolved recovery subject never gets this far:
+   *  the project-wide refusal above answers first). */
   const classify = (id: number): Extract<LandingMutationDecision, { ok: false }>['error'] | null => {
     if (id === source.id) return null;
-    if (inRecovery(id)) return 'landing-recovery-unresolved';
     if (known.has(id)) return null;
     return foreign.has(id) ? 'landing-after-cross-project' : 'landing-after-missing';
   };

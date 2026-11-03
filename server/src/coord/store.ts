@@ -3027,6 +3027,7 @@ export class CoordStore {
             reserved = gate.own?.id ?? facts.nextId;
           }
           const decision = decideLandingWrite({ landing, from, runId, current, projection, episode });
+          if (decision.act === 'refuse') return decision.failure;
           if (decision.act === 'insert' && reserved === null) return { ok: false as const, error: 'landing-id-overflow' as const };
           effects = 'applying';
           const adv = this.advanceInner(runId, to, causedBy,

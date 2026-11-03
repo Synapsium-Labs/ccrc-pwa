@@ -13,7 +13,7 @@ export const LANDING_ENTRY_STATE = {
   ejected: 'sent back from the line for a fix round',
   landed: 'merged into its base',
   withdrawn: 'taken out of the line by the operator',
-  unknown: 'a row this build cannot read',
+  unknown: 'a row this build cannot read, or one measured stale and set aside until a verified pin',
 } as const;
 export type LandingEntryState = keyof typeof LANDING_ENTRY_STATE;
 export const LANDING_ENTRY_STATES: readonly LandingEntryState[] = Object.keys(LANDING_ENTRY_STATE) as LandingEntryState[];
