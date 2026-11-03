@@ -7,12 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ACCOUNT_CAPS, type AccountAuthStatusAnswer, type AccountsConnect, type AccountUsage, type FleetSession, type LaneWire, type RosterWire } from '../../shared/api';
 import { AUTH_POLL_MS } from '../src/accounts/ConnectSheet';
-import { ReauthSheet, troubleActs, type ReauthClient, type ReauthSheetProps } from '../src/accounts/ReauthSheet';
-import { isPastAdding, resumeSheetFor } from '../src/accounts/connectFlow';
+import { ReauthSheet, resetSignOutsForTests, troubleActs, type ReauthClient, type ReauthSheetProps } from '../src/accounts/ReauthSheet';
+import { isPastAdding, laneHasNoCredential, resumeSheetFor } from '../src/accounts/connectFlow';
 import {
   CANCEL_SIGN_IN, CODE_FIELD_LABEL, LEDGER, MINT_INSTEAD, MINT_NEW_TOKEN, PASTE_A_TOKEN, PASTE_INSTEAD, REAUTH_WRONG, REPLACE_TOKEN,
   SEND_CODE, SIGN_IN_AGAIN, SIGN_OUT_RESTART, STATED_LABEL, SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, credentialUntouched, laneSignedOut,
-  reauthEnd, reauthInstalled, reauthStartRefusal, revokeRecord, switchTitle, type SignInEndKind,
+  reauthEnd, reauthInstalled, reauthIntro, reauthStartRefusal, revokeRecord, switchTitle, type SignInEndKind,
 } from '../src/fleet/accountWords';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError, api } from '../src/lib/api';
@@ -70,6 +70,7 @@ const settle = async (): Promise<void> => { await act(async () => { await vi.adv
 beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); });
 afterEach(() => {
   cleanup();
+  resetSignOutsForTests();
   vi.useRealTimers();
   vi.restoreAllMocks();
   navigate('/');
@@ -321,11 +322,15 @@ describe('a refused, cancelled or expired attempt leaves the lane as it was', ()
   });
 });
 
+/** The fresh check after a sign-in that read back another account: a passing check, a minute old, as the box records it. */
+const OTHER_AT = now - 60_000;
+const OTHER: LaneWire = { ...READY, check: { verdict: 'ok', at: OTHER_AT }, identity: 'other@example.invalid', identitySource: 'measured' };
+
 describe('after Sign this lane out and start again, every ending says the lane is signed out (D-7872 (2))', () => {
   /** Sign in again on lane-a reads back another account; Sign this lane out and start again runs N5's sign-out and a
    *  second start. `refuse` makes that second start refused with a word. */
   async function signedOutAndStarted(refuse?: ApiError): Promise<Box> {
-    const b = fakeBox({ ...READY, identity: 'other@example.invalid', identitySource: 'measured' });
+    const b = fakeBox(OTHER);
     sheet(b, { id: 'lane-a', method: 'login', lane: LANES['lane-a'] });
     await walk(b, 'Start the sign-in', LOGIN_CODE);
     expect(await screen.findByText('Signed in as other@example.invalid')).toBeInTheDocument();
@@ -393,6 +398,38 @@ describe('after Sign this lane out and start again, every ending says the lane i
     saysSignedOut(reauthStartRefusal('lane-a', 'login', 'lane-busy', undefined, true));
   });
 
+  it('signed out in one sheet and resumed in a fresh one, its cancel says the lane is signed out', async () => {
+    const b = await signedOutAndStarted();
+    // Closed mid-attempt: the sheet goes, the attempt keeps running, and the screen reads the lanes again. The box
+    // cleared the sign-in lane's check when it signed it out, so the lane holds no check now.
+    cleanup();
+    const reread: LaneWire = {
+      state: { word: 'not-checked', source: 'no check recorded yet' }, ready: false, notReadyReason: 'not-checked',
+      identity: 'other@example.invalid', identitySource: 'measured',
+    };
+    b.box.status = { ok: true, state: 'waiting-code', url: URL, host: 'claude.com', updatedAt: Date.now(), expiresAt: b.box.expiresAt };
+    sheet(b, { id: 'lane-a', method: 'login', lane: reread, resume: { attemptId: ATTEMPT, method: 'login', expiresAt: b.box.expiresAt } });
+    expect(await screen.findByLabelText(CODE_FIELD_LABEL)).toBeInTheDocument();
+    expect(b.client.accountAuthStart).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: CANCEL_SIGN_IN }));
+    await waitFor(() => expect(b.client.accountAuthCancel).toHaveBeenCalledWith('lane-a', { attemptId: ATTEMPT }));
+    await settle();
+    saysSignedOut(reauthEnd('lane-a', 'login', 'cancelled', undefined, true));
+  });
+
+  it('Sign in again opened later on the lane it signed out says so from the start, until a newer passing check', async () => {
+    const b = await signedOutAndStarted();
+    cleanup();
+    // The screen has not read the lanes again yet: the lane is the one the sheet last checked, before its sign-out.
+    sheet(b, { id: 'lane-a', method: 'login', lane: OTHER });
+    expect(screen.getByText(reauthIntro('lane-a', 'login', true))).toBeInTheDocument();
+    expect(document.querySelector('.acct-reauth')?.textContent).not.toMatch(/keeps the sign-in it has/);
+    cleanup();
+    // A passing check newer than that one: a credential went back in on the fleet host, so the lane keeps it.
+    sheet(b, { id: 'lane-a', method: 'login', lane: { ...OTHER, check: { verdict: 'ok', at: OTHER_AT + 1_000 } } });
+    expect(screen.getByText(reauthIntro('lane-a', 'login'))).toBeInTheDocument();
+  });
+
   it('no ending after a sign-out says the old credential is untouched; before one, every ending that can says so', () => {
     const kinds: SignInEndKind[] = ['expired', 'code-refused', 'untrusted', 'cancelled', 'unknown', 'lost', 'node-changed', 'failed'];
     for (const method of ['login', 'setup-token'] as const) {
@@ -407,6 +444,69 @@ describe('after Sign this lane out and start again, every ending says the lane i
       expect(reauthStartRefusal('lane-a', method, 'lane-busy', undefined, true)).not.toContain(credentialUntouched('lane-a', method));
       expect(reauthStartRefusal('lane-a', method, 'lane-busy', undefined)).toContain(credentialUntouched('lane-a', method));
     }
+  });
+});
+
+describe('a lane that says it has no credential: the intro and every ending say it is signed out (D-7872 (2))', () => {
+  const NONE: LaneWire = { state: { word: 'not-checked', source: 'no check recorded yet' }, ready: false, notReadyReason: 'no-credential' };
+  const cases = [['lane-a', 'login', 'Start the sign-in'], ['lane-b', 'setup-token', MINT_NEW_TOKEN]] as const;
+
+  for (const [id, method, primary] of cases) {
+    it(`${id} (${method}): the intro, a cancel, an expiry and a refused start each say ${id} is signed out`, async () => {
+      const b = fakeBox();
+      sheet(b, { id, method, lane: NONE });
+      expect(screen.getByText(reauthIntro(id, method, true))).toBeInTheDocument();
+      expect(document.querySelector('.acct-reauth')?.textContent).not.toMatch(/keeps the (sign-in|token) it has|Nothing changed/);
+      fireEvent.click(screen.getByRole('button', { name: primary }));
+      await settle();
+      fireEvent.click(await screen.findByRole('button', { name: CANCEL_SIGN_IN }));
+      await waitFor(() => expect(b.client.accountAuthCancel).toHaveBeenCalledTimes(1));
+      await settle();
+      expect(alertText()).toBe(reauthEnd(id, method, 'cancelled', undefined, true));
+      expect(alertText()).not.toContain(credentialUntouched(id, method));
+      fireEvent.click(screen.getByRole('button', { name: 'Start again' }));
+      await waitFor(() => expect(b.client.accountAuthStart).toHaveBeenCalledTimes(2));
+      b.box.status = { ok: true, state: 'expired', updatedAt: Date.now(), expiresAt: b.box.expiresAt };
+      await poll();
+      expect(alertText()).toBe(reauthEnd(id, method, 'expired', undefined, true));
+      b.client.accountAuthStart.mockRejectedValueOnce(new ApiError(409, { error: 'lane-busy' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Start again' }));
+      await settle();
+      expect(alertText()).toBe(reauthStartRefusal(id, method, 'lane-busy', undefined, true));
+      expect(alertText()).toContain(laneSignedOut(id));
+    });
+  }
+
+  it('a lane with its credential keeps the wording it had: the intro and a cancel say the old one is untouched', async () => {
+    for (const [id, method, primary] of cases) {
+      const b = fakeBox();
+      // Signed out at the provider (a 401) is a credential the lane still holds; so is one never checked.
+      sheet(b, { id, method, lane: LANES[id] });
+      expect(screen.getByText(reauthIntro(id, method))).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: primary }));
+      await settle();
+      fireEvent.click(await screen.findByRole('button', { name: CANCEL_SIGN_IN }));
+      await waitFor(() => expect(b.client.accountAuthCancel).toHaveBeenCalledTimes(1));
+      await settle();
+      expect(alertText()).toBe(reauthEnd(id, method, 'cancelled'));
+      expect(alertText()).toContain(credentialUntouched(id, method));
+      cleanup();
+    }
+  });
+
+  it("the rule: the lane's no-credential word, or this app's sign-out until a newer passing check; nothing else", () => {
+    const at = now - 60_000;
+    const checked = (verdict: string, t: number): LaneWire => ({ ...READY, check: { verdict, at: t } });
+    expect(laneHasNoCredential(NONE, undefined)).toBe(true);
+    expect(laneHasNoCredential({ ...READY, notReadyReason: 'no-credential' }, undefined)).toBe(true);
+    for (const l of [LANES['lane-a'], LANES['lane-b'], READY, undefined, { ...NONE, notReadyReason: 'not-checked' as const }]) {
+      expect(laneHasNoCredential(l, undefined)).toBe(false);
+    }
+    expect(laneHasNoCredential({ ...NONE, notReadyReason: 'not-checked' }, {})).toBe(true);
+    expect(laneHasNoCredential(checked('auth-dead', now), { checkAt: at })).toBe(true);
+    expect(laneHasNoCredential(checked('ok', at), { checkAt: at })).toBe(true);
+    expect(laneHasNoCredential(checked('ok', at + 1), { checkAt: at })).toBe(false);
+    expect(laneHasNoCredential(checked('ok', at), {})).toBe(false);
   });
 });
 

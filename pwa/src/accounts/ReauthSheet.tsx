@@ -9,8 +9,10 @@
 // THE FRAMES. Confirm (what happens, then Confirm it's you when the stamp has lapsed, then the one primary: nothing is
 // sent before it) → Run (`useSignInAttempt`'s, the connect sheet's and the switch sheet's own: the ledger, the URL card
 // the server accepted, the code field, the countdown read from `expiresAt`, Cancel) → the ending. A terminal state
-// says the old credential is untouched, from its code, and offers Start again; once the sheet has signed the lane out
-// (Sign this lane out and start again, below), every later ending says the lane is signed out instead (D-7872 (2)). Offline mid-attempt, the run frame shows
+// says the old credential is untouched, from its code, and offers Start again. On a lane with no credential, the intro and
+// every ending say the lane is signed out instead (D-7872 (2)): one this sheet signed out (Sign this lane out and start
+// again, below), one an earlier sheet did (Continue, or Sign in again on the card), or one that says so itself (the
+// box's `no-credential` word; `laneHasNoCredential`). Offline mid-attempt, the run frame shows
 // only the sentence with the last-known deadline. Closed mid-attempt, the attempt keeps running on the box until
 // `expiresAt`, and the app-level banner's Continue reopens this sheet with `resume` at the code field (A23, D-7871 (2)).
 //
@@ -43,7 +45,7 @@ import { RevokeItem, StepUpFor } from './RemoveSheet';
 import { RestartList, restartableOn, useRestarts } from './RestartList';
 import { StatedField } from './ResultFrame';
 import { RunFrame, type LedgerLine } from './RunFrame';
-import type { SignInMethod } from './connectFlow';
+import { laneHasNoCredential, type SignInMethod, type SignOutRecord } from './connectFlow';
 import { SignInLive, WrongAccountAct, useSignInAttempt, wordOf, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
 import type { StepUp, StepUpDeps } from './useStepUp';
 import '../fleet/fleet.css';
@@ -116,6 +118,12 @@ export interface ReauthSheetProps {
 type Frame = 'confirm' | 'run' | 'done';
 const NO_DEPS: StepUpDeps = {};
 
+/** The lanes this app signed out with N5's sign-out (D-7872 (2)), each with the last check it knew of then. It outlives
+ *  the sheet, so a sheet opened later on the lane (Continue on the banner, or Sign in again on the card) says the lane
+ *  is signed out; the lane's own state retires it (`laneHasNoCredential`). The app's memory only: a reload forgets it. */
+const signOuts = new Map<string, SignOutRecord>();
+export function resetSignOutsForTests(): void { signOuts.clear(); }
+
 export function ReauthSheet(props: ReauthSheetProps): ReactNode {
   const { id, method, open, onClose, connect, blocked, roster, refresh } = props;
   const client = props.client ?? api;
@@ -145,9 +153,16 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
   const [statedNotice, setStatedNotice] = useState<string | null>(null);
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
-  /** This sheet ran N5's sign-out on the lane and no new credential has gone in since: an ending can no longer say the
-   *  old one is untouched (D-7872 (2)). A ref, so an attempt's ending reads it whichever render started the attempt. */
-  const signedOut = useRef(false);
+  /** The lane has no credential, so nothing can say the old one is untouched (D-7872 (2)): seeded on every mount from the
+   *  lane itself and the sign-outs this app ran (`laneHasNoCredential`), set by this sheet's sign-out and cleared by an
+   *  install. A ref, so an attempt's ending reads it whichever render started the attempt. */
+  const [seeded] = useState(() => {
+    const record = signOuts.get(id);
+    const none = laneHasNoCredential(props.lane, record);
+    if (record !== undefined && !none) signOuts.delete(id);
+    return none;
+  });
+  const signedOut = useRef(seeded);
 
   const status = (text: string): void => setSaid({ kind: 'status', text });
   const alert = (text: string): void => setSaid({ kind: 'alert', text });
@@ -179,6 +194,7 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
   /** The helper says `done`: the box installed the new credential after its own check (A20). The ending follows. */
   const installed = async (): Promise<void> => {
     signedOut.current = false;
+    signOuts.delete(id);
     settle(reauthInstalled(method));
     setOnOld(restartableOn(sessions, id));
     setFrame('done');
@@ -222,8 +238,11 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
       alert(text);
       return;
     }
-    // Removed or absent, the lane has no sign-in on the box now: every ending until a new one goes in says so.
+    // Removed or absent, the lane has no sign-in on the box now: every ending until a new one goes in says so, in this
+    // sheet and in any opened on the lane later, up to a passing check newer than the last one this sheet knew of.
     signedOut.current = true;
+    const knownAt = checked?.check?.at ?? before?.check?.at;
+    signOuts.set(id, knownAt !== undefined ? { checkAt: knownAt } : {});
     setChecked(null);
     setCheckNotice(null);
     setOnOld([]);
@@ -281,7 +300,7 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
   if (frame === 'confirm') {
     body = (
       <div className="acct-frame" data-frame="reauth">
-        <p className="acct-field-note">{reauthIntro(id, method)}</p>
+        <p className="acct-field-note">{reauthIntro(id, method, seeded)}</p>
         {notice !== null && <p className="acct-notice" role="alert">{notice}</p>}
         {startFoot(reauthStart(method), props.onPaste !== undefined ? { label: PASTE_INSTEAD, onClick: props.onPaste } : null)}
       </div>

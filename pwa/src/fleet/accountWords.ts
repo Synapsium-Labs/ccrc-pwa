@@ -1044,10 +1044,19 @@ export const reauthTitle = (id: string, method: 'login' | 'setup-token'): { titl
   ? { title: `Sign ${id} in again`, eyebrow: 'sign in again' }
   : { title: `Replace ${id}'s token`, eyebrow: 'mint a new token' });
 
-/** What happens, said before anything runs: the old credential stays until the new one passes (A20). */
-export const reauthIntro = (id: string, method: 'login' | 'setup-token'): string => (method === 'login'
-  ? `A new sign-in runs on the fleet host and is checked before it replaces the old one. Until it passes, ${id} keeps the sign-in it has.`
-  : `A new long-lived token is minted on the fleet host and checked before it replaces the old one. Until it passes, ${id} keeps the token it has.`);
+/** What happens, said before anything runs: the old credential stays until the new one passes (A20). On a lane with no
+ *  credential (`signedOut`: the lane says so, or this app signed it out, D-7872 (2)) there is no old one to keep, so it
+ *  says the lane is signed out instead. */
+export const reauthIntro = (id: string, method: 'login' | 'setup-token', signedOut = false): string => {
+  if (signedOut) {
+    return method === 'login'
+      ? `A new sign-in runs on the fleet host and is checked before it is installed. ${laneSignedOut(id)}`
+      : `A new long-lived token is minted on the fleet host and checked before it is installed. ${laneSignedOut(id)}`;
+  }
+  return method === 'login'
+    ? `A new sign-in runs on the fleet host and is checked before it replaces the old one. Until it passes, ${id} keeps the sign-in it has.`
+    : `A new long-lived token is minted on the fleet host and checked before it replaces the old one. Until it passes, ${id} keeps the token it has.`;
+};
 
 /** The confirm frame's primary. */
 export const reauthStart = (method: 'login' | 'setup-token'): string => (method === 'login' ? SWITCH_START.login : MINT_NEW_TOKEN);
@@ -1056,14 +1065,16 @@ export const reauthStart = (method: 'login' | 'setup-token'): string => (method 
 export const credentialUntouched = (id: string, method: 'login' | 'setup-token'): string =>
   `Nothing changed: ${id} keeps its old ${credOf(method)}.`;
 
-/** The sentence they end with instead once "Sign this lane out and start again" ran N5's sign-out (D-7872 (2)): the old
- *  credential is gone, so nothing is untouched, and the lane runs nothing until a new one goes in. */
+/** The sentence they end with instead on a lane with no credential (D-7872 (2)): one this sheet or an earlier one signed
+ *  out with N5's sign-out, or one that says so itself. Nothing is untouched, and the lane runs nothing until a new one
+ *  goes in. */
 export const laneSignedOut = (id: string): string =>
   `${id} is signed out on the fleet host, so its sessions fail until it has a sign-in or a token again.`;
 
 /** A re-auth's terminal states (spec §9: "A refused, cancelled or expired attempt says the old credential is
  *  untouched"), each from its code. `lost` is the one state that cannot say so: whether the attempt finished is unknown.
- *  `signedOut`: the sheet signed the lane out before this attempt, so each says the lane is signed out instead. */
+ *  `signedOut`: the lane had no credential when this attempt started (it says so, or this app signed it out), so each
+ *  says the lane is signed out instead. */
 export function reauthEnd(id: string, method: 'login' | 'setup-token', kind: SignInEndKind, failure?: string, signedOut = false): string {
   const untouched = signedOut ? laneSignedOut(id) : credentialUntouched(id, method);
   switch (kind) {
@@ -1086,7 +1097,7 @@ export function reauthEnd(id: string, method: 'login' | 'setup-token', kind: Sig
   }
 }
 
-/** A start refused with a word: A22's sentence, then the old credential untouched (or, after the sheet's sign-out, the
+/** A start refused with a word: A22's sentence, then the old credential untouched (or, on a lane with no credential, the
  *  lane signed out). */
 export const reauthStartRefusal = (id: string, method: 'login' | 'setup-token', word: string, reason: string | undefined, signedOut = false): string =>
   `${signInStartRefusal(id, word, reason)} ${signedOut ? laneSignedOut(id) : credentialUntouched(id, method)}`;

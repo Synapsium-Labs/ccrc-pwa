@@ -193,6 +193,22 @@ export function isPastAdding(lane: LaneWire | undefined, usage: Pick<AccountUsag
   return lane !== undefined && lane.state.word !== 'off';
 }
 
+/** A sign-out this app ran on a lane with N5's sign-out (D-7872 (2)), and the last check of the lane it knew of then
+ *  (`checkAt`, the box's clock, so it is only ever compared with another of the box's times). */
+export interface SignOutRecord { readonly checkAt?: number }
+
+/** Whether the lane has no credential now, so a re-auth's words may not say it keeps its old one (D-7872 (2)). The lane
+ *  says so itself with the box's `no-credential` word. Otherwise only a sign-out this app ran says so (`signedOut`),
+ *  until the lane shows a passing check newer than the last one known at the sign-out: the box clears a sign-in lane's
+ *  check when it signs it out, so that check is the first record of a credential going back in. Every other lane keeps
+ *  the credential it has, working or not. */
+export function laneHasNoCredential(lane: LaneWire | undefined, signedOut: SignOutRecord | undefined): boolean {
+  if (lane?.notReadyReason === 'no-credential') return true;
+  if (signedOut === undefined) return false;
+  const c = lane?.check;
+  return !(c?.verdict === 'ok' && (signedOut.checkAt === undefined || c.at > signedOut.checkAt));
+}
+
 /** The method a lane switches TO from its fold (spec §4.4, §9; Q1): a sign-in lane to the long-lived token, a token lane
  *  to the sign-in; `null` for any lane that is not an Anthropic sign-in or token lane. */
 export function switchTargetOf(entry: Pick<RosterWire, 'provider' | 'kind'> | undefined): SignInMethod | null {
