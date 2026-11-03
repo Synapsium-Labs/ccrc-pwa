@@ -9,6 +9,8 @@
 // Mutations this file owns (plan, Task 4.4): W4-SM1 (row test) -> S1; SM2 (name test) -> S2; SM3 (mtime test) -> S3;
 // SM4 (any entry accepted) -> S4; SM5 (owner link test) -> S5; SM6 (registry readability) -> S6a; SM7 (no re-check after the
 // rename) -> S8, S9; SM8 (DSP_PRUNE_MAX ignored) -> S10; SM9 (spool root link test) -> S6b; SM10 (a count on stdout) -> S12.
+// Fix round 1 (review 1365): S4 ages its extras so that it, not S2, kills SM4; S13 (an empty owner directory's own mtime),
+// S14 (`$REG/delegation` a link) and S15 (an owner directory the prune cannot read) cover three guards no row noticed.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -98,10 +100,14 @@ describe('a spawn prunes absent owners\' spool directories past their day of ing
     plantRoot();
     const target = path.join(h.home, 'target.txt');
     fs.writeFileSync(target, 'untouched\n');
+    age(target, 48);
+    // Every extra is 48 h old too (a link by its own mtime, which `_plat_mtime` reads, and its target), so neither the mtime
+    // test nor the cutoff keeps the directory: only the entry test does, and SM4 (any entry accepted) reds this row.
+    const lage = (p: string): void => { const t = (Date.now() - 48 * HOUR) / 1000; fs.lutimesSync(p, t, t); };
     const extras: Array<[string, (d: string) => void]> = [
-      ['notes.txt', (d) => { fs.writeFileSync(path.join(d, 'notes.txt'), 'n\n'); }],
-      ['a subdirectory', (d) => { fs.mkdirSync(path.join(d, 'sub')); }],
-      ['a link', (d) => { fs.symlinkSync(target, path.join(d, bucketOf(40))); }],
+      ['notes.txt', (d) => { fs.writeFileSync(path.join(d, 'notes.txt'), 'n\n'); age(path.join(d, 'notes.txt'), 48); }],
+      ['a subdirectory', (d) => { fs.mkdirSync(path.join(d, 'sub')); age(path.join(d, 'sub'), 48); }],
+      ['a link', (d) => { fs.symlinkSync(target, path.join(d, bucketOf(40))); lage(path.join(d, bucketOf(40))); }],
     ];
     extras.forEach(([label, plant], i) => {
       const id = `${GONE}${i}`;
@@ -213,6 +219,44 @@ describe('a spawn prunes absent owners\' spool directories past their day of ing
     expect(spawn1()).toContain('[rc=0]');
     expect(fs.existsSync(leftover)).toBe(false);
     expect(snap(dirOf(GONE)), 'moved back to <id>').toEqual(before);
+  });
+
+  it('W4-S13: an EMPTY owner directory whose row is gone is judged by its own mtime: 1 h old it is kept, 48 h old it goes', () => {
+    plantRoot();
+    fs.mkdirSync(dirOf(GONE), { mode: 0o700 });
+    age(dirOf(GONE), 1);
+    expect(spawn1()).toContain('[rc=0]');
+    expect(fs.statSync(dirOf(GONE)).isDirectory(), 'a fresh empty directory is kept').toBe(true);
+    age(dirOf(GONE), 48);
+    expect(spawn1()).toContain('[rc=0]');
+    expect(fs.existsSync(dirOf(GONE)), 'an old empty directory goes').toBe(false);
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('W4-S14: a `$REG/delegation` that is a link is never pruned through: nothing under its target is removed, and the spawn returns rc 0', () => {
+    plantRoot();
+    const outside = path.join(h.home, 'outside-delegation');
+    plantOwner(path.join(outside, 'spool', GONE), OLD);
+    const before = snap(path.join(outside, 'spool', GONE));
+    fs.rmSync(path.join(reg(), 'delegation'), { recursive: true, force: true });
+    fs.symlinkSync(outside, path.join(reg(), 'delegation'));
+    expect(spawn1()).toContain('[rc=0]');
+    expect(snap(path.join(outside, 'spool', GONE))).toEqual(before);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('W4-S15: an owner directory the prune cannot read or search is not eligible: it is never renamed, so it is never stranded', () => {
+    plantRoot();
+    plantOwner(dirOf(GONE), OLD);
+    age(dirOf(GONE), 48);
+    fs.chmodSync(dirOf(GONE), 0o000);
+    let out = '';
+    let names: string[] = [];
+    try { out = spawn1(); names = fs.readdirSync(root()).sort(); } finally {
+      for (const n of fs.readdirSync(root())) if (n === GONE || n.startsWith(`.prune.${GONE}.`)) fs.chmodSync(path.join(root(), n), 0o700);
+    }
+    expect(out).toContain('[rc=0]');
+    expect(names, 'kept under <id>, with no .prune. leftover').toEqual([ID, GONE].sort());
+    expect(Object.keys(snap(dirOf(GONE)))).toEqual(OLD.map((b) => bucketOf(b.name)).sort());
   });
 
   it('W4-S12: the prune prints nothing on stdout, and the spawn around it reports rc 0', () => {

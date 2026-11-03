@@ -24047,7 +24047,7 @@ DSP_PRUNE_MAX=8   # owner directories removed per spawn, at most; the rest wait 
 _dsp_old_absent() {   # <id> <dir> <cutoff YYYYMMDDHH> <now s> -> 0 iff the owner's row is gone and the dir holds only
                       #   regular <10 digits>.spool buckets, each older than the cutoff by name and 24 h by mtime; sets DSP_OLD=(paths)
   local LC_ALL=C id="$1" d="$2" cut="$3" now="$4" e b m=""; DSP_OLD=()
-  [[ -d "$d" && ! -L "$d" ]] || return 1
+  [[ -d "$d" && -r "$d" && -x "$d" && ! -L "$d" ]] || return 1   # unreadable: its glob would read empty, so never eligible
   e=("$REG/$id".*); (( ${#e[@]} == 0 )) || return 1
   for e in "$d"/*; do
     b="${e##*/}"
