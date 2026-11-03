@@ -7,20 +7,18 @@
 // Colour lives only in the wells, which are dark in every palette (spec section 3.1): every hue is a class that paints a
 // palette token, and no run writes a `style` attribute. A block that is over a highlight bound (`html` null) renders as the
 // original text, exactly as a fenced block over its bound renders plain.
-import { useContext, useEffect, useMemo, type ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { ansiClass, ansiRuns, stripAnsi } from '../lib/ansi';
 import { HighlightedCode, useHighlightEntry, useHighlightRequest } from '../lib/markdown';
 import { isRegisteredGrammar } from '../lib/highlightNames';
-import { HighlighterContext } from '../lib/highlighterContext';
+import { useChatHighlightStore } from '../lib/highlighterContext';
 import { toolWellPlan, type ToolWellPart } from './toolWell';
 
 /** A code or diff well: the Write's path as a leading comment when the plan has one, then the code, on a one-block
  *  highlight store on chat's highlighter, plain until the worker answers. A well over a highlight bound shows
  *  `fallback`, the original text, exactly as a fenced block over its bound renders plain. */
 function CodeWell({ lang, text, head, fallback }: { lang: string; text: string; head?: string; fallback: string }): ReactNode {
-  const highlighters = useContext(HighlighterContext);
-  const store = useMemo(() => highlighters.createStore(highlighters.chat, 'chat'), [highlighters]);
-  useEffect(() => () => store.releaseAll(), [store]);
+  const store = useChatHighlightStore();
   const answer = useMemo(() => store.keyOf(lang, text), [store, lang, text]);
   const key = answer.kind === 'key' ? answer.key : null;
   const entry = useHighlightEntry(store, key);

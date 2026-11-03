@@ -7,7 +7,7 @@
 import { useContext, type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
-import { DocMarkdown } from '../src/docs/DocMarkdown';
+import { DOC_BODY_FALLBACK_NOTE, DocMarkdown } from '../src/docs/DocMarkdown';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import { HIGHLIGHTER_DEFAULT, HighlighterContext, createProductionStore, type HighlighterContextValue } from '../src/lib/highlighterContext';
 import type { HighlightStore } from '../src/lib/highlightStore';
@@ -96,6 +96,29 @@ describe('the Export hand-off: the store is published with its settled()', () =>
     expect(store.peek((k as { key: string }).key).kind).toBe('html');
     unmount();
     expect(published.at(-1)).toBeNull();
+  });
+
+  it('a body that falls back to plain text publishes no store, so nothing stays unsettled for Export (L3-2)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const docs = inThreadHighlighter({ hold: true });
+    const published: (HighlightStore | null)[] = [];
+    const created: HighlightStore[] = [];
+    const base = inThreadContext(docs, undefined, (s) => published.push(s));
+    // A store whose blocks cannot be keyed: the first `CodeBlock` to draw throws, so the doc-body boundary falls back.
+    const ctx: HighlighterContextValue = {
+      ...base,
+      createStore: (h, mode) => {
+        const real = base.createStore(h, mode);
+        created.push(real);
+        return { ...real, keyOf: () => { throw new Error('keyOf'); } };
+      },
+    };
+    const { container } = render(under(ctx, <DocMarkdown text={SRC} pinKey="p" parser={parser} link={LINK} />));
+    await waitFor(() => expect(container.querySelector('.doc-plain-note')?.textContent).toBe(DOC_BODY_FALLBACK_NOTE));
+    expect(created.length).toBeGreaterThan(0);
+    expect(published.filter((s) => s !== null)).toEqual([]);
+    expect(docs.calls).toHaveLength(0);
   });
 
   it('a text leaf publishes its one-block store the same way', async () => {

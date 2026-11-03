@@ -21,7 +21,7 @@ import React, {
 } from 'react';
 import { remarkAlerts } from './remarkAlerts';
 import { LANG_LABEL, codeLanguage } from './highlightNames';
-import { HighlighterContext } from './highlighterContext';
+import { HighlighterContext, useChatHighlightStore } from './highlighterContext';
 import {
   UNREQUESTED_ENTRY, blockKey, isCheckedHighlightHtml, type BlockKey, type HighlightEntry, type HighlightStore,
 } from './highlightStore';
@@ -424,8 +424,7 @@ const chatParse: MarkdownParser = (src, opts) => chatRunner.parse(src, opts);
 export const ChatMarkdown = memo(function ChatMarkdown({ text, parser = chatParse }: { text: string; parser?: MarkdownParser }): ReactNode {
   const highlighters = useContext(HighlighterContext);
   // One highlight store per message, on chat's own highlighter, for both paths (section 4.12 "Chat highlighting").
-  const store = useMemo(() => highlighters.createStore(highlighters.chat, 'chat'), [highlighters]);
-  useEffect(() => () => store.releaseAll(), [store]);
+  const store = useChatHighlightStore();
   // Chat prewarms its highlighter on its first message's mount (section 4.10's singletons; refinement (p)).
   useEffect(() => { highlighters.chat.prewarm(); }, [highlighters.chat]);
   useEvictAfterCommit(store);

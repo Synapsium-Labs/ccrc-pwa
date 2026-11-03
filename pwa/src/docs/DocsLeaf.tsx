@@ -11,7 +11,7 @@ import type { Element as HastElement } from 'hast';
 import { contentClass, docsApi, entryView, type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk } from '../../../shared/docs';
 import { CodeBlock, PreHighlightContext } from '../lib/markdown';
 import { isRegisteredGrammar } from '../lib/highlightNames';
-import { HighlighterContext } from '../lib/highlighterContext';
+import { useDocsHighlightStore } from '../lib/highlighterContext';
 import type { MarkdownParser } from '../lib/markdownRunner';
 import { DocImage, DocsAssetContext, svgDataUrl, type DocsAssetContextValue } from './DocImage';
 import { DocInLinkContext, DocLinkContext, fragmentTarget, type DocLinkContextValue } from './DocLink';
@@ -110,26 +110,15 @@ function SourceText(p: { readonly show: DocsShowOk }): ReactNode {
  *  highlight.js), the file is one `CodeBlock` on a one-block highlight store on the Docs highlighter, seeded with
  *  that block when it is created, published for the leaf's actions and released on unmount; else plain. */
 function TextBody(p: { readonly show: DocsShowOk; readonly path: string }): ReactNode {
-  const highlighters = useContext(HighlighterContext);
   const src = useMemo(() => docMarkdownSource(p.show), [p.show]);
   const name = leafName(p.path);
   // contentClass said `text`, so the extension is ASCII `a-z0-9` once lowered: `toLowerCase` lowers it the same way.
   const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
   const text = src.kind === 'markdown' && isRegisteredGrammar(ext) ? src.text : null;
-  const store = useMemo(() => {
-    if (text === null) return null;
-    const s = highlighters.createStore(highlighters.docs, 'docs');
-    s.seed([{ lang: ext, raw: text.replace(/\n$/, '') }]);
-    return s;
-  }, [highlighters, ext, text]);
-  useEffect(() => {
-    if (store === null) return undefined;
-    highlighters.publish?.(store);
-    return () => {
-      store.releaseAll();
-      highlighters.publish?.(null);
-    };
-  }, [highlighters, store]);
+  const store = useDocsHighlightStore(useMemo(
+    () => (text === null ? null : [{ lang: ext, raw: text.replace(/\n$/, '') }]),
+    [ext, text],
+  ));
   if (src.kind === 'no-bytes') return <DocsFailureView answer={malformed(DOCS_SHOW_NO_BYTES)} />;
   if (src.kind === 'not-utf8') return <DocPlain text={src.text} note={DOC_NOT_UTF8_NOTE} />;
   if (store === null) return <pre className="doc-plain">{src.text}</pre>;
