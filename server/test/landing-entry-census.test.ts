@@ -98,6 +98,16 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     const holders = FILES.filter((f) => /\/coord\/[^/]+$/.test(f) && identifierReferences(parsedFile(f).text, f, NAMES).length > 0)
       .map((f) => path.basename(f)).sort();
     expect(holders).toEqual(['landingEntry.ts', 'landingWrites.ts', 'store.ts']);
+    // and no second allocator under another name: every landing_entries INSERT binds its id first, from the reserved
+    // id (advanceLanding) or the decided mutation's id (writeLandingAuthority), and no landing SQL takes a MAX itself
+    const store = parsedFile('server/src/coord/store.ts').text;
+    const inserts = [...store.matchAll(/INSERT INTO landing_entries \(([^)]*)\)[\s\S]*?\.run\(([^,]+),/g)];
+    expect(inserts.length).toBe(2);
+    for (const m of inserts) {
+      expect(m[1]!.split(',')[0]!.trim()).toBe('id');
+      expect(['reserved', 'mutation.id']).toContain(m[2]!.trim());
+    }
+    expect(store.match(/MAX\([^)]*\)[^'"`]*FROM landing_/g) ?? []).toEqual([]);
   });
 
   it('the merging-at detail is built only inside advanceLanding', () => {
@@ -170,7 +180,9 @@ describe('CLAUDE.md names the landing line among what a lost coord.db loses (D-7
     // arm 3's pairs are the same list (one list, two readers), so a restore copies nothing the backup set does not hold
     const b = ccrc.indexOf('\n_upd_backup_pairs() {');
     expect(b, '_upd_backup_pairs is gone').toBeGreaterThan(-1);
-    expect(ccrc.slice(b, ccrc.indexOf('\n}\n', b))).toContain('_upd_backup_set');
+    const pairs = ccrc.slice(b, ccrc.indexOf('\n}\n', b));
+    expect(pairs).toContain('_upd_backup_set');
+    expect(pairs).not.toContain('landing.log');
     for (const f of ['deploy/backup-coord.mjs', 'deploy/coordination-snapshot.mjs']) {
       expect(existsSync(path.join(REPO_ROOT, f)), `${f} is gone: a moved file must turn this red`).toBe(true);
       expect(readFileSync(path.join(REPO_ROOT, f), 'utf8'), f).not.toContain('landing.log');
@@ -204,7 +216,14 @@ describe('the server boots the landing journal once, in both fleet modes, before
     expect(made).toHaveLength(1);
     const at = made[0]!.index!;
     const replayAt = calls().find((c) => c.name === 'replayLandingJournal')!.start;
-    const construction = text.slice(at, replayAt);
+    // the constructor's own argument list, by paren depth, so a journal named anywhere else before the replay cannot satisfy it
+    let depth = 0; let end = at;
+    for (let i = text.indexOf('(', at); i < text.length; i++) {
+      if (text[i] === '(') depth++;
+      else if (text[i] === ')' && --depth === 0) { end = i + 1; break; }
+    }
+    expect(end).toBeLessThan(replayAt);
+    const construction = text.slice(at, end);
     expect(construction).toContain('landingJournal: createLandingJournal(');
     expect(construction).toContain('onUnusableConnection');
     expect(text.indexOf('cfg.fleetMode ===')).toBeGreaterThan(at);

@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import type { FastifyReply } from 'fastify';
 import { ADVANCE_REJECT_STATUS, GENERIC_REFUSALS, LANDING_REFUSAL_STATUS, LINEAR_PROXY_REFUSALS, REFUSAL_STATUS, ROUTE_REFUSALS, type RouteRefusal } from '../../shared/refusal.js';
 import { CLAIM_REFUSALS } from '../../shared/box-token.js';
+import { LANDING_INFRASTRUCTURE_CODES, LANDING_MUTATION_CODES } from '../../shared/landingLine.js';
 import { refuseRoute } from '../src/refuse.js';
 import { addedLines, mergeBaseDiff, mergeBaseText, removedLines } from './mergeBase.js';
 import { parsedFile } from './scan/symbols.js';
@@ -474,6 +475,9 @@ describe("the landing line's words (landing order wave 5f, shared contract §5)"
     for (const w of INFRA) expect(LANDING_REFUSAL_STATUS[w], w).toBe(503);
     for (const [w, status] of Object.entries(MUTATION)) expect(LANDING_REFUSAL_STATUS[w as keyof typeof LANDING_REFUSAL_STATUS], w).toBe(status);
     expect(Object.keys(LANDING_REFUSAL_STATUS).sort()).toEqual([...INFRA, ...Object.keys(MUTATION)].sort());
+    // the L0 runtime lists (wire totality) name exactly the submap's words, each family on its own side
+    expect([...LANDING_INFRASTRUCTURE_CODES].sort()).toEqual([...INFRA].sort());
+    expect([...LANDING_MUTATION_CODES].sort()).toEqual(Object.keys(MUTATION).sort());
   });
   it('the submap is spread into both status tables, with the same status', () => {
     for (const [w, status] of Object.entries(LANDING_REFUSAL_STATUS)) {

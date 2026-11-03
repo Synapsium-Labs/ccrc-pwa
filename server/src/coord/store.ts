@@ -2988,7 +2988,6 @@ export class CoordStore {
     let effects: 'none' | 'applying' | 'committing' = 'none';
     let touched = false;
     let began = false;
-    let paired = false;
     try {
       return tx(this.db, (): LandingAdvanceResult => {
         began = true;
@@ -3005,7 +3004,6 @@ export class CoordStore {
             || (from === 'merging' && to === 'working' && landing.kind !== 'retreat')) {
             throw new Error(`advanceLanding: a ${landing.kind} advance does not pair with a move to ${to}`);
           }
-          paired = true;
           if (landing.kind === 'retreat' && landing.ejection !== null && from !== 'merging') {
             return { ok: false as const, error: 'ejection-not-merging' as const, from };
           }
@@ -3066,10 +3064,11 @@ export class CoordStore {
         return out;
       });
     } catch (err) {
-      // A plain advance carries no landing contract: its failure propagates as it always did. A pin or retreat that
-      // failed before any effect (a BEGIN that threw, a read before the fence) is the line's own db-unavailable, never
-      // a throw; only the pairing programming error (began, not yet paired) still throws.
-      if (!touched && (landing.kind === 'plain' || (began && !paired))) throw err;
+      // A plain advance, and a pin or retreat that began but never reached the line (the run read, the pairing
+      // programming error, a retreat with no PR or not from merging), carry no landing contract: the failure propagates
+      // as it always did. A pin or retreat whose BEGIN threw is the line's own db-unavailable; once the line was
+      // reached, a failure is the line's, by its effects phase.
+      if (landing.kind === 'plain' || (began && !touched)) throw err;
       const recovery = this.landingBoundary();
       if (effects === 'none') return { ok: false, error: 'landing-db-unavailable', recovery };
       this.landingFence = recovery;
