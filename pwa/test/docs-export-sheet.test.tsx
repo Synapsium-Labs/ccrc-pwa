@@ -5,6 +5,8 @@
 // project `demo`, `specs/...`.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { DocPin, DocsPageLocation } from '../../shared/docs';
 import { ExportSheet, type ExportBuilder } from '../src/docs/ExportSheet';
 import { EXPORT_FACT, EXPORT_TEXT, fillSentence } from '../src/docs/docsText';
@@ -14,6 +16,7 @@ import { detachUrls } from '../src/docs/docsLinks';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { COMMIT_A, SERVED, fileResponse, pageAt, treeOk } from './docsFixtures';
 import { syncTestStore } from './highlightTestStore';
+import { stripComments } from './cssRule';
 
 type Leaf = DocsPageLocation & { kind: 'path' };
 const PAGE = pageAt('/docs/demo/specs/a.md') as Leaf;
@@ -140,5 +143,23 @@ describe('exportInputOf (spec 4.17; refinement (l))', () => {
       source: { kind: 'text', pin: { ...PIN, path: 'a.txt' }, show: fileResponse('a').show, body: { kind: 'text', text: 'a', lang: null }, store: null },
     };
     expect(view(text)).toBeUndefined();
+  });
+});
+
+// ---- Task 9: the Export chrome paints no colour of its own (M4.S1's Export clause) ------------------------------
+
+describe('the Export chrome paints no colour of its own (M4.S1 Export clause; spec 4.14)', () => {
+  const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'docs', 'docs.css'), 'utf8'));
+  const exportRules = css.split('}').map((chunk) => chunk.split('{')).filter(([sel]) => /\.docs-export\b/.test(sel ?? ''));
+
+  it('every rule naming .docs-export sets no ink, ground, border, outline, fill or shadow, so design/audit.mjs owes it no entry', () => {
+    expect(exportRules.map(([sel]) => (sel ?? '').trim()).sort()).toEqual([
+      '.docs-export', '.docs-export-facts', '.docs-export-facts > div', '.docs-export-facts dt, .docs-export-facts dd',
+      '.docs-export-note', '.docs-export-sheet', '.docs-export:disabled',
+    ]);
+    for (const [sel, body] of exportRules) {
+      expect(body ?? '', sel).not.toMatch(
+        /(?:^|[;{\s])(?:color|background[a-z-]*|border[a-z-]*|outline[a-z-]*|fill|stroke|text-decoration-color|opacity|filter|box-shadow|accent-color|caret-color)\s*:/);
+    }
   });
 });

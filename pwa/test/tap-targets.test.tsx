@@ -1162,6 +1162,28 @@ describe('Share: .docs-share on .docs-action, the share sheet’s Share… and C
   });
 });
 
+// — native Docs reader W5, Export: the header's Export and the export sheet's Save and Retry (spec 2026-10-01 4.14,
+// 4.17). Both halves for each, as for the Docs controls above. —
+describe('Export: .docs-export on .docs-action, and the export sheet’s Save and Retry off @ccrc/ui’s Button (docs W5 Export)', () => {
+  afterEach(() => {
+    history.replaceState(null, '', '/');
+  });
+
+  it('are at least one tap tall: .docs-action on the token, the sheet’s buttons off @ccrc/ui’s Button', () => {
+    expect(floorIn(docsCss, '.docs-action')).toBe('var(--tap-min)');
+    expect(buttonVariants({ variant: 'primary' })).toContain('min-h-tap');
+    expect(buttonVariants({ variant: 'ghost' })).toContain('min-h-tap');
+  });
+
+  it('are the classes the rendered controls carry', async () => {
+    openDocs('/docs/demo/specs/a.md', markdownLeaf('# A\n'));
+    const exportButton = await screen.findByRole('button', { name: DOCS_HEAD_TEXT.export });
+    expect(exportButton).toHaveClass('docs-action', 'docs-export');
+    fireEvent.click(exportButton);
+    expect(await screen.findByRole('button', { name: /^Save / })).toHaveClass('min-h-tap');
+  });
+});
+
 describe('TextLink stays inside a line of text — a link alone is a control', () => {
   // TextLink has no tap floor by contract (ui/src/primitives/text-link.tsx: WCAG 2.5.8's in-a-sentence exemption).
   // The census grants that exemption to every TextLink, so a TextLink that is the ONLY thing in its element — the
