@@ -395,6 +395,24 @@ describe('gates', () => {
     }
   });
 
+  it('a back-off capped at the 6 h cadence is not cut short when pressure rises after it', async () => {
+    const r = rig();
+    r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    r.truncate(true);
+    await r.sweep.pass();
+    for (const wait of [15, 30, 60, 120, 240]) {
+      r.advance(wait * MIN); await r.sweep.pass();
+    }
+    expect(censuses(r), 'streak driven to 6').toBe(6);
+    r.pressured(true);
+    r.advance(ORPHAN_CENSUS_PRESSURE_MS); await r.sweep.pass();
+    expect(censuses(r), 'an hour after pressure rises').toBe(6);
+    r.advance(360 * MIN - ORPHAN_CENSUS_PRESSURE_MS - 1); await r.sweep.pass();
+    expect(censuses(r), '1 ms before the 6 h retry').toBe(6);
+    r.advance(1); await r.sweep.pass();
+    expect(censuses(r), 'at the 6 h retry').toBe(7);
+  });
+
   it('pressure clearing over a pending retry does not lengthen it', async () => {
     for (const [arm, set] of arms) {
       const r = rig();
