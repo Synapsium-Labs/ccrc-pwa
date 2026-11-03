@@ -4937,30 +4937,42 @@ Issued to this wave by the coordinator at run-open (block 7751 to 7766); the fir
 
 ## W5h-a results
 
-Measured on the workspace branch after `main` was merged in (Share, #2145, landed first), at the tip that this section's commit sits on, 2026-11-03.
+Measured on the workspace branch after `main` was merged in (Share, #2145, landed first), and measured again at the end of fix round 1, at the tip that this section's commit sits on, 2026-11-03.
 
 ### Suites
 
-| Suite | Result |
+| Suite (at the end of fix round 1) | Result |
 |---|---|
-| `pwa`, four shards | 403 files, 12 352 tests passed, 3 skipped. One case, `highlight-wiring.test.tsx`'s "M4.H16 … a text leaf: plain first, then coloured", failed once under load (a `waitFor` timing) and passed alone and on the shard's re-run. |
+| `pwa`, four shards | 403 files, 12 382 tests passed, 3 skipped |
 | `pwa` typecheck (`tsc --noEmit -p tsconfig.json`) | clean |
 | `markdown-worker-built`, `reader-built`, `fonts-built`, each alone | 9, 6 and 4 passed |
 | browser: `tool-well-colour`, `reader-frame` | 16 and 24 passed |
-| `server`: `rings/pwa-rings`, `rings/totality`, `docs-parity`, `auth-gate` | 333 passed |
-| `server`: `deviation-refs`, `dtbd`, `topology-clean`, `anchors`, `citations` | 105 passed |
+| `server`: `update-move`, `deviation-refs`, `dtbd`, `topology-clean`, `anchors`, `citations`, `docs-parity`, `auth-gate`, `rings/pwa-rings`, `rings/totality` | 459 passed |
 | `server`: `single-definition/` | 1 045 passed |
 | `server`: `typecheck-tests` | 12 passed |
 | `git diff --stat <BASE> -- pwa/test/golden` | empty |
+
+Before fix round 1, at the results commit, the same suites passed (the `pwa` suite 12 352 tests). One case, `highlight-wiring.test.tsx`'s "M4.H16 … a text leaf: plain first, then coloured", failed once under load then (a `waitFor` timing) and passed alone and on the shard's re-run; review run 1364 and fix round 1 did not see it again.
 
 **The PR's first CI run** (on the results commit) was red twice, and both are fixed on this branch:
 
 - `pwa`: R19's "an answer over the HTML cap still gives its ratio" timed out (92 s against 60 s), and the item-6 rejection case took 59 s. Both had bypassed the default fake's in-kind answer for a crafted shape, so every crafted shape ran through highlight.js in-thread. Both now use that answer (`inKind`) and take about 3 s. Rows W5HA-T9-M14, W5HA-T10-M1 and W5HA-T10-M2 re-measured as recorded.
 - `server`: `update-move.test.ts`'s census of the quoted word `'detach'` (the update move's `DETACH_CAP`) found the runner's own option, `abortRunning: 'terminate' | 'detach'`. The census now sets aside a code line naming `abortRunning`, only that line, and its CONTROL pins both directions (rows W5HA-T11-M1 and W5HA-T11-M2; D-7761). Task 11's server runs did not include this suite; the PR's server selection ran it.
 
+**Fix round 1** (review run 1364; the coordinator's rulings, mail 14095), one commit per item, each part reviewed on its own (opus for the store, sonnet for the guards), every finding fixed:
+
+- F1, D-7762: a Docs page's ceilings count every drawn copy of a shared block, one job still serving the key (rows W5HA-T11-M3, M4, M13 to M15).
+- F2: a chat store evicts its subscriber and listener rows with the keys no block references; `retainedKeys()` is the test seam (M5, M6, M16).
+- F4: a posted-then-released job's worker time stops at the detach (M7).
+- A4: one `readHighlightOutcome`, a table over every arm of `HighlightOutcome`; the runner answers an unknown reply `worker-failed` / `malformed-reply`, and the store settles an unknown outcome `plain` / `malformed`, so `settled()` always arrives (M8, M9).
+- A1: M4.H14's inputs walk their whole length and its steps are bounded from below, so a regex in place of the loop reds (M10).
+- A6: the default cache's character bound is pinned from below (M11).
+- A7: the update-move exemption is narrowed to `markdownRunner.ts` (M1 and M2 re-measured, M2 re-anchored; M12).
+- F3, D-7763; D-7755, D-7759 and D-7761 corrected; refinements (i), (j) and (o) point at their numbers. A5 and three comments made true.
+
 ### The mutation table
 
-137 rows (the last occurrence of each id), run sequentially in the workspace, each restored from a saved copy and checked by sha256, with `git status` clean after every row: **137 red, 0 green, 0 unmatched**, and the two rows the CI fix added (Task 11) red too. Seven rows measured more failing cases than their earlier record, with every recorded case still among them, because later tasks and fix rounds added cases the same mutation also reds: W5HA-T4-M2 (7), W5HA-T4-M8 (9), W5HA-T5-M8 (2), W5HA-T5-M28 (3), W5HA-T9-M1 (8), W5HA-T9-M13 (4), W5HA-T7-X1 (2, now the same mutant as W5HA-T7-M6). The rows below carry the measured red; a `note` records a coordinator ruling or a re-anchoring. Part 1's moved bounds are pinned at their new homes by W5HA-T10-A7 to A14.
+153 rows (the last occurrence of each id), run sequentially at the end of fix round 1, in the workspace, each restored from a saved copy and checked by sha256, with `git status` clean after every row: **153 red, 0 green, 0 unmatched.** Twelve rows measured more failing cases than an earlier record, with every recorded case still among them, because later tasks and fix rounds added cases the same mutation also reds: W5HA-T4-M2 (7), W5HA-T4-M8 (10), W5HA-T5-M8 (2), W5HA-T5-M10 (6), W5HA-T5-M11 (7), W5HA-T6-M5 (10), W5HA-T7-X1 (2, the same mutant as W5HA-T7-M6), W5HA-T9-M1 (8), W5HA-T9-M13 (4), W5HA-T10-M4 (2), W5HA-T10-A13 (12) and W5HA-T11-M10 (21: the three linearity cases, and 18 refusal cases, since the regex mutant also skips the class check). Fix round 1 re-anchored W5HA-T5-M5, M6, M16, M31, M32, W5HA-T10-A11, A12 and W5HA-T11-M2. The rows below carry the measured red; a `note` records a coordinator ruling or a re-anchoring. Part 1's moved bounds are pinned at their new homes by W5HA-T10-A7 to A14.
 
 ### Measurements
 
@@ -5055,7 +5067,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "zsh: 'bash',",
   "new": "zsh: 'bash', planted: 'bash',",
   "tests": "test/highlight-names.test.ts",
-  "red": "2 failed: 'the alias table is every alias the worker resolves, each to the same grammar'; 'every name and alias resolves to the same grammar on both sides, in either case'"
+  "red": "2 failed: 'every name and alias resolves to the same grammar on both sides, in either case'; 'the alias table is every alias the worker resolves, each to the same grammar'"
  },
  {
   "id": "W5HA-T2-M3",
@@ -5132,7 +5144,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "let html = cache.get(key);",
   "new": "let html: string | undefined = undefined;",
   "tests": "test/markdown-highlight-worker.test.ts",
-  "red": "2 failed: 'the same (mode, lang, code) twice calls highlight once; the other mode is its own entry'; 'the default cache holds 256 entries and 4000000 characters of markup'"
+  "red": "3 failed: 'the default cache holds 256 entries and 4000000 characters of markup'; 'the default cache keeps what weighs under its character bound (the other half of the bound)'; 'the same (mode, lang, code) twice calls highlight once; the other mode is its own entry'"
  },
  {
   "id": "W5HA-T3-M5",
@@ -5170,7 +5182,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "running = { job, timer: setTimer(() => expire(job), job.budgetMs), detached: false };",
   "new": "running = { job, timer: undefined, detached: false };",
   "tests": "test/markdown-runner.test.ts",
-  "red": "14 failed: 'a job that never answers is a timeout exactly at its budget, after one terminate'; 'the next job after a timeout spawns a fresh worker and is answered by it'; 'honours each job's own budget: 30 000 ms (Format anyway's) times out at 30 000, not before'; 'the timer starts when a job is posted, not when it is queued'; 'a reply, an error and an abort each cancel the job timer'; 'a dropped worker is no longer heard: its late reply and its error reach nobody'; 'a messageerror from a worker dropped by a timeout leaves the live worker and its job alone'; 'a respawn that throws answers worker-unavailable to each job queued behind the expired one'; 'a render job answers timeout at budgetMs and the worker is terminated'; 'M4.H8: the block deadline starts at post, not at request: a 1 999 ms boot then 749 ms of work is no timeout'; 'M4.H8: a boot that succeeds resets the count: fail, ready, then one more failure is not sticky'; 'M4.H7: after {ready}, a job that never answers times out at the deadline, terminate once, the next job respawns'; 'M4.H7: only the overrun block is lost: of a, b, c, b never answers and a and c are answered'; 'M4.H9: a detached job's deadline still runs: its timeout terminates and reaches nobody'"
+  "red": "14 failed: 'a job that never answers is a timeout exactly at its budget, after one terminate'; 'a reply, an error and an abort each cancel the job timer'; 'honours each job's own budget: 30 000 ms (Format anyway's) times out at 30 000, not before'; 'the next job after a timeout spawns a fresh worker and is answered by it'; 'the timer starts when a job is posted, not when it is queued'; 'a dropped worker is no longer heard: its late reply and its error reach nobody'; 'a messageerror from a worker dropped by a timeout leaves the live worker and its job alone'; 'a respawn that throws answers worker-unavailable to each job queued behind the expired one'; 'M4.H7: after {ready}, a job that never answers times out at the deadline, terminate once, the next job respawns'; 'M4.H7: only the overrun block is lost: of a, b, c, b never answers and a and c are answered'; 'M4.H8: a boot that succeeds resets the count: fail, ready, then one more failure is not sticky'; 'M4.H8: the block deadline starts at post, not at request: a 1 999 ms boot then 749 ms of work is no timeout'; 'M4.H9: a detached job's deadline still runs: its timeout terminates and reaches nobody'; 'a render job answers timeout at budgetMs and the worker is terminated'"
  },
  {
   "id": "W5HA-T4-M2",
@@ -5180,7 +5192,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "if (!booted) return;",
   "new": "",
   "tests": "test/markdown-runner.test.ts",
-  "red": "7 failed: 'M4.H8: no job is posted before {ready}; then exactly {id, lang, code}, and a retry adds mode line'; 'M4.H8: the block deadline starts at post, not at request: a 1 999 ms boot then 749 ms of work is no timeout'; 'M4.H8: a worker that never says ready answers every waiting job worker-failed at the boot budget, terminated'; 'M4.H8: the next job respawns once; a second boot failure in a row is sticky, with no further spawn'; 'M4.H8: an error event while booting is a boot failure for the waiting jobs'; 'L2-1: a boot failure's timer dies with its worker (drop() clears the boot timer)'; 'onPosted runs when the job is posted: after ready, after the job ahead of it, never for an unposted job'"
+  "red": "7 failed: 'L2-1: a boot failure's timer dies with its worker (drop() clears the boot timer)'; 'M4.H8: a worker that never says ready answers every waiting job worker-failed at the boot budget, terminated'; 'M4.H8: an error event while booting is a boot failure for the waiting jobs'; 'M4.H8: no job is posted before {ready}; then exactly {id, lang, code}, and a retry adds mode line'; 'M4.H8: the block deadline starts at post, not at request: a 1 999 ms boot then 749 ms of work is no timeout'; 'M4.H8: the next job respawns once; a second boot failure in a row is sticky, with no further spawn'; 'onPosted runs when the job is posted: after ready, after the job ahead of it, never for an unposted job'"
  },
  {
   "id": "W5HA-T4-M3",
@@ -5210,7 +5222,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "if (bootBudgetMs !== undefined) bootTimer = setTimer(() => bootFail('boot-timeout'), bootBudgetMs);",
   "new": "",
   "tests": "test/markdown-runner.test.ts",
-  "red": "3 failed: 'M4.H8: a worker that never says ready answers every waiting job worker-failed at the boot budget, terminated'; 'M4.H8: the next job respawns once; a second boot failure in a row is sticky, with no further spawn'; 'M4.H8: a boot that succeeds resets the count: fail, ready, then one more failure is not sticky'"
+  "red": "3 failed: 'M4.H8: a boot that succeeds resets the count: fail, ready, then one more failure is not sticky'; 'M4.H8: a worker that never says ready answers every waiting job worker-failed at the boot budget, terminated'; 'M4.H8: the next job respawns once; a second boot failure in a row is sticky, with no further spawn'"
  },
  {
   "id": "W5HA-T4-M6",
@@ -5240,7 +5252,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "if (d.ready === true) return { kind: 'ready' };",
   "new": "",
   "tests": "test/markdown-runner.test.ts",
-  "red": "9 failed: 'M4.H8: no job is posted before {ready}; then exactly {id, lang, code}, and a retry adds mode line'; 'M4.H8: the block deadline starts at post, not at request: a 1 999 ms boot then 749 ms of work is no timeout'; 'M4.H8: a boot that succeeds resets the count: fail, ready, then one more failure is not sticky'; 'L2-1: a ready worker is not failed by its own boot budget (ready() clears the boot timer)'; 'M4.H7: after {ready}, a job that never answers times out at the deadline, terminate once, the next job respawns'; 'M4.H7: only the overrun block is lost: of a, b, c, b never answers and a and c are answered'; 'M4.H9: aborting a running highlight job rejects it, never terminates, and the same worker serves the next job'; 'M4.H9: a detached job's deadline still runs: its timeout terminates and reaches nobody'; 'onPosted runs when the job is posted: after ready, after the job ahead of it, never for an unposted job'"
+  "red": "10 failed: 'A4: a reply whose result is not an outcome this build knows answers worker-failed / malformed-reply, and the next job still runs'; 'L2-1: a ready worker is not failed by its own boot budget (ready() clears the boot timer)'; 'M4.H7: after {ready}, a job that never answers times out at the deadline, terminate once, the next job respawns'; 'M4.H7: only the overrun block is lost: of a, b, c, b never answers and a and c are answered'; 'M4.H8: a boot that succeeds resets the count: fail, ready, then one more failure is not sticky'; 'M4.H8: no job is posted before {ready}; then exactly {id, lang, code}, and a retry adds mode line'; 'M4.H8: the block deadline starts at post, not at request: a 1 999 ms boot then 749 ms of work is no timeout'; 'M4.H9: a detached job's deadline still runs: its timeout terminates and reaches nobody'; 'M4.H9: aborting a running highlight job rejects it, never terminates, and the same worker serves the next job'; 'onPosted runs when the job is posted: after ready, after the job ahead of it, never for an unposted job'"
  },
  {
   "id": "W5HA-T4-M9",
@@ -5267,7 +5279,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "if (!acceptedClass(html.slice(start, end))) return null;",
   "new": "",
   "tests": "test/highlight-html.test.tsx",
-  "red": "15 failed: 'a class without the hljs- prefix'; 'an unknown language name'; 'an upper-case class character'; 'an empty scope'; 'a plain class after the scope (it could be a styled class of the app)'; 'an app class after the scope'; 'an empty scope before a second token'; 'two spaces between tokens'; 'a second token with no underscore'; 'a second token with the wrong underscore count'; 'a third token with the second's count'; 'a trailing space'; 'an underscore-only second token'; 'an underscore inside a second token'; 'an upper-case second token'"
+  "red": "15 failed: 'a class without the hljs- prefix'; 'a plain class after the scope (it could be a styled class of the app)'; 'a second token with no underscore'; 'a second token with the wrong underscore count'; 'a third token with the second's count'; 'a trailing space'; 'an app class after the scope'; 'an empty scope'; 'an empty scope before a second token'; 'an underscore inside a second token'; 'an underscore-only second token'; 'an unknown language name'; 'an upper-case class character'; 'an upper-case second token'; 'two spaces between tokens'"
  },
  {
   "id": "W5HA-T5-M2",
@@ -5301,23 +5313,23 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
  },
  {
   "id": "W5HA-T5-M5",
-  "spec": "M4.H12",
+  "spec": "M4.H12 (re-anchored at F1: the seed ternary)",
   "pkg": "pwa",
   "file": "src/lib/highlightStore.ts",
-  "old": "if (ceilingsOn && input > DOCS_HIGHLIGHT_PAGE_MAX_CHARS) entries.set(k.key, { kind: 'skipped', ceiling: 'page-input' });\n      else if (inScan",
-  "new": "if (inScan",
+  "old": "ceilingsOn && input > DOCS_HIGHLIGHT_PAGE_MAX_CHARS ? 'page-input'\n        : inScan",
+  "new": "inScan",
   "tests": "test/highlight-store.test.ts",
-  "red": "1 failed: 'the input ceiling skips at seed, in document order, a shared key counted once'"
+  "red": "4 failed: 'INPUT: copies of one block are admitted until their combined length passes the page input ceiling, then skipped as copies; the key is still requestable, one job (part1 off: no per-block bound applies)'; 'INPUT: the same with part 1 on (the block is within every per-block bound of its grammar)'; 'a key whose first occurrence is past a ceiling is skipped as an entry from the first commit, and no copy verdict is recorded'; 'the input ceiling skips at seed, in document order, a shared key counted at each occurrence (F1)'"
  },
  {
   "id": "W5HA-T5-M6",
-  "spec": "M4.H12",
+  "spec": "M4.H12 (re-anchored at F1: the output walk)",
   "pkg": "pwa",
   "file": "src/lib/highlightStore.ts",
-  "old": "} else if (docs && ceilingsOn && outputChars + o.html.length > DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS) {",
-  "new": "} else if (false) {",
+  "old": "(!capped || outputChars + o.html.length <= DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS)",
+  "new": "true",
   "tests": "test/highlight-store.test.ts",
-  "red": "2 failed: 'the output ceiling: the answer that would pass the page HTML cap is skipped, and every later request'; 'the output ceiling latches before the skipped key's listener runs: a request made from it starts no job'"
+  "red": "6 failed: 'OUTPUT: a line retry's html answer counts every copy too'; 'OUTPUT: copies of one block are drawn until the page HTML cap, the first copy past it and every later one are skipped, one job, the store latched'; 'OUTPUT: the verdicts are readable when the key's listeners run (recorded before the entry is set)'; 'OUTPUT: when the first copy is the one that passes, the entry itself is skipped (as before), and no copy verdict is needed'; 'the output ceiling: the answer that would pass the page HTML cap is skipped, and every later request'; 'the output ceiling latches before the skipped key's listener runs: a request made from it starts no job'"
  },
  {
   "id": "W5HA-T5-M7",
@@ -5337,7 +5349,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "const timer = ceilingsOn",
   "new": "const timer = false",
   "tests": "test/highlight-store.test.ts",
-  "red": "2 failed: 'the worker-time ceiling fires mid-job: the running job is detached and the rest skipped'; 'five 700 ms jobs answered back to back: the fifth is skipped by page-worker-time 200 ms into its run'"
+  "red": "2 failed: 'five 700 ms jobs answered back to back: the fifth is skipped by page-worker-time 200 ms into its run'; 'the worker-time ceiling fires mid-job: the running job is detached and the rest skipped'"
  },
  {
   "id": "W5HA-T5-M9",
@@ -5347,7 +5359,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "} else if (o.html.length > MD_HIGHLIGHT_MAX_HTML_CHARS) {\n      failure = { kind: 'too-large' };\n    } else {",
   "new": "} else {",
   "tests": "test/highlight-store.test.ts",
-  "red": "2 failed: 'an answer over MD_HIGHLIGHT_MAX_HTML_CHARS is too-large on receipt, and a long block is retried in line mode, pending meanwhile'; 'an answer both over the per-block cap and malformed is too-large (length first, refinement (e)), and a long block is retried'"
+  "red": "2 failed: 'an answer both over the per-block cap and malformed is too-large (length first, refinement (e)), and a long block is retried'; 'an answer over MD_HIGHLIGHT_MAX_HTML_CHARS is too-large on receipt, and a long block is retried in line mode, pending meanwhile'"
  },
  {
   "id": "W5HA-T5-M10",
@@ -5357,7 +5369,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "const peek = (key: string): HighlightEntry => entries.get(key) ?? UNREQUESTED_ENTRY;",
   "new": "const peek = (key: string): HighlightEntry => ({ ...(entries.get(key) ?? UNREQUESTED_ENTRY) });",
   "tests": "test/highlight-store.test.ts",
-  "red": "4 failed: 'two blocks with equal (lang, raw) make one request; peek is synchronous and never requests'; 'releasing one of two references keeps the job; releasing the last detaches it and the key is unrequested again'; 'peek returns the same object until the entry changes; subscribe(key) returns the same function for a key'; 'a chat store evicts every key no block references after a commit'"
+  "red": "6 failed: 'a chat store evicts every key no block references after a commit'; 'peek returns the same object until the entry changes; subscribe(key) returns the same function for a key'; 'releasing one of two references keeps the job; releasing the last detaches it and the key is unrequested again'; 'two blocks with equal (lang, raw) make one request; peek is synchronous and never requests'; 'INPUT: copies of one block are admitted until their combined length passes the page input ceiling, then skipped as copies; the key is still requestable, one job (part1 off: no per-block bound applies)'; 'SCAN: copies of one typescript block count in part 1's scan sum too: the first copy past it is skipped by part1-scan'"
  },
  {
   "id": "W5HA-T5-M11",
@@ -5367,7 +5379,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "if (docs) {\n      for (const key of seeded) {",
   "new": "if (false) {\n      for (const key of seeded) {",
   "tests": "test/highlight-store.test.ts",
-  "red": "1 failed: 'settled(): false while a seeded key is unanswered, from creation; true once every one is html, plain or skipped'"
+  "red": "7 failed: 'a threw without a string error: the entry is plain (malformed) and a Docs store seeded with the key reaches settled()'; 'a timeout without budgetMs: the entry is plain (malformed) and a Docs store seeded with the key reaches settled()'; 'an unknown kind: the entry is plain (malformed) and a Docs store seeded with the key reaches settled()'; 'html with a non-string html: the entry is plain (malformed) and a Docs store seeded with the key reaches settled()'; 'html with an unknown mode: the entry is plain (malformed) and a Docs store seeded with the key reaches settled()'; 'html without html: the entry is plain (malformed) and a Docs store seeded with the key reaches settled()'; 'settled(): false while a seeded key is unanswered, from creation; true once every one is html, plain or skipped'"
  },
  {
   "id": "W5HA-T5-M12",
@@ -5411,11 +5423,11 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
  },
  {
   "id": "W5HA-T5-M16",
-  "spec": "-",
+  "spec": "- (re-anchored at F1: codeBlocksOf now sets at)",
   "pkg": "pwa",
   "file": "src/lib/highlightStore.ts",
-  "old": "raw: textOf(n).replace(/\\n$/, '') });",
-  "new": "raw: textOf(n) });",
+  "old": "raw: textOf(n).replace(/\\n$/, ''), at: n });",
+  "new": "raw: textOf(n), at: n });",
   "tests": "test/highlight-store.test.ts",
   "red": "1 failed: 'walks pre elements in document order: the code class's language, and the text with one trailing newline stripped'"
  },
@@ -5507,7 +5519,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "if (end - body !== tier || body === pos) return false;",
   "new": "if (body === pos) return false;",
   "tests": "test/highlight-html.test.tsx",
-  "red": "5 failed: 'a plain class after the scope (it could be a styled class of the app)'; 'an app class after the scope'; 'a second token with no underscore'; 'a second token with the wrong underscore count'; 'a third token with the second's count'"
+  "red": "5 failed: 'a plain class after the scope (it could be a styled class of the app)'; 'a second token with no underscore'; 'a second token with the wrong underscore count'; 'a third token with the second's count'; 'an app class after the scope'"
  },
  {
   "id": "W5HA-T5-M26",
@@ -5537,7 +5549,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "if (!(isLowerAlnum(c) || c === 0x5f || c === 0x2d)) return false;",
   "new": "if (!(isLowerAlnum(c) || c === 0x2d)) return false;",
   "tests": "test/highlight-html.test.tsx",
-  "red": "3 failed: 'the HTML highlight.js gives for every code block of M4.M1's corpus'; 'real output of every registered grammar passes, and the corpus emits the multi-class sub-scope forms'; 'a language-NAME wrapper for every registered name and alias, and the two real subLanguage shapes'"
+  "red": "3 failed: 'a language-NAME wrapper for every registered name and alias, and the two real subLanguage shapes'; 'real output of every registered grammar passes, and the corpus emits the multi-class sub-scope forms'; 'the HTML highlight.js gives for every code block of M4.M1's corpus'"
  },
  {
   "id": "W5HA-T5-M29",
@@ -5561,21 +5573,21 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
  },
  {
   "id": "W5HA-T5-M31",
-  "spec": "M4.H12",
+  "spec": "M4.H12 (re-anchored at F1: the copy-aware output branch)",
   "pkg": "pwa",
   "file": "src/lib/highlightStore.ts",
-  "old": "close('page-output');\n        set(key, job.first === null ? { kind: 'skipped', ceiling: 'page-output' } : { kind: 'plain', first: job.first, retry: REFUSED });",
-  "new": "set(key, job.first === null ? { kind: 'skipped', ceiling: 'page-output' } : { kind: 'plain', first: job.first, retry: REFUSED });\n        close('page-output');",
+  "old": "close('page-output');\n        if (fitted > 0) set(key, { kind: 'html', mode: o.mode, checked });\n        else set(key, job.first === null ? { kind: 'skipped', ceiling: 'page-output' } : { kind: 'plain', first: job.first, retry: REFUSED });",
+  "new": "if (fitted > 0) set(key, { kind: 'html', mode: o.mode, checked });\n        else set(key, job.first === null ? { kind: 'skipped', ceiling: 'page-output' } : { kind: 'plain', first: job.first, retry: REFUSED });\n        close('page-output');",
   "tests": "test/highlight-store.test.ts",
   "red": "1 failed: 'the output ceiling latches before the skipped key's listener runs: a request made from it starts no job'"
  },
  {
   "id": "W5HA-T5-M32",
-  "spec": "M4.H12",
+  "spec": "M4.H12 (re-anchored at F1: indentation of the all-copies-fit branch)",
   "pkg": "pwa",
   "file": "src/lib/highlightStore.ts",
-  "old": "checkCeilings();\n        set(key, { kind: 'html', mode: o.mode, checked });",
-  "new": "set(key, { kind: 'html', mode: o.mode, checked });\n        checkCeilings();",
+  "old": "checkCeilings();\n          set(key, { kind: 'html', mode: o.mode, checked });",
+  "new": "set(key, { kind: 'html', mode: o.mode, checked });\n          checkCeilings();",
   "tests": "test/highlight-store.test.ts",
   "red": "1 failed: 'the worker-time ceiling, reached by an html answer, latches before that key's listener runs'"
  }
@@ -5594,7 +5606,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "renderToStaticMarkup(withSyncHighlight(",
   "new": "renderToStaticMarkup(Object(",
   "tests": "test/markdown-golden.test.tsx",
-  "red": "33 failed: 'lang-bash'; 'lang-css'; 'lang-diff'; 'lang-dockerfile'; 'lang-go'; 'lang-javascript'; 'lang-json'; 'lang-markdown'; 'lang-php'; 'lang-python'; 'lang-rust'; 'lang-sql'; 'lang-typescript'; 'lang-xml'; 'lang-yaml'; 'lang-zsh'; 'lang-shell'; 'lang-tsx'; 'lang-html'; 'lang-svg'; 'lang-sh'; 'lang-ts'; 'lang-js'; 'lang-jsx'; 'lang-mjs'; 'lang-py'; 'lang-yml'; 'lang-md'; 'lang-docker'; 'lang-golang'; 'lang-rs'; 'lang-jsonc'; 'M4.M1 control: rendered with no test store, a coloured golden loses its spans (W5h-a)'",
+  "red": "33 failed: 'lang-bash'; 'lang-css'; 'lang-diff'; 'lang-docker'; 'lang-dockerfile'; 'lang-go'; 'lang-golang'; 'lang-html'; 'lang-javascript'; 'lang-js'; 'lang-json'; 'lang-jsonc'; 'lang-jsx'; 'lang-markdown'; 'lang-md'; 'lang-mjs'; 'lang-php'; 'lang-py'; 'lang-python'; 'lang-rs'; 'lang-rust'; 'lang-sh'; 'lang-shell'; 'lang-sql'; 'lang-svg'; 'lang-ts'; 'lang-tsx'; 'lang-typescript'; 'lang-xml'; 'lang-yaml'; 'lang-yml'; 'lang-zsh'; 'M4.M1 control: rendered with no test store, a coloured golden loses its spans (W5h-a)'",
   "note": "row text corrected: the plan's `renderToStaticMarkup((` was a syntax error (the coordinator agreed, mail 13999)"
  },
  {
@@ -5615,7 +5627,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "const store = useContext(PreHighlightContext);",
   "new": "const store: HighlightStore | null = null;",
   "tests": "test/markdown-golden.test.tsx, test/render-hast.test.tsx",
-  "red": "34 failed: 'lang-bash'; 'lang-css'; 'lang-diff'; 'lang-dockerfile'; 'lang-go'; 'lang-javascript'; 'lang-json'; 'lang-markdown'; 'lang-php'; 'lang-python'; 'lang-rust'; 'lang-sql'; 'lang-typescript'; 'lang-xml'; 'lang-yaml'; 'lang-zsh'; 'lang-shell'; 'lang-tsx'; 'lang-html'; 'lang-svg'; 'lang-sh'; 'lang-ts'; 'lang-js'; 'lang-jsx'; 'lang-mjs'; 'lang-py'; 'lang-yml'; 'lang-md'; 'lang-docker'; 'lang-golang'; 'lang-rs'; 'lang-jsonc'; 'recap-opened: the compaction card opened, its Markdown body rendered'; 'M4.M1 control: rendered with no test store, a coloured golden loses its spans (W5h-a)'"
+  "red": "34 failed: 'lang-bash'; 'lang-css'; 'lang-diff'; 'lang-docker'; 'lang-dockerfile'; 'lang-go'; 'lang-golang'; 'lang-html'; 'lang-javascript'; 'lang-js'; 'lang-json'; 'lang-jsonc'; 'lang-jsx'; 'lang-markdown'; 'lang-md'; 'lang-mjs'; 'lang-php'; 'lang-py'; 'lang-python'; 'lang-rs'; 'lang-rust'; 'lang-sh'; 'lang-shell'; 'lang-sql'; 'lang-svg'; 'lang-ts'; 'lang-tsx'; 'lang-typescript'; 'lang-xml'; 'lang-yaml'; 'lang-yml'; 'lang-zsh'; 'recap-opened: the compaction card opened, its Markdown body rendered'; 'M4.M1 control: rendered with no test store, a coloured golden loses its spans (W5h-a)'"
  },
  {
   "id": "W5HA-T6-M4",
@@ -5635,7 +5647,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "    s.seed(blocks);\n",
   "new": "",
   "tests": "test/docs-highlight-budget.test.tsx, test/docs-markdown.test.tsx, test/highlight-wiring.test.tsx",
-  "red": "7 failed: 'a Docs page publishes its seeded store, not settled until the block is answered, and withdraws it on unmount'; 'a text leaf publishes its one-block store the same way'; 'nine 60 000-character python blocks: the first eight are highlighted and the ninth is not'; '(f) rendered: a third 64 KiB markdown block is skipped (bare label, never requested), the first two are admitted and requested and stay plain over the HTML cap until W5h-b'; 'end to end through the page store and CodeBlock: a mixed crafted page highlights exactly the blocks each budget admits'; 'through DocMarkdown, a tsx block past the scan budget and an md block past the markdown budget are never requested and keep their bare labels'; 'the page highlight budget reaches the blocks: of nine 60 000-character python blocks the ninth is not highlighted'"
+  "red": "10 failed: 'through DocMarkdown, a tsx block past the scan budget and an md block past the markdown budget are never requested and keep their bare labels'; 'the HTML ceiling: copies of one fence whose HTML together passes the page cap are coloured up to it, the rest are plain and say so; one job'; 'the input ceiling: copies of one fence whose raw text together passes the page cap are coloured up to it, the rest are plain and say so; one job'; 'the scan budget: copies of one typescript fence past the scan sum are plain and keep the bare label (part 1's ceiling is not the page's)'; 'nine 60 000-character python blocks: the first eight are highlighted and the ninth is not'; '(f) rendered: a third 64 KiB markdown block is skipped (bare label, never requested), the first two are admitted and requested and stay plain over the HTML cap until W5h-b'; 'end to end through the page store and CodeBlock: a mixed crafted page highlights exactly the blocks each budget admits'; 'the page highlight budget reaches the blocks: of nine 60 000-character python blocks the ninth is not highlighted'; 'a Docs page publishes its seeded store, not settled until the block is answered, and withdraws it on unmount'; 'a text leaf publishes its one-block store the same way'"
  },
  {
   "id": "W5HA-T6-M6",
@@ -5703,7 +5715,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "highlighters.createStore(highlighters.chat, 'chat')",
   "new": "highlighters.createStore(highlighters.docs, 'chat')",
   "tests": "test/chat-hardening.test.tsx",
-  "red": "6 failed: 'M4.C4: a 1 000 B and a 5 000 B message render the fence plain first, same layout and text, then coloured'; 'M4.C5: a growing fence is requested at once on its first render, then only once its text holds still'; 'M4.C5: once the fence closes, later settles, a re-render and a Copy tap add no request for it'; 'M4.C5: under StrictMode's double effects, a block's first fence is requested at once and stays pending'; 'refinement (r): in the debounce window the block shows its new key, so the message's store is not settled'; 'M4.H19 (chat half): chat's requests go to the chat highlighter, never the Docs one, and chat prewarms it on mount'",
+  "red": "6 failed: 'M4.C4: a 1 000 B and a 5 000 B message render the fence plain first, same layout and text, then coloured'; 'M4.C5: a growing fence is requested at once on its first render, then only once its text holds still'; 'M4.C5: once the fence closes, later settles, a re-render and a Copy tap add no request for it'; 'M4.C5: under StrictMode's double effects, a block's first fence is requested at once and stays pending'; 'M4.H19 (chat half): chat's requests go to the chat highlighter, never the Docs one, and chat prewarms it on mount'; 'refinement (r): in the debounce window the block shows its new key, so the message's store is not settled'",
   "note": "plan predicted 1; the coordinator ruled the measured count on 2026-11-02 (mail 13998); it grew with the fix rounds' cases"
  },
  {
@@ -5842,7 +5854,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "import '../session/chat.css';",
   "new": "import '../session/chat.css';\nimport plantedCore from 'highlight.js/lib/core';\nexport const plantedVersion = plantedCore.versionString;",
   "tests": "test/docs-scans.test.ts",
-  "red": "5 failed: 'M4.H4: highlight.js and the worker chain sit only in their homes across pwa/src'; 'M4.H4 planted: highlight.js imported in lib/markdown.tsx is red'; 'M4.H4 planted: highlightGrammars imported in DocsLeaf, and the worker entry imported by the runner, are red'; 'M4.H17 planted: the test store imported from pwa/src is red'; 'M4.H4 planted: highlight.js reached by a path into node_modules, or imported anywhere in ui/src, is red'"
+  "red": "5 failed: 'M4.H17 planted: the test store imported from pwa/src is red'; 'M4.H4 planted: highlight.js imported in lib/markdown.tsx is red'; 'M4.H4 planted: highlight.js reached by a path into node_modules, or imported anywhere in ui/src, is red'; 'M4.H4 planted: highlightGrammars imported in DocsLeaf, and the worker entry imported by the runner, are red'; 'M4.H4: highlight.js and the worker chain sit only in their homes across pwa/src'"
  },
  {
   "id": "W5HA-T8-M2",
@@ -5862,7 +5874,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "dangerouslySetInnerHTML={{ __html: checked.html }}",
   "new": "dangerouslySetInnerHTML={{ __html: raw }}",
   "tests": "test/docs-scans.test.ts",
-  "red": "5 failed: 'M4.H15: exactly one sink in pwa/src, the checked one in HighlightedCode'; 'M4.H15 planted: a second sink under lib/ or under docs/export/ is red'; 'M4.H15 planted: the sink name in a JSX spread is red'; 'M4.H15 planted: the sink name in a props object given to createElement is red'; 'M4.H15 planted: the sink name as an element-access key, a string key, a computed key or a shorthand is red; a comment is not'"
+  "red": "5 failed: 'M4.H15 planted: a second sink under lib/ or under docs/export/ is red'; 'M4.H15 planted: the sink name as an element-access key, a string key, a computed key or a shorthand is red; a comment is not'; 'M4.H15 planted: the sink name in a JSX spread is red'; 'M4.H15 planted: the sink name in a props object given to createElement is red'; 'M4.H15: exactly one sink in pwa/src, the checked one in HighlightedCode'"
  },
  {
   "id": "W5HA-T8-M4",
@@ -5942,7 +5954,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "  if (ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n) || ts.isMethodDeclaration(n)) return isSinkPropertyName(n.name);",
   "new": "  if (ts.isShorthandPropertyAssignment(n) || ts.isMethodDeclaration(n)) return isSinkPropertyName(n.name);",
   "tests": "test/docs-scans.test.ts",
-  "red": "3 failed: 'M4.H15 planted: the sink name in a JSX spread is red'; 'M4.H15 planted: the sink name in a props object given to createElement is red'; 'M4.H15 planted: the sink name as an element-access key, a string key, a computed key or a shorthand is red; a comment is not'"
+  "red": "3 failed: 'M4.H15 planted: the sink name as an element-access key, a string key, a computed key or a shorthand is red; a comment is not'; 'M4.H15 planted: the sink name in a JSX spread is red'; 'M4.H15 planted: the sink name in a props object given to createElement is red'"
  },
  {
   "id": "W5HA-T8-M12",
@@ -5999,7 +6011,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "const answer = await deps.loaders.tree(p.project, null);",
   "new": "const answer = await (deps.loaders as DocsLoaders).refresh(p.project, { ref: null, reason: 'manual' }).then(() => deps.loaders.tree(p.project, null));",
   "tests": "test/docs-scans.test.ts",
-  "red": "8 failed: 'its two modules make no refresh, no fetch of their own, no storage, no clipboard, and read only api.docs'; 'planted: a refresh call in the run module is red'; 'planted: a fetch of its own in the run module is red'; 'planted: a storage write in the run module is red'; 'planted: a clipboard write in the run module is red'; 'planted: another api read in the run module is red'; 'planted: the storage owner in the run module is red'; 'planted: a production highlighter singleton in the run module is red'",
+  "red": "8 failed: 'its two modules make no refresh, no fetch of their own, no storage, no clipboard, and read only api.docs'; 'planted: a clipboard write in the run module is red'; 'planted: a fetch of its own in the run module is red'; 'planted: a production highlighter singleton in the run module is red'; 'planted: a refresh call in the run module is red'; 'planted: a storage write in the run module is red'; 'planted: another api read in the run module is red'; 'planted: the storage owner in the run module is red'",
   "note": "plan predicted 1: the planted cases append to the live module (the same coupling as W5HA-T3-M6)"
  },
  {
@@ -6100,7 +6112,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "        end();\n        ends.current.delete(end);",
   "new": "        ends.current.delete(end);",
   "tests": "test/highlight-measure.test.tsx",
-  "red": "2 failed: 'terminates every worker it spawned once the run is done'; 'Stop mid-run terminates its workers and unmounts its roots; Start then completes with no root warning and a clean host'"
+  "red": "2 failed: 'Stop mid-run terminates its workers and unmounts its roots; Start then completes with no root warning and a clean host'; 'terminates every worker it spawned once the run is done'"
  },
  {
   "id": "W5HA-T9-M12",
@@ -6120,7 +6132,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "root8.unmount();",
   "new": "",
   "tests": "test/highlight-measure.test.tsx",
-  "red": "4 failed: 'is seen at the next frame of the streamed message, not after the rest of it'; 'Stop mid-run terminates its workers and unmounts its roots; Start then completes with no root warning and a clean host'; 'unmounting the page aborts the run and terminates its workers; nothing it spawned outlives it'; 'a highlighter that cannot answer ends the run with a line naming its answer, not \"Done.\"'"
+  "red": "4 failed: 'is seen at the next frame of the streamed message, not after the rest of it'; 'Stop mid-run terminates its workers and unmounts its roots; Start then completes with no root warning and a clean host'; 'a highlighter that cannot answer ends the run with a line naming its answer, not \"Done.\"'; 'unmounting the page aborts the run and terminates its workers; nothing it spawned outlives it'"
  },
  {
   "id": "W5HA-T9-M14",
@@ -6160,7 +6172,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "const w = (p.spawn ?? spawnHighlightWorker)();\n      workers.push(w);",
   "new": "const w = (p.spawn ?? spawnHighlightWorker)();",
   "tests": "test/highlight-measure.test.tsx",
-  "red": "3 failed: 'terminates every worker it spawned once the run is done'; 'Stop mid-run terminates its workers and unmounts its roots; Start then completes with no root warning and a clean host'; 'unmounting the page aborts the run and terminates its workers; nothing it spawned outlives it'"
+  "red": "3 failed: 'Stop mid-run terminates its workers and unmounts its roots; Start then completes with no root warning and a clean host'; 'terminates every worker it spawned once the run is done'; 'unmounting the page aborts the run and terminates its workers; nothing it spawned outlives it'"
  }
 ]
 ```
@@ -6177,7 +6189,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "o.kind === 'html' ? o.html.length : o.kind === 'too-large' ? o.htmlChars : null;",
   "new": "o.kind === 'html' ? o.html.length : null;",
   "tests": "test/highlight-measure.test.tsx",
-  "red": "2 failed: 'an answer over the HTML cap still gives its ratio, so the maximum is not censored at the cap, and the grammar says how many'; 'a crafted shape answered over the cap gives its ratio and is marked over the cap'"
+  "red": "2 failed: 'a crafted shape answered over the cap gives its ratio and is marked over the cap'; 'an answer over the HTML cap still gives its ratio, so the maximum is not censored at the cap, and the grammar says how many'"
  },
  {
   "id": "W5HA-T10-M2",
@@ -6218,7 +6230,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "deps.highlighter(MEASURE_DEADLINE_MS, MEASURE_DEADLINE_MS);",
   "new": "deps.highlighter(MEASURE_DEADLINE_MS);",
   "tests": "test/highlight-measure.test.tsx",
-  "red": "2 failed: 'items 1 to 5 and 8 ask for the measurement deadline as the boot budget; items 6 and 7 ask for the shipped deadline and no budget'; 'a first boot slower than the shipped boot budget is timed by item 2, not turned into a failed run'"
+  "red": "2 failed: 'a first boot slower than the shipped boot budget is timed by item 2, not turned into a failed run'; 'items 1 to 5 and 8 ask for the measurement deadline as the boot budget; items 6 and 7 ask for the shipped deadline and no budget'"
  },
  {
   "id": "W5HA-T10-M6",
@@ -6338,7 +6350,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "if (raw.length > highlightBlockCap(lang)) return",
   "new": "if (false) return",
   "tests": "test/markdown-bounds.test.tsx, test/docs-highlight-budget.test.tsx",
-  "red": "23 failed: 'end to end through the page store and CodeBlock: a mixed crafted page highlights exactly the blocks each budget admits'; 'a 64 KiB ts block of \"<a>\" in lines of 1800 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB ts block of \"<a>\" in lines of 0 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB ts block of \"<ab>\" in lines of 1800 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB tsx block of \"<a>\" in lines of 1800 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB tsx block of \"<a>\" in lines of 0 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB tsx block of \"<ab>\" in lines of 1800 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB javascript block of \"<a>\" in lines of 1800 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB javascript block of \"<a>\" in lines of 0 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB javascript block of \"<ab>\" in lines of 1800 characters is not highlighted and says 64 KiB (Docs)'; 'the same ts shapes through chat's worker path are not highlighted either'; 'the same tsx shapes through chat's worker path are not highlighted either'; 'the same javascript shapes through chat's worker path are not highlighted either'; 'a 64 KiB rust block of `r#\"` lines is not highlighted and says 64 KiB, in Docs and on the worker path'; 'a ts block of exactly 8 192 characters is highlighted; 8 193 is not, and says 9 KiB'; 'a tsx block of exactly 8 192 characters is highlighted; 8 193 is not, and says 9 KiB'; 'a jsx block of exactly 8 192 characters is highlighted; 8 193 is not, and says 9 KiB'; 'a javascript block of exactly 8 192 characters is highlighted; 8 193 is not, and says 9 KiB'; 'a mjs block of exactly 8 192 characters is highlighted; 8 193 is not, and says 9 KiB'; 'a cts block of exactly 8 192 characters is highlighted; 8 193 is not, and says 9 KiB'; 'a rust block of exactly 4 096 characters is highlighted; 4 097 is not, and says 5 KiB'; 'a rs block of exactly 4 096 characters is highlighted; 4 097 is not, and says 5 KiB'; 'a ts block of 10 000 characters the page budget refuses is labelled by its own cap: 10 KiB'"
+  "red": "23 failed: 'end to end through the page store and CodeBlock: a mixed crafted page highlights exactly the blocks each budget admits'; 'a ts block of 10 000 characters the page budget refuses is labelled by its own cap: 10 KiB'; 'a 64 KiB javascript block of \"<a>\" in lines of 0 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB javascript block of \"<a>\" in lines of 1800 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB javascript block of \"<ab>\" in lines of 1800 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB rust block of `r#\"` lines is not highlighted and says 64 KiB, in Docs and on the worker path'; 'a 64 KiB ts block of \"<a>\" in lines of 0 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB ts block of \"<a>\" in lines of 1800 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB ts block of \"<ab>\" in lines of 1800 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB tsx block of \"<a>\" in lines of 0 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB tsx block of \"<a>\" in lines of 1800 characters is not highlighted and says 64 KiB (Docs)'; 'a 64 KiB tsx block of \"<ab>\" in lines of 1800 characters is not highlighted and says 64 KiB (Docs)'; 'a cts block of exactly 8 192 characters is highlighted; 8 193 is not, and says 9 KiB'; 'a javascript block of exactly 8 192 characters is highlighted; 8 193 is not, and says 9 KiB'; 'a jsx block of exactly 8 192 characters is highlighted; 8 193 is not, and says 9 KiB'; 'a mjs block of exactly 8 192 characters is highlighted; 8 193 is not, and says 9 KiB'; 'a rs block of exactly 4 096 characters is highlighted; 4 097 is not, and says 5 KiB'; 'a rust block of exactly 4 096 characters is highlighted; 4 097 is not, and says 5 KiB'; 'a ts block of exactly 8 192 characters is highlighted; 8 193 is not, and says 9 KiB'; 'a tsx block of exactly 8 192 characters is highlighted; 8 193 is not, and says 9 KiB'; 'the same javascript shapes through chat's worker path are not highlighted either'; 'the same ts shapes through chat's worker path are not highlighted either'; 'the same tsx shapes through chat's worker path are not highlighted either'"
  },
  {
   "id": "W5HA-T10-A8",
@@ -6348,7 +6360,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "if (word > MD_HIGHLIGHT_MAX_WORD_CHARS)",
   "new": "if (false)",
   "tests": "test/markdown-bounds.test.tsx, test/docs-highlight-budget.test.tsx",
-  "red": "9 failed: 'a ts fence holding a 257-character identifier is not highlighted and says why; 256 is highlighted'; 'a 32 KiB one-identifier python fence through SHARED_COMPONENTS never reaches highlight.js'; 'the same fence through chat's worker path (ChatMarkdown, injected parser) never reaches highlight.js'; 'a php fence of 257 `_é` units (a 514-character run) is not highlighted and says why'; 'a run of 256 code units that holds non-ASCII units still highlights; 257 does not'; 'a block that trips both bounds is labelled by its word: the word bound is checked first'; 'the label order is size, then word, then line, then whitespace'"
+  "red": "9 failed: 'a run of \" \" alone is refused by the word bound first (r10 counts every unit from 0x7f up)'; 'a run of \" \" alone is refused by the word bound first (r10 counts every unit from 0x7f up)'; 'the label order is size, then word, then line, then whitespace'; 'a 32 KiB one-identifier python fence through SHARED_COMPONENTS never reaches highlight.js'; 'a php fence of 257 `_é` units (a 514-character run) is not highlighted and says why'; 'a run of 256 code units that holds non-ASCII units still highlights; 257 does not'; 'a ts fence holding a 257-character identifier is not highlighted and says why; 256 is highlighted'; 'the same fence through chat's worker path (ChatMarkdown, injected parser) never reaches highlight.js'; 'a block that trips both bounds is labelled by its word: the word bound is checked first'"
  },
  {
   "id": "W5HA-T10-A9",
@@ -6358,7 +6370,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "if (line > MD_HIGHLIGHT_MAX_LINE_CHARS)",
   "new": "if (false)",
   "tests": "test/markdown-bounds.test.tsx, test/docs-highlight-budget.test.tsx",
-  "red": "7 failed: 'a markdown block of \"[\" lines one character over the bound is not highlighted and says why'; 'a markdown block of \"[a\" lines one character over the bound is not highlighted and says why'; 'a markdown block of \"![\" lines one character over the bound is not highlighted and says why'; 'a yaml block of \"a a a \" lines one character over the bound is not highlighted and says why'; 'one long line among short ones is found, and the label carries that line length'; 'chat gets the bound through the shared components, on the synchronous path and the worker path'; 'the label order is size, then word, then line, then whitespace'"
+  "red": "7 failed: 'the label order is size, then word, then line, then whitespace'; 'a markdown block of \"![\" lines one character over the bound is not highlighted and says why'; 'a markdown block of \"[\" lines one character over the bound is not highlighted and says why'; 'a markdown block of \"[a\" lines one character over the bound is not highlighted and says why'; 'a yaml block of \"a a a \" lines one character over the bound is not highlighted and says why'; 'chat gets the bound through the shared components, on the synchronous path and the worker path'; 'one long line among short ones is found, and the label carries that line length'"
  },
  {
   "id": "W5HA-T10-A10",
@@ -6368,27 +6380,27 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "if (blank > MD_HIGHLIGHT_MAX_BLANK_CHARS)",
   "new": "if (false)",
   "tests": "test/markdown-bounds.test.tsx, test/docs-highlight-budget.test.tsx",
-  "red": "13 failed: 'a ts block of \"\\n\" one unit over the bound is not highlighted and says why (a newline)'; 'a ts block of \" \\n\" one unit over the bound is not highlighted and says why (a space and a newline)'; 'a ts block of \"\\t\\n\" one unit over the bound is not highlighted and says why (a tab and a newline)'; 'a ts block of \"\\r\\n\" one unit over the bound is not highlighted and says why (a CRLF pair)'; 'the same shapes through Docs (parseMarkdown, renderHast, SHARED_COMPONENTS) never reach highlight.js'; 'chat gets the bound on the synchronous path and on the worker path'; 'every grammar the shared components register is bounded the same way, not only ts and js'; 'a mixed run of tabs, spaces, CR and LF counts as one run'; 'a run of \"　\\n\" (a blank unit from 0x7f up joins a run) is bounded'; 'a run of \" \\n\" (a blank unit from 0x7f up joins a run) is bounded'; 'a run of \"﻿\\n\" (a blank unit from 0x7f up joins a run) is bounded'"
+  "red": "13 failed: 'a mixed run of tabs, spaces, CR and LF counts as one run'; 'a run of \" \\n\" (a blank unit from 0x7f up joins a run) is bounded'; 'a run of \" \\n\" (a blank unit from 0x7f up joins a run) is bounded'; 'a run of \" \\n\" (a blank unit from 0x7f up joins a run) is bounded'; 'a run of \"　\\n\" (a blank unit from 0x7f up joins a run) is bounded'; 'a run of \"﻿\\n\" (a blank unit from 0x7f up joins a run) is bounded'; 'a ts block of \" \\n\" one unit over the bound is not highlighted and says why (a space and a newline)'; 'a ts block of \"\\n\" one unit over the bound is not highlighted and says why (a newline)'; 'a ts block of \"\\r\\n\" one unit over the bound is not highlighted and says why (a CRLF pair)'; 'a ts block of \"\\t\\n\" one unit over the bound is not highlighted and says why (a tab and a newline)'; 'chat gets the bound on the synchronous path and on the worker path'; 'every grammar the shared components register is bounded the same way, not only ts and js'; 'the same shapes through Docs (parseMarkdown, renderHast, SHARED_COMPONENTS) never reach highlight.js'"
  },
  {
   "id": "W5HA-T10-A11",
-  "spec": "part 1 bound on the store path (L4-2); supersedes the W5P1 rows of this bound that no longer anchor",
+  "spec": "part 1 bound on the store path (L4-2) (re-anchored at F1: the seed ternary)",
   "pkg": "pwa",
   "file": "src/lib/highlightStore.ts",
-  "old": "else if (inScan && scan > DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS)",
-  "new": "else if (false)",
+  "old": "inScan && scan > DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS",
+  "new": "false",
   "tests": "test/markdown-bounds.test.tsx, test/docs-highlight-budget.test.tsx",
-  "red": "11 failed: '(a) 49 ts blocks of 8 192 characters: the first 48 (exactly 393 216) are admitted, the 49th is skipped by the scan budget'; '(b) a json block after them is still admitted: another grammar is never refused by the scan budget'; '(c) rust and javascript blocks count in the same sum, aliases included'; '(e) xml and markdown reach no bounded grammar, so they do not count in the scan sum: an xml block after the ts budget is spent is still admitted'; '(d) markdown does not count in the scan sum: a ts block after 64 KiB of markdown is admitted, and only its own sum refuses the next'; 'end to end through the page store and CodeBlock: a mixed crafted page highlights exactly the blocks each budget admits'; 'C2 a tsx block fills the scan sum, at and past the boundary'; 'C3 the canonical names and js count in the scan sum, json does not'; 'C4 the language is read from the code class: case-folded, from a string className, and the first language- wins'; 'through DocMarkdown, a tsx block past the scan budget and an md block past the markdown budget are never requested and keep their bare labels'; 'highlight={false} within the cap keeps its plain label, and an unregistered language over it keeps its own'"
+  "red": "12 failed: 'C2 a tsx block fills the scan sum, at and past the boundary'; 'C3 the canonical names and js count in the scan sum, json does not'; 'C4 the language is read from the code class: case-folded, from a string className, and the first language- wins'; 'through DocMarkdown, a tsx block past the scan budget and an md block past the markdown budget are never requested and keep their bare labels'; 'the scan budget: copies of one typescript fence past the scan sum are plain and keep the bare label (part 1's ceiling is not the page's)'; '(d) markdown does not count in the scan sum: a ts block after 64 KiB of markdown is admitted, and only its own sum refuses the next'; '(a) 49 ts blocks of 8 192 characters: the first 48 (exactly 393 216) are admitted, the 49th is skipped by the scan budget'; '(b) a json block after them is still admitted: another grammar is never refused by the scan budget'; '(c) rust and javascript blocks count in the same sum, aliases included'; '(e) xml and markdown reach no bounded grammar, so they do not count in the scan sum: an xml block after the ts budget is spent is still admitted'; 'end to end through the page store and CodeBlock: a mixed crafted page highlights exactly the blocks each budget admits'; 'highlight={false} within the cap keeps its plain label, and an unregistered language over it keeps its own'"
  },
  {
   "id": "W5HA-T10-A12",
-  "spec": "part 1 bound on the store path (L4-2); supersedes the W5P1 rows of this bound that no longer anchor",
+  "spec": "part 1 bound on the store path (L4-2) (re-anchored at F1: the seed ternary)",
   "pkg": "pwa",
   "file": "src/lib/highlightStore.ts",
-  "old": "else if (inMarkdown && markdown > DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS)",
-  "new": "else if (false)",
+  "old": "inMarkdown && markdown > DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS",
+  "new": "false",
   "tests": "test/markdown-bounds.test.tsx, test/docs-highlight-budget.test.tsx",
-  "red": "9 failed: '(a) three markdown blocks of 65 536 characters: the first two (exactly 131 072) are admitted, the third is skipped'; '(a2) at the budget: markdown blocks summing to exactly 131 072 are all admitted, one more character in a following markdown block is skipped'; '(b) an md block counts in the same sum, every alias highlight.js resolves to markdown included'; '(c) a yaml block and a ts block after them are still admitted: another grammar is never refused by it'; '(f) rendered: a third 64 KiB markdown block is skipped (bare label, never requested), the first two are admitted and requested and stay plain over the HTML cap until W5h-b'; 'end to end through the page store and CodeBlock: a mixed crafted page highlights exactly the blocks each budget admits'; 'C4 the language is read from the code class: case-folded, from a string className, and the first language- wins'; 'C5 an md block fills the markdown sum, and ts and tsx are untouched by it'; 'through DocMarkdown, a tsx block past the scan budget and an md block past the markdown budget are never requested and keep their bare labels'"
+  "red": "9 failed: 'C4 the language is read from the code class: case-folded, from a string className, and the first language- wins'; 'C5 an md block fills the markdown sum, and ts and tsx are untouched by it'; 'through DocMarkdown, a tsx block past the scan budget and an md block past the markdown budget are never requested and keep their bare labels'; '(a) three markdown blocks of 65 536 characters: the first two (exactly 131 072) are admitted, the third is skipped'; '(a2) at the budget: markdown blocks summing to exactly 131 072 are all admitted, one more character in a following markdown block is skipped'; '(b) an md block counts in the same sum, every alias highlight.js resolves to markdown included'; '(c) a yaml block and a ts block after them are still admitted: another grammar is never refused by it'; '(f) rendered: a third 64 KiB markdown block is skipped (bare label, never requested), the first two are admitted and requested and stay plain over the HTML cap until W5h-b'; 'end to end through the page store and CodeBlock: a mixed crafted page highlights exactly the blocks each budget admits'"
  },
  {
   "id": "W5HA-T10-A13",
@@ -6398,7 +6410,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "if (inScan) scan += b.raw.length;",
   "new": "",
   "tests": "test/markdown-bounds.test.tsx, test/docs-highlight-budget.test.tsx",
-  "red": "11 failed: '(a) 49 ts blocks of 8 192 characters: the first 48 (exactly 393 216) are admitted, the 49th is skipped by the scan budget'; '(b) a json block after them is still admitted: another grammar is never refused by the scan budget'; '(c) rust and javascript blocks count in the same sum, aliases included'; '(e) xml and markdown reach no bounded grammar, so they do not count in the scan sum: an xml block after the ts budget is spent is still admitted'; '(d) markdown does not count in the scan sum: a ts block after 64 KiB of markdown is admitted, and only its own sum refuses the next'; 'end to end through the page store and CodeBlock: a mixed crafted page highlights exactly the blocks each budget admits'; 'C2 a tsx block fills the scan sum, at and past the boundary'; 'C3 the canonical names and js count in the scan sum, json does not'; 'C4 the language is read from the code class: case-folded, from a string className, and the first language- wins'; 'through DocMarkdown, a tsx block past the scan budget and an md block past the markdown budget are never requested and keep their bare labels'; 'highlight={false} within the cap keeps its plain label, and an unregistered language over it keeps its own'"
+  "red": "12 failed: 'C2 a tsx block fills the scan sum, at and past the boundary'; 'C3 the canonical names and js count in the scan sum, json does not'; 'C4 the language is read from the code class: case-folded, from a string className, and the first language- wins'; 'through DocMarkdown, a tsx block past the scan budget and an md block past the markdown budget are never requested and keep their bare labels'; 'the scan budget: copies of one typescript fence past the scan sum are plain and keep the bare label (part 1's ceiling is not the page's)'; '(d) markdown does not count in the scan sum: a ts block after 64 KiB of markdown is admitted, and only its own sum refuses the next'; '(a) 49 ts blocks of 8 192 characters: the first 48 (exactly 393 216) are admitted, the 49th is skipped by the scan budget'; '(b) a json block after them is still admitted: another grammar is never refused by the scan budget'; '(c) rust and javascript blocks count in the same sum, aliases included'; '(e) xml and markdown reach no bounded grammar, so they do not count in the scan sum: an xml block after the ts budget is spent is still admitted'; 'end to end through the page store and CodeBlock: a mixed crafted page highlights exactly the blocks each budget admits'; 'highlight={false} within the cap keeps its plain label, and an unregistered language over it keeps its own'"
  },
  {
   "id": "W5HA-T10-A14",
@@ -6408,7 +6420,7 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
   "old": "return grammarOf(lang) === 'markdown';",
   "new": "return false;",
   "tests": "test/markdown-bounds.test.tsx, test/docs-highlight-budget.test.tsx",
-  "red": "10 failed: '(a) three markdown blocks of 65 536 characters: the first two (exactly 131 072) are admitted, the third is skipped'; '(a2) at the budget: markdown blocks summing to exactly 131 072 are all admitted, one more character in a following markdown block is skipped'; '(b) an md block counts in the same sum, every alias highlight.js resolves to markdown included'; '(c) a yaml block and a ts block after them are still admitted: another grammar is never refused by it'; '(f) rendered: a third 64 KiB markdown block is skipped (bare label, never requested), the first two are admitted and requested and stay plain over the HTML cap until W5h-b'; 'end to end through the page store and CodeBlock: a mixed crafted page highlights exactly the blocks each budget admits'; 'C4 the language is read from the code class: case-folded, from a string className, and the first language- wins'; 'C5 an md block fills the markdown sum, and ts and tsx are untouched by it'; 'through DocMarkdown, a tsx block past the scan budget and an md block past the markdown budget are never requested and keep their bare labels'; 'inMarkdownPageBudget is true for markdown and every alias highlight.js resolves to it, and false for every other name'"
+  "red": "10 failed: 'C4 the language is read from the code class: case-folded, from a string className, and the first language- wins'; 'C5 an md block fills the markdown sum, and ts and tsx are untouched by it'; 'through DocMarkdown, a tsx block past the scan budget and an md block past the markdown budget are never requested and keep their bare labels'; '(a) three markdown blocks of 65 536 characters: the first two (exactly 131 072) are admitted, the third is skipped'; '(a2) at the budget: markdown blocks summing to exactly 131 072 are all admitted, one more character in a following markdown block is skipped'; '(b) an md block counts in the same sum, every alias highlight.js resolves to markdown included'; '(c) a yaml block and a ts block after them are still admitted: another grammar is never refused by it'; '(f) rendered: a third 64 KiB markdown block is skipped (bare label, never requested), the first two are admitted and requested and stay plain over the HTML cap until W5h-b'; 'end to end through the page store and CodeBlock: a mixed crafted page highlights exactly the blocks each budget admits'; 'inMarkdownPageBudget is true for markdown and every alias highlight.js resolves to it, and false for every other name'"
  },
  {
   "id": "W5HA-T10-A15",
@@ -6433,29 +6445,170 @@ Measured on the workspace branch after `main` was merged in (Share, #2145, lande
 ]
 ```
 
-#### Task 11 (2 rows)
+#### Task 11 (16 rows)
 
 ```json
 [
  {
+  "id": "W5HA-T11-M3",
+  "spec": "§4.10 page ceilings (D-7762)",
+  "pkg": "pwa",
+  "file": "src/lib/highlightStore.ts",
+  "old": "const copies = admitted.get(key) ?? ONE_COPY;",
+  "new": "const copies = ONE_COPY;",
+  "tests": "test/highlight-store.test.ts test/docs-highlight-budget.test.tsx",
+  "red": "4 failed: 'the HTML ceiling: copies of one fence whose HTML together passes the page cap are coloured up to it, the rest are plain and say so; one job'; 'OUTPUT: a line retry's html answer counts every copy too'; 'OUTPUT: copies of one block are drawn until the page HTML cap, the first copy past it and every later one are skipped, one job, the store latched'; 'OUTPUT: the verdicts are readable when the key's listeners run (recorded before the entry is set)'"
+ },
+ {
+  "id": "W5HA-T11-M4",
+  "spec": "§4.10 page ceilings (D-7762)",
+  "pkg": "pwa",
+  "file": "src/lib/highlightStore.ts",
+  "old": "if (k.kind !== 'key') continue;",
+  "new": "if (k.kind !== 'key' || seeded.has(k.key)) continue;",
+  "tests": "test/highlight-store.test.ts test/docs-highlight-budget.test.tsx",
+  "red": "11 failed: 'the HTML ceiling: copies of one fence whose HTML together passes the page cap are coloured up to it, the rest are plain and say so; one job'; 'the input ceiling: copies of one fence whose raw text together passes the page cap are coloured up to it, the rest are plain and say so; one job'; 'the scan budget: copies of one typescript fence past the scan sum are plain and keep the bare label (part 1's ceiling is not the page's)'; 'INPUT: copies of one block are admitted until their combined length passes the page input ceiling, then skipped as copies; the key is still requestable, one job (part1 off: no per-block bound applies)'; 'INPUT: the same with part 1 on (the block is within every per-block bound of its grammar)'; 'MARKDOWN: copies of one markdown block count in part 1's markdown sum too'; 'OUTPUT: a line retry's html answer counts every copy too'; 'OUTPUT: copies of one block are drawn until the page HTML cap, the first copy past it and every later one are skipped, one job, the store latched'; 'OUTPUT: the verdicts are readable when the key's listeners run (recorded before the entry is set)'; 'SCAN: copies of one typescript block count in part 1's scan sum too: the first copy past it is skipped by part1-scan'; 'the input ceiling skips at seed, in document order, a shared key counted at each occurrence (F1)'"
+ },
+ {
+  "id": "W5HA-T11-M5",
+  "spec": "M4.C5 (F2)",
+  "pkg": "pwa",
+  "file": "src/lib/highlightStore.ts",
+  "old": "    for (const key of new Set([...subscribers.keys(), ...listeners.keys()])) {\n      if (referenced(key) || (listeners.get(key)?.size ?? 0) > 0) continue;\n      listeners.delete(key);\n      subscribers.delete(key);\n    }\n",
+  "new": "",
+  "tests": "test/highlight-store.test.ts test/highlight-wiring.test.tsx",
+  "red": "3 failed: 'a fence that grows over many settles leaves a constant number of rows, not one per settle'; 'an unreferenced key that still has a live listener keeps its rows until the listener goes'; 'after many settles the store holds a constant number of rows, and none for the keys it never requested'"
+ },
+ {
+  "id": "W5HA-T11-M6",
+  "spec": "M4.C5 (F2)",
+  "pkg": "pwa",
+  "file": "src/lib/highlightStore.ts",
+  "old": "          if (now.size === 0) listeners.delete(key);\n",
+  "new": "",
+  "tests": "test/highlight-store.test.ts test/highlight-wiring.test.tsx",
+  "red": "1 failed: 'unsubscribing the last listener of a key drops its listener Set at once, before any eviction'"
+ },
+ {
+  "id": "W5HA-T11-M7",
+  "spec": "§4.10 worker time (F4)",
+  "pkg": "pwa",
+  "file": "src/lib/highlightStore.ts",
+  "old": "    if (jobs.get(job.key) === job) jobs.delete(job.key);\n    stopClock(job);\n    job.controller.abort();",
+  "new": "    if (jobs.get(job.key) === job) jobs.delete(job.key);\n    job.controller.abort();",
+  "tests": "test/highlight-store.test.ts",
+  "red": "2 failed: 'its timer cannot latch page-worker-time after the release'; 'the next post counts none of the time between the release and the post'"
+ },
+ {
+  "id": "W5HA-T11-M8",
+  "spec": "§4.10 settled (A4)",
+  "pkg": "pwa",
+  "file": "src/lib/highlightStore.ts",
+  "old": "    const o = readHighlightOutcome(reply);\n",
+  "new": "    const o = reply as HighlightOutcome | null;\n",
+  "tests": "test/highlight-store.test.ts",
+  "red": "8 failed: 'a malformed outcome of a line retry leaves the first failure and records the retry as malformed'; 'a malformed outcome on a block long enough for a line retry is not retried, and a malformed timeout counts no timeout'; 'a threw without a string error: the entry is plain (malformed) and a Docs store seeded with the key reaches settled()'; 'a timeout without budgetMs: the entry is plain (malformed) and a Docs store seeded with the key reaches settled()'; 'an unknown kind: the entry is plain (malformed) and a Docs store seeded with the key reaches settled()'; 'html with a non-string html: the entry is plain (malformed) and a Docs store seeded with the key reaches settled()'; 'html with an unknown mode: the entry is plain (malformed) and a Docs store seeded with the key reaches settled()'; 'html without html: the entry is plain (malformed) and a Docs store seeded with the key reaches settled()'"
+ },
+ {
+  "id": "W5HA-T11-M9",
+  "spec": "§4.10 settled (A4)",
+  "pkg": "pwa",
+  "file": "src/lib/markdownRunner.ts",
+  "old": "outcome: readHighlightOutcome(d.result) ?? MALFORMED_REPLY };",
+  "new": "outcome: d.result as HighlightOutcome };",
+  "tests": "test/markdown-runner.test.ts",
+  "red": "1 failed: 'A4: a reply whose result is not an outcome this build knows answers worker-failed / malformed-reply, and the next job still runs'"
+ },
+ {
+  "id": "W5HA-T11-M10",
+  "spec": "M4.H14",
+  "pkg": "pwa",
+  "file": "src/lib/highlightStore.ts",
+  "old": "  while (i < html.length) {\n    if (steps !== undefined) steps.n += 1;",
+  "new": "  if (/^(?:<span class=\"[^\"]*\">|<\\/span>|[^<>\"'&]|&(?:amp|lt|gt|quot|#x27);)*$/.test(html)) i = html.length;\n  while (i < html.length) {\n    if (steps !== undefined) steps.n += 1;",
+  "tests": "test/highlight-html.test.tsx",
+  "red": "21 failed: 'balanced spans: steps grow in proportion to the input (n against 2n)'; 'plain text: steps grow in proportion to the input (n against 2n)'; 'valid but never closed spans: steps grow in proportion to the input (n against 2n)'; 'a class without the hljs- prefix'; 'a closer before its opener'; 'a plain class after the scope (it could be a styled class of the app)'; 'a second token with no underscore'; 'a second token with the wrong underscore count'; 'a third token with the second's count'; 'a trailing space'; 'an app class after the scope'; 'an empty scope'; 'an empty scope before a second token'; 'an extra </span>'; 'an unclosed span'; 'an underscore inside a second token'; 'an underscore-only second token'; 'an unknown language name'; 'an upper-case class character'; 'an upper-case second token'; 'two spaces between tokens'"
+ },
+ {
+  "id": "W5HA-T11-M11",
+  "spec": "C7 (A6)",
+  "pkg": "pwa",
+  "file": "src/lib/highlightJob.ts",
+  "old": "createLru<string>(HIGHLIGHT_CACHE_MAX_ENTRIES, HIGHLIGHT_CACHE_MAX_CHARS, (html) => html.length)",
+  "new": "createLru<string>(HIGHLIGHT_CACHE_MAX_ENTRIES, HIGHLIGHT_CACHE_MAX_CHARS / 2, (html) => html.length)",
+  "tests": "test/markdown-highlight-worker.test.ts",
+  "red": "1 failed: 'the default cache keeps what weighs under its character bound (the other half of the bound)'"
+ },
+ {
   "id": "W5HA-T11-M1",
-  "spec": "update-move census (CI fix)",
-  "pkg": "server",
-  "file": "test/update-move.test.ts",
   "old": "filter((l) => !/\\babortRunning\\b/.test(l))",
   "new": "filter(() => true)",
+  "spec": "update-move census (D-7761)",
+  "pkg": "server",
+  "file": "test/update-move.test.ts",
   "tests": "test/update-move.test.ts",
   "red": "2 failed: 'CONTROL: the walk sees every root; the patterns see a declaration and a quoted copy, not a re-export or prose'; 'DETACH_CAP is declared, and the word quoted, in shared/update-move.ts alone — dispatch.ts re-exports it'"
  },
  {
   "id": "W5HA-T11-M2",
-  "spec": "update-move census (CI fix)",
+  "old": "file !== RUNNER ? code : code.split('\\n').filter((l) => !/\\babortRunning\\b/.test(l)).join('\\n')",
+  "new": "code.split('\\n').filter(() => false).join('\\n')",
+  "spec": "update-move census (D-7761)",
   "pkg": "server",
   "file": "test/update-move.test.ts",
-  "old": "filter((l) => !/\\babortRunning\\b/.test(l))",
-  "new": "filter(() => false)",
   "tests": "test/update-move.test.ts",
-  "red": "2 failed: 'CONTROL: the walk sees every root; the patterns see a declaration and a quoted copy, not a re-export or prose'; 'DETACH_CAP is declared, and the word quoted, in shared/update-move.ts alone — dispatch.ts re-exports it'"
+  "red": "2 failed: 'CONTROL: the walk sees every root; the patterns see a declaration and a quoted copy, not a re-export or prose'; 'DETACH_CAP is declared, and the word quoted, in shared/update-move.ts alone — dispatch.ts re-exports it'",
+  "note": "re-anchored in fix round 1 (A7 narrowed the filter to one file)"
+ },
+ {
+  "id": "W5HA-T11-M12",
+  "old": "file !== RUNNER ? code : ",
+  "new": "",
+  "spec": "update-move census (D-7761)",
+  "pkg": "server",
+  "file": "test/update-move.test.ts",
+  "tests": "test/update-move.test.ts",
+  "red": "1 failed: 'CONTROL: the walk sees every root; the patterns see a declaration and a quoted copy, not a re-export or prose'"
+ },
+ {
+  "id": "W5HA-T11-M13",
+  "spec": "§4.10 page ceilings (D-7762), the copy's verdict at the block",
+  "pkg": "pwa",
+  "file": "src/lib/markdown.tsx",
+  "old": "const entry = copySkipped === null ? keyEntry : copySkippedEntry(copySkipped);",
+  "new": "const entry = keyEntry;",
+  "tests": "test/docs-highlight-budget.test.tsx",
+  "red": "3 failed: 'the HTML ceiling: copies of one fence whose HTML together passes the page cap are coloured up to it, the rest are plain and say so; one job'; 'the input ceiling: copies of one fence whose raw text together passes the page cap are coloured up to it, the rest are plain and say so; one job'; 'the scan budget: copies of one typescript fence past the scan sum are plain and keep the bare label (part 1's ceiling is not the page's)'"
+ },
+ {
+  "id": "W5HA-T11-M14",
+  "spec": "§4.10 page ceilings (D-7762), seeded from the rendered tree",
+  "pkg": "pwa",
+  "file": "src/docs/DocMarkdown.tsx",
+  "old": "codeBlocksOf(detached.tree), [detached]",
+  "new": "codeBlocksOf(p.tree), [p.tree]",
+  "tests": "test/docs-highlight-budget.test.tsx",
+  "red": "3 failed: 'the HTML ceiling: copies of one fence whose HTML together passes the page cap are coloured up to it, the rest are plain and say so; one job'; 'the input ceiling: copies of one fence whose raw text together passes the page cap are coloured up to it, the rest are plain and say so; one job'; 'the scan budget: copies of one typescript fence past the scan sum are plain and keep the bare label (part 1's ceiling is not the page's)'"
+ },
+ {
+  "id": "W5HA-T11-M15",
+  "spec": "§4.10 page ceilings (D-7762), the copy's identity reaches the block",
+  "pkg": "pwa",
+  "file": "src/lib/markdown.tsx",
+  "old": "return <CodeBlock at={node}>{children}</CodeBlock>;",
+  "new": "return <CodeBlock>{children}</CodeBlock>;",
+  "tests": "test/docs-highlight-budget.test.tsx",
+  "red": "3 failed: 'the HTML ceiling: copies of one fence whose HTML together passes the page cap are coloured up to it, the rest are plain and say so; one job'; 'the input ceiling: copies of one fence whose raw text together passes the page cap are coloured up to it, the rest are plain and say so; one job'; 'the scan budget: copies of one typescript fence past the scan sum are plain and keep the bare label (part 1's ceiling is not the page's)'"
+ },
+ {
+  "id": "W5HA-T11-M16",
+  "spec": "M4.C5 (F2), a live listener keeps its key's rows",
+  "pkg": "pwa",
+  "file": "src/lib/highlightStore.ts",
+  "old": "      if (referenced(key) || (listeners.get(key)?.size ?? 0) > 0) continue;",
+  "new": "      if (referenced(key)) continue;",
+  "tests": "test/highlight-store.test.ts",
+  "red": "1 failed: 'an unreferenced key that still has a live listener keeps its rows until the listener goes'"
  }
 ]
 ```
