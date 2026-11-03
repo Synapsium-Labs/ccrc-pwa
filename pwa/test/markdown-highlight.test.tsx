@@ -124,3 +124,12 @@ describe('M4.H1 through the real store: a block over the cap is never posted', (
     expect(h.calls.map((c) => c.code.length)).toEqual([1000]);
   });
 });
+
+describe('L1-2: a fence named for an Object.prototype key labels itself and draws plain', () => {
+  it.each(['__proto__', 'constructor'])('a ```%s fence renders its code plain under its own name, with no throw', (lang) => {
+    const c = block(lang, 'x');
+    expect(label(c)).toBe(lang);
+    expect(code(c)).toBe('x');
+    expect(c.querySelector('[class^="hljs-"]')).toBeNull();
+  });
+});

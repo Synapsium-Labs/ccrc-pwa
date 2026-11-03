@@ -171,7 +171,8 @@ export function CodeBlock({ children }: { children?: ReactNode }): ReactNode {
     | React.ReactElement<{ className?: string; children?: ReactNode }>
     | undefined;
   const lang = codeLanguage(codeEl?.props.className ?? '');
-  const label = LANG_LABEL[lang] ?? (lang || 'text');
+  // Own keys only, as `grammarOf` reads its tables: a fence named `__proto__` or `constructor` is no label.
+  const label = (Object.hasOwn(LANG_LABEL, lang) ? LANG_LABEL[lang] : undefined) ?? (lang || 'text');
   const raw = nodeText(children).replace(/\n$/, '');
   const answer = useMemo(() => (store === null ? blockKey(lang, raw) : store.keyOf(lang, raw)), [store, lang, raw]);
   const key = answer.kind === 'key' ? answer.key : null;
