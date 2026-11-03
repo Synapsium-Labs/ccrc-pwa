@@ -24,7 +24,6 @@ export const SPAWN_GROUP_ALLOWLIST: readonly AllowedTimedSpawn[] = [
   { file: 'ccd-lifecycle-emit.test.ts', command: "'bash'", count: 1 },
   { file: 'ccd-project-pool.test.ts', command: "'bash'", count: 1 },
   { file: 'ccd-scratch-rescue-reach.test.ts', command: 'file', count: 1 },
-  { file: 'ccd-start-id.test.ts', command: "'bash'", count: 1 },
   { file: 'ccd-stop-argv-order.test.ts', command: "'bash'", count: 1 },
   { file: 'ccd-substrate.test.ts', command: "'bash'", count: 1 },
   { file: 'ccd-supervise-roster-reread.test.ts', command: "'bash'", count: 1 },
