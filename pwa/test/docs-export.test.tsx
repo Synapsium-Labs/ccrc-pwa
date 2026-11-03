@@ -398,7 +398,28 @@ const HOSTILE = [
   'echo <b>hi</b>',
   '```',
   '',
+  '| left | mid | right | plain |',
+  '| :-- | :-: | --: | --- |',
+  '| <script>x</script> | [js](javascript:alert(1)) | ![ext](https://a.example/t.png) | <b onclick=x>y</b> |',
+  '',
 ].join('\n');
+
+/** Every `style` attribute of `doc`, each parsed as ONE declaration `text-align: <left|center|right>` (GFM column alignment). */
+function styleAttributes(doc: Document): string[] {
+  const seen: string[] = [];
+  for (const el of doc.querySelectorAll('[style]')) {
+    const v = el.getAttribute('style') ?? '';
+    const decls = v.split(';').map((d) => d.trim()).filter((d) => d !== '');
+    expect(decls, `${el.tagName} style=${v}`).toHaveLength(1);
+    const [prop, val, ...rest] = decls[0]!.split(':').map((t) => t.trim());
+    expect(rest, v).toEqual([]);
+    expect(prop, v).toBe('text-align');
+    expect(['left', 'center', 'right'], v).toContain(val);
+    expect(['TH', 'TD'], v).toContain(el.tagName);
+    seen.push(`${el.tagName}:${val}`);
+  }
+  return seen;
+}
 
 describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX1-EX4, M4.EX7, M4.EX10, M4.EX18)', () => {
   it('begins with one <!doctype html>, then meta charset, the CSP meta (exactly DOCS_EXPORT_CSP), the title, the metas and one style (M4.EX1)', async () => {
@@ -430,7 +451,7 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     expect(directives.get('form-action')).toEqual(["'none'"]);
   });
 
-  it('is inert over a hostile corpus: no active element, no on* or style attribute, URLs only where allowed, the banner first (M4.EX2)', async () => {
+  it('is inert over a hostile corpus: no active element, no on* attribute, only closed text-align styles, URLs only where allowed, the banner first (M4.EX2)', async () => {
     const tree = treeOk({
       entries: [entry('specs', 'a.md', { draft: draftOf('modified') }), entry('specs', 'b.md'), entry('specs', 'x.png')], drafts: holder(),
     });
@@ -445,7 +466,7 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     }
     for (const el of doc.querySelectorAll('*')) {
       for (const a of el.getAttributeNames()) expect(a.startsWith('on'), `${el.tagName} ${a}`).toBe(false);
-      for (const a of ['srcset', 'poster', 'cite', 'background', 'action', 'formaction', 'ping', 'data', 'xlink:href', 'style']) {
+      for (const a of ['srcset', 'poster', 'cite', 'background', 'action', 'formaction', 'ping', 'data', 'xlink:href']) {
         expect(el.hasAttribute(a), `${el.tagName} ${a}`).toBe(false);
       }
       const src = el.getAttribute('src');
@@ -460,6 +481,11 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
         expect(href, href).not.toContain('/api/');
       }
     }
+    // The table meets the scan: its three aligned columns carry the only style attributes, each text-align in a closed set.
+    expect(doc.querySelectorAll('article table')).toHaveLength(1);
+    expect(styleAttributes(doc).sort()).toEqual(['TD:center', 'TD:left', 'TD:right', 'TH:center', 'TH:left', 'TH:right']);
+    expect(doc.querySelectorAll('article table [style]')).toHaveLength(6);
+    expect(doc.querySelector('article table script, article table b')).toBeNull();
     expect(doc.querySelectorAll('meta[http-equiv]')).toHaveLength(1);
     expect(doc.querySelectorAll('style')).toHaveLength(1);
     const style = doc.querySelector('style')?.textContent ?? '';
