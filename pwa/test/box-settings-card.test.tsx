@@ -20,6 +20,7 @@ import { node, updatesView } from './settingsViewFixture';
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   navigate('/');
 });
@@ -52,7 +53,7 @@ const server = (settings?: unknown): NodeWire =>
   ({ ...node({ nodeId: SERVER_ID, role: 'server', label: 'server', agentOps: null }),
     ...(settings === undefined ? {} : { settings: settings as BoxSettingsRead }) });
 
-const renderCard = (nodes: NodeWire[]) => render(<BoxSettingsCard nodes={nodes} now={NOW} />);
+const renderCard = (nodes: NodeWire[]) => render(<BoxSettingsCard nodes={nodes} />);
 const block = (label: string): HTMLElement => screen.getByRole('group', { name: new RegExp(`^${label}\\b`) });
 
 describe('Box settings card: a full snapshot (D-6917)', () => {
@@ -129,6 +130,24 @@ describe('Box settings card: refused, stale, server (D-6917)', () => {
     expect(screen.getByText(/^measured 2m ago/)).not.toHaveClass('settings-catalogue--amber');
   });
 
+  it("the age is the server's: a device clock 20 minutes ahead moves neither the text nor the tone (D-6917, A12)", () => {
+    // The server measured the age at ITS clock (`ageS` 120, not stale). The device clock is 20 minutes ahead of it: the card
+    // never reads the device clock, so the line says 2m and carries no warning.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW + 20 * MIN);
+    renderCard([fleet(ok(doc({}, 2), 2, false))]);
+    const line = screen.getByText(/^measured 2m ago/);
+    expect(line).toHaveTextContent("measured 2m ago, read by the box's timer");
+    expect(line).not.toHaveClass('settings-catalogue--amber');
+    expect(screen.queryByText(/22m/)).toBeNull();
+  });
+
+  it('the age text follows ageS whatever the document\'s own `at` says', () => {
+    // `at` is box-written and its clock is the box's; `ageS` is the server\'s measure at the request.
+    renderCard([fleet({ ...ok(doc({}, 40), 2, false) })]);
+    expect(screen.getByText(/^measured 2m ago/)).toBeInTheDocument();
+  });
+
   it('a server-role node reads the models budget as not used, whatever its row says', () => {
     renderCard([server(ok())]);
     const row = within(block('server')).getByText('CCRC_MODELS_ADVANCE_BUDGET_S').closest('div')!;
@@ -167,6 +186,13 @@ describe('Box settings card: every way a node can have nothing to show (D-6917)'
   it('not-reported, not-supported and caps-unmeasured all differ', () => {
     const texts = [BOX_SETTINGS_READ_TEXT['not-reported'], BOX_SETTINGS_READ_TEXT['not-supported'], BOX_SETTINGS_READ_TEXT['caps-unmeasured']];
     expect(new Set(texts).size).toBe(3);
+  });
+
+  it('a node the server has not read since it started says so, and that is not the word for a read that failed (D-7874)', () => {
+    renderCard([fleet({ state: 'unmeasured' })]);
+    expect(within(block('fleet')).getByText('Not read since the server started')).toBeInTheDocument();
+    expect(BOX_SETTINGS_READ_TEXT.unmeasured).not.toBe(BOX_SETTINGS_READ_TEXT.unreadable);
+    expect(boxSettingsOf({ settings: { state: 'unmeasured' } })).toEqual({ state: 'unmeasured' });
   });
 
   it('an object where a string belongs reads unrecognised, and the other nodes still render', () => {

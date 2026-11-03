@@ -9818,9 +9818,10 @@ export function isRequestKind(v: unknown): v is RequestKind {
  *  a new seam). A token outside the list reads `unreadable`.
  *
  *  ITS TWO FAILURE WORDS ARE `ReadFailure`'s (`shared/agent-protocol.ts`),
- *  widened by `ok` and `malformed`. This file cannot import that type (its
- *  three type-only imports are pinned, `peers-claims-l0.test.ts`), so the
- *  union is DERIVED from the array rather than restated beside it, and
+ *  widened by `ok` and `malformed`. The union predates this file's type-only
+ *  `ReadFailure` import (the box settings' failure words, D-6914; the import is
+ *  erased, and `peers-claims-l0.test.ts` pins the import list), and it stays
+ *  DERIVED from the array rather than restated beside it, and
  *  `update-states.test.ts` holds `Exclude<StampRead, 'ok' | 'malformed'>`
  *  EQUAL to `ReadFailure` at compile time: a third read-failure word added
  *  there is a type error here until this list names it too. */
@@ -9946,10 +9947,12 @@ export const BOX_SETTINGS_READERS: readonly BoxSettingsReader[] = Object.keys(BO
 
 /** Every way a node's settings can fail to be shown (spec 2026-10-25 §2.4). The list is closed: the console reads any other word as
  *  unrecognised, never as one of these. The file-read pair is `ReadFailure`'s, DERIVED, never respelled (`single-definition`'s "one
- *  absent/unreadable read vocabulary"). */
-export type BoxSettingsFailure = ReadFailure | 'not-supported' | 'caps-unmeasured' | 'too-large' | 'malformed' | 'clock-ahead';
+ *  absent/unreadable read vocabulary"). `unmeasured` is the server holding NO read of the node since it started (D-7874: "unmeasured
+ *  is not unset", D-6365); `unreadable` is only a read that was tried and failed. */
+export type BoxSettingsFailure = ReadFailure | 'not-supported' | 'caps-unmeasured' | 'too-large' | 'malformed' | 'clock-ahead' | 'unmeasured';
 const BOX_SETTINGS_FAILURE_MAP: Record<BoxSettingsFailure, true> = {
   'not-supported': true, 'caps-unmeasured': true, absent: true, unreadable: true, 'too-large': true, malformed: true, 'clock-ahead': true,
+  unmeasured: true,
 };
 export const BOX_SETTINGS_FAILURES: readonly BoxSettingsFailure[] = Object.keys(BOX_SETTINGS_FAILURE_MAP) as BoxSettingsFailure[];
 

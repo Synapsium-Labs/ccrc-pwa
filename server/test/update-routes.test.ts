@@ -266,8 +266,9 @@ describe('GET /api/updates', () => {
     expect(view.nodes[0]).toMatchObject({ nodeId: FLEET_LABEL, reachable: false, measuredAt: null });
     expect(view.nodes[1]).toMatchObject({ nodeId: SERVER_LABEL, agentOps: null });
     // D-6916: both nodes carry `settings` from the watcher's held state. The server box's caps were not measured; the fleet
-    // connection was never reached (its link is down), so the server never read it: `unreadable`, not a guess.
-    expect(view.nodes[0]!.settings).toEqual({ state: 'unreadable' });
+    // connection was never reached (its link is down), so the server holds no read of it: `unmeasured`, never `unreadable`
+    // (D-7874: nothing was tried, so no read failed).
+    expect(view.nodes[0]!.settings).toEqual({ state: 'unmeasured' });
     expect(view.nodes[1]!.settings).toEqual({ state: 'caps-unmeasured' });
   });
 

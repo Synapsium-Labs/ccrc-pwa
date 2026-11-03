@@ -28,6 +28,7 @@ export const BOX_SETTINGS_READ_TEXT: Readonly<Record<BoxSettingsFailure | 'not-r
   'not-supported': "This box's build does not report its settings.",
   'caps-unmeasured': "This box's capabilities could not be read, so its settings were not read.",
   absent: 'Not measured on this box yet.',
+  unmeasured: 'Not read since the server started',
   unreadable: 'Could not be read (unreadable).',
   'too-large': 'Could not be read (too-large).',
   malformed: 'Could not be read (malformed).',
@@ -153,10 +154,12 @@ export function diskLine(d: BoxSettingsDisk): { text: string; danger: boolean } 
   return { text: `${humanBytes(d.availBytes)} free of ${humanBytes(d.sizeBytes)}`, danger: false };
 }
 
-/** The measurement's age and which environment it read: `measured 2m ago, read by the box's timer`. A stale one names the
- *  limit it passed, from `BOX_SETTINGS_STALE_S`, never a literal. `warn` is the warning tone. */
-export function ageLine(read: Extract<BoxSettingsRead, { state: 'ok' }>, now: number): { text: string; warn: boolean } {
-  const age = `measured ${elapsedWords(now - read.doc.at * 1000)} ago`;
+/** The measurement's age and which environment it read: `measured 2m ago, read by the box's timer`. The age is the SERVER's
+ *  (`ageS`, worked out with the request's clock, spec §2.4), never `now - doc.at` on this device: one line then reads from one
+ *  clock, the one `stale` was judged by. A stale one names the limit it passed, from `BOX_SETTINGS_STALE_S`, never a literal.
+ *  `warn` is the warning tone. */
+export function ageLine(read: Extract<BoxSettingsRead, { state: 'ok' }>): { text: string; warn: boolean } {
+  const age = `measured ${elapsedWords(read.ageS * 1000)} ago`;
   const reader = BOX_SETTINGS_READER_TEXT[read.doc.reader];
   if (!read.stale) return { text: `${age}, ${reader}`, warn: false };
   return {

@@ -3,7 +3,8 @@
 // holds no state and no poll of its own. `UpdatesSection` hands it the nodes of the one `/api/updates` poll it already
 // holds, so a second poll of the same route is not possible from here (nothing imported below can issue one).
 // Every word comes from `boxSettingsWords.ts`, and the field's one reader (`boxSettingsOf`) has already refused a
-// wrong shape, so a bad node says so in its own block and blanks nothing else.
+// wrong shape, so a bad node says so in its own block and blanks nothing else. It reads no clock: the age it shows is the
+// server's (`ageS`, worked out with the request's clock), so a device whose clock is off never changes what a block says.
 import type { ReactNode } from 'react';
 import type { BoxSettingsRead, NodeWire } from '../../../shared/api';
 import {
@@ -15,8 +16,8 @@ import './fleet.css';
 /** The danger tone's class. Its ink is `--status-dead-text`, the red the page's other refusals already use. */
 const DANGER = 'box-settings-danger';
 
-function Readout({ read, role, now }: { read: Extract<BoxSettingsRead, { state: 'ok' }>; role: NodeWire['role']; now: number }): ReactNode {
-  const age = ageLine(read, now);
+function Readout({ read, role }: { read: Extract<BoxSettingsRead, { state: 'ok' }>; role: NodeWire['role'] }): ReactNode {
+  const age = ageLine(read);
   const backups = backupsLine(read.doc.backups);
   const disk = diskLine(read.doc.disk);
   return (
@@ -43,7 +44,7 @@ function Readout({ read, role, now }: { read: Extract<BoxSettingsRead, { state: 
   );
 }
 
-function NodeBlock({ node, now }: { node: NodeWire; now: number }): ReactNode {
+function NodeBlock({ node }: { node: NodeWire }): ReactNode {
   const read = boxSettingsOf(node);
   const headId = `box-settings-${node.nodeId}`;
   return (
@@ -57,7 +58,7 @@ function NodeBlock({ node, now }: { node: NodeWire; now: number }): ReactNode {
       {typeof read === 'string' ? (
         <p className="settings-note">{BOX_SETTINGS_READ_TEXT[read]}</p>
       ) : read.state === 'ok' ? (
-        <Readout read={read} role={node.role} now={now} />
+        <Readout read={read} role={node.role} />
       ) : (
         <p className="settings-note">{BOX_SETTINGS_READ_TEXT[read.state]}</p>
       )}
@@ -65,10 +66,10 @@ function NodeBlock({ node, now }: { node: NodeWire; now: number }): ReactNode {
   );
 }
 
-export function BoxSettingsCard({ nodes, now }: { nodes: readonly NodeWire[]; now: number }): ReactNode {
+export function BoxSettingsCard({ nodes }: { nodes: readonly NodeWire[] }): ReactNode {
   return (
     <>
-      {nodes.map((n) => <NodeBlock key={n.nodeId} node={n} now={now} />)}
+      {nodes.map((n) => <NodeBlock key={n.nodeId} node={n} />)}
       <p className="settings-note">{BOX_SETTINGS_TEXT.how}</p>
     </>
   );

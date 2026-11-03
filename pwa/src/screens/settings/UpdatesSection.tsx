@@ -344,8 +344,8 @@ function UpdatesBody({ view, stale, now, reload }: {
         haltedBy={halt !== null ? haltId : null} onAcked={reload} onMove={openMove} result={moveResult}
       />
     ),
-    // D-6917: the nodes of THIS poll's view and this section's clock: the card has no poll of its own.
-    boxSettings: <BoxSettingsCard nodes={view.nodes} now={now} />,
+    // D-6917: the nodes of THIS poll's view: the card has no poll of its own and no clock (the age it shows is the server's).
+    boxSettings: <BoxSettingsCard nodes={view.nodes} />,
     policy: (
       <>
         {/* Spec §5.1's options with their notes: each note under its option, read as its description. */}

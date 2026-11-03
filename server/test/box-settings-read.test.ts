@@ -17,7 +17,9 @@ import { mkTmp } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { ccrcSettingsNames } from './ccrcSettingsLine.js';
-import { parseBoxSettings, boxSettingsView, type BoxSettingsHeld } from '../src/update/boxSettings.js';
+import {
+  parseBoxSettings, boxSettingsView, boxSettingsGate, boxSettingsReadOf, SETTINGS_CAP, type BoxSettingsHeld,
+} from '../src/update/boxSettings.js';
 import { BoxSettingsLane } from '../src/update/boxSettingsLane.js';
 import { FLEET_LABEL, SERVER_LABEL, type InventoryDeps, type SweepOutcome } from '../src/update/inventory.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
@@ -249,7 +251,7 @@ describe('the vocabularies are held equal to the verb\'s, in both directions (D-
 
   it('the failure words are spelled once, as a map the lane and the view both draw from', () => {
     expect([...BOX_SETTINGS_FAILURES].sort()).toEqual(
-      ['absent', 'caps-unmeasured', 'clock-ahead', 'malformed', 'not-supported', 'too-large', 'unreadable']);
+      ['absent', 'caps-unmeasured', 'clock-ahead', 'malformed', 'not-supported', 'too-large', 'unmeasured', 'unreadable']);
   });
 
   it('the stale bound is three timer periods, and the clock-ahead bound is 5 minutes', () => {
@@ -263,7 +265,7 @@ describe('the vocabularies are held equal to the verb\'s, in both directions (D-
 
 describe('boxSettingsView: age, stale and clock-ahead are judged at the request\'s clock', () => {
   const doc = parseBoxSettings(readFileSync(join(FIX, 'ok--defaults.json'), 'utf8')) as BoxSettingsDoc;
-  const held = (at: number): BoxSettingsHeld => ({ read: { state: 'ok', doc: { ...doc, at } }, readAtS: at });
+  const held = (at: number): BoxSettingsHeld => ({ read: { state: 'ok', doc: { ...doc, at } } });
 
   it('a 10-minute-old read is not stale, a 16-minute-old one is', () => {
     expect(boxSettingsView(held(NOW - 600), NOW)).toMatchObject({ state: 'ok', ageS: 600, stale: false });
@@ -283,11 +285,37 @@ describe('boxSettingsView: age, stale and clock-ahead are judged at the request\
     expect(boxSettingsView(held(NOW + 300), NOW)).toMatchObject({ state: 'ok', ageS: 0, stale: false });
     expect(boxSettingsView(held(NOW + 301), NOW)).toEqual({ state: 'clock-ahead' });
   });
-  it('a held failure is served as its word; a node never read is `unreadable` (the server could not read it)', () => {
+  it('a held failure is served as its word; a node never read is `unmeasured`, and a read that failed stays `unreadable` (D-7874)', () => {
     for (const state of BOX_SETTINGS_FAILURES.filter((w) => w !== 'clock-ahead')) {
-      expect(boxSettingsView({ read: { state }, readAtS: NOW }, NOW)).toEqual({ state });
+      expect(boxSettingsView({ read: { state } }, NOW)).toEqual({ state });
     }
-    expect(boxSettingsView(undefined, NOW)).toEqual({ state: 'unreadable' });
+    expect(boxSettingsView(undefined, NOW)).toEqual({ state: 'unmeasured' });
+    expect(boxSettingsView({ read: { state: 'unreadable' } }, NOW)).toEqual({ state: 'unreadable' });
+    expect(boxSettingsView(undefined, NOW)).not.toEqual(boxSettingsView({ read: { state: 'unreadable' } }, NOW));
+  });
+});
+
+// ── the gate and the mapping, as pure functions (A11, D-6916) ───────────────────────────────────────────────────────────────
+
+describe('boxSettingsGate and boxSettingsReadOf: the lane\'s two judgements are policy', () => {
+  it('the cap word is `settings`', () => {
+    expect(SETTINGS_CAP).toBe('settings');
+  });
+  it('an unknown os is caps-unmeasured whatever the caps hold; measured caps without the word are not-supported; with it, no gate', () => {
+    expect(boxSettingsGate({ os: 'unknown', caps: [] })).toBe('caps-unmeasured');
+    expect(boxSettingsGate({ os: 'unknown', caps: ['settings'] })).toBe('caps-unmeasured');
+    expect(boxSettingsGate({ os: 'linux', caps: ['verify'] })).toBe('not-supported');
+    expect(boxSettingsGate({ os: 'darwin', caps: ['verify'] })).toBe('not-supported');
+    expect(boxSettingsGate({ os: 'linux', caps: [] })).toBe('not-supported');
+    expect(boxSettingsGate({ os: 'linux', caps: ['verify', 'settings'] })).toBeNull();
+  });
+  it('a failed file read is its own reason; content the parse rejects is malformed; a document is ok', () => {
+    for (const reason of ['absent', 'unreadable', 'too-large'] as const) {
+      expect(boxSettingsReadOf({ ok: false, reason })).toEqual({ state: reason });
+    }
+    expect(boxSettingsReadOf({ ok: true, content: 'not json {' })).toEqual({ state: 'malformed' });
+    expect(boxSettingsReadOf({ ok: true, content: '{}' })).toEqual({ state: 'malformed' });
+    expect(boxSettingsReadOf({ ok: true, content: okText() })).toEqual({ state: 'ok', doc: parseBoxSettings(okText()) });
   });
 });
 
@@ -329,8 +357,8 @@ describe('the lane: what each node\'s read comes to', () => {
     const dir = ccrcWith('bsr-lane-ns-', { file: okText() });
     const { io, paths } = countingIO();
     const lane = new BoxSettingsLane();
-    await lane.run(deps(dir, io), () => [nodeRow('n1', 'linux', ['verify'])], [measuredOutcome(SERVER_LABEL, 'n1')], NOW * 1000);
-    expect(lane.held().get('n1')).toEqual({ read: { state: 'not-supported' }, readAtS: NOW });
+    await lane.run(deps(dir, io), () => [nodeRow('n1', 'linux', ['verify'])], [measuredOutcome(SERVER_LABEL, 'n1')]);
+    expect(lane.held().get('n1')).toEqual({ read: { state: 'not-supported' } });
     expect(paths).toEqual([]);
   });
 
@@ -338,21 +366,21 @@ describe('the lane: what each node\'s read comes to', () => {
     const dir = ccrcWith('bsr-lane-cu-', { file: okText() });
     const { io, paths } = countingIO();
     const lane = new BoxSettingsLane();
-    await lane.run(deps(dir, io), () => [nodeRow('n1', 'unknown', [])], [measuredOutcome(SERVER_LABEL, 'n1')], NOW * 1000);
-    expect(lane.held().get('n1')).toEqual({ read: { state: 'caps-unmeasured' }, readAtS: NOW });
+    await lane.run(deps(dir, io), () => [nodeRow('n1', 'unknown', [])], [measuredOutcome(SERVER_LABEL, 'n1')]);
+    expect(lane.held().get('n1')).toEqual({ read: { state: 'caps-unmeasured' } });
     expect(paths).toEqual([]);
   });
 
   it('a macOS node has no `settings` word and reads not-supported', async () => {
     const lane = new BoxSettingsLane();
-    await lane.run(deps(ccrcWith('bsr-lane-mac-')), () => [nodeRow('n1', 'darwin', ['verify'])], [measuredOutcome(SERVER_LABEL, 'n1')], NOW * 1000);
+    await lane.run(deps(ccrcWith('bsr-lane-mac-')), () => [nodeRow('n1', 'darwin', ['verify'])], [measuredOutcome(SERVER_LABEL, 'n1')]);
     expect(lane.held().get('n1')!.read).toEqual({ state: 'not-supported' });
   });
 
   const withCap = (id: string): Pick<NodeRow, 'nodeId' | 'os' | 'caps'> => nodeRow(id, 'linux', ['verify', 'settings']);
   const readOf = async (dir: string): Promise<BoxSettingsHeld | undefined> => {
     const lane = new BoxSettingsLane();
-    await lane.run(deps(dir), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')], NOW * 1000);
+    await lane.run(deps(dir), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')]);
     return lane.held().get('n1');
   };
 
@@ -368,9 +396,8 @@ describe('the lane: what each node\'s read comes to', () => {
   it('with the cap: junk reads malformed', async () => {
     expect((await readOf(ccrcWith('bsr-lane-junk-', { file: 'not json {' })))!.read).toEqual({ state: 'malformed' });
   });
-  it('with the cap: a valid document reads ok, and what the lane holds is the parsed document with the read\'s own second', async () => {
+  it('with the cap: a valid document reads ok, and what the lane holds is the parsed document', async () => {
     const h = await readOf(ccrcWith('bsr-lane-ok-', { file: okText() }));
-    expect(h!.readAtS).toBe(NOW);
     expect(h!.read).toEqual({ state: 'ok', doc: parseBoxSettings(okText()) });
   });
   it.each(fixtureFiles())('every corpus file through the lane: %s', async (file) => {
@@ -381,14 +408,14 @@ describe('the lane: what each node\'s read comes to', () => {
   it('a node the sweep could not reach keeps its last read, which then shows as stale', async () => {
     const dir = ccrcWith('bsr-lane-keep-', { file: okText() });
     const lane = new BoxSettingsLane();
-    await lane.run(deps(dir), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')], NOW * 1000);
+    await lane.run(deps(dir), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')]);
     const first = lane.held().get('n1');
     expect(first!.read.state).toBe('ok');
     for (const outcome of [
       { label: SERVER_LABEL, result: 'unreachable', nodeId: 'n1' }, { label: SERVER_LABEL, result: 'refused', why: 'x' },
       { label: SERVER_LABEL, result: 'error', message: 'boom' },
     ] as SweepOutcome[]) {
-      await lane.run(deps(ccrcWith('bsr-lane-gone-')), () => [withCap('n1')], [outcome], (NOW + 1200) * 1000);
+      await lane.run(deps(ccrcWith('bsr-lane-gone-')), () => [withCap('n1')], [outcome]);
       expect(lane.held().get('n1'), `an outcome of ${outcome.result} leaves the held read as it was`).toEqual(first);
     }
     expect(boxSettingsView(lane.held().get('n1'), NOW + 1200)).toMatchObject({ state: 'ok', stale: true });
@@ -398,14 +425,14 @@ describe('the lane: what each node\'s read comes to', () => {
     const dir = ccrcWith('bsr-lane-rekey-', { file: okText() });
     const lane = new BoxSettingsLane();
     const inv = { ...deps(dir), fleet: { io: localIO, state: {} as never } };
-    await lane.run(inv, () => [withCap(FLEET_LABEL)], [measuredOutcome(FLEET_LABEL, FLEET_LABEL)], NOW * 1000);
+    await lane.run(inv, () => [withCap(FLEET_LABEL)], [measuredOutcome(FLEET_LABEL, FLEET_LABEL)]);
     expect([...lane.held().keys()]).toEqual([FLEET_LABEL]);
     // The sweep re-keyed the row: the label's id is no longer a live node, the uuid is.
-    await lane.run(inv, () => [withCap(FLEET_ID)], [measuredOutcome(FLEET_LABEL, FLEET_ID)], (NOW + 60) * 1000);
+    await lane.run(inv, () => [withCap(FLEET_ID)], [measuredOutcome(FLEET_LABEL, FLEET_ID)]);
     expect([...lane.held().keys()]).toEqual([FLEET_ID]);
-    expect(lane.held().get(FLEET_ID)!.readAtS).toBe(NOW + 60);
+    expect(lane.held().get(FLEET_ID)!.read.state).toBe('ok');
     // An id no longer in the node list is dropped even when no outcome reached it.
-    await lane.run(inv, () => [], [], (NOW + 120) * 1000);
+    await lane.run(inv, () => [], []);
     expect(lane.held().size).toBe(0);
   });
 
@@ -413,7 +440,7 @@ describe('the lane: what each node\'s read comes to', () => {
     const dir = ccrcWith('bsr-lane-coll-', { file: okText() });
     const lane = new BoxSettingsLane();
     const o: SweepOutcome = { label: FLEET_LABEL, result: 'node-id-collision', nodeId: FLEET_LABEL, lease: 'none', refused: false };
-    await lane.run({ localIo: localIO, ccrcDir: dir, fleet: { io: localIO, state: {} as never } }, () => [withCap(FLEET_LABEL)], [o], NOW * 1000);
+    await lane.run({ localIo: localIO, ccrcDir: dir, fleet: { io: localIO, state: {} as never } }, () => [withCap(FLEET_LABEL)], [o]);
     expect(lane.held().get(FLEET_LABEL)!.read.state).toBe('ok');
   });
 
@@ -423,7 +450,7 @@ describe('the lane: what each node\'s read comes to', () => {
     const fleet = countingIO();
     const lane = new BoxSettingsLane();
     await lane.run({ localIo: server.io, ccrcDir: dir, fleet: { io: fleet.io, state: {} as never } },
-      () => [withCap('s1'), withCap('f1')], [measuredOutcome(SERVER_LABEL, 's1'), measuredOutcome(FLEET_LABEL, 'f1')], NOW * 1000);
+      () => [withCap('s1'), withCap('f1')], [measuredOutcome(SERVER_LABEL, 's1'), measuredOutcome(FLEET_LABEL, 'f1')]);
     expect(server.paths).toHaveLength(1);
     expect(fleet.paths).toHaveLength(1);
     expect(lane.held().get('s1')!.read.state).toBe('ok');
@@ -433,16 +460,16 @@ describe('the lane: what each node\'s read comes to', () => {
   it('it never throws into the sweep: an io that throws keeps the last held read', async () => {
     const dir = ccrcWith('bsr-lane-throw-', { file: okText() });
     const lane = new BoxSettingsLane();
-    await lane.run(deps(dir), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')], NOW * 1000);
+    await lane.run(deps(dir), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')]);
     const first = lane.held().get('n1');
     const bad: FleetIO = { ...localIO, lstatMeasured: () => { throw new Error('boom'); } };
-    await expect(lane.run(deps(dir, bad), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')], (NOW + 60) * 1000)).resolves.toBeUndefined();
+    await expect(lane.run(deps(dir, bad), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')])).resolves.toBeUndefined();
     expect(lane.held().get('n1')).toEqual(first);
     const worse = { get ccrcDir(): string { throw new Error('boom'); } } as unknown as Pick<InventoryDeps, 'localIo' | 'ccrcDir' | 'fleet'>;
-    await expect(lane.run(worse, () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')], (NOW + 60) * 1000)).resolves.toBeUndefined();
+    await expect(lane.run(worse, () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')])).resolves.toBeUndefined();
     // A store that throws (a locked coord.db) is asked inside the guard too: it must not reach the sweep's caller.
     const locked = (): never => { throw new Error('database is locked'); };
-    await expect(lane.run(deps(dir), locked, [measuredOutcome(SERVER_LABEL, 'n1')], (NOW + 60) * 1000)).resolves.toBeUndefined();
+    await expect(lane.run(deps(dir), locked, [measuredOutcome(SERVER_LABEL, 'n1')])).resolves.toBeUndefined();
     expect(lane.held().get('n1')).toEqual(first);
   });
 
@@ -450,7 +477,7 @@ describe('the lane: what each node\'s read comes to', () => {
     const dir = ccrcWith('bsr-lane-between-', { file: okText() });
     const { io, paths } = countingIO();
     const lane = new BoxSettingsLane();
-    await lane.run(deps(dir, io), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')], NOW * 1000);
+    await lane.run(deps(dir, io), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')]);
     const after = paths.length;
     expect(after).toBeGreaterThan(0);
     for (let i = 0; i < 5; i += 1) lane.held();
@@ -460,10 +487,10 @@ describe('the lane: what each node\'s read comes to', () => {
   it('two lanes never see each other\'s reads', async () => {
     const a = new BoxSettingsLane();
     const b = new BoxSettingsLane();
-    await a.run(deps(ccrcWith('bsr-lane-a-', { file: okText() })), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')], NOW * 1000);
+    await a.run(deps(ccrcWith('bsr-lane-a-', { file: okText() })), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')]);
     expect(a.held().get('n1')!.read.state).toBe('ok');
     expect(b.held().size).toBe(0);
-    await b.run(deps(ccrcWith('bsr-lane-b-')), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')], NOW * 1000);
+    await b.run(deps(ccrcWith('bsr-lane-b-')), () => [withCap('n1')], [measuredOutcome(SERVER_LABEL, 'n1')]);
     expect(b.held().get('n1')!.read.state).toBe('absent');
     expect(a.held().get('n1')!.read.state, 'b\'s run left a\'s read alone').toBe('ok');
   });
@@ -556,7 +583,7 @@ describe('GET /api/updates carries each node\'s settings from the watcher\'s hel
     expect(c.nodes[0]!.settings).toEqual({ state: 'clock-ahead' });
   });
 
-  it('a node the watcher has not read yet reads `unreadable` on the wire, and the field is set on every node', async () => {
+  it('a node the watcher has not read yet reads `unmeasured` on the wire (D-7874), and the field is set on every node', async () => {
     const b = await box({ watcher: true, files: { 'ccrc-caps': CAPS_WITH } });
     // Plant a second live row the lane never reached.
     const id = '1f1e1d1c-1b1a-4918-9716-151413121110';
@@ -570,7 +597,7 @@ describe('GET /api/updates carries each node\'s settings from the watcher\'s hel
     const view = (await b.app.inject({ method: 'GET', url: '/api/updates' })).json() as UpdatesView;
     expect(view.nodes).toHaveLength(2);
     for (const n of view.nodes) expect(n.settings, n.label).toBeDefined();
-    expect(view.nodes.find((n) => n.nodeId === id)!.settings).toEqual({ state: 'unreadable' });
+    expect(view.nodes.find((n) => n.nodeId === id)!.settings).toEqual({ state: 'unmeasured' });
     expect(view.nodes.find((n) => n.label === SERVER_LABEL)!.settings).toEqual({ state: 'absent' });
   });
 

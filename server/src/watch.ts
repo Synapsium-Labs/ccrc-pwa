@@ -1749,7 +1749,7 @@ export class FleetWatcher {
     this.triggerDispatch();
     // D-6916: last, so a stalled settings read (bounded at 10 s) never delays the resolve, the push or the dispatch above; it is still this run's
     // own sweep (its outcomes, its caps), and `inventoryNow` still awaits it. Never throws.
-    await this.boxSettingsLane.run(inv, () => coord.nodes(), outcomes, now);
+    await this.boxSettingsLane.run(inv, () => coord.nodes(), outcomes);
     return outcomes;
   }
 
