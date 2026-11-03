@@ -21,7 +21,7 @@ import { DOCS_RASTER_TYPES, docsApi, type RasterMime } from '../../../../shared/
 import { codeBlocksOf, type HighlightStore } from '../../lib/highlightStore';
 import { codeBlockParts } from '../../lib/markdown';
 import { renderHast } from '../../lib/renderHast';
-import { planImageRef, rasterDataUrl, svgDataUrl } from '../DocImage';
+import { SVG_DATA_PREFIX, planImageRef, rasterDataUrl, svgDataUrl } from '../DocImage';
 import type { DocLinkContextValue } from '../DocLink';
 import type { DetachedUrls } from '../docsLinks';
 import { DOC_IMAGE_TEXT, EXPORT_TEXT, fillSentence, pluralS } from '../docsText';
@@ -97,7 +97,12 @@ function rasterSrc(bytes: Uint8Array, mime: string): string | null {
   return RASTER_MIMES.includes(mime) ? rasterDataUrl(bytes, mime as RasterMime) : null;
 }
 
-const srcOf = (asset: ExportAsset): string | null => (asset.kind === 'svg' ? asset.src : rasterSrc(asset.bytes, asset.mime));
+/** An SVG's `src` is inlined only as the `data:image/svg+xml;base64,` URL Docs itself builds (`DocImage`'s
+ *  `SVG_DATA_PREFIX`). React 19 hoists any other `<img src>` into a `<link rel="preload">` written BEFORE the CSP meta, so
+ *  the CSP is no second line behind this check. */
+const srcOf = (asset: ExportAsset): string | null => (asset.kind === 'svg'
+  ? (asset.src.startsWith(SVG_DATA_PREFIX) ? asset.src : null)
+  : rasterSrc(asset.bytes, asset.mime));
 
 /** What each image of the body becomes, from the page's registry only (spec 4.17 "Images"; M4.EX3). */
 async function decideImages(

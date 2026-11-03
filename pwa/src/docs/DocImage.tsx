@@ -147,7 +147,7 @@ export type Fetched =
 /** `auth` is true for a 401 only: the one failure that signing in cures, so the one the image asks again after. */
 type Shown = { s: 'loading' } | { s: 'loaded'; src: string } | { s: 'failed'; sentence: string; auth: boolean };
 
-const SVG_DATA_PREFIX = 'data:image/svg+xml;base64,';
+export const SVG_DATA_PREFIX = 'data:image/svg+xml;base64,';
 
 function notOkFailure(a: DocsNotOk): Extract<Fetched, { s: 'failed' }> {
   return { s: 'failed', sentence: a.s === 'failed' ? failureSentence(a.body) : slotSentence(a), auth: a.s === 'auth' };

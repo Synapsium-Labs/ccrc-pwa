@@ -479,6 +479,19 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     expect(doc.querySelectorAll('svg, script, image')).toHaveLength(0);
   });
 
+  it('an SVG registry src that is not the data: URL Docs builds becomes a placeholder: no preload link, no https: in the file (M4.EX1, M4.EX2)', async () => {
+    const assets = createExportAssets();
+    assets.track(imageKey('s.svg')).report({ s: 'loaded', asset: { kind: 'svg', src: 'https://a.example/x.svg' } });
+    const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 's.svg')] });
+    const { text, doc } = await built(inputOf(treeBody('![s](s.svg)\n', tree), { assets }), WIDE);
+    expect(doc.querySelectorAll('link')).toHaveLength(0);
+    expect(text).not.toContain('<link');
+    expect(doc.querySelectorAll('img')).toHaveLength(0);
+    expect(doc.querySelector('.ccrc-export-missing')?.textContent).toBe(EXPORT_MISSING_SENTENCE.failed);
+    expect(doc.head.children[1]?.getAttribute('http-equiv')).toBe('Content-Security-Policy');
+    expect(text.replace(/https:\/\/github\.com\/[^"<\s]*/g, '')).not.toMatch(/https?:/);
+  });
+
   it('a raster leaf is one img of its bytes, typed from the raster table', async () => {
     const { doc } = await built(inputOf({ kind: 'image', alt: 'x.png', draft: false, image: { kind: 'raster', bytes: PNG, mime: 'image/png' } }));
     expect([...doc.querySelectorAll('img')].map((i) => i.getAttribute('src')?.slice(0, 22))).toEqual(['data:image/png;base64,']);
