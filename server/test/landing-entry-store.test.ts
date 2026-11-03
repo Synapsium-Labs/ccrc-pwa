@@ -5,6 +5,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { LandingAdvance } from '../src/coord/landingEntry.js';
+import { landingEntryFactsOfRow, landingEntryOfRow } from '../src/coord/landingEntry.js';
 import type { LandingEjectionKind } from '../../shared/landingLine.js';
 import { mergingAtDetail } from '../../shared/landing.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -261,5 +262,95 @@ describe('the entry is written by advanceLanding, in the run\'s own transaction 
     coord.db.prepare("INSERT INTO landing_entries (project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) " +
       "VALUES ('project-b', 12, ?, ?, NULL, 'pinned', 'operator', 1)").run(HEAD, HC);
     expect(coord.landingEntries(P).map((e) => e.pr)).toEqual([11, 10]);
+  });
+});
+
+describe('the strict row reader (landing order wave 5f): landingEntryFactsOfRow', () => {
+  const HEX = 'a'.repeat(40);
+  const row = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: 1, project: 'project-a', pr: 7, pinnedSha: HEX, handoffCommit: HEX, runId: null, state: 'pinned', baseSha: null,
+    ejectionKind: null, ejections: 0, afterIds: '[2]', fixesMain: 0, setBy: 'lane-a', pinnedAt: 5, quarantineKind: null, ...over });
+  it('a clean row is readable and reads as before', () => {
+    const f = landingEntryFactsOfRow(row());
+    expect(f.projection).toEqual({ kind: 'readable', quarantine: null });
+    expect(f.dependencies).toEqual({ kind: 'readable', afterIds: [2] });
+    expect(f.entry).toMatchObject({ id: 1, state: 'pinned', afterIds: [2], fixesMain: false, pinnedAt: 5, ejections: 0 });
+    expect(landingEntryOfRow(row())).toEqual(f.entry);
+  });
+  it('bigint integers read like numbers', () => {
+    const f = landingEntryFactsOfRow(row({ id: 1n, pr: 7n, runId: 3n, ejections: 2n, pinnedAt: 9n, fixesMain: 1n }));
+    expect(f.projection.kind).toBe('readable');
+    expect(f.entry).toMatchObject({ id: 1, pr: 7, runId: 3, ejections: 2, pinnedAt: 9, fixesMain: true, state: 'pinned' });
+  });
+  it('unreadable fixesMain makes entry unknown', () => {
+    for (const bad of [2, -1, 2n, 0.5, '1', true, null, undefined]) {
+      const f = landingEntryFactsOfRow(row({ fixesMain: bad }));
+      expect(f.entry.state, String(bad)).toBe('unknown');
+      expect(f.entry.fixesMain).toBe(false);
+      expect(f.projection).toEqual({ kind: 'unreadable' });
+      expect(f.dependencies).toEqual({ kind: 'readable', afterIds: [2] });
+    }
+    expect(landingEntryFactsOfRow(row({ fixesMain: 1 })).entry.fixesMain).toBe(true);
+  });
+  it('unreadable pinnedAt makes entry unknown', () => {
+    for (const bad of [-1, 2n ** 60n, 1.5, '5', null, Number.MAX_SAFE_INTEGER + 1, NaN]) {
+      const f = landingEntryFactsOfRow(row({ pinnedAt: bad }));
+      expect(f.entry.state, String(bad)).toBe('unknown');
+      expect(f.entry.pinnedAt).toBe(0);
+      expect(f.projection).toEqual({ kind: 'unreadable' });
+    }
+    expect(landingEntryFactsOfRow(row({ pinnedAt: 0 })).entry.state).toBe('pinned');
+  });
+  it('unreadable ejections makes entry unknown', () => {
+    for (const bad of [-1, 2n ** 63n, 0.5, 'x', null, Number.MAX_SAFE_INTEGER + 1]) {
+      const f = landingEntryFactsOfRow(row({ ejections: bad }));
+      expect(f.entry.state, String(bad)).toBe('unknown');
+      expect(f.entry.ejections).toBe(0);
+      expect(f.projection).toEqual({ kind: 'unreadable' });
+    }
+  });
+  it('readable-unknown-state-is-traversable: dependencies stay readable when the source values are not', () => {
+    const f = landingEntryFactsOfRow(row({ pinnedAt: -5, ejections: 'x', afterIds: '[3,4]' }));
+    expect(f.entry.state).toBe('unknown');
+    expect(f.entry.afterIds).toEqual([3, 4]);
+    expect(f.dependencies).toEqual({ kind: 'readable', afterIds: [3, 4] });
+    expect(f.projection).toEqual({ kind: 'unreadable' });
+  });
+  it('unreadable afterIds is unreadable dependencies, whatever the state', () => {
+    for (const bad of ['[0]', '[1.5]', '{"a":1}', 'nope', null, 5]) {
+      const f = landingEntryFactsOfRow(row({ afterIds: bad }));
+      expect(f.dependencies, String(bad)).toEqual({ kind: 'unreadable' });
+      expect(f.entry.state).toBe('unknown');
+      expect(f.entry.afterIds).toEqual([]);
+    }
+  });
+  it('an invalid identity number makes the projection unreadable', () => {
+    for (const over of [{ id: 0 }, { id: -1n }, { pr: 2n ** 60n }, { pr: 1.5 }, { runId: 0 }, { runId: 2n ** 60n }, { runId: 'x' }]) {
+      expect(landingEntryFactsOfRow(row(over)).projection, JSON.stringify(over, (_k, v) => (typeof v === 'bigint' ? `${v}n` : v))).toEqual({ kind: 'unreadable' });
+    }
+  });
+  it('the retained text fields must be readable: hashes, setter, project, base and kind together', () => {
+    for (const over of [{ pinnedSha: 'abc' }, { pinnedSha: HEX.toUpperCase() }, { handoffCommit: 'g'.repeat(40) }, { setBy: '' }, { setBy: ' x' },
+      { project: '' }, { baseSha: HEX }, { state: 'ejected', ejectionKind: 'new-head', baseSha: null }]) {
+      expect(landingEntryFactsOfRow(row(over)).projection, JSON.stringify(over)).toEqual({ kind: 'unreadable' });
+    }
+    expect(landingEntryFactsOfRow(row({ state: 'ejected', ejectionKind: 'new-head', baseSha: HEX, ejections: 1 })).projection.kind).toBe('readable');
+  });
+  it('quarantine: only the literal unknown state with exactly the stale-episode-head marker is readable', () => {
+    expect(landingEntryFactsOfRow(row({ state: 'unknown', quarantineKind: 'stale-episode-head' })).projection)
+      .toEqual({ kind: 'readable', quarantine: 'stale-episode-head' });
+    expect(landingEntryFactsOfRow(row({ state: 'unknown', quarantineKind: 'stale-episode-head' })).entry.state).toBe('unknown');
+    for (const over of [{ state: 'unknown' }, { state: 'unknown', quarantineKind: 'other' }, { state: 'pinned', quarantineKind: 'stale-episode-head' },
+      { state: 'future-word' }, { state: 'future-word', quarantineKind: 'stale-episode-head' }, { state: 'pinned', quarantineKind: 'other' }]) {
+      expect(landingEntryFactsOfRow(row(over)).projection, JSON.stringify(over)).toEqual({ kind: 'unreadable' });
+    }
+    // a quarantined row with an unreadable counter is not readable
+    expect(landingEntryFactsOfRow(row({ state: 'unknown', quarantineKind: 'stale-episode-head', ejections: -1 })).projection).toEqual({ kind: 'unreadable' });
+  });
+  it('never mutates the row', () => {
+    const r = row({ fixesMain: 7, afterIds: 'nope' });
+    const before = JSON.stringify(r);
+    landingEntryFactsOfRow(r);
+    expect(JSON.stringify(r)).toBe(before);
   });
 });

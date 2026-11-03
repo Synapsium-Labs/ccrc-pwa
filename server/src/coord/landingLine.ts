@@ -12,14 +12,16 @@
 //   once-only raise. A third ejection raises nothing, and the advance is never refused.
 import {
   LANDING_PAUSE_BY, LANDING_PAUSE_BYS,
-  type LandingEntry, type LandingLineFlags, type LandingOrder,
+  type LandingEntry, type LandingLineFlags, type LandingOrder, type LandingRecovery,
 } from '../../../shared/landingLine.js';
 
 /** First-green: `fixesMain` entries first, then the earlier pin, then the lower PR number. */
 const byKey = (a: LandingEntry, b: LandingEntry): number =>
   Number(b.fixesMain) - Number(a.fixesMain) || a.pinnedAt - b.pinnedAt || a.pr - b.pr;
 
-export function landingOrder(entries: readonly LandingEntry[], flags: LandingLineFlags): LandingOrder {
+/** `recovery` (wave 5f) holds the line while any authority subject is unresolved: no head, but `order` and both flags
+ *  are untouched, and a real pause keeps its `by`. Omitted recovery is today's behaviour exactly. */
+export function landingOrder(entries: readonly LandingEntry[], flags: LandingLineFlags, recovery?: LandingRecovery): LandingOrder {
   const line = entries.filter((x) => x.state === 'pinned').sort(byKey);
   // An edge holds its entry behind a target that is still outstanding. An `unknown` target is outstanding because this
   // build cannot read whether it landed, so an edge to it fails closed.
@@ -38,7 +40,10 @@ export function landingOrder(entries: readonly LandingEntry[], flags: LandingLin
   // What waits on an ejected or unknown target, or on a cycle (a self-edge included), goes last in key order.
   for (const x of line) if (rest.has(x)) order.push(x);
   const by = LANDING_PAUSE_BYS.filter((k) => flags[LANDING_PAUSE_BY[k]]);
-  return by.length > 0 ? { paused: true, by, order } : { paused: false, order, head };
+  const held = recovery?.hold ? { reason: recovery.hold.reason, subjectIds: [...recovery.hold.subjectIds] } : undefined;
+  if (by.length > 0) return held ? { paused: true, by, order, held } : { paused: true, by, order };
+  if (held) return { paused: false, order, head: null, held };
+  return { paused: false, order, head };
 }
 
 /** The ejection count at which the operator is told, once (D-7624). */

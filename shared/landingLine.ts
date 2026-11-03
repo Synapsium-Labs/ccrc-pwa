@@ -62,11 +62,16 @@ export const LANDING_PAUSE_BYS = Object.keys(LANDING_PAUSE_BY) as LandingPauseBy
  *  empty or every entry waits on an `ejected` or `unknown` target or on a cycle. Paused: `by` names the flags, and
  *  there is no head. */
 export type LandingOrder =
-  | { paused: false; order: LandingEntry[]; head: LandingEntry | null }
-  | { paused: true; by: LandingPauseBy[]; order: LandingEntry[] };
+  | { paused: false; order: LandingEntry[]; head: LandingEntry | null; held?: LandingHold }
+  | { paused: true; by: LandingPauseBy[]; order: LandingEntry[]; held?: LandingHold };
+/** Why the line is held by recovery (5f): subjects of the authority journal whose projection or association is not
+ *  measured. Not a pause: neither flag is touched. */
+export interface LandingHold { reason: 'landing-recovery-unresolved'; subjectIds: number[] }
 
 /** GET /api/landing's answer, flat beside ok. */
-export interface LandingLineView { project: string; operatorPaused: boolean; mainRedHold: boolean; entries: LandingEntry[]; order: LandingOrder }
+export interface LandingLineView { project: string; operatorPaused: boolean; mainRedHold: boolean; entries: LandingEntry[]; order: LandingOrder;
+  /** Absent from an older peer: not reported, never "complete". */
+  recovery?: LandingRecovery }
 
 // Landing order, wave 5f: the authority journal's vocabulary (shared contract §1, §5). Pure types, no imports.
 export interface LandingIdentity { id: number; project: string; pr: number }

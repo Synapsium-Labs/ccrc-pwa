@@ -196,3 +196,27 @@ describe('landingEjectionAsk', () => {
       .toBe('project-a #7 (no run): ejected from the landing line a second time (unrecorded against base unrecorded). The line holds nothing back; you decide whether it lands again, is fixed by hand or is withdrawn.');
   });
 });
+
+describe('landingOrder: recovery holds the line without touching the flags (wave 5f)', () => {
+  const HOLD = { subjects: [], hold: { reason: 'landing-recovery-unresolved' as const, subjectIds: [7, 9] } };
+  const NONE = { subjects: [], hold: null };
+  const line = [e(1, { pinnedAt: 100 }), e(2, { pinnedAt: 200 })];
+  it('a hold with the flags clear keeps the order, names no head and says why', () => {
+    expect(landingOrder(line, OPEN, HOLD)).toEqual({ paused: false, order: [line[0], line[1]], head: null, held: HOLD.hold });
+  });
+  it('a hold under a real pause keeps paused, by and order, and adds held', () => {
+    expect(landingOrder(line, OP, HOLD)).toEqual({ paused: true, by: ['operator'], order: [line[0], line[1]], held: HOLD.hold });
+  });
+  it('CONTROL: omitted recovery and an empty hold are today\'s answer exactly', () => {
+    const today = landingOrder(line, OPEN);
+    expect(today).toEqual({ paused: false, order: [line[0], line[1]], head: line[0] });
+    expect(landingOrder(line, OPEN, NONE)).toEqual(today);
+    expect('held' in landingOrder(line, OP, NONE)).toBe(false);
+    expect(landingOrder(line, OP)).toEqual(landingOrder(line, OP, NONE));
+  });
+  it('the held ids are a copy: mutating the answer never reaches the recovery', () => {
+    const o = landingOrder(line, OPEN, HOLD);
+    o.held!.subjectIds.push(1);
+    expect(HOLD.hold.subjectIds).toEqual([7, 9]);
+  });
+});
