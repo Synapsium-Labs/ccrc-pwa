@@ -31,6 +31,7 @@ import type {
   LandingEntry, LandingInfrastructureFailure, LandingLineFlags, LandingMutationCode, LandingRecovery, LandingSubjectRef,
 } from '../../../shared/landingLine.js';
 import type { LandingProjectionRead } from './landingEntry.js';
+import type { NoticeRecord } from '../notice.js';
 
 type Coordinator = { kind: 'no-run' } | { kind: 'run'; runId: number; claimedBy: string | null };
 
@@ -157,4 +158,68 @@ export function decideLandingMutation(command: LandingAuthorityCommand, facts: L
     after.push({ id: e.id, project: e.project, pr: e.pr, binding });
   }
   return { ok: true, mutation: { kind: 'order', entry: source, after, fixesMain } };
+}
+
+// ── parsing and the notice (wave 5f Task 2) ──────────────────────────────────────────────────────────────────────
+const ENTRY_KEYS = ['byId', 'byUuid', 'project', 'pr', 'pinnedSha', 'handoffCommit'] as const;
+const ORDER_KEYS = ['byId', 'byUuid', 'project', 'pr', 'afterIds', 'fixesMain'] as const;
+const BAD: { ok: false; error: 'bad-request' } = { ok: false, error: 'bad-request' };
+const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
+const positive = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
+const hash = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v);
+
+/** One request body, closed: known keys only, so a client `setBy`, `runId`, `state` or time is refused, never ignored. */
+export function parseLandingWrite(kind: 'entry' | 'order', body: unknown): LandingWriteParse {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return BAD;
+  const o = body as Record<string, unknown>;
+  const known: readonly string[] = kind === 'entry' ? ENTRY_KEYS : ORDER_KEYS;
+  if (Object.keys(o).some((k) => !known.includes(k))) return BAD;
+  const byId = text(o['byId']);
+  const byUuid = text(o['byUuid']);
+  const project = text(o['project']);
+  if (byId === null || byUuid === null || project === null || !positive(o['pr'])) return BAD;
+  const caller = { byId, byUuid, project, pr: o['pr'] };
+  if (kind === 'entry') {
+    if (!hash(o['pinnedSha']) || !hash(o['handoffCommit'])) return BAD;
+    return { ok: true, kind: 'entry', request: { ...caller, pinnedSha: o['pinnedSha'], handoffCommit: o['handoffCommit'] } };
+  }
+  const afterIds = o['afterIds'];
+  const fixesMain = o['fixesMain'];
+  if (afterIds === undefined && fixesMain === undefined) return BAD;
+  const request: LandingOrderRequest = { ...caller };
+  if (afterIds !== undefined) {
+    if (!Array.isArray(afterIds) || !afterIds.every(positive) || new Set(afterIds).size !== afterIds.length) return BAD;
+    request.afterIds = [...afterIds];
+  }
+  if (fixesMain !== undefined) {
+    if (typeof fixesMain !== 'boolean') return BAD;
+    request.fixesMain = fixesMain;
+  }
+  return { ok: true, kind: 'order', request };
+}
+
+/** The one feed notice a successful write owes: a CHANGED order by someone other than the current run's claimant (a
+ *  no-run or unclaimed current association owes it too). Creation, a no-op, a failure and a replay owe none. A crash
+ *  between COMMIT and the sink can omit the event; there is no outbox and no exactly-once claim. */
+export function landingMutationNotice(
+  command: LandingAuthorityCommand, result: Extract<LandingAuthorityWrite, { ok: true }>,
+): { due: false } | { due: true; event: NoticeRecord } {
+  if (command.kind !== 'order' || !result.changed) return { due: false };
+  const c = result.coordinator;
+  if (c.kind === 'run' && c.claimedBy === command.setBy) return { due: false };
+  const { project, pr, setBy } = command;
+  return { due: true, event: {
+    kind: 'coord', sessionId: setBy, title: `landing-inversion: ${project} #${pr}`,
+    body: `${setBy} set ${project} #${pr} afterIds=${JSON.stringify(result.entry.afterIds)}, fixesMain=${result.entry.fixesMain ? 'true' : 'false'}`,
+    runId: c.kind === 'run' ? c.runId : null } };
+}
+
+/** The command a parsed request becomes: the setter is the ATTRIBUTED sender, never a body field. */
+export function landingCommandOf(parsed: Extract<LandingWriteParse, { ok: true }>): LandingAuthorityCommand {
+  const { byId, project, pr } = parsed.request;
+  if (parsed.kind === 'entry') {
+    return { kind: 'entry', project, pr, pinnedSha: parsed.request.pinnedSha, handoffCommit: parsed.request.handoffCommit, setBy: byId };
+  }
+  const { afterIds, fixesMain } = parsed.request;
+  return { kind: 'order', project, pr, setBy: byId, ...(afterIds === undefined ? {} : { afterIds }), ...(fixesMain === undefined ? {} : { fixesMain }) };
 }

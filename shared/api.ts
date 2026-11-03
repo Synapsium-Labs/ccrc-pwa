@@ -4826,7 +4826,8 @@ export interface NotifyEvent {
    *
    * NULL IS "ABOUT NO RUN", NOT "UNKNOWN". An `ask`, a `done`, a `merged` and a
    * `coord` are about a SESSION or about the config; they belong to no
-   * programme and appear only in the unfiltered feed. The two lanes that DO
+   * programme and appear only in the unfiltered feed. ONE `coord` event is the exception: the attributed landing
+   * inversion notice carries the actual current run's id when the order's entry has one (`null` for a genuine no-run entry). The two lanes that DO
    * know a run — the mail lane and the run-transition lane — populate it, which
    * is what makes `GET /api/feed?program=` a join rather than a guess. Nothing
    * reads a run to compute this, so there is no read that could fail and no

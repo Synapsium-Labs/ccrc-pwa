@@ -23,6 +23,8 @@ import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { landingOrder } from './landingLine.js';
+import { landingCommandOf, parseLandingWrite } from './landingWrites.js';
+import { actLandingWrite } from './landingWritesAct.js';
 import type { LandingLineView } from '../../../shared/landingLine.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
@@ -3785,6 +3787,30 @@ export function registerCoordRoutes(
     const { entries, flags, recovery } = read.facts;
     const view: LandingLineView = { project, ...flags, entries, order: landingOrder(entries, flags, recovery), recovery };
     return reply.code(200).send({ ok: true, ...view });
+  });
+
+  /** The two attributed landing writes: body parse (L1), measured attribution, then ONE synchronous store call inside
+   *  `coordMutex` with no await between the store's facts, decision and write. The setter is the attributed `byId`. */
+  const landingWrite = async (req: FastifyRequest, reply: FastifyReply, kind: 'entry' | 'order') => {
+    const parsed = parseLandingWrite(kind, req.body);
+    if (!parsed.ok) return refuseRoute(reply, 'bad-request', { detail: `the landing ${kind} body is not a closed, well-formed request` });
+    if (!(await requireAttribution(reply, parsed.request.byId, parsed.request.byUuid, 'byUuid'))) return;
+    return coordMutex.run(async () => {
+      const r = actLandingWrite(landingCommandOf(parsed), Date.now(), { write: (c, at) => deps.coord!.writeLandingAuthority(c, at), notify: notice });
+      if (!r.ok) { const { ok: _ok, error, ...extra } = r; return refuseRoute(reply, error, extra); }
+      const { ok: _ok, coordinator: _c, ...answer } = r;
+      return reply.code(200).send({ ok: true, ...answer });
+    });
+  };
+  app.post('/api/landing/entries', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/landing/entries')) return;
+    return landingWrite(req, reply, 'entry');
+  });
+  app.post('/api/landing/order', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/landing/order')) return;
+    return landingWrite(req, reply, 'order');
   });
 
   /* ── asks (ask pre-emption lane, Task 9) ─────────────────────────────── */

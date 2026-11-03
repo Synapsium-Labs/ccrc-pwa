@@ -1431,8 +1431,8 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the fifty-eight machine lanes the
-fleet host reaches (thirty-four box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the sixty machine lanes the
+fleet host reaches (thirty-six box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
 the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
@@ -3908,7 +3908,7 @@ token from `~/.cc-secrets/ccrc-mail.token` (absent, `no-token`), and the route
 from a fixed table (`ROUTES`, pinned closed by `ccrc-api-closed.test.ts`):
 `runs list|open|dispatch|advance|close|items|items-list|signals|route`,
 `mail list|send|fetch|ack`, `peers list`, `lifecycle list`,
-`claims list|take|release`, `ledger list|allocate`, `landing show`,
+`claims list|take|release`, `ledger list|allocate`, `landing show|entries|order`,
 `asks list|answer|release` and `feed list` — plus `whoami`, which reads this session's `{id, uuid}` from its
 tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
@@ -5350,7 +5350,9 @@ while either flag is set. A project the line has never seen answers no entries a
 order edges, `fixesMain` and setter attribution) is journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
 place (no backup copies it) and which the server replays before it serves anything. Replay never fabricates a measured pin or a
 current run association: a project whose projection is missing or whose binding evidence contradicts is reported as unmeasured
-and held, and invalid history refuses startup.
+and held, and invalid history refuses startup. `POST /api/landing/entries` and `POST /api/landing/order` (box token and measured
+`byId`/`byUuid` attribution, `ccrc-api landing entries|order --json -`) record an entry and its order edges; the attributed `byId` is
+the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an explicit `[]` or `false` clears it.
 
 **The bypass deny (landing-order wave 2b).** A second question, asked of every session after the worker
 deny's and with its text unchanged, closes the two ways past the queue that the worker deny leaves open:

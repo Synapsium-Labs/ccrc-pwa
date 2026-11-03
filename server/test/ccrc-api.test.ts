@@ -181,6 +181,8 @@ describe('the closed route table', () => {
     [['ledger', 'allocate'], 'POST', '/api/ledger/deviations'],
     // The landing line's read (landing order wave 5e, D-7625).
     [['landing', 'show'], 'GET', '/api/landing'],
+    [['landing', 'entries'], 'POST', '/api/landing/entries'],
+    [['landing', 'order'], 'POST', '/api/landing/order'],
     [['asks', 'list'], 'GET', '/api/asks'],
     // The claimant's two ask rows: the question door family's path since the old doors retired (K5 Q3l, D-7324).
     [['asks', 'answer', '7'], 'POST', '/api/questions/ask-7/rule'],
@@ -266,7 +268,8 @@ describe('the closed route table', () => {
     // Thirty-four since the landing line's read (landing order wave 5e, D-7625).
     // Forty-six since the twelve Linear rows (D-7669, #1444).
     // Fifty-five since the programme ledgers' nine (plan PL3).
-    expect(keys).toHaveLength(55);
+    // Fifty-seven since the landing line's two attributed writes (landing order wave 5f).
+    expect(keys).toHaveLength(57);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -280,6 +283,7 @@ describe('the closed route table', () => {
       37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
+      56: 'fifty-six', 57: 'fifty-seven',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -423,7 +427,8 @@ describe('the four claimant rows send the question door family, and refuse local
       ['runs', 'close', '12'], ['runs', 'items', '12'], ['runs', 'items-list', '12'], ['runs', 'signals', '12'],
       ['runs', 'route', '12'], ['mail', 'list', '--to', 'x'], ['mail', 'send', '--json', '-'], ['mail', 'fetch', '7'],
       ['mail', 'ack', '7'], ['peers', 'list'], ['lifecycle', 'list'], ['claims', 'list'], ['claims', 'take', '--json', '-'],
-      ['claims', 'release', '3'], ['ledger', 'list'], ['ledger', 'allocate', '--json', '-'], ['landing', 'show', '--project', 'project-a'], ['asks', 'list'], ['feed', 'list'],
+      ['claims', 'release', '3'], ['ledger', 'list'], ['ledger', 'allocate', '--json', '-'], ['landing', 'show', '--project', 'project-a'],
+      ['landing', 'entries', '--json', '-'], ['landing', 'order', '--json', '-'], ['asks', 'list'], ['feed', 'list'],
       ['coordinators', 'intent', 'set', '--session', 'demo-ws'], ['approvals', 'request', '--json', '-'],
       ['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], ['approvals', 'key'], ['approvals', 'show', '41'],
       ['testbox', 'status'], ['testbox', 'tools-sync'],
@@ -911,6 +916,18 @@ describe('a query key rides only if its row declared it', () => {
     await run(['landing', 'show', '--project', 'project-a']);
     expect(seen[0]!.url).toBe('/api/landing?project=project-a');
   });
+
+  // Landing order wave 5f: the two attributed writes send the caller's own body, identity included, and never fill one.
+  it.each([['entries', '/api/landing/entries'], ['order', '/api/landing/order']] as const)(
+    'landing %s passes an explicit attributed body unchanged', async (verb, url) => {
+      const body = '{"byId":"lane-b","byUuid":"u-lane-b","project":"project-a","pr":11,"afterIds":[]}';
+      plantPane('demo-ws');
+      await run(['landing', verb, '--json', '-'], body, { TMUX_PANE: '%7' });
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.method).toBe('POST');
+      expect(seen[0]!.url).toBe(url);
+      expect(seen[0]!.body).toBe(body);
+    });
 
   it('appends a declared key', async () => {
     await run(['mail', 'list', '--to', 'a-workspace']);

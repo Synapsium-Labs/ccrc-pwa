@@ -514,7 +514,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   question door family's claimant pair `POST
   /api/questions/:id/rule` and `POST /api/questions/:id/release` (W3 Q3f, D-7030), `POST /api/claims`, `POST
   /api/claims/:id/release`,
-  `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations`, `GET /api/ledger`, `GET /api/landing` and the approvals lane's
+  `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations`, `GET /api/ledger`, `GET /api/landing`,
+  `POST /api/landing/entries` and `POST /api/landing/order` (setter attribution, not coordinator authorisation), and the approvals lane's
   four (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key` and
   `GET /api/approvals/:id`, coordinator-first routing D-5298) and the programme ledgers' coordinator routes (plan PL3; their handlers
   are in `server/src/coord/ledgersRoutes.ts`, a lane source of its own for the census, registered from `registerCoordRoutes`:

@@ -4,7 +4,10 @@ import { describe, it, expect } from 'vitest';
 import { builtinModules } from 'node:module';
 import { identifierReferences, parseSource, type ParsedFile } from './scan/parse.js';
 import { parsedFile } from './scan/symbols.js';
-import { decideLandingMutation, type LandingAuthorityCommand, type LandingMutationFacts } from '../src/coord/landingWrites.js';
+import {
+  decideLandingMutation, landingCommandOf, landingMutationNotice, parseLandingWrite, type LandingAuthorityCommand, type LandingAuthorityWrite,
+  type LandingMutationFacts,
+} from '../src/coord/landingWrites.js';
 import {
   landingAssociationReadable, landingEntryFactsOfRow, landingRecoveryOf, type LandingEntryFacts, type LandingProjectionWitness,
   type LandingRecoverySubjectFact,
@@ -199,6 +202,93 @@ describe('decideLandingMutation: identity conflict', () => {
     const f = facts({ entries: [e(1)], recovery: [conflict] });
     expect(refused(create(5), f)).toBe('landing-identity-conflict');
     expect(refused(order(1, { afterIds: [] }), f)).toBe('landing-identity-conflict');
+  });
+});
+
+const WHO = { byId: 'lane-b', byUuid: 'u-lane-b' };
+const entryIn = { ...WHO, project: 'project-a', pr: 11, pinnedSha: 'a'.repeat(40), handoffCommit: 'b'.repeat(40) };
+const orderIn = { ...WHO, project: 'project-a', pr: 11, afterIds: [2], fixesMain: true };
+const bad = { ok: false, error: 'bad-request' };
+
+describe('parseLandingWrite (wave 5f Task 2)', () => {
+  it('parses an entry and an order, keeping their literal kind', () => {
+    expect(parseLandingWrite('entry', entryIn)).toEqual({ ok: true, kind: 'entry', request: entryIn });
+    expect(parseLandingWrite('order', orderIn)).toEqual({ ok: true, kind: 'order', request: orderIn });
+  });
+  it('entry-rejects-authoritative-fields', () => {
+    for (const k of ['setBy', 'runId', 'state', 'pinnedAt', 'afterIds', 'ejections', 'id']) {
+      expect(parseLandingWrite('entry', { ...entryIn, [k]: k === 'afterIds' ? [] : 'x' }), k).toEqual(bad);
+    }
+  });
+  it('order-rejects-authoritative-fields', () => {
+    for (const k of ['setBy', 'runId', 'state', 'at', 'pinnedSha', 'id']) expect(parseLandingWrite('order', { ...orderIn, [k]: 5 }), k).toEqual(bad);
+  });
+  it('requires an object body and trimmed nonblank identity strings, trimmed on the way in', () => {
+    for (const body of [null, undefined, [], 'x', 3]) expect(parseLandingWrite('entry', body)).toEqual(bad);
+    for (const k of ['byId', 'byUuid', 'project']) {
+      for (const v of ['', '   ', 5, null]) expect(parseLandingWrite('entry', { ...entryIn, [k]: v }), `${k} ${String(v)}`).toEqual(bad);
+    }
+    expect(parseLandingWrite('entry', { ...entryIn, byId: '  lane-b ', project: ' project-a ' })).toMatchObject({ ok: true, request: { byId: 'lane-b', project: 'project-a' } });
+  });
+  it('pr is a positive safe integer', () => {
+    for (const pr of [0, -1, 1.5, '11', null, Number.MAX_SAFE_INTEGER + 1, NaN]) expect(parseLandingWrite('entry', { ...entryIn, pr }), String(pr)).toEqual(bad);
+  });
+  it('hashes are 40 lowercase hex', () => {
+    for (const v of ['A'.repeat(40), 'a'.repeat(39), 'a'.repeat(41), 'g'.repeat(40), 7, '']) {
+      expect(parseLandingWrite('entry', { ...entryIn, pinnedSha: v })).toEqual(bad);
+      expect(parseLandingWrite('entry', { ...entryIn, handoffCommit: v })).toEqual(bad);
+    }
+    expect(parseLandingWrite('entry', { ...entryIn, handoffCommit: undefined })).toEqual(bad);
+  });
+  it('afterIds is a duplicate-free array of positive safe integers', () => {
+    for (const afterIds of [[0], [-1], [1.5], ['1'], [1, 1], 'x', null, {}, [Number.MAX_SAFE_INTEGER + 1]]) {
+      expect(parseLandingWrite('order', { ...orderIn, afterIds }), JSON.stringify(afterIds)).toEqual(bad);
+    }
+  });
+  it('fixesMain-must-be-boolean', () => {
+    for (const fixesMain of [0, 1, 'true', null, [], {}]) expect(parseLandingWrite('order', { ...orderIn, fixesMain }), String(fixesMain)).toEqual(bad);
+  });
+  it('preserves omission versus an explicit [] or false, and needs at least one patch key', () => {
+    const { afterIds: _a, fixesMain: _f, ...base } = orderIn;
+    expect(parseLandingWrite('order', base)).toEqual(bad);
+    const onlyFlag = parseLandingWrite('order', { ...base, fixesMain: false });
+    expect(onlyFlag).toEqual({ ok: true, kind: 'order', request: { ...base, fixesMain: false } });
+    expect(onlyFlag.ok && 'afterIds' in (onlyFlag as { request: object }).request).toBe(false);
+    const onlyAfter = parseLandingWrite('order', { ...base, afterIds: [] });
+    expect(onlyAfter).toEqual({ ok: true, kind: 'order', request: { ...base, afterIds: [] } });
+    expect(onlyAfter.ok && 'fixesMain' in (onlyAfter as { request: object }).request).toBe(false);
+  });
+  it('the command is built from the attributed id and carries only what was sent', () => {
+    const p = parseLandingWrite('order', { ...WHO, project: 'project-a', pr: 11, afterIds: [] });
+    if (!p.ok) throw new Error('parse');
+    const c = landingCommandOf(p);
+    expect(c).toEqual({ kind: 'order', project: 'project-a', pr: 11, setBy: 'lane-b', afterIds: [] });
+    expect('fixesMain' in c).toBe(false);
+  });
+});
+
+describe('landingMutationNotice (wave 5f Task 2)', () => {
+  const ok = (over: Partial<Extract<LandingAuthorityWrite, { ok: true }>> = {}): Extract<LandingAuthorityWrite, { ok: true }> =>
+    ({ ok: true, entry: e(11, { afterIds: [2], fixesMain: true, setBy: 'lane-b' }), previous: e(11), changed: true, seq: 4,
+      coordinator: { kind: 'run', runId: 9, claimedBy: 'coord-a' }, ...over });
+  const cmd = order(11, { afterIds: [2], fixesMain: true });
+  it('is due for a foreign changed order, with the exact record', () => {
+    expect(landingMutationNotice(cmd, ok())).toEqual({ due: true, event: { kind: 'coord', sessionId: 'lane-b',
+      title: 'landing-inversion: project-a #11', body: 'lane-b set project-a #11 afterIds=[2], fixesMain=true', runId: 9 } });
+  });
+  it('a clear is described by its resulting values', () => {
+    const r = ok({ entry: e(11, { afterIds: [], fixesMain: false }) });
+    expect(landingMutationNotice(cmd, r)).toMatchObject({ due: true, event: { body: 'lane-b set project-a #11 afterIds=[], fixesMain=false' } });
+  });
+  it('the current run claimant own order, an unchanged order and a creation owe nothing', () => {
+    expect(landingMutationNotice({ ...cmd, setBy: 'coord-a' } as LandingAuthorityCommand, ok())).toEqual({ due: false });
+    expect(landingMutationNotice(cmd, ok({ changed: false, seq: null }))).toEqual({ due: false });
+    expect(landingMutationNotice(create(11), ok({ previous: null }))).toEqual({ due: false });
+  });
+  it('a no-run or unclaimed current association is always due, with its actual run id or null', () => {
+    expect(landingMutationNotice(cmd, ok({ coordinator: { kind: 'no-run' } }))).toMatchObject({ due: true, event: { runId: null } });
+    expect(landingMutationNotice({ ...cmd, setBy: 'coord-a' } as LandingAuthorityCommand, ok({ coordinator: { kind: 'run', runId: 9, claimedBy: null } })))
+      .toMatchObject({ due: true, event: { runId: 9, sessionId: 'coord-a' } });
   });
 });
 

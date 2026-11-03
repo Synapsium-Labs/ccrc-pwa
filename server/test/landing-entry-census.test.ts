@@ -203,7 +203,7 @@ describe('the server boots the landing journal once, in both fleet modes, before
   it('boot-replay-before-consumers: the store is replayed before the server, the watcher and every timer', () => {
     const replay = calls().filter((c) => c.name === 'replayLandingJournal');
     expect(replay).toHaveLength(1);
-    const consumers = calls().filter((c) => ['buildServer', 'listen', 'setInterval', 'setTimeout', 'start', 'FleetWatcher'].includes(c.name));
+    const consumers = calls().filter((c) => c.name !== null && ['buildServer', 'listen', 'setInterval', 'setTimeout', 'start', 'FleetWatcher'].includes(c.name));
     expect(consumers.length).toBeGreaterThan(3);
     expect(consumers.filter((c) => c.start < replay[0]!.start).map((c) => `${c.line} ${c.name}`)).toEqual([]);
   });
