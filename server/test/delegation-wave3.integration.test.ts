@@ -1454,7 +1454,7 @@ describe('8. the closed scope census', () => {
       ['planPruning', /^if \(this\.pruningEnabled\(\)\) for await \(const r of this\.retainedRecords\(\)\) collector\.add\(r\);$/],
       ['compactJournal', /^const carriedTemp = `\$\{this\.carriedPath\}\.tmp`;$/],
       ['compactJournal', /^const journalTemp = `\$\{this\.journalPath\}\.tmp`;$/],
-      ['compactJournal', /^await this\.edge\('carried-rename', \(\) => this\.port\.rename\(carriedTemp, this\.carriedPath\)\);$/],
+      ['compactJournal', /^await this\.port\.rename\(carriedTemp, this\.carriedPath\);$/],
       ['compactJournal', /^await this\.edge\('carried-directory-fsync', \(\) => this\.port\.fsyncDir\(this\.deps\.dir\)\);$/],
       ['compactJournal', /^await this\.port\.rename\(journalTemp, this\.journalPath\);$/],
       ['compactJournal', /^await this\.edge\('journal-directory-fsync', \(\) => this\.port\.fsyncDir\(this\.deps\.dir\)\);$/],
