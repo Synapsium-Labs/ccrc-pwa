@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccrc",
+  "maxDelta": 360,
+  "d": "D-7750",
+  "reason": "accounts plan Task A20, the box half of the sign-in: auth-start (the detached transient unit and its wait), auth-code (the byte check and the one-shot FIFO relay), auth-cancel, set --method with its two install arms and the method switch's converge, credential --sign-out, and add's mint without a key; the decisions live in deploy/account-op.mjs and bash measures and orders the steps, measured +349 net code lines against the merge-base",
+  "added": "2026-11-02"
+}

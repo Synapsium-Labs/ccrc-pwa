@@ -120,7 +120,9 @@ export const PROVIDERS = {
     label: 'Claude subscription',
     credential: 'a signed-in config dir, or a long-lived OAuth token',
     envVar: 'CLAUDE_CODE_OAUTH_TOKEN',
-    connect: ['login', 'paste', 'setup-token'],
+    // Mint first (Q1, accounts plan Task A20): the long-lived token is the default the door opens on, and so the method
+    // `ccrc account add --provider anthropic` takes when `--method` is absent.
+    connect: ['setup-token', 'login', 'paste'],
     probe: 'auth-status+inference',
     baseUrl: null,
     baseUrlRequired: false,
