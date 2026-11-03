@@ -1494,6 +1494,34 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     };
   }
 
+  // The lifetime pair (refinement (u)), after Share's two: the sheet stays open across a change after which Export is
+  // ready again, so an unkeyed ExportAction (same position, its request still set) would show the sheet straight away.
+  it('an open Export sheet closes when the page changes to another leaf Export is offered on (refinement (u))', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'b.md')] });
+    open('/docs/demo/specs/a.md', fakeLoaders({ tree: okTree(tree) }));
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    fireEvent.click(exportButton() as HTMLElement);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    act(() => { navigate('/docs/demo/specs/b.md'); });
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('an open Export sheet closes when a re-list moves the served commit (refinement (u))', async () => {
+    const f = fakeLoaders();
+    f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(treeOk({ commit: COMMIT_B }))));
+    const { container } = open('/docs/demo/specs/a.md', f);
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    fireEvent.click(exportButton() as HTMLElement);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+    await waitFor(() => expect(container.querySelector('code.docs-truth-commit')?.getAttribute('title')).toBe(COMMIT_B));
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it("a leaf's actions read View on GitHub, Share, Export, Open committed version, in that order (M4.SH8)", async () => {
     const tree = treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holder() });
     open('/docs/demo/specs/a.md?ref=main', fakeLoaders({ tree: okTree(tree) }));
