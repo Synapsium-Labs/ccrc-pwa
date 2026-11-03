@@ -561,12 +561,11 @@ describe('two saves of one slot at once (review 1389 F2)', () => {
 });
 
 /** One save with a failure planted after the gate, under the scan: answers the save and the scan's hits. */
-async function savedUnderScan(plant: (r: Rig, id: number, value: string) => void | Promise<void>) {
+async function savedUnderScan(plant: (r: Rig, id: number, value: string) => void | Promise<void>, value = mark()) {
   const out = captureConsole();
   const r = await rig();
   await r.stepUp();
   const id = raiseSecret(r);
-  const value = mark();
   const sock = listen(r);
   await sock.waiting(() => true);
   await plant(r, id, value);
@@ -617,6 +616,22 @@ describe('after the value is stored, every failure says so in one word (review 1
     expect(body(t.res)['error']).toBe(STORED);
     expect(readFileSync(t.valueFile, 'utf8')).toBe(t.value);
     expect(t.r.coord.itemById(t.id)?.state).toBe('open');
+    expect(t.hits()).toEqual([]);
+  });
+
+  it('the same, with a value too short for the masker to hide: nothing of it leaks either (the egress mask cannot cover it)', async () => {
+    const short = `SM-${mark().slice(-9)}`;
+    expect(Buffer.byteLength(short)).toBeLessThan(RUN_MIN_BYTES);
+    const t = await savedUnderScan((r) => {
+      const ingest = r.masker.ingestSecret.bind(r.masker);
+      vi.spyOn(r.masker, 'ingestSecret').mockImplementation((lane, v) => {
+        r.coord.db.prepare("UPDATE runs SET state = 'done' WHERE program = 'prog-a'").run();
+        return ingest(lane, v);
+      });
+    }, short);
+    expect(body(t.res)['error']).toBe(STORED);
+    expect(readFileSync(t.valueFile, 'utf8')).toBe(short);
+    expect(t.r.masker.maskText(short)).toBe(short);
     expect(t.hits()).toEqual([]);
   });
 
