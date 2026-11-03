@@ -1,6 +1,6 @@
 // D-7865 (#1565): the orphan-worktree beat hands the disk alarm's held block to the sweep as its pressure mode, reading
-// it on every pass. The beat is built over a fake port set; an empty census writes no row. The watch.ts construction
-// pin is added with the line that passes the block.
+// it on every pass. The beat is built over a fake port set; an empty census writes no row. A source pin on watch.ts,
+// built on the scan parser, holds that the construction passes the block as its last argument.
 import { describe, it, expect } from 'vitest';
 import { OrphanTreeBeat } from '../src/orphanTreeBeat.js';
 import { ORPHAN_CENSUS_PRESSURE_MS } from '../src/orphanTreeLane.js';
