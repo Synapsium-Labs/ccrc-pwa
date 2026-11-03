@@ -287,3 +287,5 @@ files alone; that proof is required with the handoff.
 
 W3-M38 is to read: "Add a journal rewrite, truncate, rename or remove caller other than the tail heal and `compactJournal`, or drop a
 carry rule", with its rows `delegation-wave3.integration.test.ts`'s closed list and W4-C6..C8.
+
+CI fix (14267): the store's delegation-method census goes from seven to nine with this PR's two retention methods; PR4's run read had made it seven after this plan was written.
