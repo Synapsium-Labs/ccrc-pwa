@@ -183,12 +183,13 @@ describe('centralised-update wave 14: the halt rule, the move predicates and the
     expect(DETACH_LITERAL.test("caps.includes('detach')")).toBe(true);
     expect(DETACH_LITERAL.test('carries no `detach` cap'), 'a backticked prose mention').toBe(false);
     // The runner's own option is set aside, line by line; a cap copy in the same file is still seen.
-    expect(ALL.map(rel)).toContain('pwa/src/lib/markdownRunner.ts');
-    expect(DETACH_LITERAL.test(codeOnly(path.join(ccrcRoot, 'pwa/src/lib/markdownRunner.ts'))), 'the runner spells its option').toBe(true);
+    expect(ALL.map(rel)).toContain(RUNNER);
+    expect(DETACH_LITERAL.test(codeOnly(path.join(ccrcRoot, RUNNER))), 'the runner spells its option').toBe(true);
     expect(DETACH_LITERAL.test(capLines(RUNNER, "if (abortRunning === 'detach') {\n  abortRunning: 'detach',")), 'the option is set aside').toBe(false);
     expect(DETACH_LITERAL.test(capLines(RUNNER, "if (abortRunning === 'detach') {\ncaps.includes('detach')")), 'a cap copy beside it is not').toBe(true);
     // No other file is set aside: a line there that names both the option and the quoted word is still seen.
     expect(DETACH_LITERAL.test(capLines('shared/x.ts', "caps.includes('detach') && abortRunning")), 'a line naming both, in any other file').toBe(true);
+    expect(DETACH_LITERAL.test(capLines('pwa/src/other/markdownRunner.ts', "caps.includes('detach') && abortRunning")), 'a near-miss path is another file').toBe(true);
   });
 
   it('DETACH_CAP is declared, and the word quoted, in shared/update-move.ts alone — dispatch.ts re-exports it', () => {

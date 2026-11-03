@@ -124,8 +124,9 @@ describe('M4.H14: what the check refuses (each leaves the block plain)', () => {
 });
 
 describe('M4.H14: the check is one linear pass', () => {
-  // One counted step covers at most 7 characters: a loop turn counts 1, and it consumes `</span>` (7) at most; an entity
-  // is 6 at most, an opener 21 or more for 1 plus its class length (6 at least), and any other turn 1 character.
+  // In the walked input, one counted step covers at most 7 characters: a loop turn counts 1, and it consumes `</span>`
+  // (7) at most; an entity is 6 at most, an opener 21 or more for 1 plus its class length (6 at least), and any other
+  // turn 1 character. The unterminated case's last, refused opener is 1 step for its 18 characters; the margin holds it.
   const MOST_CHARS_PER_STEP = 7;
   const steps = (html: string): number => {
     const s = { n: 0 };

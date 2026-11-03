@@ -173,12 +173,16 @@ describe('M4.H20: the worker-side LRU', () => {
     const a = createHighlightAnswerer(one.h);
     for (const id of [25, 26]) posts(a, { id, lang: 'ts', code: 'big' });
     expect(one.calls).toEqual(['big']);
-    // Four answers of a quarter of the bound each (together at most the bound) all stay held, the first included.
-    const quarter = Math.floor(HIGHLIGHT_CACHE_MAX_CHARS / 4);
-    const four = fake(() => 'x'.repeat(quarter));
-    const b = createHighlightAnswerer(four.h);
-    for (const code of ['w0', 'w1', 'w2', 'w3', 'w0', 'w1', 'w2', 'w3']) posts(b, { id: 27, lang: 'ts', code });
-    expect(four.calls).toEqual(['w0', 'w1', 'w2', 'w3']);
+    // Sixteen answers each under the per-block HTML cap, together a character or so short of the bound, all stay held,
+    // the first included: this half holds whatever order the answerer caches and refuses in.
+    const parts = 16;
+    const each = Math.floor((HIGHLIGHT_CACHE_MAX_CHARS - 1) / parts);
+    expect(each).toBeLessThanOrEqual(MD_HIGHLIGHT_MAX_HTML_CHARS);
+    const many = fake(() => 'x'.repeat(each));
+    const b = createHighlightAnswerer(many.h);
+    const codes = Array.from({ length: parts }, (_, i) => `w${i}`);
+    for (const code of [...codes, ...codes]) posts(b, { id: 27, lang: 'ts', code });
+    expect(many.calls).toEqual(codes);
   });
 });
 
