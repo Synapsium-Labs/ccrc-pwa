@@ -39,7 +39,7 @@ import { SessionScreen } from './screens/SessionScreen';
 import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
 import { SettingsScreen } from './screens/settings/SettingsFrame';
 import { ProgrammeScreen } from './ledgers/ProgrammeScreen';
-import { ItemRouteAt, WaitingRoute } from './ledgers/WaitingRoutes';
+import { ItemListColumn, ItemRouteAt, WaitingRoute } from './ledgers/WaitingRoutes';
 import { ShellFrame } from './skins/frame';
 import { SKIN_SETS } from './skins';
 import { useFleetStore } from './stores/fleet';
@@ -192,7 +192,8 @@ export function App(): ReactNode {
       <SettingsDataProvider active={settings}>
       {authLost && <LoginScreen />}
       {blocked && <BlockScreen />}
-      <ShellFrame set={set} view={view} detailRef={detail}>
+      <ShellFrame set={set} view={view} detailRef={detail}
+                  {...(route === 'item' ? { nav: (fleet: ReactNode) => <ItemListColumn param={at!.param} fleet={fleet} /> } : {})}>
         {/* THE RESUME BANNER ON EVERY ROUTE (accounts plan Task A23, D-7871 (3); spec §6.2): a sign-in this session
             started that waits for its code. The fleet's banner stack shows it on a desk and on a phone's fleet view;
             here, the top of the detail pane, on a phone's other views, so one instance is on screen at a time. */}

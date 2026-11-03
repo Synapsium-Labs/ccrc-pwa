@@ -3,7 +3,8 @@
 // (test/waiting-routes.test.tsx, item-view.test.tsx, ledger-words.test.ts) pin the markup, the order and the words; this file
 // holds what they cannot: at 360, 390, 900, 1280 and 1920 in both skins, the way back is drawn (Step 0 measured it hidden from
 // 900 up, by the shell's `.shell-detail .back-btn` rule, and a bare chevron below), previous and next step through the list
-// the item was opened from, the list stays beside the item from 1280, the recommended option carries its mark, every
+// the item was opened from, from 900 the list stays beside the item in the frame's left column in place of the fleet (the
+// coordinator's ruling: as the fleet stays beside an open session), the recommended option carries its mark, every
 // control of the strip clears the 44 px tap floor under a coarse pointer, and nothing scrolls sideways or throws.
 //
 // The fixture is two programmes: `prog-b` holds the blocking decide item (six options, the recommendation on the sixth, a long
@@ -88,7 +89,8 @@ const CROWD = [...ITEMS, ...Array.from({ length: 100 }, (_, i) => item(100 + i, 
 
 const SKINS = [REFINED, INSTRUMENT] as const;
 const WIDTHS = [360, 390, 900, 1280, 1920] as const;
-const BESIDE_FROM = 1280;
+/** From here the frame shows two columns, and on the item route its left one holds the list the item was opened from. */
+const BESIDE_FROM = 900;
 
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -181,19 +183,21 @@ describe.each(SKINS)('moving between items in %s', (skin) => {
       try {
         const shots = process.env['CCRC_SHOTS'];
         if (shots !== undefined && shots !== '') await page.screenshot({ path: `${shots}/item-nav-${skin}-${width}.png`, fullPage: true });
-        const beside = await drawn(page, '.wl-beside');
-        expect(beside, 'the list beside the item').toBe(width >= BESIDE_FROM);
+        const beside = await drawn(page, '.shell-nav .wl-beside');
+        expect(beside, 'the list beside the item, in the left column').toBe(width >= BESIDE_FROM);
+        // The fleet column is not in the left column while the list is: one column, one list.
+        expect(await page.locator('.shell-nav .fleet').count(), 'the fleet column beside the item').toBe(width >= BESIDE_FROM ? 0 : 1);
         if (beside) {
           const geo = await page.evaluate(() => {
             const list = document.querySelector('.wl-beside')!.getBoundingClientRect();
-            const it = document.querySelector('.wl-route-item')!.getBoundingClientRect();
+            const it = document.querySelector('.shell-detail .wl-route')!.getBoundingClientRect();
             const current = document.querySelector('.wl-beside .wl-item[aria-current="page"]')?.getAttribute('data-item') ?? null;
-            return { side: list.right <= it.left + 0.5, top: Math.abs(list.top - it.top) < 2, current };
+            return { side: list.right <= it.left + 0.5, top: list.top <= it.bottom && it.top <= list.bottom, current };
           });
-          expect(geo, 'the list is to the left of the item, level with it, the open item marked').toEqual({ side: true, top: true, current: '1' });
+          expect(geo, 'the list is to the left of the item, beside it, the open item marked').toEqual({ side: true, top: true, current: '1' });
           await page.click('.wl-beside .wl-item[data-item="3"]');
           await page.waitForFunction(() => location.pathname === '/waiting/3');
-          expect(await drawn(page, '.wl-beside')).toBe(true);
+          expect(await drawn(page, '.shell-nav .wl-beside')).toBe(true);
           await page.click('.wl-beside .wl-item[data-item="1"]');
           await page.waitForFunction(() => location.pathname === '/waiting/1');
         }

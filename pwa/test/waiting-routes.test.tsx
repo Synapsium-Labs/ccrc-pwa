@@ -6,7 +6,7 @@ import { ApiError } from '../src/lib/apiError';
 import { api } from '../src/lib/api';
 import { createFleetStore } from '../src/stores/fleet';
 import { ROUTES, matchRoute } from '../src/lib/routes';
-import { ItemRoute, ItemRouteAt, WaitingRoute, itemPath } from '../src/ledgers/WaitingRoutes';
+import { ItemListColumn, ItemRoute, ItemRouteAt, WaitingRoute, itemPath } from '../src/ledgers/WaitingRoutes';
 import { refetchWaiting } from '../src/ledgers/waitingStore';
 import { fleetSession } from './fleetFixture';
 import { MIN, NOW, itemView, runRow, waitingView } from './ledgersFixture';
@@ -296,16 +296,15 @@ describe('moving between items (plan PL9; spec §2 "Moving between items", D23)'
     expect(here()).toBe('/waiting');
   });
 
-  /** A screen `width` wide, as the media queries the page asks read it. */
-  const widthIs = (width: number) => vi.stubGlobal('matchMedia', (q: string) => {
-    const min = /min-width:\s*(\d+)px/.exec(q);
-    return { matches: min !== null && width >= Number(min[1]), media: q, onchange: null,
-      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false };
-  });
+  /** The column the frame draws beside the item on a desk (`ItemListColumn`), at `url`, with a stand-in for the fleet column. */
+  const columnAt = (url: string, id: number) => {
+    history.replaceState(null, '', url);
+    render(<ItemListColumn param={String(id)} store={rig()} fleet={<section aria-label="Fleet stand-in" />} />);
+  };
 
-  it('on a wide screen the list stays beside the item: the list it was opened from, the open item marked', () => {
-    widthIs(1280);
-    openAt(`/waiting/2?from=${encodeURIComponent('waiting:prog-b')}`, 2);
+  it('on a desk the list stays beside the item: the list it was opened from, the open item marked, in place of the fleet', () => {
+    columnAt(`/waiting/2?from=${encodeURIComponent('waiting:prog-b')}`, 2);
+    expect(screen.queryByRole('region', { name: 'Fleet stand-in' })).toBeNull();
     const beside = screen.getByRole('complementary', { name: 'The list beside this item' });
     const rows = within(beside).getAllByRole('button').filter((b) => b.hasAttribute('data-item'));
     expect(rows.map((r) => r.getAttribute('data-item'))).toEqual(['3', '2']); // prog-b's share, in the list's order
@@ -316,19 +315,25 @@ describe('moving between items (plan PL9; spec §2 "Moving between items", D23)'
   });
 
   it('the combined list beside an item is every programme\'s share, in the combined order', () => {
-    widthIs(1920);
-    openAt('/waiting/4', 4);
+    columnAt('/waiting/4', 4);
     const beside = screen.getByRole('complementary', { name: 'The list beside this item' });
     expect(within(beside).getAllByRole('button').filter((b) => b.hasAttribute('data-item')).map((r) => r.getAttribute('data-item')))
       .toEqual(['3', '2', '4', '1']);
   });
 
-  it.each([390, 900, 1279])('at %ipx the item is alone, with its way back and its steps', (width) => {
-    widthIs(width);
-    const nav = openAt('/waiting/2', 2);
+  it('an item with no place in a list (recently cleared, gone, or no list heard yet) leaves the fleet in the column', () => {
+    columnAt('/waiting/9', 9);
+    expect(screen.getByRole('region', { name: 'Fleet stand-in' })).toBeTruthy();
     expect(screen.queryByRole('complementary', { name: 'The list beside this item' })).toBeNull();
-    expect(within(nav).getByRole('button', { name: 'Back to Waiting on you' })).toBeTruthy();
-    expect(within(nav).getByText('2 of 4')).toBeTruthy();
+    cleanup();
+    history.replaceState(null, '', '/waiting/2');
+    render(<ItemListColumn param="2" store={mk()} fleet={<section aria-label="Fleet stand-in" />} />);
+    expect(screen.getByRole('region', { name: 'Fleet stand-in' })).toBeTruthy();
+  });
+
+  it('the item page itself draws no second list: the strip and the item only', () => {
+    openAt('/waiting/2', 2);
+    expect(screen.queryByRole('complementary', { name: 'The list beside this item' })).toBeNull();
   });
 
   it('the combined list opens an item with its side rail\'s filter in the link, and keeps the filter in its own URL', () => {

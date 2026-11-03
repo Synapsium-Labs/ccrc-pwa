@@ -12,7 +12,7 @@
 // reads them the same way).
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { BackButton, Button, useMediaQuery } from '@ccrc/ui';
+import { BackButton, Button } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { programmeTitle } from '../fleet/runWords';
@@ -24,7 +24,7 @@ import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { ItemView } from './ItemView';
 import {
   COMBINED_LIST, NO_FRAME_WORD, fromWord, groupByProgramme, itemPlace, listGroups, listOfFromWord, placeWords, programmeIsLive,
-  questionRows, type ItemList, type ItemPlace, type ProgrammeGroup,
+  questionRows, type ItemList, type ItemPlace,
 } from './ledgerWords';
 import { ListGroup, WaitingScreen } from './WaitingScreen';
 import { refetchWaiting } from './waitingStore';
@@ -109,8 +109,9 @@ function useOpenedFrom(): ItemList {
 }
 
 /** The item's way back to the list it was opened from, AT EVERY WIDTH (plan PL9; spec §2, D23): labelled with that
- *  list's name, and not the shell's back chevron, which a desk hides because the fleet beside the pane is the way out of a
- *  screen; the fleet is not the way back to this list. */
+ *  list's name, and not the shell's back chevron, which a desk hides because the column beside the pane is the way out of a
+ *  screen. A phone has no such column, and on a desk the column holds the list's rows but not its page (the filter's summary,
+ *  the programme view's Goals), so this is the way to that page. */
 function ListBack({ list, runs }: { list: ItemList; runs: readonly RunSummary[] | null }): ReactNode {
   const name = list.at === 'programme' ? programmeTitle(list.programme, runs ?? []) : 'Waiting on you';
   return (
@@ -141,23 +142,29 @@ function ItemNav({ list, place, runs }: { list: ItemList; place: ItemPlace | nul
   );
 }
 
-/** The width from which the list an item was opened from stays beside it (plan PL9; spec §2, D23): the shell's own
- *  list column (`--shell-list-col`, shell.css) beside the item, which still has room for its card. Below it the item is alone
- *  with its way back and its steps. Mounted by the query, as the frame mounts its width-gated parts, never hidden by CSS. */
-export const BESIDE_QUERY = '(min-width: 1280px)';
-
-/** The list beside an open item: the groups the list it was opened from draws (`listGroups`, the same groups its steps read),
- *  each as the list draws it, with the open item marked current. A row opens its item in the same list. */
-function ListBeside({ list, groups, currentId, runs, now }: {
-  list: ItemList; groups: readonly ProgrammeGroup[]; currentId: number; runs: readonly RunSummary[] | null; now: number;
-}): ReactNode {
+/** The list an item was opened from, drawn in the frame's left column beside the open item on a desk, in place of the fleet
+ *  (plan PL9; spec §2, D23): the fleet stays beside an open session the same way, and the fleet is one tap away in the
+ *  navigation. `app.tsx` hands it to the frame's nav slot on the item route alone; the frame draws it only at the widths that
+ *  show two columns, so a phone keeps its one screen. The groups are the ones that list draws (`listGroups`), the same groups
+ *  its steps read, each drawn as the list draws it, with the open item marked current. An item with no place in a list (not
+ *  heard yet, recently cleared, or gone) has no list to stay beside, and the column shows `fleet`, what it shows elsewhere. */
+export function ItemListColumn({ param, fleet, store = useFleetStore }: { param: string | null; fleet: ReactNode; store?: FleetStore }): ReactNode {
+  const view = store((s) => s.waiting);
+  const { sessions, runs } = useHeard(store);
+  const list = useOpenedFrom();
+  const id = Number(param);
+  if (view === null || param === null || !Number.isSafeInteger(id)) return fleet;
+  const groups = groupByProgramme(view.items, questionRows(sessions ?? [], runs ?? []));
+  const place = itemPlace(id, list, groups);
+  if (place === null) return fleet;
   const hues = fleetHues(runs ?? []);
+  const now = Date.now();
   return (
     <aside className="wl wl-beside" aria-label="The list beside this item">
-      {listGroups(list, groups).map((g) => (
-        <ListGroup key={g.program ?? ''} group={g} runs={runs} now={now} currentId={currentId}
+      {listGroups(place.list, groups).map((g) => (
+        <ListGroup key={g.program ?? ''} group={g} runs={runs} now={now} currentId={id}
                    hue={g.program === null ? null : hues.get(g.program) ?? null}
-                   onOpenItem={(id) => navigate(itemPath(id, list))} onOpenSession={(id) => navigate(sessionPath(id))} />
+                   onOpenItem={(next) => navigate(itemPath(next, place.list))} onOpenSession={(sid) => navigate(sessionPath(sid))} />
       ))}
     </aside>
   );
@@ -178,7 +185,6 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number; store?: F
   const { sessions, runs } = useHeard(store);
   const unavailable = useUnavailable(store, view !== null);
   const list = useOpenedFrom();
-  const wide = useMediaQuery(BESIDE_QUERY);
   if (view === null) {
     return (
       <div className="wl"><ItemNav list={list} place={null} runs={runs} />
@@ -193,14 +199,10 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number; store?: F
   // The list's own groups, from the one grouping every list draws (`groupByProgramme`), so the steps follow the drawn order.
   const groups = groupByProgramme(view.items, questionRows(sessions ?? [], runs ?? []));
   const place = itemPlace(id, list, groups);
-  // Beside the item only when it has a place in a list: a recently cleared item has no list to stay beside.
-  const beside = wide && place !== null;
   return (
-    <div className="wl-route" data-beside={beside ? 'list' : 'none'}>
-      {beside && <ListBeside list={place.list} groups={groups} currentId={id} runs={runs} now={Date.now()} />}
-      <div className="wl-route-item">
-        <ItemNav list={list} place={place} runs={runs} />
-        <ItemView item={item} now={Date.now()} programmeLive={programmeIsLive(item.program, runs)}
+    <div className="wl-route">
+      <ItemNav list={list} place={place} runs={runs} />
+      <ItemView item={item} now={Date.now()} programmeLive={programmeIsLive(item.program, runs)}
                   programme={{ name: programmeTitle(item.program, runs ?? []), hue: fleetHues(runs ?? []).get(item.program) ?? null }}
                   onTick={async (answer) => {
                     await (answer === undefined ? api.tickItem(item.id) : api.tickItem(item.id, answer));
@@ -211,7 +213,6 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number; store?: F
                     await refetchWaiting(store);
                     navigate(listPath(place?.list ?? list));
                   }} />
-      </div>
     </div>
   );
 }
