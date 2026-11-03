@@ -1151,6 +1151,9 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/runs/:id/items': /items: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
     '/api/coord/shadow-journal': /rows: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(deps\.coord\.shadowVerdicts/,
     '/api/feed': /events: \(deps\.masker \?\? SHAPE_ONLY_MASKER\)\.maskDeep\(/,
+    // The sign-in's status (accounts plan Task A21, D-7792): the helper's file is session-writable, so after N2 the answer
+    // is masked and one the mask changed is refused `auth-url-untrusted`.
+    '/api/accounts/:id/auth': /authAnswerMasked\(verdict\.answer, deps\.mask\)/,
   };
   /** Carries no session-derived text: path → why. */
   const EXEMPT: Record<string, string> = {
