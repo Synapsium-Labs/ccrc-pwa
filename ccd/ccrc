@@ -2465,7 +2465,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|coordination-snapshot|logs|passwd|expose|token|restamp|version|watchdog|history|test}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|coordination-snapshot|settings|logs|passwd|expose|token|restamp|version|watchdog|history|test}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -2688,6 +2688,17 @@ already running).
             checkpoint and coord.db (and its WAL/SHM) from a valid v1 snapshot, as
             one set; refuses unless ccrc.service is measured inactive
             recover                finish an interrupted restore from its marker
+  settings  print what this box's seven settings read as (CCRC_BACKUP_KEEP,
+            CCRC_BACKUP_DATA_KEEP, CCRC_VERSIONS_KEEP, CCRC_UPDATE_HEALTH_S,
+            CCRC_UPDATE_DEADLINE_MS, CCRC_RELEASE_BASE_URL and
+            CCRC_MODELS_ADVANCE_BUDGET_S): the value the act uses, where it came
+            from (the environment, ccrc.env, an empty ccrc.env line or the default)
+            and, when the act would refuse it, fall back or clamp, why; then the
+            deadline's three readings, the backups kept and the disk. [--json]
+            prints one JSON document; [--write] records it as
+            ~/.ccrc/box-settings.json (mode 0600, temp and rename) and prints
+            nothing; [--from timer] marks the timer's own run. Read-only: it never
+            prunes and never takes ~/.ccrc/update.lock
   logs      this box's service journal: journalctl --user -u ccrc.service
             (or ccrc-agent.service when ccrc.env records CCRC_ROLE=fleet).
             Exit 3: the install completed but the trailing doctor failed
@@ -2897,6 +2908,19 @@ _upd_redact() {
   fi
   s+="$cut"
   printf '%s' "$s"
+}
+# `_upd_url_origin <url>` — a URL's scheme and host, nothing else (D-6914): `_upd_redact` first (so the userinfo goes by ITS rules,
+# none restated here), then the `<scheme>://` if there is one, then the authority up to the first '/', '?' or '#'. A path, a query
+# and a fragment are gone, a port stays: `https://user:secret@mirror.example.invalid/r?token=x` reads `https://mirror.example.invalid`
+# and the scheme-less `user:secret@mirror.example.invalid/r` reads `mirror.example.invalid`. `ccrc settings` shows a mirror this way.
+# A raw '#', '?' or '/' inside a password (a KNOWN LIMIT of `_upd_redact`) still cuts the authority early, so what is left of it is shown.
+_upd_url_origin() {
+  local s sre='^[A-Za-z][A-Za-z0-9+.-]*://' scheme="" LC_ALL=C
+  s="$(_upd_redact "${1:-}")"
+  if [[ "$s" =~ $sre ]]; then scheme="${BASH_REMATCH[0]}"; s="${s#"$scheme"}"; fi
+  s="${s%%[/?#]*}"
+  s="${s##*@}"   # a host never holds '@': this is the projection's own definition of "host", not a userinfo rule, and it catches what `_upd_redact` leaves (its KNOWN LIMITS)
+  printf '%s%s' "$scheme" "$s"
 }
 # `_ccrc_die` — a bare refusal: this run cannot continue. Always exits 1 —
 # never 2, which is reserved for a USAGE error (see `_ccrc_usage_die` below).
@@ -25997,6 +26021,183 @@ cmd_backup() {
   _bak_prune
 }
 
+# ── cmd_settings — what this box's settings read as (box settings view, D-6914, D-7861) ──
+# `ccrc settings [--json] [--write] [--from timer]` prints, and with `--write` records as ~/.ccrc/box-settings.json, what each of
+# the box's seven settings reads as: the value the act uses, where it came from (`_ccrc_knob`'s `environment`, `file`, `empty` or
+# `default`), and, when the act would refuse the value or fall back, the act's own sentence. It reads each setting through the SAME
+# resolver its act calls (`_bak_keep`, `_bak_data_keep`, `_ver_keep`, `_upd_health_s`, `_upd_deadline_ms`, `_upd_release_base`,
+# `_models_budget`), so the view cannot say what the act does not do, and it asks them through a literal `case`, never a variable
+# key, so the settings census's variable-key rows stay as they were. The seven are this verb's own list (D-7861), not a walk of
+# CCRC_SETTINGS. Three states: `ok` (the act would use the value), `refused` (it would refuse it, fall back or clamp: the value shown
+# is what was written) and `unmeasured` (the reader could not decide it: a ccrc.env it cannot read is never "unset", D-6365).
+# The release base is shown as `default`, or `custom` with its scheme and host only (`_upd_url_origin`). Every value and sentence is
+# redacted (`_upd_redact`), turned to printable ASCII and cut at 480 bytes, so no home path, userinfo or credential is recorded.
+# READ-ONLY: it never prunes, never takes update.lock and writes nothing but its own file, by temp and rename with the writers'
+# idiom (`_tmp_guard`, so a die or a SIGTERM through the EXIT chain leaves no `.tmp.$$`); it sets no trap of its own. It answers
+# rc 0 whenever it answered; a write that fails is a die (rc 1), never a half-written file. `--from timer` records `reader: timer`
+# for the timer's own run, else `shell`: an interactive run can disagree with the card, and says so.
+BOX_SETTINGS_KEYS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S)
+BOX_SETTINGS_JSON="$HOME/.ccrc/box-settings.json"
+
+# `_set_text <text>` — redacted, ASCII, at most 480 bytes: `_upd_redact` first, then this file's three non-ASCII marks spelled in
+# ASCII, then each byte outside 0x20-0x7E a `?` under LC_ALL=C, then a cut at 477 bytes and `...` (D-6919: the spec's validator takes
+# printable ASCII). A subshell, so its LC_ALL never leaks. `_upd_json_str` is the 200-byte cousin of this and is held byte for byte by
+# a pin (ccrc-sweep-deliberate-stop's X0c), so it is not widened here. `_set_json <text>` is that text as a JSON string (`""` when empty).
+_set_text() (
+  s="$(_upd_redact "${1:-}")"
+  s="${s//—/-}"; s="${s//…/...}"; s="${s//→/->}"
+  LC_ALL=C
+  s="${s//[! -~]/?}"
+  [ "${#s}" -le 480 ] || s="${s:0:477}..."
+  printf '%s' "$s"
+)
+_set_json() {
+  local s bs='\' q='"'
+  s="$(_set_text "${1:-}")"
+  s="${s//"$bs"/"$bs$bs"}"; s="${s//"$q"/"$bs$q"}"
+  printf '"%s"' "$s"
+}
+# `_set_du <dir>` — the bytes under <dir>, `du -sb` under the box's deadline and at the lowest priority; rc 1 when it could not say.
+_set_du() {
+  local out
+  if command -v nice >/dev/null 2>&1; then out="$(_plat_timeout 20 nice -n 19 du -sb -- "$1" 2>/dev/null)" || return 1
+  else out="$(_plat_timeout 20 du -sb -- "$1" 2>/dev/null)" || return 1; fi
+  out="${out%%[[:space:]]*}"
+  [[ "$out" =~ ^[0-9]{1,15}$ ]] || return 1
+  printf '%s' "$out"
+}
+# `_set_df` — `<available bytes> <size bytes>` of the filesystem holding $HOME, from `df -Pk`; rc 1 when it could not say, or when a
+# figure would pass a safe integer (a 1 KiB block count of 14 digits or more).
+_set_df() {
+  local out line re='^[^[:space:]]+[[:space:]]+([0-9]+)[[:space:]]+[0-9]+[[:space:]]+([0-9]+)[[:space:]]+[0-9]+%[[:space:]]'
+  if command -v nice >/dev/null 2>&1; then out="$(_plat_timeout 10 nice -n 19 df -Pk -- "$HOME" 2>/dev/null)" || return 1
+  else out="$(_plat_timeout 10 df -Pk -- "$HOME" 2>/dev/null)" || return 1; fi
+  line="${out##*$'\n'}"
+  [[ "$line" =~ $re ]] || return 1
+  [ "${#BASH_REMATCH[1]}" -le 13 ] && [ "${#BASH_REMATCH[2]}" -le 13 ] || return 1
+  printf '%s %s' "$(( BASH_REMATCH[2] * 1024 ))" "$(( BASH_REMATCH[1] * 1024 ))"
+}
+
+cmd_settings() {
+  local json=0 write=0 k rc val st from why now sj="" tx="" sep="" dl_plain dl_min dl_max
+  local s_ok=ok s_refused=refused s_unmeasured=unmeasured f_env=environment f_file=file f_empty=empty f_default=default
+  local r_timer=timer r_shell=shell reader
+  reader="$r_shell"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --json) json=1 ;;
+      --write) write=1 ;;
+      --from) [ "${2:-}" = "$r_timer" ] || _ccrc_usage_die "${2:-$1}"; reader="$r_timer"; shift ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+    shift
+  done
+  now="$(date +%s 2>/dev/null)"
+  [[ "$now" =~ ^[1-9][0-9]{0,10}$ ]] || _ccrc_die "settings: the clock could not be read — nothing was recorded"
+  for k in "${BOX_SETTINGS_KEYS[@]}"; do
+    st="$s_ok"; val=""; why=""; rc=0
+    case "$k" in
+      CCRC_BACKUP_KEEP)       _bak_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY" ;;
+      CCRC_BACKUP_DATA_KEEP)  _bak_data_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY" ;;
+      CCRC_VERSIONS_KEEP)     _ver_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY" ;;
+      CCRC_UPDATE_HEALTH_S)   _upd_health_s; rc=$?; val="$UPD_HEALTH_S"; why="$UPD_HEALTH_WHY" ;;
+      CCRC_UPDATE_DEADLINE_MS)
+        # In THIS shell, so KNOB, KNOB_FROM and KNOB_WHY of the plain reading survive; rc 1 with a KNOB_WHY is the file that cannot be
+        # read (unmeasured), rc 1 without one is a value that is not canonical digits (refused: the acts read the printed 900000).
+        val="$(_upd_deadline_ms)" || :
+        _upd_deadline_ms >/dev/null; rc=$?
+        if [ "$rc" -ne 0 ]; then
+          if [ -n "$KNOB_WHY" ]; then rc=2; why="$KNOB_WHY"
+          else rc=1; why="CCRC_UPDATE_DEADLINE_MS is not a positive whole number of milliseconds in canonical digits (at most 15, no lead zero), so the acts read $val"; fi
+        fi ;;
+      CCRC_RELEASE_BASE_URL)
+        _upd_release_base >/dev/null 2>&1 || { rc=2; why="$KNOB_WHY"; }
+        if [ "$rc" -eq 0 ]; then
+          case "$KNOB_FROM" in "$f_default"|"$f_empty") val="$f_default" ;; *) val="custom $(_upd_url_origin "$KNOB")" ;; esac
+        fi ;;
+      CCRC_MODELS_ADVANCE_BUDGET_S)
+        _models_budget; rc=$?; val="$MODELS_BUDGET_S"; why="$MODELS_BUDGET_WHY"
+        case "$rc" in 3) rc=1 ;; esac ;;   # a clamp is a refusal here: the value shown is what was written, and the sentence says what the step uses
+      *) rc=2; why="$k has no resolver in this verb" ;;
+    esac
+    # The three keeps answer rc 1 for a refusal AND for an unreadable ccrc.env; only the second leaves KNOB_FROM empty (`_ccrc_knob`).
+    case "$k" in CCRC_BACKUP_KEEP|CCRC_BACKUP_DATA_KEEP|CCRC_VERSIONS_KEEP) [ "$rc" -eq 0 ] || [ -n "$KNOB_FROM" ] || rc=2 ;; esac
+    case "$rc" in 0) st="$s_ok"; why="" ;; 1) st="$s_refused"; val="$KNOB" ;; *) st="$s_unmeasured" ;; esac
+    if [ "$st" = "$s_unmeasured" ]; then
+      from=""
+    else
+      case "$KNOB_FROM" in
+        "$f_env"|"$f_file"|"$f_empty"|"$f_default") from="$KNOB_FROM" ;;
+        *) st="$s_unmeasured"; from=""; why="$k was read from a source this verb does not know" ;;
+      esac
+    fi
+    if [ "$st" = "$s_ok" ]; then
+      sj+="$sep{\"key\":\"$k\",\"state\":\"$st\",\"value\":$(_set_json "$val"),\"from\":\"$from\"}"
+      tx+="$(printf '%-30s %s  (%s, %s)' "$k" "$(_set_text "$val")" "$from" "$st")"$'\n'
+    elif [ "$st" = "$s_refused" ]; then
+      sj+="$sep{\"key\":\"$k\",\"state\":\"$st\",\"value\":$(_set_json "$val"),\"from\":\"$from\",\"why\":$(_set_json "$why")}"
+      tx+="$(printf '%-30s %s  (%s, %s)' "$k" "$(_set_text "$val")" "$from" "$st"): $(_set_text "$why")"$'\n'
+    else
+      sj+="$sep{\"key\":\"$k\",\"state\":\"$st\",\"why\":$(_set_json "$why")}"
+      tx+="$(printf '%-30s %s' "$k" "$st"): $(_set_text "$why")"$'\n'
+    fi
+    sep=","
+  done
+  dl_plain="$(_upd_deadline_ms)" || :; dl_min="$(_upd_deadline_ms min)" || :; dl_max="$(_upd_deadline_ms max)" || :
+  tx+="deadline: plain ${dl_plain} ms, min ${dl_min} ms, max ${dl_max} ms"$'\n'
+  # ── the backups: the prune's own list, so a hand-made sibling is never counted; a root that cannot be listed is unmeasured, never 0
+  local bj bk=0 bd=0 bb d bwhy=""
+  if [ ! -e "$BOX_BACKUP_ROOT" ] && [ ! -L "$BOX_BACKUP_ROOT" ]; then
+    bb=0
+  elif [ -d "$BOX_BACKUP_ROOT" ] && [ -r "$BOX_BACKUP_ROOT" ] && [ -x "$BOX_BACKUP_ROOT" ]; then
+    _bak_list; bk=${#BAK_DIRS[@]}
+    for d in ${BAK_DIRS[@]+"${BAK_DIRS[@]}"}; do
+      if [ -f "$d/coord.db" ] && [ ! -L "$d/coord.db" ]; then bd=$((bd + 1)); fi
+    done
+    bb="$(_set_du "$BOX_BACKUP_ROOT")" || bwhy="~/ccrc-backups could not be measured (du did not answer in time, or failed)"
+  else
+    bwhy="~/ccrc-backups is not a readable directory"
+  fi
+  if [ -z "$bwhy" ]; then
+    bj="{\"state\":\"$s_ok\",\"kept\":$bk,\"withData\":$bd,\"bytes\":$bb}"
+    tx+="backups: kept $bk, $bd with coordination data, $bb bytes"$'\n'
+  else
+    bj="{\"state\":\"$s_unmeasured\",\"why\":$(_set_json "$bwhy")}"
+    tx+="backups: $s_unmeasured: $(_set_text "$bwhy")"$'\n'
+  fi
+  # ── the disk holding $HOME
+  local dj dfo dwhy="" avail size
+  dfo="$(_set_df)" || dwhy="the filesystem holding the home directory could not be measured (df did not answer in time, or failed)"
+  if [ -z "$dwhy" ]; then
+    avail="${dfo% *}"; size="${dfo#* }"
+    dj="{\"state\":\"$s_ok\",\"availBytes\":$avail,\"sizeBytes\":$size}"
+    tx+="disk: $avail bytes available of $size"$'\n'
+  else
+    dj="{\"state\":\"$s_unmeasured\",\"why\":$(_set_json "$dwhy")}"
+    tx+="disk: $s_unmeasured: $(_set_text "$dwhy")"$'\n'
+  fi
+  local doc="{\"v\":1,\"at\":$now,\"reader\":\"$reader\",\"settings\":[$sj],\"deadline\":{\"plainMs\":$dl_plain,\"minMs\":$dl_min,\"maxMs\":$dl_max},\"backups\":$bj,\"disk\":$dj}"
+  if [ "$write" -eq 1 ]; then
+    local dest="$BOX_SETTINGS_JSON" tmp
+    tmp="$dest.tmp.$$"
+    _tmp_guard "$tmp"
+    if { [ -d "${dest%/*}" ] || mkdir -p "${dest%/*}"; } 2>/dev/null \
+       && [ ! -d "$dest" ] \
+       && { ( umask 077; printf '%s\n' "$doc" > "$tmp" ); } 2>/dev/null \
+       && chmod 600 "$tmp" 2>/dev/null \
+       && mv -f -- "$tmp" "$dest" 2>/dev/null; then
+      :
+    else
+      rm -f -- "$tmp" 2>/dev/null
+      _ccrc_die "settings: could not write ~/.ccrc/box-settings.json — the last good file, if any, is unchanged"
+    fi
+  fi
+  [ "$json" -eq 0 ] || printf '%s\n' "$doc"
+  [ "$write" -eq 1 ] || [ "$json" -eq 1 ] || printf '%s' "$tx"
+  return 0
+}
+
 # ── cmd_coordination_snapshot — validate, restore or recover a coordination snapshot (delegation broker wave 3, O3) ──
 # `ccrc coordination-snapshot validate --from <timestamp-directory>` classifies a `~/ccrc-backups/<ts>/` directory by
 # `deploy/coordination-snapshot.mjs` (`v1`, `legacy`, `none`, `thinned`, `invalid`; exit 0, 0, 1, 1, 2; and a second line `data: yes|no`;
@@ -28480,6 +28681,7 @@ case "$VERB" in
   uninstall) cmd_uninstall "$@" ;;
   backup)  cmd_backup "$@" ;;
   coordination-snapshot) cmd_coordination_snapshot "$@" ;;
+  settings) cmd_settings "$@" ;;
   logs)    cmd_logs "$@" ;;
   passwd)  cmd_passwd "$@" ;;
   expose)  cmd_expose "$@" ;;

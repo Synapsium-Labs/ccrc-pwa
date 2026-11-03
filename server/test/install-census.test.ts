@@ -2182,6 +2182,17 @@ describe('the coordination snapshot helper: run from the installed tree, shipped
     for (const v of dispatch) expect(verbs, `dispatch verb ${v}`).toContain(v);
   });
 
+  it('`settings` (D-6914) is registered in all three places, right after coordination-snapshot, and is no installed file', () => {
+    const verbs = /^usage: \$PROG \{([^}]*)\}$/m.exec(CCRC)![1]!.split('|');
+    expect(verbs.filter((v) => v === 'settings'), 'one usage entry').toHaveLength(1);
+    expect(verbs.indexOf('settings')).toBe(verbs.indexOf('coordination-snapshot') + 1);
+    expect(CCRC.match(/^ {2}settings\) cmd_settings "\$@" ;;$/gm), 'one dispatch arm').toHaveLength(1);
+    expect(CCRC).toMatch(/^ {2}settings {2}print what this box's seven settings read as /m);
+    // The verb writes one file of its own, and no unit, binary or helper carries it: it is the verb that writes it.
+    expect(bodyOfFn('cmd_settings')).toMatch(/BOX_SETTINGS_JSON/);
+    expect([...placedBins(), ...placedUnits()].join(' ')).not.toMatch(/box-settings/);
+  });
+
   it('the backup prose names the manifest and both sidecars wherever it says what ~/ccrc-backups/<ts>/ holds', () => {
     const usageBackup = /^ {2}backup {4}take update's backup step standalone:[\s\S]*?\n {2}coordination-snapshot/m.exec(CCRC);
     expect(usageBackup, 'the usage prose for `backup` moved').not.toBeNull();
