@@ -19,7 +19,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { configDefaults } from 'vitest/config';
 import { loadConfigFromFile, type ConfigEnv, type Plugin, type PluginOption, type UserConfig } from 'vite';
 import { DEFAULT_CHROME, resolveChrome } from '../browser/harness';
-import { SLOW_FIRST, SlowFirstSequencer, slowFirst } from '../browser/slowFirst';
+import { FILE_MS, SLOW_FIRST, SlowFirstSequencer, balancedShard, slowFirst } from '../browser/slowFirst';
 
 const PWA = path.join(import.meta.dirname, '..');
 
@@ -73,6 +73,32 @@ describe('the hermetic run never collects the browser leg; the browser config co
     for (const name of SLOW_FIRST) expect(existsSync(path.join(PWA, 'browser', name)), name).toBe(true);
     const files = ['browser/a.browser.test.ts', ...[...SLOW_FIRST].reverse().map((n) => `browser/${n}`), 'browser/b.browser.test.ts'];
     expect(slowFirst(files, (f) => f)).toEqual([...SLOW_FIRST.map((n) => `browser/${n}`), 'browser/a.browser.test.ts', 'browser/b.browser.test.ts']);
+  });
+
+  // D-7746: CI runs the leg as `--shard=i/n`, and the sequencer splits it by measured file time, not by path hash.
+  it('every file FILE_MS names is a browser file, and the browser config\'s sequencer overrides vitest\'s shard split', () => {
+    expect(Object.keys(FILE_MS).length, 'FILE_MS is empty').toBeGreaterThan(0);
+    for (const name of Object.keys(FILE_MS)) expect(existsSync(path.join(PWA, 'browser', name)), name).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(SlowFirstSequencer.prototype, 'shard')).toBe(true);
+  });
+
+  it('balancedShard partitions the files: each lands in exactly one shard, an unnamed one included', () => {
+    const files = [...Object.keys(FILE_MS), 'not-in-the-table.browser.test.ts'].map((n) => `browser/${n}`);
+    for (const count of [1, 2, 3, 4]) {
+      const shards = Array.from({ length: count }, (_, i) => balancedShard(files, i + 1, count, (f) => f));
+      expect(shards.flat().sort(), `count ${count}`).toEqual([...files].sort());
+      for (const s of shards) expect(s.length, `count ${count}: an empty shard`).toBeGreaterThan(0);
+    }
+  });
+
+  it('balancedShard packs longest first onto the least-loaded shard, and keeps the order it was given', () => {
+    const times = { 'a.ts': 100, 'b.ts': 60, 'c.ts': 50, 'd.ts': 40, 'e.ts': 10 };
+    const files = ['e.ts', 'd.ts', 'c.ts', 'b.ts', 'a.ts'];
+    // a -> 1 (100); b -> 2 (60); c -> 2 (110); d -> 1 (140); e -> 2 (120)
+    expect(balancedShard(files, 1, 2, (f) => f, times)).toEqual(['d.ts', 'a.ts']);
+    expect(balancedShard(files, 2, 2, (f) => f, times)).toEqual(['e.ts', 'c.ts', 'b.ts']);
+    // A file the table does not name costs its median (50).
+    expect(balancedShard(['a.ts', 'new.ts', 'b.ts'], 2, 2, (f) => f, times)).toEqual(['new.ts', 'b.ts']);
   });
 
   it('vitest lists at least one file under the browser config, every one under browser/ and named *.browser.test.*', () => {

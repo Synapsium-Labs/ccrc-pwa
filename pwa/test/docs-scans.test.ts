@@ -876,3 +876,120 @@ describe('clause W5h-a, M7.12: R19\'s measurement page only reads', () => {
     expect(measureFindings(`${read(file)}\n${text}\n`, file)).toEqual([`${file} ${rule}`]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Clause W5 Share (M4.SH7; spec 2026-10-01 4.5, 4.16): one share door, and one clipboard writer under pwa/src/docs.
+// Across `pwa/src`, a call of `share` on the bare `navigator` (`navigator.share(…)`, `navigator?.share(…)`,
+// `navigator['share'](…)`,
+// through parentheses, `!` and casts) sits only in `docs/ShareSheet.tsx`; under `pwa/src/docs`, a call of a member
+// named `writeText` sits only in `docs/share.ts` (`copyText`, which Copy link, the truth line's copy commit and the
+// reader's copy op all call). `navigator.canShare(…)` is a capability probe, not a share, and is not counted. Share
+// adds no `postMessage` and no `message` listener: clause W8a's walk reads the Share files and finds none.
+// NOT EXHAUSTIVE. Known evasions it does not see: `navigator` held in a variable first (`const n = navigator;
+// n.share(x)`), destructuring (`const { share } = navigator; share(x)`), a computed key (`navigator[k](x)`),
+// `.call` / `.apply` / `.bind` (`navigator.share.call(navigator, x)`, and the same on `writeText`), `Reflect.apply`
+// (`Reflect.apply(navigator.share, navigator, [x])`), `window.navigator.share(x)` or `globalThis.navigator.share(x)`
+// (the owner is not the bare identifier), a `writeText` reached through an alias (`const w = clipboard.writeText;
+// w(t)`), and any other clipboard writer: `clipboard.write(…)` and `document.execCommand('copy')` are not counted.
+// Review lens 3 reads for those, and
+// docs-share-sheet.test.tsx's receiver case catches a detached call in the sheet itself.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** One door use: the file (relative to the scanned base, `/` separators) and which door. */
+interface DoorUse { file: string; door: 'share' | 'writeText' }
+
+/** Every `navigator.share(…)` call in one module, and, under `src/docs/`, every `….writeText(…)` call. */
+function shareDoorUses(source: string, file: string): DoorUse[] {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true,
+    file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const uses: DoorUse[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isCallExpression(n)) {
+      const callee = unwrap(n.expression);
+      const name = memberName(callee);
+      if (name === 'share' && (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee))) {
+        const owner = unwrap(callee.expression);
+        if (ts.isIdentifier(owner) && owner.text === 'navigator') uses.push({ file, door: 'share' });
+      }
+      if (name === 'writeText' && file.startsWith('src/docs/')) uses.push({ file, door: 'writeText' });
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return uses;
+}
+
+/** The door scan over every `.ts` and `.tsx` file under `<base>/src`: the files read, and each use as `<file> <door>`. */
+function shareDoorScan(base: string): { files: string[]; uses: string[] } {
+  const files = sourceFiles(path.join(base, 'src')).map((f) => path.relative(base, f).split(path.sep).join('/'));
+  const uses = files.flatMap((rel) => shareDoorUses(readFileSync(path.join(base, ...rel.split('/')), 'utf8'), rel));
+  return { files, uses: uses.map((u) => `${u.file} ${u.door}`) };
+}
+
+describe('clause W5 Share: one share door, and one clipboard writer under pwa/src/docs (M4.SH7; M4.T7 Share clause)', () => {
+  const copies: string[] = [];
+  afterAll(() => {
+    for (const dir of copies) rmSync(dir, { recursive: true, force: true });
+  });
+  /** A copy of `pwa/src` with `text` appended to `rel`; returns the directory holding `src`. */
+  function planted(rel: string, text: string): string {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'docs-scans-share-'));
+    copies.push(dir);
+    cpSync(SRC_DIR, path.join(dir, 'src'), { recursive: true });
+    const file = path.join(dir, ...rel.split('/'));
+    writeFileSync(file, readFileSync(file, 'utf8') + text);
+    return dir;
+  }
+
+  it('M4.SH7: navigator.share is called only in docs/ShareSheet.tsx, and under docs/ only docs/share.ts writes the clipboard', () => {
+    const { files, uses } = shareDoorScan(PWA);
+    expect(files).toEqual(expect.arrayContaining(['src/docs/ShareSheet.tsx', 'src/docs/share.ts', 'src/docs/DocsHead.tsx']));
+    expect(uses.sort()).toEqual(['src/docs/ShareSheet.tsx share', 'src/docs/share.ts writeText']);
+  });
+
+  it.each([
+    ['navigator.share(x)', 'export const f = (x: ShareData) => navigator.share(x);', ['src/docs/x.ts share']],
+    ['navigator?.share(x)', 'export const f = (x: ShareData) => navigator?.share(x);', ['src/docs/x.ts share']],
+    ["navigator['share'](x)", "export const f = (x: ShareData) => navigator['share'](x);", ['src/docs/x.ts share']],
+    ['(navigator as Navigator).share(x)', 'export const f = (x: ShareData) => (navigator as Navigator).share(x);', ['src/docs/x.ts share']],
+    ['clipboard.writeText(t)', 'export const f = (t: string) => navigator.clipboard.writeText(t);', ['src/docs/x.ts writeText']],
+    ['clipboard?.writeText(t)', 'export const f = (t: string) => navigator.clipboard?.writeText(t);', ['src/docs/x.ts writeText']],
+  ])('M4.SH7: the scan reads %s', (_name, source, want) => {
+    expect(shareDoorUses(source, 'src/docs/x.ts').map((u) => `${u.file} ${u.door}`)).toEqual(want);
+  });
+
+  it.each([
+    ['a capability probe', 'export const f = (x: ShareData) => navigator.canShare(x);'],
+    ['another owner', 'export const f = (o: { share(x: unknown): void }) => o.share(1);'],
+    ['a comment', '// navigator.share(x) is never called here\nexport const x = 1;'],
+    ['a string', "export const x = 'navigator.share(x)';"],
+  ])('M4.SH7: the scan does not count %s', (_name, source) => {
+    expect(shareDoorUses(source, 'src/docs/x.ts')).toEqual([]);
+  });
+
+  it("M4.SH7: a clipboard write outside pwa/src/docs is not this clause's", () => {
+    expect(shareDoorUses('export const f = (t: string) => navigator.clipboard.writeText(t);', 'src/fleet/x.ts')).toEqual([]);
+  });
+
+  it('M4.SH7 planted: a navigator.share in DocsHead is red', () => {
+    const dir = planted('src/docs/DocsHead.tsx', "\nexport const plantedShare = (): Promise<void> => navigator.share({ url: 'x' });\n");
+    expect(shareDoorScan(dir).uses).toContain('src/docs/DocsHead.tsx share');
+  });
+
+  it('M4.SH7 planted: a clipboard write in ShareSheet is red', () => {
+    const dir = planted('src/docs/ShareSheet.tsx', "\nexport const plantedCopy = (): Promise<void> => navigator.clipboard.writeText('x');\n");
+    expect(shareDoorScan(dir).uses).toContain('src/docs/ShareSheet.tsx writeText');
+  });
+
+  it('M4.SH7: Share adds no postMessage and no message listener (clause W8a reads the Share files)', () => {
+    const { files, hits } = readerScan(PWA);
+    expect(files).toEqual(expect.arrayContaining(['src/docs/share.ts', 'src/docs/ShareSheet.tsx']));
+    expect(hits.filter((h) => h.file === 'src/docs/share.ts' || h.file === 'src/docs/ShareSheet.tsx')).toEqual([]);
+  });
+
+  it('M4.T7 Share clause: the badge scan reads share.ts and ShareSheet.tsx, and finds no draft state', () => {
+    const { files, hits } = scanTree([DOCS_DIR, DOCS_SCREEN], PWA);
+    expect(files).toEqual(expect.arrayContaining(['src/docs/share.ts', 'src/docs/ShareSheet.tsx']));
+    expect(hits).toEqual([]);
+  });
+});

@@ -4,8 +4,8 @@
 // `Record`s over its type, so a fifth section is a compile error here until it has both. No React, no DOM, no state.
 import {
   DOC_SECTION_SLUGS, entryView,
-  type DocContentClass, type DocSectionSlug, type DocsEntry, type DocsTreeOk, type DraftsFacts, type EntryMode,
-  type EntryView,
+  type DocContentClass, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsTreeOk, type DraftsFacts,
+  type EntryMode, type EntryView, type GithubTarget,
 } from '../../../shared/docs';
 
 /** A section's label, also the noun of its count (`12 specs · 40 plans · 3 design · 0 conventions`). */
@@ -110,6 +110,26 @@ export function docsPathKind(tree: DocsTreeOk, section: DocSectionSlug, path: st
   const dir = tree.entries.some((e) =>
     e.section === section && e.path.startsWith(under) && entryView(e, tree.drafts, mode).listed);
   return dir ? { kind: 'dir' } : { kind: 'missing' };
+}
+
+/** What View on GitHub and Share point at (spec 3.11, 4.4, 4.16): the repository root on a project page, the section,
+ *  the directory, or the leaf (`uncommitted` when its entry has no committed side). Null has one meaning: the page has
+ *  no GitHub counterpart (the index, or a path this listing does not hold). Moved here from `DocsHead.tsx`, which
+ *  re-exports it, so `share.ts` reaches the one target rule without importing a component (refinement (k)). */
+export function githubTargetFor(page: DocsPageLocation, tree: DocsTreeOk): GithubTarget | null {
+  switch (page.kind) {
+    case 'index':
+      return null;
+    case 'project':
+      return { kind: 'root' };
+    case 'section':
+      return { kind: 'section', section: page.section };
+    case 'path': {
+      const k = docsPathKind(tree, page.section, page.path, page.ref === null ? 'default' : 'ref');
+      if (k.kind === 'leaf') return { kind: 'leaf', section: page.section, path: page.path, uncommitted: k.entry.committed === null };
+      return k.kind === 'dir' ? { kind: 'dir', section: page.section, path: page.path } : null;
+    }
+  }
 }
 
 /** The last segment of a section-relative path: a leaf's file name, and the name Download saves it under. */

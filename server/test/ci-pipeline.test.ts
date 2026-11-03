@@ -159,7 +159,7 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
   });
 
   it('the required legs and the browser leg skip by STEP, only on a refresh or a rebuild', () => {
-    const leg = "${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
+    const leg = "${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}";
     for (const id of ['test', 'pwa-shard', 'pwa-static', 'build-pwa', 'browser-pwa']) {
       expect(job(id), `${id}: the job-level leg switch`).toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
       const s = steps(job(id));
@@ -498,11 +498,11 @@ describe('ci.yml: the required checks cannot go missing (design 2026-09-23 §4.2
 });
 
 describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23 §3, §4.3)', () => {
-  it('triggers: pull_request, a daily and an hourly schedule, dispatch and call — both with a mode, and no push (D-6769)', () => {
+  it('triggers: pull_request, a daily and a three-hourly schedule, dispatch and call — both with a mode, and no push (D-6769, D-7747)', () => {
     const on = section(read(CI), 'on');
-    expect(on, 'a push to main starts no run: the refresh is hourly').not.toMatch(/^ {2}push:/m);
+    expect(on, 'a push to main starts no run: the refresh is scheduled').not.toMatch(/^ {2}push:/m);
     expect(on).toMatch(/^ {2}pull_request:$/m);
-    expect(on).toMatch(/^ {2}schedule:\n {4}- cron: '17 3 \* \* \*'\n {4}- cron: '23 \* \* \* \*'$/m);
+    expect(on).toMatch(/^ {2}schedule:\n {4}- cron: '17 3 \* \* \*'\n {4}- cron: '23 \*\/3 \* \* \*'$/m);
     expect(on).toMatch(/^ {2}workflow_dispatch:\n {4}inputs:\n {6}mode:\n(?: {8}.*\n)*? {8}type: choice\n {8}options: \[full, rebuild, refresh\]\n {8}default: full$/m);
     expect(on).toMatch(/^ {2}workflow_call:\n {4}inputs:\n {6}mode:\n(?: {8}.*\n)*? {8}type: string$/m);
     expect(on, 'the stable gate reads this output').toMatch(/^ {8}value: \$\{\{ jobs\.full-suite\.outputs\.verdict \}\}$/m);
@@ -554,23 +554,28 @@ describe('ci.yml: modes, concurrency and the selection switch (design 2026-09-23
     expect(comment).toContain('Six jobs ask for more than this');
   });
 
-  it('probe-macos runs on a push to main and the daily schedule only — never on a pull request, and never gating a called or dispatched full run', () => {
-    // macos.yml (operator ruling 2026-10-28): a direct run (push to main, dispatch), or a call that asks with `probe: true`.
+  it('probe-macos runs on a dispatch of macos.yml and the daily schedule only — never on a pull request or a push, and never gating a called or dispatched full run', () => {
+    // macos.yml (operator rulings 2026-10-28 and 2026-11-02): a direct run (a dispatch), or a call that asks with `probe: true`.
     expect(jobKey(macJob('probe-macos'), 'if')).toBe("github.workflow == 'macos' || inputs.probe");
-    expect(jobKey(job('macos-probe'), 'if')).toBe("github.event_name != 'merge_group' && github.event_name == 'schedule' && github.event.schedule != '23 * * * *'");
+    expect(jobKey(job('macos-probe'), 'if')).toBe("github.event_name != 'merge_group' && github.event_name == 'schedule' && github.event.schedule != '23 */3 * * *'");
     expect(job('macos-probe')).toMatch(/^ {6}probe: true$/m);
     // The call full-suite needs never asks for the probe; the probe's call is needed by nothing.
     expect(job('macos')).not.toMatch(/probe:/);
     for (const [id, b] of jobs(read(CI))) expect(needs(b), `${id} must not wait on the probe`).not.toContain('macos-probe');
   });
 
-  it('the macOS legs are off the merge path: macos.yml runs on a push to main and when called, never on a pull request or a queue run', () => {
+  it('the macOS legs are off the merge path and off the push: macos.yml runs when called (the daily run is their nightly) or dispatched, never on a push, a schedule of its own, a pull request or a queue run', () => {
+    // Re-pointed 2026-11-02 from "runs on a push to main": 56 of the 65 per-push runs were red and held the
+    // organisation's macOS slots the daily run and release-stable's gate need. ci.yml's daily run already calls both
+    // legs, so a schedule here would run the same suite twice a night.
     const on = section(read(MACOS), 'on');
-    expect(on).toMatch(/^ {2}push:\n {4}branches: \[main\]$/m);
+    expect(on).not.toMatch(/^ {2}(push|schedule):/m);
+    expect(on).toMatch(/^ {2}workflow_dispatch:$/m);
+    expect(on).toMatch(/^ {2}workflow_call:$/m);
     expect(on).not.toMatch(/pull_request|merge_group/);
     expect(read(CI)).not.toMatch(/runs-on: macos/);
     expect(jobKey(job('macos'), 'if')).toContain("github.event_name != 'merge_group' && github.event_name != 'pull_request'");
-    // Pushes coalesce: one group for every direct run, never cancelled.
+    // Dispatches coalesce: one group for every direct run, never cancelled.
     expect(section(read(MACOS), 'concurrency')).toContain('cancel-in-progress: false');
     expect(section(read(MACOS), 'concurrency')).toContain("github.workflow == 'macos' && 'main'");
   });
@@ -988,12 +993,12 @@ describe('ci.yml: map-build publishes the map it wrote, then goes red on news (s
     expect(step(b, 'Keep the map as an artifact')).not.toContain('steps.build');
   });
 
-  it('the refresh is hourly and coalesced: its own group, never cancelled, and every refresh predicate names the hourly cron (D-6769)', () => {
+  it('the refresh is three-hourly and coalesced: its own group, never cancelled, and every refresh predicate names the refresh cron (D-6769, D-7747)', () => {
     const src = read(CI);
     const g = /^ {2}group: (.*)$/m.exec(section(src, 'concurrency'))?.[1] ?? '';
-    expect(g).toContain("(github.event.schedule == '23 * * * *' || inputs.mode == 'refresh') && 'refresh'");
+    expect(g).toContain("(github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh') && 'refresh'");
     expect(section(src, 'concurrency')).toMatch(/cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/);
-    expect(step(job('select'), 'Select')).toContain("INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 * * * *' && 'refresh') || '' }}");
+    expect(step(job('select'), 'Select')).toContain("INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 */3 * * *' && 'refresh') || '' }}");
     expect(src).not.toMatch(/github\.event_name == 'push'/);
   });
 });
@@ -1089,7 +1094,7 @@ describe('ci.yml: the daily run\'s "already green?" question fails SAFE (design 
 
   it('asks main-artifact.mjs green-full-suite, on the schedule only, with the token the module reads', () => {
     const st = step(job('select'), 'Does this commit already carry a green full-suite?');
-    expect(st).toMatch(/^ {8}if: github\.event_name == 'schedule' && github\.event\.schedule != '23 \* \* \* \*'$/m);
+    expect(st).toMatch(/^ {8}if: github\.event_name == 'schedule' && github\.event\.schedule != '23 \*\/3 \* \* \*'$/m);
     expect(st).toMatch(/^ {8}env:\n {10}GITHUB_TOKEN: \$\{\{ github\.token \}\}\n {10}REPO: \$\{\{ github\.repository \}\}\n {10}REPO_ID: \$\{\{ github\.repository_id \}\}\n {10}SHA: \$\{\{ github\.sha \}\}\n {8}run: \|$/m);
     expect(ask('echo found=true').log).toBe(`.github/ci/main-artifact.mjs green-full-suite --repo o/r --repo-id 1001 --sha ${'f'.repeat(40)}\n`);
   });
@@ -1519,7 +1524,7 @@ describe('ci.yml: the node-floor leg runs on exactly the declared floor (spec 20
   });
 
   it('skips by STEP, on a refresh, a rebuild, a fast pull request or a pull request that left its inputs alone (D-6771)', () => {
-    const leg = "${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true'))) && 'skip' || 'run' }}";
+    const leg = "${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true'))) && 'skip' || 'run' }}";
     const b = job('node-floor');
     expect(b, 'the job-level leg switch').toContain(`\n    env:\n      CCRC_LEG: ${leg}\n`);
     const s = steps(b);
@@ -1606,13 +1611,19 @@ describe('the node-floor leg runs every history test file on the floor interpret
 // rules it shares with the required legs (pinned above). Here: its one name,
 // its runner and deadline, and exactly what it runs.
 describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', () => {
-  it('is one job, `browser-pwa`, named `browser (pwa)`, on ubuntu-latest with a 20-minute deadline', () => {
+  it('is one job, `browser-pwa`, named `browser (pwa) i/n` over a shard matrix, on ubuntu-latest with a 20-minute deadline (D-7746)', () => {
     const b = job('browser-pwa');
-    expect(jobKey(b, 'name')).toBe('browser (pwa)');
+    expect(jobKey(b, 'name')).toBe('browser (pwa) ${{ matrix.shard }}/${{ matrix.total }}');
     const named = [...jobs(read(CI)).values()].map((x) => jobKey(x, 'name'));
-    expect(named.filter((n) => n === 'browser (pwa)'), 'two jobs report `browser (pwa)`').toHaveLength(1);
+    expect(named.filter((n) => n?.startsWith('browser (pwa)')), 'two jobs report `browser (pwa)`').toHaveLength(1);
     expect(jobKey(b, 'runs-on')).toBe('ubuntu-latest');
     expect(jobKey(b, 'timeout-minutes')).toBe('20');
+    // The shards are exactly 1..total, so `--shard=i/n` covers the whole browser config.
+    const total = /^ {8}total: \[(\d+)\]$/m.exec(b)?.[1];
+    const list = /^ {8}shard: \[([\d, ]+)\]$/m.exec(b)?.[1];
+    expect(total, 'the shard matrix names no total').toBeDefined();
+    expect(list!.split(',').map((x) => Number(x.trim()))).toEqual(Array.from({ length: Number(total) }, (_, i) => i + 1));
+    expect(b).toMatch(/^ {6}fail-fast: false$/m);
   });
 
   it('checks out, sets up Node 22, installs pwa with npm ci, and runs the browser config with the local vitest', () => {
@@ -1631,7 +1642,7 @@ describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', (
     expect(s.findIndex((st) => /- name: Install @ccrc\/ui$/m.test(st)), 'ui is installed before the Test step')
       .toBeLessThan(s.findIndex((st) => /- name: Test$/m.test(st)));
     expect(step(job('browser-pwa'), 'Test'))
-      .toMatch(/^ {8}working-directory: pwa\n {8}run: \.\/node_modules\/\.bin\/vitest run --config vitest\.browser\.config\.ts\n/m);
+      .toMatch(/^ {8}working-directory: pwa\n {8}run: \.\/node_modules\/\.bin\/vitest run --config vitest\.browser\.config\.ts --shard=\$\{\{ matrix\.shard \}\}\/\$\{\{ matrix\.total \}\}\n/m);
   });
 
   it('reads no secret and asks for no permission of its own', () => {

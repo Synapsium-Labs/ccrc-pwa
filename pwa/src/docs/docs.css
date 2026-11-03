@@ -306,6 +306,19 @@
   font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
 }
 
+/* — Share (section 4.16; native Docs reader W5, Share). The header's Share is a <button> wearing `.docs-action`, the
+   link actions' look and floor (tap-targets.test.tsx holds both halves); `.docs-share` adds the pointer and, while it
+   waits for the leaf ("Updating to …", disabled), drops the underline. The share sheet sets no colour, ground or border
+   colour of its own: it inherits the Sheet panel's measured ink and ground, as the reader's sheets do, so
+   design/audit.mjs owes it no entry (docs-share-sheet.test.tsx holds that). The read-only field a refused copy leaves
+   is a control, and carries the floor. — */
+.docs-share { cursor: pointer; }
+.docs-share:disabled { cursor: default; text-decoration: none; }
+.docs-share-sheet { display: grid; gap: var(--sp-3); min-width: 0; }
+.docs-share-url { margin: 0; font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono); overflow-wrap: anywhere; }
+.docs-share-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
+.docs-share-field { inline-size: 100%; min-height: var(--tap-min); font: var(--weight-regular) var(--text-input) / var(--leading-mono) var(--font-mono); }
+
 /* — reduced motion (D-5501, D-5502): the door, the back chevron, a row, the chip and the bordered controls each
    declare a transition, so each is named here, after every rule it governs (motion-reduced.test.ts reads both
    halves). — */

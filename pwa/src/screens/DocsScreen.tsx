@@ -10,7 +10,7 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   DOCS_PAGE_PREFIX, docsPageUrl, parseDocsPage, parseDocsRef,
-  type DocsPageLocation, type DocsProjectsResponse, type DocsRefSpec, type DocsTreeOk,
+  type DocPin, type DocsPageLocation, type DocsProjectsResponse, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs';
 import { DocsAssetContext, type DocsAssetContextValue } from '../docs/DocImage';
 import { DocsBanners } from '../docs/DocsBanners';
@@ -174,6 +174,9 @@ export function DocsScreen(p: {
   const [draftAssets, setDraftAssets] = useState(0);
   const onDraftAsset = useCallback((delta: number) => setDraftAssets((n) => n + delta), []);
   const assets = useMemo<DocsAssetContextValue>(() => ({ loaders, queue, onDraftAsset }), [loaders, queue, onDraftAsset]);
+  // The pin a raster leaf's own image settled at, which Share waits for (spec 4.16; refinement (f)). `null`: none has
+  // (not a raster leaf, or its image is still loading). The setter is stable, so the image reports once per pin.
+  const [leafImage, setLeafImage] = useState<DocPin | null>(null);
 
   // The default parser's worker is started on mount, so the first leaf does not wait for it (spec 4.3).
   useEffect(() => {
@@ -284,7 +287,7 @@ export function DocsScreen(p: {
       const leaf = page.kind === 'path' && !page.dirSlash
         && docsPathKind(t, page.section, page.path, page.ref === null ? 'default' : 'ref').kind === 'leaf';
       body = leaf && page.kind === 'path'
-        ? <DocsLeaf visit={visit} tree={t} page={page} parser={parser} reader={reader} />
+        ? <DocsLeaf visit={visit} tree={t} page={page} parser={parser} reader={reader} onLeafImage={setLeafImage} />
         : <DocsTreeView tree={t} page={page} />;
     } else if (isOwnedElsewhere(slot) && typeof slot.body.owner === 'string' && !looped) {
       body = <p className="docs-loading">{fillSentence(DOCS_VIEW_TEXT.redirecting, { owner: slot.body.owner })}</p>;
@@ -307,7 +310,7 @@ export function DocsScreen(p: {
   return (
     <DocsAssetContext value={assets}>
       <div className="docs-screen" data-draft-assets={draftAssets}>
-        {page !== null && <DocsHead page={page} visit={visit} tree={tree} />}
+        {page !== null && <DocsHead page={page} visit={visit} tree={tree} leafImage={leafImage} />}
         {note !== null && <p className="docs-note docs-redirect-note" role="status">{note.text}</p>}
         {page !== null && page.kind !== 'index' && tree !== null && (
           <DocsBanners page={page} tree={tree} file={visit.file} draftAssets={draftAssets} onRelist={visit.retryTree} />

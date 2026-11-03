@@ -260,8 +260,15 @@ const UPDATE_DOORS = ['/api/updates', '/api/updates/intent', '/api/updates/refre
 const CODE_DOORS = ['/api/token/claim'];
 const TOKEN_DOORS = ['/api/token/rotate'];
 
+/** The programme ledgers' operator doors (plan PL4): the waiting list, a programme's goals, the tick (which queues
+ *  system mail to the coordinator) and the dismiss. Registered by `registerLedgerOperatorRoutes` in `coord/ledgersRoutes.ts`
+ *  and called from `server.ts` beside `/api/digest/correct`, so `SESSION_ONLY` cannot see them, for the kickoff route's
+ *  reason. Hand-kept for the NAMES only: the ledgers describe below derives the same set from the file and compares in both
+ *  directions, so a route there cannot join or leave without this literal moving. */
+const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/programmes/:slug/goals', '/api/items/:id/tick', '/api/items/:id/dismiss'];
+
 /** Every session-only route the bullet must describe as carrying no box token. */
-const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...UPDATE_DOORS, ...TOKEN_DOORS];
+const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -431,6 +438,15 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     ]);
     expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
+  });
+
+  it('LEDGER_OPERATOR_DOORS is exactly the rest of what the ledgers file registers, in both directions (plan PL4)', () => {
+    const rest = registrationsIn(LEDGER_SRC).map((r) => r.key).filter((k) => !LEDGER_LANES.includes(k)).map((k) => k.slice(k.indexOf(' ') + 1));
+    expect([...rest].sort(), 'ledgersRoutes.ts and LEDGER_OPERATOR_DOORS disagree — a route was added or removed on one side only')
+      .toEqual([...LEDGER_OPERATOR_DOORS].sort());
+    for (const door of LEDGER_OPERATOR_DOORS) {
+      expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
+    }
   });
 
   it('a route with NO box-token check is not counted as a lane', () => {

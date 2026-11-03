@@ -198,7 +198,9 @@ function autoRetryId(scope: string, key: string, word: string): string {
   return [scope, key, word].join(NUL);
 }
 
-function samePin(a: DocPin, b: DocPin): boolean {
+/** Whether two pins name the same bytes: every field equal; a committed pin never equals a draft pin. Share compares a
+ *  leaf's opened pin with `pinFor`'s answer through it (spec 4.16). */
+export function samePin(a: DocPin, b: DocPin): boolean {
   if (a.kind === 'committed' && b.kind === 'committed') {
     return a.commit === b.commit && a.servedRef === b.servedRef && a.section === b.section && a.path === b.path;
   }
@@ -238,7 +240,8 @@ function fragmentKeyOfHref(href: string): string | null {
   return parsed.ok ? fragmentKey(parsed.loc) : null;
 }
 
-function pinCommit(pin: DocPin): string {
+/** The commit a pin reads at: a committed pin's commit, a draft pin's holder HEAD. */
+export function pinCommit(pin: DocPin): string {
   return pin.kind === 'committed' ? pin.commit : pin.head;
 }
 

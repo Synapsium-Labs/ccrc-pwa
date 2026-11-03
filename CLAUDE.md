@@ -273,7 +273,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   2026-10-25's light run: builders run scoped tests before pushing and every PR gets two reviews): every typecheck,
   `build-pwa`, the static checks, the server tests vitest relates to the change from its merge base, the traced map's
   selection for every changed path vitest's import graph cannot follow (select's `untraced`: ccd scripts, Python,
-  JSON/SQL fixtures; `vitestFollows` in select-tests.mjs), the guard suites that scan the whole tree or the diff
+  JSON/SQL fixtures; `vitestFollows` in select-tests.mjs; a test that failed under the trace is judged there by what it
+  recorded, not always, D-7780), the guard suites that scan the whole tree or the diff
   (censuses, single-definition, deviation-refs, growth-check, ownership, rings, ccd-contexts, dtbd, `typecheck-tests`,
   `oss-metadata`, the `*-pin` suites less `PIN_MAP_CARRIED`, and every test whose source runs `git ls-files`,
   `git diff` or `git merge-base` itself: `TREE_READER`; and every test that lists a source tree itself — `server/src`,
@@ -296,10 +297,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (step-level, merge_group-only refusals), so both gate the merge, and the perf legs stay advisory. The queue is the
   safety net for everything the fast run leaves out, so nobody bypasses it: an admin merge that skips the queue
   (`gh pr merge --admin`; the ruleset's admin bypass allows it) lands on the fast run only, so never use it. **The macOS legs** (`test-macos`, `probe-macos`)
-  live in `.github/workflows/macos.yml`, off the merge path: every push to `main` runs them (one run at a time, the newest
-  pending), and the daily run calls them; a red one is a failing run on `main`, never a PR's or a queue entry's. **A merge
-  to `main`** starts no `ci.yml` run: an **hourly** `refresh` run (cron plus `workflow_dispatch -f mode=refresh`, one concurrency
-  group so runs coalesce) re-traces the tests every merge since the last refresh affected and updates the map, running
+  live in `.github/workflows/macos.yml`, off the merge path and off the push to `main` (2026-11-02): the daily run calls them (their nightly run), a dispatched
+  or called full run (release-stable's gate) runs the tests, and `gh workflow run macos.yml` runs both on demand; a red
+  one is a failing run on `main`, never a PR's or a queue entry's. **A merge
+  to `main`** starts no `ci.yml` run: a `refresh` run **every three hours** (cron plus `workflow_dispatch -f mode=refresh`, one concurrency
+  group so runs coalesce; the scheduled one traces nothing when `main` has not moved since the newest map, D-7747) re-traces the tests every merge since the last refresh affected and updates the map, running
   no test legs and reporting newly failing or timed-out tests as a warning and a job summary, never a red job (D-6769).
   **Daily**, on `main`, every leg runs in full, macOS included, and the map is rebuilt — skipped when `main`'s
   head already has a green `full-suite` job from a trusted run (a daily or manual full run on `main`, or a stable
@@ -532,7 +534,12 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   registered in `server.ts` for the kickoff route's reason, so `box-token-census.test.ts` names it beside that
   route's literal. So does `POST /api/digest/correct` (coordinator-first routing D-5300): it queues the operator's
   correction of a digest line as durable system mail to that line's coordinator, consults no box token, is
-  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
+  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/programmes/:slug/goals`,
+  `POST /api/items/:id/tick` and `POST /api/items/:id/dismiss`, consult no box token either: the tick queues the operator's
+  answer as system mail to the programme's coordinator in the move's own transaction, and every one is session-gated when armed. They are
+  registered by `registerLedgerOperatorRoutes` in `server/src/coord/ledgersRoutes.ts`, called from `server.ts`; the census reads
+  that file as a lane source of its own and keeps their names in a hand-kept `LEDGER_OPERATOR_DOORS`, checked against it in both
+  directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
   the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
   the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which
   the census reads as a lane source of its own and checks against `CODE_DOORS` and `TOKEN_DOORS` in both directions.

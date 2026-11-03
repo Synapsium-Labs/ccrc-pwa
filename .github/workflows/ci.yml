@@ -33,12 +33,18 @@
 #                       bypass actor's direct merge (`gh pr merge --admin`):
 #                       the required checks it needs are the fast run's, so it
 #                       lands only what that run tested (README, "CI").
-#   push to main        the macOS legs only, in macos.yml (operator ruling
-#                       2026-10-28): off the merge path, coalesced, advisory.
-#   schedule (hourly)   refresh  — re-trace the tests every merge since the
+#   push to main        nothing: no ci.yml run, and since 2026-11-02 no macOS
+#                       run either (macos.yml); the daily run below is where
+#                       the macOS legs run, off the merge path (operator
+#                       rulings 2026-10-28 and 2026-11-02).
+#   schedule (3-hourly) refresh  — re-trace the tests every merge since the
 #                       last refresh affected and update the map. No test legs.
 #                       Not a push trigger: a refresh per merge held 8-15 runner
 #                       slots for 25-60 minutes and gated nothing (D-6769).
+#                       Every three hours, not hourly, and it traces nothing
+#                       when main has not moved since the newest map (D-7747):
+#                       about 200 runner-minutes a refresh, and 35 of 87 hourly
+#                       ones found no merge since the one before.
 #   schedule (daily)    full     — every leg, macOS included (called from macos.yml), plus a traced
 #                       rebuild of the map. Skipped when main's head already
 #                       carries a green `full-suite`.
@@ -99,13 +105,14 @@ on:
   # trigger, so the queue's own `gh-readonly-queue/main/*` branches start no
   # second run.
   merge_group:
-  # Two schedules. The daily one is the full run; the hourly one is the map
-  # refresh (D-6769). A refresh run is told apart by `github.event.schedule`
-  # being exactly the hourly cron, in every predicate below, so the string
-  # appears in each of them and server/test/ci-pipeline.test.ts pins that.
+  # Two schedules. The daily one is the full run; the three-hourly one is the
+  # map refresh (D-6769; every three hours since D-7747). A refresh run is told
+  # apart by `github.event.schedule` being exactly the refresh cron, in every
+  # predicate below, so the string appears in each of them and
+  # server/test/ci-pipeline.test.ts pins that.
   schedule:
     - cron: '17 3 * * *'
-    - cron: '23 * * * *'
+    - cron: '23 */3 * * *'
   # Manual re-run for the day the webhooks don't come: during the 2026-08-06
   # Actions incident GitHub processed ~15% of webhooks, so pushes and PR
   # events silently created NO run. `gh workflow run ci.yml --ref <branch>`
@@ -148,7 +155,7 @@ env:
   SEGMENT_DOWNLOAD_TIMEOUT_MINS: '3'
 
 # Pull requests: one group per PR, and a newer push cancels the older run.
-# Everything else never cancels, and each mode has its own group, so an hourly
+# Everything else never cancels, and each mode has its own group, so a scheduled
 # refresh can never cancel the daily run. The `refresh` group COALESCES: a
 # running refresh is never cancelled, and GitHub keeps at most one pending run
 # per group, replacing an older pending one with the newer, so the one that
@@ -164,7 +171,7 @@ env:
 # could lose its checks, and the queue would remove the entry. Nothing cancels
 # one either — `cancel-in-progress` stays the pull_request event alone.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('queue-{0}', github.run_id) || (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh') && 'refresh' || format('{0}-{1}-{2}', inputs.mode || 'full', github.event_name, github.ref_name) }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'merge_group' && format('queue-{0}', github.run_id) || (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh') && 'refresh' || format('{0}-{1}-{2}', inputs.mode || 'full', github.event_name, github.ref_name) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -339,7 +346,7 @@ jobs:
       # CLI, answer "not green", which runs the suite — the safe direction.
       - name: Does this commit already carry a green full-suite?
         id: green
-        if: github.event_name == 'schedule' && github.event.schedule != '23 * * * *'
+        if: github.event_name == 'schedule' && github.event.schedule != '23 */3 * * *'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -360,7 +367,7 @@ jobs:
           # The `full-ci` label, or a head branch under `train/`, asks a pull request for the full suite, as a change
           # under .github/ does (operator ruling 2026-10-28: a train runs the merge queue's full suite before it lands).
           FULL_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') || startsWith(github.head_ref, 'train/') }}
-          INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 * * * *' && 'refresh') || '' }}
+          INPUT_MODE: ${{ inputs.mode || (github.event.schedule == '23 */3 * * *' && 'refresh') || '' }}
           FULL_GREEN: ${{ steps.green.outputs.full_green || 'false' }}
           PIPELINE_CHANGED: ${{ steps.pipeline.outputs.changed }}
           FLOOR: ${{ steps.floor.outputs.run }}
@@ -369,6 +376,9 @@ jobs:
           args=(--repo "$GITHUB_WORKSPACE" --event "$EVENT" --base "$BASE" --selection "$CCRC_SELECTION" --full-green "$FULL_GREEN" --map "$RUNNER_TEMP/ci-cache/testmap.json" --trace-list "$RUNNER_TEMP/ci-cache/traced.txt")
           if [ -n "$INPUT_MODE" ]; then args+=(--input-mode "$INPUT_MODE"); elif [ "$PIPELINE_CHANGED" = true ] || [ "$FULL_LABEL" = true ]; then args+=(--input-mode full); fi
           if [ -f "$RUNNER_TEMP/ci-cache/testtimes.json" ]; then args+=(--times "$RUNNER_TEMP/ci-cache/testtimes.json"); fi
+          # D-7747: the SCHEDULED refresh traces nothing when main's head is the newest map's own commit (no merge since
+          # it); a dispatch with mode refresh passes no flag, so it always refreshes.
+          if [ "$EVENT" = schedule ] && [ "$INPUT_MODE" = refresh ]; then args+=(--skip-unmoved true); fi
           # D-6771: the files the node floor runs, read from its own job so the list has one source; select.mjs
           # answers `floor` true when its selection holds one of them, or when FLOOR (the static inputs) is true.
           sed -n '/^  node-floor:$/,/^  [a-z-]*:$/p' .github/workflows/ci.yml | sed -n 's/^ *\(test\/[A-Za-z0-9._-]*\.test\.ts\)$/\1/p' > "$RUNNER_TEMP/floor-list.txt"
@@ -422,8 +432,8 @@ jobs:
         # pinned equal to `engines.node` by ci-pipeline.test.ts.
         node: ['22', '22.16.0']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -789,7 +799,7 @@ jobs:
     # Pinned — key AND ceiling — by server/test/oss-metadata.test.ts.
     timeout-minutes: 30
     env:
-      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     strategy:
       fail-fast: false
       matrix:
@@ -859,7 +869,7 @@ jobs:
     # by server/test/oss-metadata.test.ts.
     timeout-minutes: 30
     env:
-      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     strategy:
       fail-fast: false
       matrix:
@@ -946,7 +956,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
@@ -1056,7 +1066,7 @@ jobs:
   # THE SAME MODE SWITCH AS THE TEST LEGS, written as a job-level `if:`. The
   # `test` matrix and `build-pwa` skip by STEP only because they are required
   # by name and a skipped job never reports; this job is not required, so it
-  # skips whole, on exactly their `CCRC_LEG == 'skip'` predicate: an hourly
+  # skips whole, on exactly their `CCRC_LEG == 'skip'` predicate: a scheduled
   # refresh ("no test legs") and a rebuild. And no merge-queue run,
   # like the other advisory legs. Pinned by server/test/ci-pipeline.test.ts.
   storybook-a11y:
@@ -1064,7 +1074,7 @@ jobs:
     # The browser download dominates; each skin's build and axe run is ~40s
     # for 180 stories, and the job runs one per skin.
     timeout-minutes: 20
-    if: github.event_name != 'merge_group' && !(github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild')
+    if: github.event_name != 'merge_group' && !(github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild')
     steps:
       # No token left behind: at this checkout major the token sits in a file
       # under the runner's temp directory only for the checkout's own fetch,
@@ -1126,8 +1136,8 @@ jobs:
         run: npm run test-storybook -- --maxWorkers=2 --url http://127.0.0.1:6007
 
   # THE macOS LEGS live in macos.yml (operator ruling 2026-10-28): off the merge
-  # path, on every push to main there, and called from here on the daily,
-  # dispatched and called full runs. `macos` runs the test-macos shards on
+  # path, never on a push to main (2026-11-02), and called from here on the daily
+  # (their nightly run), dispatched and called full runs. `macos` runs the test-macos shards on
   # select's matrix, and `full-suite` needs it (design 2026-09-23 ruling 6);
   # `macos-probe` runs probe-macos on the daily run only, and nothing needs it.
   # Never on a pull request or a merge-queue run.
@@ -1143,7 +1153,7 @@ jobs:
       tests: true
 
   macos-probe:
-    if: github.event_name != 'merge_group' && github.event_name == 'schedule' && github.event.schedule != '23 * * * *'
+    if: github.event_name != 'merge_group' && github.event_name == 'schedule' && github.event.schedule != '23 */3 * * *'
     # The ceiling of the call: GitHub checks every called job's permissions when the run starts, `plan`'s too, though a
     # call skips it.
     permissions:
@@ -1164,7 +1174,7 @@ jobs:
       attestations: read
     # Required by name, like `test`: no job-level `if:`, steps skip instead.
     env:
-      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
@@ -1238,8 +1248,16 @@ jobs:
   # ruling 2026-10-28: a fast pull request skips it). No job-level `if:` and no `needs:`: it skips by STEP on a
   # refresh or a rebuild, like the required legs, because a job skipped by
   # `if:` reads as red in full-suite. Pinned by ci-pipeline.test.ts.
+  #
+  # TWO SHARDS (D-7746). As one job it measured a 17.6-minute median in the
+  # merge queue against its 20-minute timeout, and 46 of 203 queue jobs
+  # (23%) were cancelled at 20.1-21.0 minutes: 34 of the 36 cancelled queue
+  # runs, each ejecting its entry and rebuilding up to four behind it. vitest's
+  # `--shard=i/n` goes through browser/slowFirst.ts, which splits by measured
+  # file time (`FILE_MS`, LPT), not by path hash. `test (pwa)` and `full-suite`
+  # read `needs.browser-pwa.result`, which is red when any shard is.
   browser-pwa:
-    name: browser (pwa)
+    name: browser (pwa) ${{ matrix.shard }}/${{ matrix.total }}
     runs-on: ubuntu-latest
     # Measured 2026-10-28 (desktop polish Task C11, run 40612653530, whose
     # log has 30 browser files): the Test step took 861 s of an 893 s job,
@@ -1253,9 +1271,19 @@ jobs:
     # files and ask-inline first (desktop polish Task C12): in run
     # 40695090274, with the tree's 33 files, the Test step took 911 s and
     # those four were the first four to finish.
+    # Sharded (D-7746): run 41472953945's green queue job (47 files) reported
+    # 3,104 s of file time, and its Test step took 1,067 s. Split in two by
+    # those times, each shard holds about 1,550 s, about 520 s over three
+    # workers (ask-inline alone is 491 s), so a shard expects about nine
+    # minutes with its setup, and 20 is twice that.
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+        total: [2]
     env:
-      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
@@ -1298,7 +1326,7 @@ jobs:
       - name: Test
         if: env.CCRC_LEG == 'run' && steps.reach.outputs.skip != 'true'
         working-directory: pwa
-        run: ./node_modules/.bin/vitest run --config vitest.browser.config.ts
+        run: ./node_modules/.bin/vitest run --config vitest.browser.config.ts --shard=${{ matrix.shard }}/${{ matrix.total }}
 
   # THE FLOOR ITSELF, on exactly its own version (ccrc history spec
   # 2026-10-05 §9.9; O18). Every other leg runs '22', which setup-node
@@ -1332,7 +1360,7 @@ jobs:
     # list runs in seconds. 30 is a deadline, not an estimate.
     timeout-minutes: 30
     env:
-      CCRC_LEG: ${{ (github.event.schedule == '23 * * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true'))) && 'skip' || 'run' }}
+      CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild' || (github.event_name == 'pull_request' && (needs.select.outputs.fast == 'true' || needs.select.outputs.floor != 'true'))) && 'skip' || 'run' }}
     steps:
       - uses: actions/checkout@v7
         if: env.CCRC_LEG == 'run'
@@ -1399,8 +1427,11 @@ jobs:
     # is BOUNDED (planTraceBatch, .github/ci/shards.mjs): select plans at most
     # 45 minutes of that cost per shard and defers the rest to the next
     # refresh, so a shard cannot reach this timeout, which cancels it and
-    # leaves no map. 60 is oss-metadata.test.ts's ceiling and the most any job
-    # here may take.
+    # leaves no map. A rebuild traces every test over its own profile
+    # (`traceRebuild`, D-7748): planned to 40 minutes a shard, about 22 shards
+    # of about 23 traced minutes today. At the refresh's 8 it planned about
+    # 108 minutes a shard, and 5 of 8 hit this timeout every day. 60 is
+    # oss-metadata.test.ts's ceiling and the most any job here may take.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1562,7 +1593,7 @@ jobs:
       # Last, so the map above is published first: the Build step's
       # annotations name each test (3: newly fails under trace; 4: a floor test
       # written unknown). Both stay selected — an unknown test always runs.
-      # News is REPORTED, not failed (D-6769): the hourly refresh gates
+      # News is REPORTED, not failed (D-6769): the scheduled refresh gates
       # nothing, a red one would only page whoever is watching main, and the
       # map it published is correct. The daily rebuild uses the same step; its
       # verdict is the full-suite job, not this one.
