@@ -5,7 +5,7 @@
 // (`highlightGrammars.ts#HLJS`) in both directions.
 //
 // Imports only `markdownLimits.ts`, for part 1's caps, until W5h-b, and nothing after. The helpers below the banner
-// moved here from `markdown.tsx`, their text unchanged (that file keeps its own copies until Task 6 deletes them).
+// moved here from `markdown.tsx`, their text unchanged (Task 6 deleted that file's copies).
 //
 // Ring L1: pure data and pure functions.
 

@@ -1,12 +1,13 @@
 // Docs W5 part 1, Task 6: the page highlight budget (spec 2026-10-01 4.10 "Highlighting"; M4.H2; refinement (h)),
 // rewritten by W5h-a Task 6 (refinement (j)): the decisions moved from `detachUrls` into the page store's seed
-// (`highlightStore.ts`). The store sums each requestable key once, in document order, over the block's raw text (one
-// trailing newline stripped, as `CodeBlock` strips it), and a key past a budget is `skipped` from the first commit:
+// (`highlightStore.ts`). The store sums each requestable block, repeats included (D-7762), in document order, over
+// its raw text (one trailing newline stripped, as `CodeBlock` strips it), and a key past a budget is `skipped` from
+// the first commit:
 // `skipped:page-input` for the general budget, `skipped:part1-scan` and `skipped:part1-markdown` for part 1's two
 // sub-budgets (until W5h-b). A block over its own cap, or in no registered grammar, is no requestable block and
 // counts nothing. The trees are built by hand, exactly as the parse emits a fenced block, so no case parses half a
-// megabyte; every block of a case is distinct (a key identical blocks share counts once) and bounds-clean (no word,
-// line or blank run over part 1's bounds). The rendered cases draw `DocMarkdown` under a production store over an
+// megabyte; every block of a boundary case is distinct (the repeated-copy cases below say so) and bounds-clean (no
+// word, line or blank run over part 1's bounds). The rendered cases draw `DocMarkdown` under a production store over an
 // in-thread highlighter, so the page's seed, requests and check are the shipped ones.
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

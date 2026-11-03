@@ -205,7 +205,8 @@ export function blockKey(lang: string, raw: string, part1 = true): BlockKey {
 
 /** One code block as `CodeBlock` reads it: its language and its text with one trailing newline stripped. `at`, when
  *  given, is the copy's identity: the `pre` element the block is drawn from (what `codeBlocksOf` sets), which is the
- *  `node` the block receives, so the page's ceilings can answer for this copy (`copySkip`). */
+ *  `node` the block receives, so the page's ceilings can answer for this copy (`copySkip`). A caller that seeds
+ *  repeats must pass `at`: a later copy with none counts against the ceilings but cannot be told it was skipped. */
 export interface CodeBlockText {
   readonly lang: string;
   readonly raw: string;
