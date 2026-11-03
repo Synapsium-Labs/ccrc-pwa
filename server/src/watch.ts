@@ -1718,7 +1718,6 @@ export class FleetWatcher {
     this.warnInventoryIssues(outcomes);
     const coord = this.deps.coord;
     if (!coord) return outcomes;
-    await this.boxSettingsLane.run(inv, () => coord.nodes(), outcomes, now);   // D-6916: never throws; the read and the caps are this sweep's
     let warn: { key: string; message: string } | null;
     try {
       const run = await resolveAndProject({ store: coord, role: this.deps.cfg.role, ccrcDir: this.deps.cfg.ccrcDir }, now);
@@ -1748,6 +1747,9 @@ export class FleetWatcher {
     // Wave 5 (design 2026-09-20 §10): the sweep is what settles a lease, so every inventory run ends in ONE
     // dispatch run — the next node's turn starts on the beat that freed it.
     this.triggerDispatch();
+    // D-6916: last, so a stalled settings read (bounded at 10 s) never delays the resolve, the push or the dispatch above; it is still this run's
+    // own sweep (its outcomes, its caps), and `inventoryNow` still awaits it. Never throws.
+    await this.boxSettingsLane.run(inv, () => coord.nodes(), outcomes, now);
     return outcomes;
   }
 

@@ -73,6 +73,7 @@ function diskOf(o: unknown): BoxSettingsDisk | null {
 export function parseBoxSettings(text: string): BoxSettingsDoc | null {
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { return null; }
+  // Strict on purpose: a writer that adds a field must bump `v`, and an older server reads a newer additive field as `malformed`, never half-shown.
   if (!isObj(parsed) || !hasKeys(parsed, ['v', 'at', 'reader', 'settings', 'deadline', 'backups', 'disk'])) return null;
   const { v, at, reader, settings, deadline } = parsed;
   if (v !== 1 || !isCount(at) || !oneOf<BoxSettingsReader>(BOX_SETTINGS_READERS, reader)) return null;
