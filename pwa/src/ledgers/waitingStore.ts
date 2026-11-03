@@ -9,8 +9,8 @@
 import { useEffect } from 'react';
 import type { WaitingView } from '../../../shared/ledgers';
 import { api } from '../lib/api';
-import { ApiError } from '../lib/apiError';
 import { onPageVisible } from '../lib/pageClock';
+import { LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
 import type { FleetStore } from '../stores/fleet';
 import { isWaitingView } from './waitingView';
 
@@ -29,8 +29,7 @@ async function readOnce(store: FleetStore, load: Load): Promise<WaitingRead> {
     return 'failed';
   } catch (err) {
     // Unreachable or refused: the held list stays, and the next focus asks again.
-    const body: unknown = err instanceof ApiError ? err.body : null;
-    return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'not-configured' ? 'not-configured' : 'failed';
+    return refusalText(err, LEDGER_REFUSAL_TEXT) === LEDGER_REFUSAL_TEXT['not-configured'] ? 'not-configured' : 'failed';
   }
 }
 
