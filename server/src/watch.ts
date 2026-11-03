@@ -2440,12 +2440,12 @@ export class FleetWatcher {
         void this.serverCapsNow();
       }
 
-      // Read once, share with the two lanes that would otherwise each read it
-      // again on EVERY tick (detectDialogs, sweepHookStates) — in remote mode
-      // every readRegistry() field is its own agent-WS round trip, so this is
-      // the difference between one registry read and two, every 2s, forever.
-      // sweepTasks/sweepPr below are NOT included: both throttle to their own
-      // slower clock and skip the read entirely on most ticks already.
+      // Read once, and every lane below gets the tick's one read, sweepTasks and
+      // sweepPr included: detectDialogs and sweepHookStates take its records,
+      // the slower-clock lanes its model (D-5864), so none lists the registry
+      // again — in remote mode every readRegistry() field is its own agent-WS
+      // round trip, so this is the difference between one registry read and
+      // several, every 2s, forever.
       //
       // `readRegistryMeasured`, not `readRegistry` (blocking review findings
       // 1/3): the old `[]`-on-unlistable signature made a single dropped
