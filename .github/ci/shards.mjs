@@ -52,6 +52,10 @@ export function durationsFromVitestJson(report, repoRoot) {
 
 /** @type {Record<string, ShardProfile>} */
 export const PROFILES = {
+  // 2 workers, not the runner's 4 vCPU: measured 2026-11-03 (#2169, full-mode dispatches through serverProfile), 4
+  // workers on 6 shards cut the shard runner-minutes by about a third but failed 6 of 24 shard jobs on three tests that
+  // never failed at 2 (20-second test and hook timeouts in the tree-reading suites, and a timing assertion), 3 of the 5
+  // re-run failed again, and the slowest leg took 23.6 of its 30 minutes. At 2: 1 of 60 jobs failed, green on a re-run.
   linux: { targetMs: 240_000, min: 1, max: 12, workers: 2, defaultMs: 5000 },
   // A fast pull request (fast-plan.mjs, operator ruling 2026-10-28): half the full run's target, so the related
   // tests and the guard suites finish inside the fast run's ~5 minutes; one file longer than that still takes its own.
