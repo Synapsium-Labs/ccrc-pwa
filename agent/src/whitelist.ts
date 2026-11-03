@@ -363,6 +363,7 @@ export const REQUIRED_VERB_FLAG = {
   'ws-lease-audit': '--lease',
   'testbox-remote': '--state',
   'project-add': '--name',
+  'pane-scope-stop': '--state',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -529,6 +530,12 @@ export const EXEC_WHITELIST = {
     // `REQUIRED_VERB_FLAG` above: `--state` is the verb's whole argument surface, and a bare `['testbox-remote']`
     // would admit every positional form it might grow (g24 is the other side).
     ['testbox-remote', '--state'],
+    // The pane-scope stop's switch writer (D-7902), granted on `coord-pause`'s argument exactly:
+    // `$REG/pane-scope-stop-live` is a registry-file write/unlink, non-destructive (it arms a stop the next deliberate
+    // stop makes, never one now), and the server may write only `~/.cc-clips` here, so the marker is raised through
+    // this verb or not at all. ENROLLED in `REQUIRED_VERB_FLAG` above: `--state` is the verb's whole argument surface,
+    // and a bare `['pane-scope-stop']` would admit every positional form it might grow (g27 is the other side).
+    ['pane-scope-stop', '--state'],
     // The project pool tag's writer (account pools, spec §5.4.2), granted on
     // `coord-pause`'s own argument: `$REG/pools/<project>` is a registry-file
     // write/unlink, non-destructive, and granting it widens nothing that
