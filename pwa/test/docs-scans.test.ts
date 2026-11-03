@@ -1156,6 +1156,11 @@ function closureFrom(base: string, entry: string): { files: string[]; bare: stri
   return { files: [...files].sort(), bare };
 }
 
+/** M4.EX17: which of the two highlight modules (the worker's, the grammars') a closure's files name. The real-tree case and
+ *  both planted cases call this one filter, so a planted module that this filter fails to flag is red. */
+const highlightModulesIn = (files: readonly string[]): string[] =>
+  files.filter((f) => f === 'src/lib/markdownHighlightWorker.ts' || f === 'src/lib/highlightGrammars.ts');
+
 /** Every finding of `scan` over the `.ts`/`.tsx` files under `<base>/src`, sorted. */
 function scanSrc(base: string, scan: (source: string, file: string) => string[], scope: (file: string) => boolean = () => true): string[] {
   return sourceFiles(path.join(base, 'src')).map((f) => path.relative(base, f).split(path.sep).join('/'))
@@ -1236,7 +1241,7 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
   it('M4.EX17: the builder reaches lib/markdown.tsx and neither highlight worker module nor highlight.js', () => {
     const { files, bare } = closureFrom(PWA, 'src/docs/export/buildExport');
     expect(files).toEqual(expect.arrayContaining(['src/docs/export/buildExport.tsx', 'src/lib/markdown.tsx', 'src/docs/DocImage.tsx']));
-    expect(files.filter((f) => f === 'src/lib/markdownHighlightWorker.ts' || f === 'src/lib/highlightGrammars.ts')).toEqual([]);
+    expect(highlightModulesIn(files)).toEqual([]);
     expect(bare.filter((s) => namesHighlightJs('src/docs/export/buildExport.tsx', s))).toEqual([]);
   });
 
@@ -1244,7 +1249,7 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
     const core = closureFrom(planted('src/docs/export/colouring.ts', "\nimport plantedCore from 'highlight.js/lib/core';\nexport const plantedC = plantedCore;\n"), 'src/docs/export/buildExport');
     expect(core.bare.filter((s) => namesHighlightJs('src/docs/export/colouring.ts', s))).not.toEqual([]);
     const grammars = closureFrom(planted('src/docs/export/exportMarkdown.tsx', "\nimport { HLJS as plantedG } from '../../lib/highlightGrammars';\nexport const plantedH = plantedG;\n"), 'src/docs/export/buildExport');
-    expect(grammars.files).toContain('src/lib/highlightGrammars.ts');
+    expect(highlightModulesIn(grammars.files)).toContain('src/lib/highlightGrammars.ts');
   });
 
   it('M4.EX2 planted (pure source): the sink arm, outerHTML and document.writeln each report their rule', () => {
@@ -1266,7 +1271,7 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
 
   it('M4.EX17 planted: the highlight worker module in a file the builder reaches is red', () => {
     const worker = closureFrom(planted('src/docs/export/exportMarkdown.tsx', "\nimport { plantedW as plantedWorker } from '../../lib/markdownHighlightWorker';\nexport const plantedX = plantedWorker;\n"), 'src/docs/export/buildExport');
-    expect(worker.files).toContain('src/lib/markdownHighlightWorker.ts');
+    expect(highlightModulesIn(worker.files)).toContain('src/lib/markdownHighlightWorker.ts');
   });
 
   it('M4.T7 Export clause: the badge scan reads the export files and finds no draft state', () => {
