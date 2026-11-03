@@ -2946,11 +2946,25 @@ _upd_redact() {
 # The same holds, rc 1 and nothing printed, when the RAW value (before `_upd_redact`) holds whitespace or another byte that starts a
 # token for `_upd_redact` ('"', "'", '<', '(' or a backtick; review 1396 F1): its token rule then begins a new token inside the
 # userinfo, consumes that token's '@', and a prefix of the credential is left with no '@' to show it (`https://u:p w@h/r` read
-# `https://u:p h`). A URL never holds one raw, so nothing a valid base shows is lost.
+# `https://u:p h`). A base with one of those in its path (`'` and `(` are legal there) shows no host: less, never more, and accepted.
+# And the same, rc 1, when a '/', a '\' or a '=' stands in the RAW value between the scheme's `://` (or the value's start, with no
+# scheme) and its LAST '@' (review 1398 F1): `_upd_redact`'s scheme rule then cannot run from the `://` (the '/' ends its userinfo
+# run), it matches again at the userinfo's own ':' and drops the rest of the credential with its '@' (`https://deploy:/s3cret@m/r`
+# read `https://deploy:`); and its `KEY=` rule keeps a scheme-less user name that holds '=' (`user=x:pw@m` read `user=m`). The
+# authority ends at the first '/', so a host never follows one: a path or query that holds an '@' shows no host, as above. Only
+# `http://` and `https://` show as a scheme; any other `<name>://` reads rc 1, because a scheme-less password that starts with
+# '//' (`deploy://s3cret@m`) cannot be told from a scheme, and would show its user name as one (less, never more: a mirror on
+# another scheme shows `custom` alone). These rules on the raw value close the shapes `_upd_redact`'s KNOWN LIMITS name for a
+# release base: a raw '/' (or a JSON '\/') in the userinfo, and a userinfo inside a path or a query, by the '/' rule; a raw '?'
+# or '#' there by the '@' check below (no rule of the redactor drops that '@'); and the limits whose text follows the host
+# (`tok@host refused`, `tok@host:8443-x retrying`, `tok@2130706433:80 x`) by the whitespace rule, or, written as one token, by
+# the '@' check (D-7873).
 # rc 0 otherwise, printing the origin (empty for an empty value).
 _upd_url_origin() {
-  local s sre='^[A-Za-z][A-Za-z0-9+.-]*://' scheme="" bre='[[:space:]"'"'"'<(`]' LC_ALL=C
-  if [[ "${1:-}" =~ $bre ]]; then return 1; fi
+  local s="${1:-}" sre='^[A-Za-z][A-Za-z0-9+.-]*://' scheme="" bre='[[:space:]"'"'"'<(`]' LC_ALL=C
+  if [[ "$s" =~ $bre ]]; then return 1; fi
+  if [[ "$s" =~ $sre ]]; then [[ "${BASH_REMATCH[0]}" =~ ^[Hh][Tt][Tt][Pp][Ss]?://$ ]] || return 1; s="${s#"${BASH_REMATCH[0]}"}"; fi
+  case "$s" in *[/\\=]*@*) return 1 ;; esac
   s="$(_upd_redact "${1:-}")"
   if [[ "$s" =~ $sre ]]; then scheme="${BASH_REMATCH[0]}"; s="${s#"$scheme"}"; fi
   case "$s" in *@*) return 1 ;; esac
@@ -26084,12 +26098,14 @@ cmd_backup() {
 # CCRC_SETTINGS. Three states: `ok` (the act would use the value), `refused` (it would refuse it, fall back or clamp: the value shown
 # is what was written) and `unmeasured` (the reader could not decide it: a ccrc.env it cannot read is never "unset", D-6365).
 # The release base is shown as `default`, or `custom` with its scheme and host only (`_upd_url_origin`), or `custom` alone when an '@' is
-# left in it after the redaction or the value holds whitespace or another byte that starts a token for `_upd_redact` (D-7873). Every
-# value and sentence is redacted (`_upd_redact`), turned to printable ASCII and cut at 480 bytes, so no home path is recorded, and no
-# part of the release base's userinfo. ONE accepted residual (review 1385 A13, widened by review 1396 F4): a REFUSED numeric key records
-# its raw value, in `value` and in its sentence, through `_upd_redact` alone, so a URL written there by mistake keeps its query string
-# (`?token=…`, which `_upd_redact` does not cover: its OUT OF SCOPE note) and a userinfo that holds a raw '/', '?' or '#' (its KNOWN
-# LIMITS). It needs an operator error on a numeric key; the fold belongs to ARCH-67.
+# left in it after the redaction, the value holds whitespace or another byte that starts a token for `_upd_redact`, a '/', '\' or '='
+# stands before its last '@', or its scheme is not http(s) (D-7873). Every value and sentence is redacted (`_upd_redact`), turned to
+# printable ASCII and cut at 480 bytes, so no home path is recorded, and no part of the release base's userinfo. ONE accepted residual
+# (review 1385 A13, widened by reviews 1396 F4 and 1398 F2): a REFUSED numeric key records its raw value, in `value` and in its
+# sentence, through `_upd_redact` alone, so a URL written there by mistake keeps its query string (`?token=…`, which `_upd_redact` does
+# not cover: its OUT OF SCOPE note), a userinfo that holds a raw '/', '?' or '#' (its KNOWN LIMITS), and the part of a userinfo before
+# whitespace or another token start (`https://u:p w@h/r` is recorded as `https://u:p h/r`). It needs an operator error on a numeric
+# key; the fold belongs to ARCH-67.
 # READ-ONLY: it never prunes, never takes update.lock and writes nothing but its own file, by temp and rename with the writers'
 # idiom (`_tmp_guard`, so a die or a SIGTERM through the EXIT chain leaves no `.tmp.$$`); it sets no trap of its own. What a SIGTERM
 # leaves (D-7875): before the rename, the last good file; during the rename itself (the `mv` may finish after the EXIT chain has run),

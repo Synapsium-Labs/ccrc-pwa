@@ -1364,7 +1364,8 @@ bound in bytes (default 10737418240, 10 GiB; see **Swap-carry copies and the ded
 **Seeing a box's settings.** `ccrc settings` prints what seven of them resolve to on this box — the three keeps, the
 health window, the deadline (with the smallest and largest reading the server may hold), the release base (shown only
 as `default`, or `custom` with its scheme and host, so an ordinary userinfo URL shows its host, or `custom` alone when an `@` is
-left after the redaction or the value holds whitespace) and the models budget — with where each came from (the
+left after the redaction, the value holds whitespace or another byte that starts a token for the redactor, a `/` stands inside the
+userinfo, or the scheme is not http or https) and the models budget — with where each came from (the
 environment, `ccrc.env`, an empty `ccrc.env` line, or the default) and whether the act that reads it would use it,
 refuse it or could not decide (D-6914, D-7861). It also counts the timestamped backups, those that still hold a
 `coord.db`, their size, and the home filesystem's free space. It is read-only: it never prunes, takes no lock and

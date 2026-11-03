@@ -209,8 +209,9 @@ describe('ccrc settings: a ccrc.env the reader cannot take is unmeasured, never 
   });
 
   // Each platform's own reader (`_ccrc_knob`). On Linux the systemd reader makes only the key on the bad line unmeasured. On macOS the
-  // launchd job sources the whole file with bash, so the shell reader refuses the backup keys that job reads: here CCRC_BACKUP_KEEP and
-  // CCRC_BACKUP_DATA_KEEP, which the file never names (as CI's macOS leg measured on this row); CCRC_VERSIONS_KEEP stays ok on both.
+  // launchd job sources the whole file with bash, so the shell reader refuses the backup keys that job reads: here CCRC_BACKUP_KEEP,
+  // which the file names, and CCRC_BACKUP_DATA_KEEP, which it does not (as CI's macOS leg measured on this row); CCRC_VERSIONS_KEEP
+  // stays ok on both.
   it('an inner CR: on Linux only the key on that line is unmeasured, on macOS the two backup keys the launchd job reads', () => {
     const d = json(boxWith('ccrc-sv-cr-', 'CCRC_BACKUP_KEEP=5\rjunk\nNOTE=1\n'));
     expect(rowOf(d, 'CCRC_BACKUP_KEEP').state).toBe('unmeasured');
@@ -392,6 +393,17 @@ describe('ccrc settings: _upd_url_origin', () => {
     // fix the first three printed `https://u:p h`, `https://u:p<TAB>h` and `https://user h`.
     for (const u of ['https://u:p w@h/r', 'https://u:p\tw@h/r', 'https://user name:pw@h/r', 'https://u:p\nw@h/r', 'https://u:p"w@h/r',
       "https://u:p'w@h/r", 'https://u:p<w@h/r', 'https://u:p(w@h/r', 'https://u:p`w@h/r', 'https://h/r x']) expect(rc(u), JSON.stringify(u)).toEqual({ code: 1, out: '' });
+    // Review 1398 F1: a '/', a '\' or a '=' in the raw value between the scheme's `://` (or the start) and the last '@', and any scheme
+    // but http(s): rc 1, nothing printed. Before the fix the first two printed `https://deploy:` and `https://deploy:ab:`, the
+    // `=` form `user=mirror.example.invalid` and the `//` form `deploy://mirror.example.invalid`.
+    for (const u of ['https://deploy:/s3cret@mirror.example.invalid/r', 'https://deploy:ab:/cd@mirror.example.invalid/r',
+      'https://deploy:\\/s3cret@mirror.example.invalid/r', 'deploy:/s3cret@mirror.example.invalid/r', 'deploy:\\s3cret@mirror.example.invalid/r',
+      'user=x:pw@mirror.example.invalid/r', 'deploy://s3cret@mirror.example.invalid/r', 'ftp://mirror.example.invalid/r']) {
+      expect(rc(u), JSON.stringify(u)).toEqual({ code: 1, out: '' });
+    }
+    // An ordinary userinfo keeps its host, a value with no '@' is untouched, and the scheme's case is kept.
+    expect(rc('https://user:secret@mirror.example.invalid/r')).toEqual({ code: 0, out: 'https://mirror.example.invalid' });
+    expect(rc('HTTPS://mirror.example.invalid/r/x')).toEqual({ code: 0, out: 'HTTPS://mirror.example.invalid' });
     for (const u of ['https://h/p', 'h/p', 'http://h:8080/a']) expect(rc(u).code, u).toBe(0);
   });
 });
@@ -411,6 +423,10 @@ describe('ccrc settings: a release base whose userinfo survives the redaction re
     'https://deploy:pa ss@mirror.example.invalid/r',
     'https://deploy:pa\tss@mirror.example.invalid/r',
     'https://deploy name:pw@mirror.example.invalid/r',
+    // Review 1398 F1: a '/' inside the password; the real verb recorded `custom https://deploy:` and `custom https://deploy:ab:`.
+    'https://deploy:/s3cret@mirror.example.invalid/r',
+    'https://deploy:ab:/cd@mirror.example.invalid/r',
+    'deploy://s3cret@mirror.example.invalid/r',
   ])('%s reads exactly `custom`, in the JSON, the file and the human form', (url) => {
     const home = boxWith('ccrc-sv-url-at-');
     const r = settings(home, ['--json', '--write'], { CCRC_RELEASE_BASE_URL: url });

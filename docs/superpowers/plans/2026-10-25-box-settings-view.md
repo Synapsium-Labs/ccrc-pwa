@@ -569,9 +569,10 @@ symbol. The line numbers below are from `408d93806`: use them to find each place
   - No coord.db column. Additive.
 - **D-6917.** The Box settings card under Settings › Updates, read-only, rendered from the section's one poll, with one
   guarded reader (`boxSettingsOf`), total text tables, and C7 rows in the ring-context map.
-- **D-6918.** The growth waiver for `ccd/ccrc`: `server/test/growth-waivers/D-6918-ccd-ccrc.json`, `maxDelta` 201, the
-  measured delta. The PR measures +201 net code lines: +188 for the verb and the resolvers (at `0cd610500`), +5 for the
-  timer's install and uninstall rows, +7 for review 1385's fix round, and +1 for review 1396's (D-7873's whitespace rule).
+- **D-6918.** The growth waiver for `ccd/ccrc`: `server/test/growth-waivers/D-6918-ccd-ccrc.json`, `maxDelta` 203, the
+  measured delta. The PR measures +203 net code lines: +188 for the verb and the resolvers (at `0cd610500`), +5 for the
+  timer's install and uninstall rows, +7 for review 1385's fix round, +1 for review 1396's (D-7873's whitespace rule) and +2
+  for review 1398's (D-7873's scheme and `/` rules).
 - **D-6919.** The clip's ellipsis is ASCII `...`, and the order is: `_upd_redact`, then the ASCII spelling of `—`, `…` and
   `→`, then every other byte outside printable ASCII to `?`, then the cut to 477 bytes plus `...` (480 at most), then the
   JSON escape. The spec asked for both a `…` ending and a printable-ASCII validator, which cannot both hold;
@@ -596,8 +597,16 @@ symbol. The line numbers below are from `408d93806`: use them to find each place
   less (`custom`), never more. Extended by the coordinator's ruling of 2026-11-03 on review 1396 (F1): if the raw value,
   before `_upd_redact`, holds whitespace or another byte that starts a token for `_upd_redact` (`"`, `'`, `<`, `(` or a
   backtick), the row records `custom` alone too. `_upd_redact`'s token rule starts a new token there, consumes that token's
-  `@`, and a prefix of the credential was left with no `@` to show it (`https://u:p w@h/r` read `https://u:p h`). A URL
-  never holds one raw, so no valid base shows less.
+  `@`, and a prefix of the credential was left with no `@` to show it (`https://u:p w@h/r` read `https://u:p h`). A base
+  with one of these bytes in its path (`'` and `(` are legal there) shows no host: less, never more, and accepted (review
+  1398 F3). Extended again by the coordinator's ruling of 2026-11-03 on review 1398 (F1), to close the class: the row records
+  `custom` alone when a `/`, a `\` or a `=` stands in the raw value between the scheme's `://` (or the value's start) and its
+  last `@`, and when its scheme is anything but `http://` or `https://`. A `/` in the password stopped `_upd_redact`'s scheme
+  rule at the `://`, so it matched again at the userinfo's own `:` and dropped the rest with its `@`
+  (`https://deploy:/s3cret@m/r` read `https://deploy:`); its `KEY=` rule kept a scheme-less user name holding `=`
+  (`user=x:pw@m` read `user=m`); and a scheme-less password starting `//` (`deploy://s3cret@m`) reads as a scheme and showed
+  its user name. A probe of 107,520 userinfo shapes (each printable byte and a set of pairs in the user name and the password,
+  with and without a scheme, five host forms and eight tails) left no part of the userinfo in the origin.
 - **D-7874.** The coordinator's ruling of 2026-11-03 (review 1385; supersedes D-7863's reading). The reader's failure
   vocabulary gains `unmeasured`: the server holds no read of this node since it started. `unreadable` stays only for a read
   that was tried and failed. This is the "unmeasured is not unset" rule (D-6365) and the rule against an overloaded value at a
@@ -640,7 +649,8 @@ symbol. The line numbers below are from `408d93806`: use them to find each place
 - **The URL.** `_upd_url_origin` runs `_upd_redact` and keeps the scheme. If an `@` is still left in the value, the row
   reads `custom` alone (D-7873); otherwise the authority is cut at the first `/`, `?` or `#`. An interim strip to the last
   `@` after the cut still leaked a credential prefix when the userinfo held a raw `/`, `?` or `#` (review 1385, F1). A raw
-  value that holds whitespace or another byte `_upd_redact` starts a token at reads `custom` alone too (D-7873, review 1396 F1).
+  value that holds whitespace or another byte `_upd_redact` starts a token at reads `custom` alone too (D-7873, review 1396 F1),
+  and so does one with a `/`, `\` or `=` before its last `@`, or a scheme other than http(s) (D-7873, review 1398 F1).
 - **The write.** A failed `--write` exits 1 and leaves no half file; a run that answered exits 0. SIGTERM runs the EXIT
   chain, which removes the temp file. Before the rename the last good file is kept; during the rename the file is the last good
   one or the whole new one, never partial (D-7875). Both rows are ordered by a handshake, measured 20 runs green in a row;
@@ -650,14 +660,14 @@ symbol. The line numbers below are from `408d93806`: use them to find each place
 - **macOS.** The backups size goes through `_plat_bytes` (the platform shim), so macOS measures apparent bytes too; the timer is Linux only (spec D6).
 - **deploy.sh.** It does not place the watchdog's pair, so the settings pair joins `DEPLOY_SH_WITHHOLDS.units` with its own
   reason. `TimeoutStartSec=120` on the service: the verb's `du` and `df` are bounded at 20 s and 10 s, each through
-  `_plat_timeout`, which cannot return before its seconds plus the TERM-to-KILL grace (`CCD_TIMEOUT_KILL_AFTER`, 3 s by
-  default, clamped to 2 to 8 s). One after the other, that is 30 s before any grace, (20+3)+(10+3) = 36 s at the default grace
+  `_plat_timeout`, where a call that ignores TERM is killed at its seconds plus the TERM-to-KILL grace (`CCD_TIMEOUT_KILL_AFTER`,
+  3 s by default, clamped to 2 to 8 s; review 1398 F5). One after the other, that is 30 s before any grace, (20+3)+(10+3) = 36 s at the default grace
   and (20+8)+(10+8) = 46 s at the clamp, before the knob reads (review 1396 F3, correcting A2's figures).
 - **Census C4.** No row was needed: `cmd_settings` dispatches by a literal `case`, and the variable-key list is still its two
   rows. The census regex is lifted into `server/test/ccrcSettingsLine.ts`, which `ccrc-settings-census` and
   `ccrc-update-flip-backups` import. `ccrc-settings-verb`, `ccrc-settings-lib`, `graph-knobs` and `testbox-knobs` still carry
   their own copy, for ARCH-06; merging them is not this wave's (review 1396 F12).
-- **Growth.** `ccd/ccrc` +201 (waiver D-6918); `server/src/watch.ts` +7 (the lane field, one call at the end of
+- **Growth.** `ccd/ccrc` +203 (waiver D-6918); `server/src/watch.ts` +7 (the lane field, one call at the end of
   `sweepThenProject`, the getter beside `currentCollectCounts`); `server/src/update/routes.ts` +3;
   `server/src/update/inventory.ts` 0; `server/src/coord/store.ts` and `pwa/src/lib/api.ts` untouched.
 - **Rings.** `server/src/update/boxSettings.ts` measures L1 (imports `shared/` only), and `server/src/update/boxSettingsLane.ts`

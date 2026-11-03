@@ -177,7 +177,8 @@ export const POOL_EPOCH_FILE_NAME = 'pool-epoch';
  * the home prefix becomes `~/`), print as ASCII and stop at 480 bytes, and the release base shows only its scheme and host, or
  * `custom` alone. The seven settings are counts, seconds, milliseconds and that URL, so an accepted value holds no key or token. One
  * residual (review 1396 F4, the verb header's): a REFUSED numeric key records its raw value through `_upd_redact` alone, so a path,
- * a query string or a userinfo holding '/', '?' or '#' written there by mistake can reach the file; ARCH-67 folds it. The server's
+ * a query string, a userinfo holding '/', '?' or '#', or the part of a userinfo before whitespace or another token start
+ * (`https://u:p w@h/r` is recorded as `https://u:p h/r`) written there by mistake can reach the file; ARCH-67 folds it. The server's
  * box-settings lane reads it on the inventory's own run (`server/src/update/boxSettingsLane.ts`), so the sweep's
  * `MEASURED_FILE_KEYS` leaves it out too: it has its own reader and its own parse.
  */
