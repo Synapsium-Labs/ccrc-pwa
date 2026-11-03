@@ -37,3 +37,8 @@ export type ExportMissing = 'refused' | 'external' | 'deferred' | 'failed' | 'ti
  *  over the block cap; past a page ceiling; timed out; output too large; failed (the worker's failures and the check's
  *  structural refusals); no highlight worker; and, until W5h-b, refused by W5 part 1's bounds. */
 export type ExportPlain = 'over-cap' | 'page-ceiling' | 'timeout' | 'too-large' | 'failed' | 'no-worker' | 'part1-bounds';
+
+/** Why Export is shown but disabled (spec 4.17's "When it is offered"; refinement (j)): the parse has not settled or
+ *  answers another text, the page's highlight store has not settled, the render gate waits, or a raster leaf's own image
+ *  did not load. */
+export type ExportWait = 'formatting' | 'highlighting' | 'gate' | 'image-failed';

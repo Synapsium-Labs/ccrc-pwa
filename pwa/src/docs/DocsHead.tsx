@@ -4,22 +4,22 @@
 // and the freshness chip), the actions (View on GitHub, Share, Open committed version) and "Updated to <short>". A pure
 // renderer of the page, the visit and the tree answer: it starts no request, and the chip's tap is the visit's
 // `refreshManual`. Every draft word is `entryView`'s through `ENTRY_BADGE_TEXT`, the one badge function the rows use
-// too (M4.T7). Share (spec 4.16) opens ShareSheet over shareTargetFor's answer and makes no request either; Export is
-// its own run's.
-import { useState, type ReactNode } from 'react';
+// too (M4.T7). Share (spec 4.16) opens ShareSheet over shareTargetFor's answer and makes no request either; Export
+// (spec 4.17) follows Share on a leaf: exportStateFor decides, and ExportSheet builds and saves.
+import { useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
   DOCS_CLASS_CAP, contentClass, docsApi, docsPageUrl, entryView, githubBlobUrl,
   type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk, type EntryBadge, type EntryMode, type GithubTarget,
 } from '../../../shared/docs';
 import { doorMark } from '../command/door';
 import { formatAge } from '../fleet/formatReset';
-import { openExternal } from '../lib/markdown';
+import { NO_SUBSCRIPTION, openExternal } from '../lib/markdown';
 import { navigate } from '../lib/router';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { useNow } from '@ccrc/ui';
 import { docsLocation } from './docsLinks';
 import {
-  DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, GITHUB_REFUSAL_TEXT, VIA_SENTENCE,
+  DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, GITHUB_REFUSAL_TEXT, VIA_SENTENCE,
   failureSentence, fillSentence, kib, relationSentence, servedRefText, shortCommit, slotSentence, worktreeLabel,
 } from './docsText';
 import { SECTION_LABEL, docsPathKind, githubTargetFor } from './docsTree';
@@ -27,6 +27,11 @@ import { DocsPageLink } from './DocsTreeView';
 import type { DocsNotOk } from './failures';
 import { copyText, shareTargetFor, type ShareOpened } from './share';
 import { ShareSheet } from './ShareSheet';
+import { docMarkdownSource } from './DocMarkdown';
+import { ExportSheet } from './ExportSheet';
+import type { ExportRequest, ExportSource } from './export/exportInput';
+import type { ExportWait } from './export/policy';
+import { showBytes } from './objectUrls';
 import type { ExportBody } from './exportBody';
 import type { ExportAssets } from './export/exportAssets';
 import type { HighlightStore } from '../lib/highlightStore';
@@ -177,6 +182,80 @@ export function shareStateFor(
   // an `ok` slot's body can still be the old one, so only it waits for the new read (a held body in flight).
   if (file.s !== 'ok') return readyAt(expected, null);
   return samePin(file.pin, expected) ? readyAt(file.pin, file.answer.show) : updating;
+}
+
+/** Whether Export is offered on `page`, and on what (spec 4.5, 4.17; M4.SH3, M4.SH8, M4.EX12, M4.EX15; refinements (a),
+ *  (j), (k)). Only a leaf has Export, never in `frame=full`; the header draws no actions until the tree slot is `ok`.
+ *  - `absent`: a leaf that opens nothing (a withheld new file, a symlink, a submodule); class `other` or `html` (W6); an
+ *    over-cap raster; a file slot that settled with no bytes to show (refinement (k));
+ *  - `updating`: the leaf does not show `pinFor`'s pin yet (its read, or its raster image, is in flight);
+ *  - `waiting`: disabled, with why (`ExportWait`);
+ *  - `plain-view`: the reader frame shows the leaf; a tap turns it off so Export saves the plain view (refinement (a));
+ *  - `ready`: what to export.
+ *  Here and not in a module the header imports from `share.ts`: Share's refinement (o). */
+export type ExportState =
+  | { readonly s: 'absent' }
+  | { readonly s: 'updating'; readonly to: string }
+  | { readonly s: 'waiting'; readonly why: ExportWait }
+  | { readonly s: 'plain-view' }
+  | { readonly s: 'ready'; readonly source: ExportSource };
+
+export interface ExportInputs {
+  /** What the leaf's body shows; `null`: nothing published (it is formatting, or nothing is mounted). */
+  readonly body: ExportBody | null;
+  /** The page's or text leaf's store; `null`: none published. */
+  readonly store: HighlightStore | null;
+  /** `store.settled()`, read by the caller so the header re-renders when it settles. */
+  readonly settled: boolean;
+  /** The visit's image registry; `null`: none, so a raster leaf never readies. */
+  readonly assets: ExportAssets | null;
+}
+
+const EXPORT_ABSENT: ExportState = { s: 'absent' };
+const exportWaits = (why: ExportWait): ExportState => ({ s: 'waiting', why });
+
+export function exportStateFor(page: DocsPageLocation, tree: DocsTreeOk, file: FileSlot, x: ExportInputs): ExportState {
+  if (page.kind !== 'path' || page.frame === 'full') return EXPORT_ABSENT;
+  const k = docsPathKind(tree, page.section, page.path, modeOf(page));
+  const expected = pinFor(tree, page);
+  if (k.kind !== 'leaf' || expected === null) return EXPORT_ABSENT;
+  const cls = contentClass(page.path);
+  if (cls === 'other' || cls === 'html') return EXPORT_ABSENT;
+  const updating: ExportState = { s: 'updating', to: pinCommit(expected) };
+  if (cls === 'raster') {
+    const size = expected.kind === 'draft' ? k.entry.draft?.size : k.entry.committed?.size;
+    if (typeof size === 'number' && size > DOCS_CLASS_CAP.raster) return EXPORT_ABSENT;
+    const held = x.assets?.get(docsApi.file(page.project, expected));
+    if (held === undefined || held.s === 'loading') return updating;
+    if (held.s === 'failed') return exportWaits('image-failed');
+    return held.asset.kind === 'raster' ? { s: 'ready', source: { kind: 'raster', pin: expected, asset: held.asset } } : EXPORT_ABSENT;
+  }
+  if (file.s === 'none' || file.s === 'loading') return updating;
+  if (file.s !== 'ok') return EXPORT_ABSENT;
+  if (!samePin(file.pin, expected)) return updating;
+  const pin = file.pin;
+  const show = file.answer.show;
+  if (cls === 'svg') {
+    const bytes = file.answer.contentClass === 'svg' ? showBytes(show) : null;
+    return bytes === null ? EXPORT_ABSENT : { s: 'ready', source: { kind: 'svg', pin, show, bytes } };
+  }
+  const src = docMarkdownSource(show);
+  if (src.kind === 'no-bytes') return EXPORT_ABSENT;
+  const b = x.body;
+  if (b === null) return exportWaits('formatting');
+  if (cls === 'markdown' && b.kind === 'reader') return { s: 'plain-view' };
+  if (cls === 'markdown' && b.kind === 'gate') return exportWaits('gate');
+  if (b.kind === 'plain' && b.text === src.text) return { s: 'ready', source: { kind: 'plain', pin, show, body: b } };
+  if (cls === 'markdown' && b.kind === 'tree' && b.text === src.text) {
+    return x.store === null || !x.settled ? exportWaits('highlighting')
+      : { s: 'ready', source: { kind: 'tree', pin, show, body: b, store: x.store } };
+  }
+  if (cls === 'text' && b.kind === 'text' && b.text === src.text) {
+    if (b.lang === null) return { s: 'ready', source: { kind: 'text', pin, show, body: b, store: null } };
+    return x.store === null || !x.settled ? exportWaits('highlighting')
+      : { s: 'ready', source: { kind: 'text', pin, show, body: b, store: x.store } };
+  }
+  return exportWaits('formatting');
 }
 
 /** The freshness chip's `data-state` (spec 4.5's table). */
@@ -394,6 +473,58 @@ function GithubAction(p: { readonly tree: DocsTreeOk; readonly target: GithubTar
   );
 }
 
+/** Whether `store` has settled, re-read whenever it changes (its store-wide `subscribe()`); no store reads settled. */
+function useStoreSettled(store: HighlightStore | null): boolean {
+  const subscribe = useMemo(() => (store === null ? NO_SUBSCRIPTION : store.subscribe()), [store]);
+  const read = (): boolean => store === null || store.settled();
+  return useSyncExternalStore(subscribe, read, read);
+}
+
+/** Re-renders the caller whenever the image registry changes. */
+function useAssetsVersion(assets: ExportAssets | null): number {
+  const read = (): number => (assets === null ? 0 : assets.version());
+  return useSyncExternalStore(assets === null ? NO_SUBSCRIPTION : assets.subscribe, read, read);
+}
+
+/** What an open export sheet is about (refinement (u)): the page, the commit its tree serves, and the pin it exports.
+ *  `ExportAction` is keyed by it, so a re-list or a back gesture closes the sheet. The `export` prefix keeps it from
+ *  ever equalling `shareKeyOf`'s key: both are siblings, and an `updating` pair would otherwise collide. */
+function exportKeyOf(page: Leaf, tree: DocsTreeOk, state: Exclude<ExportState, { s: 'absent' }>): string {
+  const shows = state.s === 'ready' ? docsApi.file(page.project, state.source.pin) : state.s;
+  return ['export', docsPageUrl(page), tree.ref.commit, shows].join('\u0000');
+}
+
+/** Export (spec 4.17), after Share on a leaf. Ready: a tap opens the sheet over the request captured now. Plain view: a
+ *  tap turns the reader off on this page (refinement (a)). Otherwise disabled, reading why; its accessible name then
+ *  says it is Export's ("Export: <why>"), so it never shares a name with Share's own "Updating to <short>…". */
+function ExportAction(p: {
+  readonly page: Leaf; readonly tree: DocsTreeOk; readonly state: Exclude<ExportState, { s: 'absent' }>;
+  readonly assets: ExportAssets | null; readonly readAt: number | null; readonly onPlainView: (() => void) | null;
+}): ReactNode {
+  const { page, tree, state } = p;
+  const [request, setRequest] = useState<ExportRequest | null>(null);
+  const words = state.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareUpdating, { short: shortCommit(state.to) })
+    : state.s === 'waiting' ? EXPORT_WAIT_TEXT[state.why]
+      : state.s === 'plain-view' ? DOCS_HEAD_TEXT.exportPlainView : DOCS_HEAD_TEXT.export;
+  const busy = state.s === 'updating' || state.s === 'waiting';
+  const enabled = state.s === 'ready' || (state.s === 'plain-view' && p.onPlainView !== null);
+  const onClick = (): void => {
+    if (state.s === 'plain-view') p.onPlainView?.();
+    else if (state.s === 'ready') setRequest({ page, tree, source: state.source, assets: p.assets, readAt: p.readAt });
+  };
+  return (
+    <>
+      <button
+        type="button" className="docs-action docs-export" disabled={!enabled} onClick={onClick}
+        aria-label={busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : undefined}
+      >
+        {words}
+      </button>
+      {request !== null && <ExportSheet request={request} onClose={() => setRequest(null)} />}
+    </>
+  );
+}
+
 /** What an open share sheet is about (refinement (n)): the page, the commit its tree serves, and what the leaf opened.
  *  `ShareAction` is keyed by it, so a sheet left open closes when any of them changes, rather than name a page the
  *  screen no longer shows. */
@@ -407,7 +538,7 @@ function shareKeyOf(page: TreePage, tree: DocsTreeOk, share: Exclude<ShareState,
  *  `pinFor`'s pin; otherwise a tap opens the sheet over `shareTargetFor`'s answer for what the page opened, worked out
  *  while the sheet is open. */
 function ShareAction(p: {
-  readonly page: TreePage; readonly tree: DocsTreeOk; readonly share: Exclude<ShareState, { s: 'absent' }>;
+  readonly page: TreePage; readonly tree: DocsTreeOk; readonly share: Exclude<ShareState, { s: 'absent' }>; readonly exportOffered: boolean;
 }): ReactNode {
   const { page, tree, share } = p;
   const [open, setOpen] = useState(false);
@@ -417,8 +548,8 @@ function ShareAction(p: {
       <button type="button" className="docs-action docs-share" disabled={share.s === 'updating'} onClick={() => setOpen(true)}>
         {share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareUpdating, { short: shortCommit(share.to) }) : DOCS_HEAD_TEXT.share}
       </button>
-      {/* Export (spec 4.17) passes whether it offers Export on this page; until it ships, no page does. */}
-      {target !== null && <ShareSheet target={target} exportOffered={false} onClose={() => setOpen(false)} />}
+      {/* Whether this page offers Export (spec 4.17): the refusals that take Export's clause then carry it (spec 4.16). */}
+      {target !== null && <ShareSheet target={target} exportOffered={p.exportOffered} onClose={() => setOpen(false)} />}
     </>
   );
 }
@@ -426,14 +557,19 @@ function ShareAction(p: {
 /** The actions (spec 4.5): View on GitHub; Share (spec 4.16), wherever `shareStateFor` offers it; and Open committed
  *  version, offered iff `entryView(...).offersCommitted` on a leaf not already at `view=committed`. Open committed
  *  version navigates with a history entry (URL state, so Back returns to the draft); the commit never enters the URL,
- *  it is resolved from this visit's tree. Export joins after Share in its own run. */
+ *  it is resolved from this visit's tree. Export (spec 4.17) follows Share on a leaf. */
 function Actions(p: {
   readonly page: TreePage; readonly tree: DocsTreeOk; readonly file: DocsVisit['file']; readonly leafImage: DocPin | null;
+  readonly exportBody: ExportBody | null; readonly pageStore: HighlightStore | null; readonly exportAssets: ExportAssets | null;
+  readonly onPlainView: (() => void) | null;
 }): ReactNode {
   const { page, tree, file } = p;
   const target = githubTargetFor(page, tree);
   const showsDraft = page.kind === 'path' && openedPin(tree, page, file)?.kind === 'draft';
   const share = shareStateFor(page, tree, file, p.leafImage);
+  const settled = useStoreSettled(p.pageStore);
+  useAssetsVersion(p.exportAssets);
+  const exported = exportStateFor(page, tree, file, { body: p.exportBody, store: p.pageStore, settled, assets: p.exportAssets });
   let committedHref: string | null = null;
   if (page.kind === 'path' && page.view !== 'committed') {
     const k = docsPathKind(tree, page.section, page.path, modeOf(page));
@@ -446,7 +582,15 @@ function Actions(p: {
   return (
     <div className="docs-actions">
       {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} />}
-      {share.s !== 'absent' && <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} />}
+      {share.s !== 'absent' && (
+        <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} exportOffered={exported.s !== 'absent'} />
+      )}
+      {exported.s !== 'absent' && page.kind === 'path' && (
+        <ExportAction
+          key={exportKeyOf(page, tree, exported)} page={page} tree={tree} state={exported} assets={p.exportAssets}
+          readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView}
+        />
+      )}
       {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
     </div>
   );
@@ -499,7 +643,11 @@ export function DocsHead(p: {
       {tree !== null && page.kind !== 'index' && (
         <>
           <TruthLine page={page} visit={visit} tree={tree} receivedAt={receivedAt} now={now} />
-          <Actions page={page} tree={tree} file={visit.file} leafImage={p.leafImage ?? null} />
+          <Actions
+            page={page} tree={tree} file={visit.file} leafImage={p.leafImage ?? null} exportBody={p.exportBody ?? null}
+            pageStore={p.pageStore ?? null} exportAssets={p.exportAssets ?? null} onPlainView={p.onPlainView ?? null}
+          />
+          {p.plainView === true && <p className="docs-note" role="status">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
         </>
       )}
       {visit.updatedTo !== null && (

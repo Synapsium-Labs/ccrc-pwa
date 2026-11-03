@@ -85,7 +85,7 @@ export function nodeText(n: ReactNode): string {
   return '';
 }
 
-const NO_SUBSCRIPTION = (_listener: () => void): (() => void) => () => undefined;
+export const NO_SUBSCRIPTION = (_listener: () => void): (() => void) => () => undefined;
 
 /** A block's entry in `store`, read as React reads an external store; the shared `unrequested` entry with no store
  *  or no key. `peek` is also the server snapshot, so `renderToStaticMarkup` reads the store and never requests. */
