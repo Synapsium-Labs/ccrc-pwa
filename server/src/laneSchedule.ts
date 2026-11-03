@@ -154,6 +154,11 @@ export const DISK_SWEEP_MS = 60_000;
  *  here for the reason `DISK_SWEEP_MS` is; `tmpSweepLane.ts` re-exports it (D-7895). */
 export const TMP_SWEEP_CENSUS_MS = 5 * 60_000;
 
+/** The stale-archive arm's cadence (D-6643, spec §2.7.5): hourly, which is also the gap between the two sightings a row
+ *  needs. Declared here for the reason `DISK_SWEEP_MS` is (the L0 table imports no L3 file); `coord/staleArchive.ts`
+ *  re-exports it (D-7895). */
+export const STALE_ARCHIVE_SWEEP_MS = 60 * 60_000;
+
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
 
@@ -167,7 +172,7 @@ export type LaneName =
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -295,6 +300,9 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // The tmp sweep census (D-6624) starts due as it always has, lets passes overlap, and its pass never rejects; `tick`
   // dispatches it beside the disk alarm, on the last good registry listing.
   { name: 'tmpCensus', cadenceMs: TMP_SWEEP_CENSUS_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
+  // The stale-archive arm (D-6643) starts due and keeps one pass at a time: its `sweeping` guard is this row's `skip`, with no
+  // stuck-run age (a pass in flight was never abandoned). Its pass catches its own failure with its own sentence, so no warnKey.
+  { name: 'staleArchive', cadenceMs: STALE_ARCHIVE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
 ];
 
 export function laneRow(name: string): LaneRow {

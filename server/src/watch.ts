@@ -2353,10 +2353,11 @@ export class FleetWatcher {
     return Promise.allSettled(started).then(() => undefined);
   }
 
-  /** The STALE-ARCHIVE ARM (D-6643, fleet disk retention spec §2.7.5): `StaleArchiveBeat` holds the clock, the memory and the
-   *  pass. Hourly, one pass at a time, on the tick's rows and listing; SHADOW until `$REG/stale-archive-live`. */
+  /** The STALE-ARCHIVE ARM (D-6643, fleet disk retention spec §2.7.5): `StaleArchiveBeat` holds the memory and the pass, the
+   *  `staleArchive` row the clock and the single flight (D-7895). Hourly, one pass at a time, on the tick's rows and listing;
+   *  SHADOW until `$REG/stale-archive-live`. */
   async sweepStaleArchive(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
-    await this.staleArchive.sweep(records, names);
+    await this.runLane('staleArchive', () => this.staleArchive.pass(records, names));
   }
 
   /** At an unattended act (the stop-done lane's, hibernation's): the registry record read AGAIN and the frame's row
