@@ -8,6 +8,7 @@ import type { FleetIO } from './io.js';
 import type { ProjectRow } from '../../shared/api.js';
 import type { CcdResult, RunCcd } from './coord/ports.js';
 import { readRegistryMeasured } from './registry.js';
+import { mapBounded } from './bounded.js';
 
 // D-6003: `CcdResult` and its runner's type are L2 ports in `coord/ports.ts`, beside their consumers; re-exported
 // here so every importer of this file still compiles.
@@ -133,6 +134,100 @@ const isLinkedWorktree = async (
   return kind.ok && kind.kind === 'regular'; // D-5967: unmeasured keeps
 };
 
+/** The walk's reads in flight at once (desktop polish C4, D-6436), through the one bounded pool (`bounded.ts`). Each
+ *  slot is one directory: its listing, then its `.git` probe, in that order, so never more than this many reads are
+ *  out at once. */
+export const PROJECT_WALK_CONCURRENCY = 8;
+
+/** How long `ProjectWalkCache` keeps the root walk and each probe's verdict (D-6436). */
+export const PROJECT_WALK_TTL_MS = 30_000;
+
+/** How old the watcher's latest listed tick may be, measured from when its registry read BEGAN, before
+ *  `GET /api/projects` reads the registry itself instead (D-6436). Set by C4's Step 0 at about two ticks: on the
+ *  base, a tick over 80 rows took about 7 s at 60 ms a request (about 9.6 s with every sweep due), and the listing
+ *  a route reads can be up to a tick and a poll interval older than the newest one. */
+export const FLEET_ROWS_MAX_AGE_MS = 20_000;
+
+/** A registry row as `listProjects` reads it: a `SessionRecord` and a `FleetSession` both carry these two verbatim. */
+export interface ProjectSourceRow { readonly project: string; readonly workdir: string }
+
+/** The watcher's latest listing, as the route hands it over: `listedAt` is when that tick's registry read began.
+ *  Structural, so this file never imports `watch.ts`. */
+export interface FleetRowsListing { readonly sessions: readonly ProjectSourceRow[]; readonly listedAt: number }
+
+/**
+ * Whether the watcher's listing may stand in for `listProjects`'s own registry read (D-6436). Pure. `null` means
+ * "read the registry yourself": there is no listing (no broadcast yet, or the latest tick could not list), or it is
+ * `boundMs` or more old, or its stamp is in the future (a clock that stepped back proves nothing about its age).
+ * The caller passes `null` for a tick that did not list, so a stale or unlistable tick never answers `'listed'`.
+ */
+export function fleetRowsUsable(
+  listing: FleetRowsListing | null,
+  nowMs: number,
+  boundMs: number,
+): readonly ProjectSourceRow[] | null {
+  if (listing === null) return null;
+  const age = nowMs - listing.listedAt;
+  return age >= 0 && age < boundMs ? listing.sessions : null;
+}
+
+/**
+ * The projects route's cache of what changes slowly (D-6436): the walk of `cfg.projectsRoot` and each registry
+ * workdir's linked-worktree verdict, each for `PROJECT_WALK_TTL_MS` on the injected clock. A failed root listing is
+ * never kept, so the next request walks again. Pools, limits, shares, readiness and repo cells are never cached
+ * here, so a pool write shows on the next request.
+ *
+ * Kept on purpose, and said once: an entry under the root whose listing failed is left out of a kept walk as it is
+ * left out of today's one answer (`readdir` cannot tell a plain file from a dropped read), so such a gap lasts up to
+ * the TTL rather than one request.
+ */
+export class ProjectWalkCache {
+  private walk: { at: number; rows: readonly ProjectRow[] } | null = null;
+  private readonly probes = new Map<string, { at: number; linked: boolean }>();
+
+  constructor(private readonly now: () => number = () => Date.now(), private readonly ttlMs = PROJECT_WALK_TTL_MS) {}
+
+  private fresh(at: number): boolean {
+    const age = this.now() - at;
+    return age >= 0 && age < this.ttlMs;
+  }
+
+  /** The kept walk while it is fresh, else null. */
+  keptWalk(): readonly ProjectRow[] | null {
+    return this.walk !== null && this.fresh(this.walk.at) ? this.walk.rows : null;
+  }
+
+  keepWalk(rows: readonly ProjectRow[]): void {
+    this.walk = { at: this.now(), rows };
+  }
+
+  /** A workdir's kept verdict while it is fresh, else null. */
+  keptProbe(workdir: string): boolean | null {
+    const v = this.probes.get(workdir);
+    return v !== undefined && this.fresh(v.at) ? v.linked : null;
+  }
+
+  keepProbe(workdir: string, linked: boolean): void {
+    for (const [k, v] of this.probes) if (!this.fresh(v.at)) this.probes.delete(k);
+    this.probes.set(workdir, { at: this.now(), linked });
+  }
+}
+
+/** The root walk: one slot per entry (its listing, then its probe), at most `PROJECT_WALK_CONCURRENCY` in flight, the
+ *  answer in the listing's order whatever order the reads finish in. Null when the root itself could not be listed. */
+const walkRoot = async (io: FleetIO, cfg: CcrcConfig): Promise<ProjectRow[] | null> => {
+  const names = await io.readdir(cfg.projectsRoot);
+  if (names === null) return null;
+  const rows = await mapBounded(names.filter((n) => !n.startsWith('.')), PROJECT_WALK_CONCURRENCY, async (name) => {
+    const workdir = path.join(cfg.projectsRoot, name);
+    const entries = await io.readdir(workdir);
+    if (entries === null) return null; // not a directory — skip
+    if (await isLinkedWorktree(io, workdir, entries)) return null;
+    return { name, workdir };
+  });
+  return rows.filter((r): r is ProjectRow => r !== null);
+};
+
 /**
  * Directories under cfg.projectsRoot (dotfiles skipped) unioned with registry
  * workdirs, deduped by workdir. Sorted by name (byte order) for determinism.
@@ -148,32 +243,54 @@ const isLinkedWorktree = async (
  * `projects` holds the root walk alone: a registry-only project is then
  * missing because nothing was read, not because it is gone. A refused row
  * (`RegistryRead.refused`) is never read, so its workdir never joins the union.
+ *
+ * D-6436: `rows`, when given, IS the registry half (the watcher's current listing, which `fleetRowsUsable` passed),
+ * so no session field file is read and the answer is `'listed'`; omitted, this reads the registry itself, exactly as
+ * before. The walk and the registry workdirs' probes run through `mapBounded`, and precedence is unchanged whatever
+ * order the reads finish in: root rows first, then registry rows in record order, the first holder of a workdir
+ * keeping it. `cache`, when given, keeps the walk and the probes' verdicts (`ProjectWalkCache`).
  */
 export async function listProjects(
   io: FleetIO,
   cfg: CcrcConfig,
+  rows?: readonly ProjectSourceRow[],
+  cache?: ProjectWalkCache,
 ): Promise<{ roots: string[]; projects: ProjectRow[]; registry: 'listed' | 'unlistable' }> {
-  const byWorkdir = new Map<string, ProjectRow>();
-  const names = await io.readdir(cfg.projectsRoot);
-  if (names !== null) {
-    for (const name of names) {
-      if (name.startsWith('.')) continue;
-      const workdir = path.join(cfg.projectsRoot, name);
-      const entries = await io.readdir(workdir);
-      if (entries === null) continue; // not a directory — skip
-      if (await isLinkedWorktree(io, workdir, entries)) continue;
-      byWorkdir.set(workdir, { name, workdir });
-    }
+  let walked = cache?.keptWalk() ?? null;
+  if (walked === null) {
+    const fresh = await walkRoot(io, cfg);
+    if (fresh !== null) cache?.keepWalk(fresh);
+    walked = fresh ?? [];
   }
-  // [registry-refused:reports] one read; `registry` below reports whether it listed.
-  const reg = await readRegistryMeasured(io, cfg);
-  for (const rec of reg.listed ? reg.records : []) {
-    if (!byWorkdir.has(rec.workdir) && !(await isLinkedWorktree(io, rec.workdir))) {
+  const byWorkdir = new Map<string, ProjectRow>(walked.map((r) => [r.workdir, r]));
+  let source: readonly ProjectSourceRow[];
+  let listed: boolean;
+  if (rows !== undefined) {
+    source = rows;
+    listed = true;
+  } else {
+    // [registry-refused:reports] one read; `registry` below reports whether it listed.
+    const reg = await readRegistryMeasured(io, cfg);
+    source = reg.listed ? reg.records : [];
+    listed = reg.listed;
+  }
+  // One probe per workdir the root did not already hold, in first-appearance order.
+  const candidates = [...new Set(source.map((r) => r.workdir).filter((w) => !byWorkdir.has(w)))];
+  const linked = await mapBounded(candidates, PROJECT_WALK_CONCURRENCY, async (workdir) => {
+    const kept = cache?.keptProbe(workdir) ?? null;
+    if (kept !== null) return kept;
+    const verdict = await isLinkedWorktree(io, workdir);
+    cache?.keepProbe(workdir, verdict);
+    return verdict;
+  });
+  const isLinked = new Map(candidates.map((w, i) => [w, linked[i]!]));
+  for (const rec of source) {
+    if (!byWorkdir.has(rec.workdir) && isLinked.get(rec.workdir) === false) {
       byWorkdir.set(rec.workdir, { name: rec.project, workdir: rec.workdir });
     }
   }
   const projects = [...byWorkdir.values()].sort((a, b) =>
     a.name < b.name ? -1 : a.name > b.name ? 1 : a.workdir < b.workdir ? -1 : 1,
   );
-  return { roots: [cfg.projectsRoot], projects, registry: reg.listed ? 'listed' : 'unlistable' };
+  return { roots: [cfg.projectsRoot], projects, registry: listed ? 'listed' : 'unlistable' };
 }
