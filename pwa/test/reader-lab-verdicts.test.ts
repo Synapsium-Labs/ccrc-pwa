@@ -196,6 +196,15 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
     expect(labVerdicts(runWith({ ...HEALTHY, 'csp-beacon': one }), LOCAL_OK, 200)['csp-27'].verdict).toBe('does-not-hold');
   });
 
+  it('mermaid: a partial mount list is not measured, never holds, and an over-budget gap still decides', () => {
+    const f1 = LOCAL_OK.mounts.filter((m) => m.label === 'f1');
+    expect(verdictsOf({}, { ...LOCAL_OK, mounts: f1 }).mermaid)
+      .toEqual({ verdict: 'not-measured', detail: 'did not draw: f2 missing, f3 missing, f4 missing, f5 missing, f6 missing, all missing' });
+    const noAll = LOCAL_OK.mounts.filter((m) => m.label !== 'all');
+    expect(verdictsOf({}, { ...LOCAL_OK, mounts: noAll }).mermaid).toEqual({ verdict: 'not-measured', detail: 'did not draw: all missing' });
+    expect(verdictsOf({}, { ...LOCAL_OK, mounts: [{ ...f1[0]!, longestGapMs: 420 }] }).mermaid.verdict).toBe('does-not-hold');
+  });
+
   it('the draw-on-open reading: what the busy frame\'s fact and the Mermaid line mean for drawing on open', () => {
     const shared = { ...LOCAL_OK, busy: { longestGapMs: 3012, timerLateMs: 2489, spinMs: 3000 } };
     const read = (local: LabLocal, over: Over = {}): string => drawOnOpenReading(verdictsOf(over, local), local, 200);

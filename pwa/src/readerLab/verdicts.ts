@@ -2,7 +2,7 @@
 // reader lab design, section 3.2; the rich-docs spec's row M10.13). Ring L1: pure. Each line answers one of its three
 // words and a short detail, from the door's counts for the run and what the page itself observed. "Not measured" never
 // folds into "holds": a check holds only once its own positive signal is there (a frame's report, the control and its
-// floor, the canary, the tap, a mount that reached ready), and a wall's broken signals are read
+// floor, the canary, the tap, a mount that reached ready, every figure mount present), and a wall's broken signals are read
 // first, so a forged arrival cannot hide a real "broke" or a real arrival at a wall's target. (A forged POSITIVE signal can
 // still turn "not measured" into "holds" for a frame that never ran: that defence is the nonce's secrecy, the design's
 // section 4.6, not these rules.) A saturated run (the door stopped counting) keeps a counted "does not hold", which is
@@ -178,12 +178,15 @@ function busyFrame(r: LabRunView, local: LabLocal): LabOutcome {
   };
 }
 
+/** The seven figure mounts the Mermaid line needs before it can hold: the six figures singly, then the six together. */
+const FIGURE_LABELS = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'all'] as const;
+
 const worstOf = (list: readonly LabMount[]): LabMount => list.reduce((a, b) => (b.longestGapMs > a.longestGapMs ? b : a));
 
 /** The Mermaid stall under the lab profile's draw mode, draw on open. Every figure mount counts, the six together (`all`,
  *  the heavy page) included, and so does a mount that fell back or timed out, where a stall is likeliest: the worst gap of
- *  them all decides. Over the budget: does not hold. Within it, a figure mount that did not draw cannot show that it
- *  holds: not measured, naming it. */
+ *  them all decides. Over the budget: does not hold. Within it, a figure mount that did not draw, or that is missing from
+ *  the list, cannot show that it holds: not measured, naming it. */
 function mermaid(local: LabLocal, budgetMs: number): LabOutcome {
   const figures = local.mounts.filter((m) => /^f\d$/.test(m.label) || m.label === 'all');
   if (figures.length === 0) return unmeasured('not run');
@@ -194,7 +197,10 @@ function mermaid(local: LabLocal, budgetMs: number): LabOutcome {
     : `all six together${single === null ? '' : `; worst single: figure ${single.label.slice(1)}, ${ms(single.longestGapMs)} ms`}`;
   const detail = `longest gap ${ms(worst.longestGapMs)} ms, ${where}`;
   if (worst.longestGapMs > budgetMs) return broken(detail);
-  const missed = figures.filter((m) => m.outcome !== 'ready').map((m) => `${m.label} ${m.outcome}`);
+  const missed = [
+    ...figures.filter((m) => m.outcome !== 'ready').map((m) => `${m.label} ${m.outcome}`),
+    ...FIGURE_LABELS.filter((l) => !figures.some((m) => m.label === l)).map((l) => `${l} missing`),
+  ];
   return missed.length > 0 ? unmeasured(`did not draw: ${missed.join(', ')}`) : holds(detail);
 }
 
