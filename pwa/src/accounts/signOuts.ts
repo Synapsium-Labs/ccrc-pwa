@@ -5,8 +5,10 @@
 // sheet opened later on the lane says it keeps its old credential on that check (`oldCredentialOf`, connectFlow.ts).
 // It is the app's memory alone: a reload or another device forgets it, and the rule's neutral words cover that.
 //
-// Writers: the re-auth sheet's and the connect sheet's Sign this lane out and start again. Readers: every sheet that
-// speaks of the lane's old credential (the re-auth and method switch sheets), through `oldCredentialOf`.
+// Writers: the re-auth sheet's and the connect sheet's Sign this lane out and start again, on any answer that may have
+// signed the lane out (removed, absent, or a request that never completed), whether or not the sheet is still open.
+// Readers: every sheet that speaks of the lane's old credential (the re-auth and method switch sheets), through
+// `oldCredentialOf`.
 import type { SignOutRecord } from './connectFlow';
 
 const signOuts = new Map<string, SignOutRecord>();

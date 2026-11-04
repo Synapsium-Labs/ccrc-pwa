@@ -13,7 +13,7 @@ import { resetSignOutsForTests } from '../src/accounts/signOuts';
 import {
   CANCEL_SIGN_IN, CODE_FIELD_LABEL, LEDGER, MINT_INSTEAD, MINT_NEW_TOKEN, PASTE_A_TOKEN, PASTE_INSTEAD, REAUTH_WRONG, REPLACE_TOKEN,
   NOTHING_INSTALLED, SEND_CODE, SIGN_IN_AGAIN, SIGN_OUT_RESTART, STATED_LABEL, SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, credentialUntouched, laneSignedOut,
-  reauthEnd, reauthInstalled, reauthIntro, reauthStartRefusal, revokeRecord, switchTitle, type SignInEndKind,
+  reauthEnd, reauthInstalled, reauthIntro, reauthStartRefusal, revokeRecord, switchIntro, switchTitle, type SignInEndKind,
 } from '../src/fleet/accountWords';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError, api } from '../src/lib/api';
@@ -515,6 +515,40 @@ describe('a lane that says it has no credential: the intro and every ending say 
     expect(oldCredentialOf(checked('ok', at), undefined, { checkAt: at })).toBe('unsure');
     expect(oldCredentialOf(checked('ok', at + 1), undefined, { checkAt: at })).toBe('kept');
     expect(oldCredentialOf(checked('ok', at), undefined, {})).toBe('kept');
+  });
+});
+
+describe("the screen hands each sheet the lane's 401 marker (D-7872 (10))", () => {
+  // The Signed-out sign-in card's own shape: the provider refused lane-a (ccd's 401 marker in its telemetry row) after
+  // an older check passed. Only the marker says the old sign-in may be gone, so a sheet opened without it would say
+  // lane-a keeps the sign-in it has.
+  const PASSED_THEN_401: LaneWire = { ...LANES['lane-a']!, check: { verdict: 'ok', at: now - 3 * 3_600_000 } };
+  function screenWithMarker(): void {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    act(() => useFleetStore.setState({
+      conn: 'open', usage: [usageOf('lane-a', { authDead: true })], roster: ROSTER, accountsConnect: CONNECT(),
+      lanes: { ...LANES, 'lane-a': PASSED_THEN_401 }, sessions: [], accountsReadAt: () => Date.now(),
+    }));
+    render(<AccountsScreen />);
+  }
+  const acts = (): HTMLElement => card('lane-a').querySelector('.acct-trouble-acts') as HTMLElement;
+
+  it("the card's Sign in again: the re-auth sheet's intro is the neutral one", () => {
+    expect(oldCredentialOf(PASSED_THEN_401, null, undefined)).toBe('kept');
+    screenWithMarker();
+    expect(actsOf('lane-a')).toEqual([[SWITCH_TO_TOKEN, true], [SIGN_IN_AGAIN, false]]);
+    fireEvent.click(within(acts()).getByRole('button', { name: SIGN_IN_AGAIN }));
+    const sheet = document.querySelector('.acct-reauth') as HTMLElement;
+    expect(within(sheet).getByText(reauthIntro('lane-a', 'login', 'unsure'))).toBeInTheDocument();
+    expect(sheet.textContent).not.toMatch(/keeps/);
+  });
+
+  it("the card's primary, Switch to a long-lived token: the switch sheet's intro is the neutral one", () => {
+    screenWithMarker();
+    fireEvent.click(within(acts()).getByRole('button', { name: SWITCH_TO_TOKEN }));
+    const sheet = screen.getByRole('dialog', { name: switchTitle('lane-a', 'setup-token') });
+    expect(within(sheet).getByText(switchIntro('lane-a', 'setup-token', 'unsure'))).toBeInTheDocument();
+    expect(sheet.textContent).not.toMatch(/keeps its|still uses its/);
   });
 });
 

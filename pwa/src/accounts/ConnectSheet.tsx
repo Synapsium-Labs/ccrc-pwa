@@ -44,7 +44,7 @@ import {
   READ_AGAIN, addRefusal, configDirFoundText, laneActRefusal, notFoundAfterUnknown, resultDone, stillUnknownAfterUnknown,
   ADD_AND_SIGN_IN, DISCARD_LANE, DONE, SIGN_IN_LEDGER,
   STEP_UP_AGAIN_DISCARD, STEP_UP_AGAIN_SIGN_OUT, START_AGAIN, discardedDone, removeRefusal, removeUnknown,
-  signOutConfirm, signOutRefused, statedRefused, STEP_UP_AGAIN_ADD,
+  signOutConfirm, signOutRefused, signOutUnknown, statedRefused, STEP_UP_AGAIN_ADD,
 } from '../fleet/accountWords';
 import { CompromiseSteps } from './CompromiseSteps';
 import { ConfirmItsYou } from './ConfirmItsYou';
@@ -403,6 +403,9 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
     } catch (e) {
       failure = e;
     }
+    // The sheets opened on this lane later must not say it keeps its old sign-in on the check from before (D-7872 (10)):
+    // recorded whether or not this sheet is still open, on any answer that may have signed it out (an unknown one too).
+    if (outcome === 'done' && (removed !== null || signOutUnknown(wordOf(failure)))) noteSignOut(id, lane?.check?.at);
     if (!live.current) return;
     try {
       if (outcome === 'step-up') { setNotice(STEP_UP_AGAIN_SIGN_OUT); alert(STEP_UP_AGAIN_SIGN_OUT); return; }
@@ -412,8 +415,6 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
         alert(text);
         return;
       }
-      // The sheets opened on this lane later must not say it keeps its old sign-in on the check from before (D-7872 (10)).
-      noteSignOut(id, lane?.check?.at);
       setLane(null);
       setLatency(null);
       setOn(false);

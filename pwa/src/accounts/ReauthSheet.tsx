@@ -37,7 +37,7 @@ import {
   REVOKED_OLD, REVOKE_PAGES, SIGN_IN_AGAIN, SIGN_IN_LEDGER, START_SWITCH_AGAIN, STATE_LAMPS, STEP_UP_AGAIN_SIGN_OUT,
   SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, identityLine, laneActRefusal, reauthEnd, reauthInstalled, reauthIntro,
   reauthRestartLead, reauthSignOutConfirm, reauthStart, reauthStartRefusal, reauthTitle, reauthWasLine, revokeOldLead,
-  revokeOldTail, signOutRefused, statedRefused, type OldCredential,
+  revokeOldTail, signOutRefused, signOutUnknown, statedRefused, type OldCredential,
 } from '../fleet/accountWords';
 import { AccountSheet, type Announcement } from './AccountSheet';
 import { CompromiseSteps } from './CompromiseSteps';
@@ -228,6 +228,12 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
     } catch (e) {
       failure = e;
     }
+    // The record is the app's, not this sheet's: it is written whether or not the sheet is still open, on any answer
+    // that may have signed the lane out (removed, absent, or a request that never completed). A sheet opened on the
+    // lane later cannot be sure (it may have been signed in elsewhere since), so the record only keeps it from saying
+    // the lane keeps its old one, up to a passing check newer than the last one known here.
+    const knownAt = checked?.check?.at ?? before?.check?.at;
+    if (outcome === 'done' && (removed !== null || signOutUnknown(wordOf(failure)))) noteSignOut(id, knownAt);
     if (!live.current) return;
     setBusy(false);
     if (outcome === 'step-up') { setNotice(STEP_UP_AGAIN_SIGN_OUT); alert(STEP_UP_AGAIN_SIGN_OUT); return; }
@@ -237,11 +243,7 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
       alert(text);
       return;
     }
-    // Removed or absent, the lane has no sign-in on the box now: every ending in this sheet until a new one goes in says
-    // so. A sheet opened on the lane later cannot be sure (it may have been signed in elsewhere since), so the record
-    // only keeps it from saying the lane keeps its old one, up to a passing check newer than the last one known here.
-    const knownAt = checked?.check?.at ?? before?.check?.at;
-    noteSignOut(id, knownAt);
+    // Removed or absent, the lane has no sign-in on the box now: every ending in this sheet until a new one goes in says so.
     old.current = oldCredentialOf(checked ?? before, props.usage, signOutOf(id), true);
     setChecked(null);
     setCheckNotice(null);

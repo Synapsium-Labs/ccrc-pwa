@@ -19,7 +19,7 @@ import { noteSignOut, resetSignOutsForTests, signOutOf } from '../src/accounts/s
 import {
   CANCEL_SIGN_IN, CODE_FIELD_LABEL, MINT_NEW_TOKEN, NOTHING_INSTALLED, SEND_CODE, SIGN_OUT_RESTART, SWITCH_START,
   bothHeld, credentialUntouched, laneSignedOut, noCheckedCredential, reauthEnd, reauthIntro, reauthStartRefusal,
-  switchEnd, switchIntro, type OldCredential, type SignInEndKind,
+  signOutRefused, switchEnd, switchIntro, type OldCredential, type SignInEndKind,
 } from '../src/fleet/accountWords';
 import { ApiError } from '../src/lib/api';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -237,8 +237,8 @@ describe('the re-auth sheet follows the rule (D-7872 (10))', () => {
     });
   }
 
-  /** Sign in again reads back another account; Sign this lane out and start again signs it out and starts anew. */
-  async function signedOutHere(b: Box): Promise<void> {
+  /** Sign in again reads back another account, and the sheet offers Sign this lane out and start again. */
+  async function readBackAnother(b: Box): Promise<void> {
     reauth(b, { lane: FRESH });
     fireEvent.click(screen.getByRole('button', { name: 'Start the sign-in' }));
     await settle();
@@ -252,10 +252,29 @@ describe('the re-auth sheet follows the rule (D-7872 (10))', () => {
     await settle();
     expect(await screen.findByText('Signed in as other@example.invalid')).toBeInTheDocument();
     b.box.status = { ok: true, state: 'starting', updatedAt: Date.now(), expiresAt: b.box.expiresAt };
+  }
+  /** Press Sign this lane out and start again, through its confirm. */
+  async function pressSignOut(): Promise<void> {
     fireEvent.click(screen.getByRole('button', { name: SIGN_OUT_RESTART }));
     fireEvent.click(await screen.findByRole('button', { name: SIGN_OUT_RESTART }));
+  }
+  /** The sign-out runs to its end: the lane is signed out and a new attempt has started. */
+  async function signedOutHere(b: Box): Promise<void> {
+    await readBackAnother(b);
+    await pressSignOut();
     await waitFor(() => expect(b.client.accountAuthStart).toHaveBeenCalledTimes(2));
     await settle();
+  }
+  /** Sign-in and switch sheets opened later on the lane as last read: the passing check from before the sign-out. */
+  function laterSheetsAreNeutral(b: Box, lane: LaneWire): void {
+    reauth(b, { lane });
+    expect(screen.getByText(reauthIntro('lane-a', 'login', 'unsure'))).toBeInTheDocument();
+    claimsNothing();
+    cleanup();
+    switcher(b, { lane });
+    expect(screen.getByText(switchIntro('lane-a', 'setup-token', 'unsure'))).toBeInTheDocument();
+    claimsNothing();
+    cleanup();
   }
   const OTHER: LaneWire = { ...FRESH, check: { verdict: 'ok', at: CHECK_AT + 5_000 }, identity: 'other@example.invalid' };
 
@@ -298,6 +317,82 @@ describe('the re-auth sheet follows the rule (D-7872 (10))', () => {
     reauth(b, { lane: { ...OTHER, check: { verdict: 'ok', at: OTHER.check!.at + 1 } } });
     expect(screen.getByText(reauthIntro('lane-a', 'login', 'kept'))).toBeInTheDocument();
     expect(signOutOf('lane-a')).toBeUndefined();
+  });
+
+  describe('a sign-out the sheet did not see the end of is still recorded', () => {
+    /** The sign-out request in flight, answered only when the test says. */
+    function heldSignOut(b: Box): { answer: (word: 'removed' | 'absent') => void; fail: (e: unknown) => void } {
+      let answer = (_: 'removed' | 'absent'): void => {};
+      let fail = (_: unknown): void => {};
+      b.client.accountSignOut.mockReturnValueOnce(new Promise((resolve, reject) => {
+        answer = (signOut) => resolve({ ok: true as const, signOut, lane: UNCHECKED });
+        fail = reject;
+      }));
+      return { answer: (word) => answer(word), fail: (e) => fail(e) };
+    }
+    async function closedMidSignOut(b: Box): Promise<ReturnType<typeof heldSignOut>> {
+      const held = heldSignOut(b);
+      await readBackAnother(b);
+      await pressSignOut();
+      await waitFor(() => expect(b.client.accountSignOut).toHaveBeenCalledWith('lane-a'));
+      cleanup();
+      return held;
+    }
+
+    for (const word of ['removed', 'absent'] as const) {
+      it(`closed while the sign-out is in flight, then the box answers ${word}: later sheets are neutral`, async () => {
+        const b = fakeBox(OTHER);
+        const held = await closedMidSignOut(b);
+        expect(signOutOf('lane-a')).toBeUndefined();
+        held.answer(word);
+        await settle();
+        expect(signOutOf('lane-a')).toEqual({ checkAt: OTHER.check!.at });
+        expect(b.client.accountAuthStart).toHaveBeenCalledTimes(1);
+        laterSheetsAreNeutral(b, OTHER);
+      });
+    }
+
+    it('closed while the sign-out is in flight, and its answer never comes: later sheets are neutral', async () => {
+      const b = fakeBox(OTHER);
+      const held = await closedMidSignOut(b);
+      held.fail(new TypeError('Failed to fetch'));
+      await settle();
+      expect(signOutOf('lane-a')).toEqual({ checkAt: OTHER.check!.at });
+      laterSheetsAreNeutral(b, OTHER);
+    });
+
+    it('the answer never comes with the sheet open: it says so, and later sheets are neutral, never signed out', async () => {
+      const b = fakeBox(OTHER);
+      b.client.accountSignOut.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+      await readBackAnother(b);
+      await pressSignOut();
+      await settle();
+      expect(alertOf('reauth')).toBe(signOutRefused('lane-a', undefined));
+      expect(signOutOf('lane-a')).toEqual({ checkAt: OTHER.check!.at });
+      expect(b.client.accountAuthStart).toHaveBeenCalledTimes(1);
+      cleanup();
+      laterSheetsAreNeutral(b, OTHER);
+    });
+
+    it('a refusal the box worded, or a step-up, signed nothing out: nothing is recorded, open or closed', async () => {
+      for (const refusal of [new ApiError(409, { error: 'lane-busy' }), new ApiError(403, { ok: false, error: 'step-up-required' })]) {
+        const b = fakeBox(OTHER);
+        const held = await closedMidSignOut(b);
+        held.fail(refusal);
+        await settle();
+        expect(signOutOf('lane-a')).toBeUndefined();
+        reauth(b, { lane: OTHER });
+        expect(screen.getByText(reauthIntro('lane-a', 'login', 'kept'))).toBeInTheDocument();
+        cleanup();
+      }
+      const c = fakeBox(OTHER);
+      c.client.accountSignOut.mockRejectedValueOnce(new ApiError(409, { error: 'lane-busy' }));
+      await readBackAnother(c);
+      await pressSignOut();
+      await settle();
+      expect(alertOf('reauth')).toBe(signOutRefused('lane-a', 'lane-busy'));
+      expect(signOutOf('lane-a')).toBeUndefined();
+    });
   });
 
   it('resumed after a reload (the app forgot its sign-outs): neutral, never keeps', async () => {
@@ -395,8 +490,9 @@ describe('the method switch sheet follows the rule (D-7872 (10))', () => {
 // ── The connect sheet's Sign this lane out and start again ─────────────────────────────────────────────────────────
 
 describe("the connect sheet's sign-out is one the later sheets know of (D-7872 (10))", () => {
-  it('signed out there, a re-auth opened later on the lane as last read is neutral, never keeps', async () => {
-    const CHECKED: LaneWire = { ...FRESH, identity: 'someone@example.invalid' };
+  const CHECKED: LaneWire = { ...FRESH, identity: 'someone@example.invalid' };
+  /** A lane added and signed in on the connect sheet, at the result frame that offers Sign this lane out and start again. */
+  async function addedAndSignedIn(): Promise<{ accountSignOut: Mock<SignInClient['accountSignOut']> }> {
     const NEW: LaneWire = { state: { word: 'off', source: 'Off on the fleet host' }, ready: false, notReadyReason: 'not-checked' };
     const expiresAt = Date.now() + 7 * 60_000;
     let status: Status = { ok: true, state: 'waiting-code', url: URL, host: 'claude.com', updatedAt: 0, expiresAt };
@@ -436,16 +532,67 @@ describe("the connect sheet's sign-out is one the later sheets know of (D-7872 (
     await settle();
     expect(await screen.findByText('Signed in as someone@example.invalid')).toBeInTheDocument();
     status = { ok: true, state: 'starting', updatedAt: 0, expiresAt };
+    return sc;
+  }
+  const pressSignOut = (): void => {
     fireEvent.click(screen.getByRole('button', { name: SIGN_OUT_RESTART }));
     fireEvent.click(screen.getAllByRole('button', { name: SIGN_OUT_RESTART }).at(-1)!);
+  };
+  /** A re-auth (or a switch) opened later on the lane the screen read before the sign-out. */
+  const laterSheetIsNeutral = (): void => {
+    reauth(fakeBox(), { id: 'lane-c', lane: CHECKED, usage: usageOf('lane-c') });
+    expect(screen.getByText(reauthIntro('lane-c', 'login', 'unsure'))).toBeInTheDocument();
+    claimsNothing();
+  };
+
+  it('signed out there, a re-auth opened later on the lane as last read is neutral, never keeps', async () => {
+    const sc = await addedAndSignedIn();
+    pressSignOut();
     await settle();
     expect(sc.accountSignOut).toHaveBeenCalledWith('lane-c');
     expect(signOutOf('lane-c')).toEqual({ checkAt: CHECK_AT });
     cleanup();
-    // A re-auth (or a switch) opened later on the lane the screen read before the sign-out.
-    const b = fakeBox();
-    reauth(b, { id: 'lane-c', lane: CHECKED, usage: usageOf('lane-c') });
-    expect(screen.getByText(reauthIntro('lane-c', 'login', 'unsure'))).toBeInTheDocument();
-    claimsNothing();
+    laterSheetIsNeutral();
+  });
+
+  it('closed while the sign-out is in flight, then the box answers removed: a later re-auth is neutral', async () => {
+    const sc = await addedAndSignedIn();
+    let answer = (): void => {};
+    sc.accountSignOut.mockReturnValueOnce(new Promise((resolve) => {
+      answer = () => resolve({ ok: true as const, signOut: 'removed' as const, lane: UNCHECKED });
+    }));
+    pressSignOut();
+    await waitFor(() => expect(sc.accountSignOut).toHaveBeenCalledWith('lane-c'));
+    cleanup();
+    expect(signOutOf('lane-c')).toBeUndefined();
+    answer();
+    await settle();
+    expect(signOutOf('lane-c')).toEqual({ checkAt: CHECK_AT });
+    laterSheetIsNeutral();
+  });
+
+  it('a step-up signed nothing out: nothing is recorded', async () => {
+    const sc = await addedAndSignedIn();
+    sc.accountSignOut.mockRejectedValueOnce(new ApiError(403, { ok: false, error: 'step-up-required' }));
+    pressSignOut();
+    await settle();
+    expect(sc.accountSignOut).toHaveBeenCalledWith('lane-c');
+    expect(signOutOf('lane-c')).toBeUndefined();
+  });
+
+  it('the answer never comes: recorded, so a later re-auth is neutral; a refusal the box worded records nothing', async () => {
+    const sc = await addedAndSignedIn();
+    sc.accountSignOut.mockRejectedValueOnce(new ApiError(409, { error: 'lane-busy' }));
+    pressSignOut();
+    await settle();
+    expect(alertOf('connect')).toBe(signOutRefused('lane-c', 'lane-busy'));
+    expect(signOutOf('lane-c')).toBeUndefined();
+    sc.accountSignOut.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    pressSignOut();
+    await settle();
+    expect(alertOf('connect')).toBe(signOutRefused('lane-c', undefined));
+    expect(signOutOf('lane-c')).toEqual({ checkAt: CHECK_AT });
+    cleanup();
+    laterSheetIsNeutral();
   });
 });

@@ -37,6 +37,7 @@ OA1's record (`2026-11-01-accounts-oa1-record.md`) is applied where this task re
 - `pwa/src/fleet/fleet.css`: the card's acts. Below 900 they stack, the primary first; at 900 and up they share a row.
 - `pwa/src/lib/api.ts` is unchanged. A22 already added every route this task calls.
 - Fix round 4 (D-7872 (10), the operator's option 1): `oldCredentialOf` in `connectFlow.ts` replaces `laneHasNoCredential`, and the re-auth and method switch sheets word the old credential from it. The new `pwa/src/accounts/signOuts.ts` holds the app's sign-out record, which the re-auth sheet and the connect sheet's sign-out both write. The screen hands both sheets the lane's telemetry row. `pwa/browser/reauth-sheet.browser.test.ts` serves the run's one shared build (`sharedDist`), as main's browser files now do.
+- Fix round 5 (D-7872 (10)): the re-auth sheet and the connect sheet write the sign-out record before they look at whether they are still open, and also when the request never completed. `signOutUnknown` in `accountWords.ts` is the one test for that, shared with `signOutRefused`'s sentence.
 
 **Tests:**
 - New: `pwa/test/reauth-sheet.test.tsx`. It covers:
@@ -101,6 +102,23 @@ Every case was also run green against the unmutated tree.
 | the re-auth sheet's sign-out not recorded | reauth-wording, reauth-sheet | "after a sign-out in this sheet …" (the record), "resumed after the sheet unmounts …" and "Sign in again opened later …" |
 | the both-held line always `kept` | reauth-wording | "a never-checked lane: neutral in the intro, a cancel and the both-held line" |
 | the re-auth intro always `kept` | reauth-wording, reauth-sheet | both methods' never-checked and signed-out-elsewhere cases, the unmount and connect-sheet cases, and both methods' no-credential intros |
+
+**Mutation table (run), fix round 5 (D-7872 (10)).** Each mutant was run against `reauth-wording` and `reauth-sheet`; 12 went red. A 13th, recording only on `removed === true`, stayed green because it changes nothing: an `absent` answer has no failure, so the unknown test records it anyway. "closed while the sign-out is in flight, then the box answers absent" pins that.
+
+| Mutant | Suite | Red |
+|---|---|---|
+| the screen drops `usage` from the re-auth sheet | reauth-sheet | "the card's Sign in again: the re-auth sheet's intro is the neutral one" |
+| the screen drops `usage` from the switch sheet | reauth-sheet | "the card's primary, Switch to a long-lived token: the switch sheet's intro is the neutral one" |
+| the re-auth sheet records after its live check | reauth-wording | both "closed while the sign-out is in flight, then the box answers …" and "… its answer never comes" |
+| the connect sheet records after its live check | reauth-wording | "closed while the sign-out is in flight, then the box answers removed: a later re-auth is neutral" |
+| the re-auth sheet records nothing on an unknown answer | reauth-wording | "… its answer never comes" and "the answer never comes with the sheet open …" |
+| the connect sheet records nothing on an unknown answer | reauth-wording | "the answer never comes: recorded …" |
+| the re-auth sheet records on a step-up | reauth-wording | "a refusal the box worded, or a step-up, signed nothing out …" |
+| the connect sheet records on a step-up | reauth-wording | "a step-up signed nothing out: nothing is recorded" |
+| the re-auth sheet records on a worded refusal | reauth-wording | "a refusal the box worded, or a step-up, signed nothing out …" |
+| the connect sheet records on a worded refusal | reauth-wording | "the answer never comes: recorded …" |
+| `signOutUnknown` always true | reauth-wording | the refusal cases in both sheets |
+| `signOutUnknown` always false | reauth-wording | the unknown-answer cases in both sheets |
 
 **Per width × skin × mode (Step 4):** `pwa/browser/reauth-sheet.browser.test.ts` runs in a real Chrome over the production build. The fleet's routes are answered by its fixture: lane-a is a signed-out sign-in lane, lane-b a signed-out token lane, and lane-c a minted token about 11 months old with one live session.
 
@@ -171,5 +189,5 @@ Each ✓ checks these things:
        - `unsure` everywhere else: never checked, a failed or cleared check, a 401, a sign-out an earlier sheet ran on the lane as last read, and anything a reload forgot.
      - **Its words** (`accountWords.ts`): `unsure` says "lane-a has no checked sign-in, so whether it still has one isn't known." in an intro, and "Nothing was installed." where an ending said "Nothing changed: lane-a keeps its old sign-in." (`oldCredentialLine`). `lost` asks for a check of whether the lane has a working credential, not of "which credential works". `signed-out` keeps (2)'s sentence.
      - **Every sheet that speaks of the old credential reads it**: the re-auth sheet's intro, every ending and every refused start; the method switch sheet's intro, every ending and its both-held line ("If lane-a still has its old sign-in on the fleet host, sign it out here." unless `kept`). The screen hands both sheets the lane's telemetry row for the 401 marker. The trouble card and the resume banner say nothing of the old credential, so they are unchanged. A19's paste sheet speaks of a token lane, whose token N5's sign-out does not remove, so it is unchanged too.
-     - **The sign-out record** moves to `pwa/src/accounts/signOuts.ts`, the app's memory only (the no-storage scan covers it). The re-auth sheet's and the connect sheet's Sign this lane out and start again both write it, with the last check known then. It no longer makes a later sheet say "signed out": the lane may have been signed in elsewhere since, so a later sheet on the lane as last read says the neutral words, until a passing check newer than the sign-out retires the record.
+     - **The sign-out record** moves to `pwa/src/accounts/signOuts.ts`, the app's memory only (the no-storage scan covers it). The re-auth sheet's and the connect sheet's Sign this lane out and start again both write it, with the last check known then. They write it whether or not the sheet is still open when the answer comes, since the record outlives the sheet, and on every answer that may have signed the lane out: `removed`, `absent`, or a request that never completed, where the box may have done it. A refusal the box worded and a step-up write nothing, so the lane keeps its `kept` words (fix round 5). It no longer makes a later sheet say "signed out": the lane may have been signed in elsewhere since, so a later sheet on the lane as last read says the neutral words, until a passing check newer than the sign-out retires the record.
 

@@ -927,7 +927,9 @@ export const cancelRefused = (word: string | undefined): string => (word !== und
 /** The result frame's wrong-account act (spec §6.2 step 10, §12.4). */
 export const WRONG_ACCOUNT = 'Not the account you meant?';
 export const SIGN_OUT_RESTART = 'Sign this lane out and start again';
-export const signOutRefused = (id: string, word: string | undefined): string => (word !== undefined && CODE_RE.test(word)
+/** A sign-out whose request didn't complete (no refusal word came back): the box may have signed the lane out. */
+export const signOutUnknown = (word: string | undefined): boolean => !(word !== undefined && CODE_RE.test(word));
+export const signOutRefused = (id: string, word: string | undefined): string => (!signOutUnknown(word)
   ? `The fleet host refused (${word}): ${id} was not signed out, and no new sign-in was started.`
   : `The request didn't complete, so whether ${id} was signed out is unknown. No new sign-in was started.`);
 export const STEP_UP_AGAIN_SIGN_OUT = "Confirm it's you again, then press it again. Nothing was signed out.";
