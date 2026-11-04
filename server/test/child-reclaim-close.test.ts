@@ -520,6 +520,28 @@ describe('A2/P6 — the close never reclaims on a fast-path spent verdict alone'
     expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);
   });
 
+  it('(iii, ledger) a .prhistory row placed on another branch is no fast path: HOLD, not-finished, never not-finished-merge-commit', async () => {
+    // (iii)'s live line, with the evidence moved from `.prnumber` to a ledger row about
+    // another branch. The row does not count (D-5941), so this is a fast-path MISS: rung 3
+    // reads `verifyDone`'s line, the pre-birth row is dropped, and nothing here says "merge
+    // commit". The hold is the same; only the reason is honest about what was measured.
+    const merged = prRow({ state: 'MERGED', createdAt: iso(BIRTH_MS - HOUR),
+      mergedAt: '2020-01-01T00:00:00Z', mergeCommit: { oid: 'f'.repeat(40) } });
+    const b = build({ prState: { ran: true, code: 0, stdout: `${prLine([merged])}\n`, stderr: '' } });
+    gitBranch(b.home, TIP);
+    const id = b.dispatched(ID, 1);
+    b.deps.coord.markDispatchStarted(id, BIRTH_MS);
+    b.deps.coord.setSession(id, ID, BIRTH_MS);
+    b.seed(ID, String(id));
+    writeFileSync(path.join(b.reg, `${ID}.prhistory`),
+      `${JSON.stringify({ pr: 42, branch: `ws/${ID}`, prbranch: 'ws/another', phase: 'merged', recordedAt: 1 })}\n`);
+    b.dispatched('demo-next-wave', 2);
+    const out = await closeRun(b.deps, id, { fingerprint: { ...CLAIM, prPhase: 'merged' }, final: false }, 'coordinator');
+    expect(out).toMatchObject({ ok: true, released: false, childReclaim: 'not-queued', childReclaimWhy: 'not-finished' });
+    expect(fleetActs(b.acts())).toEqual(['ws-hold']);
+    expect(b.acts().filter((a) => a === 'pr-state')).toHaveLength(1);
+  });
+
   // The positive mirror of (iii): the redate step does not just refuse a
   // stale fast-path answer, it can also PROMOTE one — a fast-path spent
   // whose live evidence genuinely dates to THIS incarnation still releases.
