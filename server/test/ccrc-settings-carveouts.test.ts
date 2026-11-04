@@ -286,3 +286,20 @@ describe('the keep and health sentences, byte for byte, before their words move 
       .toBe("1|CCRC_UPDATE_HEALTH_S='ninety' is not a number of seconds (digits only, at most 18) — using 90");
   });
 });
+
+// ── W2 (box settings wave 2): `ccrc test`'s shape check, called directly on a sourced ccd/ccrc ─────────────────────────
+describe('_tshape and _tshape_says live in ccd/ccrc (D-7906)', () => {
+  const rc = (script: string): string => sourced(boxWith('ccrc-carve-tshape-', null), `${script}; echo "rc $?"`).stdout.trim();
+  it.each([
+    ['_tshape CCRC_TEST_HEAVY_SLOTS 99', 'rc 0'],
+    ['_tshape CCRC_TEST_HEAVY_SLOTS 100', 'rc 1'],
+    ['_tshape OTHER 1', 'rc 1'],
+  ])('%s answers %s', (script, want) => {
+    expect(rc(script)).toBe(want);
+  });
+  it('the words, with their newline', () => {
+    const h = boxWith('ccrc-carve-tsays-', null);
+    expect(sourced(h, '_tshape_says CCRC_TEST_WIDE_FILES').stdout).toBe('a whole number from 0 to 999\n');
+    expect(sourced(h, '_tshape_says OTHER').stdout).toBe('a whole number from 1 to 10000\n');
+  });
+});

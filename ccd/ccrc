@@ -28657,8 +28657,8 @@ console.log("restamped");
 # read in `file` mode, ~/.ccrc/ccrc.env else the default: a caller's environment that set them would change the slice
 # for every run on the box, count its own slots, or read its own wide runs as light. The pressure bound is the caller's own: the environment, else
 # ~/.ccrc/ccrc.env, else the default. One line per setting, `KEY<US>default<US>value
-# <US>from` with US the unit separator (octal 037, never in a setting; the value empty and `from` the reader's sentence when it cannot be read), for ccd/ccrc-test, which owns
-# what each value means and refuses a value that is not its shape. The defaults are deploy/systemd/ccrctests.slice's
+# <US>from` with US the unit separator (octal 037, never in a setting; the value empty and `from` the reader's sentence when it cannot be read), for ccd/ccrc-test; `_tshape` below owns
+# what each value means, and ccd/ccrc-test refuses a value that is not its shape. The defaults are deploy/systemd/ccrctests.slice's
 # own values (ccrc-test-wrapper.test.ts holds the two equal) and are no box's measurements: 6G of memory, 1G of swap,
 # CPU and IO weight 20 against app.slice's 100, four CPUs of quota, two heavy runs at once, a vitest run naming more
 # than three files counted as wide, and no pressure wait.
@@ -28713,6 +28713,33 @@ _graph_knobs() {   # [file]
   # D-7876: a pass is deferred while the host's memory or CPU pressure (PSI some avg10, percent) is above this; 0 is off.
   # 60 leaves an ordinary busy box alone (a stall on more than half of the last ten seconds is thrash, not load).
   _ccrc_knob CCRC_GRAPH_PRESSURE_MAX 60 ${m:+"$m"}; _test_knob_say CCRC_GRAPH_PRESSURE_MAX 60 $?
+}
+# ── the checks `ccrc settings` shares with their consumers (box settings wave 2) ──
+# Each check answers by its return code and keeps its words in a `_says` twin, so a consumer's sentence and the settings
+# view are built from one owner. `_tshape` is `ccrc test`'s (D-7906).
+_tshape() {   # <KEY> <value> -> 0 when the value is the key's shape
+  local v="$2"
+  case "$1" in
+    CCRC_TEST_SLICE_MEMORY_MAX) [[ "$v" =~ ^[1-9][0-9]*[KMGT]$ || "$v" =~ ^([1-9][0-9]?|100)%$ ]] ;;
+    CCRC_TEST_SLICE_SWAP_MAX) [[ "$v" =~ ^(0|[1-9][0-9]*[KMGT])$ ]] ;;
+    CCRC_TEST_SLICE_CPU_WEIGHT|CCRC_TEST_SLICE_IO_WEIGHT) [[ "$v" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$v" -le 10000 ] ;;
+    CCRC_TEST_SLICE_CPU_QUOTA) [[ "$v" =~ ^[1-9][0-9]{0,5}%$ ]] ;;
+    CCRC_TEST_HEAVY_SLOTS) [[ "$v" =~ ^[1-9][0-9]?$ ]] ;;
+    CCRC_TEST_WIDE_FILES) [[ "$v" =~ ^[0-9]{1,3}$ ]] ;;
+    CCRC_TEST_PRESSURE_MAX) [[ "$v" =~ ^[0-9]{1,2}$ ]] ;;
+    *) return 1 ;;
+  esac
+}
+_tshape_says() {   # <KEY> -> the shape, in words, for the warning
+  case "$1" in
+    CCRC_TEST_SLICE_MEMORY_MAX) echo "a whole number with a K, M, G or T suffix, or 1% to 100%" ;;
+    CCRC_TEST_SLICE_SWAP_MAX) echo "0, or a whole number with a K, M, G or T suffix" ;;
+    CCRC_TEST_SLICE_CPU_QUOTA) echo "a whole percentage such as 400%" ;;
+    CCRC_TEST_HEAVY_SLOTS) echo "a whole number from 1 to 99" ;;
+    CCRC_TEST_WIDE_FILES) echo "a whole number from 0 to 999" ;;
+    CCRC_TEST_PRESSURE_MAX) echo "a whole number from 0 (off) to 99" ;;
+    *) echo "a whole number from 1 to 10000" ;;
+  esac
 }
 _usage_test_paragraph() {
   printf '\n%s' \
