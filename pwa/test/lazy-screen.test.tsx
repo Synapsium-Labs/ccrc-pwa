@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Suspense, type ReactNode } from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { RenderBoundary } from '../src/components/RenderBoundary';
-import { ScreenLoadError, lazyScreen } from '../src/lib/lazyScreen';
+import { PRELOAD_FALLBACK_MS, ScreenLoadError, lazyScreen, preloadWhenIdle } from '../src/lib/lazyScreen';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -69,5 +69,48 @@ describe('lazyScreen', () => {
     render(mount(Screen, '/a'));
     expect(await screen.findByRole('heading', { name: 'hello a' })).toBeInTheDocument();
     expect(load).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('preloadWhenIdle (review 1464 F4)', () => {
+  it('preloads once the page is idle, not before, and a cleanup before then cancels it', () => {
+    let queued: Array<() => void> = [];
+    const cancel = vi.fn();
+    vi.stubGlobal('requestIdleCallback', (cb: () => void) => { queued.push(cb); return queued.length; });
+    vi.stubGlobal('cancelIdleCallback', cancel);
+    try {
+      const preload = vi.fn(async () => {});
+      const stop = preloadWhenIdle({ preload });
+      expect(preload, 'nothing at mount').not.toHaveBeenCalled();
+      queued.forEach((cb) => cb());
+      expect(preload).toHaveBeenCalledTimes(1);
+      queued = [];
+      const stop2 = preloadWhenIdle({ preload });
+      stop2();
+      expect(cancel).toHaveBeenCalledWith(1);
+      stop();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('without requestIdleCallback it waits PRELOAD_FALLBACK_MS', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('requestIdleCallback', undefined);
+    try {
+      const preload = vi.fn(async () => {});
+      preloadWhenIdle({ preload });
+      vi.advanceTimersByTime(PRELOAD_FALLBACK_MS - 1);
+      expect(preload).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(preload).toHaveBeenCalledTimes(1);
+      const stop = preloadWhenIdle({ preload });
+      stop();
+      vi.advanceTimersByTime(PRELOAD_FALLBACK_MS);
+      expect(preload).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
   });
 });

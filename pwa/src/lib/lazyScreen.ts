@@ -41,3 +41,21 @@ export function lazyScreen<P extends object>(load: () => Promise<ComponentType<P
   Screen.preload = () => start().then(() => undefined, () => undefined);
   return Screen;
 }
+
+/** How long after mount a browser without `requestIdleCallback` waits before preloading. */
+export const PRELOAD_FALLBACK_MS = 2_000;
+
+/** Preload `screen` once the page is idle after its first paint (review 1464 F4: the session screen, so the first open
+ *  of a session does not wait for its chunk while the eager inspector's doors are drawn). Call it from a mount effect;
+ *  it returns the effect's cleanup. Idle-scheduled, so it competes with nothing the start draws, and the entry's own
+ *  imports are unchanged; a browser without `requestIdleCallback` waits `PRELOAD_FALLBACK_MS` instead. */
+export function preloadWhenIdle(screen: { preload(): Promise<void> }): () => void {
+  const idle = globalThis as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number;
+    cancelIdleCallback?: (h: number) => void };
+  if (typeof idle.requestIdleCallback === 'function') {
+    const h = idle.requestIdleCallback(() => { void screen.preload(); }, { timeout: 10_000 });
+    return () => idle.cancelIdleCallback?.(h);
+  }
+  const t = setTimeout(() => { void screen.preload(); }, PRELOAD_FALLBACK_MS);
+  return () => clearTimeout(t);
+}

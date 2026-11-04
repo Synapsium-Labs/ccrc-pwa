@@ -24,7 +24,7 @@ import { CommandLayer } from './command/CommandLayer';
 import { FleetChromeProvider } from './fleet/FleetChrome';
 import { FleetFlows, useFleetFlows } from './fleet/FleetFlows';
 import { useAuthLost } from './lib/auth';
-import { lazyScreen } from './lib/lazyScreen';
+import { lazyScreen, preloadWhenIdle } from './lib/lazyScreen';
 import { navigate, useLocation } from './lib/router';
 import { matchRoute, sessionPath, shellViewOf } from './lib/routes';
 import { useSkin } from './lib/skin';
@@ -67,6 +67,9 @@ function ArchiveRoute(): ReactNode {
 
 export function App(): ReactNode {
   const { path, search } = useLocation();
+  // The session screen is the one most often opened next: its chunk loads once the page is idle after the first
+  // paint, so the first open does not wait for it (review 1464 F4). The entry's imports are unchanged.
+  useEffect(() => preloadWhenIdle(SessionScreen), []);
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect once at the shell so
     // deep links to /s/:id (or /archive) still get live names, limits and
