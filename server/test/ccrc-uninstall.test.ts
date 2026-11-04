@@ -995,14 +995,14 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     const home = mkTmp('ccrc-uninst-redactor-');
     plantInstalledBox(home);
     const libexec = join(home, '.local', 'libexec', 'ccrc');
-    for (const rel of ['ccd', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs']) {
+    for (const rel of ['ccd', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs']) {
       mkdirSync(path.dirname(join(libexec, rel)), { recursive: true });
       writeFileSync(join(libexec, rel), `# fixture ${rel}\n`, { mode: 0o644 });
     }
     const r = runVerb(home, 'uninstall');
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(libexec), 'a ccrc libexec directory survived the uninstall').toBe(false);
-    expect(r.stdout).toContain('its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; ');
+    expect(r.stdout).toContain('its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; ');
   });
 
   it('W29-I3: uninstall removes the reader, and ~/.local/libexec/ccrc with it only when that leaves it empty', () => {

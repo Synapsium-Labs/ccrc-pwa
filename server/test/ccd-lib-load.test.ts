@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  CCD, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_TRAIN_LIB_PIN_PLACEHOLDER, ghContainedEnv, installDirectEntry, installedCcdBody,
+  CCD, CCD_LEASE_LIB, CCD_LEASE_LIB_PIN_PLACEHOLDER, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_TRAIN_LIB_PIN_PLACEHOLDER, ghContainedEnv, installDirectEntry, installedCcdBody,
   makeCcdHarness, type CcdHarness,
 } from './ccdWsHelpers.js';
 import { markGenerated } from '../../shared/mark.mjs';
@@ -28,6 +28,10 @@ const MOVED = ['cmd_ws_orphan', '_ws_nested_rescue', '_ws_stale_argv', '_ws_loos
 /** The second library (D-7463) and what it defines: the train record's python, the prover, the record and the proofs. */
 const TRAIN_LIB = CCD_TRAIN_LIB;
 const TRAIN_MOVED = ['_pr_train_py', 'cmd_pr_train_prove', '_ws_train_record', '_pr_train_proofs', '_pr_num_valid', '_ws_train_kept'] as const;
+/** The third library (wave 5), the delegation lease, and the functions it defines, read from the file so that growing it never
+ *  stales this list. */
+const LEASE_LIB = CCD_LEASE_LIB;
+const LEASE_MOVED: string[] = [...fs.readFileSync(LEASE_LIB, 'utf8').matchAll(/^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/gm)].map((m) => m[1]!);
 const sha = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex');
 
 let h: CcdHarness;
@@ -35,13 +39,13 @@ let dir: string;
 beforeEach(() => { h = makeCcdHarness('ccrc-lib-load-'); dir = path.join(h.home, 'tree'); });
 afterEach(() => { h.cleanup(); });
 
-/** A copy of ccd and its libraries at `<home>/tree/{ccd,lib/disk-retention.sh,lib/train-proof.sh}`, the first library
- *  through `mutate` and the second through `mutateTrain` (`null` leaves one out). The body is the INSTALLED form by default
+/** A copy of ccd and its libraries at `<home>/tree/{ccd,lib/disk-retention.sh,lib/train-proof.sh,lib/delegation-lease.sh}`, the first library
+ *  through `mutate`, the second through `mutateTrain` and the third through `mutateLease` (`null` leaves one out). The body is the INSTALLED form by default
  *  (its pins rendered to the shipped libraries, then stamped, as ccd-entry-install.py publishes it), so a mutation is a
  *  library changed after install; `body: 'source'` plants the committed file as it stands, every placeholder in place, and a
  *  function plants what it returns. */
 function plant(mutate: ((t: string) => string | null) = (t) => t, body: 'installed' | 'source' | ((src: string) => string) = 'installed',
-  mutateTrain: (t: string) => string | null = (t) => t): string {
+  mutateTrain: (t: string) => string | null = (t) => t, mutateLease: (t: string) => string | null = (t) => t): string {
   fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
   const ccd = path.join(dir, 'ccd');
   const src = fs.readFileSync(CCD, 'utf8');
@@ -50,6 +54,8 @@ function plant(mutate: ((t: string) => string | null) = (t) => t, body: 'install
   if (lib !== null) fs.writeFileSync(path.join(dir, 'lib', 'disk-retention.sh'), lib);
   const train = mutateTrain(fs.readFileSync(TRAIN_LIB, 'utf8'));
   if (train !== null) fs.writeFileSync(path.join(dir, 'lib', 'train-proof.sh'), train);
+  const lease = mutateLease(fs.readFileSync(LEASE_LIB, 'utf8'));
+  if (lease !== null) fs.writeFileSync(path.join(dir, 'lib', 'delegation-lease.sh'), lease);
   return ccd;
 }
 const MARK = (): string => path.join(h.home, 'lib-ran');
@@ -62,7 +68,7 @@ function driver(name: string, body: string): string {
   fs.writeFileSync(file, `${body}\n`, { mode: 0o644 });
   return file;
 }
-const SOURCED = `source "$1"; rc=$?; echo "rc=$rc"; for f in ${[...MOVED, ...TRAIN_MOVED].join(' ')}; do declare -F "$f" >/dev/null && echo "has $f"; done`;
+const SOURCED = `source "$1"; rc=$?; echo "rc=$rc"; for f in ${[...MOVED, ...TRAIN_MOVED, ...LEASE_MOVED].join(' ')}; do declare -F "$f" >/dev/null && echo "has $f"; done`;
 function sourced(ccd: string, extra: NodeJS.ProcessEnv = {}): { out: string; err: string } {
   const r = spawnSync('bash', [driver('sourced.sh', SOURCED), ccd],
     { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, h.env(extra), { systemd: true, tmux: true, net: true }) });
@@ -88,6 +94,16 @@ describe('the library and the pin', () => {
     expect(ccdText.match(/^__CCD_LIB_TRAIN_SHA256=.*$/gm), 'ccd/ccd carries exactly one train pin line, the placeholder')
       .toEqual([CCD_TRAIN_LIB_PIN_PLACEHOLDER]);
     const bytes = fs.readFileSync(TRAIN_LIB);
+    const text = bytes.toString('utf8');
+    expect(text.endsWith('\n') && !text.endsWith('\n\n'), 'exactly one trailing newline').toBe(true);
+    expect(bytes.includes(0), 'no NUL byte').toBe(false);
+  });
+
+  it('the third library\'s pin is a placeholder too, and the file has the same one shape (wave 5)', () => {
+    const ccdText = fs.readFileSync(CCD, 'utf8');
+    expect(ccdText.match(/^__CCD_LIB_LEASE_SHA256=.*$/gm), 'ccd/ccd carries exactly one lease pin line, the placeholder')
+      .toEqual([CCD_LEASE_LIB_PIN_PLACEHOLDER]);
+    const bytes = fs.readFileSync(LEASE_LIB);
     const text = bytes.toString('utf8');
     expect(text.endsWith('\n') && !text.endsWith('\n\n'), 'exactly one trailing newline').toBe(true);
     expect(bytes.includes(0), 'no NUL byte').toBe(false);
@@ -135,7 +151,7 @@ describe('a faithful copy loads', () => {
     const r = sourced(plant());
     expect(r.err).toBe('');
     expect(r.out).toContain('rc=0');
-    for (const f of [...MOVED, ...TRAIN_MOVED]) expect(r.out, f).toContain(`has ${f}`);
+    for (const f of [...MOVED, ...TRAIN_MOVED, ...LEASE_MOVED]) expect(r.out, f).toContain(`has ${f}`);
   });
 });
 
@@ -175,7 +191,8 @@ describe('installed or source checkout: only a body with BOTH placeholders skips
   it('a real pin with line 2 still the placeholder is not a source checkout: the digest is checked', () => {
     const pinnedOnly = (src: string): string =>
       src.replace(CCD_LIB_PIN_PLACEHOLDER, `__CCD_LIB_SHA256=${sha(fs.readFileSync(LIB))}`)
-        .replace(CCD_TRAIN_LIB_PIN_PLACEHOLDER, `__CCD_LIB_TRAIN_SHA256=${sha(fs.readFileSync(TRAIN_LIB))}`);
+        .replace(CCD_TRAIN_LIB_PIN_PLACEHOLDER, `__CCD_LIB_TRAIN_SHA256=${sha(fs.readFileSync(TRAIN_LIB))}`)
+        .replace(CCD_LEASE_LIB_PIN_PLACEHOLDER, `__CCD_LIB_LEASE_SHA256=${sha(fs.readFileSync(LEASE_LIB))}`);
     expect(sourced(plant((t) => t, pinnedOnly)).out).toContain('rc=0');
     const r = sourced(plant((t) => t + RAN, pinnedOnly));
     expect(r.err).toContain('ccd: refused (lib-digest)');
@@ -187,8 +204,9 @@ describe('installed or source checkout: only a body with BOTH placeholders skips
     for (const half of [
       (src: string): string => src.replace(CCD_LIB_PIN_PLACEHOLDER, `__CCD_LIB_SHA256=${sha(fs.readFileSync(LIB))}`),
       (src: string): string => src.replace(CCD_TRAIN_LIB_PIN_PLACEHOLDER, `__CCD_LIB_TRAIN_SHA256=${sha(fs.readFileSync(TRAIN_LIB))}`),
+      (src: string): string => src.replace(CCD_LEASE_LIB_PIN_PLACEHOLDER, `__CCD_LIB_LEASE_SHA256=${sha(fs.readFileSync(LEASE_LIB))}`),
     ]) {
-      const r = sourced(plant((t) => t + RAN, half, (t) => t + RAN));
+      const r = sourced(plant((t) => t + RAN, half, (t) => t + RAN, (t) => t + RAN));
       expect(r.err).toContain('ccd: refused (lib-digest)');
       expect(r.out).toContain('rc=125');
       expect(r.out).not.toContain('has ');
@@ -313,6 +331,31 @@ describe('a library that is not the pinned one refuses the start and runs nothin
     });
   }
 
+  // THE THIRD LIBRARY (wave 5) refuses as the second does, before ANY library is evaluated.
+  const leaseRefusals: Array<[string, (t: string) => string | null, string]> = [
+    ['one appended line', (t) => t + RAN, 'lib-digest'],
+    ['one byte changed', (t) => t.replace('_dl_leases_dir', '_dl_leases_diR'), 'lib-digest'],
+    ['an empty file', () => '', 'lib-digest'],
+    ['no file at all', () => null, 'lib-missing'],
+  ];
+  for (const [name, mutate, word] of leaseRefusals) {
+    it(`the delegation-lease library, ${name}: sourced, status 125 with the ${word} line, no library's names defined`, () => {
+      const r = sourced(plant((t) => t, 'installed', (t) => t, mutate));
+      expect(r.err).toContain(`ccd: refused (${word})`);
+      expect(r.err).toContain('delegation-lease.sh');
+      expect(r.out).toContain('rc=125');
+      expect(r.out).not.toContain('has ');
+      expect(fs.existsSync(MARK())).toBe(false);
+    });
+    it(`the delegation-lease library, ${name}: executed, exit 125 for a verb that never touches it`, () => {
+      const ccd = plant((t) => t, 'installed', (t) => t, mutate);
+      const r = spawnSync('bash', [ccd, 'version'], { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, h.env(), { systemd: true, tmux: true, net: true }) });
+      expect(r.status).toBe(125);
+      expect(r.stderr).toContain(`ccd: refused (${word})`);
+      expect(r.stdout).toBe('');
+    });
+  }
+
   it('a symbolic link in the library\'s place is refused, even to the right bytes', () => {
     const ccd = plant(() => null);
     const real = path.join(h.home, 'elsewhere.sh');
@@ -336,6 +379,15 @@ describe('a library that is not the pinned one refuses the start and runs nothin
     const e = installDirectEntry(h.home);
     fs.appendFileSync(path.join(path.dirname(e.body), 'lib', 'train-proof.sh'), RAN);
     const r = spawnSync(e.entry, ['pr-train-prove', '--project', 'x'], { encoding: 'utf8', cwd: h.home, env: h.env() });
+    expect(r.status).toBe(125);
+    expect(r.stderr).toContain('ccd: refused (lib-digest)');
+    expect(fs.existsSync(MARK())).toBe(false);
+  });
+
+  it('through the installed direct entry: a tampered delegation-lease library refuses before any verb runs, status 125 (wave 5)', () => {
+    const e = installDirectEntry(h.home);
+    fs.appendFileSync(path.join(path.dirname(e.body), 'lib', 'delegation-lease.sh'), RAN);
+    const r = spawnSync(e.entry, ['version'], { encoding: 'utf8', cwd: h.home, env: h.env() });
     expect(r.status).toBe(125);
     expect(r.stderr).toContain('ccd: refused (lib-digest)');
     expect(fs.existsSync(MARK())).toBe(false);

@@ -45129,8 +45129,9 @@ cmd_ws_title() {   # ccd ws-title --session <id> (--title <text> | --clear) — 
   fi
 }
 
-# ── THE LIBRARIES: DISK RETENTION (D-6913; GitHub #1279) AND THE TRAIN PROOF (D-7463) ──
-# The fleet disk-retention verbs live in ccd/lib/disk-retention.sh, and the train proof in ccd/lib/train-proof.sh, both
+# ── THE LIBRARIES: DISK RETENTION (D-6913; GitHub #1279), THE TRAIN PROOF (D-7463) AND THE DELEGATION LEASE (wave 5) ──
+# The fleet disk-retention verbs live in ccd/lib/disk-retention.sh, the train proof in ccd/lib/train-proof.sh and the delegation lease in
+# ccd/lib/delegation-lease.sh, all
 # installed beside this body and loaded HERE, once every function and variable they call exists; each pin below works as
 # this paragraph tells for the first. The first pin below names disk-retention.sh's SHA-256, and like the stamp on line 2 it is written AT
 # INSTALL TIME (D-6913, the ruling that gave the pin #1525's treatment): the committed line is the fixed placeholder
@@ -45153,6 +45154,7 @@ __CCD_LIB_SHA256=stamp-at-install
 # and evaluates (after disk-retention.sh). A placeholder here, rendered by ccd/ccd-entry-install.py from exactly one line, as
 # the pin above is.
 __CCD_LIB_TRAIN_SHA256=stamp-at-install
+__CCD_LIB_LEASE_SHA256=stamp-at-install
 # THE DOCS REDACTOR'S PINS (D-7077, OA-C11 (a)): the SHA-256 of `shared/redact.mjs` and `shared/redact-cli.mjs`, installed beside
 # this body. Placeholders here, rendered by ccd/ccd-entry-install.py from exactly one line each, as the library pin is. Read only by
 # `_docs_redact_cli` and `_docs_front`; written only here (the census in ccd-lib-load.test.ts).
@@ -45164,12 +45166,12 @@ __CCD_REDACT_CLI_SHA256=stamp-at-install
 # installed layout. A census in ccd-lib-load.test.ts pins the single writer over ccd/ccd and ccd/lib/*.sh.
 __CCD_LAYOUT=
 __CCD_HASH_CMD=()
-_ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's and ccd/lib/train-proof.sh's functions defined; else the refusal line on stderr and rc 1, nothing evaluated
+_ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's, ccd/lib/train-proof.sh's and ccd/lib/delegation-lease.sh's functions defined; else the refusal line on stderr and rc 1, nothing evaluated
   local self="${BASH_SOURCE[0]}" dir=. f src sum __ccd_i
   [[ "$self" == */* ]] && dir="${self%/*}"
   # THE LIBRARIES, in load order, each beside its pin (D-7463): every file is read, and every digest checked, before ANY
   # file is evaluated, so one library that is not what was shipped refuses the start with none of the others run.
-  local -a __ccd_lib_files=("$dir/lib/disk-retention.sh" "$dir/lib/train-proof.sh") __ccd_lib_pins=("$__CCD_LIB_SHA256" "$__CCD_LIB_TRAIN_SHA256") __ccd_lib_srcs=()
+  local -a __ccd_lib_files=("$dir/lib/disk-retention.sh" "$dir/lib/train-proof.sh" "$dir/lib/delegation-lease.sh") __ccd_lib_pins=("$__CCD_LIB_SHA256" "$__CCD_LIB_TRAIN_SHA256" "$__CCD_LIB_LEASE_SHA256") __ccd_lib_srcs=()
   for f in "${__ccd_lib_files[@]}"; do
     if [[ -L "$f" || ! -f "$f" || ! -r "$f" ]]; then
       printf 'ccd: refused (lib-missing): %s is not a readable regular file — ccd and its library install together (re-run: ccrc update); nothing was run\n' "$f" >&2
@@ -45183,7 +45185,7 @@ _ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's and ccd/lib/train-pr
   # or a broken install (line 2 really stamped): the second refuses. Line 2 is read from this file, as bash already read it.
   # Only a body with EVERY pin a placeholder is a source checkout; any one pin left a placeholder beside a rendered one is a
   # broken install too.
-  if [[ "$__CCD_LIB_SHA256" == stamp-at-install && "$__CCD_LIB_TRAIN_SHA256" == stamp-at-install ]]; then
+  if [[ "$__CCD_LIB_SHA256" == stamp-at-install && "$__CCD_LIB_TRAIN_SHA256" == stamp-at-install && "$__CCD_LIB_LEASE_SHA256" == stamp-at-install ]]; then
     local l1='' l2=''
     { IFS= read -r l1 && IFS= read -r l2; } < "$self" 2>/dev/null || :
     if [[ "$l2" == '# ccrc:stamp-at-install'* ]]; then
