@@ -3118,7 +3118,7 @@ describe('boot refusal (R24): an active restore marker, or one that cannot be me
   it('index.ts checks it BEFORE the line that opens coord.db, says it with console.error, and exits nonzero', () => {
     const src = readFileSync(path.join(srcRoot, 'index.ts'), 'utf8');
     const check = src.indexOf('coordinationRestoreRefusal(');
-    const open = src.indexOf('new CoordStore(openCoordDb(');
+    const open = src.indexOf('openCoordDb(cfg.coordDbPath)');
     expect(check).toBeGreaterThan(0);
     expect(open).toBeGreaterThan(0);
     expect(check, 'the refusal must come first').toBeLessThan(open);

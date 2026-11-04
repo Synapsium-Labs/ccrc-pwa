@@ -3796,7 +3796,7 @@ export function registerCoordRoutes(
     if (!parsed.ok) return refuseRoute(reply, 'bad-request', { detail: `the landing ${kind} body is not a closed, well-formed request` });
     if (!(await requireAttribution(reply, parsed.request.byId, parsed.request.byUuid, 'byUuid'))) return;
     return coordMutex.run(async () => {
-      const r = actLandingWrite(landingCommandOf(parsed), Date.now(), { write: (c, at) => deps.coord!.writeLandingAuthority(c, at), notify: notice });
+      const r = actLandingWrite(landingCommandOf(parsed), Date.now(), { write: (c, at) => deps.coord!.writeLandingAuthority(c, at), notice });
       if (!r.ok) { const { ok: _ok, error, ...extra } = r; return refuseRoute(reply, error, extra); }
       const { ok: _ok, coordinator: _c, ...answer } = r;
       return reply.code(200).send({ ok: true, ...answer });

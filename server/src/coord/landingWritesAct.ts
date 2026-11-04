@@ -9,13 +9,13 @@ import {
 
 export interface LandingWritePorts {
   write: (command: LandingAuthorityCommand, at: number) => LandingAuthorityWrite;
-  notify: NoticeSink;
+  notice: NoticeSink;
 }
 
 export function actLandingWrite(command: LandingAuthorityCommand, at: number, ports: LandingWritePorts): LandingAuthorityWrite {
   const result = ports.write(command, at);
   if (!result.ok) return result;
-  const notice = landingMutationNotice(command, result);
-  if (notice.due) ports.notify(notice.event, 'record-only');
+  const owed = landingMutationNotice(command, result);
+  if (owed.due) ports.notice(owed.event, 'record-only');
   return result;
 }
