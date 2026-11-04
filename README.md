@@ -5371,7 +5371,13 @@ while either flag is set. A project the line has never seen answers no entries a
 order edges, `fixesMain` and setter attribution) is journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
 place (no backup copies it) and which the server replays before it serves anything. Replay never fabricates a measured pin or a
 current run association: a project whose projection is missing or whose binding evidence contradicts is reported as unmeasured
-and held, and invalid history refuses startup. `POST /api/landing/entries` and `POST /api/landing/order` (box token and measured
+and held, and invalid history refuses startup. An uncertain journal append or landing database commit fences every landing read
+and write, an advance's pin and retreat included: the failing call answers 503 with `mayApply: true` (the write may or may not
+have reached the line) and a `recovery` word, and every later one answers `landing-fenced` with that word. A `replay` fence and a `restart`
+fence alike clear only when the server restarts, because the boot replay is the only thing that reopens the line; there is no
+retry timer and no in-process reopen. A retreat refused `landing-projection-unreadable` (its pin names another head than the
+episode's and a retained field no longer reads) is not cured by a restart, because replay never writes a projection: the run
+stays at `merging` and goes to the operator, and this build has no repair route for it. `POST /api/landing/entries` and `POST /api/landing/order` (box token and measured
 `byId`/`byUuid` attribution, `ccrc-api landing entries|order --json -`) record an entry and its order edges; the attributed `byId` is
 the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an explicit `[]` or `false` clears it.
 
