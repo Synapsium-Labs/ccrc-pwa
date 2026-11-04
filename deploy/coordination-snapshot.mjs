@@ -219,6 +219,54 @@ function exactKeys(o, keys, what, codes = ['unknown-key', 'bad-field']) {
 const nonEmpty = (v, what) => (typeof v === 'string' && v !== '' ? v : refuse('bad-field', `${what} is not a non-empty string`));
 const hex64 = (v, what) => (isHex64(v) ? v : refuse('bad-field', `${what} is not a lowercase 64-hex SHA-256`));
 
+// Wave 5, PR5a (D-7809): the three lease kinds, by SHAPE alone, in the server's order (`validateLeaseKind` in
+// `server/src/coord/delegation-journal.ts`). Their words (`reason`, `to`, `releaseReason`, `lineageClose`) are vocabularies, so here they
+// are only non-empty strings, as `sourceKind` is above; whether a kind applies is the server's recovery.
+const LEASE_TRANSITION_KEYS = [
+  'kind', 'leaseId', 'generation', 'reason', 'to', 'at', 'expiresAt', 'terminalEvidenceAt', 'runId', 'promotedSession', 'auditEvidence',
+  'lineageClose', 'lineageOpenRun', 'resolvesThrough',
+];
+const LEASE_RELEASED_KEYS = ['kind', 'leaseId', 'generation', 'releaseReason', 'at', 'lastHeadSha', 'resolvesThrough'];
+const LEASE_CARRIER_SEEN_KEYS = ['kind', 'leaseId', 'generation', 'at'];
+const positiveInt = (v, what) => (isSeq(v) ? v : refuse('bad-field', `${what} is not a positive safe integer`));
+const positiveIntOrNull = (v, what) => (v === null ? null : positiveInt(v, what));
+const nonEmptyOrNull = (v, what) => (v === null ? null : nonEmpty(v, what));
+const instant = (v, what) => (isInstant(v) ? v : refuse('bad-field', `${what} is not a canonical UTC millisecond instant`));
+const instantOrNull = (v, what) => (v === null ? null : instant(v, what));
+function attemptMarkOrNull(v) {
+  if (v === null) return null;
+  if (!isRecord(v)) return refuse('bad-field', 'resolvesThrough is neither null nor an object');
+  exactKeys(v, ['attemptedAt', 'attemptId'], 'resolvesThrough');
+  return { attemptedAt: instant(v.attemptedAt, 'resolvesThrough.attemptedAt'), attemptId: nonEmpty(v.attemptId, 'resolvesThrough.attemptId') };
+}
+function validateLeaseKind(entry) {
+  switch (entry.kind) {
+    case 'lease-transition':
+      exactKeys(entry, LEASE_TRANSITION_KEYS, 'a lease-transition entry');
+      return {
+        kind: 'lease-transition', leaseId: nonEmpty(entry.leaseId, 'leaseId'), generation: positiveInt(entry.generation, 'generation'),
+        reason: nonEmpty(entry.reason, 'reason'), to: nonEmpty(entry.to, 'to'), at: instant(entry.at, 'at'),
+        expiresAt: instantOrNull(entry.expiresAt, 'expiresAt'), terminalEvidenceAt: instantOrNull(entry.terminalEvidenceAt, 'terminalEvidenceAt'),
+        runId: positiveIntOrNull(entry.runId, 'runId'), promotedSession: nonEmptyOrNull(entry.promotedSession, 'promotedSession'),
+        auditEvidence: entry.auditEvidence === null || typeof entry.auditEvidence === 'string' ? entry.auditEvidence : refuse('bad-field', 'auditEvidence is neither null nor a string'),
+        lineageClose: nonEmptyOrNull(entry.lineageClose, 'lineageClose'), lineageOpenRun: positiveIntOrNull(entry.lineageOpenRun, 'lineageOpenRun'),
+        resolvesThrough: attemptMarkOrNull(entry.resolvesThrough),
+      };
+    case 'lease-released':
+      exactKeys(entry, LEASE_RELEASED_KEYS, 'a lease-released entry');
+      return {
+        kind: 'lease-released', leaseId: nonEmpty(entry.leaseId, 'leaseId'), generation: positiveInt(entry.generation, 'generation'),
+        releaseReason: nonEmpty(entry.releaseReason, 'releaseReason'), at: instant(entry.at, 'at'),
+        lastHeadSha: nonEmptyOrNull(entry.lastHeadSha, 'lastHeadSha'), resolvesThrough: attemptMarkOrNull(entry.resolvesThrough),
+      };
+    case 'lease-carrier-seen':
+      exactKeys(entry, LEASE_CARRIER_SEEN_KEYS, 'a lease-carrier-seen entry');
+      return { kind: 'lease-carrier-seen', leaseId: nonEmpty(entry.leaseId, 'leaseId'), generation: positiveInt(entry.generation, 'generation'), at: instant(entry.at, 'at') };
+    default:
+      return null;
+  }
+}
+
 function isEventEnvelope(v) {
   if (!isRecord(v) || v.v !== 1 || typeof v.eventKind !== 'string' || v.eventKind === '') return false;
   for (const k of ['sessionId', 'parentIncarnation', 'claudeSessionId', 'eventId', 'bucket']) if (typeof v[k] !== 'string' || v[k] === '') return false;
@@ -254,7 +302,7 @@ function validateEntry(entry) {
       correlationJournalIds: [...ids], firstObservedAt: entry.firstObservedAt, lineageId: hex64(entry.lineageId, 'lineageId'),
     };
   }
-  return refuse('bad-field', `entry kind ${JSON.stringify(entry.kind)} is not in the closed grammar`);
+  return validateLeaseKind(entry) ?? refuse('bad-field', `entry kind ${JSON.stringify(entry.kind)} is not in the closed grammar`);
 }
 
 /** `journalId = SHA256(canon({v, sequence, acceptedAt, previousDigest, entry}))`: nonrecursive. */

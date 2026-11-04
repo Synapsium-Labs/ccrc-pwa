@@ -1395,3 +1395,28 @@ describe('landing order wave 5c — the PR-keyed pr-state words, defined once an
     expect(ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
   });
 });
+
+// Delegation broker wave 5, PR5a (Task 5.5.1, W5-V3): the lease transition vocabularies live beside their one L1 owner,
+// `server/src/coord/delegation-lease-state.ts`, and nowhere else.
+describe('W5-V3: the lease transition vocabularies, one definition each, in delegation-lease-state.ts', () => {
+  const OWNER = 'server/src/coord/delegation-lease-state.ts';
+  const VOCABS = [
+    ['DELEGATION_LEASE_TRANSITION_REASONS', 'DelegationLeaseTransitionReason',
+      ['carrier', 'adopt', 'retain', 'operator-retain', 'attach', 'transfer', 'transfer-refused', 'transfer-recovered', 'promote']],
+    ['DELEGATION_LINEAGE_CLOSE_REASONS', 'DelegationLineageCloseReason', ['native-removed', 'transferred', 'foreign', 'transfer']],
+    ['DELEGATION_LEASE_ACT_REFUSALS', 'DelegationLeaseActRefusal',
+      ['lease-unknown', 'lease-released', 'stale-generation', 'wrong-disposition', 'not-ready', 'carrier-behind']],
+  ] as const;
+  const declaredIn = (decl: RegExp): string[] => ALL.filter((f) => decl.test(readFileSync(f, 'utf8'))).map(rel);
+  for (const [arr, type, members] of VOCABS) {
+    it(`${arr} is declared exactly once, in ${OWNER}, with the plan's members in the plan's order`, async () => {
+      expect(declaredIn(new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${arr}\\b`, 'm')), arr).toEqual([OWNER]);
+      const mod = (await import('../../src/coord/delegation-lease-state.js')) as unknown as Record<string, unknown>;
+      expect(mod[arr], `${arr} is exported`).toEqual(members);
+    });
+    it(`${type} is declared exactly once, DERIVED from ${arr}`, () => {
+      expect(declaredIn(new RegExp(`^\\s*(?:export\\s+)?type\\s+${type}\\b\\s*=`, 'm')), type).toEqual([OWNER]);
+      expect(readFileSync(path.join(ccrcRoot, OWNER), 'utf8')).toMatch(new RegExp(`^export type ${type} = \\(typeof ${arr}\\)\\[number\\];$`, 'm'));
+    });
+  }
+});

@@ -7,17 +7,18 @@
 // WHAT THIS FILE PINS (the row ids are this file's own; the applier's and the lane's rows live in their own files)
 //   R6   a row LEAVING falls back: one case per table (a session, an activity, a lease with its lineage, an activity-owned lineage row,
 //        and an attempt); each answers `{ mode: 'full' }` and parity holds at once
-//   R7   every lease row and lease-lineage row that differs, is new or leaves falls back, asserted on the RETURNED mode and on the diff's
-//        `applicable: false`, a lineage row whose `leaseId` goes non-null to null included
+//   R7   every lease row and lease-lineage row that is new or leaves falls back, and a lease-lineage row that changes other than by
+//        closing, asserted on the RETURNED mode and on the diff's `applicable: false`, a lineage row whose `leaseId` goes non-null to
+//        null included; wave 5 (PR5a, W5-J9's store half): a lease row that CHANGES and a lease-owned lineage row that CLOSES are deltas
 //   R8   the compare-and-swap catches what the count cannot: an out-of-band delete of one activity plus an out-of-band insert of another
 //        in the same parent keep the counts equal, and the delta that updates the deleted one is refused naming the miss
 //   R9   the count tripwire: a stray out-of-band attempt trips an updating delta and a zero-row delta; SQLite is byte-identical after
 //   R10  SQLite holding another value on a row the delta updates (an out-of-band edit of a column the delta does not write) is a miss
 //   R15  refusal parity: every checkpoint the full path refuses is refused by the delta with the same code, SQLite unchanged and no BEGIN;
 //        plus the position case (leases shared by reference) and foreign keys off run as an APPLICABLE delta
-//   R16  one GENERATED case per codec column, from the codecs' own `columns`: a non-key column writes exactly one row, a key column and
-//        `lineage.leaseId` fall back, a lease column `assertWave3Lease` leaves free falls back, a lease column it pins is refused with the
-//        code the full path gives (measured here on a twin store, not typed)
+//   R16  one GENERATED case per codec column, from the codecs' own `columns`: a non-key column writes exactly one row (a lease column
+//        `assertLease` leaves free included, since wave 5's `delegation_leases` arm), a key column and `lineage.leaseId` fall back, a
+//        lease column it pins is refused with the code the full path gives (measured here on a twin store, not typed)
 //   R17  an intent-change shaped next (every reference new) writes exactly one session row; an interval-only next writes none
 //   R18  a new session and its first activity in one delta: the activity INSERT follows its session's (the foreign key)
 //        plus an UPDATE onto a parent new in the same delta (an attempt to a new session, a lineage row to a new activity): the INSERT goes first
@@ -105,7 +106,7 @@ const leaseRow = (n: number, a: DelegationActivityRow, over: Partial<DelegationL
   promotedAt: null, cleanupDueAt: null, cleanupStartedAt: null, cleanupFinishedAt: null, cleanupEvidenceJson: null,
   carrierGenerationSeen: null, releasedAt: null, ...over,
 });
-/** The lease-OWNED lineage row replay opens for a lease, at the lease's `firstObservedAt` (what `assertWave3Leases` looks for). */
+/** The lease-OWNED lineage row replay opens for a lease, at the lease's `firstObservedAt` (what `assertLeases` looks for). */
 const openingRow = (id: string, l: DelegationLeaseRow, over: Partial<DelegationLineageRow> = {}): DelegationLineageRow =>
   lineageRow(id, l.parentId, l.parentIncarnation, { leaseId: l.leaseId, openedAt: l.firstObservedAt, ...over });
 const eventRow = (n: number, over: Partial<DelegationEventRow> = {}): DelegationEventRow => ({
@@ -120,7 +121,7 @@ const eventRow = (n: number, over: Partial<DelegationEventRow> = {}): Delegation
  *    - a LEAF session (`lane-d-demo`) and a LEAF activity (no lease, no lineage, nothing pointing at it), so a key column can move
  *      without a dependent row losing its parent;
  *    - a SECOND lease-owned lineage row for the first lease, opened at that lease's `firstObservedAt`, so one of the two can turn
- *      activity-owned and `assertWave3Leases` still finds the lease's opening row (R7);
+ *      activity-owned and `assertLeases` still finds the lease's opening row (R7);
  *    - two real runs, for the run-owned lineage row's foreign key and a second run to point it at. */
 const fixture = (runIds: readonly [number, number], variant: 0 | 1): DelegationCheckpointV1 => {
   const tag = variant === 0 ? 'a' : 'b';
@@ -302,9 +303,8 @@ describe('R6: a row leaving falls back to the full projection inside the same ca
 
 // ── R7: any lease row or lease-lineage row that differs, is new or leaves ────────────────────────────────────────────────
 
-describe('R7: a lease row or a lease-owned lineage row that differs, is new or leaves falls back, on the returned mode', () => {
+describe('R7: a lease row or a lease-owned lineage row that is new or leaves, or a lease lineage row changed other than by closing, falls back', () => {
   const cases: Array<[string, (p: DelegationCheckpointV1) => DelegationCheckpointV1]> = [
-    ['a lease differs (a column assertWave3Lease leaves free)', (p) => ({ ...p, leases: p.leases.map((l, i) => (i === 0 ? { ...l, workspaceState: 'absent' } : l)) })],
     ['a lease is new (with its opening lineage row)', (p) => {
       const l4 = leaseRow(4, p.activities[3]!);
       return { ...p, appliedJournalSequence: 7, leases: [...p.leases, l4], lineage: [...p.lineage, openingRow('7', l4)] };
@@ -313,7 +313,8 @@ describe('R7: a lease row or a lease-owned lineage row that differs, is new or l
       const gone = p.leases[1]!.leaseId;
       return { ...p, leases: p.leases.filter((l) => l.leaseId !== gone), lineage: p.lineage.filter((n) => n.leaseId !== gone) };
     }],
-    ['a lease-owned lineage row differs', (p) => ({ ...p, lineage: p.lineage.map((n) => (n.lineageId === p.lineage[2]!.lineageId ? { ...n, closedAt: at(5), closeReason: 'lease-closed' } : n)) })],
+    ['a lease-owned lineage row differs other than by closing (it moves its opening instant)', (p) => ({ ...p,
+      lineage: p.lineage.map((n) => (n.lineageId === p.lineage[2]!.lineageId ? { ...n, openedAt: at(3) } : n)) })],
     ['a lease-owned lineage row is new', (p) => ({ ...p, lineage: [...p.lineage, openingRow('8', p.leases[1]!, { openedAt: at(3) })] })],
     ['a lease-owned lineage row leaves (the lease keeps its opening row)', (p) => ({ ...p, lineage: p.lineage.filter((n) => n.lineageId !== p.lineage[2]!.lineageId) })],
     ['a lineage row whose leaseId goes non-null to null (the SECOND lease-owned row of a lease turns activity-owned)', (p) => ({ ...p,
@@ -327,6 +328,54 @@ describe('R7: a lease row or a lease-owned lineage row that differs, is new or l
     expect(diffOf(w.prior, next).applicable, 'the pure diff declines').toBe(false);
     expect(changes(w.s, w.prior, next)).toEqual({ mode: 'full' });
     expectParity(w.s, next);
+  });
+
+  it('R7: a closed lease-owned lineage row that reopens is not a delta (only a close is)', () => {
+    const w = openWorld();
+    const id = w.prior.lineage[2]!.lineageId;
+    const closed = { ...w.prior, lineage: w.prior.lineage.map((n) => (n.lineageId === id ? { ...n, closedAt: at(5), closeReason: 'native-removed' } : n)) };
+    expect(diffOf(w.prior, closed).applicable, 'closing is a delta').toBe(true);
+    expect(diffOf(closed, w.prior).applicable, 'reopening is not').toBe(false);
+  });
+});
+
+// ── wave 5, PR5a: the `delegation_leases` and `delegation_lineage` delta arms ───────────────────────────────────────────────
+
+describe('PR5a: a lease row that changes, and a lease-owned lineage row that closes, are written by the delta', () => {
+  it('a lease differing in a column assertLease leaves free is one UPDATE on delegation_leases', () => {
+    const w = openWorld();
+    const next = { ...w.prior, leases: w.prior.leases.map((l, i) => (i === 0 ? { ...l, workspaceState: 'absent' as const } : l)) };
+    expect(changes(w.s, w.prior, next)).toEqual({ mode: 'delta', rows: 1 });
+    expect(w.t.words()).toEqual(['update delegation_leases']);
+    expectParity(w.s, next);
+  });
+
+  it('a lease-owned lineage row that closes is one UPDATE on delegation_lineage', () => {
+    const w = openWorld();
+    const id = w.prior.lineage[2]!.lineageId;
+    const next = { ...w.prior, lineage: w.prior.lineage.map((n) => (n.lineageId === id ? { ...n, closedAt: at(5), closeReason: 'native-removed' } : n)) };
+    expect(changes(w.s, w.prior, next)).toEqual({ mode: 'delta', rows: 1 });
+    expect(w.t.words()).toEqual(['update delegation_lineage']);
+    expectParity(w.s, next);
+  });
+
+  it('a transition then a release: the lease and its lineage move in one delta each, and the projection equals the full path', () => {
+    const w = openWorld();
+    const lease = w.prior.leases[1]!;
+    const applied = Math.max(w.prior.appliedJournalSequence, lease.creatingJournalSequence) + 2;
+    const kept = { ...w.prior, appliedJournalSequence: applied,
+      leases: w.prior.leases.map((l) => (l.leaseId === lease.leaseId ? { ...l, generation: 1, currentJournalSequence: applied, disposition: 'retained' as const, retainedAt: at(6), cleanupDueAt: at(9) } : l)) };
+    expect(changes(w.s, w.prior, kept)).toEqual({ mode: 'delta', rows: 1 });
+    expectParity(w.s, kept);
+    w.t.reset();
+    const own = kept.lineage.filter((n) => n.leaseId === lease.leaseId && n.closedAt === null).map((n) => n.lineageId);
+    const released = { ...kept, appliedJournalSequence: applied + 1,
+      leases: kept.leases.map((l) => (l.leaseId === lease.leaseId ? { ...l, generation: 2, currentJournalSequence: applied + 1, releasedAt: at(7) } : l)),
+      lineage: kept.lineage.map((n) => (own.includes(n.lineageId) ? { ...n, closedAt: at(7), closeReason: 'native-removed' } : n)),
+      leaseCarriers: [{ leaseId: lease.leaseId, transferringSince: null, transferRun: null, promotedRun: null, promotedSession: null, releaseReason: 'native-removed' as const, resolvedThrough: null }] };
+    expect(changes(w.s, kept, released)).toEqual({ mode: 'delta', rows: 1 + own.length });
+    expect(w.t.words()).toEqual(['update delegation_leases', ...own.map(() => 'update delegation_lineage')]);
+    expectParity(w.s, released);
   });
 });
 
@@ -431,14 +480,14 @@ describe('R15: every checkpoint the full path refuses is refused by the delta wi
     return { ...cp, lineage: cp.lineage.flatMap((n) => (n.leaseId === id ? (f(n) === null ? [] : [f(n)!]) : [n])) };
   };
   const cases: Array<[string, (cp: DelegationCheckpointV1) => DelegationCheckpointV1, string]> = [
-    ['a nonzero generation', (cp) => lease0(cp, (l) => ({ ...l, generation: 1 })), 'lease-generation'],
+    ['a nonzero generation with equal sequences (generation 0 exactly when they are equal)', (cp) => lease0(cp, (l) => ({ ...l, generation: 1 })), 'lease-sequences'],
     ['unequal creating and current sequences at generation 0', (cp) => lease0(cp, (l) => ({ ...l, currentJournalSequence: l.creatingJournalSequence + 1 })), 'lease-sequences'],
     ['a non-ephemeral disposition', (cp) => lease0(cp, (l) => ({ ...l, disposition: 'retained' })), 'lease-disposition'],
     ['a cleanup state other than not-due', (cp) => lease0(cp, (l) => ({ ...l, cleanupState: 'pending' })), 'lease-cleanup-state'],
-    ['a transition clock', (cp) => lease0(cp, (l) => ({ ...l, adoptedAt: at(9) })), 'lease-transition-field'],
+    ['a transition clock on an ephemeral lease', (cp) => lease0(cp, (l) => ({ ...l, adoptedAt: at(9) })), 'lease-disposition'],
     ['transition evidence', (cp) => lease0(cp, (l) => ({ ...l, cleanupEvidenceJson: '{}' })), 'lease-transition-field'],
-    ['a carrier generation', (cp) => lease0(cp, (l) => ({ ...l, carrierGenerationSeen: 1 })), 'lease-transition-field'],
-    ['a release', (cp) => lease0(cp, (l) => ({ ...l, releasedAt: at(9) })), 'lease-transition-field'],
+    ['a carrier generation above the lease\'s', (cp) => lease0(cp, (l) => ({ ...l, carrierGenerationSeen: 1 })), 'lease-generation'],
+    ['a release with no carrier row naming why', (cp) => lease0(cp, (l) => ({ ...l, releasedAt: at(9) })), 'lease-carrier-row'],
     ['a lastObservedAt that is not its firstObservedAt', (cp) => lease0(cp, (l) => ({ ...l, lastObservedAt: at(9) })), 'lease-last-observed'],
     ['an event-less lease (its creating sequence is past the applied journal)', (cp) => lease0(cp, (l) => ({ ...l, creatingJournalSequence: 7, currentJournalSequence: 7 })), 'lease-without-journal-entry'],
     ['no opening lineage row at all', (cp) => withoutOpening(cp, () => null), 'lease-opening-lineage'],
@@ -561,7 +610,7 @@ const rowsOf = (cp: DelegationCheckpointV1, field: Field): readonly unknown[] =>
 const replaceRow = (cp: DelegationCheckpointV1, field: Field, idx: number, row: unknown): DelegationCheckpointV1 =>
   ({ ...cp, [field]: rowsOf(cp, field).map((r, i) => (i === idx ? row : r)) } as DelegationCheckpointV1);
 
-/** The lease columns `assertWave3Lease` leaves free, and those it pins: the task's own expectation, typed. R16 measures each column's
+/** The lease columns `assertLease` leaves free, and those it pins: the task's own expectation, typed. R16 measures each column's
  *  outcome on a twin store and asserts it is the category named here, so a lease column added to the codec (or a guard that moves) is a
  *  red case that asks for a decision, never a silent skip. `leaseId` is the lease table's key. */
 const LEASE_FREE: ReadonlySet<string> = new Set(['activityId', 'parentId', 'parentIncarnation', 'project', 'adminRecord', 'canonicalPath', 'creationBase',
@@ -666,15 +715,16 @@ const followLease = (next: DelegationCheckpointV1, oldRow: unknown, newRow: unkn
 
 type Category = 'a' | 'b' | 'c' | 'd' | 'none';
 const categoryOf = (spec: TableSpec, col: string): Category => {
-  if (spec.field === 'leases') return spec.key.includes(col) ? 'b' : LEASE_FREE.has(col) ? 'c' : LEASE_PINNED.has(col) ? 'd' : 'none';
+  // Wave 5 (PR5a): a lease column assertLease leaves free is a delta UPDATE like any other non-key column ('a'); 'c' is retired.
+  if (spec.field === 'leases') return spec.key.includes(col) ? 'b' : LEASE_FREE.has(col) ? 'a' : LEASE_PINNED.has(col) ? 'd' : 'none';
   if (spec.key.includes(col) || (spec.field === 'lineage' && col === 'leaseId')) return 'b';
   return 'a';
 };
 const TITLE: Readonly<Record<Category, string>> = {
   a: 'a non-key column writes exactly that one row (one UPDATE on its table, nothing else)',
   b: 'a key column (or lineage.leaseId) falls back: mode full',
-  c: 'a lease column assertWave3Lease leaves free falls back: mode full',
-  d: 'a lease column assertWave3Lease pins is refused with the full path’s code, before BEGIN',
+  c: 'RETIRED in wave 5 (PR5a): a free lease column is a delta UPDATE, category a',
+  d: 'a lease column assertLease pins is refused with the full path’s code, before BEGIN',
   none: 'IS NOT CLASSIFIED: add it to the free or the pinned list with its reason',
 };
 
@@ -718,13 +768,17 @@ describe('R16: one generated case per codec column', () => {
     }
   }
 
-  it('R16 (d\'): a lease differing in disposition alone is declined by the pure diff (the store refuses it earlier); MD8 on disposition reds it', () => {
+  it('R16 (d\'): a lease differing in disposition alone is an applicable pure diff (wave 5) that the store refuses before BEGIN', () => {
     const w = openWorld();
     const lease = w.prior.leases[0]!;
     const other = DELEGATION_DISPOSITIONS.find((d) => d !== lease.disposition)!;
     const next = { ...w.prior, leases: w.prior.leases.map((l, i) => (i === 0 ? { ...l, disposition: other } : { ...l })) };
     expect(next.leases[0], 'the pair differs in disposition and in no other column').toEqual({ ...lease, disposition: other });
-    expect(diffOf(w.prior, next).applicable, 'the pure diff declines').toBe(false);
+    expect(diffOf(w.prior, next).applicable, 'a changed lease row is a delta update now').toBe(true);
+    const before = dumpAll(w.raw);
+    refusedWith(() => changes(w.s, w.prior, next), 'lease-disposition');
+    expect(dumpAll(w.raw)).toEqual(before);
+    expect(beginsOf(w.t), 'refused before BEGIN').toEqual([]);
   });
 
   for (const [name, reason] of Object.entries(UNCHANGEABLE)) {

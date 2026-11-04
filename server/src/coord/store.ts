@@ -60,7 +60,7 @@ import type { UpdateIntentLog } from './updateintentlog.js';
 // Delegation broker wave 3, Task 7: the projection's row shapes, codecs and guards are the PURE `delegation-model.ts`;
 // this file runs the SQL and nothing else.
 import {
-  assertWave3Leases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
+  assertLeases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
   delegationLeaseCodec, delegationLineageCodec, delegationSessionCodec, DelegationModelError,
   prepareDelegationProjectionChanges,
   type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationProjectChangesResult,
@@ -9797,8 +9797,8 @@ export class CoordStore {
    * A fault at any statement rolls the whole replacement back; the previous projection survives intact. The cost is
    * O(the five tables) plus O(the events of the sessions that leave), never O(all events).
    *
-   * Everything refusable is refused BEFORE the transaction opens: the checkpoint's version and applied position, the wave-3
-   * lease invariants (`assertWave3Leases`), every row's encoding, a session key repeated inside the checkpoint, and a handle that
+   * Everything refusable is refused BEFORE the transaction opens: the checkpoint's version and applied position, the
+   * lease invariants (`assertLeases`), every row's encoding, a session key repeated inside the checkpoint, and a handle that
    * does not enforce foreign keys. A row the
    * schema itself refuses (a CHECK, a unique index, a foreign key) throws SQLite's error from inside the transaction.
    */
@@ -9808,7 +9808,7 @@ export class CoordStore {
     if (!Number.isSafeInteger(applied) || applied < 0) {
       throw new DelegationModelError('bad-checkpoint', `appliedJournalSequence ${String(applied)} is not a non-negative integer`);
     }
-    assertWave3Leases(checkpoint);
+    assertLeases(checkpoint);
     // Encoded now, outside the transaction: a malformed instant or list is a refusal, not a rollback.
     const sessions = checkpoint.sessions.map((r) => delegationSessionCodec.toDb(r));
     const activities = checkpoint.activities.map((r) => delegationActivityCodec.toDb(r));
@@ -9863,7 +9863,8 @@ export class CoordStore {
   /**
    * The delta twin of `projectDelegationCheckpoint`: makes the five non-event tables say what `next` says, given that they say what
    * `prior` says, by writing only the rows that differ. `diffDelegationProjection` decides. When the change is only additions and
-   * updates (no key leaves, no lease row or lease-owned lineage row changes or arrives) it runs, in ONE transaction:
+   * updates (no key leaves, no lease row and no lease-owned lineage row arrives, and a lease-owned lineage row changes only by
+   * closing: wave 5's `delegation_leases` and `delegation_lineage` arms) it runs, in ONE transaction:
    *   1. each new row as a plain INSERT, parents first (sessions, activities, attempts, lineage), so an UPDATE below may point at a
    *      parent that is new in this same delta;
    *   2. each changed row as a compare-and-swap UPDATE keyed on its primary key, whose WHERE also carries every column's prior
@@ -9876,7 +9877,7 @@ export class CoordStore {
    * `{ mode: 'full' }`. Values edited out of band in a row the delta does not touch wait for the next full projection.
    *
    * Everything the full projection refuses before its transaction is refused here the same way and with the same code, before
-   * BEGIN and with SQLite unchanged: the version and applied position, the wave-3 lease invariants, a changed or new row's
+   * BEGIN and with SQLite unchanged: the version and applied position, the lease invariants, a changed or new row's
    * encoding, and a handle that does not enforce foreign keys. A `next` the diff declines (a repeated session key included) runs the
    * full projection before that last check, so the full path gives its own answer, its own foreign-keys check included.
    */
@@ -9904,6 +9905,8 @@ export class CoordStore {
           case delegationSessionCodec.table: return swap('UPDATE delegation_sessions', delegationSessionCodec, () => delegationInsertSql(delegationSessionCodec));
           case delegationActivityCodec.table: return swap('UPDATE delegation_activities', delegationActivityCodec, () => delegationInsertSql(delegationActivityCodec));
           case delegationAttemptCodec.table: return swap('UPDATE delegation_attempts', delegationAttemptCodec, () => delegationInsertSql(delegationAttemptCodec));
+          // Wave 5 (PR5a): a lease only CHANGES in a delta (a transition, a release); a new lease is never one, so this arm has no INSERT.
+          case delegationLeaseCodec.table: return swap('UPDATE delegation_leases', delegationLeaseCodec, () => { throw new DelegationModelError('projection-delta-mismatch', 'a new lease is never a delta'); });
           case delegationLineageCodec.table: return swap('UPDATE delegation_lineage', delegationLineageCodec, () => delegationInsertSql(delegationLineageCodec));
           default: throw new DelegationModelError('projection-delta-mismatch', `${table}: the delta projection has no statement for this table`);
         }

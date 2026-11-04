@@ -19,7 +19,7 @@ import {
   validateDelegationJournalBytes,
   type DelegationJournalPosition,
 } from '../src/coord/delegation-journal.js';
-import type { DelegationJournalRecordV1 } from '../src/coord/delegation-model.js';
+import type { DelegationJournalEntryV1, DelegationJournalRecordV1 } from '../src/coord/delegation-model.js';
 import type { DelegationEventEnvelopeV1 } from '../../shared/api.js';
 
 const CLAUDE = '11111111-2222-3333-4444-555555555555';
@@ -807,6 +807,32 @@ describe('8B: the helper validates a journal exactly as the server does (differe
       ['empty leaseId', (s: string) => s.replace('"leaseId":"lease-1"', '"leaseId":""')],
       ['creationBase empty', (s: string) => s.replace('"creationBase":null', '"creationBase":""')],
     ] as const) bothAgree(name, text(`${asLine(RC)}${mutate(good)}`), {});
+  });
+
+  it('wave 5 (PR5a, D-7809): the three lease kinds are read by both, and a malformed one is refused by both with the same code', () => {
+    const asLine = (r: DelegationJournalRecordV1): string => new TextDecoder().decode(encodeDelegationJournalRecord(r));
+    const lease = LEASE_RECORD(RC);
+    const next = (prev: DelegationJournalRecordV1, entry: DelegationJournalEntryV1): DelegationJournalRecordV1 => buildDelegationJournalRecord({
+      sequence: prev.sequence + 1, acceptedAt: '2026-10-14T00:00:10.000Z', previousDigest: prev.digest, entry });
+    const transition = next(lease, {
+      kind: 'lease-transition', leaseId: 'lease-1', generation: 1, reason: 'attach', to: 'retained', at: '2026-10-14T00:00:10.000Z',
+      expiresAt: '2026-10-21T00:00:10.000Z', terminalEvidenceAt: null, runId: null, promotedSession: null, auditEvidence: null, lineageClose: null,
+      lineageOpenRun: null, resolvesThrough: { attemptedAt: '2026-10-14T00:00:09.500Z', attemptId: 'attempt-1' },
+    });
+    const seen = next(transition, { kind: 'lease-carrier-seen', leaseId: 'lease-1', generation: 1, at: '2026-10-14T00:00:11.000Z' });
+    const released = next(seen, { kind: 'lease-released', leaseId: 'lease-1', generation: 2, releaseReason: 'foreign', at: '2026-10-14T00:00:12.000Z',
+      lastHeadSha: 'c'.repeat(40), resolvesThrough: null });
+    expect(bothAgree('lease kinds', bytesOf(RA, RB, RC, lease, transition, seen, released), { completeFromStart: true }))
+      .toMatchObject({ ok: true, coverage: { lastSequence: 7, recordCount: 7 } });
+    const prefix = `${asLine(RA)}${asLine(RB)}${asLine(RC)}${asLine(lease)}`;
+    const t = asLine(transition);
+    for (const [name, mutate] of [
+      ['an extra key', (x: string) => x.replace('"kind":"lease-transition"', '"kind":"lease-transition","zz":1')],
+      ['generation 0', (x: string) => x.replace('"generation":1', '"generation":0')],
+      ['an instant without milliseconds', (x: string) => x.replace('"at":"2026-10-14T00:00:10.000Z"', '"at":"2026-10-14T00:00:10Z"')],
+      ['a resolve mark missing its attemptId', (x: string) => x.replace(',"attemptId":"attempt-1"', '')],
+      ['a run that is not a positive integer', (x: string) => x.replace('"runId":null', '"runId":0')],
+    ] as const) bothAgree(name, text(`${prefix}${mutate(t)}`), {});
   });
 });
 

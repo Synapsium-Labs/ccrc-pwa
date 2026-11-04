@@ -332,7 +332,8 @@ describe('the canonical journal grammar: what is accepted and what is refused', 
     ['an acceptedAt without milliseconds', good.replace(/"acceptedAt":"[^"]+"/, '"acceptedAt":"2026-10-14T00:00:01Z"'), 'bad-field'],
     ['an uppercase previousDigest', good.replace('"previousDigest":null', `"previousDigest":"${'A'.repeat(64)}"`), 'bad-field'],
     ['a short journalId', good.replace(/"journalId":"[0-9a-f]{64}"/, '"journalId":"abc"'), 'bad-field'],
-    ['an unknown entry kind', good.replace('"kind":"evidence-accepted"', '"kind":"lease-released"'), 'bad-field'],
+    // `lease-released` joined the grammar in wave 5 (PR5a); a kind no wave plans (D-7002 dropped the cleaner) stays unknown.
+    ['an unknown entry kind', good.replace('"kind":"evidence-accepted"', '"kind":"lease-cleaned"'), 'bad-field'],
     ['an event with no eventId', good.replace(/"eventId":"[0-9a-f]{64}",/, ''), 'bad-field'],
     ['an event whose endOffset is not past its startOffset', good.replace('"endOffset":199', '"endOffset":100'), 'bad-field'],
     ['whitespace between tokens', replaceLast(good, '"v":1}', '"v": 1}'), 'noncanonical'],
@@ -1015,6 +1016,214 @@ describe('lease replay: first and last observation and the lineage opening come 
     const without = { ...cp, leases: [], lineage: [] };
     const report = recoverDelegation(encodeDelegationCheckpoint(without), [...base2, ...lease]);
     expect(report.failure?.code).toBe('lease-proof');
+  });
+});
+
+// ── wave 5, PR5a (D-7809): the reader-only lease kinds ──────────────────────────────────────────────────────────────────
+
+/** A `lease-transition` entry as PR5b's and PR8's doors would journal it: every field present, the unused ones null. */
+function transitionEntry(over: Partial<Extract<DelegationJournalEntryV1, { kind: 'lease-transition' }>> & { generation: number; reason: string; to: string; at: string }): DelegationJournalEntryV1 {
+  return {
+    kind: 'lease-transition', leaseId: 'lease-1', expiresAt: null, terminalEvidenceAt: null, runId: null, promotedSession: null, auditEvidence: null,
+    lineageClose: null, lineageOpenRun: null, resolvesThrough: null, ...over,
+  } as DelegationJournalEntryV1;
+}
+const seenEntry = (generation: number, at: string, leaseId = 'lease-1'): DelegationJournalEntryV1 => ({ kind: 'lease-carrier-seen', leaseId, generation, at });
+const releasedEntry = (over: Partial<Extract<DelegationJournalEntryV1, { kind: 'lease-released' }>> & { generation: number }): DelegationJournalEntryV1 =>
+  ({ kind: 'lease-released', leaseId: 'lease-1', releaseReason: 'native-removed', at: T(90), lastHeadSha: null, resolvesThrough: null, ...over } as DelegationJournalEntryV1);
+const DAY_MS = 86_400_000;
+const plus7d = (at: string): string => formatDelegationInstant(Date.parse(at) + 7 * DAY_MS);
+
+describe('W5-J7: lease transitions replay through the one decision, and a bad one keeps recovery reconstructing', () => {
+  const events = [sessionStart(1), subagentStart(2, X)];
+  const base2 = evidenceChain(events);
+  const act = activityOf(recoverDelegation(null, base2).state.checkpoint, X)!;
+  const created = leaseEntryFor(act.activityId, { firstObservedAt: T(40) });
+  const transitions = [
+    transitionEntry({ generation: 1, reason: 'carrier', to: 'ephemeral', at: T(41) }),
+    transitionEntry({ generation: 2, reason: 'adopt', to: 'adopted', at: T(50), terminalEvidenceAt: T(45), expiresAt: plus7d(T(50)) }),
+    seenEntry(2, T(51)),
+    transitionEntry({ generation: 3, reason: 'retain', to: 'retained', at: T(60), expiresAt: plus7d(T(60)) }),
+  ];
+  const records = chainOf([created, ...transitions], 3, base2[1]!.digest);
+  const all = [...base2, ...records];
+
+  it('created, carrier, adopt, seen and retain recover to a retained lease at generation 3, seen at 2', () => {
+    const report = recoverDelegation(null, all);
+    expect(report.failure).toBeNull();
+    expect(report.state.phase).toBe('ready');
+    const lease = report.state.checkpoint.leases[0]!;
+    expect(lease).toMatchObject({
+      leaseId: 'lease-1', generation: 3, disposition: 'retained', carrierGenerationSeen: 2, creatingJournalSequence: 3,
+      currentJournalSequence: records[4]!.sequence, adoptedAt: T(50), terminalEvidenceAt: T(45), retainedAt: T(60), cleanupDueAt: plus7d(T(60)),
+      cleanupState: 'not-due', cleanupStartedAt: null, cleanupFinishedAt: null, cleanupEvidenceJson: null, releasedAt: null, lastObservedAt: T(40),
+    });
+    // The seen record moved neither the generation nor the current sequence (D-7851): the sequence names the retain.
+    expect(lease.currentJournalSequence).not.toBe(records[3]!.sequence);
+    // Nothing left in a carrier row: the member is absent, so the checkpoint keeps wave 4's shape.
+    expect(report.state.checkpoint.leaseCarriers).toBeUndefined();
+    expect(Object.keys(report.state.checkpoint)).not.toContain('leaseCarriers');
+  });
+
+  it('the same journal recovered from a checkpoint covering part of it (observed, then folded) is the same checkpoint', () => {
+    const at4 = recoverDelegation(null, all.slice(0, 5)).state.checkpoint;          // through the adopt
+    const report = recoverDelegation(encodeDelegationCheckpoint(at4), all);
+    expect(report.failure).toBeNull();
+    expect(withoutRevision(report.state.checkpoint)).toBe(withoutRevision(recoverDelegation(null, all).state.checkpoint));
+    const covered = recoverDelegation(encodeDelegationCheckpoint(recoverDelegation(null, all).state.checkpoint), all);
+    expect(covered.failure).toBeNull();
+  });
+
+  it('a transition whose generation skips one refuses recovery: the lane stays reconstructing', () => {
+    const skipping = chainOf([created, transitionEntry({ generation: 1, reason: 'carrier', to: 'ephemeral', at: T(41) }),
+      transitionEntry({ generation: 3, reason: 'adopt', to: 'adopted', at: T(50), expiresAt: plus7d(T(50)) })], 3, base2[1]!.digest);
+    const report = recoverDelegation(null, [...base2, ...skipping]);
+    expect(report.state.phase).toBe('reconstructing');
+    expect(report.failure).toMatchObject({ code: 'fold-refused' });
+    expect(report.failure?.detail).toMatch(/stale-generation/);
+  });
+
+  it('a transition naming an unknown lease refuses recovery', () => {
+    const unknown = chainOf([created, transitionEntry({ leaseId: 'lease-404', generation: 1, reason: 'carrier', to: 'ephemeral', at: T(41) })], 3, base2[1]!.digest);
+    const report = recoverDelegation(null, [...base2, ...unknown]);
+    expect(report.state.phase).toBe('reconstructing');
+    expect(report.failure?.detail).toMatch(/lease-unknown/);
+  });
+
+  it('a transition the table does not allow, or whose target contradicts the decision, refuses recovery', () => {
+    for (const bad of [
+      transitionEntry({ generation: 1, reason: 'promote', to: 'promoted', at: T(41), runId: 4 }),                  // promote from ephemeral
+      transitionEntry({ generation: 1, reason: 'carrier', to: 'adopted', at: T(41) }),                            // carrier goes to ephemeral
+      transitionEntry({ generation: 1, reason: 'adopt', to: 'adopted', at: T(41), terminalEvidenceAt: T(40) }),    // adopt without its expiry
+      // D-7968: adopt's terminal evidence is required, bounded by the first observation and the adoption, and adopt's alone.
+      transitionEntry({ generation: 1, reason: 'adopt', to: 'adopted', at: T(41), expiresAt: plus7d(T(41)) }),
+      transitionEntry({ generation: 1, reason: 'adopt', to: 'adopted', at: T(41), terminalEvidenceAt: T(42), expiresAt: plus7d(T(41)) }),
+      transitionEntry({ generation: 1, reason: 'adopt', to: 'adopted', at: T(41), terminalEvidenceAt: T(39), expiresAt: plus7d(T(41)) }),
+      transitionEntry({ generation: 1, reason: 'retain', to: 'retained', at: T(41), terminalEvidenceAt: T(40), expiresAt: plus7d(T(41)) }),
+    ]) {
+      const report = recoverDelegation(null, [...base2, ...chainOf([created, bad], 3, base2[1]!.digest)]);
+      expect(report.state.phase, JSON.stringify(bad)).toBe('reconstructing');
+      expect(report.failure?.code, JSON.stringify(bad)).toBe('fold-refused');
+    }
+    // and the same adopt with its evidence inside the bounds folds (the control)
+    const good = transitionEntry({ generation: 1, reason: 'adopt', to: 'adopted', at: T(41), terminalEvidenceAt: T(40), expiresAt: plus7d(T(41)) });
+    expect(recoverDelegation(null, [...base2, ...chainOf([created, good], 3, base2[1]!.digest)]).failure).toBeNull();
+  });
+
+  it('a checkpoint lease that lags its covered transition records fails the proof', () => {
+    const cp = recoverDelegation(null, all).state.checkpoint;
+    const tampered = { ...cp, leases: [{ ...cp.leases[0]!, generation: 2, currentJournalSequence: records[2]!.sequence, retainedAt: null, disposition: 'adopted' as const, cleanupDueAt: plus7d(T(50)) }] };
+    const report = recoverDelegation(encodeDelegationCheckpoint(tampered), all);
+    expect(report.state.phase).toBe('reconstructing');
+    expect(report.failure?.code).toBe('lease-proof');
+  });
+});
+
+describe('W5-J7b: the PR5a build recovers a journal holding every lease kind and field a later writer journals', () => {
+  // Written by the rig's raw appender, as PR5b's doors and PR8's resolve would write them: an `attach` and a `foreign` release,
+  // each with `resolvesThrough` set, beside a transfer, its refusal, a promotion and a `transferred` release.
+  const events = [sessionStart(1), subagentStart(2, X), subagentStart(3, Y)];
+  const base3 = evidenceChain(events);
+  const cp0 = recoverDelegation(null, base3).state.checkpoint;
+  const actX = activityOf(cp0, X)!;
+  const actY = activityOf(cp0, Y)!;
+  const markA = { attemptedAt: T(70), attemptId: 'attempt-7' };
+  const markB = { attemptedAt: T(80), attemptId: 'attempt-9' };
+  const entries: DelegationJournalEntryV1[] = [
+    leaseEntryFor(actX.activityId, { leaseId: 'lease-1', firstObservedAt: T(40), sourceKind: 'raw' }),
+    leaseEntryFor(actY.activityId, { leaseId: 'lease-2', firstObservedAt: T(41), adminRecord: 'wt-2', canonicalPath: '/work/project-a/wt-2' }),
+    // lease-1: a raw lease, attached by the operator's resolve, then released foreign by a second resolve.
+    transitionEntry({ leaseId: 'lease-1', generation: 1, reason: 'carrier', to: 'ephemeral', at: T(42) }),
+    seenEntry(1, T(43), 'lease-1'),
+    transitionEntry({ leaseId: 'lease-1', generation: 2, reason: 'attach', to: 'retained', at: T(72), expiresAt: plus7d(T(72)), resolvesThrough: markA }),
+    releasedEntry({ leaseId: 'lease-1', generation: 3, releaseReason: 'foreign', at: T(82), lastHeadSha: 'a'.repeat(40), resolvesThrough: markB }),
+    // lease-2: adopted on its terminal evidence (D-7968), kept, a transfer refused, a second transfer promoted, then released transferred.
+    transitionEntry({ leaseId: 'lease-2', generation: 1, reason: 'carrier', to: 'ephemeral', at: T(44) }),
+    seenEntry(1, T(45), 'lease-2'),
+    transitionEntry({ leaseId: 'lease-2', generation: 2, reason: 'adopt', to: 'adopted', at: T(49), terminalEvidenceAt: T(46), expiresAt: plus7d(T(49)) }),
+    transitionEntry({ leaseId: 'lease-2', generation: 3, reason: 'operator-retain', to: 'retained', at: T(50), expiresAt: plus7d(T(50)) }),
+    transitionEntry({ leaseId: 'lease-2', generation: 4, reason: 'transfer', to: 'transferring', at: T(55), runId: 11 }),
+    transitionEntry({ leaseId: 'lease-2', generation: 5, reason: 'transfer-refused', to: 'retained', at: T(56), auditEvidence: 'dirty' }),
+    transitionEntry({ leaseId: 'lease-2', generation: 6, reason: 'transfer', to: 'transferring', at: T(57), runId: 12 }),
+    transitionEntry({ leaseId: 'lease-2', generation: 7, reason: 'promote', to: 'promoted', at: T(58), runId: 12, promotedSession: 'lane-a-demo-child',
+      auditEvidence: 'token-1', lineageClose: 'transfer', lineageOpenRun: 12 }),
+    releasedEntry({ leaseId: 'lease-2', generation: 8, releaseReason: 'transferred', at: T(95) }),
+  ];
+  const records = chainOf(entries, 4, base3[2]!.digest);
+  const all = [...base3, ...records];
+
+  it('recovers to ready and folds each kind: the carrier row\'s resolvedThrough and releaseReason read back', () => {
+    const report = recoverDelegation(null, all);
+    expect(report.failure).toBeNull();
+    expect(report.state.phase).toBe('ready');
+    const cp = report.state.checkpoint;
+    const l1 = cp.leases.find((l) => l.leaseId === 'lease-1')!;
+    const l2 = cp.leases.find((l) => l.leaseId === 'lease-2')!;
+    expect(l1).toMatchObject({ generation: 3, disposition: 'retained', retainedAt: T(72), releasedAt: T(82), carrierGenerationSeen: 1 });
+    expect(l2).toMatchObject({ generation: 8, disposition: 'promoted', adoptedAt: T(49), terminalEvidenceAt: T(46), retainedAt: T(50), promotedAt: T(58),
+      releasedAt: T(95), carrierGenerationSeen: 1 });
+    expect(cp.leaseCarriers).toEqual([
+      { leaseId: 'lease-1', transferringSince: null, transferRun: null, promotedRun: null, promotedSession: null, releaseReason: 'foreign', resolvedThrough: markB },
+      { leaseId: 'lease-2', transferringSince: null, transferRun: null, promotedRun: 12, promotedSession: 'lane-a-demo-child', releaseReason: 'transferred', resolvedThrough: null },
+    ]);
+    // The lineage: lease-1's opening edge closed foreign at its release; lease-2's closed `transfer` at the promotion, and a
+    // run-owned edge for run 12 opened under the same parent.
+    const own = (leaseId: string) => cp.lineage.find((n) => n.leaseId === leaseId)!;
+    expect(own('lease-1')).toMatchObject({ closedAt: T(82), closeReason: 'foreign' });
+    expect(own('lease-2')).toMatchObject({ closedAt: T(58), closeReason: 'transfer' });
+    expect(cp.lineage.filter((n) => n.runId !== null)).toEqual([{
+      lineageId: modelNs.deriveDelegationRunLineageId({ leaseId: 'lease-2', parentId: PARENT, parentIncarnation: INC, runId: 12 }),
+      parentId: PARENT, parentIncarnation: INC, activityId: null, leaseId: null, runId: 12, openedAt: T(58), closedAt: null, closeReason: null,
+    }]);
+    // Released, so nothing of either lease is held any longer.
+    expect(cp.pruningHolds.filter((h) => h.reason === 'open-lease' || h.reason === 'open-lineage')).toEqual([]);
+  });
+
+  it('the grammar reads each lease kind\'s exact shape: a missing or extra key, or a word outside its vocabulary, is refused', () => {
+    const build = (entry: unknown) => () => buildDelegationJournalRecord({ sequence: 1, acceptedAt: T(1), previousDigest: null, entry: entry as DelegationJournalEntryV1 });
+    const t = transitionEntry({ generation: 1, reason: 'carrier', to: 'ephemeral', at: T(41) }) as unknown as Record<string, unknown>;
+    expect(build(t)).not.toThrow();
+    const { resolvesThrough: _r, ...missing } = t;
+    expect(failureCode(build(missing))).toBe('bad-field');
+    expect(failureCode(build({ ...t, extra: 1 }))).toBe('unknown-key');
+    expect(failureCode(build({ ...t, reason: 'repair' }))).toBe('bad-field');
+    expect(failureCode(build({ ...t, to: 'unknown' }))).toBe('bad-field');
+    expect(failureCode(build({ ...t, lineageClose: 'reaped' }))).toBe('bad-field');
+    expect(failureCode(build({ ...t, generation: 0 }))).toBe('bad-field');
+    expect(failureCode(build({ ...t, resolvesThrough: { attemptedAt: T(1) } }))).toBe('bad-field');
+    expect(failureCode(build(releasedEntry({ generation: 1, releaseReason: 'reaped' as never })))).toBe('bad-field');
+    expect(failureCode(build({ kind: 'lease-carrier-seen', leaseId: 'lease-1', generation: 1 }))).toBe('bad-field');
+  });
+
+  it('the checkpoint round-trips through its codec, and recovery from it over the same journal is ready and equal', () => {
+    const cp = recoverDelegation(null, all).state.checkpoint;
+    expect(decodeDelegationCheckpoint(encodeDelegationCheckpoint(cp))).toEqual(cp);
+    const again = recoverDelegation(encodeDelegationCheckpoint(cp), all);
+    expect(again.failure).toBeNull();
+    expect(withoutRevision(again.state.checkpoint)).toBe(withoutRevision(cp));
+  });
+
+  it('a released lease whose records a later compaction cut still recovers (it holds nothing, so its row stands alone)', () => {
+    const cp = recoverDelegation(null, all).state.checkpoint;
+    // The checkpoint covers everything; keep only the anchor's record, as a compaction that cut every unheld record would.
+    const report = recoverDelegation(encodeDelegationCheckpoint(cp), all.slice(-1));
+    expect(report.failure).toBeNull();
+    expect(report.state.phase).toBe('ready');
+  });
+
+  it('opens ready on the durable applier and projects the lease kinds to SQLite (no run row: lease-1 only)', async () => {
+    // The run-owned lineage row needs its run in `runs`; the attach-and-foreign half is projected here on its own.
+    const head = chainOf(entries.slice(0, 6), 4, base3[2]!.digest);
+    const dir = mkTmp('ccrc-deleg-pr5a-');
+    writeFileSync(path.join(dir, DELEGATION_JOURNAL_FILE), bytesOf([...base3, ...head]));
+    const h = harness({ dir });
+    const dur = await h.open();
+    expect(dur.failure()).toBeNull();
+    expect(dur.state().phase).toBe('ready');
+    const lease = h.store.readDelegationProjection().leases.find((l) => l.leaseId === 'lease-1')!;
+    expect(lease).toMatchObject({ generation: 3, disposition: 'retained', releasedAt: T(82), retainedAt: T(72), cleanupDueAt: plus7d(T(72)) });
+    expect(h.store.readDelegationProjection().lineage.find((n) => n.leaseId === 'lease-1')).toMatchObject({ closeReason: 'foreign', closedAt: T(82) });
+    expect(dur.state().checkpoint.leaseCarriers?.[0]).toMatchObject({ leaseId: 'lease-1', releaseReason: 'foreign', resolvedThrough: markB });
   });
 });
 
@@ -3255,8 +3464,8 @@ describe('the pure/impure split is explicit, and nothing pure mints an ID or rea
       expect(pure).not.toMatch(/node:fs|fsp\.|fsConstants|node:sqlite|\.\/db\.js|\.\/store\.js|CoordStore|process\.|readFileSync|writeFileSync|openSync/);
       const imports = [...pure.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1]);
       expect(imports.sort()).toEqual(file === 'delegation-journal.ts'
-        ? ['../../../shared/api.js', './delegation-model.js']
-        : ['../../../shared/api.js', './delegation-compaction.js', './delegation-journal.js', './delegation-model.js', 'node:path']);
+        ? ['../../../shared/api.js', './delegation-lease-state.js', './delegation-model.js']
+        : ['../../../shared/api.js', './delegation-compaction.js', './delegation-journal.js', './delegation-lease-state.js', './delegation-model.js', 'node:path']);
     });
     it(`${file}: no randomness and no clock anywhere in the module (they are injected)`, () => {
       const src = strip(readFileSync(path.join(dir, file), 'utf8'));

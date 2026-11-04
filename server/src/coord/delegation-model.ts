@@ -7,7 +7,7 @@
 //   - `canonicalDelegationJson`, the one JSON encoder every journal preimage goes through (RFC 8785 over a closed domain);
 //   - the activity natural key, the activity ID derived from it, and `allocateDelegationActivityIdInto` with its pure form
 //     `restoreOrAllocateActivityId` (O1, O4, D-5833);
-//   - `assertWave3Lease`, the one statement of what wave 3 may write to `delegation_leases`;
+//   - `assertLease`, the one statement of what a lease row may hold (wave 3's guard, loosened for wave 5's transitions);
 //   - the codecs between a checkpoint's row shapes and the six tables' columns, with typed readers that never cast text.
 //
 // THE PROJECTION IS REPAIRABLE OUTPUT. The journal and the checkpoint are authority; nothing here reads SQLite back as one.
@@ -40,8 +40,11 @@ import {
   type DelegationLeaseSourceKind,
   type DelegationParentageState,
   type DelegationWorkspaceState,
+  type DelegationCarrierState,
+  type DelegationLeaseReleaseReason,
 } from '../../../shared/api.js';
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
+import type { DelegationLeaseTransitionReason, DelegationLineageCloseReason } from './delegation-lease-state.js';
 
 // ── Durable journal and checkpoint types (the plan's vocabulary, names and shapes exact) ────────────────────────────
 
@@ -62,7 +65,53 @@ export type DelegationJournalEntryV1 =
       correlationJournalIds: readonly string[];
       firstObservedAt: string;
       lineageId: string;
-    };
+    }
+  // Delegation broker wave 5, PR5a (D-7809): the three lease kinds, in the grammar a release ahead of any writer. Each carries
+  // every field a later wave-5 writer fills (O5-8 (c)): `resolvesThrough` is PR8's resolve, null elsewhere.
+  | {
+      kind: 'lease-transition';
+      leaseId: string;
+      generation: number;
+      reason: DelegationLeaseTransitionReason;
+      to: DelegationCarrierState;
+      at: string;
+      expiresAt: string | null;
+      /** The activity's terminal evidence that the adoption rests on (PR7); non-null only on `adopt`, at or before `at`. */
+      terminalEvidenceAt: string | null;
+      runId: number | null;
+      promotedSession: string | null;
+      auditEvidence: string | null;
+      lineageClose: DelegationLineageCloseReason | null;
+      lineageOpenRun: number | null;
+      resolvesThrough: DelegationAttemptMark | null;
+    }
+  | {
+      kind: 'lease-released';
+      leaseId: string;
+      generation: number;
+      releaseReason: DelegationLeaseReleaseReason;
+      at: string;
+      lastHeadSha: string | null;
+      resolvesThrough: DelegationAttemptMark | null;
+    }
+  | { kind: 'lease-carrier-seen'; leaseId: string; generation: number; at: string };
+
+/** The operator's resolution of a conflict (spec §5.4): the newest attempt on the lease's tree when resolve acted, by the
+ *  projection's own ordering (`attemptedAt`, then `attemptId`). An attempt ordered at or below it is resolved. */
+export interface DelegationAttemptMark { attemptedAt: string; attemptId: string }
+
+/** Checkpoint-only (never projected): the lease facts no `delegation_leases` column holds, one row per lease that has any
+ *  non-null field. A transfer in flight, the run and session a promotion went to, why the lease was released, and how far an
+ *  operator's resolve reached. */
+export interface DelegationLeaseCarrierRow {
+  leaseId: string;
+  transferringSince: string | null;
+  transferRun: number | null;
+  promotedRun: number | null;
+  promotedSession: string | null;
+  releaseReason: DelegationLeaseReleaseReason | null;
+  resolvedThrough: DelegationAttemptMark | null;
+}
 
 export interface DelegationJournalRecordV1 {
   v: 1;
@@ -233,6 +282,8 @@ export interface DelegationCheckpointV1 {
   bucketCursors: readonly DelegationBucketCursor[];
   observationIntervals: readonly DelegationObservationInterval[];
   pruningHolds: readonly DelegationPruningHold[];
+  /** Wave 5 (PR5a): ABSENT when empty, so a checkpoint with no lease transition is byte-identical to wave 4's. Sorted by `leaseId`. */
+  leaseCarriers?: readonly DelegationLeaseCarrierRow[];
 }
 
 /**
@@ -381,7 +432,7 @@ export type DelegationModelRefusal =
   | 'bad-natural-key'        // an activity natural key that is not four strings and a known source kind
   | 'bad-identity-journal-id'
   | 'identity-journal-id-required'
-  | 'lease-generation'       // the five wave-3 lease invariants, then the one about the journal
+  | 'lease-generation'       // the lease invariants (`assertLease`), then the one about the journal
   | 'lease-sequences'
   | 'lease-disposition'
   | 'lease-cleanup-state'
@@ -389,6 +440,8 @@ export type DelegationModelRefusal =
   | 'lease-last-observed'    // wave 3 replays firstObservedAt into lastObservedAt: they are one instant
   | 'lease-opening-lineage'  // replay also opens the lease's own lineage row, at that same instant
   | 'lease-without-journal-entry'
+  | 'lease-expiry'           // an adopted or retained lease with no expiry (`cleanupDueAt`)
+  | 'lease-carrier-row'      // a carrier row with no lease, an all-null one, or one its lease's state contradicts
   | 'activity-id-mismatch'   // an activity row whose ID is not the derivation from its natural key and identity journalId
   | 'natural-key-map'        // activityIdsByNaturalKey and the activity rows disagree, in either direction
   | 'intent-map'             // coordinatorIntentByParent and the session rows' explicitIntentAt disagree
@@ -404,10 +457,10 @@ export class DelegationModelError extends Error {
 
 // ── The words this file spells, for the coordination scanner ─────────────────────────────────────────────────────────
 
-/** The two journal entry kinds, as a TOTAL table over `DelegationJournalEntryV1['kind']`: a kind added to the union is a compile
+/** The journal entry kinds, as a TOTAL table over `DelegationJournalEntryV1['kind']`: a kind added to the union is a compile
  *  error here until it is named, and the journal and the checkpoint read the table rather than spell the words again. */
 export const DELEGATION_JOURNAL_ENTRY_KINDS: Readonly<Record<DelegationJournalEntryV1['kind'], true>> = {
-  'evidence-accepted': true, 'lease-created': true,
+  'evidence-accepted': true, 'lease-created': true, 'lease-transition': true, 'lease-released': true, 'lease-carrier-seen': true,
 };
 
 /** The reasons a pruning hold can carry, as a TOTAL table over `DelegationPruningHold['reason']`. */
@@ -422,7 +475,7 @@ export const DELEGATION_MODEL_REFUSALS: Readonly<Record<DelegationModelRefusal, 
   'foreign-keys-off': true, 'bad-natural-key': true, 'bad-identity-journal-id': true, 'identity-journal-id-required': true,
   'lease-generation': true, 'lease-sequences': true, 'lease-disposition': true, 'lease-cleanup-state': true,
   'lease-transition-field': true, 'lease-last-observed': true, 'lease-opening-lineage': true, 'lease-without-journal-entry': true,
-  'activity-id-mismatch': true, 'natural-key-map': true, 'intent-map': true, 'lease-lineage': true, 'projection-delta-mismatch': true,
+  'lease-expiry': true, 'lease-carrier-row': true, 'activity-id-mismatch': true, 'natural-key-map': true, 'intent-map': true, 'lease-lineage': true, 'projection-delta-mismatch': true,
 };
 
 /** Every kebab word this file spells, for `mail-routes.test.ts`'s scan of `server/src/coord`: the model's refusals, the journal
@@ -600,6 +653,23 @@ export function deriveDelegationLineageId(parts: DelegationLineageIdParts): stri
     + lengthPrefixed(parentIncarnation) + lengthPrefixed(activityId));
 }
 
+const RUN_LINEAGE_ID_DOMAIN = 'ccrc-delegation-run-lineage-v1';
+
+/**
+ * The run-owned lineage row a promotion opens (wave 5, PR5a; spec §5.7, §5.8): lowercase SHA-256 of its own domain tag and
+ * `(leaseId, parentId, parentIncarnation, runId)`, length-prefixed as the lease's opening ID is. Derived, so replay of a
+ * `lease-transition` naming `lineageOpenRun` opens the same row the live door did, and no entry carries the ID.
+ */
+export function deriveDelegationRunLineageId(parts: { leaseId: string; parentId: string; parentIncarnation: string; runId: number }): string {
+  const { leaseId, parentId, parentIncarnation, runId } = parts;
+  for (const [name, v] of [['leaseId', leaseId], ['parentId', parentId], ['parentIncarnation', parentIncarnation]]) {
+    if (typeof v !== 'string' || v === '' || LONE_SURROGATE.test(v)) throw new DelegationModelError('bad-row', `run lineage ${name} is not a non-empty string`);
+  }
+  if (!Number.isSafeInteger(runId) || runId < 1) throw new DelegationModelError('bad-row', `run lineage runId ${String(runId)} is not a positive integer`);
+  return delegationSha256Hex(lengthPrefixed(RUN_LINEAGE_ID_DOMAIN) + lengthPrefixed(leaseId) + lengthPrefixed(parentId)
+    + lengthPrefixed(parentIncarnation) + lengthPrefixed(String(runId)));
+}
+
 /**
  * The mapping-first rule, written INTO the caller's own mapping (D-5833). It reads the mapping first by an OWN property
  * only: a natural key with a mapping ALWAYS gets its mapped ID back, whatever journalId the caller now holds, and the
@@ -713,65 +783,106 @@ export function formatDelegationInstant(ms: number): string {
   return iso;
 }
 
-// ── The wave-3 lease guard ────────────────────────────────────────────────────────────────────────────────────────────
+// ── The lease guard ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Every lease column that a LATER wave's transition fills in. Wave 3 has no transition entry kind, so all are null. */
-const LEASE_TRANSITION_FIELDS = [
-  'terminalEvidenceAt', 'adoptedAt', 'retainedAt', 'promotedAt', 'cleanupDueAt', 'cleanupStartedAt', 'cleanupFinishedAt',
-  'cleanupEvidenceJson', 'carrierGenerationSeen', 'releasedAt',
-] as const satisfies readonly (keyof DelegationLeaseRow)[];
+/** The cleanup columns. Wave 5 has no cleaner (D-7002), so every one stays null and `cleanupState` stays `not-due`. */
+const LEASE_CLEANUP_FIELDS = ['cleanupStartedAt', 'cleanupFinishedAt', 'cleanupEvidenceJson'] as const satisfies readonly (keyof DelegationLeaseRow)[];
+
+const leaseRefusal = (code: DelegationModelRefusal, id: string, why: string): never => {
+  throw new DelegationModelError(code, `lease ${id} ${why}`);
+};
 
 /**
- * What wave 3 may write to `delegation_leases`. The DDL is the complete future-facing shape and allows far more, so the
- * schema never has to change to loosen this; the guard is here, in one place, and `projectDelegationCheckpoint` runs it
- * over every lease BEFORE it opens a transaction.
- *
- * A wave-3 lease exists only by replaying its durable `lease-created` entry, so it is generation 0, its creating and
- * current journal sequences are equal, it is `ephemeral`, its cleanup is `not-due`, and every transition clock, evidence
- * and carrier field is null. And that entry must exist in the journal the checkpoint has applied: a lease whose creating
- * sequence is past `appliedJournalSequence` has no journal entry behind it (an "event-less" lease), and so no authority.
- * Replay sets `lastObservedAt` to the entry's `firstObservedAt` too (so the two are equal). That the entry's sequence names
- * a retained `lease-created` record whose fields equal the lease is the journal's to prove (Task 8), not this guard's.
+ * What a lease row may hold, beside its carrier row (`undefined` when it has none). The DDL is the complete future-facing shape
+ * and allows far more, so the schema never changes to loosen this; the guard is here, in one place, and the projections and the
+ * checkpoint's validation run it over every lease BEFORE anything is written. Wave 3's guard, loosened for the transitions of
+ * `delegation-lease-state.ts` (wave 5, PR5a):
+ *   - `generation >= 0`; `creatingJournalSequence <= currentJournalSequence <= appliedJournalSequence` (a sequence past the applied
+ *     one has no journal entry behind it, so no authority); generation 0 exactly when the two sequences are equal;
+ *   - the disposition and its clocks agree: `adopted` has `adoptedAt`, `retained` has `retainedAt`, `promoted` has `promotedAt`
+ *     and a carrier row with `promotedRun`, an `ephemeral` lease has none of them, and only a promoted lease has `promotedAt`;
+ *   - `adopted` and `retained` have an expiry (`cleanupDueAt`, D-7829) and an `ephemeral` lease has none, else `lease-expiry` (only a
+ *     keep sets one, and no transition returns a kept lease to `ephemeral`);
+ *   - `cleanupState` is `not-due` and the cleanup clocks and evidence are null (wave 5 has no cleaner);
+ *   - `terminalEvidenceAt` exactly beside `adoptedAt`, and not after it (D-7968); `carrierGenerationSeen` null or in `1..generation`;
+ *   - `lastObservedAt` is `firstObservedAt` (replay sets both to the creating entry's instant; no entry moves it);
+ *   - the carrier row, when present, has some non-null field, a transfer's two fields together, no transfer on a released lease,
+ *     and a `releaseReason` exactly when the lease is released (`lease-carrier-row`).
+ * That the sequences name retained journal records whose fields equal the lease is the journal proof's (the checkpoint module).
  */
-export function assertWave3Lease(lease: DelegationLeaseRow, appliedJournalSequence: number): void {
+export function assertLease(lease: DelegationLeaseRow, carrier: DelegationLeaseCarrierRow | undefined, appliedJournalSequence: number): void {
   const id = lease.leaseId;
-  if (lease.generation !== 0) {
-    throw new DelegationModelError('lease-generation', `lease ${id} is generation ${lease.generation}; wave 3 writes only generation 0`);
+  if (!Number.isSafeInteger(lease.generation) || lease.generation < 0) leaseRefusal('lease-generation', id, `is generation ${lease.generation}`);
+  if (!Number.isSafeInteger(lease.creatingJournalSequence) || lease.creatingJournalSequence < 1
+      || !Number.isSafeInteger(lease.currentJournalSequence) || lease.currentJournalSequence < lease.creatingJournalSequence
+      || (lease.generation === 0) !== (lease.creatingJournalSequence === lease.currentJournalSequence)) {
+    leaseRefusal('lease-sequences', id,
+      `has creating sequence ${lease.creatingJournalSequence}, current ${lease.currentJournalSequence} and generation ${lease.generation}; current is not below creating, and they are equal exactly at generation 0`);
   }
-  if (lease.creatingJournalSequence !== lease.currentJournalSequence
-      || !Number.isSafeInteger(lease.creatingJournalSequence) || lease.creatingJournalSequence < 1) {
-    throw new DelegationModelError('lease-sequences',
-      `lease ${id} has creating sequence ${lease.creatingJournalSequence} and current ${lease.currentJournalSequence}; at generation 0 they are one positive integer`);
+  if (lease.currentJournalSequence > appliedJournalSequence) {
+    leaseRefusal('lease-without-journal-entry', id,
+      `was written at journal sequence ${lease.currentJournalSequence}, past the applied sequence ${appliedJournalSequence}`);
   }
-  if (lease.disposition !== 'ephemeral') {
-    throw new DelegationModelError('lease-disposition', `lease ${id} is ${lease.disposition}; wave 3 writes only ephemeral leases`);
+  const d = lease.disposition;
+  const clock = (field: 'adoptedAt' | 'retainedAt' | 'promotedAt', want: boolean): void => {
+    if ((lease[field] !== null) !== want) leaseRefusal('lease-disposition', id, `is ${d} with ${field} ${String(lease[field])}`);
+  };
+  if (d === 'ephemeral') { clock('adoptedAt', false); clock('retainedAt', false); }
+  if (d === 'adopted') clock('adoptedAt', true);
+  if (d === 'retained') clock('retainedAt', true);
+  clock('promotedAt', d === 'promoted');
+  if (d === 'promoted' && (carrier === undefined || carrier.promotedRun === null)) leaseRefusal('lease-disposition', id, 'is promoted with no carrier row naming its run');
+  if (d !== 'promoted' && carrier !== undefined && (carrier.promotedRun !== null || carrier.promotedSession !== null)) {
+    leaseRefusal('lease-disposition', id, `is ${d} but its carrier row names a promoted run`);
   }
-  if (lease.cleanupState !== 'not-due') {
-    throw new DelegationModelError('lease-cleanup-state', `lease ${id} has cleanup ${lease.cleanupState}; wave 3 writes only not-due`);
+  if ((d === 'adopted' || d === 'retained') && lease.cleanupDueAt === null) leaseRefusal('lease-expiry', id, `is ${d} with no expiry (cleanupDueAt)`);
+  if (d === 'ephemeral' && lease.cleanupDueAt !== null) leaseRefusal('lease-expiry', id, `is ephemeral with an expiry (cleanupDueAt ${lease.cleanupDueAt}); only a keep sets one`);
+  if (lease.cleanupState !== 'not-due') leaseRefusal('lease-cleanup-state', id, `has cleanup ${lease.cleanupState}; wave 5 writes only not-due`);
+  for (const field of LEASE_CLEANUP_FIELDS) if (lease[field] !== null) leaseRefusal('lease-transition-field', id, `: ${field} must be null (wave 5 has no cleaner)`);
+  if (lease.terminalEvidenceAt !== null && lease.adoptedAt === null) leaseRefusal('lease-transition-field', id, ': terminalEvidenceAt is set without adoptedAt');
+  if (lease.adoptedAt !== null && lease.terminalEvidenceAt === null) leaseRefusal('lease-transition-field', id, ': adoptedAt is set without terminalEvidenceAt (D-7968)');
+  if (lease.terminalEvidenceAt !== null && lease.adoptedAt !== null && lease.terminalEvidenceAt > lease.adoptedAt) {
+    leaseRefusal('lease-transition-field', id, `: terminalEvidenceAt ${lease.terminalEvidenceAt} is after adoptedAt ${lease.adoptedAt} (D-7968)`);
   }
-  for (const field of LEASE_TRANSITION_FIELDS) {
-    if (lease[field] !== null) {
-      throw new DelegationModelError('lease-transition-field', `lease ${id}: ${field} must be null in wave 3`);
-    }
+  const seen = lease.carrierGenerationSeen;
+  if (seen !== null && (!Number.isSafeInteger(seen) || seen < 1 || seen > lease.generation)) {
+    leaseRefusal('lease-generation', id, `has carrierGenerationSeen ${seen}, outside 1..${lease.generation}`);
   }
   if (lease.lastObservedAt !== lease.firstObservedAt) {
-    throw new DelegationModelError('lease-last-observed',
-      `lease ${id} was last observed at ${lease.lastObservedAt} but first at ${lease.firstObservedAt}; wave 3 replay sets both to the entry's instant`);
+    leaseRefusal('lease-last-observed', id, `was last observed at ${lease.lastObservedAt} but first at ${lease.firstObservedAt}; replay sets both to the creating entry's instant`);
   }
-  if (lease.creatingJournalSequence > appliedJournalSequence) {
-    throw new DelegationModelError('lease-without-journal-entry',
-      `lease ${id} was created at journal sequence ${lease.creatingJournalSequence}, past the applied sequence ${appliedJournalSequence}`);
+  if (carrier === undefined) {
+    if (lease.releasedAt !== null) leaseRefusal('lease-carrier-row', id, 'is released with no carrier row naming why');
+    return;
   }
+  if (carrier.leaseId !== id) leaseRefusal('lease-carrier-row', id, `is checked against the carrier row of ${carrier.leaseId}`);
+  const all = [carrier.transferringSince, carrier.transferRun, carrier.promotedRun, carrier.promotedSession, carrier.releaseReason, carrier.resolvedThrough];
+  if (all.every((v) => v === null)) leaseRefusal('lease-carrier-row', id, 'has a carrier row whose every field is null');
+  if ((carrier.transferringSince === null) !== (carrier.transferRun === null)) leaseRefusal('lease-carrier-row', id, 'has half a transfer in its carrier row');
+  if ((carrier.releaseReason === null) !== (lease.releasedAt === null)) leaseRefusal('lease-carrier-row', id, 'has a releaseReason exactly when it is not released');
+  if (lease.releasedAt !== null && carrier.transferringSince !== null) leaseRefusal('lease-carrier-row', id, 'is released while its carrier row says transferring');
 }
 
 /**
- * Every lease of a checkpoint through `assertWave3Lease`, and then the one invariant that needs the checkpoint's lineage:
- * replay opens a lease-OWNED lineage row (`leaseId` set, so neither an activity's nor a run's) whose `openedAt` is the
- * lease's `firstObservedAt`. A lease without one is a lease whose history the journal entry would have opened and the
- * checkpoint lost. Run before any transaction opens, so a refusal writes nothing.
+ * Every lease of a checkpoint through `assertLease` beside its carrier row, then the invariants that need the whole checkpoint:
+ * every carrier row names a lease (once, in `leaseId` order, and the member is absent rather than empty), and replay opens a
+ * lease-OWNED lineage row (`leaseId` set, so neither an activity's nor a run's) whose `openedAt` is the lease's `firstObservedAt`.
+ * A lease without one is a lease whose history the journal entry would have opened and the checkpoint lost. Run before any
+ * transaction opens, so a refusal writes nothing.
  */
-export function assertWave3Leases(checkpoint: DelegationCheckpointV1): void {
-  for (const lease of checkpoint.leases) assertWave3Lease(lease, checkpoint.appliedJournalSequence);
+export function assertLeases(checkpoint: DelegationCheckpointV1): void {
+  const carriers = new Map<string, DelegationLeaseCarrierRow>();
+  const list = checkpoint.leaseCarriers;
+  if (list !== undefined && list.length === 0) throw new DelegationModelError('lease-carrier-row', 'leaseCarriers is present and empty; an empty member is absent');
+  let last: string | null = null;
+  for (const c of list ?? []) {
+    if (last !== null && !(last < c.leaseId)) throw new DelegationModelError('lease-carrier-row', `carrier rows are not in strict leaseId order at ${c.leaseId}`);
+    last = c.leaseId;
+    carriers.set(c.leaseId, c);
+  }
+  const leaseIds = new Set(checkpoint.leases.map((l) => l.leaseId));
+  for (const id of carriers.keys()) if (!leaseIds.has(id)) throw new DelegationModelError('lease-carrier-row', `a carrier row names lease ${id}, which has no row`);
+  for (const lease of checkpoint.leases) assertLease(lease, carriers.get(lease.leaseId), checkpoint.appliedJournalSequence);
   const openedAt = new Map<string, Set<string>>();
   for (const n of checkpoint.lineage) {
     if (n.leaseId === null) continue;
@@ -1304,14 +1415,20 @@ function diffProjectionTable<Row, Col extends string>(
   return { updates, inserts };
 }
 
+/** Whether `next` is `prior` closed: it was open, it is closed, and nothing else about it changed. */
+const isLineageClose = (prior: DelegationLineageRow, next: DelegationLineageRow): boolean =>
+  prior.closedAt === null && next.closedAt !== null && next.closeReason !== null && prior.lineageId === next.lineageId
+  && prior.parentId === next.parentId && prior.parentIncarnation === next.parentIncarnation && prior.activityId === next.activityId
+  && prior.leaseId === next.leaseId && prior.runId === next.runId && prior.openedAt === next.openedAt;
+
 /**
  * What a store must write to move a projection of `prior` to a projection of `next`, when that is only additions and updates:
  * a row both hold under one key whose encoded columns differ is an UPDATE, a row only `next` holds is an INSERT (parents first),
  * and `counts` is `next`'s length for each of the five tables. Pure: it reads nothing but its two arguments.
  *
- * NOT APPLICABLE (the caller projects in full) when any key `prior` holds is missing from `next`, in any table; when any lease row
- * differs or is new; when a lineage row owned by a lease, in `prior` or in `next`, differs, is new or leaves (a lease and its
- * lineage move together); or when a key repeats inside either checkpoint (so the full path gives its own answer for a corrupt
+ * NOT APPLICABLE (the caller projects in full) when any key `prior` holds is missing from `next`, in any table; when a lease row
+ * is new; when a lineage row owned by a lease is new, or differs other than by closing (a new lease and its opening lineage move
+ * together; wave 5's transitions and releases update a lease and close its lineage in a delta); or when a key repeats inside either checkpoint (so the full path gives its own answer for a corrupt
  * checkpoint). Keys: sessions (`sessionId`, `parentIncarnation`), activities `activityId`, attempts `attemptId`, leases `leaseId`,
  * lineage `lineageId`. Throws `bad-row` or `bad-instant` from the codec for a changed or new row it cannot encode. The tables are
  * diffed in that order and the first to decline ends the diff, so a table after it is never encoded.
@@ -1325,9 +1442,13 @@ export function diffDelegationProjection(prior: DelegationCheckpointV1, next: De
     () => diffProjectionTable(delegationSessionCodec, ['sessionId', 'parentIncarnation'], () => false, prior.sessions, next.sessions),
     () => diffProjectionTable(delegationActivityCodec, ['activityId'], () => false, prior.activities, next.activities),
     () => diffProjectionTable(delegationAttemptCodec, ['attemptId'], () => false, prior.attempts, next.attempts),
-    () => diffProjectionTable(delegationLeaseCodec, ['leaseId'], () => true, prior.leases, next.leases),
+    // Wave 5 (PR5a): a lease row that CHANGES is an update (a transition, a release, a carrier seen); a new lease is still not a
+    // delta, because its opening lineage row arrives with it.
+    () => diffProjectionTable(delegationLeaseCodec, ['leaseId'], (p) => p === undefined, prior.leases, next.leases),
+    // A lease-owned lineage row may only CLOSE in a delta (its lease's transition or release); a new one, or any other change to
+    // one, is not a delta. Rows owned by an activity or a run (a promotion's) are added and updated freely.
     () => diffProjectionTable(delegationLineageCodec, ['lineageId'],
-      (p, n) => (p !== undefined && p.leaseId !== null) || n.leaseId !== null, prior.lineage, next.lineage),
+      (p, n) => (p === undefined ? n.leaseId !== null : (p.leaseId !== null || n.leaseId !== null) && !isLineageClose(p, n)), prior.lineage, next.lineage),
   ];
   for (const table of tables) {
     const part = table();
@@ -1348,7 +1469,7 @@ export function diffDelegationProjection(prior: DelegationCheckpointV1, next: De
 /**
  * Everything the store's delta method refuses BEFORE its transaction, in the full projection's own order and with its own codes and
  * messages (the full projection's twin checks, so the two refuse a bad checkpoint the same way): the version, the applied position,
- * the wave-3 lease invariants, then `diffDelegationProjection(prior, next)` (which throws `bad-row` or `bad-instant` for a changed or
+ * the lease invariants (`assertLeases`), then `diffDelegationProjection(prior, next)` (which throws `bad-row` or `bad-instant` for a changed or
  * new row it cannot encode). A diff that is not applicable is returned at once: a session key repeated inside `next` is such a diff,
  * so the full path, which the store then runs, gives its own answer for it. Pure; returns the diff the store then writes or, when it is
  * not applicable, replaces by the full projection.
@@ -1357,7 +1478,7 @@ export function prepareDelegationProjectionChanges(prior: DelegationCheckpointV1
   if (next.v !== 1) throw new DelegationModelError('bad-checkpoint', `version ${String(next.v)} is not a version-1 checkpoint`);
   const applied = next.appliedJournalSequence;
   if (!Number.isSafeInteger(applied) || applied < 0) throw new DelegationModelError('bad-checkpoint', `appliedJournalSequence ${String(applied)} is not a non-negative integer`);
-  assertWave3Leases(next);
+  assertLeases(next);
   return diffDelegationProjection(prior, next);
 }
 
