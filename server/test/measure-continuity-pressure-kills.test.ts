@@ -102,6 +102,12 @@ describe('direct background-shell pressure kills, not pane-scope OOM stops', () 
     expect(read(all ? ['--all-copies'] : [])).toEqual(clean(3, 2, all ? 3 : 2));
   });
 
+  it('one unmeasured envelope in two copies of one uuid is one unmeasured notification (D-7961)', () => {
+    transcript(U1, [row(note('odd', 'exploded'))]);
+    transcript(U1, [row(note('odd', 'exploded'))], '.claude-copy', '-project-b');
+    expect(read(['--all-copies'])).toEqual({ ...clean(0, 0, 2), reading: 'partial', unmeasured_notifications: 1 });
+  });
+
   it('the existing largest-copy trade is visible; all-copies recovers a divergent shorter copy', () => {
     transcript(U1, [row('x'.repeat(2000))]);
     transcript(U1, [row(note('only-shorter'))], '.claude-copy', '-project-b');
@@ -367,15 +373,44 @@ describe('the scanner pins its own branches (D-4322 minors)', () => {
     })) as Reading;
 
   it('hits from a file are admitted only after it reads to its end: a read that fails mid-file admits none of them', () => {
-    transcript(U1, [row(note('lost-1')), row(note('lost-2')), row(note('lost-3'))]);
+    // U1's first two rows are one kill and one unmeasured envelope; the torn file admits neither.
+    transcript(U1, [row(note('lost-1')), row(note('odd', 'exploded')), row(note('lost-3'))]);
     transcript(U2, [row(note('kept'))]);
     expect(readTorn(U1, 2)).toEqual({ ...clean(1, 1, 1), reading: 'partial', unreadable_transcripts: 1, notification_sources: src(1) });
   });
 
   it('the torn-read harness reads a whole file when it does not tear (control)', () => {
-    transcript(U1, [row(note('one')), row(note('two'))]);
+    transcript(U1, [row(note('lost-1')), row(note('odd', 'exploded')), row(note('lost-3'))]);
     transcript(U2, [row(note('kept'))]);
-    expect(readTorn(U1, 99)).toEqual({ ...clean(3, 2, 2), notification_sources: src(3) });
+    expect(readTorn(U1, 99)).toEqual({ ...clean(3, 2, 2), reading: 'partial', unmeasured_notifications: 1, notification_sources: src(4) });
+  });
+
+  // Same idea for a value the scanner cannot dump: json.dumps is replaced, inside the module only, by one that
+  // raises RecursionError for a list or dict holding a notification, as a ~58,000-deep payload does in a real
+  // interpreter, without this test depending on the interpreter's depth limit. `mc.json` is the global json
+  // module, so it is swapped for a namespace and the harness's own `json` stays real.
+  const DUMP = [
+    'import importlib.util, json, sys, types',
+    'tool, home = sys.argv[1], sys.argv[2]',
+    'spec = importlib.util.spec_from_file_location("measure_continuity", tool)',
+    'mc = importlib.util.module_from_spec(spec)',
+    'spec.loader.exec_module(mc)',
+    'real_dumps = json.dumps',
+    'def fake_dumps(value, *a, **kw):',
+    '    out = real_dumps(value, *a, **kw)',
+    '    if isinstance(value, (dict, list)) and "<task-notification>" in out: raise RecursionError("fixture")',
+    '    return out',
+    'mc.json = types.SimpleNamespace(loads=json.loads, dumps=fake_dumps)',
+    'print(real_dumps(mc.s6_pressure_kills({"home": home, "since": None, "until": None, "all_copies": False})))',
+  ].join('\n');
+  const readUndumpable = (): Reading => JSON.parse(execFileSync('python3',
+    ['-I', '-c', DUMP, TOOL, h.home], {
+      encoding: 'utf8', timeout: 30_000, env: { ...inheritedEnv(), HOME: h.home, TZ: 'UTC' },
+    })) as Reading;
+
+  it('a payload holding a notification that cannot be dumped is one malformed row, never a silent skip', () => {
+    transcript(U1, [queueRow({ nested: note('deep') }), row(note('real'))]);
+    expect(readUndumpable()).toEqual({ ...clean(1, 1, 1), reading: 'partial', malformed_rows: 1, notification_sources: src(1) });
   });
 });
 

@@ -619,9 +619,13 @@ def stage4(ctx):
 # the default largest-copy-per-uuid read can hide a divergent smaller copy
 # (`--all-copies` reads it; a task is still counted once), subagent transcripts
 # are outside its pattern, and the remove and dequeue rows are not read. A queued
-# `prompt` or `content` the scanner cannot read as text (a dict, or a list element
-# that is no text part) whose JSON holds a `<task-notification>` is one unreadable
-# item, an unmeasured notification, never skipped. The unit of
+# `prompt` the scanner cannot read as text (a dict, or a list element that is no text
+# part) or an enqueue `content` that is no string (read only as a string: a list or dict
+# of any shape is ONE unreadable item, whole) whose JSON holds a `<task-notification>`
+# is one unreadable item, an unmeasured notification, never skipped. An unreadable item
+# is matched when the marker appears anywhere in its dump, broader than a readable text,
+# which must start with it: the fail-safe direction. A payload that holds one but cannot
+# be dumped is one malformed row. The unit of
 # `unmeasured_notifications` is the distinct (transcript uuid, text) pair, so one
 # notice seen in several sources or rows is one (D-7961). A KNOWN NON-EVENT is a well-formed
 # envelope read as not this event, adding no unmeasured count: exactly one status
@@ -655,8 +659,9 @@ def stage4(ctx):
 # unreadable stamp or ambiguous fields) and an absent roster are reported as such
 # and are never a clean zero; a row whose stamp is no string, or whose JSON nests
 # deeper than the parser can read, is a malformed row; a file's hits count only
-# once it was read to its end, and so are its unmeasured keys and source counts. The scanner and the comparison only read: neither
-# writes a marker or an environment assignment, or acts.
+# once it was read to its end, and so are its unmeasured keys and source counts. The
+# scanner and the comparison only read: neither writes a marker or an environment
+# assignment, or acts.
 S6_IDLE = 1800
 S6_SPAWN_SLOP = 10
 S6_DAY = 86400
@@ -914,11 +919,11 @@ S6_MARKER = "<task-notification>"
 
 
 def s6_unreadable(value):
-    """One unreadable item when the value's JSON holds a notification, else nothing."""
-    try:
-        dump = json.dumps(value, sort_keys=True)
-    except (TypeError, ValueError, RecursionError):
-        return []
+    """One unreadable item when the value's JSON holds a notification, else nothing.
+
+    A value that cannot be dumped raises: the caller makes its whole row one malformed row,
+    never a silent skip of a payload that may hold a notification."""
+    dump = json.dumps(value, sort_keys=True)
     return [(dump, False)] if S6_MARKER in dump else []
 
 
@@ -978,8 +983,15 @@ def s6_pressure_kills(ctx):
                     except (ValueError, UnicodeError, RecursionError):
                         file_malformed += 1
                         continue
+                    try:
+                        found = s6_notification_sources(row)
+                    except (TypeError, ValueError, RecursionError):
+                        # A payload that cannot be dumped is one malformed row: no source
+                        # count, nothing classified for it.
+                        file_malformed += 1
+                        continue
                     candidates = []
-                    for source, text, readable in s6_notification_sources(row):
+                    for source, text, readable in found:
                         if readable:
                             text = text.strip()
                             if not text.startswith(S6_MARKER):

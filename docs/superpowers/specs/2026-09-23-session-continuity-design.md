@@ -838,8 +838,11 @@ keys now include live UUID promotions as the §5.7 annotation says, so its row r
 history, and its limit that a queued-command notification is not read no longer holds. The direct-kill scanner reads a
 `<task-notification>` envelope from three sources, through one classification (D-7960): a user message, a
 `queued_command` attachment row's prompt (a string, or text parts), and a `queue-operation` enqueue row's content. The
-remove and dequeue rows are not read. A queued prompt or content of any other shape that holds a notification, a list
-element that is no text part included, is one unreadable item and so an unmeasured notification, never skipped. Each
+remove and dequeue rows are not read. A queued prompt of any other shape that holds a notification (a dict, or a list
+element that is no text part) is one unreadable item and so an unmeasured notification, never skipped; an enqueue
+content is read only as a string, so one of any other shape that holds a notification is one unreadable item, whole.
+An unreadable item matches when the marker appears anywhere in its dump, broader than a readable text, which must
+start with it (the fail-safe direction), and a payload that holds one but cannot be dumped is one malformed row. Each
 row is timed by its own stamp: a user or attachment row at its delivery, an enqueue row at its queue time. A notice
 enqueued before a window's end and delivered after it therefore counts in both adjacent windows, an over-count by
 design, the safe direction for a target of 0. The unit of `unmeasured_notifications` is one count per distinct
