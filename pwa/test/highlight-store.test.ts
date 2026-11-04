@@ -95,7 +95,7 @@ function setup(options: HighlightStoreOptions = { mode: 'docs' }) {
   return { h, clock, store, key, post, answer };
 }
 
-/** `n` characters of python, distinct by `tag`, in lines under 100 characters, with no long word or blank run. */
+/** `n` characters of python, distinct by `tag`, in lines under 100 characters. */
 const py = (n: number, tag: string): string =>
   (tag + ' ' + 'x '.repeat(n)).replace(/(.{80})/g, '$1\n').slice(0, n);
 const kinds = (store: { peek(k: string): HighlightEntry }, keys: string[]): string[] => keys.map((k) => store.peek(k).kind);
@@ -244,7 +244,7 @@ describe('M4.H11: a content-keyed store', () => {
     expect(blockKey('', 'a')).toEqual({ kind: 'unregistered' });
     const big = 'a\n'.repeat(MD_HIGHLIGHT_BLOCK_MAX_CHARS);
     expect(blockKey('python', big)).toEqual({ kind: 'over-cap', chars: big.length });
-    // Literal sizes, one over each retired bound: the grammar cap (8 192), the word (256), the line (2 048), the blank run (2 048).
+    // Literal sizes, just over each retired bound: the grammar cap (8 192), the word (256), the line (2 048), the blank run (2 048).
     for (const [lang, raw] of [
       ['ts', 'a\n'.repeat(4097)], ['python', 'a'.repeat(257)], ['python', 'a '.repeat(1025)], ['python', `a${'\n'.repeat(2049)}b`],
     ] as const) expect(blockKey(lang, raw).kind, `${lang}, ${raw.length} characters`).toBe('key');

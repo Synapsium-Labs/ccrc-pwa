@@ -7,10 +7,11 @@
 //     `store.keyOf` is it; `CodeBlock` and the seeding walk both ask it, so they never disagree.
 //   - `seed(blocks)`, a Docs page's or a text leaf's, once, at creation: every requestable block, in document order,
 //     each OCCURRENCE counted, a key that several blocks share included (review 1364 F1: every drawn copy inserts the
-//     key's HTML, so every copy counts); the input ceiling applies here. The first occurrence of a key decides its entry: past a ceiling, the key is `skipped` from the first
-//     commit, whatever order effects run in. A LATER occurrence past a ceiling, of a key whose first occurrence was
-//     admitted, is a skipped COPY: `copySkip(at)` names the ceiling for the copy's own `at`, the `pre` element, and
-//     the copy draws plain while its earlier siblings are coloured. One job still serves the key.
+//     key's HTML, so every copy counts); the input ceiling applies here. The first occurrence of a key decides its
+//     entry: past a ceiling, the key is `skipped` from the first commit, whatever order effects run in. A LATER
+//     occurrence past a ceiling, of a key whose first occurrence was admitted, is a skipped COPY: `copySkip(at)` names
+//     the ceiling for the copy's own `at`, the `pre` element, and the copy draws plain while its earlier siblings are
+//     coloured. One job still serves the key.
 //   - `copySkip(at)` is synchronous and never requests: the page ceiling that skipped this drawn copy, or `null` when
 //     the copy draws its key's entry. A chat store, and a block with no `at`, answer `null`.
 //   - `peek(key)` is synchronous and never requests; it returns the same entry object until that entry changes, and

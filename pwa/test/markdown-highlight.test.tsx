@@ -1,6 +1,6 @@
 // The block highlight cap (native Docs reader, W4 Task 4; design 2026-10-01 section 4.10's "Highlighting" and
 // section 4.15's M4.H1, the W4 plan's refinement (l)). `CodeBlock` asks highlight.js to colour a block only when its
-// language is registered, its `highlight` prop is not `false`, and it is at most `MD_HIGHLIGHT_BLOCK_MAX_CHARS`
+// language is registered and it is at most `MD_HIGHLIGHT_BLOCK_MAX_CHARS`
 // characters after the trailing-newline strip. A registered block over the cap renders as plain text and labels
 // itself "{label} · not highlighted ({KiB} KiB)", KiB being its characters / 1024 rounded up. (Not
 // `code-block.test.tsx`: open PR #111 creates that file.)
@@ -25,8 +25,8 @@ afterEach(() => {
  *  the strip would take). */
 const tsBody = (chars: number): string => 'const a = 1;\n'.repeat(Math.ceil(chars / 13)).slice(0, chars - 1) + 'x';
 
-/** A Python body of exactly `chars` characters, every line a keyword, ending in `x`: Python keeps the 64 KiB cap that
- *  `ts` no longer has (review 450 F1: `typescript` is capped at 8 192 characters), so it measures the general cap. */
+/** A Python body of exactly `chars` characters, every line a keyword, ending in `x`: cheap to highlight, and a block
+ *  at the 64 KiB input cap. */
 const pyBody = (chars: number): string => 'import a\n'.repeat(Math.ceil(chars / 9)).slice(0, chars - 1) + 'x';
 
 /** One fenced block, as react-markdown hands it to the `pre` component. */

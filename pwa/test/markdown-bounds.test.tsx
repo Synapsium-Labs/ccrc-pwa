@@ -297,5 +297,4 @@ describe('the xml subLanguage strip, kept by W5h-b (M4.H23): xml carries no sub-
     expect(html).not.toMatch(/hljs-attribute/);
     expect(c.querySelector('code')!.textContent).toBe('<script>let a = 1;</script><style>a { color: red }</style>');
   });
-
 });

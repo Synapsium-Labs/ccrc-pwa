@@ -33,7 +33,7 @@ beforeEach(() => { serial = 0; });
 /** `text` with its first characters replaced by `i` in base 36, its length unchanged. */
 const distinct = (text: string, i: number): string => (i.toString(36) + text.slice(i.toString(36).length)).slice(0, text.length);
 
-/** `n` characters of bounds-clean, distinct text: lines of 99 `x` and a newline, the last character never a newline. */
+/** `n` characters of distinct text: lines of 99 `x` and a newline, the last character never a newline. */
 const filler = (n: number): string =>
   distinct(('x'.repeat(99) + '\n').repeat(Math.ceil(n / 100)).slice(0, n).replace(/\n$/, 'x'), serial++);
 
@@ -48,7 +48,7 @@ const block = (className: readonly string[] | string | undefined, text: string):
 };
 /** One block of `n` raw characters in `name`. */
 const lang = (name: string, n: number): HastElement => block([`language-${name}`], filler(n));
-/** Blocks of class `className` of at most `cap` raw characters each, summing to `total` (the grammar's own cap, literal). */
+/** Blocks of class `className` of at most `cap` raw characters each, summing to `total` (the block size, literal). */
 const spread = (className: readonly string[] | string, total: number, cap: number): HastElement[] =>
   Array.from({ length: Math.ceil(total / cap) }, (_, i) => block(className, filler(Math.min(cap, total - i * cap))));
 const spreadLang = (name: string, total: number, cap: number): HastElement[] => spread([`language-${name}`], total, cap);
@@ -251,7 +251,7 @@ describe('review 460 F10: which blocks of a mixed crafted page are highlighted, 
     ]);
     expect(m.highlighted).toEqual([true, true, true, true]);
 
-    // Page G, the general budget (the accepted residue's page): 48 ts blocks and two markdown blocks fill it exactly,
+    // Page G, the page input ceiling (the accepted residue's page): 48 ts blocks and two markdown blocks fill it exactly,
     // all 50 highlighted; the yaml block after them is refused by the page input ceiling.
     const g = await run([
       ...tsFill(), mixed('markdown', 'g-1', mdChars), mixed('markdown', 'g-2', mdChars), mixed('yaml', 'g-yaml', 100),
@@ -265,7 +265,7 @@ describe('review 460 F10: which blocks of a mixed crafted page are highlighted, 
 // `ts`, `tsx` and `md`, the class shapes the reader takes, and a name no grammar registers. Literal sizes, never the
 // imported constants, so a mutated constant reds a behaviour case. Re-derived on raw lengths (W5h-a, refinement (j)).
 describe('D-7574 characterization: highlight decisions at the page input ceiling, with the aliases ts, tsx and md', () => {
-  it('C1 the general budget refuses every alias past it: python 524 288, then tsx, md and ts of one character each', () => {
+  it('C1 the page input ceiling refuses every alias past it: python 524 288, then tsx, md and ts of one character each', () => {
     expect(decisions(root([...spreadLang('python', 524288, 65536), lang('tsx', 1), lang('md', 1), lang('ts', 1)])))
       .toEqual([...rep(A, 8), INPUT, INPUT, INPUT]);
   });
@@ -275,7 +275,7 @@ describe('D-7574 characterization: highlight decisions at the page input ceiling
       .map((b) => b.lang)).toEqual(['tsx', 'ts', 'md']);
   });
 
-  it('C6 a name no grammar registers is no requestable block: it counts in no sum', () => {
+  it('C6 a name no grammar registers is no requestable block: it is never seeded', () => {
     expect(decisions(root([block(['language-nope'], 'x'.repeat(400000)), lang('ts', 1), lang('md', 1)]))).toEqual(['unregistered', A, A]);
   });
 
