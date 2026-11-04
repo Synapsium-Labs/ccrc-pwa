@@ -554,4 +554,13 @@ describe('an unmeasured fingerprint names its reason', () => {
     } finally { fs.chmodSync(parent, 0o755); }
     expect(mark(rel).doc).toMatchObject({ ok: true, answer: 'written', state: 'released' });   // CONTROL: searchable again
   }, 60_000);
+
+  it('W5-L31 (review 1461 F5, D-7978): a tag named like the branch leaves the carrier recording the branch\'s own name', () => {
+    const t = agentTree();
+    h.git(main(), 'tag', 'claude/agent-a', h.git(t, 'rev-parse', 'HEAD').trim());
+    // what `symbolic-ref --short` would have recorded, and the audit then read as a branch that does not exist
+    expect(h.git(t, 'symbolic-ref', '--short', 'HEAD').trim()).toBe('heads/claude/agent-a');
+    expect(mark().doc).toMatchObject({ ok: true, answer: 'written' });
+    expect(carrier().branch).toBe('claude/agent-a');
+  }, 60_000);
 });

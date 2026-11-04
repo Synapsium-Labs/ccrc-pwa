@@ -657,8 +657,10 @@ export const EXEC_WHITELIST = {
     // `REQUIRED_VERB_FLAG` on `--lease`, the flag that names the one lease it may write, so no bare form is grantable.
     ['ws-lease-mark', '--lease'],
     // THE LEASE AUDIT (delegation broker wave 5, PR2). `ws-lease-audit --lease <id> --generation <n> [--holders]` is the
-    // read-only measure of one leased tree: it writes nothing. It is ENROLLED in `REQUIRED_VERB_FLAG` on `--lease` all the
-    // same, so a bare grant cannot admit an audit of any lease the server was talked into naming.
+    // read-only measure of one leased tree: it writes nothing to any durable path (its residuals, scratch files under
+    // $TMPDIR and a configured clean filter, are named in `ccd/lib/delegation-lease.sh`). It is ENROLLED in
+    // `REQUIRED_VERB_FLAG` on `--lease` all the same, so a bare grant cannot admit an audit of any lease the server was
+    // talked into naming.
     ['ws-lease-audit', '--lease'],
     // THE COLLECTOR'S LOOSE ARM (fleet disk retention spec 2026-10-23 §2.4, D-6626). Two read-only `ws-audit` modes: the
     // census of the entries directly under the scratch root (names as hex) and one such entry's audit, which mints the

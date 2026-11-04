@@ -45,6 +45,11 @@ const gitRevListFails = (): string => {
     `#!/bin/bash\nfor a in "$@"; do [[ "$a" == rev-list ]] && exit 128; done\nexec '${real}' "$@"\n`, { mode: 0o755 });
   return `PATH='${dir}':"$PATH";`;
 };
+/** A stub that runs `cmd` between the audit's two reads of the tip: it wraps `_ws_gc_dirty`, the first dirt reader, and
+ *  then calls the real one ($1 is the tree). */
+const between = (cmd: string): string =>
+  `${STUBS} eval "$(declare -f _ws_gc_dirty | sed '1s/^_ws_gc_dirty/__au_gc_dirty/')"; _ws_gc_dirty() { ${cmd}; __au_gc_dirty "$@"; };`;
+const commitAll = 'git -C "$1" -c user.name=t -c user.email=t@example.invalid commit -q -am between >/dev/null 2>&1';
 /** A recursive listing with sizes, mtimes and inodes: equal before and after means nothing was written under it. */
 const listing = (root: string): string[] => {
   const rows: string[] = [];
@@ -201,7 +206,132 @@ describe('ws-lease-audit measures a leased tree', () => {
     expect(audit().doc).toMatchObject({ ok: true, aheadOfBase: 0, branchAheadOfBase: 'no-branch', changed: false });
   }, 60_000);
 
-  it('W5-AU7: three audits write nothing under the registry, the tree, its admin dir or the common worktrees entry', () => {
+  // review 1461 F2: a branch is gone only when `show-ref --exists` proves it missing; a ref that cannot be read is unmeasured
+  /** A tree one commit ahead on its recorded branch, HEAD detached back at the base, so the tip never reads the branch's ref;
+   *  answers the loose ref's path. */
+  const branchAhead = (): string => {
+    const t = agentTree(h); mark(h);
+    const base = h.git(t, 'rev-parse', 'HEAD').trim();
+    fs.writeFileSync(path.join(t, 'w.txt'), 'w\n');
+    h.git(t, 'add', 'w.txt'); h.git(t, 'commit', '-m', 'w');
+    h.git(t, 'checkout', '-q', '--detach', base);
+    expect(audit().doc).toMatchObject({ ok: true, branchAheadOfBase: 1, changed: true });   // CONTROL: the loose ref reads
+    return path.join(main(h), '.git', 'refs', 'heads', 'claude', 'agent-a');
+  };
+  it('W5-AU13a (review 1461 F2): a recorded branch under an unsearchable refs directory is unmeasured, never branch-gone', () => {
+    if (process.getuid?.() === 0) return;   // root searches a mode-0000 directory
+    const refDir = path.dirname(branchAhead());
+    fs.chmodSync(refDir, 0);
+    try {
+      const u = audit();
+      expect(u.doc, JSON.stringify(u.doc)).toMatchObject({ ok: true, branchAheadOfBase: 'unmeasured', changed: 'unmeasured' });
+      expect(u.code).toBe(1);
+    } finally { fs.chmodSync(refDir, 0o755); }
+  }, 60_000);
+  it('W5-AU13b (review 1461 F2): a corrupt ref file is unmeasured, never branch-gone', () => {
+    const ref = branchAhead();
+    fs.writeFileSync(ref, 'not a ref\n');
+    const c = audit();
+    expect(c.doc, JSON.stringify(c.doc)).toMatchObject({ ok: true, branchAheadOfBase: 'unmeasured', changed: 'unmeasured' });
+    expect(c.code).toBe(1);
+  }, 60_000);
+  it('W5-AU13c (review 1461 F2): a branch only in packed-refs reads normally', () => {
+    const ref = branchAhead();
+    h.git(main(h), 'pack-refs', '--all');
+    expect(fs.existsSync(ref)).toBe(false);
+    const p = audit();
+    expect(p.doc, JSON.stringify(p.doc)).toMatchObject({ ok: true, branchAheadOfBase: 1, changed: true });
+    expect(p.code).toBe(0);
+  }, 60_000);
+
+  it('W5-AU14 (review 1461 F4): a proven change wins over an unmeasured companion', () => {
+    const t = agentTree(h); mark(h);
+    // the recorded branch gone, the tree dirty: changed is true, rc 0
+    h.git(t, 'checkout', '-q', '--detach');
+    h.git(t, 'branch', '-q', '-D', 'claude/agent-a');
+    fs.writeFileSync(path.join(t, 'u.txt'), 'u\n');
+    const g = audit();
+    expect(g.doc, JSON.stringify(g.doc)).toMatchObject({ ok: true, dirty: true, branchAheadOfBase: 'branch-gone', changed: true });
+    expect(g.code).toBe(0);
+    fs.rmSync(path.join(t, 'u.txt'));
+    const n = audit();   // CONTROL: nothing proven, the branch gone: unmeasured
+    expect(n.doc, JSON.stringify(n.doc)).toMatchObject({ ok: true, dirty: false, branchAheadOfBase: 'branch-gone', changed: 'unmeasured' });
+    expect(n.code).toBe(1);
+    if (process.getuid?.() === 0) return;   // root reads a mode-0000 file
+    // the dirt unreadable, a commit beyond the base: changed is true
+    fs.writeFileSync(path.join(t, 'w.txt'), 'w\n');
+    h.git(t, 'add', 'w.txt'); h.git(t, 'commit', '-m', 'w');
+    rewriteCarrier({ branch: null });
+    const index = path.join(adminDir(), 'index');
+    fs.chmodSync(index, 0);
+    try {
+      const d = audit();
+      expect(d.doc, JSON.stringify(d.doc)).toMatchObject({ ok: true, dirty: 'unmeasured', aheadOfBase: 1, changed: true });
+      expect(d.code).toBe(0);
+    } finally { fs.chmodSync(index, 0o644); }
+  }, 60_000);
+
+  // review 1461 F3: a tree that moves while its dirt is read is unmeasured, in either direction
+  it('W5-AU15a (review 1461 F3): an edit committed between the reads (tip read at the base, the dirt then clean) is unmeasured', () => {
+    const t = agentTree(h); mark(h);
+    const base = h.git(t, 'rev-parse', 'HEAD').trim();
+    fs.writeFileSync(path.join(t, 'README.md'), 'edited\n');
+    const c = audit(1, '', between(commitAll));
+    expect(c.doc, JSON.stringify(c.doc)).toMatchObject({ ok: true, tip: base, changed: 'unmeasured' });
+    expect(String(c.doc.detail)).toContain('moved during the audit');
+    expect(c.code).toBe(1);
+    expect(h.git(t, 'rev-parse', 'HEAD').trim()).not.toBe(base);   // the stub did commit
+  }, 60_000);
+  it('W5-AU15b (review 1461 F3): a commit undone by reset --mixed between the reads is unmeasured', () => {
+    const t = agentTree(h); mark(h);
+    const base = h.git(t, 'rev-parse', 'HEAD').trim();
+    fs.writeFileSync(path.join(t, 'w.txt'), 'w\n');
+    h.git(t, 'add', 'w.txt'); h.git(t, 'commit', '-m', 'w');
+    const tip = h.git(t, 'rev-parse', 'HEAD').trim();
+    const r = audit(1, '', between('git -C "$1" reset -q --mixed HEAD~1 >/dev/null 2>&1'));
+    expect(r.doc, JSON.stringify(r.doc)).toMatchObject({ ok: true, tip, changed: 'unmeasured' });
+    expect(String(r.doc.detail)).toContain('moved during the audit');
+    expect(r.code).toBe(1);
+    expect(h.git(t, 'rev-parse', 'HEAD').trim()).toBe(base);   // the stub did reset
+  }, 60_000);
+  it('W5-AU15c (review 1461 F3): CONTROL, the same wrapper doing nothing measures one state and carries no detail', () => {
+    const t = agentTree(h); mark(h);
+    const base = h.git(t, 'rev-parse', 'HEAD').trim();
+    fs.writeFileSync(path.join(t, 'README.md'), 'edited\n');
+    const q = audit(1, '', between('true'));
+    expect(q.doc, JSON.stringify(q.doc)).toMatchObject({ ok: true, tip: base, dirty: true, changed: true });
+    expect(q.doc.detail).toBeUndefined();
+    expect(q.code).toBe(0);
+  }, 60_000);
+
+  it('W5-AU16 (review 1461 F8): in a partial clone a missing object is never fetched (skipped without filter support)', (ctx) => {
+    const src = main(h);
+    const origin = path.join(h.home, 'origins', 'demo.git');
+    fs.writeFileSync(path.join(src, 'old.txt'), 'only in history\n');
+    h.git(src, 'add', 'old.txt'); h.git(src, 'commit', '-m', 'old');
+    const blob = h.git(src, 'rev-parse', 'HEAD:old.txt').trim();
+    h.git(src, 'rm', '-q', 'old.txt'); h.git(src, 'commit', '-m', 'drop old');
+    h.git(src, 'push', '-q', 'origin', 'main');
+    h.git(origin, 'config', 'uploadpack.allowFilter', 'true');
+    const pc = path.join(h.home, 'projects', 'demopc');
+    try { h.git(h.home, 'clone', '-q', '--filter=blob:none', `file://${origin}`, pc); } catch { ctx.skip(); return; }
+    const has = (): string => h.sh(`GIT_NO_LAZY_FETCH=1 git -C '${pc}' cat-file -e ${blob} 2>/dev/null && echo has || echo missing`).trim();
+    const t = agentTree(h, 'agent-p', path.join(pc, '.claude', 'worktrees', 'agent-p'), pc);
+    expect(mark(h, { project: 'demopc', 'admin-record-hex': hex('agent-p') }).doc).toMatchObject({ ok: true, answer: 'written' });
+    // a staged rename onto the missing blob: `git status`'s rename detection must read it
+    h.git(t, 'rm', '-q', '--cached', 'README.md');
+    h.git(t, 'update-index', '--add', '--cacheinfo', `100644,${blob},moved.txt`);
+    const packs = path.join(pc, '.git', 'objects', 'pack');
+    const before = listing(packs);
+    expect(has()).toBe('missing');
+    const r = audit();
+    expect(r.doc, JSON.stringify(r.doc)).toMatchObject({ ok: true });
+    expect(['unmeasured', true]).toContain(r.doc.dirty);
+    expect(listing(packs), 'the audit fetched from the promisor remote').toEqual(before);
+    expect(has()).toBe('missing');
+  }, 60_000);
+
+  it('W5-AU7: three audits write nothing under the fixture HOME: the registry, the tree, its admin dir, the main checkout\'s .git', () => {
     const t = agentTree(h); mark(h);
     // The mark's lock file is removed, so an audit that opened or touched one would show; a tracked file's stat record is
     // made stale, so a git read that refreshes the index (no GIT_OPTIONAL_LOCKS=0) would rewrite it.
@@ -211,9 +341,10 @@ describe('ws-lease-audit measures a leased tree', () => {
     const reg = path.join(h.home, '.cc-sessions');
     const common = path.join(main(h), '.git', 'worktrees');
     // review 1446 F8: the main checkout's whole common dir (its index, refs, logs and every admin record), not only its
-    // worktrees entry
+    // worktrees entry; review 1461 F9: and the whole fixture HOME, less the one file the harness itself rewrites on every
+    // `sh()` (its `gh` poison, `ghContainedEnv`). The temp root is not under HOME: TMPDIR is the box's.
     const snap = (): string[] => [...listing(reg), ...listing(t), ...listing(adminDir()), ...listing(common).slice(0, 1),
-      ...listing(path.join(main(h), '.git'))];
+      ...listing(path.join(main(h), '.git')), ...listing(h.home).filter((r) => !r.startsWith('.local/bin/gh\t'))];
     const before = snap();
     expect(audit().doc).toMatchObject({ ok: true, changed: false });
     expect(audit(1, '--holders').doc).toMatchObject({ ok: true, holders: [] });

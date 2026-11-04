@@ -9,7 +9,9 @@
 #   2. the carrier reader and the per-tree index (`by-tree/<key>` names the one lease of a tree, D-7799);
 #   3. the tree resolver, the creation-base reader and the box-side fingerprint;
 #   4. `ccd ws-lease-mark` (`cmd_ws_lease_mark`), the carrier's ONE writer: generation-strict, flocked and atomic;
-#   5. `ccd ws-lease-audit` (`cmd_ws_lease_audit`), the read-only measure of a leased tree (PR2).
+#   5. `ccd ws-lease-audit` (`cmd_ws_lease_audit`), the read-only measure of a leased tree (PR2). A stated blind spot
+#      (review 1461 F6): its `changed: false` does not cover a commit reachable only from the tree's HEAD reflog, which no
+#      branch and no tip holds; the removal paths pin reflogs (`_ws_reclaim_keep_reflogs`).
 #
 # THE TRUST CHAIN is ccd/lib/disk-retention.sh's: installed beside ccd's body (`~/.local/libexec/ccrc/lib/delegation-lease.sh`)
 # by `ccd/ccd-entry-install.py`, pinned by the body (`__CCD_LIB_LEASE_SHA256`, near the foot of ccd/ccd, written at install
@@ -174,7 +176,8 @@ _dl_tree_owner() {   # <key> -> rc 0 DL_OWNER=<leaseId>; rc 3 proven absent; rc 
 }
 
 _dl_tree_of_record() {   # <main> <admin record> -> rc 0 DL_TREE (physical) DL_TREE_REC (as git records it) DL_ADMIN DL_COMMON;
-                         #    rc 3 no record or no gitdir (DL_COMMON still set); rc 4 unreadable (DL_WHY)
+                         #    rc 3 no record, no gitdir, or a tree PROVEN absent (DL_COMMON still set); rc 4 unreadable,
+                         #    an absence that could not be proven included (DL_WHY; D-7974)
   local LC_ALL=C main="${1-}" rec="${2-}" common admin gd t
   DL_TREE=''; DL_TREE_REC=''; DL_ADMIN=''; DL_COMMON=''; DL_WHY=''
   common=$(_ws_common_dir "$main") || { DL_WHY="the common git directory of $main could not be read"; return 4; }
@@ -471,7 +474,9 @@ _dl_mark_locked() {   # everything the lock serialises (the flags, $dir and $rec
     if (( crc == 0 )) && [[ "$fp" != "$s_fp" ]]; then
       _dl_mark_refuse fingerprint-mismatch "the tree at $tp is not the one lease $lease's carrier records"; return 1
     fi
-    branch=$(git -C "$tp" symbolic-ref --short -q HEAD 2>/dev/null) || branch=''
+    # the branch's own name: `symbolic-ref --short` prints `heads/<name>` when a tag has the same name (D-7978)
+    branch=$(git -C "$tp" symbolic-ref -q HEAD 2>/dev/null) && [[ "$branch" == refs/heads/?* ]] && branch="${branch#refs/heads/}" \
+      || branch=''
     tip=$(git -C "$tp" rev-parse --verify -q 'HEAD^{commit}' 2>/dev/null) || tip=''
   else
     fp="$s_fp"; base="$s_base"; branch="$s_branch"; tp="$s_path"; tip=''
@@ -516,18 +521,24 @@ _dl_mark_locked() {   # everything the lock serialises (the flags, $dir and $rec
 }
 
 # ── ccd ws-lease-audit: the read-only measure of a leased tree (PR2) ──
-# It reads the carrier WITHOUT any lock, recomputes the box-side fingerprint and answers, from ONE read of the tip and ONE of
-# the carrier's recorded branch: the tip; the dirt (untracked files included, and an edit git is told not to look at, an
-# assume-unchanged or skip-worktree path, read by `_ws_reclaim_hidden`, D-7975); the commits from the creation base to the tip
-# (`aheadOfBase`) and to the recorded branch (`branchAheadOfBase`, D-7976); `changed`; and, with --holders only, who holds or
-# sits in the tree. IT WRITES NOTHING TO ANY DURABLE PATH: no carrier, no by-tree entry, no lock file, no token store, no
-# journal line (W5-AU7). Two residuals stand, both outside the registry and the tree: the dirt readers' scratch files under
-# $TMPDIR (made and removed inside one call, so a kill between the two leaves one for the temp reaper), and a gitattributes
-# clean filter the user configured, which `git status` and `git hash-object --path` still run (`_ws_reclaim_contained`'s
-# stated residual). Its git reads run contained (GIT_OPTIONAL_LOCKS=0, so `git status` never refreshes the index). A fact
-# that does not read is "unmeasured", never false or 0, and makes `changed` "unmeasured" too. Its token is evidence, never
-# authority (D-7826): no verb consumes it, and it binds every fact the document answers, `holders` and whether it was asked
-# included (D-7977).
+# It reads the carrier WITHOUT any lock, recomputes the box-side fingerprint and answers, for ONE state of the tree: the tip;
+# the dirt (untracked files included, and an edit git is told not to look at, an assume-unchanged or skip-worktree path, read
+# by `_ws_reclaim_hidden`, D-7975); the commits from the creation base to the tip (`aheadOfBase`) and to the recorded branch
+# (`branchAheadOfBase`, D-7976); `changed`; and, with --holders only, who holds or sits in the tree. ONE STATE: the tip and
+# the recorded branch's tip are read before the dirt and again after it, and every count is taken from the first read; if
+# either moved, or the second read fails, the tree moved during the audit and `changed` is "unmeasured" (rc 1, with a
+# `detail`), never retried (review 1461 F3). A recorded branch is `branch-gone` only when `git show-ref --exists` proves it
+# missing (rc 2); any other failure is "unmeasured" (review 1461 F2). IT WRITES NOTHING TO ANY DURABLE PATH: no carrier, no
+# by-tree entry, no lock file, no token store, no journal line (W5-AU7). Two residuals stand, both outside the registry and
+# the tree: the dirt readers' scratch files under $TMPDIR (made and removed inside one call, so a kill between the two leaves
+# one for the temp reaper), and a gitattributes clean filter the user configured, which `git status` and `git hash-object
+# --path` still run (`_ws_reclaim_contained`'s stated residual). Its git reads run contained (GIT_OPTIONAL_LOCKS=0, so `git
+# status` never refreshes the index) and with GIT_NO_LAZY_FETCH=1, so a partial clone's missing object is an error, never a
+# fetch from the promisor remote, which would write a pack (review 1461 F8). A fact that does not read is "unmeasured",
+# never false or 0. `changed` is true when ANY one fact proves a change, whatever the others read; "unmeasured" when none
+# does and one could not be read (a gone branch included); false only when every fact is proven clean or zero (review 1461
+# F4). Its token is evidence, never authority (D-7826): no verb consumes it, and it binds every fact the document answers,
+# `holders` and whether it was asked included (D-7977), and whether the tree moved.
 cmd_ws_lease_audit() {   # ccd ws-lease-audit --lease <uuid> --generation <n> [--holders] -> ONE JSON document on stdout; rc 0
                          #    measured, 1 unmeasured or refused, 2 usage
   local LC_ALL=C lease='' gen='' holders=0 flag seen=' '
@@ -550,9 +561,33 @@ cmd_ws_lease_audit() {   # ccd ws-lease-audit --lease <uuid> --generation <n> [-
   _ws_reclaim_contained _dl_audit_ladder
 }
 
+_dl_audit_heads() {   # <tree> -> rc 0 DL_A_TIP (the tip) DL_A_BTIP (the carrier's recorded branch's tip, or no-branch,
+                      #    branch-gone, unmeasured); rc 1 the tip could not be read. The branch is gone only when `show-ref
+                      #    --exists` says so (rc 2): rc 1 (an unsearchable refs directory, a corrupt ref) and an older git
+                      #    without --exists are unmeasured, never gone (review 1461 F2)
+  local tree="${1-}" bref q r ex
+  DL_A_TIP=''; DL_A_BTIP=''
+  DL_A_TIP=$(git -C "$tree" rev-parse --verify -q 'HEAD^{commit}' 2>/dev/null) && [[ "$DL_A_TIP" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] \
+    || return 1
+  if [[ -z "$DL_C_branch" ]]; then DL_A_BTIP=no-branch; return 0; fi
+  git -C "$tree" show-ref --exists "refs/heads/$DL_C_branch" >/dev/null 2>&1; ex=$?
+  case "$ex" in
+    0) DL_A_BTIP=unmeasured
+       if bref=$(git -C "$tree" for-each-ref --format='%(refname)%09%(objectname)' "refs/heads/$DL_C_branch" 2>/dev/null); then
+         while IFS=$'\t' read -r q r; do
+           [[ "$q" == "refs/heads/$DL_C_branch" && "$r" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] && DL_A_BTIP="$r"
+         done <<< "$bref"
+       fi ;;
+    2) DL_A_BTIP=branch-gone ;;   # recorded, and proven no longer there: its commits cannot be counted, never 0
+    *) DL_A_BTIP=unmeasured ;;
+  esac
+  return 0
+}
+
 _dl_audit_ladder() {   # cmd_ws_lease_audit's ladder, inside _ws_reclaim_contained ($lease, $gen and $holders are the verb's)
-  local crc trc pr main mr rec base fp tree tip dirty ahead bahead btip='' bref q r tok changed rc=0 hl='' ht=not-asked hu=0
-  local i p pids='' seen=0 unread=0
+  local crc trc pr main mr rec base fp tree tip dirty ahead bahead btip q tok changed rc=0 hl='' ht=not-asked hu=0
+  local i p pids='' seen=0 unread=0 moved=0 proven=0 unknown=0 dl=''
+  local -x GIT_NO_LAZY_FETCH=1   # this audit's git calls only, never _ws_reclaim_contained's other callers (review 1461 F8)
   _dl_carrier_read "$lease"; crc=$?
   case "$crc" in
     0) ;;
@@ -580,23 +615,11 @@ _dl_audit_ladder() {   # cmd_ws_lease_audit's ladder, inside _ws_reclaim_contain
     || { _dl_mark_refuse unmeasured "${DL_WHY:-the fingerprint of $tree could not be computed}"; return 1; }
   [[ "$fp" == "$DL_C_fingerprint" ]] \
     || { _dl_mark_refuse fingerprint-mismatch "the tree at $tree is not the one lease $lease's carrier records"; return 1; }
-  # the tip and the recorded branch are each read ONCE, and every count below is taken from those reads (F13)
-  tip=$(git -C "$tree" rev-parse --verify -q 'HEAD^{commit}' 2>/dev/null) && [[ "$tip" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] \
-    || { _dl_mark_refuse unmeasured "the tip of $tree could not be read"; return 1; }
-  if [[ -z "$DL_C_branch" ]]; then
-    bahead=no-branch; btip=no-branch
-  elif bref=$(git -C "$tree" for-each-ref --format='%(refname)%09%(objectname)' "refs/heads/$DL_C_branch" 2>/dev/null); then
-    while IFS=$'\t' read -r q r; do [[ "$q" == "refs/heads/$DL_C_branch" ]] && btip="$r"; done <<< "$bref"
-    if [[ -z "$btip" ]]; then
-      bahead=branch-gone; btip=branch-gone   # recorded and no longer there: its commits cannot be counted, never 0
-    elif [[ "$btip" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
-      bahead=unmeasured
-    else
-      bahead=unmeasured; btip=unmeasured
-    fi
-  else
-    bahead=unmeasured; btip=unmeasured
-  fi
+  # ONE STATE (review 1461 F3, finishing review 1446 F13): the tip and the recorded branch's tip are read here, the dirt
+  # after them, and both tips again after the dirt; every count is taken from this first read
+  _dl_audit_heads "$tree" || { _dl_mark_refuse unmeasured "the tip of $tree could not be read"; return 1; }
+  tip="$DL_A_TIP"; btip="$DL_A_BTIP"
+  case "$btip" in no-branch|branch-gone|unmeasured) bahead="$btip" ;; *) bahead=unmeasured ;; esac
   # dirt: what `git status` sees, and what it is told not to look at (D-7975); an edit either sees is dirt, and otherwise
   # either one that cannot read is unmeasured
   if _ws_gc_dirty "$tree"; then
@@ -608,6 +631,11 @@ _dl_audit_ladder() {   # cmd_ws_lease_audit's ladder, inside _ws_reclaim_contain
     unread=1
   fi
   if (( seen )); then dirty=true; elif (( unread )); then dirty=unmeasured; else dirty=false; fi
+  if ! _dl_audit_heads "$tree"; then
+    moved=1; dl="the tip of $tree could not be read again after its dirt, so the audit measured no one state of it"
+  elif [[ "$DL_A_TIP" != "$tip" || "$DL_A_BTIP" != "$btip" ]]; then
+    moved=1; dl="the tree $tree moved during the audit (its tip or its recorded branch changed while its dirt was read)"
+  fi
   ahead=unmeasured
   if [[ "$DL_C_claudeBase" == "$base" ]]; then
     q=$(git -C "$tree" rev-list --count "$base..$tip" -- 2>/dev/null) && { [[ "$q" == 0 ]] || _dl_count_ok "$q"; } && ahead="$q"
@@ -615,10 +643,21 @@ _dl_audit_ladder() {   # cmd_ws_lease_audit's ladder, inside _ws_reclaim_contain
       q=$(git -C "$tree" rev-list --count "$base..$btip" -- 2>/dev/null) && { [[ "$q" == 0 ]] || _dl_count_ok "$q"; } && bahead="$q"
     fi
   fi
-  if [[ "$dirty" == unmeasured || "$ahead" == unmeasured || "$bahead" == unmeasured || "$bahead" == branch-gone ]]; then
+  # a proven change wins over an unmeasured companion; unmeasured only when nothing is proven and something did not read;
+  # false only when every fact is proven clean or zero (review 1461 F4); a tree that moved is unmeasured, whatever it read
+  case "$dirty" in true) proven=1 ;; unmeasured) unknown=1 ;; esac
+  if [[ "$ahead" =~ ^[0-9]+$ ]]; then (( 10#$ahead == 0 )) || proven=1; else unknown=1; fi
+  case "$bahead" in
+    no-branch) ;;
+    branch-gone|unmeasured) unknown=1 ;;
+    *) (( 10#$bahead == 0 )) || proven=1 ;;
+  esac
+  if (( moved )); then
     changed=unmeasured; rc=1
-  elif [[ "$dirty" == true ]] || (( ahead > 0 )) || { [[ "$bahead" != no-branch ]] && (( bahead > 0 )); }; then
+  elif (( proven )); then
     changed=true
+  elif (( unknown )); then
+    changed=unmeasured; rc=1
   else
     changed=false
   fi
@@ -651,13 +690,17 @@ _dl_audit_ladder() {   # cmd_ws_lease_audit's ladder, inside _ws_reclaim_contain
   fi
   tok=$(_ws_reclaim_fingerprint "mode=lease-audit" "lease=$lease" "generation=$((10#$gen))" \
     "incarnation=$DL_C_parentIncarnation" "fingerprint=$fp" "tip=$tip" "dirty=$dirty" "ahead=$ahead" \
-    "branchAhead=$bahead" "branchTip=$btip" "base=$base" "holders=$ht") \
+    "branchAhead=$bahead" "branchTip=$btip" "base=$base" "holders=$ht" "moved=$moved") \
     && [[ "$tok" =~ ^[0-9a-f]{64}$ ]] || { _dl_mark_refuse unmeasured "the audit's token could not be computed"; return 1; }
   [[ "$dirty" != unmeasured ]] || dirty='"unmeasured"'
   [[ "$ahead" != unmeasured ]] || ahead='"unmeasured"'
   [[ "$bahead" =~ ^[0-9]+$ ]] || bahead="\"$bahead\""
   [[ "$changed" != unmeasured ]] || changed='"unmeasured"'
-  printf '{"ok":true,"lease":"%s","generation":%s,"tip":"%s","dirty":%s,"aheadOfBase":%s,"branchAheadOfBase":%s,"changed":%s%s,"token":"%s"}\n' \
-    "$lease" "$((10#$gen))" "$tip" "$dirty" "$ahead" "$bahead" "$changed" "$hl" "$tok"
+  if [[ -n "$dl" ]]; then
+    q=$(_json_str "$dl") || { _dl_mark_refuse unmeasured "the audit's detail could not be quoted"; return 1; }
+    dl=",\"detail\":$q"
+  fi
+  printf '{"ok":true,"lease":"%s","generation":%s,"tip":"%s","dirty":%s,"aheadOfBase":%s,"branchAheadOfBase":%s,"changed":%s%s%s,"token":"%s"}\n' \
+    "$lease" "$((10#$gen))" "$tip" "$dirty" "$ahead" "$bahead" "$changed" "$dl" "$hl" "$tok"
   return "$rc"
 }
