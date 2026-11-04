@@ -14521,7 +14521,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
     else
       printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
       case "$REAP_VERDICT" in
-        not-a-workspace|not-a-child|branch-elsewhere|tree-unreadable|containment-unproven|no-worktree-record)
+        not-a-workspace|not-a-child|branch-elsewhere|tree-unreadable|containment-unproven|no-worktree-record|branch-gone-checked-out)
           _lc_emit reclaim refused "$id" "" verb ws-audit refusal "$REAP_VERDICT" detail "$REAP_DETAIL" ;;
       esac
     fi
@@ -32843,6 +32843,30 @@ _ws_reclaim_tip_read() {   # main branch -> 0 with REAP_TIP (the tip; '' when th
   return 1
 }
 
+_WS_HEAD_UNBORN_WHY=''
+_ws_reclaim_head_unborn() {   # workdir branch -> 0 when HEAD is still SYMBOLIC to that branch and the last
+  #                                `_ws_reclaim_tip_read` PROVED the branch absent; 1 when it is not so; 2 when
+  #                                HEAD could not be read. _WS_HEAD_UNBORN_WHY says why on 0 and on 2.
+  # THE ONE PREDICATE OF THE LADDER AND THE PIN (D-5944), so the audit never
+  # promises what the pin refuses. An `update-ref -d` under a checkout leaves
+  # HEAD naming nothing, and no WIP commit can stand on it. A DETACHED HEAD on a
+  # gone branch is not this shape: it names a commit, and the pin keeps it.
+  # `symbolic-ref` answers 1 for a detached HEAD; any other failure is a read
+  # that did not run, which is never "not so".
+  local ref rc
+  _WS_HEAD_UNBORN_WHY=''
+  [[ "$RECLAIM_BRANCHSTATE" == absent ]] || return 1
+  ref=$(git -C "$1" symbolic-ref -q HEAD 2>/dev/null); rc=$?
+  if (( rc == 0 )); then
+    [[ "$ref" == "refs/heads/$2" ]] || return 1
+    _WS_HEAD_UNBORN_WHY="$1 still has $2 checked out, but $2 is gone from its repository — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
+    return 0
+  fi
+  (( rc == 1 )) && return 1
+  _WS_HEAD_UNBORN_WHY="could not read which branch $1 has checked out"
+  return 2
+}
+
 _WS_GITDIR_WHY=''; _WS_GITDIR_DIR=''
 _ws_reclaim_gitdir_own() {   # tree common -> 0 when tree's git directory is git's OWN record of tree: an
   #                               admin directory `$common/worktrees/<n>` whose `gitdir` file names
@@ -33352,6 +33376,12 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # PROVEN absent (no tip to pin, no branch to delete), or a read that did not
   # run — unmeasured, and no token is minted over it.
   _ws_reclaim_tip_read "$main" "$branch" || { _ws_reclaim_unmeasured "$_WS_BRANCH_WHY"; return 1; }
+  # ... and a HEAD still symbolic to a branch PROVEN absent is what the pin
+  # refuses, so it is refused here, before any token: a token over it would be
+  # spent on a pin that fails on every pass. TERMINAL: waiting changes nothing.
+  _ws_reclaim_head_unborn "$workdir" "$branch"; rc=$?
+  (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_HEAD_UNBORN_WHY"; return 1; }
+  (( rc != 0 )) || { _ws_refuse branch-gone-checked-out "$_WS_HEAD_UNBORN_WHY"; return 1; }
   RECLAIM_HEAD=$(git -C "$workdir" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) || RECLAIM_HEAD=""
   RECLAIM_STASHES=$(_ws_reclaim_stash_shas "$main" "$branch") \
     || { _ws_reclaim_unmeasured "could not read the stash list of $main"; return 1; }
@@ -34599,12 +34629,12 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
   # to delete it at, and HEAD, the WIP commit and every reflog below are pinned
   # as ever — unless HEAD is still SYMBOLIC to that branch (an `update-ref -d`
   # under a checkout): HEAD then names no commit, the WIP commit has no parent
-  # to stand on, and the pin fails with nothing written.
+  # to stand on, and the pin fails with nothing written. The ladder refuses that
+  # shape by the same predicate (`_ws_reclaim_head_unborn`), so only a branch
+  # deleted after its read, or a settle with no ladder in front of it, gets here.
   _ws_reclaim_tip_read "$main" "$branch" || { RECLAIM_PIN_WHY="$_WS_BRANCH_WHY"; return 1; }
-  if [[ "$RECLAIM_BRANCHSTATE" == absent && "$headref" == "refs/heads/$branch" ]]; then
-    RECLAIM_PIN_WHY="$workdir still has $branch checked out, but $branch is gone from $main — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
-    return 1
-  fi
+  _ws_reclaim_head_unborn "$workdir" "$branch"; rc=$?
+  (( rc == 1 )) || { RECLAIM_PIN_WHY="$_WS_HEAD_UNBORN_WHY"; return 1; }
   # (0) The in-progress operation heads, pinned by sha: `commit-tree` concludes
   # nothing, and a head a later git command clears is kept all the same.
   oph=$(_ws_reclaim_opheads "$workdir")
@@ -37971,9 +38001,9 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 # gives it: GONE — `no-such-session`, `not-archived` (the row left the
 # population: returned, or never archived); TERMINAL — `not-a-workspace`,
 # `branch-elsewhere`, `tree-unreadable`, `containment-unproven`,
-# `no-worktree-record`; RETRY — `not-expired`, `child`, `paused`, `held`,
-# `attached`, `live`, `in-use`, `tree-busy`, `state-changed`, `in-progress`,
-# `reap-in-progress`, `reclaim-in-progress`. Nineteen. The ones the RECLAIM
+# `no-worktree-record`, `branch-gone-checked-out`; RETRY — `not-expired`, `child`,
+# `paused`, `held`, `attached`, `live`, `in-use`, `tree-busy`, `state-changed`,
+# `in-progress`, `reap-in-progress`, `reclaim-in-progress`. Twenty. The ones the RECLAIM
 # region spells stay spelled there; this region spells only its own
 # (`not-archived`, `not-expired`, `child`, `live`, `in-use`, and the two flavour
 # refusals). `unmeasured` is no word, exactly as there: a probe that could not
@@ -38497,7 +38527,7 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
     # the one place it reaches the lifecycle mirror; a retryable word a pass
     # would bury the journal.
     case "$REAP_VERDICT" in
-      not-a-workspace|branch-elsewhere|tree-unreadable|containment-unproven|no-worktree-record)
+      not-a-workspace|branch-elsewhere|tree-unreadable|containment-unproven|no-worktree-record|branch-gone-checked-out)
         _lc_emit expire refused "$id" "" verb ws-audit refusal "$REAP_VERDICT" detail "$REAP_DETAIL" ;;
     esac
   fi
