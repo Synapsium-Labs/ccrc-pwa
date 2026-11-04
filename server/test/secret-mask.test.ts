@@ -738,6 +738,39 @@ describe('the rulings: a restart after a rotation re-keys with backoff until it 
   });
 });
 
+describe('a re-key in flight when the masker closes (review 1426 F-G, desktop-polish carry)', () => {
+  it('fails after close() and logs no "has not landed; retrying" line, and asks for nothing more', async () => {
+    const { db } = maskerOver(() => TOKEN_1, [CMP]);
+    const lines: string[] = [];
+    let fail: (e: Error) => void = () => {};
+    let asked = 0;
+    const m = new SecretMasker({ db, token: () => TOKEN_2, log: (l) => lines.push(l), requestRekey: () => {
+      asked += 1;
+      return new Promise<never>((_resolve, reject) => { fail = reject; });
+    } });
+    expect(m.version, 'CONTROL: the rotated token is read').toBeGreaterThan(0);
+    await Promise.resolve();
+    expect(asked, 'CONTROL: the re-key was asked at start').toBe(1);
+    m.close();
+    fail(new Error('link down'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(lines.filter((l) => l.includes('has not landed'))).toEqual([]);
+    expect(asked).toBe(1);
+  });
+  it('CONTROL: the same failure while open logs the retry line', async () => {
+    const { db } = maskerOver(() => TOKEN_1, [CMP]);
+    const lines: string[] = [];
+    let fail: (e: Error) => void = () => {};
+    const m = new SecretMasker({ db, token: () => TOKEN_2, log: (l) => lines.push(l), requestRekey: () => new Promise<never>((_resolve, reject) => { fail = reject; }) });
+    expect(m.version).toBeGreaterThan(0);
+    await Promise.resolve();
+    fail(new Error('link down'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(lines.filter((l) => l.includes('has not landed'))).toHaveLength(1);
+    m.close();
+  });
+});
+
 describe('the review findings: the mask stays cheap and the drawer stays live (D-5995)', () => {
   afterEach(() => { vi.useRealTimers(); });
 
@@ -1208,6 +1241,10 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/docs/projects': 'repository content, not session text',
     '/api/docs/:project/tree': 'repository content, not session text',
     '/api/docs/:project/file': 'repository content, not session text',
+    // The reader lab's door (reader lab plan, RL-a; D-7967): the run read answers its opener counts by the lab's closed
+    // names and classes, and the probe answers an empty 204. Neither carries session text.
+    '/api/reader-lab/runs/:nonce': "a run's counts by probe name and request class, from the lab's closed vocabulary; no session text",
+    '/api/reader-lab/probe/:nonce/:name': 'an empty 204 with no-store; no body',
     '/api/linear/connection': "the Linear connection's state: organisation and user names, the key's last four characters, the check time; never the key",
     '/api/linear/resolve': "the operator's own typed name, its derived slug, and a Linear issue title; no session text",
     // The Settings list (#1444, plan task LK11, spec §10.2): what the slot records and the legacy pair hold, read from the

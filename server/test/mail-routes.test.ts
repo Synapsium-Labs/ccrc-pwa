@@ -42,6 +42,7 @@ import { isDriftKind, isRunSpendUnmeasuredReason } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
 import { isDelegationProjectionKebab } from '../src/coord/delegation-projection.js';
+import { isDelegationLeaseStateKebab } from '../src/coord/delegation-lease-state.js';
 import { isCollectLaneKebab } from '../src/collectLane.js';
 import { isNoticeMode } from '../src/notice.js';
 import { isArchiveGateKebab } from '../src/coord/archiveAdmission.js';
@@ -982,6 +983,11 @@ describe('the rejection table is total, in both directions', () => {
         // they ride the `delegation` frame. Admitted through the exported guard, derived from `shared/api.ts`'s four tables, never
         // NOT_CODES, for the reason every union above gives.
         || isDelegationProjectionKebab(tok)
+        // DELEGATION BROKER, WAVE 5 (PR5a): the lease transition table's words, beside the projection's and never merged into it.
+        // `coord/delegation-lease-state.ts` spells its transition reasons, lineage close reasons and act refusals as literals. None is
+        // a mail rejection or a run refusal: they ride the journal and the lease doors' outcomes. Admitted through the exported guard,
+        // derived from the module's three tables, never NOT_CODES.
+        || isDelegationLeaseStateKebab(tok)
         // CHILD RECLAMATION, WAVE 10: the next union, re-counted on the merged tree, checked together and never merged,
         // on the standing rule `enter-ignored` above states. `coord/collectLaneJournal.ts` (the collector switch's
         // generation journal adapter) spells its read kinds as literals, and the switch's other coord-side code

@@ -9,7 +9,7 @@
 set -uo pipefail
 
 # ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
-# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue`, `ws-shed-deps` or `ws-lease-mark`, or a direct `ws-audit --session <id>
+# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue`, `ws-shed-deps`, `ws-lease-mark` or `ws-lease-audit`, or a direct `ws-audit --session <id>
 # --reclaim [--defer-expired]`, `… --expire` or `… --collect`, runs under Bash >= 4.4 PRIVILEGED with
 # no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
 # rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
@@ -31,7 +31,7 @@ if [[ $# -ge 5 && "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --re
     case "${!__ccd_i}" in --defer-expired) ;; --stale|--hold-digest) __ccd_i=$((__ccd_i + 1)) ;; *) __ccd_stale=0; break ;; esac
   done
 fi
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue || "${1-}" == ws-shed-deps || "${1-}" == ws-lease-mark ]] \
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue || "${1-}" == ws-shed-deps || "${1-}" == ws-lease-mark || "${1-}" == ws-lease-audit ]] \
      || (( __ccd_stale )) \
      || { [[ $# -ge 4 && $# -le 6 && "${1-}" == ws-audit && "${2-}" == --session ]] \
           && [[ ( "${4-}" == --reclaim && ( $# -eq 4 || ( $# -eq 5 && "${5-}" == --defer-expired ) ) ) || ( "${4-}" == --expire && ( $# -eq 4 || ( $# -eq 6 && "${5-}" == --child-of ) ) ) || ( $# -eq 4 && "${4-}" == --collect ) ]]; } || [[ $# -eq 4 && "${1-}" == ws-audit && "${2-}" == --loose-hex && "${4-}" == --collect ]]; }; then   # + the loose arm's audit (D-6625)
@@ -3247,8 +3247,8 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
 # ANSWER AT ALL — and no ccd writer can produce one: `_reg_set` writes a regular
 # file through printf -> tmp -> atomic rename. CORRECTED (round 3): this named
 # `.svcfailed` as "the one direct writer". `_pr_py`, inside this same file,
-# writes `prphase`, `prnumber` and `prcheckedat` through its own tmp +
-# `os.replace` and appends `.prhistory` with a bare `open(…, 'a')` — four more
+# writes `prphase`, `prnumber`, `prbranch` and `prcheckedat` through its own tmp +
+# `os.replace` and appends `.prhistory` with a bare `open(…, 'a')` — five more
 # field files, none of them `_reg_set` and none of them `.svcfailed`. The
 # CONCLUSION survives, because all of them produce regular files; the census
 # carrying it did not.
@@ -4021,15 +4021,15 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), and D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50 — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, and D-5941's `prbranch` 51 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 50: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
+  # The 51: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
   # `carriednote`, `child`, `choicekept`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
-  # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
+  # `pool`, `prbranch`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `standdown`, `standdownaff`, `standdownprobe`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
   # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `typed`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
@@ -6235,7 +6235,7 @@ if mode == 'state':
 
     def get(field):
         # put/clear's own path arithmetic, read instead of written. Needed by
-        # the prhistory chokepoint below to see the OUTGOING prnumber/prphase
+        # the prhistory chokepoint below to see the OUTGOING prnumber/prphase/prbranch
         # before `clear`/the next `put` overwrite them — nothing upstream of
         # this `state` mode has read $REG for anything but rows_in()'s stdin,
         # so there was no read helper here to reuse.
@@ -6504,6 +6504,11 @@ if mode == 'state':
         if prev_at is None or prev_at <= checked_at:
             old_raw = get('prnumber')
             old_phase = get('prphase') or ''   # read before `put('prphase', ...)` below overwrites it
+            # The branch the outgoing PR was on, read before `clear('prbranch')` below
+            # (D-5941). `branch` in the row stays the branch at replacement, which is not
+            # this one across a reset. Absent for a number bound before this field existed,
+            # and the readers treat that row as unplaced.
+            old_prbranch = (get('prbranch') or '').strip()
             if old_raw is not None:
                 try:
                     old_num = int(old_raw)
@@ -6512,6 +6517,8 @@ if mode == 'state':
                 if old_num is not None and old_num != number:
                     rec = {'pr': old_num, 'branch': branch, 'phase': old_phase,
                            'recordedAt': int(time.time())}
+                    if old_prbranch:
+                        rec['prbranch'] = old_prbranch
                     # D-2380: one of FOUR OPENS in this mode, alongside
                     # `get()`, the lock above and `put()`'s own tmp-file open
                     # (above `get()` in this file) — the plan's own cardinal
@@ -6548,6 +6555,7 @@ if mode == 'state':
                     with open(hist_p, 'a') as f:
                         f.write(json.dumps(rec) + '\n')
             clear('prnumber')
+            clear('prbranch')
             put('prphase', phase)
             # phase and number are ONE answer, so a writer that persists half
             # of it lies. A PR that is deleted, force-pushed out of
@@ -6568,7 +6576,15 @@ if mode == 'state':
             # here used to claim the first guard alone made this unreachable; it
             # did not, and a `gh` that exited 0 with an empty or unparseable
             # stdout cleared a persisted `merged:#42`.
+            #
+            # `prbranch` goes AHEAD of the number and is cleared behind it, so under the lock
+            # a number on disk always has its branch beside it. The other order leaves a number
+            # with no branch, which retires as an unplaced row and so counts for every branch.
+            # Two runs that proceed UNLOCKED can still read the pair across each other's clear,
+            # and the row then goes unplaced, which is the legacy reading, not a false one.
+            # `pick` only chooses a row `bound` passed, so `headRefName` here equals `branch`.
             if number is not None:
+                put('prbranch', chosen.get('headRefName'))
                 put('prnumber', number)
             # LAST, and that ordering is the compare-and-set's other half: this
             # is the stamp the next writer compares against, so it must not
@@ -6877,7 +6893,7 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # `--session` argv, its `--project` argv, the `*.workspace` loop's id
 # check, and the registry-project check), of which two are PROJECT checks.
 # The justification is not that those uses are read-only — `cmd_pr_state`
-# persists three registry fields (`prnumber`, `prphase`, `prcheckedat`) and
+# persists four registry fields (`prnumber`, `prbranch`, `prphase`, `prcheckedat`) and
 # creates `$REG/.prstate-<id>.lock` — it is that NONE OF THEM MINTS AN ID:
 # each validates a project that either already exists in a registry row or
 # arrived for a read, and refusing there could STRAND an existing row
@@ -9105,6 +9121,7 @@ pr-open
 pr-state
 pr-train-prove
 prefer
+project-add
 project-pool
 reclaim-pause
 route
@@ -9295,7 +9312,7 @@ EOF
   echo testbox-remote   # D-7411: the test box switch's writer, behind POST /api/testbox/switch
   echo docs-index
   echo path-users-v1; echo path-users   # `ccd path-users [--json] <path>…` (DR-7, D-6619): the read-only entry to the one holder probe; sent only behind this word
-  echo lease-mark-v1; echo ws-lease-mark   # delegation broker wave 5 (PR1): the lease carrier's one writer, ccd/lib/delegation-lease.sh
+  echo lease-mark-v1; echo ws-lease-mark; echo lease-audit-v1; echo ws-lease-audit   # delegation broker wave 5: the lease carrier's one writer (PR1) and its read-only audit (PR2), ccd/lib/delegation-lease.sh
   echo ws-add-base-v1   # delegation broker wave 5 (PR3): `ws-add --child <run> --base <commit>`, a start point only (D-7827)
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
   # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
@@ -10425,6 +10442,68 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
     fi
     echo "tagged $project $new"
   fi
+}
+
+# THE NEW-PROJECT RULES, ccd's own copy of `shared/projectAdd.ts`'s (add-project spec 2026-11-04 §3-§4): ccd is bash,
+# so it cannot import them, and `server/test/project-add-parity.test.ts` holds the two equal on one table.
+_project_new_name_ok() {   # name -> 0 when a NEW project may take it (`isNewProjectName`)
+  # `_ws_project_valid` first (every creator's gate), then what a NEW name adds: a leading letter or digit (no `_`),
+  # at most 64 bytes (`PROJECT_NAME_MAX`: a workspace id is `<project>-<slug>` capped at 128), and no `.git` suffix.
+  # `LC_ALL=C` makes `${#1}` count bytes and the ranges ASCII, `_ws_project_valid`'s own reason.
+  local LC_ALL=C
+  _ws_project_valid "$1" && [[ "$1" =~ ^[A-Za-z0-9] ]] && (( ${#1} <= 64 )) && [[ "$1" != *.git ]]
+}
+
+_project_github_url_ok() {   # url -> 0 when it is exactly a clone url `parseGithubRepo` emits
+  # TWO EXACT SHAPES, `https://github.com/<o>/<r>.git` and `git@github.com:<o>/<r>.git`. The owner is GitHub's own
+  # rule, a letter or digit then `[A-Za-z0-9-]` (no dot, no underscore). The repo is `[A-Za-z0-9._-]` led by anything
+  # but a dash (`.github`, `owner/_tools`), and is not `.`, `..` or itself `….git`. Anchored and ASCII, so `ext::`,
+  # `file://`, another host, userinfo, a third segment and a dash-leading url (an option to git) never match.
+  local LC_ALL=C re='^(https://github\.com/|git@github\.com:)[A-Za-z0-9][A-Za-z0-9-]*/([A-Za-z0-9._][A-Za-z0-9._-]*)\.git$'
+  [[ "$1" =~ $re && ${BASH_REMATCH[2]} != *.git && ${BASH_REMATCH[2]} != . && ${BASH_REMATCH[2]} != .. ]]
+}
+
+# THE BOUND ON ONE `git clone`/`git init`, held under the runner's `project-add` row with `_plat_timeout`'s largest
+# kill grace (`ccd-project-add.test.ts` reads both): a clone past it dies INSIDE ccd, so ccd removes its own temp.
+PROJECT_ADD_GIT_S=220
+
+cmd_project_add() {   # ccd project-add --name <n> (--url <github-url> | --empty)
+  # A NEW PROJECT under `$PROJECTS_ROOT`, cloned from GitHub or `git init`ed empty (add-project spec 2026-11-04 §4);
+  # `POST /api/projects` reaches it through the agent's gated grant `['project-add','--name']`. EXACT ARITY, the
+  # `cmd_project_pool` rule: `--name` leads, then `--url <u>` or `--empty`, and any other argv is the usage line.
+  # VALIDATE, THEN BUILD ASIDE, THEN MOVE. Nothing is touched before both checks pass. The tree is built in
+  # `.project-add.<name>.<pid>`, a dot name the project walk skips, so a half-built clone is never listed, and moved
+  # onto the name only after a second existence check, by `_plat_mv_notdir` (never INTO a directory that appeared
+  # meanwhile). A failure removes that temp directory, which this run created, and nothing else.
+  # NO JOURNAL LINE and no `--actor`: the verb acts on a project, not a session (`cmd_project_pool`'s reason).
+  local name url="" mode usage="usage: ccd project-add --name <n> (--url <url>|--empty)"
+  case "$#" in
+    4) [[ $1 == --name && $3 == --url ]] || die "$usage"; name=$2; url=$4; mode=clone ;;
+    3) [[ $1 == --name && $3 == --empty ]] || die "$usage"; name=$2; mode=init ;;
+    *) die "$usage" ;;
+  esac
+  _project_new_name_ok "$name" \
+    || die "invalid project '$name' — a new project's name is a letter or digit, then A-Za-z0-9 . _ -, at most 64 bytes, not ending in .git"
+  [[ $mode == init ]] || _project_github_url_ok "$url" \
+    || die "invalid url '$url' — only https://github.com/<owner>/<repo>.git or git@github.com:<owner>/<repo>.git"
+  # `-L` beside `-e`: a dangling link answers false to `-e` and is still a name someone holds.
+  local dest="$PROJECTS_ROOT/$name" tmp="$PROJECTS_ROOT/.project-add.$name.$$" err rc
+  [[ ! -e "$dest" && ! -L "$dest" ]] || die "project exists: $name"
+  mkdir -p -- "$PROJECTS_ROOT" || die "cannot create $PROJECTS_ROOT"
+  # A temp of this pid's that already stands is a killed run's, not this one's: refuse rather than adopt or delete it.
+  [[ ! -e "$tmp" && ! -L "$tmp" ]] || die "a temp of an earlier project-add stands at $tmp — remove it by hand"
+  local -a op=(init --quiet -b main -- "$tmp")
+  [[ $mode == init ]] || op=(clone --quiet -- "$url" "$tmp")
+  # NO PROMPT EVER: `GIT_TERMINAL_PROMPT=0` for https, and a batch-mode ssh unless the box chose its own (GIT_SSH_COMMAND,
+  # GIT_SSH or `core.sshCommand`, which the variable would override), so a private repo with no credential fails at
+  # once instead of holding the exec until its timeout. No commit on `init`: ccd does not invent an author identity.
+  [[ -n "${GIT_SSH_COMMAND:-}${GIT_SSH:-}$(git -C "$PROJECTS_ROOT" config --get core.sshCommand 2>/dev/null)" ]] || local -x GIT_SSH_COMMAND='ssh -o BatchMode=yes'
+  err=$(GIT_TERMINAL_PROMPT=0 _plat_timeout "$PROJECT_ADD_GIT_S" git "${op[@]}" 2>&1 >/dev/null) || {
+    rc=$?; rm -rf -- "$tmp"; (( rc != 124 )) || die "git ${op[0]} timed out for $name after ${PROJECT_ADD_GIT_S}s"
+    die "git ${op[0]} failed for $name: ${err:-git gave no message}"; }
+  if [[ -e "$dest" || -L "$dest" ]]; then rm -rf -- "$tmp"; die "project exists: $name"; fi
+  _plat_mv_notdir "$tmp" "$dest" || { rm -rf -- "$tmp"; die "could not move $tmp to $dest"; }
+  echo "added $name"
 }
 
 cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
@@ -11697,7 +11776,7 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
 # NUMBER, so a landing PR older than `gh pr list`'s newest-100 window still binds; two `gh api` GETs read the base's
 # required-check names, cached under `$REG/pr-landing/` (the only registry path this verb writes). The binding is
 # `_pr_bind_facts` and `_pr_py bind`, the same code `pr-state` binds with, and nothing is persisted: `pr-state` stays
-# the one writer of `prphase`, `prnumber` and `prcheckedat`.
+# the one writer of `prphase`, `prnumber`, `prbranch` and `prcheckedat`.
 #
 # THE DOCUMENT IS BUILT, NOT INTERPOLATED. `_gh_pr_landing_query K` repeats one fixed per-alias fragment K times, K the
 # integer count of sessions (1 to 16), declaring exactly `$n0` to `$n<K-1>` as `Int!`. A constant 16-alias document
@@ -45315,6 +45394,7 @@ case "${1:-}" in
   scratch-rescue) shift; cmd_scratch_rescue "$@" ;;
   ws-shed-deps) shift; cmd_ws_shed_deps "$@" ;;
   ws-lease-mark) shift; cmd_ws_lease_mark "$@" ;;
+  ws-lease-audit) shift; cmd_ws_lease_audit "$@" ;;
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   ws-title)   shift; cmd_ws_title "$@" ;;
@@ -45324,6 +45404,7 @@ case "${1:-}" in
   win-size)  shift; cmd_win_size "$@" ;;
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
+  project-add) shift; cmd_project_add "$@" ;;
   route)     shift; cmd_route "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
@@ -45334,6 +45415,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

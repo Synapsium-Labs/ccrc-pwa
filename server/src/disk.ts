@@ -7,8 +7,9 @@
 // nor inodes, must not look like a healthy disk. A MISSING EXPECTED MOUNT IS CRITICAL AT ONCE: a silently absent
 // volume pages as plainly as a full one.
 import {
-  DISK_CLEAR_MARGIN_PCT, DISK_CRITICAL_PCT, DISK_WARN_PCT,
+  DISK_CLEAR_MARGIN_PCT, DISK_CRITICAL_PCT, DISK_WARN_PCT, TRANSCRIPT_WORK_WARN_ENTRY_BYTES, TRANSCRIPT_WORK_WARN_TOTAL_BYTES,
   type DiskExpectedMount, type DiskFilesystem, type DiskFilesystemLevel, type DiskHealth, type DiskLevel, type DiskMeasured,
+  type DiskTranscriptWork, type TranscriptWorkMeasured,
 } from '../../shared/disk.js';
 
 /** A filesystem's held level and the one differing level seen once, awaiting its second sighting. */
@@ -230,5 +231,18 @@ export function unmeasuredDiskBlock(held: DiskHealth | null, nowMs: number): Dis
     expectedMounts: held?.expectedMounts ?? [],
     pressure: held?.pressure ?? false,
     holders: [],
+    // The transcript-folder walk carries its own `at`, so the one the server last received stays (D-7898).
+    ...(held?.transcriptWork === undefined ? {} : { transcriptWork: held.transcriptWork }),
   };
+}
+
+/** The level of a transcript-folder walk (D-7898): `unmeasured` when the walk read nothing (it failed or ran out of
+ *  time), `warn` when the entries outside Claude Code's shapes hold more than `TRANSCRIPT_WORK_WARN_TOTAL_BYTES` in all
+ *  or any one of them more than `TRANSCRIPT_WORK_WARN_ENTRY_BYTES` (the top list is largest first), else `ok`. Doctor's
+ *  `transcript_work` line judges the same two bounds. It never moves the disk level: this is a warning about where work
+ *  sits, not about free space. */
+export function transcriptWorkBlock(m: TranscriptWorkMeasured): DiskTranscriptWork {
+  if (!m.measured) return { at: m.at, level: 'unmeasured', entries: 0, bytes: 0, top: [] };
+  const over = m.bytes > TRANSCRIPT_WORK_WARN_TOTAL_BYTES || (m.top[0]?.bytes ?? 0) > TRANSCRIPT_WORK_WARN_ENTRY_BYTES;
+  return { at: m.at, level: over ? 'warn' : 'ok', entries: m.entries, bytes: m.bytes, top: m.top };
 }

@@ -11,6 +11,10 @@
 // other paths were measured, and the worst reason wins, so a critical filesystem behind a failed path is not read as
 // "moved". Expected mounts (`CCRC_WORK_MOUNTS`) are answered from mountinfo, never from whether the path exists:
 // an unmounted volume leaves its empty mount-point directory behind.
+//
+// The reply also carries the latest transcript-folder walk (D-7898, `transcriptWork.ts`): work kept inside each roster
+// config dir's `projects/` tree, counted and sized, read-only. It runs in the background at most every 10 minutes and
+// the op never waits for it.
 import { readFileSync } from 'node:fs';
 import { statfs, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -18,9 +22,10 @@ import {
   DISK_STATFS_DEADLINE_MS, type DiskOpReply,
 } from '../../shared/agent-protocol.js';
 import {
-  DISK_WORK_ROOTS, type DiskExpectedMount, type DiskFilesystem, type DiskMissingRoot, type DiskMissingWhy,
+  DISK_WORK_ROOTS, type DiskExpectedMount, type DiskFilesystem, type DiskMissingRoot, type DiskMissingWhy, type TranscriptWorkMeasured,
 } from '../../shared/disk.js';
 import { parseRoster } from '../../shared/roster.js';
+import { realWalkSeams, walkTranscriptWork, type TranscriptRoot, type WalkSeams } from './transcriptWork.js';
 
 /** The fields of a `statfs` answer this op reads. */
 export interface DiskStatfs {
@@ -39,7 +44,15 @@ export interface DiskSeams {
   env: NodeJS.ProcessEnv;
   /** One root's `stat` + `statfs` deadline. */
   deadlineMs: number;
+  /** The transcript-folder walk's reads (D-7898). */
+  walk: WalkSeams;
+  /** How old the last walk may be before a `disk` op starts the next one. */
+  walkRefreshMs: number;
 }
+
+/** The transcript-folder walk runs at most this often (D-7898): it reads every session directory of every config dir,
+ *  which is far more than the `statfs` of a root, and the disk alarm asks every minute. */
+export const TRANSCRIPT_WORK_REFRESH_MS = 10 * 60_000;
 
 const realStat = (p: string): Promise<{ dev: number }> => stat(p);
 
@@ -56,6 +69,8 @@ export function realDiskSeams(): DiskSeams {
     readFile: (p) => readFileSync(p, 'utf8'),
     env: process.env,
     deadlineMs: DISK_STATFS_DEADLINE_MS,
+    walk: realWalkSeams(),
+    walkRefreshMs: TRANSCRIPT_WORK_REFRESH_MS,
   };
 }
 
@@ -139,21 +154,53 @@ async function probe(seams: DiskSeams, p: string): Promise<Outcome> {
 const WHY_RANK: Record<DiskMissingWhy, number> = { absent: 0, failed: 1, timeout: 2 };
 const worse = (a: DiskMissingWhy, b: DiskMissingWhy): DiskMissingWhy => (WHY_RANK[b] > WHY_RANK[a] ? b : a);
 
-/** The roster's config dirs under `home`. A roster that is absent has none (`absent`); one that cannot be read or
- *  parsed leaves them UNKNOWN (`failed`). */
-function configDirs(home: string, seams: DiskSeams): { dirs: string[]; why: DiskMissingWhy | null } {
+/** The roster's config dirs under `home`, each with the first account that names it. A roster that is absent has none
+ *  (`absent`); one that cannot be read or parsed leaves them UNKNOWN (`failed`). */
+function configDirs(home: string, seams: DiskSeams): { dirs: string[]; roots: TranscriptRoot[]; why: DiskMissingWhy | null } {
   let text: string;
   try {
     text = seams.readFile(path.join(home, '.ccrc', 'accounts.json'));
   } catch (e) {
-    return { dirs: [], why: (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'failed' };
+    return { dirs: [], roots: [], why: (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'failed' };
   }
   try {
     const roster = parseRoster(JSON.parse(text));
-    return { dirs: [...new Set(roster.accounts.map((a) => path.join(home, a.configDirSuffix)))], why: null };
+    const roots: TranscriptRoot[] = [];
+    for (const a of roster.accounts) {
+      const dir = path.join(home, a.configDirSuffix);
+      if (!roots.some((r) => r.dir === dir)) roots.push({ account: a.id, dir });
+    }
+    return { dirs: roots.map((r) => r.dir), roots, why: null };
   } catch {
-    return { dirs: [], why: 'failed' };
+    return { dirs: [], roots: [], why: 'failed' };
   }
+}
+
+/** The transcript-folder walk's memory, per agent process (keyed by the `stat` seam, as `running` is). */
+interface WalkMemory { home: string; last?: TranscriptWorkMeasured; inFlight?: Promise<void> }
+const walks = new WeakMap<object, WalkMemory>();
+
+/** The latest finished walk for `home`, starting the next one in the background when none is running and the last is
+ *  older than `walkRefreshMs` (or there is none). The `disk` op never waits for a walk: its own request deadline is far
+ *  below the walk's bound, so the reply carries the last walk that finished, and nothing before the first one does. A
+ *  roster that cannot be read is a walk that failed; an absent roster has no config dir, so nothing to count. */
+function transcriptWorkFor(home: string, seams: DiskSeams, cfg: { roots: TranscriptRoot[]; why: DiskMissingWhy | null }): TranscriptWorkMeasured | undefined {
+  let mem = walks.get(seams.stat);
+  if (mem === undefined || mem.home !== home) { mem = { home }; walks.set(seams.stat, mem); }
+  const m = mem;
+  const stale = m.last === undefined || seams.walk.now() - m.last.at >= seams.walkRefreshMs;
+  if (m.inFlight === undefined && stale) {
+    const run: Promise<TranscriptWorkMeasured> = cfg.why === 'failed'
+      ? Promise.resolve({ measured: false, at: seams.walk.now(), why: 'failed' })
+      : walkTranscriptWork(cfg.roots, seams.walk);
+    m.inFlight = run.then((r) => { m.last = r; }, () => {}).finally(() => { m.inFlight = undefined; });
+  }
+  return m.last;
+}
+
+/** Settles when the walk in flight for this `stat` seam (if any) has finished: a test's way to read the next reply. */
+export function transcriptWorkSettled(stat: object): Promise<void> {
+  return walks.get(stat)?.inFlight ?? Promise.resolve();
 }
 
 /** A template, resolved to the path(s) it names. `${CONFIG_DIR}` stands for every roster config dir. */
@@ -248,5 +295,6 @@ async function measureOnce(home: string, seams: DiskSeams): Promise<DiskOpReply>
     .filter((p) => p !== '')
     .map((p) => ({ path: p, mounted: mountPoints.has(path.resolve(p)) }));
 
-  return { filesystems, expectedMounts, missing };
+  const transcriptWork = transcriptWorkFor(home, seams, cfg);
+  return { filesystems, expectedMounts, missing, ...(transcriptWork === undefined ? {} : { transcriptWork }) };
 }

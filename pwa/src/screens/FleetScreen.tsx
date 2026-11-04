@@ -34,6 +34,7 @@ import { BucketBar } from '../fleet/BucketBar';
 import { FleetHead } from '../fleet/FleetHead';
 import { useFleetChrome } from '../fleet/FleetChrome';
 import { useFleetFlows } from '../fleet/FleetFlows';
+import { PROJECT_ADD_TEXT } from '../fleet/projectAddWords';
 import { openSession } from '../fleet/openers';
 import { navigate } from '../lib/router';
 import { ackAll, acksSnapshot, prune, subscribeAcks } from '../lib/seen';
@@ -324,6 +325,8 @@ export function FleetScreen({
           <Button variant="primary" onClick={newSession}>
             Start a session
           </Button>
+          {/* A brand-new fleet has no project list to sit under, so its door is here (add-project spec §2). */}
+          <Button variant="ghost" onClick={flows.openAddProject}>{PROJECT_ADD_TEXT.add}</Button>
         </section>
       ) : (
         <>
@@ -359,6 +362,11 @@ export function FleetScreen({
               {`Archived on disk · ${archived.count} · ${archivedSizeText(archived)}`}
             </BareRow>
           )}
+          {/* Add project (add-project spec 2026-11-04 §2): at the foot of the list in this screen, not in a skin's part,
+              so every skin shows it. */}
+          <BareRow className="fleet-add-project-row" onClick={flows.openAddProject}>
+            <span aria-hidden="true">+ </span>{PROJECT_ADD_TEXT.add}
+          </BareRow>
         </>
       )}
 

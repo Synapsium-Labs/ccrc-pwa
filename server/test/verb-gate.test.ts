@@ -141,6 +141,8 @@ const PROBE_ARGS: Partial<Record<string, readonly unknown[]>> = {
   wsAddWorkerBase: ['x', null, null, 7, 'a'.repeat(40), null, false],
   // Delegation broker wave 5: `leaseMark` takes one object and refuses a value its verb would refuse as usage.
   leaseMark: [{ leaseId: '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', generation: 2, project: 'demo', adminRecord: 'agent-a', parentId: 'lane-a-demo', parentIncarnation: '11111111-2222-4333-8444-555555555555', activityId: 'act-1', source: 'agent', state: 'adopted', journalSeq: 9, expiresAtMs: 1767225600000, releaseReason: null, promoted: null }],
+  // `leaseAudit` refuses a lease id that is not one and a generation below 1; the probe passes a valid pair so the table loads.
+  leaseAudit: ['0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', 1, false],
   // A loose entry travels as even-length lowercase hex; the builders refuse anything else, which is correct production behaviour (D-6626). The probe passes valid hex so the table loads.
   wsCollectLooseAudit: ['00'],
   wsCollectLoose: ['x', '00', null],
@@ -483,8 +485,10 @@ describe('every ccd call site in server/src answers the version-skew question', 
     // The four Docs verbs (docs W2) join for `ws-reclaim`'s reason: each is gated by `capSupported(DOCS_CAP)` in
     // CAP_GATED_VERBS above, and naming them here reds a vanished call site or a lost gate.
     // `ws-collect` (child reclamation wave 9) joins for the same reason: naming it reds a vanished act site or a lost gate.
+    // `project-add` (add-project spec 2026-11-04 §4) joins for `project-pool`'s reason: its one site is
+    // `planProjectAdd` (`projectAdd.ts`), gated by `ccdCan`'s `verbRow`, and naming it reds a vanished site or a lost gate.
 const NEW_GENERATION = ['pr-state', 'pr-open', 'ws-archive', 'ws-restore', 'ws-audit', 'ws-reap', 'project-pool',
-  'ws-reclaim', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'ws-collect'];
+  'ws-reclaim', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'ws-collect', 'project-add'];
     for (const verb of NEW_GENERATION) {
       const sites = ALL_SITES.filter((s) => s.verb === verb);
       expect(sites.length, `${verb} has no call site at all`).toBeGreaterThan(0);

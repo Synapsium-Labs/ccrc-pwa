@@ -171,6 +171,27 @@ describe('childBindGate — incarnation placement', () => {
     expect(h.asked, 'the birth is read from the run the marker names').toEqual([5]);
   });
 
+  const ledgerRow = (extra: Record<string, unknown>): string =>
+    `${JSON.stringify({ pr: 7, branch: `ws/${ID}`, phase: 'merged', recordedAt: 1, ...extra })}\n`;
+
+  it('a child whose only ledger row is placed on another branch binds — the live rung finds no PR on this one', async () => {
+    put('child', '5');
+    put('prhistory', ledgerRow({ prbranch: 'ws/another' }));
+    const h = harness();
+    expect(await gate(h, ID)).toEqual({ ok: true });
+    expect(h.verbs).toContain('pr-state');
+  });
+
+  it('a child whose ledger row is placed on this branch, or on none → workspace-spent, from the ledger', async () => {
+    put('child', '5');
+    for (const extra of [{ prbranch: `ws/${ID}` }, {}]) {
+      put('prhistory', ledgerRow(extra));
+      const h = harness();
+      expect(await gate(h, ID)).toEqual({ ok: false, code: 'workspace-spent', pr: 7 });
+      expect(h.verbs).not.toContain('pr-state');
+    }
+  });
+
   it('a child with a PR created after its birth → workspace-spent', async () => {
     put('child', '5');
     expect(await gate(harness(localIO, line([{ number: 9, createdAt: iso(BIRTH_MS + HOUR) }])), ID))

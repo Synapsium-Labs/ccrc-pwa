@@ -25,6 +25,7 @@ import {
   DELEGATION_CLEANUP_POPULATIONS,
   DELEGATION_CLEANUP_STATES,
   DELEGATION_DISPOSITIONS,
+  DELEGATION_LEASE_RELEASE_REASONS,
   DELEGATION_EXECUTION_STATES,
   DELEGATION_INTENT_SOURCES,
   DELEGATION_LEASE_SOURCE_KINDS,
@@ -43,12 +44,13 @@ import {
   DELEGATION_PRUNING_HOLD_REASONS,
   allocateDelegationActivityIdInto,
   assertDelegationCheckpointIdentity,
-  assertWave3Leases,
+  assertLeases,
   canonicalDelegationJson,
   DELEGATION_BASH_PENDING_MS,
   DELEGATION_STOP_CANDIDATE_HORIZON_MS,
   delegationListingsEqual,
   deriveDelegationLineageId,
+  deriveDelegationRunLineageId,
   emptyDelegationCheckpoint,
   encodeDelegationNaturalKey,
   formatDelegationInstant,
@@ -61,6 +63,7 @@ import {
   sortedProjectionRows,
   upkeepDelegationIntervals,
   WAVE3_LEASE_SOURCE_KINDS,
+  withDelegationIntentSource,
   type DeepReadonly,
   type DelegationActivityRow,
   type DelegationAttemptRow,
@@ -72,6 +75,8 @@ import {
   type DelegationIntervalState,
   type DelegationJournalEntryV1,
   type DelegationJournalRecordV1,
+  type DelegationAttemptMark,
+  type DelegationLeaseCarrierRow,
   type DelegationLeaseCreationRequest,
   type DelegationLeaseRow,
   type DelegationLineageRow,
@@ -117,6 +122,7 @@ import {
   type DelegationCompactionSkipReason,
   type DelegationRecordNaming,
 } from './delegation-compaction.js';
+import { foldLeaseCarrierSeen, foldLeaseRelease, foldLeaseTransition } from './delegation-lease-state.js';
 
 /** The checkpoint's file name under the coordination directory (`~/.ccrc`). */
 export const DELEGATION_CHECKPOINT_FILE = 'delegation-checkpoint.json';
@@ -164,9 +170,9 @@ const isMember = <T extends string>(list: readonly T[], v: unknown): v is T => t
 /** A closed reader over one object: exactly its keys, each read with a typed accessor that never casts. */
 class Fields {
   private constructor(private readonly o: Record<string, unknown>, private readonly what: string) {}
-  static of(v: unknown, what: string, keys: readonly string[]): Fields {
+  static of(v: unknown, what: string, keys: readonly string[], optional: readonly string[] = []): Fields {
     if (!isRecord(v)) return refuse('bad-shape', `${what} is not an object`);
-    for (const k of Object.keys(v)) if (!keys.includes(k)) refuse('bad-shape', `${what} has the unknown key ${JSON.stringify(k)}`);
+    for (const k of Object.keys(v)) if (!keys.includes(k) && !optional.includes(k)) refuse('bad-shape', `${what} has the unknown key ${JSON.stringify(k)}`);
     for (const k of keys) if (!Object.hasOwn(v, k)) refuse('bad-shape', `${what} is missing ${JSON.stringify(k)}`);
     return new Fields(v, what);
   }
@@ -196,6 +202,9 @@ class Fields {
     const v = this.o[k];
     return isMember(list, v) ? v : this.bad(k, `is not one of ${list.join(', ')}`);
   }
+  memberN<T extends string>(k: string, list: readonly T[]): T | null { return this.o[k] === null ? null : this.member(k, list); }
+  /** Whether an OPTIONAL key is present (`Fields.of` was given it in its `optional` list). */
+  has(k: string): boolean { return Object.hasOwn(this.o, k); }
   strList(k: string): readonly string[] {
     const v = this.o[k];
     if (!Array.isArray(v)) return this.bad(k, 'is not a list');
@@ -307,6 +316,20 @@ const readInterval = (v: unknown): DelegationObservationInterval => {
   };
 };
 
+const readAttemptMark = (f: Fields, k: string): DelegationAttemptMark | null => {
+  const m = f.objectN(k, ['attemptedAt', 'attemptId']);
+  return m === null ? null : { attemptedAt: m.inst('attemptedAt'), attemptId: m.str('attemptId') };
+};
+
+const readLeaseCarrier = (v: unknown): DelegationLeaseCarrierRow => {
+  const f = Fields.of(v, 'leaseCarrier', ['leaseId', 'transferringSince', 'transferRun', 'promotedRun', 'promotedSession', 'releaseReason', 'resolvedThrough']);
+  return {
+    leaseId: f.str('leaseId'), transferringSince: f.instN('transferringSince'), transferRun: f.intN('transferRun', 1),
+    promotedRun: f.intN('promotedRun', 1), promotedSession: f.strN('promotedSession'),
+    releaseReason: f.memberN('releaseReason', DELEGATION_LEASE_RELEASE_REASONS), resolvedThrough: readAttemptMark(f, 'resolvedThrough'),
+  };
+};
+
 const readHold = (v: unknown): DelegationPruningHold => {
   const f = Fields.of(v, 'pruningHold', ['journalId', 'reason', 'ownerId']);
   return { journalId: f.hex('journalId'), reason: f.member('reason', HOLD_REASONS), ownerId: f.str('ownerId') };
@@ -321,7 +344,7 @@ const instantOk = (s: string): boolean => { try { parseDelegationInstant(s); ret
 
 /** A checkpoint as the closed shape reads it: every key, every type, every word, every instant. Builds a NEW value. */
 function readCheckpoint(v: unknown): DelegationCheckpointV1 {
-  const f = Fields.of(v, 'checkpoint', CHECKPOINT_KEYS);
+  const f = Fields.of(v, 'checkpoint', CHECKPOINT_KEYS, ['leaseCarriers']);
   if (f.int('v') !== 1) refuse('bad-version', 'checkpoint v is not 1');
   const appliedJournalSequence = f.int('appliedJournalSequence');
   const appliedJournalId = f.hexN('appliedJournalId');
@@ -337,6 +360,8 @@ function readCheckpoint(v: unknown): DelegationCheckpointV1 {
     activities: f.list('activities').map(readActivity), leases: f.list('leases').map(readLease), lineage: f.list('lineage').map(readLineage),
     bucketCursors: f.list('bucketCursors').map(readCursor), observationIntervals: f.list('observationIntervals').map(readInterval),
     pruningHolds: f.list('pruningHolds').map(readHold),
+    // Wave 5 (PR5a): present only when it holds a row; an empty list is refused later, by `assertLeases`, as noncanonical.
+    ...(f.has('leaseCarriers') ? { leaseCarriers: f.list('leaseCarriers').map(readLeaseCarrier) } : {}),
   };
 }
 
@@ -376,6 +401,11 @@ export function decodeDelegationCheckpoint(bytes: Uint8Array): DelegationCheckpo
 // ── Projectability: the SQLite constraints, stated in code ────────────────────────────────────────────────────────────
 
 function unprojectable(detail: string): never { return refuse('unprojectable', detail); }
+
+/** The lease clocks the DDL holds at or after `firstObservedAt`, less the two `assertLease` already holds there (`terminalEvidenceAt` and
+ *  `releasedAt`, review 1451 F8): this check's one caller runs `assertLeases` first, so each bound is stated once. */
+const LEASE_CLOCKS = ['adoptedAt', 'retainedAt', 'promotedAt', 'cleanupDueAt', 'cleanupStartedAt', 'cleanupFinishedAt'] as const satisfies
+  readonly (keyof DelegationLeaseRow)[];
 
 /**
  * Refuses a checkpoint that `projectDelegationCheckpoint` could never accept: a duplicate key, a dangling reference, a CHECK
@@ -426,6 +456,10 @@ export function assertDelegationCheckpointProjectable(cp: DelegationCheckpointV1
     if (!activities.has(l.activityId)) unprojectable(`lease ${l.leaseId} names the activity ${l.activityId}, which has no row`);
     needSession(l.parentId, l.parentIncarnation, `lease ${l.leaseId}`);
     if (l.lastObservedAt < l.firstObservedAt) unprojectable(`lease ${l.leaseId} was last observed before it was first`);
+    for (const k of LEASE_CLOCKS) {
+      const at = l[k];
+      if (at !== null && at < l.firstObservedAt) unprojectable(`lease ${l.leaseId}'s ${k} ${at} is before its firstObservedAt ${l.firstObservedAt}`);
+    }
     if (l.releasedAt === null) {
       const ik = delegationLeaseIdentityKey(l);
       if (identityKeys.has(ik)) unprojectable(`two unreleased leases share the identity ${ik}`);
@@ -443,7 +477,7 @@ export function assertDelegationCheckpointProjectable(cp: DelegationCheckpointV1
     if (owners !== 1) unprojectable(`lineage ${n.lineageId} must be owned by exactly one of an activity, a lease or a run`);
     if (n.activityId !== null && !activities.has(n.activityId)) unprojectable(`lineage ${n.lineageId} names an activity with no row`);
     if (n.leaseId !== null && !leases.has(n.leaseId)) unprojectable(`lineage ${n.lineageId} names a lease with no row`);
-    if (n.runId !== null) unprojectable(`lineage ${n.lineageId} is run-owned, which has no wave-3 writer (and a run is not this checkpoint's to prove)`);
+    // A run-owned row is a promotion's (wave 5, PR5a folds it; PR9 writes it). Its run is `runs`'s to prove, not this checkpoint's.
     if ((n.closedAt === null) !== (n.closeReason === null)) unprojectable(`lineage ${n.lineageId} has a closedAt and closeReason that do not come together`);
     if (n.closedAt !== null && n.closedAt < n.openedAt) unprojectable(`lineage ${n.lineageId} closed before it opened`);
   }
@@ -458,23 +492,40 @@ export interface DelegationLeaseEntryFact {
   entry: Extract<DelegationJournalEntryV1, { kind: 'lease-created' }>;
 }
 
+/** What the fold remembers about a retained record of a wave-5 lease kind: its place, and whether it wrote a generation
+ *  (`lease-transition` and `lease-released` do; `lease-carrier-seen` does not, D-7851). */
+export interface DelegationLeaseRecordFact {
+  sequence: number;
+  journalId: string;
+  writesGeneration: boolean;
+}
+
 /**
  * The full event-less-lease proof, both ways. Every lease in the checkpoint names, by `creatingJournalSequence`, a RETAINED
- * `lease-created` record whose fields equal the lease's identity columns (and whose lineage ID is the one derived); and every
- * retained `lease-created` record the checkpoint has applied has its lease row. A lease without its entry has no authority:
- * "the journal alone creates leases".
+ * `lease-created` record whose fields equal the lease's identity columns (and whose lineage ID is the one derived), and its
+ * generation and `currentJournalSequence` are what its retained generation-writing records say: one generation each, the current
+ * sequence the last one's (wave 5, PR5a). Every retained `lease-created` record the checkpoint has applied has its lease row, and
+ * so does every retained record of a lease kind. A RELEASED lease is the one exception: it holds nothing (`computeHolds`), so a
+ * compaction may cut its records, and its row then stands on the proof it had while it was held. A lease without its entry has no
+ * authority: "the journal alone creates leases".
  */
-export function assertLeaseJournalProof(cp: DelegationCheckpointV1, facts: ReadonlyMap<string, DelegationLeaseEntryFact>): void {
+export function assertLeaseJournalProof(cp: DelegationCheckpointV1, facts: ReadonlyMap<string, DelegationLeaseEntryFact>,
+  records: ReadonlyMap<string, readonly DelegationLeaseRecordFact[]> = new Map()): void {
   for (const lease of cp.leases) {
     const fact = facts.get(lease.leaseId);
-    if (fact === undefined) refuse('lease-proof', `lease ${lease.leaseId} has no retained lease-created journal entry`);
+    if (fact === undefined) {
+      if (lease.releasedAt !== null) continue;
+      refuse('lease-proof', `lease ${lease.leaseId} has no retained lease-created journal entry`);
+    }
     const e = fact.entry;
-    const same = fact.sequence === lease.creatingJournalSequence && fact.sequence === lease.currentJournalSequence
-      && e.generation === lease.generation && e.activityId === lease.activityId && e.parentId === lease.parentId
+    const writes = (records.get(lease.leaseId) ?? []).filter((r) => r.sequence <= cp.appliedJournalSequence && r.writesGeneration);
+    const current = writes.length === 0 ? fact.sequence : writes[writes.length - 1]!.sequence;
+    const same = fact.sequence === lease.creatingJournalSequence && current === lease.currentJournalSequence
+      && writes.length === lease.generation && e.activityId === lease.activityId && e.parentId === lease.parentId
       && e.parentIncarnation === lease.parentIncarnation && e.project === lease.project && e.adminRecord === lease.adminRecord
       && e.canonicalPath === lease.canonicalPath && e.creationBase === lease.creationBase && e.sourceKind === lease.sourceKind
       && e.firstObservedAt === lease.firstObservedAt && e.lineageId === deriveDelegationLineageId(lease);
-    if (!same) refuse('lease-proof', `lease ${lease.leaseId} does not equal its lease-created entry at sequence ${fact.sequence}`);
+    if (!same) refuse('lease-proof', `lease ${lease.leaseId} does not equal its lease-created entry at sequence ${fact.sequence} and its ${writes.length} transition(s)`);
   }
   const have = new Set(cp.leases.map((l) => l.leaseId));
   for (const [leaseId, fact] of facts) {
@@ -482,23 +533,28 @@ export function assertLeaseJournalProof(cp: DelegationCheckpointV1, facts: Reado
       refuse('lease-proof', `the lease-created entry at sequence ${fact.sequence} has no lease row in the checkpoint`);
     }
   }
+  for (const [leaseId, list] of records) {
+    const first = list.find((r) => r.sequence <= cp.appliedJournalSequence);
+    if (first !== undefined && !have.has(leaseId)) refuse('lease-proof', `the lease record at sequence ${first.sequence} names lease ${leaseId}, which has no row`);
+  }
 }
 
 /**
- * Everything a checkpoint must satisfy, in one place: the anchor, the wave-3 lease guard, the identity invariants (activity IDs,
- * the natural-key map, the intent map, each lease's opening lineage), projectability, and (when the journal's lease entries
- * are known) the journal proof. Runs at checkpoint BUILD and at RECOVERY; a violation at recovery keeps the phase
+ * Everything a checkpoint must satisfy, in one place: the anchor, the lease guard (`assertLeases`), the identity invariants
+ * (activity IDs, the natural-key map, the intent map, each lease's opening lineage), projectability, and (when the journal's lease
+ * entries are known) the journal proof. Runs at checkpoint BUILD and at RECOVERY; a violation at recovery keeps the phase
  * `reconstructing` and pruning disabled.
  */
-export function validateDelegationCheckpoint(cp: DelegationCheckpointV1, leaseFacts: ReadonlyMap<string, DelegationLeaseEntryFact> | null): void {
+export function validateDelegationCheckpoint(cp: DelegationCheckpointV1, leaseFacts: ReadonlyMap<string, DelegationLeaseEntryFact> | null,
+  leaseRecords?: ReadonlyMap<string, readonly DelegationLeaseRecordFact[]>): void {
   if (cp.v !== 1) refuse('bad-version', 'not a version-1 checkpoint');
   if ((cp.appliedJournalSequence === 0) !== (cp.appliedJournalId === null) || (cp.appliedJournalId === null) !== (cp.appliedJournalDigest === null)) {
     refuse('bad-anchor', 'the applied position, journalId and digest are all zero/null or all set');
   }
-  assertWave3Leases(cp);
+  assertLeases(cp);
   assertDelegationCheckpointIdentity(cp);
   assertDelegationCheckpointProjectable(cp);
-  if (leaseFacts !== null) assertLeaseJournalProof(cp, leaseFacts);
+  if (leaseFacts !== null) assertLeaseJournalProof(cp, leaseFacts, leaseRecords);
 }
 
 // ── Naming: which upstream activities an evidence event speaks of ───────────────────────────────────────────────────
@@ -730,6 +786,10 @@ export class DelegationCheckpointBuilder {
   private intervals = new Map<string, DelegationObservationInterval>();
   private candidates = new Map<string, DelegationActivityCandidate>();
   private leaseFacts = new Map<string, DelegationLeaseEntryFact>();
+  /** Wave 5 (PR5a): the retained records of the three lease kinds, per lease, in sequence order (the proof and `computeHolds`). */
+  private leaseRecords = new Map<string, readonly DelegationLeaseRecordFact[]>();
+  /** Wave 5 (PR5a): the checkpoint-only carrier rows, by lease. */
+  private carriers = new Map<string, DelegationLeaseCarrierRow>();
   private leaseByIdentity = new Map<string, string>();
   private leaseByPath = new Map<string, string>();
   private bashCalls = new Map<string, DelegationBashCallFact>();   // D-6267
@@ -762,6 +822,7 @@ export class DelegationCheckpointBuilder {
     this.intent = { ...cp.coordinatorIntentByParent };
     this.leases = new Map(cp.leases.map((r) => [r.leaseId, r] as const));
     this.lineage = new Map(cp.lineage.map((r) => [r.lineageId, r] as const));
+    this.carriers = new Map((cp.leaseCarriers ?? []).map((r) => [r.leaseId, r] as const));
     this.cursors = new Map(cp.bucketCursors.map((r) => [cursorKeyOf(r), r] as const));
     this.intervals = new Map(cp.observationIntervals.map((r) => [intervalKeyOf(r), r] as const));
     this.leaseByIdentity = new Map();
@@ -781,6 +842,7 @@ export class DelegationCheckpointBuilder {
     b.mapping = { ...this.mapping }; b.intent = { ...this.intent }; b.leases = new Map(this.leases); b.lineage = new Map(this.lineage);
     b.cursors = new Map(this.cursors); b.intervals = new Map(this.intervals); b.candidates = new Map(this.candidates);
     b.leaseFacts = new Map(this.leaseFacts); b.leaseByIdentity = new Map(this.leaseByIdentity); b.leaseByPath = new Map(this.leaseByPath);
+    b.leaseRecords = new Map(this.leaseRecords); b.carriers = new Map(this.carriers);
     b.bashCalls = new Map(this.bashCalls); b.bashDue = [...this.bashDue]; b.stopDue = [...this.stopDue];
     b.workflowLaunches = new Map(this.workflowLaunches); b.equalPreSequence = new Map(this.equalPreSequence); b.coveredEnds = this.coveredEnds;
     b.appliedSequence = this.appliedSequence; b.appliedJournalId = this.appliedJournalId; b.appliedDigest = this.appliedDigest;
@@ -809,8 +871,11 @@ export class DelegationCheckpointBuilder {
     if (record.sequence !== this.appliedSequence + 1) refuse('fold-refused', `record ${record.sequence} does not follow the applied sequence ${this.appliedSequence}`);
     if (record.previousDigest !== this.appliedDigest) refuse('fold-refused', `record ${record.sequence} does not chain from the applied digest`);
     const entry = record.entry;
-    if (entry.kind === 'evidence-accepted') this.foldEvidence(record, entry.event, true);
-    else this.foldLease(record, entry);
+    switch (entry.kind) {
+      case 'evidence-accepted': this.foldEvidence(record, entry.event, true); break;
+      case 'lease-created': this.foldLease(record, entry); break;
+      case 'lease-transition': case 'lease-released': case 'lease-carrier-seen': this.foldLeaseKind(record, entry); break;
+    }
     this.appliedSequence = record.sequence;
     this.appliedJournalId = record.journalId;
     this.appliedDigest = record.digest;
@@ -823,7 +888,13 @@ export class DelegationCheckpointBuilder {
   observeRecord(record: DelegationJournalRecordV1): void {
     const entry = record.entry;
     if (entry.kind === 'evidence-accepted') this.foldEvidence(record, entry.event, false);
-    else this.leaseFacts.set(entry.leaseId, { sequence: record.sequence, journalId: record.journalId, entry });
+    else if (entry.kind === 'lease-created') this.leaseFacts.set(entry.leaseId, { sequence: record.sequence, journalId: record.journalId, entry });
+    else this.noteLeaseRecord(record, entry);
+  }
+
+  private noteLeaseRecord(record: DelegationJournalRecordV1, entry: Exclude<DelegationJournalEntryV1, { kind: 'evidence-accepted' | 'lease-created' }>): void {
+    const prior = this.leaseRecords.get(entry.leaseId) ?? [];
+    this.leaseRecords.set(entry.leaseId, [...prior, { sequence: record.sequence, journalId: record.journalId, writesGeneration: entry.kind !== 'lease-carrier-seen' }]);
   }
 
   private touchSession(e: DelegationEventEnvelopeV1): void {
@@ -1114,6 +1185,53 @@ export class DelegationCheckpointBuilder {
     this.leaseFacts.set(e.leaseId, { sequence: record.sequence, journalId: record.journalId, entry: e });
   }
 
+  /**
+   * Wave 5 (PR5a): one record of the three lease kinds, folded through the ONE decision (`delegation-lease-state.ts`, the replay
+   * passing `carrierRequired: false`). A refusal (an unknown lease, a skipped or repeated generation, a state the table does not
+   * allow, fields that contradict the decision) is `fold-refused`, so recovery stays `reconstructing` rather than fold it. A release
+   * frees the lease's identity and canonical path for a later lease.
+   */
+  private foldLeaseKind(record: DelegationJournalRecordV1, e: Exclude<DelegationJournalEntryV1, { kind: 'evidence-accepted' | 'lease-created' }>): void {
+    const lease = this.leases.get(e.leaseId);
+    if (e.kind === 'lease-carrier-seen') {
+      const seen = foldLeaseCarrierSeen(lease, e);
+      if (!seen.ok) refuse('fold-refused', `record ${record.sequence}: ${seen.refusal}: ${seen.detail}`);
+      this.leases.set(e.leaseId, seen.lease);
+      this.noteLeaseRecord(record, e);
+      return;
+    }
+    const carrier = this.carriers.get(e.leaseId);
+    const lineage = [...this.lineage.values()];
+    const out = e.kind === 'lease-transition'
+      ? foldLeaseTransition({ lease, carrier, lineage, entry: e, sequence: record.sequence,
+        runLineageId: (runId) => deriveDelegationRunLineageId({ leaseId: e.leaseId, parentId: lease?.parentId ?? '', parentIncarnation: lease?.parentIncarnation ?? '', runId }) })
+      : foldLeaseRelease({ lease, carrier, lineage, entry: e, sequence: record.sequence });
+    if (!out.ok) refuse('fold-refused', `record ${record.sequence}: ${out.refusal}: ${out.detail}`);
+    const { fold } = out;
+    for (const n of fold.lineage) {
+      const prior = this.lineage.get(n.lineageId);
+      if (prior !== undefined && prior.closedAt === null && n.closedAt === null) refuse('fold-refused', `record ${record.sequence} reopens lineage ${n.lineageId}`);
+      if (prior !== undefined && n.closedAt === null) refuse('fold-refused', `record ${record.sequence} opens lineage ${n.lineageId}, which exists`);
+      this.lineage.set(n.lineageId, n);
+    }
+    if (fold.lease.releasedAt !== null && lease?.releasedAt === null) {
+      const ik = delegationLeaseIdentityKey(fold.lease);
+      if (this.leaseByIdentity.get(ik) === e.leaseId) this.leaseByIdentity.delete(ik);
+      if (this.leaseByPath.get(fold.lease.canonicalPath) === e.leaseId) this.leaseByPath.delete(fold.lease.canonicalPath);
+    }
+    // D-7973 (review 1451 F13): the floor folds every effect a later writer's entry has, so `adopt` keeps the parent's identity
+    // alive here, not in PR7: `retained-lineage` joins the effective basis of the lease's parent row (spec §5.1), and nothing removes it.
+    if (e.kind === 'lease-transition' && e.reason === 'adopt') {
+      const k = sessionKeyOf(fold.lease.parentId, fold.lease.parentIncarnation);
+      const parent = this.sessions.get(k);
+      if (parent === undefined) refuse('fold-refused', `record ${record.sequence} adopts lease ${e.leaseId}, whose parent (${fold.lease.parentId}, ${fold.lease.parentIncarnation}) has no session row`);
+      this.sessions.set(k, withDelegationIntentSource(parent, 'retained-lineage'));
+    }
+    this.leases.set(e.leaseId, fold.lease);
+    if (fold.carrier === null) this.carriers.delete(e.leaseId); else this.carriers.set(e.leaseId, fold.carrier);
+    this.noteLeaseRecord(record, e);
+  }
+
   // ── checkpoint-only state ──────────────────────────────────────────────────────────────────────────────────────────
 
   /** Sets a bucket's cursor row. `replaced` is MONOTONIC (R36): a result computed from a stale state can never write `false` over a
@@ -1248,7 +1366,7 @@ export class DelegationCheckpointBuilder {
   /**
    * Every pruning hold the state implies, recomputed from the rows and the complete journal's facts (never carried over):
    *   - `checkpoint-anchor`: the applied record, so the anchor can always be verified;
-   *   - `open-lease`: each unreleased lease's creating record and its correlation evidence;
+   *   - `open-lease`: each unreleased lease's creating record, its correlation evidence and every record of its lease kinds;
    *   - `open-lineage`: each open lineage edge's references (its lease's creating record and evidence, or its activity's identity record);
    *   - `identity-candidate`: the earliest retained record naming each AGENT no qualifying join has opened (a bare occurrence, or a
    *     start-less stop until `DELEGATION_STOP_CANDIDATE_HORIZON_MS` passes, D-6270), and the first listing-carrying PreToolUse of each
@@ -1264,9 +1382,12 @@ export class DelegationCheckpointBuilder {
     const holds = new Map<string, DelegationPruningHold>();
     const add = (h: DelegationPruningHold): void => { holds.set(JSON.stringify([h.reason, h.journalId, h.ownerId]), h); };
     if (this.appliedJournalId !== null) add({ journalId: this.appliedJournalId, reason: 'checkpoint-anchor', ownerId: 'checkpoint' });
+    // A lease's records: its creating record, its correlation evidence, and (wave 5) every retained record of its lease kinds, so a
+    // compaction carries a transition while its lease is open (K1) and recovery can prove the lease's generation from the journal.
     const leaseEvidence = (leaseId: string): string[] => {
       const f = this.leaseFacts.get(leaseId);
-      return f === undefined ? [] : [f.journalId, ...f.entry.correlationJournalIds];
+      const own = (this.leaseRecords.get(leaseId) ?? []).map((r) => r.journalId);
+      return f === undefined ? own : [f.journalId, ...f.entry.correlationJournalIds, ...own];
     };
     for (const l of this.leases.values()) {
       if (l.releasedAt !== null) continue;
@@ -1300,8 +1421,10 @@ export class DelegationCheckpointBuilder {
       sessions: rows.sessions, attempts: rows.attempts, activities: rows.activities, leases: rows.leases, lineage: rows.lineage,
       bucketCursors: sortedBy(this.cursors.values(), cursorKeyOf), observationIntervals: sortedBy(this.intervals.values(), intervalKeyOf),
       pruningHolds: this.computeHolds(),
+      // Absent when empty, so a checkpoint with no lease transition is byte-identical to wave 4's.
+      ...(this.carriers.size === 0 ? {} : { leaseCarriers: sortedBy(this.carriers.values(), (c) => c.leaseId) }),
     };
-    validateDelegationCheckpoint(cp, this.leaseFacts);
+    validateDelegationCheckpoint(cp, this.leaseFacts, this.leaseRecords);
     return cp;
   }
 }
@@ -1731,10 +1854,16 @@ async function deleteEventsInGaps(projection: DelegationProjectionPort, through:
 function checkpointWithoutSessions(cp: DelegationCheckpointV1, drifted: readonly { sessionId: string; incarnation: string }[]): DelegationCheckpointV1 {
   const gone = new Set(drifted.map((k) => sessionKeyOf(k.sessionId, k.incarnation)));
   const keep = (r: { parentId: string; parentIncarnation: string }): boolean => !gone.has(sessionKeyOf(r.parentId, r.parentIncarnation));
+  const leases = cp.leases.filter(keep);
+  const kept = new Set(leases.map((l) => l.leaseId));
+  const carriers = (cp.leaseCarriers ?? []).filter((c) => kept.has(c.leaseId));
+  const { leaseCarriers: _dropped, ...rest } = cp;
   return {
-    ...cp,
+    ...rest,
     sessions: cp.sessions.filter((s) => !gone.has(sessionKeyOf(s.sessionId, s.parentIncarnation))),
-    attempts: cp.attempts.filter(keep), activities: cp.activities.filter(keep), leases: cp.leases.filter(keep), lineage: cp.lineage.filter(keep),
+    attempts: cp.attempts.filter(keep), activities: cp.activities.filter(keep), leases, lineage: cp.lineage.filter(keep),
+    // A carrier row leaves with its lease (wave 5): one left behind would be a row with no lease, which `assertLeases` refuses.
+    ...(carriers.length === 0 ? {} : { leaseCarriers: carriers }),
   };
 }
 
@@ -2424,9 +2553,12 @@ export class DelegationDurability {
               refuse('change-refused', `a change dropped or altered the identity of the activity ${a.activityId}: its ID, parent, source, upstream ID, identity journalId and opening instant are immutable (O4)`);
             }
           }
-          const leaseState = (cp: DelegationCheckpointV1): string => canonicalDelegationJson([cp.leases, cp.lineage.filter((n) => n.leaseId !== null)]);
+          // Every lease fact stays journal-first (plan, line 7): the leases, their carrier rows (a transfer, a promotion, a release reason,
+          // a resolution mark) and the lineage a lease or a promoted run owns. Only the journal writes them (review 1451 F3).
+          const leaseState = (cp: DelegationCheckpointV1): string => canonicalDelegationJson([cp.leases, cp.leaseCarriers ?? [],
+            cp.lineage.filter((n) => n.leaseId !== null || n.runId !== null)]);
           if (leaseState(after) !== leaseState(before)) {
-            refuse('change-refused', 'a checkpoint-only change cannot add or alter a lease or a lease\'s lineage: the journal alone creates leases');
+            refuse('change-refused', 'a checkpoint-only change cannot add or alter a lease, its carrier row or the lineage a lease or a run owns: the journal alone writes them');
           }
           b.replaceRows(after);
         },

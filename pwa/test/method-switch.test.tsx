@@ -34,8 +34,10 @@ const lane = (id: string, over: Partial<RosterWire> = {}): RosterWire => ({
 const CONNECT = (): AccountsConnect => ({
   accountOps: 'available', gate: 'armed', origin: 'https', caps: [...ACCOUNT_CAPS], stepUpFreshUntil: Date.now() + 3_600_000,
 });
+/** A lane with a passing check: the one shape on which the switch says the lane keeps what it has (D-7872 (10)). */
 const SIGNED_IN: LaneWire = {
-  state: { word: 'signed-in', source: 'checked just now' }, ready: true, identity: 'someone@example.invalid', identitySource: 'measured',
+  state: { word: 'signed-in', source: 'checked just now' }, ready: true, check: { verdict: 'ok', at: Date.now() - 60_000 },
+  identity: 'someone@example.invalid', identitySource: 'measured',
 };
 const onB = fleetSession({ id: 'lane-b:p-one', wrapper: 'lane-b', home: 'lane-b', project: 'p-one', title: 'one' });
 const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
@@ -172,7 +174,7 @@ describe('where the switches are offered (spec §4.2, §4.4; Q1)', () => {
     await settle();
     expect(b.client.accountAuthCancel).toHaveBeenCalledWith('lane-c', { attemptId: ATTEMPT });
     // What did not happen, said; nothing checked, set or signed out.
-    const said = switchEnd('lane-c', 'login', 'cancelled');
+    const said = switchEnd('lane-c', 'login', 'cancelled', undefined, 'kept');
     expect(said).toContain('still uses its token');
     expect(screen.getAllByText(said).length).toBeGreaterThan(0);
     expect(b.client.accountCheck).not.toHaveBeenCalled();
@@ -203,7 +205,7 @@ describe('Switch to a long-lived token (spec §9, N5)', () => {
 
     // A session that started on the sign-in is listed: the sign-out is a danger confirm, which sends nothing yet.
     fireEvent.click(screen.getByRole('button', { name: SIGN_OLD_OUT }));
-    expect(screen.getByText(signOldOutDanger(1, 'lane-b'))).toBeInTheDocument();
+    expect(screen.getByText(signOldOutDanger(1, 'lane-b', 'kept'))).toBeInTheDocument();
     expect(screen.getByRole('button', { name: SIGN_OLD_OUT_ANYWAY }).className).toMatch(/btn-danger/);
     expect(b.client.accountSignOut).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Keep it' }));
@@ -213,7 +215,7 @@ describe('Switch to a long-lived token (spec §9, N5)', () => {
     await waitFor(() => expect(props.ensure).toHaveBeenCalledWith('lane-b:p-one'));
     expect(b.client.stop).toHaveBeenCalledWith('lane-b:p-one');
     expect(await screen.findByText('restarted')).toBeInTheDocument();
-    expect(screen.queryByText(signOldOutDanger(1, 'lane-b'))).toBeNull();
+    expect(screen.queryByText(signOldOutDanger(1, 'lane-b', 'kept'))).toBeNull();
     expect(screen.queryByRole('button', { name: SIGN_OLD_OUT_ANYWAY })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: SIGN_OLD_OUT }));
     await waitFor(() => expect(b.client.accountSignOut).toHaveBeenCalledWith('lane-b'));
@@ -242,8 +244,8 @@ describe('Switch to a long-lived token (spec §9, N5)', () => {
     await settle();
     b.box.status = { ...b.box.status, state: 'failed' };
     await poll();
-    expect(screen.getAllByText(switchEnd('lane-b', 'setup-token', 'code-refused')).length).toBeGreaterThan(0);
-    expect(switchEnd('lane-b', 'setup-token', 'code-refused')).toContain('still uses its sign-in');
+    expect(screen.getAllByText(switchEnd('lane-b', 'setup-token', 'code-refused', undefined, 'kept')).length).toBeGreaterThan(0);
+    expect(switchEnd('lane-b', 'setup-token', 'code-refused', undefined, 'kept')).toContain('still uses its sign-in');
     expect(b.client.accountCheck).not.toHaveBeenCalled();
     expect(b.client.accountSignOut).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Start again' })).toBeInTheDocument();

@@ -6618,7 +6618,9 @@ export interface RunHealth {
    *  that has already been handled.
    *
    *  NOT the parked STATE below: this count is the older sense of the word, a
-   *  delivery the lane gave up on and rejected, and it stays exactly that. */
+   *  delivery the lane gave up on and rejected, and it stays exactly that. A park a
+   *  later delivery revives (D-5914) is not counted: its heir carries the message
+   *  now, in `mailOutstanding` until it is acked, so one message is one count. */
   readonly mailParked: number;
   /** Deliveries of this run's mail still OUTSTANDING and PARKED (D-5838,
    *  #754; a field of its own, not a second sense of `mailParked`, D-5839): the recipient is alive, its input box would not take the
@@ -6876,8 +6878,14 @@ export interface RunSummary {
   dispatchedAt: number | null;
   closedAt: number | null;
   handoffCommit: string | null;
+  /** The run's work items as the COORDINATOR has settled them (`itemTally`): `done` counts items acked `done`, which
+   *  the coordinator does only after a verified advance, so a wave in progress reads `0/N` by design however far its
+   *  branch has moved (spec 2026-10-20 §3.3, D-5914). It is not a measure of branch progress or of the worker's life;
+   *  the branch fingerprint the coordinator re-measures is. */
   items: RunItemTally;
-  /** Unacked mail addressed to this run's session. */
+  /** Unacked mail addressed to this run's session: every outstanding delivery, plus every abandoned park on the open run
+   *  that no later delivery revives (`ABANDONED_PARK_SQL`, `coord/store.ts`). A revived park is counted once, as its
+   *  outstanding heir, and not at all once that heir is acked (D-5914). */
   unreadMail: number;
 
   /**
@@ -11634,10 +11642,12 @@ export type DelegationAttemptVerdict = (typeof DELEGATION_ATTEMPT_VERDICTS)[numb
 // Declared ONCE, here; the server decides every word (`server/src/coord/delegation-projection.ts`) and a reader renders
 // it. Each closed set has a sibling `Record<X, true>` map and a list derived from it. This block imports nothing (L0).
 
-/** How delegated work reads NOW, decided at projection time and never stored. `live`: running, and its parent is alive
- *  in the incarnation that started it. `stale`: recorded as running, but its parent is gone, dead or in another
- *  incarnation (its stop was not seen). `ended`: its terminal evidence was seen. `unmeasured`: its execution state is
- *  `unknown`, or its parent's incarnation was not measured. */
+/** What the broker RECORDED about delegated work, decided at projection time and never stored. None of these words
+ *  measures the helper itself (delegation visibility, spec §1), so no reader draws one as "running" or "recent".
+ *  `live`: its end is not recorded and its parent is live in the incarnation that started it; execution is NOT
+ *  confirmed. `stale`: its end is not recorded, and its parent is gone, dead or in another incarnation (its stop was
+ *  not seen). `ended`: its terminal evidence was seen. `unmeasured`: its execution state is `unknown`, or its parent's
+ *  incarnation was not measured. */
 export type DelegationLiveness = 'live' | 'stale' | 'ended' | 'unmeasured';
 const DELEGATION_LIVENESS_MAP: Record<DelegationLiveness, true> = { live: true, stale: true, ended: true, unmeasured: true };
 export const DELEGATION_LIVENESS: readonly DelegationLiveness[] = Object.keys(DELEGATION_LIVENESS_MAP) as DelegationLiveness[];
@@ -11684,7 +11694,9 @@ export interface DelegationActivityWire {
   group: DelegationRowGroup;
   placement: DelegationActivityPlacement;
   sourceKind: Exclude<DelegationActivitySourceKind, 'bash-worktree'>;
-  /** The agent id, or the workflow run id (a worker's is `<runId>-<index>`), so a reader can group a run's workers. */
+  /** The agent id, or the workflow run id. Display text only: its spelling (a workflow worker's reads
+   *  `<runId>-<index>`) is no membership, run or worker-composition key, and no reader groups by it (delegation
+   *  visibility, spec §2). */
   upstreamId: string;
   /** Free text from the session's own events: the server masks the frame. */
   displayName: string | null;
@@ -11757,6 +11769,24 @@ export const LEASE_MARK_REFUSALS = ['usage', 'unmeasured', 'busy', 'bad-carrier'
   'not-under-projects-root', 'no-tree', 'symlink', 'main-worktree', 'locked', 'registered', 'nested', 'tree-held',
   'fingerprint-mismatch'] as const;
 export type LeaseMarkRefusal = (typeof LEASE_MARK_REFUSALS)[number];
+/** `ws-lease-audit`'s refusal words (delegation broker wave 5, PR2), the server's one reader of them. */
+export const LEASE_AUDIT_REFUSALS = ['usage', 'unmeasured', 'no-carrier', 'bad-carrier', 'stale-generation', 'no-tree',
+  'fingerprint-mismatch'] as const;
+export type LeaseAuditRefusal = (typeof LEASE_AUDIT_REFUSALS)[number];
+/** `ccd ws-lease-audit`'s one JSON document: the read-only measure of a leased tree (`ccd/lib/delegation-lease.sh#cmd_ws_lease_audit`).
+ *  A fact that did not read is `'unmeasured'`, never `false` or 0. `dirty` counts an edit to an assume-unchanged or
+ *  skip-worktree path (D-7975). `aheadOfBase` counts the creation base to the tip; `branchAheadOfBase` counts it to the
+ *  branch the carrier records (D-7976): `'no-branch'` when the carrier records none, `'branch-gone'` when the recorded branch
+ *  is PROVEN no longer to exist, never 0 for either. `changed` is `true` when any one fact proves a change, `'unmeasured'`
+ *  when none does and one did not read (a gone branch included), `false` only when every fact is proven clean or zero; and
+ *  `'unmeasured'`, with `detail`, when the tree moved while it was read (the only time `detail` is present). `holders` is
+ *  present only when the audit was asked `--holders`. `token` binds every fact here, `holders` and whether it was asked
+ *  included (D-7977), and whether the tree moved; it is evidence the promotion records, spent by no verb (D-7826). */
+export type LeaseAuditAnswer =
+  | { ok: true; lease: string; generation: number; tip: string; dirty: boolean | 'unmeasured';
+      aheadOfBase: number | 'unmeasured'; branchAheadOfBase: number | 'unmeasured' | 'no-branch' | 'branch-gone';
+      changed: boolean | 'unmeasured'; detail?: string; holders?: readonly number[] | 'unmeasured'; token: string }
+  | { ok: false; refusal: LeaseAuditRefusal; detail: string };
 
 /** The keys every spool line carries. A line is evidence and never authority; the hook decides nothing about
  *  parentage. `truncated` marks a line whose optional fields were dropped to fit its size bound. */

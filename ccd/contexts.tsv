@@ -173,6 +173,9 @@ cmd_account_pane	C1
 cmd_route	C1
 _reg_project_glob_has	C1
 cmd_project_pool	C1
+_project_new_name_ok	C4
+_project_github_url_ok	C4
+cmd_project_add	C4
 cmd_ws_archive	C4
 _ws_archive_manifest	C4
 cmd_ws_restore	C4
@@ -831,5 +834,9 @@ _dl_fingerprint	C4
 _dl_fingerprint_to	C4
 _dl_mark_refuse	C4
 _dl_in	C4
+_dl_count_ok	C4
 cmd_ws_lease_mark	C4
 _dl_mark_locked	C4
+cmd_ws_lease_audit	C4
+_dl_audit_heads	C4
+_dl_audit_ladder	C4

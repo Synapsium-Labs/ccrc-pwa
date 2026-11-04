@@ -1893,6 +1893,8 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "timeout": "PASS",
   "tmux": "PASS",
   "tmux_skew": "PASS",
+  // D-7898: PASS at every stage: a fresh fleet box's config dirs keep nothing outside Claude Code's transcript shapes.
+  "transcript_work": "PASS",
   "transcripts": "PASS",
   "update-exposure": "SKIP",
   "update-sweep": "SKIP",

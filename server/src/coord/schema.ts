@@ -1407,7 +1407,7 @@ export const MIGRATIONS: readonly string[] = [
   //     upserts the staying sessions in place, and inserts the activities, attempts, leases and lineage. An ordinary
   //     application that only adds rows and updates some does less: `CoordStore.projectDelegationCheckpointChanges` writes
   //     just the changed rows (a compare-and-swap UPDATE each, a plain INSERT for each new row) and holds the five tables to
-  //     the new checkpoint's row counts, falling back to the full projection for anything else; it never writes a lease. The checkpoint
+  //     the new checkpoint's row counts, falling back to the full projection for anything else; a lease row only ever UPDATEs there (a new lease takes the full projection). The checkpoint
   //     carries NO events, so `delegation_events` is journal-derived: only `CoordStore.insertDelegationEvent` and its batch
   //     `insertDelegationEvents` write it, a
   //     projection deletes the events of a session that leaves and touches no other, and a lost or damaged events table is
@@ -1418,8 +1418,8 @@ export const MIGRATIONS: readonly string[] = [
   //   - WAVE 3 WRITES A LEASE ROW ONLY BY REPLAYING A DURABLE `lease-created` ENTRY, and fixes generation 0, equal creating
   //     and current journal sequences, `ephemeral` disposition, `not-due` cleanup and every transition clock, evidence and
   //     carrier field to NULL. The DDL deliberately allows more (adoption, retention, promotion, cleanup, a carrier
-  //     generation, a release) because later waves fill those in; the WAVE-3 guard is `assertWave3Lease` in code, so the
-  //     schema never has to change to loosen it.
+  //     generation, a release) because later waves fill those in; the guard is `assertLease` in code (wave 3's, loosened by
+  //     wave 5's transitions), so the schema never has to change to loosen it.
   //   - THE TWO PARTIAL IDENTITY INDEXES on `delegation_leases` are one idea in two halves. SQLite treats NULLs in a UNIQUE
   //     index as distinct, so a single UNIQUE (project, adminRecord, creationBase, canonicalPath) would admit unlimited
   //     duplicates whose `creationBase` is NULL; one index per nullness avoids that, and both cover UNRELEASED rows only
@@ -2158,6 +2158,25 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE landing_entries ADD COLUMN quarantineKind TEXT DEFAULT NULL
     CHECK (quarantineKind IS NULL OR (quarantineKind = 'stale-episode-head' AND state = 'unknown'));
   INSERT INTO landing_journal_cursor (id, appliedSeq) VALUES (1, 0);
+  `,
+  // ── 40: user_version 39 -> 40 ─────────────────────────────────────────────
+  // A revived park's heir names its parent (D-5914, D-7901; spec 2026-10-20 §3.2, #125). `revivedFrom` is the id of
+  // the `rejected` delivery a later delivery of the same mail was queued to replace, once that parked row's recipient
+  // read live again. Its ONE writer is `CoordStore.queueDelivery`, called with a parent only by
+  // `reviveParkedDeliveries`; it is written at INSERT and never updated. Its readers are `HAS_HEIR_SQL` in `store.ts`,
+  // the one fragment both `ABANDONED_PARK_SQL` (a parent with an heir is not abandoned) and the revive's own select (no
+  // heir yet) read. NULL is "this row revives nothing", which every row before this entry is. The partial index serves
+  // that `EXISTS` lookup and holds only heirs.
+  //
+  // ONE NULLABLE COLUMN AND ONE PARTIAL INDEX, NOTHING ELSE: an older build opening a file at `user_version 40` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the column, and inserts with it NULL. It then
+  // counts a revived parent beside its heir again, which is #125's old reading and nothing worse. Every earlier entry
+  // is frozen. RE-MEASURE the slot before the PR and before merge (it must print 39 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail_deliveries ADD COLUMN revivedFrom INTEGER;
+  CREATE INDEX mail_deliveries_by_revived ON mail_deliveries(revivedFrom) WHERE revivedFrom IS NOT NULL;
   `,
 ];
 

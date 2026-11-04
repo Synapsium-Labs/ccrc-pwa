@@ -1,14 +1,16 @@
-// Delegation broker wave 4, PR2 Task 2.2: the delegation rows' words (`fleet/delegationWords.ts`). D-6999's inferred
-// chip on every raw worktree, member tolerance for a newer server's words, and the R9 chip's live-only count.
+// Delegation broker wave 4, PR2 Task 2.2, and delegation visibility Task 1: the delegation rows' words
+// (`fleet/delegationWords.ts`). D-6999's inferred chip, member tolerance, words that never say running (spec §4),
+// and a chip that counts every attached entry (D-7781).
 import { describe, expect, it } from 'vitest';
 import {
   DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_LEASE_SOURCE_KINDS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS,
-  DELEGATION_WORKSPACE_STATES, type DelegationLeaseWire,
+  DELEGATION_WORKSPACE_STATES, type DelegationActivityWire, type DelegationLeaseWire,
 } from '../../shared/api';
 import * as words from '../src/fleet/delegationWords';
 import {
-  ACTIVITY_WORD, GROUP_WORDS, LIVENESS_WORD, UNRECOGNISED_WORD, VERDICT_WORD, WORKSPACE_WORD, WORKTREE_WORD,
-  creatorChip, delegatedChip, delegationParts, inferredChip, liveActivitiesOf, readDelegation, worktreeLine,
+  ACTIVITY_WORD, ENTRIES_NOTE, GROUP_WORDS, LIVENESS_QUALIFIER, UNRECOGNISED_WORD, VERDICT_WORD, WORKSPACE_WORD,
+  WORKTREE_WORD, activitiesStartedBy, activityLine, creatorChip, delegatedChip, delegationParts, fromPart, inferredChip,
+  readDelegation, unlistedToggle, worktreeLine,
 } from '../src/fleet/delegationWords';
 import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
 
@@ -83,15 +85,23 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
     expect(worktreeLine(tree.get('l2')!, null, null).parts).not.toContain('running');
   });
 
-  it('W4-U8: the R9 chip counts live members only, and is null with none', () => {
-    const two = [activity({ activityId: 'a1', displayName: 'map the tree' }), activity({ activityId: 'a2', displayName: null })];
-    const chip = delegatedChip(two)!;
-    expect(chip.text).toBe('2 delegated');
-    expect(chip.title).toContain('map the tree');
-    expect(chip.title).toContain('agent');
-    expect(delegatedChip([...two, activity({ activityId: 'a3', liveness: 'stale' }), activity({ activityId: 'a4', liveness: 'unmeasured' })])!.text)
-      .toBe('2 delegated');
-    expect(delegatedChip([activity({ liveness: 'stale' }), activity({ liveness: 'unmeasured' })])).toBeNull();
+  it('W4-U8 (D-7781): the chip counts every entry of every liveness, says none is confirmed, and is null with none', () => {
+    const three = [
+      activity({ activityId: 'a3', displayName: 'check the build', liveness: 'unmeasured', openedAt: '2026-10-26T10:02:00.000Z' }),
+      activity({ activityId: 'a1', displayName: 'map the tree' }),
+      activity({ activityId: 'a2', displayName: null, liveness: 'stale', openedAt: '2026-10-26T10:01:00.000Z' }),
+    ];
+    const chip = delegatedChip(three)!;
+    expect(chip.text).toBe('3 delegated');
+    expect(chip.count).toBe(3);
+    expect(chip.title).toBe('3 recorded delegation entries, not a current agent count; execution not confirmed');
+    expect(chip.note).toBe(ENTRIES_NOTE);
+    expect(chip.rows.map((r) => r.key)).toEqual(['a1', 'a2', 'a3']);
+    expect(chip.rows.map((r) => r.parts)).toEqual([
+      ['agent', 'map the tree', 'not confirmed'], ['agent', 'stop not seen'], ['agent', 'check the build', 'unmeasured'],
+    ]);
+    expect(delegatedChip([activity({ liveness: 'stale' })])!.title)
+      .toBe('1 recorded delegation entry, not a current agent count; execution not confirmed');
     expect(delegatedChip([])).toBeNull();
   });
 
@@ -101,7 +111,7 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
     expect(plain.parts.some((p) => p.startsWith('via '))).toBe(false);
     expect(plain.sourceProject).toBeNull();
     expect(plain.parts).not.toContain('unmeasured');
-    expect(plain.title).toBe(l.canonicalPath);
+    expect(plain.title).toBe(`${l.canonicalPath}; ${LIVENESS_QUALIFIER.live.title}`);
     expect(worktreeLine(l, 'worker-a', null).parts).toContain('via worker-a');
     expect(worktreeLine(l, null, 'project-b').sourceProject).toBe('project-b');
     expect(worktreeLine(lease({ workspace: 'unmeasured' }), null, null).parts).toContain('unmeasured');
@@ -121,7 +131,7 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
     expect(strings.length).toBeGreaterThan(20);
     for (const s of strings) expect(s, s).not.toMatch(/lease|adopt|retain|clean|spool/i);
 
-    expect(Object.keys(LIVENESS_WORD).sort()).toEqual([...DELEGATION_LIVENESS].sort());
+    expect(Object.keys(LIVENESS_QUALIFIER).sort()).toEqual([...DELEGATION_LIVENESS].sort());
     expect(Object.keys(WORKTREE_WORD).sort()).toEqual([...DELEGATION_LEASE_SOURCE_KINDS].sort());
     expect(Object.keys(WORKSPACE_WORD).sort())
       .toEqual(DELEGATION_WORKSPACE_STATES.filter((s) => !['none', 'provisioning', 'absent'].includes(s)).sort());
@@ -131,9 +141,87 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
     expect(DELEGATION_ACTIVITY_PLACEMENTS).toEqual(['row', 'chip']);
   });
 
-  it('liveActivitiesOf selects every activity a session started, whatever its placement', () => {
+  it('VIS-W3: activitiesStartedBy selects every entry a session started, whatever its placement or liveness', () => {
     const w = frame({ activities: [activity({ activityId: 'a1', parentId: 'worker-a', placement: 'chip' }),
-      activity({ activityId: 'a2', parentId: 'worker-a', placement: 'row' }), activity({ activityId: 'a3', parentId: 'coord-a' })] });
-    expect(liveActivitiesOf('worker-a', w).map((a) => a.activityId)).toEqual(['a1', 'a2']);
+      activity({ activityId: 'a2', parentId: 'worker-a', placement: 'row', liveness: 'stale' }),
+      activity({ activityId: 'a3', parentId: 'coord-a' })] });
+    expect(activitiesStartedBy('worker-a', w).map((a) => a.activityId)).toEqual(['a1', 'a2']);
+  });
+
+  it('VIS-W1: no delegation word says running; live, stale and unmeasured read apart; the qualifier is total', () => {
+    const strings: string[] = [];
+    const collect = (v: unknown): void => {
+      if (typeof v === 'string') strings.push(v);
+      else if (typeof v === 'object' && v !== null) for (const x of Object.values(v)) collect(x);
+    };
+    collect(Object.fromEntries(Object.entries(words).filter(([, v]) => typeof v !== 'function')));
+    for (const liveness of DELEGATION_LIVENESS) {
+      collect(worktreeLine(lease({ liveness }), 'worker-a', 'project-b', 'coord-a'));
+      if (liveness !== 'ended') collect(activityLine(activity({ liveness }), 'coord-a'));
+    }
+    collect(delegatedChip([activity(), activity({ activityId: 'a2', liveness: 'stale' })]));
+    collect(unlistedToggle(3));
+    expect(strings.length).toBeGreaterThan(30);
+    // Spec §9's "No running claim", and §4's forbidden totals and phrases.
+    for (const s of strings) expect(s, s).not.toMatch(/running|\bactive\b|recent|couldn't check|check deferred/i);
+    expect(Object.keys(LIVENESS_QUALIFIER).sort()).toEqual([...DELEGATION_LIVENESS].sort());
+    for (const l of DELEGATION_LIVENESS) {
+      expect(LIVENESS_QUALIFIER[l].word.length, l).toBeGreaterThan(0);
+      expect(LIVENESS_QUALIFIER[l].title.length, l).toBeGreaterThan(20);
+    }
+    const word = (liveness: DelegationActivityWire['liveness']): string =>
+      activityLine(activity({ liveness, displayName: null })).parts[1]!;
+    expect((['live', 'stale', 'unmeasured'] as const).map(word)).toEqual(['not confirmed', 'stop not seen', 'unmeasured']);
+    expect(worktreeLine(lease({ liveness: 'ended' }), null, null).parts[2]).toBe('end recorded');
+    // A newer server's liveness word is re-filed unmeasured by the reader, never drawn as live.
+    const future = readDelegation(frame({ activities: [activity({ liveness: 'future-word' as never })] })).activities[0]!;
+    expect(activityLine(future).parts).toContain('unmeasured');
+    expect(activityLine(future).parts).not.toContain('not confirmed');
+    // The line's own fallback, with no reader in front of it (`qualifierOf`; VIS-M10): still unmeasured, never live.
+    const direct = activityLine(activity({ liveness: 'future-word' as never, displayName: null }));
+    expect(direct.parts).toEqual(['agent', 'unmeasured']);
+    expect(direct.title).toContain(LIVENESS_QUALIFIER.unmeasured.title);
+    const directTree = worktreeLine(lease({ liveness: 'future-word' as never }), null, null);
+    expect(directTree.parts).toEqual(['agent worktree', 'agent-a1', 'unmeasured']);
+    expect(directTree.title).toBe(`${lease().canonicalPath}; ${LIVENESS_QUALIFIER.unmeasured.title}`);
+  });
+
+  it('VIS-W2: titles name the qualifier and hook events; a from part names the session, last', () => {
+    const a = activityLine(activity());
+    expect(a.title).toBe(`agent agent-a1: ${LIVENESS_QUALIFIER.live.title}; opened 2026-10-26T10:00:00.000Z, `
+      + 'last recorded hook event 2026-10-26T10:05:00.000Z');
+    expect(a.title).not.toMatch(/last event/);
+    expect(a.parts).toEqual(['agent', 'explore the tree', 'not confirmed']);
+    expect(activityLine(activity(), 'coord-a').parts).toEqual(['agent', 'explore the tree', 'not confirmed', 'from coord-a']);
+    expect(worktreeLine(lease({ workspace: 'unmeasured' }), 'worker-a', null, 'coord-gone').parts)
+      .toEqual(['agent worktree', 'agent-a1', 'not confirmed', 'via worker-a', 'unmeasured', 'from coord-gone']);
+    expect(fromPart('coord-a')).toBe('from coord-a');
+    expect(unlistedToggle(2)).toBe('Delegated work, session not listed (2)');
+  });
+
+  it('VIS-W4 (review 1424 f): a member with no string openedAt or activityId sorts first and never throws', () => {
+    const bad = activity({ activityId: 'a-bad', openedAt: undefined as never });
+    const noId = activity({ activityId: 42 as never, openedAt: '2026-10-26T10:01:00.000Z' });
+    const good = activity({ activityId: 'a1' });
+    const w = readDelegation(frame({ activities: [good, noId, bad] }));
+    expect(() => delegatedChip(w.activities)).not.toThrow();
+    expect(delegatedChip(w.activities)!.rows.map((r) => r.key)).toEqual(['a-bad', 'a1', 42]);
+    expect([...w.activities].sort(words.byOpened).map((a) => a.activityId)).toEqual(['a-bad', 'a1', 42]);
+  });
+
+  it('VIS-W5 (review 1431 F3): nameAt points at the one free-text part of each line, and only there', () => {
+    const named = activityLine(activity({ displayName: 'map the tree' }), 'coord-a');
+    expect(named.nameAt).toBe(1);
+    expect(named.parts[named.nameAt!]).toBe('map the tree');
+    expect(activityLine(activity({ displayName: null })).nameAt).toBeNull();
+    expect(activityLine(activity({ displayName: '' })).nameAt).toBeNull();
+    const tree = worktreeLine(lease({ adminRecord: 'agent-x9' }), 'worker-a', null, 'coord-gone');
+    expect(tree.nameAt).toBe(1);
+    expect(tree.parts[tree.nameAt!]).toBe('agent-x9');
+    const u = words.unownedLine(unowned({ adminRecord: 'agent-u9' }));
+    expect(u.nameAt).toBe(0);
+    expect(u.parts[u.nameAt!]).toBe('agent-u9');
+    // The session header's rows carry it through.
+    expect(delegatedChip([activity({ displayName: 'read the plan' })])!.rows[0]!.nameAt).toBe(1);
   });
 });

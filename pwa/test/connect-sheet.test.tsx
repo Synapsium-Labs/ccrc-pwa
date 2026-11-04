@@ -12,7 +12,7 @@ import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ConnectSheet, type ConnectClient, type ConnectSheetProps } from '../src/accounts/ConnectSheet';
 import { defaultHue, methodChoices } from '../src/accounts/connectFlow';
 import {
-  DOOR_NARROWED, LEDGER, METHOD_LINES, NEEDS_FLEET_UPDATE, OUTCOME_UNKNOWN, READ_AGAIN, notFoundAfterUnknown, offlineRefusal,
+  DOOR_NARROWED, LEDGER, METHOD_LINES, NOT_ON_THIS_FLEET_YET, OUTCOME_UNKNOWN, READ_AGAIN, notFoundAfterUnknown, offlineRefusal,
   resultDone, stillUnknownAfterUnknown,
 } from '../src/fleet/accountWords';
 import { ApiError, api } from '../src/lib/api';
@@ -148,7 +148,7 @@ describe('the door (D-5522)', () => {
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('button', { name: /Anthropic/ })).toBeInTheDocument();
     // OpenAI and OpenRouter narrow in place: their cap words are later waves'.
-    expect(within(dialog).getAllByText(NEEDS_FLEET_UPDATE)).toHaveLength(2);
+    expect(within(dialog).getAllByText('Not available on this fleet yet')).toHaveLength(2);
     expect(within(dialog).queryByRole('button', { name: /OpenAI/ })).toBeNull();
   });
 });
@@ -334,7 +334,7 @@ describe('Method (spec §6.1)', () => {
     for (const n of [/Mint a long-lived token/, /Sign in with Claude/]) {
       const r = screen.getByRole('radio', { name: n });
       expect(r).toBeDisabled();
-      expect(r.closest('label')).toHaveTextContent(NEEDS_FLEET_UPDATE);
+      expect(r.closest('label')).toHaveTextContent(NOT_ON_THIS_FLEET_YET);
     }
     cleanup();
     sheet({ table: A20, connect: withAuth });

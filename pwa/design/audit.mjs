@@ -994,6 +994,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the row's project cell, inside .archive-row on the same Section card ground (D-5102)",
   },
+  '.fleet-archived-row, .fleet-runs-row, .fleet-add-project-row': {
+    under: ['var(--bg-page)', 'var(--bg-surface)'],
+    why: "the fleet's three quiet footers, each a <BareRow> in FleetScreen's own <main class=\"fleet\">: the runs door (inside .fleet-runs-line, which paints nothing), the archived total and the Add project door (add-project spec 2026-11-04 §2). .fleet paints no background, so the ground is .shell-nav's: --bg-surface in Refined's desktop sidebar (the build line's corrected ground, below), --bg-page in Instrument's frame (instrument.css .ins-frame .shell-nav) and on a phone, where .shell-nav paints nothing and body's --bg-page shows. Its selectors name no painted ancestor, so no route could ground it. Measured when the third door joined, rather than the grandfathered key growing a member",
+  },
   '.archive-size': {
     under: ['var(--bg-surface)'],
     why: "the row's measured size, inside .archive-row on the same Section card ground; the tertiary ink is the one the fleet footer's .fleet-archived-row shows on the desktop sidebar's --bg-surface (D-5102)",
@@ -1152,6 +1156,16 @@ export const INHERITED_GROUNDS = {
   '.docs-crumb, .docs-crumbs-more': {
     under: ['var(--bg-page)'],
     why: "the crumb links and the phone's leading … button, in .docs-crumbs on the same unpainted .docs-head-bar as .docs-back, so the same --bg-page",
+  },
+  // The compact head (the phone-header plan of 2026-11-03): a leaf page's one row under 600 CSS px. Its row, label and
+  // panel paint nothing, so the full header's ground and reasoning hold.
+  '.docs-compact-where': {
+    under: ['var(--bg-page)'],
+    why: "the compact row's first line (the parent crumb and a served ref that is not origin's default, in .docs-compact-where-text, then the draft badge beside it), a flex line in the unpainted .docs-compact-label inside the unpainted .docs-compact-bar and .docs-head on .docs-screen, so --bg-page, the .docs-crumb reasoning; the badge paints its own ground",
+  },
+  '.docs-more': {
+    under: ['var(--bg-page)'],
+    why: "the compact row's Page details button while closed: `background: none` in the unpainted .docs-compact-bar, so --bg-page, as .docs-back beside it. Open, `.docs-more[aria-expanded='true']` paints --bg-pressed with --ink-primary and is measured on that ground as a self-grounded rule of its own",
   },
   '.docs-truth': {
     under: ['var(--bg-page)'],
@@ -1330,6 +1344,11 @@ export const OPACITY_REGISTRY = {
     noText: 'an emoji glyph button with an aria-label; it carries its own bitmap palette, no token colour composites here, and the meaningful state (.bell--on) is opacity 1',
   },
   '.bell:disabled 0.35': { noText: 'WCAG 1.4.3 exempts inactive controls' },
+  // The compact Docs head (the phone-header plan of 2026-11-03): Share's or Export's icon while it waits. The icon is
+  // aria-hidden and the button's accessible name carries the words; the Page details panel shows them unfaded.
+  '.docs-compact-bar .docs-action:disabled 0.35': {
+    noText: 'WCAG 1.4.3 exempts inactive controls; a waiting Share or Export icon, whose words are its accessible name and an unfaded line in the Page details panel',
+  },
   '.pending-actions .pending-send-it:disabled 0.6': {
     noText: 'WCAG 1.4.3 exempts inactive controls; the button is disabled while its own Enter is in flight, and while the desk\'s inline ask card holds sends (D-6326, R96)',
   },

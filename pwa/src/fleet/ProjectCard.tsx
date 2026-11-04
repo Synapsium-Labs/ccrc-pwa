@@ -44,7 +44,8 @@ import { SessionLine, WorksOnChip } from './SessionLine';
 import { sameCardProps } from './lineProps';
 import { OPEN_RUNS } from './openers';
 import { sessionLabel } from './sessionLabel';
-import { GROUP_WORDS, activityLine, creatorChip, inferredChip, unownedLine, worktreeLine } from './delegationWords';
+import { WorkLine } from './WorkLine';
+import { GROUP_WORDS, activityLine, creatorChip, inferredChip, unownedLine, worktreeLine, type WorkWords } from './delegationWords';
 import { actionDoor } from '../command/door';
 import './fleet.css';
 
@@ -336,12 +337,16 @@ function ProjectCardView({
     }
     return out;
   };
-  // A worktree's `via` worker by its display name, or its raw id when the fleet does not carry it.
-  const viaLabel = (id: string | null): string | null => {
+  // A session by its display name, or its raw id when the fleet does not carry it: a worktree's `via` worker, and the
+  // session an offline-group row came from (delegation visibility, spec §5). Display only, never a join key.
+  const labelOf = (id: string | null): string | null => {
     if (id === null) return null;
     const s = coordOf(id);
     return s === null ? id : sessionLabel(s);
   };
+  /** The `from` label of a row in the offline group. A row under its own session names none. */
+  const fromOf = (rowGroup: DelegationGroupKind | null, parentId: string): string | null =>
+    rowGroup === 'offline-coordinator' ? labelOf(parentId) : null;
   // Task 5: the hold reason's door, decided HERE because this is the level that
   // holds the runs. `boundOpenRun` answers off the wire's binding and the run
   // rows — never by reading the id out of the hold string, which stays
@@ -405,32 +410,28 @@ function ProjectCardView({
   // session, a spawn or a delegation row (wave 4); the rollup's summary row is read only as that footer's state
   // (`trayOf`), or, for a head outside a box, as its own line (`summaryLine`).
   /** A delegation row's words, each a cell of one line (delegation broker wave 4). `delegationWords.ts` spells them. */
-  const workLine = (parts: readonly string[], title: string, tail: ReactNode = null): ReactNode => (
-    <div className="proj-work" title={title}>
-      <span className="proj-work-parts">
-        {parts.map((p, i) => <span key={i} className="proj-work-part">{p}</span>)}
-      </span>
-      {tail}
-    </div>
+  const workLine = (line: WorkWords, tail: ReactNode = null): ReactNode => (
+    <WorkLine parts={line.parts} title={line.title} nameAt={line.nameAt}>{tail}</WorkLine>
   );
 
   const rowBody = (row: FleetRow): ReactNode => {
     if (row.kind === 'activity') {
-      const a = activityLine(row.activity);
-      return workLine(a.parts, a.title);
+      const a = activityLine(row.activity, fromOf(row.group, row.activity.parentId));
+      return workLine(a);
     }
     if (row.kind === 'lease') {
-      const w = worktreeLine(row.lease, viaLabel(row.via), workingOnCard({ project: row.lease.project }, group.project));
+      const w = worktreeLine(row.lease, labelOf(row.via), workingOnCard({ project: row.lease.project }, group.project),
+        fromOf(row.group, row.lease.parentId));
       // D-6999: the chips are words, never colour alone, and nothing here acts on the row.
       const chips = [inferredChip(row.lease), creatorChip(row.lease)];
-      return workLine(w.parts, w.title, <>
+      return workLine(w, <>
         {w.sourceProject !== null && <WorksOnChip project={w.sourceProject} />}
         {chips.map((c, i) => c === null ? null : <span key={i} className="proj-work-chip" title={c.title}>{c.text}</span>)}
       </>);
     }
     if (row.kind === 'unowned') {
       const u = unownedLine(row.item);
-      return workLine(u.parts, u.title);
+      return workLine(u);
     }
     if (row.kind === 'delegation-group') {
       const open = groupOpen[row.group];

@@ -51,7 +51,7 @@
 
 ## Landing order
 
-PL1 → PL2 → PL3 → PL4 → PL5a → PL5b → PL6 → PL7 → PL8, with PL9 (operator steer of 2026-11-03) free to land before or after PL8. PL6 also waits for the Linear central-key plan's LK6 to merge (both edit `ACCOUNT_SECRET_PATHS` and the hook's account arm; rebase onto it, never edit around it). PL8 is GATED on that plan's LK1, LK2, LK11 and LK12 being merged; its Step 0 re-plans against them. PL10 (operator steer of 2026-11-04) lands after the console carry PR (#2258), whose files it shares.
+PL1 → PL2 → PL3 → PL4 → PL5a → PL5b → PL6 → PL7 → PL8, with PL9 (operator steer of 2026-11-03) free to land before or after PL8. PL6 also waits for the Linear central-key plan's LK6 to merge (both edit `ACCOUNT_SECRET_PATHS` and the hook's account arm; rebase onto it, never edit around it). PL8 is GATED on that plan's LK1, LK2, LK11 and LK12 being merged; its Step 0 re-plans against them. PL10 (operator steer of 2026-11-04) lands after the console carry PR (#2258), whose files it shares. PL11 (operator steer of 2026-11-04) lands after PL10.
 
 ---
 
@@ -322,7 +322,7 @@ Operator steer of 2026-11-04, spec §2, "Getting around on a phone", "The spec o
 
 **Files (confirm at Step 0 on `origin/main`):**
 - Modify: `pwa/src/skins/refined/parts.tsx` and `pwa/src/skins/instrument/parts.tsx`, which fill `PhoneNav`, and one shared phone-bar component beside the frame. It reads the console's one list of places (today Refined's `TAB_IDS`, moved to a shared owner) and `useNavBadges`, through `commandDoor(id)`, so there is no second list of places. At a desk, Refined's `AppBar` and Instrument's `Rail` leave out the fleet place (D25); the phone bar keeps it first. Also modify `pwa/src/skins/frame.tsx` and `pwa/src/styles/shell.css` (the bar at phone width only, absent in an open session) and the item strip's CSS (it stays in view on a phone).
-- Modify: `pwa/src/ledgers/ItemView.tsx` (the band's programme name links to the programme view, and a Spec link), `WaitingScreen.tsx` (a Spec link per programme group) and `ProgrammeScreen.tsx` (a Spec link on the head). All three build the address with the one function `GoalsPanel` uses today, moved to the words or links module so there is a single owner.
+- Modify: `pwa/src/ledgers/ItemView.tsx` (the band's programme name links to the programme view, and a Spec link), `WaitingScreen.tsx` (a Spec link per programme group) and `ProgrammeScreen.tsx` (a Spec link on the head). All three build the address with the one function `GoalsPanel` uses today, moved to the words or links module so there is a single owner. Also modify `pwa/src/fleet/ProgrammeBox.tsx`: the box's title opens the programme view whatever is waiting, and a Spec link reads the waiting frame's Goals, with no fetch per box (D26, amended).
 - Create: one pure L1 module that splits item text into text and link runs (`https`, console paths, repository document paths; everything else is text). Modify the item view's text, steps and history to draw through it.
 - Modify: `shared/ledgers.ts` and `server/src/coord/ledgersRoutes.ts` (`parseRaise` refuses an item whose text links a document through an artifact page or a document server outside the console, with a refusal word of its own, its status, census rows and a PWA sentence). Also `ccd/coordinator-skill/SKILL.md` clause 20 (one sentence, below) and `server/test/coordinator-skill.test.ts`.
 - Test: the new module's unit test, `pwa/test/item-view.test.tsx`, `waiting-screen`, `programme-screen` and the raise-route test. Add a browser file for the phone bar and the strip at 360 and 390, and check that the bar is absent at 900 and 1280.
@@ -340,6 +340,8 @@ Operator steer of 2026-11-04, spec §2, "Getting around on a phone", "The spec o
   - `previous and next stay in view on a long item at phone width`;
   - `the item band, each programme group and the programme head link the pinned spec`;
   - `no spec link is drawn without a pin`;
+  - `a programme box with nothing waiting opens its programme view`;
+  - `a programme box with a pin links its spec, and none without`;
   - `the band's programme name opens the programme view`;
   - `https, console paths and document paths in item text are links`;
   - `a javascript or data address stays text`;
@@ -351,6 +353,33 @@ Operator steer of 2026-11-04, spec §2, "Getting around on a phone", "The spec o
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** — PASS, plus the whole pwa/browser suite through `ccrc test`, with `full-ci` on the PR (the shell frame changes).
 - [ ] **Step 5: Commit** `feat(ledgers): get around on a phone, the spec one tap away, and links that work`.
+
+### Task PL11: one Waiting on you page, and Goals from inside a session (D-7986)
+
+Operator steer of 2026-11-04, spec §2 "One Waiting on you page" and "Goals from inside a session" (D29, D30). Lands after PL10, whose files it shares.
+
+**Files (confirm at Step 0 on `origin/main`):**
+- Modify: `pwa/src/fleet/ProgrammeBox.tsx`. The waiting chip opens `/waiting?programme=<slug>`. The title still opens the programme page.
+- Modify: `pwa/src/ledgers/ProgrammeScreen.tsx`. The page becomes the Goals page. It draws no list of its own and keeps Goals, the waits-on sentence and Stored secrets. It gains a "N waiting on you" link to the filtered list.
+- Modify: `pwa/src/ledgers/WaitingRoutes.tsx` and `ledgerWords.ts`. The `programme` list identity (`?from=programme:<slug>`) folds into the filtered combined list, so there is ONE list function and one ordering. An old `from=programme:` link still opens, on the filtered list.
+- Modify: the session chrome in both skins (`SessionChrome` parts). A Goals icon, through the one place list's programme-path builder, for a session whose row names a programme.
+- Test: `programme-screen`, `waiting-routes`, `programme-box-card` and the session chrome tests. Add a browser file at 390 and 1280 for the chip to filtered list to item to back walk, and for the session Goals icon.
+
+**Interfaces:**
+- A session's programme comes from the fleet row's existing programme fields. No new wire field.
+- `listPath(list)` has one combined-list arm with an optional programme filter.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `a programme chip opens the combined list filtered to that programme`;
+  - `the programme page draws no list of its own and links the filtered list`;
+  - `an item opened from a filtered list steps along it and goes back to it`;
+  - `an old from=programme link opens the filtered list`;
+  - `a session in a programme shows the Goals icon at phone and desk widths, and it opens that programme's Goals page`;
+  - `a session in no programme shows no Goals icon`.
+- [ ] **Step 2: Run** — FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** — PASS, plus the whole pwa/browser suite through `ccrc test`, with `full-ci` on the PR.
+- [ ] **Step 5: Commit** `feat(ledgers): one Waiting on you page, and Goals from inside a session`.
 
 ## Deviations found
 
@@ -375,6 +404,7 @@ Block D-7708 to D-7716, issued 2026-11-01 by the allocator to the coordinator (`
 - **D-7950** (carry, server): the general carry PR's server part. It clears review carries from PL4 (1338), PL7 (1348), C3 and C4 (1382, 1383, 1375), PL6 (1389 A6, 1416 F3) and the PL6 follow-up (1418, 1426). Issued 2026-11-04 by the allocator to the coordinator; the task note is `2026-11-01-programme-ledgers/carry-server.md`.
 - **D-7951** (carry, console): the general carry PR's console part. It clears review carries from PL5a (1379), PL5b (1386, 1388) and the PL9 follow-up (1408). Issued 2026-11-04 by the allocator to the coordinator; the task note is `2026-11-01-programme-ledgers/carry-console.md`.
 - **D-7952** (PL10): getting around on a phone, the spec one tap away, tappable links, and document links that go only to the Docs reader. Issued 2026-11-04 by the allocator to the coordinator, for the operator's steer that day (spec D25 to D28).
+- **D-7986** (PL11): one Waiting on you page, filtered by programme when reached from one, and Goals reachable from inside a session. Issued 2026-11-04 by the allocator to the coordinator, for the operator's steer that day (spec D29, D30).
 
 A further departure found during a task is named by slug in the worker's report; the coordinator allocates for it.
 

@@ -31,6 +31,11 @@ const ROOTS: readonly string[] = [
   'markdownLimits.ts', 'markdownGuard.ts', 'remarkAlerts.ts', 'markdownParse.ts', 'markdownWorker.ts',
   'readerRenderJob.ts', 'readerLimits.ts',
 ];
+/**
+ * The shared kernel files the closure reaches, relative to the package: the one UTF-8 byte counter, which
+ * `markdownGuard.ts` re-exports (desktop-polish server carry, row 27). It imports nothing, so it adds no specifier.
+ */
+const SHARED_FILES: readonly string[] = ['../shared/utf8.ts'];
 const ALLOWED_PACKAGES: ReadonlySet<string> = new Set([
   'unified', 'remark-parse', 'remark-gfm', 'remark-rehype', 'hast', 'mdast', '@synapsium-labs/docserver/render',
 ]);
@@ -129,8 +134,8 @@ function closure(read: (file: string) => string = (f) => readFileSync(f, 'utf8')
 describe('the parse worker closure', () => {
   const { files, refused } = closure();
 
-  it('is exactly the worker-side lib files', () => {
-    expect(files).toEqual(ROOTS.map((r) => `src/lib/${r}`).sort());
+  it('is exactly the worker-side lib files and the shared byte counter', () => {
+    expect(files).toEqual([...ROOTS.map((r) => `src/lib/${r}`), ...SHARED_FILES].sort());
   });
 
   it('imports nothing outside the closure but unified, the three remark plugins and the hast/mdast types', () => {

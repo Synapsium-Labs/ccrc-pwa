@@ -58,7 +58,7 @@ import {
 import type { Acks } from '../lib/seen';
 import { groupFleet, type FleetGroup } from './groupFleet';
 import { nestFleet, type CardDelegation, type FleetRow } from './nestFleet';
-import { readDelegation } from './delegationWords';
+import { byOpened, readDelegation } from './delegationWords';
 import { boundOpenRun, coordinatorOf, programmeWave, runCard, runHomeProject, runSentence, workerOf, type BoundSession, type ChildRunContext } from './runWords';
 import { hibernatedSince } from './hibernated';
 import { cardHues, fleetHues, type ProgHue } from './programmeBoxes';
@@ -154,12 +154,17 @@ function delegationSlices(
   return new Map([...out].map(([card, d]) => [card, { card, ...d }] as const));
 }
 
-/** How many of the frame's activities no card draws (`delegationSlices`' card rule): their parent is not in the
- *  fleet, and an activity carries no project of its own. 0 when the projection is unavailable. */
-export function unplacedActivities(sessions: readonly FleetSession[], delegation: DelegationProjectionWire | null): number {
-  if (delegation === null) return 0;
+/** Delegation visibility (spec §5): the frame's activities no card draws (`delegationSlices`' card rule: their parent
+ *  is not in the fleet list, and an activity carries no project of its own), in opening order. THE ONE SELECTION: the
+ *  fleet foot's region lists exactly these, and `data-delegation-unplaced` is their count. A parent the list carries,
+ *  archived or released included, keeps its entries on its card (its offline group). Empty when the projection is
+ *  unavailable. */
+export function unplacedActivities(
+  sessions: readonly FleetSession[], delegation: DelegationProjectionWire | null,
+): readonly DelegationActivityWire[] {
+  if (delegation === null) return [];
   const ids = new Set(sessions.map((s) => s.id));
-  return readDelegation(delegation).activities.filter((a) => !ids.has(a.parentId)).length;
+  return readDelegation(delegation).activities.filter((a) => !ids.has(a.parentId)).sort(byOpened);
 }
 
 /** The fleet as cards of nested rows. `runs` is the ACTIVE runs. `delegation` is the `delegation` frame, or `null`

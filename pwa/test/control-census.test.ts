@@ -245,7 +245,11 @@ const CONTROLS: Record<string, string> = {
   'fleet/ProjectCardHead.tsx <button> proj-card-pool': "TOKEN. The card's pool tag.",
   'fleet/ProjectCardHead.tsx <button> proj-card-toggle': 'TOKEN. The card head — one of the six floors this wave converted from a literal.',
   'fleet/SessionLine.tsx <button> sess-actions': 'TOKEN, and OVERLAY below.',
-  'fleet/SessionMeta.tsx <button> sess-subagents': 'TOKEN. The subagent toggle, a real un-nested button.',
+  'fleet/SessionMeta.tsx <button> sess-subagents':
+    'TOKEN. The subagent toggle and, beside it in the header, the delegated-entries toggle (delegation visibility): '
+    + 'real un-nested buttons in one shape. On a card the floor is the `::before` overlay; in the header, where '
+    + '`.chat-facts .sess-meta > *::before` removes it, the box itself takes it on a coarse pointer '
+    + '(`.chat-facts .sess-subagents` under `(pointer: coarse)`, D-7785); with a mouse the toggles keep their base size.',
   'screens/AccountsScreen.tsx <button> accounts-session': 'TOKEN. A session row on the accounts screen.',
   'screens/AccountsScreen.tsx <button> proj-card-pool acct-pool-chip': "TOKEN. The card's pool tag, reused as a chip.",
   'screens/FleetScreen.tsx <button> fab': 'TOKEN by VALUE, not by name — see FLOOR_BY_VALUE.',
@@ -434,6 +438,9 @@ const CONTROLS: Record<string, string> = {
   'docs/DocsHead.tsx <button> docs-crumbs-more': "TOKEN. The phone's leading … in the crumbs, which opens the full path.",
   'docs/DocsHead.tsx <button> docs-fresh': "TOKEN. The freshness chip at the truth line's end, which fetches from origin.",
   'docs/DocsHead.tsx <button> docs-copy': 'TOKEN. Copy commit, on the truth line.',
+  'docs/DocsHead.tsx <button> docs-more':
+    "TOKEN. Page details, the compact row's last button (the phone-header plan of 2026-11-03), which opens the panel "
+    + 'holding the crumbs, the truth line and the link actions.',
   'docs/DocsHead.tsx <button> docs-action docs-share':
     "TOKEN. Share (spec 4.16), after View on GitHub: a <button> wearing the header's link-action class, `.docs-action`, "
     + 'whose rule carries the floor.',

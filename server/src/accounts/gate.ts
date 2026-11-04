@@ -83,10 +83,19 @@ export function accountOriginClass(origin: string): AccountOriginClass {
 }
 
 /**
- * The route options of a credential write whose BODY is the credential (programme ledgers plan PL6's secret route): its
- * body cap; `Cache-Control: no-store` from `onRequest`, so it is on the answers that come before the gate runs (a parse
- * error, an oversize body) as well as on the gate's own; and those body errors as fixed words, because Fastify's own
- * parse error text can quote a fragment of the body. The Linear key's routes spell the same three for themselves.
+ * `Cache-Control: no-store` from `onRequest`, the first hook of all, so it is on every answer of a route that carries it,
+ * the ones that come before any handler or gate runs included. The one spelling of it for a credential's routes (review
+ * 1389 A6): the Linear connection's and the stored secrets', and `credentialBodyRoute` below.
+ */
+export const noStoreRoute: { onRequest: (req: FastifyRequest, reply: FastifyReply) => Promise<void> } = {
+  onRequest: async (_req, reply) => { reply.header('cache-control', 'no-store'); },
+};
+
+/**
+ * The route options of a credential write whose BODY is the credential (programme ledgers plan PL6's secret route, and
+ * the Linear key's two writes): its body cap; `noStoreRoute`, so `no-store` is on the answers that come before the gate
+ * runs (a parse error, an oversize body) as well as on the gate's own; and those body errors as fixed words, because
+ * Fastify's own parse error text can quote a fragment of the body. Defined once (review 1389 A6).
  */
 export function credentialBodyRoute(bodyLimit: number): {
   bodyLimit: number;
@@ -95,7 +104,7 @@ export function credentialBodyRoute(bodyLimit: number): {
 } {
   return {
     bodyLimit,
-    onRequest: async (_req, reply) => { reply.header('cache-control', 'no-store'); },
+    ...noStoreRoute,
     errorHandler: (err, _req, reply) => refuseRoute(reply, err.statusCode === 413 ? 'oversize' : 'bad-request'),
   };
 }

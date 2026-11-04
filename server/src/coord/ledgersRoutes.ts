@@ -29,17 +29,16 @@ import { LEDGER_ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusa
 import {
   ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
-  isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, secretAnswer, secretTailOf, tickMailLeftBehind,
+  earlierTickBlocks, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, secretAnswer, secretTailOf,
   type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
 } from '../../../shared/ledgers.js';
 import type { CoordStore, ItemEventRow, ItemRow } from './store.js';
 import { itemMailSubject, tickMail } from './ledgersMail.js';
-import { OUTSTANDING_DELIVERY_STATES } from '../../../shared/api.js';
 import { insertSystemMailTx } from './rundefsTx.js';
-import { credentialBodyRoute, type AccountGate } from '../accounts/gate.js';
+import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
-  OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
+  OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
   removeOperatorSecret, sweepOperatorSecretTemps, writeOperatorSecret, type OperatorSecretMeta, type OperatorSecretState,
   type RegisterSecret,
 } from './ledgersSecrets.js';
@@ -520,12 +519,12 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (!mail.ok) {
       return { ok: false, why: LEDGER_ROUTE_REFUSALS.tooLarge, detail: `the mail to the coordinator would be ${mail.bytes} bytes, past the ${mail.limit} byte cap` };
     }
-    // The newest tick mail of this item, whoever it went to and whatever run it rode (review 1335 F2): one still outstanding
-    // blocks a second, so a takeover cannot queue it twice either. Except one left behind (review 1336 F1): its recipient is
-    // no longer the coordinator and reads dead or absent, so nothing will ever acknowledge it.
+    // The newest tick mail of this item, whoever it went to and whatever run it rode (review 1335 F2): whether it holds this
+    // tick is `earlierTickBlocks`'s to decide, once (outstanding, and not left behind: review 1336 F1, review 1338).
     const earlier = coord.newestTickMail(mail.subject);
-    if (earlier !== null && OUTSTANDING_DELIVERY_STATES.includes(earlier.state)
-      && !tickMailLeftBehind({ recipient: earlier.toId, coordinator, recipientPresence: deps.presenceOf(earlier.toId) })) {
+    if (earlier !== null && earlierTickBlocks({
+      state: earlier.state, recipient: earlier.toId, coordinator, recipientPresence: deps.presenceOf(earlier.toId),
+    })) {
       return { ok: false, why: 'duplicate', detail: `an earlier tick of this item went to ${earlier.toId}, which has not acknowledged it` };
     }
     return { ok: true, coordinator, mail: { subject: mail.subject, body: mail.body } };
@@ -656,9 +655,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       if (slotChains.get(key) === chain) slotChains.delete(key);
     }
   };
-  /** `Cache-Control: no-store` on every answer of the two stored-secret doors, refusals included, from `onRequest`: the hook
-   *  the secret's PUT already takes (`credentialBodyRoute`, `accounts/gate.ts`), so no second spelling of it lives here. */
-  const noStore = credentialBodyRoute(SECRET_BODY_LIMIT).onRequest;
+  /** `Cache-Control: no-store` on every answer of the two stored-secret doors, refusals included, from `onRequest`: the
+   *  account gate's one spelling of it (`noStoreRoute`, `accounts/gate.ts`), which the secret's PUT takes too. */
+  const noStore = noStoreRoute.onRequest;
   const slotBusy = (reply: FastifyReply) =>
     refuseRoute(reply, LEDGER_ROUTE_REFUSALS.slotBusy, { detail: 'an earlier save or removal of this secret has not finished; nothing was done, try again' });
   const storedNotTicked = (reply: FastifyReply, id: number) =>
@@ -695,6 +694,11 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
         meta = await writeOperatorSecret(deps.ccrcDir, item.program, slot, value, setAt, deps.registerSecret, id);
       } catch (e) {
         if (e instanceof OperatorSecretStoredUnrecorded) return storedNotTicked(reply, id);
+        if (e instanceof OperatorSecretNameCollides) {
+          return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.secretNameCollides, {
+            detail: 'the box already stores a secret under a programme or slot name that differs from this one only by case; nothing was stored',
+          });
+        }
         return refuseRoute(reply, 'write-failed', { detail: 'the secret could not be stored; nothing was sent to the coordinator' });
       }
       let ticked: ItemRow;
@@ -753,7 +757,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    * process, and its rows leave the table, so nothing reloads them after a restart, EXCEPT in two arms that keep them there
    * (review 1418 A2): a retire whose read of the lane's rows failed (they stay in the table, review 1416 A-S5), and a delete
    * still held on a busy coord.db when the process stops. Those rows reload after a restart and go on masking the removed
-   * value (the safe side) until a save of the slot replaces them. Nothing stored: `secret-not-stored` (the lane is retired all the same, so a
+   * value (the safe side) until a save of the slot replaces them, unless a rotation came before the restart: then they match
+   * nothing, because previous box tokens are memory-only (`SecretMasker`'s class doc), and only keep the re-key retrying
+   * (review 1426 F-E). Nothing on disk is unmasked by it: the value file is gone. Nothing stored: `secret-not-stored` (the lane is retired all the same, so a
    * row left by a slot removed by hand stops being re-keyed, review 1391 A-2). A value file that cannot be removed:
    * `remove-failed`, and nothing else changes. Every answer is a fixed word with a fixed detail; none carries the value, which
    * this door never reads.

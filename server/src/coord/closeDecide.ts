@@ -4,7 +4,7 @@ import type { CcdPrLine } from '../prstate.js';
 import type { CloseCause, CloseOutcome, CloseRunBody, ChildGate } from './close.js';
 import type { DoneClaim, DoneVerdict } from './fingerprint.js';
 import type { PrHistoryRead } from './prhistory.js';
-import { HANDOFF_SHA, holdReasonVerdict, releaseIsSafe, survivorOf } from './rundefs.js';
+import { HANDOFF_SHA, holdReasonVerdict, prRowCounts, releaseIsSafe, survivorOf } from './rundefs.js';
 import type { AdvanceResult, OpenSiblingsResult, RunReadResult, RunRow } from './store.js';
 
 /**
@@ -24,7 +24,7 @@ import type { AdvanceResult, OpenSiblingsResult, RunReadResult, RunRow } from '.
  *   verified  (work close) `verifyDone`'s verdict: a failed claim is refused, with the rejection to record.
  *   close     (work close) the sibling list, the child gate, the hold: which fleet verb, and with what reason.
  *   abandon   (abandon arm) the same question for the abandon: release, or hand the claim to the survivor.
- *   ledger    (work close) the `.prhistory` read.
+ *   ledger    (work close) the `.prhistory` read, and which of its rows are this run's branch's.
  *   verb      whether the box lists the fleet verb about to be sent.
  *   fleet     ccd's answer to the act.
  *   recheck   (abandon, sweep word) the claimant re-measured AFTER the act.
@@ -58,6 +58,11 @@ const DONE_CLAIM_SUBJECTS: Record<DoneClaimDoor, { rejected: string; unmeasured:
   advance: { rejected: 'wave-advance-rejected', unmeasured: 'wave-advance-unmeasured' },
   review: { rejected: 'review-done-rejected', unmeasured: 'review-done-unmeasured' },
 };
+
+/** Every subject a done-claim is answered under, derived from the table above so a fourth door is named here without
+ *  an edit. The revive's vocabulary (`coord/mailRevive.ts`) reads it: these are the coordinator-voiced notices. */
+export const DONE_CLAIM_ANSWER_SUBJECTS: readonly string[] =
+  Object.values(DONE_CLAIM_SUBJECTS).flatMap((s) => [s.rejected, s.unmeasured]);
 
 /** The mail a failed done-claim is answered with: today's `<code>: <detail>` under the refusal subject, and, for
  *  `lineage-unmeasured`, the re-send instruction under its own subject. ONE function for the three doors. */
@@ -280,12 +285,14 @@ async function decideAbandon(f: AbandonFacts): Promise<CloseDecision<ActPlan>> {
 
 // -- steps: ledger, verb, fleet, recheck, commit -----------------------------------------------------------------
 
-export interface LedgerFacts { step: 'ledger'; history: PrHistoryRead }
+export interface LedgerFacts { step: 'ledger'; history: PrHistoryRead; branch: RunRow['branch'] }
 
 function decideLedger(f: LedgerFacts): CloseDecision<{ entries: Extract<PrHistoryRead, { ok: true }>['entries'] }> {
   // Refuse to close on an unreadable ledger; nothing closes.
-  return f.history.ok ? go({ entries: f.history.entries })
-    : refused({ ok: false, kind: 'refused', code: 'prhistory-unreadable' });
+  if (!f.history.ok) return refused({ ok: false, kind: 'refused', code: 'prhistory-unreadable' });
+  // D-5941: a run with no branch has nothing to compare a placed row to, so it folds every row, as it always did.
+  const { branch } = f;
+  return go({ entries: branch === null ? f.history.entries : f.history.entries.filter((e) => prRowCounts(e, branch)) });
 }
 
 export interface VerbFacts { step: 'verb'; verb: FleetAct['verb']; can: boolean }

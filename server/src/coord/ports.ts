@@ -83,7 +83,7 @@ export type WatcherCoordMember =
   | 'raiseLedgerFloor' | 'recentProvenance' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap'
   | 'recordObservation' | 'recordRejection' | 'recordRunEvent' | 'recordShadowVerdict' | 'recordStallObservation'
   | 'refusalsFor' | 'refuseRelease' | 'rejectDelivery' | 'rekeyNode' | 'releaseAsk' | 'releaseLease' | 'releases'
-  | 'renewClaimRow' | 'requestNode' | 'resolveNode' | 'restampAsk' | 'retireGeneration' | 'rollSettings' | 'run'
+  | 'renewClaimRow' | 'requestNode' | 'resolveNode' | 'restampAsk' | 'retireGeneration' | 'reviveParkedDeliveries' | 'rollSettings' | 'run'
   | 'runEvents' | 'runEventsSince' | 'runLastMoves' | 'runs' | 'runsNamingSession' | 'sealDeadCoordinatorBreakerState'
   | 'setCollectLane' | 'setDeliveryEnvelope' | 'setSession' | 'settleAsk' | 'settleNode' | 'staleAllocations'
   | 'staleApproval' | 'staleAsk' | 'stallCandidates' | 'stallMailFor' | 'stallSettings' | 'stalledDispatchRunIds'
