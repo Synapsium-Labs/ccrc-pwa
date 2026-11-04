@@ -92,6 +92,7 @@ import { landingAdvanceOf } from './landingEntry.js';
 import { landingEjectionAsk } from './landingLine.js';
 import type { LandingEjectionKind } from '../../../shared/landingLine.js';
 import { readSwitches } from '../../../shared/switches.js';
+import { scopeSweepViewOf } from '../../../shared/scope-sweep.js';
 import { checksModeAt } from './landing.js';
 import { refuseAdvance, refuseRateLimited, refuseRoute, refuseRun } from '../refuse.js';
 import { TESTBOX_SYNC_REFUSAL } from '../testbox.js';
@@ -2747,6 +2748,38 @@ export function registerCoordRoutes(
       notice({ kind: 'coord', sessionId: '', title: 'dispatch abandon changed', runId: null,
         body: `abandoning dispatches that never came back: ${before.stored} -> ${after.stored}; by ${actor}` },
       'record-only', { degraded: 'dispatch abandon switch written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...after });
+  });
+
+  /** `GET`/`POST /api/coord/scope-sweep` (D-7994): Settings › Automation › "Leftover processes". The GET reads the sweep's
+   *  two switches from the registry listing; `scope-sweep-live` has no writer and the card only shows it. The POST takes
+   *  `{on: boolean}` and nothing else, and runs `ccd scope-sweep-busy --state on|off` through the agent's whitelist, the
+   *  busy arm's one writer, then answers what the registry reads NOW, the authoritative answer. One path for both verbs,
+   *  the stall-watch door's shape: session-gated when `CCRC_AUTH` is armed, no box token, so no coordinator can arm a stop
+   *  of processes. A change is a record-only feed row naming the actor. No `notConfigured` arm: neither verb touches the
+   *  coordination database. */
+  app.get('/api/coord/scope-sweep', async (_req, reply) => {
+    return reply.code(200).send({ ok: true, ...scopeSweepViewOf(await deps.io.readdir(deps.cfg.registryDir)) });
+  });
+
+  app.post('/api/coord/scope-sweep', async (req, reply) => {
+    const body = req.body as { on?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') {
+      return refuseRoute(reply, 'bad-request', { detail: 'the body is {on: boolean} and nothing else' });
+    }
+    if (!ccdCan(deps.fleetState, 'scopeSweepBusy')) return refuseRoute(reply, 'unsupported');
+    const before = scopeSweepViewOf(await deps.io.readdir(deps.cfg.registryDir));
+    const res = await deps.runCcd(CCD_ARGV.scopeSweepBusy(body.on ? 'on' : 'off'));
+    // D-6840: the not-ran arm FIRST: a verb that never ran said nothing, so its forged code is not read as its refusal.
+    if (res.ran === false) return refuseRoute(reply, 'fleetFailed', { detail: notRanSentence('ccd scope-sweep-busy', res) });
+    if (!res.ok) return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr });
+    const after = scopeSweepViewOf(await deps.io.readdir(deps.cfg.registryDir));
+    if (before.busy !== after.busy && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'scope sweep busy arm changed', runId: null,
+        body: `stopping a dead session's busy scopes: ${before.busy} -> ${after.busy}; by ${actor}` },
+      'record-only', { degraded: 'scope sweep busy switch written, feed archive degraded' });
     }
     return reply.code(200).send({ ok: true, ...after });
   });

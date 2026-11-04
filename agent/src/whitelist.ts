@@ -361,6 +361,7 @@ export const REQUIRED_VERB_FLAG = {
   'ws-shed-deps': '--session',
   'ws-lease-mark': '--lease',
   'testbox-remote': '--state',
+  'scope-sweep-busy': '--state',
   'project-add': '--name',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
@@ -528,6 +529,10 @@ export const EXEC_WHITELIST = {
     // `REQUIRED_VERB_FLAG` above: `--state` is the verb's whole argument surface, and a bare `['testbox-remote']`
     // would admit every positional form it might grow (g24 is the other side).
     ['testbox-remote', '--state'],
+    // The sweep's busy arm switch (D-7994), granted on `testbox-remote`'s argument exactly: `$REG/scope-sweep-busy-live` is
+    // a registry-file write/unlink, and the verb stops nothing itself. ENROLLED in `REQUIRED_VERB_FLAG` above (g27 is the
+    // other side).
+    ['scope-sweep-busy', '--state'],
     // The project pool tag's writer (account pools, spec §5.4.2), granted on
     // `coord-pause`'s own argument: `$REG/pools/<project>` is a registry-file
     // write/unlink, non-destructive, and granting it widens nothing that

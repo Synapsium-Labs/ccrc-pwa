@@ -6857,7 +6857,8 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # its transient staging copy does; `ccd testbox-remote`'s
 # `$REG/.testbox-remote-live.$$.tmp` staging file (TB9, D-7411), the same
 # idiom again: the raise renames it onto the dot-FREE `$REG/testbox-remote-live`,
-# the test box switch, so only the transient copy carries a dot; and session-hook.sh's
+# the test box switch, so only the transient copy carries a dot; `ccd scope-sweep-busy`'s
+# `$REG/.scope-sweep-busy-live.$$.tmp` (D-7994), that idiom a third time; and session-hook.sh's
 # `.$id.$$.hookstate.tmp` — the last four ARE candidate glob matches when
 # `<id>` is the aliasing id, but their suffix after the match carries a
 # SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
@@ -9263,6 +9264,7 @@ EOF
   echo docs-show
   echo docs-fetch
   echo testbox-remote   # D-7411: the test box switch's writer, behind POST /api/testbox/switch
+  echo scope-sweep-busy   # D-7994: the sweep's busy arm switch's writer, behind POST /api/coord/scope-sweep
   echo docs-index
   echo path-users-v1; echo path-users   # `ccd path-users [--json] <path>…` (DR-7, D-6619): the read-only entry to the one holder probe; sent only behind this word
   echo lease-mark-v1; echo ws-lease-mark   # delegation broker wave 5 (PR1): the lease carrier's one writer, ccd/lib/delegation-lease.sh
@@ -30640,6 +30642,30 @@ cmd_testbox_remote() {   # ccd testbox-remote --state on|off — raise or lower 
   fi
 }
 
+cmd_scope_sweep_busy() {   # ccd scope-sweep-busy --state on|off — raise or lower the sweep's busy arm switch
+  # (D-7994; `ccd-scope-sweep`'s THE BUSY ARM). While `$REG/scope-sweep-busy-live` AND `$REG/scope-sweep-live` exist, the
+  # sweep stops a busy scope of a provably dead session; otherwise it records `would-stop (busy)`. This verb is the
+  # marker's ONE writer, reached from `POST /api/coord/scope-sweep` (session-only) through the agent's two-token grant;
+  # the sweep is its one reader, and reads it itself. It stops nothing: `cmd_testbox_remote`'s shape, the raise atomic,
+  # both arms CHECKED. `FORBIDDEN_CCD_VERBS` lists it: arming a stop of processes is the operator's, never a session's.
+  [[ $# -eq 2 && $1 == --state ]] || die "usage: ccd scope-sweep-busy --state on|off"
+  local state=$2 marker tmp
+  [[ $state == on || $state == off ]] || die "bad state: $state (want on|off)"
+  [[ -d "$REG" ]] || die "no registry at $REG"
+  marker="$REG/scope-sweep-busy-live"
+  if [[ $state == on ]]; then
+    tmp="$REG/.scope-sweep-busy-live.$$.tmp"
+    { : > "$tmp" && _plat_mv_notdir "$tmp" "$marker"; } \
+      || { rm -f -- "$tmp"; die "could not raise the busy arm's switch — it is NOT on"; }
+    echo "on"
+  else
+    if [[ -e $marker || -L $marker ]]; then   # -L: a dangling link is lowered too, so no stale name stays
+      rm -f -- "$marker" || die "could not lower the busy arm's switch — it is STILL on"
+    fi
+    echo "off"
+  fi
+}
+
 # ── EVERY tmux TARGET IS EXACT (D-3525, closing D-2781 and D-2862) ──────────
 # `_tmux` answers a session's NAME — what `new-session -s` creates. A `-t`
 # argument is not a name to tmux, it is a SEARCH: the exact name, then a UNIQUE
@@ -45352,6 +45378,7 @@ case "${1:-}" in
   coord-pause) shift; cmd_coord_pause "$@" ;;
   reclaim-pause) shift; cmd_reclaim_pause "$@" ;;
   testbox-remote) shift; cmd_testbox_remote "$@" ;;
+  scope-sweep-busy) shift; cmd_scope_sweep_busy "$@" ;;
   win-size)  shift; cmd_win_size "$@" ;;
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
@@ -45366,6 +45393,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|scope-sweep-busy|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

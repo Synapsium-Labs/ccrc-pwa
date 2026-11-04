@@ -21,6 +21,7 @@ import { navigate } from '../lib/router';
 import type { SettingsSectionId } from '../lib/routes';
 import { COLLECT_PAUSE_TEXT, COLLECT_SECTION_TEXT } from './collectLaneWords';
 import { DISPATCH_ABANDON_TEXT } from '../../../shared/dispatch-abandon';
+import { SCOPE_SWEEP_TEXT } from '../../../shared/scope-sweep';
 import { RADIO_FIELDSET, RADIO_LEGEND, Radio, toast } from '@ccrc/ui';
 
 /** A write that answered 2xx but unreadably (`postJsonOr`'s `unreadable`, D-1150): it may have landed. */
@@ -314,6 +315,10 @@ export const SETTINGS_CARDS = {
     },
     pause: {
       scope: SETTINGS_SCOPE.fleet, title: COLLECT_PAUSE_TEXT.title, purpose: COLLECT_PAUSE_TEXT.stops,
+    },
+    /** D-7994: the sweep's two switches, after Cleanup pause, whose reach it does not share. */
+    scopeSweep: {
+      scope: SETTINGS_SCOPE.fleet, title: SCOPE_SWEEP_TEXT.title, purpose: SCOPE_SWEEP_TEXT.purpose,
     },
     roll: {
       scope: SETTINGS_SCOPE.fleet, title: 'Roll idle sessions',

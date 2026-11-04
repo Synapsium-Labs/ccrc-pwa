@@ -92,6 +92,15 @@ export const CHILD_RECLAIM_DISABLED_MARKER = 'child-reclaim-disabled';
  *  with the test box plan's TB9; its reader, the wrapper, with TB8. Until then nothing in the tree holds it. */
 export const TESTBOX_REMOTE_LIVE_MARKER = 'testbox-remote-live';
 
+/** `$REG/scope-sweep-live`: arms `ccd-scope-sweep`'s stop of an INERT dead pane scope. Absent, the sweep records
+ *  `would-stop` and stops nothing. The sweep reads it itself. No writer in the tree: the operator touches it by hand,
+ *  and a Settings card only shows it (D-7994). */
+export const SCOPE_SWEEP_LIVE_MARKER = 'scope-sweep-live';
+/** `$REG/scope-sweep-busy-live` (D-7993): arms the sweep's busy arm, the stop of a busy dead scope whose session is
+ *  provably dead. It means nothing unless `scope-sweep-live` also stands. Absent, the arm records `would-stop (busy)` with
+ *  the process list. Its one writer is `ccd scope-sweep-busy`, behind the Settings card (D-7994). */
+export const SCOPE_SWEEP_BUSY_LIVE_MARKER = 'scope-sweep-busy-live';
+
 /** The spec's bounded contexts (consolidation spec 2026-10-19 §2), the `owner` of a row. */
 export const SWITCH_OWNER_MAP = {
   C1: 'Fleet Registry & Accounts',
@@ -273,6 +282,16 @@ export const SWITCHES = {
     storage: { setting: 'dispatch_abandon_settings.choice' }, default: 'on', owner: 'C5',
     meaning: 'The server abandons a run whose dispatch never came back and mails its coordinator: on, or off (D-7319).',
     writer: 'POST /api/coord/dispatch-abandon',
+  },
+  [SCOPE_SWEEP_LIVE_MARKER]: {
+    storage: { marker: SCOPE_SWEEP_LIVE_MARKER }, default: 'absent: shadow, the sweep records what it would stop',
+    owner: 'C4', meaning: 'The pane-scope sweep acts: an inert scope of a dead pane is stopped, three a minute at most.',
+    writer: 'hand-only',
+  },
+  [SCOPE_SWEEP_BUSY_LIVE_MARKER]: {
+    storage: { marker: SCOPE_SWEEP_BUSY_LIVE_MARKER }, default: 'absent: shadow, the sweep records the busy scopes it would stop',
+    owner: 'C4', meaning: 'With the sweep itself live, a busy scope whose session has been provably dead for six hours is stopped too, inside the same three a minute.',
+    writer: 'ccd scope-sweep-busy, through POST /api/coord/scope-sweep',
   },
   [TESTBOX_REMOTE_LIVE_MARKER]: {
     storage: { marker: TESTBOX_REMOTE_LIVE_MARKER }, default: 'absent: every run is local', owner: 'C2',

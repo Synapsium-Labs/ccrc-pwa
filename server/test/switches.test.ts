@@ -83,7 +83,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(DEPS_SHED_LIVE_MARKER).toBe('deps-shed-live');
     // D-7404: the test box's remote switch, written later by a ccd verb behind a route (TB9); read by the wrapper (TB8).
     expect(TESTBOX_REMOTE_LIVE_MARKER).toBe('testbox-remote-live');
-    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live', 'deps-shed-live', TESTBOX_REMOTE_LIVE_MARKER].sort());
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live', 'deps-shed-live', TESTBOX_REMOTE_LIVE_MARKER, 'scope-sweep-live', 'scope-sweep-busy-live'].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());
   });
 
@@ -123,7 +123,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     }
   });
 
-  it('the writers are the ones the tree has or a named task adds: three route-backed ccd verbs, four settings routes, the rest by hand', () => {
+  it('the writers are the ones the tree has or a named task adds: four route-backed ccd verbs, four settings routes, the rest by hand', () => {
     const writers = Object.fromEntries(rows.filter(([, r]) => r.writer !== 'hand-only').map(([k, r]) => [k, r.writer]));
     expect(writers).toEqual({
       'coordinator-paused': 'ccd coord-pause, through POST /api/coord/pause',
@@ -131,6 +131,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       'stall-watch-level': 'POST /api/coord/stall-watch',
       'collect-lane-choice': 'POST /api/coord/collect-lane',
       'testbox-remote-live': 'ccd testbox-remote, through POST /api/testbox/switch',
+      'scope-sweep-busy-live': 'ccd scope-sweep-busy, through POST /api/coord/scope-sweep',
       'roll-idle-targets': 'POST /api/coord/roll-idle',
       'dispatch-abandon-choice': 'POST /api/coord/dispatch-abandon',
     });
@@ -185,8 +186,8 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(readSwitches(null)[TESTBOX_REMOTE_LIVE_MARKER]).toBe('unmeasurable');
   });
 
-  it('the table has 33 rows: 29 markers and 4 settings (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth)', () => {
-    expect([rows.length, markerRows.length, settingRows.length]).toEqual([33, 29, 4]);
+  it('the table has 35 rows: 31 markers and 4 settings (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth; the sweep\'s two switches, D-7994)', () => {
+    expect([rows.length, markerRows.length, settingRows.length]).toEqual([35, 31, 4]);
   });
 
   it('D-7319: the dispatch abandon switch is Coordination\'s settings row, seeded on, written by its route and read by the store', () => {
