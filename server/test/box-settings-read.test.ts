@@ -997,7 +997,7 @@ describe('version 2: the vocabularies and the envelope', () => {
     mkdirSync(env['TMPDIR'], { recursive: true });
     env['LIST'] = ENVELOPE_CORPUS.map((e) => `${e.key}|${BOX_SETTING_SPECS[e.key].cls}|${e.value}`).join('\n');
     const script = `. "$1"; _set_libs; while IFS= read -r line; do k="\${line%%|*}"; c="\${line#*|}"; v="\${c#*|}"; c="\${c%%|*}"; _set_fits "$k" "$c" "$v" && printf 1 || printf 0; done <<<"$LIST"`;
-    const r = spawnSync(BASH, ['-c', script, 'bsr-fits', CCRC], { env, encoding: 'utf8', input: '', timeout: 120_000 });
+    const r = spawnSyncGroup(BASH, ['-c', script, 'bsr-fits', CCRC], { env, encoding: 'utf8', input: '', timeout: 120_000 });
     expect(r.status, r.stderr).toBe(0);
     const bash = [...r.stdout].map((c) => c === '1');
     expect(bash).toHaveLength(ENVELOPE_CORPUS.length);

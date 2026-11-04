@@ -116,7 +116,7 @@ const DEFAULTS: Record<string, string> = {
 
 /** Runs a shell script after sourcing ccd/ccrc (or a copy of it), in the fixture HOME. */
 function shell(home: string, script: string, extra: NodeJS.ProcessEnv = {}, ccrc: string = CCRC): Result {
-  const r = spawnSync(BASH, ['-c', `. "$1"; ${script}`, 'x', ccrc], { env: envOf(home, extra), encoding: 'utf8', input: '', timeout: 120_000 });
+  const r = spawnSyncGroup(BASH, ['-c', `. "$1"; ${script}`, 'x', ccrc], { env: envOf(home, extra), encoding: 'utf8', input: '', timeout: 120_000 });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 const COPIES: Record<string, string> = {};
@@ -133,7 +133,7 @@ function ccrcWithout(...names: string[]): string {
 }
 /** The verb run from `ccrc` (a copy of ccd/ccrc) as `settings --json`. */
 function jsonFrom(home: string, ccrc: string, extra: NodeJS.ProcessEnv = {}): Doc {
-  const r = spawnSync(BASH, [ccrc, 'settings', '--json'], { env: envOf(home, extra), encoding: 'utf8', input: '', timeout: 120_000 });
+  const r = spawnSyncGroup(BASH, [ccrc, 'settings', '--json'], { env: envOf(home, extra), encoding: 'utf8', input: '', timeout: 120_000 });
   return docOf({ code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' });
 }
 

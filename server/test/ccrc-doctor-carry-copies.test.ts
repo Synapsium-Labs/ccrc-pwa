@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { BASH, CCRC_SRC, CHECKS_SRC, anyVerdictFor, doctorEnv, healthy, installDoctorHooks, runDoctor, shq } from './ccrc-doctorFixture.js';
 
 removeTmpFixturesEachTest();
@@ -162,7 +163,7 @@ describe('carry-copies: its bound, CCRC_CARRY_COPY_WARN_BYTES (D-7857)', () => {
 
   /** `_carry_warn_bytes_says`, read from bash in the box's own HOME: the words are never a pasted copy. */
   const says = (b: Box): string => {
-    const r = spawnSync(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n_carry_warn_bytes_says`], { env: doctorEnv(b.home), encoding: 'utf8', timeout: 30_000 });
+    const r = spawnSyncGroup(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n_carry_warn_bytes_says`], { env: doctorEnv(b.home), encoding: 'utf8', timeout: 30_000 });
     return (r.stdout ?? '').replace(/\n$/, '');
   };
   /** D-7919: the WARN names the words and never the value. */

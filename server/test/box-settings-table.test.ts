@@ -9,6 +9,7 @@ import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { ccrcSettingsNames } from './ccrcSettingsLine.js';
 import {
@@ -211,7 +212,7 @@ function run(script: string, o: RunOpts = {}): { out: string; err: string; statu
   env['TMPDIR'] = join(home, 'tmp');
   mkdirSync(env['TMPDIR'], { recursive: true });
   Object.assign(env, o.vars ?? {});
-  const r = spawnSync(BASH, ['-c', `. "$1"; _set_libs; ${script}`, 'box-settings-table', o.ccrc ?? CCRC], { env, encoding: 'utf8', input: '', timeout: 120_000 });
+  const r = spawnSyncGroup(BASH, ['-c', `. "$1"; _set_libs; ${script}`, 'box-settings-table', o.ccrc ?? CCRC], { env, encoding: 'utf8', input: '', timeout: 120_000 });
   return { out: r.stdout, err: r.stderr, status: r.status };
 }
 const US = '\u001f';
