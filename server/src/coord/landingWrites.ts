@@ -76,12 +76,16 @@ export type LandingWriteParse =
   | { ok: true; kind: 'entry'; request: LandingEntryRequest }
   | { ok: true; kind: 'order'; request: LandingOrderRequest }
   | { ok: false; error: 'bad-request' };
+/** A noop and an order carry the source's current association the decision read (readable only), and an order its journal
+ *  binding, so neither the record nor the store's answer reads it again or folds an unreadable one into no-run. A creation
+ *  has no run. */
 export type LandingMutationDecision =
   | { ok: false; error: LandingMutationCode | 'run-unreadable' | 'landing-projection-unreadable' }
   | { ok: true; mutation:
-      | { kind: 'noop'; entry: LandingEntry }
+      | { kind: 'noop'; entry: LandingEntry; coordinator: Coordinator }
       | (Extract<LandingAuthorityCommand, { kind: 'entry' }> & { id: number })
-      | { kind: 'order'; entry: LandingEntry; after: LandingSubjectRef[]; fixesMain: boolean } };
+      | { kind: 'order'; entry: LandingEntry; coordinator: Coordinator; binding: LandingSubjectRef['binding']; after: LandingSubjectRef[];
+          fixesMain: boolean } };
 
 const refuse = (error: Extract<LandingMutationDecision, { ok: false }>['error']): LandingMutationDecision => ({ ok: false, error });
 
@@ -140,24 +144,31 @@ export function decideLandingMutation(command: LandingAuthorityCommand, facts: L
     stack.push(...deps.afterIds);
   }
 
-  const bindingOf = (e: LandingEntry): LandingSubjectRef['binding'] | null => {
+  // Step 6 before step 7: the source's and every named target's current association, so that a no-op over one that
+  // cannot be read refuses rather than reading as success. A missing or unreadable one is never a no-run.
+  const coordinatorOf = (e: LandingEntry): Coordinator | null => {
     const c = facts.coordinators.find((x) => x.id === e.id)?.value;
-    if (c === undefined || c.kind === 'unreadable') return null;
-    return c.kind === 'no-run' ? { kind: 'no-run' } : { kind: 'run', observedRunId: c.runId };
+    return c === undefined || c.kind === 'unreadable' ? null : c;
   };
-  if (bindingOf(source) === null) return refuse('run-unreadable');
-  const same = sourceDeps.kind === 'readable' && sourceDeps.afterIds.length === effective.length
-    && sourceDeps.afterIds.every((v, i) => v === effective[i]) && fixesMain === source.fixesMain;
-  if (same) return { ok: true, mutation: { kind: 'noop', entry: source } };
+  const coordinator = coordinatorOf(source);
+  if (coordinator === null) return refuse('run-unreadable');
   const after: LandingSubjectRef[] = [];
   for (const t of effective) {
     const e = known.get(t)!;
-    const binding = bindingOf(e);
-    if (binding === null) return refuse('run-unreadable');
-    after.push({ id: e.id, project: e.project, pr: e.pr, binding });
+    const c = coordinatorOf(e);
+    if (c === null) return refuse('run-unreadable');
+    after.push({ id: e.id, project: e.project, pr: e.pr, binding: landingBindingOf(c) });
   }
-  return { ok: true, mutation: { kind: 'order', entry: source, after, fixesMain } };
+  const same = sourceDeps.kind === 'readable' && sourceDeps.afterIds.length === effective.length
+    && sourceDeps.afterIds.every((v, i) => v === effective[i]) && fixesMain === source.fixesMain;
+  if (same) return { ok: true, mutation: { kind: 'noop', entry: source, coordinator } };
+  return { ok: true, mutation: { kind: 'order', entry: source, coordinator, binding: landingBindingOf(coordinator), after, fixesMain } };
 }
+
+/** A readable current association as the journal's historical binding: total over the two readable members, so an
+ *  unreadable one cannot reach it (the decision refused it). */
+const landingBindingOf = (c: Coordinator): LandingSubjectRef['binding'] =>
+  c.kind === 'no-run' ? { kind: 'no-run' } : { kind: 'run', observedRunId: c.runId };
 
 // ── parsing and the notice (wave 5f Task 2) ──────────────────────────────────────────────────────────────────────
 const ENTRY_KEYS = ['byId', 'byUuid', 'project', 'pr', 'pinnedSha', 'handoffCommit'] as const;

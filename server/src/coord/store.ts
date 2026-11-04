@@ -3226,7 +3226,7 @@ export class CoordStore {
     let held: LandingJournalSnapshot | null = null;
     try {
       return tx(this.db, (): LandingAuthorityWrite => appendThenApply<{ snapshot: LandingJournalSnapshot; record: LandingJournalRecord;
-        facts: LandingMutationFacts; mutation: Parameters<typeof landingRecordOf>[1] }, LandingAuthorityWrite, LandingAuthorityWrite>({
+        mutation: Parameters<typeof landingRecordOf>[1] }, LandingAuthorityWrite, LandingAuthorityWrite>({
         decide: () => {
           const hist = this.landingHistory(log);
           held = hist.snapshot;
@@ -3240,20 +3240,16 @@ export class CoordStore {
             return { stop: decision.error === 'landing-projection-unreadable' ? { ok: false, error: decision.error, recovery: 'restart' }
               : { ok: false, error: decision.error } };
           }
-          const coordinator = (id: number): Extract<LandingAuthorityWrite, { ok: true }>['coordinator'] => {
-            const c = read.facts.coordinators.find((x) => x.id === id)?.value;
-            return c === undefined || c.kind === 'unreadable' ? { kind: 'no-run' } : c;
-          };
           const m = decision.mutation;
-          if (m.kind === 'noop') return { stop: { ok: true, entry: m.entry, previous: m.entry, changed: false, seq: null, coordinator: coordinator(m.entry.id) } };
+          if (m.kind === 'noop') return { stop: { ok: true, entry: m.entry, previous: m.entry, changed: false, seq: null, coordinator: m.coordinator } };
           if (hist.lastSeq >= Number.MAX_SAFE_INTEGER) return { stop: { ok: false, error: 'landing-sequence-overflow' } };
-          return { go: { snapshot: held!, facts: read.facts, mutation: m, record: landingRecordOf(command, m, read.facts, hist.lastSeq + 1, at) } };
+          return { go: { snapshot: held!, mutation: m, record: landingRecordOf(command, m, hist.lastSeq + 1, at) } };
         },
         append: ({ snapshot, record }) => {
           const appended = log.append(snapshot, record);
           if (!appended.ok) throw new Error('landing journal append failed');
         },
-        apply: ({ record, facts, mutation }) => {
+        apply: ({ record, mutation }) => {
           this.applyLandingRecord(record);
           if (mutation.kind === 'entry') {
             this.db.prepare('INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) ' +
@@ -3262,9 +3258,10 @@ export class CoordStore {
           const after = this.landingFactsInner(command.project);
           const entry = after.ok ? after.facts.entries.find((e) => e.pr === command.pr) : undefined;
           if (entry === undefined) throw new Error('landing write reads back absent');
-          const previous = mutation.kind === 'order' ? mutation.entry : null;
-          const c = facts.coordinators.find((x) => x.id === entry.id)?.value;
-          return { ok: true, entry, previous, changed: true, seq: record.seq, coordinator: c === undefined || c.kind === 'unreadable' ? { kind: 'no-run' } : c };
+          // The order's association is the decision's (readable only); a creation is a no-run entry by construction.
+          return mutation.kind === 'order'
+            ? { ok: true, entry, previous: mutation.entry, changed: true, seq: record.seq, coordinator: mutation.coordinator }
+            : { ok: true, entry, previous: null, changed: true, seq: record.seq, coordinator: { kind: 'no-run' } };
         },
       }, phase));
     } catch {

@@ -384,16 +384,15 @@ export function landingHoldGate(recovery: LandingRecovery, kind: 'pin' | 'retrea
   return { ok: false, error: 'landing-recovery-unresolved' };
 }
 
-/** The journal record one decided (non-noop) mutation becomes. An order's source binding is its CURRENT projection's. */
+/** The journal record one decided (non-noop) mutation becomes. An order's source binding is the CURRENT association the
+ *  decision read and carried (review 1413 A2): never re-read from the facts, so an unreadable one cannot become no-run. */
 export function landingRecordOf(command: LandingAuthorityCommand,
   mutation: Extract<Extract<LandingMutationDecision, { ok: true }>['mutation'], { kind: 'entry' | 'order' }>,
-  facts: LandingMutationFacts, seq: number, at: number): LandingJournalRecord {
+  seq: number, at: number): LandingJournalRecord {
   if (mutation.kind === 'entry') {
     return { v: 1, seq, at, setBy: mutation.setBy, subject: { id: mutation.id, project: mutation.project, pr: mutation.pr, binding: { kind: 'no-run' } },
       kind: 'entry', claim: { pinnedSha: mutation.pinnedSha, handoffCommit: mutation.handoffCommit } };
   }
-  const c = facts.coordinators.find((x) => x.id === mutation.entry.id)?.value;
-  const binding: LandingHistoricalBinding = c?.kind === 'run' ? { kind: 'run', observedRunId: c.runId } : { kind: 'no-run' };
-  return { v: 1, seq, at, setBy: command.setBy, subject: { id: mutation.entry.id, project: mutation.entry.project, pr: mutation.entry.pr, binding },
+  return { v: 1, seq, at, setBy: command.setBy, subject: { id: mutation.entry.id, project: mutation.entry.project, pr: mutation.entry.pr, binding: mutation.binding },
     kind: 'order', after: mutation.after, fixesMain: mutation.fixesMain };
 }

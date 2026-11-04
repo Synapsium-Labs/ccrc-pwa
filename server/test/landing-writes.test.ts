@@ -9,10 +9,14 @@ import {
   type LandingMutationFacts,
 } from '../src/coord/landingWrites.js';
 import {
-  landingAssociationReadable, landingEntryFactsOfRow, landingRecoveryOf, type LandingEntryFacts, type LandingProjectionWitness,
+  landingAssociationReadable, landingEntryFactsOfRow, landingRecordOf, landingRecoveryOf, type LandingEntryFacts, type LandingProjectionWitness,
   type LandingRecoverySubjectFact,
 } from '../src/coord/landingEntry.js';
 import type { LandingEntry, LandingRecoverySubject } from '../../shared/landingLine.js';
+
+/** Type-level teeth: the spawned tsc of `typecheck-tests.test.ts` checks these, a vitest run only transpiles them. */
+type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type AssertTrue<T extends true> = T;
 
 /** Entry `id` is `pr` + 100, so an edge read as a PR number points at nothing. */
 const e = (pr: number, over: Partial<LandingEntry> = {}): LandingEntry => ({
@@ -166,7 +170,7 @@ describe('decideLandingMutation: omission, clears and no-ops', () => {
   });
   it('noop: the same resulting afterIds and fixesMain append nothing', () => {
     const m = ok(order(1, { afterIds: [102], fixesMain: true }), base);
-    expect(m).toEqual({ kind: 'noop', entry: base.entries[0] });
+    expect(m).toEqual({ kind: 'noop', entry: base.entries[0], coordinator: { kind: 'no-run' } });
     expect(ok(order(1, { fixesMain: true }), base)).toMatchObject({ kind: 'noop' });
   });
   it('a reference carries the target`s current association, never a historical id', () => {
@@ -176,6 +180,66 @@ describe('decideLandingMutation: omission, clears and no-ops', () => {
   it('an unreadable or missing current run refuses run-unreadable', () => {
     expect(refused(order(1, { afterIds: [102] }), facts({ entries: [e(1), e(2)], unreadableRun: [102] }))).toBe('run-unreadable');
     expect(refused(order(1, { fixesMain: true }), facts({ entries: [e(1)], unreadableRun: [101] }))).toBe('run-unreadable');
+  });
+  // Review 1413 A1: the header's step 6 (every association) comes before step 7 (the no-op), so a no-op over a target whose
+  // association cannot be read is a refusal, never a success (fail-closed, plan §4 "never no-run").
+  it('a no-op over an unreadable or missing target association refuses run-unreadable, never answers noop', () => {
+    const kept = { entries: [e(1, { afterIds: [102], fixesMain: true }), e(2), e(3)] };
+    const unreadable = facts({ ...kept, unreadableRun: [102] });
+    expect(refused(order(1, { afterIds: [102], fixesMain: true }), unreadable)).toBe('run-unreadable');
+    // afterIds omitted: the kept edges are the named targets
+    expect(refused(order(1, { fixesMain: true }), unreadable)).toBe('run-unreadable');
+    const missing = facts(kept);
+    missing.coordinators = missing.coordinators.filter((c) => c.id !== 102);
+    expect(refused(order(1, { afterIds: [102], fixesMain: true }), missing)).toBe('run-unreadable');
+    // CONTROL: the same request over a readable target is the no-op
+    expect(ok(order(1, { afterIds: [102], fixesMain: true }), facts(kept))).toMatchObject({ kind: 'noop' });
+  });
+});
+
+// Review 1413 A2: the source association a journal record carries is the one the decision read, so an unreadable or
+// missing coordinator can never be journalled as a no-run binding (CLAUDE.md "no overloaded null at a seam").
+describe('the record carries the decided association, never an unreadable one read as no-run', () => {
+  /** The decided order's coordinator type admits no unreadable member: the decision refused that already. */
+  type OrderMutation = Extract<Extract<ReturnType<typeof decideLandingMutation>, { ok: true }>['mutation'], { kind: 'order' }>;
+  type NoopMutation = Extract<Extract<ReturnType<typeof decideLandingMutation>, { ok: true }>['mutation'], { kind: 'noop' }>;
+  type _OrderReadable = AssertTrue<Equals<Extract<OrderMutation['coordinator'], { kind: 'unreadable' }>, never>>;
+  type _NoopReadable = AssertTrue<Equals<Extract<NoopMutation['coordinator'], { kind: 'unreadable' }>, never>>;
+  const proofs: [_OrderReadable, _NoopReadable] = [true, true];
+  const recordOf = (cmd: LandingAuthorityCommand, f: LandingMutationFacts) => {
+    const d = decideLandingMutation(cmd, f);
+    if (!d.ok) return d.error;
+    if (d.mutation.kind === 'noop') return 'noop';
+    return landingRecordOf(cmd, d.mutation, 7, 5000);
+  };
+
+  it('an unreadable or missing source association refuses: no record, and so no no-run binding, is made', () => {
+    expect(proofs).toEqual([true, true]);
+    expect(recordOf(order(1, { fixesMain: true }), facts({ entries: [e(1, { runId: 42 })], unreadableRun: [101] }))).toBe('run-unreadable');
+    const missing = facts({ entries: [e(1, { runId: 42 })] });
+    missing.coordinators = [];
+    expect(recordOf(order(1, { fixesMain: true }), missing)).toBe('run-unreadable');
+  });
+
+  it('the decided order carries the source association it read, and the record binds exactly that', () => {
+    const f = facts({ entries: [e(1, { runId: 42 })] });
+    expect(ok(order(1, { fixesMain: true }), f)).toMatchObject({ kind: 'order', coordinator: { kind: 'run', runId: 42, claimedBy: 'coord' },
+      binding: { kind: 'run', observedRunId: 42 } });
+    expect(recordOf(order(1, { fixesMain: true }), f)).toMatchObject({ kind: 'order', seq: 7, at: 5000,
+      subject: { id: 101, project: 'project-a', pr: 1, binding: { kind: 'run', observedRunId: 42 } } });
+    // CONTROL: a genuine no-run association records no-run
+    expect(recordOf(order(1, { fixesMain: true }), facts({ entries: [e(1)] })))
+      .toMatchObject({ subject: { id: 101, binding: { kind: 'no-run' } } });
+  });
+
+  it('the record never re-reads the association from the facts: the decision is the one source', () => {
+    const f = facts({ entries: [e(1, { runId: 42 })] });
+    const d = decideLandingMutation(order(1, { fixesMain: true }), f);
+    if (!d.ok || d.mutation.kind !== 'order') throw new Error('expected an order');
+    // the facts row turning unreadable after the decision changes nothing the record says
+    f.coordinators = [{ id: 101, value: { kind: 'unreadable' } }];
+    expect(landingRecordOf(order(1, { fixesMain: true }), d.mutation, 8, 6000))
+      .toMatchObject({ subject: { binding: { kind: 'run', observedRunId: 42 } } });
   });
 });
 
