@@ -736,6 +736,8 @@ describe('every programme box opens its view and links its spec (PL10, D26 amend
       const at = heard(list);
       const box = drawCard(at.sessions, at.runs, 'project-c');
       expect(within(box).queryByRole('link', { name: /^Spec/ }), JSON.stringify(list?.goals ?? null)).toBeNull();
+      // Not even as words: a link with no address is no `link` role (review 1466 F15).
+      expect(within(box).queryByText('Spec'), JSON.stringify(list?.goals ?? null)).toBeNull();
       cleanup();
     }
   });

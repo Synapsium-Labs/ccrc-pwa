@@ -244,6 +244,8 @@ describe('the spec one tap away on the combined list', () => {
     const link = within(a!).getByRole('link', { name: 'Spec for prog-a' });
     expect(link.getAttribute('href')).toBe('/docs/project-a/specs/2026-10-31-prog-a-design.md');
     expect(within(b!).queryByRole('link')).toBeNull();
+    // Not even as words: a link with no address is no `link` role, so the words are what a dead "Spec" leaves (review 1466 F15).
+    expect(within(b!).queryByText('Spec')).toBeNull();
   });
 
   it('no spec link without a home project, nor on the group of sessions in no programme', () => {
@@ -252,5 +254,6 @@ describe('the spec one tap away on the combined list', () => {
       view: waitingView({ items: [itemView({ id: 1, program: 'prog-a' })], goals: [goalsOf('prog-a', SPEC)] }),
     });
     expect(screen.queryByRole('link', { name: /^Spec/ })).toBeNull();
+    expect(screen.queryByText('Spec'), 'no dead Spec word (review 1466 F15)').toBeNull();
   });
 });

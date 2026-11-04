@@ -185,11 +185,14 @@ describe('the programme view: the spec one tap away', () => {
     const view = render(<ProgrammeScreen slug="prog-a" store={heard()} />);
     expect(await screen.findByText('No spec is pinned yet.')).toBeTruthy();
     expect(within(view.container.querySelector<HTMLElement>('.pv-head')!).queryByRole('link')).toBeNull();
+    // Not even as words: a link with no address is no `link` role, so the words are what a dead "Spec" leaves (review 1466 F15).
+    expect(within(view.container.querySelector<HTMLElement>('.pv-head')!).queryByText('Spec')).toBeNull();
     view.unmount();
     vi.spyOn(api, 'goals').mockResolvedValue({ ok: true, goals: goals() });
     const homeless = render(<ProgrammeScreen slug="prog-a" store={heard({ runs: [runRow({ id: 1, program: 'prog-a', homeProject: null } as never)] })} />);
     expect(await screen.findByText('A console view of what the programme is building.')).toBeTruthy();
     expect(within(homeless.container.querySelector<HTMLElement>('.pv-head')!).queryByRole('link')).toBeNull();
+    expect(within(homeless.container.querySelector<HTMLElement>('.pv-head')!).queryByText('Spec')).toBeNull();
   });
 });
 
