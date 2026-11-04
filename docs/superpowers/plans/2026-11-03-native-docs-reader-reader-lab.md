@@ -1364,10 +1364,11 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
  *     open, read and close routes are NOT here), named by a nonce the server minted
  *     from sixteen random bytes, for at most the life `readerLab/runs.ts` derives
  *     from the lab's own caps; with no run open it counts nothing. It is a permanent
- *     surface on every box, inert until a session opens a run. Being exempt, its GET
- *     and POST also skip the origin check, on purpose: their callers send origin
- *     `null`, and `needsOriginCheck`'s note below says why that costs nothing (every
- *     WebSocket upgrade, this route's included, is still origin-checked). Its counter
+ *     surface on every box, inert until a session opens a run. Its POST, being
+ *     exempt, skips the origin check, on purpose: its callers send origin `null`,
+ *     and `needsOriginCheck`'s note below says why that costs nothing. A GET never
+ *     takes one, and every WebSocket upgrade, this route's included, is
+ *     origin-checked. Its counter
  *     (`readerLab/routes.ts#installReaderLabCounter`) is an `onRequest` hook added
  *     just before this file's: it counts and never answers, so a probe this gate
  *     refuses (a frame's WebSocket upgrade, origin `null`) is still counted, and the
@@ -4940,7 +4941,7 @@ The coordinator ruled the review's findings, and each fix is its own commit, mad
 - F2: row `RLB-T2-M11` (see F3 under "Named, without a number").
 - A1: the nonce comes from `node:crypto`'s `randomBytes(16)`, pinned by a source scan (row `RLB-T3-M14`, a `Math.random`-derived string).
 - A2: the wording in `routes.ts`, `gate.ts` and refinement (f), and one case. A HEAD and a wrong-shaped probe path, each with no run and with a live run, dark and armed, get equal answers (row `RLB-T3-M15`, a HEAD answered differently when its run exists).
-- A3: `gate.ts`'s reason 8 now says only the probe's GET and POST skip the origin check; every upgrade is still origin-checked.
+- A3: `gate.ts`'s reason 8 now says the probe's POST, being exempt, skips the origin check; a GET never takes one; every upgrade is origin-checked (worded so in fix round 2; round 1's text still named the GET).
 - A4: the commit names in this section's opening paragraph.
 - A5: the comment over `secret-mask.test.ts`'s two rows cites D-7967.
 - A6: carried, below.
