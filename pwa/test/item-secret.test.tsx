@@ -296,7 +296,10 @@ describe('a stored secret shows "Stored" with Remove (the operator\'s ruling on 
     for (const state of ['open', 'checking', 'confirmed'] as const) {
       showStored(vi.fn(), stored({ state: state as never, secretSet: { unreadable: true } }));
       const line = document.querySelector('[data-secret="unreadable"]');
-      expect(line?.textContent, state).toBe(LEDGER_REFUSAL_TEXT['secrets-unreadable']);
+      // One slot, so one slot's sentence, never the programme-wide one (review 1426 F-F), and it names what to do next.
+      expect(line?.textContent, state).toBe(STORED_TEXT.slotUnreadable);
+      expect(line?.textContent, state).not.toBe(LEDGER_REFUSAL_TEXT['secrets-unreadable']);
+      expect(line?.textContent, state).toMatch(/reload this page/);
       expect(screen.queryByText(STORED_TEXT.stored), state).toBeNull();
       expect(screen.queryByRole('button', { name: STORED_TEXT.removeLabel('api-key') }), state).toBeNull();
       expect(screen.queryByLabelText(SECRET_TEXT.label), state).toBeNull();
