@@ -492,7 +492,6 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     expect(doc.querySelectorAll('b')).toHaveLength(0);
     expect(doc.body.firstElementChild?.textContent).toContain(`uncommitted changes from ${HOSTILE_WORKTREE_LABEL} on main`);
     expect(doc.body.textContent).toContain(`draft · modified in ${HOSTILE_WORKTREE_LABEL}`);
-    expect(doc.querySelector('meta[name="ccrc:worktree"]')?.getAttribute('content')).toBe(HOSTILE_WORKTREE_LABEL);
     expect(text).not.toContain('/repo/wt');
     // The meta's attribute value, as written: a `"` would end it early, so the raw value (read up to the first `"`)
     // decodes to the whole label only if the quote was escaped, and the raw segment appears nowhere unescaped.
@@ -501,6 +500,7 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     const decoded = new DOMParser().parseFromString(`<p title="${raw![1]!}"></p>`, 'text/html').querySelector('p')?.getAttribute('title');
     expect(decoded).toBe(HOSTILE_WORKTREE_LABEL);
     expect(raw![1]).not.toContain('<');
+    expect(doc.querySelector('meta[name="ccrc:worktree"]')?.getAttribute('content')).toBe(HOSTILE_WORKTREE_LABEL);
     expect(text).not.toContain('wt<b>');
     expect(doc.querySelectorAll('meta[http-equiv]')).toHaveLength(1);
     expect(doc.querySelectorAll('style')).toHaveLength(1);
