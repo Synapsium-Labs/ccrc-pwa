@@ -48,8 +48,8 @@ export function FleetHead(
                   the doors the bar lacks stay: Settings and the bell. D-161's "a durable door to /accounts" and D-2's "the only
                   door to /mail" are the bar's Accounts and Inbox doors now, mounted on every page but an open session. */}
               {/* THE DOOR TO /settings (centralised update management §13) — the
-                  `.accounts-door` pattern directly above, for the argument its
-                  comment makes: a glyph AND a short text label, because an
+                  pattern the head's Accounts door had until PL10 moved that door to
+                  the phone's bottom bar: a glyph AND a short text label, because an
                   icon-only gear would be exactly as undiscoverable as the
                   AccountsStrip tap target that D-161 found was the only door to
                   /accounts. The accessible name says what is behind it — updates

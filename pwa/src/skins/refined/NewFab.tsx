@@ -1,10 +1,12 @@
 // Refined's `+ New` on a phone (W2 Task S5, D-5471; spec §5.3, Fleet, phone row): an extended primary button at the
-// bottom right, above the safe-area inset, built with `commandDoor('new-session')` (the plan's door table).
+// bottom right, above the safe-area inset and the phone's bottom bar (`--safe-bottom`, which the shell lifts above the bar:
+// desktop-polish PL10, D-7952), built with `commandDoor('new-session')` (the plan's door table).
 //
 // MOUNTED, NEVER CSS-HIDDEN (the plan's "one instance per width", `skin-boundary.test.ts` (j)): not at ≥900, where the
 // app bar's `+ New session` is the door, and not off the fleet route, where the fleet column is still mounted but
 // hidden by the phone swap (`shell.css`). While mounted it publishes its measured height plus its margin as
-// `--phone-nav-h`, the one variable for whatever chrome is fixed to a phone's bottom edge, and removes it on unmount;
+// `--phone-nav-h`, the variable for the floating chrome over a phone's list (the bottom bar's own height is
+// `--phone-bar-h`, `shell.css`), and removes it on unmount;
 // `ToastHost` adds it to `--composer-h`, so a toast clears it, and the fleet list's bottom reservation follows it (the
 // token's 0px default is in `tokens.css`; the inline value on the root outranks it).
 import { useLayoutEffect, useRef } from 'react';

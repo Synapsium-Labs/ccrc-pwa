@@ -5,11 +5,14 @@
 // on every page but an open session; a desk's navigation shows no fleet place; nothing changes inside a session. jsdom applies
 // no media query, so the width is the frame's `useMediaQuery` answer (`atWidth`), and the bar's real layout is the browser
 // leg's (`browser/phone-bar.browser.test.ts`).
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { fleetSession } from './fleetFixture';
 import { itemView, waitingView } from './ledgersFixture';
+import { declValue, ruleIn } from './cssRule';
 
 vi.mock('../src/lib/push', () => ({
   pushSupported: () => true,
@@ -203,19 +206,33 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
       expect(doorsOf(phoneBar()!)[0]).toBe('go-fleet');
     });
 
-    it("an open session's chrome is unchanged at phone and desk widths", () => {
+    // Named for what it checks (review 1466 F19): nothing of the bar reaches an open session, at either width.
+    it('an open session draws no phone navigation and the shell publishes nothing inline, at phone and desk widths', () => {
       for (const width of [390, 1280]) {
         atWidth(width);
         mount(`/s/${SESSION.id}`);
         const navs = [...document.querySelectorAll('nav')].map((n) => n.getAttribute('aria-label'));
         // The navigation landmarks a session had before PL10: none of a phone's own, a desk's primary navigation.
         expect(navs.filter((n) => n === 'Navigation'), `${width}`).toEqual([]);
+        expect(document.querySelector('.shell-phone-nav, .phone-bar'), `${width}`).toBeNull();
         expect(document.querySelector('.app-shell')!.getAttribute('style'), `${width}: the shell publishes nothing inline`).toBeNull();
         cleanup();
       }
     });
   });
 }
+
+// Review 1466 F19 (fix round 1): below 900 the shell lifts `--safe-bottom` above the bar, and `.fleet` reserves it at its foot,
+// so the list inside it keeps only the device's inset under its own reservation for the round `+`: the bar is reserved once.
+describe('the fleet reserves the bar once', () => {
+  it("`.fleet` lifts above the bar through --safe-bottom; `.fleet-list` adds the device's inset alone", () => {
+    const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
+    expect(declValue(ruleIn(css, '.fleet'), 'padding')).toContain('var(--safe-bottom)');
+    const list = declValue(ruleIn(css, '.fleet-list'), 'padding-bottom');
+    expect(list).not.toContain('--safe-bottom');
+    expect(list).toContain('env(safe-area-inset-bottom,0px)');
+  });
+});
 
 describe("Instrument's rail reads the one list", () => {
   it('its head is the desk places with Archive after Accounts, then its foot', () => {

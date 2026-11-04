@@ -253,7 +253,9 @@
      card's content in every viewport and both themes. A FAB that measures itself
      publishes its height and margin as --phone-nav-h (W2 Task S5, D-5471); the
      round `+` does not, so 56px stays the floor. */
-  padding-bottom: calc(max(56px, var(--phone-nav-h)) + var(--sp-6) + var(--safe-bottom));
+  /* The device's inset, not `--safe-bottom`: below 900 the shell lifts `--safe-bottom` above the phone's bottom bar, and `.fleet`
+     around this list already reserves that, so the bar's height is reserved once (desktop-polish PL10, review 1466 F19). */
+  padding-bottom: calc(max(56px, var(--phone-nav-h)) + var(--sp-6) + env(safe-area-inset-bottom, 0px));
 }
 /* The fleet foot's region of work whose session is not listed: a grid item of .fleet-list, like .proj-card, so it
    takes the card's floor. A grid item's automatic minimum is its min-content width, and its rows' words are
