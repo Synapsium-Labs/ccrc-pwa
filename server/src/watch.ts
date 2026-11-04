@@ -2535,13 +2535,6 @@ export class FleetWatcher {
       // every dispatch, which is the precise lie spec §4.2 mints
       // `unmeasurable` to prevent.
       this.emitCoord(registryRead.listed ? registryRead.names : null);
-      // BEFORE the fail-shut return: an unlistable registry is exactly the
-      // state in which nobody may decide a pool, so `listed:false` must reach
-      // the wire now rather than leave the last pool snapshot frozen. That arm
-      // is free: `readProjectPools` returns before touching io when names is
-      // null. The listed arm's bounded cost and why it stays awaited are stated
-      // on `emitPools`; `project-pools-read.test.ts` pins both cost arms.
-      await this.emitPools(registryRead.listed ? registryRead.names : null);
       // PR landing in ccrc, stage 1: the checks lane, BEFORE the fail-shut return below, because an unlistable registry
       // still owes a live episode its stuck bound (spec §3.8). NEVER awaited, and its own beat (`LANE_SCHEDULE`), never
       // inside `sweepPr`: its reads are `ccd pr-landing` calls over the network.
@@ -2553,6 +2546,7 @@ export class FleetWatcher {
         ?.catch(() => { /* one bad sweep must not kill the poll */ });
       this.noteDelegationRegistry(registryRead.listed);
       if (!registryRead.listed) {
+        await this.emitPools(null);                                     // an unlistable registry: nobody may decide a pool, so `listed:false` reaches the wire now (free: no io)
         this.registryTick = { listed: false, at: listedAt };            // D-6436: `lastFleet` is kept, but not as a listing
         this.withdrawDelegation();                                      // wave 4: no lane runs below, so the frame is withdrawn here
         // Retain, don't erase, at fleet scale: `this.hookStates`/
@@ -2730,6 +2724,16 @@ export class FleetWatcher {
       }
       const panePids = new Map<string, number | null>();
       const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings, paneListing);
+      // The frame leaves first (console speed S1): the fleet frame follows assembly directly; pools, "Finished" pushes, claims,
+      // the lanes, the state cache and the runs frame all wait behind it.
+      this.registryTick = { listed: true, at: listedAt };               // D-6436: `lastFleet` reflects this listing either way
+      const json = JSON.stringify(sessions);
+      if (json !== this.lastJson) {
+        this.lastJson = json;
+        this.lastFleet = sessions;
+        this.bus.emit('fleet', sessions);
+      }
+      await this.emitPools(registryRead.names);
       // Blocking review finding 4: `FleetSession.unmeasured` (Task 2) now
       // carries the SAME evidence `measuredIdentity(records[i]) === null`
       // would, one hop from `records[i]` in `sessions[i]` — so this reads it
@@ -2981,12 +2985,6 @@ export class FleetWatcher {
       // clock from sessions, and an unchanged session snapshot must not
       // suppress a run transition from reaching an already-connected client.
       this.emitRuns(sessions);
-      const json = JSON.stringify(sessions);
-      this.registryTick = { listed: true, at: listedAt };               // D-6436: `lastFleet` reflects this listing either way
-      if (json === this.lastJson) return;
-      this.lastJson = json;
-      this.lastFleet = sessions;
-      this.bus.emit('fleet', sessions);
     } finally {
       this.ticking = false;
     }

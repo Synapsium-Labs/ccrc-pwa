@@ -30,7 +30,7 @@ const plant = (reg: string, id: string, extra: Record<string, string> = {}): voi
 
 export type ListingMode = 'ok' | 'fail';
 
-export function makeHarness(opts: { listing?: ListingMode; paneOf?: (id: string) => string } = {}) {
+export function makeHarness(opts: { listing?: ListingMode; paneOf?: (id: string) => string; wrapIO?: (io: FleetIO) => FleetIO } = {}) {
   const home = mkTmp('ccrc-');
   seedRoster(home);
   const reg = path.join(home, '.cc-sessions');
@@ -69,11 +69,12 @@ export function makeHarness(opts: { listing?: ListingMode; paneOf?: (id: string)
   };
 
   const log = (p: string): void => { reads.push(p); };
-  const io: FleetIO = {
+  const base: FleetIO = {
     ...localIO,
     async readFile(p, ...r) { log(p); return localIO.readFile(p, ...r); },
     async readFileMeasured(p, ...r) { log(p); return localIO.readFileMeasured(p, ...r); },
   };
+  const io = opts.wrapIO ? opts.wrapIO(base) : base;
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
   const cachePath = path.join(home, '.ccrc', 'state-cache.json');
   const deps = {
