@@ -7,7 +7,7 @@
     ".github/ci/library-provenance.sh": {"count":0,"codes":{}},
     ".github/ci/shellcheck-install.sh": {"count":0,"codes":{}},
     "ccd/ccclip": {"count":0,"codes":{}},
-    "ccd/ccd + ccd/lib": {"count":141,"codes":{"SC1007":5,"SC1010":5,"SC1090":2,"SC2034":24,"SC2053":1,"SC2100":26,"SC2120":1,"SC2128":28,"SC2154":9,"SC2155":1,"SC2174":2,"SC2178":23,"SC2179":6,"SC2206":1,"SC2209":6,"SC2318":1}},
+    "ccd/ccd + ccd/lib": {"count":142,"codes":{"SC1007":5,"SC1010":5,"SC1090":2,"SC2034":24,"SC2053":1,"SC2100":27,"SC2120":1,"SC2128":28,"SC2154":9,"SC2155":1,"SC2174":2,"SC2178":23,"SC2179":6,"SC2206":1,"SC2209":6,"SC2318":1}},
     "ccd/ccd-account-auth": {"count":6,"codes":{"SC1010":4,"SC2174":2}},
     "ccd/ccd-account-health": {"count":1,"codes":{"SC2174":1}},
     "ccd/ccd-cap-scopes": {"count":0,"codes":{}},

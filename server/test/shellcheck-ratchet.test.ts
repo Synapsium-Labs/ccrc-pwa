@@ -374,7 +374,10 @@ describe('the tree', () => {
     ['invalid parentheses', '=(', 'SC1088'],
     ['a stray operator', '&&', 'SC1070'],
   ])('red: %s at the top of a scratch copy fails as unparsed, though its count fell', { timeout: 60_000 }, async (_what, stray, code) => {
-    const { failures, lowered } = await judgeCopy((text) => text.replace('\n', `\n${stray}\n`));
+    const { failures, lowered } = await judgeCopy((text) => {
+      const line2 = text.indexOf('\n') + 1;
+      return `${text.slice(0, line2)}${stray}\n${text.slice(line2)}`;
+    });
     expect(failures).toHaveLength(1);
     expect(failures[0]).toContain('stopped parsing');
     expect(failures[0]).toContain(cite('ccd/ccrc-token-sync', 2, code));
