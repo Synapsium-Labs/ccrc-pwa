@@ -21,6 +21,7 @@ import {
 import { READER_LAB_PROBE_BODY_MAX, labOwnerOf } from '../src/readerLab/routes.js';
 import { READER_LAB_RUN_HITS_MAX, READER_LAB_RUN_TTL_MS } from '../src/readerLab/runs.js';
 import { testDeps } from './helpers.js';
+import { callsIn, parsedFile, sourceOfSymbol, symbolOf } from './scan/symbols.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -197,30 +198,38 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
   });
 
   it('the probe handlers never read a body: no body or raw-stream access in either registration (refinement (f))', () => {
-    const src = readFileSync(path.join(here, '..', 'src', 'readerLab', 'routes.ts'), 'utf8');
-    const from = src.indexOf(`app.get('${READER_LAB_PROBE_ROUTE}'`);
-    expect(from, 'the probe registrations are the last in the file').toBeGreaterThan(src.indexOf(`app.post('${READER_LAB_RUNS_PATH}'`));
-    expect(src.indexOf(`app.post('${READER_LAB_PROBE_ROUTE}'`)).toBeGreaterThan(from);
+    // Keyed on the parser (scan/symbols.ts), not on a line of text: the two probe registrations are the calls
+    // `app.get`/`app.post` whose first argument is the probe route, and `probeAnswer` is the one answer both give.
+    const F = 'server/src/readerLab/routes.ts';
+    const { text } = parsedFile(F);
+    const regs = callsIn(symbolOf(F, 'registerReaderLabRoutes'))
+      .filter((c) => /^app\.(get|post)$/.test(c.callee) && c.args[0]?.kind === 'string' && c.args[0].text === READER_LAB_PROBE_ROUTE);
+    expect(regs.map((c) => c.callee), 'both probe registrations are found').toEqual(['app.get', 'app.post']);
     // Comments are blanked, so a sentence ABOUT a body is not a read; `bodyLimit` is not the word `body`.
-    const reads = (text: string): boolean => /\bbody\b|\.\s*raw\b|\.\s*stream\b/.test(
-      text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1'));
-    expect(reads(src.slice(from)), 'a probe handler reads the request body').toBe(false);
+    const reads = (s: string): boolean => /\bbody\b|\.\s*raw\b|\.\s*stream\b/.test(
+      s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1'));
+    for (const c of regs) expect(reads(text.slice(c.start, c.end)), `${c.callee}: a probe handler reads the request body`).toBe(false);
+    expect(reads(sourceOfSymbol(F, 'probeAnswer')), 'the probe answer reads the request body').toBe(false);
     // CONTROL: every shape of a read is seen; a comment and the limit option are not.
-    for (const t of ['async (req, reply) => { const b = req.body; }', 'async ({ body }, reply) => {}', 'req.raw.on("data", f)',
-      'async (req) => { for await (const c of req.stream) {} }']) expect(reads(t), t).toBe(true);
-    for (const t of ['bodyLimit: READER_LAB_PROBE_BODY_MAX,', '// the handler never reads the body\nasync (_req, reply) => 1', '/* a body */ x']) {
-      expect(reads(t), t).toBe(false);
+    for (const s of ['async (req, reply) => { const b = req.body; }', 'async ({ body }, reply) => {}', 'req.raw.on("data", f)',
+      'async (req) => { for await (const c of req.stream) {} }']) expect(reads(s), s).toBe(true);
+    for (const s of ['bodyLimit: READER_LAB_PROBE_BODY_MAX,', '// the handler never reads the body\nasync (_req, reply) => 1', '/* a body */ x']) {
+      expect(reads(s), s).toBe(false);
     }
   });
 
   it('a nonce is 128 bits from node:crypto: minted by randomBytes(16), imported from node:crypto, with no Math.random in the door (M10.2)', () => {
     // The shape is pinned elsewhere; its entropy source is pinned here, because a Math.random- or counter-derived string of
-    // the same 22 characters would pass every shape check.
-    const src = readFileSync(path.join(here, '..', 'src', 'readerLab', 'routes.ts'), 'utf8');
-    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
-    expect(code.split("const nonce = randomBytes(16).toString('base64url');"), 'the open handler mints the nonce once').toHaveLength(2);
-    expect(code).toMatch(/import\s*\{[^}]*\brandomBytes\b[^}]*\}\s*from\s*'node:crypto'/);
-    expect(code, 'the door draws no randomness from Math').not.toMatch(/\bMath\s*\.\s*random\b/);
+    // the same 22 characters would pass every shape check. Keyed on the parser (scan/symbols.ts), not on a line of text.
+    const F = 'server/src/readerLab/routes.ts';
+    const parsed = parsedFile(F);
+    const mints = callsIn(symbolOf(F, 'registerReaderLabRoutes')).filter((c) => c.name === 'randomBytes');
+    expect(mints.map((c) => [c.callee, c.args.map((a) => a.text), c.boundTo]), 'the open handler mints the nonce once, 16 bytes')
+      .toEqual([['randomBytes', ['16'], 'nonce']]);
+    const encode = parsed.calls.filter((c) => c.callee === 'randomBytes(16).toString');
+    expect(encode.map((c) => c.args.map((a) => `${a.kind}:${a.text}`)), 'encoded as base64url').toEqual([['string:base64url']]);
+    expect(parsed.imports.filter((e) => e.names.includes('randomBytes')).map((e) => e.specifier)).toEqual(['node:crypto']);
+    expect(parsed.calls.filter((c) => /^Math\s*\.\s*random$/.test(c.callee)).length, 'the door draws no randomness from Math').toBe(0);
   });
 
   it('a request that reaches no probe handler gets one answer whether or not a run exists: a HEAD, a wrong-shaped path, dark or armed (refinement (f))', async () => {
