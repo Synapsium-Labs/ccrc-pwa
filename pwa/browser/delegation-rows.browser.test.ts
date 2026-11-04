@@ -169,17 +169,31 @@ interface PartsFit {
   readonly condition: boolean;
   readonly last: boolean;
   readonly hasCondition: boolean;
-  /** The free-text part: its width against the floor (`min(8ch, its own length)`), and whether it is cut with an
-   *  ellipsis (review 1431 F2, F3). `null` for a row with no such part. */
-  readonly name: { readonly width: number; readonly floor: number; readonly cut: boolean; readonly ellipsis: boolean } | null;
+  /** The free-text part: its width against the floor (`min(8ch, its own length)`), and whether its text is cut, in a
+   *  box that clips (a computed `overflow-x` other than `visible`: with `visible` the text paints on over the next part)
+   *  and ends in an ellipsis (review 1431 F2, F3; review 1435 F2). `null` for a row with no such part. */
+  readonly name: { readonly width: number; readonly floor: number; readonly cut: boolean; readonly clips: boolean;
+    readonly ellipsis: boolean } | null;
   /** Parts after the first that start a line, and of those, the ones whose middot is drawn (review 1431 D). */
   readonly lineStarts: number;
   readonly leadingDots: readonly string[];
+  /** Parts that draw a separator and sit under an overflow clip, which cuts that separator away in an engine with no
+   *  `overflow-clip-margin` (review 1435 F1). */
+  readonly clippedSeparators: readonly string[];
+  /** Parts after the first that share a line with the part before them, and of those, the ones whose separator is not
+   *  drawn in the gap between the two: a tap at the gap's centre reaches the part only through its `::before`, so this
+   *  measures where the glyph's box is, and a gap narrower than the floor is one the glyph covers a word in (review 1435
+   *  F2). */
+  readonly midLine: number;
+  readonly missingSeparators: readonly string[];
 }
 /** The name's floor, in characters of its own font (review 1431 F2): the test's own figure, never read from the CSS. */
 const NAME_FLOOR_CH = 8;
-const measureParts = ({ words, floorCh }: { words: readonly string[]; floorCh: number }): PartsFit[] =>
+/** The least gap a separator is drawn in: wide enough for the glyph and a space either side at the rows' sizes. */
+const GAP_FLOOR_PX = 6;
+const measureParts = ({ words, floorCh, gapFloor }: { words: readonly string[]; floorCh: number; gapFloor: number }): PartsFit[] =>
   [...document.querySelectorAll<HTMLElement>('.proj-work-parts')].map((box) => {
+    box.scrollIntoView({ block: 'center', inline: 'nearest' });
     const b = box.getBoundingClientRect();
     const inside = (el: Element): boolean => {
       const r = el.getBoundingClientRect();
@@ -188,17 +202,20 @@ const measureParts = ({ words, floorCh }: { words: readonly string[]; floorCh: n
     const parts = [...box.querySelectorAll<HTMLElement>('.proj-work-part')];
     const cond = parts.find((p) => words.includes(p.textContent ?? ''));
     const nameEl = box.querySelector<HTMLElement>('.proj-work-name');
+    // The box the name's text is drawn in: its own inner box, or the part itself if there is none.
+    const textEl = nameEl?.querySelector<HTMLElement>('.proj-work-name-text') ?? nameEl;
     let name: PartsFit['name'] = null;
-    if (nameEl !== null) {
+    if (nameEl !== null && textEl !== null && textEl !== undefined) {
       const probe = document.createElement('span');
       probe.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;font:${getComputedStyle(nameEl).font}`;
       probe.textContent = '0'.repeat(floorCh);
       document.body.append(probe);
       const chFloor = probe.getBoundingClientRect().width;
       probe.remove();
+      const t = getComputedStyle(textEl);
       name = {
-        width: nameEl.getBoundingClientRect().width, floor: Math.min(chFloor, nameEl.scrollWidth),
-        cut: nameEl.scrollWidth > nameEl.clientWidth + 0.5, ellipsis: getComputedStyle(nameEl).textOverflow === 'ellipsis',
+        width: nameEl.getBoundingClientRect().width, floor: Math.min(chFloor, textEl.scrollWidth),
+        cut: textEl.scrollWidth > textEl.clientWidth + 0.5, clips: t.overflowX !== 'visible', ellipsis: t.textOverflow === 'ellipsis',
       };
     }
     // A middot is drawn at a line's start when its box lies inside the clipping words box there.
@@ -211,12 +228,41 @@ const measureParts = ({ words, floorCh }: { words: readonly string[]; floorCh: n
       const dotRight = p.getBoundingClientRect().right - parseFloat(dot.right);
       return !(clips && dotRight <= b.left + 0.5);
     }).map((p) => p.textContent ?? '');
+    const separated = parts.slice(1);
+    const clippedSeparators = separated.filter((p) => getComputedStyle(p).overflowX !== 'visible').map((p) => p.textContent ?? '');
+    const mids = separated.filter((p) => !starts.includes(p));
+    const missingSeparators = mids.filter((p) => {
+      const prev = parts[parts.indexOf(p) - 1]!.getBoundingClientRect();
+      const r = p.getBoundingClientRect();
+      const gap = r.left - prev.right;
+      if (gap < gapFloor) return true;
+      const hit = document.elementFromPoint(prev.right + gap / 2, r.top + Math.min(r.height, parseFloat(getComputedStyle(p).lineHeight) || r.height) / 2);
+      return hit === null || !p.contains(hit);
+    }).map((p) => p.textContent ?? '');
     return {
       text: box.textContent ?? '', hasCondition: cond !== undefined,
       condition: cond === undefined || inside(cond), last: parts.length === 0 || inside(parts[parts.length - 1]!),
-      name, lineStarts: starts.length, leadingDots,
+      name, lineStarts: starts.length, leadingDots, clippedSeparators, midLine: mids.length, missingSeparators,
     };
   });
+
+/** What every row's words must hold wherever they are drawn: the condition word and the last part whole, the name at
+ *  its floor, no line that starts with a middot, and every separator unclipped and drawn in its gap. */
+const expectWords = (words: readonly PartsFit[]): void => {
+  for (const w of words) {
+    expect(w.condition, `${w.text}: its condition word is whole`).toBe(true);
+    expect(w.last, `${w.text}: its last part is whole`).toBe(true);
+    // Review 1431 F2: the name is never squeezed below its floor; the line wraps first.
+    if (w.name !== null) expect(w.name.width, `${w.text}: the name keeps its floor`).toBeGreaterThanOrEqual(w.name.floor - 0.5);
+    // Review 1431 D: no wrapped line starts with a lone middot.
+    expect(w.leadingDots, `${w.text}: no line starts with a middot`).toEqual([]);
+    // Review 1435 F1: no part that draws a separator is under a clip, so no engine cuts the separator away.
+    expect(w.clippedSeparators, `${w.text}: every separator's part computes overflow-x: visible`).toEqual([]);
+    // Review 1435 F2: every mid-line separator is drawn in the gap between its part and the one before.
+    expect(w.missingSeparators, `${w.text}: every mid-line separator is drawn in its gap`).toEqual([]);
+  }
+  expect(words.reduce((n, w) => n + w.midLine, 0), 'some separator is measured mid-line').toBeGreaterThan(0);
+};
 
 describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
   for (const theme of THEMES) {
@@ -248,23 +294,24 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
             expect(u.overflow, `${u.text}: nothing overflows it`).toBeLessThanOrEqual(1);
           }
           // F1 (review 1424): a long name never hides the condition word or the `from` part, on a card or in the region.
-          const words = await page.evaluate(measureParts, { words: CONDITION_WORDS, floorCh: NAME_FLOOR_CH });
+          const words = await page.evaluate(measureParts, { words: CONDITION_WORDS, floorCh: NAME_FLOOR_CH, gapFloor: GAP_FLOOR_PX });
           expect(words.filter((w) => w.hasCondition).length, 'every activity and worktree row has a condition word').toBe(6);
-          for (const w of words) {
-            expect(w.condition, `${w.text}: its condition word is whole`).toBe(true);
-            expect(w.last, `${w.text}: its last part is whole`).toBe(true);
-            // Review 1431 F2: the name is never squeezed below its floor; the line wraps first.
-            if (w.name !== null) expect(w.name.width, `${w.text}: the name keeps its floor`).toBeGreaterThanOrEqual(w.name.floor - 0.5);
-            // Review 1431 D: no wrapped line starts with a lone middot.
-            expect(w.leadingDots, `${w.text}: no line starts with a middot`).toEqual([]);
+          if (width !== 390) {
+            // Review 1435 G1: on the desk a name longer than the floor that fits is drawn whole, so the name grows. Asked
+            // first, so a name that stops growing is named here rather than by the floor's sub-pixel margin below.
+            const fits = words.find((w) => w.text.includes('read the plan'));
+            expect(fits?.name, 'read the plan: has a name part').not.toBeNull();
+            expect(fits!.name!.cut, 'read the plan: drawn whole').toBe(false);
           }
+          expectWords(words);
           if (width === 390) {
-            // Review 1431 F3: the long names are cut, with an ellipsis, and only they are; and the region row's `from`
+            // Review 1431 F3: the long names are cut, in a box that clips, with an ellipsis; and the region row's `from`
             // part starts a line of its own, so the middot rule above is measured on a real wrapped line.
             for (const long of ['map every caller', 'reconcile every reader']) {
               const row = words.find((w) => w.text.includes(long));
               expect(row?.name, `${long}: has a name part`).not.toBeNull();
               expect(row!.name!.cut, `${long}: its name is cut`).toBe(true);
+              expect(row!.name!.clips, `${long}: its text's box clips`).toBe(true);
               expect(row!.name!.ellipsis, `${long}: with an ellipsis`).toBe(true);
             }
             expect(words.find((w) => w.text.includes('reconcile every reader'))!.lineStarts, 'the region row wraps').toBeGreaterThan(0);
@@ -383,13 +430,15 @@ describe.each(SKINS)('the session header\'s entry list and toggles at 390 in %s'
           expect(t.minWidth, `${t.text}: width floor`).toBe(targets.floor);
           expect(t.reached, `${t.text}: a tap at its centre reaches it`).toBe(true);
         }
-        // Review 1431 F3: the long-name entry is cut, with an ellipsis.
-        const headName = await page.evaluate(() => {
-          const el = [...document.querySelectorAll<HTMLElement>('.chat-head .sess-entries .proj-work-name')]
-            .find((e) => (e.textContent ?? '').startsWith('reconcile'));
-          return el === undefined ? null : { cut: el.scrollWidth > el.clientWidth + 0.5, ellipsis: getComputedStyle(el).textOverflow === 'ellipsis' };
-        });
-        expect(headName, 'the long entry has a name part').toEqual({ cut: true, ellipsis: true });
+        // Review 1435 G3: the header's entry rows hold what the card's rows hold (measured last: it scrolls each row into
+        // view). Review 1431 F3: the long-name entry is cut, in a box that clips, with an ellipsis.
+        const headWords = await page.evaluate(measureParts, { words: CONDITION_WORDS, floorCh: NAME_FLOOR_CH, gapFloor: GAP_FLOOR_PX });
+        expect(headWords, 'three entry rows').toHaveLength(3);
+        expectWords(headWords);
+        const headName = headWords.find((w) => w.text.includes('reconcile every reader'))?.name;
+        expect(headName, 'the long entry has a name part').toBeDefined();
+        expect(headName && { cut: headName.cut, clips: headName.clips, ellipsis: headName.ellipsis }, 'the long entry is cut')
+          .toEqual({ cut: true, clips: true, ellipsis: true });
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

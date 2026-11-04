@@ -2229,21 +2229,26 @@ button.proj-card-pool::before {
 /* The one free-text part (`nameAt`, decided by the words module): it ends in an ellipsis, and only it does. Its basis
    is a floor of 8ch (D-7783, review 1431 F2): the line breaks before the name would get less, so it is never squeezed
    to nothing; above the floor it grows into what the line leaves, up to its own length, so a short name is drawn
-   whole at its own width. `overflow: clip` with a clip margin of the gap's width, rather than `hidden`, so its own
-   middot (below), which sits in the gap before it, is not clipped with its text. */
+   whole at its own width. The part itself clips nothing: its middot (below) sits in the gap outside its box, so a clip
+   here would cut the middot away, and `overflow-clip-margin`, which could keep it, has no WebKit support (review 1435
+   F1). The text's own box inside it, `.proj-work-name-text`, is what clips and ends in the ellipsis. */
 .proj-work-name {
   flex: 1 1 8ch;
   min-width: 0;
   max-width: max-content;
-  overflow: clip;
-  overflow-clip-margin: var(--sp-3);
+}
+.proj-work-name-text {
+  display: block;
+  overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 /* The middot between parts sits in the gap before a part, outside its box, so a part that starts a wrapped line has
    its middot outside `.proj-work-parts` and clipped with its overflow: no line starts with a lone `·` (D-7783, review
-   1431 D; the coordination row's rule, #633). One gap's width, centred, as the old margins drew it. */
-.proj-work-parts > *:not(:first-child)::before {
+   1431 D; the coordination row's rule, #633). It fills the gap, `--sp-3` (12 px), centred: 1.6 to 1.8 px wider per
+   separator than the old margins and glyph drew (8 px of margin plus the glyph's 2.2 to 2.4 px), review 1435 G2. Only a
+   part takes one, since only a part is the containing block it is placed against (review 1435 G5). */
+.proj-work-parts > .proj-work-part:not(:first-child)::before {
   content: '·';
   position: absolute;
   top: 0;

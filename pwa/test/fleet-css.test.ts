@@ -1544,6 +1544,21 @@ describe('delegation rows read tokens only (delegation broker wave 4)', () => {
     }
     expect(declValue(ruleFor('.proj-work-chip'), 'border')).toMatch(/currentColor/);
   });
+
+  // A supplement to the measured pins in browser/delegation-rows.browser.test.ts (review 1435 F2), never instead of them:
+  // the declarations the separator and the name's cut rest on, read from the sheet.
+  it('VIS-CSS3: a part is the separator\'s containing block and clips nothing; only the name\'s inner box clips', () => {
+    expect(declValue(ruleFor('.proj-work-parts'), 'column-gap')).toBe('var(--sp-3)');
+    expect(declValue(ruleFor('.proj-work-part'), 'position')).toBe('relative');
+    for (const sel of ['.proj-work-part', '.proj-work-name']) {
+      expect(declValue(ruleFor(sel), 'overflow'), `${sel} clips nothing`).toBeNull();
+      expect(declValue(ruleFor(sel), 'overflow-clip-margin'), `${sel} needs no clip margin`).toBeNull();
+    }
+    const text = ruleFor('.proj-work-name-text');
+    expect(declValue(text, 'overflow')).toBe('hidden');
+    expect(declValue(text, 'text-overflow')).toBe('ellipsis');
+    expect(declValue(text, 'white-space')).toBe('nowrap');
+  });
 });
 
 // Delegation visibility (the plan's Global Constraints, "CSS"): the two new list surfaces take the floor `.proj-card`
