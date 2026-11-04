@@ -3,10 +3,10 @@
 // Darwin, on a server-role box and with no session registry. Fixture HOMEs only (`healthy()`); the check runs alone,
 // sourced, as the carry-copies suite runs its own.
 import { describe, expect, it } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PANE_SCOPE_STOP_LIVE_MARKER } from '../../shared/switches.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { BASH, CCRC_SRC, CHECKS_SRC, anyVerdictFor, doctorEnv, healthy, installDoctorHooks, runDoctor, shq } from './ccrc-doctorFixture.js';
 
@@ -21,7 +21,7 @@ function box(prefix: string, o: { registry?: boolean; env?: string[] } = {}): { 
   return { home, reg };
 }
 function check(home: string, os = 'linux'): { line: string; code: number } {
-  const r = spawnSync(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\nCCD_OS=${os}; _check_pane-scope-stop`],
+  const r = spawnSyncGroup(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\nCCD_OS=${os}; _check_pane-scope-stop`],
     { env: doctorEnv(home), encoding: 'utf8', timeout: 30_000 });
   const lines = (r.stdout ?? '').split('\n');
   const i = lines.findIndex((l) => /^(PASS|WARN|FAIL|SKIP) pane-scope-stop: /.test(l));
