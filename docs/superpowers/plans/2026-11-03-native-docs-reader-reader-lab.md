@@ -13,7 +13,7 @@
 
 **Goal:** The operator opens Settings › Reader lab on a phone, taps Start, taps once inside one frame when the page asks, and typically about two minutes later selects a result block that says, for that engine, whether each of the reader frame's seven walls holds and whether a blocked navigation gives the teardown signal (E18), and whether the console stays live while the reader draws Mermaid on open, beside the fact of whether a busy frame shares the console's thread (E17). Today those labs have never run on a phone: every wall was measured on desktop Chromium through Playwright, which a phone does not have.
 
-**Architecture:** RL-a adds a measurement door to the server, present on every box and inert until a signed-in session opens a run. A session opens a run (`POST /api/reader-lab/runs`) and is handed a 128-bit nonce the server mints; the run is bound to that session by a one-way digest of its cookie, never the cookie. For at most a life derived from the lab's own caps (about eighteen minutes; a run takes about two), a counter hook added immediately before the session gate counts each request to `/api/reader-lab/probe/<nonce>/<name>` by name, keeping only classes (the session cookie present by name or not, `Sec-Fetch-Site`, `Origin`, upgrade or not); the probe route itself is `EXEMPT` (a permanent reason 8) and answers every request one empty `204`. Only the opening session reads its counts back (`GET …/runs/:nonce`) and closes the run; any other gets the unknown-nonce answer. RL-b adds the page. It builds frames of the reader frame's shape (`sandbox="allow-scripts"`, `srcdoc`, `no-referrer`) whose constant scripts report only by requesting probe URLs; one "wall" frame runs the 27-channel battery under the shared library's own `frameCsp()` plus its script nonce and one canary URL; it mounts the production reader under a new `lab-draw` profile to time Mermaid and to expose it to hostile figures and stray messages; and it turns the counts and its own observations into three-outcome lines and a versioned text block. Every arrival that decides a verdict is read by step 7, before the Mermaid mounts, so a run whose life runs out later keeps its counts. No frame gets a port and the console adds no message listener: the door is the only channel out of a frame.
+**Architecture:** RL-a adds a measurement door to the server, present on every box and inert until someone opens a run (a signed-in session on an armed box; anyone who reaches the port on a dark one). A session opens a run (`POST /api/reader-lab/runs`) and is handed a 128-bit nonce the server mints; the run is bound to that session by a one-way digest of its cookie, never the cookie. For at most a life derived from the lab's own caps (about eighteen minutes; a run takes about two), a counter hook added immediately before the session gate counts each request to `/api/reader-lab/probe/<nonce>/<name>` by name, keeping only classes (the session cookie present by name or not, `Sec-Fetch-Site`, `Origin`, upgrade or not); the probe route itself is `EXEMPT` (a permanent reason 8), and every request that reaches its handler gets the same empty `204`. Only the opening session reads its counts back (`GET …/runs/:nonce`) and closes the run; any other gets the unknown-nonce answer. RL-b adds the page. It builds frames of the reader frame's shape (`sandbox="allow-scripts"`, `srcdoc`, `no-referrer`) whose constant scripts report only by requesting probe URLs; one "wall" frame runs the 27-channel battery under the shared library's own `frameCsp()` plus its script nonce and one canary URL; it mounts the production reader under a new `lab-draw` profile to time Mermaid and to expose it to hostile figures and stray messages; and it turns the counts and its own observations into three-outcome lines and a versioned text block. Every arrival that decides a verdict is read by step 7, before the Mermaid mounts, so a run whose life runs out later keeps its counts. No frame gets a port and the console adds no message listener: the door is the only channel out of a frame.
 
 **Tech Stack:** TypeScript (server's own `tsc`, pwa's own `tsc`), Fastify 5 with `@fastify/websocket` 11 (`request.ws`, `injectWS`), vitest 5 (server on node, pwa on jsdom, the browser leg through `playwright-core`), React 19 with `@ccrc/ui`'s `PageScaffold` and `Button`, the shared Markdown library's `./frame` (`frameCsp`, `FRAME_MANIFEST`), `node:crypto` (`randomBytes`). Node `>=22.16.0`.
 
@@ -137,7 +137,7 @@ Each refinement says What, Why and Cost if wrong. (a), (b), (c), (h), (i), (k), 
   - Why: the life must outlast the run's own worst case on the slow phones E17 exists to measure; the owner keeps one signed-in session from reading or closing another's run for the price of one digest.
   - Cost if wrong: a box setting is added later (Q5's option b), or a run's life is set by a measured figure instead of the caps.
 - **(e) Classes only, memory only.** The counter keeps whether `ccrc_session` was present by name with a value, the `Sec-Fetch-Site` class, the `Origin` class and whether the request was an upgrade; never a value, a path beyond the name, a query, a body, an address or a user agent; a run keeps its owner's digest, never the cookie; nothing is written to disk, and the door logs nothing of its own. On an armed box the gate's own foreign-origin line fires for each frame's WebSocket upgrade (one or two per run); the gate keeps that alarm unchanged, Task 3's test asserts it, and the page says it is expected. Cost if wrong: a diagnosis needs a header the door did not keep; the lab is re-run with a richer class.
-- **(f) One answer for every probe.** `204`, no body, `cache-control: no-store`, nothing else, by GET or POST, for a live, unknown, malformed, closed, expired or saturated run and an unknown name, an armed box's POST from origin `null` included (exempt, so it skips the origin check on purpose; the gate's `needsOriginCheck` note says so); a body Fastify refuses (413, 415, 400) still answers the same `204` through the route's `errorHandler`. `exposeHeadRoute: false` on both GETs. No route answers `OPTIONS`, so a preflight is never approved (the cookie check's marker). Cost if wrong: a probe could tell a live nonce from a dead one, which a 128-bit nonce makes worthless anyway.
+- **(f) One answer for every probe.** Every request that reaches the probe handler gets the same `204`, no body, `cache-control: no-store`, nothing else, by GET or POST, for a live, unknown, malformed, closed, expired or saturated run and an unknown name, an armed box's POST from origin `null` included (exempt, so it skips the origin check on purpose; the gate's `needsOriginCheck` note says so); a body Fastify refuses (413, 415, 400) still answers the same `204` through the route's `errorHandler`. `exposeHeadRoute: false` on both GETs. What Fastify answers before any hook (a malformed percent-escape 400, an over-long name 414, a HEAD or a wrong-shaped path 404) or the upgrade layer does depends on the request's text alone, never on the nonce, the run or the name, and the handler never reads a body. No route answers `OPTIONS`, so a preflight is never approved (the cookie check's marker). Cost if wrong: a probe could tell a live nonce from a dead one, which a 128-bit nonce makes worthless anyway.
 - **(g) One vocabulary.** `shared/readerLab.ts` declares the channels (W8a's 27, in its order), the 40 fixed probe names, the classes, the paths and the wire; the server and the PWA import it, and RL-b's desktop browser battery reads its channel list from it. Each union has its `Record<…, true>` map (`wire-totality.test.ts`). Cost if wrong: none to behaviour; a later name is one entry.
 - **(h) The lab's frames have one home, outside the Docs reader.** Departs from the rich-docs spec's A2b ("`<iframe` and `srcDoc` only in `MockupFrame.tsx` and `docs/export/buildExport.tsx`").
   - What: `pwa/src/readerLab/frames.ts` builds every lab frame: `sandbox="allow-scripts"` and nothing else, `srcdoc`, `referrerpolicy="no-referrer"`, a JSON data block just before one constant script. No other file outside `pwa/src/docs` names `srcdoc` or an `iframe`, and no file in `pwa/src` holds another sandbox token (Task 11's scans).
@@ -1168,9 +1168,11 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
 // it through a one-way digest of its cookie (`labOwnerOf`), never the cookie itself: any other session's read or close
 // answers exactly as an unknown nonce's does. The door is present on every box and inert until a session opens a run.
 // The probe pair is `EXEMPT` (gate.ts
-// reason 8): its callers are the lab's sandboxed frames, whose requests carry no session cookie by design. Every probe
-// answer is one `204` with no body and `no-store`, whatever the nonce, the run or the name, by GET or POST, a refused
-// body included, so a probe learns nothing. The counter is an `onRequest` hook the composition root adds immediately
+// reason 8): its callers are the lab's sandboxed frames, whose requests carry no session cookie by design. Every answer
+// the probe route itself gives is one `204` with no body and `no-store`, whatever the nonce, the run or the name, by GET
+// or POST, a refused body included. What Fastify answers before any hook (a malformed percent-escape 400, an over-long
+// name 414, a HEAD or a wrong-shaped path 404) or the upgrade layer does (a WebSocket upgrade past the gate is
+// completed, then closed) depends on the request's text alone, so a probe learns nothing. The counter is an `onRequest` hook the composition root adds immediately
 // BEFORE the gate's, so a probe the gate refuses (a frame's WebSocket upgrade, `Origin: null`, on an armed box) is still
 // counted. It never answers, reads no body and awaits nothing; the gate still decides every request. The door logs
 // nothing of its own; on an armed box the gate's foreign-origin line for a frame's WebSocket upgrade is the gate's.
@@ -1306,9 +1308,16 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
  *     (the reader lab design, section 4). Its callers are sandboxed frames the lab
  *     page builds, whose requests carry no session cookie BY DESIGN: whether one
  *     ever does is the thing measured, so a gated probe would count nothing. It is
- *     not a door into anything. It answers every request `204` with no body and the
- *     same headers, reads no body, sets no cookie and no CORS header, and changes
- *     nothing but the counters of a lab run that a signed-in session opened (the
+ *     not a door into anything. Every request that reaches its handler gets the
+ *     same `204`, with no body and the same headers, whatever the nonce, the run or
+ *     the name; what Fastify refuses before any hook (a malformed percent-escape, an
+ *     over-long name, a HEAD, a path of another shape) depends on the request's text
+ *     alone, and a WebSocket upgrade that passes this gate is completed and closed,
+ *     so none of it tells a run from none. The handler reads no body (Fastify
+ *     buffers one up to a 1 KiB limit, and a refused one still answers `204`), sets
+ *     no cookie and no CORS header, and changes nothing but the counters of a lab
+ *     run that someone opened (a signed-in session on an armed box; anyone who
+ *     reaches the port on a dark one, the owner then being the no-session owner; the
  *     open, read and close routes are NOT here), named by a nonce the server minted
  *     from sixteen random bytes, for at most the life `readerLab/runs.ts` derives
  *     from the lab's own caps; with no run open it counts nothing. It is a permanent
@@ -1343,11 +1352,12 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
 ```ts
   ['GET /api/reader-lab/probe/:nonce/:name',
     "the reader lab's probe, reason 8: a sandboxed frame's request carries no cookie by design, and counting what it " +
-    'carries is the point. It answers every request 204 with no body, reads no body, sets nothing, and only counts, in ' +
-    'memory, for a run a session opened, whose nonce the request names (readerLab/routes.ts)'],
+    'carries is the point. Every request that reaches its handler gets the same 204 with no body, which never reads a ' +
+    'body and sets nothing; it only counts, in memory, for a run someone opened, whose nonce the request names ' +
+    '(readerLab/routes.ts)'],
   ['POST /api/reader-lab/probe/:nonce/:name',
     "the reader lab's probe, reason 8, its POST half: the beacon, XHR and fetch POST channels a frame sends. The same " +
-    '204 and the same count; the body is never read, and a body the server refuses still answers 204'],
+    '204 and the same count; the handler never reads the body, and a body Fastify refuses still answers 204'],
 
   ['GET /*',
 ```
@@ -1572,8 +1582,9 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
   Replace:
 ```md
 `GET /api/auth/status` (with a minimized anonymous body), the reader lab's probe
-`/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request, answered with the same empty `204`
-whatever it names, which only counts arrivals for a lab run a signed-in session opened), and `GET /*`, the
+`/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request: its answer never depends on the nonce,
+the run or the name, and it only counts arrivals for a lab run someone opened, a signed-in session on an armed box and
+anyone who reaches the port on a dark one), and `GET /*`, the
 ```
 - [ ] **Step 4: Run it to see it pass.** `( cd server && ./node_modules/.bin/vitest run test/box-token-census.test.ts )` — Expected (prediction): its BASE count plus 5, all passed. Then `test/auth-gate.test.ts`, `test/coord-pause-route.test.ts`, `test/topology-clean.test.ts` and `test/ccrc-settings-census.test.ts`, each alone through `ccrc test`, after `git fetch -q origin main` — green.
 - [ ] **Step 5: Commit.** `git add server/test/box-token-census.test.ts README.md` (expect 2), message `server: the reader lab door in the box-token census, and the README's exceptions (docs reader lab)`, trailer. Record the task's JSON row fence, as measured, in the SDD ledger.
@@ -1583,12 +1594,12 @@ whatever it names, which only counts arrivals for a lab run a signed-in session 
 | id | spec | pkg | file | old → new | tests | expected red (prediction) |
 |---|---|---|---|---|---|---|
 | RLB-T4-M1 | (b) M10.8 | server | `src/readerLab/routes.ts` | `const NO_STORE = 'no-store';` → `const NO_STORE = 'no-store'; // checkMailToken(` | `test/box-token-census.test.ts` | 1 failed — `'no lab file consults the box token, and no lab handler is a lane'` |
-| RLB-T4-M2 | (b) M10.8 | server | `../README.md` | `` `/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request, answered with the same empty `204` `` → `` the lab's probe path (a sandboxed frame's request, answered with the same empty `204` `` | `test/box-token-census.test.ts` | 1 failed — `"README's auth paragraph names the probe among the exceptions"` |
+| RLB-T4-M2 | (b) M10.8 | server | `../README.md` | `` `/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request: its answer never depends on the nonce, `` → `` the lab's probe path (a sandboxed frame's request: its answer never depends on the nonce, `` | `test/box-token-census.test.ts` | 1 failed — `"README's auth paragraph names the probe among the exceptions"` |
 
 ```json
 [
   {"id": "RLB-T4-M1", "spec": "(b) M10.8", "pkg": "server", "file": "src/readerLab/routes.ts", "old": "const NO_STORE = 'no-store';", "new": "const NO_STORE = 'no-store'; // checkMailToken(", "tests": ["test/box-token-census.test.ts"], "red": "1 failed: no lab file consults the box token, and no lab handler is a lane"},
-  {"id": "RLB-T4-M2", "spec": "(b) M10.8", "pkg": "server", "file": "../README.md", "old": "`/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request, answered with the same empty `204`", "new": "the lab's probe path (a sandboxed frame's request, answered with the same empty `204`", "tests": ["test/box-token-census.test.ts"], "red": "1 failed: README's auth paragraph names the probe among the exceptions"}
+  {"id": "RLB-T4-M2", "spec": "(b) M10.8", "pkg": "server", "file": "../README.md", "old": "`/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request: its answer never depends on the nonce,", "new": "the lab's probe path (a sandboxed frame's request: its answer never depends on the nonce,", "tests": ["test/box-token-census.test.ts"], "red": "1 failed: README's auth paragraph names the probe among the exceptions"}
 ]
 ```
 

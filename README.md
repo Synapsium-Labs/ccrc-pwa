@@ -1472,8 +1472,9 @@ the fleet host), `POST /api/token/claim` (the box token's claim door, which
 authenticates by a single-use code the server issued over the agent link), the
 login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), the reader lab's probe
-`/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request, answered with the same empty `204`
-whatever it names, which only counts arrivals for a lab run a signed-in session opened), and `GET /*`, the
+`/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request: its answer never depends on the nonce,
+the run or the name, and it only counts arrivals for a lab run someone opened, a signed-in session on an armed box and
+anyone who reaches the port on a dark one), and `GET /*`, the
 static bundle a browser has to
 download before it can show a login screen. Enrolling a passkey is **not**
 exempt — it requires already being signed in, which is what makes

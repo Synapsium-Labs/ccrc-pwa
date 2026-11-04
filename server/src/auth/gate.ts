@@ -175,9 +175,16 @@ import type { SessionStore } from './sessions.js';
  *     (the reader lab design, section 4). Its callers are sandboxed frames the lab
  *     page builds, whose requests carry no session cookie BY DESIGN: whether one
  *     ever does is the thing measured, so a gated probe would count nothing. It is
- *     not a door into anything. It answers every request `204` with no body and the
- *     same headers, reads no body, sets no cookie and no CORS header, and changes
- *     nothing but the counters of a lab run that a signed-in session opened (the
+ *     not a door into anything. Every request that reaches its handler gets the
+ *     same `204`, with no body and the same headers, whatever the nonce, the run or
+ *     the name; what Fastify refuses before any hook (a malformed percent-escape, an
+ *     over-long name, a HEAD, a path of another shape) depends on the request's text
+ *     alone, and a WebSocket upgrade that passes this gate is completed and closed,
+ *     so none of it tells a run from none. The handler reads no body (Fastify
+ *     buffers one up to a 1 KiB limit, and a refused one still answers `204`), sets
+ *     no cookie and no CORS header, and changes nothing but the counters of a lab
+ *     run that someone opened (a signed-in session on an armed box; anyone who
+ *     reaches the port on a dark one, the owner then being the no-session owner; the
  *     open, read and close routes are NOT here), named by a nonce the server minted
  *     from sixteen random bytes, for at most the life `readerLab/runs.ts` derives
  *     from the lab's own caps; with no run open it counts nothing. It is a permanent
@@ -520,11 +527,12 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
 
   ['GET /api/reader-lab/probe/:nonce/:name',
     "the reader lab's probe, reason 8: a sandboxed frame's request carries no cookie by design, and counting what it " +
-    'carries is the point. It answers every request 204 with no body, reads no body, sets nothing, and only counts, in ' +
-    'memory, for a run a session opened, whose nonce the request names (readerLab/routes.ts)'],
+    'carries is the point. Every request that reaches its handler gets the same 204 with no body, which never reads a ' +
+    'body and sets nothing; it only counts, in memory, for a run someone opened, whose nonce the request names ' +
+    '(readerLab/routes.ts)'],
   ['POST /api/reader-lab/probe/:nonce/:name',
     "the reader lab's probe, reason 8, its POST half: the beacon, XHR and fetch POST channels a frame sends. The same " +
-    '204 and the same count; the body is never read, and a body the server refuses still answers 204'],
+    '204 and the same count; the handler never reads the body, and a body Fastify refuses still answers 204'],
 
   ['GET /*',
     'the static/SPA shell: the login screen must be able to load. @fastify/static serves only ' +
