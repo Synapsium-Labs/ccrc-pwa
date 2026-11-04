@@ -624,10 +624,15 @@ def stage4(ctx):
 # of any shape is ONE unreadable item, whole) whose JSON holds a `<task-notification>`
 # is one unreadable item, an unmeasured notification, never skipped. An unreadable item
 # is matched when the marker appears anywhere in its dump, broader than a readable text,
-# which must start with it: the fail-safe direction. A payload that holds one but cannot
-# be dumped is one malformed row. The unit of
-# `unmeasured_notifications` is the distinct (transcript uuid, text) pair, so one
-# notice seen in several sources or rows is one (D-7961). A KNOWN NON-EVENT is a well-formed
+# which must start with it: the fail-safe direction. A payload that cannot be dumped
+# cannot be searched, so the row's raw line decides: without the opener (plain or JSON-escaped)
+# it counts nothing; with it the row takes the usual order (stamp type, window) and then is
+# one malformed row, with no source count or classification. The unit of
+# `unmeasured_notifications` is the distinct (transcript uuid, text) pair, the text being
+# the stripped text of a readable notice and the sorted dump of an unreadable one, so a
+# notice seen again in the same shape is one, while the same notice in two payload shapes,
+# or with different trailing text, can count again, an over-count by design (D-7961).
+# A KNOWN NON-EVENT is a well-formed
 # envelope read as not this event, adding no unmeasured count: exactly one status
 # element whose readable value is a known non-killed one (`completed`, `failed`,
 # `stopped`: a workflow that did not finish before the previous session ended
@@ -916,6 +921,8 @@ def s6_notification_texts(row):
 
 
 S6_MARKER = "<task-notification>"
+# The opener in a row's raw line, plain or JSON-escaped (`<` as a backslash-u003c escape, either hex case).
+S6_RAW_OPENER = re.compile(rb"(?:<|\\u003[cC])task-notification(?:>|\\u003[eE])")
 
 
 def s6_unreadable(value):
@@ -983,13 +990,18 @@ def s6_pressure_kills(ctx):
                     except (ValueError, UnicodeError, RecursionError):
                         file_malformed += 1
                         continue
+                    undumpable = False
                     try:
                         found = s6_notification_sources(row)
                     except (TypeError, ValueError, RecursionError):
-                        # A payload that cannot be dumped is one malformed row: no source
-                        # count, nothing classified for it.
-                        file_malformed += 1
-                        continue
+                        # The payload cannot be searched, so the row's own raw bytes decide
+                        # whether it holds a notification (the opener, plain or JSON-escaped).
+                        # One that does not counts nothing; one that does goes through the
+                        # stamp check and the window below, then is one malformed row.
+                        if not S6_RAW_OPENER.search(raw):
+                            continue
+                        undumpable = True
+                        found = []
                     candidates = []
                     for source, text, readable in found:
                         if readable:
@@ -997,9 +1009,9 @@ def s6_pressure_kills(ctx):
                             if not text.startswith(S6_MARKER):
                                 continue
                         candidates.append((source, text, readable))
-                    if not candidates:
+                    if not candidates and not undumpable:
                         continue
-                    stamp = row.get("timestamp")
+                    stamp = row.get("timestamp") if isinstance(row, dict) else None
                     if stamp is not None and not isinstance(stamp, str):
                         # A stamp that is no string (an object, a number) is a malformed
                         # row, once per row however many notification texts it carries.
@@ -1008,6 +1020,10 @@ def s6_pressure_kills(ctx):
                     at = iso_epoch(stamp)
                     # A readable timestamp outside the requested window is no event in it.
                     if at is not None and not in_window(at, ctx):
+                        continue
+                    if undumpable:
+                        # No source count, nothing classified for it.
+                        file_malformed += 1
                         continue
                     for source, text, readable in candidates:
                         file_sources[source] += 1

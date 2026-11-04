@@ -386,30 +386,57 @@ describe('the scanner pins its own branches (D-4322 minors)', () => {
   });
 
   // Same idea for a value the scanner cannot dump: json.dumps is replaced, inside the module only, by one that
-  // raises RecursionError for a list or dict holding a notification, as a ~58,000-deep payload does in a real
-  // interpreter, without this test depending on the interpreter's depth limit. `mc.json` is the global json
-  // module, so it is swapped for a namespace and the harness's own `json` stays real.
+  // raises RecursionError for a list or dict holding the sentinel key below, so the test does not depend on the
+  // interpreter's depth limit. On this interpreter a deep LIST already fails in json.loads (a malformed row before
+  // the dump arm); only a deep DICT parses and then fails to dump, so the injected fake is what reaches the arm.
+  // The fake keys on the sentinel, never on the notification marker, so a case can be undumpable with or without
+  // a notification in its raw line. `mc.json` is the global json module, so it is swapped for a namespace and the
+  // harness's own `json` stays real. argv: tool, home, since, until (epoch seconds, or "none").
   const DUMP = [
     'import importlib.util, json, sys, types',
     'tool, home = sys.argv[1], sys.argv[2]',
+    'num = lambda v: None if v == "none" else float(v)',
     'spec = importlib.util.spec_from_file_location("measure_continuity", tool)',
     'mc = importlib.util.module_from_spec(spec)',
     'spec.loader.exec_module(mc)',
     'real_dumps = json.dumps',
     'def fake_dumps(value, *a, **kw):',
     '    out = real_dumps(value, *a, **kw)',
-    '    if isinstance(value, (dict, list)) and "<task-notification>" in out: raise RecursionError("fixture")',
+    '    if isinstance(value, (dict, list)) and "undumpable_fixture" in out: raise RecursionError("fixture")',
     '    return out',
     'mc.json = types.SimpleNamespace(loads=json.loads, dumps=fake_dumps)',
-    'print(real_dumps(mc.s6_pressure_kills({"home": home, "since": None, "until": None, "all_copies": False})))',
+    'print(real_dumps(mc.s6_pressure_kills({"home": home, "since": num(sys.argv[3]), "until": num(sys.argv[4]), "all_copies": False})))',
   ].join('\n');
-  const readUndumpable = (): Reading => JSON.parse(execFileSync('python3',
-    ['-I', '-c', DUMP, TOOL, h.home], {
+  const readUndumpable = (since = 'none', until = 'none'): Reading => JSON.parse(execFileSync('python3',
+    ['-I', '-c', DUMP, TOOL, h.home, since, until], {
       encoding: 'utf8', timeout: 30_000, env: { ...inheritedEnv(), HOME: h.home, TZ: 'UTC' },
     })) as Reading;
+  // An enqueue row whose content is a dict the fake cannot dump (the sentinel key), optionally holding a notice.
+  const undumpableRow = (extra: unknown, t: number = T): string => queueRow({ undumpable_fixture: true, extra }, 'enqueue', t);
 
   it('a payload holding a notification that cannot be dumped is one malformed row, never a silent skip', () => {
-    transcript(U1, [queueRow({ nested: note('deep') }), row(note('real'))]);
+    // Reaches the arm: the sentinel key makes the fake raise; the raw line holds the plain opener.
+    transcript(U1, [undumpableRow(note('deep')), row(note('real'))]);
+    expect(readUndumpable()).toEqual({ ...clean(1, 1, 1), reading: 'partial', malformed_rows: 1, notification_sources: src(1) });
+  });
+  it('a payload whose raw line holds the JSON-escaped opener is also one malformed row', () => {
+    transcript(U1, [undumpableRow(note('deep')).replaceAll('<', '\\u003c'), row(note('real'))]);
+    expect(readUndumpable()).toEqual({ ...clean(1, 1, 1), reading: 'partial', malformed_rows: 1, notification_sources: src(1) });
+  });
+  it('an undumpable row outside the window counts nothing (the window comes before the arm)', () => {
+    // Reaches the arm: sentinel key, raw line holds the opener, stamp is a day after the window's end.
+    transcript(U1, [undumpableRow(note('deep'), T + 86400), row(note('real'))]);
+    expect(readUndumpable(String(T - 3600), String(T + 3600)))
+      .toEqual({ ...clean(1, 1, 1), notification_sources: src(1) });
+  });
+  it('an undumpable row whose raw line holds no notification counts nothing', () => {
+    // Reaches the arm: sentinel key raises in the fake, though the raw line has no opener.
+    transcript(U1, [undumpableRow('plain text'), row(note('real'))]);
+    expect(readUndumpable()).toEqual({ ...clean(1, 1, 1), notification_sources: src(1) });
+  });
+  it('an undumpable row holding a notification with a non-string stamp is one malformed row', () => {
+    transcript(U1, [JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: 7,
+      content: { undumpable_fixture: true, extra: note('deep') } }), row(note('real'))]);
     expect(readUndumpable()).toEqual({ ...clean(1, 1, 1), reading: 'partial', malformed_rows: 1, notification_sources: src(1) });
   });
 });
@@ -430,8 +457,14 @@ describe('queued-command and enqueued notifications, counted once', () => {
     expect(readFull()).toEqual({ ...clean(1, 1, 1), reading: 'partial', unmeasured_notifications: 1,
       notification_sources: src(2, 2, 2) });
   });
+  it('the same notice in two payload shapes counts in each: the unit is the uuid and the text it was read as', () => {
+    const odd = note('odd', 'exploded');
+    transcript(U1, [queueRow([{ type: 'text', text: odd }]), attachmentRow(odd)]);
+    expect(readFull()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 2,
+      notification_sources: src(0, 1, 1) });
+  });
   it('dequeue and remove rows are not read', () => {
-    transcript(U1, [queueRow(note('r'), 'remove'), queueRow(null, 'dequeue')]);
+    transcript(U1, [queueRow(note('r'), 'remove'), queueRow(note('d'), 'dequeue')]);
     expect(readFull()).toEqual({ ...clean(0, 0, 1), notification_sources: src(0) });
   });
   it('an attachment of another type is not a notification', () => {
@@ -484,6 +517,13 @@ describe('a summary-only notice is a known non-event unless it names low memory 
   it('a summary-only notice that names low memory stays unmeasured', () => {
     transcript(U1, [row(summaryOnly(PRESSURE)), row(summaryOnly('the box is running LOW ON MEMORY'))]);
     expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 2 });
+  });
+  it('a summary-only notice with a non-string stamp is one malformed row, with no stamp it is unmeasured', () => {
+    const text = summaryOnly('Commit security review found 1 issue');
+    transcript(U1, [JSON.stringify({ type: 'user', timestamp: 5, message: { role: 'user', content: text } })]);
+    expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', malformed_rows: 1 });
+    transcript(U1, [JSON.stringify({ type: 'user', message: { role: 'user', content: text } })]);
+    expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 1 });
   });
   it.each([
     ['free text after the summary that names low memory',

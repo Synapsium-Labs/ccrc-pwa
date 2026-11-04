@@ -6579,8 +6579,11 @@ unique transcript-UUID/task-ID pairs, deduplicated across selected copies. The d
 discovered main transcript per UUID; `--all-copies` includes divergent smaller copies but still counts
 one task once. Notifications are read from user text rows, from queued-command attachment prompts (a
 string or text parts) and from queue enqueue contents (a string); queue remove and dequeue rows are not
-read, and a queued payload of any other shape that holds a notification is unmeasured, never skipped.
-An unmeasured notification counts once per transcript UUID and envelope text, across sources and copies.
+read, and a queued payload of any other shape that holds a notification is unmeasured, never skipped,
+except a payload that cannot be dumped, which counts in `malformed_rows` instead.
+An unmeasured notification counts per transcript UUID and text (the readable text, or an unreadable payload's
+dump), across sources and copies; the same notice in different payload shapes, or with different trailing
+text, can count again.
 Discovery can miss unreadable roots/stat failures and excludes subagent transcripts;
 partial reads and absent input are reported, never claimed as a clean zero. Each row is timed by its own
 stamp: user and attachment rows are observations at delivery, enqueue rows at queue time, not exact kill
