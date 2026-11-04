@@ -64,6 +64,14 @@ Every outcome is one `pane-scope <id>: …` line in `swap.log`.
 | stop without the switch | no `pane-scope-stop-live`: one would-stop line, no stop call |
 | skip the slice and name check | a unit that is not `tmux-spawn-*.scope`; a pane scope outside the session slice |
 
+## Landing: two pull requests
+
+`consolidation-path-guard.test.ts` (D-5855) is red on a diff that touches `shared/switches.ts` beside any `pwa/` path, so
+the switch row and the Settings card cannot share a pull request. The first carries everything but `pwa/`: ccd, the
+agent's grant, the route, the coord frame's `paneScopeStop` and the doctor check. The Stop leftovers card follows in its
+own pull request, which edits no `shared/switches.ts`. Between the two the switch stays in shadow, and the frame already
+says so to a PWA that does not read it yet.
+
 ## Deploy
 
 Agent lane first: the verb and the act ship in ccd, the grant in the agent's whitelist. Then the server lane, for the
