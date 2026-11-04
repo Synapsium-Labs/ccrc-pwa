@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 172 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 177 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -64,7 +64,7 @@ import type { SessionStore } from './sessions.js';
  * used to pick the handler. Set membership on the ROUTER's own answer cannot
  * disagree with the handler that is about to run.
  *
- * THE SEVEN REASONS, and there are only seven:
+ * THE EIGHT REASONS, and there are only eight:
  *
  *  1. `/health` — the liveness probe. `deploy/deploy.sh`'s final gate reads the
  *     shipped sha out of it to decide whether a deploy succeeded, from a shell
@@ -170,6 +170,41 @@ import type { SessionStore } from './sessions.js';
  *     memory, single use, a short TTL, bound to the measured fleet node id, the
  *     live-code compare running before any budget (`token/door.ts`). Being exempt
  *     it also skips the origin check, which is right for a machine caller.
+ *
+ *  8. `GET` and `POST /api/reader-lab/probe/:nonce/:name` — the reader lab's probe
+ *     (the reader lab design, section 4). Its callers are sandboxed frames the lab
+ *     page builds, whose requests carry no session cookie BY DESIGN: whether one
+ *     ever does is the thing measured, so a gated probe would count nothing. It is
+ *     not a door into anything. Every request that reaches its handler gets the
+ *     same `204`, with no body and the same headers, whatever the nonce, the run or
+ *     the name. No answer to a request that reaches no probe handler depends on
+ *     whether a run exists. Fastify answers a malformed percent-escape 400 before
+ *     any hook, on every box and by every method, and an over-long name 414 before
+ *     any hook on a POST (and on a GET where no catch-all route matches). Anything
+ *     else that reaches no probe handler (a HEAD, a path of another shape) gets a
+ *     404 from the server's not-found handler where the built bundle's catch-all
+ *     matches it (a GET or a HEAD on a box serving the PWA, `GET /*` being exempt).
+ *     Where no catch-all matches (an API-only box, and a POST on any box), every
+ *     `onRequest` hook still runs for it: it gets a 404 on a dark box and this
+ *     gate's `no-session` refusal on an armed one for a caller with no session. A
+ *     WebSocket upgrade that passes this gate is completed and closed, so none of
+ *     it tells a run from none. The handler reads no body (Fastify
+ *     buffers one up to a 1 KiB limit, and a refused one still answers `204`), sets
+ *     no cookie and no CORS header, and changes nothing but the counters of a lab
+ *     run that someone opened (a signed-in session on an armed box; anyone who
+ *     reaches the port on a dark one, the owner then being the no-session owner; the
+ *     open, read and close routes are NOT here), named by a nonce the server minted
+ *     from sixteen random bytes, for at most the life `readerLab/runs.ts` derives
+ *     from the lab's own caps; with no run open it counts nothing. It is a permanent
+ *     surface on every box, inert until a session opens a run. Its POST, being
+ *     exempt, skips the origin check, on purpose: its callers send origin `null`,
+ *     and `needsOriginCheck`'s note below says why that costs nothing. A GET never
+ *     takes one, and every WebSocket upgrade, this route's included, is
+ *     origin-checked. Its counter
+ *     (`readerLab/routes.ts#installReaderLabCounter`) is an `onRequest` hook added
+ *     just before this file's: it counts and never answers, so a probe this gate
+ *     refuses (a frame's WebSocket upgrade, origin `null`) is still counted, and the
+ *     decision, with its journal line, stays here.
  *
  * NOT EXEMPT, and worth saying out loud because their absence is a decision:
  *  - `POST /api/token/rotate` — the console's "Rotate now". Session-only, like
@@ -499,6 +534,15 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'the sign on the door: the login screen must know, before anyone types, whether the gate is armed, ' +
     'whether a passkey exists to offer, and whether the rate-limit window is closed. An unauthenticated ' +
     'caller gets a MINIMIZED body (ANON_VISIBLE, server.ts) — the leak is enumerated, not incidental'],
+
+  ['GET /api/reader-lab/probe/:nonce/:name',
+    "the reader lab's probe, reason 8: a sandboxed frame's request carries no cookie by design, and counting what it " +
+    'carries is the point. Every request that reaches its handler gets the same 204 with no body, which never reads a ' +
+    'body and sets nothing; it only counts, in memory, for a run someone opened, whose nonce the request names ' +
+    '(readerLab/routes.ts)'],
+  ['POST /api/reader-lab/probe/:nonce/:name',
+    "the reader lab's probe, reason 8, its POST half: the beacon, XHR and fetch POST channels a frame sends. The same " +
+    '204 and the same count; the handler never reads the body, and a body Fastify refuses still answers 204'],
 
   ['GET /*',
     'the static/SPA shell: the login screen must be able to load. @fastify/static serves only ' +
@@ -904,6 +948,11 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * scanner — D-1233: lanes first, total second. The marker sits AFTER the
  * sentence it annotates; its first placement was spliced into the middle of one,
  * and nothing caught it because the scanner reads numerals.)
+ *
+ * The reader lab's probe (reason 8 above) is the one exempt write a browser calls
+ * cross-origin: its sandboxed frames send `Origin: null`. It skips this check on
+ * purpose, because it changes only a nonce-named counter, and counting what such a
+ * request carries is its whole point.
  *
  * `POST /api/auth/login` and the two passkey assert routes are the doors: a forged login is not a state change an attacker
  * benefits from, and the assert pair verifies an origin of its own, from inside
