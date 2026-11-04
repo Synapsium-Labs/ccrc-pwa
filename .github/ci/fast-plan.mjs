@@ -12,7 +12,8 @@
 //      censuses, single-definition, deviation-refs, growth-check, ownership, the rings, ccd-contexts, dtbd, the
 //      tests-inclusive typecheck, the oss metadata, the pin suites of TypeScript code) and every test whose source
 //      lists the tracked tree or reads the diff itself (TREE_READER: a direct `git ls-files`, `git diff` or
-//      `git merge-base`, the shape of topology-clean, gitignore-secrets and consolidation-path-guard), and every test
+//      `git merge-base`, the shape of topology-clean, gitignore-secrets and consolidation-path-guard, less
+//      HEAVY_TREE_READERS), and every test
 //      that lists a source tree itself (a ratchet, a census, a "nowhere else in server/src" rule) whose file measured
 //      at most SCANNER_MAX_MS on the last full run. Which tests those are: the UNION of what the last full run
 //      RECORDED (the `tree-scanners` artifact, tree-scanners.mjs) and what the static detector `scansSourceTree`
@@ -70,6 +71,11 @@ export const PIN_MAP_CARRIED = [
  *  `git merge-base` call (execFileSync / spawnSync / execSync and friends), not one through a fixture helper such
  *  as `h.git(...)`. Such a test checks whatever the change touched, so vitest can never relate it. */
 export const TREE_READER = /\b(?:execFileSync|spawnSync|execSync|execFile|spawn)\(\s*['"`]git(?:['"`]\s*,\s*\[[^\]]*?['"`]|\s+(?:-C\s+\S+\s+)?)(?:ls-files|merge-base|diff)\b/;
+
+/** The tree readers a fast pull request does not run (D-7995): a full pass of the shellcheck ratchet takes about half a
+ *  minute and 6 GB, and no ordinary change moves its counts. The queue and the full suite run it, and the map still
+ *  selects it for a change to a script it reads (part 2 above). */
+export const HEAVY_TREE_READERS = ['server/test/shellcheck-ratchet.test.ts'];
 
 // ── The tree scanners (D-7455) ──────────────────────────────────────────────────────────────────────────────────────
 // A test that LISTS a source tree itself (a ratchet, a census, a single-definition or ring rule, a "nowhere else in
@@ -332,7 +338,8 @@ export function treeScanners(live, readSource, durations = null, recorded = null
 }
 
 /**
- * The guard suites among the live tests: a GUARD_TESTS pattern (less PIN_MAP_CARRIED), a TREE_READER source, or a
+ * The guard suites among the live tests: a GUARD_TESTS pattern (less PIN_MAP_CARRIED), a TREE_READER source (less
+ * HEAVY_TREE_READERS), or a
  * tree scanner (`treeScanners`: the recorded and the static ones) whose file measured at most SCANNER_MAX_MS (or was
  * not measured: run it, the safe direction).
  * @param {string[]} live repo-relative test paths @param {(file: string) => string} readSource
@@ -347,7 +354,7 @@ export function guardTests(live, readSource, durations = null, recorded = null, 
     if (GUARD_TESTS.some((re) => re.test(f)) && !PIN_MAP_CARRIED.includes(f)) return true;
     let src = '';
     try { src = readSource(f); } catch { return true; } // unreadable: run it, the safe direction
-    return TREE_READER.test(src) || scanners.has(f);
+    return (TREE_READER.test(src) && !HEAVY_TREE_READERS.includes(f)) || scanners.has(f);
   });
 }
 
