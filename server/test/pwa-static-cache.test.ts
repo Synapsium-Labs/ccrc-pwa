@@ -199,7 +199,10 @@ describe('the hashed /assets/* files are sent precompressed, chosen by Accept-En
     expect(tiny.body).toBe('console.log(1)');
   });
 
-  it('no shell answer is compressed: /, index.html, a Docs page and another route through the fallback, sw.js, the manifest', async () => {
+  // The fixture holds no copy beside a shell file, exactly as the build leaves the tree
+  // (`pwa/build/compressAssets.ts` walks `assets/` only; FLC-T1-M2 and FLC-T2-M3 red that scope), so this case
+  // records the server's answer for that tree; it is not a server-side guard (the next case shows why).
+  it('with no shell copy on disk, as the build leaves it, every shell answer is sent as it is: /, index.html, a Docs page and another route through the fallback, sw.js, the manifest', async () => {
     const shell = '<!doctype html><title>fixture</title>';
     const cases: [string, string][] = [
       ['/', shell], ['/index.html', shell], ['/docs/demo/specs/a.md', shell], ['/s/project-a', shell],
@@ -211,6 +214,29 @@ describe('the hashed /assets/* files are sent precompressed, chosen by Accept-En
       expect(res.headers['content-encoding'], url).toBeUndefined();
       expect(res.headers['cache-control'], url).toBe(PWA_SHELL_CACHE);
       expect(res.body, url).toBe(body);
+    }
+  });
+
+  it('a shell copy, if one were on disk, WOULD be sent: keeping the shell uncompressed is the build\'s job, not the server\'s', async () => {
+    const shell = '<!doctype html><title>fixture</title>';
+    const own = mkdtempSync(path.join(tmpdir(), 'ccrc-pwa-shellcopy-'));
+    const ownApp = Fastify();
+    try {
+      writeFileSync(path.join(own, 'index.html'), shell);
+      writeFileSync(path.join(own, 'index.html.br'), brotliCompressSync(shell));
+      await ownApp.register(fastifyStatic, pwaStaticOptions(own));
+      ownApp.setNotFoundHandler((_req, reply) => reply.type('text/html').sendFile('index.html'));
+      await ownApp.ready();
+      for (const url of ['/', '/docs/demo/specs/a.md']) {
+        const res = await ownApp.inject({ method: 'GET', url, headers: { 'accept-encoding': 'gzip, deflate, br, zstd' } });
+        expect(res.statusCode, url).toBe(200);
+        expect(res.headers['content-encoding'], url).toBe('br');
+        expect(res.headers['cache-control'], url).toBe(PWA_SHELL_CACHE);
+        expect(brotliDecompressSync(res.rawPayload).toString(), url).toBe(shell);
+      }
+    } finally {
+      await ownApp.close();
+      rmSync(own, { recursive: true, force: true });
     }
   });
 });
