@@ -2296,6 +2296,10 @@ takes the next spare and is named in the wave-done.
   widened by review L4). The frozen version-1 snapshot changes for exactly the refused and long-sentence documents, in the same commit.
 - **D-7912.** A console tab on wave 1's build reads a version-1 node holding a refused row as unrecognised, as well as every version-2 node;
   accepted, the same reload cures it, and the rollout note says so.
+- **D-7913.** An `unmeasured` row's `why` is bounded (printable ASCII, at most 240 bytes), not a closed set: the reader's sentences name the file, a
+  line number and the key, never a value. The server reads version 2 beside version 1, each row checked against its display class and an `ok`
+  value or origin against the shared envelope; a row outside its class is a forgery and is never rewritten. Closing the unmeasured sentences as
+  line-number templates is Later.
 - **D-7920.** The plan's six one-line `( BOX_ENV_FILE="$BOX_ENV_FILE/." KEY="$v" _resolver … )` forms tripped census C8(c), which allows no setting
   name beside BOX_ENV_FILE outside `_ccrc_knob`; the mask moved to its own line as the first statement of one subshell holding all six resolver
   calls, with the same behaviour; ruled by the coordinator (option A). Each of the six resolvers reads only its own setting, measured.

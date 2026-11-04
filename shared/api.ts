@@ -10145,7 +10145,16 @@ export type BoxSettingRowV1 =
 export const BOX_SETTINGS_V1_REFUSED_WHY = 'refused by its check; this box\'s build words the refusal with the value, so it is not shown here until the box is updated';
 /** What the server says for a version-1 `ok` row whose value or origin is outside the envelope (D-7911, review L4). */
 export const BOX_SETTINGS_V1_UNFIT_WHY = 'recorded by an older ccrc in a form this view does not show';
-export type BoxSettingRow = BoxSettingRowV1;
+/** One version-2 setting (D-7913), by display class: only an `ok` row of class `value` or `origin` carries a `value`; a `presence` row is the
+ *  second arm, told apart by `'value' in row`, and the parse admits an `ok` row without `value` only for a presence-class key, so the absence
+ *  has one meaning. A refused row's `why` is one of the closed refusal words, never the value. */
+export type BoxSettingRowV2 =
+  | { key: BoxSettingName; state: 'ok'; value: string; from: BoxSettingSource }
+  | { key: BoxSettingName; state: 'ok'; from: BoxSettingSource }
+  | { key: BoxSettingName; state: 'refused'; from: BoxSettingSource; why: BoxSettingRefusalWord }
+  | { key: BoxSettingName; state: 'unmeasured'; why: string };
+/** What a node's document holds: the box's own version, never converted by the server. */
+export type BoxSettingRow = BoxSettingRowV1 | BoxSettingRowV2;
 /** The backups line and the disk line: measured, or why not. */
 export type BoxSettingsBackups = { state: 'ok'; kept: number; withData: number; bytes: number } | { state: 'unmeasured'; why: string };
 export type BoxSettingsDisk = { state: 'ok'; availBytes: number; sizeBytes: number } | { state: 'unmeasured'; why: string };
@@ -10156,7 +10165,13 @@ export interface BoxSettingsDocV1 {
   deadline: { plainMs: number; minMs: number; maxMs: number };
   backups: BoxSettingsBackups; disk: BoxSettingsDisk;
 }
-export type BoxSettingsDoc = BoxSettingsDocV1;
+/** Version 2: the 61 shown names by display class, the same top-level keys. */
+export interface BoxSettingsDocV2 {
+  v: 2; at: number; reader: BoxSettingsReader; settings: BoxSettingRowV2[];
+  deadline: { plainMs: number; minMs: number; maxMs: number };
+  backups: BoxSettingsBackups; disk: BoxSettingsDisk;
+}
+export type BoxSettingsDoc = BoxSettingsDocV1 | BoxSettingsDocV2;
 /** `NodeWire.settings`: the document with its age at the request's clock, or the word for why none is shown. */
 export type BoxSettingsRead =
   | { state: 'ok'; doc: BoxSettingsDoc; ageS: number; stale: boolean }

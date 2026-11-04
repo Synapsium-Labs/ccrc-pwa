@@ -21,8 +21,9 @@ import {
   parseBoxSettings, boxSettingsView, boxSettingsGate, boxSettingsReadOf, SETTINGS_CAP, type BoxSettingsHeld,
 } from '../src/update/boxSettings.js';
 import { BoxSettingsLane } from '../src/update/boxSettingsLane.js';
-import { FLEET_LABEL, SERVER_LABEL, type InventoryDeps, type SweepOutcome } from '../src/update/inventory.js';
+import { FLEET_LABEL, NODE_FILE_CAP_BYTES, SERVER_LABEL, type InventoryDeps, type SweepOutcome } from '../src/update/inventory.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
+import { ENVELOPE_CORPUS } from './boxSettingsEnvelope.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { buildServer, type Deps } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
@@ -37,7 +38,8 @@ import { CoordStore, type NodeRow } from '../src/coord/store.js';
 import { seedRoster } from './helpers.js';
 import {
   BOX_SETTINGS_CLOCK_AHEAD_S, BOX_SETTINGS_FAILURES, BOX_SETTINGS_KEYS, BOX_SETTINGS_READERS, BOX_SETTINGS_STALE_S, BOX_SETTINGS_TIMER_S,
-  BOX_SETTING_SOURCES, BOX_SETTING_STATES, BOX_SETTINGS_V1_REFUSED_WHY, BOX_SETTINGS_V1_UNFIT_WHY, type BoxSettingsDoc, type UpdatesView,
+  BOX_SETTING_SOURCES, BOX_SETTING_STATES, BOX_SETTINGS_SHOWN, BOX_SETTING_REFUSAL_WORDS, BOX_SETTING_SPECS, BOX_SETTINGS_TEXT_MAX,
+  BOX_SETTING_VALUE_WORDS, BOX_SETTINGS_V1_REFUSED_WHY, BOX_SETTINGS_V1_UNFIT_WHY, type BoxSettingsDoc, type UpdatesView,
 } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -142,8 +144,10 @@ describe('parseBoxSettings: the corpus, each file with its verdict', () => {
     const doc = parseBoxSettings(readFileSync(join(FIX, file), 'utf8'));
     if (verdictOf(file) === 'ok') {
       expect(doc, file).not.toBeNull();
-      expect(doc!.v).toBe(1);
-      expect(doc!.settings.map((s) => s.key), 'the seven, once each, in order').toEqual([...BOX_SETTINGS_KEYS]);
+      expect([1, 2]).toContain(doc!.v);
+      if (file.startsWith('ok--v1-')) expect(doc!.v, 'a frozen wave-1 file is version 1').toBe(1);
+      expect(doc!.settings.map((s) => s.key), 'version 1: the seven; version 2: the shown names, once each, in order')
+        .toEqual(doc!.v === 1 ? [...BOX_SETTINGS_KEYS] : [...BOX_SETTINGS_SHOWN]);
     } else {
       expect(doc, file).toBeNull();
     }
@@ -170,7 +174,7 @@ describe('parseBoxSettings: the corpus, each file with its verdict', () => {
     const row = doc!.settings.find((r) => r.key === 'CCRC_BACKUP_KEEP')!;
     expect(row.state).toBe('unmeasured');
     expect('why' in row && row.why.length, 'the sentence is long and kept whole').toBeGreaterThan(150);
-    expect(doc!.settings.map((r) => r.key)).toEqual([...BOX_SETTINGS_KEYS]);
+    expect(doc!.settings.map((r) => r.key)).toEqual(doc!.v === 1 ? [...BOX_SETTINGS_KEYS] : [...BOX_SETTINGS_SHOWN]);
   });
 });
 
@@ -268,7 +272,7 @@ describe('the vocabularies are held equal to the verb\'s, in both directions (D-
     expect(all, 'ccd/ccrc has no CCRC_SETTINGS=(…) line').not.toBeNull();
     for (const k of BOX_SETTINGS_KEYS) expect(all!.filter((n) => n === k), `${k} appears once in CCRC_SETTINGS`).toHaveLength(1);
     const live = parseBoxSettings(readFileSync(join(FIX, 'ok--defaults.json'), 'utf8'));
-    expect(live!.settings.map((s) => s.key)).toEqual([...BOX_SETTINGS_KEYS]);
+    expect(live!.settings.map((s) => s.key)).toEqual(live!.v === 1 ? [...BOX_SETTINGS_KEYS] : [...BOX_SETTINGS_SHOWN]);
     // The control: a verb whose literal lost a key reads unequal.
     const dropped = CCRC_SRC.replace('CCRC_MODELS_ADVANCE_BUDGET_S)\nBOX_SETTINGS_JSON', ')\nBOX_SETTINGS_JSON');
     expect(verbKeys(dropped)).not.toEqual([...BOX_SETTINGS_KEYS]);
@@ -764,5 +768,281 @@ describe('version 1: still exactly as strict in the file, rewritten on the way o
     expect(res.body).toContain('"state":"refused"');
     for (const raw of RAW_REFUSED) expect(res.body, raw).not.toContain(raw);
     expect(res.body).not.toContain("='");
+  });
+});
+
+// ── version 2: every row checked against its class (D-7913; spec 5.4) ───────────────────────────────────────────────────────
+
+/** The test's own builder of a version-2 document over L0's table (a fixture, not a second definition of any check): a `value` key reads
+ *  `1`, an `origin` key `default`, a `presence` key carries no value. */
+const v2RowOf = (key: string): RowObj => {
+  const cls = BOX_SETTING_SPECS[key as keyof typeof BOX_SETTING_SPECS].cls;
+  if (cls === 'value') return { key, state: 'ok', value: '1', from: 'default' };
+  if (cls === 'origin') return { key, state: 'ok', value: 'default', from: 'default' };
+  return { key, state: 'ok', from: 'default' };
+};
+const v2Base = (): Record<string, unknown> => ({ ...v1Doc('defaults'), v: 2, settings: BOX_SETTINGS_SHOWN.map(v2RowOf) });
+const rowV2 = (d: Record<string, unknown>, key: string): RowObj => v1Rows(d).find((r) => r['key'] === key)!;
+const setRow = (d: Record<string, unknown>, key: string, row: RowObj): void => { v1Rows(d)[v1Rows(d).findIndex((r) => r['key'] === key)] = row; };
+const WORD_ROWS: [string, string][] = [['CCRC_TESTBOX_LOST_RUN', 'local'], ['CCRC_TESTBOX_LOST_RUN', 'fail'], ['CCRC_TESTBOX_FALLBACK_INSTALL', 'install'], ['CCRC_TESTBOX_FALLBACK_INSTALL', 'refuse']];
+
+/** The largest document this parse accepts, built from its own bounds. Arithmetic: 60 unmeasured rows of a 240-character why of `\`
+ *  (each escapes to 2 bytes, so about 530 bytes a row with its key) come to about 32 KB; the release base adds about 560; backups and
+ *  disk's 512-character whys of `"` escape to 1 KB each; the head is a few hundred bytes: about 36 KB, under the 65536-byte cap. */
+function largestV2(): string {
+  const d = v2Base();
+  d['settings'] = BOX_SETTINGS_SHOWN.map((key) => key === 'CCRC_RELEASE_BASE_URL'
+    ? { key, state: 'ok', value: `custom https://${'h'.repeat(BOX_SETTINGS_TEXT_MAX - 'custom https://'.length)}`, from: 'file' }
+    : { key, state: 'unmeasured', why: '\\'.repeat(240) });
+  d['at'] = Number.MAX_SAFE_INTEGER;
+  d['deadline'] = { plainMs: Number.MAX_SAFE_INTEGER, minMs: Number.MAX_SAFE_INTEGER, maxMs: Number.MAX_SAFE_INTEGER };
+  d['backups'] = { state: 'unmeasured', why: '"'.repeat(512) };
+  d['disk'] = { state: 'unmeasured', why: '"'.repeat(512) };
+  return JSON.stringify(d);
+}
+
+/** Each fixed word once: every refusal word on a refused row (over the shown keys), and the two value words a document can hold at once, `fail` and `refuse`
+ *  (a key holds one value, so the other two are the parse rows'). */
+function everyWordV2(): string {
+  const d = v2Base();
+  const refusable = BOX_SETTINGS_SHOWN.filter((k) => !WORD_ROWS.some(([w]) => w === k));
+  BOX_SETTING_REFUSAL_WORDS.forEach((why, i) => setRow(d, refusable[i]!, { key: refusable[i], state: 'refused', from: 'environment', why }));
+  for (const [key, value] of [WORD_ROWS[1]!, WORD_ROWS[3]!]) setRow(d, key, { key, state: 'ok', value, from: 'file' });
+  return JSON.stringify(d);
+}
+const V2_FILES: Record<string, () => string> = {
+  'ok--v2-synthetic-base.json': () => JSON.stringify(v2Base()),
+  'ok--v2-synthetic-every-word.json': everyWordV2,
+  'ok--v2-synthetic-largest.json': largestV2,
+};
+const asText = (d: Record<string, unknown>): string => JSON.stringify(d);
+
+describe('version 2: the fixtures the tests write or read', () => {
+  it('the synthetic fixtures are what the builders make (BOX_SETTINGS_FIXTURES=write regenerates them and the malformed set)', () => {
+    const write = process.env['BOX_SETTINGS_FIXTURES'] === 'write';
+    const malformed: Record<string, () => string> = {
+      'malformed--v2-presence-with-value.json': () => { const d = v2Base(); setRow(d, 'CCRC_GRAPH_STORE', { key: 'CCRC_GRAPH_STORE', state: 'ok', value: '/srv/g', from: 'file' }); return asText(d); },
+      'malformed--v2-refused-with-value.json': () => { const d = v2Base(); setRow(d, 'CCRC_GRAPH_BUDGET', { key: 'CCRC_GRAPH_BUDGET', state: 'refused', value: 'x', from: 'file', why: BOX_SETTING_REFUSAL_WORDS[0] }); return asText(d); },
+      'malformed--v2-why-outside-set.json': () => { const d = v2Base(); setRow(d, 'CCRC_GRAPH_BUDGET', { key: 'CCRC_GRAPH_BUDGET', state: 'refused', from: 'file', why: "CCRC_GRAPH_BUDGET='7x' is not a whole number" }); return asText(d); },
+      'malformed--v2-omit-row.json': () => { const d = v2Base(); v1Rows(d).push({ key: 'CCRC_TESTBOX_RUNS', state: 'ok', value: '2', from: 'default' }); return asText(d); },
+      'malformed--v2-origin-outside.json': () => { const d = v2Base(); setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom h:abc', from: 'file' }); return asText(d); },
+      'malformed--version-3.json': () => { const d = v2Base(); d['v'] = 3; return asText(d); },
+    };
+    for (const [name, make] of Object.entries({ ...V2_FILES, ...malformed })) {
+      const file = join(FIX, name);
+      if (write) writeFileSync(file, make());
+      expect(readFileSync(file, 'utf8'), `${name}: regenerate with BOX_SETTINGS_FIXTURES=write`).toBe(make());
+    }
+  });
+});
+
+describe('parseBoxSettings, version 2: rows that parse', () => {
+  const parsed = (d: Record<string, unknown>): BoxSettingsDoc => {
+    const doc = parseBoxSettings(asText(d));
+    expect(doc, 'the document parses').not.toBeNull();
+    expect(doc!.v).toBe(2);
+    return doc!;
+  };
+
+  it('the base parses with version 2, and the keys come out in BOX_SETTINGS_SHOWN order whatever order they came in', () => {
+    expect(parsed(v2Base()).settings.map((r) => r.key)).toEqual([...BOX_SETTINGS_SHOWN]);
+    const d = v2Base();
+    d['settings'] = [...v1Rows(d)].reverse();
+    expect(parsed(d).settings.map((r) => r.key)).toEqual([...BOX_SETTINGS_SHOWN]);
+    const e = v2Base();
+    const rows = v1Rows(e);
+    e['settings'] = [...rows.slice(30), ...rows.slice(0, 30)];
+    expect(parsed(e).settings.map((r) => r.key)).toEqual([...BOX_SETTINGS_SHOWN]);
+  });
+
+  it.each(['file', 'empty', 'default'])('a presence row from %s parses and stays without a value', (from) => {
+    const d = v2Base();
+    setRow(d, 'CCRC_GRAPH_STORE', { key: 'CCRC_GRAPH_STORE', state: 'ok', from });
+    const row = parsed(d).settings.find((r) => r.key === 'CCRC_GRAPH_STORE')!;
+    expect(row).toEqual({ key: 'CCRC_GRAPH_STORE', state: 'ok', from });
+    expect('value' in row).toBe(false);
+  });
+
+  it.each(['24G', '50%', '400%', '0', '3s', '10m', '64M', '86400', '1'.repeat(32)])('a value row at %s parses', (value) => {
+    const d = v2Base();
+    setRow(d, 'CCRC_GRAPH_BUDGET', { key: 'CCRC_GRAPH_BUDGET', state: 'ok', value, from: 'file' });
+    expect(parsed(d).settings.find((r) => r.key === 'CCRC_GRAPH_BUDGET')).toMatchObject({ state: 'ok', value });
+  });
+
+  it.each(WORD_ROWS)('%s at its own word %s parses', (key, value) => {
+    const d = v2Base();
+    setRow(d, key, { key, state: 'ok', value, from: 'file' });
+    expect(parsed(d).settings.find((r) => r.key === key)).toMatchObject({ state: 'ok', value });
+  });
+
+  it.each(['custom', 'custom https://mirror.example.invalid:8443', 'custom HTTPS://mirror.example.invalid', 'custom https://[::1]:8080', 'custom mirror.example.invalid'])(
+    'the release base at %s parses', (value) => {
+      const d = v2Base();
+      setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value, from: 'file' });
+      expect(parsed(d).settings.find((r) => r.key === 'CCRC_RELEASE_BASE_URL')).toMatchObject({ value });
+    });
+
+  it.each([...BOX_SETTING_REFUSAL_WORDS])('a refused row whose why is %s parses, with no value', (why) => {
+    const d = v2Base();
+    setRow(d, 'CCRC_GRAPH_BUDGET', { key: 'CCRC_GRAPH_BUDGET', state: 'refused', from: 'file', why });
+    expect(parsed(d).settings.find((r) => r.key === 'CCRC_GRAPH_BUDGET')).toEqual({ key: 'CCRC_GRAPH_BUDGET', state: 'refused', from: 'file', why });
+  });
+
+  it('an unmeasured row with a 240-character why parses', () => {
+    const d = v2Base();
+    setRow(d, 'CCRC_GRAPH_BUDGET', { key: 'CCRC_GRAPH_BUDGET', state: 'unmeasured', why: 'x'.repeat(240) });
+    expect(parsed(d).settings.find((r) => r.key === 'CCRC_GRAPH_BUDGET')).toMatchObject({ state: 'unmeasured' });
+  });
+});
+
+describe('parseBoxSettings, version 2: rows that are null, each alone on the base', () => {
+  const GB = 'CCRC_GRAPH_BUDGET';
+  const GS = 'CCRC_GRAPH_STORE';
+  const okV = (value: string): RowObj => ({ key: GB, state: 'ok', value, from: 'file' });
+  const cases: Record<string, (d: Record<string, unknown>) => void> = {
+    'a presence row carrying a value': (d) => setRow(d, GS, { key: GS, state: 'ok', value: '/srv/g', from: 'file' }),
+    'a presence row carrying an empty value': (d) => setRow(d, GS, { key: GS, state: 'ok', value: '', from: 'file' }),
+    'a refused version-2 row carrying a value': (d) => setRow(d, GB, { key: GB, state: 'refused', value: 'x', from: 'file', why: BOX_SETTING_REFUSAL_WORDS[0] }),
+    'a refused version-2 row carrying an empty value (value class)': (d) => setRow(d, GB, { key: GB, state: 'refused', value: '', from: 'file', why: BOX_SETTING_REFUSAL_WORDS[0] }),
+    'a refused version-2 row carrying an empty value (presence class)': (d) => setRow(d, GS, { key: GS, state: 'refused', value: '', from: 'file', why: BOX_SETTING_REFUSAL_WORDS[0] }),
+    'an unmeasured row carrying a value': (d) => setRow(d, GB, { key: GB, state: 'unmeasured', why: 'x', value: '1' }),
+    'an unmeasured row carrying a from': (d) => setRow(d, GB, { key: GB, state: 'unmeasured', why: 'x', from: 'file' }),
+    'a value row whose value is a path': (d) => setRow(d, GB, okV('/etc/x')),
+    'a value row whose value is a URL with a token': (d) => setRow(d, GB, okV('https://h/?token=abc')),
+    'a value row with a word that is not its own': (d) => setRow(d, GB, okV('local')),
+    'a value row with a 33-digit value': (d) => setRow(d, GB, okV('1'.repeat(33))),
+    'a value row with a unit the shape does not take: 5Q': (d) => setRow(d, GB, okV('5Q')),
+    'a value row with a unit the shape does not take: 5 G': (d) => setRow(d, GB, okV('5 G')),
+    'a value row with a unit the shape does not take: -1': (d) => setRow(d, GB, okV('-1')),
+    'a value row with a unit the shape does not take: 1.5': (d) => setRow(d, GB, okV('1.5')),
+    'an origin with a userinfo': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom https://u:p@h', from: 'file' }),
+    'an origin with a path': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom https://h/r', from: 'file' }),
+    'an origin with a query': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom https://h?x', from: 'file' }),
+    'an origin with a fragment': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom https://h#x', from: 'file' }),
+    'an origin with a colon that is not a port': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom h:abc', from: 'file' }),
+    'an origin on another scheme': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom ftp://h', from: 'file' }),
+    'an origin with no host': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom https://', from: 'file' }),
+    'an origin with a trailing space': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom ', from: 'file' }),
+    'an origin that is a bare URL': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'https://h', from: 'file' }),
+    'an origin that is the word set': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'set', from: 'file' }),
+    'a refused why outside the closed set': (d) => setRow(d, GB, { key: GB, state: 'refused', from: 'file', why: "CCRC_GRAPH_BUDGET='7x' is not a whole number" }),
+    'a why of 241 characters': (d) => setRow(d, GB, { key: GB, state: 'unmeasured', why: 'x'.repeat(241) }),
+    'a version-2 document missing one row': (d) => { v1Rows(d).pop(); },
+    'a version-2 row for an omit setting': (d) => { v1Rows(d).push({ key: 'CCRC_TESTBOX_RUNS', state: 'ok', value: '2', from: 'default' }); },
+    'the same, in place of a real row': (d) => { v1Rows(d)[v1Rows(d).length - 1]!['key'] = 'CCRC_TESTBOX_RUNS'; },
+    'the same, as an unmeasured row in place of a real row': (d) => { v1Rows(d)[v1Rows(d).length - 1] = { key: 'CCRC_TESTBOX_RUNS', state: 'unmeasured', why: 'x' }; },
+    'the same, as a refused row in place of a real row': (d) => { v1Rows(d)[v1Rows(d).length - 1] = { key: 'CCRC_TESTBOX_RUNS', state: 'refused', from: 'file', why: BOX_SETTING_REFUSAL_WORDS[0] }; },
+    'a duplicated version-2 key': (d) => { v1Rows(d)[7]!['key'] = v1Rows(d)[6]!['key']; },
+    'version 3': (d) => { d['v'] = 3; },
+    'version 0': (d) => { d['v'] = 0; },
+    'version "2"': (d) => { d['v'] = '2'; },
+    'a version-2 document with the version-1 key list': (d) => { d['settings'] = v1Rows(v1Doc('defaults')); },
+  };
+  it.each(Object.keys(cases))('%s', (name) => {
+    expect(parseBoxSettings(asText(v2Base())), 'the control: the unforged base parses').not.toBeNull();
+    const d = v2Base();
+    cases[name]!(d);
+    expect(parseBoxSettings(asText(d))).toBeNull();
+  });
+
+  it('a version-1 document with a presence row is null', () => {
+    const d = v1Doc('defaults');
+    delete rowOfKey(d, 'CCRC_RELEASE_BASE_URL')['value'];
+    expect(parseBoxSettings(asText(d))).toBeNull();
+    expect(parseBoxSettings(v1Text('defaults'))).not.toBeNull();
+  });
+
+  it('an unmeasured row of a key outside the table is null, and so is an unknown state word', () => {
+    const d = v2Base();
+    setRow(d, GB, { key: 'CCRC_NOT_A_SETTING', state: 'unmeasured', why: 'x' });
+    expect(parseBoxSettings(asText(d))).toBeNull();
+    const e = v2Base();
+    rowV2(e, GB)['state'] = 'maybe';
+    expect(parseBoxSettings(asText(e))).toBeNull();
+  });
+});
+
+describe('version 2: the vocabularies and the envelope', () => {
+  it('every member of BOX_SETTING_REFUSAL_WORDS is printable ASCII of at most 240 characters, and none holds "=" or a quote', () => {
+    for (const w of BOX_SETTING_REFUSAL_WORDS) {
+      expect(w, w).toMatch(/^[\x20-\x7e]+$/);
+      expect(w.length, w).toBeLessThanOrEqual(240);
+      expect(w, w).not.toMatch(/["'=]/);
+    }
+    expect(Object.keys(BOX_SETTING_VALUE_WORDS).length).toBeGreaterThan(0);
+  });
+
+  it('the writer and the server agree on the envelope, entry by entry', () => {
+    const home = mkTmp('bsr-fits-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), '');
+    const env = ccrcContainedEnv(home, process.env, { managers: false, curl: 'poison' });
+    for (const k of Object.keys(env)) if (k.startsWith('CCRC_') && k !== 'CCRC_HERE') delete env[k];
+    env['TMPDIR'] = join(home, 'tmp');
+    mkdirSync(env['TMPDIR'], { recursive: true });
+    env['LIST'] = ENVELOPE_CORPUS.map((e) => `${e.key}|${BOX_SETTING_SPECS[e.key].cls}|${e.value}`).join('\n');
+    const script = `. "$1"; _set_libs; while IFS= read -r line; do k="\${line%%|*}"; c="\${line#*|}"; v="\${c#*|}"; c="\${c%%|*}"; _set_fits "$k" "$c" "$v" && printf 1 || printf 0; done <<<"$LIST"`;
+    const r = spawnSync(BASH, ['-c', script, 'bsr-fits', CCRC], { env, encoding: 'utf8', input: '', timeout: 120_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const bash = [...r.stdout].map((c) => c === '1');
+    expect(bash).toHaveLength(ENVELOPE_CORPUS.length);
+    const server = ENVELOPE_CORPUS.map((e) => {
+      const d = v2Base();
+      setRow(d, e.key, { key: e.key, state: 'ok', value: e.value, from: 'file' });
+      return parseBoxSettings(asText(d)) !== null;
+    });
+    expect(server).toEqual(bash);
+    expect(server.some(Boolean) && server.some((b) => !b), 'the corpus holds both answers').toBe(true);
+  });
+});
+
+describe('version 2: the largest document, the view and the lane', () => {
+  it('the largest document this parse accepts fits under the node-file cap', async () => {
+    const text = largestV2();
+    expect(parseBoxSettings(text)).not.toBeNull();
+    expect(Buffer.byteLength(text)).toBeLessThan(NODE_FILE_CAP_BYTES);
+    expect(Buffer.byteLength(text), 'about 36 KB, as the arithmetic says').toBeGreaterThan(30_000);
+    const lane = new BoxSettingsLane();
+    await lane.run(deps(ccrcWith('bsr-v2-big-', { file: text })), () => [nodeRow('n1', 'linux', ['verify', 'settings'])], [measuredOutcome(SERVER_LABEL, 'n1')]);
+    expect(lane.held().get('n1')!.read.state).toBe('ok');
+  });
+
+  const v2Doc = (): BoxSettingsDoc => parseBoxSettings(readFileSync(join(FIX, 'ok--v2-synthetic-base.json'), 'utf8')) as BoxSettingsDoc;
+  const held2 = (at: number): BoxSettingsHeld => ({ read: { state: 'ok', doc: { ...v2Doc(), at } } });
+  it('boxSettingsView ages a version-2 document by the request\'s clock exactly as version 1', () => {
+    expect(boxSettingsView(held2(NOW - 600), NOW)).toMatchObject({ state: 'ok', ageS: 600, stale: false });
+    expect(boxSettingsView(held2(NOW - 960), NOW)).toMatchObject({ state: 'ok', ageS: 960, stale: true });
+    expect(boxSettingsView(held2(NOW - 900), NOW)).toMatchObject({ stale: false });
+    expect(boxSettingsView(held2(NOW - 901), NOW)).toMatchObject({ stale: true });
+    expect(boxSettingsView(held2(NOW + 3600), NOW)).toEqual({ state: 'clock-ahead' });
+    expect(boxSettingsView(held2(NOW + 300), NOW)).toMatchObject({ state: 'ok', ageS: 0, stale: false });
+  });
+
+  const v2At = (at: number): string => JSON.stringify({ ...v2Base(), at });
+  it('the lane holds a version-2 document whole, and the route serves it', async () => {
+    const lane = new BoxSettingsLane();
+    await lane.run(deps(ccrcWith('bsr-v2-lane-', { file: v2At(NOW) })), () => [nodeRow('n1', 'linux', ['verify', 'settings'])], [measuredOutcome(SERVER_LABEL, 'n1')]);
+    const h = lane.held().get('n1')!;
+    expect(h.read.state).toBe('ok');
+    const b = await box({ watcher: true, files: { 'ccrc-caps': CAPS_WITH, [NODE_FILES.boxSettings]: v2At(Math.floor(Date.now() / 1000)) } });
+    await b.watcher!.inventoryNow();
+    const view = (await b.app.inject({ method: 'GET', url: '/api/updates' })).json() as UpdatesView;
+    const s = view.nodes[0]!.settings!;
+    expect(s.state).toBe('ok');
+    if (s.state === 'ok') {
+      expect(s.doc.v).toBe(2);
+      expect(s.doc.settings.map((r) => r.key)).toEqual([...BOX_SETTINGS_SHOWN]);
+    }
+  });
+
+  it('a version-2 document\'s presence rows reach the wire with no value', async () => {
+    const b = await box({ watcher: true, files: { 'ccrc-caps': CAPS_WITH, [NODE_FILES.boxSettings]: v2At(Math.floor(Date.now() / 1000)) } });
+    await b.watcher!.inventoryNow();
+    const res = await b.app.inject({ method: 'GET', url: '/api/updates' });
+    const presence = BOX_SETTINGS_SHOWN.filter((k) => BOX_SETTING_SPECS[k].cls === 'presence');
+    expect(presence.length).toBeGreaterThan(0);
+    const rows = ((res.json() as UpdatesView).nodes[0]!.settings as { doc: { settings: RowObj[] } }).doc.settings;
+    for (const k of presence) expect('value' in rows.find((r) => r['key'] === k)!, k).toBe(false);
+    for (const k of presence) expect(res.body).not.toMatch(new RegExp(`"key":"${k}"[^}]*"value"`));
   });
 });

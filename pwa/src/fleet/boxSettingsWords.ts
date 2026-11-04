@@ -9,7 +9,7 @@
 //   * The age is the shared elapsed-time spelling (`@ccrc/ui`'s `elapsedWords`) and a byte count the fleet's one
 //     size spelling (`lib/format.ts`'s `humanBytes`); neither is written a second time.
 import type {
-  BoxSettingKey, BoxSettingRowV1, BoxSettingSource, BoxSettingsBackups, BoxSettingsDisk, BoxSettingsDoc, BoxSettingsFailure,
+  BoxSettingKey, BoxSettingRow, BoxSettingRowV1, BoxSettingSource, BoxSettingsBackups, BoxSettingsDisk, BoxSettingsDoc, BoxSettingsFailure,
   BoxSettingsReader, BoxSettingsRead, NodeRole,
 } from '../../../shared/api';
 import {
@@ -136,12 +136,15 @@ export interface BoxSettingLine {
   why: string | null;
 }
 
-export function settingLine(row: BoxSettingRowV1, role: NodeRole | null): BoxSettingLine {
+export function settingLine(row: BoxSettingRow, role: NodeRole | null): BoxSettingLine {
   if (role === 'server' && row.key === MODELS_BUDGET_KEY) {
     return { key: row.key, value: BOX_SETTINGS_SERVER_BUDGET_TEXT, from: null, why: null };
   }
   if (row.state === 'unmeasured') return { key: row.key, value: BOX_SETTINGS_TEXT.notMeasured, from: null, why: row.why };
   if (row.state === 'refused') return { key: row.key, value: BOX_SETTINGS_TEXT.refused, from: BOX_SETTING_SOURCE_TEXT[row.from], why: row.why };
+  // A row with no `value` is a version-2 presence row, which no console reads before `readDoc` takes version 2: it shows its source word
+  // as its value for now (the presence words are a later change).
+  if (!('value' in row)) return { key: row.key, value: BOX_SETTING_SOURCE_TEXT[row.from], from: null, why: null };
   return { key: row.key, value: row.value, from: BOX_SETTING_SOURCE_TEXT[row.from], why: null };
 }
 

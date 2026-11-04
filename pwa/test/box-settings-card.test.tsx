@@ -3,7 +3,7 @@
 // fleet and server, settings the seven the verb lists.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
-import type { BoxSettingRow, BoxSettingsDoc, BoxSettingsRead, NodeWire } from '../../shared/api';
+import type { BoxSettingRowV1, BoxSettingsDoc, BoxSettingsDocV1, BoxSettingsRead, NodeWire } from '../../shared/api';
 import {
   BOX_SETTINGS_FAILURES, BOX_SETTINGS_KEYS, BOX_SETTINGS_STALE_S, BOX_SETTING_SOURCES, BOX_SETTING_STATES,
 } from '../../shared/api';
@@ -29,7 +29,7 @@ const NOW = Date.UTC(2026, 10, 3, 12, 0, 0);
 const MIN = 60_000;
 const SERVER_ID = '1f0e0d0c-0b0a-4908-8706-050403020100';
 
-const okRows = (): BoxSettingRow[] => [
+const okRows = (): BoxSettingRowV1[] => [
   { key: 'CCRC_BACKUP_KEEP', state: 'ok', value: '5', from: 'default' },
   { key: 'CCRC_BACKUP_DATA_KEEP', state: 'ok', value: '2', from: 'file' },
   { key: 'CCRC_VERSIONS_KEEP', state: 'ok', value: '4', from: 'environment' },
@@ -38,7 +38,7 @@ const okRows = (): BoxSettingRow[] => [
   { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'default', from: 'default' },
   { key: 'CCRC_MODELS_ADVANCE_BUDGET_S', state: 'ok', value: '120', from: 'empty' },
 ];
-const doc = (over: Partial<BoxSettingsDoc> = {}, ageMin = 2): BoxSettingsDoc => ({
+const doc = (over: Partial<BoxSettingsDocV1> = {}, ageMin = 2): BoxSettingsDocV1 => ({
   v: 1, at: Math.floor((NOW - ageMin * MIN) / 1000), reader: 'timer', settings: okRows(),
   deadline: { plainMs: 600000, minMs: 60000, maxMs: 3600000 },
   backups: { state: 'ok', kept: 5, withData: 4, bytes: 12_100_000_000 },
@@ -98,7 +98,7 @@ describe('Box settings card: refused, stale, server (D-6917)', () => {
   it('a refused setting shows its sentence in the danger tone; an unmeasured one says so, in the same tone', () => {
     const rows = okRows();
     // A wave-1 server may still send a refused row's value: a wire forgery here, which the card must not show.
-    rows[0] = { key: 'CCRC_BACKUP_KEEP', state: 'refused', value: 'abc', from: 'environment', why: 'CCRC_BACKUP_KEEP must be a whole number' } as unknown as BoxSettingRow;
+    rows[0] = { key: 'CCRC_BACKUP_KEEP', state: 'refused', value: 'abc', from: 'environment', why: 'CCRC_BACKUP_KEEP must be a whole number' } as unknown as BoxSettingRowV1;
     rows[3] = { key: 'CCRC_UPDATE_HEALTH_S', state: 'unmeasured', why: 'ccrc.env could not be scanned' };
     renderCard([fleet(ok(doc({ settings: rows })))]);
     const refused = screen.getByText('CCRC_BACKUP_KEEP must be a whole number');

@@ -308,7 +308,16 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
   // W2 of the box settings view (D11, D12, D-7909, D-7914) shows the test box's host settings and classes the rest as omitted:
   // L0's table and value words spell the keys, as do the table's own suite and the differential corpus the server reads too.
   // Every later task of the wave that adds a holder appends it here, in its own commit.
-  const BOX_SETTINGS_W2_HOLDERS = ['server/test/box-settings-table.test.ts', 'server/test/boxSettingsEnvelope.ts', 'shared/api.ts'];
+  // Task 4: the server's read test, whose version-2 rows name the test-box keys, and the nine version-2 fixtures (each holds the 16 test-box rows).
+  const BOX_SETTINGS_V2_FIXTURES = [
+    'ok--v2-synthetic-base', 'ok--v2-synthetic-every-word', 'ok--v2-synthetic-largest', 'malformed--v2-presence-with-value',
+    'malformed--v2-refused-with-value', 'malformed--v2-why-outside-set', 'malformed--v2-omit-row', 'malformed--v2-origin-outside',
+    'malformed--version-3',
+  ].map((n) => `server/test/fixtures/box-settings/${n}.json`);
+  const BOX_SETTINGS_W2_HOLDERS = [
+    'server/test/box-settings-table.test.ts', 'server/test/boxSettingsEnvelope.ts', 'shared/api.ts', 'server/test/box-settings-read.test.ts',
+    ...BOX_SETTINGS_V2_FIXTURES,
+  ];
   const HOLDERS = [
     ...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB7_HOLDERS, ...TB8_HOLDERS,
     ...TB9_HOLDERS, ...TB10_HOLDERS, ...TB11_HOLDERS, ...BOX_SETTINGS_W2_HOLDERS,
