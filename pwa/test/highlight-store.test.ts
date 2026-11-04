@@ -313,6 +313,26 @@ describe('M4.H12: page ceilings and settled()', () => {
       expect(h.calls).toHaveLength(1);
     });
 
+    // Review 1366 F4: the output walk's `<=` pinned from both sides. Copies whose HTML sums to exactly the page cap are
+    // all drawn; one copy more is skipped. The answer is sized from the page cap alone (an eighth of it, within the
+    // per-block cap), so the case holds at any value this plan sets.
+    it('OUTPUT, at the boundary: copies whose HTML sums to exactly the page cap are all drawn, and one copy more is skipped (review 1366 F4)', async () => {
+      const { h, store, key, answer } = setup();
+      const size = DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS / 8;
+      expect(Number.isInteger(size)).toBe(true);
+      expect(size).toBeLessThanOrEqual(MD_HIGHLIGHT_MAX_HTML_CHARS);
+      const html = `<span class="hljs-a">${'x'.repeat(size - 28)}</span>`;
+      expect(html).toHaveLength(size);
+      const ats = copiesOf(9);
+      store.seed(ats.map((at) => ({ lang: 'python', raw: 'same', at })));
+      const k = key('python', 'same');
+      store.request(k);
+      await answer(0, HTML(html));
+      expect(h.calls).toHaveLength(1);
+      expect(store.peek(k)).toMatchObject({ kind: 'html', mode: 'block' });
+      expect(verdicts(store, ats)).toEqual([...Array(8).fill(null), 'page-output']);
+    });
+
     it('OUTPUT: the verdicts are readable when the key\'s listeners run (recorded before the entry is set)', async () => {
       const { store, key, answer } = setup();
       const html = `<span class="hljs-a">${'x'.repeat(MD_HIGHLIGHT_MAX_HTML_CHARS - 40)}</span>`;

@@ -457,13 +457,17 @@ describe('F1: a page of copies of one block, the ceilings counting every drawn c
     const n = fit + 3;
     const { container, docs } = await drawn(root(Array.from({ length: n }, () => fence('import a\n'))), answering(html));
     expect(docs.calls).toHaveLength(1);
+    // The HTML the drawn copies insert, summed over EVERY copy that carries highlight spans (review 1366 F3: a sum
+    // sliced to the copies the ceiling admits could not fail), is within the ceiling. Asserted before the per-copy
+    // checks, so a ceiling that admits one copy too many fails here first.
+    const inserted = [...container.querySelectorAll('pre > code.hljs')]
+      .filter((c) => c.querySelector('span[class^="hljs-"]') !== null)
+      .reduce((sum, c) => sum + c.innerHTML.length, 0);
+    expect(inserted, 'inserted HTML within the ceiling').toBeLessThanOrEqual(DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS);
     const { coloured, labels } = read(container);
     expect(coloured).toEqual([...rep(true, fit), ...rep(false, n - fit)]);
     expect(labels).toEqual([...rep('Python', fit), ...rep('Python · not highlighted (page highlighting limit)', n - fit)]);
     for (const code of [...container.querySelectorAll('pre > code')].slice(fit)) expect(code.textContent).toBe('import a');
-    // The inserted HTML is within the ceiling: the characters the drawn copies carry.
-    const inserted = [...container.querySelectorAll('pre > code.hljs')].slice(0, fit).reduce((sum, c) => sum + c.innerHTML.length, 0);
-    expect(inserted).toBeLessThanOrEqual(DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS);
   }, 60000);
 
   it('the input ceiling: copies of one fence whose raw text together passes the page cap are coloured up to it, the rest are plain and say so; one job', async () => {
