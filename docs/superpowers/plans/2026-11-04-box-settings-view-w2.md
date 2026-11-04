@@ -2512,3 +2512,13 @@ Added by the build:
 - The L0 origin shape admits a schemeless host, so a token pasted as `CCRC_RELEASE_BASE_URL` could show as `custom <token>` unless `_upd_redact` catches it. The comment in `boxSettings.ts` that the shapes "prove no value can carry a credential" claims more than the origin shape proves.
 - The human form of `ccrc settings` cuts an unmeasured why at 480 while the JSON record cuts at 240.
 - V10's keepalive, usage and carry rows re-run the verb's own literal read, not each consumer's.
+- The dead `*) return 0 ;;` arm in `_set_check`'s updates subshell (final review).
+- `rowOfV2` checks a refused why against the whole closed set, not the key's own words (final review).
+
+### Final review
+
+The final whole-branch review found no leak path. It sent two fixes, both landed:
+- `docs(server): the envelope comment says what the shapes prove, not more (final review)`: the comment on the value and origin shapes no longer claims they prove no value can carry a credential; no test pinned the old text.
+- `fix(pwa): the Box settings card leaves out a family the box reported no row for (final review)`: `familyGroups` drops a family with no rows, so a version-1 document renders the updates fold alone and a server-role node no "not used" line for a family it never reported. Two new card rows (E1, E2) went red first and a restored-empty-families mutant turns both red again.
+
+Two smaller findings were moved to Later (above): the dead `*) return 0 ;;` arm and `rowOfV2`'s whole-set why check.
