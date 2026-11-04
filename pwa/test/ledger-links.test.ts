@@ -90,6 +90,7 @@ describe('linkRuns: the D28 boundary, and paths the console would not open as wr
       'https://claude.ai/artifact/0f1e2d3c', 'https://claude.ai/public/artifacts/0f1e2d3c', 'https://claude.ai/%61rtifact/0f1e2d3c',
       'https://b.example/docs/project-a/specs/a-design.md', 'https://b.example/docs/p/%73pecs/x.md',
       'https://github.com/org-a/repo-a/blob/main/docs/superpowers%2Fspecs/x.md', 'https://github.com/org-a/repo-a/tree/main/docs/superpowers/plans',
+      'https://claude.ai/%2561rtifact/0f1e2d3c', 'https://github.com/org-a/repo-a/blob/main/docs%5Csuperpowers%5Cspecs%5Cx.md',
     ]) {
       expect(links(linkRuns(`see ${t} now`, HOME)), t).toEqual([]);
       expect(joined(linkRuns(`see ${t} now`, HOME)), t).toBe(`see ${t} now`);

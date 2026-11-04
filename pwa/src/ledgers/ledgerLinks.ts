@@ -90,7 +90,6 @@ function linkOf(text: string, homeProject: string | null): LinkRun | null {
     if (linksDocumentOutside(text)) return null;
     return { kind: 'link', text, href: url.href, external: true };
   }
-  if (/^https?:\/\//i.test(text)) return null;
   if (text.startsWith('docs/')) {
     const href = docHref(text, homeProject);
     return href === null ? null : { kind: 'link', text, href, external: false };

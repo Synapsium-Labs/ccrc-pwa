@@ -268,6 +268,10 @@ describe('document links go only to the Docs reader (plan PL10, spec D28)', () =
     ['a document server section with a full stop after it', { why: 'see https://b.example/docs/p/specs.' }],
     ['a document server section in brackets', { why: 'Read it (https://b.example/docs/p/plans) first.' }],
     ["the artifact host's public artifacts page", { why: 'See https://claude.ai/public/artifacts/0f1e2d3c first.' }],
+    ["a code host's view of a section directory, with no trailing slash", { why: 'See https://github.com/o/r/tree/main/docs/superpowers/plans now.' }],
+    // Decoded until it is stable, and a decoded backslash is a separator, as some servers read it (fix round 1's hardening).
+    ['a double-encoded artifact segment', { why: 'See https://claude.ai/%2561rtifact/abc first.' }],
+    ['encoded backslashes between the section directories', { why: 'See https://github.com/o/r/blob/main/docs%5Csuperpowers%5Cspecs%5Cx.md now.' }],
   ])('the raise route refuses an artifact page or an outside document server as a document link: %s', async (_name, over) => {
     const r = await rig();
     const res = await post(r, '/api/programmes/prog-a/items', { ...as('lane-a'), ...RAISE, ...over });

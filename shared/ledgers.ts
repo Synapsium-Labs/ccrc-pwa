@@ -473,13 +473,17 @@ export function linkCandidates(text: string): LinkCandidate[] {
  *  server outside the console lists. A path of that shape names a document, whatever the host. */
 const DOC_SERVER_SECTION = new RegExp(`^/docs/[^/]+/(?:${[...DOC_SECTION_SLUGS, 'vision', 'promise'].join('|')})(?:/|$)`);
 
+/** How many times `linksDocumentOutside` decodes one path segment before it stops trusting it. */
+const DECODE_ROUNDS = 4;
+
 /** Whether `address` links a document other than through the console's Docs reader: an artifact page (a path segment
  *  `artifact`, or the artifact host's `public/artifacts`), a repository document on any host (a path through one of the Docs
  *  reader's section directories, as a code host's file or directory view has), or a document server's page
- *  (`/docs/<project>/<section>/…`). The path is read as a server reads it: each segment percent-decoded (so `%61rtifact`,
- *  `%73pecs` and `superpowers%2Fspecs` are what they spell) and folded to lower case; a segment that does not decode counts
- *  as one (review 1466 F6). An address that is none of these, an outside service's own page (a sign-in or settings page, a
- *  run's artifacts on a code host), is an ordinary link. */
+ *  (`/docs/<project>/<section>/…`). The path is read as a server reads it: each segment percent-decoded until it is stable
+ *  (so `%61rtifact`, `%2561rtifact`, `%73pecs`, `superpowers%2Fspecs` and `%5C` are what they spell), split on `/` and `\`,
+ *  and folded to lower case; a segment that does not decode, or still changes after `DECODE_ROUNDS`, counts as one (review
+ *  1466 F6). An address that is none of these, an outside service's own page (a sign-in or settings page, a run's artifacts
+ *  on a code host), is an ordinary link. */
 export function linksDocumentOutside(address: string): boolean {
   let pathname: string;
   try {
@@ -489,9 +493,17 @@ export function linksDocumentOutside(address: string): boolean {
   }
   const segs: string[] = [];
   for (const raw of pathname.split('/')) {
-    let seg: string;
-    try { seg = decodeURIComponent(raw); } catch { return true; }
-    segs.push(...seg.toLowerCase().split('/'));
+    // Decoded until it is stable (a double-encoded `%2561rtifact` too, at most `DECODE_ROUNDS` times; one still changing
+    // after that counts as outside), then split on `/` and `\`, which some servers read as one.
+    let seg = raw;
+    for (let round = 0; ; round++) {
+      let next: string;
+      try { next = decodeURIComponent(seg); } catch { return true; }
+      if (next === seg) break;
+      if (round === DECODE_ROUNDS) return true;
+      seg = next;
+    }
+    segs.push(...seg.toLowerCase().split(/[\\/]/));
   }
   if (segs.includes('artifact') || segs.some((seg, i) => seg === 'public' && segs[i + 1] === 'artifacts')) return true;
   const path = segs.join('/');
