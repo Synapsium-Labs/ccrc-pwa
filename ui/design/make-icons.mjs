@@ -63,6 +63,10 @@ const NAMES = [
   // The session inspector's toggle, shown or hidden (desktop polish T3e, D-6385).
   'panel-right-close',
   'panel-right-open',
+  // The Docs reader's compact phone head (the phone-header plan of 2026-11-03): Share, Export and Page details.
+  'share',
+  'download',
+  'ellipsis',
 ];
 
 const TAGS = new Set(['path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'ellipse']);

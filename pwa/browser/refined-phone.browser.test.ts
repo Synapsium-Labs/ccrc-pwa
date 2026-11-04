@@ -1,8 +1,8 @@
 // Refined's phone header, accounts strip and `+ New` (W2 Task S5, D-5471; the strip is the full one again, desktop-polish
 // S5a), in a real Chrome over the production build.
 //
-// What jsdom cannot hold: at 360, 390 and 438 in both palettes, with a three-digit Runs count and five lanes, the
-// header is one row with nothing cut, every door is at least 44 x 44 under the phone's touch screen, the readout is one
+// What jsdom cannot hold: at 360, 390 and 438 in both palettes, with a three-digit Runs count and five lanes (and, in a case of
+// its own, the Waiting door's "99+" badge drawn too), the header is one row with nothing cut, every door is at least 44 x 44 under the phone's touch screen, the readout is one
 // line, the strip's lane cards sit in two columns, the `+ New` clears the last card once the list is scrolled to its
 // end and sits above a 34 px home indicator (emulated through the DevTools protocol, so `env(safe-area-inset-bottom)` is
 // non-zero), a real toast (`ToastHost`'s, raised by the update line's dismiss) sits above it, and the page does not
@@ -350,6 +350,72 @@ function cardFaults({ expected, cardSel, inside }: { expected: Array<{ label: st
   if (lefts.size !== 2) out.push(`the cards sit in ${lefts.size} columns`);
   return out;
 }
+
+// Carry C (D-7951), review 1379 F6: the phone's Waiting door with its widest badge, "99+", drawn beside Inbox's and Runs'. The
+// header case above serves no list, so it asserts two badges; this one serves a hundred open items (with the one asking session,
+// the door counts 101), and holds that the third badge leaves the row's fit as it was: one row, every door whole and a
+// finger's square, each badge on its glyph's corner and never its middle, and nothing scrolls sideways.
+const listItem = (id: number): object => ({
+  id, program: 'p', runId: null, kind: 'do', title: `Item ${id} title`, why: 'Why.', how: ['Do it.'], options: null,
+  neededBy: 'later', soonLabel: null, state: 'open', stale: false, raisedAt: Date.now() - 60_000, tickedAt: null, closedAt: null,
+  answer: null, note: null, secretSlot: null, secretSet: null, history: [{ at: Date.now() - 60_000, act: 'raise', note: null }],
+});
+const LIST = { items: Array.from({ length: 100 }, (_, i) => listItem(i + 1)), cleared: [], goals: [] };
+const WITH_LIST: AppFixture = {
+  api: { ...FIXTURE.api, '/api/waiting': { ok: true, waiting: LIST } },
+  fleetFrames: [{ type: 'waiting', waiting: LIST }, ...FIXTURE.fleetFrames],
+};
+
+describe("Refined's phone header with the Waiting badge drawn keeps its one row of finger-sized doors", () => {
+  for (const view of PHONES) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, WITH_LIST);
+      try {
+        await page.goto(server!.origin + '/');
+        await page.waitForFunction(() => document.querySelector('.ref-phone-head [aria-label="Waiting on you, 101 waiting on you"]') !== null
+          && document.querySelector('.ref-phone-head [aria-label="Inbox, 1 waiting for you"]') !== null
+          && document.querySelector('.ref-phone-head [aria-label="Runs, 120 needs you"]') !== null, undefined, { timeout: 20_000 });
+        const faults = await page.evaluate(() => {
+          const out: string[] = [];
+          if (!matchMedia('(pointer: coarse)').matches) out.push('the coarse pointer was not emulated');
+          const row = document.querySelector<HTMLElement>('.ref-phone-row')!;
+          const rr = row.getBoundingClientRect();
+          const parts = [row.querySelector<HTMLElement>('[data-wordmark]')!, ...row.querySelectorAll<HTMLElement>('[data-command]')];
+          const doors = parts.slice(1).map((d) => d.getAttribute('data-command'));
+          if (doors.join(' ') !== 'go-waiting go-inbox go-runs go-docs go-settings') out.push(`the doors are ${doors.join(' ')}`);
+          const mid = (el: HTMLElement): number => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
+          const line = mid(parts.at(-1)!);
+          for (const p of parts) {
+            const r = p.getBoundingClientRect();
+            const name = p.getAttribute('aria-label') ?? 'the wordmark';
+            if (Math.abs(mid(p) - line) > 8) out.push(`${name} wrapped off the row`);
+            if (r.right > rr.right + 0.5 || r.left < rr.left - 0.5) out.push(`${name} is cut`);
+            if (p.matches('[data-command]') && (r.width < 43.5 || r.height < 43.5)) out.push(`${name} is ${Math.round(r.width)} x ${Math.round(r.height)}`);
+          }
+          const badges = [...row.querySelectorAll<HTMLElement>('.ref-phone-badge')];
+          const on = badges.map((b) => b.closest('[data-command]')!.getAttribute('data-command'));
+          if (on.join(' ') !== 'go-waiting go-inbox go-runs') out.push(`the badges are on ${on.join(' ')}`);
+          const waitingBadge = badges[0];
+          if (waitingBadge?.textContent !== '99+') out.push(`the Waiting badge reads ${waitingBadge?.textContent ?? 'nothing'}`);
+          for (const badge of badges) {
+            const br = badge.getBoundingClientRect();
+            if (br.right > rr.right + 0.5) out.push('the badge is cut');
+            const g = badge.closest('[data-command]')!.querySelector('svg')!.getBoundingClientRect();
+            const cx = (g.left + g.right) / 2;
+            const cy = (g.top + g.bottom) / 2;
+            if (br.left < cx - 0.5 || br.bottom > cy + 0.5) out.push(`a badge covers its glyph's middle (${Math.round(br.left)},${Math.round(br.bottom)} vs ${Math.round(cx)},${Math.round(cy)})`);
+          }
+          if (document.documentElement.scrollWidth > window.innerWidth + 0.5) out.push('the page scrolls sideways');
+          return out;
+        });
+        expect(faults).toEqual([]);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 60_000);
+  }
+});
 
 describe("with 17 lanes the phone's strip keeps every card readable", () => {
   for (const theme of THEMES) {

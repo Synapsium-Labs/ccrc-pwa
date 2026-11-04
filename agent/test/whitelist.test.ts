@@ -334,6 +334,16 @@ describe('whitelist.isExecAllowed', () => {
     expect(isExecAllowed('ccd', ['ws-title', '--clear'])).toBe(false);
   });
 
+  // ADD A PROJECT (add-project spec 2026-11-04 §4): the create is reachable only by naming the project first.
+  it('grants project-add ONLY with --name, in both directions', () => {
+    expect(isExecAllowed('ccd', ['project-add', '--name', 'demo', '--url', 'https://github.com/o/r.git'])).toBe(true);
+    expect(isExecAllowed('ccd', ['project-add', '--name', 'demo', '--empty'])).toBe(true);
+    expect(isExecAllowed('ccd', ['project-add'])).toBe(false);
+    expect(isExecAllowed('ccd', ['project-add', '--url', 'https://github.com/o/r.git', '--name', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['project-add', '--empty', '--name', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['project-add', 'demo'])).toBe(false);
+  });
+
   it('grants project-pool ONLY with --project, in both directions', () => {
     // The flag is not a confirmation token here, it is the verb's whole
     // argument surface — and prefix matching leaves everything after it

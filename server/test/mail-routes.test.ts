@@ -31,6 +31,7 @@ import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
 import { isDeadCoordinatorKebab } from '../src/deadCoordinator.js';
 import { isCollectExecutorKebab } from '../src/coord/collectTempRoot.js';
 import { isLandingKebab } from '../src/coord/landing.js';
+import { LANDING_INFRASTRUCTURE_CODES, LANDING_MUTATION_CODES } from '../../shared/landingLine.js';
 import { isDelegationModelKebab } from '../src/coord/delegation-model.js';
 import { isDelegationJournalKebab } from '../src/coord/delegation-journal.js';
 import { isDelegationCheckpointKebab } from '../src/coord/delegation-checkpoint.js';
@@ -41,6 +42,7 @@ import { isDriftKind, isRunSpendUnmeasuredReason } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
 import { isDelegationProjectionKebab } from '../src/coord/delegation-projection.js';
+import { isDelegationLeaseStateKebab } from '../src/coord/delegation-lease-state.js';
 import { isCollectLaneKebab } from '../src/collectLane.js';
 import { isNoticeMode } from '../src/notice.js';
 import { isArchiveGateKebab } from '../src/coord/archiveAdmission.js';
@@ -625,6 +627,13 @@ describe('the rejection table is total, in both directions', () => {
       'no-pr',               // coord/landingEntry.ts: a LandingWrite kind (landing order wave 5e), not a refusal code, though it does cross the wire in the advance's landing.kind
       'no-episode',          // coord/landingEntry.ts: a LandingWrite kind (landing order wave 5e), not a refusal code, though it does cross the wire in the advance's landing.kind
       'no-entry',            // coord/landingEntry.ts: a LandingWrite kind (landing order wave 5e), not a refusal code, though it does cross the wire in the advance's landing.kind
+      'association-unmeasured',// coord/landingEntry.ts: a recovery subject's projection kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'historical-binding-mismatch', // coord/landingEntry.ts: that projection kind's one reason (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'identity-conflict',  // coord/landingEntry.ts: a recovery subject's projection kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'no-run',             // coord/landingEntry.ts: a binding kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'not-recorded',       // coord/landingEntry.ts: a recovery subject's creation kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'not-set',            // coord/landingEntry.ts: a recovery subject's authority kind (landing order wave 5f), a recovery-view discriminant, not a refusal code
+      'stale-episode-head', // coord/landingEntry.ts: the one quarantine kind, also a schema CHECK literal (landing order wave 5f), a recovery-view discriminant, not a refusal code
       'packed-refs',         // coord/gitref.ts — a git filename
       'refused-project',     // coord/gitref.ts — a `WorktreeRead.reason` (§1.7).
                              // NOT a refusal a client ever sees: `readWorktreeRecords`
@@ -951,6 +960,9 @@ describe('the rejection table is total, in both directions', () => {
         // the verdict, a `run_events.detail` and the registry listing. Admitted through the exported guard, derived from
         // `shared/landing.ts`'s maps, never NOT_CODES, for the reason every union above gives.
         || isLandingKebab(tok)
+        // LANDING ORDER WAVE 5f: the landing journal's infrastructure and mutation refusal codes, read from L0's derived lists
+        // (`shared/landingLine.ts`, mapped to statuses by `LANDING_REFUSAL_STATUS`), never re-spelled and never NOT_CODES.
+        || (LANDING_INFRASTRUCTURE_CODES as readonly string[]).includes(tok) || (LANDING_MUTATION_CODES as readonly string[]).includes(tok)
         // DELEGATION BROKER, WAVE 3: the SEVENTEENTH union, checked together and never merged, on the standing rule
         // `enter-ignored` above states. The delegation modules (`delegation-model.ts`, `-journal.ts`, `-checkpoint.ts`,
         // `-ingest.ts`, `-correlation.ts`, `-policy.ts` and `-compaction.ts`) spell, as literals, their refusal codes, the journal's entry kinds, the pruning
@@ -971,6 +983,11 @@ describe('the rejection table is total, in both directions', () => {
         // they ride the `delegation` frame. Admitted through the exported guard, derived from `shared/api.ts`'s four tables, never
         // NOT_CODES, for the reason every union above gives.
         || isDelegationProjectionKebab(tok)
+        // DELEGATION BROKER, WAVE 5 (PR5a): the lease transition table's words, beside the projection's and never merged into it.
+        // `coord/delegation-lease-state.ts` spells its transition reasons, lineage close reasons and act refusals as literals. None is
+        // a mail rejection or a run refusal: they ride the journal and the lease doors' outcomes. Admitted through the exported guard,
+        // derived from the module's three tables, never NOT_CODES.
+        || isDelegationLeaseStateKebab(tok)
         // CHILD RECLAMATION, WAVE 10: the next union, re-counted on the merged tree, checked together and never merged,
         // on the standing rule `enter-ignored` above states. `coord/collectLaneJournal.ts` (the collector switch's
         // generation journal adapter) spells its read kinds as literals, and the switch's other coord-side code

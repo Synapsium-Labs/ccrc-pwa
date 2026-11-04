@@ -50,6 +50,18 @@
   .chat-head .ref-chip-rail .chat-coord {
     flex-wrap: nowrap;
   }
+  /* D-7784 (review 1424 F2): the session's recorded entries, once opened. `.chat-facts` is `display: contents` here, so
+     the list is an item of this one sideways row, and the only one that may shrink: beside a full rail it shrank to
+     nothing. While it is open the rail wraps, as the desk's rail always does, so the list's own `flex-basis: 100%`
+     (chat.css) gives it a line of its own, the rail's whole width, under the chips: each row keeps its condition word
+     whole, and its note wraps inside that width rather than running on as one line. Closed, the rail is the one
+     sideways row it always was. (`SessionDetails`' `showEntries` brings the opened list into view.) */
+  .chat-head .ref-chip-rail:has(.sess-entries) {
+    flex-wrap: wrap;
+  }
+  .chat-head .ref-chip-rail .sess-entries .chat-fact {
+    white-space: normal;
+  }
 }
 
 /* Desktop polish T3c (D-6333): the header names the session. The project is a small crumb above the title (the shared
@@ -212,12 +224,13 @@
    the ink is the primitive's `aria-[current=page]` utility). */
 .ref-tab {
   height: 100%;
+  min-width: var(--tap-min);
   padding: 0 var(--sp-3);
   border-radius: 0;
   white-space: nowrap;
 }
 /* The Waiting on you tab (desktop-polish PL5a) is 127px wide before its count, and the bar's line never wraps: under
-   1000px the tabs' side padding is 6px, not 12, and the line's gap 12px, not 16. That gives back 24 + 8 = 32px (measured
+   1000px the tabs' side padding is 6px, not 8 (12 from 1000), and the line's gap 12px, not 16. That gives back 24 + 8 = 32px (measured
    at 900 with the widest count badge, "99+", drawn on the Waiting tab: the line ran 20.8px past its frame, `+ New
    session` cut, and at 930 it had 9.2px free; with this rule 900 has 11.2px free and 930 has 41.2). The tabs stay the
    line's full height and the narrowest is 47.6px wide, so a finger still lands on each. */

@@ -2,17 +2,16 @@
 // 4.10 "The store", "Page ceilings", "The line retry", "The single sink and its check"). One store per Docs page,
 // text leaf, chat message or tool well, keyed by content, `${lang}\0${raw}`, so identical blocks share one entry and
 // one job.
-//   - `blockKey(lang, raw, part1)` is the ONE function that answers a key, or why the block can never be requested:
-//     no registered grammar, over MD_HIGHLIGHT_BLOCK_MAX_CHARS, or (until W5h-b, `part1` true) one of W5 part 1's
-//     per-block bounds. `store.keyOf` applies it with the store's own `part1`; `CodeBlock` and the seeding walk both
-//     ask it, so they never disagree.
+//   - `blockKey(lang, raw)` is the ONE function that answers a key, or why the block can never be requested: no
+//     registered grammar, or over MD_HIGHLIGHT_BLOCK_MAX_CHARS (W5h-b retired W5 part 1's per-block bounds).
+//     `store.keyOf` is it; `CodeBlock` and the seeding walk both ask it, so they never disagree.
 //   - `seed(blocks)`, a Docs page's or a text leaf's, once, at creation: every requestable block, in document order,
 //     each OCCURRENCE counted, a key that several blocks share included (review 1364 F1: every drawn copy inserts the
-//     key's HTML, so every copy counts); the input ceiling and (until W5h-b) part 1's scan and markdown page budgets
-//     apply here. The first occurrence of a key decides its entry: past a ceiling, the key is `skipped` from the first
-//     commit, whatever order effects run in. A LATER occurrence past a ceiling, of a key whose first occurrence was
-//     admitted, is a skipped COPY: `copySkip(at)` names the ceiling for the copy's own `at`, the `pre` element, and
-//     the copy draws plain while its earlier siblings are coloured. One job still serves the key.
+//     key's HTML, so every copy counts); the input ceiling applies here. The first occurrence of a key decides its
+//     entry: past a ceiling, the key is `skipped` from the first commit, whatever order effects run in. A LATER
+//     occurrence past a ceiling, of a key whose first occurrence was admitted, is a skipped COPY: `copySkip(at)` names
+//     the ceiling for the copy's own `at`, the `pre` element, and the copy draws plain while its earlier siblings are
+//     coloured. One job still serves the key.
 //   - `copySkip(at)` is synchronous and never requests: the page ceiling that skipped this drawn copy, or `null` when
 //     the copy draws its key's entry. A chat store, and a block with no `at`, answer `null`.
 //   - `peek(key)` is synchronous and never requests; it returns the same entry object until that entry changes, and
@@ -47,15 +46,12 @@
 // no timer global, makes no I/O and posts nothing.
 import type { Element as HastElement, Root as HastRoot, RootContent } from 'hast';
 import {
-  HIGHLIGHT_NAME_SET, codeLanguage, highlightBlockCap, inMarkdownPageBudget, inScanPageBudget, isRegisteredGrammar,
-  longestBlankRun, longestLine, longestWordRun,
+  HIGHLIGHT_NAME_SET, codeLanguage, isRegisteredGrammar,
 } from './highlightNames';
 import type { Highlighter, HighlightOutcome } from './highlightProtocol';
 import {
-  DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS,
-  DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS, HIGHLIGHT_LINE_RETRY_UNITS, HIGHLIGHT_PAGE_MAX_TIMEOUTS, HIGHLIGHT_PAGE_WORKER_MS,
-  HIGHLIGHT_STREAM_DEBOUNCE_MS, MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_BLANK_CHARS, MD_HIGHLIGHT_MAX_HTML_CHARS,
-  MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS,
+  DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS, HIGHLIGHT_LINE_RETRY_UNITS, HIGHLIGHT_PAGE_MAX_TIMEOUTS,
+  HIGHLIGHT_PAGE_WORKER_MS, HIGHLIGHT_STREAM_DEBOUNCE_MS, MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_HTML_CHARS,
 } from './markdownLimits';
 
 // ---- The check ----
@@ -190,24 +186,12 @@ const OUTCOME_READERS: {
 export type BlockKey =
   | { readonly kind: 'key'; readonly key: string }
   | { readonly kind: 'unregistered' }
-  | { readonly kind: 'over-cap'; readonly chars: number }
-  /** Until W5h-b: one of W5 part 1's per-block bounds, with the figure its label reads. */
-  | { readonly kind: 'part1'; readonly bound: 'grammar-cap' | 'word' | 'line' | 'blank'; readonly chars: number };
+  | { readonly kind: 'over-cap'; readonly chars: number };
 
-/** THE key function (section 4.10 "Keys"). `part1` (until W5h-b) applies W5 part 1's per-block bounds, in BASE's
- *  label order: the grammar cap, the word, the line, the blank run. */
-export function blockKey(lang: string, raw: string, part1 = true): BlockKey {
+/** THE key function (section 4.10 "Keys"): no registered grammar, then over the block cap, else the key. */
+export function blockKey(lang: string, raw: string): BlockKey {
   if (!isRegisteredGrammar(lang)) return { kind: 'unregistered' };
   if (raw.length > MD_HIGHLIGHT_BLOCK_MAX_CHARS) return { kind: 'over-cap', chars: raw.length };
-  if (part1) {
-    if (raw.length > highlightBlockCap(lang)) return { kind: 'part1', bound: 'grammar-cap', chars: raw.length };
-    const word = longestWordRun(raw);
-    if (word > MD_HIGHLIGHT_MAX_WORD_CHARS) return { kind: 'part1', bound: 'word', chars: word };
-    const line = longestLine(raw);
-    if (line > MD_HIGHLIGHT_MAX_LINE_CHARS) return { kind: 'part1', bound: 'line', chars: line };
-    const blank = longestBlankRun(raw);
-    if (blank > MD_HIGHLIGHT_MAX_BLANK_CHARS) return { kind: 'part1', bound: 'blank', chars: blank };
-  }
   return { kind: 'key', key: `${lang}\u0000${raw}` };
 }
 
@@ -273,8 +257,8 @@ export type PlainCause =
 /** What became of a line retry: its own failure, or `refused` (a ceiling closed before or while it ran). */
 export type RetryOutcome = PlainCause | { readonly kind: 'refused' };
 
-/** Which ceiling skipped a block: one of the four page ceilings, or (until W5h-b) one of part 1's page budgets. */
-export type SkipCeiling = 'page-input' | 'page-output' | 'page-timeouts' | 'page-worker-time' | 'part1-scan' | 'part1-markdown';
+/** Which of the four page ceilings skipped a block. */
+export type SkipCeiling = 'page-input' | 'page-output' | 'page-timeouts' | 'page-worker-time';
 
 /** One key's state. `unrequested` and `pending` are two words with two meanings, never folded. */
 export type HighlightEntry =
@@ -313,11 +297,10 @@ export interface HighlightClock {
   clearTimer(handle: unknown): void;
 }
 
-/** `mode` is the store's owner kind. The other three exist for R19's page (refinement (k)): production passes
- *  `{ mode }` alone, so part 1's bounds and the ceilings are on and the debounce is chat's constant (Docs: none). */
+/** `mode` is the store's owner kind. The other two exist for R19's page (the W5h-a plan's refinement (k)): production
+ *  passes `{ mode }` alone, so the ceilings are on and the debounce is chat's constant (Docs: none). */
 export interface HighlightStoreOptions {
   readonly mode: 'docs' | 'chat';
-  readonly part1?: boolean;
   readonly ceilings?: boolean;
   readonly debounceMs?: number;
 }
@@ -349,7 +332,6 @@ export function createHighlightStore(
   highlighter: Highlighter, options: HighlightStoreOptions, clock: HighlightClock,
 ): HighlightStore {
   const docs = options.mode === 'docs';
-  const part1 = options.part1 ?? true;
   const ceilingsOn = options.ceilings ?? true;
   const debounceMs = options.debounceMs ?? (docs ? 0 : HIGHLIGHT_STREAM_DEBOUNCE_MS);
 
@@ -515,20 +497,12 @@ export function createHighlightStore(
 
   function seed(blocks: readonly CodeBlockText[]): void {
     let input = 0;
-    let scan = 0;
-    let markdown = 0;
     for (const b of blocks) {
-      const k = blockKey(b.lang, b.raw, part1);
+      const k = blockKey(b.lang, b.raw);
       if (k.kind !== 'key') continue;
-      const inScan = part1 && inScanPageBudget(b.lang);
-      const inMarkdown = part1 && inMarkdownPageBudget(b.lang);
       // Every occurrence counts: each drawn copy inserts the key's text and HTML again (review 1364 F1).
       input += b.raw.length;
-      if (inScan) scan += b.raw.length;
-      if (inMarkdown) markdown += b.raw.length;
-      const past: SkipCeiling | null = ceilingsOn && input > DOCS_HIGHLIGHT_PAGE_MAX_CHARS ? 'page-input'
-        : inScan && scan > DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS ? 'part1-scan'
-          : inMarkdown && markdown > DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS ? 'part1-markdown' : null;
+      const past: SkipCeiling | null = ceilingsOn && input > DOCS_HIGHLIGHT_PAGE_MAX_CHARS ? 'page-input' : null;
       if (!seeded.has(k.key)) {
         seeded.add(k.key);
         if (past !== null) entries.set(k.key, { kind: 'skipped', ceiling: past });
@@ -649,7 +623,7 @@ export function createHighlightStore(
   }
 
   return {
-    mode: options.mode, debounceMs, keyOf: (lang, raw) => blockKey(lang, raw, part1), seed, peek, copySkip, request, show,
+    mode: options.mode, debounceMs, keyOf: (lang, raw) => blockKey(lang, raw), seed, peek, copySkip, request, show,
     subscribe, settled, evictUnreferenced, heldKeys, releaseAll,
   };
 }

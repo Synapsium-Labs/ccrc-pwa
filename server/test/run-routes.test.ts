@@ -34,6 +34,7 @@ import {
 import { okRun, okRuns, parentOfSession } from './coordReadHelpers.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { NotifyLog } from '../src/notifylog.js';
+import { landingStoreOver } from './landingFixture.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -181,7 +182,10 @@ const openApp = async (
   // D-5298: the claimant every open names is a registry row of the run's
   // project — unless the case already seeded it its own way.
   if (!existsSync(path.join(home, '.cc-sessions', `${CLAIMED_BY}.uuid`))) seed(home, CLAIMED_BY);
-  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  // Landing order wave 5f: an advance into or out of `merging` that names a PR goes through the landing line's guarded
+  // entrances, which need a configured journal and its boot replay: a fixture journal beside the fixture database.
+  const dbPath = path.join(home, '.ccrc', 'coord.db');
+  const coord = landingStoreOver(openCoordDb(dbPath), dbPath);
   const base = testDeps(home, run);
   const app = await buildServer({ ...base, mailToken: TOKEN, coord, ...over, cfg: { ...base.cfg, ...(over.cfg ?? {}) } });
   return { app, coord };
@@ -2634,6 +2638,52 @@ describe('POST /api/runs/:id/close', () => {
     ]);
   });
 
+  describe('the fold counts a placed row only for this run’s branch', () => {
+    /** A run closed over `rows`, with `nullBranch` writing the column the way a run
+     *  dispatched without one reads. Only `state: 'failed'` closes such a run, since
+     *  `verifyDone` has no branch to measure. */
+    const foldedLineage = async (sessionId: string, rows: Record<string, unknown>[], nullBranch = false) => {
+      const home = mkTmp('ccrc-runs-');
+      const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+      mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+      writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.prhistory`),
+        rows.map((r) => `${JSON.stringify(r)}\n`).join(''));
+      const { run } = makeRunner(home, { wsAddCreates: [sessionId],
+        prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      const base = testDeps(home, run);
+      const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
+      app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      await postDispatch(app, opened.id);
+      if (nullBranch) w.coord.db.prepare('UPDATE runs SET branch = NULL WHERE id = ?').run(opened.id);
+      const res = await postClose(app, opened.id,
+        { fingerprint: GOOD_CLAIM, final: true, ...(nullBranch ? { state: 'failed' } : {}) });
+      expect(res.statusCode).toBe(200);
+      const closed = okRun(w.coord.run(opened.id))!;
+      expect(closed.branch).toBe(nullBranch ? null : `ws/${sessionId}`);
+      return closed.prLineage;
+    };
+    const row = (pr: number, branch: string, prbranch?: string) =>
+      ({ pr, branch, phase: 'merged', recordedAt: pr, ...(prbranch === undefined ? {} : { prbranch }) });
+
+    it('close folds placed rows only for this run’s branch', async () => {
+      const b = `ws/${PROJECT}-fold1`;
+      expect(await foldedLineage(`${PROJECT}-fold1`, [row(1, b, b), row(2, b, 'ws/another'), row(3, 'ws/another', b)]))
+        .toEqual([row(1, b, b), row(3, 'ws/another', b)]);
+    });
+
+    it('legacy rows still fold', async () => {
+      const b = `ws/${PROJECT}-fold2`;
+      expect(await foldedLineage(`${PROJECT}-fold2`, [row(1, b), row(2, 'ws/another'), row(3, b, 'ws/another')]))
+        .toEqual([row(1, b), row(2, 'ws/another')]);
+    });
+
+    it('a null-branch run folds every row', async () => {
+      const rows = [row(1, 'ws/a', 'ws/a'), row(2, 'ws/a', 'ws/b'), row(3, 'ws/a')];
+      expect(await foldedLineage(`${PROJECT}-fold3`, rows, true)).toEqual(rows);
+    });
+  });
+
   it('retires the program only once ALL its runs are terminal, mirroring whichever run ' +
      'closes it out (D-51)', async () => {
     const sessionA = `${PROJECT}-close11`;
@@ -4677,12 +4727,12 @@ describe('an opted-in project: the lineage through the run routes (landing order
     stdout: `${ccdLine(id, branch, [prRow(branch, 'OPEN')])}\n`, stderr: '' });
 
   /** A work run dispatched and `working` on a branch at LIVE, in an opted-in project (unless `marker: false`). */
-  const workRun = async (o: { marker?: boolean; lineage?: string | null; io?: (io: FleetIO) => FleetIO } = {}) => {
+  const workRun = async (o: { marker?: boolean; lineage?: string | null; io?: (io: FleetIO) => FleetIO; over?: Partial<Omit<Deps, 'cfg'>> } = {}) => {
     const home = mkTmp('ccrc-runs-');
     const root = gitRoot(PROJECT, BRANCH, LIVE);
     const { run, calls } = makeRunner(home, { wsAddCreates: [SID], prState: openPr(SID, BRANCH) });
     const base = testDeps(home, run);
-    const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root },
+    const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root }, ...(o.over ?? {}),
       ...(o.io === undefined ? {} : { io: o.io(base.io) }) });
     app = w.app;
     const opened = (await postOpen(app)).json() as { id: number };

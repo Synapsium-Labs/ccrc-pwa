@@ -208,24 +208,9 @@ export function prescanMarkdown(src: string): PrescanResult {
   return prescanWithin(src, { containerDepth: MD_MAX_CONTAINER_DEPTH, delimiterRun: MD_MAX_DELIMITER_RUN });
 }
 
-/** The UTF-8 byte length of `s`, counted without allocating: a surrogate pair is 4 bytes, and a lone surrogate is
- *  3 (`TextEncoder` writes it as U+FFFD). */
-export function utf8ByteLength(s: string): number {
-  let bytes = 0;
-  for (let i = 0; i < s.length; i += 1) {
-    const c = s.charCodeAt(i);
-    if (c < 0x80) bytes += 1;
-    else if (c < 0x800) bytes += 2;
-    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
-      const d = s.charCodeAt(i + 1);
-      if (d >= 0xdc00 && d <= 0xdfff) {
-        bytes += 4;
-        i += 1;
-      } else bytes += 3;
-    } else bytes += 3;
-  }
-  return bytes;
-}
+/** The UTF-8 byte length of `s`: the shared counter (`shared/utf8.ts`, review 1389 A6), under the name the render gates
+ *  import. A surrogate pair is 4 bytes, and a lone surrogate is 3 (`TextEncoder` writes it as U+FFFD). */
+export { utf8Bytes as utf8ByteLength } from '../../../shared/utf8';
 
 /** Keystroke-shaped inline code: the named keys, and any one letter, digit or ASCII punctuation mark. */
 const NAMED_KEY =

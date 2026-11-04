@@ -23,6 +23,8 @@ import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
 import { landingOrder } from './landingLine.js';
+import { landingCommandOf, parseLandingWrite } from './landingWrites.js';
+import { actLandingWrite } from './landingWritesAct.js';
 import type { LandingLineView } from '../../../shared/landingLine.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
@@ -43,7 +45,7 @@ import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
 import { doneRejectionMail } from './closeDecide.js';
-import { advanceGate, advanceRequest, type AdvanceBody } from './advance.js';
+import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
@@ -1854,6 +1856,8 @@ export function registerCoordRoutes(
     }
     const landing = landingAdvanceOf({ to, measured: verdict?.measured ?? null, mode: episodeMode, handoffCommit: claim.handoffCommit, ejection });
     const adv = coord.advanceLanding({ runId: id, to, causedBy: 'coordinator', landing });
+    const landingReject = adv.ok ? null : landingAdvanceReject(adv);
+    if (landingReject !== null) return refuseAdvance(reply, { reject: landingReject });
     if (!adv.ok) return adv.error === 'ejection-not-merging'
       ? refuseAdvance(reply, { reject: { code: adv.error, from: adv.from } }) : reply.code(409).send({ ok: false, reject: adv });
     // D-7624: the second ejection of an entry is one operator notice, never a refusal. The written row's count reaching 2 is
@@ -3778,10 +3782,35 @@ export function registerCoordRoutes(
       return refuseRoute(reply, 'bad-request', { detail: 'the landing line is per-project — ?project= is required' });
     }
     const project = q.project.trim();
-    const entries = deps.coord.landingEntries(project);
-    const flags = deps.coord.landingProject(project);
-    const view: LandingLineView = { project, ...flags, entries, order: landingOrder(entries, flags) };
+    const read = deps.coord.readLanding(project);
+    if (!read.ok) { const { ok: _ok, error, ...extra } = read; return refuseRoute(reply, error, extra); }
+    const { entries, flags, recovery } = read.facts;
+    const view: LandingLineView = { project, ...flags, entries, order: landingOrder(entries, flags, recovery), recovery };
     return reply.code(200).send({ ok: true, ...view });
+  });
+
+  /** The two attributed landing writes: body parse (L1), measured attribution, then ONE synchronous store call inside
+   *  `coordMutex` with no await between the store's facts, decision and write. The setter is the attributed `byId`. */
+  const landingWrite = async (req: FastifyRequest, reply: FastifyReply, kind: 'entry' | 'order') => {
+    const parsed = parseLandingWrite(kind, req.body);
+    if (!parsed.ok) return refuseRoute(reply, 'bad-request', { detail: `the landing ${kind} body is not a closed, well-formed request` });
+    if (!(await requireAttribution(reply, parsed.request.byId, parsed.request.byUuid, 'byUuid'))) return;
+    return coordMutex.run(async () => {
+      const r = actLandingWrite(landingCommandOf(parsed), Date.now(), { write: (c, at) => deps.coord!.writeLandingAuthority(c, at), notice });
+      if (!r.ok) { const { ok: _ok, error, ...extra } = r; return refuseRoute(reply, error, extra); }
+      const { ok: _ok, coordinator: _c, ...answer } = r;
+      return reply.code(200).send({ ok: true, ...answer });
+    });
+  };
+  app.post('/api/landing/entries', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/landing/entries')) return;
+    return await landingWrite(req, reply, 'entry');
+  });
+  app.post('/api/landing/order', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/landing/order')) return;
+    return await landingWrite(req, reply, 'order');
   });
 
   /* ── asks (ask pre-emption lane, Task 9) ─────────────────────────────── */

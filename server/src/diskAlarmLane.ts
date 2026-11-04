@@ -7,7 +7,7 @@
 // pass's verdicts keep reading the wall clock.
 import type { DiskHealth } from '../../shared/disk.js';
 import type { WatcherDeps } from './deps.js';
-import { diskBlockOf, diskMarkFate, diskNotice, diskVerdict, unmeasuredDiskBlock, type DiskVerdict } from './disk.js';
+import { diskBlockOf, diskMarkFate, diskNotice, diskVerdict, transcriptWorkBlock, unmeasuredDiskBlock, type DiskVerdict } from './disk.js';
 import { clearDiskEpisode, readDiskEpisode, writeDiskEpisode } from './diskepisode.js';
 import type { MeasuredDisk } from './io.js';
 import { notify } from './notice.js';
@@ -53,7 +53,10 @@ export class DiskAlarmLane {
     }
     this.state = verdict;
     this.raiseNotice(before, verdict);
-    this.held = diskBlockOf(verdict);
+    // The transcript-folder walk (D-7898) rides the same reply and is passed through with its own level; a reply that
+    // carries none (an older agent, or no walk finished yet) keeps the one held, which carries its own `at`.
+    const tw = read.measured.transcriptWork === undefined ? this.held?.transcriptWork : transcriptWorkBlock(read.measured.transcriptWork);
+    this.held = { ...diskBlockOf(verdict), ...(tw === undefined ? {} : { transcriptWork: tw }) };
   }
 
   /**

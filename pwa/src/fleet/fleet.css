@@ -255,6 +255,11 @@
      round `+` does not, so 56px stays the floor. */
   padding-bottom: calc(max(56px, var(--phone-nav-h)) + var(--sp-6) + var(--safe-bottom));
 }
+/* The fleet foot's region of work whose session is not listed: a grid item of .fleet-list, like .proj-card, so it
+   takes the card's floor. A grid item's automatic minimum is its min-content width, and its rows' words are
+   white-space: nowrap (.proj-work-parts), so without this one long row widens the list's one track and scrolls the
+   pane sideways. */
+.fleet-unlisted { min-width: 0; }
 /* Offline / cold-start hydration used to fade the whole card list here:
      .fleet[data-conn='down'] .fleet-list,
      .fleet[data-conn='connecting'] .fleet-list:not([data-loading='true'])
@@ -2193,7 +2198,8 @@ button.proj-card-pool::before {
    currentColor frame, the .sess-workson idiom, so nothing is read out of colour. Neutral class names: this sheet names
    no broker word. */
 /* A row WRAPS: on a narrow column (the desk's fleet list at 1280, a phone) its chips drop under its words rather than
-   squeezing the words to nothing and pushing past the card's edge; the words keep one line and end in an ellipsis. */
+   squeezing the words to nothing and pushing past the card's edge. The words themselves are `.proj-work-parts` below:
+   only the row's one free-text part ends in an ellipsis, and every other word is drawn whole. */
 .proj-nest > .proj-work {
   flex: 1;
   flex-wrap: wrap;
@@ -2202,15 +2208,54 @@ button.proj-card-pool::before {
 .proj-work-parts {
   display: flex;
   flex: 1 1 auto;
+  flex-wrap: wrap;
   align-items: center;
+  column-gap: var(--sp-3);
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* D-7783 (review 1424 F1): a phone shows no titles, so a row's condition word (`not confirmed`, `stop not seen`, …) and
+   its `from <session>` part are always drawn whole. Every part keeps its own width and moves to the next line when the
+   line is full; in a wrapping row only a part wider than a whole line ever shrinks (a long raw session id), and it then
+   breaks inside itself rather than being cut. */
+.proj-work-part {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* The one free-text part (`nameAt`, decided by the words module): it ends in an ellipsis, and only it does. Its basis
+   is a floor of 8ch (D-7783, review 1431 F2): the line breaks before the name would get less, so it is never squeezed
+   to nothing; above the floor it grows into what the line leaves, up to its own length, so a short name is drawn
+   whole at its own width. The part itself clips nothing: its middot (below) sits in the gap outside its box, so a clip
+   here would cut the middot away, and `overflow-clip-margin`, which could keep it, has no WebKit support (review 1435
+   F1). The text's own box inside it, `.proj-work-name-text`, is what clips and ends in the ellipsis. */
+.proj-work-name {
+  flex: 1 1 8ch;
+  min-width: 0;
+  max-width: max-content;
+}
+.proj-work-name-text {
+  display: block;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+/* The middot between parts sits in the gap before a part, outside its box, so a part that starts a wrapped line has
+   its middot outside `.proj-work-parts` and clipped with its overflow: no line starts with a lone `·` (D-7783, review
+   1431 D; the coordination row's rule, #633). It fills the gap, `--sp-3` (12 px), centred: 1.6 to 1.8 px wider per
+   separator than the old margins and glyph drew (8 px of margin plus the glyph's 2.2 to 2.4 px), review 1435 G2. Every
+   child of `.proj-work-parts` is a `.proj-work-part` (WorkLine draws nothing else there), so each is the containing
+   block its middot is placed against. */
 .proj-work-parts > *:not(:first-child)::before {
   content: '·';
-  margin: 0 var(--sp-1);
+  position: absolute;
+  top: 0;
+  right: 100%;
+  width: var(--sp-3);
+  text-align: center;
   color: var(--ink-tertiary);
 }
 .proj-work-chip {
@@ -2332,8 +2377,11 @@ button.proj-card-pool::before {
    fleet, one into /runs and one into /archive. Two selectors is what "the
    same voice" looks like when it really is the same; a second copy of the
    declarations is what it looked like before. */
+/* The Add project door (add-project spec 2026-11-04 §2) is the third footer, in the same voice. The grouped rule is
+   MEASURED by the contrast gate (design/audit.mjs INHERITED_GROUNDS), no longer carried as grandfathered debt. */
 .fleet-archived-row,
-.fleet-runs-row {
+.fleet-runs-row,
+.fleet-add-project-row {
   padding: 0 var(--sp-2);
   font-family: var(--family-mono);
   font-size: var(--fs-meta);
@@ -4159,6 +4207,12 @@ button.proj-card-pool::before {
 .acct-fold > button,
 .acct-trouble-replace { flex: none; min-height: var(--tap-min); }
 .acct-trouble-replace { justify-self: start; }
+/* The trouble card's credential acts (accounts plan Task A38, D-7872; spec §4.2): the card's first action. Below 900 they
+   stack, the primary first, each the card's width; at 900 and up they sit in one row and wrap. */
+.acct-trouble-acts { display: flex; flex-direction: column; align-items: stretch; gap: var(--sp-1); min-width: 0; }
+@media (min-width: 900px) {
+  .acct-trouble-acts { flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+}
 .acct-remove-block,
 .acct-removal-section,
 .acct-revoke { display: grid; gap: var(--sp-1); min-width: 0; }

@@ -11,6 +11,7 @@
 // predicate was EXTRACTED rather than copied.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
@@ -343,7 +344,7 @@ describe('the bounded retry: a field the PANE refuses is tried ROUTE_RETRY_MAX t
  *  under test is a `while :` and spawnSync's own timeout is what turns a loop that stops
  *  exiting into one failed case instead of a hung suite. */
 const runSupervise = (snippet: string): { code: number; stderr: string } => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
     env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
   });

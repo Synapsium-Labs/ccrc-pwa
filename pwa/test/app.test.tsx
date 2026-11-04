@@ -373,6 +373,8 @@ describe('ROUTES and the ladder, both ways', () => {
     '/waiting', '/waiting/7', '/waiting/x', '/waiting/7/y', '/waitingx',
     // The programme view (desktop-polish PL5b): a programme by slug, and near misses that name no route.
     '/programmes/prog-a', '/programmes/prog-a/', '/programmes', '/programmes/Prog-A', '/programmes/Build_4', '/programmes/a/b', '/programmesx',
+    // A slug the owner refuses and a malformed escape are no route (carry C, D-7951; review 1388 F1 and F3): the fleet.
+    '/programmes/a.b', '/programmes/%zz', '/s/%zz', '/settings/%zz',
     // Settings' five pages and the catch-all (D-5504).
     '/settings/updates', '/settings/appearance', '/settings/notifications', '/settings/automation',
     '/settings/security', '/settings/bogus', '/settings/a/b', '/settings/measure-highlighting',
@@ -465,12 +467,15 @@ describe('ROUTES and the ladder, both ways', () => {
       expect(within(detail).getByRole('heading', { level: 1, name: slug })).toBeInTheDocument();
     });
 
-    it('`/programmes/<a name the owner refuses>` is the placeholder, not a view of a programme that cannot exist', () => {
+    it('`/programmes/<a name the owner refuses>` is no route: the fleet\'s view, never a view of a programme that cannot exist', () => {
       vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
       navigate('/programmes/a.b');
       render(<App />);
       expect(document.querySelector('.shell-placeholder')).not.toBeNull();
       expect(document.querySelector('.pv')).toBeNull();
+      // On a phone `[data-view='session']` hides the fleet column and the placeholder alike: the view must be the fleet's
+      // (carry C, D-7951; review 1388 F1).
+      expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'fleet');
     });
 
     it('an item the list does not hold says so, and so does a number past the safe integers', () => {

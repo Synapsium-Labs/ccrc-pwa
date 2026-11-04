@@ -141,7 +141,14 @@ describe('the run-id grammar is ASCII in every locale (D-2522\'s shape)', () => 
     // A PR number shares the grammar: bash asks `_pr_num_valid`, which calls this helper, and `_pr_py`'s embedded
     // python, which cannot call bash, spells it once as its `PR_NUM` constant (D-7362) — the one other line allowed —
     // and so does `_pr_train_py`'s, the train record's own program since it moved to ccd/lib/train-proof.sh (D-7463).
-    const code = ccdSource().split('\n').filter((l) => !/^\s*#/.test(l));
+    // Delegation broker wave 5: the lease verbs (ccd/lib/delegation-lease.sh) spell the same ten-digit bound for numbers that
+    // are NOT run ids: a carrier's --generation and --journal-seq, the audit's --generation, a commit count, a pid. PR2's fix
+    // round (review 1446 F12) put them behind ONE helper, `_dl_count_ok`, so the lease grammar has one spelling too; that line
+    // is set apart here by its name, and every other spelling is still the run-id grammar's and is pinned below as before.
+    const LEASE_NUMS = /^_dl_count_ok\(\) \{ \[\[ "\$\{1-\}" =~ \^\[1-9\]\[0-9\]\{0,9\}\$ \]\]; \}/;
+    const all = ccdSource().split('\n').filter((l) => !/^\s*#/.test(l));
+    expect(all.filter((l) => l.includes('[0-9]{0,9}') && LEASE_NUMS.test(l)), 'the lease verbs\' one number grammar').toHaveLength(1);
+    const code = all.filter((l) => !LEASE_NUMS.test(l));
     const spelled = code.filter((l) => l.includes('[0-9]{0,9}'));
     expect(spelled, 'the run-id pattern must be spelled exactly once in bash — in _child_runid_valid — and once in each embedded python as PR_NUM').toHaveLength(3);
     expect(spelled[0]).toBe("PR_NUM = r'[1-9][0-9]{0,9}'");

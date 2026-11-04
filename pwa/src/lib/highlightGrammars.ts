@@ -1,8 +1,7 @@
-// The highlight worker's grammars: one private highlight.js instance with the 15 grammars part 1 registered, and the
-// grammar-graph helpers that derive part 1's caps over it (native Docs reader, W5h-a Task 2; base spec 2026-10-01
-// section 4.10 Files and "The private instance"; M4.H3, M4.H5, M4.H6; the plan's refinement (n)). `xmlWithoutSubLanguages`
-// and `deriveBoundedCaps` moved here from `markdown.tsx`, their text unchanged (that file keeps its own copies until
-// Task 6 deletes them, so two instances coexist meanwhile: the core module's default and `HLJS`).
+// The highlight worker's grammars: one private highlight.js instance with the 15 grammars part 1 registered (native
+// Docs reader, W5h-a Task 2; base spec 2026-10-01 section 4.10 Files and "The private instance"; M4.H3, M4.H5, M4.H6).
+// `xmlWithoutSubLanguages` moved here from `markdown.tsx` in W5h-a; the grammar-graph helpers that derived part 1's
+// per-grammar caps retired with those caps in W5h-b.
 //
 // Imported only inside the highlight worker's closure and by tests: the main thread knows the grammars as data
 // (`highlightNames.ts`), and `highlight-names.test.ts` holds the two equal in both directions.
@@ -37,8 +36,8 @@ type LanguageFn = Parameters<HighlightApi['registerLanguage']>[1];
  *  Why (review 450 F1): the grammar is quadratic on those regions whatever they embed (`<script>` repeated one per line, no
  *  closer: 1, 2, 4 and 8 KiB cost 66, 308, 1 729 and 7 918 ms; `<style>{` per line, 8 KiB 2.4 s with no javascript
  *  involved), and with them removed every probed shape is linear (a snapshot of 2026-10-14 on a loaded box, load average about 40: xml 167 ms per 64 KiB at most; markdown, which
- *  embeds xml, about 650 ms on its worst shape, `<a>` in lines, which is why it has a page budget of its own,
- *  `DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`; the claim it supports is the GROWTH, linear from 8 to 128 KiB, not the figures). What it costs: script and style contents are uncoloured (one real 375-character html fence holds
+ *  embeds xml, about 650 ms on its worst shape, `<a>` in lines, which W5 part 1 gave a page budget of its own
+ *  (retired in W5h-b); the claim it supports is the GROWTH, linear from 8 to 128 KiB, not the figures). What it costs: script and style contents are uncoloured (one real 375-character html fence holds
  *  `<script` or `<style>`); in an `xml` or html block, markup outside them is coloured as before. Three grammars hand
  *  tags to `xml` with a kept continuation, so an unclosed `<script>` or `<style>` reaches past its own contents
  *  there (review 460 F9 and review 471 F1, measured against stock highlight.js 11.11.1):
@@ -54,8 +53,10 @@ type LanguageFn = Parameters<HighlightApi['registerLanguage']>[1];
  *  - the same two grammars hand an `html` tagged template (html`...`) to `xml` with the same kept continuation, so a
  *    `<script>` or `<style>` inside one leaves every later JSX tag of the block uncoloured (a bare `language-xml`
  *    span), while the code around those tags keeps its colour.
- *  No markdown fence of `docs/superpowers` holds the shape (470 checked), and chat's golden files are unchanged. `xml` and `markdown` then reach no
- *  bounded grammar, so they keep the 64 KiB cap. */
+ *  No markdown fence of `docs/superpowers` holds the shape (470 checked), and chat's golden files are unchanged.
+ *  It stays after W5h-b retired part 1's other bounds (base spec 4.10 "What stays"): it keeps xml linear on those
+ *  regions, so fewer xml, html and markdown blocks reach the worker's deadline, and restoring script and style
+ *  colouring would change chat's golden files. */
 export const xmlWithoutSubLanguages: LanguageFn = (h) => {
   const def = xml(h);
   const seen = new Set<object>();
@@ -74,70 +75,6 @@ export const xmlWithoutSubLanguages: LanguageFn = (h) => {
   }
   return def;
 };
-
-/** The registered grammars a definition embeds through highlight.js `subLanguage`, by registered name. A grammar's
- *  definition is what `h.getLanguage` answers (the object `registerLanguage` stored). highlight.js 11.11.1 compiles a
- *  mode IN PLACE on first use (`compileMode` replaces `contains` and sets `isCompiled` on the registered mode itself);
- *  only variant and parent-dependent modes are cloned, through `inherit`, which copies `subLanguage`. So the walk sees
- *  every `subLanguage` before and after compilation, and it keeps a `seen` set because `'self'` and compiled modes make
- *  the graph cyclic. Never follows `parent`. A name nothing registers (yaml's `ruby`) reaches nothing. An EMPTY array
- *  means auto-detect across every registered grammar in highlight.js (`processSubLanguage` passes `null` to
- *  `highlightAuto`), so it reaches all of them. A string `subLanguage` is looked up by name WITHOUT alias resolution at
- *  runtime, while the walk resolves aliases with `getLanguage`, which can only over-bound, the safe direction. */
-function embeddedGrammars(
-  h: HighlightApi, def: object, nameOf: ReadonlyMap<object, string>, every: readonly string[],
-): ReadonlySet<string> {
-  const found = new Set<string>();
-  const seen = new Set<object>();
-  const stack: object[] = [def];
-  while (stack.length > 0) {
-    const mode = stack.pop()!;
-    if (seen.has(mode)) continue;
-    seen.add(mode);
-    const m = mode as { subLanguage?: unknown; contains?: unknown; variants?: unknown; starts?: unknown };
-    if (Array.isArray(m.subLanguage) && m.subLanguage.length === 0) for (const n of every) found.add(n);
-    const subs = typeof m.subLanguage === 'string' ? [m.subLanguage] : Array.isArray(m.subLanguage) ? m.subLanguage : [];
-    for (const sub of subs) {
-      const target = typeof sub === 'string' ? h.getLanguage(sub) : undefined;
-      const name = target === undefined ? undefined : nameOf.get(target);
-      if (name !== undefined) found.add(name);
-    }
-    for (const list of [m.contains, m.variants]) {
-      if (Array.isArray(list)) for (const child of list) if (typeof child === 'object' && child !== null) stack.push(child);
-    }
-    if (typeof m.starts === 'object' && m.starts !== null) stack.push(m.starts);
-  }
-  return found;
-}
-
-/** The bounded grammars of `h` and the cap each takes: the grammars of `base`, and every registered grammar whose
- *  `subLanguage` chain reaches one of them, at the SMALLEST cap among those its chain reaches (`embeddedGrammars` says
- *  what a chain is). Pure over `h`'s registered grammars, so a test derives it on synthetic instances. The set is fixed
- *  at module load: no grammar is registered later in `pwa/src`. */
-export function deriveBoundedCaps(h: HighlightApi, base: ReadonlyMap<string, number>): ReadonlyMap<string, number> {
-  const names = h.listLanguages();
-  const nameOf = new Map<object, string>();
-  for (const n of names) {
-    const def = h.getLanguage(n);
-    if (def !== undefined) nameOf.set(def, n);
-  }
-  const embeds = new Map<string, ReadonlySet<string>>();
-  for (const n of names) embeds.set(n, embeddedGrammars(h, h.getLanguage(n)!, nameOf, names));
-  const caps = new Map<string, number>(base);
-  // Fixed point: a cap only ever falls, and there are finitely many grammars, so this ends.
-  for (let changed = true; changed;) {
-    changed = false;
-    for (const n of names) {
-      let cap = caps.get(n) ?? Infinity;
-      for (const sub of embeds.get(n) ?? []) cap = Math.min(cap, caps.get(sub) ?? Infinity);
-      if (cap !== Infinity && cap !== caps.get(n)) {
-        caps.set(n, cap);
-        changed = true;
-      }
-    }
-  }
-  return caps;
-}
 
 /** ccrc's own alias lists, registered beside the aliases each grammar declares. Registering a grammar also
  *  registers the aliases IT declares (that is where `golang` comes from); the php grammar declares none, so `php`

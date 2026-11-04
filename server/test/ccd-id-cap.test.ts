@@ -21,7 +21,7 @@
  * runs under `WS_ADD`.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, FIXTURE_MOUNTINFO, WS_ADD, ghContainedEnv, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
@@ -236,7 +236,7 @@ const STUBS = `_supervised_start() { echo "supervised_start $*" >> "$HOME/ccd-ca
 
 /** Captures all three streams, because the refusals under test exit non-zero. */
 const run = (snippet: string): { code: number; stdout: string; stderr: string } => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 60000,
     env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home,
       CCD_MOUNTINFO: path.join(h.home, FIXTURE_MOUNTINFO) }, { systemd: true, tmux: true }),
@@ -331,7 +331,12 @@ describe('a new id fits every name ccd derives from it (path-identity spec §2.6
       expect(bodyOf(ccd, fn).match(DIE) ?? [], `${fn} holds exactly one _reg_id_cap … || die "$_REG_ID_CAP_WHY …" line`)
         .toHaveLength(1);
     }
-    expect(ccd.match(/_reg_id_cap "/g) ?? [], 'the three mint sites are the cap\'s only callers').toHaveLength(3);
+    // Delegation broker wave 5: `ws-lease-mark` (ccd/lib/delegation-lease.sh, in this text through its `@ccd-lib:lease`
+    // pointer) asks the cap twice, of --parent and of --promoted-session. Those are CHECKS of ids it is handed, not mint
+    // sites: the verb creates no registry row, it only refuses an id no mint site could have made. So the mint sites
+    // are still the three above, and the two others are named here by the function that holds them.
+    expect(ccd.match(/_reg_id_cap "/g) ?? [], 'the three mint sites and ws-lease-mark\'s two id checks are the cap\'s only callers').toHaveLength(5);
+    expect(bodyOf(ccd, 'cmd_ws_lease_mark').match(/_reg_id_cap "/g) ?? [], 'ws-lease-mark checks --parent and --promoted-session').toHaveLength(2);
     // ws-add: appended to the slug line (line-neutral), before the fetch and the worktree.
     const add = bodyOf(ccd, 'cmd_ws_add');
     expect(add).toContain('|| die "could not find a free slug for $project"; }; _reg_id_cap "$project-$slug" '

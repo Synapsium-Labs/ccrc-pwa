@@ -9,6 +9,8 @@
 // the code field's DOM node and the one request. The attempt's own `codeSent` is the one-send latch, so a remount of
 // the field (offline and back, the sheet closed and reopened, a resumed attempt) offers no second send.
 //
+// THE RE-AUTH SHEET (A38, D-7872) runs the same attempt on an existing lane, with the same method it already has.
+//
 // RESUME (A23, D-7871 (2)): a sheet opened for an attempt the server already holds for this session (the app-level
 // banner's Continue) adopts it by its id and method, with no start, and the poll brings back its URL.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
@@ -16,14 +18,18 @@ import { authCodeShapeOk, type AuthStatusState } from '../../../shared/accounts'
 import type { AccountAuthStartAnswer, AccountAuthStatusAnswer } from '../../../shared/api';
 import { ApiError, api } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
+import { Button } from '@ccrc/ui';
 import {
-  CANCEL_SIGN_IN, CODE_NOTICE, SIGN_IN_END, SIGN_IN_LEDGER, cancelRefused, signInFailed, signInOffline, signInStartRefusal,
+  CANCEL_SIGN_IN, CODE_NOTICE, KEEP_IT, SIGN_OUT_RESTART, SIGN_IN_END, SIGN_IN_LEDGER, cancelRefused, signInFailed, signInOffline, signInStartRefusal,
   type SignInEndKind,
 } from '../fleet/accountWords';
 import { CodeField } from './CodeField';
+import { ConfirmItsYou } from './ConfirmItsYou';
 import { FrameFoot } from './FrameFoot';
 import { Countdown, RunFrame, UrlCard, type LedgerLine } from './RunFrame';
 import { readStatus, readStatusRefusal, type SignInMethod, type SignInReading } from './connectFlow';
+import { StepUpFor } from './RemoveSheet';
+import type { StepUp, StepUpDeps } from './useStepUp';
 
 /** How often an open sheet reads a live attempt's status (spec §6.2 step 5). */
 export const AUTH_POLL_MS = 1500;
@@ -81,6 +87,9 @@ export interface SignInHost {
   readonly alert: (text: string) => void;
   /** The sentence a terminal state says: what did not happen, from its kind. */
   readonly endText: (kind: SignInEndKind, failure?: string) => string;
+  /** The sentence a start refused with a word says: A22's `signInStartRefusal` by default; the re-auth sheet adds that
+   *  the old credential is untouched (Task A38, D-7872). */
+  readonly startRefusal?: (word: string, reason: string | undefined) => string;
   /** A start is under way: the host shows its run frame. */
   readonly onStart?: () => void;
   /** The helper says `done`: the attempt is over, and the host runs what follows (the check). */
@@ -132,6 +141,8 @@ export function useSignInAttempt(host: SignInHost): SignInAttempt {
     alert(text);
   };
   const endOf = (k: SignInEndKind, failure?: string): string => host.endText(k, failure);
+  const refusedStart = (word: string, reason: string | undefined): string =>
+    (host.startRefusal ?? ((w, r) => signInStartRefusal(id, w, r)))(word, reason);
 
   /** `auth/start` (spec §6.2 step 4), once. `runAct` is a mounted gate's (Start again), which shows the step itself on a
    *  `step-up-required`; the start right after the add is sent plainly, its step-up just taken. */
@@ -154,7 +165,7 @@ export function useSignInAttempt(host: SignInHost): SignInAttempt {
     if (!live.current) return;
     const fresh = (attemptId: string, expiresAt: number): Attempt =>
       ({ attemptId, method: m, expiresAt, state: null, url: null, host: null, codeSent: false });
-    if (outcome === 'step-up') { setLapsed(true); finish(signInStartRefusal(id, 'step-up-required', undefined)); return; }
+    if (outcome === 'step-up') { setLapsed(true); finish(refusedStart('step-up-required', undefined)); return; }
     if (got.a !== null) {
       setLapsed(false);
       setCodeKey((k) => k + 1);
@@ -175,7 +186,7 @@ export function useSignInAttempt(host: SignInHost): SignInAttempt {
     }
     if (word === undefined || word === 'outcome-unknown') { finish(endOf('unknown')); return; }
     if (word === 'step-up-required') setLapsed(true);
-    finish(signInStartRefusal(id, word, fieldOf(failure, 'reason')));
+    finish(refusedStart(word, fieldOf(failure, 'reason')));
   };
 
   /** An attempt the server already holds for this session (D-7871 (2)): adopted as it is, with no start. Its state and
@@ -333,5 +344,45 @@ export function SignInLive({ s, att, id, client, blocked, ledger }: {
       )}
       <FrameFoot quiet={[{ label: CANCEL_SIGN_IN, onClick: () => { void s.cancel(); }, disabled: blocked || s.cancelling }]} />
     </RunFrame>
+  );
+}
+
+/**
+ * "SIGN THIS LANE OUT AND START AGAIN" (spec §6.2 step 10, §9 row 1; Tasks A22 and A38, D-7849, D-7872): the act, then,
+ * once tapped, what it does, Confirm it's you while the stamp has lapsed, Keep it, and the act again, which runs
+ * `onSignOut` with the mounted step-up. The connect sheet's result frame and the re-auth sheet's ending draw it alike.
+ */
+export function WrongAccountAct({ open, onOpen, onKeep, confirm, freshUntil, deps, busy, offline, onSignOut }: {
+  open: boolean;
+  onOpen: () => void;
+  onKeep: () => void;
+  /** What it does, said before it runs. */
+  confirm: string;
+  freshUntil: number | null;
+  deps: StepUpDeps;
+  busy: boolean;
+  offline: boolean;
+  onSignOut: (stepUp: StepUp) => void;
+}): ReactNode {
+  if (!open || offline) {
+    return (
+      <Button variant="ghost" size="fit" className="acct-wrong-act" disabled={busy || offline} onClick={onOpen}>
+        {SIGN_OUT_RESTART}
+      </Button>
+    );
+  }
+  return (
+    <StepUpFor freshUntil={freshUntil} deps={deps}>
+      {(stepUp) => (
+        <div className="acct-wrong-confirm">
+          <p className="acct-field-note">{confirm}</p>
+          <ConfirmItsYou stepUp={stepUp} subject="the fleet's accounts" />
+          <FrameFoot
+            quiet={[{ label: KEEP_IT, onClick: onKeep, disabled: busy }]}
+            primary={{ label: SIGN_OUT_RESTART, onClick: () => onSignOut(stepUp), disabled: busy || stepUp.needed, busy }}
+          />
+        </div>
+      )}
+    </StepUpFor>
   );
 }

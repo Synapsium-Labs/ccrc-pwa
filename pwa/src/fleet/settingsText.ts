@@ -326,6 +326,12 @@ export const SETTINGS_CARDS = {
       purpose: 'When the fleet box last backed up, from the state files its backup job keeps. A failed or stale backup '
         + 'also shows a banner above the fleet.',
     },
+    /** D-7898: work kept inside Claude Code's transcript folders, a quiet count; after Backups, before Test box. */
+    transcripts: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Work in transcript folders',
+      purpose: 'Files and folders sessions left inside the Claude config dirs\' transcript folders, which belong in a '
+        + 'workspace or a temp root. Counted on the fleet box every 10 minutes; nothing is deleted.',
+    },
     /** Test box plan TB10 (D-7412): the section's last card (D-7418). */
     testbox: {
       scope: SETTINGS_SCOPE.fleet, title: 'Test box',

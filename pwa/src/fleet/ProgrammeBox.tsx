@@ -22,7 +22,7 @@ import { programmeWaitingCount } from '../ledgers/ledgerWords';
 import { navigate } from '../lib/router';
 import { programmeIsOpenable, programmePath } from '../lib/routes';
 import { useFleetStore } from '../stores/fleet';
-import { badgePrint } from './navBadges';
+import { WAITING_BADGE_UNIT, badgePrint } from './navBadges';
 import { fleetRowKey, type FleetRow } from './nestFleet';
 import {
   footerWords, movementWords, progressWords, type BoxState, type ProgHue, type ProgrammeBoxView, type Tray,
@@ -38,9 +38,11 @@ function Movement({ view, state, nowMs }: { view: ProgrammeBoxView; state: BoxSt
   return words === '' ? null : <span className="pg-moved" data-state={state}>{words}</span>;
 }
 
-/** The chip's words, "N waiting on you": the figure is the navigation badges' own print (`badgePrint`, one cap, "99+"), so the
- *  widest chip is a known width and the layout is measured with it. */
-const waitingChipWords = (count: number): string => `${badgePrint(count)} waiting on you`;
+/** The chip's words, "<figure> waiting on you", the navigation badge's unit (`WAITING_BADGE_UNIT`). The figure drawn is the
+ *  badges' own print (`badgePrint`, one cap, "99+"), so the widest chip is a known width and the layout is measured with it;
+ *  the figure spoken is the real count, as every navigation badge's accessible name carries it (`navBadges.ts`). One
+ *  spelling for both (carry C, D-7951; review 1388's advisories). */
+const waitingChipWords = (figure: string): string => `${figure} ${WAITING_BADGE_UNIT}`;
 
 /** The chip: nothing at zero (and while no list has been heard), else the count in words, and a way into the programme. */
 function WaitingChip({ slug, title }: { slug: string; title: string }): ReactNode {
@@ -48,17 +50,25 @@ function WaitingChip({ slug, title }: { slug: string; title: string }): ReactNod
   // fleet's rows and runs count only once their frames have landed, as the navigation badge reads them.
   const count = useFleetStore((s) =>
     programmeWaitingCount(s.waiting, s.fleetFrameSeen ? s.sessions : null, s.runsFrameSeen ? s.runs : null, slug));
-  if (count === 0) return null;
-  const words = waitingChipWords(count);
-  // A slug the programme view would refuse (a name the route cannot carry) is told as a plain count, never a dead door.
-  if (!programmeIsOpenable(slug)) return <span className="pg-waiting-plain">{words}</span>;
-  // The accessible name carries the real number, as every navigation badge's does (`navBadges.ts`); the figure drawn is capped.
+  if (count === null || count === 0) return null;
+  const drawn = waitingChipWords(badgePrint(count));
+  const spoken = waitingChipWords(String(count));
+  // A slug the programme view would refuse (a name the route cannot carry) is told as a plain count, never a dead door. A
+  // screen reader hears the real count there too: the capped figure is hidden from it, and the real one is said in its place.
+  if (!programmeIsOpenable(slug)) {
+    return (
+      <span className="pg-waiting-plain">
+        <span aria-hidden="true">{drawn}</span>
+        <span className="sr-only">{spoken}</span>
+      </span>
+    );
+  }
   return (
     <Door
-      className="pg-waiting" glyph="›" aria-label={`${count} waiting on you: open ${title}`}
+      className="pg-waiting" glyph="›" aria-label={`${spoken}: open ${title}`}
       onClick={() => navigate(programmePath(slug))}
     >
-      {words}
+      {drawn}
     </Door>
   );
 }

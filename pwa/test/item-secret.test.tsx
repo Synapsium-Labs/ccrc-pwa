@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ApiError } from '../src/lib/apiError';
 import { createApi } from '../src/lib/api';
-import { ItemView, SECRET_TEXT, type SaveSecret } from '../src/ledgers/ItemView';
+import { ItemView, SECRET_TEXT, STORED_TEXT, type RemoveSecret, type SaveSecret } from '../src/ledgers/ItemView';
 import { SECRET_TAIL_MIN, SECRET_VALUE_MAX, type SecretSaveAnswer } from '../../shared/ledgers';
+import { LEDGER_ROUTE_REFUSALS } from '../../shared/refusal';
+import { LEDGER_REFUSAL_TEXT } from '../src/lib/refusalWords';
 import type { StepUpDeps } from '../src/accounts/useStepUp';
 import type { AuthStatus } from '../../shared/api';
 import { api } from '../src/lib/api';
@@ -77,13 +79,13 @@ describe('the secret panel (plan PL6)', () => {
     expect(save).toHaveBeenCalledTimes(1);
   });
 
-  it('disabled with the sign-in sentence when a save is refused auth-off or insecure-origin (the fallback)', async () => {
-    for (const word of ['auth-off', 'insecure-origin']) {
+  it('disabled with its own sentence when a save is refused auth-off or insecure-origin (the fallback; review 1391 A-7)', async () => {
+    for (const [word, sentence] of [['auth-off', SECRET_TEXT.signInOff], ['insecure-origin', SECRET_TEXT.insecureOrigin]] as const) {
       const save = vi.fn<SaveSecret>(async () => { throw refuse(403, word); });
       await show(save);
       fireEvent.change(field(), { target: { value: VALUE } });
       fireEvent.click(saveButton());
-      expect(await screen.findByText(SECRET_TEXT.signInOff)).toBeTruthy();
+      expect(await screen.findByText(sentence)).toBeTruthy();
       expect(field().disabled, word).toBe(true);
       expect(field().value, word).toBe('');
       expect(saveButton().disabled, word).toBe(true);
@@ -165,11 +167,37 @@ describe('the secret panel (plan PL6)', () => {
     expect(field().disabled).toBe(false);
   });
 
-  it('the hint says one line, and names the last four characters only for a long enough secret (review 1389 F4, A8)', async () => {
+  it('the hint says one line, and names the last four characters only for a secret of SECRET_TAIL_MIN BYTES that is masked (review 1391 F2, F3)', async () => {
     await show(vi.fn());
     expect(SECRET_TEXT.hint).toMatch(/single line/);
-    expect(SECRET_TEXT.hint).toContain(`${SECRET_TAIL_MIN} characters`);
+    expect(SECRET_TEXT.hint).toContain(`at least ${SECRET_TAIL_MIN} bytes`);
+    expect(SECRET_TEXT.hint).not.toMatch(/\d+ characters/);
+    expect(SECRET_TEXT.hint).toMatch(/outgoing text will mask it/);
+    expect(SECRET_TEXT.tooLong).toContain(`${SECRET_VALUE_MAX} bytes`);
     expect(screen.getByText(SECRET_TEXT.hint)).toBeTruthy();
+  });
+
+  it('the too-long line is part of the field\'s description and is announced (review 1391 A-6)', async () => {
+    await show(vi.fn());
+    fireEvent.change(field(), { target: { value: 'k'.repeat(SECRET_VALUE_MAX + 1) } });
+    const line = screen.getByText(SECRET_TEXT.tooLong);
+    expect(line.getAttribute('role')).toBe('alert');
+    expect(field().getAttribute('aria-describedby')!.split(' ')).toContain(line.id);
+  });
+
+  it('a value the masker cannot catch as one run says so, and shows no tail (review 1391 F2)', async () => {
+    await show(vi.fn<SaveSecret>(async () => answer({ tail: '', masked: false, why: 'not-one-run' })));
+    fireEvent.change(field(), { target: { value: 'pass phrase with spaces 0123' } });
+    fireEvent.click(saveButton());
+    expect(await screen.findByText('Saved.')).toBeTruthy();
+    expect(screen.getByText(SECRET_TEXT.unmasked['not-one-run'])).toBeTruthy();
+  });
+
+  it('a value with a line break the server refused reads its one-line sentence (programme item 8)', async () => {
+    await show(vi.fn<SaveSecret>(async () => { throw refuse(400, LEDGER_ROUTE_REFUSALS.secretNotOneLine); }));
+    fireEvent.change(field(), { target: { value: VALUE } });
+    fireEvent.click(saveButton());
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', LEDGER_REFUSAL_TEXT['secret-not-one-line']);
   });
 
   it('the bound counts the trimmed value: spaces around a value of the full length still save it (review 1389 A8)', async () => {
@@ -228,5 +256,104 @@ describe('api.saveItemSecret (the console client call)', () => {
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(403);
     expect((err as ApiError).body).toEqual({ ok: false, error: 'step-up-required' });
+  });
+});
+
+describe('a stored secret shows "Stored" with Remove (the operator\'s ruling on programme item 9)', () => {
+  const stored = (over: Parameters<typeof itemView>[0] = {}) =>
+    secretItem({ state: 'confirmed' as never, secretSet: { at: NOW, tail: 'ab12', masked: true }, ...over });
+  const showStored = (removeSecret: RemoveSecret, item = stored()) =>
+    render(<ItemView item={item} onTick={vi.fn(async () => {})} onDismiss={vi.fn(async () => {})} programmeLive={true} now={NOW}
+                     saveSecret={vi.fn()} removeSecret={removeSecret} stepUpDeps={stepUpDeps} authStatus={ARMED} />);
+  const removeButton = (): HTMLButtonElement => screen.getByRole('button', { name: STORED_TEXT.removeLabel('api-key') }) as HTMLButtonElement;
+
+  it('while its slot is stored, the item says Stored with a Remove control; with nothing stored there is neither', () => {
+    showStored(vi.fn());
+    expect(screen.getByText(STORED_TEXT.stored)).toBeTruthy();
+    expect(removeButton()).toBeTruthy();
+    // The block carries the class its styles are scoped to (review 1418 A3): a rename would leave every .wi-stored rule dead.
+    expect(screen.getByText(STORED_TEXT.stored).closest('.wi-stored')).not.toBeNull();
+    expect(removeButton().closest('.wi-stored .wi-stored-remove')).not.toBeNull();
+    cleanup();
+    showStored(vi.fn(), stored({ secretSet: null }));
+    expect(screen.queryByText(STORED_TEXT.stored)).toBeNull();
+    expect(screen.queryByRole('button', { name: STORED_TEXT.removeLabel('api-key') })).toBeNull();
+  });
+
+  it('a slot that holds a value with no readable record is stored all the same: Stored and Remove, no saved line (review 1416 F4)', () => {
+    for (const state of ['open', 'checking', 'confirmed'] as const) {
+      showStored(vi.fn(), stored({ state: state as never, secretSet: { at: null, tail: '' } }));
+      expect(screen.getByText(STORED_TEXT.stored), state).toBeTruthy();
+      expect(removeButton(), state).toBeTruthy();
+      // No saved line of any shape, and no masking sentence: nothing is known of when or how.
+      expect(screen.queryByText(/^Saved\./), state).toBeNull();
+      expect(document.querySelector('[data-secret="unmasked"]'), state).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('a slot the box cannot read says so: never Stored, never Remove, never the field to give a secret (review 1418 F2)', () => {
+    for (const state of ['open', 'checking', 'confirmed'] as const) {
+      showStored(vi.fn(), stored({ state: state as never, secretSet: { unreadable: true } }));
+      const line = document.querySelector('[data-secret="unreadable"]');
+      // One slot, so one slot's sentence, never the programme-wide one (review 1426 F-F), and it names what to do next.
+      expect(line?.textContent, state).toBe(STORED_TEXT.slotUnreadable);
+      expect(line?.textContent, state).not.toBe(LEDGER_REFUSAL_TEXT['secrets-unreadable']);
+      expect(line?.textContent, state).toMatch(/reload this page/);
+      expect(screen.queryByText(STORED_TEXT.stored), state).toBeNull();
+      expect(screen.queryByRole('button', { name: STORED_TEXT.removeLabel('api-key') }), state).toBeNull();
+      expect(screen.queryByLabelText(SECRET_TEXT.label), state).toBeNull();
+      expect(screen.queryByRole('button', { name: SECRET_TEXT.save }), state).toBeNull();
+      expect(screen.queryByText(/^Saved\./), state).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('Remove asks first: Cancel removes nothing; the confirm removes the item\'s slot once and says Removed', async () => {
+    const remove = vi.fn<RemoveSecret>(async (_p, slot) => ({ ok: true, slot }));
+    showStored(remove);
+    fireEvent.click(removeButton());
+    expect(await screen.findByText(STORED_TEXT.confirmTitle('api-key'))).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(remove).not.toHaveBeenCalled();
+    fireEvent.click(removeButton());
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(Array.from(dialog.querySelectorAll('button')).find((b) => b.textContent === STORED_TEXT.remove)!);
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
+    expect(remove).toHaveBeenCalledWith('prog-a', 'api-key');
+    expect(await screen.findByText(STORED_TEXT.removed)).toBeTruthy();
+    // No part of a value is on the page: not the tail the slot's record carries.
+    expect(document.body.textContent).not.toContain('ab12');
+  });
+
+  it('a refused Remove reads its fixed sentence and the control stays; secret-not-stored counts as removed', async () => {
+    showStored(vi.fn<RemoveSecret>(async () => { throw new ApiError(503, { ok: false, error: 'remove-failed', detail: 'BOX-TEXT' }, 'application/json'); }));
+    fireEvent.click(removeButton());
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(Array.from(dialog.querySelectorAll('button')).find((b) => b.textContent === STORED_TEXT.remove)!);
+    expect(await screen.findByText(LEDGER_REFUSAL_TEXT['remove-failed'])).toBeTruthy();
+    expect(document.body.textContent).not.toContain('BOX-TEXT');
+    expect(removeButton()).toBeTruthy();
+    cleanup();
+    showStored(vi.fn<RemoveSecret>(async () => { throw refuse(404, 'secret-not-stored'); }));
+    fireEvent.click(removeButton());
+    const again = await screen.findByRole('dialog');
+    fireEvent.click(Array.from(again.querySelectorAll('button')).find((b) => b.textContent === STORED_TEXT.remove)!);
+    expect(await screen.findByText(STORED_TEXT.removed)).toBeTruthy();
+  });
+});
+
+describe('api.storedSecrets and api.removeStoredSecret (the console client calls)', () => {
+  it('reads the programme\'s stored secrets, and DELETEs one slot with no body', async () => {
+    const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const client = createApi((async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const body = init?.method === 'DELETE' ? { ok: true, slot: 'api-key' } : { ok: true, program: 'prog-a', slots: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch);
+    expect(await client.storedSecrets('prog-a')).toEqual({ ok: true, program: 'prog-a', slots: [] });
+    expect(await client.removeStoredSecret('prog-a', 'api-key')).toEqual({ ok: true, slot: 'api-key' });
+    expect(calls.map((c) => [c.init?.method ?? 'GET', c.url])).toEqual([['GET', '/api/programmes/prog-a/secrets'], ['DELETE', '/api/programmes/prog-a/secrets/api-key']]);
+    expect(calls[1]!.init?.body).toBeUndefined();
   });
 });

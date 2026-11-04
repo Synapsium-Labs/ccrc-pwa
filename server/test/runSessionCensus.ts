@@ -94,6 +94,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: 'drops the opener itself from claimantsOfSession\'s answer (a self-claimed run is admitted, D-3012): the binding is decided in claimantsOf' },
   { file: 'server/src/coord/dispatchDecide.ts', text: 'r.id === f.sessionId',
     why: 'a lookup of a REGISTRY record by its id, to measure the wrapper and identity of the session: no run is read' },
+  { file: 'server/src/coord/landingWrites.ts', text: 'c.claimedBy === command.setBy',
+    why: 'the attributed landing setter against the claimant of the ONE run the entry is bound to, read by the store in the write (landing order wave 5f): an attribute of one run, no session is asked which run is its' },
   { file: 'server/src/coord/closeDecide.ts', text: 'fresh.run.claimedBy === f.claimedBy',
     why: 'the sweep\'s compare-and-set: the claimant of ONE re-read run must still be the one the sweep measured, whichever session works it' },
   { file: 'server/src/coord/childReclaim.ts', text: 'v.id !== sessionId', count: 2,

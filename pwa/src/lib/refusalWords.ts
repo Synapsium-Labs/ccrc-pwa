@@ -516,7 +516,8 @@ export function refusalText<K extends string>(err: unknown, table: Readonly<Reco
  */
 export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'programme-ended' | 'programme-unclaimed' | 'not-open' | 'duplicate' | 'programme-live' | 'use-secret-route'
-  | 'not-a-secret-item' | 'bad-slot' | 'stored-not-ticked' | 'bad-request' | 'too-large' | 'unknown-item' | 'not-configured', string
+  | 'not-a-secret-item' | 'bad-slot' | 'stored-not-ticked' | 'secret-not-one-line' | 'slot-busy' | 'secret-not-stored'
+  | 'secrets-unreadable' | 'remove-failed' | 'secret-name-collides' | 'bad-request' | 'too-large' | 'unknown-item' | 'not-configured', string
 >> = {
   'programme-ended': 'This programme has no open run, so no coordinator is waiting for this. Dismiss the item instead.',
   'programme-unclaimed': 'This programme has an open run, but no coordinator holds it, so nobody would see your tick. Abandon that run from the Runs screen first, or wait for a coordinator to take it.',
@@ -528,6 +529,14 @@ export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'not-a-secret-item': 'This item does not ask for a secret.',
   'bad-slot': 'This item names a place for the secret that the box will not use. Ask the coordinator to raise it again.',
   'stored-not-ticked': 'The secret is stored, but the item was not marked done. Refresh and try again.',
+  // The PL6 follow-up: one line (programme item 8), a slot still busy, and the stored secrets' read and Remove (item 9).
+  'secret-not-one-line': 'A secret is one line. Take out the line break and save it again.',
+  'slot-busy': 'An earlier save or removal of this secret has not finished yet, so nothing was done. Try again in a moment.',
+  'secret-not-stored': 'No secret is stored there any more. The list will update.',
+  'secrets-unreadable': 'The stored secrets of this programme could not be read on the box.',
+  'remove-failed': "The box couldn't remove that secret, so it is still stored. Try again.",
+  // A programme or slot name that differs from a stored one only by capital letters (review 1416 F3).
+  'secret-name-collides': 'The box already keeps a secret under a name that differs from this one only in capital letters, so nothing was saved. Ask the coordinator to raise the item again with the same spelling as before.',
   'bad-request': `The server did not accept that answer. An answer is between 1 and ${ANSWER_MAX} characters; shorten it and try again.`,
   'too-large': 'That answer, with its note, is too long to send to the coordinator. Shorten it and try again.',
   'unknown-item': 'The server has no such item any more. The list will update.',

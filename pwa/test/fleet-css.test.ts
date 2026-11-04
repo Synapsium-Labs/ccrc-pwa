@@ -1533,12 +1533,47 @@ describe('delegation rows read tokens only (delegation broker wave 4)', () => {
         expect(prop, `${sel} sets no opacity`).not.toBe('opacity');
         expect(value, `${sel} { ${prop} } has no var() fallback`).not.toMatch(/var\(--[\w-]+\s*,/);
         if (!VALUED.test(prop)) continue;
-        // What is left once every token is read: only `0`, `currentColor`, the border's hairline and style words.
+        // What is left once every token is read: only `0`, `currentColor`, the border's hairline and style words, and
+        // the name part's `max-width: max-content` (D-7783, review 1424 F1: a cap at its own length, a layout relation no
+        // token carries, so a short name never stretches its row).
         const rest = value.replace(/var\(--[\w-]+\)/g, '').replace(/\bcurrentColor\b/g, '')
-          .replace(prop === 'border' ? /\b1px\b|\bsolid\b/g : /$^/g, '').replace(/\b0\b/g, '').trim();
+          .replace(prop === 'border' ? /\b1px\b|\bsolid\b/g : /$^/g, '')
+          .replace(prop === 'max-width' && sel === '.proj-work-name' ? /^max-content$/g : /$^/g, '').replace(/\b0\b/g, '').trim();
         expect(rest, `${sel} { ${prop}: ${value} }`).toBe('');
       }
     }
     expect(declValue(ruleFor('.proj-work-chip'), 'border')).toMatch(/currentColor/);
+  });
+
+  // A supplement to the measured pins in browser/delegation-rows.browser.test.ts (review 1435 F2), never instead of them:
+  // the declarations the separator and the name's cut rest on, read from the sheet.
+  it('VIS-CSS3: a part is the separator\'s containing block and clips nothing; only the name\'s inner box clips', () => {
+    expect(declValue(ruleFor('.proj-work-parts'), 'column-gap')).toBe('var(--sp-3)');
+    expect(declValue(ruleFor('.proj-work-part'), 'position')).toBe('relative');
+    for (const sel of ['.proj-work-part', '.proj-work-name']) {
+      expect(declValue(ruleFor(sel), 'overflow'), `${sel} clips nothing`).toBeNull();
+      expect(declValue(ruleFor(sel), 'overflow-clip-margin'), `${sel} needs no clip margin`).toBeNull();
+    }
+    const text = ruleFor('.proj-work-name-text');
+    expect(declValue(text, 'overflow')).toBe('hidden');
+    expect(declValue(text, 'text-overflow')).toBe('ellipsis');
+    expect(declValue(text, 'white-space')).toBe('nowrap');
+  });
+});
+
+// Delegation visibility (the plan's Global Constraints, "CSS"): the two new list surfaces take the floor `.proj-card`
+// takes. Each is an item of a grid or flex container whose automatic minimum is its min-content width, and its rows'
+// words are `white-space: nowrap`, so without `min-width: 0` one long row widens the track and scrolls the pane.
+describe('the fleet foot\'s region and the header\'s entry list shrink below their rows (delegation visibility)', () => {
+  const chatCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8');
+
+  it('VIS-CSS2: the header\'s entry list is a full-width flex item of .chat-facts with a min-width of 0', () => {
+    const rule = ruleIn(chatCss, '.chat-facts .sess-entries');
+    expect(declValue(rule, 'flex-basis')).toBe('100%');
+    expect(declValue(rule, 'min-width')).toBe('0');
+  });
+
+  it('VIS-CSS1: the fleet foot\'s region is a grid item of .fleet-list with the card\'s floor, a min-width of 0', () => {
+    expect(declValue(ruleFor('.fleet-unlisted'), 'min-width')).toBe('0');
   });
 });

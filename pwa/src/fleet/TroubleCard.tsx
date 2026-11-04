@@ -18,8 +18,11 @@
 // "PASTE A TOKEN" / "REPLACE TOKEN" (§4.2; Task A19): a token lane's card offers its credential act as a button when
 // the screen can run it, opening the replace sheet the screen hosts. The fleet-host command stays beside it.
 //
-// "SWITCH TO A LONG-LIVED TOKEN" (§4.2, §9; Q1; Task A23, D-7871): a Signed-out sign-in lane's PRIMARY fix, first among
-// its acts, opening the method switch sheet the screen hosts.
+// THE CREDENTIAL ACTS (§4.2's fix column; Tasks A19, A23 and A38; D-7742, D-7871, D-7872): the screen hands the card its
+// acts in order, the first the primary where the fleet can run a sign-in: Signed out on a sign-in lane, **Switch to a
+// long-lived token** (Q1, the method switch sheet) then Sign in again; Signed out on a token lane, **Mint a new token**
+// then Paste a token; Expiring (a minted token), **Replace token** then Switch to sign-in. They are the card's first
+// action, under its effect; below 900 they stack, the primary first, each at the tap floor.
 import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, toast } from '@ccrc/ui';
@@ -74,17 +77,17 @@ export function CopyCommand({ command }: { command: string }): ReactNode {
   );
 }
 
+/** One credential act on a trouble card: its words, whether it is the card's primary, and what it opens. */
+export interface TroubleAct { readonly label: string; readonly primary: boolean; readonly onOpen: () => void }
+
 /** A trouble card's body: what is wrong, its effect, and the fix. Where the fix names a check and the screen can run
  *  one (`onCheck`, accounts plan Task A14, D-7732), **Check again** calls the Check route, the knob row's own; while it
  *  runs (`checking`) the button is busy and does not take a second press. `fleet` is injectable for tests. */
-export function TroubleCard({ copy, onCheck, checking = false, replace, switchTo, fleet = useFleetStore }: {
+export function TroubleCard({ copy, onCheck, checking = false, acts = [], fleet = useFleetStore }: {
   copy: TroubleCopy; onCheck?: () => void; checking?: boolean;
-  /** The card's primary fix when the screen can run it (accounts plan Task A23, D-7871): a Signed-out sign-in lane's
-   *  "Switch to a long-lived token" (spec §4.2, Q1), opening the method switch sheet. */
-  switchTo?: { readonly label: string; readonly onOpen: () => void };
-  /** A token lane's credential act the screen can run (accounts plan Task A19, D-7742): Signed out's "Paste a token"
-   *  and Expiring's "Replace token", each opening the replace sheet. Absent: the command alone, as before. */
-  replace?: { readonly label: string; readonly onOpen: () => void };
+  /** The credential acts the screen can run, in order (accounts plan Tasks A19, A23 and A38; D-7742, D-7871, D-7872),
+   *  each opening the sheet the screen hosts. None: the command alone, as before. */
+  acts?: readonly TroubleAct[];
   fleet?: FleetStore;
 }): ReactNode {
   const sessions = fleet((s) => s.sessions);
@@ -104,14 +107,20 @@ export function TroubleCard({ copy, onCheck, checking = false, replace, switchTo
     <div className="acct-trouble">
       <p className="acct-trouble-wrong">{copy.wrong}</p>
       <p className="acct-trouble-effect">{copy.effect}</p>
-      {switchTo !== undefined && (
-        <Button variant="primary" className="acct-trouble-switch" onClick={switchTo.onOpen}>{switchTo.label}</Button>
-      )}
       {copy.move?.primary === true && move}
-      <p className="acct-trouble-lead">{copy.lead}</p>
-      {replace !== undefined && (
-        <Button variant="ghost" size="fit" className="acct-trouble-replace" onClick={replace.onOpen}>{replace.label}</Button>
+      {acts.length > 0 && (
+        <div className="acct-trouble-acts">
+          {acts.map((a) => (
+            <Button
+              key={a.label} variant={a.primary ? 'primary' : 'ghost'} size="fit" className="acct-trouble-replace"
+              data-primary={a.primary ? 'true' : undefined} onClick={a.onOpen}
+            >
+              {a.label}
+            </Button>
+          ))}
+        </div>
       )}
+      <p className="acct-trouble-lead">{copy.lead}</p>
       {copy.checkAgain && onCheck !== undefined && (
         <Button variant="ghost" size="fit" className="acct-check-again" disabled={checking} aria-busy={checking || undefined} onClick={onCheck}>
           {CHECK_AGAIN_LABEL}

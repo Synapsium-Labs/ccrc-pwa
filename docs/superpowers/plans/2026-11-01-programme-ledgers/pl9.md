@@ -68,7 +68,8 @@ edits no ledger.
   (D-5468), so nothing they own is lost. The banner stack the column carried in Instrument is kept: the item route's column
   mounts it (`pl9-banners-above-the-swapped-column`). The first version of this note said "nothing they own is lost", which
   was false for Instrument's banners. The item route does not draw the build readout (`BuildLine`, in both skins),
-  Instrument's pool-lag readout or the fleet column's hidden stale-update live region (review 1402, A-2), and because the
+  the pool-lag readout (in both skins: Refined's desk column draws it in the fleet's head too), Refined's count line (its
+  frame has no status bar to print it) or the fleet column's hidden stale-update live region (review 1402, A-2), and because the
   banner stack is mounted again on entering and on leaving the route, it loses its state there too: the "+n more" fold, the
   halt banner's and the host banner's confirm states, and the passkey notice, which reads `/api/auth/status` again (A-4).
 - `pl9-steps-items-only`: Previous and Next step from item to item. A session's question is a row of the list but opens its
@@ -155,7 +156,8 @@ D-7896; no number is allocated for it.
 
 - `pl9-banners-keep-the-fleet-gutters` (F1): the stack above the list beside an item sits in a box (`.wl-banners`) with the
   fleet column's own top space, side gutters and gap, written with the same tokens as `.fleet` in `fleet.css`. With no banner
-  the box is empty and draws nothing. Measured after: within 1 px of `/waiting` at 900 and 1280; Refined unchanged.
+  it takes no room: the stack keeps every slot mounted, so the box is never empty, and its room is given only while a banner
+  draws, by Refined's own test (`:has(> .banner-slot > *, > .banner-more)`; carry C, review 1408 F1). Measured after: within 1 px of `/waiting` at 900 and 1280; Refined unchanged.
 - `pl9-new-visit-resets-the-place` (F2): `useKeptPlace` takes a new place on every new visit, a visit with no place
   included, so a cleared item stepped to and left again does not leave its predecessor's place behind.
 - `pl9-real-programme-stays` (F3, as ruled): `resolveList` takes the programmes the page knows (`knownProgrammes`: the runs,

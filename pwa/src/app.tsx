@@ -25,7 +25,7 @@ import { FleetChromeProvider } from './fleet/FleetChrome';
 import { FleetFlows, useFleetFlows } from './fleet/FleetFlows';
 import { useAuthLost } from './lib/auth';
 import { navigate, useLocation } from './lib/router';
-import { isProgrammeSlug, matchRoute, sessionPath, shellViewOf } from './lib/routes';
+import { matchRoute, sessionPath, shellViewOf } from './lib/routes';
 import { useSkin } from './lib/skin';
 import { AuthResumeInDetail } from './accounts/AuthResumeBanner';
 import { AccountsScreen } from './screens/AccountsScreen';
@@ -173,9 +173,10 @@ export function App(): ReactNode {
     <WaitingRoute />
   ) : route === 'item' ? (
     <ItemRouteAt param={at!.param} />
-  ) : route === 'programme' && isProgrammeSlug(at!.param!) ? (
+  ) : route === 'programme' ? (
     // Keyed by the slug: one programme's Goals read never shows under another's name. A slug the server would refuse
-    // (`shapeProgramSlug`) falls to the placeholder below, as an unknown path does.
+    // (`shapeProgramSlug`) matches no route (the row's `accepts`), so it is an unknown path: the placeholder below on a
+    // desk, and the fleet on a phone, where `shellViewOf` answers `fleet` for it (carry C, D-7951; review 1388 F1).
     <ProgrammeScreen key={at!.param} slug={at!.param!} />
   ) : (
     <div className="shell-placeholder">

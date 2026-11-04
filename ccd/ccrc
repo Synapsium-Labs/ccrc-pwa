@@ -8277,7 +8277,8 @@ _acct_sweep_secret_temps() {   # <id> — under that lane's lock only
 # stands. The writer itself refuses, and is pinned to, everything it guards.
 _acct_lane_state() {   # <id> [--mode m] [--check-verdict v --check-at t]
   local rc=0
-  _acct_node lane-state --id "$@" >/dev/null || rc=$?
+  # The roster goes with every write: the writer measures whether the lane holds a credential as it writes (D-7992).
+  _acct_node lane-state --id "$@" --file "$(_acct_roster_path)" >/dev/null || rc=$?
   [ "$rc" -eq 0 ] \
     || printf '%s\n' "$PROG: account: lane $1's state file under $_SVC_REG/.accounts was not written (exit $rc); this verb's answer stands, and the next account verb on the lane writes it" >&2
   return 0
@@ -9333,6 +9334,7 @@ _acct_credential() {
   # is gone.
   _acct_lane_state "$id" --clear check --clear mintedAt
   _acct_write_secret "$id" "$ACCT_PROVIDER" "$ACCT_SECRET_ENV"
+  _acct_lane_state "$id"   # the new secret is in: the writer measures it (D-7992)
   _acct_live "$id"
 
   # `${arr[@]+"${arr[@]}"}` — this tree's empty-array idiom under `set -u`.
@@ -11095,8 +11097,14 @@ _acct_credential_sign_out() {   # <id>
   _acct_upstream_id "Nothing was written."
   _acct_auth_deadline
   _acct_sign_out "$id" "$ACCT_CFG_DIR" "$stands"
-  # A sign-in lane's last check measured the sign-in that is now gone; a token lane's measured its token, which stays.
-  [ -n "$ACCT_SECRETS" ] || _acct_lane_state "$id" --clear check
+  # A sign-in lane's last check measured the sign-in that is now gone; a token lane's measured its token, which stays,
+  # so only a sign-in lane is signed out by this. The lane says so until a credential goes in or a check passes (D-7992).
+  # `absent` on macOS proves nothing, since a sign-in there lives in the keychain and no logout ran: no sign-out is recorded.
+  if [ -z "$ACCT_SECRETS" ]; then
+    local cleared=(--clear check)
+    { [ "$ACCT_SIGNOUT" = removed ] || [ "$CCD_OS" != darwin ]; } && cleared+=(--signed-out-at now)
+    _acct_lane_state "$id" "${cleared[@]}"
+  fi
   _acct_read_op "Lane $id was signed out; only this report failed." \
     auth-answer --verb sign-out --id "$id" --sign-out "$ACCT_SIGNOUT"
   printf '%s\n' "$ACCT_OUT"
@@ -20116,6 +20124,9 @@ _inst_lane_state() {
     case "$(${lk[@]+"${lk[@]}"} node "$op" seed --file "$HOME/.ccrc/accounts.json" --id "$id" --when unseeded)" in
       *'"verifiedAt"'*) seeded+=("$id") ;;
     esac
+    # WHETHER THE LANE HOLDS A CREDENTIAL (D-7992): a file from before the word has none, and a sign-out from before this
+    # build recorded nothing, so the update measures every lane, under the same lock. Advisory and silent, as the seed is.
+    ${lk[@]+"${lk[@]}"} node "$op" lane-state --id "$id" --mode credential --file "$HOME/.ccrc/accounts.json" >/dev/null 2>&1 || :
   done <<<"$listed"
   [ "${#seeded[@]}" -eq 0 ] || echo "install: lane-seed: seeded ${#seeded[@]}"
 }
@@ -24165,6 +24176,7 @@ _upd_backup_set() {
   _upd_backup_copy "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" ccd-shared-redact-cli.mjs
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" ccd-lib-disk-retention.sh   # the body's library (D-6913): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/train-proof.sh" ccd-lib-train-proof.sh   # its second library (D-7463): restored before the body that pins it
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/delegation-lease.sh" ccd-lib-delegation-lease.sh   # its third library (wave 5): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/ccd" ccd-body
   _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
@@ -28621,13 +28633,13 @@ _uninst_tree_bins() {
   # ccd's BODY (D-3696), the other half of the pair the launcher above named,
   # and its directory only if that leaves it empty — anything else an operator
   # keeps under ~/.local/libexec is not ccrc's to remove.
-  rm -f -- "$HOME/.local/libexec/ccrc/ccd" "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" "$HOME/.local/libexec/ccrc/lib/train-proof.sh" \
+  rm -f -- "$HOME/.local/libexec/ccrc/ccd" "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" "$HOME/.local/libexec/ccrc/lib/train-proof.sh" "$HOME/.local/libexec/ccrc/lib/delegation-lease.sh" \
     "$HOME/.local/libexec/ccrc/shared/redact.mjs" "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" \
     || _ccrc_die "removing ccd's body and library from \$HOME/.local/libexec/ccrc failed"
   rmdir -- "$HOME/.local/libexec/ccrc/shared" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc/lib" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the

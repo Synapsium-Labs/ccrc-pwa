@@ -179,13 +179,12 @@
 .wl-beside { max-width: none; }
 /* The fleet's banner stack above the list beside an item, in a skin that draws it in its left column (Instrument; follow-up
    F1): the fleet column's own top space, side gutters and gap (`.fleet`, fleet.css: the same tokens), so a banner sits where
-   it sits on the list. The stack's slots are `display: contents`, so their banners are this box's own items. With no banner
-   to show the box is empty and takes no room. */
-.wl-banners {
-  display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0;
-  padding: calc(var(--sp-3) + var(--safe-top)) var(--sp-4) 0;
-}
-.wl-banners:empty { display: none; }
+   it sits on the list. The stack's slots are `display: contents`, so their banners are this box's own items. The stack keeps
+   every slot mounted, empty when its banner does not show, so the box is never `:empty`: its room is given only while a banner
+   draws, by Refined's own test for the same fact (`.shell-banners` in refined.css), and with none the box takes no room
+   (carry C, D-7951; review 1408 F1). */
+.wl-banners { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+.wl-banners:has(> .banner-slot > *, > .banner-more) { padding: calc(var(--sp-3) + var(--safe-top)) var(--sp-4) 0; }
 .wl-beside .wl-item { grid-template-columns: minmax(0, 1fr); }
 .wl-beside .wl-item .wl-meta { justify-items: start; }
 .wl-beside .wl-item[aria-current='page'] { box-shadow: inset 0 0 0 2px var(--accent); }
@@ -220,6 +219,24 @@
 }
 .pv-card .pv-h { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--ink-secondary); }
 .pv-card .pv-none { margin: 0; color: var(--ink-primary); overflow-wrap: anywhere; }
+
+/* A stored secret (the operator's ruling on programme item 9; review 1416 F5): the programme screen's "Stored secrets" rows and
+   the item's Stored block. A row's name, saved-when and asking item are separate lines, the name in mono as a slot is named
+   elsewhere; its Remove sits under them, and a Remove's refusal and its "Removed." take the item card's tinted styles. */
+.pv-secrets { display: grid; gap: var(--sp-2); min-width: 0; }
+.pv-secrets .pv-secret-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.pv-secrets .pv-secret {
+  display: grid; gap: var(--sp-1); justify-items: start; min-width: 0; padding: var(--sp-2);
+  border-left: 2px solid var(--edge-strong); border-radius: var(--r-md); background: var(--bg-raised); color: var(--ink-primary);
+}
+.pv-secrets .pv-secret-name { font: var(--weight-medium) var(--fs-meta) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); background: var(--bg-raised); overflow-wrap: anywhere; }
+.pv-secrets .pv-secret-when,
+.pv-secrets .pv-secret-asker { font-size: var(--fs-meta); color: var(--ink-secondary); background: var(--bg-raised); overflow-wrap: anywhere; }
+.pv-secrets .wi-status { margin: 0; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md); background: var(--accent-tint); color: var(--status-busy-text); font-size: var(--fs-meta); overflow-wrap: anywhere; }
+.pv-secrets .wi-refusal { margin: 0; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md); background: var(--status-dead-tint-solid); color: var(--status-dead-text); font-size: var(--fs-meta); overflow-wrap: anywhere; }
+.wi-stored { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.wi-stored-remove { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; }
+.wi-stored-remove .wi-refusal { flex-basis: 100%; margin: 0; }
 
 /* Goals (`GoalsPanel`). */
 .pg-goals { display: grid; gap: var(--sp-2); min-width: 0; background: var(--bg-surface); color: var(--ink-primary); }

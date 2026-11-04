@@ -10,7 +10,7 @@ import { REPO } from '../consolidationCensus.js';
 import { mkTmp, removeTmpFixtures } from '../tmpHelpers.js';
 import { parsedFile } from '../scan/symbols.js';
 import {
-  appendBeforeApplySites, appendThenApplyBreaks, delegationKernelImports, epochFloorReaders, journalFloorSites, journalFramers,
+  appendBeforeApplySites, appendThenApplyBreaks, appendThenApplyOwners, delegationKernelImports, epochFloorReaders, journalFloorSites, journalFramers,
 } from './journal.js';
 
 afterEach(removeTmpFixtures);
@@ -235,9 +235,102 @@ describe('journalFramers (D-7059)', () => {
     ]);
   });
 
+  it('counts a hand-rolled newline framer planted in the landing parser, and passes the one-call kernel framing', () => {
+    const planted = tree({
+      'server/src/coord/landingJournalPolicy.ts': [
+        'export function parseLandingJournal(text: string) {',
+        "  const lines = text.split('\\n');",
+        '  return lines;',
+        '}',
+      ].join('\n'),
+    });
+    expect(journalFramers(planted).map((x) => [x.file, x.line, x.method])).toEqual([
+      ['server/src/coord/landingJournalPolicy.ts', 2, 'parseLandingJournal'],
+    ]);
+    const tail = tree({
+      'server/src/coord/landingJournalPolicy.ts': "export const tail = (s: string) => s.slice(0, s.lastIndexOf('\\n') + 1);\n",
+    });
+    expect(journalFramers(tail).map((x) => [x.line, x.method])).toEqual([[1, '(top level)']]);
+    const kernel = tree({
+      'server/src/coord/landingJournalPolicy.ts': [
+        "import { splitJournalRecords } from '../journalKernel.js';",
+        'export function parseLandingJournal(text: string) {',
+        '  const framed = splitJournalRecords(text);',
+        "  return framed.records.filter((r) => r !== '');",
+        '}',
+      ].join('\n'),
+    });
+    expect(journalFramers(kernel)).toEqual([]);
+  });
+
   it('answers nothing for a tree without the files, or with collectLane.ts lacking the parser', () => {
     expect(journalFramers(tree({ 'server/src/a.ts': 'export {};\n' }))).toEqual([]);
     expect(journalFramers(tree({ 'server/src/collectLane.ts': "export const f = (s: string) => s.split('\\n');\n" }))).toEqual([]);
+  });
+});
+
+describe('appendThenApplyOwners', () => {
+  it('names the store method of each kernel call, sorted, and answers nothing for a tree with no store', () => {
+    const t = tree({
+      'server/src/coord/store.ts': [
+        'export class CoordStore {',
+        '  one(log: L): number { return tx(this.db, () => appendThenApply({ decide: () => ({ go: 1 }), append: (e) => log.append(e), apply: (e) => e })); }',
+        '  two(log: L): number { return tx(this.db, () => appendThenApply({ decide: () => ({ go: 1 }), append: (e) => log.append(e), apply: (e) => e })); }',
+        '  replay(): void { this.applyAll(); }',
+        '}',
+      ].join('\n'),
+    });
+    expect(appendThenApplyOwners(t)).toEqual(['CoordStore.one', 'CoordStore.two']);
+    expect(appendThenApplyOwners(tree({ 'server/src/a.ts': 'export {};\n' }))).toEqual([]);
+  });
+
+  it('recognises the landing site spelled `log.append(snapshot, record)` inside appendThenApply inside tx, and breaks when deleted or moved', () => {
+    const landing = (appendLine: string, extra = ''): string => tree({
+      'server/src/coord/store.ts': [
+        'export class CoordStore {',
+        '  writeLandingAuthority(log: LandingJournalPort): number {',
+        '    return tx(this.db, () => appendThenApply({',
+        '      decide: () => ({ go: { snapshot: 1, record: 2 } }),',
+        `      append: ({ snapshot, record }) => { ${appendLine} },`,
+        `      apply: () => { ${extra} this.db.prepare('INSERT INTO landing_entries (id) VALUES (1)').run(); return 1; },`,
+        '    }));',
+        '  }',
+        '}',
+      ].join('\n'),
+    });
+    const good = landing('log.append(snapshot, record);');
+    expect(appendThenApplyOwners(good)).toEqual(['CoordStore.writeLandingAuthority']);
+    expect(appendThenApplyBreaks(good)).toEqual([]);
+    expect(appendBeforeApplySites(good)).toEqual([]);
+    // the append deleted: the site stays but the census sees no append
+    expect(appendThenApplyBreaks(landing('')).map((b) => [b.method, b.why])).toEqual([['CoordStore.writeLandingAuthority', 'no-append']]);
+    // an append placed after a row write in apply is a write-before-append break
+    const late = tree({
+      'server/src/coord/store.ts': [
+        'export class CoordStore {',
+        '  writeLandingAuthority(log: LandingJournalPort): number {',
+        '    return tx(this.db, () => appendThenApply({',
+        '      decide: () => ({ go: 1 }),',
+        '      append: () => undefined,',
+        "      apply: () => { this.db.prepare('INSERT INTO landing_entries (id) VALUES (1)').run(); log.append(snapshot, record); return 1; },",
+        '    }));',
+        '  }',
+        '}',
+      ].join('\n'),
+    });
+    expect(appendThenApplyBreaks(late).map((b) => b.why)).toEqual(['write-before-append']);
+    // a second call (duplicate) shows as a second owner row
+    const dup = tree({
+      'server/src/coord/store.ts': [
+        'export class CoordStore {',
+        '  writeLandingAuthority(log: LandingJournalPort): number {',
+        '    tx(this.db, () => appendThenApply({ decide: () => ({ go: 1 }), append: () => log.append(snapshot, record), apply: () => 1 }));',
+        '    return tx(this.db, () => appendThenApply({ decide: () => ({ go: 1 }), append: () => log.append(snapshot, record), apply: () => 1 }));',
+        '  }',
+        '}',
+      ].join('\n'),
+    });
+    expect(appendThenApplyOwners(dup)).toEqual(['CoordStore.writeLandingAuthority', 'CoordStore.writeLandingAuthority']);
   });
 });
 
@@ -281,10 +374,17 @@ describe('the real tree (C8f\'s tip)', () => {
     expect(delegationKernelImports()).toEqual([]);
   });
 
-  it('the queries are not over nothing: the kernel defines the pieces, and the four writers call appendThenApply', () => {
+  it('the landing parser frames through splitJournalRecords exactly once: the real single-framer positive control', () => {
+    const calls = parsedFile(path.join(REPO, 'server/src/coord/landingJournalPolicy.ts')).calls.filter((c) => c.name === 'splitJournalRecords');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('the queries are not over nothing: the kernel defines the pieces, and the five writers call appendThenApply', () => {
     const kernel = parsedFile(path.join(REPO, 'server/src/journalKernel.ts'));
     expect(kernel.symbols.map((x) => x.name)).toEqual(expect.arrayContaining(['maxJournalEpoch', 'journalFloor', 'appendThenApply']));
     const calls = parsedFile(path.join(REPO, 'server/src/coord/store.ts')).calls.filter((c) => c.name === 'appendThenApply');
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(5);
+    expect(appendThenApplyOwners()).toEqual(['CoordStore.allocateDeviations', 'CoordStore.setAccountPools', 'CoordStore.setCollectLane', 'CoordStore.setIntent',
+      'CoordStore.writeLandingAuthority']);
   });
 });

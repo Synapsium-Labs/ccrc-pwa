@@ -10,8 +10,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyReply } from 'fastify';
-import { GENERIC_REFUSALS, LINEAR_PROXY_REFUSALS, REFUSAL_STATUS, ROUTE_REFUSALS, type RouteRefusal } from '../../shared/refusal.js';
+import { ADVANCE_REJECT_STATUS, GENERIC_REFUSALS, LANDING_REFUSAL_STATUS, LINEAR_PROXY_REFUSALS, PROJECT_ADD_REFUSALS, REFUSAL_STATUS, ROUTE_REFUSALS, type RouteRefusal } from '../../shared/refusal.js';
 import { CLAIM_REFUSALS } from '../../shared/box-token.js';
+import { ACCOUNT_ROUTE_REFUSALS } from '../../shared/api.js';
+import { LANDING_INFRASTRUCTURE_CODES, LANDING_MUTATION_CODES } from '../../shared/landingLine.js';
 import { refuseRoute } from '../src/refuse.js';
 import { addedLines, mergeBaseDiff, mergeBaseText, removedLines } from './mergeBase.js';
 import { parsedFile } from './scan/symbols.js';
@@ -460,5 +462,49 @@ describe('the Settings add\'s word (#1444, spec §10.1; plan task LK11)', () => 
     expect(GENERIC_REFUSALS as readonly string[]).toContain('workspace-exists');
     const routes = readFileSync(path.join(SRC, 'linear', 'routes.ts'), 'utf8');
     expect([...routes.matchAll(HELPER_WORD)].map((m) => m[1])).toContain('workspace-exists');
+  });
+});
+
+describe('the project add\'s words (add-project spec 2026-11-04 §4)', () => {
+  it('each is a route refusal at its chosen status, a typed group rather than GenericRefusals', () => {
+    expect(Object.fromEntries(PROJECT_ADD_REFUSALS.map((w) => [w, REFUSAL_STATUS[w]])))
+      .toEqual({ 'bad-source': 400, 'project-exists': 409, 'outcome-unknown': 502 });
+    for (const w of PROJECT_ADD_REFUSALS) expect(GENERIC_REFUSALS as readonly string[]).not.toContain(w);
+    // `outcome-unknown` is the account routes' word too (`ACCOUNT_ROUTE_REFUSALS`, `shared/api.ts`): one meaning, one row.
+    expect(ACCOUNT_ROUTE_REFUSALS as readonly string[]).toContain('outcome-unknown');
+    // The two words it reuses keep their one row elsewhere in the table.
+    expect([REFUSAL_STATUS['bad-request'], REFUSAL_STATUS['bad-project'], REFUSAL_STATUS.unsupported]).toEqual([400, 400, 501]);
+  });
+});
+
+describe("the landing line's words (landing order wave 5f, shared contract §5)", () => {
+  const INFRA = ['landing-journal-unavailable', 'landing-journal-unreadable', 'landing-journal-invalid', 'landing-journal-missing',
+    'landing-journal-cursor', 'landing-journal-changed', 'landing-journal-durability', 'landing-journal-append', 'landing-db-unavailable',
+    'landing-db-apply', 'landing-db-commit', 'landing-fenced', 'landing-projection-unreadable'] as const;
+  const MUTATION: Record<string, number> = { 'landing-entry-exists': 409, 'landing-entry-missing': 404, 'landing-after-missing': 409,
+    'landing-after-cross-project': 409, 'landing-cycle': 409, 'landing-dependencies-unreadable': 503, 'landing-recovery-unresolved': 409,
+    'landing-identity-conflict': 409, 'landing-id-overflow': 409, 'landing-sequence-overflow': 409 };
+  it('every infrastructure word is 503 and each mutation word has its one status, in one submap', () => {
+    for (const w of INFRA) expect(LANDING_REFUSAL_STATUS[w], w).toBe(503);
+    for (const [w, status] of Object.entries(MUTATION)) expect(LANDING_REFUSAL_STATUS[w as keyof typeof LANDING_REFUSAL_STATUS], w).toBe(status);
+    expect(Object.keys(LANDING_REFUSAL_STATUS).sort()).toEqual([...INFRA, ...Object.keys(MUTATION)].sort());
+    // the L0 runtime lists (wire totality) name exactly the submap's words, each family on its own side
+    expect([...LANDING_INFRASTRUCTURE_CODES].sort()).toEqual([...INFRA].sort());
+    expect([...LANDING_MUTATION_CODES].sort()).toEqual(Object.keys(MUTATION).sort());
+  });
+  it('the submap is spread into both status tables, with the same status', () => {
+    for (const [w, status] of Object.entries(LANDING_REFUSAL_STATUS)) {
+      expect(REFUSAL_STATUS[w as RouteRefusal], w).toBe(status);
+      expect(ADVANCE_REJECT_STATUS[w as keyof typeof ADVANCE_REJECT_STATUS], w).toBe(status);
+    }
+    expect(ROUTE_REFUSALS).toEqual(expect.arrayContaining(Object.keys(LANDING_REFUSAL_STATUS) as RouteRefusal[]));
+  });
+  it('refuseRoute answers a landing word at its status and keeps recovery, mayApply and invalid beside it', () => {
+    const sent: { code?: number; body?: unknown } = {};
+    const reply = { code: (n: number) => { sent.code = n; return reply; }, send: (b: unknown) => { sent.body = b; return reply; } };
+    refuseRoute(reply as unknown as FastifyReply, 'landing-db-commit', { recovery: 'replay', mayApply: true });
+    expect(sent).toEqual({ code: 503, body: { ok: false, error: 'landing-db-commit', recovery: 'replay', mayApply: true } });
+    refuseRoute(reply as unknown as FastifyReply, 'landing-journal-invalid', { recovery: 'replay', invalid: { reason: 'torn', record: 2 } });
+    expect(sent.body).toEqual({ ok: false, error: 'landing-journal-invalid', recovery: 'replay', invalid: { reason: 'torn', record: 2 } });
   });
 });

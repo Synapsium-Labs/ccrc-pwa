@@ -73,7 +73,9 @@ describe('the landing line’s tables are one new entry that seeds nothing (land
       ['id','INTEGER',0,null,1], ['project','TEXT',1,null,0], ['pr','INTEGER',1,null,0], ['pinnedSha','TEXT',1,null,0],
       ['handoffCommit','TEXT',1,null,0], ['runId','INTEGER',0,null,0], ['state','TEXT',1,null,0], ['baseSha','TEXT',0,null,0],
       ['ejectionKind','TEXT',0,null,0], ['ejections','INTEGER',1,'0',0], ['afterIds','TEXT',1,"'[]'",0],
-      ['fixesMain','INTEGER',1,'0',0], ['setBy','TEXT',1,null,0], ['detail','TEXT',0,null,0], ['pinnedAt','INTEGER',1,null,0]]);
+      ['fixesMain','INTEGER',1,'0',0], ['setBy','TEXT',1,null,0], ['detail','TEXT',0,null,0], ['pinnedAt','INTEGER',1,null,0],
+      // 5f's migration (landing-journal-migration.test.ts) appends this one column; 5e's entry is untouched.
+      ['quarantineKind','TEXT',0,'NULL',0]]);
     expect(projCols).toEqual([['project','TEXT',1,null,1], ['operatorPaused','INTEGER',1,'0',0], ['mainRedHold','INTEGER',1,'0',0]]);
     db.close();
   });

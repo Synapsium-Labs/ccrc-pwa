@@ -444,6 +444,11 @@ export const DOCS_HEAD_TEXT = {
   exportPlainView: 'Export (plain view)',
   exportBusy: 'Export: {state}',
   exportPlainShown: 'Showing the plain view, which Export saves.',
+  exportPlainHint: 'Export saves the plain view: its button turns the reader off on this page first.',
+  shareBusy: 'Share: {state}',
+  more: 'Page details',
+  moreNever: 'Page details (never fetched)',
+  moreFailed: 'Page details (freshness problem)',
   freshNone: 'no origin',
   freshNever: 'never fetched ↻',
   freshOk: 'fetched {age} ↻',
@@ -670,7 +675,6 @@ export const EXPORT_PLAIN_SENTENCE: Record<ExportPlain, string> = {
   'too-large': 'highlighted output too large',
   'failed': 'highlighting failed',
   'no-worker': 'this browser has no highlight worker',
-  'part1-bounds': 'refused by the page highlight bounds',
 };
 
 /** What a disabled Export reads, by why it waits (spec 4.17's "When it is offered"; refinement (j)). */

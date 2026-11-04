@@ -6,6 +6,7 @@
 // the path the loop took.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
@@ -19,7 +20,7 @@ const UUID = 'deadbeef-0000-4000-8000-000000000000';
  *  under test is a `while :` and spawnSync's own timeout is what turns a loop that stops
  *  exiting into one failed case instead of a hung suite. */
 const runSupervise = (snippet: string): { code: number; stderr: string } => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
     env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
   });

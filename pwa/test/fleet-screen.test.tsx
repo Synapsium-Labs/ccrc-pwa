@@ -3476,13 +3476,18 @@ describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => 
     // Under coord-a, activities first; then the offline group (worktrees, then activities); then the unowned group.
     expect(cells).toEqual([
       ['agent', 'reword', 'unmeasured'],
-      ['agent worktree', 'agent-a2', 'running', 'unmeasured'],
-      ['worktree', 'agent-a1', 'unmeasured', 'unmeasured'],
-      ['agent', 'regroup', 'running'],
+      ['agent worktree', 'agent-a2', 'not confirmed', 'unmeasured'],
+      ['worktree', 'agent-a1', 'unmeasured', 'unmeasured', 'from coord-a'],
+      ['agent', 'regroup', 'not confirmed', 'from coord-a'],
       ['u-future', 'no owner found', 'unmeasured'],
     ]);
     expect(chips).toEqual([[], [], ['inferred', `Bash call …${TOOL_USE_ID.slice(-8)}`], [], []]);
     expect(card().textContent).not.toContain('unrecognised');
+    // No delegation row, toggle or chip says running in its title either: the page's titles, read off the DOM.
+    const titles = [...card().querySelectorAll('.proj-work[title], .proj-group-toggle[title], .proj-children-toggle[title], .sess-meta-chip[title]')]
+      .map((e) => e.getAttribute('title') ?? '');
+    expect(titles.length).toBeGreaterThan(0);
+    for (const t of titles) expect(t, t).not.toMatch(/running/i);
   });
 
   it('a measured frame marks the list measured, and counts an activity no card can draw', () => {
@@ -3497,5 +3502,159 @@ describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => 
     const list = document.querySelector('.fleet-list');
     expect(list?.getAttribute('data-delegation')).toBe('measured');
     expect(list?.getAttribute('data-delegation-unplaced')).toBe('1');
+  });
+
+  const cardIn = (project: string): HTMLElement => {
+    const c = [...document.querySelectorAll<HTMLElement>('.proj-card')].find((el) => el.querySelector('.proj-card-name')?.textContent === project);
+    if (c === undefined) throw new Error(`no ${project} card`);
+    return c;
+  };
+  const cellsOf = (root: Element): (string | null)[][] =>
+    [...root.querySelectorAll('.proj-work')].map((r) => [...r.querySelectorAll('.proj-work-part')].map((p) => p.textContent));
+
+  it('VIS-U1: an entry whose session is not listed is drawn once, in a closed region after the cards, from its raw id', () => {
+    const store = makeLiveStore();
+    renderFleet(<FleetScreen store={store} />);
+    act(() => {
+      const s = latestFleetSocket();
+      s.open();
+      s.message({ type: 'fleet', sessions: [session({ id: 'coord-a', project: 'project-a', workdir: '/work/project-a', status: 'busy', bucket: 'working' })] });
+      s.message({ type: 'delegation', delegation: frame({ activities: [
+        activity({ activityId: 'a-gone', parentId: 'coord-gone', displayName: 'map the tree', liveness: 'stale' }),
+        activity({ activityId: 'a-here', parentId: 'coord-a', displayName: 'read the plan' }),
+      ] }) });
+    });
+    const list = document.querySelector<HTMLElement>('.fleet-list')!;
+    const toggle = within(list).getByRole('button', { name: 'Delegated work, session not listed (1)' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.hasAttribute('aria-controls')).toBe(false);
+    expect(within(list).queryByText('map the tree')).toBeNull();
+    const cards = list.querySelectorAll('.proj-card');
+    expect(cards[cards.length - 1]!.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING, 'after every card').not.toBe(0);
+    // A list region, not a card: never inside one, and its wrapper is a direct child of the list.
+    expect(toggle.closest('.proj-card'), 'inside no card').toBeNull();
+    expect(toggle.closest('.fleet-unlisted')?.parentElement, 'a child of the list').toBe(list);
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const body = document.getElementById(toggle.getAttribute('aria-controls')!);
+    if (body === null) throw new Error('aria-controls names no element');
+    expect(cellsOf(body)).toEqual([['agent', 'map the tree', 'stop not seen', 'from coord-gone']]);
+    expect(within(list).getAllByText('map the tree')).toHaveLength(1);
+    expect(Number(list.getAttribute('data-delegation-unplaced'))).toBe(cellsOf(body).length);
+    // Spec §9, "No running claim": no delegation row, toggle or chip on the list says running in its title.
+    const titles = [...list.querySelectorAll('.proj-work[title], .proj-group-toggle[title], .proj-children-toggle[title], .sess-meta-chip[title]')]
+      .map((e) => e.getAttribute('title') ?? '');
+    expect(titles.length).toBeGreaterThan(1);
+    for (const t of titles) expect(t, t).not.toMatch(/running/i);
+  });
+
+  it('VIS-U2: no region when every parent is listed, nor once the frame is withdrawn', () => {
+    const store = makeLiveStore();
+    renderFleet(<FleetScreen store={store} />);
+    act(() => {
+      const s = latestFleetSocket();
+      s.open();
+      s.message({ type: 'fleet', sessions: [session({ id: 'coord-a', project: 'project-a', status: 'busy', bucket: 'working' })] });
+      s.message({ type: 'delegation', delegation: frame({ activities: [activity({ parentId: 'coord-a' })] }) });
+    });
+    const list = (): HTMLElement => document.querySelector<HTMLElement>('.fleet-list')!;
+    expect(within(list()).queryByRole('button', { name: /session not listed/ })).toBeNull();
+    expect(list().hasAttribute('data-delegation-unplaced')).toBe(false);
+    act(() => latestFleetSocket().message({ type: 'delegation', delegation: frame({ activities: [activity({ parentId: 'coord-gone' })] }) }));
+    expect(within(list()).getByRole('button', { name: 'Delegated work, session not listed (1)' })).toBeTruthy();
+    act(() => latestFleetSocket().message({ type: 'delegation', delegation: null }));
+    expect(list().getAttribute('data-delegation')).toBe('unavailable');
+    expect(within(list()).queryByRole('button', { name: /session not listed/ })).toBeNull();
+    expect(list().hasAttribute('data-delegation-unplaced')).toBe(false);
+  });
+
+  it('VIS-U3: an archived or released parent is still listed: its entries stay in its card\'s offline group, from its label, never in the region', () => {
+    const store = makeLiveStore();
+    renderFleet(<FleetScreen store={store} />);
+    act(() => {
+      const s = latestFleetSocket();
+      s.open();
+      s.message({ type: 'fleet', sessions: [
+        session({ id: 'coord-a', project: 'project-a', workdir: '/work/project-a', status: 'busy', bucket: 'working' }),
+        session({ id: 'coord-arch', project: 'project-a', workdir: '/work/project-a-old', name: 'old coordinator', archivedAt: Date.now() - 60 * MIN }),
+        session({ id: 'w-rel', project: 'project-a', workspace: 'w-rel', workdir: '/work/project-a/.ws/w-rel', name: 'released worker',
+          releasedFrom: { runId: 9, program: 'port-api', programTitle: null, claimedBy: 'coord-a', closedAt: Date.now() - MIN, child: true } }),
+      ] });
+      s.message({ type: 'delegation', delegation: frame({ activities: [
+        activity({ activityId: 'a-arch', parentId: 'coord-arch', displayName: 'old work' }),
+        activity({ activityId: 'a-rel', parentId: 'w-rel', displayName: 'released work' }),
+      ] }) });
+    });
+    const list = document.querySelector<HTMLElement>('.fleet-list')!;
+    expect(list.hasAttribute('data-delegation-unplaced')).toBe(false);
+    expect(within(list).queryByRole('button', { name: /session not listed/ })).toBeNull();
+    fireEvent.click(within(cardIn('project-a')).getByRole('button', { name: /Offline coordinator \(2\)/ }));
+    expect(cellsOf(cardIn('project-a'))).toEqual([
+      ['agent', 'old work', 'not confirmed', 'from old coordinator'],
+      // Its label, never its raw id (review 1424 e): the row names the listed session as the list names it.
+      ['agent', 'released work', 'not confirmed', 'from released worker'],
+    ]);
+  });
+
+  it('VIS-U5 (review 1424 f): a malformed member, no string openedAt, is drawn in the region and nothing throws', () => {
+    const store = makeLiveStore();
+    renderFleet(<FleetScreen store={store} />);
+    act(() => {
+      const s = latestFleetSocket();
+      s.open();
+      s.message({ type: 'fleet', sessions: [session({ id: 'coord-a', project: 'project-a', status: 'busy', bucket: 'working' })] });
+      s.message({ type: 'delegation', delegation: frame({ activities: [
+        activity({ activityId: 'a-ok', parentId: 'coord-gone', displayName: 'map the tree' }),
+        activity({ activityId: 'a-bad', parentId: 'coord-gone', displayName: 'no opening time', openedAt: undefined as never }),
+      ] }) });
+    });
+    const list = document.querySelector<HTMLElement>('.fleet-list')!;
+    fireEvent.click(within(list).getByRole('button', { name: 'Delegated work, session not listed (2)' }));
+    const body = document.getElementById(within(list).getByRole('button', { name: /session not listed/ }).getAttribute('aria-controls')!)!;
+    expect(cellsOf(body)).toEqual([
+      ['agent', 'no opening time', 'not confirmed', 'from coord-gone'], ['agent', 'map the tree', 'not confirmed', 'from coord-gone'],
+    ]);
+  });
+
+  it('VIS-U4: an unchanged frame re-sent changes no word, and a parent that leaves the fleet takes its entries to the region', () => {
+    const store = makeLiveStore();
+    renderFleet(<FleetScreen store={store} />);
+    const coordA = session({ id: 'coord-a', project: 'project-a', workdir: '/work/project-a', status: 'busy', bucket: 'working' });
+    const coordB = session({ id: 'coord-b', project: 'project-a', workdir: '/work/project-a-b', status: 'busy', bucket: 'working' });
+    const w = frame({ activities: [
+      activity({ activityId: 'a-gone', parentId: 'coord-gone', displayName: 'map the tree', liveness: 'stale' }),
+      activity({ activityId: 'a-b', parentId: 'coord-b', displayName: 'read the plan' }),
+    ] });
+    act(() => {
+      const s = latestFleetSocket();
+      s.open();
+      s.message({ type: 'fleet', sessions: [coordA, coordB] });
+      s.message({ type: 'delegation', delegation: w });
+    });
+    const list = (): HTMLElement => document.querySelector<HTMLElement>('.fleet-list')!;
+    const toggle = (): HTMLElement => within(list()).getByRole('button', { name: /^Delegated work, session not listed/ });
+    const region = (): (string | null)[][] => {
+      const body = document.getElementById(toggle().getAttribute('aria-controls') ?? '');
+      if (body === null) throw new Error('aria-controls names no element');
+      return cellsOf(body);
+    };
+    fireEvent.click(toggle());
+    expect(region()).toEqual([['agent', 'map the tree', 'stop not seen', 'from coord-gone']]);
+    const before = list().innerHTML;
+    const banners = document.querySelectorAll('.banner, .halt-banner').length;
+    // The same frame again: the same words, the region still open, and no banner.
+    act(() => latestFleetSocket().message({ type: 'delegation', delegation: w }));
+    expect(list().innerHTML).toBe(before);
+    expect(toggle().getAttribute('aria-expanded')).toBe('true');
+    expect(document.querySelectorAll('.banner, .halt-banner')).toHaveLength(banners);
+    // coord-b leaves the fleet list: its entry leaves its card and joins the region, from its raw id, drawn once.
+    act(() => latestFleetSocket().message({ type: 'fleet', sessions: [coordA] }));
+    expect(toggle().textContent).toContain('Delegated work, session not listed (2)');
+    expect(region()).toEqual([
+      ['agent', 'read the plan', 'not confirmed', 'from coord-b'],
+      ['agent', 'map the tree', 'stop not seen', 'from coord-gone'],
+    ]);
+    expect(within(list()).getAllByText('read the plan')).toHaveLength(1);
+    expect(list().getAttribute('data-delegation-unplaced')).toBe('2');
   });
 });

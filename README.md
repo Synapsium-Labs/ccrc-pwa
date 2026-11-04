@@ -603,7 +603,7 @@ under "Attention, notifications and answering" below.
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
 `skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111),
-`timeout`, `model-default`, `history`, `transcripts`, and `jq_regex` (no session hook runs there).
+`timeout`, `model-default`, `history`, `transcripts`, `transcript_work`, and `jq_regex` (no session hook runs there).
 
 | checks | what they measure |
 |---|---|
@@ -621,6 +621,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `codex` | for each `exec.kind: "codex"` lane: the five GPT-lane executables in `~/.local/bin` against the shipped tree; the isolated runtime (`ccgpt-runtime check`, which trusts the build's stamp and compares the installed LiteLLM patch with `patch-source`); the roster row and its ports; `exec.authDir`, then its `auth.json` through the auth library's non-secret status (signed in or not, `needs-signin`, `config-error`, another family's or an unreadable file) and the file's owner and mode; `lane.json` against the roster row and the class registry; a `codex` class registry and its haiku-class probe model; the rendered LiteLLM config against the catalogue; the two tiers (half up, foreign, unmeasurable, down under a live session, or running and not proven to run the installed bytes); and its usage timer and `~/.cc-limits` row. Lane state left under `~/.ccrc/codex/` for an id no longer `codex` is a WARN |
 | `pools`, `memory`, `routing`, `models` | project pool tags; one memory store per project; lane routing; model-catalogue freshness |
 | `transcripts` | every registry row's uuid against its transcript, read by the one `continued-in` rule `ccd` and the server share: a WARN names the sessions reading a transcript Claude Code has superseded (a supervised one clears on its next supervise tick; a stopped or archived one is followed when it is next resumed) and, apart, a session whose marker names a successor never written (it clears at that job's first line, or at the first prompt the session answers on its own transcript; the row's wrapper is named, because `<wrapper> agents` lists only that account's jobs); rows it could not measure (at neither direct spelling, unreadable, or a registry row it cannot read) are counted apart inside the PASS, never claimed clean; a FAIL when `~/.cc-sessions` is not a readable, searchable directory |
+| `transcript_work` | work kept inside Claude Code's transcript folders: every roster config dir's `projects/<slug>/` entries, and each session directory's, that are not the shapes Claude Code writes (a `<uuid>.jsonl` transcript, a `<uuid>/` session directory, `memory`; inside a session directory `subagents/`, `tool-results/`, `workflows/`), counted and sized as `du -sb` sizes them; a WARN over 1 GiB in all or 256 MiB in one entry names the five largest, and a walk past its 20 s bound, or one that cannot read a directory, is unmeasured, never a PASS. It deletes nothing. `GET /api/fleet/health`'s `disk.transcriptWork` carries the agent's count of the same tree, shown in Settings › Automation (D-7898) |
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` on `PATH` resolving to that engine |
 | `history` | on a `fleet` or `both` box with the history sweep installed (SKIP elsewhere): the last tick and the index lag, the cap and free space, the journal, the export's due and overdue counts and a recovery in progress, each WARN and FAIL with its remedy, all read from `ccrc history status --json` |
@@ -1468,8 +1469,8 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the fifty-eight machine lanes the
-fleet host reaches (thirty-four box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the sixty machine lanes the
+fleet host reaches (thirty-six box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
 the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
@@ -1485,7 +1486,10 @@ cookie **or** the token, which is how a coordinator reads its own wave ledger fr
 the fleet host), `POST /api/token/claim` (the box token's claim door, which
 authenticates by a single-use code the server issued over the agent link), the
 login and passkey-assertion doors themselves,
-`GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
+`GET /api/auth/status` (with a minimized anonymous body), the reader lab's probe
+`/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request: its answer never depends on the nonce,
+the run or the name, and it only counts arrivals for a lab run someone opened, a signed-in session on an armed box and
+anyone who reaches the port on a dark one), and `GET /*`, the
 static bundle a browser has to
 download before it can show a login screen. Enrolling a passkey is **not**
 exempt — it requires already being signed in, which is what makes
@@ -3393,6 +3397,13 @@ would land (`New workspace on <project> — <account>, N% free`) or why nothing 
 beside `Runs ·` re-forecasts every card for one model class, and each card's **+** then asks for that class;
 **Coordinator row**, the default, is the request that names no class.
 
+**Add project**, at the foot of the project list and in the first-run panel, creates a project there:
+**From GitHub** (`owner/repo` or a github.com URL; the name defaults to the repo's) or **Empty**. It is
+`POST /api/projects` → `ccd project-add`, which clones or `git init`s a NEW directory under `~/projects` on the
+fleet box, never replacing an existing name; a private repository needs the fleet box user's own git credentials.
+An empty project takes sessions in its main checkout at once, but no workspace until it has a GitHub `origin`
+(`ws-add` needs `origin/HEAD`).
+
 ### A session (`/s/<id>`)
 
 **The header** names the session (a branch name the model writes types itself in — "The branch takes the name
@@ -3751,7 +3762,7 @@ general remote-shell:
   anything after it is unconstrained: `pr-state` needs `--session` or
   `--project`; `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
   `ws-hold`/`ws-release`/`ws-rename`/`ws-title`/`route`/`win-size` need `--session`;
-  `coord-pause` and `reclaim-pause` need `--state` and `project-pool` needs `--project`; and
+  `coord-pause` and `reclaim-pause` need `--state`, `project-pool` needs `--project` and `project-add` needs `--name`; and
   `ws-reap` and `ws-reclaim` need `--expect` — a load-bearing confirmation
   token, so an unconfirmed reap or reclaim can never cross the wire at all.
   `ws-rename`'s flag guards a different hazard: the verb destroys nothing, but it is the first whose argv the server builds
@@ -3764,7 +3775,7 @@ general remote-shell:
   `UNGRANTABLE_VERBS` and `REQUIRED_VERB_FLAG` (`agent/src/whitelist.ts`)
   make a grant of `ws-rm` or `ws-gc`, an empty prefix, or a gated verb
   (`ws-reap`, `ws-reclaim`, `ws-rename`, `coord-pause`, `reclaim-pause`,
-  `project-pool`, `route`, `win-size`) without its flag a type error, and
+  `project-pool`, `project-add`, `route`, `win-size`) without its flag a type error, and
   `auditExecWhitelist` re-checks the same rules when the agent loads —
   together with any command key other than `tmux` and `ccd`, such as one of
   `FORBIDDEN_COMMANDS` (`gh`, `git`, the shells and interpreters, `ssh`,
@@ -3945,7 +3956,7 @@ token from `~/.cc-secrets/ccrc-mail.token` (absent, `no-token`), and the route
 from a fixed table (`ROUTES`, pinned closed by `ccrc-api-closed.test.ts`):
 `runs list|open|dispatch|advance|close|items|items-list|signals|route`,
 `mail list|send|fetch|ack`, `peers list`, `lifecycle list`,
-`claims list|take|release`, `ledger list|allocate`, `landing show`,
+`claims list|take|release`, `ledger list|allocate`, `landing show|entries|order`,
 `asks list|answer|release` and `feed list` — plus `whoami`, which reads this session's `{id, uuid}` from its
 tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
@@ -5383,7 +5394,20 @@ is the coordinator's read of one project's line before it enqueues: every entry 
 pinned when the run entered `merging`, which the coordinator requires to equal the head it binds and passes to
 `--match-head-commit`), its `handoffCommit`, its state and its ejections — the
 operator pause and the main-red hold, and the order the server's decider computes on that read; the line is paused
-while either flag is set. A project the line has never seen answers no entries and both flags off.
+while either flag is set. A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
+order edges, `fixesMain` and setter attribution) is journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
+place (no backup copies it) and which the server replays before it serves anything. Replay never fabricates a measured pin or a
+current run association: a project whose projection is missing or whose binding evidence contradicts is reported as unmeasured
+and held, and invalid history refuses startup. An uncertain journal append or landing database commit fences every landing read
+and write, an advance's pin and its retreat from `merging` included: the failing call answers 503 with `mayApply: true` (the write
+may or may not have reached the line) and a `recovery` word, and every later one answers `landing-fenced` with that word. A `replay`
+fence and a `restart` fence alike clear only when the server restarts: the replay is the only thing that reopens the line, and only
+the boot calls it, so there is no retry timer and nothing reopens the line while the server runs; a restart whose replay refuses
+does not start. A retreat refused `landing-projection-unreadable` (its pin names another head than the
+episode's and a retained field no longer reads) is not cured by a restart, because replay never writes a projection: the run
+stays at `merging` and goes to the operator, and this build has no repair route for it. `POST /api/landing/entries` and `POST /api/landing/order` (box token and measured
+`byId`/`byUuid` attribution, `ccrc-api landing entries|order --json -`) record an entry and its order edges; the attributed `byId` is
+the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an explicit `[]` or `false` clears it.
 
 **The bypass deny (landing-order wave 2b).** A second question, asked of every session after the worker
 deny's and with its text unchanged, closes the two ways past the queue that the worker deny leaves open:
@@ -6578,10 +6602,18 @@ pressure-kill notifications in `direct_pressure_kills` (target 0 after the spawn
 pane-scope OOM stops in `reap_class_oom`, and NOW's fresh sweep record in `inert_scopes`. Direct kills are
 unique transcript-UUID/task-ID pairs, deduplicated across selected copies. The default reads the largest
 discovered main transcript per UUID; `--all-copies` includes divergent smaller copies but still counts
-one task once. Discovery can miss unreadable roots/stat failures, excludes subagent transcripts and does
-not read notifications delivered mid-turn as queued-command attachment rows;
-partial reads and absent input are reported, never claimed as a clean zero. Notification times are
-observations at delivery, not exact kill instants.
+one task once. Notifications are read from user text rows, from queued-command attachment prompts (a
+string or text parts) and from queue enqueue contents (a string); queue remove and dequeue rows are not
+read, and a queued payload of any other shape that holds a notification is unmeasured, never skipped,
+except a payload that cannot be dumped, which counts in `malformed_rows` instead.
+An unmeasured notification counts per transcript UUID and text (the readable text, or an unreadable payload's
+dump), across sources and copies; the same notice in different payload shapes, or with different trailing
+text, can count again.
+Discovery can miss unreadable roots/stat failures and excludes subagent transcripts;
+partial reads and absent input are reported, never claimed as a clean zero. Each row is timed by its own
+stamp: user and attachment rows are observations at delivery, enqueue rows at queue time, not exact kill
+instants, so a notice queued before a window's end and delivered after it counts in both windows.
+`notification_sources` counts what each source contributed.
 
 The frozen baseline B is the pane-OOM reap-class count with the reap still enabled. A read-only
 `--reap-baseline B` comparison requires stage 6 alone and an explicit interval of seven elapsed days,
@@ -7052,7 +7084,8 @@ you need to reason about one.*
   launcher starts a reclaim", under Fleet coordination), plus the libraries the
   body pins and loads at its foot, `lib/disk-retention.sh` (the fleet
   disk-retention verbs; installed first, at `~/.local/libexec/ccrc/lib/`, #1279) and
-  `lib/train-proof.sh` (the train proof of a PR a merge train landed, beside it, D-7463); `ccrc`, the box
+  `lib/train-proof.sh` (the train proof of a PR a merge train landed, beside it, D-7463) and
+  `lib/delegation-lease.sh` (the delegation broker's lease carrier and `ws-lease-mark`, beside them); `ccrc`, the box
   lifecycle CLI, with the files it sources or execs (`ccrc-doctor-checks`,
   `ccrc-wrapper-shape`, `ccrc-adopt`); `session-hook.sh` (the Claude Code hook that reports each
   session's state), `install-session-hooks.sh` (the idempotent installer that
@@ -7238,6 +7271,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-collect --expect <token> --session <id>` | the server's removal of an orphaned, witnessed child TEMP ROOT, by quarantine rename — never run by hand or by a session; its audit is `ws-audit --session <id> --collect`, and the server's collector lane composes it only once the operator has armed it: in Settings (Temp root collector) for the connected fleet node, or by `$REG/collect-lane-live` until that file's retirement is recorded |
 | `ws-rm [--reason <text>] <id>` · `ws-gc [--prune | --fast]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it; `--fast` lists the same rows without measuring sizes, archived rows showing their archive manifest's size, and never combines with `--prune`) |
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
+| `project-add --name <n> (--url <github-url> \| --empty)` | add a NEW project under the projects root: clone `https://github.com/<o>/<r>.git` or `git@github.com:<o>/<r>.git` (no prompt: `GIT_TERMINAL_PROMPT=0`, and `ssh -o BatchMode=yes` only when the box set none of `GIT_SSH_COMMAND`, `GIT_SSH` and `core.sshCommand`; git is bounded at 220 s, so an overrunning clone dies inside ccd), or `git init` an empty one on `main` with no commit; refuses a name that exists in any form, builds in a dot-named temp directory and removes only that on failure, a timeout included |
 | `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
 | `pr-open --session <id> …` · `pr-state --session <id>\|--project <p> [--pr <n>]` | open the workspace's PR — the one PR write; read PR state, per workspace or one PR by number |
 | `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane on the lane's own tmux server (`-L ccrc-auth-<id>`), on the box (the agent grants no `account-pane`) |
@@ -7815,6 +7849,7 @@ incomplete outright, so no flip ever returns to it:
 restore() { cp -a "$1" "$2.restore" && mv -f "$2.restore" "$2"; }
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-disk-retention.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-disk-retention.sh ~/.local/libexec/ccrc/lib/disk-retention.sh   # the body's library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ~/.local/libexec/ccrc/lib/train-proof.sh   # its second library, when the backup has one
+[ ! -f ~/ccrc-backups/<ts>/ccd-lib-delegation-lease.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-delegation-lease.sh ~/.local/libexec/ccrc/lib/delegation-lease.sh   # its third library, when the backup has one
 restore ~/ccrc-backups/<ts>/ccd-body ~/.local/libexec/ccrc/ccd
 restore ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
 restore ~/ccrc-backups/<ts>/notify.sh ~/.cc-sessions/notify.sh
@@ -8137,9 +8172,10 @@ These conventions carry more weight here than style:
   renders the digest of the library it publishes into the installed body BEFORE it stamps it, so
   the stamp covers the pin. Editing the library needs no restamp. The library must end in exactly
   one newline and carry no NUL byte (the body hashes it as bash reads it), or the install refuses.
-  `ccd/lib/train-proof.sh` (the train proof, D-7463) is the second library and is treated the same
-  way, its pin `__CCD_LIB_TRAIN_SHA256=stamp-at-install`; the body reads and checks both before it
-  evaluates either.
+  `ccd/lib/train-proof.sh` (the train proof, D-7463) is the second library and
+  `ccd/lib/delegation-lease.sh` (the delegation lease carrier, wave 5) the third; each is treated the
+  same way, their pins `__CCD_LIB_TRAIN_SHA256=stamp-at-install` and `__CCD_LIB_LEASE_SHA256=stamp-at-install`;
+  the body reads and checks all three before it evaluates any.
   `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
   after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
   `bash ccd/ccrc restamp ccd/session-hook.sh`; `hook-helpers-generated.test.ts` reds when the

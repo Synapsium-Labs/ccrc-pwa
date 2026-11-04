@@ -179,8 +179,11 @@ export function fleetRowsUsable(
  *
  * Only what was MEASURED is kept (review 1375, F2): a probe that could not answer keeps its row for that request, as
  * D-5967 says, but its verdict is not kept, and a walk with such a slot is not kept either. Each walk and probe is
- * stamped when it STARTS, and its result replaces a kept one only over an older stamp (F3), so an older listing that
- * finishes last never overwrites a newer one; freshness is measured from that start.
+ * stamped when it STARTS, and its result replaces a kept one only over an older stamp (F3), so, while the kept walk is
+ * fresh, an older listing that finishes last never overwrites a newer one; freshness is measured from that start. An
+ * entry whose age reads negative (the clock stepped back past its stamp) is dropped the first time it is asked for
+ * (review 1383 F2); one never asked for while the clock is behind it is served again once the clock reaches its stamp,
+ * the residual of a wall clock (`fleetRowsUsable` reads the same one).
  *
  * Kept on purpose, and said once:
  * - an entry under the root whose listing failed is left out of a kept walk as it is left out of today's one answer
@@ -190,6 +193,8 @@ export function fleetRowsUsable(
 export class ProjectWalkCache {
   private walk: { at: number; rows: readonly ProjectRow[] } | null = null;
   private readonly probes = new Map<string, { at: number; linked: boolean }>();
+  /** When `drop` last ran; a walk that STARTED at or before it is not kept (`keepWalk`). */
+  private droppedAt = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly now: () => number = () => Date.now(), private readonly ttlMs = PROJECT_WALK_TTL_MS) {}
 
@@ -198,8 +203,15 @@ export class ProjectWalkCache {
     return age >= 0 && age < this.ttlMs;
   }
 
-  /** The kept walk while it is fresh, else null. */
+  /** Whether an entry stamped `at` reads a negative age: the clock stepped back past its stamp. Such an entry is DROPPED
+   *  the first time it is asked for (review 1383 F2), so it cannot read fresh again once the clock reaches its stamp. */
+  private future(at: number): boolean {
+    return this.now() - at < 0;
+  }
+
+  /** The kept walk while it is fresh, else null; a kept walk whose age reads negative is dropped. */
   keptWalk(): readonly ProjectRow[] | null {
+    if (this.walk !== null && this.future(this.walk.at)) this.walk = null;
     return this.walk !== null && this.fresh(this.walk.at) ? this.walk.rows : null;
   }
 
@@ -212,12 +224,26 @@ export class ProjectWalkCache {
    *  is not fresh, a negative age after the clock stepped back included, is replaced whatever the new stamp, as the
    *  probes heal (review 1378, F4). */
   keepWalk(rows: readonly ProjectRow[], startedAt: number): void {
+    if (startedAt <= this.droppedAt && this.now() >= this.droppedAt) return;
     if (this.walk === null || !this.fresh(this.walk.at) || startedAt > this.walk.at) this.walk = { at: startedAt, rows };
   }
 
-  /** A workdir's kept verdict while it is fresh, else null. */
+  /**
+   * Forgets the kept walk, so the next request walks again: the project add (`POST /api/projects`) calls it once ccd has
+   * made a directory under the root, and the new project is listed by the next read rather than up to the TTL later.
+   * A walk already in flight STARTED before the directory existed, so it is not kept when it finishes either, unless
+   * the clock has since stepped back past the drop (the heal `keepWalk` has for a negative age). Probes are kept: they
+   * answer for registry workdirs, which an add does not change.
+   */
+  drop(): void {
+    this.walk = null;
+    this.droppedAt = this.now();
+  }
+
+  /** A workdir's kept verdict while it is fresh, else null; a kept verdict whose age reads negative is dropped. */
   keptProbe(workdir: string): boolean | null {
     const v = this.probes.get(workdir);
+    if (v !== undefined && this.future(v.at)) { this.probes.delete(workdir); return null; }
     return v !== undefined && this.fresh(v.at) ? v.linked : null;
   }
 

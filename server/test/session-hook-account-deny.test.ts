@@ -159,12 +159,26 @@ describe('the account arm denies on every session (D-6202)', () => {
       'cat "${HOME}"/.ccrc/operator-secrets/prog-a/x.secret', 'cat /srv/home/.ccrc/operator-secrets/prog-a/x.secret', 'cat ~/.ccrc//operator-secrets/prog-a/x.secret',
       'ls ~/.ccrc/operator-secrets', 'grep -r . ~/.ccrc/operator-secrets', 'cp ~/.ccrc/operator-secrets/prog-a/x.secret /tmp/k',
       'cd x && head ~/.ccrc/operator-secrets/prog-a/x.secret', 'ln -s /tmp/elsewhere ~/.ccrc/operator-secrets',
+      // A split-quote spelling (review 1426 F-B): the arm matches the text once quotes are stripped.
+      "cat ~/.ccrc/'operator'-secrets/prog-a/x.secret",
     ]) expect(fire(id, 'Bash', { command }, extra), command).not.toBeNull();
     for (const [tool, input] of [
       ['Read', { file_path: `${home}/.ccrc/operator-secrets/prog-a/x.secret` }], ['Read', { file_path: '~/.ccrc/./operator-secrets/prog-a/x.json' }],
       ['Grep', { pattern: 'x', path: '~/.ccrc/operator-secrets' }], ['Glob', { pattern: '~/.ccrc/operator-secrets/*/*.secret' }],
       ['Write', { file_path: '~/.ccrc/operator-secrets/prog-a/x.secret', content: 'y' }],
     ] as const) expect(fire(id, tool, input, extra), `${tool} ${JSON.stringify(input)}`).not.toBeNull();
+  });
+
+  it.each(CALLERS)('%s: a direct delete under the store is refused, whatever verb deletes it (the PL6 follow-up: the Remove door is the operator\'s)', (_c, id, extra) => {
+    for (const command of [
+      'rm ~/.ccrc/operator-secrets/prog-a/x.secret', 'rm -f "$HOME/.ccrc/operator-secrets/prog-a/x.json"', 'rm -rf ~/.ccrc/operator-secrets',
+      'rm -r $HOME/.ccrc/operator-secrets/prog-a', 'unlink ~/.ccrc/operator-secrets/prog-a/x.secret', 'shred -u ~/.ccrc/operator-secrets/prog-a/x.secret',
+      'find ~/.ccrc/operator-secrets -name "*.secret" -delete', 'mv ~/.ccrc/operator-secrets/prog-a/x.secret /tmp/x', 'rmdir ~/.ccrc/operator-secrets/prog-a',
+      ': > ~/.ccrc/operator-secrets/prog-a/x.secret', 'truncate -s 0 ~/.ccrc/operator-secrets/prog-a/x.secret',
+      'cd /tmp && rm -f ~/.ccrc/operator-secrets/prog-a/x.secret',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).not.toBeNull();
+    expect(fire(id, 'Write', { file_path: '~/.ccrc/operator-secrets/prog-a/x.secret', content: '' }, extra)).not.toBeNull();
+    expect(fire(id, 'Edit', { file_path: `${home}/.ccrc/operator-secrets/prog-a/x.json`, old_string: 'a', new_string: '' }, extra)).not.toBeNull();
   });
 
   it.each(CALLERS)('%s: a name that only begins like the store, and the store\'s source, stay open (plan PL6)', (_c, id, extra) => {

@@ -590,6 +590,31 @@ describe('the walk keeps its place while the operator stays on one item (fix rou
     expect(rows()).toEqual(['30', '32', '33']); // the combined list still, never prog-b's view alone
   });
 
+  // Carry C (D-7951), review 1408 F2(b): the column draws the list the strip names even when nothing else can tell it which: the
+  // open item has left its programme's list and its slug is no longer known (gone from the items and the cleared trail, no run
+  // and no Goals naming it), so the settled list falls back to the combined one while the strip keeps the programme's view.
+  it('the open item gone and its programme no longer known: the column keeps the programme\'s list the strip names', () => {
+    const store = rigOf([soon(30, { program: 'prog-b' }), soon(31)]);
+    open(store, `/waiting/31?from=${encodeURIComponent('programme:prog-a')}`);
+    expect(within(strip()).getByText('1 of 1')).toBeTruthy();
+    push(store, [soon(30, { program: 'prog-b' })]); // 31 withdrawn: on no list, in no trail, and prog-a is named nowhere now
+    expect(within(strip()).getByRole('button', { name: 'Back to prog-a' })).toBeTruthy();
+    const beside = screen.getByRole('complementary', { name: 'The list beside this item' });
+    expect(within(beside).queryAllByRole('button').filter((b) => b.hasAttribute('data-item'))).toEqual([]); // not prog-b's 30
+    expect(within(beside).getByText('Nothing needs you.')).toBeTruthy();
+  });
+
+  // Carry C (D-7951), review 1408 F3: with the item gone and its place kept, the region says the place alone, never "2 of 3, ".
+  it('the open item gone with its place kept: the position says the place alone, with no trailing comma', () => {
+    const store = rigOf([soon(10), soon(11), soon(12)]);
+    open(store, '/waiting/11');
+    const pos = within(strip()).getByRole('status');
+    expect(pos.textContent).toBe('2 of 3, Item 11');
+    push(store, [soon(10), soon(12)]); // 11 withdrawn: on no list and in no trail
+    expect(strip().querySelector('.wi-pos')!.textContent).toBe('2 of 3'); // the place is kept
+    expect(within(strip()).getByRole('status').textContent).toBe('2 of 3');
+  });
+
   it('the position is announced politely as it changes', () => {
     const store = rigOf([soon(10), soon(11)]);
     open(store, '/waiting/10');

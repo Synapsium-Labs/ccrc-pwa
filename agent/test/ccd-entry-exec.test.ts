@@ -43,14 +43,14 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
     mkdirSync(path.join(tree, 'ccd'), { recursive: true });
     // The publisher places the libraries a body pins (D-6913, D-7463) and the docs redactor's two shared/ files (D-7077),
     // and renders each digest into the body's one placeholder line for it: the stub body carries the four placeholders
-    // (__CCD_LIB_SHA256, __CCD_LIB_TRAIN_SHA256, __CCD_REDACT_SHA256, __CCD_REDACT_CLI_SHA256), the real files are planted
+    // (__CCD_LIB_SHA256, __CCD_LIB_TRAIN_SHA256, __CCD_LIB_LEASE_SHA256, __CCD_REDACT_SHA256, __CCD_REDACT_CLI_SHA256), the real files are planted
     // beside it. The stub never loads any of them.
     mkdirSync(path.join(tree, 'ccd', 'lib'), { recursive: true });
-    for (const f of ['disk-retention.sh', 'train-proof.sh']) copyFileSync(path.join(REPO, 'ccd', 'lib', f), path.join(tree, 'ccd', 'lib', f));
+    for (const f of ['disk-retention.sh', 'train-proof.sh', 'delegation-lease.sh']) copyFileSync(path.join(REPO, 'ccd', 'lib', f), path.join(tree, 'ccd', 'lib', f));
     mkdirSync(path.join(tree, 'shared'), { recursive: true });
     for (const f of ['redact.mjs', 'redact-cli.mjs']) copyFileSync(path.join(REPO, 'shared', f), path.join(tree, 'shared', f));
     writeFileSync(path.join(tree, 'ccd', 'ccd'),
-      `#!/usr/bin/env bash\n__CCD_LIB_SHA256=stamp-at-install\n__CCD_LIB_TRAIN_SHA256=stamp-at-install\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\n{ printf "%s\\0" "$-"; printf "%s\\0" "$@"; } > ${JSON.stringify(out)}\n`);
+      `#!/usr/bin/env bash\n__CCD_LIB_SHA256=stamp-at-install\n__CCD_LIB_TRAIN_SHA256=stamp-at-install\n__CCD_LIB_LEASE_SHA256=stamp-at-install\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\n{ printf "%s\\0" "$-"; printf "%s\\0" "$@"; } > ${JSON.stringify(out)}\n`);
     copyFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), path.join(tree, 'ccd', 'ccd-entry.py'));
     copyFileSync(path.join(REPO, 'ccd', 'ccd-entry-install.py'), path.join(tree, 'ccd', 'ccd-entry-install.py'));
     const python = spawnSync('python3', ['-IS', '-c', 'import os,sys;sys.stdout.write(os.path.realpath(sys.executable))'],
@@ -85,6 +85,11 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
       [['ws-audit', '--orphans'], false],
       [['ws-audit', '--orphan-hex', '2f61'], false],
       [['ws-orphan', '--expect', 'a'.repeat(64), '--tree-hex', '2f61', '--rescue'], true],
+      // Delegation broker wave 5 (W5-G4): the lease carrier's writer rides its own `['ws-lease-mark','--lease']` and starts under `bash -p`.
+      [['ws-lease-mark', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab'], true],
+      // Delegation broker wave 5 (W5-G12): the read-only lease audit rides its own `['ws-lease-audit','--lease']` and starts
+      // under `bash -p`, as its writer does.
+      [['ws-lease-audit', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', '--generation', '1'], true],
       [['ensure', 'demo-x'], false],
     ];
     let id = 0;

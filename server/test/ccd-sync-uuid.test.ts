@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness, WIDE_PANE_IF_UP } from './ccdWsHelpers.js';
 import { mkdirSync, writeFileSync, utimesSync, existsSync, readFileSync, symlinkSync, appendFileSync } from 'node:fs';
 import { execSync, spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import path from 'node:path';
 import { mungePath } from '../src/munge.js';
 import { eventsOf } from './lifecycleHelpers.js';
@@ -1494,7 +1495,7 @@ const jqCalls = (): number => {
  *  own timeout so a wait that never ends is one failed case, not a hung suite —
  *  the ccd-substrate.test.ts idiom. */
 const runSup = (snippet: string): { code: number; out: string; err: string } => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 30000,
     env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
   });

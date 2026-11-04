@@ -66,6 +66,13 @@ function expectEnabled(home: string, id: string, extra: string[] = []): void {
 }
 
 describe('enable needs a ready lane (G19)', () => {
+  // D-7992: the sign-out cleared the check, and the lane says why it has none: not "check it once", which cannot pass.
+  it('a signed-out lane answers `no-credential`, ahead of the check the sign-out cleared', () => {
+    const home = offBox('ccrc-enable-signed-out-');
+    state(home, 'lane-a', ['--signed-out-at', 'now']);
+    expectNotReady(home, 'lane-a', 'no-credential');
+  });
+
   it('enable refuses `not-ready` with no credential, with no seed, with a seed older than the last run, and with a failing last check', () => {
     const home = offBox('ccrc-enable-ready-');
 

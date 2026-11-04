@@ -31,7 +31,7 @@ import {
   UNREQUESTED_ENTRY, checkHighlightHtml, codeBlocksOf, createHighlightStore, type CheckedHighlightHtml, type CodeBlockText,
   type HighlightEntry, type HighlightStore, type PlainCause, type SkipCeiling,
 } from '../src/lib/highlightStore';
-import { MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS } from '../src/lib/markdownLimits';
+import { MD_HIGHLIGHT_BLOCK_MAX_CHARS } from '../src/lib/markdownLimits';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { docsHighlighter } from '../src/lib/markdownRunner';
 import { BLOB_1, COMMIT_A, COMMIT_B, FP_1, SERVED, draftOf, entry, fileResponse, holder, pageAt, treeOk } from './docsFixtures';
@@ -52,7 +52,7 @@ describe('the Export words (spec 4.7, 4.17; M4.EX5, M4.EX18)', () => {
 
   it('EXPORT_PLAIN_SENTENCE has one sentence per class of plain block, and none takes a field', () => {
     expect(Object.keys(EXPORT_PLAIN_SENTENCE).sort())
-      .toEqual(['failed', 'no-worker', 'over-cap', 'page-ceiling', 'part1-bounds', 'timeout', 'too-large']);
+      .toEqual(['failed', 'no-worker', 'over-cap', 'page-ceiling', 'timeout', 'too-large']);
     for (const s of Object.values(EXPORT_PLAIN_SENTENCE)) expect(s).not.toContain('{');
   });
 
@@ -273,17 +273,15 @@ describe('exportColouring and its notes: each drawn block counted by the entry i
   }
 
   it('counts each plain class under its closed word, a coloured block not at all, and an unregistered one not at all', () => {
-    const raws = ['ok', 'skipped', 'scan', 'slow', 'big', 'dead', 'threw', 'bad', 'none', 'forged', 'unregistered'];
+    const raws = ['ok', 'skipped', 'slow', 'big', 'dead', 'threw', 'bad', 'none', 'forged', 'unregistered'];
     const blocks: CodeBlockText[] = [
       ...raws.map((raw) => ({ lang: 'bash', raw })),
       { lang: 'bash', raw: 'x'.repeat(MD_HIGHLIGHT_BLOCK_MAX_CHARS + 1) },
-      { lang: 'bash', raw: 'w'.repeat(MD_HIGHLIGHT_MAX_WORD_CHARS + 1) },
       { lang: 'nope', raw: 'no grammar' },
     ];
     const c = exportColouring(blocks, storeOf({
       [key('bash', 'ok')]: html(OK_HTML),
       [key('bash', 'skipped')]: { kind: 'skipped', ceiling: 'page-output' },
-      [key('bash', 'scan')]: { kind: 'skipped', ceiling: 'part1-scan' },
       [key('bash', 'slow')]: plain({ kind: 'timeout', budgetMs: 750 }),
       [key('bash', 'big')]: plain({ kind: 'too-large' }),
       [key('bash', 'dead')]: plain({ kind: 'worker-failed', error: 'Error' }),
@@ -295,7 +293,7 @@ describe('exportColouring and its notes: each drawn block counted by the entry i
     }), false);
     expect(c.coloured).toBe(1);
     expect(Object.fromEntries(c.plain)).toEqual({
-      'over-cap': 1, 'part1-bounds': 2, 'page-ceiling': 1, 'timeout': 1, 'too-large': 1, 'failed': 4, 'no-worker': 1,
+      'over-cap': 1, 'page-ceiling': 1, 'timeout': 1, 'too-large': 1, 'failed': 4, 'no-worker': 1,
     });
   });
 
@@ -491,9 +489,9 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     expect(doc.querySelectorAll('article table [style]')).toHaveLength(6);
     expect(doc.querySelector('article table script, article table b')).toBeNull();
     // The worktree segment is text wherever the file shows it: banner, Source fact and the ccrc:worktree meta; no element comes of it.
+    expect(doc.querySelectorAll('b')).toHaveLength(0);
     expect(doc.body.firstElementChild?.textContent).toContain(`uncommitted changes from ${HOSTILE_WORKTREE_LABEL} on main`);
     expect(doc.body.textContent).toContain(`draft · modified in ${HOSTILE_WORKTREE_LABEL}`);
-    expect(doc.querySelector('meta[name="ccrc:worktree"]')?.getAttribute('content')).toBe(HOSTILE_WORKTREE_LABEL);
     expect(text).not.toContain('/repo/wt');
     // The meta's attribute value, as written: a `"` would end it early, so the raw value (read up to the first `"`)
     // decodes to the whole label only if the quote was escaped, and the raw segment appears nowhere unescaped.
@@ -502,6 +500,7 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     const decoded = new DOMParser().parseFromString(`<p title="${raw![1]!}"></p>`, 'text/html').querySelector('p')?.getAttribute('title');
     expect(decoded).toBe(HOSTILE_WORKTREE_LABEL);
     expect(raw![1]).not.toContain('<');
+    expect(doc.querySelector('meta[name="ccrc:worktree"]')?.getAttribute('content')).toBe(HOSTILE_WORKTREE_LABEL);
     expect(text).not.toContain('wt<b>');
     expect(doc.querySelectorAll('meta[http-equiv]')).toHaveLength(1);
     expect(doc.querySelectorAll('style')).toHaveLength(1);

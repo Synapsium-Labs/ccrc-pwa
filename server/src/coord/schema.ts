@@ -1407,7 +1407,7 @@ export const MIGRATIONS: readonly string[] = [
   //     upserts the staying sessions in place, and inserts the activities, attempts, leases and lineage. An ordinary
   //     application that only adds rows and updates some does less: `CoordStore.projectDelegationCheckpointChanges` writes
   //     just the changed rows (a compare-and-swap UPDATE each, a plain INSERT for each new row) and holds the five tables to
-  //     the new checkpoint's row counts, falling back to the full projection for anything else; it never writes a lease. The checkpoint
+  //     the new checkpoint's row counts, falling back to the full projection for anything else; a lease row only ever UPDATEs there (a new lease takes the full projection). The checkpoint
   //     carries NO events, so `delegation_events` is journal-derived: only `CoordStore.insertDelegationEvent` and its batch
   //     `insertDelegationEvents` write it, a
   //     projection deletes the events of a session that leaves and touches no other, and a lost or damaged events table is
@@ -1418,8 +1418,8 @@ export const MIGRATIONS: readonly string[] = [
   //   - WAVE 3 WRITES A LEASE ROW ONLY BY REPLAYING A DURABLE `lease-created` ENTRY, and fixes generation 0, equal creating
   //     and current journal sequences, `ephemeral` disposition, `not-due` cleanup and every transition clock, evidence and
   //     carrier field to NULL. The DDL deliberately allows more (adoption, retention, promotion, cleanup, a carrier
-  //     generation, a release) because later waves fill those in; the WAVE-3 guard is `assertWave3Lease` in code, so the
-  //     schema never has to change to loosen it.
+  //     generation, a release) because later waves fill those in; the guard is `assertLease` in code (wave 3's, loosened by
+  //     wave 5's transitions), so the schema never has to change to loosen it.
   //   - THE TWO PARTIAL IDENTITY INDEXES on `delegation_leases` are one idea in two halves. SQLite treats NULLs in a UNIQUE
   //     index as distinct, so a single UNIQUE (project, adminRecord, creationBase, canonicalPath) would admit unlimited
   //     duplicates whose `creationBase` is NULL; one index per nullness avoids that, and both cover UNRELEASED rows only
@@ -2077,6 +2077,106 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE operator_items ADD COLUMN recommended INTEGER;
   ALTER TABLE operator_items ADD COLUMN recommendedWhy TEXT;
+  `,
+  // ── 39: user_version 38 -> 39 ─────────────────────────────────────────────
+  // Landing order wave 5f: the landing line's authority overlay, its journal cursor, a DB-only association witness and
+  // the quarantine marker. Nothing here is seeded from `landing_entries`: those ordering columns stay the fallback only.
+  //
+  // `landing_subjects`: one row per identity the landing journal (`landing.log`) ever named. Its ONE writer is the
+  // private apply family of `CoordStore` (live write and replay alike); its readers are `readLanding` and the recovery
+  // fold (`landingRecoveryOf`). `bindingKind`/`observedRunId` are the LATEST historical observation of the subject's
+  // run association, with `observedSeq` the journal sequence that made it; `observedRunId` has no FK to `runs` and is
+  // never joined to a current run. `creationSeq`/`creationClaim` are the original entry record, both NULL for a subject
+  // only ever named as a target. ID and (project, pr) are each unique.
+  //
+  // `landing_authority`: the decided order of one subject (`afterIds` a JSON array of entry ids, `fixesMain` 0/1, the
+  // setter and the record sequence). Same writer and readers. Individual edge identity and uniqueness are policy
+  // (`parseLandingJournal`, `decideLandingMutation`), not a SQL graph walker.
+  //
+  // `landing_journal_cursor`: one row, `appliedSeq` the last journal sequence applied. Seeded `(1, 0)`, the only seed.
+  //
+  // `landing_projection_witness`: DB-only evidence of the last VERIFIED pin of a projection (`advanceLanding` is its
+  // only writer, atomically with the pin). `observedSeq` 0 means no subject observation yet. It is not journal authority
+  // and never current association authority; it is empty at migration and replay never mints it. It cascades with its
+  // projection; no FK to `runs`.
+  //
+  // `landing_entries.quarantineKind`: NULL for an ordinary projection, `stale-episode-head` (with `state` `unknown`) for
+  // a deliberately quarantined stale pin. Only `advanceLanding` writes or clears it. No existing row is quarantined.
+  //
+  // NEW TABLES AND ONE NULLABLE COLUMN, NOTHING ELSE: an older build opening a file at `user_version 39` takes rule 3
+  // (it warns, reads as-is and migrates nothing) and never names them. Every earlier entry is frozen. RE-MEASURE the
+  // slot before the PR and before merge (it must print 38 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE landing_subjects (
+    id            INTEGER PRIMARY KEY CHECK (typeof(id) = 'integer' AND id BETWEEN 1 AND 9007199254740991),
+    project       TEXT    NOT NULL CHECK (typeof(project) = 'text' AND project = trim(project, ' ' || char(9) || char(10) || char(13)) AND length(project) > 0),
+    pr            INTEGER NOT NULL CHECK (typeof(pr) = 'integer' AND pr BETWEEN 1 AND 9007199254740991),
+    bindingKind   TEXT    NOT NULL CHECK (bindingKind IN ('run', 'no-run')),
+    observedRunId INTEGER CHECK (observedRunId IS NULL OR (typeof(observedRunId) = 'integer' AND observedRunId BETWEEN 1 AND 9007199254740991)),
+    observedSeq   INTEGER NOT NULL CHECK (typeof(observedSeq) = 'integer' AND observedSeq BETWEEN 1 AND 9007199254740991),
+    creationSeq   INTEGER CHECK (creationSeq IS NULL OR (typeof(creationSeq) = 'integer' AND creationSeq BETWEEN 1 AND 9007199254740991)),
+    creationClaim TEXT,
+    UNIQUE (project, pr),
+    CHECK ((bindingKind = 'run') = (observedRunId IS NOT NULL)),
+    CHECK ((creationSeq IS NULL) = (creationClaim IS NULL)),
+    CHECK (creationSeq IS NULL OR creationSeq <= observedSeq),
+    CHECK (creationClaim IS NULL OR (CASE WHEN json_valid(creationClaim) THEN (json_type(creationClaim) IS 'object'
+      AND json_type(creationClaim, '$.at') IS 'integer'
+      AND json_extract(creationClaim, '$.at') BETWEEN 0 AND 9007199254740991
+      AND json_type(creationClaim, '$.setBy') IS 'text'
+      AND json_extract(creationClaim, '$.setBy') = trim(json_extract(creationClaim, '$.setBy'), ' ' || char(9) || char(10) || char(13))
+      AND length(json_extract(creationClaim, '$.setBy')) > 0
+      AND json_type(creationClaim, '$.pinnedSha') IS 'text'
+      AND length(json_extract(creationClaim, '$.pinnedSha')) = 40
+      AND json_extract(creationClaim, '$.pinnedSha') NOT GLOB '*[^0-9a-f]*'
+      AND json_type(creationClaim, '$.handoffCommit') IS 'text'
+      AND length(json_extract(creationClaim, '$.handoffCommit')) = 40
+      AND json_extract(creationClaim, '$.handoffCommit') NOT GLOB '*[^0-9a-f]*') ELSE 0 END))
+  );
+  CREATE TABLE landing_authority (
+    subjectId INTEGER PRIMARY KEY REFERENCES landing_subjects(id) CHECK (typeof(subjectId) = 'integer' AND subjectId BETWEEN 1 AND 9007199254740991),
+    afterIds  TEXT    NOT NULL CHECK (CASE WHEN json_valid(afterIds) THEN json_type(afterIds) = 'array' ELSE 0 END),
+    fixesMain INTEGER NOT NULL CHECK (typeof(fixesMain) = 'integer' AND fixesMain IN (0, 1)),
+    setBy     TEXT    NOT NULL CHECK (typeof(setBy) = 'text' AND setBy = trim(setBy, ' ' || char(9) || char(10) || char(13)) AND length(setBy) > 0),
+    seq       INTEGER NOT NULL CHECK (typeof(seq) = 'integer' AND seq BETWEEN 1 AND 9007199254740991)
+  );
+  CREATE TABLE landing_journal_cursor (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    appliedSeq INTEGER NOT NULL CHECK (typeof(appliedSeq) = 'integer' AND appliedSeq BETWEEN 0 AND 9007199254740991)
+  );
+  CREATE TABLE landing_projection_witness (
+    entryId       INTEGER PRIMARY KEY REFERENCES landing_entries(id) ON DELETE CASCADE CHECK (typeof(entryId) = 'integer' AND entryId BETWEEN 1 AND 9007199254740991),
+    project       TEXT    NOT NULL CHECK (typeof(project) = 'text' AND project = trim(project, ' ' || char(9) || char(10) || char(13)) AND length(project) > 0),
+    pr            INTEGER NOT NULL CHECK (typeof(pr) = 'integer' AND pr BETWEEN 1 AND 9007199254740991),
+    observedSeq   INTEGER NOT NULL CHECK (typeof(observedSeq) = 'integer' AND observedSeq BETWEEN 0 AND 9007199254740991),
+    runId         INTEGER NOT NULL CHECK (typeof(runId) = 'integer' AND runId BETWEEN 1 AND 9007199254740991),
+    pinnedSha     TEXT    NOT NULL CHECK (typeof(pinnedSha) = 'text' AND length(pinnedSha) = 40 AND pinnedSha NOT GLOB '*[^0-9a-f]*'),
+    handoffCommit TEXT    NOT NULL CHECK (typeof(handoffCommit) = 'text' AND length(handoffCommit) = 40 AND handoffCommit NOT GLOB '*[^0-9a-f]*')
+  );
+  ALTER TABLE landing_entries ADD COLUMN quarantineKind TEXT DEFAULT NULL
+    CHECK (quarantineKind IS NULL OR (quarantineKind = 'stale-episode-head' AND state = 'unknown'));
+  INSERT INTO landing_journal_cursor (id, appliedSeq) VALUES (1, 0);
+  `,
+  // ── 40: user_version 39 -> 40 ─────────────────────────────────────────────
+  // A revived park's heir names its parent (D-5914, D-7901; spec 2026-10-20 §3.2, #125). `revivedFrom` is the id of
+  // the `rejected` delivery a later delivery of the same mail was queued to replace, once that parked row's recipient
+  // read live again. Its ONE writer is `CoordStore.queueDelivery`, called with a parent only by
+  // `reviveParkedDeliveries`; it is written at INSERT and never updated. Its readers are `HAS_HEIR_SQL` in `store.ts`,
+  // the one fragment both `ABANDONED_PARK_SQL` (a parent with an heir is not abandoned) and the revive's own select (no
+  // heir yet) read. NULL is "this row revives nothing", which every row before this entry is. The partial index serves
+  // that `EXISTS` lookup and holds only heirs.
+  //
+  // ONE NULLABLE COLUMN AND ONE PARTIAL INDEX, NOTHING ELSE: an older build opening a file at `user_version 40` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the column, and inserts with it NULL. It then
+  // counts a revived parent beside its heir again, which is #125's old reading and nothing worse. Every earlier entry
+  // is frozen. RE-MEASURE the slot before the PR and before merge (it must print 39 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail_deliveries ADD COLUMN revivedFrom INTEGER;
+  CREATE INDEX mail_deliveries_by_revived ON mail_deliveries(revivedFrom) WHERE revivedFrom IS NOT NULL;
   `,
 ];
 

@@ -5,7 +5,6 @@
 // and `exportColouring` counts through it, so the file and its provenance cannot disagree. A block is counted as the sink
 // draws it: an `html` entry the check never made (`isCheckedHighlightHtml` false) is drawn plain, so it counts `failed`;
 // a worker `unregistered` answer, like a block in no registered grammar, is not counted, since nothing would colour it.
-// `part1-bounds` (W5 part 1's per-block bounds and its two page budgets) goes with W5h-b (M4.H23).
 //
 // Ring L1: pure; it reads a store it is given.
 import {
@@ -68,10 +67,6 @@ export function exportColouring(
       count('over-cap');
       continue;
     }
-    if (answer.kind === 'part1') {
-      count('part1-bounds');
-      continue;
-    }
     const entry = exportEntry(store, answer, b.at);
     switch (entry.kind) {
       case 'html':
@@ -79,7 +74,7 @@ export function exportColouring(
         else count('failed');
         break;
       case 'skipped':
-        count(entry.ceiling === 'part1-scan' || entry.ceiling === 'part1-markdown' ? 'part1-bounds' : 'page-ceiling');
+        count('page-ceiling');
         break;
       case 'plain': {
         const word = plainClassOf(entry.first);

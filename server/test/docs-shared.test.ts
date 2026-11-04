@@ -27,7 +27,7 @@ const L0_REFUSALS: readonly (readonly [string, RegExp])[] = [
   ['a node: specifier', /node:/],
 ];
 
-describe('shared/docs.ts is L0 and imports nothing but the redactor', () => {
+describe('shared/docs.ts is L0 and imports nothing but the redactor and the byte counter', () => {
   it('CONTROL: each refusal pattern sees its planted shape, and none fires on a plain declaration', () => {
     const planted = [
       "import type { X } from './api.js';",
@@ -46,16 +46,21 @@ describe('shared/docs.ts is L0 and imports nothing but the redactor', () => {
 
   // D-5867 (Task C1l; ARCH-66 (#801)) departs from the docs W1 ruling this pin comes from ("shared/docs.ts imports
   // nothing"): its one import is `./redact.mjs`, which imports nothing and names no host global. The refusal patterns
-  // run over docs.ts with that one import line removed, and over redact.mjs whole.
-  it("imports only `./redact.mjs`, and `shared/redact.mjs` itself passes every `L0_REFUSALS` pattern", () => {
+  // run over docs.ts with its import lines removed, and over redact.mjs whole. The desktop-polish server carry (row 27,
+  // review 1389 A6) adds the second: `./utf8.js`, the one UTF-8 byte counter, which imports nothing either and is held
+  // to the same refusals whole.
+  it("imports only `./redact.mjs` and `./utf8.js`, and each of those passes every `L0_REFUSALS` pattern", () => {
     const src = readFileSync(DOCS, 'utf8');
     const imports = src.split('\n').filter((l) => /^\s*import\b/.test(l));
-    for (const l of imports) expect(l, 'an import line other than ./redact.mjs').toMatch(/^import \{[^}]*\} from '\.\/redact\.mjs';$/);
-    expect(imports.length, 'at most the one import').toBeLessThanOrEqual(1);
+    for (const l of imports) expect(l, 'an import line other than ./redact.mjs or ./utf8.js').toMatch(/^import \{[^}]*\} from '\.\/(?:redact\.mjs|utf8\.js)';$/);
+    expect(new Set(imports.map((l) => l.replace(/^.* from /, ''))).size, 'one line per module').toBe(imports.length);
+    expect(imports.length, 'at most the two imports').toBeLessThanOrEqual(2);
     const rest = src.split('\n').filter((l) => !/^\s*import\b/.test(l)).join('\n');
     for (const [what, re] of L0_REFUSALS) expect(re.test(rest), `${what} in docs.ts`).toBe(false);
-    const redactor = readFileSync(path.resolve(here, '..', '..', 'shared', 'redact.mjs'), 'utf8');
-    for (const [what, re] of L0_REFUSALS) expect(re.test(redactor), `${what} in redact.mjs`).toBe(false);
+    for (const dep of ['redact.mjs', 'utf8.ts']) {
+      const body = readFileSync(path.resolve(here, '..', '..', 'shared', dep), 'utf8');
+      for (const [what, re] of L0_REFUSALS) expect(re.test(body), `${what} in ${dep}`).toBe(false);
+    }
   });
 
   it('is pure ASCII, so every grammar line reaches the parity scan byte for byte', () => {

@@ -35,6 +35,12 @@
 // switch, the connect sheet for a lane it added (`resumeSheetFor`). A sign-in lane's fold offers Switch to a long-lived
 // token, which is also a Signed-out sign-in lane's primary fix (Q1); a token lane's fold offers Switch to sign-in. Both
 // run only on a fleet that advertises the sign-in's cap word (`account-auth-v1`).
+//
+// RE-AUTHENTICATE (accounts plan Task A38, D-7872; spec §9 rows 1, 2, §4.2). On the same fleets, a trouble card's acts
+// come in the spec's order (`troubleActs`), the first the primary, each opening the sheet it names: Sign in again and
+// Mint a new token open the re-auth sheet, the switches A23's switch sheet, Paste a token A19's paste sheet. A token
+// lane's Replace token opens the mint first, with the paste its second way. Without the cap word, a token lane keeps
+// A19's paste arm alone.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ACCOUNT_AUTH_CAP, isArchivedRow, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
@@ -45,11 +51,12 @@ import { AddAccountDoor, ConnectSheet, DoorReason } from '../accounts/ConnectShe
 import { RemoveSheet } from '../accounts/RemoveSheet';
 import { ReplaceSheet } from '../accounts/ReplaceSheet';
 import { MethodSwitchSheet } from '../accounts/MethodSwitchSheet';
-import { heldAttemptOf, resumeSheetFor, switchTargetOf, type SignInMethod } from '../accounts/connectFlow';
+import { CREDENTIAL_ACT_LABEL, ReauthSheet, troubleActs, type CredentialAct } from '../accounts/ReauthSheet';
+import { heldAttemptOf, isPastAdding, resumeSheetFor, switchTargetOf, type SignInMethod } from '../accounts/connectFlow';
 import { wordOf, type HeldAttempt } from '../accounts/useSignInAttempt';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
-import { cardLines, connectBlock, DOOR_NARROWED, doorNarrowing, identityLine, isTrouble, kindChipWords, laneAnswerOf, notReadyWords, offAlso, offlineRefusal, PASTE_A_TOKEN, REMOVE_ACT, REPLACE_TOKEN, rollUp, troubleCopy, troubleFirst, WEEKLY_ONLY } from '../fleet/accountWords';
+import { cardLines, connectBlock, DOOR_NARROWED, doorNarrowing, identityLine, isTrouble, kindChipWords, laneAnswerOf, notReadyWords, offAlso, offlineRefusal, REMOVE_ACT, REPLACE_TOKEN, rollUp, SIGN_IN_AGAIN, troubleCopy, troubleFirst, WEEKLY_ONLY } from '../fleet/accountWords';
 import { CANCEL_SIGN_IN, CONTINUE, RESUME_CARD_LINE, SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, cancelRefused } from '../fleet/accountWords';
 import { StateLamp, TroubleCard } from '../fleet/TroubleCard';
 import { AccountKnob, useLaneActs } from '../fleet/AccountKnob';
@@ -352,7 +359,9 @@ export function AccountsScreen(): ReactNode {
     const held = heldAttemptOf(lanes?.[id], Date.now());
     if (held === null) return;
     const kind = roster.find((r) => r.id === id)?.kind;
-    if (resumeSheetFor(kind, held.method) === 'switch') openSwitch(id, held.method, held);
+    const sheet = resumeSheetFor(kind, held.method, isPastAdding(lanes?.[id], accounts?.find((x) => x.wrapper === id)));
+    if (sheet === 'switch') openSwitch(id, held.method, held);
+    else if (sheet === 'reauth') openReauth(id, held.method, held);
     else setResumingConnect({ id, held, gen: ++sheetGen.current });
   };
   // `/accounts?resume=<id>` (the banner's Continue): opens once per value, as soon as the store's answer holds the
@@ -366,6 +375,26 @@ export function AccountsScreen(): ReactNode {
     resumedFor.current = resumeId;
     openResume(resumeId);
   });
+  // Re-authenticate an existing lane (accounts plan Task A38, D-7872; spec §9 rows 1, 2): Sign in again on a sign-in
+  // lane, Mint a new token on a token lane, each with the method the lane already has. One sheet at a time: opening it
+  // closes the paste sheet, so only one step-up challenge is ever live (`useStepUp`'s one-instance rule).
+  const [reauthing, setReauthing] = useState<{ id: string; method: SignInMethod; gen: number; resume?: HeldAttempt } | null>(null);
+  function openReauth(id: string, method: SignInMethod, resume?: HeldAttempt): void {
+    setReplacing(null);
+    setReauthing({ id, method, gen: ++sheetGen.current, ...(resume !== undefined ? { resume } : {}) });
+  }
+  /** A token lane's Replace token: the mint first (with paste as its second way) where the fleet can mint. */
+  const openTokenReplace = (id: string): void => { if (canSwitch) openReauth(id, 'setup-token'); else openReplace(id); };
+  const openAct = (id: string, act: CredentialAct): void => {
+    switch (act) {
+      case 'switch-to-token': openSwitch(id, 'setup-token'); return;
+      case 'sign-in-again': openReauth(id, 'login'); return;
+      case 'mint-new-token': openReauth(id, 'setup-token'); return;
+      case 'replace-token': openTokenReplace(id); return;
+      case 'paste-token': openReplace(id); return;
+      case 'switch-to-sign-in': openSwitch(id, 'login'); return;
+    }
+  };
   /** A sheet opened by the resume query, closed: the query goes, so a re-render never reopens it. */
   const dropResume = (): void => { if (resumeParam(location.search) !== null) navigate('/accounts', { replace: true }); };
   /** Cancel, from the card: the attempt ends at the box, then the screen reads the lanes again. */
@@ -435,7 +464,7 @@ export function AccountsScreen(): ReactNode {
           const lines = cardLines(answer, a?.ts ?? null, nowSec);
           const kindWords = kindChipWords(entry);
           const identity = identityLine(laneWire, answer.word, nowSec);
-          const also = offAlso(answer, a);
+          const also = offAlso(answer, a, laneWire);
           // "Sessions on this account" means LIVE sessions (Rider A §4): a
           // workspace that is archived, mid-cleanup, or that the server does
           // not read alive is not load on this account, even though it still
@@ -550,11 +579,10 @@ export function AccountsScreen(): ReactNode {
                   copy={trouble}
                   onCheck={canAct ? () => acts.check(wrapper) : undefined}
                   checking={acts.busy[wrapper] !== undefined}
-                  replace={canAct && tokenLane && (answer.word === 'signed-out' || answer.word === 'expiring')
-                    ? { label: answer.word === 'signed-out' ? PASTE_A_TOKEN : REPLACE_TOKEN, onOpen: () => openReplace(wrapper) }
-                    : undefined}
-                  switchTo={canAct && switchTo === 'setup-token' && answer.word === 'signed-out'
-                    ? { label: SWITCH_TO_TOKEN, onOpen: () => openSwitch(wrapper, 'setup-token') }
+                  acts={canAct && entry?.provider === 'anthropic'
+                    ? troubleActs(answer.word, entry.kind, canSwitch).map((c) => ({
+                      label: CREDENTIAL_ACT_LABEL[c.act], primary: c.primary, onOpen: () => openAct(wrapper, c.act),
+                    }))
                     : undefined}
                 />
               )}
@@ -619,11 +647,21 @@ export function AccountsScreen(): ReactNode {
                       {SWITCH_TO_TOKEN}
                     </Button>
                   )}
+                  {/* A sign-in lane's Sign in again (spec §4.4; Task A38): where the fleet can run a sign-in. */}
+                  {switchTo === 'setup-token' && (
+                    <Button
+                      variant="ghost" size="fit" disabled={!canAct}
+                      aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                      onClick={() => openReauth(wrapper, 'login')}
+                    >
+                      {SIGN_IN_AGAIN}
+                    </Button>
+                  )}
                   {tokenLane && (
                     <Button
                       variant="ghost" size="fit" disabled={!canAct}
                       aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
-                      onClick={() => openReplace(wrapper)}
+                      onClick={() => openTokenReplace(wrapper)}
                     >
                       {REPLACE_TOKEN}
                     </Button>
@@ -700,7 +738,29 @@ export function AccountsScreen(): ReactNode {
           connect={connect}
           blocked={blocked}
           roster={roster}
+          lane={lanes?.[replacing.id]}
+          usage={accounts?.find((x) => x.wrapper === replacing.id) ?? null}
           refresh={refreshAccounts}
+          {...(canSwitch ? { onMint: () => openReauth(replacing.id, 'setup-token') } : {})}
+        />
+      )}
+      {reauthing !== null && (
+        <ReauthSheet
+          key={`reauth-${reauthing.gen}`}
+          id={reauthing.id}
+          method={reauthing.method}
+          open
+          // Closed mid-attempt, the attempt keeps running on the box: a fresh read lets the resume banner say so now.
+          onClose={() => { setReauthing(null); dropResume(); void refreshAccounts(); }}
+          connect={connect}
+          blocked={blocked}
+          lane={lanes?.[reauthing.id]}
+          usage={accounts?.find((x) => x.wrapper === reauthing.id) ?? null}
+          roster={roster}
+          refresh={refreshAccounts}
+          {...(reauthing.resume !== undefined ? { resume: reauthing.resume } : {})}
+          {...(reauthing.method === 'setup-token'
+            ? { onPaste: () => { const id = reauthing.id; setReauthing(null); openReplace(id); } } : {})}
         />
       )}
 
@@ -715,6 +775,7 @@ export function AccountsScreen(): ReactNode {
           blocked={blocked}
           roster={roster}
           lane={lanes?.[switching.id]}
+          usage={accounts?.find((x) => x.wrapper === switching.id) ?? null}
           refresh={refreshAccounts}
           {...(switching.resume !== undefined ? { resume: switching.resume } : {})}
         />

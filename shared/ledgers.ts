@@ -10,7 +10,8 @@
 // never compares states itself. The one rule the table cannot carry is the programme context: the
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
-import { ACTIVE_RUN_STATES, TERMINAL_RUN_STATES, type MailDeliveryState, type Presence, type RunKind, type RunState } from './api.js';
+import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, type MailDeliveryState, type Presence, type RunKind, type RunState } from './api.js';
+import { utf8Bytes } from './utf8.js';
 
 /** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
  *  `secret`'s value goes to its slot, never through the answer (spec §5). */
@@ -115,8 +116,13 @@ export interface ItemView {
   note: string | null;
   secretSlot: string | null;
   /** The slot's state (plan PL6), read from its metadata file: when it was set, its tail (`secretTailOf`) and whether the
-   *  egress masker knows it. `why` says why it does not, and is absent when it does (or from a server before PL6). */
-  secretSet: { at: number; tail: string; masked: boolean; why?: SecretUnmasked } | null;
+   *  egress masker knows it. `why` says why it does not, and is absent when it does (or from a server before PL6).
+   *  `{at: null}`: the slot HOLDS a value but its record is missing, unreadable or unparseable (review 1416 F4), so nothing
+   *  is known of when or how; it is stored all the same, never folded into `null`, which is a slot that holds no value. Its
+   *  `tail` is always empty, for a console from before it that reads one (review 1418 F3).
+   *  `{unreadable: true}`: the box cannot read the slot (a directory it cannot search, an I/O error; review 1418 F2), so
+   *  whether a value is stored is not known: neither stored nor nothing stored. */
+  secretSet: { at: number; tail: string; masked: boolean; why?: SecretUnmasked } | { at: null; tail: '' } | { unreadable: true } | null;
   history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null }[];
 }
 
@@ -207,42 +213,47 @@ export const OPERATOR_SECRETS_DIR = 'operator-secrets';
  *  its lanes with it, and the masker's roster prune (`SecretMasker.retain`) never deletes a lane that carries it: those lanes
  *  are this server's own, not the roster's (review 1389 F1). */
 export const OPERATOR_SECRET_LANE_PREFIX = 'operator-secret:';
+/** Whether a masker lane is an operator-secret slot's: the one predicate the masker's prune, its roster filter and its re-key
+ *  guard read, and the re-key's composer (`withOperatorSecretRows`) filters a box's answer with. */
+export function isOperatorSecretLane(laneId: string): boolean {
+  return typeof laneId === 'string' && laneId.startsWith(OPERATOR_SECRET_LANE_PREFIX);
+}
 
 /** The longest secret the console takes, in characters and in UTF-8 bytes alike (the masker's longest run is 8192 bytes,
  *  so a value inside this bound is never too long for it). */
 export const SECRET_VALUE_MAX = 8192;
-/** The shortest value whose tail is shown, in UTF-8 BYTES after any trailing `=`, counted as the egress masker counts a
+/** The shortest value whose tail can be shown, in UTF-8 BYTES after any trailing `=`, counted as the egress masker counts a
  *  secret: its floor, `RUN_MIN_BYTES` (`server/src/accounts/shapes.ts`), which `ledgers-secrets.test.ts` holds equal to this
  *  (review 1389 A1). Below it no character of the value leaves the server: the masker cannot catch such a value in outgoing
- *  text, and four characters of it are a fifth or more of it. */
+ *  text, and four characters are a large share of so short a value. At the floor or above, the tail is shown only when the
+ *  masker answers that it will catch the value (`masked`, review 1391 F2): a value it cannot catch shows none either. */
 export const SECRET_TAIL_MIN = 20;
 /** How many characters the tail shows. */
 export const SECRET_TAIL_CHARS = 4;
 
 /** Why the egress masker does not know a saved secret (Review Focus 2: never a silent skip). `too-short`: under the
- *  masker's 20-byte floor (after any trailing `=`); `too-long`: past its 8192-byte run; `unregistered`: the masker could
- *  not take it (no box token yet, or coord.db stayed busy). */
-export type SecretUnmasked = 'too-short' | 'too-long' | 'unregistered';
-const SECRET_UNMASKED_MAP: Record<SecretUnmasked, true> = { 'too-short': true, 'too-long': true, unregistered: true };
+ *  masker's 20-byte floor (after any trailing `=`); `too-long`: past its 8192-byte run; `not-one-run`: the masker took it,
+ *  but its search of outgoing text can never produce it as one candidate (it holds a space, `:`, `=`, `,` or another
+ *  delimiter the search splits on, or begins with one), so it would not be caught (review 1391 F2); `unregistered`: the
+ *  masker could not take it (no box token yet, or coord.db stayed busy). */
+export type SecretUnmasked = 'too-short' | 'too-long' | 'not-one-run' | 'unregistered';
+const SECRET_UNMASKED_MAP: Record<SecretUnmasked, true> = { 'too-short': true, 'too-long': true, 'not-one-run': true, unregistered: true };
 export const SECRET_UNMASKED_WHYS = Object.keys(SECRET_UNMASKED_MAP) as readonly SecretUnmasked[];
 export function isSecretUnmasked(v: unknown): v is SecretUnmasked {
   return typeof v === 'string' && (SECRET_UNMASKED_WHYS as readonly string[]).includes(v);
 }
 
-/** UTF-8 bytes of a string, counted without an encoder (this file imports nothing). A lone surrogate counts 3, as an
- *  encoder writes U+FFFD for it. */
-export function utf8Bytes(s: string): number {
-  let n = 0;
-  for (const ch of s) {
-    const c = ch.codePointAt(0)!;
-    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
-  }
-  return n;
-}
-
 /** Whether a pasted value is one the console takes: 1 to `SECRET_VALUE_MAX` characters and UTF-8 bytes. */
 export function isSecretValue(v: unknown): v is string {
   return typeof v === 'string' && v.length >= 1 && v.length <= SECRET_VALUE_MAX && utf8Bytes(v) <= SECRET_VALUE_MAX;
+}
+
+/** Whether a value is ONE line in every reading: no carriage return, line feed, vertical tab, form feed, next line (U+0085),
+ *  line separator (U+2028) or paragraph separator (U+2029) in it (the operator's ruling on programme item 8, "one line is
+ *  enough", and its ruling on review 1416 A-R5: one line means one line however a reader breaks lines). The secret's route
+ *  refuses any other with its own word before anything is written, and the panel keeps its single-line field. */
+export function isOneLine(v: string): boolean {
+  return !/[\r\n\v\f\u0085\u2028\u2029]/.test(v);
 }
 
 /** The last `SECRET_TAIL_CHARS` characters (code points, so a surrogate pair is never split) of a value of at least
@@ -265,6 +276,31 @@ export interface SecretSaveAnswer {
   readonly ok: true;
   readonly secret: { readonly setAt: number; readonly tail: string; readonly masked: boolean; readonly why?: SecretUnmasked };
   readonly item: ItemView;
+}
+
+/**
+ * ONE STORED SLOT as the programme's stored-secrets read answers it (`GET /api/programmes/:slug/secrets`, the operator's ruling
+ * on programme item 9): its name, when it was saved, and the item that asked for it. NEVER any part of the value: no tail, no
+ * length, no digest. `setAt` is `null` when the slot's record could not be read (the value file is there, its metadata is
+ * not); `item` is `null` when the record names no item (a slot saved before the record carried one) or that item is gone.
+ */
+export interface StoredSecret {
+  readonly slot: string;
+  readonly setAt: number | null;
+  readonly item: { readonly id: number; readonly title: string } | null;
+}
+/** What the stored-secrets read answers: the programme's slots, sorted by name. A store that could not be read is never
+ *  this answer with no slots: it is the `secrets-unreadable` refusal. */
+export interface StoredSecretsAnswer {
+  readonly ok: true;
+  readonly program: string;
+  readonly slots: readonly StoredSecret[];
+}
+/** What the Remove door (`DELETE /api/programmes/:slug/secrets/:slot`) answers on success: the slot it removed, and nothing of
+ *  its value. */
+export interface SecretRemoveAnswer {
+  readonly ok: true;
+  readonly slot: string;
 }
 
 const SPEC_PREFIX = 'docs/superpowers/specs/';
@@ -321,8 +357,8 @@ export const COORDINATOR_PRESENCES = Object.keys(COORDINATOR_PRESENCE_MAP) as re
  * registry listing, read from the listing's raw `*.uuid` names (refused ids included). A `dead` row is `dead`; `alive` and
  * `asleep` (hibernated, woken by mail) are `alive`; a doubt, or a row from a server that predates `presence`, is `unmeasured`;
  * an id the frame lacks is `absent` only when the listing is known and does not hold it either, and `unmeasured` when the
- * listing holds it (a refused id, or a row the registry could not assemble, is in no fleet row) or when no listing has landed
- * yet.
+ * listing holds it (a refused id, or a row the registry could not assemble, is in no fleet row; or a row the registry retired
+ * after its second listing, which the FIRST listing still names for that one tick) or when no listing has landed yet.
  *
  * WHY THIS IS NOT `measureClaimant` (the one dead predicate, D-5290; "legitimately different", review 1335 F4): that function
  * is async, a fresh registry read and a tmux verdict, and an item's view must be built SYNCHRONOUSLY (`viewOfItem`: the
@@ -369,11 +405,16 @@ export function itemIsStale(i: StaleInputs): boolean {
   return i.mail !== 'acked' && i.tickedAt !== null && i.now - i.tickedAt >= TICK_UNANSWERED_MS;
 }
 
-/** Whether an outstanding tick mail has been left behind (review 1336 F1): it went to a session that is no longer the
- *  programme's coordinator AND that session reads `dead` or `absent`. Such a mail can never be acknowledged by its recipient
- *  (the ack route takes only the recipient's own), and nothing re-addresses a mail to a literal session id, so it must not
- *  hold the operator's next tick of a sent-back item. A recipient that is still the coordinator, or that reads `alive` or
- *  `unmeasured`, keeps blocking: a live displaced coordinator must not get a second mail beside the new one. */
-export function tickMailLeftBehind(i: { recipient: string; coordinator: string; recipientPresence: CoordinatorPresence }): boolean {
-  return i.recipient !== i.coordinator && (i.recipientPresence === 'dead' || i.recipientPresence === 'absent');
+/** Whether the newest earlier tick mail of an item holds the operator's next tick, decided here alone (review 1335 F2, review
+ *  1336 F1; one decider, review 1338): a mail whose delivery is no longer outstanding never holds it, and an outstanding one
+ *  holds it unless it was LEFT BEHIND: it went to a session that is no longer the programme's coordinator AND that session
+ *  reads `dead` or `absent`. Its recipient is gone and no longer the coordinator, so the guard must not wait on it; nothing
+ *  re-addresses the mail (it keeps its delivery to the literal session id, so a revived session can still be delivered it
+ *  and ack it). A recipient that is still the coordinator, or that reads `alive` or `unmeasured`, keeps holding the tick: a
+ *  live displaced coordinator must not get a second mail beside the new one. */
+export function earlierTickBlocks(i: {
+  state: MailDeliveryState; recipient: string; coordinator: string; recipientPresence: CoordinatorPresence;
+}): boolean {
+  if (!OUTSTANDING_DELIVERY_STATES.includes(i.state)) return false;
+  return !(i.recipient !== i.coordinator && (i.recipientPresence === 'dead' || i.recipientPresence === 'absent'));
 }

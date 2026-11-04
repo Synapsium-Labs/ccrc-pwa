@@ -2,6 +2,8 @@
 // pinned in `programme-box.test.ts`). One component in both skins: the card is drawn alone here, over the fleet tree
 // and the rollup exactly as `FleetCards` builds them, and the fold's storage is checked through each skin's own list.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED, type SkinId } from '@ccrc/ui';
 import type { FleetSession, RunSummary, UpdatesView } from '../../shared/api';
@@ -646,6 +648,29 @@ describe('the waiting chip on a programme box (PL5b)', () => {
     expect(door.getAttribute('aria-label')).toMatch(/^150 waiting on you: open /);
     expect(door.textContent).toContain('99+ waiting on you');
     expect(door.textContent).not.toContain('150');
+  });
+
+  // Carry C (D-7951), review 1388's advisories: the plain count says the real number to a screen reader, as the door's label
+  // does, and the chip spells its unit once, the navigation badge's (`WAITING_BADGE_UNIT`), for the figure drawn and spoken.
+  it('a plain count past the cap says the real count to a screen reader: "99+" is drawn and hidden, "150 waiting on you" is said', () => {
+    const f = quiet();
+    const from = { sessions: f.sessions, runs: f.runs.map((r) => ({ ...r, program: 'old.name' })) };
+    withList(OPEN(150, 'old.name'), from);
+    const plain = chip(drawCard(from.sessions, from.runs, 'project-c'))!;
+    expect(plain.classList.contains('pg-waiting-plain')).toBe(true);
+    const hidden = plain.querySelector('[aria-hidden="true"]')!;
+    expect(hidden.textContent).toBe('99+ waiting on you');
+    // What a screen reader reads: the chip's text less what is hidden from it.
+    const said = [...plain.childNodes].filter((n) => !(n instanceof Element && n.getAttribute('aria-hidden') === 'true'))
+      .map((n) => n.textContent).join('');
+    expect(said).toBe('150 waiting on you');
+  });
+
+  it('spells "waiting on you" nowhere in its own source: the words are the navigation badge\'s unit, read once', () => {
+    const src = readFileSync(path.join(__dirname, '../src/fleet/ProgrammeBox.tsx'), 'utf8')
+      .split('\n').filter((l) => !/^\s*(\/\/|\/?\*)/.test(l)).join('\n');
+    expect(src).not.toMatch(/waiting on you/);
+    expect(src).toMatch(/WAITING_BADGE_UNIT/);
   });
 
   it('prints its widest count as "99+", the one width the layout is measured at', () => {

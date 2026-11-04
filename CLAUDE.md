@@ -105,6 +105,7 @@ real values: `deploy/reference-fleet.md` (gitignored).
   token re-proved on the box, never `--force` — never a session's verb, and never run against the live host from a shell or a test.
   **`scratch-rescue` is forbidden to every session too** (D-6632): the temp sweep's act, which only adds attic refs for a session's scratch repository (`ccd scratch-rescue --session <id> <path>`), behind the installed direct entry — never a session's verb, and never run against the live host from a shell or a test.
   **`ws-shed-deps` is forbidden to every session too** (D-7278): it is the SERVER's act on a SLEEPING worker's or coordinator's git-ignored, untracked dependency directories only (`ccd ws-shed-deps --session <id> --class child|coordinator`, composed by the deps-shed arm of the run-done row, shadow until `$REG/deps-shed-live`), behind the installed direct entry, with every rung re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
+  **`ws-lease-mark` is forbidden to every session too**: it is the SERVER's act on a delegation lease's carrier only (`ccd ws-lease-mark --lease <id> …`), composed after the server has journalled the generation it writes, behind `lease-mark-v1` and the installed direct entry — never a session's verb, and never run against the live host from a shell or a test.
 - **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
   `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
   or onto the launcher (`~/.local/bin/claude`) are forbidden on a session's prompt (`FORBIDDEN_CCD_VERBS` and
@@ -479,7 +480,19 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (registry, hold, `.prhistory`), which stay ground truth; a lost coord.db re-measures those from them, but
   what it adds on top — the landing line, mail, claims, asks, central pool edges, update intents, the stall-watch
   settings choice, the collector switch — is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into
-  `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The switch's `collect-lane-generation.log` is never
+  `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The landing line has an authority-recovery exception:
+  `~/.ccrc/landing.log` restores no-run creation evidence, order edges, `fixesMain` and setter attribution before
+  service starts. Leave it in place when restoring coord.db; no backup copies it or restores an older copy over it.
+  Replay never fabricates a measured pin, landed state or current run association. Missing projections and
+  contradictory surviving binding observations remain visible as unmeasured and hold their project's line;
+  identity conflicts hold every affected project without deleting or rekeying either identity. Only a verified
+  pin may supply an exact DB-only witness to reconcile contradictory binding evidence; replay never mints it.
+  This cannot detect a wholly unjournalled change lost with a snapshot. Invalid or unreadable history refuses
+  startup; missing projections or binding mismatches alone do not. An uncertain authoritative append or landing
+  database commit, including a pin or retreat with no append, fences every landing read and mutation until
+  durable replay succeeds at a clean transaction boundary; an uncertain rollback requires restart. A stale
+  episode-head retreat quarantines its pin as unknown, not ejected; only a verified repin with readable retained
+  data clears that quarantine. The switch's `collect-lane-generation.log` is never
   copied into a snapshot or restored with one: leave it in place, so a database restored alone never re-arms the
   collector (one from before the switch's last change is safety-stopped). One from before the legacy collector file's
   retirement is repaired only by a confirmed Live, which keeps its unset latch, so a standing or re-created legacy file
@@ -487,6 +500,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   file absent and retires it.
 - **Zero new ccd verbs for coordination mutation** — mutations ride already-granted `CcdArgv` (a brand built at
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
+  Workspace-lifecycle verbs and flags (`ws-reclaim`, `ws-expire`, `ws-lease-mark`, `ws-lease-audit`) act on workspaces,
+  not on coordination state, are server-composed only, and are not covered by that rule (`ws-lease-audit` is read-only:
+  it writes nothing to any durable path, so it is not on the SAFETY list; its residuals are its dirt readers' scratch
+  files under `$TMPDIR` and a gitattributes clean filter that `git status` and `git hash-object --path` still run).
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
   on missing — **except FOUR deliberately ungated operator doors: `POST /api/coord/pause`, `POST
   /api/runs/:id/abandon`, `POST /api/claims/:id/break` and `POST /api/runs/:id/reclaim`** (D-282 (was D-B4-9),
@@ -502,7 +519,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   question door family's claimant pair `POST
   /api/questions/:id/rule` and `POST /api/questions/:id/release` (W3 Q3f, D-7030), `POST /api/claims`, `POST
   /api/claims/:id/release`,
-  `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations`, `GET /api/ledger`, `GET /api/landing` and the approvals lane's
+  `POST /api/coordinators/:session/intent`, `POST /api/ledger/deviations`, `GET /api/ledger`, `GET /api/landing`,
+  `POST /api/landing/entries` and `POST /api/landing/order` (setter attribution, not coordinator authorisation), and the approvals lane's
   four (`POST /api/approvals`, `GET /api/approvals/:id/ruling`, `GET /api/approvals/key` and
   `GET /api/approvals/:id`, coordinator-first routing D-5298) and the programme ledgers' coordinator routes (plan PL3; their handlers
   are in `server/src/coord/ledgersRoutes.ts`, a lane source of its own for the census, registered from `registerCoordRoutes`:
@@ -544,11 +562,13 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   route's literal. So does `POST /api/digest/correct` (coordinator-first routing D-5300): it queues the operator's
   correction of a digest line as durable system mail to that line's coordinator, consults no box token, is
   session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/programmes/:slug/goals`,
-  `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss` and `PUT /api/items/:id/secret` (plan PL6), consult no box token
+  `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss`, `PUT /api/items/:id/secret` (plan PL6), and
+  `GET /api/programmes/:slug/secrets` and `DELETE /api/programmes/:slug/secrets/:slot` (the PL6 follow-up), consult no box token
   either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
-  the secret door stores a pasted value in its protected slot and ticks with "set" and when, and the last four characters
-  only for a value at the masker's 20-byte floor or longer, behind a step-up,
-  and every one is session-gated when armed. They are
+  the secret door stores a pasted one-line value in its protected slot and ticks with "set" and when, and the last four
+  characters only for a value the masker catches (at its 20-byte floor or longer, as one run), behind a step-up, the read
+  answers each stored slot's name, time and asking item and never any part of a value, and the Remove door deletes one slot
+  behind a step-up, and every one is session-gated when armed. They are
   registered by `registerLedgerOperatorRoutes` in `server/src/coord/ledgersRoutes.ts`, called from `server.ts`; the census reads
   that file as a lane source of its own and keeps their names in a hand-kept `LEDGER_OPERATOR_DOORS`, checked against it in both
   directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code

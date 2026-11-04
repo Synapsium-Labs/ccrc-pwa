@@ -1,9 +1,10 @@
 // The native Docs reader's L0 vocabulary: the `shared/docs.ts` row of section 1 of the design,
 // `docs/superpowers/specs/2026-10-01-native-docs-reader-design.md`.
 //
-// L0, and it imports only `shared/redact.mjs` (D-5867), which imports nothing and names no host global: the PWA
-// bundles this file and the server and the agent compile it, so it may name no host global either (the PWA's types
-// carry none). Byte lengths are therefore computed from code points by hand. The file is pure ASCII: a non-ASCII
+// L0, and it imports only `shared/redact.mjs` (D-5867) and `shared/utf8.ts`, the one UTF-8 byte counter, each of
+// which imports nothing and names no host global: the PWA bundles this file and the server and the agent compile it,
+// so it may name no host global either (the PWA's types carry none). Byte lengths are therefore computed from code
+// points, by `utf8Bytes`. The file is pure ASCII: a non-ASCII
 // code point in a grammar is written only as a `\u` escape, so the parity scan reads each grammar line byte for byte.
 //
 // Everything here is declared once and derived everywhere else. ccd's embedded helper (`_docs_py`, `ccd/ccd`)
@@ -14,6 +15,7 @@
 // vocabulary, the wire types, the content class, the overlay, the GitHub link and the page grammar.
 
 import { docsRuleRows, redact } from './redact.mjs';
+import { utf8Bytes } from './utf8.js';
 
 // ---- (A) Sections ----------------------------------------------------------------------------------------------
 
@@ -148,20 +150,6 @@ const EXCLUDED_CODE_POINT_RE = new RegExp(
   'u',
 );
 
-/** The UTF-8 length of `s`, counted from its code points: 1 to 4 bytes each, a surrogate pair being one. */
-function utf8Bytes(s: string): number {
-  let n = 0;
-  for (let i = 0; i < s.length; i += 1) {
-    const cp = s.codePointAt(i) ?? 0;
-    if (cp > 0xffff) {
-      n += 4;
-      i += 1;
-    } else {
-      n += cp < 0x80 ? 1 : cp < 0x800 ? 2 : 3;
-    }
-  }
-  return n;
-}
 
 // Every predicate refuses a non-string first: `RegExp.prototype.test` coerces its argument, so an array such as
 // a repeated query key (`['demo']`) would otherwise test as the string `demo`.

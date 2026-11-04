@@ -953,6 +953,41 @@ the worker's fingerprint exactly as the worker reports it.
 5. Dispatch wave N+1 (§2, step 2) only after the applicable close, closed-row
    proof, release proof, and exact-SHA merge proof above succeed.
 
+**Attributed landing writes.** For a PR with no run, create its entry through
+`POST /api/landing/entries`, using the closed client:
+
+```text
+ccrc-api landing entries --json -
+```
+
+Send `project`, `pr`, `pinnedSha`, `handoffCommit`, `byId` and `byUuid` in its
+JSON body. `pinnedSha` claims the PR head and `handoffCommit` claims the
+handoff commit. This door records your claims, not independent GitHub,
+review or ancestry proof. Do not use it to replace an existing or recovered
+entry, replace a run's entry or manufacture an ejection base.
+
+Set or clear an existing entry's order through `POST /api/landing/order`:
+
+```text
+ccrc-api landing order --json -
+```
+
+Send `project`, `pr`, `afterIds`, `fixesMain`, `byId` and `byUuid` in its JSON
+body. Read `GET /api/landing?project=<project>` first. `afterIds` are existing
+entry ids from this project's line, never PR numbers. Send the whole new
+`afterIds` array and the whole new `fixesMain` value, not deltas:
+`afterIds: []` clears the edges and `fixesMain: false` clears the flag. Keep
+the value you read for a field you are not changing; never default it away.
+
+`fixesMain` is the coordinator's or the operator's to set or clear, never a
+worker's. It records priority, not permission to skip any landing gate. Both
+writes require the box token and attribute `setBy` through `byId` and
+`byUuid`; this records who wrote, not who was authorized. Read the answer
+before acting; a refused or unreadable answer licenses no retry or landing.
+An answer with `mayApply: true` is uncertain, not a rejected write with no
+effect. Recovery evidence is not a current pin or proof of a no-run entry.
+A recovery hold or a fenced landing line licenses no landing.
+
 ### 5b — The landing route, from the repository's own rules
 
 Before every landing, on every project, this session reads the PR's repository

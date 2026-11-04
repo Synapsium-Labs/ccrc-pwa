@@ -1280,3 +1280,110 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
     expect(hits).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Clause W5h-b, M4.H23 (base spec 2026-10-01 section 7.10): what the retirement of W5 part 1's main-thread highlight
+// bounds keeps. (1) No `.ts`/`.tsx` file under `pwa/src` spells a retired limit, a part-1 helper or the
+// whole word `part1` (case-sensitive), in its forms `part1`, `part1-scan`, `part1-markdown`, `part1-bounds`: read as
+// TEXT, comments included, by whole word, because a retired name left in a comment is a name left behind. (2) The two
+// caps on input crossing to the worker stay, at 65 536 and 524 288, and `lib/highlightStore.ts` reads each outside its
+// import. (3) The xml grammar
+// the worker registers carries no sub-language inside `<script>` or `<style>`; stock xml beside javascript and css is
+// the control. Its imports are dynamic, inside the cases, so the clause leaves the file's import block as it is.
+// NOT EXHAUSTIVE: a retired name built from pieces (`'MD_HIGHLIGHT_' + 'MAX_WORD_CHARS'`) is not seen; nor is one
+// inside a longer identifier (`part1Bounds`), in another case (`Part1`), spelled with a `\u` escape, or in a `.css`
+// file (not read).
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Every name W5h-b retired, matched as a whole word. */
+const RETIRED_WORDS: readonly string[] = [
+  'MD_HIGHLIGHT_MAX_WORD_CHARS', 'MD_HIGHLIGHT_MAX_LINE_CHARS', 'MD_HIGHLIGHT_MAX_BLANK_CHARS', 'MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS',
+  'MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS', 'DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS', 'DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS',
+  'HIGHLIGHT_BOUNDED_CAPS', 'highlightBlockCap', 'boundedCap', 'inScanPageBudget', 'inMarkdownPageBudget', 'longestWordRun',
+  'longestLine', 'longestBlankRun', 'deriveBoundedCaps', 'embeddedGrammars', 'part1',
+];
+
+/** Each retired word found in the source files under `<base>/src`, as `<file> <word>`. */
+function retiredWordHits(base: string): string[] {
+  const hits: string[] = [];
+  for (const f of sourceFiles(path.join(base, 'src'))) {
+    const text = readFileSync(f, 'utf8');
+    const rel = path.relative(base, f).split(path.sep).join('/');
+    for (const word of RETIRED_WORDS) if (new RegExp(`\\b${word}\\b`).test(text)) hits.push(`${rel} ${word}`);
+  }
+  return hits;
+}
+
+/** How many times each identifier occurs in one module outside its import declarations. */
+function identifierUses(source: string, file: string): Map<string, number> {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const uses = new Map<string, number>();
+  const visit = (n: ts.Node): void => {
+    if (ts.isImportDeclaration(n)) return;
+    if (ts.isIdentifier(n)) uses.set(n.text, (uses.get(n.text) ?? 0) + 1);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return uses;
+}
+
+// Its planted case copies the whole of pwa/src, so it takes the same 30 s bound as the clauses above.
+describe('clause W5h-b, M4.H23: what the retirement of part 1\'s highlight bounds keeps', { timeout: 30_000 }, () => {
+  const copies: string[] = [];
+  afterAll(() => {
+    for (const dir of copies) rmSync(dir, { recursive: true, force: true });
+  });
+  /** A copy of `pwa/src` with `text` appended to `rel`; returns the directory holding `src`. */
+  function planted(rel: string, text: string): string {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'docs-scans-w5hb-'));
+    copies.push(dir);
+    cpSync(SRC_DIR, path.join(dir, 'src'), { recursive: true });
+    const file = path.join(dir, ...rel.split('/'));
+    writeFileSync(file, readFileSync(file, 'utf8') + text);
+    return dir;
+  }
+
+  it('M4.H23: no retired limit, part-1 helper or part1 word is left anywhere in pwa/src', () => {
+    expect(sourceFiles(SRC_DIR).length).toBeGreaterThan(100);
+    expect(retiredWordHits(PWA)).toEqual([]);
+  });
+
+  it('M4.H23 planted: a retired limit declared again, a helper named in a comment, and a part1 word in a string are each red', () => {
+    expect(retiredWordHits(planted('src/lib/markdownLimits.ts', '\nexport const MD_HIGHLIGHT_MAX_LINE_CHARS = 2048;\n')))
+      .toEqual(['src/lib/markdownLimits.ts MD_HIGHLIGHT_MAX_LINE_CHARS']);
+    expect(retiredWordHits(planted('src/lib/markdown.tsx', '\n// longestWordRun once bounded r10.\n')))
+      .toEqual(['src/lib/markdown.tsx longestWordRun']);
+    expect(retiredWordHits(planted('src/lib/highlightStore.ts', "\nexport const plantedSkip = 'part1-scan';\n")))
+      .toEqual(['src/lib/highlightStore.ts part1']);
+  });
+
+  it('M4.H23: the two caps on input crossing to the worker stay, at 65 536 and 524 288, and highlightStore.ts reads each outside its import', async () => {
+    const limits = await import('../src/lib/markdownLimits');
+    expect(limits.MD_HIGHLIGHT_BLOCK_MAX_CHARS).toBe(65536);
+    expect(limits.DOCS_HIGHLIGHT_PAGE_MAX_CHARS).toBe(524288);
+    const uses = identifierUses(readFileSync(path.join(SRC_DIR, 'lib', 'highlightStore.ts'), 'utf8'), 'highlightStore.ts');
+    expect(uses.get('MD_HIGHLIGHT_BLOCK_MAX_CHARS') ?? 0, 'MD_HIGHLIGHT_BLOCK_MAX_CHARS read').toBeGreaterThan(0);
+    expect(uses.get('DOCS_HIGHLIGHT_PAGE_MAX_CHARS') ?? 0, 'DOCS_HIGHLIGHT_PAGE_MAX_CHARS read').toBeGreaterThan(0);
+  });
+
+  it('M4.H23: the worker\'s xml carries no sub-language inside <script> or <style>; stock xml beside javascript and css, the control, does', async () => {
+    const { HLJS } = await import('../src/lib/highlightGrammars');
+    const { default: hljs } = await import('highlight.js/lib/core');
+    const { default: stockXml } = await import('highlight.js/lib/languages/xml');
+    const { default: javascript } = await import('highlight.js/lib/languages/javascript');
+    const { default: css } = await import('highlight.js/lib/languages/css');
+    const src = '<script>let a = 1;</script><style>a { color: red }</style>';
+    const SUB = /hljs-(?:keyword|selector-tag|attribute)/;
+    const ours = HLJS.highlight(src, { language: 'xml', ignoreIllegals: true }).value;
+    expect(ours).toMatch(/hljs-tag/);
+    expect(ours).not.toMatch(SUB);
+    expect(ours).not.toMatch(/class="language-/);
+    const stock = hljs.newInstance();
+    stock.registerLanguage('xml', stockXml);
+    stock.registerLanguage('javascript', javascript);
+    stock.registerLanguage('css', css);
+    const control = stock.highlight(src, { language: 'xml', ignoreIllegals: true }).value;
+    expect(control).toMatch(SUB);
+    expect(control).toMatch(/class="language-javascript"/);
+  });
+});

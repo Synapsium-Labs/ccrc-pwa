@@ -7,9 +7,13 @@ import type { GoalsView, ItemAct, ItemActor } from '../../../shared/ledgers.js';
 import * as ledgers from './ledgersStore.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
-import { decideLandingWrite, landingEntryOfRow, landingFlagsOfRow } from './landingEntry.js';
+import { decideLandingWrite, landingFactsOf, landingHoldGate, landingRecordOf } from './landingEntry.js';
+import { parseLandingJournal } from './landingJournalPolicy.js';
 import type { LandingAdvance, LandingWrite } from './landingEntry.js';
-import type { LandingEntry, LandingEntryState } from '../../../shared/landingLine.js';
+import type { LandingEntryState, LandingInfrastructureFailure, LandingJournalRecord } from '../../../shared/landingLine.js';
+import { decideLandingMutation } from './landingWrites.js';
+import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalReplay, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
+import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { renderEnvelope } from './envelope.js';
@@ -56,10 +60,10 @@ import type { UpdateIntentLog } from './updateintentlog.js';
 // Delegation broker wave 3, Task 7: the projection's row shapes, codecs and guards are the PURE `delegation-model.ts`;
 // this file runs the SQL and nothing else.
 import {
-  assertWave3Leases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
+  assertLeases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
   delegationLeaseCodec, delegationLineageCodec, delegationSessionCodec, DelegationModelError,
   prepareDelegationProjectionChanges,
-  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationProjectChangesResult,
+  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationLineageRow, type DelegationProjectChangesResult,
   type DelegationProjectionInsert, type DelegationProjectionUpdate, type DelegationRowCodec, type DelegationSqlValue,
 } from './delegation-model.js';
 // Child reclamation wave 10 (path-identity spec 2026-10-12 §5.2): the collector switch's read vocabularies, its journal
@@ -95,6 +99,7 @@ import type { RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
+import { REVIVABLE_PARK_ERRORS, REVIVE_SKIPPED_SENDERS, REVIVE_SKIPPED_SUBJECT_HEADS } from './mailRevive.js';
 import {
   DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
@@ -155,8 +160,12 @@ import {
 } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
- *  here rather than parsed twice: `coord/prhistory.ts` owns the reader. */
-export interface PrLineageEntry { pr: number; branch: string; phase: string; recordedAt: number }
+ *  here rather than parsed twice: `coord/prhistory.ts` owns the reader.
+ *
+ *  `branch` is the branch at REPLACEMENT, the one the sweep was bound to when this row was written. `prbranch` is the
+ *  branch the retired PR was on, recorded at bind (D-5941), and absent from a row written before ccd recorded it. The two
+ *  differ across a reset, so only `prbranch` says whose PR a row is: `prRowCounts` (`rundefs.ts`) is the one rule. */
+export interface PrLineageEntry { pr: number; branch: string; prbranch?: string; phase: string; recordedAt: number }
 
 /**
  * A run row as the STORE reads it: `RunSummary` (the wire shape) plus
@@ -268,7 +277,9 @@ export type AdvanceResult =
 export type LandingAdvanceResult =
   | (Extract<AdvanceResult, { ok: true }> & { landing: LandingWrite })
   | Exclude<AdvanceResult, { ok: true }>
-  | { ok: false; error: Extract<RunRefuseCode, 'ejection-not-merging'>; from: RunState };
+  | { ok: false; error: Extract<RunRefuseCode, 'ejection-not-merging'>; from: RunState }
+  | ({ ok: false } & LandingInfrastructureFailure)
+  | { ok: false; error: 'landing-recovery-unresolved' | 'landing-identity-conflict' | 'landing-id-overflow' };
 
 /** `setAccountPools`'s answer (T6-R4, fix round 1; `error`'s vocabulary moved
  *  to `shared/api.ts`'s `SetAccountPoolsRefuseCode` in fix round 2 — see C1
@@ -1298,6 +1309,22 @@ export type RequeueRole =
   | { role: 'coordinator'; program: string }
   | { role: 'worker'; runId: number };
 
+/** One heir `reviveParkedDeliveries` queued (D-5914): `from` is the parked delivery it revives, `heir` the new one. */
+export interface RevivedDelivery { readonly from: number; readonly heir: number; readonly mailId: number; readonly toId: string }
+/** `reviveParkedDeliveries`'s answer: every heir it queued, `[]` for none. Typed, never `void`. */
+export interface ReviveParkedResult { readonly revived: readonly RevivedDelivery[] }
+
+/** What an heir is rendered from: the mail's own columns and its run's (`queueHeir`). Selected by the re-queue and
+ *  the revive alike, through `HEIR_SOURCE_COLUMNS` below, so the two selects cannot disagree about an envelope. */
+interface HeirSource {
+  mailId: number; fromId: string; kind: string; subject: string; body: string;
+  artifacts: string; runId: number; program: string; wave: number; waveOf: number | null;
+}
+const HEIR_SOURCE_COLUMNS =
+  'm.id AS mailId, m.fromId AS fromId, m.kind AS kind, m.subject AS subject, ' +
+  'm.body AS body, m.artifacts AS artifacts, m.runId AS runId, ' +
+  'rr.program AS program, rr.wave AS wave, rr.waveOf AS waveOf';
+
 /** `?,?,?` for an `IN (...)` bound to a JS array (D-1141). `node:sqlite` has no
  *  array bind, so the list has to be BUILT — and a built SQL fragment is exactly
  *  where a value would slip into the statement text. One home, and it can emit
@@ -1399,9 +1426,22 @@ export const MAIL_CHILD_RECLAIMED_ERROR = 'child workspace reclaimed';
 const DELIBERATE_CANCEL_ERRORS_SQL =
   `('${MAIL_RUN_CLOSED_ERROR}','${MAIL_RECLAIM_CANCELLED_ERROR}','${MAIL_REBIND_SUPERSEDED_ERROR}','${MAIL_CHILD_RECLAIMED_ERROR}')`;
 
+/** D-5914 (spec 2026-10-20 §3.2, #125): THE ONE "this park has an heir" fragment. A delivery some later delivery
+ *  names as its parent (`revivedFrom`, migration 40) is not abandoned: its heir carries the attention now, and counts
+ *  while it is outstanding as any queued mail does. Keyed on `revivedFrom`, never on `mailId`/`toId`:
+ *  `repointCoordinatorMail` rewrites an heir's `toId` when a coordinator is displaced, and a clause keyed on the
+ *  recipient would lose the repointed heir and count the parent again beside it. Read in two places, both `AND NOT` it:
+ *  `ABANDONED_PARK_SQL` below, which `reviveParkedDeliveries` composes, so the read's "retired by an heir" and the
+ *  revive's "no heir yet" are one spelling and cannot drift; and `runHealth`'s `parked` count, which spells its own park
+ *  (it measures a closed run too, so `ABANDONED_PARK_SQL`'s open-run clause cannot serve it) and would otherwise go on
+ *  saying a revived mail was never received. `d` is the caller's `mail_deliveries` alias; `h` is this fragment's own.
+ *  Served by the partial index `mail_deliveries_by_revived`. */
+const HAS_HEIR_SQL = 'EXISTS (SELECT 1 FROM mail_deliveries h WHERE h.revivedFrom = d.id)';
+
 /** The ABANDONMENT half of the predicate below, lifted into its own name because
- *  it is about to have a second reader: `requeueAbandonedMail`
- *  selects exactly the rows a mailbox shows as an abandoned park, and a re-queue
+ *  it has readers beyond it: `requeueAbandonedMail` selects exactly the rows a
+ *  mailbox shows as an abandoned park, `reviveParkedDeliveries` (D-5914) selects
+ *  the lifecycle parks among them, and a re-queue
  *  that respelled these clauses would drift from the thing it is meant to
  *  mirror — the same argument `DELIBERATE_CANCEL_ERRORS_SQL` above makes about
  *  its two literals, one level up. Pinned by `single-definition.test.ts`'s
@@ -1415,7 +1455,8 @@ const DELIBERATE_CANCEL_ERRORS_SQL =
 const ABANDONED_PARK_SQL =
   "(d.state = 'rejected' " +
   `AND COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
-  `AND COALESCE(rr.state, '') NOT IN ${TERMINAL_RUN_STATES_SQL})`;
+  `AND COALESCE(rr.state, '') NOT IN ${TERMINAL_RUN_STATES_SQL} ` +
+  `AND NOT ${HAS_HEIR_SQL})`;
 
 /**
  * The READ-side "still needs a human's attention" predicate (fix, review
@@ -1779,7 +1820,13 @@ const feedDedupeHash = (key: string): string => createHash('sha256').update(key)
  * (spec:78-81) true rather than aspirational.
  */
 export class CoordStore {
-  constructor(readonly db: DatabaseSync) {}
+  /** Landing order wave 5f: null open; `replay` closed until `replayLandingJournal` proves the history; `restart` closed for good. */
+  private landingFence: 'replay' | 'restart' | null;
+  /** D-7972: the run ids whose absent `runs` row this process has already warned about, so the warning is one line per run. */
+  private readonly lineageRunsWarned = new Set<number>();
+  constructor(readonly db: DatabaseSync, private readonly landing: { landingJournal?: LandingJournalPort; onUnusableConnection?: () => never } = {}) {
+    this.landingFence = landing.landingJournal === undefined ? null : 'replay';
+  }
 
   // ── programs & runs ────────────────────────────────────────────────────────
 
@@ -2461,7 +2508,11 @@ export class CoordStore {
    *     each field says what it is documented to say, and the outstanding half
    *     clears on the heir's ack. It is written down because the sentence an
    *     operator READS counts one message twice, and a walk that skipped this
-   *     reader would have shipped that surprise unannounced.
+   *     reader would have shipped that surprise unannounced. A REVIVE's heir is
+   *     the other half of that sentence and does not share it (D-5914): it names
+   *     its parent, the `parked` count below is `AND NOT HAS_HEIR_SQL`, so a
+   *     revived park moves `mailParked` 1 -> 0 as `mailOutstanding` goes 0 -> 1.
+   *     This arm's heir names no parent, and its count stays as written here.
    *   `hasOutstandingMail` — its slot cannot be swallowed, but NOT for the
    *     reason this walk first gave. That version said the slot is "keyed by
    *     SENDER" and then argued from `queueSystemMail`'s ADDRESSEE ("no call
@@ -2551,9 +2602,7 @@ export class CoordStore {
     const scope = role.role === 'coordinator' ? 'rr.program = ?' : 'm.runId = ?';
     const scopeArg: string | number = role.role === 'coordinator' ? role.program : role.runId;
     const rows = this.db.prepare(
-      'SELECT m.id AS mailId, m.fromId AS fromId, m.kind AS kind, m.subject AS subject, ' +
-      'm.body AS body, m.artifacts AS artifacts, m.runId AS runId, ' +
-      'rr.program AS program, rr.wave AS wave, rr.waveOf AS waveOf ' +
+      `SELECT ${HEIR_SOURCE_COLUMNS} ` +
       'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       'JOIN runs rr ON rr.id = m.runId ' +
       `WHERE ${source} AND d.toId IN (${placeholders(displaced.length)}) ` +
@@ -2561,33 +2610,10 @@ export class CoordStore {
       'AND NOT EXISTS (SELECT 1 FROM mail_deliveries x ' +
       `WHERE x.mailId = m.id AND x.toId = ? AND x.state IN ${OUTSTANDING_STATES_SQL}) ` +
       'GROUP BY m.id ORDER BY MIN(d.id)',
-    ).all(...displaced, scopeArg, to) as {
-      mailId: number; fromId: string; kind: string; subject: string; body: string;
-      artifacts: string; runId: number; program: string; wave: number; waveOf: number | null;
-    }[];
-    for (const r of rows) {
-      const delivery = this.queueDelivery(r.mailId, to, '');
-      // THE RESULT IS READ, NOT DROPPED. Task 24 gave `setDeliveryEnvelope` a
-      // `SetEnvelopeResult` precisely because "a writer whose safety rests on its
-      // two callers' shape breaks silently the day a third one appears" — this IS
-      // that third caller, and TypeScript does not complain about a discarded
-      // return, so dropping it here would re-mint the defect one task after it was
-      // fixed. Same handling as the other two: unstampable is a bug, not a state.
-      const stamped = this.setDeliveryEnvelope(delivery.id, renderEnvelope({
-        id: delivery.id, fromId: r.fromId, toId: to, runId: r.runId,
-        program: r.program, wave: r.wave, waveOf: r.waveOf,
-        // Narrowed the way `hydrateMail` narrows it, not cast: `kind` is a
-        // CLOSED union and `'unknown'` is a real member. The branch is dead in
-        // practice (`insertMail`'s parameter is already `MailKind`), and a cast
-        // would have been this method quietly asserting what it did not check.
-        kind: isMailKind(r.kind) ? r.kind : 'unknown',
-        subject: r.subject, body: r.body,
-        artifacts: JSON.parse(r.artifacts) as string[],
-      }));
-      if (!stamped.ok) {
-        throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
-      }
-    }
+    ).all(...displaced, scopeArg, to) as unknown as HeirSource[];
+    // A re-queue's heir names no parent (`revivedFrom` NULL): the corpse's park stays abandoned on the corpse's own
+    // mailbox, exactly as before D-5914. Only a revive retires its parent.
+    for (const r of rows) this.queueHeir(r, to, null);
     // THE PREDECESSOR'S ROWS, PARKED — worker only. The coordinator arm's
     // source rows are already terminal (`ABANDONED_PARK_SQL`), and arm (c) of
     // `reclaimProgram`'s ruling says a park is never moved or reopened; this
@@ -2628,6 +2654,97 @@ export class CoordStore {
       "state = 'rejected', rejectCode = 'undeliverable', lastError = ?", [MAIL_REBIND_SUPERSEDED_ERROR], 'outstanding',
       `toId IN (${placeholders(displaced.length)}) AND mailId IN (${placeholders(mailIds.length)})`,
       [...displaced, ...mailIds]) };
+  }
+
+  /**
+   * The ONE heir loop body (D-5914), extracted from `requeueAbandonedMail` so the revive below shares it: a NEW delivery
+   * of `r`'s mail to `to`, with its own envelope rendered now that its id exists (`queueDelivery(…, '')` ->
+   * `renderEnvelope` -> `setDeliveryEnvelope`, the pair `routes.ts` and `rundefsTx.ts` use), naming `revivedFrom` as
+   * its parent (NULL for a re-queue, the parked delivery's id for a revive). Answers the heir's id. Like
+   * `requeueAbandonedMail`, it reaches delivery rows only through `queueDelivery` and `setDeliveryEnvelope`.
+   */
+  private queueHeir(r: HeirSource, to: string, revivedFrom: number | null): number {
+    const delivery = this.queueDelivery(r.mailId, to, '', revivedFrom);
+    // THE RESULT IS READ, NOT DROPPED. Task 24 gave `setDeliveryEnvelope` a
+    // `SetEnvelopeResult` precisely because "a writer whose safety rests on its
+    // two callers' shape breaks silently the day a third one appears" — this IS
+    // that third caller, and TypeScript does not complain about a discarded
+    // return, so dropping it here would re-mint the defect one task after it was
+    // fixed. Same handling as the other two: unstampable is a bug, not a state.
+    const stamped = this.setDeliveryEnvelope(delivery.id, renderEnvelope({
+      id: delivery.id, fromId: r.fromId, toId: to, runId: r.runId,
+      program: r.program, wave: r.wave, waveOf: r.waveOf,
+      // Narrowed the way `hydrateMail` narrows it, not cast: `kind` is a
+      // CLOSED union and `'unknown'` is a real member. The branch is dead in
+      // practice (`insertMail`'s parameter is already `MailKind`), and a cast
+      // would have been this method quietly asserting what it did not check.
+      kind: isMailKind(r.kind) ? r.kind : 'unknown',
+      subject: r.subject, body: r.body,
+      artifacts: JSON.parse(r.artifacts) as string[],
+    }));
+    if (!stamped.ok) {
+      throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
+    }
+    return delivery.id;
+  }
+
+  /**
+   * D-5914 (spec 2026-10-20 §3.1, #125): a parked mail comes back with its recipient. Each delivery below gets ONE heir,
+   * a new delivery of the same mail to the same recipient naming it in `revivedFrom`; the parked row itself is never
+   * written (no terminal row goes back to `queued`, which `mail-hardening.test.ts`'s writer scan holds), and its
+   * retirement is derived in the read (`HAS_HEIR_SQL`). A delivery qualifies when all of these hold:
+   *  - it is an abandoned park: `ABANDONED_PARK_SQL`, composed rather than respelled, which carries the open-run clause
+   *    (`COALESCE(rr.state, '')` against the terminal run states), the deliberate-cancel exclusion and `NOT HAS_HEIR_SQL`
+   *    (a parent is revived once; a heir that parks again is its own parent, revived once in its turn);
+   *  - it was rejected `undeliverable` with a `lastError` in `REVIVABLE_PARK_ERRORS` (`coord/mailRevive.ts`: the
+   *    lifecycle park and the two legacy live-recipient parks; never #853's 24 h reject, the replay ceiling or a purged
+   *    recipient);
+   *  - it is CURRENT: its mail was sent at or after its run's `dispatchedAt` (`m.at >= rr.dispatchedAt`, both the
+   *    server's clock; a delivery row has no time of its own). A run never dispatched revives nothing;
+   *  - it is not a system notice: its sender is none of `REVIVE_SKIPPED_SENDERS` (the watcher's `operator` voice) and
+   *    its subject starts with none of `REVIVE_SKIPPED_SUBJECT_HEADS` (the done-claim answers among them);
+   *  - a ROLE-addressed mail is revived only to the session that still holds the role on its run (D-7901): a
+   *    coordinator report only to `rr.claimedBy`, a worker brief only to `rr.sessionId`. A displaced chair or a
+   *    rebound worker that comes back is not the role any more; `requeueAbandonedMail` already handed the role's mail
+   *    to its successor, and a revive to the corpse would deliver it twice;
+   *  - NO OTHER COPY of the mail is live or acked (every delivery of it reads `rejected`). The role bound alone does
+   *    not hold this: a chair displaced and reinstated IS the role again, while the mail it parked was re-queued to its
+   *    successor meanwhile. That copy is repointed back to it (a revive would queue a second delivery beside it) or was
+   *    acked (the role has read the message, and a revive would hand it the mail again). `requeueAbandonedMail`'s
+   *    `NOT EXISTS` is the outstanding half of the same rule; a mail has one addressee, so any recipient's ack answers;
+   *  - its recipient is in `liveIds`, the ids the mail pass read live this tick (`coord/mailRevive.ts#revivable`).
+   *
+   * ONE heir per mail per sweep (`GROUP BY m.id`, the re-queue's own shape, the older park naming it): a chair's park
+   * and the re-queued copy that parked at it are two parks of one message, and the `NOT EXISTS` reads rows the same
+   * statement has not written yet. The newer park gets no heir and stays a park, as a re-queue's corpse does.
+   *
+   * One transaction, so a sweep racing another sees each parent with or without its heir, never half. Answers every
+   * heir it queued, in parent-id order; `[]` when nothing qualified. Never `void`.
+   */
+  reviveParkedDeliveries(liveIds: readonly string[]): ReviveParkedResult {
+    if (liveIds.length === 0) return { revived: [] };
+    const heads = REVIVE_SKIPPED_SUBJECT_HEADS;
+    return tx(this.db, () => {
+      const rows = this.db.prepare(
+        `SELECT MIN(d.id) AS deliveryId, d.toId AS toId, ${HEIR_SOURCE_COLUMNS} ` +
+        'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
+        'JOIN runs rr ON rr.id = m.runId ' +
+        `WHERE ${ABANDONED_PARK_SQL} AND d.rejectCode = 'undeliverable' ` +
+        `AND d.lastError IN (${placeholders(REVIVABLE_PARK_ERRORS.length)}) ` +
+        'AND m.at >= rr.dispatchedAt ' +
+        `AND m.fromId NOT IN (${placeholders(REVIVE_SKIPPED_SENDERS.length)}) ` +
+        `AND NOT (${heads.map(() => 'substr(m.subject, 1, length(?)) = ?').join(' OR ')}) ` +
+        "AND (m.toId != 'coordinator' OR d.toId = rr.claimedBy) " +
+        "AND (m.toId != 'worker' OR d.toId = rr.sessionId) " +
+        "AND NOT EXISTS (SELECT 1 FROM mail_deliveries x WHERE x.mailId = m.id AND x.state != 'rejected') " +
+        `AND d.toId IN (${placeholders(liveIds.length)}) ` +
+        'GROUP BY m.id ORDER BY MIN(d.id)',
+      ).all(...REVIVABLE_PARK_ERRORS, ...REVIVE_SKIPPED_SENDERS, ...heads.flatMap((h) => [h, h]), ...liveIds) as unknown as
+        (HeirSource & { deliveryId: number; toId: string })[];
+      return { revived: rows.map((r) => ({
+        from: r.deliveryId, heir: this.queueHeir(r, r.toId, r.deliveryId), mailId: r.mailId, toId: r.toId,
+      })) };
+    });
   }
 
   /**
@@ -2968,68 +3085,299 @@ export class CoordStore {
    * `merging-at:` detail itself from the same head it writes as `pinnedSha`, so the two cannot disagree. The choice of
    * what to write is `decideLandingWrite`'s (L1). The advance is never refused on the line's account (D-7618), and an
    * ejection body on a run not at `merging` is the one refusal of its own (D-7619). A `LandingAdvance` that pairs
-   * wrongly with `to` is a programming error and throws, rolling everything back.
+   * wrongly with the ACTUAL transition (a `plain` merging -> working included) is a programming error and throws,
+   * before any effect. Wave 5f: a pin or a retreat from `merging` that names a PR goes through the landing fence and
+   * the recovery hold; its own effects phase (`none`, `applying`, `committing`) says what an exception left uncertain,
+   * and an uncertain one fences the line and answers `mayApply`. A verified pin also writes its witness, atomically.
    */
   advanceLanding(input: { runId: number; to: RunState; causedBy: string; landing: LandingAdvance }): LandingAdvanceResult {
     const { runId, to, causedBy, landing } = input;
-    return tx(this.db, () => {
-      const row = this.db.prepare('SELECT state, kind, project FROM runs WHERE id = ?').get(runId) as
-        { state: string; kind: string; project: string } | undefined;
-      if (!row) return { ok: false as const, error: 'unknown-run' as const };
-      const from = isRunState(row.state) ? row.state : 'unknown';
-      const kind = isRunKind(row.kind) ? row.kind : 'unknown';
-      if (!(transitionsFor(kind)[from] as readonly string[]).includes(to)) {
-        return { ok: false as const, error: 'bad-transition' as const, from, to };
-      }
-      if ((landing.kind === 'pin') !== (to === 'merging') || (landing.kind === 'retreat' && to !== 'working')) {
-        throw new Error(`advanceLanding: a ${landing.kind} advance does not pair with a move to ${to}`);
-      }
-      if (landing.kind === 'retreat' && landing.ejection !== null && from !== 'merging') {
-        return { ok: false as const, error: 'ejection-not-merging' as const, from };
-      }
-      const episode = landing.kind === 'retreat' ? this.currentEpisode(runId) : null;
-      const pr = landing.kind === 'pin' ? landing.pr : episode?.pr ?? null;
-      const current = pr === null ? null : this.landingEntryOf(row.project, pr);
-      const decision = decideLandingWrite({ landing, from, runId, current, episode });
-      const adv = this.advanceInner(runId, to, causedBy,
-        landing.kind === 'pin' ? mergingAtDetail(landing.head, landing.pr, landing.mode) : undefined);
-      if (!adv.ok) return adv;
-      if (decision.act === 'none') return { ...adv, landing: decision.write };
-      const pinned: LandingEntryState = 'pinned';
-      const ejected: LandingEntryState = 'ejected';
-      if (landing.kind === 'pin' && decision.act === 'insert') {
-        this.db.prepare('INSERT INTO landing_entries (project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(row.project, landing.pr, landing.head, landing.handoffCommit, runId, pinned, causedBy, Date.now());
-      } else if (landing.kind === 'pin' && decision.act === 'repin') {
-        this.db.prepare('UPDATE landing_entries SET pinnedSha = ?, handoffCommit = ?, runId = ?, state = ?, baseSha = NULL, ' +
-          'ejectionKind = NULL, pinnedAt = ? WHERE id = ?').run(landing.head, landing.handoffCommit, runId, pinned, Date.now(), decision.id);
-      } else if (decision.act === 'eject') {
-        this.db.prepare('UPDATE landing_entries SET state = ?, baseSha = ?, ejectionKind = ?, ejections = ejections + 1 WHERE id = ?')
-          .run(ejected, decision.base, decision.kind, decision.id);
-      }
-      const entry = pr === null ? null : this.landingEntryOf(row.project, pr);
-      if (entry === null) throw new Error('advanceLanding: the entry it just wrote reads back absent');
-      return { ...adv, landing: decision.act === 'eject' ? { kind: 'ejected' as const, entry }
-        : { kind: 'pinned' as const, entry, created: decision.act === 'insert' } };
+    let effects: 'none' | 'applying' | 'committing' = 'none';
+    let touched = false;
+    let began = false;
+    try {
+      return tx(this.db, (): LandingAdvanceResult => {
+        began = true;
+        const out = ((): LandingAdvanceResult => {
+          const row = this.db.prepare('SELECT state, kind, project FROM runs WHERE id = ?').get(runId) as
+            { state: string; kind: string; project: string } | undefined;
+          if (!row) return { ok: false as const, error: 'unknown-run' as const };
+          const from = isRunState(row.state) ? row.state : 'unknown';
+          const kind = isRunKind(row.kind) ? row.kind : 'unknown';
+          if (!(transitionsFor(kind)[from] as readonly string[]).includes(to)) {
+            return { ok: false as const, error: 'bad-transition' as const, from, to };
+          }
+          if ((landing.kind === 'pin') !== (to === 'merging') || (landing.kind === 'retreat' && to !== 'working')
+            || (from === 'merging' && to === 'working' && landing.kind !== 'retreat')) {
+            throw new Error(`advanceLanding: a ${landing.kind} advance does not pair with a move to ${to}`);
+          }
+          if (landing.kind === 'retreat' && landing.ejection !== null && from !== 'merging') {
+            return { ok: false as const, error: 'ejection-not-merging' as const, from };
+          }
+          const episode = landing.kind === 'retreat' ? this.currentEpisode(runId) : null;
+          const pr = landing.kind === 'pin' ? landing.pr : episode?.pr ?? null;
+          let facts: LandingMutationFacts | null = null;
+          let reserved: number | null = null;
+          if (pr !== null && (landing.kind === 'pin' || from === 'merging')) {
+            const fenced = this.landingGuard();
+            if (fenced !== null) return { ok: false as const, ...fenced };
+            touched = true;
+            const read = this.landingFactsInner(row.project);
+            if (!read.ok) return read;
+            facts = read.facts;
+          }
+          const current = facts?.entries.find((e) => e.pr === pr) ?? null;
+          const projection = facts?.projections.find((p) => p.id === current?.id)?.value ?? null;
+          if (facts !== null && landing.kind !== 'plain') {
+            const gate = landingHoldGate(facts.recovery, landing.kind, { project: row.project, pr: pr! }, projection);
+            if (!gate.ok) return { ok: false as const, error: gate.error };
+            reserved = gate.own?.id ?? facts.nextId;
+          }
+          const decision = decideLandingWrite({ landing, from, runId, current, projection, episode });
+          if (decision.act === 'refuse') return decision.failure;
+          if (decision.act === 'insert' && reserved === null) return { ok: false as const, error: 'landing-id-overflow' as const };
+          effects = 'applying';
+          const adv = this.advanceInner(runId, to, causedBy,
+            landing.kind === 'pin' ? mergingAtDetail(landing.head, landing.pr, landing.mode) : undefined);
+          if (!adv.ok) return adv;
+          if (decision.act === 'none') return { ...adv, landing: decision.write };
+          const pinned: LandingEntryState = 'pinned';
+          const ejected: LandingEntryState = 'ejected';
+          let entryId = reserved;
+          if (landing.kind === 'pin' && decision.act === 'insert') {
+            this.db.prepare('INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) ' +
+              'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(reserved, row.project, landing.pr, landing.head, landing.handoffCommit, runId, pinned, causedBy, Date.now());
+          } else if (landing.kind === 'pin' && decision.act === 'repin') {
+            // A verified re-pin also clears the stale-head marker (a quarantined row re-pins only on a readable projection).
+            this.db.prepare('UPDATE landing_entries SET pinnedSha = ?, handoffCommit = ?, runId = ?, state = ?, baseSha = NULL, ' +
+              'ejectionKind = NULL, quarantineKind = NULL, pinnedAt = ? WHERE id = ?').run(landing.head, landing.handoffCommit, runId, pinned, Date.now(), decision.id);
+            entryId = decision.id;
+          } else if (decision.act === 'eject') {
+            // The count is the decider's (bounded at the safe-integer ceiling), never `ejections + 1` in SQL.
+            this.db.prepare('UPDATE landing_entries SET state = ?, baseSha = ?, ejectionKind = ?, ejections = ? WHERE id = ?')
+              .run(ejected, decision.base, decision.kind, decision.ejections, decision.id);
+          } else if (decision.act === 'quarantine') {
+            // A stale entry head is not an ejection: only the state and its one marker move (no base, count or notice).
+            this.db.prepare("UPDATE landing_entries SET state = 'unknown', quarantineKind = 'stale-episode-head' WHERE id = ?").run(decision.id);
+            return { ...adv, landing: { kind: 'kept' as const, state: 'unknown' as const } };
+          }
+          if (landing.kind === 'pin') {
+            // The witness of this verified pin, bound to the subject's latest observation (0 when it has none): the ONLY writer.
+            const seen = this.bigReads('SELECT observedSeq FROM landing_subjects WHERE project = ? AND pr = ?')
+              .get(row.project, landing.pr) as { observedSeq: bigint } | undefined;
+            this.db.prepare('INSERT OR REPLACE INTO landing_projection_witness (entryId, project, pr, observedSeq, runId, pinnedSha, handoffCommit) ' +
+              'VALUES (?, ?, ?, ?, ?, ?, ?)').run(entryId, row.project, landing.pr, Number(seen?.observedSeq ?? 0n), runId, landing.head, landing.handoffCommit);
+          }
+          const after = this.landingFactsInner(row.project);
+          const entry = after.ok ? after.facts.entries.find((e) => e.pr === pr) ?? null : null;
+          if (entry === null) throw new Error('advanceLanding: the entry it just wrote reads back absent');
+          return { ...adv, landing: decision.act === 'eject' ? { kind: 'ejected' as const, entry }
+            : { kind: 'pinned' as const, entry, created: decision.act === 'insert' } };
+        })();
+        if (effects === 'applying') effects = 'committing';
+        return out;
+      });
+    } catch (err) {
+      // A plain advance, and a pin or retreat that began but never reached the line (the run read, the pairing
+      // programming error, a retreat with no PR or not from merging), carry no landing contract: the failure propagates
+      // as it always did. A pin or retreat whose BEGIN threw is the line's own db-unavailable; once the line was
+      // reached, a failure is the line's, by its effects phase.
+      if (landing.kind === 'plain' || (began && !touched)) throw err;
+      const recovery = this.landingBoundary();
+      if (effects === 'none') return { ok: false, error: 'landing-db-unavailable', recovery };
+      this.landingFence = recovery;
+      return { ok: false, error: effects === 'applying' ? 'landing-db-apply' : 'landing-db-commit', recovery, mayApply: true };
+    }
+  }
+
+  /** The landing entrances' guard: unavailable without a journal port, `landing-fenced` while the fence stands. */
+  private landingGuard(): LandingInfrastructureFailure | null {
+    if (this.landing.landingJournal === undefined) return { error: 'landing-journal-unavailable', recovery: 'restart' };
+    return this.landingFence === null ? null : { error: 'landing-fenced', recovery: this.landingFence };
+  }
+
+  /** After a caught landing failure: `replay` only when the connection PROVABLY sits at a clean transaction boundary. An
+   *  open handle in a transaction, or one whose state cannot be measured, is closed (and the fence made restart-only); a
+   *  close that cannot be proved calls the L5 fail-stop. `tx` suppresses ROLLBACK errors, so a caught throw proves nothing. */
+  private landingBoundary(): 'replay' | 'restart' {
+    try { if (this.db.isOpen && !this.db.isTransaction) return 'replay'; } catch { /* unprovable: closed below */ }
+    this.landingFence = 'restart';
+    try { if (this.db.isOpen) this.db.close(); } catch { /* proved below */ }
+    let closed = false;
+    try { closed = !this.db.isOpen; } catch { /* not proved */ }
+    if (!closed) {
+      this.landing.onUnusableConnection?.();
+      throw new Error('landing: the database connection cannot be proved closed');
+    }
+    return 'restart';
+  }
+
+  /** A landing SELECT: it reads bigints, so an oversized INTEGER reaches the strict reader whole, never rounded. */
+  private bigReads(sql: string): StatementSync { const st = this.db.prepare(sql); st.setReadBigInts(true); return st; }
+
+  /** The guarded inner read: every landing SELECT reads bigints, and one project's rows fold into its coherent facts. */
+  private landingFactsInner(project: string): LandingReadResult {
+    const all = (sql: string, ...p: string[]): Record<string, unknown>[] => this.bigReads(sql).all(...p) as Record<string, unknown>[];
+    return landingFactsOf(project, {
+      entries: all('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, afterIds, fixesMain, ' +
+        'setBy, pinnedAt, quarantineKind FROM landing_entries ORDER BY pinnedAt, id'),
+      subjects: all('SELECT id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim FROM landing_subjects'),
+      authorities: all('SELECT subjectId, afterIds, fixesMain, setBy, seq FROM landing_authority'),
+      witnesses: all('SELECT entryId, project, pr, observedSeq, runId, pinnedSha, handoffCommit FROM landing_projection_witness'),
+      flags: all('SELECT operatorPaused, mainRedHold FROM landing_projects WHERE project = ?', project)[0],
+      runs: all('SELECT id, claimedBy FROM runs WHERE id IN (SELECT runId FROM landing_entries WHERE project = ? AND runId IS NOT NULL)', project),
     });
   }
 
-  /** One entry by (project, pr), read through `landingEntryOfRow`; null when there is none. */
-  private landingEntryOf(project: string, pr: number): LandingEntry | null {
-    const row = this.db.prepare('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, ' +
-      'afterIds, fixesMain, setBy, pinnedAt FROM landing_entries WHERE project = ? AND pr = ?').get(project, pr);
-    return row === undefined ? null : landingEntryOfRow(row);
+  /** One project's guarded landing facts (entries, flags, recovery and the inner inventories): a synchronous read
+   *  transaction behind the fence. The ONLY public landing read. */
+  readLanding(project: string): LandingReadResult {
+    const fenced = this.landingGuard();
+    if (fenced !== null) return { ok: false, ...fenced };
+    try { return this.db.isTransaction ? this.landingFactsInner(project) : tx(this.db, () => this.landingFactsInner(project)); }
+    catch { return { ok: false, error: 'landing-db-unavailable', recovery: this.landingBoundary() }; }
   }
 
-  /** A project's landing line, oldest pin first (`pinnedAt`, then `id`). An unreadable row reads `unknown`, never absent. */
-  landingEntries(project: string): LandingEntry[] {
-    return this.db.prepare('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, ' +
-      'afterIds, fixesMain, setBy, pinnedAt FROM landing_entries WHERE project = ? ORDER BY pinnedAt, id').all(project).map(landingEntryOfRow);
+  /** The whole journal, validated, against the DB cursor: `fail` is the typed refusal (never raw text), `snapshot` the
+   *  adapter's evidence the caller must release. Absence is bootstrap only with cursor 0 and no overlay rows. */
+  private landingHistory(log: LandingJournalPort): { fail: LandingInfrastructureFailure | null; snapshot: LandingJournalSnapshot | null;
+    records: LandingJournalRecord[]; lastSeq: number; cursor: number } {
+    const r = log.read();
+    if (!r.ok) return { fail: { error: 'landing-journal-unreadable', recovery: 'replay' }, snapshot: null, records: [], lastSeq: 0, cursor: 0 };
+    try { return this.landingHistoryOf(r); } catch (err) { r.snapshot.release(); throw err; }
   }
 
-  /** A project's two line flags. An absent row, which nothing seeds, reads both clear. */
-  landingProject(project: string): { operatorPaused: boolean; mainRedHold: boolean } {
-    return landingFlagsOfRow(this.db.prepare('SELECT operatorPaused, mainRedHold FROM landing_projects WHERE project = ?').get(project));
+  /** `landingHistory`'s body after a successful read: a throw out of it is released by the caller. */
+  private landingHistoryOf(r: Extract<ReturnType<LandingJournalPort['read']>, { ok: true }>): { fail: LandingInfrastructureFailure | null;
+    snapshot: LandingJournalSnapshot | null; records: LandingJournalRecord[]; lastSeq: number; cursor: number } {
+    const c = this.bigReads('SELECT appliedSeq AS cursor, (SELECT COUNT(*) FROM landing_subjects) + (SELECT COUNT(*) FROM landing_authority) AS overlay ' +
+      'FROM landing_journal_cursor WHERE id = 1').get() as { cursor: bigint; overlay: bigint } | undefined;
+    if (c === undefined) throw new Error('landing_journal_cursor has no row');
+    const cursor = Number(c.cursor);
+    const base = { snapshot: r.snapshot, cursor, records: [] as LandingJournalRecord[], lastSeq: 0 };
+    if (r.kind === 'absent') {
+      return { ...base, fail: cursor !== 0 || c.overlay !== 0n ? { error: 'landing-journal-missing', recovery: 'replay' } : null };
+    }
+    const p = parseLandingJournal(r.text);
+    if (!p.ok) return { ...base, fail: { error: 'landing-journal-invalid', recovery: 'replay', invalid: { reason: p.reason, record: p.record } } };
+    const ok = { ...base, records: p.records, lastSeq: p.lastSeq };
+    return { ...ok, fail: cursor > p.lastSeq ? { error: 'landing-journal-cursor', recovery: 'replay' } : null };
+  }
+
+  /** The ONE SQL writer of `landing_subjects`, `landing_authority` and the cursor, for live writes and replay alike. A
+   *  first mention registers a subject, a later one replaces its latest observation; an `entry` record keeps its claim. */
+  private applyLandingRecord(r: LandingJournalRecord): void {
+    const ref = this.db.prepare('INSERT INTO landing_subjects (id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET bindingKind = excluded.bindingKind, observedRunId = excluded.observedRunId, ' +
+      'observedSeq = excluded.observedSeq');
+    const claim = r.kind === 'entry' ? JSON.stringify({ at: r.at, setBy: r.setBy, pinnedSha: r.claim.pinnedSha, handoffCommit: r.claim.handoffCommit }) : null;
+    [r.subject, ...(r.kind === 'order' ? r.after : [])].forEach((s, i) => ref.run(s.id, s.project, s.pr, s.binding.kind,
+      s.binding.kind === 'run' ? s.binding.observedRunId : null, r.seq, i === 0 && claim !== null ? r.seq : null, i === 0 ? claim : null));
+    this.db.prepare('INSERT INTO landing_authority (subjectId, afterIds, fixesMain, setBy, seq) VALUES (?, ?, ?, ?, ?) ON CONFLICT(subjectId) ' +
+      'DO UPDATE SET afterIds = excluded.afterIds, fixesMain = excluded.fixesMain, setBy = excluded.setBy, seq = excluded.seq')
+      .run(r.subject.id, JSON.stringify(r.kind === 'order' ? r.after.map((a) => a.id) : []), r.kind === 'order' && r.fixesMain ? 1 : 0, r.setBy, r.seq);
+    this.db.prepare('UPDATE landing_journal_cursor SET appliedSeq = ? WHERE id = 1').run(r.seq);
+  }
+
+  /**
+   * The ONLY in-process reopen of the landing fence (shared contract §6): needs a provably clean connection, validates the
+   * WHOLE history, checks the cursor and any missing history, confirms the exact snapshot is durable (even at an equal
+   * cursor), then applies only the suffix and the cursor in ONE transaction. It never writes a projection or a witness,
+   * never notices. Any failure keeps the fence; there is no retry timer.
+   */
+  replayLandingJournal(): LandingJournalReplay {
+    const log = this.landing.landingJournal;
+    if (log === undefined) return { ok: false, error: 'landing-journal-unavailable', recovery: 'restart' };
+    if (this.landingFence === 'restart') return { ok: false, error: 'landing-fenced', recovery: 'restart' };
+    let held: LandingJournalSnapshot | null = null;
+    // Which database step a throw interrupted: a failed read or BEGIN is db-unavailable, a failed record db-apply, a
+    // failed COMMIT db-commit. (Asserted, not annotated: the closure's assignments are invisible to narrowing.)
+    let phase = 'read' as 'read' | 'apply' | 'commit';
+    // Called with the fence OPEN, a failed replay closes it (the more severe restart fence a boundary proof sets stays).
+    const wasOpen = this.landingFence === null;
+    const refuse = (f: LandingInfrastructureFailure): LandingJournalReplay => {
+      if (wasOpen) this.landingFence = this.landingFence ?? f.recovery;
+      return { ok: false, ...f };
+    };
+    try {
+      if (this.landingBoundary() === 'restart') return { ok: false, error: 'landing-fenced', recovery: 'restart' };
+      const hist = this.landingHistory(log);
+      held = hist.snapshot;
+      if (hist.fail !== null) return refuse(hist.fail);
+      const confirmed = log.confirmDurable(held!);
+      if (!confirmed.ok) {
+        return refuse({ recovery: 'replay', error: confirmed.error === 'durability' ? 'landing-journal-durability'
+          : confirmed.error === 'changed' ? 'landing-journal-changed' : 'landing-journal-unreadable' });
+      }
+      const suffix = hist.records.filter((r) => r.seq > hist.cursor);
+      tx(this.db, () => { phase = 'apply'; suffix.forEach((r) => this.applyLandingRecord(r)); phase = 'commit'; });
+      this.landingFence = null;
+      return { ok: true, applied: suffix.length, lastSeq: hist.lastSeq };
+    } catch {
+      const error = phase === 'commit' ? 'landing-db-commit' : phase === 'apply' ? 'landing-db-apply' : 'landing-db-unavailable';
+      return refuse({ error, recovery: this.landingBoundary() });
+    } finally { held?.release(); }
+  }
+
+  /**
+   * The ONE authoritative landing write (an entry for a PR with no run, or a PR's order edges and flag): validate the
+   * complete journal and cursor, gather the guarded facts in the same transaction, decide (L1), append the record, apply
+   * it to the overlay (and, for a creation, to its projection), COMMIT. A failure once the append was entered fences every
+   * landing entrance and answers `mayApply` with the phase that failed; a refusal before it appends nothing.
+   */
+  writeLandingAuthority(command: LandingAuthorityCommand, at: number): LandingAuthorityWrite {
+    const log = this.landing.landingJournal;
+    const fenced = this.landingGuard();
+    if (log === undefined || fenced !== null) return { ok: false, ...(fenced ?? { error: 'landing-journal-unavailable' as const, recovery: 'restart' as const }) };
+    const phase: { at: JournalPhase } = { at: 'decide' };
+    let held: LandingJournalSnapshot | null = null;
+    try {
+      return tx(this.db, (): LandingAuthorityWrite => appendThenApply<{ snapshot: LandingJournalSnapshot; record: LandingJournalRecord;
+        mutation: Parameters<typeof landingRecordOf>[1] }, LandingAuthorityWrite, LandingAuthorityWrite>({
+        decide: () => {
+          const hist = this.landingHistory(log);
+          held = hist.snapshot;
+          const stop = (f: LandingInfrastructureFailure): { stop: LandingAuthorityWrite } => { this.landingFence ??= 'replay'; return { stop: { ok: false, ...f } }; };
+          if (hist.fail !== null) return stop(hist.fail);
+          if (hist.lastSeq !== hist.cursor) return stop({ error: 'landing-journal-cursor', recovery: 'replay' });
+          const read = this.landingFactsInner(command.project);
+          if (!read.ok) return { stop: read };
+          const decision = decideLandingMutation(command, read.facts);
+          if (!decision.ok) {
+            return { stop: decision.error === 'landing-projection-unreadable' ? { ok: false, error: decision.error, recovery: 'restart' }
+              : { ok: false, error: decision.error } };
+          }
+          const m = decision.mutation;
+          if (m.kind === 'noop') return { stop: { ok: true, entry: m.entry, previous: m.entry, changed: false, seq: null, coordinator: m.coordinator } };
+          if (hist.lastSeq >= Number.MAX_SAFE_INTEGER) return { stop: { ok: false, error: 'landing-sequence-overflow' } };
+          return { go: { snapshot: held!, mutation: m, record: landingRecordOf(command, m, hist.lastSeq + 1, at) } };
+        },
+        append: ({ snapshot, record }) => {
+          const appended = log.append(snapshot, record);
+          if (!appended.ok) throw new Error('landing journal append failed');
+        },
+        apply: ({ record, mutation }) => {
+          this.applyLandingRecord(record);
+          if (mutation.kind === 'entry') {
+            this.db.prepare('INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) ' +
+              "VALUES (?, ?, ?, ?, ?, NULL, 'pinned', ?, ?)").run(mutation.id, mutation.project, mutation.pr, mutation.pinnedSha, mutation.handoffCommit, mutation.setBy, at);
+          }
+          const after = this.landingFactsInner(command.project);
+          const entry = after.ok ? after.facts.entries.find((e) => e.pr === command.pr) : undefined;
+          if (entry === undefined) throw new Error('landing write reads back absent');
+          // The order's association is the decision's (readable only); a creation is a no-run entry by construction.
+          return mutation.kind === 'order'
+            ? { ok: true, entry, previous: mutation.entry, changed: true, seq: record.seq, coordinator: mutation.coordinator }
+            : { ok: true, entry, previous: null, changed: true, seq: record.seq, coordinator: { kind: 'no-run' } };
+        },
+      }, phase));
+    } catch {
+      const recovery = this.landingBoundary();
+      if (phase.at === 'decide') return { ok: false, error: 'landing-db-unavailable', recovery };
+      this.landingFence = recovery;
+      return { ok: false, recovery, mayApply: true,
+        error: phase.at === 'append' ? 'landing-journal-append' : phase.at === 'apply' ? 'landing-db-apply' : 'landing-db-commit' };
+    } finally { (held as LandingJournalSnapshot | null)?.release(); }
   }
 
   /** Review findings 8/14: every `queued` or `delivered`-but-unacked delivery
@@ -4764,6 +5112,8 @@ export class CoordStore {
       `SUM(CASE WHEN d.state IN ${OUTSTANDING_STATES_SQL} THEN 1 ELSE 0 END) AS outstanding, ` +
       "SUM(CASE WHEN d.state = 'rejected' AND " +
       `COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
+      // D-5914: a revived park is not a message nobody received; its heir carries the count now (`HAS_HEIR_SQL`).
+      `AND NOT ${HAS_HEIR_SQL} ` +
       'THEN 1 ELSE 0 END) AS parked, ' +
       // D-5838: outstanding AND parked — alive, waiting on its recipient's box.
       `SUM(CASE WHEN d.state IN ${OUTSTANDING_STATES_SQL} AND d.parkedAt IS NOT NULL THEN 1 ELSE 0 END) AS parkedLive, ` +
@@ -5971,10 +6321,12 @@ export class CoordStore {
     ).get(fromId, now - 3_600_000) as { n: number }).n;
   }
 
-  queueDelivery(mailId: number, toId: string, envelope: string): { id: number } {
+  /** A new `queued` delivery. `revivedFrom` (D-5914, migration 40) is the parked delivery this one revives, written
+   *  here at INSERT and never updated; only `queueHeir`, for `reviveParkedDeliveries`, passes one. */
+  queueDelivery(mailId: number, toId: string, envelope: string, revivedFrom: number | null = null): { id: number } {
     const res = this.db.prepare(
-      'INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (?, ?, ?, ?)',
-    ).run(mailId, toId, 'queued', envelope);
+      'INSERT INTO mail_deliveries (mailId, toId, state, envelope, revivedFrom) VALUES (?, ?, ?, ?, ?)',
+    ).run(mailId, toId, 'queued', envelope, revivedFrom);
     return { id: Number(res.lastInsertRowid) };
   }
 
@@ -6017,8 +6369,9 @@ export class CoordStore {
    * them a re-render: the ingress route in `routes.ts`, the system-mail queue
    * in `rundefsTx.ts` (which has called it since Build 7 — this sentence said
    * "the ingress route ONLY" for two builds while it did: D-1426), and
-   * `requeueAbandonedMail` in this file, which renders the heir's own envelope
-   * for a second delivery of one mail. Pinned by `single-definition.test.ts`'s
+   * `queueHeir` in this file, the heir loop body `requeueAbandonedMail` and
+   * `reviveParkedDeliveries` share (D-5914), which renders the heir's own
+   * envelope for a second delivery of one mail. Pinned by `single-definition.test.ts`'s
    * "setDeliveryEnvelope names every caller it has", which derives the caller
    * set from `server/src` rather than reading this sentence. It exists to
    * close a bug fix-round finding 5 / D-41 named: the envelope's own `ack:`
@@ -6034,14 +6387,15 @@ export class CoordStore {
    * and this method never re-derives its argument — it only stores what the
    * caller already computed.
    *
-   * GUARDED. The three direct callers expand to SIX reachable paths, all in
+   * GUARDED. The three direct callers expand to SEVEN reachable paths, all in
    * the same transaction as their `queueDelivery`: the mail route's send `tx`,
    * the system-mail queue's own `tx` and the stall watch's (`queueSystemMail`
    * and `queueStallNotice`, each around `rundefsTx.ts`'s `insertSystemMailTx`),
    * `dispatchRun`'s dispatch `tx` through
    * `markDispatched` -> `bindSession` -> `requeueAbandonedMail`,
-   * `reclaimProgram`'s `tx`, and the open route's post-hold `tx` through
-   * `setSession` -> `bindSession` (D-2505). `tx` is `BEGIN IMMEDIATE` over a
+   * `reclaimProgram`'s `tx`, the open route's post-hold `tx` through
+   * `setSession` -> `bindSession` (D-2505), and the mail sweep's revive
+   * (`reviveParkedDeliveries`'s own `tx`, D-5914). `tx` is `BEGIN IMMEDIATE` over a
    * synchronous `DatabaseSync`, so those paths see no concurrent writer and
    * the row this stamps is provably `'queued'`. The `state NOT IN
    * ${TERMINAL_DELIVERY_SQL}` guard and the result union still refuse and expose
@@ -9556,8 +9910,8 @@ export class CoordStore {
    * A fault at any statement rolls the whole replacement back; the previous projection survives intact. The cost is
    * O(the five tables) plus O(the events of the sessions that leave), never O(all events).
    *
-   * Everything refusable is refused BEFORE the transaction opens: the checkpoint's version and applied position, the wave-3
-   * lease invariants (`assertWave3Leases`), every row's encoding, a session key repeated inside the checkpoint, and a handle that
+   * Everything refusable is refused BEFORE the transaction opens: the checkpoint's version and applied position, the
+   * lease invariants (`assertLeases`), every row's encoding, a session key repeated inside the checkpoint, and a handle that
    * does not enforce foreign keys. A row the
    * schema itself refuses (a CHECK, a unique index, a foreign key) throws SQLite's error from inside the transaction.
    */
@@ -9567,13 +9921,14 @@ export class CoordStore {
     if (!Number.isSafeInteger(applied) || applied < 0) {
       throw new DelegationModelError('bad-checkpoint', `appliedJournalSequence ${String(applied)} is not a non-negative integer`);
     }
-    assertWave3Leases(checkpoint);
+    assertLeases(checkpoint);
     // Encoded now, outside the transaction: a malformed instant or list is a refusal, not a rollback.
     const sessions = checkpoint.sessions.map((r) => delegationSessionCodec.toDb(r));
     const activities = checkpoint.activities.map((r) => delegationActivityCodec.toDb(r));
     const attempts = checkpoint.attempts.map((r) => delegationAttemptCodec.toDb(r));
     const leases = checkpoint.leases.map((r) => delegationLeaseCodec.toDb(r));
-    const lineage = checkpoint.lineage.map((r) => delegationLineageCodec.toDb(r));
+    const withheld = this.lineageWithoutRun(checkpoint.lineage);
+    const lineage = checkpoint.lineage.filter((r) => !withheld.has(r.lineageId)).map((r) => delegationLineageCodec.toDb(r));
     const sessionKey = (id: unknown, incarnation: unknown): string => JSON.stringify([id, incarnation]);
     // A key repeated inside the checkpoint is refused HERE, before BEGIN. The plain INSERT used to refuse it with a UNIQUE
     // error; the upsert would take it quietly (it updates the one row twice and the last wins), narrowing a distinction the
@@ -9622,7 +9977,8 @@ export class CoordStore {
   /**
    * The delta twin of `projectDelegationCheckpoint`: makes the five non-event tables say what `next` says, given that they say what
    * `prior` says, by writing only the rows that differ. `diffDelegationProjection` decides. When the change is only additions and
-   * updates (no key leaves, no lease row or lease-owned lineage row changes or arrives) it runs, in ONE transaction:
+   * updates (no key leaves, no lease row and no lease-owned lineage row arrives, and a lease-owned lineage row changes only by
+   * closing: wave 5's `delegation_leases` and `delegation_lineage` arms) it runs, in ONE transaction:
    *   1. each new row as a plain INSERT, parents first (sessions, activities, attempts, lineage), so an UPDATE below may point at a
    *      parent that is new in this same delta;
    *   2. each changed row as a compare-and-swap UPDATE keyed on its primary key, whose WHERE also carries every column's prior
@@ -9635,13 +9991,13 @@ export class CoordStore {
    * `{ mode: 'full' }`. Values edited out of band in a row the delta does not touch wait for the next full projection.
    *
    * Everything the full projection refuses before its transaction is refused here the same way and with the same code, before
-   * BEGIN and with SQLite unchanged: the version and applied position, the wave-3 lease invariants, a changed or new row's
+   * BEGIN and with SQLite unchanged: the version and applied position, the lease invariants, a changed or new row's
    * encoding, and a handle that does not enforce foreign keys. A `next` the diff declines (a repeated session key included) runs the
    * full projection before that last check, so the full path gives its own answer, its own foreign-keys check included.
    */
   projectDelegationCheckpointChanges(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): DelegationProjectChangesResult {
     const diff = prepareDelegationProjectionChanges(prior, next);
-    if (!diff.applicable) { this.projectDelegationCheckpoint(next); return { mode: 'full' }; }
+    if (!diff.applicable || this.runLineageNeedsFull(prior, next)) { this.projectDelegationCheckpoint(next); return { mode: 'full' }; }
     const fk = (this.db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number } | undefined)?.foreign_keys;
     if (fk !== 1) throw new DelegationModelError('foreign-keys-off', `PRAGMA foreign_keys reads ${String(fk)}; the projection needs 1`);
     tx(this.db, () => {
@@ -9663,6 +10019,8 @@ export class CoordStore {
           case delegationSessionCodec.table: return swap('UPDATE delegation_sessions', delegationSessionCodec, () => delegationInsertSql(delegationSessionCodec));
           case delegationActivityCodec.table: return swap('UPDATE delegation_activities', delegationActivityCodec, () => delegationInsertSql(delegationActivityCodec));
           case delegationAttemptCodec.table: return swap('UPDATE delegation_attempts', delegationAttemptCodec, () => delegationInsertSql(delegationAttemptCodec));
+          // Wave 5 (PR5a): a lease only CHANGES in a delta (a transition, a release); a new lease is never one, so this arm has no INSERT.
+          case delegationLeaseCodec.table: return swap('UPDATE delegation_leases', delegationLeaseCodec, () => { throw new DelegationModelError('projection-delta-mismatch', 'a new lease is never a delta'); });
           case delegationLineageCodec.table: return swap('UPDATE delegation_lineage', delegationLineageCodec, () => delegationInsertSql(delegationLineageCodec));
           default: throw new DelegationModelError('projection-delta-mismatch', `${table}: the delta projection has no statement for this table`);
         }
@@ -9675,6 +10033,34 @@ export class CoordStore {
       }
     });
     return { mode: 'delta', rows: diff.updates.length + diff.inserts.length };
+  }
+
+  /**
+   * D-7972 (review 1451 F2): the run-owned lineage rows (a promotion's, wave 5) whose run `runs` does not hold. The checkpoint is
+   * authority and keeps them; the foreign key would refuse them, and every full projection with it, so the projection leaves them out,
+   * warns once per run id in this process, and asks again on every projection, so a row projects once its run row is there.
+   */
+  private lineageWithoutRun(rows: readonly DelegationLineageRow[]): Set<string> {
+    const out = new Set<string>();
+    const has = this.db.prepare('SELECT 1 AS one FROM runs WHERE id = ?');
+    for (const n of rows) {
+      if (n.runId === null || has.get(n.runId) !== undefined) continue;
+      out.add(n.lineageId);
+      if (this.lineageRunsWarned.has(n.runId)) continue;
+      this.lineageRunsWarned.add(n.runId);
+      console.warn(`ccrc-server: delegation lineage ${n.lineageId} names run ${n.runId}, which coord.db does not hold; the projection leaves it out until the run row is there (D-7972)`);
+    }
+    return out;
+  }
+
+  /** D-7972, the delta's pre-check: a run-owned lineage row of `next` whose run is absent, or one of `prior` that SQLite does not hold
+   *  (a full projection left it out), sends the application to the full projection, which leaves out or adds back exactly those rows. */
+  private runLineageNeedsFull(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): boolean {
+    const owned = prior.lineage.filter((n) => n.runId !== null);
+    if (owned.length === 0 && !next.lineage.some((n) => n.runId !== null)) return false;
+    if (this.lineageWithoutRun(next.lineage).size > 0) return true;
+    const held = new Set((this.db.prepare('SELECT lineageId FROM delegation_lineage WHERE runId IS NOT NULL').all() as Array<{ lineageId: string }>).map((r) => r.lineageId));
+    return owned.some((n) => !held.has(n.lineageId));
   }
 
   /**

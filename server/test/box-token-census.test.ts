@@ -266,7 +266,7 @@ const TOKEN_DOORS = ['/api/token/rotate'];
  *  reason. Hand-kept for the NAMES only: the ledgers describe below derives the same set from the file and compares in both
  *  directions, so a route there cannot join or leave without this literal moving. */
 // …and the secret's own route (plan PL6), a credential act: the account gate with a step-up, still no box token.
-const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/programmes/:slug/goals', '/api/items/:id/tick', '/api/items/:id/dismiss', '/api/items/:id/secret'];
+const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/programmes/:slug/goals', '/api/items/:id/tick', '/api/items/:id/dismiss', '/api/items/:id/secret', '/api/programmes/:slug/secrets', '/api/programmes/:slug/secrets/:slot'];
 
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS];
@@ -289,7 +289,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'forty-one',
   // The Linear proxy (#1444, plan task LK9) and the programme ledgers (PL3): fifty-five machine lanes and fifty-eight in all.
   'forty-two', 'forty-three', 'forty-four', 'forty-five', 'forty-six', 'forty-seven', 'forty-eight', 'forty-nine',
-  'fifty', 'fifty-one', 'fifty-two', 'fifty-three', 'fifty-four', 'fifty-five', 'fifty-six', 'fifty-seven', 'fifty-eight'];
+  'fifty', 'fifty-one', 'fifty-two', 'fifty-three', 'fifty-four', 'fifty-five', 'fifty-six', 'fifty-seven', 'fifty-eight',
+  // Landing order wave 5f: the two attributed landing writes, fifty-seven machine lanes and sixty in all.
+  'fifty-nine', 'sixty'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -1274,5 +1276,89 @@ describe('the Linear proxy surface: twelve box-token lanes, every one EXEMPT (sp
     const planted = `${LINEAR_PROXY_SRC}\napp.get('/api/linear/proxy/planted', async (req, reply) => reply.send({ ok: true }));\n`;
     expect(registrationsIn(planted).map((r) => r.key)).toContain('GET /api/linear/proxy/planted');
     expect(lanesIn(planted)).not.toContain('GET /api/linear/proxy/planted');
+  });
+});
+
+// ── the reader lab's door (the reader lab plan of 2026-11-03, Task 4) ─────────
+//
+// `server/src/readerLab/routes.ts` is the TENTH file that registers routes. Its three run routes are session-gated, NOT
+// EXEMPT, and consult no box token; its probe pair is EXEMPT under gate.ts reason 8 and consults none either. So no lane,
+// no door count and no CLAUDE.md sentence moves: the door is no coordination write, as the docs surface is not. EVERY
+// file under `server/src/readerLab/` is read, as the docs surface's are: a token check in the counter would gate the
+// probe as surely as one in a handler. README's auth paragraph names the probe among the exceptions.
+describe('the reader lab door: three session-gated routes, an exempt probe pair, no box token (reader lab plan, Task 4)', () => {
+  const LAB_SRC = read('server/src/readerLab/routes.ts');
+  /** Every source file of the lab surface, by listing the directory, so a file added there is read without an edit here. */
+  const LAB_FILES = readdirSync(path.join(REPO, 'server', 'src', 'readerLab'))
+    .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/readerLab/${f}`);
+  /** The five doors. Hand-kept for the NAMES only: the first case derives the same set from the file, both directions. */
+  const LAB_DOORS = ['POST /api/reader-lab/runs', 'GET /api/reader-lab/runs/:nonce', 'POST /api/reader-lab/runs/:nonce/close',
+    'GET /api/reader-lab/probe/:nonce/:name', 'POST /api/reader-lab/probe/:nonce/:name'];
+  const PROBE_PAIR = ['GET /api/reader-lab/probe/:nonce/:name', 'POST /api/reader-lab/probe/:nonce/:name'];
+  const REGISTERED = registrationsIn(LAB_SRC).map((r) => r.key);
+  /** The registration line the planted-call control anchors on (the plan's fixed registration text). */
+  const OPEN_LINE = "app.post('/api/reader-lab/runs', async (req, reply) => {";
+
+  it('readerLab/routes.ts registers exactly the five doors, each once, and every lab file is read', () => {
+    expect(new Set(REGISTERED).size, 'a lab route is registered twice').toBe(REGISTERED.length);
+    expect([...REGISTERED].sort(), 'readerLab/routes.ts and LAB_DOORS disagree').toEqual([...LAB_DOORS].sort());
+    expect(LAB_FILES).toEqual(['server/src/readerLab/routes.ts', 'server/src/readerLab/runs.ts']);
+  });
+
+  it('no lab file consults the box token, and no lab handler is a lane', () => {
+    for (const rel of LAB_FILES) {
+      const src = read(rel);
+      for (const re of GATE_PATTERNS) expect(re.test(src), `${rel} consults the box token (${re.source})`).toBe(false);
+    }
+    expect(lanesIn(LAB_SRC)).toEqual([]);
+  });
+
+  /** Code with comments blanked, so a sentence ABOUT fs or a log line is never counted. */
+  const labCode = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+  /** `fs` loaded by import, dynamic import, re-export or require, with or without `node:` and a `/promises` tail. */
+  const FS_LOAD = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['"])(?:node:)?fs(?:\/[^'"\n]*)?\1/;
+  const LOGS = /\bconsole\s*\.|\bprocess\s*\.\s*std(?:out|err)\b/;
+  const labKeeps = (name: string, text: string): string[] => {
+    const code = labCode(text);
+    return [FS_LOAD.test(code) ? `${name} loads fs` : '', LOGS.test(code) ? `${name} writes a log line` : ''].filter(Boolean);
+  };
+
+  it('no lab file loads fs or writes a log line: the door keeps nothing on disk and logs nothing of its own (design 4.4)', () => {
+    for (const rel of LAB_FILES) expect(labKeeps(rel, read(rel)), rel).toEqual([]);
+    // CONTROL: every shape is seen, and a comment about one is not.
+    for (const src of ["import { readFileSync } from 'node:fs';", "import fs from 'fs';", "import('node:fs/promises');",
+      "const f = require('node:fs');", "export { x } from 'node:fs';"]) expect(labKeeps('x', src), src).toEqual(['x loads fs']);
+    for (const src of ["console.warn('x');", 'console . log(1);', "process.stdout.write('x');", 'process.stderr.write(1);']) {
+      expect(labKeeps('x', src), src).toEqual(['x writes a log line']);
+    }
+    for (const src of ['// import fs from "node:fs"; console.warn(1)', "/* require('fs') */ const a = 1;"]) {
+      expect(labKeeps('x', src), src).toEqual([]);
+    }
+  });
+
+  it('the probe pair is EXEMPT with reason 8, the run routes are not, and none claims a token or the cookie-or-token class', () => {
+    for (const k of LAB_DOORS) {
+      const at = GATE_SRC.indexOf(`  ['${k}',`);
+      if (!PROBE_PAIR.includes(k)) {
+        expect(at, `${k} became EXEMPT`).toBe(-1);
+        continue;
+      }
+      expect(at, `${k} is not EXEMPT`).toBeGreaterThan(-1);
+      const reason = GATE_SRC.slice(at, GATE_SRC.indexOf('],', at));
+      expect(reason, k).toContain('reason 8');
+      expect(reason, k).not.toContain('EXEMPT-BUT-AUTHENTICATED');
+      expect(reason, k).not.toContain('box-token gated');
+    }
+  });
+
+  it("README's auth paragraph names the probe among the exceptions", () => {
+    const p = passage('README, the auth paragraph', README, 'What is gated, and what is not:', 'Enrolling a passkey');
+    expect(p).toContain('`/api/reader-lab/probe/:nonce/:name`');
+  });
+
+  it('a box-token call planted after the open registration is SEEN: the lane source is live', () => {
+    expect(LAB_SRC, 'the open registration line moved: re-point this control at it').toContain(OPEN_LINE);
+    const planted = LAB_SRC.replace(OPEN_LINE, `${OPEN_LINE}\n    requireMailToken(req, reply);`);
+    expect(lanesIn(planted)).toEqual(['POST /api/reader-lab/runs']);
   });
 });

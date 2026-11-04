@@ -14,6 +14,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { ccrcSettingsNames } from './ccrcSettingsLine.js';
@@ -100,7 +101,7 @@ function runVerb(s: Scenario): string {
   Object.assign(env, s.env ?? {});
   env['PATH'] = `${bin}:${env['PATH'] ?? ''}`;
   assertNoRealTool(env, home);
-  const r = spawnSync(BASH, [CCRC, 'settings', '--json', ...(s.reader === 'timer' ? ['--from', 'timer'] : [])],
+  const r = spawnSyncGroup(BASH, [CCRC, 'settings', '--json', ...(s.reader === 'timer' ? ['--from', 'timer'] : [])],
     { env, encoding: 'utf8', input: '', timeout: 60_000 });
   expect(r.status, `stderr: ${r.stderr}`).toBe(0);
   return r.stdout;

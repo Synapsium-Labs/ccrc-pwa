@@ -51,7 +51,8 @@
 //   drop ` && -n "$2"` from the store line's condition                 -> seam (e)
 //   drop ` && -n "$2"` from the lookup condition only                  -> seam (e)
 import { describe, it, expect, afterAll } from 'vitest';
-import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { type SpawnSyncReturns } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
@@ -81,7 +82,7 @@ const harness = (): CcdHarness => {
 const run = (home: string, snippet: string, front?: string): SpawnSyncReturns<string> => {
   const env = ghContainedEnv(home, { ...process.env, ...CLEAN_ENV, HOME: home }, { systemd: true, tmux: true });
   if (front !== undefined) env['PATH'] = `${front}:${env['PATH'] ?? ''}`;
-  return spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], { encoding: 'utf8', cwd: home, timeout: 60000, env });
+  return spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], { encoding: 'utf8', cwd: home, timeout: 60000, env });
 };
 
 const lines = (file: string): string[] =>

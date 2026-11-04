@@ -23,7 +23,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { RESTART_CAUSES, RESUME_PROMPT_PREFIX } from '../../shared/api.js';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, type CcdHarness } from './ccdWsHelpers.js';
 
@@ -56,7 +56,7 @@ const procReads = (): number => h.calls().filter((l) => l === 'procread').length
 
 /** `cmd_supervise` as a PROGRAM, bounded (the `ccd-substrate.test.ts` idiom). */
 const run = (snippet: string): { code: number; stderr: string } => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
     env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
   });

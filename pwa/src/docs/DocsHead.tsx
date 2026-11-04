@@ -6,7 +6,11 @@
 // `refreshManual`. Every draft word is `entryView`'s through `ENTRY_BADGE_TEXT`, the one badge function the rows use
 // too (M4.T7). Share (spec 4.16) opens ShareSheet over shareTargetFor's answer and makes no request either; Export
 // (spec 4.17) follows Share on a leaf: exportStateFor decides, and ExportSheet builds and saves.
-import { useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+// Under DOCS_COMPACT_QUERY (600 CSS px) a leaf page draws the compact head instead (the phone-header plan of 2026-11-03):
+// one row of back, where and what, Share and Export as icons, and Page details, which opens a panel holding the crumbs,
+// the truth line and the link actions (`CompactHead`). Every other page, and every page at a wider viewport, draws the
+// header above, unchanged.
+import { useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react';
 import {
   DOCS_CLASS_CAP, contentClass, docsApi, docsPageUrl, entryView, githubBlobUrl,
   type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk, type EntryBadge, type EntryMode, type GithubTarget,
@@ -16,7 +20,7 @@ import { formatAge } from '../fleet/formatReset';
 import { NO_SUBSCRIPTION, openExternal } from '../lib/markdown';
 import { navigate } from '../lib/router';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
-import { useNow } from '@ccrc/ui';
+import { Icon, useNow } from '@ccrc/ui';
 import { docsLocation } from './docsLinks';
 import {
   DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, GITHUB_REFUSAL_TEXT, VIA_SENTENCE,
@@ -336,12 +340,51 @@ export function freshnessChip(
   return { state: 'failed', text: fillSentence(DOCS_HEAD_TEXT.freshFailed, { age: aged(stamp.attemptAgeMs), sentence, okAge }) };
 }
 
+/** The compact head's width (phone-header refinement (b)): under 600 CSS px, the compact window class. A leaf page draws one row there
+ *  (`CompactHead`); a tablet, a desktop, and every other page at any width keep the header as it was. Spelled once, here:
+ *  docs.css keys the row's rules on its own classes, never on a width (docs-compact-css.test.ts holds that half; docs-compact-head.test.tsx
+ *  holds the other, that DocsHead.tsx alone spells it under pwa/src). */
+export const DOCS_COMPACT_QUERY = '(max-width: 599.98px)';
+
+/** Which header a page draws. */
+export type HeadLayout = 'full' | 'compact';
+
+/** The header for `page` (phone-header refinement (a)): the compact row on a leaf page at the compact width, else the full header. A
+ *  directory (its URL ends in `/`), a section, a project and the index keep the full header at every width. */
+export function headLayoutFor(compactWidth: boolean, page: DocsPageLocation): HeadLayout {
+  return compactWidth && page.kind === 'path' && !page.dirSlash ? 'compact' : 'full';
+}
+
+/** The Page details button's dot (phone-header refinement (f)), from the freshness chip's state: `ok` a good fetch, `warn`
+ *  never fetched, `failed` a failed fetch, re-list or refresh, or a stale lock. `warn` and `failed` draw the same
+ *  attention colour, as the picked mockup does; the button's name tells them apart. `null` has one meaning: no dot (no
+ *  origin, a local ref, a fetch in flight, a `soon` wait), where the chip itself says nothing a glance must catch. */
+export type FreshDot = 'ok' | 'warn' | 'failed' | null;
+
+export function freshDot(state: FreshChipState): FreshDot {
+  return state === 'ok' ? 'ok' : state === 'never' ? 'warn' : state === 'failed' ? 'failed' : null;
+}
+
+/** Share's words (spec 4.5): "Share", or "Updating to <short>…" while the leaf moves to `pinFor`'s pin. The full header's
+ *  button reads them; the compact row's icon takes them as its accessible name (phone-header refinement (e)). */
+function shareWords(share: Exclude<ShareState, { s: 'absent' }>): string {
+  return share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareUpdating, { short: shortCommit(share.to) }) : DOCS_HEAD_TEXT.share;
+}
+
+/** Export's words (spec 4.17): "Export", "Export (plain view)", "Updating to <short>…" or why it waits. As for Share's. */
+function exportWords(state: Exclude<ExportState, { s: 'absent' }>): string {
+  return state.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareUpdating, { short: shortCommit(state.to) })
+    : state.s === 'waiting' ? EXPORT_WAIT_TEXT[state.why]
+      : state.s === 'plain-view' ? DOCS_HEAD_TEXT.exportPlainView : DOCS_HEAD_TEXT.export;
+}
+
 /** The crumbs (spec 4.4's layout): every crumb on a desktop; on a phone (under 900 px) the last two behind a leading
- *  `…` button, which shows them all. The last crumb is the page itself. */
-function Crumbs(p: { readonly crumbs: readonly DocsCrumb[] }): ReactNode {
+ *  `…` button, which shows them all. The last crumb is the page itself. `unfold`: every crumb at any width, with no `…`
+ *  button (the compact head's panel, phone-header refinement (c)). */
+function Crumbs(p: { readonly crumbs: readonly DocsCrumb[]; readonly unfold?: boolean }): ReactNode {
   const desktop = useMediaQuery(DESK_QUERY);
   const [whole, setWhole] = useState(false);
-  const folded = !desktop && !whole && p.crumbs.length > 2;
+  const folded = p.unfold !== true && !desktop && !whole && p.crumbs.length > 2;
   const shown = folded ? p.crumbs.slice(-2) : p.crumbs;
   return (
     <nav className="docs-crumbs" aria-label={DOCS_HEAD_TEXT.crumbs}>
@@ -500,12 +543,12 @@ function exportKeyOf(page: Leaf, tree: DocsTreeOk, state: Exclude<ExportState, {
 function ExportAction(p: {
   readonly page: Leaf; readonly tree: DocsTreeOk; readonly state: Exclude<ExportState, { s: 'absent' }>;
   readonly assets: ExportAssets | null; readonly readAt: number | null; readonly onPlainView: (() => void) | null;
+  /** The compact row's form (phone-header refinement (e)): an icon, its words the accessible name. */
+  readonly glyph?: boolean;
 }): ReactNode {
   const { page, tree, state } = p;
   const [request, setRequest] = useState<ExportRequest | null>(null);
-  const words = state.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareUpdating, { short: shortCommit(state.to) })
-    : state.s === 'waiting' ? EXPORT_WAIT_TEXT[state.why]
-      : state.s === 'plain-view' ? DOCS_HEAD_TEXT.exportPlainView : DOCS_HEAD_TEXT.export;
+  const words = exportWords(state);
   const busy = state.s === 'updating' || state.s === 'waiting';
   const enabled = state.s === 'ready' || (state.s === 'plain-view' && p.onPlainView !== null);
   const onClick = (): void => {
@@ -516,9 +559,9 @@ function ExportAction(p: {
     <>
       <button
         type="button" className="docs-action docs-export" disabled={!enabled} onClick={onClick}
-        aria-label={busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : undefined}
+        aria-label={busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : p.glyph === true ? words : undefined}
       >
-        {words}
+        {p.glyph === true ? <Icon name="download" size={20} /> : words}
       </button>
       {request !== null && <ExportSheet request={request} onClose={() => setRequest(null)} />}
     </>
@@ -539,14 +582,21 @@ function shareKeyOf(page: TreePage, tree: DocsTreeOk, share: Exclude<ShareState,
  *  while the sheet is open. */
 function ShareAction(p: {
   readonly page: TreePage; readonly tree: DocsTreeOk; readonly share: Exclude<ShareState, { s: 'absent' }>; readonly exportOffered: boolean;
+  /** The compact row's form (phone-header refinement (e)): an icon, its words the accessible name ("Share: <words>" while
+   *  it waits, as Export's is, since nothing visible says Share). */
+  readonly glyph?: boolean;
 }): ReactNode {
   const { page, tree, share } = p;
   const [open, setOpen] = useState(false);
   const target = open && share.s === 'ready' ? shareTargetFor(tree, page, share.opened) : null;
+  const words = shareWords(share);
   return (
     <>
-      <button type="button" className="docs-action docs-share" disabled={share.s === 'updating'} onClick={() => setOpen(true)}>
-        {share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareUpdating, { short: shortCommit(share.to) }) : DOCS_HEAD_TEXT.share}
+      <button
+        type="button" className="docs-action docs-share" disabled={share.s === 'updating'} onClick={() => setOpen(true)}
+        aria-label={p.glyph !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words}
+      >
+        {p.glyph === true ? <Icon name="share" size={20} /> : words}
       </button>
       {/* Whether this page offers Export (spec 4.17): the refusals that take Export's clause then carry it (spec 4.16). */}
       {target !== null && <ShareSheet target={target} exportOffered={p.exportOffered} onClose={() => setOpen(false)} />}
@@ -558,26 +608,9 @@ function ShareAction(p: {
  *  version, offered iff `entryView(...).offersCommitted` on a leaf not already at `view=committed`. Open committed
  *  version navigates with a history entry (URL state, so Back returns to the draft); the commit never enters the URL,
  *  it is resolved from this visit's tree. Export (spec 4.17) follows Share on a leaf. */
-function Actions(p: {
-  readonly page: TreePage; readonly tree: DocsTreeOk; readonly file: DocsVisit['file']; readonly leafImage: DocPin | null;
-  readonly exportBody: ExportBody | null; readonly pageStore: HighlightStore | null; readonly exportAssets: ExportAssets | null;
-  readonly onPlainView: (() => void) | null;
-}): ReactNode {
+function Actions(p: ActionInputs): ReactNode {
   const { page, tree, file } = p;
-  const target = githubTargetFor(page, tree);
-  const showsDraft = page.kind === 'path' && openedPin(tree, page, file)?.kind === 'draft';
-  const share = shareStateFor(page, tree, file, p.leafImage);
-  const settled = useStoreSettled(p.pageStore);
-  useAssetsVersion(p.exportAssets);
-  const exported = exportStateFor(page, tree, file, { body: p.exportBody, store: p.pageStore, settled, assets: p.exportAssets });
-  let committedHref: string | null = null;
-  if (page.kind === 'path' && page.view !== 'committed') {
-    const k = docsPathKind(tree, page.section, page.path, modeOf(page));
-    if (k.kind === 'leaf' && k.view.offersCommitted) {
-      const to = { kind: 'path', section: page.section, path: page.path, dirSlash: false, view: 'committed' } as const;
-      committedHref = docsPageUrl(docsLocation(page, to));
-    }
-  }
+  const { target, showsDraft, share, exported, committedHref } = useHeadActions(p);
   if (target === null && committedHref === null) return null;
   return (
     <div className="docs-actions">
@@ -594,6 +627,44 @@ function Actions(p: {
       {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
     </div>
   );
+}
+
+/** What the actions read: the page, its tree and file slot, and Export's inputs. */
+interface ActionInputs {
+  readonly page: TreePage; readonly tree: DocsTreeOk; readonly file: DocsVisit['file']; readonly leafImage: DocPin | null;
+  readonly exportBody: ExportBody | null; readonly pageStore: HighlightStore | null; readonly exportAssets: ExportAssets | null;
+  readonly onPlainView: (() => void) | null;
+}
+
+/** The actions on a page, worked out once for either header (phone-header refinement (e)): View on GitHub's target (`null`: none),
+ *  whether the leaf shows draft bytes, Share's and Export's states, and Open committed version's href (`null`: not
+ *  offered). The full header draws all of them in one line; the compact row draws Share and Export, and its panel the
+ *  two links. */
+interface HeadActions {
+  readonly target: GithubTarget | null;
+  readonly showsDraft: boolean;
+  readonly share: ShareState;
+  readonly exported: ExportState;
+  readonly committedHref: string | null;
+}
+
+function useHeadActions(p: ActionInputs): HeadActions {
+  const { page, tree, file } = p;
+  const target = githubTargetFor(page, tree);
+  const showsDraft = page.kind === 'path' && openedPin(tree, page, file)?.kind === 'draft';
+  const share = shareStateFor(page, tree, file, p.leafImage);
+  const settled = useStoreSettled(p.pageStore);
+  useAssetsVersion(p.exportAssets);
+  const exported = exportStateFor(page, tree, file, { body: p.exportBody, store: p.pageStore, settled, assets: p.exportAssets });
+  let committedHref: string | null = null;
+  if (page.kind === 'path' && page.view !== 'committed') {
+    const k = docsPathKind(tree, page.section, page.path, modeOf(page));
+    if (k.kind === 'leaf' && k.view.offersCommitted) {
+      const to = { kind: 'path', section: page.section, path: page.path, dirSlash: false, view: 'committed' } as const;
+      committedHref = docsPageUrl(docsLocation(page, to));
+    }
+  }
+  return { target, showsDraft, share, exported, committedHref };
 }
 
 /** The Docs header. `tree` null has one meaning: the visit's tree slot is not `ok` (loading, failed, or the page names
@@ -625,19 +696,21 @@ export function DocsHead(p: {
   const crumbs = docsCrumbs(page);
   const slot = visit.tree;
   const receivedAt = slot?.s === 'ok' ? slot.receivedAt : now;
+  const compactWidth = useMediaQuery(DOCS_COMPACT_QUERY);
+  // Phone-header refinement (a): a leaf page at the compact width draws one row. Keyed by the page, so a navigation closes its panel.
+  if (headLayoutFor(compactWidth, page) === 'compact' && page.kind === 'path') {
+    return (
+      <CompactHead
+        key={docsPageUrl(page)} page={page} visit={visit} tree={tree} receivedAt={receivedAt} now={now} crumbs={crumbs}
+        leafImage={p.leafImage ?? null} exportBody={p.exportBody ?? null} pageStore={p.pageStore ?? null}
+        exportAssets={p.exportAssets ?? null} plainView={p.plainView === true} onPlainView={p.onPlainView ?? null}
+      />
+    );
+  }
   return (
     <header className="docs-head">
       <div className="docs-head-bar">
-        {/* The index's up door goes to the fleet: it is the `go-fleet` door there (W2 Task S5), and only there. */}
-        <button
-          type="button"
-          className="docs-back"
-          aria-label={DOCS_HEAD_TEXT.back}
-          onClick={() => navigate(docsUpHref(page))}
-          {...(docsUpHref(page) === '/' ? doorMark('go-fleet') : {})}
-        >
-          ‹
-        </button>
+        <BackButton page={page} />
         <Crumbs key={crumbs.at(-1)?.href} crumbs={crumbs} />
       </div>
       {tree !== null && page.kind !== 'index' && (
@@ -654,5 +727,167 @@ export function DocsHead(p: {
         <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
       )}
     </header>
+  );
+}
+
+/** Back (spec 4.4: up one level, never `history.back()`), the one control both headers draw. The index's up door goes to
+ *  the fleet: it is the `go-fleet` door there (W2 Task S5), and only there. */
+function BackButton(p: { readonly page: DocsPageLocation }): ReactNode {
+  const up = docsUpHref(p.page);
+  return (
+    <button
+      type="button"
+      className="docs-back"
+      aria-label={DOCS_HEAD_TEXT.back}
+      onClick={() => navigate(up)}
+      {...(up === '/' ? doorMark('go-fleet') : {})}
+    >
+      ‹
+    </button>
+  );
+}
+
+/** The compact row's draft word (phone-header refinement (g)): the word, and the form, the truth line draws for this leaf, so the
+ *  row follows the one source (M4.T7, one badge function). `entryView`'s badge through `ENTRY_BADGE_TEXT` is drawn as a
+ *  `.docs-badge` (`badged`); for a draft whose entry no longer opens one (the pin outlived a re-list) the truth line draws
+ *  `DOCS_HEAD_TEXT.sourceDraftUnbadged` as plain text, and so does the row (`badged` false). `null` when the truth line draws
+ *  no draft word. */
+interface RowBadge { readonly word: string; readonly badged: boolean }
+function rowBadge(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): RowBadge | null {
+  const k = docsPathKind(tree, page.section, page.path, modeOf(page));
+  if (k.kind !== 'leaf') return null;
+  const s = leafSource(tree, page, openedPin(tree, page, file));
+  if (s.kind === 'draft') return { word: badgeText(s.badge), badged: s.badge !== null };
+  return k.view.badge === null ? null : { word: ENTRY_BADGE_TEXT[k.view.badge], badged: true };
+}
+
+/** The compact row's two lines (phone-header refinements (c), (g)): where the page is over its name. The first line is the
+ *  parent crumb and, when one is shown, the served ref, joined by ` · ` (the ref's own span holds the separator), each its
+ *  own text that ends in an ellipsis and the crumb the one that gives way first, so a long parent directory never hides
+ *  which ref is served; the draft badge follows as a sibling, so a long ref is cut and the badge never is. Text, not
+ *  links: back goes up one level, and the whole path is the panel's first line. */
+function CompactLabel(p: {
+  readonly where: string; readonly name: string; readonly refText: string | null; readonly badge: RowBadge | null;
+}): ReactNode {
+  return (
+    <p className="docs-compact-label">
+      <span className="docs-compact-where">
+        <span className="docs-compact-where-text">
+          <span className="docs-compact-where-crumb">{p.where}</span>
+          {p.refText !== null && <span className="docs-compact-where-ref">{SEP}{p.refText}</span>}
+        </span>
+        {p.badge !== null && <>{SEP}{p.badge.badged ? <span className="docs-badge">{p.badge.word}</span> : p.badge.word}</>}
+      </span>
+      <span className="docs-compact-name">{p.name}</span>
+    </p>
+  );
+}
+
+/** The served ref the row names (phone-header refinement (g)): a ref the page asked for, a local side, or any default
+ *  that is not origin/HEAD (a local main or master, or origin's main or master when origin/HEAD is unset or dangling,
+ *  `ccd/ccd#default_chain`). The usual default view, origin/HEAD resolved, adds nothing. */
+function rowRefText(page: Leaf, tree: DocsTreeOk): string | null {
+  const ref = tree.ref;
+  return page.ref !== null || ref.side === 'local' || ref.via !== 'default:origin-head' ? servedRefText(ref) : null;
+}
+
+/** What the compact head is given: the full header's inputs, settled (phone-header refinement (a)). */
+interface CompactProps {
+  readonly page: Leaf; readonly visit: DocsVisit; readonly receivedAt: number; readonly now: number;
+  readonly crumbs: readonly DocsCrumb[]; readonly leafImage: DocPin | null; readonly exportBody: ExportBody | null;
+  readonly pageStore: HighlightStore | null; readonly exportAssets: ExportAssets | null; readonly plainView: boolean;
+  readonly onPlainView: (() => void) | null;
+}
+
+/** The compact head (phone-header refinements (a) to (h)): a leaf page under DOCS_COMPACT_QUERY. While the tree slot is
+ *  not `ok` (loading, or failed) the head is back and the crumbs, as the full header's is (spec 4.7: a tree failure keeps
+ *  the crumbs); the row and its panel need the tree. The two notes that answer a tap or a re-list (the plain view shown,
+ *  Updated to) stay under the row, outside the panel, where the full header draws them. */
+function CompactHead(p: CompactProps & { readonly tree: DocsTreeOk | null }): ReactNode {
+  const { page, visit, tree } = p;
+  const where = p.crumbs.at(-2)?.label ?? '';
+  const name = p.crumbs.at(-1)?.label ?? '';
+  return (
+    <header className="docs-head docs-compact">
+      {tree === null
+        ? (
+          <div className="docs-compact-crumbs">
+            <BackButton page={page} />
+            <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} />
+          </div>
+        )
+        : <CompactRow {...p} tree={tree} where={where} name={name} />}
+      {p.plainView && <p className="docs-note" role="status">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
+      {visit.updatedTo !== null && (
+        <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
+      )}
+    </header>
+  );
+}
+
+/** The compact row once the tree is `ok`, and its panel (phone-header refinements (c) to (g)). Page details is a disclosure: a button
+ *  whose `aria-expanded` and `aria-controls` name the panel, a region drawn in the page's flow under the row and `hidden`
+ *  while closed. Escape inside either closes it and puts focus back on the button. */
+function CompactRow(p: CompactProps & { readonly tree: DocsTreeOk; readonly where: string; readonly name: string }): ReactNode {
+  const { page, visit, tree } = p;
+  const file = visit.file;
+  const [open, setOpen] = useState(false);
+  const toggle = useRef<HTMLButtonElement>(null);
+  const panelId = useId();
+  const { target, showsDraft, share, exported, committedHref } = useHeadActions({
+    page, tree, file, leafImage: p.leafImage, exportBody: p.exportBody, pageStore: p.pageStore,
+    exportAssets: p.exportAssets, onPlainView: p.onPlainView,
+  });
+  const dot = freshDot(freshnessChip(tree, p.receivedAt, visit.freshness, p.now).state);
+  const exportNote = exported.s === 'plain-view' ? DOCS_HEAD_TEXT.exportPlainHint
+    : exported.s === 'updating' || exported.s === 'waiting' ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: exportWords(exported) })
+      : null;
+  const onKeyDown = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape' || !open) return;
+    e.stopPropagation();
+    setOpen(false);
+    toggle.current?.focus();
+  };
+  return (
+    <>
+      <div className="docs-compact-bar">
+        <BackButton page={page} />
+        <CompactLabel
+          where={p.where} name={p.name} refText={rowRefText(page, tree)} badge={rowBadge(tree, page, file)}
+        />
+        {share.s !== 'absent' && (
+          <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} exportOffered={exported.s !== 'absent'} glyph />
+        )}
+        {exported.s !== 'absent' && (
+          <ExportAction
+            key={exportKeyOf(page, tree, exported)} page={page} tree={tree} state={exported} assets={p.exportAssets}
+            readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView} glyph
+          />
+        )}
+        <button
+          ref={toggle} type="button" className="docs-more" aria-expanded={open} aria-controls={panelId}
+          aria-label={dot === 'failed' ? DOCS_HEAD_TEXT.moreFailed : dot === 'warn' ? DOCS_HEAD_TEXT.moreNever : DOCS_HEAD_TEXT.more}
+          onClick={() => setOpen((o) => !o)} onKeyDown={onKeyDown}
+        >
+          <Icon name="ellipsis" size={20} />
+          {dot !== null && <span className="docs-more-dot" data-tone={dot} aria-hidden="true" />}
+        </button>
+      </div>
+      <div
+        id={panelId} className="docs-more-panel" role="region" aria-label={DOCS_HEAD_TEXT.more} onKeyDown={onKeyDown}
+        hidden={!open}
+      >
+        <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} unfold />
+        <TruthLine page={page} visit={visit} tree={tree} receivedAt={p.receivedAt} now={p.now} />
+        {(target !== null || committedHref !== null) && (
+          <div className="docs-actions">
+            {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} />}
+            {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
+          </div>
+        )}
+        {share.s === 'updating' && <p className="docs-note">{fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: shareWords(share) })}</p>}
+        {exportNote !== null && <p className="docs-note">{exportNote}</p>}
+      </div>
+    </>
   );
 }

@@ -17,6 +17,9 @@ export interface Route {
   readonly top: boolean;
   /** The one path a door navigates to. Null for a route whose path carries a parameter (a session) or a query. */
   readonly path: string | null;
+  /** Whether the row takes the decoded parameter its pattern captured. Absent: any. A parameter the row refuses is no match
+   *  for the row, so the path is matched as if the row were not there (carry C, D-7951). */
+  readonly accepts?: (param: string) => boolean;
 }
 
 /** Settings' five sections, in the index's order (D-5503): each is its own route, `/settings/<id>` (D-5504). The one
@@ -59,9 +62,11 @@ export const ROUTES: readonly Route[] = [
   { id: 'item', pattern: /^\/waiting\/(\d+)\/?$/, title: 'Item', top: false, path: null },
   // The programme view (desktop-polish PL5b, D-7713): one programme by slug, opened from the chip on its box. It takes one path
   // segment, as the session row does, and the slug's GRAMMAR is the owner's (`shapeProgramSlug`, asked by `isProgrammeSlug`
-  // below): a second copy of its pattern here would be one more place to be wrong (`pl5b-route-owner-grammar`). `top: false`
-  // and `path: null`: no rail highlight (only `session` is carried under Fleet, `topRouteOf`), no "Go to" row.
-  { id: 'programme', pattern: /^\/programmes\/([^/]+)\/?$/, title: 'Programme', top: false, path: null },
+  // below): a second copy of its pattern here would be one more place to be wrong (`pl5b-route-owner-grammar`). A segment the
+  // owner refuses is no match (`accepts`), so it is a path outside the table: the fleet on a phone, the placeholder on a desk,
+  // never a blank pane (carry C, D-7951; review 1388 F1). `top: false` and `path: null`: no rail highlight (only `session` is
+  // carried under Fleet, `topRouteOf`), no "Go to" row.
+  { id: 'programme', pattern: /^\/programmes\/([^/]+)\/?$/, title: 'Programme', top: false, path: null, accepts: isProgrammeSlug },
 ];
 
 /** The one builder of a session's path, `/s/<id>`, which the `session` row above parses (D-7189). It encodes every
@@ -85,11 +90,13 @@ export function isProgrammeSlug(slug: string): boolean {
   return shaped.ok && shaped.slug === slug;
 }
 
-/** Whether the programme's path leads to its view: the route resolves and the slug it carries is a programme's. A slug the
- *  view would refuse is not offered a door. */
+/** Whether the programme's path leads to its view: the slug is a programme's, and the route resolves to it. A slug the view
+ *  would refuse is not offered a door. The grammar is asked first, so a string the encoder refuses (a lone surrogate) is
+ *  refused here, never thrown during a render (carry C, D-7951; review 1388's advisory). */
 export function programmeIsOpenable(slug: string): boolean {
+  if (!isProgrammeSlug(slug)) return false;
   const at = matchRoute(programmePath(slug));
-  return at !== null && at.route.id === 'programme' && at.param !== null && isProgrammeSlug(at.param);
+  return at !== null && at.route.id === 'programme' && at.param === slug;
 }
 
 /** The accounts route's one query (T2c, D-6329): a lane card is a per-row door to its lane, so it rides a query on the
@@ -130,11 +137,27 @@ export interface RouteMatch {
   readonly param: string | null;
 }
 
-/** The route a path is on, or null for a path outside the table. */
+/** The decoded capture, or `undefined` for a malformed percent escape (`/s/%zz`), which `decodeURIComponent` throws on. */
+function decodeParam(raw: string): string | undefined {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The route a path is on, or null for a path outside the table. A path whose captured segment is not a well-formed escape is
+ *  outside the table too: `App` calls this in its own body, outside every boundary but the root's, so it never throws
+ *  (carry C, D-7951; review 1388 F3). A row's `accepts` refusing the parameter is no match for that row. */
 export function matchRoute(path: string): RouteMatch | null {
   for (const route of ROUTES) {
     const m = route.pattern.exec(path);
-    if (m !== null) return { route, param: m[1] === undefined ? null : decodeURIComponent(m[1]) };
+    if (m === null) continue;
+    if (m[1] === undefined) return { route, param: null };
+    const param = decodeParam(m[1]);
+    if (param === undefined) return null;
+    if (route.accepts !== undefined && !route.accepts(param)) continue;
+    return { route, param };
   }
   return null;
 }

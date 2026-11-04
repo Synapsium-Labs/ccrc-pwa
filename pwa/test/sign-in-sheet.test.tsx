@@ -244,7 +244,8 @@ describe('the deadline has one source (spec §3.7)', () => {
     // deadline (Task A23, D-7871).
     const files = ['src/accounts/ConnectSheet.tsx', 'src/accounts/RunFrame.tsx', 'src/accounts/CodeField.tsx',
       'src/accounts/ResultFrame.tsx', 'src/accounts/connectFlow.ts', 'src/fleet/accountWords.ts',
-      'src/accounts/useSignInAttempt.tsx', 'src/accounts/MethodSwitchSheet.tsx', 'src/accounts/AuthResumeBanner.tsx'];
+      'src/accounts/useSignInAttempt.tsx', 'src/accounts/MethodSwitchSheet.tsx', 'src/accounts/AuthResumeBanner.tsx',
+      'src/accounts/ReauthSheet.tsx'];
     for (const f of files) {
       const src = readFileSync(path.join(__dirname, '..', f), 'utf8');
       expect(src, f).not.toMatch(/\b600\b|600_?000|\b10\s*min|ten minutes|AUTH_HELPER_BOUND_MS/i);

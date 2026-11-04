@@ -72,6 +72,8 @@ import { createQuestions, type OperatorDoorDeps } from './coord/questions.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
+import { createReaderLabRuns } from './readerLab/runs.js';
+import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
@@ -81,6 +83,8 @@ import { AuthAttempts } from './accounts/attempts.js';
 import { sessionIdHash } from './auth/sessions.js';
 import { resolveTitle } from './linear/resolve.js';
 import { classifyAddFailure, planCreate } from './workspaceCreate.js';
+import { classifyProjectAddFailure, planProjectAdd } from './projectAdd.js';
+import type { ProjectAddAnswer } from '../../shared/projectAdd.js';
 import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
@@ -221,6 +225,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/programmes/:slug/items',
   // The operator's reads of the same text (plan PL4): the waiting list, and one programme's goals (an In short copy a session wrote).
   '/api/waiting', '/api/programmes/:slug/goals',
+  // The stored-secrets read (the PL6 follow-up, programme item 9): no value, but each slot's asking item's title, which a session wrote.
+  '/api/programmes/:slug/secrets',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -516,6 +522,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     authStore.startSweep();
     app.addHook('onClose', async () => { authStore.stopSweep(); await authStore.flush(); });
   }
+  // The reader lab's door (the reader lab design, section 4): its counter is an onRequest hook added HERE, before the
+  // gate's, so a probe the gate refuses (a sandboxed frame's WebSocket upgrade on an armed box) is still counted. It only
+  // counts, for a run a session opened, and never answers: the gate below still decides every request. Its routes are
+  // registered after the docs plugin.
+  const readerLab = createReaderLabRuns();
+  installReaderLabCounter(app, readerLab);
   // Unconditional — the flag is decided INSIDE the hook (`authVerdict`'s first
   // line), so there is exactly one place in the tree that answers "is this
   // request allowed", and the sweep in `auth-gate.test.ts` measures the same
@@ -2102,6 +2114,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     registerDocsReadRoutes(app, docs.readers, docs.lanes);
     registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
   });
+  registerReaderLabRoutes(app, readerLab);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
@@ -2470,10 +2483,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token.
   // The secret's route (plan PL6) takes the account gate with a step-up, writes the slot under `cfg.ccrcDir`, and registers
-  // the value with the egress masker (no masker: `unregistered`, said in the answer, never a silent skip).
+  // the value with the egress masker (no masker: `unregistered`, said in the answer, never a silent skip). The PL6 follow-up's
+  // stored-secrets read and Remove door ride the same registration; a Remove retires the slot's lane in the masker.
   registerLedgerOperatorRoutes(app, {
     coord: deps.coord, bus, now: () => Date.now(), presenceOf, gate: accountGate, ccrcDir: deps.cfg.ccrcDir,
-    registerSecret: (laneId, value) => deps.masker?.ingestSecret(laneId, value) ?? 'unregistered',
+    registerSecret: (laneId, value, o) => deps.masker?.ingestSecret(laneId, value, o) ?? 'unregistered',
+    retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
   });
 
   /**
@@ -3036,6 +3051,28 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       case 'account-refused': return refuseRoute(reply, 'account-refused', failure.leftBehind ? { reason: failure.reason, leftBehind: true } : { reason: failure.reason });
       case 'other': return ccd502(reply, res);
     }
+  });
+
+  /**
+   * The project add (add-project spec 2026-11-04 §4). `planProjectAdd` (L1, `projectAdd.ts`) decides the body, the
+   * `CCD_ARGV` entry it takes and, from the deployed ccd's caps, whether it can be sent; ccd's `project-add` is the only
+   * writer of the new directory. On success the walk cache is dropped, so the next `GET /api/projects` lists the new
+   * project rather than up to `PROJECT_WALK_TTL_MS` later; so it is on `outcome-unknown` (a lost answer: the box may
+   * have added it), so the sheet's re-read shows what the box holds. NOT in `auth/gate.ts`'s EXEMPT table — session-gated
+   * when armed, open dark, like the pool route below. NO BOX TOKEN: this is fleet control, not a coordination write.
+   */
+  app.post('/api/projects', async (req, reply) => {
+    const plan = planProjectAdd(req.body, deps.fleetState);
+    if (plan.kind === 'refuse') return refuseRoute(reply, plan.error);
+    const res = await deps.runCcd(plan.argv);
+    if (!res.ok) {
+      const failure = classifyProjectAddFailure(res);
+      if (failure === 'other') return ccd502(reply, res);
+      if (failure === 'unknown') projectWalk.drop();
+      return refuseRoute(reply, failure === 'exists' ? 'project-exists' : 'outcome-unknown');
+    }
+    projectWalk.drop();
+    return { ok: true, name: plan.name, source: plan.source } satisfies ProjectAddAnswer;
   });
 
   /**
