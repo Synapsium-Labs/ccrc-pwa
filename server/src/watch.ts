@@ -1000,7 +1000,7 @@ export class FleetWatcher {
   private collectGen = 0;
   private collectLaneGen = 0;
   /** The orphan-worktree lane (D-6631): its pass, built on first use. Its cadence is the `orphanTrees` row of `LANE_SCHEDULE`. */
-  private readonly orphanBeat = new OrphanTreeBeat(() => this.deps, () => this.childReclaimLaneNow().monoMs, () => this.diskAlarm.block());
+  private readonly orphanBeat = new OrphanTreeBeat(() => this.deps, () => this.childReclaimLaneNow().monoMs, () => this.delegationCheckpointIfReady(), () => this.diskAlarm.block());
   private collectState = new Map<string, CollectEntry>();
   private collectInFlight = new Map<string, CollectFlight>();
   private collectSlot: CollectSlot = { kind: 'free' };
@@ -2046,6 +2046,9 @@ export class FleetWatcher {
   delegationApplier(): Promise<DelegationDurability | null> {
     return this.delegationLane().applier();
   }
+
+  /** The applier's checkpoint while its phase is `ready`, else null (delegation PR4, the orphan lane's hold). A read: opens nothing. */
+  delegationCheckpointIfReady(): DeepReadonly<DelegationCheckpointV1> | null { return this.delegationLaneMemo?.readyCheckpoint() ?? null; }
 
   /** Test seams of the delegation lane (see `DelegationLaneSeams`); production passes none. */
   setDelegationSeams(seams: DelegationLaneSeams): void {
@@ -10445,6 +10448,7 @@ class DelegationLane {
   }
 
   setSeams(seams: DelegationLaneSeams): void { this.seams = seams; }
+  readyCheckpoint(): DeepReadonly<DelegationCheckpointV1> | null { const s = this.durable?.state(); return s?.phase === 'ready' ? s.checkpoint : null; }
 
   /** D-7878: close admission before aborting reads; drain actual producers, including their finally/log tails, before the applier. */
   close(): Promise<void> {

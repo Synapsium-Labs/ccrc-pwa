@@ -21,6 +21,7 @@ import {
   type OrphanCensusNext, type OrphanFold, type OrphanMemory, type OrphanRow, type OrphanTreeMemory,
 } from './orphanTreeLane.js';
 import type { DiskOrphanTrees } from '../../shared/disk.js';
+import type { OrphanLeaseHold } from './coord/delegation-orphan-hold.js';
 
 export interface OrphanSweepDeps {
   readonly io: Pick<FleetIO, 'readdirMeasured'>;
@@ -39,6 +40,8 @@ export interface OrphanSweepDeps {
   readonly coordinators: () => ReadonlySet<string>;
   /** Whether the registry row `id` is a workspace (`workspace !== null`): false for a plain session or main checkout, null when the row cannot be read. */
   readonly isWorkspace: (id: string) => Promise<boolean | null>;
+  /** The delegation hold the executor asks before the licence (`CollectOrphanDeps.leaseHold`). */
+  readonly leaseHold: (path: string, orphanClass: string) => Promise<OrphanLeaseHold>;
 }
 
 export class OrphanTreeSweep {
@@ -54,12 +57,15 @@ export class OrphanTreeSweep {
   private unreadableSaid = false;
   /** Truncated censuses in a row (D-6987): a whole census resets it; an unreadable one leaves it. */
   private truncatedStreak = 0;
+  /** The trees whose last act job stopped `lease-unready` (delegation PR4): counted in the health block while remembered. */
+  private leaseUnready = new Set<string>();
 
   constructor(private readonly deps: OrphanSweepDeps) {}
 
   /** The `disk` block's `orphanTrees`: null until a census has been read. */
   health(): DiskOrphanTrees | null {
-    return this.measured ? orphanTreesHealth(this.rows, this.memory, this.removed) : null;
+    const lu = [...this.leaseUnready].filter((h) => this.memory.has(h)).length;
+    return this.measured ? orphanTreesHealth(this.rows, this.memory, this.removed, lu) : null;
   }
 
   /** The coordinators now, or null when the store cannot be read. */
@@ -83,7 +89,7 @@ export class OrphanTreeSweep {
 
   private ccd(): CollectOrphanDeps {
     const d = this.deps;
-    return { io: d.io, registryDir: d.registryDir, runCcd: d.runCcd, fleetState: d.fleetState, epochNow: d.epochNow };
+    return { io: d.io, registryDir: d.registryDir, runCcd: d.runCcd, fleetState: d.fleetState, epochNow: d.epochNow, leaseHold: d.leaseHold };
   }
 
   private put(hex: string, f: OrphanFold): void {
@@ -178,8 +184,11 @@ export class OrphanTreeSweep {
     const d = this.deps;
     const epoch = d.epochNow();
     const obs = this.memory.get(hex)?.obs ?? null;
+    const cls = this.memory.get(hex)?.cls ?? 'other';
     try {
-      const out = await d.queue.run(ORPHAN_QUEUE_KEY, () => collectOrphanTree(this.ccd(), hex, obs, d.mono, epoch));
+      const out = await d.queue.run(ORPHAN_QUEUE_KEY, () => collectOrphanTree(this.ccd(), hex, cls, obs, d.mono, epoch));
+      // `leased` and `lease-unready` compose nothing and fold as any `stopped` does; the second is counted in the health block.
+      if (out.kind === 'stopped' && out.why === 'lease-unready') this.leaseUnready.add(hex); else this.leaseUnready.delete(hex);
       const cur = this.memory.get(hex);
       if (cur !== undefined) this.put(hex, orphanFoldJob(cur, out, d.mono(), rescueArmed, censusMs));
     } catch {

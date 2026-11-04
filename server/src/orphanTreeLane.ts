@@ -303,7 +303,7 @@ export function orphanGoesWithRow(hex: string, cls: OrphanClass): { readonly tit
 
 /** Counts by class (every census row) and by outcome (every audited tree). `removed` is the lane's running count. */
 export function orphanTreesHealth(
-  rows: readonly OrphanRow[], memory: OrphanMemory, removed: number,
+  rows: readonly OrphanRow[], memory: OrphanMemory, removed: number, leaseUnready: number,
 ): DiskOrphanTrees {
   const byClass = { 'ccd-root': 0, claude: 0, superpowers: 0, other: 0, 'not-a-worktree': 0 };
   for (const r of rows) byClass[r.cls] += 1;
@@ -312,7 +312,7 @@ export function orphanTreesHealth(
     if (m.outcome === null) byOutcome.pending += 1;
     else if (m.outcome.kind !== 'removed') byOutcome[m.outcome.kind] += 1;
   }
-  return { byClass, byOutcome };
+  return { byClass, byOutcome, leaseUnready };
 }
 
 export interface OrphanOffers { readonly act: string | null; readonly learn: readonly string[] }
@@ -333,9 +333,10 @@ export function orphanOffers(
 
 // ── folding an answer into the memory ────────────────────────────────────────
 
-/** What the L3 job reports for a tree, which the lane folds. `stopped` composed nothing and says nothing. */
+/** What the L3 job reports for a tree, which the lane folds. `stopped` composed nothing and says nothing. `leased` and
+ *  `lease-unready` are the delegation hold's (PR4): the checkpoint holds the tree, or is not ready to say. */
 export type OrphanJobOutcome =
-  | { readonly kind: 'stopped'; readonly why: 'caps' | 'paused' | 'epoch' | 'switch' }
+  | { readonly kind: 'stopped'; readonly why: 'caps' | 'paused' | 'epoch' | 'switch' | 'leased' | 'lease-unready' }
   | { readonly kind: 'audited'; readonly audit: OrphanAudit }
   | { readonly kind: 'would'; readonly rescued: boolean }
   | { readonly kind: 'result'; readonly result: OrphanResult; readonly rescued: boolean };

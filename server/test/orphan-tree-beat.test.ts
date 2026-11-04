@@ -28,7 +28,7 @@ function harness(initial: Block) {
       throw new Error(`unexpected ccd call ${argv.join(' ')}`);
     },
   } as unknown as Deps;
-  const beat = new OrphanTreeBeat(() => deps, () => mono, () => block);
+  const beat = new OrphanTreeBeat(() => deps, () => mono, () => null, () => block);
   return { beat, censuses: () => censuses, advance: (ms: number) => { mono += ms; }, set: (b: Block) => { block = b; } };
 }
 

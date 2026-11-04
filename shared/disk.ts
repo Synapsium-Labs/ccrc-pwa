@@ -128,6 +128,9 @@ export interface DiskHolder {
 export interface DiskOrphanTrees {
   readonly byClass: Readonly<Record<'ccd-root' | 'claude' | 'superpowers' | 'other' | 'not-a-worktree', number>>;
   readonly byOutcome: Readonly<Record<'pending' | 'would' | 'left' | 'removed', number>>;
+  /** Trees whose last act job stopped because the delegation checkpoint was not ready (delegation PR4): a stuck applier shows on
+   *  the orphan lane's own row. Absent from an older server, and then unknown, never zero. */
+  readonly leaseUnready?: number;
 }
 
 /** D-7898: WORK KEPT INSIDE CLAUDE CODE'S TRANSCRIPT FOLDERS (`<config dir>/projects/<slug>/...`). Sessions sometimes
@@ -357,7 +360,9 @@ function readOrphanTrees(v: unknown): DiskOrphanTrees | undefined {
   if (!isObj(v)) return undefined;
   const byClass = countsOf(v['byClass'], CLASS_KEYS);
   const byOutcome = countsOf(v['byOutcome'], OUTCOME_KEYS);
-  return byClass === null || byOutcome === null ? undefined : { byClass, byOutcome };
+  if (byClass === null || byOutcome === null) return undefined;
+  const lu = num(v['leaseUnready']);
+  return lu === null || !Number.isInteger(lu) ? { byClass, byOutcome } : { byClass, byOutcome, leaseUnready: lu };
 }
 
 /** THE ONE READER of `FleetHealth.disk`: the block, or `null`. Absent (an older server, or no pass yet) and malformed
