@@ -1554,4 +1554,8 @@ describe('the fleet foot\'s region and the header\'s entry list shrink below the
     expect(declValue(rule, 'flex-basis')).toBe('100%');
     expect(declValue(rule, 'min-width')).toBe('0');
   });
+
+  it('VIS-CSS1: the fleet foot\'s region is a grid item of .fleet-list with the card\'s floor, a min-width of 0', () => {
+    expect(declValue(ruleFor('.fleet-unlisted'), 'min-width')).toBe('0');
+  });
 });

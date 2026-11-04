@@ -255,6 +255,11 @@
      round `+` does not, so 56px stays the floor. */
   padding-bottom: calc(max(56px, var(--phone-nav-h)) + var(--sp-6) + var(--safe-bottom));
 }
+/* The fleet foot's region of work whose session is not listed: a grid item of .fleet-list, like .proj-card, so it
+   takes the card's floor. A grid item's automatic minimum is its min-content width, and its rows' words are
+   white-space: nowrap (.proj-work-parts), so without this one long row widens the list's one track and scrolls the
+   pane sideways. */
+.fleet-unlisted { min-width: 0; }
 /* Offline / cold-start hydration used to fade the whole card list here:
      .fleet[data-conn='down'] .fleet-list,
      .fleet[data-conn='connecting'] .fleet-list:not([data-loading='true'])

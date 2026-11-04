@@ -337,12 +337,16 @@ function ProjectCardView({
     }
     return out;
   };
-  // A worktree's `via` worker by its display name, or its raw id when the fleet does not carry it.
-  const viaLabel = (id: string | null): string | null => {
+  // A session by its display name, or its raw id when the fleet does not carry it: a worktree's `via` worker, and the
+  // session an offline-group row came from (delegation visibility, spec §5). Display only, never a join key.
+  const labelOf = (id: string | null): string | null => {
     if (id === null) return null;
     const s = coordOf(id);
     return s === null ? id : sessionLabel(s);
   };
+  /** The `from` label of a row in the offline group. A row under its own session names none. */
+  const fromOf = (rowGroup: DelegationGroupKind | null, parentId: string): string | null =>
+    rowGroup === 'offline-coordinator' ? labelOf(parentId) : null;
   // Task 5: the hold reason's door, decided HERE because this is the level that
   // holds the runs. `boundOpenRun` answers off the wire's binding and the run
   // rows — never by reading the id out of the hold string, which stays
@@ -412,11 +416,12 @@ function ProjectCardView({
 
   const rowBody = (row: FleetRow): ReactNode => {
     if (row.kind === 'activity') {
-      const a = activityLine(row.activity);
+      const a = activityLine(row.activity, fromOf(row.group, row.activity.parentId));
       return workLine(a.parts, a.title);
     }
     if (row.kind === 'lease') {
-      const w = worktreeLine(row.lease, viaLabel(row.via), workingOnCard({ project: row.lease.project }, group.project));
+      const w = worktreeLine(row.lease, labelOf(row.via), workingOnCard({ project: row.lease.project }, group.project),
+        fromOf(row.group, row.lease.parentId));
       // D-6999: the chips are words, never colour alone, and nothing here acts on the row.
       const chips = [inferredChip(row.lease), creatorChip(row.lease)];
       return workLine(w.parts, w.title, <>

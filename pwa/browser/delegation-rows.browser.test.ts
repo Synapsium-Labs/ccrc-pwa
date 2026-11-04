@@ -7,7 +7,7 @@
 // whose live activity is a chip on its row and whose worktree sits under the coordinator `via` it) and a session in no
 // programme, whose delegated work and raw worktree (a long name and a long path, a works-on chip, `inferred` and the
 // creating Bash call) nest under it; both heads' folds are opened. Both groups are opened too: a worktree whose parent
-// is gone and one unowned tree.
+// is gone and one unowned tree. One activity's session is in no fleet list, so the fleet foot's region draws it, with a long name and a long raw session id; the region is opened too.
 // Instrument is put in its project mode (`GROUP_MODE_KEY`), where it draws the same project cards as Refined.
 //
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/delegation-rows.browser.test.ts
@@ -54,6 +54,8 @@ const DELEGATION = frame({
       displayName: 'map every caller of the projection decider across the server and the PWA trees' }),
     activity({ activityId: 'a-coord', parentId: 'port-coord', displayName: 'read the plan' }),
     activity({ activityId: 'a-chip', parentId: 'port-w1', placement: 'chip', displayName: 'check the wire' }),
+    activity({ activityId: 'a-unlisted', parentId: 'gone-session-from-an-earlier-run-with-a-long-identifier-of-its-own',
+      displayName: 'reconcile every reader of the projection frame across the server, the agent and the PWA trees' }),
   ],
   leases: [
     lease({ leaseId: 'l-lone', parentId: 'lone-tidy-pass', sourceKind: 'raw', project: 'project-b', adminRecord: 'agent-l1',
@@ -110,6 +112,7 @@ async function open(skin: string, theme: string, width: number) {
   for (const name of ['Offline coordinator', 'Unowned work']) {
     await opened.page.locator('.proj-group-toggle', { hasText: name }).click();
   }
+  await opened.page.locator('.fleet-unlisted .proj-group-toggle').click();
   const folded = opened.page.locator('.proj-children-toggle[aria-expanded="false"]');
   for (let n = await folded.count(); n > 0; n = await folded.count()) await folded.first().click();
   await opened.page.waitForSelector('.proj-work >> nth=5', { timeout: 20_000 });
@@ -125,9 +128,9 @@ interface RowFit {
   readonly cells: { readonly text: string; readonly inRow: boolean; readonly width: number }[];
 }
 
-/** Every delegation row on the page: whether it sits inside its card, how far its content overflows its own box, and
+/** Every delegation row on a card: whether it sits inside its card, how far its content overflows its own box, and
  *  whether each of its chips sits inside the row with a width of its own. */
-const measureRows = (): RowFit[] => [...document.querySelectorAll<HTMLElement>('.proj-work')].map((row) => {
+const measureRows = (): RowFit[] => [...document.querySelectorAll<HTMLElement>('.proj-card .proj-work')].map((row) => {
   const card = row.closest('.proj-card')!.getBoundingClientRect();
   const r = row.getBoundingClientRect();
   const within = (a: DOMRect, b: DOMRect): boolean => a.left >= b.left - 0.5 && a.right <= b.right + 0.5;
@@ -141,6 +144,17 @@ const measureRows = (): RowFit[] => [...document.querySelectorAll<HTMLElement>('
     }),
   };
 });
+
+/** The fleet foot's region and each of its rows: inside the fleet list's box, and nothing overflowing its own box. A
+ *  region without its `min-width: 0` widens the list's one grid track past the list, which this sees at every width,
+ *  the desk sidebar's included (where the page itself does not scroll). */
+const measureUnlisted = (): { text: string; inList: boolean; overflow: number }[] => {
+  const list = document.querySelector<HTMLElement>('.fleet-list')!.getBoundingClientRect();
+  const within = (a: DOMRect, b: DOMRect): boolean => a.left >= b.left - 0.5 && a.right <= b.right + 0.5;
+  return [...document.querySelectorAll<HTMLElement>('.fleet-unlisted, .fleet-unlisted .proj-work')].map((el) => ({
+    text: el.textContent ?? '', inList: within(el.getBoundingClientRect(), list), overflow: el.scrollWidth - el.clientWidth,
+  }));
+};
 
 describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
   for (const theme of THEMES) {
@@ -164,6 +178,12 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
               expect(c.inRow, `${c.text}: inside its row`).toBe(true);
               expect(c.width, `${c.text}: drawn`).toBeGreaterThan(0);
             }
+          }
+          const unlisted = await page.evaluate(measureUnlisted);
+          expect(unlisted, 'the region and its one row').toHaveLength(2);
+          for (const u of unlisted) {
+            expect(u.inList, `${u.text}: inside the fleet list`).toBe(true);
+            expect(u.overflow, `${u.text}: nothing overflows it`).toBeLessThanOrEqual(1);
           }
           const chips = rows.flatMap((r) => r.cells.map((c) => c.text));
           expect(chips.filter((t) => t === 'inferred'), 'each raw worktree wears inferred').toHaveLength(2);
