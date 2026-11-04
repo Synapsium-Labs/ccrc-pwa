@@ -10,9 +10,9 @@ import type { ReactNode } from 'react';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { entryView } from '../../shared/docs';
+import { entryView, type DocPin } from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
-import { DOCS_COMPACT_QUERY, freshDot, headLayoutFor } from '../src/docs/DocsHead';
+import { DOCS_COMPACT_QUERY, DocsHead, freshDot, headLayoutFor } from '../src/docs/DocsHead';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
 import { DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, fillSentence, servedRefText, shortCommit } from '../src/docs/docsText';
 import type { DocsFileAnswer, DocsLoaders, DocsTreeAnswer } from '../src/docs/failures';
@@ -20,9 +20,10 @@ import { HighlighterContext } from '../src/lib/highlighterContext';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
+import type { DocsVisit } from '../src/docs/useDocsVisit';
 import { navigate, useLocation } from '../src/lib/router';
 import {
-  COMMIT_A, draftOf, entry, fakeLoaders, fileResponse, holder, okFile, okTree, pageAt, treeOk, type FakeLoaders,
+  COMMIT_A, FP_1, draftOf, entry, fakeLoaders, fileResponse, holder, okFile, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
 } from './docsFixtures';
 import { inThreadContext, inThreadHighlighter } from './highlightTestStore';
 
@@ -226,6 +227,27 @@ describe('the compact row (refinements (c), (e), (g))', () => {
     await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
     expect(servedRefText(tree.ref)).toBe('main (local)');
     expect(bar().querySelector('.docs-compact-where')?.textContent).toBe('specs · main (local)');
+  });
+
+  it('a draft the tree no longer lists draws the truth line\'s word on the row, as plain text, never as a badge (refinement (g))', () => {
+    atWidth(412);
+    // The pin outlived a re-list: the leaf's file slot holds a draft pin, and the tree's entry no longer carries a draft, so
+    // entryView gives the leaf no badge and the truth line draws its plain word.
+    const tree = treeOk({ entries: [entry('specs', 'a.md')], drafts: holder() });
+    const pin: DocPin = { kind: 'draft', branch: 'main', head: COMMIT_A, section: 'specs', path: 'a.md', fp: FP_1 };
+    const visit: DocsVisit = {
+      tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
+      file: { s: 'loading', pin }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
+      retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+    };
+    render(<DocsHead page={pageAt('/docs/demo/specs/a.md?ref=main')} visit={visit} tree={tree} />);
+    const word = DOCS_HEAD_TEXT.sourceDraftUnbadged;
+    const where = bar().querySelector('.docs-compact-where') as HTMLElement;
+    expect(where.textContent, 'the row ends in the truth line\'s word').toBe(`specs · ${servedRefText(tree.ref)} · ${word}`);
+    expect(where.querySelector('.docs-badge'), 'the row draws it as text, as the truth line does').toBeNull();
+    const source = panel().querySelector('.docs-truth-source') as HTMLElement;
+    expect(source.textContent?.startsWith(word), 'the truth line starts with the same word').toBe(true);
+    expect(source.querySelector('.docs-badge'), 'the truth line draws no badge for it').toBeNull();
   });
 
   it.each(['default:origin-main', 'default:origin-master'] as const)(

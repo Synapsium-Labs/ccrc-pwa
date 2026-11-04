@@ -747,14 +747,18 @@ function BackButton(p: { readonly page: DocsPageLocation }): ReactNode {
   );
 }
 
-/** The compact row's draft word (phone-header refinement (g)): the badge the truth line draws for this leaf, `entryView`'s through
- *  `ENTRY_BADGE_TEXT` (M4.T7, one badge function), or `null` when the truth line draws none. */
-function rowBadge(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): string | null {
+/** The compact row's draft word (phone-header refinement (g)): the word, and the form, the truth line draws for this leaf, so the
+ *  row follows the one source (M4.T7, one badge function). `entryView`'s badge through `ENTRY_BADGE_TEXT` is drawn as a
+ *  `.docs-badge` (`badged`); for a draft whose entry no longer opens one (the pin outlived a re-list) the truth line draws
+ *  `DOCS_HEAD_TEXT.sourceDraftUnbadged` as plain text, and so does the row (`badged` false). `null` when the truth line draws
+ *  no draft word. */
+interface RowBadge { readonly word: string; readonly badged: boolean }
+function rowBadge(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): RowBadge | null {
   const k = docsPathKind(tree, page.section, page.path, modeOf(page));
   if (k.kind !== 'leaf') return null;
   const s = leafSource(tree, page, openedPin(tree, page, file));
-  if (s.kind === 'draft') return badgeText(s.badge);
-  return k.view.badge === null ? null : ENTRY_BADGE_TEXT[k.view.badge];
+  if (s.kind === 'draft') return { word: badgeText(s.badge), badged: s.badge !== null };
+  return k.view.badge === null ? null : { word: ENTRY_BADGE_TEXT[k.view.badge], badged: true };
 }
 
 /** The compact row's two lines (phone-header refinements (c), (g)): where the page is over its name. The first line is the
@@ -763,7 +767,7 @@ function rowBadge(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): string
  *  which ref is served; the draft badge follows as a sibling, so a long ref is cut and the badge never is. Text, not
  *  links: back goes up one level, and the whole path is the panel's first line. */
 function CompactLabel(p: {
-  readonly where: string; readonly name: string; readonly refText: string | null; readonly badge: string | null;
+  readonly where: string; readonly name: string; readonly refText: string | null; readonly badge: RowBadge | null;
 }): ReactNode {
   return (
     <p className="docs-compact-label">
@@ -772,7 +776,7 @@ function CompactLabel(p: {
           <span className="docs-compact-where-crumb">{p.where}</span>
           {p.refText !== null && <span className="docs-compact-where-ref">{SEP}{p.refText}</span>}
         </span>
-        {p.badge !== null && <>{SEP}<span className="docs-badge">{p.badge}</span></>}
+        {p.badge !== null && <>{SEP}{p.badge.badged ? <span className="docs-badge">{p.badge.word}</span> : p.badge.word}</>}
       </span>
       <span className="docs-compact-name">{p.name}</span>
     </p>

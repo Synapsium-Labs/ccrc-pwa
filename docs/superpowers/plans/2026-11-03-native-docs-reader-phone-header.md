@@ -1019,9 +1019,9 @@ import type { ReactNode } from 'react';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { entryView } from '../../shared/docs';
+import { entryView, type DocPin } from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
-import { DOCS_COMPACT_QUERY, freshDot, headLayoutFor } from '../src/docs/DocsHead';
+import { DOCS_COMPACT_QUERY, DocsHead, freshDot, headLayoutFor } from '../src/docs/DocsHead';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
 import { DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, fillSentence, servedRefText, shortCommit } from '../src/docs/docsText';
 import type { DocsFileAnswer, DocsLoaders, DocsTreeAnswer } from '../src/docs/failures';
@@ -1029,9 +1029,10 @@ import { HighlighterContext } from '../src/lib/highlighterContext';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
+import type { DocsVisit } from '../src/docs/useDocsVisit';
 import { navigate, useLocation } from '../src/lib/router';
 import {
-  COMMIT_A, draftOf, entry, fakeLoaders, fileResponse, holder, okFile, okTree, pageAt, treeOk, type FakeLoaders,
+  COMMIT_A, FP_1, draftOf, entry, fakeLoaders, fileResponse, holder, okFile, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
 } from './docsFixtures';
 import { inThreadContext, inThreadHighlighter } from './highlightTestStore';
 
@@ -1235,6 +1236,27 @@ describe('the compact row (refinements (c), (e), (g))', () => {
     await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
     expect(servedRefText(tree.ref)).toBe('main (local)');
     expect(bar().querySelector('.docs-compact-where')?.textContent).toBe('specs · main (local)');
+  });
+
+  it('a draft the tree no longer lists draws the truth line\'s word on the row, as plain text, never as a badge (refinement (g))', () => {
+    atWidth(412);
+    // The pin outlived a re-list: the leaf's file slot holds a draft pin, and the tree's entry no longer carries a draft, so
+    // entryView gives the leaf no badge and the truth line draws its plain word.
+    const tree = treeOk({ entries: [entry('specs', 'a.md')], drafts: holder() });
+    const pin: DocPin = { kind: 'draft', branch: 'main', head: COMMIT_A, section: 'specs', path: 'a.md', fp: FP_1 };
+    const visit: DocsVisit = {
+      tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
+      file: { s: 'loading', pin }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
+      retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+    };
+    render(<DocsHead page={pageAt('/docs/demo/specs/a.md?ref=main')} visit={visit} tree={tree} />);
+    const word = DOCS_HEAD_TEXT.sourceDraftUnbadged;
+    const where = bar().querySelector('.docs-compact-where') as HTMLElement;
+    expect(where.textContent, 'the row ends in the truth line\'s word').toBe(`specs · ${servedRefText(tree.ref)} · ${word}`);
+    expect(where.querySelector('.docs-badge'), 'the row draws it as text, as the truth line does').toBeNull();
+    const source = panel().querySelector('.docs-truth-source') as HTMLElement;
+    expect(source.textContent?.startsWith(word), 'the truth line starts with the same word').toBe(true);
+    expect(source.querySelector('.docs-badge'), 'the truth line draws no badge for it').toBeNull();
   });
 
   it.each(['default:origin-main', 'default:origin-master'] as const)(
@@ -1750,14 +1772,18 @@ function BackButton(p: { readonly page: DocsPageLocation }): ReactNode {
   );
 }
 
-/** The compact row's draft word (phone-header refinement (g)): the badge the truth line draws for this leaf, `entryView`'s through
- *  `ENTRY_BADGE_TEXT` (M4.T7, one badge function), or `null` when the truth line draws none. */
-function rowBadge(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): string | null {
+/** The compact row's draft word (phone-header refinement (g)): the word, and the form, the truth line draws for this leaf, so the
+ *  row follows the one source (M4.T7, one badge function). `entryView`'s badge through `ENTRY_BADGE_TEXT` is drawn as a
+ *  `.docs-badge` (`badged`); for a draft whose entry no longer opens one (the pin outlived a re-list) the truth line draws
+ *  `DOCS_HEAD_TEXT.sourceDraftUnbadged` as plain text, and so does the row (`badged` false). `null` when the truth line draws
+ *  no draft word. */
+interface RowBadge { readonly word: string; readonly badged: boolean }
+function rowBadge(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): RowBadge | null {
   const k = docsPathKind(tree, page.section, page.path, modeOf(page));
   if (k.kind !== 'leaf') return null;
   const s = leafSource(tree, page, openedPin(tree, page, file));
-  if (s.kind === 'draft') return badgeText(s.badge);
-  return k.view.badge === null ? null : ENTRY_BADGE_TEXT[k.view.badge];
+  if (s.kind === 'draft') return { word: badgeText(s.badge), badged: s.badge !== null };
+  return k.view.badge === null ? null : { word: ENTRY_BADGE_TEXT[k.view.badge], badged: true };
 }
 
 /** The compact row's two lines (phone-header refinements (c), (g)): where the page is over its name. The first line is the
@@ -1766,7 +1792,7 @@ function rowBadge(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): string
  *  which ref is served; the draft badge follows as a sibling, so a long ref is cut and the badge never is. Text, not
  *  links: back goes up one level, and the whole path is the panel's first line. */
 function CompactLabel(p: {
-  readonly where: string; readonly name: string; readonly refText: string | null; readonly badge: string | null;
+  readonly where: string; readonly name: string; readonly refText: string | null; readonly badge: RowBadge | null;
 }): ReactNode {
   return (
     <p className="docs-compact-label">
@@ -1775,7 +1801,7 @@ function CompactLabel(p: {
           <span className="docs-compact-where-crumb">{p.where}</span>
           {p.refText !== null && <span className="docs-compact-where-ref">{SEP}{p.refText}</span>}
         </span>
-        {p.badge !== null && <>{SEP}<span className="docs-badge">{p.badge}</span></>}
+        {p.badge !== null && <>{SEP}{p.badge.badged ? <span className="docs-badge">{p.badge.word}</span> : p.badge.word}</>}
       </span>
       <span className="docs-compact-name">{p.name}</span>
     </p>
