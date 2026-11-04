@@ -2246,9 +2246,10 @@ button.proj-card-pool::before {
 /* The middot between parts sits in the gap before a part, outside its box, so a part that starts a wrapped line has
    its middot outside `.proj-work-parts` and clipped with its overflow: no line starts with a lone `·` (D-7783, review
    1431 D; the coordination row's rule, #633). It fills the gap, `--sp-3` (12 px), centred: 1.6 to 1.8 px wider per
-   separator than the old margins and glyph drew (8 px of margin plus the glyph's 2.2 to 2.4 px), review 1435 G2. Only a
-   part takes one, since only a part is the containing block it is placed against (review 1435 G5). */
-.proj-work-parts > .proj-work-part:not(:first-child)::before {
+   separator than the old margins and glyph drew (8 px of margin plus the glyph's 2.2 to 2.4 px), review 1435 G2. Every
+   child of `.proj-work-parts` is a `.proj-work-part` (WorkLine draws nothing else there), so each is the containing
+   block its middot is placed against. */
+.proj-work-parts > *:not(:first-child)::before {
   content: '·';
   position: absolute;
   top: 0;

@@ -120,9 +120,14 @@ below is a departure from the plan's text, and takes one of the plan's spare num
     floor, so the grow half of `flex: 1 1 8ch` is pinned by more than the floor's sub-pixel margin. VIS-M38
     (`flex: 0 1 8ch`) reds 16 cases: the eight desk card cases on `read the plan: drawn whole`, and the 390 and header
     cases on the floor (58.33 against 58.625, 63.64 against 64).
-  - **Fix round 3 (review 1435 G5): only a part draws a separator.** The selector is now `.proj-work-parts >
-    .proj-work-part:not(:first-child)::before`, so a child that is not a part, and so not the `::before`'s containing
-    block, never takes one.
+  - **Fix round 3 (review 1435 G5): the narrower separator selector is not taken.** Written as ruled,
+    `.proj-work-parts > .proj-work-part:not(:first-child)::before`, it reds six cases of `contrast.test.ts`: the
+    contrast audit's registry (`pwa/design/audit.mjs`, `INHERITED_GROUNDS`) is keyed by the selector's text, so the old
+    key goes stale and the new selector enters the uncovered census (`stale inherited registry entry:
+    .proj-work-parts > *:not(:first-child)::before matches no rule`). Rekeying that entry edits a file another run holds
+    (claim 3428, run 1436), so the selector keeps its old text, and the `fleet.css` comment says why it is safe today:
+    every child of `.proj-work-parts` is a `.proj-work-part`. The rekey is a one-line follow-up once that claim is
+    released, for the rider.
   - **Fix round 3 (review 1435 G3): the header's entry rows get the card rows' checks.** The header case at 390 now runs
     `measureParts` over its three entry rows: the condition word and the last part whole, the name at its floor, no line
     starting with a middot, and every separator unclipped and in its gap. It is run last, because it scrolls each row
@@ -198,7 +203,8 @@ below is a departure from the plan's text, and takes one of the plan's spare num
 
 ## Minors (review 1435)
 
-Taken: G1, G2 (a) to (e), G3 and the selector half of G5. Each is under its D-number above, or corrects this note.
+Taken: G1, G2 (a) to (e) and G3. Each is under its D-number above, or corrects this note. The selector half of G5
+was ruled taken and is not: see D-7783's fix round 3 entries.
 
 Considered and left, as the coordinator ruled:
 - G4: a re-opened details door brings round 1's off-screen list back. The list lives inside the details, which unmount
