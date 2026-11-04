@@ -170,6 +170,24 @@ describe('the hashed /assets/* files are sent precompressed, chosen by Accept-En
     }
   });
 
+  it('q-values order the codings: gzip;q=1, br;q=0.5 gets the .gz', async () => {
+    const res = await get(`/${APP}`, 'gzip;q=1, br;q=0.5');
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-encoding']).toBe('gzip');
+    expect(gunzipSync(res.rawPayload).equals(appBytes)).toBe(true);
+    expect(res.headers['cache-control']).toBe(PWA_ASSET_CACHE);
+  });
+
+  it('a refused coding is never sent: br;q=0, gzip gets the .gz, and br;q=0 alone gets the file', async () => {
+    const gz = await get(`/${APP}`, 'br;q=0, gzip');
+    expect(gz.headers['content-encoding']).toBe('gzip');
+    expect(gunzipSync(gz.rawPayload).equals(appBytes)).toBe(true);
+    const plain = await get(`/${APP}`, 'br;q=0');
+    expect(plain.headers['content-encoding']).toBeUndefined();
+    expect(plain.rawPayload.equals(appBytes)).toBe(true);
+    expect(variesOnEncoding(plain.headers['vary'])).toBe(true);
+  });
+
   it('a copy the build left out is skipped: br falls back to the .gz, and a file with no copy is sent as itself', async () => {
     const style = await get(`/${STYLE}`, CHROME);
     expect(style.headers['content-encoding']).toBe('gzip');

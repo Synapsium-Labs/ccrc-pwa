@@ -18,7 +18,10 @@ export const PWA_ASSET_CACHE = 'public, max-age=31536000, immutable';
  *
  * The build writes a Brotli (`<file>.br`) and a gzip (`<file>.gz`) copy beside each script,
  * stylesheet and SVG under `assets/` (`pwa/build/compressAssets.ts`), and `preCompressed` sends the
- * one the request's Accept-Encoding takes: br, else gzip, else the file itself. @fastify/static then
+ * one @fastify/static picks: br, gzip or deflate by the request's Accept-Encoding q-values (br first
+ * among equals), `*` read as gzip, and the file itself when the chosen copy is missing or no coding
+ * is accepted. The build never writes a `.deflate` copy, so a deflate pick always falls through to
+ * the file. @fastify/static then
  * sets Content-Encoding and the file's own Content-Type, and adds `Vary: Accept-Encoding` to every
  * file it answers, the uncompressed fallback included. `setHeaders` is handed the path it sent,
  * which for a copy is under `assets/` too, so a copy keeps its file's cache policy. The shell has no
