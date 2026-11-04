@@ -72,6 +72,20 @@ describe('the reader lab run store (reader lab plan, Task 2)', () => {
     for (const n of ['', 'A'.repeat(21), `${N1}A`, nonceOf(1), '../x']) expect(runs.count(n, 'cookie-fetch', CROSS, 1), n).toBe('no-run');
     expect(runs.read(N1, ME, 2)!.counted).toBe(0);
     expect(runs.read('A'.repeat(21), ME, 2)).toBeNull();
+    // A full store is untouched by a probe on a nonce nobody opened (well-formed or not): none is evicted, none is
+    // created, and no run's counts move.
+    const full = createReaderLabRuns();
+    for (let i = 1; i <= READER_LAB_RUNS_MAX; i += 1) {
+      full.open(nonceOf(i), ME, i);
+      full.count(nonceOf(i), 'cookie-fetch', CROSS, i);
+    }
+    for (const n of [nonceOf(READER_LAB_RUNS_MAX + 1), '../x']) expect(full.count(n, 'cookie-fetch', CROSS, 5), n).toBe('no-run');
+    expect(full.openCount(5)).toBe(READER_LAB_RUNS_MAX);
+    for (let i = 1; i <= READER_LAB_RUNS_MAX; i += 1) {
+      const v = full.read(nonceOf(i), ME, 5);
+      expect([v?.counted, v?.ignored, v?.probes['cookie-fetch'].hits], String(i)).toEqual([1, 0, 1]);
+    }
+    expect(full.read(nonceOf(READER_LAB_RUNS_MAX + 1), ME, 5)).toBeNull();
   });
 
   it('a run is gone at its expiry: it reads null and counts nothing (M10.6)', () => {

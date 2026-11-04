@@ -545,6 +545,20 @@ describe('the reader lab run store (reader lab plan, Task 2)', () => {
     for (const n of ['', 'A'.repeat(21), `${N1}A`, nonceOf(1), '../x']) expect(runs.count(n, 'cookie-fetch', CROSS, 1), n).toBe('no-run');
     expect(runs.read(N1, ME, 2)!.counted).toBe(0);
     expect(runs.read('A'.repeat(21), ME, 2)).toBeNull();
+    // A full store is untouched by a probe on a nonce nobody opened (well-formed or not): none is evicted, none is
+    // created, and no run's counts move.
+    const full = createReaderLabRuns();
+    for (let i = 1; i <= READER_LAB_RUNS_MAX; i += 1) {
+      full.open(nonceOf(i), ME, i);
+      full.count(nonceOf(i), 'cookie-fetch', CROSS, i);
+    }
+    for (const n of [nonceOf(READER_LAB_RUNS_MAX + 1), '../x']) expect(full.count(n, 'cookie-fetch', CROSS, 5), n).toBe('no-run');
+    expect(full.openCount(5)).toBe(READER_LAB_RUNS_MAX);
+    for (let i = 1; i <= READER_LAB_RUNS_MAX; i += 1) {
+      const v = full.read(nonceOf(i), ME, 5);
+      expect([v?.counted, v?.ignored, v?.probes['cookie-fetch'].hits], String(i)).toEqual([1, 0, 1]);
+    }
+    expect(full.read(nonceOf(READER_LAB_RUNS_MAX + 1), ME, 5)).toBeNull();
   });
 
   it('a run is gone at its expiry: it reads null and counts nothing (M10.6)', () => {
@@ -815,6 +829,7 @@ export function createReaderLabRuns(): ReaderLabRuns {
 | RLB-T2-M7 | (d) M10.17 | `if (run === undefined \|\| run.owner !== owner) return null;` → `if (run === undefined) return null;` | 1 failed — `'a run answers only its owner: …'` |
 | RLB-T2-M8 | (d) M10.17 | `return run !== undefined && run.owner === owner && runs.delete(nonce);` → `return runs.delete(nonce);` | 1 failed — `'a run answers only its owner: …'` |
 | RLB-T2-M9 | (d) M10.6 | `export const READER_LAB_RUN_TTL_MS = LAB_RUN_CAPS_MS + READER_LAB_RUN_SLACK_MS;` → `export const READER_LAB_RUN_TTL_MS = 600_000;` | 1 failed — `'a run lives as long as the lab run\'s own caps allow, plus five minutes: …'` |
+| RLB-T2-M10 | (d) M10.5 | `if (run === undefined) return 'no-run';` → `if (run === undefined) { const oldest = runs.keys().next(); if (oldest.done !== true) runs.delete(oldest.value); return 'no-run'; }` | measured: 1 failed — `'with no run open, or under a nonce of another shape or another run, nothing is counted (M10.5)'` (the create-on-miss variant, which plants a run for the unopened nonce, reds that case too, and the expiry case `'a run is gone at its expiry: …'`: 2 failed, measured, not a row) |
 
 ```json
 [
@@ -826,7 +841,8 @@ export function createReaderLabRuns(): ReaderLabRuns {
   {"id": "RLB-T2-M6", "spec": "(e) M10.7", "pkg": "server", "file": "src/readerLab/runs.ts", "old": "return [n, { hits: t.hits, cookie: t.cookie, upgrade: t.upgrade, site: { ...t.site }, origin: { ...t.origin } }];", "new": "return [n, { hits: t.hits, cookie: t.cookie, upgrade: t.upgrade, site: t.site, origin: t.origin }];", "tests": ["test/reader-lab-runs.test.ts"], "red": "1 failed: a read is a copy"},
   {"id": "RLB-T2-M7", "spec": "(d) M10.17", "pkg": "server", "file": "src/readerLab/runs.ts", "old": "if (run === undefined || run.owner !== owner) return null;", "new": "if (run === undefined) return null;", "tests": ["test/reader-lab-runs.test.ts"], "red": "1 failed: a run answers only its owner"},
   {"id": "RLB-T2-M8", "spec": "(d) M10.17", "pkg": "server", "file": "src/readerLab/runs.ts", "old": "return run !== undefined && run.owner === owner && runs.delete(nonce);", "new": "return runs.delete(nonce);", "tests": ["test/reader-lab-runs.test.ts"], "red": "1 failed: a run answers only its owner"},
-  {"id": "RLB-T2-M9", "spec": "(d) M10.6", "pkg": "server", "file": "src/readerLab/runs.ts", "old": "export const READER_LAB_RUN_TTL_MS = LAB_RUN_CAPS_MS + READER_LAB_RUN_SLACK_MS;", "new": "export const READER_LAB_RUN_TTL_MS = 600_000;", "tests": ["test/reader-lab-runs.test.ts"], "red": "1 failed: a run lives as long as the lab run's own caps allow, plus five minutes"}
+  {"id": "RLB-T2-M9", "spec": "(d) M10.6", "pkg": "server", "file": "src/readerLab/runs.ts", "old": "export const READER_LAB_RUN_TTL_MS = LAB_RUN_CAPS_MS + READER_LAB_RUN_SLACK_MS;", "new": "export const READER_LAB_RUN_TTL_MS = 600_000;", "tests": ["test/reader-lab-runs.test.ts"], "red": "1 failed: a run lives as long as the lab run's own caps allow, plus five minutes"},
+  {"id": "RLB-T2-M10", "spec": "(d) M10.5", "pkg": "server", "file": "src/readerLab/runs.ts", "old": "if (run === undefined) return 'no-run';", "new": "if (run === undefined) { const oldest = runs.keys().next(); if (oldest.done !== true) runs.delete(oldest.value); return 'no-run'; }", "tests": ["test/reader-lab-runs.test.ts"], "red": "1 failed | 12 passed (13): with no run open, or under a nonce of another shape or another run, nothing is counted (M10.5)"}
 ]
 ```
 
