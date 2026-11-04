@@ -2,9 +2,9 @@
 
 > **For agentic workers:** this wave is dispatched by the programme's coordinator as TWO runs, RL-a (Tasks 1-5) and then RL-b (Tasks 6-12) (see "How this wave runs" below). Each worker executes its run with REQUIRED SUB-SKILL superpowers:subagent-driven-development (recommended) or superpowers:executing-plans, task by task, under the `ccrc-worker` skill. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** rev 2 draft (2026-11-03), after review round 1; waiting on the operator's review and the seven questions under "Where things stand". Base `94bdcf45485c9cea22ce0563ef07a90a19fe9197` (`origin/main`, 2026-11-03T20:59:04Z). Every Find block below is quoted from that commit, except the RL-b Find blocks marked "(as RL-a leaves it)", which quote the text RL-a's merged diff writes. It replaces nothing.
+**Status:** rev 3 (2026-11-04), approved by the operator on 2026-11-04 with every recommendation (console item 17; see "Where things stand"). Base `94bdcf45485c9cea22ce0563ef07a90a19fe9197` (`origin/main`, 2026-11-03T20:59:04Z). Every Find block below is quoted from that commit, except the RL-b Find blocks marked "(as RL-a leaves it)", which quote the text RL-a's merged diff writes. It replaces nothing.
 
-**Revisions:** rev 2 (2026-11-03) applies review round 1 (twenty findings upheld, two refuted): a run's life is derived from the lab's own caps, now declared in `shared/readerLab.ts` and summed by a test (about eighteen minutes), and the run keeps its counts once they are complete (the hostile step moves before the Mermaid mounts, and the final read degrades); a run answers only the session that opened it, through a one-way digest of the session cookie; the door is named for what it is, a permanent surface on every box that is inert until a session opens a run; the gate's origin-check note names the probe, and the armed box's foreign-origin journal line is asserted, not silenced; the uniform-answer test covers expired and saturated runs and an armed POST from origin `null`; the busy frame is a fact (shared thread or own thread) that gates nothing; the Mermaid line counts all six figures together and every mount that did not draw; `csp-27` needs M8.B1's control floor and a ready library mount; a teardown-signal line splits from the self-navigation wall; the gap window has a mode for the library change; the block carries the device's feature facts, a draw-on-open reading and the door's session-cookie class; a silent top-navigation block is refinement (u); the browser case reads headers with `allHeaders()` and leaves the preflight to a server test; Task 1 runs the single-definition directory; the browser time is reported per file.
+**Revisions:** rev 3 (2026-11-04): the operator's approval is recorded. Before dispatch, the coordinator re-counted every Find block against `main` at `6da86bb83`. RL-b's all match once, except the two marked "as RL-a leaves it". RL-a's five route-count blocks in Task 3 missed: two later PRs (the PL6 follow-up and landing order wave 5f) had added four routes, two of them exempt. Those blocks, Task 3 Step 0's base check and Global Constraints' census note are re-quoted at that commit. The door adds the same five routes as before, so the counts become 174 -> 179 total, 171 -> 176 HTTP, 105 -> 108 gated and 66 -> 68 exempt-HTTP. Two user-agent strings in Task 8's test code are cut to `Chrome/141.0` and `CriOS/141.0`: a four-part version reads as a public IPv4 address to `topology-clean.test.ts`. The case reads only the major version. rev 2 (2026-11-03) applies review round 1 (twenty findings upheld, two refuted): a run's life is derived from the lab's own caps, now declared in `shared/readerLab.ts` and summed by a test (about eighteen minutes), and the run keeps its counts once they are complete (the hostile step moves before the Mermaid mounts, and the final read degrades); a run answers only the session that opened it, through a one-way digest of the session cookie; the door is named for what it is, a permanent surface on every box that is inert until a session opens a run; the gate's origin-check note names the probe, and the armed box's foreign-origin journal line is asserted, not silenced; the uniform-answer test covers expired and saturated runs and an armed POST from origin `null`; the busy frame is a fact (shared thread or own thread) that gates nothing; the Mermaid line counts all six figures together and every mount that did not draw; `csp-27` needs M8.B1's control floor and a ready library mount; a teardown-signal line splits from the self-navigation wall; the gap window has a mode for the library change; the block carries the device's feature facts, a draw-on-open reading and the door's session-cookie class; a silent top-navigation block is refinement (u); the browser case reads headers with `allHeaders()` and leaves the preflight to a server test; Task 1 runs the single-definition directory; the browser time is reported per file.
 
 **Scope:**
 - In, RL-a (the door): `shared/readerLab.ts` (the vocabulary); `server/src/readerLab/runs.ts` (the run store) and `server/src/readerLab/routes.ts` (the counter hook and the five routes); their wiring in `server/src/server.ts`; two `EXEMPT` entries and reason 8 in `server/src/auth/gate.ts`; the census edits in `server/test/auth-gate.test.ts`, `server/test/box-token-census.test.ts` and `server/test/rings/fastify-l4.data.ts`; one row of the architecture spec's context table; one README sentence; three new server test files.
@@ -27,7 +27,7 @@
 - **R19's page is the shape to copy.** `pwa/src/lib/routes.ts` holds the row `measure-highlighting` (`/settings/measure-highlighting`, `top: false`); `pwa/src/app.tsx`'s ladder renders `<HighlightMeasure />` for it; `pwa/src/command/commands.ts#GO_TO` derives "Go to Settings › Measure highlighting" from any row whose path sits under a top row; `pwa/test/app.test.tsx` and `pwa/test/command-registry.test.ts` pin the row, the probe and the palette order; `pwa/test/docs-scans.test.ts`'s clause M7.12 scans R19's two modules for storage, clipboard, `fetch` and non-`docs` `api` reads. The Settings index has no row for R19's page. Refinements (p), (r).
 - **The reader frame cannot run a lab's code.** The library's `mountDocFrame` verifies every asset text against its manifest before it inlines anything (`pwa/src/docs/reader/assets.ts`' header), and `frameCsp()` (`./frame`, no arguments) allows exactly the library's four script hashes. W8a's desktop rows evaluate the battery in the frame through Playwright (`pwa/browser/reader-frame.browser.test.ts`, `CHANNELS` and `batterySource`), outside both policies, against loopback origins A and B (`pwa/browser/harness.ts#startOrigins`). Refinements (h), (i).
 - **The gate.** `server/src/auth/gate.ts`: one `onRequest` hook (`installGate`), keyed on the MATCHED route (`request.routeOptions.url`); `EXEMPT` is keyed by method and path, with "THE SEVEN REASONS"; `needsOriginCheck` checks every WebSocket upgrade and every non-exempt write, and an opaque frame's `Origin: null` is a mismatch (`403 foreign-origin`, a bare `403` on an upgrade); `@fastify/websocket` routes an upgrade through Fastify routing as a GET with `request.ws === true`. `server/src/server.ts#buildServer` calls `installGate` before it registers almost every route, and registers the docs plugin later. `sessionVerdict` is not needed: the door keeps only whether the cookie `SESSION_COOKIE` (`ccrc_session`, `SameSite=Lax`, `server/src/auth/cookie.ts`) was present by name, through `parseCookies`, and, as a run's owner, a one-way digest of its value (the token is stable for a session's life: nothing on the server rotates it). The gate's `needsOriginCheck` skips every exempt route, and its note argues that from `curl` callers only; on an armed box a mismatched origin is refused with a `console.warn('ccrc-server: refused a … from a foreign origin …')` journal line. Refinements (b), (c), (d), (e).
-- **The route census.** `server/test/auth-gate.test.ts` scans `app.get('…'`-style literals from NINE files (`ROUTES`) and holds them equal to Fastify's own table both ways; it pins `ROUTES.length` 170, per-file counts, the exact `EXEMPT` key list ("exempts exactly the seven classes"), and three numeral sentences against what it derives (the property loop's 167 HTTP routes, the third probe's 167 and 64 exempt, `gate.ts`'s "stands in front of all 167 routes", and "170 scanned + the static wildcard"). `server/test/box-token-census.test.ts` reads named route files for box-token calls and README's auth paragraph for number WORDS in sequence (two to fifty-eight). `server/test/rings/fastify-l4.data.ts` lists every file that imports `fastify`. `server/test/rings/totality.test.ts` gives every file under `server/src` and `pwa/src` a context from the architecture spec's `ring-context-map` table, whose C9 Docs row reads `docs/**` for the server and `docs/**`, `screens/DocsScreen.tsx`, `screens/HighlightMeasure.tsx`, `screens/highlightMeasureRun.tsx` for the PWA. Refinement (b).
+- **The route census.** `server/test/auth-gate.test.ts` scans `app.get('…'`-style literals from NINE files (`ROUTES`) and holds them equal to Fastify's own table both ways; it pins `ROUTES.length` 174 (at `6da86bb83`), per-file counts, the exact `EXEMPT` key list ("exempts exactly the seven classes"), and three numeral sentences against what it derives (the property loop's 171 HTTP routes, the third probe's 171 and 66 exempt, `gate.ts`'s "stands in front of all 171 routes", and "174 scanned + the static wildcard"). `server/test/box-token-census.test.ts` reads named route files for box-token calls and README's auth paragraph for number WORDS in sequence (two to fifty-eight). `server/test/rings/fastify-l4.data.ts` lists every file that imports `fastify`. `server/test/rings/totality.test.ts` gives every file under `server/src` and `pwa/src` a context from the architecture spec's `ring-context-map` table, whose C9 Docs row reads `docs/**` for the server and `docs/**`, `screens/DocsScreen.tsx`, `screens/HighlightMeasure.tsx`, `screens/highlightMeasureRun.tsx` for the PWA. Refinement (b).
 - **Route errors.** A route-level `errorHandler` sees Fastify's own body refusals (413, 415, a parse 400) before the handler (`server/src/token/routes.ts`'s claim door uses one). Refinement (f).
 - **The reader's mount.** `pwa/src/docs/reader/bridge.ts#mountReader` hands the library `mermaidDraw: 'on-request'`, `watchdogMs: readerWatchdogMs(bytes)` and the storage port; `pwa/src/docs/ReaderFrame.tsx` exports `lazyMountReader`, the one path to the bridge and the assets (M8.10's main-bundle rule); `pwa/src/screens/DocsScreen.tsx` renders through `docsRunner.render`. The library's `mermaidDraw` takes `'auto'` (its default) or `'on-request'`, and `watchdogMs` an integer up to 120 000. Refinement (k).
 - **The source scans of W8a.** `pwa/test/docs-scans.test.ts`'s clause W8a: library specifiers have homes (`/frame` anywhere under `docs/reader/`); under `pwa/src/docs` no `postMessage`, `MessageChannel`, `onmessage`, `iframe`, `srcdoc` or `default-src 'none'` (Export's two allowances aside); across `pwa/src` no `message` listener. Nothing scans `srcdoc` outside `pwa/src/docs`, and no file in `pwa/src` holds a sandbox token today. Refinements (h), (p).
@@ -852,9 +852,9 @@ git grep -qF "import { installDocsRequestPolicy, installDocsResponsePolicy } fro
   && git grep -qF "  // Unconditional — the flag is decided INSIDE the hook (\`authVerdict\`'s first" HEAD -- server/src/server.ts \
   && git grep -qF "    registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);" HEAD -- server/src/server.ts \
   && git grep -qF " * THE SEVEN REASONS, and there are only seven:" HEAD -- server/src/auth/gate.ts \
-  && git grep -qF " * THE GATE. One \`onRequest\` hook stands in front of all 167 routes, the static" HEAD -- server/src/auth/gate.ts \
+  && git grep -qF " * THE GATE. One \`onRequest\` hook stands in front of all 171 routes, the static" HEAD -- server/src/auth/gate.ts \
   && git grep -qF " * and nothing caught it because the scanner reads numerals.)" HEAD -- server/src/auth/gate.ts \
-  && git grep -qF "    expect(ROUTES.length).toBe(170);" HEAD -- server/test/auth-gate.test.ts \
+  && git grep -qF "    expect(ROUTES.length).toBe(174);" HEAD -- server/test/auth-gate.test.ts \
   && git grep -qF "export function createReaderLabRuns(): ReaderLabRuns {" HEAD -- server/src/readerLab/runs.ts \
   && test ! -e server/src/readerLab/routes.ts \
   && grep -q "kWs\|request.ws\|\.ws = " server/node_modules/@fastify/websocket/index.js \
@@ -1284,11 +1284,11 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
 - [ ] **Step 5: The gate's table and text, `server/src/auth/gate.ts`.**
   Find:
 ```ts
- * THE GATE. One `onRequest` hook stands in front of all 167 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 171 routes, the static
 ```
   Replace:
 ```ts
- * THE GATE. One `onRequest` hook stands in front of all 172 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 176 routes, the static
 ```
   Find: ` * THE SEVEN REASONS, and there are only seven:`
   Replace: ` * THE EIGHT REASONS, and there are only eight:`
@@ -1370,13 +1370,13 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
 ```
   Find: `  it('found all nine files, and EXACTLY the route count the surface has', () => {`
   Replace: `  it('found all ten files, and EXACTLY the route count the surface has', () => {`
-  Find: `    expect(ROUTES.length).toBe(170);`
+  Find: `    expect(ROUTES.length).toBe(174);`
   Replace:
 ```ts
-    // 175 since the reader lab's door (the reader lab plan, Task 3), in a tenth file: three session-gated routes, NOT EXEMPT,
-    // and the probe pair, IN EXEMPT (gate.ts reason 8), no box token: the HTTP half 167 -> 172, the gated count 103 -> 106,
-    // the exempt-HTTP count 64 -> 66.
-    expect(ROUTES.length).toBe(175);
+    // 179 since the reader lab's door (the reader lab plan, Task 3), in a tenth file: three session-gated routes, NOT EXEMPT,
+    // and the probe pair, IN EXEMPT (gate.ts reason 8), no box token: the HTTP half 171 -> 176, the gated count 105 -> 108,
+    // the exempt-HTTP count 66 -> 68.
+    expect(ROUTES.length).toBe(179);
 ```
   Find: `    expect(scanRoutes('linear/proxyRoutes.ts').length).toBe(12);`
   Replace:
@@ -1400,8 +1400,8 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
       'GET /api/reader-lab/probe/:nonce/:name', 'POST /api/reader-lab/probe/:nonce/:name',
     ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
 ```
-  Find: `    // 170 scanned + the static wildcard when the bundle is built.`
-  Replace: `    // 175 scanned + the static wildcard when the bundle is built.`
+  Find: `    // 174 scanned + the static wildcard when the bundle is built.`
+  Replace: `    // 179 scanned + the static wildcard when the bundle is built.`
   Find: `  it('exempts exactly the seven classes the plan names — nothing has crept in', () => {`
   Replace: `  it('exempts exactly the eight classes the plan names — nothing has crept in', () => {`
   Find: `    expect([...EXEMPT.keys()].sort()).toEqual([`
@@ -1434,10 +1434,10 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
       'POST /api/reader-lab/probe/:nonce/:name',
       'POST /api/runs',
 ```
-  Find: `    // THE PROPERTY, in one loop over all 167 HTTP routes, with THREE probes each:`
-  Replace: `    // THE PROPERTY, in one loop over all 172 HTTP routes, with THREE probes each:`
-  Find: `          //    is not itself flag-aware — the assertion that covers all 167 HTTP routes, not the 64 exempt.`
-  Replace: `          //    is not itself flag-aware — the assertion that covers all 172 HTTP routes, not the 66 exempt.`
+  Find: `    // THE PROPERTY, in one loop over all 171 HTTP routes, with THREE probes each:`
+  Replace: `    // THE PROPERTY, in one loop over all 176 HTTP routes, with THREE probes each:`
+  Find: `          //    is not itself flag-aware — the assertion that covers all 171 HTTP routes, not the 66 exempt.`
+  Replace: `          //    is not itself flag-aware — the assertion that covers all 176 HTTP routes, not the 68 exempt.`
 - [ ] **Step 7: The fastify allowlist, `server/test/rings/fastify-l4.data.ts`.**
   Find:
 ```ts
@@ -2637,14 +2637,14 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
 });
 
 describe('the device line and the result block (reader lab plan, Task 8)', () => {
-  const ANDROID = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36';
+  const ANDROID = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Mobile Safari/537.36';
   const ALL: LabFeatures = { worker: true, frameSandbox: true, cspAttribute: true };
 
   it('deviceOf keeps classes only: engine and major version, OS class, cores, and the three features', () => {
     const cases: readonly (readonly [string, unknown, string, string, number | null])[] = [
       [ANDROID, 8, 'Blink 141', 'Android', 8],
       ['Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Mobile/15E148 Safari/604.1', 6, 'WebKit 19', 'iOS', 6],
-      ['Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/141.0.0.0 Mobile/15E148 Safari/604.1', 6, 'WebKit 19', 'iOS', 6],
+      ['Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/141.0 Mobile/15E148 Safari/604.1', 6, 'WebKit 19', 'iOS', 6],
       ['Mozilla/5.0 (Android 14; Mobile; rv:140.0) Gecko/140.0 Firefox/140.0', 8, 'Gecko 140', 'Android', 8],
       ['Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Safari/605.1.15', 10, 'WebKit 19', 'macOS', 10],
       ['x', 0, 'unknown', 'other', null],
@@ -4755,6 +4755,10 @@ Issued at each run's opening; refinements (a), (b) and (c) take RL-a's first thr
 - The coordinator's proposals that fill silences, for approval with this plan: refinements (d) to (g), (j), (l), (n) to (p), (s), (t) and (v).
 
 ### Waiting on you
+- Nothing. The operator approved the plan on 2026-11-04 (below).
+
+### Answered by the operator (2026-11-04)
+- "Approve with every recommendation" (console item 17). Q1: two runs, RL-a (the door, server only) first, then RL-b (the page) from `main` after RL-a merges. Q2: a stall budget of 200 ms, for the Mermaid line only. Q3: the CSP check's frame is the library's own policy plus the frame's script nonce and one exact canary, and "holds" needs the control floor and the library's hostile mount reaching ready. Q4: the counter sits before the gate. Q5 (a): the door is always registered, and inert until a signed-in session opens a run. Q6: one tap during the run. Q7: the retirement gate reads the lab as refinement (r) says, with no Settings index row. The questions as asked follow.
 - **Q1 (refinement (a)): two runs, or one?** Round 1 changed nothing that moves the argument: every door fix (the owner, the life, the gate's text, the new server cases) stays in the server run, and every page fix in the page run. Recommended: two runs, the door first, so its security review stands alone and the page builds on a merged wire. One run changes only Tasks 5 and 12 (one close, one PR).
 - **Q2 (refinement (q)): the stall budget.** Round 1 narrowed it: the budget now holds only the Mermaid line, which counts the six figures together and every mount that did not draw; the busy frame became a fact (shared thread or own thread, and how late the watchdog's stand-in timer fired) that gates nothing, since a deliberate 3 s spin on a shared thread can meet no budget. Recommended: 200 ms for the Mermaid line. The numbers are in the block whatever the budget; only the verdict word moves.
 - **Q3 (refinement (i)): the CSP check's frame.** Round 1 tightened what "holds" needs: M8.B1's control floor (the control frame reaches at least 20 of the 26 channels a srcdoc frame can reach; `iframe` is left out by design) and the library's hostile mount reaching ready; either missing reads "not measured". Recommended: unchanged, the library's own policy plus the frame's script nonce and one exact canary URL, with the real library checked separately on hostile figures. The alternative is no CSP check on the phone at all, since the reader frame cannot run the battery.

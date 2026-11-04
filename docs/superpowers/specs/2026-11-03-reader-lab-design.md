@@ -1,8 +1,8 @@
 # Reader lab: the Docs reader's phone checks, on one console page — design
 
-**Spec** · 2026-11-03 · Status: Draft (rev 2), for the operator's review · Owner: the operator · Linear: none · Related: docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md (the "rich-docs spec"), docs/superpowers/specs/2026-10-01-native-docs-reader-design.md (the "base spec"), docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md, docs/superpowers/plans/2026-11-03-native-docs-reader-reader-lab.md
+**Spec** · 2026-11-03 · Status: Approved (rev 3), 2026-11-04 · Owner: the operator · Linear: none · Related: docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md (the "rich-docs spec"), docs/superpowers/specs/2026-10-01-native-docs-reader-design.md (the "base spec"), docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md, docs/superpowers/plans/2026-11-03-native-docs-reader-reader-lab.md
 
-**Revisions:** rev 2 (2026-11-03) applies review round 1 (twenty findings upheld, two refuted): a run's life is derived from the lab's own caps (about eighteen minutes at most) and a run keeps its counts once they are complete; a run answers only the session that opened it; the door is called what it is, a permanent surface on every box, inert until a session opens a run, and Q5 now offers a box setting; the gate's expected foreign-origin journal lines are stated; the threat table says what a stolen nonce can and cannot do; the busy frame is a fact that never gates; the Mermaid line counts all six figures together and every figure that did not draw; the CSP check needs M8.B1's control floor and the library's mount; a teardown-signal line; section 8 says what the gap window measures and how it follows the library change; the block regains the device's feature facts and a draw-on-open reading; a quiet top-navigation block holds and says so; section 3.4 lists what the mockup showed and this design does not; section 9 amends the remaining W8 phone-measurement sentences.
+**Revisions:** rev 3 (2026-11-04): the operator approved the design with every recommendation (console item 17), so every Open row in section 11 is Ruled and every Proposed row is Agreed. Section 9's amendments are written into the rich-docs spec in place by the same ledger PR. rev 2 (2026-11-03) applies review round 1 (twenty findings upheld, two refuted): a run's life is derived from the lab's own caps (about eighteen minutes at most) and a run keeps its counts once they are complete; a run answers only the session that opened it; the door is called what it is, a permanent surface on every box, inert until a session opens a run, and Q5 now offers a box setting; the gate's expected foreign-origin journal lines are stated; the threat table says what a stolen nonce can and cannot do; the busy frame is a fact that never gates; the Mermaid line counts all six figures together and every figure that did not draw; the CSP check needs M8.B1's control floor and the library's mount; a teardown-signal line; section 8 says what the gap window measures and how it follows the library change; the block regains the device's feature facts and a draw-on-open reading; a quiet top-navigation block holds and says so; section 3.4 lists what the mockup showed and this design does not; section 9 amends the remaining W8 phone-measurement sentences.
 
 ## In short
 
@@ -303,7 +303,7 @@ flowchart LR
 
 ## 9. Amendments to the rich-docs spec
 
-This section lists every sentence this design changes. Each edit would be marked "(amended 2026-11-03; reader lab)".
+This section lists every sentence this design changes. Each edit is written into the rich-docs spec in place, marked "(amended 2026-11-03; reader lab)".
 
 | # | Where | Today | Change |
 |---|---|---|---|
@@ -372,24 +372,24 @@ New mutation rows, numbered M10 so they never collide with M8 or M9:
 
 ## 11. Decisions
 
-The operator rules the rows marked Open; the rest are the coordinator's proposals for approval with the plan.
+The operator approved every row on 2026-11-04 (console item 17): the rows that were Open are Ruled, and the coordinator's proposals are Agreed.
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
 | RL1 | Where it lands | Inside W8b; its own wave | Its own wave, after W8a, independent of W5b and W8b | Ruled |
-| RL2 | Runs | One run; door then page | Two runs: RL-a (door, reviewed alone, opus) then RL-b (page); round 1 did not move this | Open |
-| RL3 | How a frame reports | A port; a window listener; the door | The door only: no port and no listener, so A1 and A2b keep their meaning | Proposed |
-| RL4 | The CSP check's frame | Inject into the reader frame (impossible); a lab frame under its own policy; a lab frame under `frameCsp()` plus a nonce and a canary | `frameCsp()` plus a nonce and a canary: the production policy, with a positive signal that the battery ran | Open |
-| RL5 | Counting upgrades | In the handler (misses every upgrade); before the gate | Before the gate, deciding nothing | Open |
-| RL6 | The door's bounds and its switch | A fixed life; a life derived from the run's caps; always registered; registered only when a box setting is on | A life derived from the lab's caps (about eighteen minutes), four runs, 1024 counts, each run bound to its opener; always registered, inert until a run opens (Q5 sets out both options' costs) | Open |
-| RL7 | Stall measure | A 50 ms interval; animation-frame gaps | Animation-frame gaps, R19's measure, one function | Proposed |
-| RL8 | Mermaid timings | A lab-built Mermaid frame; the production mount | The production mount under a lab profile | Proposed |
-| RL9 | Popup check | Script only (popup blocker confound); one tap | One tap, or "not measured" | Open |
-| RL10 | Stall budget | 100 ms; 200 ms; report only; one budget for both E17 lines | 200 ms (the "good" responsiveness line browsers use for a tap), for the Mermaid line only; the busy frame is a fact with no budget | Open |
-| RL11 | Gate reading | Any "not measured" fails the gate; per-channel reading | E18: the seven walls and the teardown signal hold. E17: the Mermaid line holds; the busy frame is never a condition. A battery channel the control never sent counts as met only while the control floor holds and the channel is named. The no-cookie row (and the spec's null-origin-write row, the server's own) counts only on an armed box's run; on a dark box they read "not applicable (READER_CSP is the wall)" | Open |
-| RL12 | Settings index row | Palette only, as R19; an index row | Palette only, as R19 | Open |
-| RL13 | A quiet top-navigation block | Does not hold (M8.B4's "throws", read literally); holds, named in the detail | Holds with the detail "top navigation blocked without an error", because nothing reached its target (plan refinement (u)) | Proposed |
-| RL14 | The Mermaid gap window | Ends at `ready`; runs past `ready`; a mode | A mode: `ready` for library 1.0.0, `ready-and-settle` for the library change, which flips it | Proposed |
+| RL2 | Runs | One run; door then page | Two runs: RL-a (door, reviewed alone, opus) then RL-b (page); round 1 did not move this | Ruled |
+| RL3 | How a frame reports | A port; a window listener; the door | The door only: no port and no listener, so A1 and A2b keep their meaning | Agreed |
+| RL4 | The CSP check's frame | Inject into the reader frame (impossible); a lab frame under its own policy; a lab frame under `frameCsp()` plus a nonce and a canary | `frameCsp()` plus a nonce and a canary: the production policy, with a positive signal that the battery ran | Ruled |
+| RL5 | Counting upgrades | In the handler (misses every upgrade); before the gate | Before the gate, deciding nothing | Ruled |
+| RL6 | The door's bounds and its switch | A fixed life; a life derived from the run's caps; always registered; registered only when a box setting is on | A life derived from the lab's caps (about eighteen minutes), four runs, 1024 counts, each run bound to its opener; always registered, inert until a run opens (Q5 sets out both options' costs) | Ruled |
+| RL7 | Stall measure | A 50 ms interval; animation-frame gaps | Animation-frame gaps, R19's measure, one function | Agreed |
+| RL8 | Mermaid timings | A lab-built Mermaid frame; the production mount | The production mount under a lab profile | Agreed |
+| RL9 | Popup check | Script only (popup blocker confound); one tap | One tap, or "not measured" | Ruled |
+| RL10 | Stall budget | 100 ms; 200 ms; report only; one budget for both E17 lines | 200 ms (the "good" responsiveness line browsers use for a tap), for the Mermaid line only; the busy frame is a fact with no budget | Ruled |
+| RL11 | Gate reading | Any "not measured" fails the gate; per-channel reading | E18: the seven walls and the teardown signal hold. E17: the Mermaid line holds; the busy frame is never a condition. A battery channel the control never sent counts as met only while the control floor holds and the channel is named. The no-cookie row (and the spec's null-origin-write row, the server's own) counts only on an armed box's run; on a dark box they read "not applicable (READER_CSP is the wall)" | Ruled |
+| RL12 | Settings index row | Palette only, as R19; an index row | Palette only, as R19 | Ruled |
+| RL13 | A quiet top-navigation block | Does not hold (M8.B4's "throws", read literally); holds, named in the detail | Holds with the detail "top navigation blocked without an error", because nothing reached its target (plan refinement (u)) | Agreed |
+| RL14 | The Mermaid gap window | Ends at `ready`; runs past `ready`; a mode | A mode: `ready` for library 1.0.0, `ready-and-settle` for the library change, which flips it | Agreed |
 
 ## 12. Testing and proof
 
@@ -407,6 +407,12 @@ The operator rules the rows marked Open; the rest are the coordinator's proposal
 - The coordinator's rulings on review round 1 (2026-11-03), applied in rev 2: a run's life derived from its caps, and a run that keeps its counts once complete; the gate unchanged, its foreign-origin lines documented and asserted; each run bound to its opener by a one-way digest; the door called a permanent surface, with Q5 rewritten; the busy frame a fact that never gates; the two-run split kept.
 
 ### Waiting on you
+
+- Nothing. The operator approved the design on 2026-11-04 (below).
+
+### Answered by the operator (2026-11-04)
+
+- "Approve with every recommendation" (console item 17). Q1: two runs, the door first. Q2: 200 ms, for the Mermaid line only. Q3: the library's own policy plus the frame's script nonce and one exact canary. Q4: the counter sits before the gate. Q5: (a), the door always registered and inert until a session opens a run. Q6: one tap. Q7: the reading in RL11, and no Settings index row. The questions as asked follow.
 
 - **Q1 (RL2): two runs or one?** Round 1 changed nothing that moves the argument: every door fix (the owner, the life, the gate's text, the new server cases) stays in the server run, and every page fix in the page run. Recommended: two runs, the door first, so its security review stands alone and the page builds on a merged wire.
 - **Q2 (RL10): the stall budget.** Round 1 narrowed it: the budget now holds only the Mermaid line, which counts the six figures together and every mount that did not draw; the busy frame became a fact (shared thread or own thread, and how late the watchdog's stand-in timer fired) that gates nothing, since a deliberate 3 s spin on a shared thread can meet no budget. Recommended: 200 ms for the Mermaid line.
