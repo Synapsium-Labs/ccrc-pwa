@@ -336,6 +336,8 @@ Block D-7708 to D-7716, issued 2026-11-01 by the allocator to the coordinator (`
 - **D-7716** (PL8): Linear sign-in beside a pasted key.
 - **D-7896** (PL9): moving between items, and a recommended option with its reasons on every Decide item. Issued 2026-11-03 by the allocator to the coordinator, for the operator's steer that day (spec D23, D24).
 - **D-7926** (PL6 follow-up): secrets bookkeeping. A secret value is one line (operator item 8), and stored secrets get a names-only read and a Remove door (operator item 9). It also carries PL6 reviews 1 and 2. Issued 2026-11-04 by the allocator to the coordinator. The task note is `2026-11-01-programme-ledgers/pl6-followup.md`, in PR #2248.
+- **D-7950** (carry, server): the general carry PR's server part. It clears review carries from PL4 (1338), PL7 (1348), C3 and C4 (1382, 1383, 1375), PL6 (1389 A6, 1416 F3) and the PL6 follow-up (1418, 1426). Issued 2026-11-04 by the allocator to the coordinator; the task note is `2026-11-01-programme-ledgers/carry-server.md`.
+- **D-7951** (carry, console): the general carry PR's console part. It clears review carries from PL5a (1379), PL5b (1386, 1388) and the PL9 follow-up (1408). Issued 2026-11-04 by the allocator to the coordinator; the task note is `2026-11-01-programme-ledgers/carry-console.md`.
 
 A further departure found during a task is named by slug in the worker's report; the coordinator allocates for it.
 
