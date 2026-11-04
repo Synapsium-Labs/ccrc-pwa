@@ -29,7 +29,7 @@
 // `programme.specHref`), so this file still names no route. The item's what, why, steps and history are drawn through
 // `linkRuns`: an `https` address opens in a new tab with no opener, a console path and a repository document path (in the
 // programme's home project's Docs reader) open in the console, and anything else, `javascript:` and `data:` included, is text.
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, QuickConfirm, RadioFieldset, TextInput, TextLink } from '@ccrc/ui';
 import {
@@ -42,6 +42,7 @@ import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
 import { api } from '../lib/api';
 import { inAppClick } from '../fleet/settingsText';
+import { openExternal } from '../lib/markdown';
 import { ApiError } from '../lib/apiError';
 import { readAuthStatus } from '../lib/auth';
 import { onPageHidden } from '../lib/pageClock';
@@ -303,13 +304,15 @@ const ACT_WORD: Readonly<Record<ItemWire['history'][number]['act'], string>> = {
   dismiss: 'You dismissed it',
 };
 
-/** Text with its links drawn as links (`linkRuns`, PL10): an outside page in a new tab with no opener (`TextLink`'s default), a
- *  console or Docs path through the console's own navigation. */
+/** Text with its links drawn as links (`linkRuns`, PL10): an outside page in a new tab with no opener, through `openExternal`,
+ *  as every outside link of the console is (an installed app's own window must not navigate, review 1466 F10); a console or
+ *  Docs path through the console's own navigation. The split is made once per text and home (review 1466 F9). */
 function Linked({ text, homeProject }: { text: string; homeProject: string | null }): ReactNode {
-  return linkRuns(text, homeProject).map((r, i) => {
+  const runs = useMemo(() => linkRuns(text, homeProject), [text, homeProject]);
+  return runs.map((r, i) => {
     if (r.kind === 'text') return <span key={i}>{r.text}</span>;
     return r.external
-      ? <TextLink key={i} href={r.href}>{r.text}</TextLink>
+      ? <TextLink key={i} href={r.href} onClick={(e) => openExternal(e, r.href)}>{r.text}</TextLink>
       : <TextLink key={i} href={r.href} onClick={inAppClick(r.href)}>{r.text}</TextLink>;
   });
 }

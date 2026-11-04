@@ -362,6 +362,8 @@ describe('the item view: the spec one tap away, and links that work (PL10)', () 
   it('no spec link is drawn without a pin', () => {
     show(itemView(), { programme: { ...PROG, specHref: null } });
     expect(within(document.querySelector<HTMLElement>('.wi-band')!).queryByRole('link', { name: /^Spec/ })).toBeNull();
+    // Not even as words: a link with no address is no `link` role, so the words are what a dead "Spec" leaves (review 1466 F15).
+    expect(within(document.querySelector<HTMLElement>('.wi-band')!).queryByText('Spec')).toBeNull();
   });
 
   it("the band's programme name opens the programme view", () => {
@@ -395,6 +397,18 @@ describe('the item view: the spec one tap away, and links that work (PL10)', () 
     expect(document.querySelector('.wi-text')!.textContent).toBe('See https://example.com/page and /runs for the state.');
   });
 
+  // Review 1466 F5: a document link outside the console is text wherever the console draws item text, a return's note included,
+  // as the routes refuse it (`linksDocumentOutside`, the one decider).
+  it('an artifact page or an outside document server stays text, in the text and in a return note', () => {
+    show(itemView({
+      why: 'See https://claude.ai/artifact/abc and https://b.example/docs/p/specs/a.md.',
+      history: [{ at: NOW - MIN, act: 'raise', note: null }, { at: NOW, act: 'return', note: 'see https://claude.ai/public/artifacts/abc' }],
+    }), { programme: PROG });
+    expect(document.querySelector('.wi-text')!.querySelectorAll('a')).toHaveLength(0);
+    expect(document.querySelector('.wi-history')!.querySelectorAll('a')).toHaveLength(0);
+    expect(document.querySelector('.wi-history')!.textContent).toContain('sent back: see https://claude.ai/public/artifacts/abc');
+  });
+
   it('a javascript or data address stays text', () => {
     show(itemView({ why: 'javascript:alert(1) and JavaScript:alert(2) and data:text/html,<b>x</b> and vbscript:msgbox(1)' }), { programme: PROG });
     expect(document.querySelector('.wi-text')!.querySelectorAll('a')).toHaveLength(0);
@@ -417,6 +431,15 @@ describe('the item view: the spec one tap away, and links that work (PL10)', () 
     const link = screen.getByRole('link', { name: 'https://example.com/page' });
     expect(link).toHaveAttribute('target', '_blank');
     expect(link.getAttribute('rel')!.split(' ').sort()).toEqual(['noopener', 'noreferrer']);
+    // A tap opens a real new context through `openExternal`, so an installed app's own window never navigates (review 1466 F10).
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    try {
+      fireEvent.click(link);
+      expect(open).toHaveBeenCalledWith('https://example.com/page', '_blank', 'noopener,noreferrer');
+      expect(location.pathname).toBe('/');
+    } finally {
+      open.mockRestore();
+    }
     // An in-console link stays in this tab: its click is the console's own navigation.
     cleanup();
     show(itemView({ why: 'Open /runs.' }), { programme: PROG });

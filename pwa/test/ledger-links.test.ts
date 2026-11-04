@@ -82,6 +82,52 @@ describe('linkRuns: https, console paths and document paths in item text are lin
   });
 });
 
+// Fix round 1 of PL10 (review 1466). The console draws as a link only what the server's refusal lets through: both read one
+// candidate scanner, one trim and one decider (`linkCandidates`, `trimLinkTail`, `linksDocumentOutside`, shared/ledgers.ts).
+describe('linkRuns: the D28 boundary, and paths the console would not open as written (review 1466 F5 to F9)', () => {
+  it('F5, F6: an artifact page or an outside document server stays text, however it is spelt; a run-artifacts page stays a link', () => {
+    for (const t of [
+      'https://claude.ai/artifact/0f1e2d3c', 'https://claude.ai/public/artifacts/0f1e2d3c', 'https://claude.ai/%61rtifact/0f1e2d3c',
+      'https://b.example/docs/project-a/specs/a-design.md', 'https://b.example/docs/p/%73pecs/x.md',
+      'https://github.com/org-a/repo-a/blob/main/docs/superpowers%2Fspecs/x.md', 'https://github.com/org-a/repo-a/tree/main/docs/superpowers/plans',
+    ]) {
+      expect(links(linkRuns(`see ${t} now`, HOME)), t).toEqual([]);
+      expect(joined(linkRuns(`see ${t} now`, HOME)), t).toBe(`see ${t} now`);
+    }
+    // Trimmed as the server trims: a full stop or a closing bracket after a document server's section page.
+    expect(links(linkRuns('see https://b.example/docs/p/specs.', HOME))).toEqual([]);
+    expect(links(linkRuns('(https://b.example/docs/p/plans)', HOME))).toEqual([]);
+    expect(links(linkRuns('get https://github.com/org-a/repo-a/actions/runs/1/artifacts/2 now', HOME)).map((r) => r.href))
+      .toEqual(['https://github.com/org-a/repo-a/actions/runs/1/artifacts/2']);
+  });
+
+  it('F7: a console or document path inside a non-https address stays text', () => {
+    for (const t of ['http://a.example/[docs/superpowers/specs/a.md]', 'http://a.example/x(/waiting)', 'ftp://a.example/x(/runs)']) {
+      expect(links(linkRuns(`see ${t} now`, HOME)), t).toEqual([]);
+    }
+    // A path after an opening bracket at a word's start is still one.
+    expect(links(linkRuns('see (/waiting) and [docs/superpowers/specs/a.md]', HOME)).map((r) => r.href))
+      .toEqual(['/waiting', '/docs/project-a/specs/a.md']);
+  });
+
+  it('F8: a console path is judged as the browser resolves it, so a dot-segment or an encoded dot never leaves the table', () => {
+    for (const t of ['/docs/../api/fleet', '/docs/%2e%2e/api/fleet', '/docs/..//evil.example/x', '/docs/%2E%2E/%2e%2e/api/fleet']) {
+      expect(links(linkRuns(`open ${t} now`, HOME)), t).toEqual([]);
+    }
+    expect(links(linkRuns('open /waiting/./12 now', HOME))).toEqual([{ kind: 'link', text: '/waiting/./12', href: '/waiting/12', external: false }]);
+  });
+
+  it('F9: a run of 100,000 closing brackets after a link is trimmed in linear time', () => {
+    const text = `/waiting${')'.repeat(100_000)}`;
+    const t0 = performance.now();
+    const runs = linkRuns(text, HOME);
+    const took = performance.now() - t0;
+    expect(links(runs)).toEqual([{ kind: 'link', text: '/waiting', href: '/waiting', external: false }]);
+    expect(joined(runs)).toBe(text);
+    expect(took, `${Math.round(took)} ms`).toBeLessThan(1000);
+  });
+});
+
 describe('the Docs reader address of a document and of a programme spec', () => {
   it('docHref: a repository document path in a home project, or null', () => {
     expect(docHref('docs/superpowers/specs/x.md', HOME)).toBe('/docs/project-a/specs/x.md');

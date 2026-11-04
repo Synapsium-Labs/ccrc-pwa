@@ -245,6 +245,12 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       { tag: `item-${item.id}`, url: WAITING_URL });
   };
 
+  /** The refusal of a text that links a document outside the console (`outsideDocLink`, spec D28): the raise route's and the
+   *  return route's, as the console draws both through `linkRuns` (review 1466 F5). */
+  const refuseOutsideDocLink = (reply: FastifyReply, address: string) => refuseRoute(reply, LEDGER_ROUTE_REFUSALS.outsideDocLink, {
+    detail: `${address} links a document outside the console: write its repository path (docs/superpowers/specs/<file>.md), which the console opens in the Docs reader`,
+  });
+
   // ── raise, and read a programme's items ────────────────────────────────────────────────────────────────────────────
 
   app.post('/api/programmes/:slug/items', async (req, reply) => {
@@ -261,11 +267,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     // spec D28): an artifact page or an outside document server in any field the operator reads is refused before any write.
     const outside = outsideDocLink([parsed.v.title, parsed.v.why, ...parsed.v.how, ...(parsed.v.options ?? []),
       ...(parsed.v.recommendedWhy === null ? [] : [parsed.v.recommendedWhy]), ...(parsed.v.soonLabel === null ? [] : [parsed.v.soonLabel])]);
-    if (outside !== null) {
-      return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.outsideDocLink, {
-        detail: `${outside} links a document outside the console: write its repository path (docs/superpowers/specs/<file>.md), which the console opens in the Docs reader`,
-      });
-    }
+    if (outside !== null) return refuseOutsideDocLink(reply, outside);
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
     if (!owns(coord, reply, who.byId, slug)) return;
     const v = parsed.v;
@@ -350,6 +352,11 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     // The note is checked ahead of attribution, as the body's shape is (the order the plan names); a missing note
     // reaches here as null and is refused before any item is read.
     if (isObject(req.body) && note === null) return bad(reply, `a returned item needs a note of 1 to ${RETURN_NOTE_MAX} characters`);
+    // The console draws the note through `linkRuns` ("sent back: …"), so it is held to the raise route's rule (spec D28; review
+    // 1466 F5): of the coordinator's other notes, a confirm and a withdraw take none, and no tick answer or modification text is
+    // drawn through it.
+    const outside = note === null ? null : outsideDocLink([note]);
+    if (outside !== null) return refuseOutsideDocLink(reply, outside);
     const head = await itemHead(req, reply);
     if (head === null) return;
     const item = ownedItem(coord, reply, head);

@@ -261,6 +261,13 @@ describe('document links go only to the Docs reader (plan PL10, spec D28)', () =
     ['an http document server in the soon label', { soonLabel: 'http://b.example/docs/p/plans/x.md' }],
     ['an artifact page in an option', { ...DECIDE, options: ['Ship it', 'See https://claude.ai/artifact/abc'] }],
     ['an artifact page in the recommendation', { ...DECIDE, recommendedWhy: 'As https://claude.ai/artifact/abc shows.' }],
+    // Review 1466 F6 (fix round 1): spelt with escapes, trimmed as the console trims, or on the artifact host's plural shape.
+    ['a percent-encoded artifact segment', { why: 'See https://claude.ai/%61rtifact/abc first.' }],
+    ['a percent-encoded section on a document server', { why: 'See https://b.example/docs/p/%73pecs/x.md first.' }],
+    ['an encoded slash between the section directories on a code host', { why: 'See https://github.com/o/r/blob/main/docs/superpowers%2Fspecs/x.md now.' }],
+    ['a document server section with a full stop after it', { why: 'see https://b.example/docs/p/specs.' }],
+    ['a document server section in brackets', { why: 'Read it (https://b.example/docs/p/plans) first.' }],
+    ["the artifact host's public artifacts page", { why: 'See https://claude.ai/public/artifacts/0f1e2d3c first.' }],
   ])('the raise route refuses an artifact page or an outside document server as a document link: %s', async (_name, over) => {
     const r = await rig();
     const res = await post(r, '/api/programmes/prog-a/items', { ...as('lane-a'), ...RAISE, ...over });
@@ -427,6 +434,23 @@ describe('the item routes act on the caller\'s own programme\'s items (plan PL3)
     const res = await post(r, `/api/items/${id}/return`, { ...as(), note: 'The setting still reads off.' });
     expect(res.statusCode).toBe(200);
     expect(r.coord.itemById(id)).toMatchObject({ state: 'open', note: 'The setting still reads off.' });
+  });
+
+  // Review 1466 F5 (fix round 1): the console draws a return's note through `linkRuns` ("sent back: <note>"), so the return
+  // route refuses a document link outside the console as the raise route does, before it reads the item, and moves nothing.
+  it('return with a note that links an artifact page or an outside document server is refused outside-doc-link', async () => {
+    const r = await rig();
+    const id = await raise(r);
+    r.coord.moveItem(id, 'tick', 'operator', { answer: null }, Date.now(), { programmeHasOpenRun: true });
+    for (const note of ['See https://claude.ai/artifact/abc.', 'Read https://b.example/docs/p/%73pecs/x.md again']) {
+      const res = await post(r, `/api/items/${id}/return`, { ...as(), note });
+      expect(res.statusCode, note).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'outside-doc-link' });
+    }
+    expect(stateOf(r, id)).toBe('checking');
+    const ok = await post(r, `/api/items/${id}/return`, { ...as(), note: 'Read docs/superpowers/specs/a-design.md again.' });
+    expect(ok.statusCode).toBe(200);
+    expect(stateOf(r, id)).toBe('open');
   });
 
   it('return on an open item is refused not-open', async () => {

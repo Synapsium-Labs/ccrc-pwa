@@ -8,15 +8,19 @@
 // as every Docs link is (refinement (q)).
 //
 // `linkRuns` splits an item's text into text and link runs. Only three things are links (D27): an `https` address, a path the
-// console routes (`matchRoute`), and a repository document path in one of the Docs reader's four sections, which becomes the
-// Docs reader address in the programme's home project (D28). Everything else stays text: `http:`, `javascript:`, `data:`,
-// `vbscript:`, `mailto:`, a path the console does not route, a protocol-relative `//host`, a document path with a `..` step
-// or with no home project to open it in. This is not the chat's Markdown renderer (`lib/markdown.tsx`): item text is plain
+// console routes (`matchRoute`, asked of the path as the browser resolves it, dot-segments and `%2e` ones too: review 1466 F8),
+// and a repository document path in one of the Docs reader's four sections, which becomes the Docs reader address in the
+// programme's home project (D28). Everything else stays text: `http:`, `javascript:`, `data:`, `vbscript:`, `mailto:`, a path
+// the console does not route, a protocol-relative `//host`, a path inside another word or address (review 1466 F7), a document
+// path with a `..` step or with no home project to open it in, and an `https` address that links a document outside the Docs
+// reader (D28). The candidates, their trim and that last decision are shared/ledgers.ts's (`linkCandidates`, `trimLinkTail`,
+// `linksDocumentOutside`), the very ones the raise and return routes refuse by, so the console draws as a link nothing the
+// server would refuse (review 1466 F5, F6). This is not the chat's Markdown renderer (`lib/markdown.tsx`): item text is plain
 // text, and its link set is an allow-list with a rewrite of its own, so it is a different decision, not a second copy of that
 // one (`pl10-linkruns-not-chat-markdown`).
 import type { RunSummary } from '../../../shared/api';
 import { DOC_SECTIONS, DOC_SECTION_SLUGS, docsPageUrl, isDocsProject, isDocsRelPath } from '../../../shared/docs';
-import { isSpecPath, type GoalsView } from '../../../shared/ledgers';
+import { isSpecPath, linkCandidates, linksDocumentOutside, type GoalsView } from '../../../shared/ledgers';
 import { docsLocation } from '../docs/docsLinks';
 import { runHomeProject } from '../fleet/runWords';
 import { matchRoute } from '../lib/routes';
@@ -66,26 +70,14 @@ export function programmeSpecHref(slug: string, goals: readonly unknown[], runs:
   return specHref(entry === undefined ? null : (entry as GoalsView).specPath, homeProjectOf(slug, runs));
 }
 
-/** A candidate starts at the text's start or after a space or an opening bracket or quote, and is an `https://` (any case), a
- *  single `/`, or `docs/`; it runs to the next space or quote or angle bracket. */
-const CANDIDATE = /(^|[\s([{"'])((?:[hH][tT][tT][pP][sS]:\/\/|\/(?!\/)|docs\/)[^\s<>"'`]*)/g;
-/** What may end a sentence after a link, and is not part of it. */
-const TRAILING = /[.,;:!?]$/;
-const CLOSER_OF: Readonly<Record<string, string>> = { ')': '(', ']': '[', '}': '{' };
 /** A console path: segments of unreserved and percent-escaped characters, then an optional query or fragment. */
 const CONSOLE_PATH = /^(\/[A-Za-z0-9._~%/-]*)([?#][^\s]*)?$/;
 
-/** The candidate without what follows it in the sentence: trailing punctuation, and a closing bracket it never opened. */
-function trimmed(raw: string): string {
-  let s = raw;
-  for (;;) {
-    const last = s.at(-1);
-    if (last === undefined) return s;
-    if (TRAILING.test(last)) { s = s.slice(0, -1); continue; }
-    const opener = CLOSER_OF[last];
-    if (opener !== undefined && s.split(opener).length <= s.split(last).length - 1) { s = s.slice(0, -1); continue; }
-    return s;
-  }
+/** A console path as the browser resolves it (dot-segments, `%2e` ones too), or null when it resolves to another origin's
+ *  shape (`//host/…`): the path a tap opens, which is the one `matchRoute` must judge (review 1466 F8). */
+function resolvedPath(path: string): string | null {
+  const resolved = new URL(path, 'https://console.invalid').pathname;
+  return resolved.startsWith('//') ? null : resolved;
 }
 
 /** The link a candidate is, or null when it stays text. */
@@ -94,15 +86,20 @@ function linkOf(text: string, homeProject: string | null): LinkRun | null {
     let url: URL;
     try { url = new URL(text); } catch { return null; }
     if (url.protocol !== 'https:' || url.hostname === '') return null;
+    // A document anywhere but the Docs reader (D28) is text: the boundary the raise and return routes refuse at.
+    if (linksDocumentOutside(text)) return null;
     return { kind: 'link', text, href: url.href, external: true };
   }
+  if (/^https?:\/\//i.test(text)) return null;
   if (text.startsWith('docs/')) {
     const href = docHref(text, homeProject);
     return href === null ? null : { kind: 'link', text, href, external: false };
   }
   const m = CONSOLE_PATH.exec(text);
-  if (m === null || m[1] === undefined || m[1] === '/' || matchRoute(m[1]) === null) return null;
-  return { kind: 'link', text, href: text, external: false };
+  if (m === null || m[1] === undefined || m[1] === '/') return null;
+  const path = resolvedPath(m[1]);
+  if (path === null || path === '/' || matchRoute(path) === null) return null;
+  return { kind: 'link', text, href: `${path}${m[2] ?? ''}`, external: false };
 }
 
 /** An item's text as runs of text and links, in order; the runs' texts put together are the text, and no two text runs are
@@ -116,12 +113,8 @@ export function linkRuns(text: string, homeProject: string | null): readonly Lin
     else out.push({ kind: 'text', text: t });
   };
   let at = 0;
-  for (const m of text.matchAll(CANDIDATE)) {
-    const lead = m[1] ?? '';
-    const raw = m[2] ?? '';
-    const start = (m.index ?? 0) + lead.length;
-    const candidate = trimmed(raw);
-    const link = candidate === '' ? null : linkOf(candidate, homeProject);
+  for (const { start, text: candidate } of linkCandidates(text)) {
+    const link = linkOf(candidate, homeProject);
     if (link === null) continue;
     pushText(text.slice(at, start));
     out.push(link);

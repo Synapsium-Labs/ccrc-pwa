@@ -29,6 +29,22 @@ describe('the ledgers console has one owner of each reader, builder and list (ca
     }
   });
 
+  // Review 1466 F5 and F6 (PL10 fix round 1): the D28 boundary is ONE decider asked on both sides, so the console never draws
+  // as a link what the routes would refuse. Its scanner, trim and decider are declared in shared/ledgers.ts alone, the console's
+  // splitter reads its candidates and the decider from there, and the raise and return routes both refuse through it.
+  it('the document-link boundary is declared once in shared/ledgers.ts, and both sides ask it (review 1466 F5, F6)', () => {
+    for (const name of ['linkCandidates', 'trimLinkTail', 'linksDocumentOutside', 'outsideDocLink', 'LINK_CANDIDATE']) {
+      expect(holders(decl(name)), name).toEqual(['shared/ledgers.ts']);
+    }
+    const splitter = stallCode(ALL.find((f) => rel(f) === 'pwa/src/ledgers/ledgerLinks.ts')!);
+    // No second candidate pattern or trim of its own in the console's splitter, as it had until the fix round.
+    for (const name of ['CANDIDATE', 'trimmed', 'TRAILING', 'CLOSER_OF']) expect(splitter, name).not.toMatch(decl(name));
+    expect(splitter).toMatch(/\blinkCandidates\(text\)/);
+    expect(splitter).toMatch(/\blinksDocumentOutside\(text\)/);
+    const routes = stallCode(ALL.find((f) => rel(f) === 'server/src/coord/ledgersRoutes.ts')!);
+    expect(routes.match(/\boutsideDocLink\(/g), 'the raise route and the return route').toHaveLength(2);
+  });
+
   it("the console's places are listed in places.ts alone, and their badges decided in navBadges.ts alone (PL10)", () => {
     for (const name of ['PLACES', 'DESK_PLACES', 'phoneBarShown']) expect(holders(decl(name)), name).toEqual(['pwa/src/lib/places.ts']);
     expect(holders(decl('placeBadge'))).toEqual(['pwa/src/fleet/navBadges.ts']);

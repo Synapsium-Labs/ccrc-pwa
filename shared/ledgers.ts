@@ -420,36 +420,95 @@ export function earlierTickBlocks(i: {
   return !(i.recipient !== i.coordinator && (i.recipientPresence === 'dead' || i.recipientPresence === 'absent'));
 }
 
-// ---- Document links (desktop-polish PL10, D-7952; spec 2026-10-31 §2, D28) ----------------------------------------------
+// ---- Document links (desktop-polish PL10, D-7952; spec 2026-10-31 §2, D27 and D28) -------------------------------------
+//
+// ONE BOUNDARY, ASKED ON BOTH SIDES (review 1466 F5 and F6). The console's link splitter (`linkRuns`, `ledgerLinks.ts`) finds
+// its candidates with `linkCandidates`, trims them with `trimLinkTail` and draws an `https` one as text when
+// `linksDocumentOutside` says it links a document; the routes whose text the console draws through it (the raise route's every
+// field, the return route's note) refuse what `outsideDocLink` finds, which reads every `http`/`https` address with the same
+// trim and the same decider. So nothing the console draws as a document link outside the Docs reader gets past the server, and
+// nothing the server lets through is drawn as one.
 
-/** An address in an item's text: `http` or `https` (either case), to the next space, quote or angle bracket. */
+/** A link candidate's start: a word's start (the text's start or after white space), past any opening brackets or quotes, then
+ *  an `https://` or `http://` address (any case), a single `/` or `docs/`; it runs to the next space, quote, backtick or angle
+ *  bracket. A path inside another word, an address of any scheme included, is never a candidate (review 1466 F7). */
+const LINK_CANDIDATE = /(^|\s)([([{"']*)((?:https?:\/\/|\/(?!\/)|docs\/)[^\s<>"'`]*)/gi;
+/** An address anywhere in text, for the server's refusal: `http` or `https` (either case), to the next space, quote, backtick
+ *  or angle bracket. Every address `LINK_CANDIDATE` finds starts where one of these does and runs as far. */
 const ADDRESS_IN_TEXT = /\bhttps?:\/\/[^\s<>"'`]+/gi;
+/** What may end a sentence after a link, and is not part of it. */
+const LINK_TRAILING = '.,;:!?';
+const LINK_CLOSER_OF: Readonly<Record<string, string>> = { ')': '(', ']': '[', '}': '{' };
+
+/** A candidate without what follows it in the sentence: trailing punctuation, and each closing bracket it never opened, from
+ *  the end. One count of the brackets and one pass back, so a long run of closers costs its length (review 1466 F9). */
+export function trimLinkTail(raw: string): string {
+  const count: Record<string, number> = { '(': 0, '[': 0, '{': 0, ')': 0, ']': 0, '}': 0 };
+  for (let i = 0; i < raw.length; i++) { const c = raw.charAt(i); if (c in count) count[c] = (count[c] ?? 0) + 1; }
+  let end = raw.length;
+  while (end > 0) {
+    const last = raw.charAt(end - 1);
+    if (LINK_TRAILING.includes(last)) { end--; continue; }
+    const opener = LINK_CLOSER_OF[last];
+    if (opener !== undefined && (count[opener] ?? 0) < (count[last] ?? 0)) { count[last] = (count[last] ?? 0) - 1; end--; continue; }
+    break;
+  }
+  return raw.slice(0, end);
+}
+
+/** One link candidate of a text: where it starts and its text, trimmed (`trimLinkTail`). */
+export interface LinkCandidate { readonly start: number; readonly text: string }
+
+/** The link candidates of `text`, in order, trimmed; an empty one is dropped. The console decides which are links. */
+export function linkCandidates(text: string): LinkCandidate[] {
+  const out: LinkCandidate[] = [];
+  for (const m of text.matchAll(LINK_CANDIDATE)) {
+    const candidate = trimLinkTail(m[3] ?? '');
+    if (candidate !== '') out.push({ start: (m.index ?? 0) + (m[1] ?? '').length + (m[2] ?? '').length, text: candidate });
+  }
+  return out;
+}
+
 /** The sections a document server serves under `/docs/<project>/<section>/`: the Docs reader's four, and two more a document
  *  server outside the console lists. A path of that shape names a document, whatever the host. */
-const DOC_SERVER_SECTION = new RegExp(`^/docs/[^/]+/(?:${[...DOC_SECTION_SLUGS, 'vision', 'promise'].join('|')})(?:/|$)`, 'i');
+const DOC_SERVER_SECTION = new RegExp(`^/docs/[^/]+/(?:${[...DOC_SECTION_SLUGS, 'vision', 'promise'].join('|')})(?:/|$)`);
 
 /** Whether `address` links a document other than through the console's Docs reader: an artifact page (a path segment
- *  `artifact`), a repository document on any host (a path through one of the Docs reader's section directories, as a code
- *  host's file view has), or a document server's page (`/docs/<project>/<section>/…`). An address that is none of these, an
- *  outside service's own page (a sign-in or settings page, a run's artifacts on a code host), is an ordinary link. */
+ *  `artifact`, or the artifact host's `public/artifacts`), a repository document on any host (a path through one of the Docs
+ *  reader's section directories, as a code host's file or directory view has), or a document server's page
+ *  (`/docs/<project>/<section>/…`). The path is read as a server reads it: each segment percent-decoded (so `%61rtifact`,
+ *  `%73pecs` and `superpowers%2Fspecs` are what they spell) and folded to lower case; a segment that does not decode counts
+ *  as one (review 1466 F6). An address that is none of these, an outside service's own page (a sign-in or settings page, a
+ *  run's artifacts on a code host), is an ordinary link. */
 export function linksDocumentOutside(address: string): boolean {
-  let path: string;
+  let pathname: string;
   try {
-    path = new URL(address).pathname;
+    pathname = new URL(address).pathname;
   } catch {
     return false;
   }
-  if (path.split('/').some((seg) => seg.toLowerCase() === 'artifact')) return true;
-  if (Object.values(DOC_SECTIONS).some((dir) => path.includes(`/${dir}/`))) return true;
+  const segs: string[] = [];
+  for (const raw of pathname.split('/')) {
+    let seg: string;
+    try { seg = decodeURIComponent(raw); } catch { return true; }
+    segs.push(...seg.toLowerCase().split('/'));
+  }
+  if (segs.includes('artifact') || segs.some((seg, i) => seg === 'public' && segs[i + 1] === 'artifacts')) return true;
+  const path = segs.join('/');
+  if (Object.values(DOC_SECTIONS).some((dir) => path.includes(`/${dir}/`) || path.endsWith(`/${dir}`))) return true;
   return DOC_SERVER_SECTION.test(path);
 }
 
-/** The first address in `texts` that links a document outside the console (`linksDocumentOutside`), or null. The raise route
- *  asks it of every field the operator reads (title, why, steps, options, the recommendation, the soon label) and refuses the
- *  item `outside-doc-link`: a link to a document is its repository path, which the console opens in the Docs reader. */
+/** The first address in `texts` that links a document outside the console (`linksDocumentOutside`, trimmed as the console
+ *  trims, `trimLinkTail`), or null. The raise route asks it of every field the operator reads (title, why, steps, options, the
+ *  recommendation, the soon label), and the return route of its note, and each refuses `outside-doc-link`: a link to a
+ *  document is its repository path, which the console opens in the Docs reader. */
 export function outsideDocLink(texts: readonly string[]): string | null {
   for (const text of texts) {
-    for (const m of text.matchAll(ADDRESS_IN_TEXT)) if (linksDocumentOutside(m[0])) return m[0];
+    for (const m of text.matchAll(ADDRESS_IN_TEXT)) {
+      const address = trimLinkTail(m[0]);
+      if (linksDocumentOutside(address)) return address;
+    }
   }
   return null;
 }
