@@ -195,6 +195,23 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
     expect(counted(await readRun(a, nonce)).probes['cookie-xhr'].hits).toBe(2);
   });
 
+  it('the probe handlers never read a body: no body or raw-stream access in either registration (refinement (f))', () => {
+    const src = readFileSync(path.join(here, '..', 'src', 'readerLab', 'routes.ts'), 'utf8');
+    const from = src.indexOf(`app.get('${READER_LAB_PROBE_ROUTE}'`);
+    expect(from, 'the probe registrations are the last in the file').toBeGreaterThan(src.indexOf(`app.post('${READER_LAB_RUNS_PATH}'`));
+    expect(src.indexOf(`app.post('${READER_LAB_PROBE_ROUTE}'`)).toBeGreaterThan(from);
+    // Comments are blanked, so a sentence ABOUT a body is not a read; `bodyLimit` is not the word `body`.
+    const reads = (text: string): boolean => /\bbody\b|\.\s*raw\b|\.\s*stream\b/.test(
+      text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1'));
+    expect(reads(src.slice(from)), 'a probe handler reads the request body').toBe(false);
+    // CONTROL: every shape of a read is seen; a comment and the limit option are not.
+    for (const t of ['async (req, reply) => { const b = req.body; }', 'async ({ body }, reply) => {}', 'req.raw.on("data", f)',
+      'async (req) => { for await (const c of req.stream) {} }']) expect(reads(t), t).toBe(true);
+    for (const t of ['bodyLimit: READER_LAB_PROBE_BODY_MAX,', '// the handler never reads the body\nasync (_req, reply) => 1', '/* a body */ x']) {
+      expect(reads(t), t).toBe(false);
+    }
+  });
+
   it('a HEAD to the probe is neither answered as a probe nor counted (refinement (f))', async () => {
     const a = await openApp(false);
     const nonce = await openRun(a);
