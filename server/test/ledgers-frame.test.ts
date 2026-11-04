@@ -207,4 +207,43 @@ describe('the waiting frame (plan PL4)', () => {
     expect(lines, 'one warning for the one distinct error, across sockets and emits').toHaveLength(1);
     for (const s of socks) expect(s.typeCount('waiting')).toBe(0);
   });
+
+  // Review 1338 F3 (desktop-polish carry, D-7950): "once per distinct error" in the two directions the one-error case cannot
+  // see: a different error after the first is warned too, and a success between two failures re-arms the warning.
+  const scripted = async (outcomes: readonly ('ok' | string)[]) => {
+    const r = await rig();
+    r.coord.raiseItem({ program: 'prog-a', runId: r.runA, raisedBy: 'lane-a', kind: 'do', title: 'T', why: 'w', how: [], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null }, NOW0);
+    const real = r.coord.itemsFor.bind(r.coord);
+    let call = 0;
+    const itemsFor = vi.spyOn(r.coord, 'itemsFor').mockImplementation((...args) => {
+      const o = outcomes[Math.min(call, outcomes.length - 1)]!;
+      call += 1;
+      if (o === 'ok') return real(...args);
+      throw new Error(o);
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const sock = connect(r.port);
+    await sock.typeFrame('runs', 1);
+    for (let i = 1; i < outcomes.length; i += 1) {
+      const seen = sock.typeCount('fleet');
+      r.bus.emit('fleet', []);
+      await sock.typeFrame('fleet', seen + 1);
+    }
+    expect(itemsFor.mock.calls.length, 'one attempt per outcome: the connect, then each fleet emit').toBe(outcomes.length);
+    return { sock, lines: warn.mock.calls.map((c) => c.join(' ')).filter((l) => l.includes('waiting frame not built')) };
+  };
+
+  it('review 1338 F3: error A, then a different error B, is warned twice, once for each', async () => {
+    const { lines } = await scripted(['operator item 1: error A', 'operator item 1: error B']);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('error A');
+    expect(lines[1]).toContain('error B');
+  });
+
+  it('review 1338 F3: error A, a success, then error A again is warned twice: the success re-arms it', async () => {
+    const { sock, lines } = await scripted(['operator item 1: error A', 'ok', 'operator item 1: error A']);
+    expect(sock.typeCount('waiting'), 'CONTROL: the success sent its frame').toBeGreaterThanOrEqual(1);
+    expect(lines).toHaveLength(2);
+    for (const l of lines) expect(l).toContain('error A');
+  });
 });
