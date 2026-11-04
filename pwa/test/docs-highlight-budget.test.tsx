@@ -266,8 +266,8 @@ describe('review 450 F1: the markdown budget, a page\'s markdown code (131 072 c
   // R-P1 (W5h-a): the shipped per-block HTML cap (MD_HIGHLIGHT_MAX_HTML_CHARS) keeps a 64 KiB block of the worst shape
   // plain, as the markup of `</a>` is far over it. Part 1's decision is what this case keeps red-able: the first two
   // blocks are admitted and requested, the third is skipped by the markdown budget and never requested; then the shipped
-  // outcome (plain, "output too large", the line retry refused) until W5h-b sets the cap.
-  it('(f) rendered: a third 64 KiB markdown block is skipped (bare label, never requested), the first two are admitted and requested and stay plain over the HTML cap until W5h-b', async () => {
+  // outcome (plain, "output too large", the line retry refused) over the measured HTML cap.
+  it('(f) rendered: a third 64 KiB markdown block is skipped (bare label, never requested), the first two are admitted and requested and stay plain over the measured HTML cap', async () => {
     const tree = root([md('markdown', 65536), md('markdown', 65536), md('markdown', 65536)]);
     expect(decisions(tree)).toEqual([A, A, MARKDOWN]);
     const { container, docs, store } = await drawn(tree);

@@ -24,11 +24,12 @@ import {
 } from '../src/lib/highlightNames';
 import { HLJS, deriveBoundedCaps } from '../src/lib/highlightGrammars';
 import { createProductionStore } from '../src/lib/highlighterContext';
-import { inThreadHighlighter, syncTestStore, withSyncHighlight, withSyncStore } from './highlightTestStore';
+import { inThreadHighlighter, withSyncHighlight, withSyncStore } from './highlightTestStore';
 import { keystrokeParts, utf8ByteLength } from '../src/lib/markdownGuard';
 import {
   CHAT_SYNC_MAX_BYTES, DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS,
-  MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_BLANK_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS, MD_KEYSTROKE_MAX_CHARS,
+  MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_BLANK_CHARS, MD_HIGHLIGHT_MAX_HTML_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS,
+  MD_HIGHLIGHT_MAX_WORD_CHARS, MD_KEYSTROKE_MAX_CHARS,
 } from '../src/lib/markdownLimits';
 import { inlineCodeExtraElements, parseMarkdown, type MarkdownProfile } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
@@ -872,27 +873,21 @@ describe('review 450 F1, the closure: a grammar that embeds a bounded grammar th
     expect(c.querySelector('code')!.textContent).toBe(make(n));
   });
 
-  // R-P1 (W5h-a): at 65 536 characters the markup of these shapes is over the shipped per-block HTML cap
-  // (MD_HIGHLIGHT_MAX_HTML_CHARS), so the worker's answer is refused as too large. Part 1's decision is what these
-  // cases keep red-able (the block is admitted, its key is requestable, and it is requested); then the shipped outcome
-  // (plain, labelled "output too large") until W5h-b sets the cap.
+  // W5h-b: R19 set the per-block HTML cap (MD_HIGHLIGHT_MAX_HTML_CHARS) to 1 048 576. At 65 536 characters the markup of
+  // all three shapes measures within it (356 874, 502 514 and 356 877 characters), so each is coloured; each case
+  // measures its own markup against the cap first, so a shape that grows past it fails there.
   it.each(
     ['markdown', 'md'].flatMap((lang) => shapes.map(([name, make]) => [lang, name, 65536, make] as const)),
-  )('a %s block holding HTML, shape %s at %i characters, is admitted and requested, and stays plain over the HTML cap until W5h-b', (lang, _name, n, make) => {
+  )('a %s block holding HTML, shape %s at %i characters, is highlighted under the measured HTML cap', (lang, _name, n, make) => {
     const body = make(n);
-    const store = syncTestStore('chat');
-    const c = render(withSyncStore(<CodeBlock><code className={`language-${lang}`}>{`${body}\n`}</code></CodeBlock>, store)).container;
-    const key = store.keyOf(lang, body);
-    expect(key.kind).toBe('key');
-    expect(store.requests).toHaveLength(1);
-    expect(store.requests[0] === (key.kind === 'key' ? key.key : null)).toBe(true);
-    expect(store.peek(key.kind === 'key' ? key.key : '')).toMatchObject({ kind: 'plain', first: { kind: 'too-large' } });
-    expect(label(c)).toBe('Markdown \u00b7 not highlighted (output too large)');
+    expect(HLJS.highlight(body, { language: 'markdown', ignoreIllegals: true }).value.length).toBeLessThanOrEqual(MD_HIGHLIGHT_MAX_HTML_CHARS);
+    const c = real(lang, body);
+    expect(label(c)).not.toMatch(/not highlighted/);
     expect(c.querySelector('code')!.textContent).toBe(body);
-    expect(c.querySelector('code')!.children).toHaveLength(0);
+    expect(c.querySelector('code span')).not.toBeNull();
   });
 
-  it('a 64 KiB xml, html and svg block of <script> then <a> lines IS highlighted; the body of the script is plain; the markdown block of the same shape is admitted and requested, and stays plain over the HTML cap until W5h-b', () => {
+  it('a 64 KiB xml, html and svg block of <script> then <a> lines IS highlighted; the body of the script is plain; the markdown block of the same shape is highlighted under the measured HTML cap', () => {
     for (const lang of ['xml', 'html', 'svg']) {
       const body = scripted(65536);
       expect(body).toHaveLength(65536);
@@ -901,16 +896,12 @@ describe('review 450 F1, the closure: a grammar that embeds a bounded grammar th
       expect(c.querySelector('code')!.innerHTML).not.toMatch(HLJS_SPANS);
       cleanup();
     }
-    // R-P1: the markdown arm. Part 1's decision (admitted, requested), then the shipped outcome (plain, too large).
+    // The markdown arm: its markup measures within the per-block HTML cap, so it is coloured.
     const body = scripted(65536);
-    const store = syncTestStore('chat');
-    const md = render(withSyncStore(<CodeBlock><code className="language-markdown">{`${body}\n`}</code></CodeBlock>, store)).container;
-    const key = store.keyOf('markdown', body);
-    expect(key.kind).toBe('key');
-    expect(store.requests).toHaveLength(1);
-    expect(store.requests[0] === (key.kind === 'key' ? key.key : null)).toBe(true);
-    expect(label(md)).toBe('Markdown \u00b7 not highlighted (output too large)');
-    expect(md.querySelector('code')!.children).toHaveLength(0);
+    expect(HLJS.highlight(body, { language: 'markdown', ignoreIllegals: true }).value.length).toBeLessThanOrEqual(MD_HIGHLIGHT_MAX_HTML_CHARS);
+    const md = real('markdown', body);
+    expect(label(md)).not.toMatch(/not highlighted/);
+    expect(md.querySelector('code span')).not.toBeNull();
     cleanup();
     // Over 64 KiB it is refused as for any grammar.
     expect(label(real('xml', scripted(65537)))).toMatch(/· not highlighted \(65 KiB\)$/);

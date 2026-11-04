@@ -740,25 +740,32 @@ describe('L3-1: the worker-time ceiling counts a run of back-to-back jobs (the r
     terminate(): void {}
   }
 
-  it('five 700 ms jobs answered back to back: the fifth is skipped by page-worker-time 200 ms into its run', async () => {
+  // W5h-b: derived from HIGHLIGHT_PAGE_WORKER_MS (it was written for the provisional 3 000 ms): as many 700 ms jobs as
+  // fit are coloured, and the next is skipped (HIGHLIGHT_PAGE_WORKER_MS - fit x 700) ms into its run, under its deadline.
+  it('back-to-back 700 ms jobs: as many as fit the worker-time ceiling are coloured, and the next is skipped by page-worker-time mid-run', async () => {
+    const JOB_MS = 700;
+    expect(JOB_MS).toBeLessThan(HIGHLIGHT_BLOCK_DEADLINE_MS);
+    const fit = Math.floor(HIGHLIGHT_PAGE_WORKER_MS / JOB_MS);
+    const left = HIGHLIGHT_PAGE_WORKER_MS - fit * JOB_MS;
+    expect(left).toBeGreaterThan(0);
     const clock = fakeClock();
     const worker = new Worker();
     const highlighter = createHighlighter({ spawn: () => worker, setTimer: clock.setTimer, clearTimer: clock.clearTimer });
     const store = createHighlightStore(highlighter, { mode: 'docs' }, clock);
-    const raws = ['a', 'b', 'c', 'd', 'e'];
+    const raws = Array.from({ length: fit + 1 }, (_, i) => `b${i}`);
     store.seed(raws.map((raw) => ({ lang: 'python', raw })));
     const ks = raws.map((raw) => { const k = store.keyOf('python', raw); if (k.kind !== 'key') throw new Error('no key'); return k.key; });
     for (const k of ks) store.request(k);
     worker.onmessage?.({ data: { ready: true } });
-    for (let i = 1; i <= 4; i += 1) {
-      clock.advance(700);
+    for (let i = 1; i <= fit; i += 1) {
+      clock.advance(JOB_MS);
       worker.onmessage?.({ data: { id: i, result: { kind: 'html', html: OK, mode: 'block' } } });
       await flush();
     }
-    expect(kinds(store, ks)).toEqual(['html', 'html', 'html', 'html', 'pending']);
-    clock.advance(250);
+    expect(kinds(store, ks)).toEqual([...Array(fit).fill('html'), 'pending']);
+    clock.advance(left + 50);
     await flush();
-    expect(store.peek(ks[4]!)).toEqual({ kind: 'skipped', ceiling: 'page-worker-time' });
+    expect(store.peek(ks[fit]!)).toEqual({ kind: 'skipped', ceiling: 'page-worker-time' });
     expect(store.settled()).toBe(true);
   });
 });
