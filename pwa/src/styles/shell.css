@@ -97,7 +97,7 @@
 /* A page in the detail pane keeps its last line clear of the bar; the fleet column's list already reserves its bottom
    through `--safe-bottom` (fleet.css), so the fleet view adds nothing of its own. */
 .app-shell[data-view='session']:has(> .shell-phone-nav) {
-  padding-bottom: var(--phone-bar-h);
+  padding-bottom: var(--safe-bottom);
 }
 .shell-phone-nav {
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -125,6 +125,7 @@
   padding: 0;
   background: var(--bg-page);
   color: var(--ink-secondary);
+  container-type: inline-size;
 }
 .phone-bar-door[aria-current='page'] {
   background: var(--bg-page);
@@ -137,14 +138,18 @@
   font-family: var(--family-ui);
   font-size: var(--fs-2xs);
   line-height: 1.1;
-  text-overflow: clip;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* On the glyph's top-right corner, never its middle: the glyph is the door's only mark at a glance. */
+/* On the glyph's top-right corner, never its middle: the glyph is the door's only mark at a glance. A count too wide for the room
+   right of the glyph's centre ("99+" at 320, 360 and 390) moves left by what it would overhang, and no further, so it never
+   reaches into the next door, where a tap on it would land (review 1466 F18): the door is a size container (`.phone-bar-door`),
+   `50cqw` is half the door and `100%` in `translate` is the count's own width. It stays above the glyph's middle. */
 .phone-bar-count {
   position: absolute;
   top: calc(-1 * var(--sp-1));
   left: calc(50% + var(--sp-1));
+  translate: min(0px, calc(50cqw - var(--sp-1) - 100%)) 0;
   pointer-events: none;
 }
 

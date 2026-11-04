@@ -16,6 +16,7 @@
 //   B5 the detail view's bottom padding removed ............... "at 360/390: the bar is fixed to the foot …" (the last line under it)
 //   B7 `.phone-bar-count` at `top: 0` (refined-phone.browser) . every case of the two header-and-bar describes (badge over glyph)
 // The width gate and the session gate are jsdom's (`test/phone-bar.test.tsx`, P1 and P2), since the frame mounts by script.
+import { appendFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
@@ -69,6 +70,21 @@ const FIXTURE: AppFixture = (() => {
   };
 })();
 
+/** Review 1466 F18: the widest counts the bar prints, "99+" on Waiting on you and on Runs (120 open items, 120 runs whose
+ *  worker asks the operator), and one on the Inbox. */
+const FIXTURE_99: AppFixture = (() => {
+  const asking = { ...(session('ask-1', 'child') as Record<string, unknown>), status: 'waiting', bucket: 'attention' };
+  const many = Array.from({ length: 120 }, (_, i) => run(1000 + i, 'prog-a', 'Programme A', 'prog-a-coord', 'ask-1'));
+  const waiting = { items: Array.from({ length: 120 }, (_, i) => item(10 + i, {})), cleared: [], goals: [GOALS] };
+  return {
+    api: { ...FIXTURE.api, '/api/runs': many, '/api/waiting': { ok: true, waiting } },
+    fleetFrames: [
+      { type: 'fleet', sessions: withRunBinding([...SESSIONS, asking] as never[], many as never[]) }, { type: 'runs', runs: many },
+      { type: 'waiting', waiting },
+    ],
+  };
+})();
+
 const SKINS = [REFINED, INSTRUMENT] as const;
 const PHONES = [360, 390] as const;
 const DESKS = [900, 1280] as const;
@@ -95,8 +111,19 @@ afterAll(async () => {
   await server?.close();
 });
 
-async function open(skin: string, width: number, path: string, ready: string) {
-  const opened = await openApp(browser!, { skin, theme: 'light', width }, FIXTURE);
+/** A phone's safe-area insets, emulated through the DevTools protocol before the page is navigated, so `env(safe-area-inset-*)`
+ *  is non-zero (headless Chrome answers 0 otherwise, which is why review 1466's F1 and F2 were invisible here). A Chrome without
+ *  the command rejects it, and the case goes red, never measures at zero. */
+interface Insets { readonly top?: number; readonly bottom?: number }
+/** A notched phone: a 47 px status bar and a 34 px home indicator. */
+const NOTCHED: Insets = { top: 47, bottom: 34 };
+
+async function open(skin: string, width: number, path: string, ready: string, insets?: Insets, fixture: AppFixture = FIXTURE) {
+  const opened = await openApp(browser!, { skin, theme: 'light', width }, fixture);
+  if (insets !== undefined) {
+    const cdp = await opened.ctx.newCDPSession(opened.page);
+    await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
+  }
   await opened.page.goto(server!.origin + path);
   await opened.page.waitForSelector(ready, { timeout: 20_000 });
   await opened.page.evaluate(async () => { await document.fonts.ready; });
@@ -160,6 +187,60 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
       }
     });
 
+    // Review 1466 F1 (fix round 1): the bar stands on the home indicator, so a page reserves the bar AND the inset under it.
+    it(`at ${width} with a 34 px home indicator: every page's last line clears the bar`, async () => {
+      for (const [path, ready] of PAGES) {
+        const { ctx, page, errors } = await open(skin, width, path, ready, { bottom: NOTCHED.bottom });
+        try {
+          const clear = await page.evaluate(() => {
+            window.scrollTo(0, document.documentElement.scrollHeight);
+            const bar = document.querySelector('nav.shell-phone-nav')!.getBoundingClientRect();
+            const pane = document.querySelector<HTMLElement>(location.pathname === '/' ? '.shell-nav .fleet' : '.shell-detail')!;
+            const last = [...pane.querySelectorAll<HTMLElement>('*')].filter((e) => e.children.length === 0 && e.getBoundingClientRect().height > 0).at(-1);
+            return { lastBottom: last?.getBoundingClientRect().bottom ?? null, barTop: bar.top, barHeight: bar.height };
+          });
+          // The inset is real: the bar is its row plus the indicator.
+          expect(clear.barHeight, `${path}: the bar stands on the inset ${JSON.stringify(clear)}`).toBeGreaterThanOrEqual(44 + NOTCHED.bottom!);
+          if (clear.lastBottom !== null) expect(clear.lastBottom, `${path}: the last line ${JSON.stringify(clear)}`).toBeLessThanOrEqual(clear.barTop + 0.5);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }
+    });
+
+    // Review 1466 F2 (fix round 1; the coordinator's ruling: in reach is below the status bar). An installed app draws under the
+    // status bar; the strip's controls sit below it and its own opaque ground covers it, at rest and stuck.
+    it(`at ${width} under a 47 px status bar: the strip's controls sit below it, on the strip's own ground, at rest and stuck`, async () => {
+      const { ctx, page, errors } = await open(skin, width, '/waiting/1', '.wi', NOTCHED);
+      try {
+        const measure = () => page.evaluate((inset) => {
+          const strip = document.querySelector<HTMLElement>('.wi-nav')!;
+          const tops = ['.wi-back', '[aria-label="Previous item"]', '[aria-label="Next item"]']
+            .map((q) => strip.querySelector<HTMLElement>(q)!.getBoundingClientRect().top);
+          const r = strip.getBoundingClientRect();
+          // What a reader sees in the status bar's band: the strip itself, when the strip is there.
+          const under = document.elementFromPoint(Math.round(innerWidth / 2), Math.round(inset / 2));
+          return {
+            stripTop: r.top, controlsTop: Math.min(...tops), coversBand: under !== null && strip.contains(under),
+            ground: getComputedStyle(strip).backgroundColor, scrolled: window.scrollY,
+          };
+        }, NOTCHED.top!);
+        const rest = await measure();
+        expect(rest.controlsTop, `at rest ${JSON.stringify(rest)}`).toBeGreaterThanOrEqual(NOTCHED.top!);
+        await page.evaluate(() => { window.scrollTo(0, document.documentElement.scrollHeight); });
+        const stuck = await measure();
+        expect(stuck.scrolled, JSON.stringify(stuck)).toBeGreaterThan(400);
+        expect(Math.abs(stuck.stripTop), `stuck at the top ${JSON.stringify(stuck)}`).toBeLessThanOrEqual(0.5);
+        expect(stuck.controlsTop, `stuck ${JSON.stringify(stuck)}`).toBeGreaterThanOrEqual(NOTCHED.top!);
+        expect(stuck.coversBand, `the strip covers the status bar's band ${JSON.stringify(stuck)}`).toBe(true);
+        expect(stuck.ground, 'an opaque ground').toMatch(/^rgb\(/);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+
     it(`at ${width}: on the fleet, + New sits above the bar`, async () => {
       const { ctx, page, errors } = await open(skin, width, '/', '.shell-nav .fleet');
       try {
@@ -213,6 +294,78 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
       }
     });
   }
+
+  // Review 1466 F13 (fix round 1): with a pinned spec the band's pills keep the band's end, and the Spec link follows them.
+  for (const width of [390, 1280] as const) {
+    it(`at ${width}: with a pinned spec the band's pills keep their place, the Spec link right after them`, async () => {
+      const { ctx, page, errors } = await open(skin, width, '/waiting/2', '.wi-band .wi-spec');
+      try {
+        const band = await page.evaluate(() => {
+          const b = document.querySelector<HTMLElement>('.wi-band')!;
+          const pills = [...b.querySelectorAll<HTMLElement>('.wi-pill')].map((p) => p.getBoundingClientRect());
+          const spec = b.querySelector<HTMLElement>('.wi-spec')!.getBoundingClientRect();
+          const inner = b.getBoundingClientRect().right - parseFloat(getComputedStyle(b).paddingRight);
+          const box = (r: DOMRect) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+          return { pills: pills.map(box), spec: box(spec), inner };
+        });
+        expect(band.pills.length, JSON.stringify(band)).toBeGreaterThan(0);
+        const last = band.pills.at(-1)!;
+        expect(Math.abs(band.spec.right - band.inner), `the Spec link ends the band ${JSON.stringify(band)}`).toBeLessThanOrEqual(0.5);
+        // On one line (their boxes overlap in height), the Spec link follows the last pill by the band's gap; wrapped, it starts
+        // its own line and the pills keep the end of theirs.
+        const oneLine = last.top < band.spec.bottom && band.spec.top < last.bottom;
+        if (oneLine) expect(band.spec.left - last.right, `the Spec link follows the last pill ${JSON.stringify(band)}`).toBeLessThanOrEqual(8.5);
+        else expect(Math.abs(last.right - band.inner), `the pills end their line ${JSON.stringify(band)}`).toBeLessThanOrEqual(0.5);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+
+  // Review 1466 F18 (fix round 1): a cut word ends in an ellipsis, and the widest badge stays inside its own door, on its glyph's
+  // corner and never over the glyph's middle, at 320, 360 and 390. Each door's box can be written out so a
+  // change to the bar's rules can be measured against the boxes before it (the coordinator's condition on 15125): set
+  // CCRC_BAR_BOXES to a file and each width's boxes are appended to it.
+  it('at 320, 360 and 390: "99+" badges stay inside their doors, off the glyph\'s middle, and a cut word ends in an ellipsis', async () => {
+    for (const width of [320, 360, 390]) {
+      const { ctx, page, errors } = await open(skin, width, '/waiting', '.wl-group', undefined, FIXTURE_99);
+      try {
+        await page.waitForFunction(() => document.querySelectorAll('.shell-phone-nav .phone-bar-count').length === 3, undefined, { timeout: 20_000 });
+        const at = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.shell-phone-nav [data-command]')].map((d) => {
+          const b = d.getBoundingClientRect();
+          const badge = d.querySelector<HTMLElement>('.phone-bar-count');
+          const g = d.querySelector('svg')!.getBoundingClientRect();
+          const word = d.querySelector<HTMLElement>('.phone-bar-word')!;
+          const r = badge?.getBoundingClientRect() ?? null;
+          return {
+            command: d.getAttribute('data-command'), left: b.left, right: b.right, w: b.width, h: b.height,
+            badge: r === null ? null : { left: r.left, right: r.right, top: r.top, bottom: r.bottom, text: badge!.textContent },
+            cx: g.left + g.width / 2, cy: g.top + g.height / 2, overflow: getComputedStyle(word).textOverflow,
+          };
+        }));
+        const boxes = process.env['CCRC_BAR_BOXES'];
+        if (boxes !== undefined && boxes !== '') {
+          appendFileSync(boxes, `${skin} ${width} ${JSON.stringify(at.map((d) => [d.command, +d.left.toFixed(2), +d.w.toFixed(2), +d.h.toFixed(2)]))}\n`);
+        }
+        expect.soft(at.filter((d) => d.badge?.text === '99+').map((d) => d.command), `${width}`).toEqual(['go-waiting', 'go-runs']);
+        for (const d of at) {
+          expect.soft(d.h, `${width} ${d.command}`).toBeGreaterThanOrEqual(44);
+          expect.soft(d.w, `${width} ${d.command}`).toBeGreaterThanOrEqual(44);
+          expect.soft(d.overflow, `${width} ${d.command}: a cut word ends in an ellipsis`).toBe('ellipsis');
+          if (d.badge === null) continue;
+          const say = `${width} ${d.command} ${JSON.stringify(d)}`;
+          expect.soft(d.badge.left, `${say}: inside its door`).toBeGreaterThanOrEqual(d.left - 0.5);
+          expect.soft(d.badge.right, `${say}: inside its door`).toBeLessThanOrEqual(d.right + 0.5);
+          const coversMiddle = d.badge.left < d.cx && d.badge.right > d.cx && d.badge.top < d.cy && d.badge.bottom > d.cy;
+          expect.soft(coversMiddle, `${say}: off the glyph's middle`).toBe(false);
+        }
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }
+  });
 
   for (const width of DESKS) {
     it(`at ${width}: no bar at a desk`, async () => {

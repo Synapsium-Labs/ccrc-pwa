@@ -118,6 +118,9 @@
 .wi-band .wi-prog-door { font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--pg-ink); overflow-wrap: anywhere; }
 .wi-band .wi-prog + .wi-pill,
 .wi-band .wi-prog-door + .wi-pill { margin-left: auto; }
+/* With pills the Spec link follows the last one, so the pills keep the band's end and the free space stays before them (review
+   1466 F13); with none it takes the free space itself, as every Spec link does. */
+.wi-band .wi-pill + .wi-spec { margin-left: 0; }
 /* The name as a door into the programme view (PL10, D26): a class of its own, since `TextLink` wears it
    (`hook-class-collision.test.ts`), under a coarse pointer at the tap floor. */
 @media (pointer: coarse) {
@@ -178,9 +181,14 @@
 }
 /* On a phone the strip stays in view while the operator reads a long item, so stepping through the decisions never needs a
    scroll back up (desktop-polish PL10, D-7952; D25). The page scrolls the document there, so the strip sticks to the viewport's
-   top on its own ground; at a desk the item scrolls in its pane beside the list, where the strip has always been in reach. */
+   top on its own ground; at a desk the item scrolls in its pane beside the list, where the strip has always been in reach. In
+   reach is below the status bar: an installed app draws under it, so the strip's own opaque ground covers the top inset and its
+   controls sit under it, at rest and stuck (review 1466 F2). */
 @media (max-width: 899.98px) {
-  .wi-nav { position: sticky; top: 0; z-index: var(--z-header); padding-bottom: var(--sp-2); }
+  .wi-nav {
+    position: sticky; top: 0; z-index: var(--z-header);
+    padding-top: calc(var(--sp-2) + var(--safe-top)); padding-bottom: var(--sp-2);
+  }
 }
 /* The buttons are flex boxes, which drop a space beside the glyph: the gap is that space. */
 .wi-nav .wi-back,
