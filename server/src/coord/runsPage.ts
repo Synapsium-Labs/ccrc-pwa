@@ -1,8 +1,8 @@
 // Console speed S2, per-request reads: one PAGE of the run archive for `GET /api/runs?closed=1&limit=&before=`.
 //
-// L3: a query over the coord db, SYNCHRONOUS like the store it serves (no async surface over `CoordStore`). The row
+// A query over the coord db, SYNCHRONOUS like the store it serves (no async surface over `CoordStore`). The row
 // columns, the terminal-state list and the row hydration are the STORE's and arrive as arguments (the store's delegate
-// passes its own), so this file names no second copy of any of them.
+// passes its own), so this file names no second copy of any of them. It declares no ring: its ring follows its facts.
 import type { DatabaseSync } from 'node:sqlite';
 import type { ChildReclaimAttention } from '../../../shared/api.js';
 import type { RunsReadResult } from './store.js';
