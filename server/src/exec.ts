@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import type { PaneProbe } from '../../shared/api.js';
-import { tmuxTarget } from '../../shared/tmux-target.js';
+import { tmuxName, tmuxTarget } from '../../shared/tmux-target.js';
 
 /** The unmeasured vocabulary lives in `./unmeasured.js` (D-5896): it is a word, not an exec, and `lifecycle.ts`
  *  reached `node:child_process` only to read it. Re-exported so every other import keeps working. */
@@ -126,10 +126,69 @@ export const PANE_PROBE_FORMAT =
 /** One row of `PANE_PROBE_FORMAT`: active flag, four counts, alt flag. */
 const PANE_PROBE_ROW = /^([01]) (\d+) (\d+) (\d+) (\d+) ([01])$/;
 
+/** Console speed S1: the format of the ONE `tmux list-panes -a` a watcher tick runs instead of a `has-session` and a
+ *  `list-panes` per row. Four per-pane formats under a verb the agent already grants (no new door). Exported because
+ *  the test pins the string: a reordering would swap two numbers for each other and `parsePaneListing` would go on
+ *  believing them. */
+export const PANE_LISTING_FORMAT = '#{session_name} #{window_active} #{pane_index} #{pane_pid}';
+
+const PANE_LISTING_ROW = /^(\S+) ([01]) (\d+) (\d+)$/;
+
+/** One whole-server pane listing. `panes` is keyed by the tmux SESSION NAME (`tmuxName(id)`), never by id: the name
+ *  replaces `.` and `:`, so the map is read id to name (`verdictFromListing`) and never name to id.
+ *
+ *  THE POLARITY OF `classifyHasSession` HOLDS HERE: a session is `gone` ONLY on a clean listing that lacks its name.
+ *  A listing that did not run, exited non-zero (tmux with no server also does, and that case is not told apart: the
+ *  caller falls back to the per-row calls, which do tell), was cut short by a signal, or has a line this parser does
+ *  not know answers `ok: false`, and a failed listing never reads as gone. `detail` is never ''. */
+export type PaneListing =
+  | { ok: true; at: number; panes: ReadonlyMap<string, { pid: number | null }> }
+  | { ok: false; at: number; detail: string };
+
+/** Pure. `at` is the instant the exec STARTED (stamped by the caller). Per session: the pid of the lowest
+ *  `pane_index` whose window is active; a session listed with no active window answers `pid: null`. Empty stdout on
+ *  exit 0 is a valid listing of zero sessions. */
+export function parsePaneListing(r: ExecResult, at: number): PaneListing {
+  if (r.ran === false) return { ok: false, at, detail: `tmux list-panes did not run (${r.reason}: ${r.detail})` };
+  if (typeof r.signal === 'string') {
+    return { ok: false, at, detail: `tmux list-panes got ${r.signal} before it answered (exit ${r.code})` };
+  }
+  if (r.code !== 0) {
+    const msg = r.stderr.trim();
+    return { ok: false, at, detail: msg !== '' ? msg : `tmux list-panes exited ${r.code} with no message` };
+  }
+  const best = new Map<string, { index: number; pid: number } | null>();
+  for (const line of r.stdout.split('\n')) {
+    if (line.trim() === '') continue;
+    const m = PANE_LISTING_ROW.exec(line);
+    if (m === null) return { ok: false, at, detail: `tmux list-panes printed a line this parser does not know: ${line.slice(0, 80)}` };
+    const name = m[1]!;
+    if (!best.has(name)) best.set(name, null);
+    if (m[2] !== '1') continue;
+    const index = Number(m[3]);
+    const cur = best.get(name) ?? null;
+    if (cur === null || index < cur.index) best.set(name, { index, pid: Number(m[4]) });
+  }
+  const panes = new Map<string, { pid: number | null }>();
+  for (const [name, v] of best) panes.set(name, { pid: v === null ? null : v.pid });
+  return { ok: true, at, panes };
+}
+
+/** `live` when `tmuxName(id)` is in a clean listing, else `gone` (the polarity note on `PaneListing`). */
+export function verdictFromListing(l: PaneListing & { ok: true }, id: string): SessionVerdict {
+  return l.panes.has(tmuxName(id)) ? { verdict: 'live' } : { verdict: 'gone' };
+}
+
 export class Tmux {
   constructor(private run: Runner) {}
   async sessionVerdict(id: string): Promise<SessionVerdict> {
     return classifyHasSession(await this.run('tmux', ['has-session', '-t', tmuxTarget(id)]));
+  }
+  /** Console speed S1: every session's panes in one exec. Failure contract: `ok: false` for a listing that did not
+   *  run, failed or did not parse, and never an empty `panes` standing for it. `at` is taken before the exec. */
+  async listPanes(): Promise<PaneListing> {
+    const at = Date.now();
+    return parsePaneListing(await this.run('tmux', ['list-panes', '-a', '-F', PANE_LISTING_FORMAT]), at);
   }
   /** Derived, exactly like bash `_alive`: true only for `live`. A caller that
    *  handles `gone` differently from `unknown` must use `sessionVerdict`
