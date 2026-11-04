@@ -174,6 +174,22 @@ ones, so this is now a two-wave programme.
     - `origin`: 1
     It is design input, not a ruling.
   - **Run 1409** is open for wave 2, with deviation numbers 7906 to 7925.
+- **2026-11-04: spec revision 5, for wave 2, is drafted on this ledger PR.** It is not approved yet. It adds section 5
+  and decisions D11 to D22. The facts behind it were measured at `main` `724d7683a`:
+  - the test box's host and box tables;
+  - which checks can be called;
+  - wave 1's strict parser, wire, card and size cap;
+  - the settings census's rules.
+
+  Three Opus lenses (leaks, facts, decisions) then checked the draft against the code. Their findings are folded in:
+  - the test-box and graph rows read by literal calls and checked by `_tb_shape` and `_gr_fits`, never through the
+    warning lists that quote a value;
+  - a value pattern per class, checked by the server;
+  - refused version-1 rows lose their value at the server;
+  - value-free words for every check;
+  - two decisions added: what a server-role node shows (D21), and a closed set of refusal words (D22).
+
+  Sections 2.1 to 2.6 are marked where section 5 supersedes them. The operator rules on D11 to D22 before any plan.
 
 ## Carried constraints
 
