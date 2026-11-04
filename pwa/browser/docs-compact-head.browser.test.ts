@@ -253,14 +253,14 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
       await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}?ref=${LONG_BRANCH}`, { waitUntil: 'load' });
       await app.page.waitForFunction(() => document.querySelector('.docs-compact-where .docs-badge') !== null, undefined, { timeout: 30_000 });
       const got = await app.page.evaluate(() => {
-        const rect = (sel: string): { left: number; right: number } | null => {
+        const rect = (sel: string): { left: number; right: number; top: number; mid: number } | null => {
           const r = document.querySelector(sel)?.getBoundingClientRect();
-          return r === undefined ? null : { left: r.left, right: r.right };
+          return r === undefined ? null : { left: r.left, right: r.right, top: r.top, mid: (r.top + r.bottom) / 2 };
         };
         const text = document.querySelector('.docs-compact-where-ref');
         const badge = document.querySelector('.docs-compact-where .docs-badge');
         return {
-          label: rect('.docs-compact-label'), badge: rect('.docs-compact-where .docs-badge'),
+          label: rect('.docs-compact-label'), badge: rect('.docs-compact-where .docs-badge'), ref: rect('.docs-compact-where-ref'),
           textCut: text === null ? null : text.scrollWidth > text.clientWidth,
           badgeWhole: badge === null ? null : badge.scrollWidth <= badge.clientWidth + 1,
           words: badge?.textContent ?? null,
@@ -273,6 +273,11 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
       expect(got.badge).not.toBeNull();
       expect(got.badge!.left).toBeGreaterThanOrEqual(got.label!.left - 0.5);
       expect(got.badge!.right, 'the badge lies inside the label').toBeLessThanOrEqual(got.label!.right + 0.5);
+      // The badge stays on the ref's line (the ref's span is in this fixture, so it is the one measured): were the row to
+      // stack them, the badge would sit lower and still be inside the label. The two are centred on one line, and the badge
+      // is the taller box, so their tops differ by 1.4 px and their centres by none: the centres are compared.
+      expect(got.ref).not.toBeNull();
+      expect(Math.abs(got.badge!.mid - got.ref!.mid), 'the badge is on the ref\'s line').toBeLessThanOrEqual(1);
       expect(app.errors, 'no page error').toEqual([]);
     } finally {
       await app.ctx.close();
