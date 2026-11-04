@@ -28,6 +28,7 @@ import { actLandingWrite } from './landingWritesAct.js';
 import type { LandingLineView } from '../../../shared/landingLine.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
+import { RUNS_PAGE_LIMIT_MAX, reclaimAttentionRunIds } from './runsPage.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
 import type { WatcherCoordPort } from './ports.js';
 import { coordinatorOfRun, runsTouching, workerOfRun } from './bindingReads.js';
@@ -2895,7 +2896,28 @@ export function registerCoordRoutes(
       }
     }
     if (!deps.coord) return notConfigured(reply);
-    const q = req.query as { closed?: string };
+    const q = req.query as { closed?: string; limit?: string; before?: string };
+    // Console speed S2: `limit` and `before` page the archive and are ADDITIVE. Without `limit` this is today's read,
+    // by today's path. Either parameter without `closed=1`, a `limit` outside 1..500 and a `before` that is not a
+    // canonical positive integer are refused, never clamped or coerced.
+    if (q.limit !== undefined || q.before !== undefined) {
+      const limit = parseCanonicalPositiveSafeInteger(q.limit);
+      const before = q.before === undefined ? undefined : parseCanonicalPositiveSafeInteger(q.before);
+      if (q.closed !== '1' || limit === null || limit > RUNS_PAGE_LIMIT_MAX || before === null) {
+        return reply.code(400).send({ ok: false, error: 'bad-request' });
+      }
+      const page = deps.coord.runsPage({
+        limit, ...(before === undefined ? {} : { before }),
+        pinned: reclaimAttentionRunIds(watcher?.currentCoord()?.childReclaimAttention),
+      });
+      if (!page.read.ok) {
+        return reply.code(503).send({ ok: false, error: 'runs-unreadable', detail: page.read.detail });
+      }
+      return {
+        runs: composeChildReclaim(page.read.runs.map(toRunSummary)),
+        ...(page.nextBefore === undefined ? {} : { nextBefore: page.nextBefore }),
+      };
+    }
     const read = deps.coord.runs({ includeClosed: q.closed === '1' });
     // D-2545, ALL-OR-FAILURE at the board's own door. One unreadable row fails
     // the WHOLE read rather than quietly shipping the others: a board silently
