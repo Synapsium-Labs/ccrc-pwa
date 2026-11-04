@@ -28,12 +28,13 @@ export interface ReadOpts {
 
 /** The GETs whose server-side bound is above `READ_TIMEOUT_MS`, each with its own limit: the server's bound plus the
  *  agent link's 5 s slack (`CLIENT_TIMEOUT_SLACK_MS`), rounded up. Read from `server/src/remote/runner.ts`'s
- *  `CCD_VERB_TIMEOUT_MS` and `TMUX_TIMEOUT_MS`, and `update/inventory.ts`'s `INVENTORY_BUDGET_MS`. */
+ *  `CCD_VERB_TIMEOUT_MS` and `TMUX_TIMEOUT_MS`, and `update/inventory.ts`'s `INVENTORY_BUDGET_MS`. A route behind the
+ *  server's `knownId` gate first reads the registry over the agent link (one remote read, bounded at 15 s). */
 export const LONG_READ_MS = {
-  /** `ccd ws-audit`: the ccd default, 90 s. */
-  workspaceAudit: 100_000,
-  /** `ccd pr-state`: 25 s. */
-  pr: 35_000,
+  /** `knownId`'s registry read, 15 s, then `ccd ws-audit`, the ccd default, 90 s. */
+  workspaceAudit: 115_000,
+  /** `knownId`'s registry read, 15 s, then `ccd pr-state`, 25 s. */
+  pr: 50_000,
   /** Two tmux calls in sequence, 10 s each. */
   paneHistory: 35_000,
   /** Before the server's own node row exists, two inventory sweeps of 10 s each. */

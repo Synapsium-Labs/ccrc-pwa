@@ -131,6 +131,40 @@ describe('the read time limit', () => {
   });
 });
 
+// THE LONG-READ TABLE (review 1464 F5): each GET whose server bound is above 20 s keeps its own default, pinned here
+// as a literal so a change to `LONG_READ_MS` is a red suite, not a silent edit; and the docs loaders keep none.
+describe('the long reads keep their own limit', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  const longReads: Array<[string, number, (api: ReturnType<typeof createApi>) => Promise<unknown>]> = [
+    ['pr', 50_000, (a) => a.pr('cc-a')],
+    ['paneHistory', 35_000, (a) => a.paneHistory('cc-a')],
+    ['workspaceAudit', 115_000, (a) => a.workspaceAudit('cc-a')],
+    ['updates', 30_000, (a) => a.updates()],
+  ];
+  it.each(longReads)('%s is pending at 20 s and ApiTimeout at %i ms', async (_name, ms, call) => {
+    const api = createApi(hangingFetch() as unknown as typeof fetch);
+    const read = watch(call(api));
+    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS);
+    expect(read.now().s, 'still pending past the 20 s default').toBe('pending');
+    await vi.advanceTimersByTimeAsync(ms - READ_TIMEOUT_MS - 1);
+    expect(read.now().s, 'still pending 1 ms before its own limit').toBe('pending');
+    await vi.advanceTimersByTimeAsync(1);
+    const out = read.now();
+    expect(out.s).toBe('err');
+    expect((out as { e: unknown }).e).toBeInstanceOf(ApiTimeout);
+    expect(((out as { e: unknown }).e as ApiTimeout).ms).toBe(ms);
+  });
+
+  it('a docs loader is still pending after an hour', async () => {
+    const api = createApi(hangingFetch() as unknown as typeof fetch);
+    const read = watch(api.docs.projects());
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(read.now().s).toBe('pending');
+  });
+});
+
 describe('ReadOpts reach the polled reads', () => {
   const ok = () => vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
   const cases: Array<[string, (api: ReturnType<typeof createApi>, o: { signal: AbortSignal }) => Promise<unknown>]> = [
@@ -142,6 +176,7 @@ describe('ReadOpts reach the polled reads', () => {
     ['linearWorkspaces', (a, o) => a.linearWorkspaces(o)],
     ['digest', (a, o) => a.digest(undefined, o)],
     ['passkeys', (a, o) => a.passkeys(o)],
+    ['runsPage', (a, o) => a.runsPage(50, null, o)],
   ];
   it.each(cases)('%s honours the caller signal', async (_name, call) => {
     const api = createApi(ok() as unknown as typeof fetch);
