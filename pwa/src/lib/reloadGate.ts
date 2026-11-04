@@ -53,16 +53,18 @@ function moveReloads(s: ReloadState, from: string, to: string, nowMs: number): b
 }
 
 /** One event's answer: the next state, and whether the page reloads now. A step never clears `pending`: the reload
- *  ends the page. */
+ *  ends the page. A hidden page never reloads, in any arm (the brief's rule): an urgent reload held while hidden runs
+ *  on the return, and a pending one waits for a move. */
 export function reloadStep(
   s: ReloadState, e: ReloadEvent, nowMs: number,
 ): { readonly state: ReloadState; readonly reload: boolean } {
+  const visible = s.visibleSince !== null;
   switch (e.kind) {
-    case 'activated': return { state: { ...s, pending: true }, reload: s.urgent };
-    case 'urgent': return { state: { ...s, urgent: true }, reload: s.pending };
-    case 'visible': return { state: { ...s, visibleSince: e.at }, reload: false };
+    case 'activated': return { state: { ...s, pending: true }, reload: visible && s.urgent };
+    case 'urgent': return { state: { ...s, urgent: true }, reload: visible && s.pending };
+    case 'visible': return { state: { ...s, visibleSince: e.at }, reload: s.pending && s.urgent };
     case 'hidden': return { state: { ...s, visibleSince: null }, reload: false };
     case 'move': return { state: s, reload: moveReloads(s, e.from, e.to, nowMs) };
-    case 'chunk-failed': return { state: s, reload: s.pending };
+    case 'chunk-failed': return { state: s, reload: visible && s.pending };
   }
 }

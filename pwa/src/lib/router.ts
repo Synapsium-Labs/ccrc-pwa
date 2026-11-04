@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { prefersReducedMotion } from '@ccrc/ui';
+import { reloadOnMove } from './swupdate';
 
 /** document.startViewTransition, where the platform has it. */
 type DocWithVT = Document & {
@@ -20,8 +21,12 @@ type DocWithVT = Document & {
  *  is outside this contract. `opts.replace: true` rewrites the current history
  *  entry (`replaceState`), so Back skips it; absent or `false` pushes a new
  *  one. Both ride the same view transition and the same `flushSync` dispatch
- *  of `popstate`: only the history call differs. */
+ *  of `popstate`: only the history call differs.
+ *
+ *  After a release, a pending reload runs here (console speed, Task C3): the gate in `swupdate.ts` is asked first,
+ *  and when it loads `href` as a full page nothing is pushed, so the old build never draws the new screen. */
 export function navigate(href: string, opts?: { replace?: boolean }): void {
+  if (reloadOnMove(href, opts?.replace === true)) return;
   const go = (): void => {
     if (opts?.replace === true) history.replaceState(null, '', href);
     else history.pushState(null, '', href);

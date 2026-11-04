@@ -60,17 +60,28 @@ describe('reloadStep: when a pending reload runs (Task C3)', () => {
   });
 
   it('urgent with a pending reload reloads at once, and an activation after urgent reloads at once', () => {
-    // Inside the quiet window and on a hidden page alike: the block screen has nothing to read behind it.
-    const hiddenPending: ReloadState = { ...pending, visibleSince: null };
-    const a = reloadStep(hiddenPending, { kind: 'urgent' }, T0 + 1);
+    // Inside the quiet window: the block screen has nothing to read behind it.
+    const a = reloadStep(pending, { kind: 'urgent' }, T0 + 1);
     expect(a.reload).toBe(true);
     expect(a.state.urgent).toBe(true);
-    const u = reloadStep(RELOAD_IDLE, { kind: 'urgent' }, T0);
+    const visibleIdle: ReloadState = { ...RELOAD_IDLE, visibleSince: T0 };
+    const u = reloadStep(visibleIdle, { kind: 'urgent' }, T0);
     expect(u.reload, 'urgent with nothing pending waits for the new worker').toBe(false);
-    expect(u.state).toEqual({ ...RELOAD_IDLE, urgent: true });
+    expect(u.state).toEqual({ ...visibleIdle, urgent: true });
     const b = reloadStep(u.state, { kind: 'activated' }, T0 + 1);
     expect(b.reload).toBe(true);
     expect(b.state.pending).toBe(true);
+  });
+
+  it('a hidden page holds every arm, and its return runs an urgent reload', () => {
+    // The brief's rule: no reload while the page is hidden, the two at-once cases included.
+    const hiddenPending: ReloadState = { ...pending, visibleSince: null };
+    const u = reloadStep(hiddenPending, { kind: 'urgent' }, T0 + 1);
+    expect(u.reload).toBe(false);
+    expect(reloadStep({ ...RELOAD_IDLE, urgent: true }, { kind: 'activated' }, T0 + 1).reload).toBe(false);
+    expect(reloadStep(hiddenPending, { kind: 'chunk-failed' }, T0 + 1).reload).toBe(false);
+    expect(reloadStep(u.state, { kind: 'visible', at: T0 + 9 }, T0 + 9).reload, 'urgent and pending: at once on return').toBe(true);
+    expect(reloadStep(hiddenPending, { kind: 'visible', at: T0 + 9 }, T0 + 9).reload, 'pending alone waits for a move').toBe(false);
   });
 
   it('a failed chunk reloads only while pending', () => {
