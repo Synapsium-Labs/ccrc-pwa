@@ -117,6 +117,26 @@ describe('parseBoxSettings: the corpus, each file with its verdict', () => {
     expect(fixtureFiles().filter((f) => verdictOf(f) === 'malformed').length).toBeGreaterThanOrEqual(15);
   });
 
+  it('the frozen version-1 corpus parses to exactly what wave 1 held', () => {
+    const frozen = fixtureFiles().filter((f) => f.startsWith('ok--v1-'));
+    expect(frozen).toHaveLength(9);
+    const out: Record<string, string> = {};
+    for (const f of frozen) out[f] = JSON.stringify(parseBoxSettings(readFileSync(join(FIX, f), 'utf8')));
+    expect(out).toMatchInlineSnapshot(`
+      {
+        "ok--v1-backups-and-disk-unmeasured.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"ok","value":"10","from":"default"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"ok","value":"90","from":"default"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"ok","value":"900000","from":"default"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"ok","value":"250","from":"default"}],"deadline":{"plainMs":900000,"minMs":900000,"maxMs":900000},"backups":{"state":"unmeasured","why":"~/ccrc-backups is not a readable directory"},"disk":{"state":"unmeasured","why":"the filesystem holding the home directory could not be measured (df did not answer in time, or failed)"}}",
+        "ok--v1-custom-base-url.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"ok","value":"10","from":"default"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"ok","value":"90","from":"default"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"ok","value":"900000","from":"default"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"custom https://releases.example.invalid","from":"environment"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"ok","value":"250","from":"default"}],"deadline":{"plainMs":900000,"minMs":900000,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
+        "ok--v1-defaults.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"ok","value":"10","from":"default"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"ok","value":"90","from":"default"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"ok","value":"900000","from":"default"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"ok","value":"250","from":"default"}],"deadline":{"plainMs":900000,"minMs":900000,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
+        "ok--v1-long-sentence.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"unmeasured","why":"CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env names CCRC_BACKUP_KEEP in a shape this reader does not decide (a space around '=', an export prefix, a backslash, a quote that is not one whole pair, a quote left open on an earlier line, or a line after one ending in a backslash)"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"ok","value":"90","from":"default"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"ok","value":"900000","from":"default"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"ok","value":"250","from":"default"}],"deadline":{"plainMs":900000,"minMs":900000,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
+        "ok--v1-refused.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"refused","value":"abc","from":"environment","why":"CCRC_BACKUP_KEEP='abc' is not a whole number from 0 to 9999, as set in the environment"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"refused","value":"ninety","from":"environment","why":"CCRC_UPDATE_HEALTH_S='ninety' is not a number of seconds (digits only, at most 18) - using 90"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"refused","value":"6e5","from":"environment","why":"CCRC_UPDATE_DEADLINE_MS is not a positive whole number of milliseconds in canonical digits (at most 15, no lead zero), so its plain reading is 900000; the backup prune and the watchdog read the min and the max, which ccrc settings prints"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"refused","value":"99999","from":"environment","why":"CCRC_MODELS_ADVANCE_BUDGET_S='99999' is over 3600 seconds, so the advance step uses 3600"}],"deadline":{"plainMs":900000,"minMs":0,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
+        "ok--v1-sources.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"ok","value":"5","from":"environment"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"4","from":"file"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"empty"},{"key":"CCRC_UPDATE_HEALTH_S","state":"ok","value":"90","from":"default"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"ok","value":"900000","from":"default"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"ok","value":"250","from":"default"}],"deadline":{"plainMs":900000,"minMs":900000,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
+        "ok--v1-timer-reader.json": "{"v":1,"at":1792948000,"reader":"timer","settings":[{"key":"CCRC_BACKUP_KEEP","state":"ok","value":"10","from":"default"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"ok","value":"90","from":"default"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"ok","value":"900000","from":"default"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"ok","value":"250","from":"default"}],"deadline":{"plainMs":900000,"minMs":900000,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
+        "ok--v1-unmeasured-nul.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"unmeasured","why":"CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env could not be scanned"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"unmeasured","why":"CCRC_BACKUP_DATA_KEEP cannot be measured: ~/.ccrc/ccrc.env could not be scanned"},{"key":"CCRC_VERSIONS_KEEP","state":"unmeasured","why":"CCRC_VERSIONS_KEEP cannot be measured: ~/.ccrc/ccrc.env could not be scanned"},{"key":"CCRC_UPDATE_HEALTH_S","state":"unmeasured","why":"CCRC_UPDATE_HEALTH_S cannot be measured: ~/.ccrc/ccrc.env could not be scanned - using 90"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"unmeasured","why":"CCRC_UPDATE_DEADLINE_MS cannot be measured: ~/.ccrc/ccrc.env could not be scanned"},{"key":"CCRC_RELEASE_BASE_URL","state":"unmeasured","why":"CCRC_RELEASE_BASE_URL cannot be measured: ~/.ccrc/ccrc.env could not be scanned"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"unmeasured","why":"CCRC_MODELS_ADVANCE_BUDGET_S cannot be measured: ~/.ccrc/ccrc.env could not be scanned, so the advance step is off for this run"}],"deadline":{"plainMs":900000,"minMs":0,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
+        "ok--v1-with-backups.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"ok","value":"10","from":"default"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"ok","value":"90","from":"default"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"ok","value":"900000","from":"default"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"ok","value":"250","from":"default"}],"deadline":{"plainMs":900000,"minMs":900000,"maxMs":900000},"backups":{"state":"ok","kept":2,"withData":0,"bytes":12694000000},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
+      }
+    `);
+  });
+
   it.each(fixtureFiles())('%s', (file) => {
     const doc = parseBoxSettings(readFileSync(join(FIX, file), 'utf8'));
     if (verdictOf(file) === 'ok') {
@@ -154,13 +174,13 @@ describe('parseBoxSettings: the corpus, each file with its verdict', () => {
 });
 
 describe('parseBoxSettings: forged and broken documents are null, whole', () => {
-  const base = (): Record<string, unknown> => JSON.parse(readFileSync(join(FIX, 'ok--refused.json'), 'utf8')) as Record<string, unknown>;
+  const base = (): Record<string, unknown> => JSON.parse(readFileSync(join(FIX, 'ok--v1-refused.json'), 'utf8')) as Record<string, unknown>;
   const rows = (d: Record<string, unknown>): Record<string, unknown>[] => d['settings'] as Record<string, unknown>[];
   const cases: Record<string, (d: Record<string, unknown>) => unknown> = {
     'a missing key': (d) => { rows(d).pop(); },
     'a duplicated key': (d) => { rows(d)[1]!['key'] = rows(d)[0]!['key']; },
     'an unknown key': (d) => { rows(d)[2]!['key'] = 'CCRC_NOT_A_SETTING'; },
-    'version 2': (d) => { d['v'] = 2; },
+    'version 2 with the seven rows of version 1': (d) => { d['v'] = 2; },
     'an unknown row state': (d) => { rows(d)[0]!['state'] = 'maybe'; },
     'an unknown from': (d) => { rows(d)[0]!['from'] = 'cloud'; },
     'an unknown reader': (d) => { d['reader'] = 'cron'; },
@@ -268,7 +288,7 @@ describe('the vocabularies are held equal to the verb\'s, in both directions (D-
 // ── the view ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 describe('boxSettingsView: age, stale and clock-ahead are judged at the request\'s clock', () => {
-  const doc = parseBoxSettings(readFileSync(join(FIX, 'ok--defaults.json'), 'utf8')) as BoxSettingsDoc;
+  const doc = parseBoxSettings(readFileSync(join(FIX, 'ok--v1-defaults.json'), 'utf8')) as BoxSettingsDoc;
   const held = (at: number): BoxSettingsHeld => ({ read: { state: 'ok', doc: { ...doc, at } } });
 
   it('a 10-minute-old read is not stale, a 16-minute-old one is', () => {
@@ -331,7 +351,7 @@ function ccrcWith(prefix: string, o: { caps?: string[]; os?: 'linux' | 'darwin';
   mkdirSync(dir, { recursive: true });
   const f = join(dir, NODE_FILES.boxSettings);
   if (o.file === 'symlink') {
-    writeFileSync(join(dir, 'elsewhere.json'), readFileSync(join(FIX, 'ok--defaults.json')));
+    writeFileSync(join(dir, 'elsewhere.json'), readFileSync(join(FIX, 'ok--v1-defaults.json')));
     symlinkSync(join(dir, 'elsewhere.json'), f);
   } else if (o.file === 'big') {
     writeFileSync(f, ' '.repeat(70 * 1024));
@@ -344,7 +364,7 @@ function ccrcWith(prefix: string, o: { caps?: string[]; os?: 'linux' | 'darwin';
 const nodeRow = (nodeId: string, os: NodeRow['os'], caps: string[]): Pick<NodeRow, 'nodeId' | 'os' | 'caps'> => ({ nodeId, os, caps });
 const measuredOutcome = (label: string, nodeId: string): SweepOutcome => ({ label, result: 'measured', nodeId, lease: 'none', refused: false });
 const deps = (ccrcDir: string, io: FleetIO = localIO): Pick<InventoryDeps, 'localIo' | 'ccrcDir' | 'fleet'> => ({ localIo: io, ccrcDir, fleet: null });
-const okText = (): string => readFileSync(join(FIX, 'ok--defaults.json'), 'utf8');
+const okText = (): string => readFileSync(join(FIX, 'ok--v1-defaults.json'), 'utf8');
 
 /** `io` that records every path it is asked about, and answers as the real local one does. */
 function countingIO(): { io: FleetIO; paths: string[] } {
