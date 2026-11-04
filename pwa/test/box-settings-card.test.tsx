@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import type {
-  BoxSettingName, BoxSettingRowV1, BoxSettingRowV2, BoxSettingsDoc, BoxSettingsDocV1, BoxSettingsDocV2, BoxSettingsRead, NodeRole, NodeWire,
+  BoxSettingName, BoxSettingRow, BoxSettingRowV1, BoxSettingRowV2, BoxSettingsDoc, BoxSettingsDocV1, BoxSettingsDocV2, BoxSettingsRead, NodeRole, NodeWire,
 } from '../../shared/api';
 import {
   BOX_SETTINGS_FAILURES, BOX_SETTINGS_KEYS, BOX_SETTINGS_STALE_S, BOX_SETTING_FAMILIES, BOX_SETTING_REFUSAL_WORDS, BOX_SETTING_SOURCES,
@@ -163,8 +163,6 @@ describe('Box settings card: refused, stale, server (D-6917)', () => {
     renderCard([fleet({ ...ok(doc({}, 40), 2, false) })]);
     expect(screen.getByText(/^measured 2m ago/)).toBeInTheDocument();
   });
-
-
 });
 
 describe('Box settings card: every way a node can have nothing to show (D-6917)', () => {
@@ -395,6 +393,14 @@ describe('Box settings card: families (D17)', () => {
     const bare = okRows();
     bare[0] = { key: 'CCRC_BACKUP_KEEP', state: 'refused', from: 'environment', why: 'w' };
     expect(boxSettingsOf({ settings: { ...read, doc: doc({ settings: bare }) } })).not.toBe('unrecognised');
+    // Version 2: the server never forwards a refused row's value, so one on the wire is a forgery the reader drops.
+    const forged = { key: 'CCRC_GRAPH_BUDGET', state: 'refused', from: 'file', why: REFUSED_WHY, value: 'zz-wire' } as unknown as BoxSettingRow;
+    const v2read = { state: 'ok', ageS: 1, stale: false, doc: v2doc({ settings: withRow('CCRC_GRAPH_BUDGET', forged as BoxSettingRowV2) }) };
+    expect(boxSettingsOf({ settings: v2read })).not.toBe('unrecognised');
+    cleanup();
+    renderCard([fleet(v2read)]);
+    expect(rowOf(block('fleet'), 'CCRC_GRAPH_BUDGET').querySelector('dd.box-settings-value')!.textContent).toContain('refused');
+    expect(block('fleet').textContent).not.toContain('zz-wire');
   });
 
   it('F7: the presence words, and a presence value on the wire is never shown', () => {
@@ -466,6 +472,31 @@ describe('Box settings card: a server-role node (D21)', () => {
     }
     const source = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'boxSettingsWords.ts'), 'utf8');
     expect(source).not.toMatch(/CCRC_[A-Z]/);
+  });
+
+  it('S4: a not-used row inside a used family keeps its why when refused or unmeasured, and never shows a value', () => {
+    const key = 'CCRC_MODELS_ADVANCE_BUDGET_S';
+    const refused: BoxSettingRowV2 = { key, state: 'refused', from: 'file', why: REFUSED_WHY };
+    const first = renderCard([server(ok(v2doc({ settings: withRow(key, refused) })))]);
+    expect(familyEl(first.container, 'updates').open).toBe(true);
+    expect(summaries(block('server'))[0]).toBe('Backups and updates: 7 settings, 1 refused');
+    const row = rowOf(block('server'), key);
+    expect(row.querySelector('dd.box-settings-value')!.textContent).toBe(BOX_SETTINGS_NOT_USED_TEXT);
+    expect(within(row).getByText(REFUSED_WHY)).toHaveClass('box-settings-danger');
+    cleanup();
+    const why = 'the value could not be checked';
+    const second = renderCard([server(ok(v2doc({ settings: withRow(key, { key, state: 'unmeasured', why }) })))]);
+    expect(familyEl(second.container, 'updates').open).toBe(true);
+    expect(summaries(block('server'))[0]).toBe('Backups and updates: 7 settings, 1 not measured');
+    const unmeasured = rowOf(block('server'), key);
+    expect(unmeasured.querySelector('dd.box-settings-value')!.textContent).toBe(BOX_SETTINGS_NOT_USED_TEXT);
+    expect(within(unmeasured).getByText(why)).toHaveClass('box-settings-danger');
+    cleanup();
+    const okRow: BoxSettingRowV2 = { key, state: 'ok', value: '120', from: 'file' };
+    renderCard([server(ok(v2doc({ settings: withRow(key, okRow) })))]);
+    const fine = rowOf(block('server'), key);
+    expect(fine.querySelector('.box-settings-why')).toBeNull();
+    expect(fine.textContent).not.toContain('120');
   });
 
   it("S3: an unused family's line counts attention (D-7916)", () => {

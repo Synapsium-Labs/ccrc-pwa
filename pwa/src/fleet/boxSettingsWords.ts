@@ -171,7 +171,9 @@ const specOf = (key: string): { cls: string; roles: readonly NodeRole[]; applies
 export function settingLine(row: BoxSettingRow, role: NodeRole | null): BoxSettingLine {
   const spec = specOf(row.key);
   if (role !== null && spec !== undefined && !spec.roles.includes(role)) {
-    return { key: row.key, value: BOX_SETTINGS_NOT_USED_TEXT, from: null, why: null, mark: null };
+    // The value slot stays "not used" and never shows a value, but a refused or unmeasured row still says why, as a used row does: a
+    // refused why is a closed-set word and an unmeasured why is bounded text, so nothing leaks (the family line counts such a row).
+    return { key: row.key, value: BOX_SETTINGS_NOT_USED_TEXT, from: null, why: row.state === 'ok' ? null : row.why, mark: null };
   }
   const mark = spec !== undefined && spec.applies === 'update' ? BOX_SETTINGS_TEXT.nextUpdate : null;
   if (row.state === 'unmeasured') return { key: row.key, value: BOX_SETTINGS_TEXT.notMeasured, from: null, why: row.why, mark };
