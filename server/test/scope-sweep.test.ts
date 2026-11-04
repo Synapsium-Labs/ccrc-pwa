@@ -1517,7 +1517,7 @@ describe('the busy arm: a busy scope of a provably dead session', () => {
       const u = busy(1); stopped(); arm(); run();
       const r = doctor();
       expect(r.stderr).toBe('');
-      expect(r.stdout).toMatch(/^WARN scope-sweep: 1 dead pane scope\(s\) and 0 long-lived process\(es\) in live ones, from the sweep's record \(mode live; 1 busy orphan\(s\), busy mode shadow\):/);
+      expect(r.stdout).toMatch(/^WARN scope-sweep: 1 dead pane scope\(s\) and 0 long-lived process\(es\) in live ones, from the sweep's record \(mode live\), 1 busy orphan\(s\), busy mode shadow:/);
       expect(r.stdout).toContain(`${u} would-stop (busy)`);
       expect(r.stdout).toContain('3010:bash,3011:sleep');
       expect(r.stdout).not.toContain('cannot read');
@@ -1526,14 +1526,14 @@ describe('the busy arm: a busy scope of a provably dead session', () => {
     it('live: the mode reads live, and a stopped orphan still counts this tick', () => {
       const u = busy(1); stopped(); both(); run();
       const r = doctor();
-      expect(r.stdout).toContain('(mode live; 1 busy orphan(s), busy mode live)');
+      expect(r.stdout).toContain('(mode live), 1 busy orphan(s), busy mode live:');
       expect(r.stdout).toContain(`${u} stopped (busy)`);
     });
 
     it('a live session\'s busy scope is no orphan: counted zero, its report line unchanged', () => {
       const u = busy(1); regRow('project-a-one', GEN); run();
       const r = doctor();
-      expect(r.stdout).toContain('(mode shadow; 0 busy orphan(s), busy mode shadow)');
+      expect(r.stdout).toContain('(mode shadow), 0 busy orphan(s), busy mode shadow:');
       expect(r.stdout).not.toContain(`${u} would-stop (busy)`);
       expect(r.stdout).not.toContain('cannot read');
     });

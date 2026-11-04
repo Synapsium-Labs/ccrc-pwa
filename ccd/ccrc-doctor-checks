@@ -8817,8 +8817,8 @@ _check_scope-sweep() {
   if (( nd || no )); then
     for x in "${found[@]}"; do detail="${detail}${detail:+; }$x"; done
     [[ -z "$carries" ]] || detail="$detail; carried unmeasured: $carries"
-    _dr_warn scope-sweep "$nd dead pane scope(s) and $no long-lived process(es) in live ones, from the sweep's record (mode $mode; $busyw): $detail" \
-      "read each before acting: \`systemctl --user stop <unit>\` ends EVERY process in a dead scope; stop advice applies only to the measured dead rows, never to a carry. A service a session still needs is moved into a unit of its own (systemd-run --user --unit ...); a forgotten process in a live pane is the session's to end. The sweep stops only scopes inert for six hours, and only when armed; a busy scope of a session provably dead for six hours only when its own switch is on too (Settings, Automation)"
+    _dr_warn scope-sweep "$nd dead pane scope(s) and $no long-lived process(es) in live ones, from the sweep's record (mode $mode), $busyw: $detail" \
+      "read each before acting: \`systemctl --user stop <unit>\` ends EVERY process in a dead scope; stop advice applies only to the measured dead rows, never to a carry. A service a session still needs is moved into a unit of its own (systemd-run --user --unit ...); a forgotten process in a live pane is the session's to end. The sweep stops only scopes inert for six hours, and only when armed; a busy scope of a session provably dead for six hours only when its own switch is on too"
     return 2
   fi
   if (( nc_dead || nc_unknown )); then

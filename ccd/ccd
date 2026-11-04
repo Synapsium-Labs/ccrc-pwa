@@ -6842,7 +6842,7 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # marker `$REG/<id>.shedding`, which no alias glob reaches, and the gate fails closed on it
 # (DEPSSHED region).
 #
-# NOT reachable this way, and this set IS the boundary — NINETEEN dot-prefixed
+# NOT reachable this way, and this set IS the boundary — TWENTY dot-prefixed
 # artifacts live under `$REG`; the eight above are reachable, these eleven are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`

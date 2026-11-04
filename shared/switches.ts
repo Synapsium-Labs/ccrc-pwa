@@ -99,11 +99,11 @@ export const TESTBOX_REMOTE_LIVE_MARKER = 'testbox-remote-live';
 export const PANE_SCOPE_STOP_LIVE_MARKER = 'pane-scope-stop-live';
 /** `$REG/scope-sweep-live`: arms `ccd-scope-sweep`'s stop of an INERT dead pane scope. Absent, the sweep records
  *  `would-stop` and stops nothing. The sweep reads it itself. No writer in the tree: the operator touches it by hand,
- *  and a Settings card only shows it (D-7994). */
+ *  and the door over both only reads it (D-7994). */
 export const SCOPE_SWEEP_LIVE_MARKER = 'scope-sweep-live';
 /** `$REG/scope-sweep-busy-live` (D-7993): arms the sweep's busy arm, the stop of a busy dead scope whose session is
  *  provably dead. It means nothing unless `scope-sweep-live` also stands. Absent, the arm records `would-stop (busy)` with
- *  the process list. Its one writer is `ccd scope-sweep-busy`, behind the Settings card (D-7994). */
+ *  the process list. Its one writer is `ccd scope-sweep-busy`, behind `POST /api/coord/scope-sweep` (D-7994). */
 export const SCOPE_SWEEP_BUSY_LIVE_MARKER = 'scope-sweep-busy-live';
 
 /** The spec's bounded contexts (consolidation spec 2026-10-19 §2), the `owner` of a row. */

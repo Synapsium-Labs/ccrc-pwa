@@ -148,7 +148,7 @@
 # `$REG/scope-sweep-busy-live` stand: a collectable scope then reads `would-stop`,
 # printed `would-stop (busy)`, with its process list, and the shadow week reads those.
 # Armed, an inert and a busy stop draw on ONE budget, SCOPE_SWEEP_MAX_STOPS a tick.
-# The operator arms it from Settings (`ccd scope-sweep-busy`, its one writer).
+# The operator arms it through `POST /api/coord/scope-sweep` (`ccd scope-sweep-busy`, its one writer).
 #
 # THE VERDICT RECORD, `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`, rewritten whole
 # by rename every tick: a header `# ccd-scope-sweep v1 tick=<epoch> up=<s>
