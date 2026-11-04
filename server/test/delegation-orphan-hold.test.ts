@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { orphanLeaseHold, DELEGATION_ORPHAN_HELD_STATES, DELEGATION_UNREADY_HOLD_CLASSES } from '../src/coord/delegation-orphan-hold.js';
 import { delegationCarrierStateOf } from '../src/coord/delegation-lease-state.js';
 import { checkpointWithLease, leaseRow } from './delegationLeaseFixture.js';
+import { beatLeaseHold } from '../src/orphanTreeBeat.js';
 
 const NOW = Date.parse('2026-11-10T12:00:00Z');
 const byDisposition = (l: { disposition: string }) => l.disposition as never;
@@ -49,7 +50,7 @@ describe('orphanLeaseHold', () => {
     expect(orphanLeaseHold({ checkpoint: cp, heldStateOf: byDisposition, orphanClass: 'ccd-root', path: '/w/demo/x', nowMs: NOW }))
       .toMatchObject({ kind: 'held', state: 'retained' });
   });
-  it('W5-O14: a lease with a transferringSince carrier row is held with until null (the carrier-state rule)', () => {
+  it('W5-O14: a lease with a transferringSince carrier row is held with until null (the carrier-state rule, as the beat wires it)', async () => {
     const lease = leaseRow({ canonicalPath: '/p/t', disposition: 'adopted', cleanupDueAt: '2026-11-01T00:00:00.000Z', generation: 3 });
     const cp = checkpointWithLease(lease, { leaseCarriers: [{ leaseId: lease.leaseId, transferringSince: '2026-11-09T00:00:00.000Z', transferRun: 41,
       promotedRun: null, promotedSession: null, releaseReason: null, resolvedThrough: null }] });
@@ -57,7 +58,9 @@ describe('orphanLeaseHold', () => {
       delegationCarrierStateOf(l, c.leaseCarriers?.find((r) => r.leaseId === l.leaseId));
     expect(orphanLeaseHold({ checkpoint: cp, heldStateOf, orphanClass: 'claude', path: '/p/t', nowMs: NOW }))
       .toEqual({ kind: 'held', leaseId: lease.leaseId, state: 'transferring', until: null });
-    expect(orphanLeaseHold({ checkpoint: checkpointWithLease(lease), heldStateOf, orphanClass: 'claude', path: '/p/t', nowMs: NOW }).kind)
+    // the beat's own wiring (`orphanTreeBeat.ts#beatLeaseHold`), never `l.disposition`
+    expect(await beatLeaseHold(() => cp, () => NOW)('/p/t', 'claude')).toEqual({ kind: 'held', leaseId: lease.leaseId, state: 'transferring', until: null });
+    expect((await beatLeaseHold(() => checkpointWithLease(lease), () => NOW)('/p/t', 'claude')).kind)
       .toBe('free');   // CONTROL: no carrier row, the expired adoption frees it
   });
   it('the held set is O5-1 (a)', () => {
