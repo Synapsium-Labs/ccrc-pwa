@@ -10,7 +10,11 @@
 //      the pinned target, and the uniform fleet's running row, which the PWA looks up by tag);
 //   4. per installed tag, the newest `stableBack` older releases that are Stable, AND the newest `stableBack` older
 //      releases of ANY channel. A Stable fleet's Roll back list is Stable only; a Dev fleet's is any channel, and a
-//      fleet more than `recent` releases behind keeps neither list inside rules 1 and 2.
+//      fleet more than `recent` releases behind keeps neither list inside rules 1 and 2;
+//   5. the newest `stableBack` Stable releases that are not withdrawn (`yanked`), whatever is installed. The PWA's
+//      unmeasured branch (no managed node, a node unmeasured or unversioned, or the channel unread) shows the newest
+//      three rows on the channel, and on a Stable channel those are these; `installed` may be empty there, and the
+//      catalogue is mostly prereleases, so the newest `recent` can hold fewer than three Stable rows or none.
 // Ordering and "newer/older" are the PWA's: `compareReleaseTags` over release-tag rows, newest first, and rows whose
 // tag is not a release tag keep their input order after them. `compareReleaseTags` throws on a non-tag, so every
 // call is behind `isReleaseTag`; an installed, previous or intent value that is not a release tag is ignored by
@@ -32,7 +36,7 @@ export interface ReleaseWindowContext {
   readonly stableBack: number;
 }
 
-export function releaseWindow<R extends { tag: string; channel: string | null }>(
+export function releaseWindow<R extends { tag: string; channel: string | null; yanked?: boolean | null }>(
   releases: readonly R[], ctx: ReleaseWindowContext,
 ): R[] {
   // Newest first; `filter` returns fresh arrays, so the stable sort never reorders the caller's list.
@@ -65,6 +69,13 @@ export function releaseWindow<R extends { tag: string; channel: string | null }>
       if (r.channel === 'stable' && stable < ctx.stableBack) { keep.add(r); stable++; }
       if (any >= ctx.stableBack && stable >= ctx.stableBack) break;
     }
+  }
+
+  // 5. The newest `stableBack` Stable, non-withdrawn releases (`tagged` is newest first).
+  let waiting = 0;
+  for (const r of tagged) {
+    if (waiting >= ctx.stableBack) break;
+    if (r.channel === 'stable' && r.yanked !== true) { keep.add(r); waiting++; }
   }
 
   return sorted.filter((r) => keep.has(r));

@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { RELEASE_WINDOW_RECENT, RELEASE_WINDOW_STABLE_BACK, releaseWindow } from '../src/update/releaseWindow.js';
 
-interface Row { tag: string; channel: string | null }
+interface Row { tag: string; channel: string | null; yanked?: boolean }
 
 // v0.0.1 .. v0.0.80, every 10th Stable, the rest Dev; input order is oldest first, so newest-first is the decider's work.
 const catalogue: Row[] = Array.from({ length: 80 }, (_, i) => ({
@@ -97,6 +97,18 @@ describe('releaseWindow', () => {
 
   it('an empty catalogue answers empty', () => {
     expect(releaseWindow([], ctx({ installed: ['v0.0.5'], previous: ['v0.0.4'], intentTags: ['v0.0.3'] }))).toEqual([]);
+  });
+
+  it('keeps the newest three Stable releases for an unmeasured fleet (sparse Stable, installed [])', () => {
+    // Only a few old rows are Stable and v0.0.12 is withdrawn: the newest three non-withdrawn Stable rows are 8, 5, 3.
+    const sparse: Row[] = Array.from({ length: 80 }, (_, i) => {
+      const n = i + 1;
+      return { tag: `v0.0.${n}`, channel: [2, 3, 5, 8, 12].includes(n) ? 'stable' : 'dev', ...(n === 12 ? { yanked: true } : {}) };
+    });
+    const out = tags(releaseWindow(sparse, ctx()));
+    expect(out).toEqual([...v(51, 80), 'v0.0.8', 'v0.0.5', 'v0.0.3']);
+    expect(out).not.toContain('v0.0.12');
+    expect(out).not.toContain('v0.0.2');
   });
 
   it('does not mutate its input', () => {
