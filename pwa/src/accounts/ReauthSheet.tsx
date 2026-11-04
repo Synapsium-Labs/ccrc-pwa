@@ -12,8 +12,8 @@
 // the server accepted, the code field, the countdown read from `expiresAt`, Cancel) → the ending. A terminal state
 // says what is left of the old credential, from its code, and offers Start again. WHAT IT MAY SAY of the old credential
 // is `oldCredentialOf`'s, the one rule (D-7872 (10), D-7992): that the lane keeps it only where the lane has one; that it
-// is signed out where the lane says so or this sheet just ran Sign this lane out and start again, below; and the neutral
-// words, true either way, where the provider refused the lane, a sign-out has not been read back, or a box too old to
+// is signed out where the lane says so or Sign this lane out and start again, below, just removed its sign-in; and the
+// neutral words, true either way, where the provider refused the lane, a sign-out has not been read back, or a box too old to
 // report it leaves the lane unsaid. `useOldCredential` reads it when
 // a sentence is written, so a lane signed out elsewhere while the sheet is open gets the words its new facts allow, and
 // the mint's restart lead and revoke item are held to it as well. Offline mid-attempt, the run frame shows
@@ -155,8 +155,8 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   /** What this sheet may say of the lane's old credential (D-7872 (10)): read when a sentence is written, from the lane
-   *  and the 401 marker as the screen holds them then, and `signed-out` once this sheet's own sign-out has the box's
-   *  answer. */
+   *  and the 401 marker as the screen holds them then, and `signed-out` once this sheet's own sign-out has removed the
+   *  sign-in. */
   const old = useOldCredential(id, props.lane, props.usage);
 
   const status = (text: string): void => setSaid({ kind: 'status', text });
@@ -235,8 +235,10 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
       alert(text);
       return;
     }
-    // Removed or absent, the lane has no sign-in on the box now: every ending in this sheet until a new one goes in says so.
-    old.signedOutHere();
+    // Removed, the lane has no sign-in on the box now: every ending in this sheet until a new one goes in says so. Absent
+    // proves nothing, since a sign-in on macOS lives in the keychain and no logout ran, so the lane says, once it is read.
+    if (removed) old.signedOutHere();
+    else old.readTheLane();
     setChecked(null);
     setCheckNotice(null);
     setOnOld([]);

@@ -12,6 +12,9 @@
 // A SIGN-OUT THE LANE DOES NOT SHOW YET. The lane the screen holds is from before it until a read lands, and a read can
 // fail, which is likely just after an answer went missing, so `readLaneAfterSignOut` marks the lane in the store first.
 // Until the store has read it again, no sheet says the lane keeps what it showed.
+//
+// A SIGN-OUT THE BOX ANSWERED. `removed` is known here before any read (`signedOutHere`). `absent` is not: it proves
+// nothing where a sign-in lives in the keychain, so `readTheLane` hands the sentence back to the lane, whose read says.
 import { useRef } from 'react';
 import { ACCOUNT_OP_KILL_GRACE_MS, ACCOUNT_SUB_TIMEOUT_MS, type AccountUsage, type LaneWire } from '../../../shared/api';
 import type { OldCredential } from '../fleet/accountWords';
@@ -32,8 +35,10 @@ export function readLaneAfterSignOut(id: string, answered: boolean, refresh: () 
 export interface OldCredentialReading {
   /** What a sentence written now may say. */
   readonly now: () => OldCredential;
-  /** This sheet's own sign-out has the box's answer: it knows before the lane is read again. */
+  /** This sheet's own sign-out removed the sign-in: it knows before the lane is read again. */
   readonly signedOutHere: () => void;
+  /** This sheet's own sign-out found nothing to remove: what it knew, frozen or not, gives way to the lane. */
+  readonly readTheLane: () => void;
   /** The new credential went in: what the sheet knows of the old one stays as it is now. */
   readonly freeze: () => void;
 }
@@ -57,6 +62,7 @@ export function useOldCredential(
   return {
     now,
     signedOutHere: () => { held.current = 'signed-out'; },
+    readTheLane: () => { held.current = reading(); frozen.current = false; },
     freeze: () => { now(); frozen.current = true; },
   };
 }

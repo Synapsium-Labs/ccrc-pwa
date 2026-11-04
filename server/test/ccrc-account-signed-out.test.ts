@@ -5,7 +5,7 @@
 // reader takes both as they are written here; the wire's own case is `accounts-route-lanes.test.ts`.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { laneStateOf } from '../../shared/accounts.js';
 import { ACCOUNT_OP, BASH, HAVE_FLOCK, laneState, laneStatePath, seedRoster } from './laneStateFixture.js';
@@ -221,6 +221,72 @@ describe('`credential`: measured on the box, on every write that names the roste
     expect(laneState(home, 'lane-b')!['credential']).toBe('none');
   }, 60_000);
 
+  // Only a file confirmed missing is no credential. Each case starts from a measured `none`, so the word has to go.
+  describe('what is not a confirmed missing file says nothing', () => {
+    const withWordNone = (prefix: string): string => {
+      const home = box(prefix);
+      stamp(home, 'lane-s');
+      expect(laneState(home, 'lane-s')!['credential']).toBe('none');
+      return home;
+    };
+    const signInElsewhere = (home: string): string => {
+      const target = join(home, 'kept-elsewhere.json');
+      writeFileSync(target, `${GOOD_SIGN_IN}\n`, { mode: 0o600 });
+      return target;
+    };
+
+    it.each<readonly [string, (home: string, entry: string) => void]>([
+      ['a directory', (_, entry) => mkdirSync(entry)],
+      // A link is no file of the lane's, even to a regular file: `stat` would read this one as `held`.
+      ['a symlink to a regular file', (home, entry) => symlinkSync(signInElsewhere(home), entry)],
+      // `stat` would read this one as a missing file, `none`.
+      ['a dangling symlink', (home, entry) => symlinkSync(join(home, 'nothing-here.json'), entry)],
+    ])('%s at `.credentials.json` records no word', (_, plant) => {
+      const home = withWordNone('ccrc-credential-entry-');
+      plant(home, credFile(home, '.claude-lane-s'));
+      stamp(home, 'lane-s');
+      expect(laneState(home, 'lane-s')).not.toHaveProperty('credential');
+    }, 60_000);
+
+    it.skipIf(process.getuid?.() === 0)('a config dir it cannot read records no word, on a file that is there and on one that is not', () => {
+      const home = withWordNone('ccrc-credential-unreadable-');
+      const dir = join(home, '.claude-lane-s');
+      chmodSync(dir, 0o000);
+      try {
+        stamp(home, 'lane-s');
+        expect(laneState(home, 'lane-s')).not.toHaveProperty('credential');
+      } finally {
+        chmodSync(dir, 0o700);
+      }
+      plantSignIn(home, '.claude-lane-s');
+      stamp(home, 'lane-s');
+      expect(laneState(home, 'lane-s')!['credential']).toBe('held');
+      chmodSync(dir, 0o000);
+      try {
+        stamp(home, 'lane-s');
+        expect(laneState(home, 'lane-s')).not.toHaveProperty('credential');
+      } finally {
+        chmodSync(dir, 0o700);
+      }
+    }, 60_000);
+
+    it('a config dir that is not a directory records no word: any stat failure but a missing file', () => {
+      const home = withWordNone('ccrc-credential-not-a-dir-');
+      const dir = join(home, '.claude-lane-s');
+      rmSync(dir, { recursive: true });
+      writeFileSync(dir, '');
+      stamp(home, 'lane-s');
+      expect(laneState(home, 'lane-s')).not.toHaveProperty('credential');
+    }, 60_000);
+
+    it('the update\'s sweep takes the word back the same way', () => {
+      const home = withWordNone('ccrc-credential-entry-sweep-');
+      mkdirSync(credFile(home, '.claude-lane-s'));
+      expect(laneOp(home, ['--id', 'lane-s', '--mode', 'credential', '--file', rosterFile(home)]).code).toBe(0);
+      expect(laneState(home, 'lane-s')).not.toHaveProperty('credential');
+    }, 60_000);
+  });
+
   it('a lane whose credential ccrc does not read, a lane off the roster and a roster it cannot read record no word', () => {
     const home = box('ccrc-credential-elsewhere-');
     seedRoster(home, ELSEWHERE_ROSTER);
@@ -276,11 +342,23 @@ describe('`credential`: measured on the box, on every write that names the roste
     expect(laneState(home, 'lane-s')).toBeNull();
   }, 60_000);
 
-  it('every account verb names the roster: a paste measures the new token', () => {
-    const home = box('ccrc-credential-paste-');
+  it('an account verb names the roster: `disable` measures the lane', () => {
+    const home = box('ccrc-credential-verb-');
     plantToken(home, 'lane-b', 'export CLAUDE_CODE_OAUTH_TOKEN=fixture-not-a-token\n');
     const r = ccrcAuth(home, ['account', 'disable', '--id', 'lane-b'], '', host);
     expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(laneState(home, 'lane-b')!['credential']).toBe('held');
+  }, 60_000);
+
+  // The paste's first lane-state write comes before the secret and measures `none` here, so only the write after it can
+  // say `held`.
+  it('a paste onto a lane whose secret file is missing measures the new token: `held`', () => {
+    const home = box('ccrc-credential-paste-');
+    stamp(home, 'lane-b');
+    expect(laneState(home, 'lane-b')!['credential']).toBe('none');
+    const r = ccrcAuth(home, ['account', 'credential', '--id', 'lane-b', '--credential', '-'], `${GOOD_TOKEN}\n`, host);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(readFileSync(tokenFile(home, 'lane-b'), 'utf8')).toContain(GOOD_TOKEN);
     expect(laneState(home, 'lane-b')!['credential']).toBe('held');
   }, 60_000);
 });

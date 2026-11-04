@@ -203,9 +203,10 @@ export function isPastAdding(lane: LaneWire | undefined, usage: Pick<AccountUsag
  * danger confirm and revoke item; the paste sheet's intro, refusals, restart lead and revoke item). The box reports both
  * facts on the lane (D-7992): a sign-out it ran, and whether the lane holds a credential, measured there.
  *  - `signed-out`: the lane says so (`signedOutAt`, `no-credential`, or `credential: 'none'`), on any device and after a
- *    reload. The sheet that just ran the sign-out knows before the lane is read again (`useOldCredential`). `none` stands
- *    ahead of a passing check: the box writes it only for a file that is the lane's credential (`laneCredentialOf`), so a
- *    lane whose credential ccrc does not read never carries it, and a logout outside ccrc leaves a check behind.
+ *    reload. A sheet whose sign-out just removed the sign-in knows before the lane is read again (`useOldCredential`).
+ *    `none` stands ahead of a passing check: the box writes it only for a file that is the lane's credential
+ *    (`laneCredentialOf`), so a lane whose credential ccrc does not read never carries it, and a logout outside ccrc
+ *    leaves a check behind.
  *  - `unsure`, whose words are true whether or not the lane holds a credential, on two kinds of lane whose measure cannot
  *    be trusted. A lane a sign-out may have changed, not read since (`unread`, the store's `lanesUnread`): it still shows
  *    what it showed before. And a lane the provider refused (`usage.authDead`, or a check of `auth-dead`): the 401 marker

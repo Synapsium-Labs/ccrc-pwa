@@ -1333,7 +1333,9 @@ const signInLivesInItsFile = () => !(process.env.OSTYPE ?? process.platform).sta
  *  macOS), which leaves the lane with no word, so a screen falls back on what the lane shows. It stats and never reads
  *  the credential, and it always looks: a passing check is no measure of the file, which a logout outside ccrc removes
  *  without a word to the lane. A lane that names a secrets file holds that file. A sign-in lane holds its
- *  `.credentials.json`, and a sign-in lane is what `credential --sign-out` says it is: a generated Anthropic lane. Any
+ *  `.credentials.json`, and a sign-in lane is what `credential --sign-out` says it is: a generated Anthropic lane. Only a
+ *  file confirmed missing is `none`: an entry there that is no regular file (a link, a directory) and any stat failure but
+ *  ENOENT (a config dir it cannot read) measure nothing, so they answer `null`, and `lstat` keeps a link from passing. Any
  *  other lane with no secrets file answers `null`, whatever provider it names: an upstream lane can run on the token its
  *  launcher sources (`_ah_subjects`) and a declared launcher keeps its credential where ccrc does not read it, so no file
  *  of theirs says nothing, and `none` would read as signed out on a working lane. Every `lane-state` write that names the
@@ -1348,10 +1350,10 @@ function laneCredentialOf(home, rosterFile, id) {
   const suffix = acct['configDirSuffix'];
   if (e['kind'] !== 'generated' || laneProviderOf(e) !== 'anthropic') return null;
   if (typeof suffix !== 'string' || suffix === '' || suffix !== basename(suffix)) return null;
-  let inFile = false;
-  try { inFile = lstatSync(join(home, suffix, '.credentials.json')).isFile(); } catch { inFile = false; }
-  if (inFile) return 'held';
-  return signInLivesInItsFile() ? 'none' : null;
+  let st = null;
+  try { st = lstatSync(join(home, suffix, '.credentials.json')); } catch (e) { if (e?.code !== 'ENOENT') return null; }
+  if (st === null) return signInLivesInItsFile() ? 'none' : null;
+  return st.isFile() ? 'held' : null;
 }
 
 /** THE WRITE ITSELF, shared by the `lane-state` op and the `seed` op's record of `seedVerifiedAt` (accounts plan Task
