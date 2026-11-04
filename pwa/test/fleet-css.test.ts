@@ -1542,3 +1542,16 @@ describe('delegation rows read tokens only (delegation broker wave 4)', () => {
     expect(declValue(ruleFor('.proj-work-chip'), 'border')).toMatch(/currentColor/);
   });
 });
+
+// Delegation visibility (the plan's Global Constraints, "CSS"): the two new list surfaces take the floor `.proj-card`
+// takes. Each is an item of a grid or flex container whose automatic minimum is its min-content width, and its rows'
+// words are `white-space: nowrap`, so without `min-width: 0` one long row widens the track and scrolls the pane.
+describe('the fleet foot\'s region and the header\'s entry list shrink below their rows (delegation visibility)', () => {
+  const chatCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'session', 'chat.css'), 'utf8');
+
+  it('VIS-CSS2: the header\'s entry list is a full-width flex item of .chat-facts with a min-width of 0', () => {
+    const rule = ruleIn(chatCss, '.chat-facts .sess-entries');
+    expect(declValue(rule, 'flex-basis')).toBe('100%');
+    expect(declValue(rule, 'min-width')).toBe('0');
+  });
+});

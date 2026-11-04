@@ -20,6 +20,7 @@ import { navigate } from '../lib/router';
 import { sessionPath } from '../lib/routes';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { SessionMeta } from '../fleet/SessionMeta';
+import { WorkLine } from '../fleet/WorkLine';
 import { cardFacts, contextFact, COORDINATOR_WORD, heldWords, type SessionFactSet } from '../fleet/sessionFacts';
 import { programmeWave } from '../fleet/runWords';
 import { coordinationLine, type Coordination } from '../fleet/fleetTree';
@@ -81,6 +82,9 @@ export function SessionDetails({ facts, coordination }: {
   const [open, setOpen] = useState(false);
   const [subagentsOpen, setSubagentsOpen] = useState(false);
   const subagentsId = useId();
+  const [delegatedOpen, setDelegatedOpen] = useState(false);
+  // Derived from the subagent list's id, never a `useId` of its own, so the header calls no hook it did not call.
+  const delegatedId = `${subagentsId}-entries`;
   const detailsId = useId();
   const s = facts.session;
   const ctx = contextFact(facts);
@@ -105,6 +109,9 @@ export function SessionDetails({ facts, coordination }: {
         subagentsOpen={subagentsOpen}
         subagentsId={subagentsId}
         onToggleSubagents={() => setSubagentsOpen((v) => !v)}
+        delegatedOpen={delegatedOpen}
+        delegatedId={delegatedId}
+        onToggleDelegated={() => setDelegatedOpen((v) => !v)}
       />
       {/* The subagent disclosure's content: name and elapsed time, nothing else (the hooks hand over no more). */}
       {subagentsOpen && subagents.length > 0 && (
@@ -116,6 +123,14 @@ export function SessionDetails({ facts, coordination }: {
             </li>
           ))}
         </ul>
+      )}
+      {/* The recorded entries this session started, each in its row's words, under the description the words module
+          gives (`facts.delegated.note`). Drawn only while the disclosure is open. */}
+      {delegatedOpen && facts.delegated !== null && (
+        <div id={delegatedId} className="sess-entries">
+          <span className="chat-fact sess-entries-note">{facts.delegated.note}</span>
+          {facts.delegated.rows.map((r) => <WorkLine key={r.key} parts={r.parts} title={r.title} />)}
+        </div>
       )}
     </div>
   );

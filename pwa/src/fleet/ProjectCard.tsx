@@ -44,6 +44,7 @@ import { SessionLine, WorksOnChip } from './SessionLine';
 import { sameCardProps } from './lineProps';
 import { OPEN_RUNS } from './openers';
 import { sessionLabel } from './sessionLabel';
+import { WorkLine } from './WorkLine';
 import { GROUP_WORDS, activityLine, creatorChip, inferredChip, unownedLine, worktreeLine } from './delegationWords';
 import { actionDoor } from '../command/door';
 import './fleet.css';
@@ -406,12 +407,7 @@ function ProjectCardView({
   // (`trayOf`), or, for a head outside a box, as its own line (`summaryLine`).
   /** A delegation row's words, each a cell of one line (delegation broker wave 4). `delegationWords.ts` spells them. */
   const workLine = (parts: readonly string[], title: string, tail: ReactNode = null): ReactNode => (
-    <div className="proj-work" title={title}>
-      <span className="proj-work-parts">
-        {parts.map((p, i) => <span key={i} className="proj-work-part">{p}</span>)}
-      </span>
-      {tail}
-    </div>
+    <WorkLine parts={parts} title={title}>{tail}</WorkLine>
   );
 
   const rowBody = (row: FleetRow): ReactNode => {

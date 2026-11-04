@@ -4,6 +4,7 @@
 // rendered card's facts are all in the rendered header, in both skins.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { SessionLine } from '../src/fleet/SessionLine';
@@ -15,6 +16,7 @@ import {
 import type { ChildRunContext } from '../src/fleet/runWords';
 import { setSkin } from '../src/lib/skin';
 import { activity } from './delegationFixture';
+import { ENTRIES_NOTE } from '../src/fleet/delegationWords';
 
 afterEach(cleanup);
 
@@ -365,11 +367,77 @@ describe('the R9 chip: a worker\'s attached delegation entries (delegation broke
     expect(cardFacts(sessionFacts({ session: worker, now: NOW, delegated: [activity({ liveness: 'stale' })] })).delegated?.text).toBe('1 delegated');
   });
 
-  it('W4-U34: a dead worker carries no chip', () => {
+  it('W4-U34 (D-7781): a dead worker keeps its chip, every liveness counted, on the card and in the header', () => {
     const dead = s({ ...worker, status: 'dead', bucket: 'dead' });
-    const f = sessionFacts({ session: dead, now: NOW, delegated: two });
-    expect(cardFacts(f).delegated).toBeNull();
-    expect(headerFacts(f).some((h) => h.key === 'delegated')).toBe(false);
+    const entries = [...two, activity({ activityId: 'a3', parentId: worker.id, liveness: 'stale' })];
+    const f = sessionFacts({ session: dead, now: NOW, delegated: entries });
+    expect(cardFacts(f).delegated?.text).toBe('3 delegated');
+    expect(headerFacts(f).find((h) => h.key === 'delegated')?.text).toBe('3 delegated');
+    const { container } = render(<SessionLine session={dead} onOpen={() => {}} onActions={() => {}} now={NOW} delegated={entries} />);
+    expect(container.querySelector('.sess-meta .sess-meta-chip')?.textContent).toBe('3 delegated');
+    // A row handed no attached entries has no chip.
+    expect(cardFacts(sessionFacts({ session: worker, now: NOW })).delegated).toBeNull();
+    expect(cardFacts(sessionFacts({ session: worker, now: NOW, delegated: [] })).delegated).toBeNull();
+  });
+
+  it('VIS-C1 (D-7782): the header holds the card\'s count of attached entries though its own count is larger', () => {
+    const dead = s({ ...worker, status: 'dead', bucket: 'dead' });
+    const attached = activity({ activityId: 'a1', parentId: worker.id, placement: 'chip', liveness: 'stale' });
+    const placed = [activity({ activityId: 'a2', parentId: worker.id, placement: 'row' }),
+      activity({ activityId: 'a3', parentId: worker.id, placement: 'row', liveness: 'unmeasured' })];
+    const card = cardFacts(sessionFacts({ session: dead, now: NOW, delegated: [attached] }));
+    const header = headerFacts(sessionFacts({ session: dead, now: NOW, delegated: [attached, ...placed] }));
+    expect(card.delegated).toMatchObject({ key: 'delegated', text: '1 delegated', count: 1 });
+    expect(header.find((h) => h.key === 'delegated')).toMatchObject({ text: '3 delegated', count: 3 });
+    expect(cardWithinHeader(card, header)).toEqual([]);
+    // It still catches a card fact the header lacks, or holds with a smaller count, and every other key keeps its prefix rule.
+    expect(cardWithinHeader(card, header.filter((h) => h.key !== 'delegated'))).toEqual([card.delegated]);
+    const wide = cardFacts(sessionFacts({ session: dead, now: NOW, delegated: [attached, ...placed] }));
+    const narrow = headerFacts(sessionFacts({ session: dead, now: NOW, delegated: [attached] }));
+    expect(cardWithinHeader(wide, narrow)).toEqual([wide.delegated]);
+    expect(cardWithinHeader(card, header.filter((h) => h.key !== 'status'))).toEqual([card.status]);
+    // A `delegated` fact with no count holds nothing, on either side (VIS-M13): the count is the comparison.
+    const countless = { ...card, delegated: { key: card.delegated!.key, text: card.delegated!.text } };
+    expect(cardWithinHeader(countless, header)).toEqual([countless.delegated]);
+    const headerCountless = header.map((h) => (h.key === 'delegated' ? { key: h.key, text: h.text } : h));
+    expect(cardWithinHeader(card, headerCountless)).toEqual([card.delegated]);
+  });
+
+  it('VIS-H1: the header lists every entry the session started, once each, behind a disclosure that does not navigate', async () => {
+    const entries = [
+      activity({ activityId: 'a1', parentId: worker.id, placement: 'chip', displayName: 'map the tree' }),
+      activity({ activityId: 'a2', parentId: worker.id, placement: 'row', displayName: 'read the plan', liveness: 'stale',
+        openedAt: '2026-10-26T10:01:00.000Z' }),
+      activity({ activityId: 'a3', parentId: worker.id, placement: 'row', displayName: 'check the build', liveness: 'unmeasured',
+        openedAt: '2026-10-26T10:02:00.000Z' }),
+    ];
+    const f = sessionFacts({ session: worker, now: NOW, childRun: child(RUN), delegated: entries });
+    render(<SessionHeaderHost {...headerProps({ session: worker, status: worker.status, facts: f })} />);
+    const details = screen.queryByRole('button', { name: /details/i });
+    if (details !== null && details.getAttribute('aria-expanded') === 'false') fireEvent.click(details);
+    const door = screen.getByRole('button', { name: '3 delegated' });
+    expect(door.getAttribute('aria-expanded')).toBe('false');
+    expect(door.hasAttribute('aria-controls')).toBe(false);
+    expect(document.body.textContent).not.toContain(ENTRIES_NOTE);
+    const path = location.pathname;
+    // Keyboard: Enter on the focused button opens it.
+    door.focus();
+    await userEvent.keyboard('{Enter}');
+    expect(door.getAttribute('aria-expanded')).toBe('true');
+    const list = document.getElementById(door.getAttribute('aria-controls')!);
+    if (list === null) throw new Error('aria-controls names no element');
+    expect(list.textContent).toContain(ENTRIES_NOTE);
+    const rows = [...list.querySelectorAll('.proj-work')].map((r) => [...r.querySelectorAll('.proj-work-part')].map((p) => p.textContent));
+    expect(rows).toEqual([
+      ['agent', 'map the tree', 'not confirmed'], ['agent', 'read the plan', 'stop not seen'], ['agent', 'check the build', 'unmeasured'],
+    ]);
+    expect(location.pathname).toBe(path);
+    // Touch: a tap closes it, and the list and its aria-controls go together.
+    fireEvent.click(door);
+    expect(door.getAttribute('aria-expanded')).toBe('false');
+    expect(door.hasAttribute('aria-controls')).toBe(false);
+    expect(document.body.textContent).not.toContain(ENTRIES_NOTE);
+    expect(location.pathname).toBe(path);
   });
 
   it('W4-U35: the row draws the chip when handed attached entries, and is byte-identical without it', () => {

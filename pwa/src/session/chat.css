@@ -99,6 +99,10 @@
 .chat-facts .sess-meta > *::before { content: none; }
 .chat-fact { font-family: var(--family-mono); overflow-wrap: break-word; min-width: 0; }
 .chat-facts .sess-subagent-list { flex-basis: 100%; }
+/* The header's list of recorded entries: a full-width flex item of .chat-facts, whose automatic minimum would be its
+   min-content width. Its rows' words are white-space: nowrap (.proj-work-parts), so without min-width: 0 one long
+   row would push the header past the screen's edge; with it, the row ends in an ellipsis. */
+.chat-facts .sess-entries { flex-basis: 100%; min-width: 0; }
 /* D-5546, phone: the keycaps took ~170 of 360px beside the title, leaving the
    name, the coordination row and the meta row a 140px column that ellipsised
    the name and broke every clause. Below 900 the back button and the keycaps

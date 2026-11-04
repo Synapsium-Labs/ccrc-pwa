@@ -245,7 +245,9 @@ const CONTROLS: Record<string, string> = {
   'fleet/ProjectCardHead.tsx <button> proj-card-pool': "TOKEN. The card's pool tag.",
   'fleet/ProjectCardHead.tsx <button> proj-card-toggle': 'TOKEN. The card head — one of the six floors this wave converted from a literal.',
   'fleet/SessionLine.tsx <button> sess-actions': 'TOKEN, and OVERLAY below.',
-  'fleet/SessionMeta.tsx <button> sess-subagents': 'TOKEN. The subagent toggle, a real un-nested button.',
+  'fleet/SessionMeta.tsx <button> sess-subagents':
+    'TOKEN. The subagent toggle and, beside it in the header, the delegated-entries toggle (delegation visibility): '
+    + 'real un-nested buttons in one shape.',
   'screens/AccountsScreen.tsx <button> accounts-session': 'TOKEN. A session row on the accounts screen.',
   'screens/AccountsScreen.tsx <button> proj-card-pool acct-pool-chip': "TOKEN. The card's pool tag, reused as a chip.",
   'screens/FleetScreen.tsx <button> fab': 'TOKEN by VALUE, not by name — see FLOOR_BY_VALUE.',
