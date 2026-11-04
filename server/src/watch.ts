@@ -661,7 +661,7 @@ function failureDetail(res: CcdResult): string {
 
 export class FleetWatcher {
   private timer: NodeJS.Timeout | null = null;
-  private lastJson: string | null = null;
+  private readonly frameLatch = changeLatch<string>();   // the `fleet` frame's byte-equality guard (was `lastJson`)
   /** The fleet the last `fleet` broadcast carried — `lastJson`, unserialised. */
   private lastFleet: FleetSession[] | null = null;
   /** D-6436: whether the latest tick listed the registry, and when its read began; written by `tick()` alone. */
@@ -2730,8 +2730,7 @@ export class FleetWatcher {
       // the lanes, the state cache and the runs frame all wait behind it.
       this.registryTick = { listed: true, at: listedAt };               // D-6436: `lastFleet` reflects this listing either way
       const json = JSON.stringify(sessions);
-      if (json !== this.lastJson) {
-        this.lastJson = json;
+      if (this.frameLatch.changed(json)) {
         this.lastFleet = sessions;
         this.bus.emit('fleet', sessions);
       }
