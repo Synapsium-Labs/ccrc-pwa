@@ -8,7 +8,8 @@ import { frameCsp, mermaidGate, type RenderInput } from '@synapsium-labs/docserv
 import type { DocFrame, HostAdapters, HostLink, mountDocFrame, HiddenChar } from '@synapsium-labs/docserver/host';
 import { READER_STORE_PREFIX } from '../src/lib/readerLimits';
 import type { EnumerableStoragePort } from '../src/lib/storage';
-import { readerDocKey, readerWatchdogMs, type ReaderLink } from '../src/docs/reader/policy';
+import { readerDocKey, readerMountPlan, readerWatchdogMs, type ReaderLink } from '../src/docs/reader/policy';
+import { READER_LAB_DRAW_WATCHDOG_MS } from '../src/lib/readerLimits';
 import { loadReaderAssets } from '../src/docs/reader/assets';
 import { mountReader, type ReaderMountInput } from '../src/docs/reader/bridge';
 
@@ -389,5 +390,45 @@ describe('the installed library\'s mount, for real (jsdom)', () => {
     expect(store.touched.length).toBeGreaterThan(0);
     for (const k of store.touched) expect(k.startsWith(READER_STORE_PREFIX)).toBe(true);
     m.destroy();
+  });
+});
+
+// The reader lab's mount profile (the reader lab plan of 2026-11-03, Task 7, refinement (k); M10.15): `lab-draw` draws
+// Mermaid on open, waits the lab's watchdog and is handed no storage port; no profile is the Docs reader, unchanged.
+describe('the reader lab profile (reader lab plan, Task 7)', () => {
+  const inputOf = (profile?: 'lab-draw'): ReaderMountInput => ({
+    document: docOf({ scan: { mermaid: mermaidCounts(1, 10, 10) } } as Partial<RenderInput>),
+    bytes: 100, docKey: null, title: 'lab.md', prefs: { theme: 'auto' },
+    onLink: vi.fn(), onHash: vi.fn(), copy: vi.fn(), onReady: vi.fn(), onFallback: vi.fn(),
+    ...(profile === undefined ? {} : { profile }),
+  });
+  const adaptersFor = async (input: ReaderMountInput): Promise<HostAdapters> => {
+    const mount = vi.fn((_el: HTMLElement, _o: { document: RenderInput; adapters: HostAdapters }) =>
+      ({ update: vi.fn(), setPrefs: vi.fn(), destroy: vi.fn() }) as unknown as DocFrame);
+    await mountReader(document.createElement('div'), input, {
+      mount: mount as unknown as typeof mountDocFrame, store: () => fakeStore(),
+      assets: () => Promise.resolve(STUB_ASSETS), mermaid: () => Promise.resolve('MERMAID'),
+    });
+    return mount.mock.calls[0]![1].adapters;
+  };
+
+  it('lab-draw draws Mermaid on open, waits READER_LAB_DRAW_WATCHDOG_MS, and is handed no storage port', async () => {
+    expect(READER_LAB_DRAW_WATCHDOG_MS).toBe(60000);
+    const a = await adaptersFor(inputOf('lab-draw'));
+    expect(a.mermaidDraw).toBe('auto');
+    expect(a.watchdogMs).toBe(READER_LAB_DRAW_WATCHDOG_MS);
+    expect(Object.keys(a)).not.toContain('store');
+  });
+
+  it('no profile is the Docs reader: Mermaid on request, the reader watchdog, the storage port', async () => {
+    const a = await adaptersFor(inputOf());
+    expect(a.mermaidDraw).toBe('on-request');
+    expect(a.watchdogMs).toBe(readerWatchdogMs(100));
+    expect(Object.keys(a)).toContain('store');
+  });
+
+  it('readerMountPlan is the one decision, and only lab-draw maps to drawing on open', () => {
+    expect(readerMountPlan('lab-draw', 100)).toEqual({ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false });
+    expect(readerMountPlan(undefined, 100)).toEqual({ draw: 'on-request', watchdogMs: readerWatchdogMs(100), store: true });
   });
 });

@@ -11,7 +11,7 @@
 // Each `null` here has one meaning, stated at the function.
 import { DOCS_PARSE_BUDGET_MS } from '../../lib/markdownLimits';
 import { utf8ByteLength } from '../../lib/markdownGuard';
-import { READER_COPY_WRITE_MAX_BYTES, READER_DOC_KEY_MAX_UNITS } from '../../lib/readerLimits';
+import { READER_COPY_WRITE_MAX_BYTES, READER_DOC_KEY_MAX_UNITS, READER_LAB_DRAW_WATCHDOG_MS } from '../../lib/readerLimits';
 import { docLinkTarget } from '../docsLinks';
 import type { DocLinkContextValue } from '../DocLink';
 import type { ReaderHiddenChar } from './readerText';
@@ -133,6 +133,27 @@ export function readerPrefsOf(
  *  Mermaid (the W8a plan's refinement (c): `ready` does not wait for it in on-request mode). */
 export function readerWatchdogMs(bytes: number): number {
   return DOCS_PARSE_BUDGET_MS(bytes);
+}
+
+/** Who mounts (the reader lab plan, refinement (k)): no profile is the Docs reader; `lab-draw` is the reader lab's timed
+ *  mount, and only the lab passes it. */
+export type ReaderMountProfile = 'lab-draw';
+
+/** How one mount draws, waits and stores. */
+export interface ReaderMountPlan {
+  readonly draw: 'auto' | 'on-request';
+  readonly watchdogMs: number;
+  /** Whether the mount is handed the reader's storage port. */
+  readonly store: boolean;
+}
+
+/** The one decision: the Docs reader draws Mermaid on request, waits `readerWatchdogMs(bytes)` and keeps reader state;
+ *  the reader lab's `lab-draw` draws on open, waits READER_LAB_DRAW_WATCHDOG_MS and keeps none, so the lab stores
+ *  nothing. */
+export function readerMountPlan(profile: ReaderMountProfile | undefined, bytes: number): ReaderMountPlan {
+  return profile === 'lab-draw'
+    ? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false }
+    : { draw: 'on-request', watchdogMs: readerWatchdogMs(bytes), store: true };
 }
 
 /** Where one body (one `bodyKey`) is. `fallback` and `plain` are terminal for the key: the body stays there until its
