@@ -58,12 +58,13 @@ export const MD_KEYSTROKE_MAX_CHARS = 64;
 // HIGHLIGHT_PAGE_MAX_TIMEOUTS, whatever shape a block takes.
 
 /** MEASURED (W5h-b, R19 of 2026-11-03). The time one block may take, from post to answer; its timer starts only after
- *  the worker's ready handshake. An overrun terminates the highlight worker and leaves only that block plain. Basis:
- *  the slowest of 41 871 real blocks took 143.7 ms warm and each grammar's largest at most 96.1 ms cold, so no real
- *  block cold passes about 240 ms (about 280 with the xml and css that typescript and javascript compile on first
- *  use, 515 on the every-grammar reading); 750 is about three times 240, for a slower or busier device and the main
- *  thread's latency, and under the operator's 2 s bound for one block. Every crafted shape that grows ended here,
- *  with the main thread's longest frame gap at most 25 ms. */
+ *  the worker's ready handshake. An overrun terminates the highlight worker and leaves only that block plain. Basis,
+ *  R19's item 1: the slowest of 41 871 real blocks took 143.7 ms warm and each grammar's largest at most 96.1 ms cold,
+ *  and the xml and css that typescript and javascript compile on first use took at most 14.3 and 26.4 ms (their
+ *  largest blocks, cold), so no real block cold passes 96.1 + 14.3 + 26.4 + 143.7 = 280.5 ms (515.5 on the
+ *  every-grammar reading); 750 is over two and a half times 280.5, for a slower or busier device and the main thread's
+ *  latency, and under the operator's 2 s bound for one block. Every crafted shape that grows ended here, with the main
+ *  thread's longest frame gap at most 25 ms. */
 export const HIGHLIGHT_BLOCK_DEADLINE_MS = 750;
 /** MEASURED (W5h-b, R19 of 2026-11-03). From spawning a highlight worker to its `{ready: true}`; past it the worker is
  *  terminated and the jobs waiting for it answer `worker-failed`, and a second failure in a row is sticky until a

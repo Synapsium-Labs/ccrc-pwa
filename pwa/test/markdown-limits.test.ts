@@ -69,10 +69,12 @@ describe('markdownLimits: the values of section 4.9', () => {
   });
 
   // Section 7.8's retirement gate, as R19 measured it on the operator's phone on 2026-11-03: a real block, cold in its
-  // grammar, takes at most the slowest cold block's 96.1 ms plus the slowest warm block's 143.7 ms; the operator's bound
-  // for one block's colours is 2 000 ms (the W5h-a plan's approval, 2026-11-02). The deadline sits between the two.
+  // grammar, takes at most the slowest cold block's 96.1 ms, plus the xml and css compiles typescript and javascript run
+  // on first use (at most 14.3 and 26.4 ms, those grammars' largest blocks cold), plus the slowest warm block's 143.7 ms:
+  // 280.5 ms, all R19's item 1. The operator's bound for one block's colours is 2 000 ms (the W5h-a plan's approval,
+  // 2026-11-02). The deadline sits between the two.
   it('M4.H22: the block deadline sits between the slowest real block, cold, and the operator\'s per-block bound', () => {
-    expect(limits.HIGHLIGHT_BLOCK_DEADLINE_MS).toBeGreaterThan(96.1 + 143.7);
+    expect(limits.HIGHLIGHT_BLOCK_DEADLINE_MS).toBeGreaterThan(96.1 + 14.3 + 26.4 + 143.7);
     expect(limits.HIGHLIGHT_BLOCK_DEADLINE_MS).toBeLessThanOrEqual(2000);
   });
 
