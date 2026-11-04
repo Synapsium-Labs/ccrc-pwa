@@ -24,6 +24,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
 | 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; fix-round handoff `2f6caa48e` accepted by the server 2026-10-20 07:25 UTC, NEW review 685 dispatched 07:42 UTC; PR conflicts with main on the generated stamp; review 685 closed done 2026-10-20 13:56 UTC with its report fingerprint accepted, no critical finding; run 308 returned to working 13:59 UTC for fix round 2, its last phase waiting on another run's claims on `ccd/ccd` and README; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED; MERGED 2026-10-21 03:54 UTC (`d8cd4765`, #435) after reviews 714 and 729 and fix round 3; run 308 closed; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 5's week runs 2026-10-21 05:38 to 2026-10-28 05:38 UTC; read 2026-10-28: 0 reap-class, `not-triggered`, the variable stays; week 2 read 2026-11-04: 0 reap-class, `not-triggered` in the part read, its first 2 h 9 m unmeasured (the fleet moved boxes), the variable stays, direct figure 0 in both weeks but partial, reported under spec §9; weekly reading continues, next due 2026-11-11 05:38 UTC; the scope sweep is no longer shadowed: `scope-sweep-live` exists since 2026-10-26 23:38 UTC, armed by the operator (confirmed 2026-10-28) |
+| 4c | 6, first part | the direct-kill scanner reads the notifications it missed: queued-command attachments, queue enqueue rows, and summary-only notices that name no low memory | the instrument only (`deploy/measure-continuity.py`, in the release) | 4b and its two weekly readings | — | planned 2026-11-04 on the operator's ruling (`docs/superpowers/plans/2026-11-04-session-continuity-wave4c-direct-kill-scanner.md`, D-7960 to D-7963; Decisions, 2026-11-04 10:22), awaiting the operator's approval |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | deferred by the operator 2026-10-20: the programme stops after 4b ships and its week is measured |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -1036,6 +1037,28 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     for the operator's ruling on retirement or redesign under §9; this coordinator changes nothing.
   - **Next.** The rule covers any later week, so the observation continues weekly: the week since
     `2026-11-04 05:38:00` UTC, until `2026-11-11 05:38:00` UTC, due 2026-11-11 05:38 UTC; owner: this coordinator.
+- **2026-11-04 10:22 UTC - the operator rules on spec §9's two-week rule: redesign the direct-kill scanner. Wave 4c
+  is planned.**
+  - **The ruling.** Asked through item 27 whether to keep, redesign or retire the direct pressure-kill measure, the
+    operator chose to redesign the scanner so that it reads the notifications it now misses. This coordinator had
+    recommended keeping it. The kill rule, the B + 2 comparison and the target of 0 are not part of the ruling and
+    stay as they are.
+  - **What the scanner misses, measured.** Read-only on the fleet box over both post-deploy weeks (2026-10-21 05:38 to
+    2026-11-04 05:38 UTC), by reusing the installed scanner's own functions and printing counts only:
+    - notifications delivered mid-turn as queued-command attachment rows, about 1,100 to 1,450 a week, never read;
+    - queue enqueue rows carrying the same notices again, about 4,800 to 5,000 a week, never read;
+    - summary-only notices (Claude Code's commit, push and background security-review notices), 43 in the two
+      weeks, read as unmeasured: they are every unmeasured notification of week 2;
+    - subagent transcripts: 2,682 files, with no notification in the window.
+    No source held a pressure kill in either week. Re-read today, week 1 shows 9 unmeasured notifications where its
+    reading showed 21; that reading ran on the previous fleet box, whose transcripts are not all here.
+  - **The plan:** `docs/superpowers/plans/2026-11-04-session-continuity-wave4c-direct-kill-scanner.md`. The scanner
+    reads the two queued sources through its existing classification and counts each notification once. A
+    summary-only notice that names no low memory becomes a known non-event, and subagent transcripts stay a declared
+    limit. Its decisions are D-7960 to D-7963, allocated at 10:17 UTC and defined in the plan. It waits for the
+    operator's approval before a run is opened and dispatched.
+  - **The weekly reading continues** under the current scanner until 4c is deployed. The next one is due
+    2026-11-11 05:38 UTC.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -1103,8 +1126,9 @@ recorded below.
 (v0.0.508, 2026-10-21; Decisions, 05:43). Task 5's first week is read: 0 reap-class, `not-triggered`, so the
 variable stays (Decisions, 2026-10-28 05:51). Its second week is read too: 0 reap-class in the part read, its first
 2 h 9 m unmeasured, and the two-week direct-pressure figure reported for the operator's ruling under spec §9
-(Decisions, 2026-11-04 05:52). What is owed now: the weekly reading against baseline B, next due 2026-11-11 05:38 UTC,
-owned by this coordinator. `$REG/scope-sweep-live`
+(Decisions, 2026-11-04 05:52). The operator then ruled to redesign the direct-kill scanner, and wave 4c is planned for it
+(Decisions, 2026-11-04 10:22), awaiting the operator's approval. What is owed now: the weekly reading against baseline B,
+next due 2026-11-11 05:38 UTC, owned by this coordinator. `$REG/scope-sweep-live`
 exists since 2026-10-26 23:38 UTC: the operator armed it, and confirmed so on 2026-10-28 (Decisions, 08:00). Wave 5 stays deferred until the operator lifts the stop. Its run is open, planned, and has no worker.
 The record below is the wave's history.
 
