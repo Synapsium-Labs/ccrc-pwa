@@ -22,17 +22,17 @@ const fleetIoBody = (): string => {
 };
 
 /** Each member's name, in declaration order: a line indented two spaces that opens a call signature. */
-const members = (body: string): string[] => [...body.matchAll(/^ {2}(\w+)\(/gm)].map((m) => m[1]!);
+const members = (body: string): string[] => [...body.matchAll(/^ {2}(\w+)\??\(/gm)].map((m) => m[1]!);
 
 /** Each member's docstring: the `/** … *\/` block that ends right above its signature, whitespace only between. */
 const docs = (body: string): Map<string, string> =>
-  new Map([...body.matchAll(/\/\*\*((?:(?!\*\/)[\s\S])*)\*\/[ \t]*\n {2}(\w+)\(/g)].map((m) => [m[2]!, m[1]!]));
+  new Map([...body.matchAll(/\/\*\*((?:(?!\*\/)[\s\S])*)\*\/[ \t]*\n {2}(\w+)\??\(/g)].map((m) => [m[2]!, m[1]!]));
 
 describe('FleetIO — every member states its failure contract (D-5969)', () => {
   it('reads the members it is meant to read', () => {
     expect(members(fleetIoBody())).toEqual([
       'readFileMeasured', 'readFile', 'readFileFromMeasured', 'readFileFrom', 'readFileFromBytesMeasured',
-      'readFileB64Measured', 'readdirMeasured', 'readdir', 'statMeasured', 'stat', 'lstatMeasured', 'realpath',
+      'readFileB64Measured', 'readdirMeasured', 'readdir', 'readdirWithTimesMeasured', 'statMeasured', 'stat', 'lstatMeasured', 'realpath',
       'writeFileB64', 'tailFile', 'statfsMeasured', 'pressureMeasured',
       // The backup state files (D-7858).
       'backupMeasured',

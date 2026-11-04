@@ -1335,7 +1335,15 @@ function rowKeys(names: readonly string[], ids: readonly string[], times?: Reado
 
 export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig, opts?: RegistryReadOpts): Promise<RegistryRead> {
   const now = Date.now();
-  const names = await io.readdir(cfg.registryDir);
+  // The cache arm lists with modification times when the io can (console speed S1): a non-ok answer is the same
+  // `listed: false` a null listing is. The no-opts path keeps its one plain `readdir`, request for request.
+  let times = opts?.times;
+  let names: string[] | null;
+  if (opts?.cache !== undefined && io.readdirWithTimesMeasured !== undefined) {
+    const l = await io.readdirWithTimesMeasured(cfg.registryDir);
+    names = l.ok ? [...l.entries] : null;
+    if (l.ok && l.times !== undefined) times = l.times;
+  } else names = await io.readdir(cfg.registryDir);
   noteWholeFleetListing(names !== null, now);
   if (names === null) return { listed: false };
   // Membership only, for every row's `buildRecord` (about 40 tests a row): ONE Set per listing, so a read is not
@@ -1367,7 +1375,7 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig, opts?: 
   const reused = new Set<string>();
   const cold = new Set<string>();
   const nowMs = opts?.nowMs ?? now;
-  const keys = cache === undefined ? null : rowKeys(names, ids, opts?.times);
+  const keys = cache === undefined ? null : rowKeys(names, ids, times);
   if (cache !== undefined) cache.prune(new Set(ids));
   // The tick's verdicts may still be in flight (its tmux listing runs beside this read): wait after the readdir.
   const verdictOf = await opts?.verdicts;

@@ -22,6 +22,10 @@ export interface FakeRegistry {
   unreadable?: Set<string>;
   /** A read of this path answers `absent` (a proven ENOENT), listed or not. */
   racedAbsent?: Set<string>;
+  /** The times arm (console speed S1): `<dir>/<id>.<field>` -> mtimeMs. When set, the io has `readdirWithTimesMeasured`
+   *  answering these (a listed path with no entry answers 1); `answerTimes: false` models an agent that sends none. */
+  mtimes?: Map<string, number>;
+  answerTimes?: boolean;
 }
 
 export interface Request { op: 'readdir' | 'readFileMeasured' | 'readFile'; path: string }
@@ -84,6 +88,17 @@ export function countingIO(reg: FakeRegistry, opts: FakeOptions = {}): CountingI
       await settle(dir);
       return [...reg.files.keys()].filter((k) => !reg.hidden?.has(k) && path.dirname(k) === dir).map((k) => path.basename(k));
     },
+    ...(reg.mtimes === undefined ? {} : {
+      async readdirWithTimesMeasured(dir: string) {
+        requests.push({ op: 'readdir', path: dir });
+        await settle(dir);
+        const entries = [...reg.files.keys()].filter((k) => !reg.hidden?.has(k) && path.dirname(k) === dir);
+        return {
+          ok: true as const, entries: entries.map((k) => path.basename(k)),
+          ...(reg.answerTimes === false ? {} : { times: new Map(entries.map((k) => [path.basename(k), reg.mtimes!.get(k) ?? 1])) }),
+        };
+      },
+    }),
     async readFileMeasured(p) {
       requests.push({ op: 'readFileMeasured', path: p });
       return track(p, async () => { await settle(p); return measured(p); });
@@ -93,6 +108,8 @@ export function countingIO(reg: FakeRegistry, opts: FakeOptions = {}): CountingI
       return track(p, async () => { await settle(p); const r = measured(p); return r.ok ? r.content : null; });
     },
   };
+  // `localIO` carries the optional times reader; this fake has it only when the fixture opts in (`mtimes`).
+  if (reg.mtimes === undefined) delete (io as { readdirWithTimesMeasured?: unknown }).readdirWithTimesMeasured;
   return { io, requests, maxRowsInFlight: () => maxRows, rowsInFlightNow: () => outstanding.size };
 }
 

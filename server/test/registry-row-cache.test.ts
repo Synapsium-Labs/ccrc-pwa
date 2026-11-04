@@ -4,6 +4,8 @@ import { readRegistryMeasured, type SessionRecord } from '../src/registry.js';
 import { RegistryRowCache } from '../src/registryRowCache.js';
 import { rowTemperature, type RowKey } from '../src/rowTemperature.js';
 import type { SessionVerdict } from '../src/exec.js';
+import { createIo } from '../src/remote/io.js';
+import { READDIR_MTIMES_OP } from '../../shared/agent-protocol.js';
 import { countingIO, fleetFixture, edgeFixture, fixtureConfig } from './registryCountingIO.js';
 
 const gone: SessionVerdict = { verdict: 'gone' };
@@ -137,5 +139,93 @@ describe('readRegistryMeasured over a cache', () => {
     expect(r.listed && r.reused.has('-flag')).toBe(false);
     expect(r.listed && r.cold.has('-flag')).toBe(false);
     expect(idsOf(reg)).toContain('-flag');
+  });
+});
+
+// Console speed S1, the times arm: keys that carry modification times when the agent can report them.
+describe('readRegistryMeasured with modification times', () => {
+  const withTimes = (reg: ReturnType<typeof fleetFixture>) => { reg.mtimes = new Map(); return reg; };
+  const rowReads = (c: ReturnType<typeof countingIO>, from: number, id: string) =>
+    c.requests.slice(from).filter((q) => path.basename(q.path).startsWith(`${id}.`));
+
+  it('an agent without the cap is never asked for times', async () => {
+    const sent: Record<string, unknown>[] = [];
+    const client = {
+      state: { agentOps: ['update', 'disk'] },
+      request: async (req: Record<string, unknown>) => { sent.push(req); return { names: ['sess-a.uuid'] }; },
+    };
+    const io = createIo(client as never);
+    expect(io.readdirWithTimesMeasured).toBeDefined();
+    const r = await io.readdirWithTimesMeasured!('/x');
+    expect(r).toEqual({ ok: true, entries: ['sess-a.uuid'] });
+    expect(sent).toEqual([{ t: 'req', op: 'readdir', path: '/x' }]);
+    expect('times' in sent[0]!).toBe(false);
+    // With the word it asks, and reads the answer through one reader.
+    sent.length = 0;
+    const capable = createIo({ state: { agentOps: [READDIR_MTIMES_OP] }, request: async (req: Record<string, unknown>) => { sent.push(req); return { names: ['a.uuid', 'a.hold'], times: { 'a.uuid': 5, 'a.hold': 6 } }; } } as never);
+    const t = await capable.readdirWithTimesMeasured!('/x');
+    expect(sent[0]).toMatchObject({ op: 'readdir', times: true });
+    expect(t).toEqual({ ok: true, entries: ['a.uuid', 'a.hold'], times: new Map([['a.uuid', 5], ['a.hold', 6]]) });
+  });
+
+  it('an answer without times falls back to names-only keys', async () => {
+    const reg = withTimes(fleetFixture(20));
+    reg.answerTimes = false;
+    const c = countingIO(reg);
+    const cache = new RegistryRowCache();
+    const verdicts = (): SessionVerdict => gone;
+    await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts, nowMs: 1000 });
+    expect(cache.get('lane-a-project-017')!.key.times).toBeNull();
+    // A hot row (no .stopped) is never reused on a names-only key.
+    const before = c.requests.length;
+    const r = await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts, nowMs: 2000 });
+    expect(rowReads(c, before, 'lane-a-project-001').length).toBeGreaterThan(0);
+    expect(r.listed && r.reused.has('lane-a-project-001')).toBe(false);
+    // A malformed times answer is no times either (the remote reader's one rule).
+    const bad = createIo({ state: { agentOps: [READDIR_MTIMES_OP] }, request: async () => ({ names: ['a.uuid'], times: { 'a.uuid': 'x' } }) } as never);
+    expect(await bad.readdirWithTimesMeasured!('/x')).toEqual({ ok: true, entries: ['a.uuid'] });
+  });
+
+  it('a hot row whose key is unchanged is reused when times are known', async () => {
+    const reg = withTimes(fleetFixture(20));
+    const c = countingIO(reg);
+    const cache = new RegistryRowCache();
+    const verdicts = (): SessionVerdict => ({ verdict: 'live' });
+    const first = await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts, nowMs: 1000 });
+    expect(first.listed && first.reused.size).toBe(0);
+    const before = c.requests.length;
+    const second = await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts, nowMs: 2000 });
+    expect(rowReads(c, before, 'lane-a-project-001')).toEqual([]);
+    expect(second.listed && second.reused.has('lane-a-project-001')).toBe(true);
+    expect(second.listed && second.cold.has('lane-a-project-001')).toBe(false);
+    expect(second.listed && second.records.length).toBe(20);
+  });
+
+  it('a .uuid mtime change re-reads the row', async () => {
+    const reg = withTimes(fleetFixture(20));
+    const dir = fixtureConfig().registryDir;
+    const c = countingIO(reg);
+    const cache = new RegistryRowCache();
+    const verdicts = (): SessionVerdict => ({ verdict: 'live' });
+    await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts, nowMs: 1000 });
+    reg.mtimes!.set(path.join(dir, 'lane-a-project-001.uuid'), 99);   // rewritten in place, same names
+    const before = c.requests.length;
+    const r = await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts, nowMs: 2000 });
+    expect(rowReads(c, before, 'lane-a-project-001').length).toBeGreaterThan(0);
+    expect(r.listed && r.reused.has('lane-a-project-001')).toBe(false);
+    expect(r.listed && r.reused.has('lane-a-project-002')).toBe(true);
+  });
+
+  it('an unclean read evicts, so a gone verdict next tick still reads the row in full', async () => {
+    const reg = withTimes(edgeFixture());
+    const c = countingIO(reg);
+    const cache = new RegistryRowCache();
+    const id = 'edge-stopped-unreadable';   // a stopped row whose .stopped read fails: an unclean record
+    await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts: () => gone, nowMs: 1000 });
+    expect(cache.get(id)).toBeUndefined();
+    const before = c.requests.length;
+    const r = await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts: () => gone, nowMs: 2000 });
+    expect(rowReads(c, before, id).length).toBeGreaterThan(0);
+    expect(r.listed && r.reused.has(id)).toBe(false);
   });
 });
