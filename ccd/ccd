@@ -7542,7 +7542,7 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <wor
   # checks the workspace out at, and NOTHING ELSE. `base` below stays the origin ref and is what `$REG/<id>.base`
   # records, because `cmd_pr_open`, the archive, `_pr_bind_facts`, the reap, `ws-audit` and the server all read that
   # file as a ref name; the start point is journalled only, as `meas.startpoint`. `lc_gb` is givenness, as `lc_gt` is.
-  local lc_base='' lc_gb=0 lc_sp=()
+  local lc_base='' lc_gb=0 lc_sp=() lc_start=''
   while (( $# )); do
     case "$1" in
       --no-rc)     norc=1; shift ;;
@@ -7667,15 +7667,18 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <wor
   # floor, the placement read, the add lock, the worktree and the row. Two facts, so `meas.startpoint` names exactly the
   # commit the tree starts at (D-7981, D-7982). The value's length is this repository's id length (`--show-object-format`):
   # a 40-hex PREFIX in a sha256 repository, or a 64-hex REF NAME in a sha1 one, refuses, and an unreadable format refuses.
-  # At that length git reads the value as an object id, never as a ref or an abbreviation. And the object's own type is
-  # `commit`, never a peel (`^{commit}` would take an annotated tag's id). A blob, a tree, a tag or a missing id refuses.
+  # And the object's own type is `commit`: the check never peels (`^{commit}` would take an annotated tag's id), so a blob,
+  # a tree, a tag or a missing id refuses. Together they prove an object id of this repository's format. The ACT then
+  # starts at that object: `worktree add -b` hands its start point to `git branch`, which looks a NAME up as a ref first,
+  # so a branch or tag named exactly the id would divert it (review 1457 F1); the start point is `<id>^{commit}`, which no
+  # ref can be named (`^` is not allowed in one), and on a commit the peel is a no-op. Git never prompts (no credentials).
   if (( lc_gb )); then
     local lc_fmt lc_len=0
-    lc_fmt=$(GIT_NO_LAZY_FETCH=1 _ws_reclaim_contained git -C "$main" rev-parse --show-object-format 2>/dev/null) || lc_fmt=''
+    lc_fmt=$(GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 _ws_reclaim_contained git -C "$main" rev-parse --show-object-format 2>/dev/null) || lc_fmt=''
     case "$lc_fmt" in sha1) lc_len=40 ;; sha256) lc_len=64 ;; *) die "ws-add: --base: the object format of $project could not be read (${lc_fmt:-no answer}), so a full commit id cannot be told from a prefix or a ref name — nothing was touched" ;; esac
-    (( ${#lc_base} == lc_len )) && [[ $(GIT_NO_LAZY_FETCH=1 _ws_reclaim_contained git -C "$main" cat-file -t "$lc_base" 2>/dev/null) == commit ]] \
+    (( ${#lc_base} == lc_len )) && [[ $(GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 _ws_reclaim_contained git -C "$main" cat-file -t "$lc_base" 2>/dev/null) == commit ]] \
       || die "ws-add: --base $lc_base is not a full $lc_fmt commit id of $project"
-    lc_sp=(meas.startpoint "$lc_base")
+    lc_sp=(meas.startpoint "$lc_base"); lc_start="$lc_base^{commit}"
   fi
 
   # Before anything is created: no worktree, no branch, no registry entry, no
@@ -7820,8 +7823,9 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <wor
   # so git's branch.autoSetupMerge default would otherwise make origin/main this
   # branch's upstream, and `git pull` in the workspace would merge main into it.
   local branch="ws/$slug"
-  # The START POINT is `--base`'s commit when one was given, else `$base`; `$base` is what the row records either way.
-  git -C "$main" worktree add -b "$branch" --no-track "$wt" "${lc_base:-$base}" --quiet \
+  # The START POINT is `--base`'s commit, peeled so no ref of that name can divert it, when one was given, else `$base`;
+  # `$base` is what the row records either way.
+  git -C "$main" worktree add -b "$branch" --no-track "$wt" "${lc_start:-$base}" --quiet \
     || die "git worktree add failed for $wt"
 
   # Shared across every worktree of this repo, local only, never committed.

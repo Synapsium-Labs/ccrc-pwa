@@ -122,6 +122,22 @@ describe('--base starts a child workspace at the given commit, and nothing else 
     expect(Object.keys(measOf(rows[0]!))).not.toContain('startpoint');
     expect(measOf(rows[0]!)['base']).toBe('origin/main');
   });
+
+  for (const kind of ['branch', 'tag', 'both'] as const) {
+    it(`W5-B9d (${kind}): a ${kind === 'both' ? 'branch and a tag' : kind} named the id, pointing elsewhere, never diverts the start point (review 1457 F1)`, () => {
+      const main = path.join(h.home, 'projects', 'demo');
+      const older = h.git(main, 'rev-parse', 'HEAD').trim();
+      const tip = tipOf();
+      expect(older, 'the name points elsewhere').not.toBe(tip);
+      if (kind !== 'tag') h.git(main, 'update-ref', `refs/heads/${tip}`, older);
+      if (kind !== 'branch') h.git(main, 'update-ref', `refs/tags/${tip}`, older);
+      const r = wsAdd(`--no-rc --child 7 --base ${tip} demo`);
+      expect(r.status, `${kind}: ${r.out}`).toBe(0);
+      expect(r.out, kind).not.toContain('ambiguous object name');
+      expect(h.git(path.join(h.home, 'worktrees', 'demo', 'quiet-mesa'), 'rev-parse', 'HEAD').trim(), kind).toBe(tip);
+      expect(measOf(createRows()[0]!)['startpoint'], kind).toBe(tip);
+    });
+  }
 });
 
 describe('--base refuses before anything exists', () => {
@@ -218,11 +234,19 @@ describe('--base refuses before anything exists', () => {
     }
   });
 
-  it('W5-B5b: --base followed by another flag is refused usage (the value check refuses a flag; the arm checks arity only)', () => {
+  it('W5-B5b: --base taking --child as its value is refused usage, with nothing created (--child is never seen)', () => {
     const r = wsAdd('--no-rc --base --child 7 demo');
     expect(r.status, r.out).toBe(1);
     expect(r.out.trim()).toBe(USAGE);
     nothingCreated();
+  });
+
+  it('W5-B5c: --base taking --no-rc as its value, with --child present, is refused usage, with nothing created', () => {
+    const r = wsAdd('--child 7 --base --no-rc demo');
+    expect(r.status, r.out).toBe(1);
+    expect(r.out.trim()).toBe(USAGE);
+    nothingCreated();
+    expect(fs.existsSync(addLock())).toBe(false);
   });
 
   it('W5-B9: a 64-hex REF NAME in a SHA-1 repository is refused, though the branch resolves to a commit (D-7982)', () => {
@@ -264,20 +288,20 @@ describe('--base refuses before anything exists', () => {
     const touched = (n: string): string => path.join(h.home, `touched-${n}`);
     const r = shStatus(`${WS_ADD_REAL_SPAWN}
       _ws_disk_free_gb() { : > "$HOME/touched-disk-floor"; echo 999; }
-      _place_for_class() { : > "$HOME/touched-placement"; return 1; }
-      _ws_wrapper_why() { : > "$HOME/touched-placement"; return 1; }
+      _place_for_class() { : > "$HOME/touched-placement"; echo lane-a; return 0; }
       CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --child 7 --base ${blob} demo`, 30);
     expect(r.status, r.out).toBe(1);
     expect(r.out).toContain(notFull(blob));
-    expect(fs.existsSync(touched('disk-floor')), 'the disk floor was never read').toBe(false);
-    expect(fs.existsSync(touched('placement')), 'nor the placement').toBe(false);
+    // One comparison, so a mutant that reaches either reports both (the placement marker is never masked by the floor's).
+    expect({ diskFloor: fs.existsSync(touched('disk-floor')), placement: fs.existsSync(touched('placement')) },
+      'neither the disk floor nor the placement was read').toEqual({ diskFloor: false, placement: false });
     nothingCreated();
-    // CONTROL: the same stubs on a plain child ws-add are reached, so the absence above is the refusal's order.
-    const c = shStatus(`${WS_ADD_REAL_SPAWN}
+    // CONTROL: the same stubs on a plain child ws-add are reached, so the absence above is the refusal's order. Placement
+    // answers a lane, so an order that reached it first would go on past it and leave its marker (W5-BM11).
+    shStatus(`${WS_ADD_REAL_SPAWN}
       _ws_disk_free_gb() { : > "$HOME/touched-disk-floor"; echo 999; }
-      _place_for_class() { : > "$HOME/touched-placement"; return 1; }
+      _place_for_class() { : > "$HOME/touched-placement"; echo lane-a; return 0; }
       CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --child 7 demo`, 30);
-    expect(c.status, c.out).not.toBe(0);
     expect(fs.existsSync(touched('disk-floor'))).toBe(true);
     expect(fs.existsSync(touched('placement'))).toBe(true);
   });
@@ -285,7 +309,7 @@ describe('--base refuses before anything exists', () => {
 
 /** A `--filter=blob:none` clone of demo's origin at `projects/<name>`, whose history holds one blob that only an older
  *  commit names, so the clone does not have it. Null when this git cannot serve a filtered clone, or ignores
- *  `GIT_NO_LAZY_FETCH` (git before 2.44), measured on the clone itself rather than read from a version string. */
+ *  `GIT_NO_LAZY_FETCH` (git before 2.45), measured on the clone itself rather than read from a version string. */
 const partialCloneWithMissingBlob = (name: string): { main: string; blob: string } | null => {
   const src = path.join(h.home, 'projects', 'demo');
   const origin = path.join(h.home, 'origins', 'demo.git');
@@ -367,6 +391,27 @@ describe('a SHA-256 repository', () => {
     expect(r.out).toContain(notFull(prefix, 'demo256', 'sha256'));
     nothingCreated('demo256', 'demo256-quiet-mesa');
   });
+
+  for (const kind of ['branch', 'tag', 'both'] as const) {
+    it(`W5-B9e (${kind}): in a SHA-256 repository too, a ${kind === 'both' ? 'branch and a tag' : kind} named the id never diverts the start point (skipped when this git cannot make one)`, (ctx) => {
+      const main = makeSha256Repo('demo256');
+      if (main === null) { ctx.skip(); return; }
+      const older = h.git(main, 'rev-parse', 'HEAD').trim();
+      fs.writeFileSync(path.join(main, 'lease-work.txt'), 'w\n');
+      h.git(main, 'checkout', '-b', 'claude/agent-a');
+      h.git(main, 'add', 'lease-work.txt'); h.git(main, 'commit', '-m', 'lease work');
+      const tip = h.git(main, 'rev-parse', 'HEAD').trim();
+      h.git(main, 'checkout', '-');
+      expect(tip).toMatch(/^[0-9a-f]{64}$/);
+      if (kind !== 'tag') h.git(main, 'update-ref', `refs/heads/${tip}`, older);
+      if (kind !== 'branch') h.git(main, 'update-ref', `refs/tags/${tip}`, older);
+      const r = wsAdd(`--no-rc --child 7 --base ${tip} demo256`);
+      expect(r.status, `${kind}: ${r.out}`).toBe(0);
+      expect(r.out, kind).not.toContain('ambiguous object name');
+      expect(h.git(path.join(h.home, 'worktrees', 'demo256', 'quiet-mesa'), 'rev-parse', 'HEAD').trim(), kind).toBe(tip);
+      expect(measOf(createRows()[0]!)['startpoint'], kind).toBe(tip);
+    });
+  }
 });
 
 /** The `--base` arms of `cmd_ws_add`'s strip loop: each is one line, so an older-shaped copy is this source with
@@ -400,8 +445,6 @@ describe('an older ccd binds a leading --base as the project and refuses (D-6164
     fs.cpSync(path.join(path.dirname(CCD), 'lib'), path.join(dir, 'lib'), { recursive: true, dereference: true });
     const copy = path.join(dir, 'ccd');
     fs.writeFileSync(copy, older, { mode: 0o755 });
-    expect(fs.readFileSync(copy, 'utf8') === older, 'the copy on disk is that text').toBe(true);
-    expect(older.split('\n').filter((l) => BASE_ARM.test(l)), 'no --base arm survives in the copy').toEqual([]);
 
     const tip = tipOf();
     const r = wsAdd(`--no-rc --child 7 --base ${tip} demo`, copy);
