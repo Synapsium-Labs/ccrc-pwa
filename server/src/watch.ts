@@ -1,6 +1,8 @@
 import { createHistogram, performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
 import type { WatcherDeps } from './deps.js';
+import { timed } from './perf/recorder.js';
+import type { PerfHealth } from '../../shared/perf.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
 import { readRadarPass } from './coord/lineageRead.js';
@@ -1453,6 +1455,7 @@ export class FleetWatcher {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.deps.perf?.stop();
   }
 
   /**
@@ -2436,6 +2439,7 @@ export class FleetWatcher {
     // `SessionStream.tick` (`sessionws.ts`) verbatim.
     if (this.ticking) return;
     this.ticking = true;
+    const tickStart = performance.now();
     try {
       // The catalogue lane (design 2026-09-20 §7) is gated HERE, above the
       // registry read and its fail-shut return (`if (!registryRead.listed)`
@@ -2537,7 +2541,7 @@ export class FleetWatcher {
       // [registry-refused:omits] a refused id is in no `records`: no state and no field read here, and the lanes handed `refused` hold it, never read it as absent.
       // The tick's ONE selection listing, as the model (D-5864): the lanes that choose their rows from the registry are
       // handed it below, so they do not list again.
-      const registryRead = buildFleetReadModel(await readRegistryMeasured(this.deps.io, this.deps.cfg, { cache: this.rowCache, verdicts: listingP.then(verdictsOf), nowMs: listedAt }));
+      const registryRead = buildFleetReadModel(await timed(this.deps.perf, 'registry', readRegistryMeasured(this.deps.io, this.deps.cfg, { cache: this.rowCache, verdicts: listingP.then(verdictsOf), nowMs: listedAt })));
       // BEFORE the fail-shut return below, and on BOTH arms (D-283 (was D-B4-10)). An
       // unlistable registry is not "nothing is set": it is the exact state
       // `dispatchRun` FAILS SHUT on (`dispatch.ts:106-109`), so it must reach
@@ -2624,10 +2628,10 @@ export class FleetWatcher {
       // yields a menu with no envelope, and therefore an action-less ask push.
       // What covers the residue is `actionlessAsks` in `detectDialogs` below:
       // the latch remembers that push and amends it when the envelope turns up.
-      await this.sweepHookStates(records, plan.hookIds);
-      await this.sweepUsage(records, plan.usageIds);
-      const pending = await this.detectDialogs(this.primed, registryRead.names, records, plan.captureIds);
-      await this.sweepTasks(registryRead);
+      await timed(this.deps.perf, 'hooks', this.sweepHookStates(records, plan.hookIds));
+      await timed(this.deps.perf, 'usage', this.sweepUsage(records, plan.usageIds));
+      const pending = await timed(this.deps.perf, 'dialogs', this.detectDialogs(this.primed, registryRead.names, records, plan.captureIds));
+      await timed(this.deps.perf, 'tasks', this.sweepTasks(registryRead));
       // NEVER awaited: it shells out over the network and `gh` has no
       // --timeout, so awaiting it would stall the dialog detector and the
       // busy->idle push behind GitHub's reachability.
@@ -2736,8 +2740,8 @@ export class FleetWatcher {
         clearTimeout(timer);
       }
       const panePids = new Map<string, number | null>();
-      const limits = await readLimits(this.deps.io, this.deps.cfg);   // read once a tick: published by `currentLimits`, handed to assembleFleet
-      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings, paneListing, limits);
+      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg));   // read once a tick: published by `currentLimits`, handed to assembleFleet
+      const sessions = await timed(this.deps.perf, 'assemble', assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings, paneListing, limits));
       // The frame leaves first (console speed S1): the fleet frame follows assembly directly; pools, "Finished" pushes, claims,
       // the lanes, the state cache and the runs frame all wait behind it.
       this.registryTick = { listed: true, at: listedAt };               // D-6436: `lastFleet` reflects this listing either way
@@ -2750,7 +2754,7 @@ export class FleetWatcher {
       const sigs = rowSignatures(records, paneListing, this.rowSigs);
       for (const id of changedRows(this.rowSigs, sigs)) this.bus.emit(`row:${id}`, { listedAt });
       this.rowSigs = sigs;
-      await this.emitPools(registryRead.names, listedAt);
+      await timed(this.deps.perf, 'pools', this.emitPools(registryRead.names, listedAt));
       // Blocking review finding 4: `FleetSession.unmeasured` (Task 2) now
       // carries the SAME evidence `measuredIdentity(records[i]) === null`
       // would, one hop from `records[i]` in `sessions[i]` — so this reads it
@@ -2910,7 +2914,7 @@ export class FleetWatcher {
         // `connected` alone is not "this read was complete"; the snapshot decision and its rationale live in
         // `persistFleetSnapshot` (fleetstate.ts).
         try {
-          const outcome = await persistFleetSnapshot(this.snapshotWriter, sessions, () => this.deps.io.readdir(this.deps.cfg.registryDir), isRegistryId, json);
+          const outcome = await timed(this.deps.perf, 'snapshot', persistFleetSnapshot(this.snapshotWriter, sessions, () => this.deps.io.readdir(this.deps.cfg.registryDir), isRegistryId, json));
           const note = snapshotNotice({ degraded: this.snapshotWriteSkippedDegradedWarned, skipped: this.snapshotWriteSkippedWarned }, outcome);
           this.snapshotWriteSkippedDegradedWarned = note.latches.degraded;
           this.snapshotWriteSkippedWarned = note.latches.skipped;
@@ -2923,8 +2927,12 @@ export class FleetWatcher {
       this.emitRuns(sessions);
     } finally {
       this.ticking = false;
+      this.deps.perf?.tickDone(performance.now() - tickStart, this.intervalMs);   // listed or not (console speed S1)
     }
   }
+
+  /** The console's own timings, or undefined without a recorder (console speed S1). */
+  perfHealth(): PerfHealth | undefined { return this.deps.perf?.health(Date.now()); }
 
   /**
    * The `{type:'runs'}` WS frame emitter (Task 10, spec:222-224). Runs every

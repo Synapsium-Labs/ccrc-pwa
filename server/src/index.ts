@@ -13,6 +13,7 @@ import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
 import { installShutdownSeal } from './shutdownseal.js';
 import { connectFleet, type FleetClient } from './remote/client.js';
+import { PerfRecorder } from './perf/recorder.js';
 import { makeRefreshCaps } from './refreshcaps.js';
 import { recordCcdVerbs } from './fleetstate.js';
 import { FleetIdentityCell } from './fleetidentity.js';
@@ -168,19 +169,20 @@ const queue = new KeyedQueue();
 // The one agent connection, hoisted out of the remote arm so the `ready`
 // hook below can reach it once the watcher exists. Null in local mode.
 let fleetClient: FleetClient | null = null;
+const perf = new PerfRecorder();   // console speed S1: timers that change nothing; started beside the watcher, stopped by `watcher.stop()`
 let deps: Deps;
 if (cfg.fleetMode === 'remote') {
   if (!cfg.agentUrl || !cfg.agentToken) {
     console.error('ccrc-server: CCRC_FLEET=remote requires CCRC_AGENT_URL and CCRC_AGENT_TOKEN');
     process.exit(1);
   }
-  const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken });
+  const fleet = connectFleet({ url: cfg.agentUrl, token: cfg.agentToken, onRoundTrip: (op, ms) => perf.link(op, ms) });
   fleetClient = fleet.client;
   // The composition root is the ONLY place a raw `Runner` is in scope: it binds
   // one into `runCcd` and hands the other to `Tmux`'s constructor. Nothing
   // downstream holds a runner, which is what makes `CcdArgv` total (task 13S).
   deps = {
-    cfg, build, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
+    cfg, perf, build, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
     spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, viewers, queue, mailToken, coord,
     poolEdgeLog,
     catalogue,
@@ -245,7 +247,7 @@ if (cfg.fleetMode === 'remote') {
   // be read stays unmeasured; the connection label is never an identity.
   const localFleetIdentity = new FleetIdentityCell();
   deps = {
-    cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIOFor(cfg.home),
+    cfg, perf, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIOFor(cfg.home),
     spawnPty: attachPty, push, notifyLog, viewers, queue, mailToken, coord,
     poolEdgeLog,
     catalogue,
@@ -375,6 +377,7 @@ setInterval(() => { accountAudit.sweep(Date.now()); linearJournal.sweep(Date.now
 
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
+perf.start();
 await app.listen({ host: cfg.host, port: cfg.port });
 tokenDriver.start();
 console.log(`ccrc-server on ${cfg.host}:${cfg.port} (fleet=${cfg.fleetMode})`);
