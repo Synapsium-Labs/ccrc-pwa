@@ -7,6 +7,8 @@
  */
 import { verdictFromListing, type PaneListing, type SessionVerdict } from './exec.js';
 import type { SessionRecord } from './registry.js';
+import type { SessionUsage } from '../../shared/api.js';
+import { USAGE_FRESH_S } from './usage.js';
 
 /** This tick's verdict per row: null for every id when the listing failed (the registry then treats every row as hot). */
 export function verdictsOf(l: PaneListing): (id: string) => SessionVerdict | null {
@@ -27,4 +29,15 @@ export function planTick(records: readonly SessionRecord[], cold: ReadonlySet<st
 export function listingNotice(prevFailed: boolean, l: PaneListing): { failed: boolean; warn: string | null } {
   if (l.ok) return { failed: false, warn: null };
   return { failed: true, warn: prevFailed ? null : `ccrc-server: tmux list-panes failed, asking each row the old way: ${l.detail}` };
+}
+
+/** A usage entry carried over a sweep that did not read it (a cold row): `stale` is this sweep's own verdict, so it is
+ *  re-derived against `nowS` and never copied (the unreadable arm's rule, ruling R5). */
+export function carriedUsage(kept: SessionUsage, nowS: number): SessionUsage {
+  return { ...kept, stale: nowS - kept.ts > USAGE_FRESH_S };
+}
+
+/** A listing call that rejected (no adapter does today) reads as a failed listing, so the tick falls back per row. */
+export function rejectedListing(at: number, err: unknown): PaneListing {
+  return { ok: false, at, detail: `tmux list-panes threw: ${err instanceof Error ? err.message : String(err)}` };
 }

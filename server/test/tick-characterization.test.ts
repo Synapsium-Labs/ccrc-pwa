@@ -16,6 +16,7 @@ import { usageSidecarPath } from '../src/usage.js';
 import type { FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { makeHarness } from './tickListingHarness.js';
 
 const LIVE = ['lane-a-project-a', 'lane-a-project-b'];
 const STOPPED = ['lane-a-stopped-a', 'lane-a-stopped-b'];
@@ -492,5 +493,44 @@ describe('FleetWatcher.tick characterization (console speed S1, Step 0)', () => 
     expect(Object.keys(cache).sort()).toEqual(['savedAt', 'sessions']);
     expect(typeof cache.savedAt).toBe('number');   // wall-clock: excluded from the comparison
     expect(cache.sessions).toEqual(JSON.parse(JSON.stringify(sessions)));
+  });
+
+  // The first case runs the per-row FALLBACK (its runner fails `list-panes -a`). This one runs the SAME fixture with
+  // the runner answering the one listing, and holds the same pins: the literal statusline and hook-state map, the
+  // state cache, and a frame equal to the fallback run's (which the inline snapshot above pins).
+  it('the same fixture through the one tmux listing holds the same pins', async () => {
+    const rule = '─'.repeat(40);
+    const paneOf = (id: string): string => id === LIVE[1]
+      ? ['done', rule, '❯\u00a0', rule, '  👤 acct-a │ 🤖 Opus 5.5 · xhigh │ ⎇ ws/demo'].join('\n') : 'done\n❯ \n';
+    const run = async (listing: 'ok' | 'fail') => {
+      const h = makeHarness({ listing, paneOf });
+      const hookUpdatedAt = Date.now();
+      writeFileSync(path.join(h.reg, `${LIVE[0]}.hookstate.json`), JSON.stringify({
+        v: 1, state: 'working', event: 'PreToolUse', sessionId: `uuid-${LIVE[0]}`, pid: 4000,
+        updatedAt: hookUpdatedAt, ask: null, subagents: [],
+      }));
+      mkdirSync(path.dirname(usageSidecarPath(h.reg, STOPPED[1]!)), { recursive: true });
+      writeFileSync(usageSidecarPath(h.reg, STOPPED[1]!), JSON.stringify({ ts: STAMP, model: 'claude-opus-5', effort: 'high', ctxPct: 12, cost: 1.25 }));
+      await h.watcher.tick();
+      await h.watcher.tick();
+      return { h, hookUpdatedAt };
+    };
+    const base = await run('fail');
+    const { h, hookUpdatedAt } = await run('ok');
+    expect(h.calls.listPanesAll).toBe(2);
+    expect(h.frames).toHaveLength(1);
+    expect(h.frames[0]!.map((x) => x.id)).toEqual([ARCHIVED, CRASHED, ...LIVE, ...STOPPED]);
+    expect(h.frames[0]).toEqual(base.h.frames[0]);
+    expect([...h.watcher.currentPending()]).toEqual([]);
+    expect([...h.watcher.currentStatuslines()]).toEqual([[LIVE[1], {
+      model: 'Opus 5.5', effort: 'xhigh', ultracode: false, branch: 'ws/demo', workflowActive: false, boxCols: 40,
+    }]]);
+    expect([...h.watcher.currentHookStates()]).toEqual([[LIVE[0], {
+      state: 'working', updatedAt: hookUpdatedAt, event: 'PreToolUse', ask: null, subagents: [],
+      graphQueries: null, graphGateDenials: null, interrupted: false,
+    }]]);
+    const cache = JSON.parse(readFileSync(h.cachePath, 'utf8')) as { sessions: unknown; savedAt: unknown };
+    expect(Object.keys(cache).sort()).toEqual(['savedAt', 'sessions']);
+    expect(cache.sessions).toEqual(JSON.parse(JSON.stringify(h.frames[0])));
   });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  PANE_LISTING_FORMAT, Tmux, parsePaneListing, verdictFromListing,
+  PANE_LISTING_FORMAT, Tmux, parsePaneListing, pidFromListing, verdictFromListing,
   type ExecResult, type PaneListing, type Runner,
 } from '../src/exec.js';
 import { isExecAllowed } from '../../agent/src/whitelist.js';
@@ -87,5 +87,15 @@ describe('Tmux.listPanes', () => {
     expect(l.at).toBeGreaterThanOrEqual(before);
     expect(l.at).toBeLessThanOrEqual(Date.now());
     expect(isExecAllowed('tmux', calls[0]!.slice(1))).toBe(true);
+  });
+});
+
+describe('pidFromListing', () => {
+  it('answers the active pane pid through tmuxName, null for an absent or windowless session', () => {
+    const l = parsePaneListing(ran('cc-sess_a 1 0 222\ncc-sess-c 0 0 9\n'), 1);
+    if (!l.ok) throw new Error('listing');
+    expect(pidFromListing(l, 'sess.a')).toBe(222);
+    expect(pidFromListing(l, 'sess-c')).toBeNull();
+    expect(pidFromListing(l, 'sess-x')).toBeNull();
   });
 });

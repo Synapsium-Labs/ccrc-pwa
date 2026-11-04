@@ -1,7 +1,6 @@
 import type { CcrcConfig } from './config.js';
 import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
-import { verdictFromListing, type PaneListing, type Tmux } from './exec.js';
-import { tmuxName } from '../../shared/tmux-target.js';
+import { pidFromListing, verdictFromListing, type PaneListing, type Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { readRegistryMeasured } from './registry.js';
 import type { SessionRecord } from './registry.js';
@@ -637,7 +636,7 @@ export async function assembleFleet(
     let liveCoversWorkflows = false;
     if (alive) {
       status = 'idle';
-      const pid = listing ? (listing.panes.get(tmuxName(r.id))?.pid ?? null) : await tmux.panePid(r.id);
+      const pid = listing ? pidFromListing(listing, r.id) : await tmux.panePid(r.id);
       panePids?.set(r.id, pid);
       const cfgDir = configDirFor(cfg, r.wrapper);
       if (pid === null) {

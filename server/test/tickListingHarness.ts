@@ -28,9 +28,9 @@ const plant = (reg: string, id: string, extra: Record<string, string> = {}): voi
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
 };
 
-export type ListingMode = 'ok' | 'fail' | 'absent';
+export type ListingMode = 'ok' | 'fail';
 
-export function makeHarness(opts: { listing?: ListingMode } = {}) {
+export function makeHarness(opts: { listing?: ListingMode; paneOf?: (id: string) => string } = {}) {
   const home = mkTmp('ccrc-');
   seedRoster(home);
   const reg = path.join(home, '.cc-sessions');
@@ -43,7 +43,6 @@ export function makeHarness(opts: { listing?: ListingMode } = {}) {
   const state = { listing: (opts.listing ?? 'ok') as ListingMode, live: new Set(LIVE) };
   const calls = { hasSession: 0, listPanesAll: 0, listPanesRow: 0, capture: [] as string[] };
   const reads: string[] = [];
-  const idOf = (target: string): string => target.replace(/^=?cc-/, '').replace(/:?$/, '');
 
   const run: Runner = async (cmd, args) => {
     const t = args.indexOf('-t');
@@ -55,7 +54,6 @@ export function makeHarness(opts: { listing?: ListingMode } = {}) {
       calls.listPanesAll += 1;
       if (args[args.length - 1] !== PANE_LISTING_FORMAT) throw new Error('unexpected listing format');
       if (state.listing === 'fail') return { ran: true, code: 1, stdout: '', stderr: 'error connecting to tmux' };
-      if (state.listing === 'absent') return gone;
       return { ran: true, code: 0, stdout: [...state.live].map((id) => `cc-${id} 1 0 ${pidOf(id)}\n`).join(''), stderr: '' };
     }
     if (cmd === 'tmux' && args[0] === 'list-panes') {
@@ -63,12 +61,12 @@ export function makeHarness(opts: { listing?: ListingMode } = {}) {
       return isLive ? { ran: true, code: 0, stdout: `${pidOf([...state.live].find((id) => target.includes(id))!)}\n`, stderr: '' } : gone;
     }
     if (cmd === 'tmux' && args[0] === 'capture-pane') {
-      calls.capture.push(LIVE.concat(STOPPED, [ARCHIVED, CRASHED]).find((id) => target.includes(id)) ?? target);
-      return isLive ? { ran: true, code: 0, stdout: 'done\n❯ \n', stderr: '' } : gone;
+      const who = LIVE.concat(STOPPED, [ARCHIVED, CRASHED]).find((id) => target.includes(id)) ?? target;
+      calls.capture.push(who);
+      return isLive ? { ran: true, code: 0, stdout: opts.paneOf?.(who) ?? 'done\n❯ \n', stderr: '' } : gone;
     }
     return { ran: true, code: 0, stdout: '', stderr: '' };
   };
-  void idOf;
 
   const log = (p: string): void => { reads.push(p); };
   const io: FleetIO = {
@@ -89,5 +87,5 @@ export function makeHarness(opts: { listing?: ListingMode } = {}) {
   const reset = (): void => { calls.hasSession = 0; calls.listPanesAll = 0; calls.listPanesRow = 0; calls.capture = []; reads.length = 0; };
   /** Reads of a row's own registry files, hook-state and usage sidecar (any path naming the id). */
   const readsOf = (id: string): string[] => reads.filter((p) => p.includes(id));
-  return { home, reg, state, calls, reads, readsOf, watcher, bus, frames, reset };
+  return { home, reg, cachePath, state, calls, reads, readsOf, watcher, bus, frames, reset };
 }

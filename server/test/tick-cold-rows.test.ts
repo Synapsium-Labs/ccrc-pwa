@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { usageSidecarPath } from '../src/usage.js';
+import { usageSidecarPath, USAGE_FRESH_S } from '../src/usage.js';
 import { LIVE, STOPPED, STAMP, makeHarness } from './tickListingHarness.js';
 
 afterEach(() => { vi.useRealTimers(); });
@@ -31,6 +31,7 @@ describe('FleetWatcher.tick cold rows (console speed S1)', () => {
     h.reset();
     await h.watcher.tick();
     expect(h.readsOf(id).length).toBeGreaterThan(0);
+    expect(h.readsOf(id).some((p) => p.endsWith(`${id}.hookstate.json`))).toBe(true);
     expect(h.calls.capture).toContain(id);
     expect(h.frames.at(-1)!.find((s) => s.id === id)!.status).not.toBe('dead');
   });
@@ -69,5 +70,22 @@ describe('FleetWatcher.tick cold rows (console speed S1)', () => {
     expect(h.readsOf(b)).toEqual([]);
     expect((h.watcher as unknown as { hookStates: Map<string, unknown> }).hookStates.get(a)).toEqual(hook);
     expect(h.watcher.currentUsage().get(b)).toEqual(usage);
+  });
+
+  it('a carried usage entry turns stale on the clock while its row stays cold', async () => {
+    vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
+    const h = makeHarness();
+    const b = STOPPED[1]!;
+    mkdirSync(path.dirname(usageSidecarPath(h.reg, b)), { recursive: true });
+    const ts = Math.floor(Date.now() / 1000) - (USAGE_FRESH_S - 10);   // fresh for 10 more seconds
+    writeFileSync(usageSidecarPath(h.reg, b), JSON.stringify({ ts, model: 'claude-opus-5', effort: 'high', ctxPct: 12, cost: 1.25 }));
+    await h.watcher.tick();
+    expect(h.watcher.currentUsage().get(b)!.stale).toBe(false);
+    vi.setSystemTime(Date.now() + 25_000);   // under the 30 s re-read: the row stays cold
+    h.watcher.kick('usage');
+    h.reset();
+    await h.watcher.tick();
+    expect(h.readsOf(b)).toEqual([]);   // cold: the sidecar was not read
+    expect(h.watcher.currentUsage().get(b)!.stale).toBe(true);
   });
 });

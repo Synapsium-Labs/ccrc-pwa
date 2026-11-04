@@ -180,6 +180,12 @@ export function verdictFromListing(l: PaneListing & { ok: true }, id: string): S
   return l.panes.has(tmuxName(id)) ? { verdict: 'live' } : { verdict: 'gone' };
 }
 
+/** The pid the listing gives `id`'s session (its active window's lowest pane), or null: not listed, or listed with no
+ *  active window. Same `tmuxName` key rule as `verdictFromListing`. */
+export function pidFromListing(l: PaneListing & { ok: true }, id: string): number | null {
+  return l.panes.get(tmuxName(id))?.pid ?? null;
+}
+
 export class Tmux {
   constructor(private run: Runner) {}
   async sessionVerdict(id: string): Promise<SessionVerdict> {

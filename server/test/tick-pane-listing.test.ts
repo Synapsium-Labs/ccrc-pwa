@@ -42,12 +42,34 @@ describe('FleetWatcher.tick with one tmux listing (console speed S1)', () => {
     expect(String(notices[0]![0])).toContain('error connecting to tmux');
   });
 
-  it("a live row's pid comes from the listing into panePids", async () => {
+  it("a live row's live-state read uses the pid the listing gave", async () => {
     const h = makeHarness();
     await h.watcher.tick();
     // assembleFleet hands the listing's pid to the live-state reader: it reads <configDir>/sessions/<pid>.json.
     for (const id of LIVE) expect(h.reads.some((p) => p.endsWith(`/sessions/${pidOf(id)}.json`))).toBe(true);
     expect(h.calls.listPanesRow).toBe(0);
+  });
+
+  it('the failure latch resets on an ok listing: fail, ok, fail warns twice', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = makeHarness({ listing: 'fail' });
+    const notices = (): number => warn.mock.calls.filter((c) => String(c[0]).includes('list-panes failed')).length;
+    await h.watcher.tick();
+    expect(notices()).toBe(1);
+    h.state.listing = 'ok';
+    await h.watcher.tick();
+    expect(notices()).toBe(1);
+    h.state.listing = 'fail';
+    await h.watcher.tick();
+    expect(notices()).toBe(2);
+  });
+
+  it('a listing that throws falls back per row, like a failed one', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = makeHarness();
+    (h.watcher as unknown as { deps: { tmux: { listPanes: () => Promise<never> } } }).deps.tmux.listPanes = async () => { throw new Error('boom'); };
+    await h.watcher.tick();
+    expect(h.calls.hasSession).toBe(6);
   });
 
   it('the listing path and the per-row fallback emit the same frame', async () => {

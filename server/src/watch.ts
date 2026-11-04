@@ -9,7 +9,7 @@ import { askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { buildFleetReadModel, type FleetReadModel } from './fleetReadModel.js';
 import { RegistryRowCache } from './registryRowCache.js';
-import { listingNotice, planTick, verdictsOf } from './tickPlan.js';
+import { carriedUsage, listingNotice, planTick, rejectedListing, verdictsOf } from './tickPlan.js';
 import { mapBounded } from './bounded.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
@@ -2521,7 +2521,7 @@ export class FleetWatcher {
       // A refused id's absence from `records` is no measure of the session. The lanes on this tick that would read
       // it as one are handed `registryRead.refused` and hold the id, or leave it out (`tick-lanes-hold-a-refused-id`):
       // the stall watch on `StallTick`, the claim lease lanes and the divergence census.
-      const listingP = this.deps.tmux.listPanes();   // beside the registry read: one tmux ask a tick (console speed S1)
+      const listingP = this.deps.tmux.listPanes().catch((err: unknown) => rejectedListing(listedAt, err));   // beside the registry read: one tmux ask a tick (console speed S1)
       // [registry-refused:omits] a refused id is in no `records`: no state and no field read here, and the lanes handed `refused` hold it, never read it as absent.
       // The tick's ONE selection listing, as the model (D-5864): the lanes that choose their rows from the registry are
       // handed it below, so they do not list again.
@@ -2582,7 +2582,8 @@ export class FleetWatcher {
       }
       const records = registryRead.records;
       const paneListing = await listingP;
-      const notice = listingNotice(this.listingFailed, paneListing); this.listingFailed = notice.failed;
+      const notice = listingNotice(this.listingFailed, paneListing);
+      this.listingFailed = notice.failed;
       if (notice.warn !== null) console.warn(notice.warn);
       const plan = planTick(records, registryRead.cold, paneListing);
       this.registryIds = new Set([...records.map((r) => r.id), ...registryRead.refused]);
@@ -3636,7 +3637,11 @@ export class FleetWatcher {
     const nowS = Math.floor(now / 1000);
     const next = new Map<string, SessionUsage>();
     await Promise.all(records.map(async (r) => {
-      if (readIds?.has(r.id) === false) { const kept = this.usage.get(r.id); if (kept) next.set(r.id, kept); return; }   // cold row (console speed S1)
+      if (readIds?.has(r.id) === false) {   // a cold row (console speed S1) carries its entry
+        const kept = this.usage.get(r.id);
+        if (kept) next.set(r.id, carriedUsage(kept, nowS));
+        return;
+      }
       const read = await readUsageMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, nowS);
       if (read.kind === 'reading') next.set(r.id, read.usage);
       else if (read.kind === 'unreadable') {
