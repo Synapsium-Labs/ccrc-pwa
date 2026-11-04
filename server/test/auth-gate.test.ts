@@ -347,7 +347,7 @@ describe('the scanner is looking at something', () => {
     // and `POST /api/items/:id/dismiss`, registered from `server.ts` by `registerLedgerOperatorRoutes`, session-gated and NOT EXEMPT, no box token.
     // 14 since PL6: `PUT /api/items/:id/secret`, the same registration, session-gated and NOT EXEMPT, no box token; it also takes
     // the account gate with a step-up (a credential act).
-    // 16 since the PL6 follow-up (D-7926): `GET /api/programmes/:slug/secrets` (the stored-secrets read) and `DELETE
+    // 16 since the PL6 follow-up: `GET /api/programmes/:slug/secrets` (the stored-secrets read) and `DELETE
     // /api/programmes/:slug/secrets/:slot` (the Remove door, the account gate with a step-up), the same registration,
     // session-gated and NOT EXEMPT, no box token.
     expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(16);
@@ -516,7 +516,7 @@ describe('the scanner is looking at something', () => {
     // token: the HTTP half 162 -> 166, the gated count 98 -> 102, the exempt-HTTP count stays 64.
     // 170 since programme ledgers PL6's `PUT /api/items/:id/secret`, session-gated and NOT EXEMPT, no box token: the HTTP half
     // 166 -> 167, the gated count 102 -> 103, the exempt-HTTP count stays 64.
-    // 172 since the PL6 follow-up's two (D-7926), the stored-secrets read and the Remove door, session-gated and NOT EXEMPT, no
+    // 172 since the PL6 follow-up's two, the stored-secrets read and the Remove door, session-gated and NOT EXEMPT, no
     // box token: the HTTP half 167 -> 169, the gated count 103 -> 105, the exempt-HTTP count stays 64.
     expect(ROUTES.length).toBe(172);
     // …and the three partitions add up: the websockets plus the HTTP half.
@@ -1269,7 +1269,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // The secret's route (programme ledgers plan PL6): it takes the account gate with `cap: null` and a step-up, so dark it
     // answers `auth-off` (501) and armed with a session that has not stepped up `step-up-required` (403): BY DESIGN.
     'PUT /api/items/:id/secret',
-    // The stored secret's Remove door (the PL6 follow-up, D-7926): the same gate and step-up, so the same two answers: BY DESIGN.
+    // The stored secret's Remove door (the PL6 follow-up): the same gate and step-up, so the same two answers: BY DESIGN.
     'DELETE /api/programmes/:slug/secrets/:slot',
   ]);
 

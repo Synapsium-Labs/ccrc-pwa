@@ -3,8 +3,10 @@
 Task note for the PL6 follow-up (run 1410, programme desktop-polish wave 84). PL6 (secrets pasted into the console) merged as
 #2206. This pull request carries both PL6 reviews' leftovers (review 1 at `a7933a8b`, review 2 at `6eb1e6c0`) and builds the
 operator's rulings of 2026-11-03 on programme items 8 ("one line is enough") and 9 ("keep stored secrets, and give me a
-Remove control"). Deviation D-7926 is issued for it, and every departure below is named by slug under that one number. The
-coordinator folds this note into the plan's ledger on its own pull request; this note edits no ledger.
+Remove control"). One deviation number was issued for it, and every departure below is named by slug under that one number.
+The number is not spelled here: `deviation-refs`' floor case refuses a tracked reference above the ledger's defined
+high-water, and the number is defined only when the coordinator folds this note into the plan's ledger on its own pull
+request (PL9's note met the same rule). The pull request body and the wave-done mail name it. This note edits no ledger.
 
 ## Step 0: what was measured before any change
 
@@ -56,7 +58,7 @@ Measured on this branch at `3bdf77083` (`main` with #2206, #2236 and #2242 in it
 | Review 2 A-11, A-12, A-13 | The masker's header and the client's `saveItemSecret` comment are true again; the re-key's fixed-text warn is named below; the scan waits for the frame the tick emits, there is a 4-byte-character case at the tail floor, and the F1 race has its tests. |
 | Not this PR | Review 1 A5 (the hook's residual forms, recorded) and A6 (`credentialBodyRoute` consolidation, to the carry PR). |
 
-## Departures (all under D-7926)
+## Departures (all under the one issued number)
 
 - **pl6f-tail-only-when-masked**: the ruling withholds the tail for `not-one-run`; this PR withholds it for every unmasked answer (`unregistered` too), so the rule is one sentence: the tail is shown only when the masker catches the value. The safer direction.
 - **pl6f-masked-measured**: `masked` is the masker's own search run over the value alone after its row lands (`catchesWhole`), not a second predicate beside the search.

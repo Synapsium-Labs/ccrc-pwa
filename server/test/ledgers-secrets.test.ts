@@ -796,7 +796,7 @@ describe('the slot metadata carries no digest of the value (review 1389 A2)', ()
   });
 });
 
-// ── the PL6 follow-up (D-7926) ─────────────────────────────────────────────────────────────────────────────────────────
+// ── the PL6 follow-up ─────────────────────────────────────────────────────────────────────────────────────────
 
 describe('a secret is one line (the operator\'s ruling on programme item 8)', () => {
   it('a value with a carriage return or a line feed is refused secret-not-one-line before anything is written', async () => {

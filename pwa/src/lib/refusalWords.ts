@@ -529,7 +529,7 @@ export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'not-a-secret-item': 'This item does not ask for a secret.',
   'bad-slot': 'This item names a place for the secret that the box will not use. Ask the coordinator to raise it again.',
   'stored-not-ticked': 'The secret is stored, but the item was not marked done. Refresh and try again.',
-  // The PL6 follow-up (D-7926): one line (programme item 8), a slot still busy, and the stored secrets' read and Remove (item 9).
+  // The PL6 follow-up: one line (programme item 8), a slot still busy, and the stored secrets' read and Remove (item 9).
   'secret-not-one-line': 'A secret is one line. Take out the line break and save it again.',
   'slot-busy': 'An earlier save or removal of this secret has not finished yet, so nothing was done. Try again in a moment.',
   'secret-not-stored': 'No secret is stored there any more. The list will update.',
