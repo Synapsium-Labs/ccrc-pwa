@@ -331,6 +331,7 @@ function UpdatesBody({ view, stale, now, reload }: {
         <p className="settings-note">{CATALOGUE_EXPLAIN_TEXT}</p>
         <ReleaseList
           releases={view.releases} nodes={view.nodes} channel={fleet?.channel ?? null} source={view.source}
+          releasesTotal={view.releasesTotal}
           haltedBy={halt !== null ? haltId : null}
           onWhatsNew={waiting !== null ? () => setWhatsNew(true) : undefined}
           whatsNewSince={waiting !== null ? whatsNewReleases(view, waiting.tag).since : null}
