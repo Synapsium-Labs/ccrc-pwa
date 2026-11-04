@@ -103,6 +103,13 @@ describe('childSpent — the fast path', () => {
     expect(h.verbs).not.toContain('pr-state');
   });
 
+  it('a .prhistory row for this branch answers spent from prhistory', async () => {
+    put('prhistory', `${JSON.stringify({ pr: 5, branch: BRANCH, phase: 'merged', recordedAt: 10 })}\n`);
+    const h = harness();
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 5, source: 'prhistory', incarnation: 'unplaced' });
+    expect(h.verbs).not.toContain('pr-state');
+  });
+
   it('an UNREADABLE .prhistory → unmeasured, never unspent, and no live call', async () => {
     put('prhistory', '');   // LISTED — `readPrHistory` refuses only a file it can see
     const h = harness(undefined, { io: unreadableField(ID, 'prhistory') });

@@ -2276,6 +2276,29 @@ describe('a workspace whose worktree is parked on another branch', () => {
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.prhistory`))).toBe(false);
   });
 
+  it('branch drift answers unknown/branch-drift and leaves prnumber, prphase and .prhistory byte-identical', () => {
+    // Flag, never repair (spec 2026-10-20 §2.8). `ccd ws-rename` is the one
+    // reconciling act and it is the operator's, so the sweep's answer about a
+    // drifted workspace moves none of the bound PR's record, and a ledger that
+    // already holds rows gains none. The case above runs with no ledger at all.
+    const { id } = parked();
+    const reg = path.join(h.home, '.cc-sessions');
+    const ledger = `${JSON.stringify({ pr: 5, branch: 'ws/quiet-basin', phase: 'closed', recordedAt: 1 })}\n`;
+    h.sh(`_reg_set ${id} prphase open; _reg_set ${id} prnumber 7`);
+    fs.writeFileSync(path.join(reg, `${id}.prhistory`), ledger);
+    const bytes = (): (Buffer | null)[] => ['prnumber', 'prphase', 'prhistory'].map((f) => {
+      const p = path.join(reg, `${id}.${f}`);
+      return fs.existsSync(p) ? fs.readFileSync(p) : null;
+    });
+    const before = bytes();
+    expect(before).not.toContain(null);
+    h.ghRows([]);
+    const l = line(h.sh(`${GH_STUB} cmd_pr_state --session ${id}`));
+    expect(l.phase).toBe('unknown');
+    expect(l.reason).toBe('branch-drift');
+    expect(bytes()).toEqual(before);
+  });
+
   it('leaves the RENAME shape alone — it was already saying it had not measured', () => {
     // The negative control, and the reason the rung tests `tip` as well as the
     // two names. `git branch -m` inside the worktree drifts the two records
@@ -2289,6 +2312,45 @@ describe('a workspace whose worktree is parked on another branch', () => {
     expect(l.reason).not.toBe('branch-drift');
     expect(l.tip).toBeNull();
     expect(l.ahead).toBeNull();
+  });
+});
+
+/**
+ * A ledger row's `branch` is the branch at REPLACEMENT, not the outgoing PR's
+ * (spec 2026-10-20 §1.3). Between waves a programme resets the branch: PR 7 was
+ * on b1, the registry and the worktree move to b2, and b2 has no PR yet. The next
+ * sweep answers no number, so the chokepoint retires PR 7 under b2's name.
+ */
+describe('the ledger across a branch reset', () => {
+  const ID = 'demo-quiet-basin';
+  const B1 = 'ws/quiet-basin';
+  const B2 = 'ws/next-wave';
+  const ledger = (): Record<string, unknown>[] =>
+    fs.readFileSync(path.join(h.home, '.cc-sessions', `${ID}.prhistory`), 'utf8')
+      .split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
+  /** PR 7 bound on b1, by the real chokepoint. */
+  const boundOnB1 = (): { wt: string } => {
+    const { wt, tip } = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([mergedRow({ number: 7, headRefName: B1, headRefOid: tip })]);
+    h.sh(`${GH_STUB} cmd_pr_state --session ${ID}`);
+    expect(h.reg(ID, 'prnumber')).toBe('7');
+    return { wt };
+  };
+  /** The reset: the worktree and the registry both on b2, so nothing drifts, and
+   *  gh knows no PR on b2. */
+  const resetToB2 = (wt: string): void => {
+    h.sh(`cd "${wt}" && git checkout -q -b ${B2}`);
+    h.sh(`_reg_set ${ID} branch ${B2}`);
+    h.ghRows([]);
+    const l = line(h.sh(`${GH_STUB} cmd_pr_state --session ${ID}`));
+    expect(l.reason).not.toBe('branch-drift');
+    expect(l.number).toBeNull();
+  };
+
+  it('across a branch reset (PR 7 on b1, registry moved to b2, no PR on b2), the real chokepoint appends {pr: 7, branch: b2}', () => {
+    resetToB2(boundOnB1().wt);
+    expect(ledger()).toEqual([expect.objectContaining({ pr: 7, branch: B2, phase: 'merged' })]);
+    expect(h.reg(ID, 'prnumber')).toBeNull();
   });
 });
 
