@@ -27,6 +27,7 @@
  */
 
 import { LC_REASON_MAX_BYTES } from './api.js';
+import { utf8Bytes } from './utf8.js';
 
 /**
  * Lowercase, every non-alphanumeric run to one dash, no leading or trailing
@@ -287,8 +288,6 @@ export function isWsProject(s: string): boolean {
  * the box.
  */
 export const WS_TITLE_MAX_BYTES: number = LC_REASON_MAX_BYTES;
-
-const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
 
 /**
  * A title ccd will accept, and THE ONE FUNCTION that makes one: the create route saves what it returns, and the

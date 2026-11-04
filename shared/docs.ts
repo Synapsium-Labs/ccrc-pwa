@@ -14,6 +14,7 @@
 // vocabulary, the wire types, the content class, the overlay, the GitHub link and the page grammar.
 
 import { docsRuleRows, redact } from './redact.mjs';
+import { utf8Bytes } from './utf8.js';
 
 // ---- (A) Sections ----------------------------------------------------------------------------------------------
 
@@ -148,20 +149,6 @@ const EXCLUDED_CODE_POINT_RE = new RegExp(
   'u',
 );
 
-/** The UTF-8 length of `s`, counted from its code points: 1 to 4 bytes each, a surrogate pair being one. */
-function utf8Bytes(s: string): number {
-  let n = 0;
-  for (let i = 0; i < s.length; i += 1) {
-    const cp = s.codePointAt(i) ?? 0;
-    if (cp > 0xffff) {
-      n += 4;
-      i += 1;
-    } else {
-      n += cp < 0x80 ? 1 : cp < 0x800 ? 2 : 3;
-    }
-  }
-  return n;
-}
 
 // Every predicate refuses a non-string first: `RegExp.prototype.test` coerces its argument, so an array such as
 // a repeated query key (`['demo']`) would otherwise test as the string `demo`.

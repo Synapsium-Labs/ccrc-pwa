@@ -8,6 +8,7 @@
 // checks every field and refuses a frame with any field it does not name, so a frame is never half-read.
 
 import { isReleaseTag } from './api.js';
+import { utf8Bytes } from './utf8.js';
 
 /** The test service's protocol version (spec §2.4's protocol row compares it with the wrapper's). */
 export const TESTBOX_PROTO = 1;
@@ -138,7 +139,7 @@ const isUtcSecond = (s: string): boolean => {
 /** The format's ONE reader: a line (with or without its newline) read to its row, or `null` when any field is off. */
 export function parseRunsLine(line: string): RunsLogRow | null {
   const body = line.endsWith('\n') ? line.slice(0, -1) : line;
-  if (utf8Length(body) + 1 > RUNS_LOG_LINE_MAX) return null;
+  if (utf8Bytes(body) + 1 > RUNS_LOG_LINE_MAX) return null;
   if (/[\r\n]/.test(body)) return null;
   const f = body.split('\t');
   if (f.length !== 4) return null;
@@ -302,15 +303,6 @@ const refuse = (at: string, why: string): never => { throw new Refusal(`${at}: $
 
 function has<K extends string>(map: Record<K, true>, v: unknown): v is K {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(map, v);
-}
-
-function utf8Length(s: string): number {
-  let n = 0;
-  for (const ch of s) {
-    const c = ch.codePointAt(0) ?? 0;
-    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
-  }
-  return n;
 }
 
 type Obj = Record<string, unknown>;

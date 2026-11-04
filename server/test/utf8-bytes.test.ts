@@ -3,10 +3,10 @@
 // surrogate is 3 (an encoder writes U+FFFD for it). Every copy that was folded counted the same way, so this is the
 // answer each of them gave.
 import { describe, it, expect } from 'vitest';
-import { utf8Bytes } from '../../shared/ledgers.js';
+import { utf8Bytes } from '../../shared/utf8.js';
 
 const CORPUS: readonly string[] = [
-  '', 'a', 'plain ascii', '\u007f', '\u0080', 'é', '߿', 'ࠀ', '€', '￿', '日本語',
+  '', 'a', 'plain ascii', '\u007f', '\u0080', 'é', '\u07ff', '\u0800', '€', '\uffff', '日本語',
   '😀', 'a😀b', '\u{10ffff}', '\ud83d', '\ude00', 'x\ud83d', '\ude00x', '\ud83d\ud83d', '\ude00\ud83d', 'mixé€😀\ud800end',
 ];
 

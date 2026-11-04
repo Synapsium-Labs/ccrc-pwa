@@ -11,6 +11,7 @@
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
 import { ACTIVE_RUN_STATES, TERMINAL_RUN_STATES, type MailDeliveryState, type Presence, type RunKind, type RunState } from './api.js';
+import { utf8Bytes } from './utf8.js';
 
 /** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
  *  `secret`'s value goes to its slot, never through the answer (spec §5). */
@@ -240,17 +241,6 @@ const SECRET_UNMASKED_MAP: Record<SecretUnmasked, true> = { 'too-short': true, '
 export const SECRET_UNMASKED_WHYS = Object.keys(SECRET_UNMASKED_MAP) as readonly SecretUnmasked[];
 export function isSecretUnmasked(v: unknown): v is SecretUnmasked {
   return typeof v === 'string' && (SECRET_UNMASKED_WHYS as readonly string[]).includes(v);
-}
-
-/** UTF-8 bytes of a string, counted without an encoder (this file imports nothing). A lone surrogate counts 3, as an
- *  encoder writes U+FFFD for it. */
-export function utf8Bytes(s: string): number {
-  let n = 0;
-  for (const ch of s) {
-    const c = ch.codePointAt(0)!;
-    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
-  }
-  return n;
 }
 
 /** Whether a pasted value is one the console takes: 1 to `SECRET_VALUE_MAX` characters and UTF-8 bytes. */
