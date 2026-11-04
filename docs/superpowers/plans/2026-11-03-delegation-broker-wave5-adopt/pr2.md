@@ -52,7 +52,8 @@ None. The deviation block issued to this PR at run-open is unused: nothing below
   three number grammars (`--generation`, the `rev-list` count and a holder pid) used that bound. They now read `^[1-9][0-9]*$`
   (or `^(0|[1-9][0-9]*)$`) with `${#x} -le 10`, the same ten digits, so the run-id grammar keeps its one spelling and the
   pin is unchanged. `single-definition/core-vocab`'s "one path to the ccd script" refused W5-G15's own spelling of
-  `ccd/ccd`, which now reads `ccdWsHelpers.ts`'s `CCD`.
+  `ccd/ccd`. The second run then failed `ccd-lib-load`'s "no test file reads CCD as text" on the first fix's `readFileSync(CCD)`;
+  W5-G15 now reads `ccdSource()`, as every ccd-scanning test does.
 
 ## The mutation table, as measured
 

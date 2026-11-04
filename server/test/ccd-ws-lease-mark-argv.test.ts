@@ -8,7 +8,7 @@ import { CCD_ARGV, CCD_CAN, capSupported, LEASE_AUDIT_CAP, LEASE_MARK_CAP } from
 import { FORBIDDEN_CCD_VERBS } from '../src/coord/approvalguard.js';
 import { CHILD_DENY_RULES, childDenyRules } from '../../shared/api.js';
 import { timeoutMsFor } from '../src/remote/runner.js';
-import { CCD } from './ccdWsHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const A = { leaseId: '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', generation: 2, project: 'demo', adminRecord: '-dash',
   parentId: 'lane-a-demo', parentIncarnation: '11111111-2222-4333-8444-555555555555', activityId: 'act-1',
@@ -97,7 +97,7 @@ describe('CCD_ARGV.leaseAudit', () => {
   });
   it('W5-G15: the runner bounds an audit with --holders at two /proc walks and the git reads, within the agent\'s maximum', () => {
     const ms = timeoutMsFor('ccd', ['ws-lease-audit', '--lease', LEASE, '--generation', '1', '--holders']);
-    const ccd = fs.readFileSync(CCD, 'utf8');
+    const ccd = ccdSource();
     const bound = (name: string): number => Number(new RegExp(`^${name}=(\\d+)`, 'm').exec(ccd)?.[1] ?? NaN);
     const walks = bound('WS_PATH_USERS_SCAN_S') + bound('WS_CWD_USERS_SCAN_S');
     expect(walks).toBe(20);
