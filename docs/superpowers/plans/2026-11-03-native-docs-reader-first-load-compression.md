@@ -856,3 +856,145 @@ None. Issued and unused: 7903 to 7905.
 - zstd: Chrome sends `zstd`, and `@fastify/static` 10 negotiates br, gzip and deflate only.
 - `/api/docs/*` file answers stay uncompressed; compressing them needs its own argument (they are authenticated and may carry drafts and a request's path).
 - The entry script, at about 1962 KB, is close to workbox's 2 MiB precache ceiling, which is measured on the uncompressed file: the ceiling that made the Mermaid chunk leave the precache would fail the build for the entry too.
+
+## Results
+
+Measured by the worker of run 1400 on 2026-11-03, every run through `ccrc test`. The branch ships **Brotli quality 11**: no bound broke, so refinement (c)'s switch was not made.
+
+### Commits
+
+| Task | Commit | What |
+|---|---|---|
+| 1 | `4f6388a53` | `pwa/build/compressAssets.ts` and `pwa/test/compress-assets.test.ts` |
+| 2 | `0e67a7898` | `precompressAssets` in `pwa/vite.config.ts`; three cases in `pwa/test/reader-built.test.ts` |
+| 3 | `7e38ce131` | `preCompressed: true` in `server/src/pwaStatic.ts`; six cases in `server/test/pwa-static-cache.test.ts`; the README sentence |
+| 4 | `872819a39` | `## Deviations found`: none, the issued block unused |
+
+Each task had its own reviewer (sonnet on Tasks 1 and 2, opus on Task 3), and each came back clean. Task 4's held-out pass (two opus lenses, what the server sends and what the build writes, and one sonnet lens, the tests, censuses and scan) found no Critical or Important finding, so no fix commit was made and no refute pass was needed.
+
+### Counts
+
+| Suite | Result |
+|---|---|
+| `pwa/test/compress-assets.test.ts` | RED: failed to load; GREEN: 8 passed (8) |
+| `pwa/test/reader-built.test.ts` | BASE 6 passed; RED 2 failed, 7 passed (9); GREEN 9 passed (9) |
+| `server/test/pwa-static-cache.test.ts` | BASE 6 passed; RED 5 failed, 7 passed (12); GREEN 12 passed (12) |
+| pwa, the other 412 files, in four pieces | 12 600 passed, 3 skipped, 0 failed |
+| `fonts-built`, `markdown-worker-built` (end state) | 4 passed, 9 passed (unchanged from BASE) |
+| the config's readers (`browser-leg`, `sw-denylist`, `markdown-runner`, `shadcn-alias`) | 109 passed |
+| pwa typecheck | `TSC-OK`; `pwa/build/compressAssets.ts` in the program (`--listFilesOnly`: 1) |
+| server guards at BASE and after Task 3 | `rings/fastify-l4` 5, `auth-gate` 249, `ccrc-versioned-audit` 10, `ccrc-settings-census` 22, `topology-clean` 60 (each unchanged) |
+| `ci-reach-census`, `docs-parity`, `citations`, `contrast` | green |
+| server typecheck | `SERVER-TSC-OK` |
+| browser: `browser/reader-frame.browser.test.ts`, locally | 24 passed (24); `browser leg: built the PWA once in 8097 ms` |
+| server, the whole suite (1304 files) in pieces of 70 and then 35 | 67 942 passed, 192 skipped, 47 failed in 15 files, every one outside this wave's Scope (below) |
+| `deviation-refs`, `dtbd` (after the Deviations commit) | 32 passed (32) |
+| `typecheck-tests`, alone | 12 passed (12), once `agent/` had its modules |
+
+The 15 server files that failed in the whole run were each run again alone. They test areas this wave does not touch. Five were green alone:
+- `asks-sweep`
+- `collect-lane-route`
+- `mail-inbox-store`
+- `session-hook-approval-deny`
+- `typecheck-tests`, which had failed only because `agent/` had no modules in this workspace until it was installed.
+
+Ten were red alone too. Each one fails on this box's environment or on a timing bound under the test slice's CPU limits:
+
+| File | Why it fails here |
+|---|---|
+| `ccd-docs-fetch` | 4 cases: `fetch-failed` where `ref-locked` is expected, against this box's git 2.53. |
+| `ccd-tool-adj` | 1 case: this session's own shell already runs at `oom_score_adj` 800. |
+| `ccrc-test-wrapper` | 16 cases: they test `ccrc test` from inside its own slice. |
+| `ccrc-containment` | 1 case. |
+| `child-reclaim-paused-at-server` | 1 case: a NUL-leading `claimedBy` round-trip on this box's Node 24. |
+| `delegation-recovery` | 2 cases: 20 s timeouts. |
+| `platform-hazards` R14(i) | This box's bash 5.3. |
+| `retire-executors-pin` | 5 cases alone: timeouts, plus two timing-shaped assertions in the reclaim executors. This file imports `buildServer`, so the pull request's CI selects it. |
+| `secret-mask` | A 250 ms frame bound, measured at 396 ms. |
+| `shadow-journal`, `update-store-nodes` | 20 s timeouts. |
+| `testbox-box-package`, `testbox-wrapper`, `tmp-sweep` | This box's file modes, test-box routing and live processes. |
+
+The pull request's CI on its own runners is the arbiter for each of them.
+
+The browser file ran with `CCRC_CHROME` set to the box's Playwright Chromium, because `resolveChrome()` threw without it (no `/usr/bin/google-chrome` on this box). A fast pull request skips `browser (pwa)`, which first runs in the merge queue.
+
+### Task 2 Step 6: one real build
+
+Measured at quality 11, into a temporary directory removed afterwards (`OUT-GONE`): `rc=0`, `wall=19 s`; `precompress: 13 files under assets/, 26 copies written, 13163 ms`; Vite's `built in 15.78s`. The build child's total, summed as the plan asks, is 15.78 + 13.16 = 28.9 s. Vite logs `built in` after `writeBundle` returns, so the sum counts the step twice; the build child itself took about 16 s.
+
+| File | Bytes | `.br` | `.gz` |
+|---|---|---|---|
+| `mermaid.frame-*.js` | 3 770 403 | 764 977 | 1 040 720 |
+| `index-*.js` (the entry) | 2 037 731 | 508 489 | 615 644 |
+| `reader-*.js` | 548 493 | 329 979 | 337 601 |
+| `index-*.css` | 276 428 | 38 429 | 47 209 |
+| `readerRenderJob-*.js` | 250 915 | 78 532 | 94 189 |
+| `enhance-*.js` | 196 061 | 57 658 | 66 653 |
+| `markdownWorker-*.js` | 158 372 | 42 680 | 49 745 |
+| `markdownHighlightWorker-*.js` | 78 931 | 23 421 | 26 397 |
+| `bridge-*.js` | 42 846 | 13 942 | 15 808 |
+| `bootstrap-*.js` | 27 765 | 9 400 | 10 358 |
+| **all scripts and stylesheets** | **7 397 794** | **1 870 694** | **2 307 989** |
+
+The entry script goes from about 1.99 MB to about 497 KB as Brotli, and the Mermaid chunk from about 3.68 MB to about 747 KB.
+
+### The built-output files' build times, against the ruling's bounds
+
+Build time is the file's vitest `Duration` times its `tests` share, less its cases' time. The plan's "span less cases" reads about 0 ms here, because vitest 5's JSON report starts a file's span after `beforeAll`.
+
+| File | BASE | After Task 2 (implementer's run) | End state | End state less BASE |
+|---|---|---|---|---|
+| `reader-built` | Duration 5.89 s, build ≈ 3.9 s | Duration 22.42 s | Duration 8.98 s, build ≈ 8.5 s | ≈ 4.6 s |
+| `fonts-built` | Duration 3.76 s, build ≈ 3.0 s | Duration 20.08 s | Duration 8.64 s, build ≈ 8.2 s | ≈ 5.2 s |
+| `markdown-worker-built` | Duration 7.88 s, build ≈ 6.2 s | Duration 14.46 s | Duration 9.25 s, build ≈ 8.5 s | ≈ 2.3 s |
+| browser leg `buildDist` | — | — | 8097 ms | — |
+
+Every build is at most 120 s (the largest, 28.9 s, is Step 6's double-counted sum), and every step cost is at most 45 s. The Duration after Task 2 was measured under heavier fleet load than either the BASE or the end-state run.
+
+### Mutation table
+
+Measured at the end state, in the workspace, one row at a time. Each row was restored from saved bytes with a sha256 check, and `git status --porcelain` was unchanged after each.
+
+| id | measured red | prediction |
+|---|---|---|
+| FLC-T1-M1 | 1 failed | as predicted |
+| FLC-T1-M2 | 1 failed | as predicted |
+| FLC-T1-M3 | 1 failed | as predicted |
+| FLC-T1-M4 | 6 failed | **one more than predicted**: `running it twice changes nothing` also reds. Under the mutant, the file holds its Brotli bytes after the first pass, and a second pass encodes those smaller again with both encoders, so the file and its `.gz` change. |
+| FLC-T2-M1 | 2 failed | as predicted |
+| FLC-T2-M2 | 2 failed | as predicted (the copies were on disk when the service worker was generated) |
+| FLC-T2-M3 | 1 failed | as predicted |
+| FLC-T3-M1 | 5 failed | as predicted |
+| FLC-T3-M2 | 3 failed | as predicted |
+
+```json
+[
+  {"id": "FLC-T1-M1", "spec": "(d)", "pkg": "pwa", "file": "build/compressAssets.ts", "old": "if (copy.byteLength >= original) return { kind: 'not-smaller', bytes: copy.byteLength };", "new": "", "tests": ["test/compress-assets.test.ts"], "red": "1 failed: writes no copy that is not smaller than its file, deciding each encoding alone"},
+  {"id": "FLC-T1-M2", "spec": "(b)", "pkg": "pwa", "file": "build/compressAssets.ts", "old": "export const COMPRESSIBLE_EXTENSIONS: readonly string[] = ['.js', '.css', '.svg'];", "new": "export const COMPRESSIBLE_EXTENSIONS: readonly string[] = ['.js', '.css', '.svg', '.html'];", "tests": ["test/compress-assets.test.ts"], "red": "1 failed: leaves every other file alone"},
+  {"id": "FLC-T1-M3", "spec": "(c)", "pkg": "pwa", "file": "build/compressAssets.ts", "old": "export const BROTLI_QUALITY = 11;", "new": "export const BROTLI_QUALITY = 5;", "tests": ["test/compress-assets.test.ts"], "red": "1 failed: the .br is Brotli at BROTLI_QUALITY, a ruled value"},
+  {"id": "FLC-T1-M4", "spec": "(b)", "pkg": "pwa", "file": "build/compressAssets.ts", "old": "br: writeIfSmaller(`${file}.br`, br, bytes.byteLength),", "new": "br: writeIfSmaller(file, br, bytes.byteLength),", "tests": ["test/compress-assets.test.ts"], "red": "6 failed: writes a .br and a .gz beside; changes no name and no byte; writes no copy that is not smaller; reaches a file in a directory below; the .br is Brotli at BROTLI_QUALITY, a ruled value; running it twice changes nothing"},
+  {"id": "FLC-T2-M1", "spec": "(a)", "pkg": "pwa", "file": "vite.config.ts", "old": "precompressAssets(),", "new": "", "tests": ["test/reader-built.test.ts"], "red": "2 failed: the entry script, its stylesheet and the Mermaid chunk each have a .br and a .gz; every copy sits beside"},
+  {"id": "FLC-T2-M2", "spec": "(g)", "pkg": "pwa", "file": "vite.config.ts", "old": "globPatterns: ['**/*.{js,css,html,png,svg,webmanifest,woff2}'],", "new": "globPatterns: ['**/*.{js,css,html,png,svg,webmanifest,woff2,br,gz}'],", "tests": ["test/reader-built.test.ts"], "red": "2 failed: the service worker precaches no copy; sw.js precaches no file that carries the Mermaid asset"},
+  {"id": "FLC-T2-M3", "spec": "(b)", "pkg": "pwa", "file": "vite.config.ts", "old": "const files = compressAssets(path.join(output.dir, assetsDir));", "new": "const files = compressAssets(output.dir);", "tests": ["test/reader-built.test.ts"], "red": "1 failed: every copy sits beside the script, stylesheet or SVG it encodes, under assets/ only; one of 1 KiB or more has both"},
+  {"id": "FLC-T3-M1", "spec": "(e)", "pkg": "server", "file": "src/pwaStatic.ts", "old": "preCompressed: true,", "new": "", "tests": ["test/pwa-static-cache.test.ts"], "red": "5 failed: pwaStaticOptions turns on preCompressed; a browser that takes br gets the .br; a browser that takes gzip and not br gets the .gz; a browser that takes neither gets the file itself; a copy the build left out is skipped"},
+  {"id": "FLC-T3-M2", "spec": "(e)", "pkg": "server", "file": "src/pwaStatic.ts", "old": "reply.header('cache-control', file.startsWith(assets) ? PWA_ASSET_CACHE : PWA_SHELL_CACHE);", "new": "reply.header('cache-control', file.startsWith(assets) && !/\\.(?:br|gz)$/.test(file) ? PWA_ASSET_CACHE : PWA_SHELL_CACHE);", "tests": ["test/pwa-static-cache.test.ts"], "red": "3 failed: a browser that takes br gets the .br; a browser that takes gzip and not br gets the .gz; a copy the build left out is skipped"}
+]
+```
+
+### Named, without a number
+
+- **Every build ran with `CCRC_SW_DENYLIST` unset.** The brief asked subagents to set "a `CCRC_SW_DENYLIST` covering /docs", but `swDenylist` throws on an entry that covers `/docs`. Unset gives the default list, which is what the hermetic tests use too.
+- **How build time is read.** The plan's "span less cases" formula reads about 0 ms under vitest 5, so build time is `Duration` times its `tests` share, less the cases' time.
+- **The plan's own two sections were written in this plan**, as Task 4 says (`## Deviations found`, and `## Results`). The worker skill otherwise keeps task notes in a new file, but this plan names itself in its Scope, and the plan's text governs.
+- **`agent/` modules were installed in this workspace** (`npm ci`, no lock change) so that `typecheck-tests` could typecheck `agent/src`. The plan's LOW DISK list named `ui/`, `pwa/` and `server/` only.
+- **`CCRC_CHROME` was set for the one browser file** to the box's Playwright Chromium, because `resolveChrome()` threw without it, as the brief allows.
+
+### Carried, not fixed (all Minor, from the per-task and held-out reviews)
+
+- The server's shell case ("no shell answer is compressed") cannot fail on anything this wave changes, because the fixture has no copy beside a shell file. The guard that the shell has no copies is on the build side (`leaves every other file alone`, FLC-T2-M3).
+- No case pins q-value handling (`br;q=0, gzip` gets gzip on the installed `@fastify/static` 10.1.8, probed). Upstream, `*` is rewritten to gzip, so `gzip;q=0, *` gets gzip. No browser sends either header.
+- No row mutates Brotli's `MODE_TEXT` or `SIZE_HINT`; the exact-bytes case may not red for these fixtures if either is dropped. A dropped parameter still gives valid Brotli.
+- The README sentence and `pwaStaticOptions`' comment say "script and stylesheet" and "br, else gzip". The build also copies SVGs, and the plugin also looks for a `.deflate` copy, which is never there and falls through to the file.
+- Refinement (h) understates the release cost. The release jobs take Node from an open `engines` range, so the copies' bytes change whenever a runner image brings a Node with different zlib or Brotli. Each such change can cut one prerelease that differs only in its copies. Docs-only merges start no release run at all. Pinning the release jobs' Node would fix this, outside this wave's scope.
+- The copies add about 4.2 MB to each release tarball, each kept version and each backup, a little over the predicted 3 to 4 MB.
+- `writeBundle` runs once per output. The client build has one output, and the worker build never writes.
