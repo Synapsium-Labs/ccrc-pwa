@@ -139,6 +139,13 @@ export const LEDGER_ROUTE_REFUSALS = {
   notSecretItem: 'not-a-secret-item', badSlot: 'bad-slot',
   // …and every failure AFTER the value is in its slot (review 1389 F3): the value is stored, the item is not ticked.
   storedNotTicked: 'stored-not-ticked',
+  // The PL6 follow-up: a value carrying a line break (`secret-not-one-line`, programme item 8: one line is enough);
+  // a slot's chain still held by an earlier act past its deadline (`slot-busy`, review 1391 A-3); and the operator's
+  // stored-secrets read and Remove door (programme item 9): a slot with no value stored (`secret-not-stored`), a store that
+  // could not be read (`secrets-unreadable`, never folded into "no slots"), and a value file that could not be removed
+  // (`remove-failed`).
+  secretNotOneLine: 'secret-not-one-line', slotBusy: 'slot-busy',
+  secretNotStored: 'secret-not-stored', secretsUnreadable: 'secrets-unreadable', removeFailed: 'remove-failed',
 } as const;
 export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
 
@@ -293,6 +300,11 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // CHOSEN, not measured: 503, as `write-failed`. The box failed partway (a write, an fsync, the tick's transaction); the value
   // the operator sent is stored, and saving it again finishes the act.
   [LEDGER_ROUTE_REFUSALS.storedNotTicked]: 503,
+  // The PL6 follow-up: CHOSEN, not measured. 400 for a value with a line break (what the operator sent, theirs to fix,
+  // as `bad-request`); 404 for a slot with nothing stored (as `unknown-item`); 503 for a slot still busy, a store that could
+  // not be read and a value file that could not be removed (the box's fault, as `write-failed` and the `-unreadable` words).
+  [LEDGER_ROUTE_REFUSALS.secretNotOneLine]: 400, [LEDGER_ROUTE_REFUSALS.secretNotStored]: 404,
+  [LEDGER_ROUTE_REFUSALS.slotBusy]: 503, [LEDGER_ROUTE_REFUSALS.secretsUnreadable]: 503, [LEDGER_ROUTE_REFUSALS.removeFailed]: 503,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
   // for a call that names more than one, or names an issue that now lives in another team; 403 for the policy point's

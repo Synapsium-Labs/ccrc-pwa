@@ -347,7 +347,10 @@ describe('the scanner is looking at something', () => {
     // and `POST /api/items/:id/dismiss`, registered from `server.ts` by `registerLedgerOperatorRoutes`, session-gated and NOT EXEMPT, no box token.
     // 14 since PL6: `PUT /api/items/:id/secret`, the same registration, session-gated and NOT EXEMPT, no box token; it also takes
     // the account gate with a step-up (a credential act).
-    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(14);
+    // 16 since the PL6 follow-up: `GET /api/programmes/:slug/secrets` (the stored-secrets read) and `DELETE
+    // /api/programmes/:slug/secrets/:slot` (the Remove door, the account gate with a step-up), the same registration,
+    // session-gated and NOT EXEMPT, no box token.
+    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(16);
     // 3 in `accounts/routes.ts` (accounts plan Task A14, D-7732): `POST /api/accounts/:id/check`, `/enable` and
     // `/disable`, session-gated and NOT EXEMPT, no box token; each takes the account gate on the `account-v2` cap.
     // 8 since the write routes (accounts plan Task A17, D-7739): `POST /api/accounts`, `/:id/credential`, `/:id/set`,
@@ -513,7 +516,9 @@ describe('the scanner is looking at something', () => {
     // token: the HTTP half 162 -> 166, the gated count 98 -> 102, the exempt-HTTP count stays 64.
     // 170 since programme ledgers PL6's `PUT /api/items/:id/secret`, session-gated and NOT EXEMPT, no box token: the HTTP half
     // 166 -> 167, the gated count 102 -> 103, the exempt-HTTP count stays 64.
-    expect(ROUTES.length).toBe(170);
+    // 172 since the PL6 follow-up's two, the stored-secrets read and the Remove door, session-gated and NOT EXEMPT, no
+    // box token: the HTTP half 167 -> 169, the gated count 103 -> 105, the exempt-HTTP count stays 64.
+    expect(ROUTES.length).toBe(172);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -676,7 +681,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 170 scanned + the static wildcard when the bundle is built.
+    // 172 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1264,9 +1269,11 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // The secret's route (programme ledgers plan PL6): it takes the account gate with `cap: null` and a step-up, so dark it
     // answers `auth-off` (501) and armed with a session that has not stepped up `step-up-required` (403): BY DESIGN.
     'PUT /api/items/:id/secret',
+    // The stored secret's Remove door (the PL6 follow-up): the same gate and step-up, so the same two answers: BY DESIGN.
+    'DELETE /api/programmes/:slug/secrets/:slot',
   ]);
 
-  it('FLAG_AWARE is exactly those eighteen — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those nineteen — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -1284,6 +1291,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'DELETE /api/auth/passkey/:id',
       'DELETE /api/linear/connection',
       'DELETE /api/linear/workspaces/:id',
+      'DELETE /api/programmes/:slug/secrets/:slot',
       'GET /api/auth/passkeys',
       'POST /api/accounts/revoke-ack',
       'POST /api/auth/login',
@@ -1307,7 +1315,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 167 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 169 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1371,7 +1379,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 167 HTTP routes, not the 64 exempt.
+          //    is not itself flag-aware — the assertion that covers all 169 HTTP routes, not the 64 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

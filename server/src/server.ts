@@ -221,6 +221,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/programmes/:slug/items',
   // The operator's reads of the same text (plan PL4): the waiting list, and one programme's goals (an In short copy a session wrote).
   '/api/waiting', '/api/programmes/:slug/goals',
+  // The stored-secrets read (the PL6 follow-up, programme item 9): no value, but each slot's asking item's title, which a session wrote.
+  '/api/programmes/:slug/secrets',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -2470,10 +2472,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token.
   // The secret's route (plan PL6) takes the account gate with a step-up, writes the slot under `cfg.ccrcDir`, and registers
-  // the value with the egress masker (no masker: `unregistered`, said in the answer, never a silent skip).
+  // the value with the egress masker (no masker: `unregistered`, said in the answer, never a silent skip). The PL6 follow-up's
+  // stored-secrets read and Remove door ride the same registration; a Remove retires the slot's lane in the masker.
   registerLedgerOperatorRoutes(app, {
     coord: deps.coord, bus, now: () => Date.now(), presenceOf, gate: accountGate, ccrcDir: deps.cfg.ccrcDir,
-    registerSecret: (laneId, value) => deps.masker?.ingestSecret(laneId, value) ?? 'unregistered',
+    registerSecret: (laneId, value, o) => deps.masker?.ingestSecret(laneId, value, o) ?? 'unregistered',
+    retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
   });
 
   /**
