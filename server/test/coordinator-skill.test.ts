@@ -600,12 +600,14 @@ describe('the coordinator skill: clause 20, the Waiting-on-you list and the Goal
   });
 
   it('names only client verbs the closed client really has, each read from its own table', () => {
-    const spans = [...CLAUSE_20.matchAll(/`ccrc-api ([a-z]+) ([a-z-]+)`/g)].map((m) => `${m[1]}.${m[2]}`);
+    // A span may carry arguments inside its backticks (review 1348 A-1), and every `ccrc-api` the clause names is one span,
+    // so a verb added in another form is harvested, or reds the count.
+    const spans = [...CLAUSE_20.matchAll(/`ccrc-api ([a-z]+) ([a-z-]+)[^`]*`/g)].map((m) => `${m[1]}.${m[2]}`);
     expect(spans, 'clause 20 no longer names its five client verbs').toEqual(
       ['items.raise', 'items.confirm', 'goals.pin', 'goals.modify', 'goals.merged']);
-    const client = readFileSync(CCRC_API, 'utf8');
-    const table = client.slice(client.indexOf('declare -A ROUTES=('));
-    const keys = [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.-]+)\]='/gm)].map((m) => m[1]!);
+    expect(CLAUSE_20.split('ccrc-api').length - 1, 'every ccrc-api the clause names is a harvested span').toBe(spans.length);
+    // The client's rows through the one reader of its table (review 1348 A-2), never a parser of this file's own.
+    const keys = clientRoutes().map((r) => r.key);
     for (const span of spans) expect(keys, `the client has no row for ${span}, which clause 20 names`).toContain(span);
   });
 });
@@ -622,10 +624,11 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
   it('names a client verb the closed client really has: `ccrc-api coordinators intent set --session <id>`', () => {
     const verb = /`ccrc-api (coordinators) (intent) (set) --session <id>`/.exec(CLAUSE_17);
     expect(verb, 'clause 17 no longer names the client verb').not.toBeNull();
-    const client = readFileSync(CCRC_API, 'utf8');
-    const table = client.slice(client.indexOf('declare -A ROUTES=('));
-    const rows = [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.-]+)\]='([^']*)'/gm)].map((m) => [m[1]!, m[2]!]);
-    expect(rows, 'the client has no row for the verb clause 17 names').toContainEqual(['coordinators.intent', 'POST|/api/coordinators/{id}/intent|yes|-']);
+    // The client's rows through the one reader of its table (review 1348 A-2).
+    const row = clientRoutes().find((r) => r.key === 'coordinators.intent');
+    expect(row, 'the client has no row for the verb clause 17 names').toBeDefined();
+    expect({ method: row!.method, path: row!.path, needsId: row!.needsId, query: row!.query })
+      .toEqual({ method: 'POST', path: '/api/coordinators/{id}/intent', needsId: true, query: [] });
   });
 
   it('is an identity declaration and not a restriction: generic Agent and Workflow use stays permitted', () => {

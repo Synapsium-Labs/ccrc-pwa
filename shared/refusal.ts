@@ -147,6 +147,9 @@ export const LEDGER_ROUTE_REFUSALS = {
   // (`remove-failed`).
   secretNotOneLine: 'secret-not-one-line', slotBusy: 'slot-busy',
   secretNotStored: 'secret-not-stored', secretsUnreadable: 'secrets-unreadable', removeFailed: 'remove-failed',
+  // The secret's PUT, a programme or slot name that case-folds to a stored entry spelled differently (review 1416 F3): on a
+  // case-insensitive filesystem the two are one directory or file, so it is refused before any write, on every platform.
+  secretNameCollides: 'secret-name-collides',
 } as const;
 export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
 
@@ -321,6 +324,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // not be read and a value file that could not be removed (the box's fault, as `write-failed` and the `-unreadable` words).
   [LEDGER_ROUTE_REFUSALS.secretNotOneLine]: 400, [LEDGER_ROUTE_REFUSALS.secretNotStored]: 404,
   [LEDGER_ROUTE_REFUSALS.slotBusy]: 503, [LEDGER_ROUTE_REFUSALS.secretsUnreadable]: 503, [LEDGER_ROUTE_REFUSALS.removeFailed]: 503,
+  [LEDGER_ROUTE_REFUSALS.secretNameCollides]: 409,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
   // for a call that names more than one, or names an issue that now lives in another team; 403 for the policy point's

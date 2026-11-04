@@ -159,6 +159,8 @@ describe('the account arm denies on every session (D-6202)', () => {
       'cat "${HOME}"/.ccrc/operator-secrets/prog-a/x.secret', 'cat /srv/home/.ccrc/operator-secrets/prog-a/x.secret', 'cat ~/.ccrc//operator-secrets/prog-a/x.secret',
       'ls ~/.ccrc/operator-secrets', 'grep -r . ~/.ccrc/operator-secrets', 'cp ~/.ccrc/operator-secrets/prog-a/x.secret /tmp/k',
       'cd x && head ~/.ccrc/operator-secrets/prog-a/x.secret', 'ln -s /tmp/elsewhere ~/.ccrc/operator-secrets',
+      // A split-quote spelling (review 1426 F-B): the arm matches the text once quotes are stripped.
+      "cat ~/.ccrc/'operator'-secrets/prog-a/x.secret",
     ]) expect(fire(id, 'Bash', { command }, extra), command).not.toBeNull();
     for (const [tool, input] of [
       ['Read', { file_path: `${home}/.ccrc/operator-secrets/prog-a/x.secret` }], ['Read', { file_path: '~/.ccrc/./operator-secrets/prog-a/x.json' }],

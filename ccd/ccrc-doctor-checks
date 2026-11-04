@@ -10981,7 +10981,7 @@ _check_approval-digest-mismatch() {
 }
 
 # ── BACKUPS: where the secrets on disk could be copied (accounts plan Task A11b; D-5513's backups row; G33) ───────
-# Any backup or snapshot image taken while a lane secret existed holds that secret (spec §3.3), so doctor reports the
+# Any backup or snapshot image taken while one of those secrets existed holds that secret (spec §3.3), so doctor reports the
 # box's posture. Three checks, each with one platform: `secrets-backup-excluded` and `filevault` on darwin, where the
 # account verbs `tmutil addexclusion` the secret directories (D-5755 (8), D-5756), and `snapshot-posture` on Linux,
 # where whether the provider keeps backups or snapshots of the box is the operator's answer, stated, never guessed. The
