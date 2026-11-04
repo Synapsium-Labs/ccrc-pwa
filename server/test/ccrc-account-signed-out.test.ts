@@ -47,6 +47,15 @@ function mustLaneOp(home: string, args: string[], OSTYPE?: string): void {
   if (r.code !== 0) throw new Error(`lane-state refused: ${r.out}`);
 }
 
+/** The roster's lanes whose credential ccrc does not read: `claude`, its upstream lane, and two declared launchers, one
+ *  naming no provider and one naming Anthropic. */
+const launcherLane = (id: string, exec: Record<string, unknown>) => ({ id, label: 'lane·x', configDirSuffix: `.claude-${id}`, exec, homeAble: false, hue: 'green', telemetry: 'none' });
+const ELSEWHERE_ROSTER = {
+  ...AUTH_ROSTER,
+  accounts: [...AUTH_ROSTER.accounts, launcherLane('lane-x', { kind: 'external', launcher: '/bin/true' }),
+    launcherLane('lane-p', { kind: 'external', provider: 'anthropic', launcher: '/bin/true' })],
+};
+
 describe('the sign-out, recorded (D-7992)', () => {
   it('`credential --sign-out` records when a sign-in lane was signed out, and that it holds no credential', () => {
     const home = box('ccrc-signed-out-');
@@ -214,11 +223,7 @@ describe('`credential`: measured on the box, on every write that names the roste
 
   it('a lane whose credential ccrc does not read, a lane off the roster and a roster it cannot read record no word', () => {
     const home = box('ccrc-credential-elsewhere-');
-    seedRoster(home, {
-      ...AUTH_ROSTER,
-      accounts: [...AUTH_ROSTER.accounts, { id: 'lane-x', label: 'lane·x', configDirSuffix: '.claude-lane-x', exec: { kind: 'external', launcher: '/bin/true' },
-        homeAble: false, hue: 'green', telemetry: 'none' }],
-    });
+    seedRoster(home, ELSEWHERE_ROSTER);
     stamp(home, 'lane-x');
     expect(laneState(home, 'lane-x')).not.toHaveProperty('credential');
     stamp(home, 'lane-gone');
@@ -226,6 +231,35 @@ describe('`credential`: measured on the box, on every write that names the roste
     writeFileSync(rosterFile(home), 'not json');
     stamp(home, 'lane-s');
     expect(laneState(home, 'lane-s')).not.toHaveProperty('credential');
+  }, 60_000);
+
+  // Only a sign-in lane's credential is its `.credentials.json`. An upstream lane can run on the token its launcher
+  // sources (`_ah_subjects`), and a declared launcher keeps its credential in a config directory of its own, whatever
+  // provider it names. No file on either says nothing, so neither reads as signed out behind a check that passed.
+  it.each(['claude', 'lane-p'])('%s, working behind a passing check with no `.credentials.json`, records no word', (id) => {
+    const home = box('ccrc-credential-launcher-');
+    seedRoster(home, ELSEWHERE_ROSTER);
+    plantToken(home, 'claude', 'export CLAUDE_CODE_OAUTH_TOKEN=fixture-not-a-token\n');
+    mustLaneOp(home, ['--id', id, '--check-verdict', 'ok', '--check-at', '2026-11-01T00:00:00Z', '--file', rosterFile(home)]);
+    const st = laneState(home, id)!;
+    expect(st['check']).toEqual({ verdict: 'ok', at: '2026-11-01T00:00:00Z' });
+    expect(st).not.toHaveProperty('credential');
+    stamp(home, id);
+    expect(laneState(home, id)).not.toHaveProperty('credential');
+  }, 60_000);
+
+  it('a lane of either shape that names a secrets file holds what the file holds, as any token lane does', () => {
+    const home = box('ccrc-credential-launcher-file-');
+    seedRoster(home, { ...AUTH_ROSTER, accounts: [
+      ...AUTH_ROSTER.accounts.map((a) => (a.id === 'claude' ? { ...a, exec: { kind: 'upstream', secretsFile: '.cc-secrets/claude-oauth.env' } } : a)),
+      launcherLane('lane-e', { kind: 'external', provider: 'anthropic', launcher: '/bin/true', secretsFile: '.cc-secrets/lane-e-oauth.env' })] });
+    for (const id of ['claude', 'lane-e']) {
+      stamp(home, id);
+      expect(laneState(home, id)!['credential']).toBe('none');
+      plantToken(home, id, 'export CLAUDE_CODE_OAUTH_TOKEN=fixture-not-a-token\n');
+      stamp(home, id);
+      expect(laneState(home, id)!['credential']).toBe('held');
+    }
   }, 60_000);
 
   it('a write that names no roster keeps the word it found', () => {
@@ -290,6 +324,23 @@ describe('`--mode credential`, the update\'s sweep (D-7992)', () => {
     const st = laneState(home, 'lane-s')!;
     expect(st).not.toHaveProperty('credential');
     expect(st['check']).toEqual({ verdict: 'ok', at: '2026-11-01T00:00:00Z' });
+  }, 60_000);
+
+  it('`declare` and the sweep give a declared Anthropic launcher no word, and the sweep takes back a word it should not hold', () => {
+    const home = box('ccrc-credential-sweep-declare-');
+    writeFileSync(join(home, '.local', 'bin', 'lane-d'), 'exit 0\n', { mode: 0o755 });
+    const r = ccrcAuth(home, ['account', 'declare', '--id', 'lane-d', '--provider', 'anthropic', '--label', 'lane·d', '--hue', 'violet'], '', host);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(laneState(home, 'lane-d')).not.toBeNull();
+    expect(laneState(home, 'lane-d')).not.toHaveProperty('credential');
+    expect(sweep(home, 'lane-d').code).toBe(0);
+    expect(laneState(home, 'lane-d')).not.toHaveProperty('credential');
+
+    const path = laneStatePath(home, 'lane-d');
+    writeFileSync(path, JSON.stringify({ ...laneState(home, 'lane-d'), check: { verdict: 'ok', at: '2026-11-01T00:00:00Z' }, credential: 'none' }));
+    expect(sweep(home, 'lane-d').code).toBe(0);
+    expect(laneState(home, 'lane-d')).not.toHaveProperty('credential');
+    expect(laneState(home, 'lane-d')!['check']).toEqual({ verdict: 'ok', at: '2026-11-01T00:00:00Z' });
   }, 60_000);
 
   it('makes no file for a lane with none, and leaves a file it cannot read as it found it, answering 0', () => {

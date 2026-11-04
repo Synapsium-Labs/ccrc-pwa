@@ -77,8 +77,9 @@ export interface LaneState {
   readonly mintedAt?: number;
   /** When the box signed the lane out (N5, D-7992). Gone once a credential is in or a check passes. */
   readonly signedOutAt?: number;
-  /** Absent from a box too old to measure it, for a lane whose credential ccrc does not read, and for a sign-in lane on
-   *  macOS with no `.credentials.json`, where the sign-in may be in the keychain. */
+  /** Absent from a box too old to measure it, for a lane whose credential ccrc does not read (an upstream lane or a
+   *  declared launcher with no secrets file), and for a sign-in lane on macOS with no `.credentials.json`, where the
+   *  sign-in may be in the keychain. */
   readonly credential?: (typeof LANE_CREDENTIAL_WORDS)[number];
   readonly keyExpiresAt?: number;
   readonly seedVerifiedAt?: number;

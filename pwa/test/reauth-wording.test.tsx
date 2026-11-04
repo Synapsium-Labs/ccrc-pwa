@@ -191,6 +191,8 @@ describe('the rule: what the lane reports, and on a box too old to report it wha
     expect(oldCredentialOf(NO_CREDENTIAL, null)).toBe('signed-out');
     expect(oldCredentialOf(NONE, null)).toBe('signed-out');
     expect(oldCredentialOf({ ...FRESH, notReadyReason: 'no-credential' }, null)).toBe('signed-out');
+    // A logout outside ccrc leaves a check that passed: the box measured the lane's own file after it.
+    expect(oldCredentialOf({ ...FRESH, credential: 'none' }, null)).toBe('signed-out');
   });
 
   it('keeps wherever the box measured a credential, with no check on record or one that was inconclusive', () => {
@@ -214,7 +216,7 @@ describe('the rule: what the lane reports, and on a box too old to report it wha
     expect(oldCredentialOf(NO_CREDENTIAL, null, true)).toBe('signed-out');
   });
 
-  it('a box too old to report it: keeps behind a passing check with no 401 after it, and neutral everywhere else', () => {
+  it('no word from the box, too old to report it or a lane whose credential it does not read: keeps behind a passing check with no 401 after it, and neutral everywhere else', () => {
     expect(oldCredentialOf(FRESH, usageOf('lane-a'))).toBe('kept');
     expect(oldCredentialOf(FRESH, null)).toBe('kept');
     expect(oldCredentialOf(UNCHECKED, usageOf('lane-a'))).toBe('unsure');

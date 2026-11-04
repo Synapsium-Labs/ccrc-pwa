@@ -1332,9 +1332,12 @@ const signInLivesInItsFile = () => !(process.env.OSTYPE ?? process.platform).sta
  *  lane whose credential it does not read, a lane off the roster, a roster it cannot read, a sign-in it cannot see on
  *  macOS), which leaves the lane with no word, so a screen falls back on what the lane shows. It stats and never reads
  *  the credential, and it always looks: a passing check is no measure of the file, which a logout outside ccrc removes
- *  without a word to the lane. A token lane holds its secrets file; a sign-in lane its `.credentials.json`. Every
- *  `lane-state` write that names the roster carries it, which is how a screen tells a box that measured from one too
- *  old to: `credential` absent. */
+ *  without a word to the lane. A lane that names a secrets file holds that file. A sign-in lane holds its
+ *  `.credentials.json`, and a sign-in lane is what `credential --sign-out` says it is: a generated Anthropic lane. Any
+ *  other lane with no secrets file answers `null`, whatever provider it names: an upstream lane can run on the token its
+ *  launcher sources (`_ah_subjects`) and a declared launcher keeps its credential where ccrc does not read it, so no file
+ *  of theirs says nothing, and `none` would read as signed out on a working lane. Every `lane-state` write that names the
+ *  roster carries it, which is how a screen tells a box that measured from one too old to: `credential` absent. */
 function laneCredentialOf(home, rosterFile, id) {
   let accounts = null;
   try { accounts = JSON.parse(readFileSync(rosterFile, 'utf8'))['accounts']; } catch { return null; }
@@ -1343,7 +1346,8 @@ function laneCredentialOf(home, rosterFile, id) {
   const e = isPlainObject(acct['exec']) ? acct['exec'] : {};
   if (typeof e['secretsFile'] === 'string' && e['secretsFile'] !== '') return secretsFileHeld(home, e['secretsFile']) ? 'held' : 'none';
   const suffix = acct['configDirSuffix'];
-  if (laneProviderOf(e) !== 'anthropic' || typeof suffix !== 'string' || suffix === '' || suffix !== basename(suffix)) return null;
+  if (e['kind'] !== 'generated' || laneProviderOf(e) !== 'anthropic') return null;
+  if (typeof suffix !== 'string' || suffix === '' || suffix !== basename(suffix)) return null;
   let inFile = false;
   try { inFile = lstatSync(join(home, suffix, '.credentials.json')).isFile(); } catch { inFile = false; }
   if (inFile) return 'held';
