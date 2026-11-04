@@ -1005,7 +1005,7 @@ import { entryView } from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DOCS_COMPACT_QUERY, freshDot, headLayoutFor } from '../src/docs/DocsHead';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
-import { DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, fillSentence, servedRefText, shortCommit } from '../src/docs/docsText';
+import { DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, fillSentence, servedRefText, shortCommit } from '../src/docs/docsText';
 import type { DocsFileAnswer, DocsLoaders, DocsTreeAnswer } from '../src/docs/failures';
 import { HighlighterContext } from '../src/lib/highlighterContext';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
@@ -1192,6 +1192,21 @@ describe('the compact row (refinements (c), (e), (g))', () => {
     await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
     expect([...bar().querySelectorAll('.docs-compact-where-text > *')].map((c) => c.className), 'no ref, no ref span')
       .toEqual(['docs-compact-where-crumb']);
+  });
+
+  it('on view=committed of a draft leaf the row keeps its ref and draft badge and says nothing of the view; the banner under it does (refinement (g), (h))', async () => {
+    atWidth(412);
+    const e = entry('specs', 'a.md', { draft: draftOf('modified') });
+    const tree = treeOk({ entries: [e], drafts: holder() });
+    open('/docs/demo/specs/a.md?ref=main&view=committed', fakeLoaders({ tree: okTree(tree) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    const badge = entryView(e, tree.drafts, 'ref').badge;
+    expect(badge, 'the fixture opens a badged draft').not.toBeNull();
+    // The row is the draft view's row, byte for byte; the view is told by the banner in the flow, not by the row.
+    expect(bar().querySelector('.docs-compact-where')?.textContent).toBe(`specs · ${servedRefText(tree.ref)} · ${ENTRY_BADGE_TEXT[badge!]}`);
+    const banner = await screen.findByText(fillSentence(DOCS_BANNER_TEXT.viewCommitted, { short: shortCommit(tree.ref.commit) }));
+    expect(bar().contains(banner) || panel().contains(banner), 'the banner is outside the row and its panel').toBe(false);
+    expect(within(banner.closest('.docs-screen') as HTMLElement).getByRole('link', { name: DOCS_BANNER_TEXT.backToDraft })).toBeInTheDocument();
   });
 
   it('a default view served from anywhere but origin/HEAD names its served ref on the row (refinement (g))', async () => {
@@ -1878,7 +1893,7 @@ describe('the compact head: the rendered row carries .docs-back, .docs-action an
 
 describe('TextLink stays inside a line of text — a link alone is a control', () => {
 ```
-- [ ] **Step 6: Run it to see it pass.** `( cd pwa && ./node_modules/.bin/vitest run test/docs-compact-head.test.tsx )` — Expected (prediction): `Tests  40 passed (40)`. `TSC-OK`.
+- [ ] **Step 6: Run it to see it pass.** `( cd pwa && ./node_modules/.bin/vitest run test/docs-compact-head.test.tsx )` — Expected (prediction): `Tests  41 passed (41)`. `TSC-OK`.
 - [ ] **Step 7: The full header is unchanged, and the censuses hold.** Each alone, through `ccrc test` where heavy: `docs-screen.test.tsx`, `docs-truth.test.tsx`, `refined-phone.test.tsx` — green, each at its BASE count (they render the full header: setup's `matchMedia` answers false, and `refined-phone`'s 390 case reads `.docs-back` on a `tree: null` leaf, which the compact head keeps). `control-census.test.ts`, `tap-targets.test.tsx`, `docs-scans.test.ts`, `shell-css.test.ts`, `sheet-desktop-arm.test.tsx`, `markup-census.test.ts`, `literal-census.test.ts`, `docs-compact-css.test.ts` — green (`tap-targets.test.tsx` one case more than after Task 3; `control-census.test.ts` at its BASE count, with one more entry). `git fetch -q origin main && ( cd server && ./node_modules/.bin/vitest run test/docs-parity.test.ts test/citations.test.ts )` — green.
 - [ ] **Step 8: Commit.** `git add pwa/src/docs/DocsHead.tsx pwa/src/docs/docsText.ts pwa/test/docs-compact-head.test.tsx pwa/test/control-census.test.ts pwa/test/tap-targets.test.tsx` (expect 5), message `pwa: one Docs row on a phone, the rest behind Page details (docs phone header)`, trailer. Record the task's JSON row fence, as measured, in the SDD ledger.
 

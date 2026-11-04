@@ -14,7 +14,7 @@ import { entryView } from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DOCS_COMPACT_QUERY, freshDot, headLayoutFor } from '../src/docs/DocsHead';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
-import { DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, fillSentence, servedRefText, shortCommit } from '../src/docs/docsText';
+import { DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, fillSentence, servedRefText, shortCommit } from '../src/docs/docsText';
 import type { DocsFileAnswer, DocsLoaders, DocsTreeAnswer } from '../src/docs/failures';
 import { HighlighterContext } from '../src/lib/highlighterContext';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
@@ -201,6 +201,21 @@ describe('the compact row (refinements (c), (e), (g))', () => {
     await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
     expect([...bar().querySelectorAll('.docs-compact-where-text > *')].map((c) => c.className), 'no ref, no ref span')
       .toEqual(['docs-compact-where-crumb']);
+  });
+
+  it('on view=committed of a draft leaf the row keeps its ref and draft badge and says nothing of the view; the banner under it does (refinement (g), (h))', async () => {
+    atWidth(412);
+    const e = entry('specs', 'a.md', { draft: draftOf('modified') });
+    const tree = treeOk({ entries: [e], drafts: holder() });
+    open('/docs/demo/specs/a.md?ref=main&view=committed', fakeLoaders({ tree: okTree(tree) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    const badge = entryView(e, tree.drafts, 'ref').badge;
+    expect(badge, 'the fixture opens a badged draft').not.toBeNull();
+    // The row is the draft view's row, byte for byte; the view is told by the banner in the flow, not by the row.
+    expect(bar().querySelector('.docs-compact-where')?.textContent).toBe(`specs · ${servedRefText(tree.ref)} · ${ENTRY_BADGE_TEXT[badge!]}`);
+    const banner = await screen.findByText(fillSentence(DOCS_BANNER_TEXT.viewCommitted, { short: shortCommit(tree.ref.commit) }));
+    expect(bar().contains(banner) || panel().contains(banner), 'the banner is outside the row and its panel').toBe(false);
+    expect(within(banner.closest('.docs-screen') as HTMLElement).getByRole('link', { name: DOCS_BANNER_TEXT.backToDraft })).toBeInTheDocument();
   });
 
   it('a default view served from anywhere but origin/HEAD names its served ref on the row (refinement (g))', async () => {
