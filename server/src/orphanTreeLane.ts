@@ -335,6 +335,9 @@ export function orphanOffers(
 
 /** What the L3 job reports for a tree, which the lane folds. `stopped` composed nothing and says nothing. `leased` and
  *  `lease-unready` are the delegation hold's (PR4): the checkpoint holds the tree, or is not ready to say. */
+/** The `stopped` word for each answer of the delegation hold that composes nothing (PR4): the executor reads it, never re-spells it. */
+export const ORPHAN_LEASE_STOPS = { held: 'leased', 'not-ready': 'lease-unready' } as const;
+
 export type OrphanJobOutcome =
   | { readonly kind: 'stopped'; readonly why: 'caps' | 'paused' | 'epoch' | 'switch' | 'leased' | 'lease-unready' }
   | { readonly kind: 'audited'; readonly audit: OrphanAudit }

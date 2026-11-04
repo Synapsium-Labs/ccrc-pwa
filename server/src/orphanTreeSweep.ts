@@ -16,7 +16,7 @@ import {
 } from './coord/collectOrphanTree.js';
 import {
   ORPHAN_AUDITS_PER_PASS, ORPHAN_AUDITS_PER_PASS_PRESSURE, ORPHAN_CENSUS_MS, ORPHAN_CENSUS_PRESSURE_MS, ORPHAN_QUEUE_KEY,
-  ORPHAN_RETRY_MS, isAuditedClass, orphanPathOfHex, orphanCensusDue, orphanCensusRetryAt, orphanTruncatedRow, orphanTruncatedWaitMs, orphanGoesWithRow, orphanHeldBack, orphanInsideVerdict, orphanFeedRow, orphanFoldAudit, orphanFoldJob, orphanOffers, orphanPopulate,
+  ORPHAN_LEASE_STOPS, ORPHAN_RETRY_MS, isAuditedClass, orphanPathOfHex, orphanCensusDue, orphanCensusRetryAt, orphanTruncatedRow, orphanTruncatedWaitMs, orphanGoesWithRow, orphanHeldBack, orphanInsideVerdict, orphanFeedRow, orphanFoldAudit, orphanFoldJob, orphanOffers, orphanPopulate,
   orphanRemember, orphanRescueArmed, orphanTreesHealth,
   type OrphanCensusNext, type OrphanFold, type OrphanMemory, type OrphanRow, type OrphanTreeMemory,
 } from './orphanTreeLane.js';
@@ -188,7 +188,7 @@ export class OrphanTreeSweep {
     try {
       const out = await d.queue.run(ORPHAN_QUEUE_KEY, () => collectOrphanTree(this.ccd(), hex, cls, obs, d.mono, epoch));
       // `leased` and `lease-unready` compose nothing and fold as any `stopped` does; the second is counted in the health block.
-      if (out.kind === 'stopped' && out.why === 'lease-unready') this.leaseUnready.add(hex); else this.leaseUnready.delete(hex);
+      if ('why' in out && out.why === ORPHAN_LEASE_STOPS['not-ready']) this.leaseUnready.add(hex); else this.leaseUnready.delete(hex);
       const cur = this.memory.get(hex);
       if (cur !== undefined) this.put(hex, orphanFoldJob(cur, out, d.mono(), rescueArmed, censusMs));
     } catch {

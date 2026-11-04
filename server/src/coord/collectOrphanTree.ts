@@ -12,7 +12,7 @@ import {
   ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, readSwitches,
 } from '../../../shared/switches.js';
 import {
-  orphanLicence, orphanRescueArmed, parseOrphanAudit, parseOrphanCensus, parseOrphanResult,
+  ORPHAN_LEASE_STOPS, orphanLicence, orphanRescueArmed, parseOrphanAudit, parseOrphanCensus, parseOrphanResult,
   type OrphanAudit, type OrphanCensus, type OrphanClass, type OrphanJobOutcome, type OrphanObservation, type OrphanSwitches,
 } from '../orphanTreeLane.js';
 import type { OrphanLeaseHold } from './delegation-orphan-hold.js';
@@ -75,8 +75,7 @@ export async function collectOrphanTree(
   if (spend === null) return { kind: 'audited', audit };
   // The delegation hold, on the EXACT path (never `orphanPathOfHex`'s cleaned display form, D-7850).
   const hold = await deps.leaseHold(Buffer.from(hex, 'hex').toString('utf8'), cls);
-  if (hold.kind === 'held') return { kind: 'stopped', why: 'leased' };
-  if (hold.kind === 'not-ready') return { kind: 'stopped', why: 'lease-unready' };
+  if (hold.kind !== 'free') return { kind: 'stopped', why: ORPHAN_LEASE_STOPS[hold.kind] };
   const arrived = nowMono();
   if (orphanLicence(obs, spend.token, arrived) !== 'licensed') return { kind: 'audited', audit };
   // The switches once more: the job's last await. A pause raised, an arm withdrawn or a moved connection stops it.
