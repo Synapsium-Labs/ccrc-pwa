@@ -191,9 +191,10 @@ import type { SessionStore } from './sessions.js';
  *     open, read and close routes are NOT here), named by a nonce the server minted
  *     from sixteen random bytes, for at most the life `readerLab/runs.ts` derives
  *     from the lab's own caps; with no run open it counts nothing. It is a permanent
- *     surface on every box, inert until a session opens a run. Being exempt it also
- *     skips the origin check, on purpose: its callers send origin `null`, and
- *     `needsOriginCheck`'s note below says why that costs nothing. Its counter
+ *     surface on every box, inert until a session opens a run. Being exempt, its GET
+ *     and POST also skip the origin check, on purpose: their callers send origin
+ *     `null`, and `needsOriginCheck`'s note below says why that costs nothing (every
+ *     WebSocket upgrade, this route's included, is still origin-checked). Its counter
  *     (`readerLab/routes.ts#installReaderLabCounter`) is an `onRequest` hook added
  *     just before this file's: it counts and never answers, so a probe this gate
  *     refuses (a frame's WebSocket upgrade, origin `null`) is still counted, and the
