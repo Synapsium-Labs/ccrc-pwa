@@ -35,7 +35,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5c | 5, landed state | `ccd pr-state --project <p> --pr <n>`: its five words, its train proof and its capability token; the server's words, reader and capability-gated brand; wave 3d's F1 and F6 text and review 1109's paged rules read | ccd (fleet box first), server | wave 5a | — | merged 2026-10-31 (#2017 `a77811e5`; `docs/superpowers/plans/2026-10-30-landing-order-wave5c-pr-keyed-pr-state.md`, D-7593 to D-7599, and its departures note, D-7600 to D-7604; Decisions, 2026-10-31 07:06); reaches the fleet box with the next release the operator rolls out |
 | 5d | 5, the lander key | the radar's conf accepts `lander=coordinator` or `none`, mirrored to a marker the server reads; and D-7546's restatement, wave 5b's dropped Task 2 | ccd (fleet box first), skills | — | #2029 | run 1311 (the run's wave 17); review 1313 closed at `36f9897d2`, fix round 1 (Decisions, 2026-11-01 18:39); review 1327 closed at `40cfb6752`, fix round 2 (Decisions, 2026-11-02 22:35); review 1357 clean at `307e47b85`, accepted, departures D-7788 to D-7790 (Decisions, 2026-11-02 23:55); merged 2026-11-03 (`43e11b36`, release v0.0.921; Decisions, 2026-11-03 03:38), run 1311 closed done; plan `docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`, D-7635 to D-7647; the fleet box runs it (v0.0.926), and `lander=coordinator` is written for this project (Decisions, 2026-11-03 06:27) |
 | 5e | 5, the line's core | `landing_entries` and `landing_projects`, an entry pinned at `advance → merging`, the ejection that records its base, the second-ejection notice, the order and hold decider, and the coordinator's read of the line (`GET /api/landing`) | server, skills | wave 5a | — | merged 2026-10-31 (#2020 `4fc83e57`; `docs/superpowers/plans/2026-10-31-landing-order-wave5e-landing-line-core.md`, D-7610 to D-7627, and its departures note, D-7628 to D-7633; Decisions, 2026-10-31 15:17) |
-| 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | #2246 | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); the operator approved its CLAUDE.md amendments (Decisions, 2026-11-03 06:27); run 1312 dispatched 2026-11-03 before the plan reached `main`, on the operator's ruling (Decisions, 2026-11-03 16:14); wave-done verified at `89579e774`, review run 1413 (Decisions, 2026-11-04 03:12); fix round 1 on its report (Decisions, 2026-11-04 03:53); its wave-done verified at `65e81913d`, accepted by review 1425, departures D-7941 to D-7949 (Decisions, 2026-11-04 08:09) |
+| 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | #2246 | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); the operator approved its CLAUDE.md amendments (Decisions, 2026-11-03 06:27); run 1312 dispatched 2026-11-03 before the plan reached `main`, on the operator's ruling (Decisions, 2026-11-03 16:14); wave-done verified at `89579e774`, review run 1413 (Decisions, 2026-11-04 03:12); fix round 1 on its report (Decisions, 2026-11-04 03:53); its wave-done verified at `65e81913d`, accepted by review 1425, departures D-7941 to D-7949 (Decisions, 2026-11-04 08:09); land-synced at `211fdff14` after #2248, MERGED 2026-11-04 10:17 UTC (`6da86bb8`), run 1312 closed (Decisions, 2026-11-04 10:36) |
 | 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | to plan |
 | 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan |
 | 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | — | to plan |
@@ -1994,6 +1994,32 @@ carries it (spec §5.1, amended 2026-09-24).
     routes, under the leave this coordinator gave its programme. If #2248 lands first, the worker merges `main` once
     and recounts that line and the census and auth-gate counts with both branches' routes, and this coordinator
     re-measures that merge before #2246 enters the queue. If #2248 leaves the queue instead, #2246 lands first.
+- **2026-11-04 10:36 — 5f is merged** (#2246, `6da86bb8`, 2026-11-04 10:17:01 UTC, from head `211fdff14`), **and run
+  1312 is closed.**
+  - **The land-sync.** #2248 (the PL6 follow-up) merged first, at 08:20 UTC. Both branches had moved
+    `server/src/auth/gate.ts` line 8 from 167 to 169 routes for their own doors. The worker merged `main` once
+    (`211fdff14`, parents `65e81913d` and `7b362246a`) and recounted with both branches' doors: 171 routes in
+    `gate.ts`, and 174, 171 and 66 in `auth-gate.test.ts`. This coordinator read the merge's remerge-diff, which
+    changes only those counts and their comments. `CLAUDE.md`'s difference from `main` is still exactly amendments A
+    and B. The four required checks passed on that tip, and the run went back to `awaiting-review` and then to
+    `merging`. The acceptance at `65e81913d` stood; the merge added no other content.
+  - **One dequeue, one re-enqueue.** Enqueued at 09:09 UTC, #2246 was removed at 09:11 for failed checks. The cause
+    was a timing case in `agent/test/testbox-service.test.ts` ("Matcher did not succeed in time"). The queue tested
+    the same tree as the PR's head, whose own run had passed that case, and the branch changes no file under `agent/`,
+    so the failure is not the PR's own. Re-enqueued once at 09:55 after a fresh `BOUND_S=0` verdict and the
+    required-checks gate. The enqueue call answered HTTP 502. It was not retried, and the queue read-back showed a
+    real entry at the bound head. It merged at 10:17.
+  - **No server notice for either event.** Neither a `dequeued:#2246` nor a `merged:#2246` mail reached this
+    coordinator. The dequeue was read from the PR's timeline and the merge from `main`'s head, as with #2029 (the
+    carried 5h item below).
+  - **The close.** This coordinator mailed the worker MERGED, then closed run 1312 final: done, released, its child's
+    reclaim queued, no claim of the run still live. Two of its claims, 3383 (`schema.ts`, `coord-db.test.ts`) and
+    3384 (`landing-entry-census.test.ts`), had already lapsed at their hard expiry at about 09:12 UTC. A renewal
+    cannot pass that cap, so the instruction to keep claims until MERGED could not hold for them in the last hour.
+    Nothing edited either file after `211fdff14`.
+  - **The ledger.** #2249 landed at 10:02 UTC as `707eae764`, on the operator's go-ahead (item 26). It carries the
+    rulings, the acceptance and the departures note.
+  - **Next.** Wave 5g's run is 1427, planned and not yet planned in detail.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -2497,7 +2523,9 @@ restatement, taken by wave 5a). None of them accepts wrongly a doc the radar wri
 - **From wave 5d's landing (#2029, 2026-11-03).**
   - **To 5h** (the landed reader):
     - **No merge notice came.** Run 1311 waited at `merging`, and neither the `merged:#2029` mail nor a `merged`
-      feed record appeared, though `ccd pr-state --session` read the PR MERGED. 5h is planned only once the cause is
+      feed record appeared, though `ccd pr-state --session` read the PR MERGED. It happened again with 5f: no
+      `dequeued:#2246` mail after its 09:11 UTC dequeue, and no `merged:#2246` mail after its merge (Decisions,
+      2026-11-04 10:36). 5h is planned only once the cause is
       measured: a lane that reads landings cannot rest on a notice that stayed silent. Until then, any report of a
       merge is a cue for the coordinator to prove it, as this landing did.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
@@ -2586,9 +2614,8 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   carried test gap (to 5i); departures D-7788 to D-7790. The plan is
   `docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`. The fleet box runs it
   (v0.0.926), and `lander=coordinator` is written for this project (Decisions, 2026-11-03 06:27).
-- **5f is accepted and waits to land** (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`,
-  run 1312, #2246 at `65e81913d`, accepted by review 1425; departures D-7941 to D-7949; Decisions, 2026-10-31 20:00,
-  2026-11-03 06:27 and 16:14, and 2026-11-04 03:12, 03:53 and 08:09). It lands after #2248 or before it, as that
-  entry says. Wave 5g's run is 1427, planned. The operator approved its exact `CLAUDE.md` amendments. At landing, the coordinator compares the
-  PR's `CLAUDE.md` diff with amendments A and B byte for byte, again on any tip a merge of `main` produces.
+- **5f is merged** (#2246 `6da86bb8`, 2026-11-04; Decisions, 2026-11-04 10:36). Review 1425 accepted it; its
+  departures are D-7941 to D-7949 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-departures.md`). The plan is
+  `docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`. Wave 5g's run is
+  1427, planned.
 - **5g to 5k follow in order**, each planned against `main` as it then stands. 5h also waits until the fleet box runs 5c.
