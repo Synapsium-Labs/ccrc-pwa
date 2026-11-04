@@ -2571,9 +2571,7 @@ export class FleetWatcher {
       }
       const records = registryRead.records;
       this.registryIds = new Set([...records.map((r) => r.id), ...registryRead.refused]);
-      this.listedIds = new Set([
-        ...registryRead.names.filter((n) => n.endsWith('.uuid')).map((n) => n.slice(0, -'.uuid'.length)), ...registryRead.refused,
-      ]);
+      this.listedIds = registryRead.listedIds;
       // Wave 5: the reclaim chip's registry answer, off THIS listing. Never a
       // second read; see `childMarks`.
       const childMarks = new Map(records.map((r) => [r.id, r.child] as const));
