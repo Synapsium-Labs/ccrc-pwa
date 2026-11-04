@@ -1313,6 +1313,29 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
     expect(lanesIn(LAB_SRC)).toEqual([]);
   });
 
+  /** Code with comments blanked, so a sentence ABOUT fs or a log line is never counted. */
+  const labCode = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+  /** `fs` loaded by import, dynamic import, re-export or require, with or without `node:` and a `/promises` tail. */
+  const FS_LOAD = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['"])(?:node:)?fs(?:\/[^'"\n]*)?\1/;
+  const LOGS = /\bconsole\s*\.|\bprocess\s*\.\s*std(?:out|err)\b/;
+  const labKeeps = (name: string, text: string): string[] => {
+    const code = labCode(text);
+    return [FS_LOAD.test(code) ? `${name} loads fs` : '', LOGS.test(code) ? `${name} writes a log line` : ''].filter(Boolean);
+  };
+
+  it('no lab file loads fs or writes a log line: the door keeps nothing on disk and logs nothing of its own (design 4.4)', () => {
+    for (const rel of LAB_FILES) expect(labKeeps(rel, read(rel)), rel).toEqual([]);
+    // CONTROL: every shape is seen, and a comment about one is not.
+    for (const src of ["import { readFileSync } from 'node:fs';", "import fs from 'fs';", "import('node:fs/promises');",
+      "const f = require('node:fs');", "export { x } from 'node:fs';"]) expect(labKeeps('x', src), src).toEqual(['x loads fs']);
+    for (const src of ["console.warn('x');", 'console . log(1);', "process.stdout.write('x');", 'process.stderr.write(1);']) {
+      expect(labKeeps('x', src), src).toEqual(['x writes a log line']);
+    }
+    for (const src of ['// import fs from "node:fs"; console.warn(1)', "/* require('fs') */ const a = 1;"]) {
+      expect(labKeeps('x', src), src).toEqual([]);
+    }
+  });
+
   it('the probe pair is EXEMPT with reason 8, the run routes are not, and none claims a token or the cookie-or-token class', () => {
     for (const k of LAB_DOORS) {
       const at = GATE_SRC.indexOf(`  ['${k}',`);

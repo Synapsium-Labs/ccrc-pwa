@@ -1576,6 +1576,29 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
     expect(lanesIn(LAB_SRC)).toEqual([]);
   });
 
+  /** Code with comments blanked, so a sentence ABOUT fs or a log line is never counted. */
+  const labCode = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+  /** `fs` loaded by import, dynamic import, re-export or require, with or without `node:` and a `/promises` tail. */
+  const FS_LOAD = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['"])(?:node:)?fs(?:\/[^'"\n]*)?\1/;
+  const LOGS = /\bconsole\s*\.|\bprocess\s*\.\s*std(?:out|err)\b/;
+  const labKeeps = (name: string, text: string): string[] => {
+    const code = labCode(text);
+    return [FS_LOAD.test(code) ? `${name} loads fs` : '', LOGS.test(code) ? `${name} writes a log line` : ''].filter(Boolean);
+  };
+
+  it('no lab file loads fs or writes a log line: the door keeps nothing on disk and logs nothing of its own (design 4.4)', () => {
+    for (const rel of LAB_FILES) expect(labKeeps(rel, read(rel)), rel).toEqual([]);
+    // CONTROL: every shape is seen, and a comment about one is not.
+    for (const src of ["import { readFileSync } from 'node:fs';", "import fs from 'fs';", "import('node:fs/promises');",
+      "const f = require('node:fs');", "export { x } from 'node:fs';"]) expect(labKeeps('x', src), src).toEqual(['x loads fs']);
+    for (const src of ["console.warn('x');", 'console . log(1);', "process.stdout.write('x');", 'process.stderr.write(1);']) {
+      expect(labKeeps('x', src), src).toEqual(['x writes a log line']);
+    }
+    for (const src of ['// import fs from "node:fs"; console.warn(1)', "/* require('fs') */ const a = 1;"]) {
+      expect(labKeeps('x', src), src).toEqual([]);
+    }
+  });
+
   it('the probe pair is EXEMPT with reason 8, the run routes are not, and none claims a token or the cookie-or-token class', () => {
     for (const k of LAB_DOORS) {
       const at = GATE_SRC.indexOf(`  ['${k}',`);
@@ -1604,7 +1627,7 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
 });
 ```
 
-- [ ] **Step 2: Run it to see it fail.** `( cd server && ./node_modules/.bin/vitest run test/box-token-census.test.ts )` — Expected (prediction): `1 failed`, `"README's auth paragraph names the probe among the exceptions"`; the other four new cases pass (Task 3 built what they read), and every case at BASE stays green.
+- [ ] **Step 2: Run it to see it fail.** `( cd server && ./node_modules/.bin/vitest run test/box-token-census.test.ts )` — Expected (prediction): `1 failed`, `"README's auth paragraph names the probe among the exceptions"`; the other five new cases pass (Task 3 built what they read), and every case at BASE stays green.
 - [ ] **Step 3: The README sentence.** In `README.md`:
   Find:
 ```md
@@ -1617,7 +1640,7 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
 the run or the name, and it only counts arrivals for a lab run someone opened, a signed-in session on an armed box and
 anyone who reaches the port on a dark one), and `GET /*`, the
 ```
-- [ ] **Step 4: Run it to see it pass.** `( cd server && ./node_modules/.bin/vitest run test/box-token-census.test.ts )` — Expected (prediction): its BASE count plus 5, all passed. Then `test/auth-gate.test.ts`, `test/coord-pause-route.test.ts`, `test/topology-clean.test.ts` and `test/ccrc-settings-census.test.ts`, each alone through `ccrc test`, after `git fetch -q origin main` — green.
+- [ ] **Step 4: Run it to see it pass.** `( cd server && ./node_modules/.bin/vitest run test/box-token-census.test.ts )` — Expected (prediction): its BASE count plus 6, all passed. Then `test/auth-gate.test.ts`, `test/coord-pause-route.test.ts`, `test/topology-clean.test.ts` and `test/ccrc-settings-census.test.ts`, each alone through `ccrc test`, after `git fetch -q origin main` — green.
 - [ ] **Step 5: Commit.** `git add server/test/box-token-census.test.ts README.md` (expect 2), message `server: the reader lab door in the box-token census, and the README's exceptions (docs reader lab)`, trailer. Record the task's JSON row fence, as measured, in the SDD ledger.
 
 **Mutation rows this task contributes:**
@@ -1626,15 +1649,19 @@ anyone who reaches the port on a dark one), and `GET /*`, the
 |---|---|---|---|---|---|---|
 | RLB-T4-M1 | (b) M10.8 | server | `src/readerLab/routes.ts` | `const NO_STORE = 'no-store';` → `const NO_STORE = 'no-store'; // checkMailToken(` | `test/box-token-census.test.ts` | 1 failed — `'no lab file consults the box token, and no lab handler is a lane'` |
 | RLB-T4-M2 | (b) M10.8 | server | `../README.md` | `` `/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request: its answer never depends on the nonce, `` → `` the lab's probe path (a sandboxed frame's request: its answer never depends on the nonce, `` | `test/box-token-census.test.ts` | 1 failed — `"README's auth paragraph names the probe among the exceptions"` |
+| RLB-T4-M3 | (b) M10.8 | server | `src/readerLab/routes.ts` | `import { createHash, randomBytes } from 'node:crypto';` → `import { createHash, randomBytes } from 'node:crypto'; import { readFileSync } from 'node:fs';` (the new line is its own line) | `test/box-token-census.test.ts` | measured: 1 failed — `'no lab file loads fs or writes a log line: the door keeps nothing on disk and logs nothing of its own (design 4.4)'` |
+| RLB-T4-M4 | (b) M10.8 | server | `src/readerLab/routes.ts` | `const NO_STORE = 'no-store';` → `const NO_STORE = 'no-store'; console.warn('lab');` (the new line is its own line) | `test/box-token-census.test.ts` | measured: 1 failed — `'no lab file loads fs or writes a log line: the door keeps nothing on disk and logs nothing of its own (design 4.4)'` |
 
 ```json
 [
   {"id": "RLB-T4-M1", "spec": "(b) M10.8", "pkg": "server", "file": "src/readerLab/routes.ts", "old": "const NO_STORE = 'no-store';", "new": "const NO_STORE = 'no-store'; // checkMailToken(", "tests": ["test/box-token-census.test.ts"], "red": "1 failed: no lab file consults the box token, and no lab handler is a lane"},
-  {"id": "RLB-T4-M2", "spec": "(b) M10.8", "pkg": "server", "file": "../README.md", "old": "`/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request: its answer never depends on the nonce,", "new": "the lab's probe path (a sandboxed frame's request: its answer never depends on the nonce,", "tests": ["test/box-token-census.test.ts"], "red": "1 failed: README's auth paragraph names the probe among the exceptions"}
+  {"id": "RLB-T4-M2", "spec": "(b) M10.8", "pkg": "server", "file": "../README.md", "old": "`/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request: its answer never depends on the nonce,", "new": "the lab's probe path (a sandboxed frame's request: its answer never depends on the nonce,", "tests": ["test/box-token-census.test.ts"], "red": "1 failed: README's auth paragraph names the probe among the exceptions"},
+  {"id": "RLB-T4-M3", "spec": "(b) M10.8", "pkg": "server", "file": "src/readerLab/routes.ts", "old": "import { createHash, randomBytes } from 'node:crypto';", "new": "import { createHash, randomBytes } from 'node:crypto';\nimport { readFileSync } from 'node:fs';", "tests": ["test/box-token-census.test.ts"], "red": "1 failed | 52 passed (53): no lab file loads fs or writes a log line: the door keeps nothing on disk and logs nothing of its own (design 4.4)"},
+  {"id": "RLB-T4-M4", "spec": "(b) M10.8", "pkg": "server", "file": "src/readerLab/routes.ts", "old": "const NO_STORE = 'no-store';", "new": "const NO_STORE = 'no-store';\nconsole.warn('lab');", "tests": ["test/box-token-census.test.ts"], "red": "1 failed | 52 passed (53): no lab file loads fs or writes a log line: the door keeps nothing on disk and logs nothing of its own (design 4.4)"}
 ]
 ```
 
-**Verify:** `test/box-token-census.test.ts` its BASE count plus 5; the guards green.
+**Verify:** `test/box-token-census.test.ts` its BASE count plus 6; the guards green.
 
 ### Task 5: Close RL-a — review, suites, the mutation table, results, push and the one PR
 
