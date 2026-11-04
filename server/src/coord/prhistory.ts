@@ -39,8 +39,9 @@ export type PrHistoryRead =
  * same file, at the same moment — about whether a workspace retired any PRs.
  * ccd also performs no shape validation at all; a line that parses as JSON but
  * fails the five field guards below (`pr`/`branch`/`phase`/`recordedAt` typed
- * wrong, or an optional `prbranch` that is not a string) is dropped here exactly like an unparseable one, silently, with
- * nothing on `PrHistoryRead` distinguishing "this ledger is genuinely empty"
+ * wrong, or an optional `prbranch` that is not a string) is dropped here
+ * exactly like an unparseable one, silently, with nothing on `PrHistoryRead`
+ * distinguishing "this ledger is genuinely empty"
  * from "a line was rejected" — a second, narrower divergence in the same
  * direction. Left unsignalled deliberately for now: the one prospective reader
  * of that signal is the run-close route, which does not exist in this tree yet

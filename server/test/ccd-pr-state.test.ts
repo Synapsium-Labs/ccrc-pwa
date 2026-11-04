@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, WS_ADD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
+import { CCD, WS_ADD, ghContainedEnv, ccdSource, harnessBin } from './ccdWsHelpers.js';
 import { GH_HTTP_502, GH_RATE_LIMITED, GH_STUB, RESET_B1, RESET_B2, RESET_ID, bindOnResetB1, makePrHarness, mergedRow, notAPullRequest,
   resetLedgerPath, resetToB2, trainBlock, trainComment, trainRow, type PrHarness } from './ccdPrHelpers.js';
 import { isFullLine, parsePrLines, phaseFor } from '../src/prstate.js';
@@ -2397,19 +2397,23 @@ describe('the ledger across a branch reset', () => {
   });
 
   it('never lands a number whose prbranch did not: prbranch goes first, so a bound number is always a placed one', () => {
-    // NARROW FIRST, WIDEN LAST, as `never advances prphase past a prnumber write`
-    // injects it: a DIRECTORY at the field's path makes its write fault. A number on
-    // disk without its branch would retire as an unplaced row, and an unplaced row
-    // counts for every branch, so the order is what keeps a placed PR placed.
+    // NARROW FIRST, WIDEN LAST. A number on disk without its branch would retire as
+    // an unplaced row, and an unplaced row counts for every branch, so the order is
+    // what keeps a placed PR placed. The fault is `put`'s own: a FIFO at the pid-named
+    // tmp path (`ccd-bounded-reads.test.ts`' shim, whose `exec` keeps the pid) refuses
+    // the prbranch write and aborts the run at exactly this step.
     const { tip } = bindOnResetB1(h);
-    const field = path.join(h.home, '.cc-sessions', `${ID}.prbranch`);
     h.ghRows([]);
     h.sh(`${GH_STUB} cmd_pr_state --session ${ID}`);
-    fs.mkdirSync(field);
+    expect(h.reg(ID, 'prnumber')).toBeNull();
+    fs.writeFileSync(path.join(harnessBin(h.home), 'python3'),
+      '#!/bin/bash\n'
+      + `mkfifo "${path.join(h.home, '.cc-sessions', `.${ID}.prbranch.$$.tmp`)}" 2>/dev/null || true\n`
+      + 'exec /usr/bin/python3 "$@"\n', { mode: 0o755 });
     h.ghRows([mergedRow({ number: 9, headRefName: B1, headRefOid: tip })]);
-    h.run(`${GH_STUB} cmd_pr_state --session ${ID}`);
+    const r = h.run(`${GH_STUB} cmd_pr_state --session ${ID}`);
+    expect(r.stderr).toContain('refusing to write a non-regular-file pr-state tmp');
     expect(h.reg(ID, 'prnumber'), 'the number landed ahead of its branch').toBeNull();
-    expect(fs.statSync(field).isDirectory(), 'the fixture must survive the run').toBe(true);
   });
 });
 
