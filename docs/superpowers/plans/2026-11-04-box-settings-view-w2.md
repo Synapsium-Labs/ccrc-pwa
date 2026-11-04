@@ -2280,6 +2280,10 @@ takes the next spare and is named in the wave-done.
 - **D-7906.** The wave's one growth waiver for `ccd/ccrc` (`server/test/growth-waivers/D-7906-ccd-ccrc.json`), created by Task 2's
   Step 4 commit, the first to measure `ccd/ccrc` over 40 net code lines (+42), and raised by each later commit that grows the file.
 
+- **D-7907.** `CCRC_RELEASE_BASE_URL` gains no refusal words: it is never refused (an unparseable base reads `custom` alone).
+- **D-7908.** Wave 1's act sentences (`_keep_why`, `_upd_health_s`, `cmd_settings`' deadline sentence) are built from the value-free
+  words functions `_keep_says`, `_upd_health_says` and `_upd_deadline_says`, byte-identical to `main`.
+
 | Number | Task | What it records |
 |---|---|---|
 | D-7906 | 2 (created by the first commit past the armed limit, Step 4 by this plan's figures), raised by every later commit that grows `ccd/ccrc` (Tasks 2, 3, 5 and 7 if it touches the file), finalized in 8 | The wave's one growth waiver for `ccd/ccrc` (`server/test/growth-waivers/D-7906-ccd-ccrc.json`); `maxDelta` is the final measured delta, with its split by task; every commit's armed gate green |

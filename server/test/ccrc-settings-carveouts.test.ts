@@ -352,3 +352,19 @@ describe('_carry_warn_bytes_ok and _carry_warn_bytes_says live in ccd/ccrc', () 
     expect(sourced(boxWith('ccrc-carve-carry-s-', null), '_carry_warn_bytes_says').stdout).toBe('a whole number of bytes from 1 to 18 digits');
   });
 });
+
+// ── W2: wave 1's resolvers' value-free words, by direct calls on a sourced ccd/ccrc (D-7908) ──────────────────────────
+// Each prints its words with no newline; the consumers' sentences (K1, K2, H1 above, the verb's pinned lines) are built from them.
+describe('the words of wave 1\'s resolvers (D-7908)', () => {
+  const says = (script: string): string => sourced(boxWith('ccrc-carve-says-', null), script).stdout;
+  it.each([
+    ['_keep_says 0', 'a whole number from 0 to 9999'],
+    ['_keep_says 2', 'a whole number from 2 to 9999'],
+    ['_keep_says', 'a whole number from 0 to 9999'],
+    ['_upd_health_says', 'a number of seconds (digits only, at most 18)'],
+    ['_upd_deadline_says', 'a positive whole number of milliseconds in canonical digits (at most 15, no lead zero)'],
+    ['_models_budget_says', 'a whole number of seconds from 0 to 3600'],
+  ])('%s prints its words', (script, words) => {
+    expect(says(script)).toBe(words);
+  });
+});

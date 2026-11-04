@@ -12225,6 +12225,7 @@ _models_advance_budget_secs() {
   printf '%s' "$MODELS_BUDGET_S"
 }
 
+_models_budget_says() { printf 'a whole number of seconds from 0 to 3600'; }   # the budget's value-free words; no sentence of `_models_budget` says the range (D-7908)
 # `_models_budget` — CCRC_MODELS_ADVANCE_BUDGET_S, the advance step's budget: the ONE resolver (D-6914). `_models_advance_budget_secs`
 # prints what it sets and `ccrc settings` shows it, so the view says what the step uses. Sets MODELS_BUDGET_S, the seconds the step
 # uses, and MODELS_BUDGET_WHY, a sentence without the `$PROG: ` lead, empty at rc 0; KNOB and KNOB_FROM are left as `_ccrc_knob` read
@@ -21807,6 +21808,7 @@ _keep_knob() {   # <KEY> <default> [<lowest>]
   KEEP=$((10#$KNOB)); KEEP_WHY=""
 }
 
+_upd_deadline_says() { printf 'a positive whole number of milliseconds in canonical digits (at most 15, no lead zero)'; }   # `_upd_deadline_ms`'s refusal words, with no value (D-7908)
 # ── _upd_deadline_ms [min|max] — the deadline, in every reading the server may hold (W4a Task 9; wave 24, D-6591, D-6602) ──
 # W2's server takes `CCRC_UPDATE_DEADLINE_MS` (its `updateDeadlineMs`) from the first of the exposure file, ccrc.env and its
 # manager's environment that names it, since `ccrc.service` reads the two files in that order over the environment; this node's
@@ -23809,6 +23811,7 @@ _upd_gate_probe() {   # <role> <version> -> 0 pass, 1 fail; UPD_GATE_WHY
   return 0
 }
 
+_upd_health_says() { printf 'a number of seconds (digits only, at most 18)'; }   # `_upd_health_s`'s refusal words, with no value (D-7908)
 # ── _upd_health_s — CCRC_UPDATE_HEALTH_S, the health gate's window: the ONE resolver (D-6914) ──
 # `_upd_gate` and `ccrc settings` both read the window here, so the box's settings view says what the gate waits. Sets
 # UPD_HEALTH_S, the seconds the gate uses (the value as written, or 90 whenever a refusal or an unmeasured reading says so),
@@ -23823,7 +23826,7 @@ _upd_health_s() {
   UPD_HEALTH_S="$KNOB"
   case "$KNOB" in
     ''|*[!0-9]*|???????????????????*)
-      UPD_HEALTH_WHY="CCRC_UPDATE_HEALTH_S='${KNOB//[![:print:]]/?}' is not a number of seconds (digits only, at most 18) — using 90"
+      UPD_HEALTH_WHY="CCRC_UPDATE_HEALTH_S='${KNOB//[![:print:]]/?}' is not $(_upd_health_says) — using 90"
       UPD_HEALTH_S=90; return 1 ;;
   esac
 }
@@ -26205,7 +26208,7 @@ cmd_settings() {
         _upd_deadline_ms >/dev/null; rc=$?
         if [ "$rc" -ne 0 ]; then
           if [ -n "$KNOB_WHY" ]; then rc=2; why="$KNOB_WHY"
-          else rc=1; why="CCRC_UPDATE_DEADLINE_MS is not a positive whole number of milliseconds in canonical digits (at most 15, no lead zero), so its plain reading is $val; the backup prune and the watchdog read the min and the max, which ccrc settings prints"; fi
+          else rc=1; why="CCRC_UPDATE_DEADLINE_MS is not $(_upd_deadline_says), so its plain reading is $val; the backup prune and the watchdog read the min and the max, which ccrc settings prints"; fi
         fi ;;
       CCRC_RELEASE_BASE_URL)
         _upd_release_base >/dev/null 2>&1 || { rc=2; why="$KNOB_WHY"; }
@@ -26375,8 +26378,9 @@ _keep_ok() { [[ "$1" =~ ^[0123456789]{1,4}$ ]]; }
 _keep_why() {   # <knob> <value> [<lowest allowed>, default 0]
   local val="$2"
   [ "${#val}" -le 32 ] || val="${val:0:32}..."
-  printf "%s='%s' is not a whole number from %s to 9999" "$1" "${val//[![:print:]]/?}" "${3:-0}"
+  printf "%s='%s' is not %s" "$1" "${val//[![:print:]]/?}" "$(_keep_says "${3:-0}")"
 }
+_keep_says() { printf 'a whole number from %s to 9999' "${1:-0}"; }   # [<lowest allowed>, default 0]: `_keep_why`'s words, with no value
 
 # ── _bak_list — the timestamped backup dirs, oldest first (wave 8 item B) ──
 # One listing for both pruners. Lexical glob order IS chronological for this fixed-width shape (a DST fall-back on
