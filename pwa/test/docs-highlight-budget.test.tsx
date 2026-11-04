@@ -275,8 +275,9 @@ describe('D-7574 characterization: highlight decisions at the page input ceiling
       .map((b) => b.lang)).toEqual(['tsx', 'ts', 'md']);
   });
 
-  it('C6 a name no grammar registers is no requestable block: it is never seeded', () => {
-    expect(decisions(root([block(['language-nope'], 'x'.repeat(400000)), lang('ts', 1), lang('md', 1)]))).toEqual(['unregistered', A, A]);
+  // 524 288 characters, the whole page input ceiling: were they counted, the ts and md blocks after them would pass it.
+  it('C6 a name no grammar registers is no requestable block: it is never seeded, and counts in no page sum', () => {
+    expect(decisions(root([block(['language-nope'], 'x'.repeat(524288)), lang('ts', 1), lang('md', 1)]))).toEqual(['unregistered', A, A]);
   });
 
   it('C7 ts and md blocks filling the page exactly, and every later block is refused', () => {
