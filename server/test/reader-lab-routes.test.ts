@@ -5,6 +5,7 @@
 // frame's WebSocket upgrade is refused by the gate, which logs its foreign-origin line, and still counted; a CORS
 // preflight to the probe is never approved.
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -251,6 +252,17 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
       await a.close();
       app = undefined;
     }
+  });
+
+  it('a run\'s owner digest is never the bare sha256 of the session token, so it never equals the session store\'s own key (M10.17)', () => {
+    const token = 'lab-token-for-the-digest-case';
+    const owner = labOwnerOf(`ccrc_session=${token}`);
+    const bare = createHash('sha256').update(token);
+    // The session store keys a session by the hex of this digest (auth/sessions.ts); the door's own is base64url. Neither
+    // encoding of the bare digest may be the owner.
+    for (const form of [bare.copy().digest('hex'), bare.copy().digest('base64url'), bare.copy().digest('base64')]) expect(owner).not.toBe(form);
+    expect(owner).not.toContain(token);
+    expect(owner).toBe(createHash('sha256').update(`reader-lab:${token}`).digest('base64url'));
   });
 
   it('a HEAD to the probe is neither answered as a probe nor counted (refinement (f))', async () => {
