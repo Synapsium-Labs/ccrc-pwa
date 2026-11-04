@@ -833,3 +833,5 @@ _dl_mark_refuse	C4
 _dl_in	C4
 cmd_ws_lease_mark	C4
 _dl_mark_locked	C4
+cmd_ws_lease_audit	C4
+_dl_audit_ladder	C4

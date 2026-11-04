@@ -502,3 +502,116 @@ _dl_mark_locked() {   # everything the lock serialises (the flags, $dir and $rec
   printf '{"ok":true,"answer":"%s","lease":"%s","generation":%s,"state":"%s","fingerprint":"%s","claudeBase":"%s","tip":%s}\n' \
     "$answer" "$lease" "$((10#$gen))" "$state" "$fp" "$base" "$tip"
 }
+
+# ── ccd ws-lease-audit: the read-only measure of a leased tree (PR2) ──
+# It reads the carrier WITHOUT any lock, recomputes the box-side fingerprint and answers the tree's tip, its dirt (untracked
+# files included), the commits beyond its creation base and, with --holders only, who holds or sits in it. It WRITES NOTHING,
+# by any path: no carrier, no by-tree entry, no lock file, no token store, no journal line (W5-AU7), and its git reads run
+# contained (`_ws_reclaim_contained`: GIT_OPTIONAL_LOCKS=0, so `git status` never refreshes the index). Its token is evidence,
+# never authority (D-7826): no verb consumes it. A fact that does not read is "unmeasured", never false or 0, and makes
+# `changed` "unmeasured" too.
+cmd_ws_lease_audit() {   # ccd ws-lease-audit --lease <uuid> --generation <n> [--holders] -> ONE JSON document on stdout; rc 0
+                         #    measured, 1 unmeasured or refused, 2 usage
+  local LC_ALL=C lease='' gen='' holders=0 flag seen=' '
+  while (( $# )); do
+    flag="$1"
+    case "$flag" in
+      --lease|--generation|--holders) ;;
+      *) _dl_mark_refuse usage "unknown argument '$flag'"; return 2 ;;
+    esac
+    [[ "$seen" != *" $flag "* ]] || { _dl_mark_refuse usage "$flag is given twice"; return 2; }
+    seen+="$flag "
+    if [[ "$flag" == --holders ]]; then holders=1; shift; continue; fi
+    (( $# >= 2 )) || { _dl_mark_refuse usage "$flag needs a value"; return 2; }
+    case "$flag" in --lease) lease="$2" ;; --generation) gen="$2" ;; esac
+    shift 2
+  done
+  [[ "$lease" =~ $__DL_LEASE_RE ]] || { _dl_mark_refuse usage '--lease is not a lease id'; return 2; }
+  [[ "$gen" =~ ^[1-9][0-9]{0,9}$ ]] || { _dl_mark_refuse usage '--generation is not a positive integer'; return 2; }
+  _json_str probe >/dev/null 2>&1 || { printf '%s\n' '{"ok":false,"refusal":"unmeasured","detail":"python3 is unavailable, so the carrier cannot be read or quoted"}'; return 1; }
+  _ws_reclaim_contained _dl_audit_ladder
+}
+
+_dl_audit_ladder() {   # cmd_ws_lease_audit's ladder, inside _ws_reclaim_contained ($lease, $gen and $holders are the verb's)
+  local crc trc pr main mr rec base fp tree tip dirty ahead changed q tok rc=0 hl='' hu=0 i p pids=''
+  _dl_carrier_read "$lease"; crc=$?
+  case "$crc" in
+    0) ;;
+    3) _dl_mark_refuse no-carrier "no carrier of lease $lease is stored"; return 1 ;;
+    *) _dl_mark_refuse bad-carrier "$DL_WHY"; return 1 ;;
+  esac
+  (( 10#$DL_C_generation == 10#$gen )) \
+    || { _dl_mark_refuse stale-generation "the stored carrier of lease $lease is at generation $DL_C_generation, not $gen"; return 1; }
+  rec="$DL_C_adminRecord"
+  _ws_dir_physical "$PROJECTS_ROOT" || { _dl_mark_refuse unmeasured "the projects root could not be resolved ($_WS_PHYS_WHY)"; return 1; }
+  pr="$_WS_PHYS"; main="$PROJECTS_ROOT/$DL_C_project"
+  [[ -e "$main" || -L "$main" ]] || { _dl_mark_refuse no-tree "the main checkout $main of lease $lease's project is gone"; return 1; }
+  [[ -d "$main" && ! -L "$main" ]] && _ws_dir_physical "$main" && mr="$_WS_PHYS" && [[ "$mr" == "$pr/$DL_C_project" ]] \
+    || { _dl_mark_refuse unmeasured "$main is not a directory directly under the physical projects root"; return 1; }
+  _dl_tree_of_record "$mr" "$rec"; trc=$?
+  case "$trc" in
+    0) tree="$DL_TREE" ;;
+    3) _dl_mark_refuse no-tree "${DL_COMMON:-the repository of $mr} holds no worktree record $rec with a tree"; return 1 ;;
+    *) _dl_mark_refuse unmeasured "$DL_WHY"; return 1 ;;
+  esac
+  # the fingerprint binds the creation base: a moved base is another tree identity, never a measurement (W5-AU4)
+  base=$(_dl_creation_base "$DL_ADMIN") \
+    || { _dl_mark_refuse unmeasured "the creation base of $rec could not be read (neither CLAUDE_BASE nor logs/HEAD)"; return 1; }
+  _dl_fingerprint_to fp "$DL_COMMON" "$rec" "$DL_ADMIN" "$tree" "$base" \
+    || { _dl_mark_refuse unmeasured "${DL_WHY:-the fingerprint of $tree could not be computed}"; return 1; }
+  [[ "$fp" == "$DL_C_fingerprint" ]] \
+    || { _dl_mark_refuse fingerprint-mismatch "the tree at $tree is not the one lease $lease's carrier records"; return 1; }
+  tip=$(git -C "$tree" rev-parse --verify -q 'HEAD^{commit}' 2>/dev/null) && [[ "$tip" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] \
+    || { _dl_mark_refuse unmeasured "the tip of $tree could not be read"; return 1; }
+  if _ws_gc_dirty "$tree"; then
+    [[ "$GC_DIRTY_STATE" == dirty ]] && dirty=true || dirty=unmeasured
+  else
+    dirty=false
+  fi
+  ahead=unmeasured
+  if [[ "$DL_C_claudeBase" == "$base" ]]; then
+    q=$(git -C "$tree" rev-list --count "$base..HEAD" -- 2>/dev/null) && [[ "$q" =~ ^(0|[1-9][0-9]{0,9})$ ]] && ahead="$q"
+  fi
+  if [[ "$dirty" == unmeasured || "$ahead" == unmeasured ]]; then
+    changed=unmeasured; rc=1
+  elif [[ "$dirty" == true ]] || (( ahead > 0 )); then
+    changed=true
+  else
+    changed=false
+  fi
+  if (( holders )); then   # the only /proc walk, and only when asked (O5-2 (b), D-7841)
+    local -a say=("$tree")
+    [[ "$DL_TREE_REC" == "$tree" ]] || say+=("$DL_TREE_REC")
+    _ws_path_users_many "${say[@]}" || hu=1
+    for i in "${!say[@]}"; do
+      case "${_WS_PATH_USERS_RCS[i]-2}" in
+        0) ;;
+        1) pids+=" ${_WS_PATH_USERS_PIDS_OF[i]-}" ;;
+        *) hu=1 ;;
+      esac
+    done
+    if (( ! hu )); then
+      _ws_cwd_users "$tree"
+      case $? in
+        0) ;;
+        1) pids+=" ${_WS_CWD_USERS_PIDS-}" ;;
+        *) hu=1 ;;
+      esac
+    fi
+    for p in $pids; do [[ "$p" =~ ^[1-9][0-9]{0,9}$ ]] || hu=1; done
+    if (( hu )); then
+      hl=',"holders":"unmeasured"'; rc=1
+    else
+      hl=",\"holders\":[$(for p in $pids; do printf '%s\n' "$p"; done | sort -nu | paste -sd, -)]"
+    fi
+  fi
+  tok=$(_ws_reclaim_fingerprint "mode=lease-audit" "lease=$lease" "generation=$((10#$gen))" \
+    "incarnation=$DL_C_parentIncarnation" "fingerprint=$fp" "tip=$tip" "dirty=$dirty" "ahead=$ahead" "base=$base") \
+    && [[ "$tok" =~ ^[0-9a-f]{64}$ ]] || { _dl_mark_refuse unmeasured "the audit's token could not be computed"; return 1; }
+  [[ "$dirty" != unmeasured ]] || dirty='"unmeasured"'
+  [[ "$ahead" != unmeasured ]] || ahead='"unmeasured"'
+  [[ "$changed" != unmeasured ]] || changed='"unmeasured"'
+  printf '{"ok":true,"lease":"%s","generation":%s,"tip":"%s","dirty":%s,"aheadOfBase":%s,"changed":%s%s,"token":"%s"}\n' \
+    "$lease" "$((10#$gen))" "$tip" "$dirty" "$ahead" "$changed" "$hl" "$tok"
+  return "$rc"
+}
