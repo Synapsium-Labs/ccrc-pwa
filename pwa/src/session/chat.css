@@ -938,6 +938,9 @@ button.metachip:active {
 }
 .inputbar:focus-within {
   border-color: var(--accent);
+  /* Invisible in normal colours; forced colours draw it, where the accent border is overridden and the field itself
+     draws no ring, so the composer keeps a focus cue there (review 1473 A5). */
+  outline: 2px solid transparent;
 }
 .prompt-glyph {
   flex: none;

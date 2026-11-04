@@ -150,8 +150,9 @@ export class ReconnectingSocket {
   }
 
   /** Immediate reconnect if down (skips any pending backoff wait). Wired to the page becoming visible and coming back
-   *  online, so it also replaces an OPEN socket that has heard nothing for `SILENCE_MS` (the watchdog): a phone that
-   *  slept may hold a socket the network dropped long ago. A connecting socket is left to its connect limit. */
+   *  online, so it also replaces an open socket that a beat has ARMED and that has then heard nothing for `SILENCE_MS`
+   *  (the watchdog): a phone that slept may hold a socket the network dropped long ago, and its throttled check may not
+   *  have run. An open socket no beat has armed is left alone, and a connecting one is left to its connect limit. */
   nudge(): void {
     if (this.stopped) return; // inert unless started
     const ws = this.ws;

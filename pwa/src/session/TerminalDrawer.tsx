@@ -460,10 +460,11 @@ export function TerminalDrawer({
     // probe. Unconditionally bumping `attempt` would close a live terminal and
     // re-attach it for nothing the moment the operator signed back in: the
     // reader would watch their pane drop to `attaching…` and repaint for no
-    // reason, and lose a ^C held for a confirm and a latched `ctrl`. This is
-    // `ReconnectingSocket.nudge()`'s own rule (`ws.ts`: inert unless started,
-    // and an open socket is replaced only once armed by a beat and then quiet
-    // for 30 s), which the two paths were asymmetric on.
+    // reason, and lose a ^C held for a confirm and a latched `ctrl`. So the
+    // drawer re-attaches only a socket that is not open (a connecting one
+    // too), and never replaces an open one: its raw socket hears no beat, so
+    // it has none of `ReconnectingSocket.nudge()`'s armed-and-quiet case
+    // (`ws.ts`). Before this guard the two paths were asymmetric.
     const unsubAuth = onAuthRegained(() => {
       if (connRef.current !== 'open') setAttempt((a) => a + 1);
     });
