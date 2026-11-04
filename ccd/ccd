@@ -7572,8 +7572,9 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <wor
                    lc_gc=1; lc_child="$2"; shift 2 ;;
       --child=*)   lc_gc=1; lc_child="${1#--child=}"; shift ;;
       # ONE LINE EACH, and only these two lines spell the arm: `ccd-ws-add-base.test.ts`'s W5-B8 strips exactly them to
-      # build an older ccd, which binds a leading `--base` as the project and refuses (D-6164). A flag is never a value.
-      --base)      [[ $# -ge 2 && $2 != -* ]] && (( ! lc_gb )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gb=1; lc_base="$2"; shift 2 ;;
+      # build an older ccd, which binds a leading `--base` as the project and refuses (D-6164). A flag taken as the value is
+      # refused by the value check below, so this arm checks arity only.
+      --base)      [[ $# -ge 2 ]] && (( ! lc_gb )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gb=1; lc_base="$2"; shift 2 ;;
       --base=*)    (( ! lc_gb )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gb=1; lc_base="${1#--base=}"; shift ;;
       *)           lc_args+=("$1"); shift ;;
     esac
@@ -7631,8 +7632,9 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <wor
   # the box exactly as it found it (spec §5.3).
   (( ${#lc_route[@]} )) && _route_argv_check "${lc_route[@]}"
   (( lc_gc )) && ! _child_runid_valid "$lc_child" && die "--child needs a run id (a positive integer), got: $lc_child"
-  # `--base` IS A CHILD'S ONLY, and a FULL id of either object format, never a ref, an abbreviation or a case variant.
-  # The class is spelled out, not a range, so no locale's collation can widen it (D-2522's shape). Above the project.
+  # `--base` IS A CHILD'S ONLY, and 40 or 64 lowercase hex: the SHAPE of a full id of either object format. Which length
+  # this repository's ids have, and that the value names a commit object itself, are asked of git below. The class is
+  # spelled out, not a range, so no locale's collation can widen it (D-2522's shape). Above the project.
   (( lc_gb )) && { (( lc_gc )) && [[ $lc_base =~ ^([0123456789abcdef]{40}|[0123456789abcdef]{64})$ ]] \
     || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; }
   # BOUND AFTER THE LOOP, NEVER BEFORE IT — this line sat ABOVE the strip in the
@@ -7644,12 +7646,21 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <wor
     || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash (a dot-leading id aliases ccd's own hidden registry files, a dash-leading one spells a flag — see _ws_project_valid)"
   local main="$PROJECTS_ROOT/$project"
   [[ -d "$main/.git" ]] || die "not a git repo: $main"
-  # A COMMIT OF THIS REPOSITORY, asked of the main checkout (a linked worktree shares its object store) with every git
-  # call hook-free and config-pinned (`_ws_reclaim_contained`), BEFORE the disk floor, the placement read, the add lock,
-  # the worktree and the row. The object's own type, never a peel (`^{commit}` would take an annotated tag's id and start
-  # the tree at another commit than the one named): a blob, a tree, a tag or an id this repository does not hold refuses.
-  (( lc_gb )) && { [[ $(_ws_reclaim_contained git -C "$main" cat-file -t "$lc_base" 2>/dev/null) == commit ]] \
-    || die "ws-add: --base $lc_base is not a commit of $project"; lc_sp=(meas.startpoint "$lc_base"); }
+  # A FULL COMMIT ID OF THIS REPOSITORY, asked of the main checkout (a linked worktree shares its object store) with every
+  # git call hook-free and config-pinned (`_ws_reclaim_contained`) and no lazy fetch from a promisor remote, BEFORE the disk
+  # floor, the placement read, the add lock, the worktree and the row. Two facts, so `meas.startpoint` names exactly the
+  # commit the tree starts at (D-7981, D-7982). The value's length is this repository's id length (`--show-object-format`):
+  # a 40-hex PREFIX in a sha256 repository, or a 64-hex REF NAME in a sha1 one, refuses, and an unreadable format refuses.
+  # At that length git reads the value as an object id, never as a ref or an abbreviation. And the object's own type is
+  # `commit`, never a peel (`^{commit}` would take an annotated tag's id). A blob, a tree, a tag or a missing id refuses.
+  if (( lc_gb )); then
+    local lc_fmt lc_len=0
+    lc_fmt=$(GIT_NO_LAZY_FETCH=1 _ws_reclaim_contained git -C "$main" rev-parse --show-object-format 2>/dev/null) || lc_fmt=''
+    case "$lc_fmt" in sha1) lc_len=40 ;; sha256) lc_len=64 ;; *) die "ws-add: --base: the object format of $project could not be read (${lc_fmt:-no answer}), so a full commit id cannot be told from a prefix or a ref name — nothing was touched" ;; esac
+    (( ${#lc_base} == lc_len )) && [[ $(GIT_NO_LAZY_FETCH=1 _ws_reclaim_contained git -C "$main" cat-file -t "$lc_base" 2>/dev/null) == commit ]] \
+      || die "ws-add: --base $lc_base is not a full $lc_fmt commit id of $project"
+    lc_sp=(meas.startpoint "$lc_base")
+  fi
 
   # Before anything is created: no worktree, no branch, no registry entry, no
   # session. A refusal here must leave the box exactly as it found it.
