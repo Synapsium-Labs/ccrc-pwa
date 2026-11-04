@@ -994,8 +994,20 @@ Measured after the fix round, each through `ccrc test`:
 - pwa: `TSC-OK`; `compress-assets` 8 passed; `contrast` 314 passed, alone; the other 412 files in four pieces, 12 600 passed and 3 skipped; `reader-built` 9, `fonts-built` 4 and `markdown-worker-built` 9 passed, each alone, with Durations of 10.44 s, 10.22 s and 10.30 s.
 - browser: `browser/reader-frame.browser.test.ts`, 24 passed, with `browser leg: built the PWA once in 13217 ms`.
 - server: `SERVER-TSC-OK`; `pwa-static-cache` 14, `auth-gate` 249, `rings/fastify-l4` 5, `ccrc-versioned-audit` 10, `ccrc-settings-census` 22 and `topology-clean` 60 passed, each alone; `ci-reach-census`, `docs-parity`, `deviation-refs`, `dtbd`, `citations`, `anchors` and `typecheck-tests` passed, 141 cases.
-- Task 3's two rows again, in place, sha-restored: FLC-T3-M1 red 7 and FLC-T3-M2 red 4 (the table and fence below restate them). The other seven rows' files did not change.
+- Task 3's two rows again, in place, sha-restored: FLC-T3-M1 red 7 and FLC-T3-M2 red 4 (the table and fence above restate them). The other seven rows' files did not change.
 
+### Fix round 2 (review 1414)
+
+- F1 and F2: two stale bullets under "Carried, not fixed" are corrected. The q-value bullet now keeps only the unpinned `*`-as-gzip remark, and the README and comment wording bullet is deleted, because round 1's F2 closed it.
+- A1: the header comment of the server test's precompression describe now states the negotiation as `pwaStatic.ts` does: the highest q-value wins, the server's own order breaks ties, and a missing copy falls through to the next accepted coding and then to the file.
+- A2: the q-value case now sends `br;q=0.5, gzip;q=1` and expects gzip. In that order it reds both wrong behaviours: a negotiator that takes the first listed coding, and one that ranks by its own order and ignores q. This amends round 1's ruling.
+- A3: "below" corrected to "above" in round 1's measured list.
+- Not this wave, by the coordinator's ruling: a test that pins `emptyOutDir` on the real config goes on the ledger's Later list. The exact-bytes case's title stays as it is.
+
+Measured after fix round 2, each alone and through `ccrc test`:
+- server: `SERVER-TSC-OK`. Passed: `pwa-static-cache` 14, `auth-gate` 249, `rings/fastify-l4` 5, `deviation-refs` 31 (after `git fetch -q origin main`, re-run after this round's commit), `dtbd` 1, `citations` 4, `anchors` 9, `docs-parity` 71 and `ci-reach-census` 13.
+- Task 3's two rows, in place and sha-restored: FLC-T3-M1 red 7 and FLC-T3-M2 red 4, both unchanged. Each now includes the reordered q-value case.
+- No pwa suite or browser run, because this round changes no pwa file. The two pwa files that read plan Markdown, `plain-words` and `markdown-parse`, passed 104 cases.
 ### Named, without a number
 
 - **Every build ran with `CCRC_SW_DENYLIST` unset.** The brief asked subagents to set "a `CCRC_SW_DENYLIST` covering /docs", but `swDenylist` throws on an entry that covers `/docs`. Unset gives the default list, which is what the hermetic tests use too.
@@ -1006,8 +1018,7 @@ Measured after the fix round, each through `ccrc test`:
 
 ### Carried, not fixed (all Minor, from the per-task and held-out reviews)
 
-- No case pins q-value handling (`br;q=0, gzip` gets gzip on the installed `@fastify/static` 10.1.8, probed). Upstream, `*` is rewritten to gzip, so `gzip;q=0, *` gets gzip. No browser sends either header.
+- Upstream, `@fastify/static` rewrites `*` to gzip, so `gzip;q=0, *` gets gzip. No case pins that, and no browser sends such a header.
 - Brotli's `BROTLI_MODE_TEXT` and `BROTLI_PARAM_SIZE_HINT` are tuning, not guards (they change neither correctness nor safety; dropping either still writes valid Brotli that decodes to the file), so by the coordinator's ruling on review 1411 they are unguarded by design and take no mutation row; on the exact-bytes case's own fixtures the output with and without them was byte-identical (measured by the reviewer on Node 24).
-- The README sentence and `pwaStaticOptions`' comment say "script and stylesheet" and "br, else gzip". The build also copies SVGs, and the plugin also looks for a `.deflate` copy, which is never there and falls through to the file.
 - Refinement (h) now states the floating release Node and the 4.2 MB (corrected by the coordinator's ruling on review 1411); pinning the runner's Node is a Later item in the ledger, outside this wave.
 - `writeBundle` runs once per output. The client build has one output, and the worker build never writes.

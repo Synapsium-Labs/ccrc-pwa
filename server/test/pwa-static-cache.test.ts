@@ -117,9 +117,9 @@ describe('the server registers the PWA root through pwaStaticOptions', () => {
   });
 });
 
-// The first-load compression plan (2026-11-03, Task 3). A file is answered with `<file>.br` when the request's
-// Accept-Encoding takes br, else `<file>.gz` when it takes gzip, else the file itself. Chrome on Android sends
-// `gzip, deflate, br, zstd`.
+// The first-load compression plan (2026-11-03, Task 3). @fastify/static negotiates the request's Accept-Encoding: the
+// coding with the highest q-value wins, its own order (br, gzip, deflate) breaks ties, and a missing copy falls through
+// to the next accepted coding and then to the file itself. Chrome on Android sends `gzip, deflate, br, zstd`.
 describe('the hashed /assets/* files are sent precompressed, chosen by Accept-Encoding', () => {
   const CHROME = 'gzip, deflate, br, zstd';
   const get = (url: string, acceptEncoding?: string) => app.inject({
@@ -170,8 +170,8 @@ describe('the hashed /assets/* files are sent precompressed, chosen by Accept-En
     }
   });
 
-  it('q-values order the codings: gzip;q=1, br;q=0.5 gets the .gz', async () => {
-    const res = await get(`/${APP}`, 'gzip;q=1, br;q=0.5');
+  it('q-values order the codings: br;q=0.5, gzip;q=1 gets the .gz', async () => {
+    const res = await get(`/${APP}`, 'br;q=0.5, gzip;q=1');
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-encoding']).toBe('gzip');
     expect(gunzipSync(res.rawPayload).equals(appBytes)).toBe(true);
