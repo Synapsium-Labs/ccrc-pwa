@@ -40,8 +40,11 @@ export interface OperatorSecretMeta { setAt: number; tail: string; masked: boole
 /** A slot that HOLDS a value whose record is missing, unreadable or unparseable (review 1416 F4): stored, with nothing known of
  *  when or how. Never folded into `null`, which is a slot holding no value. */
 export interface OperatorSecretUnrecorded { setAt: null }
-/** What a slot's reader answers of a slot that holds a value. */
-export type OperatorSecretState = OperatorSecretMeta | OperatorSecretUnrecorded;
+/** A slot whose value file could not be measured (review 1418 F2): its directory cannot be searched, or an I/O error. Whether a
+ *  value is stored is not known, so it is neither "stored" nor "nothing stored". */
+export interface OperatorSecretUnreadable { unreadable: true }
+/** What a slot's reader answers of a slot it did not prove empty. */
+export type OperatorSecretState = OperatorSecretMeta | OperatorSecretUnrecorded | OperatorSecretUnreadable;
 /** How `writeOperatorSecret` asks the masker to register a value: `beside` adds its row beside the lane's rows instead of
  *  replacing them (review 1416 F1: the write could not prove which value its slot holds, so the old one stays masked too). */
 export type RegisterSecret = (laneId: string, value: string, o?: { beside?: boolean }) => 'masked' | SecretUnmasked;
@@ -56,7 +59,8 @@ const isProgramSlug = (s: unknown): s is string => typeof s === 'string' && (() 
 export class OperatorSecretBadSlot extends Error {
   constructor() { super('the programme or slot name is not a valid slug; no path was built'); this.name = 'OperatorSecretBadSlot'; }
 }
-/** Thrown when a directory of the store is a symlink, not a directory, or open to group or others: nothing was written. */
+/** Thrown when a directory of the store is a symlink, not a directory, open to group or others, or one its owner cannot
+ *  search (review 1418 F2): nothing was written. */
 export class OperatorSecretStoreUnsafe extends Error {
   constructor(which: string) { super(`the operator-secrets store's ${which} directory is not a private directory; nothing was written`); this.name = 'OperatorSecretStoreUnsafe'; }
 }
@@ -128,7 +132,9 @@ export function sweepOperatorSecretTemps(ccrcDir: string): void {
   }
 }
 
-/** Makes `dir` at 0700 when absent; refuses when it is anything but a directory of ours that group and others cannot enter. */
+/** Makes `dir` at 0700 when absent; refuses when it is anything but a directory of ours that group and others cannot enter,
+ *  and, for a write, one its owner can search (review 1418 F2): a 0600 directory lists but cannot be entered, so a write there
+ *  could only fail after the masker was asked. The readers measure such a directory per entry (`unreadable`) instead. */
 async function privateDir(dir: string, which: string): Promise<void> {
   try {
     await fsp.mkdir(dir, { mode: 0o700 });
@@ -136,9 +142,7 @@ async function privateDir(dir: string, which: string): Promise<void> {
     if ((e as NodeJS.ErrnoException)?.code !== 'EEXIST') throw e;
   }
   const st = await fsp.lstat(dir);
-  if (!st.isDirectory() || (st.mode & 0o077) !== 0 || (typeof process.getuid === 'function' && st.uid !== process.getuid())) {
-    throw new OperatorSecretStoreUnsafe(which);
-  }
+  if (!isPrivateDir(st) || (st.mode & 0o100) === 0) throw new OperatorSecretStoreUnsafe(which);
 }
 
 /**
@@ -160,10 +164,17 @@ async function privateDir(dir: string, which: string): Promise<void> {
  * told to save again, which finishes either way. A `register` that throws counts as `unregistered`, never as a failed write.
  * A failed metadata write removes the previous save's record, so no reader shows another save's time beside this value.
  *
- * NO ORDER LEAVES A VALUE ON DISK UNMASKED (review 1416 F1). A read-back that cannot read the slot (`unknown`) cannot say
- * whether the rename ran: the failure may have come at the temp's open, so the slot may still hold the previous value. So
- * that arm registers the new value BESIDE the lane's rows (`beside`), never in place of them: both values stay masked until a
- * later save, whose write proves what the slot holds, replaces the lane's rows with its own.
+ * ONE WINDOW ASIDE (below), NO ORDER LEAVES A VALUE ON DISK UNMASKED (review 1416 F1, review 1418 F1). A read-back that cannot
+ * read the slot (`unknown`) cannot say whether the rename ran: the failure may have come at the temp's open, so the slot may
+ * still hold the previous value. So that arm registers the new value BESIDE the lane's rows (`beside`), never in place of
+ * them: both values stay masked until a later save, whose write proves what the slot holds, replaces the lane's rows with its
+ * own. A rotation does not undo that: the re-key that reads the slot adds the value it read under the new token beside the
+ * current rows and drops the lane's rows of older tokens (`SecretMasker.ingest`'s `rekey`).
+ *
+ * THE WINDOW: a rotation while the slot cannot be read leaves the lane's rows under the previous token. This process keeps
+ * that token (`MAX_PREVIOUS_KEYS`), so the value stays masked here, but a restart forgets it: from the restart until the re-key
+ * reads the slot (it asks at start, then retries on its backoff), the value on disk is unmasked. A value the masker refused
+ * (`too-short` and the rest) was never masked, and the operator was told so.
  */
 export async function writeOperatorSecret(
   ccrcDir: string, program: string, slot: string, value: string, now: number, register: RegisterSecret, item?: number,
@@ -235,13 +246,19 @@ function parseMeta(raw: string): { meta: OperatorSecretMeta; item: number | null
 }
 
 /** The slot's state: its metadata, `{setAt: null}` when it holds a value whose record is missing, unreadable or one this
- *  build cannot parse (review 1416 F4: stored all the same), or `null` when it holds no value: never set, or removed (its value
- *  file is gone, whatever record is left). SYNCHRONOUS, so the one item builder (`viewOfItem`, which may not await) can carry
- *  it; a bad name answers `null` without building a path. */
+ *  build cannot parse (review 1416 F4: stored all the same), `{unreadable: true}` when its value file cannot be measured (any
+ *  failure but ENOENT: a directory that cannot be searched, an I/O error; review 1418 F2), or `null` when it holds no value:
+ *  never set, or removed (its value file is gone, whatever record is left), or what stands there is not a regular file.
+ *  SYNCHRONOUS, so the one item builder (`viewOfItem`, which may not await) can carry it; a bad name answers `null` without
+ *  building a path. */
 export function readOperatorSecretMeta(ccrcDir: string, program: string, slot: string): OperatorSecretState | null {
   let file: string;
   try { file = operatorSecretPath(ccrcDir, program, slot); } catch { return null; }
-  try { if (!lstatSync(file).isFile()) return null; } catch { return null; }
+  try {
+    if (!lstatSync(file).isFile()) return null;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? null : { unreadable: true };
+  }
   let raw: string;
   try { raw = readFileSync(metaPathOf(file), 'utf8'); } catch { return { setAt: null }; }
   return parseMeta(raw)?.meta ?? { setAt: null };

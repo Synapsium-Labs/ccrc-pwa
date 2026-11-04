@@ -133,12 +133,20 @@ function StoredSecretsSection({ slug, secrets, now, onRemoved, removeSecret, ste
   );
 }
 
+/** One item's slot state as a key: nothing stored, unreadable, stored with no record, or the time it was saved. Each is its
+ *  own key (reviews 1416 F4 and 1418 F2), so a move between any two reloads the Stored secrets list. */
+function secretSetKey(set: WaitingView['items'][number]['secretSet']): string {
+  if (set === null) return '-';
+  if ('unreadable' in set) return 'unreadable';
+  return set.at === null ? 'unrecorded' : String(set.at);
+}
+
 /** The key that moves when one of this programme's secret items changes in the frame (raised, saved, removed, closed). */
 function secretItemsKey(slug: string, view: WaitingView | null): string {
   if (view === null) return '';
   return [...view.items, ...view.cleared]
     .filter((i) => i.program === slug && i.kind === 'secret')
-    .map((i) => `${i.id}:${i.state}:${i.secretSet === null ? '-' : (i.secretSet.at ?? 'unrecorded')}`)
+    .map((i) => `${i.id}:${i.state}:${secretSetKey(i.secretSet)}`)
     .sort().join(',');
 }
 

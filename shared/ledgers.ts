@@ -117,8 +117,11 @@ export interface ItemView {
   /** The slot's state (plan PL6), read from its metadata file: when it was set, its tail (`secretTailOf`) and whether the
    *  egress masker knows it. `why` says why it does not, and is absent when it does (or from a server before PL6).
    *  `{at: null}`: the slot HOLDS a value but its record is missing, unreadable or unparseable (review 1416 F4), so nothing
-   *  is known of when or how; it is stored all the same, never folded into `null`, which is a slot that holds no value. */
-  secretSet: { at: number; tail: string; masked: boolean; why?: SecretUnmasked } | { at: null } | null;
+   *  is known of when or how; it is stored all the same, never folded into `null`, which is a slot that holds no value. Its
+   *  `tail` is always empty, for a console from before it that reads one (review 1418 F3).
+   *  `{unreadable: true}`: the box cannot read the slot (a directory it cannot search, an I/O error; review 1418 F2), so
+   *  whether a value is stored is not known: neither stored nor nothing stored. */
+  secretSet: { at: number; tail: string; masked: boolean; why?: SecretUnmasked } | { at: null; tail: '' } | { unreadable: true } | null;
   history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null }[];
 }
 

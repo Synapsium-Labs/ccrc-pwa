@@ -20,7 +20,9 @@
 // says "Stored" with a Remove control (`StoredSecretRemove`, which the programme screen's "Stored secrets" section shares). A
 // Remove asks for confirmation, is a credential act like the save (the same step-up), and never shows any part of the value.
 // A slot that holds a value whose record cannot be read (`secretSet: {at: null}`, review 1416 F4) is stored all the same: the
-// view says "Stored" with its Remove, and nothing of when or how.
+// view says "Stored" with its Remove, and nothing of when or how. A slot the box cannot read at all (`{unreadable: true}`,
+// review 1418 F2) is neither stored nor empty as far as anyone knows: the view says so in the stored-secrets read's own
+// sentence, and offers no Remove and no field to give a secret.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, QuickConfirm, RadioFieldset, TextInput } from '@ccrc/ui';
@@ -340,6 +342,12 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  // The slot's state, told apart (reviews 1416 F4 and 1418 F2): stored (with or without a record), saved with a record, or
+  // unreadable; null and an unreadable slot are never "stored".
+  const set = item.secretSet;
+  const unreadable = set !== null && 'unreadable' in set;
+  const stored = set !== null && 'at' in set ? set : null;
+  const saved = stored !== null && stored.at !== null ? stored : null;
 
   const options = item.options ?? [];
   const decide = item.kind === 'decide';
@@ -404,14 +412,17 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
       {mayTick && item.kind === 'do' && (
         <p className="wi-hint">Nothing to fill in. The coordinator checks it itself and either closes the item or sends it back with what it found.</p>
       )}
-      {open && programmeLive && item.kind === 'secret' && <SecretPanel item={item} saveSecret={saveSecret} stepUpDeps={stepUpDeps} authStatus={authStatus} />}
-      {checking && item.kind === 'secret' && item.secretSet !== null && item.secretSet.at !== null && <SecretState set={item.secretSet} />}
-      {item.kind === 'secret' && item.secretSet !== null && item.secretSlot !== null && (
+      {open && programmeLive && item.kind === 'secret' && !unreadable && <SecretPanel item={item} saveSecret={saveSecret} stepUpDeps={stepUpDeps} authStatus={authStatus} />}
+      {checking && item.kind === 'secret' && saved !== null && <SecretState set={saved} />}
+      {item.kind === 'secret' && stored !== null && item.secretSlot !== null && (
         <div className="wi-stored" data-secret="stored">
           <span className="wi-status">{STORED_TEXT.stored}</span>
-          <StoredSecretRemove key={`${item.secretSlot}:${item.secretSet.at ?? 'unrecorded'}`} program={item.program} slot={item.secretSlot}
+          <StoredSecretRemove key={`${item.secretSlot}:${stored.at ?? 'unrecorded'}`} program={item.program} slot={item.secretSlot}
                               removeSecret={removeSecret} stepUpDeps={stepUpDeps} />
         </div>
+      )}
+      {item.kind === 'secret' && unreadable && (
+        <p className="wi-refusal" data-secret="unreadable">{LEDGER_REFUSAL_TEXT['secrets-unreadable']}</p>
       )}
       {checking && (
         <p className="wi-status" role="status" data-stale={item.stale ? 'true' : 'false'}>

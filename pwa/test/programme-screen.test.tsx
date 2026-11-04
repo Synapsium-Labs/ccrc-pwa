@@ -385,6 +385,8 @@ describe('the programme screen\'s Stored secrets (the operator\'s ruling on prog
     render(<ProgrammeScreen slug="prog-a" store={heard()} secrets={{ read }} />);
     const section = await screen.findByRole('region', { name: STORED_TEXT.heading });
     const row = within(section).getByRole('listitem');
+    // The section carries the class every row rule is scoped to (review 1418 A3): renamed, each .pv-secrets rule would be dead.
+    expect(row.closest('.pv-secrets')).toBe(section);
     // Three elements, never one run of text: "api-keySaved 3h agoAsked for by: …" was the unstyled row (review 1416 F5).
     const parts = ['.pv-secret-name', '.pv-secret-when', '.pv-secret-asker'].map((c) => row.querySelector(c));
     expect(parts.map((p) => p?.textContent)).toEqual(['api-key', 'Saved 3h ago', STORED_TEXT.askedBy('Give the service key')]);
@@ -395,6 +397,8 @@ describe('the programme screen\'s Stored secrets (the operator\'s ruling on prog
     for (const sel of ['.pv-secrets .pv-secret-when', '.pv-secrets .pv-secret-asker']) expect(effectiveValue(css, sel, 'color'), sel).toBe('var(--ink-secondary)');
     expect(effectiveValue(css, '.pv-secrets .wi-refusal', 'background')).toBe('var(--status-dead-tint-solid)');
     expect(effectiveValue(css, '.pv-secrets .wi-status', 'background')).toBe('var(--accent-tint)');
+    // A long refusal or status wraps inside the row, as its item-view twin does (review 1418 A6).
+    for (const sel of ['.pv-secrets .wi-status', '.pv-secrets .wi-refusal']) expect(effectiveValue(css, sel, 'overflow-wrap'), sel).toBe('anywhere');
     expect(effectiveValue(css, '.wi-stored', 'display')).toBe('flex');
   });
 
@@ -427,5 +431,19 @@ describe('the programme screen\'s Stored secrets (the operator\'s ruling on prog
     await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
     act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 5, kind: 'secret', secretSlot: 'api-key', state: 'checking', secretSet: { at: NOW, tail: '', masked: false, why: 'too-short' } } as never)] }) }));
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  });
+
+  it('reads the list again when an item\'s slot moves between nothing stored, stored with no record and unreadable (review 1418 A3)', async () => {
+    const read = vi.fn(async () => answerOf([]));
+    const at = (secretSet: unknown) => waitingView({ items: [itemView({ id: 5, kind: 'secret', secretSlot: 'api-key', state: 'checking', secretSet } as never)] });
+    const store = heard({ waiting: at(null) });
+    render(<ProgrammeScreen slug="prog-a" store={store} secrets={{ read }} />);
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    act(() => store.setState({ waiting: at({ at: null, tail: '' }) }));
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    act(() => store.setState({ waiting: at({ unreadable: true }) }));
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+    act(() => store.setState({ waiting: at(null) }));
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(4));
   });
 });

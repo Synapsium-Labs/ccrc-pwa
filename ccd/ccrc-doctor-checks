@@ -10980,7 +10980,7 @@ _check_approval-digest-mismatch() {
   _dr_pass approval-digest-mismatch "no approval request was refused digest-mismatch in the last 7 days"
 }
 
-# ── BACKUPS: where the lane secrets could be copied (accounts plan Task A11b; D-5513's backups row; G33) ──────────
+# ── BACKUPS: where the secrets on disk could be copied (accounts plan Task A11b; D-5513's backups row; G33) ───────
 # Any backup or snapshot image taken while a lane secret existed holds that secret (spec §3.3), so doctor reports the
 # box's posture. Three checks, each with one platform: `secrets-backup-excluded` and `filevault` on darwin, where the
 # account verbs `tmutil addexclusion` the secret directories (D-5755 (8), D-5756), and `snapshot-posture` on Linux,
@@ -11045,7 +11045,7 @@ _check_secrets-backup-excluded() {
 }
 
 # `filevault` (darwin): `fdesetup status` answers `FileVault is On.` or `FileVault is Off.`, with a progress line
-# while it converts. Its subject is the same as `secrets-backup-excluded`'s, a Mac that holds lane secrets, so a fresh
+# while it converts. Its subject is the same as `secrets-backup-excluded`'s, a Mac that holds any of the four, so a fresh
 # install SKIPs it. Off, or turning off, WARNs rather than FAILs: disk encryption is the machine's policy, which ccrc
 # does not own and an operator may have chosen, and a FAIL would fail every install on such a Mac. An answer this
 # check cannot read WARNs as not measured.
@@ -11088,7 +11088,7 @@ _check_filevault() {
 # `snapshot-posture` (Linux): whether the provider keeps server backups, server snapshots or volume snapshots of this
 # box is not something doctor can see from inside it, so it is the operator's answer, stated in one line of
 # `~/.ccrc/snapshot-posture`: `none`, or one or more of `server-backups server-snapshots volume-snapshots`. Doctor
-# states it and never guesses. Absent, on a box that holds lane secrets, it WARNs "not stated"; a line it cannot read
+# states it and never guesses. Absent, on a box that holds any of the four, it WARNs "not stated"; a line it cannot read
 # FAILs, because a mistyped answer must not read as stated. A stated provider image PASSes, naming what it holds:
 # keeping backups is a choice, and the remedy for a leaked or restored image is the compromise steps, not doctor.
 SNAPSHOT_POSTURE_WORDS="server-backups server-snapshots volume-snapshots"

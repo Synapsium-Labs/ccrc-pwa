@@ -349,8 +349,10 @@ export class SecretMasker {
     if (this.staleRows()) this.scheduleRekey(true);
   }
 
+  /** Asks for the re-key now or on the backoff; never once `close` has run (review 1418 A1): a key sync after close (a held
+   *  flush's `ingest`, a late mask) starts no request and no timer. */
   private scheduleRekey(now: boolean): void {
-    if (this.rekeyInFlight || this.rekeyTimer !== null) return;
+    if (this.closed || this.rekeyInFlight || this.rekeyTimer !== null) return;
     if (now) { this.attemptRekey(); return; }
     const delay = Math.round(this.rekeyDelay * (0.75 + Math.random() * 0.5));
     this.rekeyDelay = Math.min(this.rekeyDelay * 2, REKEY_MAX_MS);
@@ -396,7 +398,7 @@ export class SecretMasker {
     this.closed = true;
     this.flushHeld();
   }
-  /** Set by `close`: a failed flush is never retried after it. */
+  /** Set by `close`: a failed flush is never retried after it, and no re-key is asked for (`scheduleRekey`). */
   private closed = false;
 
   /** Writes the CURRENT generation's fingerprints (A12's `reloadRoster` calls it, through `offer`, with every answer's
@@ -406,11 +408,14 @@ export class SecretMasker {
    *  answered without one lane (its secret file unreadable at that moment) never unmasks that lane's key (D-5995 (10),
    *  D-6057 (2)). True: it landed. Throws when coord.db stays locked past `INGEST_BUSY_MS`.
    *
-   *  `rekey` (the re-key's answer, review 1391 F1): an operator-secret lane is only FILLED, never replaced. Its row is left as
-   *  it is when the table already holds one of the current generation (a save under the current token wrote it, and the
-   *  re-key read the slot before that save's value was in place), and the lane is skipped when the operator removed it in
-   *  this process. Decided inside the write's own transaction, so a save landing before or after the re-key ends the same:
-   *  the slot's row is the save's. A roster lane is replaced as before.
+   *  `rekey` (the re-key's answer, review 1391 F1): an operator-secret lane is only FILLED, never replaced. When the table
+   *  already holds a row of the current generation for it (a save under the current token wrote it, and the re-key may have
+   *  read the slot before that save's value was in place), that row stays, the row the re-key read is ADDED beside it, and
+   *  the lane's rows of every OTHER generation are deleted (review 1418 F1): the re-key read the slot, so its row speaks for
+   *  the value those rows were kept for, and a beside row (`ingestSecret`'s `beside`) never stops the value on disk being
+   *  carried to the current token. The lane is skipped when the operator removed it in this process. Decided inside the
+   *  write's own transaction, so a save landing before or after the re-key ends the same: the save's row stands, and the
+   *  value the re-key read is at worst masked too. A roster lane is replaced as before.
    *
    *  `beside` (`ingestSecret`'s, review 1416 F1): the answer's rows are ADDED to the lanes it names, and no row is deleted. */
   ingest(answer: FingerprintAnswer, o: { rekey?: boolean; beside?: boolean } = {}): boolean {
@@ -422,11 +427,12 @@ export class SecretMasker {
       const del = db.prepare('DELETE FROM secret_fingerprints WHERE laneId = ?');
       const ins = db.prepare('INSERT OR REPLACE INTO secret_fingerprints (laneId, fp, gen, len, at) VALUES (?, ?, ?, ?, ?)');
       const current = db.prepare('SELECT 1 AS x FROM secret_fingerprints WHERE laneId = ? AND gen = ? LIMIT 1');
+      const delOther = db.prepare('DELETE FROM secret_fingerprints WHERE laneId = ? AND gen <> ?');
       const skip = new Set<string>();
       for (const lane of new Set(answer.rows.map((r) => r.laneId))) {
-        if (o.rekey === true && isOperatorSecretLane(lane) && (this.retiredLanes.has(lane) || current.get(lane, cur.gen) !== undefined)) {
-          skip.add(lane);
-          continue;
+        if (o.rekey === true && isOperatorSecretLane(lane)) {
+          if (this.retiredLanes.has(lane)) { skip.add(lane); continue; }
+          if (current.get(lane, cur.gen) !== undefined) { delOther.run(lane, cur.gen); continue; }
         }
         if (o.beside !== true) del.run(lane);
       }
@@ -486,7 +492,10 @@ export class SecretMasker {
   /**
    * RETIRES one operator-secret lane (the operator's Remove, programme item 9): its rows leave the table and are kept in this
    * process's memory only, so the removed value is still masked until the server restarts, and nothing reloads it after,
-   * because the table no longer holds it and the slot file is gone. The re-key never writes the lane back in this process
+   * because the table no longer holds it and the slot file is gone, EXCEPT in the two arms that leave the rows in the table
+   * (review 1418 A2): the failed SELECT below, and a delete still held when the process stops (`close` tries it once more; a
+   * production stop never calls `close`). There the rows reload after a restart and go on masking the removed value (the safe
+   * side), and, once a rotation leaves them under an older token, keep the re-key retrying, until a save replaces the lane. The re-key never writes the lane back in this process
    * (`ingest`'s `rekey`). A retired row keyed with a previous token matches while that token is kept (`MAX_PREVIOUS_KEYS`).
    * The table's delete is held and retried, as a roster offer is, when coord.db is busy, and tried once more at `close`. Never
    * throws; a lane that is not an operator-secret lane is refused (false), so the roster's rows are never touched from here.

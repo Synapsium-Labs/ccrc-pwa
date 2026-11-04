@@ -952,16 +952,19 @@ describe('a re-key racing a save of the same slot ends as the save wrote it (rev
   const slotRows = (r: Rig) => r.coord.db.prepare('SELECT fp, gen FROM secret_fingerprints WHERE laneId = ?')
     .all(operatorSecretLaneId('prog-a', 'api-key')) as { fp: string; gen: string }[];
 
-  it('the save lands while the re-key is in flight: the slot keeps the save\'s row, not the value the re-key read', async () => {
+  it('the save lands while the re-key is in flight: the save\'s row stands, and the value the re-key read is masked beside it (review 1418 F1)', async () => {
     const { r, v1, id2, release, settled, out } = await rotation();
     const v2 = mark();
     expect(body(await save(r, id2, v2))['secret']).toMatchObject({ masked: true });
     release();
     await settled;
     const gen = fingerprintGeneration(r.token.value);
-    expect(slotRows(r)).toEqual([{ fp: fingerprintOf(r.token.value, v2), gen }]);
+    // The re-key cannot tell whether the value it read is still on disk, so it is added beside the save's row (more masking,
+    // never less), and the lane holds no row of another generation; the next save that proves the slot replaces both.
+    const byFp = (a: { fp: string }, b: { fp: string }) => a.fp.localeCompare(b.fp);
+    expect(slotRows(r).sort(byFp)).toEqual([{ fp: fingerprintOf(r.token.value, v2), gen }, { fp: fingerprintOf(r.token.value, v1), gen }].sort(byFp));
     expect(r.masker.maskText(v2)).toBe(SECRET_MASK);
-    expect(r.masker.maskText(v1)).toBe(v1);
+    expect(r.masker.maskText(v1)).toBe(SECRET_MASK);
     scanBoth(r, v1, v2, out);
   });
 
@@ -1329,7 +1332,7 @@ describe('the write-failed arms answer the truth (review 1391 A-4)', () => {
     const dir = path.join(home, '.ccrc');
     mkdirSync(dir, { recursive: true });
     await writeOperatorSecret(dir, 'prog-a', 'x', mark(), NOW0, () => 'masked');
-    expect(readOperatorSecretMeta(dir, 'prog-a', 'x')?.setAt).toBe(NOW0);
+    expect(readOperatorSecretMeta(dir, 'prog-a', 'x')).toMatchObject({ setAt: NOW0 });
     const metaFile = operatorSecretPath(dir, 'prog-a', 'x').replace(/\.secret$/, '.json');
     const rename = fsp.rename.bind(fsp);
     vi.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
@@ -1439,6 +1442,67 @@ describe('no order leaves a value on disk unmasked: a faulted re-save keeps the 
   });
 });
 
+describe('a beside row never stops the re-key from carrying the old value across a rotation (review 1418 F1)', () => {
+  it('save V1; rotate with the slot unreadable; re-save V2 under the unknown fault; the slot readable again; the re-key; restart: V1 is masked', async () => {
+    const out = captureConsole();
+    let calls = 0;
+    let r!: Rig;
+    r = await rig({
+      egress: 'blind',
+      requestRekey: async () => {
+        const t = r.token.value;
+        const rows = await operatorSecretRows(r.ccrcDir, (lane, v) => fingerprintRow(t, lane, v));
+        calls++;
+        return withOperatorSecretRows(null, fingerprintGeneration(t), rows.rows);
+      },
+    });
+    await r.stepUp();
+    const v1 = mark();
+    const v2 = mark();
+    expect(body(await save(r, raiseSecret(r), v1))['secret']).toMatchObject({ masked: true });
+    const id2 = raiseSecret(r);
+    const dir = path.join(secretDir(r), 'prog-a');
+    const file = operatorSecretPath(r.ccrcDir, 'prog-a', 'api-key');
+    const lane = operatorSecretLaneId('prog-a', 'api-key');
+    // One fault that persists across the re-key and the re-save: every open of the slot and of its temps fails.
+    const open = fsp.open.bind(fsp);
+    const fault = vi.spyOn(fsp, 'open').mockImplementation(async (...args: Parameters<typeof fsp.open>) => {
+      const p = String(args[0]);
+      if (p === file || (path.dirname(p) === dir && path.basename(p).startsWith('.api-key.'))) {
+        throw Object.assign(new Error('EIO: i/o error, open'), { code: 'EIO' });
+      }
+      return open(...args);
+    });
+    const tokA = r.token.value;
+    const genA = fingerprintGeneration(tokA);
+    r.token.value = 'e'.repeat(64);
+    const genB = fingerprintGeneration(r.token.value);
+    r.masker.maskText('wake the key sync');
+    await vi.waitFor(() => { expect(out.some((l) => l.includes('has not landed'))).toBe(true); });
+    expect(calls).toBe(1);
+    const res = await save(r, id2, v2);
+    fault.mockRestore();
+    expect(body(res)['error']).toBe(LEDGER_ROUTE_REFUSALS.storedNotTicked);
+    expect(readFileSync(file, 'utf8'), 'the rename never ran').toBe(v1);
+    const rows = () => (r.coord.db.prepare('SELECT fp, gen FROM secret_fingerprints WHERE laneId = ? ORDER BY fp').all(lane) as { fp: string; gen: string }[])
+      .map((x) => `${x.gen}:${x.fp}`).sort();
+    expect(rows()).toEqual([`${genA}:${fingerprintOf(tokA, v1)}`, `${genB}:${fingerprintOf(r.token.value, v2)}`].sort());
+    // The slot reads again; the re-key runs (its retry, here at once) and reads V1.
+    (r.masker as unknown as { attemptRekey(): void }).attemptRekey();
+    await vi.waitFor(() => { expect(calls).toBe(2); });
+    await vi.waitFor(() => { expect((r.masker as unknown as { rekeyInFlight: boolean }).rekeyInFlight).toBe(false); });
+    expect(rows(), 'the old value under the new token beside the new one; no row of another generation').toEqual(
+      [`${genB}:${fingerprintOf(r.token.value, v1)}`, `${genB}:${fingerprintOf(r.token.value, v2)}`].sort());
+    expect((r.masker as unknown as { staleRows(): boolean }).staleRows(), 'nothing left for the re-key to retry').toBe(false);
+    const restarted = new SecretMasker({ db: r.coord.db, token: () => r.token.value, log: () => {} });
+    maskers.push(restarted);
+    expect(restarted.maskText(`x ${v1} y`), 'the value on disk is masked after a restart').toBe(`x ${SECRET_MASK} y`);
+    expect(restarted.maskText(`x ${v2} y`)).toBe(`x ${SECRET_MASK} y`);
+    expect(scan(r, v1, { frames: [], out, valueFiles: [file] }), 'v1').toEqual([]);
+    expect(scan(r, v2, { frames: [], out, valueFiles: [] }), 'v2').toEqual([]);
+  });
+});
+
 describe('the stored-secrets read never folds an unreadable slot into none (review 1416 F2)', () => {
   it.skipIf(ROOT)('a programme directory that can be listed but not searched (0600) is secrets-unreadable', async () => {
     const r = await rig();
@@ -1480,6 +1544,63 @@ describe('the stored-secrets read never folds an unreadable slot into none (revi
   });
 });
 
+describe('an item never folds a slot it cannot read into "nothing stored" (review 1418 F2)', () => {
+  it.skipIf(ROOT)('a 0600 programme directory: the item says unreadable everywhere it is read, and a save refuses as unsafe before writing', async () => {
+    const out = captureConsole();
+    const r = await rig({ egress: 'blind' });
+    await r.stepUp();
+    const v1 = mark();
+    const v2 = mark();
+    const id1 = raiseSecret(r);
+    expect((await save(r, id1, v1)).statusCode).toBe(200);
+    const id2 = raiseSecret(r);
+    const dir = path.join(secretDir(r), 'prog-a');
+    const file = operatorSecretPath(r.ccrcDir, 'prog-a', 'api-key');
+    chmodSync(dir, 0o600);
+    try {
+      expect(readOperatorSecretMeta(r.ccrcDir, 'prog-a', 'api-key'), 'the reader').toEqual({ unreadable: true });
+      const waiting = body(await r.send({ method: 'GET', url: '/api/waiting' })) as { waiting: { items: ItemView[] } };
+      for (const id of [id1, id2]) expect(waiting.waiting.items.find((i) => i.id === id)?.secretSet, `waiting item ${id}`).toEqual({ unreadable: true });
+      const list = body(await r.send({ method: 'GET', url: '/api/programmes/prog-a/items?byId=lane-a&byUuid=u-lane-a', headers: TOKEN_HEADERS })) as { items: ItemView[] };
+      expect(list.items.find((i) => i.id === id2)?.secretSet, 'the coordinator\'s list').toEqual({ unreadable: true });
+      // A save into a directory its owner cannot search is refused as unsafe before anything is written or registered.
+      const res = await save(r, id2, v2);
+      expect(body(res)['error']).toBe('write-failed');
+      expect(body(res)['detail']).toBe(WRITE_FAILED_DETAIL);
+      expect(laneRows(r.coord.db), 'nothing registered').toBe(1);
+      expect(r.masker.maskText(v2)).toBe(v2);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    expect(readFileSync(file, 'utf8'), 'the slot holds what it held').toBe(v1);
+    expect(readOperatorSecretMeta(r.ccrcDir, 'prog-a', 'api-key')).toMatchObject({ masked: true });
+    expect(r.coord.itemById(id2)?.state).toBe('open');
+    expect(scan(r, v1, { frames: [], out, valueFiles: [file] }), 'v1').toEqual([]);
+    expect(scan(r, v2, { frames: [], out, valueFiles: [] }), 'v2').toEqual([]);
+  });
+
+  it('only a slot proven absent is "nothing stored": ENOENT answers null, an I/O error on the value file answers unreadable', async () => {
+    const r = await rig();
+    await r.stepUp();
+    expect((await save(r, raiseSecret(r), mark())).statusCode).toBe(200);
+    const real = fs.lstatSync;
+    let code = 'EIO';
+    const spy = vi.spyOn(fs, 'lstatSync').mockImplementation(((p: fs.PathLike, o?: fs.StatSyncOptions) => {
+      if (String(p).endsWith(`${path.sep}api-key.secret`)) throw Object.assign(new Error(`${code}: lstat`), { code });
+      return real(p, o);
+    }) as typeof fs.lstatSync);
+    syncBuiltinESMExports();
+    try {
+      expect(readOperatorSecretMeta(r.ccrcDir, 'prog-a', 'api-key')).toEqual({ unreadable: true });
+      code = 'ENOENT';
+      expect(readOperatorSecretMeta(r.ccrcDir, 'prog-a', 'api-key')).toBeNull();
+    } finally {
+      spy.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
+});
+
 describe('a slot that holds a value with no readable record is stored, never "none" (review 1416 F4)', () => {
   it('the state pl6f-failed-record-removes-old leaves: the item view says stored with no time, the read lists it, Remove removes it', async () => {
     const r = await rig();
@@ -1497,7 +1618,8 @@ describe('a slot that holds a value with no readable record is stored, never "no
     expect(existsSync(metaFile)).toBe(false);
     expect(readOperatorSecretMeta(r.ccrcDir, 'prog-a', 'api-key')).toEqual({ setAt: null });
     const waiting = body(await r.send({ method: 'GET', url: '/api/waiting' })) as { waiting: { items: ItemView[] } };
-    expect(waiting.waiting.items.find((i) => i.id === id2)?.secretSet).toEqual({ at: null });
+    // The empty tail is for a console from before this state (review 1418 F3): it then reads "Saved.", never "Ends in undefined".
+    expect(waiting.waiting.items.find((i) => i.id === id2)?.secretSet).toEqual({ at: null, tail: '' });
     expect((body(await r.send({ method: 'GET', url: '/api/programmes/prog-a/secrets' })) as unknown as StoredSecretsAnswer).slots)
       .toEqual([{ slot: 'api-key', setAt: null, item: null }]);
     // A record this build cannot parse is the same state.
@@ -1560,6 +1682,19 @@ describe('a removed value\'s row never comes back, and its delete is not lost (r
     expect((r.masker as unknown as { held: unknown }).held).toBeNull();
   });
 
+  it('a closed masker asks for no re-key: a rotation seen after close starts no request and no timer (review 1418 A1)', async () => {
+    let asked = 0;
+    const r = await rig({ requestRekey: async () => { asked++; return null; } });
+    await r.stepUp();
+    expect((await save(r, raiseSecret(r), mark())).statusCode).toBe(200);
+    r.masker.close();
+    r.token.value = 'b'.repeat(64);
+    r.masker.maskText('wake the key sync');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(asked, 'no re-key after close').toBe(0);
+    expect((r.masker as unknown as { rekeyTimer: unknown }).rekeyTimer, 'no retry timer after close').toBeNull();
+  });
+
   it('a retire whose read of the lane\'s rows fails keeps them in the table and queues no delete (the safe side)', async () => {
     const r = await rig();
     await r.stepUp();
@@ -1608,6 +1743,15 @@ describe('the start-up sweep removes every slot\'s leftover temps across the sto
     sweepOperatorSecretTemps(r.ccrcDir);
     expect(existsSync(planted['gone1']!)).toBe(true);
     chmodSync(loose, 0o700);
+    sweepOperatorSecretTemps(r.ccrcDir);
+    expect(existsSync(planted['gone1']!)).toBe(false);
+    // Nor is a store whose TOP directory is open to others, whatever its programme directories are (review 1418 A3).
+    const top = path.join(r.ccrcDir, OPERATOR_SECRETS_DIR);
+    chmodSync(top, 0o755);
+    writeFileSync(planted['gone1']!, mark(), { mode: 0o600 });
+    sweepOperatorSecretTemps(r.ccrcDir);
+    expect(existsSync(planted['gone1']!), 'a top directory open to others is not entered').toBe(true);
+    chmodSync(top, 0o700);
     sweepOperatorSecretTemps(r.ccrcDir);
     expect(existsSync(planted['gone1']!)).toBe(false);
   });

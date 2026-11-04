@@ -233,7 +233,7 @@
 .pv-secrets .pv-secret-name { font: var(--weight-medium) var(--fs-meta) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); background: var(--bg-raised); overflow-wrap: anywhere; }
 .pv-secrets .pv-secret-when,
 .pv-secrets .pv-secret-asker { font-size: var(--fs-meta); color: var(--ink-secondary); background: var(--bg-raised); overflow-wrap: anywhere; }
-.pv-secrets .wi-status { margin: 0; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md); background: var(--accent-tint); color: var(--status-busy-text); font-size: var(--fs-meta); }
+.pv-secrets .wi-status { margin: 0; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md); background: var(--accent-tint); color: var(--status-busy-text); font-size: var(--fs-meta); overflow-wrap: anywhere; }
 .pv-secrets .wi-refusal { margin: 0; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md); background: var(--status-dead-tint-solid); color: var(--status-dead-text); font-size: var(--fs-meta); overflow-wrap: anywhere; }
 .wi-stored { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
 .wi-stored-remove { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; }

@@ -6330,7 +6330,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
   type BackupCheck = typeof BACKUP_CHECKS[number];
 
   /** A home with the given secret directories, and a stub bin holding only the named tools. */
-  const box = (o: { secrets?: Array<'.cc-secrets' | '.ccrc/auth-scratch'>; stubs?: Record<string, string>; posture?: string | 'dir'; postureLinkTo?: string } = {}): string => {
+  const box = (o: { secrets?: Array<'.cc-secrets' | '.ccrc/auth-scratch' | '.ccrc/linear' | '.ccrc/operator-secrets'>; stubs?: Record<string, string>; posture?: string | 'dir'; postureLinkTo?: string } = {}): string => {
     const home = mkTmp('ccrc-doctor-a11b-');
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     for (const d of o.secrets ?? []) mkdirSync(join(home, d), { recursive: true, mode: 0o700 });
@@ -6434,7 +6434,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
     });
 
     it('measures a server box\'s two stores, the operator\'s pasted secrets and the Linear slot store, naming each (review 1416 A-F5)', () => {
-      const both = ['.ccrc/linear', '.ccrc/operator-secrets'] as never;
+      const both: ['.ccrc/linear', '.ccrc/operator-secrets'] = ['.ccrc/linear', '.ccrc/operator-secrets'];
       const included = run(box({ secrets: both, stubs: { tmutil: tmutil(() => '[Included]') } }), 'secrets-backup-excluded', 'darwin');
       expect(lines(included.stdout)[0]).toBe(
         'FAIL secrets-backup-excluded: ~/.ccrc/linear; ~/.ccrc/operator-secrets included in Time Machine backups, so every backup taken holds the secrets stored in them');
@@ -6489,7 +6489,10 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
 
     it('WARNs a disk that is turning off, though its first line still says On', () => {
       const r = run(box({ secrets: ['.cc-secrets'], stubs: { fdesetup: fdesetup('FileVault is On.\nDecryption in progress: Percent completed = 12') } }), 'filevault', 'darwin');
-      expect(r.stdout).toMatch(/^WARN filevault: FileVault is turning off \(fdesetup status: Decryption in progress\)/m);
+      expect(lines(r.stdout)).toEqual([
+        'WARN filevault: FileVault is turning off (fdesetup status: Decryption in progress), so the secrets stored in ~/.cc-secrets will sit unencrypted',
+        '  remedy: turn FileVault back on in System Settings, Privacy & Security, FileVault (or \'sudo fdesetup enable\')',
+      ]);
       expect(r.code).toBe(2);
     });
 

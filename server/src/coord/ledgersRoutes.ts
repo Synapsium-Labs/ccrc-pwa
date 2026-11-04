@@ -69,8 +69,9 @@ const RETURN_NOTE_MAX = 600;
 /** The sentence of one In short copy (spec §4). */
 const IN_SHORT_MAX = 1200;
 
-/** A slot's state (plan PL6): its metadata, `{setAt: null}` when it holds a value with no readable record (review 1416 F4), or
- *  `null` when it holds no value: `readOperatorSecretMeta` over the server's `ccrcDir`. */
+/** A slot's state (plan PL6): its metadata, `{setAt: null}` when it holds a value with no readable record (review 1416 F4),
+ *  `{unreadable: true}` when its value file cannot be measured (review 1418 F2), or `null` when it holds no value:
+ *  `readOperatorSecretMeta` over the server's `ccrcDir`. */
 export type SecretMetaOf = (program: string, slot: string) => OperatorSecretState | null;
 const NO_SECRETS: SecretMetaOf = () => null;
 
@@ -84,8 +85,12 @@ export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale:
     raisedAt: row.raisedAt, tickedAt: row.tickedAt, closedAt: row.closedAt, answer: row.answer, note: row.note,
     secretSlot: row.secretSlot,
     secretSet: secret === null ? null
-      : secret.setAt === null ? { at: null }
-        : { at: secret.setAt, tail: secret.tail, masked: secret.masked, ...(secret.why === undefined ? {} : { why: secret.why }) },
+      : 'unreadable' in secret ? { unreadable: true }
+        // `tail: ''` for a console from before the PL6 follow-up, which reads `tail` and would say "Ends in undefined" (review
+        // 1418 F3): no character of the value, which is true of this state. No `masked`: it is not known (departure
+        // pl6f-r1-unrecorded-state).
+        : secret.setAt === null ? { at: null, tail: '' }
+          : { at: secret.setAt, tail: secret.tail, masked: secret.masked, ...(secret.why === undefined ? {} : { why: secret.why }) },
     history: events.map((e) => ({ at: e.at, act: e.act, note: e.note })),
   };
 }
@@ -745,7 +750,10 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    * CREDENTIAL ACT, in the PUT's order: the account gate with a step-up FIRST, then both names re-checked (`bad-slot`), then,
    * on the slot's chain, the path built and the slot removed (`removeOperatorSecret`: the value file, its record, its leftover
    * temps). Then the masker retires the slot's lane (`retireSecret`): the removed value is still masked for the life of this
-   * process and nothing reloads it after a restart. Nothing stored: `secret-not-stored` (the lane is retired all the same, so a
+   * process, and its rows leave the table, so nothing reloads them after a restart, EXCEPT in two arms that keep them there
+   * (review 1418 A2): a retire whose read of the lane's rows failed (they stay in the table, review 1416 A-S5), and a delete
+   * still held on a busy coord.db when the process stops. Those rows reload after a restart and go on masking the removed
+   * value (the safe side) until a save of the slot replaces them. Nothing stored: `secret-not-stored` (the lane is retired all the same, so a
    * row left by a slot removed by hand stops being re-keyed, review 1391 A-2). A value file that cannot be removed:
    * `remove-failed`, and nothing else changes. Every answer is a fixed word with a fixed detail; none carries the value, which
    * this door never reads.

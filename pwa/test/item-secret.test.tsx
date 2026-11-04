@@ -271,6 +271,9 @@ describe('a stored secret shows "Stored" with Remove (the operator\'s ruling on 
     showStored(vi.fn());
     expect(screen.getByText(STORED_TEXT.stored)).toBeTruthy();
     expect(removeButton()).toBeTruthy();
+    // The block carries the class its styles are scoped to (review 1418 A3): a rename would leave every .wi-stored rule dead.
+    expect(screen.getByText(STORED_TEXT.stored).closest('.wi-stored')).not.toBeNull();
+    expect(removeButton().closest('.wi-stored .wi-stored-remove')).not.toBeNull();
     cleanup();
     showStored(vi.fn(), stored({ secretSet: null }));
     expect(screen.queryByText(STORED_TEXT.stored)).toBeNull();
@@ -279,12 +282,26 @@ describe('a stored secret shows "Stored" with Remove (the operator\'s ruling on 
 
   it('a slot that holds a value with no readable record is stored all the same: Stored and Remove, no saved line (review 1416 F4)', () => {
     for (const state of ['open', 'checking', 'confirmed'] as const) {
-      showStored(vi.fn(), stored({ state: state as never, secretSet: { at: null } }));
+      showStored(vi.fn(), stored({ state: state as never, secretSet: { at: null, tail: '' } }));
       expect(screen.getByText(STORED_TEXT.stored), state).toBeTruthy();
       expect(removeButton(), state).toBeTruthy();
       // No saved line of any shape, and no masking sentence: nothing is known of when or how.
       expect(screen.queryByText(/^Saved\./), state).toBeNull();
       expect(document.querySelector('[data-secret="unmasked"]'), state).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('a slot the box cannot read says so: never Stored, never Remove, never the field to give a secret (review 1418 F2)', () => {
+    for (const state of ['open', 'checking', 'confirmed'] as const) {
+      showStored(vi.fn(), stored({ state: state as never, secretSet: { unreadable: true } }));
+      const line = document.querySelector('[data-secret="unreadable"]');
+      expect(line?.textContent, state).toBe(LEDGER_REFUSAL_TEXT['secrets-unreadable']);
+      expect(screen.queryByText(STORED_TEXT.stored), state).toBeNull();
+      expect(screen.queryByRole('button', { name: STORED_TEXT.removeLabel('api-key') }), state).toBeNull();
+      expect(screen.queryByLabelText(SECRET_TEXT.label), state).toBeNull();
+      expect(screen.queryByRole('button', { name: SECRET_TEXT.save }), state).toBeNull();
+      expect(screen.queryByText(/^Saved\./), state).toBeNull();
       cleanup();
     }
   });
