@@ -2306,6 +2306,8 @@ takes the next spare and is named in the wave-done.
 - **D-7916.** On a server-role node, a fleet-only family's line counts its refused and unmeasured rows ("Graph: 23 settings, not used on
   this role, 1 refused"), with no rows (C12; keeps 5.5 true).
 - **D-7917.** Wave 1's "not used on a server box" becomes "not used on this role", one wording derived from the role column.
+- **D-7918.** Doctor's release-base row goes through `_upd_url_origin` (class `origin`): `KEY=custom <origin>` when it answers rc 0 and `_set_fits` passes, else `KEY=custom`. Doctor's inline userinfo strip retires, so both census pins become `[]`, and doctor no longer prints the base's path. Measured: with `_upd_redact` made an identity, the origin answers rc 1 for a userinfo base, so that run prints `custom` alone.
+- **D-7919.** Doctor's carry-copies WARN uses its words function and drops `got '<value>'`; Task 1's carry pins are rewritten in the same commit (C7).
 - **D-7920.** The plan's six one-line `( BOX_ENV_FILE="$BOX_ENV_FILE/." KEY="$v" _resolver … )` forms tripped census C8(c), which allows no setting
   name beside BOX_ENV_FILE outside `_ccrc_knob`; the mask moved to its own line as the first statement of one subshell holding all six resolver
   calls, with the same behaviour; ruled by the coordinator (option A). Each of the six resolvers reads only its own setting, measured.

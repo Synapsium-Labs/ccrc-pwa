@@ -160,20 +160,31 @@ describe('carry-copies: its bound, CCRC_CARRY_COPY_WARN_BYTES (D-7857)', () => {
     expect(check(b, 'linux', { CCRC_CARRY_COPY_WARN_BYTES: '1' }).line).toMatch(/^PASS carry-copies: 1500 bytes .*\(warn bound 2000 bytes\)$/);
   });
 
+  /** `_carry_warn_bytes_says`, read from bash in the box's own HOME: the words are never a pasted copy. */
+  const says = (b: Box): string => {
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n_carry_warn_bytes_says`], { env: doctorEnv(b.home), encoding: 'utf8', timeout: 30_000 });
+    return (r.stdout ?? '').replace(/\n$/, '');
+  };
+  /** D-7919: the WARN names the words and never the value. */
+  const shapeWarn = (b: Box): string =>
+    `WARN carry-copies: CCRC_CARRY_COPY_WARN_BYTES must be ${says(b)} — the value in ~/.ccrc/ccrc.env is not, so neither figure is judged`;
+
   it('a value that is not a whole number of bytes is reported, and neither figure is judged', () => {
     const b = box('ccrc-doctor-carry-knob-bad-', { env: ['CCRC_CARRY_COPY_WARN_BYTES=10G'], log: [first(DAY, 5)] });
-    expect(check(b).line).toBe("WARN carry-copies: CCRC_CARRY_COPY_WARN_BYTES must be a whole number of bytes from 1 to 18 digits — got '10G' in ~/.ccrc/ccrc.env, so neither figure is judged");
+    expect(says(b), 'the words come from bash').not.toBe('');
+    const r = check(b);
+    expect(r.line).toBe(shapeWarn(b));
+    expect(r.line).not.toContain('10G');
     const zero = box('ccrc-doctor-carry-knob-zero-', { env: ['CCRC_CARRY_COPY_WARN_BYTES=0'], log: [] });
     expect(check(zero).line).toMatch(/^WARN carry-copies: CCRC_CARRY_COPY_WARN_BYTES must be a whole number/);
   });
 
-  // W2 characterization (box settings wave 2): the exact WARN line and remedy of the shape check, before it moves
-  // (Task 7, D-7919, rewrites these three rows; until then they hold).
-  const shapeWarn = (v: string): string =>
-    `WARN carry-copies: CCRC_CARRY_COPY_WARN_BYTES must be a whole number of bytes from 1 to 18 digits — got '${v}' in ~/.ccrc/ccrc.env, so neither figure is judged`;
-  it.each([['0'], ['0123'], ['9'.repeat(19)]])('W2-pin: %s is refused with exactly the shape sentence and its remedy', (v) => {
-    const r = check(box('ccrc-doctor-carry-knob-pin-', { env: [`CCRC_CARRY_COPY_WARN_BYTES=${v}`], log: [] }));
-    expect(r.line).toBe(shapeWarn(v));
+  // The exact WARN line and remedy of the shape check (D-7919 moved the value out of the line; the remedy is unchanged).
+  it.each([['0'], ['0123'], ['9'.repeat(19)]])('W2-pin: %s is refused with exactly the words and its remedy, the value absent', (v) => {
+    const b = box('ccrc-doctor-carry-knob-pin-', { env: [`CCRC_CARRY_COPY_WARN_BYTES=${v}`], log: [] });
+    const r = check(b);
+    expect(r.line).toBe(shapeWarn(b));
+    expect(r.line.includes(v), 'the value is not in the line').toBe(false);
     expect(r.remedy).toContain('set CCRC_CARRY_COPY_WARN_BYTES=<bytes> in ~/.ccrc/ccrc.env (default 10737418240, 10 GiB), or remove the line');
   });
   it('W2-pin: 18 nines is the widest accepted value and is judged', () => {
