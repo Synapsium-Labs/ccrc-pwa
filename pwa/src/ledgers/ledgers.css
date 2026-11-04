@@ -179,13 +179,12 @@
 .wl-beside { max-width: none; }
 /* The fleet's banner stack above the list beside an item, in a skin that draws it in its left column (Instrument; follow-up
    F1): the fleet column's own top space, side gutters and gap (`.fleet`, fleet.css: the same tokens), so a banner sits where
-   it sits on the list. The stack's slots are `display: contents`, so their banners are this box's own items. With no banner
-   to show the box is empty and takes no room. */
-.wl-banners {
-  display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0;
-  padding: calc(var(--sp-3) + var(--safe-top)) var(--sp-4) 0;
-}
-.wl-banners:empty { display: none; }
+   it sits on the list. The stack's slots are `display: contents`, so their banners are this box's own items. The stack keeps
+   every slot mounted, empty when its banner does not show, so the box is never `:empty`: its room is given only while a banner
+   draws, by Refined's own test for the same fact (`.shell-banners` in refined.css), and with none the box takes no room
+   (carry C, D-7951; review 1408 F1). */
+.wl-banners { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+.wl-banners:has(> .banner-slot > *, > .banner-more) { padding: calc(var(--sp-3) + var(--safe-top)) var(--sp-4) 0; }
 .wl-beside .wl-item { grid-template-columns: minmax(0, 1fr); }
 .wl-beside .wl-item .wl-meta { justify-items: start; }
 .wl-beside .wl-item[aria-current='page'] { box-shadow: inset 0 0 0 2px var(--accent); }

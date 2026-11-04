@@ -207,8 +207,9 @@ finger's square under a coarse pointer, nothing hidden or truncated to make it f
 - **The room.** Under 1000px the tabs' side padding is 6px (it was 8 from round 3, 12 before) and the bar line's gap is 12px (16
   above). That gives back 24 + 8 = 32px, in `pwa/src/skins/refined/refined.css`. The touch check now covers every tab as well as
   every door (each at least 44 x 44); the narrowest tab (Fleet, Docs) is 47.6px wide.
-- **Measured in Chrome, "99+" badge drawn** (the room between the tabs and the doors beyond their 16px gap, negative when the
-  line overruns; New session cut when negative): at 900px, round 3's rule: 20.8px past the frame; this round: 11.2px free. At
+- **Measured in Chrome, "99+" badge drawn** (the room between the tabs and the doors beyond the bar line's gap, which is 16px
+  in round 3's figures and at 1280px, and 12px in this round's figures under 1000px; negative when the line overruns; New
+  session cut when negative): at 900px, round 3's rule: 20.8px past the frame; this round: 11.2px free. At
   930px: round 3: 9.2px free; this round: 41.2px free. (At 960px 39.2 before, 71.2 after; at 1280px unchanged, 311.2.) The Waiting
   tab is 152.1px wide at 900 (156.1 with 8px padding).
 - **A1.** `pwa/browser/refined-phone.browser.test.ts` now names the row's doors in order, `go-waiting go-inbox go-runs go-docs

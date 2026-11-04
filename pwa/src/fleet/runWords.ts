@@ -924,8 +924,12 @@ export const programmeWave = (r: NonNullable<ChildRunContext['run']>): string =>
  *  split out so the fleet row can ellipsise a long programme slug and keep the
  *  wave, the fact the operator asked for, whole (D-5528). */
 export const programmeWaveTail = (r: NonNullable<ChildRunContext['run']>): string =>
-  ` · ${r.kind === 'review' ? `review of wave ${r.wave}`
-    : r.waveOf === null ? `wave ${r.wave}` : `wave ${r.wave} of ${r.waveOf}`}`;
+  ` · ${r.kind === 'review' ? `review of wave ${r.wave}` : waveOfWords(r)}`;
+
+/** `wave 5 of 7`, or `wave 5` with no planned count: the tail's work-wave words, which a programme's head and its group on
+ *  the Waiting on you list say alone (carry C, D-7951; review 1386 F12: one spelling of the template). */
+export const waveOfWords = (r: { wave: number; waveOf: number | null }): string =>
+  r.waveOf === null ? `wave ${r.wave}` : `wave ${r.wave} of ${r.waveOf}`;
 
 /** A programme's title in words (D-6170): the first non-blank `programTitle`
  *  any of `runs` carries for `program`, else the slug. A whitespace-only title

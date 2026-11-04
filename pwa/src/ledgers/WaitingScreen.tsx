@@ -8,7 +8,7 @@ import { BareRow } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import { WAITS_ON_WORDS, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { fleetHues } from '../fleet/programmeBoxes';
-import { programmeTitle, programWave } from '../fleet/runWords';
+import { programmeTitle, programWave, waveOfWords } from '../fleet/runWords';
 import {
   CLEARED_HEADING, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
   COMBINED_LIST, NO_PROGRAMME_FILTER, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, listGroups, openRunsOf,
@@ -122,7 +122,7 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
       <div className="wl-ghead">
         <span className="wl-swatch" aria-hidden="true" />
         <h2 className="wl-gtitle">{title}</h2>
-        {wave !== null && <span className="wl-gwave">{wave.waveOf === null ? `wave ${wave.wave}` : `wave ${wave.wave} of ${wave.waveOf}`}</span>}
+        {wave !== null && <span className="wl-gwave">{waveOfWords(wave)}</span>}
         {ended && <span className="wl-gwave" data-ended="true">{WAITS_ON_WORDS.ended}</span>}
       </div>
       <ItemRows rows={group.rows} now={now} onOpenItem={onOpenItem} onOpenSession={onOpenSession} currentId={currentId} />

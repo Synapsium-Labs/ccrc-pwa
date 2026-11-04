@@ -212,12 +212,13 @@
    the ink is the primitive's `aria-[current=page]` utility). */
 .ref-tab {
   height: 100%;
+  min-width: var(--tap-min);
   padding: 0 var(--sp-3);
   border-radius: 0;
   white-space: nowrap;
 }
 /* The Waiting on you tab (desktop-polish PL5a) is 127px wide before its count, and the bar's line never wraps: under
-   1000px the tabs' side padding is 6px, not 12, and the line's gap 12px, not 16. That gives back 24 + 8 = 32px (measured
+   1000px the tabs' side padding is 6px, not 8 (12 from 1000), and the line's gap 12px, not 16. That gives back 24 + 8 = 32px (measured
    at 900 with the widest count badge, "99+", drawn on the Waiting tab: the line ran 20.8px past its frame, `+ New
    session` cut, and at 930 it had 9.2px free; with this rule 900 has 11.2px free and 930 has 41.2). The tabs stay the
    line's full height and the narrowest is 47.6px wide, so a finger still lands on each. */

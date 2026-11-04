@@ -5,9 +5,11 @@
 // (desktop-polish PL5a, review 1374 F1: the fit measured without that badge held at 900px until a count drew it, and
 // the count is nonzero whenever anything waits on the operator). The bar's line holds no gauges; the lanes row under it, in
 // the same header (T2c, D-6329), holds every lane's card (lanes-row.browser.test.ts holds the row at length, with
-// seventeen lanes). This file holds the bar itself with its row: at 900, 930, 960 and 1280 in both palettes, the bar's
+// seventeen lanes). This file holds the bar itself with its row: at 900, 930, 960, 1000 and 1280 in both palettes, the bar's
 // line is whole and holds no card, the row sits under it, every card is whole inside the row with its readings whole
-// inside it, and the page does not scroll sideways. Under a coarse pointer every door and every tab in the bar is at least 44 x 44.
+// inside it, and the page does not scroll sideways. Under a coarse pointer every door and every tab in the bar is at least 44 x 44,
+// the check counts what it measured (six tabs, four doors), and every tab carries the tap floor as its minimum width.
+// 1000 is the first width with the full padding and gap (carry C, D-7951; review 1379 F1, F5 and F6).
 // The coarse pointer is a touch screen: headless Chrome ignores the DevTools protocol's pointer media feature
 // (measured), so `openApp` takes `touch`. The strip folds by default (S5b, D-6530) and six lanes fold at every desk width, so
 // the case seeds the stored choice expanded and keeps counting all six; the fold itself is lanes-row.browser.test.ts's.
@@ -23,7 +25,7 @@ import { fleetSession } from '../test/fleetFixture';
 // Each width with a mouse and with a touch screen (a coarse pointer at a desk width: a tablet in landscape, a touch
 // laptop): the layout half runs under both, the doors' size under the touch screen.
 const VIEWS: AppView[] = [false, true].flatMap((touch) => [PHOSPHOR, 'light'].flatMap((theme) =>
-  [900, 930, 960, 1280].map((width) => ({ skin: REFINED, theme, width, touch }))));
+  [900, 930, 960, 1000, 1280].map((width) => ({ skin: REFINED, theme, width, touch }))));
 const named = (v: AppView): string => `${v.skin}, ${v.theme}, ${v.width}px, ${v.touch === true ? 'touch' : 'mouse'}`;
 
 const nowSec = Math.floor(Date.now() / 1000);
@@ -127,10 +129,21 @@ describe("Refined's app bar shows nothing cut, and every door is a finger's squa
         if (view.touch !== true) { expect(errors).toEqual([]); return; }
         const small = await page.evaluate(() => {
           if (!matchMedia('(pointer: coarse)').matches) return ['the coarse pointer was not emulated'];
-          return [...document.querySelectorAll<HTMLElement>('.ref-bar-doors button, .ref-tabs > *')]
+          const doors = [...document.querySelectorAll<HTMLElement>('.ref-bar-doors button')];
+          const tabs = [...document.querySelectorAll<HTMLElement>('.ref-tabs > *')];
+          // The selection's size first (review 1379 F1): a renamed class would otherwise measure nothing and pass.
+          const out: string[] = [];
+          if (tabs.length !== 6) out.push(`${tabs.length} tabs measured, not 6`);
+          if (doors.length !== 4) out.push(`${doors.length} doors measured, not 4 (the bell, search, settings, new session)`);
+          // The floor is the tab's own (review 1379 F5): its words and padding clear 44px today, the minimum width keeps it so.
+          for (const t of tabs) {
+            // `auto` parses to NaN, which no `<` comparison catches: the floor is asserted present, not "not below".
+            if (!(parseFloat(getComputedStyle(t).minWidth) >= 44)) out.push(`${t.textContent?.trim() ?? '?'} has no tap floor (min-width ${getComputedStyle(t).minWidth})`);
+          }
+          return [...out, ...[...doors, ...tabs]
             .map((b) => ({ name: b.getAttribute('aria-label') ?? b.textContent?.trim() ?? '?', r: b.getBoundingClientRect() }))
             .filter(({ r }) => r.width < 43.5 || r.height < 43.5)
-            .map(({ name, r }) => `${name} is ${Math.round(r.width)} x ${Math.round(r.height)}`);
+            .map(({ name, r }) => `${name} is ${Math.round(r.width)} x ${Math.round(r.height)}`)];
         });
         expect(small).toEqual([]);
         expect(errors).toEqual([]);
