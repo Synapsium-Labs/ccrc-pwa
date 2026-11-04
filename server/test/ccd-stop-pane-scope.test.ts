@@ -42,6 +42,8 @@ const fx = (...p: string[]): string => path.join(h.home, 'fx', ...p);
 const reg = (f: string): string => path.join(h.home, '.cc-sessions', f);
 const swapLog = (): string => (fs.existsSync(reg('swap.log')) ? fs.readFileSync(reg('swap.log'), 'utf8') : '');
 const scopeLines = (): string[] => swapLog().split('\n').filter((l) => l.includes(' pane-scope '));
+/** Each pane-scope line past its timestamp: an exact match, with no pattern to escape. */
+const scopeTexts = (): string[] => scopeLines().map((l) => l.slice(l.indexOf('pane-scope ')));
 
 /** A planted process: `/proc/<pid>/cgroup` names `cg`. */
 const plantProc = (pid: number, cg: string): void => {
@@ -152,7 +154,7 @@ describe('ccd stop, armed: the pane scope goes, and with it what the session lef
     expect(stops()).toEqual([`systemctl --user stop --no-block ${UNIT}`]);
     expect(await waitDead(bg), 'the background sleep outlived the stop').toBe(true);
     expect(fs.existsSync(fx('cg', SLICE, UNIT)), 'the scope is gone').toBe(false);
-    expect(scopeLines()).toEqual([expect.stringMatching(new RegExp(`pane-scope ${ID}: stopped ${UNIT.replace(/\./g, '\\.')} \\(1 processes\\)$`))]);
+    expect(scopeTexts()).toEqual([`pane-scope ${ID}: stopped ${UNIT} (1 processes)`]);
   });
 
   it('the order: the scope is read before the kill, the grace is waited after it, and the stop comes last', () => {
@@ -201,7 +203,7 @@ describe('ccd stop, shadow: the same run logs `would stop` and stops nothing', (
     plantCgroup(`${SLICE}/${UNIT}`, [MAIN, bg]);
     stop();
     expect(stops()).toEqual([]);
-    expect(scopeLines()).toEqual([expect.stringMatching(new RegExp(`pane-scope ${ID}: would stop ${UNIT.replace(/\./g, '\\.')} \\(1 processes\\)$`))]);
+    expect(scopeTexts()).toEqual([`pane-scope ${ID}: would stop ${UNIT} (1 processes)`]);
     expect(alive(bg)).toBe(true);
     expect(fs.existsSync(fx('cg', SLICE, UNIT))).toBe(true);
   });
