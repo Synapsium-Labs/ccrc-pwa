@@ -8677,6 +8677,9 @@ export interface LifecycleMeas {
   /** The `--child` run marker a `ws-shed-deps` line was judged against (D-7278), beside its class in `mode`: the
    *  decimal run id as ccd wrote it. Null: the session carries no marker (a coordinator, or a row with none), or another act. */
   readonly childRun: string | null;
+  /** A child `create` row's start point, its `--base` (D-7827): the full commit id the worktree was checked out at, of the
+   *  repository's own object format (D-7982); `base` stays the origin ref. Null: no `--base`, an older ccd, or another act. */
+  readonly startpoint: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -8700,6 +8703,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
   unremoved: true, childOf: true, wip: true, residueBytes: true, tmpRootKept: true, clipsKept: true, leaf: true,
   childRun: true,
+  startpoint: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
