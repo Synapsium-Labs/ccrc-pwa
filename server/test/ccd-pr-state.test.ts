@@ -2430,16 +2430,18 @@ describe('the ledger across a branch reset', () => {
   it('never lands a number whose prbranch did not: prbranch goes first, so a bound number is always a placed one', () => {
     // NARROW FIRST, WIDEN LAST. A number on disk without its branch would retire as
     // an unplaced row, and an unplaced row counts for every branch, so the order is
-    // what keeps a placed PR placed. The fault is `put`'s own: a FIFO at the pid-named
-    // tmp path (`ccd-bounded-reads.test.ts`' shim, whose `exec` keeps the pid) refuses
-    // the prbranch write and aborts the run at exactly this step.
+    // what keeps a placed PR placed. The fault is `put`'s own: a directory at the
+    // pid-named tmp path (`ccd-bounded-reads.test.ts`' shim, whose `exec` keeps the pid)
+    // refuses the prbranch write and aborts the run at exactly this step. A directory,
+    // not that file's FIFO: this harness has no child deadline, and a directory cannot
+    // block the open even if the guard regresses.
     const { tip } = bindOnResetB1(h);
     h.ghRows([]);
     h.sh(`${GH_STUB} cmd_pr_state --session ${ID}`);
     expect(h.reg(ID, 'prnumber')).toBeNull();
     fs.writeFileSync(path.join(harnessBin(h.home), 'python3'),
       '#!/bin/bash\n'
-      + `mkfifo "${path.join(h.home, '.cc-sessions', `.${ID}.prbranch.$$.tmp`)}" 2>/dev/null || true\n`
+      + `mkdir "${path.join(h.home, '.cc-sessions', `.${ID}.prbranch.$$.tmp`)}" 2>/dev/null || true\n`
       + 'exec /usr/bin/python3 "$@"\n', { mode: 0o755 });
     h.ghRows([mergedRow({ number: 9, headRefName: B1, headRefOid: tip })]);
     const r = h.run(`${GH_STUB} cmd_pr_state --session ${ID}`);

@@ -6577,10 +6577,12 @@ if mode == 'state':
             # did not, and a `gh` that exited 0 with an empty or unparseable
             # stdout cleared a persisted `merged:#42`.
             #
-            # `prbranch` goes AHEAD of the number and is cleared behind it, so a number on
-            # disk always has its branch beside it. The other order leaves a number with no
-            # branch, which retires as an unplaced row and so counts for every branch. `pick`
-            # only chooses a row `bound` passed, so `headRefName` here equals `branch`.
+            # `prbranch` goes AHEAD of the number and is cleared behind it, so under the lock
+            # a number on disk always has its branch beside it. The other order leaves a number
+            # with no branch, which retires as an unplaced row and so counts for every branch.
+            # Two runs that proceed UNLOCKED can still read the pair across each other's clear,
+            # and the row then goes unplaced, which is the legacy reading, not a false one.
+            # `pick` only chooses a row `bound` passed, so `headRefName` here equals `branch`.
             if number is not None:
                 put('prbranch', chosen.get('headRefName'))
                 put('prnumber', number)

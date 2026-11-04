@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Runner } from '../src/exec.js';
+import type { CcdPrLine } from '../src/prstate.js';
 import { readSessionRecord, type SessionRecord } from '../src/registry.js';
 import {
   CHILD_BIRTH_SKEW_MS, childBirthOf, childSpent, childSpentLive, type ChildBirth, type ChildSpentDeps,
@@ -187,6 +188,14 @@ describe('childSpent — a ledger row counts only for the branch its PR was on',
     const h = harness({ ran: true, code: 0, stderr: '', stdout: `${JSON.stringify({ id: ID, phase: 'unknown', reason: 'error' })}\n` });
     expect(await verdict(h)).toEqual({ kind: 'unmeasured', detail: 'pr-state answered error' });
     expect(h.verbs).toContain('pr-state');
+  });
+
+  it('a caller holding the measured line: a row placed elsewhere is judged from it, with no second pr-state', async () => {
+    put('prhistory', `${row(9, 30, 'ws/another')}\n`);
+    const h = harness();
+    const held = JSON.parse(noPrOn(BRANCH).stdout) as CcdPrLine;
+    expect(await childSpent(h.deps, await recordOf(h.deps), AT_BIRTH, held)).toEqual({ kind: 'unspent' });
+    expect(h.verbs).not.toContain('pr-state');
   });
 
   it('a registry number still answers first: the filter is on the ledger rung alone', async () => {
