@@ -1749,9 +1749,13 @@ describe('the start-up sweep removes every slot\'s leftover temps across the sto
           gone1: at('prog-b', '.old-key.secret.tmp-0123456789abcdef'),
           gone2: at('prog-a', '.k2.json.tmp-fedcba9876543210'),
           kept1: at('prog-b', 'old-key.secret'),
-          kept2: at('prog-b', '.Old-Key.secret.tmp-0123456789abcdef'),
+          kept2: at('prog-b', '.Old-Slot.secret.tmp-0123456789abcdef'),
           kept3: at('prog-b', '.old-key.secret.tmp-0123'),
         });
+        // No two planted names are one file on a case-insensitive filesystem (macOS's default): there `kept2`, spelt with
+        // `gone1`'s letters in another case, was `gone1` itself, so the sweep removed the file the case says it keeps (fix
+        // round 1 of desktop-polish PL10, review 1466; main's macOS leg since #2248).
+        expect(new Set(Object.values(planted).map((f) => f.toLowerCase())).size, 'case-distinct names').toBe(Object.keys(planted).length);
         for (const f of Object.values(planted)) writeFileSync(f, mark(), { mode: 0o600 });
       },
     });
