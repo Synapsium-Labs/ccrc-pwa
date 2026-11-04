@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccrc",
+  "maxDelta": 42,
+  "d": "D-7906",
+  "reason": "box settings view wave 2: the checks ccrc settings shares with their consumers move into ccd/ccrc, measured +42 net code lines against the merge-base so far: +24 for _tshape and _tshape_says, +5 for _slice_limit_says, +7 for _keepalive_fresh_ok and its words, +6 for _usage_days_ok and its words",
+  "added": "2026-11-04"
+}

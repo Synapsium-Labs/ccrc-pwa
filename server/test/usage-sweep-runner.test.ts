@@ -189,4 +189,22 @@ describe('W29: the usage sweep reads its days from ~/.ccrc/ccrc.env through ccrc
     expect(r.code, r.err).toBe(0);
     expect(daysHanded(h)).toBe(value);
   });
+
+  // W2 (box settings wave 2): the days check is `_usage_days_ok`, carried by the generated library. A library that lacks it
+  // answers 127, which fails the test, so the pass refuses with the `must be` sentence and the scanner never runs.
+  it('W2: a library without _usage_days_ok fails closed: exit 1, the must-be sentence, no scanner-argv', () => {
+    const h = rebootHome();
+    mkdirSync(path.join(h, 'bin', 'lib'), { recursive: true });
+    writeFileSync(path.join(h, 'bin', 'ccd-usage-sweep'), readFileSync(RUNNER));
+    const lib = readFileSync(path.join(REPO, 'ccd', 'lib', 'ccrc-settings.sh'), 'utf8');
+    const cut = lib.replace(/^_usage_days_ok\(\) \{\n[\s\S]*?\n\}\n/m, '');
+    expect(cut, 'non-vacuity: the function was cut from the fixture copy').not.toBe(lib);
+    expect(cut).not.toContain('_usage_days_ok() {');
+    writeFileSync(path.join(h, 'bin', 'lib', 'ccrc-settings.sh'), cut);
+    const r = spawnSync('bash', [path.join(h, 'bin', 'ccd-usage-sweep')], { encoding: 'utf8',
+      env: { HOME: h, CCRC_USAGE_SWEEP_DAYS: '7', PATH: `${path.join(h, '.local', 'bin')}:${process.env['PATH'] ?? ''}`, TMPDIR: path.join(h, 'tmp') } });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toContain(`${REFUSE}'7', as set in the environment; nothing was swept`);
+    expect(existsSync(path.join(h, 'scanner-argv'))).toBe(false);
+  });
 });

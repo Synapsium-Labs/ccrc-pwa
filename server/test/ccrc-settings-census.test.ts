@@ -787,7 +787,7 @@ describe('W29: the ccd-* sweeps read their settings through the shared reader fi
 // internal-format ranges (tags, pids, hashes) are carried as one issue (Reading 15).
 describe('W29 (R38): the validators of outside values spell their digits', () => {
   const RANGE = /=~[^\n]*\[[^\]\n]*[0-9]-[0-9]/;
-  const BODIES = ['cmd_wrappers', '_acct_candidates', '_codex_port_ok', '_upd_deadline_ms', '_upd_watchdog_probe_gap_s', '_upd_sweep', '_keep_ok', '_keepalive_fresh_ok'];
+  const BODIES = ['cmd_wrappers', '_acct_candidates', '_codex_port_ok', '_upd_deadline_ms', '_upd_watchdog_probe_gap_s', '_upd_sweep', '_keep_ok', '_keepalive_fresh_ok', '_usage_days_ok'];
   it('W29-A1: the validators of outside values spell their digits', () => {
     const hits: string[] = [];
     let seen = 0;

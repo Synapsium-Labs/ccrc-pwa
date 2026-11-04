@@ -28758,6 +28758,14 @@ _keepalive_fresh_ok() {
 _keepalive_fresh_says() {
   printf '%s' 'a whole number of seconds from 0 to 9223372036854775807'
 }
+# `_usage_days_ok` and its words are carried by ccd/lib/ccrc-settings.sh too, for ccd/ccd-usage-sweep: a whole number of
+# days from 1 to 999, no lead zero.
+_usage_days_ok() {
+  [[ "$1" =~ ^[123456789][0123456789]{0,2}$ ]]
+}
+_usage_days_says() {
+  printf '%s' 'a whole number from 1 to 999'
+}
 _usage_test_paragraph() {
   printf '\n%s' \
     '  test      run one test or typecheck inside ccrctests.slice (its memory' \

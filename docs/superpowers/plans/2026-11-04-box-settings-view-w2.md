@@ -2277,6 +2277,9 @@ The worker writes each entry as built, in the task that builds it. These numbers
 (D-7906 to D-7925); none may be redefined, and an unused one reads "Spare, unused." A departure found while executing
 takes the next spare and is named in the wave-done.
 
+- **D-7906.** The wave's one growth waiver for `ccd/ccrc` (`server/test/growth-waivers/D-7906-ccd-ccrc.json`), created by Task 2's
+  Step 4 commit, the first to measure `ccd/ccrc` over 40 net code lines (+42), and raised by each later commit that grows the file.
+
 | Number | Task | What it records |
 |---|---|---|
 | D-7906 | 2 (created by the first commit past the armed limit, Step 4 by this plan's figures), raised by every later commit that grows `ccd/ccrc` (Tasks 2, 3, 5 and 7 if it touches the file), finalized in 8 | The wave's one growth waiver for `ccd/ccrc` (`server/test/growth-waivers/D-7906-ccd-ccrc.json`); `maxDelta` is the final measured delta, with its split by task; every commit's armed gate green |

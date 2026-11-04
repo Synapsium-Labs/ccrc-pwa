@@ -119,6 +119,16 @@ describe('W29: ccd/lib/ccrc-settings.sh is ccd/ccrc\'s reader, generated, never 
     expect(r.stdout).toBe('a whole number of seconds from 0 to 9223372036854775807');
   });
 
+  it.each([['1', 0], ['999', 0], ['0', 1], ['07', 1], ['1000', 1], ['', 1]] as [string, number][])(
+    'W29-L8: the library alone answers _usage_days_ok %j with rc %d', (v, rc) => {
+      const r = bash(freshHome(), '. "$1"; _usage_days_ok "$2"; echo "rc $?"', [LIB, v]);
+      expect(r.stderr).toBe('');
+      expect(r.stdout.trim()).toBe(`rc ${rc}`);
+    });
+  it('W29-L8: the library alone words the days check', () => {
+    expect(bash(freshHome(), '. "$1"; _usage_days_says', [LIB]).stdout).toBe('a whole number from 1 to 999');
+  });
+
   type Case = [string, (home: string) => void, Record<string, string>?, string?, RegExp?];
   const env = (home: string): string => join(home, '.ccrc', 'ccrc.env');
   const put = (text: string | Buffer) => (home: string) => writeFileSync(env(home), text, { mode: 0o600 });

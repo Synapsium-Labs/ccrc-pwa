@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 export const SETTINGS_LIB_FUNCTIONS = Object.freeze([
   '_box_env_value', '_box_env_shell_plain', '_box_env_has_nul', '_box_env_qopen', '_box_env_unit_whole',
   '_box_unit_env', '_box_unit_env_shell', '_ccrc_knob',
-  '_keepalive_fresh_ok', '_keepalive_fresh_says',
+  '_keepalive_fresh_ok', '_keepalive_fresh_says', '_usage_days_ok', '_usage_days_says',
 ]);
 
 const HEADER = [

@@ -328,3 +328,14 @@ describe('_keepalive_fresh_ok and _keepalive_fresh_says live in ccd/ccrc', () =>
     expect(sourced(boxWith('ccrc-carve-freshs-', null), '_keepalive_fresh_says').stdout).toBe('a whole number of seconds from 0 to 9223372036854775807');
   });
 });
+
+// ── W2: the usage sweep's days check, by direct calls on a sourced ccd/ccrc (D-7906) ───────────────────────────────────
+const DAYS_ROWS: [string, number][] = [['1', 0], ['999', 0], ['0', 1], ['07', 1], ['1000', 1], ['', 1]];
+describe('_usage_days_ok and _usage_days_says live in ccd/ccrc', () => {
+  it.each(DAYS_ROWS)('%j answers rc %d', (v, rc) => {
+    expect(sourced(boxWith('ccrc-carve-days-', null), '_usage_days_ok "$DV"; echo "rc $?"', { DV: v }).stdout.trim()).toBe(`rc ${rc}`);
+  });
+  it('the words, with no newline', () => {
+    expect(sourced(boxWith('ccrc-carve-days-s-', null), '_usage_days_says').stdout).toBe('a whole number from 1 to 999');
+  });
+});

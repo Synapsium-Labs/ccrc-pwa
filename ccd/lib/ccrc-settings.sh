@@ -297,3 +297,11 @@ _keepalive_fresh_ok() {
 _keepalive_fresh_says() {
   printf '%s' 'a whole number of seconds from 0 to 9223372036854775807'
 }
+
+_usage_days_ok() {
+  [[ "$1" =~ ^[123456789][0123456789]{0,2}$ ]]
+}
+
+_usage_days_says() {
+  printf '%s' 'a whole number from 1 to 999'
+}
