@@ -38,7 +38,7 @@ import { itemMailSubject, tickMail } from './ledgersMail.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
-  OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
+  OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
   removeOperatorSecret, sweepOperatorSecretTemps, writeOperatorSecret, type OperatorSecretMeta, type OperatorSecretState,
   type RegisterSecret,
 } from './ledgersSecrets.js';
@@ -694,6 +694,11 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
         meta = await writeOperatorSecret(deps.ccrcDir, item.program, slot, value, setAt, deps.registerSecret, id);
       } catch (e) {
         if (e instanceof OperatorSecretStoredUnrecorded) return storedNotTicked(reply, id);
+        if (e instanceof OperatorSecretNameCollides) {
+          return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.secretNameCollides, {
+            detail: 'the box already stores a secret under a programme or slot name that differs from this one only by case; nothing was stored',
+          });
+        }
         return refuseRoute(reply, 'write-failed', { detail: 'the secret could not be stored; nothing was sent to the coordinator' });
       }
       let ticked: ItemRow;
