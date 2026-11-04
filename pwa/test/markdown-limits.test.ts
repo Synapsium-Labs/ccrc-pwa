@@ -24,13 +24,6 @@ const VALUES: Readonly<Record<string, number>> = {
   DOCS_RENDER_GATE_BYTES: 524288,
   CHAT_SYNC_MAX_BYTES: 4096,
   CHAT_PARSE_BUDGET_MS: 2000,
-  MD_HIGHLIGHT_MAX_WORD_CHARS: 256,
-  MD_HIGHLIGHT_MAX_LINE_CHARS: 2048,
-  MD_HIGHLIGHT_MAX_BLANK_CHARS: 2048,
-  MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS: 8192,
-  MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS: 4096,
-  DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS: 393216,
-  DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS: 131072,
   MD_KEYSTROKE_MAX_CHARS: 64,
   // W5h-a and W5h-b (base spec 4.9's W5h rows and "Two more"): seven values R19 measured (W5h-b), then two fixed ones,
   // then the highlight cache's two bounds, moved from markdown.tsx unchanged (the W5h-a plan's refinement (c)).
@@ -56,7 +49,7 @@ describe('markdownLimits: the values of section 4.9', () => {
     expect(typeof limits.DOCS_PARSE_BUDGET_MS).toBe('function');
   });
 
-  it('exports exactly the twenty-nine limits', () => {
+  it('exports exactly the twenty-two limits', () => {
     expect(Object.keys(limits).sort()).toEqual(NAMES);
   });
 

@@ -670,7 +670,6 @@ export const EXPORT_PLAIN_SENTENCE: Record<ExportPlain, string> = {
   'too-large': 'highlighted output too large',
   'failed': 'highlighting failed',
   'no-worker': 'this browser has no highlight worker',
-  'part1-bounds': 'refused by the page highlight bounds',
 };
 
 /** What a disabled Export reads, by why it waits (spec 4.17's "When it is offered"; refinement (j)). */

@@ -1,9 +1,9 @@
 // One registry (native Docs reader, W5h-a Task 2; base spec 2026-10-01 section 4.10 "One registry" and "The private
 // instance", M4.H5 and M4.H6). The main thread knows grammars as data (`highlightNames.ts`); the highlight worker
 // registers them on one private highlight.js instance (`highlightGrammars.ts#HLJS`). This file holds the two equal
-// in both directions, holds part 1's grammar caps equal to their derivation over the worker's grammars (until
-// W5h-b), and pins the instance: one `hljs.newInstance()`, registrations only on it, and no `addPlugin`,
-// `configure` or `debugMode` call in the worker's first-party closure, each clause with a planted control.
+// in both directions, holds `highlightNames.ts` to importing nothing (W5h-b), and pins the instance: one
+// `hljs.newInstance()`, registrations only on it, and no `addPlugin`, `configure` or `debugMode` call in the worker's
+// first-party closure, each clause with a planted control.
 // The escaping scan reads calls through TypeScript's parser. NOT EXHAUSTIVE: a call through a variable holding the
 // method (`const c = HLJS.configure; c({})`), an element access with a computed key, and anything reached through
 // `any` or `eval` are not seen; review lens 1 reads for those.
@@ -11,11 +11,10 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
-import { CCRC_ALIASES, HLJS, deriveBoundedCaps } from '../src/lib/highlightGrammars';
+import { CCRC_ALIASES, HLJS } from '../src/lib/highlightGrammars';
 import {
-  HIGHLIGHT_ALIASES, HIGHLIGHT_BOUNDED_CAPS, HIGHLIGHT_GRAMMARS, HIGHLIGHT_NAME_SET, grammarOf, isRegisteredGrammar,
+  HIGHLIGHT_ALIASES, HIGHLIGHT_GRAMMARS, HIGHLIGHT_NAME_SET, grammarOf, isRegisteredGrammar,
 } from '../src/lib/highlightNames';
-import { MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS, MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS } from '../src/lib/markdownLimits';
 
 const LIB = path.join(import.meta.dirname, '..', 'src', 'lib');
 
@@ -53,15 +52,6 @@ describe('M4.H5: highlightNames.ts is the worker\'s registry, in both directions
       expect(isRegisteredGrammar(n), n).toBe(false);
       expect(grammarOf(n), n).toBeNull();
     }
-  });
-
-  it('part 1\'s grammar caps equal deriveBoundedCaps over the worker\'s grammars (until W5h-b)', () => {
-    const derived = deriveBoundedCaps(HLJS, new Map<string, number>([
-      ['typescript', MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS], ['javascript', MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS],
-      ['rust', MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS],
-    ]));
-    const sorted = (m: ReadonlyMap<string, number>): [string, number][] => [...m].sort(([a], [b]) => a.localeCompare(b));
-    expect(sorted(HIGHLIGHT_BOUNDED_CAPS)).toEqual(sorted(derived));
   });
 });
 
@@ -118,5 +108,30 @@ describe('M4.H6: highlight.js\'s own escaping (one private instance, no plugin, 
     for (const call of ["HLJS.configure({ classPrefix: 'x-' });", 'HLJS.addPlugin({});', 'HLJS.debugMode();']) {
       expect(escaping(`${read('highlightGrammars.ts')}\n${call}\n`, 'planted.ts').forbidden, call).toHaveLength(1);
     }
+  });
+});
+
+// W5h-b (base spec 4.10's Files table: `highlightNames.ts` imports "`markdownLimits.ts` only, until W5h-b; nothing
+// after"). Read with TypeScript's parser: every import declaration and every `export … from`. NOT EXHAUSTIVE: a dynamic
+// `import()` and a `require` are not seen.
+/** The module specifiers one module imports or re-exports from. */
+function specifiersOf(source: string): string[] {
+  const sf = ts.createSourceFile('m.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  return sf.statements.flatMap((s) => (
+    (ts.isImportDeclaration(s) || ts.isExportDeclaration(s)) && s.moduleSpecifier !== undefined && ts.isStringLiteral(s.moduleSpecifier)
+      ? [s.moduleSpecifier.text] : []));
+}
+
+describe('W5h-b: highlightNames.ts imports nothing', () => {
+  it('highlightNames.ts imports and re-exports from no module', () => {
+    expect(specifiersOf(readFileSync(path.join(LIB, 'highlightNames.ts'), 'utf8'))).toEqual([]);
+  });
+
+  it('planted: an import of markdownLimits, a type import and a re-export are each seen', () => {
+    expect(specifiersOf("import { MD_HIGHLIGHT_BLOCK_MAX_CHARS } from './markdownLimits';\nexport const c = MD_HIGHLIGHT_BLOCK_MAX_CHARS;"))
+      .toEqual(['./markdownLimits']);
+    expect(specifiersOf("import type { HighlightJob } from './highlightProtocol';\nexport type J = HighlightJob;"))
+      .toEqual(['./highlightProtocol']);
+    expect(specifiersOf("export { LANG_LABEL } from './other';")).toEqual(['./other']);
   });
 });

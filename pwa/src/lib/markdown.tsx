@@ -8,11 +8,11 @@
 // pre-scanned, then rendered as before; a longer one parses in `chatRunner`'s worker; whatever is not formatted
 // shows as `MsgPlain` with `chatPlainNote`'s sentence; and `isRefusedChatImageSrc` keeps chat from drawing an
 // image whose source is not an absolute http(s) URL (`chat-hardening.test.tsx`).
-// Bounded per W5 Task 3 (section 4.10's "Bounds on the shared components"): `CodeBlock` does not highlight a block
-// holding a word longer than `MD_HIGHLIGHT_MAX_WORD_CHARS` (r10), and `keystrokeParts` moved to `markdownGuard.ts`,
-// where the parse's element count calls it too (2-2) and it refuses a span over `MD_KEYSTROKE_MAX_CHARS` (r11).
+// Bounded per W5 Task 3 (section 4.10's "Bounds on the shared components"): `keystrokeParts` moved to `markdownGuard.ts`,
+// where the parse's element count calls it too (2-2) and it refuses a span over `MD_KEYSTROKE_MAX_CHARS` (r11). W5h-b
+// retired r10's word bound and the main-thread highlight bounds beside it: highlight.js runs only in the worker.
 // Desktop polish Task C7: chat's remark plugins are one module constant; `ChatMarkdown` is memoised on its props.
-// W5h-a Task 6 (base spec 2026-10-01 section 4.10 "Highlighting"): this file no longer imports highlight.js. The grammar registration moved to `highlightGrammars.ts` (the highlight worker's closure), `LANG_LABEL`, `codeLanguage` and part 1's scans to `highlightNames.ts`, the cache into the worker. `CodeBlock` reads a highlight store (`PreHighlightContext`) with `useSyncExternalStore`, requests in an effect, renders plain first, and draws through `HighlightedCode`, the one `dangerouslySetInnerHTML` in `pwa/src`, which inserts only a value `isCheckedHighlightHtml` accepts. `ChatMarkdown` holds one store per message on `chatHighlighter`.
+// W5h-a Task 6 (base spec 2026-10-01 section 4.10 "Highlighting"): this file no longer imports highlight.js. The grammar registration moved to `highlightGrammars.ts` (the highlight worker's closure), `LANG_LABEL` and `codeLanguage` to `highlightNames.ts`, the cache into the worker. `CodeBlock` reads a highlight store (`PreHighlightContext`) with `useSyncExternalStore`, requests in an effect, renders plain first, and draws through `HighlightedCode`, the one `dangerouslySetInnerHTML` in `pwa/src`, which inserts only a value `isCheckedHighlightHtml` accepts. `ChatMarkdown` holds one store per message on `chatHighlighter`.
 import Markdown, { defaultUrlTransform, type Options as MarkdownOptions } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
@@ -140,9 +140,6 @@ export function codeBlockLabel(label: string, raw: string, answer: BlockKey, ent
       return label;
     case 'over-cap':
       return kib;
-    case 'part1':
-      return answer.bound === 'grammar-cap' ? kib
-        : `${label} · not highlighted (a ${answer.chars}-character ${answer.bound === 'word' ? 'word' : answer.bound === 'line' ? 'line' : 'run of whitespace'})`;
     case 'key':
       break;
   }
@@ -150,7 +147,7 @@ export function codeBlockLabel(label: string, raw: string, answer: BlockKey, ent
     case 'html':
       return entry.mode === 'line' ? `${label} · highlighted line by line` : label;
     case 'skipped':
-      return entry.ceiling === 'part1-scan' || entry.ceiling === 'part1-markdown' ? label : `${label} · not highlighted (page highlighting limit)`;
+      return `${label} · not highlighted (page highlighting limit)`;
     case 'plain':
       if (entry.first.kind === 'timeout') return `${label} · not highlighted (took over ${entry.first.budgetMs / 1000} s)`;
       return entry.first.kind === 'too-large' ? `${label} · not highlighted (output too large)` : label;
