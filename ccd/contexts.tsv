@@ -820,3 +820,14 @@ _ws_train_keyable	C4
 _ws_train_kept	C4
 _ws_train_record	C4
 _pr_train_proofs	C4
+_dl_leases_dir	C4
+_dl_carrier_read	C4
+_dl_tree_key	C4
+_dl_tree_owner	C4
+_dl_tree_of_record	C4
+_dl_creation_base	C4
+_dl_fingerprint	C4
+_dl_mark_refuse	C4
+_dl_in	C4
+cmd_ws_lease_mark	C4
+_dl_mark_locked	C4
