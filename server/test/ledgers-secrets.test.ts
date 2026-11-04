@@ -1165,7 +1165,7 @@ describe('the slot\'s chain has a deadline (review 1391 A-3)', () => {
     }, NOW0);
     const bare = Fastify({ logger: false });
     registerLedgerOperatorRoutes(bare, {
-      coord, bus: new Bus(), now: () => NOW0 + 1, presenceOf: () => 'live', gate: () => ({ pass: true }), ccrcDir,
+      coord, bus: new Bus(), now: () => NOW0 + 1, presenceOf: () => 'alive', gate: () => ({ pass: true }) as never, ccrcDir,
       registerSecret: () => 'unregistered', retireSecret: () => {}, slotWaitMs: 100,
     });
     const file = operatorSecretPath(ccrcDir, 'prog-a', 'api-key');

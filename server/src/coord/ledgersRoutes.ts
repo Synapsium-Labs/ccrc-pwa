@@ -747,7 +747,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badSlot, { detail: 'that programme or slot name is not one this server stores a secret under' });
     }
     return underSlot(`${slug}\u0000${slot}`, async () => {
-      let done: 'removed' | 'absent';
+      let done: 'removed' | 'nothing-stored';
       try {
         done = await removeOperatorSecret(deps.ccrcDir, slug, slot);
       } catch {
@@ -755,7 +755,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       }
       deps.retireSecret(operatorSecretLaneId(slug, slot));
       deps.bus.emit('waiting');
-      if (done === 'absent') return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.secretNotStored, { detail: `no secret is stored in ${slot}` });
+      if (done === 'nothing-stored') return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.secretNotStored, { detail: `no secret is stored in ${slot}` });
       const answer: SecretRemoveAnswer = { ok: true, slot };
       return reply.code(200).send(answer);
     }, () => slotBusy(reply));

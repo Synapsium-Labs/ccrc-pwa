@@ -6501,11 +6501,12 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
 
     it('measures a server box that holds the operator\'s pasted secrets or the Linear slot store (review 1389 A7, the PL6 follow-up)', () => {
       for (const dir of ['.ccrc/operator-secrets', '.ccrc/linear']) {
-        const r = run(box({ secrets: [dir] }), 'snapshot-posture', 'linux');
+        // The fixture's `secrets` type names the two lane-secret directories; it makes any directory it is given.
+        const r = run(box({ secrets: [dir] as never }), 'snapshot-posture', 'linux');
         expect(lines(r.stdout)[0], dir).toBe(`WARN snapshot-posture: not stated: whether the provider keeps backups or snapshots of this box, which would hold ~/${dir}, is the operator's answer, and doctor does not guess it`);
         expect(r.code, dir).toBe(2);
       }
-      const mac = run(box({ secrets: ['.ccrc/operator-secrets'], stubs: { fdesetup: fdesetup('FileVault is On.') } }), 'filevault', 'darwin');
+      const mac = run(box({ secrets: ['.ccrc/operator-secrets'] as never, stubs: { fdesetup: fdesetup('FileVault is On.') } }), 'filevault', 'darwin');
       expect(lines(mac.stdout)).toEqual(['PASS filevault: FileVault is On (fdesetup status)']);
     });
 

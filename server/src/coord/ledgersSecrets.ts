@@ -241,11 +241,11 @@ export function readStoredSecrets(ccrcDir: string, program: string):
  * REMOVES ONE STORED SLOT (the operator's Remove door, programme item 9): the value file, then its metadata, then this slot's
  * leftover temp files. Both names are re-checked before any path is built (`OperatorSecretBadSlot`). The store's two
  * directories must be private directories of ours, never followed through a link (`OperatorSecretStoreUnsafe`), and are never
- * made here. Answers `removed`, or `absent` when no value file is there (a record left without one is removed too). A value
+ * made here. Answers `removed`, or `nothing-stored` when no value file is there (a record left without one is removed too). A value
  * file that cannot be removed rejects with what failed, and nothing else is touched; a record or temp that cannot be removed
  * after the value is gone stays (every reader ignores a record whose value file is gone). Never reads the value.
  */
-export async function removeOperatorSecret(ccrcDir: string, program: string, slot: string): Promise<'removed' | 'absent'> {
+export async function removeOperatorSecret(ccrcDir: string, program: string, slot: string): Promise<'removed' | 'nothing-stored'> {
   const file = operatorSecretPath(ccrcDir, program, slot);
   const dir = path.dirname(file);
   for (const [d, which] of [[path.join(ccrcDir, OPERATOR_SECRETS_DIR), 'top'], [dir, 'programme']] as const) {
@@ -253,7 +253,7 @@ export async function removeOperatorSecret(ccrcDir: string, program: string, slo
     try {
       st = await fsp.lstat(d);
     } catch (e) {
-      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return 'absent';
+      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return 'nothing-stored';
       throw e;
     }
     if (!st.isDirectory() || (st.mode & 0o077) !== 0 || (typeof process.getuid === 'function' && st.uid !== process.getuid())) {
@@ -277,7 +277,7 @@ export async function removeOperatorSecret(ccrcDir: string, program: string, slo
       // The value is unlinked; its durability across a crash is unproven, and a re-run of Remove finishes it.
     }
   }
-  return had ? 'removed' : 'absent';
+  return had ? 'removed' : 'nothing-stored';
 }
 
 /** What a listing of the store found: every slot whose two names pass their shapes, and whether any directory of the store
