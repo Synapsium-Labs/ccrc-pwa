@@ -2,8 +2,8 @@
 // what it pins; the screen's and the routes' tests read the same words through their components.
 import { describe, expect, it } from 'vitest';
 import {
-  COMBINED_LIST, fromWord, groupByProgramme, itemPills, itemPlace, listGroups, listOfFromWord, openRunsOf, programmeIsLive,
-  programmeWaitingCount, questionRows, resolveList, waitingTotal, type ItemList, type QuestionRow,
+  COMBINED_LIST, fromWord, groupByProgramme, itemPills, itemPlace, knownProgrammes, listGroups, listOfFromWord, openRunsOf,
+  positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, waitingTotal, type ItemList, type QuestionRow,
 } from '../src/ledgers/ledgerWords';
 import { isWaitingView } from '../src/ledgers/waitingView';
 import { fleetSession } from './fleetFixture';
@@ -231,5 +231,29 @@ describe('itemPlace: previous and next in the order and filter of the list the i
     expect(resolveList({ at: 'waiting', programme: 'prog-gone' }, groups)).toEqual(COMBINED_LIST);
     expect(resolveList({ at: 'programme', programme: 'zzz' }, groups)).toEqual(COMBINED_LIST);
     expect(resolveList({ at: 'programme', programme: 'zzz' }, [])).toEqual(COMBINED_LIST);
+  });
+
+  it('a programme view whose slug is real stays a programme view with no group; a filter to it does not (follow-up F3)', () => {
+    const view: ItemList = { at: 'programme', programme: 'prog-gone' };
+    const filter: ItemList = { at: 'waiting', programme: 'prog-gone' };
+    const known = new Set(['prog-gone']);
+    expect(resolveList(view, groups, known)).toBe(view);
+    expect(resolveList(filter, groups, known)).toEqual(COMBINED_LIST); // the side rail offers no filter to it
+    expect(resolveList({ at: 'programme', programme: 'zzz' }, groups, known)).toEqual(COMBINED_LIST); // a slug nothing knows
+    expect(resolveList(view, groups)).toEqual(COMBINED_LIST);
+  });
+
+  it('a slug is real when the runs, the Goals or the cleared trail name it (follow-up F3)', () => {
+    const goals = (program: string) => ({ program, specPath: null, inShort: null, inShortAt: null, modifications: [] });
+    expect([...knownProgrammes(waitingView(), null)]).toEqual([]);
+    expect(knownProgrammes(waitingView(), [runRow({ id: 1, program: 'prog-r' })]).has('prog-r')).toBe(true);
+    expect(knownProgrammes(waitingView({ goals: [goals('prog-g')] }), null).has('prog-g')).toBe(true);
+    expect(knownProgrammes(waitingView({ cleared: [itemView({ id: 9, program: 'prog-c', state: 'done' })] }), []).has('prog-c')).toBe(true);
+    expect(knownProgrammes(waitingView({ items: [itemView({ id: 1, program: 'prog-a' })] }), []).has('zzz')).toBe(false);
+  });
+
+  it('the position as announced carries the item\'s title, so a step that keeps "N of M" still says something new (follow-up A-3)', () => {
+    expect(positionWords({ list: COMBINED_LIST, index: 1, total: 3, prev: 10, next: 12 }, 'Item 11')).toBe('2 of 3, Item 11');
+    expect(positionWords(null, 'Item 11')).toBe('');
   });
 });
