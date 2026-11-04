@@ -398,11 +398,14 @@ describe('ccrc settings: _upd_url_origin', () => {
     // `=` form `user=mirror.example.invalid` and the `//` form `deploy://mirror.example.invalid`.
     for (const u of ['https://deploy:/s3cret@mirror.example.invalid/r', 'https://deploy:ab:/cd@mirror.example.invalid/r',
       'https://deploy:\\/s3cret@mirror.example.invalid/r', 'deploy:/s3cret@mirror.example.invalid/r', 'deploy:\\s3cret@mirror.example.invalid/r',
-      'user=x:pw@mirror.example.invalid/r', 'deploy://s3cret@mirror.example.invalid/r', 'ftp://mirror.example.invalid/r']) {
+      'user=x:pw@mirror.example.invalid/r', 'deploy://s3cret@mirror.example.invalid/r', 'ftp://mirror.example.invalid/r',
+      // Review 1403 F1: a scheme AFTER a userinfo is not http(s) either; before the fix the first two printed `ftp://h`.
+      'user:pw@ftp://h/r', 'tok@ftp://h', 'user:pw@ftp://mirror.example.invalid/r', 'tok@ftp://mirror.example.invalid']) {
       expect(rc(u), JSON.stringify(u)).toEqual({ code: 1, out: '' });
     }
     // An ordinary userinfo keeps its host, a value with no '@' is untouched, and the scheme's case is kept.
     expect(rc('https://user:secret@mirror.example.invalid/r')).toEqual({ code: 0, out: 'https://mirror.example.invalid' });
+    expect(rc('user:pw@https://mirror.example.invalid/r')).toEqual({ code: 0, out: 'https://mirror.example.invalid' });
     expect(rc('HTTPS://mirror.example.invalid/r/x')).toEqual({ code: 0, out: 'HTTPS://mirror.example.invalid' });
     for (const u of ['https://h/p', 'h/p', 'http://h:8080/a']) expect(rc(u).code, u).toBe(0);
   });
@@ -427,6 +430,9 @@ describe('ccrc settings: a release base whose userinfo survives the redaction re
     'https://deploy:/s3cret@mirror.example.invalid/r',
     'https://deploy:ab:/cd@mirror.example.invalid/r',
     'deploy://s3cret@mirror.example.invalid/r',
+    // Review 1403 F1: a scheme after a userinfo; the real verb recorded `custom ftp://mirror.example.invalid`.
+    'user:pw@ftp://mirror.example.invalid/r',
+    'tok@ftp://mirror.example.invalid',
   ])('%s reads exactly `custom`, in the JSON, the file and the human form', (url) => {
     const home = boxWith('ccrc-sv-url-at-');
     const r = settings(home, ['--json', '--write'], { CCRC_RELEASE_BASE_URL: url });

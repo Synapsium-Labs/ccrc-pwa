@@ -2934,8 +2934,9 @@ _upd_redact() {
   s+="$cut"
   printf '%s' "$s"
 }
-# `_upd_url_origin <url>` — a URL's scheme and host, nothing else (D-6914, D-7873): `_upd_redact` first (so the userinfo goes by ITS
-# rules, none restated here), then the `<scheme>://` if there is one, then the authority up to the first '/', '?' or '#'. A path, a
+# `_upd_url_origin <url>` — a URL's scheme and host, nothing else (D-6914, D-7873): the RAW value is screened first by
+# the rules below, then `_upd_redact` runs (so an ordinary userinfo goes by ITS rules, none restated here), then the `<scheme>://` if
+# there is one, then the authority up to the first '/', '?' or '#'. A path, a
 # query and a fragment are gone, a port stays: `https://user:secret@mirror.example.invalid/r?token=x` reads `https://mirror.example.invalid`
 # and the scheme-less `user:secret@mirror.example.invalid/r` reads `mirror.example.invalid`. `ccrc settings` shows a mirror this way.
 # D-7873 departs from the spec's algorithm text (2.1: cut at the first '/', '?' or '#', no more) to keep its promise, "never a path, a
@@ -2952,7 +2953,8 @@ _upd_redact() {
 # run), it matches again at the userinfo's own ':' and drops the rest of the credential with its '@' (`https://deploy:/s3cret@m/r`
 # read `https://deploy:`); and its `KEY=` rule keeps a scheme-less user name that holds '=' (`user=x:pw@m` read `user=m`). The
 # authority ends at the first '/', so a host never follows one: a path or query that holds an '@' shows no host, as above. Only
-# `http://` and `https://` show as a scheme; any other `<name>://` reads rc 1, because a scheme-less password that starts with
+# `http://` and `https://` show as a scheme, tested on the raw value's leading scheme and again on the redacted value's, so a scheme
+# after a userinfo (`user:pw@ftp://h/r`, `tok@ftp://h`) reads rc 1 too (review 1403 F1); any other `<name>://` reads rc 1, because a scheme-less password that starts with
 # '//' (`deploy://s3cret@m`) cannot be told from a scheme, and would show its user name as one (less, never more: a mirror on
 # another scheme shows `custom` alone). These rules on the raw value close the shapes `_upd_redact`'s KNOWN LIMITS name for a
 # release base: a raw '/' (or a JSON '\/') in the userinfo, and a userinfo inside a path or a query, by the '/' rule; a raw '?'
@@ -2961,12 +2963,12 @@ _upd_redact() {
 # the '@' check (D-7873).
 # rc 0 otherwise, printing the origin (empty for an empty value).
 _upd_url_origin() {
-  local s="${1:-}" sre='^[A-Za-z][A-Za-z0-9+.-]*://' scheme="" bre='[[:space:]"'"'"'<(`]' LC_ALL=C
+  local s="${1:-}" sre='^[A-Za-z][A-Za-z0-9+.-]*://' hre='^[Hh][Tt][Tt][Pp][Ss]?://$' scheme="" bre='[[:space:]"'"'"'<(`]' LC_ALL=C
   if [[ "$s" =~ $bre ]]; then return 1; fi
-  if [[ "$s" =~ $sre ]]; then [[ "${BASH_REMATCH[0]}" =~ ^[Hh][Tt][Tt][Pp][Ss]?://$ ]] || return 1; s="${s#"${BASH_REMATCH[0]}"}"; fi
+  if [[ "$s" =~ $sre ]]; then [[ "${BASH_REMATCH[0]}" =~ $hre ]] || return 1; s="${s#"${BASH_REMATCH[0]}"}"; fi
   case "$s" in *[/\\=]*@*) return 1 ;; esac
   s="$(_upd_redact "${1:-}")"
-  if [[ "$s" =~ $sre ]]; then scheme="${BASH_REMATCH[0]}"; s="${s#"$scheme"}"; fi
+  if [[ "$s" =~ $sre ]]; then scheme="${BASH_REMATCH[0]}"; [[ "$scheme" =~ $hre ]] || return 1; s="${s#"$scheme"}"; fi
   case "$s" in *@*) return 1 ;; esac
   s="${s%%[/?#]*}"
   printf '%s%s' "$scheme" "$s"
