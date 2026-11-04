@@ -279,7 +279,7 @@ export function registerReaderLabRoutes(app: any): void {
     expect(parsed.calls.filter((c) => /^Math\s*\.\s*random$/.test(c.callee)).length, 'the door draws no randomness from Math').toBe(0);
   });
 
-  it('a request that reaches no probe handler gets one answer whether or not a run exists: a HEAD, a wrong-shaped path, dark or armed (refinement (f))', async () => {
+  it('a request that reaches no probe handler gets one answer whether or not a run exists: a HEAD, a wrong-shaped path, a malformed escape, an over-long name, dark or armed (refinement (f))', async () => {
     for (const armed of [false, true]) {
       const a = await openApp(armed);
       const session = armed ? await login(a) : undefined;
@@ -289,6 +289,8 @@ export function registerReaderLabRoutes(app: any): void {
         { method: 'HEAD', url: `${base}/cookie-image` }, { method: 'GET', url: `${base}/cookie-image/extra` },
         { method: 'POST', url: `${base}/cookie-image/extra` }, { method: 'GET', url: base },
         { method: 'HEAD', url: `${READER_LAB_RUNS_PATH}/${nonce}` },
+        // Fastify answers these two before any hook: a malformed percent-escape (400) and an over-long name on a POST (414).
+        { method: 'GET', url: `${base}/cookie%ZZimage` }, { method: 'POST', url: `${base}/${'n'.repeat(200)}` },
       ] as const;
       const ask = async (cookie: string | undefined): Promise<string[]> => {
         const out: string[] = [];
@@ -305,6 +307,8 @@ export function registerReaderLabRoutes(app: any): void {
       expect(none, `armed ${armed}: a request that reaches no probe handler answers the same with no run open`).toEqual(live);
       // CONTROL: the answers are real refusals, not the probe's 204, so equality is not vacuous.
       expect(live.flat().every((l) => !l.includes(' 204 ')), `armed ${armed}`).toBe(true);
+      expect(live.flat().filter((l) => l.includes('%ZZ') || l.includes('n'.repeat(200))).map((l) => l.split(' ')[2]),
+        `armed ${armed}: the malformed escape is a 400 and the over-long POST a 414, before any hook`).toEqual(['400', '414', '400', '414']);
       await a.close();
       app = undefined;
     }
