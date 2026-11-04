@@ -191,7 +191,6 @@ const GRANDFATHERED_UNCOVERED = new Set([
   '.proj-pending-meta > *:not(:first-child)::before',
   '.proj-pending-program',
   '.proj-pending-elapsed',
-  '.fleet-archived-row, .fleet-runs-row',
   '.accounts-projection',
   '.accounts-disabled-note',
   '.accounts-fresh',

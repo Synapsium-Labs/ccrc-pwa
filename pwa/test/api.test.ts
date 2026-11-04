@@ -1144,6 +1144,32 @@ describe('account pools', () => {
     await expect(api.workspaceAdd('p', { name: 'ENG-1234' })).rejects.toMatchObject({ status: 409, body: { error: 'slug-taken' } });
   });
 
+  // ADD A PROJECT (add-project spec 2026-11-04 §4 PWA): the body rides as JSON, exactly as given, and the 2xx is read.
+  it('projectAdd posts the body as JSON to /api/projects and reads the answer', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, name: 'repo', source: 'github' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const answer = await api.projectAdd({ source: 'github', repo: 'example/repo', name: 'repo' });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/projects');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('content-type')).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({ source: 'github', repo: 'example/repo', name: 'repo' });
+    expect(answer).toEqual({ ok: true, name: 'repo', source: 'github' });
+
+    await api.projectAdd({ source: 'empty', name: 'project-a' });
+    expect(JSON.parse((fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string)).toEqual({ source: 'empty', name: 'project-a' });
+  });
+
+  it('projectAdd answers unreadable for a 2xx it cannot read, and rejects a refusal with its body intact', async () => {
+    const garbled = createApi(vi.fn().mockResolvedValue(new Response('not json', { status: 200 })) as unknown as typeof fetch);
+    expect(await garbled.projectAdd({ source: 'empty', name: 'project-a' })).toBe('unreadable');
+    const partial = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, name: 'project-a', source: 'svn' })) as unknown as typeof fetch);
+    expect(await partial.projectAdd({ source: 'empty', name: 'project-a' })).toBe('unreadable');
+    const refused = createApi(vi.fn().mockResolvedValue(jsonResponse(409, { ok: false, error: 'project-exists' })) as unknown as typeof fetch);
+    await expect(refused.projectAdd({ source: 'empty', name: 'project-a' })).rejects.toMatchObject({ status: 409, body: { error: 'project-exists' } });
+  });
+
   // NAMED WORKSPACES (S9): the rename. A title is sent trimmed, a clear is its own body, and the id rides the path
   // percent-encoded. The 2xx is read: the title the box holds, `null` after a clear, `'unreadable'` for an answer this
   // build cannot read (the exchange completed, so the rename landed).

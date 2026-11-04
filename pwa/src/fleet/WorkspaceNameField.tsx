@@ -11,7 +11,7 @@
 // A DISABLED FIELD SAYS WHY. A door that cannot take a name (a crossing project, an overflow account) disables the
 // field and says it in one line, instead of leaving an input that silently ignores what is typed into it.
 import { useId } from 'react';
-import type { ChangeEvent, KeyboardEvent, ReactNode } from 'react';
+import type { ChangeEvent, InputHTMLAttributes, KeyboardEvent, ReactNode } from 'react';
 import { Button, Chip, QC_ACTIONS, TextInput } from '@ccrc/ui';
 import { LOOKUP_NOTE, type Lookup, type NamePreview } from './workspaceNameWords';
 import { slugStays } from './workspaceRenameWords';
@@ -95,6 +95,40 @@ export interface WorkspaceNameFieldProps {
   namedNote?: string;
 }
 
+export interface PlainTextFieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'id' | 'onChange' | 'onKeyDown'> {
+  id: string;
+  label: string;
+  /** Every change goes up as typed: the value is the host's. */
+  onChange: (next: string) => void;
+  /** Enter in the field: the host's own submit, gated as its confirm is. Absent, Enter does nothing. */
+  onEnter?: () => void;
+}
+
+/** A labelled line of text that is not prose (no autocomplete, capitalisation, autocorrect or spellcheck), with Enter
+ *  as the host's submit. The one shape behind this field and the Add project sheet's two (`AddProjectSheet`). */
+export function PlainTextField({ id, label, onChange, onEnter, ...input }: PlainTextFieldProps): ReactNode {
+  return (
+    <label htmlFor={id} className={NAME_FIELD_CLASS.stack}>
+      <span className="route-field-label">{label}</span>
+      <TextInput
+        id={id}
+        autoComplete="off"
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
+        {...input}
+        onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
+        onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+          // Not while an IME is composing: its Enter commits the candidate, and a submit then would send half a word.
+          if (e.key !== 'Enter' || e.nativeEvent.isComposing || onEnter === undefined) return;
+          e.preventDefault();
+          onEnter();
+        }}
+      />
+    </label>
+  );
+}
+
 export function WorkspaceNameField({
   value, onChange, preview, project, emptyHint, disabledReason = null, onOpenSettings, keepSlug,
   placeholder = NAME_FIELD_TEXT.placeholder, locked = false, onSubmit, namedNote,
@@ -104,28 +138,17 @@ export function WorkspaceNameField({
   const disabled = disabledReason !== null;
   return (
     <div className={locked ? `${NAME_FIELD_CLASS.stack} ${NAME_FIELD_CLASS.locked}` : NAME_FIELD_CLASS.stack} data-locked={locked ? 'true' : undefined}>
-      <label htmlFor={id} className={NAME_FIELD_CLASS.stack}>
-        <span className="route-field-label">{NAME_FIELD_TEXT.label}</span>
-        <TextInput
-          id={id}
-          value={value}
-          disabled={disabled || locked}
-          placeholder={placeholder}
-          autoComplete="off"
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
-          aria-describedby={describedBy}
-          aria-invalid={!disabled && preview.kind === 'refused' ? true : undefined}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
-          onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-            // Not while an IME is composing: its Enter commits the candidate, and a submit then would send half a word.
-            if (e.key !== 'Enter' || e.nativeEvent.isComposing || onSubmit === undefined) return;
-            e.preventDefault();
-            onSubmit();
-          }}
-        />
-      </label>
+      <PlainTextField
+        id={id}
+        label={NAME_FIELD_TEXT.label}
+        value={value}
+        disabled={disabled || locked}
+        placeholder={placeholder}
+        aria-describedby={describedBy}
+        aria-invalid={!disabled && preview.kind === 'refused' ? true : undefined}
+        onChange={onChange}
+        onEnter={onSubmit}
+      />
       {/* THE PREVIEW'S HEIGHT IS RESERVED, FOR ITS TALLEST ANSWER (`PREVIEW_RESERVE`): the title, the id line, the door's
           own note, a lookup's reason and, for the two reasons whose remedy is in Settings, the pointer (a 44px row). So
           the sheet does not jump when the first answer arrives or a lookup resolves, whatever it says. A sheet is anchored

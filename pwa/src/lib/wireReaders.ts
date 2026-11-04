@@ -13,6 +13,7 @@ import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
 import { BOX_TOKEN_PHASES, OWED_REASONS, TOKEN_FILE_PROBLEMS, TOKEN_HOLDS, TOKEN_ORIGINS, type BoxTokenView, type RotateAnswer } from '../../../shared/box-token';
 import type { RouteRefusal } from '../../../shared/refusal';
+import type { ProjectAddAnswer } from '../../../shared/projectAdd';
 import { ApiError } from './apiError';
 import { refusalText } from './refusalWords';
 import { isCount, isRecord } from './wire';
@@ -263,6 +264,14 @@ export function readWorkspaceAdd(raw: unknown): WorkspaceAddAnswer {
     return { named: true, id: raw.id, slug: raw.slug, title: raw.title };
   }
   return { named: false };
+}
+
+/** `POST /api/projects`'s 2xx (add-project spec 2026-11-04 §3), or `'unreadable'`: the exchange answered 2xx, so the
+ *  project WAS added, and only the echo is lost (the sheet then names the project it sent). */
+export function readProjectAdd(raw: unknown): ProjectAddAnswer | 'unreadable' {
+  return isRecord(raw) && raw.ok === true && typeof raw.name === 'string' && (raw.source === 'github' || raw.source === 'empty')
+    ? { ok: true, name: raw.name, source: raw.source }
+    : 'unreadable';
 }
 
 /** What a workspace create can carry. `name` and `wrapper` ride the body only for a NON-BLANK name: a blank one is

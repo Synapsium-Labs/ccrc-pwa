@@ -83,6 +83,10 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // `deps-shed-budget.test.ts` reads both sides from source and holds the sum under this row. A kill here would leave no
   // stamp and no journal row, so the row is ws-reap's, not the flat 90 s.
   'ws-shed-deps': 240_000,
+  // The project create (add-project spec 2026-11-04 §4) is one whole `git clone` of a repository the operator named, of
+  // any size, under a batch-mode ssh and no prompt, so a credential failure ends at once; a large repository is the
+  // wait. ws-reap's row, under the agent's 300 s clamp (`MAX_EXEC_TIMEOUT_MS`) with the client's 5 s margin.
+  'project-add': 240_000,
   // The two SPAWNING verbs, and the reason they need the agent's MAXIMUM
   // (`MAX_EXEC_TIMEOUT_MS`, agent/src/server.ts) rather than a merely larger
   // number (F8, found live 2026-08-12). Both end in `_spawn`, which blocks in

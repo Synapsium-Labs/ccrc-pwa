@@ -2377,8 +2377,11 @@ button.proj-card-pool::before {
    fleet, one into /runs and one into /archive. Two selectors is what "the
    same voice" looks like when it really is the same; a second copy of the
    declarations is what it looked like before. */
+/* The Add project door (add-project spec 2026-11-04 §2) is the third footer, in the same voice. The grouped rule is
+   MEASURED by the contrast gate (design/audit.mjs INHERITED_GROUNDS), no longer carried as grandfathered debt. */
 .fleet-archived-row,
-.fleet-runs-row {
+.fleet-runs-row,
+.fleet-add-project-row {
   padding: 0 var(--sp-2);
   font-family: var(--family-mono);
   font-size: var(--fs-meta);

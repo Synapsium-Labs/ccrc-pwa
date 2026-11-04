@@ -784,6 +784,13 @@ export const CCD_ARGV = {
                       argv(['project-pool', '--project', project, '--pool', pool]),
   projectPoolClear: (project: string) =>
                       argv(['project-pool', '--project', project, '--clear']),
+  /** The project create's two writers (add-project spec 2026-11-04 §4). TWO ENTRIES, the `start`/`enable` and
+   *  `projectPool*` rule: `POST /api/projects` picks between a clone and an empty init rather than parameterising one
+   *  builder. `--name` LEADS, where the agent's gated grant (`REQUIRED_VERB_FLAG`) expects it. `name` and `url` come
+   *  from `planProjectAdd` (L1, `projectAdd.ts`), already held to `shared/projectAdd.ts`'s grammar, and ccd re-checks
+   *  both; the url is its own token after `--url`, so a value cannot be read as a flag. */
+  projectAddClone: (name: string, url: string) => argv(['project-add', '--name', name, '--url', url]),
+  projectAddEmpty: (name: string) => argv(['project-add', '--name', name, '--empty']),
 
   /** The routing record's writer (routing spec 2026-09-14 §5.3). ONE field per
    *  argv: the route that will call it (slice 4's picker, the wave N≥2 dispatch)
@@ -1407,6 +1414,7 @@ export const CCD_CAN = {
   // A new verb: `ccd caps` names it, and a box whose list lacks it is refused 501 rather than sent a usage error.
   testboxRemote: verbRow('testbox-remote'),
   projectPoolSet: verbRow('project-pool'), projectPoolClear: verbRow('project-pool'),
+  projectAddClone: verbRow('project-add'), projectAddEmpty: verbRow('project-add'),
   route: capRow(ROUTE_CAP), routeApply: capRow(ROUTE_APPLY_CAP), routeSet: capRow(ROUTE_CAP),
   winSize: capRow(WIN_SIZE_CAP),
   docsIndex: capRow(DOCS_CAP), docsTree: capRow(DOCS_CAP), docsShowCommitted: capRow(DOCS_CAP),

@@ -57,6 +57,19 @@ export const WS_CREATE_REFUSALS = ['bad-project', 'name-too-long', 'bad-name', '
 export type WsCreateRefusal = (typeof WS_CREATE_REFUSALS)[number];
 
 /**
+ * The project add's words (`POST /api/projects`, add-project spec 2026-11-04 §4): `bad-source` is decided by
+ * `planProjectAdd` (`server/src/projectAdd.ts`, L1) before any argv exists, `project-exists` is ccd's refusal read by
+ * `classifyProjectAddFailure`, and `outcome-unknown` is that reader's answer for a runner that may have run ccd (its wait
+ * expired, the link dropped), so the box may have added the project; the route sends all three through `refuseRoute`
+ * with a computed word, so a typed vocabulary, like `WS_CREATE_REFUSALS`. `outcome-unknown` is the account routes' word
+ * too (`ACCOUNT_ROUTE_REFUSALS`, `shared/api.ts`), with the same meaning and its ONE status row there (502): listed here
+ * so every reader of this list (the sheet's sentences) answers it. It reuses `bad-request`, the create's `bad-project`
+ * and `unsupported`.
+ */
+export const PROJECT_ADD_REFUSALS = ['bad-source', 'project-exists', 'outcome-unknown'] as const;
+export type ProjectAddRefusal = (typeof PROJECT_ADD_REFUSALS)[number];
+
+/**
  * The Linear proxy's own words (#1444, spec §6.8): the twelve `/api/linear/proxy/*` routes (`linear/proxyRoutes.ts`)
  * answer them through `refuseRoute` with a computed word (the router's, the operation table's, a Linear answer's), so
  * they are a typed vocabulary of their own rather than `GenericRefusal`s, whose "still sent" scan reads only literal
@@ -155,7 +168,7 @@ export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LED
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
-  | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal | WsTitleRefusal
+  | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal | WsTitleRefusal | ProjectAddRefusal
   | ArchiveRefusal
   // The coordinator's route door (D-6735, ARCH-20): `decideRoute` answers a `RunRouteRefuseCode`, sent through `refuseRoute`.
   | RunRouteRefuseCode
@@ -287,6 +300,10 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // `id-too-long`: the project plus the slug would pass ccd's id cap (`WS_ID_MAX`), which ccd refuses with nothing made.
   'id-too-long': 400,
   'slug-taken': 409, 'account-refused': 409,
+  // The project add (add-project spec 2026-11-04 §4): CHOSEN, not measured. 400 for a repo the operator can retype (not a
+  // GitHub repository in one of the accepted shapes), 409 for a name a directory under the projects root already holds
+  // (the request was well-formed; the box's state refused it).
+  'bad-source': 400, 'project-exists': 409,
   // The workspace rename (named workspaces S9): CHOSEN — `not-a-workspace` is 409, the request was well-formed and the
   // row's own state (a main checkout) refuses it; `bad-title` is 400, the one thing the operator can retype, though only
   // an older or newer ccd's sanitiser reaches it; `title-not-saved` is 502, the box could not write its registry fields,

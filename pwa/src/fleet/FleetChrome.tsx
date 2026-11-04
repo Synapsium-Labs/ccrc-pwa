@@ -41,6 +41,9 @@ export interface FleetChrome {
   /** Which project's `+` sheet is open (named workspaces S7), or none. */
   addWorkspaceFor: string | null;
   setAddWorkspaceFor: (project: string | null) => void;
+  /** Whether the Add project sheet is open (add-project spec 2026-11-04). */
+  addProjectOpen: boolean;
+  setAddProjectOpen: (open: boolean) => void;
   /** The guarded reap flow's subject, by id only: the session is looked up fresh from the live list. */
   reapId: string | null;
   setReapId: (id: string | null) => void;
@@ -62,6 +65,7 @@ export function FleetChromeProvider({ store, children }: { store: FleetStore; ch
   const [archiveAllFor, setArchiveAllFor] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [addWorkspaceFor, setAddWorkspaceFor] = useState<string | null>(null);
+  const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [reapId, setReapId] = useState<string | null>(null);
   // Memoised (C6, D-6438). The provider re-renders on every fleet frame that changes a row (it reads `sessions` for
   // the actions sheet's lifecycle), and an inline object would give each of its consumers a new context value, and
@@ -69,8 +73,9 @@ export function FleetChromeProvider({ store, children }: { store: FleetStore; ch
   // changes only when something a consumer reads did.
   const value = useMemo<FleetChrome>(() => ({
     store, health, updates, projects, actions, archiveAll,
-    archiveAllFor, setArchiveAllFor, newOpen, setNewOpen, addWorkspaceFor, setAddWorkspaceFor, reapId, setReapId,
-  }), [store, health, updates, projects, actions, archiveAll, archiveAllFor, newOpen, addWorkspaceFor, reapId]);
+    archiveAllFor, setArchiveAllFor, newOpen, setNewOpen, addWorkspaceFor, setAddWorkspaceFor,
+    addProjectOpen, setAddProjectOpen, reapId, setReapId,
+  }), [store, health, updates, projects, actions, archiveAll, archiveAllFor, newOpen, addWorkspaceFor, addProjectOpen, reapId]);
   return <FleetChromeContext.Provider value={value}>{children}</FleetChromeContext.Provider>;
 }
 

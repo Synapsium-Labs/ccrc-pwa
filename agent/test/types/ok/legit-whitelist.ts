@@ -85,6 +85,11 @@ export type ChildReclaimPauseNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FL
  *  bare `['testbox-remote']` with every subset test still green; asserted here, losing it stops this project compiling.
  *  `g24-testbox-remote-without-state.ts` is the other side. */
 export type TestboxRemoteNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['testbox-remote'], '--state'>>;
+
+/** The project create (add-project spec 2026-11-04 §4). Deleting this ENROLMENT turns `['project-add','--name']` into a
+ *  bare `['project-add']` with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g26-project-add-without-name.ts` is the other side. */
+export type ProjectAddNeedsName = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['project-add'], '--name'>>;
 /** Child reclamation (wave 3). The destructive verb the server composes with no
  *  human in the path is enrolled on its confirmation token; losing the
  *  enrolment stops this project compiling. `g13-ws-reclaim-without-expect.ts`

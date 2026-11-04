@@ -191,6 +191,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the lease carrier writer granted without --lease',
     codes: ['TS2322'],
   },
+  // ADD A PROJECT (add-project spec 2026-11-04 §4), g21's shape: enrolled on `--name`, its whole argument surface, so the
+  // narrowed grant is a compile error.
+  'g26-project-add-without-name.ts': {
+    what: 'the project create verb granted without --name',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -461,6 +467,16 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     expect(() => auditExecWhitelist(withCcd([['ws-title', '--title']]))).toThrow(/only grantable with '--session'/);
     expect(() => auditExecWhitelist(withCcd([['ws-title', '--clear', '--session']]))).toThrow(/only grantable with '--session'/);
     expect(() => auditExecWhitelist(withCcd([['ws-title', '--session']]))).not.toThrow();
+  });
+
+  // ADD A PROJECT (add-project spec 2026-11-04 §4): `project-add` is enrolled for its ARGUMENT SURFACE, so the audit
+  // refuses the bare verb, the wrong flag and the flag out of place, over a CONSTRUCTED table.
+  it('throws on a project-add with no --name, the wrong flag, or the flag out of place (add-project)', () => {
+    expect(() => auditExecWhitelist(withCcd([['project-add']]))).toThrow(/only grantable with '--name'/);
+    expect(() => auditExecWhitelist(withCcd([['project-add', '--url']]))).toThrow(/only grantable with '--name'/);
+    expect(() => auditExecWhitelist(withCcd([['project-add', '--empty', '--name']]))).toThrow(/only grantable with '--name'/);
+    expect(() => auditExecWhitelist(withCcd([['project-add', '--name']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'project-add'), 'one project-add grant, on --name').toEqual([['project-add', '--name']]);
   });
 
   // NATIVE DOCS READER wave 2: the four docs verbs, enrolled for their ARGUMENT SURFACE (`coord-pause`'s reason).

@@ -2714,6 +2714,25 @@ Where main contradicted the brief:
 
 Four tasks: S1 (D-7987), S2 (D-7988), C1 (D-7989) and C2 (D-7990). Snapshots and their sha256 are in the info directory (`perf-20261104/authority-*-speed.md`). Items 33 and 34 stay open, outside the spec.
 
+**Console speed dispatched; #2275 merged (2026-11-04).**
+- **Ledger PR #2279 opened** with the spec and plan. Locally, deviation-refs' "two real trees" case timed out at 20 s at load 9 to 14; CI is the arbiter.
+- **The four tasks were opened and dispatched,** on route opus/high with sonnet subagents, workflow off and compact 40. The briefs are in `perf-20261104/`, and authority is the snapshots with their sha256.
+  - Wave 88, run 1453: S1 (ccrc-pwa-polish-speed-s1).
+  - Wave 89, run 1454: S2.
+  - Wave 90, run 1455: C1.
+  - Wave 91, run 1456: C2.
+- **#2275 MERGED** at 17:20:06Z as 16677fd85: D26 amended, D29, D30, Task PL11 and D-7986 are on main. Goals modifications 9 and 10 were marked merged. The ledger worktree was removed.
+- **PL10:** run 1442's coordinator was asked (14931) for one cell of the architecture spec's C5 row, under claim 3434, because MailBadge.tsx is deleted.
+
+- 2026-11-04: leave 14933 (run 1442, claim 3434) relayed to PL10 as 14938. It covers exactly one deletion: "`fleet/MailBadge.tsx`, " in the C5 row of the architecture spec. Run 1442 edits only the C9 row, and a three-way merge was measured clean.
+- 2026-11-04: the speed workers' claim questions were ruled.
+  - C2 (14939): may add one `clearScreenCache()` line to `pwa/test/setup.ts`, under its own claim. Departure setup-clears-screen-cache. Ruling 14946.
+  - C1 (14941): granted leave in `pwa/src/app.tsx` (claim 3430, PL10) for l.17, l.31-40 and l.150-167 only. PL10's one hunk is l.90-96. SettingsDataProvider stays eager (departure settings-provider-stays-eager). Ruling 14945, with PL10 told in 14947.
+  - S2 (14940): keep out of `server/src/lifecycle.ts` (PL10's hunk at l.185 sits inside fleetRowsUsable), and pin the two readers equal in a test (departure fleetrowsusable-not-reexpressed). Leave was asked for the other three files, all measured disjoint from their holders' hunks:
+    - `shared/api.ts` and `coord/store.ts`, from the delegation coordinator, in 14942;
+    - `server.ts`, from run 1442's coordinator, in 14943.
+  - S2 was told to wait for the relays before editing those three (14944).
+
 ## R125: Delegation rows that read "running" are handed to the delegation broker (2026-11-01)
 
 The operator asked what a coordinator's box full of unnamed "agent · running" and "workflow · running" rows was. They are the delegation broker's activity rows: one row per helper (subagent or workflow agent) that a session started, under that session. Measured on the fleet box from that session's own Claude Code files: every one of its workflows had finished, and no helper had written for about three hours, so the rows were stale. As main reads, a row is live while its end was never matched and its parent session's incarnation is unchanged; nothing checks the helper's own activity or times a row out.
