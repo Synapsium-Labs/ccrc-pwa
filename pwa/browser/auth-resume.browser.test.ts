@@ -37,7 +37,8 @@ const SESSION = fleetSession({
   workspace: 'quiet-basin', name: 'quiet-basin', status: 'idle', bucket: 'idle', model: 'model-x', effort: 'high',
 });
 const SIGNED_IN = {
-  state: { word: 'signed-in', source: 'checked just now', at: now }, ready: true, identity: 'someone@example.invalid', identitySource: 'measured',
+  state: { word: 'signed-in', source: 'checked just now', at: now }, ready: true, check: { verdict: 'ok', at: now - 60_000 },
+  identity: 'someone@example.invalid', identitySource: 'measured',
 };
 const ACCOUNTS = {
   accounts: [{

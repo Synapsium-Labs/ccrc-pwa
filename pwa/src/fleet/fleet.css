@@ -4204,6 +4204,12 @@ button.proj-card-pool::before {
 .acct-fold > button,
 .acct-trouble-replace { flex: none; min-height: var(--tap-min); }
 .acct-trouble-replace { justify-self: start; }
+/* The trouble card's credential acts (accounts plan Task A38, D-7872; spec §4.2): the card's first action. Below 900 they
+   stack, the primary first, each the card's width; at 900 and up they sit in one row and wrap. */
+.acct-trouble-acts { display: flex; flex-direction: column; align-items: stretch; gap: var(--sp-1); min-width: 0; }
+@media (min-width: 900px) {
+  .acct-trouble-acts { flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+}
 .acct-remove-block,
 .acct-removal-section,
 .acct-revoke { display: grid; gap: var(--sp-1); min-width: 0; }
