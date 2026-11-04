@@ -22,7 +22,7 @@ Measured read-only on the fleet box over the two post-deploy weeks (2026-10-21 0
 | `queued_command` attachment rows (`type: attachment`, `attachment.type: queued_command`, `attachment.prompt`) | about 1,100 to 1,450 a week, 22 of them `killed` with a non-pressure summary | no | read (D-7960) |
 | `queue-operation` enqueue rows (`operation: enqueue`, `content`) | about 4,800 to 5,000 a week, mostly the same notices again | no | read, deduplicated (D-7960, D-7961) |
 | `queue-operation` remove and dequeue rows | about 2,000 a week; a dequeue has no content | no | not read: the same text as the enqueue |
-| summary-only envelopes (one `summary` element, nothing else) | 43, all Claude Code's commit, push and background security-review notices; every unmeasured notification in week 2 | counted unmeasured | a known non-event unless it names low memory (D-7962) |
+| summary-only envelopes (one `summary` element, nothing else) in user rows | 43 re-read today, 9 in week 1 and 34 in week 2 (week 2's own reading showed 33 unmeasured in all), all Claude Code's commit, push and background security-review notices; re-read today they are every unmeasured notification of both weeks | counted unmeasured | a known non-event unless it names low memory (D-7962) |
 | subagent transcripts (`projects/*/<uuid>/subagents/*.jsonl`) | 2,682 files, no notification in the window | no | stays outside, declared (D-7963) |
 
 No source held a pressure kill in either week. This wave makes that reading complete where it is now partial; it does not change what counts as a kill.
@@ -44,10 +44,10 @@ No source held a pressure kill in either week. This wave makes that reading comp
 | Input or failure class | Expected behaviour, and the test that pins it |
 |---|---|
 | One notice delivered as a queued-command attachment AND later as a user row, or enqueued AND delivered | One kill per (uuid, task id), one unmeasured count per (uuid, text): Task 1 `one notification across sources is counted once` |
-| A queued row with a non-string `prompt` or `content`, a dequeue with no content, an attachment of another type | Not a notification and not malformed; skipped: Task 1 `other queued shapes are not notifications` |
-| A queued row whose `timestamp` is not a string | One malformed row, as for a user row: Task 1 `a queued row with a non-string timestamp is one malformed row` |
-| A summary-only notice whose summary names low memory | Unmeasured, never a non-event: Task 2 `a summary-only notice that names low memory stays unmeasured` |
-| A summary-only notice beside any second element, or with two summaries | Unmeasured: Task 2 `a summary-only notice with another element stays unmeasured` |
+| A queued payload that holds a notification but is not a string or text parts | Unmeasured, so the reading turns partial, never a silent skip: Task 1 `a queued payload the scanner cannot read is unmeasured, never skipped` |
+| A notice enqueued just before a window's end and delivered just after it | Each row is timed by its own stamp, so it counts in both windows, an over-count by design: Task 1 `a notice enqueued before the window edge and delivered after it counts in both windows` |
+| A summary-only notice that names low memory, in its summary or in free text beside it | Unmeasured, never a non-event: Task 2 `a summary-only notice that names low memory stays unmeasured` and its free-text case |
+| A file that fails part-way through its read | Its kills, unmeasured texts and source counts are all dropped together: Task 1, the two torn-read cases |
 
 ---
 
@@ -58,30 +58,36 @@ No source held a pressure kill in either week. This wave makes that reading comp
 - Test: `server/test/measure-continuity-pressure-kills.test.ts`
 
 **Interfaces:**
-- Produces: `s6_notification_sources(row) -> list[tuple[str, str]]`. `source` is one of `"user"`, `"queued_command"` or `"queue_enqueue"`.
-  - `"user"`: exactly what `s6_notification_texts(row)` returns today.
-  - `"queued_command"`: when `row["type"] == "attachment"`, `row["attachment"]` is a dict, its `type` is `"queued_command"` and its `prompt` is a str.
-  - `"queue_enqueue"`: when `row["type"] == "queue-operation"`, `row["operation"] == "enqueue"` and `row["content"]` is a str.
-  - Any other row yields `[]`.
-  - `s6_notification_texts` stays for the `"user"` arm, and nothing else calls it.
-- Produces: `direct_pressure_kills.notification_sources: {"user": int, "queued_command": int, "queue_enqueue": int}`. It counts, per source and before deduplication, the texts that start with `<task-notification>` in rows the window does not exclude (an undated row is not excluded, as today). It is present on every reading except `{"transcripts": "absent"}`.
-- Unchanged: the window check, then the stamp check, then the envelope classification, in that order, for every source.
+- Produces: `s6_notification_sources(row) -> list[tuple[str, str, bool]]`, yielding `(source, text, readable)`. `source` is one of `"user"`, `"queued_command"` or `"queue_enqueue"`.
+  - `"user"`: each text `s6_notification_texts(row)` returns today, readable.
+  - `"queued_command"`: when `row["type"] == "attachment"`, `row["attachment"]` is a dict and its `type` is `"queued_command"`. A `prompt` that is a str yields one readable text. A `prompt` that is a list yields each `{"type": "text", "text": <str>}` part, readable, the way the user arm reads list content.
+  - `"queue_enqueue"`: when `row["type"] == "queue-operation"` and `row["operation"] == "enqueue"`. A `content` that is a str yields one readable text.
+  - Any other `prompt` or `content` in those two rows yields one unreadable item when `json.dumps(value, sort_keys=True)` contains `<task-notification>`. The text is that dump and `readable` is False; with no notification in it, the row yields `[]`.
+  - Every other row yields `[]`: an attachment of another type, a dequeue, a remove.
+- An unreadable item is one unmeasured notification, keyed by its `(uuid, text)` like any other.
+- Produces: `direct_pressure_kills.notification_sources: {"user": int, "queued_command": int, "queue_enqueue": int}`.
+  - It counts, per source and before deduplication, the readable texts that start with `<task-notification>` and the unreadable items.
+  - It counts only rows the window does not exclude; an undated row is not excluded, as today.
+  - It is present on every reading except `{"transcripts": "absent"}`.
+- Admission per file, unchanged in kind: a file's kills, unmeasured keys and source counts are kept only once the file reads to its end. A read that fails part-way drops all three for that file.
+- Time base: each text is timed by its own row's stamp. A delivered notice is timed at delivery, as today; an enqueued one at its queue time. A notice enqueued before `--until` and delivered after it counts in both adjacent windows, an over-count by design and the safe direction for a target of 0. The window check, the stamp check and the envelope classification run in that order for every item.
 
 - [ ] **Step 1: Add the fixture helpers and split `read()`.**
 
 ```ts
 type Sources = { user: number; queued_command: number; queue_enqueue: number };
 const src = (user: number, queued_command = 0, queue_enqueue = 0): Sources => ({ user, queued_command, queue_enqueue });
-const attachmentRow = (text: string, t: number = T): string => JSON.stringify({
-  type: 'attachment', timestamp: iso(t), attachment: { type: 'queued_command', prompt: text, commandMode: 'prompt' } });
-const queueRow = (text: string | null, operation = 'enqueue', t: number = T): string => JSON.stringify({
-  type: 'queue-operation', operation, timestamp: iso(t), ...(text === null ? {} : { content: text }) });
+const attachmentRow = (prompt: unknown, t: number = T): string => JSON.stringify({
+  type: 'attachment', timestamp: iso(t), attachment: { type: 'queued_command', prompt, commandMode: 'prompt' } });
+const queueRow = (content: unknown, operation = 'enqueue', t: number = T): string => JSON.stringify({
+  type: 'queue-operation', operation, timestamp: iso(t), ...(content === null ? {} : { content }) });
 // readFull(extra) is today's read() body, returning the whole section, notification_sources included.
 // read(extra) calls readFull, asserts that notification_sources is three non-negative integers on every
-// reading except { transcripts: 'absent' }, and returns the rest, so the existing assertions stay as they are.
+// reading except { transcripts: 'absent' }, and returns the rest, so the existing read() assertions stay as they are.
+// readTorn is unchanged; its two tests now expect the field (Step 2).
 ```
 
-- [ ] **Step 2: Write the failing tests.**
+- [ ] **Step 2: Write the failing tests, and the torn-read expectations.**
 
 ```ts
 it('a kill delivered only as a queued-command attachment is counted', () => {
@@ -103,12 +109,19 @@ it('dequeue and remove rows are not read', () => {
   transcript(U1, [queueRow(note('r'), 'remove'), queueRow(null, 'dequeue')]);
   expect(readFull()).toEqual({ ...clean(0, 0, 1), notification_sources: src(0) });
 });
-it('other queued shapes are not notifications', () => {
-  transcript(U1, [
-    JSON.stringify({ type: 'attachment', timestamp: iso(T), attachment: { type: 'skill_listing', prompt: note('s') } }),
-    JSON.stringify({ type: 'attachment', timestamp: iso(T), attachment: { type: 'queued_command', prompt: [note('a')] } }),
-    JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: iso(T), content: { text: note('o') } })]);
+it('an attachment of another type is not a notification', () => {
+  transcript(U1, [JSON.stringify({ type: 'attachment', timestamp: iso(T),
+    attachment: { type: 'skill_listing', prompt: note('s') } })]);
   expect(readFull()).toEqual({ ...clean(0, 0, 1), notification_sources: src(0) });
+});
+it('a queued-command prompt in text parts is read as the user arm reads list content', () => {
+  transcript(U1, [attachmentRow([{ type: 'text', text: note('p') }])]);
+  expect(readFull()).toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 1, 0) });
+});
+it('a queued payload the scanner cannot read is unmeasured, never skipped', () => {
+  transcript(U1, [attachmentRow({ text: note('o1') }), queueRow({ text: note('o2') }), queueRow({ text: 'no notice' })]);
+  expect(readFull()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 2,
+    notification_sources: src(0, 1, 1) });
 });
 it('a queued row with a non-string timestamp is one malformed row', () => {
   transcript(U1, [JSON.stringify({ type: 'attachment', timestamp: 1760443200,
@@ -122,16 +135,34 @@ it('the window applies to queued rows by their own timestamp', () => {
   expect(readFull(['--since', '2026-10-14 12:00:00', '--until', '2026-10-15 12:00:00']))
     .toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 1, 0) });
 });
+it('a notice enqueued before the window edge and delivered after it counts in both windows', () => {
+  transcript(U1, [queueRow(note('edge'), 'enqueue', T - 1), attachmentRow(note('edge'), T + 1)]);
+  expect(readFull(['--since', '2026-10-13 12:00:00', '--until', '2026-10-14 12:00:00']))
+    .toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 0, 1) });
+  expect(readFull(['--since', '2026-10-14 12:00:00', '--until', '2026-10-15 12:00:00']))
+    .toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 1, 0) });
+});
+// The two torn-read cases now expect the field; the torn file admits none of its rows:
+//   readTorn(U1, 2)  -> { ...clean(1, 1, 1), reading: 'partial', unreadable_transcripts: 1, notification_sources: src(1) }
+//   readTorn(U1, 99) -> { ...clean(3, 2, 2), notification_sources: src(3) }
 ```
 
-- [ ] **Step 3: Run them, and confirm the six new cases fail and the existing ones fail only on the new field.**
+- [ ] **Step 3: Run the file, and confirm what fails.**
 
 Run: `"$HOME/.local/bin/ccrc" test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/measure-continuity-pressure-kills.test.ts`
-Expected: FAIL. The queued cases read 0 kills and the cross-source case reads 1 unmeasured from its user row only; every `readFull` case lacks `notification_sources`, and every existing case fails `read()`'s new shape check.
+Expected: FAIL.
+- All ten new cases fail, because each asserts `notification_sources` and the base never emits it.
+- Every existing `read()` case except the absent one fails `read()`'s new shape check.
+- Both torn cases fail on their newly expected field.
 
 - [ ] **Step 4: Implement `s6_notification_sources` and use it in `s6_pressure_kills`.**
 
-Iterate `for source, text in s6_notification_sources(row)` where the loop now iterates `s6_notification_texts(row)`. Keep the stamp checks per row, so a row with a non-string stamp is one malformed row whatever its source. Count the source after the window check. Replace `file_unmeasured += 1` with adding `text` to a per-file set of unmeasured envelope texts. After the file reads to its end, union that set into a set keyed by `(uuid, text)`, as `file_hits` is today. `unmeasured_notifications` is the size of that set. Rewrite the header comment's "Declared discovery limits" sentence to name the three sources read, the rows not read (remove and dequeue), and D-7961's unit.
+Iterate `for source, text, readable in s6_notification_sources(row)` where the loop now iterates `s6_notification_texts(row)`. Keep the stamp checks per row, so a row with a non-string stamp is one malformed row whatever its source. Count the source after the window check. An unreadable item adds its key to the unmeasured set without classification. Replace `file_unmeasured += 1` with adding `(uuid, text)` to a per-file unmeasured set, and keep a per-file source counter. Union both into the reading's totals only after the file reads to its end, as `file_hits` is today; `unmeasured_notifications` is the size of the union.
+
+In the stage-6 header comment, rewrite three things:
+- the "complete user-message `<task-notification>` envelope" sentence, to name the three sources;
+- the "timed by the notification's delivery stamp" sentence, to state each source's time base and the cross-window over-count;
+- the "Declared discovery limits" sentence, to name the rows not read (remove and dequeue), the unreadable-payload rule and D-7961's unit.
 
 - [ ] **Step 5: Run the file again, and the other stage-6 suites.**
 
@@ -146,7 +177,10 @@ Expected: PASS, all three.
 | 4C-SRC-ENQ | the `queue_enqueue` arm returns `[]` | `a kill seen only in a queue enqueue row is counted` |
 | 4C-NO-REMOVE | the enqueue arm accepts any `operation` | `dequeue and remove rows are not read` |
 | 4C-DEDUPE-UNM | unmeasured counted per row again | `one notification across sources is counted once` |
-| 4C-ATT-TYPE | the attachment arm ignores `attachment.type` | `other queued shapes are not notifications` |
+| 4C-ATT-TYPE | the attachment arm ignores `attachment.type` | `an attachment of another type is not a notification` |
+| 4C-ATT-LIST | a list `prompt` yields `[]` | `a queued-command prompt in text parts is read …` |
+| 4C-QUEUED-UNREADABLE | an unreadable payload yields `[]` | `a queued payload the scanner cannot read is unmeasured, never skipped` |
+| 4C-TORN-SOURCES | source counts added as rows are read, not at the file's end | `hits from a file are admitted only after it reads to its end …` |
 
 - [ ] **Step 7: Commit.**
 
@@ -163,13 +197,12 @@ git commit -m "feat(measure): the direct-kill scanner reads queued-command and e
 
 **Interfaces:**
 - Consumes: Task 1's loop, and its `readFull`, `src` and `attachmentRow` helpers.
-- Produces: `S6_ANY_OPEN = re.compile(r"<([A-Za-z][A-Za-z0-9_-]*)\b")`. The new arm reads only the body's element openers, and it runs where `status_openers == 0` now falls through to unmeasured.
-- The shape is a known non-event only when all of these hold:
-  - `S6_ANY_OPEN.findall(body) == ["summary"]`, so there is exactly one element and it is a summary;
-  - `S6_SUMMARY.findall(body)` has exactly one readable value;
-  - that value contains no `low on memory`, case-insensitively.
-  Anything else in the no-status arm stays unmeasured, exactly as at the base.
-- It keeps the trailing-reminder tolerance of the other known non-event shapes (whole trailing `<system-reminder>` blocks).
+- Produces: `S6_SUMMARY_ONLY = re.compile(r"<summary>([^<>]*)</summary>")`.
+  - The new arm runs where `status_openers == 0` now falls through to unmeasured.
+  - It calls `S6_SUMMARY_ONLY.fullmatch(body)` on the envelope body, which the envelope match has already stripped of surrounding whitespace. So the summary must be the whole body: no other element, no closing tag of another element, and no free text.
+  - It is a known non-event only when the whole body is that one summary and its value contains no `low on memory`, case-insensitively.
+  - Anything else in the no-status arm stays unmeasured, exactly as at the base.
+- It keeps the trailing-reminder tolerance of the other known non-event shapes: whole trailing `<system-reminder>` blocks after the closing tag.
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -189,25 +222,23 @@ it('a summary-only notice that names low memory stays unmeasured', () => {
   expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 2 });
 });
 it.each([
+  ['free text after the summary that names low memory',
+    summaryOnly('Commit security review found 1 issue').replace('</summary>', '</summary>\nBackground command "x" was stopped because the system is running low on memory')],
+  ['a stray closing tag', summaryOnly('Commit security review found 1 issue').replace('</summary>', '</summary>\n</status>')],
   ['a second element', summaryOnly('Commit security review found 1 issue').replace('</summary>', '</summary>\n<note>x</note>')],
   ['two summaries', summaryOnly('one').replace('</summary>', '</summary>\n<summary>two</summary>')],
   ['a summary with an attribute', summaryOnly('one').replace('<summary>', '<summary kind="x">')],
-])('a summary-only notice with another element stays unmeasured: %s', (_name, text) => {
+])('a summary-only notice with anything else in its body stays unmeasured: %s', (_name, text) => {
   transcript(U1, [row(text)]);
   expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 1 });
 });
 ```
 
-- [ ] **Step 2: Run them, and confirm that the two non-event cases fail (they read unmeasured) and the others pass.**
+- [ ] **Step 2: Run them, and confirm what fails.** Run the pressure-kills file through `ccrc test`, as in Task 1. Expected: the two non-event cases fail, reading unmeasured; the five stays-unmeasured cases and the low-memory case pass.
 
-Run: the pressure-kills file through `ccrc test`, as in Task 1.
-Expected: FAIL on `a summary-only security-review notice is a known non-event` and on the trailing-reminder case.
+- [ ] **Step 3: Implement the arm.** Rewrite the header comment's "A KNOWN NON-EVENT is …" list to add the summary-only shape, its whole-body rule and its low-memory exclusion.
 
-- [ ] **Step 3: Implement the arm.** Rewrite the header comment's "A KNOWN NON-EVENT is …" list to add the summary-only shape and its low-memory exclusion.
-
-- [ ] **Step 4: Run the file and the existing D-4322 cases.**
-
-Expected: PASS. `stays unmeasured: no event element and no status` and `stays unmeasured: no task id` still read unmeasured, because each keeps a second element.
+- [ ] **Step 4: Run the file and the existing D-4322 cases.** Expected: PASS. `stays unmeasured: no event element and no status` and `stays unmeasured: no task id` still read unmeasured, because each body holds more than its one summary.
 
 - [ ] **Step 5: Measure the mutation rows.**
 
@@ -215,7 +246,7 @@ Expected: PASS. `stays unmeasured: no event element and no status` and `stays un
 |---|---|---|
 | 4C-SUMMARY-ONLY | delete the arm | `a summary-only security-review notice is a known non-event` |
 | 4C-SUMMARY-PRESSURE | drop the low-memory exclusion | `a summary-only notice that names low memory stays unmeasured` |
-| 4C-SUMMARY-ALONE | accept when `summary` is among the openers instead of the only one | `… stays unmeasured: a second element` |
+| 4C-SUMMARY-ALONE | `S6_SUMMARY_ONLY.search(body)` instead of `fullmatch` | `… stays unmeasured: free text after the summary that names low memory` |
 
 - [ ] **Step 6: Commit.**
 
@@ -233,13 +264,14 @@ git commit -m "feat(measure): a summary-only notice that does not name low memor
 **Interfaces:** none. Documentation only.
 
 - [ ] **Step 1: Add the spec paragraph.** It begins "**As built (wave 4c, <merge date>; an as-built annotation, not a new ruling).**" and states:
-  - the three sources read and the two not read;
+  - the three sources read and the two not read, and the unreadable-payload rule;
+  - each source's time base, and the cross-window over-count;
   - D-7961's unit;
   - the summary-only non-event and its low-memory exclusion;
   - that subagent transcripts stay outside;
   - that the kill rule, the B + 2 comparison and the 0 target are unchanged.
   The wave 4b paragraph is not edited.
-- [ ] **Step 2: Update README's sentence.** It now reads that discovery "excludes subagent transcripts and does not read notifications delivered mid-turn as queued-command attachment rows". Make it name what is read now and what is not.
+- [ ] **Step 2: Update README's paragraph.** It now reads that discovery "excludes subagent transcripts and does not read notifications delivered mid-turn as queued-command attachment rows", and that "Notification times are observations at delivery". Make it name what is read now and what is not, and each source's time base.
 - [ ] **Step 3: Run the document readers.** Run `anchors`, `citations`, `docs-parity`, `dtbd` and `deviation-refs` (after `git fetch origin main`), each in its own `ccrc test` process. Expected: PASS.
 - [ ] **Step 4: Commit.**
 
@@ -259,9 +291,9 @@ git commit -m "docs(continuity): the direct-kill scanner's as-built sources (wav
 
 The allocator issued D-7960 through D-7963 on 2026-11-04 10:17 UTC. All four are defined here, in the same publication act. New discoveries during execution are written `D-TBD-<slug>` and reported for coordinator allocation.
 
-- **D-7960** — the direct-kill scanner reads two more sources, `queued_command` attachment prompts and `queue-operation` enqueue contents, through the same classification. Remove and dequeue rows are not read.
+- **D-7960** — the direct-kill scanner reads two more sources, `queued_command` attachment prompts (a string, or text parts) and `queue-operation` enqueue contents, through the same classification. A queued payload of any other shape that holds a notification is unmeasured. Remove and dequeue rows are not read. Each row is timed by its own stamp, so a notice enqueued before a window's end and delivered after it counts in both windows, an over-count by design.
 - **D-7961** — `unmeasured_notifications` counts each unmeasured envelope once per (transcript uuid, envelope text), across sources and copies, not once per row. Kills stay unique per (transcript uuid, task id).
-- **D-7962** — a summary-only envelope (one readable `summary`, no other element) whose summary does not contain "low on memory" is a known non-event. One that does stays unmeasured.
+- **D-7962** — an envelope whose whole body is one readable `summary`, with no other element, closing tag or text, is a known non-event when the summary does not contain "low on memory". One that does stays unmeasured.
 - **D-7963** — `notification_sources` is an additive per-source count. Subagent transcripts stay outside the scanner's pattern: measured at 2,682 files with no notification in two weeks, they are a declared limit, not a read source.
 
 ## Where Things Stand

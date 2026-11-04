@@ -1047,11 +1047,13 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     2026-11-04 05:38 UTC), by reusing the installed scanner's own functions and printing counts only:
     - notifications delivered mid-turn as queued-command attachment rows, about 1,100 to 1,450 a week, never read;
     - queue enqueue rows carrying the same notices again, about 4,800 to 5,000 a week, never read;
-    - summary-only notices (Claude Code's commit, push and background security-review notices), 43 in the two
-      weeks, read as unmeasured: they are every unmeasured notification of week 2;
+    - summary-only notices (Claude Code's commit, push and background security-review notices) in user rows, read
+      as unmeasured: 43 re-read today, 9 in week 1 and 34 in week 2, and they are every unmeasured notification of
+      both weeks as re-read;
     - subagent transcripts: 2,682 files, with no notification in the window.
-    No source held a pressure kill in either week. Re-read today, week 1 shows 9 unmeasured notifications where its
-    reading showed 21; that reading ran on the previous fleet box, whose transcripts are not all here.
+    No source held a pressure kill in either week. The weekly readings themselves counted 21 unmeasured (week 1) and
+    33 (week 2, at 05:48). Week 1's ran on the previous fleet box, whose transcripts are not all here, and week 2's
+    re-read finds one more than its reading did.
   - **The plan:** `docs/superpowers/plans/2026-11-04-session-continuity-wave4c-direct-kill-scanner.md`. The scanner
     reads the two queued sources through its existing classification and counts each notification once. A
     summary-only notice that names no low memory becomes a known non-event, and subagent transcripts stay a declared
