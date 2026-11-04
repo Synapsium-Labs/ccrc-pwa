@@ -127,8 +127,9 @@ export function FleetScreen({
   }, [store]);
 
   // The unseen watermark (pwa/src/lib/seen.ts) — per-device, in localStorage.
-  // SUBSCRIBED, not read into state: this screen is never unmounted (app.tsx
-  // renders it as the desktop sidebar for the whole app lifetime), and the
+  // SUBSCRIBED, not read into state: this screen is long-lived (app.tsx
+  // renders it as the desktop sidebar on every route but the Waiting on you
+  // item route, plan PL9, which remounts it on the way out), and the
   // other writer is a different screen — SessionScreen acks on mount. A
   // `useState(loadAcks)` initialiser never re-runs, and a fleet that hasn't
   // changed emits no snapshot to hang a re-read on (watch.ts's `lastJson`

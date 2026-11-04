@@ -98,6 +98,12 @@ export interface ItemView {
   why: string;
   how: string[];
   options: string[] | null;
+  /** A decide item's recommended option (plan PL9, spec §3.2, D24): the 0-based index into `options` of the option its raiser
+   *  recommends, with `recommendedWhy`, why it beats each alternative. Both or neither: `null` on every other kind and on a
+   *  decide item raised before the rule, which the console draws as before. A server from before PL9 omits both, so a reader
+   *  goes through `recommendationOf`, never the fields. */
+  recommended: number | null;
+  recommendedWhy: string | null;
   neededBy: NeededBy;
   soonLabel: string | null;
   state: ItemState;
@@ -284,6 +290,24 @@ export const ITEM_TEXT_MAX = 2000;
 export const ITEM_STEPS_MAX = 12;
 export const ITEM_OPTIONS_MAX = 6;
 export const ANSWER_MAX = 2000;
+/** The longest `recommendedWhy` a raise takes (plan PL9): a few plain sentences on why the recommended option beats each
+ *  alternative, with what each alternative would cost or risk. */
+export const RECOMMEND_WHY_MAX = 2000;
+
+/** THE ONE READER of an item's recommendation (plan PL9): the option it names and why, or `null` when the item has none to
+ *  show. `null` for a field a server from before PL9 omits (absence permits: the item draws as before), for a kind that is
+ *  not `decide`, and for an index that names no listed option or reasons that are not text: the raise route refuses both,
+ *  so either is a corrupt row, and the console then shows the options with no mark rather than a mark on the wrong one. */
+export function recommendationOf(item: {
+  readonly kind: ItemKind; readonly options: readonly string[] | null;
+  readonly recommended?: number | null; readonly recommendedWhy?: string | null;
+}): { readonly index: number; readonly why: string } | null {
+  const { kind, options, recommended, recommendedWhy } = item;
+  if (kind !== 'decide' || options === null) return null;
+  if (typeof recommended !== 'number' || !Number.isInteger(recommended) || recommended < 0 || recommended >= options.length) return null;
+  if (typeof recommendedWhy !== 'string' || recommendedWhy.trim() === '') return null;
+  return { index: recommended, why: recommendedWhy };
+}
 
 /** The coordinator's presence as an item's label reads it. `unmeasured` says the server has no reading to give (no fleet
  *  frame or registry listing yet, an id the registry lists but the frame lacks, or the session's own presence is a doubt): it

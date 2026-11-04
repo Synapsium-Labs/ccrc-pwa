@@ -39,7 +39,7 @@ import { SessionScreen } from './screens/SessionScreen';
 import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
 import { SettingsScreen } from './screens/settings/SettingsFrame';
 import { ProgrammeScreen } from './ledgers/ProgrammeScreen';
-import { ItemRouteAt, WaitingRoute } from './ledgers/WaitingRoutes';
+import { ItemListColumn, ItemRouteAt, WaitingRoute } from './ledgers/WaitingRoutes';
 import { ShellFrame } from './skins/frame';
 import { SKIN_SETS } from './skins';
 import { useFleetStore } from './stores/fleet';
@@ -125,10 +125,14 @@ export function App(): ReactNode {
   // the same dependencies; a change of the search alone is a new page too.
   //
   // THE SIDEBAR IS DELIBERATELY LEFT ALONE. `.shell-nav` has always been
-  // scrollable, and its content does NOT swap per route — it is the same fleet
-  // list before and after. Resetting it would throw away the operator's place
-  // in that list every time they opened a session, which is a regression, not
-  // a fix.
+  // scrollable, and on every route but one its content does not swap — it is
+  // the same fleet list before and after. Resetting it would throw away the
+  // operator's place in that list every time they opened a session, which is a
+  // regression, not a fix. The one exception is the Waiting on you item route
+  // on a desk (plan PL9), whose nav slot draws the list the item was opened
+  // from in place of the fleet (`ItemListColumn`, below); entering and leaving
+  // that route remounts the fleet column, so its scroll is not kept across an
+  // item visit (departure pl9-fleet-column-remounts).
   const detail = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     const pane = detail.current;
@@ -192,7 +196,8 @@ export function App(): ReactNode {
       <SettingsDataProvider active={settings}>
       {authLost && <LoginScreen />}
       {blocked && <BlockScreen />}
-      <ShellFrame set={set} view={view} detailRef={detail}>
+      <ShellFrame set={set} view={view} detailRef={detail}
+                  {...(route === 'item' ? { nav: (fleet: ReactNode) => <ItemListColumn param={at!.param} fleet={fleet} /> } : {})}>
         {/* THE RESUME BANNER ON EVERY ROUTE (accounts plan Task A23, D-7871 (3); spec §6.2): a sign-in this session
             started that waits for its code. The fleet's banner stack shows it on a desk and on a phone's fleet view;
             here, the top of the detail pane, on a phone's other views, so one instance is on screen at a time. */}

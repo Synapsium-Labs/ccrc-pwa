@@ -214,9 +214,11 @@ describe('the programme view: Goals', () => {
     await screen.findByText('Dropped the old flag');
     const links = screen.getAllByRole('link', { name: 'Open the item' });
     expect(links).toHaveLength(1); // item 8 is no longer on the list: no link to a page that says so
-    expect(links[0]!.getAttribute('href')).toBe(itemPath(7));
+    // The link carries the list it was opened from, so the item's way back returns here (plan PL9).
+    expect(links[0]!.getAttribute('href')).toBe(itemPath(7, { at: 'programme', programme: 'prog-a' }));
     fireEvent.click(links[0]!);
     expect(location.pathname).toBe(itemPath(7));
+    expect(new URLSearchParams(location.search).get('from')).toBe('programme:prog-a');
   });
 });
 
@@ -255,10 +257,11 @@ describe('the programme view: its share of the list', () => {
     expect(screen.getByRole('button', { name: /Keep the old flag/ })).toBeTruthy();
   });
 
-  it('opening an item goes to its page', () => {
+  it('opening an item goes to its page, naming this programme\'s view as the list it came from (plan PL9)', () => {
     render(<ProgrammeScreen slug="prog-a" store={heard({ waiting: waitingView({ items }) })} />);
     fireEvent.click(screen.getByRole('button', { name: /Pick the order/ }));
     expect(location.pathname).toBe('/waiting/1');
+    expect(new URLSearchParams(location.search).get('from')).toBe('programme:prog-a');
   });
 
   it('lists what was recently cleared for this programme only', () => {

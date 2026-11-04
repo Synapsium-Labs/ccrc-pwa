@@ -184,7 +184,8 @@ describe('the Waiting on you list', () => {
   it('a tapped item opens it', () => {
     const { onOpenItem } = open({ view: waitingView({ items: [itemView({ id: 7, title: 'Pick one' })] }) });
     fireEvent.click(screen.getByRole('button', { name: /Pick one/ }));
-    expect(onOpenItem).toHaveBeenCalledWith(7);
+    // The list it was opened from rides along (plan PL9): the combined list, unfiltered.
+    expect(onOpenItem).toHaveBeenCalledWith(7, { at: 'waiting', programme: null });
   });
 
   it('the summary counts items by state', () => {
@@ -204,14 +205,22 @@ describe('the Waiting on you list', () => {
     expect(words).toEqual(['1 blocking now', '1 question from a session', '2 needed soon', '1 being checked', '1 came back']);
   });
 
-  it('the rail filters to one programme', () => {
-    open({
-      view: waitingView({
-        items: [itemView({ id: 1, program: 'prog-a', title: 'In A' }), itemView({ id: 2, program: 'prog-b', title: 'In B' })],
-      }),
+  it('the rail filters to the programme its prop names, keeps no copy of its own, and tells the route of a pick', () => {
+    const view = waitingView({
+      items: [itemView({ id: 1, program: 'prog-a', title: 'In A' }), itemView({ id: 2, program: 'prog-b', title: 'In B' })],
     });
-    fireEvent.click(within(screen.getByRole('navigation', { name: 'Programmes' })).getByRole('button', { name: /prog-b/ }));
+    const onFilter = vi.fn();
+    const { rerender } = render(<WaitingScreen view={view} sessions={[]} runs={[]} now={NOW} onOpenItem={vi.fn()}
+      onOpenSession={vi.fn()} programme="prog-b" onFilter={onFilter} />);
     expect(screen.queryByText('In A')).toBeNull();
+    expect(screen.getByText('In B')).toBeTruthy();
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Programmes' })).getByRole('button', { name: /prog-a/ }));
+    expect(onFilter).toHaveBeenLastCalledWith('prog-a');
+    // The pick is the route's to make: until the prop says prog-a, prog-b is what is drawn.
+    expect(screen.queryByText('In A')).toBeNull();
+    rerender(<WaitingScreen view={view} sessions={[]} runs={[]} now={NOW} onOpenItem={vi.fn()} onOpenSession={vi.fn()}
+      programme={null} onFilter={onFilter} />);
+    expect(screen.getByText('In A')).toBeTruthy();
     expect(screen.getByText('In B')).toBeTruthy();
   });
 });

@@ -94,7 +94,7 @@ describe('POST /api/items/:id/tick (plan PL4)', () => {
 
   it('a decide tick carries the operator\'s answer in the mail, and keeps it on the item', async () => {
     const r = await rig();
-    const id = raise(r, { kind: 'decide', title: 'Which branch', options: ['main', 'release'] });
+    const id = raise(r, { kind: 'decide', title: 'Which branch', options: ['main', 'release'], recommended: 0, recommendedWhy: 'Main is what ships.' });
     const res = await tick(r, id, { answer: 'release' });
     expect(res.statusCode, res.body).toBe(200);
     expect(r.coord.itemById(id)!.answer).toBe('release');
@@ -164,7 +164,7 @@ describe('POST /api/items/:id/tick (plan PL4)', () => {
 
   it('an answer outside the rules is refused 400 bad-request: over ANSWER_MAX, empty, missing on a value item, given to a do item', async () => {
     const r = await rig();
-    const dec = raise(r, { kind: 'decide', title: 'Which branch', options: ['main', 'release'] });
+    const dec = raise(r, { kind: 'decide', title: 'Which branch', options: ['main', 'release'], recommended: 0, recommendedWhy: 'Main is what ships.' });
     const val = raise(r, { kind: 'value', title: 'What is the limit' });
     const doo = raise(r, { kind: 'do', title: 'Flip it' });
     const cases: readonly (readonly [number, unknown])[] = [
@@ -182,7 +182,7 @@ describe('POST /api/items/:id/tick (plan PL4)', () => {
 
   it('a decide tick takes an answer outside the options when it is a free answer of 1 to ANSWER_MAX characters', async () => {
     const r = await rig();
-    const id = raise(r, { kind: 'decide', title: 'Which branch', options: ['main', 'release'] });
+    const id = raise(r, { kind: 'decide', title: 'Which branch', options: ['main', 'release'], recommended: 0, recommendedWhy: 'Main is what ships.' });
     expect((await tick(r, id, { answer: 'x'.repeat(ANSWER_MAX) })).statusCode).toBe(200);
   });
 
