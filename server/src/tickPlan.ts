@@ -28,7 +28,8 @@ export type PaneListing =
 
 /** Pure. `at` is the instant the exec STARTED (stamped by the caller). Per session: the pid of the lowest
  *  `pane_index` whose window is active; a session listed with no active window answers `pid: null`. Empty stdout on
- *  exit 0 is a valid listing of zero sessions. */
+ *  exit 0 is NOT a listing of zero sessions: a running tmux server always has a session (with none it exits 1, "no
+ *  server running"), so an empty answer proves nothing and reads `ok: false`, and the tick falls back per row. */
 export function parsePaneListing(r: ExecResult, at: number): PaneListing {
   if (r.ran === false) return { ok: false, at, detail: `tmux list-panes did not run (${r.reason}: ${r.detail})` };
   if (typeof r.signal === 'string') {
@@ -50,6 +51,7 @@ export function parsePaneListing(r: ExecResult, at: number): PaneListing {
     const cur = best.get(name) ?? null;
     if (cur === null || index < cur.index) best.set(name, { index, pid: Number(m[4]) });
   }
+  if (best.size === 0) return { ok: false, at, detail: 'tmux listed no panes' };
   const panes = new Map<string, { pid: number | null }>();
   for (const [name, v] of best) panes.set(name, { pid: v === null ? null : v.pid });
   return { ok: true, at, panes };

@@ -34,11 +34,17 @@ describe('parsePaneListing', () => {
     expect(l.panes.get('cc-sess-b')).toEqual({ pid: 333 });
   });
 
-  it('a session listed with no active window answers pid null; empty stdout is zero sessions', () => {
+  it('a session listed with no active window answers pid null', () => {
     const l = parsePaneListing(ran('cc-sess-a 0 0 111\n'), 1);
     expect(l.ok && l.panes.get('cc-sess-a')).toEqual({ pid: null });
-    const e = parsePaneListing(ran(''), 1);
-    expect(e.ok && e.panes.size).toBe(0);
+  });
+
+  it('an exit-0 answer with no pane line is no listing (a running tmux has a session; none exits 1)', () => {
+    for (const out of ['', '\n']) {
+      const e = parsePaneListing(ran(out), 1);
+      expect(e.ok).toBe(false);
+      if (!e.ok) expect(e.detail).toBe('tmux listed no panes');
+    }
   });
 
   it.each([
