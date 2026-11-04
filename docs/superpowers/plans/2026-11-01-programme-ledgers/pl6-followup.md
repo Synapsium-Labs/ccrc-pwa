@@ -136,7 +136,7 @@ Departures and residuals of the fix round:
 
 ## Mutants
 
-Each is one exact edit of a saved copy, run on its named case, then restored from the copy with its sha256 checked; `git status --short` was empty after the round. All twenty-one went red.
+Each is one exact edit of a saved copy, run on its named case, then restored from the copy with its sha256 checked; `git status --short` was empty after every round. All thirty-eight went red on the fix round's tip (M1 to M20 re-run there; M16 is retired, below).
 
 | Mutant | Red on |
 |---|---|
@@ -156,21 +156,40 @@ Each is one exact edit of a saved copy, run on its named case, then restored fro
 | M13 the tail shown for an unmasked value | not-one-run case, and the no-masker case |
 | M14 blind egress off | the scan is blind to the masker |
 | M15 the chain deadline removed | an act that waits past it answers slot-busy |
-| M16 a re-save keeps the retired mark | a re-save that writes no row still clears the retired mark |
+| M16 (retired in fix round 1: A-S4 ruled the opposite behaviour, which M26 pins) | n/a |
 | M17 the read not masked by the answer hook | the stored-secrets read goes through the answer masker |
 | M18 the record-write arm echoes the value | the metadata write fails; the directory fsync fails |
 | M19 the view-throws arm echoes the value | the answer's item view throws after the tick |
 | M20 the read answered without no-store | lists each stored slot by name; a slot whose record is missing (the refusal) |
+| M21 F1: the unknown read-back replaces the lane's rows (the store asks without `beside`) | the temp open and the read-back open both fail |
+| M21b F1: the masker ignores `beside` and deletes the lane's rows | the temp open and the read-back open both fail |
+| M22 F2: the bare `continue` on a failing entry | listed but not searched (0600); an I/O error on one slot's file |
+| M23 F4: a missing record folded to null | the state pl6f-failed-record-removes-old leaves |
+| M23b F4: an unparseable record folded to null | the same case |
+| M23c F4: the item view draws the unrecorded state as a saved one (pwa) | no readable record is stored all the same |
+| M24 F5: the row loses its layout (css) | a row's parts are separate, each with its rule (pwa) |
+| M24b F5: the row's parts share one class again | the same case |
+| M25 F7, review O5: the view-throws arm echoes the value less its last character | the answer's item view throws after the tick |
+| M25b F7, review O6: the record-write arm echoes the value's base64 | the metadata write fails |
+| M25c F7: the write-failed arm logs a 14-character piece (only the piece scan sees it) | a write refused before the rename |
+| M25d F7: the scan looks for the whole value only | the leak scan's own control |
+| M26 A-S4: the retired mark cleared before the row lands | a re-key across a Remove and a refused re-save; a refused re-save keeps the retired mark |
+| M27 A-S4: `close()` without the last try | a Remove's delete held on a busy coord.db lands at close |
+| M28 A-S5: a failed read of the rows still queues their delete | a retire whose read of the lane's rows fails |
+| M29 A-S6: no sweep at start | a dismissed item's temp in another programme goes on start |
+| M30 A-R5: one line back to CR and LF | a value with a carriage return, a line feed or any other line break |
+| M31 A-R4: a new egress method on the masker, unplaced | EGRESS and NOT_EGRESS together are exactly SecretMasker's members |
 
-M18 and M19 are review 2 F4's survivors: green before this PR, red now that the scan is blind.
+M18 and M19 are review 2 F4's survivors: green before this PR, red now that the scan is blind. M25 and M25b are review 1416's O5 and O6, green at `5d1e0e1c` and red now. M5's case filter was re-pointed at the item-8 case's new title; its edit is unchanged.
 
 ## Leak-scan coverage
 
-`SECRET-MARK-<24 random characters>` values, the scan over: every table of coord.db (seven asserted present, `secret_fingerprints` among them), the database file after a WAL checkpoint, every other file under the fixture HOME, every route response, every `/ws/fleet` frame and every console line, with the server's egress blind to fingerprints. Paths:
+`SECRET-MARK-<24 random characters>` values, looked for whole and (fix round 1, F7) as every 12-character piece of the random part in plain text, base64 and base64url at each byte alignment, and hex in both cases; the scan over: every table of coord.db (seven asserted present, `secret_fingerprints` among them), the database file after a WAL checkpoint, every other file under the fixture HOME, every route response, every `/ws/fleet` frame and every console line, with the server's egress blind to fingerprints. Paths:
 
 - the PUT: refusals before the gate (`step-up-required`), body errors (`bad-request`, `oversize` past the raised cap), the value bound, the three line-break forms (`secret-not-one-line`), the tick route's `use-secret-route`, the save, the second save (`not-open`), the waiting frame after the tick;
 - every after-write arm: the record write, the fsync, the fsync with an unreadable read-back, the tick refused between the write and the tick (a long and a short value), the tick throwing, the view throwing (and the frame it emits), and a write refused before the rename (`write-failed`);
 - the reads that carry item, mail, feed and ledger text, as the operator and as the coordinator;
 - the stored-secrets read, after a save and after a Remove;
 - the Remove door: a bad slot (`bad-slot`), the removal, the frame it emits, and a second removal (`secret-not-stored`); `remove-failed` asserted to carry no value;
-- the re-key after a rotation.
+- the re-key after a rotation;
+- fix round 1 (A-R2, F1, VT/FF/NEL/LS/PS): `slot-busy` (the refused value and the stored one), `secrets-unreadable`, `remove-failed`, both re-key race orders (both values), the re-key across a Remove, a `register` that throws carrying the value, the faulted re-save of F1 (three values), and the PUT's five further line breaks; the exact `detail` of every `stored-not-ticked` arm and of `write-failed` is asserted.
