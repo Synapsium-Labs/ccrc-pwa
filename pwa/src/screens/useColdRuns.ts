@@ -185,11 +185,17 @@ export function useColdRuns(
     // A re-read ISSUED after this page was asked for has the fresher view of the first page and of `nextBefore`; this
     // answer, read of the older archive, is then dropped (the next "Show older" asks again).
     const askedAt = issued.current;
-    const reading = (loadRunsRef.current as PagedLoader)(limit, held.nextBefore)
+    const asked = held.nextBefore;
+    const reading = (loadRunsRef.current as PagedLoader)(limit, asked)
       .then((r) => {
         const answer: RunsPageAnswer = { runs: r.runs, ...(r.nextBefore === undefined ? {} : { nextBefore: r.nextBefore }) };
         if (!aliveRef.current || issued.current !== askedAt) return;
-        const next = appendOlderRunPage(store.getState().runPages, answer);
+        const current = store.getState().runPages;
+        if (current === null) return;
+        // A page answers only the `nextBefore` it was asked with: a re-read that landed meanwhile may have moved it,
+        // and `appendOlderRunPage` then returns the held view itself, which leaves the store as it is.
+        const next = appendOlderRunPage(current, answer, asked);
+        if (next === current) return;
         store.getState().setRunPages({ ...next, at: Date.now() });
         setCold(next.runs);
         // `state` is left as it is: only a successful RE-READ clears an error a failed re-read left.

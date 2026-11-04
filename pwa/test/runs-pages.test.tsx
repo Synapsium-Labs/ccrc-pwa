@@ -174,13 +174,13 @@ describe('the run archive in pages', () => {
 
   it('appendOlderRunPage: held active rows win, and the answer adds only closed rows below the held nextBefore', () => {
     const held = { runs: [closed(90), run(130)], nextBefore: 71 };
-    const next = appendOlderRunPage(held, { runs: [run(130, { state: 'done', closedAt: T }), closed(70), closed(75), run(140)], nextBefore: 21 });
+    const next = appendOlderRunPage(held, { runs: [run(130, { state: 'done', closedAt: T }), closed(70), closed(75), run(140)], nextBefore: 21 }, 71);
     expect(next.runs.map((r) => [r.id, r.state])).toEqual([[70, 'done'], [90, 'done'], [130, 'working']]);
     expect(next.nextBefore).toBe(21);
   });
 
   it('a re-read of page one keeps the older pages', () => {
-    // Pure: page one was 120..71 plus active 130, one older page 70..21 is held, nextBefore 21.
+    // Pure: the held view has closed runs 129..21 (page one and the older pages below it) and active 130; nextBefore 21.
     const held = { runs: [...range(130, 21).filter((id) => id !== 130).reverse().map((id) => closed(id)), run(130)], nextBefore: 21 };
     // Two more runs closed since: page one is now 122..73, so ids 72..21 are the older region.
     const next = mergeFirstRunPage(held, { runs: [...range(122, 73).reverse().map((id) => closed(id)), run(130)], nextBefore: 73 });
@@ -192,11 +192,49 @@ describe('the run archive in pages', () => {
 
   it('an older page never duplicates a run already shown', () => {
     const held = { runs: [closed(80), closed(75), closed(71), run(90)], nextBefore: 71 };
-    const next = appendOlderRunPage(held, { runs: [closed(71, { closedAt: T }), closed(70), closed(69), run(90)], nextBefore: 60 });
+    const next = appendOlderRunPage(held, { runs: [closed(71, { closedAt: T }), closed(70), closed(69), run(90)], nextBefore: 60 }, 71);
     const idsOut = next.runs.map((r) => r.id);
     expect(idsOut).toEqual([69, 70, 71, 75, 80, 90]);
     expect(new Set(idsOut).size).toBe(idsOut.length);
     expect(next.nextBefore).toBe(60);
+  });
+
+  it('an older page asked from a superseded nextBefore is refused', () => {
+    const held = { runs: [closed(80), closed(61), run(60)], nextBefore: 61 };
+    const answer: RunsPageAnswer = { runs: [closed(39), closed(38)], nextBefore: 30 };
+    expect(appendOlderRunPage(held, answer, 40)).toBe(held);        // asked from 40; the board now asks from 61
+    expect(appendOlderRunPage(held, answer, 61)).not.toBe(held);    // the question it does ask is answered
+    expect(appendOlderRunPage({ runs: [closed(80)], nextBefore: null }, answer, 40).runs.map((r) => r.id)).toEqual([80]);
+  });
+
+  it('a re-read that lands while Show older is in flight keeps its nextBefore', async () => {
+    const a = archive(range(120, 21).filter((id) => id !== 60), [60]);
+    const store = makeStore();
+    const { result } = renderHook(() => useColdRuns(store, a.load, { page: 40 }));
+    await flush();
+    await act(async () => { await result.current.loadOlder(); });
+    expect(store.getState().runPages?.nextBefore).toBe(40);
+    // The older page (asked from 40) is read of the archive as it stands now, then run 60 closes.
+    const stale = await a.load(40, 40);
+    a.set(range(120, 21), []);
+    const fresh = await a.load(40);
+    const gates: Array<() => void> = [];
+    const hold = (answer: RunsPageAnswer) => () => new Promise<RunsPageAnswer>((resolve) => { gates.push(() => resolve(answer)); });
+    a.load.mockImplementationOnce(hold(fresh)).mockImplementationOnce(hold(stale));
+    let reread: Promise<void> = Promise.resolve();
+    let older: Promise<void> = Promise.resolve();
+    act(() => { reread = result.current.reload(); });               // issued BEFORE Show older begins
+    act(() => { older = result.current.loadOlder(); });             // still asks from the stale 40
+    expect(a.load).toHaveBeenLastCalledWith(40, 40);
+    await act(async () => { gates[0]!(); await reread; });          // the re-read lands first: nextBefore 61
+    expect(store.getState().runPages?.nextBefore).toBe(61);
+    await act(async () => { gates[1]!(); await older; });           // the page asked from 40 is refused
+    expect(store.getState().runPages?.nextBefore).toBe(61);
+    expect(result.current.hasOlder).toBe(true);
+    await act(async () => { await result.current.loadOlder(); });   // and run 60 is fetched
+    expect(ids(result.current.cold).sort((x, y) => y - x)).toEqual(range(120, 21));
+    expect(result.current.cold?.find((r) => r.id === 60)?.state).toBe('done');
+    expect(result.current.hasOlder).toBe(false);
   });
 
   it('a failed re-read stays visible after Show older succeeds', async () => {

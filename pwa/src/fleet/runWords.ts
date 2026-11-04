@@ -1036,15 +1036,18 @@ export function mergeFirstRunPage(stored: RunPagesView | null, answer: RunsPageA
   return { runs: [...answer.runs, ...kept].sort(byId), nextBefore };
 }
 
-/** An OLDER page (`loadOlder`) appended to the pages held (console speed S2). The held side is the fresher for
- *  everything it already knows: every held row stays as it is, and the answer adds only CLOSED rows that sit below the
- *  held `nextBefore` (an active row in an older page's answer is a copy from when it was read, and a re-read has
- *  the live one). A closed row the answer carries replaces a held copy of the same id. The next `before` is the
+/** An OLDER page (`loadOlder`) appended to the pages held (console speed S2). A page answers only the question the
+ *  held view still asks: `before` is the `nextBefore` the page was asked with, and when the held `nextBefore` is no
+ *  longer that (a re-read landed while the page was in flight and moved it, as it does to refetch a run that closed
+ *  inside the loaded region) the held view comes back UNCHANGED, the same object, for the caller to see. Otherwise the
+ *  held side is the fresher for everything it already knows: every held row stays as it is, and the answer adds only
+ *  CLOSED rows below `before` (an active row in an older page's answer is a copy from when it was read, and a re-read
+ *  has the live one). A closed row the answer carries replaces a held copy of the same id. The next `before` is the
  *  answer's (`null` when it carries none). PURE. */
-export function appendOlderRunPage(stored: RunPagesView | null, answer: RunsPageAnswer): RunPagesView {
-  const limit = stored?.nextBefore ?? (stored === null ? Infinity : -Infinity);
-  const added = answer.runs.filter((r) => isRunClosed(r) && r.id < limit);
+export function appendOlderRunPage<V extends RunPagesView>(stored: V, answer: RunsPageAnswer, before: number): RunPagesView | V {
+  if (stored.nextBefore !== before) return stored;
+  const added = answer.runs.filter((r) => isRunClosed(r) && r.id < before);
   const fresh = new Set(added.map((r) => r.id));
-  const held = (stored?.runs ?? []).filter((r) => !fresh.has(r.id));
+  const held = stored.runs.filter((r) => !fresh.has(r.id));
   return { runs: [...held, ...added].sort(byId), nextBefore: answer.nextBefore ?? null };
 }
