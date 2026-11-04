@@ -59,6 +59,10 @@ const ID_BUILDERS = {
   wsCollectAudit: 'id', wsCollect: 'id', wsAttic: 'id',
   wsOrphanCensus: 'no-id', wsOrphanAudit: 'no-id', wsOrphan: 'no-id',   // an orphaned tree travels as hex, never as an id (D-6630)
   wsShedDeps: 'id',
+  // Delegation broker wave 5 (W5-G7): `leaseMark`'s ids (the lease, the parent and a promoted session) ride inside ONE
+  // object the builder checks itself (`isRegistryId` and the lease-id grammar), so each is checked once, there, and never
+  // reaches the argv unexamined; no server code composes it yet (PR6 does, and adds its row below).
+  leaseMark: 'no-id',
   wsCollectCensus: 'no-id', wsCollectLooseAudit: 'no-id', wsCollectLoose: 'no-id',   // a loose entry's name travels as hex, never as an id (D-6626)
   wsHold: 'id', wsRelease: 'id', wsRename: 'id', wsTitle: 'id',
   coordPause: 'no-id', reclaimPause: 'no-id', testboxRemote: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
@@ -488,6 +492,9 @@ const GATE_FILES = [
   'coord/expireArchived.ts', 'coord/childReclaimStale.ts',
   // orphanTreeLane.ts (D-6635): the orphan census's `inside` id is vetted by the predicate before the lane reads that row.
   'orphanTreeLane.ts',
+  // ccdargv.ts (delegation broker wave 5): `CCD_ARGV.leaseMark` vets the parent and a promoted session with the predicate
+  // inside the builder, which throws before any argv is built (W5-G6b).
+  'ccdargv.ts',
   // coord/siblingRead.ts (D-6923): a sibling run's `claimedBy` is vetted by the predicate before the registry read.
   'coord/siblingRead.ts',
   // coord/radar.ts (D-7479): a probe head's `id` is vetted by the predicate before it can match a registry row.

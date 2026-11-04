@@ -137,6 +137,8 @@ const PROBE_ARGS: Partial<Record<string, readonly unknown[]>> = {
   wsOrphanAudit: ['00'],
   wsOrphan: ['x', '00', false, null],
   wsShedDeps: ['x', 'child', false, null],
+  // Delegation broker wave 5: `leaseMark` takes one object and refuses a value its verb would refuse as usage.
+  leaseMark: [{ leaseId: '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', generation: 2, project: 'demo', adminRecord: 'agent-a', parentId: 'lane-a-demo', parentIncarnation: '11111111-2222-4333-8444-555555555555', activityId: 'act-1', source: 'agent', state: 'adopted', journalSeq: 9, expiresAtMs: 1767225600000, releaseReason: null, promoted: null }],
   // A loose entry travels as even-length lowercase hex; the builders refuse anything else, which is correct production behaviour (D-6626). The probe passes valid hex so the table loads.
   wsCollectLooseAudit: ['00'],
   wsCollectLoose: ['x', '00', null],

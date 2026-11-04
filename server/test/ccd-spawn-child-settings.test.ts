@@ -93,6 +93,12 @@ describe('CHILD_DENY_RULES (spec §6.6)', () => {
     expect(childDenyRules('claude')).toEqual([...CHILD_DENY_RULES]);       // the upstream id that is Claude Code's own name
     expect(childDenyRules(null)).toEqual([...CHILD_DENY_RULES]);
   });
+  it('W5-G8: `ws-lease-mark` is forbidden and child-denied, and the two lists stay equal (delegation broker wave 5)', () => {
+    expect(FORBIDDEN_CCD_VERBS).toContain('ws-lease-mark');
+    expect(CHILD_DENY_RULES).toContain('Bash(ccd ws-lease-mark:*)');
+    expect(CHILD_DENY_RULES.filter((r) => r.startsWith('Bash(ccd ')).map((r) => r.slice('Bash(ccd '.length, -':*)'.length)))
+      .toEqual([...FORBIDDEN_CCD_VERBS]);
+  });
   it('no account verb is denied: `ccd swap` and `ccd swap-self` stay open (the 2026-10-19 ruling)', () => {
     for (const r of childDenyRules('upstream-a')) expect(r, r).not.toMatch(/^Bash\(ccd swap/);
   });

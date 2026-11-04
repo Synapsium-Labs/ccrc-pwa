@@ -1226,7 +1226,7 @@ describe('8. the closed scope census', () => {
     // The wave-3 list, frozen as it stood on main before wave 5: no `ccd/lib`. Recorded so the CONTROL row below measures the widening.
     const root = mkTmp('ccrc-dlgint-census-');
     mkdirSync(path.join(root, 'ccd', 'lib'), { recursive: true });
-    writeFileSync(path.join(root, 'ccd', 'ccd'), read('ccd/ccd'));
+    writeFileSync(path.join(root, 'ccd', 'ccd'), '#!/usr/bin/env bash\n# a stand-in for ccd/ccd: the row measures which files each list reads, not ccd\n');
     writeFileSync(path.join(root, 'ccd', 'lib', 'other.sh'), 'cmd_other() { ccd ws-lease-mark --lease x; }\n');
     const text = (f: string): string => readFileSync(path.join(root, f), 'utf8');
     const wave3 = ['ccd/ccd', ...filesUnder('agent/src', undefined, root), ...filesUnder('server/src', undefined, root)]

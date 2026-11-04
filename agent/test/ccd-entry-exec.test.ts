@@ -85,6 +85,8 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
       [['ws-audit', '--orphans'], false],
       [['ws-audit', '--orphan-hex', '2f61'], false],
       [['ws-orphan', '--expect', 'a'.repeat(64), '--tree-hex', '2f61', '--rescue'], true],
+      // Delegation broker wave 5 (W5-G4): the lease carrier's writer rides its own `['ws-lease-mark','--lease']` and starts under `bash -p`.
+      [['ws-lease-mark', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab'], true],
       [['ensure', 'demo-x'], false],
     ];
     let id = 0;
