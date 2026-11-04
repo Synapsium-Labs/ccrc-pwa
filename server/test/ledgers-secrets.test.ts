@@ -1787,7 +1787,7 @@ describe('the blind egress names every egress method of the masker (review 1416 
   });
 });
 
-describe('a name that differs from a stored one only by case is refused (review 1416 F3, desktop-polish carry D-7950)', () => {
+describe('a name that differs from a stored one only by case is refused (review 1416 F3, desktop-polish carry)', () => {
   it('a programme slug that case-folds to a stored programme but is spelled differently: secret-name-collides, before any write', async () => {
     const r = await rig();
     await r.stepUp();

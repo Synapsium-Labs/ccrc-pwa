@@ -208,7 +208,7 @@ describe('the waiting frame (plan PL4)', () => {
     for (const s of socks) expect(s.typeCount('waiting')).toBe(0);
   });
 
-  // Review 1338 F3 (desktop-polish carry, D-7950): "once per distinct error" in the two directions the one-error case cannot
+  // Review 1338 F3 (desktop-polish carry): "once per distinct error" in the two directions the one-error case cannot
   // see: a different error after the first is warned too, and a success between two failures re-arms the warning.
   const scripted = async (outcomes: readonly ('ok' | string)[]) => {
     const r = await rig();

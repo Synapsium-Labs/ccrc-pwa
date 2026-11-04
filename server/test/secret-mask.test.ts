@@ -737,7 +737,7 @@ describe('the rulings: a restart after a rotation re-keys with backoff until it 
   });
 });
 
-describe('a re-key in flight when the masker closes (review 1426 F-G, desktop-polish carry D-7950)', () => {
+describe('a re-key in flight when the masker closes (review 1426 F-G, desktop-polish carry)', () => {
   it('fails after close() and logs no "has not landed; retrying" line, and asks for nothing more', async () => {
     const { db } = maskerOver(() => TOKEN_1, [CMP]);
     const lines: string[] = [];

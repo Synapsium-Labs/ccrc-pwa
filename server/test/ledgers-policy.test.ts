@@ -241,7 +241,7 @@ describe('recommendationOf, the one reader of a decide item\'s recommendation (p
   });
 });
 
-// ONE DECIDER (desktop-polish carry, review 1338 advisory, D-7950): whether an earlier tick mail holds the operator's next
+// ONE DECIDER (desktop-polish carry, review 1338 advisory): whether an earlier tick mail holds the operator's next
 // tick is decided here alone, over (its delivery state, its recipient, the coordinator, the recipient's presence); the tick
 // handler only acts on the answer.
 describe('earlierTickBlocks', () => {

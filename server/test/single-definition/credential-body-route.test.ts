@@ -1,4 +1,4 @@
-// A credential route's body errors and its `no-store` hook have one owner (desktop-polish carry, review 1389 A6, D-7950):
+// A credential route's body errors and its `no-store` hook have one owner (desktop-polish carry, review 1389 A6):
 // `server/src/accounts/gate.ts`, whose `credentialBodyRoute` and `noStoreRoute` the stored secret's routes and the Linear
 // connection's routes take. A second mapping of a body error to its fixed word, or Linear's own copy of either, is a
 // second definition, and this file reds on it. KNOWN WIDTH: the mapping is found by its one spelling

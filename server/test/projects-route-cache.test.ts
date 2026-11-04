@@ -600,7 +600,7 @@ describe('the walk cache (D-6436)', () => {
     } finally { await r.app.close(); }
   });
 
-  // Review 1383 F2 (desktop-polish carry, D-7950): an entry stamped in the future after the clock steps back is dropped the
+  // Review 1383 F2 (desktop-polish carry): an entry stamped in the future after the clock steps back is dropped the
   // first time its age reads negative, so it is not served once the clock reaches its stamp again with no measured walk or
   // probe in between.
   it('a kept walk or verdict whose age reads negative is dropped, not served again when the clock catches up', () => {

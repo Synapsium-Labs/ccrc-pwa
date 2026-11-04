@@ -1,4 +1,4 @@
-// The UTF-8 byte counter (desktop-polish carry, review 1389 A6, D-7950). CHARACTERIZATION, pinned green on main before the
+// The UTF-8 byte counter (desktop-polish carry, review 1389 A6). CHARACTERIZATION, pinned green on main before the
 // counters were folded into one owner: the count is what an encoder writes, a surrogate pair is 4 bytes, and a lone
 // surrogate is 3 (an encoder writes U+FFFD for it). Every copy that was folded counted the same way, so this is the
 // answer each of them gave.

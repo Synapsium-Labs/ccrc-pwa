@@ -1,4 +1,4 @@
-// The UTF-8 byte counter has one home (desktop-polish carry, review 1389 A6, D-7950): `shared/utf8.ts`, L0, which the
+// The UTF-8 byte counter has one home (desktop-polish carry, review 1389 A6): `shared/utf8.ts`, L0, which the
 // ledgers, the docs paths, the test box's log line, the workspace title and the PWA's render gates import. A hand-written
 // counter anywhere else (the code-point arithmetic, or a function wrapping an encoder's length in the shared kernel or the
 // PWA) is a second definition, and this file reds on it.
