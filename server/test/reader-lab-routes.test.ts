@@ -32,6 +32,34 @@ const PASSPHRASE = 'correct horse battery staple';
 const stubPty = (): PtyLike => ({ onData: () => ({ dispose: () => {} }), write: () => {}, resize: () => {}, kill: () => {} });
 const UNKNOWN = 'ZZZZZZZZZZZZZZZZZZZZZZ';
 
+/** A body read in the door's source: the word `body`, `raw` or `stream` outside a comment (`bodyLimit` is not the word
+ *  `body`). KNOWN MISS: a deliberately computed key (`req['bo' + 'dy']`) is not seen; hiding a read takes that rewrite. */
+const readsBody = (s: string): boolean => /\b(body|raw|stream)\b/.test(
+  s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1'));
+
+/** Every piece of `file`'s source a probe request runs through, keyed on the parser (scan/symbols.ts), not on a line of
+ *  text: the counter hook, each probe registration (a call `app.<verb>` in `registerReaderLabRoutes` whose first argument
+ *  is the probe route, with its options and so its errorHandler) and, transitively, every function symbol of the file any
+ *  of those names (a handler or errorHandler pulled out into a named const, `probeAnswer`, any helper). */
+function probePathSources(file: string): { verbs: string[]; pieces: { what: string; text: string }[] } {
+  const parsed = parsedFile(file);
+  const regs = callsIn(symbolOf(file, 'registerReaderLabRoutes'))
+    .filter((c) => /^app\.\w+$/.test(c.callee) && c.args[0]?.kind === 'string' && c.args[0].text === READER_LAB_PROBE_ROUTE);
+  const pieces = [{ what: 'installReaderLabCounter', text: sourceOfSymbol(file, 'installReaderLabCounter') },
+    ...regs.map((c) => ({ what: c.callee, text: parsed.text.slice(c.start, c.end) }))];
+  const seen = new Set<string>(['installReaderLabCounter', 'registerReaderLabRoutes']);
+  for (let i = 0; i < pieces.length; i += 1) {
+    for (const id of new Set(pieces[i]!.text.match(/[A-Za-z_$][\w$]*/g) ?? [])) {
+      for (const sym of parsed.symbols) {
+        if (seen.has(sym.name) || (sym.name !== id && !sym.name.endsWith(`.${id}`))) continue;
+        seen.add(sym.name);
+        pieces.push({ what: sym.name, text: parsed.text.slice(sym.start, sym.end) });
+      }
+    }
+  }
+  return { verbs: regs.map((c) => c.callee), pieces };
+}
+
 let app: FastifyInstance | undefined;
 afterEach(async () => {
   vi.useRealTimers();
@@ -199,25 +227,42 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
     expect(counted(await readRun(a, nonce)).probes['cookie-xhr'].hits).toBe(2);
   });
 
-  it('the probe handlers never read a body: no body or raw-stream access in either registration (refinement (f))', () => {
-    // Keyed on the parser (scan/symbols.ts), not on a line of text: the two probe registrations are the calls
-    // `app.get`/`app.post` whose first argument is the probe route, and `probeAnswer` is the one answer both give.
-    const F = 'server/src/readerLab/routes.ts';
-    const { text } = parsedFile(F);
-    const regs = callsIn(symbolOf(F, 'registerReaderLabRoutes'))
-      .filter((c) => /^app\.(get|post)$/.test(c.callee) && c.args[0]?.kind === 'string' && c.args[0].text === READER_LAB_PROBE_ROUTE);
-    expect(regs.map((c) => c.callee), 'both probe registrations are found').toEqual(['app.get', 'app.post']);
-    // Comments are blanked, so a sentence ABOUT a body is not a read; `bodyLimit` is not the word `body`.
-    const reads = (s: string): boolean => /\bbody\b|\.\s*raw\b|\.\s*stream\b/.test(
-      s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1'));
-    for (const c of regs) expect(reads(text.slice(c.start, c.end)), `${c.callee}: a probe handler reads the request body`).toBe(false);
-    expect(reads(sourceOfSymbol(F, 'probeAnswer')), 'the probe answer reads the request body').toBe(false);
-    // CONTROL: every shape of a read is seen; a comment and the limit option are not.
-    for (const s of ['async (req, reply) => { const b = req.body; }', 'async ({ body }, reply) => {}', 'req.raw.on("data", f)',
-      'async (req) => { for await (const c of req.stream) {} }']) expect(reads(s), s).toBe(true);
-    for (const s of ['bodyLimit: READER_LAB_PROBE_BODY_MAX,', '// the handler never reads the body\nasync (_req, reply) => 1', '/* a body */ x']) {
-      expect(reads(s), s).toBe(false);
-    }
+  it('the probe path never reads a body: no body or raw-stream access in the counter, either registration or any function they name (refinement (f))', () => {
+    const { verbs, pieces } = probePathSources('server/src/readerLab/routes.ts');
+    expect(verbs, 'both probe registrations are found, and only they').toEqual(['app.get', 'app.post']);
+    expect(pieces.map((p) => p.what), 'the counter, both registrations and the probe answer are scanned')
+      .toEqual(expect.arrayContaining(['installReaderLabCounter', 'app.get', 'app.post', 'probeAnswer']));
+    for (const p of pieces) expect(readsBody(p.text), `${p.what}: the probe path reads the request body`).toBe(false);
+    // CONTROL, through the same scan over fixture files shaped like routes.ts: each planted read is found, through a
+    // named handler, a named errorHandler, a helper, a destructured `raw` and the counter; the clean fixture has none.
+    const dir = mkTmp('ccrc-reader-lab-scan-');
+    const fixture = (name: string, post: string, counter = '', top = ''): string => {
+      const file = path.join(dir, `${name}.ts`);
+      writeFileSync(file, `${top}
+const probeAnswer = (reply: any) => reply.code(204).send();
+export function installReaderLabCounter(app: any): void {
+  app.addHook('onRequest', async (req: any) => { ${counter} });
+}
+export function registerReaderLabRoutes(app: any): void {
+  // the handler never reads the body
+  app.get('${READER_LAB_PROBE_ROUTE}', { exposeHeadRoute: false }, async (_req: any, reply: any) => probeAnswer(reply));
+  app.post('${READER_LAB_PROBE_ROUTE}', ${post});
+}
+`);
+      return file;
+    };
+    const readIn = (file: string): string[] => probePathSources(file).pieces.filter((p) => readsBody(p.text)).map((p) => p.what);
+    expect(readIn(fixture('clean', '{ bodyLimit: 1024, errorHandler: (_e: any, _r: any, reply: any) => probeAnswer(reply) }, async (_req: any, reply: any) => probeAnswer(reply)')))
+      .toEqual([]);
+    expect(readIn(fixture('named', '{ bodyLimit: 1024 }, probeHandler', '',
+      'const probeHandler = async (req: any, reply: any) => { void req.body; return probeAnswer(reply); };'))).toEqual(['probeHandler']);
+    expect(readIn(fixture('onerror', '{ errorHandler: onRefused }, async (_req: any, reply: any) => probeAnswer(reply)', '',
+      'const onRefused = (_e: any, req: any, reply: any) => { void req.body; return probeAnswer(reply); };'))).toEqual(['onRefused']);
+    expect(readIn(fixture('helper', '{}, async (req: any, reply: any) => { drain(req); return probeAnswer(reply); }', '',
+      'const drain = (req: any) => req.stream;'))).toEqual(['drain']);
+    expect(readIn(fixture('raw', "{}, async (req: any, reply: any) => { const { raw } = req; raw.on('data', () => {}); return probeAnswer(reply); }")))
+      .toEqual(['app.post']);
+    expect(readIn(fixture('counter', '{}, async (_req: any, reply: any) => probeAnswer(reply)', 'void req.body;'))).toEqual(['installReaderLabCounter']);
   });
 
   it('a nonce is 128 bits from node:crypto: minted by randomBytes(16), imported from node:crypto, with no Math.random in the door (M10.2)', () => {
