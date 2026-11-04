@@ -3476,13 +3476,18 @@ describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => 
     // Under coord-a, activities first; then the offline group (worktrees, then activities); then the unowned group.
     expect(cells).toEqual([
       ['agent', 'reword', 'unmeasured'],
-      ['agent worktree', 'agent-a2', 'running', 'unmeasured'],
+      ['agent worktree', 'agent-a2', 'not confirmed', 'unmeasured'],
       ['worktree', 'agent-a1', 'unmeasured', 'unmeasured'],
-      ['agent', 'regroup', 'running'],
+      ['agent', 'regroup', 'not confirmed'],
       ['u-future', 'no owner found', 'unmeasured'],
     ]);
     expect(chips).toEqual([[], [], ['inferred', `Bash call …${TOOL_USE_ID.slice(-8)}`], [], []]);
     expect(card().textContent).not.toContain('unrecognised');
+    // No delegation row, toggle or chip says running in its title either: the page's titles, read off the DOM.
+    const titles = [...card().querySelectorAll('.proj-work[title], .proj-group-toggle[title], .proj-children-toggle[title], .sess-meta-chip[title]')]
+      .map((e) => e.getAttribute('title') ?? '');
+    expect(titles.length).toBeGreaterThan(0);
+    for (const t of titles) expect(t, t).not.toMatch(/running/i);
   });
 
   it('a measured frame marks the list measured, and counts an activity no card can draw', () => {

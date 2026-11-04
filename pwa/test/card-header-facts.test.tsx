@@ -345,9 +345,9 @@ describe('verifier round 1 — the gaps the first suite left open', () => {
   });
 });
 
-// Delegation broker wave 4, PR2 Task 2.8: a programme worker's live delegated work is ONE chip on its row (R9), and the
-// session header holds the same chip, because both read the same activities.
-describe('the R9 chip: a worker\'s live delegated work (delegation broker wave 4)', () => {
+// Delegation broker wave 4, PR2 Task 2.8, and delegation visibility: a programme worker's attached delegation entries
+// are ONE chip on its row (R9), every liveness counted (D-7781); the session header lists every entry it started.
+describe('the R9 chip: a worker\'s attached delegation entries (delegation broker wave 4; D-7781)', () => {
   const worker = s({ role: 'child', child: { kind: 'child', runId: 40 }, status: 'busy', bucket: 'working' });
   const two = [activity({ activityId: 'a1', parentId: worker.id, displayName: 'map the tree' }),
     activity({ activityId: 'a2', parentId: worker.id, displayName: 'read the plan' })];
@@ -356,13 +356,13 @@ describe('the R9 chip: a worker\'s live delegated work (delegation broker wave 4
     const f = sessionFacts({ session: worker, now: NOW, childRun: child(RUN), delegated: two });
     const card = cardFacts(f);
     expect(card.delegated?.text).toBe('2 delegated');
-    expect(card.delegated?.title).toContain('map the tree');
+    expect(card.delegated?.title).toBe('2 recorded delegation entries, not a current agent count; execution not confirmed');
     expect(headerFacts(f).find((h) => h.key === 'delegated')?.text).toBe('2 delegated');
     expect(cardWithinHeader(card, headerFacts(f))).toEqual([]);
     // The subset predicate itself counts the chip: a header without it is a header missing a card fact.
     expect(cardWithinHeader(card, headerFacts(f).filter((h) => h.key !== 'delegated'))).toEqual([card.delegated]);
-    // Only live work counts: a stale or unmeasured activity is no chip.
-    expect(cardFacts(sessionFacts({ session: worker, now: NOW, delegated: [activity({ liveness: 'stale' })] })).delegated).toBeNull();
+    // Every attached entry counts, of every liveness (D-7781): a stale one is a chip too.
+    expect(cardFacts(sessionFacts({ session: worker, now: NOW, delegated: [activity({ liveness: 'stale' })] })).delegated?.text).toBe('1 delegated');
   });
 
   it('W4-U34: a dead worker carries no chip', () => {
@@ -372,7 +372,7 @@ describe('the R9 chip: a worker\'s live delegated work (delegation broker wave 4
     expect(headerFacts(f).some((h) => h.key === 'delegated')).toBe(false);
   });
 
-  it('W4-U35: the row draws the chip when handed live work, and is byte-identical without it', () => {
+  it('W4-U35: the row draws the chip when handed attached entries, and is byte-identical without it', () => {
     const { container: bare } = render(<SessionLine session={worker} onOpen={() => {}} onActions={() => {}} now={NOW} />);
     const today = bare.innerHTML;
     cleanup();
@@ -382,7 +382,7 @@ describe('the R9 chip: a worker\'s live delegated work (delegation broker wave 4
     const { container } = render(<SessionLine session={worker} onOpen={() => {}} onActions={() => {}} now={NOW} delegated={two} />);
     const chip = container.querySelector('.sess-meta .sess-meta-chip');
     expect(chip?.textContent).toBe('2 delegated');
-    expect(chip?.getAttribute('title')).toContain('read the plan');
+    expect(chip?.getAttribute('title')).toBe('2 recorded delegation entries, not a current agent count; execution not confirmed');
   });
 
   it('the rendered header draws the chip the card draws', () => {

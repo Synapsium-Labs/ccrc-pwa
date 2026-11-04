@@ -11627,10 +11627,12 @@ export type DelegationAttemptVerdict = (typeof DELEGATION_ATTEMPT_VERDICTS)[numb
 // Declared ONCE, here; the server decides every word (`server/src/coord/delegation-projection.ts`) and a reader renders
 // it. Each closed set has a sibling `Record<X, true>` map and a list derived from it. This block imports nothing (L0).
 
-/** How delegated work reads NOW, decided at projection time and never stored. `live`: running, and its parent is alive
- *  in the incarnation that started it. `stale`: recorded as running, but its parent is gone, dead or in another
- *  incarnation (its stop was not seen). `ended`: its terminal evidence was seen. `unmeasured`: its execution state is
- *  `unknown`, or its parent's incarnation was not measured. */
+/** What the broker RECORDED about delegated work, decided at projection time and never stored. None of these words
+ *  measures the helper itself (delegation visibility, spec §1), so no reader draws one as "running" or "recent".
+ *  `live`: its end is not recorded and its parent is live in the incarnation that started it; execution is NOT
+ *  confirmed. `stale`: its end is not recorded, and its parent is gone, dead or in another incarnation (its stop was
+ *  not seen). `ended`: its terminal evidence was seen. `unmeasured`: its execution state is `unknown`, or its parent's
+ *  incarnation was not measured. */
 export type DelegationLiveness = 'live' | 'stale' | 'ended' | 'unmeasured';
 const DELEGATION_LIVENESS_MAP: Record<DelegationLiveness, true> = { live: true, stale: true, ended: true, unmeasured: true };
 export const DELEGATION_LIVENESS: readonly DelegationLiveness[] = Object.keys(DELEGATION_LIVENESS_MAP) as DelegationLiveness[];
@@ -11677,7 +11679,9 @@ export interface DelegationActivityWire {
   group: DelegationRowGroup;
   placement: DelegationActivityPlacement;
   sourceKind: Exclude<DelegationActivitySourceKind, 'bash-worktree'>;
-  /** The agent id, or the workflow run id (a worker's is `<runId>-<index>`), so a reader can group a run's workers. */
+  /** The agent id, or the workflow run id. Display text only: its spelling (a workflow worker's reads
+   *  `<runId>-<index>`) is no membership, run or worker-composition key, and no reader groups by it (delegation
+   *  visibility, spec §2). */
   upstreamId: string;
   /** Free text from the session's own events: the server masks the frame. */
   displayName: string | null;

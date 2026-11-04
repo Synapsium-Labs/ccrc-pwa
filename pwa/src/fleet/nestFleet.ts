@@ -38,6 +38,7 @@ import type {
   DelegationActivityWire, DelegationLeaseWire, DelegationUnownedWire, FleetSession, RunSummary,
 } from '../../../shared/api';
 import { isDispatchPending, workerOf } from './runWords';
+import { byOpened } from './delegationWords';
 
 /** How deep a row sits. ONE level, deliberately — see `nestFleet`'s rule 4. */
 export type RowDepth = 0 | 1;
@@ -241,8 +242,6 @@ export function nestFleet(
   return delegation === null ? rows : delegationPass(rows, sessions, delegation);
 }
 
-const byOpened = (a: DelegationActivityWire, b: DelegationActivityWire): number =>
-  a.openedAt.localeCompare(b.openedAt) || a.activityId.localeCompare(b.activityId);
 const byObserved = (a: DelegationLeaseWire, b: DelegationLeaseWire): number =>
   a.firstObservedAt.localeCompare(b.firstObservedAt) || a.leaseId.localeCompare(b.leaseId);
 
