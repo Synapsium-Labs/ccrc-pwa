@@ -108,7 +108,7 @@ export function ccdLauncherIn(root: string = REPO): string {
 /** The library files `ccd/ccd` loads at its foot (D-6913), in load order. The census reads them AFTER `ccd/ccd`,
  *  as one program: a moved function is still ccd's, with its row in `ccd/contexts.tsv`, its edges in the call graph and its
  *  line in the heredoc check. A tree without one (a fixture) has no lines from it. */
-export const CCD_LIB_FILES: readonly string[] = ['ccd/lib/disk-retention.sh', 'ccd/lib/train-proof.sh'];
+export const CCD_LIB_FILES: readonly string[] = ['ccd/lib/disk-retention.sh', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh'];
 
 /** One line of ccd's shell source, with the repo-relative file it is in and its 1-based line there. */
 export interface CcdSourceLine { readonly file: string; readonly line: number; readonly text: string }
@@ -263,6 +263,8 @@ export const RAN_NARROW_WINDOW = 12;
 /** The readers a `runCcd(` result may be handed to whole, each of which reads `ran` FIRST (D-6034, D-6840). */
 export const RAN_CARRY_READERS: readonly string[] = [
   'cutShort', 'sweepFailureReason', 'failureDetail', 'classifyAddFailure', 'classifyTitleFailure', 'archiveOutcome',
+  // The project add's reader (`server/src/projectAdd.ts`), `classifyAddFailure`'s shape: `ran === false` is `other` first.
+  'classifyProjectAddFailure',
 ];
 
 /** `classify` is a generic name: it counts as a carry reader only in the file that defines the one that reads `ran` first. */

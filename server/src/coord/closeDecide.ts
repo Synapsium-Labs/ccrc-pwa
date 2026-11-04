@@ -59,6 +59,11 @@ const DONE_CLAIM_SUBJECTS: Record<DoneClaimDoor, { rejected: string; unmeasured:
   review: { rejected: 'review-done-rejected', unmeasured: 'review-done-unmeasured' },
 };
 
+/** Every subject a done-claim is answered under, derived from the table above so a fourth door is named here without
+ *  an edit. The revive's vocabulary (`coord/mailRevive.ts`) reads it: these are the coordinator-voiced notices. */
+export const DONE_CLAIM_ANSWER_SUBJECTS: readonly string[] =
+  Object.values(DONE_CLAIM_SUBJECTS).flatMap((s) => [s.rejected, s.unmeasured]);
+
 /** The mail a failed done-claim is answered with: today's `<code>: <detail>` under the refusal subject, and, for
  *  `lineage-unmeasured`, the re-send instruction under its own subject. ONE function for the three doors. */
 export function doneRejectionMail(door: DoneClaimDoor, v: { code: DoneRejectCode; detail: string }):

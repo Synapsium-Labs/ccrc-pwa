@@ -1,5 +1,10 @@
 import type { FleetState } from './fleetstate.js';
-import { ROUTE_WRITABLE_FIELDS, type CollectToken, type OrphanToken, type RouteFields, type StopSurface } from '../../shared/api.js';
+import {
+  CHILD_RUN_ID, ROUTE_WRITABLE_FIELDS, isDelegationCarrierState, isDelegationLeaseReleaseReason, isRegistryId,
+  DELEGATION_LEASE_SOURCE_KINDS,
+  type CollectToken, type DelegationCarrierState, type DelegationLeaseReleaseReason, type DelegationLeaseSourceKind,
+  type OrphanToken, type RouteFields, type StopSurface,
+} from '../../shared/api.js';
 import type { DocSectionSlug } from '../../shared/docs.js';
 import type { DepsShedClass } from './depsShed.js';
 
@@ -290,6 +295,47 @@ export function sweepDec(
     ? { surface: 'agent', actor, reason: null }
     : null;
 }
+
+/** One delegation lease's carrier mark (delegation broker wave 5, PR1): the generation the server has journalled and the
+ *  lease's fields, as `ccd ws-lease-mark` writes them into that lease's carrier file on the box. */
+export interface LeaseMarkArgs {
+  leaseId: string; generation: number; project: string; adminRecord: string; parentId: string; parentIncarnation: string;
+  activityId: string; source: DelegationLeaseSourceKind; state: DelegationCarrierState; journalSeq: number;
+  expiresAtMs: number | null; releaseReason: DelegationLeaseReleaseReason | null;
+  promoted: { runId: number; sessionId: string } | null;
+}
+const LEASE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const leaseCount = (n: number, max: number): boolean => Number.isSafeInteger(n) && n >= 1 && n <= max;
+/** `ws-lease-mark`'s argv, checked against the verb's own grammar (`ccd/lib/delegation-lease.sh#cmd_ws_lease_mark`'s rule 1),
+ *  so a value the verb would refuse as `usage` throws here instead. `--lease` leads; the admin record travels as hex, so a
+ *  name beginning with `-` or holding `@`/`+` never reaches a flag position; the tree itself is never in argv. */
+const leaseMarkArgv = (a: LeaseMarkArgs): CcdArgv => {
+  const bad = (what: string): never => { throw new Error(`CCD_ARGV.leaseMark: ${what}`); };
+  if (!LEASE_UUID_RE.test(a.leaseId)) bad('leaseId is not a lease id');
+  if (!leaseCount(a.generation, 9_999_999_999)) bad('generation is not a positive integer');
+  if (!leaseCount(a.journalSeq, 9_999_999_999)) bad('journalSeq is not a positive integer');
+  if (!/^[A-Za-z0-9_][A-Za-z0-9._-]{0,254}$/.test(a.project)) bad('project is not one path segment');
+  if (!/^[A-Za-z0-9._@+-]{1,255}$/.test(a.adminRecord) || a.adminRecord === '.' || a.adminRecord === '..') bad('adminRecord is not an admin record name');
+  if (!isRegistryId(a.parentId)) bad('parentId is not a registry id');
+  if (!LEASE_UUID_RE.test(a.parentIncarnation)) bad('parentIncarnation is not an incarnation id');
+  if (!/^[A-Za-z0-9._:-]{1,200}$/.test(a.activityId)) bad('activityId is not an activity id');
+  if (!(DELEGATION_LEASE_SOURCE_KINDS as readonly string[]).includes(a.source)) bad('source is not a lease source');
+  if (!isDelegationCarrierState(a.state)) bad('state is not a carrier state');
+  if (a.expiresAtMs !== null && !leaseCount(a.expiresAtMs, 9_999_999_999_999_999)) bad('expiresAtMs is not epoch milliseconds');
+  if ((a.state === 'released') !== (a.releaseReason !== null)) bad('releaseReason is given exactly when state is released');
+  if (a.releaseReason !== null && !isDelegationLeaseReleaseReason(a.releaseReason)) bad('releaseReason is not a release reason');
+  if ((a.state === 'promoted') !== (a.promoted !== null)) bad('promoted is given exactly when state is promoted');
+  if (a.promoted !== null && (!CHILD_RUN_ID.test(String(a.promoted.runId)) || !isRegistryId(a.promoted.sessionId))) bad('promoted is not a run and a session');
+  return argv([
+    'ws-lease-mark', '--lease', a.leaseId, '--generation', String(a.generation), '--project', a.project,
+    '--admin-record-hex', Buffer.from(a.adminRecord, 'utf8').toString('hex'), '--parent', a.parentId,
+    '--parent-incarnation', a.parentIncarnation, '--activity', a.activityId, '--source', a.source, '--state', a.state,
+    '--journal-seq', String(a.journalSeq),
+    ...(a.expiresAtMs !== null ? ['--expires-at', String(a.expiresAtMs)] : []),
+    ...(a.releaseReason !== null ? ['--release-reason', a.releaseReason] : []),
+    ...(a.promoted !== null ? ['--promoted-run', String(a.promoted.runId), '--promoted-session', a.promoted.sessionId] : []),
+  ]);
+};
 
 /**
  * The ONLY place ccd argv is constructed. Every route builds its call through
@@ -648,6 +694,10 @@ export const CCD_ARGV = {
    *  nothing. The dec trails. Behind `SHED_DEPS_CAP`. Its one composer is the arm's pass (`depsShedPass.ts`). */
   wsShedDeps: (id: string, cls: DepsShedClass, dryRun: boolean, dec: ActorFlags | null) =>
     argv(['ws-shed-deps', '--session', id, '--class', cls, ...(dryRun ? ['--dry-run'] : []), ...decFlags(dec)]),
+  /** `ws-lease-mark --lease <uuid> ...` (delegation broker wave 5, PR1): the write of one lease's carrier at a generation
+   *  the server has journalled, on its own granted prefix (`['ws-lease-mark','--lease']`, enrolled in the agent's
+   *  `REQUIRED_VERB_FLAG`). Behind `LEASE_MARK_CAP`. No server code composes it yet (PR6 does). */
+  leaseMark: (a: LeaseMarkArgs) => leaseMarkArgv(a),
   /** `ws-audit --collect-census` (fleet disk retention spec 2026-10-23 section 2.4, D-6625/D-6626): the read-only census
    *  of the entries directly under `~/.cc-tmp`, classed, names as hex. Behind `COLLECT_LOOSE_CAP`. Granted by
    *  `['ws-audit','--collect-census']`; it destroys nothing. */
@@ -734,6 +784,13 @@ export const CCD_ARGV = {
                       argv(['project-pool', '--project', project, '--pool', pool]),
   projectPoolClear: (project: string) =>
                       argv(['project-pool', '--project', project, '--clear']),
+  /** The project create's two writers (add-project spec 2026-11-04 §4). TWO ENTRIES, the `start`/`enable` and
+   *  `projectPool*` rule: `POST /api/projects` picks between a clone and an empty init rather than parameterising one
+   *  builder. `--name` LEADS, where the agent's gated grant (`REQUIRED_VERB_FLAG`) expects it. `name` and `url` come
+   *  from `planProjectAdd` (L1, `projectAdd.ts`), already held to `shared/projectAdd.ts`'s grammar, and ccd re-checks
+   *  both; the url is its own token after `--url`, so a value cannot be read as a flag. */
+  projectAddClone: (name: string, url: string) => argv(['project-add', '--name', name, '--url', url]),
+  projectAddEmpty: (name: string) => argv(['project-add', '--name', name, '--empty']),
 
   /** The routing record's writer (routing spec 2026-09-14 §5.3). ONE field per
    *  argv: the route that will call it (slice 4's picker, the wave N≥2 dispatch)
@@ -1174,6 +1231,10 @@ export const ORPHAN_CAP = 'orphan-v1';
  *  <class> [--dry-run]`, one ccd inode. Spelled ONCE in `server/src`; ccd's `echo shed-deps-v1` is the other. READ IT WITH
  *  `capSupported`/`ccdCan`, which refuse on no evidence: the verb it gates deletes. */
 export const SHED_DEPS_CAP = 'shed-deps-v1';
+/** The `ccd caps` token that says this box's ccd has the lease carrier's writer (delegation broker wave 5, PR1):
+ *  `ws-lease-mark --lease <id> ...`, in `ccd/lib/delegation-lease.sh`. Spelled ONCE in `server/src`; ccd's
+ *  `echo lease-mark-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence. */
+export const LEASE_MARK_CAP = 'lease-mark-v1';
 /** The `ccd caps` token that says this box's ccd has the collector's LOOSE arm (fleet disk retention spec 2026-10-23
  *  section 2.4, D-6625): `ws-audit --collect-census`, `ws-audit --loose-hex <hex> --collect` and
  *  `ws-collect --expect <token> --loose-hex <hex>` — one ccd inode. Distinct from `COLLECT_CAP`: a box with
@@ -1343,6 +1404,8 @@ export const CCD_CAN = {
   wsOrphanCensus: capRow(ORPHAN_CAP), wsOrphanAudit: capRow(ORPHAN_CAP), wsOrphan: capRow(ORPHAN_CAP),
   // The deps-shed verb is new: an older ccd has none of it, and its dry run is the same row.
   wsShedDeps: capRow(SHED_DEPS_CAP),
+  // The lease carrier's writer is new (delegation broker wave 5): an older ccd has none of it.
+  leaseMark: capRow(LEASE_MARK_CAP),
   // The loose arm's three rows all refuse on no evidence: the audit and the census are new flags an older ccd rejects.
   wsCollectCensus: capRow(COLLECT_LOOSE_CAP), wsCollectLooseAudit: capRow(COLLECT_LOOSE_CAP), wsCollectLoose: capRow(COLLECT_LOOSE_CAP),
   wsAttic: verbRow('ws-attic'),
@@ -1351,6 +1414,7 @@ export const CCD_CAN = {
   // A new verb: `ccd caps` names it, and a box whose list lacks it is refused 501 rather than sent a usage error.
   testboxRemote: verbRow('testbox-remote'),
   projectPoolSet: verbRow('project-pool'), projectPoolClear: verbRow('project-pool'),
+  projectAddClone: verbRow('project-add'), projectAddEmpty: verbRow('project-add'),
   route: capRow(ROUTE_CAP), routeApply: capRow(ROUTE_APPLY_CAP), routeSet: capRow(ROUTE_CAP),
   winSize: capRow(WIN_SIZE_CAP),
   docsIndex: capRow(DOCS_CAP), docsTree: capRow(DOCS_CAP), docsShowCommitted: capRow(DOCS_CAP),

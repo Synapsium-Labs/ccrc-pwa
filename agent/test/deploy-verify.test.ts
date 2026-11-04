@@ -209,7 +209,8 @@ const stampedCcd = (dir: string): Buffer => {
     .replace(/^__CCD_REDACT_SHA256=stamp-at-install$/m, `__CCD_REDACT_SHA256=${digestOf(path.join(dir, '..', 'shared', 'redact.mjs'))}`)
     .replace(/^__CCD_REDACT_CLI_SHA256=stamp-at-install$/m, `__CCD_REDACT_CLI_SHA256=${digestOf(path.join(dir, '..', 'shared', 'redact-cli.mjs'))}`)
     .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${libDigest}`)
-    .replace(/^__CCD_LIB_TRAIN_SHA256=stamp-at-install$/m, `__CCD_LIB_TRAIN_SHA256=${digestOf(path.join(dir, 'lib', 'train-proof.sh'))}`).split('\n');
+    .replace(/^__CCD_LIB_TRAIN_SHA256=stamp-at-install$/m, `__CCD_LIB_TRAIN_SHA256=${digestOf(path.join(dir, 'lib', 'train-proof.sh'))}`)
+    .replace(/^__CCD_LIB_LEASE_SHA256=stamp-at-install$/m, `__CCD_LIB_LEASE_SHA256=${digestOf(path.join(dir, 'lib', 'delegation-lease.sh'))}`).split('\n');
   if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
   return Buffer.from(markGenerated(lines.join('\n')));
 };
@@ -1798,6 +1799,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     for (const backup of ['cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd;', 'cp -a ~/.local/libexec/ccrc/ccd ~/ccrc-backups/$TS/ccd-body;',
       'cp -a ~/.local/libexec/ccrc/lib/disk-retention.sh ~/ccrc-backups/$TS/ccd-lib-disk-retention.sh;',
       'cp -a ~/.local/libexec/ccrc/lib/train-proof.sh ~/ccrc-backups/$TS/ccd-lib-train-proof.sh;',
+      'cp -a ~/.local/libexec/ccrc/lib/delegation-lease.sh ~/ccrc-backups/$TS/ccd-lib-delegation-lease.sh;',
       // The docs redactor's two files (D-7077), in the library's guarded form.
       'cp -a ~/.local/libexec/ccrc/shared/redact.mjs ~/ccrc-backups/$TS/ccd-shared-redact.mjs;',
       'cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs;']) {
@@ -1820,7 +1822,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       for (const f of ['ccd', 'ccd-entry.py', 'ccd-entry-install.py']) cpSync(path.join(repoCcd, f), path.join(home, 'ccrc', 'ccd', f));
       // The libraries the body pins and the publisher places first (D-6913, D-7463).
       mkdirSync(path.join(home, 'ccrc', 'ccd', 'lib'), { recursive: true });
-      for (const f of ['disk-retention.sh', 'train-proof.sh']) cpSync(path.join(repoCcd, 'lib', f), path.join(home, 'ccrc', 'ccd', 'lib', f));
+      for (const f of ['disk-retention.sh', 'train-proof.sh', 'delegation-lease.sh']) cpSync(path.join(repoCcd, 'lib', f), path.join(home, 'ccrc', 'ccd', 'lib', f));
       // The docs redactor's two files (D-7077), which the publisher places beside the library and pins in the body.
       mkdirSync(path.join(home, 'ccrc', 'shared'), { recursive: true });
       for (const f of ['redact.mjs', 'redact-cli.mjs']) cpSync(path.join(repoCcd, '..', 'shared', f), path.join(home, 'ccrc', 'shared', f));
@@ -1840,6 +1842,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
         'the library is the tree\'s').toBe(true);
       expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'train-proof.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'train-proof.sh'))),
         'the second library is the tree\'s').toBe(true);
+      expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'delegation-lease.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'delegation-lease.sh'))),
+        'the third library is the tree\'s').toBe(true);
       const entry = path.join(home, '.local', 'bin', 'ccd');
       const bodyPath = path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
       const shebang = readFileSync(entry, 'utf8').split('\n')[0]!;

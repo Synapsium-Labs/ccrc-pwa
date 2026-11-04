@@ -738,6 +738,39 @@ describe('the rulings: a restart after a rotation re-keys with backoff until it 
   });
 });
 
+describe('a re-key in flight when the masker closes (review 1426 F-G, desktop-polish carry)', () => {
+  it('fails after close() and logs no "has not landed; retrying" line, and asks for nothing more', async () => {
+    const { db } = maskerOver(() => TOKEN_1, [CMP]);
+    const lines: string[] = [];
+    let fail: (e: Error) => void = () => {};
+    let asked = 0;
+    const m = new SecretMasker({ db, token: () => TOKEN_2, log: (l) => lines.push(l), requestRekey: () => {
+      asked += 1;
+      return new Promise<never>((_resolve, reject) => { fail = reject; });
+    } });
+    expect(m.version, 'CONTROL: the rotated token is read').toBeGreaterThan(0);
+    await Promise.resolve();
+    expect(asked, 'CONTROL: the re-key was asked at start').toBe(1);
+    m.close();
+    fail(new Error('link down'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(lines.filter((l) => l.includes('has not landed'))).toEqual([]);
+    expect(asked).toBe(1);
+  });
+  it('CONTROL: the same failure while open logs the retry line', async () => {
+    const { db } = maskerOver(() => TOKEN_1, [CMP]);
+    const lines: string[] = [];
+    let fail: (e: Error) => void = () => {};
+    const m = new SecretMasker({ db, token: () => TOKEN_2, log: (l) => lines.push(l), requestRekey: () => new Promise<never>((_resolve, reject) => { fail = reject; }) });
+    expect(m.version).toBeGreaterThan(0);
+    await Promise.resolve();
+    fail(new Error('link down'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(lines.filter((l) => l.includes('has not landed'))).toHaveLength(1);
+    m.close();
+  });
+});
+
 describe('the review findings: the mask stays cheap and the drawer stays live (D-5995)', () => {
   afterEach(() => { vi.useRealTimers(); });
 

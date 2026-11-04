@@ -118,6 +118,8 @@ export const STORED_TEXT = {
   stepUpSubject: 'removing a secret',
   heading: 'Stored secrets',
   unreadable: 'The stored secrets of this programme could not be read.',
+  /** One item's slot that the box could not read (review 1426 F-F): this slot, not the programme's whole store. */
+  slotUnreadable: 'The box could not read the secret saved for this item, so this page cannot tell whether one is stored. Check that the server can read its folder of stored secrets on the box, then reload this page.',
   savedAt: (age: string | null): string => (age === null ? 'Saved at a time the box has no record of' : `Saved ${age}`),
   askedBy: (title: string | null): string => (title === null ? 'No item on record' : `Asked for by: ${title}`),
 } as const;
@@ -422,7 +424,7 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
         </div>
       )}
       {item.kind === 'secret' && unreadable && (
-        <p className="wi-refusal" data-secret="unreadable">{LEDGER_REFUSAL_TEXT['secrets-unreadable']}</p>
+        <p className="wi-refusal" data-secret="unreadable">{STORED_TEXT.slotUnreadable}</p>
       )}
       {checking && (
         <p className="wi-status" role="status" data-stale={item.stale ? 'true' : 'false'}>

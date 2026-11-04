@@ -83,6 +83,8 @@ import { AuthAttempts } from './accounts/attempts.js';
 import { sessionIdHash } from './auth/sessions.js';
 import { resolveTitle } from './linear/resolve.js';
 import { classifyAddFailure, planCreate } from './workspaceCreate.js';
+import { classifyProjectAddFailure, planProjectAdd } from './projectAdd.js';
+import type { ProjectAddAnswer } from '../../shared/projectAdd.js';
 import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
@@ -3049,6 +3051,28 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       case 'account-refused': return refuseRoute(reply, 'account-refused', failure.leftBehind ? { reason: failure.reason, leftBehind: true } : { reason: failure.reason });
       case 'other': return ccd502(reply, res);
     }
+  });
+
+  /**
+   * The project add (add-project spec 2026-11-04 §4). `planProjectAdd` (L1, `projectAdd.ts`) decides the body, the
+   * `CCD_ARGV` entry it takes and, from the deployed ccd's caps, whether it can be sent; ccd's `project-add` is the only
+   * writer of the new directory. On success the walk cache is dropped, so the next `GET /api/projects` lists the new
+   * project rather than up to `PROJECT_WALK_TTL_MS` later; so it is on `outcome-unknown` (a lost answer: the box may
+   * have added it), so the sheet's re-read shows what the box holds. NOT in `auth/gate.ts`'s EXEMPT table — session-gated
+   * when armed, open dark, like the pool route below. NO BOX TOKEN: this is fleet control, not a coordination write.
+   */
+  app.post('/api/projects', async (req, reply) => {
+    const plan = planProjectAdd(req.body, deps.fleetState);
+    if (plan.kind === 'refuse') return refuseRoute(reply, plan.error);
+    const res = await deps.runCcd(plan.argv);
+    if (!res.ok) {
+      const failure = classifyProjectAddFailure(res);
+      if (failure === 'other') return ccd502(reply, res);
+      if (failure === 'unknown') projectWalk.drop();
+      return refuseRoute(reply, failure === 'exists' ? 'project-exists' : 'outcome-unknown');
+    }
+    projectWalk.drop();
+    return { ok: true, name: plan.name, source: plan.source } satisfies ProjectAddAnswer;
   });
 
   /**

@@ -6618,7 +6618,9 @@ export interface RunHealth {
    *  that has already been handled.
    *
    *  NOT the parked STATE below: this count is the older sense of the word, a
-   *  delivery the lane gave up on and rejected, and it stays exactly that. */
+   *  delivery the lane gave up on and rejected, and it stays exactly that. A park a
+   *  later delivery revives (D-5914) is not counted: its heir carries the message
+   *  now, in `mailOutstanding` until it is acked, so one message is one count. */
   readonly mailParked: number;
   /** Deliveries of this run's mail still OUTSTANDING and PARKED (D-5838,
    *  #754; a field of its own, not a second sense of `mailParked`, D-5839): the recipient is alive, its input box would not take the
@@ -6876,8 +6878,14 @@ export interface RunSummary {
   dispatchedAt: number | null;
   closedAt: number | null;
   handoffCommit: string | null;
+  /** The run's work items as the COORDINATOR has settled them (`itemTally`): `done` counts items acked `done`, which
+   *  the coordinator does only after a verified advance, so a wave in progress reads `0/N` by design however far its
+   *  branch has moved (spec 2026-10-20 §3.3, D-5914). It is not a measure of branch progress or of the worker's life;
+   *  the branch fingerprint the coordinator re-measures is. */
   items: RunItemTally;
-  /** Unacked mail addressed to this run's session. */
+  /** Unacked mail addressed to this run's session: every outstanding delivery, plus every abandoned park on the open run
+   *  that no later delivery revives (`ABANDONED_PARK_SQL`, `coord/store.ts`). A revived park is counted once, as its
+   *  outstanding heir, and not at all once that heir is acked (D-5914). */
   unreadMail: number;
 
   /**
@@ -11630,10 +11638,12 @@ export type DelegationAttemptVerdict = (typeof DELEGATION_ATTEMPT_VERDICTS)[numb
 // Declared ONCE, here; the server decides every word (`server/src/coord/delegation-projection.ts`) and a reader renders
 // it. Each closed set has a sibling `Record<X, true>` map and a list derived from it. This block imports nothing (L0).
 
-/** How delegated work reads NOW, decided at projection time and never stored. `live`: running, and its parent is alive
- *  in the incarnation that started it. `stale`: recorded as running, but its parent is gone, dead or in another
- *  incarnation (its stop was not seen). `ended`: its terminal evidence was seen. `unmeasured`: its execution state is
- *  `unknown`, or its parent's incarnation was not measured. */
+/** What the broker RECORDED about delegated work, decided at projection time and never stored. None of these words
+ *  measures the helper itself (delegation visibility, spec §1), so no reader draws one as "running" or "recent".
+ *  `live`: its end is not recorded and its parent is live in the incarnation that started it; execution is NOT
+ *  confirmed. `stale`: its end is not recorded, and its parent is gone, dead or in another incarnation (its stop was
+ *  not seen). `ended`: its terminal evidence was seen. `unmeasured`: its execution state is `unknown`, or its parent's
+ *  incarnation was not measured. */
 export type DelegationLiveness = 'live' | 'stale' | 'ended' | 'unmeasured';
 const DELEGATION_LIVENESS_MAP: Record<DelegationLiveness, true> = { live: true, stale: true, ended: true, unmeasured: true };
 export const DELEGATION_LIVENESS: readonly DelegationLiveness[] = Object.keys(DELEGATION_LIVENESS_MAP) as DelegationLiveness[];
@@ -11680,7 +11690,9 @@ export interface DelegationActivityWire {
   group: DelegationRowGroup;
   placement: DelegationActivityPlacement;
   sourceKind: Exclude<DelegationActivitySourceKind, 'bash-worktree'>;
-  /** The agent id, or the workflow run id (a worker's is `<runId>-<index>`), so a reader can group a run's workers. */
+  /** The agent id, or the workflow run id. Display text only: its spelling (a workflow worker's reads
+   *  `<runId>-<index>`) is no membership, run or worker-composition key, and no reader groups by it (delegation
+   *  visibility, spec §2). */
   upstreamId: string;
   /** Free text from the session's own events: the server masks the frame. */
   displayName: string | null;
@@ -11733,6 +11745,26 @@ export interface DelegationProjectionWire {
   leases: DelegationLeaseWire[];
   unowned: DelegationUnownedWire[];
 }
+
+// Delegation broker wave 5, PR1 (Task 5.1.1): the box-side carrier's closed words. A lease's carrier is written only by `ccd
+// ws-lease-mark` (`ccd/lib/delegation-lease.sh`), composed by the server through `CCD_ARGV.leaseMark`. Its states are the lease's
+// dispositions plus the two a carrier also records, derived from them (never a second spelling).
+export const DELEGATION_CARRIER_STATES = [...DELEGATION_DISPOSITIONS, 'transferring', 'released'] as const;
+export type DelegationCarrierState = (typeof DELEGATION_CARRIER_STATES)[number];
+export function isDelegationCarrierState(v: unknown): v is DelegationCarrierState {
+  return typeof v === 'string' && (DELEGATION_CARRIER_STATES as readonly string[]).includes(v);
+}
+/** Why a lease was released: its tree was removed natively, it was transferred to a promoted run, or it was ruled not delegation's. */
+export const DELEGATION_LEASE_RELEASE_REASONS = ['native-removed', 'transferred', 'foreign'] as const;
+export type DelegationLeaseReleaseReason = (typeof DELEGATION_LEASE_RELEASE_REASONS)[number];
+export function isDelegationLeaseReleaseReason(v: unknown): v is DelegationLeaseReleaseReason {
+  return typeof v === 'string' && (DELEGATION_LEASE_RELEASE_REASONS as readonly string[]).includes(v);
+}
+/** `ws-lease-mark`'s refusal words, the server's one reader of them. */
+export const LEASE_MARK_REFUSALS = ['usage', 'unmeasured', 'busy', 'bad-carrier', 'stale-generation', 'generation-conflict',
+  'not-under-projects-root', 'no-tree', 'symlink', 'main-worktree', 'locked', 'registered', 'nested', 'tree-held',
+  'fingerprint-mismatch'] as const;
+export type LeaseMarkRefusal = (typeof LEASE_MARK_REFUSALS)[number];
 
 /** The keys every spool line carries. A line is evidence and never authority; the hook decides nothing about
  *  parentage. `truncated` marks a line whose optional fields were dropped to fit its size bound. */
@@ -11971,7 +12003,7 @@ export const DELEGATION_SPOOL_BOUNDS = {
  *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
  *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
 const CHILD_DENY_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|roll|claude'.split('|');
 
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's

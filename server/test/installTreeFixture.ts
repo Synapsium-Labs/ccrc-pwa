@@ -173,6 +173,8 @@ export const TREE_FILES = [
   'ccd/lib/disk-retention.sh',
   // Its second library (D-7463), the train proof: read, pinned and published exactly as the first.
   'ccd/lib/train-proof.sh',
+  // Its third library (wave 5), the delegation lease: read, pinned and published exactly as the others.
+  'ccd/lib/delegation-lease.sh',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the

@@ -221,3 +221,8 @@
 .linear-add { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; margin: 0; padding-top: calc(var(--pad-card) / 2); border-top: 1px solid var(--edge-subtle); }
 .linear-add-line { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
 .linear-card:not([data-band='phone']) .linear-add-line { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+
+/* Automation's Work in transcript folders card (D-7898). Layout only: every word wears `.settings-note`. A name is one
+   long token (`<account>/<slug>/<entry>`), so it wraps anywhere rather than push the card sideways at 360. */
+.transcript-work-top { display: grid; gap: calc(var(--pad-card) / 4); margin: 0; padding: 0; list-style: none; min-width: 0; }
+.transcript-work-top > li { overflow-wrap: anywhere; font-family: var(--family-mono); font-size: var(--fs-meta); }

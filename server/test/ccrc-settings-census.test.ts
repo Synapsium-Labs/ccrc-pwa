@@ -142,6 +142,7 @@ const ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
   CCRC_VERIFY_WINDOW: { cls: 'call-bound', why: '`_ccrc_job_stayed_up` holds this window inside one stayed-up measurement.' },
   CCRC_DOCTOR_GH_TIMEOUT: { cls: 'call-bound', why: 'The header above its `:=` default in ccd/ccrc-doctor-checks bounds one `gh auth status` call so a test need not wait out a production timeout.' },
   CCRC_DOCTOR_DOCS_TIMEOUT: { cls: 'call-bound', why: 'The header above its `:=` default in ccd/ccrc-doctor-checks bounds one `ccd docs-index --all` call, overridable for the gh knob\'s reason.' },
+  CCRC_DOCTOR_TRANSCRIPT_WORK_TIMEOUT: { cls: 'call-bound', why: 'The header above `_check_transcript_work` in ccd/ccrc-doctor-checks bounds that check\'s walk of the transcript folders (D-7898), overridable so a test need not wait out the 20 s default.' },
   CCRC_SCOPE_SWEEP_STALE_S: { cls: 'call-bound', why: '`_check_scope-sweep` uses it as the age past which one verdict record reads stale.' },
   CCRC_LAND_PROBE_STALE_S: { cls: 'call-bound', why: '`_check_land-probe` uses it as the age past which the conflict radar\'s probe and main-health files read stale.' },
   CCRC_SCOPE_SETTLE_SEC: { cls: 'call-bound', why: '`_check_scopes` waits this settle inside one scope measurement.' },

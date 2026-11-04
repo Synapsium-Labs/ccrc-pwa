@@ -92,6 +92,8 @@ const ROUTES: readonly RouteRow[] = [
   ['wsAudit', 'GET', `/api/sessions/${ID}/workspace/audit`, undefined, 'ws-audit', 'ws-audit', 'permit'],
   ['wsReap', 'POST', `/api/sessions/${ID}/workspace/reap`, { expect: 'a'.repeat(64) }, 'ws-reap', 'ws-reap', 'permit'],
   ['projectPoolClear', 'POST', '/api/projects/demo/pool', { pool: null }, 'project-pool', 'project-pool', 'permit'],
+  ['projectAddClone', 'POST', '/api/projects', { source: 'github', repo: 'example/repo' }, 'project-add', 'project-add', 'permit'],
+  ['projectAddEmpty', 'POST', '/api/projects', { source: 'empty', name: 'project-a' }, 'project-add', 'project-add', 'permit'],
   ['coordPause', 'POST', '/api/coord/pause', { paused: true }, 'coord-pause', 'coord-pause', 'permit'],
   ['reclaimPause', 'POST', '/api/coord/reclaim-pause', { state: 'on' }, RECLAIM_PAUSE_CAP, 'reclaim-pause', 'refuse'],
   ['routeApply', 'POST', `/api/sessions/${ID}/route`, { field: 'effort', value: 'high' }, ROUTE_APPLY_CAP, 'route', 'refuse'],

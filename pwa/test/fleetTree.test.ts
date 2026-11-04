@@ -319,9 +319,9 @@ describe('fleetTree — delegation rows land on their parent\'s card (delegation
     const w = frame({ activities: [activity({ activityId: 'a-gone', parentId: 'coord-gone' })] });
     const groups = fleetTreeOf([coordA, mainB], [], [], {}, w);
     expect(count(groups, (r) => r.kind === 'activity')).toBe(0);
-    expect(unplacedActivities([coordA, mainB], w)).toBe(1);
-    expect(unplacedActivities([coordA, mainB], null)).toBe(0);
-    expect(unplacedActivities([coordA], frame({ activities: [activity({ parentId: 'coord-a' })] }))).toBe(0);
+    expect(unplacedActivities([coordA, mainB], w).map((a) => a.activityId)).toEqual(['a-gone']);
+    expect(unplacedActivities([coordA, mainB], null)).toEqual([]);
+    expect(unplacedActivities([coordA], frame({ activities: [activity({ parentId: 'coord-a' })] }))).toEqual([]);
   });
 
   // Review 1029's F2: the reader at the tree's own seam. The members arrive as the socket parses them, objects with
@@ -365,6 +365,22 @@ describe('fleetTree — delegation rows land on their parent\'s card (delegation
     expect(inferredChip(raw)?.text).toBe('inferred');
     expect(creatorChip(raw)?.title).toContain(TOOL_USE_ID);
     expect(inferredChip(trees.get('l-agent')!)).toBeNull();
+  });
+
+  it('VIS-T1: the unlisted selection returns the entries in opening order; an archived or released parent keeps its own on its card', () => {
+    const arch = fleetSession({ id: 'coord-arch', project: 'project-a', workspace: null, archivedAt: 1_800_000_000_000 });
+    const rel = fleetSession({ id: 'w-rel', project: 'project-a', workspace: 'w-rel',
+      releasedFrom: { runId: 9, program: 'port-api', programTitle: null, claimedBy: 'coord-a', closedAt: 1, child: true } });
+    const w = frame({ activities: [
+      activity({ activityId: 'a-late', parentId: 'coord-gone', openedAt: '2026-10-26T10:03:00.000Z' }),
+      activity({ activityId: 'a-early', parentId: 'other-gone', openedAt: '2026-10-26T09:00:00.000Z' }),
+      activity({ activityId: 'a-arch', parentId: 'coord-arch' }),
+      activity({ activityId: 'a-rel', parentId: 'w-rel' }),
+    ] });
+    expect(unplacedActivities([coordA, arch, rel], w).map((a) => a.activityId)).toEqual(['a-early', 'a-late']);
+    const off = fleetTreeOf([coordA, arch, rel], [], [], {}, w).flatMap((g) => g.rows)
+      .flatMap((r) => (r.kind === 'activity' && r.group === 'offline-coordinator' ? [r.activity.activityId] : []));
+    expect(off).toEqual(['a-arch', 'a-rel']);
   });
 });
 

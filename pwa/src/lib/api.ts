@@ -13,7 +13,7 @@ import type { ResolveRead } from '../fleet/workspaceNameWords';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
 import { questionAnswerRequest } from '../session/answerLifecycle';
-import { ANSWERED, answered, linearViewOf, linearWorkspacesOf, linearWorkspacesNotConnectedOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange, type LinearWorkspacesRead } from './wireReaders';
+import { ANSWERED, answered, linearViewOf, linearWorkspacesOf, linearWorkspacesNotConnectedOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readProjectAdd, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange, type LinearWorkspacesRead } from './wireReaders';
 import { TOKEN_ROTATE_PATH } from '../../../shared/box-token';
 import {
   DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, contentClass, docsApi, type DocsFileResponse, type DocsProjectsResponse,
@@ -23,6 +23,7 @@ import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
 } from '../docs/failures';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
+import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
 /** `GET`/`POST /api/coord/roll-idle`'s answer (D-7453). */
@@ -452,6 +453,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       return readWorkspaceAdd(await postRead<unknown>(`/api/projects/${encodeURIComponent(project)}/workspaces`, null,
         workspaceAddBody(opts)));
     },
+    /** `POST /api/projects` — clone a GitHub repository, or init an empty one, under the projects root (add-project
+     *  spec 2026-11-04). The body rides as given; a refusal rejects with its `ApiError` (`projectAddWords.ts`). */
+    projectAdd: async (body: ProjectAddBody): Promise<ProjectAddAnswer | 'unreadable'> =>
+      readProjectAdd(await postRead<unknown>('/api/projects', null, body)),
     /** `POST /api/sessions/:id/title` — rename an EXISTING workspace: the title only, the slug and branch never change
      *  (named workspaces S9). A title is sent trimmed; `{clear: true}` removes it. A refusal rejects with its `ApiError`
      *  (`workspaceRenameWords.ts` reads the word); a 2xx is READ, `'unreadable'` when this build cannot. */

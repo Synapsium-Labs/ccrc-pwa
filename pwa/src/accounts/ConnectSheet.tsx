@@ -42,9 +42,9 @@ import { ApiError, api } from '../lib/api';
 import {
   ADD_LANE, ADD_REFUSED, DOOR_META, FRAME_SAID, PICK_ANOTHER_NAME, STEP_UP_AGAIN, PROVIDER_ROWS, DOOR_WORD, LEDGER, NEEDS_APP_UPDATE, OUTCOME_UNKNOWN, TOKEN_CLEARED, TOKEN_FIELD_LABEL,
   READ_AGAIN, addRefusal, configDirFoundText, laneActRefusal, notFoundAfterUnknown, resultDone, stillUnknownAfterUnknown,
-  ADD_AND_SIGN_IN, DISCARD_LANE, DONE, SIGN_IN_LEDGER, SIGN_OUT_RESTART,
+  ADD_AND_SIGN_IN, DISCARD_LANE, DONE, SIGN_IN_LEDGER,
   STEP_UP_AGAIN_DISCARD, STEP_UP_AGAIN_SIGN_OUT, START_AGAIN, discardedDone, removeRefusal, removeUnknown,
-  signOutConfirm, signOutRefused, statedRefused, STEP_UP_AGAIN_ADD, KEEP_IT,
+  signOutConfirm, signOutRefused, signOutUnknown, statedRefused, STEP_UP_AGAIN_ADD,
 } from '../fleet/accountWords';
 import { CompromiseSteps } from './CompromiseSteps';
 import { ConfirmItsYou } from './ConfirmItsYou';
@@ -60,7 +60,8 @@ import { useStepUp, type StepUp, type StepUpDeps } from './useStepUp';
 import {
   defaultHue, isSignInMethod, methodChoices, providerChoices, secretShapeOk, sheetRuns, type DoorProvider,
 } from './connectFlow';
-import { SignInLive, newLaneEnd, useSignInAttempt, wordOf, type Attempt, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
+import { noteSignOut } from './signOuts';
+import { SignInLive, WrongAccountAct, newLaneEnd, useSignInAttempt, wordOf, type Attempt, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
 import type { ProviderRow } from '../../../shared/providers';
 import '../fleet/fleet.css';
 
@@ -402,6 +403,9 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
     } catch (e) {
       failure = e;
     }
+    // The sheets opened on this lane later must not say it keeps its old sign-in on the check from before (D-7872 (10)):
+    // recorded whether or not this sheet is still open, on any answer that may have signed it out (an unknown one too).
+    if (outcome === 'done' && (removed !== null || signOutUnknown(wordOf(failure)))) noteSignOut(id, lane?.check?.at);
     if (!live.current) return;
     try {
       if (outcome === 'step-up') { setNotice(STEP_UP_AGAIN_SIGN_OUT); alert(STEP_UP_AGAIN_SIGN_OUT); return; }
@@ -553,23 +557,12 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
             {...(isSignInMethod(method) ? {
               signIn: {
                 method,
-                wrongAccount: wrongOpen && !blocked ? (
-                  <StepUpGate freshUntil={freshUntil} deps={props.stepUpDeps ?? NO_DEPS}>
-                    {(stepUp) => (
-                      <div className="acct-wrong-confirm">
-                        <p className="acct-field-note">{signOutConfirm(id, method)}</p>
-                        <ConfirmItsYou stepUp={stepUp} subject="the fleet's accounts" />
-                        <FrameFoot
-                          quiet={[{ label: KEEP_IT, onClick: () => setWrongOpen(false), disabled: busy }]}
-                          primary={{ label: SIGN_OUT_RESTART, onClick: () => { void signOutRestart(stepUp); }, disabled: busy || stepUp.needed, busy }}
-                        />
-                      </div>
-                    )}
-                  </StepUpGate>
-                ) : (
-                  <Button variant="ghost" size="fit" className="acct-wrong-act" disabled={busy || blocked} onClick={() => setWrongOpen(true)}>
-                    {SIGN_OUT_RESTART}
-                  </Button>
+                wrongAccount: (
+                  <WrongAccountAct
+                    open={wrongOpen} onOpen={() => setWrongOpen(true)} onKeep={() => setWrongOpen(false)}
+                    confirm={signOutConfirm(id, method)} freshUntil={freshUntil} deps={props.stepUpDeps ?? NO_DEPS} busy={busy}
+                    offline={blocked} onSignOut={(stepUp) => { void signOutRestart(stepUp); }}
+                  />
                 ),
                 ...(method === 'setup-token' ? { onStated: (t: string) => { void saveStated(t); }, statedBusy, statedNotice } : {}),
               },

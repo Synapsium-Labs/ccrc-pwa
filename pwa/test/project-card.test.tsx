@@ -1560,4 +1560,25 @@ describe('delegation rows on a project card (delegation broker wave 4)', () => {
     expect(screen.getByRole('button', { name: /Unowned work \(3\)/ }).getAttribute('aria-expanded')).toBe('true');
     expect(container.querySelectorAll('.proj-work')).toHaveLength(3);
   });
+
+  it('VIS-P1: an offline-group row names the session it came from: its listed label, else its raw id', () => {
+    const arch = fleetSession({ id: 'coord-arch', project: 'project-a', workspace: null, name: 'old coordinator', archivedAt: 1_800_000_000_000 });
+    const w = frame({
+      activities: [activity({ activityId: 'a-arch', parentId: 'coord-arch', displayName: 'old work' })],
+      leases: [lease({ leaseId: 'l-gone', parentId: 'coord-gone', adminRecord: 'agent-o1', canonicalPath: '/work/project-a/.claude/worktrees/agent-o1' })],
+    });
+    const parts = (root: HTMLElement): (string | null)[][] =>
+      [...root.querySelectorAll('.proj-work')].map((r) => [...r.querySelectorAll('.proj-work-part')].map((p) => p.textContent));
+    const off = render(<ProjectCard group={cardFor(w, [coordA, arch])} onOpen={() => {}} onActions={() => {}}
+      coordOf={(id) => (id === arch.id ? arch : null)} offlineOpen />);
+    expect(parts(off.container)).toEqual([
+      ['agent worktree', 'agent-o1', 'not confirmed', 'from coord-gone'],
+      ['agent', 'old work', 'not confirmed', 'from old coordinator'],
+    ]);
+    off.unmount();
+    // A row under its own session names no parent.
+    const nested = render(<ProjectCard group={cardFor(frame({ activities: [activity({ parentId: 'coord-a' })] }))}
+      onOpen={() => {}} onActions={() => {}} />);
+    expect(parts(nested.container)).toEqual([['agent', 'explore the tree', 'not confirmed']]);
+  });
 });

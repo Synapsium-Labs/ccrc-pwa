@@ -5,7 +5,7 @@
 # server/test/ccd-contexts.test.ts holds it: every definition has exactly one row, every row names a definition,
 # and the cross-context reference count may only shrink. A NEW FUNCTION NEEDS A ROW in the same change.
 # Rows are in definition order, ccd/ccd first and then its libraries in load order, ccd/lib/disk-retention.sh (D-6913)
-# and ccd/lib/train-proof.sh (D-7463), which ccd loads at its foot:
+# ccd/lib/train-proof.sh (D-7463) and ccd/lib/delegation-lease.sh (wave 5), which ccd loads at its foot:
 # <function name><TAB><context>.
 _plat_mv_notdir	K
 _plat_ln_swap	K
@@ -173,6 +173,9 @@ cmd_account_pane	C1
 cmd_route	C1
 _reg_project_glob_has	C1
 cmd_project_pool	C1
+_project_new_name_ok	C4
+_project_github_url_ok	C4
+cmd_project_add	C4
 cmd_ws_archive	C4
 _ws_archive_manifest	C4
 cmd_ws_restore	C4
@@ -820,3 +823,16 @@ _ws_train_keyable	C4
 _ws_train_kept	C4
 _ws_train_record	C4
 _pr_train_proofs	C4
+_dl_leases_dir	C4
+_dl_dirs_measured	C4
+_dl_carrier_read	C4
+_dl_tree_key	C4
+_dl_tree_owner	C4
+_dl_tree_of_record	C4
+_dl_creation_base	C4
+_dl_fingerprint	C4
+_dl_fingerprint_to	C4
+_dl_mark_refuse	C4
+_dl_in	C4
+cmd_ws_lease_mark	C4
+_dl_mark_locked	C4

@@ -994,6 +994,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the row's project cell, inside .archive-row on the same Section card ground (D-5102)",
   },
+  '.fleet-archived-row, .fleet-runs-row, .fleet-add-project-row': {
+    under: ['var(--bg-page)', 'var(--bg-surface)'],
+    why: "the fleet's three quiet footers, each a <BareRow> in FleetScreen's own <main class=\"fleet\">: the runs door (inside .fleet-runs-line, which paints nothing), the archived total and the Add project door (add-project spec 2026-11-04 §2). .fleet paints no background, so the ground is .shell-nav's: --bg-surface in Refined's desktop sidebar (the build line's corrected ground, below), --bg-page in Instrument's frame (instrument.css .ins-frame .shell-nav) and on a phone, where .shell-nav paints nothing and body's --bg-page shows. Its selectors name no painted ancestor, so no route could ground it. Measured when the third door joined, rather than the grandfathered key growing a member",
+  },
   '.archive-size': {
     under: ['var(--bg-surface)'],
     why: "the row's measured size, inside .archive-row on the same Section card ground; the tertiary ink is the one the fleet footer's .fleet-archived-row shows on the desktop sidebar's --bg-surface (D-5102)",
