@@ -296,7 +296,7 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     '/api/coord/roll-idle',
     // D-7411: the test box remote switch, an act for the operator alone (its read and its sync take the box token too, D-7554).
     '/api/testbox/switch',
-    // D-7994: the busy arm's switch and its read, the operator's, session-gated like the stall-watch door.
+    // D-7994: the switch of the sweep busy arm and its read, an operator dial, session-gated like the stall-watch door.
     '/api/coord/scope-sweep',
     // W3 Q3f (D-7030): the operator door of the question family (see the docstring above).
     '/api/questions/:id/answer',

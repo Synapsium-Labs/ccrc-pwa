@@ -48,7 +48,7 @@ function setup(o: { verbs?: string[] | null; runner?: Runner; unlistable?: boole
   const feed: string[] = [];
   const deps: Deps = {
     ...base,
-    io: { ...base.io, ...(o.unlistable ? { readdir: async () => null } : {}) },
+    io: { ...base.io, ...(o.unlistable ? { readdirMeasured: async () => ({ ok: false as const, reason: 'unreadable' as const }) } : {}) },
     notifyLog: { record: async (n: { title: string; body: string }) => { feed.push(`${n.title}: ${n.body}`); }, flush: async () => undefined } as unknown as Deps['notifyLog'],
     ...(o.verbs === undefined ? {} : { fleetState: { ccdVerbs: o.verbs } as unknown as Deps['fleetState'] }),
   };

@@ -538,7 +538,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `POST /api/coord/stall-watch` (stall-watch settings wave 1), `POST /api/coord/collect-lane`
   (child-reclamation wave 10, which also refuses `live` while sign-in is dark), `POST /api/coord/review-cap`
   (D-6795, the operator's lift of the review-round cap for one work run), `POST /api/coord/dispatch-abandon` (D-7319, the
-  operator's switch on abandoning a dispatch that never came back), `POST /api/coord/roll-idle` (D-7453, the
+  operator's switch on abandoning a dispatch that never came back), `POST /api/coord/scope-sweep` (D-7994, the
+  operator's switch on the sweep stopping a dead session's busy processes), `POST /api/coord/roll-idle` (D-7453, the
   operator's Settings row for the automatic coordinator roll), `POST /api/testbox/switch` (test box plan TB9, D-7411,
   the operator's remote switch for test runs; the test box's read and sync take a session or the box token, D-7554)
   and `POST /api/questions/:id/answer` (W3 Q3f, D-7030, the operator's answer door of the question family) are
