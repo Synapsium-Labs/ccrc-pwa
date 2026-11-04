@@ -9,8 +9,10 @@
 // here, branches on a setting's `why`. `at` is NOT judged by the parse (it has no clock): the view judges it at serve time, so a lane
 // that stops running shows as stale instead of freezing a fresh verdict.
 import {
-  BOX_SETTINGS_CLOCK_AHEAD_S, BOX_SETTINGS_KEYS, BOX_SETTINGS_READERS, BOX_SETTINGS_STALE_S, BOX_SETTING_SOURCES, BOX_SETTING_STATES,
-  type BoxSettingKey, type BoxSettingRow, type BoxSettingSource, type BoxSettingState, type BoxSettingsBackups, type BoxSettingsDisk,
+  BOX_SETTINGS_CLOCK_AHEAD_S, BOX_SETTINGS_KEYS, BOX_SETTINGS_READERS, BOX_SETTINGS_STALE_S, BOX_SETTINGS_TEXT_MAX, BOX_SETTINGS_V1_REFUSED_WHY,
+  BOX_SETTINGS_V1_UNFIT_WHY, BOX_SETTINGS_WHY_MAX, BOX_SETTING_ORIGIN_SHAPE, BOX_SETTING_SOURCES, BOX_SETTING_SPECS, BOX_SETTING_STATES,
+  BOX_SETTING_VALUE_SHAPE, BOX_SETTING_VALUE_WORDS,
+  type BoxSettingKey, type BoxSettingRowV1, type BoxSettingSource, type BoxSettingState, type BoxSettingsBackups, type BoxSettingsDisk,
   type BoxSettingsDoc, type BoxSettingsFailure, type BoxSettingsRead, type BoxSettingsReader, type NodeOs,
 } from '../../../shared/api.js';
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
@@ -59,18 +61,42 @@ const isStr = (v: unknown): v is string => typeof v === 'string' && v.length <= 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 const oneOf = <T extends string>(list: readonly T[], v: unknown): v is T => typeof v === 'string' && (list as readonly string[]).includes(v);
 
-function rowOf(o: unknown): BoxSettingRow | null {
+/** The two shapes are envelopes that prove no value can carry a credential, a path or a query; they restate no setting's own check
+ *  (that stays in the writer's owner). Compiled once, without `g`, so a test holds no state. */
+const VALUE_RE = new RegExp(BOX_SETTING_VALUE_SHAPE);
+const ORIGIN_RE = new RegExp(BOX_SETTING_ORIGIN_SHAPE);
+
+/** Whether an `ok` value or origin is inside the envelope its class allows: under the writer's own cut (the value is printable ASCII, so
+ *  length is bytes), and by class the value shape or that key's own fixed words, or the origin shape. Any other class has no value. */
+function fitsClass(key: BoxSettingKey, value: string): boolean {
+  if (value.length > BOX_SETTINGS_TEXT_MAX) return false;
+  switch (BOX_SETTING_SPECS[key].cls) {
+    case 'value': return VALUE_RE.test(value) || (BOX_SETTING_VALUE_WORDS[key]?.includes(value) ?? false);
+    case 'origin': return ORIGIN_RE.test(value);
+    default: return false;
+  }
+}
+
+/** The writer's own cut form: the first 237 bytes and `...`. */
+const cutWhy = (why: string): string => (why.length > BOX_SETTINGS_WHY_MAX ? `${why.slice(0, BOX_SETTINGS_WHY_MAX - 3)}...` : why);
+
+/** A version-1 row: checked as wave 1 checked it, then rewritten so that nothing the box wrote in three cases is forwarded (D-7911):
+ *  a refused row loses its value and its `why`; an `ok` row outside the envelope becomes `unmeasured`; a long `why` is cut. */
+function rowOfV1(o: unknown): BoxSettingRowV1 | null {
   if (!isObj(o) || !oneOf<BoxSettingKey>(BOX_SETTINGS_KEYS, o['key']) || !oneOf<BoxSettingState>(BOX_SETTING_STATES, o['state'])) return null;
   const key = o['key'];
   const state = o['state'];
   if (state === 'unmeasured') {
-    return hasKeys(o, ['key', 'state', 'why']) && isStr(o['why']) ? { key, state, why: o['why'] } : null;
+    return hasKeys(o, ['key', 'state', 'why']) && isStr(o['why']) ? { key, state, why: cutWhy(o['why']) } : null;
   }
   const from = o['from'];
   const value = o['value'];
   if (!isStr(value) || !oneOf<BoxSettingSource>(BOX_SETTING_SOURCES, from)) return null;
-  if (state === 'ok') return hasKeys(o, ['key', 'state', 'value', 'from']) ? { key, state, value, from } : null;
-  return hasKeys(o, ['key', 'state', 'value', 'from', 'why']) && isStr(o['why']) ? { key, state, value, from, why: o['why'] } : null;
+  if (state === 'ok') {
+    if (!hasKeys(o, ['key', 'state', 'value', 'from'])) return null;
+    return fitsClass(key, value) ? { key, state, value, from } : { key, state: 'unmeasured', why: BOX_SETTINGS_V1_UNFIT_WHY };
+  }
+  return hasKeys(o, ['key', 'state', 'value', 'from', 'why']) && isStr(o['why']) ? { key, state, from, why: BOX_SETTINGS_V1_REFUSED_WHY } : null;
 }
 
 function backupsOf(o: unknown): BoxSettingsBackups | null {
@@ -102,9 +128,9 @@ export function parseBoxSettings(text: string): BoxSettingsDoc | null {
   const { v, at, reader, settings, deadline } = parsed;
   if (v !== 1 || !isCount(at) || !oneOf<BoxSettingsReader>(BOX_SETTINGS_READERS, reader)) return null;
   if (!Array.isArray(settings) || settings.length !== BOX_SETTINGS_KEYS.length) return null;
-  const byKey = new Map<BoxSettingKey, BoxSettingRow>();
+  const byKey = new Map<BoxSettingKey, BoxSettingRowV1>();
   for (const s of settings) {
-    const row = rowOf(s);
+    const row = rowOfV1(s);
     if (row === null || byKey.has(row.key)) return null;
     byKey.set(row.key, row);
   }

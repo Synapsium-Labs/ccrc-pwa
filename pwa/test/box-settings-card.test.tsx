@@ -97,15 +97,16 @@ describe('Box settings card: a full snapshot (D-6917)', () => {
 describe('Box settings card: refused, stale, server (D-6917)', () => {
   it('a refused setting shows its sentence in the danger tone; an unmeasured one says so, in the same tone', () => {
     const rows = okRows();
-    rows[0] = { key: 'CCRC_BACKUP_KEEP', state: 'refused', value: 'abc', from: 'environment', why: 'CCRC_BACKUP_KEEP must be a whole number' };
+    // A wave-1 server may still send a refused row's value: a wire forgery here, which the card must not show.
+    rows[0] = { key: 'CCRC_BACKUP_KEEP', state: 'refused', value: 'abc', from: 'environment', why: 'CCRC_BACKUP_KEEP must be a whole number' } as unknown as BoxSettingRow;
     rows[3] = { key: 'CCRC_UPDATE_HEALTH_S', state: 'unmeasured', why: 'ccrc.env could not be scanned' };
     renderCard([fleet(ok(doc({ settings: rows })))]);
     const refused = screen.getByText('CCRC_BACKUP_KEEP must be a whole number');
     expect(refused).toHaveClass('box-settings-danger');
     const unmeasured = screen.getByText('ccrc.env could not be scanned');
     expect(unmeasured).toHaveClass('box-settings-danger');
-    // The raw knob is shown beside the sentence: it is what the box holds.
-    expect(refused.closest('div')).toHaveTextContent('abc');
+    // The raw knob is never shown beside the sentence (D-7912): a wave-1 server may still send it, and the card drops it.
+    expect(refused.closest('div')).not.toHaveTextContent('abc');
     // A fine row carries no danger.
     expect(screen.getByText('CCRC_VERSIONS_KEEP').closest('div')!.querySelector('.box-settings-danger')).toBeNull();
   });

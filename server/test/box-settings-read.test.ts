@@ -37,7 +37,7 @@ import { CoordStore, type NodeRow } from '../src/coord/store.js';
 import { seedRoster } from './helpers.js';
 import {
   BOX_SETTINGS_CLOCK_AHEAD_S, BOX_SETTINGS_FAILURES, BOX_SETTINGS_KEYS, BOX_SETTINGS_READERS, BOX_SETTINGS_STALE_S, BOX_SETTINGS_TIMER_S,
-  BOX_SETTING_SOURCES, BOX_SETTING_STATES, type BoxSettingsDoc, type UpdatesView,
+  BOX_SETTING_SOURCES, BOX_SETTING_STATES, BOX_SETTINGS_V1_REFUSED_WHY, BOX_SETTINGS_V1_UNFIT_WHY, type BoxSettingsDoc, type UpdatesView,
 } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -122,13 +122,14 @@ describe('parseBoxSettings: the corpus, each file with its verdict', () => {
     expect(frozen).toHaveLength(9);
     const out: Record<string, string> = {};
     for (const f of frozen) out[f] = JSON.stringify(parseBoxSettings(readFileSync(join(FIX, f), 'utf8')));
+    // Rewritten in the commit of D-7911: the refused and long-sentence documents now parse to the server's sentences; every other document is as wave 1 held it.
     expect(out).toMatchInlineSnapshot(`
       {
         "ok--v1-backups-and-disk-unmeasured.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"ok","value":"10","from":"default"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"ok","value":"90","from":"default"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"ok","value":"900000","from":"default"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"ok","value":"250","from":"default"}],"deadline":{"plainMs":900000,"minMs":900000,"maxMs":900000},"backups":{"state":"unmeasured","why":"~/ccrc-backups is not a readable directory"},"disk":{"state":"unmeasured","why":"the filesystem holding the home directory could not be measured (df did not answer in time, or failed)"}}",
         "ok--v1-custom-base-url.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"ok","value":"10","from":"default"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"ok","value":"90","from":"default"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"ok","value":"900000","from":"default"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"custom https://releases.example.invalid","from":"environment"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"ok","value":"250","from":"default"}],"deadline":{"plainMs":900000,"minMs":900000,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
         "ok--v1-defaults.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"ok","value":"10","from":"default"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"ok","value":"90","from":"default"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"ok","value":"900000","from":"default"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"ok","value":"250","from":"default"}],"deadline":{"plainMs":900000,"minMs":900000,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
-        "ok--v1-long-sentence.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"unmeasured","why":"CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env names CCRC_BACKUP_KEEP in a shape this reader does not decide (a space around '=', an export prefix, a backslash, a quote that is not one whole pair, a quote left open on an earlier line, or a line after one ending in a backslash)"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"ok","value":"90","from":"default"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"ok","value":"900000","from":"default"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"ok","value":"250","from":"default"}],"deadline":{"plainMs":900000,"minMs":900000,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
-        "ok--v1-refused.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"refused","value":"abc","from":"environment","why":"CCRC_BACKUP_KEEP='abc' is not a whole number from 0 to 9999, as set in the environment"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"refused","value":"ninety","from":"environment","why":"CCRC_UPDATE_HEALTH_S='ninety' is not a number of seconds (digits only, at most 18) - using 90"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"refused","value":"6e5","from":"environment","why":"CCRC_UPDATE_DEADLINE_MS is not a positive whole number of milliseconds in canonical digits (at most 15, no lead zero), so its plain reading is 900000; the backup prune and the watchdog read the min and the max, which ccrc settings prints"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"refused","value":"99999","from":"environment","why":"CCRC_MODELS_ADVANCE_BUDGET_S='99999' is over 3600 seconds, so the advance step uses 3600"}],"deadline":{"plainMs":900000,"minMs":0,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
+        "ok--v1-long-sentence.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"unmeasured","why":"CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env names CCRC_BACKUP_KEEP in a shape this reader does not decide (a space around '=', an export prefix, a backslash, a quote that is not one whole pair, a quote left open on an earlier l..."},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"ok","value":"90","from":"default"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"ok","value":"900000","from":"default"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"ok","value":"250","from":"default"}],"deadline":{"plainMs":900000,"minMs":900000,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
+        "ok--v1-refused.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"refused","from":"environment","why":"refused by its check; this box's build words the refusal with the value, so it is not shown here until the box is updated"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"refused","from":"environment","why":"refused by its check; this box's build words the refusal with the value, so it is not shown here until the box is updated"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"refused","from":"environment","why":"refused by its check; this box's build words the refusal with the value, so it is not shown here until the box is updated"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"refused","from":"environment","why":"refused by its check; this box's build words the refusal with the value, so it is not shown here until the box is updated"}],"deadline":{"plainMs":900000,"minMs":0,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
         "ok--v1-sources.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"ok","value":"5","from":"environment"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"4","from":"file"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"empty"},{"key":"CCRC_UPDATE_HEALTH_S","state":"ok","value":"90","from":"default"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"ok","value":"900000","from":"default"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"ok","value":"250","from":"default"}],"deadline":{"plainMs":900000,"minMs":900000,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
         "ok--v1-timer-reader.json": "{"v":1,"at":1792948000,"reader":"timer","settings":[{"key":"CCRC_BACKUP_KEEP","state":"ok","value":"10","from":"default"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_VERSIONS_KEEP","state":"ok","value":"3","from":"default"},{"key":"CCRC_UPDATE_HEALTH_S","state":"ok","value":"90","from":"default"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"ok","value":"900000","from":"default"},{"key":"CCRC_RELEASE_BASE_URL","state":"ok","value":"default","from":"default"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"ok","value":"250","from":"default"}],"deadline":{"plainMs":900000,"minMs":900000,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
         "ok--v1-unmeasured-nul.json": "{"v":1,"at":1792948000,"reader":"shell","settings":[{"key":"CCRC_BACKUP_KEEP","state":"unmeasured","why":"CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env could not be scanned"},{"key":"CCRC_BACKUP_DATA_KEEP","state":"unmeasured","why":"CCRC_BACKUP_DATA_KEEP cannot be measured: ~/.ccrc/ccrc.env could not be scanned"},{"key":"CCRC_VERSIONS_KEEP","state":"unmeasured","why":"CCRC_VERSIONS_KEEP cannot be measured: ~/.ccrc/ccrc.env could not be scanned"},{"key":"CCRC_UPDATE_HEALTH_S","state":"unmeasured","why":"CCRC_UPDATE_HEALTH_S cannot be measured: ~/.ccrc/ccrc.env could not be scanned - using 90"},{"key":"CCRC_UPDATE_DEADLINE_MS","state":"unmeasured","why":"CCRC_UPDATE_DEADLINE_MS cannot be measured: ~/.ccrc/ccrc.env could not be scanned"},{"key":"CCRC_RELEASE_BASE_URL","state":"unmeasured","why":"CCRC_RELEASE_BASE_URL cannot be measured: ~/.ccrc/ccrc.env could not be scanned"},{"key":"CCRC_MODELS_ADVANCE_BUDGET_S","state":"unmeasured","why":"CCRC_MODELS_ADVANCE_BUDGET_S cannot be measured: ~/.ccrc/ccrc.env could not be scanned, so the advance step is off for this run"}],"deadline":{"plainMs":900000,"minMs":0,"maxMs":900000},"backups":{"state":"ok","kept":0,"withData":0,"bytes":0},"disk":{"state":"ok","availBytes":19327352832,"sizeBytes":161061273600}}",
@@ -664,5 +665,104 @@ describe('the node file name', () => {
   it('NODE_FILES.boxSettings is box-settings.json, the name the verb writes', () => {
     expect(NODE_FILES.boxSettings).toBe('box-settings.json');
     expect(CCRC_SRC).toContain('BOX_SETTINGS_JSON="$HOME/.ccrc/box-settings.json"');
+  });
+});
+
+// ── version 1 is read as wave 1 wrote it, and rewritten where it would carry a value (D-7911, D-7912; review L4) ──────────────
+
+const v1Text = (name: string): string => readFileSync(join(FIX, `ok--v1-${name}.json`), 'utf8');
+type RowObj = Record<string, unknown>;
+const v1Doc = (name: string): Record<string, unknown> => JSON.parse(v1Text(name)) as Record<string, unknown>;
+const v1Rows = (d: Record<string, unknown>): RowObj[] => d['settings'] as RowObj[];
+const rowOfKey = (d: Record<string, unknown>, key: string): RowObj => v1Rows(d).find((r) => r['key'] === key)!;
+const RAW_REFUSED = ['abc', 'ninety', '6e5', '99999'];
+
+describe('version 1: still exactly as strict in the file, rewritten on the way out', () => {
+  it('characterization: a version-1 refused row with no value is still null (the file must carry value and why)', () => {
+    const d = v1Doc('refused');
+    delete rowOfKey(d, 'CCRC_BACKUP_KEEP')['value'];
+    expect(parseBoxSettings(JSON.stringify(d))).toBeNull();
+    expect(parseBoxSettings(v1Text('refused'))).not.toBeNull();
+  });
+
+  it('characterization: the ok and unmeasured rows of version 1 that fit are untouched', () => {
+    for (const f of fixtureFiles().filter((n) => n.startsWith('ok--v1-'))) {
+      const text = readFileSync(join(FIX, f), 'utf8');
+      const doc = parseBoxSettings(text)!;
+      const raw = (JSON.parse(text) as { settings: { key: string; state: string; why?: string }[] }).settings;
+      // Excluded on both sides, by key: the parse cuts a long why, so a filter on its own output would not see it.
+      const out = new Set(raw.filter((r) => r.state === 'refused' || (r.state === 'unmeasured' && r.why!.length > 240)).map((r) => r.key));
+      expect(doc.settings.filter((r) => !out.has(r.key)), f).toEqual(raw.filter((r) => !out.has(r.key)));
+    }
+  });
+
+  it('a version-1 refused row parses with no value and the server\'s own sentence', () => {
+    const doc = parseBoxSettings(v1Text('refused'))!;
+    const refused = doc.settings.filter((r) => r.state === 'refused');
+    expect(refused).toHaveLength(4);
+    for (const r of refused) {
+      expect(r).toEqual({ key: r.key, state: 'refused', from: 'environment', why: BOX_SETTINGS_V1_REFUSED_WHY });
+      expect('value' in r).toBe(false);
+    }
+  });
+
+  it('no raw text of a version-1 refused row survives the parse', () => {
+    const out = JSON.stringify(parseBoxSettings(v1Text('refused')));
+    for (const raw of RAW_REFUSED) expect(out, raw).not.toContain(raw);
+  });
+
+  const unfit: [string, string][] = [
+    ['CCRC_BACKUP_KEEP', 'zz-leak secret'], ['CCRC_BACKUP_KEEP', '/etc/x'], ['CCRC_BACKUP_KEEP', '1'.repeat(33)],
+    ['CCRC_RELEASE_BASE_URL', 'custom https://u:p@h'], ['CCRC_RELEASE_BASE_URL', 'custom https://tok:secret'],
+    ['CCRC_RELEASE_BASE_URL', 'custom https://h/r'], ['CCRC_RELEASE_BASE_URL', 'custom https://'],
+  ];
+  it.each(unfit)('a version-1 ok row outside the envelope is rewritten unmeasured: %s = %s', (key, value) => {
+    const name = 'defaults';
+    const d = v1Doc(name);
+    rowOfKey(d, key)['value'] = value;
+    const text = JSON.stringify(d);
+    const doc = parseBoxSettings(text);
+    expect(doc).not.toBeNull();
+    expect(doc!.settings.find((r) => r.key === key)).toEqual({ key, state: 'unmeasured', why: BOX_SETTINGS_V1_UNFIT_WHY });
+    const out = JSON.stringify(doc);
+    for (const leak of ['zz-leak', 'secret', 'etc', 'u:p', 'tok']) expect(out, leak).not.toContain(leak);
+    const base = parseBoxSettings(v1Text(name))!;
+    expect(doc!.settings.filter((r) => r.key !== key)).toEqual(base.settings.filter((r) => r.key !== key));
+  });
+
+  it('a version-1 unmeasured why is bounded at 240 by a cut', () => {
+    const raw = v1Doc('long-sentence');
+    const long = rowOfKey(raw, 'CCRC_BACKUP_KEEP')['why'] as string;
+    expect(long.length).toBeGreaterThan(240);
+    const row = parseBoxSettings(v1Text('long-sentence'))!.settings.find((r) => r.key === 'CCRC_BACKUP_KEEP')!;
+    expect(row.state).toBe('unmeasured');
+    const why = (row as { why: string }).why;
+    expect(why).toBe(`${long.slice(0, 237)}...`);
+    expect(why.length).toBe(240);
+  });
+
+  it('the lane never holds a version-1 refused or unfit value', async () => {
+    const lane = new BoxSettingsLane();
+    const run = async (text: string): Promise<string> => {
+      await lane.run(deps(ccrcWith('bsr-v1-lane-', { file: text })), () => [nodeRow('n1', 'linux', ['verify', 'settings'])], [measuredOutcome(SERVER_LABEL, 'n1')]);
+      return JSON.stringify(lane.held().get('n1'));
+    };
+    const held = await run(v1Text('refused'));
+    expect(held).toContain('"state":"ok"');
+    for (const raw of RAW_REFUSED) expect(held, raw).not.toContain(raw);
+    const d = v1Doc('defaults');
+    rowOfKey(d, 'CCRC_BACKUP_KEEP')['value'] = 'zz-leak secret';
+    const forged = await run(JSON.stringify(d));
+    expect(forged).toContain('"state":"ok"');
+    expect(forged).not.toContain('zz-leak');
+  });
+
+  it('GET /api/updates never serves a version-1 refused value', async () => {
+    const b = await box({ watcher: true, files: { 'ccrc-caps': CAPS_WITH, [NODE_FILES.boxSettings]: JSON.stringify({ ...v1Doc('refused'), at: Math.floor(Date.now() / 1000) }) } });
+    await b.watcher!.inventoryNow();
+    const res = await b.app.inject({ method: 'GET', url: '/api/updates' });
+    expect(res.body).toContain('"state":"refused"');
+    for (const raw of RAW_REFUSED) expect(res.body, raw).not.toContain(raw);
+    expect(res.body).not.toContain("='");
   });
 });

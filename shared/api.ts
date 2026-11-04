@@ -10135,21 +10135,28 @@ export const BOX_SETTINGS_WHY_MAX = 240;
 export const BOX_SETTING_VALUE_SHAPE = '^[0123456789]{1,32}([KMGTPE]|[smhd]|%)?$';
 export const BOX_SETTING_ORIGIN_SHAPE = '^(default|custom|custom ([Hh][Tt][Tt][Pp][Ss]?://)?(\\[[0123456789ABCDEFabcdef:.]+\\]|[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~-]+)(:[0123456789]{1,5})?)$';
 
-/** One setting. `value` is what the act uses (ok) or the raw knob (refused); `why` is display text only: nothing branches on it. */
-export type BoxSettingRow =
+/** One version-1 setting as the server serves it (D-7911, D-7912). The box's file carries `value` on a refused row too; the server drops it
+ *  and the box's `why`, so no console is sent a refused value. `why` is display text only: nothing branches on it. */
+export type BoxSettingRowV1 =
   | { key: BoxSettingKey; state: 'ok'; value: string; from: BoxSettingSource }
-  | { key: BoxSettingKey; state: 'refused'; value: string; from: BoxSettingSource; why: string }
+  | { key: BoxSettingKey; state: 'refused'; from: BoxSettingSource; why: string }
   | { key: BoxSettingKey; state: 'unmeasured'; why: string };
+/** What the server says in place of a version-1 refused row's own value and sentence (D-7911): this build's own words, naming no value. */
+export const BOX_SETTINGS_V1_REFUSED_WHY = 'refused by its check; this box\'s build words the refusal with the value, so it is not shown here until the box is updated';
+/** What the server says for a version-1 `ok` row whose value or origin is outside the envelope (D-7911, review L4). */
+export const BOX_SETTINGS_V1_UNFIT_WHY = 'recorded by an older ccrc in a form this view does not show';
+export type BoxSettingRow = BoxSettingRowV1;
 /** The backups line and the disk line: measured, or why not. */
 export type BoxSettingsBackups = { state: 'ok'; kept: number; withData: number; bytes: number } | { state: 'unmeasured'; why: string };
 export type BoxSettingsDisk = { state: 'ok'; availBytes: number; sizeBytes: number } | { state: 'unmeasured'; why: string };
 /** `~/.ccrc/box-settings.json`, version 1 (`cmd_settings`). Every string is printable ASCII, at most 512 characters; every number a
  *  non-negative safe integer. */
-export interface BoxSettingsDoc {
-  v: 1; at: number; reader: BoxSettingsReader; settings: BoxSettingRow[];
+export interface BoxSettingsDocV1 {
+  v: 1; at: number; reader: BoxSettingsReader; settings: BoxSettingRowV1[];
   deadline: { plainMs: number; minMs: number; maxMs: number };
   backups: BoxSettingsBackups; disk: BoxSettingsDisk;
 }
+export type BoxSettingsDoc = BoxSettingsDocV1;
 /** `NodeWire.settings`: the document with its age at the request's clock, or the word for why none is shown. */
 export type BoxSettingsRead =
   | { state: 'ok'; doc: BoxSettingsDoc; ageS: number; stale: boolean }

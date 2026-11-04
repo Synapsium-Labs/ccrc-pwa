@@ -2290,6 +2290,12 @@ takes the next spare and is named in the wave-done.
 - **D-7914.** A setting's fixed value words live in their own L0 constant, `BOX_SETTING_VALUE_WORDS`, with a bash mirror in `ccd/ccrc`, held equal
   both ways to each other and to `_tb_shape`'s word arms, not as a table column; the writer's `_set_fits` and the server admit exactly a key's
   own words (moved from Task 4; review F5).
+- **D-7911.** The server rewrites three kinds of version-1 row and forwards none as the box wrote it: a refused row loses its value and its `why`
+  (the fixed `BOX_SETTINGS_V1_REFUSED_WHY`); an `ok` row whose value or origin is outside the envelope becomes `unmeasured` (the fixed
+  `BOX_SETTINGS_V1_UNFIT_WHY`); an `unmeasured` `why` over 240 is cut to 237 bytes and `...` (C13; the only way 5.4's "residual retires" holds;
+  widened by review L4). The frozen version-1 snapshot changes for exactly the refused and long-sentence documents, in the same commit.
+- **D-7912.** A console tab on wave 1's build reads a version-1 node holding a refused row as unrecognised, as well as every version-2 node;
+  accepted, the same reload cures it, and the rollout note says so.
 - **D-7920.** The plan's six one-line `( BOX_ENV_FILE="$BOX_ENV_FILE/." KEY="$v" _resolver … )` forms tripped census C8(c), which allows no setting
   name beside BOX_ENV_FILE outside `_ccrc_knob`; the mask moved to its own line as the first statement of one subshell holding all six resolver
   calls, with the same behaviour; ruled by the coordinator (option A). Each of the six resolvers reads only its own setting, measured.

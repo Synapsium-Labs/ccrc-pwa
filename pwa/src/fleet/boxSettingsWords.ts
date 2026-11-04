@@ -9,7 +9,7 @@
 //   * The age is the shared elapsed-time spelling (`@ccrc/ui`'s `elapsedWords`) and a byte count the fleet's one
 //     size spelling (`lib/format.ts`'s `humanBytes`); neither is written a second time.
 import type {
-  BoxSettingKey, BoxSettingRow, BoxSettingSource, BoxSettingsBackups, BoxSettingsDisk, BoxSettingsDoc, BoxSettingsFailure,
+  BoxSettingKey, BoxSettingRowV1, BoxSettingSource, BoxSettingsBackups, BoxSettingsDisk, BoxSettingsDoc, BoxSettingsFailure,
   BoxSettingsReader, BoxSettingsRead, NodeRole,
 } from '../../../shared/api';
 import {
@@ -60,6 +60,8 @@ export const BOX_SETTINGS_TEXT = {
   /** The card's block label beside each node's own: the values are the box's, never the server's. */
   reportedBy: 'reported by the box',
   notMeasured: 'not measured',
+  /** What a refused row shows where its value was: the value is never sent or shown (D-7912). */
+  refused: 'refused',
   /** Under the card (spec §2.5): where a setting is changed, and what the source column is for. */
   how: "A setting is changed in the box's ccrc.env, never here. The source says when the environment overrides the file.",
 } as const;
@@ -67,14 +69,15 @@ export const BOX_SETTINGS_TEXT = {
 /** A document string is rendered as text, so it must be one. */
 const isStr = (v: unknown): v is string => typeof v === 'string';
 
-function readRow(v: unknown): BoxSettingRow | null {
+function readRow(v: unknown): BoxSettingRowV1 | null {
   if (!isRecord(v) || !isStr(v.key) || !isOneOf(BOX_SETTING_STATES, v.state)) return null;
   // The key is box-written: it is shown as the text it is, never trusted to be one of the seven.
   const key = v.key as BoxSettingKey;
   if (v.state === 'unmeasured') return isStr(v.why) ? { key, state: 'unmeasured', why: v.why } : null;
-  if (!isStr(v.value) || !isOneOf(BOX_SETTING_SOURCES, v.from)) return null;
-  if (v.state === 'ok') return { key, state: 'ok', value: v.value, from: v.from };
-  return isStr(v.why) ? { key, state: 'refused', value: v.value, from: v.from, why: v.why } : null;
+  if (!isOneOf(BOX_SETTING_SOURCES, v.from)) return null;
+  // A refused row's value is never read, even when a wave-1 server still sends one (D-7912).
+  if (v.state === 'refused') return isStr(v.why) ? { key, state: 'refused', from: v.from, why: v.why } : null;
+  return isStr(v.value) ? { key, state: 'ok', value: v.value, from: v.from } : null;
 }
 
 function readBackups(v: unknown): BoxSettingsBackups | null {
@@ -96,7 +99,7 @@ function readDoc(v: unknown): BoxSettingsDoc | null {
   if (!Array.isArray(v.settings) || !isRecord(v.deadline)) return null;
   const { plainMs, minMs, maxMs } = v.deadline;
   if (!isNum(plainMs) || !isNum(minMs) || !isNum(maxMs)) return null;
-  const settings: BoxSettingRow[] = [];
+  const settings: BoxSettingRowV1[] = [];
   for (const r of v.settings) {
     const row = readRow(r);
     if (row === null) return null;
@@ -133,12 +136,13 @@ export interface BoxSettingLine {
   why: string | null;
 }
 
-export function settingLine(row: BoxSettingRow, role: NodeRole | null): BoxSettingLine {
+export function settingLine(row: BoxSettingRowV1, role: NodeRole | null): BoxSettingLine {
   if (role === 'server' && row.key === MODELS_BUDGET_KEY) {
     return { key: row.key, value: BOX_SETTINGS_SERVER_BUDGET_TEXT, from: null, why: null };
   }
   if (row.state === 'unmeasured') return { key: row.key, value: BOX_SETTINGS_TEXT.notMeasured, from: null, why: row.why };
-  return { key: row.key, value: row.value, from: BOX_SETTING_SOURCE_TEXT[row.from], why: row.state === 'refused' ? row.why : null };
+  if (row.state === 'refused') return { key: row.key, value: BOX_SETTINGS_TEXT.refused, from: BOX_SETTING_SOURCE_TEXT[row.from], why: row.why };
+  return { key: row.key, value: row.value, from: BOX_SETTING_SOURCE_TEXT[row.from], why: null };
 }
 
 /** "5 backups, 4 with data, 12.1 GB", or why the box could not count them. The second return is the danger tone. */
