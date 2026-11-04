@@ -1283,13 +1283,16 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
 
 // ---------------------------------------------------------------------------------------------------------------
 // Clause W5h-b, M4.H23 (base spec 2026-10-01 section 7.10): what the retirement of W5 part 1's main-thread highlight
-// bounds keeps. (1) No `.ts`/`.tsx` file under `pwa/src` spells a retired limit, a part-1 helper or the word `part1` in
-// any form (the store's option and skip words, Export's `part1-bounds`): read as TEXT, comments included, by whole
-// word, because a retired name left in a comment is a name left behind. (2) The two caps on input crossing to the
-// worker stay, at 65 536 and 524 288, and `lib/highlightStore.ts` reads each outside its import. (3) The xml grammar
+// bounds keeps. (1) No `.ts`/`.tsx` file under `pwa/src` spells a retired limit, a part-1 helper or the
+// whole word `part1` (case-sensitive), in its forms `part1`, `part1-scan`, `part1-markdown`, `part1-bounds`: read as
+// TEXT, comments included, by whole word, because a retired name left in a comment is a name left behind. (2) The two
+// caps on input crossing to the worker stay, at 65 536 and 524 288, and `lib/highlightStore.ts` reads each outside its
+// import. (3) The xml grammar
 // the worker registers carries no sub-language inside `<script>` or `<style>`; stock xml beside javascript and css is
 // the control. Its imports are dynamic, inside the cases, so the clause leaves the file's import block as it is.
-// NOT EXHAUSTIVE: a retired name built from pieces (`'MD_HIGHLIGHT_' + 'MAX_WORD_CHARS'`) is not seen.
+// NOT EXHAUSTIVE: a retired name built from pieces (`'MD_HIGHLIGHT_' + 'MAX_WORD_CHARS'`) is not seen; nor is one
+// inside a longer identifier (`part1Bounds`), in another case (`Part1`), spelled with a `\u` escape, or in a `.css`
+// file (not read).
 // ---------------------------------------------------------------------------------------------------------------
 
 /** Every name W5h-b retired, matched as a whole word. */
