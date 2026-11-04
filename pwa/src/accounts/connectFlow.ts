@@ -199,8 +199,9 @@ export interface SignOutRecord { readonly checkAt?: number }
 
 /**
  * WHAT A SHEET MAY SAY ABOUT A LANE'S OLD CREDENTIAL (D-7872 (10), the operator's option-1 ruling of 2026-11-03): the
- * one rule, read by every account sheet that speaks of it (the re-auth sheet's intro, endings and refused starts; the
- * method switch sheet's intro, endings and both-held line). After a sign-out the box clears the lane's check and nothing
+ * one rule, read through `useOldCredential` by every account sheet that speaks of it (the re-auth sheet's intro, endings,
+ * refused starts, restart lead and revoke item; the method switch sheet's intro, endings, both-held line, restart leads,
+ * danger confirm and revoke item; the paste sheet's intro, refusals, restart lead and revoke item). After a sign-out the box clears the lane's check and nothing
  * else, and the server never reports `no-credential`, so a signed-out lane reads like one never checked.
  *  - `signed-out`: certain. The box says so itself (`no-credential`), or the sheet asking just ran the sign-out and had
  *    the box's answer (`signedOutHere`).

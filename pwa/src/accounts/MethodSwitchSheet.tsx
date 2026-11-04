@@ -5,8 +5,9 @@
 // token and, only once it passes, switches the lane under its lock (A20); the poll's `done` means it did. A refused,
 // cancelled or expired attempt changes nothing, and each terminal state says so; that the lane still uses its old
 // credential is said only where `oldCredentialOf` allows it (D-7872 (10), the operator's option-1 ruling: a passing
-// check newer than any sign-out this app knows of), and the neutral words are said everywhere else, the intro and the
-// both-held line included. Then a fresh check; the stated
+// check newer than any sign-out this app knows of), read when each sentence is written (`useOldCredential`), and the
+// neutral words are said everywhere else, the intro, the both-held line, the restart lead, the danger confirm and the
+// revoke item included. Then a fresh check; the stated
 // identity, with the sign-in's readable email as its default text; the lane's sessions with one-tap Restart, since a
 // running session started without the token; and last, **Sign the old sign-in out** (N5): a plain button once no
 // listed session predates the switch, and before then the danger confirm, because the OA1 record did not measure what
@@ -29,19 +30,18 @@ import { openExternal } from '../lib/markdown';
 import { ensureSession } from '../session/useEnsure';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
-  CLOSE, DONE, KEEP_IT, LEDGER, METHOD_LINES, REVOKED_OLD, REVOKE_PAGES,
+  CLOSE, DONE, KEEP_IT, LEDGER, METHOD_LINES, REVOKE_PAGES,
   SIGN_IN_LEDGER, SIGN_OLD_OUT, SIGN_OLD_OUT_ANYWAY, START_SWITCH_AGAIN, STATE_LAMPS, STEP_UP_AGAIN_SIGN_OLD_OUT,
-  SWITCH_CLOSE_TOKEN, SWITCH_START, atProviderWords, bothHeld, identityLine, laneActRefusal, restartLead, revokeOldLead,
-  revokeOldTail, signOldOutDanger, signOldOutRefused, statedRefused, switchEnd, switchIntro, switchLedger,
-  switchRestartLead, switchTitle, type OldCredential,
+  SWITCH_CLOSE_TOKEN, SWITCH_START, atProviderWords, bothHeld, identityLine, laneActRefusal, restartLead, revokeOldWords,
+  signOldOutDanger, signOldOutRefused, statedRefused, switchEnd, switchIntro, switchLedger, switchRestartLead, switchTitle,
 } from '../fleet/accountWords';
 import { CompromiseSteps } from './CompromiseSteps';
 import { GuardedAct, RevokeItem } from './RemoveSheet';
 import { StatedField } from './ResultFrame';
 import { RestartList, restartableOn, useRestarts } from './RestartList';
 import { RunFrame, type LedgerLine } from './RunFrame';
-import { oldCredentialOf, type SignInMethod } from './connectFlow';
-import { signOutOf } from './signOuts';
+import type { SignInMethod } from './connectFlow';
+import { useOldCredential } from './useOldCredential';
 import { SignInLive, useSignInAttempt, wordOf, type Attempt, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
 import type { StepUp, StepUpDeps } from './useStepUp';
 import '../fleet/fleet.css';
@@ -102,8 +102,9 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
   /** The sign-in's readable email, read once, when the sheet opened: the stated identity's default (spec §9). */
   const [oldIdentity] = useState<string>(() =>
     (props.lane?.identity !== undefined && props.lane.identitySource !== 'stated' ? props.lane.identity : ''));
-  /** What the sheet may say of the credential the lane switches from, read once, when it opened (D-7872 (10)). */
-  const [old] = useState<OldCredential>(() => oldCredentialOf(props.lane, props.usage, signOutOf(id)));
+  /** What the sheet may say of the credential the lane switches from (D-7872 (10)): read when a sentence is written, up
+   *  to the switch landing, from where on the lane's facts are about the new credential. */
+  const old = useOldCredential(id, props.lane, props.usage);
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
 
@@ -115,6 +116,7 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
 
   /** The helper's `done`: the box has switched the lane (only a passing probe reaches it, A20). Then a fresh check. */
   const switched = async (a: Attempt): Promise<void> => {
+    old.freeze();
     settle(a.method === 'login' ? SIGN_IN_LEDGER.signedIn : SIGN_IN_LEDGER.minted);
     write(switchLedger.switched(id, to));
     setOnOld(liveOn());
@@ -140,7 +142,7 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
 
   const s = useSignInAttempt({
     id, client, blocked: offline, write, settle, status, alert,
-    endText: (k, failure) => switchEnd(id, to, k, failure, old),
+    endText: (k, failure) => switchEnd(id, to, k, failure, old.now()),
     onStart: () => setPhase('run'),
     onDone: (a) => { void switched(a); },
   });
@@ -202,7 +204,7 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
   if (phase === 'intro') {
     body = (
       <div className="acct-frame" data-frame="switch">
-        <p className="acct-field-note">{switchIntro(id, to, old)}</p>
+        <p className="acct-field-note">{switchIntro(id, to, old.now())}</p>
         <p className="acct-field-note">{METHOD_LINES[to].line}</p>
         <GuardedAct
           blocked={offline} freshUntil={freshUntil} deps={deps} label={SWITCH_START[to]} variant="primary"
@@ -233,6 +235,8 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
     const page = REVOKE_PAGES['claude-code-settings'];
     const provider = atProviderWords('anthropic-sign-in', 'unmeasured', undefined);
     const accountPage = REVOKE_PAGES['claude-account-settings'];
+    const was = old.now();
+    const revoke = revokeOldWords(id, was);
     body = (
       <>
         <RunFrame lines={ledger} live={phase === 'checking'} />
@@ -249,14 +253,14 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
               />
             )}
             <RestartList
-              ids={onOld} lead={toToken ? switchRestartLead(onOld.length) : restartLead(onOld.length)} sessions={sessions}
+              ids={onOld} lead={toToken ? switchRestartLead(onOld.length, was) : restartLead(onOld.length, was)} sessions={sessions}
               restarts={restarts} blocked={offline} onRestart={(sid) => { void restart(sid); }}
             />
             {toToken ? (
               <section className="acct-remove-block" data-sign-old-out={signedOut !== null ? 'done' : predating > 0 ? 'danger' : 'plain'}>
                 {signedOut === null ? (
                   <>
-                    <p className="acct-field-note">{bothHeld(id, old)}</p>
+                    <p className="acct-field-note">{bothHeld(id, was)}</p>
                     {predating > 0 && !confirming && (
                       <div className="acct-actions">
                         <Button variant="danger-ghost" disabled={offline} onClick={() => setConfirming(true)}>{SIGN_OLD_OUT}</Button>
@@ -264,7 +268,7 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
                     )}
                     {predating > 0 && confirming && (
                       <div className="acct-wrong-confirm">
-                        <p className="acct-notice" role="alert">{signOldOutDanger(predating, id)}</p>
+                        <p className="acct-notice" role="alert">{signOldOutDanger(predating, id, was)}</p>
                         <GuardedAct
                           blocked={offline} freshUntil={freshUntil} deps={deps} label={SIGN_OLD_OUT_ANYWAY} variant="danger"
                           disabled={false} busy={signOutBusy} onAct={(stepUp) => { void signOldOut(stepUp); }}
@@ -294,12 +298,12 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
             ) : (
               <>
                 <p className="acct-result-line">
-                  {revokeOldLead}{' '}
+                  {revoke.lead}{' '}
                   <TextLink href={page.href} onClick={(e) => openExternal(e, page.href)}>{page.label}</TextLink>
-                  {revokeOldTail}
+                  {revoke.tail}
                 </p>
                 <RevokeItem
-                  laneId={id} kind="anthropic-token" label={REVOKED_OLD} old blocked={offline}
+                  laneId={id} kind="anthropic-token" label={revoke.label} old={revoke.old} blocked={offline}
                   ack={(b) => client.accountRevokeAck(b)}
                 />
               </>

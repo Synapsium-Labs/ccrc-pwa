@@ -42,7 +42,7 @@ const OUT = { state: { word: 'signed-out', source: 'Signed out · HTTP 401 · ch
 const MINTED_AT = now - 335 * DAY;
 const EXPIRING = {
   state: { word: 'expiring', source: 'token minted 11 months ago · about 4 weeks left · estimated', at: MINTED_AT },
-  ready: true, mintedAt: MINTED_AT, identity: 'someone@example.invalid', identitySource: 'stated',
+  ready: true, check: { verdict: 'ok', at: now - 60_000 }, mintedAt: MINTED_AT, identity: 'someone@example.invalid', identitySource: 'stated',
 };
 const READY = { state: { word: 'signed-in', source: 'checked just now', at: now }, ready: true };
 const ROSTER = [rostered('lane-a', 'cyan', 'sign-in'), rostered('lane-b', 'violet', 'token'), rostered('lane-c', 'blue', 'token')];

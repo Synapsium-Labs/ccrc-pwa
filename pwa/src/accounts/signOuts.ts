@@ -7,8 +7,8 @@
 //
 // Writers: the re-auth sheet's and the connect sheet's Sign this lane out and start again, on any answer that may have
 // signed the lane out (removed, absent, or no answer: `signOutUnknown`), whether or not the sheet is still open.
-// Readers: every sheet that speaks of the lane's old credential (the re-auth and method switch sheets), through
-// `oldCredentialOf`.
+// Readers: every sheet that speaks of the lane's old credential (the re-auth, method switch and paste sheets), through
+// `useOldCredential` and `oldCredentialOf`.
 import type { SignOutRecord } from './connectFlow';
 
 const signOuts = new Map<string, SignOutRecord>();

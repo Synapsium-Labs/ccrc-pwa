@@ -738,6 +738,8 @@ export function AccountsScreen(): ReactNode {
           connect={connect}
           blocked={blocked}
           roster={roster}
+          lane={lanes?.[replacing.id]}
+          usage={accounts?.find((x) => x.wrapper === replacing.id) ?? null}
           refresh={refreshAccounts}
           {...(canSwitch ? { onMint: () => openReauth(replacing.id, 'setup-token') } : {})}
         />

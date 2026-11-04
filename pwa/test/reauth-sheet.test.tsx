@@ -13,7 +13,7 @@ import { resetSignOutsForTests } from '../src/accounts/signOuts';
 import {
   CANCEL_SIGN_IN, CODE_FIELD_LABEL, LEDGER, MINT_INSTEAD, MINT_NEW_TOKEN, PASTE_A_TOKEN, PASTE_INSTEAD, REAUTH_WRONG, REPLACE_TOKEN,
   NOTHING_INSTALLED, SEND_CODE, SIGN_IN_AGAIN, SIGN_OUT_RESTART, STATED_LABEL, SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, credentialUntouched, laneSignedOut,
-  reauthEnd, reauthInstalled, reauthIntro, reauthStartRefusal, revokeRecord, switchIntro, switchTitle, type SignInEndKind,
+  reauthEnd, reauthInstalled, reauthIntro, reauthStartRefusal, replaceIntro, revokeRecord, switchIntro, switchTitle, type SignInEndKind,
 } from '../src/fleet/accountWords';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError, api } from '../src/lib/api';
@@ -227,7 +227,7 @@ describe('every re-auth ends the same way (spec §9)', () => {
     const live = fleetSession({ id: 'lane-b:p-one', wrapper: 'lane-b', home: 'lane-b', project: 'p-one', title: 'one' });
     const b = fakeBox();
     const ensure = vi.fn(async () => {});
-    const props = sheet(b, { fleet: storeWith([live]), ensure, onPaste: vi.fn(), lane: { ...LANES['lane-b']!, identity: 'someone@example.invalid', identitySource: 'stated' } });
+    const props = sheet(b, { fleet: storeWith([live]), ensure, onPaste: vi.fn(), lane: { ...CHECKED_B, identity: 'someone@example.invalid', identitySource: 'stated' } });
     expect(screen.getByRole('button', { name: PASTE_INSTEAD })).toBeInTheDocument();
     await walk(b, MINT_NEW_TOKEN, 'C'.repeat(40));
     expect(b.client.accountAuthStart).toHaveBeenCalledWith('lane-b', { method: 'setup-token' });
@@ -258,7 +258,7 @@ describe('every re-auth ends the same way (spec §9)', () => {
     expect(await screen.findByText('Signed in as other@example.invalid')).toBeInTheDocument();
     expect(screen.getByText(/pick(s)? up the new sign-in/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Restart' })).toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: 'I revoked the old token' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /I revoked/ })).toBeNull();
     expect(screen.queryByLabelText(STATED_LABEL)).toBeNull();
     expect(screen.getByText(new RegExp(REAUTH_WRONG.replace('?', '\\?')))).toHaveTextContent('It had someone@example.invalid.');
     // Sign this lane out and start again: N5's sign-out, then a new attempt of the same method.
@@ -549,6 +549,36 @@ describe("the screen hands each sheet the lane's 401 marker (D-7872 (10))", () =
     const sheet = screen.getByRole('dialog', { name: switchTitle('lane-a', 'setup-token') });
     expect(within(sheet).getByText(switchIntro('lane-a', 'setup-token', 'unsure'))).toBeInTheDocument();
     expect(sheet.textContent).not.toMatch(/keeps its|still uses its/);
+  });
+});
+
+describe("the screen hands the paste sheet the lane and its 401 marker (D-7872 (10))", () => {
+  function pasteFromCard(lane: LaneWire, usage: AccountUsage[]): HTMLElement {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    act(() => useFleetStore.setState({
+      conn: 'open', usage, roster: ROSTER, accountsConnect: CONNECT(), lanes: { ...LANES, 'lane-b': lane }, sessions: [],
+      accountsReadAt: () => Date.now(),
+    }));
+    render(<AccountsScreen />);
+    fireEvent.click(within(card('lane-b').querySelector('.acct-trouble-acts') as HTMLElement).getByRole('button', { name: PASTE_A_TOKEN }));
+    return screen.getByRole('dialog', { name: "Replace lane-b's token" });
+  }
+
+  it("the Signed-out card's Paste a token on a no-credential lane says the lane is signed out", () => {
+    const sheet = pasteFromCard({ ...LANES['lane-b']!, notReadyReason: 'no-credential' }, []);
+    expect(within(sheet).getByText(replaceIntro('lane-b', 'signed-out'))).toBeInTheDocument();
+    expect(sheet.textContent).not.toMatch(/keeps/);
+  });
+
+  it('a passing check with a 401 after it: neutral, from the marker alone', () => {
+    const sheet = pasteFromCard({ ...LANES['lane-b']!, check: { verdict: 'ok', at: now - 3 * 3_600_000 } }, [usageOf('lane-b', { authDead: true })]);
+    expect(within(sheet).getByText(replaceIntro('lane-b', 'unsure'))).toBeInTheDocument();
+    expect(sheet.textContent).not.toMatch(/keeps/);
+  });
+
+  it('a passing check and no marker: the lane read from the screen says it keeps the token it has', () => {
+    const sheet = pasteFromCard({ ...LANES['lane-b']!, check: { verdict: 'ok', at: now - 3 * 3_600_000 } }, []);
+    expect(within(sheet).getByText(replaceIntro('lane-b', 'kept'))).toBeInTheDocument();
   });
 });
 

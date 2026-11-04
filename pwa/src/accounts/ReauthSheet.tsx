@@ -14,7 +14,9 @@
 // is `oldCredentialOf`'s, the one rule (D-7872 (10), the operator's option-1 ruling): that the lane keeps it only on a
 // passing check newer than any sign-out this app knows of; that the lane is signed out only where that is certain (this
 // sheet just ran Sign this lane out and start again, below, or the box's `no-credential` word); and the neutral words,
-// true either way, everywhere else (never checked, a 401, a sign-out an earlier sheet ran, a reload). Offline mid-attempt, the run frame shows
+// true either way, everywhere else (never checked, a 401, a sign-out an earlier sheet ran, a reload). `useOldCredential`
+// reads it when a sentence is written, so a lane signed out elsewhere while the sheet is open gets the neutral words
+// too, and the mint's restart lead and revoke item are held to it as well. Offline mid-attempt, the run frame shows
 // only the sentence with the last-known deadline. Closed mid-attempt, the attempt keeps running on the box until
 // `expiresAt`, and the app-level banner's Continue reopens this sheet with `resume` at the code field (A23, D-7871 (2)).
 //
@@ -34,10 +36,10 @@ import { ensureSession } from '../session/useEnsure';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
   CHECK_AGAIN_LABEL, CLOSE, DONE, LEDGER, MINT_NEW_TOKEN, PASTE_A_TOKEN, PASTE_INSTEAD, REAUTH_WRONG, REPLACE_TOKEN,
-  REVOKED_OLD, REVOKE_PAGES, SIGN_IN_AGAIN, SIGN_IN_LEDGER, START_SWITCH_AGAIN, STATE_LAMPS, STEP_UP_AGAIN_SIGN_OUT,
+  REVOKE_PAGES, SIGN_IN_AGAIN, SIGN_IN_LEDGER, START_SWITCH_AGAIN, STATE_LAMPS, STEP_UP_AGAIN_SIGN_OUT,
   SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, identityLine, laneActRefusal, reauthEnd, reauthInstalled, reauthIntro,
-  reauthRestartLead, reauthSignOutConfirm, reauthStart, reauthStartRefusal, reauthTitle, reauthWasLine, revokeOldLead,
-  revokeOldTail, signOutRefused, signOutUnknown, statedRefused, type OldCredential,
+  reauthRestartLead, reauthSignOutConfirm, reauthStart, reauthStartRefusal, reauthTitle, reauthWasLine, revokeOldWords,
+  signOutRefused, signOutUnknown, statedRefused,
 } from '../fleet/accountWords';
 import { AccountSheet, type Announcement } from './AccountSheet';
 import { CompromiseSteps } from './CompromiseSteps';
@@ -47,8 +49,9 @@ import { RevokeItem, StepUpFor } from './RemoveSheet';
 import { RestartList, restartableOn, useRestarts } from './RestartList';
 import { StatedField } from './ResultFrame';
 import { RunFrame, type LedgerLine } from './RunFrame';
-import { oldCredentialOf, type SignInMethod } from './connectFlow';
-import { forgetSignOut, noteSignOut, signOutOf } from './signOuts';
+import type { SignInMethod } from './connectFlow';
+import { forgetSignOut, noteSignOut } from './signOuts';
+import { useOldCredential } from './useOldCredential';
 import { SignInLive, WrongAccountAct, useSignInAttempt, wordOf, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
 import type { StepUp, StepUpDeps } from './useStepUp';
 import '../fleet/fleet.css';
@@ -152,17 +155,10 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
   const [statedNotice, setStatedNotice] = useState<string | null>(null);
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
-  /** What this sheet may say of the lane's old credential (D-7872 (10)): `oldCredentialOf` on every mount, from the lane
-   *  as the screen read it, its 401 marker and the sign-outs this app ran (a passing check newer than one retires it),
-   *  and `signed-out` once this sheet's own sign-out has the box's answer. A ref, so an attempt's ending reads it
-   *  whichever render started the attempt. */
-  const [opened] = useState<OldCredential>(() => {
-    const record = signOutOf(id);
-    const said = oldCredentialOf(props.lane, props.usage, record);
-    if (record !== undefined && said === 'kept') forgetSignOut(id);
-    return said;
-  });
-  const old = useRef<OldCredential>(opened);
+  /** What this sheet may say of the lane's old credential (D-7872 (10)): read when a sentence is written, from the lane
+   *  and the 401 marker as the screen holds them then and the sign-outs this app ran, and `signed-out` once this sheet's
+   *  own sign-out has the box's answer. */
+  const old = useOldCredential(id, props.lane, props.usage);
 
   const status = (text: string): void => setSaid({ kind: 'status', text });
   const alert = (text: string): void => setSaid({ kind: 'alert', text });
@@ -194,6 +190,7 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
   /** The helper says `done`: the box installed the new credential after its own check (A20). The ending follows. */
   const installed = async (): Promise<void> => {
     forgetSignOut(id);
+    old.freeze();
     settle(reauthInstalled(method));
     setOnOld(restartableOn(sessions, id));
     setFrame('done');
@@ -203,8 +200,8 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
 
   const s = useSignInAttempt({
     id, client, blocked: offline, write, settle, status, alert,
-    endText: (k, failure) => reauthEnd(id, method, k, failure, old.current),
-    startRefusal: (word, reason) => reauthStartRefusal(id, method, word, reason, old.current),
+    endText: (k, failure) => reauthEnd(id, method, k, failure, old.now()),
+    startRefusal: (word, reason) => reauthStartRefusal(id, method, word, reason, old.now()),
     onStart: () => { setNotice(null); setWrongOpen(false); setFrame('run'); },
     onDone: () => { void installed(); },
   });
@@ -244,7 +241,7 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
       return;
     }
     // Removed or absent, the lane has no sign-in on the box now: every ending in this sheet until a new one goes in says so.
-    old.current = oldCredentialOf(checked ?? before, props.usage, signOutOf(id), true);
+    old.signedOutHere();
     setChecked(null);
     setCheckNotice(null);
     setOnOld([]);
@@ -302,7 +299,7 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
   if (frame === 'confirm') {
     body = (
       <div className="acct-frame" data-frame="reauth">
-        <p className="acct-field-note">{reauthIntro(id, method, opened)}</p>
+        <p className="acct-field-note">{reauthIntro(id, method, old.now())}</p>
         {notice !== null && <p className="acct-notice" role="alert">{notice}</p>}
         {startFoot(reauthStart(method), props.onPaste !== undefined ? { label: PASTE_INSTEAD, onClick: props.onPaste } : null)}
       </div>
@@ -323,6 +320,7 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
     const word = (checked?.state.word ?? 'not-checked') as AccountStateWord;
     const lamp = STATE_LAMPS[word] ?? STATE_LAMPS['not-checked'];
     const identity = checked === null ? null : identityLine(checked, word, Math.floor(Date.now() / 1000));
+    const revoke = revokeOldWords(id, old.now());
     body = (
       <>
         <RunFrame lines={ledger} live={checking} />
@@ -359,18 +357,18 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
             />
           )}
           <RestartList
-            ids={onOld} lead={reauthRestartLead(onOld.length, method)} sessions={sessions} restarts={restarts}
+            ids={onOld} lead={reauthRestartLead(onOld.length, method, old.now())} sessions={sessions} restarts={restarts}
             blocked={offline} onRestart={(sid) => { void restart(sid); }}
           />
           {method === 'setup-token' && (
             <>
               <p className="acct-result-line">
-                {revokeOldLead}{' '}
+                {revoke.lead}{' '}
                 <TextLink href={page.href} onClick={(e) => openExternal(e, page.href)}>{page.label}</TextLink>
-                {revokeOldTail}
+                {revoke.tail}
               </p>
               <RevokeItem
-                laneId={id} kind="anthropic-token" label={REVOKED_OLD} old blocked={offline}
+                laneId={id} kind="anthropic-token" label={revoke.label} old={revoke.old} blocked={offline}
                 ack={(b) => client.accountRevokeAck(b)}
               />
               <CompromiseSteps roster={roster} />

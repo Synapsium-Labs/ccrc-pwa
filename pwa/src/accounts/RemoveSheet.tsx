@@ -104,8 +104,9 @@ export function RevokeItem({ laneId, kind, label, old, blocked, ack }: {
   laneId: string;
   kind: AtProviderKind;
   label: string;
-  /** Is it the token this lane HAD (Replace) rather than the lane's only one (Remove)? Only the words differ. */
-  old: boolean;
+  /** Is it the token this lane HAD (Replace) rather than the lane's only one (Remove)? `any` when the app knows of no old
+   *  token but one may exist (D-7872 (10)). Only the words differ. */
+  old: boolean | 'any';
   /** The screen cannot act (offline): the tick sends nothing. */
   blocked: boolean;
   ack: (body: AccountRevokeAckBody) => Promise<unknown>;

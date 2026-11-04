@@ -147,7 +147,7 @@ describe('the resume banner, on any route (spec §6.2)', () => {
     sessionStorage.clear();
     // And by source: no file that decides or draws the resume names a browser store.
     for (const f of ['src/accounts/AuthResumeBanner.tsx', 'src/accounts/useSignInAttempt.tsx', 'src/accounts/MethodSwitchSheet.tsx', 'src/accounts/connectFlow.ts',
-      'src/accounts/ReauthSheet.tsx', 'src/accounts/signOuts.ts']) {
+      'src/accounts/ReauthSheet.tsx', 'src/accounts/signOuts.ts', 'src/accounts/useOldCredential.ts']) {
       const src = readFileSync(path.join(import.meta.dirname, '..', f), 'utf8');
       expect(src, f).not.toMatch(/localStorage|sessionStorage|indexedDB|lib\/storage/);
     }

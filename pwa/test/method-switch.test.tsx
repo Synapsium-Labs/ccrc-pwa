@@ -205,7 +205,7 @@ describe('Switch to a long-lived token (spec §9, N5)', () => {
 
     // A session that started on the sign-in is listed: the sign-out is a danger confirm, which sends nothing yet.
     fireEvent.click(screen.getByRole('button', { name: SIGN_OLD_OUT }));
-    expect(screen.getByText(signOldOutDanger(1, 'lane-b'))).toBeInTheDocument();
+    expect(screen.getByText(signOldOutDanger(1, 'lane-b', 'kept'))).toBeInTheDocument();
     expect(screen.getByRole('button', { name: SIGN_OLD_OUT_ANYWAY }).className).toMatch(/btn-danger/);
     expect(b.client.accountSignOut).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Keep it' }));
@@ -215,7 +215,7 @@ describe('Switch to a long-lived token (spec §9, N5)', () => {
     await waitFor(() => expect(props.ensure).toHaveBeenCalledWith('lane-b:p-one'));
     expect(b.client.stop).toHaveBeenCalledWith('lane-b:p-one');
     expect(await screen.findByText('restarted')).toBeInTheDocument();
-    expect(screen.queryByText(signOldOutDanger(1, 'lane-b'))).toBeNull();
+    expect(screen.queryByText(signOldOutDanger(1, 'lane-b', 'kept'))).toBeNull();
     expect(screen.queryByRole('button', { name: SIGN_OLD_OUT_ANYWAY })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: SIGN_OLD_OUT }));
     await waitFor(() => expect(b.client.accountSignOut).toHaveBeenCalledWith('lane-b'));
