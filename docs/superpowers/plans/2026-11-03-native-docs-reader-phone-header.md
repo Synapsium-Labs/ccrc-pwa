@@ -1354,6 +1354,22 @@ describe('Page details (refinements (c), (d), (f))', () => {
     expect(freshDot(state)).toBe(dot);
   });
 
+  it('a page whose last fetch failed names it: Page details (freshness problem), with the failed dot (refinement (f))', async () => {
+    atWidth(412);
+    const base = treeOk();
+    const tree = {
+      ...base,
+      freshness: {
+        ...base.freshness,
+        stamp: { okAgeMs: 179 * 60_000, attemptAgeMs: 5 * 60_000, lastOutcome: 'fetch-transport', okCommit: COMMIT_A },
+      },
+    } as const;
+    open('/docs/demo/specs/a.md', fakeLoaders({ tree: okTree(tree) }));
+    const b = await screen.findByRole('button', { name: DOCS_HEAD_TEXT.moreFailed });
+    expect(b.querySelector('.docs-more-dot')).toHaveAttribute('data-tone', 'failed');
+    expect(screen.queryByRole('button', { name: DOCS_HEAD_TEXT.moreNever }), 'failed is not never fetched').toBeNull();
+  });
+
   it('a page never fetched draws the amber dot and says so in the name; the dot itself is hidden from a screen reader', async () => {
     atWidth(412);
     open('/docs/demo/specs/a.md', fakeLoaders());
@@ -1893,7 +1909,7 @@ describe('the compact head: the rendered row carries .docs-back, .docs-action an
 
 describe('TextLink stays inside a line of text — a link alone is a control', () => {
 ```
-- [ ] **Step 6: Run it to see it pass.** `( cd pwa && ./node_modules/.bin/vitest run test/docs-compact-head.test.tsx )` — Expected (prediction): `Tests  41 passed (41)`. `TSC-OK`.
+- [ ] **Step 6: Run it to see it pass.** `( cd pwa && ./node_modules/.bin/vitest run test/docs-compact-head.test.tsx )` — Expected (prediction): `Tests  42 passed (42)`. `TSC-OK`.
 - [ ] **Step 7: The full header is unchanged, and the censuses hold.** Each alone, through `ccrc test` where heavy: `docs-screen.test.tsx`, `docs-truth.test.tsx`, `refined-phone.test.tsx` — green, each at its BASE count (they render the full header: setup's `matchMedia` answers false, and `refined-phone`'s 390 case reads `.docs-back` on a `tree: null` leaf, which the compact head keeps). `control-census.test.ts`, `tap-targets.test.tsx`, `docs-scans.test.ts`, `shell-css.test.ts`, `sheet-desktop-arm.test.tsx`, `markup-census.test.ts`, `literal-census.test.ts`, `docs-compact-css.test.ts` — green (`tap-targets.test.tsx` one case more than after Task 3; `control-census.test.ts` at its BASE count, with one more entry). `git fetch -q origin main && ( cd server && ./node_modules/.bin/vitest run test/docs-parity.test.ts test/citations.test.ts )` — green.
 - [ ] **Step 8: Commit.** `git add pwa/src/docs/DocsHead.tsx pwa/src/docs/docsText.ts pwa/test/docs-compact-head.test.tsx pwa/test/control-census.test.ts pwa/test/tap-targets.test.tsx` (expect 5), message `pwa: one Docs row on a phone, the rest behind Page details (docs phone header)`, trailer. Record the task's JSON row fence, as measured, in the SDD ledger.
 

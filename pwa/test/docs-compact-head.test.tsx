@@ -363,6 +363,22 @@ describe('Page details (refinements (c), (d), (f))', () => {
     expect(freshDot(state)).toBe(dot);
   });
 
+  it('a page whose last fetch failed names it: Page details (freshness problem), with the failed dot (refinement (f))', async () => {
+    atWidth(412);
+    const base = treeOk();
+    const tree = {
+      ...base,
+      freshness: {
+        ...base.freshness,
+        stamp: { okAgeMs: 179 * 60_000, attemptAgeMs: 5 * 60_000, lastOutcome: 'fetch-transport', okCommit: COMMIT_A },
+      },
+    } as const;
+    open('/docs/demo/specs/a.md', fakeLoaders({ tree: okTree(tree) }));
+    const b = await screen.findByRole('button', { name: DOCS_HEAD_TEXT.moreFailed });
+    expect(b.querySelector('.docs-more-dot')).toHaveAttribute('data-tone', 'failed');
+    expect(screen.queryByRole('button', { name: DOCS_HEAD_TEXT.moreNever }), 'failed is not never fetched').toBeNull();
+  });
+
   it('a page never fetched draws the amber dot and says so in the name; the dot itself is hidden from a screen reader', async () => {
     atWidth(412);
     open('/docs/demo/specs/a.md', fakeLoaders());
