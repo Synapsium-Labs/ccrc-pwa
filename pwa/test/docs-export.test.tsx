@@ -489,6 +489,7 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     expect(doc.querySelectorAll('article table [style]')).toHaveLength(6);
     expect(doc.querySelector('article table script, article table b')).toBeNull();
     // The worktree segment is text wherever the file shows it: banner, Source fact and the ccrc:worktree meta; no element comes of it.
+    expect(doc.querySelectorAll('b')).toHaveLength(0);
     expect(doc.body.firstElementChild?.textContent).toContain(`uncommitted changes from ${HOSTILE_WORKTREE_LABEL} on main`);
     expect(doc.body.textContent).toContain(`draft · modified in ${HOSTILE_WORKTREE_LABEL}`);
     expect(doc.querySelector('meta[name="ccrc:worktree"]')?.getAttribute('content')).toBe(HOSTILE_WORKTREE_LABEL);
