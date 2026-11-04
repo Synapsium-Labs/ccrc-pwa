@@ -322,7 +322,7 @@ Operator steer of 2026-11-04, spec §2, "Getting around on a phone", "The spec o
 
 **Files (confirm at Step 0 on `origin/main`):**
 - Modify: `pwa/src/skins/refined/parts.tsx` and `pwa/src/skins/instrument/parts.tsx`, which fill `PhoneNav`, and one shared phone-bar component beside the frame. It reads the console's one list of places (today Refined's `TAB_IDS`, moved to a shared owner) and `useNavBadges`, through `commandDoor(id)`, so there is no second list of places. At a desk, Refined's `AppBar` and Instrument's `Rail` leave out the fleet place (D25); the phone bar keeps it first. Also modify `pwa/src/skins/frame.tsx` and `pwa/src/styles/shell.css` (the bar at phone width only, absent in an open session) and the item strip's CSS (it stays in view on a phone).
-- Modify: `pwa/src/ledgers/ItemView.tsx` (the band's programme name links to the programme view, and a Spec link), `WaitingScreen.tsx` (a Spec link per programme group) and `ProgrammeScreen.tsx` (a Spec link on the head). All three build the address with the one function `GoalsPanel` uses today, moved to the words or links module so there is a single owner.
+- Modify: `pwa/src/ledgers/ItemView.tsx` (the band's programme name links to the programme view, and a Spec link), `WaitingScreen.tsx` (a Spec link per programme group) and `ProgrammeScreen.tsx` (a Spec link on the head). All three build the address with the one function `GoalsPanel` uses today, moved to the words or links module so there is a single owner. Also modify `pwa/src/fleet/ProgrammeBox.tsx`: the box's title opens the programme view whatever is waiting, and a Spec link reads the waiting frame's Goals, with no fetch per box (D26, amended).
 - Create: one pure L1 module that splits item text into text and link runs (`https`, console paths, repository document paths; everything else is text). Modify the item view's text, steps and history to draw through it.
 - Modify: `shared/ledgers.ts` and `server/src/coord/ledgersRoutes.ts` (`parseRaise` refuses an item whose text links a document through an artifact page or a document server outside the console, with a refusal word of its own, its status, census rows and a PWA sentence). Also `ccd/coordinator-skill/SKILL.md` clause 20 (one sentence, below) and `server/test/coordinator-skill.test.ts`.
 - Test: the new module's unit test, `pwa/test/item-view.test.tsx`, `waiting-screen`, `programme-screen` and the raise-route test. Add a browser file for the phone bar and the strip at 360 and 390, and check that the bar is absent at 900 and 1280.
@@ -340,6 +340,8 @@ Operator steer of 2026-11-04, spec §2, "Getting around on a phone", "The spec o
   - `previous and next stay in view on a long item at phone width`;
   - `the item band, each programme group and the programme head link the pinned spec`;
   - `no spec link is drawn without a pin`;
+  - `a programme box with nothing waiting opens its programme view`;
+  - `a programme box with a pin links its spec, and none without`;
   - `the band's programme name opens the programme view`;
   - `https, console paths and document paths in item text are links`;
   - `a javascript or data address stays text`;
