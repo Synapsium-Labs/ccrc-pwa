@@ -1,7 +1,7 @@
 // Console speed S2, per-request reads: `attributionVerdict` (the box-token lanes' sender check) answers from a
-// fixture registry held in memory (`registryCountingIO.ts`), one case per answer it can give. This file pins the
-// answers, error word and `ok`, of the eight cases the plan names; detail text is not pinned here (the lanes'
-// byte-for-byte bodies are pinned in `coord-attribution.test.ts`).
+// fixture registry held in memory (`registryCountingIO.ts`), one case per answer it can give, and the cost of one
+// sender in requests. Error word and `ok` are pinned; detail text is not (the lanes' byte-for-byte bodies are pinned
+// in `coord-attribution.test.ts`).
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -55,8 +55,9 @@ describe('characterization: attributionVerdict answers (console speed S2, step 0
     expect(v.ok === false && v.error).toBe('registry-unmeasurable');
   });
 
-  // The case below is the one console speed S2's single-row change moves (named in the plan's step 2).
-  it('a row retired mid-read (listed, unreadable, then gone from a second listing) -> registry-unmeasurable', async () => {
+  // This case is the one console speed S2's single-row change moved: the row is seen absent twice, which the sender's
+  // own read (`readSessionRecord`) reports as `absent`; the whole-registry read had left it to `registry-unmeasurable`.
+  it('a row retired mid-read (listed, unreadable, then gone from a second listing) -> unknown-sender', async () => {
     const reg = registryOf([SENDER, OTHER]);
     reg.unreadable = new Set([at(SENDER, 'uuid')]);
     const counting = countingIO(reg);
@@ -72,7 +73,7 @@ describe('characterization: attributionVerdict answers (console speed S2, step 0
     const v = await attributionVerdict(io, cfg, SENDER, SENDER_UUID, 'byUuid');
     expect(listings).toBeGreaterThanOrEqual(2);
     expect(v.ok).toBe(false);
-    expect(v.ok === false && v.error).toBe('registry-unmeasurable');
+    expect(v.ok === false && v.error).toBe('unknown-sender');
   });
 
   it('no <id>.uuid is listed -> unknown-sender', async () => {
@@ -108,5 +109,16 @@ describe('characterization: attributionVerdict answers (console speed S2, step 0
   it('the row and its uuid agree -> ok', async () => {
     const reg = registryOf([SENDER, OTHER]);
     expect(await attributionVerdict(countingIO(reg).io, cfg, SENDER, SENDER_UUID, 'byUuid')).toEqual({ ok: true });
+  });
+
+  it('one sender costs one listing and that row\'s reads, not the registry\'s', async () => {
+    const others = ['b', 'c', 'd', 'e'].map((x) => `lane-a-project-${x}-sess-${x}`);
+    const counting = countingIO(registryOf([SENDER, ...others]));
+    expect(await attributionVerdict(counting.io, cfg, SENDER, SENDER_UUID, 'byUuid')).toEqual({ ok: true });
+    const listings = counting.requests.filter((q) => q.op === 'readdir');
+    expect(listings.map((q) => q.path)).toEqual([cfg.registryDir]);
+    const reads = counting.requests.filter((q) => q.op !== 'readdir');
+    expect(reads.length).toBeGreaterThan(0);
+    for (const q of reads) expect(path.basename(q.path).startsWith(`${SENDER}.`), q.path).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
 import type { CcrcConfig } from '../config.js';
 import type { FleetIO } from '../io.js';
-import { measuredIdentity, readRegistryMeasured } from '../registry.js';
+import { measuredIdentity, readSessionRecord } from '../registry.js';
 import type { AttributionRead } from './openRun.js';
 
 /**
@@ -31,22 +31,38 @@ export async function attributionVerdict(
   io: FleetIO, cfg: CcrcConfig,
   whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid' | 'claimedByUuid' | 'sessionUuid',
 ): Promise<AttributionRead> {
-  // One read (D-5863): `names` and `records` come from the same listing.
-  // [registry-refused:refuses] a refused row is in `names`, never in `records`: the ladder reads it as unmeasurable.
-  const reg = await readRegistryMeasured(io, cfg);
-  if (!reg.listed) {
-    return { ok: false, error: 'registry-unmeasurable',
-      detail: 'the registry directory could not be listed — transient, not a fact about the sender' };
-  }
-  const { names, records: registry } = reg;
-  const row = registry.find((r) => r.id === whoId);
-  if (!row) {
-    if (names.includes(`${whoId}.uuid`)) {
+  // Console speed S2: the sender's ONE row (a listing plus that row's field reads), not the whole registry's.
+  // `readSessionRecord` keeps the three-way split `readRegistryMeasured` drew, narrowed to one id; a `found` row may
+  // still carry an unmeasured identity, which `measuredIdentity` below reads as unmeasurable, never as a stale uuid.
+  const read = await readSessionRecord(io, cfg, whoId);
+  switch (read.kind) {
+    case 'unlistable':
+      return { ok: false, error: 'registry-unmeasurable',
+        detail: 'the registry directory could not be listed — transient, not a fact about the sender' };
+    case 'unmeasurable':
       return { ok: false, error: 'registry-unmeasurable',
         detail: `registry row for ${whoId} is listed but unreadable — transient, not a fact about the sender` };
+    case 'absent':
+      return { ok: false, error: 'unknown-sender', detail: `no registry row for ${whoId}` };
+    case 'bad-id': {
+      // An id the registry refuses is never read as a row. One listing keeps the two answers this check always gave
+      // for it: a file named `<id>.uuid` that IS listed is a row the registry will not hand out (unmeasurable), and
+      // an unlisted one is no sender at all.
+      const names = await io.readdir(cfg.registryDir);
+      if (names === null) {
+        return { ok: false, error: 'registry-unmeasurable',
+          detail: 'the registry directory could not be listed — transient, not a fact about the sender' };
+      }
+      if (names.includes(`${whoId}.uuid`)) {
+        return { ok: false, error: 'registry-unmeasurable',
+          detail: `registry row for ${whoId} is listed but unreadable — transient, not a fact about the sender` };
+      }
+      return { ok: false, error: 'unknown-sender', detail: `no registry row for ${whoId}` };
     }
-    return { ok: false, error: 'unknown-sender', detail: `no registry row for ${whoId}` };
+    case 'found':
+      break;
   }
+  const row = read.record;
   const identity = measuredIdentity(row);
   if (identity === null) {
     return { ok: false, error: 'registry-unmeasurable',
