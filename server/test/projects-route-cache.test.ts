@@ -599,4 +599,22 @@ describe('the walk cache (D-6436)', () => {
       } finally { await fresh.close(); }
     } finally { await r.app.close(); }
   });
+
+  // Review 1383 F2 (desktop-polish carry, D-7950): an entry stamped in the future after the clock steps back is dropped the
+  // first time its age reads negative, so it is not served once the clock reaches its stamp again with no measured walk or
+  // probe in between.
+  it('a kept walk or verdict whose age reads negative is dropped, not served again when the clock catches up', () => {
+    let now = T0 + 100_000;
+    const cache = new ProjectWalkCache(() => now);
+    cache.keepWalk([], cache.stamp());
+    cache.keepProbe('/w/a', true, cache.stamp());
+    expect(cache.keptWalk(), 'CONTROL: the walk is kept while fresh').toEqual([]);
+    expect(cache.keptProbe('/w/a'), 'CONTROL: the verdict is kept while fresh').toBe(true);
+    now = T0;
+    expect(cache.keptWalk(), 'a negative age is not fresh').toBeNull();
+    expect(cache.keptProbe('/w/a'), 'a negative age is not fresh').toBeNull();
+    now = T0 + 100_000;
+    expect(cache.keptWalk(), 'the walk was dropped, not kept for later').toBeNull();
+    expect(cache.keptProbe('/w/a'), 'the verdict was dropped, not kept for later').toBeNull();
+  });
 });
