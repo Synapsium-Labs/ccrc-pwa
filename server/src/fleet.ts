@@ -1,6 +1,7 @@
 import type { CcrcConfig } from './config.js';
 import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
-import type { Tmux } from './exec.js';
+import { verdictFromListing, type PaneListing, type Tmux } from './exec.js';
+import { tmuxName } from '../../shared/tmux-target.js';
 import type { FleetIO } from './io.js';
 import { readRegistryMeasured } from './registry.js';
 import type { SessionRecord } from './registry.js';
@@ -582,12 +583,16 @@ export async function assembleFleet(
    *  frame this assembly builds carries an old prediction however long the lane has been blind; the sends that carry an
    *  earlier fleet instead take `dropStaleLandings` (D-7481). */
   landings?: ReadonlyMap<string, SessionLanding>,
+  /** Console speed S1: the tick's one tmux listing. An ok one replaces the per-row `sessionVerdict` and `panePid`. */
+  paneListing?: PaneListing,
+  /** The limits the caller already read; absent = read here. */
+  limitsRead?: Awaited<ReturnType<typeof readLimits>>,
 ): Promise<FleetSession[]> {
   // Reached by TESTS alone (spec §2.3): every production caller passes the rows it read itself, and
   // registry-refused-census.test.ts pins all six `assembleFleet(` calls, so this fallback decides nothing a user
   // sees. An unlistable registry reads as no rows here, the old fallback's answer; refused rows were never rows.
   // [registry-refused:tests-only]
-  const [recs, limits] = await Promise.all([records ?? readRegistryMeasured(io, cfg).then((r) => (r.listed ? r.records : [])), readLimits(io, cfg, now)]);
+  const [recs, limits] = await Promise.all([records ?? readRegistryMeasured(io, cfg).then((r) => (r.listed ? r.records : [])), limitsRead ?? readLimits(io, cfg, now)]);
   // Task 19 fix round 1, item 3: ONE batched read for the whole assembly,
   // outside the per-session map below — never one `currentAskFor` per row.
   // `now` here is SECONDS (this function's own parameter contract); `asks`
@@ -610,7 +615,8 @@ export async function assembleFleet(
     // cannot-ask is a product judgement (a new SessionStatus crosses the wire
     // and every render seam), not a guard this assembly may improvise.
     const sessionRun = readSessionRun(coord, r);
-    const verdict = await tmux.sessionVerdict(r.id);
+    const listing = paneListing?.ok ? paneListing : undefined;
+    const verdict = listing ? verdictFromListing(listing, r.id) : await tmux.sessionVerdict(r.id);
     const alive = verdict.verdict === 'live';
     let status: SessionStatus = 'dead';
     let name: string | null = null, statusUpdatedAt: number | null = null, version: string | null = null;
@@ -631,7 +637,7 @@ export async function assembleFleet(
     let liveCoversWorkflows = false;
     if (alive) {
       status = 'idle';
-      const pid = await tmux.panePid(r.id);
+      const pid = listing ? (listing.panes.get(tmuxName(r.id))?.pid ?? null) : await tmux.panePid(r.id);
       panePids?.set(r.id, pid);
       const cfgDir = configDirFor(cfg, r.wrapper);
       if (pid === null) {

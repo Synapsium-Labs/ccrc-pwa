@@ -111,7 +111,6 @@ describe('readRegistryMeasured over a cache', () => {
 
   it('the second listing still retires a twice-absent hot row', async () => {
     const reg = edgeFixture();
-    const dir = fixtureConfig().registryDir;
     const victim = 'edge-wrapper-unreadable';   // unreadable identity member: needs the second listing
     const c = countingIO(reg);
     let listings = 0;
@@ -125,7 +124,6 @@ describe('readRegistryMeasured over a cache', () => {
     expect(listings).toBe(2);
     expect(r.listed && r.records.some((x) => x.id === victim)).toBe(false);
     expect(cache.get(victim)).toBeUndefined();
-    expect(path.dirname(path.join(dir, 'x'))).toBe(dir);
   });
 
   it('a refused id is never cached and never read', async () => {

@@ -1307,7 +1307,7 @@ export const REGISTRY_ROW_CONCURRENCY = 8;
 export type RegistryReadOpts = {
   cache?: RegistryRowCache;
   /** This tick's tmux verdict for a row, or null when there is no (clean) listing: doubt reads hot. */
-  verdicts?: (id: string) => SessionVerdict | null;
+  verdicts?: ((id: string) => SessionVerdict | null) | Promise<(id: string) => SessionVerdict | null>;
   nowMs?: number;
   /** Modification times by listing name, when the agent reports them (the times arm); absent = names-only keys. */
   times?: ReadonlyMap<string, number>;
@@ -1369,11 +1369,13 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig, opts?: 
   const nowMs = opts?.nowMs ?? now;
   const keys = cache === undefined ? null : rowKeys(names, ids, opts?.times);
   if (cache !== undefined) cache.prune(new Set(ids));
+  // The tick's verdicts may still be in flight (its tmux listing runs beside this read): wait after the readdir.
+  const verdictOf = await opts?.verdicts;
   const built = await mapBounded(ids, REGISTRY_ROW_CONCURRENCY, async (id) => {
     if (cache === undefined || keys === null) return buildRecord(io, cfg, listing, id, now);
     const key = keys.get(id)!;
     const prev = cache.get(id);
-    if (rowTemperature(prev, opts?.verdicts?.(id) ?? null, key, nowMs) === 'cold') {
+    if (rowTemperature(prev, verdictOf?.(id) ?? null, key, nowMs) === 'cold') {
       reused.add(id); cold.add(id);
       return prev!.record;
     }

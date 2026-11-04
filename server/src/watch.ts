@@ -8,6 +8,8 @@ import { radarRowsOf, sessionLandingsOf } from './coord/radar.js';
 import { askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { buildFleetReadModel, type FleetReadModel } from './fleetReadModel.js';
+import { RegistryRowCache } from './registryRowCache.js';
+import { listingNotice, planTick, verdictsOf } from './tickPlan.js';
 import { mapBounded } from './bounded.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
@@ -787,6 +789,9 @@ export class FleetWatcher {
    *  local JSON read per session, cheap enough not to need its own slower
    *  clock the way task/PR sweeps do. */
   private hookStates = new Map<string, HookState>();
+  /** Console speed S1: the registry reader's row cache and the pane-listing log latch (`tickPlan.ts#listingNotice`). */
+  private readonly rowCache = new RegistryRowCache();
+  private listingFailed = false;
   /** The usage sidecar lane (routing slice 0) — rebuilt on its own
    *  `USAGE_SWEEP_MS` clock, not every tick; see `sweepUsage`. */
   private usage = new Map<string, SessionUsage>();
@@ -2516,10 +2521,11 @@ export class FleetWatcher {
       // A refused id's absence from `records` is no measure of the session. The lanes on this tick that would read
       // it as one are handed `registryRead.refused` and hold the id, or leave it out (`tick-lanes-hold-a-refused-id`):
       // the stall watch on `StallTick`, the claim lease lanes and the divergence census.
+      const listingP = this.deps.tmux.listPanes();   // beside the registry read: one tmux ask a tick (console speed S1)
       // [registry-refused:omits] a refused id is in no `records`: no state and no field read here, and the lanes handed `refused` hold it, never read it as absent.
       // The tick's ONE selection listing, as the model (D-5864): the lanes that choose their rows from the registry are
       // handed it below, so they do not list again.
-      const registryRead = buildFleetReadModel(await readRegistryMeasured(this.deps.io, this.deps.cfg));
+      const registryRead = buildFleetReadModel(await readRegistryMeasured(this.deps.io, this.deps.cfg, { cache: this.rowCache, verdicts: listingP.then(verdictsOf), nowMs: listedAt }));
       // BEFORE the fail-shut return below, and on BOTH arms (D-283 (was D-B4-10)). An
       // unlistable registry is not "nothing is set": it is the exact state
       // `dispatchRun` FAILS SHUT on (`dispatch.ts:106-109`), so it must reach
@@ -2575,6 +2581,10 @@ export class FleetWatcher {
         return;
       }
       const records = registryRead.records;
+      const paneListing = await listingP;
+      const notice = listingNotice(this.listingFailed, paneListing); this.listingFailed = notice.failed;
+      if (notice.warn !== null) console.warn(notice.warn);
+      const plan = planTick(records, registryRead.cold, paneListing);
       this.registryIds = new Set([...records.map((r) => r.id), ...registryRead.refused]);
       this.listedIds = registryRead.listedIds;
       // Wave 5: the reclaim chip's registry answer, off THIS listing. Never a
@@ -2606,9 +2616,9 @@ export class FleetWatcher {
       // yields a menu with no envelope, and therefore an action-less ask push.
       // What covers the residue is `actionlessAsks` in `detectDialogs` below:
       // the latch remembers that push and amends it when the envelope turns up.
-      await this.sweepHookStates(records);
-      await this.sweepUsage(records);
-      const pending = await this.detectDialogs(this.primed, registryRead.names, records);
+      await this.sweepHookStates(records, plan.hookIds);
+      await this.sweepUsage(records, plan.usageIds);
+      const pending = await this.detectDialogs(this.primed, registryRead.names, records, plan.captureIds);
       await this.sweepTasks(registryRead);
       // NEVER awaited: it shells out over the network and `gh` has no
       // --timeout, so awaiting it would stall the dialog detector and the
@@ -2718,7 +2728,7 @@ export class FleetWatcher {
         clearTimeout(timer);
       }
       const panePids = new Map<string, number | null>();
-      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings);
+      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings, paneListing);
       // Blocking review finding 4: `FleetSession.unmeasured` (Task 2) now
       // carries the SAME evidence `measuredIdentity(records[i]) === null`
       // would, one hop from `records[i]` in `sessions[i]` — so this reads it
@@ -3552,7 +3562,7 @@ export class FleetWatcher {
    * read) so this stays independently callable, same shape as
    * `detectDialogs` below.
    */
-  private async sweepHookStates(records?: SessionRecord[]): Promise<void> {
+  private async sweepHookStates(records?: SessionRecord[], readIds?: ReadonlySet<string>): Promise<void> {
     const now = Date.now();
     let recs: SessionRecord[];
     if (records) {
@@ -3589,7 +3599,7 @@ export class FleetWatcher {
         // very sweep, exactly as it always has (verified: this map has no
         // OTHER pruning mechanism, so the full-rebuild-from-current-listing
         // shape is load-bearing and is preserved here unchanged).
-        if (measuredIdentity(r) === null) {
+        if (measuredIdentity(r) === null || readIds?.has(r.id) === false) {   // a cold row (console speed S1) keeps its entry too
           const prev = this.hookStates.get(r.id);
           if (prev) next.set(r.id, prev);
           return;
@@ -3617,15 +3627,16 @@ export class FleetWatcher {
    *  freshness call nobody measured this sweep, unbounded — controller
    *  ruling R5 — `readUsageMeasured` tells unreadable from absent, which
    *  drops the row). */
-  private async sweepUsage(records: SessionRecord[]): Promise<void> {
-    await this.runLane('usage', () => this.usagePass(records));
+  private async sweepUsage(records: SessionRecord[], readIds?: ReadonlySet<string>): Promise<void> {
+    await this.runLane('usage', () => this.usagePass(records, readIds));
   }
 
-  private async usagePass(records: SessionRecord[]): Promise<void> {
+  private async usagePass(records: SessionRecord[], readIds?: ReadonlySet<string>): Promise<void> {
     const now = Date.now();
     const nowS = Math.floor(now / 1000);
     const next = new Map<string, SessionUsage>();
     await Promise.all(records.map(async (r) => {
+      if (readIds?.has(r.id) === false) { const kept = this.usage.get(r.id); if (kept) next.set(r.id, kept); return; }   // cold row (console speed S1)
       const read = await readUsageMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, nowS);
       if (read.kind === 'reading') next.set(r.id, read.usage);
       else if (read.kind === 'unreadable') {
@@ -9059,7 +9070,7 @@ export class FleetWatcher {
    * always has, needing no retain-don't-erase logic of its own — the code
    * makes that visible by NOT mentioning `measuredIdentity` anywhere below.
    */
-  private async detectDialogs(notify: boolean, listing?: readonly string[], records?: SessionRecord[]): Promise<Set<string>> {
+  private async detectDialogs(notify: boolean, listing?: readonly string[], records?: SessionRecord[], captureIds?: ReadonlySet<string>): Promise<Set<string>> {
     const pending = new Set<string>();
     // The hold's answer, sent here: `raise` answers what to send now and never pushes (W3 Q3d, D-7028).
     const pushRaised = (v: RaiseVerdict): RaiseVerdict => {
@@ -9080,7 +9091,7 @@ export class FleetWatcher {
     // reconciles.
     const caps = await mapBounded(recs, DIALOG_CAPTURE_CONCURRENCY, async (r) => {
       const at = Date.now();
-      try { return { at, pane: await this.deps.tmux.capture(r.id), doneAt: Date.now() }; } catch (err) { return { at, err }; }
+      try { return { at, pane: captureIds?.has(r.id) === false ? null : await this.deps.tmux.capture(r.id), doneAt: Date.now() }; } catch (err) { return { at, err }; }
     });
     for (const [i, r] of recs.entries()) {
       const cap = caps[i]!;
