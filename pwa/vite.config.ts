@@ -188,6 +188,11 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    // pwa has no workspace root above it, so the dev server and vitest would allow pwa/ alone, and @ccrc/ui resolves
+    // through its symlink to ../ui: a `?raw` read of its stylesheets (docs/export/stylesheet.ts) is refused outside
+    // the allow list. Setting `allow` replaces the default, so '.' keeps pwa's own root. The production build is not
+    // affected.
+    fs: { allow: ['.', '../ui'] },
     // Dev proxy to a local ccrc-server (run with CCRC_HOME at a fixture tree).
     proxy: {
       '/api': { target: 'http://127.0.0.1:7788', changeOrigin: true },

@@ -1161,6 +1161,7 @@ describe('every stylesheet under src/ is audited', () => {
       );
     const APP_SHEETS = [
       'src/docs/docs.css',
+      'src/docs/export/export.css', // Export's own chrome (W5 Export): never imported by the app; read into every export's <style>
       'src/fleet/fleet.css',
       'src/fleet/programmeBox.css', // a programme as a box in its project card (Task G2): the frame, the kicker, the hues
       'src/ledgers/ledgers.css',  // the Waiting on you list and the item view (desktop-polish PL5a, D-7712): pills and the programme band
@@ -2443,5 +2444,54 @@ describe('the Waiting on you pills and the item band (desktop-polish PL5a)', () 
     const keys = rulesOf(ROOT, SHEET).map(ruleKey);
     expect(keys.length).toBeGreaterThan(20);
     for (const key of keys) expect(report.uncovered, key).not.toContain(key);
+  });
+});
+
+// ── native Docs reader W5, Export: the export's own chrome (docs/export/export.css; M4.S1's Export clause, M4.EX10) ──
+// The app never imports this sheet: docs/export/stylesheet.ts reads it as text into every export's one <style>. Its
+// <body> rule (.ccrc-export) paints the export's ground and ink and is measured on it; the one other colour rule sets
+// --ink-secondary inside it and is registered in INHERITED_GROUNDS with its reason. None joins the frozen census, none
+// is grandfathered, and every palette is measured, as the export may carry any of them (refinement (e)).
+describe('the export chrome is measured, not left in the blind spot (M4.S1 Export clause, M4.EX10)', () => {
+  const exportRules = rulesOf(ROOT, 'src/docs/export/export.css');
+  const NOT_A_COLOUR = /^(inherit|currentColor|unset|initial|revert)$/i;
+  const colourRules = exportRules.filter((r) => {
+    const ink = declOf(r.body, 'color');
+    return ink !== null && !NOT_A_COLOUR.test(ink);
+  });
+  const QUIET = '.ccrc-export-provenance, .ccrc-export-note, .ccrc-export-missing, .ccrc-export-caption';
+  const rowsOf = (key: string): typeof report.measured => report.measured.filter((m) => {
+    const label = m.label.replace(/^\S+\s+/, '');
+    return label === key || label.startsWith(`${key} [in `);
+  });
+
+  it('finds the sheet and its two colour rules (not a vacuous pass)', () => {
+    expect(report.sheets).toContain('src/docs/export/export.css');
+    expect(colourRules.map(ruleKey).sort()).toEqual(['.ccrc-export', QUIET]);
+  });
+
+  it('measures both colour rules in every palette, at or above the floor', () => {
+    for (const r of colourRules) {
+      const key = ruleKey(r);
+      expect(report.uncovered, key).not.toContain(key);
+      const rows = rowsOf(key);
+      expect(rows, key).toHaveLength(THEME_COUNT);
+      for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(row.floor);
+    }
+  });
+
+  it('grandfathers nothing, and registers exactly the quiet ink, on the page, with a reason', () => {
+    const keys = new Set(exportRules.map(ruleKey));
+    expect([...GRANDFATHERED_UNCOVERED].filter((k) => keys.has(k))).toEqual([]);
+    const registered = Object.entries(INHERITED_GROUNDS).filter(([k]) => keys.has(k));
+    expect(registered.map(([k]) => k)).toEqual([QUIET]);
+    expect(registered[0]?.[1].under).toEqual(['var(--bg-page)']);
+    expect(registered[0]?.[1].why.length).toBeGreaterThan(40);
+  });
+
+  it('spells no literal colour (tokens only, section 4.14)', () => {
+    const text = exportRules.map((r) => r.body).join(';');
+    expect(text).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(text).not.toMatch(/(?<![\w-])(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i);
   });
 });

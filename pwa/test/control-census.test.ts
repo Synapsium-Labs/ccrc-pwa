@@ -437,6 +437,9 @@ const CONTROLS: Record<string, string> = {
   'docs/DocsHead.tsx <button> docs-action docs-share':
     "TOKEN. Share (spec 4.16), after View on GitHub: a <button> wearing the header's link-action class, `.docs-action`, "
     + 'whose rule carries the floor.',
+  'docs/DocsHead.tsx <button> docs-action docs-export':
+    "TOKEN. Export (spec 4.17), after Share on a leaf: a <button> wearing the header's link-action class, `.docs-action`, "
+    + 'whose rule carries the floor.',
   'docs/DocsHead.tsx <a> docs-action': 'TOKEN. View on GitHub and Open committed version, standalone links in the header.',
   'docs/DocsIndexView.tsx <button> docs-row': 'TOKEN. A project row of the Docs index, one button per row (spec 4.4).',
   'docs/DocsTreeView.tsx <button> docs-row': 'TOKEN. A section or entry row of a Docs directory, the same rule.',
@@ -454,6 +457,9 @@ const CONTROLS: Record<string, string> = {
   'docs/DocLink.tsx <a> (none)':
     'INLINE. The links inside a rendered document, react-markdown\'s `a` for Docs (in-app, fragment and external). '
     + 'WCAG 2.2 SC 2.5.8 exempts a target in a sentence or block of text, as for chat\'s `lib/markdown.tsx <a> (none)`.',
+  'docs/export/exportMarkdown.tsx <a> (none)':
+    'INLINE. The links inside an exported document, `EXPORT_COMPONENTS.a` (docs W5 Export): drawn into the saved file, '
+    + 'never into the app, and in a sentence or block of text, as for `docs/DocLink.tsx <a> (none)`.',
 };
 
 /** OVERLAY entries name the pseudo-rule that reaches the floor. */

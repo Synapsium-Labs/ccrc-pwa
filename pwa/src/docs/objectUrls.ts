@@ -39,6 +39,13 @@ export function saveBytes(name: string, bytes: Uint8Array<ArrayBuffer>): void {
   setTimeout(() => URL.revokeObjectURL(url), DOCS_SAVE_REVOKE_MS);
 }
 
+/** Export's Save (spec 4.17 "Save", 5.4): the builder's bytes under their file name, through `saveBytes`, so an export
+ *  is saved as `.html` by name but typed octet-stream, never `text/html` (E6, M5.17). The ONE consumer of the builder's
+ *  output (M4.EX16). It is synchronous, so the Save click that calls it keeps its user activation (M4.EX13). */
+export function downloadExport(result: { readonly name: string; readonly bytes: Uint8Array<ArrayBuffer> }): void {
+  saveBytes(result.name, result.bytes);
+}
+
 /** A docs-show answer's bytes: `utf8` text encoded as UTF-8, `base64` decoded. `null` has ONE meaning: the answer
  *  holds no bytes in the field its encoding names (the field is missing, or the base64 does not decode). */
 export function showBytes(show: DocsShowOk): Uint8Array<ArrayBuffer> | null {

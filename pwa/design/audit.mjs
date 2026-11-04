@@ -1213,6 +1213,11 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the note above a document shown as plain text (DocPlain), a <p> in the unpainted leaf, so --bg-page, as chat's .msg-plain-note",
   },
+  // ── native Docs reader W5, Export: the export's own chrome (docs/export/export.css) ──
+  '.ccrc-export-provenance, .ccrc-export-note, .ccrc-export-missing, .ccrc-export-caption': {
+    under: ['var(--bg-page)'],
+    why: "an exported file's quiet ink: the provenance block, a plain body's note, an image placeholder and an image's draft caption, each in --ink-secondary inside the export's <body>, .ccrc-export, which paints --bg-page and is measured as a pair of its own. A placeholder inside a table or a callout sits on that block's tint instead; the auditor takes one ground per rule",
+  },
   // ── settings Task R2b2 (D-5503): the cards' when-line ──────────────────
   '.settings-when': {
     under: ['var(--bg-surface)'],
