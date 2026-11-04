@@ -2664,6 +2664,75 @@ Written on the open ledger PR #2275:
 
 Task PL11 is defined as D-7986, issued by the allocator today. It lands after PL10, which is near done; changing PL10 now would cost both.
 
+**Child reclamation found stuck since 10-29; reported to calm-mesa (14912).** Measured read-only for the operator's question about the 780 tmux spawns.
+- `ccd ls`: 63 running, 288 stopped and 5 orphan. 267 of the stopped rows are `.child` workers or reviewers.
+- `runs list --closed`: 271 closed runs read childReclaim `deferred`, every one with "could not finish measuring this workspace". Their last failures run from 10-29 06:33Z to now.
+- The last `reclaimed` outcome is for a run closed 10-29 05:14Z: 206 were reclaimed from 10-24 to 10-29.
+- The tick's per-row capture-pane and has-session spawns over those rows are the bulk of the 780.
+
+Reported to the reclamation programme's coordinator as a finding. Its dispatch is theirs. Also merged: #2254, whose claims 3402 and 3411 release (14909); PL10 merges main once if it lands second. The D29/D30 steer was pushed to #2275 as 8e2fd7abb, and Goals modification 10 is bound to it.
+
+**Operator ruling, 2026-11-04: console speed, fixes first; item 32 withdrawn as answered in chat.** The operator: "Yes to all these fixes, I don't want to waste time measuring for a day, I'd prefer you first do the fixes then measure behaviour to see if there's anything ELSE we can optimise." The approved list:
+- the server and link: read stopped sessions rarely; one tmux ask per refresh; the frame as soon as the list is ready; no per-chat re-checks; limits on the run-history and release-list reads;
+- the app: a dropped connection noticed within about 30 s; request time limits; each screen's last view kept; big screens loaded only when opened;
+- caching, from the operator's next question.
+
+The allocator issued D-7987 to D-7990 for four parallel tasks: S1 the tick, S2 the per-request reads, C1 the link and the start, C2 last view kept. An Opus drafter is writing the spec and plan from the three reports, for my review.
+
+Also at the operator's ask ("figure out why our resource management (dead sessions etc.) is not doing its job properly"), a read-only Opus forensic investigator is tracing the stuck child reclamation and the other lifecycle lanes. Its findings go to calm-mesa, whose verbs they are.
+
+**Cleanup root cause found; items 35 (do, blocking) and 36 (decide) raised.** The read-only forensic investigator's report is `perf-20261104/report-reclaim.md`.
+
+The cause:
+- The ccd lifecycle journal holds 6580 `reclaim failed probe-unmeasured` lines since 10-29 06:33:10Z, all with one detail: the registry rows ccrc-pwa-calm-mesa and ccrc-pwa-brisk-mesa name workdirs that cannot be resolved.
+- Both rows are archived and both trees are gone (measured: `ls` fails, the branches exist at 64f46172 and 9b9b4ecb, and no worktree has them checked out). Neither has a git record or a breadcrumb.
+- `_ws_reclaim_workdir_shared` and `_ws_reclaim_recorded` then refuse every reclaim box-wide. The ladder is shared, so expiry and the collector are blocked too.
+
+The trigger: a session's repo-wide `git worktree prune` at 10-29 06:13:53Z removed the `prunable` records that had placed the rows.
+
+Refuted: load and the /proc walks. A full walk took 0.30 s against the 10 s bound.
+
+calm-mesa is the reclamation programme's own coordinator, archived since 10-23, so finding 14912 is unread. Raised:
+- item 35: the operator recreates the two worktrees (non-destructive), with the commands;
+- item 36: who builds the code fixes: an evidence arm for archived rows, a smaller blast radius plus surfacing the blocking row, a hook refusing a repo-wide `git worktree prune`, the collector's box-move witnesses, and the 5 orphan rows. I recommend this programme.
+
+brisk-mesa still claims two planned runs, 66 and 83, of the terminal-drawer-fit programme.
+
+**PL10: leave 14927 for icon.test.tsx (claim 3428).** The Account door's removal left a stale colour-emoji registry entry. Run 1436 granted exactly those four lines, and measured a three-way merge with its own branch as clean. Relayed to the worker. #2275 is queued fourth, with `--match-head-commit 8e2fd7abb`.
+
+**Console speed spec and plan written; D1 to D14 ruled (2026-11-04).** The spec `docs/superpowers/specs/2026-11-04-console-speed-design.md` and the plan `docs/superpowers/plans/2026-11-04-console-speed.md` were drafted by an Opus agent from the three reports and the operator's scope, and reviewed here.
+
+D1 to D14 are agreed as the coordinator's calls inside that scope:
+- D10 follows D-113: a sender whose row is seen absent twice is gone.
+- The plan's "rebase" steps were rewritten as "merge main once".
+
+Where main contradicted the brief:
+- no frame arrives every 2 s, so S2 adds a 10 s beat and C1's watchdog arms only after one;
+- the archive is already capped at 500;
+- the mtime keys need an additive agent capability;
+- the timers' exposure lives in S2's files.
+
+Four tasks: S1 (D-7987), S2 (D-7988), C1 (D-7989) and C2 (D-7990). Snapshots and their sha256 are in the info directory (`perf-20261104/authority-*-speed.md`). Items 33 and 34 stay open, outside the spec.
+
+**Console speed dispatched; #2275 merged (2026-11-04).**
+- **Ledger PR #2279 opened** with the spec and plan. Locally, deviation-refs' "two real trees" case timed out at 20 s at load 9 to 14; CI is the arbiter.
+- **The four tasks were opened and dispatched,** on route opus/high with sonnet subagents, workflow off and compact 40. The briefs are in `perf-20261104/`, and authority is the snapshots with their sha256.
+  - Wave 88, run 1453: S1 (ccrc-pwa-polish-speed-s1).
+  - Wave 89, run 1454: S2.
+  - Wave 90, run 1455: C1.
+  - Wave 91, run 1456: C2.
+- **#2275 MERGED** at 17:20:06Z as 16677fd85: D26 amended, D29, D30, Task PL11 and D-7986 are on main. Goals modifications 9 and 10 were marked merged. The ledger worktree was removed.
+- **PL10:** run 1442's coordinator was asked (14931) for one cell of the architecture spec's C5 row, under claim 3434, because MailBadge.tsx is deleted.
+
+- 2026-11-04: leave 14933 (run 1442, claim 3434) relayed to PL10 as 14938. It covers exactly one deletion: "`fleet/MailBadge.tsx`, " in the C5 row of the architecture spec. Run 1442 edits only the C9 row, and a three-way merge was measured clean.
+- 2026-11-04: the speed workers' claim questions were ruled.
+  - C2 (14939): may add one `clearScreenCache()` line to `pwa/test/setup.ts`, under its own claim. Departure setup-clears-screen-cache. Ruling 14946.
+  - C1 (14941): granted leave in `pwa/src/app.tsx` (claim 3430, PL10) for l.17, l.31-40 and l.150-167 only. PL10's one hunk is l.90-96. SettingsDataProvider stays eager (departure settings-provider-stays-eager). Ruling 14945, with PL10 told in 14947.
+  - S2 (14940): keep out of `server/src/lifecycle.ts` (PL10's hunk at l.185 sits inside fleetRowsUsable), and pin the two readers equal in a test (departure fleetrowsusable-not-reexpressed). Leave was asked for the other three files, all measured disjoint from their holders' hunks:
+    - `shared/api.ts` and `coord/store.ts`, from the delegation coordinator, in 14942;
+    - `server.ts`, from run 1442's coordinator, in 14943.
+  - S2 was told to wait for the relays before editing those three (14944).
+
 ## R125: Delegation rows that read "running" are handed to the delegation broker (2026-11-01)
 
 The operator asked what a coordinator's box full of unnamed "agent · running" and "workflow · running" rows was. They are the delegation broker's activity rows: one row per helper (subagent or workflow agent) that a session started, under that session. Measured on the fleet box from that session's own Claude Code files: every one of its workflows had finished, and no helper had written for about three hours, so the rows were stale. As main reads, a row is live while its end was never matched and its parent session's incarnation is unchanged; nothing checks the helper's own activity or times a row out.
