@@ -16,6 +16,7 @@ type Reading = {
   killed_background_tasks?: number; transcript_uuids_with_kills?: number;
   transcripts_read?: number; unreadable_transcripts?: number;
   malformed_rows?: number; unmeasured_notifications?: number;
+  notification_sources?: { user: number; queued_command: number; queue_enqueue: number };
 };
 beforeEach(() => {
   h = makeCcdHarness('ccrc-measure-pressure-');
@@ -53,7 +54,8 @@ const transcript = (uuid: string, lines: string[], root = '.claude', project = '
  *  interpreter the question in the conditions the instrument will meet it in. */
 const instrumentEnv = (): NodeJS.ProcessEnv => (
   { ...inheritedEnv(), HOME: h.home, TZ: 'UTC', XDG_RUNTIME_DIR: path.join(h.home, 'xdg') });
-const read = (extra: string[] = []): Reading => {
+// readFull(extra) returns the whole section, notification_sources included.
+const readFull = (extra: string[] = []): Reading => {
   const out = execFileSync('python3', ['-I', TOOL, '--home', h.home, '--stage', '6',
     '--journal', path.join(h.home, 'journal.json'), '--json', ...extra], {
     encoding: 'utf8', timeout: 30_000, env: instrumentEnv(),
@@ -64,6 +66,23 @@ const read = (extra: string[] = []): Reading => {
   expect(result.stage6.direct_pressure_kills, 'the direct metric is composed into stage 6').toBeDefined();
   return result.stage6.direct_pressure_kills!;
 };
+// read(extra) asserts that notification_sources is three non-negative integers on every reading except
+// { transcripts: 'absent' }, and returns the rest, so the existing read() assertions stay as they are.
+const read = (extra: string[] = []): Reading => {
+  const { notification_sources: sources, ...rest } = readFull(extra);
+  if (rest.transcripts !== 'absent') {
+    expect(sources, 'notification_sources is on every reading').toBeDefined();
+    expect(Object.keys(sources!).sort()).toEqual(['queue_enqueue', 'queued_command', 'user']);
+    for (const n of Object.values(sources!)) expect(Number.isInteger(n) && n >= 0).toBe(true);
+  }
+  return rest;
+};
+type Sources = { user: number; queued_command: number; queue_enqueue: number };
+const src = (user: number, queued_command = 0, queue_enqueue = 0): Sources => ({ user, queued_command, queue_enqueue });
+const attachmentRow = (prompt: unknown, t: number = T): string => JSON.stringify({
+  type: 'attachment', timestamp: iso(t), attachment: { type: 'queued_command', prompt, commandMode: 'prompt' } });
+const queueRow = (content: unknown, operation = 'enqueue', t: number = T): string => JSON.stringify({
+  type: 'queue-operation', operation, timestamp: iso(t), ...(content === null ? {} : { content }) });
 const clean = (kills: number, uuids: number, files: number): Reading => ({
   reading: 'measured', killed_background_tasks: kills, transcript_uuids_with_kills: uuids,
   transcripts_read: files, unreadable_transcripts: 0, malformed_rows: 0, unmeasured_notifications: 0,
@@ -81,6 +100,12 @@ describe('direct background-shell pressure kills, not pane-scope OOM stops', () 
     transcript(U1, [row(note('same'))], '.claude-copy', '-project-b');
     transcript(U2, [row(note('same'))]);
     expect(read(all ? ['--all-copies'] : [])).toEqual(clean(3, 2, all ? 3 : 2));
+  });
+
+  it('one unmeasured envelope in two copies of one uuid is one unmeasured notification (D-7961)', () => {
+    transcript(U1, [row(note('odd', 'exploded'))]);
+    transcript(U1, [row(note('odd', 'exploded'))], '.claude-copy', '-project-b');
+    expect(read(['--all-copies'])).toEqual({ ...clean(0, 0, 2), reading: 'partial', unmeasured_notifications: 1 });
   });
 
   it('the existing largest-copy trade is visible; all-copies recovers a divergent shorter copy', () => {
@@ -348,14 +373,167 @@ describe('the scanner pins its own branches (D-4322 minors)', () => {
     })) as Reading;
 
   it('hits from a file are admitted only after it reads to its end: a read that fails mid-file admits none of them', () => {
-    transcript(U1, [row(note('lost-1')), row(note('lost-2')), row(note('lost-3'))]);
+    // U1's first two rows are one kill and one unmeasured envelope; the torn file admits neither.
+    transcript(U1, [row(note('lost-1')), row(note('odd', 'exploded')), row(note('lost-3'))]);
     transcript(U2, [row(note('kept'))]);
-    expect(readTorn(U1, 2)).toEqual({ ...clean(1, 1, 1), reading: 'partial', unreadable_transcripts: 1 });
+    expect(readTorn(U1, 2)).toEqual({ ...clean(1, 1, 1), reading: 'partial', unreadable_transcripts: 1, notification_sources: src(1) });
   });
 
   it('the torn-read harness reads a whole file when it does not tear (control)', () => {
-    transcript(U1, [row(note('one')), row(note('two'))]);
+    transcript(U1, [row(note('lost-1')), row(note('odd', 'exploded')), row(note('lost-3'))]);
     transcript(U2, [row(note('kept'))]);
-    expect(readTorn(U1, 99)).toEqual(clean(3, 2, 2));
+    expect(readTorn(U1, 99)).toEqual({ ...clean(3, 2, 2), reading: 'partial', unmeasured_notifications: 1, notification_sources: src(4) });
+  });
+
+  // Same idea for a value the scanner cannot dump: json.dumps is replaced, inside the module only, by one that
+  // raises RecursionError for a list or dict holding the sentinel key below, so the test does not depend on the
+  // interpreter's depth limit. On this interpreter a deep LIST already fails in json.loads (a malformed row before
+  // the dump arm); only a deep DICT parses and then fails to dump, so the injected fake is what reaches the arm.
+  // The fake keys on the sentinel, never on the notification marker, so a case can be undumpable with or without
+  // a notification in its raw line. `mc.json` is the global json module, so it is swapped for a namespace and the
+  // harness's own `json` stays real. argv: tool, home, since, until (epoch seconds, or "none").
+  const DUMP = [
+    'import importlib.util, json, sys, types',
+    'tool, home = sys.argv[1], sys.argv[2]',
+    'num = lambda v: None if v == "none" else float(v)',
+    'spec = importlib.util.spec_from_file_location("measure_continuity", tool)',
+    'mc = importlib.util.module_from_spec(spec)',
+    'spec.loader.exec_module(mc)',
+    'real_dumps = json.dumps',
+    'def fake_dumps(value, *a, **kw):',
+    '    out = real_dumps(value, *a, **kw)',
+    '    if isinstance(value, (dict, list)) and "undumpable_fixture" in out: raise RecursionError("fixture")',
+    '    return out',
+    'mc.json = types.SimpleNamespace(loads=json.loads, dumps=fake_dumps)',
+    'print(real_dumps(mc.s6_pressure_kills({"home": home, "since": num(sys.argv[3]), "until": num(sys.argv[4]), "all_copies": False})))',
+  ].join('\n');
+  const readUndumpable = (since = 'none', until = 'none'): Reading => JSON.parse(execFileSync('python3',
+    ['-I', '-c', DUMP, TOOL, h.home, since, until], {
+      encoding: 'utf8', timeout: 30_000, env: { ...inheritedEnv(), HOME: h.home, TZ: 'UTC' },
+    })) as Reading;
+  // An enqueue row whose content is a dict the fake cannot dump (the sentinel key), optionally holding a notice.
+  const undumpableRow = (extra: unknown, t: number = T): string => queueRow({ undumpable_fixture: true, extra }, 'enqueue', t);
+
+  it('a payload holding a notification that cannot be dumped is one malformed row, never a silent skip', () => {
+    // Reaches the arm: the sentinel key makes the fake raise; the raw line holds the plain opener.
+    transcript(U1, [undumpableRow(note('deep')), row(note('real'))]);
+    expect(readUndumpable()).toEqual({ ...clean(1, 1, 1), reading: 'partial', malformed_rows: 1, notification_sources: src(1) });
+  });
+  it('a payload whose raw line holds the JSON-escaped opener is also one malformed row', () => {
+    transcript(U1, [undumpableRow(note('deep')).replaceAll('<', '\\u003c'), row(note('real'))]);
+    expect(readUndumpable()).toEqual({ ...clean(1, 1, 1), reading: 'partial', malformed_rows: 1, notification_sources: src(1) });
+  });
+  it('an undumpable row outside the window counts nothing (the window comes before the arm)', () => {
+    // Reaches the arm: sentinel key, raw line holds the opener, stamp is a day after the window's end.
+    transcript(U1, [undumpableRow(note('deep'), T + 86400), row(note('real'))]);
+    expect(readUndumpable(String(T - 3600), String(T + 3600)))
+      .toEqual({ ...clean(1, 1, 1), notification_sources: src(1) });
+  });
+  it('an undumpable row whose raw line holds no notification counts nothing', () => {
+    // Reaches the arm: sentinel key raises in the fake, though the raw line has no opener.
+    transcript(U1, [undumpableRow('plain text'), row(note('real'))]);
+    expect(readUndumpable()).toEqual({ ...clean(1, 1, 1), notification_sources: src(1) });
+  });
+  it('an undumpable row holding a notification with a non-string stamp is one malformed row', () => {
+    transcript(U1, [JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: 7,
+      content: { undumpable_fixture: true, extra: note('deep') } }), row(note('real'))]);
+    expect(readUndumpable()).toEqual({ ...clean(1, 1, 1), reading: 'partial', malformed_rows: 1, notification_sources: src(1) });
+  });
+});
+
+describe('queued-command and enqueued notifications, counted once', () => {
+  it('a kill delivered only as a queued-command attachment is counted', () => {
+    transcript(U1, [attachmentRow(note('q1'))]);
+    expect(readFull()).toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 1, 0) });
+  });
+  it('a kill seen only in a queue enqueue row is counted', () => {
+    transcript(U1, [queueRow(note('e1'))]);
+    expect(readFull()).toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 0, 1) });
+  });
+  it('one notification across sources is counted once', () => {
+    const odd = note('odd', 'exploded');
+    transcript(U1, [queueRow(note('k')), attachmentRow(note('k')), row(note('k')),
+      queueRow(odd), attachmentRow(odd), row(odd)]);
+    expect(readFull()).toEqual({ ...clean(1, 1, 1), reading: 'partial', unmeasured_notifications: 1,
+      notification_sources: src(2, 2, 2) });
+  });
+  it('the same notice in two payload shapes counts in each: the unit is the uuid and the text it was read as', () => {
+    const odd = note('odd', 'exploded');
+    transcript(U1, [queueRow([{ type: 'text', text: odd }]), attachmentRow(odd)]);
+    expect(readFull()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 2,
+      notification_sources: src(0, 1, 1) });
+  });
+  it('dequeue and remove rows are not read', () => {
+    transcript(U1, [queueRow(note('r'), 'remove'), queueRow(note('d'), 'dequeue')]);
+    expect(readFull()).toEqual({ ...clean(0, 0, 1), notification_sources: src(0) });
+  });
+  it('an attachment of another type is not a notification', () => {
+    transcript(U1, [JSON.stringify({ type: 'attachment', timestamp: iso(T),
+      attachment: { type: 'skill_listing', prompt: note('s') } })]);
+    expect(readFull()).toEqual({ ...clean(0, 0, 1), notification_sources: src(0) });
+  });
+  it('a queued-command prompt in text parts is read as the user arm reads list content', () => {
+    transcript(U1, [attachmentRow([{ type: 'text', text: note('p') }])]);
+    expect(readFull()).toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 1, 0) });
+  });
+  it('a queued payload the scanner cannot read is unmeasured, never skipped', () => {
+    transcript(U1, [attachmentRow({ text: note('o1') }), queueRow({ text: note('o2') }), queueRow({ text: 'no notice' }),
+      attachmentRow([note('a')]), attachmentRow([{ type: 'image', source: 'x' }])]);
+    expect(readFull()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 3,
+      notification_sources: src(0, 2, 1) });
+  });
+  it('a queued row with a non-string timestamp is one malformed row', () => {
+    transcript(U1, [JSON.stringify({ type: 'attachment', timestamp: 1760443200,
+      attachment: { type: 'queued_command', prompt: note('t') } }), row(note('real'))]);
+    expect(readFull()).toEqual({ ...clean(1, 1, 1), reading: 'partial', malformed_rows: 1,
+      notification_sources: src(1) });
+  });
+  it('the window applies to queued rows by their own timestamp', () => {
+    transcript(U1, [attachmentRow(note('early'), T - 1), queueRow(note('late'), 'enqueue', T + 86400),
+      attachmentRow(note('in'), T + 1)]);
+    expect(readFull(['--since', '2026-10-14 12:00:00', '--until', '2026-10-15 12:00:00']))
+      .toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 1, 0) });
+  });
+  it('a notice enqueued before the window edge and delivered after it counts in both windows', () => {
+    transcript(U1, [queueRow(note('edge'), 'enqueue', T - 1), attachmentRow(note('edge'), T + 1)]);
+    expect(readFull(['--since', '2026-10-13 12:00:00', '--until', '2026-10-14 12:00:00']))
+      .toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 0, 1) });
+    expect(readFull(['--since', '2026-10-14 12:00:00', '--until', '2026-10-15 12:00:00']))
+      .toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 1, 0) });
+  });
+});
+
+describe('a summary-only notice is a known non-event unless it names low memory (D-7962)', () => {
+  const summaryOnly = (s: string): string => `<task-notification>\n<summary>${escapeText(s)}</summary>\n</task-notification>`;
+  it('a summary-only security-review notice is a known non-event', () => {
+    transcript(U1, [row(summaryOnly('Commit security review found 2 issues in <file>')),
+      attachmentRow(summaryOnly('Push security review did not finish'))]);
+    expect(readFull()).toEqual({ ...clean(0, 0, 1), notification_sources: src(1, 1, 0) });
+  });
+  it('with trailing reminder blocks a summary-only notice is still a known non-event', () => {
+    transcript(U1, [row(`${summaryOnly('Background security review found: path handling')}\n${reminder()}`)]);
+    expect(read()).toEqual(clean(0, 0, 1));
+  });
+  it('a summary-only notice that names low memory stays unmeasured', () => {
+    transcript(U1, [row(summaryOnly(PRESSURE)), row(summaryOnly('the box is running LOW ON MEMORY'))]);
+    expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 2 });
+  });
+  it('a summary-only notice with a non-string stamp is one malformed row, with no stamp it is unmeasured', () => {
+    const text = summaryOnly('Commit security review found 1 issue');
+    transcript(U1, [JSON.stringify({ type: 'user', timestamp: 5, message: { role: 'user', content: text } })]);
+    expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', malformed_rows: 1 });
+    transcript(U1, [JSON.stringify({ type: 'user', message: { role: 'user', content: text } })]);
+    expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 1 });
+  });
+  it.each([
+    ['free text after the summary that names low memory',
+      summaryOnly('Commit security review found 1 issue').replace('</summary>', '</summary>\nBackground command "x" was stopped because the system is running low on memory')],
+    ['a stray closing tag', summaryOnly('Commit security review found 1 issue').replace('</summary>', '</summary>\n</status>')],
+    ['a second element', summaryOnly('Commit security review found 1 issue').replace('</summary>', '</summary>\n<note>x</note>')],
+    ['two summaries', summaryOnly('one').replace('</summary>', '</summary>\n<summary>two</summary>')],
+    ['a summary with an attribute', summaryOnly('one').replace('<summary>', '<summary kind="x">')],
+  ])('a summary-only notice with anything else in its body stays unmeasured: %s', (_name, text) => {
+    transcript(U1, [row(text)]);
+    expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 1 });
   });
 });

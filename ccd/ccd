@@ -3247,8 +3247,8 @@ _reg_set() {   # id field value -> 0 iff the value is on disk under its own name
 # ANSWER AT ALL — and no ccd writer can produce one: `_reg_set` writes a regular
 # file through printf -> tmp -> atomic rename. CORRECTED (round 3): this named
 # `.svcfailed` as "the one direct writer". `_pr_py`, inside this same file,
-# writes `prphase`, `prnumber` and `prcheckedat` through its own tmp +
-# `os.replace` and appends `.prhistory` with a bare `open(…, 'a')` — four more
+# writes `prphase`, `prnumber`, `prbranch` and `prcheckedat` through its own tmp +
+# `os.replace` and appends `.prhistory` with a bare `open(…, 'a')` — five more
 # field files, none of them `_reg_set` and none of them `.svcfailed`. The
 # CONCLUSION survives, because all of them produce regular files; the census
 # carrying it did not.
@@ -4021,15 +4021,15 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), and D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50 — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, and D-5941's `prbranch` 51 — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 50: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
+  # The 51: `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
   # `carriednote`, `child`, `choicekept`, `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
-  # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
+  # `pool`, `prbranch`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `standdown`, `standdownaff`, `standdownprobe`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
   # `swapnarrownote`, `tdate`, `tickstuck`, `turn`, `typed`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
@@ -6235,7 +6235,7 @@ if mode == 'state':
 
     def get(field):
         # put/clear's own path arithmetic, read instead of written. Needed by
-        # the prhistory chokepoint below to see the OUTGOING prnumber/prphase
+        # the prhistory chokepoint below to see the OUTGOING prnumber/prphase/prbranch
         # before `clear`/the next `put` overwrite them — nothing upstream of
         # this `state` mode has read $REG for anything but rows_in()'s stdin,
         # so there was no read helper here to reuse.
@@ -6504,6 +6504,11 @@ if mode == 'state':
         if prev_at is None or prev_at <= checked_at:
             old_raw = get('prnumber')
             old_phase = get('prphase') or ''   # read before `put('prphase', ...)` below overwrites it
+            # The branch the outgoing PR was on, read before `clear('prbranch')` below
+            # (D-5941). `branch` in the row stays the branch at replacement, which is not
+            # this one across a reset. Absent for a number bound before this field existed,
+            # and the readers treat that row as unplaced.
+            old_prbranch = (get('prbranch') or '').strip()
             if old_raw is not None:
                 try:
                     old_num = int(old_raw)
@@ -6512,6 +6517,8 @@ if mode == 'state':
                 if old_num is not None and old_num != number:
                     rec = {'pr': old_num, 'branch': branch, 'phase': old_phase,
                            'recordedAt': int(time.time())}
+                    if old_prbranch:
+                        rec['prbranch'] = old_prbranch
                     # D-2380: one of FOUR OPENS in this mode, alongside
                     # `get()`, the lock above and `put()`'s own tmp-file open
                     # (above `get()` in this file) — the plan's own cardinal
@@ -6548,6 +6555,7 @@ if mode == 'state':
                     with open(hist_p, 'a') as f:
                         f.write(json.dumps(rec) + '\n')
             clear('prnumber')
+            clear('prbranch')
             put('prphase', phase)
             # phase and number are ONE answer, so a writer that persists half
             # of it lies. A PR that is deleted, force-pushed out of
@@ -6568,7 +6576,15 @@ if mode == 'state':
             # here used to claim the first guard alone made this unreachable; it
             # did not, and a `gh` that exited 0 with an empty or unparseable
             # stdout cleared a persisted `merged:#42`.
+            #
+            # `prbranch` goes AHEAD of the number and is cleared behind it, so under the lock
+            # a number on disk always has its branch beside it. The other order leaves a number
+            # with no branch, which retires as an unplaced row and so counts for every branch.
+            # Two runs that proceed UNLOCKED can still read the pair across each other's clear,
+            # and the row then goes unplaced, which is the legacy reading, not a false one.
+            # `pick` only chooses a row `bound` passed, so `headRefName` here equals `branch`.
             if number is not None:
+                put('prbranch', chosen.get('headRefName'))
                 put('prnumber', number)
             # LAST, and that ordering is the compare-and-set's other half: this
             # is the stamp the next writer compares against, so it must not
@@ -6877,7 +6893,7 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # `--session` argv, its `--project` argv, the `*.workspace` loop's id
 # check, and the registry-project check), of which two are PROJECT checks.
 # The justification is not that those uses are read-only — `cmd_pr_state`
-# persists three registry fields (`prnumber`, `prphase`, `prcheckedat`) and
+# persists four registry fields (`prnumber`, `prbranch`, `prphase`, `prcheckedat`) and
 # creates `$REG/.prstate-<id>.lock` — it is that NONE OF THEM MINTS AN ID:
 # each validates a project that either already exists in a registry row or
 # arrived for a read, and refusing there could STRAND an existing row
@@ -11728,7 +11744,7 @@ cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <proje
 # NUMBER, so a landing PR older than `gh pr list`'s newest-100 window still binds; two `gh api` GETs read the base's
 # required-check names, cached under `$REG/pr-landing/` (the only registry path this verb writes). The binding is
 # `_pr_bind_facts` and `_pr_py bind`, the same code `pr-state` binds with, and nothing is persisted: `pr-state` stays
-# the one writer of `prphase`, `prnumber` and `prcheckedat`.
+# the one writer of `prphase`, `prnumber`, `prbranch` and `prcheckedat`.
 #
 # THE DOCUMENT IS BUILT, NOT INTERPOLATED. `_gh_pr_landing_query K` repeats one fixed per-alias fragment K times, K the
 # integer count of sessions (1 to 16), declaring exactly `$n0` to `$n<K-1>` as `Int!`. A constant 16-alias document

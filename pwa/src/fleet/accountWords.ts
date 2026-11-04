@@ -363,8 +363,9 @@ export const PROVIDER_ROWS: { readonly [P in Exclude<import('../../../shared/pro
   openrouter: { name: 'OpenRouter', line: 'Pay per use, many models. Mint, connect or paste a key.' },
 };
 
-/** A provider, or a method, whose cap word the fleet does not advertise (N4): it narrows in place with this. */
-export const NEEDS_FLEET_UPDATE = 'Needs a fleet update';
+/** A provider, or a method, whose cap word the fleet does not advertise (N4): it narrows in place with this. A fully
+ *  updated fleet can show it too, while no release supports that row, so it never promises an update (D-7991). */
+export const NOT_ON_THIS_FLEET_YET = 'Not available on this fleet yet';
 /** A method the fleet can run that this app's sheet has no steps for yet: reload once the app is updated. */
 export const NEEDS_APP_UPDATE = "This app can't run it yet: reload after the next update.";
 

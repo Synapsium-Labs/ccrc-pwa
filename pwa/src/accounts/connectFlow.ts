@@ -9,7 +9,7 @@ import { isAccountStdin } from '../../../shared/account-argv';
 import { PROVIDERS, type ConnectMethod, type ProviderRow } from '../../../shared/providers';
 import { HUES, newLaneIdProblem, newLaneLabelProblem, type Hue } from '../../../shared/roster';
 import type { AccountsConnect, AccountUsage, LaneWire, RosterWire } from '../../../shared/api';
-import { NEEDS_FLEET_UPDATE, PROVIDER_ROWS, type OldCredential, type SignInEndKind } from '../fleet/accountWords';
+import { NOT_ON_THIS_FLEET_YET, PROVIDER_ROWS, type OldCredential, type SignInEndKind } from '../fleet/accountWords';
 import { AUTH_TERMINAL_STATES, type AuthStatusState } from '../../../shared/accounts';
 
 /** The providers the door offers, in its order (spec §5: three rows, no "Other"; `compatible` stays CLI in v1): the
@@ -53,7 +53,7 @@ const capsOf = (connect: AccountsConnect | null): readonly string[] => connect?.
 /** The provider rows, each narrowed in place when its cap word is absent. */
 export function providerChoices(connect: AccountsConnect | null): Choice<DoorProvider>[] {
   const caps = capsOf(connect);
-  return DOOR_PROVIDERS.map((p) => ({ value: p, narrowed: caps.includes(PROVIDER_CAP[p]) ? null : NEEDS_FLEET_UPDATE }));
+  return DOOR_PROVIDERS.map((p) => ({ value: p, narrowed: caps.includes(PROVIDER_CAP[p]) ? null : NOT_ON_THIS_FLEET_YET }));
 }
 
 /** The method radio for a provider: in the table's order, each narrowed in place when its cap word is absent, and the
@@ -67,7 +67,7 @@ export function methodChoices(
   const caps = capsOf(connect);
   const providerOk = caps.includes(PROVIDER_CAP[provider]);
   const choices = table[provider].connect.map((m) => ({
-    value: m, narrowed: providerOk && caps.includes(METHOD_CAP[m]) ? null : NEEDS_FLEET_UPDATE,
+    value: m, narrowed: providerOk && caps.includes(METHOD_CAP[m]) ? null : NOT_ON_THIS_FLEET_YET,
   }));
   return { choices, selected: choices.find((c) => c.narrowed === null)?.value ?? null };
 }

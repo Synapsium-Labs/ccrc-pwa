@@ -2638,6 +2638,52 @@ describe('POST /api/runs/:id/close', () => {
     ]);
   });
 
+  describe('the fold counts a placed row only for this run’s branch', () => {
+    /** A run closed over `rows`, with `nullBranch` writing the column the way a run
+     *  dispatched without one reads. Only `state: 'failed'` closes such a run, since
+     *  `verifyDone` has no branch to measure. */
+    const foldedLineage = async (sessionId: string, rows: Record<string, unknown>[], nullBranch = false) => {
+      const home = mkTmp('ccrc-runs-');
+      const root = gitRoot(PROJECT, `ws/${sessionId}`, TIP);
+      mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+      writeFileSync(path.join(home, '.cc-sessions', `${sessionId}.prhistory`),
+        rows.map((r) => `${JSON.stringify(r)}\n`).join(''));
+      const { run } = makeRunner(home, { wsAddCreates: [sessionId],
+        prState: { ran: true as const, code: 0, stdout: `${ccdLine(sessionId, `ws/${sessionId}`, [prRow(`ws/${sessionId}`, 'OPEN')])}\n`, stderr: '' } });
+      const base = testDeps(home, run);
+      const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root } });
+      app = w.app;
+      const opened = (await postOpen(app)).json() as { id: number };
+      await postDispatch(app, opened.id);
+      if (nullBranch) w.coord.db.prepare('UPDATE runs SET branch = NULL WHERE id = ?').run(opened.id);
+      const res = await postClose(app, opened.id,
+        { fingerprint: GOOD_CLAIM, final: true, ...(nullBranch ? { state: 'failed' } : {}) });
+      expect(res.statusCode).toBe(200);
+      const closed = okRun(w.coord.run(opened.id))!;
+      expect(closed.branch).toBe(nullBranch ? null : `ws/${sessionId}`);
+      return closed.prLineage;
+    };
+    const row = (pr: number, branch: string, prbranch?: string) =>
+      ({ pr, branch, phase: 'merged', recordedAt: pr, ...(prbranch === undefined ? {} : { prbranch }) });
+
+    it('close folds placed rows only for this run’s branch', async () => {
+      const b = `ws/${PROJECT}-fold1`;
+      expect(await foldedLineage(`${PROJECT}-fold1`, [row(1, b, b), row(2, b, 'ws/another'), row(3, 'ws/another', b)]))
+        .toEqual([row(1, b, b), row(3, 'ws/another', b)]);
+    });
+
+    it('legacy rows still fold', async () => {
+      const b = `ws/${PROJECT}-fold2`;
+      expect(await foldedLineage(`${PROJECT}-fold2`, [row(1, b), row(2, 'ws/another'), row(3, b, 'ws/another')]))
+        .toEqual([row(1, b), row(2, 'ws/another')]);
+    });
+
+    it('a null-branch run folds every row', async () => {
+      const rows = [row(1, 'ws/a', 'ws/a'), row(2, 'ws/a', 'ws/b'), row(3, 'ws/a')];
+      expect(await foldedLineage(`${PROJECT}-fold3`, rows, true)).toEqual(rows);
+    });
+  });
+
   it('retires the program only once ALL its runs are terminal, mirroring whichever run ' +
      'closes it out (D-51)', async () => {
     const sessionA = `${PROJECT}-close11`;
