@@ -118,8 +118,13 @@ describe('the read time limit', () => {
   it('a GET that answers in time resolves and is not cut off later', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
-    await expect(api.stallWatch()).resolves.toEqual({ ok: true });
+    const read = watch(api.stallWatch());
+    await vi.advanceTimersByTimeAsync(1);
+    expect(read.now()).toEqual({ s: 'ok', v: { ok: true } });
+    // The limit's timer still runs out after the answer (by design: it would abort a body still being read); the
+    // answer already read is untouched by it (review 1473 A10).
     await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS);
+    expect(read.now(), 'the same answer, past the limit').toEqual({ s: 'ok', v: { ok: true } });
   });
 
   it('a 401 still raises the login screen', async () => {
@@ -132,7 +137,8 @@ describe('the read time limit', () => {
 });
 
 // THE LONG-READ TABLE (review 1464 F5): each GET whose server bound is above 20 s keeps its own default, pinned here
-// as a literal so a change to `LONG_READ_MS` is a red suite, not a silent edit; and the docs loaders keep none.
+// as a literal so a change to `LONG_READ_MS` is a red suite, not a silent edit; and the five docs loaders keep none
+// (projects, tree, file and refresh through one helper, raster through its own call).
 describe('the long reads keep their own limit', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -160,6 +166,16 @@ describe('the long reads keep their own limit', () => {
   it('a docs loader is still pending after an hour', async () => {
     const api = createApi(hangingFetch() as unknown as typeof fetch);
     const read = watch(api.docs.projects());
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(read.now().s).toBe('pending');
+  });
+
+  // `raster` has a call site of its own, apart from the shared helper the other docs loaders use (review 1473 A8).
+  it('the docs raster loader is still pending after an hour too', async () => {
+    const api = createApi(hangingFetch() as unknown as typeof fetch);
+    const pin = { kind: 'committed', commit: 'c'.repeat(40), servedRef: 'refs/remotes/origin/main', section: 'specs',
+      path: 'img/a.png' } as const;
+    const read = watch(api.docs.raster('project-a', pin));
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(read.now().s).toBe('pending');
   });

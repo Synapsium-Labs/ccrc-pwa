@@ -27,15 +27,21 @@ export interface ReadOpts {
 }
 
 /** The GETs whose server-side bound is above `READ_TIMEOUT_MS`, each with its own limit: the server's bound plus the
- *  agent link's 5 s slack (`CLIENT_TIMEOUT_SLACK_MS`), rounded up. Read from `server/src/remote/runner.ts`'s
- *  `CCD_VERB_TIMEOUT_MS` and `TMUX_TIMEOUT_MS`, and `update/inventory.ts`'s `INVENTORY_BUDGET_MS`. A route behind the
- *  server's `knownId` gate first reads the registry over the agent link (one remote read, bounded at 15 s). */
+ *  agent link's 5 s slack (`CLIENT_TIMEOUT_SLACK_MS`) on each remote call, rounded up. Read from
+ *  `server/src/remote/runner.ts`'s `CCD_VERB_TIMEOUT_MS` and `TMUX_TIMEOUT_MS`, and `update/inventory.ts`'s
+ *  `INVENTORY_BUDGET_MS`. A route behind the server's `knownId` gate first reads the registry over the agent link (one
+ *  remote read, bounded at 15 s). These are the remote fleet's bounds: in local mode (`CCRC_FLEET=local`) the server's
+ *  ccd and tmux calls have no remote bound at all, and these limits are the only ones. */
 export const LONG_READ_MS = {
-  /** `knownId`'s registry read, 15 s, then `ccd ws-audit`, the ccd default, 90 s. */
+  /** `knownId`'s registry read, 15 s, then `ccd ws-audit`, the ccd default, 90 s, plus its slack: 110 s. */
   workspaceAudit: 115_000,
-  /** `knownId`'s registry read, 15 s, then `ccd pr-state`, 25 s. */
+  /** `knownId`'s registry read, 15 s, then the slower of `ccd pr-state` (25 s plus slack) and the route's task read
+   *  beside it (`prTasks`: four sequential agent reads of up to 15 s each, five with its re-listing). On the pr-state
+   *  path that is 45 s; a slow-but-answering agent can hold the route to 75 or 90 s, and that surfaces here as a
+   *  fair "slow" (`ApiTimeout`): the PR sheet then keeps the fleet sweep's PR state and leaves the draft's title and
+   *  body unfilled. */
   pr: 50_000,
-  /** Two tmux calls in sequence, 10 s each. */
+  /** Two tmux calls in sequence, 10 s each, with the 5 s slack on each call: 30 s. */
   paneHistory: 35_000,
   /** Before the server's own node row exists, two inventory sweeps of 10 s each. */
   updates: 30_000,
