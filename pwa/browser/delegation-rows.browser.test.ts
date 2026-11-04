@@ -164,7 +164,21 @@ const measureUnlisted = (): { text: string; inList: boolean; overflow: number }[
  *  word and its last part each lie wholly inside the row's words box. Only the one free-text part may end in an
  *  ellipsis; a clip of either of these is a row whose state or session a phone cannot read (review 1424 F1, D-7783).
  *  The boxes are measured, not the container's scroll width, because the words box hides its overflow. */
-const measureParts = (words: readonly string[]): { text: string; condition: boolean; last: boolean; hasCondition: boolean }[] =>
+interface PartsFit {
+  readonly text: string;
+  readonly condition: boolean;
+  readonly last: boolean;
+  readonly hasCondition: boolean;
+  /** The free-text part: its width against the floor (`min(8ch, its own length)`), and whether it is cut with an
+   *  ellipsis (review 1431 F2, F3). `null` for a row with no such part. */
+  readonly name: { readonly width: number; readonly floor: number; readonly cut: boolean; readonly ellipsis: boolean } | null;
+  /** Parts after the first that start a line, and of those, the ones whose middot is drawn (review 1431 D). */
+  readonly lineStarts: number;
+  readonly leadingDots: readonly string[];
+}
+/** The name's floor, in characters of its own font (review 1431 F2): the test's own figure, never read from the CSS. */
+const NAME_FLOOR_CH = 8;
+const measureParts = ({ words, floorCh }: { words: readonly string[]; floorCh: number }): PartsFit[] =>
   [...document.querySelectorAll<HTMLElement>('.proj-work-parts')].map((box) => {
     const b = box.getBoundingClientRect();
     const inside = (el: Element): boolean => {
@@ -173,9 +187,34 @@ const measureParts = (words: readonly string[]): { text: string; condition: bool
     };
     const parts = [...box.querySelectorAll<HTMLElement>('.proj-work-part')];
     const cond = parts.find((p) => words.includes(p.textContent ?? ''));
+    const nameEl = box.querySelector<HTMLElement>('.proj-work-name');
+    let name: PartsFit['name'] = null;
+    if (nameEl !== null) {
+      const probe = document.createElement('span');
+      probe.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;font:${getComputedStyle(nameEl).font}`;
+      probe.textContent = '0'.repeat(floorCh);
+      document.body.append(probe);
+      const chFloor = probe.getBoundingClientRect().width;
+      probe.remove();
+      name = {
+        width: nameEl.getBoundingClientRect().width, floor: Math.min(chFloor, nameEl.scrollWidth),
+        cut: nameEl.scrollWidth > nameEl.clientWidth + 0.5, ellipsis: getComputedStyle(nameEl).textOverflow === 'ellipsis',
+      };
+    }
+    // A middot is drawn at a line's start when its box lies inside the clipping words box there.
+    const clips = getComputedStyle(box).overflowX !== 'visible';
+    const starts = parts.slice(1).filter((p) => Math.abs(p.getBoundingClientRect().left - b.left) < 1);
+    const leadingDots = starts.filter((p) => {
+      const dot = getComputedStyle(p, '::before');
+      if (dot.content === 'none' || dot.content === '') return false;
+      if (dot.position !== 'absolute') return true;
+      const dotRight = p.getBoundingClientRect().right - parseFloat(dot.right);
+      return !(clips && dotRight <= b.left + 0.5);
+    }).map((p) => p.textContent ?? '');
     return {
       text: box.textContent ?? '', hasCondition: cond !== undefined,
       condition: cond === undefined || inside(cond), last: parts.length === 0 || inside(parts[parts.length - 1]!),
+      name, lineStarts: starts.length, leadingDots,
     };
   });
 
@@ -209,11 +248,26 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
             expect(u.overflow, `${u.text}: nothing overflows it`).toBeLessThanOrEqual(1);
           }
           // F1 (review 1424): a long name never hides the condition word or the `from` part, on a card or in the region.
-          const words = await page.evaluate(measureParts, CONDITION_WORDS);
+          const words = await page.evaluate(measureParts, { words: CONDITION_WORDS, floorCh: NAME_FLOOR_CH });
           expect(words.filter((w) => w.hasCondition).length, 'every activity and worktree row has a condition word').toBe(6);
           for (const w of words) {
             expect(w.condition, `${w.text}: its condition word is whole`).toBe(true);
             expect(w.last, `${w.text}: its last part is whole`).toBe(true);
+            // Review 1431 F2: the name is never squeezed below its floor; the line wraps first.
+            if (w.name !== null) expect(w.name.width, `${w.text}: the name keeps its floor`).toBeGreaterThanOrEqual(w.name.floor - 0.5);
+            // Review 1431 D: no wrapped line starts with a lone middot.
+            expect(w.leadingDots, `${w.text}: no line starts with a middot`).toEqual([]);
+          }
+          if (width === 390) {
+            // Review 1431 F3: the long names are cut, with an ellipsis, and only they are; and the region row's `from`
+            // part starts a line of its own, so the middot rule above is measured on a real wrapped line.
+            for (const long of ['map every caller', 'reconcile every reader']) {
+              const row = words.find((w) => w.text.includes(long));
+              expect(row?.name, `${long}: has a name part`).not.toBeNull();
+              expect(row!.name!.cut, `${long}: its name is cut`).toBe(true);
+              expect(row!.name!.ellipsis, `${long}: with an ellipsis`).toBe(true);
+            }
+            expect(words.find((w) => w.text.includes('reconcile every reader'))!.lineStarts, 'the region row wraps').toBeGreaterThan(0);
           }
           const chips = rows.flatMap((r) => r.cells.map((c) => c.text));
           expect(chips.filter((t) => t === 'inferred'), 'each raw worktree wears inferred').toHaveLength(2);
@@ -309,26 +363,105 @@ describe.each(SKINS)('the session header\'s entry list and toggles at 390 in %s'
         }
         expect(shown.toggleOnScreen, 'the delegated toggle is on the screen with the list open').toBe(true);
         expect(shown.noteInList, 'the list\'s description wraps inside it, on the screen').toBe(true);
-        // F3: both header toggles, measured as boxes and by what a tap at their centre reaches.
+        // F3: both header toggles on a touch screen, measured as boxes and by what a tap at their centre reaches. Both
+        // texts are wider than the floor, so the width floor is read as the computed minimum, which only the rule sets.
         const targets = await page.evaluate(() => {
           const floor = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tap-min'));
-          return { floor, toggles: [...document.querySelectorAll<HTMLElement>('.chat-head .chat-facts .sess-subagents')].map((t) => {
-            const r = t.getBoundingClientRect();
-            const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
-            return { text: t.textContent ?? '', width: r.width, height: r.height, reached: hit !== null && t.contains(hit) };
-          }) };
+          return { floor, coarse: matchMedia('(pointer: coarse)').matches,
+            toggles: [...document.querySelectorAll<HTMLElement>('.chat-head .chat-facts .sess-subagents')].map((t) => {
+              const r = t.getBoundingClientRect();
+              const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+              return { text: t.textContent ?? '', height: r.height, minWidth: parseFloat(getComputedStyle(t).minWidth) || 0,
+                reached: hit !== null && t.contains(hit) };
+            }) };
         });
         expect(targets.floor, 'the token resolves').toBe(44);
+        expect(targets.coarse, 'the harness gives 390 a touch screen').toBe(true);
         expect(targets.toggles.map((t) => t.text), 'the subagent toggle and the delegated toggle').toHaveLength(2);
         for (const t of targets.toggles) {
           expect(t.height, `${t.text}: height`).toBeGreaterThanOrEqual(targets.floor);
-          expect(t.width, `${t.text}: width`).toBeGreaterThanOrEqual(targets.floor);
+          expect(t.minWidth, `${t.text}: width floor`).toBe(targets.floor);
           expect(t.reached, `${t.text}: a tap at its centre reaches it`).toBe(true);
         }
+        // Review 1431 F3: the long-name entry is cut, with an ellipsis.
+        const headName = await page.evaluate(() => {
+          const el = [...document.querySelectorAll<HTMLElement>('.chat-head .sess-entries .proj-work-name')]
+            .find((e) => (e.textContent ?? '').startsWith('reconcile'));
+          return el === undefined ? null : { cut: el.scrollWidth > el.clientWidth + 0.5, ellipsis: getComputedStyle(el).textOverflow === 'ellipsis' };
+        });
+        expect(headName, 'the long entry has a name part').toEqual({ cut: true, ellipsis: true });
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
       }
     }, 60_000);
   }
+});
+
+// Review 1431 F1: on a desk with a mouse the header's toggles keep their base size and the header its base height (the
+// operator's ruling of 2026-10-15). The base is measured on the page itself: the same header with every minimum the
+// toggles could take removed, so the check needs no figure from another box.
+describe.each(SKINS)('the session header\'s toggles at 1280 with a mouse in %s', (skin) => {
+  it('keep their base size, and the header its base height', async () => {
+    const { ctx, page, errors } = await openApp(browser!, { skin, theme: PHOSPHOR, width: 1280 }, HEAD_FIXTURE);
+    try {
+      await page.goto(`${server!.origin}/s/${HEAD_ID}`);
+      await page.locator('.chat-head .sess-subagents', { hasText: '3 delegated' }).waitFor({ timeout: 20_000 });
+      await page.evaluate(async () => { await document.fonts.ready; });
+      await page.waitForTimeout(300);
+      const measure = (): Promise<{ fine: boolean; head: number; toggles: number[] }> => page.evaluate(() => ({
+        fine: matchMedia('(pointer: fine)').matches,
+        head: document.querySelector<HTMLElement>('.chat-head')!.getBoundingClientRect().height,
+        toggles: [...document.querySelectorAll<HTMLElement>('.chat-head .chat-facts .sess-subagents')].map((t) => t.getBoundingClientRect().height),
+      }));
+      const now = await measure();
+      await page.addStyleTag({ content: '.chat-head .chat-facts .sess-subagents { min-height: 0 !important; min-width: 0 !important; }' });
+      await page.waitForTimeout(100);
+      const base = await measure();
+      expect(now.fine, 'a mouse: a fine pointer').toBe(true);
+      expect(now.toggles, 'the subagent toggle and the delegated toggle').toHaveLength(2);
+      expect(now.toggles, 'each toggle at its base height').toEqual(base.toggles);
+      for (const h of now.toggles) expect(h, 'under the tap floor').toBeLessThan(44);
+      expect(now.head, 'the header at its base height').toBe(base.head);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
+});
+
+// Review 1431 F: the list is brought into view by the tap that opens it, never by a remount. With the list open, the
+// frame is withdrawn (the list unmounts, its disclosure stays open), the operator swipes the rail to its end, and the
+// frame comes back: the list mounts again, and the rail stays where the operator left it.
+describe('the session header\'s entry list in refined at 390 is brought into view by the tap only', () => {
+  it('a remount while open scrolls nothing', async () => {
+    const opened = await openApp(browser!, { skin: REFINED, theme: PHOSPHOR, width: 390 }, HEAD_FIXTURE);
+    const { ctx, page, errors } = opened;
+    try {
+      await page.goto(`${server!.origin}/s/${HEAD_ID}`);
+      await page.waitForSelector('.chat-head', { timeout: 20_000 });
+      const door = page.getByRole('button', { name: 'Session details' });
+      if (await door.count() > 0 && await door.getAttribute('aria-expanded') === 'false') await door.click();
+      await page.locator('.chat-head .sess-subagents', { hasText: '3 delegated' }).click();
+      await page.waitForSelector('.chat-head .sess-entries', { state: 'attached', timeout: 20_000 });
+      const rail = (): Promise<{ left: number; max: number; list: boolean }> => page.evaluate(() => {
+        const r = document.querySelector<HTMLElement>('.chat-head .ref-chip-rail')!;
+        return { left: r.scrollLeft, max: r.scrollWidth - r.clientWidth, list: document.querySelector('.chat-head .sess-entries') !== null };
+      });
+      expect((await rail()).left, 'the tap brought the list to the rail\'s start').toBeLessThanOrEqual(1);
+      opened.send('/ws/fleet', { type: 'delegation', delegation: null });
+      await page.waitForFunction(() => document.querySelector('.chat-head .sess-entries') === null, null, { timeout: 20_000 });
+      await page.evaluate(() => { const r = document.querySelector<HTMLElement>('.chat-head .ref-chip-rail')!; r.scrollLeft = r.scrollWidth; });
+      opened.send('/ws/fleet', HEAD_FIXTURE.fleetFrames[1]);
+      await page.waitForSelector('.chat-head .sess-entries', { state: 'attached', timeout: 20_000 });
+      await page.waitForTimeout(200);
+      const after = await rail();
+      expect(after.list, 'the list is back, still open').toBe(true);
+      expect(after.max, 'the rail still has room to scroll').toBeGreaterThan(1);
+      expect(after.left, 'the rail stays where the operator left it').toBeGreaterThan(1);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  }, 60_000);
 });

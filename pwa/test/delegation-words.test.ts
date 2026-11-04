@@ -208,4 +208,20 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
     expect(delegatedChip(w.activities)!.rows.map((r) => r.key)).toEqual(['a-bad', 'a1', 42]);
     expect([...w.activities].sort(words.byOpened).map((a) => a.activityId)).toEqual(['a-bad', 'a1', 42]);
   });
+
+  it('VIS-W5 (review 1431 F3): nameAt points at the one free-text part of each line, and only there', () => {
+    const named = activityLine(activity({ displayName: 'map the tree' }), 'coord-a');
+    expect(named.nameAt).toBe(1);
+    expect(named.parts[named.nameAt!]).toBe('map the tree');
+    expect(activityLine(activity({ displayName: null })).nameAt).toBeNull();
+    expect(activityLine(activity({ displayName: '' })).nameAt).toBeNull();
+    const tree = worktreeLine(lease({ adminRecord: 'agent-x9' }), 'worker-a', null, 'coord-gone');
+    expect(tree.nameAt).toBe(1);
+    expect(tree.parts[tree.nameAt!]).toBe('agent-x9');
+    const u = words.unownedLine(unowned({ adminRecord: 'agent-u9' }));
+    expect(u.nameAt).toBe(0);
+    expect(u.parts[u.nameAt!]).toBe('agent-u9');
+    // The session header's rows carry it through.
+    expect(delegatedChip([activity({ displayName: 'read the plan' })])!.rows[0]!.nameAt).toBe(1);
+  });
 });

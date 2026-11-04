@@ -13,7 +13,7 @@
 // At every width every fact stays reachable: from 900px up the details row is
 // always shown; on a phone it folds behind one "details" door beside the
 // coordination row, so the header stays short until it is asked.
-import { useId, useState } from 'react';
+import { useCallback, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Door, elapsedShort } from '@ccrc/ui';
 import { navigate } from '../lib/router';
@@ -73,13 +73,20 @@ export function SessionCoordination({ facts, coordination }: {
   );
 }
 
-/** D-7784 (review 1424 F2): the opened entry list scrolls into view, once, as it mounts. On a phone Refined draws the
- *  header's facts as one sideways rail, which the operator has swiped to reach the toggle; the list opens on a line of
- *  its own at the rail's start (refined.css), so without this it opens scrolled off to the left. A stable function, so React
- *  calls it on mount only, and it adds no hook. Where nothing scrolls (the shared header, the desk) it moves nothing.
- *  jsdom has no `scrollIntoView`, hence the optional call. */
-const showEntries = (el: HTMLElement | null): void => {
-  el?.scrollIntoView?.({ block: 'nearest', inline: 'start' });
+/** D-7784 (review 1424 F2; review 1431 F): bring the entry list the operator just opened into view, sideways only. On
+ *  a phone Refined draws the header's facts as one sideways rail, which the operator has swiped to reach the toggle; the
+ *  list opens on a line of its own at the rail's start (refined.css), so without this it opens scrolled off to the left.
+ *  Only the nearest ancestor that scrolls sideways (`overflow-x` auto or scroll, with something to scroll) moves, and only
+ *  sideways: never a page, a pane or an `overflow: hidden` box. Where none scrolls (the shared header, the desk) nothing
+ *  moves. */
+const bringIntoRail = (el: HTMLElement): void => {
+  for (let p = el.parentElement; p !== null; p = p.parentElement) {
+    const x = getComputedStyle(p).overflowX;
+    if ((x === 'auto' || x === 'scroll') && p.scrollWidth > p.clientWidth) {
+      p.scrollLeft += el.getBoundingClientRect().left - p.getBoundingClientRect().left;
+      return;
+    }
+  }
 };
 
 /** Everything else, in full. Always shown from 900px; behind one "details" door on a phone. */
@@ -92,8 +99,16 @@ export function SessionDetails({ facts, coordination }: {
   const [subagentsOpen, setSubagentsOpen] = useState(false);
   const subagentsId = useId();
   const [delegatedOpen, setDelegatedOpen] = useState(false);
-  // Derived from the subagent list's id, never a `useId` of its own: the header adds a `useState` and no `useId`, so
-  // React's id counter numbers every later id as before.
+  // Set by the tap that opens the list and spent by the list's first mount after it, so a remount (a withdrawn frame
+  // coming back while the disclosure is still open) never scrolls anything (review 1431 F).
+  const openedByTap = useRef(false);
+  const showEntries = useCallback((el: HTMLElement | null): void => {
+    if (el === null || !openedByTap.current) return;
+    openedByTap.current = false;
+    bringIntoRail(el);
+  }, []);
+  // Derived from the subagent list's id, never a `useId` of its own: the header adds a `useState`, a `useRef` and a
+  // `useCallback`, and no `useId`, so React's id counter numbers every later id as before.
   const delegatedId = `${subagentsId}-entries`;
   const detailsId = useId();
   const s = facts.session;
@@ -121,7 +136,7 @@ export function SessionDetails({ facts, coordination }: {
         onToggleSubagents={() => setSubagentsOpen((v) => !v)}
         delegatedOpen={delegatedOpen}
         delegatedId={delegatedId}
-        onToggleDelegated={() => setDelegatedOpen((v) => !v)}
+        onToggleDelegated={() => { openedByTap.current = !delegatedOpen; setDelegatedOpen(!delegatedOpen); }}
       />
       {/* The subagent disclosure's content: name and elapsed time, nothing else (the hooks hand over no more). */}
       {subagentsOpen && subagents.length > 0 && (

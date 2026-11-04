@@ -83,8 +83,7 @@
 .chat-coord { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--sp-2); row-gap: 2px; }
 @media (pointer: fine) {
   .chat-coord .chat-coord-link,
-  .chat-meta .chat-details-toggle,
-  .chat-facts .sess-subagents { min-height: 0; min-width: 0; }
+  .chat-meta .chat-details-toggle { min-height: 0; }
 }
 .chat-facts {
   flex-basis: 100%;
@@ -98,11 +97,15 @@
 }
 .chat-facts .sess-meta { display: contents; }
 .chat-facts .sess-meta > *::before { content: none; }
-/* D-7785 (review 1424 F3): the header's two disclosure toggles, the subagent one and the delegated-entries one. The rule
-   above removes `.sess-subagents::before`, the card's tap overlay, with the middots, so in the header the toggle's own
-   box is its hit area: it takes the floor the details door beside it takes, and gives it back on a fine pointer, as the
-   door does (the `@media (pointer: fine)` block above). */
-.chat-facts .sess-subagents { min-height: var(--tap-min); min-width: var(--tap-min); }
+/* D-7785 (review 1424 F3; review 1431 F1): the header's two disclosure toggles, the subagent one and the
+   delegated-entries one. The rule above removes `.sess-subagents::before`, the card's tap overlay, with the middots, so
+   in the header the toggle's own box is its hit area. On a touch screen it takes the tap floor. The floor is gated on
+   `(pointer: coarse)` rather than reset under `(pointer: fine)`: this rule is unlayered, so a reset of equal specificity
+   above it never applied (the door's own floor is a layered utility, which any unlayered rule beats), and a desk with
+   a mouse keeps the toggles' base size and the header its base height (the operator's ruling of 2026-10-15, below). */
+@media (pointer: coarse) {
+  .chat-facts .sess-subagents { min-height: var(--tap-min); min-width: var(--tap-min); }
+}
 .chat-fact { font-family: var(--family-mono); overflow-wrap: break-word; min-width: 0; }
 .chat-facts .sess-subagent-list { flex-basis: 100%; }
 /* The header's list of recorded entries: a full-width flex item of .chat-facts, whose automatic minimum would be its

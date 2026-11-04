@@ -1,9 +1,10 @@
 # Delegation visibility, first release: the worker's note
 
 The note the plan asks for (`2026-11-02-delegation-visibility.md`, "Ledger route"), for the coordinator to fold into
-the ledger. It records the departures fix round 1 made (review 1424, ruled in the coordinator's fix-round mail of
-2026-11-04), the minors taken and left, and what was measured. Round 1 itself departed from nothing: every Find block
-matched the base as written.
+the ledger. It records the departures fix rounds 1 and 2 made (reviews 1424 and 1431, each ruled in a coordinator's
+fix-round mail of 2026-11-04), the minors and advisories taken and left, and what was measured. Round 1 itself departed
+from nothing: every Find block matched the base as written. Fix round 2 refines D-7783, D-7784 and D-7785, as the
+coordinator ruled, and takes no new number; D-7786 stays spare.
 
 ## Deviations found
 
@@ -37,6 +38,38 @@ below is a departure from the plan's text, and takes one of the plan's spare num
     boxes. The header case below checks its own rows too.
   - The mutant VIS-M16 puts back the base's `.proj-work-parts` block without the two new rules. All 16 browser cases go
     red, on the condition word or the last part.
+  - **Fix round 2 (review 1431 F2): the name gets a floor.** A basis of 0 let line breaking ignore the name, so at the
+    1280 desk sidebar a worktree's admin record was squeezed to 7-12 px. `.proj-work-name` is now `flex: 1 1 8ch`. Its
+    hypothetical size is `min(8ch, its own length)`, so the line breaks before the name would get less. Above that it
+    grows into what the line leaves, up to its own length, and only then ends in an ellipsis. A name shorter than 8ch is
+    drawn at its own width.
+    - The floor is a flex basis. W4-U32 does not value-check `flex`, and a count of characters is not a design-scale
+      length a token would carry.
+    - The guard (`measureParts`) checks every row with a name, at every width and in both skins: the name part keeps
+      at least `min(8ch, its own length)`, measured with a probe in the name's own font, from the test's own figure of
+      8.
+    - VIS-M24 (basis back to 0) reds the 1280 Refined cases, where the name measured 30 px.
+  - **Fix round 2 (review 1431 F3): `nameAt` and the ellipsis are pinned.**
+    - VIS-W5 (`delegation-words.test.ts`) asserts each line's `nameAt` and that `parts[nameAt]` is the name. That covers
+      an activity with and without a name, a worktree, an unowned tree and a header row.
+    - The browser file asserts that at 390 the two long-name rows (a card row and the region row) and the header's
+      long entry have a name part that is cut (`scrollWidth > clientWidth`) with a computed `text-overflow: ellipsis`.
+    - VIS-M25 (`nameAt: null`) and VIS-M26 (an activity's `nameAt` off by one) each red VIS-W5 and 8 browser cases.
+      VIS-M27 and VIS-M28 (off by one in `worktreeLine` and `unownedLine`) red VIS-W5.
+  - **Fix round 2 (review 1431 D): no wrapped line starts with a lone middot.** The coordination row's remedy (#633)
+    drops the glyph for a gap. Here that would run a free-text name into the words beside it, so the glyph stays, moved
+    into the gap with CSS only.
+    - `.proj-work-parts` takes `column-gap: var(--sp-3)`.
+    - Each part after the first draws its middot as an absolutely placed `::before` (`right: 100%`, the gap's width,
+      centred) beside its own box. A part that starts a wrapped line has its middot outside `.proj-work-parts`, which
+      clips it with its overflow.
+    - The name part clips with `overflow: clip` and an `overflow-clip-margin` of the gap's width, the clip `.sess-meta`
+      and `.proj-pending-meta` already use, so its own middot is not clipped with its text.
+    - A one-line row's spacing is the old margins' (a 12 px gap).
+    - The guard reads, for every part after the first that starts a line, whether its middot's box lies inside the
+      clipping words box. At 390 the region row's `from` part starts a line (asserted), so a real wrapped line is
+      measured.
+    - VIS-M29 (the middot back in flow) reds 12 cases, `no line starts with a middot`.
 - **D-7784** — `the-header-entry-list-takes-its-own-line-in-the-refined-rail` (review 1424 F2; the same mail). In
   Refined below 900 px, `.chat-facts` is `display: contents`, so the opened list was the one shrinkable item of a
   no-wrap sideways rail, and it collapsed to a width of 0.
@@ -61,17 +94,43 @@ below is a departure from the plan's text, and takes one of the plan's spare num
     inside the list.
   - Measured red, Refined's cases each time: VIS-M18 (no wrap) on the row's width 0, VIS-M19 (`showEntries` a no-op)
     on a condition word off the screen, and VIS-M17 (no note rule) on the note.
+  - **Fix round 2 (review 1431 F): the list is brought into view only by the tap that opens it.**
+    - `SessionDetails` sets `openedByTap` (a `useRef`) in the toggle's handler when it opens the list.
+    - `showEntries` (now a `useCallback` with no dependencies) spends the flag on the list's next mount. A remount, such
+      as a withdrawn frame coming back while the disclosure stays open, scrolls nothing.
+    - The scroll is no longer `scrollIntoView`, which also scrolls `overflow: hidden` ancestors such as the desk's
+      pane. `bringIntoRail` moves only the nearest ancestor whose `overflow-x` is `auto` or `scroll` and has something
+      to scroll, and only sideways. Where none scrolls, nothing moves.
+    - Pinned in Refined at 390. The tap case: the tap brings the list to the rail's start (`scrollLeft` at most 1). The
+      remount case: with the list open, the frame is withdrawn, the rail is scrolled to its end and the frame comes
+      back, and the rail stays where it was left.
+    - VIS-M30 (the flag ignored) reds the remount case. VIS-M18 and VIS-M19 red the tap case too.
+    - The header now adds a `useState`, a `useRef` and a `useCallback`, and still no `useId`.
 - **D-7785** — `the-header-toggles-take-the-tap-floor` (review 1424 F3; the same mail). `.chat-facts .sess-meta >
   *::before { content: none }` removes the card's tap overlay with the middots, so the header's subagent toggle (an
   inherited defect) and the new delegated toggle had their text line as their hit area.
   - `chat.css` adds `.chat-facts .sess-subagents { min-height: var(--tap-min); min-width: var(--tap-min) }`, which is
     header-only.
-  - It gives the floor back on a fine pointer, beside the details door, in the existing `@media (pointer: fine)` block,
-    which gains this selector and `min-width: 0`. This is the door's own convention, so a desk with a mouse renders as
-    before.
-  - Pinned by the same header case: at 390 (a touch screen in the harness) both toggles measure at least `--tap-min`
-    (44) on each side, and a tap at their centre reaches them.
-  - VIS-M20 (the rule's body emptied) reds all four header cases on a height of 18.
+  - **Corrected in fix round 2 (review 1431 F1).** Round 1 said the floor was given back on a fine pointer through the
+    existing `@media (pointer: fine)` block, so that a desk with a mouse renders as before. That was false. The reset
+    and the floor are both unlayered and of equal specificity, so the later floor won on every pointer, and the desk
+    header grew 24 to 26 px. The details door's reset works only because its floor is a layered utility.
+    - The floor now sits under `@media (pointer: coarse)`, and the `pointer: fine` block is back to main's text. That
+      drops round 1's `min-width: 0` on the two doors, review 1431's dropped advisory E.
+    - Gated rather than re-ordered: the floor is for a touch screen, and saying so on the rule makes it independent of
+      where any reset sits.
+    - A desk with a mouse keeps the toggles' base size and the header its base height, which is the operator's ruling
+      of 2026-10-15 recorded in `chat.css`.
+  - Pinned by the same header case. At 390 (a touch screen in the harness, `(pointer: coarse)` asserted) both toggles
+    are at least `--tap-min` (44) tall, and a tap at their centre reaches them.
+    - Round 1 also asserted their width. Both texts are wider than 44, so that assertion could never go red (review
+      1431). It is replaced by the computed `min-width`, which only the rule sets.
+  - A new case at 1280 with a mouse, in both skins, measures each toggle's height and the header's height against the
+    same page with every minimum the toggles could take removed. Both must be equal, and each toggle stays under 44.
+  - Mutants:
+    - VIS-M20 (the rule's body emptied) reds all four header cases on a height of 18.
+    - VIS-M32 (`min-width` dropped) reds them on the width floor.
+    - VIS-M23 (the floor unconditional) reds both 1280 cases: toggles 44 against a base of 18.
   - The census: `control-census.test.ts`'s `classHasFloor` matches any rule naming the class whose body mentions the
     floor. Making it see that a `::before` floor cannot apply would mean modelling the cascade's specificity. No such
     change keeps every other row's verdict by construction, so the census function is left alone. The new rule now
@@ -96,10 +155,23 @@ Taken:
 Not taken, left for the rider as the coordinator ruled: b (the closed phone header lifts no `delegated` fact), g, h,
 i, j, k, l and m (list semantics for the two new lists).
 
+## Advisories (review 1431)
+
+Taken: D, F and the header case's width assertion. Each is under its D-number above.
+
+Considered and left, as the coordinator ruled:
+- G: the Refined rail wraps every chip while the list is open. This is the shape measured and chosen in round 1, and
+  the close side needs no extra row.
+- `.sess-subagent-list` is another shrinkable item of the Refined rail. That is older than this PR and goes to the
+  rider.
+- The other single-pass readings (`reached` guards only an overlay; the header case checks the condition word
+  horizontally and against the rail's box) and the earlier minors b and g-m go to the rider.
+
 ## Measured
 
 - An Instrument case in `session-header.browser.test.ts` fails on this box: the header at 900 px measures 200.8 px
   against its 188 px bound. It fails the same way at the round-1 tip `865cf8c7d` (sources restored to that tip and
-  re-run). That tip's CI browser shards were green, so it is this box's environment, not this change.
+  re-run). The CI browser shards were green at both the round-1 tip and the fix round 1 tip, so it is this box's
+  environment, not this change.
 - `origin/main` moved by two docs-only commits after round 1. They merge cleanly (merge-tree exit 0). None of the worker
   skill's absorb triggers held, so they were not merged in.
