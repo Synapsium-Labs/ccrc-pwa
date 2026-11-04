@@ -13,8 +13,8 @@ describe('the pane-scope sweep: its arming file has no writer in the tree', () =
   // `scope-sweep-live` arms `ccd-scope-sweep`'s stop: without it every inert scope is only recorded `would-stop`.
   // Like `stall-watch-live` the operator touches and removes it by hand, so the ONE line of shell that may name
   // it is the sweep's own read, and no other file under ccd/ or deploy/ does on a code line. D-7994 gives it its one TS
-  // holder, its switchboard row in `shared/switches.ts` (L0, no `node:` module, so it cannot write the marker), so the
-  // Settings card can show it; the nested rescue's pin below is the shape.
+  // holder, its switchboard row in `shared/switches.ts` (L0, no `node:` module, so it cannot write the marker), so its
+  // door can read it; the nested rescue's pin below is the shape.
   // KNOWN WIDTH: a name assembled from pieces is not seen; the bar is the ordinary copy.
   it('scope-sweep-live: one shell holder, ccd/ccd-scope-sweep, whose one line is a read; one TS holder, its definer, which reaches no write', () => {
     expect(holdersOf('scope-sweep-live'), 'a line of shell other than the sweep names it — a writer in waiting').toEqual(['ccd/ccd-scope-sweep']);
@@ -26,7 +26,7 @@ describe('the pane-scope sweep: its arming file has no writer in the tree', () =
   });
 
   // D-7994. The busy arm's switch: ONE shell reader, the sweep, whose one line needs the sweep armed too, and ONE shell
-  // writer, `ccd scope-sweep-busy`, behind the Settings door. The one TS holder is the definer; the files that name its
+  // writer, `ccd scope-sweep-busy`, behind its route. The one TS holder is the definer; the files that name its
   // constant are it and the L0 view, which read through `readSwitches` and write nothing.
   it('scope-sweep-busy-live: the sweep\'s one read, the verb\'s two lines, one TS holder that reaches no write', () => {
     const NAME = 'scope-sweep-busy-live';

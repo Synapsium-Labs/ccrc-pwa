@@ -1,13 +1,13 @@
 # Scope sweep: the busy arm
 
-> **Execution status:** Built in one pull request, shadow by default. After about a week of shadow verdicts the operator arms it from Settings › Automation › Leftover processes.
+> **Execution status:** The sweep, its switches, verb and door are built, shadow by default. The Settings card, Automation › Leftover processes, lands as its own pull request after them: `consolidation-path-guard.test.ts` reds any diff touching `shared/switches.ts` beside `pwa/`, and the fourteen latest commits that touched that file carry no `pwa/` file. After about a week of shadow verdicts the operator arms it from that card.
 
 **Goal:** A pane scope whose session is provably dead becomes collectable after a grace period even when its processes are busy, behind its own switch, shadowed first. It closes the follow-up of #1637.
 
 ## Decisions
 
 - **D-7993 (2026-11-03)** — scope sweep: the busy arm collects a provably dead session's orphan behind `scope-sweep-busy-live`. `ccd-scope-sweep` adds a `busy` line beside a busy scope's own `dead` line and changes neither that line nor any inert verdict. The header of `ccd/ccd-scope-sweep` is the definition; the rest of this section is why.
-- **D-7994 (2026-11-03)** — scope sweep: the busy arm's switch, its verb, its route and its Settings card. `scope-sweep-live` and `scope-sweep-busy-live` are rows of `shared/switches.ts`. `scope-sweep-live` keeps no writer and the card only shows it. `scope-sweep-busy-live` gets `ccd scope-sweep-busy --state on|off`, `POST /api/coord/scope-sweep` and a radio in Settings › Automation › Leftover processes, because the operator's ruling of 2026-10-25 is that an operator act has a control in the console. The door is session-gated with no box token. Like `testbox-remote` and `reclaim-pause`, the verb is not in `FORBIDDEN_CCD_VERBS`: that list lives in rules files, which a pull request may not mix with other changes, so adding it is a rules-only follow-up.
+- **D-7994 (2026-11-03)** — scope sweep: the busy arm's switch, its verb, its route and its Settings card. `scope-sweep-live` and `scope-sweep-busy-live` are rows of `shared/switches.ts`. `scope-sweep-live` keeps no writer and the door only reads it. `scope-sweep-busy-live` gets `ccd scope-sweep-busy --state on|off` and `POST /api/coord/scope-sweep`, and its own pull request adds a radio in Settings › Automation › Leftover processes, because the operator's ruling of 2026-10-25 is that an operator act has a control in the console. The door is session-gated with no box token. Like `testbox-remote` and `reclaim-pause`, the verb is not in `FORBIDDEN_CCD_VERBS`: that list lives in rules files, which a pull request may not mix with other changes, so adding it is a rules-only follow-up.
 
 ## What was measured
 
@@ -60,4 +60,4 @@ A connection between two dead scopes holds both, reported and never stopped. A c
 
 ## Deploy
 
-Agent lane, agent first; the server lane carries the card. Shadow: nothing is stopped until the operator sets Leftover processes to Stop them.
+Agent lane, agent first, then the server lane for the door. Shadow: nothing is stopped until the operator arms it.

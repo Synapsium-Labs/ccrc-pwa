@@ -2752,8 +2752,8 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, ...after });
   });
 
-  /** `GET`/`POST /api/coord/scope-sweep` (D-7994): Settings › Automation › "Leftover processes". The GET reads the sweep's
-   *  two switches from the registry listing; `scope-sweep-live` has no writer and the card only shows it. The POST takes
+  /** `GET`/`POST /api/coord/scope-sweep` (D-7994): the door of the Settings card over the sweep's two switches. The GET
+   *  reads them from the registry listing; `scope-sweep-live` has no writer, so it is only read. The POST takes
    *  `{on: boolean}` and nothing else, and runs `ccd scope-sweep-busy --state on|off` through the agent's whitelist, the
    *  busy arm's one writer, then answers what the registry reads NOW, the authoritative answer. One path for both verbs,
    *  the stall-watch door's shape: session-gated when `CCRC_AUTH` is armed, no box token, so no coordinator can arm a stop
