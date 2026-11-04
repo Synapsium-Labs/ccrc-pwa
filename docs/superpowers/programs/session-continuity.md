@@ -24,7 +24,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
 | 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; fix-round handoff `2f6caa48e` accepted by the server 2026-10-20 07:25 UTC, NEW review 685 dispatched 07:42 UTC; PR conflicts with main on the generated stamp; review 685 closed done 2026-10-20 13:56 UTC with its report fingerprint accepted, no critical finding; run 308 returned to working 13:59 UTC for fix round 2, its last phase waiting on another run's claims on `ccd/ccd` and README; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED; MERGED 2026-10-21 03:54 UTC (`d8cd4765`, #435) after reviews 714 and 729 and fix round 3; run 308 closed; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 5's week runs 2026-10-21 05:38 to 2026-10-28 05:38 UTC; read 2026-10-28: 0 reap-class, `not-triggered`, the variable stays; week 2 read 2026-11-04: 0 reap-class, `not-triggered` in the part read, its first 2 h 9 m unmeasured (the fleet moved boxes), the variable stays, direct figure 0 in both weeks but partial, reported under spec §9; weekly reading continues, next due 2026-11-11 05:38 UTC; the scope sweep is no longer shadowed: `scope-sweep-live` exists since 2026-10-26 23:38 UTC, armed by the operator (confirmed 2026-10-28) |
-| 4c | 6, first part | the direct-kill scanner reads the notifications it missed: queued-command attachments, queue enqueue rows, and summary-only notices that name no low memory | the instrument only (`deploy/measure-continuity.py`, in the release) | 4b and its two weekly readings | — | planned 2026-11-04 on the operator's ruling (`docs/superpowers/plans/2026-11-04-session-continuity-wave4c-direct-kill-scanner.md`, D-7960 to D-7963; Decisions, 2026-11-04 10:22); approved as written by the operator 2026-11-04 15:11 UTC (item 30; Decisions, 2026-11-04 15:14); plan merged 2026-11-04 16:18 UTC (`aff374c4`, #2262); run 1450 dispatched 16:23 UTC (`ccrc-pwa-continuity-4c`; Decisions, 2026-11-04 16:25); wave-done verified at `4a24db72` (PR #2277), review 1452 confirmed three important and three minor findings, fix round 1 sent (Decisions, 2026-11-04 17:35) |
+| 4c | 6, first part | the direct-kill scanner reads the notifications it missed: queued-command attachments, queue enqueue rows, and summary-only notices that name no low memory | the instrument only (`deploy/measure-continuity.py`, in the release) | 4b and its two weekly readings | — | planned 2026-11-04 on the operator's ruling (`docs/superpowers/plans/2026-11-04-session-continuity-wave4c-direct-kill-scanner.md`, D-7960 to D-7963; Decisions, 2026-11-04 10:22); approved as written by the operator 2026-11-04 15:11 UTC (item 30; Decisions, 2026-11-04 15:14); plan merged 2026-11-04 16:18 UTC (`aff374c4`, #2262); run 1450 dispatched 16:23 UTC (`ccrc-pwa-continuity-4c`; Decisions, 2026-11-04 16:25); wave-done verified at `4a24db72` (PR #2277), review 1452 confirmed three important and three minor findings, fix round 1 sent (Decisions, 2026-11-04 17:35); accepted 18:07 UTC at `a5e8071e` after review 1458 (round 2); MERGED 2026-11-04 18:27 UTC (`ba93eb31`, #2277); run 1450 closed; ships with the next release, and the first weekly reading after it deploys is the first under it (Decisions, 2026-11-04 18:44) |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | deferred by the operator 2026-10-20: the programme stops after 4b ships and its week is measured |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -1117,6 +1117,25 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     widening the exclusion to any memory wording. Changing an approved definition is not this wave's. Every
     summary-only notice measured so far was a security-review notice, and a summary-only notice cannot be a kill under
     the unchanged kill rule. This is recorded for a later decision.
+- **2026-11-04 18:44 UTC - wave 4c is accepted and merged (#2277, `ba93eb31`), and run 1450 is closed.**
+  - **Fix round 1's wave-done** (17:55 UTC) claims `a5e8071e`, one commit on the reviewed tip, suite red (it stays red
+    from the wave's first full run). Re-measured: the branch and the PR head are that tip, the PR's fast run on it
+    passed on its first attempt, the same four files changed, README only in its `--stage 6` paragraph, no new
+    deviation, and the branch merges cleanly with main.
+  - **Review 1458** (round 2 of 3) ran the held-out panel: three Opus lenses and 15 Sonnet refuters, none lost. Every
+    ruling of fix round 1 is done, its two mutation rows went red, and no critical or important finding survived.
+    Four minors did, carried below. It also noted, as a fact and not a finding of this round, that a queued-command
+    list prompt holding a readable kill beside an undumpable element drops that row's kill while the reading turns
+    partial. That shape was present at round 1, so the 17:35 entry's "none losing a kill" holds for the findings it
+    lists, not for every shape; it is fail-closed and carried with the four.
+  - **Accepted** at 18:07 UTC. The run moved to `merging` with its landing entry pinned at `a5e8071e`. The readiness
+    verdict gave the queue route on its first run, the required checks passed, and the only attempts other than
+    success were the external per-PR merge gate's, which no rule requires. Enqueued at 18:08 UTC and merged at
+    18:27:39 UTC. On main, the scanner, its test, the spec and README's `--stage 6` paragraph are identical to the
+    reviewed tip. The worker was mailed MERGED, and run 1450 closed final at 18:44 UTC.
+  - **Deploy.** The instrument ships with the next release, through the operator's updater. The first weekly reading
+    after it is installed on the fleet box is the first under the new scanner; each reading records the version it ran.
+    The next is due 2026-11-11 05:38 UTC.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -1163,6 +1182,18 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   own pane is never woken, because only mail reaches it. A run killed by the memory reaper, or anything else, is
   restored and reported in a status mail; long runs go in the foreground (run 237, 2026-10-02).
 
+- **The direct-kill scanner's next edit owes review 1458's minors** (Decisions, 2026-11-04 18:44):
+  - B1: the raw-text test for an undumpable payload recognises the angle brackets plain or as a unicode escape, but
+    not an opener whose other characters are escaped, and no test covers the escaped closing bracket or upper-case
+    hex digits; narrow the sentences that say "plain or JSON-escaped", or decide it with a decoded check;
+  - B2: the `s6_unreadable` docstring still says the caller makes the whole row one malformed row;
+  - B3: the non-string-stamp undumpable test cannot go red if the stamp check is skipped on that path, and no case
+    covers an undated undumpable row (accepted as it stands: that check cannot change the output);
+  - B4: README and the spec call the unmeasured key "an unreadable payload's dump", where for a list prompt it is
+    each element's dump;
+  - and the shape noted with them: a queued-command list prompt with a readable kill beside an undumpable element
+    drops that kill, with the reading partial.
+
 ## Next-wave brief
 
 Waves 1 and 2 are merged (#230 `a934a59b`, #235 `db44b136`). Owed after their deploys:
@@ -1186,7 +1217,8 @@ variable stays (Decisions, 2026-10-28 05:51). Its second week is read too: 0 rea
 2 h 9 m unmeasured, and the two-week direct-pressure figure reported for the operator's ruling under spec §9
 (Decisions, 2026-11-04 05:52). The operator then ruled to redesign the direct-kill scanner, and wave 4c is planned for it
 (Decisions, 2026-11-04 10:22), and the operator approved its plan as written (Decisions, 2026-11-04 15:14). The plan is merged and
-run 1450 is dispatched (Decisions, 2026-11-04 16:25). What is owed now: run 1450's fix round 1 (Decisions, 2026-11-04 17:35), then a new review and its landing, and the weekly reading against baseline B,
+run 1450 is dispatched (Decisions, 2026-11-04 16:25). Wave 4c is merged (#2277, `ba93eb31`) and run 1450 is closed (Decisions, 2026-11-04 18:44); it ships with the next
+release. What is owed now: the weekly reading against baseline B,
 next due 2026-11-11 05:38 UTC, owned by this coordinator. `$REG/scope-sweep-live`
 exists since 2026-10-26 23:38 UTC: the operator armed it, and confirmed so on 2026-10-28 (Decisions, 08:00). Wave 5 stays deferred until the operator lifts the stop. Its run is open, planned, and has no worker.
 The record below is the wave's history.
