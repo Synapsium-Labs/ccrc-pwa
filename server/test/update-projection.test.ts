@@ -426,9 +426,13 @@ describe('the projection warning dedupes on a stable key, never the message (fix
       // that runs after it threw — a resolve failure never loses what the sweep already measured.
       expect(outcomes.length).toBeGreaterThan(0);
       expect(outcomes.every((o) => o.label === SERVER_LABEL)).toBe(true);
-      expect(warn).toHaveBeenCalledTimes(1);
+      // Exactly ONE resolve warning. The planted `nodes()` throw also rejects the fire-and-forget dispatch run the sweep triggers, which
+      // warns too; whether that second line lands before `inventoryNow` returns is timing (the box-settings lane now awaits after the
+      // trigger), so the count is of the resolve line, not of every warning.
+      const resolveWarns = warn.mock.calls.filter((c) => String(c[0]).includes('the resolve run threw'));
+      expect(resolveWarns).toHaveLength(1);
       // Item 10 (F10): the `ccrc-server: ` prefix is pinned, not merely present.
-      expect(String(warn.mock.calls[0]?.[0])).toMatch(/^ccrc-server: .*the resolve run threw: planted: resolve step boom/);
+      expect(String(resolveWarns[0]?.[0])).toMatch(/^ccrc-server: .*the resolve run threw: planted: resolve step boom/);
     } finally {
       (coord as unknown as { nodes: () => unknown }).nodes = originalNodes;
       warn.mockRestore();

@@ -77,7 +77,7 @@ const OS_LINE = /^os (linux|darwin)$/;
 export type NodeFileRead =
   | { ok: true; content: string }
   | { ok: false; reason: ReadFailure | 'too-large' };
-type MeasuredFileKey = Exclude<NodeFileKey, 'projection' | 'tokenGeneration' | 'tmpSweep'>;
+type MeasuredFileKey = Exclude<NodeFileKey, 'projection' | 'tokenGeneration' | 'tmpSweep' | 'boxSettings'>;
 export type NodeFileReads = Record<MeasuredFileKey, NodeFileRead>;
 export interface NodeConnection { label: string; role: NodeRole; agentOps: readonly string[] | null }
 
@@ -87,10 +87,11 @@ export interface NodeConnection { label: string; role: NodeRole; agentOps: reado
  *  not read it at all. `box-token-generation` (box-token lifecycle wave 1) is
  *  in the read set for the token driver, which reads it itself on its own tick
  *  through `readNodeFile` (D-4389), so the sweep leaves it out too and still
- *  reads seven files. */
+ *  reads seven files. `tmp-sweep.json` and `box-settings.json` have their own lanes and parses (`tmpSweepLane.ts`; `boxSettingsLane.ts`,
+ *  which rides this sweep's run, D-6916), so they are left out too. */
 const MEASURED_FILE_KEYS: readonly MeasuredFileKey[] =
   (Object.keys(NODE_FILES) as NodeFileKey[])
-    .filter((k): k is MeasuredFileKey => k !== 'projection' && k !== 'tokenGeneration' && k !== 'tmpSweep');
+    .filter((k): k is MeasuredFileKey => k !== 'projection' && k !== 'tokenGeneration' && k !== 'tmpSweep' && k !== 'boxSettings');
 
 const ABSENT: NodeFileRead = { ok: false, reason: 'absent' };
 const UNREADABLE: NodeFileRead = { ok: false, reason: 'unreadable' };

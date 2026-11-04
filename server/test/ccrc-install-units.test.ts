@@ -10,6 +10,7 @@ import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
 import { installFixtureTree, installVersionedTree } from './installTreeFixture.js';
 import { plantFakeRuntime } from './codexLaneFixture.js';
+import { BOX_SETTINGS_TIMER_S } from '../../shared/api.js';
 import { here, REPO, realPath, BASH, treeRoot, ccrcIn, treeFile, placed, freshBox, ccrcEnv, runInstall, runLauncherVersion, pathWithout, read, dotCcrc, preexisting, gitInit, unitDir, SLICE_DIR, UNIT_FILES, systemctlCalls, FLEET_URL, FLEET_TOKEN, runInstallTty, type Result } from './ccrc-installFixture.js';
 
 removeTmpFixturesEachTest();
@@ -921,6 +922,8 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // role enables it — degrading rather than dying like every timer in
       // this list, and taking no restart (a oneshot holds no code).
       '--user enable --now ccrc-update-watchdog.timer',
+      // D-6915: the box settings timer, UNGATED — the first timer that runs on every Linux role.
+      '--user enable --now ccrc-settings.timer',
       // THE RESTART, in deploy's own position (deploy.sh's `systemctl --user restart` after the enables): after both
       // enables, before the verify. `enable --now` on an already-active unit is
       // a no-op, and `ccrc.service` runs `node ~/ccrc/server/dist/…` — a process
@@ -982,7 +985,8 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(unit.indexOf('ExecCondition=')).toBeLessThan(unit.indexOf('ExecStart='));
     const script = /^ExecCondition=\/bin\/sh -c '(.*)'$/.exec(conds[0]!)![1]!;
     const cond = (home: string): number | null =>
-      spawnSync('/bin/sh', ['-c', script.replace(/%h/g, home)]).status;
+      // `%h` is read from the environment (`"$H"`), never pasted into the script text: the home is a path, not shell syntax.
+      spawnSync('/bin/sh', ['-c', script.replace(/%h/g, '"$H"')], { env: { ...process.env, H: home } }).status;
     const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
     const plant = (prefix: string, body: string): string => {
       const home = mkTmp(prefix);
@@ -1022,6 +1026,80 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(execStart).toEqual([
       `ExecStart=/bin/sh -c 'PATH="%h/.local/bin:$$PATH" exec %h/.local/bin/ccrc watchdog'`,
     ]);
+  });
+
+  it('the settings pair is as D-6915 writes it, and its period is the L0 constant the reader will share', () => {
+    // The timer is the first one placed on every Linux role. Its period is read from the shipped file, in seconds, and
+    // held equal to `BOX_SETTINGS_TIMER_S`, so a reader that judges a record stale by that constant never drifts from
+    // the unit that writes it.
+    const timer = readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-settings.timer'), 'utf8').split('\n');
+    expect(timer.filter((l) => l.startsWith('OnBootSec=')), 'OnBootSec').toEqual(['OnBootSec=120s']);
+    expect(timer.filter((l) => l.startsWith('AccuracySec=')), 'AccuracySec').toEqual(['AccuracySec=30s']);
+    expect(timer.filter((l) => l.startsWith('WantedBy=')), 'WantedBy').toEqual(['WantedBy=timers.target']);
+    const every = timer.filter((l) => l.startsWith('OnUnitActiveSec='));
+    expect(every, 'one OnUnitActiveSec line').toHaveLength(1);
+    // Spelled as the other timers spell a period (`5min`, census-w8's convergent spellings), read in seconds here.
+    const m = /^OnUnitActiveSec=(\d+)(s|min|h)$/.exec(every[0]!);
+    expect(m, every[0]).not.toBeNull();
+    expect(Number(m![1]) * { s: 1, min: 60, h: 3600 }[m![2] as 's' | 'min' | 'h']).toBe(BOX_SETTINGS_TIMER_S);
+    const unit = readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-settings.service'), 'utf8').split('\n');
+    expect(unit.filter((l) => l.startsWith('Type='))).toEqual(['Type=oneshot']);
+    expect(unit.filter((l) => l.startsWith('ExecStart='))).toEqual([
+      `ExecStart=/bin/sh -c 'PATH="%h/.local/bin:$$PATH" exec %h/.local/bin/ccrc settings --write --from timer'`,
+    ]);
+    expect(unit.filter((l) => l.startsWith('ExecCondition='))).toEqual([
+      `ExecCondition=/bin/sh -c 'grep -q "^cmd_settings()" %h/ccrc/ccd/ccrc'`,
+    ]);
+    // Bounded under the period, so a wedge is stopped before the next tick; a oneshot has no bound by default.
+    const bound = unit.filter((l) => l.startsWith('TimeoutStartSec='));
+    expect(bound).toHaveLength(1);
+    expect(Number(bound[0]!.slice('TimeoutStartSec='.length))).toBeGreaterThan(30);
+    expect(Number(bound[0]!.slice('TimeoutStartSec='.length))).toBeLessThan(BOX_SETTINGS_TIMER_S);
+    // The comment's arithmetic: du 20 s then df 10 s, each through `_plat_timeout`, which cannot return before its seconds plus the
+    // TERM-to-KILL grace (default 3 s, clamped to 2..8): 30 s before any grace, 36 s at the default and 46 s at the clamp (review
+    // 1396 F3, correcting review 1385 A2's 26 and 36).
+    const prose = unit.filter((l) => l.startsWith('#')).join(' ');
+    expect(prose).toContain('30 s before any grace, 36 s at the default grace and 46 s at the clamp');
+    expect(prose).toContain('CCD_TIMEOUT_KILL_AFTER');
+    expect(prose).not.toContain('about 26 seconds');
+    expect(prose).not.toContain('worst case is thirty seconds');
+    // A shell-only export is not the timer's (review 1396 F10): the comment never says the two runs resolve the same values.
+    expect(prose).not.toContain('resolve the same values');
+    // The PATH is prepended in ExecStart, never set; no environment of its own (W24-P5 pins the CCRC_ half).
+    expect(unit.some((l) => l.startsWith('Environment=') || l.startsWith('EnvironmentFile='))).toBe(false);
+  });
+
+  it('the settings unit SKIPS on a tree with no settings verb, and runs on one that has it', () => {
+    // The watchdog's reason, for this pair: a restore or rollback onto a release older than this one leaves the timer
+    // enabled over a tree with no `cmd_settings`. An ExecCondition rc of 1-254 skips the run without a failure.
+    const unit = readFileSync(join(REPO, 'deploy', 'systemd', 'ccrc-settings.service'), 'utf8');
+    const cond = unit.split('\n').find((l) => l.startsWith('ExecCondition='))!;
+    const script = /^ExecCondition=\/bin\/sh -c '(.*)'$/.exec(cond)![1]!;
+    // `%h` is read from the environment (`"$H"`), never pasted into the script text (CodeQL, js/shell-command-injection-from-environment).
+    const run = (home: string): number | null => spawnSync('/bin/sh', ['-c', script.replace(/%h/g, '"$H"')], { env: { ...process.env, H: home } }).status;
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const plant = (prefix: string, body: string): string => {
+      const home = mkTmp(prefix);
+      mkdirSync(join(home, 'ccrc', 'ccd'), { recursive: true });
+      writeFileSync(join(home, 'ccrc', 'ccd', 'ccrc'), body);
+      return home;
+    };
+    expect(run(plant('ccrc-settings-cond-this-', src))).toBe(0);
+    const old = src.split('\n').filter((l) => !l.startsWith('cmd_settings()')).join('\n');
+    expect(old).not.toBe(src);
+    const rcOld = run(plant('ccrc-settings-cond-old-', old));
+    expect(rcOld).toBeGreaterThanOrEqual(1);
+    expect(rcOld).toBeLessThanOrEqual(254);
+  });
+
+  it('a systemd that will not take the settings timer DEGRADES the install, never fails it', () => {
+    const home = freshBox('ccrc-install-settings-enable-fails-');
+    writeFileSync(join(home, 'fixture-enable-fail'), 'ccrc-settings.timer\n');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(
+      /^install: settings: could not enable ccrc-settings\.timer — run: systemctl --user enable --now ccrc-settings\.timer$/m);
+    expect(r.stdout).toMatch(/^install: done — converged with \d+ degraded steps? \([^)]*\bccrc-settings\.timer\b[^)]*\)$/m);
   });
 
   it('fails the install when the started service does not stay up', () => {
@@ -1108,6 +1186,14 @@ describeDarwin('ccrc install: the launchd job, and what macOS deliberately does 
     // ONE file, not a directory of them: no template, no drop-ins, no timer.
     const dir = join(box.home, 'Library', 'LaunchAgents');
     expect(readdirSync(dir).sort()).toEqual(['app.ccrc.ccrc.plist']);
+  });
+
+  it('places no settings pair and reports no `settings` cap: the timer is a systemd unit, and the tree writes the file only there (D-6915)', () => {
+    const caps = read(join(box.home, '.ccrc', 'ccrc-caps')).split('\n').filter(Boolean);
+    expect(caps[0]).toBe('os darwin');
+    expect(caps).not.toContain('settings');
+    expect(existsSync(join(box.home, '.config', 'systemd', 'user', 'ccrc-settings.timer'))).toBe(false);
+    expect(readdirSync(join(box.home, 'Library', 'LaunchAgents')).filter((n) => n.includes('settings'))).toEqual([]);
   });
 
   it('reads ccrc.env first, then exposure.env, both optional — systemd\'s EnvironmentFile order, kept', () => {

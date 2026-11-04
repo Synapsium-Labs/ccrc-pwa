@@ -1133,12 +1133,12 @@ export const checkLine = (s: string): string => s.split('\n').find((l) => l.star
 
 /** The words THIS ccrc can do (`_ccrc_cap_words`), as `--check` joins them:
  *  W1's three, W4's four, W6's `versions` and the box-token lifecycle's
- *  `token-sync`, `detach` on Linux only
- *  (decision 17). A literal, not a read of ccd/ccrc — a pin derived from the
+ *  `token-sync`, and `detach` and box settings' `settings` (D-6915) on Linux
+ *  only (decision 17). A literal, not a read of ccd/ccrc — a pin derived from the
  *  list it pins cannot red. */
 export const CAPS_NOW = process.platform === 'darwin'
   ? 'verify,node-id,floor,update-json,update-gate,rollback,versions,token-sync'
-  : 'verify,node-id,floor,update-json,update-gate,rollback,versions,token-sync,detach';
+  : 'verify,node-id,floor,update-json,update-gate,rollback,versions,token-sync,detach,settings';
 /** The machine line as key → value. Values never contain a space or `=`
  *  (caps= joins its words with commas), so one split per field is exact. */
 export const parseCheck = (s: string): Record<string, string> =>

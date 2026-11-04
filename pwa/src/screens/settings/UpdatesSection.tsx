@@ -1,7 +1,8 @@
-// Settings › Updates (settings spec §3.1, §3.3, §4.1; D-5503, D-5504): three cards over the frame's ONE /api/updates
+// Settings › Updates (settings spec §3.1, §3.3, §4.1; D-5503, D-5504): four cards over the frame's ONE /api/updates
 // poll (`SettingsDataProvider`), in §3.3's order from one list (`UPDATES_CARDS`): Fleet version (the halt line first,
-// then the status, Check now, the catalogue line and the release window), then Nodes, then Update policy (Channel,
-// Auto-install). Versions first, policy last (§15 D7). The page's `<h2>` is the frame's; each card's title is an
+// then the status, Check now, the catalogue line and the release window), then Nodes, then Box settings (what each box
+// reported about its own settings, read-only, D-6917), then Update policy (Channel, Auto-install). Versions first,
+// policy last (§15 D7). The page's `<h2>` is the frame's; each card's title is an
 // `<h3>`.
 import { useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -17,6 +18,7 @@ import {
 } from '../../fleet/settingsText';
 import { planMove, type MoveIntent, type PlannedMove } from '../../fleet/movePlan';
 import { UpdateMoveSheet } from '../../fleet/UpdateMoveSheet';
+import { BoxSettingsCard } from '../../fleet/BoxSettingsCard';
 import { UPDATES_STALE_TEXT, type UpdatesPoll } from '../../fleet/useUpdatesView';
 import { isPlaceableInstant } from '../../fleet/updatesRead';
 import { ApiError, api, updateErrorText } from '../../lib/api';
@@ -127,7 +129,7 @@ function gateRefusalOf(err: unknown): string[] | null {
 /** Updates' cards, in §3.3's order: versions first, policy last (§15 D7). THE ONE ORDER: the page renders this list
  *  and nothing else decides it, so the Claude Code card (the binary-lifecycle plan's CB1h, §15.3 C5) is one id
  *  inserted between `nodes` and `policy`. */
-export const UPDATES_CARDS = ['fleetVersion', 'nodes', 'policy'] as const satisfies readonly (keyof typeof SETTINGS_CARDS.updates)[];
+export const UPDATES_CARDS = ['fleetVersion', 'nodes', 'boxSettings', 'policy'] as const satisfies readonly (keyof typeof SETTINGS_CARDS.updates)[];
 type UpdatesCardId = (typeof UPDATES_CARDS)[number];
 
 /** One Updates card: its head from the word table, its body given. */
@@ -342,6 +344,8 @@ function UpdatesBody({ view, stale, now, reload }: {
         haltedBy={halt !== null ? haltId : null} onAcked={reload} onMove={openMove} result={moveResult}
       />
     ),
+    // D-6917: the nodes of THIS poll's view: the card has no poll of its own and no clock (the age it shows is the server's).
+    boxSettings: <BoxSettingsCard nodes={view.nodes} />,
     policy: (
       <>
         {/* Spec §5.1's options with their notes: each note under its option, read as its description. */}
@@ -385,8 +389,8 @@ function UpdatesBody({ view, stale, now, reload }: {
 
   return (
     <>
-      {/* A fleet with no node yet has no Nodes card: an empty card says nothing the purpose line does not. */}
-      {UPDATES_CARDS.filter((id) => id !== 'nodes' || view.nodes.length > 0)
+      {/* A fleet with no node yet has no Nodes or Box settings card: an empty card says nothing the purpose line does not. */}
+      {UPDATES_CARDS.filter((id) => (id !== 'nodes' && id !== 'boxSettings') || view.nodes.length > 0)
         .map((id) => <UpdatesCard key={id} id={id}>{bodies[id]}</UpdatesCard>)}
       <WhatsNewSheet
         open={whatsNew && waiting !== null}
