@@ -10,8 +10,9 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyReply } from 'fastify';
-import { ADVANCE_REJECT_STATUS, GENERIC_REFUSALS, LANDING_REFUSAL_STATUS, LINEAR_PROXY_REFUSALS, REFUSAL_STATUS, ROUTE_REFUSALS, type RouteRefusal } from '../../shared/refusal.js';
+import { ADVANCE_REJECT_STATUS, GENERIC_REFUSALS, LANDING_REFUSAL_STATUS, LINEAR_PROXY_REFUSALS, PROJECT_ADD_REFUSALS, REFUSAL_STATUS, ROUTE_REFUSALS, type RouteRefusal } from '../../shared/refusal.js';
 import { CLAIM_REFUSALS } from '../../shared/box-token.js';
+import { ACCOUNT_ROUTE_REFUSALS } from '../../shared/api.js';
 import { LANDING_INFRASTRUCTURE_CODES, LANDING_MUTATION_CODES } from '../../shared/landingLine.js';
 import { refuseRoute } from '../src/refuse.js';
 import { addedLines, mergeBaseDiff, mergeBaseText, removedLines } from './mergeBase.js';
@@ -461,6 +462,18 @@ describe('the Settings add\'s word (#1444, spec §10.1; plan task LK11)', () => 
     expect(GENERIC_REFUSALS as readonly string[]).toContain('workspace-exists');
     const routes = readFileSync(path.join(SRC, 'linear', 'routes.ts'), 'utf8');
     expect([...routes.matchAll(HELPER_WORD)].map((m) => m[1])).toContain('workspace-exists');
+  });
+});
+
+describe('the project add\'s words (add-project spec 2026-11-04 §4)', () => {
+  it('each is a route refusal at its chosen status, a typed group rather than GenericRefusals', () => {
+    expect(Object.fromEntries(PROJECT_ADD_REFUSALS.map((w) => [w, REFUSAL_STATUS[w]])))
+      .toEqual({ 'bad-source': 400, 'project-exists': 409, 'outcome-unknown': 502 });
+    for (const w of PROJECT_ADD_REFUSALS) expect(GENERIC_REFUSALS as readonly string[]).not.toContain(w);
+    // `outcome-unknown` is the account routes' word too (`ACCOUNT_ROUTE_REFUSALS`, `shared/api.ts`): one meaning, one row.
+    expect(ACCOUNT_ROUTE_REFUSALS as readonly string[]).toContain('outcome-unknown');
+    // The two words it reuses keep their one row elsewhere in the table.
+    expect([REFUSAL_STATUS['bad-request'], REFUSAL_STATUS['bad-project'], REFUSAL_STATUS.unsupported]).toEqual([400, 400, 501]);
   });
 });
 
