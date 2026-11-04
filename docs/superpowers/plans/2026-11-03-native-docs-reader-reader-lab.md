@@ -138,7 +138,7 @@ Each refinement says What, Why and Cost if wrong. (a), (b), (c), (h), (i), (k), 
   - Why: the life must outlast the run's own worst case on the slow phones E17 exists to measure; the owner keeps one signed-in session from reading or closing another's run for the price of one digest.
   - Cost if wrong: a box setting is added later (Q5's option b), or a run's life is set by a measured figure instead of the caps.
 - **(e) Classes only, memory only.** The counter keeps whether `ccrc_session` was present by name with a value, the `Sec-Fetch-Site` class, the `Origin` class and whether the request was an upgrade; never a value, a path beyond the name, a query, a body, an address or a user agent; a run keeps its owner's digest, never the cookie; nothing is written to disk, and the door logs nothing of its own. On an armed box the gate's own foreign-origin line fires for each frame's WebSocket upgrade (one or two per run); the gate keeps that alarm unchanged, Task 3's test asserts it, and the page says it is expected. Cost if wrong: a diagnosis needs a header the door did not keep; the lab is re-run with a richer class.
-- **(f) One answer for every probe.** Every request that reaches the probe handler gets the same `204`, no body, `cache-control: no-store`, nothing else, by GET or POST, for a live, unknown, malformed, closed, expired or saturated run and an unknown name, an armed box's POST from origin `null` included (exempt, so it skips the origin check on purpose; the gate's `needsOriginCheck` note says so); a body Fastify refuses (413, 415, 400) still answers the same `204` through the route's `errorHandler`. `exposeHeadRoute: false` on both GETs. What a request that reaches no probe handler gets (a malformed percent-escape 400 and an over-long name 414, which Fastify answers before any hook on every box; a HEAD or a wrong-shaped path, a 404 on a dark box and, since every `onRequest` hook still runs for it, the gate's 401 `no-session` on an armed one for a caller with no session) or what the upgrade layer does depends on the request's method, path text and cookie, never on the nonce, the run or the name, and the handler never reads a body. No route answers `OPTIONS`, so a preflight is never approved (the cookie check's marker). Cost if wrong: a probe could tell a live nonce from a dead one, which a 128-bit nonce makes worthless anyway.
+- **(f) One answer for every probe.** Every request that reaches the probe handler gets the same `204`, no body, `cache-control: no-store`, nothing else, by GET or POST, for a live, unknown, malformed, closed, expired or saturated run and an unknown name, an armed box's POST from origin `null` included (exempt, so it skips the origin check on purpose; the gate's `needsOriginCheck` note says so); a body Fastify refuses (413, 415, 400) still answers the same `204` through the route's `errorHandler`. `exposeHeadRoute: false` on both GETs. No answer to a request that reaches no probe handler, and nothing the upgrade layer does, depends on the nonce, the run or the name: Fastify answers a malformed percent-escape 400 before any hook, on every box and by every method, and an over-long name 414 before any hook on a POST (and on a GET where no catch-all route matches); anything else (a HEAD, a wrong-shaped path) gets a 404 from the server's not-found handler where the built bundle's catch-all matches it (a GET or a HEAD on a box serving the PWA), and where none matches (an API-only box, and a POST on any box), since every `onRequest` hook still runs for it, a 404 on a dark box and the gate's 401 `no-session` on an armed one for a caller with no session. The handler never reads a body. No route answers `OPTIONS`, so a preflight is never approved (the cookie check's marker). Cost if wrong: a probe could tell a live nonce from a dead one, which a 128-bit nonce makes worthless anyway.
 - **(g) One vocabulary.** `shared/readerLab.ts` declares the channels (W8a's 27, in its order), the 40 fixed probe names, the classes, the paths and the wire; the server and the PWA import it, and RL-b's desktop browser battery reads its channel list from it. Each union has its `Record<…, true>` map (`wire-totality.test.ts`). Cost if wrong: none to behaviour; a later name is one entry.
 - **(h) The lab's frames have one home, outside the Docs reader.** Departs from the rich-docs spec's A2b ("`<iframe` and `srcDoc` only in `MockupFrame.tsx` and `docs/export/buildExport.tsx`").
   - What: `pwa/src/readerLab/frames.ts` builds every lab frame: `sandbox="allow-scripts"` and nothing else, `srcdoc`, `referrerpolicy="no-referrer"`, a JSON data block just before one constant script. No other file outside `pwa/src/docs` names `srcdoc` or an `iframe`, and no file in `pwa/src` holds another sandbox token (Task 11's scans).
@@ -1200,11 +1200,14 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
 // The probe pair is `EXEMPT` (gate.ts
 // reason 8): its callers are the lab's sandboxed frames, whose requests carry no session cookie by design. Every answer
 // the probe route itself gives is one `204` with no body and `no-store`, whatever the nonce, the run or the name, by GET
-// or POST, a refused body included. What a request that reaches no probe handler gets (a malformed percent-escape 400 and
-// an over-long name 414, which Fastify answers before any hook on every box; a HEAD or a wrong-shaped path, a 404 on a
-// dark box and, since every onRequest hook still runs for it, the gate's 401 `no-session` on an armed one for a caller
-// with no session) or what the upgrade layer does (a WebSocket upgrade past the gate is completed, then closed) depends
-// on the request's method, its path text and its cookie, never on whether a run exists, so a probe learns nothing. The counter is an `onRequest` hook the composition root adds immediately
+// or POST, a refused body included. No answer to a request that reaches no probe handler depends on whether a run exists:
+// Fastify answers a malformed percent-escape 400 before any hook, on every box and by every method, and an over-long name
+// 414 before any hook on a POST (and on a GET where no catch-all route matches); anything else (a HEAD, a wrong-shaped
+// path) gets a 404 from the server's not-found handler where the built bundle's catch-all matches it (a GET or a HEAD on a
+// box serving the PWA), and where none matches (an API-only box, and a POST on any box), since every onRequest hook still
+// runs for it, a 404 on a dark box and the gate's 401 `no-session` on an armed one for a caller with no session. A
+// WebSocket upgrade past the gate is completed, then closed. So a probe learns nothing. The counter is an `onRequest` hook
+// the composition root adds immediately
 // BEFORE the gate's, so a probe the gate refuses (a frame's WebSocket upgrade, `Origin: null`, on an armed box) is still
 // counted. It never answers, reads no body and awaits nothing; the gate still decides every request. The door logs
 // nothing of its own; on an armed box the gate's foreign-origin line for a frame's WebSocket upgrade is the gate's.
@@ -1342,13 +1345,18 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
  *     ever does is the thing measured, so a gated probe would count nothing. It is
  *     not a door into anything. Every request that reaches its handler gets the
  *     same `204`, with no body and the same headers, whatever the nonce, the run or
- *     the name; what a request that reaches no probe handler gets depends on its
- *     method, its path text and its cookie, never on whether a run exists. Fastify
- *     answers a malformed percent-escape and an over-long name before any hook, on
- *     every box. A HEAD or a path of another shape gets Fastify's 404 on a dark box
- *     and, since every `onRequest` hook still runs for it, this gate's `no-session`
- *     refusal on an armed one for a caller with no session. A WebSocket upgrade that
- *     passes this gate is completed and closed, so none of it tells a run from none. The handler reads no body (Fastify
+ *     the name. No answer to a request that reaches no probe handler depends on
+ *     whether a run exists. Fastify answers a malformed percent-escape 400 before
+ *     any hook, on every box and by every method, and an over-long name 414 before
+ *     any hook on a POST (and on a GET where no catch-all route matches). Anything
+ *     else that reaches no probe handler (a HEAD, a path of another shape) gets a
+ *     404 from the server's not-found handler where the built bundle's catch-all
+ *     matches it (a GET or a HEAD on a box serving the PWA, `GET /*` being exempt).
+ *     Where no catch-all matches (an API-only box, and a POST on any box), every
+ *     `onRequest` hook still runs for it: it gets a 404 on a dark box and this
+ *     gate's `no-session` refusal on an armed one for a caller with no session. A
+ *     WebSocket upgrade that passes this gate is completed and closed, so none of
+ *     it tells a run from none. The handler reads no body (Fastify
  *     buffers one up to a 1 KiB limit, and a refused one still answers `204`), sets
  *     no cookie and no CORS header, and changes nothing but the counters of a lab
  *     run that someone opened (a signed-in session on an armed box; anyone who
@@ -4940,7 +4948,7 @@ The coordinator ruled the review's findings, and each fix is its own commit, mad
 - A8: the owner digest is never the bare sha256 of the session token (row `RLB-T3-M16`, the `reader-lab:` prefix dropped).
 - A9: row `RLB-T4-M1` restated as a planted `requireMailToken(req, reply)` in a lab handler, re-measured red.
 - The round's own re-review (opus) found every item addressed and two documentation slips, both corrected:
-  - The unmatched-request wording now says Fastify answers a malformed percent-escape 400 and an over-long name 414 before any hook, on every box. Only a HEAD or a wrong-shaped path runs the hooks and gets the gate's refusal on an armed box.
+  - The unmatched-request wording then said Fastify answers a malformed percent-escape 400 and an over-long name 414 before any hook, on every box, and that a HEAD or a wrong-shaped path gets the gate's refusal on an armed box. Fix round 2 corrected both halves (see below).
   - Row `RLB-T2-M11` in Task 2's table is now in that table's four columns.
 - **The PR's CI on that round's first push (d2da4d261) was red** in one case: `single-definition/advance-switches.test.ts`'s ARCH-06 ratchet, "literal source pins over every other server/src file may only shrink". The never-read and entropy-source pins read `routes.ts` with `readFileSync` and matched literals, and a file with no ceiling row has a ceiling of 0. Both pins now key on `scan/symbols.ts`: the probe registrations are the `app.get`/`app.post` calls whose first argument is the probe route, and the mint is the `randomBytes` call in `registerReaderLabRoutes`. The never-read scan now also covers `probeAnswer`, with its own row, `RLB-T3-M17`. `RLB-T3-M13` and `RLB-T3-M14` were re-measured on the new scans, and each reds the same one case. The `single-definition` directory passes whole: 22 files, 1063 cases.
 

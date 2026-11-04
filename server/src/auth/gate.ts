@@ -177,13 +177,18 @@ import type { SessionStore } from './sessions.js';
  *     ever does is the thing measured, so a gated probe would count nothing. It is
  *     not a door into anything. Every request that reaches its handler gets the
  *     same `204`, with no body and the same headers, whatever the nonce, the run or
- *     the name; what a request that reaches no probe handler gets depends on its
- *     method, its path text and its cookie, never on whether a run exists. Fastify
- *     answers a malformed percent-escape and an over-long name before any hook, on
- *     every box. A HEAD or a path of another shape gets Fastify's 404 on a dark box
- *     and, since every `onRequest` hook still runs for it, this gate's `no-session`
- *     refusal on an armed one for a caller with no session. A WebSocket upgrade that
- *     passes this gate is completed and closed, so none of it tells a run from none. The handler reads no body (Fastify
+ *     the name. No answer to a request that reaches no probe handler depends on
+ *     whether a run exists. Fastify answers a malformed percent-escape 400 before
+ *     any hook, on every box and by every method, and an over-long name 414 before
+ *     any hook on a POST (and on a GET where no catch-all route matches). Anything
+ *     else that reaches no probe handler (a HEAD, a path of another shape) gets a
+ *     404 from the server's not-found handler where the built bundle's catch-all
+ *     matches it (a GET or a HEAD on a box serving the PWA, `GET /*` being exempt).
+ *     Where no catch-all matches (an API-only box, and a POST on any box), every
+ *     `onRequest` hook still runs for it: it gets a 404 on a dark box and this
+ *     gate's `no-session` refusal on an armed one for a caller with no session. A
+ *     WebSocket upgrade that passes this gate is completed and closed, so none of
+ *     it tells a run from none. The handler reads no body (Fastify
  *     buffers one up to a 1 KiB limit, and a refused one still answers `204`), sets
  *     no cookie and no CORS header, and changes nothing but the counters of a lab
  *     run that someone opened (a signed-in session on an armed box; anyone who

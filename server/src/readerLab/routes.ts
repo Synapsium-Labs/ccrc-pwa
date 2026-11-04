@@ -8,11 +8,14 @@
 // The probe pair is `EXEMPT` (gate.ts
 // reason 8): its callers are the lab's sandboxed frames, whose requests carry no session cookie by design. Every answer
 // the probe route itself gives is one `204` with no body and `no-store`, whatever the nonce, the run or the name, by GET
-// or POST, a refused body included. What a request that reaches no probe handler gets (a malformed percent-escape 400 and
-// an over-long name 414, which Fastify answers before any hook on every box; a HEAD or a wrong-shaped path, a 404 on a
-// dark box and, since every onRequest hook still runs for it, the gate's 401 `no-session` on an armed one for a caller
-// with no session) or what the upgrade layer does (a WebSocket upgrade past the gate is completed, then closed) depends
-// on the request's method, its path text and its cookie, never on whether a run exists, so a probe learns nothing. The counter is an `onRequest` hook the composition root adds immediately
+// or POST, a refused body included. No answer to a request that reaches no probe handler depends on whether a run exists:
+// Fastify answers a malformed percent-escape 400 before any hook, on every box and by every method, and an over-long name
+// 414 before any hook on a POST (and on a GET where no catch-all route matches); anything else (a HEAD, a wrong-shaped
+// path) gets a 404 from the server's not-found handler where the built bundle's catch-all matches it (a GET or a HEAD on a
+// box serving the PWA), and where none matches (an API-only box, and a POST on any box), since every onRequest hook still
+// runs for it, a 404 on a dark box and the gate's 401 `no-session` on an armed one for a caller with no session. A
+// WebSocket upgrade past the gate is completed, then closed. So a probe learns nothing. The counter is an `onRequest` hook
+// the composition root adds immediately
 // BEFORE the gate's, so a probe the gate refuses (a frame's WebSocket upgrade, `Origin: null`, on an armed box) is still
 // counted. It never answers, reads no body and awaits nothing; the gate still decides every request. The door logs
 // nothing of its own; on an armed box the gate's foreign-origin line for a frame's WebSocket upgrade is the gate's.
