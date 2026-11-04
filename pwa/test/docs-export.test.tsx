@@ -382,8 +382,8 @@ function loaded(assets: ExportAssets, path: string, bytes: Uint8Array<ArrayBuffe
 
 const HOSTILE_H1 = '</title><meta http-equiv=refresh content="0;url=https://a.example/r"><style>.ccrc-export-draft{display:none}</style>';
 /** A workspace worktree whose last segment holds markup characters: the closed label carries it as text, never markup. */
-const HOSTILE_WORKTREE_PATH = '/repo/wt<b>x';
-const HOSTILE_WORKTREE_LABEL = 'workspace wt<b>x';
+const HOSTILE_WORKTREE_PATH = '/repo/wt<b>"x';
+const HOSTILE_WORKTREE_LABEL = 'workspace wt<b>"x';
 const HOSTILE = [
   `# ${HOSTILE_H1}`,
   '',
@@ -491,12 +491,18 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
     expect(doc.querySelectorAll('article table [style]')).toHaveLength(6);
     expect(doc.querySelector('article table script, article table b')).toBeNull();
     // The worktree segment is text wherever the file shows it: banner, Source fact and the ccrc:worktree meta; no element comes of it.
-    expect(doc.querySelectorAll('b, wt')).toHaveLength(0);
     expect(doc.body.firstElementChild?.textContent).toContain(`uncommitted changes from ${HOSTILE_WORKTREE_LABEL} on main`);
     expect(doc.body.textContent).toContain(`draft · modified in ${HOSTILE_WORKTREE_LABEL}`);
     expect(doc.querySelector('meta[name="ccrc:worktree"]')?.getAttribute('content')).toBe(HOSTILE_WORKTREE_LABEL);
     expect(text).not.toContain('/repo/wt');
-    expect(text).not.toContain('<wt');
+    // The meta's attribute value, as written: a `"` would end it early, so the raw value (read up to the first `"`)
+    // decodes to the whole label only if the quote was escaped, and the raw segment appears nowhere unescaped.
+    const raw = /<meta name="ccrc:worktree" content="([^"]*)"/.exec(text);
+    expect(raw, 'the ccrc:worktree meta, as written').not.toBeNull();
+    const decoded = new DOMParser().parseFromString(`<p title="${raw![1]!}"></p>`, 'text/html').querySelector('p')?.getAttribute('title');
+    expect(decoded).toBe(HOSTILE_WORKTREE_LABEL);
+    expect(raw![1]).not.toContain('<');
+    expect(text).not.toContain('wt<b>');
     expect(doc.querySelectorAll('meta[http-equiv]')).toHaveLength(1);
     expect(doc.querySelectorAll('style')).toHaveLength(1);
     const style = doc.querySelector('style')?.textContent ?? '';
