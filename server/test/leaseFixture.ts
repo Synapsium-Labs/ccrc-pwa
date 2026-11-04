@@ -11,10 +11,13 @@ export const THIRD = '2b3c4d5e-6f70-4812-9a3b-4c5d6e7f8091';
 export const INC = '11111111-2222-4333-8444-555555555555';
 export const hex = (s: string): string => Buffer.from(s).toString('hex');
 
-/** The holder probes stubbed as `ccd-ws-orphan-verb.test.ts` stubs them: nobody uses any path. */
+/** `ccd-ws-orphan-verb.test.ts`'s probe stubs, copied whole: nobody uses any path, and the collector's idle walk answers
+ *  eight days quiet (the audit never asks it; PR4's orphan rung does). */
+const NOW = Math.floor(Date.now() / 1000);
 export const STUBS = '_ws_cwd_users() { return 0; };'
   + ' _ws_path_users_many() { local i; _WS_PATH_USERS_RCS=(); _WS_PATH_USERS_PIDS_OF=(); _WS_PATH_USERS_WHY_OF=();'
-  + ' for i in "$@"; do _WS_PATH_USERS_RCS+=(0); _WS_PATH_USERS_PIDS_OF+=(""); _WS_PATH_USERS_WHY_OF+=(""); done; return 0; };';
+  + ' for i in "$@"; do _WS_PATH_USERS_RCS+=(0); _WS_PATH_USERS_PIDS_OF+=(""); _WS_PATH_USERS_WHY_OF+=(""); done; return 0; };'
+  + ` _ws_collect_idle() { _WS_IDLE_NEWEST_NS="${NOW - 8 * 86400}000000000"; _WS_IDLE_COUNT=7; _WS_IDLE_WHY=''; _WS_IDLE_DETAIL=''; return 0; };`;
 
 export const reg = (h: CcdHarness): string => path.join(h.home, '.cc-sessions');
 export const leasesDir = (h: CcdHarness): string => path.join(reg(h), 'delegation', 'leases');

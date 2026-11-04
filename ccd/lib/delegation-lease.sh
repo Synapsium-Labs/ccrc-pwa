@@ -2,12 +2,14 @@
 #
 # NOT AN EXECUTABLE and not sourceable on its own: ccd/ccd loads it at the foot of its own file (`_ccd_lib_load`), after
 # ccd/lib/disk-retention.sh and ccd/lib/train-proof.sh and after every other function and variable of ccd is defined, and
-# these functions call those. It carries the delegation broker's workspace-lifecycle verbs: server-composed only (through
-# `CCD_ARGV` behind a capability the box reports), on the SAFETY list, named in no skill. It holds:
-#   1. the leases directory (`$REG/delegation/leases`, with `.locks/` and `by-tree/`), made only by the verb, never at a spawn;
+# these functions call those. It carries the delegation broker's workspace-lifecycle verbs, each server-composed only (through
+# `CCD_ARGV` behind a capability the box reports) and named in no skill. The writer is on the SAFETY list; the read-only
+# audit is deliberately on none, because it writes nothing to any durable path. It holds:
+#   1. the leases directory (`$REG/delegation/leases`, with `.locks/` and `by-tree/`), made only by the mark, never at a spawn;
 #   2. the carrier reader and the per-tree index (`by-tree/<key>` names the one lease of a tree, D-7799);
 #   3. the tree resolver, the creation-base reader and the box-side fingerprint;
-#   4. `ccd ws-lease-mark` (`cmd_ws_lease_mark`), the carrier's ONE writer: generation-strict, flocked and atomic.
+#   4. `ccd ws-lease-mark` (`cmd_ws_lease_mark`), the carrier's ONE writer: generation-strict, flocked and atomic;
+#   5. `ccd ws-lease-audit` (`cmd_ws_lease_audit`), the read-only measure of a leased tree (PR2).
 #
 # THE TRUST CHAIN is ccd/lib/disk-retention.sh's: installed beside ccd's body (`~/.local/libexec/ccrc/lib/delegation-lease.sh`)
 # by `ccd/ccd-entry-install.py`, pinned by the body (`__CCD_LIB_LEASE_SHA256`, near the foot of ccd/ccd, written at install
@@ -192,7 +194,14 @@ _dl_tree_of_record() {   # <main> <admin record> -> rc 0 DL_TREE (physical) DL_T
   [[ "$gd" == /*/.git ]] && _ws_reclaim_plain_path "$gd" \
     || { DL_WHY="$admin/gitdir does not name one plain absolute <tree>/.git"; return 4; }
   t="${gd%/.git}"; DL_TREE_REC="$t"
-  [[ -e "$t" || -L "$t" ]] || return 3
+  if [[ ! -e "$t" && ! -L "$t" ]]; then   # rc 3 only on a PROVEN absence: an unsearchable parent reads as ENOENT here (D-7974)
+    _ws_reclaim_absent "$t"
+    case $? in
+      0) return 3 ;;
+      1) ;;   # something stands there after all: measured below
+      *) DL_WHY="whether the tree $t, which $admin records, still stands is unmeasured: $_WS_ABSENT_WHY"; return 4 ;;
+    esac
+  fi
   [[ -d "$t" ]] || { DL_WHY="$t, the tree $admin records, is not a directory"; return 4; }
   _ws_dir_physical "$t" || { DL_WHY="the tree $t could not be resolved ($_WS_PHYS_WHY)"; return 4; }
   DL_TREE="$_WS_PHYS"
@@ -248,6 +257,9 @@ _dl_mark_refuse() {   # <word> <detail> -> prints the verb's one refusal line (n
   printf '{"ok":false,"refusal":"%s","detail":%s}\n' "$1" "$d"
 }
 _dl_in() { [[ "${1-}" =~ ^[a-z-]+$ && " ${2-} " == *" $1 "* ]]; }   # word list -> 0 iff word is one of list's words
+_dl_count_ok() { [[ "${1-}" =~ ^[1-9][0-9]{0,9}$ ]]; }   # n -> 0 iff n is a positive integer of at most ten digits: the ONE
+                                                        #    spelling of the lease verbs' number grammar (a generation, a
+                                                        #    journal sequence, a commit count above zero, a pid; F12)
 
 # ── ccd ws-lease-mark: the carrier's one writer ──
 cmd_ws_lease_mark() {   # ccd ws-lease-mark --lease <uuid> --generation <n> ... -> ONE JSON line on stdout; rc 0 written|unchanged|
@@ -274,8 +286,8 @@ cmd_ws_lease_mark() {   # ccd ws-lease-mark --lease <uuid> --generation <n> ... 
   done
   local u=''
   [[ "$lease" =~ $__DL_LEASE_RE ]] || u='--lease is not a lease id'
-  [[ -n "$u" || "$gen" =~ ^[1-9][0-9]{0,9}$ ]] || u='--generation is not a positive integer'
-  [[ -n "$u" || "$jseq" =~ ^[1-9][0-9]{0,9}$ ]] || u='--journal-seq is not a positive integer'
+  [[ -n "$u" ]] || _dl_count_ok "$gen" || u='--generation is not a positive integer'
+  [[ -n "$u" ]] || _dl_count_ok "$jseq" || u='--journal-seq is not a positive integer'
   [[ -n "$u" || "$project" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,254}$ ]] || u='--project is not one path segment'
   if [[ -z "$u" ]]; then
     if [[ "$rhex" =~ ^([0-9a-f]{2}){1,255}$ ]]; then
@@ -504,12 +516,18 @@ _dl_mark_locked() {   # everything the lock serialises (the flags, $dir and $rec
 }
 
 # ── ccd ws-lease-audit: the read-only measure of a leased tree (PR2) ──
-# It reads the carrier WITHOUT any lock, recomputes the box-side fingerprint and answers the tree's tip, its dirt (untracked
-# files included), the commits beyond its creation base and, with --holders only, who holds or sits in it. It WRITES NOTHING,
-# by any path: no carrier, no by-tree entry, no lock file, no token store, no journal line (W5-AU7), and its git reads run
-# contained (`_ws_reclaim_contained`: GIT_OPTIONAL_LOCKS=0, so `git status` never refreshes the index). Its token is evidence,
-# never authority (D-7826): no verb consumes it. A fact that does not read is "unmeasured", never false or 0, and makes
-# `changed` "unmeasured" too.
+# It reads the carrier WITHOUT any lock, recomputes the box-side fingerprint and answers, from ONE read of the tip and ONE of
+# the carrier's recorded branch: the tip; the dirt (untracked files included, and an edit git is told not to look at, an
+# assume-unchanged or skip-worktree path, read by `_ws_reclaim_hidden`, D-7975); the commits from the creation base to the tip
+# (`aheadOfBase`) and to the recorded branch (`branchAheadOfBase`, D-7976); `changed`; and, with --holders only, who holds or
+# sits in the tree. IT WRITES NOTHING TO ANY DURABLE PATH: no carrier, no by-tree entry, no lock file, no token store, no
+# journal line (W5-AU7). Two residuals stand, both outside the registry and the tree: the dirt readers' scratch files under
+# $TMPDIR (made and removed inside one call, so a kill between the two leaves one for the temp reaper), and a gitattributes
+# clean filter the user configured, which `git status` and `git hash-object --path` still run (`_ws_reclaim_contained`'s
+# stated residual). Its git reads run contained (GIT_OPTIONAL_LOCKS=0, so `git status` never refreshes the index). A fact
+# that does not read is "unmeasured", never false or 0, and makes `changed` "unmeasured" too. Its token is evidence, never
+# authority (D-7826): no verb consumes it, and it binds every fact the document answers, `holders` and whether it was asked
+# included (D-7977).
 cmd_ws_lease_audit() {   # ccd ws-lease-audit --lease <uuid> --generation <n> [--holders] -> ONE JSON document on stdout; rc 0
                          #    measured, 1 unmeasured or refused, 2 usage
   local LC_ALL=C lease='' gen='' holders=0 flag seen=' '
@@ -527,13 +545,14 @@ cmd_ws_lease_audit() {   # ccd ws-lease-audit --lease <uuid> --generation <n> [-
     shift 2
   done
   [[ "$lease" =~ $__DL_LEASE_RE ]] || { _dl_mark_refuse usage '--lease is not a lease id'; return 2; }
-  [[ "$gen" =~ ^[1-9][0-9]*$ && ${#gen} -le 10 ]] || { _dl_mark_refuse usage '--generation is not a positive integer'; return 2; }   # ten digits, as the mark's
+  _dl_count_ok "$gen" || { _dl_mark_refuse usage '--generation is not a positive integer'; return 2; }
   _json_str probe >/dev/null 2>&1 || { printf '%s\n' '{"ok":false,"refusal":"unmeasured","detail":"python3 is unavailable, so the carrier cannot be read or quoted"}'; return 1; }
   _ws_reclaim_contained _dl_audit_ladder
 }
 
 _dl_audit_ladder() {   # cmd_ws_lease_audit's ladder, inside _ws_reclaim_contained ($lease, $gen and $holders are the verb's)
-  local crc trc pr main mr rec base fp tree tip dirty ahead changed q tok rc=0 hl='' hu=0 i p pids=''
+  local crc trc pr main mr rec base fp tree tip dirty ahead bahead btip='' bref q r tok changed rc=0 hl='' ht=not-asked hu=0
+  local i p pids='' seen=0 unread=0
   _dl_carrier_read "$lease"; crc=$?
   case "$crc" in
     0) ;;
@@ -561,20 +580,44 @@ _dl_audit_ladder() {   # cmd_ws_lease_audit's ladder, inside _ws_reclaim_contain
     || { _dl_mark_refuse unmeasured "${DL_WHY:-the fingerprint of $tree could not be computed}"; return 1; }
   [[ "$fp" == "$DL_C_fingerprint" ]] \
     || { _dl_mark_refuse fingerprint-mismatch "the tree at $tree is not the one lease $lease's carrier records"; return 1; }
+  # the tip and the recorded branch are each read ONCE, and every count below is taken from those reads (F13)
   tip=$(git -C "$tree" rev-parse --verify -q 'HEAD^{commit}' 2>/dev/null) && [[ "$tip" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] \
     || { _dl_mark_refuse unmeasured "the tip of $tree could not be read"; return 1; }
-  if _ws_gc_dirty "$tree"; then
-    [[ "$GC_DIRTY_STATE" == dirty ]] && dirty=true || dirty=unmeasured
+  if [[ -z "$DL_C_branch" ]]; then
+    bahead=no-branch; btip=no-branch
+  elif bref=$(git -C "$tree" for-each-ref --format='%(refname)%09%(objectname)' "refs/heads/$DL_C_branch" 2>/dev/null); then
+    while IFS=$'\t' read -r q r; do [[ "$q" == "refs/heads/$DL_C_branch" ]] && btip="$r"; done <<< "$bref"
+    if [[ -z "$btip" ]]; then
+      bahead=branch-gone; btip=branch-gone   # recorded and no longer there: its commits cannot be counted, never 0
+    elif [[ "$btip" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+      bahead=unmeasured
+    else
+      bahead=unmeasured; btip=unmeasured
+    fi
   else
-    dirty=false
+    bahead=unmeasured; btip=unmeasured
   fi
+  # dirt: what `git status` sees, and what it is told not to look at (D-7975); an edit either sees is dirt, and otherwise
+  # either one that cannot read is unmeasured
+  if _ws_gc_dirty "$tree"; then
+    [[ "$GC_DIRTY_STATE" == dirty ]] && seen=1 || unread=1
+  fi
+  if _ws_reclaim_hidden "$tree"; then
+    (( ${#_WS_HIDDEN_PATHS[@]} == 0 )) || seen=1
+  else
+    unread=1
+  fi
+  if (( seen )); then dirty=true; elif (( unread )); then dirty=unmeasured; else dirty=false; fi
   ahead=unmeasured
   if [[ "$DL_C_claudeBase" == "$base" ]]; then
-    q=$(git -C "$tree" rev-list --count "$base..HEAD" -- 2>/dev/null) && [[ "$q" =~ ^(0|[1-9][0-9]*)$ && ${#q} -le 10 ]] && ahead="$q"
+    q=$(git -C "$tree" rev-list --count "$base..$tip" -- 2>/dev/null) && { [[ "$q" == 0 ]] || _dl_count_ok "$q"; } && ahead="$q"
+    if [[ "$bahead" == unmeasured && "$btip" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+      q=$(git -C "$tree" rev-list --count "$base..$btip" -- 2>/dev/null) && { [[ "$q" == 0 ]] || _dl_count_ok "$q"; } && bahead="$q"
+    fi
   fi
-  if [[ "$dirty" == unmeasured || "$ahead" == unmeasured ]]; then
+  if [[ "$dirty" == unmeasured || "$ahead" == unmeasured || "$bahead" == unmeasured || "$bahead" == branch-gone ]]; then
     changed=unmeasured; rc=1
-  elif [[ "$dirty" == true ]] || (( ahead > 0 )); then
+  elif [[ "$dirty" == true ]] || (( ahead > 0 )) || { [[ "$bahead" != no-branch ]] && (( bahead > 0 )); }; then
     changed=true
   else
     changed=false
@@ -598,20 +641,23 @@ _dl_audit_ladder() {   # cmd_ws_lease_audit's ladder, inside _ws_reclaim_contain
         *) hu=1 ;;
       esac
     fi
-    for p in $pids; do [[ "$p" =~ ^[1-9][0-9]*$ && ${#p} -le 10 ]] || hu=1; done
+    for p in $pids; do _dl_count_ok "$p" || hu=1; done
     if (( hu )); then
-      hl=',"holders":"unmeasured"'; rc=1
+      ht=unmeasured; hl=',"holders":"unmeasured"'; rc=1
     else
-      hl=",\"holders\":[$(for p in $pids; do printf '%s\n' "$p"; done | sort -nu | paste -sd, -)]"
+      ht=$(for p in $pids; do printf '%s\n' "$p"; done | sort -nu | paste -sd, -)
+      hl=",\"holders\":[$ht]"
     fi
   fi
   tok=$(_ws_reclaim_fingerprint "mode=lease-audit" "lease=$lease" "generation=$((10#$gen))" \
-    "incarnation=$DL_C_parentIncarnation" "fingerprint=$fp" "tip=$tip" "dirty=$dirty" "ahead=$ahead" "base=$base") \
+    "incarnation=$DL_C_parentIncarnation" "fingerprint=$fp" "tip=$tip" "dirty=$dirty" "ahead=$ahead" \
+    "branchAhead=$bahead" "branchTip=$btip" "base=$base" "holders=$ht") \
     && [[ "$tok" =~ ^[0-9a-f]{64}$ ]] || { _dl_mark_refuse unmeasured "the audit's token could not be computed"; return 1; }
   [[ "$dirty" != unmeasured ]] || dirty='"unmeasured"'
   [[ "$ahead" != unmeasured ]] || ahead='"unmeasured"'
+  [[ "$bahead" =~ ^[0-9]+$ ]] || bahead="\"$bahead\""
   [[ "$changed" != unmeasured ]] || changed='"unmeasured"'
-  printf '{"ok":true,"lease":"%s","generation":%s,"tip":"%s","dirty":%s,"aheadOfBase":%s,"changed":%s%s,"token":"%s"}\n' \
-    "$lease" "$((10#$gen))" "$tip" "$dirty" "$ahead" "$changed" "$hl" "$tok"
+  printf '{"ok":true,"lease":"%s","generation":%s,"tip":"%s","dirty":%s,"aheadOfBase":%s,"branchAheadOfBase":%s,"changed":%s%s,"token":"%s"}\n' \
+    "$lease" "$((10#$gen))" "$tip" "$dirty" "$ahead" "$bahead" "$changed" "$hl" "$tok"
   return "$rc"
 }

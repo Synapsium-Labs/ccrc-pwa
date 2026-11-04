@@ -539,4 +539,19 @@ describe('an unmeasured fingerprint names its reason', () => {
       expect(String(r.doc.detail)).toMatch(/\.git is not a readable gitfile/);
     } finally { fs.chmodSync(path.join(t, '.git'), 0o644); }
   }, 60_000);
+
+  it('W5-L30 (review 1446 F1, D-7974): a release whose tree\'s parent cannot be searched is refused unmeasured and writes nothing', () => {
+    if (process.getuid?.() === 0) return;   // root searches a mode-0000 directory
+    const t = agentTree(); mark();
+    const before = fs.readFileSync(carrierPath());
+    const parent = path.dirname(t);
+    const rel = { generation: '2', state: 'released', 'release-reason': 'native-removed', 'journal-seq': '8' };
+    fs.chmodSync(parent, 0);
+    try {
+      const r = mark(rel);
+      refused(r, 'unmeasured', before);
+      expect(String(r.doc.detail)).toContain('cannot be searched');
+    } finally { fs.chmodSync(parent, 0o755); }
+    expect(mark(rel).doc).toMatchObject({ ok: true, answer: 'written', state: 'released' });   // CONTROL: searchable again
+  }, 60_000);
 });

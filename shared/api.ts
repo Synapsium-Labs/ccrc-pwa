@@ -11758,12 +11758,16 @@ export const LEASE_AUDIT_REFUSALS = ['usage', 'unmeasured', 'no-carrier', 'bad-c
   'fingerprint-mismatch'] as const;
 export type LeaseAuditRefusal = (typeof LEASE_AUDIT_REFUSALS)[number];
 /** `ccd ws-lease-audit`'s one JSON document: the read-only measure of a leased tree (`ccd/lib/delegation-lease.sh#cmd_ws_lease_audit`).
- *  A fact that did not read is `'unmeasured'`, never `false` or 0, and makes `changed` `'unmeasured'` too. `holders` is
- *  present only when the audit was asked `--holders`. `token` is evidence the promotion records, spent by no verb (D-7826). */
+ *  A fact that did not read is `'unmeasured'`, never `false` or 0, and makes `changed` `'unmeasured'` too. `dirty` counts an
+ *  edit to an assume-unchanged or skip-worktree path (D-7975). `aheadOfBase` counts the creation base to the tip;
+ *  `branchAheadOfBase` counts it to the branch the carrier records (D-7976): `'no-branch'` when the carrier records none,
+ *  `'branch-gone'` when the recorded branch no longer exists (which makes `changed` `'unmeasured'`), never 0 for either.
+ *  `holders` is present only when the audit was asked `--holders`. `token` binds every fact here, `holders` and whether it
+ *  was asked included (D-7977); it is evidence the promotion records, spent by no verb (D-7826). */
 export type LeaseAuditAnswer =
   | { ok: true; lease: string; generation: number; tip: string; dirty: boolean | 'unmeasured';
-      aheadOfBase: number | 'unmeasured'; changed: boolean | 'unmeasured';
-      holders?: readonly number[] | 'unmeasured'; token: string }
+      aheadOfBase: number | 'unmeasured'; branchAheadOfBase: number | 'unmeasured' | 'no-branch' | 'branch-gone';
+      changed: boolean | 'unmeasured'; holders?: readonly number[] | 'unmeasured'; token: string }
   | { ok: false; refusal: LeaseAuditRefusal; detail: string };
 
 /** The keys every spool line carries. A line is evidence and never authority; the hook decides nothing about

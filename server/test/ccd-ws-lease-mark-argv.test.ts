@@ -87,7 +87,12 @@ describe('CCD_ARGV.leaseAudit', () => {
     expect(hook).not.toMatch(/ws-lease-audit/);
     expect(installer).not.toMatch(/ws-lease-audit/);
     expect(hook).toMatch(/"ws-lease-mark"/);   // CONTROL: the hook's lists name the writer
-    for (const skill of ['coordinator-skill', 'worker-skill', 'reviewer-skill']) {
+    // review 1446 F10: every skill ccd ships and installs into a home, not a named three
+    const skills = fs.readdirSync(path.join(REPO, 'ccd'), { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name.endsWith('-skill')).map((e) => e.name);
+    expect(skills).toEqual(expect.arrayContaining(['coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill',
+      'linear-skill']));
+    for (const skill of skills) {
       const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true })
         .flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]);
       for (const f of walk(path.join(REPO, 'ccd', skill))) {
@@ -108,6 +113,10 @@ describe('CCD_ARGV.leaseAudit', () => {
     const max = Number(/^const MAX_EXEC_TIMEOUT_MS = ([\d_]+);/m.exec(agent)?.[1]?.replace(/_/g, '') ?? NaN);
     expect(max).toBeGreaterThan(0);
     expect(ms).toBeLessThanOrEqual(max);
-    expect(timeoutMsFor('ccd', ['ws-lease-mark', '--lease', LEASE])).toBe(90_000);   // CONTROL: an unlisted verb gets the flat bound
+    // review 1446 F14: the row exists and is below the flat default, which an unlisted verb gets
+    const flat = timeoutMsFor('ccd', ['ws-lease-mark', '--lease', LEASE]);
+    expect(flat).toBe(90_000);
+    expect(ms).toBeLessThan(flat);
+    expect(timeoutMsFor('ccd', ['ws-lease-audit', '--lease', LEASE, '--generation', '1'])).toBe(ms);   // the key is the verb
   });
 });

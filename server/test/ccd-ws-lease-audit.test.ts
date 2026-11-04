@@ -8,7 +8,7 @@ import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { fileURLToPath } from 'node:url';
 import { LEASE_AUDIT_REFUSALS } from '../../shared/api.js';
-import { LEASE, STUBS, agentTree, carrier, carrierPath, leasesDir, main, mark } from './leaseFixture.js';
+import { LEASE, OTHER, STUBS, agentTree, carrier, carrierPath, hex, leasesDir, main, mark } from './leaseFixture.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-lease-audit-'); h.makeRepo('demo'); });
@@ -62,7 +62,8 @@ describe('ws-lease-audit measures a leased tree', () => {
     const t = agentTree(h); mark(h);
     const r = audit();
     expect(r.code, JSON.stringify(r.doc)).toBe(0);
-    expect(r.doc).toMatchObject({ ok: true, lease: LEASE, generation: 1, dirty: false, aheadOfBase: 0, changed: false });
+    expect(r.doc).toMatchObject({ ok: true, lease: LEASE, generation: 1, dirty: false, aheadOfBase: 0, branchAheadOfBase: 0,
+      changed: false });
     expect(r.doc.tip).toBe(h.git(t, 'rev-parse', 'HEAD').trim());
     expect(r.doc.token).toMatch(/^[0-9a-f]{64}$/);
     expect(r.doc).not.toHaveProperty('holders');
@@ -75,7 +76,7 @@ describe('ws-lease-audit measures a leased tree', () => {
     expect(audit().doc).toMatchObject({ ok: true, dirty: true, aheadOfBase: 0, changed: true });
     h.git(t, 'add', 'u.txt'); h.git(t, 'commit', '-m', 'w');
     const r = audit();
-    expect(r.doc).toMatchObject({ ok: true, dirty: false, aheadOfBase: 1, changed: true });
+    expect(r.doc).toMatchObject({ ok: true, dirty: false, aheadOfBase: 1, branchAheadOfBase: 1, changed: true });
     expect(r.doc.tip).toBe(h.git(t, 'rev-parse', 'HEAD').trim());
     expect(r.code).toBe(0);
   }, 60_000);
@@ -102,7 +103,20 @@ describe('ws-lease-audit measures a leased tree', () => {
   it('W5-AU4b: a base that cannot be counted makes aheadOfBase and changed unmeasured, never 0 or false', () => {
     agentTree(h); mark(h);
     const r = audit(1, '', `${STUBS} ${gitRevListFails()}`);
-    expect(r.doc, JSON.stringify(r.doc)).toMatchObject({ ok: true, dirty: false, aheadOfBase: 'unmeasured', changed: 'unmeasured' });
+    expect(r.doc, JSON.stringify(r.doc)).toMatchObject({ ok: true, dirty: false, aheadOfBase: 'unmeasured',
+      branchAheadOfBase: 'unmeasured', changed: 'unmeasured' });
+    expect(r.code).toBe(1);
+  }, 60_000);
+
+  it('W5-AU4c (review 1446 F6): a carrier whose claudeBase disagrees with the tree\'s makes both counts and changed unmeasured', () => {
+    const t = agentTree(h); mark(h);
+    const other = 'e'.repeat(40);
+    expect(other).not.toBe(carrier(h).claudeBase);
+    rewriteCarrier({ claudeBase: other });
+    const r = audit();
+    expect(r.doc, JSON.stringify(r.doc)).toMatchObject({ ok: true, dirty: false, aheadOfBase: 'unmeasured',
+      branchAheadOfBase: 'unmeasured', changed: 'unmeasured' });
+    expect(r.doc.tip).toBe(h.git(t, 'rev-parse', 'HEAD').trim());
     expect(r.code).toBe(1);
   }, 60_000);
 
@@ -130,6 +144,63 @@ describe('ws-lease-audit measures a leased tree', () => {
     refused(audit(), 'bad-carrier');
   }, 60_000);
 
+  it('W5-AU6b (review 1446 F1, D-7974): a tree whose parent cannot be searched is unmeasured, never no-tree', () => {
+    if (process.getuid?.() === 0) return;   // root searches a mode-0000 directory
+    const t = agentTree(h); mark(h);
+    const parent = path.dirname(t);
+    fs.chmodSync(parent, 0);
+    try {
+      const r = audit();
+      refused(r, 'unmeasured');
+      expect(String(r.doc.detail)).toContain('still stands is unmeasured');
+      expect(String(r.doc.detail)).toContain('cannot be searched');
+      expect(String(r.doc.detail)).not.toContain('holds no worktree record');
+    } finally { fs.chmodSync(parent, 0o755); }
+    expect(audit().doc).toMatchObject({ ok: true, changed: false });   // CONTROL: searchable again, the tree answers
+  }, 60_000);
+
+  it('W5-AU11 (review 1446 F2, D-7975): an edit git is told not to look at is dirt, under either flag', () => {
+    for (const flag of ['--assume-unchanged', '--skip-worktree']) {
+      const t = agentTree(h, `agent-${flag.slice(2, 6)}`);
+      const lease = flag === '--assume-unchanged' ? LEASE : OTHER;
+      mark(h, { lease, 'admin-record-hex': hex(path.basename(t)) });
+      h.git(t, 'update-index', flag, 'README.md');
+      fs.writeFileSync(path.join(t, 'README.md'), 'hidden edit\n');
+      expect(h.git(t, 'status', '--porcelain'), flag).toBe('');   // git status itself does not see it
+      const out = h.sh(`${STUBS} cmd_ws_lease_audit --lease ${lease} --generation 1; echo "rc=$?"`).trim().split('\n');
+      out.pop();
+      const doc = JSON.parse(out.pop()!) as Record<string, unknown>;
+      expect(doc, `${flag}: ${JSON.stringify(doc)}`).toMatchObject({ ok: true, dirty: true, aheadOfBase: 0, changed: true });
+    }
+  }, 60_000);
+
+  it('W5-AU12 (review 1446 F3, D-7976): commits on the recorded branch count when HEAD has left it', () => {
+    // a second commit on main first, so the tree's base has an ancestor to reset to
+    fs.writeFileSync(path.join(main(h), 'b.txt'), 'b\n');
+    h.git(main(h), 'add', 'b.txt'); h.git(main(h), 'commit', '-m', 'b');
+    const t = agentTree(h); mark(h);
+    const base = h.git(t, 'rev-parse', 'HEAD').trim();
+    fs.writeFileSync(path.join(t, 'w.txt'), 'w\n');
+    h.git(t, 'add', 'w.txt'); h.git(t, 'commit', '-m', 'w');
+    h.git(t, 'checkout', '-q', '--detach', base);
+    const d = audit();
+    expect(d.doc, JSON.stringify(d.doc)).toMatchObject({ ok: true, tip: base, dirty: false, aheadOfBase: 0, branchAheadOfBase: 1,
+      changed: true });
+    expect(d.code).toBe(0);
+    h.git(t, 'reset', '-q', '--hard', `${base}~1`);
+    const a = audit();
+    expect(a.doc, JSON.stringify(a.doc)).toMatchObject({ ok: true, dirty: false, aheadOfBase: 0, branchAheadOfBase: 1, changed: true });
+    expect(a.doc.tip).not.toBe(base);
+    // the recorded branch deleted: its own value, never 0, and changed cannot be measured
+    h.git(t, 'branch', '-q', '-D', 'claude/agent-a');
+    const g = audit();
+    expect(g.doc, JSON.stringify(g.doc)).toMatchObject({ ok: true, branchAheadOfBase: 'branch-gone', changed: 'unmeasured' });
+    expect(g.code).toBe(1);
+    // a carrier that records no branch (the tree was detached when it was marked)
+    rewriteCarrier({ branch: null });
+    expect(audit().doc).toMatchObject({ ok: true, aheadOfBase: 0, branchAheadOfBase: 'no-branch', changed: false });
+  }, 60_000);
+
   it('W5-AU7: three audits write nothing under the registry, the tree, its admin dir or the common worktrees entry', () => {
     const t = agentTree(h); mark(h);
     // The mark's lock file is removed, so an audit that opened or touched one would show; a tracked file's stat record is
@@ -139,7 +210,10 @@ describe('ws-lease-audit measures a leased tree', () => {
     fs.utimesSync(path.join(t, 'README.md'), later, later);
     const reg = path.join(h.home, '.cc-sessions');
     const common = path.join(main(h), '.git', 'worktrees');
-    const snap = (): string[] => [...listing(reg), ...listing(t), ...listing(adminDir()), ...listing(common).slice(0, 1)];
+    // review 1446 F8: the main checkout's whole common dir (its index, refs, logs and every admin record), not only its
+    // worktrees entry
+    const snap = (): string[] => [...listing(reg), ...listing(t), ...listing(adminDir()), ...listing(common).slice(0, 1),
+      ...listing(path.join(main(h), '.git'))];
     const before = snap();
     expect(audit().doc).toMatchObject({ ok: true, changed: false });
     expect(audit(1, '--holders').doc).toMatchObject({ ok: true, holders: [] });
@@ -164,9 +238,29 @@ describe('ws-lease-audit measures a leased tree', () => {
     expect(audit().doc.token).toBe(a);
     fs.writeFileSync(path.join(t, 'c.txt'), 'c\n');
     h.git(t, 'add', 'c.txt'); h.git(t, 'commit', '-m', 'c');
-    const c = audit().doc.token;
-    expect(c).toMatch(/^[0-9a-f]{64}$/);
-    expect(c).not.toBe(a);
+    const c = audit().doc;
+    expect(c.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(c.token).not.toBe(a);
+    // review 1446 F5: the tip moves and neither count does (an amend), and the token still changes
+    h.git(t, 'commit', '-q', '--amend', '-m', 'c2');
+    const m = audit().doc;
+    expect(m).toMatchObject({ aheadOfBase: c.aheadOfBase, branchAheadOfBase: c.branchAheadOfBase, dirty: c.dirty });
+    expect(m.tip).not.toBe(c.tip);
+    expect(m.token).not.toBe(c.token);
+  }, 60_000);
+
+  it('W5-AU8b (review 1446 F4, D-7977): the token binds holders and whether they were asked', () => {
+    agentTree(h); mark(h);
+    const none = audit().doc.token;
+    const empty = audit(1, '--holders').doc.token;
+    const cwd4242 = '_ws_cwd_users() { _WS_CWD_USERS_PIDS=4242; _WS_CWD_USERS_WHY="process 4242 (x) sits there"; return 1; };';
+    const one = audit(1, '--holders', `${STUBS} ${cwd4242}`).doc.token;
+    const cwdFails = '_ws_cwd_users() { _WS_CWD_USERS_WHY="the walk of /proc did not finish within 10s"; return 2; };';
+    const unm = audit(1, '--holders', `${STUBS} ${cwdFails}`).doc.token;
+    const all = [none, empty, one, unm];
+    for (const tk of all) expect(tk).toMatch(/^[0-9a-f]{64}$/);
+    expect(new Set(all).size, JSON.stringify(all)).toBe(4);
+    expect(audit(1, '--holders').doc.token).toBe(empty);   // the same answer mints the same token
   }, 60_000);
 
   it('W5-AU9: --holders answers the probes\' pids, [] for nobody and "unmeasured" when one fails; without it they are never asked', () => {
@@ -210,8 +304,12 @@ describe('ws-lease-audit measures a leased tree', () => {
     const lib = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'ccd', 'lib',
       'delegation-lease.sh'), 'utf8');
     const start = lib.indexOf('\ncmd_ws_lease_audit() {');
+    const ladder = lib.indexOf('\n_dl_audit_ladder() {');
+    const end = lib.indexOf('\n}\n', ladder);
     expect(start).toBeGreaterThan(0);
-    const body = lib.slice(start);
+    expect(ladder).toBeGreaterThan(start);
+    expect(end).toBeGreaterThan(ladder);
+    const body = lib.slice(start, end + 3);   // the verb and its ladder only, never a later function
     const words = new Set([...body.matchAll(/_dl_mark_refuse ([a-z-]+) /g), ...body.matchAll(/"refusal":"([a-z-]+)"/g)].map((m) => m[1]!));
     expect([...words].sort()).toEqual([...LEASE_AUDIT_REFUSALS].sort());
   });

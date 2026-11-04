@@ -83,11 +83,13 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // `deps-shed-budget.test.ts` reads both sides from source and holds the sum under this row. A kill here would leave no
   // stamp and no journal row, so the row is ws-reap's, not the flat 90 s.
   'ws-shed-deps': 240_000,
-  // The lease audit (delegation broker wave 5, PR2; O5-2 (b), D-7841): with `--holders` it asks both holder probes, each
-  // bounded at 10 s (`WS_PATH_USERS_SCAN_S`, `WS_CWD_USERS_SCAN_S`), beside the git reads of one tree (a `git status` that
-  // lists untracked files, a `rev-list --count`) and one carrier read. 60 s holds the two 10 s walks and leaves 40 s for
-  // the git reads of a large tree; the key is the verb, so an audit without `--holders` has the same bound. It writes
-  // nothing, so a kill here loses nothing but the answer.
+  // The lease audit (delegation broker wave 5, PR2; O5-2 (b), D-7841). What this row buys is a TIGHTER bound than the
+  // flat 90 s an unlisted verb gets: 60 s. With `--holders` the audit asks both holder probes, each a 10 s walk
+  // (`WS_PATH_USERS_SCAN_S`, `WS_CWD_USERS_SCAN_S`) under `_plat_timeout`, whose TERM-to-KILL grace is 3 s by default and
+  // 2 to 8 s at the widest: about 26 s for the two, 36 s at the widest. The git reads of one tree (a `git status` that lists
+  // untracked files, the hidden-edit read, two `rev-list --count`) and one carrier read have no bound of their own and take
+  // the rest. The key is the verb, so an audit without `--holders` has the same bound. It writes nothing durable, so a kill
+  // here loses only the answer. W5-G15 pins the row below the flat default.
   'ws-lease-audit': 60_000,
   // The two SPAWNING verbs, and the reason they need the agent's MAXIMUM
   // (`MAX_EXEC_TIMEOUT_MS`, agent/src/server.ts) rather than a merely larger
