@@ -58,6 +58,7 @@ import {
   type DelegationLineageRow,
   type DelegationSessionRow,
 } from '../src/coord/delegation-model.js';
+import { leaseRow as lease } from './delegationLeaseFixture.js';
 
 // ── fixed inputs (Python hashlib/json, not this module) ───────────────────────────────────────────────────────────
 const J = '842563601695ebb48c8fbb35e752df0c7c36923d6c8dea27f0602367d17add3b';   // sha256(b'fixture-journal-record-1')
@@ -485,15 +486,6 @@ describe('split source domains — an ACTIVITY source and a LEASE source are dif
 });
 
 // ── fixtures for the guard, the codecs and the projection view ───────────────────────────────────────────────────────
-const lease = (over: Partial<DelegationLeaseRow> = {}): DelegationLeaseRow => ({
-  leaseId: '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f', generation: 0, creatingJournalSequence: 5, currentJournalSequence: 5,
-  activityId: ACTIVITY_ID_FROM_JOURNAL, parentId: 'lane-a-demo', parentIncarnation: 'g1', project: 'project-a',
-  adminRecord: 'wt-1', canonicalPath: '/work/project-a/.claude/worktrees/wt-1', creationBase: null, sourceKind: 'agent',
-  parentageState: 'linked', workspaceState: 'unmeasured', disposition: 'ephemeral', cleanupState: 'not-due',
-  cleanupPopulation: 'ephemeral-lease', firstObservedAt: T0, lastObservedAt: T0, terminalEvidenceAt: null,
-  adoptedAt: null, retainedAt: null, promotedAt: null, cleanupDueAt: null, cleanupStartedAt: null,
-  cleanupFinishedAt: null, cleanupEvidenceJson: null, carrierGenerationSeen: null, releasedAt: null, ...over,
-});
 const session = (over: Partial<DelegationSessionRow> = {}): DelegationSessionRow => ({
   sessionId: 'lane-a-demo', parentIncarnation: 'g1', explicitIntentAt: null, effective: false, effectiveBasis: [],
   claudeSessionIds: [], firstObservedAt: T0, lastObservedAt: T2, ...over,
