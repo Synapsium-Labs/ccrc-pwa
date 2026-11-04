@@ -2301,6 +2301,11 @@ takes the next spare and is named in the wave-done.
   line number and the key, never a value. The server reads version 2 beside version 1, each row checked against its display class and an `ok`
   value or origin against the shared envelope; a row outside its class is a forgery and is never rewritten. Closing the unmeasured sentences as
   line-number templates is Later.
+- **D-7915.** A row whose key is not in the L0 table shows in a trailing "Other settings" group with its source word and never a value
+  (defensive; this wave's server never sends one; C19).
+- **D-7916.** On a server-role node, a fleet-only family's line counts its refused and unmeasured rows ("Graph: 23 settings, not used on
+  this role, 1 refused"), with no rows (C12; keeps 5.5 true).
+- **D-7917.** Wave 1's "not used on a server box" becomes "not used on this role", one wording derived from the role column.
 - **D-7920.** The plan's six one-line `( BOX_ENV_FILE="$BOX_ENV_FILE/." KEY="$v" _resolver … )` forms tripped census C8(c), which allows no setting
   name beside BOX_ENV_FILE outside `_ccrc_knob`; the mask moved to its own line as the first statement of one subshell holding all six resolver
   calls, with the same behaviour; ruled by the coordinator (option A). Each of the six resolvers reads only its own setting, measured.

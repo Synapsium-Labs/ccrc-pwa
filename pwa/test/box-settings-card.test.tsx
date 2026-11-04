@@ -1,11 +1,16 @@
 // The Box settings card under Settings › Updates (box settings view, spec 2026-10-25 §2.4, §2.5; D-6917): a read-only
 // card over `NodeWire.settings`, rendered from the section's ONE `/api/updates` poll. Neutral fixtures: nodes labelled
 // fleet and server, settings the seven the verb lists.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
-import type { BoxSettingRowV1, BoxSettingsDoc, BoxSettingsDocV1, BoxSettingsRead, NodeWire } from '../../shared/api';
+import type {
+  BoxSettingName, BoxSettingRowV1, BoxSettingRowV2, BoxSettingsDoc, BoxSettingsDocV1, BoxSettingsDocV2, BoxSettingsRead, NodeRole, NodeWire,
+} from '../../shared/api';
 import {
-  BOX_SETTINGS_FAILURES, BOX_SETTINGS_KEYS, BOX_SETTINGS_STALE_S, BOX_SETTING_SOURCES, BOX_SETTING_STATES,
+  BOX_SETTINGS_FAILURES, BOX_SETTINGS_KEYS, BOX_SETTINGS_STALE_S, BOX_SETTING_FAMILIES, BOX_SETTING_REFUSAL_WORDS, BOX_SETTING_SOURCES,
+  BOX_SETTING_SPECS, BOX_SETTING_STATES,
 } from '../../shared/api';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
@@ -13,7 +18,7 @@ import { SETTINGS_CARDS } from '../src/fleet/settingsText';
 import { UPDATES_CARDS } from '../src/screens/settings/UpdatesSection';
 import { BoxSettingsCard } from '../src/fleet/BoxSettingsCard';
 import {
-  BOX_SETTING_SOURCE_TEXT, BOX_SETTINGS_READ_TEXT, BOX_SETTINGS_SERVER_BUDGET_TEXT, boxSettingsOf,
+  BOX_SETTING_SOURCE_TEXT, BOX_SETTINGS_NOT_USED_TEXT, BOX_SETTINGS_READ_TEXT, boxSettingsOf,
 } from '../src/fleet/boxSettingsWords';
 import { renderSettings } from './settingsHost';
 import { node, updatesView } from './settingsViewFixture';
@@ -27,6 +32,7 @@ afterEach(() => {
 
 const NOW = Date.UTC(2026, 10, 3, 12, 0, 0);
 const MIN = 60_000;
+const OTHER_ID = '2a1e0d0c-0b0a-4908-8706-050403020101';
 const SERVER_ID = '1f0e0d0c-0b0a-4908-8706-050403020100';
 
 const okRows = (): BoxSettingRowV1[] => [
@@ -38,6 +44,12 @@ const okRows = (): BoxSettingRowV1[] => [
   { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'default', from: 'default' },
   { key: 'CCRC_MODELS_ADVANCE_BUDGET_S', state: 'ok', value: '120', from: 'empty' },
 ];
+const v2Rows = (): BoxSettingRowV2[] => Object.entries(BOX_SETTING_SPECS).filter(([, t]) => t.cls !== 'omit').map(([k, t]) => {
+  const key = k as BoxSettingName;
+  if (t.cls === 'value') return { key, state: 'ok', value: '1', from: 'default' } as const;
+  if (t.cls === 'origin') return { key, state: 'ok', value: 'default', from: 'default' } as const;
+  return { key, state: 'ok', from: 'default' } as const;
+});
 const doc = (over: Partial<BoxSettingsDocV1> = {}, ageMin = 2): BoxSettingsDocV1 => ({
   v: 1, at: Math.floor((NOW - ageMin * MIN) / 1000), reader: 'timer', settings: okRows(),
   deadline: { plainMs: 600000, minMs: 60000, maxMs: 3600000 },
@@ -45,6 +57,8 @@ const doc = (over: Partial<BoxSettingsDocV1> = {}, ageMin = 2): BoxSettingsDocV1
   disk: { state: 'ok', availBytes: 19_300_000_000, sizeBytes: 161_100_000_000 },
   ...over,
 });
+const v2doc = (over: Partial<BoxSettingsDocV2> = {}): BoxSettingsDocV2 => ({ ...doc(), v: 2, settings: v2Rows(), ...over });
+const withRow = (key: BoxSettingName, row: BoxSettingRowV2): BoxSettingRowV2[] => v2Rows().map((r) => (r.key === key ? row : r));
 const ok = (d: BoxSettingsDoc = doc(), ageMin = 2, stale = false): BoxSettingsRead =>
   ({ state: 'ok', doc: d, ageS: ageMin * 60, stale });
 const fleet = (settings?: unknown, label = 'fleet'): NodeWire =>
@@ -73,7 +87,7 @@ describe('Box settings card: a full snapshot (D-6917)', () => {
     expect(within(b).getByText('19.3 GB free of 161.1 GB')).toBeInTheDocument();
     expect(within(b).getByText("measured 2m ago, read by the box's timer")).toBeInTheDocument();
     // No setting reads as unused or refused here.
-    expect(within(b).queryByText(BOX_SETTINGS_SERVER_BUDGET_TEXT)).toBeNull();
+    expect(within(b).queryByText(BOX_SETTINGS_NOT_USED_TEXT)).toBeNull();
   });
 
   it("says a shell's read is a shell's", () => {
@@ -90,7 +104,8 @@ describe('Box settings card: a full snapshot (D-6917)', () => {
   it("notes that a setting is changed in the box's ccrc.env, and what the source column is for", () => {
     renderCard([fleet(ok())]);
     expect(screen.getByText(/changed in the box's ccrc\.env/)).toBeInTheDocument();
-    expect(screen.getByText(/overrides the file/)).toBeInTheDocument();
+    expect(screen.getByText(/override the file only for backups and updates/)).toBeInTheDocument();
+    expect(screen.getByText(/read from ccrc\.env alone/)).toBeInTheDocument();
   });
 });
 
@@ -105,7 +120,7 @@ describe('Box settings card: refused, stale, server (D-6917)', () => {
     expect(refused).toHaveClass('box-settings-danger');
     const unmeasured = screen.getByText('ccrc.env could not be scanned');
     expect(unmeasured).toHaveClass('box-settings-danger');
-    // The raw knob is never shown beside the sentence (D-7912): a wave-1 server may still send it, and the card drops it.
+    // A refused value is never shown (D-7911): a wave-1 server may still send it, and the reader drops it before the card sees it.
     expect(refused.closest('div')).not.toHaveTextContent('abc');
     // A fine row carries no danger.
     expect(screen.getByText('CCRC_VERSIONS_KEEP').closest('div')!.querySelector('.box-settings-danger')).toBeNull();
@@ -149,14 +164,7 @@ describe('Box settings card: refused, stale, server (D-6917)', () => {
     expect(screen.getByText(/^measured 2m ago/)).toBeInTheDocument();
   });
 
-  it('a server-role node reads the models budget as not used, whatever its row says', () => {
-    renderCard([server(ok())]);
-    const row = within(block('server')).getByText('CCRC_MODELS_ADVANCE_BUDGET_S').closest('div')!;
-    expect(row).toHaveTextContent(BOX_SETTINGS_SERVER_BUDGET_TEXT);
-    expect(row).not.toHaveTextContent('120');
-    // Another setting on the same box is unchanged.
-    expect(within(block('server')).getByText('CCRC_BACKUP_KEEP').closest('div')).toHaveTextContent('5');
-  });
+
 });
 
 describe('Box settings card: every way a node can have nothing to show (D-6917)', () => {
@@ -288,5 +296,229 @@ describe('Box settings card: what the library calls a fold (characterization)', 
     render(<details><summary>s</summary><dl><dt>t</dt></dl></details>);
     // Measured 1: role queries see the content of a closed details, so a count over rows inside a fold needs no `hidden`.
     expect(screen.queryAllByRole('term')).toHaveLength(1);
+  });
+});
+
+const familyOfKey = (k: string): string => BOX_SETTING_SPECS[k as BoxSettingName].family;
+const familyKeys = (f: string): BoxSettingName[] =>
+  (Object.keys(BOX_SETTING_SPECS) as BoxSettingName[]).filter((k) => familyOfKey(k) === f && BOX_SETTING_SPECS[k].cls !== 'omit');
+const FAMILY_WORDS: Readonly<Record<string, string>> = {
+  updates: 'Backups and updates', 'session-slice': 'Session slice', 'test-runs': 'Test runs', graph: 'Graph', testbox: 'Test box',
+  keepalive: 'Keepalive', 'usage-sweep': 'Usage sweep', 'carry-copies': 'Carry copies',
+};
+const plural = (n: number): string => (n === 1 ? '1 setting' : `${n} settings`);
+const summaries = (el: HTMLElement): string[] => [...el.querySelectorAll('.box-settings-family > summary')].map((x) => x.textContent ?? '');
+const familyEl = (el: HTMLElement, f: string): HTMLDetailsElement => el.querySelector(`.box-settings-family[data-family="${f}"]`) as HTMLDetailsElement;
+const rowOf = (el: HTMLElement, k: string): HTMLElement => within(el).getByText(k).closest('.box-settings-row') as HTMLElement;
+const REFUSED_WHY = BOX_SETTING_REFUSAL_WORDS[0];
+
+describe('Box settings card: what the library calls a fold (characterization, two nodes)', () => {
+  it('C3: two fleet-role nodes with every family folded hold 2 + 2 x 8 groups', () => {
+    renderCard([fleet(ok(v2doc())), { ...fleet(ok(v2doc()), 'second'), nodeId: OTHER_ID }]);
+    expect(screen.getAllByRole('group')).toHaveLength(2 + 2 * 8);
+  });
+});
+
+describe('Box settings card: families (D17)', () => {
+  it('F1: families from the L0 table, in BOX_SETTING_FAMILIES order, all closed, 61 rows', () => {
+    const { container } = renderCard([fleet(ok(v2doc()))]);
+    const expected = [
+      'Backups and updates: 7 settings, none set', 'Session slice: 2 settings, none set', 'Test runs: 8 settings, none set',
+      'Graph: 23 settings, none set', 'Keepalive: 3 settings, none set', 'Usage sweep: 1 setting, none set',
+      'Test box: 16 settings, none set', 'Carry copies: 1 setting, none set',
+    ];
+    const derived = BOX_SETTING_FAMILIES.map((f) => `${FAMILY_WORDS[f]}: ${plural(familyKeys(f).length)}, none set`);
+    expect(derived).toEqual(expected);
+    expect(summaries(block('fleet'))).toEqual(expected);
+    for (const d of container.querySelectorAll<HTMLDetailsElement>('details')) expect(d.open).toBe(false);
+    expect(container.querySelectorAll('.box-settings-row')).toHaveLength(v2Rows().length);
+    expect(v2Rows()).toHaveLength(61);
+  });
+
+  it('F2: a row sits in its table family', () => {
+    const { container } = renderCard([fleet(ok(v2doc()))]);
+    for (const row of container.querySelectorAll('.box-settings-row')) {
+      const k = row.querySelector('dt')!.textContent!;
+      expect(row.closest('.box-settings-family')!.getAttribute('data-family'), k).toBe(BOX_SETTING_SPECS[k as BoxSettingName].family);
+    }
+    const inFamily = (k: string, f: string): void => expect(rowOf(block('fleet'), k).closest('.box-settings-family')!.getAttribute('data-family')).toBe(f);
+    for (const k of ['CCRC_TEST_HEAVY_SLOTS', 'CCRC_TEST_WIDE_FILES', 'CCRC_TEST_PRESSURE_MAX']) inFamily(k, 'test-runs');
+    inFamily('CCRC_MODELS_ADVANCE_BUDGET_S', 'updates');
+    inFamily('CCRC_CARRY_COPY_WARN_BYTES', 'carry-copies');
+  });
+
+  it('F3: the fold line counts file and environment apart', () => {
+    const rows = v2Rows().map((r): BoxSettingRowV2 => {
+      if (r.state !== 'ok') return r;
+      if (r.key === 'CCRC_BACKUP_KEEP' || r.key === 'CCRC_VERSIONS_KEEP') return { ...r, from: 'file' };
+      if (r.key === 'CCRC_UPDATE_HEALTH_S') return { ...r, from: 'environment' };
+      if (r.key === 'CCRC_BACKUP_DATA_KEEP') return { ...r, from: 'empty' };
+      if (r.key === 'CCRC_GRAPH_BUDGET' || r.key === 'CCRC_GRAPH_STORE') return { ...r, from: 'file' };
+      return r;
+    });
+    const { container } = renderCard([fleet(ok(v2doc({ settings: rows })))]);
+    const lines = summaries(block('fleet'));
+    expect(lines[0]).toBe('Backups and updates: 7 settings, 2 set in ccrc.env, 1 set in the environment');
+    expect(lines[3]).toBe('Graph: 23 settings, 2 set in ccrc.env');
+    expect(familyEl(container, 'graph').open).toBe(false);
+  });
+
+  it('F4: a refused row opens its family and shows no value', () => {
+    const row: BoxSettingRowV2 = { key: 'CCRC_GRAPH_BUDGET', state: 'refused', from: 'file', why: REFUSED_WHY };
+    const { container } = renderCard([fleet(ok(v2doc({ settings: withRow('CCRC_GRAPH_BUDGET', row) })))]);
+    expect(familyEl(container, 'graph').open).toBe(true);
+    expect(summaries(block('fleet'))[3]).toBe('Graph: 23 settings, 1 refused');
+    expect(screen.getByText(REFUSED_WHY)).toHaveClass('box-settings-danger');
+    const value = rowOf(block('fleet'), 'CCRC_GRAPH_BUDGET').querySelector('dd.box-settings-value')!;
+    expect(value).toHaveTextContent('refused');
+    expect(value).toHaveTextContent('from ccrc.env');
+    for (const f of BOX_SETTING_FAMILIES) if (f !== 'graph') expect(familyEl(container, f).open, f).toBe(false);
+  });
+
+  it('F5: an unmeasured row opens its family', () => {
+    const why = 'the value could not be checked';
+    const row: BoxSettingRowV2 = { key: 'CCRC_TESTBOX_POLL', state: 'unmeasured', why };
+    const { container } = renderCard([fleet(ok(v2doc({ settings: withRow('CCRC_TESTBOX_POLL', row) })))]);
+    expect(familyEl(container, 'testbox').open).toBe(true);
+    expect(summaries(block('fleet'))[6]).toBe('Test box: 16 settings, 1 not measured');
+    expect(screen.getByText(why)).toHaveClass('box-settings-danger');
+  });
+
+  it('F6: a refused row never shows a value, from either version', () => {
+    const rows = okRows();
+    rows[0] = { key: 'CCRC_BACKUP_KEEP', state: 'refused', value: 'abc', from: 'environment', why: 'w' } as unknown as BoxSettingRowV1;
+    const read = { state: 'ok', ageS: 1, stale: false, doc: doc({ settings: rows }) };
+    expect(boxSettingsOf({ settings: read })).not.toBe('unrecognised');
+    renderCard([fleet(read)]);
+    // A refused value is never shown (D-7911), whichever version carried it.
+    expect(block('fleet').textContent).not.toContain('abc');
+    const bare = okRows();
+    bare[0] = { key: 'CCRC_BACKUP_KEEP', state: 'refused', from: 'environment', why: 'w' };
+    expect(boxSettingsOf({ settings: { ...read, doc: doc({ settings: bare }) } })).not.toBe('unrecognised');
+  });
+
+  it('F7: the presence words, and a presence value on the wire is never shown', () => {
+    const words: Array<[BoxSettingRowV2['key'], 'file' | 'empty' | 'default' | 'environment', string]> = [
+      ['CCRC_GRAPH_STORE', 'file', 'set in ccrc.env'],
+      ['CCRC_GRAPH_STORE', 'empty', 'set to empty, from ccrc.env; the default applies'],
+      ['CCRC_GRAPH_STORE', 'default', 'not set'],
+      ['CCRC_GRAPH_STORE', 'environment', 'set in the environment'],
+    ];
+    for (const [key, from, text] of words) {
+      cleanup();
+      renderCard([fleet(ok(v2doc({ settings: withRow(key, { key, state: 'ok', from }) })))]);
+      expect(rowOf(block('fleet'), key).querySelector('dd.box-settings-value')!.textContent, from).toBe(text);
+    }
+    cleanup();
+    const forged = { key: 'CCRC_GRAPH_STORE', state: 'ok', value: '/x/secret-path', from: 'file' } as unknown as BoxSettingRowV2;
+    const { container } = renderCard([fleet(ok(v2doc({ settings: withRow('CCRC_GRAPH_STORE', forged) })))]);
+    expect(container.textContent).not.toContain('secret-path');
+  });
+
+  it('F8: the next-update mark comes from the table', () => {
+    const { container } = renderCard([fleet(ok(v2doc()))]);
+    const mark = 'takes effect at the next update';
+    for (const k of ['CCRC_GRAPH_BUDGET', 'CCRC_GRAPH_REFRESH_SECS', 'CCRC_SESSION_SLICE_MEMORY_MAX']) expect(rowOf(block('fleet'), k), k).toHaveTextContent(mark);
+    expect(rowOf(block('fleet'), 'CCRC_GRAPH_FETCH_SECS')).not.toHaveTextContent(mark);
+    const marked = [...container.querySelectorAll('.box-settings-row')].filter((r) => r.textContent!.includes(mark)).length;
+    expect(marked).toBe(Object.values(BOX_SETTING_SPECS).filter((t) => t.applies === 'update').length);
+    expect(marked).toBe(6);
+  });
+});
+
+describe('Box settings card: a server-role node (D21)', () => {
+  const unusedFamilies = BOX_SETTING_FAMILIES.filter((f) => !Object.values(BOX_SETTING_SPECS).some((t) => t.family === f && t.roles.includes('server')));
+
+  it('S1: one line per fleet-only family, and the models budget reads not used', () => {
+    const settings = withRow('CCRC_MODELS_ADVANCE_BUDGET_S', { key: 'CCRC_MODELS_ADVANCE_BUDGET_S', state: 'ok', value: '120', from: 'file' });
+    const { container } = renderCard([server(ok(v2doc({ settings })))]);
+    const b = block('server');
+    const lines = [...b.querySelectorAll('p.box-settings-line')].map((p) => p.textContent);
+    expect(unusedFamilies).toHaveLength(7);
+    for (const f of unusedFamilies) {
+      expect(lines, f).toContain(`${FAMILY_WORDS[f]}: ${plural(familyKeys(f).length)}, ${BOX_SETTINGS_NOT_USED_TEXT}`);
+      expect(familyEl(container, f), f).toBeNull();
+      for (const k of familyKeys(f)) expect(within(b).queryByText(k), k).toBeNull();
+    }
+    expect(lines).toContain('Session slice: 2 settings, not used on this role');
+    expect(lines).toContain('Carry copies: 1 setting, not used on this role');
+    expect(familyEl(container, 'updates')).not.toBeNull();
+    const budget = rowOf(b, 'CCRC_MODELS_ADVANCE_BUDGET_S');
+    expect(budget.querySelector('dd.box-settings-value')!.textContent).toBe(BOX_SETTINGS_NOT_USED_TEXT);
+    expect(budget).not.toHaveTextContent('120');
+    expect(rowOf(b, 'CCRC_BACKUP_KEEP').querySelector('dd.box-settings-value span')!.textContent).toBe('1');
+  });
+
+  it('S2: the role column decides; a key never does, and the words file names no setting', () => {
+    for (const role of ['fleet', 'both', null] as Array<NodeRole | null>) {
+      cleanup();
+      const { container } = renderCard([{ ...fleet(ok(v2doc())), role }]);
+      expect(container.querySelectorAll('.box-settings-family'), String(role)).toHaveLength(8);
+      expect(container.textContent).not.toContain(BOX_SETTINGS_NOT_USED_TEXT);
+    }
+    cleanup();
+    renderCard([server(ok(v2doc()))]);
+    for (const k of Object.keys(BOX_SETTING_SPECS) as BoxSettingName[]) {
+      const t = BOX_SETTING_SPECS[k];
+      if (t.cls === 'omit' || t.roles.includes('server')) continue;
+      if (unusedFamilies.includes(t.family)) continue;
+      expect(rowOf(block('server'), k).querySelector('dd.box-settings-value')!.textContent, k).toBe(BOX_SETTINGS_NOT_USED_TEXT);
+    }
+    const source = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'boxSettingsWords.ts'), 'utf8');
+    expect(source).not.toMatch(/CCRC_[A-Z]/);
+  });
+
+  it("S3: an unused family's line counts attention (D-7916)", () => {
+    const settings = v2Rows().map((r): BoxSettingRowV2 => {
+      if (r.key === 'CCRC_GRAPH_BUDGET') return { key: r.key, state: 'refused', from: 'file', why: REFUSED_WHY };
+      if (r.key === 'CCRC_TESTBOX_POLL') return { key: r.key, state: 'unmeasured', why: 'w' };
+      return r;
+    });
+    const { container } = renderCard([server(ok(v2doc({ settings })))]);
+    const lines = [...block('server').querySelectorAll('p.box-settings-line')].map((p) => p.textContent);
+    expect(lines).toContain('Graph: 23 settings, not used on this role, 1 refused');
+    expect(lines).toContain('Test box: 16 settings, not used on this role, 1 not measured');
+    expect(familyEl(container, 'graph')).toBeNull();
+    expect(familyEl(container, 'testbox')).toBeNull();
+  });
+});
+
+describe('Box settings card: version 2 on the console (5.3, 5.4)', () => {
+  it('R1: the reader takes v1 and v2 and nothing else', () => {
+    const read = (d: unknown) => boxSettingsOf({ settings: { state: 'ok', ageS: 1, stale: false, doc: d } });
+    expect(read(v2doc())).not.toBe('unrecognised');
+    expect(read({ ...v2doc(), v: 3 })).toBe('unrecognised');
+    const noValue = v2Rows().map((r) => (r.key === 'CCRC_BACKUP_KEEP' ? { key: r.key, state: 'ok', from: 'default' } : r));
+    expect(read({ ...v2doc(), settings: noValue })).toBe('unrecognised');
+    const obj = v2Rows().map((r) => (r.key === 'CCRC_BACKUP_KEEP' ? { key: r.key, state: 'ok', value: { x: 1 }, from: 'default' } : r));
+    expect(read({ ...v2doc(), settings: obj })).toBe('unrecognised');
+  });
+
+  it('R2: an unknown key lands in a trailing open Other settings group, with its source word and never a value (D-7915)', () => {
+    const extra = { key: 'CCRC_ZZ_NEW', state: 'ok', value: '7', from: 'file' } as unknown as BoxSettingRowV2;
+    const { container } = renderCard([fleet(ok(v2doc({ settings: [...v2Rows(), extra] })))]);
+    const groups = [...container.querySelectorAll<HTMLDetailsElement>('.box-settings-family')];
+    const last = groups[groups.length - 1]!;
+    expect(last.getAttribute('data-family')).toBe('other');
+    expect(last.open).toBe(true);
+    expect(last.querySelector('summary')!.textContent).toBe('Other settings: 1 setting this console does not know');
+    const row = rowOf(block('fleet'), 'CCRC_ZZ_NEW');
+    expect(row).toHaveTextContent(BOX_SETTING_SOURCE_TEXT.file);
+    expect(row.textContent).not.toContain('7');
+    expect(summaries(block('fleet'))).toHaveLength(9);
+  });
+
+  it('A1: the card holds no act, with summaries present', () => {
+    const { container } = renderCard([fleet(ok(v2doc())), server(ok(v2doc())), server({ state: 'malformed' })]);
+    expect(container.querySelectorAll('summary').length).toBeGreaterThanOrEqual(9);
+    expect(container.querySelectorAll('button, input, select, textarea, a[href]')).toHaveLength(0);
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    const allowed = new Set(['DIV', 'H4', 'SPAN', 'P', 'DL', 'DT', 'DD', 'DETAILS', 'SUMMARY']);
+    for (const el of container.querySelectorAll('*')) expect(allowed.has(el.tagName), el.tagName).toBe(true);
+    for (const sm of container.querySelectorAll('summary')) {
+      expect(sm.parentElement!.tagName).toBe('DETAILS');
+      expect(sm.parentElement!.firstElementChild).toBe(sm);
+      for (const c of sm.children) expect(c.tagName).toBe('SPAN');
+    }
   });
 });
