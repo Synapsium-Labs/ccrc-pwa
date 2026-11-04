@@ -8,7 +8,7 @@ import path from 'node:path';
 import { parseCcdCaps } from '../../shared/agent-protocol.js';
 import { ACCOUNT_POOLS_CAP, POOL_SYNC_ABSENT_CAP, POOL_SYNC_INSTALLED_CAP } from '../src/ccdargv.js';
 import { accountPoolsEnforcement } from '../src/pools.js';
-import { CCD, makeCcdHarness, plantPoolSyncTimer, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, plantPoolSyncTimer, type CcdHarness } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
 
 let h: CcdHarness;
@@ -55,7 +55,9 @@ describe('ccd caps prints one pool-sync word, measured from the installed timer 
 
 describe('the word as the agent reads it: `ccd caps` run as a program, through parseCcdCaps', () => {
   const asAgent = (): string[] | null =>
-    parseCcdCaps(execFileSync('bash', [CCD, 'caps'], { env: h.env(), encoding: 'utf8' }));
+    parseCcdCaps(execFileSync('bash', [CCD, 'caps'], {
+      encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, h.env(), { systemd: true, tmux: true, net: true }),
+    }));
 
   it('a box with no timer reads unavailable', () => {
     expect(accountPoolsEnforcement(asAgent())).toBe('unavailable');
