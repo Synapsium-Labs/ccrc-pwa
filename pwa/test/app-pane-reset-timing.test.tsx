@@ -64,7 +64,7 @@ beforeAll(async () => {
   await screen.findByRole('heading', { name: 'runs (probe)' }, { timeout: 30_000 });
   cleanup();
   navigate('/');
-}, 60_000);
+}, 35_000);
 
 beforeEach(() => {
   probe.seen.length = 0;

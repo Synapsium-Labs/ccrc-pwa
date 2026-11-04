@@ -132,7 +132,8 @@ beforeAll(async () => {
     navigate(path);
     render(<App />);
     await waitFor(() => expect(document.querySelector('.shell-detail p.shell-placeholder-copy[role="status"]')).toBeNull(),
-      { timeout: 30_000 });
+      { timeout: 15_000 });
+    expect(document.querySelector('.shell-detail .render-fallback'), `${path} drew its screen, not the fallback`).toBeNull();
     cleanup();
   }
   navigate('/');

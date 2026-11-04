@@ -21,9 +21,10 @@ import { TEST_ROSTER } from './rosterFixture';
 import { seventeenLanes } from './seventeenLanes';
 import { itemView, waitingView } from './ledgersFixture';
 
-/** A lazy screen's first load (console speed C1): the wait and its case's own ceiling, so neither outlasts the other
- *  under load (review 1464 F8). */
+/** A lazy screen's first load (console speed C1): the wait, and its case's own ceiling a few seconds above it, so a
+ *  hang reports the wait's own failure, with the DOM, before the case's timeout (reviews 1464 F8 and 1473 A9). */
 const LAZY_WAIT_MS = 30_000;
+const LAZY_CEILING_MS = LAZY_WAIT_MS + 5_000;
 
 const s = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ workspace: 'quiet-basin', status: 'dead', lifecycle: DEAD_LIFECYCLE, branch: 'ws/quiet-basin', archivedAt: 1785300123, archivedBytes: 1_200_000_000, ...over }));
 
@@ -73,7 +74,7 @@ describe('App /archive route', () => {
 });
 
 describe('App /accounts route (Task 6, Build 3 PR G)', () => {
-  it('renders AccountsScreen and joins [data-view="session"] like /s/:id and /archive do', { timeout: LAZY_WAIT_MS }, async () => {
+  it('renders AccountsScreen and joins [data-view="session"] like /s/:id and /archive do', { timeout: LAZY_CEILING_MS }, async () => {
     // app.test.tsx's own warning (this file, Task 19 above) is real here too:
     // /accounts has to ride the SAME data-view OR every other non-fleet route
     // does, or a phone hides the very screen it just navigated to.
@@ -91,7 +92,7 @@ describe('App /accounts route (Task 6, Build 3 PR G)', () => {
 describe('App /accounts?lane= (T2c, D-6329)', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
-  it("a second lane on /accounts scrolls after the shell's pane reset", { timeout: LAZY_WAIT_MS }, async () => {
+  it("a second lane on /accounts scrolls after the shell's pane reset", { timeout: LAZY_CEILING_MS }, async () => {
     const at = Math.floor(Date.now() / 1000);
     const usage = (wrapper: string): AccountUsage => ({
       wrapper, five: 10, seven: 5, ts: at - 60, fiveResetAt: null, sevenResetAt: null,
@@ -158,7 +159,7 @@ describe('App /mail route', () => {
 });
 
 describe('App /runs route', () => {
-  it('renders RunsScreen and joins [data-view="session"] like every other non-fleet route', { timeout: LAZY_WAIT_MS }, async () => {
+  it('renders RunsScreen and joins [data-view="session"] like every other non-fleet route', { timeout: LAZY_CEILING_MS }, async () => {
     navigate('/runs');
     render(<App />);
     expect(await screen.findByRole('heading', { name: /^runs$/i }, { timeout: LAZY_WAIT_MS })).toBeInTheDocument(); // loads on demand (C1)
@@ -167,7 +168,7 @@ describe('App /runs route', () => {
 });
 
 describe('App /settings route', () => {
-  it('renders SettingsScreen and joins [data-view="session"] like every other non-fleet route', { timeout: LAZY_WAIT_MS }, async () => {
+  it('renders SettingsScreen and joins [data-view="session"] like every other non-fleet route', { timeout: LAZY_CEILING_MS }, async () => {
     // Spec §13 names this pin, and this file's /archive warning is why it has
     // two halves: a route left out of the data-view chain still renders on a
     // desktop (.shell-detail is always shown there) and is HIDDEN behind the
@@ -404,7 +405,7 @@ describe('ROUTES and the ladder, both ways', () => {
     }
   });
 
-  it('`/settings/measure-highlighting` renders R19\'s measurement page, not the Settings frame (W5h-a)', { timeout: LAZY_WAIT_MS }, async () => {
+  it('`/settings/measure-highlighting` renders R19\'s measurement page, not the Settings frame (W5h-a)', { timeout: LAZY_CEILING_MS }, async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
     try {
       navigate('/settings/measure-highlighting');
@@ -419,7 +420,7 @@ describe('ROUTES and the ladder, both ways', () => {
     }
   });
 
-  it('`/settings/bogus` renders Settings with the not-found line, never ScreenFallback (D-5504)', { timeout: LAZY_WAIT_MS }, async () => {
+  it('`/settings/bogus` renders Settings with the not-found line, never ScreenFallback (D-5504)', { timeout: LAZY_CEILING_MS }, async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
     try {
       navigate('/settings/bogus');
@@ -506,7 +507,7 @@ describe('ROUTES and the ladder, both ways', () => {
 describe("Settings' provider keeps the frame (D-5504, D-161, D-5466)", () => {
   afterEach(() => { vi.unstubAllGlobals(); });
 
-  it('`/` → `/settings/updates` → `/` keeps the same .app-shell and sidebar nodes and the sidebar\'s scrollTop', { timeout: LAZY_WAIT_MS }, async () => {
+  it('`/` → `/settings/updates` → `/` keeps the same .app-shell and sidebar nodes and the sidebar\'s scrollTop', { timeout: LAZY_CEILING_MS }, async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
     navigate('/');
     render(<App />);

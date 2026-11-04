@@ -19,9 +19,10 @@ import { lanesByFree } from '../src/fleet/laneOrder';
 import { pageAt, treeOk, treeResponse } from './docsFixtures';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
 
-/** A lazy screen's first load (console speed C1): the wait and its case's own ceiling, so neither outlasts the other
- *  under load (review 1464 F8). */
+/** A lazy screen's first load (console speed C1): the wait, and its case's own ceiling a few seconds above it, so a
+ *  hang reports the wait's own failure, with the DOM, before the case's timeout (reviews 1464 F8 and 1473 A9). */
 const LAZY_WAIT_MS = 30_000;
+const LAZY_CEILING_MS = LAZY_WAIT_MS + 5_000;
 
 // The bell renders only where the browser can push; this one can, so a bell left in the header would show.
 vi.mock('../src/lib/push', () => ({
@@ -358,7 +359,7 @@ describe("Refined's phone header (W2 Task S5)", () => {
 
 describe('the back door to the fleet (W2 Task S5, the door table\'s go-fleet row)', () => {
   for (const route of ['/runs', '/accounts', '/mail', '/settings', '/archive', '/digest', '/s/a']) {
-    it(`the back button on ${route} carries go-fleet`, { timeout: LAZY_WAIT_MS }, async () => {
+    it(`the back button on ${route} carries go-fleet`, { timeout: LAZY_CEILING_MS }, async () => {
       atWidth(390);
       render(<App />);
       act(() => { navigate(route); });
@@ -369,7 +370,7 @@ describe('the back door to the fleet (W2 Task S5, the door table\'s go-fleet row
     });
   }
 
-  it('a back button whose target is not the fleet carries no go-fleet', { timeout: LAZY_WAIT_MS }, async () => {
+  it('a back button whose target is not the fleet carries no go-fleet', { timeout: LAZY_CEILING_MS }, async () => {
     atWidth(390);
     render(<App />);
     act(() => { navigate('/settings/updates'); });

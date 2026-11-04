@@ -10,9 +10,10 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 
-/** A lazy screen's first load (console speed C1): the wait and its case's own ceiling, so neither outlasts the other
- *  under load (review 1464 F8). */
+/** A lazy screen's first load (console speed C1): the wait, and its case's own ceiling a few seconds above it, so a
+ *  hang reports the wait's own failure, with the DOM, before the case's timeout (reviews 1464 F8 and 1473 A9). */
 const LAZY_WAIT_MS = 30_000;
+const LAZY_CEILING_MS = LAZY_WAIT_MS + 5_000;
 
 /** `vi.hoisted`: the mock factory runs while app.tsx is being evaluated, before this file's body. */
 const boom = vi.hoisted(() => ({ on: true }));
@@ -66,7 +67,7 @@ describe('a throwing DocsScreen keeps the shell (M4.B1, W5 half)', () => {
     expect(screen.getByRole('heading', { name: 'docs (stand-in) /docs/demo' })).toBeInTheDocument();
   });
 
-  it('navigating away from Docs resets it too', { timeout: LAZY_WAIT_MS }, async () => {
+  it('navigating away from Docs resets it too', { timeout: LAZY_CEILING_MS }, async () => {
     navigate('/docs/demo?ref=ws/a');
     render(<App />);
     expect(screen.getByText(FALLBACK)).toBeInTheDocument();
