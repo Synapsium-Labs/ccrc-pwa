@@ -11032,7 +11032,7 @@ _check_secrets-backup-excluded() {
     esac
   done
   if [ "${#included[@]}" -gt 0 ]; then
-    _dr_fail secrets-backup-excluded "$(_dr_join "${included[@]}") included in Time Machine backups, so every backup taken holds the lane secrets in them" \
+    _dr_fail secrets-backup-excluded "$(_dr_join "${included[@]}") included in Time Machine backups, so every backup taken holds the secrets stored in them" \
       "run 'tmutil addexclusion ${included[*]}' (an account verb that writes a secret does the same); a backup already taken still holds them, and the compromise steps apply to it"
     return 1
   fi
@@ -11068,14 +11068,14 @@ _check_filevault() {
   out="$(fdesetup status 2>&1)"; first="$(_dr_first_line "$out")"
   case "$out" in
     *'Decryption in progress'*)
-      _dr_warn filevault "FileVault is turning off (fdesetup status: Decryption in progress), so lane secrets on this disk will sit unencrypted" \
+      _dr_warn filevault "FileVault is turning off (fdesetup status: Decryption in progress), so the secrets stored in $(_dr_join "${dirs[@]}") will sit unencrypted" \
         "turn FileVault back on in System Settings, Privacy & Security, FileVault (or 'sudo fdesetup enable')"
       return 2 ;;
   esac
   case "$first" in
     'FileVault is On.'*) _dr_pass filevault "FileVault is On (fdesetup status)" ;;
     'FileVault is Off.'*)
-      _dr_warn filevault "FileVault is Off, so lane secrets on this disk sit unencrypted and any copy of it holds them" \
+      _dr_warn filevault "FileVault is Off, so the secrets stored in $(_dr_join "${dirs[@]}") sit unencrypted and any copy of this disk holds them" \
         "turn FileVault on in System Settings, Privacy & Security, FileVault (or 'sudo fdesetup enable')"
       return 2 ;;
     *)
@@ -11143,7 +11143,7 @@ _check_snapshot-posture() {
     return 1
   fi
   seen="$(_dr_trim "$seen")"
-  _dr_pass snapshot-posture "stated: ${seen// /, }; every such image taken while a lane secret existed holds it, and the compromise steps apply to a leaked or restored one"
+  _dr_pass snapshot-posture "stated: ${seen// /, }; every such image taken while a secret was stored in $(_dr_join "${dirs[@]}") holds it, and the compromise steps apply to a leaked or restored one"
 }
 
 # `box-settings` (wave 24, D-6599): what the box's ccrc.env ALONE says of each of ccrc's settings (`CCRC_SETTINGS`), read

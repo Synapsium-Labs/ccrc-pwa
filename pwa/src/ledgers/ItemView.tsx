@@ -19,6 +19,8 @@
 // A STORED SECRET OUTLIVES ITS ITEM (the operator's ruling on programme item 9): while the item's slot holds a value, the view
 // says "Stored" with a Remove control (`StoredSecretRemove`, which the programme screen's "Stored secrets" section shares). A
 // Remove asks for confirmation, is a credential act like the save (the same step-up), and never shows any part of the value.
+// A slot that holds a value whose record cannot be read (`secretSet: {at: null}`, review 1416 F4) is stored all the same: the
+// view says "Stored" with its Remove, and nothing of when or how.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, QuickConfirm, RadioFieldset, TextInput } from '@ccrc/ui';
@@ -403,11 +405,11 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
         <p className="wi-hint">Nothing to fill in. The coordinator checks it itself and either closes the item or sends it back with what it found.</p>
       )}
       {open && programmeLive && item.kind === 'secret' && <SecretPanel item={item} saveSecret={saveSecret} stepUpDeps={stepUpDeps} authStatus={authStatus} />}
-      {checking && item.kind === 'secret' && item.secretSet !== null && <SecretState set={item.secretSet} />}
+      {checking && item.kind === 'secret' && item.secretSet !== null && item.secretSet.at !== null && <SecretState set={item.secretSet} />}
       {item.kind === 'secret' && item.secretSet !== null && item.secretSlot !== null && (
         <div className="wi-stored" data-secret="stored">
           <span className="wi-status">{STORED_TEXT.stored}</span>
-          <StoredSecretRemove key={`${item.secretSlot}:${item.secretSet.at}`} program={item.program} slot={item.secretSlot}
+          <StoredSecretRemove key={`${item.secretSlot}:${item.secretSet.at ?? 'unrecorded'}`} program={item.program} slot={item.secretSlot}
                               removeSecret={removeSecret} stepUpDeps={stepUpDeps} />
         </div>
       )}

@@ -277,6 +277,16 @@ describe('a stored secret shows "Stored" with Remove (the operator\'s ruling on 
     expect(screen.queryByRole('button', { name: STORED_TEXT.removeLabel('api-key') })).toBeNull();
   });
 
+  it('a slot that holds a value with no readable record is stored all the same: Stored and Remove, no saved line (review 1416 F4)', () => {
+    for (const state of ['open', 'checking', 'confirmed'] as const) {
+      showStored(vi.fn(), stored({ state: state as never, secretSet: { at: null } }));
+      expect(screen.getByText(STORED_TEXT.stored), state).toBeTruthy();
+      expect(removeButton(), state).toBeTruthy();
+      expect(screen.queryByText(SECRET_TEXT.saved('')), state).toBeNull();
+      cleanup();
+    }
+  });
+
   it('Remove asks first: Cancel removes nothing; the confirm removes the item\'s slot once and says Removed', async () => {
     const remove = vi.fn<RemoveSecret>(async (_p, slot) => ({ ok: true, slot }));
     showStored(remove);

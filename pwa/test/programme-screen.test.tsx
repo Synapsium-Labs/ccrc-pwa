@@ -17,6 +17,9 @@ import { createFleetStore } from '../src/stores/fleet';
 import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
 import { MIN, NOW, itemView, runRow, waitingView } from './ledgersFixture';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { effectiveValue, stripComments } from './cssRule';
 
 const SPEC = 'docs/superpowers/specs/2026-10-31-prog-a-design.md';
 const makeSocket = (): WebSocket => ({ close() {}, set onopen(_v: unknown) {}, set onmessage(_v: unknown) {}, set onclose(_v: unknown) {}, set onerror(_v: unknown) {} }) as unknown as WebSocket;
@@ -375,6 +378,24 @@ describe('the programme screen\'s Stored secrets (the operator\'s ruling on prog
     expect(rows[1]!.textContent).toContain(STORED_TEXT.askedBy(null));
     expect(within(section).getAllByRole('button', { name: /Remove the stored secret/ })).toHaveLength(2);
     expect(section.textContent).not.toContain(SECRET_VALUE_TAIL);
+  });
+
+  it('a row\'s name, saved-when and asking item are separate parts, each with its rule, and a Remove\'s refusal and Removed are tinted (review 1416 F5)', async () => {
+    const read = vi.fn(async () => answerOf([{ slot: 'api-key', setAt: Date.now() - 3 * 60 * MIN, item: { id: 9, title: 'Give the service key' } }]));
+    render(<ProgrammeScreen slug="prog-a" store={heard()} secrets={{ read }} />);
+    const section = await screen.findByRole('region', { name: STORED_TEXT.heading });
+    const row = within(section).getByRole('listitem');
+    // Three elements, never one run of text: "api-keySaved 3h agoAsked for by: …" was the unstyled row (review 1416 F5).
+    const parts = ['.pv-secret-name', '.pv-secret-when', '.pv-secret-asker'].map((c) => row.querySelector(c));
+    expect(parts.map((p) => p?.textContent)).toEqual(['api-key', 'Saved 3h ago', STORED_TEXT.askedBy('Give the service key')]);
+    // …and each class the row draws has its rule in ledgers.css (vitest loads no stylesheet, so the rule is read as text).
+    const css = stripComments(readFileSync(path.join(import.meta.dirname, '..', 'src', 'ledgers', 'ledgers.css'), 'utf8'));
+    expect(effectiveValue(css, '.pv-secrets .pv-secret', 'display')).toBe('grid');
+    expect(effectiveValue(css, '.pv-secrets .pv-secret-name', 'font')).toContain('var(--family-mono)');
+    for (const sel of ['.pv-secrets .pv-secret-when', '.pv-secrets .pv-secret-asker']) expect(effectiveValue(css, sel, 'color'), sel).toBe('var(--ink-secondary)');
+    expect(effectiveValue(css, '.pv-secrets .wi-refusal', 'background')).toBe('var(--status-dead-tint-solid)');
+    expect(effectiveValue(css, '.pv-secrets .wi-status', 'background')).toBe('var(--accent-tint)');
+    expect(effectiveValue(css, '.wi-stored', 'display')).toBe('flex');
   });
 
   it('a store that could not be read says so; it is never drawn as a programme with no secrets', async () => {

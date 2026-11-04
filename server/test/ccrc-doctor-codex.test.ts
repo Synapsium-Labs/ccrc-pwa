@@ -6351,7 +6351,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
   };
   /** `tmutil isexcluded <path>` in the real tool's shape: `[Excluded]` or `[Included]`, padding, then the path. */
   const tmutil = (answer: (p: string) => string): string =>
-    `[ "$1" = isexcluded ] || exit 64\ncase "$2" in\n${['.cc-secrets', '.ccrc/auth-scratch']
+    `[ "$1" = isexcluded ] || exit 64\ncase "$2" in\n${['.cc-secrets', '.ccrc/auth-scratch', '.ccrc/linear', '.ccrc/operator-secrets']
       .map((d) => `  */${d}) printf '%s    %s\\n' '${answer(d)}' "$2" ;;`).join('\n')}\n  *) exit 65 ;;\nesac`;
   const fdesetup = (out: string): string => `[ "$1" = status ] || exit 64\nprintf '%s\\n' ${shq(out)}`;
   const lines = (s: string): string[] => s.split('\n').filter(Boolean);
@@ -6394,7 +6394,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
         stubs: { tmutil: tmutil((d) => (d === '.cc-secrets' ? '[Included]' : '[Excluded]')) } });
       const r = run(home, 'secrets-backup-excluded', 'darwin');
       expect(lines(r.stdout)).toEqual([
-        'FAIL secrets-backup-excluded: ~/.cc-secrets included in Time Machine backups, so every backup taken holds the lane secrets in them',
+        'FAIL secrets-backup-excluded: ~/.cc-secrets included in Time Machine backups, so every backup taken holds the secrets stored in them',
         '  remedy: run \'tmutil addexclusion ~/.cc-secrets\' (an account verb that writes a secret does the same); a backup already taken still holds them, and the compromise steps apply to it',
       ]);
       expect(r.code).toBe(1);
@@ -6405,7 +6405,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
       const home = box({ secrets: ['.cc-secrets', '.ccrc/auth-scratch'], stubs: { tmutil: tmutil(() => '[Included]') } });
       const r = run(home, 'secrets-backup-excluded', 'darwin');
       expect(lines(r.stdout)).toEqual([
-        'FAIL secrets-backup-excluded: ~/.cc-secrets; ~/.ccrc/auth-scratch included in Time Machine backups, so every backup taken holds the lane secrets in them',
+        'FAIL secrets-backup-excluded: ~/.cc-secrets; ~/.ccrc/auth-scratch included in Time Machine backups, so every backup taken holds the secrets stored in them',
         '  remedy: run \'tmutil addexclusion ~/.cc-secrets ~/.ccrc/auth-scratch\' (an account verb that writes a secret does the same); a backup already taken still holds them, and the compromise steps apply to it',
       ]);
       expect(r.code).toBe(1);
@@ -6431,6 +6431,18 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
       expect(lines(r.stdout)).toEqual([
         'SKIP secrets-backup-excluded: no secret directory (~/.cc-secrets, ~/.ccrc/auth-scratch, ~/.ccrc/linear or ~/.ccrc/operator-secrets) exists on this box, so no secret is here to keep out of Time Machine']);
       expect(r.code).toBe(3);
+    });
+
+    it('measures a server box\'s two stores, the operator\'s pasted secrets and the Linear slot store, naming each (review 1416 A-F5)', () => {
+      const both = ['.ccrc/linear', '.ccrc/operator-secrets'] as never;
+      const included = run(box({ secrets: both, stubs: { tmutil: tmutil(() => '[Included]') } }), 'secrets-backup-excluded', 'darwin');
+      expect(lines(included.stdout)[0]).toBe(
+        'FAIL secrets-backup-excluded: ~/.ccrc/linear; ~/.ccrc/operator-secrets included in Time Machine backups, so every backup taken holds the secrets stored in them');
+      expect(included.code).toBe(1);
+      const excluded = run(box({ secrets: both, stubs: { tmutil: tmutil(() => '[Excluded]') } }), 'secrets-backup-excluded', 'darwin');
+      expect(lines(excluded.stdout)).toEqual([
+        'PASS secrets-backup-excluded: ~/.ccrc/linear; ~/.ccrc/operator-secrets excluded from Time Machine (tmutil isexcluded)']);
+      expect(excluded.code).toBe(0);
     });
 
     it('WARNs not measured, never PASSes, when tmutil is not on PATH', () => {
@@ -6469,7 +6481,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
     it('WARNs FileVault is Off. with its remedy: the machine\'s policy, never a FAIL that fails an install', () => {
       const r = run(box({ secrets: ['.cc-secrets'], stubs: { fdesetup: fdesetup('FileVault is Off.') } }), 'filevault', 'darwin');
       expect(lines(r.stdout)).toEqual([
-        'WARN filevault: FileVault is Off, so lane secrets on this disk sit unencrypted and any copy of it holds them',
+        'WARN filevault: FileVault is Off, so the secrets stored in ~/.cc-secrets sit unencrypted and any copy of this disk holds them',
         '  remedy: turn FileVault on in System Settings, Privacy & Security, FileVault (or \'sudo fdesetup enable\')',
       ]);
       expect(r.code).toBe(2);
@@ -6528,7 +6540,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
     it('PASSes a stated provider image, naming it once each and that the image holds the secrets', () => {
       const r = run(box({ secrets: ['.ccrc/auth-scratch'], posture: 'volume-snapshots server-backups volume-snapshots' }), 'snapshot-posture', 'linux');
       expect(lines(r.stdout)).toEqual([
-        'PASS snapshot-posture: stated: volume-snapshots, server-backups; every such image taken while a lane secret existed holds it, and the compromise steps apply to a leaked or restored one']);
+        'PASS snapshot-posture: stated: volume-snapshots, server-backups; every such image taken while a secret was stored in ~/.ccrc/auth-scratch holds it, and the compromise steps apply to a leaked or restored one']);
       expect(r.code).toBe(0);
     });
 

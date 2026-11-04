@@ -18,7 +18,7 @@
 // names and records only.
 //
 // NEVER LOG, RETURN OR THROW THE VALUE: every error raised here names a slot at most, and the caller answers fixed words.
-import { constants as FS, lstatSync, readFileSync, readdirSync, promises as fsp } from 'node:fs';
+import { constants as FS, lstatSync, readFileSync, readdirSync, rmSync, promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { shapeProgramSlug } from '../../../shared/api.js';
 import {
@@ -37,6 +37,14 @@ export const operatorSecretLaneId = (program: string, slot: string): string => `
 
 /** The slot's state as its metadata file holds it, and as an `ItemView.secretSet` carries it (`at` is `setAt`). */
 export interface OperatorSecretMeta { setAt: number; tail: string; masked: boolean; why?: SecretUnmasked }
+/** A slot that HOLDS a value whose record is missing, unreadable or unparseable (review 1416 F4): stored, with nothing known of
+ *  when or how. Never folded into `null`, which is a slot holding no value. */
+export interface OperatorSecretUnrecorded { setAt: null }
+/** What a slot's reader answers of a slot that holds a value. */
+export type OperatorSecretState = OperatorSecretMeta | OperatorSecretUnrecorded;
+/** How `writeOperatorSecret` asks the masker to register a value: `beside` adds its row beside the lane's rows instead of
+ *  replacing them (review 1416 F1: the write could not prove which value its slot holds, so the old one stays masked too). */
+export type RegisterSecret = (laneId: string, value: string, o?: { beside?: boolean }) => 'masked' | SecretUnmasked;
 
 /** A programme slug as `shapeProgramSlug` takes it, with nothing trimmed: a name with spaces around it is not the name. */
 const isProgramSlug = (s: unknown): s is string => typeof s === 'string' && (() => {
@@ -94,6 +102,32 @@ async function sweepSlotTemps(dir: string, slot: string): Promise<void> {
 const isPrivateDir = (st: { isDirectory(): boolean; mode: number; uid: number }): boolean =>
   st.isDirectory() && (st.mode & 0o077) === 0 && (typeof process.getuid !== 'function' || st.uid === process.getuid());
 
+/**
+ * THE START-UP SWEEP (review 1416 A-S6): removes every slot's leftover temp files across the whole store, so a crash's 0600 copy
+ * of a value is removed even when its slot is never written or removed again (a dismissed item's). It runs once, when the
+ * server registers the secret routes, before any of them can write, so no write is in flight to lose its temp; afterwards
+ * each write and Remove sweeps its own slot only (`sweepSlotTemps`). Only directories that are private directories of ours are
+ * entered, every path is made of the store's own listing entries, and only names of a slot's temp shape are removed.
+ * SYNCHRONOUS and never throws: a temp that cannot be removed stays, as before.
+ */
+export function sweepOperatorSecretTemps(ccrcDir: string): void {
+  const top = path.join(ccrcDir, OPERATOR_SECRETS_DIR);
+  const privateAt = (p: string): boolean => { try { return isPrivateDir(lstatSync(p)); } catch { return false; } };
+  const list = (p: string): string[] => { try { return readdirSync(p); } catch { return []; } };
+  if (!privateAt(top)) return;
+  for (const program of list(top)) {
+    if (!isProgramSlug(program)) continue;
+    const dir = path.join(top, program);
+    if (!privateAt(dir)) continue;
+    for (const n of list(dir)) {
+      // A temp is `.<slot>.<secret|json>.tmp-<hex>`, and a slot slug holds no dot: the slot is what lies between the first two.
+      const dot = n.indexOf('.', 1);
+      const slot = n.startsWith('.') && dot > 1 ? n.slice(1, dot) : '';
+      if (slot !== '' && isSlotSlug(slot) && isTempOf(n, slot)) { try { rmSync(path.join(dir, n), { force: true }); } catch { /* it stays */ } }
+    }
+  }
+}
+
 /** Makes `dir` at 0700 when absent; refuses when it is anything but a directory of ours that group and others cannot enter. */
 async function privateDir(dir: string, which: string): Promise<void> {
   try {
@@ -125,24 +159,31 @@ async function privateDir(dir: string, which: string): Promise<void> {
  * and a read-back that cannot read the file counts as stored (review 1391 A-4): the masker is told, and the operator is
  * told to save again, which finishes either way. A `register` that throws counts as `unregistered`, never as a failed write.
  * A failed metadata write removes the previous save's record, so no reader shows another save's time beside this value.
+ *
+ * NO ORDER LEAVES A VALUE ON DISK UNMASKED (review 1416 F1). A read-back that cannot read the slot (`unknown`) cannot say
+ * whether the rename ran: the failure may have come at the temp's open, so the slot may still hold the previous value. So
+ * that arm registers the new value BESIDE the lane's rows (`beside`), never in place of them: both values stay masked until a
+ * later save, whose write proves what the slot holds, replaces the lane's rows with its own.
  */
 export async function writeOperatorSecret(
-  ccrcDir: string, program: string, slot: string, value: string, now: number,
-  register: (laneId: string, value: string) => 'masked' | SecretUnmasked, item?: number,
+  ccrcDir: string, program: string, slot: string, value: string, now: number, register: RegisterSecret, item?: number,
 ): Promise<OperatorSecretMeta> {
   const file = operatorSecretPath(ccrcDir, program, slot);
   await privateDir(path.join(ccrcDir, OPERATOR_SECRETS_DIR), 'top');
   await privateDir(path.dirname(file), 'programme');
   await sweepSlotTemps(path.dirname(file), slot);
   let unsynced = false;
+  let proven = true;
   try {
     await writeValueFileAtomic(file, value);
   } catch (e) {
-    if ((await slotHolds(file, value)) === 'no') throw e;
+    const holds = await slotHolds(file, value);
+    if (holds === 'no') throw e;
     unsynced = true;
+    proven = holds === 'yes';
   }
   let said: 'masked' | SecretUnmasked;
-  try { said = register(operatorSecretLaneId(program, slot), value); } catch { said = 'unregistered'; }
+  try { said = register(operatorSecretLaneId(program, slot), value, { beside: !proven }); } catch { said = 'unregistered'; }
   const meta: OperatorSecretMeta = said === 'masked'
     ? { setAt: now, tail: secretTailOf(value), masked: true }
     : { setAt: now, tail: '', masked: false, why: said };
@@ -193,16 +234,17 @@ function parseMeta(raw: string): { meta: OperatorSecretMeta; item: number | null
   }
 }
 
-/** The slot's metadata, or `null` when the slot holds none: never set, removed (its value file is gone, whatever record is
- *  left), or a record this build cannot read. SYNCHRONOUS, so the one item builder (`viewOfItem`, which may not await) can
- *  carry it; a bad name answers `null` without building a path. */
-export function readOperatorSecretMeta(ccrcDir: string, program: string, slot: string): OperatorSecretMeta | null {
+/** The slot's state: its metadata, `{setAt: null}` when it holds a value whose record is missing, unreadable or one this
+ *  build cannot parse (review 1416 F4: stored all the same), or `null` when it holds no value: never set, or removed (its value
+ *  file is gone, whatever record is left). SYNCHRONOUS, so the one item builder (`viewOfItem`, which may not await) can carry
+ *  it; a bad name answers `null` without building a path. */
+export function readOperatorSecretMeta(ccrcDir: string, program: string, slot: string): OperatorSecretState | null {
   let file: string;
   try { file = operatorSecretPath(ccrcDir, program, slot); } catch { return null; }
   try { if (!lstatSync(file).isFile()) return null; } catch { return null; }
   let raw: string;
-  try { raw = readFileSync(metaPathOf(file), 'utf8'); } catch { return null; }
-  return parseMeta(raw)?.meta ?? null;
+  try { raw = readFileSync(metaPathOf(file), 'utf8'); } catch { return { setAt: null }; }
+  return parseMeta(raw)?.meta ?? { setAt: null };
 }
 
 /** One stored slot as the stored-secrets read lists it: its name, when it was saved (`null`: its record could not be read)
@@ -245,7 +287,14 @@ export function readStoredSecrets(ccrcDir: string, program: string):
     const slot = n.slice(0, -SECRET_EXT.length);
     if (!isSlotSlug(slot)) continue;
     const file = path.join(dir, n);
-    try { if (!lstatSync(file).isFile()) continue; } catch { continue; }
+    // Gone since the listing: not stored. Anything else that stops the look (a directory that can be listed but not searched,
+    // an I/O error) is an unreadable store, never "no slots" (review 1416 F2), as the re-key's reader already treats it.
+    try {
+      if (!lstatSync(file).isFile()) continue;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') continue;
+      return { state: 'unreadable' };
+    }
     let parsed: { meta: OperatorSecretMeta; item: number | null } | null = null;
     try { parsed = parseMeta(readFileSync(metaPathOf(file), 'utf8')); } catch { parsed = null; }
     slots.push({ slot, setAt: parsed?.meta.setAt ?? null, item: parsed?.item ?? null });

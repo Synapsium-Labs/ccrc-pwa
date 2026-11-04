@@ -121,8 +121,8 @@ function StoredSecretsSection({ slug, secrets, now, onRemoved, removeSecret, ste
             {secrets.map((s) => (
               <li key={s.slot} className="pv-secret" data-slot={s.slot}>
                 <span className="pv-secret-name">{s.slot}</span>
-                <span className="wi-hint">{STORED_TEXT.savedAt(s.setAt === null ? null : ageWords(s.setAt, now))}</span>
-                <span className="wi-hint">{STORED_TEXT.askedBy(s.item?.title ?? null)}</span>
+                <span className="pv-secret-when">{STORED_TEXT.savedAt(s.setAt === null ? null : ageWords(s.setAt, now))}</span>
+                <span className="pv-secret-asker">{STORED_TEXT.askedBy(s.item?.title ?? null)}</span>
                 <StoredSecretRemove key={`${s.slot}:${s.setAt ?? ''}`} program={slug} slot={s.slot} onRemoved={onRemoved}
                                     removeSecret={removeSecret} {...(stepUpDeps === undefined ? {} : { stepUpDeps })} />
               </li>
@@ -138,7 +138,7 @@ function secretItemsKey(slug: string, view: WaitingView | null): string {
   if (view === null) return '';
   return [...view.items, ...view.cleared]
     .filter((i) => i.program === slug && i.kind === 'secret')
-    .map((i) => `${i.id}:${i.state}:${i.secretSet?.at ?? '-'}`)
+    .map((i) => `${i.id}:${i.state}:${i.secretSet === null ? '-' : (i.secretSet.at ?? 'unrecorded')}`)
     .sort().join(',');
 }
 

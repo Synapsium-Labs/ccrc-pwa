@@ -115,8 +115,10 @@ export interface ItemView {
   note: string | null;
   secretSlot: string | null;
   /** The slot's state (plan PL6), read from its metadata file: when it was set, its tail (`secretTailOf`) and whether the
-   *  egress masker knows it. `why` says why it does not, and is absent when it does (or from a server before PL6). */
-  secretSet: { at: number; tail: string; masked: boolean; why?: SecretUnmasked } | null;
+   *  egress masker knows it. `why` says why it does not, and is absent when it does (or from a server before PL6).
+   *  `{at: null}`: the slot HOLDS a value but its record is missing, unreadable or unparseable (review 1416 F4), so nothing
+   *  is known of when or how; it is stored all the same, never folded into `null`, which is a slot that holds no value. */
+  secretSet: { at: number; tail: string; masked: boolean; why?: SecretUnmasked } | { at: null } | null;
   history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null }[];
 }
 
@@ -253,11 +255,12 @@ export function isSecretValue(v: unknown): v is string {
   return typeof v === 'string' && v.length >= 1 && v.length <= SECRET_VALUE_MAX && utf8Bytes(v) <= SECRET_VALUE_MAX;
 }
 
-/** Whether a value is ONE line: no carriage return and no line feed in it (the operator's ruling on programme item 8, "one
- *  line is enough"). The secret's route refuses any other with its own word before anything is written, and the panel keeps
- *  its single-line field. */
+/** Whether a value is ONE line in every reading: no carriage return, line feed, vertical tab, form feed, next line (U+0085),
+ *  line separator (U+2028) or paragraph separator (U+2029) in it (the operator's ruling on programme item 8, "one line is
+ *  enough", and its ruling on review 1416 A-R5: one line means one line however a reader breaks lines). The secret's route
+ *  refuses any other with its own word before anything is written, and the panel keeps its single-line field. */
 export function isOneLine(v: string): boolean {
-  return !/[\r\n]/.test(v);
+  return !/[\r\n\v\f\u0085\u2028\u2029]/.test(v);
 }
 
 /** The last `SECRET_TAIL_CHARS` characters (code points, so a surrogate pair is never split) of a value of at least

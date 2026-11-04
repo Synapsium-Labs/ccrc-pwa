@@ -2476,7 +2476,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // stored-secrets read and Remove door ride the same registration; a Remove retires the slot's lane in the masker.
   registerLedgerOperatorRoutes(app, {
     coord: deps.coord, bus, now: () => Date.now(), presenceOf, gate: accountGate, ccrcDir: deps.cfg.ccrcDir,
-    registerSecret: (laneId, value) => deps.masker?.ingestSecret(laneId, value) ?? 'unregistered',
+    registerSecret: (laneId, value, o) => deps.masker?.ingestSecret(laneId, value, o) ?? 'unregistered',
     retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
   });
 

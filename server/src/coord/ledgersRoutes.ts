@@ -30,7 +30,7 @@ import {
   ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
   isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, secretAnswer, secretTailOf, tickMailLeftBehind,
-  type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer, type SecretUnmasked,
+  type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
 } from '../../../shared/ledgers.js';
 import type { CoordStore, ItemEventRow, ItemRow } from './store.js';
@@ -40,7 +40,8 @@ import { insertSystemMailTx } from './rundefsTx.js';
 import { credentialBodyRoute, type AccountGate } from '../accounts/gate.js';
 import {
   OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
-  removeOperatorSecret, writeOperatorSecret, type OperatorSecretMeta,
+  removeOperatorSecret, sweepOperatorSecretTemps, writeOperatorSecret, type OperatorSecretMeta, type OperatorSecretState,
+  type RegisterSecret,
 } from './ledgersSecrets.js';
 
 /** What the coordinator routes need. `requireMailToken` and `requireAttribution` are `registerCoordRoutes`'s own closures,
@@ -68,20 +69,23 @@ const RETURN_NOTE_MAX = 600;
 /** The sentence of one In short copy (spec §4). */
 const IN_SHORT_MAX = 1200;
 
-/** A slot's metadata (plan PL6), or `null` when it holds none: `readOperatorSecretMeta` over the server's `ccrcDir`. */
-export type SecretMetaOf = (program: string, slot: string) => OperatorSecretMeta | null;
+/** A slot's state (plan PL6): its metadata, `{setAt: null}` when it holds a value with no readable record (review 1416 F4), or
+ *  `null` when it holds no value: `readOperatorSecretMeta` over the server's `ccrcDir`. */
+export type SecretMetaOf = (program: string, slot: string) => OperatorSecretState | null;
 const NO_SECRETS: SecretMetaOf = () => null;
 
 /** One item as the console reads it, with the stale verdict its builder measured and, for a secret item, its slot's state
  *  (never the value: the metadata holds none). */
-export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale: boolean, secret: OperatorSecretMeta | null = null): ItemView {
+export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale: boolean, secret: OperatorSecretState | null = null): ItemView {
   return {
     id: row.id, program: row.program, runId: row.runId, kind: row.kind, title: row.title, why: row.why, how: row.how,
     options: row.options, recommended: row.recommended, recommendedWhy: row.recommendedWhy,
     neededBy: row.neededBy, soonLabel: row.soonLabel, state: row.state, stale,
     raisedAt: row.raisedAt, tickedAt: row.tickedAt, closedAt: row.closedAt, answer: row.answer, note: row.note,
     secretSlot: row.secretSlot,
-    secretSet: secret === null ? null : { at: secret.setAt, tail: secret.tail, masked: secret.masked, ...(secret.why === undefined ? {} : { why: secret.why }) },
+    secretSet: secret === null ? null
+      : secret.setAt === null ? { at: null }
+        : { at: secret.setAt, tail: secret.tail, masked: secret.masked, ...(secret.why === undefined ? {} : { why: secret.why }) },
     history: events.map((e) => ({ at: e.at, act: e.act, note: e.note })),
   };
 }
@@ -461,8 +465,9 @@ export interface LedgerOperatorDeps {
   gate: AccountGate;
   /** Where the operator-secret slots live (`cfg.ccrcDir`, `coord/ledgersSecrets.ts`). */
   ccrcDir: string;
-  /** The egress masker's one registration of a server-held secret (`SecretMasker.ingestSecret`). */
-  registerSecret: (laneId: string, value: string) => 'masked' | SecretUnmasked;
+  /** The egress masker's one registration of a server-held secret (`SecretMasker.ingestSecret`), `beside` the lane's rows when
+   *  the write could not prove what its slot holds (review 1416 F1). */
+  registerSecret: RegisterSecret;
   /** The egress masker's retirement of a removed slot's lane (`SecretMasker.retireSecret`): masked for the life of this process,
    *  never reloaded after. */
   retireSecret: (laneId: string) => void;
@@ -490,6 +495,8 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     return /^[1-9][0-9]{0,15}$/.test(raw) ? Number(raw) : null;
   };
   const secretOf: SecretMetaOf = (program, slot) => readOperatorSecretMeta(deps.ccrcDir, program, slot);
+  // On start, before any route below can write: every slot's leftover temp files across the store (review 1416 A-S6).
+  sweepOperatorSecretTemps(deps.ccrcDir);
 
   /**
    * WHAT A TICK NEEDS, once for both doors (the tick and the secret's route): the programme's coordinator, the tick's mail,
@@ -600,10 +607,11 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    * from a plain-HTTP origin (`insecure-origin`) and without a recent step-up; it never falls back to an unconfirmed save.
    * Then the item: a secret item (`not-a-secret-item`), open (`not-open`), whose programme and slot pass their shapes
    * (`bad-slot`, re-checked before any path is built); the value, 1 to `SECRET_VALUE_MAX` characters and bytes, and ONE line
-   * (`secret-not-one-line`: no carriage return or line feed, the operator's ruling on programme item 8); the tick's
+   * (`secret-not-one-line`: no line break of any kind, `isOneLine`, the operator's rulings on programme item 8 and review 1416
+   * A-R5); the tick's
    * preconditions (its coordinator, its mail, no outstanding earlier tick), checked BEFORE the write so a refused tick stores
    * nothing; the write and the masker's registration (`writeOperatorSecret`); then the tick, with the answer
-   * `secretAnswer` builds: set and the time, and the tail only for a value at the masker's floor, NEVER the value.
+   * `secretAnswer` builds: set and the time, and the tail only when the masker catches the value (`masked`), NEVER the value.
    *
    * ONE SAVE OF A SLOT AT A TIME (review 1389 F2): everything after the gate runs on the slot's own chain (`underSlot`), so a
    * second save of the same slot starts only once the first has ticked, and then meets `not-open` before it writes anything.
