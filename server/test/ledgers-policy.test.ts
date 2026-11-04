@@ -7,10 +7,10 @@ import {
   ITEM_KINDS, ITEM_STATES, OPEN_ITEM_STATES, ITEM_TRANSITIONS, nextItemState,
   orderItems, waitingCount, programmeWaitsOn, WAITS_ON_WORDS, isSlotSlug, isSpecPath,
   CLEARED_WINDOW_MS, SOON_LABEL_MAX, ITEM_TITLE_MAX, ITEM_TEXT_MAX, ITEM_STEPS_MAX,
-  ITEM_OPTIONS_MAX, ANSWER_MAX, recommendationOf,
+  ITEM_OPTIONS_MAX, ANSWER_MAX, recommendationOf, earlierTickBlocks,
   type ItemAct, type ItemActor, type ItemState, type ItemView, type NeededBy, type WaitsOn,
 } from '../../shared/ledgers.js';
-import type { RunKind, RunState } from '../../shared/api.js';
+import { OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, type RunKind, type RunState } from '../../shared/api.js';
 
 const ACTORS: readonly ItemActor[] = ['operator', 'coordinator'];
 const ACTS = Object.keys(ITEM_TRANSITIONS) as ItemAct[];
@@ -238,5 +238,30 @@ describe('recommendationOf, the one reader of a decide item\'s recommendation (p
     expect(recommendationOf({ ...decide, recommendedWhy: 'Because.' })).toBeNull();
     expect(recommendationOf({ ...decide, recommended: 0, recommendedWhy: 7 as never })).toBeNull();
     expect(recommendationOf({ ...decide, options: null, recommended: 0, recommendedWhy: 'Because.' })).toBeNull();
+  });
+});
+
+// ONE DECIDER (desktop-polish carry, review 1338 advisory, D-7950): whether an earlier tick mail holds the operator's next
+// tick is decided here alone, over (its delivery state, its recipient, the coordinator, the recipient's presence); the tick
+// handler only acts on the answer.
+describe('earlierTickBlocks', () => {
+  const PRESENCES = ['alive', 'dead', 'absent', 'unmeasured'] as const;
+  it('a mail no longer outstanding never blocks, whoever it went to and however they read', () => {
+    for (const state of TERMINAL_DELIVERY_STATES) {
+      for (const recipientPresence of PRESENCES) {
+        for (const recipient of ['coord-a', 'coord-b']) {
+          expect(earlierTickBlocks({ state, recipient, coordinator: 'coord-a', recipientPresence }), `${state} ${recipient} ${recipientPresence}`).toBe(false);
+        }
+      }
+    }
+  });
+  it('an outstanding mail blocks, except one left behind: its recipient is no longer the coordinator and reads dead or absent', () => {
+    for (const state of OUTSTANDING_DELIVERY_STATES) {
+      for (const recipientPresence of PRESENCES) {
+        expect(earlierTickBlocks({ state, recipient: 'coord-a', coordinator: 'coord-a', recipientPresence }), `${state} coordinator ${recipientPresence}`).toBe(true);
+        const leftBehind = recipientPresence === 'dead' || recipientPresence === 'absent';
+        expect(earlierTickBlocks({ state, recipient: 'coord-old', coordinator: 'coord-a', recipientPresence }), `${state} displaced ${recipientPresence}`).toBe(!leftBehind);
+      }
+    }
   });
 });

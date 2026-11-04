@@ -29,13 +29,12 @@ import { LEDGER_ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusa
 import {
   ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
-  isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, secretAnswer, secretTailOf, tickMailLeftBehind,
+  earlierTickBlocks, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, secretAnswer, secretTailOf,
   type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
 } from '../../../shared/ledgers.js';
 import type { CoordStore, ItemEventRow, ItemRow } from './store.js';
 import { itemMailSubject, tickMail } from './ledgersMail.js';
-import { OUTSTANDING_DELIVERY_STATES } from '../../../shared/api.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
@@ -520,12 +519,12 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (!mail.ok) {
       return { ok: false, why: LEDGER_ROUTE_REFUSALS.tooLarge, detail: `the mail to the coordinator would be ${mail.bytes} bytes, past the ${mail.limit} byte cap` };
     }
-    // The newest tick mail of this item, whoever it went to and whatever run it rode (review 1335 F2): one still outstanding
-    // blocks a second, so a takeover cannot queue it twice either. Except one left behind (review 1336 F1): its recipient is
-    // no longer the coordinator and reads dead or absent, so nothing will ever acknowledge it.
+    // The newest tick mail of this item, whoever it went to and whatever run it rode (review 1335 F2): whether it holds this
+    // tick is `earlierTickBlocks`'s to decide, once (outstanding, and not left behind: review 1336 F1, review 1338).
     const earlier = coord.newestTickMail(mail.subject);
-    if (earlier !== null && OUTSTANDING_DELIVERY_STATES.includes(earlier.state)
-      && !tickMailLeftBehind({ recipient: earlier.toId, coordinator, recipientPresence: deps.presenceOf(earlier.toId) })) {
+    if (earlier !== null && earlierTickBlocks({
+      state: earlier.state, recipient: earlier.toId, coordinator, recipientPresence: deps.presenceOf(earlier.toId),
+    })) {
       return { ok: false, why: 'duplicate', detail: `an earlier tick of this item went to ${earlier.toId}, which has not acknowledged it` };
     }
     return { ok: true, coordinator, mail: { subject: mail.subject, body: mail.body } };
