@@ -887,18 +887,18 @@ Each task had its own reviewer (sonnet on Tasks 1 and 2, opus on Task 3), and ea
 | `ci-reach-census`, `docs-parity`, `citations`, `contrast` | green |
 | server typecheck | `SERVER-TSC-OK` |
 | browser: `browser/reader-frame.browser.test.ts`, locally | 24 passed (24); `browser leg: built the PWA once in 8097 ms` |
-| server, the whole suite (1304 files) in pieces of 70 and then 35 | 67 942 passed, 192 skipped, 47 failed in 15 files, every one outside this wave's Scope (below) |
+| server, the whole suite (1304 files) in pieces of 70 and then 35 | 67 942 passed, 192 skipped, 47 failed in 19 files (5 green when run alone, 14 red alone), every one outside this wave's Scope (below) |
 | `deviation-refs`, `dtbd` (after the Deviations commit) | 32 passed (32) |
 | `typecheck-tests`, alone | 12 passed (12), once `agent/` had its modules |
 
-The 15 server files that failed in the whole run were each run again alone. They test areas this wave does not touch. Five were green alone:
+The 19 server files that failed in the whole run were each run again alone. They test areas this wave does not touch. Five were green alone:
 - `asks-sweep`
 - `collect-lane-route`
 - `mail-inbox-store`
 - `session-hook-approval-deny`
 - `typecheck-tests`, which had failed only because `agent/` had no modules in this workspace until it was installed.
 
-Ten were red alone too. Each one fails on this box's environment or on a timing bound under the test slice's CPU limits:
+Fourteen were red alone too. Each one fails on this box's environment or on a timing bound under the test slice's CPU limits:
 
 | File | Why it fails here |
 |---|---|
@@ -936,20 +936,20 @@ Measured at quality 11, into a temporary directory removed afterwards (`OUT-GONE
 | `bootstrap-*.js` | 27 765 | 9 400 | 10 358 |
 | **all scripts and stylesheets** | **7 397 794** | **1 870 694** | **2 307 989** |
 
-The entry script goes from about 1.99 MB to about 497 KB as Brotli, and the Mermaid chunk from about 3.68 MB to about 747 KB.
+The entry script goes from 2 037 731 bytes (1.94 MiB) to 508 489 bytes (497 KiB) as Brotli, and the Mermaid chunk from 3 770 403 bytes (3.60 MiB) to 764 977 bytes (747 KiB).
 
 ### The built-output files' build times, against the ruling's bounds
 
-Build time is the file's vitest `Duration` times its `tests` share, less its cases' time. The plan's "span less cases" reads about 0 ms here, because vitest 5's JSON report starts a file's span after `beforeAll`.
+Build time is the file's vitest `Duration` times its `tests` share, less its cases' time. The plan's "span less cases" reads about 0 ms here, because vitest 5's JSON report starts a file's span after `beforeAll`. The step's own cost is the plugin's log line in Task 2 Step 6 (`precompress: ... 13163 ms`, 13.2 s, against the 45 s bound). The "End state less BASE" column is the difference between two runs of each file under different fleet load (2.3 to 5.2 s), not a measure of the step, which is why it differs between files that run the same build.
 
-| File | BASE | After Task 2 (implementer's run) | End state | End state less BASE |
+| File | BASE | After Task 2 (implementer's run) | End state | End state less BASE (two runs, different load) |
 |---|---|---|---|---|
 | `reader-built` | Duration 5.89 s, build ≈ 3.9 s | Duration 22.42 s | Duration 8.98 s, build ≈ 8.5 s | ≈ 4.6 s |
 | `fonts-built` | Duration 3.76 s, build ≈ 3.0 s | Duration 20.08 s | Duration 8.64 s, build ≈ 8.2 s | ≈ 5.2 s |
 | `markdown-worker-built` | Duration 7.88 s, build ≈ 6.2 s | Duration 14.46 s | Duration 9.25 s, build ≈ 8.5 s | ≈ 2.3 s |
 | browser leg `buildDist` | — | — | 8097 ms | — |
 
-Every build is at most 120 s (the largest, 28.9 s, is Step 6's double-counted sum), and every step cost is at most 45 s. The Duration after Task 2 was measured under heavier fleet load than either the BASE or the end-state run.
+Every build is at most 120 s (the largest, 28.9 s, is Step 6's double-counted sum), and the step's own cost (13.2 s, the plugin's log line) is at most 45 s. The Duration after Task 2 was measured under heavier fleet load than either the BASE or the end-state run.
 
 ### Mutation table
 
@@ -991,7 +991,7 @@ Measured at the end state, in the workspace, one row at a time. Each row was res
 
 ### Carried, not fixed (all Minor, from the per-task and held-out reviews)
 
-- The server's shell case ("no shell answer is compressed") cannot fail on anything this wave changes, because the fixture has no copy beside a shell file. The guard that the shell has no copies is on the build side (`leaves every other file alone`, FLC-T2-M3).
+- The server's shell case ("no shell answer is compressed") cannot fail on anything this wave changes, because the fixture has no copy beside a shell file. The guard that the shell has no copies is on the build side (`leaves every other file alone`, FLC-T1-M2, and the `assets/` scope, FLC-T2-M3).
 - No case pins q-value handling (`br;q=0, gzip` gets gzip on the installed `@fastify/static` 10.1.8, probed). Upstream, `*` is rewritten to gzip, so `gzip;q=0, *` gets gzip. No browser sends either header.
 - Brotli's `BROTLI_MODE_TEXT` and `BROTLI_PARAM_SIZE_HINT` are tuning, not guards (they change neither correctness nor safety; dropping either still writes valid Brotli that decodes to the file), so by the coordinator's ruling on review 1411 they are unguarded by design and take no mutation row; on the exact-bytes case's own fixtures the output with and without them was byte-identical (measured by the reviewer on Node 24).
 - The README sentence and `pwaStaticOptions`' comment say "script and stylesheet" and "br, else gzip". The build also copies SVGs, and the plugin also looks for a `.deflate` copy, which is never there and falls through to the file.
