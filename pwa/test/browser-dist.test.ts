@@ -42,49 +42,32 @@ function fakeProject(): { provided: Map<string, unknown>; project: { provide: (k
 const browserFiles = (): string[] => readdirSync(BROWSER).filter((f) => /\.browser\.test\.tsx?$/.test(f));
 const textOf = (f: string): string => readFileSync(path.join(BROWSER, f), 'utf8');
 
-// TRANSITIONAL (2026-11-02). The one build lands in three pull requests, because `vitest.browser.config.ts` may change
-// only in a rules-only pull request: first the setup, `sharedDist` and these pins, while the config names no global
-// setup and every file builds its own; then the config alone, naming the setup (each file still builds its own, so the
-// run builds once more than before, for one pull request); then the sweep of the 47 files to `sharedDist()`, with app.ts
-// dropping the per-file builder's re-export and these pins dropping every PER-FILE arm. Until then the files are in
-// exactly one of two WHOLE shapes, every serving file building its own or every one serving the shared build, and the
-// shared shape is refused without the config's setup.
-const SETUP = ['browser/globalSetup.ts'];
-const loadedSetup = async (): Promise<unknown> => {
-  // Loaded as vite loads it, bundled and imported natively (see browser-leg.test.ts's loadConfig for why).
-  const loaded = await loadConfigFromFile({ command: 'serve', mode: 'test' }, path.join(PWA, 'vitest.browser.config.ts'), PWA);
-  return loaded?.config.test?.globalSetup;
-};
-
 describe('the browser config builds the app once, in its global setup', () => {
-  it('vitest.browser.config.ts names browser/globalSetup.ts as its one global setup (transitionally: or none)', async () => {
-    const setup = await loadedSetup();
-    expect([undefined, SETUP], `the browser config's globalSetup is ${JSON.stringify(setup)}`).toContainEqual(setup);
+  it('vitest.browser.config.ts names browser/globalSetup.ts as its one global setup', async () => {
+    // Loaded as vite loads it, bundled and imported natively (see browser-leg.test.ts's loadConfig for why).
+    const loaded = await loadConfigFromFile({ command: 'serve', mode: 'test' }, path.join(PWA, 'vitest.browser.config.ts'), PWA);
+    expect(loaded?.config.test?.globalSetup).toEqual(['browser/globalSetup.ts']);
   });
 
-  it('every file that serves the app serves sharedDist(), and none builds its own or removes the shared one (transitionally: or every one builds its own)', async () => {
+  it('no browser file builds its own app or removes the shared one; every file that serves the app serves sharedDist()', () => {
     const files = browserFiles();
     expect(files.length, 'no browser file found, so this case would prove nothing').toBeGreaterThan(3);
+    expect(files.filter((f) => /\bbuildDist\b/.test(textOf(f))), 'a browser file runs its own vite build').toEqual([]);
+    expect(files.filter((f) => /\bremoveDist\b/.test(textOf(f))), 'a browser file removes the shared build').toEqual([]);
     const serves = files.filter((f) => /\bserveDist\s*\(/.test(textOf(f)));
     expect(serves.length, 'no browser file serves the app, so this case would prove nothing').toBeGreaterThan(3);
     // Each serves exactly the directory sharedDist() returned: `dist = sharedDist()` and then `serveDist(dist)`.
-    const shared = serves.filter((f) => /\bdist = sharedDist\(\);\n\s*server = await serveDist\(dist\);/.test(textOf(f)));
-    const own = serves.filter((f) => /\bdist = buildDist\(\);\n\s*server = await serveDist\(dist\);/.test(textOf(f)) && /\bremoveDist\(dist\)/.test(textOf(f)));
-    if (shared.length === 0) {
-      // PER-FILE arm (transitional): main's shape, every serving file builds its own and removes it.
-      expect(own, 'a browser file serves a directory it neither built nor took from sharedDist()').toEqual(serves);
-      return;
-    }
-    expect(shared, 'some browser files serve the shared build and others do not').toEqual(serves);
-    expect(files.filter((f) => /\bbuildDist\b/.test(textOf(f))), 'a browser file runs its own vite build').toEqual([]);
-    expect(files.filter((f) => /\bremoveDist\b/.test(textOf(f))), 'a browser file removes the shared build').toEqual([]);
-    expect(await loadedSetup(), 'the files serve the shared build, but the browser config does not build it').toEqual(SETUP);
+    const unshared = serves.filter((f) => !/\bdist = sharedDist\(\);\n\s*server = await serveDist\(dist\);/.test(textOf(f)));
+    expect(unshared, 'a browser file serves a directory that is not the shared build').toEqual([]);
   });
 
-  it('the global setup builds with the real builder', () => {
+  it('the global setup builds with the real builder, and app.ts no longer exports one', async () => {
     const setup = readFileSync(path.join(BROWSER, 'globalSetup.ts'), 'utf8');
     expect(setup).toMatch(/^export default buildOnce\(\);$/m);
     expect(setup).toMatch(/export function buildOnce\(build: \(\) => string = buildDist\)/);
+    const app = await import('../browser/app');
+    expect('buildDist' in app, 'app.ts exports a builder again: a browser file could build its own').toBe(false);
+    expect('removeDist' in app, 'app.ts exports a remover again: a browser file could remove the shared build').toBe(false);
   });
 });
 

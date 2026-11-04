@@ -127,8 +127,9 @@ export function FleetScreen({
   }, [store]);
 
   // The unseen watermark (pwa/src/lib/seen.ts) — per-device, in localStorage.
-  // SUBSCRIBED, not read into state: this screen is never unmounted (app.tsx
-  // renders it as the desktop sidebar for the whole app lifetime), and the
+  // SUBSCRIBED, not read into state: this screen is long-lived (app.tsx
+  // renders it as the desktop sidebar on every route but the Waiting on you
+  // item route, plan PL9, which remounts it on the way out), and the
   // other writer is a different screen — SessionScreen acks on mount. A
   // `useState(loadAcks)` initialiser never re-runs, and a fleet that hasn't
   // changed emits no snapshot to hang a re-read on (watch.ts's `lastJson`
@@ -384,9 +385,14 @@ export function FleetBanners(): ReactNode {
   const useStore = chrome.store;
   const sessions = useStore((s) => s.sessions);
   const conn = useStore((s) => s.conn);
+  const linkLost = useStore((s) => s.linkLost);
   const notices = useStore((s) => s.notices);
   const dismissNotice = useStore((s) => s.dismissNotice);
   const fleetHealth = chrome.health;
+  // "Reconnecting…" for the whole outage on an empty pane: each reconnect attempt reads `connecting`, and with no
+  // session held the stale-cards banner below says nothing, so the link's loss is said through the attempt too. A cold
+  // start that has not failed yet (`linkLost` false) is unchanged. Exclusive of the `connecting` banner by construction.
+  const offline = conn === 'down' || (conn === 'connecting' && linkLost && sessions.length === 0);
   const updates = chrome.updates;
   // Wave 19, R24(b): a later poll failed and the view is the last answer that landed; every banner says so.
   const stale = updates.view !== null && updates.failure !== null;
@@ -422,8 +428,8 @@ export function FleetBanners(): ReactNode {
         { id: 'substrate', shows: substrateBannerShows(sessions), node: <SubstrateBanner store={useStore} /> },
         {
           id: 'offline',
-          shows: conn === 'down',
-          node: conn === 'down' && (
+          shows: offline,
+          node: offline && (
             <div className={`offline-banner ${ATTENTION_DOT}`} role="status">
               Reconnecting…
             </div>

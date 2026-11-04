@@ -670,6 +670,14 @@ export function leaseSourceKindOfActivity(kind: DelegationActivitySourceKind): D
   }
 }
 
+/** D-6269: a worker index is the canonical decimal of a non-negative safe integer (the spelling the meta door mints `<runId>-<index>` with).
+ *  The ONE definition, for a number (the meta's) and for the string after a run's id (a row's): the checkpoint builder's fold and meta door
+ *  and the compaction planner's run-with-its-workers rule (D-7001) all read it. */
+export function isDelegationWorkerIndex(v: unknown): boolean {
+  if (typeof v === 'number') return Number.isSafeInteger(v) && v >= 0;
+  return typeof v === 'string' && /^(0|[1-9][0-9]*)$/.test(v) && Number.isSafeInteger(Number(v));
+}
+
 /**
  * The lease provenances wave 3 may WRITE: the shared lease vocabulary minus `attached`, which the complete migration can represent
  * and no wave-3 writer produces. Derived once, here, from the one declaration, so a new provenance is a decision and not a second

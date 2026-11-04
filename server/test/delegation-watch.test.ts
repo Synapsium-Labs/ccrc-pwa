@@ -760,7 +760,7 @@ describe('cursors (hand-off 4): they move only through ingestion, and a replaced
     expect(disk(w.home).checkpoint!.bucketCursors[0]).toMatchObject({ replaced: true });
   });
 
-  it('the lane never rewrites bucketCursors through a checkpoint-only change: every change it makes (attempts, interval upkeep) returns the cursor rows it was given', async () => {
+  it('the lane never rewrites bucketCursors through a checkpoint-only change: attempts return their given cursor rows, and interval retention uses upkeep without changing cursors', async () => {
     const w = await rawTreeWorld();
     const proto = DelegationDurability.prototype;
     const real = proto.applyCheckpointChange;
@@ -772,6 +772,15 @@ describe('cursors (hand-off 4): they move only through ingestion, and a replaced
         return out;
       });
     });
+    const realUpkeep = proto.upkeep;
+    const upkeepSeen: Array<{ before: string; after: string; intervals: number; out: Awaited<ReturnType<DelegationDurability['upkeep']>> }> = [];
+    vi.spyOn(proto, 'upkeep').mockImplementation(async function (this: DelegationDurability, request) {
+      const before = JSON.stringify(this.state().checkpoint.bucketCursors);
+      const intervals = this.state().checkpoint.observationIntervals.length;
+      const out = await realUpkeep.call(this, request);
+      upkeepSeen.push({ before, after: JSON.stringify(this.state().checkpoint.bucketCursors), intervals: this.state().checkpoint.observationIntervals.length - intervals, out });
+      return out;
+    });
     const census = { demo: [OLD, RAW] };
     await censusPass(w, at(0), census);
     // an old interval for the upkeep to prune, so BOTH kinds of change happen
@@ -780,10 +789,12 @@ describe('cursors (hand-off 4): they move only through ingestion, and a replaced
       sessionId: 'old', parentIncarnation: INC, utcHour: iso(Date.UTC(2026, 9, 1, 0)), state: 'unmeasured', detail: 'range-unreadable: x', recordedAt: iso(Date.UTC(2026, 9, 1, 1)),
     }] }));
     seen.length = 0;
+    upkeepSeen.length = 0;
     for (let i = 1; i < 4; i++) await censusPass(w, at(i), census);
     expect(seen.some((s) => s.attempts > 0), 'the lane filed no attempt through a change').toBe(true);
-    expect(seen.some((s) => s.intervals < 0), 'the upkeep pruned nothing through a change').toBe(true);
+    expect(upkeepSeen.some((s) => s.intervals < 0 && s.out.intervalsChanged), 'the upkeep pruned no interval through its own door').toBe(true);
     for (const s of seen) expect(s.after).toBe(s.before);
+    for (const s of upkeepSeen) expect(s.after).toBe(s.before);
     expect(disk(w.home).checkpoint!.bucketCursors.length).toBeGreaterThan(0);
     // and the source says so: no cursor row is assigned anywhere in the lane
     const lane = watchSrc().slice(watchSrc().indexOf('THE DELEGATION LANE'));
@@ -2650,21 +2661,29 @@ describe('fix round 2, minors N4 to N6', () => {
     expect(leasesOf(w.home)).toHaveLength(1);
   });
 
-  it('N6: a prune that FAILED is retried at most once per UTC hour, like one that succeeded', async () => {
+  it('N6: hourly cursor/zero-delta upkeep that FAILED is retried at most once per UTC hour, like work that succeeded', async () => {
     const DAY3 = 72 * 3_600_000;
     const w = world();
     writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a', '2026-10-15T10:01:00.000Z'));
     await censusPass(w, NOW, { demo: [] });
     await censusPass(w, Date.UTC(2026, 9, 15, 11, 3, 0), { demo: [] });                // the close write
-    const prune = vi.spyOn(DelegationDurability.prototype, 'pruneBucketCursors').mockRejectedValue(new Error('disk full'));
+    const real = DelegationDurability.prototype.upkeep;
+    const upkeep = vi.spyOn(DelegationDurability.prototype, 'upkeep').mockImplementation(async function (this: DelegationDurability, request) {
+      if (request.cursors || request.zeroDelta) throw new Error('disk full');
+      return real.call(this, request);                                           // interval-only work is due every pass, not hourly
+    });
+    const hourly = () => upkeep.mock.calls.filter(([request]) => request.cursors || request.zeroDelta);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const reconcile = vi.spyOn(policy, 'planDelegationReconciliation');
     await censusPass(w, NOW + DAY3, { demo: [] });
+    expect(reconcile.mock.calls.length, 'the failed upkeep did not stop reconciliation').toBeGreaterThan(0);
     await censusPass(w, NOW + DAY3 + 60_000, { demo: [] });
     await censusPass(w, NOW + DAY3 + 120_000, { demo: [] });
-    expect(prune, 'a failed prune was retried on every pass').toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls.filter((c) => String(c[0]).includes('cursor retention failed'))).toHaveLength(1);
+    expect(hourly(), 'a failed prune was retried on every pass').toHaveLength(1);
+    for (const [request] of upkeep.mock.calls.slice(1)) expect(request).toMatchObject({ intervals: true, cursors: false, zeroDelta: false });
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('delegation upkeep failed'))).toHaveLength(1);
     await censusPass(w, NOW + DAY3 + 3_600_000, { demo: [] });
-    expect(prune).toHaveBeenCalledTimes(2);
+    expect(hourly()).toHaveLength(2);
   });
 });
 
@@ -2673,6 +2692,22 @@ describe('fix round 2, minors N4 to N6', () => {
 describe('the read horizon and cursor retention in the lane (R58, D-4654)', () => {
   const DAY3 = 72 * 3_600_000;
   const closeOf = Date.UTC(2026, 9, 15, 11, 3, 0);
+
+  /** Observe only the real upkeep call: ingestion elsewhere in the pass may legitimately write a cursor or close an interval. */
+  function watchUpkeep(w: World) {
+    const real = DelegationDurability.prototype.upkeep;
+    const log: Array<{ out: Awaited<ReturnType<DelegationDurability['upkeep']>>; encodes: number; writes: number; revision: number; before: Buffer; after: Buffer }> = [];
+    const spy = vi.spyOn(DelegationDurability.prototype, 'upkeep').mockImplementation(async function (this: DelegationDurability, request) {
+      const before = { ...this.commitMeasures(), revision: this.state().checkpoint.revision };
+      const bytes = readFileSync(path.join(w.ccrcDir, DELEGATION_CHECKPOINT_FILE));
+      const out = await real.call(this, request);
+      const after = this.commitMeasures();
+      log.push({ out, encodes: after.encodes - before.encodes, writes: after.writes - before.writes, revision: this.state().checkpoint.revision - before.revision,
+        before: bytes, after: readFileSync(path.join(w.ccrcDir, DELEGATION_CHECKPOINT_FILE)) });
+      return out;
+    });
+    return { spy, log };
+  }
 
   /** One session with a closed, measured hour at 10:00 and a cursor behind it, three days before the lane's next pass. */
   async function agedWorld(): Promise<World> {
@@ -2713,38 +2748,49 @@ describe('the read horizon and cursor retention in the lane (R58, D-4654)', () =
 
   it('a cursor past the retention whose interval is on file is dropped by the lane\'s upkeep, once per UTC hour, and a bucket still listed is not read as new', async () => {
     const w = await agedWorld();
-    const prune = vi.spyOn(DelegationDurability.prototype, 'pruneBucketCursors');
+    const upkeep = watchUpkeep(w);
     await censusPass(w, NOW + DAY3, { demo: [] });
-    expect(prune).toHaveBeenCalledTimes(1);
+    expect(upkeep.spy).toHaveBeenCalledTimes(1);
+    expect(upkeep.log[0]!.out.cursorsDropped).toBe(1);
     expect(disk(w.home).checkpoint!.bucketCursors).toEqual([]);
     expect(w.watcher.delegationReport().cursorsPruned).toBe(1);
     await censusPass(w, NOW + DAY3 + 60_000, { demo: [] });                           // the same UTC hour
-    expect(prune, 'the prune ran twice in one hour').toHaveBeenCalledTimes(1);
+    expect(upkeep.spy, 'the prune ran twice in one hour').toHaveBeenCalledTimes(1);
     await censusPass(w, NOW + DAY3 + 2 * 3_600_000, { demo: [] });                    // a later hour with nothing droppable
-    expect(prune, 'the prune ran with nothing to drop').toHaveBeenCalledTimes(1);
+    expect(upkeep.spy, 'the next hour checks upkeep without durable work').toHaveBeenCalledTimes(2);
+    expect(upkeep.log[1]!.out).toEqual({ intervalsChanged: false, cursorsDropped: 0, cursorsUnparseable: 0, retired: 0, applied: null });
+    expect(upkeep.log[1]).toMatchObject({ encodes: 0, writes: 0, revision: 0 });
+    expect(upkeep.log[1]!.after).toEqual(upkeep.log[1]!.before);
     expect(disk(w.home).journalLines).toBe(1);
   });
 
   it('the prune runs at most once per UTC hour even when a droppable cursor reappears inside it, and again in the next hour', async () => {
     const w = await agedWorld();
-    const prune = vi.spyOn(DelegationDurability.prototype, 'pruneBucketCursors');
+    const upkeep = vi.spyOn(DelegationDurability.prototype, 'upkeep');
     await censusPass(w, NOW + DAY3, { demo: [] });
-    expect(prune).toHaveBeenCalledTimes(1);
+    expect(upkeep).toHaveBeenCalledTimes(1);
     w.watcher.setDelegationSeams({ readEveryListedBucket: true });                    // the old bucket is read again: its cursor is back, and droppable
     await censusPass(w, NOW + DAY3 + 60_000, { demo: [] });
     expect(disk(w.home).checkpoint!.bucketCursors, 'the seam did not bring the cursor back').toHaveLength(1);
-    expect(prune, 'a second prune inside the same UTC hour').toHaveBeenCalledTimes(1);
+    expect(upkeep, 'a second prune inside the same UTC hour').toHaveBeenCalledTimes(1);
     await censusPass(w, NOW + DAY3 + 3_600_000, { demo: [] });
-    expect(prune).toHaveBeenCalledTimes(2);
+    expect(upkeep).toHaveBeenCalledTimes(2);
     expect(disk(w.home).checkpoint!.bucketCursors).toEqual([]);
   });
 
-  it('the prune is called only when the planner has something to drop: a fleet of young cursors never calls it', async () => {
+  it('hourly upkeep with only young cursors drops nothing and makes no durable change', async () => {
     const w = world();
     writeBucket(w, 'demo-a', BUCKET10, startLine('demo-a'));
-    const prune = vi.spyOn(DelegationDurability.prototype, 'pruneBucketCursors');
+    const upkeep = watchUpkeep(w);
     for (let i = 0; i < 3; i++) await censusPass(w, NOW + i * 3_600_000, { demo: [] });
-    expect(prune).not.toHaveBeenCalled();
+    expect(upkeep.spy).toHaveBeenCalledTimes(3);
+    for (const entry of upkeep.log) {
+      expect(entry.out).toEqual({ intervalsChanged: false, cursorsDropped: 0, cursorsUnparseable: 0, retired: 0, applied: null });
+      expect(entry).toMatchObject({ encodes: 0, writes: 0, revision: 0 });
+      expect(entry.after).toEqual(entry.before);
+    }
+    expect(disk(w.home).checkpoint!.bucketCursors).toHaveLength(1);
+    expect(w.watcher.delegationReport().cursorsPruned).toBe(0);
   });
 
   it('with the read horizon bypassed (a test seam), re-ingesting a pruned bucket accepts nothing new: the eventIds dedupe against the retained journal', async () => {
@@ -2763,7 +2809,7 @@ describe('the read horizon and cursor retention in the lane (R58, D-4654)', () =
 
   it('the lane\'s prune is not a checkpoint-only change: it never reaches applyCheckpointChange, and the source names the one door', () => {
     const lane = watchSrc().slice(watchSrc().indexOf('THE DELEGATION LANE'));
-    expect(lane).toContain('pruneBucketCursors(');
+    expect(lane).toContain('durable.upkeep(');
     expect(lane).toContain('delegationBucketReadable(');
     expect(lane).toContain('planDelegationCursorRetention(');
   });
@@ -4836,26 +4882,26 @@ describe('the zero-delta retirement in the lane (D-6268): one call of the applie
   const mappedOf = (cp: DelegationCheckpointV1 | null, toolUseId: string): boolean =>
     Object.keys(cp?.activityIdsByNaturalKey ?? {}).some((k) => k.includes(toolUseId));
 
-  type Door = (this: DelegationDurability) => Promise<{ retired: number; applied: unknown }>;
-  const DOOR = 'retireZeroDeltaBashActivities';
+  type Door = DelegationDurability['upkeep'];
+  const DOOR = 'upkeep';
   const doorMember = (): unknown => (DelegationDurability.prototype as unknown as Record<string, unknown>)[DOOR];
   /** A spy on the door that calls through and logs what it returned and the revision either side of it. The row asserts the member
    *  first, so at a tree without it the row fails on that assertion and never reaches `vi.spyOn`. */
   function watchDoor() {
-    const proto = DelegationDurability.prototype as unknown as { retireZeroDeltaBashActivities: Door };
-    const real = proto.retireZeroDeltaBashActivities;
-    const log: Array<{ out: { retired: number; applied: unknown }; revisionBefore: number; revisionAfter: number; changes: number }> = [];
+    const proto = DelegationDurability.prototype;
+    const real = proto.upkeep;
+    const log: Array<{ out: Awaited<ReturnType<Door>>; revisionBefore: number; revisionAfter: number; changes: number }> = [];
     const calls = durableCalls();
-    const spy = vi.spyOn(proto, DOOR).mockImplementation(async function (this: DelegationDurability) {
+    const spy = vi.spyOn(proto, DOOR).mockImplementation(async function (this: DelegationDurability, request) {
       const revisionBefore = this.state().checkpoint.revision;
       const changesBefore = calls.applyCheckpointChange.mock.calls.length;
-      const out = await real.call(this);
+      const out = await real.call(this, request);
       log.push({ out, revisionBefore, revisionAfter: this.state().checkpoint.revision, changes: calls.applyCheckpointChange.mock.calls.length - changesBefore });
       return out;
     });
     return { spy, log, calls };
   }
-  const DOOR_EXISTS = 'DelegationDurability.prototype.retireZeroDeltaBashActivities is the applier\'s retirement door';
+  const DOOR_EXISTS = 'DelegationDurability.prototype.upkeep is the applier\'s unified retention door';
 
   // The lane is never primed here: with the stock on disk the lane's very first pass is also its first pass in its UTC hour (the hour 10
   // of NOW), and that pass is the one whose hourly slot retires; `primed()` would spend the slot at PRIMED_AT in NOW's hour first.
@@ -4876,7 +4922,7 @@ describe('the zero-delta retirement in the lane (D-6268): one call of the applie
     expect(rowOf(afterFirst, 'toolu_k1'), 'after pass 1 the disk checkpoint lacks K1\'s row').toBeUndefined();
     expect(mappedOf(afterFirst, 'toolu_k1'), 'and K1\'s natural-key mapping').toBe(false);
     for (const kept of ['toolu_k2', 'toolu_k3', 'toolu_k6']) expect(rowOf(afterFirst, kept), `${kept} is not a zero-delta call: kept`).toBeDefined();
-    expect(door.log[1]!.out, 'pass 3 retired nothing and wrote nothing').toEqual({ retired: 0, applied: null });
+    expect(door.log[1]!.out, 'pass 3 retired nothing and wrote nothing').toEqual({ intervalsChanged: false, cursorsDropped: 0, cursorsUnparseable: 0, retired: 0, applied: null });
     expect(door.log[1]!.revisionAfter, 'and moved no revision').toBe(door.log[1]!.revisionBefore);
     expect(rowOf(disk(w.home).checkpoint, 'toolu_k1'), 'K1 does not come back').toBeUndefined();
   });
@@ -4887,8 +4933,8 @@ describe('the zero-delta retirement in the lane (D-6268): one call of the applie
     seedStock(w, bFixture());
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const plan = vi.spyOn(policy, 'planDelegationReconciliation');
-    const spy = vi.spyOn(DelegationDurability.prototype as unknown as { retireZeroDeltaBashActivities: Door }, DOOR).mockRejectedValue(new Error('disk full'));
-    const failed = (): string[] => warn.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith('ccrc-server: the delegation zero-delta retirement failed'));
+    const spy = vi.spyOn(DelegationDurability.prototype, DOOR).mockRejectedValue(new Error('disk full'));
+    const failed = (): string[] => warn.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith('ccrc-server: delegation upkeep failed:'));
     await censusPass(w, NOW, { demo: [] });
     expect(spy, 'pass 1 called the door').toHaveBeenCalledTimes(1);
     expect(failed(), 'one warn line names the failure').toHaveLength(1);
@@ -4911,8 +4957,8 @@ describe('the zero-delta retirement in the lane (D-6268): one call of the applie
     // An ARRAY compare over the lane method's calls, by symbol (not a literal pin over watch.ts's text).
     let names: string[] | null = null;
     let why = '';
-    try { names = callsIn(symbolOf('server/src/watch.ts', 'DelegationLane.retireZeroDelta')).map((c) => c.name ?? c.callee); } catch (err) { why = err instanceof Error ? err.message : String(err); }
-    expect(names, `DelegationLane.retireZeroDelta is a method of the lane (${why})`).not.toBeNull();
+    try { names = callsIn(symbolOf('server/src/watch.ts', 'DelegationLane.upkeep')).map((c) => c.name ?? c.callee); } catch (err) { why = err instanceof Error ? err.message : String(err); }
+    expect(names, `DelegationLane.upkeep is a method of the lane (${why})`).not.toBeNull();
     expect(names, 'the lane method calls the applier\'s door').toContain(DOOR);
     expect(names, 'and never applyCheckpointChange').not.toContain('applyCheckpointChange');
   });

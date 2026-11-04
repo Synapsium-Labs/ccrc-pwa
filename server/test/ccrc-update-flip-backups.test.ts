@@ -11,6 +11,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync, lstatSync, chmodSync, readdirSync, appendFileSync, rmSync, symlinkSync, openSync, closeSync, constants as fsConstants } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { ccrcSettingsNames } from './ccrcSettingsLine.js';
 import { assertNoRealTool, CONTAINED_TOOLS } from './containedTools.js';
 import { itLinux } from './platformFixtures.js';
 import { installVersionedTree, keepDigest } from './installTreeFixture.js';
@@ -1202,6 +1203,17 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
       expect(body('_bak_prune'), '_bak_prune').toMatch(/^ +_bak_keepset(\s|$)/m);
       expect(src.split('[ -f "$d/coord.db" ]').length - 1, 'a bare coord.db test would discard a sidecar-only snapshot').toBe(0);
       expect(src.split('_bak_snap_class "$d"').length - 1, 'the classifier is asked in one place').toBe(1);
+      // The one other place a backup dir's coord.db is named by a variable path is `ccrc settings`' display-only `withData` count
+      // (D-6914): a regular, non-symlink file, read by no keep, thin or prune decision, so not worth `_bak_snap_class`'s node run. It is
+      // named here. What this counts, and no more: the spelling `="$d/coord.db"` once in ccd/ccrc, inside `cmd_settings` under its
+      // LEGITIMATELY DIFFERENT comment, and one `[ -f "$db" ]`. A second copy written with another variable passes it; this is a guard
+      // against the spelling spreading, not a proof that no other site names a backup's coord.db.
+      expect(src.split('="$d/coord.db"').length - 1, 'one variable spelling of a backup dir\'s coord.db').toBe(1);
+      const settingsBody = body('cmd_settings');
+      expect(settingsBody, 'and it is inside cmd_settings').toContain('db="$d/coord.db"');
+      expect(settingsBody, 'under a comment recording D-6914 and the reason').toMatch(/# LEGITIMATELY DIFFERENT \(D-6914;[\s\S]*display-only count[\s\S]*\n +db="\$d\/coord\.db"/);
+      expect(src.split('[ -f "$db" ]').length - 1, 'and it is tested once').toBe(1);
+      expect(body('_bak_snap_class'), '_bak_snap_class does not spell it').not.toContain('/coord.db');
     });
 
     it('_bak_gc and _bak_prune spell no keep clause of their own: each calls _bak_removable, and the filter is written once (R14(a), D-5318)', () => {
@@ -2814,7 +2826,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       });
 
       it('W24-P5: no unit or detached argv carries a CCRC_ setting, so the reader\'s file read is the only source', () => {
-        for (const unit of ['ccrc-update-watchdog.service', 'ccrc-models.service']) {
+        for (const unit of ['ccrc-update-watchdog.service', 'ccrc-models.service', 'ccrc-settings.service']) {
           const text = readFileSync(join(REPO, 'deploy', 'systemd', unit), 'utf8');
           expect(text, unit).not.toMatch(/^EnvironmentFile=/m);
           expect(text.split('\n').filter((l) => /^Environment=.*CCRC_/.test(l)), unit).toEqual([]);
@@ -2833,8 +2845,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
 
   describe('W24: ccrc reads its own settings through _ccrc_knob — the environment, else the box\'s ccrc.env, else the default (D-6587, D-6589)', () => {
     /** D-6588's names, parsed from ccd/ccrc's one CCRC_SETTINGS line and never typed here; with no such line every row reds by this name. */
-    const SETTINGS: readonly string[] = /^CCRC_SETTINGS=\(([A-Z0-9_ ]+)\)$/m.exec(readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'))?.[1]?.split(' ')
-      ?? ['CCRC_SETTINGS_LINE_MISSING'];
+    const SETTINGS: readonly string[] = ccrcSettingsNames(readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8')) ?? ['CCRC_SETTINGS_LINE_MISSING'];
     const KEEPS = SETTINGS.filter((k) => k.endsWith('_KEEP'));
     const ECHO = 'echo "rc $? val ${KNOB} from ${KNOB_FROM} why ${KNOB_WHY}"';
     const KEEP_ECHO = 'echo "rc $? keep ${KEEP} why ${KEEP_WHY}"';

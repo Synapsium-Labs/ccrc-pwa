@@ -1999,8 +1999,10 @@ describe('SettingsScreen — a malformed /api/updates element does not blank the
     };
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const region = await t7Mount(raw as unknown as UpdatesView);
-    expect(within(region).getByText('fleet')).toBeInTheDocument();
-    expect(within(region).getByText('server')).toBeInTheDocument();
+    // The Nodes card, not the page: the Box settings card (D-6917) names each node too.
+    const nodes = within(region).getByRole('region', { name: 'Nodes' });
+    expect(within(nodes).getByText('fleet')).toBeInTheDocument();
+    expect(within(nodes).getByText('server')).toBeInTheDocument();
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
   });

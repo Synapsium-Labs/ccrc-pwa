@@ -282,6 +282,11 @@ export const SETTINGS_CARDS = {
       purpose: 'Which release the fleet runs, the releases it can move to, and when the server last looked for new ones.',
     },
     nodes: { scope: SETTINGS_SCOPE.fleet, title: 'Nodes', purpose: UPDATES_TEXT.nodesLead },
+    /** D-6917: what each box reported about its own settings (spec 2026-10-25 §2.5), read-only. */
+    boxSettings: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Box settings',
+      purpose: "Each node's update and backup settings as reported by the box, with where each value came from.",
+    },
     policy: {
       scope: SETTINGS_SCOPE.fleet, title: 'Update policy',
       purpose: 'Which releases count as newest, and whether the server installs them by itself.',

@@ -24,7 +24,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
-import { buildDist, openApp, removeDist, serveDist, type AppFixture, type DistServer } from './app';
+import { openApp, serveDist, sharedDist, type AppFixture, type DistServer } from './app';
 import { GROUP_MODE_KEY } from '../src/skins/instrument/FleetTable';
 import { withRunBinding } from '../test/runBindingFixture';
 
@@ -122,7 +122,7 @@ let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
@@ -130,7 +130,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await server?.close();
-  removeDist(dist);
 });
 
 async function open(skin: string, theme: string, width: number, touch = false) {
@@ -341,7 +340,7 @@ describe.each(SKINS)('the programme view, opened from the chip in %s', (skin) =>
           expect(m.pending).toBe('spec update pending (PR #77)');
           expect(m.pendingRatio, 'a pending change on the attention tint').toBeGreaterThanOrEqual(4.5);
           expect(m.specLink).toBe('/docs/project-a/specs/2026-10-31-billing-design.md');
-          expect(m.itemLink, 'the change that came from item 3 links to it').toBe('/waiting/3');
+          expect(m.itemLink, 'the change that came from item 3 links to it').toBe('/waiting/3?from=programme%3Abilling'); // naming this view as the list it came from (plan PL9)
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();

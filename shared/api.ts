@@ -12,6 +12,7 @@ import type { Hue, RosterKindWire } from './roster.js';
 import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
+import type { ReadFailure } from './agent-protocol.js';
 import type { WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
@@ -9820,9 +9821,10 @@ export function isRequestKind(v: unknown): v is RequestKind {
  *  a new seam). A token outside the list reads `unreadable`.
  *
  *  ITS TWO FAILURE WORDS ARE `ReadFailure`'s (`shared/agent-protocol.ts`),
- *  widened by `ok` and `malformed`. This file cannot import that type (its
- *  three type-only imports are pinned, `peers-claims-l0.test.ts`), so the
- *  union is DERIVED from the array rather than restated beside it, and
+ *  widened by `ok` and `malformed`. The union predates this file's type-only
+ *  `ReadFailure` import, which carries the box settings' failure words (D-6916;
+ *  it is erased, and `peers-claims-l0.test.ts` pins the import list); it stays
+ *  DERIVED from the array rather than restated beside it, and
  *  `update-states.test.ts` holds `Exclude<StampRead, 'ok' | 'malformed'>`
  *  EQUAL to `ReadFailure` at compile time: a third read-failure word added
  *  there is a type error here until this list names it too. */
@@ -9927,6 +9929,64 @@ export interface NodeReportWire {
 }
 /** The lease (§6 lease columns). `target` outlives `state` returning to `idle`. */
 export interface NodeUpdateWire { state: UpdateState; target: string | null; startedAt: number | null; detail: string | null }
+/** Box settings view (D-6914, D-6916, D-7861): what `ccrc settings --write` records as `~/.ccrc/box-settings.json`, and the console's
+ *  reading of it. Each vocabulary is spelled ONCE here as a named union with its `Record<..., true>` map (`SESSION_ROLE_MAP`'s idiom:
+ *  a member added to the union with no key fails loudly, and the list below derives from the map). `server/test/box-settings-read.test.ts`
+ *  holds the state, source and reader words, and the seven keys, equal in both directions to the literals `cmd_settings` in `ccd/ccrc`
+ *  emits, since bash cannot import them. */
+export type BoxSettingState = 'ok' | 'refused' | 'unmeasured';
+const BOX_SETTING_STATE_MAP: Record<BoxSettingState, true> = { ok: true, refused: true, unmeasured: true };
+export const BOX_SETTING_STATES: readonly BoxSettingState[] = Object.keys(BOX_SETTING_STATE_MAP) as BoxSettingState[];
+
+/** Where a setting's value came from: `_ccrc_knob`'s `KNOB_FROM` words. */
+export type BoxSettingSource = 'environment' | 'file' | 'empty' | 'default';
+const BOX_SETTING_SOURCE_MAP: Record<BoxSettingSource, true> = { environment: true, file: true, empty: true, default: true };
+export const BOX_SETTING_SOURCES: readonly BoxSettingSource[] = Object.keys(BOX_SETTING_SOURCE_MAP) as BoxSettingSource[];
+
+/** Which environment the verb read: the timer's own run, or an interactive shell's (which can disagree with the card). */
+export type BoxSettingsReader = 'timer' | 'shell';
+const BOX_SETTINGS_READER_MAP: Record<BoxSettingsReader, true> = { timer: true, shell: true };
+export const BOX_SETTINGS_READERS: readonly BoxSettingsReader[] = Object.keys(BOX_SETTINGS_READER_MAP) as BoxSettingsReader[];
+
+/** Every way a node's settings can fail to be shown (spec 2026-10-25 §2.4). The list is closed: the console reads any other word as
+ *  unrecognised, never as one of these. The file-read pair is `ReadFailure`'s, DERIVED, never respelled (`single-definition`'s "one
+ *  absent/unreadable read vocabulary"). `unmeasured` is the server holding NO read of the node since it started (D-7874: "unmeasured
+ *  is not unset", D-6365); `unreadable` is only a read that was tried and failed. */
+export type BoxSettingsFailure = ReadFailure | 'not-supported' | 'caps-unmeasured' | 'too-large' | 'malformed' | 'clock-ahead' | 'unmeasured';
+const BOX_SETTINGS_FAILURE_MAP: Record<BoxSettingsFailure, true> = {
+  'not-supported': true, 'caps-unmeasured': true, absent: true, unreadable: true, 'too-large': true, malformed: true, 'clock-ahead': true,
+  unmeasured: true,
+};
+export const BOX_SETTINGS_FAILURES: readonly BoxSettingsFailure[] = Object.keys(BOX_SETTINGS_FAILURE_MAP) as BoxSettingsFailure[];
+
+/** The seven settings the snapshot lists, in the order the verb writes them (D-7861: the verb's own list, the first seven of
+ *  `CCRC_SETTINGS`, not a walk of it). */
+export const BOX_SETTINGS_KEYS = [
+  'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_UPDATE_HEALTH_S', 'CCRC_UPDATE_DEADLINE_MS',
+  'CCRC_RELEASE_BASE_URL', 'CCRC_MODELS_ADVANCE_BUDGET_S',
+] as const;
+export type BoxSettingKey = typeof BOX_SETTINGS_KEYS[number];
+
+/** One setting. `value` is what the act uses (ok) or the raw knob (refused); `why` is display text only: nothing branches on it. */
+export type BoxSettingRow =
+  | { key: BoxSettingKey; state: 'ok'; value: string; from: BoxSettingSource }
+  | { key: BoxSettingKey; state: 'refused'; value: string; from: BoxSettingSource; why: string }
+  | { key: BoxSettingKey; state: 'unmeasured'; why: string };
+/** The backups line and the disk line: measured, or why not. */
+export type BoxSettingsBackups = { state: 'ok'; kept: number; withData: number; bytes: number } | { state: 'unmeasured'; why: string };
+export type BoxSettingsDisk = { state: 'ok'; availBytes: number; sizeBytes: number } | { state: 'unmeasured'; why: string };
+/** `~/.ccrc/box-settings.json`, version 1 (`cmd_settings`). Every string is printable ASCII, at most 512 characters; every number a
+ *  non-negative safe integer. */
+export interface BoxSettingsDoc {
+  v: 1; at: number; reader: BoxSettingsReader; settings: BoxSettingRow[];
+  deadline: { plainMs: number; minMs: number; maxMs: number };
+  backups: BoxSettingsBackups; disk: BoxSettingsDisk;
+}
+/** `NodeWire.settings`: the document with its age at the request's clock, or the word for why none is shown. */
+export type BoxSettingsRead =
+  | { state: 'ok'; doc: BoxSettingsDoc; ageS: number; stale: boolean }
+  | { state: BoxSettingsFailure };
+
 /** One node of the inventory (§6 `nodes`, §12). `agentOps` NULL = no agent by
  *  construction (the server's own row); `[]` = an agent too old to say.
  *  `floorRead`/`previousRead` (fix round 2, R4): the STORED read-state
@@ -9956,6 +10016,9 @@ export interface NodeWire {
   request: NodeRequestWire | null;
   report: NodeReportWire | null;
   update: NodeUpdateWire;
+  /** The node's box settings as the box reported them (D-6916). ADDITIVE and OPTIONAL: an older server omits it, and so does one
+   *  with no watcher; the field's one reader on the console tells that from every word of `BoxSettingsRead`. */
+  settings?: BoxSettingsRead;
 }
 /** One intent row (§6 `update_intent`); `scope` is `FLEET_SCOPE` or a node id. */
 export interface UpdateIntentWire {
@@ -11290,6 +11353,19 @@ export const SERVER_CAPS_FILE = 'server-caps';
  *  periods of the one-minute writers, so one missed write never turns an arm off. A server rolled back below a word
  *  turns its arm off within this lease on a `server` or `both` node (an older server never rewrites the file). */
 export const SERVER_CAPS_LEASE_S = 180;
+
+/** The period, in seconds, of the box settings timer: `deploy/systemd/ccrc-settings.timer`'s `OnUnitActiveSec` (D-6915), which a
+ *  test reads back from the unit file. The record `ccrc settings --write` leaves in `~/.ccrc/box-settings.json` is as old as this
+ *  at most while the timer runs, so a reader that judges one stale does so in multiples of it. */
+export const BOX_SETTINGS_TIMER_S = 300;
+
+/** How old a record may be, in seconds by the console's clock, before the card marks it stale: three timer periods, so one missed
+ *  write never turns it amber. */
+export const BOX_SETTINGS_STALE_S = 3 * BOX_SETTINGS_TIMER_S;
+
+/** How far ahead of the console's clock a record's `at` may be before the console shows no settings (`clock-ahead`): a separate
+ *  safety bound, not tied to the timer's period. */
+export const BOX_SETTINGS_CLOCK_AHEAD_S = 300;
 
 /** One word's grammar. The file is three `\n`-terminated lines: `at <1–11 digits>` (unix seconds, the writer's
  *  clock), `caps` followed by zero or more words separated by single spaces, `end`. */

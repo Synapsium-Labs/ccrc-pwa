@@ -1611,6 +1611,47 @@ describe('ccrc doctor: services knows about the update-watchdog timer', () => {
 });
 
 
+describe('ccrc doctor: services knows about the box settings timer', () => {
+  // D-6915: `ccrc-settings.timer` joins `known`, hand-kept until ARCH-69 derives the list. A stopped timer WARNs, naming the
+  // unit: the console keeps showing the last record it read, which the card marks stale after 15 minutes.
+  itLinux('warns, naming the unit, when the settings timer is installed and stopped', () => {
+    const home = healthy('ccrc-doctor-services-settings-');
+    writeUnitFile(home, 'ccrc-settings.timer');
+    writeFileSync(join(home, 'fixture-unit-ccrc-settings.timer'), 'inactive\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccrc-settings.timer is installed but inactive');
+    expect(lines[i]).toContain('ccrc-settings.timer');
+    expect(lines[i]).not.toContain('every five minutes');
+    expect(lines[i]).not.toContain('the job it fires is not running');
+    // The console DOES mark the figures old (stale after 900 s, review 1385 A1): the sentence says so, and never says nothing does.
+    expect(lines[i]).toContain('the console keeps showing the last settings it read, marked stale after 15 minutes');
+    expect(lines[i]).not.toContain('nothing marks');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccrc-settings\.timer$/);
+    expect(r.stdout).not.toMatch(/the check exited/);
+    expect(r.code).toBe(0);
+  });
+
+  itLinux('names it in the PASS line when it is installed and running', () => {
+    const home = healthy('ccrc-doctor-services-settings-ok-');
+    writeUnitFile(home, 'ccrc-settings.timer');
+    writeFileSync(join(home, 'fixture-unit-ccrc-settings.timer'), 'active\n');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).toContain('ccrc-settings.timer is active');
+  });
+
+  it('a box without the unit is never asked about it — no count moves', () => {
+    const home = healthy('ccrc-doctor-services-settings-absent-');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).not.toContain('ccrc-settings');
+  });
+});
+
+
 describe('ccrc doctor: services knows about the update-sync timer', () => {
   // programme wave 4 (design 2026-09-20 §9): `ccd-update-sync.timer` joins
   // `known` on `ccd-pool-sync.timer`'s own ruling — a stopped puller is

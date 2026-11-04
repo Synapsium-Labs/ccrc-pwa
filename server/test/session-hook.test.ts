@@ -5690,8 +5690,8 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
   // non-empty string `path` | measured as NO set — `measure` runs without
   // `--set`, so `scope`/`cited`/`setSize` **and all six provenance fields**
   // are null". Only the first disjunct was implemented. The `norm` decision
-  // (`ccd/session-hook.sh:1619-1632`) consults `aged`, `.overlap` and
-  // `NORMAL_PROVENANCE`, and `NORMAL_PROVENANCE` (`ccd/session-hook.sh:2348`)
+  // (`ccd/session-hook.sh#@compact-post-norm`) consults `aged`, `.overlap` and
+  // `NORMAL_PROVENANCE`, and `NORMAL_PROVENANCE` (`ccd/session-hook.sh#NORMAL_PROVENANCE`)
   // validates trigger/scope/agent/transcript/parentLive/liveAgents/cwd/built
   // and never looks at `files` — so a set carrying valid provenance and ONE
   // malformed entry was passed with `--set` and the record committed
@@ -6652,7 +6652,7 @@ describe('the compaction card — every canonical write is on the list (spec §5
    *    renumbering, so citations to (3)–(16) stay true; this list simply does
    *    not carry it, and the equality is over (1) and (3)–(17).
    *  - Entry (17) was on NO §5 entry and IS produced by the filter:
-   *    `_reg_generation_read`'s `link "$p" "$al"` (`ccd/ccd:1870`), the
+   *    `_reg_generation_read`'s `link "$p" "$al"` (`ccd/ccd#_reg_generation_read`), the
    *    ccd-side twin of entry (16)'s hook-side generation-read alias, a `link`
    *    whose SOURCE names canonical. §5 enumerated the hook's and not ccd's;
    *    fix round 1 ADDED it there (D-2757), so the list below is now the
@@ -7183,7 +7183,7 @@ describe.skipIf(process.platform === 'darwin')('the compaction card — the firs
   }, 60_000);
 
   // THE RESIDUE SCENARIO (closing gate I1). The sweep loop's per-iteration
-  // `rm -f "$cand"` (`ccd/session-hook.sh:1458`) is the one member of this
+  // `rm -f "$cand"` (`ccd/session-hook.sh#@compact-sweep-rm`) is the one member of this
   // section neither scenario above can see: both leave the registry free of
   // AGED family residue, so `$aged` is empty, the loop body never runs, and a
   // child that costs one `execve` per swept candidate contributes nothing to
@@ -7196,7 +7196,8 @@ describe.skipIf(process.platform === 'darwin')('the compaction card — the firs
   // is one fork for two candidates, and it is the obvious optimisation here —
   // so the property worth pinning is that the count RISES WITH THE WORK.
   // The residue is `.stage` temp family, deliberately not `compactpost.*.claim`:
-  // the overlap `find` at `:1433` reads that second name, and although it
+  // the overlap `find` (`ccd/session-hook.sh#@compact-pre-overlap-find`)
+  // reads that second name, and although it
   // reads it YOUNG-only and aged residue could not flip the verdict, a fixture
   // whose planted file is also an input to the scope decision would couple two
   // measurements that have no business being coupled.

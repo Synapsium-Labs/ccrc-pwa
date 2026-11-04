@@ -5,7 +5,7 @@ import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { ANSI_HUE_TOKEN } from '../src/lib/ansi';
 import { resolveChrome } from './harness';
-import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 
 const VIEWS: AppView[] = [REFINED, INSTRUMENT].flatMap((skin) => [PHOSPHOR, 'light'].flatMap((theme) =>
   [360, 390, 1280, 1920].map((width) => ({ skin, theme, width }))));
@@ -46,11 +46,11 @@ let server: DistServer | undefined;
 let browser: Browser | undefined;
 beforeAll(async () => {
   const executablePath = resolveChrome();
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
-afterAll(async () => { await browser?.close(); await server?.close(); removeDist(dist); });
+afterAll(async () => { await browser?.close(); await server?.close(); });
 
 describe('an expanded Bash card shows its command and output in palette hues on the well, no escape byte visible, no sideways scroll', () => {
   for (const view of VIEWS) {

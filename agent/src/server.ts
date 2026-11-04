@@ -548,7 +548,7 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       // unchanged, whether or not `~/.ccrc` itself happens to be
       // independently admitted (e.g. `~/.ccrc` itself under another prefix):
       // only when the request literally names `<canonical
-      // ~/.ccrc>/<one of the nine basenames>` does the subject become that
+      // ~/.ccrc>/<one of the NODE_FILES basenames>` does the subject become that
       // literal path directly, never the parent-probe fallback. The basename
       // check runs FIRST — a cheap array lookup — so the two `canonicalize`
       // calls (realpath walks) below run only when it can possibly matter,

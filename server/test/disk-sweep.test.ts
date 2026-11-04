@@ -34,8 +34,8 @@ function watcherWith(answers: MeasuredDisk[]): { watcher: FleetWatcher; calls: (
   return { watcher, calls: () => n };
 }
 
-/** `sweepDisk` has a 60 s clock; rewind it so the next call measures. */
-const rewind = (w: FleetWatcher): void => { (w as unknown as { diskAlarm: { lastSweep: number } }).diskAlarm.lastSweep = 1; };
+/** `sweepDisk` has a 60 s clock, the `diskAlarm` row (D-7895); kick it so the next call measures. */
+const rewind = (w: FleetWatcher): void => { w.kick('diskAlarm'); };
 
 describe('sweepDisk — the watcher holds the verdict', () => {
   it('the block is absent before the first sweep', () => {

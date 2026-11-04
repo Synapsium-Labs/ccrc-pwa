@@ -31,6 +31,19 @@
 // THE GRID FITS ITS COLUMN. The rows sit in a size container, so a narrow
 // sidebar drops the reset columns (the 7d one first, then the 5h one) rather
 // than drawing past its edge; each reset stays in the row's name.
+//
+// THE ROW IS NAMED BY WHAT IT SHOWS (WCAG 2.5.3, D-7897). A voice user says the
+// words they see, so those words must be in the name. An `aria-label` sentence
+// could never hold them: axe-core 4.14 wants a label's visible text as ONE
+// unbroken run of its name, and a row of cells under column heads reads
+// `lane-a 22% 2h 10m 41% 3d 4h`, which no sentence says. So the name is the
+// row's own content, in order — the name, each reading, the note — with the
+// words a listener needs between them (`5h`, `used`, `resets in`) in
+// screen-reader-only spans. The reset cells are `aria-hidden` and their words
+// ride in that text, because the narrow tiers hide the cells and the name must
+// not lose them; `↻` and `—` are pictures, said in words. The whitespace-only
+// text nodes between the cells are never drawn by the grid, and they keep two
+// cells from being read as one word.
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { cn } from '../lib/cn';
@@ -94,10 +107,12 @@ function reading(w: WorkbenchUsageWindow): string {
   return `${Math.round(w.pct)}%`;
 }
 
-/** What the row's name says for one window, in words. */
-function spoken(name: WindowName, w: WorkbenchUsageWindow): string {
-  const fact = w.rolledOver === true ? 'reset' : w.pct === null ? 'never measured' : `${Math.round(w.pct)}% used`;
-  return `${name} ${fact}, resets in ${w.reset}`;
+/** The words the row's name says after a window's reading: what the cell
+ *  cannot show, and the reset, which a narrow tier may hide. `reset` is its own
+ *  whole fact, so its words follow it straight, comma first. */
+function afterReading(w: WorkbenchUsageWindow): string {
+  const fact = w.rolledOver === true ? '' : w.pct === null ? 'never measured' : 'used';
+  return `${fact}, resets in ${w.reset}`;
 }
 
 /** The two hottest live windows at ≥ 75 %, hottest first. Pure.
@@ -118,34 +133,45 @@ export function hottestWindows(
   return out.sort((x, y) => y.pct - x.pct).slice(0, n);
 }
 
-/** One window's three cells: the meter, the reading, the reset. */
-function Win({ name, w, off }: { name: WindowName; w: WorkbenchUsageWindow; off: boolean }): ReactNode {
+/** One window's three cells — the meter, the reading, the reset — and the
+ *  words its name says around them. `lead` is said before the reading (`— 5h`,
+ *  `7d`) and `tail` after the reset (`;` when more follows). */
+function Win({ name, w, off, lead, tail }: {
+  name: WindowName; w: WorkbenchUsageWindow; off: boolean; lead: string; tail: string;
+}): ReactNode {
   const pct = liveFill(w);
+  const after = afterReading(w);
   return (
     <>
+      {' '}
+      <span className="sr-only">{lead}</span>
       <Meter pct={w.rolledOver === true ? null : w.pct} band={pct === null ? 'none' : limitBand(pct)} off={off} />
-      <span className="wb-acct-pct">{reading(w)}</span>
-      <span className="wb-acct-reset" data-win={name}>{`↻ ${w.reset}`}</span>
+      {' '}
+      {/* `—` is a picture of "never measured", which the words after it say. */}
+      <span className="wb-acct-pct" aria-hidden={w.pct === null && w.rolledOver !== true ? 'true' : undefined}>
+        {reading(w)}
+      </span>
+      {after.startsWith(',') ? null : ' '}
+      <span className="sr-only">{`${after}${tail}`}</span>
+      <span className="wb-acct-reset" data-win={name} aria-hidden="true">{`↻ ${w.reset}`}</span>
     </>
   );
 }
 
 function Row({ a, onOpen }: { a: WorkbenchAccountItem; onOpen: (id: string) => void }): ReactNode {
   const off = a.off === true;
-  const label = `${a.name} — ${spoken('5h', a.five)}; ${spoken('7d', a.seven)}${a.note ? `; ${a.note.text}` : ''}`;
   return (
     <button
       type="button"
       className={cn('wb-acct-row', FOCUS_RING)}
       data-acct={a.hue ?? 'unknown'}
-      aria-label={label}
       onClick={() => onOpen(a.id)}
     >
       <span className="wb-acct-hue" data-off={off ? 'true' : undefined} aria-hidden="true" />
       <span className="wb-acct-name">{a.name}</span>
-      <Win name="5h" w={a.five} off={off} />
-      <Win name="7d" w={a.seven} off={off} />
-      {a.note && <span className="wb-acct-note" data-tone={a.note.tone}>{a.note.text}</span>}
+      <Win name="5h" w={a.five} off={off} lead="— 5h" tail=";" />
+      <Win name="7d" w={a.seven} off={off} lead="7d" tail={a.note ? ';' : ''} />
+      {a.note && <>{' '}<span className="wb-acct-note" data-tone={a.note.tone}>{a.note.text}</span></>}
     </button>
   );
 }

@@ -29,7 +29,7 @@ const inSymbol = (name: string) => (q: { file: string; start: number }) => {
   const s = symbolOf(STORE, name);
   return q.file.endsWith(STORE) && q.start >= s.start && q.start < s.end;
 };
-/** Migration 38 (and any later one) is DDL and the overlay's one seed row, in `schema.ts` template text that the
+/** Migration 39 (and any later one) is DDL and the overlay's one seed row, in `schema.ts` template text that the
  *  statement scanner splits into several rows: it is not a runtime writer. The scan leaves that ONE file out, and a
  *  test below pins what it may hold, so the exclusion is narrow and checked rather than a weakened writer query. */
 const SCHEMA = 'server/src/coord/schema.ts';

@@ -289,7 +289,7 @@ describe('the move: nothing lost, nothing twice', () => {
 // purpose line, in §3.3's order.
 describe('the cards: scope and purpose, in order (spec §3.3)', () => {
   const ORDER: Record<string, readonly string[]> = {
-    updates: ['Fleet version', 'Nodes', 'Update policy'],
+    updates: ['Fleet version', 'Nodes', 'Box settings', 'Update policy'],
     appearance: ['Layout and theme'],
     notifications: ['Push notifications', 'Release announcements'],
     automation: ['Stall watch', 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Roll idle sessions', 'Backups', 'Test box'],

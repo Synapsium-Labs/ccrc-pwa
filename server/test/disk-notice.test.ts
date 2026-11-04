@@ -150,7 +150,8 @@ async function rig(home: string, answers: MeasuredDisk[], now: () => number) {
   const deps = { ...testDeps(home), io, coord, notifyLog, push, viewers: { isVisible: () => false } };
   vi.spyOn(Date, 'now').mockImplementation(now);
   const watcher = new FleetWatcher(deps as never, new Bus());
-  const rewind = (): void => { (watcher as unknown as { diskAlarm: { lastSweep: number } }).diskAlarm.lastSweep = 1; };
+  // The beat's 60 s clock is the `diskAlarm` row (D-7895): kick it so every `sweep` measures.
+  const rewind = (): void => { watcher.kick('diskAlarm'); };
   const sweep = async (): Promise<void> => { rewind(); await watcher.sweepDisk(); };
   return { watcher, coord, push, sweep };
 }

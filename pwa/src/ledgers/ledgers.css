@@ -133,6 +133,47 @@
 .wi-card .wi-hint { margin: 0; font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .wi-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
 
+/* A decide item's recommended option (desktop-polish PL9; spec §3.2, D24). The mark is the word "Recommended", inside
+   the option's own row, on the accent tint the Settings palette chooser draws its chosen card on (ink on `--accent-tint`), so
+   it adds no new pair; the row's own edge turns to the accent (a non-text edge). The reasons sit above the choices, on the card's
+   surface with an accent rule, so they are read before the pick. Nothing is read out of colour alone. */
+.wi-act .wi-opt:has(.wi-rec) { border-color: var(--accent); }
+.wi-act .wi-opt-text { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; overflow-wrap: anywhere; }
+.wi-act .wi-rec {
+  display: inline-flex; align-items: center; padding: 0 var(--sp-2); border: 1px solid var(--accent); border-radius: var(--r-full);
+  font: var(--weight-medium) var(--fs-2xs) / 1.6 var(--family-mono); background: var(--accent-tint); color: var(--ink-primary); white-space: nowrap;
+}
+.wi-act .wi-why-rec {
+  display: grid; gap: var(--sp-1); padding: var(--sp-2); border-left: 3px solid var(--accent); border-radius: var(--r-md);
+  background: var(--bg-surface); color: var(--ink-primary); min-width: 0;
+}
+
+/* Moving between items (desktop-polish PL9; spec §2, D23). The strip above an item: its way back to the list it was opened
+   from, and the position with Previous and Next. Every control is a design-system button (`min-h-tap`, the 44 px floor under a
+   coarse pointer), visible at every width: the shell hides only the back chevron, and this is not one. */
+/* Capped at the item body's own width (`.wi`, 72rem), so on a wide screen the position and the steps end where the item does. */
+.wi-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; max-width: 72rem;
+  padding: var(--sp-2) var(--sp-2) 0; background: var(--bg-page); color: var(--ink-primary);
+}
+/* The buttons are flex boxes, which drop a space beside the glyph: the gap is that space. */
+.wi-nav .wi-back,
+.wi-nav .wi-step { gap: var(--sp-1); }
+.wi-nav .wi-back-name { overflow-wrap: anywhere; text-align: left; }
+.wi-nav .wi-steps-nav { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); margin-left: auto; min-width: 0; }
+.wi-nav .wi-pos { font-family: var(--family-mono); font-size: var(--fs-xs); background: var(--bg-page); color: var(--ink-secondary); white-space: nowrap; }
+/* The open item has left the list while shown: said in words, on a line of its own under the strip, never by colour alone. */
+.wi-nav .wi-left { flex-basis: 100%; margin: 0; font-size: var(--fs-meta); background: var(--bg-page); color: var(--ink-secondary); overflow-wrap: anywhere; }
+
+/* On a desk the list an item was opened from stays beside it, in the frame's own left column (`ItemListColumn`, which the
+   frame's nav slot draws on the item route in place of the fleet), as the fleet stays beside an open session. Its rows are the
+   list's own, stacked for the column's width; the open item's row is marked current by an accent ring (a non-text edge, and
+   `aria-current` says it too). */
+.wl-beside { max-width: none; }
+.wl-beside .wl-item { grid-template-columns: minmax(0, 1fr); }
+.wl-beside .wl-item .wl-meta { justify-items: start; }
+.wl-beside .wl-item[aria-current='page'] { box-shadow: inset 0 0 0 2px var(--accent); }
+
 /* The programme view (desktop-polish PL5b, D-7713; the prototype's view 2): the programme's head, Goals on one side and its
    share of the list on the other. GROUNDS, as above: the head and each card state their own ground and ink, so the audit
    measures every pair through the stylesheet. The programme's hue paints its non-text rule on the head, and its NAME ("Programme")

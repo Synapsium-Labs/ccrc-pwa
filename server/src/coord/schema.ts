@@ -2064,6 +2064,21 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE programs ADD COLUMN inShortAt INTEGER;
   `,
   // ── 38: user_version 37 -> 38 ─────────────────────────────────────────────
+  // A decide item's recommendation (plan PL9, spec 2026-10-31 §3.2, D24): `operator_items.recommended` is the
+  // 0-based index into `options` of the option the raiser recommends, and `operator_items.recommendedWhy` says why it beats
+  // each alternative. Their ONE writer is `raiseItem` (`ledgersStore.ts`), from a body `parseRaise` has checked: both set on
+  // a `decide` item, both NULL on every other kind. Their readers are `itemById` and `itemsFor`, and the console reads them
+  // through `recommendationOf` (`shared/ledgers.ts`) alone. An item raised before this entry reads NULL for both, which is
+  // "no recommendation", drawn as before; nothing is guessed into them.
+  //
+  // TWO NULLABLE COLUMNS, NOTHING ELSE: an older build opening a file at `user_version 38` takes rule 3 (it warns, reads
+  // as-is and migrates nothing), and its `SELECT` names columns, never `*`, so it never reads them. Every earlier entry is
+  // frozen. Shared with landing-order 5f by agreement: whichever lands second moves its own entry after the other's.
+  `
+  ALTER TABLE operator_items ADD COLUMN recommended INTEGER;
+  ALTER TABLE operator_items ADD COLUMN recommendedWhy TEXT;
+  `,
+  // ── 39: user_version 38 -> 39 ─────────────────────────────────────────────
   // Landing order wave 5f: the landing line's authority overlay, its journal cursor, a DB-only association witness and
   // the quarantine marker. Nothing here is seeded from `landing_entries`: those ordering columns stay the fallback only.
   //
@@ -2088,9 +2103,9 @@ export const MIGRATIONS: readonly string[] = [
   // `landing_entries.quarantineKind`: NULL for an ordinary projection, `stale-episode-head` (with `state` `unknown`) for
   // a deliberately quarantined stale pin. Only `advanceLanding` writes or clears it. No existing row is quarantined.
   //
-  // NEW TABLES AND ONE NULLABLE COLUMN, NOTHING ELSE: an older build opening a file at `user_version 38` takes rule 3
+  // NEW TABLES AND ONE NULLABLE COLUMN, NOTHING ELSE: an older build opening a file at `user_version 39` takes rule 3
   // (it warns, reads as-is and migrates nothing) and never names them. Every earlier entry is frozen. RE-MEASURE the
-  // slot before the PR and before merge (it must print 37 before this entry is counted):
+  // slot before the PR and before merge (it must print 38 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

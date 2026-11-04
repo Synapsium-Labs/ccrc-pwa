@@ -46,6 +46,8 @@ export type WorkbenchTerminalView = 'terminal' | 'chat' | 'split';
 
 /** One key of the phone row. `legend` is the picture on the cap (`^C`), hidden
  *  from assistive technology; `label` is its name in words ("Control C").
+ *  The name HOLDS the legend's words (WCAG 2.5.3, D-7897), because a voice user
+ *  says the cap they see: a shortened legend leads it ("Esc (Escape)").
  *  `latch` marks the Ctrl latch, which sends no byte of its own. */
 export interface WorkbenchKey { id: string; legend: string; label: string; latch?: boolean }
 

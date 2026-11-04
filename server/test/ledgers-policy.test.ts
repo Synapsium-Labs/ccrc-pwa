@@ -7,7 +7,7 @@ import {
   ITEM_KINDS, ITEM_STATES, OPEN_ITEM_STATES, ITEM_TRANSITIONS, nextItemState,
   orderItems, waitingCount, programmeWaitsOn, WAITS_ON_WORDS, isSlotSlug, isSpecPath,
   CLEARED_WINDOW_MS, SOON_LABEL_MAX, ITEM_TITLE_MAX, ITEM_TEXT_MAX, ITEM_STEPS_MAX,
-  ITEM_OPTIONS_MAX, ANSWER_MAX,
+  ITEM_OPTIONS_MAX, ANSWER_MAX, recommendationOf,
   type ItemAct, type ItemActor, type ItemState, type ItemView, type NeededBy, type WaitsOn,
 } from '../../shared/ledgers.js';
 import type { RunKind, RunState } from '../../shared/api.js';
@@ -108,7 +108,7 @@ describe('the transition table', () => {
 function item(id: number, state: ItemState, neededBy: NeededBy, raisedAt: number): ItemView {
   return {
     id, program: 'prog-a', runId: null, kind: 'do', title: `t${id}`, why: 'w', how: [], options: null,
-    neededBy, soonLabel: null, state, stale: false, raisedAt, tickedAt: null, closedAt: null,
+    recommended: null, recommendedWhy: null, neededBy, soonLabel: null, state, stale: false, raisedAt, tickedAt: null, closedAt: null,
     answer: null, note: null, secretSlot: null, secretSet: null, history: [],
   };
 }
@@ -210,5 +210,33 @@ describe('isSlotSlug', () => {
     for (const s of ['../a', 'A', 'a/b', '-a', '', 'a'.repeat(41), 'a b', 'a.b']) {
       expect(isSlotSlug(s), JSON.stringify(s)).toBe(false);
     }
+  });
+});
+
+describe('recommendationOf, the one reader of a decide item\'s recommendation (plan PL9, spec §3.2, D24)', () => {
+  const decide = { kind: 'decide' as const, options: ['Library first', 'Keep the order'] };
+  it('answers the option and why for a decide item that names one', () => {
+    expect(recommendationOf({ ...decide, recommended: 1, recommendedWhy: 'Keeping the order costs nothing.' }))
+      .toEqual({ index: 1, why: 'Keeping the order costs nothing.' });
+  });
+  it('an item from a server before PL9 (both fields absent) or raised before the rule (both null) has none: it draws as before', () => {
+    expect(recommendationOf(decide)).toBeNull();
+    expect(recommendationOf({ ...decide, recommended: null, recommendedWhy: null })).toBeNull();
+  });
+  it('every other kind has none, whatever it carries', () => {
+    for (const kind of ['do', 'value', 'secret'] as const) {
+      expect(recommendationOf({ kind, options: ['a', 'b'], recommended: 0, recommendedWhy: 'Because.' }), kind).toBeNull();
+    }
+  });
+  it('an index naming no listed option, or reasons that are not text, mark nothing rather than the wrong option', () => {
+    for (const recommended of [-1, 2, 0.5, Number.NaN]) {
+      expect(recommendationOf({ ...decide, recommended, recommendedWhy: 'Because.' }), String(recommended)).toBeNull();
+    }
+    expect(recommendationOf({ ...decide, recommended: 0, recommendedWhy: '  ' })).toBeNull();
+    // A half row (a corrupt one: the route and the store never write it) marks nothing: an absent index is never option 0.
+    expect(recommendationOf({ ...decide, recommended: null, recommendedWhy: 'Because.' })).toBeNull();
+    expect(recommendationOf({ ...decide, recommendedWhy: 'Because.' })).toBeNull();
+    expect(recommendationOf({ ...decide, recommended: 0, recommendedWhy: 7 as never })).toBeNull();
+    expect(recommendationOf({ ...decide, options: null, recommended: 0, recommendedWhy: 'Because.' })).toBeNull();
   });
 });

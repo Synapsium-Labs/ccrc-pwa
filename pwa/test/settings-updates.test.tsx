@@ -1,6 +1,6 @@
 // Settings › Updates' cards (settings Task R2b2; spec §3.3, §5.1, §15 D7; D-5503): Fleet version, then Nodes, then
-// Update policy, rendered from ONE ordered list (`UPDATES_CARDS`, §15.3 C5's insert point), and the halt line as the
-// first line of Fleet version. Neutral fixtures: nodes labelled fleet and server, tags v0.1.n.
+// Box settings (D-6917; its own cases are box-settings-card.test.tsx), then Update policy, rendered from ONE ordered
+// list (`UPDATES_CARDS`, §15.3 C5's insert point), and the halt line as the first line of Fleet version. Neutral fixtures: nodes labelled fleet and server, tags v0.1.n.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, screen, within } from '@testing-library/react';
 import type { NodeWire, ReleaseWire } from '../../shared/api';
@@ -38,11 +38,11 @@ const cardTitles = (): string[] => screen.getAllByRole('heading', { level: 3 }).
 const card = (title: string): HTMLElement => screen.getByRole('region', { name: title });
 
 describe('Updates: the cards, in order and from one list (D-5503)', () => {
-  it('the cards are Fleet version, Nodes, Update policy, in that order, from one list', async () => {
+  it('the cards are Fleet version, Nodes, Box settings, Update policy, in that order, from one list', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(updatesView({ releases, nodes: fleetAt('v0.1.4') }));
     renderSettings('updates');
     await screen.findByRole('heading', { level: 3, name: 'Update policy' });
-    expect(cardTitles()).toEqual(['Fleet version', 'Nodes', 'Update policy']);
+    expect(cardTitles()).toEqual(['Fleet version', 'Nodes', 'Box settings', 'Update policy']);
     // The one list is what decides it: the rendered order is the list's, mapped through the word table.
     expect(cardTitles()).toEqual(UPDATES_CARDS.map((id) => SETTINGS_CARDS.updates[id].title));
     // Each card holds its own controls: the releases and Check now in Fleet version, the node rows in Nodes, Channel
