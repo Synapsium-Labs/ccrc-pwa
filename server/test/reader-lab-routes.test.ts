@@ -17,7 +17,7 @@ import { DOCS_REQUEST_HEADER } from '../../shared/docs.js';
 import {
   READER_LAB_PROBE_ROUTE, READER_LAB_RUNS_PATH, readerLabProbePath, type LabOpenAnswer, type LabReadAnswer,
 } from '../../shared/readerLab.js';
-import { labOwnerOf } from '../src/readerLab/routes.js';
+import { READER_LAB_PROBE_BODY_MAX, labOwnerOf } from '../src/readerLab/routes.js';
 import { READER_LAB_RUN_HITS_MAX, READER_LAB_RUN_TTL_MS } from '../src/readerLab/runs.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -39,13 +39,15 @@ afterEach(async () => {
 });
 
 /** The real server in a fixture home, the gate armed or dark, with a passphrase so a session can be minted. */
-async function openApp(armed: boolean): Promise<FastifyInstance> {
+async function openApp(armed: boolean, seen?: string[]): Promise<FastifyInstance> {
   const home = mkTmp('ccrc-reader-lab-');
   const base = testDeps(home);
   mkdirSync(path.join(home, '.ccrc'), { recursive: true });
   writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), `${await hashLine(PASSPHRASE, FAST_PARAMS, 1)}\n`, { mode: 0o600 });
   const deps: Deps = { ...base, cfg: { ...base.cfg, authEnabled: armed, cookieSecure: false }, spawnPty: stubPty };
   app = await buildServer(deps);
+  // Fastify runs a route's onError hooks before its errorHandler, so this sees what the probe's errorHandler is handed.
+  if (seen !== undefined) app.addHook('onError', async (_req, _reply, err) => { seen.push((err as { code?: string }).code ?? err.name); });
   await app.ready();
   return app;
 }
@@ -177,6 +179,20 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
     expect([report.statusCode, report.body, big.statusCode, big.body]).toEqual([204, '', 204, '']);
     const run = counted(await readRun(a, nonce));
     expect([run.probes['cookie-beacon'].hits, run.probes['cookie-xhr'].hits]).toEqual([1, 1]);
+  });
+
+  it('a probe POST body over 1 KiB is refused by the route\'s own limit and still answers 204; one under it is not refused (M10.4)', async () => {
+    const seen: string[] = [];
+    const a = await openApp(false, seen);
+    const nonce = await openRun(a);
+    const post = (n: number) => a.inject({ method: 'POST', url: readerLabProbePath(nonce, 'cookie-xhr'),
+      payload: 'x'.repeat(n), headers: { 'content-type': 'text/plain' } });
+    const small = await post(READER_LAB_PROBE_BODY_MAX - 1);
+    expect([small.statusCode, small.body, seen], 'a body under the limit is parsed, not refused').toEqual([204, '', []]);
+    const big = await post(2 * READER_LAB_PROBE_BODY_MAX);
+    expect([big.statusCode, big.body], 'a refused body answers as an accepted one does').toEqual([204, '']);
+    expect(seen, 'the 2 KiB body went through the route\'s error path as a too-large body').toEqual(['FST_ERR_CTP_BODY_TOO_LARGE']);
+    expect(counted(await readRun(a, nonce)).probes['cookie-xhr'].hits).toBe(2);
   });
 
   it('a HEAD to the probe is neither answered as a probe nor counted (refinement (f))', async () => {
