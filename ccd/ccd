@@ -32823,7 +32823,7 @@ _ws_reclaim_head_unborn() {   # workdir branch -> 0 when HEAD is still SYMBOLIC 
   ref=$(git -C "$1" symbolic-ref -q HEAD 2>/dev/null); rc=$?
   if (( rc == 0 )); then
     [[ "$ref" == "refs/heads/$2" ]] || return 1
-    _WS_HEAD_UNBORN_WHY="$1 still has $2 checked out, but $2 is gone — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
+    _WS_HEAD_UNBORN_WHY="$1 still has $2 checked out, but $2 is gone from its repository — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
     return 0
   fi
   (( rc == 1 )) && return 1
