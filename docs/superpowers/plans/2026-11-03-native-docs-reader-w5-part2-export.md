@@ -4304,14 +4304,14 @@ Review run 1401 read the branch at `806224fbe`. The coordinator ruled every item
 - **F1:** the declared layer order now leads with Tailwind's `properties` layer, measured on a production build (`fonts-built.test.ts`). Row W5X-T13-M2.
 - **F2:** the browser config lets `.css?raw` through, and the browser leg asserts the file's `<style>` is `EXPORT_CSS`, 53,151 characters against a floor of 20,000. Row W5X-T13-M3.
 - **A1:** the hostile corpus holds an aligned GFM table. The only `style` attributes in an export are one `text-align` declaration each, on `th`/`td`, valued left, center or right. Row W5X-T13-M4.
-- **A2:** a workspace worktree whose segment holds markup (`wt<b>x`). Its closed label keeps the last segment, so the label `workspace wt<b>x` reaches the banner, the Source fact and the `ccrc:worktree` meta, as text and never as an element, and the path does not. Row W5X-T13-M5.
+- **A2:** a workspace worktree whose segment holds markup (`wt<b>"x`, after review 1405's P1). Its closed label keeps the last segment, so the label `workspace wt<b>"x` reaches the banner, the Source fact and the `ccrc:worktree` meta, as text and never as an element, and the path does not. Row W5X-T13-M5.
 - **A3:** Retry, drawn in the sheet's no-start arm, carries the tap floor class. Row W5X-T13-M6.
 - **A4:** git-failure, ambiguous and untrusted drafts facts, planted in a finished file, leave none of their detail or paths in it. A page failure's `stderrHead` has no route into an export input, so the case plants the one git detail a tree carries, `unreadable.detail`. Row W5X-T13-M7.
 - W5X-T13-M1's line now names five layers, so the row was re-measured at the end state.
 
 Re-run at the round's end, every run through `ccrc test`:
 - `pwa`: the full suite in eight shards, 418 files, 12,670 passed and 3 skipped. `tsc --noEmit` is clean.
-- The whole `pwa/browser` suite in four chunks: 46 files, 1,652 passed, 1 expected fail and 52 skipped. The two `session-header` cases at 900 px are red locally, as before the round, and CI passes them on the merge ref.
+- The whole `pwa/browser` suite in four chunks: 46 files, 1,652 passed, 2 failed, 1 expected fail and 52 skipped. The table row's 76 skipped is 24 more because, in that first run, `accounts-cards` failed at load on the bundler panic, and its 24 cases were counted as skipped; they passed alone. The two `session-header` cases at 900 px are red locally, as before the round, and CI passes them on the merge ref.
 
 The browser leg needs a Chrome. This box has no `/usr/bin/google-chrome`, so the leg is red there, never skipped, unless `CCRC_CHROME` names one: this run and the reviewer's used Playwright's Chromium 1243. CI's runners carry their own.
 
@@ -4323,7 +4323,23 @@ The build, base against tip, measured by the reviewer on two scratch production 
 | CSS | one sheet, 272.48 kB | `markdownGuard-*.css` 56.34 kB (linked first; one `@layer components` block, no unlayered rule) and `index-*.css` 216.65 kB, 272.99 kB in all |
 | lazy chunk | none | `buildExport`, 304.28 kB (92.71 kB gzipped) |
 | precache | 27 entries, 3,781 KiB | 31 entries, 4,095 KiB |
-| before first paint | 1 module script, 1 stylesheet | the module script, 2 `modulepreload`s and 2 render-blocking stylesheets: the same bytes within about 0.5%, in two more requests |
+| before first paint | 1 module script, 1 stylesheet | the module script, 2 `modulepreload`s and 2 render-blocking stylesheets: the entry JS is +0.82% (2,022.39 kB to 2,038.91 kB with the shared chunk and runtime), and JS plus CSS +0.74% (+17.03 kB), in two more requests |
+
+### Review 1405's fix round
+
+Review run 1405 read the branch at `22f8fd8d1`, and the coordinator ruled one more round, with no new numbers.
+- **P1:** the planted worktree segment holds a `"` as well as `<`, as M4.EX2 asks: `wt<b>"x`. The case reads the `ccrc:worktree` meta's attribute as written, up to its first `"`, and requires it to decode to the whole label, so a quote that ended the attribute early is red. The escaping is React's own (`renderToStaticMarkup` escapes attribute values), so no single edit can write the quote raw; the quote has no row of its own, and W5X-T13-M5 stays red for the new case (1 of 57).
+- **P5:** the two A2 checks that could not fail (`b, wt` and `<wt`) are replaced by ones the planted text can break.
+- **P4:** `stylesheet.ts`'s header names the browser config's `css.include`.
+- **P2:** the order against the stylesheet links is pinned on the built shell, in `fonts-built.test.ts`, whose build has the injected links. `layer-order.test.ts` keeps the module-entry and other-`@layer` checks. Row W5X-T13-M8.
+- **P3:** the built-layer census reads a dotted layer under its top-level name and an anonymous `@layer {` as a name `index.html` cannot declare, with a planted control. Row W5X-T13-M9.
+- **P6** and **P7:** the browser re-run line gives its failed count and why its skipped figure differs, and the first-paint row gives the reviewer's measured percentages.
+
+Re-run at this round's end, through `ccrc test`:
+- `pwa` in eight shards: 418 files, 12,672 passed and 3 skipped.
+- `contrast.test.ts` alone: 316 passed.
+- `tsc --noEmit`: clean.
+- `browser/docs-export.browser.test.ts` and `browser/tool-well-colour.browser.test.ts` with `CCRC_CHROME` set: 34 passed.
 
 ### Mutation rows
 
@@ -4499,9 +4515,11 @@ Task 13:
 {"id": "W5X-T13-M2", "spec": "D-7891", "pkg": "pwa", "file": "index.html", "old": "      @layer properties, theme, base, components, utilities;\n", "new": "      @layer theme, base, components, utilities;\n", "tests": ["test/layer-order.test.ts", "test/fonts-built.test.ts"], "red": "3 failed (of 9): index.html's first <style> opens with one leading layer, then theme.css's statement, before any rule; the built entry sheet's first layer is index.html's first name; every layer an emitted sheet uses is one index.html names"}
 {"id": "W5X-T13-M3", "spec": "M5.B9, D-7887", "pkg": "pwa", "file": "vitest.browser.config.ts", "old": "    css: { include: [/\\.css\\?raw$/] },\n", "new": "", "tests": ["browser/docs-export.browser.test.ts"], "red": "1 failed (of 18): the production file carries the shipped stylesheet: its one <style> is EXPORT_CSS, and not a trivial one (expected 2 to be greater than 20000)"}
 {"id": "W5X-T13-M4", "spec": "4.17 M4.EX2", "pkg": "pwa", "file": "src/lib/markdown.tsx", "old": "<div className=\"md-table-wrap\"><table>", "new": "<div className=\"md-table-wrap\" style={{ background: 'url(https://a.example/x)' }}><table>", "tests": ["test/docs-export.test.tsx"], "red": "1: buildExport: one React <html> > is inert over a hostile corpus: ... (M4.EX2)"}
-{"id": "W5X-T13-M5", "spec": "4.17 M4.EX2", "pkg": "pwa", "file": "src/docs/export/buildExport.tsx", "old": "<p className=\"ccrc-export-draft\" role=\"note\">{parts.banner}</p>", "new": "<p className=\"ccrc-export-draft\" role=\"note\" dangerouslySetInnerHTML={{ __html: parts.banner }} />", "tests": ["test/docs-export.test.tsx"], "red": "1: is inert over a hostile corpus ... (M4.EX2)"}
+{"id": "W5X-T13-M5", "spec": "4.17 M4.EX2", "pkg": "pwa", "file": "src/docs/export/buildExport.tsx", "old": "<p className=\"ccrc-export-draft\" role=\"note\">{parts.banner}</p>", "new": "<p className=\"ccrc-export-draft\" role=\"note\" dangerouslySetInnerHTML={{ __html: parts.banner }} />", "tests": ["test/docs-export.test.tsx"], "red": "1: is inert over a hostile corpus ... (M4.EX2)", "end": "1 failed (of 57) after review 1405's P1 (the segment `wt<b>\"x`): is inert over a hostile corpus: no active element, no on* attribute, only closed text-align styles, URLs only where allowed, the banner first (M4.EX2)"}
 {"id": "W5X-T13-M6", "spec": "4.17 M4.T-tap", "pkg": "pwa", "file": "src/docs/ExportSheet.tsx", "old": "<Button variant=\"ghost\" onClick={() => setAttempt((n) => n + 1)}>{EXPORT_TEXT.retry}</Button>", "new": "<button onClick={() => setAttempt((n) => n + 1)}>{EXPORT_TEXT.retry}</button>", "tests": ["test/tap-targets.test.tsx"], "red": "1: Export > draws Retry, in the sheet's no-start arm, with the same floor class"}
 {"id": "W5X-T13-M7", "spec": "4.17 M4.EX5", "pkg": "pwa", "file": "src/docs/export/provenance.ts", "old": "content: iso(p.exportedAt) },", "new": "content: iso(p.exportedAt) + (drafts.state === 'unreadable' ? drafts.detail : '') },", "tests": ["test/docs-export.test.tsx"], "red": "2: names a worktree by its closed label only ...(M4.EX5); a git failure the tree carries ... (M4.EX5)"}
+{"id": "W5X-T13-M8", "spec": "D-7891", "pkg": "pwa", "file": "index.html", "old": "      @layer properties, theme, base, components, utilities;\n", "new": "", "tests": ["test/layer-order.test.ts", "test/fonts-built.test.ts"], "red": "applied together with a second edit: `</body>` becomes `  <style>@layer properties, theme, base, components, utilities;</style>\\n  </body>` (the statement moved after the stylesheets Vite injects). 3 failed (of 10): index.html's first <style> opens with one leading layer, then theme.css's statement, before any rule; the statement comes before the module entry and every other @layer use; the built shell states the order before every stylesheet it links"}
+{"id": "W5X-T13-M9", "spec": "D-7891", "pkg": "pwa", "file": "test/fonts-built.test.ts", "old": "matchAll(/@layer(?:\\s+([\\w.-]+(?:\\s*,\\s*[\\w.-]+)*))?\\s*[{;]/g)", "new": "matchAll(/@layer\\s+([\\w-]+(?:\\s*,\\s*[\\w-]+)*)\\s*[{;]/g)", "tests": ["test/fonts-built.test.ts"], "red": "1 failed (of 8): reads a dotted layer as its top-level one and an anonymous layer as one index.html cannot name (planted control)"}
 ```
 
 ### Measurements
