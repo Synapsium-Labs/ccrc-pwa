@@ -10987,12 +10987,16 @@ _check_approval-digest-mismatch() {
 # where whether the provider keeps backups or snapshots of the box is the operator's answer, stated, never guessed. The
 # other platform's checks SKIP and say so. All three measure only paths and posture: no check here opens a secret.
 #
-# The subject of `secrets-backup-excluded` and `snapshot-posture` is a box that holds lane secrets: `~/.cc-secrets`
-# or `~/.ccrc/auth-scratch` exists. A box with neither (a server-role box: the server never holds a lane secret)
-# has nothing to back up by mistake and SKIPs.
+# The subject of all three is a box that holds a secret on disk: a fleet box's lane secrets (`~/.cc-secrets`,
+# `~/.ccrc/auth-scratch`), or a server box's own stores, the Linear slot store (`~/.ccrc/linear`, D-7675) and the
+# operator's pasted secrets (`~/.ccrc/operator-secrets`, programme ledgers PL6). The server never holds a lane secret,
+# but it does hold those two (review 1389 A7, the PL6 follow-up), so a server box is measured once either exists. A box
+# with none of the four has nothing to back up by mistake and SKIPs.
+# The four, named once for the SKIP lines.
+SECRET_DIRS_NAMED='~/.cc-secrets, ~/.ccrc/auth-scratch, ~/.ccrc/linear or ~/.ccrc/operator-secrets'
 _dr_secret_dirs() {   # -> the secret directories that exist on this box, one `~/`-relative name per line
   local d
-  for d in .cc-secrets .ccrc/auth-scratch; do
+  for d in .cc-secrets .ccrc/auth-scratch .ccrc/linear .ccrc/operator-secrets; do
     [ -d "$HOME/$d" ] && printf '%s\n' "~/$d"
   done
   return 0
@@ -11010,7 +11014,7 @@ _check_secrets-backup-excluded() {
   local d out word dirs=() excluded=() included=() unread=()
   while IFS= read -r d; do [ -n "$d" ] && dirs+=("$d"); done < <(_dr_secret_dirs)
   if [ "${#dirs[@]}" -eq 0 ]; then
-    _dr_skip secrets-backup-excluded "neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret is here to keep out of Time Machine"
+    _dr_skip secrets-backup-excluded "no secret directory ($SECRET_DIRS_NAMED) exists on this box, so no secret is here to keep out of Time Machine"
     return 3
   fi
   if ! command -v tmutil >/dev/null 2>&1; then
@@ -11053,7 +11057,7 @@ _check_filevault() {
   local out first d dirs=()
   while IFS= read -r d; do [ -n "$d" ] && dirs+=("$d"); done < <(_dr_secret_dirs)
   if [ "${#dirs[@]}" -eq 0 ]; then
-    _dr_skip filevault "neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret sits on its disk"
+    _dr_skip filevault "no secret directory ($SECRET_DIRS_NAMED) exists on this box, so no secret sits on its disk"
     return 3
   fi
   if ! command -v fdesetup >/dev/null 2>&1; then
@@ -11097,7 +11101,7 @@ _check_snapshot-posture() {
   local how="write one line to ~/.ccrc/snapshot-posture: none, or the ones that apply of $SNAPSHOT_POSTURE_WORDS"
   while IFS= read -r l; do [ -n "$l" ] && dirs+=("$l"); done < <(_dr_secret_dirs)
   if [ "${#dirs[@]}" -eq 0 ]; then
-    _dr_skip snapshot-posture "neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret is here for a provider image to hold"
+    _dr_skip snapshot-posture "no secret directory ($SECRET_DIRS_NAMED) exists on this box, so no secret is here for a provider image to hold"
     return 3
   fi
   if [ ! -e "$f" ]; then

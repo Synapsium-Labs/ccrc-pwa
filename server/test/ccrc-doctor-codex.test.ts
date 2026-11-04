@@ -6429,7 +6429,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
       const home = box({ stubs: { tmutil: tmutil(() => '[Included]') } });
       const r = run(home, 'secrets-backup-excluded', 'darwin');
       expect(lines(r.stdout)).toEqual([
-        'SKIP secrets-backup-excluded: neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret is here to keep out of Time Machine']);
+        'SKIP secrets-backup-excluded: no secret directory (~/.cc-secrets, ~/.ccrc/auth-scratch, ~/.ccrc/linear or ~/.ccrc/operator-secrets) exists on this box, so no secret is here to keep out of Time Machine']);
       expect(r.code).toBe(3);
     });
 
@@ -6456,7 +6456,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
     it('SKIPs a Mac with no lane secret, even with an fdesetup that would answer Off: a fresh install stays green', () => {
       const r = run(box({ stubs: { fdesetup: fdesetup('FileVault is Off.') } }), 'filevault', 'darwin');
       expect(lines(r.stdout)).toEqual([
-        'SKIP filevault: neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret sits on its disk']);
+        'SKIP filevault: no secret directory (~/.cc-secrets, ~/.ccrc/auth-scratch, ~/.ccrc/linear or ~/.ccrc/operator-secrets) exists on this box, so no secret sits on its disk']);
       expect(r.code).toBe(3);
     });
 
@@ -6492,11 +6492,21 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
   });
 
   describe('snapshot-posture (Linux): the operator\'s answer, stated, never guessed', () => {
-    it('SKIPs a box with no lane secret (a server-role box holds none)', () => {
+    it('SKIPs a box with no secret directory', () => {
       const r = run(box(), 'snapshot-posture', 'linux');
       expect(lines(r.stdout)).toEqual([
-        'SKIP snapshot-posture: neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret is here for a provider image to hold']);
+        'SKIP snapshot-posture: no secret directory (~/.cc-secrets, ~/.ccrc/auth-scratch, ~/.ccrc/linear or ~/.ccrc/operator-secrets) exists on this box, so no secret is here for a provider image to hold']);
       expect(r.code).toBe(3);
+    });
+
+    it('measures a server box that holds the operator\'s pasted secrets or the Linear slot store (review 1389 A7, the PL6 follow-up)', () => {
+      for (const dir of ['.ccrc/operator-secrets', '.ccrc/linear']) {
+        const r = run(box({ secrets: [dir] }), 'snapshot-posture', 'linux');
+        expect(lines(r.stdout)[0], dir).toBe(`WARN snapshot-posture: not stated: whether the provider keeps backups or snapshots of this box, which would hold ~/${dir}, is the operator's answer, and doctor does not guess it`);
+        expect(r.code, dir).toBe(2);
+      }
+      const mac = run(box({ secrets: ['.ccrc/operator-secrets'], stubs: { fdesetup: fdesetup('FileVault is On.') } }), 'filevault', 'darwin');
+      expect(lines(mac.stdout)).toEqual(['PASS filevault: FileVault is On (fdesetup status)']);
     });
 
     it('WARNs "not stated" when a box holding secrets has no answer, and says how to state it', () => {
