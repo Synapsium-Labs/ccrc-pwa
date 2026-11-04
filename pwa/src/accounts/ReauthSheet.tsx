@@ -11,12 +11,11 @@
 // sent before it) → Run (`useSignInAttempt`'s, the connect sheet's and the switch sheet's own: the ledger, the URL card
 // the server accepted, the code field, the countdown read from `expiresAt`, Cancel) → the ending. A terminal state
 // says what is left of the old credential, from its code, and offers Start again. WHAT IT MAY SAY of the old credential
-// is `oldCredentialOf`'s, the one rule (D-7872 (10), the operator's option-1 ruling): that the lane keeps it only on a
-// passing check newer than any sign-out this app knows of; that the lane is signed out only where that is certain (this
-// sheet just ran Sign this lane out and start again, below, or the box's `no-credential` word); and the neutral words,
-// true either way, everywhere else (never checked, a 401, a sign-out an earlier sheet ran, a reload). `useOldCredential`
-// reads it when a sentence is written, so a lane signed out elsewhere while the sheet is open gets the neutral words
-// too, and the mint's restart lead and revoke item are held to it as well. Offline mid-attempt, the run frame shows
+// is `oldCredentialOf`'s, the one rule (D-7872 (10), D-7992): that the lane keeps it only where the lane has one; that it
+// is signed out where the lane says so or this sheet just ran Sign this lane out and start again, below; and the neutral
+// words, true either way, only where a box too old to report it leaves the lane unsaid. `useOldCredential` reads it when
+// a sentence is written, so a lane signed out elsewhere while the sheet is open gets the words its new facts allow, and
+// the mint's restart lead and revoke item are held to it as well. Offline mid-attempt, the run frame shows
 // only the sentence with the last-known deadline. Closed mid-attempt, the attempt keeps running on the box until
 // `expiresAt`, and the app-level banner's Continue reopens this sheet with `resume` at the code field (A23, D-7871 (2)).
 //
@@ -50,7 +49,6 @@ import { RestartList, restartableOn, useRestarts } from './RestartList';
 import { StatedField } from './ResultFrame';
 import { RunFrame, type LedgerLine } from './RunFrame';
 import type { SignInMethod } from './connectFlow';
-import { forgetSignOut, noteSignOut } from './signOuts';
 import { useOldCredential } from './useOldCredential';
 import { SignInLive, WrongAccountAct, useSignInAttempt, wordOf, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
 import type { StepUp, StepUpDeps } from './useStepUp';
@@ -156,9 +154,9 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   /** What this sheet may say of the lane's old credential (D-7872 (10)): read when a sentence is written, from the lane
-   *  and the 401 marker as the screen holds them then and the sign-outs this app ran, and `signed-out` once this sheet's
-   *  own sign-out has the box's answer. */
-  const old = useOldCredential(id, props.lane, props.usage);
+   *  and the 401 marker as the screen holds them then, and `signed-out` once this sheet's own sign-out has the box's
+   *  answer. */
+  const old = useOldCredential(props.lane, props.usage);
 
   const status = (text: string): void => setSaid({ kind: 'status', text });
   const alert = (text: string): void => setSaid({ kind: 'alert', text });
@@ -189,7 +187,6 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
 
   /** The helper says `done`: the box installed the new credential after its own check (A20). The ending follows. */
   const installed = async (): Promise<void> => {
-    forgetSignOut(id);
     old.freeze();
     settle(reauthInstalled(method));
     setOnOld(restartableOn(sessions, id));
@@ -225,12 +222,9 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
     } catch (e) {
       failure = e;
     }
-    // The record is the app's, not this sheet's: it is written whether or not the sheet is still open, on any answer
-    // that may have signed the lane out (removed, absent, or no answer: `signOutUnknown`). A sheet opened on the
-    // lane later cannot be sure (it may have been signed in elsewhere since), so the record only keeps it from saying
-    // the lane keeps its old one, up to a passing check newer than the last one known here.
-    const knownAt = checked?.check?.at ?? before?.check?.at;
-    if (outcome === 'done' && (removed !== null || signOutUnknown(wordOf(failure)))) noteSignOut(id, knownAt);
+    // The lane says what happened (D-7992): it is read again whether or not the sheet is still open, on any answer that
+    // may have signed it out (removed, absent, or no answer: `signOutUnknown`), so the next sheet opened on it reads that.
+    if (outcome === 'done' && (removed !== null || signOutUnknown(wordOf(failure)))) void refresh();
     if (!live.current) return;
     setBusy(false);
     if (outcome === 'step-up') { setNotice(STEP_UP_AGAIN_SIGN_OUT); alert(STEP_UP_AGAIN_SIGN_OUT); return; }

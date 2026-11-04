@@ -41,6 +41,8 @@ export function lanesWire(
       ...(st?.validatedAt !== undefined ? { validatedAt: st.validatedAt } : {}),
       ...(st?.credit !== undefined ? { credit: st.credit } : {}),
       ...(st?.mintedAt !== undefined ? { mintedAt: st.mintedAt } : {}),
+      ...(st?.signedOutAt !== undefined ? { signedOutAt: st.signedOutAt } : {}),
+      ...(st?.credential !== undefined ? { credential: st.credential } : {}),
       ready: notReady === null,
       ...(notReady !== null ? { notReadyReason: notReady } : {}),
     };

@@ -31,13 +31,27 @@ describe('the backfill (G35)', () => {
     const r = backfill(home);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toBe('install: lane-state: wrote 1, kept 1\n');
-    expect(laneState(home, 'claude')).toEqual({ fleetIdentity: NODE_ID });
+    expect(laneState(home, 'claude')).toEqual({ fleetIdentity: NODE_ID, credential: 'none' });
     expect(laneState(home, 'claude')).not.toHaveProperty('check');
     expect(modeOf(laneStatePath(home, 'claude'))).toBe('600');
-    expect(readFileSync(laneStatePath(home, 'lane-b'), 'utf8')).toBe(existing);
+    // Every field stands; the only thing the update adds is the box's measured word (D-7992).
+    expect(laneState(home, 'lane-b')).toEqual({ ...JSON.parse(existing), fleetIdentity: NODE_ID, credential: 'none' });
 
     // A second run is a no-op.
+    const settled = readFileSync(laneStatePath(home, 'lane-b'), 'utf8');
     expect(backfill(home).out).toBe('install: lane-state: wrote 0, kept 2\n');
+    expect(readFileSync(laneStatePath(home, 'lane-b'), 'utf8')).toBe(settled);
+  });
+
+  // D-7992: a sign-out from before this build recorded nothing, so the update measures every lane once, and a lane
+  // already holding a word is re-measured the same way.
+  it('`ccrc update` measures whether each lane holds a credential, on a file from before the word', () => {
+    const home = laneBox('ccrc-lane-backfill-credential-');
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true });
+    writeFileSync(join(home, '.cc-secrets', 'lane-b-oauth.env'), 'export CLAUDE_CODE_OAUTH_TOKEN=fixture-not-a-token\n', { mode: 0o600 });
+    expect(backfill(home).code).toBe(0);
+    expect(laneState(home, 'lane-b')!['credential']).toBe('held');
+    expect(laneState(home, 'claude')!['credential']).toBe('none');
   });
 
   it('a server-role box hosts no sessions, so it backfills nothing', () => {
@@ -56,7 +70,7 @@ describe('the backfill (G35)', () => {
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toBe('install: lane-state: wrote 1, kept 0, 1 left to the account verb acting on it\n');
     expect(laneState(home, 'claude')).toBeNull();
-    expect(laneState(home, 'lane-b')).toEqual({ fleetIdentity: NODE_ID });
+    expect(laneState(home, 'lane-b')).toEqual({ fleetIdentity: NODE_ID, credential: 'none' });
   });
 
   it('is advisory, as the verbs\' write is: a lane-state file that cannot be written never stops an update', () => {

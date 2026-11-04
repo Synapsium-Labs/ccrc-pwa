@@ -112,9 +112,12 @@ export function cardLines(answer: AccountStateAnswer, usageTs: number | null, no
 }
 
 /** What Off's precedence would otherwise hide (spec §4.1: "the others still show in the full record"): a lane switched
- *  off whose credential the probe also measured dead says both, since the two are cleared by different acts. */
-export function offAlso(answer: AccountStateAnswer, usage: AccountUsage | null): string | null {
-  return answer.word === 'off' && usage?.authDead === true ? 'also signed out (HTTP 401)' : null;
+ *  off whose credential the probe also measured dead, or that the box signed out (D-7992), says both, since the two are
+ *  cleared by different acts. */
+export function offAlso(answer: AccountStateAnswer, usage: AccountUsage | null, lane?: LaneWire): string | null {
+  if (answer.word !== 'off') return null;
+  if (lane?.signedOutAt !== undefined) return 'also signed out on the fleet host';
+  return usage?.authDead === true ? 'also signed out (HTTP 401)' : null;
 }
 
 /** The head's identity line (spec §3.4, §4.4): a key's hint and when it was validated, or the account the credential
@@ -191,6 +194,16 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
   switch (answer.word) {
     case 'signed-out': {
       const ago = answer.at === undefined ? '' : ` ${formatAge(nowSec - Math.floor(answer.at / 1000))}`;
+      // The box signed it out (D-7992): no provider refused anything, and nothing keeps new sessions off a lane for it.
+      if (lane?.signedOutAt !== undefined) {
+        return {
+          wrong: `${id} was signed out on the fleet host${ago}.`,
+          effect: `New sessions on it fail until it has a sign-in or a token again.${sessions > 0 ? ` ${sessionsOn(sessions)} may fail their next turn.` : ''}`,
+          lead: 'Sign it in again on the fleet host, then check it again:',
+          commands: [fixCommands.check(id)],
+          move: { from: id, primary: false },
+        };
+      }
       const what = entry?.kind === 'token' ? 'token was refused'
         : keyLane ? `key was refused by ${entry?.provider === 'openrouter' ? 'OpenRouter' : 'its provider'}`
           : 'sign-in was refused';
@@ -882,8 +895,9 @@ export const SEND_CODE = 'Send code';
 export const CANCEL_SIGN_IN = 'Cancel';
 export const START_AGAIN = 'Start the sign-in again';
 
-/** What an account sheet may say about a lane's old credential: `oldCredentialOf`'s answer (connectFlow.ts; D-7872 (10)).
- *  `kept` (a passing check newer than any known sign-out), `signed-out` (certain), or `unsure` (the neutral words). */
+/** What an account sheet may say about a lane's old credential: `oldCredentialOf`'s answer (connectFlow.ts; D-7872 (10),
+ *  D-7992). `kept` (the lane has one), `signed-out` (the lane has none), or `unsure` (the neutral words: a box too old to
+ *  say). */
 export type OldCredential = 'kept' | 'unsure' | 'signed-out';
 /** The sign-in's terminal states (spec §6.2), each saying what did not happen. */
 export type SignInEndKind = 'expired' | 'code-refused' | 'untrusted' | 'cancelled' | 'unknown' | 'lost' | 'failed'
@@ -1111,15 +1125,14 @@ export const reauthStart = (method: 'login' | 'setup-token'): string => (method 
 export const credentialUntouched = (id: string, method: 'login' | 'setup-token'): string =>
   `Nothing changed: ${id} keeps its old ${credOf(method)}.`;
 
-/** The sentence they end with instead on a lane known to have no credential (D-7872 (2), (10)): one the sheet itself
- *  just signed out with N5's sign-out, or one the box says has none. The lane runs nothing until a new one goes in. */
+/** The sentence they end with instead on a lane known to have no credential (D-7872 (2), (10), D-7992): one the sheet
+ *  itself just signed out with N5's sign-out, or one the lane says has none. It runs nothing until a new one goes in. */
 export const laneSignedOut = (id: string): string =>
   `${id} is signed out on the fleet host, so its sessions fail until it has a sign-in or a token again.`;
 
-/** THE NEUTRAL WORDS (D-7872 (10), the operator's option-1 ruling of 2026-11-03): where the app cannot be sure the lane
- *  still holds a credential (no passing check on record, a 401 since, or a sign-out it knows of), a sheet says what it
- *  knows and claims nothing about the old credential. The precise signed-out words wait on the box and the server
- *  reporting a lane with no credential (a follow-up). */
+/** THE NEUTRAL WORDS (D-7872 (10), the operator's option-1 ruling of 2026-11-03): where the lane does not say whether it
+ *  holds a credential (a box too old to measure it, D-7992) and shows no passing check, a sheet says what it knows and
+ *  claims nothing about the old credential. */
 export const noCheckedCredential = (id: string, cred: 'sign-in' | 'token'): string =>
   `${id} has no checked ${cred}, so whether it still has one isn't known.`;
 export const NOTHING_INSTALLED = 'Nothing was installed.';

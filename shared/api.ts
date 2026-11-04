@@ -12502,12 +12502,18 @@ export interface LaneWire {
   validatedAt?: number;
   credit?: { limit: number | null; remaining: number | null };
   mintedAt?: number;
+  /** When the box signed the lane out, while no credential has gone in and no check has passed since (D-7992). */
+  signedOutAt?: number;
+  /** Whether the lane holds a credential, measured on the box (D-7992). Absent is a box too old to say, or a lane whose
+   *  credential ccrc does not read: `oldCredentialOf` (`pwa/src/accounts/connectFlow.ts`) is what reads the difference. */
+  credential?: LaneState['credential'];
   ready: boolean;
   notReadyReason?: LaneNotReadyReason;
 }
 
-/** Why `LaneWire.ready` is false, the first that applies: the lane state is absent or unreadable, no check, a last check
- *  not `ok`, no credential the box can find (the box's word alone, D-7732), or no seed verified after the last run. */
+/** Why `LaneWire.ready` is false, the first that applies: the lane state is absent or unreadable, a sign-out it records
+ *  (`no-credential`, D-7992), no check, a last check not `ok`, no credential the box can find (the box's word alone,
+ *  D-7732), or no seed verified after the last run. */
 export const LANE_NOT_READY_REASONS = ['no-lane-state', 'not-checked', 'check-failed', 'no-credential', 'seed-unverified'] as const;
 export type LaneNotReadyReason = (typeof LANE_NOT_READY_REASONS)[number];
 

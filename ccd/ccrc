@@ -8276,7 +8276,8 @@ _acct_sweep_secret_temps() {   # <id> — under that lane's lock only
 # stands. The writer itself refuses, and is pinned to, everything it guards.
 _acct_lane_state() {   # <id> [--mode m] [--check-verdict v --check-at t]
   local rc=0
-  _acct_node lane-state --id "$@" >/dev/null || rc=$?
+  # The roster goes with every write: the writer measures whether the lane holds a credential as it writes (D-7992).
+  _acct_node lane-state --id "$@" --file "$(_acct_roster_path)" >/dev/null || rc=$?
   [ "$rc" -eq 0 ] \
     || printf '%s\n' "$PROG: account: lane $1's state file under $_SVC_REG/.accounts was not written (exit $rc); this verb's answer stands, and the next account verb on the lane writes it" >&2
   return 0
@@ -9332,6 +9333,7 @@ _acct_credential() {
   # is gone.
   _acct_lane_state "$id" --clear check --clear mintedAt
   _acct_write_secret "$id" "$ACCT_PROVIDER" "$ACCT_SECRET_ENV"
+  _acct_lane_state "$id"   # the new secret is in: the writer measures it (D-7992)
   _acct_live "$id"
 
   # `${arr[@]+"${arr[@]}"}` — this tree's empty-array idiom under `set -u`.
@@ -11094,8 +11096,9 @@ _acct_credential_sign_out() {   # <id>
   _acct_upstream_id "Nothing was written."
   _acct_auth_deadline
   _acct_sign_out "$id" "$ACCT_CFG_DIR" "$stands"
-  # A sign-in lane's last check measured the sign-in that is now gone; a token lane's measured its token, which stays.
-  [ -n "$ACCT_SECRETS" ] || _acct_lane_state "$id" --clear check
+  # A sign-in lane's last check measured the sign-in that is now gone; a token lane's measured its token, which stays,
+  # so only a sign-in lane is signed out by this. The lane says so until a credential goes in or a check passes (D-7992).
+  [ -n "$ACCT_SECRETS" ] || _acct_lane_state "$id" --clear check --signed-out-at now
   _acct_read_op "Lane $id was signed out; only this report failed." \
     auth-answer --verb sign-out --id "$id" --sign-out "$ACCT_SIGNOUT"
   printf '%s\n' "$ACCT_OUT"
@@ -20106,6 +20109,9 @@ _inst_lane_state() {
     case "$(${lk[@]+"${lk[@]}"} node "$op" seed --file "$HOME/.ccrc/accounts.json" --id "$id" --when unseeded)" in
       *'"verifiedAt"'*) seeded+=("$id") ;;
     esac
+    # WHETHER THE LANE HOLDS A CREDENTIAL (D-7992): a file from before the word has none, and a sign-out from before this
+    # build recorded nothing, so the update measures every lane, under the same lock. Advisory and silent, as the seed is.
+    ${lk[@]+"${lk[@]}"} node "$op" lane-state --id "$id" --mode credential --file "$HOME/.ccrc/accounts.json" >/dev/null 2>&1 || :
   done <<<"$listed"
   [ "${#seeded[@]}" -eq 0 ] || echo "install: lane-seed: seeded ${#seeded[@]}"
 }

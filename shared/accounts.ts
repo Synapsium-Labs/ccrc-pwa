@@ -59,6 +59,9 @@ export const LANE_IDENTITY_SOURCES = ['measured', 'stated'] as const;
 /** How an OpenRouter key came: pasted, connected with OpenRouter (PKCE), or minted by ccrc (spec §3.4). */
 export const LANE_KEY_SOURCES = ['pasted', 'pkce', 'minted'] as const;
 
+/** Whether a lane holds a credential, as the box measured it (D-7992; `laneCredentialOf`, `deploy/account-op.mjs`). */
+export const LANE_CREDENTIAL_WORDS = ['held', 'none'] as const;
+
 /** The lane-state file (`~/.cc-sessions/.accounts/<id>.json`, spec §3.4) as the server read it, each field held to its
  *  grammar (`laneStateOf`) and its times in epoch ms. Display only: never authority for anything that touches a
  *  secret (D-5517). */
@@ -72,6 +75,10 @@ export interface LaneState {
   /** OpenRouter's key credit: `limit` null is a key with no limit; `remaining` is its `limit_remaining`. */
   readonly credit?: { readonly limit: number | null; readonly remaining: number | null };
   readonly mintedAt?: number;
+  /** When the box signed the lane out (N5, D-7992). Gone once a credential is in or a check passes. */
+  readonly signedOutAt?: number;
+  /** Absent from a box too old to measure it, and for a lane whose credential ccrc does not read. */
+  readonly credential?: (typeof LANE_CREDENTIAL_WORDS)[number];
   readonly keyExpiresAt?: number;
   readonly seedVerifiedAt?: number;
   readonly lastRunAt?: number;
@@ -160,8 +167,8 @@ const keyExpirySource = (expiresAt: number, now: number): string => {
  * THE ONE STATE WORD (D-5517, spec §4.1; created by Task A12 ahead of A2, D-6058 (3)): the first row of the table that applies, with its source. Pure, L1 policy
  * in L0: the server derives `LaneWire.state` from it, and nothing re-derives a word elsewhere.
  *
- *  - Off: the kill switch. Signed out: a 401, from the `authdead` marker or a last check of `auth-dead`, whatever its
- *    age (D-5755 (5): the last measured verdict). Rate-limited: a window at 100% or more, or an OpenRouter key whose
+ *  - Off: the kill switch. Signed out: a sign-out the box records (D-7992), or a 401, from the `authdead` marker or a last
+ *    check of `auth-dead`, whatever its age (D-5755 (5): the last measured verdict). Rate-limited: a window at 100% or more, or an OpenRouter key whose
  *    `limit_remaining` is 0 or less.
  *  - Expiring, from three sources and never from another kind's file: a minted Anthropic token whose estimated year
  *    ends in under 30 d (a pasted token has no `mintedAt`); an OpenRouter key at 10% or less of a limit it has; an
@@ -179,6 +186,7 @@ export function stateWordFor(i: StateWordInput): AccountStateAnswer {
 
   if (i.disabled) return { word: 'off', source: 'Off on the fleet host' };
 
+  if (st?.signedOutAt !== undefined) return { word: 'signed-out', source: 'signed out on the fleet host', at: st.signedOutAt };
   if (check?.verdict === 'auth-dead') {
     return { word: 'signed-out', source: `HTTP 401 · ${checkedAgo(check.at, now)}`, at: check.at };
   }
@@ -264,11 +272,13 @@ export function sourceAt(answer: AccountStateAnswer, now: number, resets?: Sourc
 }
 
 /** Why a lane is not ready, the first that applies (A13's three conditions, as the lane-state file records them): no
- *  readable lane state, no check, a last check not `ok`, or no seed verified after the last run. Display only (D-5518):
- *  `enable` reads the file on the box, which alone also answers `no-credential` (D-7732). In the box's order. */
-export function laneNotReadyReason(read: LaneStateRead): 'no-lane-state' | 'not-checked' | 'check-failed' | 'seed-unverified' | null {
+ *  readable lane state, a sign-out it records (`no-credential`, D-7992), no check, a last check not `ok`, or no seed
+ *  verified after the last run. Display only (D-5518): `enable` reads the file on the box, which alone also answers
+ *  `no-credential` for a credential it finds missing (D-7732). In the box's order. */
+export function laneNotReadyReason(read: LaneStateRead): 'no-lane-state' | 'no-credential' | 'not-checked' | 'check-failed' | 'seed-unverified' | null {
   if (read.kind !== 'read') return 'no-lane-state';
   const st = read.state;
+  if (st.signedOutAt !== undefined) return 'no-credential';
   if (st.check === undefined) return 'not-checked';
   if (st.check.verdict !== 'ok') return 'check-failed';
   if (st.seedVerifiedAt === undefined || st.lastRunAt === undefined || !(st.seedVerifiedAt > st.lastRunAt)) return 'seed-unverified';
@@ -336,7 +346,9 @@ export function laneStateOf(json: unknown): LaneState | null {
     const remaining = amountOf(cr.limit_remaining);
     if (limit !== undefined && remaining !== undefined && (limit === null || limit >= 0)) out.credit = { limit, remaining };
   }
-  for (const k of ['validatedAt', 'mintedAt', 'keyExpiresAt', 'seedVerifiedAt', 'lastRunAt', 'addedAt', 'enabledAt'] as const) {
+  const credential = oneOf(LANE_CREDENTIAL_WORDS, o['credential']);
+  if (credential !== undefined) out.credential = credential;
+  for (const k of ['validatedAt', 'mintedAt', 'signedOutAt', 'keyExpiresAt', 'seedVerifiedAt', 'lastRunAt', 'addedAt', 'enabledAt'] as const) {
     const t = timeOf(o[k]);
     if (t !== undefined) out[k] = t;
   }

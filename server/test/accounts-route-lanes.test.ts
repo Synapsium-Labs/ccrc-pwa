@@ -165,6 +165,53 @@ describe('GET /api/accounts: lanes and connect (D-5511, D-5517)', () => {
 
 // D-7740: `connect.caps` names the account cap words the fleet advertises that this server's `ACCOUNT_CAPS` knows, so
 // the connect sheet narrows each method by its own word (N4) and a word a later wave has not added is never offered.
+describe('a lane signed out on the box, on the wire (D-7992)', () => {
+  const laneFile = (home: string, id: string, body: unknown): void => {
+    writeFileSync(path.join(home, '.cc-sessions', '.accounts', `${id}.json`), JSON.stringify(body), { mode: 0o600 });
+  };
+  const lanesOf = async (a: FastifyInstance): Promise<NonNullable<AccountsResponse['lanes']>> => {
+    const cookie = await login(a);
+    const res = await a.inject({ method: 'GET', url: '/api/accounts', headers: { cookie } });
+    expect(res.statusCode, res.body).toBe(200);
+    return (res.json() as AccountsResponse).lanes!;
+  };
+
+  it('carries when it was signed out, the word for it, and why it is not ready, ahead of the check it no longer has', async () => {
+    const opened = await openApp({ enabled: true });
+    app = opened.app;
+    const at = Date.parse('2026-11-01T10:00:00.123Z');
+    laneFile(opened.home, 'claude-a', { signedOutAt: new Date(at).toISOString(), credential: 'none' });
+    const lane = (await lanesOf(app))['claude-a']!;
+    expect(lane.signedOutAt).toBe(at);
+    expect(lane.credential).toBe('none');
+    expect(lane.ready).toBe(false);
+    expect(lane.notReadyReason).toBe('no-credential');
+    expect(lane.state).toEqual({ word: 'signed-out', source: 'signed out on the fleet host', at });
+  });
+
+  it('carries `held` for a lane that holds a credential, and no sign-out', async () => {
+    const opened = await openApp({ enabled: true });
+    app = opened.app;
+    laneFile(opened.home, 'claude-a', { credential: 'held' });
+    const lane = (await lanesOf(app))['claude-a']!;
+    expect(lane.credential).toBe('held');
+    expect(lane.signedOutAt).toBeUndefined();
+    expect(lane.notReadyReason).toBe('not-checked');
+  });
+
+  it('a file from a box too old to report it carries neither, and a value off its grammar is dropped', async () => {
+    const opened = await openApp({ enabled: true });
+    app = opened.app;
+    laneFile(opened.home, 'claude-b', { signedOutAt: 'yesterday', credential: 'maybe' });
+    const lanes = await lanesOf(app);
+    for (const id of ['claude-a', 'claude-b']) {
+      expect(lanes[id]).not.toHaveProperty('signedOutAt');
+      expect(lanes[id]).not.toHaveProperty('credential');
+    }
+    expect(lanes['claude-b']!.notReadyReason).toBe('not-checked');
+  });
+});
+
 describe('connect.caps (D-7740)', () => {
   it('is the advertised words this server knows, in its order; no evidence is none', () => {
     const at = { origin: 'https' as const, stepUpFreshUntil: null };

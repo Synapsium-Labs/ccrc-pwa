@@ -9,7 +9,6 @@ import { ACCOUNT_CAPS, type AccountAuthStatusAnswer, type AccountsConnect, type 
 import { AUTH_POLL_MS } from '../src/accounts/ConnectSheet';
 import { ReauthSheet, troubleActs, type ReauthClient, type ReauthSheetProps } from '../src/accounts/ReauthSheet';
 import { isPastAdding, oldCredentialOf, resumeSheetFor } from '../src/accounts/connectFlow';
-import { resetSignOutsForTests } from '../src/accounts/signOuts';
 import {
   CANCEL_SIGN_IN, CODE_FIELD_LABEL, LEDGER, MINT_INSTEAD, MINT_NEW_TOKEN, PASTE_A_TOKEN, PASTE_INSTEAD, REAUTH_WRONG, REPLACE_TOKEN,
   NOTHING_INSTALLED, SEND_CODE, SIGN_IN_AGAIN, SIGN_OUT_RESTART, STATED_LABEL, SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, credentialUntouched, laneSignedOut,
@@ -73,7 +72,6 @@ const settle = async (): Promise<void> => { await act(async () => { await vi.adv
 beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); });
 afterEach(() => {
   cleanup();
-  resetSignOutsForTests();
   vi.useRealTimers();
   vi.restoreAllMocks();
   navigate('/');
@@ -424,16 +422,19 @@ describe('after Sign this lane out and start again, every ending says the lane i
     expect(alertText()).not.toMatch(/Nothing changed|keeps its old/);
   });
 
-  it('Sign in again opened later on the lane it signed out never says it keeps one, until a newer passing check', async () => {
+  it('Sign in again opened later on the lane it signed out reads the lane: signed out, until a credential goes back in', async () => {
     const b = await signedOutAndStarted();
     cleanup();
-    // The screen has not read the lanes again yet: the lane is the one the sheet last checked, before its sign-out.
-    sheet(b, { id: 'lane-a', method: 'login', lane: OTHER });
-    expect(screen.getByText(reauthIntro('lane-a', 'login', 'unsure'))).toBeInTheDocument();
+    const gone: LaneWire = {
+      ready: false, notReadyReason: 'no-credential', signedOutAt: OTHER_AT + 500, credential: 'none',
+      state: { word: 'signed-out', source: 'signed out on the fleet host', at: OTHER_AT + 500 },
+    };
+    sheet(b, { id: 'lane-a', method: 'login', lane: gone });
+    expect(screen.getByText(reauthIntro('lane-a', 'login', 'signed-out'))).toBeInTheDocument();
     expect(document.querySelector('.acct-reauth')?.textContent).not.toMatch(/keeps the sign-in it has/);
     cleanup();
-    // A passing check newer than that one: a credential went back in on the fleet host, so the lane keeps it.
-    sheet(b, { id: 'lane-a', method: 'login', lane: { ...OTHER, check: { verdict: 'ok', at: OTHER_AT + 1_000 } } });
+    // A credential went back in on the fleet host and passed a check: the box ended the sign-out, and the lane keeps it.
+    sheet(b, { id: 'lane-a', method: 'login', lane: { ...OTHER, check: { verdict: 'ok', at: OTHER_AT + 1_000 }, credential: 'held' } });
     expect(screen.getByText(reauthIntro('lane-a', 'login', 'kept'))).toBeInTheDocument();
   });
 
@@ -501,20 +502,23 @@ describe('a lane that says it has no credential: the intro and every ending say 
     }
   });
 
-  it("the rule: signed out on the box's no-credential word or the sheet's own sign-out; kept only behind a newer passing check", () => {
+  it("the rule: signed out on the lane's word, kept behind a passing check on a box too old to measure the lane", () => {
     const at = now - 60_000;
     const checked = (verdict: string, t: number): LaneWire => ({ ...READY, check: { verdict, at: t } });
-    expect(oldCredentialOf(NONE, undefined, undefined)).toBe('signed-out');
-    expect(oldCredentialOf({ ...READY, notReadyReason: 'no-credential' }, undefined, undefined)).toBe('signed-out');
-    expect(oldCredentialOf(checked('ok', at), undefined, undefined, true)).toBe('signed-out');
+    expect(oldCredentialOf(NONE, undefined)).toBe('signed-out');
+    expect(oldCredentialOf({ ...READY, notReadyReason: 'no-credential' }, undefined)).toBe('signed-out');
     // No passing check on record: neutral, whatever the word (reauth-wording.test.tsx holds the rest of the rule).
     for (const l of [LANES['lane-a'], LANES['lane-b'], READY, undefined, { ...NONE, notReadyReason: 'not-checked' as const }]) {
-      expect(oldCredentialOf(l, undefined, undefined)).toBe('unsure');
+      expect(oldCredentialOf(l, undefined)).toBe('unsure');
     }
-    expect(oldCredentialOf(checked('auth-dead', now), undefined, { checkAt: at })).toBe('unsure');
-    expect(oldCredentialOf(checked('ok', at), undefined, { checkAt: at })).toBe('unsure');
-    expect(oldCredentialOf(checked('ok', at + 1), undefined, { checkAt: at })).toBe('kept');
-    expect(oldCredentialOf(checked('ok', at), undefined, {})).toBe('kept');
+    expect(oldCredentialOf(checked('auth-dead', now), undefined)).toBe('unsure');
+    expect(oldCredentialOf(checked('ok', at), undefined)).toBe('kept');
+  });
+
+  it('a lane the box signed out is past adding, Off or not, so a resumed sign-in reopens the re-auth sheet', () => {
+    const off: LaneWire = { state: { word: 'off', source: 'Off on the fleet host' }, ready: false, notReadyReason: 'no-credential' };
+    expect(isPastAdding(off, null)).toBe(false);
+    expect(isPastAdding({ ...off, signedOutAt: now }, null)).toBe(true);
   });
 });
 
@@ -534,7 +538,7 @@ describe("the screen hands each sheet the lane's 401 marker (D-7872 (10))", () =
   const acts = (): HTMLElement => card('lane-a').querySelector('.acct-trouble-acts') as HTMLElement;
 
   it("the card's Sign in again: the re-auth sheet's intro is the neutral one", () => {
-    expect(oldCredentialOf(PASSED_THEN_401, null, undefined)).toBe('kept');
+    expect(oldCredentialOf(PASSED_THEN_401, null)).toBe('kept');
     screenWithMarker();
     expect(actsOf('lane-a')).toEqual([[SWITCH_TO_TOKEN, true], [SIGN_IN_AGAIN, false]]);
     fireEvent.click(within(acts()).getByRole('button', { name: SIGN_IN_AGAIN }));

@@ -91,7 +91,7 @@ export function ReplaceSheet(props: ReplaceSheetProps): ReactNode {
   /** One replacement at a time: a second tap in the same frame, before the phase has re-rendered, sends nothing. */
   const sending = useRef(false);
   /** What the sheet may say of the old token (D-7872 (10)): read when a sentence is written. */
-  const old = useOldCredential(id, props.lane, props.usage);
+  const old = useOldCredential(props.lane, props.usage);
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   useEffect(() => { if (!open) secret.current?.clear(); }, [open]);

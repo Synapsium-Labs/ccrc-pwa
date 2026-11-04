@@ -156,6 +156,14 @@ describe('what the paste sheet says of the old token follows the rule (D-7872 (1
     });
   }
 
+  it('a lane the box measured says what it measured, with no passing check on record (D-7992)', () => {
+    sheet(fakeClient(), { lane: { ...LANE_NEW, credential: 'held' }, usage: AUTH_DEAD });
+    expect(screen.getByText(replaceIntro('lane-c', 'kept'))).toBeInTheDocument();
+    cleanup();
+    sheet(fakeClient(), { lane: { ...LANE_NEW, credential: 'none' } });
+    expect(screen.getByText(replaceIntro('lane-c', 'signed-out'))).toBeInTheDocument();
+  });
+
   it("a no-credential lane: the box's own word, so the intro and a refusal say it is signed out", async () => {
     const client = fakeClient({ accountCredential: async () => { throw refused('token-unverified'); } });
     sheet(client, { lane: LANE_NONE });
