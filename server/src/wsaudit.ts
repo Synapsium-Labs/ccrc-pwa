@@ -83,8 +83,11 @@ export const SENTENCES: Record<string, string> = {
   // this is a stale REGISTRATION rather than a live checkout ccd does not
   // own. `nested-checkouts-present`'s sentence ("Checkouts of their own
   // live…") would be actively wrong here: there is no checkout to move or
-  // finish, only a record to prune.
-  'child-record-stale': 'git still records a nested worktree whose directory is gone. Run `git worktree prune` in the project checkout, then re-check.',
+  // finish, only a record to remove. The remedy names the scoped removal of
+  // that one record, never a repository-wide prune, which deletes the record
+  // of every gone worktree at once and holds ccd's cleanup (cleanup un-wedge,
+  // Task R3; the session hook refuses it).
+  'child-record-stale': 'git still records a nested worktree whose directory is gone. Remove that one record with `git -C <main> worktree remove <path>`, then re-check.',
   'stashes-present': 'This branch has stashed changes, which are in no commit.',
   // A stash read that FAILED, and it gets its own sentence for the same reason
   // `tree-unreadable` does: `git stash list` answers rc 0 with empty output for
