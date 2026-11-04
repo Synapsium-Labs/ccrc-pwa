@@ -14,7 +14,7 @@
 // screens and the toasts — is the same element in both skins, so a switch
 // remounts none of it (`skin-switch.test.tsx`).
 // ToastHost mounts here so stores/screens can fire toasts from anywhere.
-import { Suspense, lazy, useEffect, useLayoutEffect, useRef } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { BlockScreen } from './components/BlockScreen';
 import { LoginScreen } from './components/LoginScreen';
@@ -24,6 +24,7 @@ import { CommandLayer } from './command/CommandLayer';
 import { FleetChromeProvider } from './fleet/FleetChrome';
 import { FleetFlows, useFleetFlows } from './fleet/FleetFlows';
 import { useAuthLost } from './lib/auth';
+import { lazyScreen } from './lib/lazyScreen';
 import { navigate, useLocation } from './lib/router';
 import { matchRoute, sessionPath, shellViewOf } from './lib/routes';
 import { useSkin } from './lib/skin';
@@ -36,12 +37,13 @@ import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
 // own chunk, fetched the first time its route opens, so the fleet list starts without them. The fleet, the shell, Mail,
 // Archive, Docs, the programme and the Waiting routes stay in the entry. `SettingsDataProvider` stays eager: it wraps
 // the whole shell on every route (D-5504), so a lazy provider would hold the frame at start-up and defer nothing.
-const AccountsScreen = lazy(() => import('./screens/AccountsScreen').then((m) => ({ default: m.AccountsScreen })));
-const DigestScreen = lazy(() => import('./screens/DigestScreen').then((m) => ({ default: m.DigestScreen })));
-const HighlightMeasure = lazy(() => import('./screens/HighlightMeasure').then((m) => ({ default: m.HighlightMeasure })));
-const RunsScreen = lazy(() => import('./screens/RunsScreen').then((m) => ({ default: m.RunsScreen })));
-const SessionScreen = lazy(() => import('./screens/SessionScreen').then((m) => ({ default: m.SessionScreen })));
-const SettingsScreen = lazy(() => import('./screens/settings/SettingsFrame').then((m) => ({ default: m.SettingsScreen })));
+// `lazyScreen` (not React's `lazy`) so a chunk that failed to load is asked for again on the next navigation.
+const AccountsScreen = lazyScreen(() => import('./screens/AccountsScreen').then((m) => m.AccountsScreen));
+const DigestScreen = lazyScreen(() => import('./screens/DigestScreen').then((m) => m.DigestScreen));
+const HighlightMeasure = lazyScreen(() => import('./screens/HighlightMeasure').then((m) => m.HighlightMeasure));
+const RunsScreen = lazyScreen(() => import('./screens/RunsScreen').then((m) => m.RunsScreen));
+const SessionScreen = lazyScreen(() => import('./screens/SessionScreen').then((m) => m.SessionScreen));
+const SettingsScreen = lazyScreen(() => import('./screens/settings/SettingsFrame').then((m) => m.SettingsScreen));
 import { ProgrammeScreen } from './ledgers/ProgrammeScreen';
 import { ItemListColumn, ItemRouteAt, WaitingRoute } from './ledgers/WaitingRoutes';
 import { ShellFrame } from './skins/frame';
@@ -212,7 +214,7 @@ export function App(): ReactNode {
             started that waits for its code. The fleet's banner stack shows it on a desk and on a phone's fleet view;
             here, the top of the detail pane, on a phone's other views, so one instance is on screen at a time. */}
         <AuthResumeInDetail view={view} />
-        <RenderBoundary where="detail" resetKey={path + search} fallback={() => <ScreenFallback />}>{ladder}</RenderBoundary>
+        <RenderBoundary where="detail" resetKey={path + search} fallback={(e) => <ScreenFallback error={e} />}>{ladder}</RenderBoundary>
       </ShellFrame>
       <FleetFlows />
       {/* The ⌘K palette, the shortcut sheet and the global keys (D-5103),

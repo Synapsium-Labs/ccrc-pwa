@@ -425,7 +425,7 @@ describe('ROUTES and the ladder, both ways', () => {
       expect(await within(detail as HTMLElement).findByRole('heading', { level: 1, name: 'Settings' }, { timeout: 30_000 })).toBeInTheDocument();
       expect(within(detail as HTMLElement).getByText('That section does not exist.')).toBeInTheDocument();
       expect(within(detail as HTMLElement).getByRole('navigation', { name: 'Settings sections' })).toBeInTheDocument();
-      expect(within(detail as HTMLElement).queryByText(/could not be shown/i)).toBeNull();
+      expect(within(detail as HTMLElement).queryByText(/could not be (shown|loaded)/i)).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
