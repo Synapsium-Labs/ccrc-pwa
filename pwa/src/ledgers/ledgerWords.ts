@@ -298,5 +298,7 @@ export function itemPlace(id: number, list: ItemList, groups: readonly Programme
 export const placeWords = (place: ItemPlace): string => `${place.index + 1} of ${place.total}`;
 
 /** The place as a screen reader hears it (follow-up A-3): "3 of 6, <the open item's title>", so a step that lands on the same
- *  "N of M" still announces something new; empty with no place. */
-export const positionWords = (place: ItemPlace | null, title: string): string => (place === null ? '' : `${placeWords(place)}, ${title}`);
+ *  "N of M" still announces something new; empty with no place, and the place alone with no title (the item gone while its
+ *  place is kept: never "3 of 6, ", carry C, D-7951; review 1408 F3). */
+export const positionWords = (place: ItemPlace | null, title: string): string =>
+  (place === null ? '' : title === '' ? placeWords(place) : `${placeWords(place)}, ${title}`);

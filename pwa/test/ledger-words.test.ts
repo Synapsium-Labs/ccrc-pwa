@@ -256,5 +256,7 @@ describe('itemPlace: previous and next in the order and filter of the list the i
   it('the position as announced carries the item\'s title, so a step that keeps "N of M" still says something new (follow-up A-3)', () => {
     expect(positionWords({ list: COMBINED_LIST, index: 1, total: 3, prev: 10, next: 12 }, 'Item 11')).toBe('2 of 3, Item 11');
     expect(positionWords(null, 'Item 11')).toBe('');
+    // No title (the item is gone and its place kept): the place alone (carry C, D-7951; review 1408 F3).
+    expect(positionWords({ list: COMBINED_LIST, index: 1, total: 3, prev: 10, next: 12 }, '')).toBe('2 of 3');
   });
 });

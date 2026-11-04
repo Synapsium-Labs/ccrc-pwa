@@ -258,7 +258,8 @@ function ItemNav({ id, list, place, left, title, runs }: {
  *  THE BANNERS (fix round 1, F1). A skin with no `Banners` part (Instrument) draws the fleet's banner stack inside its fleet
  *  column, which this column replaces, so here it mounts that same stack (`FleetBanners`) above the list: offline,
  *  reconnecting, halt, disk, backup, passkey and the sign-in resume show on an item as on the list, in a box with the fleet
- *  column's own gutters, top space and gap (`.wl-banners`, follow-up F1), so a banner sits where it sits there. A skin whose
+ *  column's own gutters, top space and gap (`.wl-banners`, follow-up F1), so a banner sits where it sits there. That room is
+ *  given only while a banner draws: with none the box takes no room (carry C, D-7951; review 1408 F1). A skin whose
  *  frame places the stack under its bar (Refined) draws it there, and none here: one stack is mounted at any width. */
 export function ItemListColumn({ param, fleet, store = useFleetStore }: { param: string | null; fleet: ReactNode; store?: FleetStore }): ReactNode {
   const groups = useGroups(store);

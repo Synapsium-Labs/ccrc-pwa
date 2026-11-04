@@ -292,6 +292,36 @@ describe.each(SKINS)('moving between items in %s', (skin) => {
       expect(Math.abs(item.top - list.top), `gap above ${JSON.stringify(at)}`).toBeLessThanOrEqual(1);
     });
 
+    // Carry C (D-7951), review 1408 F1: the stack keeps every slot mounted, so with no banner to show the box must take no
+    // room: the list beside the item starts at the top of the left column, as it did before the box (Instrument). Refined
+    // draws no box there at all.
+    it(`at ${width}: with no banner to show, the box above the list beside an item takes no room`, async () => {
+      const { ctx, page, errors } = await open(skin, width, '/waiting/1');
+      try {
+        await page.waitForSelector('.shell-nav .wl-beside', { timeout: 20_000 });
+        const at = await page.evaluate(() => {
+          const box = document.querySelector<HTMLElement>('.shell-nav .wl-banners');
+          if (box === null) return null;
+          const shown = box.querySelectorAll(':scope > .banner-slot > *, :scope > .banner-more').length;
+          const r = box.getBoundingClientRect();
+          const nav = document.querySelector('.shell-nav')!.getBoundingClientRect();
+          const beside = document.querySelector('.shell-nav .wl-beside')!.getBoundingClientRect();
+          return { shown, height: r.height, besideTop: beside.top - nav.top };
+        });
+        if (skin === INSTRUMENT) {
+          expect(at, 'the box is mounted in Instrument').not.toBeNull();
+          expect(at!.shown, 'no banner shows in this fixture').toBe(0);
+          expect(at!.height, `the empty box's height ${JSON.stringify(at)}`).toBeLessThanOrEqual(0.5);
+          expect(at!.besideTop, `the list's top in the column ${JSON.stringify(at)}`).toBeLessThanOrEqual(0.5);
+        } else {
+          expect(at, 'Refined draws its stack under its bar, not in the column').toBeNull();
+        }
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+
     it(`at ${width}: the bare list keeps the fleet in the left column, and its own list in the detail pane`, async () => {
       const { ctx, page, errors } = await open(skin, width, '/waiting', ITEMS, false, '.wl-grid');
       try {
