@@ -44,11 +44,12 @@ describe('the cascade-layer order is declared first, in index.html (D-7891)', ()
     expect(theme[0] ?? []).not.toContain(names[0]);
   });
 
-  it('the statement comes before every stylesheet link, the module entry and every other @layer use', () => {
+  // The source shell links no stylesheet (Vite injects them at build), so the order against the BUILT links is pinned on
+  // a production build, in fonts-built.test.ts; here, the module entry Vite injects them beside.
+  it('the statement comes before the module entry and every other @layer use', () => {
     const at = source.search(/@layer\s+[\w-]+\s*,/);
     expect(at).toBeGreaterThan(-1);
     const later = (re: RegExp): number[] => [...source.matchAll(re)].map((m) => m.index ?? 0);
-    for (const i of later(/<link\b[^>]*\brel=["']?stylesheet/gi)) expect(i).toBeGreaterThan(at);
     for (const i of later(/<script\b[^>]*\btype=["']module["']/gi)) expect(i).toBeGreaterThan(at);
     expect(later(/@layer\b/g).filter((i) => i !== at).every((i) => i > at)).toBe(true);
     expect(later(/<script\b[^>]*\btype=["']module["']/gi).length).toBeGreaterThan(0);

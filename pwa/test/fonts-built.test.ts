@@ -117,6 +117,15 @@ describe('the built sheets and the layer order index.html declares first (D-7891
     expect(declared()[0]).toBe(first);
   });
 
+  it("the built shell states the order before every stylesheet it links", () => {
+    const shell = readFileSync(path.join(out, 'index.html'), 'utf8').replace(/<!--[\s\S]*?-->|\/\*[\s\S]*?\*\//g, (c) => ' '.repeat(c.length));
+    const at = shell.search(/@layer\s+[\w.-]+\s*,/);
+    expect(at, 'the built shell keeps the pre-paint @layer statement').toBeGreaterThan(-1);
+    const links = [...shell.matchAll(/<link\b[^>]*\brel="stylesheet"/g)].map((m) => m.index ?? 0);
+    expect(links.length, 'the built shell links its sheets').toBeGreaterThan(0);
+    for (const i of links) expect(i).toBeGreaterThan(at);
+  });
+
   it('every layer an emitted sheet uses is one index.html names', () => {
     const names = new Set(declared());
     const used = new Set(sheets().flatMap((n) => layersOf(readFileSync(path.join(out, 'assets', n), 'utf8'))));
