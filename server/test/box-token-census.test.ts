@@ -1278,3 +1278,64 @@ describe('the Linear proxy surface: twelve box-token lanes, every one EXEMPT (sp
     expect(lanesIn(planted)).not.toContain('GET /api/linear/proxy/planted');
   });
 });
+
+// ── the reader lab's door (the reader lab plan of 2026-11-03, Task 4) ─────────
+//
+// `server/src/readerLab/routes.ts` is the TENTH file that registers routes. Its three run routes are session-gated, NOT
+// EXEMPT, and consult no box token; its probe pair is EXEMPT under gate.ts reason 8 and consults none either. So no lane,
+// no door count and no CLAUDE.md sentence moves: the door is no coordination write, as the docs surface is not. EVERY
+// file under `server/src/readerLab/` is read, as the docs surface's are: a token check in the counter would gate the
+// probe as surely as one in a handler. README's auth paragraph names the probe among the exceptions.
+describe('the reader lab door: three session-gated routes, an exempt probe pair, no box token (reader lab plan, Task 4)', () => {
+  const LAB_SRC = read('server/src/readerLab/routes.ts');
+  /** Every source file of the lab surface, by listing the directory, so a file added there is read without an edit here. */
+  const LAB_FILES = readdirSync(path.join(REPO, 'server', 'src', 'readerLab'))
+    .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/readerLab/${f}`);
+  /** The five doors. Hand-kept for the NAMES only: the first case derives the same set from the file, both directions. */
+  const LAB_DOORS = ['POST /api/reader-lab/runs', 'GET /api/reader-lab/runs/:nonce', 'POST /api/reader-lab/runs/:nonce/close',
+    'GET /api/reader-lab/probe/:nonce/:name', 'POST /api/reader-lab/probe/:nonce/:name'];
+  const PROBE_PAIR = ['GET /api/reader-lab/probe/:nonce/:name', 'POST /api/reader-lab/probe/:nonce/:name'];
+  const REGISTERED = registrationsIn(LAB_SRC).map((r) => r.key);
+  /** The registration line the planted-call control anchors on (the plan's fixed registration text). */
+  const OPEN_LINE = "app.post('/api/reader-lab/runs', async (req, reply) => {";
+
+  it('readerLab/routes.ts registers exactly the five doors, each once, and every lab file is read', () => {
+    expect(new Set(REGISTERED).size, 'a lab route is registered twice').toBe(REGISTERED.length);
+    expect([...REGISTERED].sort(), 'readerLab/routes.ts and LAB_DOORS disagree').toEqual([...LAB_DOORS].sort());
+    expect(LAB_FILES).toEqual(['server/src/readerLab/routes.ts', 'server/src/readerLab/runs.ts']);
+  });
+
+  it('no lab file consults the box token, and no lab handler is a lane', () => {
+    for (const rel of LAB_FILES) {
+      const src = read(rel);
+      for (const re of GATE_PATTERNS) expect(re.test(src), `${rel} consults the box token (${re.source})`).toBe(false);
+    }
+    expect(lanesIn(LAB_SRC)).toEqual([]);
+  });
+
+  it('the probe pair is EXEMPT with reason 8, the run routes are not, and none claims a token or the cookie-or-token class', () => {
+    for (const k of LAB_DOORS) {
+      const at = GATE_SRC.indexOf(`  ['${k}',`);
+      if (!PROBE_PAIR.includes(k)) {
+        expect(at, `${k} became EXEMPT`).toBe(-1);
+        continue;
+      }
+      expect(at, `${k} is not EXEMPT`).toBeGreaterThan(-1);
+      const reason = GATE_SRC.slice(at, GATE_SRC.indexOf('],', at));
+      expect(reason, k).toContain('reason 8');
+      expect(reason, k).not.toContain('EXEMPT-BUT-AUTHENTICATED');
+      expect(reason, k).not.toContain('box-token gated');
+    }
+  });
+
+  it("README's auth paragraph names the probe among the exceptions", () => {
+    const p = passage('README, the auth paragraph', README, 'What is gated, and what is not:', 'Enrolling a passkey');
+    expect(p).toContain('`/api/reader-lab/probe/:nonce/:name`');
+  });
+
+  it('a box-token call planted after the open registration is SEEN: the lane source is live', () => {
+    expect(LAB_SRC, 'the open registration line moved: re-point this control at it').toContain(OPEN_LINE);
+    const planted = LAB_SRC.replace(OPEN_LINE, `${OPEN_LINE}\n    requireMailToken(req, reply);`);
+    expect(lanesIn(planted)).toEqual(['POST /api/reader-lab/runs']);
+  });
+});
