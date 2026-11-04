@@ -1014,7 +1014,9 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     row; 0 killed background tasks, in 0 transcripts; 33 notifications unmeasured. So the direct target, 0, is met
     for what was read, not proven: the 33 unmeasured notifications and the scanner's discovery limits (spec §9's
     as-built note) stay open, and whether the transcripts read include all of the week's first 2 h 9 m on the
-    previous box is unmeasured. This count never feeds the B comparison.
+    previous box is unmeasured. For exposure, only the running sessions' starts were read: for them the variable is
+    expected, not measured (Exposure, below), and the sessions behind the other transcripts were not read for
+    exposure at all. This count never feeds the B comparison.
   - **`inert_scopes`** (the sweep's current record, not the week's history): mode `live`; 1 dead, 0 inert, 0 dead for
     a day or more; carried scopes 0 dead, 0 live, 0 unknown.
   - **Exposure.** At the read, 54 sessions were running, with no lifecycle journal gaps. Each one's latest ordinary
@@ -1028,7 +1030,8 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     read, and this coordinator invents none.
   - **The two-week comparison (spec §9).** The direct figure reads 0 against its target of 0 in both weeks: 0 kills in
     2,610 transcripts with 21 notifications unmeasured, then 0 in 1,787 with 33 unmeasured. Both readings are
-    partial, so the target is met for what was read and not proven, and whether the figure moved from its baseline
+    partial, and each carries the discovery and exposure limits above, so the target is met for what was read and
+    not proven, and whether the figure moved from its baseline
     cannot be measured: the baseline's 186 was not counted by this scanner (§9's as-built note). This is reported
     for the operator's ruling on retirement or redesign under §9; this coordinator changes nothing.
   - **Next.** The rule covers any later week, so the observation continues weekly: the week since
