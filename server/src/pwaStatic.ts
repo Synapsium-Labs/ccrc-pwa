@@ -19,15 +19,16 @@ export const PWA_ASSET_CACHE = 'public, max-age=31536000, immutable';
  * The build writes a Brotli (`<file>.br`) and a gzip (`<file>.gz`) copy beside each script,
  * stylesheet and SVG under `assets/` (`pwa/build/compressAssets.ts`), and `preCompressed` sends the
  * one @fastify/static picks: br, gzip or deflate by the request's Accept-Encoding q-values (br first
- * among equals), `*` read as gzip, and the file itself when the chosen copy is missing or no coding
- * is accepted. The build never writes a `.deflate` copy, so a deflate pick always falls through to
- * the file. @fastify/static then
- * sets Content-Encoding and the file's own Content-Type, and adds `Vary: Accept-Encoding` to every
+ * among equals) and `*` read as gzip. A missing copy falls through to the next accepted coding, and
+ * then to the file itself, which is also the answer when no coding is accepted. The build never
+ * writes a `.deflate` copy, so a deflate pick always falls through. @fastify/static then sets
+ * Content-Encoding and the file's own Content-Type, and adds `Vary: Accept-Encoding` to every
  * file it answers, the uncompressed fallback included. `setHeaders` is handed the path it sent,
- * which for a copy is under `assets/` too, so a copy keeps its file's cache policy. The shell has no
- * copies, so it is always sent as it is. Only these public, content-hashed files are compressed:
- * nothing that carries a secret or a request's input is (the first-load compression plan of
- * 2026-11-03, refinement (f)).
+ * which for a copy is under `assets/` too, so a copy keeps its file's cache policy. The server
+ * would send a copy found beside a shell file too; the shell is sent as it is because the build
+ * writes no shell copy (it walks `assets/` only). Only these public, content-hashed files are
+ * compressed: nothing that carries a secret or a request's input is (the first-load compression
+ * plan of 2026-11-03, refinements (f) and (b)).
  */
 export function pwaStaticOptions(root: string): FastifyStaticOptions {
   const assets = path.join(root, 'assets') + path.sep;
