@@ -104,6 +104,26 @@ function goneBranch(c: Child): void {
   expect(existsRc(c.main), 'the CONTROL: git show-ref --exists answers absent').toBe('2');
 }
 
+/** Shape B: `git branch -D` refuses a checked-out branch, but `update-ref -d` does not. Uncommitted work stands in the
+ *  tree, HEAD stays symbolic to the branch, and git lists it as zeros. */
+function symbolicGone(): Child {
+  const c = makeChild(h);
+  fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'uncommitted\n');
+  h.git(c.main, 'update-ref', '-d', `refs/heads/${CHILD_BRANCH}`);
+  expect(h.git(c.wt, 'symbolic-ref', 'HEAD'), 'the CONTROL: HEAD still names the branch').toBe(`refs/heads/${CHILD_BRANCH}`);
+  expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the CONTROL: git lists HEAD as zeros').toMatch(/^HEAD 0{40}$/m);
+  return c;
+}
+
+/** A refusal touched nothing: the work, the row, the unit, and no pin or breadcrumb. */
+function workStands(c: Child): void {
+  expect(fs.readFileSync(path.join(c.wt, 'f1.txt'), 'utf8'), 'the uncommitted work stands').toContain('uncommitted');
+  expect(atticShas(c), 'nothing was pinned').toEqual([]);
+  expect(h.reg(CHILD_ID, 'uuid'), 'the row stands').not.toBeNull();
+  expect(h.reg(CHILD_ID, 'reaping'), 'no breadcrumb').toBeNull();
+  expect(unsupervised(), 'the unit was not touched').toEqual([]);
+}
+
 /** The ladder's fingerprint INPUTS: `_ws_reclaim_fingerprint` redefined to write what
  *  it was handed into the fixture HOME, then hash exactly as the real one does. */
 const FP_CAPTURE = `_ws_reclaim_fingerprint() { printf '%s\\n' "$@" > "$HOME/fp-inputs"; printf '%s\\n' "$@" | _plat_sha256 | cut -d' ' -f1; };`;
@@ -381,26 +401,31 @@ describe.skipIf(!MODERN_GIT)('the pin and the tail', () => {
     expect(eventsOf(h.home, 'reclaim').map((e) => e['outcome'])).toEqual(['intent', 'done']);
   }, 90_000);
 
-  it('a HEAD still symbolic to the gone branch stays pin-failed, nothing pinned', () => {
-    const c = makeChild(h);
-    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'uncommitted\n');
-    // Shape B: `git branch -D` refuses a checked-out branch, but `update-ref -d` does not.
-    h.git(c.main, 'update-ref', '-d', `refs/heads/${CHILD_BRANCH}`);
-    expect(h.git(c.wt, 'symbolic-ref', 'HEAD'), 'the CONTROL: HEAD still names the branch').toBe(`refs/heads/${CHILD_BRANCH}`);
-    expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the CONTROL: git lists HEAD as zeros').toMatch(/^HEAD 0{40}$/m);
+  it('ws-audit on a child whose HEAD is symbolic to a deleted branch refuses branch-gone-checked-out, no token', () => {
+    const c = symbolicGone();
     const a = evalOf(h);
-    // If this CONTROL is red, STOP and report: spec §5.5 rules this shape stays pin-failed; never change the ladder to meet it.
-    expect(a.verdict, `the CONTROL: the ladder passes this shape (${a.detail})`).toBe('reclaimable');
-    const r = childReclaimVerb(h, a.token);
-    expect(r.code, r.stdout + r.stderr).toBe(1);
-    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
-    expect(o.failed).toBe('pin-failed');
-    expect(o.detail).toMatch(new RegExp(`still has ${CHILD_BRANCH} checked out, but ${CHILD_BRANCH} is gone`));
-    expect(fs.readFileSync(path.join(c.wt, 'f1.txt'), 'utf8'), 'the uncommitted work stands').toContain('uncommitted');
-    expect(atticShas(c), 'nothing was pinned').toEqual([]);
-    expect(h.reg(CHILD_ID, 'uuid'), 'the row stands').not.toBeNull();
-    expect(h.reg(CHILD_ID, 'reaping'), 'no breadcrumb').toBeNull();
-    expect(unsupervised(), 'the unit was not touched').toEqual([]);
+    expect(a.verdict, a.detail).toBe('branch-gone-checked-out');
+    expect(a.token, 'refused before any token is minted').toBe('');
+    expect(a.detail).toMatch(new RegExp(`still has ${CHILD_BRANCH} checked out, but ${CHILD_BRANCH} is gone`));
+    const doc = reclaimAudit();
+    expect(doc['verdict']).toBe('branch-gone-checked-out');
+    expect(doc['token'], 'the document carries none').toBeUndefined();
+    expect(refusalsOf(h.home), 'a terminal word: the audit journals it').toEqual([{ act: 'reclaim', token: 'branch-gone-checked-out' }]);
+    workStands(c);
+  }, 90_000);
+
+  it('the verb’s in-lock recompute refuses it too: the terminal word, never pin-failed, nothing touched', () => {
+    const c = symbolicGone();
+    expect(refusedWith(childReclaimVerb(h, 'f'.repeat(64)))).toBe('branch-gone-checked-out');
+    workStands(c);
+  }, 90_000);
+
+  it('a HEAD the ladder cannot read is unmeasured: no token, and never the terminal word', () => {
+    const c = symbolicGone();
+    const a = evalOf(h, { pre: `git() { if [[ "$*" == "-C ${c.wt} symbolic-ref -q HEAD" ]]; then return 128; fi; command git "$@"; };` });
+    expect(a.verdict, a.detail).toBe('unmeasured');
+    expect(a.token).toBe('');
+    expect(a.detail).toContain('could not read which branch');
   }, 90_000);
 
   it('the pin keeps its own guard: a branch deleted in the window under a HEAD still symbolic to it is pin-failed, nothing pinned', () => {
@@ -609,6 +634,38 @@ describe.skipIf(!MODERN_GIT)('the pin and the tail', () => {
 });
 
 // Shimmed to look older than 2.43, and needing no real `--exists`: runs on every git.
+describe('`_ws_reclaim_head_unborn`: the one predicate of the ladder and the pin', () => {
+  /** The helper's rc over the tree `wt`, with the branch state the last tip read left. */
+  const unborn = (wt: string, state: string): string =>
+    h.sh(`RECLAIM_BRANCHSTATE=${state}; _ws_reclaim_head_unborn "${wt}" ${CHILD_BRANCH}; printf '%s' "$?"`);
+
+  it('answers 0 only for a HEAD symbolic to the branch while the branch is proven absent', () => {
+    const c = makeChild(h);
+    expect(unborn(c.wt, 'absent')).toBe('0');
+  }, 60_000);
+
+  it('a HEAD on the standing branch is not unborn', () => {
+    const c = makeChild(h);
+    expect(unborn(c.wt, 'present')).toBe('1');
+  }, 60_000);
+
+  it('a detached HEAD is not unborn, whatever the branch reads', () => {
+    const c = makeChild(h);
+    h.git(c.wt, 'checkout', '-q', '--detach');
+    expect(unborn(c.wt, 'absent')).toBe('1');
+  }, 60_000);
+
+  it('a HEAD drifted onto another branch is not unborn: that branch is kept, not this one', () => {
+    const c = makeChild(h);
+    h.git(c.wt, 'checkout', '-q', '-b', 'ws/drifted');
+    expect(unborn(c.wt, 'absent')).toBe('1');
+  }, 60_000);
+
+  it('a HEAD that will not read answers 2, never 1: outside a repository nothing was measured', () => {
+    expect(unborn(path.join(h.home, 'no-such-tree'), 'absent')).toBe('2');
+  }, 60_000);
+});
+
 describe('a git older than 2.43, shimmed', () => {
   it('a git older than 2.43 reclaims a standing branch exactly as today (the positive fallback)', () => {
     const c = makeChild(h);

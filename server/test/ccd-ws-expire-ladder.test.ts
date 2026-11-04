@@ -5,15 +5,16 @@
 // The ORDER is the spec's: rung 1 (`no-such-session`, `not-a-workspace`), rung 2′ (`not-archived`, `not-expired`,
 // `child`), then child reclamation's rungs 3-10 unchanged (`paused`, `held`, `attached`, the identity refusal
 // `no-worktree-record`, the vanished-worktree arm, `tree-busy`, `branch-elsewhere`, `tree-unreadable`,
-// `containment-unproven`) — with rung 5 asked MORE of for an expiry: a detached pane and a live unit refuse `live`.
+// `containment-unproven`, `branch-gone-checked-out`) — with rung 5 asked MORE of for an expiry: a detached pane and a live unit refuse `live`.
 // FIXTURE HOME ONLY (`wsExpireFixture.ts`).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
+import { refusalsOf } from './lifecycleHelpers.js';
 import { CHILD_ID, CHILD_STUBS, TMUX_FAULTS, evalOf, makeChild, plantTmux } from './childReclaimFixture.js';
 import {
-  EXP_BRANCH, EXP_ID, EXP_STUBS, NOW, OLD, WEEK, archiveAt, expireEvalOf, holdCwd, makeArchived,
+  EXP_BRANCH, EXP_ID, EXP_STUBS, NOW, OLD, WEEK, archiveAt, expireAudit, expireEvalOf, expireVerb, holdCwd, makeArchived,
 } from './wsExpireFixture.js';
 
 let h: PrHarness;
@@ -586,6 +587,29 @@ describe('rungs 7 to 9 and the identity refusal — the RECLAIM ladder’s, aske
     const r = expireEvalOf(h);
     expect(r.verdict, r.detail).toBe('expirable');
     expect(r.token).toMatch(/^[0-9a-f]{64}$/);
+  }, 60_000);
+
+  it('ws-expire’s audit refuses branch-gone-checked-out for a HEAD still symbolic to a deleted branch: no token, journaled once', () => {
+    const { wt, main } = makeArchived(h);
+    h.git(main, 'update-ref', '-d', `refs/heads/${EXP_BRANCH}`);
+    expect(h.git(wt, 'symbolic-ref', 'HEAD'), 'the CONTROL: HEAD still names the branch').toBe(`refs/heads/${EXP_BRANCH}`);
+    const r = expireEvalOf(h);
+    expect(r.verdict, r.detail).toBe('branch-gone-checked-out');
+    expect(r.token, 'refused before any token is minted').toBe('');
+    const doc = expireAudit(h);
+    expect(doc.code, doc.stderr).toBe(0);
+    expect(JSON.parse(doc.stdout)).toMatchObject({ verdict: 'branch-gone-checked-out' });
+    expect(JSON.parse(doc.stdout)['token']).toBeUndefined();
+    expect(refusalsOf(h.home), 'a terminal word: the audit journals it').toEqual([{ act: 'expire', token: 'branch-gone-checked-out' }]);
+  }, 60_000);
+
+  it('the ws-expire verb refuses it at its in-lock recompute: nothing is pinned or removed', () => {
+    const { wt, main } = makeArchived(h);
+    h.git(main, 'update-ref', '-d', `refs/heads/${EXP_BRANCH}`);
+    const r = expireVerb(h, 'f'.repeat(64));
+    expect(JSON.parse(r.stdout)['refused'], r.stdout + r.stderr).toBe('branch-gone-checked-out');
+    expect(fs.existsSync(wt), 'the tree stands').toBe(true);
+    expect(fs.existsSync(reg('reaping')), 'no breadcrumb').toBe(false);
   }, 60_000);
 
   it('refuses no-worktree-record for a directory git does not record', () => {
