@@ -314,8 +314,14 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
     'malformed--v2-refused-with-value', 'malformed--v2-why-outside-set', 'malformed--v2-omit-row', 'malformed--v2-origin-outside',
     'malformed--version-3',
   ].map((n) => `server/test/fixtures/box-settings/${n}.json`);
+  // The verb's own corpus: the nine `ok--<name>.json` documents the version-2 verb wrote, each now holding the 16 test box rows.
+  const BOX_SETTINGS_VERB_CORPUS = [
+    'ok--backups-and-disk-unmeasured', 'ok--custom-base-url', 'ok--defaults', 'ok--long-sentence', 'ok--refused', 'ok--sources', 'ok--timer-reader',
+    'ok--unmeasured-nul', 'ok--with-backups',
+  ].map((n) => `server/test/fixtures/box-settings/${n}.json`);
   const BOX_SETTINGS_W2_HOLDERS = [
     'server/test/box-settings-table.test.ts', 'server/test/boxSettingsEnvelope.ts', 'shared/api.ts', 'server/test/box-settings-read.test.ts',
+    'server/test/ccrc-settings-verb.test.ts', ...BOX_SETTINGS_VERB_CORPUS,
     ...BOX_SETTINGS_V2_FIXTURES,
   ];
   const HOLDERS = [

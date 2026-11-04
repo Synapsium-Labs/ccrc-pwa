@@ -2290,6 +2290,7 @@ takes the next spare and is named in the wave-done.
 - **D-7914.** A setting's fixed value words live in their own L0 constant, `BOX_SETTING_VALUE_WORDS`, with a bash mirror in `ccd/ccrc`, held equal
   both ways to each other and to `_tb_shape`'s word arms, not as a table column; the writer's `_set_fits` and the server admit exactly a key's
   own words (moved from Task 4; review F5).
+- **D-7910.** The class table replaces wave 1's seven-name literal `BOX_SETTINGS_KEYS`, superseding D-7861's ordered literal: `cmd_settings` walks `CCRC_SETTINGS`, reads the class of each key from `BOX_SETTINGS_TABLE` and skips `omit`, so the seven are the table's first seven rows and the verb names no key list of its own. Retired in the commit that switches the verb to version 2 (61 rows, a refused one with no value), which also rewrites the usage text, the header comment and the installer's comment that said "seven" (review F2, E1, F9, E5).
 - **D-7911.** The server rewrites three kinds of version-1 row and forwards none as the box wrote it: a refused row loses its value and its `why`
   (the fixed `BOX_SETTINGS_V1_REFUSED_WHY`); an `ok` row whose value or origin is outside the envelope becomes `unmeasured` (the fixed
   `BOX_SETTINGS_V1_UNFIT_WHY`); an `unmeasured` `why` over 240 is cut to 237 bytes and `...` (C13; the only way 5.4's "residual retires" holds;

@@ -1,15 +1,15 @@
-// Box settings view, Task 1 (D-6914, D-7861): `ccrc settings [--json] [--write] [--from timer]` — what the box's seven settings
-// resolve to, printed or recorded as ~/.ccrc/box-settings.json. Every case runs the REAL `bash ccd/ccrc settings` (or the sourced
-// `cmd_settings`, where a ccrc function is stubbed through `stubFn`) in a mkTmp fixture HOME with a contained environment:
-// nothing here reaches the live HOME, a manager, a network or tmux. Neutral names only: this repository is public.
+// Box settings view (D-6914, D-7861; wave 2 D-7910): `ccrc settings [--json] [--write] [--from timer]` — what the 61 settings a fleet or server
+// node reads resolve to, by display class, printed or recorded as ~/.ccrc/box-settings.json (version 2). Every case runs the REAL
+// `bash ccd/ccrc settings` (or the sourced `cmd_settings`, where a ccrc function is stubbed through `stubFn`) in a mkTmp fixture HOME with
+// a contained environment: nothing here reaches the live HOME, a manager, a network or tmux. Every row that plants a value asserts the value
+// is absent from stdout, stderr, the `--write` file and the human form. Neutral names only: this repository is public.
 //
 // The corpus row (the `ok` documents of server/test/fixtures/box-settings/, regenerated from the real verb with `date`, `df` and
-// `du` stubbed by PATH) belongs to the server's parse task, which creates that directory; the stubs this file already plants
-// (`date`, `mv`) are the seam it will use.
+// `du` stubbed by PATH) is box-settings-read.test.ts's.
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
-  chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync,
+  chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -18,6 +18,9 @@ import { mkTmp } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { stubFn } from './ccdStub.js';
+import { ccrcSettingsNames } from './ccrcSettingsLine.js';
+import { BOX_SETTINGS_SHOWN, BOX_SETTING_REFUSAL_WORDS, BOX_SETTING_SPECS } from '../../shared/api.js';
+import { NODE_FILE_CAP_BYTES } from '../src/update/inventory.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CCRC = path.resolve(here, '..', '..', 'ccd', 'ccrc');
@@ -58,7 +61,7 @@ function boxWith(prefix: string, envText: string | Buffer | null = null): string
  *  directory of executables) first on PATH. */
 function envOf(home: string, extra: NodeJS.ProcessEnv = {}, stubs?: string): NodeJS.ProcessEnv {
   const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
-  for (const k of [...KEYS, 'CCRC_EXPOSURE_FILE']) delete env[k];
+  for (const k of [...(ccrcSettingsNames(SRC) ?? []), 'CCRC_EXPOSURE_FILE']) delete env[k];
   env['TMPDIR'] = join(home, 'tmp');
   Object.assign(env, extra);
   if (stubs !== undefined) env['PATH'] = `${stubs}:${env['PATH'] ?? ''}`;
@@ -101,17 +104,76 @@ function ccrcState(home: string): Record<string, string> {
   return out;
 }
 
-describe('ccrc settings: the seven settings and where each came from (D-7861)', () => {
-  it('lists exactly the seven, in CCRC_SETTINGS order, each once; the verb\'s list is its own literal', () => {
+const US = '\u001f';
+/** Every key in CCRC_SETTINGS, for the environment of a case (the verb reads 61 of them, wave 1's seven from the environment too). */
+const ALL: string[] = ccrcSettingsNames(SRC) ?? [];
+const CLS = (k: string): string => BOX_SETTING_SPECS[k as keyof typeof BOX_SETTING_SPECS].cls;
+const DEFAULTS: Record<string, string> = {
+  CCRC_GRAPH_BUDGET: '4', CCRC_TESTBOX_QUEUE_WAIT: '10m', CCRC_TEST_SLICE_CPU_QUOTA: '400%', CCRC_SESSION_SLICE_MEMORY_MAX: '24G',
+  CCRC_KEEPALIVE_FRESH: '1800', CCRC_USAGE_SWEEP_DAYS: '7', CCRC_CARRY_COPY_WARN_BYTES: '10737418240', CCRC_TESTBOX_LOST_RUN: 'local',
+};
+
+/** Runs a shell script after sourcing ccd/ccrc (or a copy of it), in the fixture HOME. */
+function shell(home: string, script: string, extra: NodeJS.ProcessEnv = {}, ccrc: string = CCRC): Result {
+  const r = spawnSync(BASH, ['-c', `. "$1"; ${script}`, 'x', ccrc], { env: envOf(home, extra), encoding: 'utf8', input: '', timeout: 120_000 });
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+const COPIES: Record<string, string> = {};
+/** A copy of ccd/ with the named libraries missing, so a verb run from it cannot load them. */
+function ccrcWithout(...names: string[]): string {
+  const key = names.join('+');
+  if (COPIES[key] === undefined) {
+    const dir = join(mkTmp('ccrc-sv-ccd-'), 'ccd');
+    cpSync(path.dirname(CCRC), dir, { recursive: true });
+    for (const n of names) rmSync(join(dir, n));
+    COPIES[key] = join(dir, 'ccrc');
+  }
+  return COPIES[key];
+}
+/** The verb run from `ccrc` (a copy of ccd/ccrc) as `settings --json`. */
+function jsonFrom(home: string, ccrc: string, extra: NodeJS.ProcessEnv = {}): Doc {
+  const r = spawnSync(BASH, [ccrc, 'settings', '--json'], { env: envOf(home, extra), encoding: 'utf8', input: '', timeout: 120_000 });
+  return docOf({ code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' });
+}
+
+interface Surfaces { json: Result; human: Result; file: string }
+/** Every place a value could leave the box: the verb's stdout and stderr, the `--write` file, and the human form with its stderr. */
+function surfaces(home: string, extra: NodeJS.ProcessEnv = {}): Surfaces {
+  // `df` is stubbed: a live filesystem's figures could hold any digits a needle names.
+  const stubs = stubDir(home, { df: '#!/bin/sh\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/fixture 1000 400 600 40%% /\\n"\n' });
+  const j = settings(home, ['--json', '--write'], extra, stubs);
+  const h = settings(home, [], extra, stubs);
+  return { json: j, human: h, file: readFileSync(join(home, '.ccrc', 'box-settings.json'), 'utf8') };
+}
+function expectAbsent(s: Surfaces, needles: string[], ctx: string): void {
+  for (const n of needles) {
+    for (const [name, text] of [['stdout', s.json.stdout], ['stderr', s.json.stderr], ['the file', s.file], ['the human form', s.human.stdout], ['the human stderr', s.human.stderr]] as const) {
+      expect(text, `${ctx}: ${name} holds ${JSON.stringify(n)}`).not.toContain(n);
+    }
+  }
+}
+
+describe('ccrc settings: the 61 settings by display class, and where each came from (D-7861, D-7910)', () => {
+  it('V1: version 2 lists BOX_SETTINGS_SHOWN in order; the verb holds no literal key list; every row is ok and default, a value row at its default, a presence row bare', () => {
     const line = /^CCRC_SETTINGS=\(([A-Z0-9_ ]+)\)$/m.exec(SRC)?.[1]?.split(' ') ?? [];
-    expect(line.length).toBeGreaterThan(7);
+    expect(line.length).toBeGreaterThan(61);
     for (const k of KEYS) expect(line.filter((n) => n === k), `${k} appears once in CCRC_SETTINGS`).toHaveLength(1);
     expect(line.slice(0, 7), 'the seven are the first seven of CCRC_SETTINGS').toEqual(KEYS);
-    const own = /^BOX_SETTINGS_KEYS=\(([A-Z0-9_ ]+)\)$/m.exec(SRC)?.[1]?.split(' ');
-    expect(own, 'the verb holds its own literal list').toEqual(KEYS);
-    const d = json(boxWith('ccrc-sv-keys-'));
-    expect(d.settings.map((s) => s.key)).toEqual(KEYS);
-    expect(d.v).toBe(1);
+    expect(/^BOX_SETTINGS_KEYS=\(/m.test(SRC), 'ccd/ccrc holds no BOX_SETTINGS_KEYS literal (D-7910)').toBe(false);
+    const home = boxWith('ccrc-sv-keys-');
+    const r = settings(home, ['--json']);
+    const d = docOf(r);
+    expect(d.v).toBe(2);
+    expect(d.settings.map((s) => s.key)).toEqual([...BOX_SETTINGS_SHOWN]);
+    expect(d.settings.map((s) => s.key)).not.toContain('CCRC_TESTBOX_RUNS');
+    expect(d.settings.slice(0, 7).map((s) => s.key)).toEqual(KEYS);
+    for (const row of d.settings) {
+      if (CLS(row.key) === 'presence') expect(row, row.key).toEqual({ key: row.key, state: 'ok', from: 'default' });
+      else { expect(row.state, row.key).toBe('ok'); expect(row.from, row.key).toBe('default'); expect(typeof row.value, row.key).toBe('string'); }
+    }
+    for (const [k, v] of Object.entries(DEFAULTS)) expect(rowOf(d, k), k).toEqual({ key: k, state: 'ok', value: v, from: 'default' });
+    expect(r.stdout, 'CCRC_GRAPH_STORE\'s default is under the HOME, and the HOME is nowhere').not.toContain(home);
+    expect(r.stderr).toBe('');
   });
 
   it('reads each source as itself: environment, file, empty and default', () => {
@@ -137,102 +199,133 @@ describe('ccrc settings: the seven settings and where each came from (D-7861)', 
   });
 });
 
-describe('ccrc settings: a refused value reads refused, with the act\'s own sentence', () => {
-  it('CCRC_BACKUP_KEEP=abc: _keep_knob\'s sentence, the value as written', () => {
-    const r = rowOf(json(boxWith('ccrc-sv-rf1-'), { CCRC_BACKUP_KEEP: 'abc' }), 'CCRC_BACKUP_KEEP');
-    expect(r).toEqual({ key: 'CCRC_BACKUP_KEEP', state: 'refused', value: 'abc', from: 'environment',
-      why: "CCRC_BACKUP_KEEP='abc' is not a whole number from 0 to 9999, as set in the environment" });
+describe('ccrc settings: a setting other than wave 1\'s is read in file mode (D-7910, spec D20, 5.7)', () => {
+  it('V2: ccrc.env values read from the file; the same keys set only in the environment read their defaults; wave 1\'s keep their mode', () => {
+    const home = boxWith('ccrc-sv-v2-', 'CCRC_GRAPH_BUDGET=6\nCCRC_TESTBOX_POLL=45s\nCCRC_KEEPALIVE_FRESH=900\n');
+    const d = json(home);
+    expect(rowOf(d, 'CCRC_GRAPH_BUDGET')).toEqual({ key: 'CCRC_GRAPH_BUDGET', state: 'ok', value: '6', from: 'file' });
+    expect(rowOf(d, 'CCRC_TESTBOX_POLL')).toEqual({ key: 'CCRC_TESTBOX_POLL', state: 'ok', value: '45s', from: 'file' });
+    expect(rowOf(d, 'CCRC_KEEPALIVE_FRESH')).toEqual({ key: 'CCRC_KEEPALIVE_FRESH', state: 'ok', value: '900', from: 'file' });
+    const e = json(boxWith('ccrc-sv-v2b-'), { CCRC_GRAPH_BUDGET: '9', CCRC_TESTBOX_POLL: '5s', CCRC_KEEPALIVE_FRESH: '60', CCRC_TEST_PRESSURE_MAX: '50' });
+    expect(rowOf(e, 'CCRC_GRAPH_BUDGET')).toEqual({ key: 'CCRC_GRAPH_BUDGET', state: 'ok', value: '4', from: 'default' });
+    expect(rowOf(e, 'CCRC_TESTBOX_POLL')).toEqual({ key: 'CCRC_TESTBOX_POLL', state: 'ok', value: '30s', from: 'default' });
+    expect(rowOf(e, 'CCRC_KEEPALIVE_FRESH')).toEqual({ key: 'CCRC_KEEPALIVE_FRESH', state: 'ok', value: '1800', from: 'default' });
+    expect(rowOf(e, 'CCRC_TEST_PRESSURE_MAX'), '`_test_knobs` reads the pressure bound environment-first; the verb reads it in file mode').toEqual({ key: 'CCRC_TEST_PRESSURE_MAX', state: 'ok', value: '0', from: 'default' });
+    expect(rowOf(json(boxWith('ccrc-sv-v2c-'), { CCRC_BACKUP_KEEP: '5' }), 'CCRC_BACKUP_KEEP')).toEqual({ key: 'CCRC_BACKUP_KEEP', state: 'ok', value: '5', from: 'environment' });
+  });
+});
+
+describe('ccrc settings: a refused row carries the check\'s words and its source, never the value (D14, D22)', () => {
+  /** A value each check refuses; the default is `zz-refused-<i>`, and a key whose check accepts that has its own here. */
+  const REFUSED_SAMPLE: Record<string, string> = {
+    CCRC_TESTBOX_GIT_KEY: 'relative/key', CCRC_TESTBOX_UNTRACKED_FILE_MAX: '5MB', CCRC_GRAPH_MAX_SHRINK_PCT: '150', CCRC_GRAPH_SOURCE_REF: '../x',
+    CCRC_TEST_SLICE_CPU_QUOTA: '4', CCRC_SESSION_SLICE_MEMORY_MAX: '90', CCRC_KEEPALIVE_FRESH: '30m', CCRC_USAGE_SWEEP_DAYS: '0',
+    CCRC_CARRY_COPY_WARN_BYTES: '10G', CCRC_TESTBOX_DENY_GLOBS: 'a\tzz-denied',
+  };
+  const LIST = `for k in ${BOX_SETTINGS_SHOWN.join(' ')}; do w="$(_set_says "$k")" && printf '%s\\037%s\\n' "$k" "$w"; done`;
+  const WITH_WORDS = (): [string, string][] => {
+    const home = boxWith('ccrc-sv-v4w-');
+    const r = shell(home, `_set_libs; ${LIST}`);
+    expect(r.code, r.stderr).toBe(0);
+    return r.stdout.split('\n').filter(Boolean).map((l) => l.split(US) as [string, string]);
+  };
+
+  it('V4: every key _set_says has words for (the 58) is written refused, with its words and its source, and the sample is nowhere', () => {
+    const keys = WITH_WORDS();
+    expect(keys).toHaveLength(58);
+    const sample = (k: string, i: number): string => REFUSED_SAMPLE[k] ?? `zz-refused-${i}`;
+    const home = boxWith('ccrc-sv-v4-', keys.map(([k], i) => `${k}=${sample(k, i)}\n`).join(''));
+    // The sample is a refused one, in this fixture, for every key: a sample a check accepts fails here, loudly.
+    const rcs = shell(home, `_set_libs; ${keys.map(([k], i) => `_set_check ${k} "$V${i}"; echo "${k} $?"`).join('; ')}`,
+      Object.fromEntries(keys.map(([k], i) => [`V${i}`, sample(k, i)])));
+    expect(rcs.stdout.trim().split('\n').filter((l) => !l.endsWith(' 1')), 'a sample the check does not refuse').toEqual([]);
+    const s = surfaces(home);
+    const d = docOf(s.json);
+    for (const [k, words] of keys) {
+      expect(rowOf(d, k), k).toEqual({ key: k, state: 'refused', from: 'file', why: words.replace(/\n$/, '') });
+      expect(rowOf(d, k), k).not.toHaveProperty('value');
+    }
+    expect(d.settings.filter((r) => r.state === 'refused')).toHaveLength(58);
+    expect(BOX_SETTING_REFUSAL_WORDS.length).toBeGreaterThan(0);
+    for (const r of d.settings.filter((x) => x.state === 'refused')) expect(BOX_SETTING_REFUSAL_WORDS, r.key).toContain(r.why);
+    const needles = keys.flatMap(([k], i) => [...sample(k, i).split(/[\t/]/), sample(k, i)]).filter((t) => t.length >= 4);
+    expectAbsent(s, needles, 'V4');
   });
 
-  it('CCRC_BACKUP_DATA_KEEP=1: through _bak_data_keep\'s bound (2 is the lowest)', () => {
-    const r = rowOf(json(boxWith('ccrc-sv-rf2-', 'CCRC_BACKUP_DATA_KEEP=1\n')), 'CCRC_BACKUP_DATA_KEEP');
-    expect(r).toEqual({ key: 'CCRC_BACKUP_DATA_KEEP', state: 'refused', value: '1', from: 'file',
-      why: "CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999, as set in the box's ccrc.env" });
+  it.each([
+    ['CCRC_TESTBOX_GIT_KEY', 'relative/key', 'an absolute path, or one starting ~/, with no . or .. part'],
+    ['CCRC_TESTBOX_UNTRACKED_FILE_MAX', '5MB', 'a whole number with a K, M or G suffix'],
+    ['CCRC_GRAPH_MAX_SHRINK_PCT', '150', 'a whole percentage from 0 to 100'],
+    ['CCRC_GRAPH_SOURCE_REF', '../x', 'a ref name such as origin/HEAD'],
+    ['CCRC_TEST_SLICE_CPU_QUOTA', '4', 'a whole percentage such as 400%'],
+    ['CCRC_SESSION_SLICE_MEMORY_MAX', '90', 'a whole number with an optional K, M, G, T, P or E suffix, at least 1G, or a whole percentage from 1% to 100%'],
+    ['CCRC_KEEPALIVE_FRESH', '30m', 'a whole number of seconds from 0 to 9223372036854775807'],
+    ['CCRC_USAGE_SWEEP_DAYS', '0', 'a whole number from 1 to 999'],
+    ['CCRC_CARRY_COPY_WARN_BYTES', '10G', 'a whole number of bytes from 1 to 18 digits'],
+  ])('V4 named: %s=%s reads refused from the file with its words', (k, v, words) => {
+    const home = boxWith('ccrc-sv-v4n-', `${k}=${v}\n`);
+    const s = surfaces(home);
+    expect(rowOf(docOf(s.json), k)).toEqual({ key: k, state: 'refused', from: 'file', why: words });
+    expectAbsent(s, [`${k}=${v}`, `'${v}'`], k);
   });
 
-  it('CCRC_VERSIONS_KEEP=10000 is over 9999', () => {
-    const r = rowOf(json(boxWith('ccrc-sv-rf3-'), { CCRC_VERSIONS_KEEP: '10000' }), 'CCRC_VERSIONS_KEEP');
-    expect(r.state).toBe('refused');
-    expect(r.why).toBe("CCRC_VERSIONS_KEEP='10000' is not a whole number from 0 to 9999, as set in the environment");
-  });
-
-  it('CCRC_UPDATE_HEALTH_S=ninety: the health gate\'s own fallback words, in ASCII', () => {
-    const r = rowOf(json(boxWith('ccrc-sv-rf4-'), { CCRC_UPDATE_HEALTH_S: 'ninety' }), 'CCRC_UPDATE_HEALTH_S');
-    expect(r).toEqual({ key: 'CCRC_UPDATE_HEALTH_S', state: 'refused', value: 'ninety', from: 'environment',
-      why: "CCRC_UPDATE_HEALTH_S='ninety' is not a number of seconds (digits only, at most 18) - using 90" });
-  });
-
-  it('CCRC_UPDATE_DEADLINE_MS=6e5: refused; the sentence gives the plain reading AS the plain reading, beside the min and max the acts read (F2)', () => {
-    const d = json(boxWith('ccrc-sv-rf5-'), { CCRC_UPDATE_DEADLINE_MS: '6e5' });
-    expect(rowOf(d, 'CCRC_UPDATE_DEADLINE_MS')).toEqual({ key: 'CCRC_UPDATE_DEADLINE_MS', state: 'refused', value: '6e5', from: 'environment',
-      why: 'CCRC_UPDATE_DEADLINE_MS is not a positive whole number of milliseconds in canonical digits (at most 15, no lead zero), so its plain reading is 900000; the backup prune and the watchdog read the min and the max, which ccrc settings prints' });
-    expect(rowOf(d, 'CCRC_UPDATE_DEADLINE_MS').why, 'no act reads the plain form').not.toContain('the acts read');
-    expect(rowOf(d, 'CCRC_UPDATE_DEADLINE_MS').why, 'the card has no deadline line (review 1396 F2)').not.toContain('deadline line');
+  it('V4 wave 1: the seven\'s refusals are the check\'s words, from the environment or the file, and the value is nowhere', () => {
+    const home = boxWith('ccrc-sv-v4w1-', 'CCRC_BACKUP_DATA_KEEP=1\nCCRC_UPDATE_DEADLINE_MS=6e5\nCCRC_MODELS_ADVANCE_BUDGET_S=off\n');
+    const extra = { CCRC_BACKUP_KEEP: 'abc', CCRC_UPDATE_HEALTH_S: 'ninety' };
+    const s = surfaces(home, extra);
+    const d = docOf(s.json);
+    expect(rowOf(d, 'CCRC_BACKUP_KEEP')).toEqual({ key: 'CCRC_BACKUP_KEEP', state: 'refused', from: 'environment', why: 'a whole number from 0 to 9999' });
+    expect(rowOf(d, 'CCRC_BACKUP_DATA_KEEP')).toEqual({ key: 'CCRC_BACKUP_DATA_KEEP', state: 'refused', from: 'file', why: 'a whole number from 2 to 9999' });
+    expect(rowOf(d, 'CCRC_UPDATE_HEALTH_S')).toEqual({ key: 'CCRC_UPDATE_HEALTH_S', state: 'refused', from: 'environment', why: 'a number of seconds (digits only, at most 18)' });
+    expect(rowOf(d, 'CCRC_UPDATE_DEADLINE_MS')).toEqual({ key: 'CCRC_UPDATE_DEADLINE_MS', state: 'refused', from: 'file',
+      why: 'a positive whole number of milliseconds in canonical digits (at most 15, no lead zero)' });
+    expect(rowOf(d, 'CCRC_MODELS_ADVANCE_BUDGET_S')).toEqual({ key: 'CCRC_MODELS_ADVANCE_BUDGET_S', state: 'refused', from: 'file', why: 'a whole number of seconds from 0 to 3600' });
     expect(d.deadline.plainMs).toBe(900000);
     expect(d.deadline.minMs, 'min is 0 when a reading cannot be decided').toBe(0);
-  });
-
-  it.each([['3601', '3601'], ['99999', '99999']])('CCRC_MODELS_ADVANCE_BUDGET_S=%s is a clamp, which reads refused and says what the step uses', (v) => {
-    const r = rowOf(json(boxWith('ccrc-sv-rf6-'), { CCRC_MODELS_ADVANCE_BUDGET_S: v }), 'CCRC_MODELS_ADVANCE_BUDGET_S');
-    expect(r.state).toBe('refused');
-    expect(r.value).toBe(v);
-    expect(r.why).toBe(`CCRC_MODELS_ADVANCE_BUDGET_S='${v}' is over 3600 seconds, so the advance step uses 3600`);
-  });
-
-  it('CCRC_MODELS_ADVANCE_BUDGET_S of 30 zeros then 5000 is clamped, and the sentence marks its cut at 32 characters with three dots (A6)', () => {
-    const v = `${'0'.repeat(30)}5000`;
-    const r = rowOf(json(boxWith('ccrc-sv-rf6b-'), { CCRC_MODELS_ADVANCE_BUDGET_S: v }), 'CCRC_MODELS_ADVANCE_BUDGET_S');
-    expect(r.state).toBe('refused');
-    expect(r.why).toBe(`CCRC_MODELS_ADVANCE_BUDGET_S='${'0'.repeat(30)}50...' is over 3600 seconds, so the advance step uses 3600`);
-    // A value of 32 characters or fewer is quoted whole, with no dots.
-    expect(rowOf(json(boxWith('ccrc-sv-rf6c-'), { CCRC_MODELS_ADVANCE_BUDGET_S: `${'0'.repeat(28)}5000` }), 'CCRC_MODELS_ADVANCE_BUDGET_S').why)
-      .toBe(`CCRC_MODELS_ADVANCE_BUDGET_S='${'0'.repeat(28)}5000' is over 3600 seconds, so the advance step uses 3600`);
-  });
-
-  it('CCRC_MODELS_ADVANCE_BUDGET_S=off is not a whole number: the act\'s sentence without its `ccrc: ` lead', () => {
-    const r = rowOf(json(boxWith('ccrc-sv-rf7-'), { CCRC_MODELS_ADVANCE_BUDGET_S: 'off' }), 'CCRC_MODELS_ADVANCE_BUDGET_S');
-    expect(r).toEqual({ key: 'CCRC_MODELS_ADVANCE_BUDGET_S', state: 'refused', value: 'off', from: 'environment',
-      why: 'CCRC_MODELS_ADVANCE_BUDGET_S is not a whole number of seconds, so the advance step is off for this run' });
+    expectAbsent(s, ['abc', 'ninety', '6e5', "'off'", '=off'], 'wave 1');
+    for (const v of ['3601', '99999', 'off']) {
+      const h2 = boxWith('ccrc-sv-v4w1b-');
+      const s2 = surfaces(h2, { CCRC_MODELS_ADVANCE_BUDGET_S: v });
+      expect(rowOf(docOf(s2.json), 'CCRC_MODELS_ADVANCE_BUDGET_S')).toEqual({ key: 'CCRC_MODELS_ADVANCE_BUDGET_S', state: 'refused', from: 'environment', why: 'a whole number of seconds from 0 to 3600' });
+      expectAbsent(s2, [v === 'off' ? "'off'" : v], `budget ${v}`);
+    }
   });
 });
 
 describe('ccrc settings: a ccrc.env the reader cannot take is unmeasured, never unset (D-6365, D-6604)', () => {
-  it('a NUL byte makes every setting unmeasured, and the verb still answers rc 0 with a valid document', () => {
+  it('V5: a NUL byte makes all 61 settings unmeasured, each why naming the key and the file, at most 240 bytes, and the verb still answers rc 0', () => {
     const d = json(boxWith('ccrc-sv-nul-', Buffer.from('NOTE=x\u0000y\n', 'utf8')));
-    expect(d.v).toBe(1);
-    expect(d.settings.map((s) => s.state)).toEqual(KEYS.map(() => 'unmeasured'));
+    expect(d.v).toBe(2);
+    expect(d.settings.map((s) => s.state)).toEqual(BOX_SETTINGS_SHOWN.map(() => 'unmeasured'));
     for (const s of d.settings) {
-      expect(s.why, s.key).toContain(`${s.key} cannot be measured: ~/.ccrc/ccrc.env could not be scanned`);
+      expect(s.why, s.key).toContain(`${s.key} cannot be measured:`);
+      expect(s.why, s.key).toContain('~/.ccrc/ccrc.env');
+      expect(Buffer.byteLength(s.why!), s.key).toBeLessThanOrEqual(240);
       expect(s).not.toHaveProperty('value');
       expect(s).not.toHaveProperty('from');
     }
   });
 
   // Each platform's own reader (`_ccrc_knob`). On Linux the systemd reader makes only the key on the bad line unmeasured. On macOS the
-  // launchd job sources the whole file with bash, so the shell reader refuses the backup keys that job reads: here CCRC_BACKUP_KEEP,
-  // which the file names, and CCRC_BACKUP_DATA_KEEP, which it does not (as CI's macOS leg measured on this row); CCRC_VERSIONS_KEEP
-  // stays ok on both.
-  it('an inner CR: on Linux only the key on that line is unmeasured, on macOS the two backup keys the launchd job reads', () => {
+  // launchd job sources the whole file with bash, so the shell reader refuses every key that job reads.
+  it('an inner CR: on Linux only the key on that line is unmeasured, on macOS the keys the launchd job reads', () => {
     const d = json(boxWith('ccrc-sv-cr-', 'CCRC_BACKUP_KEEP=5\rjunk\nNOTE=1\n'));
     expect(rowOf(d, 'CCRC_BACKUP_KEEP').state).toBe('unmeasured');
-    expect(d.settings.filter((s) => s.state === 'unmeasured').map((s) => s.key))
-      .toEqual(process.platform === 'darwin' ? ['CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP'] : ['CCRC_BACKUP_KEEP']);
-    expect(rowOf(d, 'CCRC_VERSIONS_KEEP').state).toBe('ok');
+    const unm = d.settings.filter((s) => s.state === 'unmeasured').map((s) => s.key);
+    if (process.platform === 'darwin') expect(unm).toContain('CCRC_BACKUP_DATA_KEEP');
+    else expect(unm).toEqual(['CCRC_BACKUP_KEEP']);
+    expect(rowOf(d, 'CCRC_VERSIONS_KEEP').state).toBe(process.platform === 'darwin' ? 'unmeasured' : 'ok');
   });
 
-  it('a line a quote carries across two lines: the reader\'s long sentence shows whole, under 480 bytes', () => {
+  it('V6: a reader sentence over 240 bytes is cut at 240 and ends with three dots', () => {
     const d = json(boxWith('ccrc-sv-long-', 'CCRC_BACKUP_KEEP="5\nCCRC_X=1"\n'));
     const r = rowOf(d, 'CCRC_BACKUP_KEEP');
     expect(r.state).toBe('unmeasured');
-    // On macOS the shell reader's sentence, which names the line, not the shape (`_box_unit_env_shell`).
-    expect(r.why).toBe(process.platform === 'darwin'
-      ? 'CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env line 1 is not a plain NAME=value line, and on macOS the launchd job '
-        + 'sources both env files with bash, so that line can change what they set'
-      : 'CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env names CCRC_BACKUP_KEEP in a shape this reader does not decide '
-        + "(a space around '=', an export prefix, a backslash, a quote that is not one whole pair, a quote left open on an earlier line, "
-        + 'or a line after one ending in a backslash)');
-    expect(Buffer.byteLength(r.why!)).toBeLessThan(480);
-    expect(r.why!.endsWith('...')).toBe(false);
+    if (process.platform !== 'darwin') {
+      expect(r.why!.startsWith("CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env names CCRC_BACKUP_KEEP in a shape this reader does not decide (a space around '=', an export prefix")).toBe(true);
+      expect(Buffer.byteLength(r.why!)).toBe(240);
+      expect(r.why!.endsWith('...')).toBe(true);
+    }
   });
 
   it('a ccrc.env that cannot be read at all (mode 000) names ~/.ccrc/ccrc.env, never the fixture HOME', () => {
@@ -242,89 +335,175 @@ describe('ccrc settings: a ccrc.env the reader cannot take is unmeasured, never 
     try {
       const r = settings(home, ['--json']);
       const d = docOf(r);
-      expect(d.settings.map((s) => s.state)).toEqual(KEYS.map(() => 'unmeasured'));
+      expect(d.settings.map((s) => s.state)).toEqual(BOX_SETTINGS_SHOWN.map(() => 'unmeasured'));
       expect(rowOf(d, 'CCRC_BACKUP_KEEP').why).toBe('CCRC_BACKUP_KEEP cannot be measured: ~/.ccrc/ccrc.env is there but cannot be read');
       expect(r.stdout).not.toContain(home);
     } finally { chmodSync(join(home, '.ccrc', 'ccrc.env'), 0o600); }
   });
 
   it('a ccrc.env that cannot be read for the release base reads unmeasured, not default', () => {
-    const d = json(boxWith('ccrc-sv-unm-url-', 'export CCRC_RELEASE_BASE_URL=https://u:p@h/\n'));
+    const sf = surfaces(boxWith('ccrc-sv-unm-url-', 'export CCRC_RELEASE_BASE_URL=https://u:p@h/r\n'));
+    const d = docOf(sf.json);
+    expectAbsent(sf, ['u:p', 'u:p@h', 'p@h/', 'https://h'], 'unreadable release base');
     expect(rowOf(d, 'CCRC_RELEASE_BASE_URL')).toEqual({ key: 'CCRC_RELEASE_BASE_URL', state: 'unmeasured',
       why: 'CCRC_RELEASE_BASE_URL cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take (it reads only a plain KEY=value line)' });
+  });
+
+  it('V5: `export CCRC_GRAPH_BUDGET=6` makes that key alone unmeasured, with the reader\'s sentence', () => {
+    const d = json(boxWith('ccrc-sv-v5x-', 'export CCRC_GRAPH_BUDGET=6\n'));
+    const r = rowOf(d, 'CCRC_GRAPH_BUDGET');
+    expect(r.state).toBe('unmeasured');
+    expect(r.why).toContain('CCRC_GRAPH_BUDGET cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take');
+    expect(d.settings.filter((s) => s.state !== 'ok').map((s) => s.key)).toEqual(['CCRC_GRAPH_BUDGET']);
+  });
+
+  it('V5: with graph-resolve hidden the 23 graph rows are unmeasured with its sentence; with testbox-knobs hidden the 16 test box rows with its; nothing else changes', () => {
+    const home = boxWith('ccrc-sv-v5lib-');
+    const base = json(home);
+    const graph = jsonFrom(home, ccrcWithout('graph-resolve'));
+    const gRows: string[] = BOX_SETTINGS_SHOWN.filter((k) => k.startsWith('CCRC_GRAPH_'));
+    expect(gRows).toHaveLength(23);
+    for (const k of gRows) expect(rowOf(graph, k), k).toEqual({ key: k, state: 'unmeasured', why: 'the graph settings check (graph-resolve) could not be loaded beside ccrc' });
+    for (const row of graph.settings.filter((r) => !gRows.includes(r.key))) expect(row, row.key).toEqual(rowOf(base, row.key));
+    const tb = jsonFrom(home, ccrcWithout('testbox-knobs'));
+    const tRows: string[] = BOX_SETTINGS_SHOWN.filter((k) => k.startsWith('CCRC_TESTBOX_'));
+    expect(tRows).toHaveLength(16);
+    for (const k of tRows) expect(rowOf(tb, k), k).toEqual({ key: k, state: 'unmeasured', why: 'the test box settings check (testbox-knobs) could not be loaded beside ccrc' });
+    for (const row of tb.settings.filter((r) => !tRows.includes(r.key))) expect(row, row.key).toEqual(rowOf(base, row.key));
+  });
+});
+
+describe('ccrc settings: a unit separator in a value is never split into a why (review L1)', () => {
+  const sentence = (k: string): string => `${k}'s value holds a control byte this view does not record`;
+  it.each([['CCRC_GRAPH_STORE', '/x'], ['CCRC_TEST_SLICE_MEMORY_MAX', '6G'], ['CCRC_KEEPALIVE_PROMPT', 'a']])('V11: %s=%s<US>zz-secret reads the fixed sentence, and zz-secret is nowhere', (k, head) => {
+    const home = boxWith('ccrc-sv-v11-', Buffer.from(`${k}=${head}${US}zz-secret\n`, 'latin1'));
+    const s = surfaces(home);
+    const d = docOf(s.json);
+    expect(rowOf(d, k)).toEqual({ key: k, state: 'unmeasured', why: sentence(k) });
+    expect(d.settings.filter((r) => r.state !== 'ok').map((r) => r.key)).toEqual([k]);
+    expectAbsent(s, ['zz-secret', US], k);
   });
 });
 
 describe('ccrc settings: nothing private reaches the output or the file', () => {
-  it('a keep value of $HOME/x reads ~/x, and the fixture HOME appears nowhere', () => {
+  it('a keep value of $HOME/x is refused, and the fixture HOME appears nowhere', () => {
     const home = boxWith('ccrc-sv-red1-');
-    const r = settings(home, ['--json', '--write'], { CCRC_BACKUP_KEEP: `${home}/x` });
-    const d = docOf(r);
-    expect(rowOf(d, 'CCRC_BACKUP_KEEP').value).toBe('~/x');
-    expect(r.stdout).not.toContain(home);
-    expect(readFileSync(join(home, '.ccrc', 'box-settings.json'), 'utf8')).not.toContain(home);
+    const s = surfaces(home, { CCRC_BACKUP_KEEP: `${home}/x` });
+    expect(rowOf(docOf(s.json), 'CCRC_BACKUP_KEEP')).toEqual({ key: 'CCRC_BACKUP_KEEP', state: 'refused', from: 'environment', why: 'a whole number from 0 to 9999' });
+    expectAbsent(s, [home], 'keep');
   });
 
   it.each(['CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP'])(
-    'a refused %s holding a path under a HOME of 40+ characters shows no part of the home path (the keep sentence cuts at 32 before it redacts)', (key) => {
+    'a refused %s holding a path under a HOME of 40+ characters shows no part of the home path', (key) => {
       const home = boxWith(`ccrc-sv-long-home-${'p'.repeat(40)}-`);
       expect(home.length, 'the fixture HOME is long').toBeGreaterThan(40);
-      const r = settings(home, ['--json', '--write'], { [key]: `${home}/backups` });
-      const row = rowOf(docOf(r), key);
+      const s = surfaces(home, { [key]: `${home}/backups` });
+      const row = rowOf(docOf(s.json), key);
       expect(row.state).toBe('refused');
-      expect(row.value).toBe('~/backups');
-      expect(row.why).toMatch(new RegExp(`^${key}='~/backups' is not a whole number from [02] to 9999, as set in the environment$`));
-      for (const out of [r.stdout, readFileSync(join(home, '.ccrc', 'box-settings.json'), 'utf8'), settings(home, [], { [key]: `${home}/backups` }).stdout]) {
-        expect(out).not.toContain(home);
-        expect(out, 'no prefix of the home path').not.toContain(home.slice(0, 9));
-        for (let i = 0; i + 12 <= home.length; i++) expect(out, `a 12-character window of the home path at ${i}`).not.toContain(home.slice(i, i + 12));
+      expect(row).not.toHaveProperty('value');
+      expect(row.why).toBe(key === 'CCRC_BACKUP_DATA_KEEP' ? 'a whole number from 2 to 9999' : 'a whole number from 0 to 9999');
+      for (const [name, out] of [['stdout', s.json.stdout], ['stderr', s.json.stderr], ['file', s.file], ['human', s.human.stdout]] as const) {
+        expect(out, name).not.toContain(home);
+        expect(out, `${name}: no prefix of the home path`).not.toContain(home.slice(0, 9));
+        for (let i = 0; i + 12 <= home.length; i++) expect(out, `${name}: a 12-character window of the home path at ${i}`).not.toContain(home.slice(i, i + 12));
       }
     });
 
-  it('a path under the fixture HOME in the middle of a sentence comes out ~/..., and no fixture-HOME string is printed', () => {
+  it('a health window under the fixture HOME or with userinfo is refused, and neither the path nor the credential is printed', () => {
     const home = boxWith('ccrc-sv-red2-');
-    const r = settings(home, ['--json', '--write'], { CCRC_UPDATE_HEALTH_S: `${home}/deep/x` });
-    const d = docOf(r);
-    expect(rowOf(d, 'CCRC_UPDATE_HEALTH_S').why).toBe("CCRC_UPDATE_HEALTH_S='~/deep/x' is not a number of seconds (digits only, at most 18) - using 90");
-    expect(r.stdout).not.toContain(home);
-    expect(readFileSync(join(home, '.ccrc', 'box-settings.json'), 'utf8')).not.toContain(home);
-    // The human form too.
-    const h = settings(home, [], { CCRC_UPDATE_HEALTH_S: `${home}/deep/x` });
-    expect(h.stdout).toContain("'~/deep/x'");
-    expect(h.stdout).not.toContain(home);
+    const s = surfaces(home, { CCRC_UPDATE_HEALTH_S: `${home}/deep/x` });
+    expect(rowOf(docOf(s.json), 'CCRC_UPDATE_HEALTH_S')).toEqual({ key: 'CCRC_UPDATE_HEALTH_S', state: 'refused', from: 'environment', why: 'a number of seconds (digits only, at most 18)' });
+    expectAbsent(s, [home, 'deep/x'], 'path');
+    const h3 = boxWith('ccrc-sv-red3-');
+    const s3 = surfaces(h3, { CCRC_UPDATE_HEALTH_S: 'https://u:p@h/' });
+    expect(rowOf(docOf(s3.json), 'CCRC_UPDATE_HEALTH_S').state).toBe('refused');
+    expectAbsent(s3, ['u:p', 'h/'], 'userinfo');
   });
 
-  it('a value holding https://u:p@h/ loses u:p@', () => {
-    const home = boxWith('ccrc-sv-red3-');
-    const r = settings(home, ['--json', '--write'], { CCRC_UPDATE_HEALTH_S: 'https://u:p@h/' });
-    const row = rowOf(docOf(r), 'CCRC_UPDATE_HEALTH_S');
-    expect(row.value).toBe('https://h/');
-    expect(row.why).toContain("'https://h/'");
-    expect(r.stdout).not.toContain('u:p');
-    expect(readFileSync(join(home, '.ccrc', 'box-settings.json'), 'utf8')).not.toContain('u:p');
-  });
-
-  it('every string is printable ASCII: the three marks of this file are spelled in ASCII, a tab or a CR becomes ?', () => {
+  it('every string is printable ASCII, and a refused value with a tab, a CR, a quote, a backslash or a non-ASCII byte records none of it', () => {
     const home = boxWith('ccrc-sv-ascii-');
-    const row = rowOf(json(home, { CCRC_UPDATE_HEALTH_S: 'a\tb\rc' }), 'CCRC_UPDATE_HEALTH_S');
-    expect(row.value).toBe('a?b?c');
-    expect(row.why).toBe("CCRC_UPDATE_HEALTH_S='a?b?c' is not a number of seconds (digits only, at most 18) - using 90");
-    const all = settings(home, ['--json'], { CCRC_UPDATE_HEALTH_S: 'a\tb\rc', CCRC_BACKUP_KEEP: 'café"\\' }).stdout;
+    const s = surfaces(home, { CCRC_UPDATE_HEALTH_S: 'a\tb\rc', CCRC_BACKUP_KEEP: 'café"\\' });
+    const d = docOf(s.json);
+    expect(rowOf(d, 'CCRC_UPDATE_HEALTH_S').state).toBe('refused');
+    expect(rowOf(d, 'CCRC_BACKUP_KEEP').state).toBe('refused');
     // eslint-disable-next-line no-control-regex
-    expect(all.replace(/\n$/, '')).toMatch(/^[\x20-\x7e]*$/);
+    expect(s.json.stdout.replace(/\n$/, '')).toMatch(/^[\x20-\x7e]*$/);
+    expectAbsent(s, ['café', 'a\tb'], 'ascii');
   });
 
-  it('a double quote and a backslash in a value are JSON-escaped, and the document parses', () => {
-    const d = json(boxWith('ccrc-sv-esc-'), { CCRC_BACKUP_KEEP: 'a"b\\c' });
-    expect(rowOf(d, 'CCRC_BACKUP_KEEP').value).toBe('a"b\\c');
+  it('a refused 900-byte value records nothing of it (the version-1 cut of a refused value is retired)', () => {
+    const home = boxWith('ccrc-sv-cut-');
+    const s = surfaces(home, { CCRC_UPDATE_HEALTH_S: 'x'.repeat(900) });
+    const row = rowOf(docOf(s.json), 'CCRC_UPDATE_HEALTH_S');
+    expect(row).toEqual({ key: 'CCRC_UPDATE_HEALTH_S', state: 'refused', from: 'environment', why: 'a number of seconds (digits only, at most 18)' });
+    expectAbsent(s, ['xxxxxxxx'], 'cut');
+  });
+});
+
+describe('ccrc settings: an ok value outside the envelope, or a refused-looking one, is never shown (D-7909)', () => {
+  it('V6: a 40-digit size its check passes reads unmeasured with the value\'s fixed why, never a cut or the whole value', () => {
+    const big = `1${'9'.repeat(39)}M`;
+    const home = boxWith('ccrc-sv-v6a-', `CCRC_TESTBOX_SNAPSHOT_MAX=${big}\n`);
+    const s = surfaces(home);
+    expect(rowOf(docOf(s.json), 'CCRC_TESTBOX_SNAPSHOT_MAX')).toEqual({ key: 'CCRC_TESTBOX_SNAPSHOT_MAX', state: 'unmeasured',
+      why: "CCRC_TESTBOX_SNAPSHOT_MAX's value passes its check but is wider than this view records (at most 32 digits and one unit, or one of its words)" });
+    expectAbsent(s, ['9999999999', big], 'snapshot');
   });
 
-  it('a string past 480 bytes is cut at 477 and ends with three dots', () => {
-    const d = json(boxWith('ccrc-sv-cut-'), { CCRC_UPDATE_HEALTH_S: 'x'.repeat(900) });
-    const row = rowOf(d, 'CCRC_UPDATE_HEALTH_S');
-    expect(row.value).toBe(`${'x'.repeat(477)}...`);
-    expect(Buffer.byteLength(row.why!)).toBe(480);
-    expect(row.why!.endsWith('...')).toBe(true);
+  it('V6: `_upd_url_origin https://h:abc/r` answers rc 0 and https://h:abc (measured), so the base reads unmeasured with the origin\'s fixed why', () => {
+    const home = boxWith('ccrc-sv-v6b-');
+    const o = shell(home, '_upd_url_origin "https://h:abc/r"; echo " rc $?"');
+    expect(o.stdout).toBe('https://h:abc rc 0\n');
+    const s = surfaces(home, { CCRC_RELEASE_BASE_URL: 'https://h:abc/r' });
+    expect(rowOf(docOf(s.json), 'CCRC_RELEASE_BASE_URL')).toEqual({ key: 'CCRC_RELEASE_BASE_URL', state: 'unmeasured',
+      why: "CCRC_RELEASE_BASE_URL's origin is wider than this view records (an http or https scheme, a plain host name and a port)" });
+    expectAbsent(s, ['h:abc'], 'base');
+  });
+
+  it('V6: `https://` alone (rc 0, origin `https://`) reads unmeasured with the origin\'s fixed why, never `custom https://` (review L10)', () => {
+    const home = boxWith('ccrc-sv-v6c-');
+    const o = shell(home, '_upd_url_origin "https://"; echo " rc $?"');
+    expect(o.stdout).toBe('https:// rc 0\n');
+    const sf = surfaces(home, { CCRC_RELEASE_BASE_URL: 'https://' });
+    const row = rowOf(docOf(sf.json), 'CCRC_RELEASE_BASE_URL');
+    expectAbsent(sf, ['custom https://'], 'bare scheme');
+    expect(row.state).toBe('unmeasured');
+    expect(row.why).toBe("CCRC_RELEASE_BASE_URL's origin is wider than this view records (an http or https scheme, a plain host name and a port)");
+  });
+
+  it('V6: wave 1\'s value rows go through the envelope too: 9999 reads ok, and a resolver that answers /etc/x reads unmeasured, the value in neither stream', () => {
+    const home = boxWith('ccrc-sv-v6d-');
+    expect(rowOf(json(home, { CCRC_BACKUP_KEEP: '9999' }), 'CCRC_BACKUP_KEEP')).toEqual({ key: 'CCRC_BACKUP_KEEP', state: 'ok', value: '9999', from: 'environment' });
+    const r = shell(home, '_bak_keep() { KEEP=/etc/x; KEEP_WHY=; KNOB_FROM=default; }; cmd_settings --json');
+    const d = docOf(r);
+    expect(rowOf(d, 'CCRC_BACKUP_KEEP')).toEqual({ key: 'CCRC_BACKUP_KEEP', state: 'unmeasured',
+      why: "CCRC_BACKUP_KEEP's value passes its check but is wider than this view records (at most 32 digits and one unit, or one of its words)" });
+    expect(r.stdout).not.toContain('/etc/x');
+    expect(r.stderr).not.toContain('/etc/x');
+  });
+});
+
+describe('ccrc settings: the largest document fits the node-file cap (spec 5.4, V7)', () => {
+  it('V7: the worst row of each key and the worst top level, built from the writer\'s own functions, stay under NODE_FILE_CAP_BYTES', () => {
+    const home = boxWith('ccrc-sv-v7-');
+    const quotes = '"'.repeat(3000);   // handed in through the environment: every byte a quote, which escapes to two; longer than any cut, so the writer's own cut decides the size
+    const script = [
+      'rows=""; sep=""',
+      `for k in ${BOX_SETTINGS_SHOWN.join(' ')}; do`,
+      '  a="$(_set_row_json "$k" unmeasured "" "" "$Q")"; b="$(_set_row_json "$k" ok environment "${N}E" "")"',
+      '  if [ "${#a}" -ge "${#b}" ]; then r="$a"; else r="$b"; fi',
+      '  rows+="$sep$r"; sep=,',
+      'done',
+      'bw="$(_set_json "$Q480")"',
+      'printf \'{"v":2,"at":17929480000,"reader":"shell","settings":[%s],"deadline":{"plainMs":999999999999999,"minMs":999999999999999,"maxMs":999999999999999},"backups":{"state":"unmeasured","why":%s},"disk":{"state":"unmeasured","why":%s}}\\n\' "$rows" "$bw" "$bw"',
+    ].join('\n');
+    const r = shell(home, script, { Q: quotes, Q480: '"'.repeat(480), N: '9'.repeat(32) });
+    expect(r.code, r.stderr).toBe(0);
+    const bytes = Buffer.byteLength(r.stdout);
+    expect(() => JSON.parse(r.stdout), 'the worst document is still a document').not.toThrow();
+    expect(bytes, `the largest document is ${bytes} bytes`).toBeLessThanOrEqual(NODE_FILE_CAP_BYTES);
+    expect(bytes, 'the worst case really was built: a quote why is cut to 240 and escapes to about 480 bytes a row').toBeGreaterThan(30_000);
+    console.log(`V7 largest document: ${bytes} bytes of ${NODE_FILE_CAP_BYTES}`);
   });
 });
 
@@ -341,16 +520,10 @@ describe('ccrc settings: the release base shows its scheme and host, nothing els
     ['https://tok@mirror.example.invalid/r', 'custom https://mirror.example.invalid'],
   ])('%s shows as %s', (url, shown) => {
     const home = boxWith('ccrc-sv-url-');
-    const r = settings(home, ['--json', '--write'], { CCRC_RELEASE_BASE_URL: url });
-    const row = rowOf(docOf(r), 'CCRC_RELEASE_BASE_URL');
+    const sf = surfaces(home, { CCRC_RELEASE_BASE_URL: url });
+    const row = rowOf(docOf(sf.json), 'CCRC_RELEASE_BASE_URL');
     expect(row).toEqual({ key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: shown, from: 'environment' });
-    const file = readFileSync(join(home, '.ccrc', 'box-settings.json'), 'utf8');
-    for (const s of SECRETS) {
-      expect(r.stdout, `stdout holds ${s}`).not.toContain(s);
-      expect(file, `the file holds ${s}`).not.toContain(s);
-    }
-    const human = settings(home, [], { CCRC_RELEASE_BASE_URL: url }).stdout;
-    for (const s of SECRETS) expect(human, `the human form holds ${s}`).not.toContain(s);
+    expectAbsent(sf, SECRETS, 'release base');
   });
 
   it('a port stays, a value from ccrc.env is custom too, an empty line and the default read default', () => {
@@ -435,12 +608,10 @@ describe('ccrc settings: a release base whose userinfo survives the redaction re
     'tok@ftp://mirror.example.invalid',
   ])('%s reads exactly `custom`, in the JSON, the file and the human form', (url) => {
     const home = boxWith('ccrc-sv-url-at-');
-    const r = settings(home, ['--json', '--write'], { CCRC_RELEASE_BASE_URL: url });
-    expect(rowOf(docOf(r), 'CCRC_RELEASE_BASE_URL')).toEqual({ key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom', from: 'environment' });
-    const file = readFileSync(join(home, '.ccrc', 'box-settings.json'), 'utf8');
-    const human = settings(home, [], { CCRC_RELEASE_BASE_URL: url }).stdout;
-    expect(human).toMatch(/^CCRC_RELEASE_BASE_URL {10}custom {2}\(/m);
-    for (const out of [r.stdout, file, human]) for (const s of FORBIDDEN) expect(out, `${s} appears`).not.toContain(s);
+    const sf = surfaces(home, { CCRC_RELEASE_BASE_URL: url });
+    expect(rowOf(docOf(sf.json), 'CCRC_RELEASE_BASE_URL')).toEqual({ key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom', from: 'environment' });
+    expect(sf.human.stdout).toMatch(/^CCRC_RELEASE_BASE_URL {10}custom {2}\(/m);
+    expectAbsent(sf, FORBIDDEN, 'release base');
   });
 });
 
@@ -612,39 +783,66 @@ describe('ccrc settings: usage', () => {
     const r = settings(boxWith('ccrc-sv-help-'), [flag]);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/usage: ccrc \{[^}]*\|settings\|/);
-    expect(r.stdout).toMatch(/^ {2}settings {2}print what this box's seven settings read as/m);
+    expect(r.stdout).toMatch(/^ {2}settings {2}print what each setting a fleet or server node reads resolves to$/m);
   });
 });
 
-describe('ccrc settings: the human form', () => {
-  it('prints spec 2.1\'s source words, not the JSON tokens: environment, ccrc.env, ccrc.env (empty line), default (A9)', () => {
-    const home = boxWith('ccrc-sv-words-', 'CCRC_BACKUP_DATA_KEEP=4\nCCRC_VERSIONS_KEEP=\nCCRC_UPDATE_DEADLINE_MS=6e5\nCCRC_MODELS_ADVANCE_BUDGET_S=off\n');
-    const lines = settings(home, [], { CCRC_BACKUP_KEEP: '5', CCRC_UPDATE_HEALTH_S: 'ninety' }).stdout.split('\n');
-    const line = (key: string): string => lines.find((l) => l.startsWith(`${key} `)) ?? '';
-    expect(line('CCRC_BACKUP_KEEP')).toBe(`${'CCRC_BACKUP_KEEP'.padEnd(30)} 5  (environment, ok)`);
-    expect(line('CCRC_BACKUP_DATA_KEEP')).toBe(`${'CCRC_BACKUP_DATA_KEEP'.padEnd(30)} 4  (ccrc.env, ok)`);
-    expect(line('CCRC_VERSIONS_KEEP')).toBe(`${'CCRC_VERSIONS_KEEP'.padEnd(30)} 3  (ccrc.env (empty line), ok)`);
-    expect(line('CCRC_RELEASE_BASE_URL')).toBe(`${'CCRC_RELEASE_BASE_URL'.padEnd(30)} default  (default, ok)`);
-    // A refused row names its source the same way.
-    expect(line('CCRC_UPDATE_HEALTH_S')).toMatch(/^CCRC_UPDATE_HEALTH_S {11}ninety {2}\(environment, refused\): /);
-    expect(line('CCRC_UPDATE_DEADLINE_MS')).toMatch(/^CCRC_UPDATE_DEADLINE_MS {8}6e5 {2}\(ccrc\.env, refused\): /);
+describe('ccrc settings: a presence row records whether a setting is set, never what it is set to (D-7910, V3)', () => {
+  it('V3: a URL, a key path, a prompt and an empty list read set, set, set and set to empty, and none of their text is anywhere', () => {
+    const home = boxWith('ccrc-sv-v3-', 'CCRC_TESTBOX_URL=https://secret-host.invalid:9000/x?token=abc\nCCRC_TESTBOX_GIT_KEY=~/k/push.key\nCCRC_KEEPALIVE_PROMPT=say hi\nCCRC_GRAPH_REPOS_EXCLUDE=\n');
+    const s = surfaces(home);
+    const d = docOf(s.json);
+    expect(rowOf(d, 'CCRC_TESTBOX_URL')).toEqual({ key: 'CCRC_TESTBOX_URL', state: 'ok', from: 'file' });
+    expect(rowOf(d, 'CCRC_TESTBOX_GIT_KEY')).toEqual({ key: 'CCRC_TESTBOX_GIT_KEY', state: 'ok', from: 'file' });
+    expect(rowOf(d, 'CCRC_KEEPALIVE_PROMPT')).toEqual({ key: 'CCRC_KEEPALIVE_PROMPT', state: 'ok', from: 'file' });
+    expect(rowOf(d, 'CCRC_GRAPH_REPOS_EXCLUDE')).toEqual({ key: 'CCRC_GRAPH_REPOS_EXCLUDE', state: 'ok', from: 'empty' });
+    expectAbsent(s, ['secret-host', 'token=abc', 'invalid:9000', 'push.key', 'say hi'], 'V3');
+  });
+});
+
+
+describe('ccrc settings: the human form keeps its three formats (V8, review F4)', () => {
+  const lineOf = (out: string, key: string): string => out.split('\n').find((l) => l.startsWith(`${key} `)) ?? '';
+  it('V8: ok, refused and unmeasured rows keep their formats; presence rows say set, unset or set to empty; a refused row says not shown', () => {
+    const home = boxWith('ccrc-sv-words-', 'CCRC_BACKUP_DATA_KEEP=4\nCCRC_VERSIONS_KEEP=\nCCRC_UPDATE_DEADLINE_MS=6e5\nCCRC_MODELS_ADVANCE_BUDGET_S=off\n'
+      + 'CCRC_TESTBOX_URL=https://secret-host.invalid\nCCRC_GRAPH_REPOS_EXCLUDE=\nCCRC_GRAPH_BUDGET=zz\n');
+    const human = settings(home, [], { CCRC_BACKUP_KEEP: '5', CCRC_UPDATE_HEALTH_S: 'ninety' });
+    const out = human.stdout;
+    expect(human.stderr, 'the planted URL and value are not on stderr either').not.toMatch(/secret-host|ninety/);
+    expect(lineOf(out, 'CCRC_BACKUP_KEEP')).toBe(`${'CCRC_BACKUP_KEEP'.padEnd(30)} 5  (environment, ok)`);
+    expect(lineOf(out, 'CCRC_BACKUP_DATA_KEEP')).toBe(`${'CCRC_BACKUP_DATA_KEEP'.padEnd(30)} 4  (ccrc.env, ok)`);
+    expect(lineOf(out, 'CCRC_VERSIONS_KEEP')).toBe(`${'CCRC_VERSIONS_KEEP'.padEnd(30)} 3  (ccrc.env (empty line), ok)`);
+    expect(lineOf(out, 'CCRC_RELEASE_BASE_URL')).toBe(`${'CCRC_RELEASE_BASE_URL'.padEnd(30)} default  (default, ok)`);
+    expect(lineOf(out, 'CCRC_UPDATE_HEALTH_S')).toBe(`${'CCRC_UPDATE_HEALTH_S'.padEnd(30)} not shown  (environment, refused): a number of seconds (digits only, at most 18)`);
+    expect(lineOf(out, 'CCRC_TESTBOX_URL')).toBe(`${'CCRC_TESTBOX_URL'.padEnd(30)} set  (ccrc.env, ok)`);
+    expect(lineOf(out, 'CCRC_GRAPH_REPOS_EXCLUDE')).toBe(`${'CCRC_GRAPH_REPOS_EXCLUDE'.padEnd(30)} set to empty  (ccrc.env (empty line), ok)`);
+    expect(lineOf(out, 'CCRC_KEEPALIVE_PROMPT')).toBe(`${'CCRC_KEEPALIVE_PROMPT'.padEnd(30)} unset  (default, ok)`);
+    expect(lineOf(out, 'CCRC_GRAPH_BUDGET')).toBe(`${'CCRC_GRAPH_BUDGET'.padEnd(30)} not shown  (ccrc.env, refused): a whole number, 1 or more; takes effect at the next ccrc update`);
+    // A row whose `applies` is update ends with the note, one whose `applies` is run does not.
+    expect(lineOf(out, 'CCRC_GRAPH_KEEP_BUILDS').endsWith('(default, ok)')).toBe(true);
+    expect(lineOf(settings(boxWith('ccrc-sv-words2-'), [], {}).stdout, 'CCRC_GRAPH_BUDGET')).toBe(`${'CCRC_GRAPH_BUDGET'.padEnd(30)} 4  (default, ok); takes effect at the next ccrc update`);
+    // A key longer than 30 characters prints with the format's one literal space and no padding.
+    expect(out).toMatch(/^CCRC_GRAPH_INCREMENTAL_MAX_FILES 0 {2}\(default, ok\)$/m);
+    // Wave 1's rows keep their exact spacing.
+    expect(lineOf(out, 'CCRC_UPDATE_DEADLINE_MS')).toMatch(/^CCRC_UPDATE_DEADLINE_MS {8}not shown {2}\(ccrc\.env, refused\): /);
+    expect(out).not.toContain('secret-host');
     // The JSON keeps its four tokens.
     const d = json(home, { CCRC_BACKUP_KEEP: '5' });
     expect([rowOf(d, 'CCRC_BACKUP_KEEP').from, rowOf(d, 'CCRC_BACKUP_DATA_KEEP').from, rowOf(d, 'CCRC_VERSIONS_KEEP').from, rowOf(d, 'CCRC_RELEASE_BASE_URL').from])
       .toEqual(['environment', 'file', 'empty', 'default']);
   });
 
-  it('prints one line per setting (key, value, source, verdict, why) and the deadline, backups and disk lines', () => {
+  it('prints one line per shown setting in order, then the deadline, backups and disk lines, and writes nothing', () => {
     const home = boxWith('ccrc-sv-human-');
     const r = settings(home, [], { CCRC_BACKUP_KEEP: 'abc', CCRC_UPDATE_HEALTH_S: '120' });
     expect(r.code, r.stderr).toBe(0);
     const lines = r.stdout.split('\n').filter(Boolean);
-    expect(lines.slice(0, 7).map((l) => l.split(/\s+/)[0])).toEqual(KEYS);
-    expect(lines[0]).toBe("CCRC_BACKUP_KEEP               abc  (environment, refused): CCRC_BACKUP_KEEP='abc' is not a whole number from 0 to 9999, as set in the environment");
+    expect(lines.slice(0, 61).map((l) => l.split(/\s+/)[0])).toEqual([...BOX_SETTINGS_SHOWN]);
+    expect(lines[0]).toBe('CCRC_BACKUP_KEEP               not shown  (environment, refused): a whole number from 0 to 9999');
     expect(lines[3]).toBe('CCRC_UPDATE_HEALTH_S           120  (environment, ok)');
-    expect(lines[7]).toBe('deadline: plain 900000 ms, min 900000 ms, max 900000 ms');
-    expect(lines[8]).toMatch(/^backups: /);
-    expect(lines[9]).toMatch(/^disk: /);
+    expect(lines[61]).toBe('deadline: plain 900000 ms, min 900000 ms, max 900000 ms');
+    expect(lines[62]).toMatch(/^backups: /);
+    expect(lines[63]).toMatch(/^disk: /);
     expect(existsSync(join(home, '.ccrc', 'box-settings.json')), 'the human form writes nothing').toBe(false);
   });
 });
@@ -683,7 +881,7 @@ describe('ccrc settings --write: the file', () => {
     expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
     for (const [f, sum] of Object.entries(before)) if (f !== 'box-settings.json') expect(after[f], f).toBe(sum);
     expect(after['box-settings.json']).not.toBe(before['box-settings.json']);
-    expect(JSON.parse(readFileSync(file(home), 'utf8')).v).toBe(1);
+    expect(JSON.parse(readFileSync(file(home), 'utf8')).v).toBe(2);
   });
 
   it('records reader "timer" only with --from timer', () => {
@@ -777,8 +975,8 @@ describe('ccrc settings --write: the file', () => {
     const got = await termDuring('mv');
     if (got !== 'LAST-GOOD') {
       const doc = JSON.parse(got) as { v: number; settings: unknown[] };
-      expect(doc.v).toBe(1);
-      expect(doc.settings).toHaveLength(7);
+      expect(doc.v).toBe(2);
+      expect(doc.settings).toHaveLength(61);
     }
   }, 60_000);
 });
@@ -847,5 +1045,63 @@ describe('ccrc settings: the vocabularies are spelled once in the verb', () => {
     }
     // No JSON text spells a word: the keys' values are interpolated.
     expect(code).not.toMatch(new RegExp(`\\\\"${_what}\\\\":\\\\"(${words.join('|')})\\\\"`));
+  });
+});
+
+describe('ccrc settings: the verb reads by literal calls, and its table of host test box keys mirrors the owner\'s (V9)', () => {
+  const bodyOf = (name: string): string => new RegExp(`^${name}\\(\\) [({][\\s\\S]*?\\n[)}]$`, 'm').exec(SRC)?.[0] ?? '';
+  const knobPairs = (body: string): string[] =>
+    [...body.matchAll(/_ccrc_knob (CCRC_TESTBOX_[A-Z_]+) ('[^']*'|"[^"]*"|\S+) file/g)].map((m) => `${m[1]}=${m[2]}`);
+  const TB_SRC = readFileSync(join(path.dirname(CCRC), 'testbox-knobs'), 'utf8');
+  const bodyOfTb = (name: string): string => new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?\\n\\}$`, 'm').exec(TB_SRC)?.[0] ?? '';
+
+  it('V9: _set_tb_host holds exactly _tb_host_table\'s (key, default) pairs, in order, each a literal file-mode read', () => {
+    const mine = knobPairs(bodyOf('_set_tb_host'));
+    const theirs = knobPairs(bodyOfTb('_tb_host_table'));
+    expect(theirs).toHaveLength(16);
+    expect(mine).toEqual(theirs);
+    expect(bodyOf('_set_tb_host').match(/_ccrc_knob /g)).toHaveLength(16);
+  });
+
+  it('V9: the slice, keepalive, usage, carry and pressure reads are literal calls in file mode', () => {
+    const reads = bodyOf('_set_reads');
+    for (const re of [
+      /_ccrc_knob CCRC_SESSION_SLICE_MEMORY_MAX 24G file;/, /_ccrc_knob CCRC_SESSION_SLICE_SWAP_MAX 6G file;/, /_ccrc_knob CCRC_TEST_PRESSURE_MAX 0 file;/,
+      /_ccrc_knob CCRC_KEEPALIVE_FRESH 1800 file;/, /_ccrc_knob CCRC_KEEPALIVE_MODEL haiku file;/, /_ccrc_knob CCRC_KEEPALIVE_PROMPT "Reply with the single word: ok" file;/,
+      /_ccrc_knob CCRC_USAGE_SWEEP_DAYS 7 file;/, /_ccrc_knob CCRC_CARRY_COPY_WARN_BYTES 10737418240 file;/, /_graph_knobs file\)/,
+    ]) expect(reads, String(re)).toMatch(re);
+    expect(reads.match(/_ccrc_knob /g), 'eight direct reads; the two line readers are the owners\' own').toHaveLength(8);
+  });
+
+  it('V9: cmd_settings and its _set_ helpers never name the warning arrays, _tb_load, _gr_knobs or `_slice_limit ` with a space', () => {
+    for (const fn of ['cmd_settings', '_set_reads', '_set_tb_host', '_set_lines', '_set_got', '_set_row_json', '_set_check', '_set_says', '_set_fits', '_set_libs']) {
+      const code = bodyOf(fn).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+      expect(code.length, fn).toBeGreaterThan(50);
+      expect(code, fn).not.toMatch(/TBK_WARN|GK_WARN|_tb_load|_gr_knobs|_slice_limit /);
+    }
+  });
+});
+
+describe('ccrc settings: empty means the default, in every family a consumer reads (V10, the ruling on Q5)', () => {
+  // One empty line per family; the verb reads `from: empty` and, for a value row, the default; the consumer whose read the verb copies answers its default.
+  const rows: [string, string, string][] = [
+    ['CCRC_SESSION_SLICE_SWAP_MAX', '6G', '_ccrc_knob CCRC_SESSION_SLICE_SWAP_MAX 6G file; echo "$KNOB:$KNOB_FROM"'],
+    ['CCRC_TEST_WIDE_FILES', '3', '_test_knobs | while IFS= read -r l; do case "$l" in CCRC_TEST_WIDE_FILES*) IFS=$\'\\037\' read -r _ _ v f <<<"$l"; echo "$v:$f";; esac; done'],
+    ['CCRC_GRAPH_STORE', '', '_graph_knobs file | while IFS= read -r l; do case "$l" in CCRC_GRAPH_STORE*) IFS=$\'\\037\' read -r _ d v f <<<"$l"; [ "$v" = "$d" ] && echo "default:$f";; esac; done'],
+    ['CCRC_TESTBOX_URL', '', '_tb_load host; echo "${TBK[CCRC_TESTBOX_URL]}:${TBK_FROM[CCRC_TESTBOX_URL]}"'],
+    ['CCRC_KEEPALIVE_PROMPT', 'Reply with the single word: ok', '_ccrc_knob CCRC_KEEPALIVE_PROMPT "Reply with the single word: ok" file; echo "$KNOB:$KNOB_FROM"'],
+    ['CCRC_USAGE_SWEEP_DAYS', '7', '_ccrc_knob CCRC_USAGE_SWEEP_DAYS 7 file; echo "$KNOB:$KNOB_FROM"'],
+    ['CCRC_CARRY_COPY_WARN_BYTES', '10737418240', '_ccrc_knob CCRC_CARRY_COPY_WARN_BYTES 10737418240 file; echo "$KNOB:$KNOB_FROM"'],
+  ];
+  it.each(rows)('V10: an empty %s line reads from empty in the verb, and its consumer answers the default', (key, def, consumer) => {
+    const home = boxWith('ccrc-sv-v10-', `${key}=\n`);
+    const row = rowOf(json(home), key);
+    expect(row.from, key).toBe('empty');
+    expect(row.state, key).toBe('ok');
+    if (CLS(key) === 'value') expect(row.value, key).toBe(def);
+    else expect(row).not.toHaveProperty('value');
+    const r = shell(home, `_set_libs; ${consumer}`);
+    const out = r.stdout.trim();
+    expect(out, `${key}: the consumer's answer (stderr: ${r.stderr})`).toMatch(new RegExp(`^${def.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:empty$|^default:empty$`));
   });
 });

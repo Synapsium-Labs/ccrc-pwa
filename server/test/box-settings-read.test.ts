@@ -163,18 +163,21 @@ describe('parseBoxSettings: the corpus, each file with its verdict', () => {
       const file = join(FIX, `ok--${s.name}.json`);
       const out = runVerb(s);
       if (write) writeFileSync(file, out);
+      expect(parseBoxSettings(out), `${s.name}: the verb's own document parses (a refused row that carries a value reads malformed)`).not.toBeNull();
       expect(readFileSync(file, 'utf8'), `${s.name}: regenerate with BOX_SETTINGS_FIXTURES=write`).toBe(out);
     }
   });
 
-  it('the live verb\'s own output parses, a long `why` included, and keeps what it said', () => {
+  it('the live verb\'s own output parses as version 2, 61 rows in order, and a long reader sentence is kept to the writer\'s cut of 240', () => {
     const out = runVerb({ name: 'live-long', envFile: 'CCRC_BACKUP_KEEP="5\nCCRC_X=1"\n' });
     const doc = parseBoxSettings(out);
     expect(doc).not.toBeNull();
     const row = doc!.settings.find((r) => r.key === 'CCRC_BACKUP_KEEP')!;
     expect(row.state).toBe('unmeasured');
-    expect('why' in row && row.why.length, 'the sentence is long and kept whole').toBeGreaterThan(150);
-    expect(doc!.settings.map((r) => r.key)).toEqual(doc!.v === 1 ? [...BOX_SETTINGS_KEYS] : [...BOX_SETTINGS_SHOWN]);
+    expect('why' in row && row.why.length, 'the sentence is cut at 240 bytes, ending in three dots').toBe(240);
+    expect('why' in row && row.why.endsWith('...')).toBe(true);
+    expect(doc!.v).toBe(2);
+    expect(doc!.settings.map((r) => r.key)).toEqual([...BOX_SETTINGS_SHOWN]);
   });
 });
 
@@ -235,10 +238,11 @@ const wordsOf = (body: string, prefix: 's' | 'f' | 'r'): string[] =>
   [...body.matchAll(new RegExp(`\\b${prefix}_[a-z]+=([a-z-]+)`, 'g'))].map((m) => m[1]!);
 const sameSet = (a: readonly string[], b: readonly string[]): boolean =>
   a.length === b.length && new Set(a).size === a.length && a.every((w) => b.includes(w)) && b.every((w) => a.includes(w));
-/** The verb's own `BOX_SETTINGS_KEYS=(…)` line. */
-const verbKeys = (src: string): string[] | null => {
-  const m = /^BOX_SETTINGS_KEYS=\(([A-Z0-9_ ]+)\)$/m.exec(src);
-  return m ? m[1]!.split(' ') : null;
+/** The keys the verb emits, in order: the key of every line of the bash class table (`^BOX_SETTINGS_TABLE=(` to `^)`) whose class column is not `omit`. */
+const emittedKeys = (src: string): string[] => {
+  const m = /^BOX_SETTINGS_TABLE=\(\n([\s\S]*?)\n\)$/m.exec(src);
+  if (!m) return [];
+  return m[1]!.split('\n').map((l) => l.trim().split(':')).filter((c) => c.length >= 2 && c[1] !== 'omit').map((c) => c[0]!);
 };
 
 describe('the vocabularies are held equal to the verb\'s, in both directions (D-6916, spec 2.2)', () => {
@@ -266,16 +270,18 @@ describe('the vocabularies are held equal to the verb\'s, in both directions (D-
     expect(sameSet(wordsOf(body, 'r'), BOX_SETTINGS_READERS)).toBe(true);
   });
 
-  it('the seven keys: the verb\'s own literal, each once in CCRC_SETTINGS, and what the live verb lists (D-7861, not set-equality with all of them)', () => {
-    expect(verbKeys(CCRC_SRC)).toEqual([...BOX_SETTINGS_KEYS]);
+  it('the keys: the verb emits BOX_SETTINGS_SHOWN, from the bash table, each once in CCRC_SETTINGS, and the live corpus lists exactly them (D-7910)', () => {
+    expect(emittedKeys(CCRC_SRC)).toEqual([...BOX_SETTINGS_SHOWN]);
     const all = ccrcSettingsNames(CCRC_SRC);
     expect(all, 'ccd/ccrc has no CCRC_SETTINGS=(…) line').not.toBeNull();
-    for (const k of BOX_SETTINGS_KEYS) expect(all!.filter((n) => n === k), `${k} appears once in CCRC_SETTINGS`).toHaveLength(1);
+    for (const k of BOX_SETTINGS_SHOWN) expect(all!.filter((n) => n === k), `${k} appears once in CCRC_SETTINGS`).toHaveLength(1);
     const live = parseBoxSettings(readFileSync(join(FIX, 'ok--defaults.json'), 'utf8'));
-    expect(live!.settings.map((s) => s.key)).toEqual(live!.v === 1 ? [...BOX_SETTINGS_KEYS] : [...BOX_SETTINGS_SHOWN]);
-    // The control: a verb whose literal lost a key reads unequal.
-    const dropped = CCRC_SRC.replace('CCRC_MODELS_ADVANCE_BUDGET_S)\nBOX_SETTINGS_JSON', ')\nBOX_SETTINGS_JSON');
-    expect(verbKeys(dropped)).not.toEqual([...BOX_SETTINGS_KEYS]);
+    expect(live!.v).toBe(2);
+    expect(live!.settings.map((s) => s.key)).toEqual([...BOX_SETTINGS_SHOWN]);
+    // The control: a table that lost the CCRC_GRAPH_BUDGET line reads unequal.
+    const dropped = CCRC_SRC.replace(/^ {2}CCRC_GRAPH_BUDGET:.*\n/m, '');
+    expect(dropped).not.toBe(CCRC_SRC);
+    expect(emittedKeys(dropped)).not.toEqual([...BOX_SETTINGS_SHOWN]);
   });
 
   it('the failure words are spelled once, as a map the lane and the view both draw from', () => {
@@ -788,11 +794,12 @@ const WORD_ROWS: [string, string][] = [['CCRC_TESTBOX_LOST_RUN', 'local'], ['CCR
 
 /** The largest document this parse accepts, built from its own bounds. Arithmetic: 60 unmeasured rows of a 240-character why of `\`
  *  (each escapes to 2 bytes, so about 530 bytes a row with its key) come to about 32 KB; the release base adds about 560; backups and
- *  disk's 512-character whys of `"` escape to 1 KB each; the head is a few hundred bytes: about 36 KB, under the 65536-byte cap. */
+ *  disk's 512-character whys of `"` escape to 1 KB each; the head is a few hundred bytes: 35510 bytes as built (the release base is read from the
+ *  environment, the longer source word, 7 bytes over `file`), under the 65536-byte cap. */
 function largestV2(): string {
   const d = v2Base();
   d['settings'] = BOX_SETTINGS_SHOWN.map((key) => key === 'CCRC_RELEASE_BASE_URL'
-    ? { key, state: 'ok', value: `custom https://${'h'.repeat(BOX_SETTINGS_TEXT_MAX - 'custom https://'.length)}`, from: 'file' }
+    ? { key, state: 'ok', value: `custom https://${'h'.repeat(BOX_SETTINGS_TEXT_MAX - 'custom https://'.length)}`, from: 'environment' }
     : { key, state: 'unmeasured', why: '\\'.repeat(240) });
   d['at'] = Number.MAX_SAFE_INTEGER;
   d['deadline'] = { plainMs: Number.MAX_SAFE_INTEGER, minMs: Number.MAX_SAFE_INTEGER, maxMs: Number.MAX_SAFE_INTEGER };

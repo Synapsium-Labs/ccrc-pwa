@@ -2191,7 +2191,7 @@ describe('the coordination snapshot helper: run from the installed tree, shipped
     expect(verbs.filter((v) => v === 'settings'), 'one usage entry').toHaveLength(1);
     expect(verbs.indexOf('settings')).toBe(verbs.indexOf('coordination-snapshot') + 1);
     expect(CCRC.match(/^ {2}settings\) cmd_settings "\$@" ;;$/gm), 'one dispatch arm').toHaveLength(1);
-    expect(CCRC).toMatch(/^ {2}settings {2}print what this box's seven settings read as /m);
+    expect(CCRC).toMatch(/^ {2}settings {2}print what each setting a fleet or server node reads resolves to$/m);
     // The verb writes one file of its own, and no unit, binary or helper carries it: it is the verb that writes it.
     expect(bodyOfFn('cmd_settings')).toMatch(/BOX_SETTINGS_JSON/);
     expect([...placedBins(), ...placedUnits()].join(' ')).not.toMatch(/box-settings/);

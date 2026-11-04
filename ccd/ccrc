@@ -2713,12 +2713,11 @@ already running).
             checkpoint and coord.db (and its WAL/SHM) from a valid v1 snapshot, as
             one set; refuses unless ccrc.service is measured inactive
             recover                finish an interrupted restore from its marker
-  settings  print what this box's seven settings read as (CCRC_BACKUP_KEEP,
-            CCRC_BACKUP_DATA_KEEP, CCRC_VERSIONS_KEEP, CCRC_UPDATE_HEALTH_S,
-            CCRC_UPDATE_DEADLINE_MS, CCRC_RELEASE_BASE_URL and
-            CCRC_MODELS_ADVANCE_BUDGET_S): the value the act uses, where it came
-            from (the environment, ccrc.env, an empty ccrc.env line or the default)
-            and, when the act would refuse it, fall back or clamp, why; then the
+  settings  print what each setting a fleet or server node reads resolves to
+            (61 of CCRC_SETTINGS; the test box's own are left out), by display
+            class: a value, an origin, or only whether it is set; where it came
+            from (the environment, ccrc.env, an empty ccrc.env line or the
+            default), and a refused setting's check words, never its value; then the
             deadline's three readings, the backups kept and the disk. [--json]
             prints one JSON document; [--write] records it as
             ~/.ccrc/box-settings.json (mode 0600, temp and rename) and prints
@@ -18483,7 +18482,7 @@ _inst_units() {
     _inst_atomic "$tree/deploy/systemd/ccrc-update-watchdog.timer" "$dir/ccrc-update-watchdog.timer" 644
   fi
   # D-6915: the box settings pair, on EVERY Linux role (outside the gates above and below it) — the first pair that is.
-  # `ccrc settings --write` records what the box's seven settings resolve to, which the console reads from any node,
+  # `ccrc settings --write` records what the box's settings resolve to, by display class, which the console reads from any node,
   # a server-role box included. The Darwin arm returned at the top of this function and places no timer at all.
   _inst_atomic "$tree/deploy/systemd/ccrc-settings.service" "$dir/ccrc-settings.service" 644
   _inst_atomic "$tree/deploy/systemd/ccrc-settings.timer" "$dir/ccrc-settings.timer" 644
@@ -26211,31 +26210,26 @@ cmd_backup() {
   _bak_prune
 }
 
-# ── cmd_settings — what this box's settings read as (box settings view, D-6914, D-7861) ──
-# `ccrc settings [--json] [--write] [--from timer]` prints, and with `--write` records as ~/.ccrc/box-settings.json, what each of
-# the box's seven settings reads as: the value the act uses, where it came from (`_ccrc_knob`'s `environment`, `file`, `empty` or
-# `default`), and, when the act would refuse the value or fall back, the act's own sentence. It reads each setting through the SAME
-# resolver its act calls (`_bak_keep`, `_bak_data_keep`, `_ver_keep`, `_upd_health_s`, `_upd_deadline_ms`, `_upd_release_base`,
-# `_models_budget`), so the view cannot say what the act does not do, and it asks them through a literal `case`, never a variable
-# key, so the settings census's variable-key rows stay as they were. The seven are this verb's own list (D-7861), not a walk of
-# CCRC_SETTINGS. Three states: `ok` (the act would use the value), `refused` (it would refuse it, fall back or clamp: the value shown
-# is what was written) and `unmeasured` (the reader could not decide it: a ccrc.env it cannot read is never "unset", D-6365).
-# The release base is shown as `default`, or `custom` with its scheme and host only (`_upd_url_origin`), or `custom` alone when an '@' is
-# left in it after the redaction, the value holds whitespace or another byte that starts a token for `_upd_redact`, a '/', '\' or '='
-# stands before its last '@', or its scheme is not http(s) (D-7873). Every value and sentence is redacted (`_upd_redact`), turned to
-# printable ASCII and cut at 480 bytes, so no home path is recorded, and no part of the release base's userinfo. ONE accepted residual
-# (review 1385 A13, widened by reviews 1396 F4 and 1398 F2): a REFUSED numeric key records its raw value, in `value` and in its
-# sentence, through `_upd_redact` alone, so a URL written there by mistake keeps its query string (`?token=…`, which `_upd_redact` does
-# not cover: its OUT OF SCOPE note), a userinfo that holds a raw '/', '?' or '#' (its KNOWN LIMITS), and the part of a userinfo before
-# whitespace or another token start (`https://u:p w@h/r` is recorded as `https://u:p h/r`). It needs an operator error on a numeric
-# key; the fold belongs to ARCH-67.
+# ── cmd_settings — what this box's settings read as (box settings view, D-6914, D-7861, wave 2 D-7910) ──
+# `ccrc settings [--json] [--write] [--from timer]` prints, and with `--write` records as ~/.ccrc/box-settings.json (version 2), what each of
+# the 61 settings a fleet or server node reads resolves to, in `BOX_SETTINGS_TABLE`'s display class (the table walks `CCRC_SETTINGS`; the 28
+# test box settings the host never reads carry class `omit` and are not shown): a `value` or an `origin` row carries the value the act uses, a
+# `presence` row only whether the setting is set, and every row where it came from (`_ccrc_knob`'s `environment`, `file`, `empty` or
+# `default`). Wave 1's seven read through the SAME resolver their act calls (`_bak_keep`, `_bak_data_keep`, `_ver_keep`, `_upd_health_s`,
+# `_upd_deadline_ms`, `_upd_release_base`, `_models_budget`), in their own mode; every other setting is read by its own literal
+# `_ccrc_knob <KEY> <default> file` call (or the owner's own literal reader, `_test_knobs` and `_graph_knobs file`), in file mode: the
+# environment of a shell does not change what a unit reads. A refused row records the check's closed words (`_set_says`), never the value: a
+# value that failed its check may be anything an operator typed. A setting a check cannot judge (a library that did not load, a reader that
+# could not decide) is `unmeasured`, with a sentence that names the file, a line and the key. An `ok` value or origin outside the envelope
+# (`_set_fits`), or a value holding a unit separator, is written `unmeasured` too, never cut (D-7909). The release base is shown as `default`,
+# or `custom` with its scheme and host only (`_upd_url_origin`), or `custom` alone when no host can be told from a credential (D-7873).
+# Neither `TBK_WARN` nor `GK_WARN` is read here, and `BOX_SETTINGS_KEYS` is gone: the class table is the one list (D-7910).
 # READ-ONLY: it never prunes, never takes update.lock and writes nothing but its own file, by temp and rename with the writers'
 # idiom (`_tmp_guard`, so a die or a SIGTERM through the EXIT chain leaves no `.tmp.$$`); it sets no trap of its own. What a SIGTERM
 # leaves (D-7875): before the rename, the last good file; during the rename itself (the `mv` may finish after the EXIT chain has run),
 # the last good file or the whole new one, never a partial one. It answers rc 0 whenever it answered; a write that fails is a die (rc 1),
 # never a half-written file. `--from timer` records `reader: timer`
 # for the timer's own run, else `shell`: an interactive run can disagree with the card, and says so.
-BOX_SETTINGS_KEYS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S)
 BOX_SETTINGS_JSON="$HOME/.ccrc/box-settings.json"
 BOX_SETTINGS_TEXT_MAX=480   # the cut of `_set_text` and the most an `ok` value may be (`_set_fits`); L0's BOX_SETTINGS_TEXT_MAX
 
@@ -26282,11 +26276,6 @@ _set_df() {
   [ "${#BASH_REMATCH[1]}" -le 12 ] && [ "${#BASH_REMATCH[2]}" -le 12 ] || return 1
   printf '%s %s' "$(( BASH_REMATCH[2] * 1024 ))" "$(( BASH_REMATCH[1] * 1024 ))"
 }
-
-# `_set_keep_why <KEY> <lowest>` — a refused keep's sentence, with the VALUE redacted first: `_keep_why` cuts a value at 32 characters
-# before any redactor sees it, so a path under a long HOME would leave a prefix of the home directory in it. `_keep_why` stays the one
-# builder of the sentence and only its input changes; the source phrase is the one `_keep_knob` already put on KEEP_WHY.
-_set_keep_why() { printf '%s, as set in %s' "$(_keep_why "$1" "$(_upd_redact "$KNOB")" "$2")" "${KEEP_WHY##*, as set in }"; }
 
 # ── the class table's tools (box settings wave 2, D-7909, D-7914) ──
 # The two envelope literals, byte-equal to L0's BOX_SETTING_VALUE_SHAPE and BOX_SETTING_ORIGIN_SHAPE, in the subset glibc ERE and a
@@ -26405,10 +26394,87 @@ _set_fits() (
   esac
 )
 
+# `_set_row_json <key> <state> <from> <value> <why>` — one row of the document, by its state: `ok` carries a value when there is one (a
+# `presence` row has none), then its source; `refused` its source and the check's words and never a value; `unmeasured` its sentence alone.
+# Each string goes through `_set_json` once and nothing is redacted before it: a why is cut at 240 bytes, a value (which `_set_fits` held to
+# 480) is not cut (D-7909, D-7913).
+_set_row_json() {
+  local r="{\"key\":\"$1\",\"state\":\"$2\""
+  case "$2" in
+    ok) [ -z "$4" ] || r+=",\"value\":$(_set_json "$4")"; r+=",\"from\":\"$3\"" ;;
+    refused) r+=",\"from\":\"$3\",\"why\":$(_set_json "$5" 240)" ;;
+    *) r+=",\"why\":$(_set_json "$5" 240)" ;;
+  esac
+  printf '%s}' "$r"
+}
+# `_set_got <KEY> <rc of _ccrc_knob>` — records one direct read in SRD_V, SRD_F and SRD_W (the caller declares the three): the value and its
+# source, or, when the reader could not decide or the value holds a unit separator (a byte no setting holds, and the one the line readers split
+# on), a sentence that names the key only.
+_set_got() {
+  if [ "$2" != 0 ]; then SRD_W["$1"]="${KNOB_WHY:-$1 cannot be measured}"
+  else
+    case "$KNOB" in
+      *$'\037'*) SRD_W["$1"]="$1's value holds a control byte this view does not record" ;;
+      *) SRD_V["$1"]="$KNOB"; SRD_F["$1"]="$KNOB_FROM" ;;
+    esac
+  fi
+}
+# `_set_lines` — reads `KEY<US>default<US>value<US>from` lines on stdin (`_test_knobs`, `_graph_knobs`) into the same three arrays. A line is
+# split into ALL its fields and judged by its value field: a field count other than four is a value that held a unit separator (nothing of the
+# line is kept but its key); an empty value field with no source word in the fourth is a read that failed, and the fourth is the reader's
+# sentence; the pressure bound's line is dropped, because its own read is `file` mode here. Never the fourth field as a why.
+_set_lines() {
+  local line f
+  while IFS= read -r line; do
+    IFS=$'\037' read -r -a f <<<"$line"
+    [ "${f[0]:-}" != CCRC_TEST_PRESSURE_MAX ] || continue
+    if [ "${#f[@]}" -ne 4 ]; then SRD_W["${f[0]:-?}"]="${f[0]:-?}'s value holds a control byte this view does not record"
+    elif [ -z "${f[2]}" ] && [ "${f[3]}" != default ] && [ "${f[3]}" != file ] && [ "${f[3]}" != empty ] && [ "${f[3]}" != environment ]; then SRD_W["${f[0]}"]="${f[3]}"
+    else SRD_V["${f[0]}"]="${f[2]}"; SRD_F["${f[0]}"]="${f[3]}"; fi
+  done
+}
+# `_set_tb_host` — the test box's host-side settings, `_tb_host_table`'s keys and defaults in its order, each a literal `file` read here (the
+# table itself also fills the validated load, which this verb never calls).
+# shellcheck disable=SC2088  # a `~/` default is the reader's home, spelled literally: ccrc.env expands nothing
+_set_tb_host() {
+  _ccrc_knob CCRC_TESTBOX_URL '' file; _set_got CCRC_TESTBOX_URL $?
+  _ccrc_knob CCRC_TESTBOX_TOKEN_FILE '~/.ccrc/testbox.token' file; _set_got CCRC_TESTBOX_TOKEN_FILE $?
+  _ccrc_knob CCRC_TESTBOX_GIT_URL_BASE '' file; _set_got CCRC_TESTBOX_GIT_URL_BASE $?
+  _ccrc_knob CCRC_TESTBOX_GIT_KEY '~/.ccrc/testbox-push.key' file; _set_got CCRC_TESTBOX_GIT_KEY $?
+  _ccrc_knob CCRC_TESTBOX_UNTRACKED_FILE_MAX 5M file; _set_got CCRC_TESTBOX_UNTRACKED_FILE_MAX $?
+  _ccrc_knob CCRC_TESTBOX_SNAPSHOT_MAX 64M file; _set_got CCRC_TESTBOX_SNAPSHOT_MAX $?
+  _ccrc_knob CCRC_TESTBOX_STATUS_DEADLINE 3s file; _set_got CCRC_TESTBOX_STATUS_DEADLINE $?
+  _ccrc_knob CCRC_TESTBOX_RECONNECT_DEADLINE 60s file; _set_got CCRC_TESTBOX_RECONNECT_DEADLINE $?
+  _ccrc_knob CCRC_TESTBOX_LOST_RUN local file; _set_got CCRC_TESTBOX_LOST_RUN $?
+  _ccrc_knob CCRC_TESTBOX_QUEUE_LIMIT 20 file; _set_got CCRC_TESTBOX_QUEUE_LIMIT $?
+  _ccrc_knob CCRC_TESTBOX_QUEUE_WAIT 10m file; _set_got CCRC_TESTBOX_QUEUE_WAIT $?
+  _ccrc_knob CCRC_TESTBOX_BUDGET 15m file; _set_got CCRC_TESTBOX_BUDGET $?
+  _ccrc_knob CCRC_TESTBOX_DENY_GLOBS "*.pem *.key .env .env.* id_* *.p12" file; _set_got CCRC_TESTBOX_DENY_GLOBS $?
+  _ccrc_knob CCRC_TESTBOX_POLL 30s file; _set_got CCRC_TESTBOX_POLL $?
+  _ccrc_knob CCRC_TESTBOX_FALLBACK_INSTALL install file; _set_got CCRC_TESTBOX_FALLBACK_INSTALL $?
+  _ccrc_knob CCRC_TESTBOX_TIMES '~/.ccrc/testbox-times.json' file; _set_got CCRC_TESTBOX_TIMES $?
+}
+# `_set_reads` — every wave-2 read, once: the session slice, the test runs, the graph sweep, the test box, the keepalive, the usage sweep and the carry
+# copies, each by its owner's literal call.
+_set_reads() {
+  _ccrc_knob CCRC_SESSION_SLICE_MEMORY_MAX 24G file; _set_got CCRC_SESSION_SLICE_MEMORY_MAX $?
+  _ccrc_knob CCRC_SESSION_SLICE_SWAP_MAX 6G file; _set_got CCRC_SESSION_SLICE_SWAP_MAX $?
+  _set_lines < <(_test_knobs)
+  _ccrc_knob CCRC_TEST_PRESSURE_MAX 0 file; _set_got CCRC_TEST_PRESSURE_MAX $?
+  _set_lines < <(_graph_knobs file)
+  _set_tb_host
+  _ccrc_knob CCRC_KEEPALIVE_FRESH 1800 file; _set_got CCRC_KEEPALIVE_FRESH $?
+  _ccrc_knob CCRC_KEEPALIVE_MODEL haiku file; _set_got CCRC_KEEPALIVE_MODEL $?
+  _ccrc_knob CCRC_KEEPALIVE_PROMPT "Reply with the single word: ok" file; _set_got CCRC_KEEPALIVE_PROMPT $?
+  _ccrc_knob CCRC_USAGE_SWEEP_DAYS 7 file; _set_got CCRC_USAGE_SWEEP_DAYS $?
+  _ccrc_knob CCRC_CARRY_COPY_WARN_BYTES 10737418240 file; _set_got CCRC_CARRY_COPY_WARN_BYTES $?
+}
+
 cmd_settings() {
-  local json=0 write=0 k rc val st from why now sj="" tx="" sep="" dl_plain dl_min dl_max o fw
+  local json=0 write=0 k rc val st from why now sj="" tx="" sep="" dl_plain dl_min dl_max o fw cls ap slot
   local s_ok=ok s_refused=refused s_unmeasured=unmeasured f_env=environment f_file=file f_empty=empty f_default=default
   local r_timer=timer r_shell=shell reader
+  local -A SRD_V=() SRD_F=() SRD_W=()
   reader="$r_shell"
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -26422,59 +26488,87 @@ cmd_settings() {
   done
   now="$(date +%s 2>/dev/null)"
   [[ "$now" =~ ^[1-9][0-9]{0,10}$ ]] || _ccrc_die "settings: the clock could not be read — nothing was recorded"
-  for k in "${BOX_SETTINGS_KEYS[@]}"; do
-    st="$s_ok"; val=""; why=""; rc=0
-    case "$k" in
-      CCRC_BACKUP_KEEP)       _bak_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY"; [ "$rc" -eq 0 ] || [ -z "$KNOB_FROM" ] || why="$(_set_keep_why CCRC_BACKUP_KEEP 0)" ;;
-      CCRC_BACKUP_DATA_KEEP)  _bak_data_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY"; [ "$rc" -eq 0 ] || [ -z "$KNOB_FROM" ] || why="$(_set_keep_why CCRC_BACKUP_DATA_KEEP 2)" ;;
-      CCRC_VERSIONS_KEEP)     _ver_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY"; [ "$rc" -eq 0 ] || [ -z "$KNOB_FROM" ] || why="$(_set_keep_why CCRC_VERSIONS_KEEP 0)" ;;
-      CCRC_UPDATE_HEALTH_S)   _upd_health_s; rc=$?; val="$UPD_HEALTH_S"; why="$UPD_HEALTH_WHY" ;;
-      CCRC_UPDATE_DEADLINE_MS)
-        # In THIS shell, so KNOB, KNOB_FROM and KNOB_WHY of the plain reading survive; rc 1 with a KNOB_WHY is the file that cannot be
-        # read (unmeasured), rc 1 without one is a value that is not canonical digits (refused: the sentence gives the plain reading, 900000, AS
-        # the plain reading; `_bak_gc` and the watchdog read the min and the max, which `ccrc settings` prints).
-        val="$(_upd_deadline_ms)" || :
-        _upd_deadline_ms >/dev/null; rc=$?
-        if [ "$rc" -ne 0 ]; then
-          if [ -n "$KNOB_WHY" ]; then rc=2; why="$KNOB_WHY"
-          else rc=1; why="CCRC_UPDATE_DEADLINE_MS is not $(_upd_deadline_says), so its plain reading is $val; the backup prune and the watchdog read the min and the max, which ccrc settings prints"; fi
+  _set_libs
+  _set_reads
+  for k in "${CCRC_SETTINGS[@]}"; do
+    _set_spec "$k" || continue
+    cls="$SET_CLASS"; ap="$SET_APPLIES"
+    [ "$cls" != omit ] || continue
+    st="$s_ok"; val=""; why=""; rc=0; KNOB_FROM=""
+    case "$SET_FAMILY" in
+      updates)
+        case "$k" in
+          CCRC_BACKUP_KEEP)       _bak_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY" ;;
+          CCRC_BACKUP_DATA_KEEP)  _bak_data_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY" ;;
+          CCRC_VERSIONS_KEEP)     _ver_keep; rc=$?; val="$KEEP"; why="$KEEP_WHY" ;;
+          CCRC_UPDATE_HEALTH_S)   _upd_health_s; rc=$?; val="$UPD_HEALTH_S"; why="$UPD_HEALTH_WHY" ;;
+          CCRC_UPDATE_DEADLINE_MS)
+            # In THIS shell, so KNOB, KNOB_FROM and KNOB_WHY of the plain reading survive; rc 1 with a KNOB_WHY is the file that cannot be
+            # read (unmeasured), rc 1 without one is a value that is not canonical digits (refused: the row carries the check's words).
+            val="$(_upd_deadline_ms)" || :
+            _upd_deadline_ms >/dev/null; rc=$?
+            if [ "$rc" -ne 0 ]; then
+              if [ -n "$KNOB_WHY" ]; then rc=2; why="$KNOB_WHY"; else rc=1; fi
+            fi ;;
+          CCRC_RELEASE_BASE_URL)
+            _upd_release_base >/dev/null 2>&1 || { rc=2; why="$KNOB_WHY"; }
+            if [ "$rc" -eq 0 ]; then
+              case "$KNOB_FROM" in
+                "$f_default"|"$f_empty") val="$f_default" ;;
+                *) if o="$(_upd_url_origin "$KNOB")"; then val="custom${o:+ $o}"; else val=custom; fi ;;   # D-7873: an '@' left after the redaction shows no host
+              esac
+            fi ;;
+          CCRC_MODELS_ADVANCE_BUDGET_S)
+            _models_budget; rc=$?; val="$MODELS_BUDGET_S"; why="$MODELS_BUDGET_WHY"
+            case "$rc" in 3) rc=1 ;; esac ;;   # a clamp is a refusal here: the row carries the check's words
+          *) rc=2; why="$k has no resolver in this verb" ;;
+        esac
+        # The three keeps answer rc 1 for a refusal AND for an unreadable ccrc.env; only the second leaves KNOB_FROM empty (`_ccrc_knob`).
+        case "$k" in CCRC_BACKUP_KEEP|CCRC_BACKUP_DATA_KEEP|CCRC_VERSIONS_KEEP) [ "$rc" -eq 0 ] || [ -n "$KNOB_FROM" ] || rc=2 ;; esac ;;
+      *)
+        # Wave 2: the value was read once, above, by its owner's literal call; here it is judged by the class table's own check.
+        if [ -n "${SRD_W[$k]:-}" ]; then rc=2; why="${SRD_W[$k]}"
+        elif [ -z "${SRD_F[$k]+x}" ]; then rc=2; why="$k was not read by this verb"
+        else
+          val="${SRD_V[$k]}"; KNOB_FROM="${SRD_F[$k]}"
+          _set_check "$k" "$val"; rc=$?
+          [ "$rc" -ne 2 ] || why="$SET_CHECK_WHY"
         fi ;;
-      CCRC_RELEASE_BASE_URL)
-        _upd_release_base >/dev/null 2>&1 || { rc=2; why="$KNOB_WHY"; }
-        if [ "$rc" -eq 0 ]; then
-          case "$KNOB_FROM" in
-            "$f_default"|"$f_empty") val="$f_default" ;;
-            *) if o="$(_upd_url_origin "$KNOB")"; then val="custom${o:+ $o}"; else val=custom; fi ;;   # D-7873: an '@' left after the redaction shows no host
-          esac
-        fi ;;
-      CCRC_MODELS_ADVANCE_BUDGET_S)
-        _models_budget; rc=$?; val="$MODELS_BUDGET_S"; why="$MODELS_BUDGET_WHY"
-        case "$rc" in 3) rc=1 ;; esac ;;   # a clamp is a refusal here: the value shown is what was written, and the sentence says what the step uses
-      *) rc=2; why="$k has no resolver in this verb" ;;
     esac
-    # The three keeps answer rc 1 for a refusal AND for an unreadable ccrc.env; only the second leaves KNOB_FROM empty (`_ccrc_knob`).
-    case "$k" in CCRC_BACKUP_KEEP|CCRC_BACKUP_DATA_KEEP|CCRC_VERSIONS_KEEP) [ "$rc" -eq 0 ] || [ -n "$KNOB_FROM" ] || rc=2 ;; esac
-    case "$rc" in 0) st="$s_ok"; why="" ;; 1) st="$s_refused"; val="$KNOB" ;; *) st="$s_unmeasured" ;; esac
+    case "$rc" in 0) st="$s_ok"; why="" ;; 1) st="$s_refused"; val=""; why="$(_set_says "$k")" ;; *) st="$s_unmeasured"; val="" ;; esac
     if [ "$st" = "$s_unmeasured" ]; then
       from=""
     else
       case "$KNOB_FROM" in
         "$f_env"|"$f_file"|"$f_empty"|"$f_default") from="$KNOB_FROM" ;;
-        *) st="$s_unmeasured"; from=""; why="$k was read from a source this verb does not know" ;;
+        *) st="$s_unmeasured"; from=""; val=""; why="$k was read from a source this verb does not know" ;;
+      esac
+    fi
+    # What an `ok` value or origin may be: inside the envelope, else it is not recorded at all, never cut (D-7909). A presence row records none.
+    if [ "$st" = "$s_ok" ] && [ "$cls" = presence ]; then val=""
+    elif [ "$st" = "$s_ok" ] && ! _set_fits "$k" "$cls" "$val"; then
+      st="$s_unmeasured"; from=""; val=""
+      case "$cls" in
+        origin) why="$k's origin is wider than this view records (an http or https scheme, a plain host name and a port)" ;;
+        *) why="$k's value passes its check but is wider than this view records (at most 32 digits and one unit, or one of its words)" ;;
       esac
     fi
     # The human form says a source in spec 2.1's words; the JSON keeps the four tokens (A9). A literal `case`, no word declared here.
     case "$from" in "$f_env") fw=environment ;; "$f_file") fw=ccrc.env ;; "$f_empty") fw="ccrc.env (empty line)" ;; *) fw="$from" ;; esac
-    if [ "$st" = "$s_ok" ]; then
-      sj+="$sep{\"key\":\"$k\",\"state\":\"$st\",\"value\":$(_set_json "$val"),\"from\":\"$from\"}"
-      tx+="$(printf '%-30s %s  (%s, %s)' "$k" "$(_set_text "$val")" "$fw" "$st")"$'\n'
-    elif [ "$st" = "$s_refused" ]; then
-      sj+="$sep{\"key\":\"$k\",\"state\":\"$st\",\"value\":$(_set_json "$val"),\"from\":\"$from\",\"why\":$(_set_json "$why")}"
-      tx+="$(printf '%-30s %s  (%s, %s)' "$k" "$(_set_text "$val")" "$fw" "$st"): $(_set_text "$why")"$'\n'
-    else
-      sj+="$sep{\"key\":\"$k\",\"state\":\"$st\",\"why\":$(_set_json "$why")}"
-      tx+="$(printf '%-30s %s' "$k" "$st"): $(_set_text "$why")"$'\n'
+    slot="$(_set_text "$val")"
+    if [ "$cls" = presence ]; then
+      case "$from" in "$f_default") slot=unset ;; "$f_empty") slot="set to empty" ;; *) slot=set ;; esac
     fi
+    sj+="$sep$(_set_row_json "$k" "$st" "$from" "$val" "$why")"
+    if [ "$st" = "$s_ok" ]; then
+      tx+="$(printf '%-30s %s  (%s, %s)' "$k" "$slot" "$fw" "$st")"
+    elif [ "$st" = "$s_refused" ]; then
+      tx+="$(printf '%-30s %s  (%s, %s)' "$k" "not shown" "$fw" "$st"): $(_set_text "$why")"
+    else
+      tx+="$(printf '%-30s %s' "$k" "$st"): $(_set_text "$why")"
+    fi
+    [ "$ap" != update ] || tx+="; takes effect at the next ccrc update"
+    tx+=$'\n'
     sep=","
   done
   dl_plain="$(_upd_deadline_ms)" || :; dl_min="$(_upd_deadline_ms min)" || :; dl_max="$(_upd_deadline_ms max)" || :
@@ -26515,7 +26609,7 @@ cmd_settings() {
     dj="{\"state\":\"$s_unmeasured\",\"why\":$(_set_json "$dwhy")}"
     tx+="disk: $s_unmeasured: $(_set_text "$dwhy")"$'\n'
   fi
-  local doc="{\"v\":1,\"at\":$now,\"reader\":\"$reader\",\"settings\":[$sj],\"deadline\":{\"plainMs\":$dl_plain,\"minMs\":$dl_min,\"maxMs\":$dl_max},\"backups\":$bj,\"disk\":$dj}"
+  local doc="{\"v\":2,\"at\":$now,\"reader\":\"$reader\",\"settings\":[$sj],\"deadline\":{\"plainMs\":$dl_plain,\"minMs\":$dl_min,\"maxMs\":$dl_max},\"backups\":$bj,\"disk\":$dj}"
   if [ "$write" -eq 1 ]; then
     local dest="$BOX_SETTINGS_JSON" tmp
     tmp="$dest.tmp.$$"

@@ -152,12 +152,6 @@ describe('the class table: bash equals CCRC_SETTINGS and L0 (D16, spec 5.1)', ()
   it('T8: the widened view is the table itself, not a copy', () => {
     expect(BOX_SETTING_SPECS === (BOX_SETTING_TABLE as unknown)).toBe(true);
   });
-  it('T9: until the verb switches to version 2, the bash literal is the table\'s first seven shown names', () => {
-    const m = /^BOX_SETTINGS_KEYS=\(([A-Z0-9_ ]+)\)$/m.exec(SRC);
-    expect(m, 'the bash literal is still there').not.toBeNull();
-    const shown = rowsOf(lines).filter((r) => r.cls !== 'omit').map((r) => r.key);
-    expect(m![1]!.split(' ')).toEqual(shown.slice(0, 7));
-  });
 
   it('T10: the value words are held equal, both ways, to L0 and to _tb_shape\'s word arms', () => {
     const fromShape = wordPairs(TB_SRC);
