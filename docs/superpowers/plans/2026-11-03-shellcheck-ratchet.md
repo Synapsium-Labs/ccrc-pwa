@@ -38,7 +38,7 @@ coordinator folds it into the ledger.
 | `ccd/ccrc` | 4.1 GB | 13 s |
 | `ccd/ccrc-doctor-checks` | 1.2 GB | 4 s |
 
-The whole pass is about 30 s at two lanes. Two is the limit: both large files at once is about 10 GB on a 16 GB runner
+The whole pass is about 30 s locally and 66 s on a runner, at two lanes. Two is the limit: both large files at once is about 10 GB on a 16 GB runner
 that is also running the shard's vitest workers.
 
 ## Not in this change

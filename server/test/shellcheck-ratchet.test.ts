@@ -32,7 +32,7 @@ const GROUP = 'ccd/ccd + ccd/lib';
 /** `--norc` and an empty SHELLCHECK_OPTS: a developer's own settings must not move a count. */
 const SHELLCHECK_ARGS = ['--norc', '--shell=bash', '-S', 'warning', '-f', 'gcc'];
 /** Two at once. Peak RSS is 6.2 GB for ccd/ccd and 4.1 GB for ccd/ccrc, on a 16 GB runner shared with the shard's
- *  vitest workers; the whole pass takes about 30 s at two lanes. */
+ *  vitest workers; the whole pass takes about 30 s locally and 66 s on a runner at two lanes. */
 const LANES = 2;
 /** What shellcheck reports when it gave up on a file: everything after that point was not checked. */
 const PARSE_STOPPED = new Set(['SC1072', 'SC1073']);
@@ -157,6 +157,8 @@ async function analyse(files: string[], cwd: string): Promise<Finding[]> {
 const tell = (line: string): void => { writeSync(2, `shellcheck ratchet: ${line}\n`); };
 
 const finding = (file: string, line: number, code: string): Finding => ({ file, line, code, text: 'a message' });
+/** How a failure names a finding. Built, not spelled: `citations.test.ts` reads a literal one as a line citation. */
+const cite = (file: string, line: number, code: string): string => [file, line, code].join(':');
 const pinOf = (codes: Record<string, number>): Pin => ({ count: Object.values(codes).reduce((a, b) => a + b, 0), codes });
 
 describe('the ratchet rules', () => {
@@ -169,9 +171,9 @@ describe('the ratchet rules', () => {
       [finding('a.sh', 3, 'SC2034'), finding('a.sh', 7, 'SC2155'), finding('a.sh', 9, 'SC2155')]);
     expect(failures).toHaveLength(1);
     expect(failures[0]).toContain('a.sh: 3 findings, pinned at 2');
-    expect(failures[0]).toContain('a.sh:7:SC2155');
-    expect(failures[0]).toContain('a.sh:9:SC2155');
-    expect(failures[0]).not.toContain('a.sh:3:SC2034');
+    expect(failures[0]).toContain(cite('a.sh', 7, 'SC2155'));
+    expect(failures[0]).toContain(cite('a.sh', 9, 'SC2155'));
+    expect(failures[0]).not.toContain(cite('a.sh', 3, 'SC2034'));
   });
 
   it('a code that swaps for another at the same count passes: the pin is the count', () => {
@@ -189,7 +191,7 @@ describe('the ratchet rules', () => {
     const { failures } = judge({}, ['new.sh'], [finding('new.sh', 2, 'SC2164')]);
     expect(failures).toHaveLength(1);
     expect(failures[0]).toContain('a new bash file must have 0 findings');
-    expect(failures[0]).toContain('new.sh:2:SC2164');
+    expect(failures[0]).toContain(cite('new.sh', 2, 'SC2164'));
   });
 
   it('ccd/ccd and ccd/lib are one pin: code moved between them does not trip it, and a new lib file joins the group', () => {
@@ -204,7 +206,7 @@ describe('the ratchet rules', () => {
   it('a file shellcheck could not parse fails even though its count fell, and is not offered as a lower pin', () => {
     const { failures, lowered } = judge({ 'a.sh': pinOf({ SC2034: 40 }) }, ['a.sh'], [finding('a.sh', 8, 'SC1073'), finding('a.sh', 8, 'SC1072')]);
     expect(failures).toHaveLength(1);
-    expect(failures[0]).toContain('a.sh:8:SC1072');
+    expect(failures[0]).toContain(cite('a.sh', 8, 'SC1072'));
     expect(lowered).toEqual([]);
   });
 

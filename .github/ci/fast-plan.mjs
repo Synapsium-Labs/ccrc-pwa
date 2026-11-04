@@ -72,8 +72,8 @@ export const PIN_MAP_CARRIED = [
  *  as `h.git(...)`. Such a test checks whatever the change touched, so vitest can never relate it. */
 export const TREE_READER = /\b(?:execFileSync|spawnSync|execSync|execFile|spawn)\(\s*['"`]git(?:['"`]\s*,\s*\[[^\]]*?['"`]|\s+(?:-C\s+\S+\s+)?)(?:ls-files|merge-base|diff)\b/;
 
-/** The tree readers a fast pull request does not run (D-7995): a full pass of the shellcheck ratchet takes about half a
- *  minute and 6 GB, and no ordinary change moves its counts. The queue and the full suite run it, and the map still
+/** The tree readers a fast pull request does not run (D-7995): a full pass of the shellcheck ratchet takes about a
+ *  minute on a runner and 6 GB, and no ordinary change moves its counts. The queue and the full suite run it, and the map still
  *  selects it for a change to a script it reads (part 2 above). */
 export const HEAVY_TREE_READERS = ['server/test/shellcheck-ratchet.test.ts'];
 
