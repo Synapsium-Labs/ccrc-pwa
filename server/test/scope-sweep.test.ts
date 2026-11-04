@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makePaneScopeBox, SWEEP, UP, HOUR, CCD_SERVER } from './paneScopeFixture.js';
 
-const { fx, proc, server, cgOf, unitName, scope, inert, STATE, seen, arm, livePanes, run, stops, rows } = makePaneScopeBox();
+const { fx, proc, server, cgOf, unitName, scope, inert, STATE, seen, seenBusy, arm, armBusy, regRow, livePanes, run, stops, rows } = makePaneScopeBox();
 
 // ── THE STOP SHIPS SHADOWED ─────────────────────────────────────────────────
 
@@ -967,6 +967,597 @@ describe('the real sweep\'s record is readable by the doctor and the stage-6 ins
       const { row } = commRecord(comm);
       expect(row).toMatchObject({ comm });
       expect(instrumentPublishes()).toEqual(oneOldCounts);
+    });
+  });
+});
+
+// ── THE BUSY ARM (D-7993): a provably dead session's busy orphans ──────────────────────────────────────────────────────
+// A dead scope that is not inert stays `report` on its `dead` line. A `busy` line beside it says whether its SESSION is
+// provably dead: every process's CCRC_SESSION_GENERATION names no registry row, or a stopped one, and no live pane
+// carries it. Past the session's own six hours it reads `would-stop (busy)`, and it is stopped only with BOTH switches.
+describe('the busy arm: a busy scope of a provably dead session', () => {
+  const GEN = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+  const OTHER = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+  const ENV = [`CCRC_SESSION_GENERATION=${GEN}`, 'PATH=/usr/bin'];
+  const TCP_LISTEN = (ino: number, port = '1F90'): string => `   0: 0100007F:${port} 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 ${ino} 1 0000000000000000 100 0 0 10 0\n`;
+  const TCP_ESTAB = (ino: number, local: string, rem: string): string => `   1: ${local} ${rem} 01 00000000:00000000 00:00000000 00000000  1000        0 ${ino} 1 0000000000000000 100 0 0 10 0\n`;
+  type P = Parameters<typeof proc>[1];
+  /** A `while true` loop and its latest `sleep`: CPU moved since first seen dead, a child minutes old. The scope has been
+   *  dead seven hours, and `sessionAgo` (default seven hours) dates the session's own clock; null writes no busy line. */
+  const busy = (n: number, o: { env?: readonly string[]; loop?: Partial<P>; sessionAgo?: number | null } = {}): string => {
+    const u = unitName(n); const cg = cgOf(u); const pid = 3000 + n * 10;
+    proc(pid, { age: 2 * 86400, comm: 'bash', cg, env: o.env ?? ENV, ...o.loop });
+    proc(pid + 1, { age: 60, comm: 'sleep', ppid: pid, cg, env: o.env ?? ENV });
+    scope(n, { pane: pid + 9, procs: [pid, pid + 1], cpu: 7255669999 });
+    seen(u, 7 * HOUR, 7255660000);
+    if (o.sessionAgo !== null) seenBusy(u, o.sessionAgo ?? 7 * HOUR);
+    return u;
+  };
+  const stopped = (): void => regRow('project-a-one', GEN, { stopped: true });
+  const both = (): void => { arm(); armBusy(); };
+  const busyWhy = (u: string): string[] => rows('busy')[u]!['why']!.split(',');
+  const notStopped = (u: string, verdict: string, why: string): void => {
+    both();
+    const r = run();
+    expect(r.code, r.err).toBe(0);
+    expect(rows('busy')[u]).toMatchObject({ verdict });
+    expect(busyWhy(u)).toContain(why);
+    expect(stops()).toEqual([]);
+  };
+
+  describe('(a) live with both switches, shadow otherwise', () => {
+    it('both switches: stopped, its `dead` line still `report`', () => {
+      const u = busy(1); stopped(); both();
+      const r = run();
+      expect(r.code, r.err).toBe(0);
+      expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped', why: 'none', session: 'project-a-one', n: '2', procs: '3010:bash,3011:sleep' });
+      expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'cpu-moved,process-started-under-6h' });
+      expect(r.out).toContain(`${u} stopped (busy)`);
+    });
+
+    it('only scope-sweep-live: would-stop (busy), with its process list, and NEVER a stop', () => {
+      const u = busy(1); stopped(); arm();
+      const r = run();
+      expect(r.code, r.err).toBe(0);
+      expect(stops()).toEqual([]);
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'would-stop', why: 'none', procs: '3010:bash,3011:sleep', first: String(UP - 7 * HOUR) });
+      expect(r.out).toContain(`${u} would-stop (busy)`);
+      expect(r.out).toContain('3010:bash,3011:sleep');
+    });
+
+    it('neither switch: would-stop (busy), and no stop', () => {
+      const u = busy(1); stopped();
+      run();
+      expect(stops()).toEqual([]);
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'would-stop' });
+    });
+
+    it('only scope-sweep-busy-live: the busy switch alone arms nothing', () => {
+      const u = busy(1); stopped(); armBusy();
+      run();
+      expect(stops()).toEqual([]);
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'would-stop' });
+      expect(fs.readFileSync(STATE(), 'utf8')).not.toContain('busy-mode');
+    });
+
+    it('a stop systemd refuses is recorded `stop-failed`', () => {
+      const u = busy(1); stopped(); both(); fs.writeFileSync(path.join(fx.base, 'stop-rc'), '1');
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stop-failed' });
+    });
+
+    it('a mock server: a listening socket and nothing moving is collected too', () => {
+      const u = unitName(1);
+      fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), TCP_LISTEN(424242));
+      proc(3001, { age: 2 * 86400, comm: 'node', cg: cgOf(u), env: ENV, sockets: [424242] });
+      scope(1, { pane: 3009, procs: [3001] }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); both();
+      expect(run().code).toBe(0);
+      expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'socket' });
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped', procs: '3001:node' });
+      expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+    });
+
+    it('a row that is ABSENT is as dead as a stopped one: its generation names no registry row', () => {
+      const u = busy(1); regRow('project-a-two', OTHER, { stopped: false }); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped', session: '-' });
+      expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+    });
+
+    it('a scope of a tmux server that no longer runs is judged the same way', () => {
+      const u = unitName(1); const cg = cgOf(u);
+      proc(3010, { age: 2 * 86400, comm: 'bash', cg, env: ENV });
+      scope(1, { pane: 3019, server: 7777, procs: [3010], cpu: 7255669999 }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped' });
+    });
+
+    it('a comm holding a comma or a space is folded, so a process list stays one word of two-part items', () => {
+      const u = unitName(1); const cg = cgOf(u);
+      proc(3010, { age: 2 * 86400, comm: 'tail,f x', cg, env: ENV });
+      scope(1, { pane: 3019, procs: [3010], cpu: 7255669999 }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ procs: '3010:tail_f_x' });
+    });
+
+    it('a long process list is cut, and `n` still counts every process', () => {
+      const u = unitName(1); const cg = cgOf(u);
+      const pids = Array.from({ length: 20 }, (_, i) => 3100 + i);
+      for (const p of pids) proc(p, { age: 2 * 86400, comm: 'w', cg, env: ENV });
+      scope(1, { pane: 3099, procs: pids, cpu: 7255669999 }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped();
+      run();
+      expect(rows('busy')[u]!['n']).toBe('20');
+      expect(rows('busy')[u]!['procs']!.split(',')).toHaveLength(16);
+    });
+  });
+
+  describe('the grace is the SESSION\'s: six hours from when it was first seen provably dead', () => {
+    it('first seen dead now, though the scope has been dead seven hours: its clock starts, nothing stops', () => {
+      const u = busy(1, { sessionAgo: null }); stopped();
+      notStopped(u, 'report', 'session-dead-under-6h');
+      expect(rows('busy')[u]!['first']).toBe(String(UP));
+    });
+
+    it('a minute short of six hours: not yet', () => {
+      const u = busy(1, { sessionAgo: 6 * HOUR - 60 }); stopped();
+      notStopped(u, 'report', 'session-dead-under-6h');
+    });
+
+    it('control: a minute past six hours: stopped', () => {
+      const u = busy(1, { sessionAgo: 6 * HOUR + 60 }); stopped(); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped' });
+    });
+
+    it('a session seen live drops the clock, so a session stopped again waits its six hours from zero', () => {
+      const u = busy(1); regRow('project-a-one', GEN); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'report', why: 'session-live', first: 'none' });
+      fs.writeFileSync(path.join(fx.home, '.cc-sessions', 'project-a-one.stopped'), '');
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'report', why: 'session-dead-under-6h', first: String(UP) });
+      expect(stops()).toEqual([]);
+    });
+
+    it.each([['earlier than the scope', 1], ['later than now', UP + HOUR], ['past 2^64 wrapped into range', null]])('a clock %s is not believed: first seen now', (_name, first) => {
+      const u = busy(1, { sessionAgo: null }); stopped();
+      const v = first === null ? String(2n ** 64n + BigInt(UP - 30000)) : String(first);
+      fs.appendFileSync(STATE(), `busy ${u} first=${v} verdict=report why=none session=- n=1 procs=1:x\n`);
+      notStopped(u, 'report', 'session-dead-under-6h');
+      expect(rows('busy')[u]!['first']).toBe(String(UP));
+    });
+  });
+
+  describe('(b) a busy scope of a LIVE session is never touched', () => {
+    it('a row that stands with no stop stamp: the swap case, an old pane\'s scope of a session running on a new pane', () => {
+      const u = busy(1); regRow('project-a-one', GEN);
+      notStopped(u, 'report', 'session-live');
+      expect(rows('busy')[u]!['first']).toBe('none');
+    });
+
+    it('a stop stamp beside a live pane carrying that generation: the pane wins', () => {
+      const u = busy(1); stopped();
+      proc(4000, { age: 86400, comm: '2.1.318', env: ENV, cg: cgOf(unitName(8)) });
+      livePanes(4000);
+      notStopped(u, 'report', 'session-live');
+    });
+
+    it('a row gone, but a live pane carries that generation: the pane wins', () => {
+      const u = busy(1);
+      proc(4000, { age: 86400, comm: '2.1.318', env: ENV, cg: cgOf(unitName(8)) });
+      livePanes(4000);
+      notStopped(u, 'report', 'session-live');
+    });
+
+    it('a scope with a live pane is not a dead scope at all: no `dead` line, no `busy` line', () => {
+      const u = busy(1); stopped(); livePanes(3010); both();
+      run();
+      expect(rows('dead')[u]).toBeUndefined();
+      expect(rows('busy')[u]).toBeUndefined();
+      expect(stops()).toEqual([]);
+    });
+  });
+
+  describe('(c) every existing hold still holds', () => {
+    it('a live Claude Code process, by its real shape: comm the version, argv[0] under claude/versions', () => {
+      const u = busy(1, { loop: { comm: '2.1.318', argv: ['/home/fixture/.local/share/claude/versions/2.1.318', '--session-id', 'x'] } }); stopped();
+      notStopped(u, 'report', 'claude-process');
+    });
+
+    it('a Claude Code process named plainly `claude`', () => {
+      const u = busy(1, { loop: { comm: 'claude', argv: ['claude'] } }); stopped();
+      notStopped(u, 'report', 'claude-process');
+    });
+
+    it('control: a process whose name only contains claude is no Claude Code process', () => {
+      const u = busy(1, { loop: { comm: 'claude-mock', argv: ['/srv/claude-mock'] } }); stopped(); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped' });
+    });
+
+    it('a pane that still exists on ccd\'s server, its process outside this scope', () => {
+      const u = busy(1); stopped();
+      proc(3019, { age: 86400, comm: 'bash', env: [`CCRC_SESSION_GENERATION=${OTHER}`], cg: cgOf(unitName(8)) });
+      regRow('project-a-two', OTHER, { stopped: true });
+      livePanes(3019);
+      notStopped(u, 'report', 'pane-exists');
+    });
+
+    it('a scope another live session uses, by its generation: a process carrying a live row\'s, beside the dead one\'s', () => {
+      const u = unitName(1); const cg = cgOf(u);
+      proc(3010, { age: 2 * 86400, comm: 'bash', cg, env: ENV });
+      proc(3011, { age: 2 * 86400, comm: 'node', cg, env: [`CCRC_SESSION_GENERATION=${OTHER}`] });
+      scope(1, { pane: 3019, procs: [3010, 3011], cpu: 7255669999 }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); regRow('project-a-two', OTHER);
+      notStopped(u, 'report', 'session-live');
+    });
+
+    it('a scope another live session uses, by a child in another cgroup', () => {
+      const u = busy(1); stopped();
+      proc(3500, { age: 2 * 86400, ppid: 3010, cg: '/user.slice/elsewhere.service' });
+      notStopped(u, 'report', 'parent-of-a-process-elsewhere');
+    });
+
+    it('a scope another live session uses, by a loopback connection from outside the scope (v4)', () => {
+      const u = unitName(1);
+      fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), TCP_LISTEN(424242) + TCP_ESTAB(424243, '0100007F:1F90', '0100007F:C000'));
+      proc(3010, { age: 2 * 86400, comm: 'node', cg: cgOf(u), env: ENV, sockets: [424242, 424243] });
+      scope(1, { pane: 3019, procs: [3010] }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped();
+      notStopped(u, 'report', 'peer');
+    });
+
+    it('a scope another live session uses, by a loopback connection from outside the scope (v6)', () => {
+      const u = unitName(1);
+      fs.appendFileSync(path.join(fx.proc, 'net', 'tcp6'), `   0: 00000000000000000000000001000000:1F90 00000000000000000000000001000000:C000 01 00000000:00000000 00:00000000 00000000  1000        0 424243 1 0000000000000000 100 0 0 10 0\n`);
+      proc(3010, { age: 2 * 86400, comm: 'node', cg: cgOf(u), env: ENV, sockets: [424243] });
+      scope(1, { pane: 3019, procs: [3010] }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped();
+      notStopped(u, 'report', 'peer');
+    });
+
+    it('a scope another live session uses, by an accepted connection on its listening Unix socket', () => {
+      const u = unitName(1);
+      fs.appendFileSync(path.join(fx.proc, 'net', 'unix'), '0000000000000000: 00000002 00000000 00010000 0001 01 626262 /tmp/server.sock\n0000000000000000: 00000003 00000000 00000000 0001 03 636363 /tmp/server.sock\n');
+      proc(3010, { age: 2 * 86400, comm: 'node', cg: cgOf(u), env: ENV, sockets: [626262, 636363] });
+      scope(1, { pane: 3019, procs: [3010] }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped();
+      notStopped(u, 'report', 'peer');
+    });
+
+    it('control: a connection between two processes of the SAME scope is no outside user', () => {
+      const u = unitName(1);
+      fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), TCP_LISTEN(424242) + TCP_ESTAB(424243, '0100007F:1F90', '0100007F:C000') + TCP_ESTAB(424244, '0100007F:C000', '0100007F:1F90'));
+      proc(3010, { age: 2 * 86400, comm: 'node', cg: cgOf(u), env: ENV, sockets: [424242, 424243, 424244] });
+      scope(1, { pane: 3019, procs: [3010] }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped' });
+    });
+
+    it('control: an outbound connection to another host is no user of this scope', () => {
+      const u = unitName(1);
+      fs.appendFileSync(path.join(fx.proc, 'net', 'tcp'), TCP_ESTAB(424243, '0A00000A:C000', '08080808:01BB'));
+      proc(3010, { age: 2 * 86400, comm: 'node', cg: cgOf(u), env: ENV, sockets: [424243] });
+      scope(1, { pane: 3019, procs: [3010] }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped' });
+    });
+
+    it('ccrc-tmux-server.scope, a scope of another live tmux server, and a scope outside the session slice: no line at all', () => {
+      const mk = (n: number, pid: number, o: Partial<Parameters<typeof scope>[1]>): string => {
+        proc(pid, { age: 2 * 86400, comm: 'bash', cg: cgOf(o.unit ?? unitName(n)), env: ENV });
+        const u = scope(n, { pane: pid + 9, procs: [pid], cpu: 7255669999, ...o });
+        seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+        return u;
+      };
+      server(5000, 30 * 86400);
+      const us = [mk(1, 3010, { unit: 'ccrc-tmux-server.scope' }), mk(2, 3020, { server: 5000 }), mk(3, 3030, { slice: 'app.slice' })];
+      stopped(); both();
+      run();
+      for (const u of us) { expect(rows('dead')[u]).toBeUndefined(); expect(rows('busy')[u]).toBeUndefined(); }
+      expect(stops()).toEqual([]);
+    });
+
+    it('a recycled server pid: reported on the `dead` line, and no busy judgment', () => {
+      const u = unitName(1);
+      proc(3010, { age: 2 * 86400, comm: 'bash', cg: cgOf(u), env: ENV });
+      proc(5000, { age: 30 * 86400, comm: 'node' });
+      scope(1, { pane: 3019, server: 5000, procs: [3010], cpu: 7255669999 }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); both();
+      run();
+      expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'server-pid-reused' });
+      expect(rows('busy')[u]).toBeUndefined();
+      expect(stops()).toEqual([]);
+    });
+
+    it('scope-sweep-paused stops the busy arm too: nothing measured, recorded or stopped', () => {
+      busy(1); stopped(); both();
+      fs.writeFileSync(path.join(fx.home, '.cc-sessions', 'scope-sweep-paused'), '');
+      const before = fs.readFileSync(STATE(), 'utf8');
+      expect(run()).toMatchObject({ code: 0, out: '', err: '' });
+      expect(stops()).toEqual([]);
+      expect(fs.readFileSync(STATE(), 'utf8')).toBe(before);
+    });
+
+    it('a scope dead under six hours whose only reason is its clock is no busy candidate: an inert scope gets no busy line', () => {
+      proc(3001, { age: 2 * 86400, cg: cgOf(unitName(1)), env: ENV });
+      const u = scope(1, { pane: 3001, procs: [3001] }); stopped(); both();
+      run();
+      expect(rows('dead')[u]).toMatchObject({ verdict: 'report', why: 'dead-under-6h' });
+      expect(rows('busy')[u]).toBeUndefined();
+    });
+  });
+
+  describe('(d) the three-a-tick bound counts inert and busy stops together', () => {
+    it('two inert and two busy: three stopped, the fourth held for the next tick', () => {
+      const i1 = inert(1, 3901); const i2 = inert(2, 3902);
+      const b1 = busy(3); const b2 = busy(4); stopped(); both();
+      expect(run().code).toBe(0);
+      expect(stops()).toHaveLength(3);
+      expect(rows('dead')[i1]!['verdict']).toBe('stopped');
+      expect(rows('dead')[i2]!['verdict']).toBe('stopped');
+      expect([rows('busy')[b1]!['verdict'], rows('busy')[b2]!['verdict']].sort()).toEqual(['held', 'stopped']);
+    });
+
+    it('three busy first spend the tick: an inert one behind them is held', () => {
+      const bs = [1, 2, 3].map((n) => busy(n)); const i = inert(4, 3904); stopped(); both();
+      expect(run().code).toBe(0);
+      expect(stops()).toHaveLength(3);
+      expect(bs.map((u) => rows('busy')[u]!['verdict'])).toEqual(['stopped', 'stopped', 'stopped']);
+      expect(rows('dead')[i]!['verdict']).toBe('held');
+    });
+
+    it('four busy alone: three stopped, one held', () => {
+      const bs = [1, 2, 3, 4].map((n) => busy(n)); stopped(); both();
+      run();
+      expect(stops()).toHaveLength(3);
+      expect(bs.map((u) => rows('busy')[u]!['verdict'])).toEqual(['stopped', 'stopped', 'stopped', 'held']);
+    });
+
+    it('with only scope-sweep-live the bound is the inert path\'s alone: a would-stop (busy) spends none of it', () => {
+      const b = [1, 2, 3].map((n) => busy(n)); const is = [4, 5, 6].map((n) => inert(n, 3900 + n)); stopped(); arm();
+      run();
+      expect(stops()).toHaveLength(3);
+      expect(is.map((u) => rows('dead')[u]!['verdict'])).toEqual(['stopped', 'stopped', 'stopped']);
+      expect(b.map((u) => rows('busy')[u]!['verdict'])).toEqual(['would-stop', 'would-stop', 'would-stop']);
+    });
+  });
+
+  describe('(e) a fact it cannot measure stays `carry`, never a stop', () => {
+    const carried = (u: string, why: string): void => {
+      notStopped(u, 'carry', why);
+      expect(rows('busy')[u]!['first'], 'the clock survives a carry').toBe(String(UP - 7 * HOUR));
+    };
+
+    it('a process whose environ cannot be read', () => {
+      const u = busy(1, { loop: { envUnreadable: true } }); stopped();
+      try { carried(u, 'env'); } finally { fs.chmodSync(path.join(fx.proc, '3010', 'environ'), 0o644); }
+    });
+
+    it('a process whose cmdline cannot be read: it cannot be told Claude Code or not', () => {
+      const u = busy(1, { loop: { cmdlineUnreadable: true } }); stopped();
+      try { carried(u, 'cmdline'); } finally { fs.chmodSync(path.join(fx.proc, '3010', 'cmdline'), 0o644); }
+    });
+
+    it('no process carries a generation: nothing names its session', () => {
+      const u = busy(1, { env: ['PATH=/usr/bin'] }); stopped();
+      carried(u, 'session-env');
+    });
+
+    it('a generation that is not one (never read as "names no row")', () => {
+      const u = busy(1, { env: ['CCRC_SESSION_GENERATION=not-a-uuid'] }); stopped();
+      carried(u, 'env');
+    });
+
+    it('a registry generation file that is not one: which row is which cannot be said', () => {
+      const u = busy(1); stopped(); regRow('project-a-two', 'garbage');
+      carried(u, 'registry');
+    });
+
+    it('a registry generation that is a link', () => {
+      const u = busy(1); stopped();
+      fs.symlinkSync('/dev/null', path.join(fx.home, '.cc-sessions', 'project-a-two.generation'));
+      carried(u, 'registry');
+    });
+
+    it.skipIf(process.getuid?.() === 0)('a registry it cannot list', () => {
+      const u = busy(1); stopped();
+      const reg = path.join(fx.home, '.cc-sessions');
+      fs.writeFileSync(path.join(reg, 'scope-sweep-live'), ''); fs.writeFileSync(path.join(reg, 'scope-sweep-busy-live'), '');
+      fs.chmodSync(reg, 0o300);
+      try {
+        const r = run();
+        expect(r.code, r.err).toBe(0);
+        expect(rows('busy')[u]).toMatchObject({ verdict: 'carry', why: 'registry' });
+        expect(stops()).toEqual([]);
+      } finally { fs.chmodSync(reg, 0o755); }
+    });
+
+    it('a live pane whose environ cannot be read: it could be this session\'s', () => {
+      const u = busy(1); stopped();
+      proc(4000, { age: 86400, comm: '2.1.318', envUnreadable: true, cg: cgOf(unitName(8)) });
+      livePanes(4000);
+      try { carried(u, 'pane-env'); } finally { fs.chmodSync(path.join(fx.proc, '4000', 'environ'), 0o644); }
+    });
+
+    it('tmux answers nothing: no pane can be asked after', () => {
+      const u = unitName(1);
+      proc(3010, { age: 2 * 86400, comm: 'bash', cg: cgOf(u), env: ENV });
+      scope(1, { pane: 3019, server: 7777, procs: [3010], cpu: 7255669999 }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); fs.rmSync(path.join(fx.base, 'panes'));
+      carried(u, 'tmux-unknown');
+    });
+
+    it('an inert-path predicate it cannot measure: the `carry` row stands, the busy clock survives it, and no stop', () => {
+      const u = busy(1, { loop: { netns: 'net:[4026532999]' } }); stopped(); both();
+      expect(run().code).toBe(0);
+      expect(rows('carry')[u]).toEqual({ state: 'dead', first: String(UP - 7 * HOUR), cpu0: '7255660000', why: 'socket-fd' });
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'carry', why: 'socket-fd', first: String(UP - 7 * HOUR) });
+      expect(rows('dead')[u]).toBeUndefined();
+      expect(stops()).toEqual([]);
+    });
+
+    it('a carried clock reaches a stop only after a later tick measures everything', () => {
+      const u = busy(1, { loop: { netns: 'net:[4026532999]' } }); stopped(); both();
+      run();
+      expect(stops()).toEqual([]);
+      fs.rmSync(path.join(fx.proc, '3010', 'ns', 'net'));
+      fs.symlinkSync('net:[4026531840]', path.join(fx.proc, '3010', 'ns', 'net'));
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped', first: String(UP - 7 * HOUR) });
+    });
+
+    it('a live-scope carry keeps no busy clock: the hop cap\'s scope is live, so its session is', () => {
+      const u = unitName(1); const cg = cgOf(u);
+      proc(3001, { age: 3 * 86400, comm: 'claude', cg });
+      proc(3002, { age: 3 * 86400, ppid: 3003, comm: 'bash', cg });
+      proc(3003, { age: 3 * 86400, ppid: 3002, comm: 'bash', cg });
+      scope(1, { pane: 3001, procs: [3001, 3002, 3003] }); seenBusy(u, 7 * HOUR); livePanes(3001);
+      run();
+      expect(rows('carry')[u]).toMatchObject({ state: 'live', why: 'parent-hop-cap' });
+      expect(rows('busy')[u]).toBeUndefined();
+    });
+
+    it('a previous `busy` line it cannot read is passed over: no clock, no abort', () => {
+      const u = busy(1, { sessionAgo: null }); stopped();
+      fs.appendFileSync(STATE(), `busy ${u} first=08 verdict=report why=none session=- n=1 procs=1:x\n`);
+      notStopped(u, 'report', 'session-dead-under-6h');
+    });
+  });
+
+  describe('the inert path is today\'s, byte for byte', () => {
+    /** One record's lines but the busy arm's own, with the header's tick dropped. */
+    const inertLines = (): string[] => fs.readFileSync(STATE(), 'utf8').split('\n')
+      .filter((l) => !/^busy(-mode)? /.test(l)).map((l) => l.replace(/ tick=\d+ /, ' '));
+
+    it('a busy scope\'s `dead` line and every inert verdict read the same whatever the session and the busy switch say', () => {
+      const i = inert(1, 3901); const u = busy(2);
+      arm(); run();
+      const shadowed = inertLines();
+      const again = (): string[] => {
+        fs.writeFileSync(path.join(fx.base, 'calls'), '');
+        fs.rmSync(STATE());
+        seen(i, 7 * HOUR, 7255660000); seen(u, 7 * HOUR, 7255660000);
+        run();
+        return inertLines();
+      };
+      regRow('project-a-one', GEN);
+      expect(again()).toEqual(shadowed.map((l) => l));
+      expect(shadowed.some((l) => l.includes(`dead ${u} `) && l.includes('verdict=report'))).toBe(true);
+    });
+
+    it('with no busy scope the record has no line of the arm\'s at all, and the empty record is the header alone', () => {
+      const r = run();
+      expect(r).toMatchObject({ code: 0, out: '', err: '' });
+      expect(fs.readFileSync(STATE(), 'utf8')).toMatch(new RegExp(`^# ccd-scope-sweep v1 tick=\\d+ up=${UP} mode=shadow\\n$`));
+    });
+
+    it('both switches stood: the record says `busy-mode live`, its header unchanged', () => {
+      both(); run();
+      expect(fs.readFileSync(STATE(), 'utf8')).toMatch(new RegExp(`^# ccd-scope-sweep v1 tick=\\d+ up=${UP} mode=live\\nbusy-mode live\\n$`));
+    });
+  });
+
+  describe('what it says', () => {
+    it('an unchanged verdict is silent, a changed one says one line, and a `report` says nothing', () => {
+      const u = busy(1); stopped();
+      expect(run().out).toContain(`${u} would-stop (busy)`);
+      expect(run().out).toBe('');
+      const v = busy(2, { sessionAgo: null });
+      const r = run();
+      expect(r.out).not.toContain(v);
+      expect(rows('busy')[v]).toMatchObject({ verdict: 'report' });
+    });
+
+    it('it never writes a word of a process\'s environment, the generation included', () => {
+      const u = busy(1); stopped(); both();
+      const r = run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped' });
+      expect(r.out + r.err + fs.readFileSync(STATE(), 'utf8')).not.toContain(GEN);
+    });
+
+    it('it never reads the pane scope marker: a marker naming this unit for a LIVE row changes nothing', () => {
+      const u = busy(1); stopped();
+      fs.writeFileSync(path.join(fx.home, '.cc-sessions', 'project-a-other.panescope'), u);
+      both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped' });
+    });
+  });
+
+  // The record's two other readers, over rows the REAL sweep wrote.
+  describe('the doctor and the instrument read the arm\'s lines', () => {
+    const DOCTOR = path.resolve(__dirname, '../../ccd/ccrc-doctor-checks');
+    const TOOL = path.resolve(__dirname, '../../deploy/measure-continuity.py');
+    const doctor = (): { stdout: string; stderr: string } => {
+      const src = fs.readFileSync(DOCTOR, 'utf8').split('\n');
+      const from = src.findIndex((l) => l.startsWith('_check_scope-sweep() {'));
+      const to = src.findIndex((l, i) => i > from && l === '}');
+      const script = ['_dr_pass() { echo "PASS $1: $2"; return 0; }', '_dr_warn() { echo "WARN $1: $2"; echo "  remedy: $3"; return 2; }',
+        '_dr_skip() { echo "SKIP $1: $2"; return 3; }', src.slice(from, to + 1).join('\n'), '_check_scope-sweep'].join('\n');
+      const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 30000,
+        env: { PATH: process.env['PATH'] ?? '', HOME: fx.home, LC_ALL: 'C', CCRC_SCOPE_SWEEP_STATE: STATE() } });
+      return { stdout: r.stdout, stderr: r.stderr };
+    };
+    const instrument = (): unknown => {
+      const r = spawnSync('python3', ['-I', TOOL, '--home', fx.home, '--stage', '6', '--journal', path.join(fx.base, 'no-journal.json'), '--json'],
+        { encoding: 'utf8', timeout: 30000, env: { PATH: process.env['PATH'] ?? '', TZ: 'UTC', XDG_RUNTIME_DIR: fx.xdg } });
+      expect(r.status, r.stderr).toBe(0);
+      return (JSON.parse(r.stdout) as { stage6: { inert_scopes: unknown } }).stage6.inert_scopes;
+    };
+
+    it('shadow: the doctor counts the orphan, says the mode and lists the process', () => {
+      const u = busy(1); stopped(); arm(); run();
+      const r = doctor();
+      expect(r.stderr).toBe('');
+      expect(r.stdout).toMatch(/^WARN scope-sweep: 1 dead pane scope\(s\) and 0 long-lived process\(es\) in live ones, from the sweep's record \(mode live; 1 busy orphan\(s\), busy mode shadow\):/);
+      expect(r.stdout).toContain(`${u} would-stop (busy)`);
+      expect(r.stdout).toContain('3010:bash,3011:sleep');
+      expect(r.stdout).not.toContain('cannot read');
+    });
+
+    it('live: the mode reads live, and a stopped orphan still counts this tick', () => {
+      const u = busy(1); stopped(); both(); run();
+      const r = doctor();
+      expect(r.stdout).toContain('(mode live; 1 busy orphan(s), busy mode live)');
+      expect(r.stdout).toContain(`${u} stopped (busy)`);
+    });
+
+    it('a live session\'s busy scope is no orphan: counted zero, its report line unchanged', () => {
+      const u = busy(1); regRow('project-a-one', GEN); run();
+      const r = doctor();
+      expect(r.stdout).toContain('(mode shadow; 0 busy orphan(s), busy mode shadow)');
+      expect(r.stdout).not.toContain(`${u} would-stop (busy)`);
+      expect(r.stdout).not.toContain('cannot read');
+    });
+
+    it('a clean record: the PASS says zero and the mode', () => {
+      arm(); armBusy(); run();
+      expect(doctor().stdout).toMatch(/^PASS scope-sweep: .*mode live; 0 busy orphan\(s\), busy mode live\)$/m);
+    });
+
+    it('a malformed `busy` line is a line it cannot read, as any other', () => {
+      busy(1); stopped(); run();
+      fs.appendFileSync(STATE(), 'busy garbage\n');
+      expect(doctor().stdout).toContain('1 line(s) it cannot read');
+    });
+
+    it('the instrument passes over the arm\'s lines, and its counts are the inert ones', () => {
+      busy(1); stopped(); both(); run();
+      expect(instrument()).toEqual({ mode: 'live', dead: 1, inert: 0, inert_dead_a_day_or_more: 0, carried_scopes: { dead: 0, live: 0, unknown: 0 } });
+    });
+
+    it('a malformed `busy` line makes the instrument say unreadable, as any other', () => {
+      busy(1); stopped(); run();
+      fs.appendFileSync(STATE(), 'busy garbage\n');
+      expect(instrument()).toEqual({ record: 'unreadable' });
     });
   });
 });

@@ -124,7 +124,7 @@ describeLinux('C8b characterization: scope-sweep\'s staleness (CCRC_SCOPE_SWEEP_
     record(home, now - 300);
     const r = runChecks(home, 'CCD_OS=linux; _check_scope-sweep');
     expect(r.stdout.split('\n'), r.stderr).toEqual([
-      'PASS scope-sweep: no dead pane scope the sweep could measure, and no process older than a day in a live one (the sweep\'s record, 300s old, mode shadow)',
+      'PASS scope-sweep: no dead pane scope the sweep could measure, and no process older than a day in a live one (the sweep\'s record, 300s old, mode shadow; 0 busy orphan(s), busy mode shadow)',
       '',
     ]);
     expect(r.code).toBe(0);
@@ -478,7 +478,7 @@ describeLinux('C8b step 4: scope-sweep\'s "every minute" sentence, its unit file
     record(home, now - 300);
     noTimer(home, 'ccd-scope-sweep.timer');
     const r = runChecks(home, 'CCD_OS=linux; _check_scope-sweep');
-    expect(r.stdout, r.stderr).toMatch(/^PASS scope-sweep: .*300s old, mode shadow\)\n$/);
+    expect(r.stdout, r.stderr).toMatch(/^PASS scope-sweep: .*300s old, mode shadow; 0 busy orphan\(s\), busy mode shadow\)\n$/);
   });
 
   it('stale, BOX_TREE_DIR not loaded: the WARN drops its cadence clause, and a FAIL names the bug', () => {
