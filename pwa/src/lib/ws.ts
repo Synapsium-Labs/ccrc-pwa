@@ -6,7 +6,8 @@
 // THE WATCHDOG (console speed, task C1 "the link and the start"; spec 2026-11-04 §2.3). A socket the network has
 // silently dropped can sit "open" for minutes with nothing arriving. Each socket notes when its last message came;
 // the server's first `beat` frame arms a silence bound, a socket that never opens is given up, and `nudge()` on
-// becoming visible replaces a socket that has heard nothing for a while. What to do is `lib/socketWatch.ts`'s pure
+// becoming visible replaces an armed socket that has heard nothing for a while. Before the first beat, neither the
+// check nor a nudge ever closes an open socket. What to do is `lib/socketWatch.ts`'s pure
 // `nextWatchStep`; this class only keeps the state and the timer.
 import { checkAuth, isAuthLost, onAuthRegained } from './auth';
 import { WATCH_CHECK_MS, isBeatFrame, nextWatchStep, staleOnVisible, type WatchPhase } from './socketWatch';
@@ -155,9 +156,10 @@ export class ReconnectingSocket {
     if (this.stopped) return; // inert unless started
     const ws = this.ws;
     if (ws !== null) {
-      // An open socket that has heard nothing yet is measured from its open.
-      if (this.opts.watch === false || this.phase === 'connecting') return;
-      if (!staleOnVisible(this.lastMessageAt ?? this.phaseSince, Date.now())) return;
+      // Only an ARMED socket (one that has heard the server's beat) is ever replaced for its quiet: before a beat, a
+      // quiet socket may be a healthy one on a quiet fleet, so a return to the page leaves it alone.
+      if (this.opts.watch === false || this.phase !== 'armed') return;
+      if (!staleOnVisible(this.lastMessageAt, Date.now())) return;
       this.handleDown(ws);
     }
     this.clearTimer();

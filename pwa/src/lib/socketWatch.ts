@@ -2,8 +2,9 @@
 // `ReconnectingSocket` (`lib/ws.ts`) keeps the state and the timer, and asks here what to do next.
 //
 // A socket is `connecting` until it opens, `open` until the server's first `beat` frame, and `armed` after it. Only
-// an armed socket is ever closed for silence, so a server too old to send beats, or a quiet fleet that sends no fleet
-// frame for an hour, never has its socket closed under it. Any message resets the silence, not only a beat, so a
+// an armed socket is ever closed for silence, by the check or by `nudge()` on a return to the page, so a server too
+// old to send beats, or a quiet fleet that sends no fleet frame for an hour, never has its open socket closed under
+// it; before a beat only the connect limit acts. Any message resets the silence, not only a beat, so a
 // busy but live link does not flap: thirty seconds is three missed ten-second beats.
 import { isRecord } from './wire';
 

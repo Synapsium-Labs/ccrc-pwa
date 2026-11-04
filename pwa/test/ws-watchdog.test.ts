@@ -181,16 +181,32 @@ describe('ReconnectingSocket, the watchdog', () => {
     h.socket.stop();
   });
 
+  // A hidden tab's timers are throttled, so the check may not have run when the page comes back: the clock moves on
+  // without them (`setSystemTime` fires no timer), and the nudge is what notices.
   it('nudge on visible with a 40 s old last message reconnects at once', () => {
     const h = harness();
     h.socket.start();
     const first = last();
     first.open();
-    first.message({ type: 'hello', proto: 1, min: 1 });
-    vi.advanceTimersByTime(40_000);
+    first.message({ type: 'beat' });
+    vi.setSystemTime(Date.now() + 40_000);
     h.socket.nudge();
     expect(first.closed).toBe(true);
     expect(FakeSocket.instances, 'a new attempt, with no backoff wait').toHaveLength(2);
+    h.socket.stop();
+  });
+
+  it('visible return with no beat ever seen leaves the open socket alone', () => {
+    const h = harness();
+    h.socket.start();
+    last().open();
+    last().message({ type: 'hello', proto: 1, min: 1 });
+    vi.advanceTimersByTime(40_000);
+    h.socket.nudge();
+    vi.setSystemTime(Date.now() + 10 * MINUTE);
+    h.socket.nudge();
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(last().closed).toBe(false);
     h.socket.stop();
   });
 

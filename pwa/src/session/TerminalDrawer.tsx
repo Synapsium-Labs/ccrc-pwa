@@ -461,8 +461,9 @@ export function TerminalDrawer({
     // re-attach it for nothing the moment the operator signed back in: the
     // reader would watch their pane drop to `attaching…` and repaint for no
     // reason, and lose a ^C held for a confirm and a latched `ctrl`. This is
-    // `ReconnectingSocket.nudge()`'s own early return (`ws.ts`: inert unless
-    // started AND down), which the two paths were asymmetric on.
+    // `ReconnectingSocket.nudge()`'s own rule (`ws.ts`: inert unless started,
+    // and an open socket is replaced only once armed by a beat and then quiet
+    // for 30 s), which the two paths were asymmetric on.
     const unsubAuth = onAuthRegained(() => {
       if (connRef.current !== 'open') setAttempt((a) => a + 1);
     });
