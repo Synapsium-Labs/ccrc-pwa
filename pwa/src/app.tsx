@@ -14,7 +14,7 @@
 // screens and the toasts — is the same element in both skins, so a switch
 // remounts none of it (`skin-switch.test.tsx`).
 // ToastHost mounts here so stores/screens can fire toasts from anywhere.
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { Suspense, lazy, useEffect, useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { BlockScreen } from './components/BlockScreen';
 import { LoginScreen } from './components/LoginScreen';
@@ -28,16 +28,20 @@ import { navigate, useLocation } from './lib/router';
 import { matchRoute, sessionPath, shellViewOf } from './lib/routes';
 import { useSkin } from './lib/skin';
 import { AuthResumeInDetail } from './accounts/AuthResumeBanner';
-import { AccountsScreen } from './screens/AccountsScreen';
 import { ArchiveScreen } from './screens/ArchiveScreen';
-import { DigestScreen } from './screens/DigestScreen';
 import { DocsScreen } from './screens/DocsScreen';
-import { HighlightMeasure } from './screens/HighlightMeasure';
 import { MailScreen } from './screens/MailScreen';
-import { RunsScreen } from './screens/RunsScreen';
-import { SessionScreen } from './screens/SessionScreen';
 import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
-import { SettingsScreen } from './screens/settings/SettingsFrame';
+// THE BIG SCREENS LOAD ON DEMAND (console speed, task C1 "the link and the start"; spec 2026-11-04 §2.3): each is its
+// own chunk, fetched the first time its route opens, so the fleet list starts without them. The fleet, the shell, Mail,
+// Archive, Docs, the programme and the Waiting routes stay in the entry. `SettingsDataProvider` stays eager: it wraps
+// the whole shell on every route (D-5504), so a lazy provider would hold the frame at start-up and defer nothing.
+const AccountsScreen = lazy(() => import('./screens/AccountsScreen').then((m) => ({ default: m.AccountsScreen })));
+const DigestScreen = lazy(() => import('./screens/DigestScreen').then((m) => ({ default: m.DigestScreen })));
+const HighlightMeasure = lazy(() => import('./screens/HighlightMeasure').then((m) => ({ default: m.HighlightMeasure })));
+const RunsScreen = lazy(() => import('./screens/RunsScreen').then((m) => ({ default: m.RunsScreen })));
+const SessionScreen = lazy(() => import('./screens/SessionScreen').then((m) => ({ default: m.SessionScreen })));
+const SettingsScreen = lazy(() => import('./screens/settings/SettingsFrame').then((m) => ({ default: m.SettingsScreen })));
 import { ProgrammeScreen } from './ledgers/ProgrammeScreen';
 import { ItemListColumn, ItemRouteAt, WaitingRoute } from './ledgers/WaitingRoutes';
 import { ShellFrame } from './skins/frame';
@@ -147,23 +151,28 @@ export function App(): ReactNode {
   // all outside it, stay mounted. Its reset key is `path + search`, so any
   // navigation draws the ladder again; it is not a React `key`, so it never
   // remounts a screen and the pane reset above stays the shell's.
-  const ladder = sessionId !== null ? (
+  // A lazy screen's chunk loads under one Suspense, inside the boundary: while it loads the pane says so, and a chunk
+  // that fails to load throws into the boundary, which draws its fallback rather than a blank pane.
+  const loading = (screen: ReactNode): ReactNode => (
+    <Suspense fallback={<p className="shell-placeholder-copy" role="status">Loading…</p>}>{screen}</Suspense>
+  );
+  const ladder = sessionId !== null ? loading(
     // key remounts per session so per-session UI state (terminal drawer,
     // pickers) never leaks across a sidebar switch.
     <SessionScreen key={sessionId} id={sessionId} />
   ) : route === 'archive' ? (
     <ArchiveRoute />
-  ) : route === 'accounts' ? (
+  ) : route === 'accounts' ? loading(
     <AccountsScreen />
   ) : route === 'inbox' ? (
     <MailScreen />
-  ) : route === 'runs' ? (
+  ) : route === 'runs' ? loading(
     <RunsScreen />
-  ) : settings ? (
+  ) : settings ? loading(
     <SettingsScreen />
-  ) : route === 'digest' ? (
+  ) : route === 'digest' ? loading(
     <DigestScreen day={digestDay} />
-  ) : route === 'measure-highlighting' ? (
+  ) : route === 'measure-highlighting' ? loading(
     <HighlightMeasure />
   ) : route === 'docs' ? (
     // NOT keyed: one mount spans one Docs visit (its listings, its auto-refresh set, its image queue), across every

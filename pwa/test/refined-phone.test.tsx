@@ -354,21 +354,22 @@ describe("Refined's phone header (W2 Task S5)", () => {
 
 describe('the back door to the fleet (W2 Task S5, the door table\'s go-fleet row)', () => {
   for (const route of ['/runs', '/accounts', '/mail', '/settings', '/archive', '/digest', '/s/a']) {
-    it(`the back button on ${route} carries go-fleet`, () => {
+    it(`the back button on ${route} carries go-fleet`, async () => {
       atWidth(390);
       render(<App />);
       act(() => { navigate(route); });
-      const back = screen.getAllByRole('button', { name: 'Back to fleet' });
+      // Five of these screens load on demand (console speed C1): the chunk resolves after the navigation's commit.
+      const back = await screen.findAllByRole('button', { name: 'Back to fleet' }, { timeout: 30_000 });
       expect(back.length, route).toBeGreaterThan(0);
       for (const b of back) expect(b, route).toHaveAttribute('data-command', 'go-fleet');
     });
   }
 
-  it('a back button whose target is not the fleet carries no go-fleet', () => {
+  it('a back button whose target is not the fleet carries no go-fleet', async () => {
     atWidth(390);
     render(<App />);
     act(() => { navigate('/settings/updates'); });
-    const back = screen.getByRole('button', { name: 'Back to Settings' });
+    const back = await screen.findByRole('button', { name: 'Back to Settings' }, { timeout: 30_000 }); // loads on demand (C1)
     expect(back).not.toHaveAttribute('data-command');
   });
 

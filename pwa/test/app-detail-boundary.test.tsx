@@ -7,6 +7,9 @@
 // The thrower is a mocked `RunsScreen` at `/runs`, a W4 stand-in: M4.B1's own fixture is "a mocked throwing
 // `DocsScreen` at `/docs`", and that screen and route arm are W5's (refinement (a); Task 12 records the W5 half for
 // W5's brief). Its own file because the module mock is per-file (app-pane-reset-timing.test.tsx's reason).
+//
+// `RunsScreen` loads on demand (console speed, task C1): the first render of `/runs` in this file shows the loading
+// line until its chunk resolves, so each case awaits the screen (`findBy…`) before it reads the pane.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockInstance } from 'vitest';
 import type { ReactNode } from 'react';
@@ -51,54 +54,56 @@ const FALLBACK = 'This screen could not be shown.';
 const detail = (): HTMLElement => document.querySelector('.shell-detail') as HTMLElement;
 
 describe('a throwing detail screen keeps the shell (M4.B1, W4 half)', () => {
-  it('draws the fallback inside .shell-detail while .shell-nav stays mounted', () => {
+  it('draws the fallback inside .shell-detail while .shell-nav stays mounted', async () => {
     navigate('/runs');
     render(<App />);
     expect(document.querySelector('.shell-nav')).not.toBeNull();
     expect(detail()).not.toBeNull();
-    expect(detail()).toContainElement(screen.getByText(FALLBACK));
+    expect(detail()).toContainElement(await screen.findByText(FALLBACK));
     expect(warn).toHaveBeenCalledWith('ccrc: render error in detail', expect.objectContaining({ message: 'runs screen broke' }));
   });
 
-  it('Back to the fleet navigates to / and the pane shows the placeholder again', () => {
+  it('Back to the fleet navigates to / and the pane shows the placeholder again', async () => {
     navigate('/runs');
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Back to the fleet' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Back to the fleet' }));
     expect(location.pathname).toBe('/');
     expect(screen.getByText('Select a session')).toBeInTheDocument();
     expect(screen.queryByText(FALLBACK)).toBeNull();
   });
 
-  it('navigating to another route resets the boundary too', () => {
+  it('navigating to another route resets the boundary too', async () => {
     navigate('/runs');
     render(<App />);
-    expect(screen.getByText(FALLBACK)).toBeInTheDocument();
+    expect(await screen.findByText(FALLBACK)).toBeInTheDocument();
     act(() => { navigate('/settings'); });
     expect(screen.queryByText(FALLBACK)).toBeNull();
-    expect(screen.getByRole('heading', { name: /^settings$/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /^settings$/i })).toBeInTheDocument();
   });
 
-  it('the same path with another search resets it: the key is path + search', () => {
+  it('the same path with another search resets it: the key is path + search', async () => {
     navigate('/runs?x=1');
     render(<App />);
-    expect(screen.getByText(FALLBACK)).toBeInTheDocument();
+    expect(await screen.findByText(FALLBACK)).toBeInTheDocument();
     boom.on = false;
     act(() => { navigate('/runs?x=2'); });
     expect(screen.queryByText(FALLBACK)).toBeNull();
-    expect(screen.getByRole('heading', { name: 'runs (stand-in)' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'runs (stand-in)' })).toBeInTheDocument();
   });
 
-  it('the same path and search keeps the fallback, even once the screen would draw', () => {
+  it('the same path and search keeps the fallback, even once the screen would draw', async () => {
     navigate('/runs?x=1');
     render(<App />);
+    await screen.findByText(FALLBACK);
     boom.on = false;
     act(() => { navigate('/runs?x=1'); });
     expect(screen.getByText(FALLBACK)).toBeInTheDocument();
   });
 
-  it('the toasts and the login overlay, outside the boundary, still mount while the fallback shows', () => {
+  it('the toasts and the login overlay, outside the boundary, still mount while the fallback shows', async () => {
     navigate('/runs');
     render(<App />);
+    await screen.findByText(FALLBACK);
     act(() => { toast('still here'); });
     expect(screen.getByText('still here')).toBeInTheDocument();
     act(() => raiseAuthLost('expired'));

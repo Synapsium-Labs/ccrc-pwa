@@ -24,10 +24,10 @@
 // screens' headings, and a module mock is per-file. RunsScreen is the stand-in
 // for "any screen that reads the pane on mount" — nothing about the real one
 // matters to the ordering.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 
@@ -54,6 +54,17 @@ vi.mock('../src/screens/RunsScreen', () => ({
 }));
 
 const { App } = await import('../src/app');
+
+// RUNS LOADS ON DEMAND (console speed C1, `app.tsx`). Loaded once here, through the real `React.lazy` path, so the
+// probe below mounts in the SAME commit as the route change, which is the ordering these cases measure: the first
+// load of a chunk mounts the screen in a later commit, after the reset by construction, and would prove nothing.
+beforeAll(async () => {
+  navigate('/runs');
+  render(<App />);
+  await screen.findByRole('heading', { name: 'runs (probe)' }, { timeout: 30_000 });
+  cleanup();
+  navigate('/');
+}, 60_000);
 
 beforeEach(() => {
   probe.seen.length = 0;

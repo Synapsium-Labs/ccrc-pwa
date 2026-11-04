@@ -69,13 +69,14 @@ describe('App /archive route', () => {
 });
 
 describe('App /accounts route (Task 6, Build 3 PR G)', () => {
-  it('renders AccountsScreen and joins [data-view="session"] like /s/:id and /archive do', () => {
+  it('renders AccountsScreen and joins [data-view="session"] like /s/:id and /archive do', async () => {
     // app.test.tsx's own warning (this file, Task 19 above) is real here too:
     // /accounts has to ride the SAME data-view OR every other non-fleet route
     // does, or a phone hides the very screen it just navigated to.
     navigate('/accounts');
     render(<App />);
-    expect(screen.getByRole('heading', { name: /accounts/i })).toBeInTheDocument();
+    // Accounts loads on demand (console speed C1): its chunk resolves after the first render.
+    expect(await screen.findByRole('heading', { name: /accounts/i }, { timeout: 30_000 })).toBeInTheDocument();
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
   });
 });
@@ -101,6 +102,7 @@ describe('App /accounts?lane= (T2c, D-6329)', () => {
     });
     navigate('/accounts?lane=claude');
     render(<App />);
+    await screen.findByRole('heading', { name: /accounts/i }, { timeout: 30_000 }); // the lazy screen has loaded (console speed C1)
     await screen.findAllByText('team·alt');
     await act(async () => {});
     expect(log, 'the first lane arrived once the poll landed').toEqual(['scroll:claude']);
@@ -152,16 +154,16 @@ describe('App /mail route', () => {
 });
 
 describe('App /runs route', () => {
-  it('renders RunsScreen and joins [data-view="session"] like every other non-fleet route', () => {
+  it('renders RunsScreen and joins [data-view="session"] like every other non-fleet route', async () => {
     navigate('/runs');
     render(<App />);
-    expect(screen.getByRole('heading', { name: /^runs$/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /^runs$/i }, { timeout: 30_000 })).toBeInTheDocument(); // loads on demand (C1)
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
   });
 });
 
 describe('App /settings route', () => {
-  it('renders SettingsScreen and joins [data-view="session"] like every other non-fleet route', () => {
+  it('renders SettingsScreen and joins [data-view="session"] like every other non-fleet route', async () => {
     // Spec §13 names this pin, and this file's /archive warning is why it has
     // two halves: a route left out of the data-view chain still renders on a
     // desktop (.shell-detail is always shown there) and is HIDDEN behind the
@@ -169,7 +171,7 @@ describe('App /settings route', () => {
     // the attribute catches a missing `|| settings`.
     navigate('/settings');
     render(<App />);
-    expect(screen.getByRole('heading', { name: /^settings$/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /^settings$/i }, { timeout: 30_000 })).toBeInTheDocument(); // loads on demand (C1)
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
   });
 });
@@ -398,26 +400,29 @@ describe('ROUTES and the ladder, both ways', () => {
     }
   });
 
-  it('`/settings/measure-highlighting` renders R19\'s measurement page, not the Settings frame (W5h-a)', () => {
+  it('`/settings/measure-highlighting` renders R19\'s measurement page, not the Settings frame (W5h-a)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
     try {
       navigate('/settings/measure-highlighting');
       render(<App />);
       const detail = document.querySelector('.shell-detail')!;
-      expect(within(detail as HTMLElement).getByRole('heading', { level: 1, name: 'Measure highlighting' })).toBeInTheDocument();
+      // The page loads on demand (console speed C1): its chunk resolves after the first render.
+      expect(await within(detail as HTMLElement).findByRole('heading', { level: 1, name: 'Measure highlighting' }, { timeout: 30_000 }))
+        .toBeInTheDocument();
       expect(within(detail as HTMLElement).queryByRole('navigation', { name: 'Settings sections' })).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it('`/settings/bogus` renders Settings with the not-found line, never ScreenFallback (D-5504)', () => {
+  it('`/settings/bogus` renders Settings with the not-found line, never ScreenFallback (D-5504)', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
     try {
       navigate('/settings/bogus');
       render(<App />);
       const detail = document.querySelector('.shell-detail')!;
-      expect(within(detail as HTMLElement).getByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
+      // Settings loads on demand (console speed C1): its chunk resolves after the first render.
+      expect(await within(detail as HTMLElement).findByRole('heading', { level: 1, name: 'Settings' }, { timeout: 30_000 })).toBeInTheDocument();
       expect(within(detail as HTMLElement).getByText('That section does not exist.')).toBeInTheDocument();
       expect(within(detail as HTMLElement).getByRole('navigation', { name: 'Settings sections' })).toBeInTheDocument();
       expect(within(detail as HTMLElement).queryByText(/could not be shown/i)).toBeNull();
@@ -497,7 +502,7 @@ describe('ROUTES and the ladder, both ways', () => {
 describe("Settings' provider keeps the frame (D-5504, D-161, D-5466)", () => {
   afterEach(() => { vi.unstubAllGlobals(); });
 
-  it('`/` → `/settings/updates` → `/` keeps the same .app-shell and sidebar nodes and the sidebar\'s scrollTop', () => {
+  it('`/` → `/settings/updates` → `/` keeps the same .app-shell and sidebar nodes and the sidebar\'s scrollTop', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
     navigate('/');
     render(<App />);
@@ -506,7 +511,8 @@ describe("Settings' provider keeps the frame (D-5504, D-161, D-5466)", () => {
     let top = 900;
     Object.defineProperty(nav, 'scrollTop', { configurable: true, get: () => top, set: (v: number) => { top = v; } });
     act(() => { navigate('/settings/updates'); });
-    expect(screen.getByRole('heading', { level: 2, name: 'Updates' })).toBeInTheDocument();
+    // Settings loads on demand (console speed C1): its chunk resolves after the navigation's commit.
+    expect(await screen.findByRole('heading', { level: 2, name: 'Updates' }, { timeout: 30_000 })).toBeInTheDocument();
     expect(document.querySelector('.app-shell')).toBe(shell);
     expect(document.querySelector('.shell-nav')).toBe(nav);
     act(() => { navigate('/'); });
