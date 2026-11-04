@@ -212,6 +212,16 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
     }
   });
 
+  it('a nonce is 128 bits from node:crypto: minted by randomBytes(16), imported from node:crypto, with no Math.random in the door (M10.2)', () => {
+    // The shape is pinned elsewhere; its entropy source is pinned here, because a Math.random- or counter-derived string of
+    // the same 22 characters would pass every shape check.
+    const src = readFileSync(path.join(here, '..', 'src', 'readerLab', 'routes.ts'), 'utf8');
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+    expect(code.split("const nonce = randomBytes(16).toString('base64url');"), 'the open handler mints the nonce once').toHaveLength(2);
+    expect(code).toMatch(/import\s*\{[^}]*\brandomBytes\b[^}]*\}\s*from\s*'node:crypto'/);
+    expect(code, 'the door draws no randomness from Math').not.toMatch(/\bMath\s*\.\s*random\b/);
+  });
+
   it('a HEAD to the probe is neither answered as a probe nor counted (refinement (f))', async () => {
     const a = await openApp(false);
     const nonce = await openRun(a);
