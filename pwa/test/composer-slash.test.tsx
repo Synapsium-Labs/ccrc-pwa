@@ -89,9 +89,9 @@ describe('what a tap leaves behind', () => {
 
 describe('when the box cannot answer', () => {
   it('renders no menu and does not retry on the next keystroke', async () => {
-    // The `.catch(() => setCommands([]))` arm: `[]` is "asked and got
-    // nothing", which is what stops the effect asking again — a retry per
-    // keystroke would be one agent round trip per character.
+    // The failure arm: a failed read stays unknown (never cached as `[]`),
+    // and it is not asked again while this `/` command is being typed — a
+    // retry per keystroke would be one agent round trip per character.
     commands.mockRejectedValue(new Error('501'));
     render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
     type('/');
@@ -99,6 +99,28 @@ describe('when the box cannot answer', () => {
     type('/co');
     await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
     expect(commands).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed read is asked again on the next `/`, once, and its answer is shown', async () => {
+    // A transient failure (a 502, or a read past its time limit) must not leave
+    // the session with no slash commands for the composer's whole life (review
+    // 1464 F6): the next `/` the reader starts asks once more.
+    commands.mockRejectedValueOnce(new Error('502'));
+    render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    type('/');
+    await waitFor(() => expect(commands).toHaveBeenCalledTimes(1));
+    type('/co');
+    type('/com');
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+    expect(commands, 'no retry while the same `/` is typed').toHaveBeenCalledTimes(1);
+    type('hello');
+    type('/');
+    await screen.findByText('/compact');
+    expect(commands, 'one retry on the next `/`').toHaveBeenCalledTimes(2);
+    type('');
+    type('/');
+    await screen.findByText('/compact');
+    expect(commands, 'and cached once it answers').toHaveBeenCalledTimes(2);
   });
 
   it('asks nothing at all without a session id', () => {

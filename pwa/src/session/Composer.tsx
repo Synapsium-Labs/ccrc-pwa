@@ -102,17 +102,27 @@ export function Composer({
   };
 
   // Lazily fetch the session's slash commands (built-ins + skills) the first
-  // time the user starts a `/` command; cache for the rest of the session.
+  // time the user starts a `/` command; cache for the rest of the session. A
+  // failed read is not cached (an empty list would hide every command for the
+  // composer's life, review 1464 F6): it stays unknown, is not asked again
+  // while that `/` command is typed, and is asked once more when the next one
+  // starts, so a failure costs at most one request per `/`, never a loop.
   const query = slashQuery(value);
+  const slashOpen = query !== null;
+  const failedThisSlash = useRef(false);
   useEffect(() => {
-    if (query === null || commands !== null || id === undefined) return;
+    if (!slashOpen) {
+      failedThisSlash.current = false;
+      return;
+    }
+    if (commands !== null || id === undefined || failedThisSlash.current) return;
     let live = true;
     void api
       .commands(id)
       .then((r) => { if (live) setCommands([...r.builtins, ...r.skills]); })
-      .catch(() => { if (live) setCommands([]); });
+      .catch(() => { if (live) failedThisSlash.current = true; });
     return () => { live = false; };
-  }, [query, commands, id]);
+  }, [slashOpen, commands, id]);
 
   const matches = query !== null && commands ? filterCommands(commands, query) : [];
 
