@@ -19,9 +19,9 @@ export const DOCS_MAX_RENDER_ELEMENTS = 20000;
  *  block clones across the worker boundary, and the main thread checks the length itself (base spec 4.9, re-argued by
  *  W5h-b); the worker's deadline, not this cap, bounds the time a block takes, whatever its shape. */
 export const MD_HIGHLIGHT_BLOCK_MAX_CHARS = 65536;
-/** Code characters per Docs page, at most, that the main thread admits to the highlight worker (a block is posted at
- *  most twice, the second time for its line retry), summed in document order with every drawn copy counted; a block
- *  past it is never posted and stays plain (base spec 4.9, re-argued by W5h-b). */
+/** Code characters per Docs page, at most, that the main thread admits to the highlight worker (a line retry posts a
+ *  block again), summed in document order with every drawn copy counted; a block past it is never posted and stays
+ *  plain (base spec 4.9, re-argued by W5h-b). */
 export const DOCS_HIGHLIGHT_PAGE_MAX_CHARS = 524288;
 /** The Docs parse budget for a document of `bytes` UTF-8 bytes: 2 s under 64 KiB, one more second per 64 KiB,
  *  at most 10 s. */
@@ -50,8 +50,8 @@ export const MD_KEYSTROKE_MAX_CHARS = 64;
 // What the highlight limits leave (base spec 4.9, rewritten by W5h-b when it retired W5 part 1's main-thread highlight
 // bounds): no highlight.js runs on the main thread. There, per block, the main thread posts at most
 // MD_HIGHLIGHT_BLOCK_MAX_CHARS, receives at most MD_HIGHLIGHT_MAX_HTML_CHARS, checks it in one linear pass and inserts
-// it once; per Docs page it admits at most DOCS_HIGHLIGHT_PAGE_MAX_CHARS (a block is posted at most twice, the second
-// time for its line retry) and inserts at most DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS; upgrade re-renders are at most one
+// it once; per Docs page it admits at most DOCS_HIGHLIGHT_PAGE_MAX_CHARS (a line retry posts a block
+// again) and inserts at most DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS; upgrade re-renders are at most one
 // per `pre`, so DOCS_MAX_RENDER_ELEMENTS bounds their count. On the phone R19 measured, checking, inserting and laying
 // out 2 097 145 characters of highlight HTML in one commit took 276 ms. highlight.js's own time is the worker's,
 // bounded per block by HIGHLIGHT_BLOCK_DEADLINE_MS and per store by HIGHLIGHT_PAGE_WORKER_MS and
