@@ -1463,6 +1463,7 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
     const files = fs.readdirSync(dir).filter((f) => /^ccd.*\.ts$/.test(f));
     expect(files.length).toBeGreaterThanOrEqual(7);
     let asked = 0;
+    let grouped = 0;
     for (const f of files) {
       const src = fs.readFileSync(path.join(dir, f), 'utf8').split('\n');
       src.forEach((ln, i) => {
@@ -1477,7 +1478,11 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
         // must be observed mid-flight cannot be a synchronous call, and the
         // scan's claim is about every bash call site, not every convenient
         // one. Matched by the same alternation so a reader sees one rule.
-        if (!/(?:execFileSync|spawnSync|spawn)\((?:'bash'|BASH)[,)]/.test(ln)) return;
+        // `spawnSyncGroup` joined them when `spawn-group-pin.test.ts` began
+        // sending every timed shell spawn there (#896): it is `spawnSync` in a
+        // process group of its own, and a bash spawned that way reaches the same
+        // gh, systemctl and tmux.
+        if (!/(?:execFileSync|spawnSync(?:Group)?|spawn)\((?:'bash'|BASH)[,)]/.test(ln)) return;
         // Either side of the call: `ccd-archive`'s `runCcd` builds its `opts`
         // object several lines above the spawn.
         const window = src.slice(Math.max(0, i - SCAN_LOOKBACK_LINES), i + 8).join('\n');
@@ -1506,11 +1511,14 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
         expect.soft(window, `${f}:${i + 1} runs ccd without asking for tmux containment`)
           .toContain('tmux: true');
         asked++;
+        if (ln.includes('spawnSyncGroup(')) grouped++;
       });
     }
     // The scan is only worth anything if it is scanning something: a refactor
     // that renamed the spawn helper would otherwise pass by matching nothing.
     expect(asked, 'the scan matched no ccd bash spawn at all').toBeGreaterThanOrEqual(12);
+    // The same for the grouped spelling: the sweep only ever moves sites to it, so the count only ever rises.
+    expect(grouped, 'the scan stopped seeing ccd bash spawns through spawnSyncGroup').toBeGreaterThanOrEqual(29);
   });
 
   it('puts the harness bin FIRST on PATH, whatever the caller passes', () => {
