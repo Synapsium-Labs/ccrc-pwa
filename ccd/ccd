@@ -10409,7 +10409,7 @@ _project_new_name_ok() {   # name -> 0 when a NEW project may take it (`isNewPro
 _project_github_url_ok() {   # url -> 0 when it is exactly a clone url `parseGithubRepo` emits
   # TWO EXACT SHAPES, `https://github.com/<o>/<r>.git` and `git@github.com:<o>/<r>.git`. The owner is GitHub's own
   # rule, a letter or digit then `[A-Za-z0-9-]` (no dot, no underscore). The repo is `[A-Za-z0-9._-]` led by anything
-  # but a dash (`.github`, `_tools`), and is not `.`, `..` or itself `….git`. Anchored and ASCII, so `ext::`,
+  # but a dash (`.github`, `owner/_tools`), and is not `.`, `..` or itself `….git`. Anchored and ASCII, so `ext::`,
   # `file://`, another host, userinfo, a third segment and a dash-leading url (an option to git) never match.
   local LC_ALL=C re='^(https://github\.com/|git@github\.com:)[A-Za-z0-9][A-Za-z0-9-]*/([A-Za-z0-9._][A-Za-z0-9._-]*)\.git$'
   [[ "$1" =~ $re && ${BASH_REMATCH[2]} != *.git && ${BASH_REMATCH[2]} != . && ${BASH_REMATCH[2]} != .. ]]
