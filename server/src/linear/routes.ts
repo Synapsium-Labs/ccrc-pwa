@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import {
   isLinearKeyShape, isLinearUuid, type LinearConnectionAnswer, type LinearConnectionView, type LinearDetailsRead,
   type LinearLegacyRow, type LinearTeam, type LinearTeamShown, type LinearWorkspaceView, type LinearWorkspacesAnswer,
@@ -7,7 +7,7 @@ import type { RouteRefusal } from '../../../shared/refusal.js';
 import { LINEAR_REF_MAX_CHARS } from '../workspaceCreate.js';
 import { refuseRoute } from '../refuse.js';
 import type { AccountActor } from '../accounts/audit.js';
-import type { AccountGate } from '../accounts/gate.js';
+import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import { valueDigestHex } from '../token/files.js';
 import { verifyLinearKey, type FetchLike, type LinearKeyCheck } from './client.js';
 import {
@@ -59,17 +59,10 @@ export interface LinearRouteOpts {
  *  holds the whole JSON with room, and a larger body is refused before it is parsed. */
 const PUT_BODY_LIMIT = 2048;
 
-const NO_STORE = 'no-store';
-const noStore = {
-  onRequest: async (_req: FastifyRequest, reply: FastifyReply): Promise<void> => { reply.header('cache-control', NO_STORE); },
-};
-
-/**
- * The connection's body errors, as fixed words. Fastify's own parse error text can quote a fragment of the
- * body, and on the key's route the body IS the key, so no parser message is ever forwarded.
- */
-const bodyError = (err: Error & { statusCode?: number }, _req: FastifyRequest, reply: FastifyReply): FastifyReply =>
-  refuseRoute(reply, err.statusCode === 413 ? 'oversize' : 'bad-request');
+/** `no-store` on every answer, and the write's body errors as fixed words (Fastify's own parse error text can quote a
+ *  fragment of the body, and on the key's route the body IS the key): the account gate's one spelling of each
+ *  (`noStoreRoute`, `credentialBodyRoute`, review 1389 A6). */
+const noStore = noStoreRoute;
 
 /** `rate-limited` (429) with its detail and its wait, in the `Retry-After` header and the body (spec §6.7, §6.8). */
 const refuseRate = (reply: FastifyReply, detail: LinearRateRefusal, retryAfterS: number): FastifyReply => {
@@ -126,10 +119,10 @@ export function registerLinearRoutes(app: FastifyInstance, opts: LinearRouteOpts
 
   app.get('/api/linear/connection', noStore, async () => answer(await currentView()));
 
-  // THE BODY ERRORS TOO. A parse error (400) or an oversize body (413) answers from `bodyError` BEFORE any handler or
-  // gate runs, so the `no-store` they set never reaches it: the `onRequest` hook runs first of all, and carries the header
-  // on those answers. The gate still sets it, harmlessly, for the refusals it makes.
-  const write = { bodyLimit: PUT_BODY_LIMIT, errorHandler: bodyError, ...noStore };
+  // THE BODY ERRORS TOO. A parse error (400) or an oversize body (413) answers from the route's error handler BEFORE any
+  // handler or gate runs, so the `no-store` they set never reaches it: the `onRequest` hook runs first of all, and carries
+  // the header on those answers. The gate still sets it, harmlessly, for the refusals it makes.
+  const write = credentialBodyRoute(PUT_BODY_LIMIT);
 
   app.put('/api/linear/connection', write, async (req, reply) => {
     // The gate first: before the body is read, before Linear is asked. Every answer of this route, its refusals and
@@ -373,7 +366,7 @@ export function registerLinearWorkspaceRoutes(app: FastifyInstance, opts: Linear
   app.get('/api/linear/workspaces', noStore, async () => listAnswer());
 
   // The body errors answer before any handler or gate runs, so `no-store` rides the `onRequest` hook (as on the PUT).
-  const write = { bodyLimit: PUT_BODY_LIMIT, errorHandler: bodyError, ...noStore };
+  const write = credentialBodyRoute(PUT_BODY_LIMIT);
 
   app.post('/api/linear/workspaces', write, async (req, reply) => {
     // The gate first: before the body is read, before Linear is asked.

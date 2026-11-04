@@ -1267,9 +1267,13 @@ function noteRefused(refused: ReadonlySet<string>): void {
  *  never read, never built and never in `records`, so no caller can compose it.
  *  Its raw name stays in `names`, which is the listing, not a list of sessions.
  *  Each caller classifies what a refused row means to it; the census in
- *  `registry-refused-census.test.ts` pins every call. */
+ *  `registry-refused-census.test.ts` pins every call.
+ *
+ *  `listedIds` (review 1338 F2) holds every `.uuid` basename of the FIRST listing minus `.uuid`: a built row, a row
+ *  `buildRecord` could not assemble and a refused id alike. It is derived here once, from `names`, so no caller
+ *  re-parses the listing for it (the watcher's presence ids read it). `refused` is a subset of it. */
 export type RegistryRead =
-  | { listed: true; records: SessionRecord[]; names: readonly string[]; refused: ReadonlySet<string> }
+  | { listed: true; records: SessionRecord[]; names: readonly string[]; refused: ReadonlySet<string>; listedIds: ReadonlySet<string> }
   | { listed: false };
 
 /**
@@ -1308,6 +1312,7 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
   const listedIds = names.filter((n) => n.endsWith('.uuid')).map((n) => n.slice(0, -'.uuid'.length)).sort();
   const ids = listedIds.filter((x) => isRegistryId(x));
   const refused: ReadonlySet<string> = new Set(listedIds.filter((x) => !isRegistryId(x)));
+  const listedIdSet: ReadonlySet<string> = new Set(listedIds);
   pruneWarnState(new Set(ids));
   noteRefused(refused);
   /** Ids whose `.hold` was in `names` but whose bytes came back null. Resolved
@@ -1365,10 +1370,10 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
       }
       // `names`, not `again`: the FIRST listing is the one every caller shares
       // (D-283). `again` answers a different question, on some calls only.
-      if (retired.size > 0) return { listed: true, records: out.filter((r) => !retired.has(r.id)), names, refused };
+      if (retired.size > 0) return { listed: true, records: out.filter((r) => !retired.has(r.id)), names, refused, listedIds: listedIdSet };
     }
   }
-  return { listed: true, records: out, names, refused };
+  return { listed: true, records: out, names, refused, listedIds: listedIdSet };
 }
 
 export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<SessionRecord[]> {

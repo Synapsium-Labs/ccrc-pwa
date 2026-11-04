@@ -483,8 +483,10 @@ describe('every ccd call site in server/src answers the version-skew question', 
     // The four Docs verbs (docs W2) join for `ws-reclaim`'s reason: each is gated by `capSupported(DOCS_CAP)` in
     // CAP_GATED_VERBS above, and naming them here reds a vanished call site or a lost gate.
     // `ws-collect` (child reclamation wave 9) joins for the same reason: naming it reds a vanished act site or a lost gate.
+    // `project-add` (add-project spec 2026-11-04 §4) joins for `project-pool`'s reason: its one site is
+    // `planProjectAdd` (`projectAdd.ts`), gated by `ccdCan`'s `verbRow`, and naming it reds a vanished site or a lost gate.
 const NEW_GENERATION = ['pr-state', 'pr-open', 'ws-archive', 'ws-restore', 'ws-audit', 'ws-reap', 'project-pool',
-  'ws-reclaim', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'ws-collect'];
+  'ws-reclaim', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'ws-collect', 'project-add'];
     for (const verb of NEW_GENERATION) {
       const sites = ALL_SITES.filter((s) => s.verb === verb);
       expect(sites.length, `${verb} has no call site at all`).toBeGreaterThan(0);

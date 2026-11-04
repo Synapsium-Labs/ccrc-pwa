@@ -10,7 +10,8 @@
 // never compares states itself. The one rule the table cannot carry is the programme context: the
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
-import { ACTIVE_RUN_STATES, TERMINAL_RUN_STATES, type MailDeliveryState, type Presence, type RunKind, type RunState } from './api.js';
+import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, type MailDeliveryState, type Presence, type RunKind, type RunState } from './api.js';
+import { utf8Bytes } from './utf8.js';
 
 /** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
  *  `secret`'s value goes to its slot, never through the answer (spec §5). */
@@ -242,17 +243,6 @@ export function isSecretUnmasked(v: unknown): v is SecretUnmasked {
   return typeof v === 'string' && (SECRET_UNMASKED_WHYS as readonly string[]).includes(v);
 }
 
-/** UTF-8 bytes of a string, counted without an encoder (this file imports nothing). A lone surrogate counts 3, as an
- *  encoder writes U+FFFD for it. */
-export function utf8Bytes(s: string): number {
-  let n = 0;
-  for (const ch of s) {
-    const c = ch.codePointAt(0)!;
-    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
-  }
-  return n;
-}
-
 /** Whether a pasted value is one the console takes: 1 to `SECRET_VALUE_MAX` characters and UTF-8 bytes. */
 export function isSecretValue(v: unknown): v is string {
   return typeof v === 'string' && v.length >= 1 && v.length <= SECRET_VALUE_MAX && utf8Bytes(v) <= SECRET_VALUE_MAX;
@@ -367,8 +357,8 @@ export const COORDINATOR_PRESENCES = Object.keys(COORDINATOR_PRESENCE_MAP) as re
  * registry listing, read from the listing's raw `*.uuid` names (refused ids included). A `dead` row is `dead`; `alive` and
  * `asleep` (hibernated, woken by mail) are `alive`; a doubt, or a row from a server that predates `presence`, is `unmeasured`;
  * an id the frame lacks is `absent` only when the listing is known and does not hold it either, and `unmeasured` when the
- * listing holds it (a refused id, or a row the registry could not assemble, is in no fleet row) or when no listing has landed
- * yet.
+ * listing holds it (a refused id, or a row the registry could not assemble, is in no fleet row; or a row the registry retired
+ * after its second listing, which the FIRST listing still names for that one tick) or when no listing has landed yet.
  *
  * WHY THIS IS NOT `measureClaimant` (the one dead predicate, D-5290; "legitimately different", review 1335 F4): that function
  * is async, a fresh registry read and a tmux verdict, and an item's view must be built SYNCHRONOUSLY (`viewOfItem`: the
@@ -415,11 +405,16 @@ export function itemIsStale(i: StaleInputs): boolean {
   return i.mail !== 'acked' && i.tickedAt !== null && i.now - i.tickedAt >= TICK_UNANSWERED_MS;
 }
 
-/** Whether an outstanding tick mail has been left behind (review 1336 F1): it went to a session that is no longer the
- *  programme's coordinator AND that session reads `dead` or `absent`. Such a mail can never be acknowledged by its recipient
- *  (the ack route takes only the recipient's own), and nothing re-addresses a mail to a literal session id, so it must not
- *  hold the operator's next tick of a sent-back item. A recipient that is still the coordinator, or that reads `alive` or
- *  `unmeasured`, keeps blocking: a live displaced coordinator must not get a second mail beside the new one. */
-export function tickMailLeftBehind(i: { recipient: string; coordinator: string; recipientPresence: CoordinatorPresence }): boolean {
-  return i.recipient !== i.coordinator && (i.recipientPresence === 'dead' || i.recipientPresence === 'absent');
+/** Whether the newest earlier tick mail of an item holds the operator's next tick, decided here alone (review 1335 F2, review
+ *  1336 F1; one decider, review 1338): a mail whose delivery is no longer outstanding never holds it, and an outstanding one
+ *  holds it unless it was LEFT BEHIND: it went to a session that is no longer the programme's coordinator AND that session
+ *  reads `dead` or `absent`. Its recipient is gone and no longer the coordinator, so the guard must not wait on it; nothing
+ *  re-addresses the mail (it keeps its delivery to the literal session id, so a revived session can still be delivered it
+ *  and ack it). A recipient that is still the coordinator, or that reads `alive` or `unmeasured`, keeps holding the tick: a
+ *  live displaced coordinator must not get a second mail beside the new one. */
+export function earlierTickBlocks(i: {
+  state: MailDeliveryState; recipient: string; coordinator: string; recipientPresence: CoordinatorPresence;
+}): boolean {
+  if (!OUTSTANDING_DELIVERY_STATES.includes(i.state)) return false;
+  return !(i.recipient !== i.coordinator && (i.recipientPresence === 'dead' || i.recipientPresence === 'absent'));
 }

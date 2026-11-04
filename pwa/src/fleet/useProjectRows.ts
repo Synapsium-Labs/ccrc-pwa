@@ -23,9 +23,11 @@ import type {
   ProjectPoolsWire, ProjectPoolWire, ProjectRepoWire, ProjectRow,
 } from '../../../shared/api';
 import type { ModelClass } from '../../../shared/models';
+import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import { api, type WorkspaceAddAnswer } from '../lib/api';
 import { useWhenVisible } from '../lib/usePoll';
 import { placementOfRow, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
+import { projectAddOutcomeUnknown } from './projectAddWords';
 
 /** THE ONE reader of `GET /api/projects` in the app (C7n, D-7192): the fleet screen's plane below calls it with the
  *  class its chooser holds, and the New session and Start programme sheets call it with none, so their request is the
@@ -99,6 +101,13 @@ export type AddOutcome =
   | { kind: 'refused'; error: unknown }
   | { kind: 'busy' };
 
+/** How a project add ended (add-project spec 2026-11-04 §4 PWA), `AddOutcome`'s shape for its reasons. `unreadable`
+ *  is a 2xx whose echo this build cannot read: the project WAS added. */
+export type ProjectAddOutcome =
+  | { kind: 'added'; answer: ProjectAddAnswer | 'unreadable' }
+  | { kind: 'refused'; error: unknown }
+  | { kind: 'busy' };
+
 export interface ProjectRowsPlane {
   rows: ProjectRowsRead;
   /** R5 (D-3010): the card set is seeded from the known-project list once it
@@ -116,6 +125,11 @@ export interface ProjectRowsPlane {
   /** Creates a workspace on `project`: today's bodyless request when `name` is absent or blank, the named one when
    *  it is not. Keeps the class the chooser holds, and refreshes the rows after a success. */
   addWorkspace: (project: string, opts?: { name?: string }) => Promise<AddOutcome>;
+  /** Whether a project add is in flight (one at a time: a clone can take minutes). */
+  addingProject: boolean;
+  /** Adds a project under the projects root, then re-reads the rows through `refreshProjects`, so the new card comes
+   *  from this plane's own read and `loadProjects` stays the one reader of `GET /api/projects`. */
+  addProject: (body: ProjectAddBody) => Promise<ProjectAddOutcome>;
   poolSelection: PoolSelection | null;
   poolOpen: boolean;
   openPool: (project: string) => void;
@@ -319,6 +333,29 @@ export function useProjectRows(
     }
   }, [adding, classFilter, refreshProjects]);
 
+  // One add at a time, by a ref (a second tap in the same tick must not see stale state) mirrored into state for the
+  // sheet's busy look. Re-armed in `finally`, `addWorkspace`'s reason: a refusal must not leave a dead confirm.
+  const [addingProject, setAddingProject] = useState(false);
+  const projectAddInFlight = useRef(false);
+  const addProject = useCallback(async (body: ProjectAddBody): Promise<ProjectAddOutcome> => {
+    if (projectAddInFlight.current) return { kind: 'busy' };
+    projectAddInFlight.current = true;
+    setAddingProject(true);
+    try {
+      const answer = await api.projectAdd(body);
+      void refreshProjects();
+      return { kind: 'added', answer };
+    } catch (error) {
+      // A failure whose outcome is unknown (no answer, or the server could not wait for ccd's) may have left the
+      // project on the box, so the list is re-read for it too; a refusal changed nothing and reads nothing.
+      if (projectAddOutcomeUnknown(error)) void refreshProjects();
+      return { kind: 'refused', error };
+    } finally {
+      projectAddInFlight.current = false;
+      setAddingProject(false);
+    }
+  }, [refreshProjects]);
+
   const chooseClass = useCallback((next: '' | 'default' | ModelClass): void => {
     setClassFilter(next);
     // Synchronously, beside the state: `refreshProjects` reads the ref and
@@ -352,13 +389,15 @@ export function useProjectRows(
     repoFor,
     adding,
     addWorkspace,
+    addingProject,
+    addProject,
     poolSelection,
     poolOpen,
     openPool,
     closePool,
     notePoolWrite,
   }), [
-    projectRows, classFilter, chooseClass, placementFor, poolFor, repoFor, adding, addWorkspace,
+    projectRows, classFilter, chooseClass, placementFor, poolFor, repoFor, adding, addWorkspace, addingProject, addProject,
     poolSelection, poolOpen, openPool, closePool, notePoolWrite,
   ]);
 }

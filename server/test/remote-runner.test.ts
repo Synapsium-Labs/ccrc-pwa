@@ -99,6 +99,9 @@ describe('per-verb timeouts', () => {
     // The deps-shed act (D-7278) has ws-reap's row; its shadow, the dry run, a shorter one of its own (166 s of bounds),
     // because it runs inside the run-done lane's single flight. `deps-shed-budget.test.ts` holds both sums.
     [['ws-shed-deps', '--session', 'x', '--class', 'child'], 240_000],
+    // The project create (add-project spec 2026-11-04 §4): a whole `git clone` of an operator-named repository.
+    [['project-add', '--name', 'demo', '--url', 'https://github.com/o/r.git'], 240_000],
+    [['project-add', '--name', 'demo', '--empty'], 240_000],
     [['ws-shed-deps', '--session', 'x', '--class', 'child', '--dry-run'], 180_000],
     [['ws-shed-deps', '--session', 'x', '--class', 'coordinator', '--dry-run', '--surface', 'server', '--actor', 'deps-shed'], 180_000],
     // The two SPAWNING verbs (F8, 2026-08-12). Both run `_spawn`, which blocks

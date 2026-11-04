@@ -88,7 +88,10 @@ describe('openCoordDb', () => {
       "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='mail_deliveries' " +
       "AND name NOT LIKE 'sqlite_%'",
     ).all() as { name: string }[]).map((r) => r.name).sort();
-    expect(indexNames).toEqual(['mail_deliveries_by_mail', 'mail_deliveries_due']);
+    // D-5914 adds the third, `mail_deliveries_by_revived`: a PARTIAL index holding heirs only, which serves
+    // `HAS_HEIR_SQL`'s `EXISTS` lookup (pinned by EXPLAIN in its own describe below) and costs a write to rows that
+    // are heirs, never to the ordinary queue.
+    expect(indexNames).toEqual(['mail_deliveries_by_mail', 'mail_deliveries_by_revived', 'mail_deliveries_due']);
     db.close();
   });
 
@@ -691,9 +694,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // (linear_events, D-7671, #1444), and MIGRATIONS[36] (operator_items, operator_item_events,
     // programme_modifications and the spec pin on programs, programme ledgers PL2), and MIGRATIONS[37]
     // (operator_items.recommended and recommendedWhy, programme ledgers PL9), and MIGRATIONS[38] (the landing
-    // authority overlay, its journal cursor, the projection witness and quarantineKind, landing order wave 5f).
-    expect(COORD_SCHEMA_VERSION).toBe(39);
-    expect(MIGRATIONS.length).toBe(39);
+    // authority overlay, its journal cursor, the projection witness and quarantineKind, landing order wave 5f), and
+    // MIGRATIONS[39] (mail_deliveries.revivedFrom and its partial index, D-5914).
+    expect(COORD_SCHEMA_VERSION).toBe(40);
+    expect(MIGRATIONS.length).toBe(40);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -759,9 +763,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // (account_events), MIGRATIONS[26] (the mail_deliveries park columns), MIGRATIONS[27] (secret_fingerprints) and
     // MIGRATIONS[28] (feed_events.dedupe_key), up to MIGRATIONS[33] (roll_settings, D-7453) and MIGRATIONS[34] (landing_entries and landing_projects, landing order wave 5e) and MIGRATIONS[35]
     // (linear_events, D-7671) and MIGRATIONS[36] (the programme ledgers' three tables and the spec pin on programs)
-    // and MIGRATIONS[37] (the PL9 recommendation columns) and MIGRATIONS[38] (the landing authority overlay, 5f);
-    // the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(39);
+    // and MIGRATIONS[37] (the PL9 recommendation columns) and MIGRATIONS[38] (the landing authority overlay, 5f)
+    // and MIGRATIONS[39] (mail_deliveries.revivedFrom, D-5914); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(40);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2301,6 +2305,70 @@ describe('coord.db: feed_events.dedupe_key, a notice\'s once-only key (D-5860, c
     // An older build's insert never names `dedupe_key`.
     b.prepare("INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body, runId) VALUES ('e', 1, 1, 'nudge', 's', 't', 'b', NULL)").run();
     expect(b.prepare('SELECT body, dedupe_key FROM feed_events').all()).toEqual([{ body: 'b', dedupe_key: null }]);
+    warnSpy.mockRestore();
+    b.close();
+  });
+});
+
+describe('coord.db: mail_deliveries.revivedFrom, a revived park\'s heir names its parent (D-5914, #125)', () => {
+  /** This entry's slot, found by its DDL and never hard-coded: a branch that merges first moves it up a slot. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('revivedFrom')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
+  const col = (db: DatabaseSync): ColumnInfo | undefined =>
+    (db.prepare('PRAGMA table_info(mail_deliveries)').all() as unknown as ColumnInfo[]).find((c) => c.name === 'revivedFrom');
+
+  it('ONE nullable INTEGER column with no default, and one partial index: nothing an older build would trip on', () => {
+    expect(SLOT, 'no MIGRATIONS entry adds revivedFrom').toBeGreaterThanOrEqual(40);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const c = col(db);
+    expect(c).toBeDefined();
+    expect(c!.type).toBe('INTEGER');
+    expect(c!.notnull, 'revivedFrom must be nullable (rule 3: an older build inserts without it)').toBe(0);
+    expect(c!.dflt_value).toBeNull();
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration adds one column and one index')
+      .toBe('ALTER TABLE mail_deliveries ADD COLUMN revivedFrom INTEGER;\n  CREATE INDEX mail_deliveries_by_revived ON mail_deliveries(revivedFrom) WHERE revivedFrom IS NOT NULL;');
+    const listed = db.prepare("SELECT partial FROM pragma_index_list('mail_deliveries') WHERE name = 'mail_deliveries_by_revived'")
+      .get() as { partial: number } | undefined;
+    expect(listed?.partial).toBe(1);
+    db.close();
+  });
+
+  it('the heir lookup HAS_HEIR_SQL makes is a SEARCH on the partial index, not a scan of the table', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const plan = (db.prepare('EXPLAIN QUERY PLAN SELECT d.id FROM mail_deliveries d WHERE d.state = \'rejected\' ' +
+      'AND EXISTS (SELECT 1 FROM mail_deliveries h WHERE h.revivedFrom = d.id)').all() as { detail: string }[])
+      .map((r) => r.detail).join('\n');
+    expect(plan).toMatch(/SEARCH h (?:EXISTS )?USING (?:COVERING )?INDEX mail_deliveries_by_revived/);
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it, and its deliveries read back with no parent', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts) VALUES (1, 'a', 'u', 'b', NULL, 'status', 's', 'b', '[]')");
+      raw.exec("INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (1, 'b', 'rejected', 'e')");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT state, revivedFrom FROM mail_deliveries').all()).toEqual([{ state: 'rejected', revivedFrom: null }]);
+    db.close();
+  });
+
+  it('rollback is real: an older build meeting the file at this version inserts without naming the column', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    const a = openCoordDb(p);
+    a.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION + 3}`);
+    a.close();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const b = openCoordDb(p);
+    b.exec("INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts) VALUES (1, 'a', 'u', 'b', NULL, 'status', 's', 'b', '[]')");
+    b.prepare("INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (1, 'b', 'queued', 'e')").run();
+    expect(b.prepare('SELECT state, revivedFrom FROM mail_deliveries').all()).toEqual([{ state: 'queued', revivedFrom: null }]);
     warnSpy.mockRestore();
     b.close();
   });

@@ -65,6 +65,13 @@ export class OperatorSecretStoreUnsafe extends Error {
   constructor(which: string) { super(`the operator-secrets store's ${which} directory is not a private directory; nothing was written`); this.name = 'OperatorSecretStoreUnsafe'; }
 }
 
+/** Thrown when a programme slug or slot name case-folds equal to an entry the store already holds but is spelled differently
+ *  (review 1416 F3): on a case-insensitive filesystem the two are one directory or file, so the write would land in another
+ *  name's slot. Refused on every platform, before anything is written. Names the kind of name only. */
+export class OperatorSecretNameCollides extends Error {
+  constructor(which: 'programme' | 'slot') { super(`a stored ${which} name differs from this one only by case; nothing was written`); this.name = 'OperatorSecretNameCollides'; }
+}
+
 /** Thrown when the value IS in its slot but what follows failed: the directory fsync after the rename, or the metadata write
  *  (review 1389 F3). The masker was asked first, so the value is registered for masking as far as the masker could take it. */
 export class OperatorSecretStoredUnrecorded extends Error {
@@ -164,22 +171,27 @@ async function privateDir(dir: string, which: string): Promise<void> {
  * told to save again, which finishes either way. A `register` that throws counts as `unregistered`, never as a failed write.
  * A failed metadata write removes the previous save's record, so no reader shows another save's time beside this value.
  *
- * ONE WINDOW ASIDE (below), NO ORDER LEAVES A VALUE ON DISK UNMASKED (review 1416 F1, review 1418 F1). A read-back that cannot
+ * THE WINDOW ASIDE (below), NO ORDER OF A SAVE, A ROTATION AND A RE-KEY LEAVES A VALUE ON DISK UNMASKED (review 1416 F1,
+ * review 1418 F1). A read-back that cannot
  * read the slot (`unknown`) cannot say whether the rename ran: the failure may have come at the temp's open, so the slot may
  * still hold the previous value. So that arm registers the new value BESIDE the lane's rows (`beside`), never in place of
  * them: both values stay masked until a later save, whose write proves what the slot holds, replaces the lane's rows with its
  * own. A rotation does not undo that: the re-key that reads the slot adds the value it read under the new token beside the
  * current rows and drops the lane's rows of older tokens (`SecretMasker.ingest`'s `rekey`).
  *
- * THE WINDOW: a rotation while the slot cannot be read leaves the lane's rows under the previous token. This process keeps
- * that token (`MAX_PREVIOUS_KEYS`), so the value stays masked here, but a restart forgets it: from the restart until the re-key
- * reads the slot (it asks at start, then retries on its backoff), the value on disk is unmasked. A value the masker refused
- * (`too-short` and the rest) was never masked, and the operator was told so.
+ * THE WINDOW (review 1426 F-D): it opens after ANY rotation followed by a restart, before the boot re-key lands, for every
+ * stored slot, with no fault at all. The rows reload under the previous token, and previous box tokens are memory-only
+ * (`SecretMasker`'s class doc, `accounts/mask.ts`), so after the restart they match nothing: from the restart until the re-key
+ * reads the slot (it asks at start, after the roster read, so at least one box round trip; then it retries on its backoff),
+ * the value on disk is unmasked. A rotation while the slot cannot be read keeps it open past the boot re-key, until a re-key
+ * can read the slot. Without a restart, this process keeps a previous token while its generation holds rows, so the value
+ * stays masked here. A value the masker refused (`too-short` and the rest) was never masked, and the operator was told so.
  */
 export async function writeOperatorSecret(
   ccrcDir: string, program: string, slot: string, value: string, now: number, register: RegisterSecret, item?: number,
 ): Promise<OperatorSecretMeta> {
   const file = operatorSecretPath(ccrcDir, program, slot);
+  refuseCaseCollision(ccrcDir, program, slot);
   await privateDir(path.join(ccrcDir, OPERATOR_SECRETS_DIR), 'top');
   await privateDir(path.dirname(file), 'programme');
   await sweepSlotTemps(path.dirname(file), slot);
@@ -206,6 +218,31 @@ export async function writeOperatorSecret(
   }
   if (unsynced) throw new OperatorSecretStoredUnrecorded();
   return meta;
+}
+
+/**
+ * Throws `OperatorSecretNameCollides` when the store holds a programme directory whose name case-folds to `program` but is
+ * spelled differently, or, in the programme's own directory, a slot's value or record file whose slot case-folds to `slot` but
+ * is spelled differently (review 1416 F3). Reads the two listings only, and every path is made of the store's own entries.
+ * A directory that is absent holds nothing to collide with, and a listing that fails proves nothing and is left to the write,
+ * which measures the directory itself (`privateDir`). The readers (`readStoredSecrets`, `removeOperatorSecret`) stay exact-name.
+ */
+function refuseCaseCollision(ccrcDir: string, program: string, slot: string): void {
+  const list = (dir: string): string[] | null => { try { return readdirSync(dir); } catch { return null; } };
+  const top = path.join(ccrcDir, OPERATOR_SECRETS_DIR);
+  const programmes = list(top);
+  if (programmes === null) return;
+  const programFold = program.toLowerCase();
+  if (programmes.some((e) => e !== program && e.toLowerCase() === programFold)) throw new OperatorSecretNameCollides('programme');
+  const found = programmes.find((e) => e === program);
+  if (found === undefined) return;
+  const slotFold = slot.toLowerCase();
+  for (const e of list(path.join(top, found)) ?? []) {
+    const ext = e.endsWith(SECRET_EXT) ? SECRET_EXT : e.endsWith(META_EXT) ? META_EXT : null;
+    if (ext === null || e.startsWith('.')) continue;
+    const name = e.slice(0, -ext.length);
+    if (name !== slot && name.toLowerCase() === slotFold) throw new OperatorSecretNameCollides('slot');
+  }
 }
 
 /** Whether the slot's value file holds exactly `value` (a regular file, opened with no symlink followed): `yes`, `no` (it is

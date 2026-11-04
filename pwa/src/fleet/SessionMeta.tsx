@@ -100,10 +100,14 @@ export interface SessionMetaProps {
   subagentsOpen?: boolean;
   subagentsId?: string;
   onToggleSubagents?: () => void;
+  /** The delegated-entries disclosure's state (header mode; `SessionDetails` draws the list beside the row). */
+  delegatedOpen?: boolean;
+  delegatedId?: string;
+  onToggleDelegated?: () => void;
 }
 
 export function SessionMeta({
-  facts: f, mode, onOpenRun, subagentsOpen = false, subagentsId, onToggleSubagents,
+  facts: f, mode, onOpenRun, subagentsOpen = false, subagentsId, onToggleSubagents, delegatedOpen = false, delegatedId, onToggleDelegated,
 }: SessionMetaProps): ReactNode {
   const card = mode === 'card';
   const session = f.session;
@@ -164,7 +168,7 @@ export function SessionMeta({
           {glance.marker !== null && glance.marker.key !== 'spawn' && (
             <Marker fact={glance.marker} full={false} />
           )}
-          {/* R9 (delegation broker wave 4): a programme worker's live delegated work, one chip after the marker. */}
+          {/* R9: the row's attached delegation entries, every liveness, on a live or dead row (D-7781): one chip after the marker. */}
           {glance.delegated !== null && (
             <span className="sess-meta-chip" title={glance.delegated.title}>{glance.delegated.text}</span>
           )}
@@ -213,8 +217,21 @@ export function SessionMeta({
           ⑂ {subagentList.length} subagent{subagentList.length === 1 ? '' : 's'}
         </button>
       )}
-      {/* R9 (delegation broker wave 4): the card's chip, the same text, so the header stays a superset (D-5545). */}
-      {f.delegated !== null && <span className="sess-meta-chip" title={f.delegated.title}>{f.delegated.text}</span>}
+      {/* Delegation visibility (spec §5): every entry this session started, a disclosure in the subagent toggle's shape: a
+          REAL `<button>`, `aria-controls` only while the list exists (`SessionDetails` draws it). Its count is never
+          smaller than the card's chip, which counts only the attached entries (D-7782). */}
+      {f.delegated !== null && (
+        <button
+          type="button"
+          className="sess-subagents"
+          aria-expanded={delegatedOpen}
+          aria-controls={delegatedOpen ? delegatedId : undefined}
+          title={f.delegated.title}
+          onClick={onToggleDelegated}
+        >
+          {f.delegated.text}
+        </button>
+      )}
       {/* Every marker, in full — but the last spawn and the restart, which the header already draws (the spawn chip
           above, the header's own restart chip). */}
       {markers(f).filter((m) => m.key !== 'spawn' && m.key !== 'restarted').map((m) => (

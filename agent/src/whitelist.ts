@@ -362,6 +362,7 @@ export const REQUIRED_VERB_FLAG = {
   'ws-lease-mark': '--lease',
   'ws-lease-audit': '--lease',
   'testbox-remote': '--state',
+  'project-add': '--name',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -672,6 +673,13 @@ export const EXEC_WHITELIST = {
     // admit every positional form it might grow, and the id it names is the PWA's. ccd re-proves every gate on the box
     // (a real session, a workspace and not a main checkout, a clean title).
     ['ws-title', '--session'],
+    // ADD A PROJECT (add-project spec 2026-11-04 §4): `project-add --name <n> (--url <github-url> | --empty)` clones a
+    // GitHub repository, or `git init`s an empty one, into a NEW directory under the projects root, and nothing else:
+    // it refuses an existing name, and its failure removes only its own temp directory. Granted on `--name` and
+    // ENROLLED in `REQUIRED_VERB_FLAG` above for `ws-title`'s reason: the flag is the verb's whole argument surface. ccd
+    // re-proves the name and the url (two exact github.com shapes) on the box; the clone is the agent's only way to a
+    // `git clone`, since `git` is a forbidden exec command.
+    ['project-add', '--name'],
   ],
 } as const satisfies ExecWhitelist;
 

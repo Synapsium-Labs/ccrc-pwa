@@ -412,7 +412,7 @@ describe('the capture pass of one tick (D-6435)', () => {
     expect(taskReads(await r.during(() => r.tick())).length).toBeGreaterThan(0);
   }, 60_000);
 
-  // An unlistable tick returns before every lane below the registry read, so it stamps none of them: a lane that was
+  // An unlistable tick returns before every lane below its fail-shut return, so it stamps none of them: a lane that was
   // due stays due. Kicked once, then an outage tick, then a listed tick inside TASK_SWEEP_MS with NO second kick: the
   // task lane still sweeps. A task sweep moved above the unlistable return would stamp the lane on the outage tick (the
   // lane runner stamps before the body runs, and `tasksPass` then returns on the unlisted model), and this listed tick

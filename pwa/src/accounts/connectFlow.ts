@@ -8,8 +8,8 @@
 import { isAccountStdin } from '../../../shared/account-argv';
 import { PROVIDERS, type ConnectMethod, type ProviderRow } from '../../../shared/providers';
 import { HUES, newLaneIdProblem, newLaneLabelProblem, type Hue } from '../../../shared/roster';
-import type { AccountsConnect, LaneWire, RosterWire } from '../../../shared/api';
-import { NEEDS_FLEET_UPDATE, PROVIDER_ROWS, type SignInEndKind } from '../fleet/accountWords';
+import type { AccountsConnect, AccountUsage, LaneWire, RosterWire } from '../../../shared/api';
+import { NEEDS_FLEET_UPDATE, PROVIDER_ROWS, type OldCredential, type SignInEndKind } from '../fleet/accountWords';
 import { AUTH_TERMINAL_STATES, type AuthStatusState } from '../../../shared/accounts';
 
 /** The providers the door offers, in its order (spec §5: three rows, no "Other"; `compatible` stays CLI in v1): the
@@ -171,9 +171,55 @@ export function heldAttemptOf(
 }
 
 /** Which sheet continues an attempt (spec §9): `setup-token` on a sign-in lane and `login` on a token lane are the two
- *  method switches; the same method as the lane's is the connect sheet's sign-in of a lane it added. */
-export function resumeSheetFor(kind: RosterWire['kind'] | undefined, method: SignInMethod): 'switch' | 'connect' {
-  return (method === 'setup-token' && kind === 'sign-in') || (method === 'login' && kind === 'token') ? 'switch' : 'connect';
+ *  method switches. The same method as the lane's is a re-auth (Task A38, D-7872) on a lane past its adding
+ *  (`pastAdding`, {@link isPastAdding}), and otherwise the connect sheet's sign-in of a lane it added. */
+export function resumeSheetFor(
+  kind: RosterWire['kind'] | undefined, method: SignInMethod, pastAdding = false,
+): 'switch' | 'reauth' | 'connect' {
+  if ((method === 'setup-token' && kind === 'sign-in') || (method === 'login' && kind === 'token')) return 'switch';
+  return pastAdding ? 'reauth' : 'connect';
+}
+
+/** Whether a lane is past its adding (D-7872 (9)): it shows a fact that a lane the connect sheet is still adding never
+ *  has. Every new lane starts off (spec: `add` writes the off marker, and only Turn it on, after the sign-in, lifts it),
+ *  so such a lane's word is Off, with no check and no 401 marker. Any one of these three says the lane exists already:
+ *  - a check in its lane state;
+ *  - the 401 marker (`authDead`), which ccd's rescue path writes with no check, so a Signed-out sign-in lane often has
+ *    no check at all, and which still holds under Off's precedence;
+ *  - a word other than Off: the marker that holds an added lane off is gone, so the lane was turned on.
+ *  An Off lane with neither a check nor the 401 marker reads as one being added. */
+export function isPastAdding(lane: LaneWire | undefined, usage: Pick<AccountUsage, 'authDead'> | null | undefined): boolean {
+  if (lane?.check !== undefined || usage?.authDead === true) return true;
+  return lane !== undefined && lane.state.word !== 'off';
+}
+
+/** A sign-out this app ran on a lane with N5's sign-out (D-7872 (2)), and the last check of the lane it knew of then
+ *  (`checkAt`, the box's clock, so it is only ever compared with another of the box's times). Kept by `signOuts.ts`. */
+export interface SignOutRecord { readonly checkAt?: number }
+
+/**
+ * WHAT A SHEET MAY SAY ABOUT A LANE'S OLD CREDENTIAL (D-7872 (10), the operator's option-1 ruling of 2026-11-03): the
+ * one rule, read through `useOldCredential` by every account sheet that speaks of it (the re-auth sheet's intro, endings,
+ * refused starts, restart lead and revoke item; the method switch sheet's intro, endings, both-held line, restart leads,
+ * danger confirm and revoke item; the paste sheet's intro, refusals, restart lead and revoke item). After a sign-out the box clears the lane's check and nothing
+ * else, and the server never reports `no-credential`, so a signed-out lane reads like one never checked.
+ *  - `signed-out`: certain. The box says so itself (`no-credential`), or the sheet asking just ran the sign-out and had
+ *    the box's answer (`signedOutHere`).
+ *  - `kept`: the lane shows a passing check, newer than any sign-out this app knows of (`signOut`), with no 401 marker
+ *    after it (`usage.authDead`: the provider refused it since, which a sign-out elsewhere also causes).
+ *  - `unsure` everywhere else: never checked, a check that failed or was cleared, a 401, a sign-out this app ran on the
+ *    lane as last read, or one it forgot on a reload. Its words are true whether or not the lane holds a credential.
+ */
+export function oldCredentialOf(
+  lane: LaneWire | undefined,
+  usage: Pick<AccountUsage, 'authDead'> | null | undefined,
+  signOut: SignOutRecord | undefined,
+  signedOutHere = false,
+): OldCredential {
+  if (signedOutHere || lane?.notReadyReason === 'no-credential') return 'signed-out';
+  const c = lane?.check;
+  if (c?.verdict !== 'ok' || usage?.authDead === true) return 'unsure';
+  return signOut?.checkAt === undefined || c.at > signOut.checkAt ? 'kept' : 'unsure';
 }
 
 /** The method a lane switches TO from its fold (spec §4.4, §9; Q1): a sign-in lane to the long-lived token, a token lane

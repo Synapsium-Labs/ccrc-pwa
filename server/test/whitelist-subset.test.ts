@@ -243,6 +243,17 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.prLanding('project-a', [{ id: 'a', pr: 1 }])])).toBe(true);
   });
 
+  // The project create (add-project spec 2026-11-04 §4) is granted on `--name` alone: the flag is its whole argument
+  // surface, and a bare `['project-add']` would let any form through. Both builders lead with it.
+  it('project-add is grantable ONLY with --name, and builds its clone and empty forms', () => {
+    const pa = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'project-add');
+    expect(pa, 'exactly one project-add grant').toEqual([['project-add', '--name']]);
+    expect(isExecAllowed('ccd', ['project-add'])).toBe(false);
+    expect(isExecAllowed('ccd', ['project-add', '--url', 'https://github.com/o/r.git', '--name', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.projectAddClone('demo', 'https://github.com/o/r.git')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.projectAddEmpty('demo')])).toBe(true);
+  });
+
   // Enrolled in REQUIRED_VERB_FLAG for its ARGUMENT SURFACE rather than for a
   // confirmation token — `ws-rename`, `coord-pause`, `project-pool` and
   // `route`'s reason — and reached from a door as open as any of theirs, with
@@ -551,6 +562,8 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     testboxRemote: ['testbox-remote', '--state', 'on'],
     projectPoolSet: ['project-pool', '--project', 'demo', '--pool', 'pool-a'],
     projectPoolClear: ['project-pool', '--project', 'demo', '--clear'],
+    projectAddClone: ['project-add', '--name', 'demo', '--url', 'https://github.com/o/r.git'],
+    projectAddEmpty: ['project-add', '--name', 'demo', '--empty'],
     route: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high'],
     // Pairs in `ROUTE_WRITABLE_FIELDS` order — `class` before `effort` — not
     // the sample object's own key order, which happens to agree here; the

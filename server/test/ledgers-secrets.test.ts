@@ -12,7 +12,7 @@
 // fingerprint (`egress: 'blind'`), while the save still registers the value with the real masker. So an echo of the value in
 // any answer, frame or line reaches the scan as it was written, and is a hit, whatever the masker would have done.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import fs, { chmodSync, existsSync, lstatSync, mkdirSync, promises as fsp, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import fs, { chmodSync, existsSync, lstatSync, mkdirSync, promises as fsp, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes } from 'node:crypto';
@@ -225,11 +225,18 @@ function listen(r: Rig): { raw: string[]; waiting: (pred: (f: WaitingFrame) => b
   };
 }
 
-/** Console output, captured whole (every argument of every level) while the flow runs. */
+/** Console output, captured whole (every argument of every level) while the flow runs, and anything written to the process's
+ *  own stdout or stderr directly, past the console (review 1426 F-J). */
 function captureConsole(): string[] {
   const lines: string[] = [];
   for (const level of ['log', 'info', 'warn', 'error', 'debug'] as const) {
     vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { lines.push(args.map((a) => (a instanceof Error ? `${a.message} ${a.stack ?? ''}` : typeof a === 'string' ? a : JSON.stringify(a))).join(' ')); });
+  }
+  for (const stream of [process.stdout, process.stderr]) {
+    vi.spyOn(stream, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      lines.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+      return true;
+    }) as typeof stream.write);
   }
   return lines;
 }
@@ -309,6 +316,14 @@ describe('the leak scan (plan PL6 Step 1, spec §5: no secret value anywhere but
     }
     expect(existsSync(secretDir(r)), 'nothing was written for a refused value').toBe(false);
     expect(body(await r.send({ method: 'POST', url: `/api/items/${id}/tick`, payload: { answer: value } })).error).toBe(LEDGER_ROUTE_REFUSALS.useSecretRoute);
+    // A programme name the store already holds in another case (review 1416 F3): refused before any write, the value with it.
+    const sibling = privateStore(r, 'PROG-A');
+    const collides = await save(r, id, value);
+    expect(collides.statusCode).toBe(REFUSAL_STATUS[LEDGER_ROUTE_REFUSALS.secretNameCollides]);
+    expect(body(collides).error).toBe(LEDGER_ROUTE_REFUSALS.secretNameCollides);
+    expect(readdirSync(secretDir(r)), 'nothing was written beside the sibling').toEqual(['PROG-A']);
+    expect(readdirSync(sibling)).toEqual([]);
+    rmSync(sibling, { recursive: true });
 
     // The save.
     const ok = await save(r, id, value);
@@ -353,6 +368,13 @@ describe('the leak scan (plan PL6 Step 1, spec §5: no secret value anywhere but
     const valueFile = operatorSecretPath(r.ccrcDir, 'prog-a', 'api-key');
     expect(walk(r.home), 'the scan reads the slot metadata').toContain(valueFile.replace(/\.secret$/, '.json'));
     expect(scan(r, value, { frames: sock.raw, out, valueFiles: [valueFile] })).toEqual([]);
+    // The scan's control for the process's own streams (review 1426 F-J): a direct write, past the console, is seen.
+    for (const stream of [process.stdout, process.stderr]) {
+      const at = out.length;
+      stream.write(`planted ${value}\n`);
+      expect(scan(r, value, { frames: [], out, valueFiles: [valueFile] }), stream === process.stdout ? 'stdout' : 'stderr').toContain(`console #${at}`);
+      out.length = at;
+    }
     const db = r.coord.db;
 
     // …and the one place it is: the slot's value file, 0600, in 0700 directories, holding exactly the value.
@@ -1762,5 +1784,45 @@ describe('the blind egress names every egress method of the masker (review 1416 
     const members = Object.getOwnPropertyNames(SecretMasker.prototype).sort();
     expect([...EGRESS].filter((m) => NOT_EGRESS.has(m))).toEqual([]);
     expect([...EGRESS, ...NOT_EGRESS].sort()).toEqual(members);
+  });
+});
+
+describe('a name that differs from a stored one only by case is refused (review 1416 F3, desktop-polish carry)', () => {
+  it('a programme slug that case-folds to a stored programme but is spelled differently: secret-name-collides, before any write', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const id = raiseSecret(r);
+    const sibling = privateStore(r, 'PROG-A');
+    const value = mark();
+    const res = await save(r, id, value);
+    expect(res.statusCode).toBe(409);
+    expect(body(res)).toEqual({ ok: false, error: 'secret-name-collides', detail: 'the box already stores a secret under a programme or slot name that differs from this one only by case; nothing was stored' });
+    expect(readdirSync(secretDir(r)), 'no directory was made for prog-a').toEqual(['PROG-A']);
+    expect(readdirSync(sibling), 'nothing was written into the stored one').toEqual([]);
+    expect(r.coord.itemById(id)?.state).toBe('open');
+    expect(laneRows(r.coord.db), 'the masker was not asked').toBe(0);
+    expect(r.masker.maskText(`x ${value} y`)).toContain(value);
+  });
+  it('a slot name that case-folds to a stored slot file but is spelled differently: secret-name-collides, before any write', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const id = raiseSecret(r);
+    const dir = privateStore(r);
+    // A slot file this server never writes (slot slugs are lower case): one made by hand, in another case.
+    writeFileSync(path.join(dir, 'API-KEY.secret'), 'x', { mode: 0o600 });
+    const res = await save(r, id, mark());
+    expect(res.statusCode).toBe(409);
+    expect(body(res).error).toBe('secret-name-collides');
+    expect(readdirSync(dir)).toEqual(['API-KEY.secret']);
+    expect(r.coord.itemById(id)?.state).toBe('open');
+  });
+  it('CONTROL: the same names spelled exactly as stored are saved', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const id = raiseSecret(r);
+    const dir = privateStore(r);
+    writeFileSync(path.join(dir, 'other-slot.secret'), 'x', { mode: 0o600 });
+    expect((await save(r, id, mark())).statusCode).toBe(200);
+    expect(readdirSync(dir).sort()).toEqual(['api-key.json', 'api-key.secret', 'other-slot.secret']);
   });
 });

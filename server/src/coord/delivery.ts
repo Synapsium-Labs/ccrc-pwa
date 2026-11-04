@@ -178,6 +178,17 @@ export function decideRecipientAbsent(d: Pick<DueFacts, 'attempts' | 'deliveredA
     why: unmeasurable ? 'registry row listed but unreadable (registry-unmeasurable)' : 'recipient not in registry' };
 }
 
+/** The lifecycle park's `lastError` (`decideSessionDead` below), spelled once: the revive (`coord/mailRevive.ts`,
+ *  D-5914) selects exactly these words, so a second spelling of the sentence would let the two drift apart. */
+export const sessionDeadError = (lifecycle: string): string => `recipient session is ${lifecycle}`;
+
+/** The subject of the server's own park notice to a sender (`FleetWatcher.tellParkedSender`), spelled once: the
+ *  revive never re-sends a notice the server itself wrote, and it recognises one by this head. */
+export type ParkNoticeWhat = 'parked' | 'rejected';
+export const PARK_NOTICE_WHATS: readonly ParkNoticeWhat[] = ['parked', 'rejected'];
+export const parkNoticeHead = (what: ParkNoticeWhat): string => `mail ${what}:`;
+export const parkNoticeSubject = (what: ParkNoticeWhat, subject: string): string => `${parkNoticeHead(what)} ${subject}`;
+
 /**
  * tmux proved the pane gone and `lifecycle` (a `sessionLifecycle` word that `lifecycleIsDead` named) says it will not
  * come back. It takes the absent rung's terms (back off, count, reject at the ceiling) EXCEPT that a DELIVERED row
@@ -186,7 +197,7 @@ export function decideRecipientAbsent(d: Pick<DueFacts, 'attempts' | 'deliveredA
  */
 export function decideSessionDead(d: Pick<DueFacts, 'attempts' | 'deliveredAt'>, lifecycle: string, now: number): SettleAction {
   const attempts = d.attempts + 1;
-  const error = `recipient session is ${lifecycle}`;
+  const error = sessionDeadError(lifecycle);
   if (d.deliveredAt === null && attempts >= MAIL_MAX_ATTEMPTS) return { kind: 'reject', code: 'undeliverable', error, told: null };
   return { kind: 'backOff', why: error, until: now + stepMs(attempts), countsAsAttempt: true };
 }

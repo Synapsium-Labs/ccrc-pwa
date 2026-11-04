@@ -137,7 +137,7 @@ const CONTRACT = [
   // the curly spelling can drift. It names the CLIENT verb, not the route; it is an identity declaration, never a restriction.
   'Before delegating, declare coordinator intent for this session with `ccrc-api coordinators intent set --session <id>`; clear that declaration when the coordinator role ends. This is an identity declaration, not a restriction on ordinary Agent or Workflow use.',
   // Fleet disk retention, DR-25 (spec 2026-10-23 §2.7.2, §10). ASCII only, no apostrophe, no quote.
-  'A workflow script, a worker brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree. Every test and typecheck runs through `ccrc test -- <command>` (for example `ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts` or `ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json`), which runs it in the fleet test slice and queues heavy runs fleet-wide; never run one bare, and never under a `systemd-run` of your own, which the session hook denies.',
+  'A workflow script, a worker brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree. Work, scratch repositories, reports and build output never go under the `projects/` transcript folders of a Claude config dir (`~/.claude*/projects/`): they belong in the workspace or in that temp root. Every test and typecheck runs through `ccrc test -- <command>` (for example `ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts` or `ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json`), which runs it in the fleet test slice and queues heavy runs fleet-wide; never run one bare, and never under a `systemd-run` of your own, which the session hook denies.',
   // Workflow rule, operator ruling 2026-10-25. ASCII only, no apostrophe, no quote.
   'Workflows are not a default. This session launches a workflow only for short, self-contained work that needs nothing from its own children and finishes in minutes: a review, a verification or an audit, or at least three independent items worth running in parallel. Each such workflow carries a time cap, its agents run at `medium` effort, and its vitest runs pass `--maxWorkers=2`. Nobody uses a workflow for a mechanical edit: a D-number substitution, a PR body edit, a rebase or a re-pin. This session never holds its turn open on anything that waits for its own children: it dispatches, ends its turn, and wakes on mail. Mail to a coordinator is held while it reads busy or waiting, so child mail has sat undelivered for hours behind a background workflow that died still reading busy and behind an operator question left open overnight. While any child is active, this session asks the operator in its closing turn text and ends the turn, never with an AskUserQuestion dialog, which reads waiting and holds every child mail behind it (`POST /api/mail` takes no `operator` recipient), and it never leaves a blocking question open while a child waits. A background workflow that stops, for any reason, is a wake: on its task notification, read the held mail (`GET /api/mail?to=<your id>`) in that turn.',
   // Programme ledgers PL7 (D-7715), operator-approved text. Its two apostrophes are straight, in `operator's` and `spec's`; its two
@@ -542,6 +542,12 @@ describe('the coordinator skill: clause 18, temp and long output', () => {
     expect(line).toContain('`CCRC_SESSION_TMPDIR`');
     expect(line).toContain('Long command output goes to a file there, or through `tail`');
   });
+  // D-7898: clause 18 keeps work out of a Claude config dir's transcript folders.
+  it('keeps work out of the transcript folders of a Claude config dir (D-7898)', () => {
+    const line = skill.split('\n').find((l) => l.startsWith('18. '));
+    expect(line).toContain('Work, scratch repositories, reports and build output never go under the `projects/` transcript folders of a Claude config dir (`~/.claude*/projects/`)');
+    expect(line).toContain('they belong in the workspace or in that temp root');
+  });
   // D-7298: clause 18 routes every test and typecheck through `ccrc test`, and names the hook's refusal.
   it('routes tests and typechecks through ccrc test, never a bare run or a systemd-run of its own (D-7298)', () => {
     const line = skill.split('\n').find((l) => l.startsWith('18. '));
@@ -600,12 +606,14 @@ describe('the coordinator skill: clause 20, the Waiting-on-you list and the Goal
   });
 
   it('names only client verbs the closed client really has, each read from its own table', () => {
-    const spans = [...CLAUSE_20.matchAll(/`ccrc-api ([a-z]+) ([a-z-]+)`/g)].map((m) => `${m[1]}.${m[2]}`);
+    // A span may carry arguments inside its backticks (review 1348 A-1), and every `ccrc-api` the clause names is one span,
+    // so a verb added in another form is harvested, or reds the count.
+    const spans = [...CLAUSE_20.matchAll(/`ccrc-api ([a-z]+) ([a-z-]+)[^`]*`/g)].map((m) => `${m[1]}.${m[2]}`);
     expect(spans, 'clause 20 no longer names its five client verbs').toEqual(
       ['items.raise', 'items.confirm', 'goals.pin', 'goals.modify', 'goals.merged']);
-    const client = readFileSync(CCRC_API, 'utf8');
-    const table = client.slice(client.indexOf('declare -A ROUTES=('));
-    const keys = [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.-]+)\]='/gm)].map((m) => m[1]!);
+    expect(CLAUSE_20.split('ccrc-api').length - 1, 'every ccrc-api the clause names is a harvested span').toBe(spans.length);
+    // The client's rows through the one reader of its table (review 1348 A-2), never a parser of this file's own.
+    const keys = clientRoutes().map((r) => r.key);
     for (const span of spans) expect(keys, `the client has no row for ${span}, which clause 20 names`).toContain(span);
   });
 });
@@ -622,10 +630,11 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
   it('names a client verb the closed client really has: `ccrc-api coordinators intent set --session <id>`', () => {
     const verb = /`ccrc-api (coordinators) (intent) (set) --session <id>`/.exec(CLAUSE_17);
     expect(verb, 'clause 17 no longer names the client verb').not.toBeNull();
-    const client = readFileSync(CCRC_API, 'utf8');
-    const table = client.slice(client.indexOf('declare -A ROUTES=('));
-    const rows = [...table.slice(0, table.indexOf('\n)')).matchAll(/^\s*\[([a-z.-]+)\]='([^']*)'/gm)].map((m) => [m[1]!, m[2]!]);
-    expect(rows, 'the client has no row for the verb clause 17 names').toContainEqual(['coordinators.intent', 'POST|/api/coordinators/{id}/intent|yes|-']);
+    // The client's rows through the one reader of its table (review 1348 A-2).
+    const row = clientRoutes().find((r) => r.key === 'coordinators.intent');
+    expect(row, 'the client has no row for the verb clause 17 names').toBeDefined();
+    expect({ method: row!.method, path: row!.path, needsId: row!.needsId, query: row!.query })
+      .toEqual({ method: 'POST', path: '/api/coordinators/{id}/intent', needsId: true, query: [] });
   });
 
   it('is an identity declaration and not a restriction: generic Agent and Workflow use stays permitted', () => {

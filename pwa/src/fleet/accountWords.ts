@@ -740,18 +740,28 @@ export function atProviderWords(kind: string, state: string, keyHint: string | u
 
 /** The revoke checklist item (spec §9, §11.3; N6): the operator ticks it; the tick is recorded with no value. */
 export const REVOKED_IT = 'I revoked it';
-export const REVOKED_OLD = 'I revoked the old token';
-export const revokeOldLead = 'Revoke the old token at';
-export const revokeOldTail = " (ccrc can't; it stays valid for up to a year until you do).";
+/** The old token's revoke line and item, at the end of every sheet that replaces a token. They name the old token only
+ *  when `oldCredentialOf` says `kept` (D-7872 (10)); elsewhere the app knows of no old token, so they ask about any there
+ *  was. `old` is `RevokeItem`'s, for its record line. */
+export const revokeOldWords = (id: string, old: OldCredential): { lead: string; tail: string; label: string; old: true | 'any' } => ({
+  lead: old === 'kept' ? 'Revoke the old token at' : `If ${id} had an old token, revoke it at`,
+  tail: " (ccrc can't; it stays valid for up to a year until you do).",
+  label: old === 'kept' ? 'I revoked the old token' : 'I revoked any old token',
+  old: old === 'kept' ? true : 'any',
+});
 /** What the record says about the tick (spec §9: "leaving it unticked is allowed, and the full record then says so"). */
-export const revokeRecord = (ticked: boolean, old: boolean): string =>
-  ticked ? `Record: ${old ? 'old token' : 'token'} marked revoked.` : `Record: ${old ? 'old token' : 'token'} not marked revoked.`;
+export const revokeRecord = (ticked: boolean, old: boolean | 'any'): string => {
+  const what = old === 'any' ? 'any old token' : old ? 'old token' : 'token';
+  return ticked ? `Record: ${what} marked revoked.` : `Record: ${what} not marked revoked.`;
+};
 export const REVOKE_NOT_RECORDED = "The tick couldn't be recorded. Try again.";
 
-/** Replace token by paste (spec §9, §6.3): validate-first on the box, the old token kept until the new one passes. */
+/** Replace token by paste (spec §9, §6.3): validate-first on the box, the old token kept until the new one passes. That
+ *  the lane keeps one is said only when `oldCredentialOf` says `kept` (D-7872 (10)): `add` writes a token lane with no key
+ *  file, and a cancelled or expired mint leaves that lane, so a token lane can have no token at all. */
 export const NEW_TOKEN_LABEL = 'Paste the new token';
-export const replaceIntro = (id: string): string =>
-  `The new token is checked with Anthropic before anything is saved. Until it passes, ${id} keeps the token it has.`;
+export const replaceIntro = (id: string, old: OldCredential): string =>
+  `The new token is checked with Anthropic before anything is saved. ${oldCredentialLine(id, old, `Until it passes, ${id} keeps the token it has.`, noCheckedCredential(id, 'token'))}`;
 export const REPLACE_SAVE = 'Replace token';
 export const replaceLedger = {
   saving: (id: string): string => `… checking the new token and saving it on ${id}`,
@@ -762,28 +772,37 @@ export const TOKEN_CLEARED_REPLACE = 'The token was cleared when the app went to
 type ReplaceRefusalWord = Extract<RouteRefusal,
   'key-rejected' | 'token-unverified' | 'key-charset' | 'lane-busy' | 'auth-in-progress' | 'not-found' | 'unsupported'
   | 'insecure-origin' | 'unavailable'>;
-const REPLACE_REFUSAL_TEXT: Readonly<Record<ReplaceRefusalWord, (id: string) => string>> = {
-  'key-rejected': (id) => `That token was refused (HTTP 401). ${id} keeps its old token.`,
-  'token-unverified': (id) => `Anthropic didn't answer, so nothing was saved. ${id} keeps its old token. Try again.`,
-  'key-charset': (id) => `That isn't a token: it holds a line break or a control character, or is too long. ${id} keeps its old token.`,
+/** What a refused replacement leaves, by what the app may say of the old token. */
+const replaceLeft = (id: string, old: OldCredential): string => oldCredentialLine(id, old, `${id} keeps its old token.`);
+const REPLACE_REFUSAL_TEXT: Readonly<Record<ReplaceRefusalWord, (id: string, old: OldCredential) => string>> = {
+  'key-rejected': (id, old) => `That token was refused (HTTP 401). ${replaceLeft(id, old)}`,
+  'token-unverified': (id, old) =>
+    `Anthropic didn't answer, so nothing was saved. ${oldCredentialLine(id, old, `${id} keeps its old token.`, `${id} is as it was.`)} Try again.`,
+  'key-charset': (id, old) => `That isn't a token: it holds a line break or a control character, or is too long. ${replaceLeft(id, old)}`,
   'lane-busy': (id) => `${id} is busy with another account change. Nothing was changed. Try again in a moment.`,
   'auth-in-progress': (id) => `A sign-in for ${id} is in progress. Nothing was changed.`,
   'not-found': (id) => `${id} is no longer on this box's roster.`,
   unsupported: () => 'The fleet host needs an update before tokens can be replaced here.',
   'insecure-origin': () => "Accounts can't be changed over plain HTTP. Nothing was changed.",
-  unavailable: (id) => `The fleet host couldn't run it. ${id} keeps its old token.`,
+  unavailable: (id, old) => `The fleet host couldn't run it. ${replaceLeft(id, old)}`,
 };
-/** A replacement's refusal, from its code alone; `null` for step-up and an answer that never came. */
-export function replaceRefusal(id: string, word: string | undefined): string | null {
+/** A replacement's refusal, from its code and what the app may say of the old token; `null` for step-up and an answer
+ *  that never came. */
+export function replaceRefusal(id: string, word: string | undefined, old: OldCredential): string | null {
   if (word === undefined || word === 'step-up-required' || word === 'outcome-unknown') return null;
-  if (Object.hasOwn(REPLACE_REFUSAL_TEXT, word)) return REPLACE_REFUSAL_TEXT[word as ReplaceRefusalWord](id);
-  return CODE_RE.test(word) ? `The fleet host refused (${word}). ${id} keeps its old token.` : `The fleet host refused. ${id} keeps its old token.`;
+  if (Object.hasOwn(REPLACE_REFUSAL_TEXT, word)) return REPLACE_REFUSAL_TEXT[word as ReplaceRefusalWord](id, old);
+  return CODE_RE.test(word) ? `The fleet host refused (${word}). ${replaceLeft(id, old)}` : `The fleet host refused. ${replaceLeft(id, old)}`;
 }
 export const replaceUnknown = (id: string): string =>
   `The fleet host didn't answer in time, so whether ${id}'s token was replaced is unknown. Check it to see whether the lane works.`;
+/** The live sessions when a new credential went in, where the app cannot name what they run on (D-7872 (10)): true
+ *  whether or not the lane held an old credential. */
+const startedBefore = (n: number): string =>
+  `${plural(n, 'session')} on this lane started before this change. Restart ${n === 1 ? 'it' : 'them'} to run on the new credential.`;
 /** The live sessions after a replacement (spec §9: a running session keeps the token it started with). */
-export const restartLead = (n: number): string =>
-  `${plural(n, 'session')} on this lane ${n === 1 ? 'keeps' : 'keep'} the old token until ${n === 1 ? 'it restarts' : 'they restart'}.`;
+export const restartLead = (n: number, old: OldCredential): string => (old === 'kept'
+  ? `${plural(n, 'session')} on this lane ${n === 1 ? 'keeps' : 'keep'} the old token until ${n === 1 ? 'it restarts' : 'they restart'}.`
+  : startedBefore(n));
 export const RESTART = 'Restart';
 export const RESTARTED = 'restarted';
 export const RESTART_FAILED = "couldn't restart";
@@ -863,6 +882,9 @@ export const SEND_CODE = 'Send code';
 export const CANCEL_SIGN_IN = 'Cancel';
 export const START_AGAIN = 'Start the sign-in again';
 
+/** What an account sheet may say about a lane's old credential: `oldCredentialOf`'s answer (connectFlow.ts; D-7872 (10)).
+ *  `kept` (a passing check newer than any known sign-out), `signed-out` (certain), or `unsure` (the neutral words). */
+export type OldCredential = 'kept' | 'unsure' | 'signed-out';
 /** The sign-in's terminal states (spec §6.2), each saying what did not happen. */
 export type SignInEndKind = 'expired' | 'code-refused' | 'untrusted' | 'cancelled' | 'unknown' | 'lost' | 'failed'
   | 'node-changed';
@@ -924,7 +946,13 @@ export const cancelRefused = (word: string | undefined): string => (word !== und
 /** The result frame's wrong-account act (spec §6.2 step 10, §12.4). */
 export const WRONG_ACCOUNT = 'Not the account you meant?';
 export const SIGN_OUT_RESTART = 'Sign this lane out and start again';
-export const signOutRefused = (id: string, word: string | undefined): string => (word !== undefined && CODE_RE.test(word)
+/** A sign-out with no answer, where the box may have signed the lane out: a request that didn't complete, a word that
+ *  can't be read, the route's `outcome-unknown` (a timeout, a lost answer, or an output it couldn't read), or its
+ *  `lane-act-refused`. That word reaches the route once the verb has removed the credential, when only its report failed
+ *  (verb code `no-answer`), and from a killed verb, which leaves no code to read. Anything else is a refusal. */
+export const signOutUnknown = (word: string | undefined): boolean =>
+  word === 'outcome-unknown' || word === 'lane-act-refused' || !(word !== undefined && CODE_RE.test(word));
+export const signOutRefused = (id: string, word: string | undefined): string => (!signOutUnknown(word)
   ? `The fleet host refused (${word}): ${id} was not signed out, and no new sign-in was started.`
   : `The request didn't complete, so whether ${id} was signed out is unknown. No new sign-in was started.`);
 export const STEP_UP_AGAIN_SIGN_OUT = "Confirm it's you again, then press it again. Nothing was signed out.";
@@ -971,11 +999,21 @@ export const SWITCH_TO_TOKEN = 'Switch to a long-lived token';
 export const SWITCH_TO_SIGN_IN = 'Switch to sign-in';
 export const switchTitle = (id: string, to: 'setup-token' | 'login'): string =>
   (to === 'setup-token' ? `Switch ${id} to a long-lived token` : `Switch ${id} to sign-in`);
-/** What the switch does, before it starts (spec §9): nothing changes until the new credential passes its check. */
-export const switchIntro = (id: string, to: 'setup-token' | 'login'): string => (to === 'setup-token'
-  ? `A long-lived token is minted for ${id} and checked before anything changes. Until it passes, ${id} keeps its sign-in. `
-    + 'Afterwards you sign the old sign-in out here.'
-  : `${id} signs in with Claude, and the sign-in is checked before anything changes. Until it passes, ${id} keeps its token.`);
+/** What the switch does, before it starts (spec §9): nothing changes until the new credential passes its check. It
+ *  says the lane keeps the credential it has only when `oldCredentialOf` says `kept` (D-7872 (10)). */
+export const switchIntro = (id: string, to: 'setup-token' | 'login', old: OldCredential): string => {
+  const from = to === 'setup-token' ? 'sign-in' : 'token';
+  if (old === 'kept') {
+    return to === 'setup-token'
+      ? `A long-lived token is minted for ${id} and checked before anything changes. Until it passes, ${id} keeps its sign-in. `
+        + 'Afterwards you sign the old sign-in out here.'
+      : `${id} signs in with Claude, and the sign-in is checked before anything changes. Until it passes, ${id} keeps its token.`;
+  }
+  const lead = to === 'setup-token'
+    ? `A long-lived token is minted for ${id} and checked before it is installed.`
+    : `${id} signs in with Claude, and the sign-in is checked before it is installed.`;
+  return `${lead} ${old === 'signed-out' ? laneSignedOut(id) : noCheckedCredential(id, from)}`;
+};
 export const SWITCH_START: { readonly [M in 'setup-token' | 'login']: string } = {
   'setup-token': 'Mint the token',
   login: 'Start the sign-in',
@@ -986,9 +1024,10 @@ export const switchLedger = {
 } as const;
 
 /** A switch's terminal states (spec §9: "a refused, cancelled or expired attempt leaves the lane exactly as it was"),
- *  each saying what did not happen, from its kind. A lost attempt may have finished, so it claims nothing. */
-export function switchEnd(id: string, to: 'setup-token' | 'login', kind: SignInEndKind, failure?: string): string {
-  const keeps = `Nothing changed: ${id} still uses its ${to === 'setup-token' ? 'sign-in' : 'token'}.`;
+ *  each saying what did not happen, from its kind. A lost attempt may have finished, so it claims nothing. That the
+ *  lane still uses its old credential is said only when `oldCredentialOf` says `kept` (D-7872 (10)). */
+export function switchEnd(id: string, to: 'setup-token' | 'login', kind: SignInEndKind, failure: string | undefined, old: OldCredential): string {
+  const keeps = oldCredentialLine(id, old, `Nothing changed: ${id} still uses its ${to === 'setup-token' ? 'sign-in' : 'token'}.`);
   switch (kind) {
     case 'expired': return `The sign-in timed out. ${keeps}`;
     case 'code-refused': return `The new credential wasn't accepted: claude.ai refused the code, or the check of what it gave failed. ${keeps}`;
@@ -999,26 +1038,148 @@ export function switchEnd(id: string, to: 'setup-token' | 'login', kind: SignInE
     case 'failed':
       return `The sign-in stopped on the fleet host before a code was sent${failure !== undefined && CODE_RE.test(failure) ? ` (${failure})` : ''}. ${keeps}`;
     case 'lost':
-      return `The server no longer holds the sign-in for ${id}, so whether the switch finished is unknown. Check ${id} to see which credential it uses.`;
+      return `The server no longer holds the sign-in for ${id}, so whether the switch finished is unknown. ${old === 'kept'
+        ? `Check ${id} to see which credential it uses.` : `Check ${id} to see whether it has a working credential.`}`;
   }
 }
 export const CLOSE = 'Close';
 export const START_SWITCH_AGAIN = 'Start again';
 
 /** After a switch to the token (spec §9): the sessions still on the sign-in, and the old sign-in's sign-out. */
-export const switchRestartLead = (n: number): string =>
-  `${plural(n, 'session')} on this lane ${n === 1 ? 'still uses' : 'still use'} the sign-in until ${n === 1 ? 'it restarts' : 'they restart'}.`;
+export const switchRestartLead = (n: number, old: OldCredential): string => (old === 'kept'
+  ? `${plural(n, 'session')} on this lane ${n === 1 ? 'still uses' : 'still use'} the sign-in until ${n === 1 ? 'it restarts' : 'they restart'}.`
+  : startedBefore(n));
 export const SIGN_OLD_OUT = 'Sign the old sign-in out';
 export const SIGN_OLD_OUT_ANYWAY = 'Sign it out anyway';
-/** The danger confirm while a listed session predates the switch (spec §9's words). */
-export const signOldOutDanger = (n: number, id: string): string =>
-  `${plural(n, 'session')} on ${id} still ${n === 1 ? 'uses' : 'use'} the sign-in and may fail ${n === 1 ? 'its' : 'their'} next turn.`;
+/** The danger confirm while a listed session predates the switch (spec §9's words). That it uses the sign-in is said only
+ *  on `kept` (D-7872 (10)). */
+export const signOldOutDanger = (n: number, id: string, old: OldCredential): string => (old === 'kept'
+  ? `${plural(n, 'session')} on ${id} still ${n === 1 ? 'uses' : 'use'} the sign-in and may fail ${n === 1 ? 'its' : 'their'} next turn.`
+  : `${plural(n, 'session')} on ${id} started before this change. If ${n === 1 ? 'it still uses' : 'they still use'} the old sign-in, ${n === 1 ? 'it' : 'they'} may fail ${n === 1 ? 'its' : 'their'} next turn.`);
 export const STEP_UP_AGAIN_SIGN_OLD_OUT = "Confirm it's you again, then press it again. Nothing was signed out.";
 /** The old sign-in's sign-out was refused, or its answer never came: the lane keeps both until it is signed out. */
-export const signOldOutRefused = (id: string, word: string | undefined): string => (word !== undefined && CODE_RE.test(word)
+export const signOldOutRefused = (id: string, word: string | undefined): string => (!signOutUnknown(word)
   ? `The fleet host refused (${word}): ${id}'s old sign-in was not signed out.`
   : `The request didn't complete, so whether ${id}'s old sign-in was signed out is unknown. Press it again.`);
-/** Until the old sign-in is signed out, the lane holds both (spec §9's one stated exception to "never two"). */
-export const bothHeld = (id: string): string =>
-  `${id} holds both the new token and its old sign-in until you sign the old one out.`;
+/** Until the old sign-in is signed out, the lane holds both (spec §9's one stated exception to "never two"): said only
+ *  when the lane was known to have it (`kept`, D-7872 (10)); otherwise the sign-out is offered for one it may have. */
+export const bothHeld = (id: string, old: OldCredential): string => (old === 'kept'
+  ? `${id} holds both the new token and its old sign-in until you sign the old one out.`
+  : `If ${id} still has its old sign-in on the fleet host, sign it out here.`);
 export const SWITCH_CLOSE_TOKEN = "Sessions on this lane won't ask you to sign in again for about a year.";
+
+// ── Re-authenticate an existing Anthropic lane (accounts plan Task A38, D-7872; spec §9 rows 1, 2, §4.2, §4.4) ────────
+// Sign in again (a sign-in lane), Mint a new token (a token lane), and the Expiring (minted token) card's Replace token.
+// The lane already exists and keeps its method, so nothing here says it was created, is off, or can be discarded: a
+// terminal state says the old credential is untouched, from a code, where the app knows the lane has one (D-7872 (10)). The switches' words are A23's (above). NO DURATION
+// IS WRITTEN HERE either: every deadline reads `expiresAt`.
+
+/** The acts' words, on the trouble card and the fold (spec §4.2, §4.4). */
+export const SIGN_IN_AGAIN = 'Sign in again';
+export const MINT_NEW_TOKEN = 'Mint a new token';
+/** The re-auth sheet's way over to A19's paste arm, and the paste sheet's way back. */
+export const PASTE_INSTEAD = 'Paste a token instead';
+export const MINT_INSTEAD = 'Mint a new token instead';
+
+/** What a re-auth replaces, by the method it runs: a sign-in for `login`, a token for `setup-token`. */
+const credOf = (method: 'login' | 'setup-token'): 'sign-in' | 'token' => (method === 'login' ? 'sign-in' : 'token');
+
+/** The sheet's title and eyebrow, by the method it runs. */
+export const reauthTitle = (id: string, method: 'login' | 'setup-token'): { title: string; eyebrow: string } => (method === 'login'
+  ? { title: `Sign ${id} in again`, eyebrow: 'sign in again' }
+  : { title: `Replace ${id}'s token`, eyebrow: 'mint a new token' });
+
+/** What happens, said before anything runs: the old credential stays until the new one passes (A20). That the lane keeps
+ *  it is said only when `oldCredentialOf` says `kept` (D-7872 (10)); on a lane known to have none (`signed-out`) it says
+ *  the lane is signed out, and everywhere else the neutral words, true either way. */
+export const reauthIntro = (id: string, method: 'login' | 'setup-token', old: OldCredential): string => {
+  if (old !== 'kept') {
+    const line = old === 'signed-out' ? laneSignedOut(id) : noCheckedCredential(id, credOf(method));
+    return method === 'login'
+      ? `A new sign-in runs on the fleet host and is checked before it is installed. ${line}`
+      : `A new long-lived token is minted on the fleet host and checked before it is installed. ${line}`;
+  }
+  return method === 'login'
+    ? `A new sign-in runs on the fleet host and is checked before it replaces the old one. Until it passes, ${id} keeps the sign-in it has.`
+    : `A new long-lived token is minted on the fleet host and checked before it replaces the old one. Until it passes, ${id} keeps the token it has.`;
+};
+
+/** The confirm frame's primary. */
+export const reauthStart = (method: 'login' | 'setup-token'): string => (method === 'login' ? SWITCH_START.login : MINT_NEW_TOKEN);
+
+/** The sentence every refused, cancelled or expired attempt ends with. */
+export const credentialUntouched = (id: string, method: 'login' | 'setup-token'): string =>
+  `Nothing changed: ${id} keeps its old ${credOf(method)}.`;
+
+/** The sentence they end with instead on a lane known to have no credential (D-7872 (2), (10)): one the sheet itself
+ *  just signed out with N5's sign-out, or one the box says has none. The lane runs nothing until a new one goes in. */
+export const laneSignedOut = (id: string): string =>
+  `${id} is signed out on the fleet host, so its sessions fail until it has a sign-in or a token again.`;
+
+/** THE NEUTRAL WORDS (D-7872 (10), the operator's option-1 ruling of 2026-11-03): where the app cannot be sure the lane
+ *  still holds a credential (no passing check on record, a 401 since, or a sign-out it knows of), a sheet says what it
+ *  knows and claims nothing about the old credential. The precise signed-out words wait on the box and the server
+ *  reporting a lane with no credential (a follow-up). */
+export const noCheckedCredential = (id: string, cred: 'sign-in' | 'token'): string =>
+  `${id} has no checked ${cred}, so whether it still has one isn't known.`;
+export const NOTHING_INSTALLED = 'Nothing was installed.';
+
+/** The closing sentence of an attempt that installed nothing, by what the app may say of the old credential: `kept`'s
+ *  own sentence, the lane signed out, or the neutral one. */
+export const oldCredentialLine = (id: string, old: OldCredential, kept: string, unsure: string = NOTHING_INSTALLED): string =>
+  (old === 'kept' ? kept : old === 'signed-out' ? laneSignedOut(id) : unsure);
+
+/** A re-auth's terminal states (spec §9: "A refused, cancelled or expired attempt says the old credential is
+ *  untouched"), each from its code. `lost` is the one state that cannot say so: whether the attempt finished is unknown.
+ *  `old` is `oldCredentialOf`'s answer (D-7872 (10)): the untouched sentence only on `kept`, the lane signed out on
+ *  `signed-out`, and "Nothing was installed." otherwise. */
+export function reauthEnd(id: string, method: 'login' | 'setup-token', kind: SignInEndKind, failure: string | undefined, old: OldCredential): string {
+  const untouched = oldCredentialLine(id, old, credentialUntouched(id, method));
+  switch (kind) {
+    case 'expired': return `The sign-in timed out. ${untouched}`;
+    case 'code-refused':
+      return `claude.ai didn't accept that code. ${untouched} Codes work once and expire quickly. Start again for a fresh one.`;
+    case 'untrusted':
+      return `The sign-in link on the fleet host didn't look like claude.ai, so it isn't shown. ${untouched}`;
+    case 'cancelled': return `Cancelled. ${untouched}`;
+    case 'unknown':
+      return `The fleet host didn't answer in time, so whether a new sign-in started for ${id} is unknown. ${oldCredentialLine(id, old, `Its old ${credOf(method)} was not replaced here.`, 'Nothing was installed here.')} Start again.`;
+    case 'lost':
+      return `The server no longer holds the sign-in for ${id}, so whether it finished is unknown. ${old === 'kept'
+        ? 'Check the lane to see which credential works.'
+        : old === 'signed-out'
+          ? `${id} was signed out before it started: check the lane to see whether it has a sign-in now.`
+          : 'Check the lane to see whether it has a working credential.'}`;
+    case 'node-changed':
+      return `The fleet host answering now is not the one the sign-in started on, so it was stopped. ${untouched}`;
+    case 'failed':
+      return `The sign-in stopped on the fleet host before a code was sent${failure !== undefined && CODE_RE.test(failure) ? ` (${failure})` : ''}. ${untouched}`;
+  }
+}
+
+/** A start refused with a word: A22's sentence, then what `old` allows of the old credential (D-7872 (10)). `not-found`
+ *  says the first alone: the lane has left the roster and a removal signs it out, so it has no old credential to speak
+ *  of, as A19's `not-found` has none. */
+export const reauthStartRefusal = (id: string, method: 'login' | 'setup-token', word: string, reason: string | undefined, old: OldCredential): string => {
+  const refused = signInStartRefusal(id, word, reason);
+  return word === 'not-found' ? refused : `${refused} ${oldCredentialLine(id, old, credentialUntouched(id, method))}`;
+};
+
+/** The run frame's line once the helper says `done` (A20 installed it after its own check of the new credential). */
+export const reauthInstalled = (method: 'login' | 'setup-token'): string => (method === 'login'
+  ? '✓ New sign-in checked and installed on the fleet host'
+  : '✓ New token minted, checked and installed on the fleet host');
+
+/** The live sessions after it (spec §9): a token is read at a session's start, a sign-in at its next request. */
+export const reauthRestartLead = (n: number, method: 'login' | 'setup-token', old: OldCredential): string => (method === 'setup-token'
+  ? (old === 'kept'
+    ? `${plural(n, 'session')} on this lane ${n === 1 ? 'keeps' : 'keep'} the old credential until ${n === 1 ? 'it restarts' : 'they restart'}.`
+    : startedBefore(n))
+  : `${plural(n, 'session')} on this lane ${n === 1 ? 'picks' : 'pick'} up the new sign-in at ${n === 1 ? 'its' : 'their'} next request. Restart one if it's stuck on the old error.`);
+
+/** The identity read back differs from the one the lane had (spec §9 row 1): N5's sign-out, then a new attempt. G23 is
+ *  unmeasured (the OA1 record), so nothing is said about the provider. */
+export const REAUTH_WRONG = 'Not the account this lane had?';
+export const reauthWasLine = (old: string): string => `It had ${old}.`;
+export const reauthSignOutConfirm = (id: string): string =>
+  `${id} is signed out on the fleet host, then a new sign-in starts. Until you finish it, sessions on ${id} fail their next turn. Sign in with the account this lane should use.`;

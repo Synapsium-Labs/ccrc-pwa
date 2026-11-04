@@ -9074,6 +9074,7 @@ pr-open
 pr-state
 pr-train-prove
 prefer
+project-add
 project-pool
 reclaim-pause
 route
@@ -10393,6 +10394,68 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
     fi
     echo "tagged $project $new"
   fi
+}
+
+# THE NEW-PROJECT RULES, ccd's own copy of `shared/projectAdd.ts`'s (add-project spec 2026-11-04 §3-§4): ccd is bash,
+# so it cannot import them, and `server/test/project-add-parity.test.ts` holds the two equal on one table.
+_project_new_name_ok() {   # name -> 0 when a NEW project may take it (`isNewProjectName`)
+  # `_ws_project_valid` first (every creator's gate), then what a NEW name adds: a leading letter or digit (no `_`),
+  # at most 64 bytes (`PROJECT_NAME_MAX`: a workspace id is `<project>-<slug>` capped at 128), and no `.git` suffix.
+  # `LC_ALL=C` makes `${#1}` count bytes and the ranges ASCII, `_ws_project_valid`'s own reason.
+  local LC_ALL=C
+  _ws_project_valid "$1" && [[ "$1" =~ ^[A-Za-z0-9] ]] && (( ${#1} <= 64 )) && [[ "$1" != *.git ]]
+}
+
+_project_github_url_ok() {   # url -> 0 when it is exactly a clone url `parseGithubRepo` emits
+  # TWO EXACT SHAPES, `https://github.com/<o>/<r>.git` and `git@github.com:<o>/<r>.git`. The owner is GitHub's own
+  # rule, a letter or digit then `[A-Za-z0-9-]` (no dot, no underscore). The repo is `[A-Za-z0-9._-]` led by anything
+  # but a dash (`.github`, `owner/_tools`), and is not `.`, `..` or itself `….git`. Anchored and ASCII, so `ext::`,
+  # `file://`, another host, userinfo, a third segment and a dash-leading url (an option to git) never match.
+  local LC_ALL=C re='^(https://github\.com/|git@github\.com:)[A-Za-z0-9][A-Za-z0-9-]*/([A-Za-z0-9._][A-Za-z0-9._-]*)\.git$'
+  [[ "$1" =~ $re && ${BASH_REMATCH[2]} != *.git && ${BASH_REMATCH[2]} != . && ${BASH_REMATCH[2]} != .. ]]
+}
+
+# THE BOUND ON ONE `git clone`/`git init`, held under the runner's `project-add` row with `_plat_timeout`'s largest
+# kill grace (`ccd-project-add.test.ts` reads both): a clone past it dies INSIDE ccd, so ccd removes its own temp.
+PROJECT_ADD_GIT_S=220
+
+cmd_project_add() {   # ccd project-add --name <n> (--url <github-url> | --empty)
+  # A NEW PROJECT under `$PROJECTS_ROOT`, cloned from GitHub or `git init`ed empty (add-project spec 2026-11-04 §4);
+  # `POST /api/projects` reaches it through the agent's gated grant `['project-add','--name']`. EXACT ARITY, the
+  # `cmd_project_pool` rule: `--name` leads, then `--url <u>` or `--empty`, and any other argv is the usage line.
+  # VALIDATE, THEN BUILD ASIDE, THEN MOVE. Nothing is touched before both checks pass. The tree is built in
+  # `.project-add.<name>.<pid>`, a dot name the project walk skips, so a half-built clone is never listed, and moved
+  # onto the name only after a second existence check, by `_plat_mv_notdir` (never INTO a directory that appeared
+  # meanwhile). A failure removes that temp directory, which this run created, and nothing else.
+  # NO JOURNAL LINE and no `--actor`: the verb acts on a project, not a session (`cmd_project_pool`'s reason).
+  local name url="" mode usage="usage: ccd project-add --name <n> (--url <url>|--empty)"
+  case "$#" in
+    4) [[ $1 == --name && $3 == --url ]] || die "$usage"; name=$2; url=$4; mode=clone ;;
+    3) [[ $1 == --name && $3 == --empty ]] || die "$usage"; name=$2; mode=init ;;
+    *) die "$usage" ;;
+  esac
+  _project_new_name_ok "$name" \
+    || die "invalid project '$name' — a new project's name is a letter or digit, then A-Za-z0-9 . _ -, at most 64 bytes, not ending in .git"
+  [[ $mode == init ]] || _project_github_url_ok "$url" \
+    || die "invalid url '$url' — only https://github.com/<owner>/<repo>.git or git@github.com:<owner>/<repo>.git"
+  # `-L` beside `-e`: a dangling link answers false to `-e` and is still a name someone holds.
+  local dest="$PROJECTS_ROOT/$name" tmp="$PROJECTS_ROOT/.project-add.$name.$$" err rc
+  [[ ! -e "$dest" && ! -L "$dest" ]] || die "project exists: $name"
+  mkdir -p -- "$PROJECTS_ROOT" || die "cannot create $PROJECTS_ROOT"
+  # A temp of this pid's that already stands is a killed run's, not this one's: refuse rather than adopt or delete it.
+  [[ ! -e "$tmp" && ! -L "$tmp" ]] || die "a temp of an earlier project-add stands at $tmp — remove it by hand"
+  local -a op=(init --quiet -b main -- "$tmp")
+  [[ $mode == init ]] || op=(clone --quiet -- "$url" "$tmp")
+  # NO PROMPT EVER: `GIT_TERMINAL_PROMPT=0` for https, and a batch-mode ssh unless the box chose its own (GIT_SSH_COMMAND,
+  # GIT_SSH or `core.sshCommand`, which the variable would override), so a private repo with no credential fails at
+  # once instead of holding the exec until its timeout. No commit on `init`: ccd does not invent an author identity.
+  [[ -n "${GIT_SSH_COMMAND:-}${GIT_SSH:-}$(git -C "$PROJECTS_ROOT" config --get core.sshCommand 2>/dev/null)" ]] || local -x GIT_SSH_COMMAND='ssh -o BatchMode=yes'
+  err=$(GIT_TERMINAL_PROMPT=0 _plat_timeout "$PROJECT_ADD_GIT_S" git "${op[@]}" 2>&1 >/dev/null) || {
+    rc=$?; rm -rf -- "$tmp"; (( rc != 124 )) || die "git ${op[0]} timed out for $name after ${PROJECT_ADD_GIT_S}s"
+    die "git ${op[0]} failed for $name: ${err:-git gave no message}"; }
+  if [[ -e "$dest" || -L "$dest" ]]; then rm -rf -- "$tmp"; die "project exists: $name"; fi
+  _plat_mv_notdir "$tmp" "$dest" || { rm -rf -- "$tmp"; die "could not move $tmp to $dest"; }
+  echo "added $name"
 }
 
 cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
@@ -45293,6 +45356,7 @@ case "${1:-}" in
   win-size)  shift; cmd_win_size "$@" ;;
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
+  project-add) shift; cmd_project_add "$@" ;;
   route)     shift; cmd_route "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
@@ -45303,6 +45367,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

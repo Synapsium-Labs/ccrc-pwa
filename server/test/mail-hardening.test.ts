@@ -10,6 +10,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { queueSystemMail } from '../src/coord/rundefsTx.js';
 import { mkTmp } from './tmpHelpers.js';
+import { callsIn, sqlStatementsIn, sqlStatementsInFile, symbolOf } from './scan/symbols.js';
 
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-mailhard-'), '.ccrc', 'coord.db')));
@@ -381,6 +382,27 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
     expect(body).toMatch(/state NOT IN \$\{TERMINAL_DELIVERY_SQL\}/);
     // `where` is ANDed AFTER the guard, never ORed into it.
     expect(body).toMatch(/WHERE \$\{guardSql\} AND \(\$\{where\}\)/);
+  });
+
+  it('the revive writes no delivery row but its heir: revivedFrom is set at INSERT, by queueDelivery alone (D-5914)', () => {
+    // The revive's guard is that it writes NOTHING to the parked row (a terminal row going back to `queued` is the
+    // invariant the one-statement case above holds) and mints its heir through the ordinary insert. So `revivedFrom`
+    // has exactly one writer statement, an INSERT in `queueDelivery`; no UPDATE names it; and the revive's own body
+    // holds no statement but its SELECT and reaches delivery rows only through `queueHeir`. Keyed on the symbol scan
+    // (`scan/symbols.ts`), not on literal source text.
+    const STORE = 'server/src/coord/store.ts';
+    const stmts = sqlStatementsInFile(STORE).filter((st) => st.table === 'mail_deliveries');
+    expect(stmts.filter((st) => st.verb === 'INSERT').length, 'no delivery INSERT found at all').toBeGreaterThanOrEqual(1);
+    const naming = stmts.filter((st) => st.verb === 'INSERT' && /\brevivedFrom\b/.test(st.text));
+    expect(naming).toHaveLength(1);
+    const q = symbolOf(STORE, 'CoordStore.queueDelivery');
+    expect(naming[0]!.start >= q.start && naming[0]!.end <= q.end, 'the revivedFrom INSERT is not queueDelivery\'s').toBe(true);
+    expect(stmts.filter((st) => st.verb === 'UPDATE' && /\brevivedFrom\b/.test(st.source))).toEqual([]);
+    const revive = symbolOf(STORE, 'CoordStore.reviveParkedDeliveries');
+    expect(sqlStatementsIn(revive).map((st) => st.verb)).toEqual(['SELECT']);
+    const callees = callsIn(revive).map((c) => c.callee);
+    expect(callees.filter((c) => /\bqueueHeir$/.test(c)), 'the revive does not mint through queueHeir').toHaveLength(1);
+    expect(callees.filter((c) => /\bwriteDeliver(?:y|ies)$/.test(c))).toEqual([]);
   });
 
   it('no delivery-row writer returns void, and CLAUDE.md says so (D-5997)', () => {

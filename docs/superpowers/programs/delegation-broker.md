@@ -47,7 +47,7 @@ never links work by a name, a path, a time or a working directory.
 | 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **merged** 2026-10-13 as `4967dc495`, a plain merge of exact head `823efd3eb` (fix round 5, which absorbed `main`), adding history only; its content first reached `main` inside #340's squash `081636389` on 2026-10-10, byte-identical to `e183237e5`, the tip review 334 accepted; run 306 closed `done` |
 | 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448, #597, #681, #698, #711, #736, #832, #1068, #1097, #1115, #1120, #1162, #1558 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664; pre-soak follow-up #597 merged 2026-10-18 as `c1453e422` (22:04:47Z), a squash of head `7cb2ccda5`, after reviews 610, 615 and 617; run 600 closed `done`; D-5433..D-5436 used from block D-5433..D-5438; prerelease `v0.0.299`; follow-up 2 #681 merged 2026-10-19 as `c44bea401`, run 627 closed `done`; follow-up 3 #698 merged 2026-10-19 as `da2610662`, run 629 closed `done`; follow-up 4 #711 merged 2026-10-19 as `2f7e88cdd`, run 632 closed `done`, and its docs fix #736 merged the same day as `2e0dd3ede`; follow-up 5 #832 merged 2026-10-21 as `69aac52f5`, run 645 closed `done`; follow-up 6 #1068 merged 2026-10-21 as `7da6498a7`, run 728 closed `done`; follow-up 7 #1097 merged 2026-10-22 as `bc231bbcb`, run 740 closed `done`; follow-up 7b #1115 merged 2026-10-22 as `bb1a9478d`, run 762 closed `done`; follow-up 8 #1120 merged 2026-10-22 as `3fe68e1de`, run 768 closed `done`; follow-up 9 #1162 merged 2026-10-23 as `0c439bb7d`, run 816 closed `done`; follow-up 10 #1558 merged 2026-10-27 as `66fd18299` (head `2155e5625`), run 968 still open; the seven-day soak was waived by the operator on 2026-10-28, not passed |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | #1614, #1627, #1619, #2191 | **merged**: PR1 #1614 on 2026-10-31 as `3ce530dad` and PR2 #1627 on 2026-10-31 as `c555df234` (both landed by another session at the operator's go; runs 584 and 1021 still open); PR4 #1619 on 2026-11-03 as `27cd78962` from `c9eaf82fc`, after reviews 1365 and 1367, run 1020 closed `done`; PR3 #2191 on 2026-11-03 as `30b270d19` from `ef3b85d46`, after reviews 1384, 1390 and 1397, run 1007 closed `done`; the two-day gate was waived by the operator on 2026-10-28, not passed |
-| 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; `ws-add --base`, dark; adoption; digest mail; retain and resolve; the console's worktree controls | **AGENT-FIRST**, then server | 4 | — | planned in #2167, approved 2026-11-04; PR1 dispatched 2026-11-04 (run 1422) |
+| 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; `ws-add --base`, dark; adoption; digest mail; retain and resolve; the console's worktree controls | **AGENT-FIRST**, then server | 4 | #2256 | planned in #2167, approved 2026-11-04; PR1 #2256 **merged** 2026-11-04 as `a520aaace` at reviewed head `aa8579d65` (run 1422, reviews 1429, 1438 and 1439); PR2 (run 1444), PR3 (run 1445) and PR5a (run 1443) dispatched 2026-11-04; PR4 waits for PR2 |
 | 5b | 4 Adopt (promotion) | promotion through `ws-add --base` (the plan's PR9a and PR9b) | server | 5 | — | split out of wave 5 by the operator on 2026-11-04 (D-7940); dispatched once the rest of wave 5 has landed and been used, when the operator says so |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | dropped by the operator on 2026-10-26 (D-7002) |
 | 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; #166 wave 4's sweep (merged #215, live) | — | dropped by the operator on 2026-10-26 (D-7002) |
@@ -1624,6 +1624,36 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
   2. `leased` and `lease-unready` are additive to `OrphanJobOutcome`: no existing word is renamed or folded into them,
      and an unreadable carrier or index answers `lease-unready`, never `leased`.
   3. Task 5.4.1's characterisation of the ladder lands first, green on `main`, before the rung.
+- **2026-11-04 — Three wave 4 runs closed (item 23).** The operator ruled that runs 584, 1021 and 968 close the way
+  run 985 was closed: their PRs (#1614, #1627, #1558) had merged outside the runs' own review path. Run 968's workspace
+  tip still matched #1558's merged head, so it closed `done` with a verified fingerprint. Runs 584 and 1021 no longer
+  matched their merged heads, so they closed `failed` by substitution, with each PR's merged head as the recorded
+  handoff commit. Each worker was mailed before its close.
+- **2026-11-04 — PR1 landed.** #2256 merged through the native queue as `a520aaace`, at exact head `aa8579d65`, after
+  three review rounds. Round 1 (review 1429) found five issues, all fixed: the library's pointer in `ccd/ccd`, a release
+  after the admin record was reused, a cleanly absent directory reading as unmeasured, rule 9's carrier half without a
+  row, and a mutant that survived. Round 2 (review 1438) found that the round-1 release fix had dropped the only binding
+  between a release's flags and the stored carrier; it was fixed and pinned, and the class of round 1's pointer bug is
+  now pinned in `ccd-lib-load`. Round 3 (review 1439) was clean. PR1's departures are D-7934..D-7939 in its note,
+  `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt/pr1.md`.
+- **2026-11-04 — PR1's carried items.** To PR4's dispatch: `_dl_tree_owner` answers "not held" when `by-tree/` is
+  cleanly absent although `leases/` holds carriers, which is the unsafe direction for PR4's rung; PR4's brief rules
+  whether rung rule 1 reads that state as unmeasured. To the Rider: review 1439's five minors (the `ccd-lib-load` row
+  checks regions as a total and does not refuse a duplicated pointer; D-7937's gone-record claim has no row; two
+  mutation-table wordings; the release refusal rows do not assert `by-tree/` unchanged), and review 1438's two
+  same-user accident guards (the write path follows links after the directory check; the lock's descriptor has no
+  close-on-exec).
+- **2026-11-04 — Dispatch after PR1 (extends D-7848).** PR5a, PR2 and PR3 went out together, each with its own
+  deviation block named in its brief. PR4 waits for PR2 to merge: PR4 imports `server/test/leaseFixture.ts`, which
+  PR2's first commit extracts, and both append to the lease library and `ccd/contexts.tsv`. PR2's run claims the files
+  it shares with PR3 (`ccd/ccd`, `server/src/ccdargv.ts`, `server/test/ccdCapTokens.ts`, `verb-gate`,
+  `whitelist-subset`, `ccd-ws-lease-mark-argv`, `delegation-wave3.integration` and `CLAUDE.md`). PR3 and PR5a edit
+  only their own named hunks there, by the coordinator's consent, and whichever lands second merges `main`. PR5a's
+  scope, where the plan's PR5 file list does not split it: PR5a ships Tasks 5.5.1 and 5.5.2 with `computeHolds` and
+  the `delegation_leases` and `delegation_lineage` delta arms (the PR5a paragraph names them); the doors, the lane
+  phase, `uncensusedLeases` and the `heldStateOf` widening (row W5-O14) are not PR5a's. W5-O14 goes to PR4 if PR5a is
+  on `main` when PR4 is dispatched, and otherwise to PR5b. PR5a makes the `server/test/delegationLeaseFixture.ts` move
+  commit (`leaseRow`), since PR4 is not yet out; PR4 adds `checkpointWithLease` beside it.
 
 ## Carried constraints
 

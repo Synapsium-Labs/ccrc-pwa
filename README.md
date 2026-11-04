@@ -603,7 +603,7 @@ under "Attention, notifications and answering" below.
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
 `skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111),
-`timeout`, `model-default`, `history`, `transcripts`, and `jq_regex` (no session hook runs there).
+`timeout`, `model-default`, `history`, `transcripts`, `transcript_work`, and `jq_regex` (no session hook runs there).
 
 | checks | what they measure |
 |---|---|
@@ -621,6 +621,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `codex` | for each `exec.kind: "codex"` lane: the five GPT-lane executables in `~/.local/bin` against the shipped tree; the isolated runtime (`ccgpt-runtime check`, which trusts the build's stamp and compares the installed LiteLLM patch with `patch-source`); the roster row and its ports; `exec.authDir`, then its `auth.json` through the auth library's non-secret status (signed in or not, `needs-signin`, `config-error`, another family's or an unreadable file) and the file's owner and mode; `lane.json` against the roster row and the class registry; a `codex` class registry and its haiku-class probe model; the rendered LiteLLM config against the catalogue; the two tiers (half up, foreign, unmeasurable, down under a live session, or running and not proven to run the installed bytes); and its usage timer and `~/.cc-limits` row. Lane state left under `~/.ccrc/codex/` for an id no longer `codex` is a WARN |
 | `pools`, `memory`, `routing`, `models` | project pool tags; one memory store per project; lane routing; model-catalogue freshness |
 | `transcripts` | every registry row's uuid against its transcript, read by the one `continued-in` rule `ccd` and the server share: a WARN names the sessions reading a transcript Claude Code has superseded (a supervised one clears on its next supervise tick; a stopped or archived one is followed when it is next resumed) and, apart, a session whose marker names a successor never written (it clears at that job's first line, or at the first prompt the session answers on its own transcript; the row's wrapper is named, because `<wrapper> agents` lists only that account's jobs); rows it could not measure (at neither direct spelling, unreadable, or a registry row it cannot read) are counted apart inside the PASS, never claimed clean; a FAIL when `~/.cc-sessions` is not a readable, searchable directory |
+| `transcript_work` | work kept inside Claude Code's transcript folders: every roster config dir's `projects/<slug>/` entries, and each session directory's, that are not the shapes Claude Code writes (a `<uuid>.jsonl` transcript, a `<uuid>/` session directory, `memory`; inside a session directory `subagents/`, `tool-results/`, `workflows/`), counted and sized as `du -sb` sizes them; a WARN over 1 GiB in all or 256 MiB in one entry names the five largest, and a walk past its 20 s bound, or one that cannot read a directory, is unmeasured, never a PASS. It deletes nothing. `GET /api/fleet/health`'s `disk.transcriptWork` carries the agent's count of the same tree, shown in Settings › Automation (D-7898) |
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` on `PATH` resolving to that engine |
 | `history` | on a `fleet` or `both` box with the history sweep installed (SKIP elsewhere): the last tick and the index lag, the cap and free space, the journal, the export's due and overdue counts and a recovery in progress, each WARN and FAIL with its remedy, all read from `ccrc history status --json` |
@@ -3379,6 +3380,13 @@ would land (`New workspace on <project> — <account>, N% free`) or why nothing 
 beside `Runs ·` re-forecasts every card for one model class, and each card's **+** then asks for that class;
 **Coordinator row**, the default, is the request that names no class.
 
+**Add project**, at the foot of the project list and in the first-run panel, creates a project there:
+**From GitHub** (`owner/repo` or a github.com URL; the name defaults to the repo's) or **Empty**. It is
+`POST /api/projects` → `ccd project-add`, which clones or `git init`s a NEW directory under `~/projects` on the
+fleet box, never replacing an existing name; a private repository needs the fleet box user's own git credentials.
+An empty project takes sessions in its main checkout at once, but no workspace until it has a GitHub `origin`
+(`ws-add` needs `origin/HEAD`).
+
 ### A session (`/s/<id>`)
 
 **The header** names the session (a branch name the model writes types itself in — "The branch takes the name
@@ -3737,7 +3745,7 @@ general remote-shell:
   anything after it is unconstrained: `pr-state` needs `--session` or
   `--project`; `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
   `ws-hold`/`ws-release`/`ws-rename`/`ws-title`/`route`/`win-size` need `--session`;
-  `coord-pause` and `reclaim-pause` need `--state` and `project-pool` needs `--project`; and
+  `coord-pause` and `reclaim-pause` need `--state`, `project-pool` needs `--project` and `project-add` needs `--name`; and
   `ws-reap` and `ws-reclaim` need `--expect` — a load-bearing confirmation
   token, so an unconfirmed reap or reclaim can never cross the wire at all.
   `ws-rename`'s flag guards a different hazard: the verb destroys nothing, but it is the first whose argv the server builds
@@ -3750,7 +3758,7 @@ general remote-shell:
   `UNGRANTABLE_VERBS` and `REQUIRED_VERB_FLAG` (`agent/src/whitelist.ts`)
   make a grant of `ws-rm` or `ws-gc`, an empty prefix, or a gated verb
   (`ws-reap`, `ws-reclaim`, `ws-rename`, `coord-pause`, `reclaim-pause`,
-  `project-pool`, `route`, `win-size`) without its flag a type error, and
+  `project-pool`, `project-add`, `route`, `win-size`) without its flag a type error, and
   `auditExecWhitelist` re-checks the same rules when the agent loads —
   together with any command key other than `tmux` and `ccd`, such as one of
   `FORBIDDEN_COMMANDS` (`gh`, `git`, the shells and interpreters, `ssh`,
@@ -7238,6 +7246,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-collect --expect <token> --session <id>` | the server's removal of an orphaned, witnessed child TEMP ROOT, by quarantine rename — never run by hand or by a session; its audit is `ws-audit --session <id> --collect`, and the server's collector lane composes it only once the operator has armed it: in Settings (Temp root collector) for the connected fleet node, or by `$REG/collect-lane-live` until that file's retirement is recorded |
 | `ws-rm [--reason <text>] <id>` · `ws-gc [--prune | --fast]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it; `--fast` lists the same rows without measuring sizes, archived rows showing their archive manifest's size, and never combines with `--prune`) |
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
+| `project-add --name <n> (--url <github-url> \| --empty)` | add a NEW project under the projects root: clone `https://github.com/<o>/<r>.git` or `git@github.com:<o>/<r>.git` (no prompt: `GIT_TERMINAL_PROMPT=0`, and `ssh -o BatchMode=yes` only when the box set none of `GIT_SSH_COMMAND`, `GIT_SSH` and `core.sshCommand`; git is bounded at 220 s, so an overrunning clone dies inside ccd), or `git init` an empty one on `main` with no commit; refuses a name that exists in any form, builds in a dot-named temp directory and removes only that on failure, a timeout included |
 | `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
 | `pr-open --session <id> …` · `pr-state --session <id>\|--project <p> [--pr <n>]` | open the workspace's PR — the one PR write; read PR state, per workspace or one PR by number |
 | `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane on the lane's own tmux server (`-L ccrc-auth-<id>`), on the box (the agent grants no `account-pane`) |

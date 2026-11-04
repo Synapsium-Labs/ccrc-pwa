@@ -59,7 +59,7 @@ export function refusalWordOf(err: unknown): string | undefined {
 
 /** The step-up for the act that needs it, mounted only while that act is drawn and the screen can act, so the
  *  challenge is fetched when the step is SHOWN (`useStepUp`'s rule) and an offline sheet sends nothing. */
-function StepUpFor({ freshUntil, deps, children }: {
+export function StepUpFor({ freshUntil, deps, children }: {
   freshUntil: number | null; deps: StepUpDeps; children: (s: StepUp) => ReactNode;
 }): ReactNode {
   return children(useStepUp(freshUntil, deps));
@@ -104,8 +104,9 @@ export function RevokeItem({ laneId, kind, label, old, blocked, ack }: {
   laneId: string;
   kind: AtProviderKind;
   label: string;
-  /** Is it the token this lane HAD (Replace) rather than the lane's only one (Remove)? Only the words differ. */
-  old: boolean;
+  /** Is it the token this lane HAD (Replace) rather than the lane's only one (Remove)? `any` when the app knows of no old
+   *  token but one may exist (D-7872 (10)). Only the words differ. */
+  old: boolean | 'any';
   /** The screen cannot act (offline): the tick sends nothing. */
   blocked: boolean;
   ack: (body: AccountRevokeAckBody) => Promise<unknown>;
