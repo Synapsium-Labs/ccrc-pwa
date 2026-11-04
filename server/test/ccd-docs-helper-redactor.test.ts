@@ -886,14 +886,14 @@ describe('the docs front probes node and the pinned redactor before any work (D-
       fs.writeFileSync(path.join(harnessBin(h.home), tool), [
         '#!/bin/sh',
         `echo x >> ${shWord(count)}`,
-        // The loader hashes each of its two libraries (D-7463); every later call is the front's.
-        `[ "$(wc -l < ${shWord(count)})" -le 2 ] && ${real ? `exec ${shWord(real)} "$@"` : 'exit 127'}`,
+        // The loader hashes each of its three libraries (D-7463, wave 5); every later call is the front's.
+        `[ "$(wc -l < ${shWord(count)})" -le 3 ] && ${real ? `exec ${shWord(real)} "$@"` : 'exit 127'}`,
         'cat >/dev/null; exit 0',
         '',
       ].join('\n'), { mode: 0o755 });
     }
     const r = installed().run(INDEX);
-    expect(fs.readFileSync(count, 'utf8').split('\n').filter(Boolean).length, 'the loader and the front both hashed').toBeGreaterThanOrEqual(3);
+    expect(fs.readFileSync(count, 'utf8').split('\n').filter(Boolean).length, 'the loader and the front both hashed').toBeGreaterThanOrEqual(4);
     expect([r.code, r.stdout, r.stderr]).toEqual([0, unavailable('docs-index', 'redactor-mismatch'), '']);
   });
 

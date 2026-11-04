@@ -9,7 +9,7 @@
 set -uo pipefail
 
 # ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
-# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue` or `ws-shed-deps`, or a direct `ws-audit --session <id>
+# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue`, `ws-shed-deps` or `ws-lease-mark`, or a direct `ws-audit --session <id>
 # --reclaim [--defer-expired]`, `… --expire` or `… --collect`, runs under Bash >= 4.4 PRIVILEGED with
 # no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
 # rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
@@ -31,7 +31,7 @@ if [[ $# -ge 5 && "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --re
     case "${!__ccd_i}" in --defer-expired) ;; --stale|--hold-digest) __ccd_i=$((__ccd_i + 1)) ;; *) __ccd_stale=0; break ;; esac
   done
 fi
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue || "${1-}" == ws-shed-deps ]] \
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue || "${1-}" == ws-shed-deps || "${1-}" == ws-lease-mark ]] \
      || (( __ccd_stale )) \
      || { [[ $# -ge 4 && $# -le 6 && "${1-}" == ws-audit && "${2-}" == --session ]] \
           && [[ ( "${4-}" == --reclaim && ( $# -eq 4 || ( $# -eq 5 && "${5-}" == --defer-expired ) ) ) || ( "${4-}" == --expire && ( $# -eq 4 || ( $# -eq 6 && "${5-}" == --child-of ) ) ) || ( $# -eq 4 && "${4-}" == --collect ) ]]; } || [[ $# -eq 4 && "${1-}" == ws-audit && "${2-}" == --loose-hex && "${4-}" == --collect ]]; }; then   # + the loose arm's audit (D-6625)
@@ -9264,6 +9264,7 @@ EOF
   echo testbox-remote   # D-7411: the test box switch's writer, behind POST /api/testbox/switch
   echo docs-index
   echo path-users-v1; echo path-users   # `ccd path-users [--json] <path>…` (DR-7, D-6619): the read-only entry to the one holder probe; sent only behind this word
+  echo lease-mark-v1; echo ws-lease-mark   # delegation broker wave 5 (PR1): the lease carrier's one writer, ccd/lib/delegation-lease.sh
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
   # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
   # design 2026-10-20 §4.1). Two tokens, because the two flags are separable: the server sends each only behind its own
@@ -40845,6 +40846,8 @@ _ws_collect_locked() {   # token id surface actor reason — everything the reap
 
 # @ccd-lib:depsshed — the deps-shed verb, `ws-shed-deps` (D-7278), lives in ccd/lib/disk-retention.sh
 
+# @ccd-lib:lease — the delegation broker's lease carrier and its one writer, `ws-lease-mark` (wave 5, D-7798), live in ccd/lib/delegation-lease.sh
+
 # ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──
 _ws_reap_leaf_ok() { [[ ! -L "${1%"${1##*[!/]}"}" ]] || _ws_refuse containment-unproven "$1 is a symbolic link — ccd never follows a link to a tree it would delete, so it cannot prove the tree at that path is $2's own"; }   # workdir id -> 0, or rc 1 refused
 _ws_reclaim_mirror() {   # id breadcrumb -> ws-reap's refusal of a `reclaim:` or an `expire:` breadcrumb, on stdout
@@ -45129,8 +45132,9 @@ cmd_ws_title() {   # ccd ws-title --session <id> (--title <text> | --clear) — 
   fi
 }
 
-# ── THE LIBRARIES: DISK RETENTION (D-6913; GitHub #1279) AND THE TRAIN PROOF (D-7463) ──
-# The fleet disk-retention verbs live in ccd/lib/disk-retention.sh, and the train proof in ccd/lib/train-proof.sh, both
+# ── THE LIBRARIES: DISK RETENTION (D-6913; GitHub #1279), THE TRAIN PROOF (D-7463) AND THE DELEGATION LEASE (wave 5) ──
+# The fleet disk-retention verbs live in ccd/lib/disk-retention.sh, the train proof in ccd/lib/train-proof.sh and the delegation lease in
+# ccd/lib/delegation-lease.sh, all
 # installed beside this body and loaded HERE, once every function and variable they call exists; each pin below works as
 # this paragraph tells for the first. The first pin below names disk-retention.sh's SHA-256, and like the stamp on line 2 it is written AT
 # INSTALL TIME (D-6913, the ruling that gave the pin #1525's treatment): the committed line is the fixed placeholder
@@ -45153,6 +45157,7 @@ __CCD_LIB_SHA256=stamp-at-install
 # and evaluates (after disk-retention.sh). A placeholder here, rendered by ccd/ccd-entry-install.py from exactly one line, as
 # the pin above is.
 __CCD_LIB_TRAIN_SHA256=stamp-at-install
+__CCD_LIB_LEASE_SHA256=stamp-at-install
 # THE DOCS REDACTOR'S PINS (D-7077, OA-C11 (a)): the SHA-256 of `shared/redact.mjs` and `shared/redact-cli.mjs`, installed beside
 # this body. Placeholders here, rendered by ccd/ccd-entry-install.py from exactly one line each, as the library pin is. Read only by
 # `_docs_redact_cli` and `_docs_front`; written only here (the census in ccd-lib-load.test.ts).
@@ -45164,12 +45169,12 @@ __CCD_REDACT_CLI_SHA256=stamp-at-install
 # installed layout. A census in ccd-lib-load.test.ts pins the single writer over ccd/ccd and ccd/lib/*.sh.
 __CCD_LAYOUT=
 __CCD_HASH_CMD=()
-_ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's and ccd/lib/train-proof.sh's functions defined; else the refusal line on stderr and rc 1, nothing evaluated
+_ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's, ccd/lib/train-proof.sh's and ccd/lib/delegation-lease.sh's functions defined; else the refusal line on stderr and rc 1, nothing evaluated
   local self="${BASH_SOURCE[0]}" dir=. f src sum __ccd_i
   [[ "$self" == */* ]] && dir="${self%/*}"
   # THE LIBRARIES, in load order, each beside its pin (D-7463): every file is read, and every digest checked, before ANY
   # file is evaluated, so one library that is not what was shipped refuses the start with none of the others run.
-  local -a __ccd_lib_files=("$dir/lib/disk-retention.sh" "$dir/lib/train-proof.sh") __ccd_lib_pins=("$__CCD_LIB_SHA256" "$__CCD_LIB_TRAIN_SHA256") __ccd_lib_srcs=()
+  local -a __ccd_lib_files=("$dir/lib/disk-retention.sh" "$dir/lib/train-proof.sh" "$dir/lib/delegation-lease.sh") __ccd_lib_pins=("$__CCD_LIB_SHA256" "$__CCD_LIB_TRAIN_SHA256" "$__CCD_LIB_LEASE_SHA256") __ccd_lib_srcs=()
   for f in "${__ccd_lib_files[@]}"; do
     if [[ -L "$f" || ! -f "$f" || ! -r "$f" ]]; then
       printf 'ccd: refused (lib-missing): %s is not a readable regular file — ccd and its library install together (re-run: ccrc update); nothing was run\n' "$f" >&2
@@ -45183,7 +45188,7 @@ _ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's and ccd/lib/train-pr
   # or a broken install (line 2 really stamped): the second refuses. Line 2 is read from this file, as bash already read it.
   # Only a body with EVERY pin a placeholder is a source checkout; any one pin left a placeholder beside a rendered one is a
   # broken install too.
-  if [[ "$__CCD_LIB_SHA256" == stamp-at-install && "$__CCD_LIB_TRAIN_SHA256" == stamp-at-install ]]; then
+  if [[ "$__CCD_LIB_SHA256" == stamp-at-install && "$__CCD_LIB_TRAIN_SHA256" == stamp-at-install && "$__CCD_LIB_LEASE_SHA256" == stamp-at-install ]]; then
     local l1='' l2=''
     { IFS= read -r l1 && IFS= read -r l2; } < "$self" 2>/dev/null || :
     if [[ "$l2" == '# ccrc:stamp-at-install'* ]]; then
@@ -45277,6 +45282,7 @@ case "${1:-}" in
   ws-orphan)  shift; cmd_ws_orphan "$@" ;;
   scratch-rescue) shift; cmd_scratch_rescue "$@" ;;
   ws-shed-deps) shift; cmd_ws_shed_deps "$@" ;;
+  ws-lease-mark) shift; cmd_ws_lease_mark "$@" ;;
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   ws-title)   shift; cmd_ws_title "$@" ;;
@@ -45296,6 +45302,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|win-size|account-pane|project-pool|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

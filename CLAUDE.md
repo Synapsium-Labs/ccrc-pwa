@@ -105,6 +105,7 @@ real values: `deploy/reference-fleet.md` (gitignored).
   token re-proved on the box, never `--force` — never a session's verb, and never run against the live host from a shell or a test.
   **`scratch-rescue` is forbidden to every session too** (D-6632): the temp sweep's act, which only adds attic refs for a session's scratch repository (`ccd scratch-rescue --session <id> <path>`), behind the installed direct entry — never a session's verb, and never run against the live host from a shell or a test.
   **`ws-shed-deps` is forbidden to every session too** (D-7278): it is the SERVER's act on a SLEEPING worker's or coordinator's git-ignored, untracked dependency directories only (`ccd ws-shed-deps --session <id> --class child|coordinator`, composed by the deps-shed arm of the run-done row, shadow until `$REG/deps-shed-live`), behind the installed direct entry, with every rung re-proved on the box — never a session's verb, and never run against the live host from a shell or a test.
+  **`ws-lease-mark` is forbidden to every session too**: it is the SERVER's act on a delegation lease's carrier only (`ccd ws-lease-mark --lease <id> …`), composed after the server has journalled the generation it writes, behind `lease-mark-v1` and the installed direct entry — never a session's verb, and never run against the live host from a shell or a test.
 - **Rolling, installing and selecting a Claude Code build are never a session's** (D-5696, spec 2026-10-18 §7.6):
   `ccd roll`, every `ccd claude …` verb (the operator's switches) and any write into `~/.local/share/claude/versions/`
   or onto the launcher (`~/.local/bin/claude`) are forbidden on a session's prompt (`FORBIDDEN_CCD_VERBS` and
@@ -499,6 +500,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   file absent and retires it.
 - **Zero new ccd verbs for coordination mutation** — mutations ride already-granted `CcdArgv` (a brand built at
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
+  Workspace-lifecycle verbs and flags (`ws-reclaim`, `ws-expire`, `ws-lease-mark`) act on workspaces, not on
+  coordination state, are server-composed only, and are not covered by that rule.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
   on missing — **except FOUR deliberately ungated operator doors: `POST /api/coord/pause`, `POST
   /api/runs/:id/abandon`, `POST /api/claims/:id/break` and `POST /api/runs/:id/reclaim`** (D-282 (was D-B4-9),

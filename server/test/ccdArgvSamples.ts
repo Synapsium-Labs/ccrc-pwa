@@ -94,6 +94,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   wsOrphanAudit: ['2f6f7270'],
   wsOrphan: ['a'.repeat(64) as OrphanToken, '2f6f7270', true, { surface: 'agent', actor: 'orphan sweep', reason: null }],
   wsShedDeps: ['project-a-quiet-basin', 'child', true, { surface: 'agent', actor: 'sweep:deps-shed', reason: null }],
+  leaseMark: [{ leaseId: '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', generation: 2, project: 'demo', adminRecord: 'agent-a', parentId: 'lane-a-demo', parentIncarnation: '11111111-2222-4333-8444-555555555555', activityId: 'act-1', source: 'agent', state: 'adopted', journalSeq: 9, expiresAtMs: 1767225600000, releaseReason: null, promoted: null }],
   // THE COLLECTOR'S LOOSE ARM (D-6626): the census rides `['ws-audit','--collect-census']`, the audit
   // `['ws-audit','--loose-hex']`, and the verb the collector's own `['ws-collect','--expect']`; the verb's sample carries a
   // dec so layer 2 proves the FLAGGED shape crosses with no third prefix.

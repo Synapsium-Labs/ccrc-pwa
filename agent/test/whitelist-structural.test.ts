@@ -42,6 +42,7 @@ import {
   EXEC_WHITELIST,
   FORBIDDEN_COMMANDS,
   GRANTABLE_COMMANDS,
+  REQUIRED_VERB_FLAG,
   auditExecWhitelist,
   isExecAllowed,
 } from '../src/whitelist.js';
@@ -182,6 +183,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
   // THE TEST BOX SWITCH (D-7411), g14's shape: enrolled on `--state`, so the narrowed grant is a compile error.
   'g24-testbox-remote-without-state.ts': {
     what: 'the test box switch verb granted without --state',
+    codes: ['TS2322'],
+  },
+  // THE LEASE CARRIER (delegation broker wave 5, PR1), g23's shape: enrolled on `--lease`, so the narrowed grant is a
+  // compile error.
+  'g25-ws-lease-mark-without-lease.ts': {
+    what: 'the lease carrier writer granted without --lease',
     codes: ['TS2322'],
   },
 };
@@ -426,6 +433,15 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     expect(() => auditExecWhitelist(withCcd([['ws-shed-deps', '--session']]))).not.toThrow();
     expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-shed-deps'), 'one ws-shed-deps grant, on --session')
       .toEqual([['ws-shed-deps', '--session']]);
+  });
+
+  it('W5-G2: throws on a ws-lease-mark without --lease, and grants exactly the one prefix (delegation broker wave 5)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-mark']]))).toThrow();
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-mark', '--generation']]))).toThrow();
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-mark', '--lease']]))).not.toThrow();
+    expect(REQUIRED_VERB_FLAG['ws-lease-mark']).toBe('--lease');
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-lease-mark'), 'one ws-lease-mark grant, on --lease')
+      .toEqual([['ws-lease-mark', '--lease']]);
   });
 
   it('throws on a ws-orphan with no confirmation token, and grants the audit modes without one (D-6630)', () => {
