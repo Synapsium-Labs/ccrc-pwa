@@ -5,8 +5,8 @@
  * whatever the agent started in the background keeps running in the pane's transient scope
  * (`app-claude\x2dsession.slice/tmux-spawn-<uuid>.scope`) until the scope sweep finds it, hours later. Now
  * `ccd stop` and `ccd hibernate` (which the stop-done lane composes, and the roll) read the pane's scope before the
- * kill and hand the rest to a detached `_pane_scope_reap`, so the verb never waits: it waits for the main process to
- * exit and a grace (`PANE_SCOPE_STOP_GRACE_S`), and then, only when `$REG/pane-scope-stop-live` stands, runs
+ * kill, after the stop's stamp and the unit's disable and under a deadline, and hand the rest to a detached
+ * `_pane_scope_reap`, so the verb never waits: it waits for the main process to exit and a grace (`PANE_SCOPE_STOP_GRACE_S`), and then, only when `$REG/pane-scope-stop-live` stands, runs
  * `systemctl --user stop --no-block <unit>`. Without the switch the same run
  * logs `would stop` and stops nothing. A scope that holds another live pane, a unit that is not a tmux pane scope, and
  * one outside the session slice are never stopped.

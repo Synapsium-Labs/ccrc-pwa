@@ -6619,8 +6619,9 @@ forced fleet restart is part of this change. An aggregate slice `MemoryHigh` mus
 
 The sweep above collects what a dead pane left behind hours later; a stop ccd makes ON PURPOSE takes it down at once.
 `ccd stop`, and `ccd hibernate` (which the stop-done lane and the coordinator roll compose), read the session's pane and
-its scope from the live pane's `/proc/<pid>/cgroup` before the kill and hand the rest to a job in its own transient
-unit, so the verb never waits: once the main process has exited and a ten-second grace has passed, that job runs
+its scope from the live pane's `/proc/<pid>/cgroup` before the kill, after the stop's stamp and the unit's disable so
+that a wedged tmux server holds neither (the read is bounded, and one that runs out of time is logged `held`), and hand
+the rest to a job in its own transient unit, so the verb never waits: once the main process has exited and a ten-second grace has passed, that job runs
 `systemctl --user stop --no-block <unit>` — only for a `tmux-spawn-*.scope` whose parent
 is the session slice, only while something is still in it, and never while another live tmux pane has its process in it
 or below it. Every outcome is one `pane-scope <id>: …` line in `~/.cc-sessions/swap.log` (`stopped`, `would stop`,

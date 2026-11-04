@@ -23933,13 +23933,22 @@ _pane_cgroup_of() {   # pid -> that process's unified cgroup path (the `0::` lin
 # pane, never from `$REG/<id>.panescope`, so that marker keeps its one writer (`_panescope_record`, which calls this)
 # and its one reader (`_end_cause`); the K16 census (`server/test/census-w5/paneScopes.ts`) pins both. Declared and
 # initialised at file scope for `SPAWN_FROMSWAP`'s reason: `set -u` reads them before any call has run.
-PANE_SCOPE_PID="" PANE_SCOPE_CG="" PANE_SCOPE_UNIT=""
-_pane_scope_of() {   # id — the session's live pane: PANE_SCOPE_PID, its cgroup PANE_SCOPE_CG and its unit PANE_SCOPE_UNIT (all empty when none). Always rc 0.
+# PANE_SCOPE_WEDGED is the fourth fact: a read that ran out of time found nothing, and that is not the same as no pane.
+PANE_SCOPE_PID="" PANE_SCOPE_CG="" PANE_SCOPE_UNIT="" PANE_SCOPE_WEDGED=""
+_pane_scope_tmux() {   # tmux args… — one tmux call, bounded the `_end_cause` way (SUBSTRATE_PROBE_DEADLINE_S), because a wedged server must not hold a stop. rc of the call, 124 past the deadline.
+  # `_plat_timeout` runs a program, so a tmux that is a shell function (a test's) is called as one.
+  if declare -F tmux >/dev/null; then tmux "$@"
+  else _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux "$@"
+  fi
+}
+_pane_scope_of() {   # id — the session's live pane: PANE_SCOPE_PID, its cgroup PANE_SCOPE_CG and its unit PANE_SCOPE_UNIT (all empty when none), and PANE_SCOPE_WEDGED (1 when tmux did not answer in time). Always rc 0.
   # One `list-panes` and one `/proc` read. Linux only, by construction: macOS has no `/proc` (and no cgroups,
   # `_plat_cgroup`'s argument), so the read finds nothing there.
-  PANE_SCOPE_PID="" PANE_SCOPE_CG="" PANE_SCOPE_UNIT=""
-  local pid
-  pid=$(tmux list-panes -t "$(_tmux_t "$1")" -F '#{pane_pid}' 2>/dev/null | head -1)
+  PANE_SCOPE_PID="" PANE_SCOPE_CG="" PANE_SCOPE_UNIT="" PANE_SCOPE_WEDGED=""
+  local pid rc=0
+  pid=$(_pane_scope_tmux list-panes -t "$(_tmux_t "$1")" -F '#{pane_pid}' 2>/dev/null) || rc=$?
+  (( rc != 124 )) || PANE_SCOPE_WEDGED=1
+  pid="${pid%%$'\n'*}"
   [[ "$pid" =~ ^[0-9]+$ ]] || return 0
   PANE_SCOPE_PID=$pid
   PANE_SCOPE_CG=$(_pane_cgroup_of "$pid")
@@ -23968,6 +23977,11 @@ _panescope_record() {   # id — once per spawn, after the pane exists: its scop
 # `cmd_stop`, and `cmd_hibernate`, which the stop-done lane and the roll compose — read the pane's scope before the
 # kill (`_pane_scope_of`) and, after it, call `_pane_scope_stop`. The auto-swap's restart is not a stop and never
 # reaches it.
+#
+# THE INTENT DOES NOT WAIT FOR TMUX. The read comes after `_ws_unsupervise`, not before it: the stop's stamp and the
+# unit's disable are what a wedged tmux server must not hold, and the pane stands until `kill-session` because
+# `KillMode=process` ends the supervisor alone. The read itself is bounded (`_pane_scope_tmux`); one that runs out of
+# time reads no scope, the stop goes on, and `_pane_scope_stop` logs it `held` for the scope sweep to collect.
 #
 # THE WAIT IS NOT THE VERB'S. A plain hibernate is called with the coordination serialiser held
 # (`server/src/remote/runner.ts`, D-7541), so a verb that waited out the main process and a grace would hold every
@@ -24012,6 +24026,9 @@ _pane_scope_detach() {   # fn args… — run a function of this file in its own
 }
 _pane_scope_stop() {   # id — after a deliberate stop's kill: check the scope `_pane_scope_of` read before it, and hand the wait and the act to `_pane_scope_reap`. Always rc 0.
   local id="$1" pid="$PANE_SCOPE_PID" cg="$PANE_SCOPE_CG" unit="$PANE_SCOPE_UNIT" parent rc=0
+  if [[ -n "$PANE_SCOPE_WEDGED" ]]; then
+    _pane_scope_note "$id" "held: tmux did not answer within ${SUBSTRATE_PROBE_DEADLINE_S}s, so no scope was read"; return 0
+  fi
   [[ -n "$pid" && -n "$cg" ]] || return 0   # no live pane, or no cgroup to read (macOS, a tmux without systemd)
   # Outside the session slice is not a ccd pane scope at all (a tmux without systemd, a test's planted pid): silent,
   # as `_panescope_record` is silent for a cgroup that names no scope. Inside it, only a tmux pane scope is ever stopped.
@@ -24040,12 +24057,7 @@ _pane_scope_reap() {   # id pid cg — in its own unit: wait for the main proces
   if [[ ! -r "$cgdir/cgroup.procs" ]]; then _pane_scope_note "$id" "held $unit: its cgroup.procs is not readable"; return 0; fi
   while IFS= read -r p || [[ -n "$p" ]]; do [[ "$p" =~ ^[0-9]+$ ]] && n=$((n + 1)); done < "$cgdir/cgroup.procs"
   if (( n == 0 )); then _pane_scope_note "$id" "nothing left in $unit"; return 0; fi
-  # Bounded the `_end_cause` way (SUBSTRATE_PROBE_DEADLINE_S): a wedged server must not hold the stop's answer.
-  if declare -F tmux >/dev/null; then
-    out=$(tmux list-panes -a -F '#{session_name} #{pane_pid}' 2>&1) || rc=$?
-  else
-    out=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux list-panes -a -F '#{session_name} #{pane_pid}' 2>&1) || rc=$?
-  fi
+  out=$(_pane_scope_tmux list-panes -a -F '#{session_name} #{pane_pid}' 2>&1) || rc=$?
   if (( rc != 0 )); then
     if [[ "$out" == "no server running"* ]]; then out=""
     else _pane_scope_note "$id" "held $unit: tmux did not list its panes (exit $rc)"; return 0
@@ -30315,8 +30327,8 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   _lc_done stop "$id" "" dec.surface "$(_lc_surface_norm "$declared")"
   rm -f -- "$REG/$id.hibernated"   # a stop ENDS a hibernation (D-5242): an ordinary stopped row, which mail never wakes
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first; a session already stopped and read is not read again (§5.7)
-  _pane_scope_of "$id"   # D-7902: the pane's scope, read while the pane still stands
   _ws_unsupervise "$id" "$surface" "$declared"
+  _pane_scope_of "$id"   # D-7902: the pane's scope, read while the pane still stands, and after the stop's intent, which no tmux may hold
   tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
   _pane_scope_stop "$id"   # D-7902: what the session left running in its pane scope goes too (shadow until armed)
   echo "stopped $id"
@@ -30493,8 +30505,8 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   # 2. The marker BEFORE the stop, so a row that reads stopped is never a
   #    sleeping one nobody knows to wake.
   _reg_set "$id" hibernated "$now $hours" || die "could not write $REG/$id.hibernated — nothing was stopped"
-  _pane_scope_of "$id"   # D-7902: the pane's scope, read while the pane still stands
   _ws_unsupervise "$id" ccd
+  _pane_scope_of "$id"   # D-7902: the pane's scope, read while the pane still stands, and after the stop's intent, which no tmux may hold
   tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
   # A roll whose pane is still live after the kill did not stop it, so nothing is rolled and no wake is tried: its own
   # exit (6) and phrase, never `rolled`. The marker and the stopped unit the act wrote stand, so the line says so.

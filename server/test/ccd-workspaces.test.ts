@@ -806,8 +806,8 @@ describe('cmd_stop', () => {
       // process, so `_lc_obs`'s once-per-process `tmux list-panes` probe fires
       // before the disable/kill pair.
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
-      'tmux list-panes -t =cc-project-j-quiet-mesa: -F #{pane_pid}',   // D-7902: the pane's scope, read before the kill
       'systemctl --user disable --now claude-session@project-j-quiet-mesa',
+      'tmux list-panes -t =cc-project-j-quiet-mesa: -F #{pane_pid}',   // D-7902: the pane's scope, read after the disable and before the kill
       'tmux kill-session -t =cc-project-j-quiet-mesa:',
     ]);
   });
@@ -816,8 +816,8 @@ describe('cmd_stop', () => {
     expect(sh(`${STOP} cmd_stop claude-a demo`)).toBe('stopped claude-a-demo');
     expect(calls()).toEqual([
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
-      'tmux list-panes -t =cc-claude-a-demo: -F #{pane_pid}',   // D-7902: the pane's scope, read before the kill
       'systemctl --user disable --now claude-session@claude-a-demo',
+      'tmux list-panes -t =cc-claude-a-demo: -F #{pane_pid}',   // D-7902: the pane's scope, read after the disable and before the kill
       'tmux kill-session -t =cc-claude-a-demo:',
     ]);
   });

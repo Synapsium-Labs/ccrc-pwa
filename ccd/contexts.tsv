@@ -383,6 +383,7 @@ _ws_slug_git_state	C4
 _tmux_new_session	C2
 _panescope_proc_root	C2
 _pane_cgroup_of	C2
+_pane_scope_tmux	C2
 _pane_scope_of	C2
 _panescope_record	C2
 _panescope_cgroup_root	C2

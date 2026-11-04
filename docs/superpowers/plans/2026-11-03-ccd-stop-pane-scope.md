@@ -19,12 +19,21 @@ scope. Follow-up to the scope sweep (session-continuity spec §5.6 item 2), appr
 
 | Path | Verb | Pane at teardown start | Change |
 | --- | --- | --- | --- |
-| `ccd stop` (the PWA's Stop, a session's own shell) | `cmd_stop` | yes, before `_ws_unsupervise` and the kill | reads the scope, then `_pane_scope_stop` after the kill |
+| `ccd stop` (the PWA's Stop, a session's own shell) | `cmd_stop` | yes, until the kill: `KillMode=process` ends only the supervisor | reads the scope after `_ws_unsupervise` and before the kill, then `_pane_scope_stop` after the kill |
 | stop-done (a finished worker) | composes `ccd hibernate` (`server/src/stopDone.ts`, D-5427) | yes: the hibernate re-measure requires a live pane | through `cmd_hibernate` |
-| hibernation (a long-idle session) | `cmd_hibernate` | yes, same re-measure | reads the scope before `_ws_unsupervise`, stops it after the kill |
+| hibernation (a long-idle session) | `cmd_hibernate` | yes, same re-measure | reads the scope after `_ws_unsupervise` and before the kill, stops it after the kill |
 | the roll (`hibernate --roll`) | `cmd_hibernate` | yes | the delayed stop is dispatched after the kill and before the wake, for the scope read before the kill; the wake's new pane runs in a new scope |
 | the auto-swap restart | `cmd_swap` | n/a | untouched: a swap is not a stop |
 | `ws-archive`, `ws-rm`, `ws-reap`, `forget` | `_ws_unsupervise` callers | varies | untouched (not in this change's scope) |
+
+## A wedged tmux holds no stop
+
+The stop's stamp and the unit's disable are the intent, and they come first: `_pane_scope_of` runs after `_ws_unsupervise`,
+where the pane still stands, so a wedged tmux server cannot keep a row from reading stopped or a unit enabled. The read is
+bounded too (`_pane_scope_tmux`, `SUBSTRATE_PROBE_DEADLINE_S`, the same call the reap's `list-panes -a` makes), which also
+bounds `_panescope_record` on the spawn path. A read that runs out of time reads no scope: the stop goes on, the line says
+`held: tmux did not answer within <n>s, so no scope was read`, and the scope sweep collects what is left. The verbs'
+`tmux kill-session` is unbounded, as it was before this change.
 
 ## The act, in order
 
