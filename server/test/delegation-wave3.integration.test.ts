@@ -889,17 +889,17 @@ describe('7. seven complete days below 1% unmeasured becomes eligible, without e
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 const read = (rel: string): string => readFileSync(path.join(REPO_ROOT, rel), 'utf8');
-/** Every file under `rel` (relative to the repository), skipping dependency and build directories. */
-function filesUnder(rel: string, ext: RegExp = /\.(ts|tsx|mjs|js|sh|md)$/): string[] {
+/** Every file under `rel` (relative to `root`, the repository by default), skipping dependency and build directories. */
+function filesUnder(rel: string, ext: RegExp = /\.(ts|tsx|mjs|js|sh|md)$/, root: string = REPO_ROOT): string[] {
   const out: string[] = [];
   const rec = (d: string): void => {
-    for (const e of readdirSync(path.join(REPO_ROOT, d), { withFileTypes: true })) {
+    for (const e of readdirSync(path.join(root, d), { withFileTypes: true })) {
       if (e.name === 'node_modules' || e.name === 'dist' || e.name === '.git') continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) rec(p); else if (ext.test(e.name)) out.push(p);
     }
   };
-  if (existsSync(path.join(REPO_ROOT, rel))) rec(rel);
+  if (existsSync(path.join(root, rel))) rec(rel);
   return out.sort();
 }
 /** Drops comment-only lines (TypeScript and shell), so a sentence that NAMES a later wave's door is not mistaken for the door. */
@@ -937,18 +937,34 @@ const pwaWordOffenders = (files: readonly string[], text: (f: string) => string,
 /** The delegation family: a name that would belong to this broker under any spelling. */
 const FAMILY = /deleg|lease|spool|carrier|journal/i;
 
-/** Every file a later wave would put its door in: the ccd tools and their skills, the agent, the server, shared, and deploy. */
-const SHIPPED = [
+/** Every file a later wave would put its door in: the ccd tools, their libraries and their skills, the agent, the server, shared, and
+ *  deploy. Wave 5 widened it with `ccd/lib` (W5-SC1): a lease door in a library was invisible to the wave-3 list. */
+const shippedOf = (root: string): string[] => [
   ...['ccd/ccd', 'ccd/ccrc', 'ccd/ccrc-api', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh', 'ccd/install-session-hooks.sh'],
-  ...filesUnder('ccd/coordinator-skill'), ...filesUnder('ccd/worker-skill'), ...filesUnder('ccd/reviewer-skill'),
-  ...filesUnder('agent/src'), ...filesUnder('server/src'), ...filesUnder('shared'), ...filesUnder('deploy', /\.(mjs|js|sh|json)$/),
+  ...filesUnder('ccd/lib', undefined, root),
+  ...filesUnder('ccd/coordinator-skill', undefined, root), ...filesUnder('ccd/worker-skill', undefined, root),
+  ...filesUnder('ccd/reviewer-skill', undefined, root), ...filesUnder('agent/src', undefined, root), ...filesUnder('server/src', undefined, root),
+  ...filesUnder('shared', undefined, root), ...filesUnder('deploy', /\.(mjs|js|sh|json)$/, root),
+].filter((f) => existsSync(path.join(root, f)));
+const SHIPPED = shippedOf(REPO_ROOT);
+/** Wave 5's opened words, each with the ONLY shipped files that may hold it (allow-list: a listed file need not hold it).
+ *  A wave-5 PR adds files to a row; it never adds or widens a pattern. Wave 6 and 7's words stay in STILL_CLOSED (D-7002). */
+const W5_OPEN: readonly (readonly [string, RegExp, readonly string[]])[] = [
+  ['ws-lease-mark', /\bws-lease-mark\b|\bcmd_ws_lease_mark\b|\blease-mark-v1\b/, [
+    'ccd/ccd', 'ccd/lib/delegation-lease.sh', 'ccd/ccd-entry.py', 'ccd/session-hook.sh', 'ccd/install-session-hooks.sh',
+    'agent/src/whitelist.ts', 'server/src/ccdargv.ts', 'server/src/coord/approvalguard.ts', 'shared/api.ts']],
+  ['ws-lease-audit', /\bws-lease-audit\b|\bcmd_ws_lease_audit\b|\blease-audit-v1\b/, []],
+  ['ws-add --base', /\bws-add-base(?:-v1)?\b|ws-add\s+--base/, []],
+  ['delegation/leases', /delegation\/leases/, ['ccd/lib/delegation-lease.sh']],
+  ['delegation-adopt', /delegation-adopt/, []],
+  ['promotesLease', /\bpromotesLease\b/, []],
 ];
-/** Wave 5 to 7 verbs, capability words, markers and paths. `ws-release` and the error code `lease-cleanup-state` are not among them:
- *  `(?<!re)lease` keeps `release` legal while `ws-adopt-lease` and `cmd_ws_x_lease` are not. */
-const LATER_WAVE = new RegExp([
-  String.raw`\bws-[\w-]*?(?<!re)lease`, String.raw`\bcmd_ws_\w*?(?<!re)lease`, String.raw`\blease-(?:mark|audit|clean)-v1\b`,
-  String.raw`\bws-add-base(?:-v1)?\b`, String.raw`ws-add\s+--base`, 'delegation/leases', 'delegation-adopt', 'lease-clean-live', String.raw`\bpromotesLease\b`,
-].join('|'), 'i');
+const STILL_CLOSED = /\bws-lease-clean\b|\bcmd_ws_lease_clean\b|\blease-clean(?:-v1|-live)?\b|cleanup-queue/i;
+/** The fleet-side files allowed to hold the bare word `leases` (a path composed from parts has no token for W5_OPEN). */
+const W5_FLEET_LEASES = ['ccd/lib/delegation-lease.sh'];
+/** For each W5_OPEN row, the files of `shipped` (read through `text`) that hold its word outside its list. */
+const w5Offenders = (shipped: readonly string[], text: (f: string) => string): string[] =>
+  W5_OPEN.flatMap(([word, re, allowed]) => shipped.filter((f) => re.test(text(f)) && !allowed.includes(f)).map((f) => `${word}: ${f}`));
 
 // ── a small bash command extractor, for the doctor clause ───────────────────────────────────────────────────────────────────
 interface ShellCmd { word: string; args: string[] }
@@ -1206,22 +1222,47 @@ describe('8. the closed scope census', () => {
     expect(read('shared/api.ts')).toMatch(/delegation\?: DelegationObservationHealth/);
   });
 
-  it('no carrier, adoption, promotion or `ws-add --base` command, capability, marker or file anywhere that ships', () => {
-    const offenders = SHIPPED.filter((f) => LATER_WAVE.test(read(f)));
-    expect(offenders, 'a later wave\'s door is in a shipped file').toEqual([]);
+  it('W5-SC0: a fixture tree whose ccd/lib holds a lease verb is missed by the wave-3 file list (the miss wave 5 closes)', () => {
+    // The wave-3 list, frozen as it stood on main before wave 5: no `ccd/lib`. Recorded so the CONTROL row below measures the widening.
+    const root = mkTmp('ccrc-dlgint-census-');
+    mkdirSync(path.join(root, 'ccd', 'lib'), { recursive: true });
+    writeFileSync(path.join(root, 'ccd', 'ccd'), read('ccd/ccd'));
+    writeFileSync(path.join(root, 'ccd', 'lib', 'other.sh'), 'cmd_other() { ccd ws-lease-mark --lease x; }\n');
+    const text = (f: string): string => readFileSync(path.join(root, f), 'utf8');
+    const wave3 = ['ccd/ccd', ...filesUnder('agent/src', undefined, root), ...filesUnder('server/src', undefined, root)]
+      .filter((f) => existsSync(path.join(root, f)));
+    const WAVE3_LATER_WAVE = new RegExp([
+      String.raw`\bws-[\w-]*?(?<!re)lease`, String.raw`\bcmd_ws_\w*?(?<!re)lease`, String.raw`\blease-(?:mark|audit|clean)-v1\b`,
+      String.raw`\bws-add-base(?:-v1)?\b`, String.raw`ws-add\s+--base`, 'delegation/leases', 'delegation-adopt', 'lease-clean-live', String.raw`\bpromotesLease\b`,
+    ].join('|'), 'i');
+    expect(wave3.filter((f) => WAVE3_LATER_WAVE.test(text(f))), 'the wave-3 list never reads ccd/lib').toEqual([]);
+    // CONTROL (W5-SC1): the wave-5 list over the same fixture names the library as an offender of the first W5_OPEN row.
+    expect(w5Offenders(shippedOf(root), text), 'CONTROL: a lease verb in an unlisted library is red').toEqual(['ws-lease-mark: ccd/lib/other.sh']);
+  });
+
+  it('W5-SC1: each wave-5 word only in its listed files, no wave-6/7 word, no carrier at a spawn', () => {
+    expect(SHIPPED, 'the scan reached the libraries').toContain('ccd/lib/train-proof.sh');
+    expect(w5Offenders(SHIPPED, read), 'a wave-5 word in a shipped file outside its list').toEqual([]);
+    expect(SHIPPED.filter((f) => STILL_CLOSED.test(read(f))), 'a wave-6/7 door is in a shipped file').toEqual([]);
     // a path COMPOSED from parts (`"$base/leases"`) has no token for the scan above to find, so the word itself is out of the fleet tools
-    // and the agent altogether (the checkpoint's `leases` list is the server's and the deploy helper's, which are not scanned for it)
-    const FLEET_SIDE = ['ccd/ccd', 'ccd/ccrc', 'ccd/ccrc-api', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh', 'ccd/install-session-hooks.sh', ...filesUnder('agent/src')];
-    expect(FLEET_SIDE.filter((f) => /\bleases\b/i.test(read(f))), 'the word `leases` in a fleet-side file').toEqual([]);
+    // and the agent but for the lease library (the checkpoint's `leases` list is the server's and the deploy helper's, which are not scanned)
+    const FLEET_SIDE = ['ccd/ccd', 'ccd/ccrc', 'ccd/ccrc-api', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh', 'ccd/install-session-hooks.sh',
+      ...filesUnder('ccd/lib'), ...filesUnder('agent/src')];
+    expect(FLEET_SIDE.filter((f) => /\bleases\b/i.test(read(f)) && !W5_FLEET_LEASES.includes(f)), 'the word `leases` in a fleet-side file').toEqual([]);
     const h = makeCcdHarness('ccrc-dlgint-ccd-');
     try {
-      // and the real thing: the function that makes the spool directory, run, leaves `delegation/` holding exactly `spool`
+      // and the real thing: the function that makes the spool directory, run, leaves `delegation/` holding exactly `spool` (the leases
+      // directory is made by `ws-lease-mark` only, never at a spawn)
       expect(h.sh('_delegation_spool_dir demo-quiet-mesa; echo "[rc=$?]"')).toContain('[rc=0]');
       expect(readdirSync(path.join(h.home, '.cc-sessions', 'delegation')), '`$REG/delegation` holds the spool and nothing else').toEqual(['spool']);
-      expect(walk(path.join(h.home, '.cc-sessions')).filter((q) => LATER_WAVE_NAME.test(q))).toEqual([]);
-      // the fleet advertises the one wave-3 capability and nothing else of the family
+      expect(walk(path.join(h.home, '.cc-sessions')).filter((q) => STILL_CLOSED.test(q))).toEqual([]);
+      // the fleet advertises the family's capability and verb words, a subset of wave 5's, and always the wave-3 one
       const caps = h.sh('cmd_caps').split('\n').filter((c) => c !== '');
-      expect(caps.filter((c) => /(^|-)lease|delegation|adopt|carrier/i.test(c))).toEqual(['delegation-events-v1']);
+      const family = caps.filter((c) => /(^|-)lease|delegation|adopt|carrier/i.test(c));
+      expect(family).toContain('delegation-events-v1');
+      for (const c of family) {
+        expect(['delegation-events-v1', 'lease-mark-v1', 'ws-lease-mark', 'lease-audit-v1', 'ws-lease-audit', 'ws-add-base-v1', 'orphan-lease-v1'], c).toContain(c);
+      }
     } finally { h.cleanup(); }
     expect(DELEGATION_EVENTS_CAP).toBe('delegation-events-v1');
   });

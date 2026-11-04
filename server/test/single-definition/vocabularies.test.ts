@@ -4,7 +4,8 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { componentFamily } from '../sourceScan.js';
-import { PR_REASONS, LIFECYCLE_ACTS, LC_ACT_UNKNOWN, ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, SPAWN_VERDICTS } from '../../../shared/api.js';
+import { PR_REASONS, LIFECYCLE_ACTS, LC_ACT_UNKNOWN, ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, SPAWN_VERDICTS,
+  DELEGATION_CARRIER_STATES, DELEGATION_DISPOSITIONS } from '../../../shared/api.js';
 import { PR_STATE_PR_WORDS } from '../../src/prstate.js';
 import { reclaimPauseParseSites } from '../consolidationCensus.js';
 import { callsIn, symbolOf } from '../scan/symbols.js';
@@ -591,13 +592,24 @@ describe('delegation wave 3: the closed vocabularies are declared once, in share
     ['DELEGATION_CLEANUP_POPULATIONS', 'DelegationCleanupPopulation', ['ephemeral-lease']],
     ['DELEGATION_INTENT_SOURCES', 'DelegationIntentSource', ['explicit', 'run-owner', 'delegation-inferred', 'retained-lineage']],
     ['DELEGATION_ATTEMPT_VERDICTS', 'DelegationAttemptVerdict', ['linked', 'unresolved', 'conflicting', 'unmeasured']],
+    // Delegation broker wave 5, PR1 Task 5.1.1 (W5-V1): the carrier's states and a lease's release reasons.
+    ['DELEGATION_CARRIER_STATES', 'DelegationCarrierState',
+      ['ephemeral', 'adopted', 'retained', 'promoted', 'transferring', 'released']],
+    ['DELEGATION_LEASE_RELEASE_REASONS', 'DelegationLeaseReleaseReason', ['native-removed', 'transferred', 'foreign']],
   ] as const;
   const apiText = (): string => readFileSync(path.join(ccrcRoot, 'shared', 'api.ts'), 'utf8');
   const declaredIn = (decl: RegExp): string[] => ALL.filter((f) => decl.test(readFileSync(f, 'utf8'))).map(rel);
 
   it('finds the vocabularies it scans (a scan over nothing passes everything)', () => {
-    expect(VOCABS.length).toBe(11);
+    expect(VOCABS.length).toBe(13);
     expect(apiText()).toContain('DELEGATION_EVENT_KINDS');
+  });
+
+  it('W5-V2: the carrier states are derived from the dispositions, never a second spelling of them', () => {
+    const src = apiText();
+    expect(src).toMatch(/DELEGATION_CARRIER_STATES = \[\.\.\.DELEGATION_DISPOSITIONS, 'transferring', 'released'\] as const;/);
+    expect(DELEGATION_CARRIER_STATES.slice(0, DELEGATION_DISPOSITIONS.length)).toEqual([...DELEGATION_DISPOSITIONS]);
+    expect(src.match(/'ephemeral', 'adopted', 'retained', 'promoted'/g) ?? []).toHaveLength(1);
   });
 
   for (const [arr, type, members] of VOCABS) {

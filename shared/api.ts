@@ -11731,6 +11731,26 @@ export interface DelegationProjectionWire {
   unowned: DelegationUnownedWire[];
 }
 
+// Delegation broker wave 5, PR1 (Task 5.1.1): the box-side carrier's closed words. A lease's carrier is written only by `ccd
+// ws-lease-mark` (`ccd/lib/delegation-lease.sh`), composed by the server through `CCD_ARGV.leaseMark`. Its states are the lease's
+// dispositions plus the two a carrier also records, derived from them (never a second spelling).
+export const DELEGATION_CARRIER_STATES = [...DELEGATION_DISPOSITIONS, 'transferring', 'released'] as const;
+export type DelegationCarrierState = (typeof DELEGATION_CARRIER_STATES)[number];
+export function isDelegationCarrierState(v: unknown): v is DelegationCarrierState {
+  return typeof v === 'string' && (DELEGATION_CARRIER_STATES as readonly string[]).includes(v);
+}
+/** Why a lease was released: its tree was removed natively, it was transferred to a promoted run, or it was ruled not delegation's. */
+export const DELEGATION_LEASE_RELEASE_REASONS = ['native-removed', 'transferred', 'foreign'] as const;
+export type DelegationLeaseReleaseReason = (typeof DELEGATION_LEASE_RELEASE_REASONS)[number];
+export function isDelegationLeaseReleaseReason(v: unknown): v is DelegationLeaseReleaseReason {
+  return typeof v === 'string' && (DELEGATION_LEASE_RELEASE_REASONS as readonly string[]).includes(v);
+}
+/** `ws-lease-mark`'s refusal words, the server's one reader of them. */
+export const LEASE_MARK_REFUSALS = ['usage', 'unmeasured', 'busy', 'bad-carrier', 'stale-generation', 'generation-conflict',
+  'not-under-projects-root', 'no-tree', 'symlink', 'main-worktree', 'locked', 'registered', 'nested', 'tree-held',
+  'fingerprint-mismatch'] as const;
+export type LeaseMarkRefusal = (typeof LEASE_MARK_REFUSALS)[number];
+
 /** The keys every spool line carries. A line is evidence and never authority; the hook decides nothing about
  *  parentage. `truncated` marks a line whose optional fields were dropped to fit its size bound. */
 export interface DelegationSpoolCommonV1 {
