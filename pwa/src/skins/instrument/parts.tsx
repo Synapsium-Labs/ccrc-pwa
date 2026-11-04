@@ -3,6 +3,7 @@
 // column, today's fleet screen, until S11's phone parts. S10 to S12 fill the rest. Composed from shared modules
 // only; never from Refined's directory (`skin-boundary.test.ts`, from S4a).
 import { INSTRUMENT } from '@ccrc/ui';
+import { PhoneBar } from '../PhoneBar';
 import type { SkinSet } from '../types';
 import { FleetTable } from './FleetTable';
 import { ListColumn } from './ListColumn';
@@ -28,6 +29,7 @@ export const INSTRUMENT_SET: SkinSet = {
   TranscriptRow: null,
   Inspector: null,
   StatusBar,
-  PhoneNav: null,
+  // Desktop-polish PL10 (D-7952): the shared bottom bar of the console's places, below 900 and outside a session.
+  PhoneNav: PhoneBar,
   transcriptGrouping: 'none',
 };

@@ -248,6 +248,39 @@ describe('POST /api/programmes/:slug/items (plan PL3)', () => {
  *  each alternative. */
 const RECOMMEND = { recommended: 0, recommendedWhy: 'Yes keeps the wave on time; no would cost a day of rework.' };
 
+// Desktop-polish PL10 (D-7952; spec §2, D28): a link to a document is its repository path, which the console opens in the Docs
+// reader. The raise route refuses an item that links a document any other way, an artifact page or a document server outside the
+// console, in any field the operator reads, and writes nothing; an outside service's own page stays an ordinary https link.
+describe('document links go only to the Docs reader (plan PL10, spec D28)', () => {
+  const DECIDE = { kind: 'decide', options: ['Ship it', 'Hold it'], recommended: 0, recommendedWhy: 'It is ready.' };
+  it.each([
+    ['an artifact page in why', { why: 'Read https://claude.ai/artifact/0f1e2d3c first.' }],
+    ['a code artifact page in a step', { how: ['Open https://claude.ai/code/artifact/0f1e2d3c-aaaa-bbbb-cccc-0123456789ab'] }],
+    ['an outside document server in the title', { title: 'Read https://b.example/docs/project-a/specs/a-design.md' }],
+    ['a repository document on a code host in why', { why: 'See https://github.com/org-a/repo-a/blob/main/docs/superpowers/plans/p.md.' }],
+    ['an http document server in the soon label', { soonLabel: 'http://b.example/docs/p/plans/x.md' }],
+    ['an artifact page in an option', { ...DECIDE, options: ['Ship it', 'See https://claude.ai/artifact/abc'] }],
+    ['an artifact page in the recommendation', { ...DECIDE, recommendedWhy: 'As https://claude.ai/artifact/abc shows.' }],
+  ])('the raise route refuses an artifact page or an outside document server as a document link: %s', async (_name, over) => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/items', { ...as('lane-a'), ...RAISE, ...over });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'outside-doc-link' });
+    expect(String(res.json().detail)).toMatch(/Docs reader|repository path/);
+    expect(r.coord.itemsFor(null, Date.now()).open).toEqual([]);
+    expect(r.waiting()).toBe(0);
+  });
+
+  it("an outside service's own page stays a link, and a repository path is the way to link a document", async () => {
+    const r = await rig();
+    const id = await raise(r, {
+      why: 'Sign in at https://github.com/settings/applications/new and read docs/superpowers/specs/a-design.md.',
+      how: ['Open https://console.example.com/sign-in', 'Download https://github.com/org-a/repo-a/actions/runs/1/artifacts/2', 'Open /docs/project-a/specs/a-design.md'],
+    });
+    expect(r.coord.itemById(id)).toMatchObject({ state: 'open' });
+  });
+});
+
 describe('a decide item names the option its raiser recommends, and why (plan PL9, spec §3.2, D24)', () => {
   const DECIDE = { kind: 'decide', options: ['Library first', 'Keep the order', 'Split the wave'] };
 

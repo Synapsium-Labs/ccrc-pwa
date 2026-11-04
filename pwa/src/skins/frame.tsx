@@ -17,6 +17,8 @@
 // skin's parts without branching on the skin (D-5469).
 import { createContext, useContext, useLayoutEffect, useRef } from 'react';
 import type { MouseEvent, ReactNode, Ref } from 'react';
+import { phoneBarShown } from '../lib/places';
+import { useLocation } from '../lib/router';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { inspectorHidden, setInspectorHidden, useInspectorShown } from '../inspector/inspectorShown';
 import type { SkinSet } from './types';
@@ -107,6 +109,10 @@ export function ShellFrame({ set, view, detailRef, children, nav }: ShellFramePr
   // (`FleetColumn`'s `showAccounts`), so one instance is mounted at any width. Mounted, never CSS-hidden. The rail and
   // the status bar are desk parts too (W2 Task S9, D-5472): a phone's navigation is `PhoneNav`'s.
   const desk = useMediaQuery(DESK_QUERY);
+  // The phone's bottom bar (desktop-polish PL10, D-7952; D25): below 900 only, and on every page but an open session, where the
+  // composer owns the bottom of the screen. Mounted, never CSS-hidden, like the desk parts.
+  const { path } = useLocation();
+  const phoneNav = !desk && phoneBarShown(path);
   const { Bar, Banners, Rail, Nav, Inspector, StatusBar, PhoneNav } = set;
   // The inspector is placed when the set has the part AND it is shown (width and the device's choice, T3e, D-6385).
   const inspectorShown = useInspectorShown();
@@ -173,7 +179,7 @@ export function ShellFrame({ set, view, detailRef, children, nav }: ShellFramePr
             <StatusBar />
           </footer>
         )}
-        {PhoneNav !== null && (
+        {PhoneNav !== null && phoneNav && (
           <nav key="phone-nav" className="shell-phone-nav" aria-label="Navigation">
             <PhoneNav />
           </nav>

@@ -53,7 +53,8 @@ export const ROUTES: readonly Route[] = [
   // Settings › Measure highlighting") on a phone; its id is not `settings-…`, so the ladder renders the page itself.
   { id: 'measure-highlighting', pattern: /^\/settings\/measure-highlighting\/?$/, title: 'Measure highlighting', top: false, path: '/settings/measure-highlighting' },
   // Any other id under Settings (D-5504): still Settings, which says "That section does not exist." above its index,
-  // never the fallback. No path, so "Go to" leaves it out.
+  // never the fallback, except a malformed escape (`/settings/%zz`), which is outside the table (`matchRoute`). No path, so
+  // "Go to" leaves it out.
   { id: 'settings-section', pattern: /^\/settings\/([^/]+)\/?$/, title: 'Settings', top: false, path: null },
   // `/digest?day=YYYY-MM-DD` (D-5300): the daily digest push's deep link.
   { id: 'digest', pattern: /^\/digest\/?$/, title: 'Digest', top: false, path: null },
@@ -83,8 +84,8 @@ export function programmePath(slug: string): string {
 }
 
 /** Whether a string is a programme slug the server accepts: `shapeProgramSlug`'s grammar and length, the one owner of both,
- *  and the slug as it stands (the owner trims, a path segment must not change under it). The route takes any one segment, so
- *  this is what the ladder asks before it draws a programme and what the chip asks before it offers a door. */
+ *  and the slug as it stands (the owner trims, a path segment must not change under it). This is what the programme row's
+ *  `accepts` asks, and what the chip asks before it offers a door (`programmeIsOpenable`). */
 export function isProgrammeSlug(slug: string): boolean {
   const shaped = shapeProgramSlug(slug);
   return shaped.ok && shaped.slug === slug;
@@ -172,11 +173,14 @@ export function shellViewOf(path: string): 'fleet' | 'session' {
 
 /** The top route a path is on or under: `/settings/updates` is under Settings, `/docs/a/b` is Docs, a session is
  *  under Fleet (its breadcrumb reads "Fleet › …"). Null for a path outside the table and for a route that is no
- *  place's page (the digest). Read by the rail's current item and the breadcrumb (W2 Task S9, D-5472), so the two
- *  never disagree about where a page sits. */
+ *  place's page (the digest). Read by the rail's current item, the phone's bottom bar and the breadcrumb (W2 Task S9,
+ *  D-5472), so they never disagree about where a page sits. A path with a malformed escape is under no place, as
+ *  `matchRoute` places it outside the table: the pane draws the placeholder, and no door says the page is there (review 1437
+ *  F2). */
 export function topRouteOf(path: string): Route | null {
   const at = matchRoute(path);
   if (at?.route.top === true) return at.route;
   if (at?.route.id === 'session') return ROUTES.find((r) => r.id === 'fleet') ?? null;
+  if (at === null && decodeParam(path) === undefined) return null;
   return ROUTES.find((r) => r.top && r.path !== null && r.path !== '/' && path.startsWith(`${r.path}/`)) ?? null;
 }

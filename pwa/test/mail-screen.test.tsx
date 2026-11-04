@@ -5,14 +5,12 @@
 //     live catch-up tail, merged and deduped — a screen that only shows one
 //     of the two either loses history across a deploy (D-3) or never shows
 //     what just happened;
-//   * `MailBadge` is the ONLY door to this screen (D-2) and, exactly like
-//     `AccountsStrip` before it, must never render nothing — the state a
-//     count of zero describes is not a state the control may vanish in.
+//   * the screen's door: `MailBadge` was its only door (D-2) until desktop-polish PL10 (D-7952), when the phone's
+//     bottom bar's Inbox door and the desk's Inbox tab and rail door became the doors (`test/phone-bar.test.tsx`).
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { NotifyEvent, RunSummary } from '../../shared/api';
 import { MailScreen } from '../src/screens/MailScreen';
-import { MailBadge } from '../src/fleet/MailBadge';
 import { SETTINGS_GLYPH } from '@ccrc/ui';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { api } from '../src/lib/api';
@@ -365,61 +363,6 @@ describe('the mail feed', () => {
     expect(unseenOf('⎋ interrupted · keycap')).toBe('false');
     expect(unseenOf('↻ Nudging after idle compaction')).toBe('true');
     expect(unseenOf('✉ finding › clear-cove')).toBe('true');
-  });
-});
-
-describe('the door', () => {
-  it('is always rendered — with a count, and without one', () => {
-    // AccountsStrip.tsx:9-15's rule, inherited: the ONLY door to a screen may
-    // never render nothing, or the screen is unreachable in exactly the state
-    // it exists to explain.
-    const { rerender } = render(<MailBadge waiting={0} />);
-    expect(screen.getByRole('button', { name: /mail — nothing waiting for you/i })).toBeInTheDocument();
-    rerender(<MailBadge waiting={3} />);
-    expect(screen.getByRole('button', { name: /mail — 3 waiting for you/i })).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument();
-  });
-
-  it('before anything is heard (`null`) is named plainly, with no count and no "nothing waiting"', () => {
-    render(<MailBadge waiting={null} />);
-    const door = screen.getByRole('button', { name: /^Mail$/ });
-    expect(door).toHaveAttribute('data-unread', 'false');
-    expect(door.querySelector('.mail-badge-count')).toBeNull();
-  });
-
-  it('at a measured zero it is not unread and draws no pill', () => {
-    render(<MailBadge waiting={0} />);
-    const door = screen.getByRole('button', { name: /^Mail — nothing waiting for you$/ });
-    expect(door).toHaveAttribute('data-unread', 'false');
-    expect(door.querySelector('.mail-badge-count')).toBeNull();
-  });
-
-  it('navigates rather than toggling anything', () => {
-    render(<MailBadge waiting={1} />);
-    fireEvent.click(screen.getByRole('button', { name: /mail/i }));
-    expect(location.pathname).toBe('/mail');
-  });
-
-  it('nests no control inside another', () => {
-    // The standing rule (commit ce313de). The bell is a separate button beside
-    // this one, never inside it.
-    render(<MailBadge waiting={1} />);
-    const btn = screen.getByRole('button', { name: /mail/i });
-    expect(btn.querySelector('button')).toBeNull();
-  });
-
-  it('caps the printed count so a three-digit number cannot blow the head open', () => {
-    render(<MailBadge waiting={412} />);
-    expect(screen.getByText('99+')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /mail — 412 waiting for you/i })).toBeInTheDocument();
-  });
-
-  it('draws Icon mail in its glyph span, stroked in the door\'s ink (D-5100)', () => {
-    render(<MailBadge waiting={0} />);
-    const glyph = document.querySelector('.mail-badge-glyph')!;
-    expect(glyph).toHaveAttribute('aria-hidden', 'true');
-    expect(glyph.textContent).toBe('');
-    expect(glyph.querySelector('svg')).toHaveAttribute('stroke', 'currentColor');
   });
 });
 

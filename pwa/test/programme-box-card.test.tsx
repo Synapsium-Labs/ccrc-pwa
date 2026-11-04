@@ -681,3 +681,77 @@ describe('the waiting chip on a programme box (PL5b)', () => {
     expect(c.textContent).not.toContain('250');
   });
 });
+
+// Desktop-polish PL10, D26 amended (D-7952; the operator's steer of 2026-11-04, "where in the UI, for each coordinator, can I
+// see that spec?"): every programme box is a door into its programme view whatever its count (its title), and links its pinned
+// spec from the waiting frame's Goals, the programme view's own source (`isGoalsFor`), with no fetch of its own.
+describe('every programme box opens its view and links its spec (PL10, D26 amended)', () => {
+  const SPEC = 'docs/superpowers/specs/2026-10-31-port-api-design.md';
+  const goals = (over: Record<string, unknown> = {}) => ({ program: 'port-api', specPath: SPEC, inShort: null, inShortAt: null, modifications: [], ...over });
+  /** The fleet, its runs naming a home project, and the list as given, heard. */
+  const heard = (list: ReturnType<typeof waitingView> | null) => {
+    const f = fleet(answeredByCoordinator());
+    const runs = f.runs.map((r) => ({ ...r, homeProject: 'project-a' }));
+    act(() => useFleetStore.setState({ waiting: list, sessions: f.sessions, runs, fleetFrameSeen: true, runsFrameSeen: true }));
+    return { sessions: f.sessions, runs };
+  };
+  const titleDoor = (c: Element): HTMLAnchorElement | null => c.querySelector<HTMLAnchorElement>('.pg-kicker a.pg-title-door');
+  afterEach(() => {
+    act(() => useFleetStore.setState({ sessions: [], runs: [], fleetFrameSeen: false, runsFrameSeen: false }));
+    history.replaceState(null, '', '/');
+  });
+
+  it('a programme box with nothing waiting opens its programme view', () => {
+    const { sessions, runs } = heard(waitingView());
+    const c = drawCard(sessions, runs, 'project-c');
+    expect(c.querySelector('.pg-waiting'), 'no chip at zero').toBeNull();
+    const door = within(c).getByRole('link', { name: 'Port the API' });
+    expect(door).toBe(titleDoor(c));
+    expect(door.getAttribute('href')).toBe('/programmes/port-api');
+    expect(door.querySelector('.pg-title')?.textContent).toBe('Port the API');
+    fireEvent.click(door);
+    expect(location.pathname).toBe('/programmes/port-api');
+    expect(c.querySelector('.pg-foot button')?.getAttribute('aria-expanded'), 'the footer toggle is untouched').toBe('false');
+  });
+
+  it('a slug the view refuses keeps its title as plain text', () => {
+    const f = fleet(answeredByCoordinator());
+    const runs = f.runs.map((r) => ({ ...r, program: 'a.b' }));
+    act(() => useFleetStore.setState({ waiting: waitingView(), sessions: f.sessions, runs, fleetFrameSeen: true, runsFrameSeen: true }));
+    const c = drawCard(f.sessions, runs, 'project-c');
+    expect(titleDoor(c)).toBeNull();
+    expect(c.querySelector('.pg-kicker .pg-title')).not.toBeNull();
+  });
+
+  it('a programme box with a pin links its spec, and none without', () => {
+    const pinned = heard(waitingView({ goals: [goals()] }));
+    const c = drawCard(pinned.sessions, pinned.runs, 'project-c');
+    const spec = within(c).getByRole('link', { name: 'Spec for Port the API' });
+    expect(spec.getAttribute('href')).toBe('/docs/project-a/specs/2026-10-31-port-api-design.md');
+    fireEvent.click(spec);
+    expect(location.pathname).toBe('/docs/project-a/specs/2026-10-31-port-api-design.md');
+    cleanup();
+    for (const list of [null, waitingView(), waitingView({ goals: [goals({ specPath: null })] }),
+      waitingView({ goals: [goals({ modifications: null })] }), waitingView({ goals: [goals({ program: 'another-programme' })] })]) {
+      const at = heard(list);
+      const box = drawCard(at.sessions, at.runs, 'project-c');
+      expect(within(box).queryByRole('link', { name: /^Spec/ }), JSON.stringify(list?.goals ?? null)).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('the waiting chip is unchanged above zero', () => {
+    const list = waitingView({ items: Array.from({ length: 3 }, (_v, i) => itemView({ id: 100 + i, program: 'port-api' })), goals: [goals()] });
+    const { sessions, runs } = heard(list);
+    const c = drawCard(sessions, runs, 'project-c');
+    const chip = within(c).getByRole('button', { name: /3 waiting on you/ });
+    expect(chip.classList.contains('pg-waiting')).toBe(true);
+    expect(chip.getAttribute('aria-label')).toBe('3 waiting on you: open Port the API');
+    expect(chip.textContent).toContain('3 waiting on you');
+    // The title door and the spec link sit beside it, and the chip stays the box's one button to the view.
+    expect(titleDoor(c)!.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(c.querySelectorAll('.pg-kicker button')).toHaveLength(1);
+    fireEvent.click(chip);
+    expect(location.pathname).toBe('/programmes/port-api');
+  });
+});

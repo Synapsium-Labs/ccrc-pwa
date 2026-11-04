@@ -340,7 +340,8 @@ describe('the rail', () => {
     mount('/');
     const routeItems = RAIL_ITEMS.filter((i) => !('reserved' in i) && !('bell' in i));
     const words = routeItems.map((i) => ROUTES.find((r) => r.id === i.id)!.title);
-    expect(words).toEqual(['Fleet', 'Waiting on you', 'Inbox', 'Runs', 'Accounts', 'Archive', 'Docs', 'Settings']);
+    // No fleet item: the sessions are in the column beside every page at a desk (desktop-polish PL10, D-7952; D25).
+    expect(words).toEqual(['Waiting on you', 'Inbox', 'Runs', 'Accounts', 'Archive', 'Docs', 'Settings']);
     expect(railDoors().map((b) => b.getAttribute('aria-label'))).toEqual(words);
     // Activity is held in the registry, reserved, and draws nothing: no control that does nothing ships.
     expect(RAIL_ITEMS.find((i) => i.id === 'activity')).toEqual({ id: 'activity', reserved: 'F4, W4' });
@@ -367,11 +368,12 @@ describe('the rail', () => {
     expect(declsOf('.ins-rail-item')).not.toMatch(/width:\s*\d+px/);
   });
 
-  it('the active rail item carries aria-current=page, and only one does; a session sits under Fleet, as its breadcrumb says', () => {
-    for (const [at, word] of [['/', 'Fleet'], ['/runs', 'Runs'], ['/settings/updates', 'Settings'], ['/docs', 'Docs'], [`/s/${S.id}`, 'Fleet']] as const) {
+  it('the active rail item carries aria-current=page, and only one does; the fleet and a session, under no rail item, mark none', () => {
+    // The fleet is the column beside every page at a desk, and no rail item (desktop-polish PL10, D-7952; D25).
+    for (const [at, word] of [['/', null], ['/runs', 'Runs'], ['/settings/updates', 'Settings'], ['/docs', 'Docs'], [`/s/${S.id}`, null]] as const) {
       mount(at);
       const current = railDoors().filter((b) => b.getAttribute('aria-current') === 'page');
-      expect(current.map((b) => b.getAttribute('aria-label')), at).toEqual([word]);
+      expect(current.map((b) => b.getAttribute('aria-label')), at).toEqual(word === null ? [] : [word]);
       cleanup();
     }
   });
@@ -379,7 +381,7 @@ describe('the rail', () => {
   it('every rail item, the command field and + carry their data-command; a rail item\'s tooltip shows on focus-visible', () => {
     mount('/');
     expect(railDoors().map((b) => b.getAttribute('data-command')))
-      .toEqual(['go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs', 'go-settings']);
+      .toEqual(['go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs', 'go-settings']);
     expect(within(topBar()).getByRole('button', { name: 'Search or run a command' })).toHaveAttribute('data-command', 'open-palette');
     expect(within(topBar()).getByRole('button', { name: 'New session' })).toHaveAttribute('data-command', 'new-session');
     // The word is in each door, for its tooltip.
@@ -669,10 +671,13 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
       expect(document.querySelector('.shell-nav .fleet-count'), `${width}px: no count line`).toBeNull();
       cleanup();
     }
-    // Below 900 nothing changed: the head holds its chrome, and the rail and the bar are not mounted.
+    // Below 900 the head holds its chrome, and the rail and the bar are not mounted; the phone's bottom bar is, and it holds the
+    // Docs, Accounts and Inbox doors, so the head keeps only Settings and the bell (desktop-polish PL10, D-7952; the ruling of
+    // 2026-11-04): one door per place.
     stubAt(899);
     mount('/');
-    expect(doorCounts(), '899px').toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 0, mail: 1, waiting: 0, bell: 1 });
+    expect(doorCounts(), '899px').toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, waiting: 0, bell: 1 });
+    expect(document.querySelectorAll('.shell-phone-nav [data-command]'), '899px: the bottom bar').toHaveLength(7);
     expect(document.querySelector('.shell-nav .fleet-head .wordmark')).not.toBeNull();
   });
 

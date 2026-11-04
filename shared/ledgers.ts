@@ -11,6 +11,7 @@
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
 import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, type MailDeliveryState, type Presence, type RunKind, type RunState } from './api.js';
+import { DOC_SECTIONS, DOC_SECTION_SLUGS } from './docs.js';
 import { utf8Bytes } from './utf8.js';
 
 /** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
@@ -417,4 +418,38 @@ export function earlierTickBlocks(i: {
 }): boolean {
   if (!OUTSTANDING_DELIVERY_STATES.includes(i.state)) return false;
   return !(i.recipient !== i.coordinator && (i.recipientPresence === 'dead' || i.recipientPresence === 'absent'));
+}
+
+// ---- Document links (desktop-polish PL10, D-7952; spec 2026-10-31 §2, D28) ----------------------------------------------
+
+/** An address in an item's text: `http` or `https` (either case), to the next space, quote or angle bracket. */
+const ADDRESS_IN_TEXT = /\bhttps?:\/\/[^\s<>"'`]+/gi;
+/** The sections a document server serves under `/docs/<project>/<section>/`: the Docs reader's four, and two more a document
+ *  server outside the console lists. A path of that shape names a document, whatever the host. */
+const DOC_SERVER_SECTION = new RegExp(`^/docs/[^/]+/(?:${[...DOC_SECTION_SLUGS, 'vision', 'promise'].join('|')})(?:/|$)`, 'i');
+
+/** Whether `address` links a document other than through the console's Docs reader: an artifact page (a path segment
+ *  `artifact`), a repository document on any host (a path through one of the Docs reader's section directories, as a code
+ *  host's file view has), or a document server's page (`/docs/<project>/<section>/…`). An address that is none of these, an
+ *  outside service's own page (a sign-in or settings page, a run's artifacts on a code host), is an ordinary link. */
+export function linksDocumentOutside(address: string): boolean {
+  let path: string;
+  try {
+    path = new URL(address).pathname;
+  } catch {
+    return false;
+  }
+  if (path.split('/').some((seg) => seg.toLowerCase() === 'artifact')) return true;
+  if (Object.values(DOC_SECTIONS).some((dir) => path.includes(`/${dir}/`))) return true;
+  return DOC_SERVER_SECTION.test(path);
+}
+
+/** The first address in `texts` that links a document outside the console (`linksDocumentOutside`), or null. The raise route
+ *  asks it of every field the operator reads (title, why, steps, options, the recommendation, the soon label) and refuses the
+ *  item `outside-doc-link`: a link to a document is its repository path, which the console opens in the Docs reader. */
+export function outsideDocLink(texts: readonly string[]): string | null {
+  for (const text of texts) {
+    for (const m of text.matchAll(ADDRESS_IN_TEXT)) if (linksDocumentOutside(m[0])) return m[0];
+  }
+  return null;
 }

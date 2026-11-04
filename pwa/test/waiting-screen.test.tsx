@@ -224,3 +224,33 @@ describe('the Waiting on you list', () => {
     expect(screen.getByText('In B')).toBeTruthy();
   });
 });
+
+// Desktop-polish PL10 (D-7952; spec §2, D26): each programme group of the combined list links its pinned spec, at the address
+// Goals builds (`programmeSpecHref`), and a programme with no pin, or no home project, has none.
+describe('the spec one tap away on the combined list', () => {
+  const SPEC = 'docs/superpowers/specs/2026-10-31-prog-a-design.md';
+  const goalsOf = (program: string, specPath: string | null) => ({ program, specPath, inShort: null, inShortAt: null, modifications: [] });
+
+  it('each programme group links the pinned spec; no spec link is drawn without a pin', () => {
+    const runs = [runRow({ id: 1, program: 'prog-a', homeProject: 'project-a' } as never), runRow({ id: 2, program: 'prog-b', homeProject: 'project-a' } as never)];
+    open({
+      runs,
+      view: waitingView({
+        items: [itemView({ id: 1, program: 'prog-a' }), itemView({ id: 2, program: 'prog-b' })],
+        goals: [goalsOf('prog-a', SPEC), goalsOf('prog-b', null)],
+      }),
+    });
+    const [a, b] = ['prog-a', 'prog-b'].map((p) => document.querySelector<HTMLElement>(`.wl-group[data-program="${p}"]`)!);
+    const link = within(a!).getByRole('link', { name: 'Spec for prog-a' });
+    expect(link.getAttribute('href')).toBe('/docs/project-a/specs/2026-10-31-prog-a-design.md');
+    expect(within(b!).queryByRole('link')).toBeNull();
+  });
+
+  it('no spec link without a home project, nor on the group of sessions in no programme', () => {
+    open({
+      runs: [runRow({ id: 1, program: 'prog-a', homeProject: null } as never)],
+      view: waitingView({ items: [itemView({ id: 1, program: 'prog-a' })], goals: [goalsOf('prog-a', SPEC)] }),
+    });
+    expect(screen.queryByRole('link', { name: /^Spec/ })).toBeNull();
+  });
+});

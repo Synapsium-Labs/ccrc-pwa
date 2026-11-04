@@ -1,27 +1,25 @@
 // Refined's app bar at laptop and wide (W2 Task S4b, D-5471; spec §5.3, Shell, laptop and wide rows), inside the
-// frame's `<header>`. Left to right on its line: the wordmark; the five tabs; the bell, search and Settings (pushed to
+// frame's `<header>`. Left to right on its line: the wordmark; the tabs, the console's desk places (`DESK_PLACES`, which has
+// no fleet place: the sessions are in the column beside every page, desktop-polish PL10, D-7952); the bell, search and Settings (pushed to
 // the line's right edge); `+ New session`. Under the line the header holds the lanes row, the full accounts strip
 // (T2c, D-6329): every lane's card, one instance, since the bar mounts only at the desk.
 //
 // EVERY CONTROL IS A DOOR (the plan's door table): each tab, search, Settings and New session is built
 // with `commandDoor(id)`, so the bar and the palette run the same command with the same context. A tab's place comes
 // from `ROUTES` (its title, and whether it is current), never from a path written here. Its badge comes from the one
-// function the fleet's own door reads (`useNavBadges`), and a badged tab says its count in its name ("Inbox, 2 waiting
-// for you"). This file holds markup and its own class names only.
+// function the fleet's own door reads (`useNavBadges`, through `placeBadge`), and a badged tab says its count in its name
+// ("Inbox, 2 waiting for you"). This file holds markup and its own class names only.
 import type { ReactNode } from 'react';
 import { Button, CountBadge, Door, Icon, Wordmark } from '@ccrc/ui';
 import { commandDoor } from '../../command/door';
 import { AccountsStrip } from '../../fleet/AccountsStrip';
-import { badgePrint, INBOX_BADGE_UNIT, RUNS_BADGE_UNIT, WAITING_BADGE_UNIT, useNavBadges } from '../../fleet/navBadges';
+import { badgePrint, placeBadge, useNavBadges } from '../../fleet/navBadges';
 import { NotificationBell } from '../../fleet/NotificationBell';
+import { DESK_PLACES } from '../../lib/places';
 import { useLocation } from '../../lib/router';
 import { matchRoute, ROUTES } from '../../lib/routes';
 
-/** The bar's places, in its order (spec §5.3): each is a `ROUTES` id. */
-export const TAB_IDS = ['fleet', 'waiting', 'inbox', 'runs', 'accounts', 'docs'] as const;
-type TabId = (typeof TAB_IDS)[number];
-
-function Tab({ id, here, count, word }: { id: TabId; here: boolean; count: number; word: string }): ReactNode {
+function Tab({ id, here, count, word }: { id: string; here: boolean; count: number; word: string }): ReactNode {
   const route = ROUTES.find((r) => r.id === id)!;
   return (
     <Door
@@ -40,17 +38,14 @@ function Tab({ id, here, count, word }: { id: TabId; here: boolean; count: numbe
 export function AppBar(): ReactNode {
   const { path } = useLocation();
   const here = matchRoute(path)?.route.id ?? null;
-  const { waiting, runsNeedYou, waitingItems } = useNavBadges();
-  const badge = (id: TabId): { count: number; word: string } =>
-    id === 'inbox' ? { count: waiting ?? 0, word: INBOX_BADGE_UNIT } : id === 'runs' ? { count: runsNeedYou ?? 0, word: RUNS_BADGE_UNIT }
-      : id === 'waiting' ? { count: waitingItems ?? 0, word: WAITING_BADGE_UNIT } : { count: 0, word: '' };
+  const badges = useNavBadges();
   return (
     <>
       <div className="ref-bar">
         <Wordmark className="ref-bar-mark" />
         <nav aria-label="Primary" className="ref-tabs">
-          {TAB_IDS.map((id) => (
-            <Tab key={id} id={id} here={here === id} {...badge(id)} />
+          {DESK_PLACES.map(({ id }) => (
+            <Tab key={id} id={id} here={here === id} {...placeBadge(id, badges)} />
           ))}
         </nav>
         <div className="ref-bar-doors">

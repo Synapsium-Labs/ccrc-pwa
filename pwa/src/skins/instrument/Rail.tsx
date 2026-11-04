@@ -1,7 +1,10 @@
 // Instrument's rail (W2 Task S9, D-5472): the 52px column of icon doors beside the list, inside the frame's
 // `<nav aria-label="Primary">`, mounted at desk widths only (`ShellFrame`).
 //
-// ONE REGISTRY, `RAIL_ITEMS`, top to bottom. A route item's word is `ROUTES`' title for its id and its door is the
+// ONE REGISTRY, `RAIL_ITEMS`, top to bottom. Its head is the console's desk places (`DESK_PLACES`, `lib/places.ts`, the one
+// list the desk bar and the phone's bottom bar read too), with Archive, a rail-only door, after Accounts; the desk's places
+// have no fleet place, since the sessions are in the column beside every page (desktop-polish PL10, D-7952; spec 2026-10-31
+// D25). A route item's word is `ROUTES`' title for its id and its door is the
 // registry's own "Go to" command (`commandDoor('go-<id>')`), so the rail, the palette and the keys run one command.
 // The word is the item's accessible name and its tooltip, which shows on hover AND on `:focus-visible`
 // (instrument.css), so a keyboard reader sees what a pointer reader sees. The item the page is on or under carries
@@ -20,6 +23,7 @@ import { CountBadge, Door, Icon, type IconName } from '@ccrc/ui';
 import { commandDoor } from '../../command/door';
 import { badgePrint, INBOX_BADGE_UNIT, WAITING_BADGE_UNIT, useNavBadges } from '../../fleet/navBadges';
 import { NotificationBell } from '../../fleet/NotificationBell';
+import { DESK_PLACES } from '../../lib/places';
 import { useLocation } from '../../lib/router';
 import { ROUTES, topRouteOf } from '../../lib/routes';
 
@@ -31,14 +35,11 @@ export type RailItem =
   /** A slot held for a later task, never rendered. */
   | { readonly id: string; readonly reserved: string };
 
+/** The rail's own door among the places: Archive, after Accounts (its place before PL10). */
+const ARCHIVE_AFTER = 'accounts';
+
 export const RAIL_ITEMS: readonly RailItem[] = [
-  { id: 'fleet', icon: 'layout-list' },
-  { id: 'waiting', icon: 'hand' },
-  { id: 'inbox', icon: 'mail' },
-  { id: 'runs', icon: 'workflow' },
-  { id: 'accounts', icon: 'key-round' },
-  { id: 'archive', icon: 'archive' },
-  { id: 'docs', icon: 'file-text' },
+  ...DESK_PLACES.flatMap((p): RailItem[] => (p.id === ARCHIVE_AFTER ? [p, { id: 'archive', icon: 'archive' }] : [p])),
   { id: 'activity', reserved: 'F4, W4' },
   { id: 'bell', bell: true, foot: true },
   { id: 'settings', icon: 'settings', foot: true },

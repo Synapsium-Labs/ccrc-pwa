@@ -2,7 +2,8 @@
 // S5a), in a real Chrome over the production build.
 //
 // What jsdom cannot hold: at 360, 390 and 438 in both palettes, with a three-digit Runs count and five lanes (and, in a case of
-// its own, the Waiting door's "99+" badge drawn too), the header is one row with nothing cut, every door is at least 44 x 44 under the phone's touch screen, the readout is one
+// its own, the Waiting door's "99+" badge drawn too), the header is one row with nothing cut (the wordmark and Settings; the
+// badged places are the bottom bar's since desktop-polish PL10, D-7952, and measured there), every door is at least 44 x 44 under the phone's touch screen, the readout is one
 // line, the strip's lane cards sit in two columns, the `+ New` clears the last card once the list is scrolled to its
 // end and sits above a 34 px home indicator (emulated through the DevTools protocol, so `env(safe-area-inset-bottom)` is
 // non-zero), a real toast (`ToastHost`'s, raised by the update line's dismiss) sits above it, and the page does not
@@ -23,7 +24,7 @@
 // A real tap on the control (`locator.tap()`, a touch screen below 900) opens the panel: the lanes the line folds away, in
 // order, each lane drawn once across the line and the panel (Task C13), hung from
 // the strip's bottom edge, drawn over the content with no push of the page, bounded by the room left under the strip and
-// scrolling inside itself when it is taller (also with a release waiting, a case run at 390x744 so that the panel of
+// scrolling inside itself when it is taller (also with a release waiting, a case run at 390x640 so that the panel of
 // thirteen scrolls: at 844 it fits Instrument's room, review 1142 measured). A tap outside the strip and the panel, Escape
 // and a second tap on the control close it; closing leaves focus on the control, on screen.
 //
@@ -135,8 +136,8 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
         await insetHomeIndicator(ctx, page);
         await page.goto(server!.origin + '/');
         await page.waitForFunction(() => document.querySelectorAll('.ref-phone-head .account-gauge').length === 5
-          && document.querySelector('.ref-phone-head [aria-label="Inbox, 1 waiting for you"]') !== null
-          && document.querySelector('.ref-phone-head [aria-label="Runs, 120 needs you"]') !== null
+          && document.querySelector('.shell-phone-nav [aria-label="Inbox, 1 waiting for you"]') !== null
+          && document.querySelector('.shell-phone-nav [aria-label="Runs, 120 needs you"]') !== null
           && document.querySelectorAll('.proj-card').length > 0 && document.querySelector('.ref-fab') !== null, undefined, { timeout: 20_000 });
         await page.waitForTimeout(200); // the FAB's ResizeObserver publishes
         const faults = await page.evaluate((inset) => {
@@ -145,10 +146,11 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
           const row = document.querySelector<HTMLElement>('.ref-phone-row')!;
           const rr = row.getBoundingClientRect();
           const parts = [row.querySelector<HTMLElement>('[data-wordmark]')!, ...row.querySelectorAll<HTMLElement>('[data-command]')];
-          if (parts.length !== 6) out.push(`the row holds ${parts.length} parts, not the wordmark and five doors`);
-          // Named, not only counted (desktop-polish PL5a, review 1374 A1): a different door in Waiting's place would pass the count.
+          // Since desktop-polish PL10 (D-7952) the row is the wordmark and Settings; the places are the bottom bar's.
+          if (parts.length !== 2) out.push(`the row holds ${parts.length} parts, not the wordmark and the Settings door`);
+          // Named, not only counted (desktop-polish PL5a, review 1374 A1): a different door in Settings' place would pass the count.
           const doors = parts.slice(1).map((d) => d.getAttribute('data-command'));
-          if (doors.join(' ') !== 'go-waiting go-inbox go-runs go-docs go-settings') out.push(`the doors are ${doors.join(' ')}`);
+          if (doors.join(' ') !== 'go-settings') out.push(`the doors are ${doors.join(' ')}`);
           const mid = (el: HTMLElement): number => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
           const line = mid(parts.at(-1)!);
           for (const p of parts) {
@@ -158,11 +160,12 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
             if (r.right > rr.right + 0.5 || r.left < rr.left - 0.5) out.push(`${name} is cut`);
             if (p.matches('[data-command]') && (r.width < 43.5 || r.height < 43.5)) out.push(`${name} is ${Math.round(r.width)} x ${Math.round(r.height)}`);
           }
-          const badges = [...row.querySelectorAll<HTMLElement>('.ref-phone-badge')];
+          // The badges are the bottom bar's (PL10): on Inbox and Runs, inside the viewport, never over a glyph's middle.
+          const badges = [...document.querySelectorAll<HTMLElement>('.shell-phone-nav .phone-bar-count')];
           if (badges.length !== 2) out.push(`${badges.length} badges, not Inbox's and Runs'`);
           for (const badge of badges) {
             const br = badge.getBoundingClientRect();
-            if (br.right > rr.right + 0.5) out.push('the badge is cut');
+            if (br.right > window.innerWidth + 0.5) out.push('the badge is cut');
             // The glyph is the door's only visible label: a "99+" may sit on its top-right corner, never its middle.
             const g = badge.closest('[data-command]')!.querySelector('svg')!.getBoundingClientRect();
             const cx = (g.left + g.right) / 2;
@@ -366,15 +369,15 @@ const WITH_LIST: AppFixture = {
   fleetFrames: [{ type: 'waiting', waiting: LIST }, ...FIXTURE.fleetFrames],
 };
 
-describe("Refined's phone header with the Waiting badge drawn keeps its one row of finger-sized doors", () => {
+describe("Refined's phone header and the bottom bar with the Waiting badge drawn keep their finger-sized doors", () => {
   for (const view of PHONES) {
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, WITH_LIST);
       try {
         await page.goto(server!.origin + '/');
-        await page.waitForFunction(() => document.querySelector('.ref-phone-head [aria-label="Waiting on you, 101 waiting on you"]') !== null
-          && document.querySelector('.ref-phone-head [aria-label="Inbox, 1 waiting for you"]') !== null
-          && document.querySelector('.ref-phone-head [aria-label="Runs, 120 needs you"]') !== null, undefined, { timeout: 20_000 });
+        await page.waitForFunction(() => document.querySelector('.shell-phone-nav [aria-label="Waiting on you, 101 waiting on you"]') !== null
+          && document.querySelector('.shell-phone-nav [aria-label="Inbox, 1 waiting for you"]') !== null
+          && document.querySelector('.shell-phone-nav [aria-label="Runs, 120 needs you"]') !== null, undefined, { timeout: 20_000 });
         const faults = await page.evaluate(() => {
           const out: string[] = [];
           if (!matchMedia('(pointer: coarse)').matches) out.push('the coarse pointer was not emulated');
@@ -382,7 +385,7 @@ describe("Refined's phone header with the Waiting badge drawn keeps its one row 
           const rr = row.getBoundingClientRect();
           const parts = [row.querySelector<HTMLElement>('[data-wordmark]')!, ...row.querySelectorAll<HTMLElement>('[data-command]')];
           const doors = parts.slice(1).map((d) => d.getAttribute('data-command'));
-          if (doors.join(' ') !== 'go-waiting go-inbox go-runs go-docs go-settings') out.push(`the doors are ${doors.join(' ')}`);
+          if (doors.join(' ') !== 'go-settings') out.push(`the doors are ${doors.join(' ')}`);
           const mid = (el: HTMLElement): number => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
           const line = mid(parts.at(-1)!);
           for (const p of parts) {
@@ -392,14 +395,19 @@ describe("Refined's phone header with the Waiting badge drawn keeps its one row 
             if (r.right > rr.right + 0.5 || r.left < rr.left - 0.5) out.push(`${name} is cut`);
             if (p.matches('[data-command]') && (r.width < 43.5 || r.height < 43.5)) out.push(`${name} is ${Math.round(r.width)} x ${Math.round(r.height)}`);
           }
-          const badges = [...row.querySelectorAll<HTMLElement>('.ref-phone-badge')];
+          // The badges are the bottom bar's since PL10 (D-7952); every bar door at the floor too.
+          for (const d of document.querySelectorAll<HTMLElement>('.shell-phone-nav [data-command]')) {
+            const r = d.getBoundingClientRect();
+            if (r.width < 43.5 || r.height < 43.5) out.push(`${d.getAttribute('aria-label')} is ${Math.round(r.width)} x ${Math.round(r.height)}`);
+          }
+          const badges = [...document.querySelectorAll<HTMLElement>('.shell-phone-nav .phone-bar-count')];
           const on = badges.map((b) => b.closest('[data-command]')!.getAttribute('data-command'));
           if (on.join(' ') !== 'go-waiting go-inbox go-runs') out.push(`the badges are on ${on.join(' ')}`);
           const waitingBadge = badges[0];
           if (waitingBadge?.textContent !== '99+') out.push(`the Waiting badge reads ${waitingBadge?.textContent ?? 'nothing'}`);
           for (const badge of badges) {
             const br = badge.getBoundingClientRect();
-            if (br.right > rr.right + 0.5) out.push('the badge is cut');
+            if (br.right > window.innerWidth + 0.5) out.push('the badge is cut');
             const g = badge.closest('[data-command]')!.querySelector('svg')!.getBoundingClientRect();
             const cx = (g.left + g.right) / 2;
             const cy = (g.top + g.bottom) / 2;
@@ -791,10 +799,11 @@ describe("the phone's panel", () => {
     it(`with a release waiting the panel stays inside the viewport, bounded by the room under the strip, and scrolls inside itself to its last card: ${named(view)}`, async () => {
       const { ctx, page, errors } = await openFolded(view, 4, false, undefined, true);
       try {
-        // A shorter phone (390x744), so that the panel scrolls: it holds the thirteen folded-away lanes (Task C13), which
+        // A shorter phone (390x640), so that the panel scrolls: it holds the thirteen folded-away lanes (Task C13), which
         // fit Instrument's room under the strip at 844 (review 1142 measured about 106 px to spare there, and about 8 px of
-        // scrolling at 744).
-        await page.setViewportSize({ width: view.width, height: 744 });
+        // scrolling at 744). Since desktop-polish PL10 (D-7952) Instrument's phone head holds no Docs, Account or Mail door,
+        // so it is shorter and the panel fit at 744 too (396 in 396, measured): 640 leaves it scrolling again.
+        await page.setViewportSize({ width: view.width, height: 640 });
         await page.waitForTimeout(300);
         const before = await page.evaluate(measurePanelBaseline);
         await openPanel(page);

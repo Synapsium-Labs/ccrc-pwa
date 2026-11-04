@@ -62,7 +62,8 @@ function atWidth(width: number): void {
   });
 }
 
-const TAB_IDS = ['fleet', 'waiting', 'inbox', 'runs', 'accounts', 'docs'] as const;
+// The desk's places: no fleet place, since the sessions are in the column beside every page (desktop-polish PL10, D-7952; D25).
+const TAB_IDS = ['waiting', 'inbox', 'runs', 'accounts', 'docs'] as const;
 const tabTitle = (id: string): string => ROUTES.find((r) => r.id === id)!.title;
 
 beforeEach(() => {
@@ -84,7 +85,7 @@ const primary = (): HTMLElement => within(bar()).getByRole('navigation', { name:
 const tabs = (): HTMLElement[] => [...primary().querySelectorAll<HTMLElement>('[data-command^="go-"]')];
 
 describe('the app bar (W2 Task S4b)', () => {
-  it('the app bar renders the wordmark, the six tabs from ROUTES, the bell, search, settings and New session, in that order', () => {
+  it('the app bar renders the wordmark, the five tabs from ROUTES (no fleet place), the bell, search, settings and New session, in that order', () => {
     atWidth(1280);
     render(<App />);
     const b = bar();
@@ -125,7 +126,8 @@ describe('the app bar (W2 Task S4b)', () => {
     atWidth(1280);
     const current = (): string[] => tabs().filter((t) => t.getAttribute('aria-current') === 'page').map((t) => t.getAttribute('data-command')!);
     render(<App />);
-    expect(current()).toEqual(['go-fleet']);
+    // The fleet is the column beside every page at a desk, and no tab (PL10, D25): on it, no tab is current.
+    expect(current()).toEqual([]);
     act(() => { navigate('/runs'); });
     expect(current()).toEqual(['go-runs']);
     act(() => { navigate('/letters'); });
@@ -286,8 +288,12 @@ describe('the app bar (W2 Task S4b)', () => {
         expect(document.querySelector('header.shell-accounts')).toBeNull();
         expect(fleet.contains(readouts[0]!)).toBe(true);
         expect(fleet.contains(slot)).toBe(true);
-        // Below 900 the column holds the chrome: Refined's phone header and its Inbox door (W2 Task S5).
-        expect(within(fleet).getByRole('button', { name: /^Inbox/ })).toHaveAttribute('data-command', 'go-inbox');
+        // Below 900 the column holds the chrome: Refined's phone header and its Settings door (W2 Task S5); the places are the
+        // bottom bar's, outside the column (desktop-polish PL10, D-7952).
+        expect(within(fleet).getByRole('button', { name: /^Settings/ })).toHaveAttribute('data-command', 'go-settings');
+        expect(within(fleet).queryByRole('button', { name: /^Inbox/ })).toBeNull();
+        expect(within(document.querySelector<HTMLElement>('nav.shell-phone-nav')!).getByRole('button', { name: /^Inbox/ }))
+          .toHaveAttribute('data-command', 'go-inbox');
       }
     });
   }

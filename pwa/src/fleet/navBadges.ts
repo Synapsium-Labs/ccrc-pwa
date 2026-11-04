@@ -74,6 +74,16 @@ export interface NavBadges {
   readonly waitingItems: number | null;
 }
 
+/** A place's badge (`lib/places.ts`): its count and the word its accessible name says after the count ("Inbox, 2 waiting
+ *  for you"). The one decision of which place counts what, read by Refined's desk bar and the phone's bottom bar (desktop-polish
+ *  PL10, D-7952); a place that counts nothing, or a count not heard yet, answers 0. */
+export function placeBadge(id: string, badges: NavBadges): { count: number; word: string } {
+  if (id === 'inbox') return { count: badges.waiting ?? 0, word: INBOX_BADGE_UNIT };
+  if (id === 'runs') return { count: badges.runsNeedYou ?? 0, word: RUNS_BADGE_UNIT };
+  if (id === 'waiting') return { count: badges.waitingItems ?? 0, word: WAITING_BADGE_UNIT };
+  return { count: 0, word: '' };
+}
+
 /** The three counts, from the shell's fleet store. */
 export function useNavBadges(): NavBadges {
   const useStore = useFleetChrome().store;

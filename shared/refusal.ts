@@ -163,6 +163,9 @@ export const LEDGER_ROUTE_REFUSALS = {
   // The secret's PUT, a programme or slot name that case-folds to a stored entry spelled differently (review 1416 F3): on a
   // case-insensitive filesystem the two are one directory or file, so it is refused before any write, on every platform.
   secretNameCollides: 'secret-name-collides',
+  // The raise route (desktop-polish PL10, D-7952; spec D28): an item whose text links a document through an artifact page or a
+  // document server outside the console (`outsideDocLink`, shared/ledgers.ts). A document link is its repository path.
+  outsideDocLink: 'outside-doc-link',
 } as const;
 export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
 
@@ -342,6 +345,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   [LEDGER_ROUTE_REFUSALS.secretNotOneLine]: 400, [LEDGER_ROUTE_REFUSALS.secretNotStored]: 404,
   [LEDGER_ROUTE_REFUSALS.slotBusy]: 503, [LEDGER_ROUTE_REFUSALS.secretsUnreadable]: 503, [LEDGER_ROUTE_REFUSALS.removeFailed]: 503,
   [LEDGER_ROUTE_REFUSALS.secretNameCollides]: 409,
+  // Desktop-polish PL10 (D-7952): CHOSEN, not measured. 400: the item's text is what the coordinator sent, theirs to fix (it
+  // writes the repository path instead), as `bad-spec-path`.
+  [LEDGER_ROUTE_REFUSALS.outsideDocLink]: 400,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
   // for a call that names more than one, or names an issue that now lives in another team; 403 for the policy point's

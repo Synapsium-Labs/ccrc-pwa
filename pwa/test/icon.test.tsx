@@ -129,10 +129,6 @@ describe('the text glyph constants', () => {
  *  in a registered file still reds. */
 const REGISTERED: Record<string, { chars: string; why: string }> = {
   'ui/src/components/tool-card.tsx': { chars: '❓', why: 'the ask sheet half' },
-  // D-5452: #402 now also edits FleetHead.tsx (the Docs door), so the Account
-  // door's swap waits for it. 📄 is NOT listed: it reds here, and is swapped
-  // for `Icon file-text` (plan Task 8, "#402's 📄").
-  'pwa/src/fleet/FleetHead.tsx': { chars: '🔑', why: '#402 holds the file (D-5452)' },
 };
 
 /** A colour emoji: emoji presentation by default (not asked back to text with

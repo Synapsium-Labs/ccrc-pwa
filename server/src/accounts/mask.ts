@@ -498,8 +498,8 @@ export class SecretMasker {
    * because the table no longer holds it and the slot file is gone, EXCEPT in the two arms that leave the rows in the table
    * (review 1418 A2): the failed SELECT below, and a delete still held when the process stops (`close` tries it once more; a
    * production stop never calls `close`). There the rows reload after a restart and go on masking the removed value (the safe
-   * side) until a save replaces the lane, UNLESS a rotation came before that restart: previous box tokens are memory-only (the
-   * class doc), so rows under one reload but match nothing, and only keep the re-key retrying (review 1426 F-E). Nothing on disk
+   * side) until a save replaces the lane, UNLESS a rotation came before that restart: previous box tokens are memory-only (this
+   * module's header, A ROTATION …; review 1440 F5), so rows under one reload but match nothing, and only keep the re-key retrying (review 1426 F-E). Nothing on disk
    * is unmasked by it: the value file is gone. The re-key never writes the lane back in this process (`ingest`'s `rekey`),
    * unless a re-save un-retires it meanwhile (review 1426 F-H). A retired row keyed with a previous token matches while that
    * token is kept, which is while its generation holds rows (`syncKeys`).

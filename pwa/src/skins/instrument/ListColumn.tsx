@@ -8,8 +8,9 @@
 // sits on the table's toggle row in project mode (`FleetTable`). The banner stack stays
 // here, because Instrument's `Banners` part is `null`; on the item route, where the frame's nav slot holds the item's list
 // in place of this column once a list has been heard, `ItemListColumn` (`ledgers/WaitingRoutes.tsx`) mounts the same stack above
-// that list. The column's other chrome is not drawn there: this column's pool-lag readout, and in Refined, whose desk column is
-// the shared `FleetColumn` too, both that readout and its count line.
+// that list. The column's other chrome is not drawn there, among other things: this column's pool-lag readout, the hot-files
+// strip and the conflict chip, and in Refined, whose desk column is the shared `FleetColumn` too, that readout, its count line
+// and its runs line with the class chooser (review 1437 F3).
 import type { ReactNode } from 'react';
 import { FleetColumn } from '../../screens/FleetColumn';
 

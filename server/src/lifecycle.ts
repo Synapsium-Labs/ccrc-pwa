@@ -182,8 +182,8 @@ export function fleetRowsUsable(
  * stamped when it STARTS, and its result replaces a kept one only over an older stamp (F3), so, while the kept walk is
  * fresh, an older listing that finishes last never overwrites a newer one; freshness is measured from that start. An
  * entry whose age reads negative (the clock stepped back past its stamp) is dropped the first time it is asked for
- * (review 1383 F2); one never asked for while the clock is behind it is served again once the clock reaches its stamp,
- * the residual of a wall clock (`fleetRowsUsable` reads the same one).
+ * (review 1383 F2); one never asked for while the clock is behind it may be served again once the clock reaches its stamp
+ * (a probe kept for any workdir meanwhile drops every probe whose age reads negative; review 1440 F6), the residual of a wall clock (`fleetRowsUsable` reads the same one).
  *
  * Kept on purpose, and said once:
  * - an entry under the root whose listing failed is left out of a kept walk as it is left out of today's one answer

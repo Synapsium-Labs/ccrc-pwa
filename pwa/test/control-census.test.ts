@@ -224,7 +224,6 @@ function controls(): Map<string, number[]> {
 const CONTROLS: Record<string, string> = {
   // ── TOKEN: the control's own rule declares the floor ─────────────────────
   'fleet/AccountKnob.tsx <button> acct-switch': 'TOKEN. The lane\'s kill switch on the Accounts card (D-7732): a 36px track inside a tap-floor box.',
-  'fleet/MailBadge.tsx <button> mail-badge': 'TOKEN. The mail door in the fleet header.',
   'fleet/NewSessionSheet.tsx <button> acct-change': 'TOKEN. The change-account line above the project list.',
   'fleet/chips.tsx <button> acct-disclosure':
     'TOKEN. "show other pools (N)" — ONE entry where there were two, because '
@@ -433,7 +432,6 @@ const CONTROLS: Record<string, string> = {
   // ── native Docs reader W5 part 1 (docs/ and the fleet header's door), which landed after this census ────────
   // Every Docs control carries `min-height: var(--tap-min)` in its own docs.css rule (docs.css's TAP FLOOR header;
   // tap-targets.test.tsx pins each rule and its rendered class); the exemption is a link in running text.
-  'fleet/FleetHead.tsx <button> docs-door': "TOKEN. The fleet header's door to /docs, a plain button whose box is docs.css's `.docs-door`, not `Door`.",
   'docs/DocsHead.tsx <button> docs-back': 'TOKEN. The Docs header\'s up-one-level chevron.',
   'docs/DocsHead.tsx <button> docs-crumbs-more': "TOKEN. The phone's leading … in the crumbs, which opens the full path.",
   'docs/DocsHead.tsx <button> docs-fresh': "TOKEN. The freshness chip at the truth line's end, which fetches from origin.",

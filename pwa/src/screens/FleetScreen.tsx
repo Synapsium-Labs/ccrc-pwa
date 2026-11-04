@@ -26,7 +26,7 @@ import { BannerStack } from '../fleet/BannerStack';
 import { AuthResumeBanner, authResumeBannerShows, useResumeInStack } from '../accounts/AuthResumeBanner';
 import { fleetSummary } from '../fleet/fleetSummary';
 import { poolLagText } from '../fleet/poolLag';
-import { runsLineLabel, waitingOnYou } from '../fleet/navBadges';
+import { runsLineLabel } from '../fleet/navBadges';
 import { ConflictChip } from '../fleet/ConflictChip';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { FleetCards } from '../fleet/FleetCards';
@@ -202,11 +202,7 @@ export function FleetScreen({
   // too. `null` runs: this head has never carried the runs part (the runs line below is their door).
   const countLine = fleetSummary(sessions, null).readout;
 
-  // The mail door's count: `waitingOnYou` (navBadges.ts), what every Inbox door counts (T2d, D-6330). Before the first
-  // fleet frame the rows are the offline snapshot's, not a fact, so the door says nothing. The feed's unread marks are
-  // the Inbox's own rows' (`raisesUnread`, D-5431).
-  const fleetFrameSeen = useStore((s) => s.fleetFrameSeen);
-  const waiting = waitingOnYou(fleetFrameSeen ? sessions : null);
+  // The head's mail door and its count went to the phone's bottom bar (its Inbox door, `placeBadge`; desktop-polish PL10).
 
   // The account-pool epoch/observed lag — a STALENESS signal, not a health
   // one (see the prop docs above). Rendered ONLY when both numbers are known
@@ -231,7 +227,6 @@ export function FleetScreen({
         <FleetHead
           countLine={headCount && sessions.length > 0 ? countLine : null}
           poolLag={poolLag}
-          waiting={waiting}
           chrome={headChrome}
         />
       )}

@@ -1816,6 +1816,65 @@ describe('a name that differs from a stored one only by case is refused (review 
     expect(readdirSync(dir)).toEqual(['API-KEY.secret']);
     expect(r.coord.itemById(id)?.state).toBe('open');
   });
+  // Review 1440 F1 (desktop-polish PL10): two programmes whose slugs differ only by case shared no chain, so a second save could
+  // make its case check in the first save's gap between the check and its directory's creation, find nothing, and pass. The
+  // chain's key folds the programme's case (`slotChainKey`), so the second save waits, and then meets the first's directory.
+  it('two saves for programmes whose slugs differ only by case, at once: one is stored, the other secret-name-collides', async () => {
+    const r = await rig();
+    await r.stepUp();
+    r.coord.openRun({ program: 'Prog-A', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' });
+    const lower = raiseSecret(r, 'api-key', 'prog-a');
+    const upper = raiseSecret(r, 'api-key', 'Prog-A');
+    // The first save's programme directory waits for a gate: its case check is done, its directory not yet made.
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const mkdir = fsp.mkdir.bind(fsp);
+    let gated = false;
+    vi.spyOn(fsp, 'mkdir').mockImplementation(async (dir, opts) => {
+      if (!gated && path.basename(String(dir)) === 'prog-a') { gated = true; await gate; }
+      return mkdir(dir, opts as never);
+    });
+    const a = save(r, lower, mark());
+    await vi.waitFor(() => { expect(gated).toBe(true); });
+    const b = save(r, upper, mark());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    open();
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(ra.statusCode, ra.body).toBe(200);
+    expect(rb.statusCode, rb.body).toBe(409);
+    expect(body(rb)['error']).toBe('secret-name-collides');
+    expect(readdirSync(secretDir(r)), 'one programme directory, never two siblings').toEqual(['prog-a']);
+    expect(r.coord.itemById(upper)?.state).toBe('open');
+  });
+
+  // Review 1440 F2 (desktop-polish PL10): a Remove that empties a programme's directory removes the directory too, so an emptied
+  // `Prog-A/` no longer blocks a save for `prog-a`, and the operator's recourse is the Remove door, not a hand-made removal.
+  it("Remove deletes a programme directory it leaves empty, and the case collision with it clears", async () => {
+    const r = await rig();
+    await r.stepUp();
+    r.coord.openRun({ program: 'Prog-A', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' });
+    const upper = raiseSecret(r, 'api-key', 'Prog-A');
+    expect((await save(r, upper, mark())).statusCode).toBe(200);
+    const lower = raiseSecret(r, 'api-key', 'prog-a');
+    expect(body(await save(r, lower, mark()))['error']).toBe('secret-name-collides');
+    const removed = await r.send({ method: 'DELETE', url: removeUrl('api-key', 'Prog-A') });
+    expect(removed.statusCode, removed.body).toBe(200);
+    expect(readdirSync(secretDir(r)), 'the emptied programme directory is gone').toEqual([]);
+    expect((await save(r, lower, mark())).statusCode).toBe(200);
+    expect(readdirSync(secretDir(r))).toEqual(['prog-a']);
+  });
+  it('CONTROL: a Remove that leaves another slot keeps the programme directory', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const one = raiseSecret(r, 'api-key');
+    const two = raiseSecret(r, 'other-key');
+    expect((await save(r, one, mark())).statusCode).toBe(200);
+    expect((await save(r, two, mark())).statusCode).toBe(200);
+    expect((await r.send({ method: 'DELETE', url: removeUrl('api-key') })).statusCode).toBe(200);
+    expect(readdirSync(secretDir(r))).toEqual(['prog-a']);
+    expect(readdirSync(path.join(secretDir(r), 'prog-a')).sort()).toEqual(['other-key.json', 'other-key.secret']);
+  });
+
   it('CONTROL: the same names spelled exactly as stored are saved', async () => {
     const r = await rig();
     await r.stepUp();

@@ -7,6 +7,7 @@ import { REFINED } from '@ccrc/ui';
 import { UpdateIndicator } from '../../fleet/UpdateIndicator';
 import { FleetColumn } from '../../screens/FleetColumn';
 import { FleetBanners } from '../../screens/FleetScreen';
+import { PhoneBar } from '../PhoneBar';
 import type { SkinSet } from '../types';
 import { AppBar } from './AppBar';
 import { InspectorRail } from './InspectorRail';
@@ -54,6 +55,7 @@ export const REFINED_SET: SkinSet = {
   // W2 Task S8 (D-5474): the shared sections in a 320 rail at >=1600, on a session route only.
   Inspector: InspectorRail,
   StatusBar: null,
-  PhoneNav: null,
+  // Desktop-polish PL10 (D-7952): the shared bottom bar of the console's places, below 900 and outside a session.
+  PhoneNav: PhoneBar,
   transcriptGrouping: 'tool-runs',
 };
