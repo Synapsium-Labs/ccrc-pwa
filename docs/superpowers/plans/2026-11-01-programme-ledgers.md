@@ -335,6 +335,7 @@ Block D-7708 to D-7716, issued 2026-11-01 by the allocator to the coordinator (`
 - **D-7715** (PL7): coordinator-skill clause 20.
 - **D-7716** (PL8): Linear sign-in beside a pasted key.
 - **D-7896** (PL9): moving between items, and a recommended option with its reasons on every Decide item. Issued 2026-11-03 by the allocator to the coordinator, for the operator's steer that day (spec D23, D24).
+- **D-7926** (PL6 follow-up): secrets bookkeeping. A secret value is one line (operator item 8), and stored secrets get a names-only read and a Remove door (operator item 9). It also carries PL6 reviews 1 and 2. Issued 2026-11-04 by the allocator to the coordinator. The task note is `2026-11-01-programme-ledgers/pl6-followup.md`, in PR #2248.
 
 A further departure found during a task is named by slug in the worker's report; the coordinator allocates for it.
 

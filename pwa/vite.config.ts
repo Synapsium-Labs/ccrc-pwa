@@ -6,6 +6,8 @@ import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import type { Plugin } from 'vite';
 import { createRequire } from 'node:module';
+import path from 'node:path';
+import { compressAssets } from './build/compressAssets.js';
 
 // The worker bundle resolves `decode-named-character-reference` (reached through
 // remark-gfm and micromark) to its plain `index.js`, never its `browser` entry,
@@ -49,6 +51,32 @@ function devWorkerSafeEntries(): Plugin {
         }],
       },
     }),
+  };
+}
+
+// Brotli and gzip copies of the scripts, stylesheets and SVGs under assets/, written beside them once the bundle is on
+// disk (build/compressAssets.ts); the server sends the copy a browser accepts (server/src/pwaStatic.ts). Build only.
+// It runs in `writeBundle`, which ends before any `closeBundle` begins, so the service worker VitePWA generates in its
+// `closeBundle` is always made with the copies on disk, and `globPatterns` below, which names no `.br` or `.gz`, is
+// what keeps them out of its precache. Pinned by test/compress-assets.test.ts and test/reader-built.test.ts.
+function precompressAssets(): Plugin {
+  let assetsDir = '';
+  let info: (message: string) => void = () => undefined;
+  return {
+    name: 'ccrc-precompress-assets',
+    apply: 'build',
+    configResolved(config) {
+      assetsDir = config.build.assetsDir;
+      info = (message) => config.logger.info(message);
+    },
+    writeBundle(output) {
+      if (output.dir === undefined) throw new Error('ccrc-precompress-assets: the build has no output directory');
+      const started = performance.now();
+      const files = compressAssets(path.join(output.dir, assetsDir));
+      const written = files.flatMap((f) => [f.br, f.gz]).filter((c) => c.kind === 'written').length;
+      info(`precompress: ${files.length} files under ${assetsDir}/, ${written} copies written, `
+        + `${Math.round(performance.now() - started)} ms`);
+    },
   };
 }
 
@@ -111,6 +139,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
     devWorkerSafeEntries(),
+    precompressAssets(),
     // Installable PWA. Updates apply themselves — main.tsx also drives periodic
     // update CHECKS, because a never-navigating SPA otherwise never asks.
     VitePWA({
@@ -188,6 +217,11 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    // pwa has no workspace root above it, so the dev server and vitest would allow pwa/ alone, and @ccrc/ui resolves
+    // through its symlink to ../ui: a `?raw` read of its stylesheets (docs/export/stylesheet.ts) is refused outside
+    // the allow list. Setting `allow` replaces the default, so '.' keeps pwa's own root. The production build is not
+    // affected.
+    fs: { allow: ['.', '../ui'] },
     // Dev proxy to a local ccrc-server (run with CCRC_HOME at a fixture tree).
     proxy: {
       '/api': { target: 'http://127.0.0.1:7788', changeOrigin: true },

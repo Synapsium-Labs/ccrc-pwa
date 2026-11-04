@@ -23,7 +23,7 @@ import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
 } from '../docs/failures';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
-import type { SecretSaveAnswer } from '../../../shared/ledgers';
+import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
 /** `GET`/`POST /api/coord/roll-idle`'s answer (D-7453). */
 export interface RollIdleView {
@@ -872,9 +872,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  only after the next read of the digest says `corrected`. */
     correctDigest: (body: DigestCorrectBody) => postJson<DigestCorrectAnswer>('/api/digest/correct', body),
     /** `PUT /api/items/:id/secret` (desktop-polish PL6): a secret item's value, sent once to its own route, which stores it
-     *  in its protected slot and ticks the item with "set, when, the last four". The value rides only in this body, and the
-     *  answer carries the slot's state, never the value. A refusal (`step-up-required`, `not-open`, `bad-slot`, …) rejects
-     *  with an `ApiError` like every non-2xx, and nothing is stored. Session-gated with a step-up when armed. */
+     *  in its protected slot and ticks the item with "set" and when, and the last four characters only for a value outgoing
+     *  text will mask. The value rides only in this body, and the answer carries the slot's state, never the value. A refusal
+     *  rejects with an `ApiError` like every non-2xx: before the write (`step-up-required`, `not-open`, `bad-slot`,
+     *  `secret-not-one-line`, `write-failed`, …) nothing is stored, and `stored-not-ticked` means the value IS stored and
+     *  the item is not ticked. Session-gated with a step-up when armed. */
     saveItemSecret: async (id: number, value: string): Promise<SecretSaveAnswer> =>
       (await request(`/api/items/${id}/secret`, {
         method: 'PUT',
@@ -895,6 +897,17 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  Session-gated when armed; a programme the box knows nothing of answers an empty view, never a refusal. */
     goals: (slug: string) =>
       getJson<{ readonly ok: true; readonly goals: GoalsView }>(`/api/programmes/${encodeURIComponent(slug)}/goals`),
+    /** `GET /api/programmes/:slug/secrets` (the PL6 follow-up, programme item 9): the programme's stored secrets by slot name,
+     *  with when each was saved and the item that asked for it, never any part of a value. `secrets-unreadable` (a store the
+     *  box could not read) rejects with an `ApiError`, never an empty list. Session-gated when armed. */
+    storedSecrets: (slug: string) => getJson<StoredSecretsAnswer>(`/api/programmes/${encodeURIComponent(slug)}/secrets`),
+    /** `DELETE /api/programmes/:slug/secrets/:slot` (programme item 9): removes one stored secret. A credential act: session-gated
+     *  with a step-up when armed. A refusal (`step-up-required`, `secret-not-stored`, `remove-failed`, …) rejects with an
+     *  `ApiError` like every non-2xx. No body is sent and none of the value comes back. */
+    removeStoredSecret: async (slug: string, slot: string): Promise<SecretRemoveAnswer> =>
+      (await request(`/api/programmes/${encodeURIComponent(slug)}/secrets/${encodeURIComponent(slot)}`, {
+        method: 'DELETE', headers: { accept: 'application/json' },
+      })).json() as Promise<SecretRemoveAnswer>,
     /** `POST /api/items/:id/dismiss` (PL4): refused `programme-live` while the programme has an open run. */
     dismissItem: (id: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/dismiss`),
     commands: (id: string) =>

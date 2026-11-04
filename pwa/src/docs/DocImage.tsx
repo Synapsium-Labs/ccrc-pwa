@@ -20,6 +20,7 @@ import {
   kib, slotSentence, type DocImageRefusal,
 } from './docsText';
 import type { FetchQueue } from './fetchQueue';
+import { ASSET_FAILED, ASSET_LOADING, type ExportAssets } from './export/exportAssets';
 import type { DocsLoaders, DocsNotOk } from './failures';
 import { rasterObjectUrl, showBytes } from './objectUrls';
 
@@ -32,6 +33,9 @@ export interface DocsAssetContextValue {
   readonly loaders: Pick<DocsLoaders, 'file' | 'raster'>;
   readonly queue: FetchQueue;
   readonly onDraftAsset: (count: number) => void;
+  /** Export's registry of the bytes this page's images hold (spec 4.3 item 6; refinement (g)); absent or `null`: nothing
+   *  is recorded. */
+  readonly exportAssets?: ExportAssets | null;
 }
 
 /** `null`, the default, has ONE meaning: `DocImage` is rendered outside a Docs page, and refuses every image. */
@@ -143,7 +147,7 @@ export type Fetched =
 /** `auth` is true for a 401 only: the one failure that signing in cures, so the one the image asks again after. */
 type Shown = { s: 'loading' } | { s: 'loaded'; src: string } | { s: 'failed'; sentence: string; auth: boolean };
 
-const SVG_DATA_PREFIX = 'data:image/svg+xml;base64,';
+export const SVG_DATA_PREFIX = 'data:image/svg+xml;base64,';
 
 function notOkFailure(a: DocsNotOk): Extract<Fetched, { s: 'failed' }> {
   return { s: 'failed', sentence: a.s === 'failed' ? failureSentence(a.body) : slotSentence(a), auth: a.s === 'auth' };
@@ -189,7 +193,7 @@ export async function fetchImage(job: LoadJob, signal: AbortSignal): Promise<Fet
 
 /** Runs `job` through its queue while its key stands. A new key (a replaced image) or an unmount aborts the load and
  *  revokes the object URL this run created; a result for an older key is never shown. `job: null` loads nothing. */
-function useImageSrc(job: LoadJob | null): Shown {
+function useImageSrc(job: LoadJob | null, exportAssets: ExportAssets | null): Shown {
   const [done, setDone] = useState<{ key: string; shown: Shown } | null>(null);
   const key = job === null ? null : job.key;
   const [attempt, setAttempt] = useState(0);
@@ -209,6 +213,9 @@ function useImageSrc(job: LoadJob | null): Shown {
     const ctl = new AbortController();
     let live = true;
     let created: string | null = null;
+    // Export's registry (refinement (g)): this image shows `key` while this effect stands, and says what its load held.
+    const held = exportAssets === null ? null : exportAssets.track(key);
+    held?.report(ASSET_LOADING);
     // `.then(ok).catch(err)`, not `.then(ok, err)`: a throw inside `ok` (`rasterObjectUrl` on a MIME outside the table)
     // is the same chip as a loader that rejects, never an unhandled rejection over an image stuck on Loading.
     job.queue.run((signal) => fetchImage(job, signal), ctl.signal).then((f) => {
@@ -216,19 +223,24 @@ function useImageSrc(job: LoadJob | null): Shown {
       if (f.s === 'raster') {
         created = rasterObjectUrl(f.bytes, f.mime);
         setDone({ key, shown: { s: 'loaded', src: created } });
+        held?.report({ s: 'loaded', asset: { kind: 'raster', bytes: f.bytes, mime: f.mime } });
       } else if (f.s === 'svg') {
         setDone({ key, shown: { s: 'loaded', src: f.src } });
+        held?.report({ s: 'loaded', asset: { kind: 'svg', src: f.src } });
       } else {
         setDone({ key, shown: f });
+        held?.report(ASSET_FAILED);
       }
     }).catch((err: unknown) => {
       if (!live) return;
       const error = err instanceof Error ? err.message : String(err);
       setDone({ key, shown: { s: 'failed', sentence: fillSentence(DOC_IMAGE_TEXT.loaderFailed, { error }), auth: false } });
+      held?.report(ASSET_FAILED);
     });
     return () => {
       live = false;
       ctl.abort();
+      held?.release();
       if (created !== null) {
         URL.revokeObjectURL(created);
         // `done` still holds the URL just revoked under this key; a render that comes back to the key (A, B, A, or the
@@ -237,7 +249,7 @@ function useImageSrc(job: LoadJob | null): Shown {
       }
     };
     // The job's other fields are fixed by its key (`docsApi.file(project, pin)` and the class its path gives).
-  }, [key, job?.loaders, job?.queue, attempt]);
+  }, [key, job?.loaders, job?.queue, attempt, exportAssets]);
   return done !== null && done.key === key ? done.shown : { s: 'loading' };
 }
 
@@ -268,7 +280,7 @@ export function DocImage(p: ComponentProps<'img'> & { node?: HastElement }): Rea
       loaders: assets.loaders, queue: assets.queue,
     }
     : null;
-  const shown = useImageSrc(job);
+  const shown = useImageSrc(job, assets?.exportAssets ?? null);
   const draftKey = pinned !== null && pinned.draft && ctx !== null ? docsApi.file(ctx.project, pinned.pin) : null;
   const onDraftAsset = assets?.onDraftAsset;
   useEffect(() => {

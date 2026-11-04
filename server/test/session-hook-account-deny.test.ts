@@ -167,6 +167,18 @@ describe('the account arm denies on every session (D-6202)', () => {
     ] as const) expect(fire(id, tool, input, extra), `${tool} ${JSON.stringify(input)}`).not.toBeNull();
   });
 
+  it.each(CALLERS)('%s: a direct delete under the store is refused, whatever verb deletes it (the PL6 follow-up: the Remove door is the operator\'s)', (_c, id, extra) => {
+    for (const command of [
+      'rm ~/.ccrc/operator-secrets/prog-a/x.secret', 'rm -f "$HOME/.ccrc/operator-secrets/prog-a/x.json"', 'rm -rf ~/.ccrc/operator-secrets',
+      'rm -r $HOME/.ccrc/operator-secrets/prog-a', 'unlink ~/.ccrc/operator-secrets/prog-a/x.secret', 'shred -u ~/.ccrc/operator-secrets/prog-a/x.secret',
+      'find ~/.ccrc/operator-secrets -name "*.secret" -delete', 'mv ~/.ccrc/operator-secrets/prog-a/x.secret /tmp/x', 'rmdir ~/.ccrc/operator-secrets/prog-a',
+      ': > ~/.ccrc/operator-secrets/prog-a/x.secret', 'truncate -s 0 ~/.ccrc/operator-secrets/prog-a/x.secret',
+      'cd /tmp && rm -f ~/.ccrc/operator-secrets/prog-a/x.secret',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).not.toBeNull();
+    expect(fire(id, 'Write', { file_path: '~/.ccrc/operator-secrets/prog-a/x.secret', content: '' }, extra)).not.toBeNull();
+    expect(fire(id, 'Edit', { file_path: `${home}/.ccrc/operator-secrets/prog-a/x.json`, old_string: 'a', new_string: '' }, extra)).not.toBeNull();
+  });
+
   it.each(CALLERS)('%s: a name that only begins like the store, and the store\'s source, stay open (plan PL6)', (_c, id, extra) => {
     for (const command of ['cat ~/.ccrc/operator-secrets-notes.md', 'grep -n writeOperatorSecret server/src/coord/ledgersSecrets.ts']) {
       expect(fire(id, 'Bash', { command }, extra), command).toBeNull();

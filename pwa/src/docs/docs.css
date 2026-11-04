@@ -319,6 +319,19 @@
 .docs-share-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
 .docs-share-field { inline-size: 100%; min-height: var(--tap-min); font: var(--weight-regular) var(--text-input) / var(--leading-mono) var(--font-mono); }
 
+/* — Export (section 4.17; native Docs reader W5, Export). The header's Export is a <button> wearing `.docs-action`, as
+   Share's is (tap-targets.test.tsx holds both halves); `.docs-export` adds the pointer and, while it waits ("Updating
+   to …", "Formatting…", "Highlighting…"), drops the underline. The export sheet sets no colour, ground or border colour
+   of its own: it inherits the Sheet panel's measured ink and ground, as the share sheet does, so design/audit.mjs owes
+   it no entry (docs-export-sheet.test.tsx holds that). Save and Retry are @ccrc/ui's Button, which carries the floor. — */
+.docs-export { cursor: pointer; }
+.docs-export:disabled { cursor: default; text-decoration: none; }
+.docs-export-sheet { display: grid; gap: var(--sp-3); min-width: 0; }
+.docs-export-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--sp-1) var(--sp-3); margin: 0; }
+.docs-export-facts > div { display: contents; }
+.docs-export-facts dt, .docs-export-facts dd { margin: 0; overflow-wrap: anywhere; font-size: var(--text-sm); }
+.docs-export-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
+
 /* — reduced motion (D-5501, D-5502): the door, the back chevron, a row, the chip and the bordered controls each
    declare a transition, so each is named here, after every rule it governs (motion-reduced.test.ts reads both
    halves). — */

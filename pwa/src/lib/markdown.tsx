@@ -85,7 +85,7 @@ export function nodeText(n: ReactNode): string {
   return '';
 }
 
-const NO_SUBSCRIPTION = (_listener: () => void): (() => void) => () => undefined;
+export const NO_SUBSCRIPTION = (_listener: () => void): (() => void) => () => undefined;
 
 /** A block's entry in `store`, read as React reads an external store; the shared `unrequested` entry with no store
  *  or no key. `peek` is also the server snapshot, so `renderToStaticMarkup` reads the store and never requests. */
@@ -175,6 +175,20 @@ export function HighlightedCode({ entry, raw }: { readonly entry: HighlightEntry
  *  provides one. */
 export const PreHighlightContext = createContext<HighlightStore | null>(null);
 
+/** What a fenced block's code element says: its language (`codeLanguage` of its class), its label (`LANG_LABEL`, own
+ *  keys only, else the language, else `text`) and its raw text with one trailing newline stripped. `CodeBlock` and
+ *  Export's static `pre` (`docs/export/exportMarkdown.tsx`) both read a block through it, so they label and key it alike. */
+export interface CodeBlockParts { readonly lang: string; readonly label: string; readonly raw: string }
+export function codeBlockParts(children: ReactNode): CodeBlockParts {
+  const codeEl = React.Children.toArray(children).find(React.isValidElement) as
+    | React.ReactElement<{ className?: string; children?: ReactNode }>
+    | undefined;
+  const lang = codeLanguage(codeEl?.props.className ?? '');
+  // Own keys only, as `grammarOf` reads its tables: a fence named `__proto__` or `constructor` is no label.
+  const label = (Object.hasOwn(LANG_LABEL, lang) ? LANG_LABEL[lang] : undefined) ?? (lang || 'text');
+  return { lang, label, raw: nodeText(children).replace(/\n$/, '') };
+}
+
 /** Fenced code: language label + copy bar over the well. The bar is a SIBLING above the scrolling <pre>, never an
  *  overlay. It makes no highlight.js call: it reads its entry in the store, plain until the worker's answer is
  *  `html` (the plain first frame, section 4.10), and its label says why a registered block is not coloured. `at`,
@@ -184,13 +198,7 @@ export const PreHighlightContext = createContext<HighlightStore | null>(null);
 export function CodeBlock({ children, at }: { children?: ReactNode; at?: object }): ReactNode {
   const store = useContext(PreHighlightContext);
   const [copied, setCopied] = useState(false);
-  const codeEl = React.Children.toArray(children).find(React.isValidElement) as
-    | React.ReactElement<{ className?: string; children?: ReactNode }>
-    | undefined;
-  const lang = codeLanguage(codeEl?.props.className ?? '');
-  // Own keys only, as `grammarOf` reads its tables: a fence named `__proto__` or `constructor` is no label.
-  const label = (Object.hasOwn(LANG_LABEL, lang) ? LANG_LABEL[lang] : undefined) ?? (lang || 'text');
-  const raw = nodeText(children).replace(/\n$/, '');
+  const { lang, label, raw } = codeBlockParts(children);
   const answer = useMemo(() => (store === null ? blockKey(lang, raw) : store.keyOf(lang, raw)), [store, lang, raw]);
   const key = answer.kind === 'key' ? answer.key : null;
   const keyEntry = useHighlightEntry(store, key);

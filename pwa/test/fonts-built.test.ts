@@ -90,3 +90,53 @@ describe('the built shell and the Geist pair (D-5095, Task 7 Step 7b)', () => {
     expect(denied('/docs')).toBe(false);
   });
 });
+
+// D-7891: index.html's pre-paint <style> names the cascade-layer order before any built sheet loads. Its FIRST name is
+// not in ui's theme.css statement (layer-order.test.ts holds the rest equal to that): it is the layer Tailwind's built
+// entry sheet opens with (`properties`, the --tw-* defaults, which must stay lowest), measured here on this build
+// rather than typed. And every layer any emitted sheet uses is one index.html names, so a layer a later Tailwind or a
+// new sheet adds can never be appended above `utilities` unseen.
+describe('the built sheets and the layer order index.html declares first (D-7891)', () => {
+  const declared = (): string[] => {
+    const html = readFileSync(path.join(PWA, 'index.html'), 'utf8').replace(/<!--[\s\S]*?-->|\/\*[\s\S]*?\*\//g, '');
+    const m = /@layer\s+([\w-]+(?:\s*,\s*[\w-]+)+)\s*;/.exec(html);
+    expect(m, 'index.html declares an @layer order').not.toBeNull();
+    return m![1]!.split(/\s*,\s*/);
+  };
+  const sheets = (): string[] => readdirSync(path.join(out, 'assets')).filter((n) => n.endsWith('.css'));
+  /** Every layer `css` opens or names, as the TOP-LEVEL layer that ranks it: a dotted `a.b` counts under `a`, and an
+   *  anonymous `@layer {` reads as `(anonymous)`, which index.html can never name, so it is always reported. */
+  const layersOf = (css: string): string[] =>
+    [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/@layer(?:\s+([\w.-]+(?:\s*,\s*[\w.-]+)*))?\s*[{;]/g)]
+      .flatMap((m) => (m[1] === undefined ? ['(anonymous)'] : m[1].split(/\s*,\s*/).map((n) => n.split('.')[0]!)));
+
+  it('reads a dotted layer as its top-level one and an anonymous layer as one index.html cannot name (planted control)', () => {
+    expect(layersOf('@layer foo.bar{a{b:c}} @layer{d{e:f}} @layer components.x{g{h:i}} @layer a, b.c;'))
+      .toEqual(['foo', '(anonymous)', 'components', 'a', 'b']);
+  });
+
+  it("the built entry sheet's first layer is index.html's first name", () => {
+    const shell = readFileSync(path.join(out, 'index.html'), 'utf8');
+    const entry = /<link rel="stylesheet"[^>]*href="\/assets\/(index-[\w-]+\.css)"/.exec(shell);
+    expect(entry, 'the built shell links its entry sheet').not.toBeNull();
+    const first = layersOf(readFileSync(path.join(out, 'assets', entry![1]!), 'utf8'))[0];
+    expect(first).toBeDefined();
+    expect(declared()[0]).toBe(first);
+  });
+
+  it("the built shell states the order before every stylesheet it links", () => {
+    const shell = readFileSync(path.join(out, 'index.html'), 'utf8').replace(/<!--[\s\S]*?-->|\/\*[\s\S]*?\*\//g, (c) => ' '.repeat(c.length));
+    const at = shell.search(/@layer\s+[\w.-]+\s*,/);
+    expect(at, 'the built shell keeps the pre-paint @layer statement').toBeGreaterThan(-1);
+    const links = [...shell.matchAll(/<link\b[^>]*\brel="stylesheet"/g)].map((m) => m.index ?? 0);
+    expect(links.length, 'the built shell links its sheets').toBeGreaterThan(0);
+    for (const i of links) expect(i).toBeGreaterThan(at);
+  });
+
+  it('every layer an emitted sheet uses is one index.html names', () => {
+    const names = new Set(declared());
+    const used = new Set(sheets().flatMap((n) => layersOf(readFileSync(path.join(out, 'assets', n), 'utf8'))));
+    expect(used.size).toBeGreaterThan(0);
+    expect([...used].filter((n) => !names.has(n))).toEqual([]);
+  });
+});

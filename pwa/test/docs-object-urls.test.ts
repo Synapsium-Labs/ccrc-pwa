@@ -11,7 +11,7 @@ import {
 } from '../../shared/docs';
 import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
 import { DOCS_SHOW_NO_BYTES } from '../src/docs/docsText';
-import { DOCS_SAVE_REVOKE_MS, downloadDocFile, rasterObjectUrl, saveBytes, showBytes } from '../src/docs/objectUrls';
+import { DOCS_SAVE_REVOKE_MS, downloadDocFile, downloadExport, rasterObjectUrl, saveBytes, showBytes } from '../src/docs/objectUrls';
 import { COMMIT_A, SERVED, failedAnswer, fileResponse } from './docsFixtures';
 
 let clicks: HTMLAnchorElement[] = [];
@@ -179,5 +179,18 @@ describe('downloadDocFile (spec 5.4; M5.17): octet-stream for every class', () =
     expect(url.startsWith(DOCS_API_PREFIX + '/')).toBe(true);
     expect(new Headers(init.headers).get(DOCS_REQUEST_HEADER)).toBe(DOCS_REQUEST_HEADER_VALUE);
     expect(await bytesOf(blobs()[0]!)).toEqual([104, 105]);
+  });
+});
+
+describe('downloadExport (spec 4.17 "Save", 5.4; M4.EX8, M5.17 as amended 2026-10-13)', () => {
+  it("saves the result's bytes under its name, as application/octet-stream, clicked inside the call", async () => {
+    const bytes = new TextEncoder().encode('<!doctype html><p>x</p>');
+    downloadExport({ name: 'demo_specs_a.md_aaaaaaaa.html', bytes });
+    // No await between the call and these lines: the click happened inside it.
+    expect(clicks).toHaveLength(1);
+    expect(clicks[0]!.download).toBe('demo_specs_a.md_aaaaaaaa.html');
+    expect(blobs()).toHaveLength(1);
+    expect(blobs()[0]!.type).toBe('application/octet-stream');
+    expect(await bytesOf(blobs()[0]!)).toEqual([...bytes]);
   });
 });

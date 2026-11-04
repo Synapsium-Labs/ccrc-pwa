@@ -9,9 +9,15 @@
    already gated on (`.pg-kicker`'s). Every width from a 360 px phone to a wide desktop holds with no horizontal scroll: the
    grids' text tracks are `minmax(0, 1fr)` and the words wrap anywhere. */
 
+/* The list's and the item's measure, one value for the list, the item and the strip above it (`.wi-nav`), so the three never
+   drift apart (follow-up A-8). Set on every root that holds one of them. */
+.wl-route,
+.wl,
+.wi { --wl-measure: 72rem; }
+
 .wl,
 .wi {
-  display: grid; gap: var(--sp-2); padding: var(--sp-2); min-width: 0; max-width: 72rem;
+  display: grid; gap: var(--sp-2); padding: var(--sp-2); min-width: 0; max-width: var(--wl-measure);
   background: var(--bg-page); color: var(--ink-primary);
 }
 .wl-route { display: grid; gap: var(--sp-1); min-width: 0; background: var(--bg-page); color: var(--ink-primary); }
@@ -151,9 +157,10 @@
 /* Moving between items (desktop-polish PL9; spec §2, D23). The strip above an item: its way back to the list it was opened
    from, and the position with Previous and Next. Every control is a design-system button (`min-h-tap`, the 44 px floor under a
    coarse pointer), visible at every width: the shell hides only the back chevron, and this is not one. */
-/* Capped at the item body's own width (`.wi`, 72rem), so on a wide screen the position and the steps end where the item does. */
+/* Capped at the item body's own measure (`--wl-measure`, `.wi`'s), so on a wide screen the position and the steps end where the
+   item does. */
 .wi-nav {
-  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; max-width: 72rem;
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; max-width: var(--wl-measure);
   padding: var(--sp-2) var(--sp-2) 0; background: var(--bg-page); color: var(--ink-primary);
 }
 /* The buttons are flex boxes, which drop a space beside the glyph: the gap is that space. */
@@ -170,6 +177,15 @@
    list's own, stacked for the column's width; the open item's row is marked current by an accent ring (a non-text edge, and
    `aria-current` says it too). */
 .wl-beside { max-width: none; }
+/* The fleet's banner stack above the list beside an item, in a skin that draws it in its left column (Instrument; follow-up
+   F1): the fleet column's own top space, side gutters and gap (`.fleet`, fleet.css: the same tokens), so a banner sits where
+   it sits on the list. The stack's slots are `display: contents`, so their banners are this box's own items. With no banner
+   to show the box is empty and takes no room. */
+.wl-banners {
+  display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0;
+  padding: calc(var(--sp-3) + var(--safe-top)) var(--sp-4) 0;
+}
+.wl-banners:empty { display: none; }
 .wl-beside .wl-item { grid-template-columns: minmax(0, 1fr); }
 .wl-beside .wl-item .wl-meta { justify-items: start; }
 .wl-beside .wl-item[aria-current='page'] { box-shadow: inset 0 0 0 2px var(--accent); }
@@ -204,6 +220,24 @@
 }
 .pv-card .pv-h { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--ink-secondary); }
 .pv-card .pv-none { margin: 0; color: var(--ink-primary); overflow-wrap: anywhere; }
+
+/* A stored secret (the operator's ruling on programme item 9; review 1416 F5): the programme screen's "Stored secrets" rows and
+   the item's Stored block. A row's name, saved-when and asking item are separate lines, the name in mono as a slot is named
+   elsewhere; its Remove sits under them, and a Remove's refusal and its "Removed." take the item card's tinted styles. */
+.pv-secrets { display: grid; gap: var(--sp-2); min-width: 0; }
+.pv-secrets .pv-secret-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.pv-secrets .pv-secret {
+  display: grid; gap: var(--sp-1); justify-items: start; min-width: 0; padding: var(--sp-2);
+  border-left: 2px solid var(--edge-strong); border-radius: var(--r-md); background: var(--bg-raised); color: var(--ink-primary);
+}
+.pv-secrets .pv-secret-name { font: var(--weight-medium) var(--fs-meta) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); background: var(--bg-raised); overflow-wrap: anywhere; }
+.pv-secrets .pv-secret-when,
+.pv-secrets .pv-secret-asker { font-size: var(--fs-meta); color: var(--ink-secondary); background: var(--bg-raised); overflow-wrap: anywhere; }
+.pv-secrets .wi-status { margin: 0; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md); background: var(--accent-tint); color: var(--status-busy-text); font-size: var(--fs-meta); overflow-wrap: anywhere; }
+.pv-secrets .wi-refusal { margin: 0; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md); background: var(--status-dead-tint-solid); color: var(--status-dead-text); font-size: var(--fs-meta); overflow-wrap: anywhere; }
+.wi-stored { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.wi-stored-remove { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; }
+.wi-stored-remove .wi-refusal { flex-basis: 100%; margin: 0; }
 
 /* Goals (`GoalsPanel`). */
 .pg-goals { display: grid; gap: var(--sp-2); min-width: 0; background: var(--bg-surface); color: var(--ink-primary); }

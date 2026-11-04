@@ -6330,7 +6330,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
   type BackupCheck = typeof BACKUP_CHECKS[number];
 
   /** A home with the given secret directories, and a stub bin holding only the named tools. */
-  const box = (o: { secrets?: Array<'.cc-secrets' | '.ccrc/auth-scratch'>; stubs?: Record<string, string>; posture?: string | 'dir'; postureLinkTo?: string } = {}): string => {
+  const box = (o: { secrets?: Array<'.cc-secrets' | '.ccrc/auth-scratch' | '.ccrc/linear' | '.ccrc/operator-secrets'>; stubs?: Record<string, string>; posture?: string | 'dir'; postureLinkTo?: string } = {}): string => {
     const home = mkTmp('ccrc-doctor-a11b-');
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     for (const d of o.secrets ?? []) mkdirSync(join(home, d), { recursive: true, mode: 0o700 });
@@ -6351,7 +6351,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
   };
   /** `tmutil isexcluded <path>` in the real tool's shape: `[Excluded]` or `[Included]`, padding, then the path. */
   const tmutil = (answer: (p: string) => string): string =>
-    `[ "$1" = isexcluded ] || exit 64\ncase "$2" in\n${['.cc-secrets', '.ccrc/auth-scratch']
+    `[ "$1" = isexcluded ] || exit 64\ncase "$2" in\n${['.cc-secrets', '.ccrc/auth-scratch', '.ccrc/linear', '.ccrc/operator-secrets']
       .map((d) => `  */${d}) printf '%s    %s\\n' '${answer(d)}' "$2" ;;`).join('\n')}\n  *) exit 65 ;;\nesac`;
   const fdesetup = (out: string): string => `[ "$1" = status ] || exit 64\nprintf '%s\\n' ${shq(out)}`;
   const lines = (s: string): string[] => s.split('\n').filter(Boolean);
@@ -6394,7 +6394,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
         stubs: { tmutil: tmutil((d) => (d === '.cc-secrets' ? '[Included]' : '[Excluded]')) } });
       const r = run(home, 'secrets-backup-excluded', 'darwin');
       expect(lines(r.stdout)).toEqual([
-        'FAIL secrets-backup-excluded: ~/.cc-secrets included in Time Machine backups, so every backup taken holds the lane secrets in them',
+        'FAIL secrets-backup-excluded: ~/.cc-secrets included in Time Machine backups, so every backup taken holds the secrets stored in them',
         '  remedy: run \'tmutil addexclusion ~/.cc-secrets\' (an account verb that writes a secret does the same); a backup already taken still holds them, and the compromise steps apply to it',
       ]);
       expect(r.code).toBe(1);
@@ -6405,7 +6405,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
       const home = box({ secrets: ['.cc-secrets', '.ccrc/auth-scratch'], stubs: { tmutil: tmutil(() => '[Included]') } });
       const r = run(home, 'secrets-backup-excluded', 'darwin');
       expect(lines(r.stdout)).toEqual([
-        'FAIL secrets-backup-excluded: ~/.cc-secrets; ~/.ccrc/auth-scratch included in Time Machine backups, so every backup taken holds the lane secrets in them',
+        'FAIL secrets-backup-excluded: ~/.cc-secrets; ~/.ccrc/auth-scratch included in Time Machine backups, so every backup taken holds the secrets stored in them',
         '  remedy: run \'tmutil addexclusion ~/.cc-secrets ~/.ccrc/auth-scratch\' (an account verb that writes a secret does the same); a backup already taken still holds them, and the compromise steps apply to it',
       ]);
       expect(r.code).toBe(1);
@@ -6429,8 +6429,20 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
       const home = box({ stubs: { tmutil: tmutil(() => '[Included]') } });
       const r = run(home, 'secrets-backup-excluded', 'darwin');
       expect(lines(r.stdout)).toEqual([
-        'SKIP secrets-backup-excluded: neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret is here to keep out of Time Machine']);
+        'SKIP secrets-backup-excluded: no secret directory (~/.cc-secrets, ~/.ccrc/auth-scratch, ~/.ccrc/linear or ~/.ccrc/operator-secrets) exists on this box, so no secret is here to keep out of Time Machine']);
       expect(r.code).toBe(3);
+    });
+
+    it('measures a server box\'s two stores, the operator\'s pasted secrets and the Linear slot store, naming each (review 1416 A-F5)', () => {
+      const both: ['.ccrc/linear', '.ccrc/operator-secrets'] = ['.ccrc/linear', '.ccrc/operator-secrets'];
+      const included = run(box({ secrets: both, stubs: { tmutil: tmutil(() => '[Included]') } }), 'secrets-backup-excluded', 'darwin');
+      expect(lines(included.stdout)[0]).toBe(
+        'FAIL secrets-backup-excluded: ~/.ccrc/linear; ~/.ccrc/operator-secrets included in Time Machine backups, so every backup taken holds the secrets stored in them');
+      expect(included.code).toBe(1);
+      const excluded = run(box({ secrets: both, stubs: { tmutil: tmutil(() => '[Excluded]') } }), 'secrets-backup-excluded', 'darwin');
+      expect(lines(excluded.stdout)).toEqual([
+        'PASS secrets-backup-excluded: ~/.ccrc/linear; ~/.ccrc/operator-secrets excluded from Time Machine (tmutil isexcluded)']);
+      expect(excluded.code).toBe(0);
     });
 
     it('WARNs not measured, never PASSes, when tmutil is not on PATH', () => {
@@ -6456,7 +6468,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
     it('SKIPs a Mac with no lane secret, even with an fdesetup that would answer Off: a fresh install stays green', () => {
       const r = run(box({ stubs: { fdesetup: fdesetup('FileVault is Off.') } }), 'filevault', 'darwin');
       expect(lines(r.stdout)).toEqual([
-        'SKIP filevault: neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret sits on its disk']);
+        'SKIP filevault: no secret directory (~/.cc-secrets, ~/.ccrc/auth-scratch, ~/.ccrc/linear or ~/.ccrc/operator-secrets) exists on this box, so no secret sits on its disk']);
       expect(r.code).toBe(3);
     });
 
@@ -6469,7 +6481,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
     it('WARNs FileVault is Off. with its remedy: the machine\'s policy, never a FAIL that fails an install', () => {
       const r = run(box({ secrets: ['.cc-secrets'], stubs: { fdesetup: fdesetup('FileVault is Off.') } }), 'filevault', 'darwin');
       expect(lines(r.stdout)).toEqual([
-        'WARN filevault: FileVault is Off, so lane secrets on this disk sit unencrypted and any copy of it holds them',
+        'WARN filevault: FileVault is Off, so the secrets stored in ~/.cc-secrets sit unencrypted and any copy of this disk holds them',
         '  remedy: turn FileVault on in System Settings, Privacy & Security, FileVault (or \'sudo fdesetup enable\')',
       ]);
       expect(r.code).toBe(2);
@@ -6477,7 +6489,10 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
 
     it('WARNs a disk that is turning off, though its first line still says On', () => {
       const r = run(box({ secrets: ['.cc-secrets'], stubs: { fdesetup: fdesetup('FileVault is On.\nDecryption in progress: Percent completed = 12') } }), 'filevault', 'darwin');
-      expect(r.stdout).toMatch(/^WARN filevault: FileVault is turning off \(fdesetup status: Decryption in progress\)/m);
+      expect(lines(r.stdout)).toEqual([
+        'WARN filevault: FileVault is turning off (fdesetup status: Decryption in progress), so the secrets stored in ~/.cc-secrets will sit unencrypted',
+        '  remedy: turn FileVault back on in System Settings, Privacy & Security, FileVault (or \'sudo fdesetup enable\')',
+      ]);
       expect(r.code).toBe(2);
     });
 
@@ -6492,11 +6507,22 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
   });
 
   describe('snapshot-posture (Linux): the operator\'s answer, stated, never guessed', () => {
-    it('SKIPs a box with no lane secret (a server-role box holds none)', () => {
+    it('SKIPs a box with no secret directory', () => {
       const r = run(box(), 'snapshot-posture', 'linux');
       expect(lines(r.stdout)).toEqual([
-        'SKIP snapshot-posture: neither ~/.cc-secrets nor ~/.ccrc/auth-scratch exists on this box, so no lane secret is here for a provider image to hold']);
+        'SKIP snapshot-posture: no secret directory (~/.cc-secrets, ~/.ccrc/auth-scratch, ~/.ccrc/linear or ~/.ccrc/operator-secrets) exists on this box, so no secret is here for a provider image to hold']);
       expect(r.code).toBe(3);
+    });
+
+    it('measures a server box that holds the operator\'s pasted secrets or the Linear slot store (review 1389 A7, the PL6 follow-up)', () => {
+      for (const dir of ['.ccrc/operator-secrets', '.ccrc/linear']) {
+        // The fixture's `secrets` type names the two lane-secret directories; it makes any directory it is given.
+        const r = run(box({ secrets: [dir] as never }), 'snapshot-posture', 'linux');
+        expect(lines(r.stdout)[0], dir).toBe(`WARN snapshot-posture: not stated: whether the provider keeps backups or snapshots of this box, which would hold ~/${dir}, is the operator's answer, and doctor does not guess it`);
+        expect(r.code, dir).toBe(2);
+      }
+      const mac = run(box({ secrets: ['.ccrc/operator-secrets'] as never, stubs: { fdesetup: fdesetup('FileVault is On.') } }), 'filevault', 'darwin');
+      expect(lines(mac.stdout)).toEqual(['PASS filevault: FileVault is On (fdesetup status)']);
     });
 
     it('WARNs "not stated" when a box holding secrets has no answer, and says how to state it', () => {
@@ -6517,7 +6543,7 @@ describe('A11b: the backups doctor checks (D-5513 backups row, G33)', () => {
     it('PASSes a stated provider image, naming it once each and that the image holds the secrets', () => {
       const r = run(box({ secrets: ['.ccrc/auth-scratch'], posture: 'volume-snapshots server-backups volume-snapshots' }), 'snapshot-posture', 'linux');
       expect(lines(r.stdout)).toEqual([
-        'PASS snapshot-posture: stated: volume-snapshots, server-backups; every such image taken while a lane secret existed holds it, and the compromise steps apply to a leaked or restored one']);
+        'PASS snapshot-posture: stated: volume-snapshots, server-backups; every such image taken while a secret was stored in ~/.ccrc/auth-scratch holds it, and the compromise steps apply to a leaked or restored one']);
       expect(r.code).toBe(0);
     });
 
