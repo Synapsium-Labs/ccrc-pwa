@@ -2545,6 +2545,92 @@ The worker built every Part C row except 18 and row 20's F10, which were ruled n
 
 D25 was amended on #2261. The phone bar keeps the fleet place first. At a desk, Refined's top bar drops its Fleet tab and Instrument's rail drops its fleet item, because the column beside every page holds the sessions. Nothing changes inside a session, at either width. PL10 now reads the one list of places from a shared owner. This also answers my question about the phone bar's places: the console's places, fleet included.
 
+**Run 1428: CI red on its own row 27, fixed in aa1267e80 (14777).** CI at 1e26d5453 went red on two import pins that row 27's new shared/utf8.ts crossed: docs-shared, which pins shared/docs.ts's imports, and markdown-purity, which pins the parse worker's closure. Neither suite was in the brief's gate set. The fix lets each pin admit shared/utf8.ts, which imports nothing, and still refuse anything else. Mutants R27f and R27g were added, and claim 3426 was taken. This is a second push after the main merge, against the brief's one. I accept it: the red was the worker's own, and it was found by CI. The push is still waiting out GitHub's 500s on a bounded retry. No reply was sent.
+
+**#2261 MERGED (2026-11-04T10:30:36Z, 096c08aed).** Spec D25 to D28, with the desk's fleet place, and Task PL10 / D-7952 are on main. Goals modifications 7 and 8 were marked merged with `goals merged` (pr 2261). The body was patched before landing to name the amendment, and the ledger worktree was removed. PL10 is dispatched once the console carry PR #2258 merges, since the two share files.
+
+**Review 1437: run 1430 ACCEPTED at b8d3e7ea5 (2026-11-04).** Review-done 14780 reports on tip b8d3e7ea5. Review run 1437 was advanced to working, then closed with `{reviewedTip, report}`, and the report was copied to `review-1437-b8d3e7ea.md`.
+- **Findings:** no blocker and no major issue. Three minors, all comments or wording, each with 3/3 refuters confirming. Twelve advisories.
+- **Evidence:** all nine re-run mutants went red as named. The five browser files alone and the whole browser suite were green, apart from the known session-header pair and one connect-sheet case that was 20/20 alone (a load flake).
+- **Disclosed:** the does-it-reproduce lens was run by the review session itself, not a fresh Opus agent. I accept the round anyway. That lens is measurement, and its suites and mutants are in the report with their outputs. The two judgment lenses were fresh Opus/high.
+- **Carried into PL10, which touches the same files:** F1 (the isProgrammeSlug doc), F2 (the malformed-escape comments, with topRouteOf agreeing), F3 (row 41's sentences), A2 (an isGoalsFor pin and test), A3 (three assertions that do not bear load) and A11 (the ledgers.css sentence).
+- The other advisories are recorded only.
+
+The worker was told to push nothing and to answer body-ok or body-patched.
+
+**Run 1430 landing.** The worker answered body-patched (14782): the deviation-refs line and a browser-local line. The live body scans clean and carries no doc-server or artifact link. Re-measured: the remote tip, b8d3e7ea5, equals the PR head; the PR is open, not a draft and mergeable; merge-tree is clean; the only non-green check is the external review-gate app. Queued with `gh pr merge 2258 --match-head-commit b8d3e7ea5`, first in the queue. Run 1430 was advanced to merging.
+
+**Run 1428 answered a stall-check (14788).** aa1267e80 is on the branch, pushed on the fourth try. GitHub has a partial pull-request outage, so `refs/pull/2260/head` still reads 1e26d5453 and no checks have started. The worker is watching until about 11:40Z. It will not close and reopen the PR or push again without my word, and that is right: a reopen can race the merge ref. No reply was needed.
+
+**Run 1428: #2260 stuck after the outage; ruled an empty commit (14790, answered).** Measured: `refs/heads/ws/polish-carry-s` is aa1267e80 while `refs/pull/2260/head` and the PR head are still 1e26d5453. Of the worker's three options I ruled (b), one empty commit carrying the Ledger-Edit trailer. A close and reopen changes PR state, which the run's binding re-measures, and the reopen can race the merge ref. The worker checks the pull head, the merge ref's parents and the checks' sha before it trusts CI.
+
+**Run 1428's wave-done verified; review 1 (1440) dispatched (2026-11-04).** Wave-done 14792 claims tip 4278b61df on #2260. Re-measured:
+- the remote tip, `refs/pull/2260/head` and the PR head all agree;
+- the PR is open, not a draft and mergeable; merge-tree against main is clean;
+- 36 files, +683/-166 against the merge base 2d43be8a5;
+- ci run 41823315482 and codeql run 41823315387 succeeded; the only red is the external review-gate app; the browser legs skipped.
+
+Every Part S row is done. 4b was already done. N3 and the hook residuals are recorded only. The worker reports 26 mutants. Run 1428 was advanced to working, then to awaiting-review. Review run 1440 was opened and dispatched (slug polish-carry-s-rev1). It has three FRESH Opus lenses (consolidation and rings; security and wording; does-it-reproduce), and the brief says each lens is a fresh agent and never the review session itself. That is review 1437's disclosed gap.
+
+**#2258 MERGED (2026-11-04T11:58:45Z, fad514ab0); PL10 dispatched as run 1441; run 1430 closed.**
+- The MERGED mail (14796) went to the console carry worker first. It releases claims 3416 and 3420.
+- Wave 87's run 1441 was opened and dispatched to `ccrc-pwa-polish-pl10` (brief `pl10-20261104/brief.txt`), on route opus/high with sonnet subagents, workflow off and compact 40.
+  - It builds D25 to D28 (with the desk's fleet place), plus review 1437's F1-F3, A2, A3 and A11.
+  - The whole browser suite and full-ci are required, because the shell frame changes.
+  - The server carry's hold on ItemView.tsx and refusalWords.ts is named: the worker mails me if those are still held at step 0.
+- Run 1430 was final-closed at prPhase merged (child reclaim queued).
+
+**PL10 step 0: claim 3417 still held (14798, answered).** Run 1428's claim 3417 holds six files PL10 needs: shared/ledgers.ts, shared/refusal.ts, ledgersRoutes.ts, ItemView.tsx, refusalWords.ts and coordinator-skill.test.ts, plus refusal-status.test.ts. Ruled: wait for #2260. Its hunks share the same functions, so leave inside its claim would invite conflicts. The worker builds every uncontested part first. After #2260's MERGED mail it merges main once, claims the six files and finishes. control-census.test.ts (claim 3402, run 1421) goes through me if a phone-bar control needs listing there.
+
+**PL10 ask 306 ruled: option index 1, "Header keeps Settings only" (2026-11-04).** On a phone's fleet page, Refined's header has five icon doors: Waiting, Inbox, Runs, Docs and Settings. The new bar repeats four of them. The spec says nothing about the header. Ruled from spec D25 and the plan's one-list-of-places interface: the bottom bar is the phone's one navigation, so the header keeps only the door the bar lacks, Settings, with no duplicates. Option 0 kept the duplicates, against the one-list rule. Option 2 would make the bar differ page by page. The choice is reversible, and it is flagged to the operator in this turn's text to overrule if wanted. The index was copied from the printed Option 1 heredoc, which is 0-based.
+
+**Review 1440: run 1428 ACCEPTED at 4278b61df (2026-11-04).** Review-done 14804 reports on tip 4278b61df. Review run 1440 was advanced to working, then closed with `{reviewedTip, report}`, and the report was copied to `review-1440-4278b61d.md`.
+- **Findings:** no blocker and no major issue. Eleven minors and advisories. One lens candidate (K1) was killed by three refutations.
+- **Evidence:** 16 re-run mutants went red as named. The suites were green, apart from secret-mask's wall-clock case under load (3/3 alone) and the testbox pair, which is red on clean main here.
+- **The behavioural item, F1:** a race between two case-variant PROGRAMMES, whose per-slot chain keys differ. Refuters called it stands-weaker, minor.
+- **Carried into PL10 (run 1441),** which edits the same files right after #2260 merges. That is faster than a fix round here, and the race needs two case-variant programmes with step-up-gated PUTs within milliseconds:
+  - F1: the chain key case-folds the programme slug.
+  - F2, ruled: the sentence says what happened, that nothing was saved, and the recourse. Remove deletes a programme directory it empties.
+  - F3: more utf8 pin spellings.
+  - F4 to F7: comments.
+  - F8, ruled: tightened to "a restart before the rotation's re-key has landed".
+- **F9:** a declared limit, recorded.
+- **F10, ruled:** a named wrapper around the platform's TextEncoder is not a second counter.
+- **F11:** the worker fixes the PR body's mutant count.
+
+The worker was told to push nothing and to answer body-ok or body-patched.
+
+**Run 1428 landing.** The worker answered body-patched (14806): the mutant count now reads 26, and the pins, the merge and the empty commit are named. The live body scans clean. Re-measured: the remote tip, 4278b61df, equals the PR head; the PR is open and mergeable; merge-tree is clean; the only non-green check is the external review-gate app. Queued with `gh pr merge 2260 --match-head-commit 4278b61df`, second in the queue. Run 1428 was advanced to merging.
+
+**#2260 MERGED (2026-11-04T12:53:59Z, 41459d385); run 1428 closed.** The MERGED mail (14818) went to the server carry worker first. It releases claims 3417, 3421, 3422 and 3426. PL10's worker was told (14819) to merge main once, take the six files that claim 3417 held, and build review 1440's carries: F1 (the chain key case-folds the programme slug), F2 (the sentence, plus Remove deleting an emptied programme directory), F3 (more pin spellings), F4 to F7 (comments) and F8 (the tightened window sentence). PL10's run 1441 is open, so the programme stays live. Run 1428 was final-closed at prPhase merged (child reclaim queued). Both carry PRs have now landed.
+
+**PL10 status (14820) and the Instrument phone head ruled (answered).** The uncontested parts are built at 5dfe79ee5, not yet pushed:
+- one place list (`pwa/src/lib/places.ts`), the desk dropping its fleet place, the phone bar and the sticky strip;
+- one spec-link builder, with `linkRuns` (`ledgerLinks.ts`);
+- review 1437's carries.
+
+28 mutants: 27 killed, plus one equivalent mutant recorded. Ruled for slug pl10-instrument-phone-head-unchanged: ask 306's rule applies to Instrument too. A phone head door whose destination is a bar place goes (Docs; Mail, since the bar has Inbox; Account if it opens Accounts). A door the bar lacks stays. Both skins' phone heads get a no-duplicate pin and a mutant.
+
+**PL10: leave asked for three held test files (14828).** Applying ruling 14821, the shared FleetHead on a phone drops its Docs (/docs), Account (/accounts) and Mail (/mail) doors, and MailBadge.tsx is deleted. Settings and the bell stay. Three held test files must change:
+- control-census.test.ts and fleet-screen.test.tsx, under claim 3402 (run 1421);
+- tap-targets.test.tsx, under claim 3428 (run 1436).
+
+Leave was asked from both runs' coordinators on the exact lines the worker named. fleet.css stays untouched, and its dead rules stay (pl10-fleet-head-dead-css). The worker waits on those three files and builds the rest.
+
+**Leaves 14832 (run 1421, claim 3402) and 14833 (run 1436, claim 3428) granted and relayed.** Both coordinators measured their own hunks as disjoint. Run 1436 noted that its docs-compact-head browser cases measure the Docs head on a phone, where PL10's bar is new chrome. Run 1421 noted run 1436's docs-more insertion near PL10's docs-door deletion in control-census. The worker was told to keep that hunk to one line and to run the docs-compact-head cases against its bar before its wave-done. Calm-canyon was told of the adjacency.
+
+**PL10 status (14837).** Everything is built at 7c501b95c, not yet pushed:
+- the outside-doc-link refusal (400, with its status, census row and PWA sentence);
+- clause 20's sentence, pinned;
+- the item band's programme and Spec links, and links in item text;
+- the phone heads per 14821;
+- review 1440's F1 to F8;
+- the leave hunks.
+
+fleet-screen.test.tsx also dropped two imports, ICONS and FEED_ACK_KEY, that only the retired cases used: the type check refuses an unused import. That goes one step past the named hunks, but it is forced by them and sits at the file head, away from run 1421's hunks, so I accept it without a further ask. Mutant round 2 and the gates are running, then the push and full-ci. No reply was needed.
+
+**Operator steer, 2026-11-04 (third): the spec from every programme box; D26 amended.** The operator asked, "where in the UI, for each coordinator in ccrc-pwa app, can I see that spec?" Measured on main: the spec is reachable only through Goals on the programme view. The only door into that view is the waiting chip on the programme's fleet box (`ProgrammeBox.tsx`, `WaitingChip`), which is not drawn at zero. So a programme with nothing waiting had no way in from the UI. D26 was amended on a ledger PR: every programme box's title opens its programme view whatever is waiting, and the box carries a Spec link when the programme has a pin. The link reads the waiting frame's Goals, with no per-box fetch. Added to PL10 before its push (14906). In parallel, at the operator's ask about slowness, three read-only Opus investigators (PWA, server reads, agent link) were started; no work is touched.
+
 ## R125: Delegation rows that read "running" are handed to the delegation broker (2026-11-01)
 
 The operator asked what a coordinator's box full of unnamed "agent · running" and "workflow · running" rows was. They are the delegation broker's activity rows: one row per helper (subagent or workflow agent) that a session started, under that session. Measured on the fleet box from that session's own Claude Code files: every one of its workflows had finished, and no helper had written for about three hours, so the rows were stale. As main reads, a row is live while its end was never matched and its parent session's incarnation is unchanged; nothing checks the helper's own activity or times a row out.
