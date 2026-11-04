@@ -698,6 +698,15 @@ export const CCD_ARGV = {
    *  the server has journalled, on its own granted prefix (`['ws-lease-mark','--lease']`, enrolled in the agent's
    *  `REQUIRED_VERB_FLAG`). Behind `LEASE_MARK_CAP`. No server code composes it yet (PR6 does). */
   leaseMark: (a: LeaseMarkArgs) => leaseMarkArgv(a),
+  /** `ws-lease-audit --lease <uuid> --generation <n> [--holders]` (delegation broker wave 5, PR2): the read-only measure of
+   *  one leased tree at the carrier generation the server expects, on its own granted prefix (`['ws-lease-audit','--lease']`,
+   *  enrolled in the agent's `REQUIRED_VERB_FLAG`); `--holders` (the only `/proc` walk) only when asked. It writes nothing.
+   *  Behind `LEASE_AUDIT_CAP`. No server code composes it yet (PR7 and PR9 do). */
+  leaseAudit: (leaseId: string, generation: number, withHolders: boolean) => {
+    if (!LEASE_UUID_RE.test(leaseId)) throw new Error('CCD_ARGV.leaseAudit: leaseId is not a lease id');
+    if (!leaseCount(generation, 9_999_999_999)) throw new Error('CCD_ARGV.leaseAudit: generation is not a positive integer');
+    return argv(['ws-lease-audit', '--lease', leaseId, '--generation', String(generation), ...(withHolders ? ['--holders'] : [])]);
+  },
   /** `ws-audit --collect-census` (fleet disk retention spec 2026-10-23 section 2.4, D-6625/D-6626): the read-only census
    *  of the entries directly under `~/.cc-tmp`, classed, names as hex. Behind `COLLECT_LOOSE_CAP`. Granted by
    *  `['ws-audit','--collect-census']`; it destroys nothing. */
@@ -1235,6 +1244,11 @@ export const SHED_DEPS_CAP = 'shed-deps-v1';
  *  `ws-lease-mark --lease <id> ...`, in `ccd/lib/delegation-lease.sh`. Spelled ONCE in `server/src`; ccd's
  *  `echo lease-mark-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence. */
 export const LEASE_MARK_CAP = 'lease-mark-v1';
+/** The `ccd caps` token that says this box's ccd has the lease audit (delegation broker wave 5, PR2): `ws-lease-audit
+ *  --lease <id> --generation <n> [--holders]`, in `ccd/lib/delegation-lease.sh`. Spelled ONCE in `server/src`; ccd's
+ *  `echo lease-audit-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence: a box without
+ *  it makes every tree count as changed, and promotion refuses. */
+export const LEASE_AUDIT_CAP = 'lease-audit-v1';
 /** The `ccd caps` token that says this box's ccd has the collector's LOOSE arm (fleet disk retention spec 2026-10-23
  *  section 2.4, D-6625): `ws-audit --collect-census`, `ws-audit --loose-hex <hex> --collect` and
  *  `ws-collect --expect <token> --loose-hex <hex>` — one ccd inode. Distinct from `COLLECT_CAP`: a box with
@@ -1406,6 +1420,8 @@ export const CCD_CAN = {
   wsShedDeps: capRow(SHED_DEPS_CAP),
   // The lease carrier's writer is new (delegation broker wave 5): an older ccd has none of it.
   leaseMark: capRow(LEASE_MARK_CAP),
+  // So is its read-only audit (PR2).
+  leaseAudit: capRow(LEASE_AUDIT_CAP),
   // The loose arm's three rows all refuse on no evidence: the audit and the census are new flags an older ccd rejects.
   wsCollectCensus: capRow(COLLECT_LOOSE_CAP), wsCollectLooseAudit: capRow(COLLECT_LOOSE_CAP), wsCollectLoose: capRow(COLLECT_LOOSE_CAP),
   wsAttic: verbRow('ws-attic'),
