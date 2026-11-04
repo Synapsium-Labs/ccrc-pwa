@@ -37,7 +37,9 @@ import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
 // own chunk, fetched the first time its route opens, so the fleet list starts without them. The fleet, the shell, Mail,
 // Archive, Docs, the programme and the Waiting routes stay in the entry. `SettingsDataProvider` stays eager: it wraps
 // the whole shell on every route (D-5504), so a lazy provider would hold the frame at start-up and defer nothing.
-// `lazyScreen` (not React's `lazy`) so a chunk that failed to load is asked for again on the next navigation.
+// `lazyScreen` (not React's `lazy`): a chunk that failed to load is asked for once more on the next navigation, which
+// recovers only where the engine fetches a failed module again (Chromium does not: it rejects with no request), so
+// the fallback's Reload is the recovery there (review 1473 F1).
 const AccountsScreen = lazyScreen(() => import('./screens/AccountsScreen').then((m) => m.AccountsScreen));
 const DigestScreen = lazyScreen(() => import('./screens/DigestScreen').then((m) => m.DigestScreen));
 const HighlightMeasure = lazyScreen(() => import('./screens/HighlightMeasure').then((m) => m.HighlightMeasure));
@@ -68,7 +70,8 @@ function ArchiveRoute(): ReactNode {
 export function App(): ReactNode {
   const { path, search } = useLocation();
   // The session screen is the one most often opened next: its chunk loads once the page is idle after the first
-  // paint, so the first open does not wait for it (review 1464 F4). The entry's imports are unchanged.
+  // paint, and once loaded the first open draws it in the first commit, with no loading line (reviews 1464 F4 and 1473
+  // F3). The entry's imports are unchanged.
   useEffect(() => preloadWhenIdle(SessionScreen), []);
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect once at the shell so

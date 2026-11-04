@@ -122,7 +122,9 @@ describe('a lazy route', { timeout: 30_000 }, () => {
     expect(screen.getByRole('button', { name: 'Reload' }), 'a chunk that failed to load offers Reload').toBeInTheDocument();
   });
 
-  it('a chunk that failed is asked again on the next navigation, which draws the screen without a reload', async () => {
+  // The stand-in's loader is asked again; a real engine may answer from its failed-module memory instead (Chromium
+  // does), and then Reload is the recovery (review 1473 F1).
+  it('a chunk that failed is asked for once more on the next navigation, where the engine fetches it again', { timeout: 30_000 }, async () => {
     digestLink.offline = true;
     digestLink.loads = 0;
     const { App } = await import('../src/app');
