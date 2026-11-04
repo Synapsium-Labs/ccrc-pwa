@@ -6,9 +6,10 @@
 //   - a bash file with no pin (a new file) must have 0 findings; each intended exception carries a
 //     `# shellcheck disable=SCxxxx  # reason` directive (the reason after a second `#`: ` -- reason` is not shellcheck
 //     syntax, and it stops the parse);
-//   - a file shellcheck could not parse FAILS whatever its count. A parse failure reports one or two findings and
-//     checks nothing after them, so without this rule breaking a file would read as lowering its count. That is how
-//     `ccd/ccrc-doctor-checks` went unlinted: five malformed directives, 2 findings, the rest of the file unread.
+//   - a file shellcheck could not parse FAILS whatever its count (PARSE_STOPPED lists every code that means it stopped).
+//     A parse failure reports a few findings at most and checks nothing after them, so without this rule breaking a
+//     file would read as lowering its count. That is how `ccd/ccrc-doctor-checks` went unlinted: five malformed
+//     directives, 2 findings, the rest of the file unread.
 //
 // The counts are only as good as the tool that made them, so the baseline pins the version: another version here is a
 // printed skip, and in CI a failure, so a skip can never read as a pass there. server-deps installs that version on
@@ -18,7 +19,8 @@
 // The whole pass is slow, so it is no guard suite (fast-plan.mjs HEAVY_TREE_READERS): the queue and the full suite run
 // it, and a fast pull request runs it only when the map selects it for a file it reads.
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, chmodSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { chmodSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,8 +36,13 @@ const SHELLCHECK_ARGS = ['--norc', '--shell=bash', '-S', 'warning', '-f', 'gcc']
 /** Two at once. Peak RSS is 6.2 GB for ccd/ccd and 4.1 GB for ccd/ccrc, on a 16 GB runner shared with the shard's
  *  vitest workers; the whole pass takes about 30 s locally and 66 s on a runner at two lanes. */
 const LANES = 2;
-/** What shellcheck reports when it gave up on a file: everything after that point was not checked. */
-const PARSE_STOPPED = new Set(['SC1072', 'SC1073']);
+/**
+ * What shellcheck reports when it gave up on a file: everything after that point was not checked. Its parser has two
+ * ways out. A construct it could not finish gives SC1072, with SC1073 for that construct. Input left over at the top
+ * level gives one of the rest, alone: SC1089 for a stray keyword or closer (`fi`, `done`, `}`, `)`), SC1088 for invalid
+ * parentheses, SC1070 for a stray operator (`&&`, `|`, `;`).
+ */
+const PARSE_STOPPED = new Set(['SC1070', 'SC1072', 'SC1073', 'SC1088', 'SC1089']);
 
 type Finding = { file: string; line: number; code: string; text: string };
 type Pin = { count: number; codes: Record<string, number> };
@@ -210,6 +217,15 @@ describe('the ratchet rules', () => {
     expect(lowered).toEqual([]);
   });
 
+  // These three come alone, with no SC1072 or SC1073 beside them, and a single finding is well under most pins.
+  it.each(['SC1070', 'SC1088', 'SC1089'])('%s is a parse stop too: it fails, and is not offered as a lower pin', (code) => {
+    const { failures, lowered } = judge({ 'a.sh': pinOf({ SC2034: 40 }) }, ['a.sh'], [finding('a.sh', 8, code)]);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('stopped parsing');
+    expect(failures[0]).toContain(cite('a.sh', 8, code));
+    expect(lowered).toEqual([]);
+  });
+
   it('a pinned file that is gone passes and says to delete its entry', () => {
     const { failures, lowered } = judge({ 'gone.sh': pinOf({ SC2034: 1 }) }, [], []);
     expect(failures).toEqual([]);
@@ -243,25 +259,61 @@ describe('the baseline and its install', () => {
     }
   });
 
-  it('the install refuses a tarball whose sha256 is not the pinned one, and puts nothing on PATH', () => {
+  /**
+   * The real install script in a scratch tree, over a stand-in for the download: a real `.tar.xz` laid out like the
+   * release, so curl and tar both succeed and the sum alone decides. `pinnedSum` makes the scratch baseline's sum from
+   * the stand-in's true one.
+   */
+  function installStandIn(pinnedSum: (actual: string) => string): { status: number | null; output: string; onPath: string } {
     const dir = mkdtempSync(path.join(tmpdir(), 'shellcheck-install-'));
     try {
+      const version = baseline.shellcheckVersion;
+      const member = path.join(dir, 'release', `shellcheck-v${version}`);
+      mkdirSync(member, { recursive: true });
+      writeFileSync(path.join(member, 'shellcheck'), '#!/usr/bin/env bash\n');
+      const tarball = path.join(dir, 'stand-in.tar.xz');
+      execFileSync('tar', ['-cJf', tarball, '-C', path.join(dir, 'release'), `shellcheck-v${version}`]);
+      const actual = createHash('sha256').update(readFileSync(tarball)).digest('hex');
+
       const bin = path.join(dir, 'bin');
       mkdirSync(bin);
-      // Writes something other than the release to curl's `-o` target.
-      writeFileSync(path.join(bin, 'curl'), '#!/usr/bin/env bash\nwhile [ "$#" -gt 0 ]; do [ "$1" = -o ] && printf tampered > "$2"; shift; done\n');
+      // Copies the stand-in to curl's `-o` target.
+      writeFileSync(path.join(bin, 'curl'), `#!/usr/bin/env bash\nwhile [ "$#" -gt 0 ]; do [ "$1" = -o ] && cp '${tarball}' "$2"; shift; done\n`);
       chmodSync(path.join(bin, 'curl'), 0o755);
+
+      const script = path.join(dir, 'tree/.github/ci/shellcheck-install.sh');
+      const pins = path.join(dir, 'tree/server/test/shellcheck-baseline.json');
+      mkdirSync(path.dirname(script), { recursive: true });
+      mkdirSync(path.dirname(pins), { recursive: true });
+      copyFileSync(path.join(REPO, '.github/ci/shellcheck-install.sh'), script);
+      chmodSync(script, 0o755);
+      writeFileSync(pins, JSON.stringify({ ...baseline, shellcheckSha256: pinnedSum(actual) }));
+
       const pathFile = path.join(dir, 'github-path');
       writeFileSync(pathFile, '');
-      const r = spawnSync(path.join(REPO, '.github/ci/shellcheck-install.sh'), [], {
+      const r = spawnSync(script, [], {
         encoding: 'utf8',
         env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}`, RUNNER_TEMP: dir, GITHUB_PATH: pathFile },
       });
-      expect(r.status).not.toBe(0);
-      expect(readFileSync(pathFile, 'utf8')).toBe('');
+      return { status: r.status, output: `${r.stdout}${r.stderr}`, onPath: readFileSync(pathFile, 'utf8') };
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+
+  it('the install takes a tarball whose sha256 is the pinned one and puts it on PATH', () => {
+    const { status, output, onPath } = installStandIn((actual) => actual);
+    expect(output).not.toContain('FAILED');
+    expect(status).toBe(0);
+    expect(onPath).toContain('ccrc-shellcheck');
+  });
+
+  // The same tarball as the case above, so the sum is all that differs: without the check it would install.
+  it('the install refuses a tarball whose sha256 is not the pinned one, and puts nothing on PATH', () => {
+    const { status, output, onPath } = installStandIn((actual) => (actual.startsWith('0') ? '1' : '0') + actual.slice(1));
+    expect(status).not.toBe(0);
+    expect(output).toContain('FAILED');
+    expect(onPath).toBe('');
   });
 });
 
@@ -285,14 +337,13 @@ describe('the tree', () => {
     expect(failures.join('\n\n')).toBe('');
   });
 
-  /** A scratch copy of a pinned file with `lines` appended, judged by the real shellcheck against the real pin. */
-  async function judgeCopy(lines: string): Promise<ReturnType<typeof judge>> {
+  /** A scratch copy of a pinned file after `edit`, judged by the real shellcheck against the real pin. */
+  async function judgeCopy(edit: (text: string) => string): Promise<ReturnType<typeof judge>> {
     const file = 'ccd/ccrc-token-sync';
     const dir = mkdtempSync(path.join(tmpdir(), 'shellcheck-ratchet-'));
     try {
       mkdirSync(path.join(dir, 'ccd'));
-      copyFileSync(path.join(REPO, file), path.join(dir, file));
-      appendFileSync(path.join(dir, file), lines);
+      writeFileSync(path.join(dir, file), edit(readFileSync(path.join(REPO, file), 'utf8')));
       return judge({ [file]: baseline.files[file] }, [file], await analyse([file], dir));
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -300,7 +351,7 @@ describe('the tree', () => {
   }
 
   it.skipIf(!live)('red: one more warning in a scratch copy of a pinned file fails and names it', { timeout: 60_000 }, async () => {
-    const { failures } = await judgeCopy('\nnever_read_again=1\n');
+    const { failures } = await judgeCopy((text) => `${text}\nnever_read_again=1\n`);
     expect(failures).toHaveLength(1);
     expect(failures[0]).toMatch(/ccd\/ccrc-token-sync:\d+:SC2034/);
   });
@@ -308,9 +359,25 @@ describe('the tree', () => {
   // The two findings a parse failure reports are under this pin, so a count alone would pass it as an improvement.
   it.skipIf(!live)('red: a malformed directive in a scratch copy fails as unparsed, though its count fell', { timeout: 60_000 }, async () => {
     expect(baseline.files['ccd/ccrc-token-sync'].count).toBeGreaterThan(2);
-    const { failures, lowered } = await judgeCopy('\n# shellcheck disable=SC2086 -- not the syntax\necho "$1"\n');
+    const { failures, lowered } = await judgeCopy((text) => `${text}\n# shellcheck disable=SC2086 -- not the syntax\necho "$1"\n`);
     expect(failures).toHaveLength(1);
     expect(failures[0]).toContain('stopped parsing');
+    expect(lowered).toEqual([]);
+  });
+
+  // Each of shellcheck's ways out of a file before its end, against the real tool, on line 2: what it reports there is
+  // under the pin, so a code missing from PARSE_STOPPED reads as a file that improved. Together with SC1072 and SC1073
+  // above, this pins the list to what this version actually does.
+  it.skipIf(!live).each([
+    ['a stray keyword', 'fi', 'SC1089'],
+    ['a stray closing brace', '}', 'SC1089'],
+    ['invalid parentheses', '=(', 'SC1088'],
+    ['a stray operator', '&&', 'SC1070'],
+  ])('red: %s at the top of a scratch copy fails as unparsed, though its count fell', { timeout: 60_000 }, async (_what, stray, code) => {
+    const { failures, lowered } = await judgeCopy((text) => text.replace('\n', `\n${stray}\n`));
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('stopped parsing');
+    expect(failures[0]).toContain(cite('ccd/ccrc-token-sync', 2, code));
     expect(lowered).toEqual([]);
   });
 });

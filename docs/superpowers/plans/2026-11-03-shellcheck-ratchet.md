@@ -12,9 +12,12 @@ coordinator folds it into the ledger.
 
 ## Departures from the triage
 
-- **A parse stop fails whatever the count.** The triage's rules had a hole: a file shellcheck cannot parse reports one
-  or two findings and checks nothing after them, so breaking a file would read as lowering its count. SC1072 or SC1073
-  on any file is now a failure, and that file is never offered as a lower pin.
+- **A parse stop fails whatever the count.** The triage's rules had a hole: a file shellcheck cannot parse reports a
+  few findings at most and checks nothing after them, so breaking a file would read as lowering its count. Any parse
+  stop is now a failure, and that file is never offered as a lower pin. shellcheck 0.11.0's parser has two ways out,
+  read from its source: a construct it could not finish gives SC1072 and SC1073, and input left over at the top level
+  gives SC1089, SC1088 or SC1070, alone. A stray `fi` at line 3 of a 178-finding file reports just one SC1089. The
+  baseline holds none of the five, and a red case runs each of the last three against the real tool.
 - **Five directives, not three.** `ccd/ccrc-doctor-checks` had five ` -- reason` directives by the time this was built.
   All five are fixed, comment text only, and the file now parses: 113 findings, where it reported 2 before.
 - **The red-first demonstration uses SC2034, not SC2086.** SC2086 is info level, so `-S warning` never counts it (0
