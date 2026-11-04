@@ -25,6 +25,7 @@ export const SPAWN_GROUP_ALLOWLIST: readonly AllowedTimedSpawn[] = [
   { file: 'ccd-project-pool.test.ts', command: "'bash'", count: 1 },
   { file: 'ccd-scratch-rescue-reach.test.ts', command: 'file', count: 1 },
   { file: 'ccd-ws-collect-reach.test.ts', command: 'file', count: 1 },
+  { file: 'ccd-ws-lease-mark-reach.test.ts', command: 'file', count: 1 },
   { file: 'ccd-ws-shed-deps-reach.test.ts', command: 'file', count: 1 },
   { file: 'ccdDocsHelpers.ts', command: "'bash'", count: 2 },
   { file: 'ccdLandProbeFixture.ts', command: "'bash'", count: 2 },
