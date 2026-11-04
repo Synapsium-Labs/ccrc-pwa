@@ -174,8 +174,15 @@ describe('parseBoxSettings: the corpus, each file with its verdict', () => {
     expect(doc).not.toBeNull();
     const row = doc!.settings.find((r) => r.key === 'CCRC_BACKUP_KEEP')!;
     expect(row.state).toBe('unmeasured');
-    expect('why' in row && row.why.length, 'the sentence is cut at 240 bytes, ending in three dots').toBe(240);
-    expect('why' in row && row.why.endsWith('...')).toBe(true);
+    const why = 'why' in row ? row.why : '';
+    expect(why.length, 'the sentence is bounded by the writer\'s cut of 240 bytes').toBeLessThanOrEqual(240);
+    expect(why.length, 'the sentence is the reader\'s own, not a stand-in').toBeGreaterThan(150);
+    // On Linux this scenario's sentence is longer than the cut, so the cut shows; on macOS `_ccrc_knob` reads ccrc.env by
+    // its launchd rule (see the corpus row above) and prints a shorter sentence that fits whole.
+    if (process.platform !== 'darwin') {
+      expect(why.length, 'the sentence is cut at 240 bytes, ending in three dots').toBe(240);
+      expect(why.endsWith('...')).toBe(true);
+    }
     expect(doc!.v).toBe(2);
     expect(doc!.settings.map((r) => r.key)).toEqual([...BOX_SETTINGS_SHOWN]);
   });
