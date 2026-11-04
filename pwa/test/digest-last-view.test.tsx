@@ -51,6 +51,7 @@ describe('the digest keeps its last view (console speed C2)', () => {
 
   it('a different day draws nothing cached', async () => {
     await firstVisit(DAY, digest(DAY, 'Which colour?'));
+    expect(peek(digestKey('2026-10-19'))).toBeUndefined();   // kept under its own day only
     render(<DigestScreen day="2026-10-19" load={never} />);
     expect(rowTexts()).toEqual([]);
     expect(screen.getByText('Loading…')).toBeInTheDocument();
@@ -82,9 +83,11 @@ describe('the digest keeps its last view (console speed C2)', () => {
   });
 
   it('a kept answer the reader refuses draws Loading', () => {
-    put(digestKey(DAY), { v: 2, junk: true }, 1);
+    // a whole answer for this day, but of a version this build cannot read: drawn only through the guard, it is refused
+    put(digestKey(DAY), { ...digest(DAY, 'From a newer server'), v: 2 }, 1);
     render(<DigestScreen day={DAY} load={never} />);
     expect(screen.getByText('Loading…')).toBeInTheDocument();
+    expect(rowTexts()).toEqual([]);
   });
 
   it('a correction forgets the kept day, so the next visit never draws the line before it', async () => {
