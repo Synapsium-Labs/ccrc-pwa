@@ -2,11 +2,14 @@
 // reader lab design, section 3.2; the rich-docs spec's row M10.13). Ring L1: pure. Each line answers one of its three
 // words and a short detail, from the door's counts for the run and what the page itself observed. "Not measured" never
 // folds into "holds": a check holds only once its own positive signal is there (a frame's report, the control and its
-// floor, the canary, the tap, a mount that reached ready), and a wall's broken signals are read first, so a forged arrival
-// cannot hide a real "broke" or a real arrival at a wall's target. (A forged POSITIVE signal can still turn "not measured"
-// into "holds" for a frame that never ran: that defence is the nonce's secrecy, the design's section 4.6, not these
-// rules.) An unread or saturated run makes every line that reads counts "not measured". `busy-frame` is a fact that gates
-// nothing; `self-nav-teardown` names an engine that differs from desktop Chromium without calling a wall broken.
+// floor, the canary, the tap, a mount that reached ready), and a wall's broken signals are read
+// first, so a forged arrival cannot hide a real "broke" or a real arrival at a wall's target. (A forged POSITIVE signal can
+// still turn "not measured" into "holds" for a frame that never ran: that defence is the nonce's secrecy, the design's
+// section 4.6, not these rules.) A saturated run (the door stopped counting) keeps a counted "does not hold", which is
+// already in the counts it took, and answers every other count line "not measured"; an unread run answers every count line
+// "not measured"; so neither ever reads "holds". `bridge-strays`' broken arm is local (the reader's own callbacks), so it is
+// read before the door's state. `busy-frame` is a fact that gates nothing; `self-nav-teardown` names an engine that differs
+// from desktop Chromium without calling a wall broken.
 import { LAB_BATTERY_CHANNELS, type LabBatteryChannel, type LabProbeName, type LabRunView } from '../../../shared/readerLab';
 import type { LabCheckId, LabOutcome } from './checks';
 import { LAB_STRAYS_POSTED } from './frameScripts';
@@ -147,11 +150,17 @@ function selfNavTeardown(r: LabRunView, local: LabLocal): LabOutcome {
   return local.selfNavLoads >= 2 ? holds('second load fired') : { verdict: 'differs', detail: 'no second load' };
 }
 
+/** The stray messages' broken signal, observed by the page itself and so independent of the door: `undefined` when none. */
+function straysBroke(local: LabLocal): LabOutcome | undefined {
+  const h = local.hostile;
+  return h !== null && (h.effects > 0 || h.addressChanged)
+    ? broken(`${h.effects} effects${h.addressChanged ? '; the address changed' : ''}`) : undefined;
+}
+
 function strays(r: LabRunView, local: LabLocal): LabOutcome {
   const h = local.hostile;
-  if (h !== null && (h.effects > 0 || h.addressChanged)) {
-    return broken(`${h.effects} effects${h.addressChanged ? '; the address changed' : ''}`);
-  }
+  const bad = straysBroke(local);
+  if (bad !== undefined) return bad;
   if (h === null || !h.ready) return unmeasured('the reader did not become ready');
   if (hits(r, 'strays-sent') === 0) return unmeasured('the stray frame did not run');
   return holds(`${LAB_STRAYS_POSTED} sent, 0 effects`);
@@ -209,8 +218,10 @@ export function drawOnOpenReading(o: Readonly<Record<LabCheckId, LabOutcome>>, l
 export function labVerdicts(run: LabRunView | null, local: LabLocal, budgetMs: number): Record<LabCheckId, LabOutcome> {
   const fromCounts = (f: (r: LabRunView) => LabOutcome): LabOutcome => {
     if (run === null) return unmeasured('the door could not be read');
-    if (run.saturated) return unmeasured('the door counted more than a lab run sends');
-    return f(run);
+    const o = f(run);
+    // A saturated run: the door stopped counting, which does not falsify the counts it had taken, so a counted "does not
+    // hold" stands; anything else cannot be trusted to be complete and is not measured.
+    return run.saturated && o.verdict !== 'does-not-hold' ? unmeasured('the door counted more than a lab run sends') : o;
   };
   return {
     'opaque-origin': fromCounts((r) => opaqueOrigin(r)),
@@ -219,7 +230,7 @@ export function labVerdicts(run: LabRunView | null, local: LabLocal, budgetMs: n
     'csp-27': fromCounts((r) => csp27(r, local)),
     'no-popup-top-nav': fromCounts((r) => popups(r)),
     'no-self-navigate': fromCounts((r) => selfNavigate(r)),
-    'bridge-strays': fromCounts((r) => strays(r, local)),
+    'bridge-strays': straysBroke(local) ?? fromCounts((r) => strays(r, local)),
     'self-nav-teardown': fromCounts((r) => selfNavTeardown(r, local)),
     'busy-frame': fromCounts((r) => busyFrame(r, local)),
     mermaid: mermaid(local, budgetMs),

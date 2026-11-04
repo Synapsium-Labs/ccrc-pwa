@@ -183,6 +183,19 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
     }
   });
 
+  it('a saturated run keeps a counted broke; a run the door could not read still reads a local stray effect broke; neither ever holds', () => {
+    const sat = (over: Over, local: LabLocal = LOCAL_OK) => labVerdicts(runWith({ ...HEALTHY, ...over }, { saturated: true }), local, 200);
+    expect(sat({ 'csp-beacon': one })['csp-27'].verdict).toBe('does-not-hold');
+    expect(sat({ 'ambient-local-broke': one })['no-ambient-state'].verdict).toBe('does-not-hold');
+    expect(sat({ 'popup-open': one })['no-popup-top-nav'].verdict).toBe('does-not-hold');
+    expect(sat({})['csp-27']).toEqual({ verdict: 'not-measured', detail: 'the door counted more than a lab run sends' });
+    const effect = { ...LOCAL_OK, hostile: { ready: true, effects: 1, addressChanged: false } };
+    expect(sat({}, effect)['bridge-strays'].verdict).toBe('does-not-hold');
+    expect(labVerdicts(null, effect, 200)['bridge-strays']).toEqual({ verdict: 'does-not-hold', detail: '1 effects' });
+    expect(labVerdicts(null, LOCAL_OK, 200)['bridge-strays'].verdict).toBe('not-measured');
+    expect(labVerdicts(runWith({ ...HEALTHY, 'csp-beacon': one }), LOCAL_OK, 200)['csp-27'].verdict).toBe('does-not-hold');
+  });
+
   it('the draw-on-open reading: what the busy frame\'s fact and the Mermaid line mean for drawing on open', () => {
     const shared = { ...LOCAL_OK, busy: { longestGapMs: 3012, timerLateMs: 2489, spinMs: 3000 } };
     const read = (local: LabLocal, over: Over = {}): string => drawOnOpenReading(verdictsOf(over, local), local, 200);
