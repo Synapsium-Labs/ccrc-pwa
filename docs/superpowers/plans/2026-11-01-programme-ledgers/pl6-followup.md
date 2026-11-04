@@ -76,6 +76,11 @@ Measured on this branch at `3bdf77083` (`main` with #2206, #2236 and #2242 in it
 - **pl6f-five-words**: `secret-not-one-line` 400, `secret-not-stored` 404, `slot-busy` 503, `secrets-unreadable` 503, `remove-failed` 503, each with its status and a console sentence.
 - **pl6f-remove-word**: the store's remove answers `removed` or `none`, and the read's states are `ok`, `unreadable` and `invalid`: `absent` beside `removed` is another context's vocabulary pair (`late-census.test.ts`), and a quoted kebab word in `server/src/coord` must be a declared code (`mail-routes.test.ts`).
 - **pl6f-slot-deadline**: `SLOT_WAIT_MS` is 30 s, a constant with a test override (`slotWaitMs`); the map entry stays until the running act finishes, so the deadline never lets two acts of one slot run together.
+- **pl6f-paths-from-listing**: the read and the Remove door build no path from their route parameters. Each finds the
+  programme directory and the slot's files by listing the store and taking the entry equal to the name asked for, after the
+  names pass their shapes; the temp sweep matches entries with a fixed expression and never compiles a slot name into one.
+  CodeQL's `js/path-injection` (ten alerts on the first push) does not recognise a guard inside a helper; this removes the
+  flow instead of dismissing the alerts.
 - **pl6f-temps-on-write**: leftover temps are cleaned on the next write or Remove of their slot, not at server start.
 - **pl6f-unknown-readback-counts-stored**, **pl6f-register-throw-unregistered**, **pl6f-failed-record-removes-old**: A-4 as above.
 - **pl6f-roster-drops-operator-lanes**: A-1 in both entries (`offer`, `withOperatorSecretRows`), through one L0 predicate.

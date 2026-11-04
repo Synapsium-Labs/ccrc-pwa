@@ -70,8 +70,13 @@ export function operatorSecretPath(ccrcDir: string, program: string, slot: strin
   return path.join(ccrcDir, OPERATOR_SECRETS_DIR, program, `${slot}${SECRET_EXT}`);
 }
 const metaPathOf = (secretPath: string): string => `${secretPath.slice(0, -SECRET_EXT.length)}${META_EXT}`;
-/** The temporary files `writeValueFileAtomic` (`token/files.ts`) makes beside a slot's two files: `.<name>.tmp-<16 hex>`. */
-const tempOf = (slot: string): RegExp => new RegExp(`^\\.${slot}\\.(?:secret|json)\\.tmp-[0-9a-f]{16}$`);
+/** The tail of a temporary file `writeValueFileAtomic` (`token/files.ts`) makes beside a slot's two files, after the
+ *  `.<slot>.` it begins with: `secret` or `json`, then `.tmp-` and 16 hex digits. A fixed expression: no slot name is ever
+ *  compiled into one. */
+const TEMP_TAIL = /^(?:secret|json)\.tmp-[0-9a-f]{16}$/;
+/** Whether a directory entry is one of `slot`'s temporary files. */
+const isTempOf = (entry: string, slot: string): boolean =>
+  entry.startsWith(`.${slot}.`) && TEMP_TAIL.test(entry.slice(slot.length + 2));
 
 /**
  * Removes what a crash between a temp file's open and its rename left of ONE slot (review 1389 A4): a 0600 copy of a value in
@@ -82,9 +87,12 @@ const tempOf = (slot: string): RegExp => new RegExp(`^\\.${slot}\\.(?:secret|jso
 async function sweepSlotTemps(dir: string, slot: string): Promise<void> {
   let names: string[];
   try { names = await fsp.readdir(dir); } catch { return; }
-  const re = tempOf(slot);
-  for (const n of names) if (re.test(n)) await fsp.rm(path.join(dir, n), { force: true }).catch(() => {});
+  for (const n of names) if (isTempOf(n, slot)) await fsp.rm(path.join(dir, n), { force: true }).catch(() => {});
 }
+
+/** Whether a store directory is a private directory of ours: not a link, not open to group or others, owned by this user. */
+const isPrivateDir = (st: { isDirectory(): boolean; mode: number; uid: number }): boolean =>
+  st.isDirectory() && (st.mode & 0o077) === 0 && (typeof process.getuid !== 'function' || st.uid === process.getuid());
 
 /** Makes `dir` at 0700 when absent; refuses when it is anything but a directory of ours that group and others cannot enter. */
 async function privateDir(dir: string, which: string): Promise<void> {
@@ -211,15 +219,23 @@ export interface StoredSlotRecord { slot: string; setAt: number | null; item: nu
 export function readStoredSecrets(ccrcDir: string, program: string):
   { state: 'ok'; slots: StoredSlotRecord[] } | { state: 'unreadable' } | { state: 'invalid' } {
   if (!isProgramSlug(program)) return { state: 'invalid' };
+  // NO PATH IS BUILT FROM THE NAME ASKED FOR: the programme directory is found by listing the store and taking the entry that
+  // equals it, so every path below is made of names the store's own listing gave (the caller's name is a route parameter).
   const top = path.join(ccrcDir, OPERATOR_SECRETS_DIR);
-  const dir = path.join(top, program);
-  for (const d of [top, dir]) {
-    try {
-      const st = lstatSync(d);
-      if (!st.isDirectory() || (st.mode & 0o077) !== 0 || (typeof process.getuid === 'function' && st.uid !== process.getuid())) return { state: 'unreadable' };
-    } catch (e) {
-      return (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? { state: 'ok', slots: [] } : { state: 'unreadable' };
-    }
+  let entries: string[];
+  try {
+    if (!isPrivateDir(lstatSync(top))) return { state: 'unreadable' };
+    entries = readdirSync(top);
+  } catch (e) {
+    return (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? { state: 'ok', slots: [] } : { state: 'unreadable' };
+  }
+  const found = entries.find((e) => e === program);
+  if (found === undefined) return { state: 'ok', slots: [] };
+  const dir = path.join(top, found);
+  try {
+    if (!isPrivateDir(lstatSync(dir))) return { state: 'unreadable' };
+  } catch (e) {
+    return (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? { state: 'ok', slots: [] } : { state: 'unreadable' };
   }
   let names: string[];
   try { names = readdirSync(dir); } catch { return { state: 'unreadable' }; }
@@ -246,28 +262,38 @@ export function readStoredSecrets(ccrcDir: string, program: string):
  * after the value is gone stays (every reader ignores a record whose value file is gone). Never reads the value.
  */
 export async function removeOperatorSecret(ccrcDir: string, program: string, slot: string): Promise<'removed' | 'none'> {
-  const file = operatorSecretPath(ccrcDir, program, slot);
-  const dir = path.dirname(file);
-  for (const [d, which] of [[path.join(ccrcDir, OPERATOR_SECRETS_DIR), 'top'], [dir, 'programme']] as const) {
+  if (!operatorSlotNamesValid(program, slot)) throw new OperatorSecretBadSlot();
+  // NO PATH IS BUILT FROM THE NAMES ASKED FOR (they are the Remove door's route parameters): the programme directory and the
+  // slot's two files are found by listing the store and taking the entries equal to them, so every path below is made of
+  // names the store's own listing gave.
+  const top = path.join(ccrcDir, OPERATOR_SECRETS_DIR);
+  /** The entry of `dir` equal to `name`, after `dir` is checked private; `null` when `dir` or the entry is absent. */
+  const entryOf = async (dir: string, which: string, name: string): Promise<string | null> => {
     let st: Awaited<ReturnType<typeof fsp.lstat>>;
     try {
-      st = await fsp.lstat(d);
+      st = await fsp.lstat(dir);
     } catch (e) {
-      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return 'none';
+      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
       throw e;
     }
-    if (!st.isDirectory() || (st.mode & 0o077) !== 0 || (typeof process.getuid === 'function' && st.uid !== process.getuid())) {
-      throw new OperatorSecretStoreUnsafe(which);
+    if (!isPrivateDir(st)) throw new OperatorSecretStoreUnsafe(which);
+    return (await fsp.readdir(dir)).find((e) => e === name) ?? null;
+  };
+  const programEntry = await entryOf(top, 'top', program);
+  if (programEntry === null) return 'none';
+  const dir = path.join(top, programEntry);
+  const valueEntry = await entryOf(dir, 'programme', `${slot}${SECRET_EXT}`);
+  const metaEntry = await entryOf(dir, 'programme', `${slot}${META_EXT}`);
+  let had = false;
+  if (valueEntry !== null) {
+    try {
+      await fsp.unlink(path.join(dir, valueEntry));
+      had = true;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw e;
     }
   }
-  let had = false;
-  try {
-    await fsp.unlink(file);
-    had = true;
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw e;
-  }
-  await fsp.rm(metaPathOf(file), { force: true }).catch(() => {});
+  if (metaEntry !== null) await fsp.rm(path.join(dir, metaEntry), { force: true }).catch(() => {});
   await sweepSlotTemps(dir, slot);
   if (had) {
     try {
