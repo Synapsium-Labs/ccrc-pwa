@@ -157,8 +157,12 @@ describe('what the paste sheet says of the old token follows the rule (D-7872 (1
   }
 
   it('a lane the box measured says what it measured, with no passing check on record (D-7992)', () => {
-    sheet(fakeClient(), { lane: { ...LANE_NEW, credential: 'held' }, usage: AUTH_DEAD });
+    sheet(fakeClient(), { lane: { ...LANE_NEW, credential: 'held' } });
     expect(screen.getByText(replaceIntro('lane-c', 'kept'))).toBeInTheDocument();
+    cleanup();
+    // The provider refused it: the file is there, and a refused token is not known to stand.
+    sheet(fakeClient(), { lane: { ...LANE_NEW, credential: 'held' }, usage: AUTH_DEAD });
+    expect(screen.getByText(replaceIntro('lane-c', 'unsure'))).toBeInTheDocument();
     cleanup();
     sheet(fakeClient(), { lane: { ...LANE_NEW, credential: 'none' } });
     expect(screen.getByText(replaceIntro('lane-c', 'signed-out'))).toBeInTheDocument();

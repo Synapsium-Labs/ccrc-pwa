@@ -199,6 +199,21 @@ describe('a lane signed out on the box, on the wire (D-7992)', () => {
     expect(lane.notReadyReason).toBe('not-checked');
   });
 
+  it('says a lane is still being added only while `enable` has never switched it on, and names neither time', async () => {
+    const opened = await openApp({ enabled: true });
+    app = opened.app;
+    const at = new Date(Date.parse('2026-11-01T10:00:00Z')).toISOString();
+    laneFile(opened.home, 'claude-a', { addedAt: at, signedOutAt: at, credential: 'none' });
+    laneFile(opened.home, 'claude-b', { addedAt: at, enabledAt: at, signedOutAt: at, credential: 'none' });
+    const lanes = await lanesOf(app);
+    expect(lanes['claude-a']!.adding).toBe(true);
+    expect(lanes['claude-b']).not.toHaveProperty('adding');
+    for (const id of ['claude-a', 'claude-b']) {
+      expect(lanes[id]).not.toHaveProperty('addedAt');
+      expect(lanes[id]).not.toHaveProperty('enabledAt');
+    }
+  });
+
   it('a file from a box too old to report it carries neither, and a value off its grammar is dropped', async () => {
     const opened = await openApp({ enabled: true });
     app = opened.app;

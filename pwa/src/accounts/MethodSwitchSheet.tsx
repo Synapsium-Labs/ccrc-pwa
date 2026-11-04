@@ -104,7 +104,7 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
     (props.lane?.identity !== undefined && props.lane.identitySource !== 'stated' ? props.lane.identity : ''));
   /** What the sheet may say of the credential the lane switches from (D-7872 (10)): read when a sentence is written, up
    *  to the switch landing, from where on the lane's facts are about the new credential. */
-  const old = useOldCredential(props.lane, props.usage);
+  const old = useOldCredential(id, props.lane, props.usage);
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
 

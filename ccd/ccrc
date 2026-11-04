@@ -11098,7 +11098,12 @@ _acct_credential_sign_out() {   # <id>
   _acct_sign_out "$id" "$ACCT_CFG_DIR" "$stands"
   # A sign-in lane's last check measured the sign-in that is now gone; a token lane's measured its token, which stays,
   # so only a sign-in lane is signed out by this. The lane says so until a credential goes in or a check passes (D-7992).
-  [ -n "$ACCT_SECRETS" ] || _acct_lane_state "$id" --clear check --signed-out-at now
+  # `absent` on macOS proves nothing, since a sign-in there lives in the keychain and no logout ran: no sign-out is recorded.
+  if [ -z "$ACCT_SECRETS" ]; then
+    local cleared=(--clear check)
+    { [ "$ACCT_SIGNOUT" = removed ] || [ "$CCD_OS" != darwin ]; } && cleared+=(--signed-out-at now)
+    _acct_lane_state "$id" "${cleared[@]}"
+  fi
   _acct_read_op "Lane $id was signed out; only this report failed." \
     auth-answer --verb sign-out --id "$id" --sign-out "$ACCT_SIGNOUT"
   printf '%s\n' "$ACCT_OUT"

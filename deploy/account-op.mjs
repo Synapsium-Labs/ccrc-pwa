@@ -1323,12 +1323,19 @@ function secretsFileHeld(home, name) {
   return st !== null && st.isFile() && st.size > 0;
 }
 
+/** Whether a missing `.credentials.json` means a sign-in lane has no sign-in. It does on Linux. Claude Code on macOS keeps
+ *  a sign-in in the keychain, which ccrc does not read, so there only a file that exists says anything. `OSTYPE` first,
+ *  as `ccd/ccrc`'s `CCD_OS` reads it. */
+const signInLivesInItsFile = () => !(process.env.OSTYPE ?? process.platform).startsWith('darwin');
+
 /** WHETHER THE LANE HOLDS A CREDENTIAL, MEASURED ON THE BOX (D-7992): `held`, `none`, or `null` when ccrc cannot say (a
- *  lane whose credential it does not read, a lane off the roster, a roster it cannot read), which writes no word. It
- *  stats and never reads the credential. A token lane holds its secrets file; a sign-in lane its `.credentials.json`,
- *  or a sign-in its passing `check` proved it has where this box does not look. Every `lane-state` write that names the
- *  roster carries it, which is how a screen tells a box that measured from one too old to: `credential` absent. */
-function laneCredentialOf(home, rosterFile, id, check) {
+ *  lane whose credential it does not read, a lane off the roster, a roster it cannot read, a sign-in it cannot see on
+ *  macOS), which leaves the lane with no word, so a screen falls back on what the lane shows. It stats and never reads
+ *  the credential, and it always looks: a passing check is no measure of the file, which a logout outside ccrc removes
+ *  without a word to the lane. A token lane holds its secrets file; a sign-in lane its `.credentials.json`. Every
+ *  `lane-state` write that names the roster carries it, which is how a screen tells a box that measured from one too
+ *  old to: `credential` absent. */
+function laneCredentialOf(home, rosterFile, id) {
   let accounts = null;
   try { accounts = JSON.parse(readFileSync(rosterFile, 'utf8'))['accounts']; } catch { return null; }
   const acct = Array.isArray(accounts) ? accounts.find((x) => isPlainObject(x) && x['id'] === id) : undefined;
@@ -1337,8 +1344,10 @@ function laneCredentialOf(home, rosterFile, id, check) {
   if (typeof e['secretsFile'] === 'string' && e['secretsFile'] !== '') return secretsFileHeld(home, e['secretsFile']) ? 'held' : 'none';
   const suffix = acct['configDirSuffix'];
   if (laneProviderOf(e) !== 'anthropic' || typeof suffix !== 'string' || suffix === '' || suffix !== basename(suffix)) return null;
-  if (isPlainObject(check) && check['verdict'] === 'ok') return 'held';
-  try { return lstatSync(join(home, suffix, '.credentials.json')).isFile() ? 'held' : 'none'; } catch { return 'none'; }
+  let inFile = false;
+  try { inFile = lstatSync(join(home, suffix, '.credentials.json')).isFile(); } catch { inFile = false; }
+  if (inFile) return 'held';
+  return signInLivesInItsFile() ? 'none' : null;
 }
 
 /** THE WRITE ITSELF, shared by the `lane-state` op and the `seed` op's record of `seedVerifiedAt` (accounts plan Task
@@ -1391,8 +1400,9 @@ function laneStateWrite(home, id, mode, set, clear, rosterFile) {
   }
   for (const c of [].concat(clear ?? [])) delete next[c];
   Object.assign(next, set);
-  const credential = rosterFile === undefined ? null : laneCredentialOf(home, rosterFile, id, next.check);
-  if (credential !== null) next.credential = credential;
+  const credential = rosterFile === undefined ? undefined : laneCredentialOf(home, rosterFile, id);
+  if (credential === null) delete next.credential;
+  else if (credential !== undefined) next.credential = credential;
   if (set.signedOutAt === undefined && (credential === 'held' || set.check?.verdict === 'ok')) delete next.signedOutAt;
   next.fleetIdentity = readNodeIdentity(home);
 
@@ -1510,12 +1520,11 @@ function opLaneState(a) {
 
   // THE UPDATE'S SWEEP (D-7992): a file from before `credential`, or one a credential changed under, gets the measured
   // word, and every other field stands. No file makes none, a file that cannot be read is left to the next verb, and a
-  // word that stands rewrites nothing. `_inst_lane_state` runs it.
+  // word that stands rewrites nothing. A word the box can no longer measure goes. `_inst_lane_state` runs it.
   if (mode === 'credential') {
     const st = laneStateOf(home, id);
     if (st === null) return 0;
-    const word = laneCredentialOf(home, a['file'], id, st['check']);
-    if (word === null || word === st['credential']) return 0;
+    if (laneCredentialOf(home, a['file'], id) === (st['credential'] ?? null)) return 0;
     const refused = laneStateWrite(home, id, 'merge', {}, [], a['file']);
     if (refused !== null) { refuse(refused[0], refused[1]); return 1; }
     return 0;

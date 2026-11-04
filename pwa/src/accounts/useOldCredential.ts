@@ -8,10 +8,26 @@
 // THE NEW CREDENTIAL ENDS THE READING. Once one goes in, the lane's facts are about it and no longer about the old one
 // (the box clears the check when it swaps, and the fresh check measures the new credential), so `freeze` keeps what the
 // sheet knew of the old credential for the rest of its ending.
+//
+// A SIGN-OUT THE LANE DOES NOT SHOW YET. The lane the screen holds is from before it until a read lands, and a read can
+// fail, which is likely just after an answer went missing, so `readLaneAfterSignOut` marks the lane in the store first.
+// Until the store has read it again, no sheet says the lane keeps what it showed.
 import { useRef } from 'react';
-import type { AccountUsage, LaneWire } from '../../../shared/api';
+import { ACCOUNT_OP_KILL_GRACE_MS, ACCOUNT_SUB_TIMEOUT_MS, type AccountUsage, type LaneWire } from '../../../shared/api';
 import type { OldCredential } from '../fleet/accountWords';
+import { useFleetStore } from '../stores/fleet';
 import { oldCredentialOf } from './connectFlow';
+
+/** A sign-out with no answer may still be running on the box, and a read before it ends shows the lane as it was. This is
+ *  as long as the verb can run. */
+const SIGN_OUT_UNANSWERED_MS = ACCOUNT_SUB_TIMEOUT_MS.credential + ACCOUNT_OP_KILL_GRACE_MS;
+
+/** A sign-out that may have changed lane `id` (`answered`: the box said what it did; otherwise it may still be doing it):
+ *  the lane is marked until the store has read it again, and read now. Whether or not the sheet is still open. */
+export function readLaneAfterSignOut(id: string, answered: boolean, refresh: () => Promise<'ok' | 'error'>): void {
+  useFleetStore.getState().markLaneUnread(id, answered ? 0 : SIGN_OUT_UNANSWERED_MS);
+  void refresh();
+}
 
 export interface OldCredentialReading {
   /** What a sentence written now may say. */
@@ -23,16 +39,18 @@ export interface OldCredentialReading {
 }
 
 export function useOldCredential(
-  lane: LaneWire | undefined, usage: Pick<AccountUsage, 'authDead'> | null | undefined,
+  id: string, lane: LaneWire | undefined, usage: Pick<AccountUsage, 'authDead'> | null | undefined,
 ): OldCredentialReading {
   const facts = useRef({ lane, usage });
   facts.current = { lane, usage };
+  const reading = (): OldCredential =>
+    oldCredentialOf(facts.current.lane, facts.current.usage, useFleetStore.getState().lanesUnread[id] !== undefined);
   const held = useRef<OldCredential | null>(null);
-  held.current ??= oldCredentialOf(lane, usage);
+  held.current ??= reading();
   const frozen = useRef(false);
 
   const now = (): OldCredential => {
-    const read = oldCredentialOf(facts.current.lane, facts.current.usage);
+    const read = reading();
     if (held.current !== 'signed-out' && read !== 'kept' && !frozen.current) held.current = read;
     return held.current!;
   };

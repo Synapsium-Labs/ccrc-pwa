@@ -13,7 +13,8 @@
 // says what is left of the old credential, from its code, and offers Start again. WHAT IT MAY SAY of the old credential
 // is `oldCredentialOf`'s, the one rule (D-7872 (10), D-7992): that the lane keeps it only where the lane has one; that it
 // is signed out where the lane says so or this sheet just ran Sign this lane out and start again, below; and the neutral
-// words, true either way, only where a box too old to report it leaves the lane unsaid. `useOldCredential` reads it when
+// words, true either way, where the provider refused the lane, a sign-out has not been read back, or a box too old to
+// report it leaves the lane unsaid. `useOldCredential` reads it when
 // a sentence is written, so a lane signed out elsewhere while the sheet is open gets the words its new facts allow, and
 // the mint's restart lead and revoke item are held to it as well. Offline mid-attempt, the run frame shows
 // only the sentence with the last-known deadline. Closed mid-attempt, the attempt keeps running on the box until
@@ -49,7 +50,7 @@ import { RestartList, restartableOn, useRestarts } from './RestartList';
 import { StatedField } from './ResultFrame';
 import { RunFrame, type LedgerLine } from './RunFrame';
 import type { SignInMethod } from './connectFlow';
-import { useOldCredential } from './useOldCredential';
+import { readLaneAfterSignOut, useOldCredential } from './useOldCredential';
 import { SignInLive, WrongAccountAct, useSignInAttempt, wordOf, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
 import type { StepUp, StepUpDeps } from './useStepUp';
 import '../fleet/fleet.css';
@@ -156,7 +157,7 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
   /** What this sheet may say of the lane's old credential (D-7872 (10)): read when a sentence is written, from the lane
    *  and the 401 marker as the screen holds them then, and `signed-out` once this sheet's own sign-out has the box's
    *  answer. */
-  const old = useOldCredential(props.lane, props.usage);
+  const old = useOldCredential(id, props.lane, props.usage);
 
   const status = (text: string): void => setSaid({ kind: 'status', text });
   const alert = (text: string): void => setSaid({ kind: 'alert', text });
@@ -222,9 +223,9 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
     } catch (e) {
       failure = e;
     }
-    // The lane says what happened (D-7992): it is read again whether or not the sheet is still open, on any answer that
-    // may have signed it out (removed, absent, or no answer: `signOutUnknown`), so the next sheet opened on it reads that.
-    if (outcome === 'done' && (removed !== null || signOutUnknown(wordOf(failure)))) void refresh();
+    // The lane says what happened (D-7992), once it is read again: that is marked and asked for whether or not the sheet
+    // is still open, on any answer that may have signed it out (removed, absent, or no answer: `signOutUnknown`).
+    if (outcome === 'done' && (removed !== null || signOutUnknown(wordOf(failure)))) readLaneAfterSignOut(id, removed !== null, refresh);
     if (!live.current) return;
     setBusy(false);
     if (outcome === 'step-up') { setNotice(STEP_UP_AGAIN_SIGN_OUT); alert(STEP_UP_AGAIN_SIGN_OUT); return; }

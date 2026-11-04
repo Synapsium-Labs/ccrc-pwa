@@ -13,6 +13,9 @@ import {
 
 beforeEach((ctx) => { if (!HAVE_FLOCK) ctx.skip(); });
 
+/** The word a sign-in lane with no `.credentials.json` measures: none on a Mac, where a sign-in lives in the keychain. */
+const NO_SIGN_IN_FILE: { credential?: string } = process.platform === 'darwin' ? {} : { credential: 'none' };
+
 /** The spine step, sourced, under the role `ccrc install`/`update` would give it. */
 function backfill(home: string, role: 'both' | 'fleet' | 'server' = 'both'): { code: number; out: string; err: string } {
   const r = spawnSync(BASH, ['-c', `umask 022; . "$1"; INST_ROLE=${role}; _inst_lane_state`, '_', ccrcIn(home)],
@@ -31,7 +34,7 @@ describe('the backfill (G35)', () => {
     const r = backfill(home);
     expect(r.code, r.err).toBe(0);
     expect(r.out).toBe('install: lane-state: wrote 1, kept 1\n');
-    expect(laneState(home, 'claude')).toEqual({ fleetIdentity: NODE_ID, credential: 'none' });
+    expect(laneState(home, 'claude')).toEqual({ fleetIdentity: NODE_ID, ...NO_SIGN_IN_FILE });
     expect(laneState(home, 'claude')).not.toHaveProperty('check');
     expect(modeOf(laneStatePath(home, 'claude'))).toBe('600');
     // Every field stands; the only thing the update adds is the box's measured word (D-7992).
@@ -51,7 +54,7 @@ describe('the backfill (G35)', () => {
     writeFileSync(join(home, '.cc-secrets', 'lane-b-oauth.env'), 'export CLAUDE_CODE_OAUTH_TOKEN=fixture-not-a-token\n', { mode: 0o600 });
     expect(backfill(home).code).toBe(0);
     expect(laneState(home, 'lane-b')!['credential']).toBe('held');
-    expect(laneState(home, 'claude')!['credential']).toBe('none');
+    expect(laneState(home, 'claude')!['credential']).toBe(NO_SIGN_IN_FILE.credential);
   });
 
   it('a server-role box hosts no sessions, so it backfills nothing', () => {

@@ -896,8 +896,8 @@ export const CANCEL_SIGN_IN = 'Cancel';
 export const START_AGAIN = 'Start the sign-in again';
 
 /** What an account sheet may say about a lane's old credential: `oldCredentialOf`'s answer (connectFlow.ts; D-7872 (10),
- *  D-7992). `kept` (the lane has one), `signed-out` (the lane has none), or `unsure` (the neutral words: a box too old to
- *  say). */
+ *  D-7992). `kept` (the lane has one), `signed-out` (the lane has none), or `unsure` (the neutral words: the provider
+ *  refused it, a sign-out has not been read back, or a box too old to say). */
 export type OldCredential = 'kept' | 'unsure' | 'signed-out';
 /** The sign-in's terminal states (spec §6.2), each saying what did not happen. */
 export type SignInEndKind = 'expired' | 'code-refused' | 'untrusted' | 'cancelled' | 'unknown' | 'lost' | 'failed'
@@ -1130,9 +1130,9 @@ export const credentialUntouched = (id: string, method: 'login' | 'setup-token')
 export const laneSignedOut = (id: string): string =>
   `${id} is signed out on the fleet host, so its sessions fail until it has a sign-in or a token again.`;
 
-/** THE NEUTRAL WORDS (D-7872 (10), the operator's option-1 ruling of 2026-11-03): where the lane does not say whether it
- *  holds a credential (a box too old to measure it, D-7992) and shows no passing check, a sheet says what it knows and
- *  claims nothing about the old credential. */
+/** THE NEUTRAL WORDS (D-7872 (10), the operator's option-1 ruling of 2026-11-03): where the lane cannot be taken at its
+ *  word (`oldCredentialOf`: the provider refused it, or a sign-out has not been read back) or says nothing (a box too old
+ *  to measure it, D-7992, with no passing check), a sheet says what it knows and claims nothing about the old credential. */
 export const noCheckedCredential = (id: string, cred: 'sign-in' | 'token'): string =>
   `${id} has no checked ${cred}, so whether it still has one isn't known.`;
 export const NOTHING_INSTALLED = 'Nothing was installed.';

@@ -77,16 +77,21 @@ export interface LaneState {
   readonly mintedAt?: number;
   /** When the box signed the lane out (N5, D-7992). Gone once a credential is in or a check passes. */
   readonly signedOutAt?: number;
-  /** Absent from a box too old to measure it, and for a lane whose credential ccrc does not read. */
+  /** Absent from a box too old to measure it, for a lane whose credential ccrc does not read, and for a sign-in lane on
+   *  macOS with no `.credentials.json`, where the sign-in may be in the keychain. */
   readonly credential?: (typeof LANE_CREDENTIAL_WORDS)[number];
   readonly keyExpiresAt?: number;
   readonly seedVerifiedAt?: number;
   readonly lastRunAt?: number;
   /** When `add` made the lane and when `enable` first switched it on (accounts plan Task A16): the write routes' discard
-   *  check reads them (A17, D-7739). Never on `LaneWire`. */
+   *  check reads them (A17, D-7739). Never on `LaneWire`, which carries only `neverEnabled`'s answer. */
   readonly addedAt?: number;
   readonly enabledAt?: number;
 }
+
+/** A lane `add` made that `enable` never switched on (spec §11.5): what Discard requires, and what tells a lane still
+ *  being added from one that has been in use (`LaneWire.adding`). */
+export const neverEnabled = (st: LaneState): boolean => st.addedAt !== undefined && st.enabledAt === undefined;
 
 /** The two non-readings stay two (D-5517): an absent file is Not checked, an unreadable one Inconclusive. */
 export type LaneStateRead =

@@ -187,9 +187,12 @@ export function resumeSheetFor(
  *  - the 401 marker (`authDead`), which ccd's rescue path writes with no check, so a Signed-out sign-in lane often has
  *    no check at all, and which still holds under Off's precedence;
  *  - a word other than Off: the marker that holds an added lane off is gone, so the lane was turned on.
- *  An Off lane with neither a check nor the 401 marker reads as one being added. */
+ *  An Off lane with neither a check nor the 401 marker reads as one being added, unless the box signed it out (D-7992) and
+ *  it has been on before: the connect sheet's own Sign this lane out and start again signs out a lane still `adding`, and
+ *  that lane stays the connect sheet's, with its Turn it on and its Discard. */
 export function isPastAdding(lane: LaneWire | undefined, usage: Pick<AccountUsage, 'authDead'> | null | undefined): boolean {
-  if (lane?.check !== undefined || lane?.signedOutAt !== undefined || usage?.authDead === true) return true;
+  if (lane?.check !== undefined || usage?.authDead === true) return true;
+  if (lane?.signedOutAt !== undefined && lane.adding !== true) return true;
   return lane !== undefined && lane.state.word !== 'off';
 }
 
@@ -201,19 +204,23 @@ export function isPastAdding(lane: LaneWire | undefined, usage: Pick<AccountUsag
  * facts on the lane (D-7992): a sign-out it ran, and whether the lane holds a credential, measured there.
  *  - `signed-out`: the lane says so (`signedOutAt`, `no-credential`, or `credential: 'none'`), on any device and after a
  *    reload. The sheet that just ran the sign-out knows before the lane is read again (`useOldCredential`).
- *  - `kept`: the lane holds a credential (`credential: 'held'`), even a refused one: a 401 is the provider's answer, and
- *    the file it refused is still the lane's.
- *  - A lane with no `credential` word is a box too old to measure it, or a lane whose credential ccrc does not read. Only
- *    there does the rule fall back on what the lane shows: `kept` behind a passing check with no 401 marker after it
- *    (`usage.authDead`), and `unsure` everywhere else, whose words are true whether or not the lane holds a credential.
+ *  - `unsure`, whose words are true whether or not the lane holds a credential, on two kinds of lane whose measure cannot
+ *    be trusted. A lane a sign-out may have changed, not read since (`unread`, the store's `lanesUnread`): it still shows
+ *    what it showed before. And a lane the provider refused (`usage.authDead`, or a check of `auth-dead`): the 401 marker
+ *    is written with no lane-state write, so `held` may be from before a logout that caused it, and a token just refused
+ *    is not known to stand.
+ *  - `kept`: otherwise, the lane holds a credential (`credential: 'held'`), or it has no word (a box too old to measure
+ *    it, a lane whose credential ccrc does not read, a sign-in on macOS) and a passing check stands in.
+ *  - `unsure` everywhere else.
  */
 export function oldCredentialOf(
   lane: LaneWire | undefined,
   usage: Pick<AccountUsage, 'authDead'> | null | undefined,
+  unread = false,
 ): OldCredential {
   if (lane?.signedOutAt !== undefined || lane?.notReadyReason === 'no-credential' || lane?.credential === 'none') return 'signed-out';
-  if (lane?.credential === 'held') return 'kept';
-  return lane?.check?.verdict === 'ok' && usage?.authDead !== true ? 'kept' : 'unsure';
+  if (unread || usage?.authDead === true || lane?.check?.verdict === 'auth-dead') return 'unsure';
+  return lane?.credential === 'held' || lane?.check?.verdict === 'ok' ? 'kept' : 'unsure';
 }
 
 /** The method a lane switches TO from its fold (spec §4.4, §9; Q1): a sign-in lane to the long-lived token, a token lane

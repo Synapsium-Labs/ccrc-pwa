@@ -1,13 +1,14 @@
 // What an account sheet may say about a lane's old credential (accounts plan Task A38, D-7872 (10): the operator's
 // option-1 ruling of 2026-11-03; D-7992). The box reports a sign-out and whether the lane holds a credential, so one rule
-// decides (`oldCredentialOf`): "signed out on the fleet host" where the lane says so or the sheet just ran the sign-out,
-// "keeps its old sign-in/token" where the lane holds one, and the neutral words, true either way, only where a box too
-// old to report it leaves the lane unsaid and no passing check stands. Each sheet that speaks of the old credential is
-// held to it here: the re-auth sheet (intro, endings, refused starts, the mint's restart and revoke lines), the method
-// switch sheet (intro, endings, the both-held line, the restart lead and the danger confirm) and the connect sheet's Sign
-// this lane out and start again, which reads the lane again so the next sheet knows. A19's paste sheet is held to it in
-// `replace-token.test.tsx`. The answer is read when a sentence is written, from the lane as the screen holds it then, and
-// never moves to `kept` (`useOldCredential`).
+// decides (`oldCredentialOf`): "signed out on the fleet host" where the lane says so or the sheet just ran the sign-out;
+// the neutral words, true either way, on a lane the provider refused, a lane a sign-out may have changed that the store
+// has not read since, and where a box too old to report it leaves the lane unsaid with no passing check; and "keeps its
+// old sign-in/token" otherwise. Each sheet that speaks of the old credential is held to it here: the re-auth sheet (intro,
+// endings, refused starts, the mint's restart and revoke lines), the method switch sheet (intro, endings, the both-held
+// line, the restart lead and the danger confirm) and the connect sheet's Sign this lane out and start again, which marks
+// the lane and reads it again so the next sheet knows. A19's paste sheet is held to it in `replace-token.test.tsx`. The
+// answer is read when a sentence is written, from the lane as the screen holds it then, and never moves to `kept`
+// (`useOldCredential`).
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import {
@@ -24,7 +25,7 @@ import {
   reauthStartRefusal, restartLead, revokeOldWords, revokeRecord, signInStartRefusal, signOldOutDanger, signOldOutRefused,
   signOutRefused, signOutUnknown, switchEnd, switchIntro, switchRestartLead, type OldCredential, type SignInEndKind,
 } from '../src/fleet/accountWords';
-import { ApiError } from '../src/lib/api';
+import { ApiError, api } from '../src/lib/api';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { fleetSession } from './fleetFixture';
 
@@ -139,6 +140,8 @@ const switcher = (b: Box, over: Partial<MethodSwitchSheetProps> = {}): ((next: P
   return (next) => drawn.rerender(<MethodSwitchSheet {...props} {...next} />);
 };
 const text = (): string => document.body.textContent ?? '';
+/** The store's mark on a lane a sign-out may have changed, not read since. */
+const unreadMark = (id: string): unknown => useFleetStore.getState().lanesUnread[id];
 const alertOf = (sheet: 'reauth' | 'switch' | 'connect'): string => screen.getByTestId(`${sheet}-alert`).textContent ?? '';
 /** No sentence on screen claims the lane still holds its old credential. */
 const claimsNothing = (): void => {
@@ -175,7 +178,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
-  act(() => useFleetStore.setState({ roster: [], lanes: null, accountsConnect: null }));
+  act(() => useFleetStore.setState({ roster: [], lanes: null, accountsConnect: null, lanesUnread: {} }));
 });
 
 // ── The rule ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -190,10 +193,25 @@ describe('the rule: what the lane reports, and on a box too old to report it wha
     expect(oldCredentialOf({ ...FRESH, notReadyReason: 'no-credential' }, null)).toBe('signed-out');
   });
 
-  it('keeps wherever the box measured a credential, a refused one too: no check, a failed check or a 401 change nothing', () => {
+  it('keeps wherever the box measured a credential, with no check on record or one that was inconclusive', () => {
     expect(oldCredentialOf(HELD, null)).toBe('kept');
-    expect(oldCredentialOf({ ...HELD, check: { verdict: 'auth-dead', at: CHECK_AT } }, null)).toBe('kept');
-    expect(oldCredentialOf(HELD, usageOf('lane-a', { authDead: true }))).toBe('kept');
+    expect(oldCredentialOf({ ...HELD, check: { verdict: 'inconclusive', at: CHECK_AT } }, null)).toBe('kept');
+  });
+
+  it('a lane the provider refused is neutral whatever the box measured: the 401 marker comes with no measure of the lane', () => {
+    const refused = usageOf('lane-a', { authDead: true });
+    expect(oldCredentialOf(HELD, refused)).toBe('unsure');
+    expect(oldCredentialOf({ ...FRESH, credential: 'held' }, refused)).toBe('unsure');
+    expect(oldCredentialOf({ ...HELD, check: { verdict: 'auth-dead', at: CHECK_AT } }, null)).toBe('unsure');
+    // A lane that says it has nothing still says so.
+    expect(oldCredentialOf(NO_CREDENTIAL, refused)).toBe('signed-out');
+  });
+
+  it('a lane not read since a sign-out may have changed it is neutral, unless what it shows already says signed out', () => {
+    expect(oldCredentialOf(FRESH, null, true)).toBe('unsure');
+    expect(oldCredentialOf({ ...FRESH, credential: 'held' }, null, true)).toBe('unsure');
+    expect(oldCredentialOf(SIGNED_OUT, null, true)).toBe('signed-out');
+    expect(oldCredentialOf(NO_CREDENTIAL, null, true)).toBe('signed-out');
   });
 
   it('a box too old to report it: keeps behind a passing check with no 401 after it, and neutral everywhere else', () => {
@@ -393,6 +411,21 @@ describe('the re-auth sheet follows the rule (D-7872 (10))', () => {
     await settle();
     return again;
   }
+  /** The store has not read the lane since (its read failed): sheets opened now, on the passing check from before. */
+  function laterSheetsAreNeutral(b: Box, lane: LaneWire): void {
+    reauth(b, { lane });
+    expect(screen.getByText(reauthIntro('lane-a', 'login', 'unsure'))).toBeInTheDocument();
+    claimsNothing();
+    cleanup();
+    switcher(b, { lane });
+    expect(screen.getByText(switchIntro('lane-a', 'setup-token', 'unsure'))).toBeInTheDocument();
+    claimsNothing();
+    cleanup();
+    reauth(b, { lane: { ...lane, credential: 'held' } });
+    expect(screen.getByText(reauthIntro('lane-a', 'login', 'unsure'))).toBeInTheDocument();
+    claimsNothing();
+    cleanup();
+  }
   /** Sign-in and switch sheets opened later on the lane as read again, on a box that reports it and on one too old to. */
   function laterSheetsReadTheLane(b: Box): void {
     reauth(b, { lane: SIGNED_OUT });
@@ -421,7 +454,8 @@ describe('the re-auth sheet follows the rule (D-7872 (10))', () => {
     await settle();
     expect(alertOf('reauth')).toBe(reauthEnd('lane-a', 'login', 'cancelled', undefined, 'signed-out'));
     expect(alertOf('reauth')).toContain(laneSignedOut('lane-a'));
-    });
+    expect(unreadMark('lane-a')).toBeDefined();
+  });
 
   it('after a sign-out in this sheet, a newer read of the lane does not change what its endings say', async () => {
     const b = fakeBox(OTHER);
@@ -432,12 +466,21 @@ describe('the re-auth sheet follows the rule (D-7872 (10))', () => {
     expect(alertOf('reauth')).toBe(reauthEnd('lane-a', 'login', 'cancelled', undefined, 'signed-out'));
   });
 
-  it('resumed after the sheet unmounts: the lane as read again decides, signed out on a box that reports it, neutral on one too old to', async () => {
+  it('resumed after the sheet unmounts, on the lane as last read or as read again: never keeps', async () => {
     const b = fakeBox(OTHER);
+    b.refresh.mockResolvedValue('error');
     await signedOutHere(b);
     cleanup();
     const resume = { attemptId: ATTEMPT, method: 'login' as const, expiresAt: b.box.expiresAt };
     b.box.status = { ok: true, state: 'waiting-code', url: URL, host: 'claude.com', updatedAt: Date.now(), expiresAt: b.box.expiresAt };
+    // The read failed: the lane still shows the check from before the sign-out.
+    reauth(b, { lane: OTHER, resume });
+    expect(await screen.findByLabelText(CODE_FIELD_LABEL)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: CANCEL_SIGN_IN }));
+    await settle();
+    expect(alertOf('reauth')).toBe(reauthEnd('lane-a', 'login', 'cancelled', undefined, 'unsure'));
+    claimsNothing();
+    cleanup();
     reauth(b, { lane: SIGNED_OUT, resume });
     expect(await screen.findByLabelText(CODE_FIELD_LABEL)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: CANCEL_SIGN_IN }));
@@ -452,6 +495,23 @@ describe('the re-auth sheet follows the rule (D-7872 (10))', () => {
     await settle();
     expect(alertOf('reauth')).toBe(reauthEnd('lane-a', 'login', 'cancelled', undefined, 'unsure'));
     claimsNothing();
+  });
+
+  it('through the store itself: a failed read leaves later sheets neutral on the lane as last read, and a good read ends it', async () => {
+    const accounts = vi.spyOn(api, 'accounts').mockRejectedValue(new Error('offline'));
+    const b = fakeBox(OTHER);
+    b.refresh.mockImplementation(() => useFleetStore.getState().refreshAccounts());
+    await signedOutHere(b);
+    await settle();
+    expect(accounts).toHaveBeenCalled();
+    cleanup();
+    expect(unreadMark('lane-a')).toBeDefined();
+    laterSheetsAreNeutral(b, OTHER);
+    accounts.mockResolvedValue({ accounts: [], projected: null, roster: ROSTER, lanes: { 'lane-a': OTHER } });
+    await act(async () => { await useFleetStore.getState().refreshAccounts(); });
+    expect(unreadMark('lane-a')).toBeUndefined();
+    reauth(b, { lane: OTHER });
+    expect(screen.getByText(reauthIntro('lane-a', 'login', 'kept'))).toBeInTheDocument();
   });
 
   describe('a sign-out the sheet did not see the end of still reads the lane again', () => {
@@ -477,12 +537,15 @@ describe('the re-auth sheet follows the rule (D-7872 (10))', () => {
     for (const word of ['removed', 'absent'] as const) {
       it(`closed while the sign-out is in flight, then the box answers ${word}: the lane is read again`, async () => {
         const b = fakeBox(OTHER);
+        b.refresh.mockResolvedValue('error');
         const held = await closedMidSignOut(b);
         const reads = b.refresh.mock.calls.length;
+        expect(unreadMark('lane-a')).toBeUndefined();
         held.answer(word);
         await settle();
         expect(b.refresh).toHaveBeenCalledTimes(reads + 1);
         expect(b.client.accountAuthStart).toHaveBeenCalledTimes(1);
+        laterSheetsAreNeutral(b, OTHER);
         laterSheetsReadTheLane(b);
       });
     }
@@ -490,16 +553,19 @@ describe('the re-auth sheet follows the rule (D-7872 (10))', () => {
     for (const [how, failure] of UNKNOWN_ANSWERS) {
       it(`closed while the sign-out is in flight, and ${how}: the lane is read again`, async () => {
         const b = fakeBox(OTHER);
+        b.refresh.mockResolvedValue('error');
         const held = await closedMidSignOut(b);
         const reads = b.refresh.mock.calls.length;
         held.fail(failure());
         await settle();
         expect(b.refresh).toHaveBeenCalledTimes(reads + 1);
+        laterSheetsAreNeutral(b, OTHER);
         laterSheetsReadTheLane(b);
       });
 
       it(`${how} with the sheet open: it says so, and the lane is read again`, async () => {
         const b = fakeBox(OTHER);
+        b.refresh.mockResolvedValue('error');
         b.client.accountSignOut.mockRejectedValueOnce(failure());
         await readBackAnother(b);
         const reads = b.refresh.mock.calls.length;
@@ -510,6 +576,7 @@ describe('the re-auth sheet follows the rule (D-7872 (10))', () => {
         expect(b.refresh).toHaveBeenCalledTimes(reads + 1);
         expect(b.client.accountAuthStart).toHaveBeenCalledTimes(1);
         cleanup();
+        laterSheetsAreNeutral(b, OTHER);
         laterSheetsReadTheLane(b);
       });
     }
@@ -522,6 +589,7 @@ describe('the re-auth sheet follows the rule (D-7872 (10))', () => {
         held.fail(refusal);
         await settle();
         expect(b.refresh).toHaveBeenCalledTimes(reads);
+        expect(unreadMark('lane-a')).toBeUndefined();
         reauth(b, { lane: OTHER });
         expect(screen.getByText(reauthIntro('lane-a', 'login', 'kept'))).toBeInTheDocument();
         cleanup();
@@ -532,7 +600,8 @@ describe('the re-auth sheet follows the rule (D-7872 (10))', () => {
       await pressSignOut();
       await settle();
       expect(alertOf('reauth')).toBe(signOutRefused('lane-a', 'lane-busy'));
-      });
+      expect(unreadMark('lane-a')).toBeUndefined();
+    });
   });
 
   it('after a reload the lane still says it: signed out on a box that reports it, neutral on one too old to', async () => {
@@ -557,8 +626,10 @@ describe('the re-auth sheet follows the rule (D-7872 (10))', () => {
     expect(screen.getByText(reauthIntro('lane-a', 'login', 'kept'))).toBeInTheDocument();
     expect(text()).not.toContain(noCheckedCredential('lane-a', 'sign-in'));
     cleanup();
+    // A 401 with `held` behind it: the marker may come from a logout the lane never saw, so nothing is claimed.
     reauth(fakeBox(), { lane: HELD, usage: usageOf('lane-a', { authDead: true }) });
-    expect(screen.getByText(reauthIntro('lane-a', 'login', 'kept'))).toBeInTheDocument();
+    expect(screen.getByText(reauthIntro('lane-a', 'login', 'unsure'))).toBeInTheDocument();
+    claimsNothing();
     cleanup();
     reauth(fakeBox(), { lane: NO_CREDENTIAL });
     expect(screen.getByText(reauthIntro('lane-a', 'login', 'signed-out'))).toBeInTheDocument();
@@ -922,6 +993,19 @@ describe('an ending names the old credential only behind the rule (D-7872 (10))'
     });
   }
 
+  it("a token the provider just refused, still in its file: the mint's revoke item only asks about any old token", async () => {
+    const b = fakeBox();
+    reauth(b, {
+      id: 'lane-b', method: 'setup-token', lane: { ...UNCHECKED, check: { verdict: 'auth-dead', at: CHECK_AT }, credential: 'held' },
+      usage: usageOf('lane-b', { authDead: true }), fleet: storeWith([ON_B]),
+    });
+    await ranToDone(b, MINT_NEW_TOKEN, MINT_CODE);
+    expect(await screen.findByRole('checkbox', { name: 'I revoked any old token' })).toBeInTheDocument();
+    expect(text()).toContain('If lane-b had an old token, revoke it at');
+    expect(screen.getByTestId('revoke-record')).toHaveTextContent(revokeRecord(false, 'any'));
+    claimsNothing();
+  });
+
   it('a lane the box says has no credential: the same neutral lines, and no old sign-in to sign out', async () => {
     const b = fakeBox();
     switcher(b, { lane: NONE, fleet: storeWith([ON_A]) });
@@ -1003,13 +1087,20 @@ describe("the connect sheet's sign-out is one the later sheets know of (D-7872 (
     status = { ok: true, state: 'starting', updatedAt: 0, expiresAt };
     return sc;
   }
+  beforeEach(() => { refresh.mockResolvedValue('ok'); });
   const pressSignOut = (): void => {
+    refresh.mockResolvedValue('error');
     fireEvent.click(screen.getByRole('button', { name: SIGN_OUT_RESTART }));
     fireEvent.click(screen.getAllByRole('button', { name: SIGN_OUT_RESTART }).at(-1)!);
   };
-  /** The lane is read again by the store once; a re-auth opened then reads what it says, on either box. */
+  /** The lane is read again, and that read failed: a re-auth opened on the lane as last read is neutral, and one opened
+   *  on it as read later says what it says, on either box. */
   const laneReadAgain = (): void => {
     expect(refresh.mock.calls.length).toBeGreaterThan(readsBefore);
+    reauth(fakeBox(), { id: 'lane-c', lane: CHECKED, usage: usageOf('lane-c') });
+    expect(screen.getByText(reauthIntro('lane-c', 'login', 'unsure'))).toBeInTheDocument();
+    claimsNothing();
+    cleanup();
     reauth(fakeBox(), { id: 'lane-c', lane: SIGNED_OUT, usage: usageOf('lane-c') });
     expect(screen.getByText(reauthIntro('lane-c', 'login', 'signed-out'))).toBeInTheDocument();
     claimsNothing();
@@ -1052,6 +1143,7 @@ describe("the connect sheet's sign-out is one the later sheets know of (D-7872 (
     await settle();
     expect(sc.accountSignOut).toHaveBeenCalledWith('lane-c');
     expect(refresh).toHaveBeenCalledTimes(readsBefore);
+    expect(unreadMark('lane-c')).toBeUndefined();
   });
 
   for (const [how, failure] of UNKNOWN_ANSWERS) {
@@ -1063,6 +1155,7 @@ describe("the connect sheet's sign-out is one the later sheets know of (D-7872 (
       await settle();
       expect(alertOf('connect')).toBe(signOutRefused('lane-c', 'lane-busy'));
       expect(refresh).toHaveBeenCalledTimes(readsBefore);
+      expect(unreadMark('lane-c')).toBeUndefined();
       sc.accountSignOut.mockRejectedValueOnce(failure());
       pressSignOut();
       await settle();

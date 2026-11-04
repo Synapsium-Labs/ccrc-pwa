@@ -76,7 +76,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   navigate('/');
   act(() => useFleetStore.setState({
-    sessions: [], conn: 'connecting', usage: null, projected: undefined, roster: [], lanes: null, accountsConnect: null,
+    sessions: [], conn: 'connecting', usage: null, projected: undefined, roster: [], lanes: null, accountsConnect: null, lanesUnread: {},
   }));
 });
 
@@ -422,8 +422,13 @@ describe('after Sign this lane out and start again, every ending says the lane i
     expect(alertText()).not.toMatch(/Nothing changed|keeps its old/);
   });
 
-  it('Sign in again opened later on the lane it signed out reads the lane: signed out, until a credential goes back in', async () => {
+  it('Sign in again opened later on the lane it signed out never says it keeps one, until the lane read again says so', async () => {
     const b = await signedOutAndStarted();
+    cleanup();
+    // The screen has not read the lanes again yet: the lane is the one the sheet last checked, before its sign-out.
+    sheet(b, { id: 'lane-a', method: 'login', lane: OTHER });
+    expect(screen.getByText(reauthIntro('lane-a', 'login', 'unsure'))).toBeInTheDocument();
+    expect(document.querySelector('.acct-reauth')?.textContent).not.toMatch(/keeps the sign-in it has/);
     cleanup();
     const gone: LaneWire = {
       ready: false, notReadyReason: 'no-credential', signedOutAt: OTHER_AT + 500, credential: 'none',
@@ -433,7 +438,9 @@ describe('after Sign this lane out and start again, every ending says the lane i
     expect(screen.getByText(reauthIntro('lane-a', 'login', 'signed-out'))).toBeInTheDocument();
     expect(document.querySelector('.acct-reauth')?.textContent).not.toMatch(/keeps the sign-in it has/);
     cleanup();
-    // A credential went back in on the fleet host and passed a check: the box ended the sign-out, and the lane keeps it.
+    // A credential went back in on the fleet host and passed a check: the box ended the sign-out, the store read it, and
+    // the lane keeps it.
+    act(() => useFleetStore.setState({ lanesUnread: {} }));
     sheet(b, { id: 'lane-a', method: 'login', lane: { ...OTHER, check: { verdict: 'ok', at: OTHER_AT + 1_000 }, credential: 'held' } });
     expect(screen.getByText(reauthIntro('lane-a', 'login', 'kept'))).toBeInTheDocument();
   });
@@ -519,6 +526,17 @@ describe('a lane that says it has no credential: the intro and every ending say 
     const off: LaneWire = { state: { word: 'off', source: 'Off on the fleet host' }, ready: false, notReadyReason: 'no-credential' };
     expect(isPastAdding(off, null)).toBe(false);
     expect(isPastAdding({ ...off, signedOutAt: now }, null)).toBe(true);
+  });
+
+  it("a lane still being added stays the connect sheet's after its own Sign this lane out and start again", () => {
+    const adding: LaneWire = {
+      state: { word: 'off', source: 'Off on the fleet host' }, ready: false, notReadyReason: 'no-credential',
+      signedOutAt: now, credential: 'none', adding: true,
+    };
+    expect(isPastAdding(adding, null)).toBe(false);
+    expect(resumeSheetFor('sign-in', 'login', isPastAdding(adding, usageOf('lane-n', { disabled: true })))).toBe('connect');
+    // A check or the 401 marker still says it exists.
+    expect(isPastAdding(adding, usageOf('lane-n', { disabled: true, authDead: true }))).toBe(true);
   });
 });
 

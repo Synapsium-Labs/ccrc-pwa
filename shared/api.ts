@@ -12504,9 +12504,12 @@ export interface LaneWire {
   mintedAt?: number;
   /** When the box signed the lane out, while no credential has gone in and no check has passed since (D-7992). */
   signedOutAt?: number;
-  /** Whether the lane holds a credential, measured on the box (D-7992). Absent is a box too old to say, or a lane whose
-   *  credential ccrc does not read: `oldCredentialOf` (`pwa/src/accounts/connectFlow.ts`) is what reads the difference. */
+  /** Whether the lane holds a credential, measured on the box (D-7992). Absent is a box too old to say, or one that cannot
+   *  (`LaneState.credential`): `oldCredentialOf` (`pwa/src/accounts/connectFlow.ts`) is what reads the difference. */
   credential?: LaneState['credential'];
+  /** `add` made this lane and `enable` has never switched it on (`neverEnabled`, D-7992): a sign-out on it is the connect
+   *  sheet's own, and says nothing about the lane having been in use. */
+  adding?: true;
   ready: boolean;
   notReadyReason?: LaneNotReadyReason;
 }
