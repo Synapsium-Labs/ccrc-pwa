@@ -5,12 +5,19 @@
 //
 // The census is `spawnGroupScan.ts`, which reads sources only through `scan/parse.ts`. Every timed
 // `spawnSync`/`execFileSync` under server/test whose command is a shell, a wrapper or a script path must be a row of
-// `SPAWN_GROUP_ALLOWLIST`, by file and command, with its exact count. The list may only shrink: a new site is red
-// here until it uses `spawnSyncGroup`, and a converted site is red until its row is lowered.
+// `SPAWN_GROUP_ALLOWLIST`, by file and command, with its exact count. A new site is red here until it uses
+// `spawnSyncGroup`, and a converted site is red until its row is lowered. The list may only shrink, and
+// `SPAWN_GROUP_CEILING` is what holds that: comparing the tree with the list passes a change that edits both.
 import { describe, it, expect } from 'vitest';
 import { REPO_ROOT } from './scan/symbols.js';
 import { timedSpawnCensus, timedSpawnsInSource, type TimedSpawn } from './spawnGroupScan.js';
 import { SPAWN_GROUP_ALLOWLIST } from './spawnGroupAllowlist.js';
+
+// The sum of the allowlist's counts. It is held exactly, so a conversion lowers it by the same number in the same
+// commit and leaves no slack for a new row to use. NEVER RAISE IT: a new timed spawn uses `spawnSyncGroup` instead.
+// Measured: 150 once the census read renamed imports, conditional spreads and assignments, and part 1 of #896 had
+// moved 28 sites.
+const SPAWN_GROUP_CEILING = 150;
 
 const kinds = (src: string): string[] => timedSpawnsInSource(src).map((s) => `${s.name} ${s.command} ${s.kind}`);
 
@@ -52,6 +59,75 @@ describe('the timed-spawn census (fixtures)', () => {
       .toEqual(["spawnSync 'git' plain", 'spawnSync process.execPath plain', 'spawnSync PY! plain',
         'spawnSync node[0]! plain']);
   });
+
+  it('a renamed import, a name bound to a spawn and a cast callee are the spawn they name', () => {
+    expect(kinds("import { spawnSync as run } from 'node:child_process';\nrun('bash', ['-c', 'x'], { timeout: 1 });"))
+      .toEqual(["spawnSync 'bash' shell"]);
+    expect(kinds("import { execFileSync as ef } from 'node:child_process';\nef(SRC, [], { timeout: 1 });"))
+      .toEqual(['execFileSync SRC script']);
+    expect(kinds("const run = spawnSync;\nrun('bash', [], { timeout: 1 });")).toEqual(["spawnSync 'bash' shell"]);
+    expect(kinds("const run = cp.spawnSync;\nrun('bash', [], { timeout: 1 });")).toEqual(["spawnSync 'bash' shell"]);
+    expect(kinds("(spawnSync as unknown as Spawn)('bash', [], { timeout: 1 });")).toEqual(["spawnSync 'bash' shell"]);
+    // CONTROL: a member that shares the alias's name is not it, and neither is the group helper under any name.
+    expect(kinds("import { spawnSync as run } from 'node:child_process';\nobj.run('bash', [], { timeout: 1 });")).toEqual([]);
+    expect(kinds("import { spawnSyncGroup as run } from './spawnGroup.js';\nrun('bash', [], { timeout: 1 });")).toEqual([]);
+  });
+
+  it('a `timeout` is read from the parsed object, so no spelling or comment hides it', () => {
+    const shell = ["spawnSync 'bash' shell"];
+    expect(kinds("spawnSync('bash', [], {\n  encoding: 'utf8', // why\n  timeout: 5,\n});")).toEqual(shell);
+    expect(kinds("spawnSync('bash', [], {\n  // why\n  timeout: 5,\n});")).toEqual(shell);
+    expect(kinds("spawnSync('bash', [], { /* why */ timeout: 5 });")).toEqual(shell);
+    expect(kinds("spawnSync('bash', [], { 'timeout': 5 });")).toEqual(shell);
+    expect(kinds("spawnSync('bash', [], { ['timeout']: 5 });")).toEqual(shell);
+    expect(kinds("const opts = {\n  cwd: '/', // why\n  timeout: 5,\n};\nspawnSync('bash', [], opts);")).toEqual(shell);
+    // CONTROL: `timeout` in a nested object, a value or a comment is not the option.
+    expect(kinds("spawnSync('bash', [], { env: { timeout: '1' }, input: 'timeout: 1' /* timeout: 1 */ });")).toEqual([]);
+  });
+
+  it('a `timeout` in any arm of a conditional or a logical expression counts', () => {
+    const shell = ["spawnSync 'bash' shell"];
+    expect(kinds("spawnSync('bash', [], { encoding: 'utf8', ...(t === undefined ? {} : { timeout: t }) });")).toEqual(shell);
+    expect(kinds("spawnSync('bash', [], { ...(o.t === undefined ? {} : { timeout: o.t }) });")).toEqual(shell);
+    expect(kinds("spawnSync('bash', [], { ...(t !== undefined && { timeout: t }) });")).toEqual(shell);
+    expect(kinds("spawnSync('bash', [], c ? { timeout: 1 } : {});")).toEqual(shell);
+    expect(kinds("spawnSync('bash', [], (c ? {} : { timeout: 1 }) as never);")).toEqual(shell);
+    expect(kinds("const o = c ? { timeout: 1 } : { cwd: '/' };\nspawnSync('bash', [], o);")).toEqual(shell);
+    // CONTROL: an arm with no timeout is not one, and the guard of an `&&` adds nothing.
+    expect(kinds("spawnSync('bash', [], { ...(cwd === undefined ? {} : { cwd }) });")).toEqual([]);
+    expect(kinds("spawnSync('bash', [], { ...(cwd !== undefined && { cwd }) });")).toEqual([]);
+  });
+
+  it('an assignment in scope gives a bound options object its timeout', () => {
+    const shell = ["spawnSync 'bash' shell"];
+    expect(kinds("const opts: O = { encoding: 'utf8' };\nif (ms) { opts.timeout = ms; }\nspawnSync('bash', [], opts);"))
+      .toEqual(shell);
+    expect(kinds("const opts: O = {};\nopts['timeout'] = ms;\nspawnSync('bash', [], opts);")).toEqual(shell);
+    expect(kinds("let opts: O = {};\nopts = { timeout: 1 };\nspawnSync('bash', [], opts);")).toEqual(shell);
+    expect(kinds("let opts: O = {};\nopts = mkOpts();\nspawnSync('bash', [], opts);")).toEqual(shell);
+    expect(kinds("const opts: O = {};\nObject.assign(opts, { timeout: 1 });\nspawnSync('bash', [], opts);")).toEqual(shell);
+    // CONTROL: another member, another object, or the same name in another scope gives it none.
+    expect(kinds("const opts: O = {};\nopts.cwd = '/';\nspawnSync('bash', [], opts);")).toEqual([]);
+    expect(kinds("const opts: O = {};\nconst other: O = {};\nother.timeout = 1;\nspawnSync('bash', [], opts);")).toEqual([]);
+    expect(kinds("function a() { const opts: O = {}; opts.timeout = 1; }\n"
+      + "function b() { const opts: O = {}; spawnSync('bash', [], opts); }")).toEqual([]);
+  });
+
+  it('options the scan cannot read count as timed, except in the argument straight after the command', () => {
+    const shell = ["spawnSync 'bash' shell"];
+    expect(kinds("function f(opts: O) { spawnSync('bash', [], opts); }")).toEqual(shell);
+    expect(kinds("spawnSync('bash', [], mkOpts());")).toEqual(shell);
+    expect(kinds("spawnSync('bash', [], h.opts);")).toEqual(shell);
+    expect(kinds("spawnSync('bash', [], { ...h.opts, encoding: 'utf8' });")).toEqual(shell);
+    expect(kinds("function f(extra: O) { spawnSync('bash', [], { ...extra, encoding: 'utf8' }); }")).toEqual(shell);
+    expect(kinds("spawnSync('bash', [], { [k]: 1 });")).toEqual(shell);
+    expect(kinds("spawnSync(...args);")).toEqual(['spawnSync ...args script']);
+    // CONTROL: an argv in that slot is not options, and `undefined` is no options at all.
+    expect(kinds("spawnSync('bash', ['-c', 'x']);")).toEqual([]);
+    expect(kinds("function f(argv: string[]) { spawnSync('bash', argv); spawnSync('sh', argv.slice(1)); }")).toEqual([]);
+    expect(kinds("spawnSync('bash', [], undefined);")).toEqual([]);
+    expect(kinds("spawnSync('bash', { timeout: 1 });")).toEqual(shell);
+  });
 });
 
 describe('timed shell and script spawns in server/test go through spawnSyncGroup (#896)', () => {
@@ -78,6 +154,12 @@ describe('timed shell and script spawns in server/test go through spawnSyncGroup
     console.log(`timed spawns outside spawnSyncGroup: ${census.length}\n${lines.join('\n')}`);
     expect(over, 'new timed shell or script spawns').toEqual([]);
     expect(under, 'allowlist rows above the tree').toEqual([]);
+  });
+
+  it('the allowlist may only shrink: its counts sum to the ceiling, which may only be lowered', () => {
+    const sum = SPAWN_GROUP_ALLOWLIST.reduce((n, r) => n + r.count, 0);
+    expect(sum, 'a row was added or raised (use spawnSyncGroup), or a conversion left SPAWN_GROUP_CEILING behind (lower it)')
+      .toBe(SPAWN_GROUP_CEILING);
   });
 
   it('the allowlist has one row per file and command, each with a positive count', () => {

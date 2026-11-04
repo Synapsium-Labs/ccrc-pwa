@@ -4,10 +4,23 @@
 // process group of its own and kills the whole group. This module finds the sites that still bypass it.
 //
 // It reads sources only through the repo's one parser module, `scan/parse.ts` (ARCH-06): a call is a parsed
-// `CallSite`, an options object passed by name resolves through the file's parsed `bindings`.
+// `CallSite`, and an options expression is read by its parsed shape, never by matching its text, so a comment, a quoted
+// key or a conditional cannot hide a `timeout`.
 //
-// A call is TIMED when an argument after the command is an object literal with a `timeout` property, or a name or
-// spread (`opts`, `{ ...opts, stdio }`, `opts as never`) whose innermost binding is one, followed up to three hops.
+// A spawn is `spawnSync` or `execFileSync`, called by that name, on a namespace (`cp.spawnSync`), through a renamed
+// import (`import { spawnSync as run }`), through a name bound to one (`const run = spawnSync`), or through a cast.
+//
+// A call is TIMED when its options can carry a `timeout`: an object literal with that key (`{ timeout }`, `'timeout'`,
+// `['timeout']`), a conditional, a logical expression, a cast or a spread with one in any arm
+// (`...(t === undefined ? {} : { timeout: t })`), or a name whose binding is one of those, found through the file's
+// parsed `bindings` or a relative import. A name also counts when an assignment in its scope gives it a timeout
+// (`opts.timeout = ms`, `opts = { timeout }`, `Object.assign(opts, { timeout })`).
+//
+// WHAT THE SCAN CANNOT READ COUNTS AS TIMED. Options that are a parameter, a call's result, a member of something else
+// or a name followed past the hop limit, and a call whose arguments are spread (`spawnSync(...args)`), are timed until
+// someone shows otherwise, so such a site needs a row, with a `keep` reason if it does not fork. The one exception is
+// the argument straight after the command: it is usually the argv, so only a readable options object there counts.
+//
 // Its command is one of:
 //   * `shell`   — a shell (`bash`, `sh`, `/bin/sh`, `BASH` bound to one, `real('bash')`, `join(bin, 'bash')`);
 //   * `wrapper` — a program that runs another command (`prlimit`, `unshare`, `env`, `timeout`, …);
@@ -16,14 +29,15 @@
 //                 `process.execPath`, or a python interpreter found by a lookup (`const PY = pythonOrSkip()`).
 // `plain` sites are not counted. Every other site is a row of `SPAWN_GROUP_ALLOWLIST` until it moves to
 // `spawnSyncGroup`.
-// KNOWN WIDTH: an options object built by assignment after its binding (`opts.timeout = ms`), passed through a
-// parameter, or a `timeout` read from a spread more than three hops away is not seen as timed; a call through a
-// renamed import (`import { spawnSync as run }`) or a destructured `child_process` is not seen; an interpreter given
-// inline code or a script that forks (`python3 -c 'subprocess.run(…)'`) is `plain`, because what forks is the
-// program's own code, not its command.
+// KNOWN WIDTH: a renamed destructure (`const { spawnSync: run } = cp`), a spawn handed over as a value
+// (`{ spawn: spawnSync }`) and an options object changed by a helper it was passed to are not seen; a parameter that
+// shadows an outer binding of the same name reads as that binding; `execSync` and the asynchronous spawns are outside
+// this census (no `execSync` in server/test has a timeout today); an interpreter given inline code or a script that
+// forks (`python3 -c 'subprocess.run(…)'`) is `plain`, because what forks is the program's own code, not its command.
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { parseFile, parseSource, type Binding, type CallSite, type ParsedFile } from './scan/parse.js';
+import { expressionShape, identifierReferences, nameWrites, parseFile, parseSource, type Binding, type CallSite,
+  type NameWrite, type ParsedFile } from './scan/parse.js';
 
 export type SpawnCommandKind = 'shell' | 'wrapper' | 'script' | 'plain';
 
@@ -31,7 +45,7 @@ export interface TimedSpawn {
   /** Repository-relative (`server/test/foo.test.ts`). */
   file: string;
   line: number;
-  /** `spawnSync` or `execFileSync`. */
+  /** `spawnSync` or `execFileSync`, whatever local name it was called through. */
   name: string;
   /** The command argument's source text, line breaks removed. */
   command: string;
@@ -72,20 +86,42 @@ const bindingAt = (p: ParsedFile, name: string, at: number): Binding | undefined
   return best;
 };
 
-/** Does the options expression `text` (at offset `at` of `p`) carry a `timeout`? */
-export function timedOptions(p: ParsedFile, text: string, at: number, hops = 0): boolean {
-  if (hops > MAX_HOPS) return false;
-  const t = bare(text);
-  if (IDENT.test(t)) {
-    const b = bindingAt(p, t, at);
-    return b !== undefined && b.initStart !== at && timedOptions(p, b.init, b.initStart, hops + 1);
+const WRITES = new WeakMap<ParsedFile, NameWrite[]>();
+const writesOf = (p: ParsedFile): NameWrite[] => {
+  const known = WRITES.get(p);
+  if (known) return known;
+  const w = nameWrites(p);
+  WRITES.set(p, w);
+  return w;
+};
+
+/** Does an assignment, or an `Object.assign` onto it, give the name bound by `b` a `timeout` inside its scope? */
+const writtenTimeout = (p: ParsedFile, b: Binding, unread: boolean, hops: number): boolean => {
+  const inScope = (at: number): boolean => at >= b.scopeStart && at <= b.scopeEnd;
+  return writesOf(p).some((w) => w.name === b.name && inScope(w.start)
+      && (w.member === 'timeout' || (w.member === null && timedOptions(p, w.value, w.start, unread, hops + 1))))
+    || p.calls.some((c) => c.callee === 'Object.assign' && c.args[0]?.text === b.name && inScope(c.start)
+      && c.argSpans.slice(1).some((a) => timedOptions(p, p.text.slice(a.start, a.end), c.start, unread, hops + 1)));
+};
+
+/** Can the options expression `text` (at offset `at` of `p`) carry a `timeout`? `unread` is the answer for an
+ *  expression the scan cannot follow to a literal. */
+export function timedOptions(p: ParsedFile, text: string, at: number, unread = true, hops = 0): boolean {
+  if (hops > MAX_HOPS) return unread;
+  const s = expressionShape(text);
+  const next = (t: string, offset = at): boolean => timedOptions(p, t, offset, unread, hops + 1);
+  switch (s.kind) {
+    case 'object': return s.keys.includes('timeout') || s.spreads.some((x) => next(x)) || (s.open && unread);
+    case 'either': return s.branches.some((x) => next(x));
+    case 'absent': return false;
+    case 'other': return unread;
+    case 'name': {
+      const b = bindingAt(p, s.name, at);
+      if (b && b.initStart !== at) return next(b.init, b.initStart) || writtenTimeout(p, b, unread, hops);
+      const from = importedBinding(p, s.name);
+      return from ? timedOptions(from.p, from.b.init, from.b.initStart, unread, hops + 1) : unread;
+    }
   }
-  if (!t.startsWith('{')) return false;
-  if (/(?:^\{|,)\s*timeout\s*(?::|,|\})/.test(t)) return true;
-  for (const m of t.matchAll(/\.\.\.\s*([A-Za-z_$][\w$]*)/g)) {
-    if (timedOptions(p, m[1]!, at, hops + 1)) return true;
-  }
-  return false;
 }
 
 const literalKind = (value: string): SpawnCommandKind => {
@@ -152,20 +188,48 @@ const importedBinding = (p: ParsedFile, name: string): { p: ParsedFile; b: Bindi
   return top ? { p: q, b: top } : undefined;
 };
 
-const isSpawn = (c: CallSite): boolean => c.name !== null && SPAWNS.has(c.name)
-  && (c.callee === c.name || c.callee.endsWith(`.${c.name}`));
+/** The local names of the spawns in `p`: their own, a renamed import's, and a name bound to one. */
+const spawnNames = (p: ParsedFile): Map<string, string> => {
+  const names = new Map([...SPAWNS].map((n) => [n, n]));
+  for (const r of identifierReferences(p.text, p.path, SPAWNS)) {
+    if (r.role === 'import' && r.imported !== null && SPAWNS.has(r.imported)) names.set(r.name, r.imported);
+  }
+  for (const b of p.bindings) {
+    const spawn = /^(?:[\w$]+\.)*([\w$]+)$/.exec(b.init.trim())?.[1];
+    if (spawn !== undefined && SPAWNS.has(spawn)) names.set(b.name, spawn);
+  }
+  return names;
+};
+
+/** Which spawn `c` calls, if any. */
+const spawnOf = (c: CallSite, names: ReadonlyMap<string, string>): string | undefined => {
+  if (c.name === null) {
+    // A cast callee: `(spawnSync as unknown as Spawn)(…)`.
+    const s = c.callee.startsWith('(') ? expressionShape(c.callee) : null;
+    return s?.kind === 'name' ? names.get(s.name) : undefined;
+  }
+  if (c.callee === c.name) return names.get(c.name);
+  return SPAWNS.has(c.name) && c.callee.endsWith(`.${c.name}`) ? c.name : undefined;
+};
+
+/** Is the spawn `c` timed? The argument straight after the command is an argv more often than options, so only what
+ *  reads as options there counts. */
+const isTimed = (p: ParsedFile, c: CallSite): boolean =>
+  c.args.some((a) => a.kind === 'other' && a.text.startsWith('...'))
+  || c.argSpans.some((a, i) => i > 0 && c.args[i]!.kind === 'other'
+    && timedOptions(p, p.text.slice(a.start, a.end), c.start, i > 1));
 
 /** The timed spawns of one parsed file, `file` its repository-relative name. */
 export function timedSpawnsIn(p: ParsedFile, file: string): TimedSpawn[] {
+  const names = spawnNames(p);
   const out: TimedSpawn[] = [];
   for (const c of p.calls) {
-    if (!isSpawn(c) || c.args.length < 2) continue;
-    const timed = c.args.slice(1).some((a) => a.kind === 'other' && timedOptions(p, a.text, c.start));
-    if (!timed) continue;
+    const name = spawnOf(c, names);
+    if (name === undefined || !isTimed(p, c)) continue;
     const cmd = c.args[0]!;
     const command = cmd.kind === 'string' ? `'${cmd.text}'` : cmd.text;
     const kind = cmd.kind === 'string' ? literalKind(cmd.text) : commandKind(p, cmd.text, c.start);
-    out.push({ file, line: c.line, name: c.name!, command, kind });
+    out.push({ file, line: c.line, name, command, kind });
   }
   return out;
 }

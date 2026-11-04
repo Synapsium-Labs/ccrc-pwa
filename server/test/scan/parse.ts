@@ -82,10 +82,18 @@ export interface CallSite {
   head: string | null;
   headArgs: string[] | null;
   args: CallArg[];
+  /** Each argument's offsets into the text, so a reader can take its source as written: `CallArg.text` has its line
+   *  breaks removed, which leaves a `//` comment swallowing the rest of the argument. */
+  argSpans: ArgSpan[];
   boundTo: string | null;
   start: number;
   end: number;
   line: number;
+}
+
+export interface ArgSpan {
+  start: number;
+  end: number;
 }
 
 /** A `const|let|var` with a plain identifier name and an initialiser (`init` its source text, starting at offset
@@ -506,6 +514,82 @@ export function identifierReferences(text: string, fileName: string, names: Read
   return out;
 }
 
+/** What an expression is by its syntax, through parentheses, `!`, `as`, `satisfies` and a `<T>` assertion (#896).
+ *  `object` is an object literal: `keys` its member names (quoted, literal-computed and shorthand ones included),
+ *  `spreads` each `...x` operand's source, `open` true when a member's name is computed from anything but a literal.
+ *  `either` is what a conditional or a logical expression can evaluate to: both arms of `c ? a : b`, both sides of
+ *  `a || b` and `a ?? b`, and the right side of `a && b` (its left side matters only as something falsy).
+ *  `name` is a bare identifier, `undefined` excepted; `absent` is `undefined`, `null` or a boolean. */
+export type ExpressionShape =
+  | { kind: 'object'; keys: string[]; spreads: string[]; open: boolean }
+  | { kind: 'either'; branches: string[] }
+  | { kind: 'name'; name: string }
+  | { kind: 'absent' }
+  | { kind: 'other' };
+
+/** The shape of the expression whose source is `text`, comments and line breaks included. Text that does not parse as
+ *  one expression is `other`. */
+export function expressionShape(text: string, fileName = 'expression.ts'): ExpressionShape {
+  // The newline keeps a trailing `//` comment from swallowing the closing parenthesis.
+  const sf = ts.createSourceFile(fileName, `(${text}\n);`, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const st = sf.statements[0];
+  if (sf.statements.length !== 1 || !st || !ts.isExpressionStatement(st)) return { kind: 'other' };
+  let e: ts.Expression = st.expression;
+  while (ts.isParenthesizedExpression(e) || ts.isNonNullExpression(e) || ts.isAsExpression(e)
+    || ts.isSatisfiesExpression(e) || ts.isTypeAssertionExpression(e)) e = e.expression;
+  if (isAbsentValue(e) || e.kind === ts.SyntaxKind.TrueKeyword || e.kind === ts.SyntaxKind.FalseKeyword) return { kind: 'absent' };
+  if (ts.isIdentifier(e)) return { kind: 'name', name: e.text };
+  if (ts.isConditionalExpression(e)) return { kind: 'either', branches: [e.whenTrue.getText(sf), e.whenFalse.getText(sf)] };
+  if (ts.isBinaryExpression(e)) {
+    const op = e.operatorToken.kind;
+    if (op === ts.SyntaxKind.AmpersandAmpersandToken) return { kind: 'either', branches: [e.right.getText(sf)] };
+    if (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.QuestionQuestionToken) {
+      return { kind: 'either', branches: [e.left.getText(sf), e.right.getText(sf)] };
+    }
+  }
+  if (!ts.isObjectLiteralExpression(e)) return { kind: 'other' };
+  const keys: string[] = [];
+  const spreads: string[] = [];
+  let open = false;
+  for (const m of e.properties) {
+    if (ts.isSpreadAssignment(m)) { spreads.push(m.expression.getText(sf)); continue; }
+    const computed = m.name && ts.isComputedPropertyName(m.name) ? m.name.expression : null;
+    const key = computed ? (ts.isStringLiteralLike(computed) ? computed.text : null) : nameText(m.name);
+    if (key === null) open = true; else keys.push(key);
+  }
+  return { kind: 'object', keys, spreads, open };
+}
+
+/** One assignment to a plain name or to a member of one: `x = v` (`member` is `null`), `x.k = v`, `x['k'] = v`. `value`
+ *  is the right side's source. A member named by anything but a literal is not listed. */
+export interface NameWrite {
+  name: string;
+  member: string | null;
+  value: string;
+  start: number;
+}
+
+/** Every assignment to a plain name or its member in `p`, in source order (#896). A walk of its own, as `wireFacts` is. */
+export function nameWrites(p: ParsedFile): NameWrite[] {
+  const sf = ts.createSourceFile(p.path, p.text, ts.ScriptTarget.Latest, true, scriptKindOf(p.path));
+  const out: NameWrite[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const l = n.left;
+      const target = ts.isPropertyAccessExpression(l) || ts.isElementAccessExpression(l) ? l.expression : l;
+      const member = ts.isPropertyAccessExpression(l) ? l.name.text
+        : ts.isElementAccessExpression(l) && ts.isStringLiteralLike(l.argumentExpression) ? l.argumentExpression.text
+          : ts.isIdentifier(l) ? null : undefined;
+      if (ts.isIdentifier(target) && member !== undefined) {
+        out.push({ name: target.text, member, value: n.right.getText(sf), start: n.getStart(sf) });
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
 export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
   const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
   const lineOf = (pos: number): number => sf.getLineAndCharacterOfPosition(pos).line + 1;
@@ -543,8 +627,9 @@ export function parseSource(text: string, fileName = 'source.ts'): ParsedFile {
     const args: CallArg[] = node.arguments.map((a) => ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a)
       ? { kind: 'string' as const, text: a.text }
       : ts.isRegularExpressionLiteral(a) ? { kind: 'regex' as const, text: a.text } : { kind: 'other' as const, text: flat(a) });
+    const argSpans = node.arguments.map((a) => ({ start: a.getStart(sf), end: a.end }));
     const start = node.getStart(sf);
-    calls.push({ callee: flat(callee), name, head, headArgs, args, boundTo, start, end: node.end, line: lineOf(start) });
+    calls.push({ callee: flat(callee), name, head, headArgs, args, argSpans, boundTo, start, end: node.end, line: lineOf(start) });
   };
 
   const addSymbol = (name: string, kind: SymbolKind, node: ts.Node): void => {
