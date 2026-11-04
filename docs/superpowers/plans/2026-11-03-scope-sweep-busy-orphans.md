@@ -7,7 +7,7 @@
 ## Decisions
 
 - **D-7993 (2026-11-03)** — scope sweep: the busy arm collects a provably dead session's orphan behind `scope-sweep-busy-live`. `ccd-scope-sweep` adds a `busy` line beside a busy scope's own `dead` line and changes neither that line nor any inert verdict. The header of `ccd/ccd-scope-sweep` is the definition; the rest of this section is why.
-- **D-7994 (2026-11-03)** — scope sweep: the busy arm's switch, its verb, its route and its Settings card. `scope-sweep-live` and `scope-sweep-busy-live` are rows of `shared/switches.ts`. `scope-sweep-live` keeps no writer and the card only shows it. `scope-sweep-busy-live` gets `ccd scope-sweep-busy --state on|off`, `POST /api/coord/scope-sweep` and a radio in Settings › Automation › Leftover processes, because the operator's ruling of 2026-10-25 is that an operator act has a control in the console. The verb joins `FORBIDDEN_CCD_VERBS`: arming a stop of processes is never a session's.
+- **D-7994 (2026-11-03)** — scope sweep: the busy arm's switch, its verb, its route and its Settings card. `scope-sweep-live` and `scope-sweep-busy-live` are rows of `shared/switches.ts`. `scope-sweep-live` keeps no writer and the card only shows it. `scope-sweep-busy-live` gets `ccd scope-sweep-busy --state on|off`, `POST /api/coord/scope-sweep` and a radio in Settings › Automation › Leftover processes, because the operator's ruling of 2026-10-25 is that an operator act has a control in the console. The door is session-gated with no box token. Like `testbox-remote` and `reclaim-pause`, the verb is not in `FORBIDDEN_CCD_VERBS`: that list lives in rules files, which a pull request may not mix with other changes, so adding it is a rules-only follow-up.
 
 ## What was measured
 
