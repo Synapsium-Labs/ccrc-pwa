@@ -834,7 +834,7 @@ describe('the hashed /assets/* files are sent precompressed, chosen by Accept-En
 
 ## Deviations found
 
-Issued at the run's opening for departures found while executing and in a fix round; none of the refinements departs. (Task 4 Step 4 replaces this line.)
+None. Issued and unused: 7903 to 7905.
 
 ## Where things stand
 
