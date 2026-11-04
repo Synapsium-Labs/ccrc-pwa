@@ -104,9 +104,16 @@ describe('the built sheets and the layer order index.html declares first (D-7891
     return m![1]!.split(/\s*,\s*/);
   };
   const sheets = (): string[] => readdirSync(path.join(out, 'assets')).filter((n) => n.endsWith('.css'));
+  /** Every layer `css` opens or names, as the TOP-LEVEL layer that ranks it: a dotted `a.b` counts under `a`, and an
+   *  anonymous `@layer {` reads as `(anonymous)`, which index.html can never name, so it is always reported. */
   const layersOf = (css: string): string[] =>
-    [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/@layer\s+([\w-]+(?:\s*,\s*[\w-]+)*)\s*[{;]/g)]
-      .flatMap((m) => m[1]!.split(/\s*,\s*/));
+    [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/@layer(?:\s+([\w.-]+(?:\s*,\s*[\w.-]+)*))?\s*[{;]/g)]
+      .flatMap((m) => (m[1] === undefined ? ['(anonymous)'] : m[1].split(/\s*,\s*/).map((n) => n.split('.')[0]!)));
+
+  it('reads a dotted layer as its top-level one and an anonymous layer as one index.html cannot name (planted control)', () => {
+    expect(layersOf('@layer foo.bar{a{b:c}} @layer{d{e:f}} @layer components.x{g{h:i}} @layer a, b.c;'))
+      .toEqual(['foo', '(anonymous)', 'components', 'a', 'b']);
+  });
 
   it("the built entry sheet's first layer is index.html's first name", () => {
     const shell = readFileSync(path.join(out, 'index.html'), 'utf8');
