@@ -282,7 +282,9 @@ describe('a stored secret shows "Stored" with Remove (the operator\'s ruling on 
       showStored(vi.fn(), stored({ state: state as never, secretSet: { at: null } }));
       expect(screen.getByText(STORED_TEXT.stored), state).toBeTruthy();
       expect(removeButton(), state).toBeTruthy();
-      expect(screen.queryByText(SECRET_TEXT.saved('')), state).toBeNull();
+      // No saved line of any shape, and no masking sentence: nothing is known of when or how.
+      expect(screen.queryByText(/^Saved\./), state).toBeNull();
+      expect(document.querySelector('[data-secret="unmasked"]'), state).toBeNull();
       cleanup();
     }
   });
