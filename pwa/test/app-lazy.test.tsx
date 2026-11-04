@@ -38,14 +38,15 @@ vi.mock('../src/screens/DigestScreen', () => {
 
 const APP = readFileSync(path.join(__dirname, '../src/app.tsx'), 'utf8');
 /** Every module specifier of a static `import … from '…'` statement (a type-only import included: it loads nothing,
- *  but none of the six is imported for a type either). */
+ *  but none of the six is imported for a type either), and of a bare `import '…';`, which loads the module too. */
 const staticImports = (src: string): string[] =>
-  [...src.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1] as string);
+  [...src.matchAll(/^import\s+(?:[^;']*?from\s+)?'([^']+)';/gms)].map((m) => m[1] as string);
 const dynamicImports = (src: string): string[] => [...src.matchAll(/\bimport\('([^']+)'\)/g)].map((m) => m[1] as string);
 
 describe('the entry does not carry the six screens', () => {
   it('CONTROL: the scanners read a static and a dynamic import', () => {
-    expect(staticImports("import { A } from './a';\nimport type {\n  B,\n} from './b';\n")).toEqual(['./a', './b']);
+    expect(staticImports("import { A } from './a';\nimport type {\n  B,\n} from './b';\nimport './c.css';\n"))
+      .toEqual(['./a', './b', './c.css']);
     expect(dynamicImports("const A = lazy(() => import('./a').then((m) => m));")).toEqual(['./a']);
   });
 
