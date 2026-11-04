@@ -82,8 +82,8 @@ describe('Box settings card: a full snapshot (D-6917)', () => {
   });
 
   it('one block per node, in the order given, each labelled with the node', () => {
-    renderCard([fleet(ok()), server(ok())]);
-    expect(screen.getAllByRole('group').map((g) => within(g).getByRole('heading', { level: 4 }).textContent))
+    const { container } = renderCard([fleet(ok()), server(ok())]);
+    expect([...container.querySelectorAll('.box-settings-node')].map((g) => within(g as HTMLElement).getByRole('heading', { level: 4 }).textContent))
       .toEqual(['fleet reported by the box', 'server reported by the box']);
   });
 
@@ -268,5 +268,25 @@ describe('Box settings card: under Settings › Updates (D-6917)', () => {
     renderSettings('updates');
     await screen.findByRole('heading', { level: 3, name: 'Update policy' });
     expect(screen.queryByRole('heading', { level: 3, name: 'Box settings' })).toBeNull();
+  });
+});
+
+describe('Box settings card: what the library calls a fold (characterization)', () => {
+  it('C1: a details is a group and its summary is not a button', () => {
+    render(<details><summary>s</summary><p>p</p></details>);
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    expect(screen.getAllByRole('group')).toHaveLength(1);
+  });
+
+  it('C2: text inside a closed details is found by text, and the details is closed', () => {
+    const { container } = render(<details><summary>s</summary><p>p</p></details>);
+    expect(screen.getByText('p')).toBeInTheDocument();
+    expect(container.querySelector('details')!.open).toBe(false);
+  });
+
+  it('C2b: role queries over closed content (measured: jsdom 30.1.3 with @testing-library/dom 10.4.1)', () => {
+    render(<details><summary>s</summary><dl><dt>t</dt></dl></details>);
+    // Measured 1: role queries see the content of a closed details, so a count over rows inside a fold needs no `hidden`.
+    expect(screen.queryAllByRole('term')).toHaveLength(1);
   });
 });
