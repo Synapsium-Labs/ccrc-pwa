@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { declValue, ruleIn, stripComments } from './cssRule';
+import { declValue, effectiveValue, ruleIn, stripComments } from './cssRule';
 
 const docsCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'docs', 'docs.css'), 'utf8');
 const SCREEN = '.docs-screen:has(> .docs-compact)';
@@ -39,6 +39,25 @@ describe('the compact head in docs.css (the phone-header plan, refinements (d), 
     expect(declValue(ruleIn(docsCss, '.docs-compact-where'), 'display')).toBe('flex');
     expect(declValue(ruleIn(docsCss, '.docs-compact-where'), 'overflow')).toBeNull();
     expect(declValue(ruleIn(docsCss, '.docs-compact-where .docs-badge'), 'flex')).toBe('none');
+  });
+
+  it('the crumb and the ref are two spans, each cut at its own end, the crumb giving way first, so a long directory never hides the ref (refinement (g))', () => {
+    // The first line's text also sits in the grouped ellipsis rule, so its flex line is read over every rule naming it.
+    expect(effectiveValue(docsCss, '.docs-compact-where-text', 'display')).toBe('flex');
+    expect(effectiveValue(docsCss, '.docs-compact-where-text', 'min-width')).toBe('0');
+    const crumb = ruleIn(docsCss, '.docs-compact-where-crumb');
+    const ref = ruleIn(docsCss, '.docs-compact-where-ref');
+    for (const [sel, rule] of [['crumb', crumb], ['ref', ref]] as const) {
+      expect(declValue(rule, 'min-width'), sel).toBe('0');
+      expect(declValue(rule, 'overflow'), sel).toBe('hidden');
+      expect(declValue(rule, 'text-overflow'), sel).toBe('ellipsis');
+    }
+    expect(declValue(crumb, 'white-space')).toBe('nowrap');
+    // The ref's span opens with the separator's space, which a flex item drops under `nowrap`.
+    expect(declValue(ref, 'white-space')).toBe('pre');
+    const shrink = (rule: string): number => Number(/^0\s+(\d+)\s+auto$/.exec(declValue(rule, 'flex') ?? '')?.[1] ?? Number.NaN);
+    expect(shrink(ref)).toBe(1);
+    expect(shrink(crumb), 'the crumb shrinks first').toBeGreaterThan(shrink(ref));
   });
 
   it('Share and Export on the row are a whole tap wide with no underline, and a disabled one is dimmed, not recoloured', () => {

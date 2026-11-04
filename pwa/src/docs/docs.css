@@ -341,7 +341,10 @@
    back and the crumbs (`.docs-compact-crumbs`), as the full header's is. The row is one tap tall with the picked
    mockup's 1 px divider inside that height (box-sizing is border-box everywhere, reset.css), so the row and the 4 px gap
    under it are the console's whole part above the frame. The first line's draft badge sits beside its text, never
-   inside the part that ends in an ellipsis. GROUNDS: the row, the label and the panel paint nothing, so everything here
+   inside the part that ends in an ellipsis. That part is two spans, the parent crumb and the served ref, each cut at its
+   own end, the crumb giving way first (a flex-shrink a thousand times the ref's), so a long parent directory never hides
+   which ref is served; the ref's span holds the ` · ` separator, so it keeps its spaces (`white-space: pre`: a flex item
+   drops a leading space under `nowrap`). GROUNDS: the row, the label and the panel paint nothing, so everything here
    sits on body's --bg-page as the full header does (design/audit.mjs registers `.docs-compact-where` and `.docs-more`
    there); an open `.docs-more` paints its own pressed ground and ink and is measured on it; the dot paints a status fill
    and sets no ink. A disabled icon is dimmed by opacity, registered in design/audit.mjs's OPACITY_REGISTRY beside the
@@ -360,7 +363,9 @@
   font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
   color: var(--ink-secondary);
 }
-.docs-compact-where-text { flex: 0 1 auto; min-width: 0; }
+.docs-compact-where-text { flex: 0 1 auto; min-width: 0; display: flex; }
+.docs-compact-where-crumb { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs-compact-where-ref { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
 .docs-compact-where .docs-badge { flex: none; }
 .docs-compact-name { display: block; font: var(--weight-medium) var(--text-md) / var(--leading-tight) var(--font-ui); }
 .docs-compact-bar .docs-action { justify-content: center; min-width: var(--tap-min); padding: 0; text-decoration: none; }

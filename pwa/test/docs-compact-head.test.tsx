@@ -182,6 +182,27 @@ describe('the compact row (refinements (c), (e), (g))', () => {
     expect(bar().querySelector('.docs-compact-where')?.textContent, 'the default view on origin/HEAD adds nothing').toBe('specs');
   });
 
+  it('a ref view of a nested leaf draws the parent directory and the ref as two spans, the ref with its separator (refinement (g))', async () => {
+    atWidth(412);
+    const tree = treeOk({ entries: [entry('specs', 'd/x.md')] });
+    open('/docs/demo/specs/d/x.md?ref=main', fakeLoaders({ tree: okTree(tree) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    const where = bar().querySelector('.docs-compact-where') as HTMLElement;
+    expect(where.textContent).toBe(`d · ${servedRefText(tree.ref)}`);
+    expect([...where.children].map((c) => c.className)).toEqual(['docs-compact-where-text']);
+    const text = where.querySelector('.docs-compact-where-text') as HTMLElement;
+    // Each is cut at its own end (docs.css), so a long directory never takes the whole line from the ref.
+    expect([...text.children].map((c) => [c.className, c.textContent])).toEqual([
+      ['docs-compact-where-crumb', 'd'],
+      ['docs-compact-where-ref', ` · ${servedRefText(tree.ref)}`],
+    ]);
+    cleanup();
+    open('/docs/demo/specs/d/x.md', fakeLoaders({ tree: okTree(tree) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    expect([...bar().querySelectorAll('.docs-compact-where-text > *')].map((c) => c.className), 'no ref, no ref span')
+      .toEqual(['docs-compact-where-crumb']);
+  });
+
   it('a default view served from anywhere but origin/HEAD names its served ref on the row (refinement (g))', async () => {
     atWidth(412);
     const base = treeOk();

@@ -141,7 +141,7 @@ Each refinement says What, Why and Cost if wrong, and whether it departs from a 
   - Cost if wrong: the dot's fill is a non-text graphic the contrast census does not measure (it measures inks); the fills are the status tokens the fleet's chips use on the same page ground.
   - Departs from no spec sentence: §4.5's chip, its states and its tap are unchanged inside the truth line.
 - **(g) The row keeps what goal 4 needs at a glance.**
-  - What: the label's first line adds, after the parent crumb and joined by ` · `, the served ref (`servedRefText`) whenever what was served is not the usual default (`rowRefText`: the page names a ref, or the served side is local, or the default chain's `via` is not `default:origin-head`, which covers a local main or master and origin's main or master when origin/HEAD is unset or dangling, measured in `ccd/ccd#default_chain`), and then the draft badge `rowBadge` gives: the truth line's own badge for this leaf, from `entryView` through `ENTRY_BADGE_TEXT` (a draft source's badge, or the view's badge), drawn as `.docs-badge`. The crumb and the ref are one text that ends in an ellipsis (`.docs-compact-where-text`); the badge is its sibling with `flex: none`, so the text order stays "where · ref · badge" and only the ref is cut. The usual default view, origin/HEAD resolved, adds nothing.
+  - What: the label's first line adds, after the parent crumb and joined by ` · `, the served ref (`servedRefText`) whenever what was served is not the usual default (`rowRefText`: the page names a ref, or the served side is local, or the default chain's `via` is not `default:origin-head`, which covers a local main or master and origin's main or master when origin/HEAD is unset or dangling, measured in `ccd/ccd#default_chain`), and then the draft badge `rowBadge` gives: the truth line's own badge for this leaf, from `entryView` through `ENTRY_BADGE_TEXT` (a draft source's badge, or the view's badge), drawn as `.docs-badge`. The crumb and the ref are two spans in one flex text (`.docs-compact-where-text`: `.docs-compact-where-crumb` and `.docs-compact-where-ref`, the ref's holding the ` · `), each cut by its own ellipsis and the crumb giving way first (a thousandfold flex-shrink), so a long parent directory never hides the served ref; the badge is the text's sibling with `flex: none`, so the order stays "where · ref · badge" and only a ref too long for the line is cut, at its end. The usual default view, origin/HEAD resolved, adds nothing.
   - Why: with the truth line behind a tap, a branch, a local default or a draft would otherwise look like origin's `main` on the row (the mockup named this loss and this fix, at no height). The draft view the banners link to is `?ref=refs/heads/<branch>`, served as "<branch> (local)", and a workspace branch can run past the 35 or so characters of 11 px mono the label has at 412 px; the badge is the part goal 4 needs, so it is the part that is never cut. One badge function (M4.T7) keeps the row and the truth line from disagreeing; docs-scans clause 1 reads `DocsHead.tsx`.
   - Cost if wrong: on a ref view with a long branch name the ref is what is truncated, never the badge; the full refname is the panel's. Task 5's long-branch case measures the badge whole and inside the label at 412 px.
   - Departs from no spec sentence; it narrows (d)'s departure.
@@ -225,6 +225,8 @@ node .superpowers/sdd/2026-11-03-native-docs-reader-phone-header/find-check.mjs 
 //   - every control on the row is at least one tap (44 x 44), and the row, the mockup's 1 px divider inside it, is one
 //     tap tall (its border box, as getBoundingClientRect reads it);
 //   - on a draft leaf of a ref view with a long branch name, the ref is cut and the draft badge is whole, inside the label;
+//   - on a leaf under a 46-character directory in a ref view, the ref still has room on the first line (the directory
+//     gives way first), and the badge is inside the label;
 //   - Page details opens the truth line under the row, and Escape closes it with focus back on the button.
 // At 599 the head is still the row; at 600, 768 and 1280 it is the full header, as before (its truth line on the page,
 // its crumbs folded below the desk width), and the phone turned sideways (915 x 412, a touch screen) is a desk width that
@@ -260,6 +262,10 @@ const SIZE = Buffer.byteLength(DOC, 'utf8');
 /** A branch name long enough to overflow the label's first line at 412 px. */
 const LONG_BRANCH = 'ws/a-long-workspace-branch-for-the-phone-header';
 
+/** A parent directory as long as this repository's own plan directories run (46 characters), so the row's first line
+ *  holds the directory and nothing else unless the ref is given its own room. */
+const LONG_DIR = '2026-10-27-a-long-directory-name-for-the-row-case';
+
 /** The picked mockup's figures: 133 px above the title, of which the console's row and the gap under it are 48 (44 + 4)
  *  and the reader frame's own top (its body margin, its bar and the gap under the bar) 85, unchanged by this wave. */
 const PHONE_TITLE_MAX = 133;
@@ -291,9 +297,9 @@ const bodyOf = (value: unknown): Buffer => Buffer.from(JSON.stringify(value), 'u
 const COMMITTED_TREE = treeOk({ entries: [entry(SECTION, NAME, { committed: { kind: 'file', blob: BLOB, size: SIZE } })] });
 
 /** The same leaf in a ref view of a long local branch, with a draft over it held by that branch's checkout. */
-function draftTree(): ReturnType<typeof treeOk> {
+function draftTree(leaf = NAME): ReturnType<typeof treeOk> {
   const base = treeOk({
-    entries: [entry(SECTION, NAME, { committed: { kind: 'file', blob: BLOB, size: SIZE }, draft: draftOf('modified') })],
+    entries: [entry(SECTION, leaf, { committed: { kind: 'file', blob: BLOB, size: SIZE }, draft: draftOf('modified') })],
     drafts: { ...holder(), branch: LONG_BRANCH },
   });
   return {
@@ -304,7 +310,7 @@ function draftTree(): ReturnType<typeof treeOk> {
 
 /** `/api/docs/demo/tree` answers `tree` and `/api/docs/demo/file` the leaf's Markdown; any other `/api/docs` request (a
  *  refresh) answers 204. Routed after `openApp`'s own `/api` route, so this one answers first. */
-async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE): Promise<void> {
+async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE, leaf = NAME): Promise<void> {
   await app.ctx.route((u) => u.pathname.startsWith('/api/docs/'), async (route) => {
     const req = route.request();
     if (req.method() !== 'GET') {
@@ -317,7 +323,7 @@ async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE): Promise<void> 
       return;
     }
     const show = {
-      v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section: SECTION, path: NAME, size: SIZE,
+      v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section: SECTION, path: leaf, size: SIZE,
       sha256: BLOB.padEnd(64, '0'), encoding: 'utf8', text: DOC, commit: COMMIT_A, blob: BLOB, onRef: 'contains',
     };
     await route.fulfill({ status: 200, headers, body: bodyOf({ ok: true, contentClass: 'markdown', from: 'ccd', show }) });
@@ -327,10 +333,10 @@ async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE): Promise<void> 
 interface View { readonly width: number; readonly height: number; readonly skin: string; readonly touch?: boolean }
 
 /** A context at `view` (a touch screen below 900 px, or when `touch` asks), its `/api/docs` answering `tree`. */
-async function openView(view: View, tree = COMMITTED_TREE): Promise<OpenedApp> {
+async function openView(view: View, tree = COMMITTED_TREE, leaf = NAME): Promise<OpenedApp> {
   const app = await openApp(browser!, { width: view.width, skin: view.skin, theme: 'light', touch: view.touch }, { api: {}, fleetFrames: [] });
   await app.page.setViewportSize({ width: view.width, height: view.height });
-  await answerDocs(app, tree);
+  await answerDocs(app, tree, leaf);
   return app;
 }
 
@@ -467,7 +473,7 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
           const r = document.querySelector(sel)?.getBoundingClientRect();
           return r === undefined ? null : { left: r.left, right: r.right };
         };
-        const text = document.querySelector('.docs-compact-where-text');
+        const text = document.querySelector('.docs-compact-where-ref');
         const badge = document.querySelector('.docs-compact-where .docs-badge');
         return {
           label: rect('.docs-compact-label'), badge: rect('.docs-compact-where .docs-badge'),
@@ -483,6 +489,41 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
       expect(got.badge).not.toBeNull();
       expect(got.badge!.left).toBeGreaterThanOrEqual(got.label!.left - 0.5);
       expect(got.badge!.right, 'the badge lies inside the label').toBeLessThanOrEqual(got.label!.right + 0.5);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  it('412 x 915: a ref view of a leaf under a 46-character directory still draws the ref, and the badge is inside the label (refinement (g))', async () => {
+    const leaf = `${LONG_DIR}/${NAME}`;
+    const app = await openView({ ...PHONE, skin: REFINED }, draftTree(leaf), leaf);
+    try {
+      await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${leaf}?ref=${LONG_BRANCH}`, { waitUntil: 'load' });
+      await app.page.waitForFunction(() => document.querySelector('.docs-compact-where-ref') !== null, undefined, { timeout: 30_000 });
+      const got = await app.page.evaluate(() => {
+        const box = (sel: string): { left: number; right: number; width: number } | null => {
+          const r = document.querySelector(sel)?.getBoundingClientRect();
+          return r === undefined ? null : { left: r.left, right: r.right, width: r.width };
+        };
+        // The separator's own space is drawn: the first character of the ref's text has a box of its own.
+        const ref = document.querySelector('.docs-compact-where-ref');
+        const first = document.createRange();
+        if (ref?.firstChild != null) { first.setStart(ref.firstChild, 0); first.setEnd(ref.firstChild, 1); }
+        return {
+          label: box('.docs-compact-label'), crumb: box('.docs-compact-where-crumb'), ref: box('.docs-compact-where-ref'),
+          badge: box('.docs-compact-where .docs-badge'), separatorW: first.getBoundingClientRect().width,
+          refText: ref?.textContent ?? null,
+        };
+      });
+      console.log(`PHH-FIGURE refined 412x915 long-directory-ref ${JSON.stringify(got)}`);
+      expect(got.ref, 'the ref is drawn').not.toBeNull();
+      expect(got.ref!.width, 'the ref has room for at least four mono characters').toBeGreaterThan(24);
+      expect(got.separatorW, 'the separator\'s space is drawn').toBeGreaterThan(0);
+      expect(got.badge).not.toBeNull();
+      expect(got.label).not.toBeNull();
+      expect(got.badge!.right, 'the badge lies inside the label').toBeLessThanOrEqual(got.label!.right + 0.5);
+      expect(got.ref!.right, 'the ref ends before the badge').toBeLessThanOrEqual(got.badge!.left + 0.5);
       expect(app.errors, 'no page error').toEqual([]);
     } finally {
       await app.ctx.close();
@@ -645,7 +686,7 @@ describe('a tablet and a desktop keep the full header (refinement (b))', () => {
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { declValue, ruleIn, stripComments } from './cssRule';
+import { declValue, effectiveValue, ruleIn, stripComments } from './cssRule';
 
 const docsCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'docs', 'docs.css'), 'utf8');
 const SCREEN = '.docs-screen:has(> .docs-compact)';
@@ -678,6 +719,25 @@ describe('the compact head in docs.css (the phone-header plan, refinements (d), 
     expect(declValue(ruleIn(docsCss, '.docs-compact-where'), 'display')).toBe('flex');
     expect(declValue(ruleIn(docsCss, '.docs-compact-where'), 'overflow')).toBeNull();
     expect(declValue(ruleIn(docsCss, '.docs-compact-where .docs-badge'), 'flex')).toBe('none');
+  });
+
+  it('the crumb and the ref are two spans, each cut at its own end, the crumb giving way first, so a long directory never hides the ref (refinement (g))', () => {
+    // The first line's text also sits in the grouped ellipsis rule, so its flex line is read over every rule naming it.
+    expect(effectiveValue(docsCss, '.docs-compact-where-text', 'display')).toBe('flex');
+    expect(effectiveValue(docsCss, '.docs-compact-where-text', 'min-width')).toBe('0');
+    const crumb = ruleIn(docsCss, '.docs-compact-where-crumb');
+    const ref = ruleIn(docsCss, '.docs-compact-where-ref');
+    for (const [sel, rule] of [['crumb', crumb], ['ref', ref]] as const) {
+      expect(declValue(rule, 'min-width'), sel).toBe('0');
+      expect(declValue(rule, 'overflow'), sel).toBe('hidden');
+      expect(declValue(rule, 'text-overflow'), sel).toBe('ellipsis');
+    }
+    expect(declValue(crumb, 'white-space')).toBe('nowrap');
+    // The ref's span opens with the separator's space, which a flex item drops under `nowrap`.
+    expect(declValue(ref, 'white-space')).toBe('pre');
+    const shrink = (rule: string): number => Number(/^0\s+(\d+)\s+auto$/.exec(declValue(rule, 'flex') ?? '')?.[1] ?? Number.NaN);
+    expect(shrink(ref)).toBe(1);
+    expect(shrink(crumb), 'the crumb shrinks first').toBeGreaterThan(shrink(ref));
   });
 
   it('Share and Export on the row are a whole tap wide with no underline, and a disabled one is dimmed, not recoloured', () => {
@@ -777,7 +837,10 @@ describe('the compact head: .docs-more and the row’s .docs-action icons are a 
    back and the crumbs (`.docs-compact-crumbs`), as the full header's is. The row is one tap tall with the picked
    mockup's 1 px divider inside that height (box-sizing is border-box everywhere, reset.css), so the row and the 4 px gap
    under it are the console's whole part above the frame. The first line's draft badge sits beside its text, never
-   inside the part that ends in an ellipsis. GROUNDS: the row, the label and the panel paint nothing, so everything here
+   inside the part that ends in an ellipsis. That part is two spans, the parent crumb and the served ref, each cut at its
+   own end, the crumb giving way first (a flex-shrink a thousand times the ref's), so a long parent directory never hides
+   which ref is served; the ref's span holds the ` · ` separator, so it keeps its spaces (`white-space: pre`: a flex item
+   drops a leading space under `nowrap`). GROUNDS: the row, the label and the panel paint nothing, so everything here
    sits on body's --bg-page as the full header does (design/audit.mjs registers `.docs-compact-where` and `.docs-more`
    there); an open `.docs-more` paints its own pressed ground and ink and is measured on it; the dot paints a status fill
    and sets no ink. A disabled icon is dimmed by opacity, registered in design/audit.mjs's OPACITY_REGISTRY beside the
@@ -796,7 +859,9 @@ describe('the compact head: .docs-more and the row’s .docs-action icons are a 
   font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
   color: var(--ink-secondary);
 }
-.docs-compact-where-text { flex: 0 1 auto; min-width: 0; }
+.docs-compact-where-text { flex: 0 1 auto; min-width: 0; display: flex; }
+.docs-compact-where-crumb { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs-compact-where-ref { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
 .docs-compact-where .docs-badge { flex: none; }
 .docs-compact-name { display: block; font: var(--weight-medium) var(--text-md) / var(--leading-tight) var(--font-ui); }
 .docs-compact-bar .docs-action { justify-content: center; min-width: var(--tap-min); padding: 0; text-decoration: none; }
@@ -1106,6 +1171,27 @@ describe('the compact row (refinements (c), (e), (g))', () => {
     open('/docs/demo/specs/a.md', fakeLoaders());
     await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
     expect(bar().querySelector('.docs-compact-where')?.textContent, 'the default view on origin/HEAD adds nothing').toBe('specs');
+  });
+
+  it('a ref view of a nested leaf draws the parent directory and the ref as two spans, the ref with its separator (refinement (g))', async () => {
+    atWidth(412);
+    const tree = treeOk({ entries: [entry('specs', 'd/x.md')] });
+    open('/docs/demo/specs/d/x.md?ref=main', fakeLoaders({ tree: okTree(tree) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    const where = bar().querySelector('.docs-compact-where') as HTMLElement;
+    expect(where.textContent).toBe(`d · ${servedRefText(tree.ref)}`);
+    expect([...where.children].map((c) => c.className)).toEqual(['docs-compact-where-text']);
+    const text = where.querySelector('.docs-compact-where-text') as HTMLElement;
+    // Each is cut at its own end (docs.css), so a long directory never takes the whole line from the ref.
+    expect([...text.children].map((c) => [c.className, c.textContent])).toEqual([
+      ['docs-compact-where-crumb', 'd'],
+      ['docs-compact-where-ref', ` · ${servedRefText(tree.ref)}`],
+    ]);
+    cleanup();
+    open('/docs/demo/specs/d/x.md', fakeLoaders({ tree: okTree(tree) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    expect([...bar().querySelectorAll('.docs-compact-where-text > *')].map((c) => c.className), 'no ref, no ref span')
+      .toEqual(['docs-compact-where-crumb']);
   });
 
   it('a default view served from anywhere but origin/HEAD names its served ref on the row (refinement (g))', async () => {
@@ -1612,9 +1698,10 @@ function rowBadge(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): string
 }
 
 /** The compact row's two lines (phone-header refinements (c), (g)): where the page is over its name. The first line is the
- *  parent crumb and, when one is shown, the served ref, joined by ` · ` in a text that ends in an ellipsis; the draft
- *  badge follows it as a sibling, so a long ref is cut and the badge never is. Text, not links: back goes up one level,
- *  and the whole path is the panel's first line. */
+ *  parent crumb and, when one is shown, the served ref, joined by ` · ` (the ref's own span holds the separator), each its
+ *  own text that ends in an ellipsis and the crumb the one that gives way first, so a long parent directory never hides
+ *  which ref is served; the draft badge follows as a sibling, so a long ref is cut and the badge never is. Text, not
+ *  links: back goes up one level, and the whole path is the panel's first line. */
 function CompactLabel(p: {
   readonly where: string; readonly name: string; readonly refText: string | null; readonly badge: string | null;
 }): ReactNode {
@@ -1622,8 +1709,8 @@ function CompactLabel(p: {
     <p className="docs-compact-label">
       <span className="docs-compact-where">
         <span className="docs-compact-where-text">
-          {p.where}
-          {p.refText !== null && <>{SEP}{p.refText}</>}
+          <span className="docs-compact-where-crumb">{p.where}</span>
+          {p.refText !== null && <span className="docs-compact-where-ref">{SEP}{p.refText}</span>}
         </span>
         {p.badge !== null && <>{SEP}<span className="docs-badge">{p.badge}</span></>}
       </span>
@@ -1791,7 +1878,7 @@ describe('the compact head: the rendered row carries .docs-back, .docs-action an
 
 describe('TextLink stays inside a line of text — a link alone is a control', () => {
 ```
-- [ ] **Step 6: Run it to see it pass.** `( cd pwa && ./node_modules/.bin/vitest run test/docs-compact-head.test.tsx )` — Expected (prediction): `Tests  39 passed (39)`. `TSC-OK`.
+- [ ] **Step 6: Run it to see it pass.** `( cd pwa && ./node_modules/.bin/vitest run test/docs-compact-head.test.tsx )` — Expected (prediction): `Tests  40 passed (40)`. `TSC-OK`.
 - [ ] **Step 7: The full header is unchanged, and the censuses hold.** Each alone, through `ccrc test` where heavy: `docs-screen.test.tsx`, `docs-truth.test.tsx`, `refined-phone.test.tsx` — green, each at its BASE count (they render the full header: setup's `matchMedia` answers false, and `refined-phone`'s 390 case reads `.docs-back` on a `tree: null` leaf, which the compact head keeps). `control-census.test.ts`, `tap-targets.test.tsx`, `docs-scans.test.ts`, `shell-css.test.ts`, `sheet-desktop-arm.test.tsx`, `markup-census.test.ts`, `literal-census.test.ts`, `docs-compact-css.test.ts` — green (`tap-targets.test.tsx` one case more than after Task 3; `control-census.test.ts` at its BASE count, with one more entry). `git fetch -q origin main && ( cd server && ./node_modules/.bin/vitest run test/docs-parity.test.ts test/citations.test.ts )` — green.
 - [ ] **Step 8: Commit.** `git add pwa/src/docs/DocsHead.tsx pwa/src/docs/docsText.ts pwa/test/docs-compact-head.test.tsx pwa/test/control-census.test.ts pwa/test/tap-targets.test.tsx` (expect 5), message `pwa: one Docs row on a phone, the rest behind Page details (docs phone header)`, trailer. Record the task's JSON row fence, as measured, in the SDD ledger.
 
@@ -1856,7 +1943,7 @@ describe('TextLink stays inside a line of text — a link alone is a control', (
 - Guards (not edited): `pwa/browser/reader-frame.browser.test.ts` (its 390 x 844 layout row now runs with the compact head).
 
 - [ ] **Step 0: The file is Task 1's.** `git status --porcelain -- pwa/browser/docs-compact-head.browser.test.ts` prints `?? pwa/browser/docs-compact-head.browser.test.ts`, and its sha256 equals the one recorded in Task 1 Step 5. A difference is a stop-and-ask.
-- [ ] **Step 1: Run it**, through `ccrc test`: `( cd pwa && CCRC_CHROME=<the brief's Chrome> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/docs-compact-head.browser.test.ts )` — Expected (prediction): `Tests  10 passed (10)`. Copy every `PHH-FIGURE` line into the SDD ledger. Predicted at 412 x 915 in Refined: `screenTop` 0, `frameTop` 48 (the 44 px row, its 1 px divider inside that height, and the 4 px gap), `titleInFrame` as at BASE (about 85), `above` about 133; the row line's `bar.h` 44 and `divider` `1px`; the long-branch line's `textCut` and `badgeWhole` both true.
+- [ ] **Step 1: Run it**, through `ccrc test`: `( cd pwa && CCRC_CHROME=<the brief's Chrome> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/docs-compact-head.browser.test.ts )` — Expected (prediction): `Tests  11 passed (11)`. Copy every `PHH-FIGURE` line into the SDD ledger. Predicted at 412 x 915 in Refined: `screenTop` 0, `frameTop` 48 (the 44 px row, its 1 px divider inside that height, and the 4 px gap), `titleInFrame` as at BASE (about 85), `above` about 133; the row line's `bar.h` 44 and `divider` `1px`; the long-branch line's `textCut` and `badgeWhole` both true.
 - [ ] **Step 2: Compare with BASE.** For 600 x 960, 768 x 1024, 1280 x 800 and 915 x 412, `frameTop` and `above` within 1 px of Task 1's figures (the full header is unchanged); a larger move is a stop-and-ask. The 915 x 412 figure is the cost Q3 names (a phone turned sideways keeps today's header); it is recorded, not pinned. For 412 x 915 in both skins, `titleInFrame` within 1 px of BASE (the frame's own part is untouched).
 - [ ] **Step 3: The reader's own browser rows still hold.** `( cd pwa && CCRC_CHROME=<the brief's Chrome> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/reader-frame.browser.test.ts )` through `ccrc test` — green at its BASE count (its `'the reader is sized to the Docs pane and only the frame scrolls, at 1280x800 and 390x844'` row now meets the compact head at 390 and must still find the frame one pane tall).
 - [ ] **Step 4: Commit.** `git add pwa/browser/docs-compact-head.browser.test.ts` (expect 1), message `pwa: the Docs phone header's figure, measured in Chromium at 412 x 915 (docs phone header)`, trailer. Record the task's JSON row fence, as measured, in the SDD ledger.

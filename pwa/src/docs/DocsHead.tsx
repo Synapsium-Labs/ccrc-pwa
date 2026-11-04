@@ -757,9 +757,10 @@ function rowBadge(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): string
 }
 
 /** The compact row's two lines (phone-header refinements (c), (g)): where the page is over its name. The first line is the
- *  parent crumb and, when one is shown, the served ref, joined by ` · ` in a text that ends in an ellipsis; the draft
- *  badge follows it as a sibling, so a long ref is cut and the badge never is. Text, not links: back goes up one level,
- *  and the whole path is the panel's first line. */
+ *  parent crumb and, when one is shown, the served ref, joined by ` · ` (the ref's own span holds the separator), each its
+ *  own text that ends in an ellipsis and the crumb the one that gives way first, so a long parent directory never hides
+ *  which ref is served; the draft badge follows as a sibling, so a long ref is cut and the badge never is. Text, not
+ *  links: back goes up one level, and the whole path is the panel's first line. */
 function CompactLabel(p: {
   readonly where: string; readonly name: string; readonly refText: string | null; readonly badge: string | null;
 }): ReactNode {
@@ -767,8 +768,8 @@ function CompactLabel(p: {
     <p className="docs-compact-label">
       <span className="docs-compact-where">
         <span className="docs-compact-where-text">
-          {p.where}
-          {p.refText !== null && <>{SEP}{p.refText}</>}
+          <span className="docs-compact-where-crumb">{p.where}</span>
+          {p.refText !== null && <span className="docs-compact-where-ref">{SEP}{p.refText}</span>}
         </span>
         {p.badge !== null && <>{SEP}<span className="docs-badge">{p.badge}</span></>}
       </span>

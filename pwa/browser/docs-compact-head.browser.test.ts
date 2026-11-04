@@ -8,6 +8,8 @@
 //   - every control on the row is at least one tap (44 x 44), and the row, the mockup's 1 px divider inside it, is one
 //     tap tall (its border box, as getBoundingClientRect reads it);
 //   - on a draft leaf of a ref view with a long branch name, the ref is cut and the draft badge is whole, inside the label;
+//   - on a leaf under a 46-character directory in a ref view, the ref still has room on the first line (the directory
+//     gives way first), and the badge is inside the label;
 //   - Page details opens the truth line under the row, and Escape closes it with focus back on the button.
 // At 599 the head is still the row; at 600, 768 and 1280 it is the full header, as before (its truth line on the page,
 // its crumbs folded below the desk width), and the phone turned sideways (915 x 412, a touch screen) is a desk width that
@@ -43,6 +45,10 @@ const SIZE = Buffer.byteLength(DOC, 'utf8');
 /** A branch name long enough to overflow the label's first line at 412 px. */
 const LONG_BRANCH = 'ws/a-long-workspace-branch-for-the-phone-header';
 
+/** A parent directory as long as this repository's own plan directories run (46 characters), so the row's first line
+ *  holds the directory and nothing else unless the ref is given its own room. */
+const LONG_DIR = '2026-10-27-a-long-directory-name-for-the-row-case';
+
 /** The picked mockup's figures: 133 px above the title, of which the console's row and the gap under it are 48 (44 + 4)
  *  and the reader frame's own top (its body margin, its bar and the gap under the bar) 85, unchanged by this wave. */
 const PHONE_TITLE_MAX = 133;
@@ -74,9 +80,9 @@ const bodyOf = (value: unknown): Buffer => Buffer.from(JSON.stringify(value), 'u
 const COMMITTED_TREE = treeOk({ entries: [entry(SECTION, NAME, { committed: { kind: 'file', blob: BLOB, size: SIZE } })] });
 
 /** The same leaf in a ref view of a long local branch, with a draft over it held by that branch's checkout. */
-function draftTree(): ReturnType<typeof treeOk> {
+function draftTree(leaf = NAME): ReturnType<typeof treeOk> {
   const base = treeOk({
-    entries: [entry(SECTION, NAME, { committed: { kind: 'file', blob: BLOB, size: SIZE }, draft: draftOf('modified') })],
+    entries: [entry(SECTION, leaf, { committed: { kind: 'file', blob: BLOB, size: SIZE }, draft: draftOf('modified') })],
     drafts: { ...holder(), branch: LONG_BRANCH },
   });
   return {
@@ -87,7 +93,7 @@ function draftTree(): ReturnType<typeof treeOk> {
 
 /** `/api/docs/demo/tree` answers `tree` and `/api/docs/demo/file` the leaf's Markdown; any other `/api/docs` request (a
  *  refresh) answers 204. Routed after `openApp`'s own `/api` route, so this one answers first. */
-async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE): Promise<void> {
+async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE, leaf = NAME): Promise<void> {
   await app.ctx.route((u) => u.pathname.startsWith('/api/docs/'), async (route) => {
     const req = route.request();
     if (req.method() !== 'GET') {
@@ -100,7 +106,7 @@ async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE): Promise<void> 
       return;
     }
     const show = {
-      v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section: SECTION, path: NAME, size: SIZE,
+      v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section: SECTION, path: leaf, size: SIZE,
       sha256: BLOB.padEnd(64, '0'), encoding: 'utf8', text: DOC, commit: COMMIT_A, blob: BLOB, onRef: 'contains',
     };
     await route.fulfill({ status: 200, headers, body: bodyOf({ ok: true, contentClass: 'markdown', from: 'ccd', show }) });
@@ -110,10 +116,10 @@ async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE): Promise<void> 
 interface View { readonly width: number; readonly height: number; readonly skin: string; readonly touch?: boolean }
 
 /** A context at `view` (a touch screen below 900 px, or when `touch` asks), its `/api/docs` answering `tree`. */
-async function openView(view: View, tree = COMMITTED_TREE): Promise<OpenedApp> {
+async function openView(view: View, tree = COMMITTED_TREE, leaf = NAME): Promise<OpenedApp> {
   const app = await openApp(browser!, { width: view.width, skin: view.skin, theme: 'light', touch: view.touch }, { api: {}, fleetFrames: [] });
   await app.page.setViewportSize({ width: view.width, height: view.height });
-  await answerDocs(app, tree);
+  await answerDocs(app, tree, leaf);
   return app;
 }
 
@@ -250,7 +256,7 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
           const r = document.querySelector(sel)?.getBoundingClientRect();
           return r === undefined ? null : { left: r.left, right: r.right };
         };
-        const text = document.querySelector('.docs-compact-where-text');
+        const text = document.querySelector('.docs-compact-where-ref');
         const badge = document.querySelector('.docs-compact-where .docs-badge');
         return {
           label: rect('.docs-compact-label'), badge: rect('.docs-compact-where .docs-badge'),
@@ -266,6 +272,41 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
       expect(got.badge).not.toBeNull();
       expect(got.badge!.left).toBeGreaterThanOrEqual(got.label!.left - 0.5);
       expect(got.badge!.right, 'the badge lies inside the label').toBeLessThanOrEqual(got.label!.right + 0.5);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  it('412 x 915: a ref view of a leaf under a 46-character directory still draws the ref, and the badge is inside the label (refinement (g))', async () => {
+    const leaf = `${LONG_DIR}/${NAME}`;
+    const app = await openView({ ...PHONE, skin: REFINED }, draftTree(leaf), leaf);
+    try {
+      await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${leaf}?ref=${LONG_BRANCH}`, { waitUntil: 'load' });
+      await app.page.waitForFunction(() => document.querySelector('.docs-compact-where-ref') !== null, undefined, { timeout: 30_000 });
+      const got = await app.page.evaluate(() => {
+        const box = (sel: string): { left: number; right: number; width: number } | null => {
+          const r = document.querySelector(sel)?.getBoundingClientRect();
+          return r === undefined ? null : { left: r.left, right: r.right, width: r.width };
+        };
+        // The separator's own space is drawn: the first character of the ref's text has a box of its own.
+        const ref = document.querySelector('.docs-compact-where-ref');
+        const first = document.createRange();
+        if (ref?.firstChild != null) { first.setStart(ref.firstChild, 0); first.setEnd(ref.firstChild, 1); }
+        return {
+          label: box('.docs-compact-label'), crumb: box('.docs-compact-where-crumb'), ref: box('.docs-compact-where-ref'),
+          badge: box('.docs-compact-where .docs-badge'), separatorW: first.getBoundingClientRect().width,
+          refText: ref?.textContent ?? null,
+        };
+      });
+      console.log(`PHH-FIGURE refined 412x915 long-directory-ref ${JSON.stringify(got)}`);
+      expect(got.ref, 'the ref is drawn').not.toBeNull();
+      expect(got.ref!.width, 'the ref has room for at least four mono characters').toBeGreaterThan(24);
+      expect(got.separatorW, 'the separator\'s space is drawn').toBeGreaterThan(0);
+      expect(got.badge).not.toBeNull();
+      expect(got.label).not.toBeNull();
+      expect(got.badge!.right, 'the badge lies inside the label').toBeLessThanOrEqual(got.label!.right + 0.5);
+      expect(got.ref!.right, 'the ref ends before the badge').toBeLessThanOrEqual(got.badge!.left + 0.5);
       expect(app.errors, 'no page error').toEqual([]);
     } finally {
       await app.ctx.close();
