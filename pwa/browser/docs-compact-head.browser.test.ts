@@ -47,7 +47,7 @@ const LONG_BRANCH = 'ws/a-long-workspace-branch-for-the-phone-header';
 
 /** A parent directory as long as this repository's own plan directories run (46 characters), so the row's first line
  *  holds the directory and nothing else unless the ref is given its own room. */
-const LONG_DIR = '2026-10-27-a-long-directory-name-for-the-row-case';
+const LONG_DIR = '2026-10-27-one-long-directory-name-for-the-row';
 
 /** The picked mockup's figures: 133 px above the title, of which the console's row and the gap under it are 48 (44 + 4)
  *  and the reader frame's own top (its body margin, its bar and the gap under the bar) 85, unchanged by this wave. */
