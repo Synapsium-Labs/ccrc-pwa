@@ -7,7 +7,7 @@
 // Measured, not guessed: `Composer.tsx` carried 19 uncovered statements at
 // 83.62%, and the slash lane was the bulk of them.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Composer } from '../src/session/Composer';
 import { api } from '../src/lib/api';
 
@@ -41,6 +41,21 @@ describe('the slash menu asks the box, once', () => {
     expect(commands).toHaveBeenCalledWith(ID);
     expect(screen.getByText('/compact')).toBeInTheDocument();
     expect(screen.getByText('/graphify')).toBeInTheDocument();
+  });
+
+  it('typing on while the first read is pending asks once (review 1473 F5)', async () => {
+    // What keeps this to one request is the effect's dependency on whether a `/` command is open, not on the query:
+    // a query dependency would ask again on every keystroke while the first answer is still on its way.
+    let answer: (v: typeof COMMANDS) => void = () => {};
+    commands.mockImplementation(() => new Promise((r) => { answer = r; }));
+    render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    type('/');
+    type('/c');
+    type('/co');
+    await waitFor(() => expect(commands).toHaveBeenCalledTimes(1));
+    act(() => { answer(COMMANDS); });
+    expect(await screen.findByText('/compact')).toBeInTheDocument();
+    expect(commands).toHaveBeenCalledTimes(1);
   });
 
   it('marks a SKILL and leaves a builtin unmarked — they are not the same thing', async () => {

@@ -104,23 +104,21 @@ export function Composer({
   // Lazily fetch the session's slash commands (built-ins + skills) the first
   // time the user starts a `/` command; cache for the rest of the session. A
   // failed read is not cached (an empty list would hide every command for the
-  // composer's life, review 1464 F6): it stays unknown, is not asked again
-  // while that `/` command is typed, and is asked once more when the next one
-  // starts, so a failure costs at most one request per `/`, never a loop.
+  // composer's life, review 1464 F6): it stays unknown and is asked once more
+  // when the next `/` command starts. What does the work is the dependency on
+  // `slashOpen`, not on the query: the effect runs once as a `/` command opens,
+  // so neither a pending read nor a failed one is asked again while it is
+  // typed, and a failure costs at most one request per `/`, never a loop
+  // (review 1473 F5).
   const query = slashQuery(value);
   const slashOpen = query !== null;
-  const failedThisSlash = useRef(false);
   useEffect(() => {
-    if (!slashOpen) {
-      failedThisSlash.current = false;
-      return;
-    }
-    if (commands !== null || id === undefined || failedThisSlash.current) return;
+    if (!slashOpen || commands !== null || id === undefined) return;
     let live = true;
     void api
       .commands(id)
       .then((r) => { if (live) setCommands([...r.builtins, ...r.skills]); })
-      .catch(() => { if (live) failedThisSlash.current = true; });
+      .catch(() => {}); // stays unknown: asked again when the next `/` opens
     return () => { live = false; };
   }, [slashOpen, commands, id]);
 
