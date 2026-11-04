@@ -1,6 +1,6 @@
 # Box settings in the console
 
-**Spec** · 2026-10-25 · Status: wave 1 built (#2193); revision 5, for wave 2, is a draft · Owner: the coordinator · Issue: #1417 · Related:
+**Spec** · 2026-10-25 · Status: wave 1 built (#2193); wave 2 agreed (revision 5) · Owner: the coordinator · Issue: #1417 · Related:
 `docs/superpowers/plans/2026-10-23-centralised-update-w24-settings-live-in-ccrc-config.md` (#1237),
 `docs/superpowers/specs/2026-09-20-centralised-update-management-design.md`,
 `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`,
@@ -24,13 +24,12 @@ keeps the CLI as their one reader.
 Nothing writes a setting. No route, agent op or box-token door is added, and coord.db gains no column. Wave 1 built
 this for seven settings (#2193, 2026-11-04).
 
-**Wave 2 (revision 5, section 5; proposed).** The card shows the 54 other settings a node reads, all of them used
+**Wave 2 (revision 5, section 5; agreed 2026-11-04).** The card shows the 54 other settings a node reads, all of them used
 on the fleet box, each with a display class. A checked number or choice shows as it is. A path, key file, address,
 list or free text shows only whether it is set. The test box's own 28 settings are left out. A refused setting never
 records its raw text, which also retires wave 1's accepted residual, and the server checks every row against its
 class. The snapshot becomes version 2, which the server and an updated console read beside version 1, so the rollout
-goes server first. **To approve:** D11 to D22 in section 3, above all the classes (D12), the refused-row rule (D14
-and D22), the version-2 rollout (D15) and the test box's address (D19).
+goes server first. The operator approved D11 to D22 as proposed on 2026-11-04.
 
 **Revision history:**
 - Revision 2 folded in an adversarial design review: two critical findings, five important and seven minor.
@@ -42,7 +41,7 @@ and D22), the version-2 rollout (D15) and the test box's address (D19).
 - Revision 5 (2026-11-04, the operator's ruling for a wave 2): adds section 5 and decisions D11 to D22 for the
   remaining settings, from a read-only census of all 82 names and a measurement of wave 1's parser, wire and card at
   `724d7683a`. Three Opus lenses (leaks, facts, decisions) then checked the draft against the code; their findings are
-  folded in, and sections 2.1 to 2.6 are marked where section 5 supersedes them. D1 to D10 now read Agreed: the operator approved revision 3 on 2026-10-26, and wave 1 was built to it.
+  folded in, and sections 2.1 to 2.6 are marked where section 5 supersedes them. D1 to D10 now read Agreed: the operator approved revision 3 on 2026-10-26, and wave 1 was built to it. The operator approved D11 to D22 as proposed on 2026-11-04, so they read Agreed too.
 
 Changes from either revision are marked "(review)" or "(refactor)".
 
@@ -276,7 +275,7 @@ field blanks nothing.
 
 ## 3. Decisions
 
-The coordinator proposes these. The operator rules on the ones marked Proposed. D1 to D10 are wave 1's, agreed and built; D11 to D22 are wave 2's (section 5).
+D1 to D10 are wave 1's, agreed and built. D11 to D22 are wave 2's (section 5), approved as proposed on 2026-11-04.
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
@@ -290,18 +289,18 @@ The coordinator proposes these. The operator rules on the ones marked Proposed. 
 | D8 | Validators the verb needs | restate them in the verb; extract one resolver per setting | Extract, characterization first and behaviour-preserving (review): a restated rule would be a second definition | Agreed |
 | D9 | A stopped timer | the stale label only; doctor's units check too | Both (review): doctor's known units gain the timer with its own sentence. It stays hand-kept until ARCH-69 | Agreed |
 | D10 | Where the carve-outs land | inside this wave's PR; a behaviour-identical PR first | Inside this PR, characterization first. A separate PR first is the operator's call (refactor) | Agreed |
-| D11 | Which settings wave 2 shows | (a) all 89; (b) every setting a fleet or server node reads; (c) some families only | (b): 54 more, 61 in all, every one used on the fleet box. The test box's own 28 are read only on the test box, so a node could only ever show their defaults | Proposed |
-| D12 | How each setting shows | (a) every value through `_upd_redact`, as doctor does; (b) one display class per setting: `value`, `origin`, `presence` or `omit` | (b): the class decides what may leave the box. 43 `value`, 11 `presence`, 28 `omit` (5.1) | Proposed |
-| D13 | Where a verdict comes from | (a) copy each check's rule into the verb; (b) call each owner's check, moving the ones that cannot be called; (c) show values with no verdict | (b), characterization first as D8. `_tshape` moves into `ccrc`; the keepalive, usage and carry checks become functions in `ccrc`, the first two shipped to the sweeps through the generated settings library, which widens its purpose; checks with no value-free words gain them (5.2) | Proposed |
-| D14 | What a refused setting records | (a) its raw value through `_upd_redact` (wave 1, an accepted residual); (b) the check's words and the source, never the value | (b), for all 61 rows, so wave 1's seven change too and the residual retires (5.3) | Proposed |
-| D15 | The wire | (a) keep version 1 and grow the list, which a wave-1 server reads as malformed; (b) version 2, read beside version 1; (c) version 2 in a new field beside a version-1 copy of the seven | (b), rolled out `--server-first`. A console tab on wave 1's build shows version-2 nodes as unreadable until it reloads; (c) avoids that at the cost of a second reader (5.4) | Proposed |
-| D16 | Where the class table lives | (a) a new sourced file; (b) `ccd/ccrc`, beside `CCRC_SETTINGS`, mirrored in L0 | (b): the verb and doctor already run in `ccrc`'s shell, and the settings census already scans that file. The table holds each setting's class, family and roles | Proposed |
-| D17 | The card with 61 rows | (a) one flat list; (b) grouped by family, folded unless a row needs attention; (c) only rows that differ from their default | (b), with the native `details` element so the card holds no control (5.5) | Proposed |
-| D18 | Doctor's `box-settings` line | (a) unchanged, printing every set value; (b) the same class table | (b): a `presence` setting prints as set, and a refused `value` prints the check's words, never the value (5.6) | Proposed |
-| D19 | The test box's address, `CCRC_TESTBOX_URL` | (a) `presence`; (b) `origin`, showing its host | (a) is proposed: its host is a private address, and the card has no need of it (judgement). Wave 1's release base keeps `origin`, since a release mirror is an address meant to be named; a private mirror raises the same question, under Later. Your call | Proposed |
-| D20 | Wave-2 read mode, and settings applied at install | (a) each setting in its consumer's mode; (b) `ccrc.env` alone, with install-time settings labelled | (b): an environment-first read would report the timer's own environment (5.7) | Proposed |
-| D21 | What a server-role node shows for the fleet's settings | (a) a row each, reading "not used on a server box"; (b) one folded line per family, "not used on this role"; (c) no rows | (b): the server box uses none of the 54, and a line per family says so without 54 rows of noise | Proposed |
-| D22 | What a refused row's `why` may hold | (a) the check's words, cut at 240 bytes, on the writer's promise; (b) a closed set of the checks' words, mirrored in L0 and checked by the server | (b): a `why` is the one free string left in a refused row, and only a closed set lets the server prove it holds no value. The cost is one more vocabulary held set-equal, as the failure words are | Proposed |
+| D11 | Which settings wave 2 shows | (a) all 89; (b) every setting a fleet or server node reads; (c) some families only | (b): 54 more, 61 in all, every one used on the fleet box. The test box's own 28 are read only on the test box, so a node could only ever show their defaults | Agreed |
+| D12 | How each setting shows | (a) every value through `_upd_redact`, as doctor does; (b) one display class per setting: `value`, `origin`, `presence` or `omit` | (b): the class decides what may leave the box. 43 `value`, 11 `presence`, 28 `omit` (5.1) | Agreed |
+| D13 | Where a verdict comes from | (a) copy each check's rule into the verb; (b) call each owner's check, moving the ones that cannot be called; (c) show values with no verdict | (b), characterization first as D8. `_tshape` moves into `ccrc`; the keepalive, usage and carry checks become functions in `ccrc`, the first two shipped to the sweeps through the generated settings library, which widens its purpose; checks with no value-free words gain them (5.2) | Agreed |
+| D14 | What a refused setting records | (a) its raw value through `_upd_redact` (wave 1, an accepted residual); (b) the check's words and the source, never the value | (b), for all 61 rows, so wave 1's seven change too and the residual retires (5.3) | Agreed |
+| D15 | The wire | (a) keep version 1 and grow the list, which a wave-1 server reads as malformed; (b) version 2, read beside version 1; (c) version 2 in a new field beside a version-1 copy of the seven | (b), rolled out `--server-first`. A console tab on wave 1's build shows version-2 nodes as unreadable until it reloads; (c) avoids that at the cost of a second reader (5.4) | Agreed |
+| D16 | Where the class table lives | (a) a new sourced file; (b) `ccd/ccrc`, beside `CCRC_SETTINGS`, mirrored in L0 | (b): the verb and doctor already run in `ccrc`'s shell, and the settings census already scans that file. The table holds each setting's class, family and roles | Agreed |
+| D17 | The card with 61 rows | (a) one flat list; (b) grouped by family, folded unless a row needs attention; (c) only rows that differ from their default | (b), with the native `details` element so the card holds no control (5.5) | Agreed |
+| D18 | Doctor's `box-settings` line | (a) unchanged, printing every set value; (b) the same class table | (b): a `presence` setting prints as set, and a refused `value` prints the check's words, never the value (5.6) | Agreed |
+| D19 | The test box's address, `CCRC_TESTBOX_URL` | (a) `presence`; (b) `origin`, showing its host | (a): its host is a private address, and the card has no need of it (judgement). Wave 1's release base keeps `origin`, since a release mirror is an address meant to be named; a private mirror raises the same question, under Later | Agreed |
+| D20 | Wave-2 read mode, and settings applied at install | (a) each setting in its consumer's mode; (b) `ccrc.env` alone, with install-time settings labelled | (b): an environment-first read would report the timer's own environment (5.7) | Agreed |
+| D21 | What a server-role node shows for the fleet's settings | (a) a row each, reading "not used on a server box"; (b) one folded line per family, "not used on this role"; (c) no rows | (b): the server box uses none of the 54, and a line per family says so without 54 rows of noise | Agreed |
+| D22 | What a refused row's `why` may hold | (a) the check's words, cut at 240 bytes, on the writer's promise; (b) a closed set of the checks' words, mirrored in L0 and checked by the server | (b): a `why` is the one free string left in a refused row, and only a closed set lets the server prove it holds no value. The cost is one more vocabulary held set-equal, as the failure words are | Agreed |
 
 ## 4. What this does not change
 
@@ -313,7 +312,7 @@ The coordinator proposes these. The operator rules on the ones marked Proposed. 
 - Wave 2 changes no default, range or refusal either. Every check it moves (D13) answers exactly as before, pinned
   first.
 
-## 5. Wave 2: every setting a node reads (revision 5, proposed)
+## 5. Wave 2: every setting a node reads (revision 5, agreed)
 
 Wave 1 shows seven settings. The operator ruled on 2026-11-04 that a second wave covers the rest. This section says
 which of them the card shows, how each one shows, and what that changes in the verb, the wire, the server, the card
@@ -537,14 +536,15 @@ relays `GK_WARN`, which quotes a refused value; that stays, under Later.
 - It is built as the wave after #1410, in line with the DDD/Clean/SOLID refactor in flight (the operator, 2026-10-25).
 - D1 to D10, approved 2026-10-26. Wave 1 was built to them and merged as #2193 on 2026-11-04.
 - A wave 2 for the remaining settings (the operator, 2026-11-04: "Yes: plan a wave 2 for the remaining settings").
-
-**Waiting on you**
-- D11 to D22, wave 2's design (section 5). Above all:
+- D11 to D22, wave 2's design in section 5, approved as proposed (the operator, 2026-11-04). Among them:
   - D12, the display class of each setting (the table in 5.1);
   - D14 and D22, a refused setting records no raw text, wave 1's seven included, and its words come from a closed set;
   - D15, a version-2 snapshot and a server-first rollout, with a reload for any open console tab;
-  - D19, whether the test box's address may show its host;
-  - D21, what a server-role node shows for the fleet's settings.
+  - D19, the test box's address shows only whether it is set;
+  - D21, a server-role node shows one folded line per family of the fleet's settings.
+
+**Waiting on you**
+- Nothing on this design. The wave-2 plan follows it.
 
 **Later**
 - Editing a setting from the console.

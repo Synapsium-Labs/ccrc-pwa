@@ -16,7 +16,7 @@ ones, so this is now a two-wave programme.
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | A read-only `ccrc settings` verb and its snapshot; a five-minute timer on every Linux box; the snapshot as an eleventh node file on `NodeWire.settings`; a Box settings card under Settings › Updates. | #2193 | **MERGED** 2026-11-04 01:28 UTC as `98ade6885`, at head `4035979d8` (run 1369, dispatched 2026-11-03 06:56 UTC; four review rounds). |
-| 2 | The 82 other names in `CCRC_SETTINGS`, each with a display class. | — | **PLANNED** 2026-11-04 (run 1409). It needs a spec revision and the operator's approval of it before a plan or a dispatch. |
+| 2 | The 82 other names in `CCRC_SETTINGS`, each with a display class. | — | **PLANNED** 2026-11-04 (run 1409). Spec revision 5 (section 5, D11 to D22) approved 2026-11-04; the plan and the dispatch follow. |
 
 ## Decisions & deviations
 
@@ -190,6 +190,11 @@ ones, so this is now a two-wave programme.
   - two decisions added: what a server-role node shows (D21), and a closed set of refusal words (D22).
 
   Sections 2.1 to 2.6 are marked where section 5 supersedes them. The operator rules on D11 to D22 before any plan.
+- **2026-11-04: the operator approved D11 to D22 as proposed** ("Approve D11 to D22 as proposed"). Before
+  recording it, the coordinator re-measured: `main` had moved four commits past `724d7683a`, none of them touching
+  `ccd/`, `deploy/`, `shared/` or the update code, and `ccd/ccrc` on `main` was byte-identical to the file the census
+  and the spec were measured from, with the same 89 names in `CCRC_SETTINGS`. The spec's decisions now read Agreed,
+  D19 among them: the test box's address shows only whether it is set. The plan is written next, from section 5.
 
 ## Carried constraints
 
@@ -199,8 +204,9 @@ ones, so this is now a two-wave programme.
 
 ## Next-wave brief
 
-Wave 2: the remaining settings (run 1409, deviation numbers 7906 to 7925). Before any plan, the spec gains a
-revision covering them, and the operator approves it. The revision settles these points from the census:
+Wave 2: the remaining settings (run 1409, deviation numbers 7906 to 7925). The design is the spec's section 5
+(revision 5, approved 2026-11-04), and where it differs from the points below, section 5 governs. The points it
+settled from the census:
 
 - **One display class per name** (`value`, `origin`, `presence` or `omit`). Free text, names, paths, globs, lists,
   user names and token or key files are `presence`.
@@ -212,8 +218,7 @@ revision covering them, and the operator approves it. The revision settles these
   environment.
 - **The test box.** The host table goes on the card. The box table, read only on the test box itself, is omitted on a
   console node.
-- **The test-box URL.** Whether its host, a private address, may show at all is the operator's call. `presence` is
-  the default proposal.
+- **The test-box URL.** `presence`, approved as D19: its host, a private address, never shows.
 - **Settings applied at install.** Slice and graph-unit settings take effect at the next update. Either the card says
   so, or it reads the installed drop-in.
 - **Doctor.** Doctor's `box-settings` check uses the same display table as the card.
