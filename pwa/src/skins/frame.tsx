@@ -95,9 +95,14 @@ export interface ShellFrameProps {
   detailRef: Ref<HTMLElement>;
   /** The route ladder, behind its boundary. */
   children: ReactNode;
+  /** What the nav slot draws on a desk, given the set's fleet column (`app.tsx`'s per-route choice). Absent, it draws the fleet
+   *  column. The Waiting on you item route draws the list the item was opened from there, beside the open item, as the fleet
+   *  stays beside an open session (desktop-polish PL9; spec 2026-10-31 §2, D23). A phone draws the fleet column whatever this
+   *  says: its nav slot is the fleet's screen of the phone swap. */
+  nav?: (fleet: ReactNode) => ReactNode;
 }
 
-export function ShellFrame({ set, view, detailRef, children }: ShellFrameProps): ReactNode {
+export function ShellFrame({ set, view, detailRef, children, nav }: ShellFrameProps): ReactNode {
   // The bar is a desk part in both of today's sets (D-5678): on a phone the accounts strip lives in the fleet screen
   // (`FleetColumn`'s `showAccounts`), so one instance is mounted at any width. Mounted, never CSS-hidden. The rail and
   // the status bar are desk parts too (W2 Task S9, D-5472): a phone's navigation is `PhoneNav`'s.
@@ -149,9 +154,10 @@ export function ShellFrame({ set, view, detailRef, children }: ShellFrameProps):
           </nav>
         )}
         {Nav !== null && (
-          // The fleet column: always mounted, so it is the desk sidebar; hidden on a phone while the detail shows.
+          // The fleet column: the desk sidebar, unless the route draws something else beside its detail (`nav`); hidden on a
+          // phone while the detail shows. The slot's node is the same either way: only its child changes.
           <div key="nav" className="shell-nav">
-            <Nav />
+            {desk && nav !== undefined ? nav(<Nav />) : <Nav />}
           </div>
         )}
         <main key="detail" id={CONTENT_ID} className="shell-detail" ref={detailRef} tabIndex={-1}>

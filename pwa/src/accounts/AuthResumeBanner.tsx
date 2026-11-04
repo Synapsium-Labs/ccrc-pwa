@@ -9,7 +9,8 @@
 // nothing (only the starting session may send its code, spec §3.7).
 //
 // WHERE IT SITS: in the fleet's banner stack (`FleetBanners`, pinned, never folded), which a desk shows on every route
-// (Refined under its bar, Instrument in its list column) and a phone on the fleet view; and on a phone's other views at
+// (Refined under its bar; Instrument in its list column, or above the list beside an item on the Waiting on you item route,
+// `ItemListColumn`, which replaces that column) and a phone on the fleet view; and on a phone's other views at
 // the top of the detail pane (`AuthResumeInDetail`), so one instance shows at a time. In flow, never over the composer
 // or the tab bar: on a phone's session view the pane becomes a column so the chat keeps its composer on screen
 // (`fleet.css`, `.shell-detail:has(> .auth-resume)`).

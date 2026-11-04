@@ -23,7 +23,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
-| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; fix-round handoff `2f6caa48e` accepted by the server 2026-10-20 07:25 UTC, NEW review 685 dispatched 07:42 UTC; PR conflicts with main on the generated stamp; review 685 closed done 2026-10-20 13:56 UTC with its report fingerprint accepted, no critical finding; run 308 returned to working 13:59 UTC for fix round 2, its last phase waiting on another run's claims on `ccd/ccd` and README; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED; MERGED 2026-10-21 03:54 UTC (`d8cd4765`, #435) after reviews 714 and 729 and fix round 3; run 308 closed; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 5's week runs 2026-10-21 05:38 to 2026-10-28 05:38 UTC; read 2026-10-28: 0 reap-class, `not-triggered`, the variable stays; weekly reading continues, next due 2026-11-04 05:38 UTC; the scope sweep is no longer shadowed: `scope-sweep-live` exists since 2026-10-26 23:38 UTC, armed by the operator (confirmed 2026-10-28) |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; fix-round handoff `2f6caa48e` accepted by the server 2026-10-20 07:25 UTC, NEW review 685 dispatched 07:42 UTC; PR conflicts with main on the generated stamp; review 685 closed done 2026-10-20 13:56 UTC with its report fingerprint accepted, no critical finding; run 308 returned to working 13:59 UTC for fix round 2, its last phase waiting on another run's claims on `ccd/ccd` and README; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED; MERGED 2026-10-21 03:54 UTC (`d8cd4765`, #435) after reviews 714 and 729 and fix round 3; run 308 closed; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 5's week runs 2026-10-21 05:38 to 2026-10-28 05:38 UTC; read 2026-10-28: 0 reap-class, `not-triggered`, the variable stays; week 2 read 2026-11-04: 0 reap-class, `not-triggered` in the part read, its first 2 h 9 m unmeasured (the fleet moved boxes), the variable stays, direct figure 0 in both weeks but partial, reported under spec §9; weekly reading continues, next due 2026-11-11 05:38 UTC; the scope sweep is no longer shadowed: `scope-sweep-live` exists since 2026-10-26 23:38 UTC, armed by the operator (confirmed 2026-10-28) |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | deferred by the operator 2026-10-20: the programme stops after 4b ships and its week is measured |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -995,6 +995,47 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
 - **2026-10-28 08:00 UTC - the operator confirmed arming the scope sweep.** Asked by this coordinator, the operator
   confirmed that they armed `$REG/scope-sweep-live` on 2026-10-26. The sweep's stop is live by the operator's ruling,
   and the week's reading above is recorded with it armed for its last 30 hours. The owed confirmation is closed.
+- **2026-11-04 05:52 UTC - Task 5's second week read: not triggered in the part read; the variable stays. Its first
+  2 h 9 m are unmeasured, and the two-week direct-pressure figure is reported.**
+  - **The read.** At 05:48 UTC on the fleet box, with the installed tool (v0.0.945, install complete, a build that
+    contains `d8cd4765`), after `--help` confirmed the flag grammar: `TZ=UTC python3 -I deploy/measure-continuity.py
+    --stage 6 --since "2026-10-28 05:38:00" --until "2026-11-04 05:38:00" --reap-baseline 0 --all-copies --json`. It
+    exited 0 with no error output. The raw JSON is kept in private evidence; the aggregate follows.
+  - **Coverage: the week's first 2 h 9 m are not read.** The fleet moved to another box on 2026-10-28. This box's
+    user journal holds no pane-scope record before 07:46:39 UTC that day, so the kernel reading covers 2026-10-28
+    07:46:39 to 2026-11-04 05:38:00 UTC, 6 days 21 h 51 m of the 7. The first 2 h 8 m 39 s ran on the previous fleet
+    box, whose journal this read does not reach. That part is unmeasured, not zero.
+  - **`reap_class_oom`:** 0 pane-scope OOM stops in the part read, so 0 reap-class, 0 busy within the idle window, 0
+    idle without a live background shell, 0 unmapped and 0 unmeasured. This box's journal holds no pane-scope OOM
+    stop at all.
+  - **`pressure_reap_comparison`:** baseline 0, withdraw above 2, observed 0: `not-triggered` over the part read. The
+    unread 2 h 9 m are not folded into that decision; they stay unmeasured.
+  - **`direct_pressure_kills`:** `partial`. 1,787 transcripts were read (every copy), none unreadable, no malformed
+    row; 0 killed background tasks, in 0 transcripts; 33 notifications unmeasured. So the direct target, 0, is met
+    for what was read, not proven: the 33 unmeasured notifications and the scanner's discovery limits (spec §9's
+    as-built note) stay open, and whether the transcripts read include all of the week's first 2 h 9 m on the
+    previous box is unmeasured. For exposure, only the running sessions' starts were read: for them the variable is
+    expected, not measured (Exposure, below), and the sessions behind the other transcripts were not read for
+    exposure at all. This count never feeds the B comparison.
+  - **`inert_scopes`** (the sweep's current record, not the week's history): mode `live`; 1 dead, 0 inert, 0 dead for
+    a day or more; carried scopes 0 dead, 0 live, 0 unknown.
+  - **Exposure.** At the read, 54 sessions were running, with no lifecycle journal gaps. Each one's latest ordinary
+    start (`spawn`, `done`) is after 2026-10-28 05:38 UTC, the earliest of those at 07:50 UTC that day. Eleven of them
+    also started between 06:59 and 07:05 UTC that day, inside the unread 2 h 9 m, so panes did run in that window.
+    This box's installed build at those start times is not in this read's evidence. Today's build contains
+    `d8cd4765`, and its `ccd` sets the variable in the spawn environment (`_resume_env`), so each running session is
+    expected to carry it, not measured to. The variable in any process's environment is unmeasured.
+  - **The rule applied.** The observed reap-class count is 0 in the part read, so nothing triggers withdrawal (Task 5
+    Step 5) and the variable stays. The unread 2 h 9 m are reported as unmeasured; no rule fires on them without a
+    read, and this coordinator invents none.
+  - **The two-week comparison (spec §9).** The direct figure reads 0 against its target of 0 in both weeks: 0 kills in
+    2,610 transcripts with 21 notifications unmeasured, then 0 in 1,787 with 33 unmeasured. Both readings are
+    partial, and each carries the discovery and exposure limits above, so the target is met for what was read and
+    not proven, and whether the figure moved from its baseline
+    cannot be measured: the baseline's 186 was not counted by this scanner (§9's as-built note). This is reported
+    for the operator's ruling on retirement or redesign under §9; this coordinator changes nothing.
+  - **Next.** The rule covers any later week, so the observation continues weekly: the week since
+    `2026-11-04 05:38:00` UTC, until `2026-11-11 05:38:00` UTC, due 2026-11-11 05:38 UTC; owner: this coordinator.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -1060,8 +1101,10 @@ recorded below.
 
 **Wave 4b is merged** (#435 `d8cd4765`, 2026-10-21 03:54 UTC; Decisions, 2026-10-21 03:55) **and deployed**
 (v0.0.508, 2026-10-21; Decisions, 05:43). Task 5's first week is read: 0 reap-class, `not-triggered`, so the
-variable stays (Decisions, 2026-10-28 05:51). What is owed now: the weekly reading against baseline B, next due
-2026-11-04 05:38 UTC with the two-week direct-pressure comparison, owned by this coordinator. `$REG/scope-sweep-live`
+variable stays (Decisions, 2026-10-28 05:51). Its second week is read too: 0 reap-class in the part read, its first
+2 h 9 m unmeasured, and the two-week direct-pressure figure reported for the operator's ruling under spec §9
+(Decisions, 2026-11-04 05:52). What is owed now: the weekly reading against baseline B, next due 2026-11-11 05:38 UTC,
+owned by this coordinator. `$REG/scope-sweep-live`
 exists since 2026-10-26 23:38 UTC: the operator armed it, and confirmed so on 2026-10-28 (Decisions, 08:00). Wave 5 stays deferred until the operator lifts the stop. Its run is open, planned, and has no worker.
 The record below is the wave's history.
 

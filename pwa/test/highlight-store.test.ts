@@ -11,10 +11,8 @@ import {
   type HighlightStoreOptions,
 } from '../src/lib/highlightStore';
 import {
-  DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS,
-  DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS, HIGHLIGHT_BLOCK_DEADLINE_MS, HIGHLIGHT_LINE_RETRY_UNITS,
-  HIGHLIGHT_PAGE_MAX_TIMEOUTS, HIGHLIGHT_PAGE_WORKER_MS, MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS,
-  MD_HIGHLIGHT_MAX_BLANK_CHARS, MD_HIGHLIGHT_MAX_HTML_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS,
+  DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS, HIGHLIGHT_BLOCK_DEADLINE_MS, HIGHLIGHT_LINE_RETRY_UNITS,
+  HIGHLIGHT_PAGE_MAX_TIMEOUTS, HIGHLIGHT_PAGE_WORKER_MS, MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_HTML_CHARS,
 } from '../src/lib/markdownLimits';
 
 interface Call {
@@ -97,7 +95,7 @@ function setup(options: HighlightStoreOptions = { mode: 'docs' }) {
   return { h, clock, store, key, post, answer };
 }
 
-/** `n` characters of python, distinct by `tag`, in lines under 100 characters, with no long word or blank run. */
+/** `n` characters of python, distinct by `tag`, in lines under 100 characters. */
 const py = (n: number, tag: string): string =>
   (tag + ' ' + 'x '.repeat(n)).replace(/(.{80})/g, '$1\n').slice(0, n);
 const kinds = (store: { peek(k: string): HighlightEntry }, keys: string[]): string[] => keys.map((k) => store.peek(k).kind);
@@ -240,22 +238,16 @@ describe('M4.H11: a content-keyed store', () => {
     });
   });
 
-  it('keyOf: a key, or why the block can never be requested, in BASE\'s order; part 1\'s bounds only with part1', () => {
+  it('keyOf: a key, or why the block can never be requested (no registered grammar, over the block cap); a block of any shape part 1 refused has a key', () => {
     expect(blockKey('ts', 'a')).toEqual({ kind: 'key', key: 'ts\u0000a' });
     expect(blockKey('nope', 'a')).toEqual({ kind: 'unregistered' });
     expect(blockKey('', 'a')).toEqual({ kind: 'unregistered' });
     const big = 'a\n'.repeat(MD_HIGHLIGHT_BLOCK_MAX_CHARS);
     expect(blockKey('python', big)).toEqual({ kind: 'over-cap', chars: big.length });
-    const ts = 'a\n'.repeat(MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS);
-    expect(blockKey('ts', ts)).toEqual({ kind: 'part1', bound: 'grammar-cap', chars: ts.length });
-    expect(blockKey('ts', ts, false).kind).toBe('key');
-    const word = 'a'.repeat(MD_HIGHLIGHT_MAX_WORD_CHARS + 1);
-    expect(blockKey('python', word)).toEqual({ kind: 'part1', bound: 'word', chars: word.length });
-    const line = 'a '.repeat(MD_HIGHLIGHT_MAX_LINE_CHARS);
-    expect(blockKey('python', line)).toEqual({ kind: 'part1', bound: 'line', chars: line.length });
-    const blank = `a${'\n'.repeat(MD_HIGHLIGHT_MAX_BLANK_CHARS + 1)}b`;
-    expect(blockKey('python', blank)).toEqual({ kind: 'part1', bound: 'blank', chars: MD_HIGHLIGHT_MAX_BLANK_CHARS + 1 });
-    expect(blockKey('python', blank, false).kind).toBe('key');
+    // Literal sizes, just over each retired bound: the grammar cap (8 192), the word (256), the line (2 048), the blank run (2 048).
+    for (const [lang, raw] of [
+      ['ts', 'a\n'.repeat(4097)], ['python', 'a'.repeat(257)], ['python', 'a '.repeat(1025)], ['python', `a${'\n'.repeat(2049)}b`],
+    ] as const) expect(blockKey(lang, raw).kind, `${lang}, ${raw.length} characters`).toBe('key');
   });
 });
 
@@ -313,6 +305,26 @@ describe('M4.H12: page ceilings and settled()', () => {
       expect(h.calls).toHaveLength(1);
     });
 
+    // Review 1366 F4: the output walk's `<=` pinned from both sides. Copies whose HTML sums to exactly the page cap are
+    // all drawn; one copy more is skipped. The answer is sized from the page cap alone (an eighth of it, within the
+    // per-block cap), so the case holds at any value this plan sets.
+    it('OUTPUT, at the boundary: copies whose HTML sums to exactly the page cap are all drawn, and one copy more is skipped (review 1366 F4)', async () => {
+      const { h, store, key, answer } = setup();
+      const size = DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS / 8;
+      expect(Number.isInteger(size)).toBe(true);
+      expect(size).toBeLessThanOrEqual(MD_HIGHLIGHT_MAX_HTML_CHARS);
+      const html = `<span class="hljs-a">${'x'.repeat(size - 28)}</span>`;
+      expect(html).toHaveLength(size);
+      const ats = copiesOf(9);
+      store.seed(ats.map((at) => ({ lang: 'python', raw: 'same', at })));
+      const k = key('python', 'same');
+      store.request(k);
+      await answer(0, HTML(html));
+      expect(h.calls).toHaveLength(1);
+      expect(store.peek(k)).toMatchObject({ kind: 'html', mode: 'block' });
+      expect(verdicts(store, ats)).toEqual([...Array(8).fill(null), 'page-output']);
+    });
+
     it('OUTPUT: the verdicts are readable when the key\'s listeners run (recorded before the entry is set)', async () => {
       const { store, key, answer } = setup();
       const html = `<span class="hljs-a">${'x'.repeat(MD_HIGHLIGHT_MAX_HTML_CHARS - 40)}</span>`;
@@ -358,8 +370,8 @@ describe('M4.H12: page ceilings and settled()', () => {
       expect(verdicts(store, ats)).toEqual([...Array(fit).fill(null), 'page-output']);
     });
 
-    it('INPUT: copies of one block are admitted until their combined length passes the page input ceiling, then skipped as copies; the key is still requestable, one job (part1 off: no per-block bound applies)', async () => {
-      const { h, store, key, answer } = setup({ mode: 'docs', part1: false });
+    it('INPUT: copies of one block are admitted until their combined length passes the page input ceiling, then skipped as copies; the key is still requestable, one job', async () => {
+      const { h, store, key, answer } = setup();
       const raw = py(MD_HIGHLIGHT_BLOCK_MAX_CHARS, 'same');
       const fit = Math.floor(DOCS_HIGHLIGHT_PAGE_MAX_CHARS / raw.length);
       expect(fit).toBeGreaterThan(1);
@@ -373,35 +385,6 @@ describe('M4.H12: page ceilings and settled()', () => {
       await answer(0, HTML(OK));
       expect(h.calls).toHaveLength(1);
       expect(store.peek(k).kind).toBe('html');
-    });
-
-    it('INPUT: the same with part 1 on (the block is within every per-block bound of its grammar)', () => {
-      const { store } = setup();
-      const raw = py(MD_HIGHLIGHT_BLOCK_MAX_CHARS, 'same');
-      const fit = Math.floor(DOCS_HIGHLIGHT_PAGE_MAX_CHARS / raw.length);
-      const ats = copiesOf(fit + 1);
-      store.seed(ats.map((at) => ({ lang: 'python', raw, at })));
-      expect(verdicts(store, ats)).toEqual([...Array(fit).fill(null), 'page-input']);
-    });
-
-    it('SCAN: copies of one typescript block count in part 1\'s scan sum too: the first copy past it is skipped by part1-scan', () => {
-      const { store, key } = setup();
-      const raw = py(MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS, 'same');
-      const fit = Math.floor(DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS / raw.length);
-      expect((fit + 2) * raw.length).toBeLessThanOrEqual(DOCS_HIGHLIGHT_PAGE_MAX_CHARS);
-      const ats = copiesOf(fit + 2);
-      store.seed(ats.map((at) => ({ lang: 'typescript', raw, at })));
-      expect(verdicts(store, ats)).toEqual([...Array(fit).fill(null), 'part1-scan', 'part1-scan']);
-      expect(store.peek(key('typescript', raw))).toBe(UNREQUESTED_ENTRY);
-    });
-
-    it('MARKDOWN: copies of one markdown block count in part 1\'s markdown sum too', () => {
-      const { store } = setup();
-      const raw = py(MD_HIGHLIGHT_BLOCK_MAX_CHARS, 'same');
-      const fit = Math.floor(DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS / raw.length);
-      const ats = copiesOf(fit + 1);
-      store.seed(ats.map((at) => ({ lang: 'markdown', raw, at })));
-      expect(verdicts(store, ats)).toEqual([...Array(fit).fill(null), 'part1-markdown']);
     });
 
     it('a key whose first occurrence is past a ceiling is skipped as an entry from the first commit, and no copy verdict is recorded', () => {
@@ -533,30 +516,6 @@ describe('M4.H12: page ceilings and settled()', () => {
     const ks = Array.from({ length: Math.ceil(DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS / huge.length) + 1 }, (_, i) => key('python', `k${i}`));
     for (const [i, k] of ks.entries()) { store.request(k); await answer(i, HTML(huge)); }
     expect(kinds(store, ks).every((s) => s === 'html')).toBe(true);
-  });
-
-  it('part 1\'s scan page budget skips at seed with its own ceiling, and only its grammars; part1 off, never', () => {
-    const { store, key } = setup();
-    const n = Math.floor(DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS / MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS);
-    const ts = Array.from({ length: n + 1 }, (_, i) => ({ lang: 'ts', raw: py(MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS, `t${i}`) }));
-    const json = { lang: 'json', raw: py(1000, 'j') };
-    store.seed([...ts, json]);
-    expect(store.peek(key('ts', ts[n]!.raw))).toEqual({ kind: 'skipped', ceiling: 'part1-scan' });
-    expect(store.peek(key('ts', ts[n - 1]!.raw)).kind).toBe('unrequested');
-    expect(store.peek(key('json', json.raw)).kind).toBe('unrequested');
-    const off = setup({ mode: 'docs', part1: false }).store;
-    off.seed(ts);
-    expect(off.peek(`ts\u0000${ts[n]!.raw}`).kind).toBe('unrequested');
-  });
-
-  it('part 1\'s markdown page budget skips at seed with its own ceiling, and only markdown', () => {
-    const { store, key } = setup();
-    const md = Array.from({ length: 3 }, (_, i) => ({ lang: i === 1 ? 'md' : 'markdown', raw: py(DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS / 2, `m${i}`) }));
-    const yaml = { lang: 'yaml', raw: py(1000, 'y') };
-    store.seed([...md, yaml]);
-    expect(kinds(store, md.map((b) => key(b.lang, b.raw)))).toEqual(['unrequested', 'unrequested', 'skipped']);
-    expect(store.peek(key('markdown', md[2]!.raw))).toEqual({ kind: 'skipped', ceiling: 'part1-markdown' });
-    expect(store.peek(key('yaml', yaml.raw)).kind).toBe('unrequested');
   });
 
   it('a chat store is not settled while a shown key waits for its request (the debounce window)', async () => {
@@ -720,25 +679,33 @@ describe('L3-1: the worker-time ceiling counts a run of back-to-back jobs (the r
     terminate(): void {}
   }
 
-  it('five 700 ms jobs answered back to back: the fifth is skipped by page-worker-time 200 ms into its run', async () => {
+  // W5h-b: derived from HIGHLIGHT_PAGE_WORKER_MS (it was written for the provisional 3 000 ms): as many 700 ms jobs as
+  // fit are coloured, and the next is skipped (HIGHLIGHT_PAGE_WORKER_MS - fit x 700) ms into its run, under its deadline.
+  it('back-to-back 700 ms jobs: as many as fit the worker-time ceiling are coloured, and the next is skipped by page-worker-time mid-run', async () => {
+    const JOB_MS = 700;
+    expect(JOB_MS).toBeLessThan(HIGHLIGHT_BLOCK_DEADLINE_MS);
+    const fit = Math.floor(HIGHLIGHT_PAGE_WORKER_MS / JOB_MS);
+    const left = HIGHLIGHT_PAGE_WORKER_MS - fit * JOB_MS;
+    expect(left).toBeGreaterThan(0);
+    expect(left + 50).toBeLessThan(HIGHLIGHT_BLOCK_DEADLINE_MS);
     const clock = fakeClock();
     const worker = new Worker();
     const highlighter = createHighlighter({ spawn: () => worker, setTimer: clock.setTimer, clearTimer: clock.clearTimer });
     const store = createHighlightStore(highlighter, { mode: 'docs' }, clock);
-    const raws = ['a', 'b', 'c', 'd', 'e'];
+    const raws = Array.from({ length: fit + 1 }, (_, i) => `b${i}`);
     store.seed(raws.map((raw) => ({ lang: 'python', raw })));
     const ks = raws.map((raw) => { const k = store.keyOf('python', raw); if (k.kind !== 'key') throw new Error('no key'); return k.key; });
     for (const k of ks) store.request(k);
     worker.onmessage?.({ data: { ready: true } });
-    for (let i = 1; i <= 4; i += 1) {
-      clock.advance(700);
+    for (let i = 1; i <= fit; i += 1) {
+      clock.advance(JOB_MS);
       worker.onmessage?.({ data: { id: i, result: { kind: 'html', html: OK, mode: 'block' } } });
       await flush();
     }
-    expect(kinds(store, ks)).toEqual(['html', 'html', 'html', 'html', 'pending']);
-    clock.advance(250);
+    expect(kinds(store, ks)).toEqual([...Array(fit).fill('html'), 'pending']);
+    clock.advance(left + 50);
     await flush();
-    expect(store.peek(ks[4]!)).toEqual({ kind: 'skipped', ceiling: 'page-worker-time' });
+    expect(store.peek(ks[fit]!)).toEqual({ kind: 'skipped', ceiling: 'page-worker-time' });
     expect(store.settled()).toBe(true);
   });
 });

@@ -51,7 +51,7 @@
 
 ## Landing order
 
-PL1 → PL2 → PL3 → PL4 → PL5a → PL5b → PL6 → PL7 → PL8, with PL9 (operator steer of 2026-11-03) free to land before or after PL8. PL6 also waits for the Linear central-key plan's LK6 to merge (both edit `ACCOUNT_SECRET_PATHS` and the hook's account arm; rebase onto it, never edit around it). PL8 is GATED on that plan's LK1, LK2, LK11 and LK12 being merged; its Step 0 re-plans against them.
+PL1 → PL2 → PL3 → PL4 → PL5a → PL5b → PL6 → PL7 → PL8, with PL9 (operator steer of 2026-11-03) free to land before or after PL8. PL6 also waits for the Linear central-key plan's LK6 to merge (both edit `ACCOUNT_SECRET_PATHS` and the hook's account arm; rebase onto it, never edit around it). PL8 is GATED on that plan's LK1, LK2, LK11 and LK12 being merged; its Step 0 re-plans against them. PL10 (operator steer of 2026-11-04) lands after the console carry PR (#2258), whose files it shares.
 
 ---
 
@@ -316,6 +316,42 @@ Operator steer of 2026-11-03, spec §2 "Moving between items" and §3.2 "The rec
 - [ ] **Step 4: Run** — PASS, plus the whole pwa/browser suite through `ccrc test`, with `full-ci` on the PR (the item view's layout changes).
 - [ ] **Step 5: Commit** `feat(ledgers): move between items, and a recommended option on every decide item`.
 
+### Task PL10: getting around on a phone, the spec one tap away, and links that work (D-7952)
+
+Operator steer of 2026-11-04, spec §2, "Getting around on a phone", "The spec one tap away", "Links work" and "Document links go to the Docs reader" (D25 to D28).
+
+**Files (confirm at Step 0 on `origin/main`):**
+- Modify: `pwa/src/skins/refined/parts.tsx` and `pwa/src/skins/instrument/parts.tsx`, which fill `PhoneNav`, and one shared phone-bar component beside the frame. It reads the console's one list of places (today Refined's `TAB_IDS`, moved to a shared owner) and `useNavBadges`, through `commandDoor(id)`, so there is no second list of places. At a desk, Refined's `AppBar` and Instrument's `Rail` leave out the fleet place (D25); the phone bar keeps it first. Also modify `pwa/src/skins/frame.tsx` and `pwa/src/styles/shell.css` (the bar at phone width only, absent in an open session) and the item strip's CSS (it stays in view on a phone).
+- Modify: `pwa/src/ledgers/ItemView.tsx` (the band's programme name links to the programme view, and a Spec link), `WaitingScreen.tsx` (a Spec link per programme group) and `ProgrammeScreen.tsx` (a Spec link on the head). All three build the address with the one function `GoalsPanel` uses today, moved to the words or links module so there is a single owner.
+- Create: one pure L1 module that splits item text into text and link runs (`https`, console paths, repository document paths; everything else is text). Modify the item view's text, steps and history to draw through it.
+- Modify: `shared/ledgers.ts` and `server/src/coord/ledgersRoutes.ts` (`parseRaise` refuses an item whose text links a document through an artifact page or a document server outside the console, with a refusal word of its own, its status, census rows and a PWA sentence). Also `ccd/coordinator-skill/SKILL.md` clause 20 (one sentence, below) and `server/test/coordinator-skill.test.ts`.
+- Test: the new module's unit test, `pwa/test/item-view.test.tsx`, `waiting-screen`, `programme-screen` and the raise-route test. Add a browser file for the phone bar and the strip at 360 and 390, and check that the bar is absent at 900 and 1280.
+
+**Interfaces:**
+- The phone bar's places are the console's one list of places, in its order, fleet first, plus the Search door. The desk bar and rail show the same list without the fleet place. A place added to the list appears on both with no second edit.
+- `linkRuns(text: string): readonly LinkRun[]`, where `LinkRun = {kind:'text', text} | {kind:'link', text, href, external: boolean}`. A repository document path becomes the Docs reader address in the programme's home project.
+- Clause 20 gains, after "why it beats each alternative,": "a link to a document is its repository path, which the console opens in the Docs reader, never an artifact page or another document server,".
+
+- [ ] **Step 1: Write the failing tests:**
+  - `the phone bar shows the desk places with their badges on the ledger pages`;
+  - `the phone bar is absent in an open session and at a desk`;
+  - `the desk bar and rail show no fleet place, and the phone bar shows it first`;
+  - `an open session's chrome is unchanged at phone and desk widths`;
+  - `previous and next stay in view on a long item at phone width`;
+  - `the item band, each programme group and the programme head link the pinned spec`;
+  - `no spec link is drawn without a pin`;
+  - `the band's programme name opens the programme view`;
+  - `https, console paths and document paths in item text are links`;
+  - `a javascript or data address stays text`;
+  - `a document path opens in the Docs reader`;
+  - `an outside link opens with no opener`;
+  - `the raise route refuses an artifact page or an outside document server as a document link`;
+  - `an outside service's own page stays a link`.
+- [ ] **Step 2: Run** — FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** — PASS, plus the whole pwa/browser suite through `ccrc test`, with `full-ci` on the PR (the shell frame changes).
+- [ ] **Step 5: Commit** `feat(ledgers): get around on a phone, the spec one tap away, and links that work`.
+
 ## Deviations found
 
 Block D-7708 to D-7716, issued 2026-11-01 by the allocator to the coordinator (`desktop-polish: programme ledgers, Goals and Waiting on you (PL1 to PL8)`), one number per task:
@@ -335,6 +371,10 @@ Block D-7708 to D-7716, issued 2026-11-01 by the allocator to the coordinator (`
 - **D-7715** (PL7): coordinator-skill clause 20.
 - **D-7716** (PL8): Linear sign-in beside a pasted key.
 - **D-7896** (PL9): moving between items, and a recommended option with its reasons on every Decide item. Issued 2026-11-03 by the allocator to the coordinator, for the operator's steer that day (spec D23, D24).
+- **D-7926** (PL6 follow-up): secrets bookkeeping. A secret value is one line (operator item 8), and stored secrets get a names-only read and a Remove door (operator item 9). It also carries PL6 reviews 1 and 2. Issued 2026-11-04 by the allocator to the coordinator. The task note is `2026-11-01-programme-ledgers/pl6-followup.md`, in PR #2248.
+- **D-7950** (carry, server): the general carry PR's server part. It clears review carries from PL4 (1338), PL7 (1348), C3 and C4 (1382, 1383, 1375), PL6 (1389 A6, 1416 F3) and the PL6 follow-up (1418, 1426). Issued 2026-11-04 by the allocator to the coordinator; the task note is `2026-11-01-programme-ledgers/carry-server.md`.
+- **D-7951** (carry, console): the general carry PR's console part. It clears review carries from PL5a (1379), PL5b (1386, 1388) and the PL9 follow-up (1408). Issued 2026-11-04 by the allocator to the coordinator; the task note is `2026-11-01-programme-ledgers/carry-console.md`.
+- **D-7952** (PL10): getting around on a phone, the spec one tap away, tappable links, and document links that go only to the Docs reader. Issued 2026-11-04 by the allocator to the coordinator, for the operator's steer that day (spec D25 to D28).
 
 A further departure found during a task is named by slug in the worker's report; the coordinator allocates for it.
 

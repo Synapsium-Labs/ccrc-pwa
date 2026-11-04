@@ -52,7 +52,10 @@ import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate } from '../src/lib/router';
 import { renderSettings } from './settingsHost';
-import { draftOf, entry, failedAnswer, fakeLoaders, fileResponse, holder, okTree, treeOk, type FakeLoaders } from './docsFixtures';
+import { COMMIT_A, SERVED, draftOf, entry, failedAnswer, fakeLoaders, fileResponse, holder, okTree, pageAt, treeOk, type FakeLoaders } from './docsFixtures';
+import { ExportSheet } from '../src/docs/ExportSheet';
+import { EXPORT_TEXT } from '../src/docs/docsText';
+import type { ExportRequest } from '../src/docs/export/exportInput';
 
 const read = (...seg: string[]): string =>
   readFileSync(path.join(import.meta.dirname, '..', 'src', ...seg), 'utf8');
@@ -1159,6 +1162,42 @@ describe('Share: .docs-share on .docs-action, the share sheet’s Share… and C
     expect(copy).toHaveClass('min-h-tap');
     fireEvent.click(copy);
     expect(await screen.findByRole('textbox', { name: SHARE_SHEET_TEXT.field })).toHaveClass('docs-share-field');
+  });
+});
+
+// — native Docs reader W5, Export: the header's Export and the export sheet's Save and Retry (spec 2026-10-01 4.14,
+// 4.17). Both halves for each, as for the Docs controls above. —
+describe('Export: .docs-export on .docs-action, and the export sheet’s Save and Retry off @ccrc/ui’s Button (docs W5 Export)', () => {
+  afterEach(() => {
+    history.replaceState(null, '', '/');
+  });
+
+  it('are at least one tap tall: .docs-action on the token, the sheet’s buttons off @ccrc/ui’s Button', () => {
+    expect(floorIn(docsCss, '.docs-action')).toBe('var(--tap-min)');
+    expect(buttonVariants({ variant: 'primary' })).toContain('min-h-tap');
+    expect(buttonVariants({ variant: 'ghost' })).toContain('min-h-tap');
+  });
+
+  it('are the classes the rendered controls carry', async () => {
+    openDocs('/docs/demo/specs/a.md', markdownLeaf('# A\n'));
+    const exportButton = await screen.findByRole('button', { name: DOCS_HEAD_TEXT.export });
+    expect(exportButton).toHaveClass('docs-action', 'docs-export');
+    fireEvent.click(exportButton);
+    expect(await screen.findByRole('button', { name: /^Save / })).toHaveClass('min-h-tap');
+  });
+
+  it('draws Retry, in the sheet’s no-start arm, with the same floor class', async () => {
+    const page = pageAt('/docs/demo/specs/a.md');
+    if (page.kind !== 'path') throw new Error('fixture: not a leaf');
+    const request: ExportRequest = {
+      page, tree: treeOk(), assets: null, readAt: 0,
+      source: {
+        kind: 'plain', show: fileResponse('# A').show, body: { kind: 'plain', text: '# A', note: 'a note' },
+        pin: { kind: 'committed', commit: COMMIT_A, servedRef: SERVED, section: 'specs', path: 'a.md' },
+      },
+    };
+    render(<ExportSheet request={request} onClose={() => {}} load={() => Promise.reject(new TypeError('chunk'))} />);
+    expect(await screen.findByRole('button', { name: EXPORT_TEXT.retry })).toHaveClass('min-h-tap');
   });
 });
 

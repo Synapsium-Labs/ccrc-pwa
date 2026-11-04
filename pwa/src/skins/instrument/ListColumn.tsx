@@ -6,7 +6,8 @@
 // rail's Runs door (`go-runs`), mounted at every desk width, is the door, and the status bar prints the open runs in its
 // count when there are any, so the column draws no runs line (T2f, D-6371); the class chooser, the line's other half,
 // sits on the table's toggle row in project mode (`FleetTable`). The banner stack stays
-// here, because Instrument's `Banners` part is `null`.
+// here, because Instrument's `Banners` part is `null`; on the item route, where the frame's nav slot holds the item's list
+// in place of this column, `ItemListColumn` (`ledgers/WaitingRoutes.tsx`) mounts the same stack above that list.
 import type { ReactNode } from 'react';
 import { FleetColumn } from '../../screens/FleetColumn';
 

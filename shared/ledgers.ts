@@ -98,6 +98,12 @@ export interface ItemView {
   why: string;
   how: string[];
   options: string[] | null;
+  /** A decide item's recommended option (plan PL9, spec §3.2, D24): the 0-based index into `options` of the option its raiser
+   *  recommends, with `recommendedWhy`, why it beats each alternative. Both or neither: `null` on every other kind and on a
+   *  decide item raised before the rule, which the console draws as before. A server from before PL9 omits both, so a reader
+   *  goes through `recommendationOf`, never the fields. */
+  recommended: number | null;
+  recommendedWhy: string | null;
   neededBy: NeededBy;
   soonLabel: string | null;
   state: ItemState;
@@ -109,8 +115,13 @@ export interface ItemView {
   note: string | null;
   secretSlot: string | null;
   /** The slot's state (plan PL6), read from its metadata file: when it was set, its tail (`secretTailOf`) and whether the
-   *  egress masker knows it. `why` says why it does not, and is absent when it does (or from a server before PL6). */
-  secretSet: { at: number; tail: string; masked: boolean; why?: SecretUnmasked } | null;
+   *  egress masker knows it. `why` says why it does not, and is absent when it does (or from a server before PL6).
+   *  `{at: null}`: the slot HOLDS a value but its record is missing, unreadable or unparseable (review 1416 F4), so nothing
+   *  is known of when or how; it is stored all the same, never folded into `null`, which is a slot that holds no value. Its
+   *  `tail` is always empty, for a console from before it that reads one (review 1418 F3).
+   *  `{unreadable: true}`: the box cannot read the slot (a directory it cannot search, an I/O error; review 1418 F2), so
+   *  whether a value is stored is not known: neither stored nor nothing stored. */
+  secretSet: { at: number; tail: string; masked: boolean; why?: SecretUnmasked } | { at: null; tail: '' } | { unreadable: true } | null;
   history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null }[];
 }
 
@@ -201,23 +212,31 @@ export const OPERATOR_SECRETS_DIR = 'operator-secrets';
  *  its lanes with it, and the masker's roster prune (`SecretMasker.retain`) never deletes a lane that carries it: those lanes
  *  are this server's own, not the roster's (review 1389 F1). */
 export const OPERATOR_SECRET_LANE_PREFIX = 'operator-secret:';
+/** Whether a masker lane is an operator-secret slot's: the one predicate the masker's prune, its roster filter and its re-key
+ *  guard read, and the re-key's composer (`withOperatorSecretRows`) filters a box's answer with. */
+export function isOperatorSecretLane(laneId: string): boolean {
+  return typeof laneId === 'string' && laneId.startsWith(OPERATOR_SECRET_LANE_PREFIX);
+}
 
 /** The longest secret the console takes, in characters and in UTF-8 bytes alike (the masker's longest run is 8192 bytes,
  *  so a value inside this bound is never too long for it). */
 export const SECRET_VALUE_MAX = 8192;
-/** The shortest value whose tail is shown, in UTF-8 BYTES after any trailing `=`, counted as the egress masker counts a
+/** The shortest value whose tail can be shown, in UTF-8 BYTES after any trailing `=`, counted as the egress masker counts a
  *  secret: its floor, `RUN_MIN_BYTES` (`server/src/accounts/shapes.ts`), which `ledgers-secrets.test.ts` holds equal to this
  *  (review 1389 A1). Below it no character of the value leaves the server: the masker cannot catch such a value in outgoing
- *  text, and four characters of it are a fifth or more of it. */
+ *  text, and four characters are a large share of so short a value. At the floor or above, the tail is shown only when the
+ *  masker answers that it will catch the value (`masked`, review 1391 F2): a value it cannot catch shows none either. */
 export const SECRET_TAIL_MIN = 20;
 /** How many characters the tail shows. */
 export const SECRET_TAIL_CHARS = 4;
 
 /** Why the egress masker does not know a saved secret (Review Focus 2: never a silent skip). `too-short`: under the
- *  masker's 20-byte floor (after any trailing `=`); `too-long`: past its 8192-byte run; `unregistered`: the masker could
- *  not take it (no box token yet, or coord.db stayed busy). */
-export type SecretUnmasked = 'too-short' | 'too-long' | 'unregistered';
-const SECRET_UNMASKED_MAP: Record<SecretUnmasked, true> = { 'too-short': true, 'too-long': true, unregistered: true };
+ *  masker's 20-byte floor (after any trailing `=`); `too-long`: past its 8192-byte run; `not-one-run`: the masker took it,
+ *  but its search of outgoing text can never produce it as one candidate (it holds a space, `:`, `=`, `,` or another
+ *  delimiter the search splits on, or begins with one), so it would not be caught (review 1391 F2); `unregistered`: the
+ *  masker could not take it (no box token yet, or coord.db stayed busy). */
+export type SecretUnmasked = 'too-short' | 'too-long' | 'not-one-run' | 'unregistered';
+const SECRET_UNMASKED_MAP: Record<SecretUnmasked, true> = { 'too-short': true, 'too-long': true, 'not-one-run': true, unregistered: true };
 export const SECRET_UNMASKED_WHYS = Object.keys(SECRET_UNMASKED_MAP) as readonly SecretUnmasked[];
 export function isSecretUnmasked(v: unknown): v is SecretUnmasked {
   return typeof v === 'string' && (SECRET_UNMASKED_WHYS as readonly string[]).includes(v);
@@ -237,6 +256,14 @@ export function utf8Bytes(s: string): number {
 /** Whether a pasted value is one the console takes: 1 to `SECRET_VALUE_MAX` characters and UTF-8 bytes. */
 export function isSecretValue(v: unknown): v is string {
   return typeof v === 'string' && v.length >= 1 && v.length <= SECRET_VALUE_MAX && utf8Bytes(v) <= SECRET_VALUE_MAX;
+}
+
+/** Whether a value is ONE line in every reading: no carriage return, line feed, vertical tab, form feed, next line (U+0085),
+ *  line separator (U+2028) or paragraph separator (U+2029) in it (the operator's ruling on programme item 8, "one line is
+ *  enough", and its ruling on review 1416 A-R5: one line means one line however a reader breaks lines). The secret's route
+ *  refuses any other with its own word before anything is written, and the panel keeps its single-line field. */
+export function isOneLine(v: string): boolean {
+  return !/[\r\n\v\f\u0085\u2028\u2029]/.test(v);
 }
 
 /** The last `SECRET_TAIL_CHARS` characters (code points, so a surrogate pair is never split) of a value of at least
@@ -259,6 +286,31 @@ export interface SecretSaveAnswer {
   readonly ok: true;
   readonly secret: { readonly setAt: number; readonly tail: string; readonly masked: boolean; readonly why?: SecretUnmasked };
   readonly item: ItemView;
+}
+
+/**
+ * ONE STORED SLOT as the programme's stored-secrets read answers it (`GET /api/programmes/:slug/secrets`, the operator's ruling
+ * on programme item 9): its name, when it was saved, and the item that asked for it. NEVER any part of the value: no tail, no
+ * length, no digest. `setAt` is `null` when the slot's record could not be read (the value file is there, its metadata is
+ * not); `item` is `null` when the record names no item (a slot saved before the record carried one) or that item is gone.
+ */
+export interface StoredSecret {
+  readonly slot: string;
+  readonly setAt: number | null;
+  readonly item: { readonly id: number; readonly title: string } | null;
+}
+/** What the stored-secrets read answers: the programme's slots, sorted by name. A store that could not be read is never
+ *  this answer with no slots: it is the `secrets-unreadable` refusal. */
+export interface StoredSecretsAnswer {
+  readonly ok: true;
+  readonly program: string;
+  readonly slots: readonly StoredSecret[];
+}
+/** What the Remove door (`DELETE /api/programmes/:slug/secrets/:slot`) answers on success: the slot it removed, and nothing of
+ *  its value. */
+export interface SecretRemoveAnswer {
+  readonly ok: true;
+  readonly slot: string;
 }
 
 const SPEC_PREFIX = 'docs/superpowers/specs/';
@@ -284,6 +336,24 @@ export const ITEM_TEXT_MAX = 2000;
 export const ITEM_STEPS_MAX = 12;
 export const ITEM_OPTIONS_MAX = 6;
 export const ANSWER_MAX = 2000;
+/** The longest `recommendedWhy` a raise takes (plan PL9): a few plain sentences on why the recommended option beats each
+ *  alternative, with what each alternative would cost or risk. */
+export const RECOMMEND_WHY_MAX = 2000;
+
+/** THE ONE READER of an item's recommendation (plan PL9): the option it names and why, or `null` when the item has none to
+ *  show. `null` for a field a server from before PL9 omits (absence permits: the item draws as before), for a kind that is
+ *  not `decide`, and for an index that names no listed option or reasons that are not text: the raise route refuses both,
+ *  so either is a corrupt row, and the console then shows the options with no mark rather than a mark on the wrong one. */
+export function recommendationOf(item: {
+  readonly kind: ItemKind; readonly options: readonly string[] | null;
+  readonly recommended?: number | null; readonly recommendedWhy?: string | null;
+}): { readonly index: number; readonly why: string } | null {
+  const { kind, options, recommended, recommendedWhy } = item;
+  if (kind !== 'decide' || options === null) return null;
+  if (typeof recommended !== 'number' || !Number.isInteger(recommended) || recommended < 0 || recommended >= options.length) return null;
+  if (typeof recommendedWhy !== 'string' || recommendedWhy.trim() === '') return null;
+  return { index: recommended, why: recommendedWhy };
+}
 
 /** The coordinator's presence as an item's label reads it. `unmeasured` says the server has no reading to give (no fleet
  *  frame or registry listing yet, an id the registry lists but the frame lacks, or the session's own presence is a doubt): it

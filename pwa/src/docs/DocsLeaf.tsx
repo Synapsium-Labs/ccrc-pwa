@@ -24,6 +24,7 @@ import type { DocsNotOk } from './failures';
 import { downloadDocFile, showBytes } from './objectUrls';
 import { ReaderFrame, type ReaderDeps } from './ReaderFrame';
 import { pinFor, type DocsVisit, type FileSlot } from './useDocsVisit';
+import { usePublishExportBody, type ExportBody } from './exportBody';
 
 type Leaf = DocsPageLocation & { kind: 'path' };
 type LinkBase = Omit<DocLinkContextValue, 'urls'>;
@@ -119,6 +120,10 @@ function TextBody(p: { readonly show: DocsShowOk; readonly path: string }): Reac
     () => (text === null ? null : [{ lang: ext, raw: text.replace(/\n$/, '') }]),
     [ext, text],
   ));
+  // What this body shows, for Export: its text, and the grammar that colours it, if any. Bytes that are not UTF-8 are
+  // `DocPlain`'s, which publishes itself.
+  usePublishExportBody(useMemo<ExportBody | null>(
+    () => (src.kind === 'markdown' ? { kind: 'text', text: src.text, lang: text === null ? null : ext } : null), [src, text, ext]));
   if (src.kind === 'no-bytes') return <DocsFailureView answer={malformed(DOCS_SHOW_NO_BYTES)} />;
   if (src.kind === 'not-utf8') return <DocPlain text={src.text} note={DOC_NOT_UTF8_NOTE} />;
   if (store === null) return <pre className="doc-plain">{src.text}</pre>;

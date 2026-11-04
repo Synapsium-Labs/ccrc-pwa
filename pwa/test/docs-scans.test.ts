@@ -998,3 +998,392 @@ describe('clause W5 Share: one share door, and one clipboard writer under pwa/sr
     expect(hits).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Clause W5 Export (spec 2026-10-01 4.17; M4.EX2's scan, M4.EX11, M4.EX16, M4.EX17, M4.T7's Export clause), read with
+// TypeScript's parser:
+//   - M4.EX2: in `docs/export/**`, `docs/ExportSheet.tsx`, `docs/share.ts` and `docs/ShareSheet.tsx`: no
+//     `dangerouslySetInnerHTML` (any spelling clause W5h-a's `namesSink` reads), no assignment to `innerHTML` or
+//     `outerHTML`, no `insertAdjacentHTML` call, no `document.write` or `document.writeln` call, and no string or
+//     template piece that begins with `<` and a letter, `/` or `!`, except `EXPORT_PREFIX`'s own initialiser in
+//     `docs/export/policy.ts`;
+//   - M4.EX11: the name `imagePinFor` (a call, an import, any identifier) appears only in `docs/docsLinks.ts`, its
+//     definition, and `docs/DocImage.tsx`, whose `planImageRef` is the one way Export reaches it;
+//   - M4.EX16: across `pwa/src`, a `react-dom/server` specifier (any subpath) and the name `renderToStaticMarkup` only in
+//     `docs/export/buildExport.tsx`, which exports `buildExport` and types only; `./export/buildExport` imported only by
+//     `docs/ExportSheet.tsx`, through a dynamic `import()`; `ExportSheet.tsx` calls `downloadExport`, reads no member
+//     named `bytes`, and holds no `srcDoc`, `innerHTML`, `document.write` or `window.open`; under `pwa/src/docs` and
+//     `lib/markdown*`, `new Blob(`, `new File(` and `URL.createObjectURL(` only in `docs/objectUrls.ts`; and in W5 no JSX
+//     `iframe` element and no `srcDoc` attribute anywhere in `pwa/src` (refinement (v));
+//   - M4.EX17: the run-time import closure of `docs/export/buildExport.tsx`, static and dynamic, through every relative
+//     specifier, holds neither `lib/markdownHighlightWorker.ts` nor `lib/highlightGrammars.ts`, and no `highlight.js`
+//     specifier;
+//   - M4.T7: clause 1's badge scan reads the export files and finds no draft state.
+// NOT EXHAUSTIVE. Known evasions: a specifier, a name or a tag built at run time; a sink, `write`, `open` or `bytes`
+// reached through an alias (`const w = document.write`, `const { bytes } = result`); `Reflect.set` or
+// `Object.defineProperty` onto `innerHTML`; an `@/` import in the closure (`ui/src` holds no highlight.js: clause
+// W5h-a); `require`. The behavioural halves are docs-export.test.tsx (the hostile corpus) and the browser leg (M5.B9).
+// ---------------------------------------------------------------------------------------------------------------
+
+const parse = (source: string, file: string): ts.SourceFile =>
+  ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+
+/** The files M4.EX2's token rule reads. */
+const exportInertScope = (file: string): boolean => file.startsWith('src/docs/export/')
+  || ['src/docs/ExportSheet.tsx', 'src/docs/share.ts', 'src/docs/ShareSheet.tsx'].includes(file);
+
+/** Whether `n` sits in the initialiser of `EXPORT_PREFIX` in `docs/export/policy.ts`. */
+function inExportPrefix(n: ts.Node, file: string): boolean {
+  if (file !== 'src/docs/export/policy.ts') return false;
+  let p: ts.Node | undefined = n.parent;
+  while (p !== undefined && !ts.isVariableDeclaration(p)) p = p.parent;
+  return p !== undefined && ts.isIdentifier(p.name) && p.name.text === 'EXPORT_PREFIX';
+}
+
+/** `<owner>.<name>(…)` with the bare identifier `owner`. */
+function callsOn(n: ts.CallExpression, owner: string, names: readonly string[]): string | undefined {
+  const callee = unwrap(n.expression);
+  const name = memberName(callee);
+  if (name === undefined || !names.includes(name)) return undefined;
+  if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) return undefined;
+  const o = unwrap(callee.expression);
+  return ts.isIdentifier(o) && o.text === owner ? `${owner}.${name}` : undefined;
+}
+
+/** M4.EX2's findings in one module, `<file> <rule>`. */
+function exportInertHits(source: string, file: string): string[] {
+  const hits = new Set<string>();
+  const visit = (n: ts.Node): void => {
+    if (namesSink(n)) hits.add(`${file} sink`);
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const name = memberName(unwrap(n.left));
+      if (name === 'innerHTML' || name === 'outerHTML') hits.add(`${file} ${name}`);
+    }
+    if (ts.isCallExpression(n)) {
+      if (memberName(unwrap(n.expression)) === 'insertAdjacentHTML') hits.add(`${file} insertAdjacentHTML`);
+      const write = callsOn(n, 'document', ['write', 'writeln']);
+      if (write !== undefined) hits.add(`${file} ${write}`);
+    }
+    const text = stringText(n);
+    if (text !== undefined && /^<[A-Za-z/!]/.test(text) && !inExportPrefix(n, file)) hits.add(`${file} markup-string`);
+    ts.forEachChild(n, visit);
+  };
+  visit(parse(source, file));
+  return [...hits];
+}
+
+/** M4.EX11, M4.EX16's findings in one module, `<file> <use>`, each once. */
+function exportUses(source: string, file: string): string[] {
+  const sf = parse(source, file);
+  const uses = new Set<string>();
+  for (const use of moduleUses(sf)) {
+    if (/^react-dom\/server(?:[./]|$)/.test(use.specifier)) uses.add(`${file} react-dom/server`);
+    if (use.value && relativeTarget(file, use.specifier) === 'src/docs/export/buildExport') {
+      uses.add(`${file} buildExport:${use.dynamic ? 'dynamic' : 'static'}`);
+    }
+  }
+  const blobScope = file.startsWith('src/docs/') || file.startsWith('src/lib/markdown');
+  const visit = (n: ts.Node): void => {
+    if (ts.isIdentifier(n) && n.text === 'renderToStaticMarkup') uses.add(`${file} renderToStaticMarkup`);
+    if (ts.isIdentifier(n) && n.text === 'imagePinFor') uses.add(`${file} imagePinFor`);
+    if (blobScope && ts.isNewExpression(n) && ts.isIdentifier(n.expression) && (n.expression.text === 'Blob' || n.expression.text === 'File')) {
+      uses.add(`${file} new ${n.expression.text}`);
+    }
+    if (blobScope && ts.isCallExpression(n) && callsOn(n, 'URL', ['createObjectURL']) !== undefined) uses.add(`${file} createObjectURL`);
+    if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && ts.isIdentifier(n.tagName) && n.tagName.text === 'iframe') {
+      uses.add(`${file} iframe`);
+    }
+    if (ts.isJsxAttribute(n) && ts.isIdentifier(n.name) && n.name.text.toLowerCase() === 'srcdoc') uses.add(`${file} srcDoc`);
+    if (file === 'src/docs/ExportSheet.tsx') {
+      if (memberName(n) === 'bytes') uses.add(`${file} bytes`);
+      if (memberName(n) === 'innerHTML') uses.add(`${file} innerHTML`);
+      if (ts.isCallExpression(n)) {
+        const callee = unwrap(n.expression);
+        if (ts.isIdentifier(callee) && callee.text === 'downloadExport') uses.add(`${file} downloadExport`);
+        if (callsOn(n, 'document', ['write', 'writeln']) !== undefined) uses.add(`${file} document.write`);
+        if (callsOn(n, 'window', ['open']) !== undefined) uses.add(`${file} window.open`);
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return [...uses];
+}
+
+/** The names `buildExport.tsx` exports as values (a function, a class, a variable, or an `export { … }` that is not
+ *  type-only). */
+function exportedValues(source: string, file: string): string[] {
+  const out: string[] = [];
+  for (const st of parse(source, file).statements) {
+    const exported = ts.canHaveModifiers(st) && (ts.getModifiers(st) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+    if (exported && (ts.isFunctionDeclaration(st) || ts.isClassDeclaration(st)) && st.name !== undefined) out.push(st.name.text);
+    if (exported && ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) if (ts.isIdentifier(d.name)) out.push(d.name.text);
+    }
+    if (ts.isExportDeclaration(st) && !st.isTypeOnly && st.exportClause !== undefined && ts.isNamedExports(st.exportClause)) {
+      for (const e of st.exportClause.elements) if (!e.isTypeOnly) out.push(e.name.text);
+    }
+  }
+  return out;
+}
+
+/** A base-relative module path (no extension) as the source file it names, or undefined (a stylesheet, a package). */
+function sourceOf(base: string, mod: string): string | undefined {
+  for (const ext of ['.ts', '.tsx', '/index.ts', '/index.tsx']) {
+    try {
+      if (statSync(path.join(base, mod + ext)).isFile()) return mod + ext;
+    } catch { /* absent */ }
+  }
+  return undefined;
+}
+
+/** M4.EX17: the run-time import closure of `entry` under `base`: its source files and every bare specifier on the way. */
+function closureFrom(base: string, entry: string): { files: string[]; bare: string[] } {
+  const files = new Set<string>();
+  const bare: string[] = [];
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = sourceOf(base, queue.shift()!);
+    if (file === undefined || files.has(file)) continue;
+    files.add(file);
+    for (const use of moduleUses(parse(readFileSync(path.join(base, file), 'utf8'), file))) {
+      if (!use.value) continue;
+      const target = relativeTarget(file, use.specifier);
+      if (target === undefined) bare.push(use.specifier);
+      else queue.push(target);
+    }
+  }
+  return { files: [...files].sort(), bare };
+}
+
+/** M4.EX17: which of the two highlight modules (the worker's, the grammars') a closure's files name. The real-tree case and
+ *  both planted cases call this one filter, so a planted module that this filter fails to flag is red. */
+const highlightModulesIn = (files: readonly string[]): string[] =>
+  files.filter((f) => f === 'src/lib/markdownHighlightWorker.ts' || f === 'src/lib/highlightGrammars.ts');
+
+/** Every finding of `scan` over the `.ts`/`.tsx` files under `<base>/src`, sorted. */
+function scanSrc(base: string, scan: (source: string, file: string) => string[], scope: (file: string) => boolean = () => true): string[] {
+  return sourceFiles(path.join(base, 'src')).map((f) => path.relative(base, f).split(path.sep).join('/'))
+    .filter(scope).flatMap((rel) => scan(readFileSync(path.join(base, ...rel.split('/')), 'utf8'), rel)).sort();
+}
+
+describe('clause W5 Export: inert by construction, confined, one pin rule, no highlighter (M4.EX2, M4.EX11, M4.EX16, M4.EX17, M4.T7)', { timeout: 30_000 }, () => {
+  const copies: string[] = [];
+  afterAll(() => {
+    for (const dir of copies) rmSync(dir, { recursive: true, force: true });
+  });
+  /** A copy of `pwa/src` with `text` appended to `rel`; returns the copy's base. */
+  function planted(rel: string, text: string): string {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'docs-scans-export-'));
+    copies.push(dir);
+    cpSync(SRC_DIR, path.join(dir, 'src'), { recursive: true });
+    const file = path.join(dir, ...rel.split('/'));
+    writeFileSync(file, readFileSync(file, 'utf8') + text);
+    return dir;
+  }
+
+  it('M4.EX2: the export files hold no sink, no HTML writer and no markup string but EXPORT_PREFIX', () => {
+    const files = sourceFiles(path.join(SRC_DIR, 'docs')).map((f) => path.relative(PWA, f).split(path.sep).join('/')).filter(exportInertScope);
+    expect(files).toEqual(expect.arrayContaining([
+      'src/docs/ExportSheet.tsx', 'src/docs/ShareSheet.tsx', 'src/docs/export/buildExport.tsx', 'src/docs/export/exportMarkdown.tsx',
+      'src/docs/export/policy.ts', 'src/docs/share.ts',
+    ]));
+    expect(scanSrc(PWA, exportInertHits, exportInertScope)).toEqual([]);
+  });
+
+  it.each([
+    ['a markup string', "export const planted = '<b>x</b>';", 'markup-string'],
+    ['a markup template', 'export const planted = (x: string) => `</p>${x}`;', 'markup-string'],
+    ['an innerHTML write', 'export const planted = (e: Element) => { e.innerHTML = "x"; };', 'innerHTML'],
+    ['an insertAdjacentHTML call', "export const planted = (e: Element) => e.insertAdjacentHTML('beforeend', 'x');", 'insertAdjacentHTML'],
+    ['a document.write call', "export const planted = () => document.write('x');", 'document.write'],
+  ])('M4.EX2 planted: %s in exportMarkdown.tsx is red', (_name, text, rule) => {
+    const dir = planted('src/docs/export/exportMarkdown.tsx', `\n${text}\n`);
+    expect(scanSrc(dir, exportInertHits, exportInertScope)).toContain(`src/docs/export/exportMarkdown.tsx ${rule}`);
+  });
+
+  it('M4.EX2: EXPORT_PREFIX is allowed by name, and only in policy.ts', () => {
+    expect(exportInertHits("export const EXPORT_PREFIX = '<!doctype html>';", 'src/docs/export/policy.ts')).toEqual([]);
+    expect(exportInertHits("export const EXPORT_PREFIX = '<!doctype html>';", 'src/docs/export/filename.ts'))
+      .toEqual(['src/docs/export/filename.ts markup-string']);
+  });
+
+  it('M4.EX16 and M4.EX11: the builder, the blob, the pin rule and the frame have exactly their homes', () => {
+    expect(scanSrc(PWA, exportUses)).toEqual([
+      'src/docs/DocImage.tsx imagePinFor',
+      'src/docs/ExportSheet.tsx buildExport:dynamic',
+      'src/docs/ExportSheet.tsx downloadExport',
+      'src/docs/docsLinks.ts imagePinFor',
+      'src/docs/export/buildExport.tsx react-dom/server',
+      'src/docs/export/buildExport.tsx renderToStaticMarkup',
+      'src/docs/objectUrls.ts createObjectURL',
+      'src/docs/objectUrls.ts new Blob',
+    ]);
+  });
+
+  it('M4.EX16: buildExport.tsx exports buildExport and types only', () => {
+    const file = 'src/docs/export/buildExport.tsx';
+    expect(exportedValues(readFileSync(path.join(PWA, file), 'utf8'), file)).toEqual(['buildExport']);
+  });
+
+  it.each([
+    ['a static import of the builder in DocsHead', 'src/docs/DocsHead.tsx', "\nimport { buildExport as plantedBuild } from './export/buildExport';\nexport const plantedB = plantedBuild;\n", 'src/docs/DocsHead.tsx buildExport:static'],
+    ['react-dom/server in exportMarkdown', 'src/docs/export/exportMarkdown.tsx', "\nimport { renderToString as plantedRender } from 'react-dom/server';\nexport const plantedR = plantedRender;\n", 'src/docs/export/exportMarkdown.tsx react-dom/server'],
+    ['a bytes read in the sheet', 'src/docs/ExportSheet.tsx', '\nexport const plantedBytes = (r: { bytes: Uint8Array }) => r.bytes.length;\n', 'src/docs/ExportSheet.tsx bytes'],
+    ['a window.open in the sheet', 'src/docs/ExportSheet.tsx', "\nexport const plantedOpen = () => window.open('x');\n", 'src/docs/ExportSheet.tsx window.open'],
+    ['a Blob in the builder', 'src/docs/export/buildExport.tsx', "\nexport const plantedBlob = () => new Blob(['x']);\n", 'src/docs/export/buildExport.tsx new Blob'],
+    ['an iframe in the builder', 'src/docs/export/buildExport.tsx', '\nexport const PlantedFrame = () => <iframe srcDoc="x" />;\n', 'src/docs/export/buildExport.tsx iframe'],
+    ['imagePinFor in Export', 'src/docs/export/exportMarkdown.tsx', "\nimport { imagePinFor as plantedPin } from '../docsLinks';\nexport const plantedP = plantedPin;\n", 'src/docs/export/exportMarkdown.tsx imagePinFor'],
+  ])('M4.EX16/M4.EX11 planted: %s is red', (_name, rel, text, use) => {
+    expect(scanSrc(planted(rel, text), exportUses)).toContain(use);
+  });
+
+  it('M4.EX17: the builder reaches lib/markdown.tsx and neither highlight worker module nor highlight.js', () => {
+    const { files, bare } = closureFrom(PWA, 'src/docs/export/buildExport');
+    expect(files).toEqual(expect.arrayContaining(['src/docs/export/buildExport.tsx', 'src/lib/markdown.tsx', 'src/docs/DocImage.tsx']));
+    expect(highlightModulesIn(files)).toEqual([]);
+    expect(bare.filter((s) => namesHighlightJs('src/docs/export/buildExport.tsx', s))).toEqual([]);
+  });
+
+  it('M4.EX17 planted: highlight.js, or the grammars module, in a file the builder reaches is red', () => {
+    const core = closureFrom(planted('src/docs/export/colouring.ts', "\nimport plantedCore from 'highlight.js/lib/core';\nexport const plantedC = plantedCore;\n"), 'src/docs/export/buildExport');
+    expect(core.bare.filter((s) => namesHighlightJs('src/docs/export/colouring.ts', s))).not.toEqual([]);
+    const grammars = closureFrom(planted('src/docs/export/exportMarkdown.tsx', "\nimport { HLJS as plantedG } from '../../lib/highlightGrammars';\nexport const plantedH = plantedG;\n"), 'src/docs/export/buildExport');
+    expect(highlightModulesIn(grammars.files)).toContain('src/lib/highlightGrammars.ts');
+  });
+
+  it('M4.EX2 planted (pure source): the sink arm, outerHTML and document.writeln each report their rule', () => {
+    const f = 'src/docs/export/exportMarkdown.tsx';
+    expect(exportInertHits('export const planted = () => <p dangerouslySetInnerHTML={{ __html: "x" }} />;', f)).toContain(`${f} sink`);
+    expect(exportInertHits('export const planted = (e: Element) => { e.outerHTML = "x"; };', f)).toContain(`${f} outerHTML`);
+    expect(exportInertHits("export const planted = () => document.writeln('x');", f)).toContain(`${f} document.writeln`);
+  });
+
+  it('M4.EX16 planted (pure source): the sheet, new File and createObjectURL arms each report their rule', () => {
+    const sheet = 'src/docs/ExportSheet.tsx';
+    expect(exportUses('export const planted = (e: Element) => e.innerHTML;', sheet)).toContain(`${sheet} innerHTML`);
+    expect(exportUses("export const planted = () => document.write('x');", sheet)).toContain(`${sheet} document.write`);
+    expect(exportUses('export const Planted = () => <div srcDoc="x" />;', 'src/docs/DocsHead.tsx')).toContain('src/docs/DocsHead.tsx srcDoc');
+    expect(exportUses("export const planted = () => new File(['x'], 'x');", 'src/docs/export/filename.ts')).toContain('src/docs/export/filename.ts new File');
+    expect(exportUses("export const planted = () => URL.createObjectURL(new Blob(['x']));", 'src/docs/DocsHead.tsx'))
+      .toContain('src/docs/DocsHead.tsx createObjectURL');
+  });
+
+  it('M4.EX17 planted: the highlight worker module in a file the builder reaches is red', () => {
+    const worker = closureFrom(planted('src/docs/export/exportMarkdown.tsx', "\nimport { plantedW as plantedWorker } from '../../lib/markdownHighlightWorker';\nexport const plantedX = plantedWorker;\n"), 'src/docs/export/buildExport');
+    expect(highlightModulesIn(worker.files)).toContain('src/lib/markdownHighlightWorker.ts');
+  });
+
+  it('M4.T7 Export clause: the badge scan reads the export files and finds no draft state', () => {
+    const { files, hits } = scanTree([DOCS_DIR, DOCS_SCREEN], PWA);
+    expect(files).toEqual(expect.arrayContaining(['src/docs/export/provenance.ts', 'src/docs/export/buildExport.tsx', 'src/docs/ExportSheet.tsx']));
+    expect(hits).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Clause W5h-b, M4.H23 (base spec 2026-10-01 section 7.10): what the retirement of W5 part 1's main-thread highlight
+// bounds keeps. (1) No `.ts`/`.tsx` file under `pwa/src` spells a retired limit, a part-1 helper or the
+// whole word `part1` (case-sensitive), in its forms `part1`, `part1-scan`, `part1-markdown`, `part1-bounds`: read as
+// TEXT, comments included, by whole word, because a retired name left in a comment is a name left behind. (2) The two
+// caps on input crossing to the worker stay, at 65 536 and 524 288, and `lib/highlightStore.ts` reads each outside its
+// import. (3) The xml grammar
+// the worker registers carries no sub-language inside `<script>` or `<style>`; stock xml beside javascript and css is
+// the control. Its imports are dynamic, inside the cases, so the clause leaves the file's import block as it is.
+// NOT EXHAUSTIVE: a retired name built from pieces (`'MD_HIGHLIGHT_' + 'MAX_WORD_CHARS'`) is not seen; nor is one
+// inside a longer identifier (`part1Bounds`), in another case (`Part1`), spelled with a `\u` escape, or in a `.css`
+// file (not read).
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Every name W5h-b retired, matched as a whole word. */
+const RETIRED_WORDS: readonly string[] = [
+  'MD_HIGHLIGHT_MAX_WORD_CHARS', 'MD_HIGHLIGHT_MAX_LINE_CHARS', 'MD_HIGHLIGHT_MAX_BLANK_CHARS', 'MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS',
+  'MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS', 'DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS', 'DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS',
+  'HIGHLIGHT_BOUNDED_CAPS', 'highlightBlockCap', 'boundedCap', 'inScanPageBudget', 'inMarkdownPageBudget', 'longestWordRun',
+  'longestLine', 'longestBlankRun', 'deriveBoundedCaps', 'embeddedGrammars', 'part1',
+];
+
+/** Each retired word found in the source files under `<base>/src`, as `<file> <word>`. */
+function retiredWordHits(base: string): string[] {
+  const hits: string[] = [];
+  for (const f of sourceFiles(path.join(base, 'src'))) {
+    const text = readFileSync(f, 'utf8');
+    const rel = path.relative(base, f).split(path.sep).join('/');
+    for (const word of RETIRED_WORDS) if (new RegExp(`\\b${word}\\b`).test(text)) hits.push(`${rel} ${word}`);
+  }
+  return hits;
+}
+
+/** How many times each identifier occurs in one module outside its import declarations. */
+function identifierUses(source: string, file: string): Map<string, number> {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const uses = new Map<string, number>();
+  const visit = (n: ts.Node): void => {
+    if (ts.isImportDeclaration(n)) return;
+    if (ts.isIdentifier(n)) uses.set(n.text, (uses.get(n.text) ?? 0) + 1);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return uses;
+}
+
+// Its planted case copies the whole of pwa/src, so it takes the same 30 s bound as the clauses above.
+describe('clause W5h-b, M4.H23: what the retirement of part 1\'s highlight bounds keeps', { timeout: 30_000 }, () => {
+  const copies: string[] = [];
+  afterAll(() => {
+    for (const dir of copies) rmSync(dir, { recursive: true, force: true });
+  });
+  /** A copy of `pwa/src` with `text` appended to `rel`; returns the directory holding `src`. */
+  function planted(rel: string, text: string): string {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'docs-scans-w5hb-'));
+    copies.push(dir);
+    cpSync(SRC_DIR, path.join(dir, 'src'), { recursive: true });
+    const file = path.join(dir, ...rel.split('/'));
+    writeFileSync(file, readFileSync(file, 'utf8') + text);
+    return dir;
+  }
+
+  it('M4.H23: no retired limit, part-1 helper or part1 word is left anywhere in pwa/src', () => {
+    expect(sourceFiles(SRC_DIR).length).toBeGreaterThan(100);
+    expect(retiredWordHits(PWA)).toEqual([]);
+  });
+
+  it('M4.H23 planted: a retired limit declared again, a helper named in a comment, and a part1 word in a string are each red', () => {
+    expect(retiredWordHits(planted('src/lib/markdownLimits.ts', '\nexport const MD_HIGHLIGHT_MAX_LINE_CHARS = 2048;\n')))
+      .toEqual(['src/lib/markdownLimits.ts MD_HIGHLIGHT_MAX_LINE_CHARS']);
+    expect(retiredWordHits(planted('src/lib/markdown.tsx', '\n// longestWordRun once bounded r10.\n')))
+      .toEqual(['src/lib/markdown.tsx longestWordRun']);
+    expect(retiredWordHits(planted('src/lib/highlightStore.ts', "\nexport const plantedSkip = 'part1-scan';\n")))
+      .toEqual(['src/lib/highlightStore.ts part1']);
+  });
+
+  it('M4.H23: the two caps on input crossing to the worker stay, at 65 536 and 524 288, and highlightStore.ts reads each outside its import', async () => {
+    const limits = await import('../src/lib/markdownLimits');
+    expect(limits.MD_HIGHLIGHT_BLOCK_MAX_CHARS).toBe(65536);
+    expect(limits.DOCS_HIGHLIGHT_PAGE_MAX_CHARS).toBe(524288);
+    const uses = identifierUses(readFileSync(path.join(SRC_DIR, 'lib', 'highlightStore.ts'), 'utf8'), 'highlightStore.ts');
+    expect(uses.get('MD_HIGHLIGHT_BLOCK_MAX_CHARS') ?? 0, 'MD_HIGHLIGHT_BLOCK_MAX_CHARS read').toBeGreaterThan(0);
+    expect(uses.get('DOCS_HIGHLIGHT_PAGE_MAX_CHARS') ?? 0, 'DOCS_HIGHLIGHT_PAGE_MAX_CHARS read').toBeGreaterThan(0);
+  });
+
+  it('M4.H23: the worker\'s xml carries no sub-language inside <script> or <style>; stock xml beside javascript and css, the control, does', async () => {
+    const { HLJS } = await import('../src/lib/highlightGrammars');
+    const { default: hljs } = await import('highlight.js/lib/core');
+    const { default: stockXml } = await import('highlight.js/lib/languages/xml');
+    const { default: javascript } = await import('highlight.js/lib/languages/javascript');
+    const { default: css } = await import('highlight.js/lib/languages/css');
+    const src = '<script>let a = 1;</script><style>a { color: red }</style>';
+    const SUB = /hljs-(?:keyword|selector-tag|attribute)/;
+    const ours = HLJS.highlight(src, { language: 'xml', ignoreIllegals: true }).value;
+    expect(ours).toMatch(/hljs-tag/);
+    expect(ours).not.toMatch(SUB);
+    expect(ours).not.toMatch(/class="language-/);
+    const stock = hljs.newInstance();
+    stock.registerLanguage('xml', stockXml);
+    stock.registerLanguage('javascript', javascript);
+    stock.registerLanguage('css', css);
+    const control = stock.highlight(src, { language: 'xml', ignoreIllegals: true }).value;
+    expect(control).toMatch(SUB);
+    expect(control).toMatch(/class="language-javascript"/);
+  });
+});

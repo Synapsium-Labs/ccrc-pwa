@@ -247,6 +247,9 @@ describe('GET /api/updates', () => {
     expect(view.nodes[0]).toMatchObject({
       label: SERVER_LABEL, role: 'both', stampRead: 'absent', current: null, agentOps: null,
     });
+    // D-6916: with a watcher every node carries `settings`. This box's caps file is absent, so its caps were not measured: the word
+    // is `caps-unmeasured`, never `not-supported`.
+    expect(view.nodes[0]!.settings).toEqual({ state: 'caps-unmeasured' });
   });
 
   it('remote mode, before the first sweep: two nodes — this box as `server`, the agent connection as `fleet` (D-3184)', async () => {
@@ -262,6 +265,11 @@ describe('GET /api/updates', () => {
     expect(view.nodes.map((n) => [n.label, n.role])).toEqual([[FLEET_LABEL, 'fleet'], [SERVER_LABEL, 'server']]);
     expect(view.nodes[0]).toMatchObject({ nodeId: FLEET_LABEL, reachable: false, measuredAt: null });
     expect(view.nodes[1]).toMatchObject({ nodeId: SERVER_LABEL, agentOps: null });
+    // D-6916: both nodes carry `settings` from the watcher's held state. The server box's caps were not measured; the fleet
+    // connection was never reached (its link is down), so the server holds no read of it: `unmeasured`, never `unreadable`
+    // (D-7874: nothing was tried, so no read failed).
+    expect(view.nodes[0]!.settings).toEqual({ state: 'unmeasured' });
+    expect(view.nodes[1]!.settings).toEqual({ state: 'caps-unmeasured' });
   });
 
   it('answers the stored surface: releases with their refusal roll-up, live nodes only, the seed intent, a never-checked catalogue', async () => {
@@ -299,6 +307,8 @@ describe('GET /api/updates', () => {
       update: { state: 'idle', target: null, startedAt: null, detail: null },
     };
     expect(view.nodes, 'the superseded placeholder leaked onto the wire').toEqual([want]);
+    // D-6916: a server with no watcher has no held box-settings reads, so it sets no `settings` field (an older server's answer).
+    expect('settings' in view.nodes[0]!, 'a server with no watcher set a settings field').toBe(false);
     expect(view.intent).toEqual([
       { scope: '*', channel: 'stable', pinnedTag: null, auto: 'off', notify: 'channel', setAt: 0, setBy: 'migration' },
     ]);

@@ -45,6 +45,7 @@ import type { ClaimRefusal } from './box-token.js';
 import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from './api.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
+import type { LandingInfrastructureCode, LandingMutationCode } from './landingLine.js';
 import type { ItemMoveRefusal } from './ledgers.js';
 
 /**
@@ -139,6 +140,13 @@ export const LEDGER_ROUTE_REFUSALS = {
   notSecretItem: 'not-a-secret-item', badSlot: 'bad-slot',
   // …and every failure AFTER the value is in its slot (review 1389 F3): the value is stored, the item is not ticked.
   storedNotTicked: 'stored-not-ticked',
+  // The PL6 follow-up: a value carrying a line break (`secret-not-one-line`, programme item 8: one line is enough);
+  // a slot's chain still held by an earlier act past its deadline (`slot-busy`, review 1391 A-3); and the operator's
+  // stored-secrets read and Remove door (programme item 9): a slot with no value stored (`secret-not-stored`), a store that
+  // could not be read (`secrets-unreadable`, never folded into "no slots"), and a value file that could not be removed
+  // (`remove-failed`).
+  secretNotOneLine: 'secret-not-one-line', slotBusy: 'slot-busy',
+  secretNotStored: 'secret-not-stored', secretsUnreadable: 'secrets-unreadable', removeFailed: 'remove-failed',
 } as const;
 export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
 
@@ -161,7 +169,22 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The write routes (accounts plan Task A17, D-7739): their words of their own.
   | AccountWriteRefusal
   // The sign-in routes (accounts plan Task A21, D-7793): their nine words of their own.
-  | AccountAuthRefusal;
+  | AccountAuthRefusal
+  // The landing line's guarded entrances (wave 5f): the infrastructure words and the mutation words, one closed family.
+  | LandingInfrastructureCode | LandingMutationCode;
+
+/** The landing family's statuses, declared once (wave 5f, shared contract §5): every infrastructure word is 503, a
+ *  missing thing 404, a refused graph or identity 409, an unreadable dependency 503. Spread into `REFUSAL_STATUS` and
+ *  `ADVANCE_REJECT_STATUS`; chosen, not measured: new words. */
+export const LANDING_REFUSAL_STATUS: Readonly<Record<LandingInfrastructureCode | LandingMutationCode, number>> = {
+  'landing-journal-unavailable': 503, 'landing-journal-unreadable': 503, 'landing-journal-invalid': 503, 'landing-journal-missing': 503,
+  'landing-journal-cursor': 503, 'landing-journal-changed': 503, 'landing-journal-durability': 503, 'landing-journal-append': 503,
+  'landing-db-unavailable': 503, 'landing-db-apply': 503, 'landing-db-commit': 503, 'landing-fenced': 503,
+  'landing-projection-unreadable': 503,
+  'landing-entry-exists': 409, 'landing-entry-missing': 404, 'landing-after-missing': 409, 'landing-after-cross-project': 409,
+  'landing-cycle': 409, 'landing-dependencies-unreadable': 503, 'landing-recovery-unresolved': 409, 'landing-identity-conflict': 409,
+  'landing-id-overflow': 409, 'landing-sequence-overflow': 409,
+};
 
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
@@ -293,6 +316,11 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // CHOSEN, not measured: 503, as `write-failed`. The box failed partway (a write, an fsync, the tick's transaction); the value
   // the operator sent is stored, and saving it again finishes the act.
   [LEDGER_ROUTE_REFUSALS.storedNotTicked]: 503,
+  // The PL6 follow-up: CHOSEN, not measured. 400 for a value with a line break (what the operator sent, theirs to fix,
+  // as `bad-request`); 404 for a slot with nothing stored (as `unknown-item`); 503 for a slot still busy, a store that could
+  // not be read and a value file that could not be removed (the box's fault, as `write-failed` and the `-unreadable` words).
+  [LEDGER_ROUTE_REFUSALS.secretNotOneLine]: 400, [LEDGER_ROUTE_REFUSALS.secretNotStored]: 404,
+  [LEDGER_ROUTE_REFUSALS.slotBusy]: 503, [LEDGER_ROUTE_REFUSALS.secretsUnreadable]: 503, [LEDGER_ROUTE_REFUSALS.removeFailed]: 503,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
   // for a call that names more than one, or names an issue that now lives in another team; 403 for the policy point's
@@ -305,6 +333,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'policy-unavailable': 503, 'journal-unavailable': 503,
   'linear-unauthorised': 502,
   'linear-invalid': 422,
+  ...LANDING_REFUSAL_STATUS,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */
@@ -333,11 +362,14 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
  *  GitHub #550). They travel in a `reject` object, never an `error` key, so they are neither `RouteRefusal`s nor
  *  `OpenRunConflict`s. `unknown-run` and `bad-session` are not `RunRefuseCode`s: the route sent them as bare literals. */
 export type AdvanceRejectCode = 'unknown-run' | 'bad-session'
-  | Extract<RunRefuseCode, 'bad-transition' | 'not-dispatched' | 'review-in-flight' | 'cap-concurrency' | 'ejection-not-merging'>;
+  | Extract<RunRefuseCode, 'bad-transition' | 'not-dispatched' | 'review-in-flight' | 'cap-concurrency' | 'ejection-not-merging'>
+  // The landing line's closed code family (wave 5f): what `advanceLanding` answers when the line refuses or fails.
+  | LandingInfrastructureCode | LandingMutationCode;
 
 /** Each one's status, measured from the advance route's inline sends on landing day, never chosen: 404 for the one
  *  absent run, 409 for every refusal of a run that exists. */
 export const ADVANCE_REJECT_STATUS: Readonly<Record<AdvanceRejectCode, number>> = {
   'unknown-run': 404, 'bad-transition': 409, 'not-dispatched': 409, 'review-in-flight': 409,
   'cap-concurrency': 409, 'bad-session': 409, 'ejection-not-merging': 409,   // D-7619: chosen, not measured — the family's 409
+  ...LANDING_REFUSAL_STATUS,
 };

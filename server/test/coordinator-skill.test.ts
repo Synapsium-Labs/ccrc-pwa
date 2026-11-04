@@ -142,7 +142,7 @@ const CONTRACT = [
   'Workflows are not a default. This session launches a workflow only for short, self-contained work that needs nothing from its own children and finishes in minutes: a review, a verification or an audit, or at least three independent items worth running in parallel. Each such workflow carries a time cap, its agents run at `medium` effort, and its vitest runs pass `--maxWorkers=2`. Nobody uses a workflow for a mechanical edit: a D-number substitution, a PR body edit, a rebase or a re-pin. This session never holds its turn open on anything that waits for its own children: it dispatches, ends its turn, and wakes on mail. Mail to a coordinator is held while it reads busy or waiting, so child mail has sat undelivered for hours behind a background workflow that died still reading busy and behind an operator question left open overnight. While any child is active, this session asks the operator in its closing turn text and ends the turn, never with an AskUserQuestion dialog, which reads waiting and holds every child mail behind it (`POST /api/mail` takes no `operator` recipient), and it never leaves a blocking question open while a child waits. A background workflow that stops, for any reason, is a wake: on its task notification, read the held mail (`GET /api/mail?to=<your id>`) in that turn.',
   // Programme ledgers PL7 (D-7715), operator-approved text. Its two apostrophes are straight, in `operator's` and `spec's`; its two
   // double quotes are escaped here and typed straight in SKILL.md.
-  "The operator's own work is on the Waiting-on-you list. As soon as this session can see the operator will be needed, it raises an item with `ccrc-api items raise`, saying what, how and why, and it sets the item blocking only when work has stopped on it. A question this session asks the operator in its closing turn text is raised as an item too. When the operator ticks an item, this session re-measures the result before `ccrc-api items confirm`, and if the result does not hold it returns the item with what it found. A secret never reaches this session: it asks for one with a `secret` item and reads only whether it is set. When the operator approves a spec, this session pins it with `ccrc-api goals pin` and raises an item for each open point in the spec's own \"Waiting on you\" box. Whenever the operator steers, this session rewrites the spec on its ledger PR, records the change with `ccrc-api goals modify`, and marks it with `ccrc-api goals merged` once that PR reads MERGED.",
+  "The operator's own work is on the Waiting-on-you list. As soon as this session can see the operator will be needed, it raises an item with `ccrc-api items raise`, saying what, how and why, and a `decide` item names the option this session recommends and why it beats each alternative, and it sets the item blocking only when work has stopped on it. A question this session asks the operator in its closing turn text is raised as an item too. When the operator ticks an item, this session re-measures the result before `ccrc-api items confirm`, and if the result does not hold it returns the item with what it found. A secret never reaches this session: it asks for one with a `secret` item and reads only whether it is set. When the operator approves a spec, this session pins it with `ccrc-api goals pin` and raises an item for each open point in the spec's own \"Waiting on you\" box. Whenever the operator steers, this session rewrites the spec on its ledger PR, records the change with `ccrc-api goals modify`, and marks it with `ccrc-api goals merged` once that PR reads MERGED.",
 ];
 
 describe('the coordinator skill: its contract', () => {
@@ -3898,7 +3898,7 @@ describe('landing order wave 5b: the report-less fix round from merging', () => 
     'A dequeue with any other cause, a requested change or a cause you could not read among them, is no report-less round: it stays a stop for the operator.',
     'For either form, on route Q disarm first (§5), then make the same advance to `working`, on the `merging → working` edge, and send the same `fix-round` mail with no `artifacts`.',
     'Every `ejected:` round\'s advance carries `ejection`, an object of two fields: `base`, the sha on the mail\'s `base:` line, and `kind`, `new-head` or `dequeued` as the mail\'s first line names it; a `red:` round\'s advance, and any other retreat, carries none.',
-    'Send the `ejected:` mail once the advance\'s answer reads `landing.kind` `ejected` with the base you sent.',
+    'Send the `ejected:` mail once the advance\'s answer reads `landing.kind` `ejected` and `landing.entry.baseSha` equals the base you sent.',
     'If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run at `working`.',
     'The second ejection of one entry is not refused: where the entry you read counts one ejection already, the advance still answers `ok` and the server raises one notice to the operator, so name the second ejection in your turn\'s text and send the round as usual.',
     'The worker\'s answering wave-done gets a NEW review run (step 5), whose brief names that round\'s commits as the change under review, for the new-head round its merge commit; the reviewer still reads the whole diff (reviewer clause 5), and a merge of `main` is reviewed like any other change.',
@@ -4026,5 +4026,240 @@ describe('landing order wave 5d: the latest attempt decides (D-7546)', () => {
       const sentence = flatAll.slice(from, flatAll.indexOf('. ', from));
       expect(sentence, `a double quote in the sentence beginning ${s}`).not.toContain('"');
     }
+  });
+});
+
+// Landing order wave 5f (Task 4): the coordinator's two copies of the attributed landing writes, and the step-6 answer member.
+// The short block in SKILL.md and the detailed WRITES block in the reference are each pinned whole, from raw extractors with
+// asserted opening and closing markers, normalized by `flat(raw).trim()` alike; the raw physical shape (no double quote, at most
+// 80 columns) is asserted on the original text, so a re-wrap that leaves the normalized text equal still reds.
+describe('landing order wave 5f: the attributed landing writes in both coordinator texts', () => {
+  const wl = refs('wave-lifecycle.md');
+  const SHORT_OPEN = '**Landing writes.**';
+  const SHORT_CLOSE = '\n\n## The wave lifecycle';
+  const WRITES_OPEN = '**Attributed landing writes.**';
+  const WRITES_CLOSE = '\n### 5b — The landing route, from the repository\'s own rules';
+
+  const shortRaw = (): string => {
+    const from = skill.indexOf(SHORT_OPEN);
+    const to = skill.indexOf(SHORT_CLOSE, from);
+    expect(from, 'SKILL.md lost the short landing writes block').toBeGreaterThanOrEqual(0);
+    expect(skill.indexOf(SHORT_OPEN, from + 1), 'the short block opens twice').toBe(-1);
+    expect(to, 'the short block no longer ends at the wave lifecycle heading').toBeGreaterThan(from);
+    return skill.slice(from, to);
+  };
+  const writesRaw = (): string => {
+    const from = wl.indexOf(WRITES_OPEN);
+    const to = wl.indexOf(WRITES_CLOSE, from);
+    expect(from, 'the reference lost the attributed landing writes block').toBeGreaterThanOrEqual(0);
+    expect(wl.indexOf(WRITES_OPEN, from + 1), 'the WRITES block opens twice').toBe(-1);
+    expect(to, 'the WRITES block no longer ends at the reference 5b heading').toBeGreaterThan(from);
+    return wl.slice(from, to);
+  };
+
+  const SHORT = flat([
+    '**Landing writes.** `fixesMain` is the coordinator\'s or the operator\'s to set',
+    'or clear, never a worker\'s. For a PR with no run, use',
+    '`POST /api/landing/entries`; to replace its order edges or `fixesMain`, use',
+    '`POST /api/landing/order` as described in `references/wave-lifecycle.md` §5.',
+    'Both writes are box-token gated and attributed, not an authorization boundary.',
+  ].join('\n')).trim();
+
+  const WRITES = flat([
+    '**Attributed landing writes.** For a PR with no run, create its entry through',
+    '`POST /api/landing/entries`, using the closed client:',
+    '',
+    '```text',
+    'ccrc-api landing entries --json -',
+    '```',
+    '',
+    'Send `project`, `pr`, `pinnedSha`, `handoffCommit`, `byId` and `byUuid` in its',
+    'JSON body. `pinnedSha` claims the PR head and `handoffCommit` claims the',
+    'handoff commit. This door records your claims, not independent GitHub,',
+    'review or ancestry proof. Do not use it to replace an existing or recovered',
+    'entry, replace a run\'s entry or manufacture an ejection base.',
+    '',
+    'Set or clear an existing entry\'s order through `POST /api/landing/order`:',
+    '',
+    '```text',
+    'ccrc-api landing order --json -',
+    '```',
+    '',
+    'Send `project`, `pr`, `afterIds`, `fixesMain`, `byId` and `byUuid` in its JSON',
+    'body. Read `GET /api/landing?project=<project>` first. `afterIds` are existing',
+    'entry ids from this project\'s line, never PR numbers. Send the whole new',
+    '`afterIds` array and the whole new `fixesMain` value, not deltas:',
+    '`afterIds: []` clears the edges and `fixesMain: false` clears the flag. Keep',
+    'the value you read for a field you are not changing; never default it away.',
+    '',
+    '`fixesMain` is the coordinator\'s or the operator\'s to set or clear, never a',
+    'worker\'s. It records priority, not permission to skip any landing gate. Both',
+    'writes require the box token and attribute `setBy` through `byId` and',
+    '`byUuid`; this records who wrote, not who was authorized. Read the answer',
+    'before acting; a refused or unreadable answer licenses no retry or landing.',
+    'An answer with `mayApply: true` is uncertain, not a rejected write with no',
+    'effect. Recovery evidence is not a current pin or proof of a no-run entry.',
+    'A recovery hold or a fenced landing line licenses no landing.',
+  ].join('\n')).trim();
+
+  const STEP6_BEFORE = [
+    '     `red:` round\'s advance, and any other retreat, carries none. Send the',
+    '     `ejected:` mail once the advance\'s answer reads `landing.kind` `ejected`',
+    '     with the base you sent. If it reads anything else, the line recorded no',
+  ].join('\n');
+  const STEP6_AFTER = [
+    '     `red:` round\'s advance, and any other retreat, carries none. Send the',
+    '     `ejected:` mail once the advance\'s answer reads `landing.kind` `ejected`',
+    '     and `landing.entry.baseSha` equals the base you sent. If it reads',
+    '     anything else, the line recorded no',
+  ].join('\n');
+  const count = (hay: string, needle: string): number => hay.split(needle).length - 1;
+
+  it('controls: the protected 5b verdict fence is 254 body lines, ends in a line feed and keeps its SHA-256 (the fence control)', async () => {
+    const { createHash } = await import('node:crypto');
+    const at = wl.indexOf('### 5b — The landing route, from the repository\'s own rules');
+    expect(at).toBeGreaterThanOrEqual(0);
+    const sec = wl.slice(at, wl.indexOf('\n## ', at));
+    const body = /```bash\n([\s\S]*?)```/.exec(sec)?.[1] ?? '';
+    expect(body.endsWith('\n'), 'the verdict fence lost its trailing line feed').toBe(true);
+    expect(body.split('\n').length - 1, 'the verdict fence changed its line count').toBe(254);
+    expect(createHash('sha256').update(body).digest('hex'))
+      .toBe('dec52b5aaf9d6166853a25a18db29d2203a38fd6ace044f7c7068e43c4eef3a7');
+    // The new block is outside the fence, the section and its latest-attempt paragraph.
+    expect(sec, 'the WRITES block moved into 5b').not.toContain(WRITES_OPEN);
+    expect(wl.indexOf(WRITES_OPEN), 'the WRITES block sits after the 5b heading').toBeLessThan(at);
+  });
+
+  it('SKILL.md carries the short block whole, once, right before the wave lifecycle heading', () => {
+    expect(flat(shortRaw()).trim()).toBe(SHORT);
+    expect(count(skill, '## The wave lifecycle\n'), 'the heading is not unique').toBe(1);
+    expect(skill, 'the short block is not followed by exactly one blank line and the heading')
+      .toContain(shortRaw() + '\n\n## The wave lifecycle\n');
+  });
+
+  it('the reference carries the WRITES block whole, with both client fences, before the 5b heading', () => {
+    expect(flat(writesRaw()).trim()).toBe(WRITES);
+    expect(wl, 'the block is not set off by one blank line before the heading').toContain(writesRaw().replace(/\n*$/, '') + '\n\n### 5b');
+  });
+
+  it('keeps the new raw lines free of double quotes and within 80 columns, on the original text and not the normalized one', () => {
+    for (const [name, raw] of [['SKILL.md short block', shortRaw()], ['reference WRITES block', writesRaw()]] as const) {
+      for (const l of raw.split('\n')) {
+        expect(l, `${name}: a double quote in: ${l}`).not.toContain('"');
+        expect(l.length, `${name}: a line past 80 columns: ${l}`).toBeLessThanOrEqual(80);
+      }
+    }
+  });
+
+  it('reserves fixesMain to the coordinator and the operator in each text on its own, and never to a worker as well', () => {
+    const sentence = '`fixesMain` is the coordinator\'s or the operator\'s to set or clear, never a worker\'s.';
+    const sFlat = flat(shortRaw());
+    const wFlat = flat(writesRaw());
+    expect(sFlat, 'SKILL.md lost the fixesMain reservation').toContain(sentence);
+    expect(wFlat, 'the reference lost the fixesMain reservation').toContain(sentence);
+    for (const t of [sFlat, wFlat]) {
+      expect(t).not.toMatch(/fixesMain[^.]*\b(?:or|and) (?:a )?worker/);
+      expect(t).not.toMatch(/\bworkers? may (?:set|clear)/);
+    }
+  });
+
+  it('names the plural POST paths and the closed client rows they run through, never a PR number as an entry id', () => {
+    const sFlat = flat(shortRaw());
+    const wFlat = flat(writesRaw());
+    const entries = clientRoutes().find((r) => r.key === 'landing.entries');
+    const order = clientRoutes().find((r) => r.key === 'landing.order');
+    expect([entries?.method, entries?.path]).toEqual(['POST', '/api/landing/entries']);
+    expect([order?.method, order?.path]).toEqual(['POST', '/api/landing/order']);
+    for (const t of [sFlat, wFlat]) {
+      expect(t).toContain('`POST /api/landing/entries`');
+      expect(t).toContain('`POST /api/landing/order`');
+    }
+    // No other landing path: not a singular `entry`, not `orders`, and the one read is the line's own.
+    expect([...new Set([...wFlat.matchAll(/\/api\/landing[^\s`?]*/g)].map((m) => m[0]))].sort())
+      .toEqual(['/api/landing', '/api/landing/entries', '/api/landing/order']);
+    expect([...new Set([...sFlat.matchAll(/\/api\/landing[^\s`?]*/g)].map((m) => m[0]))].sort())
+      .toEqual(['/api/landing/entries', '/api/landing/order']);
+    // The two client commands are the rows' own group and verb, each in its own text fence.
+    expect([...writesRaw().matchAll(/```text\n([^\n]*)\n```/g)].map((m) => m[1]))
+      .toEqual(['ccrc-api landing entries --json -', 'ccrc-api landing order --json -']);
+    expect(wFlat).toContain('`afterIds` are existing entry ids from this project\'s line, never PR numbers.');
+    expect(wFlat).not.toMatch(/afterIds[^.]*\bPR numbers? (?:are|may be|work)/);
+  });
+
+  it('asks for the whole resulting value of each field, with the explicit clears, never a delta', () => {
+    const wFlat = flat(writesRaw());
+    expect(wFlat).toContain('Send the whole new `afterIds` array and the whole new `fixesMain` value, not deltas:');
+    expect(wFlat).toContain('`afterIds: []` clears the edges');
+    expect(wFlat).toContain('`fixesMain: false` clears the flag.');
+    expect(wFlat).toContain('Keep the value you read for a field you are not changing; never default it away.');
+    expect(wFlat).toContain('Read `GET /api/landing?project=<project>` first.');
+    expect(wFlat).not.toMatch(/only the (?:changed|fields? you change)/i);
+  });
+
+  it('says priority and attribution are neither permission nor authorization, and licenses no gate bypass', () => {
+    const sFlat = flat(shortRaw());
+    const wFlat = flat(writesRaw());
+    expect(wFlat).toContain('It records priority, not permission to skip any landing gate.');
+    expect(wFlat).toContain('this records who wrote, not who was authorized.');
+    expect(wFlat).toContain('Both writes require the box token and attribute `setBy` through `byId` and `byUuid`;');
+    expect(sFlat).toContain('Both writes are box-token gated and attributed, not an authorization boundary.');
+    for (const t of [sFlat, wFlat.replace('not permission to skip any landing gate', '')]) {
+      expect(t).not.toMatch(/\b(?:skip|bypass|override)s? (?:any |the |a )?(?:landing )?(?:gate|review|check)s?\b/i);
+      expect(t).not.toMatch(/authoriz(?:es|ed by|ation from) the (?:box token|attribution)/);
+    }
+  });
+
+  it('names the uncertain answer and the recovery hold, and licenses no retry or landing on either', () => {
+    const wFlat = flat(writesRaw());
+    expect(wFlat).toContain('Read the answer before acting; a refused or unreadable answer licenses no retry or landing.');
+    expect(wFlat).toContain('An answer with `mayApply: true` is uncertain, not a rejected write with no effect.');
+    expect(wFlat).toContain('Recovery evidence is not a current pin or proof of a no-run entry.');
+    expect(wFlat).toContain('A recovery hold or a fenced landing line licenses no landing.');
+  });
+
+  it('keeps the entry door to claims: no independent proof, no replacement, no manufactured base', () => {
+    const wFlat = flat(writesRaw());
+    expect(wFlat).toContain('`pinnedSha` claims the PR head and `handoffCommit` claims the handoff commit.');
+    expect(wFlat).toContain('This door records your claims, not independent GitHub, review or ancestry proof.');
+    expect(wFlat).toContain('Do not use it to replace an existing or recovered entry, replace a run\'s entry or manufacture an ejection base.');
+  });
+
+  it('step 6 replaces its physical lines once: the answer member `landing.entry.baseSha`, and nothing else moves', () => {
+    expect(count(skill, STEP6_BEFORE), 'the old step-6 lines are still in SKILL.md').toBe(0);
+    expect(count(skill, STEP6_AFTER), 'the new step-6 lines must match once').toBe(1);
+    for (const l of STEP6_AFTER.split('\n')) {
+      expect(l, `a double quote in: ${l}`).not.toContain('"');
+      expect(l.length, `a line past 80 columns: ${l}`).toBeLessThanOrEqual(80);
+    }
+    // The member exists on the wire the sentence reads: the advance's `landing.entry` carries `baseSha`.
+    const sent = flat(STEP6_AFTER);
+    expect(sent).toContain('`landing.kind` `ejected` and `landing.entry.baseSha` equals the base you sent.');
+    expect(sent).not.toContain('`landing.baseSha`');
+  });
+
+  it('pins step 6\'s whole report-less paragraph with the entry\'s base, and the fail-closed no-base, no-mail fallback after it (the 5f report-less pin)', () => {
+    const step6 = skill.slice(skill.indexOf('6. **Rule on the report**'), skill.indexOf('\n7. **Final merge:**'));
+    const start = step6.indexOf('**Send back:**');
+    const s = flat(step6.slice(start, step6.indexOf('**Clean:**', start + 1)));
+    const from = s.indexOf('**A fix round with no report behind it**');
+    expect(from, 'step 6 lost its report-less paragraph').toBeGreaterThanOrEqual(0);
+    expect(s.slice(from).replace(/\s*-\s*$/, '').trim()).toBe([
+      '**A fix round with no report behind it** comes from `merging`, and the cause you measured decides which of two forms it takes.',
+      '**An ejection** is sent in two cases only: the new-head route for a red that is `main`\'s own (`references/wave-lifecycle.md` §5b), and a dequeue (§5) whose cause is a conflict you measured: after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths.',
+      'Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>` or `ejected: dequeued:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for the dequeue.',
+      'Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>` (`ccrc-api landing show --project <project>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and it stays a stop for the operator.',
+      '**A red the PR owns** is sent when the queue dequeued the PR for a required check and no conflict was measured, or when the verdict\'s `RED` line names a required check red on the head that is the PR\'s own.',
+      'Its body holds two entries, one to a line, and nothing else: `red: #<pr>`, then `checks: <required names that are red>`.',
+      'It has no `base:` entry and licenses no absorb: the worker absorbs only on its own clause 16\'s first two triggers.',
+      'A dequeue with any other cause, a requested change or a cause you could not read among them, is no report-less round: it stays a stop for the operator.',
+      'For either form, on route Q disarm first (§5), then make the same advance to `working`, on the `merging → working` edge, and send the same `fix-round` mail with no `artifacts`.',
+      'Every `ejected:` round\'s advance carries `ejection`, an object of two fields: `base`, the sha on the mail\'s `base:` line, and `kind`, `new-head` or `dequeued` as the mail\'s first line names it; a `red:` round\'s advance, and any other retreat, carries none.',
+      'Send the `ejected:` mail once the advance\'s answer reads `landing.kind` `ejected` and `landing.entry.baseSha` equals the base you sent.',
+      'If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run at `working`.',
+      'The second ejection of one entry is not refused: where the entry you read counts one ejection already, the advance still answers `ok` and the server raises one notice to the operator, so name the second ejection in your turn\'s text and send the round as usual.',
+      'The worker\'s answering wave-done gets a NEW review run (step 5), whose brief names that round\'s commits as the change under review, for the new-head round its merge commit; the reviewer still reads the whole diff (reviewer clause 5), and a merge of `main` is reviewed like any other change.',
+    ].join(' '));
+    // The fail-closed sentence directly follows the new equality sentence, so deleting it reds here on its own.
+    expect(s).toContain('equals the base you sent. If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run at `working`.');
   });
 });

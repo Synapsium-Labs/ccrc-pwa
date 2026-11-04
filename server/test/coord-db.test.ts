@@ -689,9 +689,11 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // MIGRATIONS[32] (dispatch_abandon_settings, D-7319), and MIGRATIONS[33] (roll_settings, D-7453), and
     // MIGRATIONS[34] (landing_entries and landing_projects, landing order wave 5e), and MIGRATIONS[35]
     // (linear_events, D-7671, #1444), and MIGRATIONS[36] (operator_items, operator_item_events,
-    // programme_modifications and the spec pin on programs, programme ledgers PL2).
-    expect(COORD_SCHEMA_VERSION).toBe(37);
-    expect(MIGRATIONS.length).toBe(37);
+    // programme_modifications and the spec pin on programs, programme ledgers PL2), and MIGRATIONS[37]
+    // (operator_items.recommended and recommendedWhy, programme ledgers PL9), and MIGRATIONS[38] (the landing
+    // authority overlay, its journal cursor, the projection witness and quarantineKind, landing order wave 5f).
+    expect(COORD_SCHEMA_VERSION).toBe(39);
+    expect(MIGRATIONS.length).toBe(39);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -756,9 +758,10 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // (runs.unattributed), MIGRATIONS[23] (approvals), MIGRATIONS[24] (digests, asks.corrected), MIGRATIONS[25]
     // (account_events), MIGRATIONS[26] (the mail_deliveries park columns), MIGRATIONS[27] (secret_fingerprints) and
     // MIGRATIONS[28] (feed_events.dedupe_key), up to MIGRATIONS[33] (roll_settings, D-7453) and MIGRATIONS[34] (landing_entries and landing_projects, landing order wave 5e) and MIGRATIONS[35]
-    // (linear_events, D-7671) and MIGRATIONS[36] (the programme ledgers' three tables and the spec pin on programs);
+    // (linear_events, D-7671) and MIGRATIONS[36] (the programme ledgers' three tables and the spec pin on programs)
+    // and MIGRATIONS[37] (the PL9 recommendation columns) and MIGRATIONS[38] (the landing authority overlay, 5f);
     // the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(37);
+    expect(COORD_SCHEMA_VERSION).toBe(39);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

@@ -48,7 +48,8 @@ import { saveSnapshot } from '../src/fleetstate.js';
 import type { FleetSession } from '../../shared/api.js';
 import { CREDENTIAL_MASKS, SECRET_MASK, SECRET_MASK_TOO_LARGE, type SessionStreamMsg } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
-import { seedRoster } from './helpers.js';
+import { seedRoster, testDeps } from './helpers.js';
+import { landingStoreOver } from './landingFixture.js';
 import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 import { isDeepStrictEqual } from 'node:util';
 import { parseTranscriptLine } from '../src/transcript/parse.js';
@@ -855,6 +856,35 @@ describe('the review findings: every egress of session text is masked (D-5995)',
   it('GET /api/digest, GET /api/ledger and GET /api/landing are masked like their siblings, as one frame each', () => {
     // the one answer hook masks both (D-5995)
     for (const p of ['/api/digest', '/api/ledger', '/api/landing']) expect(answerMasked('GET', p), p).toBe(true);
+  });
+
+  it('POST /api/landing/entries and /api/landing/order answers are masked: neither is write-answer exempt, and an assembled credential never leaves (wave 5f)', async () => {
+    for (const p of ['/api/landing/entries', '/api/landing/order']) {
+      expect(WRITE_ANSWER_EXEMPT.test(p), p).toBe(false);
+      expect(answerMasked('POST', p), p).toBe(true);
+    }
+    const home = mkTmp('ccrc-landing-mask-');
+    const dbPath = path.join(home, '.ccrc', 'coord.db');
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    for (const [k, v] of Object.entries({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', uuid: 'u-lane-a', started: '1' })) writeFileSync(path.join(reg, `lane-a.${k}`), v);
+    const TOKEN = 'e'.repeat(64);
+    const app = await buildServer({ ...testDeps(home), mailToken: TOKEN, coord: landingStoreOver(openCoordDb(dbPath), dbPath) });
+    try {
+      const headers = { 'x-ccrc-mail-token': TOKEN };
+      const who = { byId: 'lane-a', byUuid: 'u-lane-a' };
+      const made = await app.inject({ method: 'POST', url: '/api/landing/entries', headers,
+        payload: { ...who, project: OAT, pr: 11, pinnedSha: 'a'.repeat(40), handoffCommit: 'b'.repeat(40) } });
+      expect(made.statusCode, made.body).toBe(200);
+      expect(made.body).toContain('"pr":11');
+      expect(leaksNone(made.body, OAT), 'the entries answer leaked the credential').toBe(true);
+      const ordered = await app.inject({ method: 'POST', url: '/api/landing/order', headers, payload: { ...who, project: OAT, pr: 11, fixesMain: true } });
+      expect(ordered.statusCode, ordered.body).toBe(200);
+      expect(ordered.body).toContain('"fixesMain":true');
+      expect(leaksNone(ordered.body, OAT), 'the order answer leaked the credential').toBe(true);
+      // the control: the credential really is in the stored line the answer was built from, so the mask is what hid it
+      expect(readFileSync(path.join(home, '.ccrc', 'landing.log'), 'utf8')).toContain(OAT);
+    } finally { await app.close(); }
   });
 
   // Review 951 F1: the review cap's ask carries the last review-done's summary and its report path, session-derived

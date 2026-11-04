@@ -140,13 +140,23 @@ export function appendThenApplyBreaks(root: string = REPO): AppendThenApplyBreak
   return out;
 }
 
-/** The files the lifecycle mirror and the collect-lane journal frame NDJSON in, and (for `collectLane.ts`) the one
+/** The store methods that call `appendThenApply(`, sorted by name: the journal-first writers. Five in wave 5f
+ *  (`allocateDeviations`, `setAccountPools`, `setIntent`, `setCollectLane`, `writeLandingAuthority`). Replay shares the
+ *  landing writer's private SQL apply family and never appends, so it is not one. A tree with no store answers none. */
+export function appendThenApplyOwners(root: string = REPO): string[] {
+  const f = storeFacts(root);
+  if (f === null) return [];
+  return f.parsed.calls.filter((c) => c.name === 'appendThenApply').map((c) => f.methodOf(c.start)).sort();
+}
+
+/** The files the lifecycle mirror, the collect-lane journal and the landing journal's parser frame NDJSON in, and (for `collectLane.ts`) the one
  *  function there whose text is journal text: the rest of that file splits other strings (a refusal's stderr). */
 const FRAMER_SCOPES: readonly { readonly file: string; readonly fn?: string }[] = [
   { file: 'server/src/coord/mirrorplan.ts' },
   { file: 'server/src/coord/journalparse.ts' },
   { file: 'server/src/collectLane.ts', fn: 'parseCollectLaneJournal' },
   { file: 'server/src/coord/collectLaneJournal.ts' },
+  { file: 'server/src/coord/landingJournalPolicy.ts' },
 ];
 
 /** A call that frames on a newline: `split(…)` or `lastIndexOf(…)` whose first argument is the string `\n` or a regex
@@ -160,9 +170,9 @@ const isNewlineFrame = (c: CallSite): boolean => {
 /** One hand-rolled framing call, with the function it is in. */
 export type JournalFramerSite = StoreJournalSite;
 
-/** The hand-rolled NDJSON framers of the two journals: a `split('\n')` or `lastIndexOf('\n')` call (see
- *  `isNewlineFrame`) in `coord/mirrorplan.ts`, `coord/journalparse.ts`, `collectLane.ts#parseCollectLaneJournal` or
- *  `coord/collectLaneJournal.ts`, outside `journalKernel.ts` (which is none of them). 3 sites in 2 framers at the base
+/** The hand-rolled NDJSON framers of the journals: a `split('\n')` or `lastIndexOf('\n')` call (see
+ *  `isNewlineFrame`) in `coord/mirrorplan.ts`, `coord/journalparse.ts`, `collectLane.ts#parseCollectLaneJournal`,
+ *  `coord/collectLaneJournal.ts` or `coord/landingJournalPolicy.ts` (the landing parser, wave 5f), outside `journalKernel.ts` (which is none of them). 3 sites in 2 framers at the base
  *  (`frameRead`'s `lastIndexOf` and `split`, `parseCollectLaneJournal`'s `split`); 0 once both call
  *  `splitJournalRecords`. A file the tree lacks is passed over. */
 export function journalFramers(root: string = REPO): JournalFramerSite[] {

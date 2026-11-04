@@ -79,6 +79,8 @@ import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput
 import { createHash, randomUUID } from 'node:crypto';
 import type { MeasuredDirectoryRead } from './io.js';
 import { TmpCensusBeat } from './tmpSweepLane.js';
+import type { BoxSettingsHeld } from './update/boxSettings.js';
+import { BoxSettingsLane } from './update/boxSettingsLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
 import { PressureLane } from './pressureLane.js';
 import { BackupLane } from './backupLane.js';
@@ -1074,6 +1076,8 @@ export class FleetWatcher {
   /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
   readonly testboxLane = new TestboxLane(() => this.deps);
   private readonly tmpCensus = new TmpCensusBeat(() => this.deps);
+  /** Each node's last box-settings read (D-6916): read inside the inventory run, served by `GET /api/updates` through `boxSettingsHeld()`. */
+  private readonly boxSettingsLane = new BoxSettingsLane();
   /** The registry ids of the last good listing (`null` until one lands: nothing is mailed without it). */
   private registryIds: ReadonlySet<string> | null = null;
   /** The ids of the last good listing as the listing names them: every `*.uuid` basename, so a refused id and a row the registry
@@ -1757,6 +1761,9 @@ export class FleetWatcher {
     // Wave 5 (design 2026-09-20 §10): the sweep is what settles a lease, so every inventory run ends in ONE
     // dispatch run — the next node's turn starts on the beat that freed it.
     this.triggerDispatch();
+    // D-6916: last, so a stalled settings read (bounded at 10 s) never delays the resolve, the push or the dispatch above; it is still this run's
+    // own sweep (its outcomes, its caps), and `inventoryNow` still awaits it. Never throws.
+    await this.boxSettingsLane.run(inv, () => coord.nodes(), outcomes);
     return outcomes;
   }
 
@@ -2129,6 +2136,11 @@ export class FleetWatcher {
   currentCollectCounts(): CollectLaneCounts | null {
     if (this.collectPop === null) return null;
     return collectLaneCounts(this.collectAttentionInput());
+  }
+
+  /** Each node's last box-settings read, by node id (D-6916). Read-only and issues no read: the lane reads inside an inventory run. */
+  boxSettingsHeld(): ReadonlyMap<string, BoxSettingsHeld> {
+    return this.boxSettingsLane.held();
   }
 
   /** The sweep's in-memory state, read-only (child-reclamation wave 4) — what

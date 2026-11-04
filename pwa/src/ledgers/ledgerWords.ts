@@ -6,7 +6,7 @@
 //
 // An item's state is its `state` column only (plan PL5b R2): `Came back` is an OPEN item whose latest coordinator move was
 // a return, read from its history, never from a field that keeps the last round's value.
-import type { FleetSession, RunSummary } from '../../../shared/api';
+import { shapeProgramSlug, type FleetSession, type RunSummary } from '../../../shared/api';
 import { orderItems, waitingCount, type ItemKind, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { operatorAsk } from '../fleet/rollup';
 import { sessionLabel } from '../fleet/sessionLabel';
@@ -30,6 +30,9 @@ export const CLEARED_HEADING = 'Recently cleared';
 export const EMPTY_WORD = 'Nothing needs you.';
 export const NO_FRAME_WORD = 'Waiting for the first update from the server…';
 export const NO_PROGRAMME_WORD = 'Not in a programme';
+/** A decide item's recommended option (plan PL9; spec §3.2, D24): the mark on it, and the heading of its reasons. */
+export const RECOMMENDED_WORD = 'Recommended';
+export const RECOMMENDED_WHY_HEADING = 'Why it is recommended';
 
 /** What a pill's colour means; a pill always says it in words too, so no state is read out of colour alone. */
 export type PillTone = 'blocking' | 'soon' | 'later' | 'checking' | 'stale' | 'bounced' | 'ask';
@@ -183,3 +186,116 @@ export function ageWords(at: number, now: number): string {
   const h = Math.floor(m / 60);
   return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
 }
+
+// ── moving between items (plan PL9; spec §2 "Moving between items", D23) ───────────────────────────────────────────
+//
+// An opened item steps to the previous and next item OF THE LIST IT WAS OPENED FROM, in that list's own order and filter. There
+// is ONE ORDER: `groupByProgramme`'s groups, which the combined list, its side rail's filter and the programme view all draw, read
+// through `listGroups`; the neighbours are read off those same groups, so no second ordering exists to drift from the drawn one.
+// A session's question is a row of the list but not an item (it opens its session), so the steps go from item to item.
+
+/** The list an item was opened from: the combined list, unfiltered (`programme: null`) or filtered by its side rail to one
+ *  programme, or one programme's own view. */
+export type ItemList =
+  | { readonly at: 'waiting'; readonly programme: string | null }
+  | { readonly at: 'programme'; readonly programme: string };
+
+/** The combined list, unfiltered: where an item opened with no list, or with one this page cannot read, steps and goes back. */
+export const COMBINED_LIST: ItemList = { at: 'waiting', programme: null };
+
+/** The side rail's filter to the sessions in no programme, as the list's URL holds it (`?programme=`, empty): no slug is
+ *  empty (`shapeProgramSlug`), so it names no programme. No item can be opened from it: it holds questions only. */
+export const NO_PROGRAMME_FILTER = '';
+
+/** The words of the strip above an item (plan PL9). The step controls' names hold their shown words (WCAG 2.5.3). */
+export const BETWEEN_ITEMS_LABEL = 'Between items';
+export const PREVIOUS_WORD = 'Previous';
+export const NEXT_WORD = 'Next';
+export const PREVIOUS_ITEM_LABEL = 'Previous item';
+export const NEXT_ITEM_LABEL = 'Next item';
+export const BESIDE_LABEL = 'The list beside this item';
+/** An item no list holds and none ever showed: an id that names nothing now. */
+export const GONE_WORD = 'That item is not on the list any more.';
+/** The open item left the list while the operator was on it (confirmed, withdrawn): its steps stay where they were. */
+export const LEFT_LIST_WORD = 'This item is not on the list now.';
+/** The way back's name: the list's own name after "Back to". */
+export const backLabel = (listName: string): string => `Back to ${listName}`;
+
+const isSlug = (s: string): boolean => { const shaped = shapeProgramSlug(s); return shaped.ok && shaped.slug === s; };
+
+/** The list as one word for the item's URL (`?from=`), so a reload or a shared link keeps it: `waiting`, `waiting:<slug>`,
+ *  `programme:<slug>`. A slug never holds `:` (`shapeProgramSlug`), so the word reads back unambiguously. */
+export function fromWord(list: ItemList): string {
+  if (list.at === 'programme') return `programme:${list.programme}`;
+  return list.programme === null ? 'waiting' : `waiting:${list.programme}`;
+}
+
+/** The list a `from` word names, or the combined list for a word that names none (absent, unknown or malformed). */
+export function listOfFromWord(word: string | null): ItemList {
+  if (word === 'waiting') return COMBINED_LIST;
+  const m = word === null ? null : /^(waiting|programme):([^:]+)$/.exec(word);
+  if (m === null || !isSlug(m[2]!)) return COMBINED_LIST;
+  return m[1] === 'programme' ? { at: 'programme', programme: m[2]! } : { at: 'waiting', programme: m[2]! };
+}
+
+/** No programme known beyond the groups: `resolveList`'s default, for a caller that settles only the side rail's filter. */
+const NONE_KNOWN: ReadonlySet<string> = new Set();
+
+/** THE ONE STALE-LIST RULE: a list naming a programme no group holds (an old link, a programme with nothing waiting now, a
+ *  well-formed slug nobody uses) is the combined list. The filter, the way back, the column beside an item and the steps all
+ *  settle the list they were given through this, so none of them returns to a filter the side rail no longer offers.
+ *  ONE EXCEPTION (follow-up F3, as ruled after review 1402): a programme's VIEW whose slug is real (`known`, from
+ *  `knownProgrammes`: the runs, the Goals or the cleared trail name it) stays that view with no group, because the view is a
+ *  page of its own ("Nothing needs you. Waiting on: …", its Goals, its cleared trail), so the way back goes to it. A filter to
+ *  such a programme is still stale (the side rail offers no filter to a programme with nothing on the list), and a slug
+ *  nothing knows is the combined list either way. */
+export function resolveList(list: ItemList, groups: readonly ProgrammeGroup[], known: ReadonlySet<string> = NONE_KNOWN): ItemList {
+  if (list.programme === null || groups.some((g) => g.program === list.programme)) return list;
+  return list.at === 'programme' && known.has(list.programme) ? list : COMBINED_LIST;
+}
+
+/** The programmes this page knows besides the list's groups (follow-up F3): every slug the runs, the Goals or the recently
+ *  cleared items name. `runs` is `null` before the runs frame lands, and then names none. */
+export function knownProgrammes(view: WaitingView, runs: readonly RunSummary[] | null): ReadonlySet<string> {
+  return new Set([...(runs ?? []).map((r) => r.program), ...view.goals.map((g) => g.program), ...view.cleared.map((i) => i.program)]);
+}
+
+/** THE GROUPS A LIST DRAWS, in its order, from `groupByProgramme`'s: every group for the combined list; the programme's own group
+ *  for its filter or its view. A filter to a programme with no group is stale (`resolveList`) and draws every group; a programme's
+ *  own view draws none, and says what the programme waits on instead. */
+export function listGroups(list: ItemList, groups: readonly ProgrammeGroup[]): readonly ProgrammeGroup[] {
+  if (list.at === 'programme') return groups.filter((g) => g.program === list.programme);
+  const settled = resolveList(list, groups);
+  return settled.programme === null ? groups : groups.filter((g) => g.program === settled.programme);
+}
+
+/** Where an item sits in a list: the list it was resolved to, its 0-based index among the list's items, how many items the list
+ *  holds, and the ids either side (`null` past either end). */
+export interface ItemPlace {
+  readonly list: ItemList;
+  readonly index: number;
+  readonly total: number;
+  readonly prev: number | null;
+  readonly next: number | null;
+}
+
+/** The item's place in the list it was opened from, read off the groups that list draws (`listGroups`). A list that does not
+ *  hold the item (a stale link: an item of another programme, or a programme with no items now) falls back to the combined list;
+ *  `null` when that does not hold it either (an item recently cleared, or gone), which has a way back and no steps. */
+export function itemPlace(id: number, list: ItemList, groups: readonly ProgrammeGroup[]): ItemPlace | null {
+  const named = resolveList(list, groups);
+  const tries = named.programme === null ? [named] : [named, COMBINED_LIST];
+  for (const l of tries) {
+    const ids = listGroups(l, groups).flatMap((g) => g.rows).flatMap((r) => (r.kind === 'item' ? [r.item.id] : []));
+    const index = ids.indexOf(id);
+    if (index >= 0) return { list: l, index, total: ids.length, prev: ids[index - 1] ?? null, next: ids[index + 1] ?? null };
+  }
+  return null;
+}
+
+/** "3 of 6": the place as the operator reads it. */
+export const placeWords = (place: ItemPlace): string => `${place.index + 1} of ${place.total}`;
+
+/** The place as a screen reader hears it (follow-up A-3): "3 of 6, <the open item's title>", so a step that lands on the same
+ *  "N of M" still announces something new; empty with no place. */
+export const positionWords = (place: ItemPlace | null, title: string): string => (place === null ? '' : `${placeWords(place)}, ${title}`);

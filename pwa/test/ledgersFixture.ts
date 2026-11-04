@@ -9,7 +9,7 @@ export const MIN = 60_000;
 
 export const itemView = (over: Partial<ItemView> = {}): ItemView => ({
   id: 1, program: 'prog-a', runId: null, kind: 'do', title: 'Switch the setting on', why: 'It keeps piling up until then.',
-  how: ['Open Settings.', 'Set it to Live.'], options: null, neededBy: 'soon', soonLabel: null, state: 'open', stale: false,
+  how: ['Open Settings.', 'Set it to Live.'], options: null, recommended: null, recommendedWhy: null, neededBy: 'soon', soonLabel: null, state: 'open', stale: false,
   raisedAt: NOW - 20 * MIN, tickedAt: null, closedAt: null, answer: null, note: null, secretSlot: null, secretSet: null,
   history: [{ at: NOW - 20 * MIN, act: 'raise', note: null }], ...over,
 });

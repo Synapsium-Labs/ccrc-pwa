@@ -16,20 +16,25 @@ import { DocsScreen } from '../src/screens/DocsScreen';
 import { DocsLeaf } from '../src/docs/DocsLeaf';
 import { DocsAssetContext } from '../src/docs/DocImage';
 import { createFetchQueue } from '../src/docs/fetchQueue';
+import { detachUrls } from '../src/docs/docsLinks';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
-import { pinFor, type DocsVisit } from '../src/docs/useDocsVisit';
-import { DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, fillSentence, shortCommit } from '../src/docs/docsText';
+import { pinFor, type DocsVisit, type FileSlot } from '../src/docs/useDocsVisit';
+import { exportStateFor } from '../src/docs/DocsHead';
+import { DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, EXPORT_WAIT_TEXT, SHARE_EXPORT_CLAUSE, fillSentence, shortCommit } from '../src/docs/docsText';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
-import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
+import { DOCS_RENDER_GATE_BYTES, HIGHLIGHT_PAGE_WORKER_MS } from '../src/lib/markdownLimits';
 import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
-import { parseMarkdown } from '../src/lib/markdownParse';
+import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
+import { HighlighterContext } from '../src/lib/highlighterContext';
+import type { Highlighter } from '../src/lib/highlightProtocol';
+import type { HighlightClock } from '../src/lib/highlightStore';
 import { docsRunner, type MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
 import {
   BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, RAN, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, fileResponse, holder,
-  okRefresh, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
+  okFile, okRefresh, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
 } from './docsFixtures';
-import { withSyncHighlight } from './highlightTestStore';
+import { inThreadContext, inThreadHighlighter, syncTestStore, withSyncHighlight } from './highlightTestStore';
 
 /** Parses in this thread, as the worker would. */
 const parser: MarkdownParser = async (src) => parseMarkdown(src, 'docs');
@@ -1282,7 +1287,7 @@ describe('W5 Share on the Docs screen (spec 4.5, 4.16; M4.SH8 Share half, M4.EX1
     const tree = treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holder() });
     open('/docs/demo/specs/a.md?ref=main', fakeLoaders({ tree: okTree(tree) }));
     expect(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeEnabled();
-    const actions = [...document.querySelectorAll('.docs-actions .docs-action')].map((e) => e.textContent);
+    const actions = [...document.querySelectorAll('.docs-actions .docs-action:not(.docs-export)')].map((e) => e.textContent);
     expect(actions).toEqual([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.openCommitted]);
   });
 
@@ -1431,5 +1436,375 @@ describe('W5 Share on the Docs screen (spec 4.5, 4.16; M4.SH8 Share half, M4.EX1
     expect(screen.queryByRole('button', { name: updatingTo(COMMIT_B) })).toBeNull();
     fireEvent.click(shareButton() as HTMLElement);
     await waitFor(() => expect(sheetUrl()).toBe(`${GH}/blob/${COMMIT_B}/docs/superpowers/specs/a.md`));
+  });
+});
+
+// ---- W5 Export, Task 8: Export on the Docs screen ----------------------------------------------------------------
+
+describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export halves, M4.EX12, M4.EX15; refinements (a), (j))', () => {
+  const exportButton = (): HTMLElement | null => screen.queryByRole('button', { name: DOCS_HEAD_TEXT.export });
+  const busy = (state: string): string => fillSentence(DOCS_HEAD_TEXT.exportBusy, { state });
+  const updatingTo = (commit: string): string => fillSentence(DOCS_HEAD_TEXT.shareUpdating, { short: shortCommit(commit) });
+  function deferredOf<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+    let resolve: (v: T) => void = () => {};
+    const promise = new Promise<T>((r) => { resolve = r; });
+    return { promise, resolve };
+  }
+  function answerOf(commit: string, blob: string, heading: string): DocsFileAnswer {
+    const r = fileResponse(`# ${heading}\n`);
+    return { s: 'ok', value: { ...r, show: { ...r.show, commit, blob, onRef: 'contains' } } };
+  }
+  beforeEach(() => {
+    vi.mocked(URL.createObjectURL).mockClear();
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Taps Export, then Save, and answers the saved file, parsed. */
+  async function exported(): Promise<Document> {
+    fireEvent.click(exportButton() as HTMLElement);
+    fireEvent.click(await screen.findByRole('button', { name: /^Save / }));
+    const blob = vi.mocked(URL.createObjectURL).mock.calls.at(-1)?.[0];
+    if (!(blob instanceof Blob)) throw new Error('nothing saved');
+    return new DOMParser().parseFromString(new TextDecoder().decode(await blob.arrayBuffer()), 'text/html');
+  }
+
+  /** A store clock the case moves by hand (`highlight-store.test.ts#fakeClock`'s form): `advance` fires every timer due. */
+  function handClock(): HighlightClock & { advance(ms: number): void } {
+    let now = 0;
+    let next = 1;
+    const timers = new Map<number, { at: number; fn: () => void }>();
+    return {
+      now: () => now,
+      setTimer: (fn, ms) => { const h = next++; timers.set(h, { at: now + ms, fn }); return h; },
+      clearTimer: (h) => { timers.delete(h as number); },
+      advance(ms) {
+        const end = now + ms;
+        for (;;) {
+          const due = [...timers].filter(([, t]) => t.at <= end).sort(([, a], [, b]) => a.at - b.at)[0];
+          if (due === undefined) break;
+          timers.delete(due[0]);
+          now = due[1].at;
+          due[1].fn();
+        }
+        now = end;
+      },
+    };
+  }
+
+  // The lifetime pair (refinement (u)), after Share's two: the sheet stays open across a change after which Export is
+  // ready again, so an unkeyed ExportAction (same position, its request still set) would show the sheet straight away.
+  it('an open Export sheet closes when the page changes to another leaf Export is offered on (refinement (u))', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'b.md')] });
+    open('/docs/demo/specs/a.md', fakeLoaders({ tree: okTree(tree) }));
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    fireEvent.click(exportButton() as HTMLElement);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    act(() => { navigate('/docs/demo/specs/b.md'); });
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('an open Export sheet closes when a re-list moves the served commit (refinement (u))', async () => {
+    const f = fakeLoaders();
+    f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(treeOk({ commit: COMMIT_B }))));
+    const { container } = open('/docs/demo/specs/a.md', f);
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    fireEvent.click(exportButton() as HTMLElement);
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+    await waitFor(() => expect(container.querySelector('code.docs-truth-commit')?.getAttribute('title')).toBe(COMMIT_B));
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it("a leaf's actions read View on GitHub, Share, Export, Open committed version, in that order (M4.SH8)", async () => {
+    const tree = treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holder() });
+    open('/docs/demo/specs/a.md?ref=main', fakeLoaders({ tree: okTree(tree) }));
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    const actions = [...document.querySelectorAll('.docs-actions .docs-action')].map((e) => e.textContent);
+    expect(actions).toEqual([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.export, DOCS_HEAD_TEXT.openCommitted]);
+  });
+
+  it('no Export on the index, a project, section or directory page, in frame=full, or while the tree slot loads (M4.SH8)', async () => {
+    openIndex();
+    await waitFor(() => expect(mainRowNames().length).toBeGreaterThan(0));
+    expect(document.querySelector('.docs-export')).toBeNull();
+    cleanup();
+    const tree = treeOk({ entries: [entry('specs', 'd/x.md'), entry('specs', 'm.html')] });
+    for (const url of ['/docs/demo', '/docs/demo/specs', '/docs/demo/specs/d/']) {
+      open(url, fakeLoaders({ tree: okTree(tree) }));
+      await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+      expect(document.querySelector('.docs-export'), url).toBeNull();
+      cleanup();
+    }
+    open('/docs/demo/specs/m.html?ref=main&frame=full', byPath(tree, { 'm.html': fileAs('m.html', '<p>a</p>', 'html') }));
+    expect(await screen.findByRole('link', { name: DOCS_HEAD_TEXT.github })).toBeInTheDocument();
+    expect(document.querySelector('.docs-export')).toBeNull();
+    cleanup();
+    // The URL grammar keeps `frame=full` on an html leaf alone (shared/docs.ts#pageKeepsFrame), so the frame arm of
+    // exportStateFor is read directly: the same ready Markdown leaf is offered inline and absent in the full frame.
+    const mdTree = treeOk();
+    const inline = pageAt('/docs/demo/specs/a.md');
+    const mdPin = pinFor(mdTree, inline);
+    if (mdPin === null || inline.kind !== 'path') throw new Error('fixture');
+    const mdFile: FileSlot = { s: 'ok', pin: mdPin, answer: fileResponse('# T\n'), receivedAt: 0 };
+    const mdParsed = parseMarkdown('# T\n', 'docs');
+    if (mdParsed.kind !== 'tree') throw new Error('fixture');
+    const mdD = detachUrls(mdParsed.tree);
+    const mdLink = { project: 'demo', pageRef: null, view: 'effective' as const, section: 'specs' as const, path: 'a.md', tree: mdTree, pageSource: 'committed' as const, onFragment: () => {} };
+    const mdBody = { kind: 'tree' as const, text: '# T\n', tree: mdD.tree, urls: mdD.urls, link: mdLink };
+    const mdInputs = { body: mdBody, store: syncTestStore('docs'), settled: true, assets: null };
+    expect(exportStateFor(inline, mdTree, mdFile, mdInputs).s).toBe('ready');
+    expect(exportStateFor({ ...inline, frame: 'full' }, mdTree, mdFile, mdInputs)).toEqual({ s: 'absent' });
+    const f = fakeLoaders();
+    f.tree.mockImplementation(() => new Promise<never>(() => {}));
+    open('/docs/demo/specs/a.md', f);
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(document.querySelector('.docs-export')).toBeNull();
+  });
+
+  it('no Export for class other, nor for html in W5 (M4.SH8)', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'o.pdf'), entry('specs', 'm.html')] });
+    open('/docs/demo/specs/o.pdf', fakeLoaders({ tree: okTree(tree) }));
+    await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeEnabled());
+    expect(document.querySelector('.docs-export')).toBeNull();
+    cleanup();
+    open('/docs/demo/specs/m.html', byPath(tree, { 'm.html': fileAs('m.html', '<p>a</p>', 'html') }));
+    await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeEnabled());
+    expect(document.querySelector('.docs-export')).toBeNull();
+  });
+
+  it("a new draft: Export is enabled and Share's refusal carries Export's clause; a withheld new file: no Export, no clause (M4.SH3)", async () => {
+    const fresh = treeOk({ entries: [entry('specs', 'n.md', { committed: null, draft: draftOf('added') })], drafts: holder() });
+    open('/docs/demo/specs/n.md?ref=main', fakeLoaders({ tree: okTree(fresh) }));
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: DOCS_HEAD_TEXT.share }));
+    expect(await screen.findByText(`Not committed yet, so GitHub has nothing to show. ${SHARE_EXPORT_CLAUSE}`)).toBeInTheDocument();
+    cleanup();
+    const withheld = treeOk({ entries: [entry('specs', 'w.md', { committed: null, draft: draftOf('added', { fp: null }) })], drafts: holder() });
+    open('/docs/demo/specs/w.md?ref=main', fakeLoaders({ tree: okTree(withheld) }));
+    fireEvent.click(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share }));
+    expect(await screen.findByText(/^Not committed yet, and Docs did not read it/)).toBeInTheDocument();
+    expect(document.querySelector('.docs-share-sheet')?.textContent).not.toContain(SHARE_EXPORT_CLAUSE);
+    expect(document.querySelector('.docs-export')).toBeNull();
+  });
+
+  it('Formatting… while the parse runs, Export once it lands, and the file holds the tree the page shows (M4.EX15)', async () => {
+    const text = '# Alpha\n\nbody text\n';
+    let resolve: (o: ParseOutcome) => void = () => {};
+    const slow: MarkdownParser = () => new Promise<ParseOutcome>((r) => { resolve = r; });
+    open('/docs/demo/specs/a.md', fakeLoaders({ file: okFile(text) }), slow);
+    expect(await screen.findByRole('button', { name: busy(EXPORT_WAIT_TEXT.formatting) })).toBeDisabled();
+    await act(async () => { resolve(parseMarkdown(text, 'docs')); });
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    const page = document.querySelector('.doc-body')?.textContent;
+    const doc = await exported();
+    expect(doc.querySelector('title')?.textContent).toBe('Alpha');
+    expect(doc.querySelector('article')?.textContent).toBe(page);
+  });
+
+  it("Highlighting… until the page's store settles; then each exported block's HTML is what the page inserted (M4.EX15)", async () => {
+    const docs = inThreadHighlighter({ hold: true });
+    const f = fakeLoaders({ file: okFile('```bash\necho one\n```\n\n```bash\necho two\n```\n') });
+    navigate('/docs/demo/specs/a.md');
+    render(<HighlighterContext value={inThreadContext(docs)}><Routed loaders={f.loaders} /></HighlighterContext>);
+    expect(await screen.findByRole('button', { name: busy(EXPORT_WAIT_TEXT.highlighting) })).toBeDisabled();
+    await act(async () => { docs.release(); });
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    const page = [...document.querySelectorAll('.doc-body pre code')].map((c) => c.innerHTML);
+    expect(page).toHaveLength(2);
+    expect(page.every((h) => h.includes('hljs-'))).toBe(true);
+    const doc = await exported();
+    expect([...doc.querySelectorAll('article pre code')].map((c) => c.innerHTML)).toEqual(page);
+  });
+
+  it('the page ceilings bound the wait: a highlighter that only times out settles the store, and Export saves those blocks plain, counted (M4.EX15)', async () => {
+    const timesOut: Highlighter = {
+      highlight: async (_r, o) => { o.onPosted?.(); return { kind: 'timeout', budgetMs: 750 }; },
+      status: () => 'live', prewarm: () => undefined,
+    };
+    const text = ['one', 'two', 'three'].map((w) => `\`\`\`bash\necho ${w}\n\`\`\`\n`).join('\n');
+    navigate('/docs/demo/specs/a.md');
+    render(<HighlighterContext value={inThreadContext(timesOut)}><Routed loaders={fakeLoaders({ file: okFile(text) }).loaders} /></HighlighterContext>);
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    const doc = await exported();
+    expect(doc.querySelectorAll('article pre code span')).toHaveLength(0);
+    const count = (word: string): number => Number(doc.querySelector(`meta[name="ccrc:plain-${word}"]`)?.getAttribute('content') ?? '0');
+    expect(count('timeout')).toBeGreaterThan(0);
+    expect(count('page-ceiling')).toBeGreaterThan(0);
+    expect(count('timeout') + count('page-ceiling')).toBe(3);
+  });
+
+  it('the worker-time ceiling bounds the wait: with a highlighter that never answers, Highlighting… holds until HIGHLIGHT_PAGE_WORKER_MS passes, then Export saves the blocks plain (M4.EX15)', async () => {
+    const hangs: Highlighter = {
+      highlight: (_r, o) => { o.onPosted?.(); return new Promise<never>(() => {}); },
+      status: () => 'live', prewarm: () => undefined,
+    };
+    const clock = handClock();
+    const text = ['one', 'two'].map((w) => `\`\`\`bash\necho ${w}\n\`\`\`\n`).join('\n');
+    navigate('/docs/demo/specs/a.md');
+    render(<HighlighterContext value={inThreadContext(hangs, undefined, undefined, clock)}><Routed loaders={fakeLoaders({ file: okFile(text) }).loaders} /></HighlighterContext>);
+    expect(await screen.findByRole('button', { name: busy(EXPORT_WAIT_TEXT.highlighting) })).toBeDisabled();
+    act(() => { clock.advance(HIGHLIGHT_PAGE_WORKER_MS - 1); });
+    expect(screen.getByRole('button', { name: busy(EXPORT_WAIT_TEXT.highlighting) })).toBeDisabled();
+    act(() => { clock.advance(1); });
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    const doc = await exported();
+    expect(doc.querySelectorAll('article pre code span')).toHaveLength(0);
+    expect(doc.querySelector('meta[name="ccrc:plain-page-ceiling"]')?.getAttribute('content')).toBe('2');
+  });
+
+  it('a body that answers another text is not exported: it reads Formatting… (M4.EX15)', () => {
+    const tree = treeOk();
+    const page = pageAt('/docs/demo/specs/a.md');
+    const pin = pinFor(tree, page);
+    if (pin === null) throw new Error('fixture');
+    const file: FileSlot = { s: 'ok', pin, answer: fileResponse('# New\n'), receivedAt: 0 };
+    const old = parseMarkdown('# Old\n', 'docs');
+    if (old.kind !== 'tree') throw new Error('fixture');
+    const d = detachUrls(old.tree);
+    const link = { project: 'demo', pageRef: null, view: 'effective' as const, section: 'specs' as const, path: 'a.md', tree, pageSource: 'committed' as const, onFragment: () => {} };
+    const body = { kind: 'tree' as const, text: '# Old\n', tree: d.tree, urls: d.urls, link };
+    expect(exportStateFor(page, tree, file, { body, store: syncTestStore('docs'), settled: true, assets: null }))
+      .toEqual({ s: 'waiting', why: 'formatting' });
+    expect(exportStateFor(page, tree, file, { body: { ...body, text: '# New\n' }, store: syncTestStore('docs'), settled: true, assets: null }).s)
+      .toBe('ready');
+  });
+
+  it('a tree moved to C2 while the file is at C1: Export reads Updating to; once C2 lands it exports C2 (M4.EX12)', async () => {
+    const f = fakeLoaders({ tree: okTree(treeOk()) });
+    const later = deferredOf<DocsFileAnswer>();
+    f.file.mockImplementation(async (_project: string, pin: DocPin) =>
+      (pin.kind === 'committed' && pin.commit === COMMIT_B ? later.promise : answerOf(COMMIT_A, BLOB_1, 'A')));
+    f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(treeOk({
+      commit: COMMIT_B, entries: [entry('specs', 'a.md', { committed: { kind: 'file', blob: BLOB_2, size: 100 } })],
+    }))));
+    const { container } = open('/docs/demo/specs/a.md', f);
+    await screen.findByRole('heading', { name: 'A' });
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+    expect(await screen.findByRole('button', { name: busy(updatingTo(COMMIT_B)) })).toBeDisabled();
+    await act(async () => { later.resolve(answerOf(COMMIT_B, BLOB_2, 'B')); });
+    await screen.findByRole('heading', { name: 'B' });
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    const doc = await exported();
+    expect(doc.querySelector('meta[name="ccrc:commit"]')?.getAttribute('content')).toBe(COMMIT_B);
+  });
+
+  it('on a leaf the reader frame shows, Export (plain view) turns the reader off there, says so, then exports the plain view (refinement (a))', async () => {
+    const reader = { render: vi.fn(() => new Promise<never>(() => {})), mount: vi.fn(), images: vi.fn() } as unknown as ReaderDeps;
+    navigate('/docs/demo/specs/a.md');
+    const { container } = render(<DocsScreen path={location.pathname} search={location.search} loaders={fakeLoaders().loaders} parser={parser} reader={reader} />);
+    const plain = await screen.findByRole('button', { name: DOCS_HEAD_TEXT.exportPlainView });
+    expect(container.querySelector('.docs-reader')).not.toBeNull();
+    fireEvent.click(plain);
+    expect(await screen.findByText(DOCS_HEAD_TEXT.exportPlainShown)).toBeInTheDocument();
+    await waitFor(() => expect(container.querySelector('.doc-body')).not.toBeNull());
+    expect(container.querySelector('.docs-reader')).toBeNull();
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    const doc = await exported();
+    expect(doc.querySelector('meta[name="ccrc:view"]')?.getAttribute('content')).toBe('plain');
+  });
+
+  it('leaving the page brings the reader back, on a later return too (refinement (a))', async () => {
+    const reader = { render: vi.fn(() => new Promise<never>(() => {})), mount: vi.fn(), images: vi.fn() } as unknown as ReaderDeps;
+    const f = fakeLoaders();
+    function WithReader(): ReactNode {
+      const { path, search } = useLocation();
+      return <DocsScreen path={path} search={search} loaders={f.loaders} parser={parser} reader={reader} />;
+    }
+    navigate('/docs/demo/specs/a.md');
+    const { container } = render(<WithReader />);
+    fireEvent.click(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.exportPlainView }));
+    await waitFor(() => expect(container.querySelector('.doc-body')).not.toBeNull());
+    await act(async () => { navigate('/docs/demo/specs'); });
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    await act(async () => { navigate('/docs/demo/specs/a.md'); });
+    expect(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.exportPlainView })).toBeEnabled();
+    expect(container.querySelector('.docs-reader')).not.toBeNull();
+    expect(screen.queryByText(DOCS_HEAD_TEXT.exportPlainShown)).toBeNull();
+  });
+
+  it('a raster leaf: Export waits for its own image, then exports its bytes; an image that failed disables it (M4.EX12, refinement (j))', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'x.png')] });
+    const f = fakeLoaders({ tree: okTree(tree) });
+    const image = deferredOf<DocsRasterAnswer>();
+    f.raster.mockImplementation(() => image.promise);
+    open('/docs/demo/specs/x.png', f);
+    expect(await screen.findByRole('button', { name: busy(updatingTo(COMMIT_A)) })).toBeDisabled();
+    await act(async () => { image.resolve(okPng()); });
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    const doc = await exported();
+    expect([...doc.querySelectorAll('img')].map((i) => i.getAttribute('src')?.slice(0, 22))).toEqual(['data:image/png;base64,']);
+    cleanup();
+    open('/docs/demo/specs/x.png', fakeLoaders({ tree: okTree(tree) }));
+    expect(await screen.findByRole('button', { name: busy(EXPORT_WAIT_TEXT['image-failed']) })).toBeDisabled();
+  });
+
+  // ---- Task 12: every arm of exportStateFor is reached by a screen case ----
+
+  it('a Markdown leaf over the render gate reads Choose Format or Show as text first; after Show as text, Export saves the text (the gate and plain arms)', async () => {
+    const big = '# Big\n\n' + 'x'.repeat(DOCS_RENDER_GATE_BYTES);
+    open('/docs/demo/specs/a.md', fakeLoaders({ file: okFile(big) }));
+    expect(await screen.findByRole('button', { name: busy(EXPORT_WAIT_TEXT.gate) })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Show as text' }));
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    const doc = await exported();
+    expect(doc.querySelector('pre.ccrc-export-plain')?.textContent).toBe(big);
+  });
+
+  it('x.txt is exportable at once; x.ts reads Highlighting… until its store settles, then exports (the text arm, both halves)', async () => {
+    const docs = inThreadHighlighter({ hold: true });
+    const tree = treeOk({ entries: [entry('specs', 'x.ts'), entry('specs', 'x.txt')] });
+    const f = byPath(tree, { 'x.ts': fileAs('x.ts', 'const a: number = 1;', 'text'), 'x.txt': fileAs('x.txt', 'plain words', 'text') });
+    navigate('/docs/demo/specs/x.txt');
+    render(<HighlighterContext value={inThreadContext(docs)}><Routed loaders={f.loaders} /></HighlighterContext>);
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    expect((await exported()).querySelector('pre.ccrc-export-plain')?.textContent).toBe('plain words');
+    expect(docs.calls).toHaveLength(0);
+    act(() => { navigate('/docs/demo/specs/x.ts'); });
+    expect(await screen.findByRole('button', { name: busy(EXPORT_WAIT_TEXT.highlighting) })).toBeDisabled();
+    await waitFor(() => expect(docs.calls).toHaveLength(1));
+    await act(async () => { docs.release(); });
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    expect((await exported()).querySelector('pre code .hljs-keyword')?.textContent).toBe('const');
+  });
+
+  it('an SVG leaf is exportable from its bytes, and saves one svg data: image; an answer that is not svg offers no Export (the svg arm)', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'd.svg')] });
+    open('/docs/demo/specs/d.svg', byPath(tree, { 'd.svg': fileAs('d.svg', SVG_TEXT, 'svg') }));
+    await waitFor(() => expect(exportButton()).toBeEnabled());
+    const doc = await exported();
+    expect([...doc.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual([SVG_DATA]);
+    cleanup();
+    const other = byPath(tree, { 'd.svg': fileAs('d.svg', '# not svg', 'markdown') });
+    open('/docs/demo/specs/d.svg', other);
+    await waitFor(() => expect(other.file).toHaveBeenCalled());
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(document.querySelector('.docs-actions')).not.toBeNull();
+    expect(document.querySelector('.docs-export')).toBeNull();
+  });
+
+  it('a leaf whose file failed or is over its class cap offers no Export (refinement (k))', async () => {
+    open('/docs/demo/specs/a.md', byPath(treeOk(), {}));
+    expect(await screen.findByText(DOCS_FAILURE_SENTENCE['absent-path'])).toBeInTheDocument();
+    expect(document.querySelector('.docs-export')).toBeNull();
+    cleanup();
+    const big = treeOk({ entries: [entry('specs', 'a.md', { committed: { kind: 'file', blob: '1'.repeat(40), size: DOCS_CLASS_CAP.markdown + 1 } })] });
+    open('/docs/demo/specs/a.md', byPath(big, {}));
+    expect(await screen.findByText(/^This file is 2049 KiB; Docs shows files of this kind up to 2048 KiB/)).toBeInTheDocument();
+    expect(document.querySelector('.docs-export')).toBeNull();
+  });
+
+  it('a raster listed over its cap offers no Export', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'p.png', { committed: { kind: 'file', blob: '2'.repeat(40), size: DOCS_CLASS_CAP.raster + 1 } })] });
+    open('/docs/demo/specs/p.png', byPath(tree, {}));
+    expect(await screen.findByText('Image not loaded: it is 2049 KiB; Docs shows images up to 2048 KiB')).toBeInTheDocument();
+    expect(document.querySelector('.docs-export')).toBeNull();
   });
 });

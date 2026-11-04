@@ -1605,7 +1605,11 @@ describe('deploy/deploy.sh, the fallback installer, places everything `ccrc inst
   // deploy.sh to place one, telling them to remove it from this list).
   const DEPLOY_SH_WITHHOLDS = {
     bins: ['ccd-update-sync'],
-    units: ['ccd-update-sync.service', 'ccd-update-sync.timer', 'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer'],
+    // The settings pair (D-6915) is withheld for its own reason, not update-sync's: it is ccrc's install spine's,
+    // placed on every Linux role and enabled by `_inst_enable`, while deploy.sh places no timer of the update lane's
+    // kind and writes no install record, so a deploy.sh-placed tree would run a timer over no `ccrc install` act.
+    units: ['ccd-update-sync.service', 'ccd-update-sync.timer', 'ccrc-update-watchdog.service', 'ccrc-update-watchdog.timer',
+      'ccrc-settings.service', 'ccrc-settings.timer'],
   } as const;
 
   it('every binary _inst_bins places, deploy.sh places too (except DEPLOY_SH_WITHHOLDS.bins)', () => {
@@ -2180,6 +2184,17 @@ describe('the coordination snapshot helper: run from the installed tree, shipped
     const dispatch = [...CCRC.matchAll(/^ {2}([a-z][a-z-]*)\) +(?:cmd_[a-z_]+|exec node)[^\n]*;;$/gm)].map((m) => m[1]!);
     expect(dispatch.length).toBeGreaterThan(15);
     for (const v of dispatch) expect(verbs, `dispatch verb ${v}`).toContain(v);
+  });
+
+  it('`settings` (D-6914) is registered in all three places, right after coordination-snapshot, and is no installed file', () => {
+    const verbs = /^usage: \$PROG \{([^}]*)\}$/m.exec(CCRC)![1]!.split('|');
+    expect(verbs.filter((v) => v === 'settings'), 'one usage entry').toHaveLength(1);
+    expect(verbs.indexOf('settings')).toBe(verbs.indexOf('coordination-snapshot') + 1);
+    expect(CCRC.match(/^ {2}settings\) cmd_settings "\$@" ;;$/gm), 'one dispatch arm').toHaveLength(1);
+    expect(CCRC).toMatch(/^ {2}settings {2}print what this box's seven settings read as /m);
+    // The verb writes one file of its own, and no unit, binary or helper carries it: it is the verb that writes it.
+    expect(bodyOfFn('cmd_settings')).toMatch(/BOX_SETTINGS_JSON/);
+    expect([...placedBins(), ...placedUnits()].join(' ')).not.toMatch(/box-settings/);
   });
 
   it('the backup prose names the manifest and both sidecars wherever it says what ~/ccrc-backups/<ts>/ holds', () => {

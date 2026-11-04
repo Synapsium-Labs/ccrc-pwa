@@ -137,6 +137,41 @@ describe('the node floor, assertion 4: what ccrc history needs from node:sqlite'
   });
 });
 
+// ── assertion 5: the landing line's connection probes ──────────────────────
+// ABSOLUTE, like 3 and 4 (no package.json is read, so no edit of `engines` can turn it green). Landing order wave 5f
+// measures `db.isOpen` and `db.isTransaction` after a caught transaction failure: only an open connection with no
+// transaction proves a clean boundary (`CoordStore.landingBoundary`). Both are on `DatabaseSync` at the floor (22.16.0);
+// below it the probe is `undefined`, which the store would have to read as unmeasurable, so a missing one RAISES engines.
+const OPEN_PROBE = [
+  "import { DatabaseSync } from 'node:sqlite';",
+  "const db = new DatabaseSync(':memory:');",
+  "if (db.isOpen !== true) throw new Error('isOpen on an open connection: ' + db.isOpen);",
+  "if (db.isTransaction !== false) throw new Error('isTransaction outside a transaction: ' + db.isTransaction);",
+  "db.exec('BEGIN');",
+  "if (db.isTransaction !== true) throw new Error('isTransaction inside BEGIN: ' + db.isTransaction);",
+  "db.exec('ROLLBACK');",
+  "if (db.isTransaction !== false) throw new Error('isTransaction after ROLLBACK: ' + db.isTransaction);",
+  'db.close();',
+  "if (db.isOpen !== false) throw new Error('isOpen after close: ' + db.isOpen);",
+].join('\n');
+
+describe('the node floor, assertion 5: the connection probes the landing line reads', () => {
+  it('5a: DatabaseSync exposes isOpen and isTransaction, and they follow BEGIN, ROLLBACK and close()', () => {
+    const r = childProbe(OPEN_PROBE);
+    expect(r.spawnError, 'the probe child did not run to completion (spawn failure or 30 s timeout) — this is not a floor answer').toBeUndefined();
+    expect(r.out, 'node:sqlite on this interpreter lacks isOpen or isTransaction — RAISE engines, never lower them').toBe('');
+    expect(r.status).toBe(0);
+  });
+
+  it('5b: this interpreter, in process, answers both as booleans (the same facts the store reads)', async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(':memory:');
+    expect([db.isOpen, db.isTransaction]).toEqual([true, false]);
+    db.close();
+    expect(db.isOpen).toBe(false);
+  });
+});
+
 describe('D-4296 is cited where its remedy text lives (review 316 F32)', () => {
   it('the doctor remedy line and the install.sh floor comment each cite D-4296', () => {
     const doctor = readFileSync(path.join(root, 'ccd', 'ccrc-doctor-checks'), 'utf8').split('\n');

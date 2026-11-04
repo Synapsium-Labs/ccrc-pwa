@@ -29,7 +29,7 @@ const REAL_CLOCK: HighlightClock = {
   clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
-/** A production store: part 1's bounds and the ceilings on, chat's debounce for a chat store (section 4.10). */
+/** A production store: the page ceilings on, chat's debounce for a chat store (section 4.10). */
 export function createProductionStore(highlighter: Highlighter, mode: 'docs' | 'chat'): HighlightStore {
   return createHighlightStore(highlighter, { mode }, REAL_CLOCK);
 }

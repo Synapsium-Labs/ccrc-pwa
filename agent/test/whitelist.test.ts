@@ -166,19 +166,21 @@ describe('whitelist.checkPath', () => {
     expect(await checkPath(proj, cfg, 'write')).toBeNull();
   });
 
-  // ── design 2026-09-20 §8: the ten ~/.ccrc node files (the ninth is box-token lifecycle wave 1's, the tenth the tmp sweep census's) ──
+  // ── design 2026-09-20 §8: the eleven ~/.ccrc node files (the ninth is box-token lifecycle wave 1's, the tenth the tmp sweep census's, the eleventh the box settings record's) ──
   // D-3176 — the spec put these in whitelist-structural.test.ts,
   // which pins only the EXEC whitelist (tsc-spawned compile errors, no checkPath
   // case at all); every other checkPath case is in this describe, so these are.
   describe('the ~/.ccrc node files — exact basenames, READ mode only', () => {
-    const NINE = ['box-token-generation', 'build.json', 'ccrc-caps', 'floor', 'installed', 'node-id', 'previous',
+    const NINE = ['box-settings.json', 'box-token-generation', 'build.json', 'ccrc-caps', 'floor', 'installed', 'node-id', 'previous',
       'tmp-sweep.json', 'update-intent', 'update.json'];
     // Every other name ccd/ccrc writes (or could) beside them — the secrets first.
     const REFUSED = ['agent.env', 'auth.scrypt', 'coord.db', 'deploy.env', 'ccrc.env', 'exposure.env',
       'mail.token', 'accounts.json', 'accounts.sh', 'build.json.bak', '.build.json.tmp', path.join('logs', 'x'),
       // The box-token lifecycle's server-side files beside the ninth name: values, state and temps stay refused.
       'mail-previous.token', 'mail-pending-0123456789abcdef.token', 'box-token.json', 'box-token-retired.json',
-      'token-sync.json', '.box-token-generation.tmp-0123456789abcdef', 'box-token-generation.bak'];
+      'token-sync.json', '.box-token-generation.tmp-0123456789abcdef', 'box-token-generation.bak',
+      // The settings verb's own temp and look-alikes beside the eleventh name stay refused.
+      'box-settings.json.tmp.12345', 'box-settings.json.bak', '.box-settings.json'];
 
     function seedCcrc(): string {
       seed();
@@ -187,7 +189,7 @@ describe('whitelist.checkPath', () => {
       return ccrc;
     }
 
-    it('the set is exactly the ten names (§8, box-token-generation, and the tmp sweep census) — an eleventh is a design change, not an edit', () => {
+    it('the set is exactly the eleven names (§8, box-token-generation, the tmp sweep census and the box settings record) — a twelfth is a design change, not an edit', () => {
       // The grant DERIVES from NODE_FILE_BASENAMES, so a name added to
       // NODE_FILES is a read grant; this is the line that makes that visible.
       expect([...NODE_FILE_BASENAMES].sort()).toEqual(NINE);

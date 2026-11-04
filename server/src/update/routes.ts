@@ -13,6 +13,7 @@ import {
 } from './catalogue.js';
 import { resolveAndProject, resolveInputFor } from './project.js';
 import { SERVER_LABEL, buildInfoOfRow } from './inventory.js';
+import { boxSettingsView } from './boxSettings.js';
 import { dispatchViewsFor } from './converge.js';
 import type { CataloguePoller } from './catalogue.js';
 import { updateTargetListed } from '../../../shared/update-move.js';
@@ -618,10 +619,13 @@ export function registerUpdateRoutes(
   app.get('/api/updates', async (req, reply) => {
     if (!deps.coord) return refuse(reply, { error: 'not-configured' });
     await ensureInventory(req);
+    // D-6916: each node's box settings, from the watcher's held reads and the request's clock. No watcher, no field.
+    const held = watcher?.boxSettingsHeld();
+    const nowS = Math.floor(Date.now() / 1000);
     const view: UpdatesView = {
       catalogue: deps.catalogue?.state() ?? { lastOkAt: null, lastError: null },
       releases: deps.coord.releases().map(toReleaseWire),
-      nodes: deps.coord.nodes().map(toNodeWire),
+      nodes: deps.coord.nodes().map((n) => ({ ...toNodeWire(n), ...(held ? { settings: boxSettingsView(held.get(n.nodeId), nowS) } : {}) })),
       intent: deps.coord.intents().map(toIntentWire),
       // Box-token lifecycle wave 1 (D-4392): the console card's one object, the driver's own view, read at
       // request time. No driver, no field — an absent `boxToken` is how an older server already answers.

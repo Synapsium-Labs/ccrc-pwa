@@ -8,11 +8,11 @@
 // pre-scanned, then rendered as before; a longer one parses in `chatRunner`'s worker; whatever is not formatted
 // shows as `MsgPlain` with `chatPlainNote`'s sentence; and `isRefusedChatImageSrc` keeps chat from drawing an
 // image whose source is not an absolute http(s) URL (`chat-hardening.test.tsx`).
-// Bounded per W5 Task 3 (section 4.10's "Bounds on the shared components"): `CodeBlock` does not highlight a block
-// holding a word longer than `MD_HIGHLIGHT_MAX_WORD_CHARS` (r10), and `keystrokeParts` moved to `markdownGuard.ts`,
-// where the parse's element count calls it too (2-2) and it refuses a span over `MD_KEYSTROKE_MAX_CHARS` (r11).
+// Bounded per W5 Task 3 (section 4.10's "Bounds on the shared components"): `keystrokeParts` moved to `markdownGuard.ts`,
+// where the parse's element count calls it too (2-2) and it refuses a span over `MD_KEYSTROKE_MAX_CHARS` (r11). W5h-b
+// retired r10's word bound and the main-thread highlight bounds beside it: highlight.js runs only in the worker.
 // Desktop polish Task C7: chat's remark plugins are one module constant; `ChatMarkdown` is memoised on its props.
-// W5h-a Task 6 (base spec 2026-10-01 section 4.10 "Highlighting"): this file no longer imports highlight.js. The grammar registration moved to `highlightGrammars.ts` (the highlight worker's closure), `LANG_LABEL`, `codeLanguage` and part 1's scans to `highlightNames.ts`, the cache into the worker. `CodeBlock` reads a highlight store (`PreHighlightContext`) with `useSyncExternalStore`, requests in an effect, renders plain first, and draws through `HighlightedCode`, the one `dangerouslySetInnerHTML` in `pwa/src`, which inserts only a value `isCheckedHighlightHtml` accepts. `ChatMarkdown` holds one store per message on `chatHighlighter`.
+// W5h-a Task 6 (base spec 2026-10-01 section 4.10 "Highlighting"): this file no longer imports highlight.js. The grammar registration moved to `highlightGrammars.ts` (the highlight worker's closure), `LANG_LABEL` and `codeLanguage` to `highlightNames.ts`, the cache into the worker. `CodeBlock` reads a highlight store (`PreHighlightContext`) with `useSyncExternalStore`, requests in an effect, renders plain first, and draws through `HighlightedCode`, the one `dangerouslySetInnerHTML` in `pwa/src`, which inserts only a value `isCheckedHighlightHtml` accepts. `ChatMarkdown` holds one store per message on `chatHighlighter`.
 import Markdown, { defaultUrlTransform, type Options as MarkdownOptions } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
@@ -85,7 +85,7 @@ export function nodeText(n: ReactNode): string {
   return '';
 }
 
-const NO_SUBSCRIPTION = (_listener: () => void): (() => void) => () => undefined;
+export const NO_SUBSCRIPTION = (_listener: () => void): (() => void) => () => undefined;
 
 /** A block's entry in `store`, read as React reads an external store; the shared `unrequested` entry with no store
  *  or no key. `peek` is also the server snapshot, so `renderToStaticMarkup` reads the store and never requests. */
@@ -140,9 +140,6 @@ export function codeBlockLabel(label: string, raw: string, answer: BlockKey, ent
       return label;
     case 'over-cap':
       return kib;
-    case 'part1':
-      return answer.bound === 'grammar-cap' ? kib
-        : `${label} · not highlighted (a ${answer.chars}-character ${answer.bound === 'word' ? 'word' : answer.bound === 'line' ? 'line' : 'run of whitespace'})`;
     case 'key':
       break;
   }
@@ -150,7 +147,7 @@ export function codeBlockLabel(label: string, raw: string, answer: BlockKey, ent
     case 'html':
       return entry.mode === 'line' ? `${label} · highlighted line by line` : label;
     case 'skipped':
-      return entry.ceiling === 'part1-scan' || entry.ceiling === 'part1-markdown' ? label : `${label} · not highlighted (page highlighting limit)`;
+      return `${label} · not highlighted (page highlighting limit)`;
     case 'plain':
       if (entry.first.kind === 'timeout') return `${label} · not highlighted (took over ${entry.first.budgetMs / 1000} s)`;
       return entry.first.kind === 'too-large' ? `${label} · not highlighted (output too large)` : label;
@@ -175,6 +172,20 @@ export function HighlightedCode({ entry, raw }: { readonly entry: HighlightEntry
  *  provides one. */
 export const PreHighlightContext = createContext<HighlightStore | null>(null);
 
+/** What a fenced block's code element says: its language (`codeLanguage` of its class), its label (`LANG_LABEL`, own
+ *  keys only, else the language, else `text`) and its raw text with one trailing newline stripped. `CodeBlock` and
+ *  Export's static `pre` (`docs/export/exportMarkdown.tsx`) both read a block through it, so they label and key it alike. */
+export interface CodeBlockParts { readonly lang: string; readonly label: string; readonly raw: string }
+export function codeBlockParts(children: ReactNode): CodeBlockParts {
+  const codeEl = React.Children.toArray(children).find(React.isValidElement) as
+    | React.ReactElement<{ className?: string; children?: ReactNode }>
+    | undefined;
+  const lang = codeLanguage(codeEl?.props.className ?? '');
+  // Own keys only, as `grammarOf` reads its tables: a fence named `__proto__` or `constructor` is no label.
+  const label = (Object.hasOwn(LANG_LABEL, lang) ? LANG_LABEL[lang] : undefined) ?? (lang || 'text');
+  return { lang, label, raw: nodeText(children).replace(/\n$/, '') };
+}
+
 /** Fenced code: language label + copy bar over the well. The bar is a SIBLING above the scrolling <pre>, never an
  *  overlay. It makes no highlight.js call: it reads its entry in the store, plain until the worker's answer is
  *  `html` (the plain first frame, section 4.10), and its label says why a registered block is not coloured. `at`,
@@ -184,13 +195,7 @@ export const PreHighlightContext = createContext<HighlightStore | null>(null);
 export function CodeBlock({ children, at }: { children?: ReactNode; at?: object }): ReactNode {
   const store = useContext(PreHighlightContext);
   const [copied, setCopied] = useState(false);
-  const codeEl = React.Children.toArray(children).find(React.isValidElement) as
-    | React.ReactElement<{ className?: string; children?: ReactNode }>
-    | undefined;
-  const lang = codeLanguage(codeEl?.props.className ?? '');
-  // Own keys only, as `grammarOf` reads its tables: a fence named `__proto__` or `constructor` is no label.
-  const label = (Object.hasOwn(LANG_LABEL, lang) ? LANG_LABEL[lang] : undefined) ?? (lang || 'text');
-  const raw = nodeText(children).replace(/\n$/, '');
+  const { lang, label, raw } = codeBlockParts(children);
   const answer = useMemo(() => (store === null ? blockKey(lang, raw) : store.keyOf(lang, raw)), [store, lang, raw]);
   const key = answer.kind === 'key' ? answer.key : null;
   const keyEntry = useHighlightEntry(store, key);

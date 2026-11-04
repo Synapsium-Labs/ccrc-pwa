@@ -22,6 +22,8 @@ import { lazyMountReader, type ReaderDeps } from '../docs/ReaderFrame';
 import { loadReaderImages } from '../docs/reader/images';
 import { DocsPageLink, DocsTreeView } from '../docs/DocsTreeView';
 import { createFetchQueue } from '../docs/fetchQueue';
+import { createExportAssets } from '../docs/export/exportAssets';
+import { ExportBodyContext, type ExportBody } from '../docs/exportBody';
 import { docsRetryPlan, type DocsLoaders, type DocsNotOk } from '../docs/failures';
 import { docsLocation } from '../docs/docsLinks';
 import {
@@ -31,7 +33,8 @@ import { docsPathKind } from '../docs/docsTree';
 import { useDocsVisit, type Freshness, type TreeSlot } from '../docs/useDocsVisit';
 import { api } from '../lib/api';
 import { onAuthRegained } from '../lib/auth';
-import { HighlighterContext } from '../lib/highlighterContext';
+import { HighlighterContext, type HighlighterContextValue } from '../lib/highlighterContext';
+import type { HighlightStore } from '../lib/highlightStore';
 import { docsRunner, type MarkdownParser } from '../lib/markdownRunner';
 import { navigate } from '../lib/router';
 import { useNow } from '@ccrc/ui';
@@ -171,12 +174,21 @@ export function DocsScreen(p: {
 
   // The image queue and the drafted-asset count, one each per visit, stable across renders (DocsAssetContext).
   const [queue] = useState(createFetchQueue);
+  const [exportAssets] = useState(createExportAssets);
   const [draftAssets, setDraftAssets] = useState(0);
   const onDraftAsset = useCallback((delta: number) => setDraftAssets((n) => n + delta), []);
-  const assets = useMemo<DocsAssetContextValue>(() => ({ loaders, queue, onDraftAsset }), [loaders, queue, onDraftAsset]);
+  const assets = useMemo<DocsAssetContextValue>(() => ({ loaders, queue, onDraftAsset, exportAssets }), [loaders, queue, onDraftAsset, exportAssets]);
   // The pin a raster leaf's own image settled at, which Share waits for (spec 4.16; refinement (f)). `null`: none has
   // (not a raster leaf, or its image is still loading). The setter is stable, so the image reports once per pin.
   const [leafImage, setLeafImage] = useState<DocPin | null>(null);
+  // Export (spec 4.17): what the leaf's body shows (`docs/exportBody.ts`), the page's or text leaf's highlight store (W5h-a's
+  // `publish` slot, held here: D-7755), and the page URL the reader was turned off at so Export can save the plain view
+  // (refinement (a)). The image registry is `exportAssets`, above, in the images' context.
+  const [exportBody, setExportBody] = useState<ExportBody | null>(null);
+  const [pageStore, setPageStore] = useState<HighlightStore | null>(null);
+  const [plainAt, setPlainAt] = useState<string | null>(null);
+  // Leaving the page brings the reader back, on a later return too (refinement (a)); `setTrail`'s effect has this form.
+  useEffect(() => { setPlainAt((at) => (at === null || at === here ? at : null)); }, [here]);
 
   // The default parser's worker is started on mount, so the first leaf does not wait for it (spec 4.3).
   useEffect(() => {
@@ -186,6 +198,13 @@ export function DocsScreen(p: {
   // The Docs highlighter's worker is started on mount too, so the first code block does not wait for its boot
   // (base spec 4.10 "The highlight runner").
   const highlighters = useContext(HighlighterContext);
+  // The page's store reaches Export through the context's `publish` slot (refinement (i)). Memoised on the outer value, so
+  // `useDocsHighlightStore`'s memo is stable and no render makes a second store.
+  // It hands each store on to an outer `publish` too, so a provider above the screen still hears it.
+  const withPublish = useMemo<HighlighterContextValue>(() => ({
+    ...highlighters,
+    publish: (store) => { setPageStore(store); highlighters.publish?.(store); },
+  }), [highlighters]);
   useEffect(() => {
     highlighters.docs.prewarm();
   }, [highlighters.docs]);
@@ -287,7 +306,7 @@ export function DocsScreen(p: {
       const leaf = page.kind === 'path' && !page.dirSlash
         && docsPathKind(t, page.section, page.path, page.ref === null ? 'default' : 'ref').kind === 'leaf';
       body = leaf && page.kind === 'path'
-        ? <DocsLeaf visit={visit} tree={t} page={page} parser={parser} reader={reader} onLeafImage={setLeafImage} />
+        ? <DocsLeaf visit={visit} tree={t} page={page} parser={parser} reader={plainAt === here ? null : reader} onLeafImage={setLeafImage} />
         : <DocsTreeView tree={t} page={page} />;
     } else if (isOwnedElsewhere(slot) && typeof slot.body.owner === 'string' && !looped) {
       body = <p className="docs-loading">{fillSentence(DOCS_VIEW_TEXT.redirecting, { owner: slot.body.owner })}</p>;
@@ -310,12 +329,19 @@ export function DocsScreen(p: {
   return (
     <DocsAssetContext value={assets}>
       <div className="docs-screen" data-draft-assets={draftAssets}>
-        {page !== null && <DocsHead page={page} visit={visit} tree={tree} leafImage={leafImage} />}
+        {page !== null && (
+          <DocsHead
+            page={page} visit={visit} tree={tree} leafImage={leafImage} exportBody={exportBody} pageStore={pageStore}
+            exportAssets={exportAssets} plainView={plainAt === here} onPlainView={() => setPlainAt(here)}
+          />
+        )}
         {note !== null && <p className="docs-note docs-redirect-note" role="status">{note.text}</p>}
         {page !== null && page.kind !== 'index' && tree !== null && (
           <DocsBanners page={page} tree={tree} file={visit.file} draftAssets={draftAssets} onRelist={visit.retryTree} />
         )}
-        {body}
+        <ExportBodyContext value={setExportBody}>
+          <HighlighterContext value={withPublish}>{body}</HighlighterContext>
+        </ExportBodyContext>
       </div>
     </DocsAssetContext>
   );

@@ -1,6 +1,6 @@
 // The block highlight cap (native Docs reader, W4 Task 4; design 2026-10-01 section 4.10's "Highlighting" and
 // section 4.15's M4.H1, the W4 plan's refinement (l)). `CodeBlock` asks highlight.js to colour a block only when its
-// language is registered, its `highlight` prop is not `false`, and it is at most `MD_HIGHLIGHT_BLOCK_MAX_CHARS`
+// language is registered and it is at most `MD_HIGHLIGHT_BLOCK_MAX_CHARS`
 // characters after the trailing-newline strip. A registered block over the cap renders as plain text and labels
 // itself "{label} · not highlighted ({KiB} KiB)", KiB being its characters / 1024 rounded up. (Not
 // `code-block.test.tsx`: open PR #111 creates that file.)
@@ -25,8 +25,8 @@ afterEach(() => {
  *  the strip would take). */
 const tsBody = (chars: number): string => 'const a = 1;\n'.repeat(Math.ceil(chars / 13)).slice(0, chars - 1) + 'x';
 
-/** A Python body of exactly `chars` characters, every line a keyword, ending in `x`: Python keeps the 64 KiB cap that
- *  `ts` no longer has (review 450 F1: `typescript` is capped at 8 192 characters), so it measures the general cap. */
+/** A Python body of exactly `chars` characters, every line a keyword, ending in `x`: cheap to highlight, and a block
+ *  at the 64 KiB input cap. */
 const pyBody = (chars: number): string => 'import a\n'.repeat(Math.ceil(chars / 9)).slice(0, chars - 1) + 'x';
 
 /** One fenced block, as react-markdown hands it to the `pre` component. */
@@ -57,22 +57,15 @@ describe('M4.H1: the block highlight cap', () => {
     expect(label(c)).toBe('TypeScript');
   });
 
-  // From W5h-a the shipped per-block HTML cap (MD_HIGHLIGHT_MAX_HTML_CHARS) keeps a 65 536-character python block of
-  // keyword lines plain, whatever the block cap admits: its markup is over that cap. The two cases below keep what
-  // part 1's cap decides (the block is admitted, its key is requestable, and it is requested) and then assert what
-  // ships (plain, labelled "output too large") until W5h-b.
-  it('the cap is inclusive: 65 536 characters are admitted and requested, and stay plain over the HTML cap until W5h-b; 65 537 are not requested', () => {
+  // W5h-b: at the measured per-block HTML cap (MD_HIGHLIGHT_MAX_HTML_CHARS) a 65 536-character python block of keyword
+  // lines is coloured again: its markup is under the cap, and the case says so first.
+  it('the cap is inclusive: 65 536 characters are highlighted; 65 537 are not requested', () => {
     expect(MD_HIGHLIGHT_BLOCK_MAX_CHARS).toBe(65536);
     const atBody = pyBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS);
-    const store = syncTestStore('chat');
-    const at = render(withSyncStore(<CodeBlock><code className="language-python">{`${atBody}\n`}</code></CodeBlock>, store)).container;
-    const key = store.keyOf('python', atBody);
-    expect(key.kind).toBe('key');
-    expect(store.requests).toHaveLength(1);
-    expect(store.requests[0] === (key.kind === 'key' ? key.key : null)).toBe(true);
-    expect(HLJS.highlight(atBody, { language: 'python', ignoreIllegals: true }).value.length).toBeGreaterThan(MD_HIGHLIGHT_MAX_HTML_CHARS);
-    expect(keywords(at)).toBe(0);
-    expect(label(at)).toBe('Python · not highlighted (output too large)');
+    expect(HLJS.highlight(atBody, { language: 'python', ignoreIllegals: true }).value.length).toBeLessThanOrEqual(MD_HIGHLIGHT_MAX_HTML_CHARS);
+    const at = block('python', atBody);
+    expect(keywords(at)).toBeGreaterThan(0);
+    expect(label(at)).toBe('Python');
     cleanup();
     const overStore = syncTestStore('chat');
     const over = render(withSyncStore(<CodeBlock><code className="language-python">{`${pyBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS + 1)}\n`}</code></CodeBlock>, overStore)).container;
@@ -82,16 +75,12 @@ describe('M4.H1: the block highlight cap', () => {
     expect(label(over)).toBe('Python · not highlighted (65 KiB)');
   });
 
-  it('counts the block after the trailing-newline strip, as the copy button does: admitted and requested, plain over the HTML cap until W5h-b', () => {
+  it('counts the block after the trailing-newline strip, as the copy button does: 65 536 characters are highlighted', () => {
     // pyBody(65 536) plus the newline the block appends is 65 537 characters before the strip.
     const body = pyBody(MD_HIGHLIGHT_BLOCK_MAX_CHARS);
-    const store = syncTestStore('chat');
-    const c = render(withSyncStore(<CodeBlock><code className="language-python">{`${body}\n`}</code></CodeBlock>, store)).container;
-    const key = store.keyOf('python', body);
-    expect(key.kind).toBe('key');
-    expect(store.requests).toHaveLength(1);
-    expect(store.requests[0] === (key.kind === 'key' ? key.key : null)).toBe(true);
-    expect(label(c)).toBe('Python · not highlighted (output too large)');
+    const c = block('python', body);
+    expect(keywords(c)).toBeGreaterThan(0);
+    expect(label(c)).toBe('Python');
     expect(code(c)).toBe(body);
   });
 

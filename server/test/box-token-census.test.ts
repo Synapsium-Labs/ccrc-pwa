@@ -266,7 +266,7 @@ const TOKEN_DOORS = ['/api/token/rotate'];
  *  reason. Hand-kept for the NAMES only: the ledgers describe below derives the same set from the file and compares in both
  *  directions, so a route there cannot join or leave without this literal moving. */
 // …and the secret's own route (plan PL6), a credential act: the account gate with a step-up, still no box token.
-const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/programmes/:slug/goals', '/api/items/:id/tick', '/api/items/:id/dismiss', '/api/items/:id/secret'];
+const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/programmes/:slug/goals', '/api/items/:id/tick', '/api/items/:id/dismiss', '/api/items/:id/secret', '/api/programmes/:slug/secrets', '/api/programmes/:slug/secrets/:slot'];
 
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS];
@@ -289,7 +289,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'forty-one',
   // The Linear proxy (#1444, plan task LK9) and the programme ledgers (PL3): fifty-five machine lanes and fifty-eight in all.
   'forty-two', 'forty-three', 'forty-four', 'forty-five', 'forty-six', 'forty-seven', 'forty-eight', 'forty-nine',
-  'fifty', 'fifty-one', 'fifty-two', 'fifty-three', 'fifty-four', 'fifty-five', 'fifty-six', 'fifty-seven', 'fifty-eight'];
+  'fifty', 'fifty-one', 'fifty-two', 'fifty-three', 'fifty-four', 'fifty-five', 'fifty-six', 'fifty-seven', 'fifty-eight',
+  // Landing order wave 5f: the two attributed landing writes, fifty-seven machine lanes and sixty in all.
+  'fifty-nine', 'sixty'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`

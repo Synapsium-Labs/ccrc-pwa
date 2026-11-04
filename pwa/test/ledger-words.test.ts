@@ -2,7 +2,8 @@
 // what it pins; the screen's and the routes' tests read the same words through their components.
 import { describe, expect, it } from 'vitest';
 import {
-  groupByProgramme, itemPills, openRunsOf, programmeIsLive, programmeWaitingCount, questionRows, waitingTotal, type QuestionRow,
+  COMBINED_LIST, fromWord, groupByProgramme, itemPills, itemPlace, knownProgrammes, listGroups, listOfFromWord, openRunsOf,
+  positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, waitingTotal, type ItemList, type QuestionRow,
 } from '../src/ledgers/ledgerWords';
 import { isWaitingView } from '../src/ledgers/waitingView';
 import { fleetSession } from './fleetFixture';
@@ -156,5 +157,103 @@ describe('programmeWaitingCount (the chip\'s count)', () => {
     expect(programmeWaitingCount(null, sessions, runs, 'prog-a')).toBe(0);
     expect(programmeWaitingCount(view, null, runs, 'prog-a')).toBe(0);
     expect(programmeWaitingCount(waitingView({ items: [itemView({ state: 'done', closedAt: NOW })] }), [], [], 'prog-a')).toBe(0);
+  });
+});
+
+// ── moving between items (plan PL9; spec §2 "Moving between items", D23) ──────────────────────────────────────────
+describe('the list an item was opened from rides the URL as one word', () => {
+  const LISTS: readonly (readonly [string, ItemList])[] = [
+    ['waiting', { at: 'waiting', programme: null }],
+    ['waiting:prog-a', { at: 'waiting', programme: 'prog-a' }],
+    ['programme:prog-b', { at: 'programme', programme: 'prog-b' }],
+  ];
+  it.each(LISTS)('%s reads back as the list it names, and that list writes it', (word, list) => {
+    expect(listOfFromWord(word)).toEqual(list);
+    expect(fromWord(list)).toBe(word);
+  });
+  it.each([null, '', 'fleet', 'waiting:', 'programme:', 'programme:../x', 'programme:a b', 'waiting:prog-a:x', 'PROGRAMME:prog-a'])(
+    'an unknown or malformed word (%j) falls back to the combined list', (word) => {
+      expect(listOfFromWord(word)).toEqual(COMBINED_LIST);
+    });
+});
+
+describe('itemPlace: previous and next in the order and filter of the list the item was opened from', () => {
+  // prog-b holds the blocking item, so it sorts first though it is second by slug; a session's question sits in prog-a.
+  const items = [
+    itemView({ id: 1, program: 'prog-a', neededBy: 'later' }),
+    itemView({ id: 2, program: 'prog-b', neededBy: 'soon' }),
+    itemView({ id: 3, program: 'prog-b', neededBy: 'blocking' }),
+    itemView({ id: 4, program: 'prog-a', neededBy: 'soon' }),
+    itemView({ id: 5, program: 'prog-b', neededBy: 'later', state: 'checking', tickedAt: NOW - MIN }),
+  ];
+  const groups = groupByProgramme(items, [ask('prog-a-w1', 'prog-a')]);
+  /** The item ids the screen draws, in its order: read off the same groups the screen draws. */
+  const drawn = (list: ItemList): number[] =>
+    listGroups(list, groups).flatMap((g) => g.rows).flatMap((r) => (r.kind === 'item' ? [r.item.id] : []));
+
+  it('the combined list: every programme\'s items in the order the list draws them, questions skipped', () => {
+    expect(drawn(COMBINED_LIST)).toEqual([3, 2, 5, 4, 1]);
+    expect(itemPlace(2, COMBINED_LIST, groups)).toEqual({ list: COMBINED_LIST, index: 1, total: 5, prev: 3, next: 5 });
+  });
+
+  it('the side rail\'s filter to one programme, and the programme view, step inside that programme only', () => {
+    const filtered: ItemList = { at: 'waiting', programme: 'prog-a' };
+    const view: ItemList = { at: 'programme', programme: 'prog-a' };
+    expect(itemPlace(4, filtered, groups)).toEqual({ list: filtered, index: 0, total: 2, prev: null, next: 1 });
+    expect(itemPlace(1, view, groups)).toEqual({ list: view, index: 1, total: 2, prev: 4, next: null });
+  });
+
+  it('the first item has no previous and the last no next', () => {
+    expect(itemPlace(3, COMBINED_LIST, groups)).toMatchObject({ index: 0, prev: null, next: 2 });
+    expect(itemPlace(1, COMBINED_LIST, groups)).toMatchObject({ index: 4, prev: 4, next: null });
+    expect(itemPlace(2, { at: 'programme', programme: 'prog-b' }, groups)).toMatchObject({ index: 1, total: 3, prev: 3, next: 5 });
+  });
+
+  it('a list that does not hold the item (a stale link) falls back to the combined list', () => {
+    expect(itemPlace(2, { at: 'programme', programme: 'prog-a' }, groups)).toEqual({ list: COMBINED_LIST, index: 1, total: 5, prev: 3, next: 5 });
+    expect(itemPlace(2, { at: 'waiting', programme: 'prog-gone' }, groups)).toEqual({ list: COMBINED_LIST, index: 1, total: 5, prev: 3, next: 5 });
+  });
+
+  it('an item no list holds (recently cleared, or gone) has no place', () => {
+    expect(itemPlace(9, COMBINED_LIST, groups)).toBeNull();
+    expect(itemPlace(9, { at: 'programme', programme: 'prog-a' }, groups)).toBeNull();
+  });
+
+  it('the filter to a programme with no group shows every group, as the side rail does; the programme view shows none', () => {
+    expect(listGroups({ at: 'waiting', programme: 'prog-gone' }, groups)).toEqual(groups);
+    expect(listGroups({ at: 'programme', programme: 'prog-gone' }, groups)).toEqual([]);
+  });
+
+  it('resolveList is the one stale-list rule: a list naming a programme no group holds is the combined list, any other stands', () => {
+    for (const list of [COMBINED_LIST, { at: 'waiting', programme: 'prog-a' }, { at: 'programme', programme: 'prog-b' }] as ItemList[]) {
+      expect(resolveList(list, groups), fromWord(list)).toBe(list);
+    }
+    expect(resolveList({ at: 'waiting', programme: 'prog-gone' }, groups)).toEqual(COMBINED_LIST);
+    expect(resolveList({ at: 'programme', programme: 'zzz' }, groups)).toEqual(COMBINED_LIST);
+    expect(resolveList({ at: 'programme', programme: 'zzz' }, [])).toEqual(COMBINED_LIST);
+  });
+
+  it('a programme view whose slug is real stays a programme view with no group; a filter to it does not (follow-up F3)', () => {
+    const view: ItemList = { at: 'programme', programme: 'prog-gone' };
+    const filter: ItemList = { at: 'waiting', programme: 'prog-gone' };
+    const known = new Set(['prog-gone']);
+    expect(resolveList(view, groups, known)).toBe(view);
+    expect(resolveList(filter, groups, known)).toEqual(COMBINED_LIST); // the side rail offers no filter to it
+    expect(resolveList({ at: 'programme', programme: 'zzz' }, groups, known)).toEqual(COMBINED_LIST); // a slug nothing knows
+    expect(resolveList(view, groups)).toEqual(COMBINED_LIST);
+  });
+
+  it('a slug is real when the runs, the Goals or the cleared trail name it (follow-up F3)', () => {
+    const goals = (program: string) => ({ program, specPath: null, inShort: null, inShortAt: null, modifications: [] });
+    expect([...knownProgrammes(waitingView(), null)]).toEqual([]);
+    expect(knownProgrammes(waitingView(), [runRow({ id: 1, program: 'prog-r' })]).has('prog-r')).toBe(true);
+    expect(knownProgrammes(waitingView({ goals: [goals('prog-g')] }), null).has('prog-g')).toBe(true);
+    expect(knownProgrammes(waitingView({ cleared: [itemView({ id: 9, program: 'prog-c', state: 'done' })] }), []).has('prog-c')).toBe(true);
+    expect(knownProgrammes(waitingView({ items: [itemView({ id: 1, program: 'prog-a' })] }), []).has('zzz')).toBe(false);
+  });
+
+  it('the position as announced carries the item\'s title, so a step that keeps "N of M" still says something new (follow-up A-3)', () => {
+    expect(positionWords({ list: COMBINED_LIST, index: 1, total: 3, prev: 10, next: 12 }, 'Item 11')).toBe('2 of 3, Item 11');
+    expect(positionWords(null, 'Item 11')).toBe('');
   });
 });

@@ -1118,6 +1118,11 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the muted role/os, desired-resolution, request, reachability and state lines of the same unfilled inventory row, in --ink-tertiary. Same ground and same reason as .settings-node-current--amber; registered separately because it sets its own colour",
   },
+  // ── box settings view, D-6917: the Box settings card ────────────────────
+  '.box-settings-danger': {
+    under: ['var(--bg-page)'],
+    why: "a refused or unmeasured setting's sentence, and the backups and disk lines when the box could not measure them, in --status-dead-text, in the Updates section's Box settings card. .box-settings-node draws a hairline and no fill, .settings-section/.settings-screen and .shell-detail paint no background, so body's --bg-page (styles/base.css:111) is behind it — the .settings-node-detail reasoning. Registered on its own because it sets its own colour",
+  },
   // ── native Docs reader W5 part 1, Task 11: the Docs door and the Docs screen's chrome (docs/docs.css) ──
   // The Docs screen renders into .shell-detail, and neither it nor .docs-screen nor any view inside paints a
   // background, so body's --bg-page (styles/base.css) is behind every rule below: the .settings-title reasoning.
@@ -1207,6 +1212,11 @@ export const INHERITED_GROUNDS = {
   '.doc-plain-note': {
     under: ['var(--bg-page)'],
     why: "the note above a document shown as plain text (DocPlain), a <p> in the unpainted leaf, so --bg-page, as chat's .msg-plain-note",
+  },
+  // ── native Docs reader W5, Export: the export's own chrome (docs/export/export.css) ──
+  '.ccrc-export-provenance, .ccrc-export-note, .ccrc-export-missing, .ccrc-export-caption': {
+    under: ['var(--bg-page)'],
+    why: "an exported file's quiet ink: the provenance block, a plain body's note, an image placeholder and an image's draft caption, each in --ink-secondary inside the export's <body>, .ccrc-export, which paints --bg-page and is measured as a pair of its own. A placeholder inside a table or a callout sits on that block's tint instead; the auditor takes one ground per rule",
   },
   // ── settings Task R2b2 (D-5503): the cards' when-line ──────────────────
   '.settings-when': {
