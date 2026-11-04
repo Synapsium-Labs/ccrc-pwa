@@ -9,6 +9,8 @@
 buildability). The revisions that change an approved decision are listed in §2.1 and need the operator's
 confirmation in the review of this document. No implementation plan exists yet.
 
+> **Wave 5 amendment (plan approved 2026-11-04).** "No implementation plan exists yet" no longer holds. Wave 5's plan is `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt.md`. The operator approved it on 2026-11-04 and ruled O5-1 to O5-8 (D-7840..D-7847). Waves 6 and 7 are dropped (D-7002), so this design builds no lease cleaner. The orphan-tree lane (#1252) owns removal of these trees and skips a held one (D-7840, D-7828).
+
 **Anchors** are `origin/main` at `698f679da`; they are snapshots — trust the shipped source's own comments
 over a line number here. **Deviation numbers:** this spec defines none. Each wave's plan mints its own
 block at run-open; a contingency named here is named by slug and minted when it fires.
@@ -71,6 +73,8 @@ has an owner in ccrc; nothing ccrc runs will ever clean one.
    `lifecycle` (§5.2).
 
 ### 2.1 Revisions after review — each changes an approved decision and needs confirmation
+
+> **Wave 5 amendment (plan approved 2026-11-04).** R1, R2 and R8 stand, and wave 5 builds them: carriers, `ws-lease-mark` and the read-only `ws-lease-audit` ship with adoption, and promotion dispatches a child workspace from the lease's tip. R1's 'then the lease is cleaned as usual' no longer holds: the old tree is left to the orphan ladder (D-7002). The cleaner half of R5, and the admission rule R6 puts in §5.11, no longer hold: waves 6 and 7 are dropped (D-7002), so there is no `ws-lease-clean`, no `lease-clean-v1`, no `$REG/lease-clean-live` and no admission ladder (§5.11). R5's separate read-only verb with its own capability stands. The wave-5 plan records this section as approved on 2026-10-05, R9 included, so read "Proposed" in R9's row and "(proposed, R9)" in §5.8 as approved; its claimant rule for a programme worker's lease is R9's nesting rule (D-7817). Detail: `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt.md`.
 
 | # | Approved in conversation | Revised to | Why |
 |---|---|---|---|
@@ -170,6 +174,8 @@ inventing runs for past work; non-git version control.
   (§5.14). Stage 1 measures their share.
 
 ### 5.2 Data model and state
+
+> **Wave 5 amendment (plan approved 2026-11-04).** The sentence "One `coord.db` migration (wave 2) creates every table; later waves ship code only" no longer holds for `runs`: wave 5 adds one additive nullable column, `runs.promotedLeaseId`, and derives `executionOrigin` from it (D-7844). That is the one durable migration wave 5 adds. It adds no migration on any `delegation_*` table (D-7847). A lease's expiry is stored in the existing `cleanupDueAt` column, and `cleanupState` stays `not-due` (D-7829). Wave 5 has no cleaner (D-7002), so the cleanup dimension's transitions past `not-due` are not built, and the `ephemeral-lease` population named under "Populations" never joins the run-child executor. Disposition changes follow one transition table in the server's policy layer (`server/src/coord/delegation-lease-state.ts#DELEGATION_LEASE_TRANSITIONS`): Retain, operator-retain and attach move an `ephemeral`, `adopted` or `retained` lease to `retained`, and a promotion's transfer starts from any of those three, so an `ephemeral` lease can be promoted too. `transferring` and `released` are carrier states beside the dispositions (§5.10). Wave 5 writes no `unknown` execution state; the durable `unknown` writer is deferred (the plan's Rider). Detail: `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt.md`.
 
 One `coord.db` migration (wave 2) creates every table; later waves ship code only.
 
@@ -323,6 +329,8 @@ bracket; process ancestry; directory nesting; a session's own working directory.
 
 ### 5.5 Reconciliation
 
+> **Wave 5 amendment (plan approved 2026-11-04).** Native-removed release ships in wave 5 (D-7795). The clause "and no `lease-clean:<phase>` breadcrumb exists" has no writer after D-7002 and is not implemented (D-7795). The release records the last head the census saw and pins no branch; nothing in this programme deletes the lease's branch (D-7796). It acts only on a lease whose project this pass censused as a measured success; a lease in an uncensused project is counted `uncensused` and is neither released nor adopted (D-7852). `transferred` is the release reason of a `promoted` lease whose tree is gone, found by the same detector (D-7797). "Enqueue cleanup" no longer holds: there is no lease cleanup queue (D-7002). A `transferring` lease returns to its prior disposition only on a measured outcome, read inside the coordination serialiser that a promoting dispatch holds across its steps; silence proves nothing (D-7815). The recovery step runs last in the pass's lease-acts phase, after native-removed release, adoption and carrier marks, and takes the serialiser only when the checkpoint the pass read before any hold holds a `transferring` lease (D-7855). Recovery binds no workspace: a returned child of a promoting run is bound by the existing dead-dispatch pass, and the lease is then recorded `promoted` (D-7816). Its attention items read measured causes (D-7856). Detail: `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt.md`.
+
 The decisions live in a pure policy module (the correlation ladder, the state transitions, admission
 pre-checks) fed with census, spool events, runs, holds, markers, the registry and transcript lookups.
 The watcher only schedules and performs IO.
@@ -344,6 +352,8 @@ The watcher only schedules and performs IO.
 
 ### 5.6 Auto-adoption and guidance
 
+> **Wave 5 amendment (plan approved 2026-11-04).** The sentence "A rung-4 (raw) lease is adopted when linked" no longer holds: a raw lease is shown nested under its linked session, marked inferred, and is never adopted automatically; the operator attaches one (D-6999, §5.14). Only `agent` and `workflow` leases are adopted. The thresholds (5 minutes after terminal evidence, two stable passes, a 7-day expiry reset by every Retain, a 24-hour reminder) are approved with the plan (D-7794). A lease is not adopted while its tree's newest attempt is `conflicting` and unresolved (D-7819), while its carrier has not been read back at the lease's generation (D-7806), while the box lacks `orphan-lease-v1` (D-7810) or `lease-mark-v1` (the plan's row W5-D19), or while its project was not censused this pass (D-7852). A git-locked tree gets no carrier and is never adopted (D-7842). Terminal evidence is §5.11's; it lets the lane stop waiting and is never presented as completion of the work. The sentence "Adoption opens an `adopted-workspace` lineage edge" no longer holds: the lease's own opening edge already nests the row, and adoption opens no second one (D-7831). The 7-day clock is an expiry stored in `cleanupDueAt` (D-7829). The words "assigns cleanup to the parent" no longer hold: there is no lease cleaner (D-7002). Until the expiry the orphan-tree lane skips the tree; after it, the orphan ladder's own rungs decide (D-7840). "One digest mail per parent per pass" becomes one notice per adopted lease and generation (D-7813). Notices are derived each pass from durable state and deduped on their subject, so a crash, a restart or a standing `mail-disabled` never loses one or sends one twice (D-7812). They reuse the stall watch's run-less notice writer (D-7839). For a programme worker's lease the notice goes to the coordinator that `leaseCoordinatorOf` names, and the worker gets none (D-7843, D-7817, D-7818). A parent whose incarnation changed and that has no coordinator is mailed nothing (D-7813). While `$REG/delegation-adopt` is absent the lane records "would adopt" observations in health counts and one log line per lease, with no carrier change, no mail and no feed row (D-7846). Detail: `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt.md`.
+
 A `linked` lease is **adopted** when, after its activity's terminal evidence plus 5 minutes and two
 stable passes, the worktree is still present and changed — commits beyond `claudeBase` or a dirty tree,
 as `ws-lease-audit` measures it. **Where the audit cannot answer (no `lease-audit-v1` on the box, an
@@ -358,6 +368,8 @@ reference-based; non-ccd parents get none. Adoption needs positive proof and is 
 lease id and generation. It is enabled by the hand-touched marker `$REG/delegation-adopt`.
 
 ### 5.7 Promotion — a real run, dispatched from the lease's tip (revision R1)
+
+> **Wave 5 amendment (plan approved 2026-11-04).** Promotion stays explicit and keeps R1's shape. `promotedLeaseId` is stored in one additive nullable column, `runs.promotedLeaseId`, and `executionOrigin` is derived from it (D-7844). It ships reader first: a reader-and-recovery build, which refuses a fresh-spawn dispatch of a run carrying the field as `base-unsupported` while a bound session still resumes, rolls out and stays a release before `promotesLease` opens at `POST /api/runs` (D-7808, D-7853). The claimant is the lease's parent, or the coordinator that `leaseCoordinatorOf` names, the same rule as Retain (D-7843, D-7817, D-7818). A lease whose tree is `conflicting` and unresolved is not promoted (D-7819). The transfer needs a box that reports `lease-mark-v1` and `orphan-lease-v1` (D-7810 for `orphan-lease-v1`; the plan's dispatch step 1 for both), and the dispatch marks the carrier itself after each transition (D-7814). Step 1: the sentence "Every audit token minted earlier is now stale (admission rung 10), and `ws-lease-clean` refuses a `transferring` lease" no longer holds: there is no cleaner and no admission ladder (D-7002). The audit's token is evidence recorded in the promotion's journal entry and spent by no verb (D-7826). Step 2: an `active` activity under a live parent refuses. `unknown`, or `active` under a parent proved dead by §5.11's terminal evidence, passes only when the audit measures no process holding or sitting in the tree; an unmeasured answer refuses, and nothing writes "ended" (D-7841). Step 3: `ws-add --base` changes only the start point; it is recorded as `meas.startpoint`, and `$REG/<id>.base` stays the origin ref (D-7827). A box without `ws-add-base-v1` refuses; there is never a plain `ws-add` fallback. Step 4: the promotion closes the lease's opening lineage edge with `transfer` and opens a run-owned edge (D-7831). The sentence "the lease becomes cleanup-due by the ephemeral rule (§5.11); a lease-created branch is pinned before removal, a pre-existing one preserved" no longer holds: the old tree is left to the orphan ladder's own rungs (D-7002). A dispatch of a run whose lease is already `promoted` to that run refuses `lease-already-promoted` (D-7854). Crash recovery is §5.5's: measured outcomes only, inside the coordination serialiser (D-7815, D-7855), with a returned child bound by the dead-dispatch pass (D-7816, D-7856). The server's rollback floor is §7's. Detail: `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt.md`.
 
 Promotion is explicit only. The coordinator opens a run naming the lease (`POST /api/runs` gains an
 optional `promotesLease`; `executionOrigin: 'promoted-lease'` and `promotedLeaseId` are additive run and
@@ -422,6 +434,8 @@ A promotion consumes capacity exactly as any dispatch does, when its run is disp
 
 ### 5.10 The lease carrier and `ws-lease-mark`
 
+> **Wave 5 amendment (plan approved 2026-11-04).** The carrier stands as written, with these departures. The verbs live in a pinned ccd library, `ccd/lib/delegation-lease.sh`, not in `ccd/ccd` (D-7798). `--admin-record` is spelled `--admin-record-hex` (D-7800). The carrier adds `expiresAt`, `releaseReason` and `markedAt`, and omits `branchCreatedByLease`, whose only consumer was the dropped cleaner (D-7823). The sentence "refuses a generation other than stored + 1 (or 1 when new)" no longer holds: any generation above the stored one is written, so a carrier that missed generations catches up in one write. A lower generation refuses `stale-generation`, and another body at the stored generation refuses `generation-conflict` (D-7802); an identical body at the stored generation answers `unchanged` (D-7824). The server marks only at the journal's current generation. A linked lease's first carrier is journalled as a `carrier` transition from generation 0 to 1 (D-7830). A carrier read back is journalled as `lease-carrier-seen`, which moves neither the generation nor the journal sequence (D-7851). A by-tree index, `$REG/delegation/leases/by-tree/<key>`, names one lease per tree (D-7799). It is written before the carrier (D-7803), re-pointed only from an absent or non-holding carrier (D-7804), and cleared by a `released` mark of a lease with no stored carrier (D-7805). A containing registry workdir or linked worktree does not refuse `nested` when the tree is a direct `.claude/worktrees/<name>` or `.superpowers/worktrees/<name>` child of that checkout; every other containment refuses, and the symlink rule is measured below whichever root holds the tree, the projects root or the ccd worktrees root (D-7801). The locked-tree refusal stands: a git-locked tree gets no carrier (D-7842). A `released` mark whose admin record is gone skips the tree checks (D-7825). The server treats every mark refusal but `busy` and `unmeasured` as standing until the lease's generation or the tree's census row changes (D-7807). A transition that starts a new step from a settled state refuses `carrier-behind` on a box that reports `lease-mark-v1` while the carrier has not been read back at the lease's generation (D-7806). The release reasons are `native-removed`, `transferred` (a promoted lease whose tree is gone, D-7797) and `foreign`; "foreign" is a release reason, not a state (D-7835). The words "a later cleanup" no longer hold: there is no lease cleanup (D-7002). A tree released `foreign` gets no new lease (D-7822). Detail: `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt.md`.
+
 One carrier per lease at `$REG/delegation/leases/<leaseId>.json` (dotless subdirectory, so no session id
 can collide), written when the lease is linked (from stage 4) and advanced at every disposition change:
 
@@ -456,6 +470,8 @@ carrier whose `journalSeq` the journal does not hold is unowned (§5.12). Wideni
 allowlist was rejected: it is the security boundary of the PWA → agent path.
 
 ### 5.11 Lease cleanup: `ws-lease-audit` and `ws-lease-clean` (revisions R5, R6)
+
+> **Wave 5 amendment (plan approved 2026-11-04).** D-7002 drops waves 6 and 7: `ws-lease-clean`, audit tokens spent by a deleter and `lease-clean-v1` are never built, nor `$REG/lease-clean-live`, a cleanup queue or an executor. Read this section without them. The admission ladder, "Dirty work", the executor, the outcomes, the stage-5 token requests and the 24-hour `attached` / `tree-busy` attention belong to the dropped cleaner. The orphan-tree lane (#1252) owns removal of these trees. It skips a tree whose lease is `adopted` or `retained` until the lease's expiry, which every Retain resets, and a `transferring` one with no expiry; after that the orphan ladder's own rungs decide, and a tree released `foreign` is not skipped (D-7840). The skip is a fail-shut box rung plus a server skip from the checkpoint, with no marker (D-7828). The box rung is advertised as `orphan-lease-v1`, and every server act that moves a lease off `ephemeral` requires it (D-7810). The server skip consults a ready checkpoint for every orphan class (D-7811) and compares the exact path (D-7850). What wave 5 builds from this section is the read-only `ws-lease-audit`: it reports the tip, dirt, commits beyond the creation base and `changed`, and, when asked, the processes holding or sitting in the tree (D-7841). Its token is evidence only (D-7826). The clocks: 7 days for adopted and retained leases, and a 1-hour margin on the orphan hold (D-7794); the expiry is `cleanupDueAt` (D-7829). An unchanged `ephemeral` tree is left to native removal and the orphan ladder. A raw lease is never adopted; an attached one is `retained` (D-6999, D-7833). Terminal evidence stands as written and feeds adoption (§5.6) and promotion (§5.7). Detail: `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt.md`.
 
 ```text
 ccd ws-lease-audit --lease <id> --generation <n>                   # read-only: measures, mints the token
@@ -518,6 +534,8 @@ refusals on the backlog and the attention list. Only the server acts, only throu
 hooks never delete; no session invokes these verbs and no skill names them.
 
 ### 5.12 Transport, journal and durable recovery (revision R2)
+
+> **Wave 5 amendment (plan approved 2026-11-04).** "A carrier with no journal entry ... is shown as unowned work" stands (R2). In wave 5 an unowned row with no lease shows no control, and a row whose tree holds a lease the projection hid for a conflict offers that lease's resolve (D-7847). The journal gains three kinds, `lease-transition`, `lease-released` and `lease-carrier-seen`. They ship first in a reader-only build, which becomes the server's rollback floor (D-7809). `lease-carrier-seen` moves neither the lease's generation nor its journal sequence (D-7851). A transition that starts a new step from a settled state refuses `carrier-behind` on a box that reports `lease-mark-v1` while the carrier has not been read back at the lease's generation; the replay fold does not apply that check (D-7806). "A cleanup crash" no longer applies: there is no lease cleaner (D-7002).
 
 - The server appends each accepted event to `~/.ccrc/delegation-events.log` before updating any
   projection (the `pool-edges.log` precedent), with a checkpoint of applied state.
@@ -587,6 +605,8 @@ hooks never delete; no session invokes these verbs and no skill names them.
 
 ### 5.13 Compatibility and mixed versions
 
+> **Wave 5 amendment (plan approved 2026-11-04).** The `lease-clean-v1` row no longer holds: `ws-lease-clean` is never built (D-7002). Read "no cleanup" below as "there is no lease cleanup". Wave 5 adds `orphan-lease-v1`, printed by the orphan-tree lane's lease rung on the box. Every server act that moves a lease off `ephemeral` requires it: adoption, Retain, operator-retain, resolve attach and the transfer. A fleet box below that rung therefore stops new holds visibly (D-7810). A box without `lease-mark-v1`, `lease-audit-v1`, `ws-add-base-v1` or `orphan-lease-v1` defers the act as `unsupported`, and promotion never falls back to a plain `ws-add`. Deploy order stays fleet box first. The server box is never rolled back below the newest reader build: the reader-only journal build once a new kind is journalled (D-7809), and the reader-and-recovery promotion build once a run carries `promotedLeaseId` or a lease has been transferred (D-7808). The box rung has no marker and is not disabled while a carrier stands off `ephemeral` (D-7828).
+
 | Capability | Grants |
 |---|---|
 | `delegation-events-v1` | the spool grammar and ccd creating spool directories (hook registration is measured per home by the doctor, not attested by this token) |
@@ -610,6 +630,8 @@ Observing never implies writing a carrier; auditing never implies executing.
 
 ### 5.14 Legacy, raw and non-ccd worktrees
 
+> **Wave 5 amendment (plan approved 2026-11-04).** Wave 5 acts on leases only (D-7847). Attach applies to a linked raw lease, or to a conflicting lease of any source. It moves the lease to `retained` and keeps its source and parent; re-parenting is not offered (D-7833, D-6999). A non-conflicting agent or workflow lease is kept with operator-retain, not attach. Attach of an `ephemeral` lease needs a box that reports `lease-mark-v1` and `orphan-lease-v1` (D-7810). Foreign releases a lease with the reason `foreign`, a release reason and not a state (D-7835). It is final for the tree: correlation requests no new lease and records no attempt for the same project, admin record and creation base (D-7822). The words "permanent, never cleaned" no longer hold: a tree released `foreign` is not held back from the orphan-tree lane (D-7840). Either act writes a resolution mark that ends the tree's conflict (D-7820); correlation's own rule that a once-conflicted tree records no further attempt is unchanged (D-7821). An unowned row whose tree holds a lease the projection hid for a conflict carries that lease's id and offers its resolve. An unowned row with no lease shows no control: attaching or disowning such a tree is deferred past wave 5 (D-7847). The PWA's controls read "Keep worktree", "Attach to…" and "Not delegated" (D-7845). Detail: `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt.md`.
+
 - No ownership from path shape, branch prefix, nesting, ancestry, age or a working directory.
 - Run-child agreement seeds programme lineage.
 - Rung 2 or rung 4 evidence may establish a lease; everything else is `unresolved` or `unmeasured` in
@@ -620,6 +642,8 @@ Observing never implies writing a carrier; auditing never implies executing.
   trigger, never authority.
 
 ## 6. Routes and doors
+
+> **Wave 5 amendment (plan approved 2026-11-04).** The lease routes take `:lease`, not `:id` (D-7838). Retain's caller may be the lease's parent or the coordinator that `leaseCoordinatorOf` names; this amends row 3 (D-7843). Retain's body is exactly `{byId, byUuid}`. On `/resolve`, `:lease` is a lease id or `tree-<key>`, where `<key>` is the SHA-256 hex of the server's tree key; a `tree-<key>` whose tree holds an unreleased lease is resolved as that lease (D-7837), and one whose tree holds none refuses `tree-unleased` (D-7847). `promotesLease` opens only in the second promotion build (D-7808). The retain route takes an `auth/gate.ts` EXEMPT entry with its reason; operator-retain and resolve join `SESSION_ONLY`. The handlers stay thin in `server/src/coord/routes.ts`, with their shared body in `server/src/coord/delegationLeaseDoor.ts`. Detail: `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt.md`.
 
 All registered in `server/src/coord/routes.ts`, so `box-token-census.test.ts` and
 `coord-pause-route.test.ts` see them.
@@ -633,6 +657,8 @@ All registered in `server/src/coord/routes.ts`, so `box-token-census.test.ts` an
 | `POST /api/leases/:id/resolve` (attach / foreign) | session only | operator | `SESSION_ONLY`, with its argument |
 
 ## 7. Rollout
+
+> **Wave 5 amendment (plan approved 2026-11-04).** Stage 4 is wave 5. It also ships the orphan-tree lane's lease rung, advertised as `orphan-lease-v1`, which every server act that moves a lease off `ephemeral` requires (D-7810, D-7828), and native-removed release (D-7795). The stage-4 gate "7 days; 0 adoptions the independent reader classifies wrong" no longer holds. The soak was waived on 2026-10-28, not passed. While `$REG/delegation-adopt` is absent the lane records "would adopt" observations; the operator reads them and touches the marker by hand, and that touch is the gate. It is never presented as a soak (D-7846). "Adoption only for fixture-proven correlation classes" is a CI corpus row plus the coordinator's re-read of the fleet's Claude Code versions, not a per-lease check (D-7832). Implementation completeness, exact-tip review, required CI, the merge queue, rollout verification and truthful run closure still apply. Stages 5 and 6 are dropped (D-7002). Rollback: a new journal kind, entry field, source word or checkpoint member, or a run field an older dispatch would ignore, ships first in a reader-only build that is rolled out and kept a release, and that build becomes the server's rollback floor, the unattended watchdog rollback included (D-7809). The floor is the journal reader build once a new lease kind is journalled, and the promotion reader build once a run carries `promotedLeaseId` or a lease has been transferred (D-7808). The Retain and resolve doors add no grammar, so they move no floor (D-7847). Detail: `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt.md`.
 
 | Stage | Ships | Enabled by | Gate to leave it (proposed, not measured) |
 |---|---|---|---|
@@ -700,6 +726,8 @@ carries its tests as new files so selection picks them up.
 
 ### 8.4 Mutation table (rows each plan must measure red)
 
+> **Wave 5 amendment (plan approved 2026-11-04).** The rows for `ws-lease-clean`, admission rungs 1–10 and "shadow cannot execute" belong to the dropped cleaner and are not measured (D-7002). In the `ws-lease-mark` row, "generation-strict" reads as monotonic: any higher generation is written, a lower one refused (D-7802); and "root under the projects root" includes the ccd worktrees root (D-7801). Each wave-5 pull request carries its own mutation table in the plan: `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt.md`.
+
 Each mutation applied alone, restored from a saved copy, `ccd/ccd` re-stamped where touched; the
 measured cell records the failing test and `N failed | M passed`.
 
@@ -734,6 +762,8 @@ measured cell records the failing test and `N failed | M passed`.
 
 ### 8.5 Acceptance criteria
 
+> **Wave 5 amendment (plan approved 2026-11-04).** "`ccd/ccd` re-stamped" is stale for the lease verbs: they live in a pinned library, `ccd/lib/delegation-lease.sh`, which the installer stamps (D-7798); `ccd/ccd` carries the library's pin and the verbs' dispatch arms. "Every §8.4 row measured red" reads with §8.4's wave-5 amendment: the cleaner's rows are not built (D-7002), and every guard of the wave is a row in its pull request's mutation table. Wave 5 adds no coordinator clause: the clauses stay verbatim, and the skill gains a reference on delegated worktrees that names no lease verb. Each new capability token (`lease-mark-v1`, `lease-audit-v1`, `ws-add-base-v1`, `orphan-lease-v1`) is printed by `ccd caps` and joins `server/test/ccdCapTokens.ts#CCD_CAPABILITY_TOKENS`. Detail: `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt.md`.
+
 - Every §8.4 row measured red, except the one marked exempt.
 - `single-definition` scans for each new vocabulary; `box-token-census`, `coord-pause-route`,
   `auth/gate.ts` EXEMPT and the prose route counts updated; `ccrc-api` rows added; the coordinator
@@ -746,6 +776,8 @@ measured cell records the failing test and `N failed | M passed`.
   suites green.
 
 ### 8.6 Shadow thresholds and kill rule (proposed, not measured)
+
+> **Wave 5 amendment (plan approved 2026-11-04).** Stages 5 and 6 are dropped (D-7002), so this section sets no gate. The stage-4 gate is §7's amended text: the operator's hand touch of `$REG/delegation-adopt` after reading the "would adopt" observations, never presented as a soak (D-7846).
 
 - **False admission:** a token minted in shadow for a tree that has, at mint time or later, a live
   parent or activity; a ccd session, hold, `.child` or `.archived`; another population's owner;
@@ -762,6 +794,8 @@ measured cell records the failing test and `N failed | M passed`.
 
 ## 9. Observability and operator controls
 
+> **Wave 5 amendment (plan approved 2026-11-04).** These belong to the dropped cleaner and are not built (D-7002): `$REG/lease-clean-live`, the single cleanup switch stopping lease cleanup, the cleanup backlog, feed rows per cleanup outcome, and the `lease-clean-shadow` records. `$REG/delegation-adopt` stays: it is touched by hand and has no writer. While it is absent the lane records "would adopt" observations in health counts and one lane log line per lease, with no carrier change, no mail and no feed row. The operator's touch is the stage-4 gate and is never presented as a soak (D-7846). The orphan-tree lane's skip has no marker (D-7828).
+
 - **Stage markers** `$REG/delegation-adopt` and `$REG/lease-clean-live`: touched by hand, no writer in
   the tree, absence = off / shadow, pinned by test.
 - **The single cleanup switch** `$REG/reclaim-paused`, checked by the verb on the box, stops lease
@@ -777,6 +811,8 @@ measured cell records the failing test and `N failed | M passed`.
   `console.warn('ccrc-server: …')` line; dedupe writers return a typed recorded / duplicate result.
 
 ## 10. Sequencing
+
+> **Wave 5 amendment (plan approved 2026-11-04).** Waves 6 and 7 are dropped, so the wave-6 sequencing after #166 no longer applies (D-7002). Every `delegation_*` table still comes from wave 2's migration, and wave 5 adds none (D-7847). Wave 5's one durable migration is the additive nullable `runs.promotedLeaseId` column (D-7844). Wave 5 lands its fleet-box PRs first, and its journal and promotion PRs ship reader first (D-7809, D-7808). Reverts go in reverse order, but never take the server box below the newest reader build once a later writer has used what it reads.
 
 One ccrc programme, run through `runs open` / `runs dispatch` — this design exists because that was
 skipped — one wave per stage. Every `delegation_*` table lands in wave 2's single migration. Waves 1–4
@@ -798,6 +834,8 @@ whose parentage is unproved; any change to `ws-reclaim`'s or `ws-expire`'s popul
 untracked files through promotion; non-git version control.
 
 ## 13. Amendments this design makes to other documents
+
+> **Wave 5 amendment (plan approved 2026-11-04).** `ws-lease-clean` is never built, so neither the SAFETY entry nor the coordination-invariant sentence names it (D-7002). SAFETY gains only `ws-lease-mark`, beside `ws-reclaim`, as forbidden to every session. It also goes on the approval guard's forbidden verbs, the child deny rules and the session hook's deny lists. `ws-lease-audit` writes nothing and is not on the SAFETY list. The coordination-invariant sentence names `ws-lease-mark`, `ws-lease-audit` and `ws-add --base`. Each is added by the PR that ships its verb, never earlier. The child-reclaim executor's target record and `reclaim-paused` governing lease cleanup belong to the dropped cleaner and are not built (D-7002).
 
 - **`CLAUDE.md`**:
   - Coordination invariants: after "Zero new ccd verbs for coordination mutation", add that
