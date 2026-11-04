@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 171 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 176 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -64,7 +64,7 @@ import type { SessionStore } from './sessions.js';
  * used to pick the handler. Set membership on the ROUTER's own answer cannot
  * disagree with the handler that is about to run.
  *
- * THE SEVEN REASONS, and there are only seven:
+ * THE EIGHT REASONS, and there are only eight:
  *
  *  1. `/health` — the liveness probe. `deploy/deploy.sh`'s final gate reads the
  *     shipped sha out of it to decide whether a deploy succeeded, from a shell
@@ -170,6 +170,24 @@ import type { SessionStore } from './sessions.js';
  *     memory, single use, a short TTL, bound to the measured fleet node id, the
  *     live-code compare running before any budget (`token/door.ts`). Being exempt
  *     it also skips the origin check, which is right for a machine caller.
+ *
+ *  8. `GET` and `POST /api/reader-lab/probe/:nonce/:name` — the reader lab's probe
+ *     (the reader lab design, section 4). Its callers are sandboxed frames the lab
+ *     page builds, whose requests carry no session cookie BY DESIGN: whether one
+ *     ever does is the thing measured, so a gated probe would count nothing. It is
+ *     not a door into anything. It answers every request `204` with no body and the
+ *     same headers, reads no body, sets no cookie and no CORS header, and changes
+ *     nothing but the counters of a lab run that a signed-in session opened (the
+ *     open, read and close routes are NOT here), named by a nonce the server minted
+ *     from sixteen random bytes, for at most the life `readerLab/runs.ts` derives
+ *     from the lab's own caps; with no run open it counts nothing. It is a permanent
+ *     surface on every box, inert until a session opens a run. Being exempt it also
+ *     skips the origin check, on purpose: its callers send origin `null`, and
+ *     `needsOriginCheck`'s note below says why that costs nothing. Its counter
+ *     (`readerLab/routes.ts#installReaderLabCounter`) is an `onRequest` hook added
+ *     just before this file's: it counts and never answers, so a probe this gate
+ *     refuses (a frame's WebSocket upgrade, origin `null`) is still counted, and the
+ *     decision, with its journal line, stays here.
  *
  * NOT EXEMPT, and worth saying out loud because their absence is a decision:
  *  - `POST /api/token/rotate` — the console's "Rotate now". Session-only, like
@@ -499,6 +517,14 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'the sign on the door: the login screen must know, before anyone types, whether the gate is armed, ' +
     'whether a passkey exists to offer, and whether the rate-limit window is closed. An unauthenticated ' +
     'caller gets a MINIMIZED body (ANON_VISIBLE, server.ts) — the leak is enumerated, not incidental'],
+
+  ['GET /api/reader-lab/probe/:nonce/:name',
+    "the reader lab's probe, reason 8: a sandboxed frame's request carries no cookie by design, and counting what it " +
+    'carries is the point. It answers every request 204 with no body, reads no body, sets nothing, and only counts, in ' +
+    'memory, for a run a session opened, whose nonce the request names (readerLab/routes.ts)'],
+  ['POST /api/reader-lab/probe/:nonce/:name',
+    "the reader lab's probe, reason 8, its POST half: the beacon, XHR and fetch POST channels a frame sends. The same " +
+    '204 and the same count; the body is never read, and a body the server refuses still answers 204'],
 
   ['GET /*',
     'the static/SPA shell: the login screen must be able to load. @fastify/static serves only ' +
@@ -904,6 +930,11 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * scanner — D-1233: lanes first, total second. The marker sits AFTER the
  * sentence it annotates; its first placement was spliced into the middle of one,
  * and nothing caught it because the scanner reads numerals.)
+ *
+ * The reader lab's probe (reason 8 above) is the one exempt write a browser calls
+ * cross-origin: its sandboxed frames send `Origin: null`. It skips this check on
+ * purpose, because it changes only a nonce-named counter, and counting what such a
+ * request carries is its whole point.
  *
  * `POST /api/auth/login` and the two passkey assert routes are the doors: a forged login is not a state change an attacker
  * benefits from, and the assert pair verifies an origin of its own, from inside
