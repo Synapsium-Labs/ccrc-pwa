@@ -23,7 +23,7 @@
 # whatever the environment holds. A fixture root that is not an absolute path, or is `/`, is refused. TB6's
 # `_tb_release_base` and TB7's installer call the same check.
 #
-# Why ccd/ccrc and not ccd/lib/ccrc-settings.sh: the generated library carries `_ccrc_knob` and its closure only, and
+# Why ccd/ccrc and not ccd/lib/ccrc-settings.sh: the generated library carries `_ccrc_knob`, its closure and two sweeps' checks only, and
 # this file also needs `_plat_mode` and CCD_OS, which only ccd/ccrc defines. A caller that has sourced ccd/ccrc already
 # (ccd/ccrc-test) is not made to source it twice.
 #

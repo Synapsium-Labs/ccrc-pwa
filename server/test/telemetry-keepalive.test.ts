@@ -868,6 +868,27 @@ describe('W29: the keepalive reads its settings from ~/.ccrc/ccrc.env through cc
     expect(turns()).toEqual([]);
   });
 
+  // W2 (box settings wave 2): the freshness check is `_keepalive_fresh_ok`, carried by the generated library. A library that
+  // lacks it answers 127, which is neither 0 nor 2, so the pass refuses with the whole-number sentence and runs no turn.
+  it('W2: a library without _keepalive_fresh_ok fails closed: exit 1, the whole-number sentence, no turn', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    fs.mkdirSync(j('bin', 'lib'), { recursive: true });
+    fs.copyFileSync(KEEPALIVE, j('bin', 'ccd-telemetry-keepalive'));
+    const lib = fs.readFileSync(path.resolve(__dirname, '../../ccd/lib/ccrc-settings.sh'), 'utf8');
+    const cut = lib.replace(/^_keepalive_fresh_ok\(\) \{\n[\s\S]*?\n\}\n/m, '');
+    expect(cut, 'non-vacuity: the function was cut from the fixture copy').not.toBe(lib);
+    expect(cut).not.toContain('_keepalive_fresh_ok() {');
+    fs.writeFileSync(j('bin', 'lib', 'ccrc-settings.sh'), cut);
+    const r = spawnSync('bash', [j('bin', 'ccd-telemetry-keepalive')], {
+      encoding: 'utf8',
+      env: { ...inherited(), HOME: home, CCRC_KEEPALIVE_TURN_TIMEOUT: '20', CCRC_KEEPALIVE_FRESH: '1800', PATH: `${j('fixture-bin')}:${process.env.PATH}` },
+    });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toContain('CCRC_KEEPALIVE_FRESH must be a whole number');
+    expect(turns()).toEqual([]);
+  });
+
   it.each([
     ['9223372036854775808', 'file'], ['9223372036854775808', 'environment'],
     ['99999999999999999999', 'file'], ['99999999999999999999', 'environment'],

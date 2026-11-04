@@ -313,3 +313,18 @@ describe('_slice_limit_says prints the slice limit words, with no newline', () =
     expect(sourced(boxWith('ccrc-carve-sls-', null), '_slice_limit_says "$SL_DIR"', { SL_DIR: dir }).stdout).toBe(words);
   });
 });
+
+// ── W2: the keepalive's freshness check, by direct calls on a sourced ccd/ccrc (D-7906) ────────────────────────────────
+// The values arrive as exported variables, so the empty string and a leading zero reach the function as typed.
+const FRESH_ROWS: [string, number][] = [
+  ['0', 0], ['0800', 0], ['9223372036854775807', 0], ['30m', 1], ['-1', 1], ['', 1],
+  ['9223372036854775808', 2], ['99999999999999999999', 2],
+];
+describe('_keepalive_fresh_ok and _keepalive_fresh_says live in ccd/ccrc', () => {
+  it.each(FRESH_ROWS)('%j answers rc %d', (v, rc) => {
+    expect(sourced(boxWith('ccrc-carve-fresh-', null), '_keepalive_fresh_ok "$FV" 2>/dev/null; echo "rc $?"', { FV: v }).stdout.trim()).toBe(`rc ${rc}`);
+  });
+  it('the words, with no newline', () => {
+    expect(sourced(boxWith('ccrc-carve-freshs-', null), '_keepalive_fresh_says').stdout).toBe('a whole number of seconds from 0 to 9223372036854775807');
+  });
+});

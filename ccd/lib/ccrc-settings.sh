@@ -1,7 +1,8 @@
 # ccd/lib/ccrc-settings.sh — GENERATED from ccd/ccrc by deploy/gen-settings-lib.mjs; never edit it by hand.
-# ccrc's one reader of its settings (`_ccrc_knob`) and the byte-wise model it reads through, copied whole out of
-# ccd/ccrc, so the ccd-* sweeps, which never source ccd/ccrc, read ~/.ccrc/ccrc.env exactly as ccrc does. The argument
-# for every rule is in ccd/ccrc, above each function. server/test/ccrc-settings-lib.test.ts reds when the two differ.
+# ccrc's one reader of its settings (`_ccrc_knob`), the byte-wise model it reads through and the checks two sweeps share
+# with `ccrc settings`, copied whole out of ccd/ccrc, so the ccd-* sweeps, which never source ccd/ccrc, read ~/.ccrc/ccrc.env
+# and refuse a value exactly as ccrc does. The argument for every rule is in ccd/ccrc, above each function.
+# server/test/ccrc-settings-lib.test.ts reds when the two differ.
 # Installed 0644 at ~/.local/libexec/ccrc/ccrc-settings.sh: sourced, never executed, and sourcing it runs nothing.
 CCD_OS=linux
 case "${OSTYPE:-}" in
@@ -286,4 +287,13 @@ _ccrc_knob() {   # <KEY> <default> [file]
     [ -z "$why" ] || { KNOB=""; KNOB_WHY="$key cannot be measured: ${why/#"$HOME"/\~}"; return 1; }
   fi
   [ -n "$KNOB" ] || { KNOB="$2"; KNOB_FROM="${KNOB_FROM:-default}"; }
+}
+
+_keepalive_fresh_ok() {
+  [[ "$1" =~ ^[0123456789]+$ ]] || return 1
+  [ "$1" -ge 0 ] 2>/dev/null || return 2
+}
+
+_keepalive_fresh_says() {
+  printf '%s' 'a whole number of seconds from 0 to 9223372036854775807'
 }
