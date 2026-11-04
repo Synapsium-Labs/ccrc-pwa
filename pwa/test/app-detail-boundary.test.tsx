@@ -72,13 +72,14 @@ describe('a throwing detail screen keeps the shell (M4.B1, W4 half)', () => {
     expect(screen.queryByText(FALLBACK)).toBeNull();
   });
 
-  it('navigating to another route resets the boundary too', async () => {
+  // The first real Settings chunk loads here: a wait of its own, inside a ceiling of its own (review 1464 F8).
+  it('navigating to another route resets the boundary too', { timeout: 30_000 }, async () => {
     navigate('/runs');
     render(<App />);
     expect(await screen.findByText(FALLBACK)).toBeInTheDocument();
     act(() => { navigate('/settings'); });
     expect(screen.queryByText(FALLBACK)).toBeNull();
-    expect(await screen.findByRole('heading', { name: /^settings$/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /^settings$/i }, { timeout: 30_000 })).toBeInTheDocument();
   });
 
   it('the same path with another search resets it: the key is path + search', async () => {

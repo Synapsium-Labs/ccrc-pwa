@@ -19,6 +19,10 @@ import { lanesByFree } from '../src/fleet/laneOrder';
 import { pageAt, treeOk, treeResponse } from './docsFixtures';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
 
+/** A lazy screen's first load (console speed C1): the wait and its case's own ceiling, so neither outlasts the other
+ *  under load (review 1464 F8). */
+const LAZY_WAIT_MS = 30_000;
+
 // The bell renders only where the browser can push; this one can, so a bell left in the header would show.
 vi.mock('../src/lib/push', () => ({
   pushSupported: () => true,
@@ -354,22 +358,22 @@ describe("Refined's phone header (W2 Task S5)", () => {
 
 describe('the back door to the fleet (W2 Task S5, the door table\'s go-fleet row)', () => {
   for (const route of ['/runs', '/accounts', '/mail', '/settings', '/archive', '/digest', '/s/a']) {
-    it(`the back button on ${route} carries go-fleet`, async () => {
+    it(`the back button on ${route} carries go-fleet`, { timeout: LAZY_WAIT_MS }, async () => {
       atWidth(390);
       render(<App />);
       act(() => { navigate(route); });
       // Five of these screens load on demand (console speed C1): the chunk resolves after the navigation's commit.
-      const back = await screen.findAllByRole('button', { name: 'Back to fleet' }, { timeout: 30_000 });
+      const back = await screen.findAllByRole('button', { name: 'Back to fleet' }, { timeout: LAZY_WAIT_MS });
       expect(back.length, route).toBeGreaterThan(0);
       for (const b of back) expect(b, route).toHaveAttribute('data-command', 'go-fleet');
     });
   }
 
-  it('a back button whose target is not the fleet carries no go-fleet', async () => {
+  it('a back button whose target is not the fleet carries no go-fleet', { timeout: LAZY_WAIT_MS }, async () => {
     atWidth(390);
     render(<App />);
     act(() => { navigate('/settings/updates'); });
-    const back = await screen.findByRole('button', { name: 'Back to Settings' }, { timeout: 30_000 }); // loads on demand (C1)
+    const back = await screen.findByRole('button', { name: 'Back to Settings' }, { timeout: LAZY_WAIT_MS }); // loads on demand (C1)
     expect(back).not.toHaveAttribute('data-command');
   });
 
