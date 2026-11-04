@@ -6,12 +6,11 @@
 // reasons (the token, step-up and proxy routes) are not credential-body routes and are not counted here.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { ALL, ccrcRoot, rel } from './helpers.js';
+import { ALL, rel } from './helpers.js';
+import { parsedFile } from '../scan/symbols.js';
 
 const HOME = 'server/src/accounts/gate.ts';
 const MAPPING = /=== 413 \? 'oversize'/;
-const read = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
 
 describe('a credential route\'s body errors and no-store hook are defined once, in accounts/gate.ts (review 1389 A6)', () => {
   it('CONTROL: the pattern sees the mapping and passes over a use', () => {
@@ -21,13 +20,18 @@ describe('a credential route\'s body errors and no-store hook are defined once, 
   it('the body-error mapping is spelled in the home alone', () => {
     expect(ALL.filter((f) => MAPPING.test(readFileSync(f, 'utf8'))).map(rel).sort()).toEqual([HOME]);
   });
-  it('the Linear routes and the ledger routes take both from the home, and Linear keeps no copy', () => {
+  // Keyed on the parse (`test/scan`), not on the files' text: a literal source pin over a server/src file is ARCH-06's ratchet's.
+  it('the Linear routes and the ledger routes take both from the home, and Linear binds no copy', () => {
     for (const f of ['server/src/linear/routes.ts', 'server/src/coord/ledgersRoutes.ts']) {
-      expect(read(f), f).toMatch(/import \{[^}]*\bcredentialBodyRoute\b[^}]*\bnoStoreRoute\b[^}]*\} from '\.\.\/accounts\/gate\.js'/);
+      const edge = parsedFile(f).imports.find((e) => e.specifier === '../accounts/gate.js');
+      expect(edge?.names ?? [], f).toEqual(expect.arrayContaining(['credentialBodyRoute', 'noStoreRoute']));
     }
-    const linear = read('server/src/linear/routes.ts');
-    expect(linear).not.toMatch(/\bbodyError\b/);
-    expect(linear).not.toMatch(/\bNO_STORE\b/);
-    expect(linear).not.toMatch(/header\('cache-control'/);
+    const linear = parsedFile('server/src/linear/routes.ts');
+    const names = linear.bindings.map((b) => b.name);
+    expect(names).not.toContain('bodyError');
+    expect(names).not.toContain('NO_STORE');
+    // No header of its own: `no-store` rides the home's hook alone.
+    expect(linear.calls.filter((c) => c.name === 'header' && c.args[0]?.kind === 'string' && c.args[0].text.toLowerCase() === 'cache-control')
+      .map((c) => c.line)).toEqual([]);
   });
 });
