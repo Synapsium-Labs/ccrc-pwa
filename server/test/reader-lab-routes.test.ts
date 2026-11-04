@@ -184,6 +184,8 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
   });
 
   it('a probe POST body over 1 KiB is refused by the route\'s own limit and still answers 204; one under it is not refused (M10.4)', async () => {
+    // The limit's value is pinned, as its sibling READER_LAB_RUN_HITS_MAX is: the bodies below are sized from it.
+    expect(READER_LAB_PROBE_BODY_MAX, 'the probe POST body limit is 1 KiB').toBe(1024);
     const seen: string[] = [];
     const a = await openApp(false, seen);
     const nonce = await openRun(a);
