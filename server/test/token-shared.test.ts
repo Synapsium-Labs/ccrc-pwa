@@ -382,8 +382,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(HOLDERS_MESSAGE, 'a missing holder').toMatch(/missing[^]*(moved|changed value)/);
   });
 
-  it('the holders across shared, server/src, pwa/src and agent/src are exactly the eight separate seven-day quantities', () => {
-    // A weekly interval anywhere else must import the one in shared/box-token.ts. These eight are separate
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the nine separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These nine are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
     // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
     // (R81), and it does not import the token interval. The review-child ceiling (D-5942) is the separate quantity
@@ -393,10 +393,14 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // spec 2026-10-23-fleet-disk-retention-design §2.7.3 (rulings G2) chose: seven days, the expiry horizon, which ccd's WS_STALE_IDLE_S measures on the box.
     // The programme ledgers' "Recently cleared" trail (spec 2026-10-31-programme-ledgers-design D13, ruled in by the
     // coordinator for PL1) is a separate quantity too: seven days of cleared items, unrelated to token rotation.
+    // The delegation lease expiry (delegation broker wave 5, threshold A3, D-7829) is a separate quantity, ruled in by the operator's
+    // approval of the wave 5 plan (2026-11-04, which approves its thresholds): an adopted or retained tree is held back from the orphan
+    // lane for seven days from its last keep. It does not import the token interval.
     expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
       'server/src/childReclaimSweep.ts:CHILD_STALE_IDLE_MS',
       'server/src/childReclaimSweep.ts:REVIEW_CHILD_CEILING_MS',
+      'server/src/coord/delegation-lease-state.ts:DELEGATION_LEASE_EXPIRY_MS',
       'server/src/coord/delegation-model.ts:DELEGATION_HEALTH_WINDOW_MS',
       'shared/accounts.ts:SIGNED_IN_WITHIN_MS',
       'shared/api.ts:LEDGER_STALE_MS',
