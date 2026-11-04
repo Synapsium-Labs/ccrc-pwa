@@ -14,8 +14,8 @@
 // NOT A POLL, four times over. Each trigger is a diff against the PREVIOUS
 // frame, so it fires on a real transition and never on an unrelated re-render.
 import { useEffect, useRef, useState } from 'react';
-import type { RunSummary } from '../../../shared/api';
-import { childReclaimDoneRefreshDue, childReclaimRefreshDue, childRunsSeen } from '../fleet/runWords';
+import type { RunsPageAnswer, RunSummary } from '../../../shared/api';
+import { appendOlderRunPage, childReclaimDoneRefreshDue, childReclaimRefreshDue, childRunsSeen, mergeFirstRunPage } from '../fleet/runWords';
 import { childReclaimDoneAtOf } from '../fleet/childReclaimWords';
 import type { FleetStore } from '../stores/fleet';
 import { api } from '../lib/api';
@@ -34,6 +34,12 @@ import { api } from '../lib/api';
  *  link, and the Inbox could not title a record whose run finished yesterday. */
 export const loadColdRuns = (): Promise<{ runs: RunSummary[] }> => api.runs(true);
 
+/** The unpaged archive reader: `loadColdRuns`, and every caller that does not pass `page`. */
+export type ColdLoader = () => Promise<{ runs: RunSummary[] }>;
+/** The paged archive reader (console speed S2): the newest `limit` closed runs older than `before` (every closed run
+ *  when `before` is absent is NOT promised here; `limit` is always given), and `nextBefore` while older ones remain. */
+export type PagedLoader = (limit: number, before?: number) => Promise<RunsPageAnswer>;
+
 export interface ColdRuns {
   /** The archive rows, or `null` for "no answer yet". Read `state` to tell
    *  which kind of no-answer this is. */
@@ -51,6 +57,12 @@ export interface ColdRuns {
   /** Re-read now. The two sheets that close a run call it on `onDone`: the
    *  finished half of the board has no source but this read. */
   readonly reload: () => Promise<void>;
+  /** Console speed S2, with `page` only. Asks the next older page (`before` = the stored `nextBefore`) and appends it
+   *  to the rows held. Resolves at once when nothing older remains or a page is already on its way. A caller that
+   *  passes no `page` gets a function that does nothing. A failed page keeps every row and sets `state` to `error`. */
+  readonly loadOlder: () => Promise<void>;
+  /** Whether older closed runs remain to load: the stored `nextBefore` is set. Always `false` without `page`. */
+  readonly hasOlder: boolean;
 }
 
 export interface ColdRunsOptions {
@@ -58,12 +70,18 @@ export interface ColdRunsOptions {
    *  reclaim end). Default `true`: the run board's schedule. `false` reads once per mount and never again, the
    *  Inbox's schedule (C7n, D-7209): its programme headers need the titles, not a finished row's reclaim chip. */
   readonly rereadOnTransitions?: boolean;
+  /** Read the archive in pages of this many closed runs (console speed S2): the loader is then a `PagedLoader`, asked
+   *  first for `page` rows with no `before`, and the pages are kept in the fleet store's `runPages`. Absent: the
+   *  unpaged read, exactly as before. */
+  readonly page?: number;
 }
 
+export function useColdRuns(store: FleetStore, loadRuns: ColdLoader, options?: ColdRunsOptions & { page?: undefined }): ColdRuns;
+export function useColdRuns(store: FleetStore, loadRuns: PagedLoader, options: ColdRunsOptions & { page: number }): ColdRuns;
 export function useColdRuns(
   store: FleetStore,
-  loadRuns: () => Promise<{ runs: RunSummary[] }>,
-  { rereadOnTransitions = true }: ColdRunsOptions = {},
+  loadRuns: ColdLoader | PagedLoader,
+  { rereadOnTransitions = true, page }: ColdRunsOptions = {},
 ): ColdRuns {
   const live = store((s) => s.runs);
   const runsFrameSeen = store((s) => s.runsFrameSeen);
@@ -72,8 +90,12 @@ export function useColdRuns(
   const coordFrame = store((s) => s.coord);
   const coordFrameSeen = store((s) => s.coordFrameSeen);
 
-  const [cold, setCold] = useState<RunSummary[] | null>(null);
-  const [coldState, setColdState] = useState<'loading' | 'ok' | 'error'>('loading');
+  // A paged hook draws the pages the store already holds AT ONCE (state `ok`) and re-reads in the background: the
+  // store is the pages' one owner (console speed S2), so a second mount costs one request and no "Loading…".
+  const heldPages = page === undefined ? null : store.getState().runPages;
+  const [cold, setCold] = useState<RunSummary[] | null>(heldPages?.runs ?? null);
+  const [coldState, setColdState] = useState<'loading' | 'ok' | 'error'>(heldPages === null ? 'loading' : 'ok');
+  const hasOlder = store((s) => page !== undefined && s.runPages !== null && s.runPages.nextBefore !== null);
 
   // Held in a ref, not the effect's own dependency array — the same fix
   // `MailScreen` already applies to `loadFeed`: "once per mount" has to hold
@@ -82,6 +104,8 @@ export function useColdRuns(
   // reason for the effect to re-run.
   const loadRunsRef = useRef(loadRuns);
   loadRunsRef.current = loadRuns;
+  const pageRef = useRef(page);
+  pageRef.current = page;
 
   // Never fires a `set*` after this instance has unmounted — shared by the
   // mount-time read below and every transition-triggered re-read.
@@ -119,15 +143,56 @@ export function useColdRuns(
   const applied = useRef(0);
   const loadCold = (): Promise<void> => {
     const seq = ++issued.current;
-    return loadRunsRef.current()
+    const limit = pageRef.current;
+    const reading = limit === undefined
+      ? (loadRunsRef.current as ColdLoader)()
+      : (loadRunsRef.current as PagedLoader)(limit);
+    return reading
       .then((r) => {
         // The body is read BEFORE the mark moves: a success whose body cannot be
         // read (a `null` answer) throws here, reaches the `catch` below as an
         // error for this same `seq`, and so cannot advance the mark first.
         const rows = r.runs;
-        if (aliveRef.current && seq > applied.current) { applied.current = seq; setCold(rows); setColdState('ok'); }
+        if (!aliveRef.current || seq <= applied.current) return;
+        applied.current = seq;
+        if (limit === undefined) {
+          setCold(rows);
+        } else {
+          // A re-read asks the FIRST page again and keeps the older pages already loaded (console speed S2): it
+          // replaces the rows that page covers and every active run, and keeps the stored closed rows below it and
+          // the stored `nextBefore` that reaches them (`mergeFirstRunPage`). Folded against the store AS IT STANDS
+          // when the answer lands, so an older page that arrived meanwhile is kept too.
+          const next = mergeFirstRunPage(store.getState().runPages, r as RunsPageAnswer);
+          store.getState().setRunPages({ ...next, at: Date.now() });
+          setCold(next.runs);
+        }
+        setColdState('ok');
       })
+      // A failed read changes only `state`: the rows, and the stored pages, stay (never a fold to empty).
       .catch(() => { if (aliveRef.current && seq > applied.current) setColdState('error'); });
+  };
+
+  // The older page in flight, if any: a second tap on "Show older" while one is on its way joins it rather than
+  // asking the same page twice.
+  const olderInflight = useRef<Promise<void> | null>(null);
+  const loadOlder = (): Promise<void> => {
+    const limit = pageRef.current;
+    const held = store.getState().runPages;
+    if (limit === undefined || held === null || held.nextBefore === null) return Promise.resolve();
+    if (olderInflight.current !== null) return olderInflight.current;
+    const reading = (loadRunsRef.current as PagedLoader)(limit, held.nextBefore)
+      .then((r) => {
+        const answer: RunsPageAnswer = { runs: r.runs, ...(r.nextBefore === undefined ? {} : { nextBefore: r.nextBefore }) };
+        if (!aliveRef.current) return;
+        const next = appendOlderRunPage(store.getState().runPages, answer);
+        store.getState().setRunPages({ ...next, at: Date.now() });
+        setCold(next.runs);
+        setColdState('ok');
+      })
+      .catch(() => { if (aliveRef.current) setColdState('error'); })
+      .finally(() => { olderInflight.current = null; });
+    olderInflight.current = reading;
+    return reading;
   };
 
   useEffect(() => {
@@ -214,5 +279,5 @@ export function useColdRuns(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coordFrame, coordFrameSeen]);
 
-  return { cold, state: coldState, reload: loadCold };
+  return { cold, state: coldState, reload: loadCold, loadOlder, hasOlder };
 }

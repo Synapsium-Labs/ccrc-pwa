@@ -8,7 +8,7 @@
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
 import { WARN_GLYPH } from '@ccrc/ui';
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildReclaimWord, isRunState, sessionRunOf,
-  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary, type SessionRun } from '../../../shared/api';
+  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary, type RunsPageAnswer, type SessionRun } from '../../../shared/api';
 import { formatAge } from './formatReset';
 
 export const RUN_WORD: Record<RunState, string> = {
@@ -1005,3 +1005,34 @@ export const childOfRunLabel = (
   }
   return null;
 };
+
+/** The run archive's pages as the pure deciders below read and write them (console speed S2): every row loaded so far,
+ *  ids ascending, and the `before` that asks the next older page (`null`: none remain). The fleet store's `RunPages`
+ *  adds the read's time and satisfies this. */
+export interface RunPagesView { runs: RunSummary[]; nextBefore: number | null }
+
+const byId = (a: RunSummary, b: RunSummary): number => a.id - b.id;
+
+/** A RE-READ of the archive's first page, folded into the pages already held (console speed S2). The answer is every
+ *  active run plus the newest closed runs; `nextBefore` is the lowest closed id on that page (never a pinned extra),
+ *  so every row with an id at or above it, and every active run, is covered by the answer and REPLACED by it.
+ *  A stored CLOSED row below it is an older page the operator already loaded and is KEPT, as is the stored
+ *  `nextBefore` when it reaches further down: a re-read never throws a loaded page away. A stored active row the
+ *  answer no longer carries has closed or left, so it is dropped, wherever its id sits. With no `nextBefore` in the
+ *  answer nothing older remains, so no stored row survives below the page. PURE. */
+export function mergeFirstRunPage(stored: RunPagesView | null, answer: RunsPageAnswer): RunPagesView {
+  const boundary = answer.nextBefore;
+  if (boundary === undefined) return { runs: [...answer.runs].sort(byId), nextBefore: null };
+  const inAnswer = new Set(answer.runs.map((r) => r.id));
+  const kept = (stored?.runs ?? []).filter((r) => r.id < boundary && !inAnswer.has(r.id) && isRunClosed(r));
+  const reach = kept.length === 0 || stored === null ? boundary : stored.nextBefore === null ? null : Math.min(stored.nextBefore, boundary);
+  return { runs: [...answer.runs, ...kept].sort(byId), nextBefore: reach };
+}
+
+/** An OLDER page (`loadOlder`) appended to the pages held: rows deduplicated by id, the answer's row winning, and the
+ *  next `before` the answer's (`null` when it carries none). PURE. */
+export function appendOlderRunPage(stored: RunPagesView | null, answer: RunsPageAnswer): RunPagesView {
+  const fresh = new Set(answer.runs.map((r) => r.id));
+  const held = (stored?.runs ?? []).filter((r) => !fresh.has(r.id));
+  return { runs: [...held, ...answer.runs].sort(byId), nextBefore: answer.nextBefore ?? null };
+}
