@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { localIO } from '../src/io.js';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
 
@@ -75,5 +76,13 @@ describe('the plain io.readdir ratchet (D-5969)', () => {
     for (const f of ['collectTempRoot.ts', 'endDeadCoordinator.ts', 'expireArchived.ts']) {
       expect(readFileSync(path.join(SRC, 'coord', f), 'utf8'), f).not.toMatch(/\bio\.readdir\(/);
     }
+  });
+});
+
+describe('localIO lists names only', () => {
+  it('does not implement readdirWithTimesMeasured', () => {
+    // Test fakes spread `...localIO` and override `readdir`; an inherited times reader would make the cached registry
+    // read list the REAL filesystem and bypass the fake's listing. Local mode keeps names-only keys.
+    expect(localIO.readdirWithTimesMeasured).toBeUndefined();
   });
 });

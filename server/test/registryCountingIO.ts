@@ -108,8 +108,6 @@ export function countingIO(reg: FakeRegistry, opts: FakeOptions = {}): CountingI
       return track(p, async () => { await settle(p); const r = measured(p); return r.ok ? r.content : null; });
     },
   };
-  // `localIO` carries the optional times reader; this fake has it only when the fixture opts in (`mtimes`).
-  if (reg.mtimes === undefined) delete (io as { readdirWithTimesMeasured?: unknown }).readdirWithTimesMeasured;
   return { io, requests, maxRowsInFlight: () => maxRows, rowsInFlightNow: () => outstanding.size };
 }
 

@@ -206,7 +206,9 @@ export interface FleetIO {
    *  `readdirMeasured` to tell them apart. */
   readdir(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<string[] | null>;
   /** `readdirMeasured` plus each entry's modification time (ms), when this io can report them (console speed S1).
-   *  OPTIONAL: an io without it answers names only, and a caller falls back to `readdir`. A missing `times` is
+   *  OPTIONAL: an io without it answers names only, and a caller falls back to `readdir`. `localIO` deliberately
+   *  does NOT implement it: a test fake that spreads `...localIO` and overrides `readdir` would otherwise have the
+   *  cached registry read list the real filesystem through the inherited member. Local mode keeps names-only keys. A missing `times` is
    *  "names only", never an error, and an entry missing from `times` has an unknown time (never 0).
    *  Failure contract: never rejects; `absent` only for a proven ENOENT, every other failure `unreadable`; an agent
    *  without the `readdir-mtimes` word, or one whose `times` answer is malformed, still answers the listing, without `times`. */
@@ -403,16 +405,6 @@ export const localIO: FleetIO = {
   async readdir(p, timeoutMs, signal) {
     const r = await this.readdirMeasured(p, timeoutMs, signal);
     return r.ok ? [...r.entries] : null;
-  },
-
-  async readdirWithTimesMeasured(p) {
-    const r = await this.readdirMeasured(p);
-    if (!r.ok) return r;
-    const times = new Map<string, number>();
-    await Promise.all(r.entries.map(async (n) => {
-      try { times.set(n, (await lstat(`${p}/${n}`)).mtimeMs); } catch { /* an entry that cannot be stat-ed has no time */ }
-    }));
-    return { ok: true, entries: r.entries, times };
   },
 
   async statMeasured(p) {
