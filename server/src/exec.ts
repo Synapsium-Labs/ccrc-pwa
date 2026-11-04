@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import type { PaneProbe } from '../../shared/api.js';
-import { tmuxName, tmuxTarget } from '../../shared/tmux-target.js';
+import { tmuxTarget } from '../../shared/tmux-target.js';
 
 /** The unmeasured vocabulary lives in `./unmeasured.js` (D-5896): it is a word, not an exec, and `lifecycle.ts`
  *  reached `node:child_process` only to read it. Re-exported so every other import keeps working. */
@@ -132,59 +132,10 @@ const PANE_PROBE_ROW = /^([01]) (\d+) (\d+) (\d+) (\d+) ([01])$/;
  *  believing them. */
 export const PANE_LISTING_FORMAT = '#{session_name} #{window_active} #{pane_index} #{pane_pid}';
 
-/** The name is greedy and anchored on the three numeric fields, so a session named with a space still parses. */
-const PANE_LISTING_ROW = /^(.+) ([01]) (\d+) (\d+)$/;
-
-/** One whole-server pane listing. `panes` is keyed by the tmux SESSION NAME (`tmuxName(id)`), never by id: the name
- *  replaces `.` and `:`, so the map is read id to name (`verdictFromListing`) and never name to id.
- *
- *  THE POLARITY OF `classifyHasSession` HOLDS HERE: a session is `gone` ONLY on a clean listing that lacks its name.
- *  A listing that did not run, exited non-zero (tmux with no server also does, and that case is not told apart: the
- *  caller falls back to the per-row calls, which do tell), was cut short by a signal, or has a line this parser does
- *  not know answers `ok: false`, and a failed listing never reads as gone. `detail` is never ''. */
-export type PaneListing =
-  | { ok: true; at: number; panes: ReadonlyMap<string, { pid: number | null }> }
-  | { ok: false; at: number; detail: string };
-
-/** Pure. `at` is the instant the exec STARTED (stamped by the caller). Per session: the pid of the lowest
- *  `pane_index` whose window is active; a session listed with no active window answers `pid: null`. Empty stdout on
- *  exit 0 is a valid listing of zero sessions. */
-export function parsePaneListing(r: ExecResult, at: number): PaneListing {
-  if (r.ran === false) return { ok: false, at, detail: `tmux list-panes did not run (${r.reason}: ${r.detail})` };
-  if (typeof r.signal === 'string') {
-    return { ok: false, at, detail: `tmux list-panes got ${r.signal} before it answered (exit ${r.code})` };
-  }
-  if (r.code !== 0) {
-    const msg = r.stderr.trim();
-    return { ok: false, at, detail: msg !== '' ? msg : `tmux list-panes exited ${r.code} with no message` };
-  }
-  const best = new Map<string, { index: number; pid: number } | null>();
-  for (const line of r.stdout.split('\n')) {
-    if (line.trim() === '') continue;
-    const m = PANE_LISTING_ROW.exec(line);
-    if (m === null) return { ok: false, at, detail: `tmux list-panes printed a line this parser does not know: ${line.slice(0, 80)}` };
-    const name = m[1]!;
-    if (!best.has(name)) best.set(name, null);
-    if (m[2] !== '1') continue;
-    const index = Number(m[3]);
-    const cur = best.get(name) ?? null;
-    if (cur === null || index < cur.index) best.set(name, { index, pid: Number(m[4]) });
-  }
-  const panes = new Map<string, { pid: number | null }>();
-  for (const [name, v] of best) panes.set(name, { pid: v === null ? null : v.pid });
-  return { ok: true, at, panes };
-}
-
-/** `live` when `tmuxName(id)` is in a clean listing, else `gone` (the polarity note on `PaneListing`). */
-export function verdictFromListing(l: PaneListing & { ok: true }, id: string): SessionVerdict {
-  return l.panes.has(tmuxName(id)) ? { verdict: 'live' } : { verdict: 'gone' };
-}
-
-/** The pid the listing gives `id`'s session (its active window's lowest pane), or null: not listed, or listed with no
- *  active window. Same `tmuxName` key rule as `verdictFromListing`. */
-export function pidFromListing(l: PaneListing & { ok: true }, id: string): number | null {
-  return l.panes.get(tmuxName(id))?.pid ?? null;
-}
+// The pure decoder of the listing (`PaneListing`, `parsePaneListing`, `verdictFromListing`, `pidFromListing`) lives in
+// `tickPlan.ts` (L1) so no policy file loads this adapter; re-exported here so every import of it keeps resolving.
+export { parsePaneListing, verdictFromListing, pidFromListing, type PaneListing } from './tickPlan.js';
+import { parsePaneListing, type PaneListing } from './tickPlan.js';
 
 export class Tmux {
   constructor(private run: Runner) {}

@@ -1,6 +1,7 @@
 import type { CcrcConfig } from './config.js';
 import { configDirFor } from './configDir.js'; // D-5896: the pure join, not the config reader
-import { pidFromListing, verdictFromListing, type PaneListing, type Tmux } from './exec.js';
+import { pidFromListing, verdictFromListing, type PaneListing } from './tickPlan.js';
+import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { readRegistryMeasured } from './registry.js';
 import type { SessionRecord } from './registry.js';
