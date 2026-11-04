@@ -4811,7 +4811,11 @@ RLB-T11-M2 keeps the wall frame's canary in its config, so the canary arrives an
 
 Issued at each run's opening; refinements (a), (b) and (c) take RL-a's first three numbers, and (h), (i), (k), (m) and (u) RL-b's first five. (Task 5 Step 4 replaces RL-a's line, and Task 12 Step 4 RL-b's.)
 
-- RL-a: placeholder.
+- RL-a: issued at the run's opening as one block, 7964 to 7967: the first three to the departing refinements (a), (b) and (c), the fourth for a departure found while executing or in a fix round.
+- **D-7964 (2026-11-04)** — two-runs (refinement (a)). The reader lab is its own wave in two runs, RL-a (the door, server only) and then RL-b (the page). This departs from the rich-docs spec's M8.B7 and M8.B8 ("Manual: …") and from the mockup's "lands in W8b". The operator ruled it its own wave, and a server-only PR keeps the door's security review on the door alone (question Q1). Applied by "How this wave runs" and by Tasks 5 and 12.
+- **D-7965 (2026-11-04)** — door-reason-8 (refinement (b)). The door is three session-gated run routes and an exempt probe pair under a new gate reason 8. This departs from `gate.ts`'s "THE SEVEN REASONS, and there are only seven" and adds a route family the base spec's §3.4 does not list (design A25). A frame's request carries no session cookie, which is what the lab measures, so a gated probe would count nothing. The door is a permanent surface on every box, inert until a session opens a run (question Q5 (a)). Applied by Task 3 (rows RLB-T3-M3 to M6, M10, M11) and Task 4 (rows RLB-T4-M1 to M4).
+- **D-7966 (2026-11-04)** — counter-before-gate (refinement (c)). The counter is an `onRequest` hook added immediately before the gate's, so the gate is no longer the root's first `onRequest` hook (design A25, question Q4). An opaque frame's WebSocket upgrade is refused by the gate before any handler, so counting in the handler would leave that channel unmeasured on every box. The counter never answers, never reads a body and never awaits. Applied by Task 3 (rows RLB-T3-M1 and M2, and Step 9's measured order figure).
+- RL-a, issued and unused: 7967. The fix round's four findings bring the code and its prose to properties the design already states, so none departs from a spec sentence.
 - RL-b: placeholder.
 
 ## Where things stand
