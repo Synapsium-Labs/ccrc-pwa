@@ -59,7 +59,9 @@ export interface ColdRuns {
   readonly reload: () => Promise<void>;
   /** Console speed S2, with `page` only. Asks the next older page (`before` = the stored `nextBefore`) and appends it
    *  to the rows held. Resolves at once when nothing older remains or a page is already on its way. A caller that
-   *  passes no `page` gets a function that does nothing. A failed page keeps every row and sets `state` to `error`. */
+   *  passes no `page` gets a function that does nothing. A failed page keeps every row and sets `state` to `error`;
+   *  a successful one leaves `state` alone, so only a successful re-read clears an error. An answer that lands after a
+   *  re-read issued later is dropped. */
   readonly loadOlder: () => Promise<void>;
   /** Whether older closed runs remain to load: the stored `nextBefore` is set. Always `false` without `page`. */
   readonly hasOlder: boolean;
@@ -180,14 +182,17 @@ export function useColdRuns(
     const held = store.getState().runPages;
     if (limit === undefined || held === null || held.nextBefore === null) return Promise.resolve();
     if (olderInflight.current !== null) return olderInflight.current;
+    // A re-read ISSUED after this page was asked for has the fresher view of the first page and of `nextBefore`; this
+    // answer, read of the older archive, is then dropped (the next "Show older" asks again).
+    const askedAt = issued.current;
     const reading = (loadRunsRef.current as PagedLoader)(limit, held.nextBefore)
       .then((r) => {
         const answer: RunsPageAnswer = { runs: r.runs, ...(r.nextBefore === undefined ? {} : { nextBefore: r.nextBefore }) };
-        if (!aliveRef.current) return;
+        if (!aliveRef.current || issued.current !== askedAt) return;
         const next = appendOlderRunPage(store.getState().runPages, answer);
         store.getState().setRunPages({ ...next, at: Date.now() });
         setCold(next.runs);
-        setColdState('ok');
+        // `state` is left as it is: only a successful RE-READ clears an error a failed re-read left.
       })
       .catch(() => { if (aliveRef.current) setColdState('error'); })
       .finally(() => { olderInflight.current = null; });

@@ -6,6 +6,7 @@ import { describe, it, expect, vi, afterEach, beforeEach, type Mock } from 'vite
 import { act, cleanup, render, renderHook } from '@testing-library/react';
 import type { RunsPageAnswer, RunSummary } from '../../shared/api';
 import { useColdRuns, type PagedLoader } from '../src/screens/useColdRuns';
+import { appendOlderRunPage, mergeFirstRunPage } from '../src/fleet/runWords';
 import { MailScreen } from '../src/screens/MailScreen';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
@@ -125,6 +126,103 @@ describe('the run archive in pages', () => {
     expect(row70).toHaveLength(1);
     expect(row70[0]!.state).toBe('done');
     expect(result.current.cold).toHaveLength(70);
+  });
+
+  it('a run that closes inside the loaded older pages is fetched again', async () => {
+    // Run 60 is active and sits inside the older region already loaded (below page one, above the stored nextBefore).
+    const a = archive(range(120, 21).filter((id) => id !== 60), [60]);
+    const store = makeStore();
+    const { result } = renderHook(() => useColdRuns(store, a.load, { page: 40 }));
+    await flush();
+    await act(async () => { await result.current.loadOlder(); });
+    expect(store.getState().runPages?.nextBefore).toBe(40);
+    expect(result.current.cold?.find((r) => r.id === 60)?.state).toBe('working');
+    a.set(range(120, 21), []);                                      // run 60 closes; page one is still 120..81
+    await act(async () => { await result.current.reload(); });
+    // Its fresh closed copy is on no page held, so the row is not lost silently: Show older is offered again from it.
+    expect(result.current.hasOlder).toBe(true);
+    expect(store.getState().runPages?.nextBefore).toBeGreaterThanOrEqual(61);
+    await act(async () => { await result.current.loadOlder(); });
+    const sixty = (result.current.cold ?? []).filter((r) => r.id === 60);
+    expect(sixty).toHaveLength(1);
+    expect(sixty[0]!.state).toBe('done');
+    expect(ids(result.current.cold).sort((x, y) => y - x)).toEqual(range(120, 21));
+    expect(result.current.hasOlder).toBe(false);
+  });
+
+  it('an older page that lands after a re-read does not undo it', async () => {
+    const a = archive(range(120, 1), [130]);
+    const store = makeStore();
+    const { result } = renderHook(() => useColdRuns(store, a.load, { page: 50 }));
+    await flush();
+    // Show older is asked now, and its answer (read of the old archive, run 130 still active) is held back.
+    const stale = await a.load(50, 71);
+    let release: () => void = () => {};
+    a.load.mockImplementationOnce(() => new Promise<RunsPageAnswer>((resolve) => { release = () => resolve(stale); }));
+    let older: Promise<void> = Promise.resolve();
+    act(() => { older = result.current.loadOlder(); });
+    a.set(range(130, 1), []);                                       // run 130 closed since
+    await act(async () => { await result.current.reload(); });      // the re-read lands first
+    expect(store.getState().runPages?.nextBefore).toBe(71);
+    await act(async () => { release(); await older; });
+    const rows = result.current.cold ?? [];
+    expect(rows.find((r) => r.id === 130)?.state).toBe('done');     // not undone by the stale active copy
+    expect(ids(rows).sort((x, y) => y - x)).toEqual(range(130, 81).concat(range(80, 71)));
+    expect(store.getState().runPages?.nextBefore).toBe(71);         // nor its nextBefore overwritten
+    expect(result.current.hasOlder).toBe(true);
+  });
+
+  it('appendOlderRunPage: held active rows win, and the answer adds only closed rows below the held nextBefore', () => {
+    const held = { runs: [closed(90), run(130)], nextBefore: 71 };
+    const next = appendOlderRunPage(held, { runs: [run(130, { state: 'done', closedAt: T }), closed(70), closed(75), run(140)], nextBefore: 21 });
+    expect(next.runs.map((r) => [r.id, r.state])).toEqual([[70, 'done'], [90, 'done'], [130, 'working']]);
+    expect(next.nextBefore).toBe(21);
+  });
+
+  it('a re-read of page one keeps the older pages', () => {
+    // Pure: page one was 120..71 plus active 130, one older page 70..21 is held, nextBefore 21.
+    const held = { runs: [...range(130, 21).filter((id) => id !== 130).reverse().map((id) => closed(id)), run(130)], nextBefore: 21 };
+    // Two more runs closed since: page one is now 122..73, so ids 72..21 are the older region.
+    const next = mergeFirstRunPage(held, { runs: [...range(122, 73).reverse().map((id) => closed(id)), run(130)], nextBefore: 73 });
+    expect(next.runs.map((r) => r.id)).toEqual([...range(122, 21).reverse(), 130]);
+    expect(next.nextBefore).toBe(21);                               // the older pages' reach is kept
+    expect(mergeFirstRunPage(held, { runs: [closed(120), closed(119)] }).nextBefore).toBeNull();  // nothing older remains
+    expect(mergeFirstRunPage(null, { runs: [closed(9)], nextBefore: 9 })).toEqual({ runs: [closed(9)], nextBefore: 9 });
+  });
+
+  it('an older page never duplicates a run already shown', () => {
+    const held = { runs: [closed(80), closed(75), closed(71), run(90)], nextBefore: 71 };
+    const next = appendOlderRunPage(held, { runs: [closed(71, { closedAt: T }), closed(70), closed(69), run(90)], nextBefore: 60 });
+    const idsOut = next.runs.map((r) => r.id);
+    expect(idsOut).toEqual([69, 70, 71, 75, 80, 90]);
+    expect(new Set(idsOut).size).toBe(idsOut.length);
+    expect(next.nextBefore).toBe(60);
+  });
+
+  it('a failed re-read stays visible after Show older succeeds', async () => {
+    const a = archive(range(120, 1));
+    const store = makeStore();
+    const { result } = renderHook(() => useColdRuns(store, a.load, { page: 50 }));
+    await flush();
+    a.load.mockRejectedValueOnce(new Error('down'));
+    await act(async () => { await result.current.reload(); });
+    expect(result.current.state).toBe('error');
+    await act(async () => { await result.current.loadOlder(); });
+    expect(result.current.cold).toHaveLength(100);                  // the page landed
+    expect(result.current.state).toBe('error');                     // only a good re-read clears the error
+    await act(async () => { await result.current.reload(); });
+    expect(result.current.state).toBe('ok');
+  });
+
+  it('a failed Show older shows its error and keeps every row', async () => {
+    const a = archive(range(120, 1));
+    const store = makeStore();
+    const { result } = renderHook(() => useColdRuns(store, a.load, { page: 50 }));
+    await flush();
+    a.load.mockRejectedValueOnce(new Error('down'));
+    await act(async () => { await result.current.loadOlder(); });
+    expect(result.current.state).toBe('error');
+    expect(result.current.cold).toHaveLength(50);
   });
 
   it('a failed re-read keeps the stored pages and shows the error', async () => {

@@ -1018,21 +1018,33 @@ const byId = (a: RunSummary, b: RunSummary): number => a.id - b.id;
  *  so every row with an id at or above it, and every active run, is covered by the answer and REPLACED by it.
  *  A stored CLOSED row below it is an older page the operator already loaded and is KEPT, as is the stored
  *  `nextBefore` when it reaches further down: a re-read never throws a loaded page away. A stored active row the
- *  answer no longer carries has closed or left, so it is dropped, wherever its id sits. With no `nextBefore` in the
- *  answer nothing older remains, so no stored row survives below the page. PURE. */
+ *  answer no longer carries has closed or left, so it is dropped, wherever its id sits. One that sat BELOW the page
+ *  (inside the older region) has its fresh closed copy on no page held, so the result's `nextBefore` is raised to just
+ *  above the highest such id: the next "Show older" asks for it again, and no row is lost silently. With no
+ *  `nextBefore` in the answer nothing older remains (every closed run is on the page), so no stored row survives
+ *  below it. PURE. */
 export function mergeFirstRunPage(stored: RunPagesView | null, answer: RunsPageAnswer): RunPagesView {
   const boundary = answer.nextBefore;
   if (boundary === undefined) return { runs: [...answer.runs].sort(byId), nextBefore: null };
   const inAnswer = new Set(answer.runs.map((r) => r.id));
-  const kept = (stored?.runs ?? []).filter((r) => r.id < boundary && !inAnswer.has(r.id) && isRunClosed(r));
+  const below = (stored?.runs ?? []).filter((r) => r.id < boundary && !inAnswer.has(r.id));
+  const kept = below.filter((r) => isRunClosed(r));
+  const gone = below.filter((r) => !isRunClosed(r)).map((r) => r.id);
   const reach = kept.length === 0 || stored === null ? boundary : stored.nextBefore === null ? null : Math.min(stored.nextBefore, boundary);
-  return { runs: [...answer.runs, ...kept].sort(byId), nextBefore: reach };
+  const refetch = gone.length === 0 ? null : Math.max(...gone) + 1;
+  const nextBefore = refetch === null ? reach : reach === null ? refetch : Math.max(reach, refetch);
+  return { runs: [...answer.runs, ...kept].sort(byId), nextBefore };
 }
 
-/** An OLDER page (`loadOlder`) appended to the pages held: rows deduplicated by id, the answer's row winning, and the
- *  next `before` the answer's (`null` when it carries none). PURE. */
+/** An OLDER page (`loadOlder`) appended to the pages held (console speed S2). The held side is the fresher for
+ *  everything it already knows: every held row stays as it is, and the answer adds only CLOSED rows that sit below the
+ *  held `nextBefore` (an active row in an older page's answer is a copy from when it was read, and a re-read has
+ *  the live one). A closed row the answer carries replaces a held copy of the same id. The next `before` is the
+ *  answer's (`null` when it carries none). PURE. */
 export function appendOlderRunPage(stored: RunPagesView | null, answer: RunsPageAnswer): RunPagesView {
-  const fresh = new Set(answer.runs.map((r) => r.id));
+  const limit = stored?.nextBefore ?? (stored === null ? Infinity : -Infinity);
+  const added = answer.runs.filter((r) => isRunClosed(r) && r.id < limit);
+  const fresh = new Set(added.map((r) => r.id));
   const held = (stored?.runs ?? []).filter((r) => !fresh.has(r.id));
-  return { runs: [...held, ...answer.runs].sort(byId), nextBefore: answer.nextBefore ?? null };
+  return { runs: [...held, ...added].sort(byId), nextBefore: answer.nextBefore ?? null };
 }
