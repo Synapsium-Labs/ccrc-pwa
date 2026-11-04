@@ -2631,6 +2631,39 @@ fleet-screen.test.tsx also dropped two imports, ICONS and FEED_ACK_KEY, that onl
 
 **Operator steer, 2026-11-04 (third): the spec from every programme box; D26 amended.** The operator asked, "where in the UI, for each coordinator in ccrc-pwa app, can I see that spec?" Measured on main: the spec is reachable only through Goals on the programme view. The only door into that view is the waiting chip on the programme's fleet box (`ProgrammeBox.tsx`, `WaitingChip`), which is not drawn at zero. So a programme with nothing waiting had no way in from the UI. D26 was amended on a ledger PR: every programme box's title opens its programme view whatever is waiting, and the box carries a Spec link when the programme has a pin. The link reads the waiting frame's Goals, with no per-box fetch. Added to PL10 before its push (14906). In parallel, at the operator's ask about slowness, three read-only Opus investigators (PWA, server reads, agent link) were started; no work is touched.
 
+**Console speed investigation (operator ask, 2026-11-04); items 32 to 34 raised.** Three read-only Opus investigators (PWA, server reads, agent link) reported. Their reports are in `perf-20261104/` in the info directory.
+
+Measured on the fleet box: the watcher's 2 s tick reads all 356 registry rows (about 64 live), which is about 7,800 file reads and about 780 tmux spawns per tick. The link carries about 2,300 ops/s and 1.15 MB/s outbound. So a tick likely takes 4 s or more, and the fleet frame is sent only at the end of a serial chain of stages.
+
+Server, by code:
+- each open chat viewer re-resolves its session every 2 s;
+- every attributed write reads the whole registry;
+- the state cache is rewritten on every tick;
+- the closed-runs and releases reads are unbounded.
+
+PWA:
+- `autoUpdate` reloads every open client on return after each release (5 releases in a day);
+- no watchdog for a silently dead socket and no connect timeout;
+- one eager 2.07 MB entry chunk;
+- per-visit Loading on Docs, Settings and Goals;
+- no fetch timeout;
+- a cold start waits for three frames.
+
+Decide items raised with recommendations:
+- 32: the approach (measure, then server and link, then app);
+- 33: when to reload after a release (on the next navigation);
+- 34: drawing the saved list, marked not current, on a cold start (yes, with acting blocked until live).
+
+Item 34 revisits review 1359 F3's ruling, so it is the operator's. The spec waits for item 32.
+
+**Operator steer, 2026-11-04 (fourth): one Waiting on you page, and Goals from a session; D29, D30, PL11 (D-7986).** The operator said: "I also don't like the two different pages, if i go to Waiting on you from the nav bar it takes me to a different page than if I click waiting on you inside a programme. It's super weird. Let's make sure waiting on you always has a unified experience (e.g. take to the waiting on you page that currently goes to via nav bar and pre-filter by project) and that Goals has a separate UI icon to access it from inside a session (on desktop and mobile)."
+
+Written on the open ledger PR #2275:
+- D29: the chip and the programme page open `/waiting`, filtered to the programme. The programme page becomes the Goals page, with no list of its own; it keeps the waits-on sentence and Stored secrets and links the filtered list. The `from=programme:` list identity folds into the filtered list.
+- D30: a Goals icon in a programme session's chrome, at a desk and on a phone. It is the one in-session change, so it narrows D25's "nothing changes in a session".
+
+Task PL11 is defined as D-7986, issued by the allocator today. It lands after PL10, which is near done; changing PL10 now would cost both.
+
 ## R125: Delegation rows that read "running" are handed to the delegation broker (2026-11-01)
 
 The operator asked what a coordinator's box full of unnamed "agent · running" and "workflow · running" rows was. They are the delegation broker's activity rows: one row per helper (subagent or workflow agent) that a session started, under that session. Measured on the fleet box from that session's own Claude Code files: every one of its workflows had finished, and no helper had written for about three hours, so the rows were stale. As main reads, a row is live while its end was never matched and its parent session's incarnation is unchanged; nothing checks the helper's own activity or times a row out.
