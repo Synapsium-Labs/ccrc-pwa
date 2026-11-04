@@ -4885,8 +4885,8 @@ fi
 # (the verbs and the surface); `install`, `update`, `upgrade` and `respawn`, each on its own (a Claude Code verb under
 # any head, `$CLAUDE_CODE_EXECPATH` and a runner included); `anthropic-ai/claude-code` (a global install by `add`);
 # `downloads.claude.ai` and `claude.ai/install` in any case (`${apf,,}`; an upper-case installer path names no `install`);
-# `.local` (a write, in any spelling, after a `cd` too); and `.cc-sessions` (a trusted file;
-# `~/.ccrc`'s are admitted by `ccrc`). Every pattern needs one
+# `.local` (a write, in any spelling, after a `cd` too); `.cc-sessions` (a trusted file;
+# `~/.ccrc`'s are admitted by `ccrc`); and `prune` (the prune row, in this arm and the account arm). Every pattern needs one
 # of those words literally (JSON escaping never touches ASCII letters). A real payload's `transcript_path` names
 # `.claude…`, so every child call naming `install` or `update` already forked one jq. A deny already set is
 # never replaced. FAIL-OPEN as every gate here: a jq that cannot run (no Oniguruma, say) denies nothing, and
@@ -4905,6 +4905,22 @@ fi
 # It NEVER refuses a swap path (the operator's Q8 ruling of 2026-10-19): no `ccd` verb but `account-pane`, no bare
 # `ccrc account`, no registry path (`PATHF` is not reused), no `/api/` pattern; `must-allow.json` holds it. An accident
 # guard: `bash -c` with an assembled string, another interpreter or a script file runs past it.
+# THE PRUNE ROW ON EVERY SESSION (cleanup un-wedge, Task R3; spec 2026-11-04 §5, D9 to D11). A repository-wide
+# `git worktree prune` deletes git's record of every gone worktree of the repository at once, and ccd's cleanup reads
+# those records, so one session's prune holds the cleanup of every lane on the box. `fmatch` answers the category
+# `prune`, which all three modes read: `deny` (a child), `account` (every other session) and `class` (the classifier's
+# `FORBIDDEN_PATTERNS` hold the same row, `server/test/fixtures/prune-deny/` both lists). Once the raw text names
+# `prune`, the row reads the command as bash runs it (`norm`, defined before `fmatch` for this row), split into simple
+# commands on `;`, `&`, `|` and newlines (`hbt`'s split), and matches one whose program (at its head or after `$(`,
+# `(`, a backtick or `{`, a shell keyword, assignments and a few wrappers such as `sudo`, `env` and `bash -c`: `GITPRE`)
+# is `git`, bare or path-qualified, then git's global options (`GOPT`: `-C`, `-c`, `--git-dir`, `--work-tree`,
+# `--no-pager`, `--bare` and their kin), `worktree`, any flags and `prune`, unless `-n` or `--dry-run` is one of its
+# words (`GDRY`): a dry run deletes nothing. Every repetition is bounded or unambiguous. `pr""une` names no `prune`
+# until bash removes the quotes, so class mode misses it and the strict grammar escalates it; deny and account modes
+# read the `norm` form too. An accident guard, not a wall: an assembled string, a script file, an alias, `eval`, a
+# `$VAR` program (no `xmatch` row) and `git gc` (which prunes records older than `gc.worktreePruneExpire`) run past it,
+# and so does a top-level payload over APF_ACCT_STRIP_MAX that spells `prune` with quotes (the prefilter reads it as
+# written). The scoped act stays open: `git -C <main> worktree remove <path>` removes one record.
 APPROVAL_FORBIDDEN_JQ='def WS: "\t\n\u000b\f\r " + ([160, 5760, 8192, 45, 8202, 8232, 8233, 8239, 8287, 12288, 65279] | implode);
 def SP: "[" + WS + "]"; def NS: "[^" + WS + "]";
 def WB: "(?:^|" + SP + "|[;&|()`" + $q + "\"=/])";
@@ -4920,6 +4936,11 @@ def CRED: "(?:\\.ssh(?![A-Za-z0-9_-])|\\.cc-secrets|\\.token(?![A-Za-z0-9_-])|\\
 def PATHF: "/\\.(?:cc-sessions|cc-limits|ccrc)(?![A-Za-z0-9_.-])|approval-signing|approval-verify\\.mjs";
 def WR: ">|" + NB + "tee" + NA + "|" + NB + "sed" + SP + "+" + FLAGS + "-i|" + NB + "perl" + SP + "+-" + NS + "*i|" + NB + "mv" + NA + "|" + NB + "cp" + NA + "|" + NB + "ln" + NA + "|" + NB + "truncate" + NA + "|" + NB + "rm" + NA;
 def BUILD: "(?:/\\.local/share/claude/versions(?![A-Za-z0-9_.-])|/\\.local/bin/claude(?![A-Za-z0-9_.-]))";
+def norm: gsub("\\\\\n"; "") | gsub("\\$(?=[" + $q + "\"])"; "") | gsub("\\\\(?<c>[\\s\\S])"; .c) | gsub("[" + $q + "\"]"; "");
+def GITPRE: "(?:^|\\$\\(|[(`{])" + SP + "*(?:(?:then|do|else|elif|if|while|until|!)" + SP + "+){0,4}(?:[A-Za-z_][A-Za-z0-9_]*=" + NS + "*" + SP + "+){0,8}(?:(?:" + NS + "{0,256}/)?(?:sudo|env|command|exec|nohup|nice|time|timeout|bash|sh|zsh|dash)" + SP + "+(?:(?:-" + NS + "*|[A-Za-z_][A-Za-z0-9_]*=" + NS + "*|[0-9][0-9.]*[smhd]?)" + SP + "+){0,8}){0,4}(?:" + NS + "{0,256}/)?git" + SP + "+";
+def GOPT: "(?:-[Cc]" + SP + "+" + NS + "+|--(?:git-dir|work-tree|namespace|config-env)(?:=" + NS + "*|" + SP + "+" + NS + "+)|--exec-path(?:=" + NS + "*)?|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice)|-[pP])" + SP + "+";
+def GITWT: GITPRE + "(?:" + GOPT + "){0,8}worktree" + SP + "+" + FLAGS + "prune" + NW;
+def GDRY: "(?:^|" + SP + ")(?:-n|--dry-run)(?=$|" + SP + "|[)`}])";
 def hbt($sep; $head; $tail): any(split($sep; null)[];
   ([match("^[\\s\\S]*(?=" + $tail + ")")] | if length == 0 then -1 else .[0].length end) as $last
   | $last >= 0 and (.[0:$last] | test($head)));
@@ -4927,6 +4948,7 @@ def fmatch:
   (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "ws-lease-mark", "roll", "claude") as $v
      | select(test(CCD + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; CCD + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
+  (select(test("prune") and (norm | any(split("[\n;&|]"; null)[]; test("worktree") and test(GITWT) and (test(GDRY) | not)))) | "prune\tgit worktree prune"),
   (select(test(WB + "tmux(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\ttmux"),
   (select(test("/\\.(?:cc-sessions|cc-limits|ccrc)(?![A-Za-z0-9_.-])")) | "other\ta registry path"),
   (select(test(WB + "(?:reboot|shutdown|poweroff|halt)(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\treboot or shutdown"),
@@ -4939,7 +4961,6 @@ def fmatch:
   (select(hbt("[\n;&|]"; WR; SENS)) | "other\tan edit to a settings file, a hook or a CLAUDE.md"),
   (select(hbt("[\n;&|]"; WR; BUILD)) | "other\ta write to a Claude Code build or its launcher"),
   (select(hbt("[\n;&|]"; WB + "(?:cat|head|tail|less|more|base64|xxd|strings|od|nl|bat)" + NW; CRED)) | "other\tprinting a secret");
-def norm: gsub("\\\\\n"; "") | gsub("\\$(?=[" + $q + "\"])"; "") | gsub("\\\\(?<c>[\\s\\S])"; .c) | gsub("[" + $q + "\"]"; "");
 def EXP: "(?:\\$\\{[^}]*\\}|\\$\\([^)]*\\)|\\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`)";
 def EXPV: WB + EXP + SP + "+" + FLAGS;
 def xmatch:
@@ -5074,12 +5095,12 @@ def pathwhy($t):
 (.tool_name | if type == "string" then . else "" end) as $t
 | (.tool_input | if type == "object" then . else {} end) as $i
 | if $mode == "deny" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t") or startswith("account\t"))) // first((., norm) | apmatch) // first((., norm) | bmatch) // "" else "" end)
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t") or startswith("account\t") or startswith("prune\t"))) // first((., norm) | apmatch) // first((., norm) | bmatch) // "" else "" end)
      elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // acctpath($t; $i) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(BUILDX)) | BW) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(TRUST)) | BTR) // "")
      elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // acctpath($t; $i) // "")
      else "" end)
   elif $mode == "account" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("account\t"))) // first((., norm) | apmatch) // "" else "" end)
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("account\t") or startswith("prune\t"))) // first((., norm) | apmatch) // "" else "" end)
      else acctpath($t; $i) // "" end)
   elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch) // "" else "" end)
   elif ($t | startswith("mcp__")) and any($i | .. | strings; first(fmatch) != null) then "other\tan MCP call naming a forbidden act"
@@ -5105,13 +5126,13 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]
        || "$apf" == *install* || "$apf" == *update* || "$apf" == *upgrade* || "$apf" == *respawn* \
        || "$apf" == *anthropic-ai/claude-code* || "${apf,,}" == *downloads.claude.ai* || "${apf,,}" == *claude.ai/install* || "$apf" == *.local* \
        || "$apf" == *.cc-sessions* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
-       || "$apf" == *runtime.env* || "$apf" == *printenv* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+       || "$apf" == *runtime.env* || "$apf" == *printenv* || "$apf" == *prune* || "$apf" =~ $APF_ENV_RE ]] || apf=""
   else
     # THE ACCOUNT ARM ON EVERY OTHER SESSION (D-6202): the account verbs, paths and bare `env`/`printenv` only.
     amode=account
     [[ "$apf" == *account* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
        || "$apf" == *runtime.env* || "$apf" == *.auth* || "$apf" == *.ccrc*linear* || "$apf" == *operator-secrets* \
-       || "$apf" == *printenv* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+       || "$apf" == *printenv* || "$apf" == *prune* || "$apf" =~ $APF_ENV_RE ]] || apf=""
   fi
 fi
 # The deny file is read once here, by a bounded builtin read, and its text passed as `--arg deny` (D-6066). Read by jq's
@@ -5149,6 +5170,9 @@ if [[ -n "$apf" ]]; then
           areason+=" Carry on with your task; a prompt you raise reaches them by itself." ;;
         account$'\t'*)
           areason="ccrc: this call is ${afw#*$'\t'}: an account-management act no fleet session runs, in any form (CLAUDE.md's SAFETY section; spec 2026-10-18 §3.1; D-6202). Adding, signing in, checking, enabling, disabling or removing a fleet account, and reading its secrets, are the operator's, from the PWA's Accounts screen or their own shell. Switching accounts is never refused: \`ccd swap-self <lane>\`, \`ccd prefer\` and \`ccd swap\` stay open." ;;
+        prune$'\t'*)
+          areason="ccrc: this call runs \`git worktree prune\`, which deletes git's records of every gone worktree of the repository at once, and ccd's cleanup reads those records: one prune holds the cleanup of every lane on this box (the cleanup un-wedge spec, section 5)."
+          areason+=" To remove one stale record, use \`git -C <main> worktree remove <path>\`; a dry run (\`-n\`) is allowed." ;;
         build$'\t'*)
           areason="ccrc: this call is ${afw#*$'\t'}, which a dispatched child never does: rolling, installing and selecting a Claude Code build are the operator's acts and ccrc's own (CLAUDE.md's SAFETY section; spec 2026-10-18 §7.6; D-5696)."
           areason+=" Report what you need to your coordinator instead." ;;
