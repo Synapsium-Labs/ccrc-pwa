@@ -197,6 +197,29 @@ function headBeforeTail(text: string, sep: RegExp, head: RegExp, tail: RegExp): 
 }
 const g = (re: string): RegExp => new RegExp(re, 'g');
 
+/** Cleanup un-wedge, Task R3 (spec 2026-11-04 §5): a repository-wide `git worktree prune` deletes git's record of every
+ *  gone worktree of the repository at once, and ccd's cleanup reads those records. The hook's `fmatch` holds the same
+ *  row (`GITPRE`, `GOPT`, `GITWT`, `GDRY`), held equal to this one over `server/test/fixtures/prune-deny/`. Read once
+ *  the raw text names `prune`: the command as bash runs it (the hook's `norm`: a backslash-newline, a `$` before a
+ *  quote, every backslash escape and every quote removed), split into simple commands on `;`, `&`, `|` and newlines; a
+ *  simple command whose program, at its head or after `$(`, `(`, a backtick or `{`, a shell keyword, assignments and
+ *  a few wrappers (`sudo`, `env`, `bash -c` and the like), is `git`, bare or path-qualified, then git's global options,
+ *  `worktree`, any flags and `prune`, unless `-n` or `--dry-run` is one of its words. Every repetition is bounded or
+ *  unambiguous, so the match stays linear. An accident guard: an assembled string, a script, an alias, `eval`, a `$VAR`
+ *  program and `git gc` run past it. */
+const GIT_PRE = String.raw`(?:^|\$\(|[(\x60{])\s*(?:(?:then|do|else|elif|if|while|until|!)\s+){0,4}(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+){0,8}`
+  + String.raw`(?:(?:\S{0,256}/)?(?:sudo|env|command|exec|nohup|nice|time|timeout|bash|sh|zsh|dash)\s+(?:(?:-\S*|[A-Za-z_][A-Za-z0-9_]*=\S*|[0-9][0-9.]*[smhd]?)\s+){0,8}){0,4}`
+  + String.raw`(?:\S{0,256}/)?git\s+`;
+const GIT_GLOBAL_OPT = String.raw`(?:-[Cc]\s+\S+|--(?:git-dir|work-tree|namespace|config-env)(?:=\S*|\s+\S+)|--exec-path(?:=\S*)?`
+  + String.raw`|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice)|-[pP])\s+`;
+const GIT_WORKTREE_PRUNE = new RegExp(`${GIT_PRE}(?:${GIT_GLOBAL_OPT}){0,8}worktree\\s+(?:-\\S+\\s+)*prune(?![\\w-])`);
+const GIT_DRY_RUN = /(?:^|\s)(?:-n|--dry-run)(?=$|[\s)\x60}])/;
+/** The hook's `norm`: the text as bash runs it, once its quotes and backslashes are removed. */
+const asBashRuns = (t: string): string =>
+  t.replace(/\\\n/g, '').replace(/\$(?=['"])/g, '').replace(/\\([\s\S])/g, '$1').replace(/['"]/g, '');
+const runsWorktreePrune = (t: string): boolean => t.includes('prune')
+  && asBashRuns(t).split(/[\n;&|]/).some((s) => s.includes('worktree') && GIT_WORKTREE_PRUNE.test(s) && !GIT_DRY_RUN.test(s));
+
 /** Every forbidden shape, matched anywhere in a Bash command's text (spec §6.5 "forbidden"). Each test is linear in
  *  the text's length (D-5299). */
 export const FORBIDDEN_PATTERNS: readonly { readonly why: string; readonly test: (text: string) => boolean }[] = [
@@ -211,6 +234,7 @@ export const FORBIDDEN_PATTERNS: readonly { readonly why: string; readonly test:
     const tail = g(rest.map((r) => String.raw`\s${reEsc(r)}(?![\w-])`).join(''));
     return { why: `ccd ${v}`, test: (t: string) => headBeforeTail(t, /[;&|]/, head, tail) };
   }),
+  { why: 'git worktree prune', test: runsWorktreePrune },
   ...[
     { why: 'tmux', re: new RegExp(`${WB}tmux(?=$|[\\s;&|)'"])`) },
     { why: 'a registry path', re: /\/\.(?:cc-sessions|cc-limits|ccrc)(?![\w.-])/ },

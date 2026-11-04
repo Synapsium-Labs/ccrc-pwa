@@ -339,3 +339,51 @@ describe('the workflow control verb is operator-only (D-5936)', () => {
     expect(approvalClass('Read', { file_path: `${WT}/shared/workflows.ts` }, ctxFor({ cwd: WT }))).not.toBe('forbidden');
   });
 });
+
+// Cleanup un-wedge, Task R3 (spec 2026-11-04 §5): a repository-wide `git worktree prune` deletes git's record of every
+// gone worktree of the repository at once, and ccd's cleanup reads those records, so no approval may rule one. The
+// hook's `fmatch` holds the same row (`GITWT`), held equal to this one over `fixtures/prune-deny/` by
+// `session-hook-approval-deny.test.ts`. A dry run deletes nothing and is not forbidden.
+describe('the prune row: git worktree prune is forbidden, a dry run and every other prune are not', () => {
+  const PRUNE_DENY: string[] = JSON.parse(readFileSync(path.join(here, 'fixtures/prune-deny/must-deny.json'), 'utf8'));
+  const PRUNE_ALLOW: string[] = JSON.parse(readFileSync(path.join(here, 'fixtures/prune-deny/must-allow.json'), 'utf8'));
+  const whys = (c: string): string[] => FORBIDDEN_PATTERNS.filter((p) => p.test(c)).map((p) => p.why);
+  it('git worktree prune is forbidden', () => {
+    expect(bash('git worktree prune')).toBe('forbidden');
+    expect(whys('git worktree prune')).toEqual(['git worktree prune']);
+  });
+  it('git -C x worktree prune is forbidden', () => {
+    expect(bash('git -C x worktree prune')).toBe('forbidden');
+    expect(whys('git -C x worktree prune')).toEqual(['git worktree prune']);
+  });
+  it('git worktree prune --dry-run is not forbidden', () => {
+    expect(bash('git worktree prune --dry-run')).not.toBe('forbidden');
+    expect(bash('git worktree prune -n')).not.toBe('forbidden');
+  });
+  it('git remote prune origin is not forbidden', () => {
+    expect(bash('git remote prune origin')).not.toBe('forbidden');
+    expect(whys('git remote prune origin')).toEqual([]);
+  });
+  it('every must-deny command is matched by the row, but one whose `prune` bash spells with quotes, which escalates', () => {
+    // The row reads the command as bash runs it (quotes and backslashes removed) once its raw text names `prune`, as
+    // the hook's class mode does; `pr""une` names no `prune` until bash removes the quotes, so here it is the strict
+    // grammar's, which never answers `ordinary` for it. The hook's deny and account modes read that form too.
+    const missed = PRUNE_DENY.filter((c) => !whys(c).includes('git worktree prune'));
+    expect(missed).toEqual(['git worktree pr""une']);
+    for (const c of PRUNE_DENY) expect(bash(c), c).not.toBe('ordinary');
+  });
+  it('no must-allow command is matched by the row', () => {
+    expect(PRUNE_ALLOW.filter((c) => whys(c).includes('git worktree prune'))).toEqual([]);
+  });
+  it('the row is linear: a 256 KB line naming worktree and prune in every unit is matched in under 250 ms', () => {
+    const p = FORBIDDEN_PATTERNS.find((x) => x.why === 'git worktree prune');
+    expect(p).toBeDefined();
+    const big = (unit: string): string => unit.repeat(Math.floor((256 * 1024) / unit.length));
+    for (const u of ['(worktree prune ', '$(git worktree -x prune', 'git -C x -C ', 'env A=b ', 'sudo -x ', 'a/b/c/', '((((((((worktree prune',
+      'git --git-dir x worktree ', "g''it worktree prune -n ", 'git worktree -a -b -c ']) {
+      const t0 = performance.now();
+      p!.test(big(u));
+      expect(performance.now() - t0, JSON.stringify(u)).toBeLessThan(250);
+    }
+  });
+});
