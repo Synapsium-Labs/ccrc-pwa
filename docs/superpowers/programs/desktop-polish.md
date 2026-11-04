@@ -2732,6 +2732,103 @@ Four tasks: S1 (D-7987), S2 (D-7988), C1 (D-7989) and C2 (D-7990). Snapshots and
     - `shared/api.ts` and `coord/store.ts`, from the delegation coordinator, in 14942;
     - `server.ts`, from run 1442's coordinator, in 14943.
   - S2 was told to wait for the relays before editing those three (14944).
+- 2026-11-04: ledger PR #2279 conflicted with #2275 in the programme ledger only. Main was merged once into `ledger/desktop-polish-console-speed`, and the local ledger (a superset of main's) was taken whole, giving 1fecd6fad. dtbd passed and the scan was clean. CI was re-awaited.
+- 2026-11-04: leave for S2 was granted and relayed in one mail.
+  - 14950, from the delegation coordinator: `shared/api.ts` and `coord/store.ts`. S2 stays clear of two zones in `shared/api.ts` and of the import block and delta arms in `store.ts`, and adds no export.
+  - 14949, from the Docs reader coordinator: `server.ts`. S2 adds no header, no body and no onRequest hook ahead of the reader lab's probe counter, and records nothing keyed on its paths.
+- 2026-11-04: S2's points 5 and 6 (14952) were ruled.
+  - Point 5: the ring totality test needs a ring-table cell for each new top-level server file, and it reds a row that names no file. So each PR names only its own files. S1 adds three files to the C1 row and `perf/**` to the K row; S2 adds `servedRead.ts` to C1. S2 lands second and takes the union of the cell. Leave was asked of run 1442 (14953 to its coordinator), and S1 was told.
+  - Point 6, option (a): S2 claims `pwa/src/screens/updates.tsx`, which was unclaimed, and reads `releasesTotal` (departure older-hidden-reads-the-window). This fills a gap in the plan, which listed neither.
+- 2026-11-04: leave 14957 was granted by run 1442's coordinator for the ring-table cells, and relayed to S1 and S2. The K row sits next to run 1442's C9 row, so their two edits will conflict as text; the agreed resolution is to keep both rows as written.
+- 2026-11-04: C2 (14964) has Steps 0-4 committed at d5c7f61d4, unpushed, with 18 mutants killed. It waits on C1 for Step 5, and I sent it a `wait:` mail. Its eight departures were accepted as recorded, for the review to read. screen-cache-keeps-its-own-map needs a legitimately-different reason in the note.
+- 2026-11-04: C1 (14966) found that making the six screens lazy reds 44 test cases in 7 files. In each, an assertion runs before the lazy screen has mounted. Ruled option (A): the tests await the lazy screen, and there is no preload seam. C1 claims four unclaimed files. It has leave in PL10's app.test.tsx outside l.383-394, and in refined-phone.test.tsx outside l.84-140; sites inside those ranges wait for PL10 to merge. This fills a gap in the plan.
+- 2026-11-04: ledger PR #2279 went green at 1fecd6fad; the only red was the external review-gate app. Its body passed the scan. It was enqueued with `--match-head-commit` at position 2, and a background wait on the merge started.
+- 2026-11-04: C2 (14976) passed tsc, and the whole pwa suite had 13070 passing and 1 red. The red is a fleet-screen case whose second mount is no longer a first visit. Ruled: C2 claims the file, which was unclaimed, and adds one clearScreenCache() call after that case's cleanup(). C2 still waits for C1 to merge.
+- 2026-11-04: S2 (14980) found that the `beat` type reds the session store's exhaustive switch. Ruled: S2 claims `pwa/src/stores/session.ts`, which was unclaimed, for one `case 'beat'` arm, pinned by a same-reference test (departure beat-needs-a-session-store-arm). S2's U1 and its serve decider are done.
+- **#2279 MERGED (2026-11-04, 3c7a1336e).** The console speed spec and plan are on main, byte-identical to the authority snapshots (sha256 measured). The operator's steer was recorded as Goals modification 11 with pr 2279, and then marked merged (`marked: 1`). The four speed workers were told, and the ledger worktree was removed.
+- 2026-11-04: PL10 status (14994).
+  - Gates passed on the tree before the merge. In the whole browser suite, the 10 reds were known or passed alone.
+  - The conflict probe exited 1 on the architecture spec's C5 row and on older-server-render. Main was merged once at 4297e00ca, keeping the leave-cell deletion.
+  - PL10 is re-gating what the merge reaches. Then it pushes once, opens the PR, runs full CI and sends wave-done.
+- 2026-11-04: C1 (14996): every GET now carries a signal, so a pin of "init is undefined" reds. Ruled (A): C1 has leave in C2's `use-collect-lane-view.test.tsx` (claim 3461), for l.82 only. C2 has no edit there, measured at f4b9fdc45. C2 was told and keeps waiting for C1.
+- 2026-11-04: C1 status (15001). Steps 1-5 are committed, unpushed. All of its app.test and refined-phone sites fell outside PL10's ranges, so none waits. tsc is clean, and the new browser test passes 9/9. Next: the l.82 pin, then a `lib/readLimit.ts` split, because `api.ts` measured +44 net lines against the growth check's 40. Then mutants by hand, the browser suite, a push, the PR with full CI, and wave-done.
+- 2026-11-04: S2 (15008) edited `UpdatesSection.tsx` before claiming it. The file was unclaimed, and S2 took claim 3472 afterwards. The one line was accepted (departure updates-section-passes-the-total), with a reminder to claim before editing. The plan gave `coord/runsPage.ts` ring L3, but its importer is L1, so it now declares no ring (departure runs-page-ring-follows-the-store).
+- 2026-11-04: PL10 (15009) opened PR #2286 at 1f67245cf, a single commit on 3c7a1336e, and dispatched full CI (run 41889482578).
+  - The pre-push hook refused a fixture hostname that main does not carry. Since the branch was unpublished, the fixture was changed to one main already has, and the branch was squashed into one commit. The old tip is kept under `refs/attic/`.
+  - The tree is the gated tip plus that one string, and raise-route passed 122/122.
+  - Waiting for terminal CI, then wave-done.
+- 2026-11-04: S2 (15012) put a run-pages type and two pure functions into `runWords.ts` (+32 lines) before claiming it, and took claim 3473 afterwards. Ruled (a): they stay in the L1 owner (departure run-pages-merge-in-run-words), with their own tests. S2 added a stop-and-report rule to its subagents' brief.
+- 2026-11-04: ask 308 (PL10, #2286): topology-clean's tailnet-name class reads every blob the branch adds, so it reds a fixture host on `.ts.net`, and a fix commit on top cannot clear it.
+  - Ruled option 0: amend the one commit and force-push with a lease on 1f67245cf. The old tip is kept under `refs/attic/`, the diff must be the one line, and every added line is grepped for `.ts.net` and dotted quads.
+  - Why: the ledger's cure is one commit holding the net change, and on a workspace branch that can only be the workspace branch.
+  - This is a one-time exception that sets no standing licence. Terms are in 15021.
+- 2026-11-04: PL10 (15025) did the force-push.
+  - The amended commit is 5a289eb58. Its diff against 1f67245cf is the one line, the old tip is kept under `refs/attic/`, and the push used a lease. PR #2286 is kept.
+  - Slip: PL10 pushed before reading the terms, so the grep ran afterwards. It found nothing, and no second rewrite was needed.
+  - A note commit, a13a60772, was fast-forwarded on top, and the PR body was patched. Full CI was re-dispatched (run 41893396503).
+- 2026-11-04: S2 (15026) has Steps 0-6 committed at 0a10beb10, unpushed.
+  - Its changed tests are green: 347 server and 246 pwa. The growth check passed 49/49.
+  - It waits for S1 (Step 7) and for C1 (RunsScreen's paged read). Then one merge of main, the full gates, one push, the PR and wave-done.
+- 2026-11-04: C1 (15029) ran the full suites.
+  - The one remaining file is refusal-copy.browser, at refined 1920. It clicks the first PR keycap before the lazy session screen mounts, and only the eager inspector's keycap exists by then. Ruled: C1 claims the file and adds one wait.
+  - Known gap, for the review to rule on: while a lazy screen loads, a tap on the inspector's PR keycap does nothing.
+  - linear-section failed 1 of 6 on the branch and 0 of 3 on main. It is named in the wave-done as unconfirmed.
+  - `lib/readLimit.ts` was split out, so `api.ts` is now +6 lines. Since the branch predates #2279, D-7989 is in the PR body only.
+- **C1 wave-done verified (15046); review 1464 dispatched (2026-11-04).**
+  - PR #2290 at a17d5d8e0: remote tip equals head, open, not a draft, MERGEABLE. merge-tree against main is clean (rc 0).
+  - ci 41894297936 and codeql 41894297532 succeeded on that sha, and both browser legs' Test step ran. The only red is the external review-gate app.
+  - Entry JS is claimed to drop from 1,687.50 kB to 665.18 kB.
+  - Run 1455 was advanced to working, then awaiting-review.
+  - Review run 1464 (ccrc-pwa-polish-speed-c1-rev1) was dispatched on route sonnet/high with workflow on. It has three Opus lenses: the link, the start and the user, and does-it-reproduce. It runs the whole pwa and browser suites, the mutants, and the linear-section re-measure. The brief is in `perf-20261104/c1-review/`.
+- **PL10 wave-done verified (15056); review 1466 dispatched (2026-11-04).**
+  - PR #2286 at a13a60772: remote tip equals head, open, not a draft, MERGEABLE. merge-tree against main is clean. Diff from 3c7a1336e: 70 files, +2070/-514.
+  - The pull_request ci 41893362860 and codeql 41893362451 succeeded. In the full run 41893396503, every required job is green, and the browser Test steps ran.
+  - The full run's reds: perf (advisory); macOS 2/4 on ledgers-secrets kept2, two temps that differ only by case, from #2248 on main, reported as main-red for a carry; and full-suite, through the macOS leg.
+  - Run 1441 was advanced to awaiting-review.
+  - Review run 1466 (ccrc-pwa-polish-pl10-rev1) was dispatched on route sonnet/high with workflow on, with three Opus lenses: getting around and layout, links read for security, and does-it-reproduce. It is asked for a recommendation on departure pl10-strip-all-accounts-stays, which I rule after the report. The brief is in `pl10-20261104/review/`.
+- 2026-11-04: S1 (15062, a reply to a stall-check) has all 12 steps built at 16006a205, unpushed. The whole-branch review is clean after one fix wave, and 15/15 mutants are red. The agent suite passed 959. The full server suite is running. Then one push, the PR, terminal CI and wave-done.
+- 2026-11-04: delegation PR5a (#2269) merged as 08e3b290a, which released claim 3438 on `store.ts` (15078). S2 was told: its one planned merge of main absorbs this, and leave 14950 for `shared/api.ts` stands.
+- 2026-11-04: the operator ticked items 33 and 34, both on the recommended option.
+  - 33: reload on the next move between screens, never in the first seconds back.
+  - 34: show the saved copy, marked not current until live data replaces it.
+  - Both items are in state "checking". They are confirmed only after the build is re-measured.
+  - D-7997 (C3, item 33) and D-7998 (C4, item 34) were issued, and the floor is now 7999.
+  - An Opus agent is drafting the speed spec's §2.5, §2.6, D15 and D16, and plan Tasks C3 and C4, in the ledger worktree on branch `ledger/desktop-polish-speed-items`.
+- **Review 1464 (C1) closed and ruled (2026-11-04).** It read a17d5d8e0 and found ten findings plus eight nits, none killed. The report is `review-1464-a17d5d8e.md`. The whole pwa and browser suites were green (only the known session-header red), all six mutants red, and linear-section passed 8/8 on the tip and on main, so the worker's 1 of 6 did not reproduce.
+  - Fix round 1 (15090):
+    - F1: the composer focus ring returned through unlayered sheet order; the browser test is extended to focused fields.
+    - F2: a lazy wrapper retries a failed chunk, and ScreenFallback gets Reload.
+    - F3: the open-socket nudge acts only once armed (departure nudge-acts-only-once-armed). The spec §2.3 correction goes on the speed-items ledger PR.
+    - F4: SessionScreen is preloaded after first paint, and the inspector doors are aria-disabled until a target publishes.
+    - F5: pins for the long-read limits.
+    - F6: a failed Composer commands read is not cached, and the note's table is completed.
+    - F8, F9, F10 and N1.
+  - No change: F7 (as specified) and N2-N8.
+  - S2 was told to spell runsPage's answer type once, as RunsPageAnswer.
+- 2026-11-04: the operator ticked item 36: this programme builds the cleanup fixes. four deviation numbers were issued for R1-R4. The cleanup plan names them when it lands, and the floor is now 8003. An Opus agent is drafting `docs/superpowers/specs/2026-11-04-cleanup-unwedge-design.md` and its plan on branch `ledger/desktop-polish-cleanup-fixes`. It is held to: no re-proof weakened, no destructive path a session can call, no fail-open, and neutral names only. Item 35, the two `git worktree add` commands, is still open, and it remains the immediate unwedge.
+- **Review 1466 (PL10) closed and ruled (2026-11-04).** It read a13a60772 and found 19 findings, with no blocker. Two majors were confirmed 3/3:
+  - F1: the bottom safe-area inset is missing under the phone bar;
+  - F2: the sticky strip sits under the status bar.
+  The report is `review-1466-a13a6077.md`. The suites were green apart from the known session-header reds. The force-push diff is the one line, and kept2 is main's (#2248).
+- Fix round 1 (15097) rulings:
+  - F2: "in reach" means below the status bar.
+  - F3: All accounts does not meet D25, so it is removed below 900.
+  - F4: the rail reads placeBadge.
+  - F5 and F6: the D28 refusal becomes a boundary through one shared decider. It decodes and trims, refuses the artifact host's public-artifacts shape, covers every note route that reaches linkRuns, and the console draws outside document links as text.
+  - F7 to F19 are fixed. F11 and F12 put the secrets directory and remove on one folded-programme chain.
+  - The macOS kept2 fix is folded in.
+  - PL10's claims had lapsed, so it re-claims. It has leave in C1's `shell.css` (claim 3476) for l.99-101, and C1 was told (15098).
+- 2026-11-04: PL10 (15099) was granted leave for its own lines only, and C1 and C2 were told.
+  - F18: the phone-bar word and count rules in `shell.css` (claim 3476, C1).
+  - F19: one case in `fleet-screen.test.tsx` (claim 3468, C2), which gains a bell assertion.
+- 2026-11-04: PL10's F3 (15103, 15104) also drops the no-lane accounts placeholder below 900px, since it is the same door to a bar place. It has leave for test cases only: refined-phone l.210 and l.256 (C1's claim), and fleet-screen l.412 and l.430 (C2's claim). C1 and C2 were told.
+- **Items 33 and 34 are drafted into the speed spec and plan (2026-11-04).** The draft is spec §2.5, §2.6, D15, D16 and §6 points 12-14, and plan Tasks C3 (D-7997) and C4 (D-7998). It also corrects §2.3 to match review 1464's F3 ruling: the nudge acts only once armed, and the abort wording is fixed.
+  - The coordinator's calls:
+    - The 15 s bound for "the first seconds back" is accepted.
+    - C4 does not build on C2's screenCache, because that cache is memory-only by rule. Instead it extends the cold-start owner `lib/offline.ts`, through the guarded storage port.
+    - C4 edits `stores/fleet.ts` with S2; whichever lands second merges main once.
+    - C4 keeps "a saved copy is not a fact" by using a separate `waitingSaved` field. Every "heard" reader is unchanged, and acts stay blocked until the live list lands.
+  - Landing: C3 starts at once, and shares no file with C1 or C2. C4 starts after PL10 merges. Its steps 1-3 build at once, and Step 4 (the screens) waits for PL11.
 
 ## R125: Delegation rows that read "running" are handed to the delegation broker (2026-11-01)
 
