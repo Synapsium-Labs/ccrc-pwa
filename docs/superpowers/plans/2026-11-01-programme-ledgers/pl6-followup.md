@@ -70,7 +70,7 @@ Measured on this branch at `3bdf77083` (`main` with #2206, #2236 and #2242 in it
 - **pl6f-read-masked**: the stored-secrets read is in `MASKED_GET_ROUTES`: it carries no value, but an asking item's title is text a session wrote. (Raised by the commit's automated security review.)
 - **pl6f-read-no-step-up**: the read is session-gated only; it reads no value.
 - **pl6f-five-words**: `secret-not-one-line` 400, `secret-not-stored` 404, `slot-busy` 503, `secrets-unreadable` 503, `remove-failed` 503, each with its status and a console sentence.
-- **pl6f-remove-word**: the store's remove answers `removed` or `nothing-stored`; `absent` beside `removed` is another context's vocabulary pair (`late-census.test.ts`).
+- **pl6f-remove-word**: the store's remove answers `removed` or `none`, and the read's states are `ok`, `unreadable` and `invalid`: `absent` beside `removed` is another context's vocabulary pair (`late-census.test.ts`), and a quoted kebab word in `server/src/coord` must be a declared code (`mail-routes.test.ts`).
 - **pl6f-slot-deadline**: `SLOT_WAIT_MS` is 30 s, a constant with a test override (`slotWaitMs`); the map entry stays until the running act finishes, so the deadline never lets two acts of one slot run together.
 - **pl6f-temps-on-write**: leftover temps are cleaned on the next write or Remove of their slot, not at server start.
 - **pl6f-unknown-readback-counts-stored**, **pl6f-register-throw-unregistered**, **pl6f-failed-record-removes-old**: A-4 as above.

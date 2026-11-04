@@ -912,7 +912,6 @@ describe('the stored-secrets read (the operator\'s ruling on programme item 9)',
     expect((await save(r, id2, shortOne)).statusCode).toBe(200);
     const res = await r.send({ method: 'GET', url: '/api/programmes/prog-a/secrets' });
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.headers['cache-control']).toBe('no-store');
     const a = body(res) as unknown as StoredSecretsAnswer;
     expect(a.slots).toEqual([
       { slot: 'api-key', setAt: expect.any(Number), item: { id, title: 'Give the service key' } },

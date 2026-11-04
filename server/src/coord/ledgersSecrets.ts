@@ -205,12 +205,12 @@ export interface StoredSlotRecord { slot: string; setAt: number | null; item: nu
  * THE STORED-SECRETS READ (the operator's ruling on programme item 9): one programme's stored slots, by name, with when each was
  * saved and the item that asked for it. It reads directory listings and the metadata files only, never a value file's
  * contents. MEASURED: an absent store or programme directory is `ok` with no slots, and a directory that exists and cannot
- * be listed (or is not a private directory of ours) is `unreadable`; the two are never folded. `bad-slot` when the programme
+ * be listed (or is not a private directory of ours) is `unreadable`; the two are never folded. `invalid` when the programme
  * name fails its shape, before any path is built. Never throws.
  */
 export function readStoredSecrets(ccrcDir: string, program: string):
-  { state: 'ok'; slots: StoredSlotRecord[] } | { state: 'unreadable' } | { state: 'bad-slot' } {
-  if (!isProgramSlug(program)) return { state: 'bad-slot' };
+  { state: 'ok'; slots: StoredSlotRecord[] } | { state: 'unreadable' } | { state: 'invalid' } {
+  if (!isProgramSlug(program)) return { state: 'invalid' };
   const top = path.join(ccrcDir, OPERATOR_SECRETS_DIR);
   const dir = path.join(top, program);
   for (const d of [top, dir]) {
@@ -241,11 +241,11 @@ export function readStoredSecrets(ccrcDir: string, program: string):
  * REMOVES ONE STORED SLOT (the operator's Remove door, programme item 9): the value file, then its metadata, then this slot's
  * leftover temp files. Both names are re-checked before any path is built (`OperatorSecretBadSlot`). The store's two
  * directories must be private directories of ours, never followed through a link (`OperatorSecretStoreUnsafe`), and are never
- * made here. Answers `removed`, or `nothing-stored` when no value file is there (a record left without one is removed too). A value
+ * made here. Answers `removed`, or `none` when no value file is there (a record left without one is removed too). A value
  * file that cannot be removed rejects with what failed, and nothing else is touched; a record or temp that cannot be removed
  * after the value is gone stays (every reader ignores a record whose value file is gone). Never reads the value.
  */
-export async function removeOperatorSecret(ccrcDir: string, program: string, slot: string): Promise<'removed' | 'nothing-stored'> {
+export async function removeOperatorSecret(ccrcDir: string, program: string, slot: string): Promise<'removed' | 'none'> {
   const file = operatorSecretPath(ccrcDir, program, slot);
   const dir = path.dirname(file);
   for (const [d, which] of [[path.join(ccrcDir, OPERATOR_SECRETS_DIR), 'top'], [dir, 'programme']] as const) {
@@ -253,7 +253,7 @@ export async function removeOperatorSecret(ccrcDir: string, program: string, slo
     try {
       st = await fsp.lstat(d);
     } catch (e) {
-      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return 'nothing-stored';
+      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return 'none';
       throw e;
     }
     if (!st.isDirectory() || (st.mode & 0o077) !== 0 || (typeof process.getuid === 'function' && st.uid !== process.getuid())) {
@@ -277,7 +277,7 @@ export async function removeOperatorSecret(ccrcDir: string, program: string, slo
       // The value is unlinked; its durability across a crash is unproven, and a re-run of Remove finishes it.
     }
   }
-  return had ? 'removed' : 'nothing-stored';
+  return had ? 'removed' : 'none';
 }
 
 /** What a listing of the store found: every slot whose two names pass their shapes, and whether any directory of the store

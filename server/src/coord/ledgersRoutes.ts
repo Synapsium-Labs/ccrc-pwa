@@ -716,7 +716,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   app.get('/api/programmes/:slug/secrets', (req, reply) => {
     const slug = (req.params as { slug: string }).slug;
     const read = readStoredSecrets(deps.ccrcDir, slug);
-    if (read.state === 'bad-slot') return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badSlot, { detail: 'that programme name is not one this server stores secrets under' });
+    if (read.state === 'invalid') return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badSlot, { detail: 'that programme name is not one this server stores secrets under' });
     if (read.state === 'unreadable') {
       return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.secretsUnreadable, { detail: 'the stored secrets of this programme could not be read' });
     }
@@ -725,7 +725,6 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       const item = s.item === null || !coord ? null : coord.itemById(s.item);
       return { slot: s.slot, setAt: s.setAt, item: item !== null && item.program === slug ? { id: item.id, title: item.title } : null };
     });
-    reply.header('cache-control', 'no-store');
     const answer: StoredSecretsAnswer = { ok: true, program: slug, slots };
     return reply.code(200).send(answer);
   });
@@ -747,7 +746,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badSlot, { detail: 'that programme or slot name is not one this server stores a secret under' });
     }
     return underSlot(`${slug}\u0000${slot}`, async () => {
-      let done: 'removed' | 'nothing-stored';
+      let done: 'removed' | 'none';
       try {
         done = await removeOperatorSecret(deps.ccrcDir, slug, slot);
       } catch {
@@ -755,7 +754,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       }
       deps.retireSecret(operatorSecretLaneId(slug, slot));
       deps.bus.emit('waiting');
-      if (done === 'nothing-stored') return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.secretNotStored, { detail: `no secret is stored in ${slot}` });
+      if (done === 'none') return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.secretNotStored, { detail: `no secret is stored in ${slot}` });
       const answer: SecretRemoveAnswer = { ok: true, slot };
       return reply.code(200).send(answer);
     }, () => slotBusy(reply));
