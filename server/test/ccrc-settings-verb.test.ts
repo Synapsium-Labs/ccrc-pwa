@@ -15,6 +15,7 @@ import path, { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { stubFn } from './ccdStub.js';
@@ -68,7 +69,7 @@ function envOf(home: string, extra: NodeJS.ProcessEnv = {}, stubs?: string): Nod
 
 /** `ccrc settings <args>` as an operator runs it. */
 function settings(home: string, args: string[] = [], extra: NodeJS.ProcessEnv = {}, stubs?: string): Result {
-  const r = spawnSync(BASH, [CCRC, 'settings', ...args], { env: envOf(home, extra, stubs), encoding: 'utf8', input: '', timeout: 60_000 });
+  const r = spawnSyncGroup(BASH, [CCRC, 'settings', ...args], { env: envOf(home, extra, stubs), encoding: 'utf8', input: '', timeout: 60_000 });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 const docOf = (r: Result): Doc => {
