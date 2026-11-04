@@ -549,7 +549,7 @@ describe('armSignals — a persistent arm that collects the run and always exits
   // The harness child disarms BEFORE it prints the run, never after: a SIGTERM that arrives between the print
   // and the disarm is caught by libuv and then dropped once the last listener goes, and the child hangs
   // (measured). Every child also has a 15 s kill-after watchdog, so a mutant that never exits reads as SIGKILL.
-  type Variant = 'wait' | 'slowexit' | 'throw' | 'disarm' | 'noarm';
+  type Variant = 'wait' | 'slowexit' | 'throw' | 'disarm' | 'noarm' | 'failed' | 'sameturn';
   interface Armed { child: ChildProcess; pid: number; run: string; exit: Promise<Exit> }
 
   async function armed(base: string, variant: Variant): Promise<Armed> {
@@ -564,6 +564,10 @@ describe('armSignals — a persistent arm that collects the run and always exits
         : '',
       variant === 'noarm' ? '' : 'const disarm = m.armSignals(o.run);',
       variant === 'disarm' ? 'disarm();' : '',
+      // T4h's children: the exit code a run has by the time the signal lands, and the one its own ending writes in the
+      // signal's turn. vitest does the second when a group signal kills a worker: a worker's death ends the run, exit 1.
+      variant === 'failed' ? 'process.exitCode = 1;' : '',
+      variant === 'sameturn' ? "process.on('SIGHUP', () => { process.exitCode = 1; });" : '',
       'console.log(JSON.stringify({ run: o.run }));',
       variant === 'throw' ? "setTimeout(() => { throw new Error('a crash of the main process'); }, 50);" : '',
       IDLE_SRC,
@@ -605,7 +609,7 @@ describe('armSignals — a persistent arm that collects the run and always exits
   it('T4d: a second SIGTERM after the first was handled (GNU timeout\'s shape) cannot take the default action', async () => {
     // GNU timeout signals its child, then the child's group, so main gets SIGTERM twice. Two sent back to back
     // merge into one pending signal, which a `once` arm passes (measured); the real window — the first handler's
-    // `rm` plus the 1 ms exit timer — is a few milliseconds on Linux, too narrow to hit reliably under load. So
+    // `rm` — is a few milliseconds on Linux, too narrow to hit reliably under load. So
     // this child defers its exit 3 s, and the second SIGTERM goes once the first has been handled: the run
     // renamed away, the child still running.
     const a = await armed(socketBase(), 'slowexit');
@@ -616,6 +620,15 @@ describe('armSignals — a persistent arm that collects the run and always exits
     expect(running(a.child), 'the child exited before the second signal, so this case proves nothing').toBe(true);
     process.kill(a.pid, 'SIGTERM');
     expect(await a.exit).toEqual({ code: 143, signal: null });
+    expect(clean(a.run)).toBe(true);
+  });
+
+  it.each(['failed', 'sameturn'] as const)('T4h (%s): the signal decides the exit code, whatever the run had or writes in the same turn', async (variant) => {
+    // Measured in CI: a group SIGHUP, the worker dead of it, and vitest's own ending inside the arm's old 1 ms exit
+    // timer: exit 1, and teardown blaming another actor for the run the arm had just collected.
+    const a = await armed(socketBase(), variant);
+    process.kill(a.pid, 'SIGHUP');
+    expect(await a.exit).toEqual({ code: 129, signal: null });
     expect(clean(a.run)).toBe(true);
   });
 
@@ -787,6 +800,18 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
 
   const runsIn = (base: string): string[] => readdirSync(base).filter((f) => f.startsWith(RUN_PREFIX));
 
+  /** A process's `ps` state letters, empty once it is gone. */
+  const psState = (pid: number): string =>
+    spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim();
+
+  async function until(ok: () => boolean, failure: string): Promise<void> {
+    const t0 = Date.now();
+    while (!ok()) {
+      if (Date.now() - t0 > 30_000) throw new Error(failure);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+
   /** A run killed the one way no arm can answer: SIGKILL to main, then its orphan workers. */
   async function killedRun(base: string): Promise<string> {
     const n = nested(base, 'sleep');
@@ -853,6 +878,29 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     expect(readdirSync(base), 'the base is not empty after the signal').toEqual([]);
   }, 120_000);
 
+  it.each([['SIGHUP', 129], ['SIGTERM', 143]] as const)('T5d2: %s to the group while main is busy still exits %i and leaves nothing, whichever of it and the worker\'s death main reads first', async (signal, code) => {
+    // What a loaded box does to T5d by chance, done on purpose: main is stopped, so the signal waits while the worker
+    // dies of it, and both reach main's loop together once it continues. A dead worker ends the run through vitest's own
+    // path (exit code 1, teardown), which the arm must beat, in either order. Measured under load with the arm's old exit
+    // timer and first-thing disarm, 20 runs each: SIGHUP exited 1 in 19, SIGTERM in 11, with nothing left behind.
+    const base = socketBase();
+    const n = nested(base, 'sleep', { FX_PLANT: '1' });
+    const rec = await firstRecord(n);
+    const planted = plantedDir(n, base);
+    expect(existsSync(planted), 'the plant never happened, so this case proves nothing').toBe(true);
+    process.kill(n.pid, 'SIGSTOP');
+    await until(() => psState(n.pid).startsWith('T'), 'main never stopped');
+    process.kill(-n.pid, signal);
+    // Nothing reaps the worker while main is stopped, so dead reads as a zombie here.
+    await until(() => psState(rec.pid).startsWith('Z'), `the worker did not die of the ${signal}`);
+    process.kill(n.pid, 'SIGCONT');
+    expect(await n.exit, n.output()).toEqual({ code, signal: null });
+    expect(n.output()).not.toContain('already gone at teardown');
+    expect(runsIn(base)).toEqual([]);
+    expect(existsSync(planted), 'vitest\'s tmpDir survived the signal').toBe(false);
+    expect(readdirSync(base), 'the base is not empty after the signal').toEqual([]);
+  }, 120_000);
+
   it('T5e: a dead run that is not quiet at setup is reaped at TEARDOWN once it is', async () => {
     // Margin-based, not timing-based: the only requirement is a nested startup under the 8 s window.
     const base = socketBase();
@@ -885,7 +933,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
 describe('setup() and its teardown, in a bare node child (T6)', () => {
   // The `globalSetup` contract without vitest: the child calls the default export under `TMPDIR=base`, does what
   // the case says between setup and teardown, runs the teardown, and prints what setup handed its workers.
-  type Between = 'nothing' | 'vanish' | 'block-rename';
+  type Between = 'nothing' | 'vanish' | 'block-rename' | 'signal';
   interface Seen { run?: string; refused?: string; stderr: string }
 
   async function setupChild(base: string, between: Between, extra: { [k: string]: string } = {}): Promise<Seen> {
@@ -900,6 +948,8 @@ describe('setup() and its teardown, in a bare node child (T6)', () => {
       between === 'vanish' ? 'rmSync(run, { recursive: true, force: true });' : '',
       // A non-empty `<run>.dead` makes teardown's rename fail (ENOTEMPTY or EEXIST), so the run keeps its name.
       between === 'block-rename' ? "mkdirSync(path.join(run + DEAD_SUFFIX, 'x'), { recursive: true });" : '',
+      // A signal caught just before teardown: libuv has it, this loop has not read it yet. Printed first: it never returns.
+      between === 'signal' ? "console.log(JSON.stringify({ run, refused })); process.kill(process.pid, 'SIGHUP');" : '',
       'await teardown();',
       'console.log(JSON.stringify({ run, refused }));',
     ].join('\n');
@@ -913,7 +963,7 @@ describe('setup() and its teardown, in a bare node child (T6)', () => {
     c.stdout!.setEncoding('utf8').on('data', (d: string) => { out += d; });
     c.stderr!.setEncoding('utf8').on('data', (d: string) => { stderr += d; });
     const exit = await new Promise<Exit>((r) => c.once('close', (code, signal) => r({ code, signal })));
-    expect(exit, stderr).toEqual({ code: 0, signal: null });
+    expect(exit, stderr).toEqual({ code: between === 'signal' ? 129 : 0, signal: null });
     return { ...(JSON.parse(out.trim().split('\n').pop()!) as { run?: string; refused?: string }), stderr };
   }
 
@@ -947,6 +997,14 @@ describe('setup() and its teardown, in a bare node child (T6)', () => {
     expect(seen.run).toBeTruthy();
     expect(existsSync(seen.run!)).toBe(false);
     expect(seen.stderr).not.toContain('ccrc-test:');
+  });
+
+  it('T6e: a signal caught as teardown starts still exits 128+n: teardown\'s disarm comes last and does not drop it', async () => {
+    const base = socketBase();
+    const seen = await setupChild(base, 'signal');
+    expect(seen.run).toBeTruthy();
+    expect(existsSync(seen.run!)).toBe(false);
+    expect(readdirSync(base)).toEqual([]);
   });
 
   it('T6d: a quiet window that is not a whole number of seconds warns and keeps the default — a fresh dead run survives', async () => {

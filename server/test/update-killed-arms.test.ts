@@ -421,6 +421,7 @@ describe('the bound against the REAL ccrc, through the real bounded localUpdateS
     }
   });
   const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const gcPidWritten = (file: string): boolean => existsSync(file) && readFileSync(file, 'utf8').trim() !== '';
   async function untilDead(pid: number): Promise<boolean> {
     for (let i = 0; i < 60 && alive(pid); i++) await new Promise((r) => setTimeout(r, 50));
     return !alive(pid);
@@ -471,13 +472,28 @@ describe('the bound against the REAL ccrc, through the real bounded localUpdateS
     writeFileSync(launcher, `#!/bin/sh\nsetsid sh -c 'echo $$ > "$HOME/gc-pid"; exec sleep 300' &\nexec sleep 300\n`);
     chmodSync(launcher, 0o755);
     stubs.push({ home: h.home, file: 'gc-pid' });
-    h.deps.runLocal = localUpdateSpawnFor(h.home, { env: { HOME: h.home, PATH: '/usr/bin:/bin' }, timeoutMs: 300 });
+    const gcPidFile = path.join(h.home, 'gc-pid');
+    const bounded = localUpdateSpawnFor(h.home, { env: { HOME: h.home, PATH: '/usr/bin:/bin' }, timeoutMs: 300 });
+    let detachedAt = 0;
+    h.deps.runLocal = (kind, tag) => {
+      // The bound kills the launcher's GROUP, so a grandchild that has not left it yet dies there too, the pipes close and
+      // the row reads arm A (run with a delayed setsid: released, not-queued). A fixed bound cannot wait for that, so this
+      // thread does: the spawn and its bound's timer are both armed by the time `bounded` returns, and no timer fires
+      // while the thread is held here. `gc-pid` is written after the setsid, so the kill always comes after the detach.
+      const answer = bounded(kind, tag);
+      const giveUp = Date.now() + 20_000;
+      while (!gcPidWritten(gcPidFile) && Date.now() < giveUp) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+      detachedAt = Date.now();
+      return answer;
+    };
     seedServer(h);
     const started = Date.now();
     const r = ran(await runDispatch(h.deps, T0 + 1000));
-    const elapsed = Date.now() - started;
-    expect(elapsed).toBeGreaterThanOrEqual(300);
-    expect(elapsed).toBeLessThan(300 + UPDATE_SPAWN_DRAIN_MS + 4000);
+    const answeredAt = Date.now();
+    expect(gcPidWritten(gcPidFile), 'the grandchild never left the group, so this case proves nothing').toBe(true);
+    expect(alive(Number(readFileSync(gcPidFile, 'utf8').trim())), 'the grandchild died with the group').toBe(true);
+    expect(answeredAt - started).toBeGreaterThanOrEqual(300);
+    expect(answeredAt - detachedAt).toBeLessThan(300 + UPDATE_SPAWN_DRAIN_MS + 4000);
     expect(r.outcome).toEqual({ nodeId: SERVER_ID, result: 'accepted', detail: armD('its stdout did not reach EOF') });
     expect(h.store.node(SERVER_ID)).toMatchObject({ updateState: 'pending', updateDetail: armD('its stdout did not reach EOF') });
   }, 30_000);
