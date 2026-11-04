@@ -579,6 +579,15 @@ describe('rungs 7 to 9 and the identity refusal — the RECLAIM ladder’s, aske
     } finally { fs.chmodSync(a, 0o755); }
   }, 60_000);
 
+  it('a detached HEAD on a gone branch is expirable, its token over branchState=absent (the #326 case)', () => {
+    const { wt, main } = makeArchived(h);
+    h.git(wt, 'checkout', '-q', '--detach');
+    h.git(main, 'branch', '-q', '-D', EXP_BRANCH);
+    const r = expireEvalOf(h);
+    expect(r.verdict, r.detail).toBe('expirable');
+    expect(r.token).toMatch(/^[0-9a-f]{64}$/);
+  }, 60_000);
+
   it('refuses no-worktree-record for a directory git does not record', () => {
     const { main } = makeArchived(h);
     fs.rmSync(path.join(main, '.git', 'worktrees', 'quiet-dune'), { recursive: true, force: true });

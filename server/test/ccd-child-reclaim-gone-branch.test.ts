@@ -19,10 +19,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
+import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
-import { eventsOf } from './lifecycleHelpers.js';
-import { CHILD_BRANCH, CHILD_ID, childReclaimVerb, evalOf, makeChild, type Child } from './childReclaimFixture.js';
+import { eventsOf, refusalsOf } from './lifecycleHelpers.js';
+import { CHILD_BRANCH, CHILD_ID, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, type Child } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
 import { parseChildReclaimResult } from '../src/coord/childReclaim.js';
 import { CHILD_RECLAIM_PRE_LOCK_TOKEN, childReclaimFailureLine } from '../src/childReclaimSweep.js';
@@ -78,6 +78,10 @@ function refUntouched(c: Child, how: Broken, sha: string): void {
     expect(fs.readFileSync(refFile(c), 'utf8'), 'the corrupt ref was left exactly as it was').toBe('not a sha\n');
   }
 }
+
+/** `ws-audit --reclaim`, the token's source, as the sweep reads it. */
+const reclaimAudit = (): Record<string, unknown> =>
+  JSON.parse(h.sh(`${CHILD_STUBS} _session_verdict() { echo gone; }; ${GH_STUB} cmd_ws_audit --session ${CHILD_ID} --reclaim`)) as Record<string, unknown>;
 
 /** `show-ref --exists`'s own answer, through the plain binary (never ccd). */
 const existsRc = (repo: string, pre = ''): string =>
@@ -397,6 +401,32 @@ describe.skipIf(!MODERN_GIT)('the pin and the tail', () => {
     expect(h.reg(CHILD_ID, 'uuid'), 'the row stands').not.toBeNull();
     expect(h.reg(CHILD_ID, 'reaping'), 'no breadcrumb').toBeNull();
     expect(unsupervised(), 'the unit was not touched').toEqual([]);
+  }, 90_000);
+
+  it('the pin keeps its own guard: a branch deleted in the window under a HEAD still symbolic to it is pin-failed, nothing pinned', () => {
+    const c = makeChild(h);
+    fs.appendFileSync(path.join(c.wt, 'f1.txt'), 'uncommitted\n');
+    const token = evalOf(h).token;                     // minted over branchState=present: HEAD stood on a branch that stood
+    const r = childReclaimVerb(h, token, { pre: IN_THE_WINDOW(`git -C "$1" update-ref -d "refs/heads/$2" >/dev/null 2>&1`) });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    expect(o.failed).toBe('pin-failed');
+    expect(o.detail).toMatch(new RegExp(`still has ${CHILD_BRANCH} checked out, but ${CHILD_BRANCH} is gone`));
+    expect(h.git(c.wt, 'symbolic-ref', 'HEAD'), 'the CONTROL: HEAD still names the branch').toBe(`refs/heads/${CHILD_BRANCH}`);
+    expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the CONTROL: the other actor did delete the branch').toBe('');
+    expect(fs.readFileSync(path.join(c.wt, 'f1.txt'), 'utf8'), 'the uncommitted work stands').toContain('uncommitted');
+    expect(atticShas(c), 'nothing was pinned').toEqual([]);
+    expect(h.reg(CHILD_ID, 'reaping'), 'no breadcrumb').toBeNull();
+    expect(unsupervised(), 'the unit was not touched').toEqual([]);
+  }, 90_000);
+
+  it('a detached HEAD on a gone branch passes ws-audit --reclaim with a token, and nothing is refused (the #326 case)', () => {
+    const c = makeChild(h);
+    goneBranch(c);
+    const a = reclaimAudit();
+    expect(a['verdict'], String(a['detail'])).toBe('reclaimable');
+    expect(a['token']).toMatch(/^[0-9a-f]{64}$/);
+    expect(refusalsOf(h.home), 'nothing refused, so nothing journaled').toEqual([]);
   }, 90_000);
 
   it('a branch that reappears after the tombstone is kept: branch-moved', () => {
