@@ -99,7 +99,7 @@ const isTempOf = (entry: string, slot: string): boolean =>
 
 /**
  * Removes what a crash between a temp file's open and its rename left of ONE slot (review 1389 A4): a 0600 copy of a value in
- * the programme directory, which nothing lists, masks or re-keys. Only this slot's own temps, and only on this slot's chain
+ * the programme directory, which nothing lists, masks or re-keys. Only this slot's own temps, and only on its programme's chain
  * (the route's `underSlot`), so another slot's write in flight is never touched. `slot` passed its shape before any path was
  * built. Never throws: a temp that cannot be removed stays, as before.
  */
@@ -220,6 +220,16 @@ export async function writeOperatorSecret(
   return meta;
 }
 
+/** The key of the chain a save or a Remove runs on in the routes (`underSlot`, `ledgersRoutes.ts`): the programme case-folded,
+ *  and nothing else. Every act of one programme's store, in any slot and any spelling, is one chain, so the two steps that change
+ *  the programme's directory never meet another act of it half done: a save's case check (`refuseCaseCollision`) and the
+ *  directory it makes (review 1440 F1, review 1466 F11: two slots were two chains, so `prog-a/slot-x` and `Prog-A/slot-y` made
+ *  two sibling directories), and a Remove's removal of the directory it empties (review 1466 F12: it could take the directory
+ *  from under another slot's save). Saves of different slots of one programme wait for each other; they are the operator's. */
+export function programmeChainKey(program: string): string {
+  return program.toLowerCase();
+}
+
 /**
  * Throws `OperatorSecretNameCollides` when the store holds a programme directory whose name case-folds to `program` but is
  * spelled differently, or, in the programme's own directory, a slot's value or record file whose slot case-folds to `slot` but
@@ -227,13 +237,6 @@ export async function writeOperatorSecret(
  * A directory that is absent holds nothing to collide with, and a listing that fails proves nothing and is left to the write,
  * which measures the directory itself (`privateDir`). The readers (`readStoredSecrets`, `removeOperatorSecret`) stay exact-name.
  */
-/** The key of one slot's chain in the routes (`underSlot`, `ledgersRoutes.ts`): the programme case-folded, then the slot. Two
- *  programmes whose slugs differ only by case are one chain, so the second save's case check (`refuseCaseCollision`) runs only
- *  after the first save has made its directory, and meets it (review 1440 F1). Slot slugs are lower case by their shape. */
-export function slotChainKey(program: string, slot: string): string {
-  return `${program.toLowerCase()}\u0000${slot}`;
-}
-
 function refuseCaseCollision(ccrcDir: string, program: string, slot: string): void {
   const list = (dir: string): string[] | null => { try { return readdirSync(dir); } catch { return null; } };
   const top = path.join(ccrcDir, OPERATOR_SECRETS_DIR);

@@ -39,7 +39,7 @@ import { insertSystemMailTx } from './rundefsTx.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
   OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
-  removeOperatorSecret, slotChainKey, sweepOperatorSecretTemps, writeOperatorSecret, type OperatorSecretMeta, type OperatorSecretState,
+  removeOperatorSecret, programmeChainKey, sweepOperatorSecretTemps, writeOperatorSecret, type OperatorSecretMeta, type OperatorSecretState,
   type RegisterSecret,
 } from './ledgersSecrets.js';
 
@@ -626,9 +626,10 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    * nothing; the write and the masker's registration (`writeOperatorSecret`); then the tick, with the answer
    * `secretAnswer` builds: set and the time, and the tail only when the masker catches the value (`masked`), NEVER the value.
    *
-   * ONE SAVE OF A SLOT AT A TIME (review 1389 F2): everything after the gate runs on the slot's own chain (`underSlot`), so a
-   * second save of the same slot starts only once the first has ticked, and then meets `not-open` before it writes anything.
-   * The file, its metadata and the masker's row are always one save's. A Remove of the slot rides the same chain. An act that
+   * ONE SAVE OF A SLOT AT A TIME (review 1389 F2): everything after the gate runs on its programme's chain (`underSlot`, keyed by
+   * `programmeChainKey`: every slot and spelling of the programme, review 1466 F11 and F12), so a second save of the same slot
+   * starts only once the first has ticked, and then meets `not-open` before it writes anything. The file, its metadata and the
+   * masker's row are always one save's. A Remove rides the same chain. An act that
    * waits past `SLOT_WAIT_MS` answers `slot-busy` and does nothing (review 1391 A-3).
    *
    * AFTER THE VALUE IS IN ITS SLOT, EVERY FAILURE IS ONE WORD (review 1389 F3): `stored-not-ticked`, whether the fsync or the
@@ -680,8 +681,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (id === null) return bad(reply, 'the item id is a positive integer');
     const first = coord.itemById(id);
     if (first === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
-    // The chain's key is the slot the item names; inside it every check is made again, on the item as it is then.
-    return underSlot(slotChainKey(first.program, first.secretSlot ?? ''), async () => {
+    // The chain's key is the programme the item names (`programmeChainKey`); inside it every check is made again, on the item as
+    // it is then.
+    return underSlot(programmeChainKey(first.program), async () => {
       const item = coord.itemById(id);
       if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
       if (item.kind !== 'secret') return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notSecretItem, { detail: `item ${id} does not ask for a secret` });
@@ -779,7 +781,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (!operatorSlotNamesValid(slug, slot)) {
       return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badSlot, { detail: 'that programme or slot name is not one this server stores a secret under' });
     }
-    return underSlot(slotChainKey(slug, slot), async () => {
+    return underSlot(programmeChainKey(slug), async () => {
       let done: 'removed' | 'none';
       try {
         done = await removeOperatorSecret(deps.ccrcDir, slug, slot);
