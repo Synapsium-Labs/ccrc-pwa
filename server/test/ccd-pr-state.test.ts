@@ -2396,6 +2396,37 @@ describe('the ledger across a branch reset', () => {
     expect(fs.readFileSync(elsewhere, 'utf8')).toBe('ws/not-a-registry-value');
   });
 
+  it('clears the number first: prbranch goes after it, so an interrupted clear never leaves a number with no branch', () => {
+    // The other half of the same rule. A DIRECTORY at the field's path makes `clear`
+    // fault at exactly this step: the number must already be gone.
+    const { wt } = bindOnResetB1(h);
+    const field = path.join(h.home, '.cc-sessions', `${ID}.prbranch`);
+    fs.rmSync(field);
+    fs.mkdirSync(field);
+    h.sh(`cd "${wt}" && git checkout -q -b ${B2}`);
+    h.sh(`_reg_set ${ID} branch ${B2}`);
+    h.ghRows([]);
+    h.run(`${GH_STUB} cmd_pr_state --session ${ID}`);
+    expect(h.reg(ID, 'prnumber'), 'the number outlived the clear of its branch').toBeNull();
+    expect(fs.statSync(field).isDirectory(), 'the fixture must survive the run').toBe(true);
+  });
+
+  it('a real ws-rename moves only .branch: the next sweep retires the PR placed on the old name', () => {
+    // The pr* family is keyed by id, so `ws-rename` has no list of them to keep in
+    // step, and `prbranch` has no second writer. A rename is one of the branch changes
+    // the spec names (§1.3): the row says the PR was on the old name.
+    const { wt } = bindOnResetB1(h);
+    const renamed = 'ws/renamed-since';
+    expect(line(h.sh(`${GH_STUB} cmd_ws_rename --session ${ID} --branch ${renamed}`)))
+      .toEqual({ renamed: ID, old: B1, new: renamed });
+    expect(h.git(wt, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe(renamed);
+    expect([h.reg(ID, 'branch'), h.reg(ID, 'prnumber'), h.reg(ID, 'prbranch')]).toEqual([renamed, '7', B1]);
+    h.ghRows([]);
+    h.sh(`${GH_STUB} cmd_pr_state --session ${ID}`);
+    expect(ledger()).toEqual([expect.objectContaining({ pr: 7, branch: renamed, prbranch: B1 })]);
+    expect(h.reg(ID, 'prbranch')).toBeNull();
+  });
+
   it('never lands a number whose prbranch did not: prbranch goes first, so a bound number is always a placed one', () => {
     // NARROW FIRST, WIDEN LAST. A number on disk without its branch would retire as
     // an unplaced row, and an unplaced row counts for every branch, so the order is

@@ -160,8 +160,9 @@ import {
 } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
- *  here rather than parsed twice: `coord/prhistory.ts` owns the reader. */
-/** `branch` is the branch at REPLACEMENT, the one the sweep was bound to when this row was written. `prbranch` is the
+ *  here rather than parsed twice: `coord/prhistory.ts` owns the reader.
+ *
+ *  `branch` is the branch at REPLACEMENT, the one the sweep was bound to when this row was written. `prbranch` is the
  *  branch the retired PR was on, recorded at bind (D-5941), and absent from a row written before ccd recorded it. The two
  *  differ across a reset, so only `prbranch` says whose PR a row is: `prRowCounts` (`rundefs.ts`) is the one rule. */
 export interface PrLineageEntry { pr: number; branch: string; prbranch?: string; phase: string; recordedAt: number }

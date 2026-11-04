@@ -178,11 +178,14 @@ describe('childSpent — a ledger row counts only for the branch its PR was on',
     expect(await verdict(harness())).toEqual({ kind: 'spent', pr: 5, source: 'prhistory', incarnation: 'unplaced' });
   });
 
-  it('an unnamed registry branch cannot match a placed row: the live rung answers, never the ledger', async () => {
+  it('an unnamed registry branch cannot match a placed row: the live rung answers, and it does not measure', async () => {
+    // Measured against the real verb: `pr-state --session` on an empty or absent
+    // `.branch` answers this id-only line, so a placed row with no branch to compare
+    // it to ends in `unmeasured`, which refuses a bind as `spent` did.
     put('prhistory', `${row(5, 10, BRANCH)}\n`);
     put('branch', '');
-    const h = harness(noPrOn(BRANCH));
-    expect(await verdict(h)).toEqual({ kind: 'unspent' });
+    const h = harness({ ran: true, code: 0, stderr: '', stdout: `${JSON.stringify({ id: ID, phase: 'unknown', reason: 'error' })}\n` });
+    expect(await verdict(h)).toEqual({ kind: 'unmeasured', detail: 'pr-state answered error' });
     expect(h.verbs).toContain('pr-state');
   });
 
