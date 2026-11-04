@@ -222,6 +222,37 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
     expect(code, 'the door draws no randomness from Math').not.toMatch(/\bMath\s*\.\s*random\b/);
   });
 
+  it('a request that reaches no probe handler gets one answer whether or not a run exists: a HEAD, a wrong-shaped path, dark or armed (refinement (f))', async () => {
+    for (const armed of [false, true]) {
+      const a = await openApp(armed);
+      const session = armed ? await login(a) : undefined;
+      const nonce = await openRun(a, session);
+      const base = `/api/reader-lab/probe/${nonce}`;
+      const probes = [
+        { method: 'HEAD', url: `${base}/cookie-image` }, { method: 'GET', url: `${base}/cookie-image/extra` },
+        { method: 'POST', url: `${base}/cookie-image/extra` }, { method: 'GET', url: base },
+        { method: 'HEAD', url: `${READER_LAB_RUNS_PATH}/${nonce}` },
+      ] as const;
+      const ask = async (cookie: string | undefined): Promise<string[]> => {
+        const out: string[] = [];
+        for (const p of probes) {
+          const res = await a.inject({ method: p.method, url: p.url, headers: headersOf(cookie) });
+          out.push(`${p.method} ${p.url} ${res.statusCode} ${res.body}`);
+        }
+        return out;
+      };
+      // Each answer is read with the run live, then again once it is closed: the same nonce, the same request, no run.
+      const live = [await ask(undefined), await ask(session)];
+      expect((await a.inject({ method: 'POST', url: `${READER_LAB_RUNS_PATH}/${nonce}/close`, headers: headersOf(session) })).statusCode).toBe(200);
+      const none = [await ask(undefined), await ask(session)];
+      expect(none, `armed ${armed}: a request that reaches no probe handler answers the same with no run open`).toEqual(live);
+      // CONTROL: the answers are real refusals, not the probe's 204, so equality is not vacuous.
+      expect(live.flat().every((l) => !l.includes(' 204 ')), `armed ${armed}`).toBe(true);
+      await a.close();
+      app = undefined;
+    }
+  });
+
   it('a HEAD to the probe is neither answered as a probe nor counted (refinement (f))', async () => {
     const a = await openApp(false);
     const nonce = await openRun(a);

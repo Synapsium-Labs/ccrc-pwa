@@ -177,10 +177,13 @@ import type { SessionStore } from './sessions.js';
  *     ever does is the thing measured, so a gated probe would count nothing. It is
  *     not a door into anything. Every request that reaches its handler gets the
  *     same `204`, with no body and the same headers, whatever the nonce, the run or
- *     the name; what Fastify refuses before any hook (a malformed percent-escape, an
- *     over-long name, a HEAD, a path of another shape) depends on the request's text
- *     alone, and a WebSocket upgrade that passes this gate is completed and closed,
- *     so none of it tells a run from none. The handler reads no body (Fastify
+ *     the name; what a request that reaches no probe handler gets (a malformed
+ *     percent-escape, an over-long name, a HEAD, a path of another shape: a 4xx from
+ *     Fastify on a dark box, this gate's 401 `no-session` on an armed one for a caller
+ *     with no session, since every `onRequest` hook still runs) depends on its method,
+ *     its path text and its cookie, never on whether a run exists, and a WebSocket
+ *     upgrade that passes this gate is completed and closed, so none of it tells a run
+ *     from none. The handler reads no body (Fastify
  *     buffers one up to a 1 KiB limit, and a refused one still answers `204`), sets
  *     no cookie and no CORS header, and changes nothing but the counters of a lab
  *     run that someone opened (a signed-in session on an armed box; anyone who
