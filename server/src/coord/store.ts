@@ -99,7 +99,7 @@ import type { RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
-import { REVIVABLE_PARK_ERRORS, REVIVE_SKIPPED_SUBJECT_HEADS } from './mailRevive.js';
+import { REVIVABLE_PARK_ERRORS, REVIVE_SKIPPED_SENDERS, REVIVE_SKIPPED_SUBJECT_HEADS } from './mailRevive.js';
 import {
   DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
@@ -1426,10 +1426,12 @@ const DELIBERATE_CANCEL_ERRORS_SQL =
  *  names as its parent (`revivedFrom`, migration 40) is not abandoned: its heir carries the attention now, and counts
  *  while it is outstanding as any queued mail does. Keyed on `revivedFrom`, never on `mailId`/`toId`:
  *  `repointCoordinatorMail` rewrites an heir's `toId` when a coordinator is displaced, and a clause keyed on the
- *  recipient would lose the repointed heir and count the parent again beside it. Read in one place,
- *  `ABANDONED_PARK_SQL` below (`AND NOT` it), which `reviveParkedDeliveries` composes, so the read's "retired by an
- *  heir" and the revive's "no heir yet" are one spelling and cannot drift. `d` is the caller's `mail_deliveries`
- *  alias; `h` is this fragment's own. Served by the partial index `mail_deliveries_by_revived`. */
+ *  recipient would lose the repointed heir and count the parent again beside it. Read in two places, both `AND NOT` it:
+ *  `ABANDONED_PARK_SQL` below, which `reviveParkedDeliveries` composes, so the read's "retired by an heir" and the
+ *  revive's "no heir yet" are one spelling and cannot drift; and `runHealth`'s `parked` count, which spells its own park
+ *  (it measures a closed run too, so `ABANDONED_PARK_SQL`'s open-run clause cannot serve it) and would otherwise go on
+ *  saying a revived mail was never received. `d` is the caller's `mail_deliveries` alias; `h` is this fragment's own.
+ *  Served by the partial index `mail_deliveries_by_revived`. */
 const HAS_HEIR_SQL = 'EXISTS (SELECT 1 FROM mail_deliveries h WHERE h.revivedFrom = d.id)';
 
 /** The ABANDONMENT half of the predicate below, lifted into its own name because
@@ -2500,7 +2502,11 @@ export class CoordStore {
    *     each field says what it is documented to say, and the outstanding half
    *     clears on the heir's ack. It is written down because the sentence an
    *     operator READS counts one message twice, and a walk that skipped this
-   *     reader would have shipped that surprise unannounced.
+   *     reader would have shipped that surprise unannounced. A REVIVE's heir is
+   *     the other half of that sentence and does not share it (D-5914): it names
+   *     its parent, the `parked` count below is `AND NOT HAS_HEIR_SQL`, so a
+   *     revived park moves `mailParked` 1 -> 0 as `mailOutstanding` goes 0 -> 1.
+   *     This arm's heir names no parent, and its count stays as written here.
    *   `hasOutstandingMail` — its slot cannot be swallowed, but NOT for the
    *     reason this walk first gave. That version said the slot is "keyed by
    *     SENDER" and then argued from `queueSystemMail`'s ADDRESSEE ("no call
@@ -2689,12 +2695,22 @@ export class CoordStore {
    *    recipient);
    *  - it is CURRENT: its mail was sent at or after its run's `dispatchedAt` (`m.at >= rr.dispatchedAt`, both the
    *    server's clock; a delivery row has no time of its own). A run never dispatched revives nothing;
-   *  - it is not a system nudge: its subject starts with none of `REVIVE_SKIPPED_SUBJECT_HEADS`;
+   *  - it is not a system notice: its sender is none of `REVIVE_SKIPPED_SENDERS` (the watcher's `operator` voice) and
+   *    its subject starts with none of `REVIVE_SKIPPED_SUBJECT_HEADS` (the done-claim answers among them);
    *  - a ROLE-addressed mail is revived only to the session that still holds the role on its run (D-7901): a
    *    coordinator report only to `rr.claimedBy`, a worker brief only to `rr.sessionId`. A displaced chair or a
    *    rebound worker that comes back is not the role any more; `requeueAbandonedMail` already handed the role's mail
    *    to its successor, and a revive to the corpse would deliver it twice;
+   *  - NO OTHER COPY of the mail is live or acked (every delivery of it reads `rejected`). The role bound alone does
+   *    not hold this: a chair displaced and reinstated IS the role again, while the mail it parked was re-queued to its
+   *    successor meanwhile. That copy is repointed back to it (a revive would queue a second delivery beside it) or was
+   *    acked (the role has read the message, and a revive would hand it the mail again). `requeueAbandonedMail`'s
+   *    `NOT EXISTS` is the outstanding half of the same rule; a mail has one addressee, so any recipient's ack answers;
    *  - its recipient is in `liveIds`, the ids the mail pass read live this tick (`coord/mailRevive.ts#revivable`).
+   *
+   * ONE heir per mail per sweep (`GROUP BY m.id`, the re-queue's own shape, the older park naming it): a chair's park
+   * and the re-queued copy that parked at it are two parks of one message, and the `NOT EXISTS` reads rows the same
+   * statement has not written yet. The newer park gets no heir and stays a park, as a re-queue's corpse does.
    *
    * One transaction, so a sweep racing another sees each parent with or without its heir, never half. Answers every
    * heir it queued, in parent-id order; `[]` when nothing qualified. Never `void`.
@@ -2704,18 +2720,20 @@ export class CoordStore {
     const heads = REVIVE_SKIPPED_SUBJECT_HEADS;
     return tx(this.db, () => {
       const rows = this.db.prepare(
-        `SELECT d.id AS deliveryId, d.toId AS toId, ${HEIR_SOURCE_COLUMNS} ` +
+        `SELECT MIN(d.id) AS deliveryId, d.toId AS toId, ${HEIR_SOURCE_COLUMNS} ` +
         'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
         'JOIN runs rr ON rr.id = m.runId ' +
         `WHERE ${ABANDONED_PARK_SQL} AND d.rejectCode = 'undeliverable' ` +
         `AND d.lastError IN (${placeholders(REVIVABLE_PARK_ERRORS.length)}) ` +
         'AND m.at >= rr.dispatchedAt ' +
+        `AND m.fromId NOT IN (${placeholders(REVIVE_SKIPPED_SENDERS.length)}) ` +
         `AND NOT (${heads.map(() => 'substr(m.subject, 1, length(?)) = ?').join(' OR ')}) ` +
         "AND (m.toId != 'coordinator' OR d.toId = rr.claimedBy) " +
         "AND (m.toId != 'worker' OR d.toId = rr.sessionId) " +
+        "AND NOT EXISTS (SELECT 1 FROM mail_deliveries x WHERE x.mailId = m.id AND x.state != 'rejected') " +
         `AND d.toId IN (${placeholders(liveIds.length)}) ` +
-        'ORDER BY d.id',
-      ).all(...REVIVABLE_PARK_ERRORS, ...heads.flatMap((h) => [h, h]), ...liveIds) as unknown as
+        'GROUP BY m.id ORDER BY MIN(d.id)',
+      ).all(...REVIVABLE_PARK_ERRORS, ...REVIVE_SKIPPED_SENDERS, ...heads.flatMap((h) => [h, h]), ...liveIds) as unknown as
         (HeirSource & { deliveryId: number; toId: string })[];
       return { revived: rows.map((r) => ({
         from: r.deliveryId, heir: this.queueHeir(r, r.toId, r.deliveryId), mailId: r.mailId, toId: r.toId,
@@ -5088,6 +5106,8 @@ export class CoordStore {
       `SUM(CASE WHEN d.state IN ${OUTSTANDING_STATES_SQL} THEN 1 ELSE 0 END) AS outstanding, ` +
       "SUM(CASE WHEN d.state = 'rejected' AND " +
       `COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
+      // D-5914: a revived park is not a message nobody received; its heir carries the count now (`HAS_HEIR_SQL`).
+      `AND NOT ${HAS_HEIR_SQL} ` +
       'THEN 1 ELSE 0 END) AS parked, ' +
       // D-5838: outstanding AND parked — alive, waiting on its recipient's box.
       `SUM(CASE WHEN d.state IN ${OUTSTANDING_STATES_SQL} AND d.parkedAt IS NOT NULL THEN 1 ELSE 0 END) AS parkedLive, ` +

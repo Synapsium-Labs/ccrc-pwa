@@ -6618,7 +6618,9 @@ export interface RunHealth {
    *  that has already been handled.
    *
    *  NOT the parked STATE below: this count is the older sense of the word, a
-   *  delivery the lane gave up on and rejected, and it stays exactly that. */
+   *  delivery the lane gave up on and rejected, and it stays exactly that. A park a
+   *  later delivery revives (D-5914) is not counted: its heir carries the message
+   *  now, in `mailOutstanding` until it is acked, so one message is one count. */
   readonly mailParked: number;
   /** Deliveries of this run's mail still OUTSTANDING and PARKED (D-5838,
    *  #754; a field of its own, not a second sense of `mailParked`, D-5839): the recipient is alive, its input box would not take the

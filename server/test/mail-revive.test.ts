@@ -14,7 +14,13 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, MAIL_REPLAY_CEILING_ERROR, MAIL_RUN_CLOSED_ERROR } from '../src/coord/store.js';
 import { MAIL_DISABLED_MARKER } from '../../shared/switches.js';
 import { parkExpiredError, parkNoticeSubject, sessionDeadError } from '../src/coord/delivery.js';
-import { REVIVABLE_PARK_ERRORS, REVIVE_SKIPPED_SUBJECT_HEADS, revivable } from '../src/coord/mailRevive.js';
+import { REVIVABLE_PARK_ERRORS, REVIVE_SKIPPED_SENDERS, REVIVE_SKIPPED_SUBJECT_HEADS, revivable } from '../src/coord/mailRevive.js';
+import { BRIEF_NOTICE_DETAIL, WAVE_BRIEF_SUBJECT, briefNotTakenSubject } from '../src/coord/briefwatch.js';
+import { DONE_CLAIM_ANSWER_SUBJECTS, doneRejectionMail } from '../src/coord/closeDecide.js';
+import { checksSubject, dequeuedSubject, mergedSubject } from '../src/coord/landing.js';
+import { queueLandingNotice, queueStallNotice, queueSystemMail } from '../src/coord/rundefsTx.js';
+import { DISPATCH_ABANDON_SUBJECT } from '../../shared/dispatch-abandon.js';
+import { checksRowDetail, mergingAtDetail } from '../../shared/landing.js';
 import { STALL_CHECK_PREFIX, STALL_REPORT_PREFIX } from '../src/coord/stall.js';
 import { DEAD_LIFECYCLES, type LifecycleInput } from '../../shared/api.js';
 import type { PushPayload } from '../src/push.js';
@@ -231,6 +237,141 @@ describe('reviveParkedDeliveries: what comes back', () => {
   });
 });
 
+describe('reviveParkedDeliveries: the server\'s own notices stay parked (the real writers, the real subjects)', () => {
+  const HEAD = 'a'.repeat(40);
+  const heirsFrom = (s: CoordStore, live: readonly string[] = [WORKER, COORD]): number[] =>
+    s.reviveParkedDeliveries(live).revived.map((r) => r.from);
+  const queued = (q: { queued: boolean; deliveryId?: number | undefined }): number => {
+    if (!q.queued || q.deliveryId === undefined) throw new Error('fixture: the notice was not queued');
+    return q.deliveryId;
+  };
+
+  it('nothing the watcher says for the operator comes back; the wave brief, in the coordinator voice, does', () => {
+    const s = store();
+    const runId = dispatchedRun(s);
+    for (const to of ['dispatched', 'working'] as const) expect(s.advance(runId, to, 'test').ok, to).toBe(true);
+    const run = { id: runId, program: 'prog-a', wave: 1, waveOf: 3 };
+    const operatorMail = (subject: string): number =>
+      queued(queueSystemMail(s, run, { fromId: 'operator', toId: COORD, runId, kind: 'status', subject, body: 'b' }));
+    const notices = [
+      queued(queueStallNotice(s, run, { detail: BRIEF_NOTICE_DETAIL, at: NOW, toId: COORD, kind: 'status',
+        subject: briefNotTakenSubject(WORKER, runId, 'held by the draft gate'), body: 'b' })),
+      operatorMail(DISPATCH_ABANDON_SUBJECT),
+      operatorMail(mergedSubject(42)),
+      operatorMail(dequeuedSubject(42, null)),
+    ];
+    const brief = queued(queueSystemMail(s, run, { fromId: 'coordinator', toId: WORKER, runId, kind: 'status',
+      subject: WAVE_BRIEF_SUBJECT, body: 'go' }));
+    for (const d of [...notices, brief]) park(s, d);
+    expect(heirsFrom(s)).toEqual([brief]);
+    expect(REVIVE_SKIPPED_SENDERS).toEqual(['operator']);
+  });
+
+  it('a checks notice on a run at merging does not come back as if new', () => {
+    const s = store();
+    const runId = dispatchedRun(s);
+    for (const to of ['dispatched', 'working', 'awaiting-review'] as const) expect(s.advance(runId, to, 'test').ok, to).toBe(true);
+    expect(s.advance(runId, 'merging', 'coordinator', mergingAtDetail(HEAD, 42, 'live')).ok).toBe(true);
+    const e = s.currentEpisode(runId)!.e;
+    const run = { id: runId, program: 'prog-a', wave: 1, waveOf: 3 };
+    const d = queued(queueLandingNotice(s, run, { detail: checksRowDetail(e, 0, 'red', 'b'.repeat(12)), at: NOW, episode: e,
+      toId: COORD, subject: checksSubject(42, e, 0, 'red', HEAD), body: 'b' }));
+    park(s, d);
+    expect(heirsFrom(s)).toEqual([]);
+  });
+
+  it('a done-claim answer, in the coordinator voice, does not come back: the claim it answered has moved on', () => {
+    const s = store();
+    const runId = dispatchedRun(s);
+    const run = { id: runId, program: 'prog-a', wave: 1, waveOf: 3 };
+    const answers = (['work', 'advance', 'review'] as const).flatMap((door) => [
+      doneRejectionMail(door, { code: 'stale-tip', detail: 'd' }),
+      doneRejectionMail(door, { code: 'lineage-unmeasured', detail: 'd' }),
+    ]);
+    expect(answers.map((a) => a.subject).sort()).toEqual([...DONE_CLAIM_ANSWER_SUBJECTS].sort());
+    for (const a of answers) {
+      park(s, queued(queueSystemMail(s, run, { fromId: 'coordinator', toId: WORKER, runId, kind: 'status', ...a })));
+    }
+    expect(heirsFrom(s)).toEqual([]);
+  });
+
+  it('a skipped head holds whoever the sender: a session quoting a stall check gets no revive either', () => {
+    const s = store();
+    const runId = dispatchedRun(s);
+    park(s, send(s, { runId, subject: `${STALL_CHECK_PREFIX} forwarded` }));
+    expect(heirsFrom(s)).toEqual([]);
+  });
+
+  it('the coordinator voice says the wave brief and the done-claim answers, and nothing else in server/src', () => {
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const f = path.join(dir, e.name);
+        if (e.isDirectory()) walk(f); else if (e.name.endsWith('.ts')) files.push(f);
+      }
+    };
+    walk(path.join(ccrcRoot, 'server/src'));
+    // A new notice in this voice would be revived unless it is named in `REVIVE_SKIPPED_SUBJECT_HEADS`; this reds first.
+    const said = files.flatMap((f) => [...readFileSync(f, 'utf8').matchAll(/fromId: 'coordinator',[^;]*?(subject: \w+|\.\.\.doneRejectionMail)/g)]
+      .map((m) => m[1]!));
+    expect(new Set(said)).toEqual(new Set(['subject: WAVE_BRIEF_SUBJECT', '...doneRejectionMail']));
+    expect(said).toHaveLength(4);
+  });
+});
+
+describe('reviveParkedDeliveries: one mail, one live copy per role (the dedupe beside the heir clause)', () => {
+  const queuedRows = (s: CoordStore, mailId: number) => deliveriesOf(s, mailId).filter((x) => x.state === 'queued');
+  /** A coordinator report parked at `COORD`, then the chair away to `HEIR_COORD`, whose re-queue is the copy answered. */
+  const handedOver = (s: CoordStore): { runId: number; parked: number; mailId: number; copy: number } => {
+    const runId = dispatchedRun(s);
+    const parked = send(s, { runId, toId: 'coordinator', fromId: WORKER }, COORD);
+    park(s, parked);
+    expect(s.reclaimProgram(runId, HEIR_COORD, NOW + 1, null)).toMatchObject({ ok: true });
+    const mailId = row(s, parked).mailId;
+    const live = queuedRows(s, mailId);
+    expect(live).toEqual([expect.objectContaining({ toId: HEIR_COORD, revivedFrom: null })]);
+    return { runId, parked, mailId, copy: live[0]!.id };
+  };
+
+  it('a chair that comes back to a copy repointed to it gets no second one', () => {
+    const s = store();
+    const { runId, mailId, copy } = handedOver(s);
+    expect(s.reclaimProgram(runId, COORD, NOW + 2, null)).toMatchObject({ ok: true });
+    expect(queuedRows(s, mailId).map((x) => [x.id, x.toId])).toEqual([[copy, COORD]]);
+    expect(s.reviveParkedDeliveries([COORD]).revived).toEqual([]);
+    expect(queuedRows(s, mailId).map((x) => x.id), 'one mail, two queued deliveries to one session').toEqual([copy]);
+  });
+
+  it('a chair that comes back after the role acked the copy gets nothing: the role has read it', () => {
+    const s = store();
+    const { runId, mailId, copy } = handedOver(s);
+    expect(s.markAcked(copy, NOW + 2)).toEqual({ ok: true, state: 'acked' });
+    expect(s.reclaimProgram(runId, COORD, NOW + 3, null)).toMatchObject({ ok: true });
+    expect(s.reviveParkedDeliveries([COORD]).revived).toEqual([]);
+    expect(queuedRows(s, mailId)).toEqual([]);
+  });
+
+  it('a copy that is delivered and not acked is live: it holds the revive too', () => {
+    const s = store();
+    const { runId, mailId, copy } = handedOver(s);
+    s.markDelivered(copy, NOW + 2);
+    expect(s.reclaimProgram(runId, COORD, NOW + 3, null)).toMatchObject({ ok: true });
+    expect(s.reviveParkedDeliveries([COORD]).revived).toEqual([]);
+    expect(deliveriesOf(s, mailId)).toHaveLength(2);
+  });
+
+  it('two parks of one mail to one chair revive once, in the one sweep, from the older', () => {
+    const s = store();
+    const { runId, parked, mailId, copy } = handedOver(s);
+    expect(s.reclaimProgram(runId, COORD, NOW + 2, null)).toMatchObject({ ok: true });
+    park(s, copy);   // the copy died at the chair too: no live copy now, and two parks of the one mail
+    const { revived } = s.reviveParkedDeliveries([COORD]);
+    expect(revived.map((r) => r.from)).toEqual([parked]);
+    expect(queuedRows(s, mailId).map((x) => x.id)).toEqual([revived[0]!.heir]);
+    expect(s.reviveParkedDeliveries([COORD]).revived, 'the second park came back behind the heir').toEqual([]);
+  });
+});
+
 describe('unreadMail counts a revived park once (the readers of ABANDONED_PARK_SQL)', () => {
   it('`unreadMail`: 1 before, 1 after the revive (the heir), 0 after the heir\'s ack', () => {
     const s = store();
@@ -296,6 +437,50 @@ describe('unreadMail counts a revived park once (the readers of ABANDONED_PARK_S
     expect(s.outstandingMailFor(HEIR_COORD).map((m) => m.deliveryId)).toEqual([heir]);
     expect(s.outstandingMailFor(COORD), 'the parent came back as a park beside its repointed heir').toEqual([]);
     expect(s.abandonedCount(COORD)).toBe(0);
+  });
+});
+
+describe('runHealth.mailParked retires a revived parent (it spells its own count, not ABANDONED_PARK_SQL)', () => {
+  const health = (s: CoordStore, runId: number) => {
+    const h = s.runHealth([runId], []).get(runId)!;
+    return [h.mailParked, h.mailOutstanding];
+  };
+
+  it('`[mailParked, mailOutstanding]`: [1,0] parked, [0,1] revived, [0,0] once the heir is acked', () => {
+    const s = store();
+    const runId = dispatchedRun(s);
+    const d = send(s, { runId });
+    park(s, d);
+    expect(health(s, runId)).toEqual([1, 0]);
+    const heir = s.reviveParkedDeliveries([WORKER]).revived[0]!.heir;
+    expect(health(s, runId), 'the run board still said a revived mail was never received').toEqual([0, 1]);
+    expect(s.markAcked(heir, NOW + 1)).toEqual({ ok: true, state: 'acked' });
+    expect(health(s, runId)).toEqual([0, 0]);
+    expect(unread(s, runId)).toBe(0);
+  });
+
+  it('a heir that parks twice reads 1 for the one message, and agrees with `unreadMail`', () => {
+    const s = store();
+    const runId = dispatchedRun(s);
+    const d = send(s, { runId });
+    park(s, d);
+    const first = s.reviveParkedDeliveries([WORKER]).revived[0]!.heir;
+    park(s, first);
+    const second = s.reviveParkedDeliveries([WORKER]).revived[0]!.heir;
+    park(s, second);
+    expect(health(s, runId)).toEqual([1, 0]);
+    expect(unread(s, runId)).toBe(1);
+  });
+
+  it('a park with no heir is unchanged: it counts while nothing carries it', () => {
+    const s = store();
+    const runId = dispatchedRun(s);
+    const a = send(s, { runId });
+    const b = send(s, { runId }, 'lane-a-elsewhere');
+    park(s, a);
+    park(s, b);
+    expect(s.reviveParkedDeliveries([WORKER]).revived.map((r) => r.from)).toEqual([a]);
+    expect(health(s, runId)).toEqual([1, 1]);
   });
 });
 
