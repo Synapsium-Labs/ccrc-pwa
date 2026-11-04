@@ -225,11 +225,18 @@ function listen(r: Rig): { raw: string[]; waiting: (pred: (f: WaitingFrame) => b
   };
 }
 
-/** Console output, captured whole (every argument of every level) while the flow runs. */
+/** Console output, captured whole (every argument of every level) while the flow runs, and anything written to the process's
+ *  own stdout or stderr directly, past the console (review 1426 F-J). */
 function captureConsole(): string[] {
   const lines: string[] = [];
   for (const level of ['log', 'info', 'warn', 'error', 'debug'] as const) {
     vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { lines.push(args.map((a) => (a instanceof Error ? `${a.message} ${a.stack ?? ''}` : typeof a === 'string' ? a : JSON.stringify(a))).join(' ')); });
+  }
+  for (const stream of [process.stdout, process.stderr]) {
+    vi.spyOn(stream, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+      lines.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+      return true;
+    }) as typeof stream.write);
   }
   return lines;
 }
@@ -361,6 +368,13 @@ describe('the leak scan (plan PL6 Step 1, spec §5: no secret value anywhere but
     const valueFile = operatorSecretPath(r.ccrcDir, 'prog-a', 'api-key');
     expect(walk(r.home), 'the scan reads the slot metadata').toContain(valueFile.replace(/\.secret$/, '.json'));
     expect(scan(r, value, { frames: sock.raw, out, valueFiles: [valueFile] })).toEqual([]);
+    // The scan's control for the process's own streams (review 1426 F-J): a direct write, past the console, is seen.
+    for (const stream of [process.stdout, process.stderr]) {
+      const at = out.length;
+      stream.write(`planted ${value}\n`);
+      expect(scan(r, value, { frames: [], out, valueFiles: [valueFile] }), stream === process.stdout ? 'stdout' : 'stderr').toContain(`console #${at}`);
+      out.length = at;
+    }
     const db = r.coord.db;
 
     // …and the one place it is: the slot's value file, 0600, in 0700 directories, holding exactly the value.
