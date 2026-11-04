@@ -421,10 +421,10 @@ describe('FleetScreen', () => {
     seed(store, { conn: 'open', sessions: [] });
 
     expect(screen.getByText('No sessions yet')).toBeInTheDocument();
-    // With a lane to show, the strip is a group of lane doors and the strip's door to /accounts is its All accounts
-    // button at the end (T2c, D-6329).
-    const all = await screen.findByRole('button', { name: 'All accounts' });
-    expect(all).toHaveAttribute('data-command', 'go-accounts');
+    // With a lane to show, the strip is a group of lane doors (T2c, D-6329): found by its lane card. jsdom is a phone here,
+    // where the bottom bar holds the Accounts place and the strip draws no All accounts (desktop-polish PL10, review 1466 F3).
+    await waitFor(() => expect(document.querySelector('.accounts-strip .account-gauge')).not.toBeNull());
+    expect(screen.queryByRole('button', { name: 'All accounts' })).toBeNull();
   });
 
   it('renders the accounts strip during the initial skeleton load, not just once sessions are known', () => {
@@ -432,7 +432,16 @@ describe('FleetScreen', () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     // untouched store: conn 'connecting', no sessions — same state as the
-    // skeleton test above.
+    // skeleton test above. jsdom is a phone here: the bottom bar's Accounts door is the door, so the strip draws no
+    // placeholder (desktop-polish PL10, review 1466 F3, the ruling on 15104); at the desk the placeholder is the door.
+    expect(screen.queryByRole('link', { name: 'account usage — open accounts' })).toBeNull();
+    cleanup();
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q.includes('min-width: 900px'), media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+    renderFleet(<FleetScreen store={makeStore()} />);
     expect(screen.getByRole('link', { name: 'account usage — open accounts' })).toBeInTheDocument();
   });
 
@@ -447,9 +456,20 @@ describe('FleetScreen', () => {
       const head = document.querySelector<HTMLElement>('.fleet-head-right')!;
       expect(within(head).queryByRole('button', { name: /^(Docs|Account|Mail)\b/ })).toBeNull();
       expect(head.querySelector('.docs-door, .accounts-door, .mail-badge')).toBeNull();
-      // The bell is drawn only where the browser offers push, which jsdom does not; Settings always is.
+      // Settings is always drawn.
       expect(within(head).getByRole('button', { name: /^Settings/ })).toBeInTheDocument();
     }
+    // The bell is drawn where the browser offers push (`pushSupported`), which jsdom does not: offered here, it stays in the
+    // head (review 1466 F19: the case's name says so).
+    cleanup();
+    vi.stubGlobal('PushManager', class {});
+    vi.stubGlobal('Notification', { permission: 'default' });
+    Object.defineProperty(navigator, 'serviceWorker', { value: { getRegistration: async () => undefined }, configurable: true });
+    onTestFinished(() => { vi.unstubAllGlobals(); delete (navigator as { serviceWorker?: unknown }).serviceWorker; });
+    const pushing = makeStore();
+    renderFleet(<FleetScreen store={pushing} />);
+    seed(pushing, { conn: 'open', sessions: [], fleetFrameSeen: true });
+    expect(within(document.querySelector<HTMLElement>('.fleet-head-right')!).getByRole('button', { name: /^Notifications (on|off)$/ })).toBeInTheDocument();
   });
 
   // The runs line says what it counts (T2d, D-6330): "N active" is the runs in `ACTIVE_RUN_STATES`, "N open" is what

@@ -207,7 +207,7 @@ describe("Refined's phone header (W2 Task S5)", () => {
     expect(published()).toBe('');
   });
 
-  it("the phone header shows the full strip: each lane's 5h and 7d rows, each card its lane's door, All accounts the go-accounts door", async () => {
+  it("the phone header shows the full strip: each lane's 5h and 7d rows, each card its lane's door, and no go-accounts door (PL10: the bar holds Accounts)", async () => {
     const lanes = [lane('lane-a', 30, 80), lane('lane-b', 12, null), lane('lane-c', null, 5), lane('lane-d', 1, 2), lane('lane-e', 3, 4)];
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
     atWidth(390);
@@ -215,7 +215,8 @@ describe("Refined's phone header (W2 Task S5)", () => {
     const strip = await within(head()).findByRole('group', { name: /^account usage, highest lane-a 80%/ });
     await within(strip).findByText('lane-a');
     expect(strip).toHaveClass('accounts-strip');
-    // The strip is no door itself: its cards are, and the end cell's All accounts is the `go-accounts` door.
+    // The strip is no door itself: its cards are. Below 900 the bottom bar holds the Accounts place, so the phone head draws no
+    // `go-accounts` door, All accounts included (desktop-polish PL10, review 1466 F3).
     expect(strip).not.toHaveAttribute('data-command');
     const cards = [...strip.querySelectorAll<HTMLElement>('.account-gauge')];
     expect(cards).toHaveLength(lanes.length);
@@ -228,16 +229,12 @@ describe("Refined's phone header (W2 Task S5)", () => {
     expect(windows(cards.find((c) => name(c) === 'lane-c')!)).toEqual(['7d']);
     // One readout of the lanes on the page: the full strip is the phone's.
     expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
-    // A card opens its lane; All accounts is a command door, which the layer navigates.
+    expect(within(head()).queryByRole('button', { name: 'All accounts' })).toBeNull();
+    expect(head().querySelector('[data-command="go-accounts"]')).toBeNull();
+    // A card opens its lane.
     fireEvent.click(cards.find((c) => name(c) === 'lane-b')!);
     expect(location.pathname).toBe('/accounts');
     expect(location.search).toBe('?lane=lane-b');
-    act(() => { navigate('/'); });
-    const all = await within(head()).findByRole('button', { name: 'All accounts' });
-    expect(all).toHaveAttribute('data-command', 'go-accounts');
-    fireEvent.click(all);
-    expect(location.pathname).toBe('/accounts');
-    expect(location.search).toBe('');
   });
 
   // The strip folds at every width (S5b, D-6530): four cards on a phone, whatever its width, and the control's words say
@@ -258,8 +255,8 @@ describe("Refined's phone header (W2 Task S5)", () => {
     expect(cardNames(strip)).toEqual(['lane-a', 'lane-f', 'lane-with-a-very-long-name-q', 'lane-e']);
     const more = within(strip).getByRole('button', { name: '+13 more · 1 sign-in expired · 1 rate-limited' });
     expect(more).toHaveAttribute('aria-expanded', 'false');
-    // The end cell holds the control, then All accounts: still one strip on the page.
-    expect(more.closest('.accounts-end')!.lastElementChild).toBe(within(strip).getByRole('button', { name: 'All accounts' }));
+    // The end cell holds the control alone (no All accounts below 900: PL10, review 1466 F3): still one strip on the page.
+    expect([...more.closest('.accounts-end')!.children]).toEqual([more]);
     expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
   });
 

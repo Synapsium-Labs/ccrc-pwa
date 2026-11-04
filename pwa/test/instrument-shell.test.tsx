@@ -736,6 +736,32 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     expect(window.location.pathname).toBe('/waiting');
   });
 
+  // Review 1466 F4 (desktop-polish PL10, fix round 1): the rail's badges are `placeBadge`'s, the one decision the phone bar and
+  // Refined's desk bar read, so the rail's Runs door counts the open runs that need the operator as theirs do.
+  it("the rail's Runs door says 'needs you' with the count the phone bar and Refined's tab show", () => {
+    stubAt(1280);
+    const sessions = waitingFleet(1);
+    const runs = [
+      { id: 1, state: 'working', closedAt: null, sessionId: 'ask-0', claimedBy: null },
+      { id: 2, state: 'working', closedAt: null, sessionId: 'held-child', claimedBy: null },
+    ] as unknown as RunSummary[];
+    act(() => useFleetStore.setState({ runs, runsFrameSeen: true }));
+    try {
+      mount('/', sessions);
+      const door = within(rail()).getByRole('button', { name: 'Runs, 1 needs you' });
+      expect(door).toHaveAttribute('data-command', 'go-runs');
+      expect(door.querySelector('.ins-rail-tip')?.textContent).toBe('Runs, 1 needs you');
+      expect(door.querySelector('.ins-rail-count')?.textContent).toBe('1');
+      cleanup();
+      act(() => { setSkin(REFINED); });
+      mount('/', sessions);
+      expect(screen.getByRole('button', { name: 'Runs, 1 needs you' })).toHaveAttribute('data-command', 'go-runs');
+    } finally {
+      act(() => { setSkin(INSTRUMENT); });
+      act(() => useFleetStore.setState({ runs: [], runsFrameSeen: false }));
+    }
+  });
+
   it('with nobody waiting on the operator the Inbox door draws no badge, however much mail is unread', () => {
     for (const width of [900, 1920]) {
       stubAt(width);

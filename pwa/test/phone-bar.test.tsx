@@ -21,7 +21,7 @@ vi.mock('../src/lib/push', () => ({
 const { App } = await import('../src/app');
 const { navigate } = await import('../src/lib/router');
 const { DESK_PLACES, PLACES, phoneBarShown } = await import('../src/lib/places');
-const { ROUTES } = await import('../src/lib/routes');
+const { ROUTES, topRouteOf } = await import('../src/lib/routes');
 const { RAIL_ITEMS } = await import('../src/skins/instrument/Rail');
 const { setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
@@ -78,6 +78,19 @@ describe('the one list of places', () => {
     }
     expect(phoneBarShown(`/s/${SESSION.id}`)).toBe(false);
   });
+
+  // Review 1466 F14 (fix round 1): a path outside the table is under no place, so no door says the page is there, whatever it
+  // starts with; a path the table routes is under the place it starts with, and a session under the fleet.
+  it('a path outside the table is under no place; one in the table is under its place', () => {
+    for (const path of ['/waiting/abc', '/runs/x', '/settings/a/b', '/docsx', '/nope', '/waiting/%E0%A4%A']) {
+      expect(topRouteOf(path)?.id ?? null, path).toBeNull();
+    }
+    const under: Array<[string, string]> = [
+      ['/waiting/1', 'waiting'], ['/settings/measure-highlighting', 'settings'], ['/docs/project-a/specs/a.md', 'docs'],
+      [`/s/${SESSION.id}`, 'fleet'], ['/runs', 'runs'], ['/', 'fleet'],
+    ];
+    for (const [path, id] of under) expect(topRouteOf(path)?.id ?? null, path).toBe(id);
+  });
 });
 
 for (const skin of [REFINED, INSTRUMENT] as const) {
@@ -117,24 +130,34 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
       expect(within(bar!).getByRole('button', { name: 'Inbox' })).toHaveAttribute('data-command', 'go-inbox');
     });
 
-    it('no door in a phone head duplicates a bar place (the ruling of 2026-11-04)', () => {
-      atWidth(390);
-      mount('/');
-      const head = document.querySelector<HTMLElement>('.shell-nav .ref-phone-head, .shell-nav .fleet-head');
-      expect(head, 'the phone head').not.toBeNull();
-      // Every door the head draws, by where it goes: a registry door by its command, a plain door by the route it names. The
-      // lane gauges (the accounts strip, with its All accounts control) are not a door to a place but the gauges, which the
-      // ruling keeps; the strip is the desk's too (slug pl10-strip-all-accounts-stays).
-      const places = new Set(PLACES.map((p) => p.id));
-      const outsideStrip = (el: Element): boolean => el.closest('.accounts-strip') === null;
-      const headDoors = [...head!.querySelectorAll<HTMLElement>('button')].filter(outsideStrip).map((b) => b.getAttribute('aria-label') ?? '');
-      const titles = PLACES.map((p) => ROUTES.find((r) => r.id === p.id)!.title);
-      for (const name of headDoors) {
-        for (const title of [...titles, 'Mail', 'Account']) expect(name.startsWith(title), `${skin}'s head door "${name}"`).toBe(false);
+    // The ruling of 2026-11-04 and review 1466 F3: a phone's chrome keeps no door to a place the bar holds. The lane cards are
+    // gauges (each opens its own lane) and are the only doors passed over; the strip's All accounts and its no-lane placeholder
+    // are doors to the Accounts place and are not drawn on a phone. The head is each skin's phone head and the accounts strip,
+    // wherever a skin puts it (Instrument's sits outside its `<header>`).
+    it('no door in a phone head duplicates a bar place, with no lane to show and with lanes (the ruling of 2026-11-04, review 1466 F3)', () => {
+      const lane = { wrapper: 'lane-a', five: 10, seven: 20, ts: null, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false };
+      for (const usage of [null, [lane]]) {
+        atWidth(390);
+        mount('/');
+        act(() => useFleetStore.setState({ usage }));
+        const heads = [...document.querySelectorAll<HTMLElement>('.shell-nav .ref-phone-head, .shell-nav .fleet-head, .shell-nav .accounts-strip')];
+        expect(heads.length, `${skin}: the phone head`).toBeGreaterThan(0);
+        const doorish = 'button, a, [role="link"], [data-command]';
+        const chrome = heads.flatMap((h) => [...(h.matches(doorish) ? [h] : []), ...h.querySelectorAll<HTMLElement>(doorish)])
+          .filter((el) => el.closest('.account-gauge') === null);
+        const titles = PLACES.map((p) => ROUTES.find((r) => r.id === p.id)!.title);
+        const places = new Set(PLACES.map((p) => p.id));
+        for (const el of chrome) {
+          const name = el.getAttribute('aria-label') ?? el.textContent ?? '';
+          for (const title of [...titles, 'Mail', 'Account', 'All accounts']) expect(name.startsWith(title), `${skin}, ${usage === null ? 'no lane' : 'a lane'}: "${name}"`).toBe(false);
+          const command = el.getAttribute('data-command');
+          if (command !== null) expect(places.has(command.replace(/^go-/, '')), `${skin}: ${command}`).toBe(false);
+        }
+        if (usage !== null) expect(document.querySelectorAll('.shell-nav .account-gauge').length, `${skin}: the lane gauges stay`).toBeGreaterThan(0);
+        expect(within(document.querySelector<HTMLElement>('.shell-nav')!).getByRole('button', { name: /^Settings/ })).toBeInTheDocument();
+        cleanup();
+        act(() => useFleetStore.setState({ usage: null }));
       }
-      const commands = [...head!.querySelectorAll('[data-command]')].filter(outsideStrip).map((d) => d.getAttribute('data-command')!);
-      for (const c of commands) expect(places.has(c.replace(/^go-/, '')), `${skin}'s head door ${c}`).toBe(false);
-      expect(within(head!).getByRole('button', { name: /^Settings/ })).toBeInTheDocument();
     });
 
     it('the place the page is on or under is current; a tap goes there', () => {

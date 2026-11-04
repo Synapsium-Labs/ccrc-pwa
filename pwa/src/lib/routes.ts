@@ -174,13 +174,13 @@ export function shellViewOf(path: string): 'fleet' | 'session' {
 /** The top route a path is on or under: `/settings/updates` is under Settings, `/docs/a/b` is Docs, a session is
  *  under Fleet (its breadcrumb reads "Fleet › …"). Null for a path outside the table and for a route that is no
  *  place's page (the digest). Read by the rail's current item, the phone's bottom bar and the breadcrumb (W2 Task S9,
- *  D-5472), so they never disagree about where a page sits. A path with a malformed escape is under no place, as
- *  `matchRoute` places it outside the table: the pane draws the placeholder, and no door says the page is there (review 1437
- *  F2). */
+ *  D-5472), so they never disagree about where a page sits. A path outside the table is under no place, whatever it starts
+ *  with (`/waiting/abc`, `/runs/x`), and so is one with a malformed escape, which `matchRoute` places outside it: the pane
+ *  draws the placeholder there, and no door says the page is there (review 1437 F2, review 1466 F14). */
 export function topRouteOf(path: string): Route | null {
   const at = matchRoute(path);
   if (at?.route.top === true) return at.route;
   if (at?.route.id === 'session') return ROUTES.find((r) => r.id === 'fleet') ?? null;
-  if (at === null && decodeParam(path) === undefined) return null;
+  if (at === null) return null;
   return ROUTES.find((r) => r.top && r.path !== null && r.path !== '/' && path.startsWith(`${r.path}/`)) ?? null;
 }
