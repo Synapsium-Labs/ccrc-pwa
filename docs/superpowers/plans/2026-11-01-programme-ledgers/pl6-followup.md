@@ -69,6 +69,10 @@ Measured on this branch at `3bdf77083` (`main` with #2206, #2236 and #2242 in it
 - **pl6f-meta-needs-value-file**: `readOperatorSecretMeta` answers nothing when the value file is gone, whatever record is left, so the item view's "Stored" follows the value file.
 - **pl6f-read-masked**: the stored-secrets read is in `MASKED_GET_ROUTES`: it carries no value, but an asking item's title is text a session wrote. (Raised by the commit's automated security review.)
 - **pl6f-read-no-step-up**: the read is session-gated only; it reads no value.
+- **pl6f-no-store-shared-hook**: both new doors answer `Cache-Control: no-store` on every answer, refusals included, from the
+  `onRequest` hook the PUT already takes (`credentialBodyRoute`, `accounts/gate.ts`): a quoted header name in
+  `server/src/coord` would be an undeclared kebab code to `mail-routes.test.ts`'s census, so the one spelling stays in the
+  account gate. (Raised by the commit's automated security review after a first fix dropped the header.)
 - **pl6f-five-words**: `secret-not-one-line` 400, `secret-not-stored` 404, `slot-busy` 503, `secrets-unreadable` 503, `remove-failed` 503, each with its status and a console sentence.
 - **pl6f-remove-word**: the store's remove answers `removed` or `none`, and the read's states are `ok`, `unreadable` and `invalid`: `absent` beside `removed` is another context's vocabulary pair (`late-census.test.ts`), and a quoted kebab word in `server/src/coord` must be a declared code (`mail-routes.test.ts`).
 - **pl6f-slot-deadline**: `SLOT_WAIT_MS` is 30 s, a constant with a test override (`slotWaitMs`); the map entry stays until the running act finishes, so the deadline never lets two acts of one slot run together.
@@ -93,7 +97,7 @@ Measured on this branch at `3bdf77083` (`main` with #2206, #2236 and #2242 in it
 
 ## Mutants
 
-Each is one exact edit of a saved copy, run on its named case, then restored from the copy with its sha256 checked; `git status --short` was empty after the round. All twenty went red.
+Each is one exact edit of a saved copy, run on its named case, then restored from the copy with its sha256 checked; `git status --short` was empty after the round. All twenty-one went red.
 
 | Mutant | Red on |
 |---|---|
@@ -117,6 +121,7 @@ Each is one exact edit of a saved copy, run on its named case, then restored fro
 | M17 the read not masked by the answer hook | the stored-secrets read goes through the answer masker |
 | M18 the record-write arm echoes the value | the metadata write fails; the directory fsync fails |
 | M19 the view-throws arm echoes the value | the answer's item view throws after the tick |
+| M20 the read answered without no-store | lists each stored slot by name; a slot whose record is missing (the refusal) |
 
 M18 and M19 are review 2 F4's survivors: green before this PR, red now that the scan is blind.
 

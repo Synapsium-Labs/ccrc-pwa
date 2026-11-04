@@ -643,6 +643,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       if (slotChains.get(key) === chain) slotChains.delete(key);
     }
   };
+  /** `Cache-Control: no-store` on every answer of the two stored-secret doors, refusals included, from `onRequest`: the hook
+   *  the secret's PUT already takes (`credentialBodyRoute`, `accounts/gate.ts`), so no second spelling of it lives here. */
+  const noStore = credentialBodyRoute(SECRET_BODY_LIMIT).onRequest;
   const slotBusy = (reply: FastifyReply) =>
     refuseRoute(reply, LEDGER_ROUTE_REFUSALS.slotBusy, { detail: 'an earlier save or removal of this secret has not finished; nothing was done, try again' });
   const storedNotTicked = (reply: FastifyReply, id: number) =>
@@ -713,7 +716,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    * programme name that fails its shape is `bad-slot`, before any path is built. Session-gated, no box token, no step-up: it
    * reads no value.
    */
-  app.get('/api/programmes/:slug/secrets', (req, reply) => {
+  app.get('/api/programmes/:slug/secrets', { onRequest: noStore }, (req, reply) => {
     const slug = (req.params as { slug: string }).slug;
     const read = readStoredSecrets(deps.ccrcDir, slug);
     if (read.state === 'invalid') return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badSlot, { detail: 'that programme name is not one this server stores secrets under' });
@@ -739,7 +742,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    * `remove-failed`, and nothing else changes. Every answer is a fixed word with a fixed detail; none carries the value, which
    * this door never reads.
    */
-  app.delete('/api/programmes/:slug/secrets/:slot', async (req, reply) => {
+  app.delete('/api/programmes/:slug/secrets/:slot', { onRequest: noStore }, async (req, reply) => {
     if (!deps.gate(req, reply, { cap: null, stepUp: true }).pass) return reply;
     const { slug, slot } = req.params as { slug: string; slot: string };
     if (!operatorSlotNamesValid(slug, slot)) {
