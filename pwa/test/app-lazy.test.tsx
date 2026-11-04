@@ -6,6 +6,7 @@ import type { MockInstance } from 'vitest';
 import type { ReactNode } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import postcss from 'postcss';
 import { act, cleanup, render, screen } from '@testing-library/react';
 
 /** The six, by module path as `app.tsx` names them. */
@@ -25,6 +26,14 @@ const EAGER = ['./screens/DocsScreen', './ledgers/ProgrammeScreen', './screens/M
 vi.mock('../src/screens/RunsScreen', () => ({ RunsScreen: (): ReactNode => <h1>runs (stand-in)</h1> }));
 vi.mock('../src/screens/AccountsScreen', () => {
   throw new Error('Failed to fetch dynamically imported module');
+});
+/** The Digest's chunk fails to load while `offline` holds, and loads once it is lifted (review 1464 F2). React retries
+ *  a failed render once by itself, so the failure is a state, not a count. */
+const digestLink = vi.hoisted(() => ({ offline: false, loads: 0 }));
+vi.mock('../src/screens/DigestScreen', () => {
+  digestLink.loads += 1;
+  if (digestLink.offline) throw new Error('Failed to fetch dynamically imported module');
+  return { DigestScreen: (): ReactNode => <h1>digest (stand-in)</h1> };
 });
 
 const APP = readFileSync(path.join(__dirname, '../src/app.tsx'), 'utf8');
@@ -49,6 +58,18 @@ describe('the entry does not carry the six screens', () => {
 
   it('the screens that stay eager are still static imports', () => {
     expect(EAGER.filter((s) => !staticImports(APP).includes(s))).toEqual([]);
+  });
+});
+
+describe('the loading line', () => {
+  // Review 1464 F9: the line reuses `.shell-placeholder-copy`, which once had a rule only inside the desktop media
+  // block, so a phone drew it as a bare paragraph.
+  it('is styled at every width: its class has a rule outside any @media block', () => {
+    const css = postcss.parse(readFileSync(path.join(__dirname, '../src/styles/shell.css'), 'utf8'));
+    const top: string[] = [];
+    css.walkRules((r) => { if (r.selector === '.shell-placeholder-copy' && r.parent?.type === 'root') top.push(r.toString()); });
+    expect(top).toHaveLength(1);
+    expect(top[0]).toContain('font-family: var(--family-mono)');
   });
 });
 
@@ -89,9 +110,27 @@ describe('a lazy route', { timeout: 30_000 }, () => {
     render(<App />);
     act(() => { navigate('/accounts'); });
     const pane = document.querySelector('.shell-detail') as HTMLElement;
-    expect(pane).toContainElement(await screen.findByText('This screen could not be shown.'));
+    expect(pane).toContainElement(await screen.findByText('This screen could not be loaded.'));
     expect(screen.getByRole('button', { name: 'Back to the fleet' })).toBeInTheDocument();
     expect(document.querySelector('.shell-nav'), 'the shell stays').not.toBeNull();
     expect(warn).toHaveBeenCalledWith('ccrc: render error in detail', expect.anything());
+    expect(screen.getByRole('button', { name: 'Reload' }), 'a chunk that failed to load offers Reload').toBeInTheDocument();
+  });
+
+  it('a chunk that failed is asked again on the next navigation, which draws the screen without a reload', async () => {
+    digestLink.offline = true;
+    digestLink.loads = 0;
+    const { App } = await import('../src/app');
+    const { navigate } = await import('../src/lib/router');
+    render(<App />);
+    act(() => { navigate('/digest'); });
+    expect(await screen.findByText('This screen could not be loaded.')).toBeInTheDocument();
+    const failedLoads = digestLink.loads;
+    expect(failedLoads).toBeGreaterThan(0);
+    digestLink.offline = false;
+    act(() => { navigate('/'); });
+    act(() => { navigate('/digest'); });
+    expect(await screen.findByRole('heading', { name: 'digest (stand-in)' })).toBeInTheDocument();
+    expect(digestLink.loads, 'the chunk was asked for again, in the same page').toBeGreaterThan(failedLoads);
   });
 });
