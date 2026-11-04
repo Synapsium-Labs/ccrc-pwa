@@ -19,6 +19,7 @@ import { SessionScreen } from '../src/screens/SessionScreen';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { TEST_ROSTER } from './rosterFixture';
+import { activity, frame } from './delegationFixture';
 
 // SessionScreen renders ChatList, and Virtuoso needs a real viewport jsdom
 // does not have — the same stand-in chat.test.tsx installs, for the reason
@@ -717,5 +718,36 @@ describe('a chat that had to look elsewhere says so', () => {
     } as Backlog);
     expect(screen.getByText("Can't find this session's transcript")).toBeInTheDocument();
     expect(screen.queryByText("Can't read the fleet host right now")).not.toBeInTheDocument();
+  });
+});
+
+// Delegation visibility (spec §9, "Header list"): the REAL screen's wiring, store to header. The session header counts
+// and lists every entry the open session started, attached (`placement: 'chip'`) and row-placed alike, and no other
+// session's (VIS-M11 narrows the screen's selection and must red this).
+describe('the session header lists every entry the session started (delegation visibility)', () => {
+  it('VIS-S1: one attached and one row-placed entry read "2 delegated", and the list holds both, in opening order', () => {
+    const id = 'project-a-worker';
+    const store = makeStore(id);
+    const fleet = makeFleet();
+    act(() => {
+      fleet.setState({
+        sessions: [fleetSession({ id, project: 'project-a', workspace: 'worker', workdir: '/w/project-a/worker' })],
+        delegation: frame({ activities: [
+          activity({ activityId: 'a1', parentId: id, placement: 'chip', displayName: 'map the tree' }),
+          activity({ activityId: 'a2', parentId: id, placement: 'row', displayName: 'read the plan', liveness: 'stale',
+            openedAt: '2026-10-26T10:01:00.000Z' }),
+          activity({ activityId: 'a3', parentId: 'coord-a', displayName: 'not this session' }),
+        ] }),
+      });
+    });
+    render(<SessionScreen id={id} store={store} fleet={fleet} />);
+    const details = screen.queryByRole('button', { name: 'Session details' });
+    if (details !== null && details.getAttribute('aria-expanded') === 'false') fireEvent.click(details);
+    const door = screen.getByRole('button', { name: '2 delegated' });
+    fireEvent.click(door);
+    const list = document.getElementById(door.getAttribute('aria-controls') ?? '');
+    if (list === null) throw new Error('aria-controls names no element');
+    const rows = [...list.querySelectorAll('.proj-work')].map((r) => [...r.querySelectorAll('.proj-work-part')].map((p) => p.textContent));
+    expect(rows).toEqual([['agent', 'map the tree', 'not confirmed'], ['agent', 'read the plan', 'stop not seen']]);
   });
 });
