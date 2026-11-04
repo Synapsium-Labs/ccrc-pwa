@@ -18,6 +18,7 @@ import { ToastHost } from '@ccrc/ui';
 import { ICONS } from '../../ui/src/icons/lucide';
 import { TEST_ROSTER } from './rosterFixture';
 import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
+import { clearScreenCache } from '../src/lib/screenCache';
 
 // foldState.ts persists to localStorage — clear it so one test's fold can
 // never leak into the next's initial (expanded) expectation. `resetAcks` for
@@ -3293,6 +3294,9 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     expect(exposed(), 'said to assistive tech once').toBe(1);
     expect(screen.getByText(/run different builds/i), 'and the skew arm no longer vouches for auto').toHaveTextContent('then run ccrc rollout');
     cleanup();
+    // The second half starts from a first visit with nothing kept: the first half's answer stays in the screen cache
+    // (console speed C2), and a remount would draw it as the last answer that landed.
+    clearScreenCache();
     vi.spyOn(api, 'updates').mockRejectedValue(new Error('offline'));
     renderFleet(<FleetScreen store={makeStore()} />);
     await until(() => expect(document.querySelector('.build-line')).not.toBeNull());
