@@ -60,7 +60,8 @@ class FakeSocket {
   onclose: ((ev: CloseEvent) => void) | null = null;
   onerror: ((ev: Event) => void) | null = null;
   onmessage: ((ev: MessageEvent) => void) | null = null;
-  constructor(readonly url: string) { FakeSocket.instances.push(this); }
+  readonly url: string;
+  constructor(url: string) { this.url = url; FakeSocket.instances.push(this); }
   close(): void { this.closed = true; }
   open(): void { this.onopen?.(new Event('open')); }
   message(data: unknown): void { this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent); }

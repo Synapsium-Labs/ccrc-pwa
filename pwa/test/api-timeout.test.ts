@@ -155,14 +155,14 @@ describe('ReadOpts reach the polled reads', () => {
 
 describe('runsPage, the archive page read', () => {
   it('asks for one page and reads nextBefore', async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ runs: [], nextBefore: 41 }), { status: 200 }));
+    const fetchImpl = vi.fn(async (_url: string) => new Response(JSON.stringify({ runs: [], nextBefore: 41 }), { status: 200 }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
     await expect(api.runsPage(50, 100)).resolves.toEqual({ runs: [], nextBefore: 41 });
     expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/runs?closed=1&limit=50&before=100');
   });
 
   it('the first page sends no before', async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ runs: [] }), { status: 200 }));
+    const fetchImpl = vi.fn(async (_url: string) => new Response(JSON.stringify({ runs: [] }), { status: 200 }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
     await expect(api.runsPage(50, null)).resolves.toEqual({ runs: [] });
     expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/runs?closed=1&limit=50');
