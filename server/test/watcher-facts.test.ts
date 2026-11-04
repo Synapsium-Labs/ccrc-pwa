@@ -1,10 +1,10 @@
 // The watcher publishes what it measured (console speed S1, Step 7): getters stamped with the listing time, and a
 // `row:<id>` event when a row's record or verdict changes. Each getter is null before the first listed tick and after
 // an unlistable one.
-import { describe, it, expect } from 'vitest';
-import { readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, vi } from 'vitest';
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { makeHarness, LIVE, STOPPED, ARCHIVED, pidOf } from './tickListingHarness.js';
+import { makeHarness, LIVE, STOPPED, ARCHIVED, CRASHED, pidOf } from './tickListingHarness.js';
 import type { FleetIO } from '../src/io.js';
 
 describe('the watcher publishes what it measured (console speed S1, Step 7)', () => {
@@ -30,6 +30,33 @@ describe('the watcher publishes what it measured (console speed S1, Step 7)', ()
     expect(h.watcher.currentProjectPoolsRead()?.read.listed).toBe(true);
   });
 
+  it('currentProjectPoolsRead keeps the last read, with its own listedAt, while the next tick\'s read is pending', async () => {
+    let hold: Promise<void> | null = null;
+    let release: () => void = () => {};
+    let asked = false;
+    const h = makeHarness({
+      wrapIO: (io): FleetIO => ({
+        ...io,
+        async readdir(p, ...r) { if (hold !== null && path.basename(p) === 'pools') { asked = true; await hold; } return io.readdir(p, ...r); },
+      }),
+    });
+    mkdirSync(path.join(h.reg, 'pools'), { recursive: true });
+    writeFileSync(path.join(h.reg, 'pools', LIVE[0]!), 'pool-a');
+    expect(h.watcher.currentProjectPoolsRead()).toBeNull();
+    await h.watcher.tick();
+    const first = h.watcher.currentProjectPoolsRead();
+    expect(first?.read.listed).toBe(true);
+    await new Promise((r) => setTimeout(r, 5));
+    hold = new Promise<void>((r) => { release = r; });
+    const tick2 = h.watcher.tick();
+    await vi.waitFor(() => { expect(asked).toBe(true); });
+    expect(h.watcher.currentProjectPoolsRead()).toEqual(first);
+    expect(h.watcher.currentLimits()!.listedAt).toBeGreaterThan(first!.listedAt);
+    release();
+    await tick2;
+    expect(h.watcher.currentProjectPoolsRead()!.listedAt).toBe(h.watcher.currentLimits()!.listedAt);
+  });
+
   it('currentRowFacts answers a copy with verdict and pid', async () => {
     const h = makeHarness();
     expect(h.watcher.currentRowFacts(LIVE[0]!)).toBeNull();
@@ -53,7 +80,7 @@ describe('the watcher publishes what it measured (console speed S1, Step 7)', ()
     const h = makeHarness();
     await h.watcher.tick();
     const seen: Array<{ id: string; listedAt: number }> = [];
-    for (const id of [...LIVE, ...STOPPED, ARCHIVED]) h.bus.on(`row:${id}`, (e: { listedAt: number }) => seen.push({ id, listedAt: e.listedAt }));
+    for (const id of [...LIVE, ...STOPPED, ARCHIVED, CRASHED]) h.bus.on(`row:${id}`, (e: { listedAt: number }) => seen.push({ id, listedAt: e.listedAt }));
     await h.watcher.tick();
     expect(seen).toEqual([]);
     writeFileSync(path.join(h.reg, `${LIVE[1]}.branch`), 'ws/changed');

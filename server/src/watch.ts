@@ -14,7 +14,7 @@ import { readLimits } from './limits.js';
 import { mapBounded } from './bounded.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
-  readProjectPools,
+  readProjectPools, type ProjectPoolsRead,
 } from './pools.js';
 import type { CcdResult, WatcherCoordPort } from './coord/ports.js';
 import { parseDialog } from './pane/dialog.js';
@@ -662,8 +662,8 @@ function failureDetail(res: CcdResult): string {
 
 export class FleetWatcher {
   private timer: NodeJS.Timeout | null = null;
-  private readonly frameLatch = changeLatch<string>();   // the `fleet` frame's byte-equality guard (was `lastJson`)
-  /** The fleet the last `fleet` broadcast carried — `lastJson`, unserialised. */
+  private readonly frameLatch = changeLatch<string>();   // the `fleet` frame's byte-equality guard
+  /** The fleet the last `fleet` broadcast carried — the JSON `frameLatch` last saw, unserialised. */
   private lastFleet: FleetSession[] | null = null;
   /** D-6436: whether the latest tick listed the registry, and when its read began; written by `tick()` alone. */
   private registryTick: { listed: boolean; at: number } | null = null;
@@ -1255,11 +1255,11 @@ export class FleetWatcher {
    *  off past a sweep is kept). IN MEMORY BY DESIGN, as
    *  `mailCooldown` is: a restart logs a still-held delivery once more. */
   private busyShadowLogged = new Set<number>();
-  /** `emitRuns`'s own byte-equality guard, the same idiom as `lastJson`
+  /** `emitRuns`'s own byte-equality guard, the same idiom as `frameLatch`
    *  above, over `RunSummary[]` instead of `FleetSession[]`. `null` (not
    *  `'[]'`) so the very first tick with a real `coord` always emits at
-   *  least once, even into an empty fleet — mirroring `lastJson`'s own
-   *  initial value. */
+   *  least once, even into an empty fleet — mirroring `frameLatch`'s own
+   *  first-key rule. */
   private lastRunsJson: string | null = null;
   /** D-7334: the stall watch's quiet time the last runs frame carried, for `/ws/fleet`'s frames (`currentStallQuietMs`).
    *  `null` until `emitRuns` first emits. */
@@ -2407,9 +2407,11 @@ export class FleetWatcher {
 
   /** What the latest LISTED tick measured, or null before the first and after an unlistable one (console speed S1). */
   private tickFacts: TickFacts | null = null;
+  /** The latest pools read with ITS tick's listing time: kept across ticks (a tick's read is slow and lands after its frame), cleared only by an unlistable tick. */
+  private poolsFact: { read: ProjectPoolsRead; listedAt: number } | null = null;
   private rowSigs = new Map<string, string>();
-  currentLimits(): { limits: TickFacts['limits']; listedAt: number } | null { const f = this.tickFacts; return f === null ? null : { limits: f.limits, listedAt: f.listedAt }; }
-  currentProjectPoolsRead(): { read: NonNullable<TickFacts['pools']>; listedAt: number } | null { const f = this.tickFacts; return f === null || f.pools === null ? null : { read: f.pools, listedAt: f.listedAt }; }
+  currentLimits(): { limits: TickFacts['limits']; listedAt: number } | null { const f = this.tickFacts; return f === null ? null : structuredClone({ limits: f.limits, listedAt: f.listedAt }); }
+  currentProjectPoolsRead(): { read: ProjectPoolsRead; listedAt: number } | null { return this.poolsFact === null ? null : structuredClone(this.poolsFact); }
   currentRowFacts(id: string): ReturnType<typeof rowFactsOf> { return this.tickFacts === null ? null : rowFactsOf(this.tickFacts, id); }
 
   /** The last measured project-pool sweep, or null if none has been taken yet
@@ -2556,12 +2558,12 @@ export class FleetWatcher {
         ?.catch(() => { /* one bad sweep must not kill the poll */ });
       this.noteDelegationRegistry(registryRead.listed);
       if (!registryRead.listed) {
-        this.tickFacts = null;                                          // every getter is null after an unlistable tick
-        await this.emitPools(null, listedAt);                                     // an unlistable registry: nobody may decide a pool, so `listed:false` reaches the wire now (free: no io)
+        this.tickFacts = null; this.poolsFact = null; // every getter is null after an unlistable tick
+        await this.emitPools(null, listedAt); // an unlistable registry: nobody may decide a pool, so `listed:false` reaches the wire now (free: no io)
         this.registryTick = { listed: false, at: listedAt };            // D-6436: `lastFleet` is kept, but not as a listing
         this.withdrawDelegation();                                      // wave 4: no lane runs below, so the frame is withdrawn here
         // Retain, don't erase, at fleet scale: `this.hookStates`/
-        // `this.taskProgress`/`this.prevStatus`/`this.lastJson` are all left
+        // `this.taskProgress`/`this.prevStatus`/`this.frameLatch` are all left
         // exactly as the prior successful tick set them. Nothing is broadcast
         // this tick — a stale-but-real fleet on the connected client's screen
         // is honest; an empty one is a lie. `registry.ts`'s own
@@ -2744,7 +2746,7 @@ export class FleetWatcher {
         this.lastFleet = sessions;
         this.bus.emit('fleet', sessions);
       }
-      this.tickFacts = { listedAt, limits, records: new Map(records.map((r) => [r.id, r])), listing: paneListing, panePids, pools: null };
+      this.tickFacts = { listedAt, limits, records: new Map(records.map((r) => [r.id, r])), listing: paneListing, panePids };
       const sigs = rowSignatures(records, paneListing, this.rowSigs);
       for (const id of changedRows(this.rowSigs, sigs)) this.bus.emit(`row:${id}`, { listedAt });
       this.rowSigs = sigs;
@@ -2905,29 +2907,15 @@ export class FleetWatcher {
       void this.sweepDelegation(sessions, records).catch(() => { /* one bad sweep must not kill the poll */ });
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
-        // C0.4: `connected` alone is not "this read was complete" — a
-        // wedged-yet-connected agent, a socket hiccup mid-sweep, or a handful of
-        // sessions timing out inside `readRegistry`'s 24-generation loop all
-        // still leave `fleetState.connected` true while `sessions` comes back
-        // short. Without a size check, THAT partial assembly overwrites the
-        // fuller last-known-good snapshot on disk — and `/api/fleet`
-        // (server.ts) serves exactly this file, unconditionally, as `stale:
-        // true` for the whole REST of a subsequent real outage. So a single bad
-        // tick during an otherwise-healthy stretch degrades every request after
-        // it, not just its own. Guard: never let a smaller (or empty) assembly
-        // clobber a fuller one already on disk — implementing the intent this
-        // class's own docstring already states above ("a stretch of
-        // empty/partial reads never clobbers the last known good snapshot").
-        //
-        // The snapshot decision (skip rules, shrink check against the in-memory last snapshot, write on change) lives in
-        // `persistFleetSnapshot` (fleetstate.ts), with the rationale that used to sit here.
+        // `connected` alone is not "this read was complete"; the snapshot decision and its rationale live in
+        // `persistFleetSnapshot` (fleetstate.ts).
         try {
           const outcome = await persistFleetSnapshot(this.snapshotWriter, sessions, () => this.deps.io.readdir(this.deps.cfg.registryDir), isRegistryId, json);
           const note = snapshotNotice({ degraded: this.snapshotWriteSkippedDegradedWarned, skipped: this.snapshotWriteSkippedWarned }, outcome);
           this.snapshotWriteSkippedDegradedWarned = note.latches.degraded;
           this.snapshotWriteSkippedWarned = note.latches.skipped;
           if (note.warn !== null) console.warn(note.warn);
-        } catch { /* best-effort cache — never blocks the poll */ }
+        } catch { this.snapshotWriteSkippedDegradedWarned = false; /* best-effort cache — never blocks the poll; main's latch reset ran before the load/save */ }
       }
       // Independent of the `fleet` diff below: runs change on a different
       // clock from sessions, and an unchanged session snapshot must not
@@ -3076,7 +3064,7 @@ export class FleetWatcher {
       readProjectPools(this.deps.io, this.deps.cfg, names, budgetMs),
       readObservedEpochFromRegistry(this.deps.io, this.deps.cfg, budgetMs),
     ]);
-    if (this.tickFacts !== null && this.tickFacts.listedAt === listedAt) this.tickFacts.pools = read;   // published by `currentProjectPoolsRead`
+    if (names !== null) this.poolsFact = { read, listedAt };   // published by `currentProjectPoolsRead`; an unlistable tick clears it instead
     // T9-R2: the epoch/observedEpoch producer, the SAME two reads `/api/fleet`
     // (server.ts) makes for its own `poolsWire` call — `readPoolEpoch`
     // (`pools.ts`) leaves `epoch` off the wire whether `deps.coord` is

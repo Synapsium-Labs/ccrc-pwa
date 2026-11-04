@@ -434,6 +434,21 @@ export type SnapshotOutcome =
 export interface SnapshotLatches { degraded: boolean; skipped: boolean }
 
 // The rationale below moved here with the decision from `FleetWatcher.tick` (unchanged text):
+// C0.4: `connected` alone is not "this read was complete" — a
+// wedged-yet-connected agent, a socket hiccup mid-sweep, or a handful of
+// sessions timing out inside `readRegistry`'s 24-generation loop all
+// still leave `fleetState.connected` true while `sessions` comes back
+// short. Without a size check, THAT partial assembly overwrites the
+// fuller last-known-good snapshot on disk — and `/api/fleet`
+// (server.ts) serves exactly this file, unconditionally, as `stale:
+// true` for the whole REST of a subsequent real outage. So a single bad
+// tick during an otherwise-healthy stretch degrades every request after
+// it, not just its own. Guard: never let a smaller (or empty) assembly
+// clobber a fuller one already on disk — implementing the intent this
+// class's own docstring already states above ("a stretch of
+// empty/partial reads never clobbers the last known good snapshot").
+//
+//
 // C0.4-FOLLOWUP (blocking review findings 1/2): a bare length
 // comparison cannot tell "this tick's read was partial" apart from
 // "the fleet is genuinely smaller now" — and the second one is the
@@ -505,8 +520,6 @@ export async function persistFleetSnapshot(
     const surviving = new Set(sessions.map((s) => s.id));
     const missingIds = prior.sessions.map((s) => s.id).filter((id) => !surviving.has(id));
     const names = await listRegistry();
-    // Spec §2.3: a REFUSED id is never assembled, so a snapshot an older build wrote may still carry it while its `.uuid`
-    // stays listed; its absence is not a partial read and never heals, so it counts as purged.
     const allGenuinelyPurged = names !== null && missingIds.every((id) => !isRegistryId(id) || !names.includes(`${id}.uuid`));
     if (!allGenuinelyPurged) {
       writer.skipped();

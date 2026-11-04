@@ -7,8 +7,7 @@
  */
 import { verdictFromListing, type PaneListing, type SessionVerdict } from './exec.js';
 import type { SessionRecord } from './registry.js';
-import type { readLimits } from './limits.js';
-import type { ProjectPoolsRead } from './pools.js';
+import type { AccountLimits } from './limits.js';
 import type { SessionUsage } from '../../shared/api.js';
 import { USAGE_FRESH_S } from './usage.js';
 
@@ -45,15 +44,13 @@ export function rejectedListing(at: number, err: unknown): PaneListing {
 }
 
 /** What one listed tick measured, as the watcher publishes it (`currentLimits`, `currentProjectPoolsRead`,
- *  `currentRowFacts`): all stamped with `listedAt`, when the tick's listing began. `pools` is null until this tick's pools
- *  read returns, never the previous tick's value under this tick's stamp. */
+ *  `currentRowFacts`): all stamped with `listedAt`, when the tick's listing began. */
 export interface TickFacts {
   listedAt: number;
-  limits: Awaited<ReturnType<typeof readLimits>>;
+  limits: Record<string, AccountLimits>;
   records: ReadonlyMap<string, SessionRecord>;
   listing: PaneListing;
   panePids: ReadonlyMap<string, number | null>;
-  pools: ProjectPoolsRead | null;
 }
 
 /** One row's facts, a copy. On a tick whose listing failed no verdict was measured by the tick (assembleFleet asked each
