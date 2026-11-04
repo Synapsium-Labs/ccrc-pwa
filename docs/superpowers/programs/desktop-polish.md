@@ -2402,6 +2402,111 @@ The regions to avoid were listed. 1312's operator-approved CLAUDE.md amendments 
 
 **Ledger PR #2250 opened (2026-11-04).** It defines D-7926 in the programme-ledgers plan's Deviations found and carries the receipts through run 1410's first review dispatch. deviation-refs is 31/31 on the branch, and the private-name scan of both files and the body is clean. It lands through the merge queue with `--match-head-commit` once its required checks are green.
 
+**#2250 MERGED (2026-11-04T04:39:40Z, 63acf9a78).** D-7926 is now defined on main. The first CI run went red because two receipts quoted worker placeholders literally, which `dtbd.test.ts` (and ci-shards' nested run of it) reads as a placeholder landing. The receipts now name the form, the placeholder `D-TBD-<slug>`, and its slug, and the second run was green. It was queued with `--match-head-commit 1ba275032`.
+
+**Review 1416 rulings: fix round 1 for run 1410 (14621, 2026-11-04).** Review-done 14620 reports on tip 5d1e0e1cf. Review run 1416 was advanced to working, then closed with `{reviewedTip, report}`. The report was copied to `review-1416-5d1e0e1c.md` in the info directory. It found no blocker and no major issue. It found seven minors, none killed by the refuters, and eleven advisories. Every suite, the whole browser suite (only the two known session-header reds) and 14 of the worker's mutants plus four of the reviewer's own were green or red as named. Because this is a security PR, the security minors are fixed now, not carried.
+- **Fix:**
+  - F1: a faulted re-save must add the new row beside the old ones, so no value on disk is ever unmasked.
+  - F2: a per-entry read failure answers secrets-unreadable, never "no slots".
+  - F4: a stored slot with no readable record is a distinct state, never null.
+  - F5: styles for the new rows.
+  - F7: the leak scan also checks a 12-character window of the value, in plain, base64 and hex.
+  - A-R2: more paths under the scan. A-R4: the EGRESS set is pinned.
+  - A-R5, ruled: "one line" refuses VT, FF, NEL, LS and PS as well as CR and LF.
+  - A-S4, A-S5 and A-S6: the masker's retired mark, the failed SELECT, and a store-wide temp sweep at start.
+  - Wording: A-F4, A-F5, and F6's note sentence.
+- **F6, ruled:** no new hook arm. The account arm is an accident guard by contract, and the delete forms that do not spell the store path are recorded as residuals beside review 1's A5. Item 9's how named the arm as my own elaboration, not the operator's words, so this ruling is mine.
+- **F3, ruled residual:** case-colliding programme slugs on a case-insensitive store predate this PR. It goes to the carry list.
+- **A-F6:** 14581 accepted. Whichever branch lands second recounts.
+- **A-R3:** recorded.
+
+Run 1410 was advanced back to working with the verified fingerprint.
+
+**Run 1410's fix round 1 verified; review 2 (1418) dispatched (2026-11-04).** Wave-done 14635 claims tip 3d0ca5ebf on #2248. Re-measured: the remote tip equals the PR head; the PR is open, not a draft and mergeable; merge-tree against main is clean. The new tip fast-forwards from 5d1e0e1cf with three commits (14 files, +636/-102) and no merge. ci run 41780203840 and codeql run 41780203816 succeeded. The only red is the external review-gate app. The browser legs SKIPPED their Test step. The worker reports 38 mutants, all red. M16 is retired by A-S4's reversal and replaced by M26. The worker claimed ledgers.css as claim 3396. Run 1410 was advanced to awaiting-review. Review run 1418 was opened and dispatched (slug polish-pl6f-rev2). It reads only `5d1e0e1cf..3d0ca5ebf`, with the same panel shape, and takes the browser files alone, with screenshots at 390 and 1280.
+
+**Review 1418 rulings: fix round 2 for run 1410 (14648, 2026-11-04).** Review-done 14647 reports on tip 3d0ca5ebf. Review run 1418 was advanced to working, then closed with `{reviewedTip, report}`. The report was copied to `review-1418-3d0ca5eb.md`. It found no blocker and no major issue, and three minors, none killed.
+- **F1, fix:** a re-key that reads an operator lane holding a current row adds the row beside it and drops the lane's other-generation rows. This closes the order rotate, faulted re-save, then restart.
+- **F2, fix:** the item reader answers null only on ENOENT. An unreadable slot is a distinct state, and privateDir requires the owner's search bit.
+- **F3, fix:** three sentences in the note.
+  - (c) records that the no-new-arm ruling is the coordinator's (14621). The hook arm was my brief's elaboration of item 9, not the operator's ask, which was to keep stored secrets and give them a Remove control. So the ruling stands without an operator item.
+- **Advisories:** A1, A2, A3 (pins for O1, O2 and O4, and the class assertions), A4 and A6 are done here.
+- **A5, ruled no change:** U+001C to U+001E are separators, not line ends.
+
+Run 1410 was advanced back to working with the verified fingerprint.
+
+**Consent to run 1422 under claim 3387 (14656, answered 14659, 2026-11-04).** The delegation broker's wave 5 PR1 asked to edit ccd/session-hook.sh, ccd/install-session-hooks.sh and CLAUDE.md under run 1410's claim, to add its new `ws-lease-mark` verb beside ws-reclaim. Measured at 3d0ca5ebf: #2248 does not touch either hook file, and its only CLAUDE.md hunks are lines 547-553. Granted in disjoint hunks, off those lines. Standing terms: the second to land merges main, and nobody rebases.
+
+**Consent to run 1409 under claims 3387 and 3389 (14676, 2026-11-04).** Box-settings wave 2 asked for leave on two parts of ccd/ccrc-doctor-checks, the carry-copies check and `_check_box-settings` with its header, and on the box-settings describe of ccrc-doctor-codex.test.ts. Measured: #2248's doctor hunks end at `_check_snapshot-posture`'s pass line (main 11142), and its test hunks stay inside the A11b describe (6328-6581). Granted for the named hunks. The terms: snapshot-posture, its closing brace and the blank line after it stay untouched; the second branch to land merges main once; and a conflict goes to the two coordinators.
+
+**Run 1410's fix round 2 verified; review 3 (1426) dispatched (2026-11-04).** Wave-done 14688 claims tip 0c34b7807 on #2248. Re-measured:
+- the remote tip equals the PR head; the PR is open, not a draft and mergeable; merge-tree against main is clean;
+- the tip fast-forwards from 3d0ca5ebf with two commits (14 files, +338/-61);
+- ci run 41790718324 succeeded on attempt 2. Attempt 1 failed one sessionws.test.ts case that the PR does not import, and the worker re-ran the failed jobs on the same tip;
+- codeql run 41790718211 succeeded;
+- the only red is the external review-gate app.
+
+The wave-done says the browser shards "ran green", but both legs SKIPPED their Test step. The review brief says so, and makes the reviewer's run the browser evidence. Run 1410 was advanced to awaiting-review. Review run 1426 was opened and dispatched (slug polish-pl6f-rev3). It reads only `3d0ca5ebf..0c34b7807`, with the same panel shape.
+
+**Review 1426: run 1410 ACCEPTED at 0c34b7807 (14696, 2026-11-04).** Review-done 14695 reports on tip 0c34b7807. Review run 1426 was advanced to working, then closed with `{reviewedTip, report}`. The report was copied to `review-1426-0c34b780.md`.
+
+What the review found:
+- No blocker and no major issue.
+- Three minors and seven advisories, none killed. All are wording, comments, one log line and test depth.
+- Ruled items 1-8 check out.
+- Every listed suite and type check, the three browser files (run by the reviewer; CI skipped them) and 13 mutants reproduce.
+
+Three reviews in all (1416, 1418 and 1426). Carried to the general carry PR:
+- F-D: the header names the general restart-after-rotation window. The read reorder in index.ts is optional.
+- F-C, F-E, F-H and F-I: header, docs and note wording.
+- F-A: a doctor comment.
+- F-G: the closed-masker log line.
+- F-F: a slot-level unreadable sentence.
+- F-B and F-J: optional test depth.
+- Earlier residuals: review 1416's F3 (case-colliding slugs), the hook residuals beside A5, and A6.
+
+The worker is told to push nothing and to answer body-ok or body-patched, with the browser-in-CI claim kept out of the body.
+
+**Run 1410 landing (2026-11-04).** The worker answered body-patched (14699). It added fix round 2's gates, and one sentence saying the browser results are local runs, not CI. The live body scans clean. Re-measured:
+- the remote tip, 0c34b7807, equals the PR head;
+- the PR is open, not a draft and mergeable;
+- merge-tree against main is clean;
+- the only non-green check is the external review-gate app.
+
+The other programme's #2246 is still open with the same gate.ts line-8 recount (167 to 169), so whichever lands second recounts. Queued with `gh pr merge 2248 --match-head-commit 0c34b7807`, first in the queue. Run 1410 was advanced to merging.
+
+**#2248 MERGED (2026-11-04T08:20:23Z, 7b362246a); run 1428 opened; run 1410 closed.**
+- The MERGED mail (14707) went to the worker first; it releases claims 3387, 3389 and 3396.
+- Run 1312's coordinator was told that #2246 now lands second and recounts gate.ts line 8 and the census counts (14700, 14708).
+- 1410 was the last open run, so wave 85's run 1428 was opened first (planned; the general carry PR).
+- Run 1410 was then final-closed at prPhase merged (child reclaim queued).
+
+PL6 and its follow-up are complete.
+
+**PL6 follow-up claims settled (14709).** Claims 3387, 3389 and 3396 answered 409 claim-terminal: the run's final close had already released them. Run 1410 holds no other claim. Nothing is owed.
+
+**The carry PRs dispatched: runs 1428 (wave 85, server) and 1430 (wave 86, console), D-7950 and D-7951 (2026-11-04).** A read-only subagent compiled every finding ruled "to the carry PR" from the ledger and the reports, and checked each against main at 7b362246a. That gave 41 rows. I ruled each row and wrote them to `carry-20261104/carry-items.md` in the info directory. The rows are split by origin into two PRs on disjoint files:
+- Part S: PL4 review 1338, PL7 review 1348, C3/C4 reviews 1382/1383/1375, PL6 1389 A6 and 1416 F3, and the PL6 follow-up 1418/1426.
+- Part C: PL5a 1379, PL5b 1386/1388, and the PL9 follow-up 1408.
+
+Rulings made here:
+- 1338's 4b is already done.
+- 1383 F2: drop a negative-age entry. N3 is recorded only.
+- 1389 A6: consolidate, characterization first.
+- 1416 F3: the PUT refuses a case-colliding store name, on every platform, with its own word.
+- F-D: words only, no reorder.
+- F-B/F-J: pin one split-quote form, and spy stdout and stderr.
+- 1388 F1: a refused slug is unmatched.
+- 1388 F2: comment only.
+- 1386 F6: done.
+- 1386 F7 and F10: no change, recorded.
+- The hook residuals stay recorded, with nothing built.
+
+The docs-only CI follow-up and the Goals binding gap stay separate. The allocator issued D-7950 and D-7951 (floor 7952). Run 1428 went to ccrc-pwa-polish-carry-s and run 1430 to ccrc-pwa-polish-carry-c, each on route opus/high with sonnet subagents, workflow off and compact 40. refined.css (rows 8 and 10) is held by run 1421's claim 3411. Leave was asked (14715), and the console worker holds those two rows until it is relayed.
+
+**Leave 14719 granted and relayed.** Run 1421's coordinator consented, under claim 3411, to exactly the `.ref-tab` floor and the one comment in refined.css. It measured that #2254 touches only the phone chip-rail block near line 50, and it will warn first if a fix round reaches the tab rules. Relayed to run 1430's worker, which takes no claim on the file and names the leave.
+
+**Leave to run 1409 extended under claim 3417 (14722).** Claim 3387 was released, and ccrc-doctor-checks is now held by run 1428's claim 3417. The extension keeps the same hunks: the carry-copies check, and `_check_box-settings` with its header. The condition is unchanged too: snapshot-posture, its closing brace and the blank line after it stay untouched. Run 1428's only edit there is row 34's comment near line 10984. Its worker was told to stay inside that comment.
+
 ## R125: Delegation rows that read "running" are handed to the delegation broker (2026-11-01)
 
 The operator asked what a coordinator's box full of unnamed "agent · running" and "workflow · running" rows was. They are the delegation broker's activity rows: one row per helper (subagent or workflow agent) that a session started, under that session. Measured on the fleet box from that session's own Claude Code files: every one of its workflows had finished, and no helper had written for about three hours, so the rows were stale. As main reads, a row is live while its end was never matched and its parent session's incarnation is unchanged; nothing checks the helper's own activity or times a row out.
