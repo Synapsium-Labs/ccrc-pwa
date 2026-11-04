@@ -458,6 +458,7 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
         expect(b.h, b.name).toBeGreaterThanOrEqual(TAP);
       }
       expect(r.bar.h, 'the row is one tap tall, its divider inside').toBeLessThanOrEqual(TAP + 0.5);
+      expect(r.bar.h, 'the row is a whole tap tall').toBeGreaterThanOrEqual(TAP - 0.5);
       expect(r.divider, 'the mockup\'s 1 px divider').toBe('1px');
       expect(r.lines.reduce((s, h) => s + h, 0), 'the label\'s two lines fit the row').toBeLessThanOrEqual(TAP);
     });
