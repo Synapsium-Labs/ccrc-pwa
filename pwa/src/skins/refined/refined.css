@@ -50,6 +50,18 @@
   .chat-head .ref-chip-rail .chat-coord {
     flex-wrap: nowrap;
   }
+  /* D-7784 (review 1424 F2): the session's recorded entries, once opened. `.chat-facts` is `display: contents` here, so
+     the list is an item of this one sideways row, and the only one that may shrink: beside a full rail it shrank to
+     nothing. While it is open the rail wraps, as the desk's rail always does, so the list's own `flex-basis: 100%`
+     (chat.css) gives it a line of its own, the rail's whole width, under the chips: each row keeps its condition word
+     whole, and its note wraps inside that width rather than running on as one line. Closed, the rail is the one
+     sideways row it always was. (`SessionDetails`' `showEntries` brings the opened list into view.) */
+  .chat-head .ref-chip-rail:has(.sess-entries) {
+    flex-wrap: wrap;
+  }
+  .chat-head .ref-chip-rail .sess-entries .chat-fact {
+    white-space: normal;
+  }
 }
 
 /* Desktop polish T3c (D-6333): the header names the session. The project is a small crumb above the title (the shared

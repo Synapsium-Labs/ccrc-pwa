@@ -2198,7 +2198,8 @@ button.proj-card-pool::before {
    currentColor frame, the .sess-workson idiom, so nothing is read out of colour. Neutral class names: this sheet names
    no broker word. */
 /* A row WRAPS: on a narrow column (the desk's fleet list at 1280, a phone) its chips drop under its words rather than
-   squeezing the words to nothing and pushing past the card's edge; the words keep one line and end in an ellipsis. */
+   squeezing the words to nothing and pushing past the card's edge. The words themselves are `.proj-work-parts` below:
+   only the row's one free-text part ends in an ellipsis, and every other word is drawn whole. */
 .proj-nest > .proj-work {
   flex: 1;
   flex-wrap: wrap;
@@ -2207,8 +2208,28 @@ button.proj-card-pool::before {
 .proj-work-parts {
   display: flex;
   flex: 1 1 auto;
+  flex-wrap: wrap;
   align-items: center;
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* D-7783 (review 1424 F1): a phone shows no titles, so a row's condition word (`not confirmed`, `stop not seen`, …) and
+   its `from <session>` part are always drawn whole. Every part keeps its own width and moves to the next line when the
+   line is full; in a wrapping row only a part wider than a whole line ever shrinks (a long raw session id), and it then
+   breaks inside itself rather than being cut. */
+.proj-work-part {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* The one free-text part (`nameAt`, decided by the words module): a basis of 0, so it never pushes a word to the next
+   line; it grows into what the line leaves, up to its own length, and only it ends in an ellipsis. */
+.proj-work-name {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: max-content;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;

@@ -19,6 +19,10 @@ import { openApp, serveDist, sharedDist, type AppFixture, type DistServer } from
 import { GROUP_MODE_KEY } from '../src/skins/instrument/FleetTable';
 import { withRunBinding } from '../test/runBindingFixture';
 import { activity, frame, lease, unowned } from '../test/delegationFixture';
+import { LIVENESS_QUALIFIER } from '../src/fleet/delegationWords';
+
+/** The four condition words a delegation row may carry: the words a phone must always show whole (D-7783). */
+const CONDITION_WORDS = Object.values(LIVENESS_QUALIFIER).map((q) => q.word);
 
 const NOW = Date.now();
 
@@ -156,6 +160,25 @@ const measureUnlisted = (): { text: string; inList: boolean; overflow: number }[
   }));
 };
 
+/** Each delegation row's words (on a card, in the fleet foot's region and in the session header): whether its condition
+ *  word and its last part each lie wholly inside the row's words box. Only the one free-text part may end in an
+ *  ellipsis; a clip of either of these is a row whose state or session a phone cannot read (review 1424 F1, D-7783).
+ *  The boxes are measured, not the container's scroll width, because the words box hides its overflow. */
+const measureParts = (words: readonly string[]): { text: string; condition: boolean; last: boolean; hasCondition: boolean }[] =>
+  [...document.querySelectorAll<HTMLElement>('.proj-work-parts')].map((box) => {
+    const b = box.getBoundingClientRect();
+    const inside = (el: Element): boolean => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.left >= b.left - 0.5 && r.right <= b.right + 0.5 && r.top >= b.top - 0.5 && r.bottom <= b.bottom + 0.5;
+    };
+    const parts = [...box.querySelectorAll<HTMLElement>('.proj-work-part')];
+    const cond = parts.find((p) => words.includes(p.textContent ?? ''));
+    return {
+      text: box.textContent ?? '', hasCondition: cond !== undefined,
+      condition: cond === undefined || inside(cond), last: parts.length === 0 || inside(parts[parts.length - 1]!),
+    };
+  });
+
 describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
   for (const theme of THEMES) {
     for (const width of WIDTHS) {
@@ -185,6 +208,13 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
             expect(u.inList, `${u.text}: inside the fleet list`).toBe(true);
             expect(u.overflow, `${u.text}: nothing overflows it`).toBeLessThanOrEqual(1);
           }
+          // F1 (review 1424): a long name never hides the condition word or the `from` part, on a card or in the region.
+          const words = await page.evaluate(measureParts, CONDITION_WORDS);
+          expect(words.filter((w) => w.hasCondition).length, 'every activity and worktree row has a condition word').toBe(6);
+          for (const w of words) {
+            expect(w.condition, `${w.text}: its condition word is whole`).toBe(true);
+            expect(w.last, `${w.text}: its last part is whole`).toBe(true);
+          }
           const chips = rows.flatMap((r) => r.cells.map((c) => c.text));
           expect(chips.filter((t) => t === 'inferred'), 'each raw worktree wears inferred').toHaveLength(2);
           expect(chips.some((t) => t.includes('project-b')), 'the works-on chip').toBe(true);
@@ -197,5 +227,108 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
         }
       });
     }
+  }
+});
+
+// ---- the session header at a phone's width (review 1424 F2, F3) ------------------------------------------------------
+// A session whose facts fill Refined's one-row chip rail (a long model and branch, a PR, a question to its coordinator,
+// subagents), with three recorded entries, one of them a long name. With the details door and the entry list open, each
+// entry row shows its condition word whole (F2: the list never collapses inside the rail), and each of the header's two
+// toggles, the subagent one and the delegated one, has a hit area of at least --tap-min (F3).
+const HEAD_ID = 'project-c-head-pass';
+const HEAD_SESSIONS = [session(HEAD_ID, 'project-c', {
+  model: 'claude-opus-5-5-with-a-very-long-model-identifier-20261027', effort: 'high',
+  branch: 'ws/head-pass-a-long-branch-name-that-no-rail-holds-in-one-piece',
+  subagents: [{ name: 'explore', startedAt: NOW - 120_000 }, { name: 'verify', startedAt: NOW - 60_000 }],
+  withCoordinator: { kind: 'question', parentId: 'project-c-coordinator-with-a-long-name-id', since: NOW, notifyAt: NOW + 600_000 },
+  pr: { phase: 'open', number: 123, url: null, title: null, checks: 'pass', checkNames: null, ahead: 1, reason: null,
+    checkedAt: null, mergedAt: null, retryAt: null },
+})];
+const HEAD_FIXTURE: AppFixture = {
+  api: FIXTURE.api,
+  fleetFrames: [
+    { type: 'fleet', sessions: HEAD_SESSIONS },
+    { type: 'delegation', delegation: frame({ activities: [
+      activity({ activityId: 'h1', parentId: HEAD_ID, placement: 'chip',
+        displayName: 'reconcile every reader of the projection frame across the server, the agent and the PWA trees' }),
+      activity({ activityId: 'h2', parentId: HEAD_ID, displayName: 'read the plan', liveness: 'stale',
+        openedAt: '2026-10-26T10:01:00.000Z' }),
+      activity({ activityId: 'h3', parentId: HEAD_ID, displayName: null, liveness: 'unmeasured',
+        openedAt: '2026-10-26T10:02:00.000Z' }),
+    ] }) },
+  ],
+};
+
+describe.each(SKINS)('the session header\'s entry list and toggles at 390 in %s', (skin) => {
+  for (const theme of THEMES) {
+    it(`${theme}: every entry shows its condition word, and each toggle's hit area is at least --tap-min`, async () => {
+      const { ctx, page, errors } = await openApp(browser!, { skin, theme, width: 390 }, HEAD_FIXTURE);
+      try {
+        await page.goto(`${server!.origin}/s/${HEAD_ID}`);
+        await page.waitForSelector('.chat-head', { timeout: 20_000 });
+        const door = page.getByRole('button', { name: 'Session details' });
+        if (await door.count() > 0 && await door.getAttribute('aria-expanded') === 'false') await door.click();
+        const toggle = page.locator('.chat-head .sess-subagents', { hasText: '3 delegated' });
+        await toggle.waitFor({ timeout: 20_000 });
+        await toggle.click();
+        await page.waitForSelector('.chat-head .sess-entries .proj-work >> nth=2', { state: 'attached', timeout: 20_000 });
+        await page.evaluate(async () => { await document.fonts.ready; });
+        await page.waitForTimeout(300);
+        const shots = process.env['CCRC_SHOTS'];
+        if (shots !== undefined && shots !== '') {
+          await page.screenshot({ path: `${shots}/delegation-head-${skin}-${theme}-390.png`, fullPage: true });
+        }
+        const sideScroll = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        expect(sideScroll, 'sideways scroll').toBe(0);
+        // F2: every header entry row is wide enough to show its condition word whole, and the word is on the screen:
+        // inside what the header shows (Refined's rail scrolls sideways; its visible box is the rail's own).
+        const shown = await page.evaluate((words) => {
+          const clipOf = (el: Element): DOMRect => (el.closest('.ref-chip-rail') ?? el.closest('.chat-head')!).getBoundingClientRect();
+          const visible = (r: DOMRect, c: DOMRect): boolean => r.width > 0 && r.left >= c.left - 0.5 && r.right <= c.right + 0.5;
+          const rows = [...document.querySelectorAll<HTMLElement>('.chat-head .sess-entries .proj-work-parts')].map((box) => {
+            const b = box.getBoundingClientRect();
+            const cond = [...box.querySelectorAll<HTMLElement>('.proj-work-part')].find((p) => words.includes(p.textContent ?? ''));
+            const r = cond?.getBoundingClientRect();
+            return { text: box.textContent ?? '', width: b.width,
+              whole: r !== undefined && r.width > 0 && r.left >= b.left - 0.5 && r.right <= b.right + 0.5,
+              onScreen: r !== undefined && visible(r, clipOf(box)) };
+          });
+          // The toggle that opened it stays on the screen beside the list, so the same tap closes it.
+          const t = [...document.querySelectorAll<HTMLElement>('.chat-head .sess-subagents')].find((e) => /delegated$/.test(e.textContent ?? ''));
+          // The list's description wraps inside the list, never running on past it as one line.
+          const list = document.querySelector<HTMLElement>('.chat-head .sess-entries')!;
+          const note = list.querySelector<HTMLElement>('.sess-entries-note')!;
+          return { rows, toggleOnScreen: t !== undefined && visible(t.getBoundingClientRect(), clipOf(t)),
+            noteInList: visible(note.getBoundingClientRect(), list.getBoundingClientRect()) && visible(note.getBoundingClientRect(), clipOf(list)) };
+        }, CONDITION_WORDS);
+        expect(shown.rows, 'three entry rows').toHaveLength(3);
+        for (const r of shown.rows) {
+          expect(r.width, `${r.text}: the row has a width`).toBeGreaterThan(0);
+          expect(r.whole, `${r.text}: its condition word is whole`).toBe(true);
+          expect(r.onScreen, `${r.text}: its condition word is on the screen`).toBe(true);
+        }
+        expect(shown.toggleOnScreen, 'the delegated toggle is on the screen with the list open').toBe(true);
+        expect(shown.noteInList, 'the list\'s description wraps inside it, on the screen').toBe(true);
+        // F3: both header toggles, measured as boxes and by what a tap at their centre reaches.
+        const targets = await page.evaluate(() => {
+          const floor = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tap-min'));
+          return { floor, toggles: [...document.querySelectorAll<HTMLElement>('.chat-head .chat-facts .sess-subagents')].map((t) => {
+            const r = t.getBoundingClientRect();
+            const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+            return { text: t.textContent ?? '', width: r.width, height: r.height, reached: hit !== null && t.contains(hit) };
+          }) };
+        });
+        expect(targets.floor, 'the token resolves').toBe(44);
+        expect(targets.toggles.map((t) => t.text), 'the subagent toggle and the delegated toggle').toHaveLength(2);
+        for (const t of targets.toggles) {
+          expect(t.height, `${t.text}: height`).toBeGreaterThanOrEqual(targets.floor);
+          expect(t.width, `${t.text}: width`).toBeGreaterThanOrEqual(targets.floor);
+          expect(t.reached, `${t.text}: a tap at its centre reaches it`).toBe(true);
+        }
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 60_000);
   }
 });

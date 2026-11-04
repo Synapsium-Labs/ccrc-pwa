@@ -354,7 +354,7 @@ describe('the R9 chip: a worker\'s attached delegation entries (delegation broke
   const two = [activity({ activityId: 'a1', parentId: worker.id, displayName: 'map the tree' }),
     activity({ activityId: 'a2', parentId: worker.id, displayName: 'read the plan' })];
 
-  it('W4-U33: two live activities read "2 delegated" on the card, and the header holds it', () => {
+  it('W4-U33 (D-7781): two attached entries, of any liveness, read "2 delegated" on the card, and the header holds it', () => {
     const f = sessionFacts({ session: worker, now: NOW, childRun: child(RUN), delegated: two });
     const card = cardFacts(f);
     expect(card.delegated?.text).toBe('2 delegated');

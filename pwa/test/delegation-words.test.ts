@@ -198,4 +198,14 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
     expect(fromPart('coord-a')).toBe('from coord-a');
     expect(unlistedToggle(2)).toBe('Delegated work, session not listed (2)');
   });
+
+  it('VIS-W4 (review 1424 f): a member with no string openedAt or activityId sorts first and never throws', () => {
+    const bad = activity({ activityId: 'a-bad', openedAt: undefined as never });
+    const noId = activity({ activityId: 42 as never, openedAt: '2026-10-26T10:01:00.000Z' });
+    const good = activity({ activityId: 'a1' });
+    const w = readDelegation(frame({ activities: [good, noId, bad] }));
+    expect(() => delegatedChip(w.activities)).not.toThrow();
+    expect(delegatedChip(w.activities)!.rows.map((r) => r.key)).toEqual(['a-bad', 'a1', 42]);
+    expect([...w.activities].sort(words.byOpened).map((a) => a.activityId)).toEqual(['a-bad', 'a1', 42]);
+  });
 });

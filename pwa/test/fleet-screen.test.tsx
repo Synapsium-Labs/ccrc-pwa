@@ -3577,7 +3577,7 @@ describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => 
       s.message({ type: 'fleet', sessions: [
         session({ id: 'coord-a', project: 'project-a', workdir: '/work/project-a', status: 'busy', bucket: 'working' }),
         session({ id: 'coord-arch', project: 'project-a', workdir: '/work/project-a-old', name: 'old coordinator', archivedAt: Date.now() - 60 * MIN }),
-        session({ id: 'w-rel', project: 'project-a', workspace: 'w-rel', workdir: '/work/project-a/.ws/w-rel',
+        session({ id: 'w-rel', project: 'project-a', workspace: 'w-rel', workdir: '/work/project-a/.ws/w-rel', name: 'released worker',
           releasedFrom: { runId: 9, program: 'port-api', programTitle: null, claimedBy: 'coord-a', closedAt: Date.now() - MIN, child: true } }),
       ] });
       s.message({ type: 'delegation', delegation: frame({ activities: [
@@ -3591,7 +3591,28 @@ describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => 
     fireEvent.click(within(cardIn('project-a')).getByRole('button', { name: /Offline coordinator \(2\)/ }));
     expect(cellsOf(cardIn('project-a'))).toEqual([
       ['agent', 'old work', 'not confirmed', 'from old coordinator'],
-      ['agent', 'released work', 'not confirmed', 'from w-rel'],
+      // Its label, never its raw id (review 1424 e): the row names the listed session as the list names it.
+      ['agent', 'released work', 'not confirmed', 'from released worker'],
+    ]);
+  });
+
+  it('VIS-U5 (review 1424 f): a malformed member, no string openedAt, is drawn in the region and nothing throws', () => {
+    const store = makeLiveStore();
+    renderFleet(<FleetScreen store={store} />);
+    act(() => {
+      const s = latestFleetSocket();
+      s.open();
+      s.message({ type: 'fleet', sessions: [session({ id: 'coord-a', project: 'project-a', status: 'busy', bucket: 'working' })] });
+      s.message({ type: 'delegation', delegation: frame({ activities: [
+        activity({ activityId: 'a-ok', parentId: 'coord-gone', displayName: 'map the tree' }),
+        activity({ activityId: 'a-bad', parentId: 'coord-gone', displayName: 'no opening time', openedAt: undefined as never }),
+      ] }) });
+    });
+    const list = document.querySelector<HTMLElement>('.fleet-list')!;
+    fireEvent.click(within(list).getByRole('button', { name: 'Delegated work, session not listed (2)' }));
+    const body = document.getElementById(within(list).getByRole('button', { name: /session not listed/ }).getAttribute('aria-controls')!)!;
+    expect(cellsOf(body)).toEqual([
+      ['agent', 'no opening time', 'not confirmed', 'from coord-gone'], ['agent', 'map the tree', 'not confirmed', 'from coord-gone'],
     ]);
   });
 

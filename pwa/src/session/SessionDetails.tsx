@@ -73,6 +73,15 @@ export function SessionCoordination({ facts, coordination }: {
   );
 }
 
+/** D-7784 (review 1424 F2): the opened entry list scrolls into view, once, as it mounts. On a phone Refined draws the
+ *  header's facts as one sideways rail, which the operator has swiped to reach the toggle; the list opens on a line of
+ *  its own at the rail's start (refined.css), so without this it opens scrolled off to the left. A stable function, so React
+ *  calls it on mount only, and it adds no hook. Where nothing scrolls (the shared header, the desk) it moves nothing.
+ *  jsdom has no `scrollIntoView`, hence the optional call. */
+const showEntries = (el: HTMLElement | null): void => {
+  el?.scrollIntoView?.({ block: 'nearest', inline: 'start' });
+};
+
 /** Everything else, in full. Always shown from 900px; behind one "details" door on a phone. */
 export function SessionDetails({ facts, coordination }: {
   facts: SessionFactSet;
@@ -83,7 +92,8 @@ export function SessionDetails({ facts, coordination }: {
   const [subagentsOpen, setSubagentsOpen] = useState(false);
   const subagentsId = useId();
   const [delegatedOpen, setDelegatedOpen] = useState(false);
-  // Derived from the subagent list's id, never a `useId` of its own, so the header calls no hook it did not call.
+  // Derived from the subagent list's id, never a `useId` of its own: the header adds a `useState` and no `useId`, so
+  // React's id counter numbers every later id as before.
   const delegatedId = `${subagentsId}-entries`;
   const detailsId = useId();
   const s = facts.session;
@@ -127,9 +137,9 @@ export function SessionDetails({ facts, coordination }: {
       {/* The recorded entries this session started, each in its row's words, under the description the words module
           gives (`facts.delegated.note`). Drawn only while the disclosure is open. */}
       {delegatedOpen && facts.delegated !== null && (
-        <div id={delegatedId} className="sess-entries">
+        <div id={delegatedId} className="sess-entries" ref={showEntries}>
           <span className="chat-fact sess-entries-note">{facts.delegated.note}</span>
-          {facts.delegated.rows.map((r) => <WorkLine key={r.key} parts={r.parts} title={r.title} />)}
+          {facts.delegated.rows.map((r) => <WorkLine key={r.key} parts={r.parts} title={r.title} nameAt={r.nameAt} />)}
         </div>
       )}
     </div>

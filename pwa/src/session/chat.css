@@ -83,7 +83,8 @@
 .chat-coord { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--sp-2); row-gap: 2px; }
 @media (pointer: fine) {
   .chat-coord .chat-coord-link,
-  .chat-meta .chat-details-toggle { min-height: 0; }
+  .chat-meta .chat-details-toggle,
+  .chat-facts .sess-subagents { min-height: 0; min-width: 0; }
 }
 .chat-facts {
   flex-basis: 100%;
@@ -97,11 +98,17 @@
 }
 .chat-facts .sess-meta { display: contents; }
 .chat-facts .sess-meta > *::before { content: none; }
+/* D-7785 (review 1424 F3): the header's two disclosure toggles, the subagent one and the delegated-entries one. The rule
+   above removes `.sess-subagents::before`, the card's tap overlay, with the middots, so in the header the toggle's own
+   box is its hit area: it takes the floor the details door beside it takes, and gives it back on a fine pointer, as the
+   door does (the `@media (pointer: fine)` block above). */
+.chat-facts .sess-subagents { min-height: var(--tap-min); min-width: var(--tap-min); }
 .chat-fact { font-family: var(--family-mono); overflow-wrap: break-word; min-width: 0; }
 .chat-facts .sess-subagent-list { flex-basis: 100%; }
 /* The header's list of recorded entries: a full-width flex item of .chat-facts, whose automatic minimum would be its
    min-content width. Its rows' words are white-space: nowrap (.proj-work-parts), so without min-width: 0 one long
-   row would push the header past the screen's edge; with it, the row ends in an ellipsis. */
+   row would push the header past the screen's edge; with it, the row keeps the list's width, its free-text part ends in
+   an ellipsis and its other words wrap whole (`.proj-work-part`, fleet.css; D-7783). */
 .chat-facts .sess-entries { flex-basis: 100%; min-width: 0; }
 /* D-5546, phone: the keycaps took ~170 of 360px beside the title, leaving the
    name, the coordination row and the meta row a 140px column that ellipsised

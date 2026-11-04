@@ -45,7 +45,7 @@ import { sameCardProps } from './lineProps';
 import { OPEN_RUNS } from './openers';
 import { sessionLabel } from './sessionLabel';
 import { WorkLine } from './WorkLine';
-import { GROUP_WORDS, activityLine, creatorChip, inferredChip, unownedLine, worktreeLine } from './delegationWords';
+import { GROUP_WORDS, activityLine, creatorChip, inferredChip, unownedLine, worktreeLine, type WorkWords } from './delegationWords';
 import { actionDoor } from '../command/door';
 import './fleet.css';
 
@@ -410,28 +410,28 @@ function ProjectCardView({
   // session, a spawn or a delegation row (wave 4); the rollup's summary row is read only as that footer's state
   // (`trayOf`), or, for a head outside a box, as its own line (`summaryLine`).
   /** A delegation row's words, each a cell of one line (delegation broker wave 4). `delegationWords.ts` spells them. */
-  const workLine = (parts: readonly string[], title: string, tail: ReactNode = null): ReactNode => (
-    <WorkLine parts={parts} title={title}>{tail}</WorkLine>
+  const workLine = (line: WorkWords, tail: ReactNode = null): ReactNode => (
+    <WorkLine parts={line.parts} title={line.title} nameAt={line.nameAt}>{tail}</WorkLine>
   );
 
   const rowBody = (row: FleetRow): ReactNode => {
     if (row.kind === 'activity') {
       const a = activityLine(row.activity, fromOf(row.group, row.activity.parentId));
-      return workLine(a.parts, a.title);
+      return workLine(a);
     }
     if (row.kind === 'lease') {
       const w = worktreeLine(row.lease, labelOf(row.via), workingOnCard({ project: row.lease.project }, group.project),
         fromOf(row.group, row.lease.parentId));
       // D-6999: the chips are words, never colour alone, and nothing here acts on the row.
       const chips = [inferredChip(row.lease), creatorChip(row.lease)];
-      return workLine(w.parts, w.title, <>
+      return workLine(w, <>
         {w.sourceProject !== null && <WorksOnChip project={w.sourceProject} />}
         {chips.map((c, i) => c === null ? null : <span key={i} className="proj-work-chip" title={c.title}>{c.text}</span>)}
       </>);
     }
     if (row.kind === 'unowned') {
       const u = unownedLine(row.item);
-      return workLine(u.parts, u.title);
+      return workLine(u);
     }
     if (row.kind === 'delegation-group') {
       const open = groupOpen[row.group];

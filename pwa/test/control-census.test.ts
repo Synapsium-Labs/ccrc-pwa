@@ -247,7 +247,8 @@ const CONTROLS: Record<string, string> = {
   'fleet/SessionLine.tsx <button> sess-actions': 'TOKEN, and OVERLAY below.',
   'fleet/SessionMeta.tsx <button> sess-subagents':
     'TOKEN. The subagent toggle and, beside it in the header, the delegated-entries toggle (delegation visibility): '
-    + 'real un-nested buttons in one shape.',
+    + 'real un-nested buttons in one shape. On a card the floor is the `::before` overlay; in the header, where '
+    + '`.chat-facts .sess-meta > *::before` removes it, the box itself takes it (`.chat-facts .sess-subagents`, D-7785).',
   'screens/AccountsScreen.tsx <button> accounts-session': 'TOKEN. A session row on the accounts screen.',
   'screens/AccountsScreen.tsx <button> proj-card-pool acct-pool-chip': "TOKEN. The card's pool tag, reused as a chip.",
   'screens/FleetScreen.tsx <button> fab': 'TOKEN by VALUE, not by name — see FLOOR_BY_VALUE.',

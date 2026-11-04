@@ -254,7 +254,7 @@ function UnlistedWork({ entries }: { entries: readonly DelegationActivityWire[] 
         <div id={bodyId} className="fleet-unlisted-body">
           {entries.map((a) => {
             const line = activityLine(a, a.parentId);
-            return <WorkLine key={a.activityId} parts={line.parts} title={line.title} />;
+            return <WorkLine key={a.activityId} parts={line.parts} title={line.title} nameAt={line.nameAt} />;
           })}
         </div>
       )}

@@ -31,6 +31,11 @@ export const UNRECOGNISED_WORD = 'unrecognised';
 
 export interface Chip { readonly text: string; readonly title: string }
 
+/** A delegation row's words. `nameAt` is the index of its one free-text part (a delegated agent's name, a worktree's
+ *  admin record), the only part a narrow row may cut short; every other part, its condition word and its `from` part
+ *  among them, is always drawn whole (D-7783: a phone shows no titles). `null` when the row has no such part. */
+export interface WorkWords { readonly parts: readonly string[]; readonly title: string; readonly nameAt: number | null }
+
 /** The two group headers of a card (rules 9 and 10 of `nestFleet`). */
 export const GROUP_WORDS: Readonly<Record<'offline-coordinator' | 'unowned', { label: string; title: string }>> = {
   'offline-coordinator': {
@@ -184,44 +189,47 @@ export function creatorChip(l: DelegationLeaseWire): Chip | null {
  *  `end recorded`, and its workspace word alone says whether its presence was measured. */
 export function worktreeLine(
   l: DelegationLeaseWire, viaLabel: string | null, sourceProject: string | null, fromLabel: string | null = null,
-): { parts: readonly string[]; title: string; sourceProject: string | null } {
+): WorkWords & { sourceProject: string | null } {
   const q = qualifierOf(l.liveness);
   const parts = [wordOf(WORKTREE_WORD, l.sourceKind), l.adminRecord, q.word];
   if (viaLabel !== null) parts.push(`via ${viaLabel}`);
   const ws = Object.hasOwn(WORKSPACE_WORD, l.workspace) ? WORKSPACE_WORD[l.workspace] : UNRECOGNISED_WORD;
   if (ws !== null) parts.push(ws);
   if (fromLabel !== null) parts.push(fromPart(fromLabel));
-  return { parts, title: `${l.canonicalPath}; ${q.title}`, sourceProject };
+  return { parts, title: `${l.canonicalPath}; ${q.title}`, nameAt: 1, sourceProject };
 }
 
 /** A delegated agent's or workflow's row. Its times are the hook events the broker recorded, never helper activity. */
-export function activityLine(
-  a: DelegationActivityWire, fromLabel: string | null = null,
-): { parts: readonly string[]; title: string } {
+export function activityLine(a: DelegationActivityWire, fromLabel: string | null = null): WorkWords {
   const word = wordOf(ACTIVITY_WORD, a.sourceKind);
   const q = qualifierOf(a.liveness);
-  const parts = [
-    word, ...(a.displayName !== null && a.displayName !== '' ? [a.displayName] : []), q.word,
-    ...(fromLabel === null ? [] : [fromPart(fromLabel)]),
-  ];
-  return { parts, title: `${word} ${a.upstreamId}: ${q.title}; opened ${a.openedAt}, last recorded hook event ${a.lastEventAt}` };
+  const name = a.displayName !== null && a.displayName !== '' ? [a.displayName] : [];
+  const parts = [word, ...name, q.word, ...(fromLabel === null ? [] : [fromPart(fromLabel)])];
+  return {
+    parts, nameAt: name.length > 0 ? 1 : null,
+    title: `${word} ${a.upstreamId}: ${q.title}; opened ${a.openedAt}, last recorded hook event ${a.lastEventAt}`,
+  };
 }
 
 /** An unowned tree's row. */
-export function unownedLine(u: DelegationUnownedWire): { parts: readonly string[]; title: string } {
+export function unownedLine(u: DelegationUnownedWire): WorkWords {
   const parts = [u.adminRecord, wordOf(VERDICT_WORD, u.verdict)];
   const ws = Object.hasOwn(WORKSPACE_WORD, u.workspace) ? WORKSPACE_WORD[u.workspace] : UNRECOGNISED_WORD;
   if (ws !== null) parts.push(ws);
-  return { parts, title: `${u.canonicalPath ?? u.adminRecord}: ${u.reason}` };
+  return { parts, title: `${u.canonicalPath ?? u.adminRecord}: ${u.reason}`, nameAt: 0 };
 }
 
+/** A sort key read from a member as it arrived: `readDelegation` keeps a member's other fields as they came, so one
+ *  with no string here sorts first rather than throwing (review 1424 f). */
+const sortKey = (v: unknown): string => (typeof v === 'string' ? v : '');
+
 /** Entries in the order they opened, then by id: the one order of every list of them (`nestFleet`'s rows, the
- *  fleet foot's region, the session header's list). */
+ *  fleet foot's region, the session header's list). A malformed member sorts first and never throws. */
 export const byOpened = (a: DelegationActivityWire, b: DelegationActivityWire): number =>
-  a.openedAt.localeCompare(b.openedAt) || a.activityId.localeCompare(b.activityId);
+  sortKey(a.openedAt).localeCompare(sortKey(b.openedAt)) || sortKey(a.activityId).localeCompare(sortKey(b.activityId));
 
 /** One line of the session header's entry list, in an activity row's words. */
-export interface EntryRow { readonly key: string; readonly parts: readonly string[]; readonly title: string }
+export interface EntryRow extends WorkWords { readonly key: string }
 
 /** A session's recorded entries: the chip (`N delegated`), their count, the header's description and its list. */
 export interface DelegatedSummary extends Chip {
