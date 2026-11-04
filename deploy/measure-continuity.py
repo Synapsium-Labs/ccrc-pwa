@@ -629,7 +629,11 @@ def stage4(ctx):
 # `stopped`: a workflow that did not finish before the previous session ended
 # carries `stopped`), whatever its task-id count (a batched envelope; the status is
 # read BEFORE the id count); or no status element, exactly one readable task-id
-# element and exactly one plain `<event>` element (an event-style notification).
+# element and exactly one plain `<event>` element (an event-style notification); or no
+# status element and a body that is, whole, one plain `<summary>` element (no other
+# element, stray closing tag or free text around it, and no task id: a security-review
+# notice) whose value does not contain `low on memory`, case-insensitively (D-7962). A
+# summary-only body that names low memory stays unmeasured, as does any other body.
 # An envelope is the whole `<task-notification>…</task-notification>` text once
 # trailing whitespace and whole trailing `<system-reminder>…</system-reminder>`
 # blocks (optional whitespace between them) are removed, but only the shapes above
@@ -882,6 +886,9 @@ S6_TASK_ID_OPEN = re.compile(r"<task-id\b")
 S6_EVENT_TAGS = re.compile(r"</?event\b[^<>]*>?")
 S6_SUMMARY = re.compile(r"<summary>([^<>]*)</summary>", re.S)
 S6_SUMMARY_OPEN = re.compile(r"<summary\b")
+# A summary-only body (D-7962): the whole envelope body is one plain summary element, with no
+# other element, no stray closing tag and no free text around it.
+S6_SUMMARY_ONLY = re.compile(r"<summary>([^<>]*)</summary>")
 S6_PRESSURE_SUMMARY = re.compile(
     r'Background command ".*" was stopped because the system is running low on memory', re.S
 )
@@ -1012,6 +1019,11 @@ def s6_pressure_kills(ctx):
                             # and exactly one plain event element.
                             if id_openers == 1 and len(ids) == 1 \
                                     and S6_EVENT_TAGS.findall(body) == ["<event>", "</event>"]:
+                                continue
+                            # Summary-only (D-7962): the whole body is one plain summary that
+                            # does not name low memory, such as a security-review notice.
+                            summary_only = S6_SUMMARY_ONLY.fullmatch(body)
+                            if summary_only and "low on memory" not in summary_only.group(1).lower():
                                 continue
                             file_unmeasured.add((uuid, text))
                             continue

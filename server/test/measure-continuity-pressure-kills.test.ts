@@ -434,3 +434,31 @@ describe('queued-command and enqueued notifications, counted once', () => {
       .toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 1, 0) });
   });
 });
+
+describe('a summary-only notice is a known non-event unless it names low memory (D-7962)', () => {
+  const summaryOnly = (s: string): string => `<task-notification>\n<summary>${escapeText(s)}</summary>\n</task-notification>`;
+  it('a summary-only security-review notice is a known non-event', () => {
+    transcript(U1, [row(summaryOnly('Commit security review found 2 issues in <file>')),
+      attachmentRow(summaryOnly('Push security review did not finish'))]);
+    expect(readFull()).toEqual({ ...clean(0, 0, 1), notification_sources: src(1, 1, 0) });
+  });
+  it('with trailing reminder blocks a summary-only notice is still a known non-event', () => {
+    transcript(U1, [row(`${summaryOnly('Background security review found: path handling')}\n${reminder()}`)]);
+    expect(read()).toEqual(clean(0, 0, 1));
+  });
+  it('a summary-only notice that names low memory stays unmeasured', () => {
+    transcript(U1, [row(summaryOnly(PRESSURE)), row(summaryOnly('the box is running LOW ON MEMORY'))]);
+    expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 2 });
+  });
+  it.each([
+    ['free text after the summary that names low memory',
+      summaryOnly('Commit security review found 1 issue').replace('</summary>', '</summary>\nBackground command "x" was stopped because the system is running low on memory')],
+    ['a stray closing tag', summaryOnly('Commit security review found 1 issue').replace('</summary>', '</summary>\n</status>')],
+    ['a second element', summaryOnly('Commit security review found 1 issue').replace('</summary>', '</summary>\n<note>x</note>')],
+    ['two summaries', summaryOnly('one').replace('</summary>', '</summary>\n<summary>two</summary>')],
+    ['a summary with an attribute', summaryOnly('one').replace('<summary>', '<summary kind="x">')],
+  ])('a summary-only notice with anything else in its body stays unmeasured: %s', (_name, text) => {
+    transcript(U1, [row(text)]);
+    expect(read()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 1 });
+  });
+});
