@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { makeCcdHarness, stubContainedTool, type CcdHarness } from './ccdWsHelpers.js';
+import { asManagerCalls } from './platformFixtures.js';
 
 let h: CcdHarness;
 let kids: ChildProcess[] = [];
@@ -71,10 +72,14 @@ const waitDead = async (pid: number): Promise<boolean> => {
 
 // The stub tmux: the session's pane answers `main-pid` until `kill-session`, which also ends the main process (its
 // planted /proc entry and its line in every planted cgroup.procs go). `list-panes -a` answers `panes-all`, or "no server
-// running" under `no-server`, or fails with `list-rc`. `display-message` answers 0 terminals attached.
+// running" under `no-server`, or fails with `list-rc`. `display-message` answers 0 terminals attached. A wedged server is
+// a call that does not answer: `wedged` holds every call for that many seconds, `wedged-read` only the session's own
+// `list-panes -t`. Each is an `exec`, so the deadline's TERM lands on the sleep itself and leaves nothing behind.
 const TMUX = (base: string): string => `#!/usr/bin/env bash
 F=${JSON.stringify(base)}
 printf 'tmux %s\\n' "$*" >> "$HOME/ccd-calls"
+[ -f "$F/wedged" ] && exec sleep "$(cat "$F/wedged")"
+[ "$1 $2" = "list-panes -t" ] && [ -f "$F/wedged-read" ] && exec sleep "$(cat "$F/wedged-read")"
 case "$1" in
   list-panes)
     if [ "$2" = -a ]; then
@@ -360,6 +365,65 @@ describe('the verb never waits: the reap runs in its own transient unit', () => 
     expect(() => h.sh('_pane_scope_detach _pane_scope_reap \'a$b\' 1 /x')).toThrow();
     expect(() => h.sh('_pane_scope_detach _pane_scope_reap \'a b\' 1 /x')).toThrow();
     expect(runs()).toEqual([]);
+  });
+});
+
+describe('a wedged tmux never holds a stop', () => {
+  const WEDGE_S = 5;   // what a wedged call sleeps, past the one-second deadlines below
+  const DEADLINES = 'SUBSTRATE_PROBE_DEADLINE_S=1; _LC_OBS_TMUX_DEADLINE_S=1';
+  const LAUNCHD = `launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; }`;   // macOS's disable, for asManagerCalls to read
+  const HELD = `pane-scope ${ID}: held: tmux did not answer within 1s, so no scope was read`;
+  const READ = `tmux list-panes -t =cc-${ID}: -F #{pane_pid}`;
+
+  it('ccd stop with every tmux call hanging: the stop is stamped and the unit disabled before the read, which gives up and says so', () => {
+    pane(); plantCgroup(`${SLICE}/${UNIT}`, [MAIN, realSleep()]); arm();
+    fs.writeFileSync(fx('wedged'), `${WEDGE_S}\n`);
+    const out = h.sh(`${SEAMS}\n ${DEADLINES}\n ${LAUNCHD}\n cmd_stop ${ID}`);
+    expect(out).toContain(`stopped ${ID}`);
+    expect(h.reg(ID, 'stopped')).toMatch(/^\d{10} cli$/);
+    const c = asManagerCalls(h.calls());
+    const disable = c.indexOf(`systemctl --user disable --now claude-session@${ID}`);
+    expect(disable, c.join('\n')).toBeGreaterThanOrEqual(0);
+    expect(disable, c.join('\n')).toBeLessThan(c.indexOf(READ));
+    expect(scopeTexts()).toEqual([HELD]);
+    expect(stops()).toEqual([]);
+  }, 30_000);
+
+  it('ccd hibernate with its read hanging: the marker stands, the unit is disabled before the read, and the verb answers', () => {
+    h.sh(`_reg_set ${ID} wrapper claude
+          _reg_set ${ID} workdir '${h.home}'
+          _reg_set ${ID} uuid ${UUID}`);
+    fs.writeFileSync(reg(`${ID}.turn.json`), `{"state":"done","bg":0,"crons":0,"stopAt":${Date.now() - 3 * 3600_000}}\n`);
+    pane(); plantCgroup(`${SLICE}/${UNIT}`, [MAIN, realSleep()]); arm();
+    fs.writeFileSync(fx('wedged-read'), `${WEDGE_S}\n`);
+    const out = h.sh(`${SEAMS}\n ${DEADLINES}\n ${LAUNCHD}
+      _pane_for_keystroke() { KS_PANE='%1'; return 0; }; _idle_for_keystroke() { return 0; }
+      cmd_hibernate ${ID}`);
+    expect(out).toContain(`hibernated ${ID}`);
+    expect(fs.existsSync(reg(`${ID}.hibernated`))).toBe(true);
+    const c = asManagerCalls(h.calls());
+    const disable = c.indexOf(`systemctl --user disable --now claude-session@${ID}`);
+    expect(disable, c.join('\n')).toBeGreaterThanOrEqual(0);
+    expect(disable, c.join('\n')).toBeLessThan(c.indexOf(READ));
+    expect(scopeTexts()).toEqual([HELD]);
+    expect(stops()).toEqual([]);
+  }, 30_000);
+
+  it('a spawn whose read hangs is not held either: it gives up inside the deadline and leaves no marker', () => {
+    const LONG_S = 20;   // a read this file would wait out whole if it were not bounded
+    pane();
+    fs.writeFileSync(reg(`${ID}.panescope`), `${UNIT}\n`);   // a stale one from an earlier spawn
+    fs.writeFileSync(fx('wedged-read'), `${LONG_S}\n`);
+    const t0 = Date.now();
+    h.sh(`${DEADLINES}\n _panescope_record ${ID}`);
+    expect(Date.now() - t0).toBeLessThan((LONG_S - 5) * 1000);
+    expect(fs.existsSync(reg(`${ID}.panescope`))).toBe(false);
+  }, 40_000);
+
+  it('control: a tmux that answers says nothing about a wedge', () => {
+    pane(); plantCgroup(`${SLICE}/${UNIT}`, [MAIN]); arm();
+    h.sh(`${SEAMS}\n ${DEADLINES}\n cmd_stop ${ID}`);
+    expect(scopeTexts()).toEqual([`pane-scope ${ID}: nothing left in ${UNIT}`]);
   });
 });
 
