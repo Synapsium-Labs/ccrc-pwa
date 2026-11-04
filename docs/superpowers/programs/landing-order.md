@@ -35,7 +35,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5c | 5, landed state | `ccd pr-state --project <p> --pr <n>`: its five words, its train proof and its capability token; the server's words, reader and capability-gated brand; wave 3d's F1 and F6 text and review 1109's paged rules read | ccd (fleet box first), server | wave 5a | — | merged 2026-10-31 (#2017 `a77811e5`; `docs/superpowers/plans/2026-10-30-landing-order-wave5c-pr-keyed-pr-state.md`, D-7593 to D-7599, and its departures note, D-7600 to D-7604; Decisions, 2026-10-31 07:06); reaches the fleet box with the next release the operator rolls out |
 | 5d | 5, the lander key | the radar's conf accepts `lander=coordinator` or `none`, mirrored to a marker the server reads; and D-7546's restatement, wave 5b's dropped Task 2 | ccd (fleet box first), skills | — | #2029 | run 1311 (the run's wave 17); review 1313 closed at `36f9897d2`, fix round 1 (Decisions, 2026-11-01 18:39); review 1327 closed at `40cfb6752`, fix round 2 (Decisions, 2026-11-02 22:35); review 1357 clean at `307e47b85`, accepted, departures D-7788 to D-7790 (Decisions, 2026-11-02 23:55); merged 2026-11-03 (`43e11b36`, release v0.0.921; Decisions, 2026-11-03 03:38), run 1311 closed done; plan `docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`, D-7635 to D-7647; the fleet box runs it (v0.0.926), and `lander=coordinator` is written for this project (Decisions, 2026-11-03 06:27) |
 | 5e | 5, the line's core | `landing_entries` and `landing_projects`, an entry pinned at `advance → merging`, the ejection that records its base, the second-ejection notice, the order and hold decider, and the coordinator's read of the line (`GET /api/landing`) | server, skills | wave 5a | — | merged 2026-10-31 (#2020 `4fc83e57`; `docs/superpowers/plans/2026-10-31-landing-order-wave5e-landing-line-core.md`, D-7610 to D-7627, and its departures note, D-7628 to D-7633; Decisions, 2026-10-31 15:17) |
-| 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | #2246 | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); the operator approved its CLAUDE.md amendments (Decisions, 2026-11-03 06:27); run 1312 dispatched 2026-11-03 before the plan reached `main`, on the operator's ruling (Decisions, 2026-11-03 16:14); wave-done verified at `89579e774`, review run 1413 (Decisions, 2026-11-04 03:12) |
+| 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | #2246 | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); the operator approved its CLAUDE.md amendments (Decisions, 2026-11-03 06:27); run 1312 dispatched 2026-11-03 before the plan reached `main`, on the operator's ruling (Decisions, 2026-11-03 16:14); wave-done verified at `89579e774`, review run 1413 (Decisions, 2026-11-04 03:12); fix round 1 on its report (Decisions, 2026-11-04 03:53) |
 | 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | to plan |
 | 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan |
 | 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | — | to plan |
@@ -1914,6 +1914,41 @@ carries it (spec §5.1, amended 2026-09-24).
   - **Review run 1413** went to `ccrc-pwa-amber-cove` at `89579e774`. It runs the held-out panel with a 60-minute
     bound, on route sonnet/high with sonnet subagents, workflow on for the panel only, and compact 40. Its brief names
     every claimed departure for the reviewer to examine.
+- **2026-11-04 03:53 — review 1413 read 5f at `89579e774`, and fix round 1 is sent.** The panel ran three Opus lenses
+  and 42 Sonnet refuters, with none dead and no lens unverified. It returned 22 findings: three distinct confirmed
+  defects, four advisory and fourteen refuted. The reviewer reproduced the twelve primary landing suites, the type
+  check, typecheck-tests, deviation-refs and the armed growth-check, all green. `CLAUDE.md` is byte-identical to
+  amendments A and B. The claimed-equivalent survivor C-QUARANTINE-BROAD survives and reads as equivalent, and rows
+  T3-REFUSE-UNREADABLE and T2-MUTEX are killed. Run 1312 went back to `working`, and the review count stands at 1
+  of 3.
+  - **To fix in this round:**
+    - F1, the advance route's landing-refusal branch, which no test pins. The reviewer deleted it and five landing
+      suites stayed green. The plan's Review Focus requires `mayApply` and the fence to survive HTTP. Fix:
+      route-level tests on `POST /api/runs/:id/advance` for each class (fenced, an uncertain pin or retreat
+      COMMIT, the unreadable-projection retreat) and a mutation row for the branch.
+    - F3: a `replay` fence clears only when the server restarts, because boot replay is the only reopen, and nothing
+      says so. Fix: README says it. No in-process reopen is added, per the plan.
+    - The same README note says that `landing-projection-unreadable` on a retreat is not cured by a restart, since
+      replay never writes a projection. The code keeps `recovery:'restart'` (the plan's §4 pairs it so) rather than
+      gaining a new wire word.
+    - A1: an effective no-op order over an unreadable target answered success. The code now follows its own header
+      and checks the targets first.
+    - A2: `landingRecordOf` folded an unreadable coordinator into no-run, which is unreachable today but an
+      overloaded value at a seam. It must keep the distinction.
+    - No mutation row ran at the final tip. The rows whose mutated file or killing test changed since they ran are
+      re-run there, alongside the new rows; each other row shows its files byte-identical.
+  - **Ruled and not fixed in this wave:**
+    - F2, step 6's "with the run at `working`" after a refused or uncertain retreat. The plan fixes Task 4's skill
+      text as exact copy, and the action step 6 names is already right, so it is carried (below) as the departure
+      skill-step6-refused-retreat.
+    - The growth, `store.ts` +200 and `routes.ts` +26, is accepted under the existing new-file rule: `growthCheck.ts`
+      is unchanged and no waiver is written (store-growth).
+    - The equal-head eject over an unreadable projection is 5e's own retreat ejection, not a false ejection. It is
+      outside unreadable-pin-retreat and carried.
+    - A3 (`readLanding`'s inner-read boundary, unreachable today) is carried.
+    - A4 (one commit message's import count) and the third arm of `landingHoldGate` (refuted 3/3, inside the plan)
+      need nothing.
+    - unreadable-pin-retreat is accepted as built: the reviewer confirmed all four limits of ask 299's ruling.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -2385,6 +2420,18 @@ restatement, taken by wave 5a). None of them accepts wrongly a doc the radar wri
     - **The read is unbounded.** With a held 40-byte secret, the masker replaces `order`'s shas after about 2048
       entries, and `entries`' after about 4096. The landing check then fails closed. 5h bounds the read, to
       non-terminal states or with `?pr=`.
+- **From wave 5f's review (1413).**
+  - **To the next wave that edits the coordinator skill:** step 6 says to report "with the run at `working`" when an
+    advance records no base. In 5f a retreat out of `merging` can be refused before the run moves (a recovery hold,
+    the fence, `landing-projection-unreadable`), and an uncertain answer leaves the run's state unknown, so the run
+    can still be at `merging` (skill-step6-refused-retreat).
+  - **To 5i** (the binding order):
+    - An equal-head retreat still ejects a pinned row whose projection is unreadable (a non-hash `handoffCommit`, a
+      blank `setBy`). Rule on it before the order binds.
+    - `landing-projection-unreadable` answers `recovery:'restart'`, yet nothing on a restart repairs the row, and no
+      repair route exists.
+    - `readLanding` called inside a caller's transaction would close the shared database on a throw. Its only caller
+      is outside a transaction today.
 - **From wave 5d's reviews (1327, 1357).**
   - **To 5i** (the marker's reader):
     - **Pin the project-directory symlink arm.** Plant `lander` and `enabled` behind a symlinked `landing/<project>`,
@@ -2484,9 +2531,10 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   carried test gap (to 5i); departures D-7788 to D-7790. The plan is
   `docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`. The fleet box runs it
   (v0.0.926), and `lander=coordinator` is written for this project (Decisions, 2026-11-03 06:27).
-- **5f is in review** (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`,
-  run 1312, #2246 at `89579e774`, review run 1413; Decisions, 2026-10-31 20:00, 2026-11-03 06:27 and 16:14, and
-  2026-11-04 03:12). The operator approved its exact `CLAUDE.md` amendments. At landing, the coordinator compares the
+- **5f is in fix round 1** (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`,
+  run 1312, #2246, reviewed at `89579e774` by review 1413; Decisions, 2026-10-31 20:00, 2026-11-03 06:27 and 16:14,
+  and 2026-11-04 03:12 and 03:53). Its next wave-done gets a new review run, which reads the round's commits and
+  makes a short whole-branch pass. The operator approved its exact `CLAUDE.md` amendments. At landing, the coordinator compares the
   PR's `CLAUDE.md` diff with amendments A and B byte for byte. At acceptance, it rules on the four departures the
   worker reported by slug, with the reviewer's evidence.
 - **5g to 5k follow in order**, each planned against `main` as it then stands. 5h also waits until the fleet box runs 5c.
