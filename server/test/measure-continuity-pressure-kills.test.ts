@@ -16,6 +16,7 @@ type Reading = {
   killed_background_tasks?: number; transcript_uuids_with_kills?: number;
   transcripts_read?: number; unreadable_transcripts?: number;
   malformed_rows?: number; unmeasured_notifications?: number;
+  notification_sources?: { user: number; queued_command: number; queue_enqueue: number };
 };
 beforeEach(() => {
   h = makeCcdHarness('ccrc-measure-pressure-');
@@ -53,7 +54,8 @@ const transcript = (uuid: string, lines: string[], root = '.claude', project = '
  *  interpreter the question in the conditions the instrument will meet it in. */
 const instrumentEnv = (): NodeJS.ProcessEnv => (
   { ...inheritedEnv(), HOME: h.home, TZ: 'UTC', XDG_RUNTIME_DIR: path.join(h.home, 'xdg') });
-const read = (extra: string[] = []): Reading => {
+// readFull(extra) returns the whole section, notification_sources included.
+const readFull = (extra: string[] = []): Reading => {
   const out = execFileSync('python3', ['-I', TOOL, '--home', h.home, '--stage', '6',
     '--journal', path.join(h.home, 'journal.json'), '--json', ...extra], {
     encoding: 'utf8', timeout: 30_000, env: instrumentEnv(),
@@ -64,6 +66,23 @@ const read = (extra: string[] = []): Reading => {
   expect(result.stage6.direct_pressure_kills, 'the direct metric is composed into stage 6').toBeDefined();
   return result.stage6.direct_pressure_kills!;
 };
+// read(extra) asserts that notification_sources is three non-negative integers on every reading except
+// { transcripts: 'absent' }, and returns the rest, so the existing read() assertions stay as they are.
+const read = (extra: string[] = []): Reading => {
+  const { notification_sources: sources, ...rest } = readFull(extra);
+  if (rest.transcripts !== 'absent') {
+    expect(sources, 'notification_sources is on every reading').toBeDefined();
+    expect(Object.keys(sources!).sort()).toEqual(['queue_enqueue', 'queued_command', 'user']);
+    for (const n of Object.values(sources!)) expect(Number.isInteger(n) && n >= 0).toBe(true);
+  }
+  return rest;
+};
+type Sources = { user: number; queued_command: number; queue_enqueue: number };
+const src = (user: number, queued_command = 0, queue_enqueue = 0): Sources => ({ user, queued_command, queue_enqueue });
+const attachmentRow = (prompt: unknown, t: number = T): string => JSON.stringify({
+  type: 'attachment', timestamp: iso(t), attachment: { type: 'queued_command', prompt, commandMode: 'prompt' } });
+const queueRow = (content: unknown, operation = 'enqueue', t: number = T): string => JSON.stringify({
+  type: 'queue-operation', operation, timestamp: iso(t), ...(content === null ? {} : { content }) });
 const clean = (kills: number, uuids: number, files: number): Reading => ({
   reading: 'measured', killed_background_tasks: kills, transcript_uuids_with_kills: uuids,
   transcripts_read: files, unreadable_transcripts: 0, malformed_rows: 0, unmeasured_notifications: 0,
@@ -350,12 +369,68 @@ describe('the scanner pins its own branches (D-4322 minors)', () => {
   it('hits from a file are admitted only after it reads to its end: a read that fails mid-file admits none of them', () => {
     transcript(U1, [row(note('lost-1')), row(note('lost-2')), row(note('lost-3'))]);
     transcript(U2, [row(note('kept'))]);
-    expect(readTorn(U1, 2)).toEqual({ ...clean(1, 1, 1), reading: 'partial', unreadable_transcripts: 1 });
+    expect(readTorn(U1, 2)).toEqual({ ...clean(1, 1, 1), reading: 'partial', unreadable_transcripts: 1, notification_sources: src(1) });
   });
 
   it('the torn-read harness reads a whole file when it does not tear (control)', () => {
     transcript(U1, [row(note('one')), row(note('two'))]);
     transcript(U2, [row(note('kept'))]);
-    expect(readTorn(U1, 99)).toEqual(clean(3, 2, 2));
+    expect(readTorn(U1, 99)).toEqual({ ...clean(3, 2, 2), notification_sources: src(3) });
+  });
+});
+
+describe('queued-command and enqueued notifications, counted once', () => {
+  it('a kill delivered only as a queued-command attachment is counted', () => {
+    transcript(U1, [attachmentRow(note('q1'))]);
+    expect(readFull()).toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 1, 0) });
+  });
+  it('a kill seen only in a queue enqueue row is counted', () => {
+    transcript(U1, [queueRow(note('e1'))]);
+    expect(readFull()).toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 0, 1) });
+  });
+  it('one notification across sources is counted once', () => {
+    const odd = note('odd', 'exploded');
+    transcript(U1, [queueRow(note('k')), attachmentRow(note('k')), row(note('k')),
+      queueRow(odd), attachmentRow(odd), row(odd)]);
+    expect(readFull()).toEqual({ ...clean(1, 1, 1), reading: 'partial', unmeasured_notifications: 1,
+      notification_sources: src(2, 2, 2) });
+  });
+  it('dequeue and remove rows are not read', () => {
+    transcript(U1, [queueRow(note('r'), 'remove'), queueRow(null, 'dequeue')]);
+    expect(readFull()).toEqual({ ...clean(0, 0, 1), notification_sources: src(0) });
+  });
+  it('an attachment of another type is not a notification', () => {
+    transcript(U1, [JSON.stringify({ type: 'attachment', timestamp: iso(T),
+      attachment: { type: 'skill_listing', prompt: note('s') } })]);
+    expect(readFull()).toEqual({ ...clean(0, 0, 1), notification_sources: src(0) });
+  });
+  it('a queued-command prompt in text parts is read as the user arm reads list content', () => {
+    transcript(U1, [attachmentRow([{ type: 'text', text: note('p') }])]);
+    expect(readFull()).toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 1, 0) });
+  });
+  it('a queued payload the scanner cannot read is unmeasured, never skipped', () => {
+    transcript(U1, [attachmentRow({ text: note('o1') }), queueRow({ text: note('o2') }), queueRow({ text: 'no notice' }),
+      attachmentRow([note('a')]), attachmentRow([{ type: 'image', source: 'x' }])]);
+    expect(readFull()).toEqual({ ...clean(0, 0, 1), reading: 'partial', unmeasured_notifications: 3,
+      notification_sources: src(0, 2, 1) });
+  });
+  it('a queued row with a non-string timestamp is one malformed row', () => {
+    transcript(U1, [JSON.stringify({ type: 'attachment', timestamp: 1760443200,
+      attachment: { type: 'queued_command', prompt: note('t') } }), row(note('real'))]);
+    expect(readFull()).toEqual({ ...clean(1, 1, 1), reading: 'partial', malformed_rows: 1,
+      notification_sources: src(1) });
+  });
+  it('the window applies to queued rows by their own timestamp', () => {
+    transcript(U1, [attachmentRow(note('early'), T - 1), queueRow(note('late'), 'enqueue', T + 86400),
+      attachmentRow(note('in'), T + 1)]);
+    expect(readFull(['--since', '2026-10-14 12:00:00', '--until', '2026-10-15 12:00:00']))
+      .toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 1, 0) });
+  });
+  it('a notice enqueued before the window edge and delivered after it counts in both windows', () => {
+    transcript(U1, [queueRow(note('edge'), 'enqueue', T - 1), attachmentRow(note('edge'), T + 1)]);
+    expect(readFull(['--since', '2026-10-13 12:00:00', '--until', '2026-10-14 12:00:00']))
+      .toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 0, 1) });
+    expect(readFull(['--since', '2026-10-14 12:00:00', '--until', '2026-10-15 12:00:00']))
+      .toEqual({ ...clean(1, 1, 1), notification_sources: src(0, 1, 0) });
   });
 });
