@@ -6,6 +6,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { fileURLToPath } from 'node:url';
+import { LEASE_AUDIT_REFUSALS } from '../../shared/api.js';
 import { LEASE, STUBS, agentTree, carrier, carrierPath, leasesDir, main, mark } from './leaseFixture.js';
 
 let h: CcdHarness;
@@ -203,4 +205,14 @@ describe('ws-lease-audit measures a leased tree', () => {
     refused(auditArgv(`--lease ${LEASE} --generation 1 --other x`), 'usage');
     refused(auditArgv(`--lease ${LEASE} --generation`), 'usage');
   }, 60_000);
+
+  it('W5-AU10: the verb refuses with exactly the words shared/api.ts declares, the server\'s one reader of them', () => {
+    const lib = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'ccd', 'lib',
+      'delegation-lease.sh'), 'utf8');
+    const start = lib.indexOf('\ncmd_ws_lease_audit() {');
+    expect(start).toBeGreaterThan(0);
+    const body = lib.slice(start);
+    const words = new Set([...body.matchAll(/_dl_mark_refuse ([a-z-]+) /g), ...body.matchAll(/"refusal":"([a-z-]+)"/g)].map((m) => m[1]!));
+    expect([...words].sort()).toEqual([...LEASE_AUDIT_REFUSALS].sort());
+  });
 });

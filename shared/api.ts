@@ -11753,6 +11753,18 @@ export const LEASE_MARK_REFUSALS = ['usage', 'unmeasured', 'busy', 'bad-carrier'
   'not-under-projects-root', 'no-tree', 'symlink', 'main-worktree', 'locked', 'registered', 'nested', 'tree-held',
   'fingerprint-mismatch'] as const;
 export type LeaseMarkRefusal = (typeof LEASE_MARK_REFUSALS)[number];
+/** `ws-lease-audit`'s refusal words (delegation broker wave 5, PR2), the server's one reader of them. */
+export const LEASE_AUDIT_REFUSALS = ['usage', 'unmeasured', 'no-carrier', 'bad-carrier', 'stale-generation', 'no-tree',
+  'fingerprint-mismatch'] as const;
+export type LeaseAuditRefusal = (typeof LEASE_AUDIT_REFUSALS)[number];
+/** `ccd ws-lease-audit`'s one JSON document: the read-only measure of a leased tree (`ccd/lib/delegation-lease.sh#cmd_ws_lease_audit`).
+ *  A fact that did not read is `'unmeasured'`, never `false` or 0, and makes `changed` `'unmeasured'` too. `holders` is
+ *  present only when the audit was asked `--holders`. `token` is evidence the promotion records, spent by no verb (D-7826). */
+export type LeaseAuditAnswer =
+  | { ok: true; lease: string; generation: number; tip: string; dirty: boolean | 'unmeasured';
+      aheadOfBase: number | 'unmeasured'; changed: boolean | 'unmeasured';
+      holders?: readonly number[] | 'unmeasured'; token: string }
+  | { ok: false; refusal: LeaseAuditRefusal; detail: string };
 
 /** The keys every spool line carries. A line is evidence and never authority; the hook decides nothing about
  *  parentage. `truncated` marks a line whose optional fields were dropped to fit its size bound. */

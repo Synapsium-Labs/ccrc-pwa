@@ -360,6 +360,7 @@ export const REQUIRED_VERB_FLAG = {
   'ws-title': '--session',
   'ws-shed-deps': '--session',
   'ws-lease-mark': '--lease',
+  'ws-lease-audit': '--lease',
   'testbox-remote': '--state',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
@@ -654,6 +655,10 @@ export const EXEC_WHITELIST = {
     // carrier file on the box, the server's mark of a generation it has journalled. It is ENROLLED in
     // `REQUIRED_VERB_FLAG` on `--lease`, the flag that names the one lease it may write, so no bare form is grantable.
     ['ws-lease-mark', '--lease'],
+    // THE LEASE AUDIT (delegation broker wave 5, PR2). `ws-lease-audit --lease <id> --generation <n> [--holders]` is the
+    // read-only measure of one leased tree: it writes nothing. It is ENROLLED in `REQUIRED_VERB_FLAG` on `--lease` all the
+    // same, so a bare grant cannot admit an audit of any lease the server was talked into naming.
+    ['ws-lease-audit', '--lease'],
     // THE COLLECTOR'S LOOSE ARM (fleet disk retention spec 2026-10-23 §2.4, D-6626). Two read-only `ws-audit` modes: the
     // census of the entries directly under the scratch root (names as hex) and one such entry's audit, which mints the
     // token. Neither destroys anything, and neither is gated in `REQUIRED_VERB_FLAG` (`ws-audit` is not). The loose VERB

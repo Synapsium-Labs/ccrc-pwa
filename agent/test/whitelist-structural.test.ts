@@ -191,6 +191,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the lease carrier writer granted without --lease',
     codes: ['TS2322'],
   },
+  // THE LEASE AUDIT (delegation broker wave 5, PR2), g25's shape: enrolled on `--lease`, so the narrowed grant is a
+  // compile error.
+  'g26-ws-lease-audit-without-lease.ts': {
+    what: 'the lease audit granted without --lease',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -442,6 +448,15 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     expect(REQUIRED_VERB_FLAG['ws-lease-mark']).toBe('--lease');
     expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-lease-mark'), 'one ws-lease-mark grant, on --lease')
       .toEqual([['ws-lease-mark', '--lease']]);
+  });
+
+  it('W5-G11: throws on a ws-lease-audit without --lease, and grants exactly the one prefix (delegation broker wave 5)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-audit']]))).toThrow();
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-audit', '--generation']]))).toThrow();
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-audit', '--lease']]))).not.toThrow();
+    expect(REQUIRED_VERB_FLAG['ws-lease-audit']).toBe('--lease');
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-lease-audit'), 'one ws-lease-audit grant, on --lease')
+      .toEqual([['ws-lease-audit', '--lease']]);
   });
 
   it('throws on a ws-orphan with no confirmation token, and grants the audit modes without one (D-6630)', () => {

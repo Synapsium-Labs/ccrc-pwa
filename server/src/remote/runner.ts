@@ -83,6 +83,12 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // `deps-shed-budget.test.ts` reads both sides from source and holds the sum under this row. A kill here would leave no
   // stamp and no journal row, so the row is ws-reap's, not the flat 90 s.
   'ws-shed-deps': 240_000,
+  // The lease audit (delegation broker wave 5, PR2; O5-2 (b), D-7841): with `--holders` it asks both holder probes, each
+  // bounded at 10 s (`WS_PATH_USERS_SCAN_S`, `WS_CWD_USERS_SCAN_S`), beside the git reads of one tree (a `git status` that
+  // lists untracked files, a `rev-list --count`) and one carrier read. 60 s holds the two 10 s walks and leaves 40 s for
+  // the git reads of a large tree; the key is the verb, so an audit without `--holders` has the same bound. It writes
+  // nothing, so a kill here loses nothing but the answer.
+  'ws-lease-audit': 60_000,
   // The two SPAWNING verbs, and the reason they need the agent's MAXIMUM
   // (`MAX_EXEC_TIMEOUT_MS`, agent/src/server.ts) rather than a merely larger
   // number (F8, found live 2026-08-12). Both end in `_spawn`, which blocks in
@@ -187,7 +193,9 @@ const CCD_DRY_RUN_TIMEOUT_MS: Record<string, number> = {
  *  of the verb, so `--roll` in its argv is the flag itself. */
 const CCD_ROLL_TIMEOUT_MS = 300_000;
 
-function timeoutMsFor(cmd: string, args: string[]): number {
+/** The bound one runner call gets. Exported for the lease audit's budget row (delegation broker wave 5, W5-G15), the one
+ *  lookup that reads `CCD_VERB_TIMEOUT_MS` from outside; unchanged otherwise. */
+export function timeoutMsFor(cmd: string, args: string[]): number {
   if (cmd !== 'ccd') return TMUX_TIMEOUT_MS;
   const dry = CCD_DRY_RUN_TIMEOUT_MS[args[0] ?? ''];
   if (dry !== undefined && args.includes('--dry-run')) return dry;

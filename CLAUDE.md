@@ -500,8 +500,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   file absent and retires it.
 - **Zero new ccd verbs for coordination mutation** — mutations ride already-granted `CcdArgv` (a brand built at
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
-  Workspace-lifecycle verbs and flags (`ws-reclaim`, `ws-expire`, `ws-lease-mark`) act on workspaces, not on
-  coordination state, are server-composed only, and are not covered by that rule.
+  Workspace-lifecycle verbs and flags (`ws-reclaim`, `ws-expire`, `ws-lease-mark`, `ws-lease-audit`) act on workspaces,
+  not on coordination state, are server-composed only, and are not covered by that rule (`ws-lease-audit` is read-only:
+  it writes nothing, so it is not on the SAFETY list).
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
   on missing — **except FOUR deliberately ungated operator doors: `POST /api/coord/pause`, `POST
   /api/runs/:id/abandon`, `POST /api/claims/:id/break` and `POST /api/runs/:id/reclaim`** (D-282 (was D-B4-9),
