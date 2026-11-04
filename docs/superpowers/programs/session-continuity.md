@@ -1011,14 +1011,18 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - **`pressure_reap_comparison`:** baseline 0, withdraw above 2, observed 0: `not-triggered` over the part read. The
     unread 2 h 9 m are not folded into that decision; they stay unmeasured.
   - **`direct_pressure_kills`:** `partial`. 1,787 transcripts were read (every copy), none unreadable, no malformed
-    row; 0 killed background tasks, in 0 transcripts; 33 notifications unmeasured. This count never feeds the B
-    comparison.
+    row; 0 killed background tasks, in 0 transcripts; 33 notifications unmeasured. So the direct target, 0, is met
+    for what was read, not proven: the 33 unmeasured notifications and the scanner's discovery limits (spec §9's
+    as-built note) stay open, and whether the transcripts read include all of the week's first 2 h 9 m on the
+    previous box is unmeasured. This count never feeds the B comparison.
   - **`inert_scopes`** (the sweep's current record, not the week's history): mode `live`; 1 dead, 0 inert, 0 dead for
     a day or more; carried scopes 0 dead, 0 live, 0 unknown.
-  - **Exposure.** At the read, 54 sessions were running. Each has an ordinary start (`spawn`, `done`) in the lifecycle
-    journal after 2026-10-28 05:38 UTC, the earliest at 07:50 UTC that day, with no journal gaps, so each is expected to
-    carry the variable; the installed `ccd` still sets it in the spawn environment (`_resume_env`). The variable in
-    any process's environment is unmeasured.
+  - **Exposure.** At the read, 54 sessions were running, with no lifecycle journal gaps. Each one's latest ordinary
+    start (`spawn`, `done`) is after 2026-10-28 05:38 UTC, the earliest of those at 07:50 UTC that day. Eleven of them
+    also started between 06:59 and 07:05 UTC that day, inside the unread 2 h 9 m, so panes did run in that window.
+    This box's installed build at those start times is not in this read's evidence. Today's build contains
+    `d8cd4765`, and its `ccd` sets the variable in the spawn environment (`_resume_env`), so each running session is
+    expected to carry it, not measured to. The variable in any process's environment is unmeasured.
   - **The rule applied.** The observed reap-class count is 0 in the part read, so nothing triggers withdrawal (Task 5
     Step 5) and the variable stays. The unread 2 h 9 m are reported as unmeasured; no rule fires on them without a
     read, and this coordinator invents none.
