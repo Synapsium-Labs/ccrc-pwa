@@ -812,7 +812,7 @@ measured cell records the failing test and `N failed | M passed`.
 
 ## 10. Sequencing
 
-> **Wave 5 amendment (plan approved 2026-11-04).** Waves 6 and 7 are dropped, so the wave-6 sequencing after #166 no longer applies (D-7002). Every `delegation_*` table still comes from wave 2's migration, and wave 5 adds none (D-7847). Wave 5's one durable migration is the additive nullable `runs.promotedLeaseId` column (D-7844). Wave 5 lands its fleet-box PRs first, and its journal and promotion PRs ship reader first (D-7809, D-7808). Reverts go in reverse order, but never take the server box below the newest reader build once a later writer has used what it reads.
+> **Wave 5 amendment (plan approved 2026-11-04).** Waves 6 and 7 are dropped, so the wave-6 sequencing after #166 no longer applies (D-7002). Every `delegation_*` table still comes from wave 2's migration, and wave 5 adds none (D-7847). Wave 5's one durable migration is the additive nullable `runs.promotedLeaseId` column (D-7844). Wave 5 lands its fleet-box PRs first, and its journal and promotion PRs ship reader first (D-7809, D-7808). Reverts go in reverse order, but never take the server box below the newest reader build once a later writer has used what it reads. Promotion (the plan's PR9a and PR9b) ships as its own wave, 5b, once the rest of wave 5 has landed and been used (the operator's ruling of 2026-11-04, D-7940).
 
 One ccrc programme, run through `runs open` / `runs dispatch` — this design exists because that was
 skipped — one wave per stage. Every `delegation_*` table lands in wave 2's single migration. Waves 1–4
