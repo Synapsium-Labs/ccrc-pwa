@@ -37,20 +37,41 @@ vi.mock('../src/screens/DigestScreen', () => {
 });
 
 const APP = readFileSync(path.join(__dirname, '../src/app.tsx'), 'utf8');
-/** Every module specifier of a static `import … from '…'` statement (a type-only import included: it loads nothing,
- *  but none of the six is imported for a type either), and of a bare `import '…';`, which loads the module too. */
+/** Every module specifier a static statement names (review 1473 F7): `import … from`, a bare `import '…'`, and
+ *  `export … from` (a re-export loads the module as surely), in either quote, with or without a trailing semicolon,
+ *  however many share a line, a type-only one included (it loads nothing, but none of the six is imported for a type
+ *  either). Read from `app.tsx` alone: no other module imports the six. */
 const staticImports = (src: string): string[] =>
-  [...src.matchAll(/^import\s+(?:[^;']*?from\s+)?'([^']+)';/gms)].map((m) => m[1] as string);
-const dynamicImports = (src: string): string[] => [...src.matchAll(/\bimport\('([^']+)'\)/g)].map((m) => m[1] as string);
+  [...src.matchAll(/(?:^|;)[ \t]*(?:import|export)\s+(?:type\s+)?(?:[^;'"`()]*?\bfrom\s*)?(['"])([^'"\n]+)\1/gm)]
+    .map((m) => m[2] as string);
+/** Every specifier a dynamic `import(…)` names, spaced or across lines, in any quote, and every `import.meta.glob`
+ *  pattern, so a glob that reaches a screen shows in the list the case compares with the six. */
+const dynamicImports = (src: string): string[] => [
+  ...[...src.matchAll(/\bimport\s*\(\s*(['"`])([^'"`]+)\1\s*[,)]/g)].map((m) => m[2] as string),
+  ...[...src.matchAll(/\bimport\.meta\.glob\s*(?:<[^>]*>)?\s*\(\s*(['"`])([^'"`]+)\1/g)].map((m) => m[2] as string),
+];
 
 describe('the entry does not carry the six screens', () => {
-  it('CONTROL: the scanners read a static and a dynamic import', () => {
-    expect(staticImports("import { A } from './a';\nimport type {\n  B,\n} from './b';\nimport './c.css';\n"))
-      .toEqual(['./a', './b', './c.css']);
-    expect(dynamicImports("const A = lazy(() => import('./a').then((m) => m));")).toEqual(['./a']);
+  it('CONTROL: the scanners read every static and dynamic form', () => {
+    expect(staticImports([
+      "import { A } from './a';",
+      'import type {\n  B,\n} from "./b"',
+      "import './c.css';",
+      "export { D } from './d'; export * from './e'",
+      "export * as F from './f'",
+      "import G from './g'; import H from './h';",
+      "export const notAnImport = 'x';",
+      "export function alsoNot(): string { return 'y'; }",
+    ].join('\n'))).toEqual(['./a', './b', './c.css', './d', './e', './f', './g', './h']);
+    expect(dynamicImports([
+      "const A = lazy(() => import('./a').then((m) => m));",
+      'const B = lazy(() => import ( "./b" ));',
+      'const C = lazy(() => import(\n  `./c`\n));',
+      "const D = import.meta.glob('./screens/*.tsx');",
+    ].join('\n'))).toEqual(['./a', './b', './c', './screens/*.tsx']);
   });
 
-  it('the entry module graph imports none of the six screens', () => {
+  it('app.tsx imports none of the six screens statically, and each only by its own dynamic import', () => {
     const statics = staticImports(APP);
     expect(statics.length).toBeGreaterThan(10);
     expect(statics.filter((s) => (LAZY as readonly string[]).includes(s))).toEqual([]);
