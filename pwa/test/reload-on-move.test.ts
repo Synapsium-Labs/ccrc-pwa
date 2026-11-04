@@ -169,15 +169,17 @@ describe('navigate asks the reload gate before it pushes (Task C3)', () => {
     setVisibility('hidden');
     const t = T0 + 120_000;
     now = t;
+    navigate('/runs');
+    expect(acts.go, 'hidden, two minutes after the load: holds').not.toHaveBeenCalled();
     setVisibility('visible');
     now = t + 5_000;
-    navigate('/runs');
-    expect(acts.go, 'five seconds back: holds').not.toHaveBeenCalled();
-    expect(location.pathname).toBe('/runs');
-    now = t + 15_000;
     navigate('/accounts');
+    expect(acts.go, 'five seconds back: holds').not.toHaveBeenCalled();
+    expect(location.pathname).toBe('/accounts');
+    now = t + 15_000;
+    navigate('/waiting');
     expect(acts.go).toHaveBeenCalledTimes(1);
-    expect(acts.go).toHaveBeenCalledWith('/accounts', false);
+    expect(acts.go).toHaveBeenCalledWith('/waiting', false);
   });
 
   it('a hidden page never reloads', () => {
