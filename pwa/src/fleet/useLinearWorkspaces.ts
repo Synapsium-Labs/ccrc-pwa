@@ -8,8 +8,14 @@
 // newest-issued guard is `usePoll`'s, with no timer (`pollMs: null`): a read that lands after a write's answer cannot
 // put the old list back.
 import { useCallback, useState } from 'react';
-import { api, type LinearWorkspacesRead } from '../lib/api';
+import { api, readLinearWorkspaces, type LinearWorkspacesRead } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
+import { forget, peek, put, settingsKey } from '../lib/screenCache';
+
+/** This read's key in the screen cache: its last good list is drawn at once on the next mount; a write forgets it.
+ *  The read already ran `api.linearWorkspaces`' reader, so what is kept is that list, and it is drawn back through
+ *  `readLinearWorkspaces`, which reads its own answer whole (`settings-last-view.test.tsx` pins that). */
+const CACHE_KEY = settingsKey('linear-workspaces');
 
 /** Why there is no list: the read failed, or its answer was a body this build cannot read. */
 export type LinearReadFailure = 'failed';
@@ -25,13 +31,15 @@ export interface LinearWorkspacesPoll {
 }
 
 export function useLinearWorkspaces(): LinearWorkspacesPoll {
-  const [state, setState] = useState<{ view: LinearWorkspacesRead | null; failure: LinearReadFailure | null }>({ view: null, failure: null });
+  const [state, setState] = useState<{ view: LinearWorkspacesRead | null; failure: LinearReadFailure | null }>(
+    () => ({ view: readLinearWorkspaces(peek(CACHE_KEY)?.raw), failure: null }));
   const { reload: load, supersede } = usePoll({
     pollMs: null,
     request: () => api.linearWorkspaces(),
     onOutcome: (outcome) => {
       if (outcome.ok) {
         const v = outcome.raw as LinearWorkspacesRead | 'unreadable';
+        if (v !== 'unreadable') put(CACHE_KEY, v, Date.now());
         setState((prev) => (v === 'unreadable' ? { view: prev.view, failure: 'failed' } : { view: v, failure: null }));
       } else {
         setState((prev) => ({ view: prev.view, failure: 'failed' }));
@@ -42,6 +50,7 @@ export function useLinearWorkspaces(): LinearWorkspacesPoll {
   const reload = useCallback(() => { load(); }, [load]);
   const settle = useCallback((view: LinearWorkspacesRead) => {
     supersede();
+    forget(CACHE_KEY);
     setState({ view, failure: null });
   }, [supersede]);
   return { view: state.view, failure: state.failure, reload, settle };

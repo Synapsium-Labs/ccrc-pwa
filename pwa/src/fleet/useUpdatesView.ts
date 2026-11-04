@@ -15,6 +15,7 @@ import { useMemo, useState } from 'react';
 import type { UpdatesView } from '../../../shared/api';
 import { ApiError, api } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
+import { peek, put, settingsKey } from '../lib/screenCache';
 import { asUpdatesView } from './updatesRead';
 import { sameJson } from '../lib/sameJson';
 
@@ -25,6 +26,9 @@ import { sameJson } from '../lib/sameJson';
  *  the same rows again. The visibility refresh covers a phone that slept
  *  through polls. */
 export const UPDATES_POLL_MS = 60_000;
+
+/** This read's key in the screen cache: its last good answer is drawn at once on the next mount. */
+const CACHE_KEY = settingsKey('updates');
 
 /** Why the latest poll produced no view — two words, because the screen says
  *  two different things: `not-configured` is a box with no control plane (a
@@ -75,14 +79,17 @@ const failureOf = (err: unknown): UpdatesFailure =>
  * after some event from one issued before it (D-4273).
  */
 export function useUpdatesView(pollMs: number = UPDATES_POLL_MS): UpdatesPoll {
+  // The last answer kept from an earlier mount (console speed C2), drawn at once through the reader. `seq` stays 0: no
+  // read of THIS mount has landed, so a hold waiting on a read issued after a tap keeps waiting (D-4273).
   const [state, setState] = useState<{ view: UpdatesView | null; failure: UpdatesFailure | null; seq: number }>(
-    { view: null, failure: null, seq: 0 });
+    () => ({ view: asUpdatesView(peek(CACHE_KEY)?.raw), failure: null, seq: 0 }));
   const { reload } = usePoll({
     pollMs,
     request: () => api.updates(),
     onOutcome: (outcome, issue) => {
       if (outcome.ok) {
         const view = asUpdatesView(outcome.raw);
+        if (view !== null) put(CACHE_KEY, outcome.raw, Date.now());
         // An equal good answer keeps the previous view's reference (C8, D-6440), so its readers do not re-render, but
         // `seq` still takes this read's number: HaltBanner reads it as the issue of the last good read (D-4273).
         setState((prev) => (view === null

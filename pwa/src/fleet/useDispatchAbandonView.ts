@@ -10,10 +10,15 @@ import { ApiError, api, apiErrorText } from '../lib/api';
 import { isRecord } from '../lib/wire';
 import { settingsReadFailure, type SettingsReadFailure } from '../lib/notAvailable';
 import { usePoll } from '../lib/usePoll';
+import { forget, peek, put, settingsKey } from '../lib/screenCache';
 import { asDispatchAbandonView } from './dispatchAbandonWords';
 
 /** The read's cadence, the stall section's: 60 s, the lane's own beat. */
 export const DISPATCH_ABANDON_POLL_MS = 60_000;
+
+/** This read's key in the screen cache: its last good answer is drawn at once on the next mount; a write, or a
+ *  not-available answer, forgets it. */
+const CACHE_KEY = settingsKey('dispatch-abandon');
 
 export interface DispatchAbandonPoll {
   /** The LAST GOOD answer: a failed read keeps it; a not-available answer drops it. */
@@ -26,16 +31,18 @@ export interface DispatchAbandonPoll {
 
 export function useDispatchAbandonView(pollMs: number = DISPATCH_ABANDON_POLL_MS): DispatchAbandonPoll {
   const [state, setState] = useState<{ view: DispatchAbandonView | null; failure: SettingsReadFailure | null }>(
-    { view: null, failure: null });
+    () => ({ view: asDispatchAbandonView(peek(CACHE_KEY)?.raw), failure: null }));
   const { reload: load, supersede } = usePoll({
     pollMs,
     request: () => api.dispatchAbandon(),
     onOutcome: (outcome) => {
       if (outcome.ok) {
         const view = asDispatchAbandonView(outcome.raw);
+        if (view !== null) put(CACHE_KEY, outcome.raw, Date.now());
         setState((prev) => (view === null ? { view: prev.view, failure: 'failed' } : { view, failure: null }));
       } else {
         const failure = settingsReadFailure(outcome.err);
+        if (failure === 'not-configured') forget(CACHE_KEY);
         setState((prev) => ({ view: failure === 'not-configured' ? null : prev.view, failure }));
       }
     },
@@ -43,6 +50,7 @@ export function useDispatchAbandonView(pollMs: number = DISPATCH_ABANDON_POLL_MS
   const reload = useCallback(() => { load(); }, [load]);
   const settle = useCallback((view: DispatchAbandonView) => {
     supersede();
+    forget(CACHE_KEY);
     setState({ view, failure: null });
   }, [supersede]);
   return { view: state.view, failure: state.failure, reload, settle };

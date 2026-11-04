@@ -12,11 +12,15 @@ import type { StallConfirmRequired, StallWatchView } from '../../../shared/api';
 import { ApiError, api, apiErrorText } from '../lib/api';
 import { settingsReadFailure, type SettingsReadFailure } from '../lib/notAvailable';
 import { usePoll } from '../lib/usePoll';
+import { forget, peek, put, settingsKey } from '../lib/screenCache';
 import { isRecord } from '../lib/wire';
 import { asStallConfirm, asStallWatchView } from './stallWatchRead';
 
 /** The read's cadence: the stall sweep's own (60 s), so a faster read would fetch the same answer again. */
 export const STALL_WATCH_POLL_MS = 60_000;
+
+/** This read's key in the screen cache: its last good answer is drawn at once on the next mount; a write forgets it. */
+const CACHE_KEY = settingsKey('stall-watch');
 
 /** Why the latest poll produced no view. `not-configured` is a server with no stall-watch settings to offer (a box with
  *  no coordination database, or an older build without the route), which the section renders INSTEAD of any view that
@@ -83,13 +87,14 @@ export function stallWriteRefusal(err: unknown): StallWriteRefusal {
  */
 export function useStallWatchView(pollMs: number = STALL_WATCH_POLL_MS): StallWatchPoll {
   const [state, setState] = useState<{ view: StallWatchView | null; failure: StallWatchFailure | null }>(
-    { view: null, failure: null });
+    () => ({ view: asStallWatchView(peek(CACHE_KEY)?.raw), failure: null }));
   const { reload: load, supersede } = usePoll({
     pollMs,
     request: () => api.stallWatch(),
     onOutcome: (outcome) => {
       if (outcome.ok) {
         const view = asStallWatchView(outcome.raw);
+        if (view !== null) put(CACHE_KEY, outcome.raw, Date.now());
         setState((prev) => (view === null ? { view: prev.view, failure: 'failed' } : { view, failure: null }));
       } else {
         const failure = settingsReadFailure(outcome.err);
@@ -101,6 +106,7 @@ export function useStallWatchView(pollMs: number = STALL_WATCH_POLL_MS): StallWa
   const reload = useCallback(() => { load(); }, [load]);
   const settle = useCallback((view: StallWatchView) => {
     supersede();   // every poll issued before this write now lands stale
+    forget(CACHE_KEY);   // the kept answer is from before the write; the next read keeps the new one
     setState({ view, failure: null });
   }, [supersede]);
   return { view: state.view, failure: state.failure, reload, settle };

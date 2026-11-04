@@ -3,6 +3,7 @@ import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
 import { setStripExpanded } from '../src/fleet/stripExpanded';
 import { clearEveryLru } from '../src/lib/highlightCache';
+import { clearScreenCache } from '../src/lib/screenCache';
 import { memoryStorage } from '../src/lib/storage';
 import { useFleetStore } from '../src/stores/fleet';
 
@@ -77,6 +78,12 @@ import { useFleetStore } from '../src/stores/fleet';
 // earlier test cached. `clearEveryLru` empties every cache `createLru` made. It is test isolation only, and production
 // never calls it. `highlightCache.ts` imports nothing, so this hook loads no renderer and no file's own `vi.mock` of
 // `lib/markdown` meets an instance loaded here first.
+//
+// (5) THE SCREEN CACHE IS EMPTIED AFTER EVERY TEST (console speed C2).
+//
+// `screenCache.ts` keeps the last answer of each Settings read and digest day in module state, and the hooks draw it on
+// their first render. Across tests that is a leak: a later test in the same file would draw an earlier test's answer
+// before any read of its own. `screenCache.ts` imports nothing, so this hook loads no hook or screen.
 afterEach(async () => {
   useFleetStore.getState().disconnect();
   cleanup();
@@ -87,6 +94,7 @@ afterEach(async () => {
     /* a file on the node environment has no window, and a test may have made storage throw: nothing to clear then */
   }
   clearEveryLru();
+  clearScreenCache();
   if (vi.isFakeTimers()) {
     vi.runOnlyPendingTimers();
   } else {

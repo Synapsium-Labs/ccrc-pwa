@@ -19,9 +19,14 @@ import { api } from '../lib/api';
 import { isCount, isRecord } from '../lib/wire';
 import { settingsReadFailure, type SettingsReadFailure } from '../lib/notAvailable';
 import { usePoll } from '../lib/usePoll';
+import { forget, peek, put, settingsKey } from '../lib/screenCache';
 
 /** The read's cadence: `CCRC_TESTBOX_POLL`'s default, the server poll's own beat. */
 export const TESTBOX_POLL_MS = 30_000;
+
+/** This read's key in the screen cache: its last good answer is drawn at once on the next mount; a not-available
+ *  answer forgets it. */
+const CACHE_KEY = settingsKey('testbox');
 
 export type TestboxSwitch = 'on' | 'off' | 'unknown';
 
@@ -114,16 +119,18 @@ export interface TestboxPoll {
 
 export function useTestboxView(pollMs: number = TESTBOX_POLL_MS): TestboxPoll {
   const [state, setState] = useState<{ view: TestboxRead | null; failure: SettingsReadFailure | null }>(
-    { view: null, failure: null });
+    () => ({ view: asTestboxRead(peek(CACHE_KEY)?.raw), failure: null }));
   const { reload: load } = usePoll({
     pollMs,
     request: () => api.testbox(),
     onOutcome: (outcome) => {
       if (outcome.ok) {
         const view = asTestboxRead(outcome.raw);
+        if (view !== null) put(CACHE_KEY, outcome.raw, Date.now());
         setState((prev) => (view === null ? { view: prev.view, failure: 'failed' } : { view, failure: null }));
       } else {
         const failure = settingsReadFailure(outcome.err);
+        if (failure === 'not-configured') forget(CACHE_KEY);
         setState((prev) => ({ view: failure === 'not-configured' ? null : prev.view, failure }));
       }
     },
