@@ -3379,6 +3379,13 @@ would land (`New workspace on <project> — <account>, N% free`) or why nothing 
 beside `Runs ·` re-forecasts every card for one model class, and each card's **+** then asks for that class;
 **Coordinator row**, the default, is the request that names no class.
 
+**Add project**, at the foot of the project list and in the first-run panel, creates a project there:
+**From GitHub** (`owner/repo` or a github.com URL; the name defaults to the repo's) or **Empty**. It is
+`POST /api/projects` → `ccd project-add`, which clones or `git init`s a NEW directory under `~/projects` on the
+fleet box, never replacing an existing name; a private repository needs the fleet box user's own git credentials.
+An empty project takes sessions in its main checkout at once, but no workspace until it has a GitHub `origin`
+(`ws-add` needs `origin/HEAD`).
+
 ### A session (`/s/<id>`)
 
 **The header** names the session (a branch name the model writes types itself in — "The branch takes the name
@@ -3737,7 +3744,7 @@ general remote-shell:
   anything after it is unconstrained: `pr-state` needs `--session` or
   `--project`; `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
   `ws-hold`/`ws-release`/`ws-rename`/`ws-title`/`route`/`win-size` need `--session`;
-  `coord-pause` and `reclaim-pause` need `--state` and `project-pool` needs `--project`; and
+  `coord-pause` and `reclaim-pause` need `--state`, `project-pool` needs `--project` and `project-add` needs `--name`; and
   `ws-reap` and `ws-reclaim` need `--expect` — a load-bearing confirmation
   token, so an unconfirmed reap or reclaim can never cross the wire at all.
   `ws-rename`'s flag guards a different hazard: the verb destroys nothing, but it is the first whose argv the server builds
@@ -3750,7 +3757,7 @@ general remote-shell:
   `UNGRANTABLE_VERBS` and `REQUIRED_VERB_FLAG` (`agent/src/whitelist.ts`)
   make a grant of `ws-rm` or `ws-gc`, an empty prefix, or a gated verb
   (`ws-reap`, `ws-reclaim`, `ws-rename`, `coord-pause`, `reclaim-pause`,
-  `project-pool`, `route`, `win-size`) without its flag a type error, and
+  `project-pool`, `project-add`, `route`, `win-size`) without its flag a type error, and
   `auditExecWhitelist` re-checks the same rules when the agent loads —
   together with any command key other than `tmux` and `ccd`, such as one of
   `FORBIDDEN_COMMANDS` (`gh`, `git`, the shells and interpreters, `ssh`,
@@ -7238,6 +7245,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-collect --expect <token> --session <id>` | the server's removal of an orphaned, witnessed child TEMP ROOT, by quarantine rename — never run by hand or by a session; its audit is `ws-audit --session <id> --collect`, and the server's collector lane composes it only once the operator has armed it: in Settings (Temp root collector) for the connected fleet node, or by `$REG/collect-lane-live` until that file's retirement is recorded |
 | `ws-rm [--reason <text>] <id>` · `ws-gc [--prune | --fast]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it; `--fast` lists the same rows without measuring sizes, archived rows showing their archive manifest's size, and never combines with `--prune`) |
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
+| `project-add --name <n> (--url <github-url> \| --empty)` | add a NEW project under the projects root: clone `https://github.com/<o>/<r>.git` or `git@github.com:<o>/<r>.git` (no prompt: `GIT_TERMINAL_PROMPT=0`, and `ssh -o BatchMode=yes` only when the box set none of `GIT_SSH_COMMAND`, `GIT_SSH` and `core.sshCommand`; git is bounded at 220 s, so an overrunning clone dies inside ccd), or `git init` an empty one on `main` with no commit; refuses a name that exists in any form, builds in a dot-named temp directory and removes only that on failure, a timeout included |
 | `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
 | `pr-open --session <id> …` · `pr-state --session <id>\|--project <p> [--pr <n>]` | open the workspace's PR — the one PR write; read PR state, per workspace or one PR by number |
 | `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane on the lane's own tmux server (`-L ccrc-auth-<id>`), on the box (the agent grants no `account-pane`) |
