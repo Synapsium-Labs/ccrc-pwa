@@ -2532,6 +2532,19 @@ The spec was rewritten on ledger PR (this PR) with D25 to D28:
 
 The plan gains Task PL10. It lands after #2258, whose files it shares. The allocator issued D-7952.
 
+**Run 1430's wave-done verified; review 1 (1437) dispatched (2026-11-04).** Wave-done 14760 claims tip b8d3e7ea5 on #2258, with suite green. Re-measured:
+- the remote tip equals the PR head; the PR is open, not a draft and mergeable;
+- merge-tree against main is clean;
+- the tip is one plain merge of main (2d43be8a5, #2259) over six feature commits: 24 files, +482/-83 against the merge base;
+- ci run 41810212476 and codeql run 41810212217 succeeded; the only red is the external review-gate app;
+- the browser legs SKIPPED their Test step.
+
+The worker built every Part C row except 18 and row 20's F10, which were ruled no change. It reports five departures and two extra files (runWords.ts and waitingView.ts, claim 3420). It ran 15 mutants, all red. One of them, M10, at first survived a NaN comparison, and the check was fixed. Run 1430 was advanced to working, then to awaiting-review. Review run 1437 was opened and dispatched (slug polish-carry-c-rev1): Sonnet/high, three Opus/high lenses (routes and words; layout and accessibility; does-it-reproduce) and three refuters per finding, with the whole browser suite.
+
+**Operator steer, 2026-11-04 (second): the desk's fleet place.** The operator said: "the sessions button in main nav is useless at the moment on desktop as you see sessions from everywhere and you just click on the one you want. On mobile it's useful if you're away from working with sessions (like the rest of the nav bar). The in-session experience at the moment doesn't need navigation changes on desktop or mobile, the issues are on the other screens primarily."
+
+D25 was amended on #2261. The phone bar keeps the fleet place first. At a desk, Refined's top bar drops its Fleet tab and Instrument's rail drops its fleet item, because the column beside every page holds the sessions. Nothing changes inside a session, at either width. PL10 now reads the one list of places from a shared owner. This also answers my question about the phone bar's places: the console's places, fleet included.
+
 ## R125: Delegation rows that read "running" are handed to the delegation broker (2026-11-01)
 
 The operator asked what a coordinator's box full of unnamed "agent · running" and "workflow · running" rows was. They are the delegation broker's activity rows: one row per helper (subagent or workflow agent) that a session started, under that session. Measured on the fleet box from that session's own Claude Code files: every one of its workflows had finished, and no helper had written for about three hours, so the rows were stale. As main reads, a row is live while its end was never matched and its parent session's incarnation is unchanged; nothing checks the helper's own activity or times a row out.

@@ -321,20 +321,22 @@ Operator steer of 2026-11-03, spec §2 "Moving between items" and §3.2 "The rec
 Operator steer of 2026-11-04, spec §2, "Getting around on a phone", "The spec one tap away", "Links work" and "Document links go to the Docs reader" (D25 to D28).
 
 **Files (confirm at Step 0 on `origin/main`):**
-- Modify: `pwa/src/skins/refined/parts.tsx` and `pwa/src/skins/instrument/parts.tsx`, which fill `PhoneNav`, and one shared phone-bar component beside the frame. It reads the desk bar's `TAB_IDS` places and `useNavBadges`, through `commandDoor(id)`, so there is no second list of places. Also modify `pwa/src/skins/frame.tsx` and `pwa/src/styles/shell.css` (the bar at phone width only, absent in an open session) and the item strip's CSS (it stays in view on a phone).
+- Modify: `pwa/src/skins/refined/parts.tsx` and `pwa/src/skins/instrument/parts.tsx`, which fill `PhoneNav`, and one shared phone-bar component beside the frame. It reads the console's one list of places (today Refined's `TAB_IDS`, moved to a shared owner) and `useNavBadges`, through `commandDoor(id)`, so there is no second list of places. At a desk, Refined's `AppBar` and Instrument's `Rail` leave out the fleet place (D25); the phone bar keeps it first. Also modify `pwa/src/skins/frame.tsx` and `pwa/src/styles/shell.css` (the bar at phone width only, absent in an open session) and the item strip's CSS (it stays in view on a phone).
 - Modify: `pwa/src/ledgers/ItemView.tsx` (the band's programme name links to the programme view, and a Spec link), `WaitingScreen.tsx` (a Spec link per programme group) and `ProgrammeScreen.tsx` (a Spec link on the head). All three build the address with the one function `GoalsPanel` uses today, moved to the words or links module so there is a single owner.
 - Create: one pure L1 module that splits item text into text and link runs (`https`, console paths, repository document paths; everything else is text). Modify the item view's text, steps and history to draw through it.
 - Modify: `shared/ledgers.ts` and `server/src/coord/ledgersRoutes.ts` (`parseRaise` refuses an item whose text links a document through an artifact page or a document server outside the console, with a refusal word of its own, its status, census rows and a PWA sentence). Also `ccd/coordinator-skill/SKILL.md` clause 20 (one sentence, below) and `server/test/coordinator-skill.test.ts`.
 - Test: the new module's unit test, `pwa/test/item-view.test.tsx`, `waiting-screen`, `programme-screen` and the raise-route test. Add a browser file for the phone bar and the strip at 360 and 390, and check that the bar is absent at 900 and 1280.
 
 **Interfaces:**
-- The phone bar's places are the desk bar's `TAB_IDS`, in their order, plus the Search door. A place added to the desk bar appears on the phone with no second edit.
+- The phone bar's places are the console's one list of places, in its order, fleet first, plus the Search door. The desk bar and rail show the same list without the fleet place. A place added to the list appears on both with no second edit.
 - `linkRuns(text: string): readonly LinkRun[]`, where `LinkRun = {kind:'text', text} | {kind:'link', text, href, external: boolean}`. A repository document path becomes the Docs reader address in the programme's home project.
 - Clause 20 gains, after "why it beats each alternative,": "a link to a document is its repository path, which the console opens in the Docs reader, never an artifact page or another document server,".
 
 - [ ] **Step 1: Write the failing tests:**
   - `the phone bar shows the desk places with their badges on the ledger pages`;
   - `the phone bar is absent in an open session and at a desk`;
+  - `the desk bar and rail show no fleet place, and the phone bar shows it first`;
+  - `an open session's chrome is unchanged at phone and desk widths`;
   - `previous and next stay in view on a long item at phone width`;
   - `the item band, each programme group and the programme head link the pinned spec`;
   - `no spec link is drawn without a pin`;
