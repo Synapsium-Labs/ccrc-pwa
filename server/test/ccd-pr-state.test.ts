@@ -4,8 +4,8 @@ import { readFileSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
-import { GH_HTTP_502, GH_RATE_LIMITED, GH_STUB, makePrHarness, mergedRow, notAPullRequest, trainBlock, trainComment, trainRow,
-  type PrHarness } from './ccdPrHelpers.js';
+import { GH_HTTP_502, GH_RATE_LIMITED, GH_STUB, RESET_B1, RESET_B2, RESET_ID, bindOnResetB1, makePrHarness, mergedRow, notAPullRequest,
+  resetLedgerPath, resetToB2, trainBlock, trainComment, trainRow, type PrHarness } from './ccdPrHelpers.js';
 import { isFullLine, parsePrLines, phaseFor } from '../src/prstate.js';
 import { plantGitRecorder, type RecordedGitCall } from './ccdDocsHelpers.js';
 import { createHash } from 'node:crypto';
@@ -2284,9 +2284,9 @@ describe('a workspace whose worktree is parked on another branch', () => {
     const { id } = parked();
     const reg = path.join(h.home, '.cc-sessions');
     const ledger = `${JSON.stringify({ pr: 5, branch: 'ws/quiet-basin', phase: 'closed', recordedAt: 1 })}\n`;
-    h.sh(`_reg_set ${id} prphase open; _reg_set ${id} prnumber 7`);
+    h.sh(`_reg_set ${id} prphase open; _reg_set ${id} prnumber 7; _reg_set ${id} prbranch ws/quiet-basin`);
     fs.writeFileSync(path.join(reg, `${id}.prhistory`), ledger);
-    const bytes = (): (Buffer | null)[] => ['prnumber', 'prphase', 'prhistory'].map((f) => {
+    const bytes = (): (Buffer | null)[] => ['prnumber', 'prbranch', 'prphase', 'prhistory'].map((f) => {
       const p = path.join(reg, `${id}.${f}`);
       return fs.existsSync(p) ? fs.readFileSync(p) : null;
     });
@@ -2322,35 +2322,94 @@ describe('a workspace whose worktree is parked on another branch', () => {
  * sweep answers no number, so the chokepoint retires PR 7 under b2's name.
  */
 describe('the ledger across a branch reset', () => {
-  const ID = 'demo-quiet-basin';
-  const B1 = 'ws/quiet-basin';
-  const B2 = 'ws/next-wave';
-  const ledger = (): Record<string, unknown>[] =>
-    fs.readFileSync(path.join(h.home, '.cc-sessions', `${ID}.prhistory`), 'utf8')
-      .split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
-  /** PR 7 bound on b1, by the real chokepoint. */
-  const boundOnB1 = (): { wt: string } => {
-    const { wt, tip } = workspaceWithCommit('demo', 'quiet-basin');
-    h.ghRows([mergedRow({ number: 7, headRefName: B1, headRefOid: tip })]);
-    h.sh(`${GH_STUB} cmd_pr_state --session ${ID}`);
-    expect(h.reg(ID, 'prnumber')).toBe('7');
-    return { wt };
-  };
-  /** The reset: the worktree and the registry both on b2, so nothing drifts, and
-   *  gh knows no PR on b2. */
-  const resetToB2 = (wt: string): void => {
-    h.sh(`cd "${wt}" && git checkout -q -b ${B2}`);
-    h.sh(`_reg_set ${ID} branch ${B2}`);
-    h.ghRows([]);
-    const l = line(h.sh(`${GH_STUB} cmd_pr_state --session ${ID}`));
-    expect(l.reason).not.toBe('branch-drift');
-    expect(l.number).toBeNull();
-  };
+  const ID = RESET_ID;
+  const B1 = RESET_B1;
+  const B2 = RESET_B2;
+  const ledger = (): Record<string, unknown>[] => fs.readFileSync(resetLedgerPath(h), 'utf8')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l) as Record<string, unknown>);
 
   it('across a branch reset (PR 7 on b1, registry moved to b2, no PR on b2), the real chokepoint appends {pr: 7, branch: b2}', () => {
-    resetToB2(boundOnB1().wt);
+    resetToB2(h, bindOnResetB1(h).wt);
     expect(ledger()).toEqual([expect.objectContaining({ pr: 7, branch: B2, phase: 'merged' })]);
     expect(h.reg(ID, 'prnumber')).toBeNull();
+  });
+
+  it('the reset row carries prbranch: b1', () => {
+    resetToB2(h, bindOnResetB1(h).wt);
+    expect(ledger()).toEqual([{ pr: 7, branch: B2, prbranch: B1, phase: 'merged', recordedAt: expect.any(Number) }]);
+  });
+
+  it('a bind writes .prbranch, and a clear removes it with .prnumber', () => {
+    const { wt } = bindOnResetB1(h);
+    expect(h.reg(ID, 'prbranch')).toBe(B1);
+    resetToB2(h, wt);
+    expect(h.reg(ID, 'prnumber')).toBeNull();
+    expect(h.reg(ID, 'prbranch')).toBeNull();
+  });
+
+  it('a number replaced on the same branch retires with that branch, and the new number binds it', () => {
+    const { tip } = bindOnResetB1(h);
+    h.ghRows([mergedRow({ number: 9, headRefName: B1, headRefOid: tip })]);
+    h.sh(`${GH_STUB} cmd_pr_state --session ${ID}`);
+    expect(ledger()).toEqual([expect.objectContaining({ pr: 7, branch: B1, prbranch: B1 })]);
+    expect(h.reg(ID, 'prnumber')).toBe('9');
+    expect(h.reg(ID, 'prbranch')).toBe(B1);
+  });
+
+  it('a number bound before this field existed retires with no prbranch key, unplaced', () => {
+    const { wt } = bindOnResetB1(h);
+    fs.rmSync(path.join(h.home, '.cc-sessions', `${ID}.prbranch`));
+    resetToB2(h, wt);
+    expect(ledger()).toHaveLength(1);
+    expect(ledger()[0]).not.toHaveProperty('prbranch');
+  });
+
+  it('a number bound before this field existed gains it at the next sweep that still binds it', () => {
+    const { tip } = bindOnResetB1(h);
+    fs.rmSync(path.join(h.home, '.cc-sessions', `${ID}.prbranch`));
+    h.ghRows([mergedRow({ number: 7, headRefName: B1, headRefOid: tip })]);
+    h.sh(`${GH_STUB} cmd_pr_state --session ${ID}`);
+    expect(h.reg(ID, 'prbranch')).toBe(B1);
+    expect(fs.existsSync(resetLedgerPath(h))).toBe(false);
+  });
+
+  it('.prbranch is one more $REG/<id>.* field: it holds the slug, and the purge takes it', () => {
+    bindOnResetB1(h);
+    const reg = path.join(h.home, '.cc-sessions');
+    for (const f of fs.readdirSync(reg)) if (f.startsWith(`${ID}.`) && !f.endsWith('.prbranch')) fs.rmSync(path.join(reg, f), { recursive: true });
+    expect(h.run(`_ws_slug_free demo quiet-basin`).code, 'a slug with a .prbranch standing is not free').not.toBe(0);
+    h.sh(`_reg_purge ${ID}`);
+    expect(h.reg(ID, 'prbranch')).toBeNull();
+    expect(h.run(`_ws_slug_free demo quiet-basin`).code).toBe(0);
+  });
+
+  it('a symlink at .prbranch is no field: the row carries no prbranch, never the bytes it resolves to', () => {
+    const { wt } = bindOnResetB1(h);
+    const field = path.join(h.home, '.cc-sessions', `${ID}.prbranch`);
+    const elsewhere = path.join(h.home, 'elsewhere');
+    fs.writeFileSync(elsewhere, 'ws/not-a-registry-value');
+    fs.rmSync(field);
+    fs.symlinkSync(elsewhere, field);
+    resetToB2(h, wt);
+    expect(ledger()).toHaveLength(1);
+    expect(ledger()[0]).not.toHaveProperty('prbranch');
+    expect(fs.readFileSync(elsewhere, 'utf8')).toBe('ws/not-a-registry-value');
+  });
+
+  it('never lands a number whose prbranch did not: prbranch goes first, so a bound number is always a placed one', () => {
+    // NARROW FIRST, WIDEN LAST, as `never advances prphase past a prnumber write`
+    // injects it: a DIRECTORY at the field's path makes its write fault. A number on
+    // disk without its branch would retire as an unplaced row, and an unplaced row
+    // counts for every branch, so the order is what keeps a placed PR placed.
+    const { tip } = bindOnResetB1(h);
+    const field = path.join(h.home, '.cc-sessions', `${ID}.prbranch`);
+    h.ghRows([]);
+    h.sh(`${GH_STUB} cmd_pr_state --session ${ID}`);
+    fs.mkdirSync(field);
+    h.ghRows([mergedRow({ number: 9, headRefName: B1, headRefOid: tip })]);
+    h.run(`${GH_STUB} cmd_pr_state --session ${ID}`);
+    expect(h.reg(ID, 'prnumber'), 'the number landed ahead of its branch').toBeNull();
+    expect(fs.statSync(field).isDirectory(), 'the fixture must survive the run').toBe(true);
   });
 });
 

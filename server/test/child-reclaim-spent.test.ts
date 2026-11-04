@@ -9,13 +9,14 @@
 // `ccd pr-state --session` — the one path that can see a PR opened seconds
 // ago, which is the hand-over rule 3 exists to stop.
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Runner } from '../src/exec.js';
 import { readSessionRecord, type SessionRecord } from '../src/registry.js';
 import {
   CHILD_BIRTH_SKEW_MS, childBirthOf, childSpent, childSpentLive, type ChildBirth, type ChildSpentDeps,
 } from '../src/coord/childSpent.js';
+import { RESET_B1, RESET_B2, bindOnResetB1, makePrHarness, resetLedgerPath, resetToB2 } from './ccdPrHelpers.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
@@ -123,6 +124,72 @@ describe('childSpent — the fast path', () => {
       { io: unreadableField(ID, 'prnumber') });
     expect(await verdict(h)).toEqual({ kind: 'spent', pr: 7, source: 'live', incarnation: 'unplaced' });
     expect(h.verbs).toContain('pr-state');
+  });
+});
+
+describe('childSpent — a ledger row counts only for the branch its PR was on', () => {
+  const row = (pr: number, recordedAt: number, prbranch?: string): string =>
+    JSON.stringify({ pr, branch: BRANCH, phase: 'merged', recordedAt, ...(prbranch === undefined ? {} : { prbranch }) });
+  /** The live rung's answer for a branch with no PR on it. */
+  const noPrOn = (branch: string) => ({ ran: true as const, code: 0, stderr: '', stdout:
+    `${JSON.stringify({ id: ID, rows: [], baseShort: 'main', branch, ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 })}\n` });
+
+  it('the reset row (prbranch b1) on a b2 workspace falls through to the live rung', async () => {
+    // The row is the real chokepoint's own output: a hand-written one would pin
+    // this reader to the shape it expects, not to the shape ccd writes.
+    const fleet = makePrHarness('ccrc-child-spent-reset-');
+    let ledger: string;
+    try {
+      resetToB2(fleet, bindOnResetB1(fleet).wt);
+      ledger = readFileSync(resetLedgerPath(fleet), 'utf8');
+    } finally { fleet.cleanup(); }
+    put('prhistory', ledger);
+    put('branch', RESET_B2);
+    const h = harness(noPrOn(RESET_B2));
+    expect(await verdict(h)).toEqual({ kind: 'unspent' });
+    expect(h.verbs).toContain('pr-state');
+  });
+
+  it('the same row on a workspace back on b1 still answers spent from the ledger', async () => {
+    put('prhistory', `${row(7, 10, RESET_B1)}\n`);
+    put('branch', RESET_B1);
+    const h = harness();
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 7, source: 'prhistory', incarnation: 'unplaced' });
+    expect(h.verbs).not.toContain('pr-state');
+  });
+
+  it('rows for two branches: the newest row placed on this branch decides', async () => {
+    put('prhistory', [row(5, 10, BRANCH), row(6, 20, BRANCH), row(9, 30, 'ws/another')].join('\n') + '\n');
+    const h = harness();
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 6, source: 'prhistory', incarnation: 'unplaced' });
+    expect(h.verbs).not.toContain('pr-state');
+  });
+
+  it('a legacy row without prbranch answers as today', async () => {
+    put('prhistory', `${row(5, 10)}\n`);
+    put('branch', 'ws/renamed-since');
+    const h = harness();
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 5, source: 'prhistory', incarnation: 'unplaced' });
+    expect(h.verbs).not.toContain('pr-state');
+  });
+
+  it('a legacy row still counts beside a newer row placed on another branch', async () => {
+    put('prhistory', [row(5, 10), row(9, 30, 'ws/another')].join('\n') + '\n');
+    expect(await verdict(harness())).toEqual({ kind: 'spent', pr: 5, source: 'prhistory', incarnation: 'unplaced' });
+  });
+
+  it('an unnamed registry branch cannot match a placed row: the live rung answers, never the ledger', async () => {
+    put('prhistory', `${row(5, 10, BRANCH)}\n`);
+    put('branch', '');
+    const h = harness(noPrOn(BRANCH));
+    expect(await verdict(h)).toEqual({ kind: 'unspent' });
+    expect(h.verbs).toContain('pr-state');
+  });
+
+  it('a registry number still answers first: the filter is on the ledger rung alone', async () => {
+    put('prnumber', '42');
+    put('prhistory', `${row(9, 30, 'ws/another')}\n`);
+    expect(await verdict(harness())).toEqual({ kind: 'spent', pr: 42, source: 'registry', incarnation: 'unplaced' });
   });
 });
 
