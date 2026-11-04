@@ -109,8 +109,9 @@ out("OK", *vals, "body=" + body)
 '
 
 _dl_dirs_measured() {   # <dir>... (each the next one's parent, the first under $REG) -> rc 0 each is a searchable directory and
-                        #    no link; rc 3 the first one missing is PROVEN absent (no entry under a searchable parent: nothing was
-                        #    ever made there); rc 4 a link, a non-directory or an unsearchable one (DL_WHY)
+                        #    no link; rc 3 the first one missing is PROVEN absent (no entry of that name under a searchable parent
+                        #    now; whether one stood there before is not measured); rc 4 a link, a non-directory or an unsearchable
+                        #    one (DL_WHY)
   local d
   [[ -d "$REG" && -x "$REG" ]] || { DL_WHY="the registry $REG is not a searchable directory"; return 4; }
   for d in "$@"; do
@@ -125,7 +126,7 @@ _dl_carrier_read() {   # <leaseId> -> rc 0 with DL_C_<field> set; rc 3 PROVEN ab
   local LC_ALL=C id="${1-}" dir="$REG/delegation/leases" f kv k
   local -a out=()
   DL_WHY=''
-  for k in generation state fingerprint expiresAt canonicalPath journalSeq parentId parentIncarnation claudeBase branch body; do
+  for k in generation state fingerprint expiresAt canonicalPath journalSeq parentId parentIncarnation claudeBase branch project adminRecord body; do
     printf -v "DL_C_$k" '%s' ''
   done
   [[ "$id" =~ $__DL_LEASE_RE ]] || { DL_WHY="'$id' is not a lease id"; return 4; }
@@ -144,7 +145,7 @@ _dl_carrier_read() {   # <leaseId> -> rc 0 with DL_C_<field> set; rc 3 PROVEN ab
   for kv in "${out[@]:1}"; do
     k="${kv%%=*}"
     case "$k" in
-      generation|state|fingerprint|expiresAt|canonicalPath|journalSeq|parentId|parentIncarnation|claudeBase|branch|body)
+      generation|state|fingerprint|expiresAt|canonicalPath|journalSeq|parentId|parentIncarnation|claudeBase|branch|project|adminRecord|body)
         printf -v "DL_C_$k" '%s' "${kv#*=}" ;;
     esac
   done
@@ -321,13 +322,13 @@ cmd_ws_lease_mark() {   # ccd ws-lease-mark --lease <uuid> --generation <n> ... 
 }
 
 _dl_mark_locked() {   # everything the lock serialises (the flags, $dir and $rec are cmd_ws_lease_mark's)
-  local crc s_gen=0 s_fp='' s_path='' s_base='' s_branch='' s_body='' pr wr main mr ci key trc
+  local crc s_gen=0 s_fp='' s_path='' s_base='' s_branch='' s_body='' s_proj='' s_rec='' pr wr main mr ci key trc
   local tp='' admin='' common troot below comp cls host='' chk sp wd f fp base branch tip orc owner index=none
   # rule 4: the stored carrier
   _dl_carrier_read "$lease"; crc=$?
   case "$crc" in
     0) s_gen="$DL_C_generation"; s_fp="$DL_C_fingerprint"; s_path="$DL_C_canonicalPath"; s_base="$DL_C_claudeBase"
-       s_branch="$DL_C_branch"; s_body="$DL_C_body" ;;
+       s_branch="$DL_C_branch"; s_body="$DL_C_body"; s_proj="$DL_C_project"; s_rec="$DL_C_adminRecord" ;;
     3) ;;
     *) _dl_mark_refuse bad-carrier "$DL_WHY; nothing was written"; return 1 ;;
   esac
@@ -336,6 +337,11 @@ _dl_mark_locked() {   # everything the lock serialises (the flags, $dir and $rec
   fi
   if (( crc == 0 && 10#$gen < 10#$s_gen )); then
     _dl_mark_refuse stale-generation "the stored carrier is at generation $s_gen, above $gen"; return 1
+  fi
+  # a release keeps the stored fingerprint (rule 11, D-7937), so it proves here that it names the lease's own record and project
+  if (( crc == 0 )) && [[ "$state" == released && ( "$project" != "$s_proj" || "$rec" != "$s_rec" ) ]]; then
+    _dl_mark_refuse fingerprint-mismatch "lease $lease's carrier records project $s_proj and admin record $s_rec, not $project and $rec; nothing was written"
+    return 1
   fi
   # rule 5: the main checkout and the tree its admin record names
   _ws_dir_physical "$PROJECTS_ROOT" || { _dl_mark_refuse unmeasured "the projects root could not be resolved ($_WS_PHYS_WHY)"; return 1; }

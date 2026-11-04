@@ -52,7 +52,7 @@ export const PLANNED_FORMS: Readonly<Record<string, string>> = {
   _home_measured_to: 'W3 Task 16 (D-4963)',
   _swap_lane_to: 'auto-swap reliability W1 (D-6180)',
   _roster_fp_to: 'accounts connect A15 (D-7717)',
-  _dl_fingerprint_to: 'delegation broker wave 5 PR1 (review 1429)',
+  _dl_fingerprint_to: 'delegation broker wave 5 PR1, Task 5.1.3 (D-7939)',
 };
 /** What has NOT landed in `ccd/ccd` yet: the planned forms, plus `_now_s`, the one printing form whose name is new.
  *  The task that lands a name deletes it here in the same commit (the header's "RED FIRST"). D-4961 (Task 4) landed

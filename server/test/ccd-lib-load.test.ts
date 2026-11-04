@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  CCD, CCD_LEASE_LIB, CCD_LEASE_LIB_PIN_PLACEHOLDER, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_TRAIN_LIB_PIN_PLACEHOLDER, ghContainedEnv, installDirectEntry, installedCcdBody,
+  CCD, CCD_LEASE_LIB, CCD_LEASE_LIB_PIN_PLACEHOLDER, CCD_LIBS, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_TRAIN_LIB_PIN_PLACEHOLDER, ghContainedEnv, installDirectEntry, installedCcdBody,
   makeCcdHarness, type CcdHarness,
 } from './ccdWsHelpers.js';
 import { markGenerated } from '../../shared/mark.mjs';
@@ -137,6 +137,24 @@ describe('a test that scans ccd reads all of it', () => {
   // `ccdSource()` puts the moved regions back where they sat; a bare read of `CCD` as text sees ccd without them, and a scanner
   // built on it passes over less than it did. These files read the FILE, not the program, on purpose.
   const FILE_READERS = new Set(['ccd-lib-load.test.ts', 'ccd-entry-install.test.ts', 'ownership.test.ts', 'ccrc-restamp.test.ts', 'ccd-install-stamp.test.ts', 'ccdWsHelpers.ts']);
+
+  it('every region of every library is spliced back by a pointer line in ccd/ccd, and every marker is one region id', () => {
+    // `ccdSource()` replaces each `# @ccd-lib:<id>` pointer in ccd/ccd with that library region and never reports a region
+    // nothing points at: such a region silently leaves every text scan (delegation broker wave 5, review 1429 F1, where
+    // the lease library had no pointer). A marker that is not one `\w+` id (`# @ccd-lib:lease-mark`) is never split on,
+    // so its text would ride inside the region before it unseen.
+    const pointers = new Set([...fs.readFileSync(CCD, 'utf8').matchAll(/^# @ccd-lib:(\w+)\b/gm)].map((m) => m[1]!));
+    const regions: string[] = [];
+    for (const lib of CCD_LIBS) {
+      const text = fs.readFileSync(lib, 'utf8');
+      const markers = text.split('\n').filter((l) => l.startsWith('# @ccd-lib:'));
+      expect(markers.filter((l) => !/^# @ccd-lib:\w+$/.test(l)), `${path.basename(lib)}: a marker line is one region id`).toEqual([]);
+      regions.push(...markers.map((l) => l.slice('# @ccd-lib:'.length)));
+    }
+    expect(regions.length, 'the libraries carry regions').toBeGreaterThanOrEqual(CCD_LIBS.length);
+    expect(regions.filter((r) => !pointers.has(r)), 'a library region with no pointer in ccd/ccd').toEqual([]);
+    expect([...pointers].filter((p) => !regions.includes(p)), 'a pointer in ccd/ccd with no library region').toEqual([]);
+  });
 
   it('no test file reads CCD as text outside the ones about the file itself', () => {
     const dir = path.join(REPO, 'server', 'test');
