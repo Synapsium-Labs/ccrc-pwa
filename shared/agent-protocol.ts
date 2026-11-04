@@ -368,7 +368,9 @@ export interface ReadReq   { t: 'req'; id: number; op: 'read'; path: string }
  *  optional field — no new op, no ready-frame word, no `FLEET_PROTO` bump. */
 export interface ReadFromReq { t: 'req'; id: number; op: 'readFrom'; path: string; offset: number; maxBytes?: number }
 export interface ReadB64Req { t: 'req'; id: number; op: 'readB64'; path: string }
-export interface ReaddirReq{ t: 'req'; id: number; op: 'readdir'; path: string }
+/** `times` is ADDITIVE (console speed S1): an agent that lists `READDIR_MTIMES_OP` in `ready.ops` answers
+ *  `times: Record<name, mtimeMs>` beside `names`; an older caller omits it and gets the answer it always got. */
+export interface ReaddirReq{ t: 'req'; id: number; op: 'readdir'; path: string; times?: true }
 export interface StatReq   { t: 'req'; id: number; op: 'stat'; path: string }
 /** The PATH's own type, never its target's — the one question `stat` cannot
  *  answer because it follows. Its own op rather than a field on `stat` for
@@ -422,7 +424,7 @@ export interface ResErr { t: 'res'; id: number; ok: false; err: string; detail?:
 //   readFrom WITH `maxBytes` → {data: string, dataB64: string, size: number}|{data: null, absent?: true}: `data` is the old lossy UTF-8
 //   decode of the bounded bytes, `dataB64` their canonical base64, and a reader that needs the BYTES reads `dataB64` alone — an older agent
 //   ignores `maxBytes` and sends no `dataB64`, which a byte reader must take as unmeasured, never as text to re-encode;
-// readB64 → {dataB64: string|null, absent?: true, tooLarge?: true, size?: number}; readdir → {names: string[]}|{names: null, absent?: true}
+// readB64 → {dataB64: string|null, absent?: true, tooLarge?: true, size?: number}; readdir → {names: string[], times?: Record<string, number>}|{names: null, absent?: true}
 //   (`absent` only on a proven ENOENT; an older agent sends a bare {names: null} for every failure, which is unmeasured, never absent);
 //   stat → {mtimeMs, size}|{missing: true, absent?: true};
 // lstat → {kind: 'regular'|'symlink'|'other'}|{missing: true, absent?: true}. TWO positive markers and no
@@ -904,6 +906,10 @@ export function readAccountOpAnswer(raw: unknown): AccountOpAnswer | null {
 
 /** The op's name, and the word an agent that answers it lists in `ready.ops`. */
 export const DISK_OP = 'disk';
+
+/** The word an agent lists in `ready.ops` when its `readdir` op answers modification times on request (console speed
+ *  S1). Not an op of its own: it names a field of `readdir`. It matches `CAP_WORD` in shared/api.ts. */
+export const READDIR_MTIMES_OP = 'readdir-mtimes';
 
 /** The deadline for ONE `statfs`/`stat` of a work root on the agent. A root that does not answer in this time is
  *  reported `missing` with `why: 'timeout'` (unknown, never zero): a full or stalled volume is exactly when its
