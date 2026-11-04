@@ -193,6 +193,8 @@ export function fleetRowsUsable(
 export class ProjectWalkCache {
   private walk: { at: number; rows: readonly ProjectRow[] } | null = null;
   private readonly probes = new Map<string, { at: number; linked: boolean }>();
+  /** When `drop` last ran; a walk that STARTED at or before it is not kept (`keepWalk`). */
+  private droppedAt = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly now: () => number = () => Date.now(), private readonly ttlMs = PROJECT_WALK_TTL_MS) {}
 
@@ -222,7 +224,20 @@ export class ProjectWalkCache {
    *  is not fresh, a negative age after the clock stepped back included, is replaced whatever the new stamp, as the
    *  probes heal (review 1378, F4). */
   keepWalk(rows: readonly ProjectRow[], startedAt: number): void {
+    if (startedAt <= this.droppedAt && this.now() >= this.droppedAt) return;
     if (this.walk === null || !this.fresh(this.walk.at) || startedAt > this.walk.at) this.walk = { at: startedAt, rows };
+  }
+
+  /**
+   * Forgets the kept walk, so the next request walks again: the project add (`POST /api/projects`) calls it once ccd has
+   * made a directory under the root, and the new project is listed by the next read rather than up to the TTL later.
+   * A walk already in flight STARTED before the directory existed, so it is not kept when it finishes either, unless
+   * the clock has since stepped back past the drop (the heal `keepWalk` has for a negative age). Probes are kept: they
+   * answer for registry workdirs, which an add does not change.
+   */
+  drop(): void {
+    this.walk = null;
+    this.droppedAt = this.now();
   }
 
   /** A workdir's kept verdict while it is fresh, else null; a kept verdict whose age reads negative is dropped. */
