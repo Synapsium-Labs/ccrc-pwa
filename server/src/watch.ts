@@ -9,7 +9,8 @@ import { askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { buildFleetReadModel, type FleetReadModel } from './fleetReadModel.js';
 import { RegistryRowCache } from './registryRowCache.js';
-import { carriedUsage, listingNotice, planTick, rejectedListing, verdictsOf } from './tickPlan.js';
+import { carriedUsage, changedRows, listingNotice, planTick, rejectedListing, rowFactsOf, rowSignatures, verdictsOf, type TickFacts } from './tickPlan.js';
+import { readLimits } from './limits.js';
 import { mapBounded } from './bounded.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
@@ -2404,6 +2405,13 @@ export class FleetWatcher {
     return row === null ? { ok: false } : { ok: true, row };
   }
 
+  /** What the latest LISTED tick measured, or null before the first and after an unlistable one (console speed S1). */
+  private tickFacts: TickFacts | null = null;
+  private rowSigs = new Map<string, string>();
+  currentLimits(): { limits: TickFacts['limits']; listedAt: number } | null { const f = this.tickFacts; return f === null ? null : { limits: f.limits, listedAt: f.listedAt }; }
+  currentProjectPoolsRead(): { read: NonNullable<TickFacts['pools']>; listedAt: number } | null { const f = this.tickFacts; return f === null || f.pools === null ? null : { read: f.pools, listedAt: f.listedAt }; }
+  currentRowFacts(id: string): ReturnType<typeof rowFactsOf> { return this.tickFacts === null ? null : rowFactsOf(this.tickFacts, id); }
+
   /** The last measured project-pool sweep, or null if none has been taken yet
    *  — same reasoning as `currentCoord()`'s null. */
   currentPools(): ProjectPoolsWire | null {
@@ -2548,7 +2556,8 @@ export class FleetWatcher {
         ?.catch(() => { /* one bad sweep must not kill the poll */ });
       this.noteDelegationRegistry(registryRead.listed);
       if (!registryRead.listed) {
-        await this.emitPools(null);                                     // an unlistable registry: nobody may decide a pool, so `listed:false` reaches the wire now (free: no io)
+        this.tickFacts = null;                                          // every getter is null after an unlistable tick
+        await this.emitPools(null, listedAt);                                     // an unlistable registry: nobody may decide a pool, so `listed:false` reaches the wire now (free: no io)
         this.registryTick = { listed: false, at: listedAt };            // D-6436: `lastFleet` is kept, but not as a listing
         this.withdrawDelegation();                                      // wave 4: no lane runs below, so the frame is withdrawn here
         // Retain, don't erase, at fleet scale: `this.hookStates`/
@@ -2725,7 +2734,8 @@ export class FleetWatcher {
         clearTimeout(timer);
       }
       const panePids = new Map<string, number | null>();
-      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings, paneListing);
+      const limits = await readLimits(this.deps.io, this.deps.cfg);   // read once a tick: published by `currentLimits`, handed to assembleFleet
+      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings, paneListing, limits);
       // The frame leaves first (console speed S1): the fleet frame follows assembly directly; pools, "Finished" pushes, claims,
       // the lanes, the state cache and the runs frame all wait behind it.
       this.registryTick = { listed: true, at: listedAt };               // D-6436: `lastFleet` reflects this listing either way
@@ -2734,7 +2744,11 @@ export class FleetWatcher {
         this.lastFleet = sessions;
         this.bus.emit('fleet', sessions);
       }
-      await this.emitPools(registryRead.names);
+      this.tickFacts = { listedAt, limits, records: new Map(records.map((r) => [r.id, r])), listing: paneListing, panePids, pools: null };
+      const sigs = rowSignatures(records, paneListing, this.rowSigs);
+      for (const id of changedRows(this.rowSigs, sigs)) this.bus.emit(`row:${id}`, { listedAt });
+      this.rowSigs = sigs;
+      await this.emitPools(registryRead.names, listedAt);
       // Blocking review finding 4: `FleetSession.unmeasured` (Task 2) now
       // carries the SAME evidence `measuredIdentity(records[i]) === null`
       // would, one hop from `records[i]` in `sessions[i]` — so this reads it
@@ -3056,12 +3070,13 @@ export class FleetWatcher {
    *  values, so no catch is needed here. `project-pools-read.test.ts` pins cost,
    *  overlap and deadline behavior; `fleetws.test.ts` pins this cadence-derived
    *  budget at the consumer. */
-  private async emitPools(names: readonly string[] | null): Promise<void> {
+  private async emitPools(names: readonly string[] | null, listedAt: number): Promise<void> {
     const budgetMs = Math.max(1, Math.floor(this.intervalMs / 2));
     const [read, observedEpoch] = await Promise.all([
       readProjectPools(this.deps.io, this.deps.cfg, names, budgetMs),
       readObservedEpochFromRegistry(this.deps.io, this.deps.cfg, budgetMs),
     ]);
+    if (this.tickFacts !== null && this.tickFacts.listedAt === listedAt) this.tickFacts.pools = read;   // published by `currentProjectPoolsRead`
     // T9-R2: the epoch/observedEpoch producer, the SAME two reads `/api/fleet`
     // (server.ts) makes for its own `poolsWire` call — `readPoolEpoch`
     // (`pools.ts`) leaves `epoch` off the wire whether `deps.coord` is

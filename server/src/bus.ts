@@ -23,12 +23,17 @@ export interface PaneReading { readonly at: number; readonly doneAt: number; rea
 export type HookEventName = `hook:${string}`;
 export interface HookReading { readonly at: number; readonly uuid: string; readonly raw: HookStateRawRead }
 
+/** A row's record or pane verdict changed on the latest listed tick, or the row left the listing: `row:<id>`. `listedAt` is
+ *  when that tick's listing began, the stamp `currentRowFacts` carries. A reader waits for this instead of asking again. */
+export type RowEventName = `row:${string}`;
+export interface RowReading { readonly listedAt: number }
+
 /**
  * Typed event bus shared between the watcher, routes, and websocket streams.
  * Events: 'fleet' (FleetSession[]), 'notice' ({message}), 'runs' (RunSummary[],
  * Build 7 — see `FleetWatcher.emitRuns`), 'coord' (CoordStatus, Build 4 — see
  * `FleetWatcher.emitCoord`), 'session:<id>' (SessionStreamMsg), 'answered:<id>' (Dialog | null),
- * 'pane:<id>' / 'hook:<id>' (the watcher's per-tick readings, for a session's feed), 'waiting' (no payload: the
+ * 'pane:<id>' / 'hook:<id>' (the watcher's per-tick readings, for a session's feed), 'row:<id>' (the row changed), 'waiting' (no payload: the
  * programme ledgers changed, PL3; the live frame's listener re-reads the list, PL4).
  */
 export class Bus extends EventEmitter {
@@ -61,6 +66,7 @@ export class Bus extends EventEmitter {
   override emit(event: AnsweredEventName, next: Dialog | null): boolean;
   override emit(event: PaneEventName, reading: PaneReading): boolean;
   override emit(event: HookEventName, reading: HookReading): boolean;
+  override emit(event: RowEventName, reading: RowReading): boolean;
   override emit(event: string, ...args: unknown[]): boolean {
     return super.emit(event, ...args);
   }
@@ -77,6 +83,7 @@ export class Bus extends EventEmitter {
   override on(event: AnsweredEventName, listener: (next: Dialog | null) => void): this;
   override on(event: PaneEventName, listener: (reading: PaneReading) => void): this;
   override on(event: HookEventName, listener: (reading: HookReading) => void): this;
+  override on(event: RowEventName, listener: (reading: RowReading) => void): this;
   override on(event: string, listener: (...args: any[]) => void): this {
     return super.on(event, listener);
   }
@@ -93,6 +100,7 @@ export class Bus extends EventEmitter {
   override off(event: AnsweredEventName, listener: (next: Dialog | null) => void): this;
   override off(event: PaneEventName, listener: (reading: PaneReading) => void): this;
   override off(event: HookEventName, listener: (reading: HookReading) => void): this;
+  override off(event: RowEventName, listener: (reading: RowReading) => void): this;
   override off(event: string, listener: (...args: any[]) => void): this {
     return super.off(event, listener);
   }
