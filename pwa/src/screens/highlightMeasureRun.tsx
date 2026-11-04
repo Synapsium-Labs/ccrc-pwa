@@ -6,8 +6,8 @@
 // `tree` and `file` (never `refresh`), at the Docs screen's fetch concurrency; it stores and sends nothing and writes
 // no clipboard (M7.12). The result names no project, path, file or code: a block is its grammar, its length, an
 // ordinal. Items, as section 7.8 numbers them:
-//   1. every block of the corpus, one per job, on a warm highlighter (MEASURE_DEADLINE_MS, no ceilings, none of part
-//      1's bounds): time by grammar, each distinct block once (a repeat is the worker's cache hit: counted, not timed);
+//   1. every block of the corpus, one per job, on a warm highlighter (MEASURE_DEADLINE_MS, no ceilings):
+//      time by grammar, each distinct block once (a repeat is the worker's cache hit: counted, not timed);
 //      then each grammar's largest block first on a fresh highlighter (cold);
 //   2. boot: a fresh highlighter's first call (which spawns) to its post (after `{ready}`): the page's first, cold;
 //      the cold-block highlighters of item 1, after a respawn;
@@ -16,7 +16,7 @@
 //   4. checking and inserting DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS of real answers through the one sink, and layout;
 //   5. the largest real page within the render gate, through `DocMarkdown`: plain first frame to last block coloured;
 //   6. part 1's crafted shapes under the SHIPPED deadline: outcome, time, the longest main-thread frame gap;
-//   7. eight crafted blocks under the SHIPPED ceilings, none of part 1's bounds: the wait to settled, against section
+//   7. eight crafted blocks under the SHIPPED ceilings: the wait to settled, against section
 //      4.10's sum for Export's longest wait;
 //   8. a `ChatMarkdown` streamed at each of MEASURE_SETTLE_CADENCES_MS and, at each, for each candidate debounce:
 //      the requests the growing block made and the time from its fence closing to its colours. No settle gaps: they
@@ -107,7 +107,8 @@ function shape(unit: string, chars: number, line: number): string {
 }
 const BLOCK = 65000;
 const LS = String.fromCharCode(0x2028);
-/** W5 part 1's crafted shapes, from `markdownLimits.ts`'s notes, each in its grammar, under the block cap. */
+/** The crafted shapes W5 part 1's reviews found (its notes in `markdownLimits.ts` retired with its bounds in W5h-b),
+ *  each in its grammar, under the block cap. */
 export const CRAFTED_SHAPES: readonly { readonly name: string; readonly lang: string; readonly code: string }[] = [
   { name: 'markdown-link-openers', lang: 'markdown', code: shape('[](', BLOCK, 2048) },
   { name: 'yaml-flow', lang: 'yaml', code: shape('[]', BLOCK, 2048) },
@@ -314,7 +315,7 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
   } finally {
     root4.unmount();
   }
-  // Item 5: the largest real page through DocMarkdown, no ceilings, no part-1 bounds.
+  // Item 5: the largest real page through DocMarkdown, no ceilings.
   progress('Item 5');
   let firstFrameToColouredMs: number | null = null;
   const largest = page as Page | null;
@@ -323,7 +324,7 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
     let published: HighlightStore | null = null;
     const ctx: HighlighterContextValue = {
       docs: h5, chat: h5, publish: (s) => { published = s; },
-      createStore: (h, mode) => createHighlightStore(h, { mode, part1: false, ceilings: false }, clockOf(deps)),
+      createStore: (h, mode) => createHighlightStore(h, { mode, ceilings: false }, clockOf(deps)),
     };
     const root5 = createRoot(deps.host);
     try {
@@ -356,10 +357,10 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
     const r = await job;
     item6.push({ shape: s.name, grammar: s.lang, chars: s.code.length, outcome: r.outcome.kind, ms: r.ms, longestFrameGapMs: gap });
   }
-  // Item 7: eight crafted blocks under the shipped ceilings, none of part 1's bounds.
+  // Item 7: eight crafted blocks under the shipped ceilings.
   progress('Item 7');
   const sumMs = HIGHLIGHT_PAGE_WORKER_MS + HIGHLIGHT_BLOCK_DEADLINE_MS + (HIGHLIGHT_PAGE_MAX_TIMEOUTS + 1) * HIGHLIGHT_BOOT_BUDGET_MS;
-  const store7 = createHighlightStore(deps.highlighter(HIGHLIGHT_BLOCK_DEADLINE_MS), { mode: 'docs', part1: false }, clockOf(deps));
+  const store7 = createHighlightStore(deps.highlighter(HIGHLIGHT_BLOCK_DEADLINE_MS), { mode: 'docs' }, clockOf(deps));
   const blocks7 = CRAFTED_SHAPES.slice(0, 8).map((s, i) => ({ lang: s.lang, raw: `${s.code.slice(0, BLOCK - 4)}\n${i}` }));
   store7.seed(blocks7);
   const keys7 = blocks7.map((b) => store7.keyOf(b.lang, b.raw)).flatMap((k) => (k.kind === 'key' ? [k.key] : []));
@@ -390,7 +391,7 @@ export async function runHighlightMeasure(deps: MeasureDeps, progress: (line: st
       };
       const ctx: HighlighterContextValue = {
         docs: counting, chat: counting,
-        createStore: (h, mode) => createHighlightStore(h, { mode, part1: false, ceilings: false, debounceMs: d }, clockOf(deps)),
+        createStore: (h, mode) => createHighlightStore(h, { mode, ceilings: false, debounceMs: d }, clockOf(deps)),
       };
       const root8 = createRoot(deps.host);
       const show = (text: string): void => {

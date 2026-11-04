@@ -328,8 +328,7 @@ describe('a tree renders through detachUrls and DOC_COMPONENTS (spec 4.10 step 4
   });
 
   it('the page highlight budget reaches the blocks: of nine 60 000-character python blocks the ninth is not highlighted', async () => {
-    // 60 000 characters in 60 lines of 1 000 (the line bound caps a line at MD_HIGHLIGHT_MAX_LINE_CHARS, so one long line
-    // would be unhighlighted), with no long run of blank units (the whitespace bound, MD_HIGHLIGHT_MAX_BLANK_CHARS).
+    // 60 000 characters in 60 lines of 1 000, with no long run of blank units: ordinary code, cheap to highlight.
     // The nine are distinct (`import a${i}= 1`, the same length), because a store keys a block by its content and counts
     // identical blocks once (W5h-a).
     const fence = (i: number): HastElement => ({
