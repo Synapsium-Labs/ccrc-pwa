@@ -221,6 +221,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/programmes/:slug/items',
   // The operator's reads of the same text (plan PL4): the waiting list, and one programme's goals (an In short copy a session wrote).
   '/api/waiting', '/api/programmes/:slug/goals',
+  // The stored-secrets read (the PL6 follow-up, programme item 9): no value, but each slot's asking item's title, which a session wrote.
+  '/api/programmes/:slug/secrets',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>

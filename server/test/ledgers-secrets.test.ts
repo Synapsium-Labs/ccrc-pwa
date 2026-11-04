@@ -1250,3 +1250,37 @@ describe('the scan is blind to the masker (review 1391 F4)', () => {
     expect(r.masker.maskText(value)).toBe(SECRET_MASK);
   });
 });
+
+describe('a re-save after a Remove is the re-key\'s again (the PL6 follow-up\'s commit review)', () => {
+  it('a re-save that writes no row (no token yet) still clears the retired mark, so a later re-key fills the lane', async () => {
+    const r = await rig();
+    await r.stepUp();
+    expect((await save(r, raiseSecret(r), mark())).statusCode).toBe(200);
+    expect((await r.send({ method: 'DELETE', url: removeUrl('api-key') })).statusCode).toBe(200);
+    const retired = (r.masker as unknown as { retiredLanes: Set<string> }).retiredLanes;
+    expect(retired.has(operatorSecretLaneId('prog-a', 'api-key'))).toBe(true);
+    const v2 = mark();
+    expect(r.masker.ingestSecret(operatorSecretLaneId('prog-a', 'api-key'), 'short')).toBe('too-short');
+    expect(retired.has(operatorSecretLaneId('prog-a', 'api-key'))).toBe(false);
+    await writeOperatorSecret(r.ccrcDir, 'prog-a', 'api-key', v2, NOW0, () => 'unregistered');
+    const t = r.token.value;
+    const rows = await operatorSecretRows(r.ccrcDir, (lane, v) => fingerprintRow(t, lane, v));
+    expect(r.masker.ingest(withOperatorSecretRows(null, fingerprintGeneration(t), rows.rows)!, { rekey: true })).toBe(true);
+    expect(r.masker.maskText(v2)).toBe(SECRET_MASK);
+  });
+
+  it('the stored-secrets read goes through the answer masker: an asking item\'s title a session wrote is masked', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const value = mark();
+    expect((await save(r, raiseSecret(r), value)).statusCode).toBe(200);
+    const id = r.coord.raiseItem({
+      program: 'prog-a', runId: r.runA, raisedBy: 'lane-a', kind: 'secret', title: `the key ${value}`, why: 'w', how: [], options: null,
+      neededBy: 'later', soonLabel: null, secretSlot: 'k-two',
+    }, NOW0);
+    expect((await save(r, id, mark())).statusCode).toBe(200);
+    const res = await r.send({ method: 'GET', url: '/api/programmes/prog-a/secrets' });
+    expect(res.body).not.toContain(value);
+    expect(res.body).toContain(SECRET_MASK);
+  });
+});

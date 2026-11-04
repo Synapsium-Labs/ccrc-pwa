@@ -15,12 +15,20 @@
 //
 // "NOTHING NEEDS YOU" is said only for what is KNOWN: with no open item the card says what the programme waits on instead
 // (spec section 3), and names it only once the runs frame has landed; a programme is never called ended on runs not heard.
-import { useEffect, useState } from 'react';
+//
+// STORED SECRETS (the operator's ruling on programme item 9): the Waiting card ends with a "Stored secrets" section, shown only
+// when the programme has one, read from `GET /api/programmes/:slug/secrets` on arrival and again whenever one of this
+// programme's secret items changes in the frame. Each slot shows its name, when it was saved and the item that asked for it,
+// NEVER any part of the value, and a Remove control (`StoredSecretRemove`) that asks for confirmation. A store the box could
+// not read says so; it is never drawn as a programme with no secrets.
+import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import {
-  WAITS_ON_WORDS, programmeWaitsOn, type GoalsView, type ItemView, type WaitingView, type WaitsOn,
+  WAITS_ON_WORDS, programmeWaitsOn, type GoalsView, type ItemView, type StoredSecret, type StoredSecretsAnswer, type WaitingView,
+  type WaitsOn,
 } from '../../../shared/ledgers';
+import type { StepUpDeps } from '../accounts/useStepUp';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { programWave, programmeTitle, runHomeProject } from '../fleet/runWords';
 import { api } from '../lib/api';
@@ -28,7 +36,8 @@ import { navigate } from '../lib/router';
 import { ROUTES, sessionPath } from '../lib/routes';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { GoalsPanel } from './GoalsPanel';
-import { EMPTY_WORD, NO_FRAME_WORD, groupByProgramme, listGroups, openRunsOf, questionRows, type ItemList } from './ledgerWords';
+import { EMPTY_WORD, NO_FRAME_WORD, ageWords, groupByProgramme, listGroups, openRunsOf, questionRows, type ItemList } from './ledgerWords';
+import { STORED_TEXT, StoredSecretRemove, removeStoredSecret, type RemoveSecret } from './ItemView';
 import { Back, itemPath, useHeard, useUnavailable } from './WaitingRoutes';
 import { ClearedTrail, ItemRows } from './WaitingScreen';
 import './ledgers.css';
@@ -72,6 +81,67 @@ function homeProjectOf(slug: string, runs: readonly RunSummary[]): string | null
 const NO_RUNS: readonly RunSummary[] = [];
 const NO_ITEMS: readonly ItemView[] = [];
 
+/** Reads one programme's stored secrets (`api.storedSecrets`); a test passes its own. */
+export type ReadStoredSecrets = (slug: string) => Promise<StoredSecretsAnswer>;
+const readStoredSecrets: ReadStoredSecrets = (slug) => api.storedSecrets(slug);
+/** What the read of the stored secrets has come to: not answered yet, refused or unreachable, or the slots. Never `[]` for a
+ *  read that failed. */
+type SecretsRead = 'reading' | 'failed' | readonly StoredSecret[];
+
+/** The programme's stored secrets, read on arrival and whenever `key` moves (a secret item of this programme changed in the
+ *  frame), and again after a Remove. An answer for another programme is a failed read. */
+function useStoredSecrets(slug: string, key: string, read: ReadStoredSecrets): { secrets: SecretsRead; reread: () => void } {
+  const [secrets, setSecrets] = useState<SecretsRead>('reading');
+  const [bump, setBump] = useState(0);
+  useEffect(() => {
+    let live = true;
+    read(slug).then(
+      (a) => { if (live) setSecrets(a.ok === true && a.program === slug && Array.isArray(a.slots) ? a.slots : 'failed'); },
+      () => { if (live) setSecrets('failed'); },
+    );
+    return () => { live = false; };
+  }, [slug, key, bump, read]);
+  const reread = useCallback(() => setBump((n) => n + 1), []);
+  return { secrets, reread };
+}
+
+/** The Waiting card's "Stored secrets" section: nothing while reading or when the programme has none; the sentence when the
+ *  read failed; otherwise one row per slot, with its Remove. */
+function StoredSecretsSection({ slug, secrets, now, onRemoved, removeSecret, stepUpDeps }: {
+  slug: string; secrets: SecretsRead; now: number; onRemoved: () => void; removeSecret: RemoveSecret; stepUpDeps?: StepUpDeps;
+}): ReactNode {
+  if (secrets === 'reading' || (secrets !== 'failed' && secrets.length === 0)) return null;
+  return (
+    <section className="pv-secrets" aria-label={STORED_TEXT.heading} data-secrets="stored">
+      <h3 className="pv-h">{STORED_TEXT.heading}</h3>
+      {secrets === 'failed'
+        ? <p className="wl-note" role="alert">{STORED_TEXT.unreadable}</p>
+        : (
+          <ul className="pv-secret-list">
+            {secrets.map((s) => (
+              <li key={s.slot} className="pv-secret" data-slot={s.slot}>
+                <span className="pv-secret-name">{s.slot}</span>
+                <span className="wi-hint">{STORED_TEXT.savedAt(s.setAt === null ? null : ageWords(s.setAt, now))}</span>
+                <span className="wi-hint">{STORED_TEXT.askedBy(s.item?.title ?? null)}</span>
+                <StoredSecretRemove key={`${s.slot}:${s.setAt ?? ''}`} program={slug} slot={s.slot} onRemoved={onRemoved}
+                                    removeSecret={removeSecret} {...(stepUpDeps === undefined ? {} : { stepUpDeps })} />
+              </li>
+            ))}
+          </ul>
+        )}
+    </section>
+  );
+}
+
+/** The key that moves when one of this programme's secret items changes in the frame (raised, saved, removed, closed). */
+function secretItemsKey(slug: string, view: WaitingView | null): string {
+  if (view === null) return '';
+  return [...view.items, ...view.cleared]
+    .filter((i) => i.program === slug && i.kind === 'secret')
+    .map((i) => `${i.id}:${i.state}:${i.secretSet?.at ?? '-'}`)
+    .sort().join(',');
+}
+
 /** The card's one sentence when nothing is waiting on the operator: what the programme waits on, named only once the runs have
  *  been heard, and, for a programme with no open run, said once as a sentence of its own, not as `WAITS_ON_WORDS.ended`'s tail
  *  after "Waiting on:" (that text reads as a fragment and is the words' other readers', `pl5b-ended-words-literal`). */
@@ -103,9 +173,9 @@ function GoalsCard({ read, held, homeProject, heldItems, list }: {
 }
 
 /** The right column: this programme's open items and its sessions' questions, or what the programme waits on instead. */
-function WaitingCard({ slug, view, sessions, runs, unavailable, now, list }: {
+function WaitingCard({ slug, view, sessions, runs, unavailable, now, list, stored }: {
   slug: string; view: WaitingView | null; sessions: readonly FleetSession[] | null; runs: readonly RunSummary[] | null;
-  unavailable: string | null; now: number; list: ItemList;
+  unavailable: string | null; now: number; list: ItemList; stored: ReactNode;
 }): ReactNode {
   if (view === null || sessions === null) {
     return (
@@ -114,6 +184,7 @@ function WaitingCard({ slug, view, sessions, runs, unavailable, now, list }: {
         {unavailable !== null
           ? <p className="wl-note" role="alert">{unavailable}</p>
           : <p className="wl-note" role="status">{NO_FRAME_WORD}</p>}
+        {stored}
       </section>
     );
   }
@@ -134,12 +205,17 @@ function WaitingCard({ slug, view, sessions, runs, unavailable, now, list }: {
         <ItemRows rows={group.rows} now={now} onOpenItem={(id) => navigate(itemPath(id, list))} onOpenSession={(id) => navigate(sessionPath(id))} />
       )}
       <ClearedTrail items={cleared} now={now} />
+      {stored}
     </section>
   );
 }
 
-/** `/programmes/<slug>`. Keyed by the slug where it is mounted, so one programme's Goals never show under another's name. */
-export function ProgrammeScreen({ slug, store = useFleetStore }: { slug: string; store?: FleetStore }): ReactNode {
+/** `/programmes/<slug>`. Keyed by the slug where it is mounted, so one programme's Goals never show under another's name.
+ *  `secrets` replaces the stored-secrets read, the Remove call and the step-up's injectables (a test's). */
+export function ProgrammeScreen({ slug, store = useFleetStore, secrets }: {
+  slug: string; store?: FleetStore;
+  secrets?: { read?: ReadStoredSecrets; remove?: RemoveSecret; stepUpDeps?: StepUpDeps };
+}): ReactNode {
   const view = store((s) => s.waiting);
   const { sessions, runs } = useHeard(store);
   const unavailable = useUnavailable(store, view !== null);
@@ -152,6 +228,8 @@ export function ProgrammeScreen({ slug, store = useFleetStore }: { slug: string;
   const hue = fleetHues(heard).get(slug) ?? 'none';
   // The list an item opened here names, so its way back and its steps stay in this programme (plan PL9).
   const list: ItemList = { at: 'programme', programme: slug };
+  const stored = useStoredSecrets(slug, secretItemsKey(slug, view), secrets?.read ?? readStoredSecrets);
+  const now = Date.now();
   return (
     <div className="wl pv" data-program={slug} data-hue={hue}>
       <header className="pv-head" data-hue={hue}>
@@ -164,7 +242,10 @@ export function ProgrammeScreen({ slug, store = useFleetStore }: { slug: string;
         <div className="pv-card">
           <GoalsCard read={read} held={held} homeProject={homeProjectOf(slug, heard)} heldItems={heldItems} list={list} />
         </div>
-        <WaitingCard slug={slug} view={view} sessions={sessions} runs={runs} unavailable={unavailable} now={Date.now()} list={list} />
+        <WaitingCard slug={slug} view={view} sessions={sessions} runs={runs} unavailable={unavailable} now={now} list={list}
+                     stored={<StoredSecretsSection slug={slug} secrets={stored.secrets} now={now} onRemoved={stored.reread}
+                                                   removeSecret={secrets?.remove ?? removeStoredSecret}
+                                                   {...(secrets?.stepUpDeps === undefined ? {} : { stepUpDeps: secrets.stepUpDeps })} />} />
       </div>
     </div>
   );

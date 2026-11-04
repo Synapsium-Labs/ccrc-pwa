@@ -13,14 +13,18 @@
 // to the tick. The save is a credential act: `useStepUp`'s `runAct` runs it once, and a `step-up-required` answer shows
 // "Confirm it's you" and waits for the operator to press Save again. A box whose sign-in is not armed (`auth-off`, or a
 // plain-HTTP origin, `insecure-origin`) disables the field with the sentence that says why; there is no unconfirmed save.
-// What the operator sees after saving is the server's answer: when it was set, its last four characters (none for a short
-// value), and whether outgoing text will be masked.
+// What the operator sees after saving is the server's answer: when it was set, its last four characters (none for a value
+// outgoing text will not mask), and whether outgoing text will be masked.
+//
+// A STORED SECRET OUTLIVES ITS ITEM (the operator's ruling on programme item 9): while the item's slot holds a value, the view
+// says "Stored" with a Remove control (`StoredSecretRemove`, which the programme screen's "Stored secrets" section shares). A
+// Remove asks for confirmation, is a credential act like the save (the same step-up), and never shows any part of the value.
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, RadioFieldset, TextInput } from '@ccrc/ui';
+import { Button, QuickConfirm, RadioFieldset, TextInput } from '@ccrc/ui';
 import {
-  ANSWER_MAX, SECRET_VALUE_MAX, WAITS_ON_WORDS, isSecretValue, recommendationOf, type ItemView as ItemWire, type SecretSaveAnswer,
-  type SecretUnmasked, SECRET_TAIL_MIN,
+  ANSWER_MAX, SECRET_VALUE_MAX, WAITS_ON_WORDS, isSecretValue, recommendationOf, type ItemView as ItemWire, type SecretRemoveAnswer,
+  type SecretSaveAnswer, type SecretUnmasked, SECRET_TAIL_MIN,
 } from '../../../shared/ledgers';
 import type { AuthStatus } from '../../../shared/api';
 import type { ProgHue } from '../fleet/programmeBoxes';
@@ -48,6 +52,8 @@ export interface ItemViewProps {
   readonly programme?: { readonly name: string; readonly hue: ProgHue | null };
   /** Sends a secret item's value to its own route (plan PL6). Defaults to the console's client; a test passes its own. */
   readonly saveSecret?: SaveSecret;
+  /** Removes a stored secret (the Remove door). Defaults to the console's client; a test passes its own. */
+  readonly removeSecret?: RemoveSecret;
   /** The step-up's injectables (a fake box and authenticator in a test); a module constant by default, so it is stable. */
   readonly stepUpDeps?: StepUpDeps;
   /** What the box says of its sign-in (`readAuthStatus`, `lib/auth.ts`): a secret panel on a box whose sign-in is off starts
@@ -60,6 +66,10 @@ export type SaveSecret = (id: number, value: string) => Promise<SecretSaveAnswer
 
 /** The panel's default: the console's client call. */
 const saveItemSecret: SaveSecret = (id, value) => api.saveItemSecret(id, value);
+/** Removes one stored secret (`api.removeStoredSecret`): the slot comes back, never any part of the value. */
+export type RemoveSecret = (program: string, slot: string) => Promise<SecretRemoveAnswer>;
+/** The Remove control's default: the console's client call. */
+export const removeStoredSecret: RemoveSecret = (program, slot) => api.removeStoredSecret(program, slot);
 
 const NO_STEP_UP_DEPS: StepUpDeps = {};
 /** The panel's default reader of the box's sign-in: the console's one spelling of `GET /api/auth/status`. A module constant, so
@@ -72,30 +82,54 @@ const ASSUME_FRESH = Infinity;
 /** The panel's words. */
 export const SECRET_TEXT = {
   label: 'The secret',
-  hint: `The secret must be a single line. It goes straight into a protected file on the server; the coordinator is told only that it is set and when, and, for a secret of ${SECRET_TAIL_MIN} characters or more, its last four characters.`,
-  tooLong: `That is too long to be a secret this console takes (at most ${SECRET_VALUE_MAX} characters).`,
+  // Bytes, as the server counts (review 1391 F3): the tail is told only for a value of at least SECRET_TAIL_MIN UTF-8 bytes that
+  // outgoing text will mask (review 1391 F2), never by a second floor in characters.
+  hint: `The secret must be a single line. It goes straight into a protected file on the server. The coordinator is told only that it is set and when, and its last four characters only if it is at least ${SECRET_TAIL_MIN} bytes long and outgoing text will mask it.`,
+  tooLong: `That is too long to be a secret this console takes (at most ${SECRET_VALUE_MAX} bytes).`,
   save: 'Save secret',
   signInOff: 'Saving a secret needs sign-in turned on for this console.',
+  insecureOrigin: 'Saving a secret needs this console opened over HTTPS.',
   saved: (tail: string): string => (tail === '' ? 'Saved.' : `Saved. Ends in ${tail}.`),
   unmasked: {
     'too-short': 'Too short to be masked in outgoing text.',
     'too-long': 'Too long to be masked in outgoing text.',
+    'not-one-run': 'Not masked in outgoing text: it holds a space, or a sign such as : = or a comma, where outgoing text is split, so it could never be caught whole. The coordinator was told none of its characters.',
     unregistered: 'Not registered for masking in outgoing text: the box could not take it just now. Saving it again retries.',
   } satisfies Record<SecretUnmasked, string>,
   stepUpSubject: 'a secret',
 } as const;
 
+/** The stored-secret words: the item view's "Stored" line and the programme screen's section (programme item 9). No sentence
+ *  names any part of a value. */
+export const STORED_TEXT = {
+  stored: 'Stored.',
+  remove: 'Remove',
+  removeLabel: (slot: string): string => `Remove the stored secret ${slot}`,
+  confirmTitle: (slot: string): string => `Remove the stored secret ${slot}?`,
+  confirmConsequence: [
+    'The secret is deleted from this server. The coordinator is not told, and nothing that needs it can read it any more.',
+    'Outgoing text keeps masking it until the server restarts.',
+  ],
+  removed: 'Removed.',
+  stepUpSubject: 'removing a secret',
+  heading: 'Stored secrets',
+  unreadable: 'The stored secrets of this programme could not be read.',
+  savedAt: (age: string | null): string => (age === null ? 'Saved at a time the box has no record of' : `Saved ${age}`),
+  askedBy: (title: string | null): string => (title === null ? 'No item on record' : `Asked for by: ${title}`),
+} as const;
+
 /** The words where a secret's save means something other than a tick's; every other word is the item's shared sentence
  *  (`LEDGER_REFUSAL_TEXT`, which names the secret route's own two, `not-a-secret-item` and `bad-slot`). */
 const SECRET_REFUSAL_TEXT: Readonly<Record<string, string>> = {
-  'bad-request': `That secret was not accepted. A secret is between 1 and ${SECRET_VALUE_MAX} characters.`,
-  oversize: `That is too long to be a secret this console takes (at most ${SECRET_VALUE_MAX} characters).`,
+  'bad-request': `That secret was not accepted. A secret is between 1 and ${SECRET_VALUE_MAX} bytes.`,
+  oversize: `That is too long to be a secret this console takes (at most ${SECRET_VALUE_MAX} bytes).`,
   'write-failed': "The box couldn't store that, so nothing was sent to the coordinator. Try again.",
 };
 /** Whether the panel may send a value: `asking` until the box answers its sign-in, `dark` when sign-in is off (or a save was
  *  refused `auth-off`/`insecure-origin`, the fallback), `open` otherwise; a box that cannot say opens, and its refusal decides. */
 type Posture = 'asking' | 'open' | 'dark';
-const GATE_DARK = new Set(['auth-off', 'insecure-origin']);
+/** Why a dark panel is dark, each with its own sentence (review 1391 A-7: a plain-HTTP origin is not "sign-in turned off"). */
+const GATE_DARK: Readonly<Record<string, 'signInOff' | 'insecureOrigin'>> = { 'auth-off': 'signInOff', 'insecure-origin': 'insecureOrigin' };
 const wordOf = (err: unknown): string | null => {
   if (!(err instanceof ApiError) || typeof err.body !== 'object' || err.body === null) return null;
   const w = (err.body as { error?: unknown }).error;
@@ -119,6 +153,7 @@ function SecretPanel({ item, saveSecret, stepUpDeps, authStatus }: {
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
   const [posture, setPosture] = useState<Posture>('asking');
+  const [darkWhy, setDarkWhy] = useState<'signInOff' | 'insecureOrigin'>('signInOff');
   const dark = posture === 'dark';
   const [refusal, setRefusal] = useState<string | null>(null);
   const [saved, setSaved] = useState<SecretSaveAnswer['secret'] | null>(null);
@@ -128,6 +163,9 @@ function SecretPanel({ item, saveSecret, stepUpDeps, authStatus }: {
   // The value never waits in a backgrounded page.
   useEffect(() => onPageHidden(() => { setValue(''); }), []);
   // The box's sign-in, read once: off means no value is ever sent (spec §5: "shows the item with its field disabled").
+  // `mode === 'off'` and not `armedMode` (`lib/auth.ts`), LEGITIMATELY DIFFERENT (review 1391 A-8): `armedMode` answers what
+  // the console may assume is armed, failing closed; this read only decides whether to disable a field before the server
+  // decides, so it fails OPEN (an unknown or failed status opens the field) and the server's refusal stays the gate.
   useEffect(() => {
     let live = true;
     void authStatus().then(
@@ -143,6 +181,7 @@ function SecretPanel({ item, saveSecret, stepUpDeps, authStatus }: {
   const ready = posture === 'open' && !busy && trimmed !== '' && !tooLong;
   const fieldId = useId();
   const hintId = useId();
+  const tooLongId = useId();
   const submit = async (): Promise<void> => {
     if (!ready) return;
     setBusy(true);
@@ -156,7 +195,8 @@ function SecretPanel({ item, saveSecret, stepUpDeps, authStatus }: {
       setSaved((answer as SecretSaveAnswer).secret);
     } catch (err) {
       const word = wordOf(err);
-      if (word !== null && GATE_DARK.has(word)) { setPosture('dark'); setValue(''); return; }
+      const why = word === null ? undefined : GATE_DARK[word];
+      if (why !== undefined) { setDarkWhy(why); setPosture('dark'); setValue(''); return; }
       // A 401 raises the login screen, which is the answer.
       if (err instanceof ApiError && err.status === 401) return;
       setRefusal((word !== null ? SECRET_REFUSAL_TEXT[word] : undefined) ?? refusalText(err, LEDGER_REFUSAL_TEXT) ?? apiErrorText(err));
@@ -171,10 +211,10 @@ function SecretPanel({ item, saveSecret, stepUpDeps, authStatus }: {
         <div className="wi-field">
           <label className="wi-label" htmlFor={fieldId}>{SECRET_TEXT.label}</label>
           <TextInput id={fieldId} className="wi-input" type="password" autoComplete="off" autoCapitalize="off" spellCheck={false}
-                     aria-describedby={hintId} value={value} disabled={posture !== 'open'}
+                     aria-describedby={tooLong && !dark ? `${hintId} ${tooLongId}` : hintId} value={value} disabled={posture !== 'open'}
                      onChange={(e) => setValue(e.target.value)} />
-          <span id={hintId} className="wi-hint">{dark ? SECRET_TEXT.signInOff : SECRET_TEXT.hint}</span>
-          {tooLong && !dark && <span className="wi-hint" data-secret="too-long">{SECRET_TEXT.tooLong}</span>}
+          <span id={hintId} className="wi-hint">{dark ? SECRET_TEXT[darkWhy] : SECRET_TEXT.hint}</span>
+          {tooLong && !dark && <span id={tooLongId} className="wi-hint" role="alert" data-secret="too-long">{SECRET_TEXT.tooLong}</span>}
         </div>
         <div className="wi-actions">
           <Button type="submit" variant="primary" size="fit" disabled={!ready}>{SECRET_TEXT.save}</Button>
@@ -184,6 +224,54 @@ function SecretPanel({ item, saveSecret, stepUpDeps, authStatus }: {
       <ConfirmItsYou stepUp={stepUp} subject={SECRET_TEXT.stepUpSubject} />
       {saved !== null && <SecretState set={saved} />}
       {refusal !== null && <p className="wi-refusal" role="alert">{refusal}</p>}
+    </div>
+  );
+}
+
+/**
+ * THE REMOVE CONTROL OF ONE STORED SECRET (the operator's ruling on programme item 9), shared by the item view and the programme
+ * screen's "Stored secrets" section. Remove opens a confirmation; Confirm runs the removal once through the step-up (`runAct`),
+ * and a `step-up-required` answer shows "Confirm it's you" and waits for the operator to press Remove again, as the save does.
+ * A removal refused `secret-not-stored` is a removal already made: `onRemoved` runs either way. Nothing here sees a value.
+ */
+export function StoredSecretRemove({ program, slot, onRemoved, removeSecret = removeStoredSecret, stepUpDeps = NO_STEP_UP_DEPS }: {
+  program: string; slot: string; onRemoved?: () => void; removeSecret?: RemoveSecret; stepUpDeps?: StepUpDeps;
+}): ReactNode {
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const stepUp = useStepUp(ASSUME_FRESH, stepUpDeps);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const remove = async (): Promise<void> => {
+    setBusy(true);
+    setRefusal(null);
+    try {
+      let removed = false;
+      const outcome = await stepUp.runAct(async () => { await removeSecret(program, slot); removed = true; });
+      if (outcome === 'step-up' || !removed || !mounted.current) return;
+      setDone(true);
+      onRemoved?.();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) return;
+      if (wordOf(err) === 'secret-not-stored') { if (mounted.current) setDone(true); onRemoved?.(); return; }
+      if (mounted.current) setRefusal(refusalText(err, LEDGER_REFUSAL_TEXT) ?? apiErrorText(err));
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+  if (done) return <span className="wi-status" role="status" data-secret="removed">{STORED_TEXT.removed}</span>;
+  return (
+    <div className="wi-stored-remove" data-secret="remove">
+      <Button variant="ghost" size="fit" disabled={busy} aria-label={STORED_TEXT.removeLabel(slot)} onClick={() => setAsking(true)}>
+        {STORED_TEXT.remove}
+      </Button>
+      <ConfirmItsYou stepUp={stepUp} subject={STORED_TEXT.stepUpSubject} />
+      {refusal !== null && <p className="wi-refusal" role="alert">{refusal}</p>}
+      <QuickConfirm open={asking} onClose={() => setAsking(false)} tone="danger" defaultFocus="cancel"
+                    title={STORED_TEXT.confirmTitle(slot)} consequence={[...STORED_TEXT.confirmConsequence]}
+                    confirmLabel={STORED_TEXT.remove} onConfirm={() => { setAsking(false); void remove(); }} />
     </div>
   );
 }
@@ -242,8 +330,8 @@ function Field({ label, value, onChange, maxLength, hint }: {
   );
 }
 
-function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSecret, stepUpDeps = NO_STEP_UP_DEPS, authStatus = readSignIn }:
-  Pick<ItemViewProps, 'item' | 'programmeLive' | 'onTick' | 'onDismiss' | 'saveSecret' | 'stepUpDeps' | 'authStatus'>): ReactNode {
+function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSecret, removeSecret = removeStoredSecret, stepUpDeps = NO_STEP_UP_DEPS, authStatus = readSignIn }:
+  Pick<ItemViewProps, 'item' | 'programmeLive' | 'onTick' | 'onDismiss' | 'saveSecret' | 'removeSecret' | 'stepUpDeps' | 'authStatus'>): ReactNode {
   const [pick, setPick] = useState<string | null>(null);
   const [own, setOwn] = useState('');
   const [note, setNote] = useState('');
@@ -316,6 +404,13 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
       )}
       {open && programmeLive && item.kind === 'secret' && <SecretPanel item={item} saveSecret={saveSecret} stepUpDeps={stepUpDeps} authStatus={authStatus} />}
       {checking && item.kind === 'secret' && item.secretSet !== null && <SecretState set={item.secretSet} />}
+      {item.kind === 'secret' && item.secretSet !== null && item.secretSlot !== null && (
+        <div className="wi-stored" data-secret="stored">
+          <span className="wi-status">{STORED_TEXT.stored}</span>
+          <StoredSecretRemove key={`${item.secretSlot}:${item.secretSet.at}`} program={item.program} slot={item.secretSlot}
+                              removeSecret={removeSecret} stepUpDeps={stepUpDeps} />
+        </div>
+      )}
       {checking && (
         <p className="wi-status" role="status" data-stale={item.stale ? 'true' : 'false'}>
           {item.stale
@@ -337,7 +432,7 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
   );
 }
 
-export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme, saveSecret, stepUpDeps, authStatus }: ItemViewProps): ReactNode {
+export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme, saveSecret, removeSecret, stepUpDeps, authStatus }: ItemViewProps): ReactNode {
   const pills = itemPills(item);
   const name = programme?.name ?? item.program;
   return (
@@ -366,7 +461,8 @@ export function ItemView({ item, onTick, onDismiss, programmeLive, now, programm
           </section>
         </div>
         <Panel item={item} programmeLive={programmeLive} onTick={onTick} onDismiss={onDismiss}
-               {...(saveSecret === undefined ? {} : { saveSecret })} {...(stepUpDeps === undefined ? {} : { stepUpDeps })}
+               {...(saveSecret === undefined ? {} : { saveSecret })} {...(removeSecret === undefined ? {} : { removeSecret })}
+               {...(stepUpDeps === undefined ? {} : { stepUpDeps })}
                {...(authStatus === undefined ? {} : { authStatus })} />
       </div>
     </div>

@@ -441,19 +441,22 @@ export class SecretMasker {
    * candidate in any text, so it answers `not-one-run`. Its row stays: it is harmless, and a re-save replaces it.
    */
   ingestSecret(laneId: string, secret: string): 'masked' | SecretUnmasked {
+    // A save means the slot holds a value again: the re-key may speak for its lane from here on, whatever happens below.
+    this.retiredLanes.delete(laneId);
     this.syncKeys();
     const cur = this.keys[0];
     const row = fingerprintRow(cur?.token ?? '', laneId, secret);
     if (row.len < RUN_MIN_BYTES) return 'too-short';
     if (row.len > RUN_MAX_BYTES) return 'too-long';
     if (cur === undefined || this.db === null) return 'unregistered';
-    this.retiredLanes.delete(laneId);
-    this.held?.drop.delete(laneId);
     try {
       if (!this.ingest({ gen: cur.gen, rows: [row] })) return 'unregistered';
     } catch {
       return 'unregistered';
     }
+    // The lane's rows were just replaced by this save's: a Remove's delete still waiting must not take this row with it. Left
+    // waiting when the row did not land, so the removed value's row still leaves the table.
+    this.held?.drop.delete(laneId);
     return this.catchesWhole(secret) ? 'masked' : 'not-one-run';
   }
 

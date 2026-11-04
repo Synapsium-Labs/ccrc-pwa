@@ -4,13 +4,14 @@
 // (`goals-panel.test.tsx`). The store is the test's own, the programme `prog-a`, the project `project-a`.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { GoalsView } from '../../shared/ledgers';
+import type { GoalsView, StoredSecretsAnswer } from '../../shared/ledgers';
 import { WAITS_ON_WORDS } from '../../shared/ledgers';
 import { ApiError } from '../src/lib/apiError';
 import { api } from '../src/lib/api';
 import { PROGRAM_SLUG_MAX_CHARS } from '../../shared/api';
 import { ROUTES, isProgrammeSlug, matchRoute, programmeIsOpenable, programmePath } from '../src/lib/routes';
 import { ProgrammeScreen } from '../src/ledgers/ProgrammeScreen';
+import { STORED_TEXT, type RemoveSecret } from '../src/ledgers/ItemView';
 import { itemPath } from '../src/ledgers/WaitingRoutes';
 import { createFleetStore } from '../src/stores/fleet';
 import { fleetSession } from './fleetFixture';
@@ -37,6 +38,7 @@ function heard(over: Partial<ReturnType<ReturnType<typeof mk>['getState']>> = {}
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
   vi.spyOn(api, 'goals').mockResolvedValue({ ok: true, goals: goals() });
+  vi.spyOn(api, 'storedSecrets').mockResolvedValue({ ok: true, program: 'prog-a', slots: [] });
   history.replaceState(null, '', '/');
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); history.replaceState(null, '', '/'); });
@@ -335,5 +337,74 @@ describe('the programme view: when nothing needs the operator', () => {
     expect(screen.queryByText(/Nothing needs you/)).toBeNull();
     // Goals do not wait on the list: they come from their own read.
     expect(screen.getByRole('region', { name: 'Goals' })).toBeTruthy();
+  });
+});
+
+describe('the programme screen\'s Stored secrets (the operator\'s ruling on programme item 9)', () => {
+  const SECRET_VALUE_TAIL = 'zz99';
+  const answerOf = (slots: StoredSecretsAnswer['slots']): StoredSecretsAnswer => ({ ok: true, program: 'prog-a', slots });
+  const stepUpDeps = {
+    client: {
+      stepUpStart: async () => ({ challengeB64url: 'AQID', rpId: 'box.example.invalid', allowCredentialIdsB64url: [] }),
+      stepUpFinish: async () => { throw new Error('no passkey in this test'); },
+      stepUpPassphrase: async () => ({ ok: true, stepUpFreshUntil: Date.now() + 300_000 }),
+    } as never,
+  };
+
+  it('is not shown when the programme has no stored secret', async () => {
+    const read = vi.fn(async () => answerOf([]));
+    render(<ProgrammeScreen slug="prog-a" store={heard()} secrets={{ read }} />);
+    await waitFor(() => expect(read).toHaveBeenCalledWith('prog-a'));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByRole('region', { name: STORED_TEXT.heading })).toBeNull();
+  });
+
+  it('lists each slot by name, when it was saved and the item that asked for it, never any part of the value, with a Remove', async () => {
+    const read = vi.fn(async () => answerOf([
+      { slot: 'api-key', setAt: Date.now() - 3 * 60 * MIN, item: { id: 9, title: 'Give the service key' } },
+      { slot: 'old-one', setAt: null, item: null },
+    ]));
+    render(<ProgrammeScreen slug="prog-a" store={heard()} secrets={{ read }} />);
+    const section = await screen.findByRole('region', { name: STORED_TEXT.heading });
+    const rows = within(section).getAllByRole('listitem');
+    expect(rows.map((r) => r.getAttribute('data-slot'))).toEqual(['api-key', 'old-one']);
+    expect(rows[0]!.textContent).toContain('api-key');
+    expect(rows[0]!.textContent).toContain('Saved 3h ago');
+    expect(rows[0]!.textContent).toContain(STORED_TEXT.askedBy('Give the service key'));
+    expect(rows[1]!.textContent).toContain(STORED_TEXT.savedAt(null));
+    expect(rows[1]!.textContent).toContain(STORED_TEXT.askedBy(null));
+    expect(within(section).getAllByRole('button', { name: /Remove the stored secret/ })).toHaveLength(2);
+    expect(section.textContent).not.toContain(SECRET_VALUE_TAIL);
+  });
+
+  it('a store that could not be read says so; it is never drawn as a programme with no secrets', async () => {
+    const read = vi.fn(async () => { throw new ApiError(503, { ok: false, error: 'secrets-unreadable' }); });
+    render(<ProgrammeScreen slug="prog-a" store={heard()} secrets={{ read }} />);
+    const section = await screen.findByRole('region', { name: STORED_TEXT.heading });
+    expect(within(section).getByRole('alert').textContent).toBe(STORED_TEXT.unreadable);
+  });
+
+  it('Remove asks for confirmation, removes that slot of this programme, and reads the list again', async () => {
+    let slots: StoredSecretsAnswer['slots'] = [{ slot: 'api-key', setAt: NOW, item: null }];
+    const read = vi.fn(async () => answerOf(slots));
+    const remove = vi.fn<RemoveSecret>(async (_p, slot) => { slots = []; return { ok: true, slot }; });
+    render(<ProgrammeScreen slug="prog-a" store={heard()} secrets={{ read, remove, stepUpDeps }} />);
+    const section = await screen.findByRole('region', { name: STORED_TEXT.heading });
+    fireEvent.click(within(section).getByRole('button', { name: STORED_TEXT.removeLabel('api-key') }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain(STORED_TEXT.confirmTitle('api-key'));
+    fireEvent.click(Array.from(dialog.querySelectorAll('button')).find((b) => b.textContent === STORED_TEXT.remove)!);
+    await waitFor(() => expect(remove).toHaveBeenCalledWith('prog-a', 'api-key'));
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole('region', { name: STORED_TEXT.heading })).toBeNull());
+  });
+
+  it('reads the list again when one of this programme\'s secret items changes in the frame', async () => {
+    const read = vi.fn(async () => answerOf([]));
+    const store = heard({ waiting: waitingView({ items: [itemView({ id: 5, kind: 'secret', secretSlot: 'api-key' } as never)] }) });
+    render(<ProgrammeScreen slug="prog-a" store={store} secrets={{ read }} />);
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 5, kind: 'secret', secretSlot: 'api-key', state: 'checking', secretSet: { at: NOW, tail: '', masked: false, why: 'too-short' } } as never)] }) }));
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   });
 });
