@@ -2,9 +2,9 @@
 
 > **For agentic workers:** this wave is dispatched by the programme's coordinator as one run (see "How this wave runs" below). The worker executes it with REQUIRED SUB-SKILL superpowers:subagent-driven-development (recommended) or superpowers:executing-plans, task by task, under the `ccrc-worker` skill. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** rev 2 (2026-11-03), drafted for the coordinator; reviewed by three lenses with a refuter per finding (round 1); not yet approved by the operator (see "Where things stand"). Base: `main` after Export (#2237) merges. Every Find block below is quoted from one of two commits, named on the block itself: Export's tip `5fcc4268ac3c3a59959ee8b3cd9ce91e914707bb` (PR #2237, branch `ws/docs-reader-export`) for every file Export changes, and `origin/main` at `94bdcf45485c9cea22ce0563ef07a90a19fe9197` (2026-11-03) for every other file (the table under Global Constraints). `main` has not touched any Export-changed file this wave edits since the two branched (measured: `git diff a3c319d44 94bdcf454` is empty for all six), so after the merge they read as at `5fcc4268a`. Export is still in review and may change, so **Task 1 Step 0 re-checks every Find block against the dispatch base** with one script, and any miss is a stop-and-ask. It replaces nothing.
+**Status:** rev 2 (2026-11-03), drafted for the coordinator; reviewed by three lenses with a refuter per finding (round 1); approved by the operator on 2026-11-04 with every recommendation (console item 13; see "Where things stand"). Base: `main` after Export (#2237) merges. Every Find block below is quoted from one of two commits, named on the block itself: Export's tip `5fcc4268ac3c3a59959ee8b3cd9ce91e914707bb` (PR #2237, branch `ws/docs-reader-export`) for every file Export changes, and `origin/main` at `94bdcf45485c9cea22ce0563ef07a90a19fe9197` (2026-11-03) for every other file (the table under Global Constraints). `main` has not touched any Export-changed file this wave edits since the two branched (measured: `git diff a3c319d44 94bdcf454` is empty for all six), so after the merge they read as at `5fcc4268a`. Export is still in review and may change, so **Task 1 Step 0 re-checks every Find block against the dispatch base** with one script, and any miss is a stop-and-ask. It replaces nothing.
 
-**Revisions:** rev 2 (2026-11-03) applies review round 1 (sixteen findings upheld): the draft badge is drawn beside the ellipsised first line, never in it, with a 412 px long-branch case (spec-intent F1); the compact head keeps the crumbs while the tree slot is not `ok`, so §4.7 holds (F2); Share's waiting icon is named "Share: …" (F3); §4.17's "When it is offered" words and the "Export (plain view)" label join (e)'s departure and Q1, and Task 4 pins each word (F4); the row names the served ref for every default view that is not origin/HEAD (F5); the picked mockup's 1 px divider is kept inside the 44 px row, never-fetched and failed share its attention colour, and the parent-crumb label is named as a departure from the mockup (F6); the failed name is the neutral "Page details (freshness problem)" (F7); Q3 states the landscape cost and a 915 x 412 case records it (F8); Task 3's comment no longer spells the width constant, so Task 4 Step 0 can pass (executability F1); Task 2 keeps npm's cache and the tarball in the scratch directory it removes and extracts only the files the generator reads, with measured sizes (executability F2); the tap-targets render half waits for Share (executability F3, tests-guards F2); the disabled icon's fade is registered in `OPACITY_REGISTRY` (tests-guards F1); twelve mutation rows added, two predictions restated, and the "Formatting…" selector chain pinned against the live DOM (tests-guards F3 to F5). Find blocks: 22.
+**Revisions:** rev 3 (2026-11-04): the operator's approval is recorded, and one Find block is re-quoted. Export's review added a case after the old anchor of the floor-half block in `pwa/test/tap-targets.test.tsx`, so that block now anchors on the end of Export's Retry case, quoted from `b55e96a75`, Export's merge on `main`. The find-check, run by the coordinator against `main` at `707eae764`, counts 22 blocks and no miss. rev 2 (2026-11-03) applies review round 1 (sixteen findings upheld): the draft badge is drawn beside the ellipsised first line, never in it, with a 412 px long-branch case (spec-intent F1); the compact head keeps the crumbs while the tree slot is not `ok`, so §4.7 holds (F2); Share's waiting icon is named "Share: …" (F3); §4.17's "When it is offered" words and the "Export (plain view)" label join (e)'s departure and Q1, and Task 4 pins each word (F4); the row names the served ref for every default view that is not origin/HEAD (F5); the picked mockup's 1 px divider is kept inside the 44 px row, never-fetched and failed share its attention colour, and the parent-crumb label is named as a departure from the mockup (F6); the failed name is the neutral "Page details (freshness problem)" (F7); Q3 states the landscape cost and a 915 x 412 case records it (F8); Task 3's comment no longer spells the width constant, so Task 4 Step 0 can pass (executability F1); Task 2 keeps npm's cache and the tarball in the scratch directory it removes and extracts only the files the generator reads, with measured sizes (executability F2); the tap-targets render half waits for Share (executability F3, tests-guards F2); the disabled icon's fade is registered in `OPACITY_REGISTRY` (tests-guards F1); twelve mutation rows added, two predictions restated, and the "Formatting…" selector chain pinned against the live DOM (tests-guards F3 to F5). Find blocks: 22.
 
 **Scope:**
 - In: on a leaf page under 600 CSS px, `DocsHead` draws one row (back, a two-line label naming where and what, Share and Export as icons, Page details) and, under it, a Page details panel that holds the crumbs, the truth line, View on GitHub and Open committed version; while the tree slot is not `ok`, back and the crumbs, as today; the picked mockup's 1 px divider inside the row's 44 px; the Docs screen gives that row the top (no padding above it, 4 px under it); "Formatting…" lies over the reader's host on that screen instead of taking a line; three lucide icons vendored for it; five words in `docsText.ts`; the tests (jsdom behaviour, the stylesheet's declarations, both tap-target halves, the control census entry, two contrast grounds and one registered fade, and a browser test that measures the pixels above the title at the operator's phone's viewport).
@@ -50,6 +50,7 @@
 |---|---|---|
 | `pwa/src/docs/DocsHead.tsx`, `pwa/src/docs/docsText.ts`, `pwa/src/docs/docs.css`, `pwa/design/audit.mjs`, `pwa/test/tap-targets.test.tsx`, `pwa/test/control-census.test.ts` | `5fcc4268a` (Export's tip) | Export changes each; `main` has not touched them since the two branched |
 | `ui/design/make-icons.mjs`, `pwa/test/icon.test.tsx` | `94bdcf454` (`origin/main`) | Export changes neither |
+| `pwa/test/tap-targets.test.tsx`, the floor-half block only (Task 3 Step 1) | `b55e96a75` (Export's merge on `main`) | Export's review added a case after its old anchor (rev 3) |
 
 - **Rings and seams.** `DocsHead.tsx` stays ring L4 delivery: it decides the layout with one pure function (`headLayoutFor`) and one pure mapping (`freshDot`), and renders; it starts no request (the chip's tap is still `visit.refreshManual`). No overloaded `null` at a seam: `FreshDot`'s `null` has one meaning (no dot), `HeadActions.target`'s and `committedHref`'s each one (not offered). `Icon` is decoration (`aria-hidden`), so every icon's meaning is its button's accessible name.
 - **Exact values.** `DOCS_COMPACT_QUERY = '(max-width: 599.98px)'` (declared once, in `DocsHead.tsx`); the row's border box 44 px tall (`block-size: var(--tap-min)`) with a 1 px `--edge-subtle` divider inside it; the screen's `padding-top: 0` and `gap: var(--sp-1)` (4 px) when it holds the compact head; icons `share` (Share), `download` (Export), `ellipsis` (Page details) at size 20; a disabled row icon `opacity: 0.35`; the dot `var(--sp-2)` square at `--sp-2` from the button's top and end, `--status-done` (ok), `--status-attention` (never fetched, and failed); the five words `exportPlainHint`, `shareBusy` ("Share: {state}"), `more` ("Page details"), `moreNever` ("Page details (never fetched)"), `moreFailed` ("Page details (freshness problem)") (Task 4); the fade's registry key `.docs-compact-bar .docs-action:disabled 0.35`; the browser file's `PHONE` 412 x 915, `PHONE_TITLE_MAX` 133, `CONSOLE_PART_MAX` 48, `TAP` 44, `LONG_BRANCH` `ws/a-long-workspace-branch-for-the-phone-header`.
@@ -725,17 +726,15 @@ describe('the compact head in docs.css (the phone-header plan, refinements (d), 
 ```
 
   and, in `pwa/test/tap-targets.test.tsx`, the floor half and one loop line:
-  Find (`pwa/test/tap-targets.test.tsx`, quoted from `5fcc4268a`):
+  Find (`pwa/test/tap-targets.test.tsx`, quoted from `b55e96a75`):
 ```tsx
-    fireEvent.click(exportButton);
-    expect(await screen.findByRole('button', { name: /^Save / })).toHaveClass('min-h-tap');
+    expect(await screen.findByRole('button', { name: EXPORT_TEXT.retry })).toHaveClass('min-h-tap');
   });
 });
 ```
   Replace:
 ```tsx
-    fireEvent.click(exportButton);
-    expect(await screen.findByRole('button', { name: /^Save / })).toHaveClass('min-h-tap');
+    expect(await screen.findByRole('button', { name: EXPORT_TEXT.retry })).toHaveClass('min-h-tap');
   });
 });
 
@@ -1906,7 +1905,7 @@ A browser row's `tests` run under the browser config: `( cd pwa && CCRC_CHROME=<
 
 ## Deviations found
 
-Issued at the run's opening: the first three for refinements (c), (d) and (e), the rest for departures found while executing and in a fix round. (Task 6 Step 4 replaces this line.)
+Issued at the run's opening (run 1436, 2026-11-04): 7953 to 7959. The first three are for refinements (c), (d) and (e), in that order; the other four are for departures found while executing and in a fix round. (Task 6 Step 4 replaces this line.)
 
 ## Where things stand
 
@@ -1917,6 +1916,10 @@ Issued at the run's opening: the first three for refinements (c), (d) and (e), t
 - The coordinator's rulings on review round 1 (2026-11-03), applied in rev 2: the draft badge is drawn beside the ellipsised text, never in it, with a 412 px long-branch case and its rows; the compact head keeps the crumbs while the tree slot is not `ok`, so spec §4.7 holds rather than being departed from; Share's waiting icon is named "Share: …", as Export's is; §4.17's "When it is offered" words join (e)'s departure and Q1; the picked mockup is followed for the 1 px divider (inside the 44 px row) and for the one attention colour for never fetched and failed, and the parent-crumb label is named as a deliberate departure from the mockup; Q3 states the landscape cost, a 915 x 412 case records it, and a height arm is offered only as an alternative; the icon step keeps npm's cache and the tarball in the scratch directory it removes and extracts only the files the generator reads; the disabled icon's fade is registered in the contrast census's opacity registry.
 
 ### Waiting on you
+- Nothing. The operator approved the plan on 2026-11-04 (below).
+
+### Answered by the operator (2026-11-04)
+- "Approve with every recommendation" (console item 13). Q1: one tap for the full truth on a phone, with (g) on the row; the departures stay plan-only, numbered at the run's opening as 7953 (c), 7954 (d) and 7955 (e); §4.4, §4.5 and §4.17 are amended in one place when option 2 lands. Q2: the Page details panel is a disclosure in the page's flow under the row. Q3: the row applies to leaf pages under 600 CSS px only. The questions as asked follow.
 - **Q1, the spec's sentences (refinements (c), (d), (e)).** On a phone leaf, these change meaning:
   - §4.4's Layout sentence: the breadcrumb behind `…` and the truth-line facts inline;
   - the Leaf row of §4.4's Views table: the truth line on the page;
