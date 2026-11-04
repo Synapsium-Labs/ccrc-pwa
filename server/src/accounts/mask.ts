@@ -374,6 +374,8 @@ export class SecretMasker {
       let landed = false;
       try { landed = a !== null && this.ingest(a, { rekey: true }); } catch { landed = false; }
       if (landed && !this.staleRows()) { this.rekeyDelay = REKEY_FIRST_MS; return; }
+      // A closed masker retries nothing (`scheduleRekey`), so it logs no retry either (review 1426 F-G).
+      if (this.closed) return;
       this.log(`[mask] the re-key for generation ${this.keys[0]?.gen ?? '-'} has not landed; retrying`);
       this.scheduleRekey(false);
     };
