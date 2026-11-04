@@ -158,4 +158,35 @@ describe('W29: the usage sweep reads its days from ~/.ccrc/ccrc.env through ccrc
     expect(r.err).toContain("usage-sweep: CCRC_USAGE_SWEEP_DAYS must be a whole number from 1 to 999 — got '0', as set in ~/.ccrc/ccrc.env; nothing was swept");
     expect(existsSync(path.join(h, 'scanner-argv'))).toBe(false);
   });
+
+  // W2 characterization (box settings wave 2): the days check's exact sentence and what it cuts, before it moves.
+  const REFUSE = 'usage-sweep: CCRC_USAGE_SWEEP_DAYS must be a whole number from 1 to 999 — got ';
+  it.each([
+    ['1000', '1000'],
+    ['9'.repeat(40), '9'.repeat(32)],
+    ['7\t', '7?'],
+  ])('W2-pin: %j from the environment refuses, shown as %j, with no mark past 32 bytes', (value, shown) => {
+    const h = rebootHome();
+    const r = run(h, { CCRC_USAGE_SWEEP_DAYS: value });
+    expect(r.code, r.err).toBe(1);
+    expect(r.err).toContain(`${REFUSE}'${shown}', as set in the environment; nothing was swept`);
+    expect(existsSync(path.join(h, 'scanner-argv'))).toBe(false);
+  });
+
+  it('W2-pin: 07 from the file refuses, naming the file', () => {
+    const h = rebootHome();
+    ccrcEnv(h, 'CCRC_USAGE_SWEEP_DAYS=07\n');
+    const r = reboot(h);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(`${REFUSE}'07', as set in ~/.ccrc/ccrc.env; nothing was swept`);
+    expect(existsSync(path.join(h, 'scanner-argv'))).toBe(false);
+  });
+
+  it.each(['999', '1'])('W2-pin: %s from the file reaches the scanner as --days %s', (value) => {
+    const h = rebootHome();
+    ccrcEnv(h, `CCRC_USAGE_SWEEP_DAYS=${value}\n`);
+    const r = reboot(h);
+    expect(r.code, r.err).toBe(0);
+    expect(daysHanded(h)).toBe(value);
+  });
 });

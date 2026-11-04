@@ -239,3 +239,50 @@ describe('the deadline and the release base answer as the verb will read them (D
     expect(r.stdout).toBe(`rc 1 from= knob= why=${why}\nstderr ccrc: ${why}\n`);
   });
 });
+
+// ── W2 characterization (box settings wave 2): the pure slice-limit check, by direct calls ─────────────────────────────
+// `_slice_limit_ok <directive> <value>` is pure: rc 0 when the value is one the slice renderer writes. `sourced()` passes no
+// positional argument to the script, so each row hands the directive and the value in as exported variables.
+describe('_slice_limit_ok, by direct calls, before its words move (W2 characterization)', () => {
+  const rcOf = (dir: string, val: string): string =>
+    sourced(boxWith('ccrc-carve-sl-', null), '_slice_limit_ok "$SL_DIR" "$SL_VAL"; echo "rc $?"', { SL_DIR: dir, SL_VAL: val }).stdout.trim();
+  it.each([
+    ['MemoryMax', '1G', 0], ['MemoryMax', '1073741824', 0], ['MemoryMax', '1048576K', 0], ['MemoryMax', '24G', 0],
+    ['MemoryMax', '1%', 0], ['MemoryMax', '100%', 0], ['MemoryMax', '9999999999999999E', 0],
+    ['MemoryMax', '1073741823', 1], ['MemoryMax', '1023M', 1], ['MemoryMax', '0', 1], ['MemoryMax', '0%', 1],
+    ['MemoryMax', '101%', 1], ['MemoryMax', 'infinity', 1], ['MemoryMax', '1.5G', 1], ['MemoryMax', '01G', 1],
+    ['MemoryMax', '1g', 1], ['MemoryMax', '9'.repeat(17), 1],
+    ['MemorySwapMax', '0', 0], ['MemorySwapMax', '1M', 0], ['MemorySwapMax', '1048576', 0], ['MemorySwapMax', '6G', 0],
+    ['MemorySwapMax', '1048575', 1], ['MemorySwapMax', '1023K', 1], ['MemorySwapMax', '50%', 1],
+    ['MemoryHigh', '1G', 1],
+  ] as [string, string, number][])('%s %s answers rc %d', (dir, val, rc) => {
+    expect(rcOf(dir, val)).toBe(`rc ${rc}`);
+  });
+});
+
+// ── W2 characterization: wave 1's keep and health sentences, byte for byte, before their words move ───────────────────
+describe('the keep and health sentences, byte for byte, before their words move (W2 characterization)', () => {
+  const S = (home: string, script: string, extra: NodeJS.ProcessEnv = {}): string => {
+    const r = sourced(home, script, extra);
+    expect(r.stderr).toBe('');
+    return r.stdout;
+  };
+  it('K1: _keep_why names the key, the value and the bound', () => {
+    const h = boxWith('ccrc-carve-k1-', null);
+    expect(S(h, '_keep_why CCRC_BACKUP_KEEP "$KV"', { KV: 'abc' })).toBe("CCRC_BACKUP_KEEP='abc' is not a whole number from 0 to 9999");
+    expect(S(h, '_keep_why CCRC_BACKUP_DATA_KEEP "$KV" 2', { KV: '1' })).toBe("CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999");
+    expect(S(h, '_keep_why CCRC_BACKUP_KEEP "$KV"', { KV: 'x'.repeat(40) })).toBe(`CCRC_BACKUP_KEEP='${'x'.repeat(32)}...' is not a whole number from 0 to 9999`);
+    expect(S(h, '_keep_why CCRC_BACKUP_KEEP "$KV"', { KV: 'a\tb' })).toBe("CCRC_BACKUP_KEEP='a?b' is not a whole number from 0 to 9999");
+  });
+  it('K2: _keep_knob refuses with K1\'s sentence and the source that won', () => {
+    const k1 = "CCRC_BACKUP_KEEP='abc' is not a whole number from 0 to 9999";
+    const script = '_keep_knob CCRC_BACKUP_KEEP 10; printf \'%s|%s\' "$?" "$KEEP_WHY"';
+    expect(S(boxWith('ccrc-carve-k2e-', null), script, { CCRC_BACKUP_KEEP: 'abc' })).toBe(`1|${k1}, as set in the environment`);
+    expect(S(boxWith('ccrc-carve-k2f-', 'CCRC_BACKUP_KEEP=abc\n'), script)).toBe(`1|${k1}, as set in the box's ccrc.env`);
+  });
+  it('H1: _upd_health_s refuses a non-number with its sentence and the default 90', () => {
+    const h = boxWith('ccrc-carve-h1-', null);
+    expect(S(h, '_upd_health_s; printf \'%s|%s\' "$?" "$UPD_HEALTH_WHY"', { CCRC_UPDATE_HEALTH_S: 'ninety' }))
+      .toBe("1|CCRC_UPDATE_HEALTH_S='ninety' is not a number of seconds (digits only, at most 18) — using 90");
+  });
+});

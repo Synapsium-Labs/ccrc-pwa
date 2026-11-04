@@ -837,6 +837,37 @@ describe('W29: the keepalive reads its settings from ~/.ccrc/ccrc.env through cc
     expect(turns()).toEqual([]);
   });
 
+  // W2 characterization (box settings wave 2): the whole-number check's exact sentences and the order of its tests, before it moves.
+  it.each([['-1'], ['+5']])('W2-pin: CCRC_KEEPALIVE_FRESH=%s from the environment refuses with the whole-number sentence', (value) => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    const r = run({ CCRC_KEEPALIVE_FRESH: value });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toContain(`keepalive: CCRC_KEEPALIVE_FRESH must be a whole number — got '${value}', as set in the environment; nothing was measured`);
+    expect(turns()).toEqual([]);
+  });
+
+  it('W2-pin: the whole-number loop runs before the representability test, so the first refusal names the timeout', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    const r = run({ CCRC_KEEPALIVE_FRESH: '99999999999999999999', CCRC_KEEPALIVE_TURN_TIMEOUT: '1h' });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr.split('\n').find((l) => l.includes('must be'))).toBe("keepalive: CCRC_KEEPALIVE_TURN_TIMEOUT must be a whole number — got '1h'; nothing was measured");
+    expect(r.stderr).not.toContain('representable');
+    expect(turns()).toEqual([]);
+  });
+
+  it('W2-pin: a freshness of 30m beside a timeout of 1h: the only `must be` line names the freshness', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    const r = run({ CCRC_KEEPALIVE_FRESH: '30m', CCRC_KEEPALIVE_TURN_TIMEOUT: '1h' });
+    expect(r.status, r.stderr).toBe(1);
+    const lines = r.stderr.split('\n').filter((l) => l.includes('must be'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('CCRC_KEEPALIVE_FRESH must be a whole number');
+    expect(turns()).toEqual([]);
+  });
+
   it.each([
     ['9223372036854775808', 'file'], ['9223372036854775808', 'environment'],
     ['99999999999999999999', 'file'], ['99999999999999999999', 'environment'],

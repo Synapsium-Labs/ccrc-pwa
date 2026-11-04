@@ -166,4 +166,18 @@ describe('carry-copies: its bound, CCRC_CARRY_COPY_WARN_BYTES (D-7857)', () => {
     const zero = box('ccrc-doctor-carry-knob-zero-', { env: ['CCRC_CARRY_COPY_WARN_BYTES=0'], log: [] });
     expect(check(zero).line).toMatch(/^WARN carry-copies: CCRC_CARRY_COPY_WARN_BYTES must be a whole number/);
   });
+
+  // W2 characterization (box settings wave 2): the exact WARN line and remedy of the shape check, before it moves
+  // (Task 7, D-7919, rewrites these three rows; until then they hold).
+  const shapeWarn = (v: string): string =>
+    `WARN carry-copies: CCRC_CARRY_COPY_WARN_BYTES must be a whole number of bytes from 1 to 18 digits — got '${v}' in ~/.ccrc/ccrc.env, so neither figure is judged`;
+  it.each([['0'], ['0123'], ['9'.repeat(19)]])('W2-pin: %s is refused with exactly the shape sentence and its remedy', (v) => {
+    const r = check(box('ccrc-doctor-carry-knob-pin-', { env: [`CCRC_CARRY_COPY_WARN_BYTES=${v}`], log: [] }));
+    expect(r.line).toBe(shapeWarn(v));
+    expect(r.remedy).toContain('set CCRC_CARRY_COPY_WARN_BYTES=<bytes> in ~/.ccrc/ccrc.env (default 10737418240, 10 GiB), or remove the line');
+  });
+  it('W2-pin: 18 nines is the widest accepted value and is judged', () => {
+    const b = box('ccrc-doctor-carry-knob-18-', { env: [`CCRC_CARRY_COPY_WARN_BYTES=${'9'.repeat(18)}`], log: [first(DAY, 5)] });
+    expect(check(b).line).toMatch(/^PASS carry-copies: .*\(warn bound 999999999999999999 bytes\)$/);
+  });
 });
