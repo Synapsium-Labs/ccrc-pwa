@@ -1628,10 +1628,11 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     const pairs = sourcedCcrc(home, '_upd_backup_pairs');
     expect(pairs.code, pairs.stderr).toBe(0);
     expect(pairs.stdout.split('\n').filter(Boolean).length).toBeGreaterThan(8);
-    expect(pairs.stdout).not.toMatch(/delegation|coordination|coord\.db/);
+    // The lease library (ccd/lib/delegation-lease.sh, delegation broker wave 5) is shipped code the set backs up, not a sidecar.
+    expect(pairs.stdout).not.toMatch(/delegation(?!-lease\.sh)|coordination|coord\.db/);
     const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
     const set = /^_upd_backup_set\(\) \{[\s\S]*?\n\}$/m.exec(src)![0];
-    expect(set).not.toMatch(/delegation|coordination|coord\.db/);
+    expect(set).not.toMatch(/delegation(?!-lease\.sh)|coordination|coord\.db/);
   });
 
   it('the backup listing names the docs redactor\'s two files before the library, and the library before the body: arm 3 restores in that order (D-7077)', () => {

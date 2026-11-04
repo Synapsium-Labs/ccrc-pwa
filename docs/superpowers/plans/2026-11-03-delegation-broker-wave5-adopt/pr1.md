@@ -41,6 +41,9 @@ plan and the programme ledger. This PR edits no existing plan and not the progra
 - **W5-G4** is measured by a new `server/test/ccd-ws-lease-mark-reach.test.ts` (the `ws-shed-deps` twin: one table run against the
   body's entry guard and the installed launcher) beside the plan's `agent/test/ccd-entry-exec.test.ts` case, which reaches the
   launcher only.
+- **The backup set's sidecar check** (`ccrc-update-flip-backups.test.ts`) matched any `delegation` in a backup row, so the
+  library's own row (`ccd-lib-delegation-lease.sh`) read as a sidecar in the first full run. The pattern now carves out
+  `-lease.sh` only, and still matches `delegation-events.log`, `delegation-checkpoint.json`, `coordination-*` and `coord.db`.
 - **W5-L16** makes a new commit before re-adding the tree, so the re-added tree's creation base differs: `_plat_btime` is whole
   seconds and an inode can be reused, so a same-second re-add could otherwise measure the same fingerprint.
 
