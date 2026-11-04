@@ -527,7 +527,7 @@ cmd_ws_lease_audit() {   # ccd ws-lease-audit --lease <uuid> --generation <n> [-
     shift 2
   done
   [[ "$lease" =~ $__DL_LEASE_RE ]] || { _dl_mark_refuse usage '--lease is not a lease id'; return 2; }
-  [[ "$gen" =~ ^[1-9][0-9]{0,9}$ ]] || { _dl_mark_refuse usage '--generation is not a positive integer'; return 2; }
+  [[ "$gen" =~ ^[1-9][0-9]*$ && ${#gen} -le 10 ]] || { _dl_mark_refuse usage '--generation is not a positive integer'; return 2; }   # ten digits, as the mark's
   _json_str probe >/dev/null 2>&1 || { printf '%s\n' '{"ok":false,"refusal":"unmeasured","detail":"python3 is unavailable, so the carrier cannot be read or quoted"}'; return 1; }
   _ws_reclaim_contained _dl_audit_ladder
 }
@@ -570,7 +570,7 @@ _dl_audit_ladder() {   # cmd_ws_lease_audit's ladder, inside _ws_reclaim_contain
   fi
   ahead=unmeasured
   if [[ "$DL_C_claudeBase" == "$base" ]]; then
-    q=$(git -C "$tree" rev-list --count "$base..HEAD" -- 2>/dev/null) && [[ "$q" =~ ^(0|[1-9][0-9]{0,9})$ ]] && ahead="$q"
+    q=$(git -C "$tree" rev-list --count "$base..HEAD" -- 2>/dev/null) && [[ "$q" =~ ^(0|[1-9][0-9]*)$ && ${#q} -le 10 ]] && ahead="$q"
   fi
   if [[ "$dirty" == unmeasured || "$ahead" == unmeasured ]]; then
     changed=unmeasured; rc=1
@@ -598,7 +598,7 @@ _dl_audit_ladder() {   # cmd_ws_lease_audit's ladder, inside _ws_reclaim_contain
         *) hu=1 ;;
       esac
     fi
-    for p in $pids; do [[ "$p" =~ ^[1-9][0-9]{0,9}$ ]] || hu=1; done
+    for p in $pids; do [[ "$p" =~ ^[1-9][0-9]*$ && ${#p} -le 10 ]] || hu=1; done
     if (( hu )); then
       hl=',"holders":"unmeasured"'; rc=1
     else

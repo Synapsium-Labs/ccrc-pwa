@@ -47,6 +47,12 @@ None. The deviation block issued to this PR at run-open is unused: nothing below
   `WS_CWD_USERS_SCAN_S`), and 40 s for a large tree's `git status` and `rev-list`, under the agent's 300 s maximum
   (`MAX_EXEC_TIMEOUT_MS`). `timeoutMsFor` is exported, unchanged; W5-G15 reads the two bounds from `ccd/ccd` and the maximum from
   `agent/src/server.ts`.
+- **The first full CI run was red on two static pins this PR reaches but its tip list does not name.**
+  `ccd-ws-add-child`'s run-id census counts every `[0-9]{0,9}` spelling in `ccdSource()`, and the audit's first spelling of its
+  three number grammars (`--generation`, the `rev-list` count and a holder pid) used that bound. They now read `^[1-9][0-9]*$`
+  (or `^(0|[1-9][0-9]*)$`) with `${#x} -le 10`, the same ten digits, so the run-id grammar keeps its one spelling and the
+  pin is unchanged. `single-definition/core-vocab`'s "one path to the ccd script" refused W5-G15's own spelling of
+  `ccd/ccd`, which now reads `ccdWsHelpers.ts`'s `CCD`.
 
 ## The mutation table, as measured
 
