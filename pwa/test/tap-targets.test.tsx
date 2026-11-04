@@ -43,6 +43,7 @@ import { RootFallback, ScreenFallback } from '../src/components/RenderBoundary';
 import { DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, type DocsProjectsResponse } from '../../shared/docs';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import { DocsScreen } from '../src/screens/DocsScreen';
+import { DOCS_COMPACT_QUERY } from '../src/docs/DocsHead';
 import { DocsFailureView } from '../src/docs/DocsFailureView';
 import { DOC_MARKDOWN_ACTION } from '../src/docs/DocMarkdown';
 import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT, SHARE_SHEET_TEXT } from '../src/docs/docsText';
@@ -1210,6 +1211,26 @@ describe('the compact head: .docs-more and the row’s .docs-action icons are a 
     expect(declValue(ruleIn(docsCss, '.docs-more'), 'min-width')).toBe('var(--tap-min)');
     expect(floorIn(docsCss, '.docs-action')).toBe('var(--tap-min)');
     expect(declValue(ruleIn(docsCss, '.docs-compact-bar .docs-action'), 'min-width')).toBe('var(--tap-min)');
+  });
+});
+
+// — the Docs reader's compact head (the phone-header plan of 2026-11-03): the render half of the describe above. —
+describe('the compact head: the rendered row carries .docs-back, .docs-action and .docs-more (docs phone header)', () => {
+  afterEach(() => {
+    history.replaceState(null, '', '/');
+  });
+
+  it('are the classes the rendered row carries', async () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q === DOCS_COMPACT_QUERY, media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    openDocs('/docs/demo/specs/a.md', markdownLeaf('# A\n'));
+    // Share is named "Share" only once the leaf's read settles; Page details and back are drawn from the tree alone.
+    expect(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share })).toHaveClass('docs-action', 'docs-share');
+    expect(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.export })).toHaveClass('docs-action', 'docs-export');
+    expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.moreNever })).toHaveClass('docs-more');
+    expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.back })).toHaveClass('docs-back');
   });
 });
 

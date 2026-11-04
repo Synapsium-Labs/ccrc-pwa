@@ -434,6 +434,9 @@ const CONTROLS: Record<string, string> = {
   'docs/DocsHead.tsx <button> docs-crumbs-more': "TOKEN. The phone's leading … in the crumbs, which opens the full path.",
   'docs/DocsHead.tsx <button> docs-fresh': "TOKEN. The freshness chip at the truth line's end, which fetches from origin.",
   'docs/DocsHead.tsx <button> docs-copy': 'TOKEN. Copy commit, on the truth line.',
+  'docs/DocsHead.tsx <button> docs-more':
+    "TOKEN. Page details, the compact row's last button (the phone-header plan of 2026-11-03), which opens the panel "
+    + 'holding the crumbs, the truth line and the link actions.',
   'docs/DocsHead.tsx <button> docs-action docs-share':
     "TOKEN. Share (spec 4.16), after View on GitHub: a <button> wearing the header's link-action class, `.docs-action`, "
     + 'whose rule carries the floor.',
