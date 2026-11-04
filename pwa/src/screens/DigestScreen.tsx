@@ -17,6 +17,7 @@ import {
 } from '../../../shared/api';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
+import { digestKey, forget, peek, put } from '../lib/screenCache';
 import { doorMark } from '../command/door';
 import './digest.css';
 
@@ -142,11 +143,15 @@ function DigestRow({ line, correct, onCorrected }: {
 export function DigestScreen({ day, load = LOAD, correct = CORRECT }: {
   day: string | null; load?: Load; correct?: Correct;
 }): ReactNode {
-  const [digest, setDigest] = useState<DigestAnswer | null>(null);
-  const [state, setState] = useState<'loading' | 'ok' | 'error'>('loading');
+  // The day's last answer, kept from an earlier visit (console speed C2), drawn at once through the wire guard while
+  // the screen re-reads; a failed re-read keeps it and says the error beside it.
+  const [digest, setDigest] = useState<DigestAnswer | null>(() => asDigestAnswer(peek(digestKey(day))?.raw));
+  const [state, setState] = useState<'loading' | 'ok' | 'error'>(digest === null ? 'loading' : 'ok');
   const [error, setError] = useState<string | null>(null);
   const [gen, setGen] = useState(0);
   const reload = useCallback(() => setGen((g) => g + 1), []);
+  // A correction changes the day's lines on the server, so the kept answer is from before it: forget it, then re-read.
+  const corrected = useCallback(() => { forget(digestKey(day)); reload(); }, [day, reload]);
   useEffect(() => {
     let live = true;
     setState((s) => (s === 'ok' ? s : 'loading'));
@@ -155,6 +160,7 @@ export function DigestScreen({ day, load = LOAD, correct = CORRECT }: {
         if (!live) return;
         const d = asDigestAnswer(raw);
         if (d === null) { setState('error'); setError('This server answered in a shape this app cannot read.'); return; }
+        put(digestKey(day), raw, Date.now());
         setDigest(d);
         setState('ok');
       })
@@ -211,7 +217,7 @@ export function DigestScreen({ day, load = LOAD, correct = CORRECT }: {
           ) : (
             <ul className="digest-list">
               {shown.lines.map((l) => (
-                <DigestRow key={`${l.rowKind}-${l.id}`} line={l} correct={correct} onCorrected={reload} />
+                <DigestRow key={`${l.rowKind}-${l.id}`} line={l} correct={correct} onCorrected={corrected} />
               ))}
             </ul>
           )}
