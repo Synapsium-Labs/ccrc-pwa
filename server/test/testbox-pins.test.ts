@@ -305,11 +305,15 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
     'server/test/ccrc-doctor-testbox.test.ts', 'server/test/ccrc-update-testbox-signal.test.ts', 'server/test/lifecycle.test.ts',
     'server/test/testbox-times.test.ts', 'shared/lifecycle.ts',
   ];
+  // W2 of the box settings view (D11, D12, D-7909, D-7914) shows the test box's host settings and classes the rest as omitted:
+  // L0's table and value words spell the keys, as do the table's own suite and the differential corpus the server reads too.
+  // Every later task of the wave that adds a holder appends it here, in its own commit.
+  const BOX_SETTINGS_W2_HOLDERS = ['server/test/box-settings-table.test.ts', 'server/test/boxSettingsEnvelope.ts', 'shared/api.ts'];
   const HOLDERS = [
     ...TB1_HOLDERS, ...TB5_HOLDERS, ...TB6_HOLDERS, ...TB4_HOLDERS, ...TB3_HOLDERS, ...TB2_HOLDERS, ...TB7_HOLDERS, ...TB8_HOLDERS,
-    ...TB9_HOLDERS, ...TB10_HOLDERS, ...TB11_HOLDERS,
+    ...TB9_HOLDERS, ...TB10_HOLDERS, ...TB11_HOLDERS, ...BOX_SETTINGS_W2_HOLDERS,
   ].sort();
-  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync; TB7: the box package; TB8: the remote arm; TB9: the agent op, the decider and the switch verb; TB10: the Test box card\'s read hook; TB11: the doctor line, the durations timer, lifecycle and README)', () => {
+  it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync; TB7: the box package; TB8: the remote arm; TB9: the agent op, the decider and the switch verb; TB10: the Test box card\'s read hook; TB11: the doctor line, the durations timer, lifecycle and README; W2: the box settings view\'s table, value words and tests)', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/', `:!${SELF}`]);
     expect(r.status === 0 || r.status === 1, 'git grep ran (1 is no match)').toBe(true);
     expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual(HOLDERS);

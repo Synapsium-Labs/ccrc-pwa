@@ -2283,6 +2283,16 @@ takes the next spare and is named in the wave-done.
 - **D-7907.** `CCRC_RELEASE_BASE_URL` gains no refusal words: it is never refused (an unparseable base reads `custom` alone).
 - **D-7908.** Wave 1's act sentences (`_keep_why`, `_upd_health_s`, `cmd_settings`' deadline sentence) are built from the value-free
   words functions `_keep_says`, `_upd_health_says` and `_upd_deadline_says`, byte-identical to `main`.
+- **D-7909.** The value and origin envelope is spelled once in L0 (`BOX_SETTING_VALUE_SHAPE`, `BOX_SETTING_ORIGIN_SHAPE`, `BOX_SETTINGS_TEXT_MAX`) with
+  a byte-equal bash mirror held equal by a test; an `ok` value or origin outside it (wave 1's seven included) is written as `unmeasured`
+  with a fixed why naming the limit, and doctor prints it as wider than the view records (widens the 480-byte rule; C4; review L3, L12).
+  Task 3 builds the literals and `_set_fits`; Tasks 5 and 7 use them.
+- **D-7914.** A setting's fixed value words live in their own L0 constant, `BOX_SETTING_VALUE_WORDS`, with a bash mirror in `ccd/ccrc`, held equal
+  both ways to each other and to `_tb_shape`'s word arms, not as a table column; the writer's `_set_fits` and the server admit exactly a key's
+  own words (moved from Task 4; review F5).
+- **D-7920.** The plan's six one-line `( BOX_ENV_FILE="$BOX_ENV_FILE/." KEY="$v" _resolver … )` forms tripped census C8(c), which allows no setting
+  name beside BOX_ENV_FILE outside `_ccrc_knob`; the mask moved to its own line as the first statement of one subshell holding all six resolver
+  calls, with the same behaviour; ruled by the coordinator (option A). Each of the six resolvers reads only its own setting, measured.
 
 | Number | Task | What it records |
 |---|---|---|
@@ -2300,7 +2310,7 @@ takes the next spare and is named in the wave-done.
 | D-7917 | 6 | Wave 1's "not used on a server box" becomes "not used on this role", one wording derived from the role column |
 | D-7918 | 7 | Doctor's release-base row goes through `_upd_url_origin` (class `origin`); doctor's inline userinfo strip retires, so both census pins become `[]`, and doctor no longer prints the base's path |
 | D-7919 | 7 | Doctor's carry-copies WARN uses its words function and drops `got '<value>'`; Task 1's carry pins are rewritten in the same commit (C7) |
-| D-7920 | | Spare. |
+| D-7920 | 3 | `_set_check`'s `updates` arm masks `ccrc.env` once, as the first statement of one subshell holding all six resolver calls, not six one-line `( BOX_ENV_FILE="$BOX_ENV_FILE/." KEY="$v" _resolver )` forms, which census C8(c) refuses; same behaviour (coordinator ruling, option A) |
 | D-7921 | | Spare. |
 | D-7922 | | Spare. |
 | D-7923 | | Spare. |

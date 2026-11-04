@@ -1,7 +1,7 @@
 {
   "file": "ccd/ccrc",
-  "maxDelta": 52,
+  "maxDelta": 261,
   "d": "D-7906",
-  "reason": "box settings view wave 2: the checks ccrc settings shares with their consumers move into ccd/ccrc, measured +52 net code lines against the merge-base so far: +24 for _tshape and _tshape_says, +5 for _slice_limit_says, +7 for _keepalive_fresh_ok and its words, +6 for _usage_days_ok and its words, +6 for _carry_warn_bytes_ok and its words, +4 for wave 1's four words functions (_keep_says, _upd_health_says, _upd_deadline_says, _models_budget_says)",
+  "reason": "box settings view wave 2: the checks ccrc settings shares with their consumers move into ccd/ccrc, measured +261 net code lines against the merge-base so far: +24 for _tshape and _tshape_says, +5 for _slice_limit_says, +7 for _keepalive_fresh_ok and its words, +6 for _usage_days_ok and its words, +6 for _carry_warn_bytes_ok and its words, +4 for wave 1's four words functions (_keep_says, _upd_health_says, _upd_deadline_says, _models_budget_says), +209 for the per-setting class table (91 lines), its value-words mirror (4) and the tools beside cmd_settings (_set_spec, _set_libs, _set_says, _set_check, _set_fits and the two envelope literals, about 114, the updates arm's one masked subshell, D-7920, included)",
   "added": "2026-11-04"
 }
