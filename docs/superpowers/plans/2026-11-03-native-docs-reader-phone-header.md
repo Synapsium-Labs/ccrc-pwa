@@ -709,6 +709,10 @@ describe('the compact head in docs.css (the phone-header plan, refinements (d), 
     expect(declValue(ruleIn(docsCss, '.docs-compact-crumbs'), 'display')).toBe('flex');
   });
 
+  it('the row\'s controls draw the focus ring inside their boxes: the row is at the top of the page, so an outer ring would be off-screen (refinement (k))', () => {
+    expect(declValue(ruleIn(docsCss, '.docs-compact-bar :focus-visible'), 'outline-offset')).toBe('-2px');
+  });
+
   it('the first line\'s text and the name end in an ellipsis; the draft badge beside the text never shrinks (refinement (g))', () => {
     for (const sel of ['.docs-compact-where-text', '.docs-compact-name']) {
       const lines = ruleIn(docsCss, sel);
@@ -851,6 +855,9 @@ describe('the compact head: .docs-more and the row’s .docs-action icons are a 
   block-size: var(--tap-min);
   border-block-end: 1px solid var(--edge-subtle);
 }
+/* The row sits at the top of the page, so the global ring (2px offset 2px, base.css) would draw above the viewport: the
+   row's controls draw it inside their own boxes. */
+.docs-compact-bar :focus-visible { outline-offset: -2px; }
 .docs-compact-crumbs { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
 .docs-compact-label { flex: 1 1 auto; min-width: 0; margin: 0; }
 .docs-compact-where-text, .docs-compact-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

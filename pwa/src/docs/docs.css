@@ -355,6 +355,9 @@
   block-size: var(--tap-min);
   border-block-end: 1px solid var(--edge-subtle);
 }
+/* The row sits at the top of the page, so the global ring (2px offset 2px, base.css) would draw above the viewport: the
+   row's controls draw it inside their own boxes. */
+.docs-compact-bar :focus-visible { outline-offset: -2px; }
 .docs-compact-crumbs { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
 .docs-compact-label { flex: 1 1 auto; min-width: 0; margin: 0; }
 .docs-compact-where-text, .docs-compact-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

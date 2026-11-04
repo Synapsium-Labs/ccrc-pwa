@@ -29,6 +29,10 @@ describe('the compact head in docs.css (the phone-header plan, refinements (d), 
     expect(declValue(ruleIn(docsCss, '.docs-compact-crumbs'), 'display')).toBe('flex');
   });
 
+  it('the row\'s controls draw the focus ring inside their boxes: the row is at the top of the page, so an outer ring would be off-screen (refinement (k))', () => {
+    expect(declValue(ruleIn(docsCss, '.docs-compact-bar :focus-visible'), 'outline-offset')).toBe('-2px');
+  });
+
   it('the first line\'s text and the name end in an ellipsis; the draft badge beside the text never shrinks (refinement (g))', () => {
     for (const sel of ['.docs-compact-where-text', '.docs-compact-name']) {
       const lines = ruleIn(docsCss, sel);
