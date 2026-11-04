@@ -19,8 +19,9 @@ export const DOCS_MAX_RENDER_ELEMENTS = 20000;
  *  block clones across the worker boundary, and the main thread checks the length itself (base spec 4.9, re-argued by
  *  W5h-b); the worker's deadline, not this cap, bounds the time a block takes, whatever its shape. */
 export const MD_HIGHLIGHT_BLOCK_MAX_CHARS = 65536;
-/** Code characters per Docs page, at most, that the main thread posts to the highlight worker, summed in document order
- *  with every drawn copy counted; a block past it is never posted and stays plain (base spec 4.9, re-argued by W5h-b). */
+/** Code characters per Docs page, at most, that the main thread admits to the highlight worker (a block is posted at
+ *  most twice, the second time for its line retry), summed in document order with every drawn copy counted; a block
+ *  past it is never posted and stays plain (base spec 4.9, re-argued by W5h-b). */
 export const DOCS_HIGHLIGHT_PAGE_MAX_CHARS = 524288;
 /** The Docs parse budget for a document of `bytes` UTF-8 bytes: 2 s under 64 KiB, one more second per 64 KiB,
  *  at most 10 s. */
@@ -49,30 +50,34 @@ export const MD_KEYSTROKE_MAX_CHARS = 64;
 // What the highlight limits leave (base spec 4.9, rewritten by W5h-b when it retired W5 part 1's main-thread highlight
 // bounds): no highlight.js runs on the main thread. There, per block, the main thread posts at most
 // MD_HIGHLIGHT_BLOCK_MAX_CHARS, receives at most MD_HIGHLIGHT_MAX_HTML_CHARS, checks it in one linear pass and inserts
-// it once; per Docs page it posts at most DOCS_HIGHLIGHT_PAGE_MAX_CHARS and inserts at most
-// DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS; upgrade re-renders are at most one per `pre`, so DOCS_MAX_RENDER_ELEMENTS bounds
-// their count. On the phone R19 measured, checking, inserting and laying out 2 097 145 characters of highlight HTML
-// in one commit took 276 ms. highlight.js's own time is the worker's, bounded per block by HIGHLIGHT_BLOCK_DEADLINE_MS
-// and per store by HIGHLIGHT_PAGE_WORKER_MS and HIGHLIGHT_PAGE_MAX_TIMEOUTS, whatever shape a block takes.
+// it once; per Docs page it admits at most DOCS_HIGHLIGHT_PAGE_MAX_CHARS (a block is posted at most twice, the second
+// time for its line retry) and inserts at most DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS; upgrade re-renders are at most one
+// per `pre`, so DOCS_MAX_RENDER_ELEMENTS bounds their count. On the phone R19 measured, checking, inserting and laying
+// out 2 097 145 characters of highlight HTML in one commit took 276 ms. highlight.js's own time is the worker's,
+// bounded per block by HIGHLIGHT_BLOCK_DEADLINE_MS and per store by HIGHLIGHT_PAGE_WORKER_MS and
+// HIGHLIGHT_PAGE_MAX_TIMEOUTS, whatever shape a block takes.
 
 /** MEASURED (W5h-b, R19 of 2026-11-03). The time one block may take, from post to answer; its timer starts only after
  *  the worker's ready handshake. An overrun terminates the highlight worker and leaves only that block plain. Basis:
  *  the slowest of 41 871 real blocks took 143.7 ms warm and each grammar's largest at most 96.1 ms cold, so no real
- *  block cold passes about 240 ms; 750 is about three times that, for a slower or busier device and the main thread's
- *  latency, and under the operator's 2 s bound for one block. Every crafted shape that grows ended here, with the
- *  main thread's longest frame gap at most 25 ms. */
+ *  block cold passes about 240 ms (about 280 with the xml and css that typescript and javascript compile on first
+ *  use, 515 on the every-grammar reading); 750 is about three times 240, for a slower or busier device and the main
+ *  thread's latency, and under the operator's 2 s bound for one block. Every crafted shape that grows ended here,
+ *  with the main thread's longest frame gap at most 25 ms. */
 export const HIGHLIGHT_BLOCK_DEADLINE_MS = 750;
 /** MEASURED (W5h-b, R19 of 2026-11-03). From spawning a highlight worker to its `{ready: true}`; past it the worker is
  *  terminated and the jobs waiting for it answer `worker-failed`, and a second failure in a row is sticky until a
- *  reload. Basis: 32.2 ms for a first boot and at most 74.4 ms for thirteen respawns, each from the service worker's
- *  precache on an idle main thread; about 27 times that, because a long main-thread task when the worker spawns
- *  delays `{ready}` and a page no service worker controls fetches the chunk over the network, neither measured. */
+ *  reload. Basis: 32.2 ms for a first boot and at most 74.4 ms for thirteen further spawns, each from the service
+ *  worker's precache or from memory, on an idle main thread; about 27 times that, because a long main-thread task when
+ *  the worker spawns delays `{ready}` and a page no service worker controls fetches the chunk over the network,
+ *  neither measured. */
 export const HIGHLIGHT_BOOT_BUDGET_MS = 2000;
 /** MEASURED (W5h-b, R19 of 2026-11-03). The summed post-to-answer time of one highlight store's jobs (a Docs page, a
  *  text leaf, a chat message, a tool well); past it, every block not yet answered is skipped. Basis: the real page
  *  with the most code (238 blocks, 323 842 characters) went from its plain first frame to its last block coloured in
  *  9 515.6 ms, about 40 ms a block where the worker's own time is a few: an upper bound on that page's sum, which
- *  counts the main thread's latency between answers. 12 000 is about a quarter more. It also bounds Export's wait. */
+ *  counts the main thread's latency between answers. 12 000 is about a quarter more. A page of more, smaller blocks
+ *  may take longer (Later). It also bounds Export's wait. */
 export const HIGHLIGHT_PAGE_WORKER_MS = 12000;
 /** MEASURED (W5h-b, R19 of 2026-11-03). The block timeouts one highlight store may take, each a worker respawn; once
  *  reached, every block not yet answered is skipped. Basis: no real block came near the deadline, so no real page
@@ -89,7 +94,8 @@ export const MD_HIGHLIGHT_MAX_HTML_CHARS = 1048576;
 /** MEASURED (W5h-b, R19 of 2026-11-03). The HTML one Docs page may insert from highlighting, each drawn copy counted;
  *  past it the remaining blocks are skipped. Docs only. Basis: R19 checked (20.6 ms), inserted and laid out (255.7 ms)
  *  2 097 145 characters of real answers in one commit, within the 300 ms the W5h-b plan allows one page; it is twice
- *  MD_HIGHLIGHT_MAX_HTML_CHARS, so two blocks at that cap fit. */
+ *  MD_HIGHLIGHT_MAX_HTML_CHARS, so two blocks at that cap fit. R19 reports no page's HTML, so the rule's "never less
+ *  than the largest real page's HTML" is not measured (Later). */
 export const DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS = 2097152;
 /** MEASURED (W5h-b, R19 of 2026-11-03). Chat only: a block whose text changed less than this long ago is not
  *  requested yet, so a streaming block asks the worker when it pauses. Basis: a 40-line fence streamed at settles of
