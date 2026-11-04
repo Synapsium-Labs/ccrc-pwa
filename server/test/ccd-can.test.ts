@@ -5,7 +5,7 @@
 // share first argv words across different tokens (`route` and `routeApply`), and a lane asks before any argv exists.
 import { describe, it, expect } from 'vitest';
 import {
-  ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CCD_ARGV, CCD_CAN, CHILD_ARGV_CAP, COLLECT_CAP, EXPIRE_CAP, ORPHAN_CAP,
+  ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CCD_ARGV, CCD_CAN, CHILD_ARGV_CAP, COLLECT_CAP, EXPIRE_CAP, ORPHAN_CAP, POOL_SYNC_ABSENT_CAP, POOL_SYNC_INSTALLED_CAP,
   HIBERNATE_HOLD_OK_CAP, POOLS_CAP, PR_STATE_PR_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, SWAP_BUSY_CAP, ccdCan,
 } from '../src/ccdargv.js';
 import type { FleetState } from '../src/fleetstate.js';
@@ -70,7 +70,7 @@ describe('ccdCan(state, row) answers by the row\'s own token and default (D-5866
 
   it('a flag token is not a row, and no row is answered by a flag', () => {
     const FLAGS = [ACTOR_FLAGS_CAP, POOLS_CAP, ROUTE_ARGV_CAP, CHILD_ARGV_CAP, SWAP_BUSY_CAP, 'stop-surface',
-      HIBERNATE_HOLD_OK_CAP, ACCOUNT_POOLS_CAP];
+      HIBERNATE_HOLD_OK_CAP, ACCOUNT_POOLS_CAP, POOL_SYNC_INSTALLED_CAP, POOL_SYNC_ABSENT_CAP];
     const tokens = ROWS.map((r) => CCD_CAN[r]).flatMap((r) => (r === 'none' ? [] : [r.token]));
     expect(tokens.filter((t) => FLAGS.includes(t))).toEqual([]);
     expect(Object.keys(CCD_CAN).filter((k) => FLAGS.includes(k))).toEqual([]);
