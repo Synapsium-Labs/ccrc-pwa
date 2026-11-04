@@ -10,7 +10,7 @@
 // The fleet's rows and runs count only once their frames have landed: before that they are the offline snapshot's, which
 // is not a fact this page has heard, so the screens are handed `null` and say they are waiting (the Waiting on you badge
 // reads them the same way).
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode, Ref } from 'react';
 import { BackButton, Button } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
@@ -25,9 +25,10 @@ import { useFrameSet } from '../skins/frame';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { ItemView } from './ItemView';
 import {
-  BESIDE_LABEL, BETWEEN_ITEMS_LABEL, COMBINED_LIST, GONE_WORD, LEFT_LIST_WORD, NEXT_ITEM_LABEL, NEXT_WORD, NO_FRAME_WORD,
-  PREVIOUS_ITEM_LABEL, PREVIOUS_WORD, backLabel, fromWord, groupByProgramme, itemPlace, listGroups, listOfFromWord, placeWords,
-  programmeIsLive, questionRows, resolveList, type ItemList, type ItemPlace, type ProgrammeGroup,
+  BESIDE_LABEL, BETWEEN_ITEMS_LABEL, COMBINED_LIST, EMPTY_WORD, GONE_WORD, LEFT_LIST_WORD, NEXT_ITEM_LABEL, NEXT_WORD,
+  NO_FRAME_WORD, PREVIOUS_ITEM_LABEL, PREVIOUS_WORD, backLabel, fromWord, groupByProgramme, itemPlace, knownProgrammes,
+  listGroups, listOfFromWord, placeWords, positionWords, programmeIsLive, questionRows, resolveList, type ItemList,
+  type ItemPlace, type ProgrammeGroup,
 } from './ledgerWords';
 import { ListGroup, WaitingScreen } from './WaitingScreen';
 import { refetchWaiting } from './waitingStore';
@@ -125,6 +126,18 @@ function useGroups(store: FleetStore): ProgrammeGroup[] | null {
   return view === null ? null : groupByProgramme(view.items, questionRows(sessions ?? [], runs ?? []));
 }
 
+/** The list the item's URL names, settled by the one stale-list rule (`resolveList`) with the programmes this page knows
+ *  (`knownProgrammes`, follow-up F3); the named list itself before the first `waiting` frame, when there is nothing to
+ *  settle it against. */
+function useSettledList(store: FleetStore, named: ItemList, groups: readonly ProgrammeGroup[] | null): ItemList {
+  const view = store((s) => s.waiting);
+  const { runs } = useHeard(store);
+  return groups === null || view === null ? named : resolveList(named, groups, knownProgrammes(view, runs));
+}
+
+/** One visit to an item: its id and the list it was opened from. */
+const visitOf = (id: number | null, list: ItemList): string | null => (id === null ? null : `${id} ${fromWord(list)}`);
+
 /** THE WALK KEEPS ITS PLACE (fix round 1, F2 and F6; departure pl9-walk-keeps-its-place). While the operator stays on one
  *  item, its steps and its position are the place it had when it was opened or last stepped to: a value taken from
  *  `itemPlace`, the one list function, never a second order. An act on the open item (a tick, an answer, or a change the
@@ -134,13 +147,34 @@ function useGroups(store: FleetStore): ProgrammeGroup[] | null {
  *  again; leaving the route drops it. `null` while the item has no place and never had one on this visit (recently cleared
  *  when opened, gone, or no list heard yet). */
 function useKeptPlace(id: number | null, list: ItemList, live: ItemPlace | null): ItemPlace | null {
-  const visit = id === null ? null : `${id} ${fromWord(list)}`;
-  const [kept, setKept] = useState<{ readonly visit: string; readonly place: ItemPlace } | null>(null);
-  const mine = kept !== null && kept.visit === visit ? kept.place : null;
-  // Taken during the render that first sees a place for this visit (React re-renders at once, before the commit), so the
-  // page never draws a step the kept place would not take.
-  if (visit !== null && live !== null && mine === null) setKept({ visit, place: live });
+  const visit = visitOf(id, list);
+  const [kept, setKept] = useState<{ readonly visit: string | null; readonly place: ItemPlace | null }>({ visit: null, place: null });
+  // Taken during the render that first sees this visit, or the first place on it (React re-renders at once, before the
+  // commit), so the page never draws a step the kept place would not take. A NEW VISIT ALWAYS RESETS IT, with no place too
+  // (follow-up F2): a visit with no place (a cleared item) must not leave the previous visit's place behind, or Back to that
+  // earlier visit would take the stale place instead of the live order's.
+  if (kept.visit !== visit) setKept({ visit, place: live });
+  else if (kept.place === null && live !== null) setKept({ visit, place: live });
+  const mine = kept.visit === visit ? kept.place : null;
   return mine ?? live;
+}
+
+/** THE KEPT PLACE'S LIST, for the column beside the item (follow-up F3). The column is drawn in the frame's nav slot, outside
+ *  this route's tree, so it cannot read the route's state; the route publishes the list its strip names (the kept place's,
+ *  or the settled list with no place) here, keyed by the visit, and the column draws that list, so the strip and the column
+ *  agree when the open item has left its list. A mirror with one writer (`ItemRoute`'s effect), never a second place: the
+ *  place itself stays in `useKeptPlace`'s state. Cleared when the route unmounts. */
+let shownList: { readonly visit: string; readonly list: ItemList } | null = null;
+const shownListeners = new Set<() => void>();
+function publishShownList(next: { readonly visit: string; readonly list: ItemList } | null): void {
+  shownList = next;
+  for (const l of shownListeners) l();
+}
+const subscribeShownList = (l: () => void): (() => void) => { shownListeners.add(l); return () => { shownListeners.delete(l); }; };
+/** The list the item route's strip names on `visit`, or `null` when the route has published none for it yet. */
+function useShownList(visit: string | null): ItemList | null {
+  const shown = useSyncExternalStore(subscribeShownList, () => shownList, () => null);
+  return shown !== null && shown.visit === visit ? shown.list : null;
 }
 
 /** The item's way back to the list it was opened from, AT EVERY WIDTH (plan PL9; spec §2, D23): labelled with that
@@ -166,9 +200,11 @@ type StepWay = 'prev' | 'next';
  *  FOCUS (fix round 1, F4). The strip stays mounted across a step (`ItemRouteAt` is not keyed), and after Previous or Next the
  *  focus is put back on the same control, or on the other one when the end of the list has disabled it (a browser drops the
  *  focus of a control that turns disabled to the body). The position is a polite live region, so a screen reader hears where
- *  the step landed. */
-function ItemNav({ id, list, place, left, runs }: {
-  id: number | null; list: ItemList; place: ItemPlace | null; left: boolean; runs: readonly RunSummary[] | null;
+ *  the step landed: drawn always, empty with no place, and carrying the open item's title beside "N of M" (follow-up A-3), so
+ *  a step that lands on the same "N of M" still announces. The shown "N of M" is hidden from assistive technology, which
+ *  hears the region instead. */
+function ItemNav({ id, list, place, left, title, runs }: {
+  id: number | null; list: ItemList; place: ItemPlace | null; left: boolean; title: string; runs: readonly RunSummary[] | null;
 }): ReactNode {
   const pressed = useRef<StepWay | null>(null);
   const prevRef = useRef<HTMLButtonElement | null>(null);
@@ -192,9 +228,10 @@ function ItemNav({ id, list, place, left, runs }: {
   return (
     <nav className="wi-nav" aria-label={BETWEEN_ITEMS_LABEL}>
       <ListBack list={place?.list ?? list} runs={runs} ref={backRef} />
+      <span className="sr-only" role="status">{positionWords(place, title)}</span>
       {place !== null && (
         <span className="wi-steps-nav">
-          <span className="wi-pos" role="status">{placeWords(place)}</span>
+          <span className="wi-pos" aria-hidden="true">{placeWords(place)}</span>
           <Button ref={prevRef} variant="ghost" size="fit" className="wi-step" aria-label={PREVIOUS_ITEM_LABEL}
                   disabled={place.prev === null} onClick={() => step('prev')}><span aria-hidden="true">‹</span>{PREVIOUS_WORD}</Button>
           <Button ref={nextRef} variant="ghost" size="fit" className="wi-step" aria-label={NEXT_ITEM_LABEL}
@@ -211,29 +248,38 @@ function ItemNav({ id, list, place, left, runs }: {
  *  navigation. `app.tsx` hands it to the frame's nav slot on the item route alone; the frame draws it only at the widths that
  *  show two columns, so a phone keeps its one screen. The list is the one the item's URL names, settled by the one stale-list
  *  rule (`resolveList`), and its groups are the ones that list draws (`listGroups`), each drawn as the list draws it, with the
- *  open item marked current when the list holds it. It follows the live order. It stays when the open item leaves the list
- *  (fix round 1, F6), and it is drawn beside an item the list does not hold (recently cleared, gone): the column is the list's.
- *  Before the first `waiting` frame there is no list to draw, and the column shows `fleet`, what it shows elsewhere.
+ *  open item marked current when the list holds it. It follows the live order. It is the list the strip names (follow-up F3):
+ *  the kept place's list as the item route publishes it (`useShownList`), or, before that, the live place's or the settled
+ *  list, so it stays when the open item leaves the list (fix round 1, F6) and the strip and the column never disagree. It is
+ *  drawn beside an item the list does not hold (recently cleared, gone): the column is the list's. A programme's view with
+ *  nothing on the list says so, as the view does. Before the first `waiting` frame there is no list to draw, and the column
+ *  shows `fleet`, what it shows elsewhere.
  *
  *  THE BANNERS (fix round 1, F1). A skin with no `Banners` part (Instrument) draws the fleet's banner stack inside its fleet
  *  column, which this column replaces, so here it mounts that same stack (`FleetBanners`) above the list: offline,
- *  reconnecting, halt, disk, backup, passkey and the sign-in resume show on an item exactly as on the list. A skin whose frame
- *  places the stack under its bar (Refined) draws it there, and none here: one stack is mounted at any width. */
+ *  reconnecting, halt, disk, backup, passkey and the sign-in resume show on an item as on the list, in a box with the fleet
+ *  column's own gutters, top space and gap (`.wl-banners`, follow-up F1), so a banner sits where it sits there. A skin whose
+ *  frame places the stack under its bar (Refined) draws it there, and none here: one stack is mounted at any width. */
 export function ItemListColumn({ param, fleet, store = useFleetStore }: { param: string | null; fleet: ReactNode; store?: FleetStore }): ReactNode {
   const groups = useGroups(store);
   const { runs } = useHeard(store);
   const named = useOpenedFrom();
+  const settled = useSettledList(store, named, groups);
   const set = useFrameSet();
   const id = Number(param);
-  if (groups === null || param === null || !Number.isSafeInteger(id)) return fleet;
-  const list = resolveList(named, groups);
+  const valid = param !== null && Number.isSafeInteger(id);
+  const shown = useShownList(valid ? visitOf(id, named) : null);
+  if (groups === null || !valid) return fleet;
+  const list = shown ?? itemPlace(id, named, groups)?.list ?? settled;
+  const drawnGroups = listGroups(list, groups);
   const hues = fleetHues(runs ?? []);
   const now = Date.now();
   return (
     <>
-      {set !== null && set.Banners === null && <FleetBanners />}
+      {set !== null && set.Banners === null && <div className="wl-banners"><FleetBanners /></div>}
       <aside className="wl wl-beside" aria-label={BESIDE_LABEL}>
-        {listGroups(list, groups).map((g) => (
+        {drawnGroups.length === 0 && list.at === 'programme' && <p className="wl-note">{EMPTY_WORD}</p>}
+        {drawnGroups.map((g) => (
           <ListGroup key={g.program ?? ''} group={g} runs={runs} now={now} currentId={id}
                      hue={g.program === null ? null : hues.get(g.program) ?? null}
                      onOpenItem={(next) => navigate(itemPath(next, list))} onOpenSession={(sid) => navigate(sessionPath(sid))} />
@@ -252,11 +298,19 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
   const groups = useGroups(store);
   const unavailable = useUnavailable(store, view !== null);
   const named = useOpenedFrom();
-  const list = groups === null ? named : resolveList(named, groups);
+  const list = useSettledList(store, named, groups);
   const live = id === null || groups === null ? null : itemPlace(id, named, groups);
   const place = useKeptPlace(id, named, live);
   const item = id === null || view === null ? null : view.items.find((i) => i.id === id) ?? view.cleared.find((i) => i.id === id) ?? null;
   const back = place?.list ?? list;
+  // The list the strip names, for the column beside the item (`useShownList`), once a list has been heard.
+  const visit = visitOf(id, named);
+  const backWord = groups === null ? null : fromWord(back);
+  useLayoutEffect(() => {
+    if (visit === null || backWord === null) return undefined;
+    publishShownList({ visit, list: listOfFromWord(backWord) });
+    return () => publishShownList(null);
+  }, [visit, backWord]);
   let body: ReactNode;
   if (id !== null && view === null) {
     body = unavailable !== null
@@ -281,7 +335,7 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
   }
   return (
     <div className="wl-route">
-      <ItemNav id={id} list={list} place={place} left={place !== null && live === null} runs={runs} />
+      <ItemNav id={id} list={list} place={place} left={place !== null && live === null} title={item?.title ?? ''} runs={runs} />
       {item === null ? <div className="wl">{body}</div> : body}
     </div>
   );

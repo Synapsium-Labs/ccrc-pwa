@@ -266,6 +266,32 @@ describe.each(SKINS)('moving between items in %s', (skin) => {
       }
     });
 
+    // Follow-up F1: on the item route the stack keeps the fleet column's spacing, so a banner sits where it sits on the list:
+    // its left and right gutters and the gap above it, inside the left column in Instrument (`.shell-nav`), and its own box
+    // under the bar in Refined, which this round leaves as it was.
+    it(`at ${width}: a banner on an item keeps the gutters and the gap above it that it has on the list`, async () => {
+      const at: Record<string, { left: number; right: number; top: number }> = {};
+      for (const path of ['/waiting', '/waiting/1']) {
+        const { ctx, page, errors } = await open(skin, width, path, ITEMS, false, path === '/waiting' ? '.wl-grid' : '.wi', CRITICAL_DISK);
+        try {
+          await page.waitForSelector('[data-banner="disk"] [role="status"]', { timeout: 20_000 });
+          at[path] = await page.evaluate((inNav) => {
+            const banner = document.querySelector('[data-banner="disk"] > *')!.getBoundingClientRect();
+            if (!inNav) return { left: banner.left, right: banner.right, top: banner.top };
+            const nav = document.querySelector('.shell-nav')!.getBoundingClientRect();
+            return { left: banner.left - nav.left, right: nav.right - banner.right, top: banner.top - nav.top };
+          }, skin === INSTRUMENT);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }
+      const [list, item] = [at['/waiting']!, at['/waiting/1']!];
+      expect(Math.abs(item.left - list.left), `left gutter ${JSON.stringify(at)}`).toBeLessThanOrEqual(1);
+      expect(Math.abs(item.right - list.right), `right gutter ${JSON.stringify(at)}`).toBeLessThanOrEqual(1);
+      expect(Math.abs(item.top - list.top), `gap above ${JSON.stringify(at)}`).toBeLessThanOrEqual(1);
+    });
+
     it(`at ${width}: the bare list keeps the fleet in the left column, and its own list in the detail pane`, async () => {
       const { ctx, page, errors } = await open(skin, width, '/waiting', ITEMS, false, '.wl-grid');
       try {

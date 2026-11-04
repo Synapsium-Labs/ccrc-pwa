@@ -9,9 +9,15 @@
    already gated on (`.pg-kicker`'s). Every width from a 360 px phone to a wide desktop holds with no horizontal scroll: the
    grids' text tracks are `minmax(0, 1fr)` and the words wrap anywhere. */
 
+/* The list's and the item's measure, one value for the list, the item and the strip above it (`.wi-nav`), so the three never
+   drift apart (follow-up A-8). Set on every root that holds one of them. */
+.wl-route,
+.wl,
+.wi { --wl-measure: 72rem; }
+
 .wl,
 .wi {
-  display: grid; gap: var(--sp-2); padding: var(--sp-2); min-width: 0; max-width: 72rem;
+  display: grid; gap: var(--sp-2); padding: var(--sp-2); min-width: 0; max-width: var(--wl-measure);
   background: var(--bg-page); color: var(--ink-primary);
 }
 .wl-route { display: grid; gap: var(--sp-1); min-width: 0; background: var(--bg-page); color: var(--ink-primary); }
@@ -151,9 +157,10 @@
 /* Moving between items (desktop-polish PL9; spec §2, D23). The strip above an item: its way back to the list it was opened
    from, and the position with Previous and Next. Every control is a design-system button (`min-h-tap`, the 44 px floor under a
    coarse pointer), visible at every width: the shell hides only the back chevron, and this is not one. */
-/* Capped at the item body's own width (`.wi`, 72rem), so on a wide screen the position and the steps end where the item does. */
+/* Capped at the item body's own measure (`--wl-measure`, `.wi`'s), so on a wide screen the position and the steps end where the
+   item does. */
 .wi-nav {
-  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; max-width: 72rem;
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; max-width: var(--wl-measure);
   padding: var(--sp-2) var(--sp-2) 0; background: var(--bg-page); color: var(--ink-primary);
 }
 /* The buttons are flex boxes, which drop a space beside the glyph: the gap is that space. */
@@ -170,6 +177,15 @@
    list's own, stacked for the column's width; the open item's row is marked current by an accent ring (a non-text edge, and
    `aria-current` says it too). */
 .wl-beside { max-width: none; }
+/* The fleet's banner stack above the list beside an item, in a skin that draws it in its left column (Instrument; follow-up
+   F1): the fleet column's own top space, side gutters and gap (`.fleet`, fleet.css: the same tokens), so a banner sits where
+   it sits on the list. The stack's slots are `display: contents`, so their banners are this box's own items. With no banner
+   to show the box is empty and takes no room. */
+.wl-banners {
+  display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0;
+  padding: calc(var(--sp-3) + var(--safe-top)) var(--sp-4) 0;
+}
+.wl-banners:empty { display: none; }
 .wl-beside .wl-item { grid-template-columns: minmax(0, 1fr); }
 .wl-beside .wl-item .wl-meta { justify-items: start; }
 .wl-beside .wl-item[aria-current='page'] { box-shadow: inset 0 0 0 2px var(--accent); }

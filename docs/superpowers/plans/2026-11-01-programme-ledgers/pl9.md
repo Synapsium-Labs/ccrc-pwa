@@ -67,7 +67,10 @@ edits no ledger.
   alone holds for every other route, and `app.tsx`'s comment now says so. The fleet's polls and sheets sit above the frame
   (D-5468), so nothing they own is lost. The banner stack the column carried in Instrument is kept: the item route's column
   mounts it (`pl9-banners-above-the-swapped-column`). The first version of this note said "nothing they own is lost", which
-  was false for Instrument's banners.
+  was false for Instrument's banners. The item route does not draw the build readout (`BuildLine`, in both skins),
+  Instrument's pool-lag readout or the fleet column's hidden stale-update live region (review 1402, A-2), and because the
+  banner stack is mounted again on entering and on leaving the route, it loses its state there too: the "+n more" fold, the
+  halt banner's and the host banner's confirm states, and the passkey notice, which reads `/api/auth/status` again (A-4).
 - `pl9-steps-items-only`: Previous and Next step from item to item. A session's question is a row of the list but opens its
   session, so the steps skip it, and the position counts items only.
 - `pl9-combined-list-writes-no-from`: the combined list, unfiltered, is the default and writes no `?from=`, so `/waiting/<id>`
@@ -122,13 +125,63 @@ edits no ledger.
   context's ask surface: importing it would make the Waiting on you screens depend on that module and its `chat.css`, and
   nothing in `ledgers/` imports from `session/` today. Second, its paint is the sheet eyebrow's (`.dlg-header-chip`: accent
   ink on the accent tint, with the eyebrow's left margin), grounded on the dialog. The item's mark sits inside a radio row's
-  label, on the item card's ground, with its own pinned contrast pair. The word itself is one constant in each context's
-  words file.
+  label, on the item card's ground, with its own pinned contrast pair. The word is a constant in the ledgers' words file
+  (`RECOMMENDED_WORD`, `ledgerWords.ts`); the session side writes it inline in `recommendedTag()`, so the two share no
+  constant (review 1402, A-7; the first version of this sentence said each context had one).
 - `pl9-cite-plan-not-number`: when the code was written, the branch's tree predated the ledger PR (#2213), and
   `deviation-refs`' floor case reads the branch's own tree, so citing D-7896 in code was red. Code comments cite "plan PL9"
   instead. The branch has since absorbed `main`, which holds the plan that defines D-7896, so that reason no longer holds
   (review 1399, A1). The comments keep "plan PL9", which names the same task and is harmless. A later change may cite the
   number.
+
+## Follow-up (run 1407, the carries of review 1402)
+
+One pull request of the small fixes carried from PL9's second review (mail 14536, which ruled F3 and A-5). It follows PL9 under
+D-7896; no number is allocated for it.
+
+### Step 0: measured before any change, on the branch at `dc6ae572b`
+
+- F1, a critical disk banner in Instrument, Chrome, at 900 and at 1280: on `/waiting` the banner sits 16 px from the left
+  column's left edge, 17 px from its right edge and 12 px below its top; on `/waiting/1` it sits 0, 1 and 0. Refined: the
+  banner's box is the same on both routes.
+- F2, the reviewer's probe as a test (items 10, 11, 12, 13; open 11; the coordinator confirms 12; Next to `/waiting/12`;
+  `history.back()` to `/waiting/11`): "2 of 3" is not drawn; the strip keeps the stale place.
+- F3 (a), `/waiting/9?from=programme:prog-a`, prog-a holding only a cleared item: the way back goes to `/waiting`, not to
+  `/programmes/prog-a`.
+- F3 (b), prog-a's only item opened from its view, then confirmed: the column beside it holds one row, prog-b's item, and
+  the strip reads "Back to prog-a, 1 of 1".
+
+### Departures, by slug
+
+- `pl9-banners-keep-the-fleet-gutters` (F1): the stack above the list beside an item sits in a box (`.wl-banners`) with the
+  fleet column's own top space, side gutters and gap, written with the same tokens as `.fleet` in `fleet.css`. With no banner
+  the box is empty and draws nothing. Measured after: within 1 px of `/waiting` at 900 and 1280; Refined unchanged.
+- `pl9-new-visit-resets-the-place` (F2): `useKeptPlace` takes a new place on every new visit, a visit with no place
+  included, so a cleared item stepped to and left again does not leave its predecessor's place behind.
+- `pl9-real-programme-stays` (F3, as ruled): `resolveList` takes the programmes the page knows (`knownProgrammes`: the runs,
+  the Goals and the cleared trail) and keeps a programme's VIEW whose slug is real with no group, so the way back goes to
+  that programme's page. A filter to such a programme is still stale, because the side rail offers no filter to a programme
+  with nothing on the list, and a slug nothing knows is still the combined list (F7's case is unchanged). `resolveList`
+  stays the one resolver.
+- `pl9-column-draws-the-strips-list` (F3, as ruled): the column beside the item draws the list the strip names. The column is
+  drawn in the frame's nav slot, outside the item route's tree, so the route publishes that list, keyed by the visit, to a
+  small module cell in `WaitingRoutes.tsx` that the column reads; the kept place itself stays in the route's state, and the
+  cell is cleared when the route unmounts. A programme's view with nothing on the list says "Nothing needs you." in the
+  column, as the view does.
+- `pl9-position-names-the-item` (A-3): the polite live region says "N of M, <the open item's title>", is drawn always and is
+  empty with no place. The shown "N of M" is hidden from assistive technology, which hears the region instead.
+- `pl9-focus-tests-bear-load` (A-6): the focus test no longer focuses Next before the click, so its first assertion is the
+  restore's alone, and a new case covers Previous handing the focus to Next at the start of the list.
+- `pl9-remembered-step-lands` (A-5, as ruled): Next and Previous land on the remembered item even when it has left the list,
+  with no skip to the live neighbour; a test pins it, and no code changed.
+- `pl9-one-measure` (A-8): the list's, the item's and the strip's 72rem is one custom property, `--wl-measure`.
+
+### Recorded, not changed
+
+- A-1: `WaitingRoutes.tsx` keeps importing `FleetBanners` from `screens/FleetScreen`; no import moves.
+- A-8: `onDismiss` navigates to the list after its awaits, so stepping on before they resolve pulls the operator back to the
+  list. It predates PL9 and is left as it is.
+- A-2's and A-4's losses are named under `pl9-fleet-column-remounts` above; nothing changed to draw them on the item route.
 
 ## Not changed
 

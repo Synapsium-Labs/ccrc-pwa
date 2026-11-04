@@ -238,11 +238,26 @@ export function listOfFromWord(word: string | null): ItemList {
   return m[1] === 'programme' ? { at: 'programme', programme: m[2]! } : { at: 'waiting', programme: m[2]! };
 }
 
+/** No programme known beyond the groups: `resolveList`'s default, for a caller that settles only the side rail's filter. */
+const NONE_KNOWN: ReadonlySet<string> = new Set();
+
 /** THE ONE STALE-LIST RULE: a list naming a programme no group holds (an old link, a programme with nothing waiting now, a
  *  well-formed slug nobody uses) is the combined list. The filter, the way back, the column beside an item and the steps all
- *  settle the list they were given through this, so none of them returns to a filter the side rail no longer offers. */
-export function resolveList(list: ItemList, groups: readonly ProgrammeGroup[]): ItemList {
-  return list.programme === null || groups.some((g) => g.program === list.programme) ? list : COMBINED_LIST;
+ *  settle the list they were given through this, so none of them returns to a filter the side rail no longer offers.
+ *  ONE EXCEPTION (follow-up F3, as ruled after review 1402): a programme's VIEW whose slug is real (`known`, from
+ *  `knownProgrammes`: the runs, the Goals or the cleared trail name it) stays that view with no group, because the view is a
+ *  page of its own ("Nothing needs you. Waiting on: …", its Goals, its cleared trail), so the way back goes to it. A filter to
+ *  such a programme is still stale (the side rail offers no filter to a programme with nothing on the list), and a slug
+ *  nothing knows is the combined list either way. */
+export function resolveList(list: ItemList, groups: readonly ProgrammeGroup[], known: ReadonlySet<string> = NONE_KNOWN): ItemList {
+  if (list.programme === null || groups.some((g) => g.program === list.programme)) return list;
+  return list.at === 'programme' && known.has(list.programme) ? list : COMBINED_LIST;
+}
+
+/** The programmes this page knows besides the list's groups (follow-up F3): every slug the runs, the Goals or the recently
+ *  cleared items name. `runs` is `null` before the runs frame lands, and then names none. */
+export function knownProgrammes(view: WaitingView, runs: readonly RunSummary[] | null): ReadonlySet<string> {
+  return new Set([...(runs ?? []).map((r) => r.program), ...view.goals.map((g) => g.program), ...view.cleared.map((i) => i.program)]);
 }
 
 /** THE GROUPS A LIST DRAWS, in its order, from `groupByProgramme`'s: every group for the combined list; the programme's own group
@@ -280,3 +295,7 @@ export function itemPlace(id: number, list: ItemList, groups: readonly Programme
 
 /** "3 of 6": the place as the operator reads it. */
 export const placeWords = (place: ItemPlace): string => `${place.index + 1} of ${place.total}`;
+
+/** The place as a screen reader hears it (follow-up A-3): "3 of 6, <the open item's title>", so a step that lands on the same
+ *  "N of M" still announces something new; empty with no place. */
+export const positionWords = (place: ItemPlace | null, title: string): string => (place === null ? '' : `${placeWords(place)}, ${title}`);

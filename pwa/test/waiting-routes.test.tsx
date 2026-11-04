@@ -115,7 +115,7 @@ describe('ItemRoute', () => {
 
   it('before the first update it says it is waiting, never that the item is gone', () => {
     render(<ItemRoute id={5} store={mk()} />);
-    expect(screen.getByRole('status').textContent).toMatch(/first update/i);
+    expect(screen.getAllByRole('status').map((s) => s.textContent)).toEqual(['', expect.stringMatching(/first update/i)]);
     expect(screen.queryByText('That item is not on the list any more.')).toBeNull();
   });
 });
@@ -335,6 +335,17 @@ describe('moving between items (plan PL9; spec §2 "Moving between items", D23)'
     expect(here()).toBe('/waiting');
   });
 
+  it('a programme whose items are all cleared is still a programme: the way back from its cleared item is its page (follow-up F3)', () => {
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({
+      items: ITEMS.filter((i) => i.program === 'prog-b'), cleared: [itemView({ id: 9, program: 'prog-a', state: 'done', title: 'Nine' })],
+    }) }));
+    history.replaceState(null, '', `/waiting/9?from=${encodeURIComponent('programme:prog-a')}`);
+    render(<ItemRouteAt param="9" store={store} />);
+    fireEvent.click(within(strip()).getByRole('button', { name: /^Back to / }));
+    expect(here()).toBe('/programmes/prog-a');
+  });
+
   /** The column the frame draws beside the item on a desk (`ItemListColumn`), at `url`, with a stand-in for the fleet column. */
   const columnAt = (url: string, id: number) => {
     history.replaceState(null, '', url);
@@ -487,8 +498,9 @@ describe('the walk keeps its place while the operator stays on one item (fix rou
   it('after Previous or Next, focus is on the same control, or on the other one when the end of the list disables it', () => {
     const store = rigOf([soon(10), soon(11), soon(12)]);
     open(store, '/waiting/10');
-    const next = within(strip()).getByRole('button', { name: 'Next item' });
-    next.focus();
+    // The click does not move the focus (a test event, as Safari and Firefox on a Mac leave a clicked button unfocused), so the
+    // focus on Next after the step is the restore's alone (follow-up A-6: this assertion goes red with the restore deleted).
+    expect(document.activeElement).toBe(document.body);
     step('Next item');
     expect(location.pathname).toBe('/waiting/11');
     expect(document.activeElement).toBe(within(strip()).getByRole('button', { name: 'Next item' }));
@@ -498,13 +510,93 @@ describe('the walk keeps its place while the operator stays on one item (fix rou
     expect(document.activeElement).toBe(within(strip()).getByRole('button', { name: 'Previous item' }));
   });
 
+  it('at the start of the list, Previous hands the focus to Next (follow-up A-6)', () => {
+    const store = rigOf([soon(10), soon(11), soon(12)]);
+    open(store, '/waiting/11');
+    step('Previous item');
+    expect(location.pathname).toBe('/waiting/10');
+    expect((within(strip()).getByRole('button', { name: 'Previous item' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(document.activeElement).toBe(within(strip()).getByRole('button', { name: 'Next item' }));
+  });
+
+  it('a placeless visit between resets the remembered place: Back to 11 reads the live order again (follow-up F2)', async () => {
+    const store = rigOf([soon(10), soon(11), soon(12), soon(13)]);
+    open(store, '/waiting/11');
+    expect(within(strip()).getByText('2 of 4')).toBeTruthy();
+    push(store, [soon(10), soon(11), soon(13)], [soon(12, { state: 'done', closedAt: NOW })]); // the coordinator confirms 12
+    step('Next item');
+    expect(location.pathname).toBe('/waiting/12');
+    expect(within(strip()).queryByRole('button', { name: 'Next item' })).toBeNull(); // the way back only
+    act(() => { history.back(); });
+    await waitFor(() => expect(location.pathname).toBe('/waiting/11'));
+    await waitFor(() => expect(within(strip()).getByText('2 of 3')).toBeTruthy());
+    step('Next item');
+    expect(location.pathname).toBe('/waiting/13');
+  });
+
+  it('Next lands on the remembered item even after it left the list, with no skip to the live neighbour (A-5, as ruled)', () => {
+    const store = rigOf([soon(10), soon(11), soon(12), soon(13)]);
+    open(store, '/waiting/11');
+    push(store, [soon(10), soon(11), soon(13)], [soon(12, { state: 'done', closedAt: NOW })]);
+    expect(within(strip()).getByText('2 of 4')).toBeTruthy();
+    step('Next item');
+    expect(location.pathname).toBe('/waiting/12');
+    expect(screen.getByRole('heading', { name: 'Item 12' })).toBeTruthy();
+  });
+
+  it('a step that keeps "N of M" still changes what is announced: the item\'s title rides the position (follow-up A-3)', () => {
+    const store = rigOf([soon(10), soon(11), soon(12)]);
+    open(store, '/waiting/11');
+    const pos = within(strip()).getByRole('status');
+    expect(pos.textContent).toBe('2 of 3, Item 11');
+    push(store, [soon(10), soon(11, { state: 'checking' }), soon(12)]);
+    step('Next item');
+    expect(within(strip()).getByText('2 of 3')).toBeTruthy();
+    expect(within(strip()).getByRole('status')).toBe(pos);
+    expect(pos.textContent).toBe('2 of 3, Item 12');
+  });
+
+  it('the position region is drawn with no place too, empty, so the first place it holds is announced (follow-up A-3)', () => {
+    const store = rigOf([soon(10)]);
+    act(() => store.setState({ waiting: waitingView({ items: [soon(10)], cleared: [soon(9, { state: 'done', closedAt: NOW })] }) }));
+    open(store, '/waiting/9');
+    expect(within(strip()).getByRole('status').textContent).toBe('');
+  });
+
+  it('opening a programme\'s last item from its view, then the coordinator confirming it, keeps that programme\'s list beside it (follow-up F3)', () => {
+    const store = rigOf([soon(30, { program: 'prog-b' }), soon(31)]);
+    open(store, `/waiting/31?from=${encodeURIComponent('programme:prog-a')}`);
+    expect(within(strip()).getByText('1 of 1')).toBeTruthy();
+    push(store, [soon(30, { program: 'prog-b' })], [soon(31, { state: 'done', closedAt: NOW })]);
+    expect(within(strip()).getByRole('button', { name: 'Back to prog-a' })).toBeTruthy();
+    const beside = screen.getByRole('complementary', { name: 'The list beside this item' });
+    expect(within(beside).queryAllByRole('button').filter((b) => b.hasAttribute('data-item'))).toEqual([]); // not prog-b's 30
+    expect(within(beside).getByText('Nothing needs you.')).toBeTruthy();
+  });
+
+  it('the column draws the list the strip names: an item its from-list does not hold walks the combined list, before and after it leaves (follow-up F3)', () => {
+    // 31 is prog-a's, opened from prog-b's view, which does not hold it: the strip walks the combined list, prog-a's 31, then
+    // prog-b's 30 and 32, then prog-c's 33.
+    const items = [soon(30, { program: 'prog-b' }), soon(31), soon(32, { program: 'prog-b' }), soon(33, { program: 'prog-c' })];
+    const store = rigOf(items);
+    open(store, `/waiting/31?from=${encodeURIComponent('programme:prog-b')}`);
+    const rows = () => within(screen.getByRole('complementary', { name: 'The list beside this item' })).queryAllByRole('button')
+      .filter((b) => b.hasAttribute('data-item')).map((b) => b.getAttribute('data-item'));
+    expect(within(strip()).getByRole('button', { name: 'Back to Waiting on you' })).toBeTruthy();
+    expect(rows()).toEqual(['31', '30', '32', '33']);
+    push(store, [soon(30, { program: 'prog-b' }), soon(32, { program: 'prog-b' }), soon(33, { program: 'prog-c' })],
+      [soon(31, { state: 'done', closedAt: NOW })]);
+    expect(within(strip()).getByRole('button', { name: 'Back to Waiting on you' })).toBeTruthy();
+    expect(rows()).toEqual(['30', '32', '33']); // the combined list still, never prog-b's view alone
+  });
+
   it('the position is announced politely as it changes', () => {
     const store = rigOf([soon(10), soon(11)]);
     open(store, '/waiting/10');
     const pos = within(strip()).getByRole('status');
-    expect(pos.textContent).toBe('1 of 2');
+    expect(pos.textContent).toBe('1 of 2, Item 10');
     step('Next item');
     expect(within(strip()).getByRole('status')).toBe(pos);
-    expect(pos.textContent).toBe('2 of 2');
+    expect(pos.textContent).toBe('2 of 2, Item 11');
   });
 });
