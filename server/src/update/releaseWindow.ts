@@ -6,8 +6,11 @@
 //   1. the newest `recent` releases;
 //   2. every release newer than the oldest installed tag of any node (the What's-new sheet lists that span, and
 //      Newer reads its tail);
-//   3. every previous and intent tag, however old (Roll back's "ran before" row; the pinned target);
-//   4. per installed tag, the newest `stableBack` Stable releases older than it (Roll back's list).
+//   3. every previous and intent tag, and every installed tag's own row, however old (Roll back's "ran before" row,
+//      the pinned target, and the uniform fleet's running row, which the PWA looks up by tag);
+//   4. per installed tag, the newest `stableBack` older releases that are Stable, AND the newest `stableBack` older
+//      releases of ANY channel. A Stable fleet's Roll back list is Stable only; a Dev fleet's is any channel, and a
+//      fleet more than `recent` releases behind keeps neither list inside rules 1 and 2.
 // Ordering and "newer/older" are the PWA's: `compareReleaseTags` over release-tag rows, newest first, and rows whose
 // tag is not a release tag keep their input order after them. `compareReleaseTags` throws on a non-tag, so every
 // call is behind `isReleaseTag`; an installed, previous or intent value that is not a release tag is ignored by
@@ -47,16 +50,20 @@ export function releaseWindow<R extends { tag: string; channel: string | null }>
   const oldest = installed.reduce<string | null>((lo, t) => (lo === null || compareReleaseTags(t, lo) < 0 ? t : lo), null);
   if (oldest !== null) for (const r of tagged) if (isNewerTag(r.tag, oldest)) keep.add(r);
 
-  // 3. Previous and intent tags, by exact match.
-  const named = new Set<string>([...ctx.previous, ...ctx.intentTags]);
+  // 3. Previous, intent and installed tags, by exact match (any string for previous and intent).
+  const named = new Set<string>([...ctx.previous, ...ctx.intentTags, ...installed]);
   for (const r of releases) if (named.has(r.tag)) keep.add(r);
 
-  // 4. Per installed tag, the newest `stableBack` Stable releases older than it (`tagged` is newest first).
+  // 4. Per installed tag, the newest `stableBack` older Stable releases and the newest `stableBack` older releases
+  //    of any channel (`tagged` is newest first).
   for (const t of new Set(installed)) {
-    let taken = 0;
+    let stable = 0;
+    let any = 0;
     for (const r of tagged) {
-      if (taken >= ctx.stableBack) break;
-      if (r.channel === 'stable' && isNewerTag(t, r.tag)) { keep.add(r); taken++; }
+      if (!isNewerTag(t, r.tag)) continue;
+      if (any < ctx.stableBack) { keep.add(r); any++; }
+      if (r.channel === 'stable' && stable < ctx.stableBack) { keep.add(r); stable++; }
+      if (any >= ctx.stableBack && stable >= ctx.stableBack) break;
     }
   }
 

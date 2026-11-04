@@ -27,9 +27,9 @@ describe('releaseWindow', () => {
   });
 
   it('keeps every release after the oldest installed tag', () => {
-    // v0.0.20 is the oldest installed: v0.0.21..v0.0.80 are all newer. v0.0.20 itself and older are not kept by this rule.
+    // v0.0.20 is the oldest installed: v0.0.21..v0.0.80 are all newer; v0.0.20 is kept as its own row, nothing older.
     const out = tags(releaseWindow(catalogue, ctx({ installed: ['v0.0.70', 'v0.0.20'], stableBack: 0 })));
-    expect(out).toEqual(v(21, 80));
+    expect(out).toEqual(v(20, 80));
   });
 
   it('keeps previous and intent tags however old', () => {
@@ -41,15 +41,33 @@ describe('releaseWindow', () => {
   });
 
   it('keeps three older Stable releases per installed tag', () => {
-    // Stable tags are v0.0.10, 20, ... 80. Installed v0.0.45: older Stable are 40, 30, 20 (not 10).
-    // Installed v0.0.15: older Stable is 10 only.
+    // Stable tags are v0.0.10, 20, ... 80. Installed v0.0.45: older Stable are 40, 30, 20 (not 10); the three newest
+    // older of any channel (44, 43, 42) ride along. Installed v0.0.15: older Stable is 10 only, any channel 14, 13, 12.
     const out = tags(releaseWindow(catalogue, ctx({ installed: ['v0.0.45', 'v0.0.15'] })));
-    // v0.0.15 is the oldest installed, so everything above it is kept too: v0.0.16..v0.0.80, plus Stable 10 below it.
-    expect(out).toEqual([...v(16, 80), 'v0.0.10']);
+    // v0.0.15 is the oldest installed, so everything above it is kept too, then its own older rows.
+    expect(out).toEqual([...v(12, 80), 'v0.0.10']);
     const one = tags(releaseWindow(catalogue, ctx({ installed: ['v0.0.45'], recent: 0 })));
-    expect(one).toEqual([...v(46, 80), 'v0.0.40', 'v0.0.30', 'v0.0.20']);
-    // Dev rows older than the installed tag are never kept by the Stable-back rule.
-    expect(one).not.toContain('v0.0.44');
+    expect(one).toEqual([...v(42, 80), 'v0.0.40', 'v0.0.30', 'v0.0.20']);
+    // The fourth older Stable and the Dev rows between are not kept.
+    expect(one).not.toContain('v0.0.10');
+    expect(one).not.toContain('v0.0.41');
+  });
+
+  it('keeps three older releases of any channel per installed tag (a Dev fleet\'s Roll back)', () => {
+    // v0.0.20 is 60 releases behind the newest, so rules 1 and 2 reach nothing below it. Its Roll back list on a Dev
+    // fleet is the three newest older rows of any channel: 19, 18, 17 (Dev rows); the one older Stable (10) rides too.
+    const out = tags(releaseWindow(catalogue, ctx({ installed: ['v0.0.20'] })));
+    expect(out).toEqual([...v(17, 80), 'v0.0.10']);
+    expect(out).not.toContain('v0.0.16');
+  });
+
+  it('keeps each installed tag\'s own row however old', () => {
+    const out = tags(releaseWindow(catalogue, ctx({ installed: ['v0.0.3'], recent: 0, stableBack: 0 })));
+    expect(out).toEqual(v(3, 80));
+    // a middle installed tag is its own row too, even where nothing else would keep it
+    const mid = tags(releaseWindow(catalogue, ctx({ installed: ['v0.0.2', 'v0.0.1'], recent: 0, stableBack: 0 })));
+    expect(mid).toContain('v0.0.1');
+    expect(mid).toContain('v0.0.2');
   });
 
   it('no duplicates and newest first', () => {
@@ -74,7 +92,7 @@ describe('releaseWindow', () => {
     expect(tags(releaseWindow(catalogue, ctx({ installed: bad, previous: bad, intentTags: bad })))).toEqual(v(51, 80));
     // one good value among bad ones still counts
     expect(tags(releaseWindow(catalogue, ctx({ installed: ['garbage', 'v0.0.45'], recent: 0 }))))
-      .toEqual([...v(46, 80), 'v0.0.40', 'v0.0.30', 'v0.0.20']);
+      .toEqual([...v(42, 80), 'v0.0.40', 'v0.0.30', 'v0.0.20']);
   });
 
   it('an empty catalogue answers empty', () => {
