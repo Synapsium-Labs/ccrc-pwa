@@ -26,4 +26,19 @@ describe('the watcher\'s listed ids (review 1336 F2)', () => {
     expect(coordinatorPresenceIn(fleet, ids, 'demo-torn')).toBe('unmeasured');
     expect(coordinatorPresenceIn(fleet, ids, 'demo-gone')).toBe('absent');
   });
+
+  // CHARACTERIZATION (desktop-polish carry, review 1338 F2, D-7950): pinned green on main before the listed ids moved onto
+  // `RegistryRead`. The set is every `*.uuid` basename of the listing: a built row, a torn row and a refused id (one
+  // `isRegistryId` refuses, a leading dash) alike, and no name that is not a `.uuid` (another field of a listed row, a field
+  // of a row with no `.uuid`, a stray file).
+  it('are every `*.uuid` basename of the listing, a refused id included, and no other name', async () => {
+    const r = rig();
+    r.row('demo-a', 'demo');
+    writeFileSync(path.join(r.cfg.registryDir, 'demo-torn.uuid'), 'u-demo-torn');
+    writeFileSync(path.join(r.cfg.registryDir, '-lead.uuid'), 'u-lead');
+    writeFileSync(path.join(r.cfg.registryDir, 'demo-nouuid.hold'), 'program:p wave:1/2');
+    writeFileSync(path.join(r.cfg.registryDir, 'stray.txt'), 'x');
+    await primed(r);
+    expect([...r.w.currentRegistryIds()!].sort()).toEqual(['-lead', 'demo-a', 'demo-torn']);
+  });
 });
