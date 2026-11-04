@@ -1,5 +1,9 @@
 # Delegation broker — every coordinator's work nests, and every worktree it leaves is cleaned up — Design
 
+> **Operator scope amendment — 2026-11-02: staged visibility delivery.** Honest delegation visibility may ship before automatic-end/reopening capabilities have been qualified. Each unqualified capability remains explicitly unsupported or not confirmed; silence, a live parent and a missing source never prove that a helper ended. Independent helper/workspace visibility remains. Automatic repair is still outstanding programme work, not removed from scope or completed by this first release. This scope decision does not approve the follow-up's final architecture, time defaults, durable migration, written spec or implementation plan; their ordinary approval gates remain. It does not release existing worker holds or authorize a safety-refused inspection. The separate visibility design defines its bounded first-release contract.
+
+> **Operator amendment — 2026-10-28: "Skip soaks".** All remaining elapsed-time soak gates in this programme are **waived**, not passed. This includes wave 3's seven-day window and any restart on a fix release, wave 4's two-day window and wave 5's three-day window. This amendment supersedes historical timed-gate wording below; original failures and coverage gaps remain recorded. Implementation completeness, ownership and dependency clearance, exact-tip independent review, required CI and the native merge queue, rollout verification and truthful run closure remain required. Product retention horizons and compaction cadence are unchanged. See the programme ledger and the wave-4 plan for the current execution conditions.
+
 **Date:** 2026-10-04. **Status:** design approved in conversation, section by section (2026-10-01 to
 2026-10-04), then revised after an independent four-lens review (fidelity, safety, fact check,
 buildability). The revisions that change an approved decision are listed in §2.1 and need the operator's
