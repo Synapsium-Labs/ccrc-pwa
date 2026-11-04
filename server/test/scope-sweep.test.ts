@@ -1163,6 +1163,70 @@ describe('the busy arm: a busy scope of a provably dead session', () => {
     });
   });
 
+  // `cmd_hibernate` writes `.hibernated` and then `_ws_unsupervise` stamps `.stopped`, so every sleeping row reads stopped
+  // too. It is asleep, not dead (D-5242): mail, an open screen or a send-back wakes it, and it expects its scope intact.
+  describe('(b2) a busy scope of a SLEEPING session is never touched', () => {
+    const asleep = (): void => regRow('project-a-one', GEN, { stopped: true, hibernated: true });
+    const mark = (): string => path.join(fx.home, '.cc-sessions', 'project-a-one.hibernated');
+
+    it('a row with `.stopped` and `.hibernated`: the swapped-away dev server of a worker put to sleep, held with both switches up', () => {
+      const u = busy(1); asleep();
+      notStopped(u, 'report', 'session-asleep');
+      expect(rows('busy')[u]).toMatchObject({ why: 'session-asleep', first: 'none', session: '-' });
+      expect(rows('dead')[u]).toMatchObject({ verdict: 'report' });
+    });
+
+    it('shadow says the same: no `would-stop (busy)` for the shadow week to misread', () => {
+      const u = busy(1); asleep();
+      expect(run().out).toBe('');
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'report', why: 'session-asleep' });
+    });
+
+    it('the marker before the stop stamp: `ccd hibernate` writes it first, and the row is asleep already', () => {
+      const u = busy(1); regRow('project-a-one', GEN, { hibernated: true });
+      notStopped(u, 'report', 'session-asleep');
+    });
+
+    it('a marker that is a dangling link still holds: `ccd`\'s own wake clears one, so a mark that stands is no death', () => {
+      const u = busy(1); stopped(); fs.symlinkSync(path.join(fx.base, 'nowhere'), mark());
+      notStopped(u, 'report', 'session-asleep');
+    });
+
+    it('sleep drops the clock, so a `ccd stop` that ends the sleep waits its six hours from zero', () => {
+      const u = busy(1); asleep(); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'report', why: 'session-asleep', first: 'none' });
+      fs.rmSync(mark());
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'report', why: 'session-dead-under-6h', first: String(UP) });
+      expect(stops()).toEqual([]);
+    });
+
+    it('control: the marker gone, an ordinary stopped row past its grace is collected', () => {
+      const u = busy(1); stopped(); both();
+      run();
+      expect(rows('busy')[u]).toMatchObject({ verdict: 'stopped', why: 'none', session: 'project-a-one' });
+      expect(stops()).toEqual([`--user stop --no-block ${u}`]);
+    });
+
+    it('a process of a sleeping session beside a stopped one\'s: the sleeper holds the scope', () => {
+      const u = unitName(1); const cg = cgOf(u);
+      proc(3010, { age: 2 * 86400, comm: 'bash', cg, env: ENV });
+      proc(3011, { age: 2 * 86400, comm: 'node', cg, env: [`CCRC_SESSION_GENERATION=${OTHER}`] });
+      scope(1, { pane: 3019, procs: [3010, 3011], cpu: 7255669999 }); seen(u, 7 * HOUR, 7255660000); seenBusy(u, 7 * HOUR);
+      stopped(); regRow('project-a-two', OTHER, { stopped: true, hibernated: true });
+      notStopped(u, 'report', 'session-asleep');
+    });
+
+    it('a live pane beside a sleeping row says `session-live`: the stronger fact', () => {
+      const u = busy(1); asleep();
+      proc(4000, { age: 86400, comm: '2.1.318', env: ENV, cg: cgOf(unitName(8)) });
+      livePanes(4000);
+      notStopped(u, 'report', 'session-live');
+      expect(busyWhy(u)).toEqual(['session-live']);
+    });
+  });
+
   describe('(c) every existing hold still holds', () => {
     it('a live Claude Code process, by its real shape: comm the version, argv[0] under claude/versions', () => {
       const u = busy(1, { loop: { comm: '2.1.318', argv: ['/home/fixture/.local/share/claude/versions/2.1.318', '--session-id', 'x'] } }); stopped();
@@ -1536,6 +1600,15 @@ describe('the busy arm: a busy scope of a provably dead session', () => {
       expect(r.stdout).toContain('(mode shadow), 0 busy orphan(s), busy mode shadow:');
       expect(r.stdout).not.toContain(`${u} would-stop (busy)`);
       expect(r.stdout).not.toContain('cannot read');
+    });
+
+    it('a sleeping session\'s busy scope is no orphan either: counted zero, and the instrument reads the word', () => {
+      const u = busy(1); regRow('project-a-one', GEN, { stopped: true, hibernated: true }); run();
+      const r = doctor();
+      expect(r.stdout).toContain('(mode shadow), 0 busy orphan(s), busy mode shadow:');
+      expect(r.stdout).not.toContain(`${u} would-stop (busy)`);
+      expect(r.stdout).not.toContain('cannot read');
+      expect(instrument()).toEqual({ mode: 'shadow', dead: 1, inert: 0, inert_dead_a_day_or_more: 0, carried_scopes: { dead: 0, live: 0, unknown: 0 } });
     });
 
     it('a clean record: the PASS says zero and the mode', () => {

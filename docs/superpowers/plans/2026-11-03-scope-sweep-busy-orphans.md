@@ -17,11 +17,12 @@ Read-only on the fleet box on 2026-11-04, printing counts only. The one dead sco
 
 The triage asked for three facts: the registry row is stopped or absent, no Claude Code process is in the scope, and the scope's pane is gone from its server. The scope's `Description` names a pane and a tmux server and no session, and the K16 census pins that neither act reads `$REG/<id>.panescope` (that marker also names only a session's last pane, never a scope a swap left behind). So the session comes from each process's own environment: both spawn lines export `CCRC_SESSION_GENERATION`, and `$REG/<id>.generation` holds that uuid for the row's whole life.
 
-Three additions the triage did not list, each in the safe direction:
+Four additions the triage did not list, each in the safe direction:
 
 1. **The grace is the session's clock, not the scope's.** A scope dead for a week whose session stopped a minute ago would otherwise be stopped at once. A `busy` line carries its own `first=`, and a session seen live drops it.
 2. **No live pane may carry the generation**, whatever the registry says. A stop stamp beside a running pane is no dead session.
 3. **`peer`**, the measurable part of "a scope another live session uses": a loopback TCP connection whose far end is no socket of this scope, or an accepted connection on a named Unix socket. The other parts are a process carrying a live row's generation and predicate 5.
+4. **A sleeping row is not a stopped one.** `cmd_hibernate` writes `.hibernated` and `_ws_unsupervise` then stamps `.stopped`, so every sleeping row reads stopped, while the rest of the product holds it alive: `reclaim.ts` says a hibernated claimant is alive as any live one (D-5242), and `ccd stop` is what turns one into "an ordinary stopped row, which mail never wakes". The stop-done lane sleeps a worker whose run parks and wakes it on a send-back, so a swapped-away dev server of a sleeping worker is the case this arm exists to protect. `.hibernated` is read first and answers `session-asleep`, which drops the clock as `session-live` does: only `ccd stop` or an archive ends a sleep, and that row then waits its six hours from zero. It reads by presence, the way `ccd` and `ccd-tmp-sweep` do, so a marker whose contents cannot be parsed still holds. How many sleeping rows hold busy scopes on the fleet box today was not measured.
 
 A busy scope's predicates 2 to 4 are what make it busy, so they are the only ones this arm does not ask.
 
@@ -53,6 +54,10 @@ Each mutation was applied to `ccd/ccd-scope-sweep` alone and run against `server
 | the pane-exists hold dropped | 1 | (c) a pane outside the scope |
 | a missing generation read as absent | 1 | (e) no process carries one |
 | the busy verdict written onto the `dead` line | 12 | the byte-for-byte case and the existing socket cases |
+| the sleeping hold dropped | 7 | (b2) six of its cases; the doctor's zero |
+| a dangling `.hibernated` not read | 1 | (b2) the dangling link |
+| sleep keeps the clock | 2 | (b2) the sleeping row; the `ccd stop` that ends a sleep |
+| asleep outranks a live session | 1 | (b2) the live pane beside a sleeping row |
 
 ## Limits, recorded
 

@@ -123,7 +123,11 @@
 #     row without any marker. This sweep never reads `$REG/<id>.panescope` (the K16
 #     census pins it): that names a session's LAST pane only, never the swapped-away
 #     scope this arm exists for. A generation in no `$REG/*.generation` file is an
-#     ABSENT row; a row with `$REG/<id>.stopped` is STOPPED; any other row is `session-live`.
+#     ABSENT row; a row with `$REG/<id>.hibernated` is `session-asleep`, read first because
+#     `ccd hibernate` stamps `.stopped` too and asleep is not dead (D-5242): it wakes on mail
+#     or a send-back expecting its scope, and only `ccd stop` or an archive ends a sleep; a row
+#     with `$REG/<id>.stopped` is STOPPED; any other row is `session-live`. Live or asleep,
+#     the session's clock drops.
 #   * NO LIVE PANE carries that generation, whatever the registry says: a stop stamp
 #     beside a running pane is not a dead session.
 #   * NO CLAUDE CODE PROCESS in the scope, read as ccd-tmp-sweep reads one: argv[0]
@@ -441,7 +445,7 @@ _ss_busy_judge() {
   local p c n g id
   local -a a list=() ids=()
   local -A gens=()
-  local claude=0 live=0
+  local claude=0 live=0 asleep=0
   BV=report BW=() BS='-' BL='-'
   BF=${BFIRST[$u]:-}
   [[ -z "$BF" ]] || (( BF >= born && BF <= UP )) || BF=""        # a clock it cannot believe starts now, the `dead` line's rule
@@ -466,9 +470,12 @@ _ss_busy_judge() {
     [[ -z "${PANEGEN[$g]+x}" ]] || live=1
     id=${ROWGEN[$g]:-}
     [[ -n "$id" ]] || continue                                     # no row names it: absent
-    if [ -e "$REG/$id.stopped" ]; then ids+=("$id"); else live=1; fi   # `-e`, ccd's own: a stamp present but unreadable is still a stop
+    if [ -e "$REG/$id.hibernated" ] || [ -L "$REG/$id.hibernated" ]; then asleep=1   # by presence, as `_hib_wake_clear`: every sleeping row reads stopped too
+    elif [ -e "$REG/$id.stopped" ]; then ids+=("$id")              # `-e`, ccd's own: a stamp present but unreadable is still a stop
+    else live=1; fi
   done
   if (( live )); then BW=(session-live); BF=none; return 0; fi     # its clock drops: dead again, it waits from zero
+  if (( asleep )); then BW=(session-asleep); BF=none; return 0; fi # the same hold: a live session is the stronger word
   [[ -n "$BF" ]] || BF=$UP
   (( ${#ids[@]} )) && { c="${ids[*]}"; BS=${c// /,}; }
   (( claude )) && BW+=(claude-process)

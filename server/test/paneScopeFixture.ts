@@ -182,10 +182,11 @@ export function makePaneScopeBox(opts: { honourPattern?: boolean } = {}) {
   const arm = (): void => fs.writeFileSync(path.join(fx.home, '.cc-sessions', 'scope-sweep-live'), '');
   const armBusy = (): void => fs.writeFileSync(path.join(fx.home, '.cc-sessions', 'scope-sweep-busy-live'), '');
   /** D-7993: a registry row: `$REG/<id>.generation` (no line feed, as the mint writes it), and `$REG/<id>.stopped` when it is stopped. */
-  function regRow(id: string, generation: string, o: { stopped?: boolean } = {}): void {
+  function regRow(id: string, generation: string, o: { stopped?: boolean; hibernated?: boolean } = {}): void {
     const reg = path.join(fx.home, '.cc-sessions');
     fs.writeFileSync(path.join(reg, `${id}.generation`), generation);
     if (o.stopped) fs.writeFileSync(path.join(reg, `${id}.stopped`), '');
+    if (o.hibernated) fs.writeFileSync(path.join(reg, `${id}.hibernated`), '1790000000 3\n');   // `<epoch> <idle-hours>`, `ccd hibernate`'s shape
   }
   const livePanes = (...panes: number[]): void => fs.writeFileSync(path.join(fx.base, 'panes'), [4242, ...panes].map((p) => `${CCD_SERVER} ${p}\n`).join(''));
 

@@ -6575,13 +6575,14 @@ CPU, start children or hold a socket, so the inert path only reports them. A dea
 is judged a second way, beside its `dead` line and never in its place: is its SESSION provably dead? A dead scope
 alone does not say so, because an account swap kills a pane while the session goes on in a new one. The sweep
 reads each process's own `CCRC_SESSION_GENERATION` (never `$REG/<id>.panescope`, which names only a session's last
-pane) and looks that generation up in `$REG/*.generation`: no row, or a row with `$REG/<id>.stopped`, is dead, and
-any other row is `session-live`. Beside that, no live pane may carry the generation, no process in the scope may be
+pane) and looks that generation up in `$REG/*.generation`: no row, or a row with `$REG/<id>.stopped`, is dead, a row
+with `$REG/<id>.hibernated` is `session-asleep` (every sleeping row reads stopped too, and it wakes expecting its scope:
+asleep is not dead, D-5242), and any other row is `session-live`. Beside that, no live pane may carry the generation, no process in the scope may be
 Claude Code (by `argv[0]` or `comm`: a build's `comm` is its version number), the `Description`'s pane must be gone,
 no process may be the parent of one in another cgroup, and nothing outside may be connected to it (`peer`: a loopback
 TCP connection whose far end is no socket of this scope, or an accepted connection on a named Unix socket). The grace
 is the session's: six hours from when the sweep first saw it provably dead, so a stop and a restart cost nothing and a
-session seen live drops the clock. Any of those it cannot measure is a `verdict=carry`, never a stop, and the clock
+session seen live or asleep drops the clock. Any of those it cannot measure is a `verdict=carry`, never a stop, and the clock
 survives a carry. **It ships shadowed behind its own switch:** a collectable scope reads `would-stop (busy)` with its
 process list until BOTH `scope-sweep-live` and `~/.cc-sessions/scope-sweep-busy-live` stand, and an armed busy stop spends
 the same three a tick as an inert one. `GET`/`POST /api/coord/scope-sweep` reads both switches and sets
