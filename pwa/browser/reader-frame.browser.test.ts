@@ -36,6 +36,8 @@ import {
   DOC_SECTION_SLUGS, DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, sniffRaster,
 } from '../../shared/docs';
 import { READER_FALLBACK_NOTE } from '../src/docs/reader/readerText';
+import { LAB_BATTERY_CHANNELS } from '../../shared/readerLab';
+import { LAB_BATTERY_CHANNELS_JS, LAB_BATTERY_PRELUDE_JS } from '../src/readerLab/battery';
 import { READER_IMAGE_BUDGET_BYTES, READER_STORE_PREFIX } from '../src/lib/readerLimits';
 import { COMMIT_A, entry, treeOk, treeResponse } from '../test/docsFixtures';
 import { openApp, serveDist, sharedDist, type DistServer, type OpenedApp } from './app';
@@ -292,12 +294,8 @@ function hookScript(cfg: HookConfig): string {
 
 // ---- the 27-channel battery -------------------------------------------------------------------------------------------
 
-const CHANNELS = [
-  'fetch-cors', 'fetch-nocors', 'fetch-credentials', 'fetch-post', 'fetch-keepalive', 'xhr-get', 'xhr-post', 'beacon',
-  'websocket', 'eventsource', 'image', 'image-srcset', 'script', 'script-module', 'link-stylesheet', 'link-prefetch',
-  'link-preload', 'link-modulepreload', 'style-import', 'css-background', 'css-font-face', 'css-content-url', 'audio',
-  'video', 'svg-image', 'import-dynamic', 'iframe',
-] as const;
+/** The 27 channels: one list for this leg and the reader lab (the reader lab plan, Task 6; M10.16). */
+const CHANNELS = LAB_BATTERY_CHANNELS;
 
 /** The battery as an expression for the frame's own realm: every channel, once per origin, each to `/battery/<name>`.
  *  It returns what it attempted and the `securitypolicyviolation` events the frame's CSP raised, so a run that reaches
@@ -307,46 +305,8 @@ function batterySource(origins: readonly string[]): string {
   const violations = []; const threw = {}; const attempted = [];
   document.addEventListener('securitypolicyviolation', (e) => { violations.push(e.blockedURI); });
   const nap = (ms) => new Promise((r) => setTimeout(r, ms));
-  const ns = 'http://www.w3.org/2000/svg';
-  const mount = (el) => { (document.body || document.documentElement).append(el); return el; };
-  const channels = {
-    'fetch-cors': (u) => fetch(u, { mode: 'cors' }).catch(() => 0),
-    'fetch-nocors': (u) => fetch(u, { mode: 'no-cors' }).catch(() => 0),
-    'fetch-credentials': (u) => fetch(u, { mode: 'cors', credentials: 'include' }).catch(() => 0),
-    'fetch-post': (u) => fetch(u, { method: 'POST', body: 'x', mode: 'no-cors' }).catch(() => 0),
-    'fetch-keepalive': (u) => fetch(u, { keepalive: true, mode: 'no-cors' }).catch(() => 0),
-    'xhr-get': (u) => { const x = new XMLHttpRequest(); x.open('GET', u); x.send(); },
-    'xhr-post': (u) => { const x = new XMLHttpRequest(); x.open('POST', u); x.send('x'); },
-    'beacon': (u) => { navigator.sendBeacon(u, 'x'); },
-    'websocket': (u) => { const w = new WebSocket(u.replace('http', 'ws')); w.onerror = () => {}; },
-    'eventsource': (u) => { const s = new EventSource(u); s.onerror = () => s.close(); },
-    'image': (u) => { const i = new Image(); i.src = u; },
-    'image-srcset': (u) => { const i = document.createElement('img'); i.srcset = u + ' 1x'; mount(i); },
-    'script': (u) => { const s = document.createElement('script'); s.src = u; mount(s); },
-    'script-module': (u) => { const s = document.createElement('script'); s.type = 'module'; s.src = u; mount(s); },
-    'link-stylesheet': (u) => { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = u; mount(l); },
-    'link-prefetch': (u) => { const l = document.createElement('link'); l.rel = 'prefetch'; l.href = u; mount(l); },
-    'link-preload': (u) => { const l = document.createElement('link'); l.rel = 'preload'; l.as = 'image'; l.href = u; mount(l); },
-    'link-modulepreload': (u) => { const l = document.createElement('link'); l.rel = 'modulepreload'; l.href = u; mount(l); },
-    'style-import': (u) => { const s = document.createElement('style'); s.textContent = '@import url("' + u + '");'; mount(s); },
-    'css-background': (u) => { const d = document.createElement('div'); d.style.cssText = 'width:10px;height:10px;background-image:url("' + u + '")'; mount(d); },
-    'css-font-face': (u) => {
-      const s = document.createElement('style'); s.textContent = '@font-face{font-family:bat;src:url("' + u + '")}.bat{font-family:bat}'; mount(s);
-      const p = document.createElement('p'); p.className = 'bat'; p.textContent = 'x'; mount(p);
-    },
-    'css-content-url': (u) => {
-      const s = document.createElement('style'); s.textContent = '.cu::before{content:url("' + u + '")}'; mount(s);
-      const d = document.createElement('div'); d.className = 'cu'; d.textContent = 'x'; mount(d);
-    },
-    'audio': (u) => { const a = new Audio(); a.preload = 'auto'; a.src = u; a.load(); },
-    'video': (u) => { const v = document.createElement('video'); v.preload = 'auto'; v.src = u; mount(v); v.load(); },
-    'svg-image': (u) => {
-      const s = document.createElementNS(ns, 'svg'); const i = document.createElementNS(ns, 'image');
-      i.setAttribute('href', u); i.setAttribute('width', '10'); i.setAttribute('height', '10'); s.append(i); mount(s);
-    },
-    'import-dynamic': (u) => import(u).catch(() => 0),
-    'iframe': (u) => { const f = document.createElement('iframe'); f.src = u; mount(f); },
-  };
+  ${LAB_BATTERY_PRELUDE_JS}
+  const channels = ${LAB_BATTERY_CHANNELS_JS};
   for (const origin of ${JSON.stringify(origins)}) {
     for (const [name, run] of Object.entries(channels)) {
       attempted.push(name + '@' + origin);
