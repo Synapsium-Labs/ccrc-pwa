@@ -14,7 +14,10 @@
       "ignored",
       "newestctimens",
       "entries",
-      "floor"
+      "floor",
+      "lease",
+      "leasegen",
+      "leasestate"
     ],
     "rescueInputs": []
   },
@@ -33,7 +36,10 @@
       "ignored",
       "newestctimens",
       "entries",
-      "floor"
+      "floor",
+      "lease",
+      "leasegen",
+      "leasestate"
     ],
     "rescueInputs": []
   },
@@ -71,7 +77,10 @@
       "ignored",
       "newestctimens",
       "entries",
-      "floor"
+      "floor",
+      "lease",
+      "leasegen",
+      "leasestate"
     ]
   }
 }
