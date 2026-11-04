@@ -3,6 +3,9 @@ import type { CcrcConfig } from './config.js';
 import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
 import { readHookState } from './hookstate.js';
 import { mapBounded } from './bounded.js';
+import type { RegistryRowCache } from './registryRowCache.js';
+import { rowTemperature, hotRowReuse, type RowKey } from './rowTemperature.js';
+import type { SessionVerdict } from './exec.js';
 import {
   CHILD_RUN_ID, CHILD_SHELL_PATH, DENY_SETTINGS_DIGEST, isPrPhase, isRegistryId, isStopSurface, parseLastEnd,
   ROUTE_WRITABLE_FIELDS,
@@ -1273,7 +1276,11 @@ function noteRefused(refused: ReadonlySet<string>): void {
  *  `buildRecord` could not assemble and a refused id alike. It is derived here once, from `names`, so no caller
  *  re-parses the listing for it (the watcher's presence ids read it). `refused` is a subset of it. */
 export type RegistryRead =
-  | { listed: true; records: SessionRecord[]; names: readonly string[]; refused: ReadonlySet<string>; listedIds: ReadonlySet<string> }
+  | { listed: true; records: SessionRecord[]; names: readonly string[]; refused: ReadonlySet<string>; listedIds: ReadonlySet<string>;
+      /** Ids whose record came from the row cache (cold rows, and hot rows whose key is unchanged); empty without a cache. */
+      reused: ReadonlySet<string>;
+      /** The cold subset of `reused`: stopped or archived, tmux-gone, clean, unchanged and read under 30 s ago. */
+      cold: ReadonlySet<string> }
   | { listed: false };
 
 /**
@@ -1296,7 +1303,37 @@ export type RegistryRead =
  */
 export const REGISTRY_ROW_CONCURRENCY = 8;
 
-export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promise<RegistryRead> {
+/** The optional row cache of `readRegistryMeasured` (console speed S1). Absent = today's read, request for request. */
+export type RegistryReadOpts = {
+  cache?: RegistryRowCache;
+  /** This tick's tmux verdict for a row, or null when there is no (clean) listing: doubt reads hot. */
+  verdicts?: (id: string) => SessionVerdict | null;
+  nowMs?: number;
+  /** Modification times by listing name, when the agent reports them (the times arm); absent = names-only keys. */
+  times?: ReadonlyMap<string, number>;
+};
+
+/** Each valid id's cache key from the one listing: the sorted names starting `<id>.` (an id that prefixes another
+ *  dotted id gets a superset, which only makes its row hotter), and their mtimes when every one is known. */
+function rowKeys(names: readonly string[], ids: readonly string[], times?: ReadonlyMap<string, number>): Map<string, RowKey> {
+  const byPrefix = new Map<string, string[]>();
+  for (const n of names) {
+    for (let i = n.indexOf('.'); i > 0; i = n.indexOf('.', i + 1)) {
+      const p = n.slice(0, i);
+      const l = byPrefix.get(p);
+      if (l === undefined) byPrefix.set(p, [n]); else l.push(n);
+    }
+  }
+  const out = new Map<string, RowKey>();
+  for (const id of ids) {
+    const mine = (byPrefix.get(id) ?? []).slice().sort();
+    const t = times === undefined ? null : mine.map((n) => times.get(n));
+    out.set(id, { names: mine, times: t !== null && t.every((x): x is number => x !== undefined) ? t : null });
+  }
+  return out;
+}
+
+export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig, opts?: RegistryReadOpts): Promise<RegistryRead> {
   const now = Date.now();
   const names = await io.readdir(cfg.registryDir);
   noteWholeFleetListing(names !== null, now);
@@ -1326,7 +1363,26 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
   // D-6388: the rows are read with bounded concurrency, not one after another. `mapBounded` answers in INPUT order
   // (`ids` is sorted), so `out` is the sorted order it always was; a dropped row (`null`) is left out after, and the
   // reconfirm sets are filled from the answers in that same order, so they hold what the serial loop left in them.
-  const built = await mapBounded(ids, REGISTRY_ROW_CONCURRENCY, (id) => buildRecord(io, cfg, listing, id, now));
+  const cache = opts?.cache;
+  const reused = new Set<string>();
+  const cold = new Set<string>();
+  const nowMs = opts?.nowMs ?? now;
+  const keys = cache === undefined ? null : rowKeys(names, ids, opts?.times);
+  if (cache !== undefined) cache.prune(new Set(ids));
+  const built = await mapBounded(ids, REGISTRY_ROW_CONCURRENCY, async (id) => {
+    if (cache === undefined || keys === null) return buildRecord(io, cfg, listing, id, now);
+    const key = keys.get(id)!;
+    const prev = cache.get(id);
+    if (rowTemperature(prev, opts?.verdicts?.(id) ?? null, key, nowMs) === 'cold') {
+      reused.add(id); cold.add(id);
+      return prev!.record;
+    }
+    if (hotRowReuse(prev, key)) { reused.add(id); return prev!.record; }
+    const rec = await buildRecord(io, cfg, listing, id, now);
+    // A built row is stored with this read's time (an unclean one evicts); a dropped row (null) leaves no entry.
+    if (rec !== null) cache.put(id, rec, key, nowMs); else cache.delete(id);
+    return rec;
+  });
   const out: SessionRecord[] = [];
   for (const rec of built) {
     if (rec === null) continue;
@@ -1370,10 +1426,10 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
       }
       // `names`, not `again`: the FIRST listing is the one every caller shares
       // (D-283). `again` answers a different question, on some calls only.
-      if (retired.size > 0) return { listed: true, records: out.filter((r) => !retired.has(r.id)), names, refused, listedIds: listedIdSet };
+      if (retired.size > 0) return { listed: true, records: out.filter((r) => !retired.has(r.id)), names, refused, listedIds: listedIdSet, reused, cold };
     }
   }
-  return { listed: true, records: out, names, refused, listedIds: listedIdSet };
+  return { listed: true, records: out, names, refused, listedIds: listedIdSet, reused, cold };
 }
 
 export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<SessionRecord[]> {
