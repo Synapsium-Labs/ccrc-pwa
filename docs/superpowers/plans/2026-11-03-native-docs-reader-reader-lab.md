@@ -869,9 +869,9 @@ git grep -qF "import { installDocsRequestPolicy, installDocsResponsePolicy } fro
   && git grep -qF "  // Unconditional — the flag is decided INSIDE the hook (\`authVerdict\`'s first" HEAD -- server/src/server.ts \
   && git grep -qF "    registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);" HEAD -- server/src/server.ts \
   && git grep -qF " * THE SEVEN REASONS, and there are only seven:" HEAD -- server/src/auth/gate.ts \
-  && git grep -qF " * THE GATE. One \`onRequest\` hook stands in front of all 171 routes, the static" HEAD -- server/src/auth/gate.ts \
+  && git grep -qF " * THE GATE. One \`onRequest\` hook stands in front of all 172 routes, the static" HEAD -- server/src/auth/gate.ts \
   && git grep -qF " * and nothing caught it because the scanner reads numerals.)" HEAD -- server/src/auth/gate.ts \
-  && git grep -qF "    expect(ROUTES.length).toBe(174);" HEAD -- server/test/auth-gate.test.ts \
+  && git grep -qF "    expect(ROUTES.length).toBe(175);" HEAD -- server/test/auth-gate.test.ts \
   && git grep -qF "export function createReaderLabRuns(): ReaderLabRuns {" HEAD -- server/src/readerLab/runs.ts \
   && test ! -e server/src/readerLab/routes.ts \
   && grep -q "kWs\|request.ws\|\.ws = " server/node_modules/@fastify/websocket/index.js \
@@ -1314,11 +1314,11 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
 - [ ] **Step 5: The gate's table and text, `server/src/auth/gate.ts`.**
   Find:
 ```ts
- * THE GATE. One `onRequest` hook stands in front of all 171 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 172 routes, the static
 ```
   Replace:
 ```ts
- * THE GATE. One `onRequest` hook stands in front of all 176 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 177 routes, the static
 ```
   Find: ` * THE SEVEN REASONS, and there are only seven:`
   Replace: ` * THE EIGHT REASONS, and there are only eight:`
@@ -1408,13 +1408,13 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
 ```
   Find: `  it('found all nine files, and EXACTLY the route count the surface has', () => {`
   Replace: `  it('found all ten files, and EXACTLY the route count the surface has', () => {`
-  Find: `    expect(ROUTES.length).toBe(174);`
+  Find: `    expect(ROUTES.length).toBe(175);`
   Replace:
 ```ts
-    // 179 since the reader lab's door (the reader lab plan, Task 3), in a tenth file: three session-gated routes, NOT EXEMPT,
-    // and the probe pair, IN EXEMPT (gate.ts reason 8), no box token: the HTTP half 171 -> 176, the gated count 105 -> 108,
+    // 180 since the reader lab's door (the reader lab plan, Task 3), in a tenth file: three session-gated routes, NOT EXEMPT,
+    // and the probe pair, IN EXEMPT (gate.ts reason 8), no box token: the HTTP half 172 -> 177, the gated count 106 -> 109,
     // the exempt-HTTP count 66 -> 68.
-    expect(ROUTES.length).toBe(179);
+    expect(ROUTES.length).toBe(180);
 ```
   Find: `    expect(scanRoutes('linear/proxyRoutes.ts').length).toBe(12);`
   Replace:
@@ -1438,8 +1438,8 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
       'GET /api/reader-lab/probe/:nonce/:name', 'POST /api/reader-lab/probe/:nonce/:name',
     ]) expect(keys, `${k} was not found by the scanner`).toContain(k);
 ```
-  Find: `    // 174 scanned + the static wildcard when the bundle is built.`
-  Replace: `    // 179 scanned + the static wildcard when the bundle is built.`
+  Find: `    // 175 scanned + the static wildcard when the bundle is built.`
+  Replace: `    // 180 scanned + the static wildcard when the bundle is built.`
   Find: `  it('exempts exactly the seven classes the plan names — nothing has crept in', () => {`
   Replace: `  it('exempts exactly the eight classes the plan names — nothing has crept in', () => {`
   Find: `    expect([...EXEMPT.keys()].sort()).toEqual([`
@@ -1472,10 +1472,10 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
       'POST /api/reader-lab/probe/:nonce/:name',
       'POST /api/runs',
 ```
-  Find: `    // THE PROPERTY, in one loop over all 171 HTTP routes, with THREE probes each:`
-  Replace: `    // THE PROPERTY, in one loop over all 176 HTTP routes, with THREE probes each:`
-  Find: `          //    is not itself flag-aware — the assertion that covers all 171 HTTP routes, not the 66 exempt.`
-  Replace: `          //    is not itself flag-aware — the assertion that covers all 176 HTTP routes, not the 68 exempt.`
+  Find: `    // THE PROPERTY, in one loop over all 172 HTTP routes, with THREE probes each:`
+  Replace: `    // THE PROPERTY, in one loop over all 177 HTTP routes, with THREE probes each:`
+  Find: `          //    is not itself flag-aware — the assertion that covers all 172 HTTP routes, not the 66 exempt.`
+  Replace: `          //    is not itself flag-aware — the assertion that covers all 177 HTTP routes, not the 68 exempt.`
 - [ ] **Step 7: The fastify allowlist, `server/test/rings/fastify-l4.data.ts`.**
   Find:
 ```ts
@@ -4814,7 +4814,7 @@ RLB-T11-M2 keeps the wall frame's canary in its config, so the canary arrives an
 
 ## Results (RL-a)
 
-Measured on 2026-11-04 at RL-a's end state, on BASE dd5b190e8: the suites at 7da7ffb9d, the last code commit of Tasks 1-4 and the fix round, and the mutation table there too. The one census fix the whole-suite run found (`secret-mask.test.ts`, below) is 7d25d35f6, a test file only. Every suite ran in the workspace, in the foreground, through `ccrc test`. The route counts were measured at BASE equal to the plan's (174, 171, 105 and 66), so the plan's +5, +5, +3 and +2 give 179, 176, 108 and 68 unchanged.
+Measured on 2026-11-04 at RL-a's end state, on BASE dd5b190e8: the suites at 7da7ffb9d, the last code commit of Tasks 1-4 and the fix round, and the mutation table there too. The one census fix the whole-suite run found (`secret-mask.test.ts`, below) is 7d25d35f6, a test file only. Every suite ran in the workspace, in the foreground, through `ccrc test`. The route counts were measured at BASE equal to the plan's (174, 171, 105 and 66), so the plan's +5, +5, +3 and +2 gave 179, 176, 108 and 68. Route counts restated at the merge of main f9ec398d7, which carries 16677fd85: #2270's session-gated `POST /api/projects` moved main to 175 total, 172 HTTP, 106 gated and 66 exempt-HTTP, and the door's fixed +5, +5, +3 and +2 give 180, 177, 109 and 68. Task 3's Finds, replacements and Step 0 greps carry the restated numbers.
 
 **Scope:** as planned, plus `server/test/secret-mask.test.ts`: two `EXEMPT` rows in its egress census (D-7967).
 
@@ -4827,7 +4827,8 @@ Measured on 2026-11-04 at RL-a's end state, on BASE dd5b190e8: the suites at 7da
 | `SERVER-TSC-OK` | | yes | | |
 
 - **This run's own files**, each alone after the fix round: `reader-lab-vocabulary` 8, `reader-lab-runs` 13, `reader-lab-routes` 13, `box-token-census` 53, `auth-gate` 260, `coord-pause-route` 22, `rings/totality` 9, `rings/fastify-l4` 5, `anchors` 9 and `citations` 4, every case passing. None of them is red in the full run either.
-- **Growth, as measured.** `auth-gate.test.ts` went from 255 cases to 260, and `box-token-census.test.ts` from 47 to 53: the five lab cases of Task 4 and the fix round's fs and logging scan (F4).
+- **After the merge of main** (f9ec398d7), each alone through `ccrc test`: `auth-gate` 261, `box-token-census` 53, `secret-mask` 96 with 1 skipped, `rings/fastify-l4` 5, `rings/totality` 9, `topology-clean` 60, `deviation-refs` 31, `dtbd` 1, `reader-lab-routes` 13, `reader-lab-runs` 13, `reader-lab-vocabulary` 8 and `coord-pause-route` 22, every case passing, and `SERVER-TSC-OK`. `topology-clean`'s first run lost its worker to the test slice's memory cap, and it passed 60 of 60 when re-run.
+- **Growth, as measured.** `auth-gate.test.ts` went from 255 cases to 260 (261 after the merge of main, whose one added route adds a case), and `box-token-census.test.ts` from 47 to 53: the five lab cases of Task 4 and the fix round's fs and logging scan (F4).
 - **One red was this run's own**: `secret-mask.test.ts`'s egress census ("every GET route and websocket is masked by the hook, masked inline, or exempt with a reason") failed on `/api/reader-lab/runs/:nonce is neither masked nor exempt`, and the probe's GET would have failed next. Global Constraints' census exception applied: the worker stopped and asked, and the coordinator ruled two `EXEMPT` rows, each with its reason (D-7967). They are committed with rows `RLB-T4-M5` and `RLB-T4-M6` (measured below), and the file's egress case is green. Its other red, the 25 ms event-loop bound, is a timing bound under load (below).
 - **The full run's other reds**, each re-run alone, each with a measured cause outside this run's change. None names a lab route, the probe or the counter.
   - The box's disk: the root filesystem stood at 86% used, past the server disk watch's 85% warning line. The watch measures the real disk, so a "Fleet disk 85% full" event lands in the feeds and pushes these tests read: `push-copy`, `feed-writers-pin`, `questions-pin`, `questions-sequence-pin`, `questions-clock-pin`, `asks-mint`, `mail-sweep`, `stall-sweep`, `tick-concurrency`, `tick-refused-lanes` and `pr-sweep`. `feed-writers-pin` and `tick-concurrency` stay red alone, with the same event.
@@ -4845,7 +4846,7 @@ Measured at Task 3 (`Tests  1 failed | 11 passed (12)`), and again at the end st
 
 ### The mutation table, at the end state
 
-Every row ran in the workspace, one at a time, under `timeout -k 10 600` and `ulimit -u 4096`. Each was restored from its saved copy with its sha256 checked, and `git status --porcelain` was empty after the last row. The last occurrence of each id is kept. A row added in the fix round says "measured (fix round)".
+Every row ran in the workspace, one at a time, under `timeout -k 10 600` and `ulimit -u 4096`. Each was restored from its saved copy with its sha256 checked, and `git status --porcelain` was empty after the last row. The last occurrence of each id is kept. A row added in the fix round says "measured (fix round)". After the merge of main, every row whose file the merge touched (`RLB-T3-M2`, `RLB-T3-M6`, `RLB-T4-M2`, `RLB-T4-M5`, `RLB-T4-M6` and the order figure) was re-measured the same way and appended last; each reds the same cases as before.
 
 ```json
 [
@@ -4877,10 +4878,16 @@ Every row ran in the workspace, one at a time, under `timeout -k 10 600` and `ul
   {"id": "RLB-T4-M1", "spec": "(b) M10.8", "pkg": "server", "file": "src/readerLab/routes.ts", "old": "const NO_STORE = 'no-store';", "new": "const NO_STORE = 'no-store'; // checkMailToken(", "tests": "test/box-token-census.test.ts", "red": "Tests  1 failed | 52 passed (53)", "failing": ["test/box-token-census.test.ts > the reader lab door: three session-gated routes, an exempt probe pair, no box token (reader lab plan, Task 4) > no lab file consults the box token, and no lab handler is a lane"], "restore_sha_equal": true, "status_equal": true, "vs": "as predicted"},
   {"id": "RLB-T4-M2", "spec": "(b) M10.8", "pkg": "server", "file": "../README.md", "old": "`/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request: its answer never depends on the nonce,", "new": "the lab's probe path (a sandboxed frame's request: its answer never depends on the nonce,", "tests": "test/box-token-census.test.ts", "red": "Tests  1 failed | 52 passed (53)", "failing": ["test/box-token-census.test.ts > the reader lab door: three session-gated routes, an exempt probe pair, no box token (reader lab plan, Task 4) > README's auth paragraph names the probe among the exceptions"], "restore_sha_equal": true, "status_equal": true, "vs": "measured (fix round)"},
   {"id": "RLB-T4-M3", "spec": "(b) M10.8", "pkg": "server", "file": "src/readerLab/routes.ts", "old": "import { createHash, randomBytes } from 'node:crypto';", "new": "import { createHash, randomBytes } from 'node:crypto';\nimport { readFileSync } from 'node:fs';", "tests": "test/box-token-census.test.ts", "red": "Tests  1 failed | 52 passed (53)", "failing": ["test/box-token-census.test.ts > the reader lab door: three session-gated routes, an exempt probe pair, no box token (reader lab plan, Task 4) > no lab file loads fs or writes a log line: the door keeps nothing on disk and logs nothing of its own (design 4.4)"], "restore_sha_equal": true, "status_equal": true, "vs": "measured (fix round)"},
-  {"id": "RLB-T4-M4", "spec": "(b) M10.8", "pkg": "server", "file": "src/readerLab/routes.ts", "old": "const NO_STORE = 'no-store';", "new": "const NO_STORE = 'no-store';\nconsole.warn('lab');", "tests": "test/box-token-census.test.ts", "red": "Tests  1 failed | 52 passed (53)", "failing": ["test/box-token-census.test.ts > the reader lab door: three session-gated routes, an exempt probe pair, no box token (reader lab plan, Task 4) > no lab file loads fs or writes a log line: the door keeps nothing on disk and logs nothing of its own (design 4.4)"], "restore_sha_equal": true, "status_equal": true, "vs": "measured (fix round)"},,
+  {"id": "RLB-T4-M4", "spec": "(b) M10.8", "pkg": "server", "file": "src/readerLab/routes.ts", "old": "const NO_STORE = 'no-store';", "new": "const NO_STORE = 'no-store';\nconsole.warn('lab');", "tests": "test/box-token-census.test.ts", "red": "Tests  1 failed | 52 passed (53)", "failing": ["test/box-token-census.test.ts > the reader lab door: three session-gated routes, an exempt probe pair, no box token (reader lab plan, Task 4) > no lab file loads fs or writes a log line: the door keeps nothing on disk and logs nothing of its own (design 4.4)"], "restore_sha_equal": true, "status_equal": true, "vs": "measured (fix round)"},
   {"id": "RLB-T4-M5", "spec": "(b) M10.8", "pkg": "server", "file": "test/secret-mask.test.ts", "old": "'/api/reader-lab/runs/:nonce': \"a run's counts by probe name and request class, from the lab's closed vocabulary; no session text\",", "new": "", "tests": "test/secret-mask.test.ts -t \"every GET route and websocket\"", "red": "Tests  1 failed | 94 skipped (95)", "failing": ["test/secret-mask.test.ts > the rulings: every egress of session-derived text goes through the masker (D-5995) > every GET route and websocket is masked by the hook, masked inline, or exempt with a reason"], "restore_sha_equal": true, "status_equal": true, "vs": "measured (fix round)"},
-  {"id": "RLB-T4-M6", "spec": "(b) M10.8", "pkg": "server", "file": "test/secret-mask.test.ts", "old": "'/api/reader-lab/probe/:nonce/:name': 'an empty 204 with no-store; no body',", "new": "", "tests": "test/secret-mask.test.ts -t \"every GET route and websocket\"", "red": "Tests  1 failed | 94 skipped (95)", "failing": ["test/secret-mask.test.ts > the rulings: every egress of session-derived text goes through the masker (D-5995) > every GET route and websocket is masked by the hook, masked inline, or exempt with a reason"], "restore_sha_equal": true, "status_equal": true, "vs": "measured (fix round)"}
-  {"id": "RLB-T3-ORDER", "pkg": "server", "file": "src/server.ts", "tests": "test/reader-lab-routes.test.ts", "red": "Tests  1 failed | 12 passed (13)", "failing": ["test/reader-lab-routes.test.ts > the reader lab door (reader lab plan, Task 3) > armed: a frame's WebSocket upgrade to the probe is refused by the gate (403), logged by the gate once, and still counted (M10.3)"], "restore_sha_equal": true, "status_equal": true, "vs": "measured: the WebSocket-upgrade case reds (counter after the gate no longer counts a refused upgrade)"}
+  {"id": "RLB-T4-M6", "spec": "(b) M10.8", "pkg": "server", "file": "test/secret-mask.test.ts", "old": "'/api/reader-lab/probe/:nonce/:name': 'an empty 204 with no-store; no body',", "new": "", "tests": "test/secret-mask.test.ts -t \"every GET route and websocket\"", "red": "Tests  1 failed | 94 skipped (95)", "failing": ["test/secret-mask.test.ts > the rulings: every egress of session-derived text goes through the masker (D-5995) > every GET route and websocket is masked by the hook, masked inline, or exempt with a reason"], "restore_sha_equal": true, "status_equal": true, "vs": "measured (fix round)"},
+  {"id": "RLB-T3-ORDER", "pkg": "server", "file": "src/server.ts", "tests": "test/reader-lab-routes.test.ts", "red": "Tests  1 failed | 12 passed (13)", "failing": ["test/reader-lab-routes.test.ts > the reader lab door (reader lab plan, Task 3) > armed: a frame's WebSocket upgrade to the probe is refused by the gate (403), logged by the gate once, and still counted (M10.3)"], "restore_sha_equal": true, "status_equal": true, "vs": "measured: the WebSocket-upgrade case reds (counter after the gate no longer counts a refused upgrade)"},
+  {"id": "RLB-T3-M2", "spec": "(c) M10.3", "pkg": "server", "file": "src/server.ts", "old": "installReaderLabCounter(app, readerLab);", "new": "", "tests": "test/reader-lab-routes.test.ts", "red": "Tests  5 failed | 8 passed (13)", "failing": ["test/reader-lab-routes.test.ts > the reader lab door (reader lab plan, Task 3) > a POST probe whose body the server will not take still answers 204, and is counted (M10.4)", "test/reader-lab-routes.test.ts > the reader lab door (reader lab plan, Task 3) > armed: a frame's POST probe from origin null skips the origin check (reason 8): the same 204, counted, and no refusal logged (M10.4)", "test/reader-lab-routes.test.ts > the reader lab door (reader lab plan, Task 3) > armed: a frame's WebSocket upgrade to the probe is refused by the gate (403), logged by the gate once, and still counted (M10.3)", "test/reader-lab-routes.test.ts > the reader lab door (reader lab plan, Task 3) > armed: the counter keeps classes, never a value: the cookie by name, Sec-Fetch-Site and Origin (M10.7)", "test/reader-lab-routes.test.ts > the reader lab door (reader lab plan, Task 3) > every probe answer is the same empty 204, by GET and POST, for a live, unknown, malformed, closed, expired or saturated run and an unknown name (M10.4)"], "restore_sha_equal": true, "status_equal": true, "vs": "re-measured after the merge of main"},
+  {"id": "RLB-T3-M6", "spec": "(b) M10.8", "pkg": "server", "file": "src/auth/gate.ts", "old": "['GET /api/reader-lab/probe/:nonce/:name',", "new": "['POST /api/reader-lab/runs', 'a planted exemption of the run route, long enough to read as a reason for the gate table'],\n  ['GET /api/reader-lab/probe/:nonce/:name',", "tests": "test/reader-lab-routes.test.ts test/auth-gate.test.ts", "red": "Tests  4 failed | 270 passed (274)", "failing": ["test/auth-gate.test.ts > EXEMPT is complete in both directions > exempts exactly the eight classes the plan names — nothing has crept in", "test/auth-gate.test.ts > the gate sweep states the route counts it derives > the third probe names the whole and the exempt part", "test/reader-lab-routes.test.ts > the reader lab door (reader lab plan, Task 3) > armed: a session opens, reads and closes a run; an anonymous caller gets the gate's 401 on all three (M10.8)", "test/reader-lab-routes.test.ts > the reader lab door (reader lab plan, Task 3) > the probe pair is EXEMPT under reason 8; the run routes are not (M10.8)"], "restore_sha_equal": true, "status_equal": true, "vs": "re-measured after the merge of main"},
+  {"id": "RLB-T4-M2", "spec": "(b) M10.8", "pkg": "server", "file": "../README.md", "old": "`/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request: its answer never depends on the nonce,", "new": "the lab's probe path (a sandboxed frame's request: its answer never depends on the nonce,", "tests": "test/box-token-census.test.ts", "red": "Tests  1 failed | 52 passed (53)", "failing": ["test/box-token-census.test.ts > the reader lab door: three session-gated routes, an exempt probe pair, no box token (reader lab plan, Task 4) > README's auth paragraph names the probe among the exceptions"], "restore_sha_equal": true, "status_equal": true, "vs": "re-measured after the merge of main"},
+  {"id": "RLB-T4-M5", "spec": "(b) M10.8", "pkg": "server", "file": "test/secret-mask.test.ts", "old": "'/api/reader-lab/runs/:nonce': \"a run's counts by probe name and request class, from the lab's closed vocabulary; no session text\",", "new": "", "tests": "test/secret-mask.test.ts -t \"every GET route and websocket\"", "red": "Tests  1 failed | 96 skipped (97)", "failing": ["test/secret-mask.test.ts > the rulings: every egress of session-derived text goes through the masker (D-5995) > every GET route and websocket is masked by the hook, masked inline, or exempt with a reason"], "restore_sha_equal": true, "status_equal": true, "vs": "re-measured after the merge of main"},
+  {"id": "RLB-T4-M6", "spec": "(b) M10.8", "pkg": "server", "file": "test/secret-mask.test.ts", "old": "'/api/reader-lab/probe/:nonce/:name': 'an empty 204 with no-store; no body',", "new": "", "tests": "test/secret-mask.test.ts -t \"every GET route and websocket\"", "red": "Tests  1 failed | 96 skipped (97)", "failing": ["test/secret-mask.test.ts > the rulings: every egress of session-derived text goes through the masker (D-5995) > every GET route and websocket is masked by the hook, masked inline, or exempt with a reason"], "restore_sha_equal": true, "status_equal": true, "vs": "re-measured after the merge of main"},
+  {"id": "RLB-T3-ORDER", "pkg": "server", "file": "src/server.ts", "tests": "test/reader-lab-routes.test.ts", "red": "Tests  1 failed | 12 passed (13)", "failing": ["test/reader-lab-routes.test.ts > the reader lab door (reader lab plan, Task 3) > armed: a frame's WebSocket upgrade to the probe is refused by the gate (403), logged by the gate once, and still counted (M10.3)"], "restore_sha_equal": true, "status_equal": true, "vs": "re-measured after the merge of main"}
 ]
 ```
 
@@ -4906,7 +4913,7 @@ These are choices that filled a silence while executing. None departs from a spe
     - section 4.1's two probe rows ("`204`, no body", "the same `204`");
     - section 4.4's "Inert by default" and "What a probe can learn" rows, and section 4.6's "The door on every box" row ("answers one empty `204`");
     - the M10.4 row of section 9 (the amendments to the rich-docs spec);
-    - section 4.7's census row, which still gives the counts from before rev 3 ("170 to 175 routes, 167 to 172 HTTP routes, 64 to 66 exempt"; measured 174 to 179, 171 to 176 and 66 to 68).
+    - section 4.7's census row, which still gives the counts from before rev 3 ("170 to 175 routes, 167 to 172 HTTP routes, 64 to 66 exempt"; at the merge of main, 175 to 180, 172 to 177 and 66 to 68).
   - In the rich-docs spec (`2026-10-12-rich-docs-reader-and-shared-renderer-design.md`): section 7.4's M10.4 row and section 10's RD36.
 - **Test and census minors from the reviews:**
   - The armed cases' `console.warn` spies print the gate's journal line into the suite output. The spies count it, but nothing mocks the print.
