@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import {
@@ -374,4 +374,151 @@ export async function loadSnapshot(cachePath: string): Promise<FleetSnapshot | n
   } catch {
     return null;
   }
+}
+
+/**
+ * The state cache's one writer (console speed S1). It loads the file once (`prime`), keeps the snapshot it last wrote
+ * or loaded in memory, and writes only when the sessions' JSON differs; `last()` answers the shrink rule from memory,
+ * so no tick reads the file. One `stat` a tick (`refresh`) is the guard against the file changing under it (deleted,
+ * or rewritten by another process): a changed signature reloads, so a cache someone removed is rewritten on the next
+ * tick, never left absent for as long as the fleet is quiet. After a skipped tick (`skipped`) the next clean tick
+ * writes even if the sessions equal the last written, as it did before this writer existed.
+ * Failure contract: `prime` and `refresh` never throw (`loadSnapshot` folds a bad file to null, a failed `stat` reads
+ * as a changed file); `writeIfChanged` throws what `saveSnapshot` throws and then leaves its memory as it was, so the
+ * next tick retries.
+ */
+export class SnapshotWriter {
+  private snap: FleetSnapshot | null = null;
+  private json: string | null = null;
+  private sig: string | null = null;
+  private primed = false;
+  constructor(private readonly cachePath: string) {}
+  private async signature(): Promise<string | null> {
+    try { const st = await stat(this.cachePath); return `${st.ino}:${st.size}:${st.mtimeMs}`; } catch { return null; }
+  }
+  async prime(): Promise<FleetSnapshot | null> {
+    if (!this.primed) {
+      this.primed = true;
+      this.sig = await this.signature();
+      this.snap = await loadSnapshot(this.cachePath);
+      this.json = this.snap === null ? null : JSON.stringify(this.snap.sessions);
+    }
+    return this.snap;
+  }
+  /** The tick's one `stat`: reload when the file is no longer the one this writer last wrote or loaded. */
+  async refresh(): Promise<FleetSnapshot | null> {
+    if (this.primed && (await this.signature()) !== this.sig) this.primed = false;
+    return this.prime();
+  }
+  last(): FleetSnapshot | null { return this.snap; }
+  /** A tick skipped its write: forget what was last written, so the next clean tick writes. */
+  skipped(): void { this.json = null; }
+  async writeIfChanged(sessions: FleetSession[], json: string = JSON.stringify(sessions)): Promise<'written' | 'unchanged'> {
+    await this.prime();
+    if (json === this.json) return 'unchanged';
+    await saveSnapshot(sessions, this.cachePath);
+    this.snap = { sessions, savedAt: Date.now() };
+    this.json = json;
+    this.sig = await this.signature();
+    return 'written';
+  }
+}
+
+/** What one tick's snapshot decision did. `degraded` and `shrink-skipped` carry the line to warn once per episode. */
+export type SnapshotOutcome =
+  | { kind: 'written' | 'unchanged' }
+  | { kind: 'degraded'; warn: string }
+  | { kind: 'shrink-skipped'; warn: string };
+
+/** Which skip episodes were already reported (`snapshotNotice` is the latch). */
+export interface SnapshotLatches { degraded: boolean; skipped: boolean }
+
+// The rationale below moved here with the decision from `FleetWatcher.tick` (unchanged text):
+// C0.4-FOLLOWUP (blocking review findings 1/2): a bare length
+// comparison cannot tell "this tick's read was partial" apart from
+// "the fleet is genuinely smaller now" — and the second one is the
+// ROUTINE case, not the rare one: `ccd`'s `_reg_purge` unlinks a
+// session's whole registry entry from `cmd_ws_rm` (session rm),
+// `ws-reap`, and `ws-gc --prune` alike. Comparing lengths ALONE turns
+// every purge into a permanent high-water mark: once the fleet drops
+// below it, `sessions.length < prior.sessions.length` stays true on
+// every later tick FOREVER, even fully healthy ones, and the cache —
+// every field of every surviving session included — freezes at the
+// instant of the purge and never updates again. Silently: nothing
+// failed loudly enough to log.
+//
+// The escape hatch is the same evidence `readRegistry`'s own
+// hold-reconfirm already trusts (registry.ts): `_reg_purge` removes
+// the id's `.uuid` too, so a GENUINE purge is a directory listing that
+// no longer names `<id>.uuid` at all. A FAILED field read, by
+// contrast, leaves `.uuid` (and the id's other files) sitting right
+// there in the listing — only the bytes behind one of them came back
+// null. So: when this tick assembled fewer sessions than the prior
+// snapshot, list the registry directory fresh and check every id that
+// dropped out against it. The write is allowed only when EVERY
+// missing id is confirmed gone from that listing — one still-listed
+// id is enough to treat the whole tick as a partial read and keep the
+// prior snapshot, exactly as the original guard intended for that
+// case. A failed (or absent) confirmation listing itself proves
+// nothing either way, so it fails shut the same way.
+// Task 2: the shrink guard above keys ONLY on `sessions.length`,
+// and a degraded row survives length unchanged — `assembleFleet`
+// still emits one `FleetSession` per readable-or-degraded record,
+// it just carries a non-empty `unmeasured`. So a 24-row assembly
+// with 3 degraded rows sails straight through
+// `sessions.length >= prior.sessions.length` and would be
+// persisted as last-known-good: `status` frozen at a guessed
+// default, `branch`/`workdir` reading stale or empty for reasons
+// that have nothing to do with the session's real state. The
+// snapshot's whole purpose is degraded-mode serving (`/api/fleet`
+// ships it, unconditionally `stale: true`, through a REAL
+// fleet-host outage) — persisting a guess as THAT snapshot defeats
+// the one thing it exists for at the exact moment it matters.
+// Same warn-once-per-episode discipline as the shrink guard below,
+// on its own flag (`snapshotWriteSkippedDegradedWarned`) so the two
+// episodes can each report once without silencing the other.
+// Spec §2.3: a REFUSED id (not a registry id) is never assembled, so a
+// snapshot an older build wrote may still carry it while its `.uuid`
+// stays listed. Its absence from `sessions` is not a partial read and
+// never heals, so it counts as purged — or one stray file would freeze
+// every snapshot write for as long as it stands.
+/**
+ * The tick's snapshot decision (moved from `FleetWatcher.tick`; the rules are unchanged): no write while a row carries
+ * an unmeasured identity field; a snapshot smaller than the last is written only when every missing id is really gone
+ * from the registry listing (`listRegistry`; a refused id, `!isRegistryId`, counts as purged); otherwise written when
+ * the JSON changed.
+ */
+export async function persistFleetSnapshot(
+  writer: SnapshotWriter,
+  sessions: FleetSession[],
+  listRegistry: () => Promise<readonly string[] | null>,
+  isRegistryId: (id: string) => boolean,
+  json?: string,
+): Promise<SnapshotOutcome> {
+  const degraded = sessions.filter((s) => s.unmeasured.length > 0);
+  if (degraded.length > 0) {
+    writer.skipped();
+    return { kind: 'degraded', warn: `ccrc-server: snapshot write skipped — ${degraded.length}/${sessions.length} assembled sessions carry an unmeasured identity field this tick (${degraded.map((s) => s.id).join(', ')}); the cache would otherwise persist a guess as last-known-good` };
+  }
+  const prior = await writer.refresh();
+  if (prior !== null && sessions.length < prior.sessions.length) {
+    const surviving = new Set(sessions.map((s) => s.id));
+    const missingIds = prior.sessions.map((s) => s.id).filter((id) => !surviving.has(id));
+    const names = await listRegistry();
+    // Spec §2.3: a REFUSED id is never assembled, so a snapshot an older build wrote may still carry it while its `.uuid`
+    // stays listed; its absence is not a partial read and never heals, so it counts as purged.
+    const allGenuinelyPurged = names !== null && missingIds.every((id) => !isRegistryId(id) || !names.includes(`${id}.uuid`));
+    if (!allGenuinelyPurged) {
+      writer.skipped();
+      return { kind: 'shrink-skipped', warn: `ccrc-server: snapshot write skipped — this tick assembled ${sessions.length}/${prior.sessions.length} of the prior snapshot's sessions and at least one missing id is still listed in the registry (a read failure, not a confirmed purge); cache stays at the prior size until that clears` };
+    }
+  }
+  return { kind: await writer.writeIfChanged(sessions, json) };
+}
+
+/** The warn-once-per-episode latches of the two skips, each on its own flag so one cannot silence the other. */
+export function snapshotNotice(prev: SnapshotLatches, o: SnapshotOutcome): { latches: SnapshotLatches; warn: string | null } {
+  if (o.kind === 'degraded') return { latches: { ...prev, degraded: true }, warn: prev.degraded ? null : o.warn };
+  if (o.kind === 'shrink-skipped') return { latches: { degraded: false, skipped: true }, warn: prev.skipped ? null : o.warn };
+  return { latches: { degraded: false, skipped: false }, warn: null };
 }

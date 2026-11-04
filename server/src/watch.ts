@@ -18,7 +18,7 @@ import {
 import type { CcdResult, WatcherCoordPort } from './coord/ports.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
-import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
+import { defaultCachePath, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, EXPIRE_CHILD_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
@@ -1182,6 +1182,7 @@ export class FleetWatcher {
    *  restart doesn't notify for every already-pending dialog / idle session. */
   private primed = false;
   private readonly cachePath: string;
+  private readonly snapshotWriter: SnapshotWriter;
   /** The sixth lane's transcript memo (§5.4) — ONE per watcher, shared across
    *  rows, keyed per `(configDir, uuid, dir)`. This lane resolves per eligible
    *  row on a 10 s clock; without the memo, every row with no transcript at its
@@ -1432,6 +1433,7 @@ export class FleetWatcher {
       projectOf: (childId) => this.lastFleet?.find((f) => f.id === childId)?.project ?? '',
     } });
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
+    this.snapshotWriter = new SnapshotWriter(this.cachePath);
     this.transcripts = new TranscriptResolver(deps.io);
     this.headsSettled = new Promise<void>((resolve) => { this.settleHeads = resolve; });
     // The collector lane's start (spec §5.10): its act hold-off counts from here, on the lane's monotonic clock.
@@ -2904,81 +2906,14 @@ export class FleetWatcher {
         // class's own docstring already states above ("a stretch of
         // empty/partial reads never clobbers the last known good snapshot").
         //
-        // C0.4-FOLLOWUP (blocking review findings 1/2): a bare length
-        // comparison cannot tell "this tick's read was partial" apart from
-        // "the fleet is genuinely smaller now" — and the second one is the
-        // ROUTINE case, not the rare one: `ccd`'s `_reg_purge` unlinks a
-        // session's whole registry entry from `cmd_ws_rm` (session rm),
-        // `ws-reap`, and `ws-gc --prune` alike. Comparing lengths ALONE turns
-        // every purge into a permanent high-water mark: once the fleet drops
-        // below it, `sessions.length < prior.sessions.length` stays true on
-        // every later tick FOREVER, even fully healthy ones, and the cache —
-        // every field of every surviving session included — freezes at the
-        // instant of the purge and never updates again. Silently: nothing
-        // failed loudly enough to log.
-        //
-        // The escape hatch is the same evidence `readRegistry`'s own
-        // hold-reconfirm already trusts (registry.ts): `_reg_purge` removes
-        // the id's `.uuid` too, so a GENUINE purge is a directory listing that
-        // no longer names `<id>.uuid` at all. A FAILED field read, by
-        // contrast, leaves `.uuid` (and the id's other files) sitting right
-        // there in the listing — only the bytes behind one of them came back
-        // null. So: when this tick assembled fewer sessions than the prior
-        // snapshot, list the registry directory fresh and check every id that
-        // dropped out against it. The write is allowed only when EVERY
-        // missing id is confirmed gone from that listing — one still-listed
-        // id is enough to treat the whole tick as a partial read and keep the
-        // prior snapshot, exactly as the original guard intended for that
-        // case. A failed (or absent) confirmation listing itself proves
-        // nothing either way, so it fails shut the same way.
+        // The snapshot decision (skip rules, shrink check against the in-memory last snapshot, write on change) lives in
+        // `persistFleetSnapshot` (fleetstate.ts), with the rationale that used to sit here.
         try {
-          // Task 2: the shrink guard above keys ONLY on `sessions.length`,
-          // and a degraded row survives length unchanged — `assembleFleet`
-          // still emits one `FleetSession` per readable-or-degraded record,
-          // it just carries a non-empty `unmeasured`. So a 24-row assembly
-          // with 3 degraded rows sails straight through
-          // `sessions.length >= prior.sessions.length` and would be
-          // persisted as last-known-good: `status` frozen at a guessed
-          // default, `branch`/`workdir` reading stale or empty for reasons
-          // that have nothing to do with the session's real state. The
-          // snapshot's whole purpose is degraded-mode serving (`/api/fleet`
-          // ships it, unconditionally `stale: true`, through a REAL
-          // fleet-host outage) — persisting a guess as THAT snapshot defeats
-          // the one thing it exists for at the exact moment it matters.
-          // Same warn-once-per-episode discipline as the shrink guard below,
-          // on its own flag (`snapshotWriteSkippedDegradedWarned`) so the two
-          // episodes can each report once without silencing the other.
-          const degraded = sessions.filter((s) => s.unmeasured.length > 0);
-          if (degraded.length > 0) {
-            if (!this.snapshotWriteSkippedDegradedWarned) {
-              this.snapshotWriteSkippedDegradedWarned = true;
-              console.warn(`ccrc-server: snapshot write skipped — ${degraded.length}/${sessions.length} assembled sessions carry an unmeasured identity field this tick (${degraded.map((s) => s.id).join(', ')}); the cache would otherwise persist a guess as last-known-good`);
-            }
-          } else {
-            this.snapshotWriteSkippedDegradedWarned = false;
-            const prior = await loadSnapshot(this.cachePath);
-            if (prior === null || sessions.length >= prior.sessions.length) {
-              await saveSnapshot(sessions, this.cachePath);
-              this.snapshotWriteSkippedWarned = false;
-            } else {
-              const survivingIds = new Set(sessions.map((s) => s.id));
-              const missingIds = prior.sessions.map((s) => s.id).filter((id) => !survivingIds.has(id));
-              const names = await this.deps.io.readdir(this.deps.cfg.registryDir);
-              // Spec §2.3: a REFUSED id (not a registry id) is never assembled, so a
-              // snapshot an older build wrote may still carry it while its `.uuid`
-              // stays listed. Its absence from `sessions` is not a partial read and
-              // never heals, so it counts as purged — or one stray file would freeze
-              // every snapshot write for as long as it stands.
-              const allGenuinelyPurged = names !== null && missingIds.every((id) => !isRegistryId(id) || !names.includes(`${id}.uuid`));
-              if (allGenuinelyPurged) {
-                await saveSnapshot(sessions, this.cachePath);
-                this.snapshotWriteSkippedWarned = false;
-              } else if (!this.snapshotWriteSkippedWarned) {
-                this.snapshotWriteSkippedWarned = true;
-                console.warn(`ccrc-server: snapshot write skipped — this tick assembled ${sessions.length}/${prior.sessions.length} of the prior snapshot's sessions and at least one missing id is still listed in the registry (a read failure, not a confirmed purge); cache stays at the prior size until that clears`);
-              }
-            }
-          }
+          const outcome = await persistFleetSnapshot(this.snapshotWriter, sessions, () => this.deps.io.readdir(this.deps.cfg.registryDir), isRegistryId, json);
+          const note = snapshotNotice({ degraded: this.snapshotWriteSkippedDegradedWarned, skipped: this.snapshotWriteSkippedWarned }, outcome);
+          this.snapshotWriteSkippedDegradedWarned = note.latches.degraded;
+          this.snapshotWriteSkippedWarned = note.latches.skipped;
+          if (note.warn !== null) console.warn(note.warn);
         } catch { /* best-effort cache — never blocks the poll */ }
       }
       // Independent of the `fleet` diff below: runs change on a different
