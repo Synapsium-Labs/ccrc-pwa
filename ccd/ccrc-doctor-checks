@@ -11226,8 +11226,8 @@ _check_carry-copies() {
     return 2
   fi
   thr="$KNOB"
-  if ! [[ "$thr" =~ ^[123456789][0123456789]{0,17}$ ]]; then
-    _dr_warn carry-copies "CCRC_CARRY_COPY_WARN_BYTES must be a whole number of bytes from 1 to 18 digits — got '$thr' in ~/.ccrc/ccrc.env, so neither figure is judged" \
+  if ! _carry_warn_bytes_ok "$thr"; then
+    _dr_warn carry-copies "CCRC_CARRY_COPY_WARN_BYTES must be $(_carry_warn_bytes_says) — got '$thr' in ~/.ccrc/ccrc.env, so neither figure is judged" \
       "set CCRC_CARRY_COPY_WARN_BYTES=<bytes> in ~/.ccrc/ccrc.env (default 10737418240, 10 GiB), or remove the line"
     return 2
   fi

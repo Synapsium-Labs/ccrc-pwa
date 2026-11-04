@@ -28766,6 +28766,14 @@ _usage_days_ok() {
 _usage_days_says() {
   printf '%s' 'a whole number from 1 to 999'
 }
+# `_carry_warn_bytes_ok` is the carry-copies bound's shape, for ccd/ccrc-doctor-checks, which ccrc sources: 1 to 18 digits,
+# no lead zero, so the figure fits bash's 64-bit arithmetic. It is not in the generated library.
+_carry_warn_bytes_ok() {
+  [[ "$1" =~ ^[123456789][0123456789]{0,17}$ ]]
+}
+_carry_warn_bytes_says() {
+  printf '%s' 'a whole number of bytes from 1 to 18 digits'
+}
 _usage_test_paragraph() {
   printf '\n%s' \
     '  test      run one test or typecheck inside ccrctests.slice (its memory' \

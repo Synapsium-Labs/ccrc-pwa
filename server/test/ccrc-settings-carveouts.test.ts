@@ -339,3 +339,16 @@ describe('_usage_days_ok and _usage_days_says live in ccd/ccrc', () => {
     expect(sourced(boxWith('ccrc-carve-days-s-', null), '_usage_days_says').stdout).toBe('a whole number from 1 to 999');
   });
 });
+
+// ── W2: the carry-copies bound's check, by direct calls on a sourced ccd/ccrc (D-7906) ─────────────────────────────────
+const CARRY_ROWS: [string, number][] = [
+  ['1', 0], ['9'.repeat(18), 0], ['0', 1], ['0123', 1], ['9'.repeat(19), 1], ['10G', 1],
+];
+describe('_carry_warn_bytes_ok and _carry_warn_bytes_says live in ccd/ccrc', () => {
+  it.each(CARRY_ROWS)('%j answers rc %d', (v, rc) => {
+    expect(sourced(boxWith('ccrc-carve-carry-', null), '_carry_warn_bytes_ok "$CV"; echo "rc $?"', { CV: v }).stdout.trim()).toBe(`rc ${rc}`);
+  });
+  it('the words, with no newline', () => {
+    expect(sourced(boxWith('ccrc-carve-carry-s-', null), '_carry_warn_bytes_says').stdout).toBe('a whole number of bytes from 1 to 18 digits');
+  });
+});
