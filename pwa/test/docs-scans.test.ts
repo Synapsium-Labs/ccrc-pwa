@@ -1377,10 +1377,13 @@ describe('clause W5h-b, M4.H23: what the retirement of part 1\'s highlight bound
     const ours = HLJS.highlight(src, { language: 'xml', ignoreIllegals: true }).value;
     expect(ours).toMatch(/hljs-tag/);
     expect(ours).not.toMatch(SUB);
+    expect(ours).not.toMatch(/class="language-/);
     const stock = hljs.newInstance();
     stock.registerLanguage('xml', stockXml);
     stock.registerLanguage('javascript', javascript);
     stock.registerLanguage('css', css);
-    expect(stock.highlight(src, { language: 'xml', ignoreIllegals: true }).value).toMatch(SUB);
+    const control = stock.highlight(src, { language: 'xml', ignoreIllegals: true }).value;
+    expect(control).toMatch(SUB);
+    expect(control).toMatch(/class="language-javascript"/);
   });
 });

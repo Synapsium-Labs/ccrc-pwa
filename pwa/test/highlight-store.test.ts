@@ -687,6 +687,7 @@ describe('L3-1: the worker-time ceiling counts a run of back-to-back jobs (the r
     const fit = Math.floor(HIGHLIGHT_PAGE_WORKER_MS / JOB_MS);
     const left = HIGHLIGHT_PAGE_WORKER_MS - fit * JOB_MS;
     expect(left).toBeGreaterThan(0);
+    expect(left + 50).toBeLessThan(HIGHLIGHT_BLOCK_DEADLINE_MS);
     const clock = fakeClock();
     const worker = new Worker();
     const highlighter = createHighlighter({ spawn: () => worker, setTimer: clock.setTimer, clearTimer: clock.clearTimer });
