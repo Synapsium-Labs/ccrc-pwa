@@ -222,7 +222,8 @@ import type { MoveFeedRecord } from './update/dispatch.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { LaneRunner } from './laneRunner.js';
-import { decideParked, decideRecipientAbsent, decideReplayCeiling, decideSendFailure, decideSessionDead, decideTmuxUnknown, MAIL_ARMED_HOLD_MS, MAIL_PARK_PROBE_MS, MAIL_PARK_RETRY_MS, type SettleAction } from './coord/delivery.js';
+import { decideParked, decideRecipientAbsent, decideReplayCeiling, decideSendFailure, decideSessionDead, decideTmuxUnknown, MAIL_ARMED_HOLD_MS, MAIL_PARK_PROBE_MS, MAIL_PARK_RETRY_MS, parkNoticeSubject, type ParkNoticeWhat, type SettleAction } from './coord/delivery.js';
+import { revivable } from './coord/mailRevive.js';
 import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_MS, IDLE_NUDGE_SWEEP_MS, LC_SWEEP_MS, STALL_SWEEP_MS, PR_BACKOFF_MAX_MS, PR_SWEEP_MS, READINESS_SWEEP_MS, LANDING_RADAR_SWEEP_MS, type LaneName } from './laneSchedule.js';
 // THE TEMP-ROOT COLLECTOR'S LANE (child reclamation wave 9, spec §5.10). A block of its own, so no import line above
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
@@ -3352,13 +3353,14 @@ export class FleetWatcher {
    *  and the park's operator escalation (D-5838): one durable feed row, and a
    *  presence-gated push, tagged with the sender's session. */
   private pushSenderNotice(store: WatcherCoordPort, mailId: number, toId: string, why: string, tag: string,
-                           sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): void {
+                           sessionProjects: ReadonlyMap<string, string>, projects: Set<string>,
+                           head: 'blocked' | 'revived' = 'blocked'): void {
     const s = this.mailSender(store, mailId);
     if (s === null) return;
     this.pushOne({
       kind: 'mail', sessionId: s.senderId,
       project: sessionProjects.get(s.senderId) ?? '',
-      title: `✉ blocked › ${toId}`,
+      title: `✉ ${head} › ${toId}`,
       body: `${s.origin.subject}: ${why}`,
       runId: s.origin.runId,
       tag,
@@ -3465,7 +3467,7 @@ export class FleetWatcher {
    *  degrades it to nobody), and never the recipient itself. `queueSystemMail`
    *  dedupes an identical outstanding notice. */
   private tellParkedSender(store: WatcherCoordPort, mailId: number, toId: string,
-                           what: 'parked' | 'rejected', reason: string | null): void {
+                           what: ParkNoticeWhat, reason: string | null): void {
     const s = this.mailSender(store, mailId);
     if (s === null || s.senderId === toId) return;
     const subject = s.origin.subject.length > 80 ? `${s.origin.subject.slice(0, 79)}…` : s.origin.subject;
@@ -3476,7 +3478,7 @@ export class FleetWatcher {
       : `your "${subject}" to ${toId} was rejected after 24 h parked: ${words.why}. ` +
         'It was never delivered; send it again or act on it directly.';
     queueSystemMail(store, null, { fromId: 'operator', toId: s.senderId, runId: null, kind: 'status',
-      subject: `mail ${what}: ${subject}`, body });
+      subject: parkNoticeSubject(what, subject), body });
   }
 
   private pushOne(e: {
@@ -7545,6 +7547,25 @@ export class FleetWatcher {
     return mode;
   }
 
+  /** D-5914 (spec 2026-10-20 §3.1, #125): revive every lifecycle park whose recipient reads live this tick, and tell
+   *  each sender once. "Reads live" is `coord/mailRevive.ts#revivable` over the registry row as the park arm reads it
+   *  (`lifecycleInputFor(rec, false, now)`, the session-dead rung's own input), so a recipient the park would still
+   *  call dead is never revived and one it would hold is. Every row in `records` is listed and present by construction
+   *  (`readRegistryMeasured` drops an absent one). The store bounds the rest (`reviveParkedDeliveries`). */
+  private reviveParked(store: WatcherCoordPort, records: readonly SessionRecord[], now: number,
+                       sessionProjects: ReadonlyMap<string, string>, projects: Set<string>): void {
+    const liveIds = records
+      .filter((r) => revivable(lifecycleInputFor(r, false, now), { listed: true, registryPresent: true }))
+      .map((r) => r.id);
+    const { revived } = store.reviveParkedDeliveries(liveIds);
+    for (const r of revived) {
+      // Told once: the heir is minted once per parent (`HAS_HEIR_SQL`), and the tag names the parent.
+      this.pushSenderNotice(store, r.mailId, r.toId,
+        'its recipient is back, so the parked mail is queued to it again', `mail-revived-${r.from}`,
+        sessionProjects, projects, 'revived');
+    }
+  }
+
   /** The bookkeeping maps keep only what is still outstanding (parked probes, the busy-shadow memory). */
   private pruneMailMemory(store: WatcherCoordPort, parkedRows: readonly { id: number }[],
                           outstanding: readonly { id: number }[]): void {
@@ -7714,6 +7735,17 @@ export class FleetWatcher {
     if (listing === null || readSwitches(listing)[MAIL_DISABLED_MARKER] === 'set') return;
     const mode = this.applyMailMode(store, listing, now);
 
+    // D-5914 (#125): the sweep's first act is the REVIVE. A delivery rejected because its recipient's lifecycle read
+    // dead (or a legacy live-recipient park) gets one heir once that recipient reads live in this tick's listing, so
+    // the heir is in the due set read below. It reads the tick's model (`fleetFor`), the same read the due loop uses;
+    // an unlistable registry fails shut here, as it does there.
+    const registryRead = await this.fleetFor(fleet);
+    if (!registryRead.listed) return;
+    const records = registryRead.records;
+    const projects = new Set(records.map((r) => r.project));
+    const sessionProjects = new Map(records.map((r) => [r.id, r.project] as const));
+    this.reviveParked(store, records, now, sessionProjects, projects);
+
     const unacked = store.deliveredUnacked();
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);
     // D-5838: every outstanding PARKED row, due or not — probed, escalated and
@@ -7742,16 +7774,13 @@ export class FleetWatcher {
     // silently emptying `records` and letting every row downstream mistake
     // "we could not read the fleet this pass" for "this recipient is gone".
     // A refused recipient is held `registry-unmeasurable` below, never parked (it holds).
-    const registryRead = await this.fleetFor(fleet);
-    if (!registryRead.listed) return;
-    const records = registryRead.records;
+    // (The registry read itself moved up to the revive, D-5914: one read per pass, refused there.)
     const uuidByToId = new Map(records.map((r) => [r.id, r.uuid] as const));
     // For `pushOne`'s project decoration (Task 409's sender-side notice), from
-    // the registry read this method already has. A sender the registry does
-    // not list decorates to '' — and `pushOne` degrades an empty project to no
-    // decoration at all, never to a dangling separator.
-    const projects = new Set(records.map((r) => r.project));
-    const sessionProjects = new Map(records.map((r) => [r.id, r.project] as const));
+    // the registry read this method already has (`projects`, `sessionProjects`
+    // above). A sender the registry does not list decorates to '' — and
+    // `pushOne` degrades an empty project to no decoration at all, never to a
+    // dangling separator.
     // One hookstate read per SESSION this sweep, shared between the edge
     // sample below and the gate's own read further down — both use this same
     // `now`, so a cached answer is exactly as fresh as a second read would

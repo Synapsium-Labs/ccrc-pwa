@@ -6618,7 +6618,9 @@ export interface RunHealth {
    *  that has already been handled.
    *
    *  NOT the parked STATE below: this count is the older sense of the word, a
-   *  delivery the lane gave up on and rejected, and it stays exactly that. */
+   *  delivery the lane gave up on and rejected, and it stays exactly that. A park a
+   *  later delivery revives (D-5914) is not counted: its heir carries the message
+   *  now, in `mailOutstanding` until it is acked, so one message is one count. */
   readonly mailParked: number;
   /** Deliveries of this run's mail still OUTSTANDING and PARKED (D-5838,
    *  #754; a field of its own, not a second sense of `mailParked`, D-5839): the recipient is alive, its input box would not take the
@@ -6876,8 +6878,14 @@ export interface RunSummary {
   dispatchedAt: number | null;
   closedAt: number | null;
   handoffCommit: string | null;
+  /** The run's work items as the COORDINATOR has settled them (`itemTally`): `done` counts items acked `done`, which
+   *  the coordinator does only after a verified advance, so a wave in progress reads `0/N` by design however far its
+   *  branch has moved (spec 2026-10-20 §3.3, D-5914). It is not a measure of branch progress or of the worker's life;
+   *  the branch fingerprint the coordinator re-measures is. */
   items: RunItemTally;
-  /** Unacked mail addressed to this run's session. */
+  /** Unacked mail addressed to this run's session: every outstanding delivery, plus every abandoned park on the open run
+   *  that no later delivery revives (`ABANDONED_PARK_SQL`, `coord/store.ts`). A revived park is counted once, as its
+   *  outstanding heir, and not at all once that heir is acked (D-5914). */
   unreadMail: number;
 
   /**
