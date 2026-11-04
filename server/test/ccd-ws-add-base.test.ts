@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ccdSource, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness } from './ccdWsHelpers.js';
 import { readJournal } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -260,11 +260,12 @@ const BASE_ARM = /^\s+--base(=\*)?\)\s/;
 
 describe('an older ccd binds a leading --base as the project and refuses (D-6164)', () => {
   it('the --base arm is exactly two lines of cmd_ws_add, so W5-B8 strips the whole of it', () => {
-    const src = fs.readFileSync(CCD, 'utf8').split('\n');
+    // A scan, so it reads the program (`ccdSource()`, the libraries spliced back), not the file alone.
+    const src = ccdSource().split('\n');
     const body = src.slice(src.findIndex((l) => l.startsWith('cmd_ws_add() {')));
     const fnEnd = body.findIndex((l) => l === '}');
     expect(body.slice(0, fnEnd).filter((l) => BASE_ARM.test(l))).toHaveLength(2);
-    expect(src.filter((l) => BASE_ARM.test(l)), 'and nowhere else in ccd/ccd').toHaveLength(2);
+    expect(src.filter((l) => BASE_ARM.test(l)), 'and nowhere else in ccd or its libraries').toHaveLength(2);
   });
 
   it('W5-B8: a ccd copy with the --base arm removed refuses the leading flag, with nothing created', () => {

@@ -24,16 +24,10 @@ plan and the programme ledger. This PR edits no existing plan and not the progra
 
 ## Deviations found
 
-- **D-7980** — `startpoint-is-a-declared-meas-key` (Task 5.3.1 rule 5, D-7827): the plan's PR3 file list gains `shared/api.ts` (two
-  lines), `server/src/coord/journalparse.ts` and `server/test/journalparse.test.ts`. Rule 5 puts `meas.startpoint` on the create row,
-  and `ccd-lifecycle-contain.test.ts` checks every `meas.<key>` ccd emits against `LIFECYCLE_MEAS_KEYS`, which is derived from
-  `LifecycleMeas`; `reviveMeas` returns that interface as a literal, so the compiler requires the new member there too. Without them
-  the key would be dropped at ingest with nothing saying so, the failure mode `meas.unremoved` once shipped with. The member is
-  `string | null` and read by `reviveMeas` alone: a line from a ccd that does not write it reads null (the skew row in
-  `journalparse.test.ts`, on the `childRun` precedent of D-7278). No `FLEET_PROTO` change.
-- **D-7981** — `base-object-type-not-peel` (Task 5.3.1 rule 3): the object check asks the object's own type,
-  `git cat-file -t <id>` equal to `commit`, rather than `git cat-file -e "<id>^{commit}"`. The peel accepts an annotated tag's id and
-  `git worktree add` would then start the tree at the tagged commit, a different id from the one named and the one journalled as
-  `meas.startpoint`; Review Focus (3) asks that the start point be a full commit id. Row W5-B4c pins the refusal of a tag id. The
-  check still runs under `_ws_reclaim_contained`, against the main checkout, before the disk floor, the placement read, the add lock,
-  the worktree and the row.
+D-7980 and D-7981 are defined in the plan's "Deviations found" (the coordinator's ruling of 2026-11-04, on wave 4's D-7869
+precedent: deviation-refs' floor case reads definitions from top-level plans only). In short:
+
+- D-7980 (`startpoint-is-a-declared-meas-key`): the new key reaches `LifecycleMeas` through `LIFECYCLE_MEAS_KEYS` and `reviveMeas`,
+  so PR3 also edits `shared/api.ts` (two lines, by consent), `server/src/coord/journalparse.ts` and its test, with a skew row.
+- D-7981 (`base-object-type-not-peel`): the object check asks the object's type, not a peel, so an annotated tag's id is refused
+  (W5-B4c, mutant W5-BM8).
