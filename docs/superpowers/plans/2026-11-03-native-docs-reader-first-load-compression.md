@@ -878,7 +878,7 @@ Each task had its own reviewer (sonnet on Tasks 1 and 2, opus on Task 3), and ea
 |---|---|
 | `pwa/test/compress-assets.test.ts` | RED: failed to load; GREEN: 8 passed (8) |
 | `pwa/test/reader-built.test.ts` | BASE 6 passed; RED 2 failed, 7 passed (9); GREEN 9 passed (9) |
-| `server/test/pwa-static-cache.test.ts` | BASE 6 passed; RED 5 failed, 7 passed (12); GREEN 12 passed (12) |
+| `server/test/pwa-static-cache.test.ts` | BASE 6 passed; RED 5 failed, 7 passed (12); GREEN 12 passed (12); after fix round 1's three cases, 15 passed (15) |
 | pwa, the other 412 files, in four pieces | 12 600 passed, 3 skipped, 0 failed |
 | `fonts-built`, `markdown-worker-built` (end state) | 4 passed, 9 passed (unchanged from BASE) |
 | the config's readers (`browser-leg`, `sw-denylist`, `markdown-runner`, `shadcn-alias`) | 109 passed |
@@ -964,8 +964,8 @@ Measured at the end state, in the workspace, one row at a time. Each row was res
 | FLC-T2-M1 | 2 failed | as predicted |
 | FLC-T2-M2 | 2 failed | as predicted (the copies were on disk when the service worker was generated) |
 | FLC-T2-M3 | 1 failed | as predicted |
-| FLC-T3-M1 | 5 failed | as predicted |
-| FLC-T3-M2 | 3 failed | as predicted |
+| FLC-T3-M1 | 5 failed; 8 after fix round 1 | as predicted at Task 3; the fix round's three cases (q-value order, a refused coding, a shell copy would be sent) red too |
+| FLC-T3-M2 | 3 failed; 4 after fix round 1 | as predicted at Task 3; the fix round's q-value case asserts a copy's cache policy too |
 
 ```json
 [
@@ -976,8 +976,8 @@ Measured at the end state, in the workspace, one row at a time. Each row was res
   {"id": "FLC-T2-M1", "spec": "(a)", "pkg": "pwa", "file": "vite.config.ts", "old": "precompressAssets(),", "new": "", "tests": ["test/reader-built.test.ts"], "red": "2 failed: the entry script, its stylesheet and the Mermaid chunk each have a .br and a .gz; every copy sits beside"},
   {"id": "FLC-T2-M2", "spec": "(g)", "pkg": "pwa", "file": "vite.config.ts", "old": "globPatterns: ['**/*.{js,css,html,png,svg,webmanifest,woff2}'],", "new": "globPatterns: ['**/*.{js,css,html,png,svg,webmanifest,woff2,br,gz}'],", "tests": ["test/reader-built.test.ts"], "red": "2 failed: the service worker precaches no copy; sw.js precaches no file that carries the Mermaid asset"},
   {"id": "FLC-T2-M3", "spec": "(b)", "pkg": "pwa", "file": "vite.config.ts", "old": "const files = compressAssets(path.join(output.dir, assetsDir));", "new": "const files = compressAssets(output.dir);", "tests": ["test/reader-built.test.ts"], "red": "1 failed: every copy sits beside the script, stylesheet or SVG it encodes, under assets/ only; one of 1 KiB or more has both"},
-  {"id": "FLC-T3-M1", "spec": "(e)", "pkg": "server", "file": "src/pwaStatic.ts", "old": "preCompressed: true,", "new": "", "tests": ["test/pwa-static-cache.test.ts"], "red": "5 failed: pwaStaticOptions turns on preCompressed; a browser that takes br gets the .br; a browser that takes gzip and not br gets the .gz; a browser that takes neither gets the file itself; a copy the build left out is skipped"},
-  {"id": "FLC-T3-M2", "spec": "(e)", "pkg": "server", "file": "src/pwaStatic.ts", "old": "reply.header('cache-control', file.startsWith(assets) ? PWA_ASSET_CACHE : PWA_SHELL_CACHE);", "new": "reply.header('cache-control', file.startsWith(assets) && !/\\.(?:br|gz)$/.test(file) ? PWA_ASSET_CACHE : PWA_SHELL_CACHE);", "tests": ["test/pwa-static-cache.test.ts"], "red": "3 failed: a browser that takes br gets the .br; a browser that takes gzip and not br gets the .gz; a copy the build left out is skipped"}
+  {"id": "FLC-T3-M1", "spec": "(e)", "pkg": "server", "file": "src/pwaStatic.ts", "old": "preCompressed: true,", "new": "", "tests": ["test/pwa-static-cache.test.ts"], "red": "8 failed: pwaStaticOptions turns on preCompressed; a browser that takes br gets the .br; a browser that takes gzip and not br gets the .gz; a browser that takes neither gets the file itself; a copy the build left out is skipped; q-values order the codings; a refused coding is never sent; a shell copy, if one were on disk, WOULD be sent"},
+  {"id": "FLC-T3-M2", "spec": "(e)", "pkg": "server", "file": "src/pwaStatic.ts", "old": "reply.header('cache-control', file.startsWith(assets) ? PWA_ASSET_CACHE : PWA_SHELL_CACHE);", "new": "reply.header('cache-control', file.startsWith(assets) && !/\\.(?:br|gz)$/.test(file) ? PWA_ASSET_CACHE : PWA_SHELL_CACHE);", "tests": ["test/pwa-static-cache.test.ts"], "red": "4 failed: a browser that takes br gets the .br; a browser that takes gzip and not br gets the .gz; a copy the build left out is skipped; q-values order the codings"}
 ]
 ```
 
@@ -988,6 +988,13 @@ Measured at the end state, in the workspace, one row at a time. Each row was res
 - F3: the server shell case is restated as recording the build's tree (no shell copy); a new case pins that a shell copy, if present, would be sent; refinement (f) now says the guarantee is build-side (FLC-T1-M2, FLC-T2-M3), by the coordinator's ruling.
 - F4: refinement (h) states the floating release Node and the 4.2 MB.
 - F5: Results counts, units and the build-time reading corrected.
+- The re-review of the fix range found every item addressed. Its wording minor on the server comment (a missing copy falls through to the next accepted coding before the file) is fixed in its own commit.
+
+Measured after the fix round, each through `ccrc test`:
+- pwa: `TSC-OK`; `compress-assets` 8 passed; `contrast` 314 passed, alone; the other 412 files in four pieces, 12 600 passed and 3 skipped; `reader-built` 9, `fonts-built` 4 and `markdown-worker-built` 9 passed, each alone, with Durations of 10.44 s, 10.22 s and 10.30 s.
+- browser: `browser/reader-frame.browser.test.ts`, 24 passed, with `browser leg: built the PWA once in 13217 ms`.
+- server: `SERVER-TSC-OK`; `pwa-static-cache` 15, `auth-gate` 249, `rings/fastify-l4` 5, `ccrc-versioned-audit` 10, `ccrc-settings-census` 22 and `topology-clean` 60 passed, each alone; `ci-reach-census`, `docs-parity`, `deviation-refs`, `dtbd`, `citations`, `anchors` and `typecheck-tests` passed, 141 cases.
+- Task 3's two rows again, in place, sha-restored: FLC-T3-M1 red 8 and FLC-T3-M2 red 4 (the table and fence below restate them). The other seven rows' files did not change.
 
 ### Named, without a number
 
