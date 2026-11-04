@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD, WS_ADD, ccdSource } from './ccdWsHelpers.js';
+import { CCD, WS_ADD, ccdSource, ghContainedEnv } from './ccdWsHelpers.js';
 import { CCD_FUNCTION_DEF, bashCodeOf, ccdCallGraph, ccdFunctionDefinitions } from './consolidationCensus.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { writeField } from './worktreeIdentityFixture.js';
@@ -67,11 +67,13 @@ const padded = (n: number): string => line(`/${'a'.repeat(n - line('/').length)}
 const READ = (logical: string, id: string = ID): string =>
   `_ws_workdirid_read ${id} '${logical}'; echo "[rc=$?] $_WS_WDID_STATE|$_WS_WDID_IDENT|$_WS_WDID_PHYS|$_WS_WDID_WHY"`;
 const read = (logical: string = W(), id: string = ID): string => h.sh(READ(logical, id));
-/** `snippet` with ccd sourced, in the harness's own environment (`h.env()`, built by ghContainedEnv) and HOME, in a
- *  process group of its own that is killed whole at `ms`: for a case whose failure is a hang. */
+/** `snippet` with ccd sourced, in the harness's own environment (`h.env()`, with the poisons named here too, as every
+ *  bash spawn in a ccd suite must for the containment scan to read it) and HOME, in a process group of its own that is
+ *  killed whole at `ms`: for a case whose failure is a hang. */
 const timed = (snippet: string, ms: number) => spawnSyncGroup('bash',
   ['-c', 'ccd_t_src=$T4_CCD ccd_t_snippet=$T4_SNIPPET; unset T4_CCD T4_SNIPPET; source "$ccd_t_src"; eval "$ccd_t_snippet"'],
-  { cwd: h.home, encoding: 'utf8', timeout: ms, env: { ...h.env(), T4_CCD: CCD, T4_SNIPPET: snippet } });
+  { cwd: h.home, encoding: 'utf8', timeout: ms,
+    env: ghContainedEnv(h.home, { ...h.env(), T4_CCD: CCD, T4_SNIPPET: snippet }, { systemd: true, tmux: true, net: true }) });
 
 /** A workdir reached through a link: `link` -> `real` (returned resolved). */
 const linked = (): { link: string; real: string } => {

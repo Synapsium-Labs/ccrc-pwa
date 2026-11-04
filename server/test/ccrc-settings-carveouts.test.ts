@@ -17,6 +17,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { stubFn } from './ccdStub.js';
@@ -47,7 +48,7 @@ function sourced(home: string, script: string, extra: NodeJS.ProcessEnv = {}): R
   env['TMPDIR'] = join(home, 'tmp');
   Object.assign(env, extra);
   assertNoRealTool(env, home);
-  const r = spawnSync(BASH, ['-c', `. "$1"; ${script}`, 'ccrc-under-test', CCRC], { env, encoding: 'utf8', input: '', timeout: 60_000 });
+  const r = spawnSyncGroup(BASH, ['-c', `. "$1"; ${script}`, 'ccrc-under-test', CCRC], { env, encoding: 'utf8', input: '', timeout: 60_000 });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 

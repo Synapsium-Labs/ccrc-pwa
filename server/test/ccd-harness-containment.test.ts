@@ -270,7 +270,7 @@ describe('ghContainedEnv contains gh always, systemd only when asked', () => {
     // abstractions" bound on this fix: this exists to find the ACTUAL spawn
     // lines in THIS file, not to become a second scan.
     const spawnLines = src
-      .map((ln, i) => (/(?:execFileSync|spawnSync)\((?:'bash'|BASH)[,)]/.test(ln) ? i : -1))
+      .map((ln, i) => (/(?:execFileSync|spawnSync(?:Group)?)\((?:'bash'|BASH)[,)]/.test(ln) ? i : -1))
       .filter((i) => i >= 0);
     expect(spawnLines.length, 'no bash-spawn call site found in this file to check the marker against')
       .toBeGreaterThanOrEqual(2);

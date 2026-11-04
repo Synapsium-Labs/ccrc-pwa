@@ -10,11 +10,12 @@
 // and review 265 (F5) named the three shapes it misses. This file is that census, over both test trees.
 //
 // THE RULE, decided per call, never per file:
-//   * A SPAWN is a call of a spawn-family function as the file's imports spell it: `spawnSync`, `spawn`,
-//     `execFileSync`, `execFile` and `execSync` by their bare names; `exec` and every `as` alias when imported from
-//     child_process; `<ns>.<member>` for a namespace or default import of child_process; and node-pty's `spawn` by
-//     any of those spellings (comments, strings and regex literals skipped; the call's extent found by matching its
-//     parentheses). A member call on anything else (`re.exec(…)`) is never one.
+//   * A SPAWN is a call of a spawn-family function as the file's imports spell it: `spawnSync`, `spawnSyncGroup`,
+//     `spawn`, `execFileSync`, `execFile` and `execSync` by their bare names; `exec` and every `as` alias when imported
+//     from child_process; `<ns>.<member>` for a namespace or default import of child_process; node-pty's `spawn` by any
+//     of those spellings; and `spawnSyncGroup` by any of them too, imported from `spawnGroup.ts`, which is where
+//     `spawn-group-pin.test.ts` sends every timed shell spawn (#896) (comments, strings and regex literals skipped; the
+//     call's extent found by matching its parentheses). A member call on anything else (`re.exec(…)`) is never one.
 //   * It EXECUTES a script when its argument text names one: a literal path ending in the scripts' directory and
 //     name; a script name joined onto a binding of the scripts' directory inline (`join(SCRIPTS_DIR, 'ccrc')`); an
 //     identifier bound to one in that file (a `const`/`let` whose initialiser names the path, joins a script name onto
@@ -124,7 +125,7 @@ const SCRIPT_PATH = new RegExp(`${Q}${D}${Q}\\s*,\\s*${Q}${NAMES}${Q}\\s*\\)|\\b
 /** The scripts' DIRECTORY in an initialiser's text: a join/resolve whose last segment is `<D>`, or a literal ending
  *  `/<D>` (`updateRealBox.ts` builds `CCRC_SRC` as `join(CCD_DIR, 'ccrc')`). */
 const SCRIPT_DIR = new RegExp(`${Q}${D}${Q}\\s*\\)\\s*$|/${D}${Q}\\s*$`);
-const READS = /\b(?:readFileSync|readFile|read|execFileSync|spawnSync|execSync|spawn)\s*\(/;
+const READS = /\b(?:readFileSync|readFile|read|execFileSync|spawnSync|spawnSyncGroup|execSync|spawn)\s*\(/;
 /** A READ of a file's text: what makes a binding SLICED when it also names a script (D-5251). */
 const READS_TEXT = /\b(?:readFileSync|readFile|read)\s*\(/;
 /** A binding that can only BE a path: a `join`/`resolve` call, a template, another name, or an arrow returning one.
@@ -457,13 +458,17 @@ function importsOf(s: Src, exported: Map<string, Paths>): Paths {
   return out;
 }
 
-const FAMILY = ['spawnSync', 'spawn', 'execFileSync', 'execFile', 'execSync', 'exec'] as const;
+const FAMILY = ['spawnSync', 'spawnSyncGroup', 'spawn', 'execFileSync', 'execFile', 'execSync', 'exec'] as const;
 /** Their first argument is a command LINE, not a program. */
 const SHELL = new Set<string>(['execSync', 'exec']);
+/** Where a member's options sit when they are not its last argument: `spawnSyncGroup`'s fourth is `{ strays }`. */
+const OPTIONS_AT = new Map<string, number>([['spawnSyncGroup', 2]]);
 const CP = String.raw`['"](?:node:)?child_process['"]`;
+/** `spawnGroup.ts`, as a relative import names it from either test tree. */
+const GROUP = String.raw`['"]\.{1,2}/(?:[^'"]*/)?spawnGroup(?:\.js)?['"]`;
 /** The spellings that call a spawn in a file, each mapped to the member it is: the bare names (`exec` only when
  *  imported), every `as` alias of a child_process import, `<ns>.<member>` for a namespace or default import of
- *  child_process, and node-pty's `spawn` by any of those spellings. */
+ *  child_process, and node-pty's `spawn` and `spawnGroup.ts`'s `spawnSyncGroup` by any of those spellings. */
 function calleesOf(s: Src): Map<string, string> {
   const out = new Map<string, string>(FAMILY.filter((f) => f !== 'exec').map((f) => [f, f]));
   const named = (list: string, keep: (orig: string) => string | null): void => {
@@ -485,6 +490,12 @@ function calleesOf(s: Src): Map<string, string> {
   }
   for (const m of s.text.matchAll(/import\s+(?:\*\s*as\s+)?([A-Za-z_$][\w$]*)\s+from\s*['"]node-pty['"]/g)) {
     out.set(`${m[1]}.spawn`, 'pty.spawn');
+  }
+  for (const m of s.text.matchAll(new RegExp(String.raw`import\s*\{([^}]*)\}\s*from\s*${GROUP}`, 'g'))) {
+    named(m[1]!, (o) => (o === 'spawnSyncGroup' ? o : null));
+  }
+  for (const m of s.text.matchAll(new RegExp(String.raw`import\s+(?:\*\s*as\s+)?([A-Za-z_$][\w$]*)\s+from\s*${GROUP}`, 'g'))) {
+    out.set(`${m[1]}.spawnSyncGroup`, 'spawnSyncGroup');
   }
   return out;
 }
@@ -665,9 +676,14 @@ function isCallback(s: Src, a: number, b: number, bs: Binding[]): boolean {
 }
 /** The env of a spawn call: its last argument when it has two or more, else none. A trailing callback, inline or
  *  named, is not the options (`exec(cmd, cb)`, `execFile('bash', [s], cb)`): it is dropped first, so no options reads
- *  as no env (D-5256). */
-function envOf(s: Src, open: number, close: number, bs: Binding[]): Shape | null {
+ *  as no env (D-5256). A member in `OPTIONS_AT` reads the argument there instead. */
+function envOf(s: Src, open: number, close: number, bs: Binding[], member: string): Shape | null {
   let parts = partsOf(s.code, open, close);
+  const at = OPTIONS_AT.get(member);
+  if (at !== undefined) {
+    const o = parts[at];
+    return o ? optsEnv(s, o[0], o[1], bs, 0) : 'no env';
+  }
   if (parts.length >= 2 && isCallback(s, ...parts[parts.length - 1]!, bs)) parts = parts.slice(0, -1);
   if (parts.length < 2) return 'no env';
   const [a, b] = parts[parts.length - 1]!;
@@ -721,7 +737,7 @@ function analyse(srcs: Src[]): Census {
         kind: named && !reader ? 'script' : slice && !reader ? 'sliced' : null,
         prog: named ? prog : '',
         placed: !named || RUNNERS.has(prog) || reader || n.isScript(prog, m.index!) || scoped.includes(prog),
-        shape: envOf(s, open, close, bs), argText,
+        shape: envOf(s, open, close, bs, member), argText,
       });
     }
   }
@@ -767,6 +783,8 @@ const CORPUS: Src[] = [
     "import * as P from './paths.js';",
     "import { CCRC, SCRIPTS_DIR } from './paths.js';",
     "import { CCRC as C } from './paths.js';",
+    "import { spawnSyncGroup, spawnSyncGroup as grouped } from './spawnGroup.js';",
+    "import * as G from './spawnGroup.js';",
     "const SRC = path.join(SCRIPTS_DIR, 'ccrc');",
     "const text = readFileSync(CCRC, 'utf8');",
     'const base = { env: process.env };',
@@ -820,6 +838,27 @@ const CORPUS: Src[] = [
     // Review 574 (F2, F3): the directory-alias arm, and a `for … of` script variable used as the program.
     "const D2 = SCRIPTS_DIR; spawnSync('bash', [path.join(D2, 'ccrc')], { env: process.env }); // expect: script env: process.env",
     "for (const s3 of [CCRC]) spawnSync(s3, [], { env: process.env }); // expect: script env: process.env",
+    // #896: the spelling the pin sends every timed shell spawn to, in each way a file can name it. Its options are its
+    // third argument: a fourth `{ strays }` neither hides a bare env nor makes a contained one read as no env.
+    "spawnSyncGroup('bash', [CCRC], { env: process.env, timeout: 5 }); // expect: script env: process.env",
+    "spawnSyncGroup('bash', [CCRC], { encoding: 'utf8', timeout: 5 }); // expect: script no env",
+    "spawnSyncGroup(BASH, [CCRC], { env: { ...process.env, HOME: d } }); // expect: script { ...process.env } without a builder",
+    "grouped('bash', [CCRC], { env: process.env }); // expect: script env: process.env",
+    "G.spawnSyncGroup('bash', [CCRC], { env: process.env }); // expect: script env: process.env",
+    "spawnSyncGroup('bash', [CCRC], { env: process.env }, { strays: 'end' }); // expect: script env: process.env",
+    "spawnSyncGroup('bash', ['-c', text], { env: process.env }); // expect: sliced env: process.env",
+    "spawnSyncGroup('sh', [CCRC]); // expect: script no env | unplaced",
+    "spawnSyncGroup('bash', [CCRC], { env: ghContainedEnv(d), timeout: 5 });",
+    "spawnSyncGroup('bash', [CCRC], { env: ghContainedEnv(d) }, { strays: 'end' });",
+    "spawnSyncGroup('bash', ['-c', 'command -v curl'], { env: process.env });",
+    // A spawn's result is a READ, whichever spelling ran it: `g1` is no script binding, so this bare spawn is no hit.
+    "const g1 = `${spawnSyncGroup('bash', [CCRC], { env: ghContainedEnv(d) }).stdout}`; spawnSync('bash', ['-c', g1], { env: process.env });",
+  ]),
+  // #896: `spawnSyncGroup` is a bare name like `spawnSync`, so a file that reaches it through another module is read too.
+  fixture('fixture/test/reexport.test.ts', [
+    "import { spawnSyncGroup } from './runners.js';",
+    "import { CCRC } from './paths.js';",
+    "spawnSyncGroup('bash', [CCRC], { env: process.env }); // expect: script env: process.env",
   ]),
   // An imported script or directory name stays the import before a later, inner binding of the same name (D-5256).
   fixture('fixture/test/shadow.test.ts', [
