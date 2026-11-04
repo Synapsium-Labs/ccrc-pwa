@@ -350,6 +350,7 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(docsCss, '.docs-row'), ruleIn(docsCss, '.docs-fresh'), ruleIn(docsCss, '.docs-copy'),
       ruleIn(docsCss, '.docs-action'), ruleIn(docsCss, '.docs-filter'), ruleIn(docsCss, '.docs-nodocs > summary'),
       ruleIn(docsCss, '.btn-ghost.docs-banner-action'), ruleIn(docsCss, '.doc-img-link'),
+      ruleIn(docsCss, '.docs-more'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -1198,6 +1199,17 @@ describe('Export: .docs-export on .docs-action, and the export sheet’s Save an
     };
     render(<ExportSheet request={request} onClose={() => {}} load={() => Promise.reject(new TypeError('chunk'))} />);
     expect(await screen.findByRole('button', { name: EXPORT_TEXT.retry })).toHaveClass('min-h-tap');
+  });
+});
+
+// — the Docs reader's compact head (the phone-header plan of 2026-11-03): Page details, and Share and Export as the
+// row's icons. The floor half; the render half is the describe after it, which lands with the head itself. —
+describe('the compact head: .docs-more and the row’s .docs-action icons are a whole tap (docs phone header)', () => {
+  it('are at least one tap tall and one tap wide, off the shared token', () => {
+    expect(floorIn(docsCss, '.docs-more')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(docsCss, '.docs-more'), 'min-width')).toBe('var(--tap-min)');
+    expect(floorIn(docsCss, '.docs-action')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(docsCss, '.docs-compact-bar .docs-action'), 'min-width')).toBe('var(--tap-min)');
   });
 });
 
