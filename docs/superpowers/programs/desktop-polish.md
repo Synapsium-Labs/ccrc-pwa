@@ -2507,6 +2507,31 @@ The docs-only CI follow-up and the Goals binding gap stay separate. The allocato
 
 **Leave to run 1409 extended under claim 3417 (14722).** Claim 3387 was released, and ccrc-doctor-checks is now held by run 1428's claim 3417. The extension keeps the same hunks: the carry-copies check, and `_check_box-settings` with its header. The condition is unchanged too: snapshot-posture, its closing brace and the blank line after it stay untouched. Run 1428's only edit there is row 34's comment near line 10984. Its worker was told to stay inside that comment.
 
+**Ledger PR #2259 opened for D-7950 and D-7951 (2026-11-04).** The console carry worker reported (14740) that #2258, at 894ac8b7c, is red on deviation-refs' floor case: D-7951 is cited but no top-level plan defines it, and the guard reads only `docs/superpowers/plans/*.md` definition lines. That follows #2250's precedent for D-7926. #2259 adds both definitions plus the receipts since #2250; deviation-refs 31/31 and dtbd 1/1 pass on the branch, and the scan is clean. Run 1430 was told (`wait:`, 14742) to merge main once after #2259 merges, and run 1428 was told the same (14743).
+
+**Run 1428 status (14749).** #2260 is open at 9e8417b61. All Part S rows are built, and 4b was already done. 24 mutants each go red on their named case. Row 27's one UTF-8 owner reached a new shared/utf8.ts, plus shared/docs.ts, testbox.ts, slug.ts and pwa/src/lib/markdownGuard.ts (claim 3421, which nobody else holds). The review checks that widening. The worker waits for #2259's MERGED mail, then merges main once.
+
+**#2259 MERGED (2026-11-04T09:47:30Z, 2d43be8a5).** D-7950 and D-7951 are defined on main. Both carry workers were mailed to merge main once, re-gate, push and send one wave-done. The ledger worktree was removed.
+
+**Operator steer, 2026-11-04: D25 to D28, Task PL10 (D-7952).** The operator said, in chat:
+- "On the task ledger screen on mobile there is still no easy way to navigate to other areas of the app back and forth through the decisions etc."
+- "where is the easy access to the current programme spec?"
+- "the decision ledger should provide clickable links when it gives links"
+- "the decision ledger should use the new docserver links and not artifacts, old docserver, or anything else."
+
+Measured on main (7b362246a):
+- Both skins set the skin contract's `PhoneNav` part to null, and on a phone `shell.css` hides the shell nav on every non-fleet page. So the ledger pages' only way out is their own back.
+- The spec link exists only in `GoalsPanel`, on the programme view, and the item view does not link the programme view.
+- None of this programme's open items carries a link. Item 2 (register the Linear app) should carry one to Linear's page once D27 lands.
+
+The spec was rewritten on ledger PR (this PR) with D25 to D28:
+- D25: a phone bottom bar with the desk tabs' places, badges and a Search door, on every page but an open session, with the item strip kept in view;
+- D26: a Spec link on the item band, the programme groups and the programme head, and the band's name opens the programme view;
+- D27: tappable `https`, console-path and document-path links, and every other scheme stays text;
+- D28: document links go to the Docs reader only, and the raise route refuses artifact pages and outside document servers. Clause 20 gains one sentence.
+
+The plan gains Task PL10. It lands after #2258, whose files it shares. The allocator issued D-7952.
+
 ## R125: Delegation rows that read "running" are handed to the delegation broker (2026-11-01)
 
 The operator asked what a coordinator's box full of unnamed "agent · running" and "workflow · running" rows was. They are the delegation broker's activity rows: one row per helper (subagent or workflow agent) that a session started, under that session. Measured on the fleet box from that session's own Claude Code files: every one of its workflows had finished, and no helper had written for about three hours, so the rows were stale. As main reads, a row is live while its end was never matched and its parent session's incarnation is unchanged; nothing checks the helper's own activity or times a row out.
