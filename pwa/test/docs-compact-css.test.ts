@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { declValue, effectiveValue, ruleIn, stripComments } from './cssRule';
+import { declValue, effectiveValue, ruleIn, selectorsOf, stripComments } from './cssRule';
 
 const docsCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'docs', 'docs.css'), 'utf8');
 const SCREEN = '.docs-screen:has(> .docs-compact)';
@@ -31,6 +31,12 @@ describe('the compact head in docs.css (the phone-header plan, refinements (d), 
 
   it('the row\'s controls draw the focus ring inside their boxes: the row is at the top of the page, so an outer ring would be off-screen (refinement (k))', () => {
     expect(declValue(ruleIn(docsCss, '.docs-compact-bar :focus-visible'), 'outline-offset')).toBe('-2px');
+  });
+
+  it('the crumbs state (the tree slot not ok) draws the same inset ring: it sits at the top of the page too, where the safe-area inset is 0', () => {
+    expect(declValue(ruleIn(docsCss, '.docs-compact-crumbs :focus-visible'), 'outline-offset')).toBe('-2px');
+    expect(selectorsOf(docsCss, '.docs-compact-crumbs :focus-visible'), 'one rule with the row\'s, not a second mechanism')
+      .toContain('.docs-compact-bar :focus-visible');
   });
 
   it('the first line\'s text and the name end in an ellipsis; the draft badge beside the text never shrinks (refinement (g))', () => {
