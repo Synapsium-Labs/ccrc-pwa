@@ -51,13 +51,14 @@ const open = async (io: FleetIO = localIO, watcher?: FleetWatcher): Promise<Fast
 };
 
 /** A minimal watcher double — same idiom as `lifecycle.test.ts`'s `makeApp`:
- *  only the two methods this route actually calls, cast rather than
+ *  only the methods this route actually calls, cast rather than
  *  constructed, so the test exercises the ROUTE's use of
  *  `currentProjectRepos()` without paying for a real sweep. */
 const withRepos = (repos: Record<string, ProjectRepoWire>): FleetWatcher =>
   ({
     currentReadiness: () => undefined,
     currentProjectRepos: () => new Map(Object.entries(repos)),
+    currentFleetListing: () => null,   // D-6436: no listing, so the route reads the registry itself
     stop: () => {},
     serverCapsSettled: async () => {},
   } as unknown as FleetWatcher);

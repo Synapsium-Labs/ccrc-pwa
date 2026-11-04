@@ -1729,8 +1729,12 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *
  *  RAISED BY ONE AGAIN, on every platform (test box TB11, D-7413, D-7567): `testbox`
  *  SKIPs - `healthy()` sets no test box URL, so no test box is configured (state
- *  `off`). `ccrc-doctor-testbox.test.ts` configures one and plants each answer. */
-export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 14;
+ *  `off`). `ccrc-doctor-testbox.test.ts` configures one and plants each answer.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (D-7857): `carry-copies` SKIPs - `healthy()`
+ *  creates no `~/.cc-sessions`, so there is no swap carry to size.
+ *  `ccrc-doctor-carry-copies.test.ts` plants the registry, swap.log and the record. */
+export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 15;
 
 // ── the session gate: the flag, and the passphrase it needs ───────────────
 // Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,

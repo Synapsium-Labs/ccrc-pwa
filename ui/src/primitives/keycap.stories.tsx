@@ -37,7 +37,11 @@ export const OnChrome: Story = {
  *  measure it rather than moving into a variant where neither half could. */
 export const OnTheWell: Story = {
   args: {
-    'aria-label': 'Escape',
+    /* THE NAME HOLDS THE LEGEND (WCAG 2.5.3, D-7897): a voice user says the
+       cap they see, and `esc` is not a word of `Escape`. So a shortened legend
+       leads the name and the key is spelled out after it, as the app's key
+       table does; `^C` is already the `C` of `Control C`. */
+    'aria-label': 'Esc (Escape)',
     className: 'flex-none px-2 text-ink-on-well'
       + ' bg-[color-mix(in_srgb,var(--ink-on-well)_9%,transparent)]'
       + ' border-[color-mix(in_srgb,var(--ink-on-well)_22%,transparent)]',
@@ -47,8 +51,8 @@ export const OnTheWell: Story = {
     <div className="flex gap-2 rounded-md bg-well p-3">
       <Keycap {...args} />
       <Keycap className={args.className} aria-label="Tab"><span aria-hidden="true">tab</span></Keycap>
-      <Keycap className={args.className} aria-label="Interrupt"><span aria-hidden="true">^C</span></Keycap>
-      <Keycap className={args.className} aria-label="History"><span aria-hidden="true">hist</span></Keycap>
+      <Keycap className={args.className} aria-label="Control C"><span aria-hidden="true">^C</span></Keycap>
+      <Keycap className={args.className} aria-label="Hist (History)"><span aria-hidden="true">hist</span></Keycap>
     </div>
   ),
 };

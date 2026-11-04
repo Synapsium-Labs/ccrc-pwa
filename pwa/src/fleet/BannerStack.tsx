@@ -35,7 +35,8 @@ export interface BannerRank {
 }
 
 /** Every global banner: one per fleet, above the list. */
-export type BannerId = 'fleet-host' | 'pressure' | 'disk' | 'halt' | 'substrate' | 'offline' | 'connecting' | 'notice' | 'passkey';
+export type BannerId = 'fleet-host' | 'pressure' | 'disk' | 'backup' | 'halt' | 'substrate' | 'offline' | 'connecting' | 'notice'
+  | 'passkey' | 'resume';
 
 /** A `Record` over the id union, so a new banner id without a rank is a compile error. The ranks are the order
  *  the fleet rendered its banners in before the stack, so a fleet with two or fewer looks as it did. */
@@ -46,6 +47,8 @@ export const BANNER_ORDER: Readonly<Record<BannerId, BannerRank>> = {
   halt: { rank: 2, role: 'status', module: 'HaltBanner' },
   // The fleet's disk alarm (D-6617): ranks after the fleet host, which it can follow from. Rank 3 was free.
   disk: { rank: 3, role: 'status', module: 'DiskBanner' },
+  // The fleet box's backup alarm (D-7860): after the disk, which it can share a cause with. Rank 3.5 was free.
+  backup: { rank: 3.5, role: 'status', module: 'BackupBanner' },
   substrate: { rank: 4, role: 'status', module: 'SubstrateBanner' },
   // The connection lines say every other line on the screen is stale, so they are pinned: whatever else applies,
   // "Reconnecting…" and "Last known state" stay in sight (and announced). Their rank keeps the order main drew.
@@ -53,6 +56,9 @@ export const BANNER_ORDER: Readonly<Record<BannerId, BannerRank>> = {
   connecting: { rank: 6, role: 'status', module: null, pinned: true },
   notice: { rank: 7, role: 'status', module: null },
   passkey: { rank: 8, role: 'door', module: 'PasskeyNotice' },
+  // A sign-in this session started that waits for its code (accounts plan Task A23, D-7871 (3)): a door to its sheet,
+  // pinned and ranked first, because its deadline is the one thing on the stack that runs out.
+  resume: { rank: 0.5, role: 'door', module: 'AuthResumeBanner', pinned: true },
 };
 
 /** Banner modules that are not the fleet's, each with the reason it stays where it renders. */

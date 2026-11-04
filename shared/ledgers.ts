@@ -10,10 +10,10 @@
 // never compares states itself. The one rule the table cannot carry is the programme context: the
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
-import { ACTIVE_RUN_STATES, type MailDeliveryState, type Presence, type RunKind, type RunState } from './api.js';
+import { ACTIVE_RUN_STATES, TERMINAL_RUN_STATES, type MailDeliveryState, type Presence, type RunKind, type RunState } from './api.js';
 
-/** What the operator is asked to do. `value` and `secret` take something back; `secret` never
- *  through the item's answer (spec §5). */
+/** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
+ *  `secret`'s value goes to its slot, never through the answer (spec §5). */
 export type ItemKind = 'decide' | 'do' | 'value' | 'secret';
 const ITEM_KIND_MAP: Record<ItemKind, true> = { decide: true, do: true, value: true, secret: true };
 export const ITEM_KINDS = Object.keys(ITEM_KIND_MAP) as readonly ItemKind[];
@@ -24,9 +24,6 @@ const ITEM_STATE_MAP: Record<ItemState, true> = {
   open: true, checking: true, done: true, withdrawn: true, dismissed: true,
 };
 export const ITEM_STATES = Object.keys(ITEM_STATE_MAP) as readonly ItemState[];
-/** The states an item still waits in. Derived from nothing else: it is the pair the transition table
- *  leaves by `confirm`, `return`, `withdraw` and `dismiss`. */
-export const OPEN_ITEM_STATES: readonly ItemState[] = ['open', 'checking'];
 
 /** `blocking` = work has stopped on it; `soon` carries a short label; `later` is the rest. */
 export type NeededBy = 'blocking' | 'soon' | 'later';
@@ -53,6 +50,13 @@ export const ITEM_TRANSITIONS: Readonly<Record<ItemAct, {
   withdraw: { actor: 'coordinator', from: ['open', 'checking'], to: 'withdrawn' },
   dismiss: { actor: 'operator', from: ['open', 'checking'], to: 'dismissed' },
 };
+
+/** The states an item still waits in: the states some row of `ITEM_TRANSITIONS` leaves, in `ITEM_STATES` order
+ *  (today `open` and `checking`). Derived from the table, so a state the table can still move an item out of
+ *  is never missing from it. */
+export const OPEN_ITEM_STATES: readonly ItemState[] = ITEM_STATES.filter(
+  (s) => Object.values(ITEM_TRANSITIONS).some((row) => row.from.includes(s)),
+);
 
 /** Why a move of one item is refused (the decider's three, and `unknown-item` for an id the store holds no row for).
  *  Declared once here so the store's answers and, in PL3 and PL4, the routes' typed refusals read the same words. */
@@ -94,6 +98,12 @@ export interface ItemView {
   why: string;
   how: string[];
   options: string[] | null;
+  /** A decide item's recommended option (plan PL9, spec §3.2, D24): the 0-based index into `options` of the option its raiser
+   *  recommends, with `recommendedWhy`, why it beats each alternative. Both or neither: `null` on every other kind and on a
+   *  decide item raised before the rule, which the console draws as before. A server from before PL9 omits both, so a reader
+   *  goes through `recommendationOf`, never the fields. */
+  recommended: number | null;
+  recommendedWhy: string | null;
   neededBy: NeededBy;
   soonLabel: string | null;
   state: ItemState;
@@ -104,7 +114,9 @@ export interface ItemView {
   answer: string | null;
   note: string | null;
   secretSlot: string | null;
-  secretSet: { at: number; tail: string; masked: boolean } | null;
+  /** The slot's state (plan PL6), read from its metadata file: when it was set, its tail (`secretTailOf`) and whether the
+   *  egress masker knows it. `why` says why it does not, and is absent when it does (or from a server before PL6). */
+  secretSet: { at: number; tail: string; masked: boolean; why?: SecretUnmasked } | null;
   history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null }[];
 }
 
@@ -155,7 +167,11 @@ export const WAITS_ON_KINDS = Object.keys(WAITS_ON_MAP) as readonly WaitsOn[];
 
 /**
  * Priority: any active work run -> `work`; any work run awaiting review or any active review run ->
- * `review`; any `merging` run -> `merge-queue`; any `planned` run -> `next-wave`; else `ended`.
+ * `review`; any `merging` run -> `merge-queue`; any `planned` run -> `next-wave`; any other run that is
+ * still open (a `closing` run, a run of kind `unknown`, a review run awaiting its own review) -> `work`;
+ * else `ended`. `ended` means exactly what the store's `programmeHasOpenRun` means: no run outside
+ * `TERMINAL_RUN_STATES`, so the panel never says "the programme has no open run" while a dismiss is
+ * refused `programme-live` (review 1323 R1).
  */
 export function programmeWaitsOn(runs: readonly { state: RunState; kind: RunKind }[]): WaitsOn {
   const active = (r: { state: RunState }) => (ACTIVE_RUN_STATES as readonly RunState[]).includes(r.state);
@@ -164,6 +180,7 @@ export function programmeWaitsOn(runs: readonly { state: RunState; kind: RunKind
     || (r.kind === 'review' && active(r)))) return 'review';
   if (runs.some((r) => r.state === 'merging')) return 'merge-queue';
   if (runs.some((r) => r.state === 'planned')) return 'next-wave';
+  if (runs.some((r) => !(TERMINAL_RUN_STATES as readonly RunState[]).includes(r.state))) return 'work';
   return 'ended';
 }
 
@@ -179,6 +196,75 @@ const SLOT_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 /** A secret slot's name, safe to build a path from. */
 export function isSlotSlug(s: string): boolean {
   return typeof s === 'string' && SLOT_SLUG_RE.test(s);
+}
+
+// ── secrets pasted into the console (plan PL6, spec §5) ────────────────────────────────────────────────────────────
+
+/** The directory under `~/.ccrc` that holds the operator-secret slots (`server/src/coord/ledgersSecrets.ts`); the account deny
+ *  rules name the same directory (`ACCOUNT_SECRET_PATHS`, `shared/api.ts`), and `account-deny.test.ts` holds the two equal. */
+export const OPERATOR_SECRETS_DIR = 'operator-secrets';
+/** The egress masker's lane prefix of an operator-secret slot (`operator-secret:<programme>:<slot>`). The slot store names
+ *  its lanes with it, and the masker's roster prune (`SecretMasker.retain`) never deletes a lane that carries it: those lanes
+ *  are this server's own, not the roster's (review 1389 F1). */
+export const OPERATOR_SECRET_LANE_PREFIX = 'operator-secret:';
+
+/** The longest secret the console takes, in characters and in UTF-8 bytes alike (the masker's longest run is 8192 bytes,
+ *  so a value inside this bound is never too long for it). */
+export const SECRET_VALUE_MAX = 8192;
+/** The shortest value whose tail is shown, in UTF-8 BYTES after any trailing `=`, counted as the egress masker counts a
+ *  secret: its floor, `RUN_MIN_BYTES` (`server/src/accounts/shapes.ts`), which `ledgers-secrets.test.ts` holds equal to this
+ *  (review 1389 A1). Below it no character of the value leaves the server: the masker cannot catch such a value in outgoing
+ *  text, and four characters of it are a fifth or more of it. */
+export const SECRET_TAIL_MIN = 20;
+/** How many characters the tail shows. */
+export const SECRET_TAIL_CHARS = 4;
+
+/** Why the egress masker does not know a saved secret (Review Focus 2: never a silent skip). `too-short`: under the
+ *  masker's 20-byte floor (after any trailing `=`); `too-long`: past its 8192-byte run; `unregistered`: the masker could
+ *  not take it (no box token yet, or coord.db stayed busy). */
+export type SecretUnmasked = 'too-short' | 'too-long' | 'unregistered';
+const SECRET_UNMASKED_MAP: Record<SecretUnmasked, true> = { 'too-short': true, 'too-long': true, unregistered: true };
+export const SECRET_UNMASKED_WHYS = Object.keys(SECRET_UNMASKED_MAP) as readonly SecretUnmasked[];
+export function isSecretUnmasked(v: unknown): v is SecretUnmasked {
+  return typeof v === 'string' && (SECRET_UNMASKED_WHYS as readonly string[]).includes(v);
+}
+
+/** UTF-8 bytes of a string, counted without an encoder (this file imports nothing). A lone surrogate counts 3, as an
+ *  encoder writes U+FFFD for it. */
+export function utf8Bytes(s: string): number {
+  let n = 0;
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!;
+    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+  }
+  return n;
+}
+
+/** Whether a pasted value is one the console takes: 1 to `SECRET_VALUE_MAX` characters and UTF-8 bytes. */
+export function isSecretValue(v: unknown): v is string {
+  return typeof v === 'string' && v.length >= 1 && v.length <= SECRET_VALUE_MAX && utf8Bytes(v) <= SECRET_VALUE_MAX;
+}
+
+/** The last `SECRET_TAIL_CHARS` characters (code points, so a surrogate pair is never split) of a value of at least
+ *  `SECRET_TAIL_MIN` bytes, its trailing `=` set aside as the masker sets it aside; `''` for a shorter one, whose tail is
+ *  never shown. */
+export function secretTailOf(value: string): string {
+  if (utf8Bytes(value.replace(/=+$/, '')) < SECRET_TAIL_MIN) return '';
+  return Array.from(value).slice(-SECRET_TAIL_CHARS).join('');
+}
+
+/** THE ANSWER A SECRET ITEM'S TICK CARRIES to the coordinator (spec §5: set, the time and the last four, never the value):
+ *  `set <ISO time> ending <tail>`, or `set <ISO time>` when no tail is shown. */
+export function secretAnswer(s: { setAt: number; tail: string }): string {
+  const at = new Date(s.setAt).toISOString();
+  return s.tail === '' ? `set ${at}` : `set ${at} ending ${s.tail}`;
+}
+
+/** What `PUT /api/items/:id/secret` answers on success: the slot's state and the ticked item, never the value. */
+export interface SecretSaveAnswer {
+  readonly ok: true;
+  readonly secret: { readonly setAt: number; readonly tail: string; readonly masked: boolean; readonly why?: SecretUnmasked };
+  readonly item: ItemView;
 }
 
 const SPEC_PREFIX = 'docs/superpowers/specs/';
@@ -204,6 +290,24 @@ export const ITEM_TEXT_MAX = 2000;
 export const ITEM_STEPS_MAX = 12;
 export const ITEM_OPTIONS_MAX = 6;
 export const ANSWER_MAX = 2000;
+/** The longest `recommendedWhy` a raise takes (plan PL9): a few plain sentences on why the recommended option beats each
+ *  alternative, with what each alternative would cost or risk. */
+export const RECOMMEND_WHY_MAX = 2000;
+
+/** THE ONE READER of an item's recommendation (plan PL9): the option it names and why, or `null` when the item has none to
+ *  show. `null` for a field a server from before PL9 omits (absence permits: the item draws as before), for a kind that is
+ *  not `decide`, and for an index that names no listed option or reasons that are not text: the raise route refuses both,
+ *  so either is a corrupt row, and the console then shows the options with no mark rather than a mark on the wrong one. */
+export function recommendationOf(item: {
+  readonly kind: ItemKind; readonly options: readonly string[] | null;
+  readonly recommended?: number | null; readonly recommendedWhy?: string | null;
+}): { readonly index: number; readonly why: string } | null {
+  const { kind, options, recommended, recommendedWhy } = item;
+  if (kind !== 'decide' || options === null) return null;
+  if (typeof recommended !== 'number' || !Number.isInteger(recommended) || recommended < 0 || recommended >= options.length) return null;
+  if (typeof recommendedWhy !== 'string' || recommendedWhy.trim() === '') return null;
+  return { index: recommended, why: recommendedWhy };
+}
 
 /** The coordinator's presence as an item's label reads it. `unmeasured` says the server has no reading to give (no fleet
  *  frame or registry listing yet, an id the registry lists but the frame lacks, or the session's own presence is a doubt): it

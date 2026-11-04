@@ -1,42 +1,30 @@
-// The real-browser leg's app half (foundations follow-up F-e; D-5570, D-5576): the production PWA, built once by the
-// app's own `vite build`, served from loopback, and opened in a Chrome context whose `/api` and `/ws` answer from a
+// The real-browser leg's app half (foundations follow-up F-e; D-5570, D-5576): the production PWA, built once per run by
+// the app's own `vite build` (`globalSetup.ts`), served from loopback, and opened in a Chrome context whose `/api` and `/ws` answer from a
 // fixture. No server, no ccd, no tmux: a row-fit measure needs the shipped markup and the shipped stylesheet laid out
 // by a real engine, which jsdom cannot do, and nothing else. `harness.ts` stays the docs rows' three things; this is
 // the second thing a browser row can need, so it is a module of its own.
-import { execFileSync } from 'node:child_process';
-import { createReadStream, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import type { Browser, BrowserContext, Page, WebSocketRoute } from 'playwright-core';
+import { inject } from 'vitest';
 import { SKIN_STORAGE_KEY, THEME_STORAGE_KEY } from '@ccrc/ui';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession } from '../test/fleetFixture';
+import { DIST_KEY } from './dist';
 
-const PWA = path.join(import.meta.dirname, '..');
-
-// Runs in a node child, cwd the PWA package, as `test/markdown-worker-built.test.ts` builds: the app's own config, a
-// production build (vitest's NODE_ENV=test would build the `development` export conditions), into argv[1]. Not in
-// this file's jsdom realm, whose URL the PWA plugin's file writes reject.
-const BUILDER = `
-import { build } from 'vite';
-await build({ configFile: 'vite.config.ts', logLevel: 'error', build: { outDir: process.argv[1], emptyOutDir: true } });
-`;
-
-/** Build the PWA into a fresh temporary directory and return it. The caller removes it (`removeDist`). */
-export function buildDist(): string {
-  const out = mkdtempSync(path.join(tmpdir(), 'ccrc-browser-dist-'));
-  const env: Record<string, string> = { PATH: process.env['PATH'] ?? '', NODE_ENV: 'production' };
-  if (process.env['HOME'] !== undefined) env['HOME'] = process.env['HOME'];
-  execFileSync(process.execPath, ['--input-type=module', '-e', BUILDER, out],
-    { cwd: PWA, env, encoding: 'utf8', timeout: 170_000, stdio: ['ignore', 'pipe', 'pipe'] });
-  return out;
-}
-
-export function removeDist(dist: string | undefined): void {
-  if (dist !== undefined) rmSync(dist, { recursive: true, force: true });
+/** The run's one production build (`browser/globalSetup.ts`, the browser config's global setup), sealed read-only.
+ *  Every browser file serves it; none builds its own or removes it. Throws when the run has none, as under a config
+ *  without that setup: a red file, never one that quietly builds its own. */
+export function sharedDist(): string {
+  const dist = inject(DIST_KEY) as string | undefined;
+  if (typeof dist !== 'string' || !existsSync(path.join(dist, 'index.html'))) {
+    throw new Error(`no shared PWA build for this run (${DIST_KEY} is ${JSON.stringify(dist)}): run the browser files `
+      + 'under vitest.browser.config.ts, whose global setup (browser/globalSetup.ts) builds it once');
+  }
+  return dist;
 }
 
 const TYPES: Readonly<Record<string, string>> = {
@@ -125,6 +113,11 @@ export interface OpenedApp {
    *  (`internetdisconnected`) and every socket closes, the ones already open now and each new one as it opens. The
    *  page itself was already served, so the app stays up on what it holds: an offline cell's shape. Test code only. */
   cut(): void;
+  /** Hold every socket attempt made from now on while the link is cut in CONNECTING, as an attempt to an unreachable
+   *  host stays on a real network: its routed close waits until the returned release is called (Playwright opens a
+   *  routed socket only once its handler has returned). An attempt made before the hold closes at once, as `cut()`'s
+   *  do. Test code only. */
+  holdAttempts(): () => void;
 }
 
 /** One entry of `OpenedApp.events`. `fulfil-start` is logged when a request's answer is due (it then counts as in
@@ -164,6 +157,8 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
   const settled = new Set<() => void>();
   // `cut()`'s switch: once set, nothing answers again for this context.
   let offline = false;
+  // `holdAttempts()`'s gate: while set, a socket opened offline waits on it before its close.
+  let attemptGate: Promise<void> | null = null;
   await ctx.route('**/api/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname;
     log({ kind: 'intercept', path: pathname });
@@ -192,7 +187,10 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
   const sockets = new Map<string, WebSocketRoute[]>();
   await ctx.routeWebSocket(/\/ws\//, (ws) => {
     const pathname = new URL(ws.url()).pathname;
-    if (offline) { void ws.close(); return; }
+    if (offline) {
+      if (attemptGate === null) { void ws.close(); return; }
+      return attemptGate.then(() => { void ws.close(); });
+    }
     sockets.set(pathname, [...(sockets.get(pathname) ?? []), ws]);
     ws.onClose(() => { sockets.set(pathname, (sockets.get(pathname) ?? []).filter((x) => x !== ws)); });
     const frames = pathname === '/ws/fleet' ? fixture.fleetFrames : (fixture.socketFrames?.[pathname] ?? []);
@@ -240,6 +238,11 @@ export async function openApp(browser: Browser, view: AppView, fixture: AppFixtu
     cut: () => {
       offline = true;
       for (const open of sockets.values()) for (const ws of open) void ws.close();
+    },
+    holdAttempts: () => {
+      let release = (): void => undefined;
+      attemptGate = new Promise<void>((done) => { release = done; });
+      return () => { attemptGate = null; release(); };
     },
     releaseApi: () => {
       const due = parked ?? [];

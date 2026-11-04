@@ -59,8 +59,10 @@ export interface AccountGateAsk {
   stepUp?: boolean;
 }
 
-/** `pass: false` means the gate has answered the request and the handler stops. */
-export type AccountGateAnswer = { pass: true; actor: AccountActor } | { pass: false };
+/** `pass: false` means the gate has answered the request and the handler stops. A pass carries the session's whole
+ *  `idHash` beside the actor, for the one route family that binds an act to the session that started it (the sign-in's
+ *  attempt, spec §3.7; accounts plan Task A21). It is a hash of the cookie the gate verified, never the cookie. */
+export type AccountGateAnswer = { pass: true; actor: AccountActor; sessionIdHash: string } | { pass: false };
 
 export type AccountGate = (req: FastifyRequest, reply: FastifyReply, ask: AccountGateAsk) => AccountGateAnswer;
 
@@ -78,6 +80,24 @@ export function accountOriginClass(origin: string): AccountOriginClass {
   if (url.protocol === 'https:') return 'https';
   if (url.protocol === 'http:' && isLoopbackHost(url.hostname)) return 'loopback';
   return 'insecure';
+}
+
+/**
+ * The route options of a credential write whose BODY is the credential (programme ledgers plan PL6's secret route): its
+ * body cap; `Cache-Control: no-store` from `onRequest`, so it is on the answers that come before the gate runs (a parse
+ * error, an oversize body) as well as on the gate's own; and those body errors as fixed words, because Fastify's own
+ * parse error text can quote a fragment of the body. The Linear key's routes spell the same three for themselves.
+ */
+export function credentialBodyRoute(bodyLimit: number): {
+  bodyLimit: number;
+  onRequest: (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  errorHandler: (err: Error & { statusCode?: number }, req: FastifyRequest, reply: FastifyReply) => FastifyReply;
+} {
+  return {
+    bodyLimit,
+    onRequest: async (_req, reply) => { reply.header('cache-control', 'no-store'); },
+    errorHandler: (err, _req, reply) => refuseRoute(reply, err.statusCode === 413 ? 'oversize' : 'bad-request'),
+  };
 }
 
 export function createAccountGate(deps: AccountGateDeps): AccountGate {
@@ -104,6 +124,7 @@ export function createAccountGate(deps: AccountGateDeps): AccountGate {
       return { pass: false };
     }
     if (ask.stepUp === true && deps.stepUp.requireRecentAssertion()(req, reply)) return { pass: false };
-    return { pass: true, actor: actorOf(decision.device, sessionIdHash(token)) };
+    const idHash = sessionIdHash(token);
+    return { pass: true, actor: actorOf(decision.device, idHash), sessionIdHash: idHash };
   };
 }

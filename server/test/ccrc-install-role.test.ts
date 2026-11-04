@@ -153,6 +153,15 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     // ccrc.service that must never be touched — there is no server here.
     expect(argv.join('\n')).not.toMatch(/\bccrc\.service\b/);
     expect(argv.join('\n')).not.toContain('ccrc-update-watchdog');
+    // D-6915: the box settings timer, which no role gates out: the pair is the shipped files byte for byte.
+    expect(argv).toContain('--user enable --now ccrc-settings.timer');
+    expect(argv.indexOf('--user enable --now ccrc-settings.timer'), 'the settings timer was enabled before daemon-reload read its unit file')
+      .toBeGreaterThan(argv.indexOf('--user daemon-reload'));
+    for (const u of ['ccrc-settings.service', 'ccrc-settings.timer']) {
+      const p = unitDir(home, u);
+      expect(readFileSync(p), `${u} is not the shipped file`).toEqual(readFileSync(placed(home, 'deploy', 'systemd', u)));
+      expect(statSync(p).mode & 0o777, `${u} has the wrong mode`).toBe(0o644);
+    }
     expect(r.stdout).toContain(
       'install: services: ccrc-agent.service and ccd-cap-scopes.timer enabled, and ccrc-agent.service restarted onto the tree this run placed');
   });
@@ -200,6 +209,24 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     }
     const argv = systemctlCalls(home).map((c) => c.argv);
     expect(argv.indexOf('--user enable --now ccd-testbox-times.timer'), 'the durations timer was enabled before daemon-reload read its unit file')
+      .toBeGreaterThan(argv.indexOf('--user daemon-reload'));
+  });
+
+  itLinux('places the carry dedupe sweep\'s bin and units, and enables its timer, on a fleet box (D-7857)', async () => {
+    const { home, r } = await fleet();
+    const bin = join(home, '.local', 'bin', 'ccd-carry-dedupe-sweep');
+    expect(existsSync(bin), '--role fleet did not place ccd-carry-dedupe-sweep').toBe(true);
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-carry-dedupe-sweep')));
+    expect(statSync(bin).mode & 0o777).toBe(0o755);
+    expect(r.stdout).toMatch(/^install: bins: .*(?<![\w-])ccd-carry-dedupe-sweep(?![\w-])/m);
+    for (const u of ['ccd-carry-dedupe.service', 'ccd-carry-dedupe.timer']) {
+      const p = unitDir(home, u);
+      expect(existsSync(p), `${u} never reached ~/.config/systemd/user on the fleet role`).toBe(true);
+      expect(readFileSync(p), `${u} is not the shipped file`).toEqual(readFileSync(placed(home, 'deploy', 'systemd', u)));
+      expect(statSync(p).mode & 0o777, `${u} has the wrong mode`).toBe(0o644);
+    }
+    const argv = systemctlCalls(home).map((c) => c.argv);
+    expect(argv.indexOf('--user enable --now ccd-carry-dedupe.timer'), 'the carry dedupe timer was enabled before daemon-reload read its unit file')
       .toBeGreaterThan(argv.indexOf('--user daemon-reload'));
   });
 
@@ -287,6 +314,8 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccd-land-probe.timer',
       // test box TB11 (D-7413): the durations timer, `!= server` like the radar, so `both` enables it.
       '--user enable --now ccd-testbox-times.timer',
+      // D-7857: the carry dedupe timer, `!= server` like the radar, so `both` enables it.
+      '--user enable --now ccd-carry-dedupe.timer',
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
       '--user enable --now ccrc-models.timer',
@@ -295,6 +324,8 @@ describe('ccrc install --role: the refusals and the default', () => {
       // role enables it — degrading rather than dying like every timer in
       // this list, and taking no restart (a oneshot holds no code).
       '--user enable --now ccrc-update-watchdog.timer',
+      // D-6915: the box settings timer, enabled on every Linux role (here, `both`).
+      '--user enable --now ccrc-settings.timer',
       '--user restart ccrc.service',
     ]);
     expect(r.stdout).toMatch(
@@ -318,7 +349,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
         || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
-        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccd-history-sweep.') || dest.startsWith('ccd-land-probe.') || dest.startsWith('ccd-testbox-times.') || dest.startsWith('ccrc-codex-usage@')) continue;
+        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccd-history-sweep.') || dest.startsWith('ccd-land-probe.') || dest.startsWith('ccd-testbox-times.') || dest.startsWith('ccd-carry-dedupe.') || dest.startsWith('ccrc-codex-usage@')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -348,6 +379,10 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(unitDir(home, 'ccd-testbox-times.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-testbox-times.timer'))).toBe(false);
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-testbox-times');
+    // D-7857: the carry dedupe sweep's pair is `!= server` too; its bin lands on every role, as the radar's.
+    expect(existsSync(unitDir(home, 'ccd-carry-dedupe.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-carry-dedupe.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-carry-dedupe');
     expect(existsSync(join(home, '.local', 'bin', 'ccd-land-probe')), '--role server did not place ccd-land-probe').toBe(true);
     // history spec §9.5: no shim, no unit pair and no enable on a server box —
     // it hosts no sessions and must never hold a store D-4183.
@@ -382,6 +417,8 @@ describe('ccrc install --role: the refusals and the default', () => {
     // W4a Task 9: the watchdog is the SERVER's — its pair landed through the
     // UNIT_FILES loop above (not skipped there), and its timer is enabled.
     expect(systemctlCalls(home).map((c) => c.argv)).toContain('--user enable --now ccrc-update-watchdog.timer');
+    // D-6915: and the box settings timer, which no role gates out.
+    expect(systemctlCalls(home).map((c) => c.argv)).toContain('--user enable --now ccrc-settings.timer');
     // Final review F-2 (spec §11): the two GPT-lane executables are gated
     // `!= server` — the lane needs a converged per-account launcher, and a
     // server-role box converges nothing per account (D-3111) — and the
@@ -520,11 +557,11 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
   // W4's four — `detach` on Linux only (decision 17: `--detach` refuses on
   // Darwin) — W6's `versions`, and the box-token lifecycle's `token-sync`
   // (design 2026-10-07 §4.5; every os, because the op runs the verb in the
-  // foreground), so a Linux install writes nine words and a Darwin one eight.
+  // foreground), so a Linux install writes ten words (D-6915's `settings`, which the tree's timer backs, is the tenth) and a Darwin one eight.
   // LITERALS, not a read of ccd/ccrc's arrays: a pin
   // derived from the list it pins could never red on the list being wrong.
   const CAPS_ALL = ['verify', 'node-id', 'floor', 'update-json', 'update-gate', 'rollback', 'versions', 'token-sync'];
-  const CAPS_LINUX = [...CAPS_ALL, 'detach'];
+  const CAPS_LINUX = [...CAPS_ALL, 'detach', 'settings'];
   const CAPS_HERE = process.platform === 'darwin' ? CAPS_ALL : CAPS_LINUX;
 
   it('node-id: minted once as a lowercase uuid, kept byte-identical by a second run', () => {
@@ -539,7 +576,10 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(b.code, b.stderr).toBe(0);
     expect(readFileSync(join(home, '.ccrc', 'node-id'), 'utf8')).toBe(id);
     expect(b.stdout).toMatch(/^install: node-id: kept /m);
-  });
+    // AN EXPLICIT BOUND, as the floor case below: two whole install spines. 6.8 s in a full-suite
+    // queue shard; 33 s in a PR shard that ran it beside the session-hook and typecheck suites,
+    // twice in a row — past the 20 s Linux default though nothing here was wrong.
+  }, 60_000);
 
   it('node-id: a file that is not a uuid is refused, never overwritten — it identifies this node to the console', () => {
     const home = freshBox('ccrc-install-nodeid-bad-');
@@ -568,7 +608,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(r.stdout.split('\n').filter((l) => l.startsWith('install: caps:')).join('\n')).not.toContain(home);
   });
 
-  it('ccrc-caps: nine words on Linux, eight on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
+  it('ccrc-caps: ten words on Linux, eight on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
     // A real install reaches only the host's own arm. The other is reached by
     // running the real `_inst_caps` and `_ccrc_cap_words` out of ccd/ccrc with
     // CCD_OS set — the extraction harness the `_inst_installed` cases below
@@ -632,6 +672,8 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       // Box-token lifecycle wave 1: the verb ccrc-agent's token-sync op spawns, dispatched to its sibling body.
       'token-sync': [/^cmd_token\(\) \{/m, /^\s*token\)\s+cmd_token "\$@" ;;$/m, /"\$CCRC_HERE\/ccrc-token-sync"/],
       detach: [/^_upd_detach\(\) \{/m, /^\s*--detach\) detach=1 ;;$/m],
+      // D-6915: the tree writes ~/.ccrc/box-settings.json — the verb, its dispatch, and the timer that runs it.
+      settings: [/^cmd_settings\(\) \{/m, /^\s*settings\)\s+cmd_settings "\$@" ;;$/m, /^\s*_inst_enable_timer settings ccrc-settings\.timer\b/m],
     };
     const arr = (name: string): string[] => {
       const m = new RegExp(`^${name}=\\((.*)\\)$`, 'm').exec(src);

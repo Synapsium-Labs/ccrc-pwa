@@ -54,7 +54,7 @@ import { answerAsk, type AskDeps } from './inject/ask.js';
 import { measuredIdentity, readRegistryMeasured, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
-import { listProjects, type CcdResult } from './lifecycle.js';
+import { FLEET_ROWS_MAX_AGE_MS, fleetRowsUsable, listProjects, ProjectWalkCache, type CcdResult } from './lifecycle.js';
 import { projectReadiness } from './readiness.js';
 import { sessionCommands } from './commands.js';
 import { CLIP_MIME, CLIP_NAME_RE, clipPath, clipStem, isSafeSessionId, stageUpload } from './clip.js';
@@ -65,6 +65,7 @@ import { Viewers } from './viewer.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes, type OperatorDoorWiring } from './coord/routes.js';
 import { registerLedgerOperatorRoutes, waitingViewOf } from './coord/ledgersRoutes.js';
+import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
 import { createQuestions, type OperatorDoorDeps } from './coord/questions.js';
@@ -76,6 +77,8 @@ import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/ro
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { createAccountGate } from './accounts/gate.js';
 import { registerAccountRoutes } from './accounts/routes.js';
+import { AuthAttempts } from './accounts/attempts.js';
+import { sessionIdHash } from './auth/sessions.js';
 import { resolveTitle } from './linear/resolve.js';
 import { classifyAddFailure, planCreate } from './workspaceCreate.js';
 import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
@@ -1286,6 +1289,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const disk = watcher?.disk() ?? undefined;
     // The host's PSI and the link's classification by it (#1170). Local mode has no link: it is always up.
     const psi = watcher?.pressure(deps.cfg.fleetMode !== 'remote' || deps.fleetState?.connected === true) ?? undefined;
+    // The fleet box's backup health (D-7858), judged now from the last read. Absent before one landed: UNKNOWN.
+    const backup = watcher?.backup() ?? undefined;
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       // The two stamps: with a coordination database, the inventory's rows —
       // re-measured every minute by `sweepInventory`, superseded rows excluded
@@ -1311,6 +1316,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         ...(archivedHeld ? { archivedHeld } : {}),
         ...(disk ? { disk } : {}),
         ...(psi ? { psi } : {}),
+        ...(backup ? { backup } : {}),
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1335,6 +1341,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       ...(archivedHeld ? { archivedHeld } : {}),
       ...(disk ? { disk } : {}),
       ...(psi ? { psi } : {}),
+      ...(backup ? { backup } : {}),
     };
   });
 
@@ -1498,6 +1505,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!deps.cfg.authEnabled || !auth.allow || auth.reason !== 'session') return today;
     const lanes = lanesWire(today.roster, limits, await readLaneStates(deps.io, deps.cfg),
       deps.masker ?? SHAPE_ONLY_MASKER, Date.now());
+    // The in-flight sign-in (A21, D-7793), from the server's memory: `mine` only for the session that started it.
+    const sessionToken = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
+    const viewer = sessionToken === undefined || sessionToken === '' ? null : sessionIdHash(sessionToken);
+    for (const [id, lane] of Object.entries(lanes)) {
+      const attempt = authAttempts.wireOf(id, viewer);
+      if (attempt !== undefined) lane.authAttempt = attempt;
+    }
     const connect = accountsConnect({
       ccdVerbs: deps.fleetState?.ccdVerbs ?? null, origin: accountOriginClass(deps.cfg.origin),
       stepUpFreshUntil: stepUp.stepUpFreshUntil(req),
@@ -1538,7 +1552,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (fresh) dropWaiting();
     if (waitingFailed) return null;
     try {
-      waitingBuilt ??= waitingViewOf(deps.coord, Date.now(), presenceOf);
+      waitingBuilt ??= waitingViewOf(deps.coord, Date.now(), presenceOf, (p, slot) => readOperatorSecretMeta(deps.cfg.ccrcDir, p, slot));
       waitingWarned = null;
       return waitingBuilt;
     } catch (err) {
@@ -2001,6 +2015,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const accountGate = createAccountGate({
     enabled: deps.cfg.authEnabled, origin: deps.cfg.origin, sessionAuth, fleetState: () => deps.fleetState, stepUp,
   });
+  // The sign-in's in-memory attempts (accounts plan Task A21, D-7793): one store per server, read by the sign-in routes
+  // and by `GET /api/accounts`'s `LaneWire.authAttempt`. Its expiry timers never hold the process, and close with it.
+  const authAttempts = deps.authAttempts ?? new AuthAttempts();
+  app.addHook('onClose', async () => { authAttempts.close(); });
   // The one Linear rate service (spec §6.7) and the one background refresher (spec §4.3) are passed through as they
   // are, possibly absent: never a default built here.
   registerLinearRoutes(app, {
@@ -2037,6 +2055,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return reg.listed ? reg.records.filter((r) => r.wrapper === id || r.home === id).map((r) => r.id) : null;
   };
   registerAccountRoutes(app, {
+    attempts: authAttempts,
+    // The sign-in's status file, over the same measured read as the lane states (the agent's `read` op in remote mode).
+    authStatus: async (id) => {
+      const r = await deps.io.readFileMeasured(path.join(deps.cfg.registryDir, '.auth', `${id}.json`));
+      return r.ok ? { kind: 'read', content: r.content } : { kind: r.reason === 'absent' ? 'absent' : 'unreadable' };
+    },
+    // `GET …/auth`'s answer, masked in the handler and refused when the mask changed it (A21, D-7792).
+    mask: (v) => (deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(v),
     gate: accountGate,
     ops: { run: async (...a) => accountOps === undefined ? { kind: 'not-started' } : accountOps.run(...a) },
     laneOf: (id) => {
@@ -2443,7 +2469,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
 
   // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token.
-  registerLedgerOperatorRoutes(app, { coord: deps.coord, bus, now: () => Date.now(), presenceOf });
+  // The secret's route (plan PL6) takes the account gate with a step-up, writes the slot under `cfg.ccrcDir`, and registers
+  // the value with the egress masker (no masker: `unregistered`, said in the answer, never a silent skip).
+  registerLedgerOperatorRoutes(app, {
+    coord: deps.coord, bus, now: () => Date.now(), presenceOf, gate: accountGate, ccrcDir: deps.cfg.ccrcDir,
+    registerSecret: (laneId, value) => deps.masker?.ingestSecret(laneId, value) ?? 'unregistered',
+  });
 
   /**
    * `POST /api/digest/correct` (spec §10, D-5300): the operator's correction of one digest line, `{rowKind, id,
@@ -2792,6 +2823,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // that arm means "not swept yet" and nothing else. Same shape of reasoning
   // as D-1024: the arm is kept because a build that could not express it could
   // never report the day it becomes reachable.
+  // D-6436: the route's one walk cache; the registry half comes from the watcher's listed tick while it is current.
+  const projectWalk = new ProjectWalkCache();
   app.get('/api/projects', async (req, reply) => {
     // `?class=` (routing spec, slice 4, Task 6): the placement FORECAST by
     // class, so a caller can ask "who could take this project running that
@@ -2812,7 +2845,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'class: not in the vocabulary' });
       }
     }
-    const listed = await listProjects(deps.io, deps.cfg);
+    const rows = fleetRowsUsable(watcher?.currentFleetListing() ?? null, Date.now(), FLEET_ROWS_MAX_AGE_MS) ?? undefined;
+    const listed = await listProjects(deps.io, deps.cfg, rows, projectWalk);
     // The pool half, composed HERE and never inside `listProjects`: that is the
     // fleet read (a readdir of the projects root unioned with registry
     // workdirs) and this is policy off the registry, exactly the split

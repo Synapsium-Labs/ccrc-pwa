@@ -26,7 +26,7 @@ import type { LinearLegacyRow, LinearWorkspaceView } from '../../shared/linear';
 import { LINEAR_TEAMS_SHOWN, LINEAR_TEXT, type LinearBand } from '../src/screens/LinearSection';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
 import { resolveChrome } from './harness';
-import { buildDist, openApp, removeDist, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 
 const THEMES = [PHOSPHOR, 'light'];
 const SKINS = [REFINED, INSTRUMENT];
@@ -66,7 +66,7 @@ let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
@@ -74,7 +74,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await server?.close();
-  removeDist(dist);
 });
 
 interface Box { left: number; right: number; top: number; bottom: number; width: number; height: number }

@@ -105,11 +105,11 @@ describe('the index and the section routes', () => {
     expect(within(index()).getAllByRole('link')).toHaveLength(5);
   });
 
-  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its six cards)', () => {
+  it('headings nest h1, h2, h3 with no level skipped (the Automation page, its seven cards)', () => {
     pendingReads();
     renderSettings('automation');
     const levels = screen.getAllByRole('heading').map((h) => Number(h.tagName.slice(1)));
-    expect(levels).toEqual([1, 2, 3, 3, 3, 3, 3, 3]);
+    expect(levels).toEqual([1, 2, 3, 3, 3, 3, 3, 3, 3]);
   });
 });
 
@@ -289,10 +289,10 @@ describe('the move: nothing lost, nothing twice', () => {
 // purpose line, in §3.3's order.
 describe('the cards: scope and purpose, in order (spec §3.3)', () => {
   const ORDER: Record<string, readonly string[]> = {
-    updates: ['Fleet version', 'Nodes', 'Update policy'],
+    updates: ['Fleet version', 'Nodes', 'Box settings', 'Update policy'],
     appearance: ['Layout and theme'],
     notifications: ['Push notifications', 'Release announcements'],
-    automation: ['Stall watch', 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Roll idle sessions', 'Test box'],
+    automation: ['Stall watch', 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Roll idle sessions', 'Backups', 'Test box'],
     security: ['Sign-in gate', 'Box token', 'Linear'],
   };
   const SCOPES: readonly string[] = Object.values(SETTINGS_SCOPE);

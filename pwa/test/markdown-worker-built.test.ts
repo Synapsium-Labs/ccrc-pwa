@@ -225,3 +225,66 @@ describe('the built render job is its own lazily loaded worker chunk (W8a Task 4
     expect(result.replies![0]!.outcome.kind).toBe('rendered');
   }, 90_000);
 });
+
+// Docs W5h-a Task 8 (base spec 2026-10-01 section 7.10's M7.11 and section 4.10's M4.H4, built half; the W5h-a
+// plan's refinement (f)). The production build emits the highlight worker as its own chunk; a plain node child with no
+// DOM loads it, sees `{ready: true}`, and gets spans for a typescript job; the built `sw.js` precaches it beside the
+// parse worker's chunk; highlight.js core (named by a string from its language-not-found message) is in that chunk
+// and in the reader's render chunk (the shared Markdown library's own colouring, A6 and A22), and in no other emitted
+// file, so in no main-thread chunk. (The count of the `new URL(...)` literal that spawns it is an AST scan in
+// `docs-scans.test.ts`'s W5h-a clause, which needs no build.)
+const HL_LOADER = `
+import { pathToFileURL } from 'node:url';
+const [chunk] = process.argv.slice(1);
+const replies = [];
+globalThis.self = { postMessage: (r) => replies.push(r) };
+const report = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+try {
+  await import(pathToFileURL(chunk).href);
+} catch (e) {
+  report({ load: 'threw', name: e?.name, message: String(e?.message).slice(0, 200), document: typeof document });
+  process.exit(0);
+}
+if (typeof self.onmessage !== 'function') { report({ load: 'no-onmessage', replies }); process.exit(0); }
+const ready = replies.splice(0);
+self.onmessage({ data: { id: 3, lang: 'typescript', code: 'const a: number = 1;' } });
+report({ load: 'ok', document: typeof document, window: typeof window, ready, replies });
+`;
+
+describe('the built highlight worker chunk (W5h-a: M7.11, M4.H4 built half)', () => {
+  const assets = (): string => path.join(out, 'assets');
+  const MARKER = 'did you forget to load/include a language module?';
+  const precached = (): string[] => {
+    const manifest = /precacheAndRoute\(\[(.*?)\],/s.exec(readFileSync(path.join(out, 'sw.js'), 'utf8'));
+    expect(manifest, 'sw.js calls precacheAndRoute with a manifest').not.toBeNull();
+    return [...manifest![1]!.matchAll(/url:"([^"]+)"/g)].map((m) => m[1]!);
+  };
+
+  it('M7.11: exactly one markdownHighlightWorker chunk; it loads with no DOM, says ready, and answers a typescript job with spans', () => {
+    const chunks = readdirSync(assets()).filter((n) => /^markdownHighlightWorker-[\w-]+\.js$/.test(n));
+    expect(chunks).toHaveLength(1);
+    const stdout = execFileSync(process.execPath, ['--input-type=module', '-e', HL_LOADER, path.join(assets(), chunks[0]!)],
+      { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '' }, timeout: 60_000 });
+    const result = JSON.parse(stdout.trim().split('\n').at(-1)!) as {
+      load: string; document?: string; window?: string; ready?: unknown[];
+      replies?: { id: number; result: { kind: string; mode?: string; html?: string } }[];
+    };
+    expect(result).toMatchObject({ load: 'ok', document: 'undefined', window: 'undefined', ready: [{ ready: true }] });
+    expect(result.replies).toHaveLength(1);
+    expect(result.replies![0]).toMatchObject({ id: 3, result: { kind: 'html', mode: 'block' } });
+    expect(result.replies![0]!.result.html).toContain('<span class="hljs-keyword">const</span>');
+  }, 90_000);
+
+  it('M7.11: sw.js precaches the highlight worker chunk beside the parse worker\'s', () => {
+    const urls = precached();
+    expect(urls.filter((u) => /^assets\/markdownHighlightWorker-[\w-]+\.js$/.test(u))).toHaveLength(1);
+    expect(urls.filter((u) => /^assets\/markdownWorker-[\w-]+\.js$/.test(u))).toHaveLength(1);
+  });
+
+  it('M4.H4 (built): highlight.js core is in the highlight worker\'s chunk, may be in the reader\'s render chunk, and is in no other file', () => {
+    const files = readdirSync(assets()).filter((n) => n.endsWith('.js'));
+    const holders = files.filter((n) => readFileSync(path.join(assets(), n), 'utf8').includes(MARKER));
+    expect(holders.filter((n) => /^markdownHighlightWorker-[\w-]+\.js$/.test(n))).toHaveLength(1);
+    expect(holders.filter((n) => !/^(?:markdownHighlightWorker|readerRenderJob)-[\w-]+\.js$/.test(n))).toEqual([]);
+  });
+});

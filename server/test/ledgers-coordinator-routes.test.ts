@@ -15,6 +15,7 @@ import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
 import { testDeps } from './helpers.js';
 import { clientRoutes } from './ccrcApiTable.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { RECOMMEND_WHY_MAX } from '../../shared/ledgers.js';
 
 const HEADERS = { 'x-ccrc-mail-token': ID_GATE_TOKEN };
 const as = (who = 'lane-a'): { byId: string; byUuid: string } => ({ byId: who, byUuid: `u-${who}` });
@@ -183,7 +184,7 @@ describe('POST /api/programmes/:slug/items (plan PL3)', () => {
     const r = await rig();
     const id = await raise(r, { neededBy: 'blocking', soonLabel: null, runId: r.runA });
     expect(r.sent).toHaveLength(1);
-    expect(r.sent[0]).toMatchObject({ title: 'Waiting on you', body: 'Turn on the setting', tag: `item-${id}` });
+    expect(r.sent[0]).toMatchObject({ title: 'Waiting on you', body: 'Turn on the setting', tag: `item-${id}`, url: '/waiting' }); // a tap opens the list (review 1331 F1)
   });
 
   it('a blocking raise and a block still push while the operator views the raising coordinator (F1: the notice is not a run notice of that session)', async () => {
@@ -236,10 +237,81 @@ describe('POST /api/programmes/:slug/items (plan PL3)', () => {
 
   it('accepts a decide item with two to six options, and a secret item with a slot', async () => {
     const r = await rig();
-    const d = await raise(r, { kind: 'decide', options: ['yes', 'no'] });
+    const d = await raise(r, { kind: 'decide', options: ['yes', 'no'], ...RECOMMEND });
     const s = await raise(r, { kind: 'secret', secretSlot: 'npm-token' });
     expect(r.coord.itemById(d)).toMatchObject({ kind: 'decide', options: ['yes', 'no'] });
     expect(r.coord.itemById(s)).toMatchObject({ kind: 'secret', secretSlot: 'npm-token', options: null });
+  });
+});
+
+/** A decide item's recommendation (plan PL9, spec §3.2, D24): the index of the option its raiser recommends and why it beats
+ *  each alternative. */
+const RECOMMEND = { recommended: 0, recommendedWhy: 'Yes keeps the wave on time; no would cost a day of rework.' };
+
+describe('a decide item names the option its raiser recommends, and why (plan PL9, spec §3.2, D24)', () => {
+  const DECIDE = { kind: 'decide', options: ['Library first', 'Keep the order', 'Split the wave'] };
+
+  it('a decide item with a recommendation is kept with it, and its view carries both', async () => {
+    const r = await rig();
+    const id = await raise(r, { ...DECIDE, recommended: 2, recommendedWhy: 'Splitting keeps both halves reviewable.' });
+    expect(r.coord.itemById(id)).toMatchObject({ recommended: 2, recommendedWhy: 'Splitting keeps both halves reviewable.' });
+    const res = await get(r, '/api/programmes/prog-a/items?byId=lane-a&byUuid=u-lane-a');
+    expect((res.json() as { items: unknown[] }).items[0]).toMatchObject({ recommended: 2, recommendedWhy: 'Splitting keeps both halves reviewable.' });
+  });
+
+  it('accepts reasons of exactly RECOMMEND_WHY_MAX characters, and trims them as it trims every text field', async () => {
+    const r = await rig();
+    const id = await raise(r, { ...DECIDE, recommended: 0, recommendedWhy: 'x'.repeat(RECOMMEND_WHY_MAX) });
+    expect(r.coord.itemById(id)?.recommendedWhy).toBe('x'.repeat(RECOMMEND_WHY_MAX));
+    const trimmed = await raise(r, { ...DECIDE, recommended: 1, recommendedWhy: '  Keeping the order is cheaper.  ' });
+    expect(r.coord.itemById(trimmed)?.recommendedWhy).toBe('Keeping the order is cheaper.');
+  });
+
+  it('every other kind reads null for both', async () => {
+    const r = await rig();
+    const id = await raise(r);
+    expect(r.coord.itemById(id)).toMatchObject({ recommended: null, recommendedWhy: null });
+  });
+
+  it.each([
+    ['a decide item without a recommendation', {}],
+    ['a decide item with reasons and no option named', { recommendedWhy: 'Because.' }],
+    ['a decide item naming an option and no reasons', { recommended: 0 }],
+    ['a decide item with blank reasons', { recommended: 0, recommendedWhy: '   ' }],
+    ['a decide item with null for both', { recommended: null, recommendedWhy: null }],
+    ['a recommendation naming no listed option (one past the last)', { recommended: 3, recommendedWhy: 'Because.' }],
+    ['a recommendation naming no listed option (negative)', { recommended: -1, recommendedWhy: 'Because.' }],
+    ['a recommendation that is not a whole number', { recommended: 1.5, recommendedWhy: 'Because.' }],
+    ['a recommendation given as text', { recommended: '0', recommendedWhy: 'Because.' }],
+    ['reasons over RECOMMEND_WHY_MAX characters', { recommended: 0, recommendedWhy: 'x'.repeat(RECOMMEND_WHY_MAX + 1) }],
+    ['reasons that are not text', { recommended: 0, recommendedWhy: ['Because.'] }],
+  ])('refuses %s with bad-request and writes nothing', async (_name, over) => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/items', { ...as(), ...RAISE, ...DECIDE, ...over });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request', detail: expect.stringMatching(/recommend/) });
+    expect(r.coord.itemsFor('prog-a', Date.now()).open).toEqual([]);
+    expect(r.waiting()).toBe(0);
+  });
+
+  it.each([
+    ['a do item carrying a recommendation', {}, RECOMMEND],
+    ['a do item carrying an index alone', {}, { recommended: 0 }],
+    ['a do item carrying reasons alone', {}, { recommendedWhy: 'Because.' }],
+    ['a value item carrying a recommendation', { kind: 'value' }, RECOMMEND],
+    ['a secret item carrying a recommendation', { kind: 'secret', secretSlot: 'npm-token' }, RECOMMEND],
+  ])('refuses %s with bad-request and writes nothing', async (_name, kind, over) => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/items', { ...as(), ...RAISE, ...kind, ...over });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request', detail: expect.stringMatching(/recommend/) });
+    expect(r.coord.itemsFor('prog-a', Date.now()).open).toEqual([]);
+  });
+
+  it('null for both on another kind is the same as leaving them out', async () => {
+    const r = await rig();
+    const id = await raise(r, { recommended: null, recommendedWhy: null });
+    expect(r.coord.itemById(id)).toMatchObject({ kind: 'do', recommended: null, recommendedWhy: null });
   });
 });
 
@@ -350,7 +422,7 @@ describe('POST /api/items/:id/blocking (plan PL3, review 1329 F1)', () => {
     expect(r.waiting()).toBe(1);
     expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: true })).statusCode).toBe(200);
     expect(r.sent).toHaveLength(1);
-    expect(r.sent[0]).toMatchObject({ title: 'Waiting on you', body: 'Turn on the setting', tag: `item-${id}` });
+    expect(r.sent[0]).toMatchObject({ title: 'Waiting on you', body: 'Turn on the setting', tag: `item-${id}`, url: '/waiting' }); // a tap opens the list (review 1331 F1)
     expect(r.waiting()).toBe(2);   // a change to blocking emits once (review 1332 F2)
     // already blocking: ok, no second push, no second emit
     expect((await post(r, `/api/items/${id}/blocking`, { ...as(), blocking: true })).statusCode).toBe(200);

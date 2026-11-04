@@ -6,7 +6,7 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import {
-  ATTENTION_DOT, BareRow, BuildLine, Button, Skeleton,
+  ATTENTION_DOT, BareRow, BuildLine, Button, Skeleton, useNow,
 } from '@ccrc/ui';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner, fleetHostBannerShows } from '../fleet/FleetHostBanner';
@@ -15,12 +15,15 @@ import { DiskBanner } from '../fleet/DiskBanner';
 import { diskBannerShows } from '../fleet/diskWords';
 import { PressureBanner } from '../fleet/PressureBanner';
 import { pressureBannerShows } from '../fleet/pressureWords';
+import { BackupBanner } from '../fleet/BackupBanner';
+import { backupBannerShows } from '../fleet/backupWords';
 import { UpdateIndicator } from '../fleet/UpdateIndicator';
 import { ClassChooser } from '../fleet/ClassChooser';
 import { UPDATES_STALE_TEXT } from '../fleet/useUpdatesView';
 import { SubstrateBanner, substrateBannerShows } from '../fleet/SubstrateBanner';
 import { PasskeyNotice, passkeyNoticeShows, usePasskeyStatus } from '../fleet/PasskeyNotice';
 import { BannerStack } from '../fleet/BannerStack';
+import { AuthResumeBanner, authResumeBannerShows, useResumeInStack } from '../accounts/AuthResumeBanner';
 import { fleetSummary } from '../fleet/fleetSummary';
 import { poolLagText } from '../fleet/poolLag';
 import { runsLineLabel, waitingOnYou } from '../fleet/navBadges';
@@ -124,8 +127,9 @@ export function FleetScreen({
   }, [store]);
 
   // The unseen watermark (pwa/src/lib/seen.ts) — per-device, in localStorage.
-  // SUBSCRIBED, not read into state: this screen is never unmounted (app.tsx
-  // renders it as the desktop sidebar for the whole app lifetime), and the
+  // SUBSCRIBED, not read into state: this screen is long-lived (app.tsx
+  // renders it as the desktop sidebar on every route but the Waiting on you
+  // item route, plan PL9, which remounts it on the way out), and the
   // other writer is a different screen — SessionScreen acks on mount. A
   // `useState(loadAcks)` initialiser never re-runs, and a fleet that hasn't
   // changed emits no snapshot to hang a re-read on (watch.ts's `lastJson`
@@ -381,14 +385,23 @@ export function FleetBanners(): ReactNode {
   const useStore = chrome.store;
   const sessions = useStore((s) => s.sessions);
   const conn = useStore((s) => s.conn);
+  const linkLost = useStore((s) => s.linkLost);
   const notices = useStore((s) => s.notices);
   const dismissNotice = useStore((s) => s.dismissNotice);
   const fleetHealth = chrome.health;
+  // "Reconnecting…" for the whole outage on an empty pane: each reconnect attempt reads `connecting`, and with no
+  // session held the stale-cards banner below says nothing, so the link's loss is said through the attempt too. A cold
+  // start that has not failed yet (`linkLost` false) is unchanged. Exclusive of the `connecting` banner by construction.
+  const offline = conn === 'down' || (conn === 'connecting' && linkLost && sessions.length === 0);
   const updates = chrome.updates;
   // Wave 19, R24(b): a later poll failed and the view is the last answer that landed; every banner says so.
   const stale = updates.view !== null && updates.failure !== null;
   // The passkey notice's posture, read once here for the stack's predicate and the notice alike.
   const passkeyStatus = usePasskeyStatus();
+  // The resume banner's reading (accounts plan Task A23, D-7871 (3)): the lanes the store's one accounts read holds.
+  const lanes = useStore((s) => s.lanes);
+  const resumeNow = useNow(15_000);
+  const resumeHere = useResumeInStack();
   return (
     <BannerStack
       items={[
@@ -401,6 +414,8 @@ export function FleetBanners(): ReactNode {
         { id: 'pressure', shows: pressureBannerShows(fleetHealth), node: <PressureBanner health={fleetHealth} /> },
         // The disk alarm (D-6617), from the same health poll as the fleet-host banner above.
         { id: 'disk', shows: diskBannerShows(fleetHealth), node: <DiskBanner health={fleetHealth} /> },
+        // The fleet box's backup alarm (D-7860), from the same health poll: failed or stale only.
+        { id: 'backup', shows: backupBannerShows(fleetHealth), node: <BackupBanner health={fleetHealth} /> },
         // The halt, with each halting node's Ack in place (programme wave 14, R15(a)). Re-polls on every Ack. The
         // release that waits is not a banner (D-6327): it is the quiet update line, placed once per width.
         {
@@ -413,8 +428,8 @@ export function FleetBanners(): ReactNode {
         { id: 'substrate', shows: substrateBannerShows(sessions), node: <SubstrateBanner store={useStore} /> },
         {
           id: 'offline',
-          shows: conn === 'down',
-          node: conn === 'down' && (
+          shows: offline,
+          node: offline && (
             <div className={`offline-banner ${ATTENTION_DOT}`} role="status">
               Reconnecting…
             </div>
@@ -454,6 +469,11 @@ export function FleetBanners(): ReactNode {
         // the one most likely to have a gate armed and no passkey on it yet. Outside `showAccounts` too — that
         // flag is about which surface owns the accounts STRIP (top bar vs fleet list), and this is not it.
         { id: 'passkey', shows: passkeyNoticeShows(passkeyStatus), node: <PasskeyNotice status={passkeyStatus} /> },
+        // A sign-in this session started that waits for its code (spec §6.2): pinned, so a deadline is never folded.
+        // A phone's other views place it in the detail pane instead (`AuthResumeInDetail`), so the hidden column holds none.
+        // Its slot is in the stack only while it applies, as each store notice's is: it holds no state a fold must keep.
+        ...(resumeHere && authResumeBannerShows(lanes, resumeNow)
+          ? [{ id: 'resume' as const, shows: true, node: <AuthResumeBanner lanes={lanes} /> }] : []),
       ]}
     />
   );

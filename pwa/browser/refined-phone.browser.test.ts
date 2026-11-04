@@ -32,7 +32,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
-import { buildDist, openApp, removeDist, seedStripExpanded, serveDist, type AppFixture, type AppView, type DistServer } from './app';
+import { openApp, seedStripExpanded, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
 import { seventeenLanes, type LaneCase } from '../test/seventeenLanes';
 
@@ -117,7 +117,7 @@ let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  dist = buildDist();
+  dist = sharedDist();
   server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
@@ -125,7 +125,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await server?.close();
-  removeDist(dist);
 });
 
 describe("Refined's phone header is one row of finger-sized doors, and `+ New` clears the list and the toast", () => {
@@ -146,7 +145,10 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
           const row = document.querySelector<HTMLElement>('.ref-phone-row')!;
           const rr = row.getBoundingClientRect();
           const parts = [row.querySelector<HTMLElement>('[data-wordmark]')!, ...row.querySelectorAll<HTMLElement>('[data-command]')];
-          if (parts.length !== 5) out.push(`the row holds ${parts.length} parts, not the wordmark and four doors`);
+          if (parts.length !== 6) out.push(`the row holds ${parts.length} parts, not the wordmark and five doors`);
+          // Named, not only counted (desktop-polish PL5a, review 1374 A1): a different door in Waiting's place would pass the count.
+          const doors = parts.slice(1).map((d) => d.getAttribute('data-command'));
+          if (doors.join(' ') !== 'go-waiting go-inbox go-runs go-docs go-settings') out.push(`the doors are ${doors.join(' ')}`);
           const mid = (el: HTMLElement): number => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
           const line = mid(parts.at(-1)!);
           for (const p of parts) {

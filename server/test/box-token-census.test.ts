@@ -265,7 +265,8 @@ const TOKEN_DOORS = ['/api/token/rotate'];
  *  and called from `server.ts` beside `/api/digest/correct`, so `SESSION_ONLY` cannot see them, for the kickoff route's
  *  reason. Hand-kept for the NAMES only: the ledgers describe below derives the same set from the file and compares in both
  *  directions, so a route there cannot join or leave without this literal moving. */
-const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/programmes/:slug/goals', '/api/items/:id/tick', '/api/items/:id/dismiss'];
+// …and the secret's own route (plan PL6), a credential act: the account gate with a step-up, still no box token.
+const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/programmes/:slug/goals', '/api/items/:id/tick', '/api/items/:id/dismiss', '/api/items/:id/secret'];
 
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS];
@@ -1160,40 +1161,45 @@ describe('the docs surface: four session-gated doors, no box token, no /docs rou
 // ── the accounts surface (accounts plan Task A14, D-7732; spec 2026-10-18 accounts-connect §13) ─────────────────────
 //
 // `server/src/accounts/routes.ts` is the SEVENTH file that registers routes: Check and the kill switch, and since A17
-// (D-7739) the write routes and the revoke checklist's tick (N6, D-7738). Spec §13's rule
+// (D-7739) the write routes and the revoke checklist's tick (N6, D-7738), and since A21 (D-7793) the sign-in's four,
+// one of them a GET. Spec §13's rule
 // for every account route is "session-only: not in EXEMPT, and never accepts a box token", so the census here is the
 // docs surface's: every registration is a door in `ACCOUNT_DOORS`, in both directions; no file under
 // `server/src/accounts/` consults the box token (a call in the gate or the port would refuse or admit every door as surely
 // as one in a handler); none is EXEMPT; and a planted call is SEEN. The doors are session-only fleet acts, not
 // coordination writes, so like the docs doors they join neither `SESSION_ONLY_ALL` nor `ALL_LANES`, and CLAUDE.md's
 // box-token bullet owes them no sentence.
-describe('the accounts surface: eight session-only doors, no box token (spec 2026-10-18 §13)', () => {
+describe('the accounts surface: twelve session-only doors, no box token (spec 2026-10-18 §13)', () => {
   const ACCOUNTS_SRC = read('server/src/accounts/routes.ts');
   /** Every source file of the accounts context, by listing the directory, so a file added there is read without an
    *  edit here. */
   const ACCOUNTS_FILES = readdirSync(path.join(REPO, 'server', 'src', 'accounts'))
     .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/accounts/${f}`);
-  /** The three doors, by path (spec §13.1). Hand-kept for the NAMES only: the cases below derive the same set from the
-   *  file and compare in both directions. */
-  const ACCOUNT_DOORS = ['/api/accounts/:id/check', '/api/accounts/:id/enable', '/api/accounts/:id/disable',
+  /** The doors, by method and path (spec §13.1). Hand-kept for the NAMES only: the cases below derive the same set from
+   *  the file and compare in both directions. */
+  const ACCOUNT_DOOR_KEYS = ['POST /api/accounts/:id/check', 'POST /api/accounts/:id/enable', 'POST /api/accounts/:id/disable',
     // The write routes (accounts plan Task A17, D-7739) and the revoke checklist's tick (N6, D-7738).
-    '/api/accounts', '/api/accounts/:id/credential', '/api/accounts/:id/set', '/api/accounts/:id/remove',
-    '/api/accounts/revoke-ack'];
+    'POST /api/accounts', 'POST /api/accounts/:id/credential', 'POST /api/accounts/:id/set', 'POST /api/accounts/:id/remove',
+    'POST /api/accounts/revoke-ack',
+    // The sign-in routes (accounts plan Task A21, D-7793): the status read is the one GET.
+    'POST /api/accounts/:id/auth/start', 'GET /api/accounts/:id/auth', 'POST /api/accounts/:id/auth/code',
+    'POST /api/accounts/:id/auth/cancel'];
+  const ACCOUNT_DOORS = ACCOUNT_DOOR_KEYS.map((k) => k.slice(k.indexOf(' ') + 1));
   const REGISTERED = registrationsIn(ACCOUNTS_SRC).map((r) => r.key);
   const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
   const CHECK_LINE = "app.post('/api/accounts/:id/check', act('check'));";
 
   it('accounts/routes.ts registers what the checks below reason over, and every accounts file is read', () => {
-    expect(REGISTERED.length, 'the accounts scan collapsed — this describe is over nothing').toBe(ACCOUNT_DOORS.length);
+    expect(REGISTERED.length, 'the accounts scan collapsed — this describe is over nothing').toBe(ACCOUNT_DOOR_KEYS.length);
     expect(new Set(REGISTERED).size, 'an account route is registered twice').toBe(REGISTERED.length);
     expect(ACCOUNTS_FILES, 'the accounts directory listing lost a file this census must read').toEqual(expect.arrayContaining([
       'server/src/accounts/gate.ts', 'server/src/accounts/ops.ts', 'server/src/accounts/reconcile.ts', 'server/src/accounts/routes.ts',
     ]));
   });
 
-  it('ACCOUNT_DOORS is exactly what accounts/routes.ts registers, every one a POST, in both directions', () => {
+  it('ACCOUNT_DOORS is exactly what accounts/routes.ts registers, method and path, in both directions', () => {
     expect([...REGISTERED].sort(), 'accounts/routes.ts and ACCOUNT_DOORS disagree — a route was added or removed on one side only')
-      .toEqual(ACCOUNT_DOORS.map((p) => `POST ${p}`).sort());
+      .toEqual([...ACCOUNT_DOOR_KEYS].sort());
   });
 
   it('no accounts file consults the box token, and no account door is EXEMPT (gate.ts, read as text)', () => {
@@ -1204,7 +1210,7 @@ describe('the accounts surface: eight session-only doors, no box token (spec 202
       }
     }
     expect(lanesIn(ACCOUNTS_SRC)).toEqual([]);
-    for (const p of ACCOUNT_DOORS) expect(GATE_SRC, `${p} became EXEMPT`).not.toContain(`  ['POST ${p}',`);
+    for (const k of ACCOUNT_DOOR_KEYS) expect(GATE_SRC, `${k} became EXEMPT`).not.toContain(`  ['${k}',`);
   });
 
   it('a box-token call planted after the check registration is SEEN — the lane source is live', () => {

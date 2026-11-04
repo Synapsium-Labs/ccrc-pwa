@@ -5,12 +5,14 @@
 // re-derived from the grammars `lib/markdown.tsx` registers) and a few cases the corpus does not carry. M4.P5: raw
 // HTML is visible text on both paths, never an element. Then renderHast's own contract: the url clause runs only
 // when a transform is given, only on url attributes, and never writes the caller's tree.
+// From W5h-a, M4.P10 is stated over settled output: both sides render under one synchronous test store.
 import { afterEach, describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { cleanup, render } from '@testing-library/react';
 import Markdown, { defaultUrlTransform, type Components, type UrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import hljs from 'highlight.js/lib/core';
+import { HIGHLIGHT_GRAMMARS } from '../src/lib/highlightNames';
+import { syncTestStore, withSyncStore } from './highlightTestStore';
 import type { Root as HastRoot } from 'hast';
 import { CHAT_COMPONENTS, ChatMarkdown } from '../src/lib/markdown';
 import { remarkAlerts } from '../src/lib/remarkAlerts';
@@ -27,22 +29,27 @@ const treeOf = (o: ParseOutcome): HastRoot => {
   return o.tree;
 };
 
+/** One synchronous test store for both sides (M4.P10 is stated over settled output). */
+const STORE = syncTestStore('chat');
+
 /** The sync path: what chat renders for a message of at most 4 KiB, react-markdown end to end. */
 const viaMarkdown = (src: string): string =>
-  renderToStaticMarkup(
+  renderToStaticMarkup(withSyncStore(
     <Markdown remarkPlugins={[remarkGfm, remarkAlerts]} components={CHAT_COMPONENTS}>{src}</Markdown>,
-  );
+    STORE,
+  ));
 
 /** The worker path: `parseMarkdown`'s tree through `renderHast`, as chat renders a longer message. */
 const viaRenderHast = (src: string): string =>
-  renderToStaticMarkup(
+  renderToStaticMarkup(withSyncStore(
     renderHast(treeOf(parseMarkdown(src)), { components: CHAT_COMPONENTS, urlTransform: defaultUrlTransform }),
-  );
+    STORE,
+  ));
 
 // The language cases exactly as the golden builds them: every registered grammar (measured, importing
 // lib/markdown.tsx registers them), every alias, every unregistered tag.
 const TAGS: readonly string[] = [
-  ...new Set([...[...hljs.listLanguages()].sort(), ...CHAT_ALIAS_TAGS, ...CHAT_UNREGISTERED_TAGS]),
+  ...new Set([...[...HIGHLIGHT_GRAMMARS], ...CHAT_ALIAS_TAGS, ...CHAT_UNREGISTERED_TAGS]),
 ];
 
 // Parity cases the corpus does not carry, each about a clause post() applies or a shape the parse could split.

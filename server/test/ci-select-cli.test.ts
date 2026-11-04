@@ -142,7 +142,7 @@ function parseGithubOutput(text: string): Record<string, string> {
   return out;
 }
 
-type RunOpts = { event: string; inputMode?: string; selection?: 'shadow' | 'enforce'; fullGreen?: 'true' | 'false'; mapFile?: string; base?: string; timesFile?: string; traceList?: string; floorList?: string; floorStatic?: string };
+type RunOpts = { event: string; inputMode?: string; selection?: 'shadow' | 'enforce'; fullGreen?: 'true' | 'false'; mapFile?: string; base?: string; timesFile?: string; traceList?: string; floorList?: string; floorStatic?: string; workers?: string };
 
 function runSelect(repo: string, opts: RunOpts) {
   const io = mkTmp('ccrc-ci-select-io-');
@@ -165,6 +165,7 @@ function runSelect(repo: string, opts: RunOpts) {
   if (opts.traceList) args.push('--trace-list', opts.traceList);
   if (opts.floorList) args.push('--floor-list', opts.floorList);
   if (opts.floorStatic) args.push('--floor-static', opts.floorStatic);
+  if (opts.workers) args.push('--workers', opts.workers);
 
   let status = 0;
   let stderr = '';
@@ -335,6 +336,92 @@ describe('select.mjs CLI — pull_request', () => {
     // …and the light pull request ran fewer files than the queue will, which is the saving.
     expect(Number(pr.outputs.count)).toBeLessThan(Number(queue.outputs.count));
     expect(queue.summary).toContain('- event: `merge_group`');
+  });
+
+  // D-7868 (the operator's direction of 2026-11-03): a docs-only merge-queue group selects as a pull request does,
+  // from the queue's base sha (`--base`), and hands fast-plan the same `untraced` selection; any other group, or a
+  // queue run with no base to diff from, stays the full run.
+  function buildDocsFixture(extra?: string) {
+    const repo = initRepo();
+    writeFile(repo, 'docs/superpowers/plans/x.md', 'one\n');
+    writeFile(repo, 'src/foo.ts', 'export const foo = 1;\n');
+    writeFile(repo, 'server/test/reads-doc.test.ts', "it('r', () => {});\n");
+    writeFile(repo, 'server/test/reads-src.test.ts', "it('s', () => {});\n");
+    writeFile(repo, 'server/test/git.test.ts', "it('g', () => {});\n");
+    const baseSha = commitAll(repo, 'base');
+    writeFile(repo, 'docs/superpowers/plans/x.md', 'two\n');
+    commitAll(repo, 'queue entry 1: a doc');
+    writeFile(repo, 'docs/superpowers/specs/y.md', 'new\n');
+    commitAll(repo, 'queue entry 2: another doc');
+    if (extra) { writeFile(repo, extra, 'x\n'); commitAll(repo, `queue entry 3: ${extra}`); }
+    // Written after the commits, uncommitted, so the group's change is the queue entries alone.
+    const mapFile = writeMapFile(repo, {
+      format: 1, sha: baseSha, baseline: depRecord(),
+      tests: {
+        'server/test/reads-doc.test.ts': testRecord({ read: ['docs/superpowers/plans/x.md'] }),
+        'server/test/reads-src.test.ts': testRecord({ read: ['src/foo.ts'] }),
+        'server/test/git.test.ts': testRecord({ git: true }),
+      },
+    });
+    return { repo, mapFile, baseSha };
+  }
+
+  it('merge_group, a docs-only group with the queue\'s base: the selection and the untraced list a pull request gets (D-7868)', () => {
+    const { repo, mapFile, baseSha } = buildDocsFixture();
+    const queue = runSelect(repo, { event: 'merge_group', selection: 'enforce', mapFile, base: baseSha });
+    const pr = runSelect(repo, { event: 'pull_request', selection: 'enforce', mapFile, base: baseSha });
+    expect(queue.status, queue.stderr).toBe(0);
+    expect(queue.outputs.tests).toBe('selected');
+    expect(queue.outputs.fallback).toBe('');
+    expect(uniqueFilesInMatrix(queue.outputs.server_matrix)).toEqual(new Set(['test/reads-doc.test.ts', 'test/git.test.ts']));
+    expect(JSON.parse(queue.outputs.untraced!)).toEqual(['server/test/git.test.ts', 'server/test/reads-doc.test.ts']);
+    expect(queue.outputs.untraced).toBe(pr.outputs.untraced);
+    expect(queue.outputs.server_matrix).toBe(pr.outputs.server_matrix);
+    expect(queue.summary).toContain('- event: `merge_group`');
+  });
+
+  it('merge_group: a mixed group, a root file in it, or no base to diff from is the full run (D-7868)', () => {
+    for (const extra of ['src/foo.ts', 'README.md', 'docs/x/package.json']) {
+      const { repo, mapFile, baseSha } = buildDocsFixture(extra);
+      const queue = runSelect(repo, { event: 'merge_group', selection: 'enforce', mapFile, base: baseSha });
+      expect(queue.status, extra).toBe(0);
+      expect(queue.outputs.tests, extra).toBe('full');
+      expect(queue.outputs.count, extra).toBe('3');
+      expect(queue.outputs.untraced, extra).toBe('');
+    }
+    const { repo, mapFile } = buildDocsFixture();
+    const noBase = runSelect(repo, { event: 'merge_group', selection: 'enforce', mapFile });
+    expect(noBase.outputs.tests).toBe('full');
+    const badBase = runSelect(repo, { event: 'merge_group', selection: 'enforce', mapFile, base: '0'.repeat(40) });
+    expect(badBase.status).toBe(0);
+    expect(badBase.outputs.tests, 'an undiffable group').toBe('full');
+  });
+
+  it("--workers 4 plans a full dispatch's server shards at 4 workers, and nothing else's: the macOS legs, a pull request, a queue run and a schedule keep 2", () => {
+    const { repo, mapFile } = buildMainFixture();
+    const dispatch = runSelect(repo, { event: 'workflow_dispatch', inputMode: 'full', selection: 'enforce', mapFile, workers: '4' });
+    expect(dispatch.status).toBe(0);
+    expectValidMatrix(dispatch.outputs.server_matrix, 4);
+    expectValidMatrix(dispatch.outputs.macos_matrix, 2);
+    expect(dispatch.summary).toContain('4 vitest workers');
+    // The same tests run: only the workers moved.
+    const plain = runSelect(repo, { event: 'workflow_dispatch', inputMode: 'full', selection: 'enforce', mapFile });
+    expect(dispatch.outputs.count).toBe(plain.outputs.count);
+    expect(uniqueFilesInMatrix(dispatch.outputs.server_matrix)).toEqual(uniqueFilesInMatrix(plain.outputs.server_matrix));
+    for (const [event, inputMode] of [['pull_request', undefined], ['merge_group', undefined], ['schedule', undefined]] as const) {
+      const other = runSelect(repo, { event, inputMode, selection: 'enforce', mapFile, workers: '4' });
+      expect(other.status, event).toBe(0);
+      expectValidMatrix(other.outputs.server_matrix, 2);
+      expect(other.summary, event).not.toContain('4 vitest workers');
+    }
+  });
+
+  it('--workers on a dispatch with a count the input does not offer fails the job, writing no matrix', () => {
+    const { repo, mapFile } = buildMainFixture();
+    const bad = runSelect(repo, { event: 'workflow_dispatch', inputMode: 'full', selection: 'enforce', mapFile, workers: '3' });
+    expect(bad.status).not.toBe(0);
+    expect(bad.stderr).toMatch(/2 or 4/);
+    expect(bad.outputs.server_matrix).toBeUndefined();
   });
 
   it('a directory a test linked whole: a change under it selects the test, and the table names rule 6 SUBTREE', () => {

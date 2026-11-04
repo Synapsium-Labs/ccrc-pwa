@@ -12,6 +12,7 @@ import type { Hue, RosterKindWire } from './roster.js';
 import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
+import type { ReadFailure } from './agent-protocol.js';
 import type { WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
@@ -9817,9 +9818,10 @@ export function isRequestKind(v: unknown): v is RequestKind {
  *  a new seam). A token outside the list reads `unreadable`.
  *
  *  ITS TWO FAILURE WORDS ARE `ReadFailure`'s (`shared/agent-protocol.ts`),
- *  widened by `ok` and `malformed`. This file cannot import that type (its
- *  three type-only imports are pinned, `peers-claims-l0.test.ts`), so the
- *  union is DERIVED from the array rather than restated beside it, and
+ *  widened by `ok` and `malformed`. The union predates this file's type-only
+ *  `ReadFailure` import, which carries the box settings' failure words (D-6916;
+ *  it is erased, and `peers-claims-l0.test.ts` pins the import list); it stays
+ *  DERIVED from the array rather than restated beside it, and
  *  `update-states.test.ts` holds `Exclude<StampRead, 'ok' | 'malformed'>`
  *  EQUAL to `ReadFailure` at compile time: a third read-failure word added
  *  there is a type error here until this list names it too. */
@@ -9924,6 +9926,64 @@ export interface NodeReportWire {
 }
 /** The lease (§6 lease columns). `target` outlives `state` returning to `idle`. */
 export interface NodeUpdateWire { state: UpdateState; target: string | null; startedAt: number | null; detail: string | null }
+/** Box settings view (D-6914, D-6916, D-7861): what `ccrc settings --write` records as `~/.ccrc/box-settings.json`, and the console's
+ *  reading of it. Each vocabulary is spelled ONCE here as a named union with its `Record<..., true>` map (`SESSION_ROLE_MAP`'s idiom:
+ *  a member added to the union with no key fails loudly, and the list below derives from the map). `server/test/box-settings-read.test.ts`
+ *  holds the state, source and reader words, and the seven keys, equal in both directions to the literals `cmd_settings` in `ccd/ccrc`
+ *  emits, since bash cannot import them. */
+export type BoxSettingState = 'ok' | 'refused' | 'unmeasured';
+const BOX_SETTING_STATE_MAP: Record<BoxSettingState, true> = { ok: true, refused: true, unmeasured: true };
+export const BOX_SETTING_STATES: readonly BoxSettingState[] = Object.keys(BOX_SETTING_STATE_MAP) as BoxSettingState[];
+
+/** Where a setting's value came from: `_ccrc_knob`'s `KNOB_FROM` words. */
+export type BoxSettingSource = 'environment' | 'file' | 'empty' | 'default';
+const BOX_SETTING_SOURCE_MAP: Record<BoxSettingSource, true> = { environment: true, file: true, empty: true, default: true };
+export const BOX_SETTING_SOURCES: readonly BoxSettingSource[] = Object.keys(BOX_SETTING_SOURCE_MAP) as BoxSettingSource[];
+
+/** Which environment the verb read: the timer's own run, or an interactive shell's (which can disagree with the card). */
+export type BoxSettingsReader = 'timer' | 'shell';
+const BOX_SETTINGS_READER_MAP: Record<BoxSettingsReader, true> = { timer: true, shell: true };
+export const BOX_SETTINGS_READERS: readonly BoxSettingsReader[] = Object.keys(BOX_SETTINGS_READER_MAP) as BoxSettingsReader[];
+
+/** Every way a node's settings can fail to be shown (spec 2026-10-25 §2.4). The list is closed: the console reads any other word as
+ *  unrecognised, never as one of these. The file-read pair is `ReadFailure`'s, DERIVED, never respelled (`single-definition`'s "one
+ *  absent/unreadable read vocabulary"). `unmeasured` is the server holding NO read of the node since it started (D-7874: "unmeasured
+ *  is not unset", D-6365); `unreadable` is only a read that was tried and failed. */
+export type BoxSettingsFailure = ReadFailure | 'not-supported' | 'caps-unmeasured' | 'too-large' | 'malformed' | 'clock-ahead' | 'unmeasured';
+const BOX_SETTINGS_FAILURE_MAP: Record<BoxSettingsFailure, true> = {
+  'not-supported': true, 'caps-unmeasured': true, absent: true, unreadable: true, 'too-large': true, malformed: true, 'clock-ahead': true,
+  unmeasured: true,
+};
+export const BOX_SETTINGS_FAILURES: readonly BoxSettingsFailure[] = Object.keys(BOX_SETTINGS_FAILURE_MAP) as BoxSettingsFailure[];
+
+/** The seven settings the snapshot lists, in the order the verb writes them (D-7861: the verb's own list, the first seven of
+ *  `CCRC_SETTINGS`, not a walk of it). */
+export const BOX_SETTINGS_KEYS = [
+  'CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP', 'CCRC_VERSIONS_KEEP', 'CCRC_UPDATE_HEALTH_S', 'CCRC_UPDATE_DEADLINE_MS',
+  'CCRC_RELEASE_BASE_URL', 'CCRC_MODELS_ADVANCE_BUDGET_S',
+] as const;
+export type BoxSettingKey = typeof BOX_SETTINGS_KEYS[number];
+
+/** One setting. `value` is what the act uses (ok) or the raw knob (refused); `why` is display text only: nothing branches on it. */
+export type BoxSettingRow =
+  | { key: BoxSettingKey; state: 'ok'; value: string; from: BoxSettingSource }
+  | { key: BoxSettingKey; state: 'refused'; value: string; from: BoxSettingSource; why: string }
+  | { key: BoxSettingKey; state: 'unmeasured'; why: string };
+/** The backups line and the disk line: measured, or why not. */
+export type BoxSettingsBackups = { state: 'ok'; kept: number; withData: number; bytes: number } | { state: 'unmeasured'; why: string };
+export type BoxSettingsDisk = { state: 'ok'; availBytes: number; sizeBytes: number } | { state: 'unmeasured'; why: string };
+/** `~/.ccrc/box-settings.json`, version 1 (`cmd_settings`). Every string is printable ASCII, at most 512 characters; every number a
+ *  non-negative safe integer. */
+export interface BoxSettingsDoc {
+  v: 1; at: number; reader: BoxSettingsReader; settings: BoxSettingRow[];
+  deadline: { plainMs: number; minMs: number; maxMs: number };
+  backups: BoxSettingsBackups; disk: BoxSettingsDisk;
+}
+/** `NodeWire.settings`: the document with its age at the request's clock, or the word for why none is shown. */
+export type BoxSettingsRead =
+  | { state: 'ok'; doc: BoxSettingsDoc; ageS: number; stale: boolean }
+  | { state: BoxSettingsFailure };
+
 /** One node of the inventory (§6 `nodes`, §12). `agentOps` NULL = no agent by
  *  construction (the server's own row); `[]` = an agent too old to say.
  *  `floorRead`/`previousRead` (fix round 2, R4): the STORED read-state
@@ -9953,6 +10013,9 @@ export interface NodeWire {
   request: NodeRequestWire | null;
   report: NodeReportWire | null;
   update: NodeUpdateWire;
+  /** The node's box settings as the box reported them (D-6916). ADDITIVE and OPTIONAL: an older server omits it, and so does one
+   *  with no watcher; the field's one reader on the console tells that from every word of `BoxSettingsRead`. */
+  settings?: BoxSettingsRead;
 }
 /** One intent row (§6 `update_intent`); `scope` is `FLEET_SCOPE` or a node id. */
 export interface UpdateIntentWire {
@@ -11288,6 +11351,19 @@ export const SERVER_CAPS_FILE = 'server-caps';
  *  turns its arm off within this lease on a `server` or `both` node (an older server never rewrites the file). */
 export const SERVER_CAPS_LEASE_S = 180;
 
+/** The period, in seconds, of the box settings timer: `deploy/systemd/ccrc-settings.timer`'s `OnUnitActiveSec` (D-6915), which a
+ *  test reads back from the unit file. The record `ccrc settings --write` leaves in `~/.ccrc/box-settings.json` is as old as this
+ *  at most while the timer runs, so a reader that judges one stale does so in multiples of it. */
+export const BOX_SETTINGS_TIMER_S = 300;
+
+/** How old a record may be, in seconds by the console's clock, before the card marks it stale: three timer periods, so one missed
+ *  write never turns it amber. */
+export const BOX_SETTINGS_STALE_S = 3 * BOX_SETTINGS_TIMER_S;
+
+/** How far ahead of the console's clock a record's `at` may be before the console shows no settings (`clock-ahead`): a separate
+ *  safety bound, not tied to the timer's period. */
+export const BOX_SETTINGS_CLOCK_AHEAD_S = 300;
+
 /** One word's grammar. The file is three `\n`-terminated lines: `at <1–11 digits>` (unix seconds, the writer's
  *  clock), `caps` followed by zero or more words separated by single spaces, `end`. */
 const SERVER_CAP_WORD_RE = /^[a-z0-9-]{1,64}$/;
@@ -12373,7 +12449,7 @@ export const ACCOUNT_OP_KILL_GRACE_MS = 5_000;
 /** The most a sub's stdout may carry before the answer is cut and refused (spec §13.2's 8 MiB cap). */
 export const ACCOUNT_OP_OUTPUT_MAX_BYTES = 8 * 1024 * 1024;
 
-import type { AccountStateAnswer, LaneState } from './accounts.js';
+import type { AccountStateAnswer, AuthMethod, AuthStatusState, LaneState } from './accounts.js';
 /** One lane on `GET /api/accounts`'s `lanes` (spec §3.4, §13.1; D-5517; accounts plan Task A12), keyed by lane id and
  *  read from `~/.cc-sessions/.accounts/<id>.json`. ONLY for a reader with the session verdict (D-5511): a dark gate's
  *  reader gets today's three fields and nothing else, and an armed gate refuses a box token before the handler. Never
@@ -12401,9 +12477,9 @@ export const LANE_NOT_READY_REASONS = ['no-lane-state', 'not-checked', 'check-fa
 export type LaneNotReadyReason = (typeof LANE_NOT_READY_REASONS)[number];
 
 /** The cap words `ccd caps` advertises for the account subs (N4; spec §13): `account-v2` is the first wave's write
- *  subs, advertised by the box task that ships them (A16); each later wave appends its own word. Accounts plan Task
- *  A12 reads `account-v2` for `connect.accountOps`. */
-export const ACCOUNT_CAPS = ['account-v2'] as const;
+ *  subs, advertised by the box task that ships them (A16); each later wave appends its own word (`account-auth-v1`, A22's
+ *  sign-in sheet, D-7849). Accounts plan Task A12 reads `account-v2` for `connect.accountOps`. */
+export const ACCOUNT_CAPS = ['account-v2', 'account-auth-v1'] as const;
 export type AccountCap = (typeof ACCOUNT_CAPS)[number];
 
 /** `GET /api/accounts`'s `connect` (spec §12.6, §13.1; D-5511), what the screen needs to offer an act and why it cannot: whether the fleet can run the account subs
@@ -12555,11 +12631,11 @@ export const ACCOUNT_CLI_ONLY_VERBS: Readonly<Record<string, string>> = Object.f
 export const ACCOUNT_DENY_SUBS: readonly string[] =
   'add|auth-start|auth-code|auth-cancel|set|check|enable|disable|credential|remove|seed|openrouter-management'.split('|');
 
-/** The account paths the guard covers (spec §3.1; the Linear slot store and legacy key, D-7675), `~`-anchored: Read (and
- *  Bash) of the first six, writes under the last two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
+/** The account paths the guard covers (spec §3.1; the Linear slot store and legacy key, D-7675; the operator's pasted
+ *  secrets, programme ledgers plan PL6), `~`-anchored: Read (and Bash) of the first seven, writes under the last two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
  *  and `~/.cc-sessions/<id>.wrapper`; a read of `.accounts/<id>.json` (spec §3.1 lists writes only) or `~/.ccrc/linear.json` is not refused. */
 export const ACCOUNT_SECRET_PATHS: readonly string[] =
-  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key'];
+  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**'];
 export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
 
 /** The Linear MCP tools no fleet session may call (D-7674, #1444 spec §11): every Linear act goes through `ccrc-api linear`
@@ -12959,3 +13035,102 @@ export interface AccountRemoveCheckAnswer {
 /** `POST /api/accounts/revoke-ack`'s body (N6, D-7738): the lane (which may already be gone) and the credential kind
  *  the operator ticked "I revoked it" for. It writes one `revoke-acknowledged` audit row with no value and runs no op. */
 export interface AccountRevokeAckBody { laneId: string; kind: AtProviderKind }
+
+// ── Accounts: the sign-in routes (accounts plan Task A21, D-7792, D-7793; spec §3.7, §3.8, §6.2, §9, §13.1) ──────────
+// APPENDED at the foot, never inserted above: README and the frozen spec and plan corpus cite this file by line.
+
+/** The cap word the sign-in routes gate on (N4; D-7750 (10), D-7793 (1)): `account-auth-v1`, which A20's `ccd caps`
+ *  advertises. Held out of {@link ACCOUNT_CAPS} until the screen that runs a sign-in shipped; A22's sheet runs Mint and
+ *  Sign in, so it is `ACCOUNT_CAPS`' second word (D-7849 (1)) and `connect.caps` offers it, and the Anthropic sheet
+ *  opens on Mint, the first method of the provider table it does not narrow. */
+export const ACCOUNT_AUTH_CAP = 'account-auth-v1';
+
+/** The words the sign-in routes (`server/src/accounts/routes.ts`) answer of their own, each with its one status in
+ *  `REFUSAL_STATUS` (D-7793). The verb's own codes of the same spelling cross as these words, never as its sentence.
+ *  `bad-code`              the code is off its method's shape, or its bytes off the stdin rule (400): nothing was sent,
+ *                          and the attempt still waits for a code.
+ *  `code-already-sent`     the attempt already has its code; a code works once (409).
+ *  `no-auth-attempt`       no attempt with that id is running for the lane, here or on the box (409).
+ *  `not-your-attempt`      another session started the attempt; only it may send the code (403, spec §3.7).
+ *  `auth-url-untrusted`    the status file did not echo the attempt, or named a URL, host or device code off the
+ *                          method's allowlist (409, N2): the attempt was ended and the answer carries no URL.
+ *  `auth-unsupported-here` the fleet node cannot run a sign-in (501), with the verb's `reason` when it is one of
+ *                          `AUTH_UNSUPPORTED_REASONS`.
+ *  `method-unmeasured`     the method's sign-in host has not been measured on a box, so the server would refuse every
+ *                          URL it showed (409, D-7792): nothing was started.
+ *  `node-changed`          the fleet node answering is not the one the attempt started on (409, spec §13.2).
+ *  `not-a-sign-in-lane`    the sign-out was asked of a lane that is not a ccrc-generated Anthropic lane (409, D-7749). */
+export const ACCOUNT_AUTH_REFUSALS = [
+  'bad-code', 'code-already-sent', 'no-auth-attempt', 'not-your-attempt', 'auth-url-untrusted', 'auth-unsupported-here',
+  'method-unmeasured', 'node-changed', 'not-a-sign-in-lane',
+] as const;
+export type AccountAuthRefusal = (typeof ACCOUNT_AUTH_REFUSALS)[number];
+
+/** Why `auth-unsupported-here`, as `ccrc account auth-start` measures it (D-7750 (6)). */
+export const AUTH_UNSUPPORTED_REASONS = ['darwin-arm-absent', 'no-systemd-run', 'no-user-manager'] as const;
+
+/** `LaneWire`'s in-flight sign-in (spec §6.2, §13.1), from the server's in-memory attempt: its last state the server
+ *  read, the first instant it is no longer live, and whether THIS session started it (the resume banner's question).
+ *  For the starting session only, also the attempt's id and method (accounts plan Task A23, D-7871 (1)): the resumed
+ *  sheet sends its code (`auth/code {attemptId}`) and checks the code's shape and the URL card's words by method. The
+ *  id is no capability: `auth/code` still takes the code from the starting session alone (`not-your-attempt`).
+ *  Absent when the server holds no attempt for the lane. Never persisted by `offline.ts`. An interface merge at the
+ *  foot, so no line cited above moves. */
+export interface LaneWire {
+  authAttempt?: LaneAuthAttempt;
+}
+/** `LaneWire.authAttempt`: what every reader with the session verdict sees, and for the starting session the id and
+ *  method too (D-7871 (1)). */
+export type LaneAuthAttempt = { state: AuthStatusState; expiresAt: number }
+  & ({ mine: true; attemptId: string; method: AuthMethod } | { mine: false });
+
+/** `POST /api/accounts/:id/auth/start`'s body: the method (`AUTH_METHODS`). */
+export interface AccountAuthStartBody { method: string }
+
+/** `POST /api/accounts/:id/auth/start`'s 200: the attempt the server generated, and the one deadline every countdown
+ *  reads (spec §3.7). */
+export interface AccountAuthStartAnswer {
+  readonly ok: true;
+  readonly attemptId: string;
+  readonly expiresAt: number;
+}
+
+/** `GET /api/accounts/:id/auth`'s 200 (spec §6.2 step 5, §3.8): the helper's state, and for the URL states the URL and
+ *  host the server parsed and accepted, and the device code when the method has one. `failure` is the helper's
+ *  refusal code on `failed`, when it is a plain word: never its sentence. Times in epoch ms. */
+export interface AccountAuthStatusAnswer {
+  readonly ok: true;
+  readonly state: AuthStatusState;
+  readonly url?: string;
+  readonly host?: string;
+  readonly userCode?: string;
+  readonly failure?: string;
+  readonly updatedAt: number;
+  readonly expiresAt: number;
+}
+
+/** `POST /api/accounts/:id/auth/code`'s body: the attempt, and the one code (secret-bearing, held for the request). */
+export interface AccountAuthCodeBody { attemptId: string; code: string }
+/** `POST /api/accounts/:id/auth/cancel`'s body. */
+export interface AccountAuthCancelBody { attemptId: string }
+
+/** `POST /api/accounts/:id/credential {signOut: true}`'s 200 (N5, D-7749): what the sign-out found on this box, and the
+ *  lane as the server reads it after. Nothing is said about the provider: G23 is unmeasured (the OA1 record). */
+export interface AccountSignOutAnswer {
+  readonly ok: true;
+  readonly signOut: 'removed' | 'absent';
+  readonly lane: LaneWire;
+}
+
+/** `FleetHealth`'s backup block (D-7858), at the foot as an interface merge, the disk block's rule, so no line cited
+ *  above moves. */
+import type { BackupHealth } from './backup.js';
+export interface FleetHealth {
+  /**
+   * The fleet box's backup health (`BackupHealth`): the status the decider judged from the backup state files on the
+   * last read, the last success, failure, skip and warning, and the staleness. Optional for the absence-permits reason:
+   * an older server, an agent without the `backup` op, or no read yet omits it. Read it through `readBackupHealth`
+   * alone; absent reads as UNKNOWN, never as a healthy backup and never as an alarm.
+   */
+  backup?: BackupHealth;
+}

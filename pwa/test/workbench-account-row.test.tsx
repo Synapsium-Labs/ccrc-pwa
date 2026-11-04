@@ -52,6 +52,7 @@ import {
   type WorkbenchUsageWindow,
 } from '@ccrc/ui';
 import { atBlock, declaredValues, declValue, norm, ruleIn, stripComments } from './cssRule';
+import { labelWords, shownText } from './labelInName';
 
 afterEach(cleanup);
 
@@ -175,7 +176,8 @@ describe('an account that cannot take work', () => {
     const row = rowOf('lane-d');
     const note = within(row).getByText('sign-in expired on the fleet host');
     expect(note.getAttribute('data-tone')).toBe('off');
-    expect(row.getAttribute('aria-label')).toMatch(/; sign-in expired on the fleet host$/);
+    // Named by its content now, not an aria-label (label in name, D-7897): the same sentence.
+    expect(row).toHaveAccessibleName(/; sign-in expired on the fleet host$/);
   });
 
   it('the over-ceiling forecast is a dead-toned note', () => {
@@ -367,10 +369,36 @@ describe('a row is one button that opens the Accounts screen', () => {
 
   it('the row\'s name reads both windows in words', () => {
     render(<WorkbenchAccountRow accounts={[A, acct('lane-b', win(null, '—'), win(10, 'now', { rolledOver: true }))]} onOpen={() => {}} />);
-    expect(rowOf('lane-a').getAttribute('aria-label'))
-      .toBe('lane-a — 5h 82% used, resets in 2h 10m; 7d 41% used, resets in 3d 4h');
-    expect(rowOf('lane-b').getAttribute('aria-label'))
-      .toBe('lane-b — 5h never measured, resets in —; 7d reset, resets in now');
+    // Named by its content now, not an aria-label (label in name, D-7897): the same sentences, word for word.
+    expect(rowOf('lane-a')).toHaveAccessibleName('lane-a — 5h 82% used, resets in 2h 10m; 7d 41% used, resets in 3d 4h');
+    expect(rowOf('lane-b')).toHaveAccessibleName('lane-b — 5h never measured, resets in —; 7d reset, resets in now');
+  });
+
+  it('the row is named by what it shows: no aria-label, and every word it shows is in its name, in order (D-7897)', () => {
+    // axe-core 4.14 checks an aria-label against the row's visible text as ONE unbroken run, which a row of cells
+    // under column heads can never be. So the name is the row's own content: what it shows, in order, with the
+    // words a reader needs between (`5h`, `used`, `resets in`) in screen-reader-only text.
+    const off = acct('lane-d', win(12, '1h 05m'), win(null, '—'), {
+      hue: 'amber', off: true, note: { tone: 'off', text: 'sign-in expired on the fleet host' },
+    });
+    render(<WorkbenchAccountRow accounts={[A, off, acct('lane-b', win(null, '—'), win(10, 'now', { rolledOver: true }))]} onOpen={() => {}} />);
+    const names: Record<string, string> = {
+      'lane-a': 'lane-a — 5h 82% used, resets in 2h 10m; 7d 41% used, resets in 3d 4h',
+      'lane-b': 'lane-b — 5h never measured, resets in —; 7d reset, resets in now',
+      'lane-d': 'lane-d — 5h 12% used, resets in 1h 05m; 7d never measured, resets in —; sign-in expired on the fleet host',
+    };
+    for (const [id, full] of Object.entries(names)) {
+      const row = rowOf(id);
+      expect(row.hasAttribute('aria-label'), id).toBe(false);
+      expect(row).toHaveAccessibleName(full);
+      const name = labelWords(full);
+      let at = 0;
+      for (const w of labelWords(shownText(row))) {
+        at = name.indexOf(w, at);
+        expect(at, `${id}: "${w}" in order in its name`).toBeGreaterThanOrEqual(0);
+        at += 1;
+      }
+    }
   });
 
   it('every focusable control carries the focus ring; the hue rides data-acct, unknown for a null hue', () => {

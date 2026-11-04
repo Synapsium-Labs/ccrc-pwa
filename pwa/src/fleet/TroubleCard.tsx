@@ -17,6 +17,9 @@
 //
 // "PASTE A TOKEN" / "REPLACE TOKEN" (§4.2; Task A19): a token lane's card offers its credential act as a button when
 // the screen can run it, opening the replace sheet the screen hosts. The fleet-host command stays beside it.
+//
+// "SWITCH TO A LONG-LIVED TOKEN" (§4.2, §9; Q1; Task A23, D-7871): a Signed-out sign-in lane's PRIMARY fix, first among
+// its acts, opening the method switch sheet the screen hosts.
 import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, toast } from '@ccrc/ui';
@@ -74,8 +77,11 @@ export function CopyCommand({ command }: { command: string }): ReactNode {
 /** A trouble card's body: what is wrong, its effect, and the fix. Where the fix names a check and the screen can run
  *  one (`onCheck`, accounts plan Task A14, D-7732), **Check again** calls the Check route, the knob row's own; while it
  *  runs (`checking`) the button is busy and does not take a second press. `fleet` is injectable for tests. */
-export function TroubleCard({ copy, onCheck, checking = false, replace, fleet = useFleetStore }: {
+export function TroubleCard({ copy, onCheck, checking = false, replace, switchTo, fleet = useFleetStore }: {
   copy: TroubleCopy; onCheck?: () => void; checking?: boolean;
+  /** The card's primary fix when the screen can run it (accounts plan Task A23, D-7871): a Signed-out sign-in lane's
+   *  "Switch to a long-lived token" (spec §4.2, Q1), opening the method switch sheet. */
+  switchTo?: { readonly label: string; readonly onOpen: () => void };
   /** A token lane's credential act the screen can run (accounts plan Task A19, D-7742): Signed out's "Paste a token"
    *  and Expiring's "Replace token", each opening the replace sheet. Absent: the command alone, as before. */
   replace?: { readonly label: string; readonly onOpen: () => void };
@@ -98,6 +104,9 @@ export function TroubleCard({ copy, onCheck, checking = false, replace, fleet = 
     <div className="acct-trouble">
       <p className="acct-trouble-wrong">{copy.wrong}</p>
       <p className="acct-trouble-effect">{copy.effect}</p>
+      {switchTo !== undefined && (
+        <Button variant="primary" className="acct-trouble-switch" onClick={switchTo.onOpen}>{switchTo.label}</Button>
+      )}
       {copy.move?.primary === true && move}
       <p className="acct-trouble-lead">{copy.lead}</p>
       {replace !== undefined && (

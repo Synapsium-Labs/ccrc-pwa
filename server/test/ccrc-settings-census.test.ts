@@ -67,6 +67,7 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ccrcSettingsNames } from './ccrcSettingsLine.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
@@ -111,10 +112,7 @@ const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&'
 function settingsLines(): string[] {
   return FILES.flatMap((f) => CODE[f].split('\n').filter((l) => /^\s*CCRC_SETTINGS\+?=/.test(l)));
 }
-const SETTINGS: string[] = (() => {
-  const m = /^CCRC_SETTINGS=\(([^)]*)\)$/m.exec(CODE['ccd/ccrc']);
-  return m ? m[1].split(' ').filter((w) => w !== '') : [];
-})();
+const SETTINGS: string[] = ccrcSettingsNames(CODE['ccd/ccrc']) ?? [];
 
 type EnvOnlyClass = 'call-bound' | 'fixture-path' | 'per-run' | 'rollout' | 'handshake' | 'constant' | 'tuning';
 /** D-6588's 42 environment-only names and D-6921's one. Each is a reasoned
@@ -152,7 +150,7 @@ const ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
   CCRC_CADDY_ROOT_CA: { cls: 'fixture-path', why: 'Its header in ccd/ccrc makes it a constant for CCRC_CADDY_SYSTEM_FILE\'s reason, a root-side path a test points at a fixture.' },
   CCRC_SCOPE_SWEEP_STATE: { cls: 'fixture-path', why: '`_check_scope-sweep` reads the sweep\'s verdict record there, a runtime path a test points at a fixture.' },
   CCRC_CGROUP_ROOT: { cls: 'fixture-path', why: '`_check_scopes` reads the cgroup tree there, which a test points at a fixture.' },
-  CCRC_PROC_ROOT: { cls: 'fixture-path', why: '`_check_scopes` reads /proc there, which a test points at a fixture.' },
+  CCRC_PROC_ROOT: { cls: 'fixture-path', why: '`_check_scopes` and the host pressure reader `_psi_over` (D-7876) read /proc there, which a test points at a fixture.' },
   CCRC_ALLOW_SANDBOX_LAUNCHCTL: { cls: 'fixture-path', why: '`_svc_launchctl` lets a harness that asks reach launchctl from a home that is not the real one.' },
   CCRC_CODEX_AUTH_BASE: { cls: 'fixture-path', why: '`_codex_bridge_prepare` forwards it to a direct lane\'s bridge only when its caller set it, the auth endpoint a test points at a loopback fake and a live box never sets (D-6921).' },
   // per run: the address for one run.

@@ -33,13 +33,37 @@ describe('raising and reading an item (plan PL2)', () => {
   it('raiseItem stores every field the coordinator gave, open, and itemById reads it back', () => {
     const s = mk();
     const runId = openRunFor(s, 'prog-a', 'lane-a');
-    const id = raise(s, { runId, kind: 'decide', options: ['yes', 'no'], how: ['Pick one'], neededBy: 'blocking', soonLabel: null });
+    const id = raise(s, { runId, kind: 'decide', options: ['yes', 'no'], how: ['Pick one'], neededBy: 'blocking', soonLabel: null,
+      recommended: 0, recommendedWhy: 'Yes keeps the wave moving.' });
     expect(s.itemById(id)).toEqual({
       id, program: 'prog-a', runId, raisedBy: 'lane-a', kind: 'decide', title: 'Turn on the setting',
       why: 'The wave needs it.', how: ['Pick one'], options: ['yes', 'no'], neededBy: 'blocking', soonLabel: null,
       secretSlot: null, state: 'open', answer: null, note: null, raisedAt: NOW, tickedAt: null, closedAt: null,
+      recommended: 0, recommendedWhy: 'Yes keeps the wave moving.',
     } satisfies ItemRow);
     expect(s.itemById(id + 1)).toBeNull();
+  });
+
+  it('a decide item keeps the option its raiser recommends and why (plan PL9), and another kind raised without one reads null', () => {
+    const s = mk();
+    const id = raise(s, { kind: 'decide', options: ['yes', 'no'], recommended: 1, recommendedWhy: 'No costs nothing now.' });
+    expect(s.itemById(id)).toMatchObject({ recommended: 1, recommendedWhy: 'No costs nothing now.' });
+    expect(s.itemsFor('prog-a', NOW).open[0]).toMatchObject({ recommended: 1, recommendedWhy: 'No costs nothing now.' });
+    const other = raise(s, { kind: 'do' });
+    expect(s.itemById(other)).toMatchObject({ recommended: null, recommendedWhy: null });
+  });
+
+  it('raiseItem refuses a decide row without a recommendation it can read, with a RangeError, and writes nothing (plan PL9)', () => {
+    const s = mk();
+    const cases: readonly Partial<Parameters<CoordStore['raiseItem']>[0]>[] = [
+      {}, { recommended: null, recommendedWhy: null }, { recommended: 0 }, { recommendedWhy: 'Because.' },
+      { recommended: 2, recommendedWhy: 'Because.' }, { recommended: 0, recommendedWhy: '  ' },
+    ];
+    for (const over of cases) {
+      expect(() => raise(s, { kind: 'decide', options: ['yes', 'no'], ...over }), JSON.stringify(over)).toThrow(RangeError);
+    }
+    expect(s.itemsFor(null, NOW).open).toEqual([]);
+    expect(s.db.prepare('SELECT COUNT(*) AS n FROM operator_item_events').get()).toEqual({ n: 0 });
   });
 
   it('a secret item keeps its slot and no options', () => {

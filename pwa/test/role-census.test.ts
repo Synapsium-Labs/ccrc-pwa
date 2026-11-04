@@ -249,6 +249,9 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.settings-release-refused': META,
     '.settings-release-running': META,
     '.settings-node-detail': META,
+    // The Box settings card (D-6917): a setting's key, and the sentence under a refused or unmeasured one.
+    '.box-settings-key': META,
+    '.box-settings-why': META,
     '.settings-theme-name': UI,
     '.update-indicator-door': META,
     '.update-indicator-stale': META,
@@ -262,6 +265,9 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     // disclosure's steps.
     '.acct-session-word': META,
     '.acct-compromise-steps': META,
+    // Mint and Sign in (accounts plan Task A22, D-7849): the server's host beside Open, and the countdown.
+    '.acct-url-host': META,
+    '.acct-countdown': META,
   },
   'shell.css': {
     '.shell-accounts .account-gauge-label': META,

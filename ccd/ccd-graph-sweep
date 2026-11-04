@@ -67,7 +67,8 @@ _gs_row() {      # <row json> — keep one repos[] row for the census, and print
 
 _gs_finish() {   # pass-status ; exit-code
   local status="$1" rc="$2" tmp pass
-  pass='{started:$started, finished:$finished, pin:$pin, status:$status, repos:.} + (if $reason == "" then {} else {reason:$reason} end)'
+  pass='{started:$started, finished:$finished, pin:$pin, status:$status, repos:.} + (if $reason == "" then {} else {reason:$reason} end)
+    + (if $status == "deferred-pressure" then {deferrals:1, deferred_since:$started} else {} end)'
   tmp="$(mktemp "$CENSUS.XXXXXX")"
   # NB: printf of an EMPTY array must emit nothing — a lone newline breaks
   # `jq -cs` (slurp of empty input is [], of "\n" is a parse error).
@@ -75,8 +76,13 @@ _gs_finish() {   # pass-status ; exit-code
     --arg started "$STARTED" --arg finished "$(date -u +%FT%TZ)" \
     --arg pin "$PIN" --arg status "$status" --arg reason "${PASS_REASON:-}" "$pass" > "$tmp" \
     || { rm -f "$tmp"; echo "graph-sweep: census assembly failed" >&2; exit 1; }
-  # append, keep last 10 passes, atomic
-  jq -c --slurpfile p "$tmp" '.passes = ((.passes // []) + $p | .[-10:])' \
+  # append, keep last 10 passes, atomic. A deferred-pressure pass right after another REPLACES it, counting the run in
+  # `deferrals` and keeping the run's first start in `deferred_since` (D-7876): a box under pressure for hours would
+  # otherwise push every earlier pass, and the repository rows the backoff and the budget order read, out of the ten.
+  jq -c --slurpfile p "$tmp" '(.passes // []) as $o | ($o | last // {}) as $l
+    | .passes = (if $p[0].status == "deferred-pressure" and $l.status == "deferred-pressure"
+        then $o[:-1] + [$p[0] + {deferred_since: ($l.deferred_since // $l.started), deferrals: (($l.deferrals // 1) + 1)}]
+        else $o + $p end | .[-10:])' \
     "$CENSUS" 2>/dev/null > "$tmp.2" \
     || jq -cn --slurpfile p "$tmp" '{passes: $p}' > "$tmp.2"
   mv "$tmp.2" "$CENSUS"; rm -f "$tmp"
@@ -1149,6 +1155,14 @@ _gs_lib || _gs_finish failed 1
 . "$GRAPH_LIB/graph-resolve" || { PASS_REASON="cannot load $GRAPH_LIB/graph-resolve"; _gs_finish failed 1; }
 _gr_knobs || { PASS_REASON="${GK_WARN[*]:-the graph settings cannot be read}"; _gs_finish failed 1; }
 for w in ${GK_WARN[@]+"${GK_WARN[@]}"}; do echo "graph-sweep: setting: $w" >&2; done
+# The host's pressure (D-7876): the first thing the pass does once its settings are read, after the lock and the pause
+# file (which keeps its precedence) and before the pin, the store, any fetch or any build. Above
+# CCRC_GRAPH_PRESSURE_MAX (0: off) the pass ends `deferred-pressure`, its reason in the census and on stderr (the
+# journal); the timer, counting from this pass's end, tries again one period later.
+if [ "${GK[CCRC_GRAPH_PRESSURE_MAX]}" -gt 0 ] && _psi_over "${GK[CCRC_GRAPH_PRESSURE_MAX]}" CCRC_GRAPH_PRESSURE_MAX; then
+  PASS_REASON="$PRESSURE_SAID, so the pass is deferred to the timer's next firing"
+  _gs_finish deferred-pressure 0
+fi
 [ -n "$PIN" ] || { PASS_REASON="no pin at ${PIN_FILE/#"$HOME"/\~} — run ccrc install first"; _gs_finish failed 1; }
 # staging/ never outlives its build (spec §3.5): the trap names it while a build holds it.
 trap '_gs_drop_staging' EXIT

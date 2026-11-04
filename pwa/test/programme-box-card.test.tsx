@@ -8,13 +8,16 @@ import type { FleetSession, RunSummary, UpdatesView } from '../../shared/api';
 import { fleetTree } from '../src/fleet/fleetTree';
 import { NO_ROLLUP_PREFS, rollupFleet, type RollupPrefs } from '../src/fleet/rollup';
 import { ProjectCard } from '../src/fleet/ProjectCard';
+import { ProgrammeScreen } from '../src/ledgers/ProgrammeScreen';
 import { assignHues } from '../src/fleet/programmeBoxes';
 import { api } from '../src/lib/api';
 import { resetAcks } from '../src/lib/seen';
+import { matchRoute } from '../src/lib/routes';
 import { setSkin } from '../src/lib/skin';
 import { SKIN_SETS } from '../src/skins';
-import { createFleetStore } from '../src/stores/fleet';
+import { createFleetStore, useFleetStore } from '../src/stores/fleet';
 import { renderFleet } from './fleetHost';
+import { itemView, waitingView } from './ledgersFixture';
 import { withRunBinding } from './runBindingFixture';
 import { HOUR, MIN, NOW, answeredByCoordinator, asking, run, sess } from './rollupFixture';
 
@@ -65,6 +68,7 @@ beforeEach(() => {
   resetAcks();
 });
 afterEach(() => {
+  act(() => useFleetStore.setState({ waiting: null }));
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -508,5 +512,147 @@ describe.each([REFINED, INSTRUMENT] as const)('the box\'s fold in the %s fleet l
     act(() => { vi.advanceTimersByTime(46_000); });
     expect(boxOf(document)?.getAttribute('data-state')).toBe('stalled');
     expect(boxOf(document)?.querySelector('.pg-moved')?.textContent).toBe('no move 2h');
+  });
+});
+
+// PL5b: the chip on the programme box. "N waiting on you" beside the title, only when N is above zero, and a door to the
+// programme's view. N is what the programme view's heading reads (ruling 14290): the programme's open items plus its sessions'
+// questions. The list, the fleet's rows and its runs are the fleet store's (one list for every reader); the box reads its own
+// programme's number. `fleet()`'s worker `w1` asks the operator, so the default fleet holds one question for `port-api`;
+// `quiet()` is the same fleet with nobody asking.
+describe('the waiting chip on a programme box (PL5b)', () => {
+  const OPEN = (n: number, program = 'port-api') =>
+    Array.from({ length: n }, (_v, i) => itemView({ id: 100 + i, program, title: `Item ${i}` }));
+  const quiet = () => fleet(answeredByCoordinator());
+  /** Put `items` on the store's list, with the fleet the box is drawn from heard (its rows and its runs). */
+  const withList = (items: ReturnType<typeof itemView>[], from = quiet()): void => {
+    act(() => useFleetStore.setState({
+      waiting: waitingView({ items }), sessions: from.sessions, runs: from.runs, fleetFrameSeen: true, runsFrameSeen: true,
+    }));
+  };
+  const chip = (c: Element): HTMLElement | null => c.querySelector<HTMLElement>('.pg-kicker .pg-waiting, .pg-kicker .pg-waiting-plain');
+  afterEach(() => { act(() => useFleetStore.setState({ sessions: [], runs: [], fleetFrameSeen: false, runsFrameSeen: false })); });
+
+  it('shows "N waiting on you" after the title when the programme has N open items', () => {
+    withList(OPEN(3));
+    const { sessions, runs } = quiet();
+    const kicker = drawCard(sessions, runs, 'project-c').querySelector('.pg-kicker')!;
+    const c = chip(kicker)!;
+    expect(c.textContent).toContain('3 waiting on you');
+    const title = kicker.querySelector('.pg-title')!;
+    expect(title.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('counts its sessions\' questions with its open items: 2 items and 1 question read "3 waiting on you" on the box and 3 on the view (ruling 14290)', () => {
+    const asking = fleet();
+    withList(OPEN(2), asking);
+    const box = drawCard(asking.sessions, asking.runs, 'project-c');
+    expect(chip(box)!.textContent).toContain('3 waiting on you');
+    cleanup();
+    render(<ProgrammeScreen slug="port-api" store={useFleetStore} />);
+    expect(screen.getByRole('heading', { name: 'Waiting on you · 3' })).toBeTruthy();
+  });
+
+  it('counts a question alone: a programme with no open item but one asking session still has a chip', () => {
+    const asking = fleet();
+    withList([], asking);
+    expect(chip(drawCard(asking.sessions, asking.runs, 'project-c'))!.textContent).toContain('1 waiting on you');
+  });
+
+  it('draws no chip at zero: no list yet, no fleet frame yet, a list without this programme, or nothing but items being checked or done', () => {
+    const { sessions, runs } = quiet();
+    expect(chip(drawCard(sessions, runs, 'project-c'))).toBeNull(); // no list heard
+    cleanup();
+    withList(OPEN(2), quiet());
+    act(() => useFleetStore.setState({ fleetFrameSeen: false })); // the list, but not the fleet's rows
+    expect(chip(drawCard(sessions, runs, 'project-c'))).toBeNull();
+    cleanup();
+    withList(OPEN(2, 'another-programme'));
+    expect(chip(drawCard(sessions, runs, 'project-c'))).toBeNull();
+    cleanup();
+    withList([itemView({ id: 1, program: 'port-api', state: 'checking', tickedAt: NOW }), itemView({ id: 2, program: 'port-api', state: 'done', closedAt: NOW })]);
+    expect(chip(drawCard(sessions, runs, 'project-c'))).toBeNull();
+    cleanup();
+    withList([]);
+    expect(chip(drawCard(sessions, runs, 'project-c'))).toBeNull();
+  });
+
+  it('counts only its own programme\'s open items', () => {
+    withList([...OPEN(2), ...OPEN(5, 'another-programme')]);
+    const { sessions, runs } = quiet();
+    expect(chip(drawCard(sessions, runs, 'project-c'))!.textContent).toContain('2 waiting on you');
+  });
+
+  it('follows the list: the chip appears, changes and goes when the count does', () => {
+    const { sessions, runs } = quiet();
+    const c = drawCard(sessions, runs, 'project-c');
+    expect(chip(c)).toBeNull();
+    withList(OPEN(1));
+    expect(chip(c)!.textContent).toContain('1 waiting on you');
+    withList(OPEN(4));
+    expect(chip(c)!.textContent).toContain('4 waiting on you');
+    withList([]);
+    expect(chip(c)).toBeNull();
+  });
+
+  it('is a door: a labelled button that opens the programme\'s view and nothing else on the box', () => {
+    withList(OPEN(3));
+    const { sessions, runs } = quiet();
+    const c = drawCard(sessions, runs, 'project-c');
+    const door = within(c).getByRole('button', { name: /3 waiting on you/ });
+    expect(door.classList.contains('pg-waiting')).toBe(true);
+    expect(door.getAttribute('aria-label')).toMatch(/port the api/i);
+    expect(c.querySelectorAll('.pg-waiting')).toHaveLength(1);
+    history.replaceState(null, '', '/');
+    fireEvent.click(door);
+    expect(location.pathname).toBe('/programmes/port-api');
+    expect(c.querySelector('.pg-foot button')?.getAttribute('aria-expanded'), 'the footer toggle is untouched').toBe('false');
+    history.replaceState(null, '', '/');
+  });
+
+  it.each(['Build_4', 'pA', 'build_4-name'])('is a door to the view for the programme %s, a slug the server accepts that the first route refused', (slug) => {
+    const f = quiet();
+    const from = { sessions: f.sessions, runs: f.runs.map((r) => ({ ...r, program: slug })) };
+    withList(OPEN(2, slug), from);
+    const c = drawCard(from.sessions, from.runs, 'project-c');
+    const door = within(c).getByRole('button', { name: /2 waiting on you/ });
+    history.replaceState(null, '', '/');
+    fireEvent.click(door);
+    expect(location.pathname).toBe(`/programmes/${slug}`);
+    expect(matchRoute(location.pathname)?.route.id).toBe('programme');
+    expect(matchRoute(location.pathname)?.param).toBe(slug);
+    history.replaceState(null, '', '/');
+  });
+
+  it('draws a plain count, no door, for a slug the programme view would refuse (the owner\'s grammar has no dot)', () => {
+    const f = quiet();
+    const from = { sessions: f.sessions, runs: f.runs.map((r) => ({ ...r, program: 'old.name' })) };
+    withList(OPEN(2, 'old.name'), from);
+    const c = drawCard(from.sessions, from.runs, 'project-c');
+    const plain = chip(c)!;
+    expect(plain.textContent).toContain('2 waiting on you');
+    expect(plain.tagName).not.toBe('BUTTON');
+    expect(within(c).queryByRole('button', { name: /waiting on you/ })).toBeNull();
+    history.replaceState(null, '', '/');
+    fireEvent.click(plain);
+    expect(location.pathname).toBe('/');
+  });
+
+  it('names the real count to a screen reader past the cap: 150 items read "150 waiting on you" in the label, "99+" on screen', () => {
+    withList(OPEN(150));
+    const { sessions, runs } = quiet();
+    const c = drawCard(sessions, runs, 'project-c');
+    const door = within(c).getByRole('button', { name: /150 waiting on you/ });
+    expect(door.getAttribute('aria-label')).toMatch(/^150 waiting on you: open /);
+    expect(door.textContent).toContain('99+ waiting on you');
+    expect(door.textContent).not.toContain('150');
+  });
+
+  it('prints its widest count as "99+", the one width the layout is measured at', () => {
+    withList(OPEN(250));
+    const { sessions, runs } = quiet();
+    const c = chip(drawCard(sessions, runs, 'project-c'))!;
+    expect(c.textContent).toContain('99+ waiting on you');
+    expect(c.textContent).not.toContain('250');
   });
 });

@@ -505,6 +505,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 | `ccd-cap-scopes.timer` | all | 60 s | caps each new tmux pane scope's memory | — |
 | `ccd-pool-sync.timer`, `ccd-update-sync.timer` | fleet | 60 s | pull the account-pool and update projections from the server | — |
 | `ccrc-update-watchdog.timer` | server, both | 60 s | re-measures a self-update that died with its updater ("Releases") | — |
+| `ccrc-settings.timer` | all | 5 min | `ccrc settings --write --from timer`: records what ccrc's settings resolve to, with the backups and free disk, for the console's Box settings card ("Seeing a box's settings", below) | — |
 | `ccd-history-sweep.timer` | fleet, both | 2 min | copies every rostered home's transcripts verbatim, secrets a session printed included, into the store `ccrc history` reads ("Session history", below) | `~/.ccrc/history-off` |
 | `ccd-land-probe.timer` | fleet, both | 5 min | measures, for each project opted in by `~/.ccrc/landing/<project>.conf`, which open PRs conflict with the base and each other, the base's required checks, and each workspace branch's lineage of clean base merges, read-only ("Conflict radar", below) | `~/.cc-sessions/land-probe-paused`; per project `~/.cc-sessions/landing/<project>/paused` |
 | `ccd-graph-sweep.timer` | fleet, both | 15 min (`CCRC_GRAPH_REFRESH_SECS`) | refreshes one code graph per repository, built from its main line in the graph store and linked into each of its trees ("Graph layer", below) | `~/.ccrc/graph-sweep-paused` |
@@ -514,6 +515,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 | `ccd-tmp-sweep.timer` | fleet, both | 1 h | reaps Claude Code's per-uid temp dir | `~/.ccrc/tmp-sweep-paused` |
 | `ccd-scope-sweep.timer` | fleet, both | 60 s | records every dead ccd pane scope; stops an inert one only when armed (below) | `~/.cc-sessions/scope-sweep-paused` |
 | `ccd-usage-sweep.timer` | fleet, both | 4 h | per-account usage totals from transcripts | `~/.ccrc/usage-sweep-paused` |
+| `ccd-carry-dedupe.timer` | fleet, both | 24 h | runs `ccd carry-dedupe --identical-only` and records what it would reclaim in `~/.cc-sessions/carry-dedupe-record`; a dry run until the operator arms it ("Swap-carry copies and the dedupe sweep", below) | — |
 | `ccd-testbox-times.timer` | fleet, both | 24 h | fetches CI's per-file test durations into `CCRC_TESTBOX_TIMES` with the box's `gh`, for the test box's budget estimate; fetches nothing with no test box configured ("The test box", below) | — |
 | `ccrc-codex-usage@<id>.timer` | fleet, both | 15 min | one per `codex` lane: that lane's Codex usage into `~/.cc-limits` | — |
 
@@ -624,6 +626,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `history` | on a `fleet` or `both` box with the history sweep installed (SKIP elsewhere): the last tick and the index lag, the cap and free space, the journal, the export's due and overdue counts and a recovery in progress, each WARN and FAIL with its remedy, all read from `ccrc history status --json` |
 | `build`, `provenance`, `fleet` | the running server's build against the stamp; whether this install was verified (never a FAIL); in remote mode, whether the two boxes agree |
 | `test-slice`, `testbox` | the test slice's live memory, limits and heavy-run queue; the test box as the server decided it: its state and its switch, named separately, the box's queue depth and the tool versions that differ ("The test box", below) |
+| `carry-copies` | the bytes swap carries copied in the last 7 days (swap.log's `(copy: …)` and `, copy: …` forms) and what the dedupe sweep's latest record says it could reclaim, each against `CCRC_CARRY_COPY_WARN_BYTES`; a WARN names how to read the record and arm the sweep ("Swap-carry copies and the dedupe sweep", below) |
 | `box-token` | the box token's lifecycle on each box (the server's token and state files; the fleet's copy and its last sync). The FAIL and WARN arms are on: a FAIL counts in doctor's exit code and a WARN does not. A fresh box that was never handed a value (no fleet generation file and no sync report that records a value written or carries the generation the box held, or no server state file and none of the server's traces of a value: its retired list, its previous value, a set-aside copy, or, on a box whose server writes the fleet file itself, that file or its generation file) has that finding read PASS with its sentence, never WARN or FAIL: the server mints at its first boot, and its next rotation hands the fleet one. A box that once held a value and lost it is a FAIL |
 
 `ccrc doctor --fix` cures the failing checks that know how — `skills`, `wrappers` and `codex`, each by
@@ -687,7 +690,9 @@ verb writes two ccrc-owned files and prints the rest:
   Deleting `exposure.env` and restarting `ccrc.service` takes the box dark again — and disarms the
   gate it armed, so stop Caddy first.
 - **`~/.ccrc/Caddyfile`**, regenerated whole on every run: the host, the
-  chosen `bind` if any, and `reverse_proxy 127.0.0.1:<CCRC_PORT>`, nothing else. Stock Caddy's automatic
+  chosen `bind` if any, and `reverse_proxy 127.0.0.1:<CCRC_PORT>`, nothing else. It needs no `encode` line: the
+  PWA's build writes a Brotli and a gzip copy beside each script, stylesheet and SVG under `/assets/`, and the server
+  sends whichever the browser's `Accept-Encoding` takes. Stock Caddy's automatic
   HTTPS does the certificate through the standard ACME challenges
   (HTTP-01/TLS-ALPN-01) — which is why **a router forwarding ports 80 and 443
   to the box is a prerequisite** the verb states loudly and nothing on the box
@@ -1222,6 +1227,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `status`, `version` | what this box is (its build, role, services, sessions and whether the two boxes agree); the build it runs — both read-only |
 | `update`, `rollback`, `versions`, `channel`, `rollout`, `watchdog` | this section |
 | `backup`, `logs`, `uninstall` | the maintenance verbs, below |
+| `settings [--json] [--write]` | what seven of ccrc's settings resolve to on this box, with the backups and free disk; read-only ("Seeing a box's settings", below) |
 | `coordination-snapshot validate\|restore\|recover` | classify a backup's coordination snapshot, restore it as one set, finish an interrupted restore; exits 0 (`v1`, `legacy`), 1 (`none`, `thinned`), 2 (`invalid`), 70 (usage or a helper that cannot run), below |
 | `expose duckdns\|byo\|ip\|status` | a public name and a certificate ("Exposure", above) |
 | `passwd` | set or rotate the PWA passphrase ("The session gate", below) |
@@ -1279,8 +1285,8 @@ when the recorded role is `fleet`) — on macOS it tails the LaunchAgent's `~/.c
 passed through. `ccrc uninstall` takes the box off ccrc and leaves reinstall safe: it refuses while live sessions
 exist, and while an update holds `~/.ccrc/update.lock` or that lock cannot be measured (`--force` passes both;
 D-3453), removes the units (every enabled `ccrc-codex-usage@<id>.timer` disabled first, while its template is still on
-disk; another tool's `ccgpt-usage@` units are never touched), ccrc's managed settings.json hook entries (per-file
-backup; unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts inside
+disk; another tool's `ccgpt-usage@` units are never touched), ccrc's own hook command from settings.json (per-file
+backup; each entry keeps its matcher and every other hook), marker-verified wrappers only, ccrc's own artifacts inside
 `~/.cc-sessions` file-by-file, `~/ccrc`, a staged `~/ccrc.new` link (D-3452), every kept tree under `~/ccrc-versions`
 and a leftover `~/ccrc.migrating`, and the installed executables — and preserves `~/.ccrc` (less the node's
 install-state files — `installed`, `node-id`, `ccrc-caps`, `floor`, `previous`, `install-step`, `update.json`,
@@ -1327,14 +1333,15 @@ containment**): `CCRC_TEST_SLICE_MEMORY_MAX`, `CCRC_TEST_SLICE_SWAP_MAX`, `CCRC_
 `CCRC_TEST_SLICE_CPU_QUOTA`, `CCRC_TEST_SLICE_IO_WEIGHT`, `CCRC_TEST_HEAVY_SLOTS` and `CCRC_TEST_WIDE_FILES` hold for
 the whole box, so they are read from `ccrc.env` alone (the reader's `file` mode), and `CCRC_TEST_PRESSURE_MAX` the same
 way as the rest; a value that is not its shape keeps its default and warns.
-Twenty-two are the graph sweep's (graph revision 2, D-7348; see **The sweep** under "Graph layer"): `CCRC_GRAPH_STORE`,
+Twenty-three are the graph sweep's (graph revision 2, D-7348; see **The sweep** under "Graph layer"): `CCRC_GRAPH_STORE`,
 `CCRC_GRAPH_SOURCE_REF`, `CCRC_GRAPH_REPOS_EXCLUDE`, `CCRC_GRAPH_REFRESH_SECS`, `CCRC_GRAPH_FETCH_SECS`,
 `CCRC_GRAPH_FULL_REBUILD_SECS`, `CCRC_GRAPH_INCREMENTAL_MAX_FILES` (box-wide default 0: every refresh is a full build,
 OA-GR2, D-7634), `CCRC_GRAPH_FULL_FAIL_MAX`, `CCRC_GRAPH_FAIL_BACKOFF_SECS`, `CCRC_GRAPH_BUDGET`,
 `CCRC_GRAPH_BUILD_TIMEOUT`, `CCRC_GRAPH_SLOT_WAIT_SECS`, `CCRC_GRAPH_BUILD_NICE`, `CCRC_GRAPH_MAX_WORKERS`,
 `CCRC_GRAPH_MAX_SHRINK_PCT`, `CCRC_GRAPH_KEEP_BUILDS`, `CCRC_GRAPH_BUILD_GRACE_SECS`, `CCRC_GRAPH_MIGRATE_BUDGET`,
-`CCRC_GRAPH_HOOKSTATE_FRESH_SECS`, `CCRC_GRAPH_GATE_MAX_DIFF_PCT`, `CCRC_GRAPH_GATE_MAX_DENIALS` and
-`CCRC_GRAPH_CARD_DIFF_LIST_MAX`. `_graph_knobs` reads them and `ccd/graph-resolve` checks each against its shape; a
+`CCRC_GRAPH_HOOKSTATE_FRESH_SECS`, `CCRC_GRAPH_GATE_MAX_DIFF_PCT`, `CCRC_GRAPH_GATE_MAX_DENIALS`,
+`CCRC_GRAPH_CARD_DIFF_LIST_MAX` and `CCRC_GRAPH_PRESSURE_MAX` (default 60, 0 off: the host pressure above which a pass
+is deferred, D-7876). `_graph_knobs` reads them and `ccd/graph-resolve` checks each against its shape; a
 value that is not its shape keeps its default and warns with the key, the value and where it came from, so a typo never
 removes a bound. The sweep's unit sets no environment, so on the fleet box `ccrc.env` is where they go. Four are
 rendered into the sweep's units by `ccrc install`/`update` and `deploy.sh agent` (`CCRC_GRAPH_REFRESH_SECS` into the
@@ -1353,6 +1360,27 @@ naming the file when it is not that shape. Sixteen are the fleet host's, read fr
 twenty-eight are the test box's own, read on the box from its root-owned `/etc/ccrc-testbox/ccrc.env` alone
 (`deploy/testbox/ccrc.env.example` documents them): `CCRC_TESTBOX_RUNS`, `CCRC_TESTBOX_WORKERS`, `CCRC_TESTBOX_RUN_TMPDIR`, `CCRC_TESTBOX_RUN_MEMORY_MAX`, `CCRC_TESTBOX_RUN_SWAP_MAX`, `CCRC_TESTBOX_RUN_CPU_QUOTA`, `CCRC_TESTBOX_ROOT`, `CCRC_TESTBOX_REPOS`, `CCRC_TESTBOX_FETCH_EVERY`, `CCRC_TESTBOX_RETENTION`, `CCRC_TESTBOX_PRISTINE_KEEP`, `CCRC_TESTBOX_PRISTINE_RETRY`, `CCRC_TESTBOX_REPORT_MAX`, `CCRC_TESTBOX_TOOLS_DIR`, `CCRC_TESTBOX_OS_MIRROR`, `CCRC_TESTBOX_EGRESS_ALLOW`, `CCRC_TESTBOX_PUSH_USER`, `CCRC_TESTBOX_ENV_FORWARD`, `CCRC_TESTBOX_RUN_USER_PREFIX`, `CCRC_TESTBOX_REGISTRY_PROXY`, `CCRC_TESTBOX_REGISTRY_UPSTREAM`, `CCRC_TESTBOX_TMPFS`, `CCRC_TESTBOX_LOG_TAIL`, `CCRC_TESTBOX_SESSION_RUNS`, `CCRC_TESTBOX_SERVICE_USER`, `CCRC_TESTBOX_LISTEN`, `CCRC_TESTBOX_SERVICE_TOKEN_FILE` and `CCRC_TESTBOX_UNIT_MAX`. `ccrc test --testbox-knobs host|box` prints either table, one
 line per key, and is how every other reader (the fleet agent's `testbox` op, the test service) gets them.
+One more is read by `ccrc doctor` alone, in `file` mode: `CCRC_CARRY_COPY_WARN_BYTES`, the `carry-copies` check's warn
+bound in bytes (default 10737418240, 10 GiB; see **Swap-carry copies and the dedupe sweep**).
+
+**Seeing a box's settings.** `ccrc settings` prints what seven of them resolve to on this box — the three keeps, the
+health window, the deadline (with the smallest and largest reading the server may hold), the release base (shown only
+as `default`, or `custom` with its scheme and host, so an ordinary userinfo URL shows its host, or `custom` alone when an `@` is
+left after the redaction, the value holds whitespace or another byte that starts a token for the redactor, a `/` stands inside the
+userinfo, or the scheme is not http or https) and the models budget — with where each came from (the
+environment, `ccrc.env`, an empty `ccrc.env` line, or the default) and whether the act that reads it would use it,
+refuse it or could not decide (D-6914, D-7861). It also counts the timestamped backups, those that still hold a
+`coord.db`, their size, and the home filesystem's free space. It is read-only: it never prunes, takes no lock and
+changes no setting. `--json` prints the record, and `--write` writes it to `~/.ccrc/box-settings.json` (0600), every
+string redacted of userinfo and `$HOME` and cut to 480 printable-ASCII characters. On every Linux box
+`ccrc-settings.timer` runs `ccrc settings --write --from timer` every five minutes under the user manager (D-6915), so
+the record shows the environment a console-driven update's detached child reads, not your shell's: a value you export
+only in a shell shows in that shell's `ccrc settings` and not on the card, which says which environment it read. The
+server reads the record inside the inventory sweep, as an eleventh node file, and Settings › Updates shows it per node
+in a read-only **Box settings** card (D-6916, D-6917): a node whose build has no `settings` cap word says so, and a
+record older than 15 minutes shows its age in the warning tone. Nothing acts on the record; every act re-reads its
+setting when it runs. `ccrc doctor`'s `box-settings` check still names a `ccrc.env` line the reader refuses, and its
+`services` check names a stopped `ccrc-settings.timer`.
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -3738,10 +3766,10 @@ general remote-shell:
   and checks it's still under an allowed canonical prefix — closing the
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,
   `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), the
-  fleet's projects root, and exactly the ten `$HOME/.ccrc` node files by
+  fleet's projects root, and exactly the eleven `$HOME/.ccrc` node files by
   name (`NODE_FILES`, `shared/agent-protocol.ts`; the ninth,
   `box-token-generation`, holds a generation id, never a token; the tenth, `tmp-sweep.json`, is the tmp sweep's
-  census, which the server's census lane reads and mails from, D-6624) — a live symlink inside
+  census, which the server's census lane reads and mails from, D-6624; the eleventh, `box-settings.json`, is the box settings record, redacted and ASCII by its writer, which the server's box-settings lane reads inside the inventory run, D-6916) — a live symlink inside
   `$HOME/.ccrc` carrying one is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the update inventory refuses to read as that file; never `$HOME/.ccrc` itself. Writes: `$HOME/.cc-clips/` only. **This
   list did not widen for the transcript resolver or the supervisor
   heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
@@ -3798,6 +3826,13 @@ the last-known-good fleet snapshot instead of going blank:
   time, in that order); `unknown` is a real answer the PWA stays silent on. On a box with
   `CCRC_AUTH=on` this is a gated read like any other — a cookieless `curl` gets `401
   unauthenticated`; `/health` is the ungated probe, and it reports the build, not the link.
+  A `backup` block (D-7858) joins once the fleet box's backup state files have been read once (the agent's
+  `backup` op, once a minute): `status` is `stale`, `failed`, `warning`, `ok`, `unreadable` or
+  `not-configured`, judged at the read of the route against `CCRC_BACKUP_STALE_HOURS` (default 36), with the
+  last success, failure, skip and warning. The directory is `CCRC_BACKUP_STATE_DIR` in the reading process's
+  environment: the fleet box's `~/.ccrc/agent.env`, or a local-mode server's `ccrc.env` (D-7859). `failed` and
+  `stale` raise a banner; Settings › Automation › Backups shows the quiet line for every status, and an unset
+  directory reads "Backups not configured", never an alarm.
 - `POST /api/fleet/reboot` fires a Hetzner Cloud reboot of the fleet host —
   the PWA's confirm dialog names the collateral, because a reboot takes down
   everything else running on that box, not just the fleet. Guards: `409` if
@@ -4490,7 +4525,7 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its nineteen
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its twenty
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
 shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), nineteen clauses,
@@ -4713,9 +4748,15 @@ fourteen-rung ladder or mints a token, and `ccd ws-orphan --expect <token> --tre
 names it or a path inside it, nothing holds it, and nothing in it has changed for 7 days. The server is the only
 composer of `ws-orphan`, and a child's deny list names the verb.
 The lane (`server/src/orphanTreeLane.ts`, `coord/collectOrphanTree.ts`, `orphanTreeSweep.ts`, the wiring in
-`orphanTreeBeat.ts`, the cadence the `orphanTrees` row of `LANE_SCHEDULE`) takes a census every 6 hours (hourly in pressure mode), audits at most 2 trees per
+`orphanTreeBeat.ts`, the cadence the `orphanTrees` row of `LANE_SCHEDULE`) takes a census every 6 hours (hourly in pressure mode,
+which is the disk alarm's `critical`; before the alarm's first sweep the lane reads no pressure), audits at most 2 trees per
 pass (4 under pressure) and acts at most once per pass fleet-wide, only on two audits of one unchanged token at least an
-hour apart. It needs `orphan-v1` from ccd and is stopped by `reclaim-paused`.
+hour apart. It needs `orphan-v1` from ccd and is stopped by `reclaim-paused`. A census that meets its bound (`truncated`)
+audits nothing that pass, writes one `orphan census truncated` row with the rows it saw and the seconds it took, and is
+asked again after 15 minutes, the wait doubling with each truncated census in a row up to the cadence and reset by a
+whole one; an unreadable census is asked again after 15 minutes. A pending retry is a fixed instant that a later change of
+pressure does not move. The count of truncated censuses lives in the server's memory, so a restart starts it over, which
+costs at most a few bounded census walks in the hours after it (#1565).
 
 It ships in **shadow**: it records `orphan worktree would be removed` in the feed and runs no verb until the operator
 touches `$REG/orphan-tree-live` by hand. A tree whose HEAD is on no remote is `orphan worktree left` until
@@ -6128,13 +6169,19 @@ queries/denials, `nullPeerRead` (every row carrying no `ccrcPeerReads` field at 
 proves the hook shipped), `heldN` and `coTenantN` among the roll-ups. It is the instrument the R4 and R7
 adoption readings are taken from; nothing in this repository writes it, ships it, or tests it.
 
-**The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`, `OnUnitActiveSec=` rendered
-from `CCRC_GRAPH_REFRESH_SECS`, default `15min`), builds **one graph per repository** (graph revision 2, D-7350). A
+**The sweep.** `ccd-graph-sweep`, driven by `ccd-graph-sweep.timer` (`OnBootSec=5min`, `OnUnitInactiveSec=` rendered
+from `CCRC_GRAPH_REFRESH_SECS`, default `15min`: the period is counted from the END of the previous pass, so passes
+never run back to back, D-7876), builds **one graph per repository** (graph revision 2, D-7350). A
 pass takes its own flock (a second entrant is `pass-locked`), then reads the pause file:
 `touch ~/.ccrc/graph-sweep-paused` makes every pass `paused` before any fetch, store write or build, and nothing in
 ccrc removes it — not the sweep, not `ccrc install`/`update`, not `deploy.sh agent`, though those enable and start the
 timer (D-7365); only you do, with `rm`. The pass then loads its library from the shipped tree (`ccd/ccrc`'s body and
-`ccd/graph-resolve`, which owns the store, the repository key and the source ref), creates or checks the store
+`ccd/graph-resolve`, which owns the store, the repository key and the source ref) and reads the host's pressure (PSI
+memory and cpu, `some avg10`, the reading `ccrc test` queues on): above `CCRC_GRAPH_PRESSURE_MAX` (default 60; 0 turns
+it off) the pass ends `deferred-pressure` with the reading as its reason, in the census and the journal, before any
+fetch, store write or build, and the timer tries again one period later; a run of deferred passes is one census entry
+whose `deferrals` counts them, so the earlier passes' rows (and every repository's backoff) stay in the census. The
+pause file is read first and wins. The pass then creates or checks the store
 (`CCRC_GRAPH_STORE`, default `~/.ccrc/graphs`, always used as its realpath and refused inside `~/projects` or
 `~/worktrees`), and groups every tree under `~/projects` and `~/worktrees` by the realpath of its git common dir: one
 repository each, keyed `<basename of the main checkout>-<8 hex of the common dir's digest>`. Per repository it keeps a
@@ -6147,7 +6194,8 @@ operator ruled after the measured one-day incremental gap of 10.26%, OA-GR2, D-7
 `CCRC_GRAPH_FAIL_BACKOFF_SECS` between attempts. A build runs through `ccd/graph-build`, the only caller of the engine,
 inside `ccrc test --local --heavy` (the tests slice and its heavy queue: it waits at most `CCRC_GRAPH_SLOT_WAIT_SECS`
 for a slot, runs at `nice` `CCRC_GRAPH_BUILD_NICE` with `CCRC_GRAPH_MAX_WORKERS` workers, and is stopped after
-`CCRC_GRAPH_BUILD_TIMEOUT`), so the sweep's unit no longer carries the build's memory. A build is staged in
+`CCRC_GRAPH_BUILD_TIMEOUT`), so the sweep's unit no longer carries the build's memory; the unit's own
+`MemorySwapMax=512M` (D-7876) makes a sweep that reaches its `MemoryMax=6G` fail rather than swap without limit. A build is staged in
 `<repo-key>/staging/`, checked (the corpus guard, and a graph that shrank by more than `CCRC_GRAPH_MAX_SHRINK_PCT` is
 refused), and published read-only as `<repo-key>/builds/<commit12>-<pin>-<UTC time>/`; `current` then names it in one
 rename, so a session never reads a half-written graph. The unit's `TimeoutStartSec=` is rendered as
@@ -6158,7 +6206,9 @@ and removing a stray `.graphifyignore` an old per-tree sweep generated, are the 
 tree; `graphify update .` run through the link fails with `EACCES` and changes nothing shared, while
 `graphify save-result` writes to `graphify-out/memory/`, which links to the repository's writable `memory/`. A
 repository named in `CCRC_GRAPH_REPOS_EXCLUDE` gets no graph. The census, `~/.ccrc/graph-sweep.json`, keeps the last 10
-passes; a pass status is one of `ok · paused · failed · probed-zero · no-trees-configured · pass-locked`, and each pass
+passes; a pass status is one of `ok · paused · failed · probed-zero · no-trees-configured · pass-locked ·
+deferred-pressure`, and `ccrc doctor`'s graphify line names the last pass's status and duration, and the reason a
+deferred one gives (D-7876); each pass
 holds one `repos[]` row per repository with its outcome (`fresh · refreshed · rebuilt · skipped-budget ·
 skipped-slots · skipped-backoff · refused-by-guard · refused-shrink · timed-out · oom-killed · failed · no-source ·
 excluded`; `failed` names its `fail` class), the build's duration, peak memory and CPU, and each row is also printed
@@ -6530,6 +6580,31 @@ is `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in ccd's child spawn environme
 resume-retry, including an external-provider wrapper that execs Claude Code. Deploying it does not retrofit
 existing panes. Assignment and any subsequent removal take effect at each session's NEXT ordinary start; no
 forced fleet restart is part of this change. An aggregate slice `MemoryHigh` must never return.
+
+### Swap-carry copies and the dedupe sweep
+
+A swap carry copies the session's transcript to the destination account and never removes the source, and a sidecar
+carry that cannot hardlink (a bind-mounted account root answers `EXDEV`, and no read-write mount of that filesystem
+exposes both trees) copies too, so every account a session passed through can keep a full stale copy (#317).
+`ccd carry-dedupe` collects them one uuid at a time behind its keeper rule and its proofs (its header in `ccd/ccd`).
+
+`ccd-carry-dedupe-sweep`, driven by `ccd-carry-dedupe.timer` (an hour after the timer is armed, then daily, spread by up
+to an hour), runs `ccd carry-dedupe --identical-only`: only copies byte-identical to the
+keeper's are candidates. **It ships shadowed:** the verb runs as a dry run and changes nothing, and `--apply` is added
+only while `~/.cc-sessions/carry-dedupe-live` exists. Nothing writes that file; the operator touches it after reading a
+week of shadow lines. Each pass appends one line to `~/.cc-sessions/carry-dedupe-record` (its last 400 lines are kept):
+
+    <YYYY-MM-DD HH:MM:SS> mode=<shadow|live> rc=<n> uuids=<n> copies=<n> <reclaimable|reclaimed>=<bytes> refused=<n> by=<word:n,…|->
+
+taken from the verb's own `total:` line, with its refusals counted by word (`tie`, `diverged`, `recent`, `locked`,
+`keeperless`, `error`). A pass whose output has no total records `unmeasured=no-total` and fails the unit.
+
+`ccrc doctor`'s `carry-copies` check reads two figures and derives neither: the bytes swap carries copied in the last
+7 days, from swap.log's `sidecar … (copy: <cause> <bytes> bytes)` and `, copy: <cause> <F> files <B> bytes` lines, and
+the latest record line's reclaimable bytes. It WARNs when either is over `CCRC_CARRY_COPY_WARN_BYTES` (default
+10737418240, 10 GiB), or when the latest pass did not measure or exited non-zero, and PASSes with both figures
+otherwise. Its remedy for a shadow sweep is to read the record and then arm the sweep; once armed, it points at the
+swap.log lines that name why each carry copied.
 
 ### Memory guardrails (Linux)
 
@@ -7867,8 +7942,12 @@ carrier, adoption, retention, promotion or cleanup. This section records what th
 in `ccd caps`. `session-hook.sh` appends one line per delegation-relevant hook event to that directory's hourly bucket
 `<YYYYMMDDHH>.spool` (a strict UTF-8 JSON line plus LF, under 4096 bytes where bash is built for glibc Linux and OSTYPE reads `linux-gnu*`, else 1008, D-5436; a
 `listing` of git admin-record names rides a Bash call that names a worktree, and is the first field dropped to fit). The hook never makes the directory, never
-prunes outside its own, and keeps its own buckets for about 24 hours. The directory of a session that is removed, or never runs again, is not pruned by anything in
-this wave. On the server the watcher's delegation lane, once per census cadence and never awaited by the poll, lists each live session's
+prunes outside its own, and keeps its own buckets for about 24 hours. The directory of a session that is removed is pruned at a later
+spawn of any session (`_delegation_spool_prune_absent` in `ccd`, after `_delegation_spool_dir`; operator ruling 2026-10-14), at most
+eight directories a spawn: only when no `~/.cc-sessions/<id>.*` entry of any type stands and the directory holds nothing but regular
+`<YYYYMMDDHH>.spool` buckets, each older than 24 hours by name and by mtime (an empty directory needs its own mtime 24 hours old). It is renamed aside, checked again, and moved back if the
+owner reappeared or a bucket arrived; a session respawned in that instant skips the events of that instant, which the census backstops.
+No verb, timer or server delete exists for it. On the server the watcher's delegation lane, once per census cadence and never awaited by the poll, lists each live session's
 directory, reads the buckets as bounded byte ranges (the existing `readFrom` request with an optional `maxBytes` of at most 262144; an
 agent that answers without `dataB64` is unmeasured, never rebuilt from text) and applies them durably in this order: the journal
 `~/.ccrc/delegation-events.log` is appended and fsynced, then `~/.ccrc/delegation-checkpoint.json` is replaced atomically, then
@@ -7904,9 +7983,13 @@ and an unmeasured hour is final: it is never read later as empty.
   unreadable registration, a home or roster it cannot read, a spool root that is a symlink or unsearchable, and a directory that exists
   but is unreadable; it WARNs for a running session whose own directory does not exist yet (the session is not observed until its next
   spawn: nothing is lost by waiting, and `ccd stop` then `ccd start` observes it now at the cost of an in-flight turn) and for a
-  `WorktreeCreate` or `WorktreeRemove` hook that is not ccrc's (ccrc never registers either). The check writes nothing. `ccrc doctor --fix`
-  runs only the shipped `install-session-hooks.sh`, refuses a home whose `settings.json` has an entry mixing ccrc's hook with another
-  command (the installer's sweep would drop it), leaves every foreign registration byte for byte, and makes no spool directory.
+  `WorktreeCreate` or `WorktreeRemove` hook that is not ccrc's (ccrc never registers either); and it WARNs for a home whose
+  `settings.json` `env` sets `BASH_MAX_TIMEOUT_MS` or `BASH_DEFAULT_TIMEOUT_MS`, naming the home and the key, never the value: the
+  delegation broker's twenty-minute rung-4 margin assumes Claude Code's ten-minute Bash ceiling, and changing the margin is a code change
+  (it does not read a project's own `.claude/settings.json` or the environment ccd spawns sessions with). The check writes nothing.
+  `ccrc doctor --fix` runs only the shipped `install-session-hooks.sh`, which removes only ccrc's own hook command from an entry,
+  keeping the entry's matcher and every other hook (an entry that mixes ccrc's hook with another command keeps the other command),
+  and backs up the file first; it leaves every foreign registration byte for byte, and makes no spool directory.
 - **`ccrc coordination-snapshot`** (above, under "The maintenance verbs") is how the journal and checkpoint are backed up, validated
   and restored as one set with `coord.db`.
 - **The torn-tail heal.** A crash in the middle of an append leaves at most one partial line after the journal's last newline. At

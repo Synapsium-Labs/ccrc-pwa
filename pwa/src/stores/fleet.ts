@@ -13,6 +13,8 @@ import { warnNonArrayRoster } from '../lib/accounts';
 import type { DivergenceCensus } from '../fleet/integrityWords';
 import { keepRows } from '../fleet/keepRows';
 import type { AccountsConnect, AccountUsage, LaneWire, ProjectedHome } from '../../../shared/api';
+import type { WaitingView } from '../../../shared/ledgers';
+import { isWaitingView } from '../ledgers/waitingView';
 import { sameJson } from '../lib/sameJson';
 import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
 
@@ -24,6 +26,10 @@ export interface FleetNotice {
 export interface FleetState {
   sessions: FleetSession[];
   conn: 'connecting' | 'open' | 'down';
+  /** Whether the link has gone `down` since it was last `open`: set by a `down`, cleared by an `open`, and left as it is
+   *  by each `connecting` attempt between them, so a reader can tell an attempt during an outage from a cold start's
+   *  first one (an empty Fleet pane keeps saying "Reconnecting…" through the former). Initially false. */
+  linkLost: boolean;
   notices: FleetNotice[];
   /**
    * The account roster — `GET /api/accounts`'s `roster` field, id/label/hue/
@@ -216,6 +222,14 @@ export interface FleetState {
    *  `pools`' reason. Envelope-level validation only; a member word this build cannot name is `readDelegation`'s
    *  (`fleet/delegationWords.ts`) to re-file, never this boundary's to drop. */
   delegation: DelegationProjectionWire | null;
+  /** The Waiting on you list (desktop-polish PL5a, spec §2), off the fleet-level `waiting` frame or a `GET /api/waiting`
+   *  read (`ledgers/waitingStore.ts`). `null` means NO LIST YET on this page, never "nothing waits": a reader that must
+   *  tell the two apart reads `null`, not `items.length`. A reconnect keeps the last view (it is replaced by the frame the
+   *  server sends on connect), so a network blip is not an empty list. NOT hydrated from, or written to, the offline
+   *  snapshot, for `pools`' reason: items from an earlier page load are not a fact this page has heard. Envelope-level
+   *  validation only (`asFleetMsg`): a member this build cannot name is the reader's to tolerate. */
+  waiting: WaitingView | null;
+  setWaiting(view: WaitingView): void;
   /** The LAST successful `/api/projects` read, as `FleetScreen` made it —
    *  lifted here so the session view can label a repo (R3) without a second
    *  agent round trip per project on every mount. `null` = no read yet on
@@ -333,6 +347,13 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
     if (d === null) return m as FleetMsg;                                   // the server's withdrawal: unavailable again
     if (isRecord(d) && typeof d.asOf === 'string'
       && Array.isArray(d.activities) && Array.isArray(d.leases) && Array.isArray(d.unowned)) return m as FleetMsg;
+    return null;
+  }
+  // Desktop-polish PL5a: the envelope only. A frame with no list, or a list that is not three arrays, is dropped and the
+  // held view stays (there is no withdrawal: an empty list is `{items: [], …}`, a fact).
+  if (t === 'waiting') {
+    const w = (m as { waiting?: unknown }).waiting;
+    if (isWaitingView(w)) return m as FleetMsg;
     return null;
   }
   if (
@@ -491,6 +512,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       // snapshot replaces this one.
       sessions: snapshot?.sessions ?? [],
       conn: 'connecting',
+      linkLost: false,
       notices: [],
       feed: [],
       feedDropped: 0,
@@ -508,6 +530,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       divergenceCensus: null,
       // Unavailable until this connection's first frame, and never hydrated — see the field's docstring.
       delegation: null,
+      // No list until a frame or a refetch lands, and never hydrated — see the field's docstring.
+      waiting: null,
       projects: null,
       roster: snapshot?.roster ?? [],
       // Never hydrated: the snapshot holds no lane, by design (G15).
@@ -659,9 +683,11 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               set({ divergenceCensus: { items: msg.divergences, at: Date.now() } });
             } else if (msg.type === 'delegation') {
               set({ delegation: msg.delegation });
+            } else if (msg.type === 'waiting') {
+              set({ waiting: msg.waiting });
             }
           },
-          onState: (conn) => set({ conn }),
+          onState: (conn) => set(conn === 'connecting' ? { conn } : { conn, linkLost: conn === 'down' }),
           // `delegation` is per connection: a reconnect reads unavailable until the new server speaks.
           onOpen: () => { set({ delegation: null }); askCatchUp(); askDurableFeed(); },
           makeSocket: deps.makeSocket,
@@ -697,6 +723,10 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
 
       setProjects(rows) {
         set({ projects: rows });
+      },
+
+      setWaiting(view) {
+        set({ waiting: view });
       },
 
       mergeFeed(events, dropped) {

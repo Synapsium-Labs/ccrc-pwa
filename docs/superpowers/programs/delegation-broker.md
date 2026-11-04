@@ -2,8 +2,10 @@
 
 Spec: `docs/superpowers/specs/2026-10-04-delegation-broker-design.md` (approved 2026-10-05, revisions R1–R9 included)
 Plans: `docs/superpowers/plans/2026-10-05-delegation-broker-wave1-measurement.md` (waves 1–2) and
-`docs/superpowers/plans/2026-10-08-delegation-broker-wave3-observe.md` (wave 3, operator-approved 2026-10-09). Waves
-4–7 are planned one at a time from the measured fields, each before its run dispatches
+`docs/superpowers/plans/2026-10-08-delegation-broker-wave3-observe.md` (wave 3, operator-approved 2026-10-09) and
+`docs/superpowers/plans/2026-10-26-delegation-broker-wave4-project.md` (wave 4, operator-approved 2026-10-26). Wave 5
+is planned from the measured fields before its run dispatches (its plan is proposed in #2167); waves 6 and 7 were
+dropped by the operator (D-7002)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-soft-basin` (the session that wrote the spec; claimant of run 271)
 Workspace: **a fresh child per wave**
 
@@ -23,11 +25,11 @@ never links work by a name, a path, a time or a working directory.
 |---|---|---|---|---|---|---|
 | 1 | 1 Measure | `SessionEnd` registered (captured in a `-hookcap` session, otherwise inert); the capture reducer's delegation block; the mock-API capture rig in the tree; the fixture corpus and its derived matrix; a read-only on-box census | fleet (the hook and installer reach homes through `ccrc update`); tests | — | #284 | **merged** 2026-10-06 as `22b4eabda` after reviews 277, 296 and 304 and two fix rounds; run 271 closed `done`; review 304's 13 findings carried to wave 2 as residue |
 | 2 | 1 Measure (close-out) | the real-lane cross-check (a worker runs two `-hookcap` lanes); a capture of every fleet Claude Code version the corpus lacks; review 304's residue; one re-capture script | tests and docs (the hook and installer unchanged) | 1 | #321 | **merged** 2026-10-13 as `4967dc495`, a plain merge of exact head `823efd3eb` (fix round 5, which absorbed `main`), adding history only; its content first reached `main` inside #340's squash `081636389` on 2026-10-10, byte-identical to `e183237e5`, the tip review 334 accepted; run 306 closed `done` |
-| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448, #597, #681, #698, #711, #736, #832, #1068, #1097, #1115, #1120 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664; pre-soak follow-up #597 merged 2026-10-18 as `c1453e422` (22:04:47Z), a squash of head `7cb2ccda5`, after reviews 610, 615 and 617; run 600 closed `done`; D-5433..D-5436 used from block D-5433..D-5438; prerelease `v0.0.299`; follow-up 2 #681 merged 2026-10-19 as `c44bea401`, run 627 closed `done`; follow-up 3 #698 merged 2026-10-19 as `da2610662`, run 629 closed `done`; follow-up 4 #711 merged 2026-10-19 as `2f7e88cdd`, run 632 closed `done`, and its docs fix #736 merged the same day as `2e0dd3ede`; follow-up 5 #832 merged 2026-10-21 as `69aac52f5`, run 645 closed `done`; follow-up 6 #1068 merged 2026-10-21 as `7da6498a7`, run 728 closed `done`; follow-up 7 #1097 merged 2026-10-22 as `bc231bbcb`, run 740 closed `done`; follow-up 7b #1115 merged 2026-10-22 as `bb1a9478d`, run 762 closed `done`; follow-up 8 #1120 merged 2026-10-22 as `3fe68e1de`, run 768 closed `done` |
-| 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | — | to plan |
+| 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448, #597, #681, #698, #711, #736, #832, #1068, #1097, #1115, #1120, #1162, #1558 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664; pre-soak follow-up #597 merged 2026-10-18 as `c1453e422` (22:04:47Z), a squash of head `7cb2ccda5`, after reviews 610, 615 and 617; run 600 closed `done`; D-5433..D-5436 used from block D-5433..D-5438; prerelease `v0.0.299`; follow-up 2 #681 merged 2026-10-19 as `c44bea401`, run 627 closed `done`; follow-up 3 #698 merged 2026-10-19 as `da2610662`, run 629 closed `done`; follow-up 4 #711 merged 2026-10-19 as `2f7e88cdd`, run 632 closed `done`, and its docs fix #736 merged the same day as `2e0dd3ede`; follow-up 5 #832 merged 2026-10-21 as `69aac52f5`, run 645 closed `done`; follow-up 6 #1068 merged 2026-10-21 as `7da6498a7`, run 728 closed `done`; follow-up 7 #1097 merged 2026-10-22 as `bc231bbcb`, run 740 closed `done`; follow-up 7b #1115 merged 2026-10-22 as `bb1a9478d`, run 762 closed `done`; follow-up 8 #1120 merged 2026-10-22 as `3fe68e1de`, run 768 closed `done`; follow-up 9 #1162 merged 2026-10-23 as `0c439bb7d`, run 816 closed `done`; follow-up 10 #1558 merged 2026-10-27 as `66fd18299` (head `2155e5625`), run 968 still open; the seven-day soak was waived by the operator on 2026-10-28, not passed |
+| 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | #1614, #1627, #1619, #2191 | **merged**: PR1 #1614 on 2026-10-31 as `3ce530dad` and PR2 #1627 on 2026-10-31 as `c555df234` (both landed by another session at the operator's go; runs 584 and 1021 still open); PR4 #1619 on 2026-11-03 as `27cd78962` from `c9eaf82fc`, after reviews 1365 and 1367, run 1020 closed `done`; PR3 #2191 on 2026-11-03 as `30b270d19` from `ef3b85d46`, after reviews 1384, 1390 and 1397, run 1007 closed `done`; the two-day gate was waived by the operator on 2026-10-28, not passed |
 | 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; adoption; digest mail; retain and resolve; promotion through `ws-add --base` | **AGENT-FIRST**, then server | 4 | — | to plan |
-| 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | to plan |
-| 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; #166 wave 4's sweep (merged #215, live) | — | to plan |
+| 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | dropped by the operator on 2026-10-26 (D-7002) |
+| 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; #166 wave 4's sweep (merged #215, live) | — | dropped by the operator on 2026-10-26 (D-7002) |
 
 ## Measurement matrix (filled by wave 1; wave 2's close-out added 2.1.292 and the real-lane cross-check)
 
@@ -1534,8 +1536,54 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     daily report carries the window since T0. A tap that changes a delegation-lane file goes to the coordinator first,
     who decides whether the clock restarts.
 
+- **2026-10-26 — wave 4 planned and approved.** The operator approved the lean four-PR plan
+  (`docs/superpowers/plans/2026-10-26-delegation-broker-wave4-project.md`) and ruled D-6999..D-7002 and D-7021..D-7024
+  (its "Operator rulings of 2026-10-26"): rung-4 leases are shown inferred and never adopted automatically; a 10-day
+  journal floor; the checkpoint bounded by retiring ended rows; waves 6 and 7 dropped, so the orphan-tree lane owns the
+  cleanup and must skip an adopted lease; compaction carries the records it still needs; compaction armed on landing;
+  the frame's shape; C1 retires ended activities only.
+- **2026-10-28 — "Skip soaks".** The operator waived every remaining elapsed-time soak gate: wave 3's seven days and
+  wave 4's two. Waived, not passed. Health, disk and update monitoring stay.
+- **2026-10-31 — PR1 #1614 and PR2 #1627 merged**, landed by another session at the operator's go, as `3ce530dad` and
+  `c555df234`. Runs 584 and 1021 are still open; closing them is the operator's decision, as run 985's was.
+- **2026-11-03 — PR4 #1619 merged** as `27cd78962` from `c9eaf82fc`. Review 1365's F1-F10 (less F5 and F9) and its
+  addendum were fixed in round 1; review 1367 found no critical or important finding. D-7017..D-7019 are defined in
+  `pr4.md`, and D-7020 is unused. Review 1367's nine minors are in the plan's Rider. Run 1020 closed `done`. Ledger
+  folds #2164 and #2171 turned the plan's D-7017..D-7019 and D-7011..D-7016 lines into pointers to the task notes
+  (one definition per number).
+- **2026-11-03 — PR3 #2191 merged** as `30b270d19` from `ef3b85d46`, through the native merge queue. Run 1007 closed
+  `done`.
+  - Production: the base merges of `main` were docs-only. A stale install made the first PWA run red; it was green
+    after `npm ci`.
+  - Integration fixes after the PR opened: `main` had narrowed the watcher's store port (#2031, #2059), so the two
+    retention reads joined `WatcherCoordMember` (D-7869), and the store's delegation-method census went from seven to
+    nine. D-7869 was the tree's highest number, and deviation-refs' floor reads top-level plans only, so its definition
+    sits in this plan, under a `Ledger-Edit` trailer by ruling.
+  - Review 1384 (round 1) ruled F1-F4: a failure after the carried rename re-recovers (D-7015); the rollback text is
+    corrected and pinned; 24 unmeasured mutants measured; the open's own repair report is the oracle. Its advisories
+    A1, A3 (D-7016), A4 and A5 were taken too.
+  - CI then found lane output after a test's teardown: the delegation lane's close drained nothing. The gap was older
+    than PR3, and PR3's daily compaction added to it. D-7878 makes the awaited close admit nothing, drain every pass and
+    latch the durability closed. Its `watch.ts` hunks were edited under claim 3297, by its coordinator's consent.
+  - Review 1390 (round 2): the rollback text in full, a third arm pinned, three guards each given a red, a close abort
+    no longer a budget cut, and the samplers stopped in a `finally`.
+  - Review 1397 (round 3, the last) confirmed every item and found a fourth older-build outcome (`fold-refused`) and
+    the flip-only way back. They are text, not behaviour, and are folded into D-7022's amendment and the Rider; no
+    fourth round.
+  - delegation-recovery's crash-matrix rows O5 and O1 time out at their 20 s bound on the loaded fleet box, on `main`
+    as well, and were carried with CI as the arbiter: a `main`-side item in the Rider.
+  - The operator accepted the soaks as waived. The full server suite ran in the merge queue, not locally.
+
 ## Carried constraints
 
+- **Learned in wave 4:**
+  - A nested task note cannot define the tree's highest D-number: deviation-refs' floor reads top-level plans only.
+  - A feature PR that edits a top-level plan needs a `Ledger-Edit` trailer in its head commit's LAST paragraph, beside
+    the attribution, or git's trailer parser does not see it.
+  - delegation-recovery's crash-matrix rows sit at their 20 s bound on the fleet box. A timeout-only red there is
+    timed alone at the tip and on `main` before it is called anything.
+  - RLIMIT_NPROC counts threads: a mutation run's cap is `ps -L` + 1500, never processes + N.
+  - A suite the tool moves to background at 600 s is awaited, never duplicated.
 - macOS CI legs are flaky by ruling and gate nothing; mutation-table discipline (every guard ships with a red);
   `ccd/ccd` re-stamped after every edit; README citation instruments green; no stage marker gains a writer.
 - **ccrc never registers `WorktreeCreate` or `WorktreeRemove`** — either replaces Claude Code's native worktree

@@ -2109,11 +2109,11 @@ describe('ccrc install: ~/.local/bin/graphify converges onto the pinned venv (R3
 removeTmpFixturesEachTest();
 
 // ── graph revision 2 GR8 (D-7354; spec §5.2, §6.1, §9.2): the sweep's units are RENDERED from the settings ──────────
-// `deploy/systemd/ccd-graph-sweep.{timer,service}` are templates whose `OnUnitActiveSec=` and `TimeoutStartSec=` are
-// the defaults. `ccrc install`/`update` (`_inst_units`) and `deploy.sh agent` (`_graph_units`) render them through
-// `_inst_graph_timer` and `_inst_graph_service` in ccd/ccrc, from the graph settings `_gr_knobs` validates: the period
-// is CCRC_GRAPH_REFRESH_SECS, the start timeout BUDGET x (SLOT_WAIT_SECS + BUILD_TIMEOUT) + 600. Unset, both render
-// the template's bytes. Every bash run below is a FIXED driver: paths and values arrive as arguments or environment.
+// `deploy/systemd/ccd-graph-sweep.{timer,service}` are templates whose `OnUnitInactiveSec=` (`OnUnitActiveSec=` before
+// D-7876) and `TimeoutStartSec=` are the defaults. `ccrc install`/`update` (`_inst_units`) and `deploy.sh agent`
+// (`_graph_units`) render them through `_inst_graph_timer` and `_inst_graph_service` in ccd/ccrc, from the graph
+// settings `_gr_knobs` validates: the period is CCRC_GRAPH_REFRESH_SECS, the start timeout BUDGET x (SLOT_WAIT_SECS +
+// BUILD_TIMEOUT) + 600. Unset, both render the template's bytes. Every bash run below is a FIXED driver: paths and values arrive as arguments or environment.
 const GRAPH_TIMER_T = join(REPO, 'deploy', 'systemd', 'ccd-graph-sweep.timer');
 const GRAPH_SERVICE_T = join(REPO, 'deploy', 'systemd', 'ccd-graph-sweep.service');
 
@@ -2149,8 +2149,35 @@ function withValue(template: string, directive: string, value: string): string {
 
 describe('N14: the sweep\'s timer and service are rendered from the graph settings (D-7354, spec §5.2)', () => {
   it('characterization: the templates carry today\'s values, the defaults the formula gives (15min; 4 x (600 + 600) + 600)', () => {
-    expect(readFileSync(GRAPH_TIMER_T, 'utf8').split('\n').filter((l) => l.startsWith('OnUnitActiveSec='))).toEqual(['OnUnitActiveSec=15min']);
+    expect(readFileSync(GRAPH_TIMER_T, 'utf8').split('\n').filter((l) => l.startsWith('OnUnitInactiveSec='))).toEqual(['OnUnitInactiveSec=15min']);
     expect(readFileSync(GRAPH_SERVICE_T, 'utf8').split('\n').filter((l) => l.startsWith('TimeoutStartSec='))).toEqual(['TimeoutStartSec=5400']);
+  });
+
+  // D-7876: the period counts from the END of the previous pass (OnUnitInactiveSec=), so no pass starts in the second
+  // the last one finished, as 27 of one day's passes did under OnUnitActiveSec= while each ran longer than the period.
+  // The mutant row: the template's key reverted to OnUnitActiveSec= is refused by the renderer, so a revert reds here.
+  it('the timer counts from the previous pass\'s end: one OnUnitInactiveSec= line, no OnUnitActiveSec= line (D-7876)', () => {
+    const lines = readFileSync(GRAPH_TIMER_T, 'utf8').split('\n');
+    expect(lines.filter((l) => /^OnUnit(Active|Inactive)Sec=/.test(l))).toEqual(['OnUnitInactiveSec=15min']);
+    const home = mkTmp('ccrc-graph-unit-revert-');
+    const reverted = join(home, 'reverted.timer');
+    writeFileSync(reverted, readFileSync(GRAPH_TIMER_T, 'utf8').replace(/^OnUnitInactiveSec=/m, 'OnUnitActiveSec='));
+    const r = renderGraphUnit('_inst_graph_timer', reverted);
+    expect(r.code, 'a template whose key reverted is refused').not.toBe(0);
+    expect(r.stderr).toMatch(/exactly one OnUnitInactiveSec= line/);
+    expect(existsSync(r.dest)).toBe(false);
+  });
+
+  // D-7876: the sweep's own unit gets a finite swap cap (it was MemorySwapMax=infinity under MemoryMax=6G); the builds
+  // are capped by ccrctests.slice, so this caps the sweep's own git, jq and bookkeeping. The renderer touches only
+  // TimeoutStartSec=, so the installed unit carries the template's MemorySwapMax= byte for byte.
+  it('the service carries one finite MemorySwapMax= (512M), and the rendered unit keeps it byte for byte (D-7876)', () => {
+    const t = readFileSync(GRAPH_SERVICE_T, 'utf8');
+    expect(t.split('\n').filter((l) => l.startsWith('MemorySwapMax='))).toEqual(['MemorySwapMax=512M']);
+    expect(t.split('\n').filter((l) => l.startsWith('MemoryMax='))).toEqual(['MemoryMax=6G']);
+    const r = renderGraphUnit('_inst_graph_service', GRAPH_SERVICE_T, {}, ['CCRC_GRAPH_BUDGET=2']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(r.dest, 'utf8').split('\n').filter((l) => l.startsWith('MemorySwapMax='))).toEqual(['MemorySwapMax=512M']);
   });
 
   it('unset: both render the template byte for byte, at 644, with nothing on stderr', () => {
@@ -2168,7 +2195,7 @@ describe('N14: the sweep\'s timer and service are rendered from the graph settin
     for (const [secs, want] of [['1800', '30min'], ['90', '90s'], ['900', '15min']] as const) {
       const r = renderGraphUnit('_inst_graph_timer', GRAPH_TIMER_T, { CCRC_GRAPH_REFRESH_SECS: secs });
       expect(r.code, r.stderr).toBe(0);
-      expect(readFileSync(r.dest, 'utf8'), secs).toBe(withValue(GRAPH_TIMER_T, 'OnUnitActiveSec', want));
+      expect(readFileSync(r.dest, 'utf8'), secs).toBe(withValue(GRAPH_TIMER_T, 'OnUnitInactiveSec', want));
     }
   });
 
@@ -2192,7 +2219,7 @@ describe('N14: the sweep\'s timer and service are rendered from the graph settin
     writeFileSync(bad, '[Timer]\nOnBootSec=5min\n');
     const r = renderGraphUnit('_inst_graph_timer', bad);
     expect(r.code).not.toBe(0);
-    expect(r.stderr).toMatch(/exactly one OnUnitActiveSec= line/);
+    expect(r.stderr).toMatch(/exactly one OnUnitInactiveSec= line/);
     expect(existsSync(r.dest)).toBe(false);
   });
 
@@ -2215,7 +2242,7 @@ describe('N14: the sweep\'s timer and service are rendered from the graph settin
     expect(readFileSync(unit('ccd-graph-sweep.service'))).toEqual(readFileSync(GRAPH_SERVICE_T));
     const r2 = runInstall(home, ['install'], { CCRC_GRAPH_REFRESH_SECS: '1800', CCRC_GRAPH_BUDGET: '2' });
     expect(r2.code, r2.stderr).toBe(0);
-    expect(readFileSync(unit('ccd-graph-sweep.timer'), 'utf8')).toBe(withValue(GRAPH_TIMER_T, 'OnUnitActiveSec', '30min'));
+    expect(readFileSync(unit('ccd-graph-sweep.timer'), 'utf8')).toBe(withValue(GRAPH_TIMER_T, 'OnUnitInactiveSec', '30min'));
     expect(readFileSync(unit('ccd-graph-sweep.service'), 'utf8')).toBe(withValue(GRAPH_SERVICE_T, 'TimeoutStartSec', '3000'));
   });
 });
@@ -2270,7 +2297,7 @@ describe('deploy.sh agent renders the sweep\'s units through the same functions 
       expect(r.status, r.stderr).toBe(0);
       const unit = (n: string): string => join(home, '.config', 'systemd', 'user', n);
       expect(readFileSync(unit('ccd-graph-sweep.timer'), 'utf8'))
-        .toBe(timer === null ? readFileSync(GRAPH_TIMER_T, 'utf8') : withValue(GRAPH_TIMER_T, 'OnUnitActiveSec', timer));
+        .toBe(timer === null ? readFileSync(GRAPH_TIMER_T, 'utf8') : withValue(GRAPH_TIMER_T, 'OnUnitInactiveSec', timer));
       expect(readFileSync(unit('ccd-graph-sweep.service'), 'utf8'))
         .toBe(service === null ? readFileSync(GRAPH_SERVICE_T, 'utf8') : withValue(GRAPH_SERVICE_T, 'TimeoutStartSec', service));
     });

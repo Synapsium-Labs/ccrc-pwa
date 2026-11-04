@@ -345,12 +345,17 @@ describe('the scanner is looking at something', () => {
     // `registerCoordRoutes` and each IN EXEMPT as a box-token machine lane (box token and attribution, no cookie). They add nine to the exempt-HTTP count.
     // 13 since PL4: the operator's four, `GET /api/waiting`, `GET /api/programmes/:slug/goals`, `POST /api/items/:id/tick`
     // and `POST /api/items/:id/dismiss`, registered from `server.ts` by `registerLedgerOperatorRoutes`, session-gated and NOT EXEMPT, no box token.
-    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(13);
+    // 14 since PL6: `PUT /api/items/:id/secret`, the same registration, session-gated and NOT EXEMPT, no box token; it also takes
+    // the account gate with a step-up (a credential act).
+    expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(14);
     // 3 in `accounts/routes.ts` (accounts plan Task A14, D-7732): `POST /api/accounts/:id/check`, `/enable` and
     // `/disable`, session-gated and NOT EXEMPT, no box token; each takes the account gate on the `account-v2` cap.
     // 8 since the write routes (accounts plan Task A17, D-7739): `POST /api/accounts`, `/:id/credential`, `/:id/set`,
     // `/:id/remove` and `/api/accounts/revoke-ack` (N6, D-7738), session-gated and NOT EXEMPT, no box token.
-    expect(scanRoutes('accounts/routes.ts').length).toBe(8);
+    // 12 since the sign-in routes (accounts plan Task A21, D-7793): `POST /api/accounts/:id/auth/start`, `GET …/auth`,
+    // `POST …/auth/code` and `POST …/auth/cancel`, session-gated and NOT EXEMPT, no box token; each takes the account
+    // gate on the `account-auth-v1` cap.
+    expect(scanRoutes('accounts/routes.ts').length).toBe(12);
     // 12 in `linear/proxyRoutes.ts` (#1444, plan task LK9, spec §6): one per `ccrc-api linear` verb, every one a
     // box-token lane IN EXEMPT whose own `onRequest` refuses every token verdict but `ok` whatever the flag says.
     expect(scanRoutes('linear/proxyRoutes.ts').length).toBe(12);
@@ -504,7 +509,11 @@ describe('the scanner is looking at something', () => {
     // token: the HTTP half 154 -> 158, the gated count 90 -> 94, the exempt-HTTP count stays 64.
     // 165 since PL4 on top: the operator's four routes in `coord/ledgersRoutes.ts`, session-gated and NOT EXEMPT, no box token: the
     // total 161 -> 165, the HTTP half 158 -> 162, the gated count 94 -> 98, the exempt-HTTP count stays 64.
-    expect(ROUTES.length).toBe(165);
+    // 169 since the accounts sign-in routes' four (accounts plan Task A21, D-7793), session-gated and NOT EXEMPT, no box
+    // token: the HTTP half 162 -> 166, the gated count 98 -> 102, the exempt-HTTP count stays 64.
+    // 170 since programme ledgers PL6's `PUT /api/items/:id/secret`, session-gated and NOT EXEMPT, no box token: the HTTP half
+    // 166 -> 167, the gated count 102 -> 103, the exempt-HTTP count stays 64.
+    expect(ROUTES.length).toBe(170);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -667,7 +676,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 165 scanned + the static wildcard when the bundle is built.
+    // 170 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1252,9 +1261,12 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // and the remove answer `step-up-required` (403); the check asks for no step-up and reaches its handler, which, with
     // no journal in the sweep's deps, answers `linear-unavailable` (503). Dark and authenticated differ BY DESIGN.
     'POST /api/linear/workspaces', 'POST /api/linear/workspaces/:id/check', 'DELETE /api/linear/workspaces/:id',
+    // The secret's route (programme ledgers plan PL6): it takes the account gate with `cap: null` and a step-up, so dark it
+    // answers `auth-off` (501) and armed with a session that has not stepped up `step-up-required` (403): BY DESIGN.
+    'PUT /api/items/:id/secret',
   ]);
 
-  it('FLAG_AWARE is exactly those seventeen — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those eighteen — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -1285,6 +1297,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'POST /api/auth/step-up/start',
       'POST /api/linear/workspaces',
       'POST /api/linear/workspaces/:id/check',
+      'PUT /api/items/:id/secret',
       'PUT /api/linear/connection',
     ]);
     // …and both really are exempt-or-gated as the loop below assumes: login is
@@ -1294,7 +1307,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 162 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 167 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1358,7 +1371,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 162 HTTP routes, not the 64 exempt.
+          //    is not itself flag-aware — the assertion that covers all 167 HTTP routes, not the 64 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

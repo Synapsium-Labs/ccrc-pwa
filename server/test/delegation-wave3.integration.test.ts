@@ -1393,9 +1393,9 @@ describe('8. the closed scope census', () => {
     }
   });
 
-  it('no physical journal compaction or truncation, except the torn-tail heal: every production use of the journal path is on a closed list, by caller', () => {
+  it('only the torn-tail heal and compactJournal rewrite the retained set: every journal and carried path use and file-port act is on a closed list, by caller', () => {
     const SRC = filesUnder('server/src', /\.ts$/);
-    expect(SRC.filter((f) => /delegation-events\.log|DELEGATION_JOURNAL_FILE/.test(code(read(f)))), 'only the journal module and the applier name the file').toEqual(
+    expect(SRC.filter((f) => /delegation-(?:events|carried)\.log|DELEGATION_(?:JOURNAL|CARRIED)_FILE/.test(code(read(f)))), 'only the journal module and the applier name either file').toEqual(
       ['server/src/coord/delegation-checkpoint.ts', 'server/src/coord/delegation-journal.ts']);
 
     // 1. EVERY truncating call in the server, by spelling (`truncate`, `truncateSync`, `ftruncate`, `fsp.truncate`...). The delegation
@@ -1412,8 +1412,8 @@ describe('8. the closed scope census', () => {
       'server/src/coord/delegation-journal.ts: truncate(',
     ]);
 
-    // 2. EVERY use of the journal's path in the applier, by the method that makes it. A temp-and-rename over the journal, a second cut, an
-    //    alias or a write through the file would all need a line that is not on this list, whatever they are spelt.
+    // 2. EVERY journal/carried path use and file-port act in the applier, by its caller. This includes temps, their renames and removal,
+    //    so replacing a temp operand with a live file, or adding another writer, cannot hide behind an allowed method name.
     const lines = code(read('server/src/coord/delegation-checkpoint.ts')).split('\n');
     let method = '(file)';
     let inClass = false;
@@ -1422,23 +1422,56 @@ describe('8. the closed scope census', () => {
       if (/^(?:export )?class DelegationDurability\b/.test(l)) { inClass = true; method = '(class)'; }
       const top = /^(?:export )?(?:async )?function\*? ([A-Za-z_]\w*)/.exec(l);
       if (top !== null) { inClass = false; method = top[1]!; }
-      const m = inClass ? /^ {2}(?:(?:private|public|protected|static|async|readonly)\s+)*(constructor|[A-Za-z_]\w*)\(/.exec(l) : null;
+      const m = inClass ? /^ {2}(?:(?:private|public|protected|static|async|readonly)\s+)*\*?(constructor|[A-Za-z_]\w*)\(/.exec(l) : null;
       if (m !== null && !/^(?:if|for|while|switch|return|catch)$/.test(m[1]!)) method = m[1]!;
-      if (/journalPath|DELEGATION_JOURNAL_FILE|delegation-events\.log/.test(l)) hits.push({ method, text: l.trim() });
+      if (/journalPath|carriedPath|DELEGATION_(?:JOURNAL|CARRIED)_FILE|delegation-(?:events|carried)\.log|this\.port\.\w+\(|\bretainedRecords\(/.test(l)) hits.push({ method, text: l.trim() });
     }
-    const ALLOWED: ReadonlyArray<[string, RegExp]> = [
-      ['(file)', /^DELEGATION_JOURNAL_FILE,$/],                                                                       // the import
-      ['recoverDelegationFromFiles', /^for await \(const record of readDelegationJournalRecords\(port, path\.join\(dir, DELEGATION_JOURNAL_FILE\), undefined, /],   // recovery's read
+    const ALLOWED: ReadonlyArray<[string, RegExp, number?]> = [
+      ['(file)', /^DELEGATION_CARRIED_FILE,$/],
+      ['(file)', /^DELEGATION_JOURNAL_FILE,$/],
+      ['recoverDelegationFromFiles', /^for await \(const line of readDelegationRetainedRecords\(port, path\.join\(dir, DELEGATION_CARRIED_FILE\), path\.join\(dir, DELEGATION_JOURNAL_FILE\), \(t\) => \{ found\.tail = t; \}\)\) \{$/],
       ['(class)', /^private readonly journalPath: string;$/],
+      ['(class)', /^private readonly carriedPath: string;$/],
       ['constructor', /^this\.journalPath = path\.join\(deps\.dir, DELEGATION_JOURNAL_FILE\);$/],
-      ['constructor', /^this\.writer = new DelegationJournalWriter\(this\.port, this\.journalPath, deps\.dir\);$/],   // the appender
-      ['recover', /^this\.writer = new DelegationJournalWriter\(this\.port, this\.journalPath, this\.deps\.dir\);$/],  // the appender, again
-      ['healTailLocked', /^await this\.port\.truncate\(this\.journalPath, plan\.offset\);$/],                        // THE ONE CUT (D-4655)
+      ['constructor', /^this\.carriedPath = path\.join\(deps\.dir, DELEGATION_CARRIED_FILE\);$/],
+      ['constructor', /^this\.writer = new DelegationJournalWriter\(this\.port, this\.journalPath, deps\.dir\);$/],
+      ['recover', /^this\.writer = new DelegationJournalWriter\(this\.port, this\.journalPath, this\.deps\.dir\);$/],
+      ['healTailLocked', /^await this\.port\.mkdirp\(path\.dirname\(kept\)\);$/],
+      ['healTailLocked', /^const existing = await this\.port\.readFile\(kept\);$/],
+      ['healTailLocked', /^const handle = await this\.port\.createTemp\(temp\);$/],
+      ['healTailLocked', /^await this\.port\.rename\(temp, kept\);$/],
+      ['healTailLocked', /^await this\.port\.fsyncDir\(path\.dirname\(kept\)\);$/],
+      ['healTailLocked', /^await this\.port\.fsyncDir\(this\.deps\.dir\);$/, 2], // once before and once after the cut
+      ['healTailLocked', /^await this\.port\.truncate\(this\.journalPath, plan\.offset\);$/],
       ['healTailLocked', /^await this\.port\.fsyncFile\(this\.journalPath\);$/],
-      ['remeasureTail', /^const handle = await this\.port\.openRead\(this\.journalPath\);$/],                        // the heal's re-measure: a read
-      ['repairLocked', /^projection, checkpoint: this\.current\.checkpoint, journal: \(\) => readDelegationJournalRecords\(this\.port, this\.journalPath\), /],
-      ['visitRetainedRecords', /^for await \(const record of readDelegationJournalRecords\(this\.port, this\.journalPath\)\) visit\(record\);$/],
-      ['planPruning', /^if \(this\.pruningEnabled\(\)\) for await \(const r of readDelegationJournalRecords\(this\.port, this\.journalPath\)\) collector\.add\(r\);$/],
+      ['reportQuarantineLocked', /^try \{ names = await this\.port\.listDir\(dir\); \} catch \(err\) \{$/],
+      ['reportQuarantineLocked', /^try \{ st = await this\.port\.statFile\(kept\); \} catch \(err\) \{$/],
+      ['remeasureTail', /^const handle = await this\.port\.openRead\(this\.journalPath\);$/],
+      ['repairLocked', /^projection, checkpoint: this\.current\.checkpoint, journal: \(\) => this\.retainedRecords\(\), heal: \[\.\.\.this\.drifted\.values\(\)\], evidence: this\.evidence,$/],
+      ['visitRetainedRecords', /^for await \(const record of this\.retainedRecords\(\)\) visit\(record\);$/],
+      ['retainedRecords', /^private async \*retainedRecords\(\): AsyncGenerator<DelegationJournalRecordV1, void, undefined> \{$/],
+      ['retainedRecords', /^for await \(const line of readDelegationRetainedRecords\(this\.port, this\.carriedPath, this\.journalPath\)\) yield line\.record;$/],
+      ['planPruning', /^if \(this\.pruningEnabled\(\)\) for await \(const r of this\.retainedRecords\(\)\) collector\.add\(r\);$/],
+      ['compactJournal', /^const carriedTemp = `\$\{this\.carriedPath\}\.tmp`;$/],
+      ['compactJournal', /^const journalTemp = `\$\{this\.journalPath\}\.tmp`;$/],
+      ['compactJournal', /^await this\.port\.rename\(carriedTemp, this\.carriedPath\);$/],
+      ['compactJournal', /^await this\.edge\('carried-directory-fsync', \(\) => this\.port\.fsyncDir\(this\.deps\.dir\)\);$/],
+      ['compactJournal', /^await this\.port\.rename\(journalTemp, this\.journalPath\);$/],
+      ['compactJournal', /^await this\.edge\('journal-directory-fsync', \(\) => this\.port\.fsyncDir\(this\.deps\.dir\)\);$/],
+      ['compactJournal', /^await this\.edge\('writer-reopen', \(\) => \{ this\.writer = new DelegationJournalWriter\(this\.port, this\.journalPath, this\.deps\.dir\); \}\);$/],
+      ['compactJournal', /^await this\.port\.removeTemp\(carriedTemp\)\.catch\(\(\) => undefined\);$/],
+      ['compactJournal', /^await this\.port\.removeTemp\(journalTemp\)\.catch\(\(\) => undefined\);$/],
+      ['compactJournal', /^this\.writer = new DelegationJournalWriter\(this\.port, this\.journalPath, this\.deps\.dir\);$/],
+      ['planCompactionLocked', /^for await \(const line of readDelegationRetainedRecords\(this\.port, this\.carriedPath, this\.journalPath, undefined, \(bytes, lines\) => \{ currentCarriedBytes = bytes; currentCarriedLines = lines; \}\)\) \{$/],
+      ['writeCarriedLocked', /^held\.out = await this\.port\.createTemp\(temp\);$/],
+      ['writeCarriedLocked', /^\? \(held\.carried \?\?= await this\.port\.openRead\(this\.carriedPath\)\)$/],
+      ['writeCarriedLocked', /^: \(held\.journal \?\?= await this\.port\.openRead\(this\.journalPath\)\);$/],
+      ['copySuffixLocked', /^held\.src = await this\.port\.openRead\(this\.journalPath\);$/],
+      ['copySuffixLocked', /^held\.out = await this\.port\.createTemp\(temp\);$/],
+      ['replaceCheckpoint', /^await this\.port\.mkdirp\(this\.deps\.dir\);$/],
+      ['replaceCheckpoint', /^held\.handle = await this\.port\.createTemp\(this\.tempPath\);$/],
+      ['replaceCheckpoint', /^await this\.edge\('checkpoint-rename', \(\) => this\.port\.rename\(this\.tempPath, this\.checkpointPath\)\);$/],
+      ['replaceCheckpoint', /^await this\.edge\('directory-fsync', \(\) => this\.port\.fsyncDir\(this\.deps\.dir\)\);$/],
     ];
     const used = new Map<number, number>();
     const unlisted = hits.filter((h) => {
@@ -1447,8 +1480,8 @@ describe('8. the closed scope census', () => {
       used.set(k, (used.get(k) ?? 0) + 1);
       return false;
     }).map((h) => `${h.method}: ${h.text.slice(0, 110)}`);
-    expect(unlisted, 'a use of the journal path that is not on the closed list').toEqual([]);
-    expect([...used.entries()].filter(([, count]) => count !== 1), 'each listed use exists exactly once').toEqual([]);
+    expect(unlisted, 'a retained-set path or file-port act that is not on the closed list').toEqual([]);
+    expect([...used.entries()].filter(([k, count]) => count !== (ALLOWED[k]![2] ?? 1)), 'each listed use exists exactly as many times as declared').toEqual([]);
     expect(used.size).toBe(ALLOWED.length);
     // the heal is declared once and called once, from recovery, on the plan recovery made; the copy is durable before the cut
     const checkpoint = code(read('server/src/coord/delegation-checkpoint.ts'));
@@ -1470,8 +1503,8 @@ describe('8. the closed scope census', () => {
     expect(jr.match(/\bport\.\w+\(/g), 'every call the journal module makes on the port').toEqual(['port.openRead(', 'port.mkdirp(', 'port.openRead(', 'port.openAppend(', 'port.fsyncDir(']);
     // R80 N1: the file name's every use INSIDE the journal module: its one declaration, and nothing else (a function here that wrote,
     // created or truncated `${dir}/${DELEGATION_JOURNAL_FILE}` through `fsp` or the node port would need a second)
-    expect(jr.match(/^.*(?:DELEGATION_JOURNAL_FILE|delegation-events\.log).*$/gm)?.map((l) => l.trim()), 'the journal module names its file once').toEqual(
-      ["export const DELEGATION_JOURNAL_FILE = 'delegation-events.log';"]);
+    expect(jr.match(/^.*(?:DELEGATION_(?:JOURNAL|CARRIED)_FILE|delegation-(?:events|carried)\.log).*$/gm)?.map((l) => l.trim()), 'the journal module names each file once').toEqual(
+      ["export const DELEGATION_JOURNAL_FILE = 'delegation-events.log';", "export const DELEGATION_CARRIED_FILE = 'delegation-carried.log';"]);
     // every `fsp.` call of the module is inside the node port's own literal (the adapter), never a free function
     const portFile = parsedFile('server/src/coord/delegation-file-port.ts');
     const portBinding = portFile.bindings.find((b) => b.name === 'nodeDelegationFilePort');
@@ -1517,15 +1550,15 @@ describe('8. the closed scope census', () => {
   it('no new agent request operation, capability word or protocol bump: `readFrom` is the same op with one optional field', () => {
     expect([FLEET_PROTO, FLEET_PROTO_MIN]).toEqual([1, 1]);
     const proto = read('shared/agent-protocol.ts');
-    // the request ops are a small closed set: main's nineteen (the eighteenth and nineteenth, `testbox` and `testbox-tools-sync`, are the test box plan's TB9, D-7411; the seventeenth, `pressure`, is the host-pressure read of #1170; the sixteenth, `disk`, is fleet disk retention's DR-2, D-6614; the fifteenth, `account`, is the accounts plan's A8, not
+    // the request ops are a small closed set: main's twenty (the twentieth, `backup`, is backup health's D-7858; the eighteenth and nineteenth, `testbox` and `testbox-tools-sync`, are the test box plan's TB9, D-7411; the seventeenth, `pressure`, is the host-pressure read of #1170; the sixteenth, `disk`, is fleet disk retention's DR-2, D-6614; the fifteenth, `account`, is the accounts plan's A8, not
     // delegation's), whatever form a new one is declared in (an interface, or a `type X = { ...; op: 'x' }` alias, which an
-    // interface-shaped parse cannot see), and exactly main's nineteen members of the union
+    // interface-shaped parse cannot see), and exactly main's twenty members of the union
     const ops = [...proto.matchAll(/\bop:\s*'([\w-]+)'/g)].map((m) => m[1]!);
     expect(ops, 'every request op the protocol declares').toEqual(['exec', 'read', 'readFrom', 'readB64', 'readdir', 'stat', 'lstat', 'caps', 'writeB64', 'tailOpen',
-      'tailClose', 'ptyOpen', 'update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync']);
+      'tailClose', 'ptyOpen', 'update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync', 'backup']);
     expect(/export type AgentReq = ([^;]+);/.exec(proto)![1]!.split('|').map((m) => m.trim()), 'the union of requests').toEqual(['ExecReq', 'ReadReq', 'ReadFromReq',
       'ReadB64Req', 'ReaddirReq', 'StatReq', 'LstatReq', 'WriteB64Req', 'TailOpenReq', 'TailCloseReq', 'PtyOpenReq', 'CapsReq', 'UpdateReq', 'TokenSyncReq', 'AccountOpReq', 'DiskReq', 'PressureReq',
-      'TestboxReq', 'TestboxToolsSyncReq']);
+      'TestboxReq', 'TestboxToolsSyncReq', 'BackupReq']);
     expect(proto).toMatch(/export interface ReadFromReq \{ t: 'req'; id: number; op: 'readFrom'; path: string; offset: number; maxBytes\?: number \}/);
     expect(proto.match(/\bmaxBytes\b/g)!.length).toBeGreaterThan(0);
     // the ready frame, the advertised words and the agent's op switch carry nothing of the broker's
@@ -1603,7 +1636,6 @@ describe('8. the closed scope census', () => {
       systemctl: (a) => a[0] === '--user' && a[1] === 'is-active',
     };
     expect(commandsOutside(shellBody(checks, '_check_delegation-hooks'), READERS), 'the check runs something that is not a reader').toEqual([]);
-    expect(commandsOutside(shellBody(checks, '_dh_mixed_events'), { jq: (a) => a[0] === '-r' }), 'the mixed-group reader').toEqual([]);
     // the readers it calls: the installer's event list (a file read), the roster read (one node program, with no write in it), the
     // joiner, and the four one-line verdict printers, which are pinned whole
     expect(commandsOutside(shellBody(checks, '_dh_events'), { local: true, '[': true, read: true, return: true, printf: true }), '_dh_events').toEqual([]);
@@ -1624,16 +1656,18 @@ describe('8. the closed scope census', () => {
     // only read (a file, `systemctl --user is-active` or a `.svcfailed` stamp) or print; they are not pinned here by digest, because every
     // unrelated doctor wave edits them.
     const ccrcSrc = read('ccd/ccrc');
-    for (const fn of ['_fix_delegation-hooks', '_check_delegation-hooks', '_dh_mixed_events', '_dh_events', '_dr_join']) {
+    for (const fn of ['_fix_delegation-hooks', '_check_delegation-hooks', '_dh_events', '_dr_join']) {
       const defs = (checks.match(new RegExp(`^${fn}\\(\\) *\\{`, 'gm')) ?? []).length + (ccrcSrc.match(new RegExp(`^${fn}\\(\\) *\\{`, 'gm')) ?? []).length;
       expect(defs, `${fn} is defined exactly once across ccd/ccrc-doctor-checks and ccd/ccrc`).toBe(1);
     }
+    // R55 is lifted (PR4 Task 4.5b, W4-D5): the mixed-group reader the fixer refused with is gone, from both files
+    expect((checks + ccrcSrc).match(/^_dh_mixed_events\(\) *\{/gm), 'R55 is lifted: the mixed-group reader is gone').toBeNull();
     // THE FIXER: the shipped installer, once, with exactly `--homes <dirs>`, and the readers it uses today. `install`, a second script, `rm`,
-    // `eval`, `sh -c` and every redirection to a file are each outside this list.
+    // `eval`, `sh -c` and every redirection to a file are each outside this list. So is `command -v jq` since R55 was lifted (review
+    // 1365, F7): the mixed-group reader was its only caller.
     const fixBody = shellBody(checks, '_fix_delegation-hooks');
     const FIXER: CommandRules = {
-      local: true, echo: true, return: true, read: true, '[': true, continue: true, _skills_roster_rows: true, _dh_mixed_events: true, _dr_join: true,
-      command: (a) => a.length === 2 && a[0] === '-v' && a[1] === 'jq',
+      local: true, echo: true, return: true, read: true, '[': true, continue: true, _skills_roster_rows: true, _dr_join: true,
       '"${BASH:-bash}"': (a) => a.length === 3 && a[0] === '"$inst"' && a[1] === '--homes' && a[2] === '"${dirs[@]}"',
     };
     expect(commandsOutside(fixBody, FIXER), 'the fixer runs something that is not the shipped installer or a reader').toEqual([]);
@@ -1649,13 +1683,14 @@ describe('8. the closed scope census', () => {
     expect(assigns.filter((a) => a.name === 'inst').map((a) => `${a.declared ? 'local ' : ''}${a.name}=${a.value}`), '`inst` is assigned once, by `local`')
       .toEqual(['local inst="$CCRC_HERE/install-session-hooks.sh"']);
     expect([...new Set(assigns.filter((a) => a.prefixOf === null).map((a) => a.name))].sort(), 'the names the fixer assigns').toEqual(
-      ['dir', 'dirs', 'evarr', 'evs', 'inst', 'list', 'mixed', 'n', 'refused', 'roster', 'rows', 'said', 'verb'].sort());
+      ['dir', 'dirs', 'inst', 'list', 'n', 'roster', 'rows', 'said'].sort());
     // R80 N6: the `local inst=` line comes BEFORE the installer call (not necessarily first)
     const instAt = raw.indexOf('local inst="$CCRC_HERE/install-session-hooks.sh"');
     expect(instAt, 'the fixer names the shipped installer').toBeGreaterThan(-1);
     expect(instAt, 'before the installer call').toBeLessThan(raw.indexOf('"${BASH:-bash}" "$inst"'));
-    // it refuses a home with a mixed hook group before the installer could touch it (R55), and removes nothing itself
-    expect(raw).toContain('_dh_mixed_events');
+    // R55 is lifted (PR4 Task 4.5b): the fixer hands every rostered home to the installer, whose option-B sweep keeps foreign
+    // hooks, and it removes nothing itself
+    expect(raw).not.toContain('_dh_mixed_events');
   });
 
   it('the lane\'s in-memory structures are not durable state: the lane class opens no file and no SQLite handle of its own', () => {
@@ -1663,8 +1698,8 @@ describe('8. the closed scope census', () => {
     const lane = code(watch.slice(watch.indexOf('class DelegationLane {')));
     expect(lane.length).toBeGreaterThan(10_000);
     expect(lane, 'every durable write goes through DelegationDurability').not.toMatch(/\b(writeFile|appendFile|mkdir|rename|unlink|rmSync|createWriteStream|truncate)\w*\(|\.prepare\(|\bdb\.exec\(|openCoordDb|new DatabaseSync/);
-    // the lane's whole contact with the coordination store: four calls, all through the applier's projection port (and the store's
-    // presence, tested once); a fifth (`coord.setSetting(...)` with the marks in it) would be a durable state the journal does not hold
+    // The lane's whole contact with the coordination store: six calls, all through the applier's projection port (and the store's
+    // presence, tested once); another (`coord.setSetting(...)` with the marks in it) would be a durable state the journal does not hold
     expect(lane.split('\n').filter((l) => /\bcoord\b/.test(l)).map((l) => l.replace(/\s*\/\/.*$/, '').trim()), 'every mention of the store in the lane').toEqual([
       'const coord = this.deps.coord;',
       'projection: coord === undefined ? null : {',
@@ -1672,6 +1707,8 @@ describe('8. the closed scope census', () => {
       'projectChanged: (prior, next) => coord.projectDelegationCheckpointChanges(prior, next),',
       'insertEvents: (rows) => coord.insertDelegationEvents(rows),',
       'eventStats: () => coord.delegationEventStats(),',
+      'countEventsAtOrBelow: (s) => coord.countDelegationEventsAtOrBelow(s),',
+      'deleteEventsBetween: (a, b, n) => coord.deleteDelegationEventsBetween(a, b, n),',
       // wave 4 (PR1 Task 1.3): `sweep` answers whether a pass ran, so the watcher projects only after one
       'if (this.deps.coord === undefined) return false;',
     ]);

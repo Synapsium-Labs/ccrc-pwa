@@ -8,22 +8,27 @@
 //   2-2: the parse's element count includes the chips `SHARED_COMPONENTS.code` draws for inline code, so `too-wide`
 //        fires in the parse, before anything renders, for docs and for chat's worker path alike.
 // Every parse here is `parseMarkdown`, the function the worker runs; chat's worker path gets it through an injected
-// parser. `hljs.highlight` is spied where a case asserts it is not called, and answers nothing, so a red run never
+// parser. `HLJS.highlight` is spied where a case asserts it is not called, and answers nothing, so a red run never
 // pays for a long word.
+// From W5h-a part 1's bounds are applied by `highlightStore.ts#blockKey` from `highlightNames.ts`'s data on the main thread (until W5h-b), and the colours come from the highlight worker; here, from the synchronous test store, whose `HLJS.highlight` calls the spies count.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
-import hljs from 'highlight.js/lib/core';
 import type { Root as HastRoot } from 'hast';
+// Only for `hljs.newInstance()` in the synthetic-grammar cases: an instance (`HLJS`) has no `newInstance` of its own.
+import hljs from 'highlight.js/lib/core';
+import { ChatMarkdown, CodeBlock, PreHighlightContext, SHARED_COMPONENTS } from '../src/lib/markdown';
 import {
-  ChatMarkdown, CodeBlock, HIGHLIGHT_BOUNDED_CAPS, SHARED_COMPONENTS, deriveBoundedCaps, highlightBlockCap, inMarkdownPageBudget, inScanPageBudget,
-  longestBlankRun, longestWordRun,
-} from '../src/lib/markdown';
+  HIGHLIGHT_BOUNDED_CAPS, highlightBlockCap, inMarkdownPageBudget, inScanPageBudget, longestBlankRun, longestWordRun,
+} from '../src/lib/highlightNames';
+import { HLJS, deriveBoundedCaps } from '../src/lib/highlightGrammars';
+import { createProductionStore } from '../src/lib/highlighterContext';
+import { inThreadHighlighter, syncTestStore, withSyncHighlight, withSyncStore } from './highlightTestStore';
 import { keystrokeParts, utf8ByteLength } from '../src/lib/markdownGuard';
 import {
-  CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_BLANK_CHARS,
-  MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS, MD_KEYSTROKE_MAX_CHARS,
+  CHAT_SYNC_MAX_BYTES, DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS,
+  MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_BLANK_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS, MD_KEYSTROKE_MAX_CHARS,
 } from '../src/lib/markdownLimits';
 import { inlineCodeExtraElements, parseMarkdown, type MarkdownProfile } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
@@ -34,17 +39,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** Spies `hljs.highlight` and answers an empty highlight: a case that counts calls never pays for one. */
+/** Spies `HLJS.highlight` and answers an empty highlight: a case that counts calls never pays for one. */
 const spyHighlight = () =>
-  vi.spyOn(hljs, 'highlight').mockReturnValue({ value: '' } as unknown as ReturnType<typeof hljs.highlight>);
+  vi.spyOn(HLJS, 'highlight').mockReturnValue({ value: '' } as unknown as ReturnType<typeof HLJS.highlight>);
 
 /** One fenced block, as react-markdown hands it to the `pre` component. */
 function block(lang: string, body: string): HTMLElement {
-  return render(
+  return render(withSyncStore(
     <CodeBlock>
       <code className={`language-${lang}`}>{`${body}\n`}</code>
     </CodeBlock>,
-  ).container;
+  )).container;
 }
 
 const label = (c: HTMLElement): string | null | undefined => c.querySelector('.code-block-lang')?.textContent;
@@ -59,7 +64,7 @@ function treeOf(src: string, profile: MarkdownProfile): HastRoot {
 /** Chat's Markdown for `text` through an injected parser that answers what the worker would, settled. */
 async function chat(text: string) {
   const parser = vi.fn<MarkdownParser>((src, opts) => Promise.resolve(parseMarkdown(src, opts.profile)));
-  const r = render(<div className="msg-assist"><ChatMarkdown text={text} parser={parser} /></div>);
+  const r = render(withSyncHighlight(<div className="msg-assist"><ChatMarkdown text={text} parser={parser} /></div>));
   await act(async () => {
     await Promise.resolve();
   });
@@ -87,7 +92,7 @@ describe('W5 bound r10: no highlighting for a block holding a word longer than M
 
   it('a 32 KiB one-identifier python fence through SHARED_COMPONENTS never reaches highlight.js', () => {
     const highlight = spyHighlight();
-    const { container } = render(renderHast(treeOf(`\`\`\`python\n${'a'.repeat(32768)}\n\`\`\`\n`, 'docs'), { components: SHARED_COMPONENTS }));
+    const { container } = render(withSyncStore(renderHast(treeOf(`\`\`\`python\n${'a'.repeat(32768)}\n\`\`\`\n`, 'docs'), { components: SHARED_COMPONENTS })));
     expect(highlight).not.toHaveBeenCalled();
     expect(label(container)).toBe('Python · not highlighted (a 32768-character word)');
   });
@@ -267,11 +272,12 @@ describe('the line bound: no highlighting for a block holding a line longer than
     expect(within).toBeGreaterThanOrEqual(1000);
   });
 
-  it('an unregistered fence and highlight={false} are never scanned either', () => {
+  // From W5h-a a block the page budget skips is still keyed by `blockKey`, which scans it once, linearly, and the store
+  // never requests it (what the `highlight={false}` half pinned, no highlight.js call, is the T13 describe's).
+  it('an unregistered fence is never scanned either', () => {
     spyHighlight();
     const calls = vi.spyOn(String.prototype, 'charCodeAt');
     block('mermaid', 'a'.repeat(5000));
-    render(<CodeBlock highlight={false}><code className="language-ts">{'a'.repeat(5000)}</code></CodeBlock>);
     const n = calls.mock.calls.length;
     calls.mockRestore();
     expect(n).toBeLessThan(1000);
@@ -305,10 +311,10 @@ describe('W5 bound r11: a code span longer than MD_KEYSTROKE_MAX_CHARS is never 
     expect([at.length, over.length]).toEqual([MD_KEYSTROKE_MAX_CHARS, MD_KEYSTROKE_MAX_CHARS + 1]);
     expect(keystrokeParts(at)).toHaveLength(31);
     expect(keystrokeParts(over)).toBeNull();
-    const chips = render(renderHast(treeOf(`Press \`${at}\` now.`, 'docs'), { components: SHARED_COMPONENTS })).container;
+    const chips = render(withSyncStore(renderHast(treeOf(`Press \`${at}\` now.`, 'docs'), { components: SHARED_COMPONENTS }))).container;
     expect(chips.querySelectorAll('kbd')).toHaveLength(31);
     cleanup();
-    const plain = render(renderHast(treeOf(`Press \`${over}\` now.`, 'docs'), { components: SHARED_COMPONENTS })).container;
+    const plain = render(withSyncStore(renderHast(treeOf(`Press \`${over}\` now.`, 'docs'), { components: SHARED_COMPONENTS }))).container;
     expect(plain.querySelectorAll('kbd')).toHaveLength(0);
     expect(plain.querySelector('code.md-code')?.textContent).toBe(over);
   });
@@ -342,7 +348,7 @@ describe("W5 bound 2-2: the parse's element count includes the chips inline code
 
   it('300 such spans are a tree, and the DOM it draws holds exactly the counted elements', () => {
     const tree = treeOf(spans(300, CHORD), 'docs');
-    const { container } = render(renderHast(tree, { components: SHARED_COMPONENTS }));
+    const { container } = render(withSyncStore(renderHast(tree, { components: SHARED_COMPONENTS })));
     expect(container.querySelectorAll('kbd')).toHaveLength(300 * 32);
     expect(container.querySelectorAll('*')).toHaveLength(1 + 300 * PER_SPAN);
     expect(1 + 300 * PER_SPAN).toBeLessThanOrEqual(DOCS_MAX_RENDER_ELEMENTS);
@@ -364,34 +370,57 @@ describe("W5 bound 2-2: the parse's element count includes the chips inline code
 });
 
 describe('T13 review 4-3: a block the page budget refuses labels itself by its size when it is over the cap', () => {
+  // From W5h-a the page budgets decide in the production docs store's seed (the part-1 scan budget here), not in
+  // `detachUrls`: the store is seeded so the block drawn is past `DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS`, and the held
+  // highlighter shows that nothing is ever requested.
   const big = 'const a = 1;\n'.repeat(5400);
   const KIB = Math.ceil(big.replace(/\n$/, '').length / 1024);
+  /** `n` distinct 8 192-character ts blocks, each at the grammar's own cap, so together they pass the scan budget. */
+  const fillers = (n: number): { lang: string; raw: string }[] =>
+    Array.from({ length: n }, (_, i) => ({
+      lang: 'ts', raw: (`// f${i}\n` + ('x'.repeat(99) + '\n').repeat(Math.ceil(MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS / 100))).slice(0, MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS - 1) + 'x',
+    }));
+  const pastScanBudget = (blocks: { lang: string; raw: string }[]) => {
+    const h = inThreadHighlighter({ hold: true });
+    const store = createProductionStore(h, 'docs');
+    store.seed([...fillers(Math.floor(DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS / MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS) + 1), ...blocks]);
+    return { h, store };
+  };
+  const drawn = (store: ReturnType<typeof createProductionStore>, lang: string, body: string) =>
+    render(<PreHighlightContext value={store}><CodeBlock><code className={`language-${lang}`}>{body}</code></CodeBlock></PreHighlightContext>);
 
   it('highlight={false} over the cap reads "{label} · not highlighted ({KiB} KiB)", with no scan and no colour', () => {
     expect(big.length).toBeGreaterThan(MD_HIGHLIGHT_BLOCK_MAX_CHARS);
     const spy = spyHighlight();
-    const { container } = render(<CodeBlock highlight={false}><code className="language-ts">{big}</code></CodeBlock>);
+    const { h, store } = pastScanBudget([]);
+    const { container } = drawn(store, 'ts', big);
     expect(label(container)).toBe(`TypeScript · not highlighted (${KIB} KiB)`);
     expect(spy).not.toHaveBeenCalled();
+    expect(h.calls).toHaveLength(0);
     expect(container.querySelector('.hljs-keyword')).toBeNull();
   });
 
   it('highlight={false} within the cap keeps its plain label, and an unregistered language over it keeps its own', () => {
-    const small = render(<CodeBlock highlight={false}><code className="language-ts">{'const a = 1;'}</code></CodeBlock>);
+    const { h, store } = pastScanBudget([{ lang: 'ts', raw: 'const a = 1;' }]);
+    const small = drawn(store, 'ts', 'const a = 1;');
     expect(label(small.container)).toBe('TypeScript');
-    const other = render(<CodeBlock highlight={false}><code className="language-nosuchlang">{big}</code></CodeBlock>);
+    expect(small.container.querySelector('.hljs-keyword')).toBeNull();
+    const other = drawn(store, 'nosuchlang', big);
     expect(label(other.container)).toBe('nosuchlang');
+    expect(h.calls).toHaveLength(0);
   });
 
   it('a refused block is never scanned for a word or a line, however long either is', () => {
     const word = 'a'.repeat(MD_HIGHLIGHT_BLOCK_MAX_CHARS + 10);
     spyHighlight();
+    const { h, store } = pastScanBudget([]);
     const calls = vi.spyOn(String.prototype, 'charCodeAt');
-    const { container } = render(<CodeBlock highlight={false}><code className="language-ts">{word}</code></CodeBlock>);
+    const { container } = drawn(store, 'ts', word);
     const n = calls.mock.calls.length;
     calls.mockRestore();
     expect(label(container)).toBe(`TypeScript · not highlighted (${Math.ceil(word.length / 1024)} KiB)`);
     expect(n).toBeLessThan(1000);
+    expect(h.calls).toHaveLength(0);
   });
 });
 
@@ -435,7 +464,7 @@ describe('Review 439 F1: a fence of whitespace that spans lines is not highlight
     const highlight = spyHighlight();
     for (const [unit] of SHAPES) {
       const src = `\`\`\`ts\n${unitRun(unit, 8000)}\n\`\`\`\n`;
-      const { container } = render(renderHast(treeOf(src, 'docs'), { components: SHARED_COMPONENTS }));
+      const { container } = render(withSyncStore(renderHast(treeOf(src, 'docs'), { components: SHARED_COMPONENTS })));
       expect(label(container)).toMatch(NOT_HIGHLIGHTED);
       expect(Number(NOT_HIGHLIGHTED.exec(label(container) ?? '')?.[1])).toBeGreaterThan(MAX);
       cleanup();
@@ -569,7 +598,7 @@ describe('review 450 F1: typescript, javascript and rust have their own, smaller
       const highlight = spyHighlight();
       const body = shape(unit, n, 65536);
       expect(body).toHaveLength(65536);
-      const { container } = render(renderHast(treeOf(`\`\`\`${lang}\n${body}\n\`\`\`\n`, 'docs'), { components: SHARED_COMPONENTS }));
+      const { container } = render(withSyncStore(renderHast(treeOf(`\`\`\`${lang}\n${body}\n\`\`\`\n`, 'docs'), { components: SHARED_COMPONENTS })));
       expect(label(container)).toMatch(OVER_64);
       expect(highlight).not.toHaveBeenCalled();
     },
@@ -591,7 +620,7 @@ describe('review 450 F1: typescript, javascript and rust have their own, smaller
   it('a 64 KiB rust block of `r#"` lines is not highlighted and says 64 KiB, in Docs and on the worker path', async () => {
     const highlight = spyHighlight();
     const text = `\`\`\`rust\n${shape('r#"', 1800, 65536)}\n\`\`\`\n`;
-    const docs = render(renderHast(treeOf(text, 'docs'), { components: SHARED_COMPONENTS }));
+    const docs = render(withSyncStore(renderHast(treeOf(text, 'docs'), { components: SHARED_COMPONENTS })));
     expect(label(docs.container)).toMatch(OVER_64);
     cleanup();
     const worker = await chat(text);
@@ -694,15 +723,15 @@ describe('review 450 F1, the closure: a grammar that embeds a bounded grammar th
     return found;
   };
   const closure = (): Map<string, number> => {
-    const registered = hljs.listLanguages();
+    const registered = HLJS.listLanguages();
     const canonical = (name: string): string | undefined => {
-      const def = hljs.getLanguage(name);
-      return def === undefined ? undefined : registered.find((r) => hljs.getLanguage(r) === def);
+      const def = HLJS.getLanguage(name);
+      return def === undefined ? undefined : registered.find((r) => HLJS.getLanguage(r) === def);
     };
     const direct = new Map<string, Set<string>>();
     for (const g of registered) {
       const targets = new Set<string>();
-      for (const sub of subLanguagesOf(hljs.getLanguage(g)!, registered)) {
+      for (const sub of subLanguagesOf(HLJS.getLanguage(g)!, registered)) {
         const c = canonical(sub);
         if (c !== undefined) targets.add(c);
       }
@@ -720,30 +749,30 @@ describe('review 450 F1, the closure: a grammar that embeds a bounded grammar th
 
   it('the module\'s bounded set is exactly the closure of the base set under the registered grammars\' subLanguage references', () => {
     // Highlight once first: highlight.js compiles a grammar's modes on first use, and the walk must read either shape.
-    for (const g of hljs.listLanguages()) hljs.highlight('<script>a</script>', { language: g, ignoreIllegals: true });
+    for (const g of HLJS.listLanguages()) HLJS.highlight('<script>a</script>', { language: g, ignoreIllegals: true });
     expect(Object.fromEntries(HIGHLIGHT_BOUNDED_CAPS)).toEqual(Object.fromEntries(closure()));
   });
 
   it('today that set is typescript and javascript at 8 192 and rust at 4 096; yaml\'s ruby and xml\'s handlebars are not registered', () => {
     expect(Object.fromEntries(HIGHLIGHT_BOUNDED_CAPS)).toEqual({ typescript: 8192, javascript: 8192, rust: 4096 });
-    expect(hljs.getLanguage('ruby')).toBeUndefined();
-    expect(hljs.getLanguage('handlebars')).toBeUndefined();
-    expect([...subLanguagesOf(hljs.getLanguage('yaml')!, [])]).toContain('ruby');
+    expect(HLJS.getLanguage('ruby')).toBeUndefined();
+    expect(HLJS.getLanguage('handlebars')).toBeUndefined();
+    expect([...subLanguagesOf(HLJS.getLanguage('yaml')!, [])]).toContain('ruby');
   });
 
   it('every name of HIGHLIGHT_BOUNDED_CAPS and every alias highlight.js resolves to it takes its cap and the scan budget; every other grammar takes 65 536 and does not', () => {
     const bounded = new Set<string>();
     for (const [name, cap] of HIGHLIGHT_BOUNDED_CAPS) {
-      const aliases = (hljs.getLanguage(name) as { aliases?: string[] }).aliases ?? [];
+      const aliases = (HLJS.getLanguage(name) as { aliases?: string[] }).aliases ?? [];
       for (const alias of [name, ...aliases, ...(name === 'typescript' ? ['tsx'] : [])]) {
         bounded.add(alias);
-        expect(hljs.getLanguage(alias), alias).toBe(hljs.getLanguage(name));
+        expect(HLJS.getLanguage(alias), alias).toBe(HLJS.getLanguage(name));
         expect(highlightBlockCap(alias), alias).toBe(cap);
         expect(inScanPageBudget(alias), alias).toBe(true);
       }
     }
     expect(bounded.size).toBeGreaterThanOrEqual(3);
-    const others = hljs.listLanguages().filter((n) => !HIGHLIGHT_BOUNDED_CAPS.has(n));
+    const others = HLJS.listLanguages().filter((n) => !HIGHLIGHT_BOUNDED_CAPS.has(n));
     expect(others.length).toBeGreaterThan(0);
     for (const name of others) {
       expect(highlightBlockCap(name), name).toBe(65536);
@@ -752,24 +781,24 @@ describe('review 450 F1, the closure: a grammar that embeds a bounded grammar th
   });
 
   it('inMarkdownPageBudget is true for markdown and every alias highlight.js resolves to it, and false for every other name', () => {
-    const mdDef = hljs.getLanguage('markdown')!;
+    const mdDef = HLJS.getLanguage('markdown')!;
     const aliases = (mdDef as { aliases?: string[] }).aliases ?? [];
     expect(aliases).toEqual(expect.arrayContaining(['md']));
     for (const alias of ['markdown', ...aliases]) expect(inMarkdownPageBudget(alias), alias).toBe(true);
-    for (const name of hljs.listLanguages().filter((n) => n !== 'markdown')) expect(inMarkdownPageBudget(name), name).toBe(false);
+    for (const name of HLJS.listLanguages().filter((n) => n !== 'markdown')) expect(inMarkdownPageBudget(name), name).toBe(false);
     expect(inMarkdownPageBudget('')).toBe(false);
     expect(inMarkdownPageBudget('nope')).toBe(false);
   });
 
   it('the registered xml carries no subLanguage on any mode (script and style contents are one plain run), and every alias of xml is that grammar', () => {
-    const xmlDef = hljs.getLanguage('xml')!;
+    const xmlDef = HLJS.getLanguage('xml')!;
     expect([...subLanguagesOf(xmlDef, [])]).toEqual([]);
     // Compiled or not: highlight once, then read again.
-    hljs.highlight('<script>a</script><style>a{}</style>', { language: 'xml', ignoreIllegals: true });
+    HLJS.highlight('<script>a</script><style>a{}</style>', { language: 'xml', ignoreIllegals: true });
     expect([...subLanguagesOf(xmlDef, [])]).toEqual([]);
     const aliases = (xmlDef as { aliases?: string[] }).aliases ?? [];
     expect(aliases).toEqual(expect.arrayContaining(['html', 'svg']));
-    for (const alias of [...aliases, 'html', 'svg']) expect(hljs.getLanguage(alias)).toBe(xmlDef);
+    for (const alias of [...aliases, 'html', 'svg']) expect(HLJS.getLanguage(alias)).toBe(xmlDef);
   });
 
   describe('deriveBoundedCaps on synthetic grammars', () => {
@@ -836,15 +865,35 @@ describe('review 450 F1, the closure: a grammar that embeds a bounded grammar th
   });
 
   it.each(
-    ['markdown', 'md'].flatMap((lang) => shapes.flatMap(([name, make]) => [8192, 65536].map((n) => [lang, name, n, make] as const))),
+    ['markdown', 'md'].flatMap((lang) => shapes.map(([name, make]) => [lang, name, 8192, make] as const)),
   )('a %s block holding HTML, shape %s at %i characters, is highlighted', (lang, _name, n, make) => {
     const c = real(lang, make(n));
     expect(label(c)).not.toMatch(/not highlighted/);
     expect(c.querySelector('code')!.textContent).toBe(make(n));
   });
 
-  it('a 64 KiB xml, html and markdown block of <script> then <a> lines IS highlighted; the body of the script is plain', () => {
-    for (const lang of ['xml', 'html', 'svg', 'markdown']) {
+  // R-P1 (W5h-a): at 65 536 characters the markup of these shapes is over the shipped per-block HTML cap
+  // (MD_HIGHLIGHT_MAX_HTML_CHARS), so the worker's answer is refused as too large. Part 1's decision is what these
+  // cases keep red-able (the block is admitted, its key is requestable, and it is requested); then the shipped outcome
+  // (plain, labelled "output too large") until W5h-b sets the cap.
+  it.each(
+    ['markdown', 'md'].flatMap((lang) => shapes.map(([name, make]) => [lang, name, 65536, make] as const)),
+  )('a %s block holding HTML, shape %s at %i characters, is admitted and requested, and stays plain over the HTML cap until W5h-b', (lang, _name, n, make) => {
+    const body = make(n);
+    const store = syncTestStore('chat');
+    const c = render(withSyncStore(<CodeBlock><code className={`language-${lang}`}>{`${body}\n`}</code></CodeBlock>, store)).container;
+    const key = store.keyOf(lang, body);
+    expect(key.kind).toBe('key');
+    expect(store.requests).toHaveLength(1);
+    expect(store.requests[0] === (key.kind === 'key' ? key.key : null)).toBe(true);
+    expect(store.peek(key.kind === 'key' ? key.key : '')).toMatchObject({ kind: 'plain', first: { kind: 'too-large' } });
+    expect(label(c)).toBe('Markdown \u00b7 not highlighted (output too large)');
+    expect(c.querySelector('code')!.textContent).toBe(body);
+    expect(c.querySelector('code')!.children).toHaveLength(0);
+  });
+
+  it('a 64 KiB xml, html and svg block of <script> then <a> lines IS highlighted; the body of the script is plain; the markdown block of the same shape is admitted and requested, and stays plain over the HTML cap until W5h-b', () => {
+    for (const lang of ['xml', 'html', 'svg']) {
       const body = scripted(65536);
       expect(body).toHaveLength(65536);
       const c = real(lang, body);
@@ -852,6 +901,17 @@ describe('review 450 F1, the closure: a grammar that embeds a bounded grammar th
       expect(c.querySelector('code')!.innerHTML).not.toMatch(HLJS_SPANS);
       cleanup();
     }
+    // R-P1: the markdown arm. Part 1's decision (admitted, requested), then the shipped outcome (plain, too large).
+    const body = scripted(65536);
+    const store = syncTestStore('chat');
+    const md = render(withSyncStore(<CodeBlock><code className="language-markdown">{`${body}\n`}</code></CodeBlock>, store)).container;
+    const key = store.keyOf('markdown', body);
+    expect(key.kind).toBe('key');
+    expect(store.requests).toHaveLength(1);
+    expect(store.requests[0] === (key.kind === 'key' ? key.key : null)).toBe(true);
+    expect(label(md)).toBe('Markdown \u00b7 not highlighted (output too large)');
+    expect(md.querySelector('code')!.children).toHaveLength(0);
+    cleanup();
     // Over 64 KiB it is refused as for any grammar.
     expect(label(real('xml', scripted(65537)))).toMatch(/· not highlighted \(65 KiB\)$/);
   });
@@ -881,11 +941,8 @@ describe('review 450 F1, the closure: a grammar that embeds a bounded grammar th
 
   it('a ts block of 10 000 characters the page budget refuses is labelled by its own cap: 10 KiB', () => {
     const highlight = spyHighlight();
-    const { container } = render(
-      <CodeBlock highlight={false}>
-        <code className="language-ts">{`${'const a = 1;\n'.repeat(800).slice(0, 10000)}\n`}</code>
-      </CodeBlock>,
-    );
+    // From W5h-a the label comes from `blockKey`'s part-1 grammar cap (10 000 > 8 192), not from a page budget.
+    const container = block('ts', 'const a = 1;\n'.repeat(800).slice(0, 10000));
     expect(label(container)).toBe('TypeScript \u00b7 not highlighted (10 KiB)');
     expect(highlight).not.toHaveBeenCalled();
   });

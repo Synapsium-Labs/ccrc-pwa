@@ -282,6 +282,11 @@ export const SETTINGS_CARDS = {
       purpose: 'Which release the fleet runs, the releases it can move to, and when the server last looked for new ones.',
     },
     nodes: { scope: SETTINGS_SCOPE.fleet, title: 'Nodes', purpose: UPDATES_TEXT.nodesLead },
+    /** D-6917: what each box reported about its own settings (spec 2026-10-25 §2.5), read-only. */
+    boxSettings: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Box settings',
+      purpose: "Each node's update and backup settings as reported by the box, with where each value came from.",
+    },
     policy: {
       scope: SETTINGS_SCOPE.fleet, title: 'Update policy',
       purpose: 'Which releases count as newest, and whether the server installs them by itself.',
@@ -314,6 +319,12 @@ export const SETTINGS_CARDS = {
       scope: SETTINGS_SCOPE.fleet, title: 'Roll idle sessions',
       purpose: 'Restarts an idle coordinator onto the current ccrc release, resuming its conversation, once it has been '
         + 'quiet for 90 minutes. Other sessions pick up a new release when they next start.',
+    },
+    /** D-7860: the fleet box's backup, a quiet line; the card before Test box, which stays the section's last. */
+    backup: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Backups',
+      purpose: 'When the fleet box last backed up, from the state files its backup job keeps. A failed or stale backup '
+        + 'also shows a banner above the fleet.',
     },
     /** Test box plan TB10 (D-7412): the section's last card (D-7418). */
     testbox: {

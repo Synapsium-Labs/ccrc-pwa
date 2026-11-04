@@ -240,6 +240,7 @@ import { api } from '../src/lib/api';
 import { poolLagText } from '../src/fleet/poolLag';
 import { fleetSession } from './fleetFixture';
 import { seventeenLanes } from './seventeenLanes';
+import { itemView, waitingView } from './ledgersFixture';
 
 // The bell renders only where the browser can push; this one can, so the doors' census counts it (T2e).
 vi.mock('../src/lib/push', () => ({
@@ -328,7 +329,7 @@ afterEach(() => {
   // The `api.accounts` spies the lanes-row cases add must not leak into the next case.
   vi.restoreAllMocks();
   navigate('/');
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null, feed: [], fleetFrameSeen: false }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null, feed: [], fleetFrameSeen: false, waiting: null }));
   resetAcks();
   act(() => { setSkin(REFINED); });
   localStorage.clear();
@@ -339,7 +340,7 @@ describe('the rail', () => {
     mount('/');
     const routeItems = RAIL_ITEMS.filter((i) => !('reserved' in i) && !('bell' in i));
     const words = routeItems.map((i) => ROUTES.find((r) => r.id === i.id)!.title);
-    expect(words).toEqual(['Fleet', 'Inbox', 'Runs', 'Accounts', 'Archive', 'Docs', 'Settings']);
+    expect(words).toEqual(['Fleet', 'Waiting on you', 'Inbox', 'Runs', 'Accounts', 'Archive', 'Docs', 'Settings']);
     expect(railDoors().map((b) => b.getAttribute('aria-label'))).toEqual(words);
     // Activity is held in the registry, reserved, and draws nothing: no control that does nothing ships.
     expect(RAIL_ITEMS.find((i) => i.id === 'activity')).toEqual({ id: 'activity', reserved: 'F4, W4' });
@@ -378,7 +379,7 @@ describe('the rail', () => {
   it('every rail item, the command field and + carry their data-command; a rail item\'s tooltip shows on focus-visible', () => {
     mount('/');
     expect(railDoors().map((b) => b.getAttribute('data-command')))
-      .toEqual(['go-fleet', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs', 'go-settings']);
+      .toEqual(['go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs', 'go-settings']);
     expect(within(topBar()).getByRole('button', { name: 'Search or run a command' })).toHaveAttribute('data-command', 'open-palette');
     expect(within(topBar()).getByRole('button', { name: 'New session' })).toHaveAttribute('data-command', 'new-session');
     // The word is in each door, for its tooltip.
@@ -619,7 +620,8 @@ function doorCounts(): Record<string, number> {
   return {
     wordmark: document.querySelectorAll('[data-wordmark], .wordmark').length,
     docs: count(/^Docs\b/),
-    accounts: count(/^(Accounts|Your sign-in and accounts)$/),
+    // The header door's name leads with its word, "Account" (label in name, D-7897).
+    accounts: count(/^(Accounts|Account — your sign-in and accounts)$/),
     settings: count(/^Settings\b/),
     inbox: count(/^Inbox\b/),
     mail: count(/^Mail\b/),
@@ -714,6 +716,19 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     mount('/', waitingFleet(120));
     const capped = within(rail()).getByRole('button', { name: 'Inbox, 120 waiting for you' });
     expect(capped.textContent).toBe('Inbox, 120 waiting for you99+');
+  });
+
+  // Desktop-polish PL5a (D-7712): the rail's Waiting on you door counts the open items plus the sessions' questions.
+  it("the rail's Waiting on you door says 'waiting on you' with its count, never counting an item being checked", () => {
+    stubAt(1280);
+    const sessions = waitingFleet(1);
+    act(() => useFleetStore.setState({ waiting: waitingView({ items: [itemView({ id: 1 }), itemView({ id: 2, state: 'checking' })] }) }));
+    mount('/', sessions);
+    const door = within(rail()).getByRole('button', { name: 'Waiting on you, 2 waiting on you' }); // 1 open item + 1 question
+    expect(door).toHaveAttribute('data-command', 'go-waiting');
+    expect(door.querySelector('.ins-rail-tip')?.textContent).toBe('Waiting on you, 2 waiting on you');
+    fireEvent.click(door);
+    expect(window.location.pathname).toBe('/waiting');
   });
 
   it('with nobody waiting on the operator the Inbox door draws no badge, however much mail is unread', () => {

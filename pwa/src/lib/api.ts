@@ -2,8 +2,10 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
+import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
+import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { RotateAnswer } from '../../../shared/box-token';
@@ -21,6 +23,7 @@ import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
 } from '../docs/failures';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
+import type { SecretSaveAnswer } from '../../../shared/ledgers';
 
 /** `GET`/`POST /api/coord/roll-idle`'s answer (D-7453). */
 export interface RollIdleView {
@@ -391,6 +394,21 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     accountCredential: (id: string, body: AccountCredentialBody) =>
       postJson<AccountCredentialAnswer>(`/api/accounts/${encodeURIComponent(id)}/credential`, body),
     accountRevokeAck: (body: AccountRevokeAckBody) => postJson<{ ok: true }>('/api/accounts/revoke-ack', body),
+    /** Mint and Sign in (accounts plan Task A22, D-7849; spec §3.7, §3.8, §6.2, §6.3, §13.1): start an attempt (step-up),
+     *  read its status (polled by an open sheet only, never otherwise), send its one code (held for the request, kept
+     *  nowhere: no retry, no queue), cancel it; `set {stated}` for a minted lane's stated account; and N5's sign-out.
+     *  A refusal rejects with its `ApiError`, whose `error` word the sheet words, never its text. */
+    accountAuthStart: (id: string, body: AccountAuthStartBody) =>
+      postJson<AccountAuthStartAnswer>(`/api/accounts/${encodeURIComponent(id)}/auth/start`, body),
+    accountAuthStatus: (id: string) => getJson<AccountAuthStatusAnswer>(`/api/accounts/${encodeURIComponent(id)}/auth`),
+    accountAuthCode: (id: string, body: AccountAuthCodeBody) =>
+      postJson<{ ok: true }>(`/api/accounts/${encodeURIComponent(id)}/auth/code`, body),
+    accountAuthCancel: (id: string, body: AccountAuthCancelBody) =>
+      postJson<{ ok: true }>(`/api/accounts/${encodeURIComponent(id)}/auth/cancel`, body),
+    accountSet: (id: string, body: AccountSetBody) =>
+      postJson<AccountSwitchAnswer>(`/api/accounts/${encodeURIComponent(id)}/set`, body),
+    accountSignOut: (id: string) =>
+      postJson<AccountSignOutAnswer>(`/api/accounts/${encodeURIComponent(id)}/credential`, { signOut: true }),
     // `ProjectRow`, not a hand-written twin — the comment two lines up names
     // this exact failure mode, and F3's `readiness` is the field it predicted:
     // spelled inline here, this generic would have gone on declaring a shape
@@ -853,6 +871,32 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  screen reads nothing off the answer but its arrival, and a write whose answer was unreadable is shown as sent
      *  only after the next read of the digest says `corrected`. */
     correctDigest: (body: DigestCorrectBody) => postJson<DigestCorrectAnswer>('/api/digest/correct', body),
+    /** `PUT /api/items/:id/secret` (desktop-polish PL6): a secret item's value, sent once to its own route, which stores it
+     *  in its protected slot and ticks the item with "set, when, the last four". The value rides only in this body, and the
+     *  answer carries the slot's state, never the value. A refusal (`step-up-required`, `not-open`, `bad-slot`, …) rejects
+     *  with an `ApiError` like every non-2xx, and nothing is stored. Session-gated with a step-up when armed. */
+    saveItemSecret: async (id: number, value: string): Promise<SecretSaveAnswer> =>
+      (await request(`/api/items/${id}/secret`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ value }),
+      })).json() as Promise<SecretSaveAnswer>,
+    /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last seven days, and
+     *  each programme's Goals, as the `waiting` frame carries them. The screen reads it again when the tab regains focus
+     *  (review 1336: a quiet fleet sends no frame when an item crosses its 30 minutes). Session-gated when armed. */
+    waiting: () => getJson<{ readonly ok: true; readonly waiting: WaitingView }>('/api/waiting'),
+    /** `POST /api/items/:id/tick` (PL4): the operator marks an item done. `answer` rides only for a `decide` or a `value`
+     *  item; a `do` item sends no body at all. A refusal (`programme-ended`, `not-open`, `duplicate`, …) rejects with an
+     *  `ApiError` like every non-2xx, and the item is unchanged. */
+    tickItem: (id: number, answer?: string) =>
+      postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/tick`, answer === undefined ? undefined : { answer }),
+    /** `GET /api/programmes/:slug/goals` (PL4; PL5b): one programme's Goals, the spec it pins, its "In short" and the dated
+     *  list of what changed since approval, as the `waiting` frame carries them. The programme view reads it on arrival.
+     *  Session-gated when armed; a programme the box knows nothing of answers an empty view, never a refusal. */
+    goals: (slug: string) =>
+      getJson<{ readonly ok: true; readonly goals: GoalsView }>(`/api/programmes/${encodeURIComponent(slug)}/goals`),
+    /** `POST /api/items/:id/dismiss` (PL4): refused `programme-live` while the programme has an open run. */
+    dismissItem: (id: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/dismiss`),
     commands: (id: string) =>
       getJson<{ builtins: SlashCommand[]; skills: SlashCommand[] }>(`${sid(id)}/commands`),
     upload: async (id: string, file: File): Promise<StagedClip> => {

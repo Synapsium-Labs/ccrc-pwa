@@ -54,21 +54,24 @@ const DECLARATIONS: readonly string[] = [
   '^export interface CollectLaneConfirmRequired\\b',
 ];
 
-/** `peers-claims-l0.test.ts`'s thirteen lines (the eleventh is the host-pressure block, #1170, the twelfth the landing line's entry, the thirteenth the programme ledgers' waiting frame). The block adds none. */
+/** `peers-claims-l0.test.ts`'s fifteen lines (the eleventh is the host-pressure block, #1170, the twelfth the landing line's entry, the thirteenth the programme ledgers' waiting frame, the fourteenth the backup block, D-7858, the fifteenth the box settings' `ReadFailure`, D-6916). The block adds none. */
 const IMPORTS = [
   "import type { Hue, RosterKindWire } from './roster.js';",
   "import type { AccountPoolWire } from './poolrule.js';",
   "import type { BuildInfo } from './buildinfo.js';",
   "import type { BoxTokenView } from './box-token.js';",
+  "import type { ReadFailure } from './agent-protocol.js';",
   "import type { WorkflowView } from './workflows.js';",
   "import type { WaitingView } from './ledgers.js';",
   "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
   "import type { LandingEntry } from './landingLine.js';",
   "import type { NodeRole } from './node-role.js';",
-  "import type { AccountStateAnswer, LaneState } from './accounts.js';",
+  // The sign-in's state words (accounts plan Task A21) join the same import-free `accounts.ts` line: no new import.
+  "import type { AccountStateAnswer, AuthMethod, AuthStatusState, LaneState } from './accounts.js';",
   "import type { DiskHealth } from './disk.js';",
   "import { parseReapCrumb, type ReapCrumb } from './reapcrumb.js';",
   "import type { HostPressureHealth } from './pressure.js';",
+  "import type { BackupHealth } from './backup.js';",
 ];
 
 describe("the collector switch's L0 vocabulary (path-identity spec §5.7)", () => {

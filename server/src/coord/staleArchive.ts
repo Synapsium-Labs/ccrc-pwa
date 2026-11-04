@@ -43,8 +43,9 @@ import {
  * The marker has NO WRITER in the tree (`single-definition.test.ts`): the operator touches it by hand.
  */
 
-/** The arm's cadence: hourly, which is also the gap between the two sightings a row needs. */
-export const STALE_ARCHIVE_SWEEP_MS = 60 * 60_000;
+/** The arm's cadence: hourly, which is also the gap between the two sightings a row needs. Declared in `laneSchedule.ts` with
+ *  the watcher's other cadences, as the `staleArchive` row's (D-7895). */
+export { STALE_ARCHIVE_SWEEP_MS } from '../laneSchedule.js';
 /** The lane `ws-archive` records in its trail. */
 export const STALE_ARCHIVE_ACTOR = 'sweep:stale-archive';
 /** Journal acts that say a workspace ran or was brought up. */

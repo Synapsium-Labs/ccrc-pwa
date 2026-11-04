@@ -1999,8 +1999,10 @@ describe('SettingsScreen — a malformed /api/updates element does not blank the
     };
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const region = await t7Mount(raw as unknown as UpdatesView);
-    expect(within(region).getByText('fleet')).toBeInTheDocument();
-    expect(within(region).getByText('server')).toBeInTheDocument();
+    // The Nodes card, not the page: the Box settings card (D-6917) names each node too.
+    const nodes = within(region).getByRole('region', { name: 'Nodes' });
+    expect(within(nodes).getByText('fleet')).toBeInTheDocument();
+    expect(within(nodes).getByText('server')).toBeInTheDocument();
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
   });
@@ -2386,13 +2388,13 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(rows).toEqual(['updates', 'appearance', 'notifications', 'automation', 'security']);
   });
 
-  it('LOADING state: the Automation page is Stall watch, Temp root collector, Dispatches that never came back, Cleanup pause, Roll idle sessions (D-7453), then Test box (D-7412), each a card under the page heading', async () => {
+  it('LOADING state: the Automation page is Stall watch, Temp root collector, Dispatches that never came back, Cleanup pause, Roll idle sessions (D-7453), Backups (D-7860), then Test box (D-7412), each a card under the page heading', async () => {
     vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
     vi.spyOn(api, 'dispatchAbandon').mockReturnValue(new Promise(() => {}));
     await mount(swView());
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Automation']);
     expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent))
-      .toEqual([STALL_SECTION_TEXT.title, 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Roll idle sessions', 'Test box']);
+      .toEqual([STALL_SECTION_TEXT.title, 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Roll idle sessions', 'Backups', 'Test box']);
   });
 
   it('LANDED state (api.updates answered, so the Box token card renders): it renders on the Security page', async () => {

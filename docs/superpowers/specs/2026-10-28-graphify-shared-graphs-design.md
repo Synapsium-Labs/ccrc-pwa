@@ -535,6 +535,7 @@ sweep rewrites it every pass.
 | `CCRC_GRAPH_GATE_MAX_DIFF_PCT` | 25 | The gate arms when the files differing between the graph's commit and `HEAD` are at most this share of the graph's `files`. Replaces the hook's hard-coded `GRAPH_GATE_MAX_BEHIND=10` (`session-hook.sh:2376`). |
 | `CCRC_GRAPH_GATE_MAX_DENIALS` | 3 | Replaces the hard-coded `GRAPH_GATE_MAX_DENIALS=3` (`session-hook.sh:2377`). |
 | `CCRC_GRAPH_CARD_DIFF_LIST_MAX` | 20 | Changed files the card names before it gives the rest as a count. |
+| `CCRC_GRAPH_PRESSURE_MAX` | 60 | Added by D-7876 (2026-11-03). A pass is `deferred-pressure`, before any fetch, store write or build, while the host's memory or CPU pressure (PSI `some avg10`, in percent) is above this; 0 turns the check off. |
 
 Retired: `CCRC_GRAPH_STALE_ESCAPE_COMMITS`, `CCRC_GRAPH_STALE_ESCAPE_SECS` (builds never touch a session's tree, so
 there is no idle gate on builds and no escape hatch from one).

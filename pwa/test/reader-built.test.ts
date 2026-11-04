@@ -9,15 +9,18 @@
 // - each of the five frame assets reaches the bundle as exactly one chunk holding its text exactly;
 // - the built shell holds the one Content-Security-Policy meta, `frame-src 'none'`, before any script, style,
 //   stylesheet link or module preload;
-// - the Geist pair is still precached.
+// - the Geist pair is still precached;
+// - the build writes a Brotli and a gzip copy beside each script, stylesheet and SVG under assets/, and the service
+//   worker precaches none of them (the first-load compression plan of 2026-11-03, Task 2).
 // A `?raw` import is emitted as a JS string literal: quotes, newlines and non-ASCII characters are escaped in the
 // chunk, and every frame script opens with `"use strict";` and a newline, so a chunk is never found by matching the
 // asset's raw text. It is found by CONTENT: a node child imports every emitted chunk that is a bare string module,
 // hashes its default export (sha256 of the UTF-8 bytes) and the hash is looked up in the library's manifest.
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import { FRAME_MANIFEST } from '@synapsium-labs/docserver/frame';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -148,5 +151,63 @@ describe('the built reader and the precache (A9, M8.13, M8.14 as read by the W8a
       expect(hits, `one emitted file matching ${re}`).toHaveLength(1);
       expect(urls).toContain(`assets/${hits[0]}`);
     }
+  });
+});
+
+// The first-load compression plan (2026-11-03, Task 2): `precompressAssets` (vite.config.ts) runs
+// `build/compressAssets.ts` over the build's assets/ once the bundle is written, and the server sends the copies
+// (server/src/pwaStatic.ts). The service worker is generated after them and precaches none.
+describe('the built assets carry their precompressed copies, which the service worker does not precache', () => {
+  const assets = (): string => path.join(out, 'assets');
+  /** The module entry and the stylesheets the built shell loads, as `assets/<name>`. */
+  const shellLoads = (): string[] => {
+    const doc = new DOMParser().parseFromString(readFileSync(path.join(out, 'index.html'), 'utf8'), 'text/html');
+    return [
+      ...[...doc.querySelectorAll('script[type="module"][src]')].map((e) => e.getAttribute('src') ?? ''),
+      ...[...doc.querySelectorAll('link[rel="stylesheet"][href]')].map((e) => e.getAttribute('href') ?? ''),
+    ].filter((u) => u.startsWith('/assets/')).map((u) => u.slice(1));
+  };
+  /** Every file the build wrote, relative to it, at any depth. */
+  const built = (): string[] => readdirSync(out, { recursive: true, withFileTypes: true })
+    .filter((d) => d.isFile())
+    .map((d) => path.relative(out, path.join(d.parentPath, d.name)).split(path.sep).join('/'))
+    .sort();
+
+  it('the entry script, its stylesheet and the Mermaid chunk each have a .br and a .gz, smaller, that decode to their bytes', () => {
+    const mermaid = readdirSync(assets()).filter((n) => /^mermaid\.frame-.+\.js$/.test(n)).map((n) => `assets/${n}`);
+    const targets = [...shellLoads(), ...mermaid];
+    expect(targets.filter((t) => t.endsWith('.js')), 'one module entry and one Mermaid chunk').toHaveLength(2);
+    expect(targets.some((t) => t.endsWith('.css')), 'the shell loads a stylesheet').toBe(true);
+    for (const t of targets) {
+      const bytes = readFileSync(path.join(out, t));
+      const br = readFileSync(path.join(out, `${t}.br`));
+      const gz = readFileSync(path.join(out, `${t}.gz`));
+      expect(br.length, `${t}.br`).toBeLessThan(bytes.length);
+      expect(gz.length, `${t}.gz`).toBeLessThan(bytes.length);
+      expect(brotliDecompressSync(br).equals(bytes), `${t}.br`).toBe(true);
+      expect(gunzipSync(gz).equals(bytes), `${t}.gz`).toBe(true);
+    }
+  });
+
+  it('every copy sits beside the script, stylesheet or SVG it encodes, under assets/ only; one of 1 KiB or more has both', () => {
+    const files = built();
+    const copies = files.filter((f) => /\.(?:br|gz)$/.test(f));
+    expect(copies.length, 'the build wrote no copy').toBeGreaterThan(0);
+    for (const c of copies) {
+      expect(c.startsWith('assets/'), c).toBe(true);
+      expect(/\.(?:js|css|svg)\.(?:br|gz)$/.test(c), c).toBe(true);
+      expect(files, c).toContain(c.slice(0, -3));
+    }
+    for (const f of files.filter((n) => n.startsWith('assets/') && /\.(?:js|css)$/.test(n))) {
+      if (statSync(path.join(out, f)).size < 1024) continue;
+      expect(files, f).toContain(`${f}.br`);
+      expect(files, f).toContain(`${f}.gz`);
+    }
+  });
+
+  it('the service worker precaches no copy, and still precaches the entry script', () => {
+    const urls = precached();
+    expect(urls.filter((u) => /\.(?:br|gz)$/.test(u))).toEqual([]);
+    expect(urls).toContain(shellLoads().find((t) => t.endsWith('.js')));
   });
 });

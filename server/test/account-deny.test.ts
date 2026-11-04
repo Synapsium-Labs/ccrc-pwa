@@ -18,6 +18,7 @@ import {
   ACCOUNT_CLI_ONLY_VERBS, ACCOUNT_DENY_RULES, ACCOUNT_DENY_SUBS, ACCOUNT_READ_SUBS, ACCOUNT_SECRET_PATHS,
   ACCOUNT_SUBS, ACCOUNT_WRITE_DIRS, LINEAR_MCP_DENY,
 } from '../../shared/api.js';
+import { OPERATOR_SECRETS_DIR } from '../../shared/ledgers.js';
 import { ACCOUNT_SUB_ARGV } from '../../shared/account-argv.js';
 import { approvalClass, rootsForChild, type ApprovalClass } from '../src/coord/approvalguard.js';
 
@@ -117,6 +118,17 @@ describe('the managed account deny file (D-6202)', () => {
     expect(anyRule('Read', { file_path: '~/.ccrc/linear.key' })).toBe('Read(~/.ccrc/linear.key)');
     // the legacy details file holds no key, and stays readable
     expect(anyRule('Read', { file_path: '~/.ccrc/linear.json' })).toBeUndefined();
+  });
+
+  it('the list refuses a Read of the operator-secret slots (programme ledgers plan PL6, spec §5)', () => {
+    expect(ACCOUNT_SECRET_PATHS).toContain('~/.ccrc/operator-secrets/**');
+    // the same directory the store writes under (one name, two spellings held equal here)
+    expect(ACCOUNT_SECRET_PATHS).toContain(`~/.ccrc/${OPERATOR_SECRETS_DIR}/**`);
+    expect(anyRule('Read', { file_path: '~/.ccrc/operator-secrets/prog-a/x.secret' })).toBe('Read(~/.ccrc/operator-secrets/**)');
+    expect(anyRule('Read', { file_path: '~/.ccrc/operator-secrets/prog-a/x.json' })).toBe('Read(~/.ccrc/operator-secrets/**)');
+    // (a Bash read of it is the session hook's account arm, `session-hook-account-deny.test.ts`; the deny file has Read rules for paths)
+    // a sibling that only begins like it is not the store
+    expect(anyRule('Read', { file_path: '~/.ccrc/operator-secrets-notes.md' })).toBeUndefined();
   });
 
   it('the list refuses the claude.ai Linear connector\'s tools, by its prefix alone (D-7674; #1444 §11)', () => {

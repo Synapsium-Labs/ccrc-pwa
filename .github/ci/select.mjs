@@ -24,7 +24,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readMap, FAILED_UNDER_TRACE } from './testmap.mjs';
 import { readChanges, liveTestFiles, unsafeTestPaths, gitExistsAt, selectTests, gitStaleChanges, selectIgnoringUncertainty, uncertainTests, vitestFollows, RULE_NAMES } from './select-tests.mjs';
-import { planShards, planTraceBatch, toMatrix, PROFILES } from './shards.mjs';
+import { planShards, planTraceBatch, toMatrix, PROFILES, serverProfile } from './shards.mjs';
+import { queueScope } from './reach.mjs';
 
 /** @typedef {import('./testmap.mjs').TestMap} TestMap */
 /** @typedef {import('./select-tests.mjs').Selection} Selection */
@@ -40,9 +41,12 @@ import { planShards, planTraceBatch, toMatrix, PROFILES } from './shards.mjs';
  * misconfigured caller gets the SAFE answer, never a silent no-op.
  *
  * Order is significant, and matches the contract's own listing:
- *   1. `merge_group`                             -> full / none, whatever the change: the queue is where the whole
- *                                                 suite runs (operator ruling 2026-10-25, which replaced 2026-09-28's
- *                                                 "a queue run runs what a pull request runs").
+ *   1. `merge_group`                             -> full / none: the queue is where the whole suite runs (operator
+ *                                                 ruling 2026-10-25, which replaced 2026-09-28's "a queue run runs
+ *                                                 what a pull request runs"). ONE exception, `queueDocsOnly` (D-7868,
+ *                                                 the operator's direction of 2026-11-03): a docs-only group
+ *                                                 (reach.mjs `queueScope('server', …)` answers `selected`) answers
+ *                                                 selected / none, the selection a pull request runs for it.
  *   1b. `pull_request`                           -> selected / none — or full / none with `inputMode === 'full'`,
  *                                                 which ci.yml passes when the change touches `.github/` (a
  *                                                 plain-bash check, so a PR cannot talk its own selector out of a
@@ -54,11 +58,11 @@ import { planShards, planTraceBatch, toMatrix, PROFILES } from './shards.mjs';
  *   5. `inputMode === 'rebuild'`                  -> none / rebuild
  *   6. anything else                              -> full / none
  *
- * @param {{ event: string, inputMode?: string, fullGreen: boolean }} args
+ * @param {{ event: string, inputMode?: string, fullGreen: boolean, queueDocsOnly?: boolean }} args
  * @returns {ModeDecision}
  */
-export function decideMode({ event, inputMode, fullGreen }) {
-  if (event === 'merge_group') return { tests: 'full', trace: 'none', skip: false };
+export function decideMode({ event, inputMode, fullGreen, queueDocsOnly = false }) {
+  if (event === 'merge_group') return { tests: queueDocsOnly ? 'selected' : 'full', trace: 'none', skip: false };
   if (event === 'pull_request') {
     return inputMode === 'full'
       ? { tests: 'full', trace: 'none', skip: false }
@@ -84,15 +88,17 @@ export function decideMode({ event, inputMode, fullGreen }) {
 /**
  * What a trigger can never answer (ruling T2), checked on decideMode's answer before anything runs: a pull
  * request, and a merge-queue run (landing-order wave 2), always runs server tests (never `none`), a
- * merge-queue run never a SELECTION (operator ruling 2026-10-25: the queue runs everything), and a
+ * merge-queue run never a SELECTION (operator ruling 2026-10-25: the queue runs everything) unless its group is
+ * docs-only (`queueDocsOnly`, D-7868), and a
  * schedule, a refresh push or a rebuild never runs a
  * per-file SELECTION (they run everything or nothing). A violation is a bug in this module; the CLI refuses it.
  * @param {string} event @param {string | undefined} inputMode @param {'selected'|'full'|'none'} tests
+ * @param {boolean} [queueDocsOnly]
  * @returns {string | null}
  */
-export function modeInvariantViolation(event, inputMode, tests) {
+export function modeInvariantViolation(event, inputMode, tests, queueDocsOnly = false) {
   if ((event === 'pull_request' || event === 'merge_group') && tests === 'none') return `a ${event} answered tests: none`;
-  if (event === 'merge_group' && tests === 'selected') return 'a merge_group answered tests: selected';
+  if (event === 'merge_group' && tests === 'selected' && !queueDocsOnly) return 'a merge_group answered tests: selected';
   if (tests === 'selected' && (event === 'schedule' || (event === 'push' && !inputMode) || inputMode === 'refresh' || inputMode === 'rebuild')) {
     return `a ${inputMode === 'rebuild' || inputMode === 'refresh' ? inputMode : event} answered tests: selected`;
   }
@@ -403,6 +409,20 @@ function floorListHit(floorListFile, selection) {
   return listed.some((f) => chosen.has(`server/${f}`) || chosen.has(f));
 }
 
+/** Whether a merge-queue group is docs-only (D-7868): reach.mjs `queueScope('server', …)` over the group's change,
+ *  `base` (the queue's base sha) to HEAD. Undiffable, or no base: false, the full run.
+ *  @param {string} repoDir @param {string | undefined} base @returns {boolean} */
+function queueGroupDocsOnly(repoDir, base) {
+  if (!base) return false;
+  try {
+    const from = execFileSync('git', ['merge-base', base, 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).trim();
+    const changed = execFileSync('git', ['diff', '--name-only', '--no-renames', from, 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).split('\n');
+    return queueScope('server', changed) === 'selected';
+  } catch {
+    return false;
+  }
+}
+
 /** A pull request's changed paths from its merge base, for `untracedOutput` when the map gave no answer; null when
  *  they cannot be read (the safe answer then is `full`). @param {string} repoDir @param {string | undefined} base */
 function prChangedPaths(repoDir, base) {
@@ -437,13 +457,17 @@ function main() {
     }
   }
 
-  const decide = decideMode({ event, inputMode, fullGreen });
-  const violation = modeInvariantViolation(event, inputMode, decide.tests);
+  // A docs-only merge-queue group selects as a pull request does, from the queue's base (D-7868).
+  const queueDocsOnly = event === 'merge_group' && queueGroupDocsOnly(repoDir, opt.base);
+  const decide = decideMode({ event, inputMode, fullGreen, queueDocsOnly });
+  const violation = modeInvariantViolation(event, inputMode, decide.tests, queueDocsOnly);
   if (violation) throw new Error(`select.mjs: ${violation} — refusing (ruling T2)`);
   const liveTestsAll = liveTestsOrRefuse(repoDir);
 
   const needsRealSelection = decide.tests === 'selected' || decide.trace === 'refresh';
-  const realSel = needsRealSelection ? computeRealSelection(repoDir, mapFile, liveTestsAll, event === 'pull_request' ? opt.base : undefined) : null;
+  // The change a selection diffs from its base: a pull request's, or a docs-only queue group's (D-7868).
+  const byChange = event === 'pull_request' || queueDocsOnly;
+  const realSel = needsRealSelection ? computeRealSelection(repoDir, mapFile, liveTestsAll, byChange ? opt.base : undefined) : null;
 
   let testsOut = decide.tests;
   let fallback = '';
@@ -518,7 +542,10 @@ function main() {
   // full run.
   const macosProfile = event !== 'pull_request' && testsOut === 'full' ? PROFILES.macosFull : PROFILES.macosSelected;
 
-  const serverPlan = planShards(testFileList, durations, PROFILES.linux);
+  // A dispatch's `workers` input (2 or 4) plans the server shards at that many vitest workers; every other event
+  // keeps PROFILES.linux (serverProfile). Resolved before anything is written, so a refused count writes no matrix.
+  const linuxProfile = serverProfile(event, opt.workers);
+  const serverPlan = planShards(testFileList, durations, linuxProfile);
   const macosPlan = planShards(testFileList, durations, macosProfile);
   // `durations ?? {}`, never null: trace-run.mjs takes an exact list and has
   // no --shard, so the trace plan must always be a real partition (LPT at
@@ -559,7 +586,7 @@ function main() {
     map_sha: mapSha,
     fallback,
     queued_count: String(queued ? queued.unmapped.length + queued.uncertain.length : 0),
-    untraced: untracedOutput({ isPr: event === 'pull_request', untraced: realSel?.untraced, changedPaths: event === 'pull_request' ? prChangedPaths(repoDir, opt.base) : null }),
+    untraced: untracedOutput({ isPr: byChange, untraced: realSel?.untraced, changedPaths: byChange ? prChangedPaths(repoDir, opt.base) : null }),
   });
 
   /** @type {string[]} */
@@ -585,6 +612,9 @@ function main() {
     if (listed.length > QUEUED_LISTED) notes.push(`queued: ${listed.length - QUEUED_LISTED} more not listed`);
     const total = queued.unmapped.length + queued.uncertain.length;
     if (total > 0) process.stdout.write(`::notice::this light run left ${total} server test(s) to the merge queue's full run (${queued.unmapped.length} unmapped, ${queued.uncertain.length} uncertain); the step summary lists them\n`);
+  }
+  if (linuxProfile !== PROFILES.linux) {
+    notes.push(`server shards planned at ${linuxProfile.workers} vitest workers each (this dispatch's workers input; the profile's is ${PROFILES.linux.workers})`);
   }
   const nowMs = opt.now ? Date.parse(opt.now) : Date.now();
   // Main's head, where this run can name it: a pull request's base, or the checked-out main of a refresh.

@@ -12,7 +12,6 @@ import { createFetchQueue } from '../src/docs/fetchQueue';
 import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
 import { detachUrls } from '../src/docs/docsLinks';
 import { loadReaderImages } from '../src/docs/reader/images';
-import { codeLanguage, inMarkdownPageBudget, inScanPageBudget } from '../src/lib/markdown';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { READER_IMAGE_BUDGET_BYTES } from '../src/lib/readerLimits';
 import { draftOf, entry, fileResponse, holder, pageAt, treeOk } from './docsFixtures';
@@ -155,7 +154,7 @@ describe('loadReaderImages: the reader frame\'s images as data: URLs (the W8a pl
     // raw spelling is refused as malformed, so the encoded ref is the one both views pin.
     const parsed = parseMarkdown('![i](<a b.png>)', 'docs');
     if (parsed.kind !== 'tree') throw new Error('expected a tree');
-    const d = detachUrls(parsed.tree, { codeLanguage, inScanPageBudget, inMarkdownPageBudget });
+    const d = detachUrls(parsed.tree);
     const img = (n: HastNode): HastElement | undefined =>
       n.type === 'element' && n.tagName === 'img' ? n : ('children' in n ? n.children.map(img).find(Boolean) : undefined);
     const node = img(d.tree);
