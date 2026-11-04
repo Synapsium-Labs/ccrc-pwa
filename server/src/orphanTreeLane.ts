@@ -312,7 +312,7 @@ export function orphanTreesHealth(
     if (m.outcome === null) byOutcome.pending += 1;
     else if (m.outcome.kind !== 'removed') byOutcome[m.outcome.kind] += 1;
   }
-  return { byClass, byOutcome, leaseUnready };
+  return leaseUnready > 0 ? { byClass, byOutcome, leaseUnready } : { byClass, byOutcome };
 }
 
 export interface OrphanOffers { readonly act: string | null; readonly learn: readonly string[] }

@@ -129,7 +129,8 @@ export interface DiskOrphanTrees {
   readonly byClass: Readonly<Record<'ccd-root' | 'claude' | 'superpowers' | 'other' | 'not-a-worktree', number>>;
   readonly byOutcome: Readonly<Record<'pending' | 'would' | 'left' | 'removed', number>>;
   /** Trees whose last act job stopped because the delegation checkpoint was not ready (delegation PR4): a stuck applier shows on
-   *  the orphan lane's own row. Absent from an older server, and then unknown, never zero. */
+   *  the orphan lane's own row. Present only when above zero: absent means no tree is so stopped, which an older server, whose
+   *  lane has no delegation hold, also says truly. */
   readonly leaseUnready?: number;
 }
 
