@@ -342,7 +342,8 @@ export function freshnessChip(
 
 /** The compact head's width (phone-header refinement (b)): under 600 CSS px, the compact window class. A leaf page draws one row there
  *  (`CompactHead`); a tablet, a desktop, and every other page at any width keep the header as it was. Spelled once, here:
- *  docs.css keys the row's rules on its own classes, never on a width (docs-compact-head.test.tsx holds both). */
+ *  docs.css keys the row's rules on its own classes, never on a width (docs-compact-css.test.ts holds that half; docs-compact-head.test.tsx
+ *  holds the other, that DocsHead.tsx alone spells it under pwa/src). */
 export const DOCS_COMPACT_QUERY = '(max-width: 599.98px)';
 
 /** Which header a page draws. */

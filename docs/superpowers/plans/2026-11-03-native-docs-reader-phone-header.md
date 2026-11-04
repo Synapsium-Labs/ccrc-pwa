@@ -1227,6 +1227,19 @@ describe('the compact row (refinements (c), (e), (g))', () => {
     expect(bar().querySelector('.docs-compact-where')?.textContent).toBe('specs · main (local)');
   });
 
+  it.each(['default:origin-main', 'default:origin-master'] as const)(
+    'an origin-side default view that is %s names its served ref on the row (refinement (g))',
+    async (via) => {
+      atWidth(412);
+      const base = treeOk();
+      const tree = { ...base, ref: { ...base.ref, side: 'origin' as const, via } };
+      open('/docs/demo/specs/a.md', fakeLoaders({ tree: okTree(tree) }));
+      await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+      expect(servedRefText(tree.ref)).toContain(tree.ref.name);
+      expect(bar().querySelector('.docs-compact-where')?.textContent).toBe(`specs · ${servedRefText(tree.ref)}`);
+    },
+  );
+
   it('while the leaf moves to its pin, Share and Export are disabled and named for it, and the panel says why (refinement (e))', async () => {
     atWidth(412);
     const f = fakeLoaders();
@@ -1448,7 +1461,8 @@ function Crumbs(p: { readonly crumbs: readonly DocsCrumb[] }): ReactNode {
 ```tsx
 /** The compact head's width (phone-header refinement (b)): under 600 CSS px, the compact window class. A leaf page draws one row there
  *  (`CompactHead`); a tablet, a desktop, and every other page at any width keep the header as it was. Spelled once, here:
- *  docs.css keys the row's rules on its own classes, never on a width (docs-compact-head.test.tsx holds both). */
+ *  docs.css keys the row's rules on its own classes, never on a width (docs-compact-css.test.ts holds that half; docs-compact-head.test.tsx
+ *  holds the other, that DocsHead.tsx alone spells it under pwa/src). */
 export const DOCS_COMPACT_QUERY = '(max-width: 599.98px)';
 
 /** Which header a page draws. */
