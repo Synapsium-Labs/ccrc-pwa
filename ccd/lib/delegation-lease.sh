@@ -43,10 +43,10 @@ __DL_REASONS='native-removed transferred foreign'
 
 # The carrier reader's python: one fixed program, the carrier's path its only file argument. It opens without following a
 # link, refuses a non-regular file and one past the size bound, and checks every key and value against the carrier's
-# grammar; it prints `OK` and NUL-separated `field=value` pairs (null as the empty value, and `body`, the carrier less
+# grammar, and that it records the lease its file name names; it prints `OK` and NUL-separated `field=value` pairs (null as the empty value, and `body`, the carrier less
 # `markedAt` in its own key order), `ABSENT`, or `BAD` and a reason. Nothing it prints is ever evaluated.
 __DL_CARRIER_PY='import json, os, re, stat, sys
-p, mx = sys.argv[1], int(sys.argv[2])
+p, mx, want = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
 REGID = re.compile(r"(?!-)[A-Za-z0-9._-]{1,128}\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
@@ -102,10 +102,23 @@ ok = (doc["v"] == 1 and type(doc["v"]) is int and word(doc["leaseId"], UUID) and
       and (doc["promotedRun"] is not None) == (doc["state"] == "promoted") == (doc["promotedSession"] is not None)
       and num(doc["markedAt"]))
 if not ok: bad("a value is out of the carrier grammar")
+if doc["leaseId"] != want: bad("it records lease %s, not the lease its name says" % doc["leaseId"])
 body = json.dumps({k: v for k, v in doc.items() if k != "markedAt"}, separators=(",", ":"))
 vals = ["%s=%s" % (k, "" if doc[k] is None else doc[k]) for k in KEYS]
 out("OK", *vals, "body=" + body)
 '
+
+_dl_dirs_measured() {   # <dir>... (each the next one's parent, the first under $REG) -> rc 0 each is a searchable directory and
+                        #    no link; rc 3 the first one missing is PROVEN absent (no entry under a searchable parent: nothing was
+                        #    ever made there); rc 4 a link, a non-directory or an unsearchable one (DL_WHY)
+  local d
+  [[ -d "$REG" && -x "$REG" ]] || { DL_WHY="the registry $REG is not a searchable directory"; return 4; }
+  for d in "$@"; do
+    [[ ! -L "$d" ]] || { DL_WHY="$d is a link, which is never followed"; return 4; }
+    [[ -e "$d" ]] || return 3
+    [[ -d "$d" && -x "$d" ]] || { DL_WHY="$d is not a searchable directory, so nothing under it can be proven absent"; return 4; }
+  done
+}
 
 _dl_carrier_read() {   # <leaseId> -> rc 0 with DL_C_<field> set; rc 3 PROVEN absent (no entry, no link); rc 4 anything else
                        #    (link, non-regular, oversize, unreadable, malformed JSON, a field out of grammar), DL_WHY set
@@ -116,13 +129,12 @@ _dl_carrier_read() {   # <leaseId> -> rc 0 with DL_C_<field> set; rc 3 PROVEN ab
     printf -v "DL_C_$k" '%s' ''
   done
   [[ "$id" =~ $__DL_LEASE_RE ]] || { DL_WHY="'$id' is not a lease id"; return 4; }
-  [[ ! -L "$REG/delegation" && ! -L "$dir" && -d "$dir" && -x "$dir" ]] \
-    || { DL_WHY="the leases directory $dir is not a searchable directory, so no carrier can be proven absent"; return 4; }
+  _dl_dirs_measured "$REG/delegation" "$dir" || return
   f="$dir/$id.json"
   [[ ! -L "$f" ]] || { DL_WHY="$f is a link, which is never read"; return 4; }
   [[ -e "$f" ]] || return 3
   [[ -f "$f" ]] || { DL_WHY="$f is not a regular file"; return 4; }
-  mapfile -d '' out < <(python3 -I -c "$__DL_CARRIER_PY" "$f" "$__DL_CARRIER_MAX" 2>/dev/null)
+  mapfile -d '' out < <(python3 -I -c "$__DL_CARRIER_PY" "$f" "$__DL_CARRIER_MAX" "$id" 2>/dev/null)
   case "${out[0]-}" in
     OK) ;;
     ABSENT) return 3 ;;
@@ -148,8 +160,7 @@ _dl_tree_owner() {   # <key> -> rc 0 DL_OWNER=<leaseId>; rc 3 proven absent; rc 
   local LC_ALL=C key="${1-}" d="$REG/delegation/leases/by-tree" f v
   DL_OWNER=''; DL_WHY=''
   [[ "$key" =~ ^[0-9a-f]{64}$ ]] || { DL_WHY="'$key' is not a tree key"; return 4; }
-  [[ ! -L "$REG/delegation" && ! -L "$REG/delegation/leases" && ! -L "$d" && -d "$d" && -x "$d" ]] \
-    || { DL_WHY="the by-tree index $d is not a searchable directory"; return 4; }
+  _dl_dirs_measured "$REG/delegation" "$REG/delegation/leases" "$d" || return
   f="$d/$key"
   [[ ! -L "$f" ]] || { DL_WHY="the by-tree entry $f is a link"; return 4; }
   [[ -e "$f" ]] || return 3
@@ -202,8 +213,15 @@ _dl_creation_base() {   # <admin dir> -> prints CLAUDE_BASE's id if it is one 40
 }
 
 _dl_fingerprint() {   # <common> <record> <admin> <tree> <base> -> prints 64 hex over named lines (mode=lease-mark first);
-                      #    rc 4 unmeasured (DL_WHY)
-  local LC_ALL=C common="$1" rec="$2" admin="$3" tree="$4" base="$5" ci ai ti gf l
+                      #    rc 4 unmeasured (DL_WHY, which a caller reading this through $(...) never sees: use _dl_fingerprint_to)
+  local __dl_fp
+  _dl_fingerprint_to __dl_fp "$@" || return 4
+  printf '%s\n' "$__dl_fp"
+}
+
+_dl_fingerprint_to() {   # <var> <common> <record> <admin> <tree> <base> -> rc 0 <var>=64 hex; rc 4 unmeasured, DL_WHY set in THIS
+                         #    shell, so the reason reaches the caller's refusal
+  local LC_ALL=C __dl_out="$1" common="$2" rec="$3" admin="$4" tree="$5" base="$6" ci ai ti gf l v
   DL_WHY=''
   _ws_path_ident "$common" || { DL_WHY="the identity of $common could not be read${_WS_IDENT_WHY:+ ($_WS_IDENT_WHY)}"; return 4; }; ci="$_WS_IDENT"
   _ws_path_ident "$admin" || { DL_WHY="the identity of $admin could not be read${_WS_IDENT_WHY:+ ($_WS_IDENT_WHY)}"; return 4; }; ai="$_WS_IDENT"
@@ -216,8 +234,10 @@ _dl_fingerprint() {   # <common> <record> <admin> <tree> <base> -> prints 64 hex
   _ws_reclaim_gitdir_own "$tree" "$common" || { DL_WHY="${_WS_GITDIR_WHY:-the git directory of $tree is not its own record}"; return 4; }
   [[ "$_WS_GITDIR_DIR" == "$admin" || "$(_ws_realpath "$_WS_GITDIR_DIR")" == "$admin" ]] \
     || { DL_WHY="the git directory of $tree is $_WS_GITDIR_DIR, not $admin"; return 4; }
-  _ws_reclaim_fingerprint "mode=lease-mark" "common=$ci" "record=$rec" "admin=$ai" "root=$ti" "gitfile=$gf" \
-    "gitdir=$_WS_GITDIR_DIR" "base=$base"
+  v=$(_ws_reclaim_fingerprint "mode=lease-mark" "common=$ci" "record=$rec" "admin=$ai" "root=$ti" "gitfile=$gf" \
+    "gitdir=$_WS_GITDIR_DIR" "base=$base") && [[ "$v" =~ ^[0-9a-f]{64}$ ]] \
+    || { DL_WHY="the fingerprint of $tree could not be computed"; return 4; }
+  printf -v "$__dl_out" '%s' "$v"
 }
 
 _dl_mark_refuse() {   # <word> <detail> -> prints the verb's one refusal line (never dies)
@@ -227,7 +247,7 @@ _dl_mark_refuse() {   # <word> <detail> -> prints the verb's one refusal line (n
 }
 _dl_in() { [[ "${1-}" =~ ^[a-z-]+$ && " ${2-} " == *" $1 "* ]]; }   # word list -> 0 iff word is one of list's words
 
-# @ccd-lib:lease-mark
+# ── ccd ws-lease-mark: the carrier's one writer ──
 cmd_ws_lease_mark() {   # ccd ws-lease-mark --lease <uuid> --generation <n> ... -> ONE JSON line on stdout; rc 0 written|unchanged|
                         #    index-cleared, 1 refused, 2 usage
   local LC_ALL=C
@@ -269,7 +289,7 @@ cmd_ws_lease_mark() {   # ccd ws-lease-mark --lease <uuid> --generation <n> ... 
   [[ -n "$u" || "$act" =~ ^[A-Za-z0-9._:-]{1,200}$ ]] || u='--activity is not an activity id'
   [[ -n "$u" ]] || _dl_in "$src" "$__DL_SOURCES" || u='--source is not a lease source'
   [[ -n "$u" ]] || _dl_in "$state" "$__DL_STATES" || u='--state is not a carrier state'
-  [[ -n "$u" || -z "$exp" || "$exp" =~ ^[1-9][0-9]{0,15}$ ]] || u='--expires-at is not epoch milliseconds'
+  [[ -n "$u" || "$seen" != *' --expires-at '* || "$exp" =~ ^[1-9][0-9]{0,15}$ ]] || u='--expires-at is not epoch milliseconds'
   if [[ -z "$u" ]]; then
     if [[ "$state" == released ]]; then
       _dl_in "$reason" "$__DL_REASONS" || u='--state released needs --release-reason native-removed|transferred|foreign'
@@ -291,7 +311,7 @@ cmd_ws_lease_mark() {   # ccd ws-lease-mark --lease <uuid> --generation <n> ... 
   command -v flock >/dev/null 2>&1 || { _dl_mark_refuse unmeasured "flock (util-linux) is unavailable, so the mark cannot be serialised"; return 1; }
   dir=$(_dl_leases_dir) && [[ -n "$dir" ]] \
     || { _dl_mark_refuse unmeasured "$REG/delegation/leases could not be made a private directory (a link or a non-directory stands in its path)"; return 1; }
-  exec {lfd}>>"$dir/.locks/$lease.lock" 2>/dev/null \
+  { exec {lfd}>>"$dir/.locks/$lease.lock"; } 2>/dev/null \
     || { _dl_mark_refuse unmeasured "the lock $dir/.locks/$lease.lock could not be opened"; return 1; }
   flock -n "$lfd" || { exec {lfd}>&-; _dl_mark_refuse busy "another ws-lease-mark holds the lock of lease $lease"; return 1; }
   _ws_reclaim_contained _dl_mark_locked; rc=$?
@@ -422,11 +442,12 @@ _dl_mark_locked() {   # everything the lock serialises (the flags, $dir and $rec
     3) [[ "$state" == released ]] || index=write ;;
     *) _dl_mark_refuse unmeasured "$DL_WHY"; return 1 ;;
   esac
-  # rule 11: the fingerprint, the creation base and the branch
-  if [[ -n "$tp" ]]; then
+  # rule 11: the fingerprint, the creation base and the branch. A release keeps what the stored carrier records (D-7937, as
+  # D-7825 does for a gone tree): it writes no hold and never takes the entry (D-7934), and the record may name a new tree.
+  if [[ -n "$tp" && "$state" != released ]]; then
     base=$(_dl_creation_base "$admin") \
       || { _dl_mark_refuse unmeasured "the creation base of $rec could not be read (neither CLAUDE_BASE nor logs/HEAD)"; return 1; }
-    fp=$(_dl_fingerprint "$common" "$rec" "$admin" "$tp" "$base") && [[ "$fp" =~ ^[0-9a-f]{64}$ ]] \
+    _dl_fingerprint_to fp "$common" "$rec" "$admin" "$tp" "$base" \
       || { _dl_mark_refuse unmeasured "${DL_WHY:-the fingerprint of $tp could not be computed}"; return 1; }
     if (( crc == 0 )) && [[ "$fp" != "$s_fp" ]]; then
       _dl_mark_refuse fingerprint-mismatch "the tree at $tp is not the one lease $lease's carrier records"; return 1

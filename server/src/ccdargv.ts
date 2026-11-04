@@ -296,14 +296,6 @@ export function sweepDec(
     : null;
 }
 
-/**
- * The ONLY place ccd argv is constructed. Every route builds its call through
- * this table, and `whitelist-subset.test.ts` enumerates the table against the
- * agent's EXEC_WHITELIST in both directions. An argv the enumeration cannot see
- * is exactly how `ws-add`/`ws-rm` shipped whitelisted-out and dead on the fleet
- * with every suite green — so there is deliberately no other way to obtain the
- * `CcdArgv` that `Deps.runCcd` demands.
- */
 /** One delegation lease's carrier mark (delegation broker wave 5, PR1): the generation the server has journalled and the
  *  lease's fields, as `ccd ws-lease-mark` writes them into that lease's carrier file on the box. */
 export interface LeaseMarkArgs {
@@ -345,6 +337,14 @@ const leaseMarkArgv = (a: LeaseMarkArgs): CcdArgv => {
   ]);
 };
 
+/**
+ * The ONLY place ccd argv is constructed. Every route builds its call through
+ * this table, and `whitelist-subset.test.ts` enumerates the table against the
+ * agent's EXEC_WHITELIST in both directions. An argv the enumeration cannot see
+ * is exactly how `ws-add`/`ws-rm` shipped whitelisted-out and dead on the fleet
+ * with every suite green — so there is deliberately no other way to obtain the
+ * `CcdArgv` that `Deps.runCcd` demands.
+ */
 export const CCD_ARGV = {
   /** `route` is a FOURTH, OPTIONAL argument, not a fifth positional — flags
    *  LEAD (the `swapCross` rule two entries down: a trailing flag on an old

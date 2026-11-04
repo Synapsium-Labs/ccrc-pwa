@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
@@ -125,6 +125,7 @@ describe('ws-lease-mark refuses every tree spec §5.10 refuses, before any write
     refused(mark({ state: 'promoted', 'promoted-run': '12' }), 'usage');
     refused(mark({ 'admin-record-hex': hex('..') }), 'usage');
     refused(mark({ 'admin-record-hex': 'AB' }), 'usage');
+    refused(mark({ 'expires-at': "''" }), 'usage');
   }, 60_000);
 
   it('W5-L6: a main checkout that is a link refuses not-under-projects-root', () => {
@@ -247,6 +248,24 @@ describe('ws-lease-mark refuses every tree spec §5.10 refuses, before any write
     const big = Buffer.alloc(20000, 0x20);
     fs.writeFileSync(carrierPath(), big);
     refused(mark(), 'bad-carrier', big);
+    // a dangling link and a link to itself: python never opens a missing target, so the bash layer alone refuses them
+    for (const target of [path.join(h.home, 'nowhere.json'), carrierPath()]) {
+      fs.rmSync(carrierPath(), { force: true });
+      fs.symlinkSync(target, carrierPath());
+      const l = mark();
+      expect(l.doc, JSON.stringify(l.doc)).toMatchObject({ ok: false, refusal: 'bad-carrier' });
+      expect(fs.lstatSync(carrierPath()).isSymbolicLink(), 'the link is left in place').toBe(true);
+      expect(fs.readlinkSync(carrierPath())).toBe(target);
+    }
+  }, 60_000);
+
+  it('W5-L14b: a carrier that records another lease than its file name refuses bad-carrier and is left as it is', () => {
+    agentTree();
+    mark({ lease: OTHER });
+    fs.copyFileSync(carrierPath(OTHER), carrierPath());
+    const bytes = fs.readFileSync(carrierPath());
+    refused(mark(), 'bad-carrier', bytes);
+    expect(mark().doc.detail).toMatch(/records lease 7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d, not the lease its name says/);
   }, 60_000);
 
   it('W5-L15: a leases directory that is a link refuses unmeasured and makes nothing at its target', () => {
@@ -270,6 +289,21 @@ describe('ws-lease-mark refuses every tree spec §5.10 refuses, before any write
     refused(mark({ generation: '2', state: 'adopted', 'journal-seq': '8' }), 'fingerprint-mismatch', before);
   }, 60_000);
 
+  it('W5-L16b: a release after the tree was removed and re-added at the same path is written and keeps the stored fingerprint (D-7937)', () => {
+    const t = agentTree();
+    mark();
+    const stored = carrier();
+    h.git(main(), 'worktree', 'remove', t);
+    fs.writeFileSync(path.join(main(), 'more.md'), 'more\n');
+    h.git(main(), 'add', 'more.md');
+    h.git(main(), 'commit', '-m', 'more');
+    h.git(main(), 'worktree', 'add', '-b', 'claude/agent-a-again', '--', t);
+    const r = mark({ generation: '2', state: 'released', 'release-reason': 'native-removed', 'journal-seq': '8' });
+    expect(r.doc, JSON.stringify(r.doc)).toMatchObject({ ok: true, answer: 'written', state: 'released', fingerprint: stored.fingerprint });
+    expect(carrier()).toMatchObject({ generation: 2, state: 'released', releaseReason: 'native-removed', fingerprint: stored.fingerprint,
+      claudeBase: stored.claudeBase, canonicalPath: t, branch: 'claude/agent-a' });
+  }, 60_000);
+
   it('W5-L17: a lost answer is re-driven: the same generation 2 twice answers unchanged the second time', () => {
     agentTree(); mark();
     const g2 = { generation: '2', state: 'adopted', 'expires-at': '1767225600000', 'journal-seq': '9' };
@@ -283,12 +317,15 @@ describe('ws-lease-mark refuses every tree spec §5.10 refuses, before any write
     agentTree();
     h.sh('_dl_leases_dir >/dev/null');
     const lock = path.join(leasesDir(), '.locks', `${LEASE}.lock`);
-    const holder = spawn('flock', [lock, 'sleep', '5'], { stdio: 'ignore' });
+    // its own process group, so the finally kills flock AND the sleep that inherits the lock's descriptor
+    const holder = spawn('flock', [lock, 'sleep', '30'], { stdio: 'ignore', detached: true });
+    const held = (): boolean => spawnSync('flock', ['-n', lock, 'true']).status === 1;
     try {
-      for (let i = 0; i < 50 && !fs.existsSync(lock); i++) await new Promise((r) => setTimeout(r, 50));
-      await new Promise((r) => setTimeout(r, 200));
+      // wait until a probe cannot take the lock, not merely until its file exists: a loaded box may start flock late
+      for (let i = 0; i < 400 && !held(); i++) await new Promise((r) => setTimeout(r, 50));
+      expect(held(), 'the holder holds the lock').toBe(true);
       refused(mark(), 'busy');
-    } finally { holder.kill('SIGKILL'); }
+    } finally { try { process.kill(-holder.pid!, 'SIGKILL'); } catch { /* already gone */ } }
   }, 60_000);
 
   it('W5-L19: a release whose tree is gone is written and keeps the stored fingerprint; with no carrier it refuses no-tree', () => {
@@ -396,5 +433,85 @@ describe('ws-lease-mark refuses every tree spec §5.10 refuses, before any write
     expect(fs.readFileSync(carrierPath())).toEqual(before);
     expect(fs.statSync(carrierPath()).ino).toBe(ino);
     expect(fs.readdirSync(leasesDir()).filter((f) => f.startsWith(`.${LEASE}`) || (f.endsWith('.json') && f !== `${LEASE}.json`))).toEqual([]);
+  }, 60_000);
+});
+
+describe('the readers tell a directory never made from one they cannot read (F3)', () => {
+  const KEY = 'a'.repeat(64);
+  const rcs = (): [string, string] => {
+    const out = h.sh(`_dl_carrier_read ${LEASE}; echo "c=$?"; _dl_tree_owner ${KEY}; echo "o=$?"`).trim().split('\n');
+    return [out.find((l) => l.startsWith('c='))!, out.find((l) => l.startsWith('o='))!];
+  };
+  it('W5-L26: a missing delegation/, leases/ or by-tree/ is proven absent (rc 3); a link, a file or an unsearchable one is rc 4', () => {
+    const del = path.join(reg(), 'delegation');
+    fs.rmSync(del, { recursive: true, force: true });
+    expect(rcs(), 'no delegation/').toEqual(['c=3', 'o=3']);
+    fs.mkdirSync(del);
+    expect(rcs(), 'delegation/ but no leases/').toEqual(['c=3', 'o=3']);
+    fs.mkdirSync(leasesDir());
+    expect(rcs(), 'leases/ but no by-tree/').toEqual(['c=3', 'o=3']);
+    fs.mkdirSync(path.join(leasesDir(), 'by-tree'));
+    expect(rcs(), 'all three, empty').toEqual(['c=3', 'o=3']);
+    const away = fs.mkdtempSync(path.join(h.home, 'away-'));
+    fs.rmSync(path.join(leasesDir(), 'by-tree'), { recursive: true });
+    fs.symlinkSync(away, path.join(leasesDir(), 'by-tree'));
+    expect(rcs(), 'by-tree/ a link').toEqual(['c=3', 'o=4']);
+    fs.rmSync(leasesDir(), { recursive: true });
+    fs.symlinkSync(away, leasesDir());
+    expect(rcs(), 'leases/ a link').toEqual(['c=4', 'o=4']);
+    fs.rmSync(del, { recursive: true });
+    fs.symlinkSync(away, del);
+    expect(rcs(), 'delegation/ a link').toEqual(['c=4', 'o=4']);
+    fs.rmSync(del);
+    fs.writeFileSync(del, 'not a directory\n');
+    expect(rcs(), 'delegation a regular file').toEqual(['c=4', 'o=4']);
+    fs.rmSync(del);
+    if (process.getuid?.() === 0) return;   // root searches a mode-0000 directory
+    fs.mkdirSync(path.join(leasesDir(), 'by-tree'), { recursive: true });
+    fs.chmodSync(leasesDir(), 0);
+    try { expect(rcs(), 'leases/ unsearchable').toEqual(['c=4', 'o=4']); } finally { fs.chmodSync(leasesDir(), 0o700); }
+  }, 60_000);
+});
+
+describe("rule 9's carrier half: nesting git's own worktree list cannot see (F4, D-7935)", () => {
+  const other = (): string => path.join(h.home, 'projects', 'other');
+  it('W5-L27: a tree of another repository nested in, or around, a leased tree refuses nested', () => {
+    h.makeRepo('other');
+    // inside: lease A's tree X (demo), then lease B's tree (other) at X/inner
+    const x = agentTree();
+    expect(mark().doc).toMatchObject({ ok: true, answer: 'written' });
+    h.git(other(), 'worktree', 'add', '-b', 'claude/inner', '--', path.join(x, 'inner'));
+    refused(mark({ lease: OTHER, project: 'other', 'admin-record-hex': hex('inner') }), 'nested', fs.readFileSync(carrierPath()));
+    expect(fs.existsSync(carrierPath(OTHER))).toBe(false);
+    // around: lease A's tree (demo) inside lease B's tree (other)
+    fs.rmSync(leasesDir(), { recursive: true });
+    const y = agentTree('agent-o', path.join(other(), '.claude', 'worktrees', 'agent-o'), other());
+    agentTree('agent-d', path.join(y, 'sub', 'agent-d'));
+    expect(mark({ 'admin-record-hex': hex('agent-d') }).doc).toMatchObject({ ok: true, answer: 'written' });
+    const r = mark({ lease: OTHER, project: 'other', 'admin-record-hex': hex('agent-o') });
+    expect(r.doc, JSON.stringify(r.doc)).toMatchObject({ ok: false, refusal: 'nested' });
+    expect(fs.existsSync(carrierPath(OTHER))).toBe(false);
+  }, 120_000);
+
+  it("W5-L28: another lease's malformed carrier never blocks a mark that is otherwise clean (D-7935)", () => {
+    agentTree();
+    fs.mkdirSync(path.join(leasesDir(), 'by-tree'), { recursive: true });
+    fs.writeFileSync(carrierPath(THIRD), '{');
+    const r = mark();
+    expect(r.doc, JSON.stringify(r.doc)).toMatchObject({ ok: true, answer: 'written' });
+    expect(fs.readFileSync(carrierPath(THIRD), 'utf8')).toBe('{');
+  }, 60_000);
+});
+
+describe('an unmeasured fingerprint names its reason', () => {
+  it("W5-L29: a tree whose .git file cannot be read refuses unmeasured with the fingerprint reader's own reason", () => {
+    if (process.getuid?.() === 0) return;   // root reads a mode-0000 file
+    const t = agentTree();
+    fs.chmodSync(path.join(t, '.git'), 0);
+    try {
+      const r = mark();
+      refused(r, 'unmeasured');
+      expect(String(r.doc.detail)).toMatch(/\.git is not a readable gitfile/);
+    } finally { fs.chmodSync(path.join(t, '.git'), 0o644); }
   }, 60_000);
 });

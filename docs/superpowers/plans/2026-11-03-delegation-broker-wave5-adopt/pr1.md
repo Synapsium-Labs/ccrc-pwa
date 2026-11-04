@@ -22,13 +22,28 @@ plan and the programme ledger. This PR edits no existing plan and not the progra
   is unchanged.
 - **D-7935** — `nesting-skips-an-unreadable-carrier` (rule 9): the carrier half of the `nested` check skips another lease's carrier
   that cannot be read, rather than refusing `unmeasured`. Review Focus 1 says one corrupt carrier blocks one tree, never the lane;
-  refusing here would block every mark on the box. A tree shared with the unreadable lease is still guarded by the by-tree index
-  (rule 10 refuses `unmeasured`), and git's own worktree list (the stanza half of the same rule) still sees every live nesting.
+  refusing here would block every mark on the box. Within this repository the skip leaves two guards: the by-tree index guards a
+  tree shared with the unreadable lease (rule 10 refuses `unmeasured`), and git's worktree list (the stanza half of the same
+  rule) sees a nesting of this repository's own worktrees. Neither sees across repositories: the by-tree key is per common
+  directory and the stanza list is this project's only. So a worktree of ANOTHER repository nested in or around the tree,
+  whose lease's carrier cannot be read, is not caught. That residual gap is accepted, because refusing there would block every
+  mark on the box (review 1429, A2). W5-L28 pins the skip and W5-L27 the carrier half it leaves in place.
 - **D-7936** — `lease-mark-id-census` (W5-G7): `id-argv-census.test.ts` registers `leaseMark` as `no-id`, as it does `prLanding`,
   and `server/src/ccdargv.ts` joins its `GATE_FILES`. The census probes a builder's id by argument position, and `leaseMark` takes one
   object; its three ids (the lease, the parent and a promoted session) are each checked once, inside the builder, which throws before
   any argv is built (W5-G6b). PR6, the first caller, adds its own call-site row.
-- D-7937, D-7938 and D-7939: unused.
+- **D-7937** — `release-keeps-the-stored-fingerprint` (rules 5 and 11; mail 14732, review 1429 F2): a `released` mark with a stored
+  carrier never recomputes the fingerprint. It keeps the stored fingerprint, creation base, branch and path, as D-7825 already
+  does when the tree is gone. Rules 5 and 11 as written refuse such a release `fingerprint-mismatch` when the lease's admin record
+  has been reused by a new tree at the same path. A release only ends this lease's claim: it writes no hold and, by D-7934, never
+  takes or re-points the by-tree entry, so the fingerprint check that protects holding marks has nothing to protect. Refusing it
+  would leave a new lease on the reused tree `tree-held` for good. Rules 6 and 7 (a link on the path, the main checkout) still
+  read the tree the record names now. W5-L16b pins it; W5-LM24 restores the recompute and reds it.
+- **D-7938** — `rule-4-decided-at-rule-12` (rule 4; mail 14732): plan rule 4 decides `generation-conflict` and `unchanged` first,
+  and the verb decides them at rule 12, after rules 5 to 11. The compared body holds measured fields (the fingerprint, the creation
+  base, the branch), so it cannot be built before they are read. The consequence: a re-drive of a lost answer after the tree
+  switched branch answers `generation-conflict` (a standing refusal), not `unchanged`. No code change.
+- D-7939: unused.
 
 ## Measured, not departures
 
@@ -44,6 +59,26 @@ plan and the programme ledger. This PR edits no existing plan and not the progra
 - **The backup set's sidecar check** (`ccrc-update-flip-backups.test.ts`) matched any `delegation` in a backup row, so the
   library's own row (`ccd-lib-delegation-lease.sh`) read as a sidecar in the first full run. The pattern now carves out
   `-lease.sh` only, and still matches `delegation-events.log`, `delegation-checkpoint.json`, `coordination-*` and `coord.db`.
+- **The `@ccd-lib:lease` pointer** (review 1429 F1, not a departure: the plan names the region) puts the library into
+  `ccdSource()`. That exposed two pins, each updated with its reason: `ccd-id-cap.test.ts` counts five `_reg_id_cap` calls (the
+  three mint sites, and `cmd_ws_lease_mark`'s two CHECKS of `--parent` and `--promoted-session`, which mint nothing), and
+  `ccd-ws-add-child.test.ts` sets apart the verb's `--generation` and `--journal-seq` grammar lines, which share the run-id bound
+  but are not run ids. The library's second marker (`# @ccd-lib:lease-mark`, which `ccdSource()` never split on) is now a plain
+  comment: the library is one region.
+- **The readers' missing directories** (review 1429 F3, not a departure: the plan's interface says rc 3 is proven absent):
+  `_dl_carrier_read` and `_dl_tree_owner` answer rc 3 when `$REG/delegation`, `leases/` or `by-tree/` is cleanly absent under a
+  searchable parent, and rc 4 for a link, a non-directory or an unsearchable one (`_dl_dirs_measured`, W5-L26).
+- **Carried, not built here**: a tree-level lock (review 1429 A1) goes to PR6, whose text says how marks of different leases on
+  one tree are serialised (the lane's mark step and the later synchronous marks). PR6's rule 3 wording (A3) goes there too.
+- **Minors taken** (review 1429): the lock's `exec` no longer silences the process's stderr; the carrier reader checks that the
+  file's `leaseId` is the lease asked for (W5-L14b); `--expires-at ""` refuses `usage` (W5-L5); the fingerprint's unmeasured
+  reason reaches the answer through `_dl_fingerprint_to`, with `_dl_fingerprint` kept as the printing form PR3 consumes
+  (W5-L29); `LeaseMarkArgs` and `leaseMarkArgv` sit above `CCD_ARGV`'s JSDoc; W5-L18's holder is its own process group,
+  killed whole, and the row waits until a probe cannot take the lock.
+- **Minors left for later** (review 1429): `_ws_orphan_stanzas` folds a failed `git worktree list` into no worktrees (it is
+  `disk-retention.sh`'s, the orphan lane's, for PR4's review); the D-6051 python parse check does not cover the reader's `-c`
+  string (behaviour rows run it); the mutation-table wording points other than W5-LM9; and the mark's cost, one `python3` per
+  carrier ever written in the nesting loop, carried to PR6.
 - **W5-L16** makes a new commit before re-adding the tree, so the re-added tree's creation base differs: `_plat_btime` is whole
   seconds and an inode can be reused, so a same-second re-add could otherwise measure the same fingerprint.
 
@@ -60,7 +95,7 @@ Each mutant applied alone to the working tree from a saved copy, restored and ch
 | W5-LM6 | W5-L12 |
 | W5-LM7 | W5-L13 |
 | W5-LM8 | W5-L16 |
-| W5-LM9 (drop the bash `! -L` test alone) | **survived**: the reader's python opens with `O_NOFOLLOW`, a second layer that still refuses the link |
+| W5-LM9 (drop the bash `! -L` test alone) | W5-L14, through its dangling-link and self-loop sub-cases (round 2), which python never opens. In round 1 it survived and was explained wrongly as equivalent (review 1429 F5): the second layer covers a link to an existing file only. |
 | W5-LM9b (drop both layers) | W5-L14 |
 | W5-LM10 | W5-L3, W5-L4 |
 | W5-LM10b | W5-L3 |
@@ -78,3 +113,12 @@ Each mutant applied alone to the working tree from a saved copy, restored and ch
 | W5-LM16b (the launcher's classifier) | the reach test's three launcher rows |
 | W5-LM17 | W5-G8, the CHILD_DENY_RULES row |
 | W5-LM18 | W5-G6c |
+| W5-LM23 (drop the `@ccd-lib:lease` pointer) | `ccd-id-cap` "each mint site carries its own die line", `ccd-ws-add-child` "spells the literal run-id pattern once" |
+| W5-LM24 (a release recomputes the fingerprint again) | W5-L16b |
+| W5-LM25 (a missing directory answers rc 4 again) | W5-L26 |
+| W5-LM26 (delete rule 9's carrier half) | W5-L27 |
+| W5-LM26b (an unreadable other carrier refuses `unmeasured`) | W5-L28 |
+| W5-LM27 (drop the reader's `leaseId` check) | W5-L14b |
+| W5-LM28 (`--expires-at ""` passes the usage check) | W5-L5 |
+| W5-LM29 (the fingerprint read through `$(...)` again) | W5-L29 |
+| W5-LM12 and W5-LM8, re-measured in round 2 | W5-L18 (it waited out the 30 s holder and answered `written`), W5-L16 |
