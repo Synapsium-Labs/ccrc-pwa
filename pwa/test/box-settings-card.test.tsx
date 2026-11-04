@@ -553,3 +553,22 @@ describe('Box settings card: version 2 on the console (5.3, 5.4)', () => {
     }
   });
 });
+
+describe('Box settings card: a family the box reported no row for (final review)', () => {
+  it('E1: a version-1 fleet node renders only the updates fold, and claims nothing of a family it never reported', () => {
+    const { container } = renderCard([fleet(ok(doc()))]);
+    const folds = container.querySelectorAll('.box-settings-family');
+    expect(folds).toHaveLength(1);
+    expect(folds[0]!.getAttribute('data-family')).toBe('updates');
+    expect(summaries(container)).toEqual(['Backups and updates: 7 settings, 2 set in ccrc.env, 1 set in the environment']);
+    expect(container.textContent).not.toContain('0 settings');
+  });
+
+  it('E2: a version-1 server-role node renders no line for a fleet-only family', () => {
+    const { container } = renderCard([server(ok(doc()))]);
+    const b = block('server');
+    const lines = [...b.querySelectorAll('p.box-settings-line')].map((p) => p.textContent ?? '');
+    expect(lines.filter((t) => t.includes('not used on this role'))).toEqual([]);
+    expect(container.textContent).not.toContain('0 settings');
+  });
+});

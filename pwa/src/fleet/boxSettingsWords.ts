@@ -201,22 +201,24 @@ export interface FamilyGroup {
 
 /** The node's rows grouped by their table family, in `BOX_SETTING_FAMILIES` order, then `other` only when a key outside the table is
  *  present. This wave's server never sends such a key (it refuses any key outside the 61); the group exists so a newer server's added
- *  setting never blanks an older console's node (D-7915). A family is `used` unless the role is `server` and no key of it lists
+ *  setting never blanks an older console's node (D-7915). A family with no row is left out, for either version. A family is `used` unless the role is `server` and no key of it lists
  *  `server` in its role column; a role of null counts as used. */
 export function familyGroups(rows: readonly BoxSettingRow[], role: NodeRole | null): FamilyGroup[] {
   const families: Array<BoxSettingFamily | 'other'> = [...BOX_SETTING_FAMILIES];
   const familyOf = (r: BoxSettingRow): BoxSettingFamily | 'other' => specOf(r.key)?.family ?? 'other';
   if (rows.some((r) => familyOf(r) === 'other')) families.push('other');
-  return families.map((family) => {
+  return families.flatMap((family) => {
     const mine = rows.filter((r) => familyOf(r) === family);
+    // A family with no row is one the box made no claim about (a version-1 document carries the updates rows only).
+    if (mine.length === 0) return [];
     const used = role !== 'server' || family === 'other' || Object.values(BOX_SETTING_SPECS).some((t) => t.family === family && t.roles.includes('server'));
-    return {
+    return [{
       family, rows: mine, used,
       refused: mine.filter((r) => r.state === 'refused').length,
       unmeasured: mine.filter((r) => r.state === 'unmeasured').length,
       inFile: mine.filter((r) => r.state === 'ok' && r.from === 'file').length,
       inEnv: mine.filter((r) => r.state === 'ok' && r.from === 'environment').length,
-    };
+    }];
   });
 }
 
