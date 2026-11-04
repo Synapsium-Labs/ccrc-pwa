@@ -1,7 +1,8 @@
 // The Docs reader's compact phone head, measured in a real Chrome over the production build (native Docs reader, the
 // phone-header plan of 2026-11-03, refinements (a), (b), (d), (i)). The operator's phone, a Pixel 10 Pro XL in Chrome on
-// Android, has a CSS viewport of about 412 x 915; on it about 341 px sat above a reader doc's title, and the mockup the
-// operator picked (one console row) draws 133. So, at 412 x 915 with the reader up:
+// Android, has a CSS viewport of about 412 x 915; on it 311.5 px sat above a reader doc's title (measured at the base:
+// the console's part 234.5 and the reader frame's own top 77), and the mockup the operator picked (one console row)
+// draws 133. So, at 412 x 915 with the reader up:
 //   - the head is the compact row, and the console's part above the frame (the row and the gap under it) is at most
 //     CONSOLE_PART_MAX px, in either skin;
 //   - in Refined, the phone's skin, the title's top is at most PHONE_TITLE_MAX px below the top of the page;
@@ -49,8 +50,10 @@ const LONG_BRANCH = 'ws/a-long-workspace-branch-for-the-phone-header';
  *  holds the directory and nothing else unless the ref is given its own room. */
 const LONG_DIR = '2026-10-27-one-long-directory-name-for-the-row';
 
-/** The picked mockup's figures: 133 px above the title, of which the console's row and the gap under it are 48 (44 + 4)
- *  and the reader frame's own top (its body margin, its bar and the gap under the bar) 85, unchanged by this wave. */
+/** The picked mockup's figure is 133 px above the title. The console's part, its row and the gap under it, is 48 (44 + 4),
+ *  and CONSOLE_PART_MAX is the binding pin. The reader frame's own top (its body margin, its bar and the gap under the
+ *  bar) measured 77: the shared reader library's, so not ccrc's to pin. The title therefore sits at 125, with 8 px of
+ *  slack under 133, kept so that a 1 px change in the library does not red a ccrc test. */
 const PHONE_TITLE_MAX = 133;
 const CONSOLE_PART_MAX = 48;
 /** The floor every control on the row reaches (`--tap-min`). */
