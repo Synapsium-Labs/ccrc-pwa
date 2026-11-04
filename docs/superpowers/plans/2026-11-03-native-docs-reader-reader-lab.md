@@ -831,6 +831,7 @@ export function createReaderLabRuns(): ReaderLabRuns {
 | RLB-T2-M8 | (d) M10.17 | `return run !== undefined && run.owner === owner && runs.delete(nonce);` → `return runs.delete(nonce);` | 1 failed — `'a run answers only its owner: …'` |
 | RLB-T2-M9 | (d) M10.6 | `export const READER_LAB_RUN_TTL_MS = LAB_RUN_CAPS_MS + READER_LAB_RUN_SLACK_MS;` → `export const READER_LAB_RUN_TTL_MS = 600_000;` | 1 failed — `'a run lives as long as the lab run\'s own caps allow, plus five minutes: …'` |
 | RLB-T2-M10 | (d) M10.5 | `if (run === undefined) return 'no-run';` → `if (run === undefined) { const oldest = runs.keys().next(); if (oldest.done !== true) runs.delete(oldest.value); return 'no-run'; }` | measured: 1 failed — `'with no run open, or under a nonce of another shape or another run, nothing is counted (M10.5)'` (the create-on-miss variant, which plants a run for the unopened nonce, reds that case too, and the expiry case `'a run is gone at its expiry: …'`: 2 failed, measured, not a row) |
+| RLB-T2-M11 | (d) M10.5 | `src/readerLab/runs.ts` | `if (run === undefined) return 'no-run';` → `if (run === undefined) { if (runs.size >= READER_LAB_RUNS_MAX) { const oldest = runs.keys().next(); if (oldest.done !== true) runs.delete(oldest.value); } return 'no-run'; }` | `test/reader-lab-runs.test.ts` | measured: 1 failed — `'with no run open, or under a nonce of another shape or another run, nothing is counted (M10.5)'` (at the full-store block's `openCount` line, not an earlier one: this row evicts only when the store is full) |
 
 ```json
 [
@@ -843,7 +844,8 @@ export function createReaderLabRuns(): ReaderLabRuns {
   {"id": "RLB-T2-M7", "spec": "(d) M10.17", "pkg": "server", "file": "src/readerLab/runs.ts", "old": "if (run === undefined || run.owner !== owner) return null;", "new": "if (run === undefined) return null;", "tests": ["test/reader-lab-runs.test.ts"], "red": "1 failed: a run answers only its owner"},
   {"id": "RLB-T2-M8", "spec": "(d) M10.17", "pkg": "server", "file": "src/readerLab/runs.ts", "old": "return run !== undefined && run.owner === owner && runs.delete(nonce);", "new": "return runs.delete(nonce);", "tests": ["test/reader-lab-runs.test.ts"], "red": "1 failed: a run answers only its owner"},
   {"id": "RLB-T2-M9", "spec": "(d) M10.6", "pkg": "server", "file": "src/readerLab/runs.ts", "old": "export const READER_LAB_RUN_TTL_MS = LAB_RUN_CAPS_MS + READER_LAB_RUN_SLACK_MS;", "new": "export const READER_LAB_RUN_TTL_MS = 600_000;", "tests": ["test/reader-lab-runs.test.ts"], "red": "1 failed: a run lives as long as the lab run's own caps allow, plus five minutes"},
-  {"id": "RLB-T2-M10", "spec": "(d) M10.5", "pkg": "server", "file": "src/readerLab/runs.ts", "old": "if (run === undefined) return 'no-run';", "new": "if (run === undefined) { const oldest = runs.keys().next(); if (oldest.done !== true) runs.delete(oldest.value); return 'no-run'; }", "tests": ["test/reader-lab-runs.test.ts"], "red": "1 failed | 12 passed (13): with no run open, or under a nonce of another shape or another run, nothing is counted (M10.5)"}
+  {"id": "RLB-T2-M10", "spec": "(d) M10.5", "pkg": "server", "file": "src/readerLab/runs.ts", "old": "if (run === undefined) return 'no-run';", "new": "if (run === undefined) { const oldest = runs.keys().next(); if (oldest.done !== true) runs.delete(oldest.value); return 'no-run'; }", "tests": ["test/reader-lab-runs.test.ts"], "red": "1 failed | 12 passed (13): with no run open, or under a nonce of another shape or another run, nothing is counted (M10.5)"},
+  {"id": "RLB-T2-M11", "spec": "(d) M10.5", "pkg": "server", "file": "src/readerLab/runs.ts", "old": "if (run === undefined) return 'no-run';", "new": "if (run === undefined) { if (runs.size >= READER_LAB_RUNS_MAX) { const oldest = runs.keys().next(); if (oldest.done !== true) runs.delete(oldest.value); } return 'no-run'; }", "tests": ["test/reader-lab-runs.test.ts"], "red": "1 failed | 12 passed (13): with no run open, or under a nonce of another shape or another run, nothing is counted (M10.5)"}
 ]
 ```
 
@@ -1530,7 +1532,7 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
 
 RLB-T3-M7's `new` reads `req`, the open handler's own parameter name, so it compiles as written. RLB-T3-M9 plants a preflight answer; the planted `app.options` call is not one the route census reads, and the row's tests do not include `auth-gate.test.ts`. The order half of M10.3 is Step 9's measured figure.
 
-**Verify:** `test/reader-lab-routes.test.ts` 13 passed; `auth-gate`, the rings, `box-token-census`, `coord-pause-route` and `auth-passkey` green at their BASE counts; `SERVER-TSC-OK`; Step 9 recorded.
+**Verify:** `test/reader-lab-routes.test.ts` 15 passed; `auth-gate`, the rings, `box-token-census`, `coord-pause-route` and `auth-passkey` green at their BASE counts; `SERVER-TSC-OK`; Step 9 recorded.
 
 ### Task 4: The lab surface in the box-token census, and the README's auth paragraph (refinement (b); M10.8)
 
