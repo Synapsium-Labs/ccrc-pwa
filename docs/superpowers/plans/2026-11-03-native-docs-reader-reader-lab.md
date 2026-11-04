@@ -952,6 +952,9 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
     expect(a.hasRoute({ method: 'POST', url: `${READER_LAB_RUNS_PATH}/:nonce/close` })).toBe(true);
     expect(a.hasRoute({ method: 'GET', url: READER_LAB_PROBE_ROUTE })).toBe(true);
     expect(a.hasRoute({ method: 'POST', url: READER_LAB_PROBE_ROUTE })).toBe(true);
+    // Refinement (f): no HEAD on either GET (a HEAD route would share the probe's counter and answer 204).
+    expect(a.hasRoute({ method: 'HEAD', url: READER_LAB_PROBE_ROUTE })).toBe(false);
+    expect(a.hasRoute({ method: 'HEAD', url: `${READER_LAB_RUNS_PATH}/:nonce` })).toBe(false);
     const src = readFileSync(path.join(here, '..', 'src', 'readerLab', 'routes.ts'), 'utf8');
     for (const lit of [`app.post('${READER_LAB_RUNS_PATH}'`, `app.get('${READER_LAB_PROBE_ROUTE}'`, `app.post('${READER_LAB_PROBE_ROUTE}'`]) {
       expect(src, lit).toContain(lit);
@@ -1041,6 +1044,14 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
     expect([report.statusCode, report.body, big.statusCode, big.body]).toEqual([204, '', 204, '']);
     const run = counted(await readRun(a, nonce));
     expect([run.probes['cookie-beacon'].hits, run.probes['cookie-xhr'].hits]).toEqual([1, 1]);
+  });
+
+  it('a HEAD to the probe is neither answered as a probe nor counted (refinement (f))', async () => {
+    const a = await openApp(false);
+    const nonce = await openRun(a);
+    await a.inject({ method: 'HEAD', url: readerLabProbePath(nonce, 'cookie-image') });
+    const run = counted(await readRun(a, nonce));
+    expect([run.counted, run.probes['cookie-image'].hits]).toEqual([0, 0]);
   });
 
   it('armed: the counter keeps classes, never a value: the cookie by name, Sec-Fetch-Site and Origin (M10.7)', async () => {
@@ -1460,7 +1471,7 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
   'server/src/readerLab/routes.ts': { reason: "the reader lab door's counter hook and HTTP routes (the reader lab plan, Task 3)", since: '<the commit date>' },
 };
 ```
-- [ ] **Step 8: Run it to see it pass.** `( cd server && ./node_modules/.bin/vitest run test/reader-lab-routes.test.ts )` through `ccrc test` — Expected (prediction): `Tests  12 passed (12)`. The armed POST case is a prediction about the real gate: the probe pair is `EXEMPT`, so `needsOriginCheck` skips it and the answer is the same `204`; if the measured answer is a refusal instead, that is a stop-and-ask, never an edit to the test's expectation. Then, each alone through `ccrc test`: `test/auth-gate.test.ts` (its count equal to BASE: no case is added there, only expectations move), `test/rings/fastify-l4.test.ts`, `test/rings/exemption-age.test.ts`, `test/rings/outward-edges.test.ts`, `test/rings/totality.test.ts`, `test/box-token-census.test.ts`, `test/coord-pause-route.test.ts`, `test/auth-passkey.test.ts` — green, counts equal to Step 0's. `SERVER-TSC-OK`. A census in another file that reds on the new routes is a stop-and-ask, never a silent edit.
+- [ ] **Step 8: Run it to see it pass.** `( cd server && ./node_modules/.bin/vitest run test/reader-lab-routes.test.ts )` through `ccrc test` — Expected (prediction): `Tests  13 passed (13)`. The armed POST case is a prediction about the real gate: the probe pair is `EXEMPT`, so `needsOriginCheck` skips it and the answer is the same `204`; if the measured answer is a refusal instead, that is a stop-and-ask, never an edit to the test's expectation. Then, each alone through `ccrc test`: `test/auth-gate.test.ts` (its count equal to BASE: no case is added there, only expectations move), `test/rings/fastify-l4.test.ts`, `test/rings/exemption-age.test.ts`, `test/rings/outward-edges.test.ts`, `test/rings/totality.test.ts`, `test/box-token-census.test.ts`, `test/coord-pause-route.test.ts`, `test/auth-passkey.test.ts` — green, counts equal to Step 0's. `SERVER-TSC-OK`. A census in another file that reds on the new routes is a stop-and-ask, never a silent edit.
 - [ ] **Step 9: The counter's position, measured once by hand.** In the workspace, move the two lines `  const readerLab = createReaderLabRuns();` and `  installReaderLabCounter(app, readerLab);` (save `server.ts` first, as a mutation row's discipline) to just after `installGate(app, { … });`'s closing line, run `test/reader-lab-routes.test.ts`, record the red (prediction: `1 failed` — the armed WebSocket case, counted 0; the armed POST case stays green, since the gate lets that exempt request through and a counter after it still counts it), restore from the saved copy and check its sha256. This is the order half of M10.3, which a one-hunk row cannot express; RLB-T3-M2 below is the deletion half.
 - [ ] **Step 10: Commit.** `git add server/src/readerLab/routes.ts server/test/reader-lab-routes.test.ts server/src/server.ts server/src/auth/gate.ts server/test/auth-gate.test.ts server/test/rings/fastify-l4.data.ts` (expect 6), message `server: the reader lab's door: session-gated runs, an exempt probe, a counter before the gate (docs reader lab)`, trailer. Record the task's JSON row fence and Step 9's figure, as measured, in the SDD ledger.
 
@@ -1477,6 +1488,8 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
 | RLB-T3-M7 | (b) M10.8 | `src/readerLab/routes.ts` | `const nonce = randomBytes(16).toString('base64url');` → `const nonce = typeof (req.body as { nonce?: unknown } \| undefined)?.nonce === 'string' ? String((req.body as { nonce: string }).nonce) : randomBytes(16).toString('base64url');` | `test/reader-lab-routes.test.ts` | 1 failed — `'the server mints every nonce: …'` |
 | RLB-T3-M8 | (d) M10.17 | `src/readerLab/routes.ts` | ``return token === undefined \|\| token === '' ? LAB_NO_SESSION : createHash('sha256').update(`reader-lab:${token}`).digest('base64url');`` → `return LAB_NO_SESSION;` | `test/reader-lab-routes.test.ts` | 1 failed — `'a run answers only the session that opened it: …'` |
 | RLB-T3-M9 | (f) M10.4 | `src/readerLab/routes.ts` | `app.get('/api/reader-lab/probe/:nonce/:name', { exposeHeadRoute: false }, async (_req, reply) => probeAnswer(reply));` → `app.options('/api/reader-lab/probe/:nonce/:name', async (_req, reply) => reply.code(204).header('access-control-allow-origin', '*').header('access-control-allow-headers', '*').send()); app.get('/api/reader-lab/probe/:nonce/:name', { exposeHeadRoute: false }, async (_req, reply) => probeAnswer(reply));` | `test/reader-lab-routes.test.ts` | 1 failed — `'a CORS preflight to the probe is never approved: …'` (its dark half; on the armed box the gate's 401 still answers first) |
+| RLB-T3-M10 | (f) M10.4 | `src/readerLab/routes.ts` | `app.get('/api/reader-lab/probe/:nonce/:name', { exposeHeadRoute: false }, async (_req, reply) => probeAnswer(reply));` → `app.get('/api/reader-lab/probe/:nonce/:name', async (_req, reply) => probeAnswer(reply));` | `test/reader-lab-routes.test.ts` | measured: 2 failed — `'registers the run routes and the probe pair at the paths the vocabulary names, as literals'`, `'a HEAD to the probe is neither answered as a probe nor counted (refinement (f))'` |
+| RLB-T3-M11 | (f) M10.4 | `src/readerLab/routes.ts` | `app.get('/api/reader-lab/runs/:nonce', { exposeHeadRoute: false }, async (req, reply) => {` → `app.get('/api/reader-lab/runs/:nonce', async (req, reply) => {` | `test/reader-lab-routes.test.ts` | measured: 1 failed — `'registers the run routes and the probe pair at the paths the vocabulary names, as literals'` |
 
 ```json
 [
@@ -1488,13 +1501,15 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
   {"id": "RLB-T3-M6", "spec": "(b) M10.8", "pkg": "server", "file": "src/auth/gate.ts", "old": "['GET /api/reader-lab/probe/:nonce/:name',", "new": "['POST /api/reader-lab/runs', 'a planted exemption of the run route, long enough to read as a reason for the gate table'],\n  ['GET /api/reader-lab/probe/:nonce/:name',", "tests": ["test/reader-lab-routes.test.ts", "test/auth-gate.test.ts"], "red": "2+ failed: armed: a session opens, reads and closes a run; the probe pair is EXEMPT under reason 8; exempts exactly the eight classes"},
   {"id": "RLB-T3-M7", "spec": "(b) M10.2", "pkg": "server", "file": "src/readerLab/routes.ts", "old": "const nonce = randomBytes(16).toString('base64url');", "new": "const nonce = typeof (req.body as { nonce?: unknown } | undefined)?.nonce === 'string' ? String((req.body as { nonce: string }).nonce) : randomBytes(16).toString('base64url');", "tests": ["test/reader-lab-routes.test.ts"], "red": "1 failed: the server mints every nonce"},
   {"id": "RLB-T3-M8", "spec": "(d) M10.17", "pkg": "server", "file": "src/readerLab/routes.ts", "old": "return token === undefined || token === '' ? LAB_NO_SESSION : createHash('sha256').update(`reader-lab:${token}`).digest('base64url');", "new": "return LAB_NO_SESSION;", "tests": ["test/reader-lab-routes.test.ts"], "red": "1 failed: a run answers only the session that opened it"},
-  {"id": "RLB-T3-M9", "spec": "(f) M10.4", "pkg": "server", "file": "src/readerLab/routes.ts", "old": "app.get('/api/reader-lab/probe/:nonce/:name', { exposeHeadRoute: false }, async (_req, reply) => probeAnswer(reply));", "new": "app.options('/api/reader-lab/probe/:nonce/:name', async (_req, reply) => reply.code(204).header('access-control-allow-origin', '*').header('access-control-allow-headers', '*').send()); app.get('/api/reader-lab/probe/:nonce/:name', { exposeHeadRoute: false }, async (_req, reply) => probeAnswer(reply));", "tests": ["test/reader-lab-routes.test.ts"], "red": "1 failed: a CORS preflight to the probe is never approved"}
+  {"id": "RLB-T3-M9", "spec": "(f) M10.4", "pkg": "server", "file": "src/readerLab/routes.ts", "old": "app.get('/api/reader-lab/probe/:nonce/:name', { exposeHeadRoute: false }, async (_req, reply) => probeAnswer(reply));", "new": "app.options('/api/reader-lab/probe/:nonce/:name', async (_req, reply) => reply.code(204).header('access-control-allow-origin', '*').header('access-control-allow-headers', '*').send()); app.get('/api/reader-lab/probe/:nonce/:name', { exposeHeadRoute: false }, async (_req, reply) => probeAnswer(reply));", "tests": ["test/reader-lab-routes.test.ts"], "red": "1 failed: a CORS preflight to the probe is never approved"},
+  {"id": "RLB-T3-M10", "spec": "(f) M10.4", "pkg": "server", "file": "src/readerLab/routes.ts", "old": "app.get('/api/reader-lab/probe/:nonce/:name', { exposeHeadRoute: false }, async (_req, reply) => probeAnswer(reply));", "new": "app.get('/api/reader-lab/probe/:nonce/:name', async (_req, reply) => probeAnswer(reply));", "tests": ["test/reader-lab-routes.test.ts"], "red": "2 failed | 11 passed (13): registers the run routes and the probe pair at the paths the vocabulary names, as literals; a HEAD to the probe is neither answered as a probe nor counted (refinement (f))"},
+  {"id": "RLB-T3-M11", "spec": "(f) M10.4", "pkg": "server", "file": "src/readerLab/routes.ts", "old": "app.get('/api/reader-lab/runs/:nonce', { exposeHeadRoute: false }, async (req, reply) => {", "new": "app.get('/api/reader-lab/runs/:nonce', async (req, reply) => {", "tests": ["test/reader-lab-routes.test.ts"], "red": "1 failed | 12 passed (13): registers the run routes and the probe pair at the paths the vocabulary names, as literals"}
 ]
 ```
 
 RLB-T3-M7's `new` reads `req`, the open handler's own parameter name, so it compiles as written. RLB-T3-M9 plants a preflight answer; the planted `app.options` call is not one the route census reads, and the row's tests do not include `auth-gate.test.ts`. The order half of M10.3 is Step 9's measured figure.
 
-**Verify:** `test/reader-lab-routes.test.ts` 12 passed; `auth-gate`, the rings, `box-token-census`, `coord-pause-route` and `auth-passkey` green at their BASE counts; `SERVER-TSC-OK`; Step 9 recorded.
+**Verify:** `test/reader-lab-routes.test.ts` 13 passed; `auth-gate`, the rings, `box-token-census`, `coord-pause-route` and `auth-passkey` green at their BASE counts; `SERVER-TSC-OK`; Step 9 recorded.
 
 ### Task 4: The lab surface in the box-token census, and the README's auth paragraph (refinement (b); M10.8)
 

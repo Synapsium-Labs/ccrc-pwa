@@ -85,6 +85,9 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
     expect(a.hasRoute({ method: 'POST', url: `${READER_LAB_RUNS_PATH}/:nonce/close` })).toBe(true);
     expect(a.hasRoute({ method: 'GET', url: READER_LAB_PROBE_ROUTE })).toBe(true);
     expect(a.hasRoute({ method: 'POST', url: READER_LAB_PROBE_ROUTE })).toBe(true);
+    // Refinement (f): no HEAD on either GET (a HEAD route would share the probe's counter and answer 204).
+    expect(a.hasRoute({ method: 'HEAD', url: READER_LAB_PROBE_ROUTE })).toBe(false);
+    expect(a.hasRoute({ method: 'HEAD', url: `${READER_LAB_RUNS_PATH}/:nonce` })).toBe(false);
     const src = readFileSync(path.join(here, '..', 'src', 'readerLab', 'routes.ts'), 'utf8');
     for (const lit of [`app.post('${READER_LAB_RUNS_PATH}'`, `app.get('${READER_LAB_PROBE_ROUTE}'`, `app.post('${READER_LAB_PROBE_ROUTE}'`]) {
       expect(src, lit).toContain(lit);
@@ -174,6 +177,14 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
     expect([report.statusCode, report.body, big.statusCode, big.body]).toEqual([204, '', 204, '']);
     const run = counted(await readRun(a, nonce));
     expect([run.probes['cookie-beacon'].hits, run.probes['cookie-xhr'].hits]).toEqual([1, 1]);
+  });
+
+  it('a HEAD to the probe is neither answered as a probe nor counted (refinement (f))', async () => {
+    const a = await openApp(false);
+    const nonce = await openRun(a);
+    await a.inject({ method: 'HEAD', url: readerLabProbePath(nonce, 'cookie-image') });
+    const run = counted(await readRun(a, nonce));
+    expect([run.counted, run.probes['cookie-image'].hits]).toEqual([0, 0]);
   });
 
   it('armed: the counter keeps classes, never a value: the cookie by name, Sec-Fetch-Site and Origin (M10.7)', async () => {
