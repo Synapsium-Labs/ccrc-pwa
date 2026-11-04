@@ -11,8 +11,8 @@ import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Element as HastElement, Root as HastRoot } from 'hast';
 import { HighlighterContext, createProductionStore } from '../src/lib/highlighterContext';
-import { codeBlocksOf, type HighlightStore } from '../src/lib/highlightStore';
-import { PreHighlightContext, SHARED_COMPONENTS } from '../src/lib/markdown';
+import { codeBlocksOf, type HighlightStore, type SkipCeiling } from '../src/lib/highlightStore';
+import { PreHighlightContext, SHARED_COMPONENTS, codeBlockLabel } from '../src/lib/markdown';
 import {
   DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS, MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_HTML_CHARS,
 } from '../src/lib/markdownLimits';
@@ -358,4 +358,13 @@ describe('F1: a page of copies of one block, the ceilings counting every drawn c
     expect(coloured).toEqual([...rep(true, fit), ...rep(false, n - fit)]);
     expect(labels).toEqual([...rep('Python', fit), ...rep('Python · not highlighted (page highlighting limit)', n - fit)]);
   }, 60000);
+});
+
+// The label of a skipped block names the page, whichever of the four page ceilings skipped it (section 4.10's table).
+describe('M4.H12 label: every page ceiling skips under the one label "page highlighting limit"', () => {
+  it('page-input, page-output, page-timeouts and page-worker-time each read "Python · not highlighted (page highlighting limit)"', () => {
+    const ceilings: readonly SkipCeiling[] = ['page-input', 'page-output', 'page-timeouts', 'page-worker-time'];
+    expect(ceilings.map((ceiling) => codeBlockLabel('Python', 'import a\n', { kind: 'key', key: 'python\u0000import a' }, { kind: 'skipped', ceiling })))
+      .toEqual(rep('Python · not highlighted (page highlighting limit)', 4));
+  });
 });
