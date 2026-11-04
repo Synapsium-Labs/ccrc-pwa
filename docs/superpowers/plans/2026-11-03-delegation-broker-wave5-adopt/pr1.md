@@ -73,7 +73,8 @@ plan and the programme ledger. This PR edits no existing plan and not the progra
 - **Minors taken** (review 1429): the lock's `exec` no longer silences the process's stderr; the carrier reader checks that the
   file's `leaseId` is the lease asked for (W5-L14b); `--expires-at ""` refuses `usage` (W5-L5); the fingerprint's unmeasured
   reason reaches the answer through `_dl_fingerprint_to`, with `_dl_fingerprint` kept as the printing form PR3 consumes
-  (W5-L29); `LeaseMarkArgs` and `leaseMarkArgv` sit above `CCD_ARGV`'s JSDoc; W5-L18's holder is its own process group,
+  (W5-L29; the new out-var form joins `PLANNED_FORMS` in `server/test/ccdTickDietRunner.ts`, planned and landed in one commit as
+  `_roster_fp_to` was, so the out-var census E1c reads it); `LeaseMarkArgs` and `leaseMarkArgv` sit above `CCD_ARGV`'s JSDoc; W5-L18's holder is its own process group,
   killed whole, and the row waits until a probe cannot take the lock.
 - **Minors left for later** (review 1429): `_ws_orphan_stanzas` folds a failed `git worktree list` into no worktrees (it is
   `disk-retention.sh`'s, the orphan lane's, for PR4's review); the D-6051 python parse check does not cover the reader's `-c`

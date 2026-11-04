@@ -221,7 +221,8 @@ _dl_fingerprint() {   # <common> <record> <admin> <tree> <base> -> prints 64 hex
 
 _dl_fingerprint_to() {   # <var> <common> <record> <admin> <tree> <base> -> rc 0 <var>=64 hex; rc 4 unmeasured, DL_WHY set in THIS
                          #    shell, so the reason reaches the caller's refusal
-  local LC_ALL=C __dl_out="$1" common="$2" rec="$3" admin="$4" tree="$5" base="$6" ci ai ti gf l v
+  local __dl_out="$1"; shift
+  local LC_ALL=C common="$1" rec="$2" admin="$3" tree="$4" base="$5" ci ai ti gf l v
   DL_WHY=''
   _ws_path_ident "$common" || { DL_WHY="the identity of $common could not be read${_WS_IDENT_WHY:+ ($_WS_IDENT_WHY)}"; return 4; }; ci="$_WS_IDENT"
   _ws_path_ident "$admin" || { DL_WHY="the identity of $admin could not be read${_WS_IDENT_WHY:+ ($_WS_IDENT_WHY)}"; return 4; }; ai="$_WS_IDENT"
