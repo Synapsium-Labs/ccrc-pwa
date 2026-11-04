@@ -357,8 +357,8 @@ export const COORDINATOR_PRESENCES = Object.keys(COORDINATOR_PRESENCE_MAP) as re
  * registry listing, read from the listing's raw `*.uuid` names (refused ids included). A `dead` row is `dead`; `alive` and
  * `asleep` (hibernated, woken by mail) are `alive`; a doubt, or a row from a server that predates `presence`, is `unmeasured`;
  * an id the frame lacks is `absent` only when the listing is known and does not hold it either, and `unmeasured` when the
- * listing holds it (a refused id, or a row the registry could not assemble, is in no fleet row) or when no listing has landed
- * yet.
+ * listing holds it (a refused id, or a row the registry could not assemble, is in no fleet row; or a row the registry retired
+ * after its second listing, which the FIRST listing still names for that one tick) or when no listing has landed yet.
  *
  * WHY THIS IS NOT `measureClaimant` (the one dead predicate, D-5290; "legitimately different", review 1335 F4): that function
  * is async, a fresh registry read and a tmux verdict, and an item's view must be built SYNCHRONOUSLY (`viewOfItem`: the

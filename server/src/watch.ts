@@ -1080,9 +1080,11 @@ export class FleetWatcher {
   private readonly boxSettingsLane = new BoxSettingsLane();
   /** The registry ids of the last good listing (`null` until one lands: nothing is mailed without it). */
   private registryIds: ReadonlySet<string> | null = null;
-  /** The ids of the last good listing as the listing names them: every `*.uuid` basename, so a refused id and a row the registry
-   *  could not assemble are held with the rest; null before one (the ledgers' presence reading: an id the fleet frame lacks but
-   *  this holds is a doubt, not an absence). Apart from `registryIds` on purpose: that set is the mail and census lanes' (the
+  /** The ids of the last good listing as the listing names them (`RegistryRead.listedIds`): every `*.uuid` basename, so a refused
+   *  id and a row the registry could not assemble are held with the rest; null before one (the ledgers' presence reading: an id
+   *  the fleet frame lacks but this holds is a doubt, not an absence). It is the FIRST listing's, so a row the registry retires
+   *  after its second listing is held here for one tick too, and reads `unmeasured` rather than `absent` (the doubt's side).
+   *  Apart from `registryIds` on purpose: that set is the temp-root census lane's (`sweepTmpSweepCensus`, its one reader: the
    *  rows the registry composed, refused ids included), and this one must not narrow with a row that failed to assemble. */
   currentRegistryIds(): ReadonlySet<string> | null { return this.listedIds; }
   private listedIds: ReadonlySet<string> | null = null;
@@ -2490,8 +2492,10 @@ export class FleetWatcher {
       // `fleetFor`, D-5864), so they do not list again; in remote mode every
       // readRegistry() field is its own agent-WS round trip. Some lanes still list
       // the registry themselves on purpose, each for its own reason recorded at
-      // its call site: sweepDivergences, the mail lane's `mailPass`, the temp-root
-      // collector, sweepOrphanTrees, the lifecycle mirror and the snapshot re-check.
+      // its call site, among others: sweepDivergences, the mail lane's `mailPass`,
+      // the temp-root collector, sweepOrphanTrees, the snapshot re-check, and
+      // `readLimits` inside `assembleFleet`, every listed tick. The lifecycle mirror
+      // lists none of the registry's rows: it reads its own `$REG/.lifecycle/`.
       //
       // `readRegistryMeasured`, not `readRegistry` (blocking review findings
       // 1/3): the old `[]`-on-unlistable signature made a single dropped
@@ -9042,8 +9046,9 @@ export class FleetWatcher {
     // No loop body writes to a pane. A capture that rejects (no Runner does) is settled and rethrown at its own row.
     // The trade: every row's body runs after ALL captures finish, so of N registry rows an EARLIER row is judged on an
     // older pane than under the serial loop: row 0 waits about ceil(N / DIALOG_CAPTURE_CONCURRENCY) - 1 capture rounds,
-    // the last round's rows about none, and no row waits when N <= DIALOG_CAPTURE_CONCURRENCY. The values per pane are
-    // unchanged, and the next tick reconciles.
+    // the last round's rows about none, and, with equal capture times, no row waits when N <= DIALOG_CAPTURE_CONCURRENCY;
+    // otherwise a row waits for the slowest capture of the batch. The values per pane are unchanged, and the next tick
+    // reconciles.
     const caps = await mapBounded(recs, DIALOG_CAPTURE_CONCURRENCY, async (r) => {
       const at = Date.now();
       try { return { at, pane: await this.deps.tmux.capture(r.id), doneAt: Date.now() }; } catch (err) { return { at, err }; }

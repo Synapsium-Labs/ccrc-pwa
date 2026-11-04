@@ -69,7 +69,8 @@ export const DRAWER_HOLD_MS = 6;
 const DRAWER_CONTEXT = 1024;
 /** The most a drawer holds back: a longer undelimited run is no fingerprint candidate (D-5995). */
 const DRAWER_HELD_MAX = RUN_MAX_BYTES + 1024;
-/** The re-key's backoff, and how many previous box tokens a run of rotations keeps (D-5995). */
+/** The re-key's backoff, and the most previous box tokens kept at once (D-5995). A previous token is kept only while its
+ *  generation holds rows (`syncKeys`), so this caps the generations holding rows, not the rotations (review 1426 F-C). */
 const REKEY_FIRST_MS = 1_000;
 const REKEY_MAX_MS = 600_000;
 const MAX_PREVIOUS_KEYS = 4;
@@ -497,8 +498,11 @@ export class SecretMasker {
    * because the table no longer holds it and the slot file is gone, EXCEPT in the two arms that leave the rows in the table
    * (review 1418 A2): the failed SELECT below, and a delete still held when the process stops (`close` tries it once more; a
    * production stop never calls `close`). There the rows reload after a restart and go on masking the removed value (the safe
-   * side), and, once a rotation leaves them under an older token, keep the re-key retrying, until a save replaces the lane. The re-key never writes the lane back in this process
-   * (`ingest`'s `rekey`). A retired row keyed with a previous token matches while that token is kept (`MAX_PREVIOUS_KEYS`).
+   * side) until a save replaces the lane, UNLESS a rotation came before that restart: previous box tokens are memory-only (the
+   * class doc), so rows under one reload but match nothing, and only keep the re-key retrying (review 1426 F-E). Nothing on disk
+   * is unmasked by it: the value file is gone. The re-key never writes the lane back in this process (`ingest`'s `rekey`),
+   * unless a re-save un-retires it meanwhile (review 1426 F-H). A retired row keyed with a previous token matches while that
+   * token is kept, which is while its generation holds rows (`syncKeys`).
    * The table's delete is held and retried, as a roster offer is, when coord.db is busy, and tried once more at `close`. Never
    * throws; a lane that is not an operator-secret lane is refused (false), so the roster's rows are never touched from here.
    *

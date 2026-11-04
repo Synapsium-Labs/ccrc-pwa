@@ -757,7 +757,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    * process, and its rows leave the table, so nothing reloads them after a restart, EXCEPT in two arms that keep them there
    * (review 1418 A2): a retire whose read of the lane's rows failed (they stay in the table, review 1416 A-S5), and a delete
    * still held on a busy coord.db when the process stops. Those rows reload after a restart and go on masking the removed
-   * value (the safe side) until a save of the slot replaces them. Nothing stored: `secret-not-stored` (the lane is retired all the same, so a
+   * value (the safe side) until a save of the slot replaces them, unless a rotation came before the restart: then they match
+   * nothing, because previous box tokens are memory-only (`SecretMasker`'s class doc), and only keep the re-key retrying
+   * (review 1426 F-E). Nothing on disk is unmasked by it: the value file is gone. Nothing stored: `secret-not-stored` (the lane is retired all the same, so a
    * row left by a slot removed by hand stops being re-keyed, review 1391 A-2). A value file that cannot be removed:
    * `remove-failed`, and nothing else changes. Every answer is a fixed word with a fixed detail; none carries the value, which
    * this door never reads.
