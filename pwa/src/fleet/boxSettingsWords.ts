@@ -70,7 +70,7 @@ export const BOX_SETTING_FAMILY_TEXT: Readonly<Record<BoxSettingFamily | 'other'
   other: 'Other settings',
 };
 
-/** What a presence-class row says in place of a value, which is never sent or shown (D12): only whether one is set. */
+/** What an is-set-class row (the spec's `presence`, D12) says in place of a value, which is never sent or shown (D12): only whether one is set. */
 export const BOX_SETTING_PRESENCE_TEXT: Readonly<Record<BoxSettingSource, string>> = {
   file: 'set in ccrc.env',
   empty: 'set to empty, from ccrc.env; the default applies',
@@ -102,7 +102,7 @@ function readRow(v: unknown): BoxSettingRow | null {
   // A refused row's value is never read, even when a wave-1 server still sends one (D-7911).
   if (v.state === 'refused') return isStr(v.why) ? { key, state: 'refused', from: v.from, why: v.why } as BoxSettingRow : null;
   if (v.value !== undefined) return isStr(v.value) ? { key, state: 'ok', value: v.value, from: v.from } : null;
-  // No `value`: only a presence-class key (or a key this table does not know, which shows no value) may be an ok row without one.
+  // No `value`: only an is-set-class key (or a key this table does not know, which shows no value) may be an ok row without one.
   const spec: { cls: string } | undefined = (BOX_SETTING_SPECS as Readonly<Record<string, { cls: string } | undefined>>)[key];
   return spec !== undefined && (spec.cls === 'value' || spec.cls === 'origin') ? null : { key, state: 'ok', from: v.from };
 }
@@ -157,7 +157,7 @@ export interface BoxSettingLine {
   key: string;
   /** What is shown for the value. */
   value: string;
-  /** The source word, or null where there is none to say (unmeasured, presence, or not used on this role). */
+  /** The source word, or null where there is none to say (unmeasured, is-set, or not used on this role). */
   from: string | null;
   /** The sentence for a refused or unmeasured row, shown in the danger tone; null for a row that is fine. */
   why: string | null;
@@ -182,8 +182,8 @@ export function settingLine(row: BoxSettingRow, role: NodeRole | null): BoxSetti
   }
   // An unknown key shows only its source word, never a value (D-7915): this console cannot tell whether it is safe to show.
   if (spec === undefined) return { key: row.key, value: BOX_SETTING_SOURCE_TEXT[row.from], from: null, why: null, mark: null };
-  // A presence-class row says only whether a value is set; a `value` a forged or newer server adds to one is never shown.
-  if (spec.cls === 'presence' || !('value' in row)) return { key: row.key, value: BOX_SETTING_PRESENCE_TEXT[row.from], from: null, why: null, mark };
+  // An is-set-class row says only whether a value is set; a `value` a forged or newer server adds to one is never shown.
+  if (spec.cls === 'is-set' || !('value' in row)) return { key: row.key, value: BOX_SETTING_PRESENCE_TEXT[row.from], from: null, why: null, mark };
   return { key: row.key, value: row.value, from: BOX_SETTING_SOURCE_TEXT[row.from], why: null, mark };
 }
 

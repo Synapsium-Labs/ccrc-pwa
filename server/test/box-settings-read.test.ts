@@ -780,7 +780,7 @@ describe('version 1: still exactly as strict in the file, rewritten on the way o
 // ── version 2: every row checked against its class (D-7913; spec 5.4) ───────────────────────────────────────────────────────
 
 /** The test's own builder of a version-2 document over L0's table (a fixture, not a second definition of any check): a `value` key reads
- *  `1`, an `origin` key `default`, a `presence` key carries no value. */
+ *  `1`, an `origin` key `default`, an `is-set` key (the spec's `presence`, D12) carries no value. */
 const v2RowOf = (key: string): RowObj => {
   const cls = BOX_SETTING_SPECS[key as keyof typeof BOX_SETTING_SPECS].cls;
   if (cls === 'value') return { key, state: 'ok', value: '1', from: 'default' };
@@ -862,7 +862,7 @@ describe('parseBoxSettings, version 2: rows that parse', () => {
     expect(parsed(e).settings.map((r) => r.key)).toEqual([...BOX_SETTINGS_SHOWN]);
   });
 
-  it.each(['file', 'empty', 'default'])('a presence row from %s parses and stays without a value', (from) => {
+  it.each(['file', 'empty', 'default'])('an is-set row from %s parses and stays without a value', (from) => {
     const d = v2Base();
     setRow(d, 'CCRC_GRAPH_STORE', { key: 'CCRC_GRAPH_STORE', state: 'ok', from });
     const row = parsed(d).settings.find((r) => r.key === 'CCRC_GRAPH_STORE')!;
@@ -907,11 +907,11 @@ describe('parseBoxSettings, version 2: rows that are null, each alone on the bas
   const GS = 'CCRC_GRAPH_STORE';
   const okV = (value: string): RowObj => ({ key: GB, state: 'ok', value, from: 'file' });
   const cases: Record<string, (d: Record<string, unknown>) => void> = {
-    'a presence row carrying a value': (d) => setRow(d, GS, { key: GS, state: 'ok', value: '/srv/g', from: 'file' }),
-    'a presence row carrying an empty value': (d) => setRow(d, GS, { key: GS, state: 'ok', value: '', from: 'file' }),
+    'an is-set row carrying a value': (d) => setRow(d, GS, { key: GS, state: 'ok', value: '/srv/g', from: 'file' }),
+    'an is-set row carrying an empty value': (d) => setRow(d, GS, { key: GS, state: 'ok', value: '', from: 'file' }),
     'a refused version-2 row carrying a value': (d) => setRow(d, GB, { key: GB, state: 'refused', value: 'x', from: 'file', why: BOX_SETTING_REFUSAL_WORDS[0] }),
     'a refused version-2 row carrying an empty value (value class)': (d) => setRow(d, GB, { key: GB, state: 'refused', value: '', from: 'file', why: BOX_SETTING_REFUSAL_WORDS[0] }),
-    'a refused version-2 row carrying an empty value (presence class)': (d) => setRow(d, GS, { key: GS, state: 'refused', value: '', from: 'file', why: BOX_SETTING_REFUSAL_WORDS[0] }),
+    'a refused version-2 row carrying an empty value (is-set class)': (d) => setRow(d, GS, { key: GS, state: 'refused', value: '', from: 'file', why: BOX_SETTING_REFUSAL_WORDS[0] }),
     'an unmeasured row carrying a value': (d) => setRow(d, GB, { key: GB, state: 'unmeasured', why: 'x', value: '1' }),
     'an unmeasured row carrying a from': (d) => setRow(d, GB, { key: GB, state: 'unmeasured', why: 'x', from: 'file' }),
     'a value row whose value is a path': (d) => setRow(d, GB, okV('/etc/x')),
@@ -952,7 +952,7 @@ describe('parseBoxSettings, version 2: rows that are null, each alone on the bas
     expect(parseBoxSettings(asText(d))).toBeNull();
   });
 
-  it('a version-1 document with a presence row is null', () => {
+  it('a version-1 document with an is-set row is null', () => {
     const d = v1Doc('defaults');
     delete rowOfKey(d, 'CCRC_RELEASE_BASE_URL')['value'];
     expect(parseBoxSettings(asText(d))).toBeNull();
@@ -1042,14 +1042,14 @@ describe('version 2: the largest document, the view and the lane', () => {
     }
   });
 
-  it('a version-2 document\'s presence rows reach the wire with no value', async () => {
+  it('a version-2 document\'s is-set rows reach the wire with no value', async () => {
     const b = await box({ watcher: true, files: { 'ccrc-caps': CAPS_WITH, [NODE_FILES.boxSettings]: v2At(Math.floor(Date.now() / 1000)) } });
     await b.watcher!.inventoryNow();
     const res = await b.app.inject({ method: 'GET', url: '/api/updates' });
-    const presence = BOX_SETTINGS_SHOWN.filter((k) => BOX_SETTING_SPECS[k].cls === 'presence');
-    expect(presence.length).toBeGreaterThan(0);
+    const isSet = BOX_SETTINGS_SHOWN.filter((k) => BOX_SETTING_SPECS[k].cls === 'is-set');
+    expect(isSet.length).toBeGreaterThan(0);
     const rows = ((res.json() as UpdatesView).nodes[0]!.settings as { doc: { settings: RowObj[] } }).doc.settings;
-    for (const k of presence) expect('value' in rows.find((r) => r['key'] === k)!, k).toBe(false);
-    for (const k of presence) expect(res.body).not.toMatch(new RegExp(`"key":"${k}"[^}]*"value"`));
+    for (const k of isSet) expect('value' in rows.find((r) => r['key'] === k)!, k).toBe(false);
+    for (const k of isSet) expect(res.body).not.toMatch(new RegExp(`"key":"${k}"[^}]*"value"`));
   });
 });

@@ -2311,6 +2311,7 @@ takes the next spare and is named in the wave-done.
 - **D-7920.** The plan's six one-line `( BOX_ENV_FILE="$BOX_ENV_FILE/." KEY="$v" _resolver … )` forms tripped census C8(c), which allows no setting
   name beside BOX_ENV_FILE outside `_ccrc_knob`; the mask moved to its own line as the first statement of one subshell holding all six resolver
   calls, with the same behaviour; ruled by the coordinator (option A). Each of the six resolvers reads only its own setting, measured.
+- **D-7921.** The D12 class `presence` is spelled `is-set` in code, because C7o (OA-C18 (a), #1371) reserves `presence` in TS for session presence.
 
 | Number | Task | What it records |
 |---|---|---|
@@ -2329,7 +2330,7 @@ takes the next spare and is named in the wave-done.
 | D-7918 | 7 | Doctor's release-base row goes through `_upd_url_origin` (class `origin`); doctor's inline userinfo strip retires, so both census pins become `[]`, and doctor no longer prints the base's path |
 | D-7919 | 7 | Doctor's carry-copies WARN uses its words function and drops `got '<value>'`; Task 1's carry pins are rewritten in the same commit (C7) |
 | D-7920 | 3 | `_set_check`'s `updates` arm masks `ccrc.env` once, as the first statement of one subshell holding all six resolver calls, not six one-line `( BOX_ENV_FILE="$BOX_ENV_FILE/." KEY="$v" _resolver )` forms, which census C8(c) refuses; same behaviour (coordinator ruling, option A) |
-| D-7921 | | Spare, unused. |
+| D-7921 | gate sweep | The D12 class `presence` is spelled `is-set` in code, because C7o (OA-C18 (a), #1371) reserves `presence` in TS for session presence |
 | D-7922 | | Spare, unused. |
 | D-7923 | | Spare, unused. |
 | D-7924 | | Spare, unused. |
@@ -2354,7 +2355,7 @@ the task that built it, or re-measured in Task 8. Commit SHAs are those after th
 
 ### Deviations: each one's use
 
-D-7906 to D-7920 are defined once, in the bullets of "Deviations found" above; the table there carries each one's task.
+D-7906 to D-7921 are defined once, in the bullets of "Deviations found" above; the table there carries each one's task.
 
 | Number | Built in | Used by | State |
 |---|---|---|---|
@@ -2373,7 +2374,8 @@ D-7906 to D-7920 are defined once, in the bullets of "Deviations found" above; t
 | D-7918 | Task 7 (`e0a2e2b98`) | doctor's release-base row goes through `_upd_url_origin` and `_set_fits` | built |
 | D-7919 | Task 7 (`e0a2e2b98`) | the carry-copies WARN built from its words function; Task 1's carry pins rewritten in the same commit | built |
 | D-7920 | Task 3 (`2606db945`, fix round 1) | `_set_check`'s `updates` arm, one masked subshell; C8(c) unedited | built |
-| D-7921 to D-7925 | none | none | Spare, unused. |
+| D-7921 | gate sweep (the rename commit) | the class token `is-set` in the bash table, L0, the server parse, the card and the tests; the spec's name `presence` stays in prose | built |
+| D-7922 to D-7925 | none | none | Spare, unused. |
 
 D19 (`CCRC_TESTBOX_URL` is `presence`) was built by Task 3, D21 (a server node's fleet-only families as one line each) by
 Task 6, and D22 (a refused row's `why` is a member of a closed set) by Tasks 3 (the 33 words, `BOX_SETTING_REFUSAL_WORDS`
@@ -2495,6 +2497,8 @@ wrapper baseline for W2-M7 was measured on the unmutated file: 16 red rows, all 
 - **Task 4's extra M12 rows.** The plan's rows did not kill the omit-class mutant (an `ok` omit row is refused by the class check anyway); two forgery rows were added (an unmeasured and a refused row of an omit key in a real row's place), both red.
 - **V7's quote premise.** Task 5 first measured 27438 bytes on a `a\` input and wrote that a run of quotes is dropped; that was a shell quoting accident. The worst why is 3000 `"` characters, and the largest document is 35177 bytes, under the cap.
 - Smaller: the plan's `9000` needle in V3 sits inside `900000` (the row uses `invalid:9000`); the bash-only table mutants are red in T2 and CONTROL, where T3 and T5 read L0 only until Task 3's fix round widened them to the bash rows too.
+
+- **Gate sweep, the class token (D-7921).** The D12 class `presence` is spelled `is-set` in code (the `is-set` class, the spec's `presence`, D12), because C7o (OA-C18 (a), #1371) reserves `presence` in TypeScript for session presence and `census-w7/pwa.test.ts#persistedPresenceWords` went red at 33 against its 20. Only the class TOKEN moved: the bash table rows and comparisons, `BoxSettingClass` and `BOX_SETTING_TABLE`, the server parse's arm, the card's comparison, and the tests that name it. The words the user reads do not change, `BOX_SETTING_PRESENCE_TEXT` keeps its name (the census names its own list of identifiers and none is this one), and the fixture file `malformed--v2-presence-with-value.json` keeps its name (`testbox-pins` names it).
 
 ### Later (the plan's list, unchanged, and what the build added)
 

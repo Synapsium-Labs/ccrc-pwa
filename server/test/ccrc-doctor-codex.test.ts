@@ -6827,7 +6827,7 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
     expect(r.code).toBe(0);
   });
 
-  it('W2-D3: a presence setting prints as set, never its value', () => {
+  it('W2-D3: an is-set setting (the spec\'s presence, D12) prints as set, never its value', () => {
     const r = runBs(fleetBox('ccrc-doctor-bs-d3-', ['CCRC_TESTBOX_URL=https://tb.zz-mark.invalid:8443/zz-path', 'CCRC_GRAPH_STORE=/srv/zz-mark-store', 'CCRC_KEEPALIVE_PROMPT=zz-mark prompt']));
     expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: /);
     for (const k of ['CCRC_TESTBOX_URL', 'CCRC_GRAPH_STORE', 'CCRC_KEEPALIVE_PROMPT']) expect(verdict(r)).toContain(`${k} (set)`);
@@ -6835,7 +6835,7 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
     expect(r.code).toBe(0);
   });
 
-  it('W2-D4: a refused presence setting prints its words, not its value', () => {
+  it('W2-D4: a refused is-set setting prints its words, not its value', () => {
     const home = fleetBox('ccrc-doctor-bs-d4-', ['CCRC_TESTBOX_URL=zz-mark not a url']);
     const words = says(home, 'CCRC_TESTBOX_URL');
     expect(words).not.toBe('');

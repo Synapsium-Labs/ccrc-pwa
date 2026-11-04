@@ -100,7 +100,7 @@ function rowOfV1(o: unknown): BoxSettingRowV1 | null {
 }
 
 /** A version-2 row, checked against its class (D-7913). Unlike version 1, version 2 is this build's own writer's, so a row outside the envelope is a
- *  forgery and is never rewritten. Every arm names the exact key set, so a `value` of any kind (an empty one too) on a presence or refused row is
+ *  forgery and is never rewritten. Every arm names the exact key set, so a `value` of any kind (an empty one too) on an is-set (the spec's `presence`, D12) or refused row is
  *  as `null` as any other: nothing here tests a value for truthiness. */
 function rowOfV2(o: unknown): BoxSettingRowV2 | null {
   if (!isObj(o) || typeof o['key'] !== 'string' || !Object.hasOwn(BOX_SETTING_SPECS, o['key']) || !oneOf<BoxSettingState>(BOX_SETTING_STATES, o['state'])) return null;
@@ -116,7 +116,7 @@ function rowOfV2(o: unknown): BoxSettingRowV2 | null {
   if (state === 'refused') {
     return hasKeys(o, ['key', 'state', 'from', 'why']) && oneOf(BOX_SETTING_REFUSAL_WORDS, o['why']) ? { key, state, from, why: o['why'] } : null;
   }
-  if (cls === 'presence') return hasKeys(o, ['key', 'state', 'from']) ? { key, state, from } : null;
+  if (cls === 'is-set') return hasKeys(o, ['key', 'state', 'from']) ? { key, state, from } : null;
   const value = o['value'];
   return hasKeys(o, ['key', 'state', 'value', 'from']) && isStr(value) && fitsClass(key, value) ? { key, state, value, from } : null;
 }

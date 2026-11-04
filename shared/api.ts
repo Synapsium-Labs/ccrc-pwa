@@ -9965,11 +9965,11 @@ export const BOX_SETTINGS_KEYS = [
 export type BoxSettingKey = typeof BOX_SETTINGS_KEYS[number];
 
 /** The box settings view's per-setting class table (spec 2026-10-25 5.1, D12, D16, D-7909). `value` shows what the act uses, `origin`
- *  the release base's scheme and host, `presence` only that a value is set, `omit` is never shown (the test box's own keys). Each union
+ *  the release base's scheme and host, `is-set` (the spec's `presence`, D12; `presence` is reserved for session presence, D-7921) only that a value is set, `omit` is never shown (the test box's own keys). Each union
  *  has its `Record<..., true>` map, the list derived from it. `server/test/box-settings-table.test.ts` holds this table, the value
  *  words, the envelope and the refusal words equal, in both directions, to `BOX_SETTINGS_TABLE` and its neighbours in `ccd/ccrc`. */
-export type BoxSettingClass = 'value' | 'origin' | 'presence' | 'omit';
-const BOX_SETTING_CLASS_MAP: Record<BoxSettingClass, true> = { value: true, origin: true, presence: true, omit: true };
+export type BoxSettingClass = 'value' | 'origin' | 'is-set' | 'omit';
+const BOX_SETTING_CLASS_MAP: Record<BoxSettingClass, true> = { value: true, origin: true, 'is-set': true, omit: true };
 export const BOX_SETTING_CLASSES: readonly BoxSettingClass[] = Object.keys(BOX_SETTING_CLASS_MAP) as BoxSettingClass[];
 
 /** The card's families, in the card's order (the map's insertion order: the order each first appears in the table below). */
@@ -10005,9 +10005,9 @@ export const BOX_SETTING_TABLE = {
   CCRC_TEST_HEAVY_SLOTS: { cls: 'value', family: 'test-runs', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_TEST_WIDE_FILES: { cls: 'value', family: 'test-runs', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_TEST_PRESSURE_MAX: { cls: 'value', family: 'test-runs', roles: ['fleet', 'both'], applies: 'run' },
-  CCRC_GRAPH_STORE: { cls: 'presence', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
-  CCRC_GRAPH_SOURCE_REF: { cls: 'presence', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
-  CCRC_GRAPH_REPOS_EXCLUDE: { cls: 'presence', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_STORE: { cls: 'is-set', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_SOURCE_REF: { cls: 'is-set', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_REPOS_EXCLUDE: { cls: 'is-set', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_GRAPH_REFRESH_SECS: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'update' },
   CCRC_GRAPH_FETCH_SECS: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_GRAPH_FULL_REBUILD_SECS: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
@@ -10028,14 +10028,14 @@ export const BOX_SETTING_TABLE = {
   CCRC_GRAPH_GATE_MAX_DENIALS: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_GRAPH_CARD_DIFF_LIST_MAX: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_GRAPH_PRESSURE_MAX: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
-  CCRC_KEEPALIVE_MODEL: { cls: 'presence', family: 'keepalive', roles: ['fleet', 'both'], applies: 'run' },
-  CCRC_KEEPALIVE_PROMPT: { cls: 'presence', family: 'keepalive', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_KEEPALIVE_MODEL: { cls: 'is-set', family: 'keepalive', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_KEEPALIVE_PROMPT: { cls: 'is-set', family: 'keepalive', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_KEEPALIVE_FRESH: { cls: 'value', family: 'keepalive', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_USAGE_SWEEP_DAYS: { cls: 'value', family: 'usage-sweep', roles: ['fleet', 'both'], applies: 'run' },
-  CCRC_TESTBOX_URL: { cls: 'presence', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
-  CCRC_TESTBOX_TOKEN_FILE: { cls: 'presence', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
-  CCRC_TESTBOX_GIT_URL_BASE: { cls: 'presence', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
-  CCRC_TESTBOX_GIT_KEY: { cls: 'presence', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_URL: { cls: 'is-set', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_TOKEN_FILE: { cls: 'is-set', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_GIT_URL_BASE: { cls: 'is-set', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_GIT_KEY: { cls: 'is-set', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_TESTBOX_UNTRACKED_FILE_MAX: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_TESTBOX_SNAPSHOT_MAX: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_TESTBOX_STATUS_DEADLINE: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
@@ -10044,10 +10044,10 @@ export const BOX_SETTING_TABLE = {
   CCRC_TESTBOX_QUEUE_LIMIT: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_TESTBOX_QUEUE_WAIT: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_TESTBOX_BUDGET: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
-  CCRC_TESTBOX_DENY_GLOBS: { cls: 'presence', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_DENY_GLOBS: { cls: 'is-set', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_TESTBOX_POLL: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_TESTBOX_FALLBACK_INSTALL: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
-  CCRC_TESTBOX_TIMES: { cls: 'presence', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_TIMES: { cls: 'is-set', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_TESTBOX_RUNS: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_TESTBOX_WORKERS: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_TESTBOX_RUN_TMPDIR: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
@@ -10145,8 +10145,8 @@ export type BoxSettingRowV1 =
 export const BOX_SETTINGS_V1_REFUSED_WHY = 'refused by its check; this box\'s build words the refusal with the value, so it is not shown here until the box is updated';
 /** What the server says for a version-1 `ok` row whose value or origin is outside the envelope (D-7911, review L4). */
 export const BOX_SETTINGS_V1_UNFIT_WHY = 'recorded by an older ccrc in a form this view does not show';
-/** One version-2 setting (D-7913), by display class: only an `ok` row of class `value` or `origin` carries a `value`; a `presence` row is the
- *  second arm, told apart by `'value' in row`, and the parse admits an `ok` row without `value` only for a presence-class key, so the absence
+/** One version-2 setting (D-7913), by display class: only an `ok` row of class `value` or `origin` carries a `value`; an `is-set` row is the
+ *  second arm, told apart by `'value' in row`, and the parse admits an `ok` row without `value` only for an is-set-class key, so the absence
  *  has one meaning. A refused row's `why` is one of the closed refusal words, never the value. */
 export type BoxSettingRowV2 =
   | { key: BoxSettingName; state: 'ok'; value: string; from: BoxSettingSource }

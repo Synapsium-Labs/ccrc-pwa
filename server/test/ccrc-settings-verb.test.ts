@@ -154,7 +154,7 @@ function expectAbsent(s: Surfaces, needles: string[], ctx: string): void {
 }
 
 describe('ccrc settings: the 61 settings by display class, and where each came from (D-7861, D-7910)', () => {
-  it('V1: version 2 lists BOX_SETTINGS_SHOWN in order; the verb holds no literal key list; every row is ok and default, a value row at its default, a presence row bare', () => {
+  it('V1: version 2 lists BOX_SETTINGS_SHOWN in order; the verb holds no literal key list; every row is ok and default, a value row at its default, an is-set row bare', () => {
     const line = /^CCRC_SETTINGS=\(([A-Z0-9_ ]+)\)$/m.exec(SRC)?.[1]?.split(' ') ?? [];
     expect(line.length).toBeGreaterThan(61);
     for (const k of KEYS) expect(line.filter((n) => n === k), `${k} appears once in CCRC_SETTINGS`).toHaveLength(1);
@@ -168,7 +168,7 @@ describe('ccrc settings: the 61 settings by display class, and where each came f
     expect(d.settings.map((s) => s.key)).not.toContain('CCRC_TESTBOX_RUNS');
     expect(d.settings.slice(0, 7).map((s) => s.key)).toEqual(KEYS);
     for (const row of d.settings) {
-      if (CLS(row.key) === 'presence') expect(row, row.key).toEqual({ key: row.key, state: 'ok', from: 'default' });
+      if (CLS(row.key) === 'is-set') expect(row, row.key).toEqual({ key: row.key, state: 'ok', from: 'default' });
       else { expect(row.state, row.key).toBe('ok'); expect(row.from, row.key).toBe('default'); expect(typeof row.value, row.key).toBe('string'); }
     }
     for (const [k, v] of Object.entries(DEFAULTS)) expect(rowOf(d, k), k).toEqual({ key: k, state: 'ok', value: v, from: 'default' });
@@ -787,7 +787,7 @@ describe('ccrc settings: usage', () => {
   });
 });
 
-describe('ccrc settings: a presence row records whether a setting is set, never what it is set to (D-7910, V3)', () => {
+describe('ccrc settings: an is-set row (the spec\'s presence, D12) records whether a setting is set, never what it is set to (D-7910, V3)', () => {
   it('V3: a URL, a key path, a prompt and an empty list read set, set, set and set to empty, and none of their text is anywhere', () => {
     const home = boxWith('ccrc-sv-v3-', 'CCRC_TESTBOX_URL=https://secret-host.invalid:9000/x?token=abc\nCCRC_TESTBOX_GIT_KEY=~/k/push.key\nCCRC_KEEPALIVE_PROMPT=say hi\nCCRC_GRAPH_REPOS_EXCLUDE=\n');
     const s = surfaces(home);
@@ -803,7 +803,7 @@ describe('ccrc settings: a presence row records whether a setting is set, never 
 
 describe('ccrc settings: the human form keeps its three formats (V8, review F4)', () => {
   const lineOf = (out: string, key: string): string => out.split('\n').find((l) => l.startsWith(`${key} `)) ?? '';
-  it('V8: ok, refused and unmeasured rows keep their formats; presence rows say set, unset or set to empty; a refused row says not shown', () => {
+  it('V8: ok, refused and unmeasured rows keep their formats; is-set rows say set, unset or set to empty; a refused row says not shown', () => {
     const home = boxWith('ccrc-sv-words-', 'CCRC_BACKUP_DATA_KEEP=4\nCCRC_VERSIONS_KEEP=\nCCRC_UPDATE_DEADLINE_MS=6e5\nCCRC_MODELS_ADVANCE_BUDGET_S=off\n'
       + 'CCRC_TESTBOX_URL=https://secret-host.invalid\nCCRC_GRAPH_REPOS_EXCLUDE=\nCCRC_GRAPH_BUDGET=zz\n');
     const human = settings(home, [], { CCRC_BACKUP_KEEP: '5', CCRC_UPDATE_HEALTH_S: 'ninety' });

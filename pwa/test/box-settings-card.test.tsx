@@ -403,7 +403,7 @@ describe('Box settings card: families (D17)', () => {
     expect(block('fleet').textContent).not.toContain('zz-wire');
   });
 
-  it('F7: the presence words, and a presence value on the wire is never shown', () => {
+  it('F7: the is-set words (the spec\'s presence, D12), and a value on an is-set row on the wire is never shown', () => {
     const words: Array<[BoxSettingRowV2['key'], 'file' | 'empty' | 'default' | 'environment', string]> = [
       ['CCRC_GRAPH_STORE', 'file', 'set in ccrc.env'],
       ['CCRC_GRAPH_STORE', 'empty', 'set to empty, from ccrc.env; the default applies'],

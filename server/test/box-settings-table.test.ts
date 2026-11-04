@@ -30,7 +30,7 @@ const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).
 
 // ── the bash table, read as text ──────────────────────────────────────────────────────────────────────────────────────────────
 
-const LINE = /^ {2}(CCRC_[A-Z0-9_]+):(value|origin|presence|omit):([a-z-]+):(none|[a-z,]+):(run|update)$/;
+const LINE = /^ {2}(CCRC_[A-Z0-9_]+):(value|origin|is-set|omit):([a-z-]+):(none|[a-z,]+):(run|update)$/;
 const blockOf = (src: string, open: string): string[] => {
   const m = new RegExp(`^${open}=\\(\\n([\\s\\S]*?)\\n\\)$`, 'm').exec(src);
   return m ? m[1]!.split('\n') : [];
@@ -103,16 +103,16 @@ describe('the class table: bash equals CCRC_SETTINGS and L0 (D16, spec 5.1)', ()
   it('T3: counts and named members, in L0 and in the bash table', () => {
     const l0 = (c: string): string[] => keysWhere((k) => classOf(k) === c);
     const bash = (c: string): string[] => rowsOf(lines).filter((r) => r.cls === c).map((r) => r.key);
-    const PRESENCE = [
+    const IS_SET = [
       'CCRC_GRAPH_REPOS_EXCLUDE', 'CCRC_GRAPH_SOURCE_REF', 'CCRC_GRAPH_STORE', 'CCRC_KEEPALIVE_MODEL', 'CCRC_KEEPALIVE_PROMPT',
       'CCRC_TESTBOX_DENY_GLOBS', 'CCRC_TESTBOX_GIT_KEY', 'CCRC_TESTBOX_GIT_URL_BASE', 'CCRC_TESTBOX_TIMES', 'CCRC_TESTBOX_TOKEN_FILE',
       'CCRC_TESTBOX_URL',
     ];
     for (const of of [l0, bash]) {
-      expect({ value: of('value').length, origin: of('origin').length, presence: of('presence').length, omit: of('omit').length })
-        .toEqual({ value: 49, origin: 1, presence: 11, omit: 28 });
-      expect(of('presence').sort()).toEqual(PRESENCE);
-      expect(of('presence'), 'D19: the test box URL is presence').toContain('CCRC_TESTBOX_URL');
+      expect({ value: of('value').length, origin: of('origin').length, 'is-set': of('is-set').length, omit: of('omit').length })
+        .toEqual({ value: 49, origin: 1, 'is-set': 11, omit: 28 });
+      expect(of('is-set').sort()).toEqual(IS_SET);
+      expect(of('is-set'), 'D19: the test box URL is is-set (the spec\'s presence, D12; D-7921)').toContain('CCRC_TESTBOX_URL');
       expect(of('origin')).toEqual(['CCRC_RELEASE_BASE_URL']);
     }
     expect(BOX_SETTINGS_SHOWN).toHaveLength(61);
@@ -177,7 +177,7 @@ describe('the class table: bash equals CCRC_SETTINGS and L0 (D16, spec 5.1)', ()
     const swapped = [...lines];
     [swapped[3], swapped[4]] = [swapped[4]!, swapped[3]!];
     expect(tableFaults(swapped).length).toBeGreaterThan(0);
-    const url = lines.map((l) => l.replace(/^ {2}CCRC_TESTBOX_URL:presence:/, '  CCRC_TESTBOX_URL:origin:'));
+    const url = lines.map((l) => l.replace(/^ {2}CCRC_TESTBOX_URL:is-set:/, '  CCRC_TESTBOX_URL:origin:'));
     expect(url).not.toEqual(lines);
     expect(tableFaults(url).length).toBeGreaterThan(0);
   });

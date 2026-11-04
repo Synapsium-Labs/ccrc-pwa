@@ -11148,7 +11148,7 @@ _check_snapshot-posture() {
 # name, and what it prints of a name the file sets follows the setting's display class in ccrc's class table (`_set_spec`),
 # never a rule of its own: a `value` setting prints `KEY=value` when its check passes (`_set_check`) and the value fits the
 # view (`_set_fits`), `KEY (wider than this view records)` when it does not fit, and `KEY (refused: <words>)` when the check
-# refuses it (`_set_says`, the closed-set words, never the value); a `presence` setting prints `KEY (set)`, or the same
+# refuses it (`_set_says`, the closed-set words, never the value); an `is-set` setting (the spec's `presence`, D12) prints `KEY (set)`, or the same
 # refusal; an `origin` setting (the release base) prints `custom` and its scheme and host from `_upd_url_origin`, never its
 # path or userinfo; an `omit` setting prints nothing (its reader refusal still WARNs). A refused value stays a PASS, rc 0:
 # only what prints changes. A check that cannot run (`_set_check` rc 2, a library not loaded) is a WARN, `KEY cannot be
@@ -11188,7 +11188,7 @@ _check_box-settings() {
         *)
           _set_check "$k" "$v"; rc=$?
           case "$rc" in
-            0) if [ "$cls" = presence ]; then shown="$k (set)"
+            0) if [ "$cls" = is-set ]; then shown="$k (set)"
                elif _set_fits "$k" value "$v"; then shown="$k=$v"
                else shown="$k (wider than this view records)"; fi ;;
             1) shown="$k (refused: $(_set_says "$k"))" ;;

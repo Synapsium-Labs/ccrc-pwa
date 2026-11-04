@@ -1370,7 +1370,7 @@ box, one row each, with where it came from (the environment, `ccrc.env`, an empt
 whether the act that reads it would use it, refuse it or could not decide (D-6914, D-7861). The test box's own 28 settings
 are left out. Every row has a display class, written once in the class table: `value` prints the value, `origin` prints a
 URL's scheme and host only (the release base shows as `default`, or `custom <scheme://host>`, or `custom` alone when the
-value does not reduce to one), `presence` prints only that it is set (the test-box URL, D19), and `omit` is not shown. A
+value does not reduce to one), `is-set` (the spec's `presence`, D12) prints only that it is set (the test-box URL, D19), and `omit` is not shown. A
 refused row records its source and its check's words and never the value, wave 1's seven included (D14, D22). Every wave-2
 setting is read from `ccrc.env` alone; only the backups and the updates settings keep the environment-first read (D20). The
 session slice's two limits and the four graph settings that the installed units render take effect at the next
@@ -1392,7 +1392,7 @@ are all `ok` and keeps one with a refused or not-measured row open (D17); a serv
 version-2 node, or a version-1 node with a refused row, as a form it does not read until it reloads (D15, D-7912). Nothing acts on the record; every act re-reads its
 setting when it runs. `ccrc doctor`'s `box-settings` check still names a `ccrc.env` line the reader refuses, prints a value only when its check
 passes and it fits the view's envelope (otherwise `KEY (refused: <words>)` or `KEY (wider than this view records)`), prints a
-`presence` setting as set, reads the test box's own settings without printing them, prints the release base as its origin, and
+`is-set` setting as set, reads the test box's own settings without printing them, prints the release base as its origin, and
 its carry-copies warning no longer quotes the value (D18, D-7918, D-7919). Its `services` check names a stopped
 `ccrc-settings.timer`.
 
