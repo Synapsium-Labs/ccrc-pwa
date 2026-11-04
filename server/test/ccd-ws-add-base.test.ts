@@ -292,3 +292,8 @@ describe('an older ccd binds a leading --base as the project and refuses (D-6164
   });
 });
 
+describe('cmd_caps', () => {
+  it('advertises ws-add-base-v1', () => {
+    expect(h.sh('cmd_caps').split('\n')).toContain('ws-add-base-v1');
+  });
+});

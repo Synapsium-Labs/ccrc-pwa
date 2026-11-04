@@ -9285,6 +9285,7 @@ EOF
   echo docs-index
   echo path-users-v1; echo path-users   # `ccd path-users [--json] <path>…` (DR-7, D-6619): the read-only entry to the one holder probe; sent only behind this word
   echo lease-mark-v1; echo ws-lease-mark   # delegation broker wave 5 (PR1): the lease carrier's one writer, ccd/lib/delegation-lease.sh
+  echo ws-add-base-v1   # delegation broker wave 5 (PR3): `ws-add --child <run> --base <commit>`, a start point only (D-7827)
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
   # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
   # design 2026-10-20 §4.1). Two tokens, because the two flags are separable: the server sends each only behind its own

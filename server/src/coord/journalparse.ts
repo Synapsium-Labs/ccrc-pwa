@@ -211,7 +211,7 @@ export function reviveMeas(v: unknown): LifecycleMeas | null {
     unremoved: s(o, 'unremoved'), childOf: s(o, 'childOf'), wip: s(o, 'wip'), residueBytes: s(o, 'residueBytes'), tmpRootKept: s(o, 'tmpRootKept'), clipsKept: s(o, 'clipsKept'), leaf: presentAsText(o, 'leaf'),
     // D-7278 — the run marker a deps-shed line was judged against (`LifecycleMeas.childRun`).
     childRun: s(o, 'childRun'),
-    // Delegation broker wave 5 PR3 (D-7827) — a `create` row's `ws-add --base` start point (`LifecycleMeas.startpoint`).
+    // Delegation broker wave 5 PR3 (D-7827) — a child `create` row's `--base` start point (`LifecycleMeas.startpoint`).
     startpoint: s(o, 'startpoint'),
   };
 }

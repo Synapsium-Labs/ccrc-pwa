@@ -508,6 +508,9 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     // what this spawn IS, both are parsed by the same strip loop, and neither
     // may trail the dec, where an old ccd's positional binding would eat it.
     wsAddWorker: ['ws-add', '--no-rc', '--child', '7', 'demo', '--surface', 'agent', '--actor', 'run:7 dispatch'],
+    // W5-G18 (delegation broker wave 5 PR3): `--base` LEADS beside `--child`, before the project and the slug, so an older ccd
+    // binds it as the project and refuses (D-6164). The one-token `['ws-add']` grant covers it: no agent change.
+    wsAddWorkerBase: ['ws-add', '--no-rc', '--child', '7', '--base', 'a'.repeat(40), 'demo', 'quiet-mesa', '--surface', 'agent', '--actor', 'run:7 dispatch'],
     prStateSession: ['pr-state', '--session', 'demo-quiet-basin'],
     prStateProject: ['pr-state', '--project', 'demo'],
     prStatePr: ['pr-state', '--project', 'demo', '--pr', '41'],

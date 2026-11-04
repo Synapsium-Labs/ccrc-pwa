@@ -14,6 +14,14 @@ plan and the programme ledger. This PR edits no existing plan and not the progra
 - `shared/api.ts`: under PR2's claim, by the coordinator's consent (mail of 2026-11-04 answering PR3's question), for two lines only:
   the `startpoint` member of `LifecycleMeas` and its `LIFECYCLE_MEAS_KEY_MAP` entry (D-7980).
 
+## Files beyond the plan's list, with no departure
+
+- `server/test/ccdArgvSamples.ts` (claimed by PR3): every `CCD_ARGV` key needs a sample, because `whitelist-subset.test.ts` and
+  `ccd-verb-sets.test.ts` hold the sample keys equal to `CCD_ARGV`'s. The `wsAddWorkerBase` sample is what W5-G18's layer 3 builds.
+- `server/test/verb-gate.test.ts` (already on the list) gains `FLAG_GATED_ROWS`: until now every `ws-add` row was ungated by
+  decision, and `wsAddWorkerBase` is the first that refuses on no evidence, so the table names it as the one exception and row
+  W5-G17e holds it to `refuse`.
+
 ## Deviations found
 
 - **D-7980** — `startpoint-is-a-declared-meas-key` (Task 5.3.1 rule 5, D-7827): the plan's PR3 file list gains `shared/api.ts` (two
