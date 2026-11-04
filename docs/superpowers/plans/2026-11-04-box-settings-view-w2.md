@@ -2314,7 +2314,7 @@ takes the next spare and is named in the wave-done.
 
 | Number | Task | What it records |
 |---|---|---|
-| D-7906 | 2 (created by the first commit past the armed limit, Step 4 by this plan's figures), raised by every later commit that grows `ccd/ccrc` (Tasks 2, 3, 5 and 7 if it touches the file), finalized in 8 | The wave's one growth waiver for `ccd/ccrc` (`server/test/growth-waivers/D-7906-ccd-ccrc.json`); `maxDelta` is the final measured delta, with its split by task; every commit's armed gate green |
+| D-7906 | 2 (created by the first commit past the armed limit, Step 4 by this plan's figures), raised by Tasks 3 and 5 (Task 7 did not touch `ccd/ccrc`), finalized in 8 | The wave's one growth waiver for `ccd/ccrc` (`server/test/growth-waivers/D-7906-ccd-ccrc.json`); `maxDelta` is the final measured delta, with its split by task; every commit's armed gate green |
 | D-7907 | 2 | `CCRC_RELEASE_BASE_URL` gains no refusal words: it is never refused (an unparseable base reads `custom` alone), a departure from 5.2's "wave 1's seven each gain fixed refusal words" |
 | D-7908 | 2 | Wave 1's act sentences (`_keep_why`, `_upd_health_s`) are now built from the new words functions, byte-identical to `main`, pinned by Task 1's K1, K2 and H1 |
 | D-7909 | 3, used by 5 and 7 | The value and origin envelope, spelled once in L0 with a bash mirror held equal by a test; an `ok` value or origin outside it (wave 1's seven included) is written as `unmeasured` with a fixed why naming the limit, and doctor prints it as wider than the view records (widens the 480-byte rule; C4; review L3, L12) |
@@ -2329,10 +2329,186 @@ takes the next spare and is named in the wave-done.
 | D-7918 | 7 | Doctor's release-base row goes through `_upd_url_origin` (class `origin`); doctor's inline userinfo strip retires, so both census pins become `[]`, and doctor no longer prints the base's path |
 | D-7919 | 7 | Doctor's carry-copies WARN uses its words function and drops `got '<value>'`; Task 1's carry pins are rewritten in the same commit (C7) |
 | D-7920 | 3 | `_set_check`'s `updates` arm masks `ccrc.env` once, as the first statement of one subshell holding all six resolver calls, not six one-line `( BOX_ENV_FILE="$BOX_ENV_FILE/." KEY="$v" _resolver )` forms, which census C8(c) refuses; same behaviour (coordinator ruling, option A) |
-| D-7921 | | Spare. |
-| D-7922 | | Spare. |
-| D-7923 | | Spare. |
-| D-7924 | | Spare. |
-| D-7925 | | Spare. |
+| D-7921 | | Spare, unused. |
+| D-7922 | | Spare, unused. |
+| D-7923 | | Spare, unused. |
+| D-7924 | | Spare, unused. |
+| D-7925 | | Spare, unused. |
 
 ## As built
+
+Built on the branch `ws/box-settings-w2`, Tasks 1 to 8, nothing pushed before the PR. Every figure below was measured in
+the task that built it, or re-measured in Task 8. Commit SHAs are those after the local autosquash that folded the
+`log-line-redact-corpus` pin into Task 5's commit (see the rulings).
+
+| Task | Commits |
+|---|---|
+| 1 | `9f1c23c5d`, `8524c5e1f`, `6b0bb16e5` (on the plan's own commit `8a92ba2cc`) |
+| 2 | `d544daf31`, `1ea5a2ca8`, `37f62e39f`, `2d748ba78`, `0f5cb00e8`, `ff61b617e` |
+| 3 | `2606db945` |
+| 4 | `042a8df1d`, `f851e519e`, `0cfc0c209` |
+| 5 | `8e19e43e9` |
+| 6 | `bf75dc730`, `d7d5aa331`, `048c9dd0c` |
+| 7 | `e0a2e2b98` |
+| 8 | the README commit, the waiver commit and this one |
+
+### Deviations: each one's use
+
+D-7906 to D-7920 are defined once, in the bullets of "Deviations found" above; the table there carries each one's task.
+
+| Number | Built in | Used by | State |
+|---|---|---|---|
+| D-7906 | Task 2 (`2d748ba78`, +42, the first commit past 40), raised in Tasks 3 and 5, finalized in Task 8 | the one waiver of `ccd/ccrc`, `maxDelta` 345 | final |
+| D-7907 | Task 2 (`ff61b617e`) | `CCRC_RELEASE_BASE_URL` is never refused, so it has no refusal words; an unparseable base reads `custom` alone | built |
+| D-7908 | Task 2 (`ff61b617e`) | `_keep_says`, `_upd_health_says`, `_upd_deadline_says` (and `_models_budget_says`) build wave 1's act sentences, byte-identical to `main`, pinned by Task 1's K1, K2 and H1 | built |
+| D-7909 | Task 3 (`2606db945`) | the envelope in L0 and its bash mirror; `_set_fits` in the verb (Task 5) and doctor (Task 7) | built |
+| D-7910 | Task 5 (`8e19e43e9`) | the class table replaces `BOX_SETTINGS_KEYS`; T9 (the equality of the literal to the table's first seven) was deleted with the literal in the same commit | built |
+| D-7911 | Task 4 (`f851e519e`) | the version-1 rewrite: refused loses value and why, an unfit `ok` becomes `unmeasured`, a long why is cut to 237 plus `...` | built |
+| D-7912 | Task 4 (`f851e519e`) | accepted: a console tab on wave 1's build reads a v2 node, or a v1 node with a refused row, as unrecognised until it reloads; the PR's rollout note says so | built |
+| D-7913 | Task 4 (`0cfc0c209`) | version 2 read beside version 1; an `unmeasured` why bounded (printable ASCII, 240), not a closed set | built |
+| D-7914 | Task 3 (`2606db945`) | `BOX_SETTING_VALUE_WORDS` in L0 with its bash mirror, held equal both ways to each other and to `_tb_shape`'s word arms (T10, E2) | built |
+| D-7915 | Task 6 (`d7d5aa331`) | an unknown key's row shows in a trailing "Other settings" group, source word only (R2) | built |
+| D-7916 | Task 6 (`d7d5aa331`, `048c9dd0c`) | a server node's fleet-only family is one line with refused and not-measured counts (S1, S3, S4) | built |
+| D-7917 | Task 6 (`d7d5aa331`) | "not used on this role", one wording from the role column | built |
+| D-7918 | Task 7 (`e0a2e2b98`) | doctor's release-base row goes through `_upd_url_origin` and `_set_fits` | built |
+| D-7919 | Task 7 (`e0a2e2b98`) | the carry-copies WARN built from its words function; Task 1's carry pins rewritten in the same commit | built |
+| D-7920 | Task 3 (`2606db945`, fix round 1) | `_set_check`'s `updates` arm, one masked subshell; C8(c) unedited | built |
+| D-7921 to D-7925 | none | none | Spare, unused. |
+
+D19 (`CCRC_TESTBOX_URL` is `presence`) was built by Task 3, D21 (a server node's fleet-only families as one line each) by
+Task 6, and D22 (a refused row's `why` is a member of a closed set) by Tasks 3 (the 33 words, `BOX_SETTING_REFUSAL_WORDS`
+in L0, held equal to the bash words by W1), 4 (the server's check) and 5 (the writer); doctor prints those words too.
+All three stand as the spec agreed them.
+
+### Controller rulings made while building
+
+- Tasks 3 to 8's step-level text was scanned at each task's dispatch, not all up front: the plan's ownership section already settled the cross-task interfaces.
+- The SDD workspace stays in the worktree's git-ignored `.superpowers/sdd`; tests and subagent temp use the session temp root.
+- The implementer's `- **D-7906/7907/7908.**` bullets in the plan's "Deviations found" stand: the growth test counts only bullet and heading definitions.
+- The reviewer's out-of-task note on the origin shape (see Corrections and Later) is parked for the wave-done and the final review, not fixed here.
+- Task 6's F1 expected family order follows L0's first-appearance order, not the plan's literal list.
+- A not-used row keeps "not used on this role" in its value slot but shows its refused or not-measured why (closed words or bounded text, never a value).
+- The `log-line-redact-corpus` pin (`CALLS` for `ccd/ccrc` 21 to 20, `_set_keep_why` retired) was folded into Task 5's commit by a local autosquash, so every commit stays green; SHAs changed locally only.
+- The coordinator ruled option A for census C8(c) (D-7920): one subshell, the mask as its first statement, census unedited.
+- README leave: edit only the box-settings hunks (claim 3395 held by another programme); the session gate's opening paragraph is excluded; the leave on `ccd/ccrc-doctor-checks` was extended under claim 3417 for Task 7's doctor hunks.
+
+### Interfaces as built
+
+No task renamed an interface of the plan. As built: L0 (`shared/api.ts`) holds `BOX_SETTINGS_TABLE`-derived `BOX_SETTING_SPECS`
+and `BOX_SETTINGS_SHOWN` (61), `BOX_SETTING_FAMILIES` (first-appearance order), `BOX_SETTING_VALUE_SHAPE`,
+`BOX_SETTING_ORIGIN_SHAPE`, `BOX_SETTINGS_TEXT_MAX`, `BOX_SETTING_VALUE_WORDS`, `BOX_SETTING_REFUSAL_WORDS`,
+`BOX_SETTINGS_V1_REFUSED_WHY` and `BOX_SETTINGS_V1_UNFIT_WHY`. `ccd/ccrc` holds `BOX_SETTINGS_TABLE` (bash), `_set_spec`,
+`_set_libs`, `_set_says`, `_set_check`, `_set_fits`, `_set_row_json`, `_set_got`, `_set_lines`, `_set_tb_host`, `_set_reads`,
+and the moved checks and words `_tshape`/`_tshape_says`, `_slice_limit_says`, `_keepalive_fresh_ok`/`_says`,
+`_usage_days_ok`/`_says`, `_carry_warn_bytes_ok`/`_says`, `_keep_says`, `_upd_health_says`, `_upd_deadline_says`,
+`_models_budget_says`. The server's `parseBoxSettings` reads version 1 (`rowOfV1`) and version 2 (`rowOfV2`); the card's
+`familyGroups` and `settingLine` and `BOX_SETTINGS_NOT_USED_TEXT` are in `boxSettingsWords.ts`. `ccd/lib/ccrc-settings.sh` is
+regenerated and byte-equal (W29-L1).
+
+### Moved checks: their suites, run unchanged and green
+
+Each move's own suites ran green after the move with no pin edited: Task 2 step 1 carveouts, testbox-knobs, graph-knobs,
+ccrc-cli, census; step 2 slice-limits-config, carveouts, ccrc-uninstall, install-units; step 3 settings-lib, carveouts,
+telemetry-keepalive, keepalive-freshness-parity, census, timer-first-run, ccrc-install-tree, install-census, macos-platform,
+graph-repo-sweep, testbox-knobs; step 4 settings-lib, carveouts, usage-sweep-runner, usage-sweep-deploy-ship, census; step 5
+ccrc-doctor-carry-copies, ccrc-doctor-core, census, docs-parity, carveouts, settings-lib; step 6 ten suites (1247 tests). The
+wave-1 acts (`ccrc-update-kept`, `ccrc-update-flip-backups`, `ccrc-models-advance`, `ccrc-update-phases`,
+`ccrc-versions-warn-arms`) were green at Tasks 3 and 5. `ccrc-test-wrapper` (16 rows) and `testbox-wrapper` (38 rows) fail in the
+worker's own test slice on unmodified code (the stub `systemd-run` sees no call when run inside the slice, reproduced on
+`6b0bb16e5`'s parent); CI is the arbiter.
+
+### Growth, measured with the counter against the merge-base
+
+| File | Net code lines |
+|---|---|
+| `ccd/ccrc` | +345 (waiver D-7906, `maxDelta` 345) |
+| `ccd/ccrc-doctor-checks` | +12 |
+| `server/src/watch.ts` | 0 |
+| `pwa/src/lib/api.ts` | 0 |
+| `shared/api.ts` | +163 |
+| `server/src/update/boxSettings.ts` | +42 |
+| `pwa/src/fleet/boxSettingsWords.ts` | +72 |
+| `pwa/src/fleet/BoxSettingsCard.tsx` | +8 |
+
+D-7906's split, each measured at its task's commit: Tasks 1 and 2 +52 (24, 29, 36, 42, 48, 52 after each of Task 2's six
+commits; Task 1 nets 0), Task 3 +209 (+200 in its commit, +9 in its fix round), Task 5 +84; Tasks 4, 6 and 7 do not touch the
+file. The waiver was created by `2d748ba78` (+42, the first commit past 40) and finalized by Task 8's waiver commit; the
+armed run is green. `wire-totality`'s `EXEMPT_PINNED` did not move (the file is unchanged on the branch).
+
+### Measurements the plan asked to record
+
+- **V7, the largest document.** The writer's worst row of each key and worst top level, built from its own functions: 35177
+  bytes of 65536. The server's synthetic largest version-2 document (`ok--v2-synthetic-largest.json`): 35510 bytes (35503 at
+  Task 4, 7 more after Task 5's `from:'environment'`).
+- **W2-D7 and V6 origin outputs.** `https://u:hunter2@mirror.example/releases` prints `custom https://mirror.example`;
+  `u:hunter2@mirror.example/r` prints `custom mirror.example`; `http:/u:hunter2@mirror.example/r` and
+  `https:///u:hunter2@mirror.example/r` print `custom`. With `_upd_redact` made an identity the first prints `custom` alone
+  (the origin's own `@` test answers rc 1), recorded in D-7918. V6: `_upd_url_origin 'https://h:abc/r'` prints `https://h:abc`,
+  rc 0, so the base reads `unmeasured` with the origin's fixed why; `_upd_url_origin 'https://'` prints `https://`, rc 0, also `unmeasured`.
+- **C2b, jsdom.** `queryAllByRole('term')` inside a closed `details` returns 1 (jsdom 30.1.3, testing-library dom 10.4.1): role
+  queries see closed content. The arm taken is "1": the pin is `toHaveLength(1)`, the existing term count (7, from
+  `within(b).getAllByRole('term')`) at the old `:65` stays as written, and no `{ hidden: true }` was added anywhere.
+- **V4's `REFUSED_SAMPLE` overrides** (a value each check refuses where the default `zz-refused-<i>` would pass):
+  `CCRC_TESTBOX_GIT_KEY=relative/key`, `CCRC_TESTBOX_UNTRACKED_FILE_MAX=5MB`, `CCRC_GRAPH_MAX_SHRINK_PCT=150`,
+  `CCRC_GRAPH_SOURCE_REF=../x`, `CCRC_TEST_SLICE_CPU_QUOTA=4`, `CCRC_SESSION_SLICE_MEMORY_MAX=90`, `CCRC_KEEPALIVE_FRESH=30m`,
+  `CCRC_USAGE_SWEEP_DAYS=0`, `CCRC_CARRY_COPY_WARN_BYTES=10G` and `CCRC_TESTBOX_DENY_GLOBS` set to a tab and `zz-denied`.
+- **Review 1403's F1, F3 and F4** were closed by Task 1: F1 and F3 by `9f1c23c5d` (`_upd_url_origin` tests the redacted scheme for
+  http(s) too, with the `user:pw@ftp://h` rows), F4 by `8524c5e1f` (the third importer recorded in wave 1's plan).
+
+### The mutation table (Task 8, re-run on saved copies, sequentially, each restored and checked with `cmp`)
+
+Each mutant ran on a saved copy of the file (its sha256 recorded), only the suites it names, bounded by `timeout -k 10 900`.
+Every mutant was killed; none survived.
+
+| Mutant | What it changes | Killing rows |
+|---|---|---|
+| W2-M1 | one `value` key to `presence` in the bash table only | `box-settings-table` T2, T3, CONTROL; `ccrc-settings-verb` V1 |
+| W2-M2 | a word added to bash only (`_tshape_says`) | `box-settings-table` W1 |
+| W2-M2 | the server accepts a `why` outside the set | `box-settings-read` "a refused why outside the closed set", and the corpus and lane rows for `malformed--v2-why-outside-set.json` |
+| W2-M3 | the verb writes `value` on a refused row | `ccrc-settings-verb` V4 (whole, nine named, wave 1), the `$HOME` row; `box-settings-read` "the corpus regenerates from the real verb" (the document parses `malformed`) |
+| W2-M4 | the parse accepts a value on a `presence` row | `box-settings-read` "a presence row carrying a value" and "carrying an empty value", and `malformed--v2-presence-with-value.json` (file and lane) |
+| W2-M5 | the server keeps a refused version-1 row's value | `box-settings-read` the frozen v1 corpus, "parses with no value and the server's own sentence", "no raw text survives", the lane row, the `GET /api/updates` row |
+| W2-M6 | the verb reads a test-box host key through `_tb_load` | `ccrc-settings-verb` V4 (whole and the `CCRC_TESTBOX_GIT_KEY` row), V5 (NUL, mode 000, hidden libraries), V9 (both rows) |
+| W2-M7 | `_tshape`'s CPU and I/O weight bound 10000 to 10001 | `ccrc-test-wrapper` "CCRC_TEST_SLICE_CPU_WEIGHT=10001 is not its shape" and "IO_WEIGHT=10001 warns with exactly its words" (the two rows red beyond the 16 environmental ones); `ccrc-settings-carveouts` stays green (no row pins that bound) |
+| W2-M8 | a library check changed in `ccd/ccrc`, not regenerated | `ccrc-settings-lib` W29-L1 and W29-L5 |
+| W2-M9 | the 240 why cut skipped (cut at 2000) | `ccrc-settings-verb` V7 and V6 "a reader sentence over 240 bytes" |
+| W2-M10 | `_set_fits` always passes | `ccrc-settings-verb` V6 (four rows); `box-settings-table` E2 |
+| W2-M11 | a family with a refused row folds | `box-settings-card` F4, F5, S4 |
+| W2-M11 | a `button` in place of `summary` | `box-settings-card` A1, F1, F3, F4, F5, R2, S4 and "renders no button and no input" |
+| W2-M12 | a server-role node renders the 54 fleet rows | `box-settings-card` S1, S3 |
+| W2-M13 | the redacted scheme's http(s) test dropped | `ccrc-settings-verb` the `_upd_url_origin` rc-1 row and the `user:pw@ftp://...` and `tok@ftp://...` rows |
+| W2-M14 | `_set_check` folds rc 2 into 1 | `box-settings-table` C (four hidden-library rows), `ccrc-settings-verb` V5 (hidden libraries), `ccrc-doctor-codex` W2-D9 |
+| W2-M15 | `_set_lines` takes the fourth field as a why | `ccrc-settings-verb` V11 (the graph store and the test-runs rows) |
+| W2-M16 | `rowOfV1` forwards an `ok` value outside the envelope | `box-settings-read` the seven version-1 unfit rows, the lane row |
+| W2-M17 | doctor skips `_set_fits` | `ccrc-doctor-codex` W2-D11 |
+| W2-M18 | `_set_fits` admits any lowercase word on a `testbox` key | `box-settings-table` E2; `box-settings-read` "the writer and the server agree on the envelope, entry by entry" |
+
+A first try of W2-M15 broke the file's syntax (96 rows red for that reason), so it was redone as a clean mutation. The
+wrapper baseline for W2-M7 was measured on the unmutated file: 16 red rows, all environmental.
+
+### Corrections of plan claims the build measured differently
+
+- **M10's attribution.** The plan said the emitted-key row catches the restored `BOX_SETTINGS_KEYS` literal. It cannot (that row reads the table, not the loop); V1's no-literal assertion and the corpus row catch it.
+- **F1's family order.** The card's order is L0's first-appearance order: Updates, Session slice, Test runs, Graph, Keepalive, Usage sweep, Test box, Carry copies; the plan's list put Test box before Keepalive.
+- **W2-D7's own-mask case.** With the redactor made an identity, the userinfo base prints `custom` alone, not `custom https://mirror.example`; the origin's own `@` test refuses it.
+- **Task 3's growth estimate.** The plan expected about +140; Task 3 measured +209 (+200 at first, +9 in the fix round).
+- **Task 4's extra M12 rows.** The plan's rows did not kill the omit-class mutant (an `ok` omit row is refused by the class check anyway); two forgery rows were added (an unmeasured and a refused row of an omit key in a real row's place), both red.
+- **V7's quote premise.** Task 5 first measured 27438 bytes on a `a\` input and wrote that a run of quotes is dropped; that was a shell quoting accident. The worst why is 3000 `"` characters, and the largest document is 35177 bytes, under the cap.
+- Smaller: the plan's `9000` needle in V3 sits inside `900000` (the row uses `invalid:9000`); the bash-only table mutants are red in T2 and CONTROL, where T3 and T5 read L0 only until Task 3's fix round widened them to the bash rows too.
+
+### Later (the plan's list, unchanged, and what the build added)
+
+Unchanged from the plan:
+- `_tshape`'s `[0-9]`/`[1-9]` ranges: enumerating them changes behaviour under a locale, so they move verbatim (ruling; Task 2 Step 1).
+- Closing an `unmeasured` row's `why` as line-number templates, so the server can check it rather than only bound it (D-7913; review L9).
+- Doctor's graph check relays `GK_WARN`, which quotes a refused value (spec 5.6).
+- Whether a private release mirror should show its host (D19).
+- Reading the installed slice and graph-unit values rather than the configured ones (spec 5.7).
+- The test box's own 28 settings, shown from the test box itself, if it ever reports to the console.
+- From the spec's earlier list, still deferred: editing a setting from the console; a macOS snapshot; a push when a setting turns `refused`; a `reason` token vocabulary held set-equal to the bash literals; doctor reading the timer's cadence from its unit file (ARCH-69).
+
+Added by the build:
+- The rc 2 WARN from doctor's box-settings check when a library failed to load carries the generic plain-line remedy, not one for the library.
+- The L0 origin shape admits a schemeless host, so a token pasted as `CCRC_RELEASE_BASE_URL` could show as `custom <token>` unless `_upd_redact` catches it. The comment in `boxSettings.ts` that the shapes "prove no value can carry a credential" claims more than the origin shape proves.
+- The human form of `ccrc settings` cuts an unmeasured why at 480 while the JSON record cuts at 240.
+- V10's keepalive, usage and carry rows re-run the verb's own literal read, not each consumer's.
