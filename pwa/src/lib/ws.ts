@@ -2,7 +2,14 @@
 // exponential backoff (+jitter), recomputes the URL on every attempt so a
 // fresh `?since=<uuid>:<offset>` rides along, and exposes `nudge()` for
 // callers to wire to `visibilitychange`→visible / `online` events.
+//
+// THE WATCHDOG (console speed, task C1 "the link and the start"; spec 2026-11-04 §2.3). A socket the network has
+// silently dropped can sit "open" for minutes with nothing arriving. Each socket notes when its last message came;
+// the server's first `beat` frame arms a silence bound, a socket that never opens is given up, and `nudge()` on
+// becoming visible replaces a socket that has heard nothing for a while. What to do is `lib/socketWatch.ts`'s pure
+// `nextWatchStep`; this class only keeps the state and the timer.
 import { checkAuth, isAuthLost, onAuthRegained } from './auth';
+import { WATCH_CHECK_MS, isBeatFrame, nextWatchStep, staleOnVisible, type WatchPhase } from './socketWatch';
 
 export type SocketState = 'connecting' | 'open' | 'down';
 
@@ -51,6 +58,9 @@ export interface ReconnectingSocketOpts {
   baseDelayMs?: number; // default 500, doubles to max 10s, ±30% jitter
   /** The session gate. Defaults to the shipped signal; injectable for tests. */
   auth?: AuthGate;
+  /** `false`: no watchdog. Never closed for silence or a slow connect, and `nudge()` acts only while down, as before
+   *  the watchdog. For tests, and for a socket that must never be closed by silence. */
+  watch?: false;
 }
 
 const MAX_DELAY_MS = 10_000;
@@ -77,6 +87,11 @@ export class ReconnectingSocket {
    *  must not cost a probe. */
   private opened = false;
   private unsubAuth: (() => void) | null = null;
+  /** The watchdog's state for the CURRENT socket (`lib/socketWatch.ts`'s `WatchState`), reset on every attempt. */
+  private phase: WatchPhase = 'connecting';
+  private phaseSince = 0;
+  private lastMessageAt: number | null = null;
+  private watchTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(o: ReconnectingSocketOpts) {
     this.opts = o;
@@ -99,6 +114,7 @@ export class ReconnectingSocket {
     this.unsubAuth?.();
     this.unsubAuth = null;
     this.clearTimer();
+    this.clearWatch();
     if (this.ws) {
       const ws = this.ws;
       this.ws = null;
@@ -132,9 +148,18 @@ export class ReconnectingSocket {
     }
   }
 
-  /** Immediate reconnect if down (skips any pending backoff wait). */
+  /** Immediate reconnect if down (skips any pending backoff wait). Wired to the page becoming visible and coming back
+   *  online, so it also replaces an OPEN socket that has heard nothing for `SILENCE_MS` (the watchdog): a phone that
+   *  slept may hold a socket the network dropped long ago. A connecting socket is left to its connect limit. */
   nudge(): void {
-    if (this.stopped || this.ws) return; // inert unless started and down
+    if (this.stopped) return; // inert unless started
+    const ws = this.ws;
+    if (ws !== null) {
+      // An open socket that has heard nothing yet is measured from its open.
+      if (this.opts.watch === false || this.phase === 'connecting') return;
+      if (!staleOnVisible(this.lastMessageAt ?? this.phaseSince, Date.now())) return;
+      this.handleDown(ws);
+    }
     this.clearTimer();
     this.attempt = 0; // fresh network conditions — restart the backoff ladder
     this.connect();
@@ -161,10 +186,14 @@ export class ReconnectingSocket {
       return;
     }
     this.ws = ws;
+    this.enterPhase('connecting');
+    this.lastMessageAt = null;
+    this.startWatch(ws);
     ws.onopen = () => {
       if (this.ws !== ws) return;
       this.attempt = 0;
       this.opened = true;
+      this.enterPhase('open');
       this.setState('open');
       this.opts.onOpen?.();
     };
@@ -177,6 +206,12 @@ export class ReconnectingSocket {
       } catch {
         return; // malformed frames dropped silently
       }
+      // ANY message proves the link is live, so any message resets the silence, not only a beat.
+      this.lastMessageAt = Date.now();
+      if (isBeatFrame(parsed)) {
+        if (this.phase === 'open') this.enterPhase('armed');
+        return; // the transport's own frame: no store reads it
+      }
       this.opts.onMessage(parsed);
     };
     ws.onclose = () => this.handleDown(ws);
@@ -187,6 +222,7 @@ export class ReconnectingSocket {
   private handleDown(ws: WebSocket): void {
     if (this.ws !== ws) return; // stale socket (already replaced or stopped)
     this.ws = null;
+    this.clearWatch();
     this.detach(ws);
     try {
       ws.close(); // error path: make sure the browser tears it down
@@ -220,6 +256,31 @@ export class ReconnectingSocket {
       this.timer = null;
       this.connect();
     }, jittered);
+  }
+
+  private enterPhase(p: WatchPhase): void {
+    this.phase = p;
+    this.phaseSince = Date.now();
+  }
+
+  /** One check timer per socket, cleared when that socket goes down or the class stops. */
+  private startWatch(ws: WebSocket): void {
+    this.clearWatch();
+    if (this.opts.watch === false) return;
+    this.watchTimer = setInterval(() => {
+      if (this.ws !== ws) return;
+      const step = nextWatchStep(
+        { phase: this.phase, since: this.phaseSince, lastMessageAt: this.lastMessageAt }, Date.now());
+      // Both closes take the ordinary down path: a socket that never opened asks the auth gate, and the ladder retries.
+      if (step !== 'wait') this.handleDown(ws);
+    }, WATCH_CHECK_MS);
+  }
+
+  private clearWatch(): void {
+    if (this.watchTimer !== null) {
+      clearInterval(this.watchTimer);
+      this.watchTimer = null;
+    }
   }
 
   private setState(s: SocketState): void {
