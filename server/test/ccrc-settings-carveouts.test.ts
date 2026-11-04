@@ -303,3 +303,13 @@ describe('_tshape and _tshape_says live in ccd/ccrc (D-7906)', () => {
     expect(sourced(h, '_tshape_says OTHER').stdout).toBe('a whole number from 1 to 10000\n');
   });
 });
+
+// ── W2: the session slice's words, by direct calls (D-7906) ────────────────────────────────────────────────────────────
+describe('_slice_limit_says prints the slice limit words, with no newline', () => {
+  it.each([
+    ['MemoryMax', 'a whole number with an optional K, M, G, T, P or E suffix, at least 1G, or a whole percentage from 1% to 100%'],
+    ['MemorySwapMax', 'a whole number with an optional K, M, G, T, P or E suffix, at least 1M, or 0'],
+  ])('%s', (dir, words) => {
+    expect(sourced(boxWith('ccrc-carve-sls-', null), '_slice_limit_says "$SL_DIR"', { SL_DIR: dir }).stdout).toBe(words);
+  });
+});

@@ -17280,6 +17280,15 @@ _slice_limit_ok() {   # <MemoryMax|MemorySwapMax> <value>
   [ "$sh" -ge "$floor" ] || [ "${BASH_REMATCH[1]}" -ge "$((1 << (floor - sh)))" ]
 }
 
+# _slice_limit_says <MemoryMax|MemorySwapMax> — the value shape `_slice_limit_ok` takes, in words, with no newline: the
+# one owner of the sentence `_slice_limit`'s WARN prints.
+_slice_limit_says() {
+  case "$1" in
+    MemoryMax) printf '%s' 'a whole number with an optional K, M, G, T, P or E suffix, at least 1G, or a whole percentage from 1% to 100%' ;;
+    *) printf '%s' 'a whole number with an optional K, M, G, T, P or E suffix, at least 1M, or 0' ;;
+  esac
+}
+
 # _slice_installed <dest> <directive> — print the value <dest>'s one `<directive>=` line carries, rc 0, when <dest> is a
 # readable regular file with exactly one such line and its value is one `_slice_limit_ok` takes; else print nothing, rc 1.
 # A drop-in this renderer would itself refuse is not a value to keep.
@@ -17294,13 +17303,12 @@ _slice_installed() {   # <dest> <MemoryMax|MemorySwapMax>
 # sets, else — when the value cannot be read or used — to the value installed at <dest> (`_slice_installed`), else
 # <default>, WARNing on stderr with the value it keeps and where that came from.
 _slice_limit() {   # <knob rc> <KEY> <directive> <default> <dest>
-  local which="the default" from="the environment" also=", or 0" floor="1M"
+  local which="the default" from="the environment"
   if [ "$1" -eq 0 ] && _slice_limit_ok "$3" "$KNOB"; then SLICE_LIMIT="$KNOB"; return 0; fi
   if SLICE_LIMIT="$(_slice_installed "$5" "$3")"; then which="the value installed at $5"; else SLICE_LIMIT="$4"; fi
   [ "$1" -eq 0 ] || { echo "$PROG: WARN: $KNOB_WHY — the session slice keeps $3=$SLICE_LIMIT ($which)" >&2; return 0; }
   [ "$KNOB_FROM" != file ] || from="~/${BOX_ENV_FILE#"$HOME/"}"
-  [ "$3" != MemoryMax ] || { also=", or a whole percentage from 1% to 100%"; floor="1G"; }
-  echo "$PROG: WARN: $2='$KNOB' (from $from) is not a size the session slice takes for $3 (a whole number with an optional K, M, G, T, P or E suffix, at least $floor$also) — the session slice keeps $3=$SLICE_LIMIT ($which)" >&2
+  echo "$PROG: WARN: $2='$KNOB' (from $from) is not a size the session slice takes for $3 ($(_slice_limit_says "$3")) — the session slice keeps $3=$SLICE_LIMIT ($which)" >&2
 }
 
 # _inst_slice_limits <template> <dest> — render the slice drop-in from <template> with the two values substituted, into
