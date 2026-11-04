@@ -62,6 +62,9 @@ export class RenderBoundary extends Component<RenderBoundaryProps, RenderBoundar
 
   componentDidCatch(error: unknown): void {
     console.warn('ccrc: render error in ' + this.props.where, error);
+    // A lazy screen's failed load is forgotten only now that the fallback is drawn, so the next reset asks once more
+    // (`lib/lazyScreen.ts`; review 1473 F2).
+    if (error instanceof ScreenLoadError) error.forget();
   }
 
   render(): ReactNode {
