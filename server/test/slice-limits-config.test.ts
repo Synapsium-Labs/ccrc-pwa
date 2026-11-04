@@ -257,8 +257,12 @@ describe('_inst_slice_limits renders the template from the box\'s config (D-7296
   it('the defaults it reads with are the template\'s own values, so unset renders the template', () => {
     const code = readFileSync(CCRC, 'utf8').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     const knob = (k: string): string[] => [...code.matchAll(new RegExp(`_ccrc_knob ${k} ([^\\s;]+)`, 'g'))].map((m) => m[1]!);
-    expect(knob('CCRC_SESSION_SLICE_MEMORY_MAX')).toEqual(['24G']);
-    expect(knob('CCRC_SESSION_SLICE_SWAP_MAX')).toEqual(['6G']);
+    // Every literal read takes the template's default: the installer's, and `ccrc settings`' own file-mode read of the
+    // same two keys (box settings wave 2, `cmd_settings`), which census C2 holds to one default per setting.
+    expect(knob('CCRC_SESSION_SLICE_MEMORY_MAX').length).toBeGreaterThan(0);
+    expect(new Set(knob('CCRC_SESSION_SLICE_MEMORY_MAX'))).toEqual(new Set(['24G']));
+    expect(knob('CCRC_SESSION_SLICE_SWAP_MAX').length).toBeGreaterThan(0);
+    expect(new Set(knob('CCRC_SESSION_SLICE_SWAP_MAX'))).toEqual(new Set(['6G']));
   });
 });
 
