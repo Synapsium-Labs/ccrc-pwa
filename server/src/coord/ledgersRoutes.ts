@@ -37,7 +37,7 @@ import type { CoordStore, ItemEventRow, ItemRow } from './store.js';
 import { itemMailSubject, tickMail } from './ledgersMail.js';
 import { OUTSTANDING_DELIVERY_STATES } from '../../../shared/api.js';
 import { insertSystemMailTx } from './rundefsTx.js';
-import { credentialBodyRoute, type AccountGate } from '../accounts/gate.js';
+import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
   OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
   removeOperatorSecret, sweepOperatorSecretTemps, writeOperatorSecret, type OperatorSecretMeta, type OperatorSecretState,
@@ -656,9 +656,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       if (slotChains.get(key) === chain) slotChains.delete(key);
     }
   };
-  /** `Cache-Control: no-store` on every answer of the two stored-secret doors, refusals included, from `onRequest`: the hook
-   *  the secret's PUT already takes (`credentialBodyRoute`, `accounts/gate.ts`), so no second spelling of it lives here. */
-  const noStore = credentialBodyRoute(SECRET_BODY_LIMIT).onRequest;
+  /** `Cache-Control: no-store` on every answer of the two stored-secret doors, refusals included, from `onRequest`: the
+   *  account gate's one spelling of it (`noStoreRoute`, `accounts/gate.ts`), which the secret's PUT takes too. */
+  const noStore = noStoreRoute.onRequest;
   const slotBusy = (reply: FastifyReply) =>
     refuseRoute(reply, LEDGER_ROUTE_REFUSALS.slotBusy, { detail: 'an earlier save or removal of this secret has not finished; nothing was done, try again' });
   const storedNotTicked = (reply: FastifyReply, id: number) =>
