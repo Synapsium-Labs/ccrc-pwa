@@ -13,9 +13,9 @@ const SCREEN = '.docs-screen:has(> .docs-compact)';
 const LEAF = `${SCREEN} > .docs-leaf:has(> .docs-reader)`;
 
 describe('the compact head in docs.css (the phone-header plan, refinements (d), (e), (f), (i), (k))', () => {
-  it('the screen gives the row the top: no padding above it and a 4 px gap under it; its sides and bottom as before', () => {
+  it('the screen gives the row the top: only the safe-area inset above it (0 outside an installed iOS app) and a 4 px gap under it; its sides and bottom as before', () => {
     const rule = ruleIn(docsCss, SCREEN);
-    expect(declValue(rule, 'padding-top')).toBe('0');
+    expect(declValue(rule, 'padding-top')).toBe('var(--safe-top)');
     expect(declValue(rule, 'gap')).toBe('var(--sp-1)');
     expect(declValue(rule, 'padding')).toBeNull();
     expect(declValue(ruleIn(docsCss, '.docs-screen'), 'padding')).toBe('var(--sp-2)');

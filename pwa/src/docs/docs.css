@@ -340,7 +340,7 @@
    the truth line and the link actions, closed until Page details opens it. While the tree slot is not `ok` the head is
    back and the crumbs (`.docs-compact-crumbs`), as the full header's is. The row is one tap tall with the picked
    mockup's 1 px divider inside that height (box-sizing is border-box everywhere, reset.css), so the row and the 4 px gap
-   under it are the console's whole part above the frame. The first line's draft badge sits beside its text, never
+   under it are the console's whole part above the frame (the screen pads its top for the status bar of an installed iOS app, `--safe-top`, 0 everywhere else). The first line's draft badge sits beside its text, never
    inside the part that ends in an ellipsis. That part is two spans, the parent crumb and the served ref, each cut at its
    own end, the crumb giving way first (a flex-shrink a thousand times the ref's), so a long parent directory never hides
    which ref is served; the ref's span holds the ` · ` separator, so it keeps its spaces (`white-space: pre`: a flex item
@@ -349,7 +349,7 @@
    there); an open `.docs-more` paints its own pressed ground and ink and is measured on it; the dot paints a status fill
    and sets no ink. A disabled icon is dimmed by opacity, registered in design/audit.mjs's OPACITY_REGISTRY beside the
    `.bell:disabled` fade it follows, because every docs rule that sets a colour is measured and none is exempt. — */
-.docs-screen:has(> .docs-compact) { padding-top: 0; gap: var(--sp-1); }
+.docs-screen:has(> .docs-compact) { padding-top: var(--safe-top); gap: var(--sp-1); }
 .docs-compact-bar {
   display: flex; align-items: center; min-width: 0;
   block-size: var(--tap-min);
