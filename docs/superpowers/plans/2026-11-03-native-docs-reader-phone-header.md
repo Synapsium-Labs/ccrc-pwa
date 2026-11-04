@@ -344,15 +344,25 @@ async function openView(view: View, tree = COMMITTED_TREE, leaf = NAME): Promise
 }
 
 /** A context at `view` with the leaf open and the reader up. Throws when the reader fell back to the plain view or never
- *  came up: the figure is about the reader page. */
+ *  came up: the figure is about the reader page. One re-open on a fallback, D-7958: the reader's start watchdog (2 s for a
+ *  small document) can pass on a loaded runner, so a `fallback` re-navigates the same page once, and says so on the
+ *  console; a second `fallback`, a timeout and every other outcome throw as before. */
 async function openLeaf(view: View): Promise<OpenedApp> {
   const app = await openView(view);
-  await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}`, { waitUntil: 'load' });
-  const up = await app.page.waitForFunction((note) => {
-    if ([...document.querySelectorAll('.doc-plain-note')].some((n) => n.textContent === note)) return 'fallback';
-    return document.querySelector('.docs-reader iframe') !== null && document.querySelector('.doc-formatting') === null ? 'ready' : null;
-  }, READER_FALLBACK_NOTE, { timeout: 90_000, polling: 100 });
-  const outcome = await up.jsonValue();
+  const url = `${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}`;
+  const start = async (): Promise<unknown> => {
+    await app.page.goto(url, { waitUntil: 'load' });
+    const up = await app.page.waitForFunction((note) => {
+      if ([...document.querySelectorAll('.doc-plain-note')].some((n) => n.textContent === note)) return 'fallback';
+      return document.querySelector('.docs-reader iframe') !== null && document.querySelector('.doc-formatting') === null ? 'ready' : null;
+    }, READER_FALLBACK_NOTE, { timeout: 90_000, polling: 100 });
+    return up.jsonValue();
+  };
+  let outcome = await start();
+  if (outcome === 'fallback') {
+    console.warn(`PHH-RETRY ${view.skin} ${view.width}x${view.height}: the reader's start watchdog fell back; opening the leaf once more (D-7958)`);
+    outcome = await start();
+  }
   if (outcome !== 'ready') throw new Error(`the reader did not come up: ${String(outcome)}`);
   return app;
 }
