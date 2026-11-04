@@ -39,13 +39,16 @@
  *
  * This module is the one reader and writer of `secret_fingerprints`, and the table is never served. The server never
  * holds a lane secret. It does hold the operator's pasted secrets (plan PL6, `coord/ledgersSecrets.ts`): `ingestSecret`
- * fingerprints one of them here, and their lanes (`operator-secret:<programme>:<slot>`) are kept through a roster reload
- * by `reloadRoster`'s `keep` and re-keyed after a rotation by the re-key's answer (`withOperatorSecretRows`).
+ * fingerprints one of them here. Their lanes (`operator-secret:<programme>:<slot>`) are this server's own: `retain` never
+ * prunes one (review 1389 F1), a box's roster answer never names one (`offer` drops any it carries, review 1391 A-1), and
+ * the re-key after a rotation carries them (`withOperatorSecretRows`) without ever replacing a row a save wrote meanwhile
+ * (review 1391 F1). The operator's Remove (programme item 9) retires a lane: its rows leave the table and are kept in this
+ * process's memory only, so the removed value is masked until the server restarts and never reloaded after.
  */
 import { createHash, createHmac, type Hash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { SECRET_MASK, SECRET_MASK_TOO_LARGE } from '../../../shared/api.js';
-import { OPERATOR_SECRET_LANE_PREFIX, type SecretUnmasked } from '../../../shared/ledgers.js';
+import { isOperatorSecretLane, type SecretUnmasked } from '../../../shared/ledgers.js';
 import {
   RUN_MAX_BYTES, RUN_MIN_BYTES, ROW_END, ROW_INDENT, SHAPE_STARTED, SHAPES, TOKEN_RUN, leadingRun, matchesShape, origin,
   rowTextEnd, shapeSpans, spanIn, spliceMasked, viewOf, walkStrings, type View,
@@ -278,8 +281,15 @@ export class SecretMasker {
   private readonly log: (line: string) => void;
   /** Current generation first; then every previous one whose rows are still held (D-5995). */
   private keys: Key[] = [];
-  /** gen → fingerprints and byte lengths, mirrored from the table. */
+  /** gen → fingerprints and byte lengths, mirrored from the table, with the retired rows (`retireSecret`) merged in. */
   private rows = new Map<string, GenRows>();
+  /** The generations the TABLE holds rows of (the re-key's concern: a retired row is never re-keyed). */
+  private tableGens = new Set<string>();
+  /** The rows of lanes the operator removed (`retireSecret`), in memory only: they go on matching for the life of this
+   *  process, and a restart forgets them, because the table no longer holds them and the slot file is gone. */
+  private retired = new Map<string, GenRows>();
+  /** The lanes retired in this process: the re-key never writes one back (a re-key that read the slot before its removal). */
+  private retiredLanes = new Set<string>();
   private rekeyTimer: ReturnType<typeof setTimeout> | null = null;
   private rekeyInFlight = false;
   private rekeyDelay = REKEY_FIRST_MS;
@@ -302,21 +312,27 @@ export class SecretMasker {
   private load(): void {
     this.epoch++;
     this.rows = new Map();
+    this.tableGens = new Set();
+    const add = (gen: string, fp: string, len: number): void => {
+      let g = this.rows.get(gen);
+      if (g === undefined) this.rows.set(gen, (g = { fps: new Set(), lens: new Set() }));
+      g.fps.add(fp);
+      g.lens.add(len);
+    };
+    for (const [gen, g] of this.retired) for (const fp of g.fps) for (const len of g.lens) add(gen, fp, len);
     if (this.db === null) return;
     const all = this.db.prepare('SELECT fp, gen, len FROM secret_fingerprints').all() as unknown as
       (FingerprintRow & { len: number })[];
     for (const r of all) {
-      let g = this.rows.get(r.gen);
-      if (g === undefined) this.rows.set(r.gen, (g = { fps: new Set(), lens: new Set() }));
-      g.fps.add(r.fp);
-      g.lens.add(r.len);
+      add(r.gen, r.fp, r.len);
+      this.tableGens.add(r.gen);
     }
   }
 
-  /** Rows of a generation other than the current one are held. */
+  /** Rows of a generation other than the current one are held in the table (a retired row is never re-keyed). */
   private staleRows(): boolean {
     const cur = this.keys[0]?.gen;
-    return cur !== undefined && [...this.rows.keys()].some((g) => g !== cur);
+    return cur !== undefined && [...this.tableGens].some((g) => g !== cur);
   }
 
   /** Follows the box token. A change keeps every previous token whose rows are held (memory only) and asks for the
@@ -354,7 +370,7 @@ export class SecretMasker {
     const settle = (a: FingerprintAnswer | null): void => {
       this.rekeyInFlight = false;
       let landed = false;
-      try { landed = a !== null && this.ingest(a); } catch { landed = false; }
+      try { landed = a !== null && this.ingest(a, { rekey: true }); } catch { landed = false; }
       if (landed && !this.staleRows()) { this.rekeyDelay = REKEY_FIRST_MS; return; }
       this.log(`[mask] the re-key for generation ${this.keys[0]?.gen ?? '-'} has not landed; retrying`);
       this.scheduleRekey(false);
@@ -382,8 +398,14 @@ export class SecretMasker {
    *  nothing (D-5995). Each lane the answer NAMES has every row of every generation replaced by the answer's; a lane
    *  it does not name keeps its rows, and the previous token that keys them is kept while they last, so a re-key
    *  answered without one lane (its secret file unreadable at that moment) never unmasks that lane's key (D-5995 (10),
-   *  D-6057 (2)). True: it landed. Throws when coord.db stays locked past `INGEST_BUSY_MS`. */
-  ingest(answer: FingerprintAnswer): boolean {
+   *  D-6057 (2)). True: it landed. Throws when coord.db stays locked past `INGEST_BUSY_MS`.
+   *
+   *  `rekey` (the re-key's answer, review 1391 F1): an operator-secret lane is only FILLED, never replaced. Its row is left as
+   *  it is when the table already holds one of the current generation (a save under the current token wrote it, and the
+   *  re-key read the slot before that save's value was in place), and the lane is skipped when the operator removed it in
+   *  this process. Decided inside the write's own transaction, so a save landing before or after the re-key ends the same:
+   *  the slot's row is the save's. A roster lane is replaced as before. */
+  ingest(answer: FingerprintAnswer, o: { rekey?: boolean } = {}): boolean {
     this.syncKeys();
     const cur = this.keys[0];
     if (cur === undefined || this.db === null || answer.gen !== cur.gen) return false;
@@ -391,8 +413,16 @@ export class SecretMasker {
     this.write((db) => {
       const del = db.prepare('DELETE FROM secret_fingerprints WHERE laneId = ?');
       const ins = db.prepare('INSERT OR REPLACE INTO secret_fingerprints (laneId, fp, gen, len, at) VALUES (?, ?, ?, ?, ?)');
-      for (const lane of new Set(answer.rows.map((r) => r.laneId))) del.run(lane);
-      for (const r of answer.rows) if (validRow(r)) ins.run(r.laneId, r.fp, cur.gen, r.len, at);
+      const current = db.prepare('SELECT 1 AS x FROM secret_fingerprints WHERE laneId = ? AND gen = ? LIMIT 1');
+      const skip = new Set<string>();
+      for (const lane of new Set(answer.rows.map((r) => r.laneId))) {
+        if (o.rekey === true && isOperatorSecretLane(lane) && (this.retiredLanes.has(lane) || current.get(lane, cur.gen) !== undefined)) {
+          skip.add(lane);
+          continue;
+        }
+        del.run(lane);
+      }
+      for (const r of answer.rows) if (!skip.has(r.laneId) && validRow(r)) ins.run(r.laneId, r.fp, cur.gen, r.len, at);
     });
     return true;
   }
@@ -401,8 +431,14 @@ export class SecretMasker {
    * Registers ONE secret this server holds itself (an operator-secret slot, plan PL6; spec §5), fingerprinted here under the
    * CURRENT box token and written through `ingest`, the table's one writer. It answers what happened, never a silent skip
    * (Review Focus 2): `masked`, or why not: the unpadded value is under `RUN_MIN_BYTES` (`too-short`) or over
-   * `RUN_MAX_BYTES` (`too-long`), or there is no token, no table or the table stayed busy (`unregistered`). Never throws,
-   * and the value is never logged or kept: only its HMAC and byte length are stored.
+   * `RUN_MAX_BYTES` (`too-long`), or there is no token, no table or the table stayed busy (`unregistered`), or the row landed
+   * but the egress search cannot produce the value as one candidate (`not-one-run`, review 1391 F2). Never throws, and the
+   * value is never logged or kept: only its HMAC and byte length are stored.
+   *
+   * `masked` IS MEASURED, not decided on byte length: once the row has landed, the value standing alone is searched exactly
+   * as outgoing text is (`fingerprintSpans`, this file's one search), and `masked` means that search caught the whole value.
+   * A value with a space, `:`, `=`, `,` or another delimiter the search splits on inside it, or before it, is never one
+   * candidate in any text, so it answers `not-one-run`. Its row stays: it is harmless, and a re-save replaces it.
    */
   ingestSecret(laneId: string, secret: string): 'masked' | SecretUnmasked {
     this.syncKeys();
@@ -411,11 +447,56 @@ export class SecretMasker {
     if (row.len < RUN_MIN_BYTES) return 'too-short';
     if (row.len > RUN_MAX_BYTES) return 'too-long';
     if (cur === undefined || this.db === null) return 'unregistered';
+    this.retiredLanes.delete(laneId);
+    this.held?.drop.delete(laneId);
     try {
-      return this.ingest({ gen: cur.gen, rows: [row] }) ? 'masked' : 'unregistered';
+      if (!this.ingest({ gen: cur.gen, rows: [row] })) return 'unregistered';
     } catch {
       return 'unregistered';
     }
+    return this.catchesWhole(secret) ? 'masked' : 'not-one-run';
+  }
+
+  /** Whether the egress search, run over `secret` standing alone, masks the whole of it (its trailing `=` aside, as the
+   *  fingerprint sets it aside): the measurement behind `ingestSecret`'s `masked`. */
+  private catchesWhole(secret: string): boolean {
+    const bare = secret.replace(/=+$/, '').length;
+    try {
+      return this.fingerprintSpans(secret, false, newBudget()).spans.some(([a, b]) => a === 0 && b === bare);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * RETIRES one operator-secret lane (the operator's Remove, programme item 9): its rows leave the table and are kept in this
+   * process's memory only, so the removed value is still masked until the server restarts, and nothing reloads it after,
+   * because the table no longer holds it and the slot file is gone. The re-key never writes the lane back in this process
+   * (`ingest`'s `rekey`). A retired row keyed with a previous token matches while that token is kept (`MAX_PREVIOUS_KEYS`).
+   * The table's delete is held and retried, as a roster offer is, when coord.db is busy. Never throws; a lane that is not
+   * an operator-secret lane is refused (false), so the roster's rows are never touched from here.
+   */
+  retireSecret(laneId: string): boolean {
+    if (!isOperatorSecretLane(laneId)) return false;
+    this.retiredLanes.add(laneId);
+    if (this.db === null) return true;
+    try {
+      const rows = this.db.prepare('SELECT fp, gen, len FROM secret_fingerprints WHERE laneId = ?').all(laneId) as unknown as
+        (FingerprintRow & { len: number })[];
+      for (const r of rows) {
+        let g = this.retired.get(r.gen);
+        if (g === undefined) this.retired.set(r.gen, (g = { fps: new Set(), lens: new Set() }));
+        g.fps.add(r.fp);
+        g.lens.add(r.len);
+      }
+    } catch {
+      // The rows could not be read: the table keeps them (they mask the value, the safe side), and the delete below still runs.
+    }
+    this.load();
+    const held = this.held;
+    this.held = { answer: held?.answer ?? null, keep: held?.keep ?? null, drop: new Set([...(held?.drop ?? []), laneId]) };
+    if (this.heldTimer === null) this.flushHeld();
+    return true;
   }
 
   /** Deletes every row of every lane outside `keep` (a lane the roster no longer has, or one whose entry holds no
@@ -424,11 +505,11 @@ export class SecretMasker {
    *  NEVER an operator-secret lane (`OPERATOR_SECRET_LANE_PREFIX`, plan PL6; review 1389 F1). Those rows are this server's
    *  own (`ingestSecret`), not the roster's, so the roster's keep set cannot speak for them: a keep set computed while the
    *  store could not be listed, or held across a save, would otherwise delete a live slot's row and unmask it. Nothing in
-   *  ccrc removes a slot, so no operator-secret row is ever pruned; `ingest` still replaces one when its lane is named. */
+   *  ccrc's own prune is the operator's Remove (`retireSecret`), never this; `ingest` still replaces one when its lane is named. */
   retain(keep: ReadonlySet<string>): void {
     if (this.db === null) return;
     const lanes = (this.db.prepare('SELECT DISTINCT laneId FROM secret_fingerprints').all() as unknown as { laneId: string }[])
-      .map((r) => r.laneId).filter((l) => !keep.has(l) && !l.startsWith(OPERATOR_SECRET_LANE_PREFIX));
+      .map((r) => r.laneId).filter((l) => !keep.has(l) && !isOperatorSecretLane(l));
     if (lanes.length === 0) return;
     this.write((db) => {
       const del = db.prepare('DELETE FROM secret_fingerprints WHERE laneId = ?');
@@ -442,14 +523,20 @@ export class SecretMasker {
    * that finds the database locked is held (the latest offer replaces an older held one, whose prune it subsumes and
    * whose fingerprints it carries forward when it names none) and retried on an unref'd timer with the re-key's
    * backoff until it lands. Never throws.
+   *
+   * An operator-secret lane in `answer` is DROPPED (review 1391 A-1): those rows are this server's own, so a box's roster
+   * answer that names one can never replace a slot's row.
    */
   offer(answer: FingerprintAnswer | null, keep: ReadonlySet<string>): void {
     const held = this.held;
-    this.held = { answer: answer ?? held?.answer ?? null, keep };
+    const own = answer === null ? null : { gen: answer.gen, rows: answer.rows.filter((r) => !isOperatorSecretLane(r.laneId)) };
+    this.held = { answer: own ?? held?.answer ?? null, keep, drop: held?.drop ?? new Set() };
     if (this.heldTimer === null) this.flushHeld();
   }
 
-  private held: { answer: FingerprintAnswer | null; keep: ReadonlySet<string> } | null = null;
+  /** What is waiting to be written: a roster answer, its prune (`keep`, null when only a retire is waiting) and the lanes the
+   *  operator removed (`drop`). */
+  private held: { answer: FingerprintAnswer | null; keep: ReadonlySet<string> | null; drop: Set<string> } | null = null;
   private heldTimer: ReturnType<typeof setTimeout> | null = null;
   private heldDelay = REKEY_FIRST_MS;
 
@@ -458,7 +545,13 @@ export class SecretMasker {
     if (h === null) return;
     try {
       if (h.answer !== null) this.ingest(h.answer);
-      this.retain(h.keep);
+      if (h.keep !== null) this.retain(h.keep);
+      if (h.drop.size > 0) {
+        this.write((db) => {
+          const del = db.prepare('DELETE FROM secret_fingerprints WHERE laneId = ?');
+          for (const l of h.drop) del.run(l);
+        });
+      }
       this.held = null;
       this.heldDelay = REKEY_FIRST_MS;
     } catch {

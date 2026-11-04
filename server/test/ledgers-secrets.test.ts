@@ -7,6 +7,10 @@
 // (the slot's metadata included; only the slot's value file may hold it), every route response the flow made and the reads
 // that carry item, mail, feed and ledger text, every frame the socket received (the `waiting` frame among them), and
 // everything written to the console. Zero hits. A write this task adds is added to the scan.
+//
+// THE SCAN IS BLIND TO THE MASKER IT CHECKS (review 1391 F4): its rigs pass the server an egress that masks nothing by
+// fingerprint (`egress: 'blind'`), while the save still registers the value with the real masker. So an echo of the value in
+// any answer, frame or line reaches the scan as it was written, and is a hit, whatever the masker would have done.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, lstatSync, mkdirSync, promises as fsp, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -19,18 +23,22 @@ import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
-import { SecretMasker, fingerprintGeneration, fingerprintRow } from '../src/accounts/mask.js';
+import { SecretMasker, fingerprintGeneration, fingerprintOf, fingerprintRow, type FingerprintAnswer } from '../src/accounts/mask.js';
 import { loadConfig, reloadRoster } from '../src/config.js';
 import {
   OPERATOR_SECRETS_DIR, OperatorSecretBadSlot, operatorSecretLaneId, operatorSecretPath, operatorSecretRows, readOperatorSecretMeta,
-  withOperatorSecretRows, writeOperatorSecret,
+  readStoredSecrets, removeOperatorSecret, withOperatorSecretRows, writeOperatorSecret,
 } from '../src/coord/ledgersSecrets.js';
+import { SECRET_BODY_LIMIT, registerLedgerOperatorRoutes } from '../src/coord/ledgersRoutes.js';
+import Fastify from 'fastify';
 import { RUN_MIN_BYTES } from '../src/accounts/shapes.js';
 import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
 import { DEFAULT_TEST_ROSTER, seedRoster, testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { SECRET_MASK, type FleetMsg } from '../../shared/api.js';
-import { SECRET_TAIL_MIN, SECRET_VALUE_MAX, secretAnswer, secretTailOf, type ItemView } from '../../shared/ledgers.js';
+import {
+  SECRET_TAIL_MIN, SECRET_VALUE_MAX, secretAnswer, secretTailOf, type ItemView, type StoredSecretsAnswer,
+} from '../../shared/ledgers.js';
 import { LEDGER_ROUTE_REFUSALS, REFUSAL_STATUS } from '../../shared/refusal.js';
 
 const FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
@@ -61,12 +69,31 @@ interface Rig {
   token: { value: string };
   /** Every response this rig's `send` made, for the leak scan. */
   answers: string[];
-  send: (o: { method: 'GET' | 'PUT' | 'POST'; url: string; payload?: unknown; headers?: Record<string, string>; raw?: string }) => Promise<LightMyRequestResponse>;
+  send: (o: { method: 'GET' | 'PUT' | 'POST' | 'DELETE'; url: string; payload?: unknown; headers?: Record<string, string>; raw?: string }) => Promise<LightMyRequestResponse>;
   stepUp: () => Promise<void>;
 }
 
-/** An ARMED server: sign-in on, a loopback origin, a session from the passphrase login. `stepUp` takes the passphrase step. */
-async function rig(o: { armed?: boolean; origin?: string; masker?: boolean } = {}): Promise<Rig> {
+/** The egress methods a blind rig answers from a masker that holds no fingerprint (shapes only): everything the server SENDS. */
+const EGRESS = new Set(['maskText', 'maskTextSliced', 'maskDeep', 'maskWithCarry', 'drawer', 'version', 'fingerprintMax']);
+/** The real masker for every registration (`ingestSecret`, `retireSecret`, `ingest`, …), and a blind one for every egress. */
+function blindEgress(real: SecretMasker): SecretMasker {
+  const blind = new SecretMasker({});
+  maskers.push(blind);
+  return new Proxy(real, {
+    get(target, prop) {
+      const src = typeof prop === 'string' && EGRESS.has(prop) ? blind : target;
+      const v = Reflect.get(src, prop, src) as unknown;
+      return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(src) : v;
+    },
+  });
+}
+
+/** An ARMED server: sign-in on, a loopback origin, a session from the passphrase login. `stepUp` takes the passphrase step.
+ *  `egress: 'blind'` gives the server an egress that masks no fingerprint (the leak scan's rigs, review 1391 F4);
+ *  `requestRekey` is the masker's re-key request (a rotation's race, review 1391 F1). */
+async function rig(o: {
+  armed?: boolean; origin?: string; masker?: boolean; egress?: 'blind'; requestRekey?: () => Promise<FingerprintAnswer | null>;
+} = {}): Promise<Rig> {
   const home = mkTmp('ccrc-ledgers-secrets-');
   seedRow(home, 'lane-a');
   const ccrcDir = path.join(home, '.ccrc');
@@ -74,12 +101,12 @@ async function rig(o: { armed?: boolean; origin?: string; masker?: boolean } = {
   writeFileSync(path.join(ccrcDir, 'auth.scrypt'), `${await hashLine(PASSPHRASE, FAST_PARAMS, 1)}\n`, { mode: 0o600 });
   const coord = new CoordStore(openCoordDb(path.join(ccrcDir, 'coord.db')));
   const token = { value: ID_GATE_TOKEN };
-  const masker = new SecretMasker({ db: coord.db, token: () => token.value });
+  const masker = new SecretMasker({ db: coord.db, token: () => token.value, ...(o.requestRekey ? { requestRekey: o.requestRekey } : {}) });
   maskers.push(masker);
   const base = testDeps(home, recorder().run);
   const armed = o.armed ?? true;
   const deps: Deps = {
-    ...base, coord, mailToken: ID_GATE_TOKEN, ...(o.masker === false ? {} : { masker }),
+    ...base, coord, mailToken: ID_GATE_TOKEN, ...(o.masker === false ? {} : { masker: o.egress === 'blind' ? blindEgress(masker) : masker }),
     cfg: { ...base.cfg, authEnabled: armed, cookieSecure: false, rpId: 'localhost', origin: o.origin ?? ORIGIN },
   };
   app = await buildServer(deps, new Bus());
@@ -214,7 +241,7 @@ async function rekey(r: Rig): Promise<void> {
 describe('the leak scan (plan PL6 Step 1, spec §5: no secret value anywhere but its protected file)', () => {
   it('the leak scan: a saved SECRET-MARK value appears in no table, no other file, no response, no frame and no console line', async () => {
     const out = captureConsole();
-    const r = await rig();
+    const r = await rig({ egress: 'blind' });
     const value = mark();
     const id = raiseSecret(r);
     const sock = listen(r);
@@ -225,8 +252,15 @@ describe('the leak scan (plan PL6 Step 1, spec §5: no secret value anywhere but
     expect(body(noStep)['error']).toBe('step-up-required');
     await r.stepUp();
     expect(body(await r.send({ method: 'PUT', url: `/api/items/${id}/secret`, raw: `{"value":"${value}` })).error).toBe('bad-request');
-    expect(body(await r.send({ method: 'PUT', url: `/api/items/${id}/secret`, raw: JSON.stringify({ value: value.repeat(800) }) })).error).toBe('oversize');
+    expect(body(await r.send({ method: 'PUT', url: `/api/items/${id}/secret`, raw: JSON.stringify({ value: value.repeat(Math.ceil(SECRET_BODY_LIMIT / value.length) + 1) }) })).error).toBe('oversize');
     expect(body(await save(r, id, `${value}${'x'.repeat(SECRET_VALUE_MAX)}`)).error).toBe('bad-request');
+    // One line (the operator's ruling on programme item 8): a value with a line break is refused before any write.
+    for (const broken of [`${value}\n`, `${value}\rx`, `x\r\n${value}`]) {
+      const res = await save(r, id, broken);
+      expect(res.statusCode).toBe(REFUSAL_STATUS[LEDGER_ROUTE_REFUSALS.secretNotOneLine]);
+      expect(body(res).error).toBe(LEDGER_ROUTE_REFUSALS.secretNotOneLine);
+    }
+    expect(existsSync(secretDir(r)), 'nothing was written for a refused value').toBe(false);
     expect(body(await r.send({ method: 'POST', url: `/api/items/${id}/tick`, payload: { answer: value } })).error).toBe(LEDGER_ROUTE_REFUSALS.useSecretRoute);
 
     // The save.
@@ -255,6 +289,12 @@ describe('the leak scan (plan PL6 Step 1, spec §5: no secret value anywhere but
     const list = await r.send({ method: 'GET', url: '/api/programmes/prog-a/items?byId=lane-a&byUuid=u-lane-a', headers: TOKEN_HEADERS });
     expect(list.statusCode, list.body).toBe(200);
     expect((body(list)['items'] as ItemView[]).find((i) => i.id === id)?.secretSet?.tail).toBe(value.slice(-4));
+
+    // The operator's stored-secrets read (programme item 9): names and records only.
+    const stored = await r.send({ method: 'GET', url: '/api/programmes/prog-a/secrets' });
+    expect(stored.statusCode, stored.body).toBe(200);
+    expect((body(stored) as unknown as StoredSecretsAnswer).slots.map((x) => x.slot)).toEqual(['api-key']);
+    expect(stored.body).not.toContain(value.slice(-4));
 
     // A rotation: the re-key writes the operator rows under the new token, and the scan reads what it wrote.
     r.token.value = 'f'.repeat(64);
@@ -404,7 +444,8 @@ describe('masking (Review Focus 2: a short secret is stored and said to be unmas
     await r.stepUp();
     const id = raiseSecret(r);
     const a = body(await save(r, id, mark()));
-    expect(a['secret']).toMatchObject({ masked: false, why: 'unregistered' });
+    // Unmasked, so no tail either (review 1391 F2: the tail is shown only when the masker catches the value).
+    expect(a['secret']).toMatchObject({ masked: false, why: 'unregistered', tail: '' });
   });
 });
 
@@ -447,7 +488,7 @@ describe('the masker keeps operator-secret lanes (plan PL6)', () => {
     expect(masker.maskText(value)).toBe(SECRET_MASK);
     // A box answer keyed with another generation is passed on unchanged: `ingest` refuses it, as it would without rows.
     const other = { gen: fingerprintGeneration('c'.repeat(64)), rows: [] };
-    expect(withOperatorSecretRows(other, fingerprintGeneration(token), (await rowsUnder(token)).rows)).toBe(other);
+    expect(withOperatorSecretRows(other, fingerprintGeneration(token), (await rowsUnder(token)).rows)).toEqual(other);
     // …and one keyed with it gets the rows beside its own.
     const same = { gen: fingerprintGeneration(token), rows: [] };
     expect(withOperatorSecretRows(same, fingerprintGeneration(token), (await rowsUnder(token)).rows)?.rows.map((x) => x.laneId)).toEqual(['operator-secret:prog-a:api-key']);
@@ -563,13 +604,15 @@ describe('two saves of one slot at once (review 1389 F2)', () => {
 /** One save with a failure planted after the gate, under the scan: answers the save and the scan's hits. */
 async function savedUnderScan(plant: (r: Rig, id: number, value: string) => void | Promise<void>, value = mark()) {
   const out = captureConsole();
-  const r = await rig();
+  const r = await rig({ egress: 'blind' });
   await r.stepUp();
   const id = raiseSecret(r);
   const sock = listen(r);
   await sock.waiting(() => true);
   await plant(r, id, value);
   const res = await save(r, id, value);
+  // A save that ticked emits the waiting frame: the scan reads it too (review 1391 A-13).
+  if (r.coord.itemById(id)?.state === 'checking') await sock.waiting((f) => f.waiting.items.some((i) => i.id === id && i.state === 'checking'));
   await r.send({ method: 'GET', url: '/api/waiting' });
   await r.send({ method: 'GET', url: '/api/mail?to=lane-a', headers: TOKEN_HEADERS });
   const valueFile = operatorSecretPath(r.ccrcDir, 'prog-a', 'api-key');
@@ -650,6 +693,8 @@ describe('after the value is stored, every failure says so in one word (review 1
       vi.spyOn(r.coord, 'itemHistory').mockImplementationOnce(() => { throw new Error('database is locked'); });
     });
     expect(body(t.res)['error']).toBe(STORED);
+    // This arm is the one AFTER the tick: the item is ticked, only its answer's view failed (review 1391 A-5).
+    expect(t.r.coord.itemById(t.id)?.state).toBe('checking');
     expect(t.hits()).toEqual([]);
   });
 
@@ -701,7 +746,7 @@ describe('the store refuses a directory that is not its own (review 1389 F5)', (
 });
 
 describe('the tail floor is the masker\'s floor, in bytes (review 1389 A1)', () => {
-  it('SECRET_TAIL_MIN is the masker\'s RUN_MIN_BYTES, so a value shows its tail exactly when the masker can catch it', () => {
+  it('SECRET_TAIL_MIN is the masker\'s RUN_MIN_BYTES: the floor below which no tail is shown (review 1391 F2 retitled it)', () => {
     expect(SECRET_TAIL_MIN).toBe(RUN_MIN_BYTES);
   });
 
@@ -713,6 +758,9 @@ describe('the tail floor is the masker\'s floor, in bytes (review 1389 A1)', () 
       [`${'a'.repeat(SECRET_TAIL_MIN - 1)}=`, false],
       ['é'.repeat(SECRET_TAIL_MIN / 2 - 1) + 'a', false],
       ['é'.repeat(SECRET_TAIL_MIN / 2), true],
+      // A 4-byte character at the floor (review 1391 A-13): five of them are 20 bytes, and the tail is four of the five.
+      ['\u{1F600}'.repeat(SECRET_TAIL_MIN / 4 - 1) + 'abc', false],
+      ['\u{1F600}'.repeat(SECRET_TAIL_MIN / 4), true],
     ];
     for (const [v, shown] of cases) {
       expect(secretTailOf(v) !== '', v).toBe(shown);
@@ -740,5 +788,465 @@ describe('the slot metadata carries no digest of the value (review 1389 A2)', ()
     await writeOperatorSecret(dir, 'prog-a', 'x', mark(), NOW0, () => 'masked');
     const meta = JSON.parse(readFileSync(path.join(dir, OPERATOR_SECRETS_DIR, 'prog-a', 'x.json'), 'utf8')) as Record<string, unknown>;
     expect(Object.keys(meta).sort()).toEqual(['masked', 'setAt', 'tail', 'v']);
+    // With the item whose save it is (the stored-secrets read names it): one more key, a number, and still nothing of the value.
+    await writeOperatorSecret(dir, 'prog-a', 'y', mark(), NOW0, () => 'masked', 7);
+    const withItem = JSON.parse(readFileSync(path.join(dir, OPERATOR_SECRETS_DIR, 'prog-a', 'y.json'), 'utf8')) as Record<string, unknown>;
+    expect(Object.keys(withItem).sort()).toEqual(['item', 'masked', 'setAt', 'tail', 'v']);
+    expect(withItem['item']).toBe(7);
+  });
+});
+
+// ── the PL6 follow-up (D-7926) ─────────────────────────────────────────────────────────────────────────────────────────
+
+describe('a secret is one line (the operator\'s ruling on programme item 8)', () => {
+  it('a value with a carriage return or a line feed is refused secret-not-one-line before anything is written', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const id = raiseSecret(r);
+    for (const v of [`${mark()}\n`, `a\r${mark()}`, `${mark()}\r\nb`, '\n']) {
+      const res = await save(r, id, v);
+      expect(res.statusCode, JSON.stringify(v)).toBe(400);
+      expect(body(res)['error']).toBe('secret-not-one-line');
+      expect(String(body(res)['detail'])).toBe('a secret is one line: it holds no line break');
+    }
+    expect(existsSync(secretDir(r))).toBe(false);
+    expect(r.coord.itemById(id)?.state).toBe('open');
+    // A tab is not a line break: it is stored as given.
+    expect((await save(r, id, `${mark()}\tz`)).statusCode).toBe(200);
+  });
+});
+
+describe('masked is measured, not decided on byte length (review 1391 F2)', () => {
+  it('a value the egress search cannot catch as one run answers not-one-run, and its tail is withheld', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const cases: [string, string][] = [
+      ['k-space', `${mark()} and more`], ['k-colon', `user:${mark()}`], ['k-lead', `=${mark()}`], ['k-comma', `${mark()},x`],
+    ];
+    for (const [slot, v] of cases) {
+      const a = body(await save(r, raiseSecret(r, slot), v)) as { secret: Record<string, unknown>; item: ItemView };
+      expect(a.secret, slot).toEqual({ setAt: expect.any(Number), tail: '', masked: false, why: 'not-one-run' });
+      expect(a.item.answer, slot).toBe(secretAnswer({ setAt: a.secret['setAt'] as number, tail: '' }));
+      expect(readOperatorSecretMeta(r.ccrcDir, 'prog-a', slot), slot).toMatchObject({ masked: false, why: 'not-one-run', tail: '' });
+      // The measurement is the truth: the egress search really does not mask it.
+      expect(r.masker.maskText(`x ${v} y`), slot).toContain(v.slice(-6));
+    }
+  });
+
+  it('a value the search does catch whole is masked, its tail shown: a path-like value and one ending in punctuation', async () => {
+    const r = await rig();
+    await r.stepUp();
+    for (const [slot, v] of [['k-path', `${mark()}/sub/x`], ['k-dot', `${mark()}.`], ['k-pad', `${mark()}==`]] as const) {
+      const a = body(await save(r, raiseSecret(r, slot), v)) as { secret: Record<string, unknown> };
+      expect(a.secret, slot).toMatchObject({ masked: true, tail: Array.from(v).slice(-4).join('') });
+      expect(r.masker.maskText(`x ${v} y`), slot).not.toContain(v.replace(/=+$/, ''));
+    }
+  });
+});
+
+describe('a re-key racing a save of the same slot ends as the save wrote it (review 1391 F1)', () => {
+  /** Saves V1 through item 1, then rotates the token so the masker asks for its re-key; the re-key reads the slot (V1) and
+   *  waits on `gate`. Answers what the test needs to land a second save (V2) before or after that re-key's answer. */
+  async function rotation() {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let read = false;
+    let landed!: () => void;
+    const settled = new Promise<void>((resolve) => { landed = resolve; });
+    let r!: Rig;
+    r = await rig({
+      requestRekey: async () => {
+        const t = r.token.value;
+        const rows = await operatorSecretRows(r.ccrcDir, (lane, v) => fingerprintRow(t, lane, v));
+        read = true;
+        await gate;
+        setTimeout(landed, 20);
+        return withOperatorSecretRows(null, fingerprintGeneration(t), rows.rows);
+      },
+    });
+    await r.stepUp();
+    const v1 = mark();
+    expect(body(await save(r, raiseSecret(r), v1))['secret']).toMatchObject({ masked: true });
+    const id2 = raiseSecret(r);
+    r.token.value = 'e'.repeat(64);
+    r.masker.maskText('wake the key sync');
+    await vi.waitFor(() => { expect(read).toBe(true); });
+    return { r, v1, id2, release, settled };
+  }
+  const slotRows = (r: Rig) => r.coord.db.prepare('SELECT fp, gen FROM secret_fingerprints WHERE laneId = ?')
+    .all(operatorSecretLaneId('prog-a', 'api-key')) as { fp: string; gen: string }[];
+
+  it('the save lands while the re-key is in flight: the slot keeps the save\'s row, not the value the re-key read', async () => {
+    const { r, v1, id2, release, settled } = await rotation();
+    const v2 = mark();
+    expect(body(await save(r, id2, v2))['secret']).toMatchObject({ masked: true });
+    release();
+    await settled;
+    const gen = fingerprintGeneration(r.token.value);
+    expect(slotRows(r)).toEqual([{ fp: fingerprintOf(r.token.value, v2), gen }]);
+    expect(r.masker.maskText(v2)).toBe(SECRET_MASK);
+    expect(r.masker.maskText(v1)).toBe(v1);
+  });
+
+  it('the re-key lands first and the save after: the same end, the save\'s row', async () => {
+    const { r, id2, release, settled } = await rotation();
+    release();
+    await settled;
+    const v2 = mark();
+    expect(body(await save(r, id2, v2))['secret']).toMatchObject({ masked: true });
+    expect(slotRows(r)).toEqual([{ fp: fingerprintOf(r.token.value, v2), gen: fingerprintGeneration(r.token.value) }]);
+    expect(r.masker.maskText(v2)).toBe(SECRET_MASK);
+  });
+});
+
+describe('the stored-secrets read (the operator\'s ruling on programme item 9)', () => {
+  it('lists each stored slot by name, with when it was saved and the item that asked for it, and NOTHING of any value', async () => {
+    const r = await rig();
+    expect(body(await r.send({ method: 'GET', url: '/api/programmes/prog-a/secrets' }))).toEqual({ ok: true, program: 'prog-a', slots: [] });
+    await r.stepUp();
+    const value = mark();
+    const id = raiseSecret(r);
+    expect((await save(r, id, value)).statusCode).toBe(200);
+    const shortOne = 'Short-Key-12';
+    const id2 = raiseSecret(r, 'b-short');
+    expect((await save(r, id2, shortOne)).statusCode).toBe(200);
+    const res = await r.send({ method: 'GET', url: '/api/programmes/prog-a/secrets' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    const a = body(res) as unknown as StoredSecretsAnswer;
+    expect(a.slots).toEqual([
+      { slot: 'api-key', setAt: expect.any(Number), item: { id, title: 'Give the service key' } },
+      { slot: 'b-short', setAt: expect.any(Number), item: { id: id2, title: 'Give the service key' } },
+    ]);
+    // No value byte: not the value, not its tail, not the short one, not a length.
+    for (const piece of [value, value.slice(-4), value.slice(0, 16), shortOne, shortOne.slice(-4)]) expect(res.body).not.toContain(piece);
+    expect(Object.keys(a.slots[0]!).sort()).toEqual(['item', 'setAt', 'slot']);
+  });
+
+  it('a stored slot outlives its item: the item closed, the slot is still listed', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const id = raiseSecret(r);
+    expect((await save(r, id, mark())).statusCode).toBe(200);
+    r.coord.moveItem(id, 'confirm', 'coordinator', {}, NOW0 + 5, { programmeHasOpenRun: true });
+    expect(r.coord.itemById(id)?.state).not.toBe('checking');
+    expect((body(await r.send({ method: 'GET', url: '/api/programmes/prog-a/secrets' })) as unknown as StoredSecretsAnswer).slots.map((s) => s.slot)).toEqual(['api-key']);
+    expect(readOperatorSecretMeta(r.ccrcDir, 'prog-a', 'api-key')).not.toBeNull();
+  });
+
+  it.skipIf(ROOT)('an unreadable store is secrets-unreadable, never an empty list; an absent one is empty', async () => {
+    const r = await rig();
+    await r.stepUp();
+    expect((await save(r, raiseSecret(r), mark())).statusCode).toBe(200);
+    const dir = path.join(secretDir(r), 'prog-a');
+    chmodSync(dir, 0o000);
+    try {
+      const res = await r.send({ method: 'GET', url: '/api/programmes/prog-a/secrets' });
+      expect(res.statusCode).toBe(503);
+      expect(body(res)['error']).toBe('secrets-unreadable');
+      expect(readStoredSecrets(r.ccrcDir, 'prog-a')).toEqual({ state: 'unreadable' });
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    // A store directory open to others is not read either.
+    chmodSync(secretDir(r), 0o755);
+    expect(readStoredSecrets(r.ccrcDir, 'prog-a')).toEqual({ state: 'unreadable' });
+    chmodSync(secretDir(r), 0o700);
+    expect(readStoredSecrets(r.ccrcDir, 'prog-b')).toEqual({ state: 'ok', slots: [] });
+    expect(readStoredSecrets(path.join(r.home, 'nowhere'), 'prog-a')).toEqual({ state: 'ok', slots: [] });
+  });
+
+  it('a slot whose record is missing is listed with no time and no item; a bad programme name is bad-slot', async () => {
+    const r = await rig();
+    await r.stepUp();
+    expect((await save(r, raiseSecret(r), mark())).statusCode).toBe(200);
+    await fsp.rm(operatorSecretPath(r.ccrcDir, 'prog-a', 'api-key').replace(/\.secret$/, '.json'));
+    expect((body(await r.send({ method: 'GET', url: '/api/programmes/prog-a/secrets' })) as unknown as StoredSecretsAnswer).slots)
+      .toEqual([{ slot: 'api-key', setAt: null, item: null }]);
+    const bad = await r.send({ method: 'GET', url: '/api/programmes/prog.a/secrets' });
+    expect(body(bad)['error']).toBe(LEDGER_ROUTE_REFUSALS.badSlot);
+  });
+});
+
+/** The Remove door's URL for a slot of prog-a. */
+const removeUrl = (slot: string, program = 'prog-a') => `/api/programmes/${program}/secrets/${slot}`;
+
+describe('the Remove door (the operator\'s ruling on programme item 9)', () => {
+  it('refused without step-up: step-up-required, and the slot stays', async () => {
+    const r = await rig();
+    const value = mark();
+    await writeOperatorSecret(r.ccrcDir, 'prog-a', 'api-key', value, NOW0, (lane, v) => r.masker.ingestSecret(lane, v));
+    const noStep = await r.send({ method: 'DELETE', url: removeUrl('api-key') });
+    expect(noStep.statusCode).toBe(REFUSAL_STATUS['step-up-required']);
+    expect(body(noStep)['error']).toBe('step-up-required');
+    expect(noStep.headers['cache-control']).toBe('no-store');
+    expect(readFileSync(operatorSecretPath(r.ccrcDir, 'prog-a', 'api-key'), 'utf8')).toBe(value);
+    expect(laneRows(r.coord.db)).toBe(1);
+  });
+
+  it('refused auth-off: a box whose sign-in is not armed removes nothing', async () => {
+    const dark = await rig({ armed: false });
+    await writeOperatorSecret(dark.ccrcDir, 'prog-a', 'api-key', mark(), NOW0, () => 'unregistered');
+    expect(body(await dark.send({ method: 'DELETE', url: removeUrl('api-key') }))['error']).toBe('auth-off');
+    expect(existsSync(operatorSecretPath(dark.ccrcDir, 'prog-a', 'api-key'))).toBe(true);
+  });
+
+  it('a slot or programme that fails its shape is bad-slot, after the step-up and before any path is built', async () => {
+    const r = await rig();
+    const unstepped = await r.send({ method: 'DELETE', url: removeUrl('..%2Fx') });
+    expect(body(unstepped)['error'], 'the step-up comes first').toBe('step-up-required');
+    await r.stepUp();
+    const join = vi.spyOn(path, 'join');
+    for (const [program, slot] of [['prog-a', '..%2Fx'], ['prog-a', 'A-B'], ['prog-a', '-x'], ['prog.a', 'x'], ['prog%2Fa', 'x'], ['%20prog-a', 'x']] as const) {
+      join.mockClear();
+      const res = await r.send({ method: 'DELETE', url: removeUrl(slot, program) });
+      expect(body(res)['error'], `${program} ${slot}`).toBe(LEDGER_ROUTE_REFUSALS.badSlot);
+      expect(join.mock.calls.filter((c) => c.some((a) => typeof a === 'string' && a.includes(OPERATOR_SECRETS_DIR))), `${program} ${slot}`).toEqual([]);
+    }
+  });
+
+  it('removes the value file and its record; the item shows nothing stored; the value is still masked in this process and nothing reloads it after a restart', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const value = mark();
+    const id = raiseSecret(r);
+    expect((await save(r, id, value)).statusCode).toBe(200);
+    const file = operatorSecretPath(r.ccrcDir, 'prog-a', 'api-key');
+    const sock = listen(r);
+    await sock.waiting(() => true);
+    const res = await r.send({ method: 'DELETE', url: removeUrl('api-key') });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(body(res)).toEqual({ ok: true, slot: 'api-key' });
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(existsSync(file)).toBe(false);
+    expect(existsSync(file.replace(/\.secret$/, '.json'))).toBe(false);
+    expect(readOperatorSecretMeta(r.ccrcDir, 'prog-a', 'api-key')).toBeNull();
+    const frame = await sock.waiting((f) => f.waiting.items.some((i) => i.id === id && i.secretSet === null));
+    expect(frame.waiting.items.find((i) => i.id === id)?.secretSet).toBeNull();
+    expect((body(await r.send({ method: 'GET', url: '/api/programmes/prog-a/secrets' })) as unknown as StoredSecretsAnswer).slots).toEqual([]);
+    // Masked for the life of this process…
+    expect(r.masker.maskText(`x ${value} y`)).toBe(`x ${SECRET_MASK} y`);
+    // …its row gone from the table, so a restart (a new masker over the same database) reloads nothing.
+    await vi.waitFor(() => { expect(laneRows(r.coord.db)).toBe(0); });
+    const restarted = new SecretMasker({ db: r.coord.db, token: () => r.token.value, log: () => {} });
+    maskers.push(restarted);
+    expect(restarted.maskText(`x ${value} y`)).toBe(`x ${value} y`);
+    // A second Remove: nothing stored.
+    const again = await r.send({ method: 'DELETE', url: removeUrl('api-key') });
+    expect(again.statusCode).toBe(404);
+    expect(body(again)['error']).toBe('secret-not-stored');
+  });
+
+  it('a re-key in flight across a Remove never writes the removed slot\'s row back', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let read = false;
+    let landed!: () => void;
+    const settled = new Promise<void>((resolve) => { landed = resolve; });
+    let r!: Rig;
+    r = await rig({
+      requestRekey: async () => {
+        const t = r.token.value;
+        const rows = await operatorSecretRows(r.ccrcDir, (lane, v) => fingerprintRow(t, lane, v));
+        read = true;
+        await gate;
+        setTimeout(landed, 20);
+        return withOperatorSecretRows(null, fingerprintGeneration(t), rows.rows);
+      },
+    });
+    await r.stepUp();
+    expect((await save(r, raiseSecret(r), mark())).statusCode).toBe(200);
+    r.token.value = 'd'.repeat(64);
+    r.masker.maskText('wake the key sync');
+    await vi.waitFor(() => { expect(read).toBe(true); });
+    expect((await r.send({ method: 'DELETE', url: removeUrl('api-key') })).statusCode).toBe(200);
+    release();
+    await settled;
+    await vi.waitFor(() => { expect(laneRows(r.coord.db)).toBe(0); });
+  });
+
+  it.skipIf(ROOT)('a value file that cannot be removed is remove-failed, and nothing else changes; a symlinked programme directory too', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const value = mark();
+    expect((await save(r, raiseSecret(r), value)).statusCode).toBe(200);
+    const dir = path.join(secretDir(r), 'prog-a');
+    chmodSync(dir, 0o500);
+    try {
+      const res = await r.send({ method: 'DELETE', url: removeUrl('api-key') });
+      expect(res.statusCode).toBe(503);
+      expect(body(res)['error']).toBe('remove-failed');
+      expect(res.body).not.toContain(value);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    expect(readFileSync(operatorSecretPath(r.ccrcDir, 'prog-a', 'api-key'), 'utf8')).toBe(value);
+    expect(laneRows(r.coord.db)).toBe(1);
+    // A programme directory that is a link: refused, and the directory it points at is untouched.
+    const home = mkTmp('ccrc-ledgers-secrets-rmlink-');
+    const top = path.join(home, '.ccrc', OPERATOR_SECRETS_DIR);
+    const elsewhere = path.join(home, 'elsewhere');
+    mkdirSync(top, { recursive: true, mode: 0o700 });
+    chmodSync(top, 0o700);
+    mkdirSync(elsewhere, { mode: 0o700 });
+    writeFileSync(path.join(elsewhere, 'x.secret'), 'kept', { mode: 0o600 });
+    symlinkSync(elsewhere, path.join(top, 'prog-a'));
+    await expect(removeOperatorSecret(path.join(home, '.ccrc'), 'prog-a', 'x')).rejects.toThrow(/not a private directory/);
+    expect(readFileSync(path.join(elsewhere, 'x.secret'), 'utf8')).toBe('kept');
+  });
+
+  it('the leak scan over the Remove door and the stored-secrets read: no answer, refusal, frame, file or line carries the value', async () => {
+    const out = captureConsole();
+    const r = await rig({ egress: 'blind' });
+    const value = mark();
+    const id = raiseSecret(r);
+    const sock = listen(r);
+    await sock.waiting(() => true);
+    await r.stepUp();
+    expect((await save(r, id, value)).statusCode).toBe(200);
+    await r.send({ method: 'GET', url: '/api/programmes/prog-a/secrets' });
+    await r.send({ method: 'DELETE', url: removeUrl('A-B') });
+    expect(body(await r.send({ method: 'DELETE', url: removeUrl('api-key') }))).toEqual({ ok: true, slot: 'api-key' });
+    await sock.waiting((f) => f.waiting.items.some((i) => i.id === id && i.secretSet === null));
+    await r.send({ method: 'DELETE', url: removeUrl('api-key') });
+    await r.send({ method: 'GET', url: '/api/programmes/prog-a/secrets' });
+    await r.send({ method: 'GET', url: '/api/waiting' });
+    expect(scan(r, value, { frames: sock.raw, out, valueFiles: [] })).toEqual([]);
+  });
+});
+
+describe('a temp file a crash left mid-write is removed on the next write or Remove of its slot (review 1389 A4)', () => {
+  it('the slot\'s own leftover temps go; another slot\'s stay', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const dir = privateStore(r);
+    const mine = path.join(dir, '.api-key.secret.tmp-0123456789abcdef');
+    const mineMeta = path.join(dir, '.api-key.json.tmp-fedcba9876543210');
+    const other = path.join(dir, '.other.secret.tmp-0123456789abcdef');
+    for (const f of [mine, mineMeta, other]) writeFileSync(f, mark(), { mode: 0o600 });
+    expect((await save(r, raiseSecret(r), mark())).statusCode).toBe(200);
+    expect(existsSync(mine)).toBe(false);
+    expect(existsSync(mineMeta)).toBe(false);
+    expect(existsSync(other)).toBe(true);
+    writeFileSync(mine, mark(), { mode: 0o600 });
+    expect((await r.send({ method: 'DELETE', url: removeUrl('api-key') })).statusCode).toBe(200);
+    expect(existsSync(mine)).toBe(false);
+    expect(existsSync(other)).toBe(true);
+  });
+});
+
+describe('a box\'s roster answer never speaks for an operator-secret lane (review 1391 A-1)', () => {
+  it('offer drops an operator lane the box names, and the re-key\'s composer drops it from the box\'s part', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const value = mark();
+    expect((await save(r, raiseSecret(r), value)).statusCode).toBe(200);
+    const gen = fingerprintGeneration(r.token.value);
+    const forged = fingerprintRow(r.token.value, operatorSecretLaneId('prog-a', 'api-key'), mark());
+    r.masker.offer({ gen, rows: [forged, fingerprintRow(r.token.value, 'lane-x', mark())] }, new Set(['lane-x']));
+    expect(laneRows(r.coord.db, 'lane-x')).toBe(1);
+    expect(r.coord.db.prepare('SELECT fp FROM secret_fingerprints WHERE laneId = ?').all(operatorSecretLaneId('prog-a', 'api-key')))
+      .toEqual([{ fp: fingerprintOf(r.token.value, value) }]);
+    expect(r.masker.maskText(value)).toBe(SECRET_MASK);
+    expect(withOperatorSecretRows({ gen, rows: [forged] }, gen, [])).toEqual({ gen, rows: [] });
+  });
+});
+
+describe('the slot\'s chain has a deadline (review 1391 A-3)', () => {
+  it('an act that waits past it answers slot-busy and does nothing; the act it waited on still finishes', async () => {
+    const home = mkTmp('ccrc-ledgers-secrets-busy-');
+    const ccrcDir = path.join(home, '.ccrc');
+    mkdirSync(ccrcDir, { recursive: true });
+    const coord = new CoordStore(openCoordDb(path.join(ccrcDir, 'coord.db')));
+    const runA = (coord.openRun({ program: 'prog-a', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' }) as { id: number }).id;
+    const id = coord.raiseItem({
+      program: 'prog-a', runId: runA, raisedBy: 'lane-a', kind: 'secret', title: 't', why: 'w', how: [], options: null,
+      neededBy: 'blocking', soonLabel: null, secretSlot: 'api-key',
+    }, NOW0);
+    const bare = Fastify({ logger: false });
+    registerLedgerOperatorRoutes(bare, {
+      coord, bus: new Bus(), now: () => NOW0 + 1, presenceOf: () => 'live', gate: () => ({ pass: true }), ccrcDir,
+      registerSecret: () => 'unregistered', retireSecret: () => {}, slotWaitMs: 100,
+    });
+    const file = operatorSecretPath(ccrcDir, 'prog-a', 'api-key');
+    let open!: () => void;
+    const held = new Promise<void>((resolve) => { open = resolve; });
+    let gated = false;
+    const rename = fsp.rename.bind(fsp);
+    vi.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
+      if (!gated && String(to) === file) { gated = true; await held; }
+      return rename(from, to);
+    });
+    const first = bare.inject({ method: 'PUT', url: `/api/items/${id}/secret`, payload: { value: mark() } });
+    await vi.waitFor(() => { expect(gated).toBe(true); });
+    const second = await bare.inject({ method: 'PUT', url: `/api/items/${id}/secret`, payload: { value: mark() } });
+    expect(second.statusCode).toBe(503);
+    expect(second.json()).toMatchObject({ error: 'slot-busy' });
+    const removing = await bare.inject({ method: 'DELETE', url: '/api/programmes/prog-a/secrets/api-key' });
+    expect(removing.json()).toMatchObject({ error: 'slot-busy' });
+    open();
+    expect((await first).statusCode).toBe(200);
+    await bare.close();
+  });
+});
+
+describe('the write-failed arms answer the truth (review 1391 A-4)', () => {
+  it('the fsync after the rename fails and the read-back cannot read the file: stored-not-ticked, and the masker was told', async () => {
+    const t = await savedUnderScan((r) => {
+      const dir = privateStore(r);
+      const file = operatorSecretPath(r.ccrcDir, 'prog-a', 'api-key');
+      const open = fsp.open.bind(fsp);
+      let failed = false;
+      vi.spyOn(fsp, 'open').mockImplementation(async (...args: Parameters<typeof fsp.open>) => {
+        if (!failed && String(args[0]) === dir && args[1] === 'r') { failed = true; throw Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' }); }
+        if (failed && String(args[0]) === file) throw Object.assign(new Error('EIO: i/o error, open'), { code: 'EIO' });
+        return open(...args);
+      });
+    });
+    expect(body(t.res)['error']).toBe(LEDGER_ROUTE_REFUSALS.storedNotTicked);
+    expect(readFileSync(t.valueFile, 'utf8')).toBe(t.value);
+    expect(t.r.masker.maskText(t.value)).toBe(SECRET_MASK);
+    expect(t.hits()).toEqual([]);
+  });
+
+  it('a register that throws is unregistered, never a failed write', async () => {
+    const home = mkTmp('ccrc-ledgers-secrets-throw-');
+    const dir = path.join(home, '.ccrc');
+    mkdirSync(dir, { recursive: true });
+    const meta = await writeOperatorSecret(dir, 'prog-a', 'x', mark(), NOW0, () => { throw new Error('boom'); });
+    expect(meta).toEqual({ setAt: NOW0, tail: '', masked: false, why: 'unregistered' });
+  });
+
+  it('a failed record write removes the previous save\'s record, so no reader shows another save\'s time beside this value', async () => {
+    const home = mkTmp('ccrc-ledgers-secrets-oldmeta-');
+    const dir = path.join(home, '.ccrc');
+    mkdirSync(dir, { recursive: true });
+    await writeOperatorSecret(dir, 'prog-a', 'x', mark(), NOW0, () => 'masked');
+    expect(readOperatorSecretMeta(dir, 'prog-a', 'x')?.setAt).toBe(NOW0);
+    const metaFile = operatorSecretPath(dir, 'prog-a', 'x').replace(/\.secret$/, '.json');
+    const rename = fsp.rename.bind(fsp);
+    vi.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
+      if (String(to) === metaFile) throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      return rename(from, to);
+    });
+    await expect(writeOperatorSecret(dir, 'prog-a', 'x', mark(), NOW0 + 9, () => 'masked')).rejects.toThrow(/stored in its slot/);
+    expect(readOperatorSecretMeta(dir, 'prog-a', 'x')).toBeNull();
+    expect(readStoredSecrets(dir, 'prog-a')).toEqual({ state: 'ok', slots: [{ slot: 'x', setAt: null, item: null }] });
+  });
+});
+
+describe('the scan is blind to the masker (review 1391 F4)', () => {
+  it('a blind rig\'s egress shows a registered value as written, so an echo is a hit; the real masker still masks it', async () => {
+    const r = await rig({ egress: 'blind' });
+    await r.stepUp();
+    const value = mark();
+    expect(body(await save(r, raiseSecret(r), value))['secret']).toMatchObject({ masked: true });
+    const raised = await r.send({
+      method: 'POST', url: '/api/programmes/prog-a/items', headers: TOKEN_HEADERS,
+      payload: { byId: 'lane-a', byUuid: 'u-lane-a', kind: 'do', title: 'Echo', why: `the key is ${value}`, how: [], neededBy: 'later' },
+    });
+    expect(raised.statusCode, raised.body).toBe(200);
+    expect((await r.send({ method: 'GET', url: '/api/waiting' })).body).toContain(value);
+    expect(r.masker.maskText(value)).toBe(SECRET_MASK);
   });
 });

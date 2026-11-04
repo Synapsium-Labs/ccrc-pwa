@@ -2470,10 +2470,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token.
   // The secret's route (plan PL6) takes the account gate with a step-up, writes the slot under `cfg.ccrcDir`, and registers
-  // the value with the egress masker (no masker: `unregistered`, said in the answer, never a silent skip).
+  // the value with the egress masker (no masker: `unregistered`, said in the answer, never a silent skip). The PL6 follow-up's
+  // stored-secrets read and Remove door ride the same registration; a Remove retires the slot's lane in the masker.
   registerLedgerOperatorRoutes(app, {
     coord: deps.coord, bus, now: () => Date.now(), presenceOf, gate: accountGate, ccrcDir: deps.cfg.ccrcDir,
     registerSecret: (laneId, value) => deps.masker?.ingestSecret(laneId, value) ?? 'unregistered',
+    retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
   });
 
   /**

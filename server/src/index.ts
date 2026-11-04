@@ -340,7 +340,10 @@ const masker = new SecretMasker({
     if (token === null || token === '') return fromBox;
     const listed = await operatorSecretRows(cfg.ccrcDir, (laneId, value) => fingerprintRow(token, laneId, value));
     // A slot that could not be read is not named, so its rows stay under their old generation and the re-key retries them.
+    // The warn is fixed text: it names no slot and no value (departure pl6f-rekey-unreadable-warn, review 1391 A-12).
     if (listed.unreadable) console.warn('ccrc-server: the operator-secrets store could not be read whole; its unread slots are re-keyed on a later pass');
+    // A save that lands while this re-key is in flight keeps its own row: the masker only fills an operator lane that holds no
+    // row of the current token, and never one the operator removed meanwhile (`ingest`'s `rekey`, review 1391 F1).
     return withOperatorSecretRows(fromBox, fingerprintGeneration(token), listed.rows);
   },
 });
