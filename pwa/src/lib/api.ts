@@ -8,6 +8,7 @@ import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, Dig
 import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
+import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
 import type { RotateAnswer } from '../../../shared/box-token';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
 import { raiseAuthLostFrom } from './auth';
@@ -852,6 +853,13 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  Settings' Automation card reads it through `useDispatchAbandonView`, whose `asDispatchAbandonView` is the wire
      *  guard. 501 `not-configured` and an older server's 404 read as not available. Session-gated when armed. */
     dispatchAbandon: (opts?: ReadOpts) => getJson<DispatchAbandonView>('/api/coord/dispatch-abandon', opts),
+    /** D-7994: the sweep's two switches, as the registry reads them. Settings' Automation card reads it through
+     *  `useScopeSweepView`, whose `asScopeSweepView` is the wire guard. */
+    scopeSweep: () => getJson<ScopeSweepView>('/api/coord/scope-sweep'),
+    /** D-7994: the busy arm's switch. The reply is the same view, read after the verb ran; `'unreadable'` is a 2xx
+     *  whose body was not JSON. */
+    setScopeSweepBusy: (body: ScopeSweepBusyRequest) =>
+      postJsonOr<ScopeSweepView | 'unreadable'>('/api/coord/scope-sweep', 'unreadable', body),
     /** `POST /api/coord/dispatch-abandon`: `{choice:'on'|'off'}`. `postJsonOr` for `setCoordCaps`' reason: an answer that
      *  could not be read may still have stored the choice. */
     setDispatchAbandon: (body: DispatchAbandonRequest) =>

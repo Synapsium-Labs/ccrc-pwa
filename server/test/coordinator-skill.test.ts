@@ -827,6 +827,9 @@ describe('the coordinator skill: linkage', () => {
       // runs; the read is the first half of that invitation, so neither half is named.
       'GET /api/coord/dispatch-abandon',
       'POST /api/coord/dispatch-abandon',
+      // D-7994: the sweep's two switches on Settings › Automation, the operator's and session-gated: no coordinator's door.
+      'GET /api/coord/scope-sweep',
+      'POST /api/coord/scope-sweep',
       // THE QUESTION DOOR FAMILY (W3 Q3f, D-7030; the coordinator's ruling of 2026-10-28, slug q3f-skill-exempt; named exception 3): one
       // route the skill corpus does not name. The claimant's two, `POST /api/questions/:id/rule` and `/release`, left this
       // list when the client moved onto them behind the `questions-v1` cap word (K5 Q3j, D-7322): the ask lane and the

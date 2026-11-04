@@ -1,16 +1,17 @@
-// Settings › Automation (settings spec §3.3, §5.4; D-5503): eight cards, in this order, each a `Section` with its
+// Settings › Automation (settings spec §3.3, §5.4; D-5503): nine cards, in this order, each a `Section` with its
 // scope and purpose line: Stall watch, Temp root collector, Dispatches that never came back (D-7319), Cleanup pause,
-// Roll idle sessions (D-7453), which reads and writes its own door, Backups (D-7860) and Work in transcript folders
+// Leftover processes (D-7994), Roll idle sessions (D-7453), which reads and writes its own door, Backups (D-7860) and Work in transcript folders
 // (D-7898), which read the shell's health poll, then Test box (D-7412), the section's last card
 // (D-7418), which reads the frame's view and writes its switch and its tools sync. Cleanup pause is its own card since
 // settings Task R2b2, because it stops more than the collector; it offers Pause only and links to Runs for Resume.
-// Stall watch, the collector, the dispatch switch and the test box read the frame's one view (`SettingsDataProvider`), never their own endpoints, so the
+// Stall watch, the collector, the dispatch switch, the leftover processes and the test box read the frame's one view (`SettingsDataProvider`), never their own endpoints, so the
 // index's status line and this page never read twice; the pause reads the coord frame through the one reader
 // (`childReclaimMarker`). The page's `<h2>` is the frame's and each card's title is an `<h3>`.
 import type { ReactNode } from 'react';
 import { Section } from '@ccrc/ui';
 import { CollectLaneSection, PauseAllCleanup } from '../../fleet/CollectLaneSection';
 import { DispatchAbandonSection } from '../../fleet/DispatchAbandonSection';
+import { ScopeSweepSection } from '../../fleet/ScopeSweepSection';
 import { SETTINGS_CARDS } from '../../fleet/settingsText';
 import { StallWatchSection } from '../StallWatchSection';
 import { RollIdleSection } from '../../fleet/RollIdleSection';
@@ -29,6 +30,7 @@ export function AutomationSection({ view }: { view: SettingsView }): ReactNode {
       <Section level={3} scope={pause.scope} title={pause.title} purpose={pause.purpose}>
         <PauseAllCleanup />
       </Section>
+      <ScopeSweepSection poll={view.scopeSweep} />
       <RollIdleSection />
       <BackupSection />
       <TranscriptWorkSection />

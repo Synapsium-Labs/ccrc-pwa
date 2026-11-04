@@ -316,7 +316,8 @@ describe('the scanner is looking at something', () => {
     // 56 since landing order wave 5f: `POST /api/landing/entries` and `POST /api/landing/order`, two box-token lanes IN EXEMPT.
     // 57 since `POST /api/coord/pane-scope-stop` (D-7902, Settings › Automation's pane-scope stop switch): the
     // operator's, session-gated, NOT EXEMPT, no box token.
-    expect(scanRoutes('coord/routes.ts').length).toBe(57);
+    // 59 since `GET`/`POST /api/coord/scope-sweep` (D-7994, the sweep's busy arm switch): session-gated, NOT EXEMPT, no box token.
+    expect(scanRoutes('coord/routes.ts').length).toBe(59);
     // 5 in `update/routes.ts` (update-management W2, design 2026-09-20 §12):
     // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
     // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
@@ -531,12 +532,14 @@ describe('the scanner is looking at something', () => {
     // 174 since landing order wave 5f on top: the two box-token landing writes, the HTTP half 169 -> 171, the gated count stays 105, the exempt-HTTP count 64 -> 66.
     // 175 since the project add's `POST /api/projects` (add-project spec 2026-11-04 §4), session-gated and NOT EXEMPT, no
     // box token: the HTTP half 171 -> 172, the gated count 105 -> 106, the exempt-HTTP count stays 66.
-    // 180 since the reader lab's door (the reader lab plan, Task 3), in a tenth file: three session-gated routes, NOT EXEMPT,
-    // and the probe pair, IN EXEMPT (gate.ts reason 8), no box token: the HTTP half 172 -> 177, the gated count 106 -> 109,
+    // 177 since `GET`/`POST /api/coord/scope-sweep` (D-7994), session-gated and NOT EXEMPT, no box token: the HTTP half
+    // 172 -> 174, the gated count 106 -> 108, the exempt-HTTP count stays 66.
+    // 182 since the reader lab's door (the reader lab plan, Task 3), in a tenth file: three session-gated routes, NOT EXEMPT,
+    // and the probe pair, IN EXEMPT (gate.ts reason 8), no box token: the HTTP half 174 -> 179, the gated count 108 -> 111,
     // the exempt-HTTP count 66 -> 68.
-    // 181 since `POST /api/coord/pane-scope-stop` (D-7902), session-gated and NOT EXEMPT, no box token: the HTTP half
-    // 177 -> 178, the gated count 109 -> 110, the exempt-HTTP count stays 68.
-    expect(ROUTES.length).toBe(181);
+    // 183 since `POST /api/coord/pane-scope-stop` (D-7902), session-gated and NOT EXEMPT, no box token: the HTTP half
+    // 179 -> 180, the gated count 111 -> 112, the exempt-HTTP count stays 68.
+    expect(ROUTES.length).toBe(183);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -563,6 +566,7 @@ describe('the scanner is looking at something', () => {
       'GET /api/coord/collect-lane', 'POST /api/coord/collect-lane',
       'GET /api/coord/shadow-journal',
       'GET /api/coord/dispatch-abandon', 'POST /api/coord/dispatch-abandon',
+      'GET /api/coord/scope-sweep', 'POST /api/coord/scope-sweep',
       'POST /api/sessions/:id/prompt', 'GET /ws/fleet', 'GET /ws/pty/:id',
       'POST /api/auth/login', 'POST /api/auth/logout', 'GET /api/auth/status',
       // Task 8's four, which split TWO ways under the gate: the register pair is
@@ -702,7 +706,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 181 scanned + the static wildcard when the bundle is built.
+    // 183 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1390,7 +1394,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 178 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 180 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1454,7 +1458,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 178 HTTP routes, not the 68 exempt.
+          //    is not itself flag-aware — the assertion that covers all 180 HTTP routes, not the 68 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

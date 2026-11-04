@@ -513,7 +513,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 | `ccd-telemetry-keepalive.timer` | fleet, both | 15 min | one minimal turn on an idle measured account (below) | `~/.ccrc/keepalive-paused` |
 | `ccrc-models.timer` | fleet, both | 1 h | `ccrc models refresh --all`: every lane's model catalogue, and on a Codex lane the advance step ("Model classes per lane") | — |
 | `ccd-tmp-sweep.timer` | fleet, both | 1 h | reaps Claude Code's per-uid temp dir | `~/.ccrc/tmp-sweep-paused` |
-| `ccd-scope-sweep.timer` | fleet, both | 60 s | records every dead ccd pane scope; stops an inert one only when armed (below) | `~/.cc-sessions/scope-sweep-paused` |
+| `ccd-scope-sweep.timer` | fleet, both | 60 s | records every dead ccd pane scope; stops an inert one only when armed, and a busy one of a provably dead session only when its own switch is on too (below) | `~/.cc-sessions/scope-sweep-paused` |
 | `ccd-usage-sweep.timer` | fleet, both | 4 h | per-account usage totals from transcripts | `~/.ccrc/usage-sweep-paused` |
 | `ccd-carry-dedupe.timer` | fleet, both | 24 h | runs `ccd carry-dedupe --identical-only` and records what it would reclaim in `~/.cc-sessions/carry-dedupe-record`; a dry run until the operator arms it ("Swap-carry copies and the dedupe sweep", below) | — |
 | `ccd-testbox-times.timer` | fleet, both | 24 h | fetches CI's per-file test durations into `CCRC_TESTBOX_TIMES` with the box's `gh`, for the test box's budget estimate; fetches nothing with no test box configured ("The test box", below) | — |
@@ -3750,7 +3750,7 @@ general remote-shell:
   anything after it is unconstrained: `pr-state` needs `--session` or
   `--project`; `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
   `ws-hold`/`ws-release`/`ws-rename`/`ws-title`/`route`/`win-size` need `--session`;
-  `coord-pause` and `reclaim-pause` need `--state`, `project-pool` needs `--project` and `project-add` needs `--name`; and
+  `coord-pause`, `reclaim-pause` and `scope-sweep-busy` need `--state`, `project-pool` needs `--project` and `project-add` needs `--name`; and
   `ws-reap` and `ws-reclaim` need `--expect` — a load-bearing confirmation
   token, so an unconfirmed reap or reclaim can never cross the wire at all.
   `ws-rename`'s flag guards a different hazard: the verb destroys nothing, but it is the first whose argv the server builds
@@ -3762,7 +3762,7 @@ general remote-shell:
   can either come back, or a gated verb lose its flag, by accident:
   `UNGRANTABLE_VERBS` and `REQUIRED_VERB_FLAG` (`agent/src/whitelist.ts`)
   make a grant of `ws-rm` or `ws-gc`, an empty prefix, or a gated verb
-  (`ws-reap`, `ws-reclaim`, `ws-rename`, `coord-pause`, `reclaim-pause`,
+  (`ws-reap`, `ws-reclaim`, `ws-rename`, `coord-pause`, `reclaim-pause`, `scope-sweep-busy`,
   `project-pool`, `project-add`, `route`, `win-size`) without its flag a type error, and
   `auditExecWhitelist` re-checks the same rules when the agent loads —
   together with any command key other than `tmux` and `ccd`, such as one of
@@ -6570,13 +6570,34 @@ is issued only while `~/.cc-sessions/scope-sweep-live` exists — nothing writes
 touches it after reading the shadow verdicts. Armed, one tick stops at most three scopes and records the
 rest `held`. `~/.cc-sessions/scope-sweep-paused` stops everything, the shadow record included.
 
+**The busy arm** (D-7993). A dead session's busy orphans (a `while true` monitor, a mock server, a `tail -f`) move
+CPU, start children or hold a socket, so the inert path only reports them. A dead scope that fails on those reasons
+is judged a second way, beside its `dead` line and never in its place: is its SESSION provably dead? A dead scope
+alone does not say so, because an account swap kills a pane while the session goes on in a new one. The sweep
+reads each process's own `CCRC_SESSION_GENERATION` (never `$REG/<id>.panescope`, which names only a session's last
+pane) and looks that generation up in `$REG/*.generation`: no row, or a row with `$REG/<id>.stopped`, is dead, and
+any other row is `session-live`. Beside that, no live pane may carry the generation, no process in the scope may be
+Claude Code (by `argv[0]` or `comm`: a build's `comm` is its version number), the `Description`'s pane must be gone,
+no process may be the parent of one in another cgroup, and nothing outside may be connected to it (`peer`: a loopback
+TCP connection whose far end is no socket of this scope, or an accepted connection on a named Unix socket). The grace
+is the session's: six hours from when the sweep first saw it provably dead, so a stop and a restart cost nothing and a
+session seen live drops the clock. Any of those it cannot measure is a `verdict=carry`, never a stop, and the clock
+survives a carry. **It ships shadowed behind its own switch:** a collectable scope reads `would-stop (busy)` with its
+process list until BOTH `scope-sweep-live` and `~/.cc-sessions/scope-sweep-busy-live` stand, and an armed busy stop spends
+the same three a tick as an inert one. **Settings › Automation › Leftover processes** shows both switches and sets the
+busy one (D-7994), through `POST /api/coord/scope-sweep` and `ccd scope-sweep-busy --state on|off`, its one writer: signed-in
+operators only, and a verb no session runs. Limits: a connection between two dead scopes holds both, and a client
+of a Unix socket a process did not accept on a named path is not seen.
+
 Its verdicts live in `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`, rewritten every tick (a reboot empties it,
 which restarts every clock): one `dead` line per dead ccd scope, one `carry` line per scope the tick could not
-measure, and one `old` line per process older than a day in a live pane scope, other than the pane's own and
-its Claude Code's MCP servers. `ccrc doctor`'s
+measure, one `old` line per process older than a day in a live pane scope, other than the pane's own and
+its Claude Code's MCP servers, one `busy` line per busy scope the arm judged, and `busy-mode live` under the header
+while both switches stand. `ccrc doctor`'s
 `scope-sweep` check reads that record and never re-derives it: it lists every dead scope — how long dead,
 the scope's own age and its oldest process's, its pids, memory, sockets and verdict — and every such
-long-lived process, warns when the record is stale, and SKIPs while the sweep is paused.
+long-lived process, says the busy-orphan count and the busy mode (each orphan with its process list), warns when the
+record is stale, and SKIPs while the sweep is paused.
 
 Doctor validates the whole body before giving ordinary scope advice. Malformed, future or stale records
 warn and ask for a new measurement, not a stop. Dead/unknown carries warn without destructive advice;
