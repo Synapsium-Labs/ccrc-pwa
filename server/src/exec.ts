@@ -132,7 +132,8 @@ const PANE_PROBE_ROW = /^([01]) (\d+) (\d+) (\d+) (\d+) ([01])$/;
  *  believing them. */
 export const PANE_LISTING_FORMAT = '#{session_name} #{window_active} #{pane_index} #{pane_pid}';
 
-const PANE_LISTING_ROW = /^(\S+) ([01]) (\d+) (\d+)$/;
+/** The name is greedy and anchored on the three numeric fields, so a session named with a space still parses. */
+const PANE_LISTING_ROW = /^(.+) ([01]) (\d+) (\d+)$/;
 
 /** One whole-server pane listing. `panes` is keyed by the tmux SESSION NAME (`tmuxName(id)`), never by id: the name
  *  replaces `.` and `:`, so the map is read id to name (`verdictFromListing`) and never name to id.

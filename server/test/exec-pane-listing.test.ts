@@ -26,6 +26,14 @@ describe('parsePaneListing', () => {
     expect(l.panes.size).toBe(2);
   });
 
+  it('a session name with a space parses', () => {
+    const l = parsePaneListing(ran('my session 1 0 444\ncc-sess-b 1 0 333\n'), 1);
+    expect(l.ok).toBe(true);
+    if (!l.ok) return;
+    expect(l.panes.get('my session')).toEqual({ pid: 444 });
+    expect(l.panes.get('cc-sess-b')).toEqual({ pid: 333 });
+  });
+
   it('a session listed with no active window answers pid null; empty stdout is zero sessions', () => {
     const l = parsePaneListing(ran('cc-sess-a 0 0 111\n'), 1);
     expect(l.ok && l.panes.get('cc-sess-a')).toEqual({ pid: null });
@@ -56,6 +64,9 @@ describe('verdictFromListing', () => {
     expect(verdictFromListing(ok, 'sess-b')).toEqual({ verdict: 'live' });
     expect(verdictFromListing(ok, 'sess-c')).toEqual({ verdict: 'gone' });
     expect(verdictFromListing(ok, 'sess.a')).toEqual({ verdict: 'live' });
+  });
+  it('a colon in an id maps through tmuxName like a dot', () => {
+    expect(verdictFromListing(ok, 'sess:a')).toEqual({ verdict: 'live' });
   });
 });
 

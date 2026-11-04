@@ -12,6 +12,7 @@ import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { KeyedQueue } from '../src/inject/queue.js';
+import { usageSidecarPath } from '../src/usage.js';
 import type { FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
@@ -45,6 +46,17 @@ describe('FleetWatcher.tick characterization (console speed S1, Step 0)', () => 
       v: 1, state: 'working', event: 'PreToolUse', sessionId: `uuid-${LIVE[0]}`, pid: 4000,
       updatedAt: hookUpdatedAt, ask: null, subagents: [],
     }));
+    // A cold-row candidate carries a hook-state file (the first stopped row) and a usage sidecar (the second), so a
+    // later step that mishandles a cold row's hook state or usage changes a pinned output. Planted with fixed
+    // values: the sidecar's `ts` is old on purpose, so its `stale` flag does not depend on the wall clock.
+    const stoppedHookAt = Date.now();
+    writeFileSync(path.join(reg, `${STOPPED[0]}.hookstate.json`), JSON.stringify({
+      v: 1, state: 'idle', event: 'Stop', sessionId: `uuid-${STOPPED[0]}`, pid: 4100,
+      updatedAt: stoppedHookAt, ask: null, subagents: [],
+    }));
+    const usageFile = usageSidecarPath(reg, STOPPED[1]!);
+    mkdirSync(path.dirname(usageFile), { recursive: true });
+    writeFileSync(usageFile, JSON.stringify({ ts: STAMP, model: 'claude-opus-5', effort: 'high', ctxPct: 12, cost: 1.25 }));
 
     const run: Runner = async (cmd, args) => {
       const target = args[args.indexOf('-t') + 1] ?? '';
@@ -448,7 +460,15 @@ describe('FleetWatcher.tick characterization (console speed S1, Step 0)', () => 
           "title": null,
           "ultracode": false,
           "unmeasured": [],
-          "usage": null,
+          "usage": {
+            "class": "opus",
+            "cost": 1.25,
+            "ctxPct": 12,
+            "effort": "high",
+            "model": "claude-opus-5",
+            "stale": true,
+            "ts": 1700000000,
+          },
           "version": null,
           "withCoordinator": null,
           "workdir": "/data/projects/lane-a-stopped-b",

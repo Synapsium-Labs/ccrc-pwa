@@ -13,7 +13,7 @@ const rec = (over: Partial<SessionRecord> = {}): SessionRecord => ({
   started: true, home: null, pool: null, lastswap: null,
   workspace: 'sess-a', branch: 'ws/sess-a', branchEvidence: 'named', base: 'origin/main',
   prPhase: null, prNumber: null, prCheckedAt: null, archivedAt: null, archivedBytes: null, held: null,
-  substrate: null, stopped: { at: 1, surface: 'ws-stop' } as SessionRecord['stopped'], supervisedAt: null,
+  substrate: null, stopped: { at: 1, surface: 'cli' } as SessionRecord['stopped'], supervisedAt: null,
   swapBlocked: null, stranded: null, spawn: null, lastEnd: null, lifecycleUnmeasured: [],
   unmeasured: [], route: null, child: { kind: 'none' },
   ...over,
@@ -25,7 +25,7 @@ describe('RegistryRowCache', () => {
     const c = new RegistryRowCache();
     c.put('sess-a', rec(), key, 5);
     const first = c.get('sess-a')!;
-    first.record.unmeasured.push('wrapper');
+    first.record.unmeasured = ['wrapper'];
     (first.key.names as string[]).push('x');
     const again = c.get('sess-a')!;
     expect(again.record.unmeasured).toEqual([]);
