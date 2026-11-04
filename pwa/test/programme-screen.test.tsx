@@ -17,7 +17,7 @@ import { createFleetStore } from '../src/stores/fleet';
 import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
 import { MIN, NOW, itemView, runRow, waitingView } from './ledgersFixture';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { effectiveValue, stripComments } from './cssRule';
 
@@ -128,6 +128,25 @@ describe('the programme view: the head', () => {
     expect(location.pathname).toBe('/');
   });
 
+  // Carry C (D-7951), review 1386 F12: the "wave N of M" template is spelled once (`waveOfWords`, the work-wave half of
+  // `programmeWaveTail`), and the programme's head and its group on the combined list both read it.
+  it('the "wave N of M" template is spelled once in pwa/src, in runWords.ts', () => {
+    const root = path.join(__dirname, '../src');
+    const holders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.tsx?$/.test(e.name)) {
+          const n = readFileSync(p, 'utf8').match(/wave \$\{[^}]+\} of \$\{/g)?.length ?? 0;
+          for (let i = 0; i < n; i++) holders.push(path.relative(root, p));
+        }
+      }
+    };
+    walk(root);
+    expect(holders).toEqual(['fleet/runWords.ts']);
+  });
+
   it('says the programme has no open run once, in the card, and not before the runs have been heard', () => {
     const store = heard({ runs: [runRow({ id: 1, program: 'prog-a', state: 'done' })] });
     const view = render(<ProgrammeScreen slug="prog-a" store={store} />);
@@ -213,6 +232,32 @@ describe('the programme view: Goals', () => {
     render(<ProgrammeScreen slug="prog-a" store={heard()} />);
     expect((await screen.findByRole('alert')).textContent).toBe('Goals could not be read.');
     expect(screen.queryByText('Another programme\'s summary.')).toBeNull();
+  });
+
+  // Carry C (D-7951), review 1386 F6: the read resets when the slug changes, so a mount that is not keyed by the slug never
+  // draws one programme's Goals under another's name.
+  it('a new slug on the same mount resets the read: the old programme\'s Goals are never drawn under the new name', async () => {
+    const answer: Record<string, (v: { ok: true; goals: GoalsView }) => void> = {};
+    vi.spyOn(api, 'goals').mockImplementation((slug: string) => new Promise((r) => { answer[slug] = r; }));
+    const store = heard();
+    const view = render(<ProgrammeScreen slug="prog-a" store={store} />);
+    await act(async () => { answer['prog-a']!({ ok: true, goals: goals({ inShort: 'The first programme\'s summary.' }) }); });
+    expect(screen.getByText('The first programme\'s summary.')).toBeTruthy();
+    view.rerender(<ProgrammeScreen slug="prog-b" store={store} />);
+    expect(screen.queryByText('The first programme\'s summary.')).toBeNull();
+    expect(screen.getByText('Reading Goals…')).toBeTruthy();
+    await act(async () => { answer['prog-b']!({ ok: true, goals: goals({ program: 'prog-b', inShort: 'The second programme\'s summary.' }) }); });
+    expect(screen.getByText('The second programme\'s summary.')).toBeTruthy();
+  });
+
+  // Carry C (D-7951), review 1386 F8: the frame's copy is shape-checked as the fetched one is (`isGoalsFor`), so an entry the
+  // panel cannot read is not drawn, and the fetched copy is.
+  it('a frame entry that is not a Goals view is not drawn: the fetched copy is, and nothing throws', async () => {
+    vi.spyOn(api, 'goals').mockResolvedValue({ ok: true, goals: goals({ inShort: 'The fetched copy.' }) });
+    const broken = { program: 'prog-a', specPath: null, inShort: 'A broken frame copy.', inShortAt: null } as unknown as GoalsView;
+    render(<ProgrammeScreen slug="prog-a" store={heard({ waiting: waitingView({ goals: [broken] }) })} />);
+    expect(await screen.findByText('The fetched copy.')).toBeTruthy();
+    expect(screen.queryByText('A broken frame copy.')).toBeNull();
   });
 
   it('says it is reading until Goals arrive, never "no spec is pinned yet"', async () => {

@@ -152,10 +152,11 @@ describe('programmeWaitingCount (the chip\'s count)', () => {
     expect(programmeWaitingCount(waitingView(), sessions, runs, 'prog-b')).toBe(0);
     expect(programmeWaitingCount(waitingView(), sessions, [], 'prog-a')).toBe(0); // runs unheard: its programme is unknown
   });
-  it('is zero for a programme with nothing open, and until the list and the fleet frame have both been heard', () => {
+  it('is zero for a programme with nothing open, and null until the list and the fleet frame have both been heard', () => {
     expect(programmeWaitingCount(view, sessions, runs, 'prog-c')).toBe(0);
-    expect(programmeWaitingCount(null, sessions, runs, 'prog-a')).toBe(0);
-    expect(programmeWaitingCount(view, null, runs, 'prog-a')).toBe(0);
+    // Not heard yet is not zero (carry C, D-7951; review 1386 F9): null, as its sibling `waitingItemsCount` answers.
+    expect(programmeWaitingCount(null, sessions, runs, 'prog-a')).toBeNull();
+    expect(programmeWaitingCount(view, null, runs, 'prog-a')).toBeNull();
     expect(programmeWaitingCount(waitingView({ items: [itemView({ state: 'done', closedAt: NOW })] }), [], [], 'prog-a')).toBe(0);
   });
 });

@@ -30,7 +30,7 @@ import {
 } from '../../../shared/ledgers';
 import type { StepUpDeps } from '../accounts/useStepUp';
 import { fleetHues } from '../fleet/programmeBoxes';
-import { programWave, programmeTitle, runHomeProject } from '../fleet/runWords';
+import { programWave, programmeTitle, runHomeProject, waveOfWords } from '../fleet/runWords';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { ROUTES, sessionPath } from '../lib/routes';
@@ -40,6 +40,7 @@ import { EMPTY_WORD, NO_FRAME_WORD, ageWords, groupByProgramme, listGroups, open
 import { STORED_TEXT, StoredSecretRemove, removeStoredSecret, type RemoveSecret } from './ItemView';
 import { Back, itemPath, useHeard, useUnavailable } from './WaitingRoutes';
 import { ClearedTrail, ItemRows } from './WaitingScreen';
+import { isGoalsFor } from './waitingView';
 import './ledgers.css';
 
 /** The fleet's own path, read off the `fleet` row of the route table: this file spells no path of its own. */
@@ -49,26 +50,21 @@ const FLEET_PATH: string = ROUTES.find((r) => r.id === 'fleet')?.path ?? '/';
  *  screen words differently, so three values and no `null`. */
 type GoalsRead = 'reading' | 'failed' | GoalsView;
 
-/** Ask for the programme's Goals once on arrival (the screen is keyed by the slug, so a new slug is a new read). A view that is
- *  not for this programme, or not a view at all, is a failed read: the answer is drawn only when it is the one asked for. */
+/** Ask for the programme's Goals once on arrival, and again for a new slug. A view that is not for this programme, or not a
+ *  view at all, is a failed read: the answer is drawn only when it is the one asked for. The read is kept beside the slug it
+ *  was asked for, so a new slug reads `reading` from its first render, even on a mount not keyed by the slug (carry C, D-7951;
+ *  review 1386 F6). */
 function useGoalsRead(slug: string): GoalsRead {
-  const [read, setRead] = useState<GoalsRead>('reading');
+  const [read, setRead] = useState<{ slug: string; read: GoalsRead }>({ slug, read: 'reading' });
   useEffect(() => {
     let live = true;
     api.goals(slug).then(
-      (answer) => { if (live) setRead(answer.ok === true && isGoalsFor(answer.goals, slug) ? answer.goals : 'failed'); },
-      () => { if (live) setRead('failed'); },
+      (answer) => { if (live) setRead({ slug, read: answer.ok === true && isGoalsFor(answer.goals, slug) ? answer.goals : 'failed' }); },
+      () => { if (live) setRead({ slug, read: 'failed' }); },
     );
     return () => { live = false; };
   }, [slug]);
-  return read;
-}
-
-/** The envelope of a Goals view, and that it is this programme's: what the panel reads (`modifications.map`) must be an array. */
-function isGoalsFor(v: unknown, slug: string): v is GoalsView {
-  if (typeof v !== 'object' || v === null) return false;
-  const g = v as Partial<GoalsView>;
-  return g.program === slug && Array.isArray(g.modifications);
+  return read.slug === slug ? read.read : 'reading';
 }
 
 /** The newest run of the programme that names a home project: the repository whose Docs hold its spec. `null` when none does. */
@@ -152,7 +148,7 @@ function secretItemsKey(slug: string, view: WaitingView | null): string {
 
 /** The card's one sentence when nothing is waiting on the operator: what the programme waits on, named only once the runs have
  *  been heard, and, for a programme with no open run, said once as a sentence of its own, not as `WAITS_ON_WORDS.ended`'s tail
- *  after "Waiting on:" (that text reads as a fragment and is the words' other readers', `pl5b-ended-words-literal`). */
+ *  after "Waiting on:" (that text reads as a fragment and is the words' other readers', `pl5b-ended-card-sentence`). */
 function waitsOnSentence(waitsOn: WaitsOn | null): string {
   if (waitsOn === null) return EMPTY_WORD;
   if (waitsOn === 'ended') return `${EMPTY_WORD} The programme has no open run.`;
@@ -163,9 +159,11 @@ function waitsOnSentence(waitsOn: WaitsOn | null): string {
 function GoalsCard({ read, held, homeProject, heldItems, list }: {
   read: GoalsRead; held: GoalsView | null; homeProject: string | null; heldItems: ReadonlySet<number>; list: ItemList;
 }): ReactNode {
-  // The frame's copy for THIS programme wins whenever the frame has one: the frame is re-sent on every spec pin, change and merge,
-  // so it is never older than the one fetch. The fetch answers only for a programme the frame does not list (a programme with a
-  // pin and nothing else waiting is in it; one with neither is not), and a read that has not answered or failed says so.
+  // The frame's copy for THIS programme wins whenever the frame has one: the frame is re-sent on every spec pin, change and merge.
+  // The fetch answers only for a programme the frame does not list (a programme with a pin and nothing else waiting is in it; one
+  // with neither is not), and a read that has not answered or failed says so. The fallback is the one fetch, asked on arrival,
+  // so it can be as old as the mount: a programme the frame stops listing, or never lists, shows that copy until the view is
+  // opened again.
   const goals = held ?? (read !== 'reading' && read !== 'failed' ? read : null);
   if (goals === null) {
     return (
@@ -231,7 +229,9 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets }: {
   const heard = runs ?? NO_RUNS;
   const open = openRunsOf(slug, heard);
   const wave = open.length === 0 ? null : programWave(open);
-  const held = view?.goals.find((g) => g.program === slug) ?? null;
+  // The frame's entry, on the fetched answer's terms (`isGoalsFor`): an entry the panel cannot read is no copy.
+  const entry = view?.goals.find((g) => g.program === slug);
+  const held = isGoalsFor(entry, slug) ? entry : null;
   const heldItems = new Set<number>([...(view?.items ?? NO_ITEMS), ...(view?.cleared ?? NO_ITEMS)].map((i) => i.id));
   const hue = fleetHues(heard).get(slug) ?? 'none';
   // The list an item opened here names, so its way back and its steps stay in this programme (plan PL9).
@@ -244,7 +244,7 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets }: {
         <Back to={FLEET_PATH} label="Back to Fleet" />
         <span className="pv-kicker">Programme</span>
         <h1 className="pv-title">{programmeTitle(slug, heard)}</h1>
-        {wave !== null && <span className="pv-sub">{wave.waveOf === null ? `wave ${wave.wave}` : `wave ${wave.wave} of ${wave.waveOf}`}</span>}
+        {wave !== null && <span className="pv-sub">{waveOfWords(wave)}</span>}
       </header>
       <div className="pv-two">
         <div className="pv-card">

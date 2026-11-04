@@ -92,13 +92,14 @@ export const waitingTotal = (items: readonly ItemView[], questions: readonly Que
 /** The chip's number for `program`, off what the fleet store holds: "waiting on you" as spec §2 defines it once, the programme's
  *  open items (sent-back ones included, one being checked not) plus the questions its sessions ask, summed by `waitingTotal`,
  *  the one sum the combined list, the navigation badge and the programme view's heading (`groupByProgramme`'s `waiting`) read
- *  too, so a programme never reads one number on its box and another on its view (ruling 14290). Zero until the list AND the
- *  fleet frame have landed (`sessions`, as the navigation badge gates them): "not heard yet" draws no chip rather than a guess. `runs` may be `null` (no runs frame yet): a question's programme is then
- *  unknown, so it counts for no programme. */
+ *  too, so a programme never reads one number on its box and another on its view (ruling 14290). Until the list AND the
+ *  fleet frame have landed (`sessions`, as the navigation badge gates them) it answers `null`, as its sibling
+ *  `waitingItemsCount` does, because "not heard yet" is not zero; the chip draws nothing for either (carry C, D-7951; review 1386 F9). `runs`
+ *  may be `null` (no runs frame yet): a question's programme is then unknown, so it counts for no programme. */
 export function programmeWaitingCount(
   view: WaitingView | null, sessions: readonly FleetSession[] | null, runs: readonly RunSummary[] | null, program: string,
-): number {
-  if (view === null || sessions === null) return 0;
+): number | null {
+  if (view === null || sessions === null) return null;
   return waitingTotal(
     view.items.filter((i) => i.program === program),
     questionRows(sessions, runs ?? []).filter((q) => q.program === program),
