@@ -2836,6 +2836,19 @@ Four tasks: S1 (D-7987), S2 (D-7988), C1 (D-7989) and C2 (D-7990). Snapshots and
   - Design: R1 is a third evidence arm, placing a row only from its archive record, which now records workdir, workdirReal and uuid. R2 names the hold once (`heldBy`) and leaves the safety check unchanged. R3 is a prune deny in the hook and classifier for every session. R4 is the collector's box-move release, mirroring #1799, plus a diagnosis of rows git forgot. Nothing weakens a re-proof.
   - Open for the operator: D3 (old archive records place nothing, so the live rows need item 35), D6 (no narrowing of the hold is safe without a new proof) and D12 (R4's box-move release changes the collector spec's never-taken rule). These were raised as items.
   - Landing order: R3, then R1, R4 and R2. R3 is dispatched first. R1 follows when load allows. R4 waits for D12, and R2 waits for D6.
+- 2026-11-04: cleanup ledger PR #2297 opened at 584240cc8. Goals modification 13 is bound to item 36 and pr 2297.
+  - Items 37 (D3), 38 (D6) and 39 (D12) were raised, each with recommended option 0.
+  - Task R3 (D-8001) was opened and dispatched: run 1472, wave 93, session ccrc-pwa-polish-cleanup-r3, on route opus/high with sonnet subagents. Its authority is in `cleanup-20261104/` (with the sha256 manifest).
+- 2026-11-04: the Docs reader coordinator asked leave for RL-b (run 1470), in 15113. Granted for its additive hunks: in C1's `api.ts`, `app.tsx` (in the lazyScreen form, if C1 lands first) and `app.test.tsx` (awaiting the lazy screen), and one row in PL10's `routes.ts`. C1 and PL10 were told.
+- 2026-11-04: ledger PR #2296 went green and CLEAN at da565b301. Its body passed the scan, and it was enqueued with `--match-head-commit` at position 1.
+- **Item 35 done and confirmed: cleanup is unwedged (2026-11-04, about 22:05Z).**
+  - The operator recreated the brisk-mesa worktree, which is registered at 9b9b4ecb.
+  - The calm-mesa row and its branch are gone from the registry (ws-audit answers no-such-session).
+  - The lifecycle log shows 38 ws-reclaim done in the last 39 minutes, the latest a minute ago, and one ws-expire done, after none since 29 Oct.
+  - Item 37 (D3) is now moot for today's rows. It still governs archives made before R1.
+- 2026-11-04: #2296 left the merge queue at 22:03Z with failed_checks. Merge-group run 41920436072, server 10/12, failed on `rings/watcher-store-port` "the store census on the real tree": "Hook timed out in 20000ms". It is a load-timing hook on a docs-only change, and every other file passed (1664 tests). Re-enqueued with `--match-head-commit da565b301`.
+- 2026-11-04: PL10 (15124) asked to extend its F18 leave by one declaration, `container-type: inline-size` on `.phone-bar-door`. Granted, on condition the door boxes are measured unchanged at 320, 360 and 390px; otherwise PL10 uses its fallback.
+- **#2296 MERGED (2026-11-04, 03798e033).** Speed spec §2.5, §2.6, D15, D16 and plan Tasks C3 and C4 are on main. `goals merged` was run with pr 2296, and the ledger worktree was removed.
 
 ## R125: Delegation rows that read "running" are handed to the delegation broker (2026-11-01)
 

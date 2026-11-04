@@ -1,4 +1,4 @@
-// `ws-lease-mark` sits behind the privileged direct-entry check (delegation broker wave 5, W5-G4, as `ws-shed-deps` does, D-7278): the installed launcher (`ccd/ccd-entry.py`'s
+// `ws-lease-mark` (and, from PR2, `ws-lease-audit`, W5-G12) sits behind the privileged direct-entry check (delegation broker wave 5, W5-G4, as `ws-shed-deps` does, D-7278): the installed launcher (`ccd/ccd-entry.py`'s
 // `is_protected`, a case-folding superset) starts it with `-p`, and the body's own entry guard refuses an unprivileged explicit
 // bash. One table run against both, in the style of `ccd-ws-collect-reach.test.ts`. FIXTURE HOME ONLY: every launcher is a
 // fixture install under the harness HOME, and no argv here reaches a removal — a protected shape is refused at entry or started
@@ -55,9 +55,12 @@ const echoed = (): { flags: string; argv: string[] } => {
 const SHAPES: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['ws-lease-mark alone', ['ws-lease-mark']],
   ['ws-lease-mark with its lease', ['ws-lease-mark', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', '--generation', '1']],
+  // W5-G12 (PR2): the read-only audit starts protected as its writer does.
+  ['ws-lease-audit alone', ['ws-lease-audit']],
+  ['ws-lease-audit with its lease', ['ws-lease-audit', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', '--generation', '1', '--holders']],
 ];
 
-describe('ws-lease-mark is a protected shape at both classifiers', () => {
+describe('ws-lease-mark and ws-lease-audit are protected shapes at both classifiers', () => {
   it('the body refuses an unprivileged explicit bash at entry — nothing runs', () => {
     for (const argv of SHAPES.map(([, a]) => a)) {
       const b = bash([], argv);
@@ -80,7 +83,9 @@ describe('ws-lease-mark is a protected shape at both classifiers', () => {
     de = installDirectEntry(h.home, { body: ECHO_BODY });
     expect(direct(['WS-LEASE-MARK', '--lease', 'x'], { BASHOPTS: 'nocasematch' }).code).toBe(0);
     expect(echoed().flags.includes('p')).toBe(true);
-    for (const argv of [['ws-lease-markx'], ['caps', 'ws-lease-mark']]) {
+    expect(direct(['Ws-Lease-Audit', '--lease', 'x'], { BASHOPTS: 'nocasematch' }).code).toBe(0);
+    expect(echoed().flags.includes('p')).toBe(true);
+    for (const argv of [['ws-lease-markx'], ['caps', 'ws-lease-mark'], ['ws-lease-auditx'], ['caps', 'ws-lease-audit']]) {
       expect(direct(argv).code).toBe(0);
       expect(echoed().flags.includes('p'), argv.join(' ')).toBe(false);
     }
