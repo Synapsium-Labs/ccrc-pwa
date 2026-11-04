@@ -1,6 +1,6 @@
 # Delegation visibility: honest words, every entry reachable
 
-**Spec** · 2026-11-02 · Status: Proposed design; staged scope agreed · Owner: Delegation broker · Related: `docs/superpowers/specs/2026-10-04-delegation-broker-design.md`
+**Spec** · 2026-11-02 · Status: Approved by the operator on 2026-11-04, with its plan; staged scope agreed 2026-11-02 · Owner: Delegation broker · Related: `docs/superpowers/specs/2026-10-04-delegation-broker-design.md`
 
 ## In short
 
@@ -253,10 +253,11 @@ The terms below keep visibility, evidence and authority distinct.
 - The operator accepted staged visibility delivery on 2026-11-02. Automatic end and reopening can stay explicitly unsupported while useful visibility ships.
 - Automatic repair remains programme work. Visibility never implies ownership or permission to delete.
 - Elapsed-time soaks are waived, not passed. Existing worker holds and safety refusals are unchanged.
+- The operator approved this design together with its implementation plan, `docs/superpowers/plans/2026-11-02-delegation-visibility.md`, on 2026-11-04. That includes the first release's limit: honest words and full reachability now, no positive recent-activity claims yet.
 
 ### Waiting on you
 
-- Approval of this design together with its implementation plan, `docs/superpowers/plans/2026-11-02-delegation-visibility.md`. That includes the first release's limit: honest words and full reachability now, no positive recent-activity claims yet.
+- Nothing for this release until its pull request merges. The rollout after that is yours.
 
 ### Later
 

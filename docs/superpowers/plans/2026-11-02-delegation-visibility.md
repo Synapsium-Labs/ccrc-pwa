@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript ESM; the React 19 PWA on `@ccrc/ui` tokens; Vitest with Testing Library on jsdom; Node.js `>=22.16.0`.
 
-**Spec:** `docs/superpowers/specs/2026-11-02-delegation-visibility-design.md` (all sections; acceptance in §9). The operator agreed the staged delivery on 2026-11-02. The coordinator ruled the two departures from the wave-4 rules this release needs (D-7781, D-7782, below).
+**Spec:** `docs/superpowers/specs/2026-11-02-delegation-visibility-design.md` (all sections; acceptance in §9). The operator agreed the staged delivery on 2026-11-02 and approved this plan together with the spec on 2026-11-04. The coordinator ruled the two departures from the wave-4 rules this release needs (D-7781, D-7782, below).
 
 **Shape:** one pull request by one worker, four tasks in order. Every task's commit is green on its own: the tests that task names pass, and the PWA typecheck passes.
 
