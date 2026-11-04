@@ -1045,32 +1045,33 @@ describe('W5-J7: lease transitions replay through the one decision, and a bad on
     seenEntry(2, T(51)),
     transitionEntry({ generation: 3, reason: 'retain', to: 'retained', at: T(60), expiresAt: plus7d(T(60)) }),
   ];
-  const records = chainOf([created, ...transitions], 3, base2[1]!.digest);
-  const all = [...base2, ...records];
+  // Built on first use, not at collection: a grammar that refuses a kind (mutants W5-JM11, W5-JM11b) reds these rows, not the file.
+  let built: { records: DelegationJournalRecordV1[]; all: DelegationJournalRecordV1[] } | null = null;
+  const fx = () => (built ??= (() => { const records = chainOf([created, ...transitions], 3, base2[1]!.digest); return { records, all: [...base2, ...records] }; })());
 
   it('created, carrier, adopt, seen and retain recover to a retained lease at generation 3, seen at 2', () => {
-    const report = recoverDelegation(null, all);
+    const report = recoverDelegation(null, fx().all);
     expect(report.failure).toBeNull();
     expect(report.state.phase).toBe('ready');
     const lease = report.state.checkpoint.leases[0]!;
     expect(lease).toMatchObject({
       leaseId: 'lease-1', generation: 3, disposition: 'retained', carrierGenerationSeen: 2, creatingJournalSequence: 3,
-      currentJournalSequence: records[4]!.sequence, adoptedAt: T(50), terminalEvidenceAt: T(45), retainedAt: T(60), cleanupDueAt: plus7d(T(60)),
+      currentJournalSequence: fx().records[4]!.sequence, adoptedAt: T(50), terminalEvidenceAt: T(45), retainedAt: T(60), cleanupDueAt: plus7d(T(60)),
       cleanupState: 'not-due', cleanupStartedAt: null, cleanupFinishedAt: null, cleanupEvidenceJson: null, releasedAt: null, lastObservedAt: T(40),
     });
     // The seen record moved neither the generation nor the current sequence (D-7851): the sequence names the retain.
-    expect(lease.currentJournalSequence).not.toBe(records[3]!.sequence);
+    expect(lease.currentJournalSequence).not.toBe(fx().records[3]!.sequence);
     // Nothing left in a carrier row: the member is absent, so the checkpoint keeps wave 4's shape.
     expect(report.state.checkpoint.leaseCarriers).toBeUndefined();
     expect(Object.keys(report.state.checkpoint)).not.toContain('leaseCarriers');
   });
 
   it('the same journal recovered from a checkpoint covering part of it (observed, then folded) is the same checkpoint', () => {
-    const at4 = recoverDelegation(null, all.slice(0, 5)).state.checkpoint;          // through the adopt
-    const report = recoverDelegation(encodeDelegationCheckpoint(at4), all);
+    const at4 = recoverDelegation(null, fx().all.slice(0, 5)).state.checkpoint;          // through the adopt
+    const report = recoverDelegation(encodeDelegationCheckpoint(at4), fx().all);
     expect(report.failure).toBeNull();
-    expect(withoutRevision(report.state.checkpoint)).toBe(withoutRevision(recoverDelegation(null, all).state.checkpoint));
-    const covered = recoverDelegation(encodeDelegationCheckpoint(recoverDelegation(null, all).state.checkpoint), all);
+    expect(withoutRevision(report.state.checkpoint)).toBe(withoutRevision(recoverDelegation(null, fx().all).state.checkpoint));
+    const covered = recoverDelegation(encodeDelegationCheckpoint(recoverDelegation(null, fx().all).state.checkpoint), fx().all);
     expect(covered.failure).toBeNull();
   });
 
@@ -1111,9 +1112,9 @@ describe('W5-J7: lease transitions replay through the one decision, and a bad on
   });
 
   it('a checkpoint lease that lags its covered transition records fails the proof', () => {
-    const cp = recoverDelegation(null, all).state.checkpoint;
-    const tampered = { ...cp, leases: [{ ...cp.leases[0]!, generation: 2, currentJournalSequence: records[2]!.sequence, retainedAt: null, disposition: 'adopted' as const, cleanupDueAt: plus7d(T(50)) }] };
-    const report = recoverDelegation(encodeDelegationCheckpoint(tampered), all);
+    const cp = recoverDelegation(null, fx().all).state.checkpoint;
+    const tampered = { ...cp, leases: [{ ...cp.leases[0]!, generation: 2, currentJournalSequence: fx().records[2]!.sequence, retainedAt: null, disposition: 'adopted' as const, cleanupDueAt: plus7d(T(50)) }] };
+    const report = recoverDelegation(encodeDelegationCheckpoint(tampered), fx().all);
     expect(report.state.phase).toBe('reconstructing');
     expect(report.failure?.code).toBe('lease-proof');
   });
@@ -1149,11 +1150,12 @@ describe('W5-J7b: the PR5a build recovers a journal holding every lease kind and
       auditEvidence: 'token-1', lineageClose: 'transfer', lineageOpenRun: 12 }),
     releasedEntry({ leaseId: 'lease-2', generation: 8, releaseReason: 'transferred', at: T(95) }),
   ];
-  const records = chainOf(entries, 4, base3[2]!.digest);
-  const all = [...base3, ...records];
+  // Built on first use, not at collection: a grammar that refuses a kind (mutants W5-JM11, W5-JM11b) reds these rows, not the file.
+  let built: { records: DelegationJournalRecordV1[]; all: DelegationJournalRecordV1[] } | null = null;
+  const fx = () => (built ??= (() => { const records = chainOf(entries, 4, base3[2]!.digest); return { records, all: [...base3, ...records] }; })());
 
   it('recovers to ready and folds each kind: the carrier row\'s resolvedThrough and releaseReason read back', () => {
-    const report = recoverDelegation(null, all);
+    const report = recoverDelegation(null, fx().all);
     expect(report.failure).toBeNull();
     expect(report.state.phase).toBe('ready');
     const cp = report.state.checkpoint;
@@ -1196,17 +1198,17 @@ describe('W5-J7b: the PR5a build recovers a journal holding every lease kind and
   });
 
   it('the checkpoint round-trips through its codec, and recovery from it over the same journal is ready and equal', () => {
-    const cp = recoverDelegation(null, all).state.checkpoint;
+    const cp = recoverDelegation(null, fx().all).state.checkpoint;
     expect(decodeDelegationCheckpoint(encodeDelegationCheckpoint(cp))).toEqual(cp);
-    const again = recoverDelegation(encodeDelegationCheckpoint(cp), all);
+    const again = recoverDelegation(encodeDelegationCheckpoint(cp), fx().all);
     expect(again.failure).toBeNull();
     expect(withoutRevision(again.state.checkpoint)).toBe(withoutRevision(cp));
   });
 
   it('a released lease whose records a later compaction cut still recovers (it holds nothing, so its row stands alone)', () => {
-    const cp = recoverDelegation(null, all).state.checkpoint;
+    const cp = recoverDelegation(null, fx().all).state.checkpoint;
     // The checkpoint covers everything; keep only the anchor's record, as a compaction that cut every unheld record would.
-    const report = recoverDelegation(encodeDelegationCheckpoint(cp), all.slice(-1));
+    const report = recoverDelegation(encodeDelegationCheckpoint(cp), fx().all.slice(-1));
     expect(report.failure).toBeNull();
     expect(report.state.phase).toBe('ready');
   });
