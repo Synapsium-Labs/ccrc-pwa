@@ -243,6 +243,12 @@ routes alike — answers when this box's server has no coordination database
 wired in at all. It is not a per-call failure to retry; it is a fact about
 the box, the same as `unsupported`: stop and report it to the operator.
 
+**Landing writes.** `fixesMain` is the coordinator's or the operator's to set
+or clear, never a worker's. For a PR with no run, use
+`POST /api/landing/entries`; to replace its order edges or `fixesMain`, use
+`POST /api/landing/order` as described in `references/wave-lifecycle.md` §5.
+Both writes are box-token gated and attributed, not an authorization boundary.
+
 ## The wave lifecycle
 
 Six steps, and they are Build 2.5's manual six with the manual taken out. The
@@ -400,7 +406,8 @@ not after.
      `kind`, `new-head` or `dequeued` as the mail's first line names it; a
      `red:` round's advance, and any other retreat, carries none. Send the
      `ejected:` mail once the advance's answer reads `landing.kind` `ejected`
-     with the base you sent. If it reads anything else, the line recorded no
+     and `landing.entry.baseSha` equals the base you sent. If it reads
+     anything else, the line recorded no
      base: send no mail, and report it to the operator with the run at
      `working`. The second ejection of one entry is not refused: where
      the entry you read counts one ejection already, the advance still answers

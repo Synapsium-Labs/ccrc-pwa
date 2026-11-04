@@ -1454,8 +1454,8 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the fifty-eight machine lanes the
-fleet host reaches (thirty-four box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the sixty machine lanes the
+fleet host reaches (thirty-six box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
 the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
@@ -3931,7 +3931,7 @@ token from `~/.cc-secrets/ccrc-mail.token` (absent, `no-token`), and the route
 from a fixed table (`ROUTES`, pinned closed by `ccrc-api-closed.test.ts`):
 `runs list|open|dispatch|advance|close|items|items-list|signals|route`,
 `mail list|send|fetch|ack`, `peers list`, `lifecycle list`,
-`claims list|take|release`, `ledger list|allocate`, `landing show`,
+`claims list|take|release`, `ledger list|allocate`, `landing show|entries|order`,
 `asks list|answer|release` and `feed list` — plus `whoami`, which reads this session's `{id, uuid}` from its
 tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
@@ -5369,7 +5369,20 @@ is the coordinator's read of one project's line before it enqueues: every entry 
 pinned when the run entered `merging`, which the coordinator requires to equal the head it binds and passes to
 `--match-head-commit`), its `handoffCommit`, its state and its ejections — the
 operator pause and the main-red hold, and the order the server's decider computes on that read; the line is paused
-while either flag is set. A project the line has never seen answers no entries and both flags off.
+while either flag is set. A project the line has never seen answers no entries and both flags off. The line's authority (no-run creation evidence,
+order edges, `fixesMain` and setter attribution) is journalled in `~/.ccrc/landing.log`, which a restored `coord.db` leaves in
+place (no backup copies it) and which the server replays before it serves anything. Replay never fabricates a measured pin or a
+current run association: a project whose projection is missing or whose binding evidence contradicts is reported as unmeasured
+and held, and invalid history refuses startup. An uncertain journal append or landing database commit fences every landing read
+and write, an advance's pin and its retreat from `merging` included: the failing call answers 503 with `mayApply: true` (the write
+may or may not have reached the line) and a `recovery` word, and every later one answers `landing-fenced` with that word. A `replay`
+fence and a `restart` fence alike clear only when the server restarts: the replay is the only thing that reopens the line, and only
+the boot calls it, so there is no retry timer and nothing reopens the line while the server runs; a restart whose replay refuses
+does not start. A retreat refused `landing-projection-unreadable` (its pin names another head than the
+episode's and a retained field no longer reads) is not cured by a restart, because replay never writes a projection: the run
+stays at `merging` and goes to the operator, and this build has no repair route for it. `POST /api/landing/entries` and `POST /api/landing/order` (box token and measured
+`byId`/`byUuid` attribution, `ccrc-api landing entries|order --json -`) record an entry and its order edges; the attributed `byId` is
+the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an explicit `[]` or `false` clears it.
 
 **The bypass deny (landing-order wave 2b).** A second question, asked of every session after the worker
 deny's and with its text unchanged, closes the two ways past the queue that the worker deny leaves open:

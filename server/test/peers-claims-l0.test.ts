@@ -161,8 +161,8 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
     // The reaping breadcrumb (ARCH-25, #531) a ninth, its parser a value: the rule this pin defends still
     // holds, shared/api.ts pulls nothing into the PWA but L0, because reapcrumb.ts imports nothing
     // (`reapcrumb.test.ts` pins that). The fleet health's host-pressure block (#1170) an
-    // eleventh, a type from the import-free pressure.ts. The landing line's entry (landing order wave 5e) a twelfth,
-    // a type from the import-free landingLine.ts. The operator's waiting frame (programme ledgers PL4) a thirteenth, a type from
+    // eleventh, a type from the import-free pressure.ts. The landing line's wire answer (landing order wave 5e, its type moved here in 5f) a twelfth,
+    // `LandingWrite`, a type from the import-free landingLine.ts. The operator's waiting frame (programme ledgers PL4) a thirteenth, a type from
     // ledgers.ts, which imports from api.ts only types and the run-state list: the import is erased, so nothing cycles.
     // The fleet health's backup block (D-7858) a fourteenth, a type from the import-free backup.ts. The box settings' failure
     // words (D-6916) a fifteenth, the `ReadFailure` type from agent-protocol.ts, which does import values from api.ts at run
@@ -179,7 +179,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import type { WorkflowView } from './workflows.js';",
       "import type { WaitingView } from './ledgers.js';",
       "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
-      "import type { LandingEntry } from './landingLine.js';",
+      "import type { LandingWrite } from './landingLine.js';",
       "import type { NodeRole } from './node-role.js';",
       // The sign-in's state words (accounts plan Task A21) join the same import-free `accounts.ts` line: no new import.
       "import type { AccountStateAnswer, AuthMethod, AuthStatusState, LaneState } from './accounts.js';",

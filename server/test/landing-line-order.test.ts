@@ -191,8 +191,58 @@ describe('landingEjectionAsk', () => {
       due: true, tag: 'landing-ejected-project-a-42', title: 'Landing: project-a #42 ejected twice',
       body: 'run 420, project-a #42: ejected from the landing line a second time (conflict against base 0123456789ab). The line holds nothing back; you decide whether it lands again, is fixed by hand or is withdrawn.' });
   });
-  it('says no run, and an unrecorded kind and base, when they are null', () => {
-    expect((landingEjectionAsk(e(7, { state: 'ejected', ejections: 2, runId: null })) as { body: string }).body)
-      .toBe('project-a #7 (no run): ejected from the landing line a second time (unrecorded against base unrecorded). The line holds nothing back; you decide whether it lands again, is fixed by hand or is withdrawn.');
+  it('a bare second retreat says plainly that no ejection kind or base was recorded (no run)', () => {
+    expect(landingEjectionAsk(e(7, { state: 'ejected', ejections: 2, runId: null }))).toEqual({
+      due: true, tag: 'landing-ejected-project-a-7', title: 'Landing: project-a #7 ejected twice',
+      body: 'project-a #7 (no run): returned from merging to working a second time; no ejection kind or base was recorded. The line holds nothing back; you decide whether it lands again, is fixed by hand or is withdrawn.' });
+    expect((landingEjectionAsk(e(7, { state: 'ejected', ejections: 2, runId: null })) as { body: string }).body).not.toContain('unrecorded');
+  });
+  it('a bare second retreat of a run-bound entry names the run and says the same', () => {
+    expect((landingEjectionAsk(e(42, { state: 'ejected', ejections: 2 })) as { body: string }).body)
+      .toBe('run 420, project-a #42: returned from merging to working a second time; no ejection kind or base was recorded. The line holds nothing back; you decide whether it lands again, is fixed by hand or is withdrawn.');
+  });
+  it('CONTROL: a named ejection keeps the named copy, the title and the tag', () => {
+    const named = landingEjectionAsk(e(7, { state: 'ejected', ejections: 2, runId: null, baseSha: '0123456789ab' + 'c'.repeat(28), ejectionKind: 'dequeued' }));
+    expect(named).toEqual({ due: true, tag: 'landing-ejected-project-a-7', title: 'Landing: project-a #7 ejected twice',
+      body: 'project-a #7 (no run): ejected from the landing line a second time (dequeued against base 0123456789ab). The line holds nothing back; you decide whether it lands again, is fixed by hand or is withdrawn.' });
+  });
+});
+
+describe('landingOrder: a quarantined stale pin is in no line (wave 5f Task 3, C-STALE-HEAD)', () => {
+  it('an unknown stale pin cannot head the line and cannot release a follower', () => {
+    const stale = e(1, { pinnedAt: 100, state: 'unknown', ejections: 0 });
+    const follower = e(2, { pinnedAt: 200, afterIds: [101] });
+    const alone = landingOrder([stale, follower], OPEN);
+    expect(prs(alone)).toEqual([2]);
+    expect(alone).toMatchObject({ paused: false, head: null });
+    expect(landingOrder([stale], OPEN)).toMatchObject({ order: [], head: null });
+    // CONTROL: the same pair with the first entry pinned heads the line and releases its follower
+    const live = landingOrder([e(1, { pinnedAt: 100 }), follower], OPEN);
+    expect(prs(live)).toEqual([1, 2]);
+    expect(head(live)).toBe(1);
+  });
+});
+
+describe('landingOrder: recovery holds the line without touching the flags (wave 5f)', () => {
+  const HOLD = { subjects: [], hold: { reason: 'landing-recovery-unresolved' as const, subjectIds: [7, 9] } };
+  const NONE = { subjects: [], hold: null };
+  const line = [e(1, { pinnedAt: 100 }), e(2, { pinnedAt: 200 })];
+  it('a hold with the flags clear keeps the order, names no head and says why', () => {
+    expect(landingOrder(line, OPEN, HOLD)).toEqual({ paused: false, order: [line[0], line[1]], head: null, held: HOLD.hold });
+  });
+  it('a hold under a real pause keeps paused, by and order, and adds held', () => {
+    expect(landingOrder(line, OP, HOLD)).toEqual({ paused: true, by: ['operator'], order: [line[0], line[1]], held: HOLD.hold });
+  });
+  it('CONTROL: omitted recovery and an empty hold are today\'s answer exactly', () => {
+    const today = landingOrder(line, OPEN);
+    expect(today).toEqual({ paused: false, order: [line[0], line[1]], head: line[0] });
+    expect(landingOrder(line, OPEN, NONE)).toEqual(today);
+    expect('held' in landingOrder(line, OP, NONE)).toBe(false);
+    expect(landingOrder(line, OP)).toEqual(landingOrder(line, OP, NONE));
+  });
+  it('the held ids are a copy: mutating the answer never reaches the recovery', () => {
+    const o = landingOrder(line, OPEN, HOLD);
+    o.held!.subjectIds.push(1);
+    expect(HOLD.hold.subjectIds).toEqual([7, 9]);
   });
 });

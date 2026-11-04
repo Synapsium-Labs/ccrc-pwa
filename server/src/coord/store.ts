@@ -7,9 +7,13 @@ import type { GoalsView, ItemAct, ItemActor } from '../../../shared/ledgers.js';
 import * as ledgers from './ledgersStore.js';
 import type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
 export type { ItemEventRow, ItemMoveResult, ItemRow, RaiseItemInput } from './ledgersStore.js';
-import { decideLandingWrite, landingEntryOfRow, landingFlagsOfRow } from './landingEntry.js';
+import { decideLandingWrite, landingFactsOf, landingHoldGate, landingRecordOf } from './landingEntry.js';
+import { parseLandingJournal } from './landingJournalPolicy.js';
 import type { LandingAdvance, LandingWrite } from './landingEntry.js';
-import type { LandingEntry, LandingEntryState } from '../../../shared/landingLine.js';
+import type { LandingEntryState, LandingInfrastructureFailure, LandingJournalRecord } from '../../../shared/landingLine.js';
+import { decideLandingMutation } from './landingWrites.js';
+import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalReplay, LandingMutationFacts, LandingReadResult } from './landingWrites.js';
+import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { renderEnvelope } from './envelope.js';
@@ -268,7 +272,9 @@ export type AdvanceResult =
 export type LandingAdvanceResult =
   | (Extract<AdvanceResult, { ok: true }> & { landing: LandingWrite })
   | Exclude<AdvanceResult, { ok: true }>
-  | { ok: false; error: Extract<RunRefuseCode, 'ejection-not-merging'>; from: RunState };
+  | { ok: false; error: Extract<RunRefuseCode, 'ejection-not-merging'>; from: RunState }
+  | ({ ok: false } & LandingInfrastructureFailure)
+  | { ok: false; error: 'landing-recovery-unresolved' | 'landing-identity-conflict' | 'landing-id-overflow' };
 
 /** `setAccountPools`'s answer (T6-R4, fix round 1; `error`'s vocabulary moved
  *  to `shared/api.ts`'s `SetAccountPoolsRefuseCode` in fix round 2 — see C1
@@ -1779,7 +1785,11 @@ const feedDedupeHash = (key: string): string => createHash('sha256').update(key)
  * (spec:78-81) true rather than aspirational.
  */
 export class CoordStore {
-  constructor(readonly db: DatabaseSync) {}
+  /** Landing order wave 5f: null open; `replay` closed until `replayLandingJournal` proves the history; `restart` closed for good. */
+  private landingFence: 'replay' | 'restart' | null;
+  constructor(readonly db: DatabaseSync, private readonly landing: { landingJournal?: LandingJournalPort; onUnusableConnection?: () => never } = {}) {
+    this.landingFence = landing.landingJournal === undefined ? null : 'replay';
+  }
 
   // ── programs & runs ────────────────────────────────────────────────────────
 
@@ -2968,68 +2978,299 @@ export class CoordStore {
    * `merging-at:` detail itself from the same head it writes as `pinnedSha`, so the two cannot disagree. The choice of
    * what to write is `decideLandingWrite`'s (L1). The advance is never refused on the line's account (D-7618), and an
    * ejection body on a run not at `merging` is the one refusal of its own (D-7619). A `LandingAdvance` that pairs
-   * wrongly with `to` is a programming error and throws, rolling everything back.
+   * wrongly with the ACTUAL transition (a `plain` merging -> working included) is a programming error and throws,
+   * before any effect. Wave 5f: a pin or a retreat from `merging` that names a PR goes through the landing fence and
+   * the recovery hold; its own effects phase (`none`, `applying`, `committing`) says what an exception left uncertain,
+   * and an uncertain one fences the line and answers `mayApply`. A verified pin also writes its witness, atomically.
    */
   advanceLanding(input: { runId: number; to: RunState; causedBy: string; landing: LandingAdvance }): LandingAdvanceResult {
     const { runId, to, causedBy, landing } = input;
-    return tx(this.db, () => {
-      const row = this.db.prepare('SELECT state, kind, project FROM runs WHERE id = ?').get(runId) as
-        { state: string; kind: string; project: string } | undefined;
-      if (!row) return { ok: false as const, error: 'unknown-run' as const };
-      const from = isRunState(row.state) ? row.state : 'unknown';
-      const kind = isRunKind(row.kind) ? row.kind : 'unknown';
-      if (!(transitionsFor(kind)[from] as readonly string[]).includes(to)) {
-        return { ok: false as const, error: 'bad-transition' as const, from, to };
-      }
-      if ((landing.kind === 'pin') !== (to === 'merging') || (landing.kind === 'retreat' && to !== 'working')) {
-        throw new Error(`advanceLanding: a ${landing.kind} advance does not pair with a move to ${to}`);
-      }
-      if (landing.kind === 'retreat' && landing.ejection !== null && from !== 'merging') {
-        return { ok: false as const, error: 'ejection-not-merging' as const, from };
-      }
-      const episode = landing.kind === 'retreat' ? this.currentEpisode(runId) : null;
-      const pr = landing.kind === 'pin' ? landing.pr : episode?.pr ?? null;
-      const current = pr === null ? null : this.landingEntryOf(row.project, pr);
-      const decision = decideLandingWrite({ landing, from, runId, current, episode });
-      const adv = this.advanceInner(runId, to, causedBy,
-        landing.kind === 'pin' ? mergingAtDetail(landing.head, landing.pr, landing.mode) : undefined);
-      if (!adv.ok) return adv;
-      if (decision.act === 'none') return { ...adv, landing: decision.write };
-      const pinned: LandingEntryState = 'pinned';
-      const ejected: LandingEntryState = 'ejected';
-      if (landing.kind === 'pin' && decision.act === 'insert') {
-        this.db.prepare('INSERT INTO landing_entries (project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(row.project, landing.pr, landing.head, landing.handoffCommit, runId, pinned, causedBy, Date.now());
-      } else if (landing.kind === 'pin' && decision.act === 'repin') {
-        this.db.prepare('UPDATE landing_entries SET pinnedSha = ?, handoffCommit = ?, runId = ?, state = ?, baseSha = NULL, ' +
-          'ejectionKind = NULL, pinnedAt = ? WHERE id = ?').run(landing.head, landing.handoffCommit, runId, pinned, Date.now(), decision.id);
-      } else if (decision.act === 'eject') {
-        this.db.prepare('UPDATE landing_entries SET state = ?, baseSha = ?, ejectionKind = ?, ejections = ejections + 1 WHERE id = ?')
-          .run(ejected, decision.base, decision.kind, decision.id);
-      }
-      const entry = pr === null ? null : this.landingEntryOf(row.project, pr);
-      if (entry === null) throw new Error('advanceLanding: the entry it just wrote reads back absent');
-      return { ...adv, landing: decision.act === 'eject' ? { kind: 'ejected' as const, entry }
-        : { kind: 'pinned' as const, entry, created: decision.act === 'insert' } };
+    let effects: 'none' | 'applying' | 'committing' = 'none';
+    let touched = false;
+    let began = false;
+    try {
+      return tx(this.db, (): LandingAdvanceResult => {
+        began = true;
+        const out = ((): LandingAdvanceResult => {
+          const row = this.db.prepare('SELECT state, kind, project FROM runs WHERE id = ?').get(runId) as
+            { state: string; kind: string; project: string } | undefined;
+          if (!row) return { ok: false as const, error: 'unknown-run' as const };
+          const from = isRunState(row.state) ? row.state : 'unknown';
+          const kind = isRunKind(row.kind) ? row.kind : 'unknown';
+          if (!(transitionsFor(kind)[from] as readonly string[]).includes(to)) {
+            return { ok: false as const, error: 'bad-transition' as const, from, to };
+          }
+          if ((landing.kind === 'pin') !== (to === 'merging') || (landing.kind === 'retreat' && to !== 'working')
+            || (from === 'merging' && to === 'working' && landing.kind !== 'retreat')) {
+            throw new Error(`advanceLanding: a ${landing.kind} advance does not pair with a move to ${to}`);
+          }
+          if (landing.kind === 'retreat' && landing.ejection !== null && from !== 'merging') {
+            return { ok: false as const, error: 'ejection-not-merging' as const, from };
+          }
+          const episode = landing.kind === 'retreat' ? this.currentEpisode(runId) : null;
+          const pr = landing.kind === 'pin' ? landing.pr : episode?.pr ?? null;
+          let facts: LandingMutationFacts | null = null;
+          let reserved: number | null = null;
+          if (pr !== null && (landing.kind === 'pin' || from === 'merging')) {
+            const fenced = this.landingGuard();
+            if (fenced !== null) return { ok: false as const, ...fenced };
+            touched = true;
+            const read = this.landingFactsInner(row.project);
+            if (!read.ok) return read;
+            facts = read.facts;
+          }
+          const current = facts?.entries.find((e) => e.pr === pr) ?? null;
+          const projection = facts?.projections.find((p) => p.id === current?.id)?.value ?? null;
+          if (facts !== null && landing.kind !== 'plain') {
+            const gate = landingHoldGate(facts.recovery, landing.kind, { project: row.project, pr: pr! }, projection);
+            if (!gate.ok) return { ok: false as const, error: gate.error };
+            reserved = gate.own?.id ?? facts.nextId;
+          }
+          const decision = decideLandingWrite({ landing, from, runId, current, projection, episode });
+          if (decision.act === 'refuse') return decision.failure;
+          if (decision.act === 'insert' && reserved === null) return { ok: false as const, error: 'landing-id-overflow' as const };
+          effects = 'applying';
+          const adv = this.advanceInner(runId, to, causedBy,
+            landing.kind === 'pin' ? mergingAtDetail(landing.head, landing.pr, landing.mode) : undefined);
+          if (!adv.ok) return adv;
+          if (decision.act === 'none') return { ...adv, landing: decision.write };
+          const pinned: LandingEntryState = 'pinned';
+          const ejected: LandingEntryState = 'ejected';
+          let entryId = reserved;
+          if (landing.kind === 'pin' && decision.act === 'insert') {
+            this.db.prepare('INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) ' +
+              'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(reserved, row.project, landing.pr, landing.head, landing.handoffCommit, runId, pinned, causedBy, Date.now());
+          } else if (landing.kind === 'pin' && decision.act === 'repin') {
+            // A verified re-pin also clears the stale-head marker (a quarantined row re-pins only on a readable projection).
+            this.db.prepare('UPDATE landing_entries SET pinnedSha = ?, handoffCommit = ?, runId = ?, state = ?, baseSha = NULL, ' +
+              'ejectionKind = NULL, quarantineKind = NULL, pinnedAt = ? WHERE id = ?').run(landing.head, landing.handoffCommit, runId, pinned, Date.now(), decision.id);
+            entryId = decision.id;
+          } else if (decision.act === 'eject') {
+            // The count is the decider's (bounded at the safe-integer ceiling), never `ejections + 1` in SQL.
+            this.db.prepare('UPDATE landing_entries SET state = ?, baseSha = ?, ejectionKind = ?, ejections = ? WHERE id = ?')
+              .run(ejected, decision.base, decision.kind, decision.ejections, decision.id);
+          } else if (decision.act === 'quarantine') {
+            // A stale entry head is not an ejection: only the state and its one marker move (no base, count or notice).
+            this.db.prepare("UPDATE landing_entries SET state = 'unknown', quarantineKind = 'stale-episode-head' WHERE id = ?").run(decision.id);
+            return { ...adv, landing: { kind: 'kept' as const, state: 'unknown' as const } };
+          }
+          if (landing.kind === 'pin') {
+            // The witness of this verified pin, bound to the subject's latest observation (0 when it has none): the ONLY writer.
+            const seen = this.bigReads('SELECT observedSeq FROM landing_subjects WHERE project = ? AND pr = ?')
+              .get(row.project, landing.pr) as { observedSeq: bigint } | undefined;
+            this.db.prepare('INSERT OR REPLACE INTO landing_projection_witness (entryId, project, pr, observedSeq, runId, pinnedSha, handoffCommit) ' +
+              'VALUES (?, ?, ?, ?, ?, ?, ?)').run(entryId, row.project, landing.pr, Number(seen?.observedSeq ?? 0n), runId, landing.head, landing.handoffCommit);
+          }
+          const after = this.landingFactsInner(row.project);
+          const entry = after.ok ? after.facts.entries.find((e) => e.pr === pr) ?? null : null;
+          if (entry === null) throw new Error('advanceLanding: the entry it just wrote reads back absent');
+          return { ...adv, landing: decision.act === 'eject' ? { kind: 'ejected' as const, entry }
+            : { kind: 'pinned' as const, entry, created: decision.act === 'insert' } };
+        })();
+        if (effects === 'applying') effects = 'committing';
+        return out;
+      });
+    } catch (err) {
+      // A plain advance, and a pin or retreat that began but never reached the line (the run read, the pairing
+      // programming error, a retreat with no PR or not from merging), carry no landing contract: the failure propagates
+      // as it always did. A pin or retreat whose BEGIN threw is the line's own db-unavailable; once the line was
+      // reached, a failure is the line's, by its effects phase.
+      if (landing.kind === 'plain' || (began && !touched)) throw err;
+      const recovery = this.landingBoundary();
+      if (effects === 'none') return { ok: false, error: 'landing-db-unavailable', recovery };
+      this.landingFence = recovery;
+      return { ok: false, error: effects === 'applying' ? 'landing-db-apply' : 'landing-db-commit', recovery, mayApply: true };
+    }
+  }
+
+  /** The landing entrances' guard: unavailable without a journal port, `landing-fenced` while the fence stands. */
+  private landingGuard(): LandingInfrastructureFailure | null {
+    if (this.landing.landingJournal === undefined) return { error: 'landing-journal-unavailable', recovery: 'restart' };
+    return this.landingFence === null ? null : { error: 'landing-fenced', recovery: this.landingFence };
+  }
+
+  /** After a caught landing failure: `replay` only when the connection PROVABLY sits at a clean transaction boundary. An
+   *  open handle in a transaction, or one whose state cannot be measured, is closed (and the fence made restart-only); a
+   *  close that cannot be proved calls the L5 fail-stop. `tx` suppresses ROLLBACK errors, so a caught throw proves nothing. */
+  private landingBoundary(): 'replay' | 'restart' {
+    try { if (this.db.isOpen && !this.db.isTransaction) return 'replay'; } catch { /* unprovable: closed below */ }
+    this.landingFence = 'restart';
+    try { if (this.db.isOpen) this.db.close(); } catch { /* proved below */ }
+    let closed = false;
+    try { closed = !this.db.isOpen; } catch { /* not proved */ }
+    if (!closed) {
+      this.landing.onUnusableConnection?.();
+      throw new Error('landing: the database connection cannot be proved closed');
+    }
+    return 'restart';
+  }
+
+  /** A landing SELECT: it reads bigints, so an oversized INTEGER reaches the strict reader whole, never rounded. */
+  private bigReads(sql: string): StatementSync { const st = this.db.prepare(sql); st.setReadBigInts(true); return st; }
+
+  /** The guarded inner read: every landing SELECT reads bigints, and one project's rows fold into its coherent facts. */
+  private landingFactsInner(project: string): LandingReadResult {
+    const all = (sql: string, ...p: string[]): Record<string, unknown>[] => this.bigReads(sql).all(...p) as Record<string, unknown>[];
+    return landingFactsOf(project, {
+      entries: all('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, afterIds, fixesMain, ' +
+        'setBy, pinnedAt, quarantineKind FROM landing_entries ORDER BY pinnedAt, id'),
+      subjects: all('SELECT id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim FROM landing_subjects'),
+      authorities: all('SELECT subjectId, afterIds, fixesMain, setBy, seq FROM landing_authority'),
+      witnesses: all('SELECT entryId, project, pr, observedSeq, runId, pinnedSha, handoffCommit FROM landing_projection_witness'),
+      flags: all('SELECT operatorPaused, mainRedHold FROM landing_projects WHERE project = ?', project)[0],
+      runs: all('SELECT id, claimedBy FROM runs WHERE id IN (SELECT runId FROM landing_entries WHERE project = ? AND runId IS NOT NULL)', project),
     });
   }
 
-  /** One entry by (project, pr), read through `landingEntryOfRow`; null when there is none. */
-  private landingEntryOf(project: string, pr: number): LandingEntry | null {
-    const row = this.db.prepare('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, ' +
-      'afterIds, fixesMain, setBy, pinnedAt FROM landing_entries WHERE project = ? AND pr = ?').get(project, pr);
-    return row === undefined ? null : landingEntryOfRow(row);
+  /** One project's guarded landing facts (entries, flags, recovery and the inner inventories): a synchronous read
+   *  transaction behind the fence. The ONLY public landing read. */
+  readLanding(project: string): LandingReadResult {
+    const fenced = this.landingGuard();
+    if (fenced !== null) return { ok: false, ...fenced };
+    try { return this.db.isTransaction ? this.landingFactsInner(project) : tx(this.db, () => this.landingFactsInner(project)); }
+    catch { return { ok: false, error: 'landing-db-unavailable', recovery: this.landingBoundary() }; }
   }
 
-  /** A project's landing line, oldest pin first (`pinnedAt`, then `id`). An unreadable row reads `unknown`, never absent. */
-  landingEntries(project: string): LandingEntry[] {
-    return this.db.prepare('SELECT id, project, pr, pinnedSha, handoffCommit, runId, state, baseSha, ejectionKind, ejections, ' +
-      'afterIds, fixesMain, setBy, pinnedAt FROM landing_entries WHERE project = ? ORDER BY pinnedAt, id').all(project).map(landingEntryOfRow);
+  /** The whole journal, validated, against the DB cursor: `fail` is the typed refusal (never raw text), `snapshot` the
+   *  adapter's evidence the caller must release. Absence is bootstrap only with cursor 0 and no overlay rows. */
+  private landingHistory(log: LandingJournalPort): { fail: LandingInfrastructureFailure | null; snapshot: LandingJournalSnapshot | null;
+    records: LandingJournalRecord[]; lastSeq: number; cursor: number } {
+    const r = log.read();
+    if (!r.ok) return { fail: { error: 'landing-journal-unreadable', recovery: 'replay' }, snapshot: null, records: [], lastSeq: 0, cursor: 0 };
+    try { return this.landingHistoryOf(r); } catch (err) { r.snapshot.release(); throw err; }
   }
 
-  /** A project's two line flags. An absent row, which nothing seeds, reads both clear. */
-  landingProject(project: string): { operatorPaused: boolean; mainRedHold: boolean } {
-    return landingFlagsOfRow(this.db.prepare('SELECT operatorPaused, mainRedHold FROM landing_projects WHERE project = ?').get(project));
+  /** `landingHistory`'s body after a successful read: a throw out of it is released by the caller. */
+  private landingHistoryOf(r: Extract<ReturnType<LandingJournalPort['read']>, { ok: true }>): { fail: LandingInfrastructureFailure | null;
+    snapshot: LandingJournalSnapshot | null; records: LandingJournalRecord[]; lastSeq: number; cursor: number } {
+    const c = this.bigReads('SELECT appliedSeq AS cursor, (SELECT COUNT(*) FROM landing_subjects) + (SELECT COUNT(*) FROM landing_authority) AS overlay ' +
+      'FROM landing_journal_cursor WHERE id = 1').get() as { cursor: bigint; overlay: bigint } | undefined;
+    if (c === undefined) throw new Error('landing_journal_cursor has no row');
+    const cursor = Number(c.cursor);
+    const base = { snapshot: r.snapshot, cursor, records: [] as LandingJournalRecord[], lastSeq: 0 };
+    if (r.kind === 'absent') {
+      return { ...base, fail: cursor !== 0 || c.overlay !== 0n ? { error: 'landing-journal-missing', recovery: 'replay' } : null };
+    }
+    const p = parseLandingJournal(r.text);
+    if (!p.ok) return { ...base, fail: { error: 'landing-journal-invalid', recovery: 'replay', invalid: { reason: p.reason, record: p.record } } };
+    const ok = { ...base, records: p.records, lastSeq: p.lastSeq };
+    return { ...ok, fail: cursor > p.lastSeq ? { error: 'landing-journal-cursor', recovery: 'replay' } : null };
+  }
+
+  /** The ONE SQL writer of `landing_subjects`, `landing_authority` and the cursor, for live writes and replay alike. A
+   *  first mention registers a subject, a later one replaces its latest observation; an `entry` record keeps its claim. */
+  private applyLandingRecord(r: LandingJournalRecord): void {
+    const ref = this.db.prepare('INSERT INTO landing_subjects (id, project, pr, bindingKind, observedRunId, observedSeq, creationSeq, creationClaim) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET bindingKind = excluded.bindingKind, observedRunId = excluded.observedRunId, ' +
+      'observedSeq = excluded.observedSeq');
+    const claim = r.kind === 'entry' ? JSON.stringify({ at: r.at, setBy: r.setBy, pinnedSha: r.claim.pinnedSha, handoffCommit: r.claim.handoffCommit }) : null;
+    [r.subject, ...(r.kind === 'order' ? r.after : [])].forEach((s, i) => ref.run(s.id, s.project, s.pr, s.binding.kind,
+      s.binding.kind === 'run' ? s.binding.observedRunId : null, r.seq, i === 0 && claim !== null ? r.seq : null, i === 0 ? claim : null));
+    this.db.prepare('INSERT INTO landing_authority (subjectId, afterIds, fixesMain, setBy, seq) VALUES (?, ?, ?, ?, ?) ON CONFLICT(subjectId) ' +
+      'DO UPDATE SET afterIds = excluded.afterIds, fixesMain = excluded.fixesMain, setBy = excluded.setBy, seq = excluded.seq')
+      .run(r.subject.id, JSON.stringify(r.kind === 'order' ? r.after.map((a) => a.id) : []), r.kind === 'order' && r.fixesMain ? 1 : 0, r.setBy, r.seq);
+    this.db.prepare('UPDATE landing_journal_cursor SET appliedSeq = ? WHERE id = 1').run(r.seq);
+  }
+
+  /**
+   * The ONLY in-process reopen of the landing fence (shared contract §6): needs a provably clean connection, validates the
+   * WHOLE history, checks the cursor and any missing history, confirms the exact snapshot is durable (even at an equal
+   * cursor), then applies only the suffix and the cursor in ONE transaction. It never writes a projection or a witness,
+   * never notices. Any failure keeps the fence; there is no retry timer.
+   */
+  replayLandingJournal(): LandingJournalReplay {
+    const log = this.landing.landingJournal;
+    if (log === undefined) return { ok: false, error: 'landing-journal-unavailable', recovery: 'restart' };
+    if (this.landingFence === 'restart') return { ok: false, error: 'landing-fenced', recovery: 'restart' };
+    let held: LandingJournalSnapshot | null = null;
+    // Which database step a throw interrupted: a failed read or BEGIN is db-unavailable, a failed record db-apply, a
+    // failed COMMIT db-commit. (Asserted, not annotated: the closure's assignments are invisible to narrowing.)
+    let phase = 'read' as 'read' | 'apply' | 'commit';
+    // Called with the fence OPEN, a failed replay closes it (the more severe restart fence a boundary proof sets stays).
+    const wasOpen = this.landingFence === null;
+    const refuse = (f: LandingInfrastructureFailure): LandingJournalReplay => {
+      if (wasOpen) this.landingFence = this.landingFence ?? f.recovery;
+      return { ok: false, ...f };
+    };
+    try {
+      if (this.landingBoundary() === 'restart') return { ok: false, error: 'landing-fenced', recovery: 'restart' };
+      const hist = this.landingHistory(log);
+      held = hist.snapshot;
+      if (hist.fail !== null) return refuse(hist.fail);
+      const confirmed = log.confirmDurable(held!);
+      if (!confirmed.ok) {
+        return refuse({ recovery: 'replay', error: confirmed.error === 'durability' ? 'landing-journal-durability'
+          : confirmed.error === 'changed' ? 'landing-journal-changed' : 'landing-journal-unreadable' });
+      }
+      const suffix = hist.records.filter((r) => r.seq > hist.cursor);
+      tx(this.db, () => { phase = 'apply'; suffix.forEach((r) => this.applyLandingRecord(r)); phase = 'commit'; });
+      this.landingFence = null;
+      return { ok: true, applied: suffix.length, lastSeq: hist.lastSeq };
+    } catch {
+      const error = phase === 'commit' ? 'landing-db-commit' : phase === 'apply' ? 'landing-db-apply' : 'landing-db-unavailable';
+      return refuse({ error, recovery: this.landingBoundary() });
+    } finally { held?.release(); }
+  }
+
+  /**
+   * The ONE authoritative landing write (an entry for a PR with no run, or a PR's order edges and flag): validate the
+   * complete journal and cursor, gather the guarded facts in the same transaction, decide (L1), append the record, apply
+   * it to the overlay (and, for a creation, to its projection), COMMIT. A failure once the append was entered fences every
+   * landing entrance and answers `mayApply` with the phase that failed; a refusal before it appends nothing.
+   */
+  writeLandingAuthority(command: LandingAuthorityCommand, at: number): LandingAuthorityWrite {
+    const log = this.landing.landingJournal;
+    const fenced = this.landingGuard();
+    if (log === undefined || fenced !== null) return { ok: false, ...(fenced ?? { error: 'landing-journal-unavailable' as const, recovery: 'restart' as const }) };
+    const phase: { at: JournalPhase } = { at: 'decide' };
+    let held: LandingJournalSnapshot | null = null;
+    try {
+      return tx(this.db, (): LandingAuthorityWrite => appendThenApply<{ snapshot: LandingJournalSnapshot; record: LandingJournalRecord;
+        mutation: Parameters<typeof landingRecordOf>[1] }, LandingAuthorityWrite, LandingAuthorityWrite>({
+        decide: () => {
+          const hist = this.landingHistory(log);
+          held = hist.snapshot;
+          const stop = (f: LandingInfrastructureFailure): { stop: LandingAuthorityWrite } => { this.landingFence ??= 'replay'; return { stop: { ok: false, ...f } }; };
+          if (hist.fail !== null) return stop(hist.fail);
+          if (hist.lastSeq !== hist.cursor) return stop({ error: 'landing-journal-cursor', recovery: 'replay' });
+          const read = this.landingFactsInner(command.project);
+          if (!read.ok) return { stop: read };
+          const decision = decideLandingMutation(command, read.facts);
+          if (!decision.ok) {
+            return { stop: decision.error === 'landing-projection-unreadable' ? { ok: false, error: decision.error, recovery: 'restart' }
+              : { ok: false, error: decision.error } };
+          }
+          const m = decision.mutation;
+          if (m.kind === 'noop') return { stop: { ok: true, entry: m.entry, previous: m.entry, changed: false, seq: null, coordinator: m.coordinator } };
+          if (hist.lastSeq >= Number.MAX_SAFE_INTEGER) return { stop: { ok: false, error: 'landing-sequence-overflow' } };
+          return { go: { snapshot: held!, mutation: m, record: landingRecordOf(command, m, hist.lastSeq + 1, at) } };
+        },
+        append: ({ snapshot, record }) => {
+          const appended = log.append(snapshot, record);
+          if (!appended.ok) throw new Error('landing journal append failed');
+        },
+        apply: ({ record, mutation }) => {
+          this.applyLandingRecord(record);
+          if (mutation.kind === 'entry') {
+            this.db.prepare('INSERT INTO landing_entries (id, project, pr, pinnedSha, handoffCommit, runId, state, setBy, pinnedAt) ' +
+              "VALUES (?, ?, ?, ?, ?, NULL, 'pinned', ?, ?)").run(mutation.id, mutation.project, mutation.pr, mutation.pinnedSha, mutation.handoffCommit, mutation.setBy, at);
+          }
+          const after = this.landingFactsInner(command.project);
+          const entry = after.ok ? after.facts.entries.find((e) => e.pr === command.pr) : undefined;
+          if (entry === undefined) throw new Error('landing write reads back absent');
+          // The order's association is the decision's (readable only); a creation is a no-run entry by construction.
+          return mutation.kind === 'order'
+            ? { ok: true, entry, previous: mutation.entry, changed: true, seq: record.seq, coordinator: mutation.coordinator }
+            : { ok: true, entry, previous: null, changed: true, seq: record.seq, coordinator: { kind: 'no-run' } };
+        },
+      }, phase));
+    } catch {
+      const recovery = this.landingBoundary();
+      if (phase.at === 'decide') return { ok: false, error: 'landing-db-unavailable', recovery };
+      this.landingFence = recovery;
+      return { ok: false, recovery, mayApply: true,
+        error: phase.at === 'append' ? 'landing-journal-append' : phase.at === 'apply' ? 'landing-db-apply' : 'landing-db-commit' };
+    } finally { (held as LandingJournalSnapshot | null)?.release(); }
   }
 
   /** Review findings 8/14: every `queued` or `delivered`-but-unacked delivery

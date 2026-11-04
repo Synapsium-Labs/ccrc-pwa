@@ -2078,6 +2078,87 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE operator_items ADD COLUMN recommended INTEGER;
   ALTER TABLE operator_items ADD COLUMN recommendedWhy TEXT;
   `,
+  // ── 39: user_version 38 -> 39 ─────────────────────────────────────────────
+  // Landing order wave 5f: the landing line's authority overlay, its journal cursor, a DB-only association witness and
+  // the quarantine marker. Nothing here is seeded from `landing_entries`: those ordering columns stay the fallback only.
+  //
+  // `landing_subjects`: one row per identity the landing journal (`landing.log`) ever named. Its ONE writer is the
+  // private apply family of `CoordStore` (live write and replay alike); its readers are `readLanding` and the recovery
+  // fold (`landingRecoveryOf`). `bindingKind`/`observedRunId` are the LATEST historical observation of the subject's
+  // run association, with `observedSeq` the journal sequence that made it; `observedRunId` has no FK to `runs` and is
+  // never joined to a current run. `creationSeq`/`creationClaim` are the original entry record, both NULL for a subject
+  // only ever named as a target. ID and (project, pr) are each unique.
+  //
+  // `landing_authority`: the decided order of one subject (`afterIds` a JSON array of entry ids, `fixesMain` 0/1, the
+  // setter and the record sequence). Same writer and readers. Individual edge identity and uniqueness are policy
+  // (`parseLandingJournal`, `decideLandingMutation`), not a SQL graph walker.
+  //
+  // `landing_journal_cursor`: one row, `appliedSeq` the last journal sequence applied. Seeded `(1, 0)`, the only seed.
+  //
+  // `landing_projection_witness`: DB-only evidence of the last VERIFIED pin of a projection (`advanceLanding` is its
+  // only writer, atomically with the pin). `observedSeq` 0 means no subject observation yet. It is not journal authority
+  // and never current association authority; it is empty at migration and replay never mints it. It cascades with its
+  // projection; no FK to `runs`.
+  //
+  // `landing_entries.quarantineKind`: NULL for an ordinary projection, `stale-episode-head` (with `state` `unknown`) for
+  // a deliberately quarantined stale pin. Only `advanceLanding` writes or clears it. No existing row is quarantined.
+  //
+  // NEW TABLES AND ONE NULLABLE COLUMN, NOTHING ELSE: an older build opening a file at `user_version 39` takes rule 3
+  // (it warns, reads as-is and migrates nothing) and never names them. Every earlier entry is frozen. RE-MEASURE the
+  // slot before the PR and before merge (it must print 38 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE landing_subjects (
+    id            INTEGER PRIMARY KEY CHECK (typeof(id) = 'integer' AND id BETWEEN 1 AND 9007199254740991),
+    project       TEXT    NOT NULL CHECK (typeof(project) = 'text' AND project = trim(project, ' ' || char(9) || char(10) || char(13)) AND length(project) > 0),
+    pr            INTEGER NOT NULL CHECK (typeof(pr) = 'integer' AND pr BETWEEN 1 AND 9007199254740991),
+    bindingKind   TEXT    NOT NULL CHECK (bindingKind IN ('run', 'no-run')),
+    observedRunId INTEGER CHECK (observedRunId IS NULL OR (typeof(observedRunId) = 'integer' AND observedRunId BETWEEN 1 AND 9007199254740991)),
+    observedSeq   INTEGER NOT NULL CHECK (typeof(observedSeq) = 'integer' AND observedSeq BETWEEN 1 AND 9007199254740991),
+    creationSeq   INTEGER CHECK (creationSeq IS NULL OR (typeof(creationSeq) = 'integer' AND creationSeq BETWEEN 1 AND 9007199254740991)),
+    creationClaim TEXT,
+    UNIQUE (project, pr),
+    CHECK ((bindingKind = 'run') = (observedRunId IS NOT NULL)),
+    CHECK ((creationSeq IS NULL) = (creationClaim IS NULL)),
+    CHECK (creationSeq IS NULL OR creationSeq <= observedSeq),
+    CHECK (creationClaim IS NULL OR (CASE WHEN json_valid(creationClaim) THEN (json_type(creationClaim) IS 'object'
+      AND json_type(creationClaim, '$.at') IS 'integer'
+      AND json_extract(creationClaim, '$.at') BETWEEN 0 AND 9007199254740991
+      AND json_type(creationClaim, '$.setBy') IS 'text'
+      AND json_extract(creationClaim, '$.setBy') = trim(json_extract(creationClaim, '$.setBy'), ' ' || char(9) || char(10) || char(13))
+      AND length(json_extract(creationClaim, '$.setBy')) > 0
+      AND json_type(creationClaim, '$.pinnedSha') IS 'text'
+      AND length(json_extract(creationClaim, '$.pinnedSha')) = 40
+      AND json_extract(creationClaim, '$.pinnedSha') NOT GLOB '*[^0-9a-f]*'
+      AND json_type(creationClaim, '$.handoffCommit') IS 'text'
+      AND length(json_extract(creationClaim, '$.handoffCommit')) = 40
+      AND json_extract(creationClaim, '$.handoffCommit') NOT GLOB '*[^0-9a-f]*') ELSE 0 END))
+  );
+  CREATE TABLE landing_authority (
+    subjectId INTEGER PRIMARY KEY REFERENCES landing_subjects(id) CHECK (typeof(subjectId) = 'integer' AND subjectId BETWEEN 1 AND 9007199254740991),
+    afterIds  TEXT    NOT NULL CHECK (CASE WHEN json_valid(afterIds) THEN json_type(afterIds) = 'array' ELSE 0 END),
+    fixesMain INTEGER NOT NULL CHECK (typeof(fixesMain) = 'integer' AND fixesMain IN (0, 1)),
+    setBy     TEXT    NOT NULL CHECK (typeof(setBy) = 'text' AND setBy = trim(setBy, ' ' || char(9) || char(10) || char(13)) AND length(setBy) > 0),
+    seq       INTEGER NOT NULL CHECK (typeof(seq) = 'integer' AND seq BETWEEN 1 AND 9007199254740991)
+  );
+  CREATE TABLE landing_journal_cursor (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    appliedSeq INTEGER NOT NULL CHECK (typeof(appliedSeq) = 'integer' AND appliedSeq BETWEEN 0 AND 9007199254740991)
+  );
+  CREATE TABLE landing_projection_witness (
+    entryId       INTEGER PRIMARY KEY REFERENCES landing_entries(id) ON DELETE CASCADE CHECK (typeof(entryId) = 'integer' AND entryId BETWEEN 1 AND 9007199254740991),
+    project       TEXT    NOT NULL CHECK (typeof(project) = 'text' AND project = trim(project, ' ' || char(9) || char(10) || char(13)) AND length(project) > 0),
+    pr            INTEGER NOT NULL CHECK (typeof(pr) = 'integer' AND pr BETWEEN 1 AND 9007199254740991),
+    observedSeq   INTEGER NOT NULL CHECK (typeof(observedSeq) = 'integer' AND observedSeq BETWEEN 0 AND 9007199254740991),
+    runId         INTEGER NOT NULL CHECK (typeof(runId) = 'integer' AND runId BETWEEN 1 AND 9007199254740991),
+    pinnedSha     TEXT    NOT NULL CHECK (typeof(pinnedSha) = 'text' AND length(pinnedSha) = 40 AND pinnedSha NOT GLOB '*[^0-9a-f]*'),
+    handoffCommit TEXT    NOT NULL CHECK (typeof(handoffCommit) = 'text' AND length(handoffCommit) = 40 AND handoffCommit NOT GLOB '*[^0-9a-f]*')
+  );
+  ALTER TABLE landing_entries ADD COLUMN quarantineKind TEXT DEFAULT NULL
+    CHECK (quarantineKind IS NULL OR (quarantineKind = 'stale-episode-head' AND state = 'unknown'));
+  INSERT INTO landing_journal_cursor (id, appliedSeq) VALUES (1, 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

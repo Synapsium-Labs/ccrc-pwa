@@ -27,6 +27,7 @@ import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/l
 import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
+import { createLandingJournal } from './coord/landingJournal.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from './coord/updateintentlog.js';
 import { collectLaneJournalAt, defaultCollectLaneJournalPath } from './coord/collectLaneJournal.js';
@@ -42,6 +43,7 @@ import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf, fingerprintGeneration, fingerprintRow } from './accounts/mask.js';
+import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -95,7 +97,22 @@ if (restoreRefusal !== null) {
 // ccrc.service` (added this build) is what turns it into a failed deploy with
 // the journal tail attached, rather than a green deploy in front of a
 // three-second crash loop.
-const coord = new CoordStore(openCoordDb(cfg.coordDbPath));
+const coordDb = openCoordDb(cfg.coordDbPath);
+// Landing order wave 5f (shared contract §6): the store owns ONE authority journal, `landing.log` inside `cfg.ccrcDir`
+// (made here, because the adapter never creates a directory), and its landing entrances start fenced. The replay below
+// is the only thing that opens them, and it runs before the HTTP server, the watchers and every timer, in both fleet
+// modes (one store, built above the mode branch). A callback that cannot prove the connection closed stops the process.
+mkdirSync(cfg.ccrcDir, { recursive: true });
+const coord = new CoordStore(coordDb, {
+  landingJournal: createLandingJournal(cfg.ccrcDir),
+  onUnusableConnection: (): never => { console.error('ccrc-server: landing connection unusable, stopping'); process.exit(1); },
+});
+const landingReplay = coord.replayLandingJournal();
+if (!landingReplay.ok) {
+  console.error(`ccrc-server: landing journal recovery refused ${landingReplay.error}`);
+  try { coordDb.close(); } catch { /* the process stops either way */ }
+  process.exit(1);
+}
 
 // The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
 // `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`

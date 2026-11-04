@@ -13,6 +13,7 @@ import { NotifyLog } from '../src/notifylog.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { landingStoreOver } from './landingFixture.js';
 
 const TOKEN = 'f'.repeat(64);
 const PROJECT = 'demo';
@@ -49,7 +50,8 @@ async function scenario(o: { visible?: boolean } = {}) {
   const run: Runner = async (_c, args) => (args[0] !== 'pr-state'
     ? { ran: true, code: 0, stdout: '', stderr: '' }
     : { ran: true, code: 0, stdout: `${prLine()}\n`, stderr: '' });
-  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const dbPath = path.join(home, '.ccrc', 'coord.db');
+  const coord = landingStoreOver(openCoordDb(dbPath), dbPath);
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
   const push = { notify: vi.fn() };
@@ -69,8 +71,9 @@ async function scenario(o: { visible?: boolean } = {}) {
       payload: { to, fingerprint, ...extra } });
   const toMerging = async () => { expect((await post('awaiting-review')).statusCode).toBe(200); return post('merging'); };
   const eject = () => post('working', { ejection: { base: 'b'.repeat(40), kind: 'new-head' } });
+  const bareRetreat = () => post('working');
   const asks = () => notifyLog.catchUp(notifyLog.epoch, 0).events.filter((x) => x.title.startsWith('Landing: '));
-  return { app, coord, id: opened.id, post, toMerging, eject, asks, push };
+  return { app, coord, id: opened.id, post, toMerging, eject, bareRetreat, asks, push };
 }
 
 let app: FastifyInstance | undefined;
@@ -119,6 +122,45 @@ describe('the second ejection raises one operator notice (D-7624)', () => {
     expect((await toMerging()).statusCode).toBe(200); expect((await eject()).statusCode).toBe(200);
     expect((await toMerging()).statusCode).toBe(200); expect((await eject()).statusCode).toBe(200);
     expect(asks()).toHaveLength(1);
+    expect(push.notify).not.toHaveBeenCalled();
+  });
+});
+
+describe('a bare second retreat raises one honest notice (wave 5f Task 3)', () => {
+  it('two bare retreats raise ONE ask whose body says no kind or base was recorded, never "unrecorded against base unrecorded"', async () => {
+    const { app: a, id, toMerging, bareRetreat, asks, push } = await scenario(); app = a;
+    expect((await toMerging()).statusCode).toBe(200); expect((await bareRetreat()).statusCode).toBe(200);
+    expect(asks()).toHaveLength(0);
+    expect((await toMerging()).statusCode).toBe(200); expect((await bareRetreat()).statusCode).toBe(200);
+    expect(asks()).toHaveLength(1);
+    expect(asks()[0]).toMatchObject({ kind: 'run', runId: id, title: 'Landing: demo #7 ejected twice',
+      body: `run ${id}, demo #7: returned from merging to working a second time; no ejection kind or base was recorded. The line holds nothing back; you decide whether it lands again, is fixed by hand or is withdrawn.` });
+    expect(asks()[0]!.body).not.toContain('unrecorded against base unrecorded');
+    expect(push.notify).toHaveBeenCalledTimes(1);
+    expect(push.notify.mock.calls[0]![0]).toMatchObject({ tag: 'landing-ejected-demo-7' });
+  });
+
+  it('CONTROL: a named second ejection keeps its named copy', async () => {
+    const { app: a, id, toMerging, eject, asks } = await scenario(); app = a;
+    expect((await toMerging()).statusCode).toBe(200); expect((await eject()).statusCode).toBe(200);
+    expect((await toMerging()).statusCode).toBe(200); expect((await eject()).statusCode).toBe(200);
+    expect(asks()).toHaveLength(1);
+    expect(asks()[0]!.body).toBe(`run ${id}, demo #7: ejected from the landing line a second time (new-head against base ${'b'.repeat(12)}). The line holds nothing back; you decide whether it lands again, is fixed by hand or is withdrawn.`);
+  });
+});
+
+describe('a stale-head quarantine is no ejection (wave 5f Task 3)', () => {
+  it.each([['named', true], ['bare', false]])('a %s retreat whose entry names another head quarantines it and raises no ask and no notice', async (_n, named) => {
+    const { app: a, coord, toMerging, eject, bareRetreat, asks, push } = await scenario(); app = a;
+    expect((await toMerging()).statusCode).toBe(200);
+    // one ejection already counted, so a retreat wrongly counted as the second would raise the ask
+    coord.db.prepare('UPDATE landing_entries SET pinnedSha = ?, ejections = 1 WHERE pr = 7').run('c'.repeat(40));
+    const res = await (named ? eject() : bareRetreat());
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, run: { state: 'working' }, landing: { kind: 'kept', state: 'unknown' } });
+    expect(coord.db.prepare('SELECT state, quarantineKind, ejections FROM landing_entries WHERE pr = 7').get())
+      .toEqual({ state: 'unknown', quarantineKind: 'stale-episode-head', ejections: 1 });
+    expect(asks()).toHaveLength(0);
     expect(push.notify).not.toHaveBeenCalled();
   });
 });

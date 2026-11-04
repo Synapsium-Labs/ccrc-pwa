@@ -16,7 +16,7 @@ import type { ReadFailure } from './agent-protocol.js';
 import type { WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
-import type { LandingEntry } from './landingLine.js';
+import type { LandingWrite } from './landingLine.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -4827,7 +4827,10 @@ export interface NotifyEvent {
    *
    * NULL IS "ABOUT NO RUN", NOT "UNKNOWN". An `ask`, a `done`, a `merged` and a
    * `coord` are about a SESSION or about the config; they belong to no
-   * programme and appear only in the unfiltered feed. The two lanes that DO
+   * programme and appear only in the unfiltered feed. A `coord` event
+   * normally carries null; the attributed landing inversion notice carries the
+   * actual current run's id when its entry has one (null for a genuine no-run
+   * entry), so it joins `GET /api/feed?program=`. The two lanes that DO
    * know a run — the mail lane and the run-transition lane — populate it, which
    * is what makes `GET /api/feed?program=` a join rather than a guess. Nothing
    * reads a run to compute this, so there is no read that could fail and no
@@ -12794,9 +12797,10 @@ export type DeadCause = typeof DEAD_CAUSES[number];
 export interface AdvanceOk {
   ok: true; run: RunSummary; checksMail?: typeof CHECKS_MAIL_TOKEN; verifiedHead?: string;
   /** Landing order wave 5e (D-7627): what the landing line recorded for this advance. `kind` is the store's
-   *  `LandingWrite` word (`none`, `no-pr`, `no-episode`, `no-entry`, `kept`, `pinned`, `ejected`); `entry` is present
-   *  for `pinned` and `ejected` only. ADDITIVE and optional: an older server's answer carries none. */
-  landing?: { kind: string; entry?: LandingEntry };
+   *  `LandingWrite` word and the answer is exactly that union (`shared/landingLine.ts`): `kept` carries its `state`,
+   *  `pinned` its `entry` and `created`, `ejected` its `entry`, the rest nothing. ADDITIVE and optional: an older
+   *  server's answer carries none. */
+  landing?: LandingWrite;
 }
 
 /** How far ahead of the reader's clock a radar file's own `at` may read and still be trusted (D-7475). */

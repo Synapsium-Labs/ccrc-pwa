@@ -34,6 +34,7 @@ import {
 import { okRun, okRuns, parentOfSession } from './coordReadHelpers.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { NotifyLog } from '../src/notifylog.js';
+import { landingStoreOver } from './landingFixture.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -181,7 +182,10 @@ const openApp = async (
   // D-5298: the claimant every open names is a registry row of the run's
   // project — unless the case already seeded it its own way.
   if (!existsSync(path.join(home, '.cc-sessions', `${CLAIMED_BY}.uuid`))) seed(home, CLAIMED_BY);
-  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  // Landing order wave 5f: an advance into or out of `merging` that names a PR goes through the landing line's guarded
+  // entrances, which need a configured journal and its boot replay: a fixture journal beside the fixture database.
+  const dbPath = path.join(home, '.ccrc', 'coord.db');
+  const coord = landingStoreOver(openCoordDb(dbPath), dbPath);
   const base = testDeps(home, run);
   const app = await buildServer({ ...base, mailToken: TOKEN, coord, ...over, cfg: { ...base.cfg, ...(over.cfg ?? {}) } });
   return { app, coord };
@@ -4677,12 +4681,12 @@ describe('an opted-in project: the lineage through the run routes (landing order
     stdout: `${ccdLine(id, branch, [prRow(branch, 'OPEN')])}\n`, stderr: '' });
 
   /** A work run dispatched and `working` on a branch at LIVE, in an opted-in project (unless `marker: false`). */
-  const workRun = async (o: { marker?: boolean; lineage?: string | null; io?: (io: FleetIO) => FleetIO } = {}) => {
+  const workRun = async (o: { marker?: boolean; lineage?: string | null; io?: (io: FleetIO) => FleetIO; over?: Partial<Omit<Deps, 'cfg'>> } = {}) => {
     const home = mkTmp('ccrc-runs-');
     const root = gitRoot(PROJECT, BRANCH, LIVE);
     const { run, calls } = makeRunner(home, { wsAddCreates: [SID], prState: openPr(SID, BRANCH) });
     const base = testDeps(home, run);
-    const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root },
+    const w = await openApp(home, run, { cfg: { ...base.cfg, projectsRoot: root }, ...(o.over ?? {}),
       ...(o.io === undefined ? {} : { io: o.io(base.io) }) });
     app = w.app;
     const opened = (await postOpen(app)).json() as { id: number };

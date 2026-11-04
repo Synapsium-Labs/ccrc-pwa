@@ -1,8 +1,12 @@
 // Landing order wave 5e: the landing line's entry has ONE writer. Keyed on symbols and call sites (`scan/symbols.ts`),
 // never a literal source pin, so the store's growth ceiling is not touched. A later sub-wave that adds a writer of
 // `landing_entries` adds it here by name.
+// Wave 5f (task 1) adds ONE named exception: the live, genuine no-run creation INSERT in `writeLandingAuthority`'s apply
+// step. `advanceLanding` stays the owner of pin, repin, ejection and the verified-pin witness; replay writes none of
+// them; the journal-derived overlay (subjects, authority, cursor) has one SQL writer, the private
+// `applyLandingRecord`; and one allocator (`nextId`, in `landingEntry.ts`) names every new entry id.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import path from 'node:path';
 import { identifierReferences, parseSource, type ImportEdge, type ParsedFile } from './scan/parse.js';
@@ -18,13 +22,29 @@ const inWriter = (q: { file: string; start: number }) => {
   const s = symbolOf(STORE, WRITER);
   return q.file.endsWith(STORE) && q.start >= s.start && q.start < s.end;
 };
+const AUTHORITY = 'CoordStore.writeLandingAuthority';
+const REPLAY = 'CoordStore.replayLandingJournal';
+const APPLY = 'CoordStore.applyLandingRecord';
+const inSymbol = (name: string) => (q: { file: string; start: number }) => {
+  const s = symbolOf(STORE, name);
+  return q.file.endsWith(STORE) && q.start >= s.start && q.start < s.end;
+};
+/** Migration 39 (and any later one) is DDL and the overlay's one seed row, in `schema.ts` template text that the
+ *  statement scanner splits into several rows: it is not a runtime writer. The scan leaves that ONE file out, and a
+ *  test below pins what it may hold, so the exclusion is narrow and checked rather than a weakened writer query. */
+const SCHEMA = 'server/src/coord/schema.ts';
+const isSchema = (q: { file: string }) => q.file.endsWith(SCHEMA);
 const writes = (re: RegExp) => FILES.flatMap((f) => sqlStatementsInFile(f))
-  .filter((q) => ['INSERT', 'UPDATE', 'REPLACE'].includes(q.verb) && re.test(q.source));
+  .filter((q) => !isSchema(q) && ['INSERT', 'UPDATE', 'REPLACE'].includes(q.verb) && re.test(q.source));
+const allWrites = (tableRe: RegExp) => FILES.flatMap((f) => sqlStatementsInFile(f))
+  .filter((q) => !isSchema(q) && ['INSERT', 'UPDATE', 'REPLACE', 'DELETE'].includes(q.verb) && tableRe.test(q.table ?? ''));
 
 describe('the landing line has one writer (landing order wave 5e, D-7614)', () => {
-  it('pinnedSha has one writer, advanceLanding', () => {
+  it('pinnedSha has one writer, advanceLanding, but for the genuine no-run creation INSERT (5f)', () => {
     expect(writes(/\bpinnedSha\b/i).length).toBeGreaterThanOrEqual(2);
-    expect(writes(/\bpinnedSha\b/i).filter((q) => !inWriter(q)).map((q) => `${q.file}:${q.text}`)).toEqual([]);
+    const outside = writes(/\bpinnedSha\b/i).filter((q) => !inWriter(q));
+    expect(outside.map((q) => `${q.verb} ${q.table}`)).toEqual(['INSERT landing_entries']);
+    expect(outside.every(inSymbol(AUTHORITY))).toBe(true);
   });
 
   it('ejections has one writer, advanceLanding', () => {
@@ -32,11 +52,75 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(writes(/\bejections\b/i).filter((q) => !inWriter(q)).map((q) => `${q.file}:${q.text}`)).toEqual([]);
   });
 
-  it('every write of landing_entries is advanceLanding\'s (5e; a later sub-wave adds its writer here by name)', () => {
-    const all = FILES.flatMap((f) => sqlStatementsInFile(f))
-      .filter((q) => q.table === 'landing_entries' && ['INSERT', 'UPDATE', 'REPLACE', 'DELETE'].includes(q.verb));
-    expect(all.length).toBeGreaterThanOrEqual(3);
-    expect(all.filter((q) => !inWriter(q)).map((q) => `${q.file}:${q.text}`)).toEqual([]);
+  it('every write of landing_entries is advanceLanding\'s, but for the narrow live no-run creation INSERT in writeLandingAuthority (5e, 5f)', () => {
+    const all = allWrites(/^landing_entries$/);
+    expect(all.length).toBeGreaterThanOrEqual(4);
+    const outside = all.filter((q) => !inWriter(q));
+    expect(outside.map((q) => `${q.verb}:${inSymbol(AUTHORITY)(q)}`)).toEqual(['INSERT:true']);
+    // the exception creates a no-run projection only: a NULL runId, state 'pinned', and nothing else
+    expect(outside[0]!.source.replace(/\s+/g, ' ')).toMatch(/VALUES \(\?, \?, \?, \?, \?, NULL, 'pinned', \?, \?\)/);
+  });
+
+  it('quarantineKind has one writer, advanceLanding: the quarantine UPDATE marks it and the verified re-pin clears it (5f Task 3)', () => {
+    const marks = writes(/\bquarantineKind\b/i);
+    expect(marks.map((q) => q.verb), 'the quarantine UPDATE and the re-pin UPDATE').toEqual(['UPDATE', 'UPDATE']);
+    expect(marks.filter((q) => !inWriter(q)).map((q) => `${q.file}:${q.text}`)).toEqual([]);
+    const flat = marks.map((q) => q.source.replace(/\s+/g, ' '));
+    expect(flat.filter((t) => /quarantineKind = 'stale-episode-head'/.test(t))).toHaveLength(1);
+    expect(flat.filter((t) => /quarantineKind = NULL/.test(t))).toHaveLength(1);
+    // the decision is made in the pure decider and acted on inside the one writer: nothing else calls it
+    const calls = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'decideLandingWrite').map((c) => ({ file: f, start: c.start })));
+    expect(calls).toHaveLength(1);
+    expect(calls.every(inWriter)).toBe(true);
+  });
+
+  it('advanceLanding owns pin, repin, ejection and quarantine on landing_entries and the one witness write; replay owns neither', () => {
+    expect(allWrites(/^landing_entries$/).filter(inWriter).map((q) => q.verb).sort()).toEqual(['INSERT', 'UPDATE', 'UPDATE', 'UPDATE']);
+    const witness = allWrites(/^landing_projection_witness$/);
+    expect(witness.length).toBe(1);
+    expect(witness.every(inWriter)).toBe(true);
+    // replay: no landing_entries write, no witness write, and it never calls the creation or the witness writer
+    const replaySql = FILES.flatMap((f) => sqlStatementsInFile(f)).filter((q) => !isSchema(q) && inSymbol(REPLAY)(q));
+    expect(replaySql.filter((q) => ['INSERT', 'UPDATE', 'REPLACE', 'DELETE'].includes(q.verb) && /landing_(entries|projection_witness)/.test(q.source)).map((q) => q.text)).toEqual([]);
+    const replayCalls = callsIn(symbolOf(STORE, REPLAY)).map((c) => c.name);
+    expect(replayCalls).toContain('applyLandingRecord');
+    expect(replayCalls).not.toContain('advanceLanding');
+    expect(replayCalls).not.toContain('writeLandingAuthority');
+    expect(replayCalls).not.toContain('appendThenApply');
+  });
+
+  it('the overlay has one SQL writer, the private applyLandingRecord, called only by writeLandingAuthority and replay', () => {
+    const overlay = allWrites(/^landing_(subjects|authority|journal_cursor)$/);
+    expect(overlay.map((q) => q.table).sort()).toEqual(['landing_authority', 'landing_journal_cursor', 'landing_subjects']);
+    expect(overlay.filter((q) => !inSymbol(APPLY)(q)).map((q) => `${q.file}:${q.text}`)).toEqual([]);
+    const callers = FILES.flatMap((f) => parsedFile(f).calls.filter((c) => c.name === 'applyLandingRecord').map((c) => ({ file: f, start: c.start })));
+    expect(callers.length).toBe(2);
+    expect(callers.filter((c) => !inSymbol(AUTHORITY)(c) && !inSymbol(REPLAY)(c))).toEqual([]);
+  });
+
+  it('migration DDL is not a runtime writer: schema.ts holds only DDL on the landing tables and the cursor\'s one seed', () => {
+    const inSchema = FILES.flatMap((f) => sqlStatementsInFile(f)).filter((q) => isSchema(q) && /landing_/.test(q.source));
+    expect(inSchema.length).toBeGreaterThan(0);
+    const dml = inSchema.filter((q) => ['INSERT', 'UPDATE', 'REPLACE', 'DELETE'].includes(q.verb)).map((q) => `${q.verb} ${q.table}`);
+    expect(dml.every((d) => d === 'INSERT landing_journal_cursor')).toBe(true);
+  });
+
+  it('one allocator: the entry id is the facts\' nextId, produced in landingEntry.ts and consumed by landingWrites.ts and the store', () => {
+    const NAMES = new Set(['nextId']);
+    // other contexts keep an unrelated `nextId` (the remote client's request counter): the question is the coordination one
+    const holders = FILES.filter((f) => /\/coord\/[^/]+$/.test(f) && identifierReferences(parsedFile(f).text, f, NAMES).length > 0)
+      .map((f) => path.basename(f)).sort();
+    expect(holders).toEqual(['landingEntry.ts', 'landingWrites.ts', 'store.ts']);
+    // and no second allocator under another name: every landing_entries INSERT binds its id first, from the reserved
+    // id (advanceLanding) or the decided mutation's id (writeLandingAuthority), and no landing SQL takes a MAX itself
+    const store = parsedFile('server/src/coord/store.ts').text;
+    const inserts = [...store.matchAll(/INSERT INTO landing_entries \(([^)]*)\)[\s\S]*?\.run\(([^,]+),/g)];
+    expect(inserts.length).toBe(2);
+    for (const m of inserts) {
+      expect(m[1]!.split(',')[0]!.trim()).toBe('id');
+      expect(['reserved', 'mutation.id']).toContain(m[2]!.trim());
+    }
+    expect(store.match(/MAX\([^)]*\)[^'"`]*FROM landing_/g) ?? []).toEqual([]);
   });
 
   it('the merging-at detail is built only inside advanceLanding', () => {
@@ -77,10 +161,85 @@ describe('CLAUDE.md names the landing line among what a lost coord.db loses (D-7
     return flat(text.slice(a, b));
   };
 
+  const claude = (): string => readFileSync(path.join(REPO_ROOT, 'CLAUDE.md'), 'utf8');
+
+  it('landing-journal-prose: the recovery exception is stated, and the loss list and collector prose still stand', () => {
+    const exception = passage('the recovery exception', claude(), 'The landing line has an authority-recovery exception', 'The switch\'s `collect-lane-generation.log`');
+    for (const phrase of [
+      '`~/.ccrc/landing.log` restores no-run creation evidence, order edges, `fixesMain` and setter attribution before service starts',
+      'Replay never fabricates a measured pin, landed state or current run association',
+      'remain visible as unmeasured and hold their project\'s line',
+      'identity conflicts hold every affected project without deleting or rekeying either identity',
+      'Only a verified pin may supply an exact DB-only witness',
+      'replay never mints it',
+      'This cannot detect a wholly unjournalled change lost with a snapshot',
+      'Invalid or unreadable history refuses startup; missing projections or binding mismatches alone do not',
+      'fences every landing read and mutation until durable replay succeeds at a clean transaction boundary; an uncertain rollback requires restart',
+      'quarantines its pin as unknown, not ejected; only a verified repin with readable retained data clears that quarantine',
+    ]) expect(exception, phrase).toContain(phrase);
+    const collector = passage('the collector sentence', claude(), 'The switch\'s `collect-lane-generation.log`', 'collector');
+    expect(collector).toContain('is never copied into a snapshot or restored with one: leave it in place, so a database restored alone never re-arms the');
+  });
+
+  it('landing-journal-left-in-place: the prose says so, and no backup set, restore pair or snapshot capture names landing.log', () => {
+    const exception = passage('the leave-in-place rule', claude(), 'Leave it in place when restoring coord.db', 'Replay never fabricates');
+    expect(exception).toContain('no backup copies it or restores an older copy over it');
+    const ccrc = readFileSync(path.join(REPO_ROOT, 'ccd/ccrc'), 'utf8');
+    const a = ccrc.indexOf('\n_upd_backup_set() {');
+    expect(a, '_upd_backup_set is gone').toBeGreaterThan(-1);
+    const set = ccrc.slice(a, ccrc.indexOf('\n}\n', a));
+    expect(set).toContain('_upd_backup_copy');
+    expect(set).not.toContain('landing.log');
+    // arm 3's pairs are the same list (one list, two readers), so a restore copies nothing the backup set does not hold
+    const b = ccrc.indexOf('\n_upd_backup_pairs() {');
+    expect(b, '_upd_backup_pairs is gone').toBeGreaterThan(-1);
+    const pairs = ccrc.slice(b, ccrc.indexOf('\n}\n', b));
+    expect(pairs).toContain('_upd_backup_set');
+    expect(pairs).not.toContain('landing.log');
+    for (const f of ['deploy/backup-coord.mjs', 'deploy/coordination-snapshot.mjs']) {
+      expect(existsSync(path.join(REPO_ROOT, f)), `${f} is gone: a moved file must turn this red`).toBe(true);
+      expect(readFileSync(path.join(REPO_ROOT, f), 'utf8'), f).not.toContain('landing.log');
+    }
+  });
+
   it('the coord.db bullet lists the landing line first', () => {
     const bullet = passage('the coord.db bullet', readFileSync(path.join(REPO_ROOT, 'CLAUDE.md'), 'utf8'),
       'what it adds on top', 'is gone without the snapshot');
     expect(bullet).toContain('what it adds on top — the landing line, mail, claims');
+  });
+});
+
+describe('the server boots the landing journal once, in both fleet modes, before anything consumes it (5f)', () => {
+  const INDEX = 'server/src/index.ts';
+  const calls = (): ReturnType<typeof parsedFile>['calls'] => parsedFile(INDEX).calls;
+
+  it('boot-replay-before-consumers: the store is replayed before the server, the watcher and every timer', () => {
+    const replay = calls().filter((c) => c.name === 'replayLandingJournal');
+    expect(replay).toHaveLength(1);
+    const consumers = calls().filter((c) => c.name !== null && ['buildServer', 'listen', 'setInterval', 'setTimeout', 'start', 'FleetWatcher'].includes(c.name));
+    expect(consumers.length).toBeGreaterThan(3);
+    expect(consumers.filter((c) => c.start < replay[0]!.start).map((c) => `${c.line} ${c.name}`)).toEqual([]);
+  });
+
+  it('local-mode-has-store-journal and remote-mode-has-store-journal: ONE CoordStore, built above the mode branch, with the journal', () => {
+    // `new` is not a call to the scan library, so the construction is read from the parsed text: one `new CoordStore(`, whose
+    // option object carries the journal and the fail-stop callback, and the first test of the fleet mode comes after it.
+    const text = parsedFile(INDEX).text;
+    const made = [...text.matchAll(/new CoordStore\(/g)];
+    expect(made).toHaveLength(1);
+    const at = made[0]!.index!;
+    const replayAt = calls().find((c) => c.name === 'replayLandingJournal')!.start;
+    // the constructor's own argument list, by paren depth, so a journal named anywhere else before the replay cannot satisfy it
+    let depth = 0; let end = at;
+    for (let i = text.indexOf('(', at); i < text.length; i++) {
+      if (text[i] === '(') depth++;
+      else if (text[i] === ')' && --depth === 0) { end = i + 1; break; }
+    }
+    expect(end).toBeLessThan(replayAt);
+    const construction = text.slice(at, end);
+    expect(construction).toContain('landingJournal: createLandingJournal(');
+    expect(construction).toContain('onUnusableConnection');
+    expect(text.indexOf('cfg.fleetMode ===')).toBeGreaterThan(at);
   });
 });
 
@@ -128,6 +287,15 @@ describe('landingEntry.ts is the pure L1 module its header says it is (no fs, no
 
   it('reads no clock and no filesystem', () => {
     expect(clockAndFsReferences(parsedFile(FILE)), 'landingEntry.ts reads the clock or reaches for a filesystem').toEqual([]);
+  });
+
+  it('the 5f L1 siblings (the write decider and the journal parser) read no clock, no filesystem and import no node builtin', () => {
+    for (const f of ['server/src/coord/landingWrites.ts', 'server/src/coord/landingJournalPolicy.ts']) {
+      const p = parsedFile(f);
+      expect(p.calls.length, `${f} parses to nothing`).toBeGreaterThan(0);
+      expect(clockAndFsReferences(p), `${f} reads the clock or reaches for a filesystem`).toEqual([]);
+      expect(nodeBuiltinSpecifiers(p), `${f} imports a node builtin`).toEqual([]);
+    }
   });
 
   it('imports no node builtin, and values only from shared/ (L0)', () => {
