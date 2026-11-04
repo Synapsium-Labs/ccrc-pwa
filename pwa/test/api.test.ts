@@ -1356,7 +1356,7 @@ describe('the update plane client (W3 Task 5)', () => {
     status: 200, headers: { 'content-type': 'application/json' },
   });
 
-  it('updates() is a bare GET of /api/updates — no init at all, the fleetHealth shape', async () => {
+  it('updates() is a bare GET of /api/updates — no method, header or body, only the read limit\'s signal', async () => {
     const body = { catalogue: CATALOGUE, releases: [], nodes: [NODE], intent: [INTENT] };
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, body));
     const api = createApi(fetchImpl as unknown as typeof fetch);
@@ -1366,7 +1366,9 @@ describe('the update plane client (W3 Task 5)', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit | undefined];
     expect(url).toBe('/api/updates');
-    expect(init).toBeUndefined();
+    // Console speed C1: every GET carries its time limit's signal, and nothing else.
+    expect(Object.keys(init ?? {})).toEqual(['signal']);
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it('setUpdateIntent POSTs the partial as JSON, asks for JSON back, and resolves the answer', async () => {
