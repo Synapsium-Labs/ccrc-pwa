@@ -27,7 +27,7 @@ import { useFleetStore } from '../stores/fleet';
  *    the line, as it did before the desk polish (until S11). Below 900 every column keeps it.
  *  - `banners`: the banner stack. Refined's frame places the stack under its bar; Instrument's `Banners` part is `null`,
  *    so its column is where the stack is drawn, and a flag tied to the head's would drop it there altogether. The item
- *    route is the one place this column is not drawn at a desk: the item's list replaces it, and `ItemListColumn`
+ *    route is the one place this column is not drawn at a desk once a list has been heard: the item's list replaces it, and `ItemListColumn`
  *    (`ledgers/WaitingRoutes.tsx`) mounts the same stack there.
  *  Each reads "the column draws it at a desk", and defaults to true. */
 export function FleetColumn(

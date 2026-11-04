@@ -137,7 +137,8 @@ describe("Refined's app bar shows nothing cut, and every door is a finger's squa
           if (doors.length !== 4) out.push(`${doors.length} doors measured, not 4 (the bell, search, settings, new session)`);
           // The floor is the tab's own (review 1379 F5): its words and padding clear 44px today, the minimum width keeps it so.
           for (const t of tabs) {
-            if (parseFloat(getComputedStyle(t).minWidth) < 44) out.push(`${t.textContent?.trim() ?? '?'} has no tap floor (min-width ${getComputedStyle(t).minWidth})`);
+            // `auto` parses to NaN, which no `<` comparison catches: the floor is asserted present, not "not below".
+            if (!(parseFloat(getComputedStyle(t).minWidth) >= 44)) out.push(`${t.textContent?.trim() ?? '?'} has no tap floor (min-width ${getComputedStyle(t).minWidth})`);
           }
           return [...out, ...[...doors, ...tabs]
             .map((b) => ({ name: b.getAttribute('aria-label') ?? b.textContent?.trim() ?? '?', r: b.getBoundingClientRect() }))
