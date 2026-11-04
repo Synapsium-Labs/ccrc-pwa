@@ -488,7 +488,10 @@ const CENSUS: readonly CensusRow[] = [
 
 /** The files whose gates ask the predicate themselves. */
 const GATE_FILES = [
-  'server.ts', 'registry.ts', 'watch.ts',
+  'server.ts', 'registry.ts',
+  // fleetstate.ts (console speed S1): the snapshot decision moved out of watch.ts (which no longer names the predicate), and
+  // its purge test vets each missing id with the predicate before reading the registry listing.
+  'fleetstate.ts',
   'coord/routes.ts', 'coord/route.ts', 'coord/openRun.ts', 'coord/advance.ts', 'coord/dispatchDecide.ts', 'coord/closeDecide.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
   'coord/expireArchived.ts', 'coord/childReclaimStale.ts',
   // orphanTreeLane.ts (D-6635): the orphan census's `inside` id is vetted by the predicate before the lane reads that row.

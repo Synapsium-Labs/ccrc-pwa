@@ -57,7 +57,7 @@ import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthI
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, RADAR_PROBE_FRESH_S, SERVER_CAPS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, freshWithin, isRegistryId, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, RADAR_PROBE_FRESH_S, SERVER_CAPS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, freshWithin, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER, readSwitches } from '../../shared/switches.js';
 // The pause marker, reached through `rundefs.ts`'s re-export of its one definition, the `shared/switches.ts` row.
@@ -2914,7 +2914,7 @@ export class FleetWatcher {
         // `connected` alone is not "this read was complete"; the snapshot decision and its rationale live in
         // `persistFleetSnapshot` (fleetstate.ts).
         try {
-          const outcome = await timed(this.deps.perf, 'snapshot', persistFleetSnapshot(this.snapshotWriter, sessions, () => this.deps.io.readdir(this.deps.cfg.registryDir), isRegistryId, json));
+          const outcome = await timed(this.deps.perf, 'snapshot', persistFleetSnapshot(this.snapshotWriter, sessions, () => this.deps.io.readdir(this.deps.cfg.registryDir), json));
           const note = snapshotNotice({ degraded: this.snapshotWriteSkippedDegradedWarned, skipped: this.snapshotWriteSkippedWarned }, outcome);
           this.snapshotWriteSkippedDegradedWarned = note.latches.degraded;
           this.snapshotWriteSkippedWarned = note.latches.skipped;

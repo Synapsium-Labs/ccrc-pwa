@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import {
-  RUNS_ATTRIBUTION_SINCE, isReleaseTag, reviveFleetSessions, type BuildAgreement, type FleetSession, type NodeRole,
+  RUNS_ATTRIBUTION_SINCE, isRegistryId, isReleaseTag, reviveFleetSessions, type BuildAgreement, type FleetSession, type NodeRole,
 } from '../../shared/api.js';
 import { compareReleaseTags } from '../../shared/semver.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
@@ -507,7 +507,6 @@ export async function persistFleetSnapshot(
   writer: SnapshotWriter,
   sessions: FleetSession[],
   listRegistry: () => Promise<readonly string[] | null>,
-  isRegistryId: (id: string) => boolean,
   json?: string,
 ): Promise<SnapshotOutcome> {
   const degraded = sessions.filter((s) => s.unmeasured.length > 0);
