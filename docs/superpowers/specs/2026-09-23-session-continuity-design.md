@@ -834,6 +834,30 @@ mid-turn as a queued-command attachment row is not read. A partial or absent rea
 target stays 0 and the baseline cells above are historical: the 186 is not claimed as a replay of this scanner. Stage 7's
 keys now include live UUID promotions as the §5.7 annotation says, so its row reads as logged refusals, not restarts.
 
+**As built (wave 4c, 2026-11-04; an as-built annotation, not a new ruling).** The wave 4b paragraph above stands as
+history, and its limit that a queued-command notification is not read no longer holds. The direct-kill scanner reads a
+`<task-notification>` envelope from three sources, through one classification (D-7960): a user message, a
+`queued_command` attachment row's prompt (a string, or text parts), and a `queue-operation` enqueue row's content. The
+remove and dequeue rows are not read. A queued prompt of any other shape that holds a notification (a dict, or a list
+element that is no text part) is one unreadable item and so an unmeasured notification, never skipped; an enqueue
+content is read only as a string, so one of any other shape that holds a notification is one unreadable item, whole.
+An unreadable item matches when the marker appears anywhere in its dump, broader than a readable text, which must
+start with it (the fail-safe direction). A payload that cannot be dumped cannot be searched, so the row's raw line
+decides: without the opener (plain or JSON-escaped) it counts nothing, and with it the row takes the usual order (stamp
+type, then window) and is then one malformed row, not an unmeasured notification. Each
+row is timed by its own stamp: a user or attachment row at its delivery, an enqueue row at its queue time. A notice
+enqueued before a window's end and delivered after it therefore counts in both adjacent windows, an over-count by
+design, the safe direction for a target of 0. The unit of `unmeasured_notifications` is one count per distinct
+(transcript UUID, text), the text being the stripped text of a readable notice and the dump of an unreadable payload,
+so a notice seen again in the same shape is one, while the same notice in two payload shapes, or with different
+trailing text, can count again, an over-count by design (D-7961); kills
+stay unique per (transcript UUID, task ID). An envelope whose whole body is one readable `summary`, with no other
+element, stray closing tag or text and no task ID, is a known non-event when the summary does not contain "low on
+memory", case-insensitively, and one that does stays unmeasured (D-7962). `notification_sources` is an additive count
+per source of the notification texts and unreadable items read, before deduplication. Subagent transcripts stay outside
+the scanner's pattern as a declared limit: they held no notification in two weeks (D-7963). The kill rule, the B + 2
+comparison and the target of 0 are unchanged.
+
 Prompt text and skill clauses are requests; a stage whose metric has not moved two weeks after rollout is retired or
 redesigned.
 

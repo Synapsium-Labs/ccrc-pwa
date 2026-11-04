@@ -6585,10 +6585,18 @@ pressure-kill notifications in `direct_pressure_kills` (target 0 after the spawn
 pane-scope OOM stops in `reap_class_oom`, and NOW's fresh sweep record in `inert_scopes`. Direct kills are
 unique transcript-UUID/task-ID pairs, deduplicated across selected copies. The default reads the largest
 discovered main transcript per UUID; `--all-copies` includes divergent smaller copies but still counts
-one task once. Discovery can miss unreadable roots/stat failures, excludes subagent transcripts and does
-not read notifications delivered mid-turn as queued-command attachment rows;
-partial reads and absent input are reported, never claimed as a clean zero. Notification times are
-observations at delivery, not exact kill instants.
+one task once. Notifications are read from user text rows, from queued-command attachment prompts (a
+string or text parts) and from queue enqueue contents (a string); queue remove and dequeue rows are not
+read, and a queued payload of any other shape that holds a notification is unmeasured, never skipped,
+except a payload that cannot be dumped, which counts in `malformed_rows` instead.
+An unmeasured notification counts per transcript UUID and text (the readable text, or an unreadable payload's
+dump), across sources and copies; the same notice in different payload shapes, or with different trailing
+text, can count again.
+Discovery can miss unreadable roots/stat failures and excludes subagent transcripts;
+partial reads and absent input are reported, never claimed as a clean zero. Each row is timed by its own
+stamp: user and attachment rows are observations at delivery, enqueue rows at queue time, not exact kill
+instants, so a notice queued before a window's end and delivered after it counts in both windows.
+`notification_sources` counts what each source contributed.
 
 The frozen baseline B is the pane-OOM reap-class count with the reap still enabled. A read-only
 `--reap-baseline B` comparison requires stage 6 alone and an explicit interval of seven elapsed days,
