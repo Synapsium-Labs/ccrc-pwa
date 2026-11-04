@@ -2509,7 +2509,7 @@ Unchanged from the plan:
 
 Added by the build:
 - The rc 2 WARN from doctor's box-settings check when a library failed to load carries the generic plain-line remedy, not one for the library.
-- The L0 origin shape admits a schemeless host, so a token pasted as `CCRC_RELEASE_BASE_URL` could show as `custom <token>` unless `_upd_redact` catches it. The comment in `boxSettings.ts` that the shapes "prove no value can carry a credential" claims more than the origin shape proves.
+- The L0 origin shape admits a schemeless host, so a token pasted as `CCRC_RELEASE_BASE_URL` could show as `custom <token>` unless `_upd_redact` catches it. (The comment in `boxSettings.ts` that overclaimed this was corrected by the final review; the residual itself stays here.)
 - The human form of `ccrc settings` cuts an unmeasured why at 480 while the JSON record cuts at 240.
 - V10's keepalive, usage and carry rows re-run the verb's own literal read, not each consumer's.
 - The dead `*) return 0 ;;` arm in `_set_check`'s updates subshell (final review).
