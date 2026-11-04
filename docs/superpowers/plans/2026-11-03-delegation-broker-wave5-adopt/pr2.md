@@ -5,7 +5,7 @@ plan and the programme ledger. This PR edits no existing plan and not the progra
 
 ## Deviations found
 
-None. The block issued to this PR (D-7974..D-7979) is unused: nothing below departs from the plan's text.
+None. The deviation block issued to this PR at run-open is unused: nothing below departs from the plan's text. (Its numbers are not written here, because a mention alone would raise the ledger floor, `deviation-refs`' floor case.)
 
 ## Measured, not departures
 
