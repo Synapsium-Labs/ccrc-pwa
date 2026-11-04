@@ -30647,7 +30647,7 @@ cmd_scope_sweep_busy() {   # ccd scope-sweep-busy --state on|off — raise or lo
   # sweep stops a busy scope of a provably dead session; otherwise it records `would-stop (busy)`. This verb is the
   # marker's ONE writer, reached from `POST /api/coord/scope-sweep` (session-only) through the agent's two-token grant;
   # the sweep is its one reader, and reads it itself. It stops nothing: `cmd_testbox_remote`'s shape, the raise atomic,
-  # both arms CHECKED. `FORBIDDEN_CCD_VERBS` lists it: arming a stop of processes is the operator's, never a session's.
+  # both arms CHECKED.
   [[ $# -eq 2 && $1 == --state ]] || die "usage: ccd scope-sweep-busy --state on|off"
   local state=$2 marker tmp
   [[ $state == on || $state == off ]] || die "bad state: $state (want on|off)"

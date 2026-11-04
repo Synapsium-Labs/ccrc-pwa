@@ -6580,8 +6580,8 @@ session seen live drops the clock. Any of those it cannot measure is a `verdict=
 survives a carry. **It ships shadowed behind its own switch:** a collectable scope reads `would-stop (busy)` with its
 process list until BOTH `scope-sweep-live` and `~/.cc-sessions/scope-sweep-busy-live` stand, and an armed busy stop spends
 the same three a tick as an inert one. **Settings › Automation › Leftover processes** shows both switches and sets the
-busy one (D-7994), through `POST /api/coord/scope-sweep` and `ccd scope-sweep-busy --state on|off`, its one writer: signed-in
-operators only, and a verb no session runs. Limits: a connection between two dead scopes holds both, and a client
+busy one (D-7994), through `POST /api/coord/scope-sweep` and `ccd scope-sweep-busy --state on|off`, its one writer: a door for
+signed-in operators only. Limits: a connection between two dead scopes holds both, and a client
 of a Unix socket a process did not accept on a named path is not seen.
 
 Its verdicts live in `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`, rewritten every tick (a reboot empties it,
