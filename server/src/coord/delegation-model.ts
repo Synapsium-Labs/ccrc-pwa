@@ -479,14 +479,14 @@ export const DELEGATION_MODEL_REFUSALS: Readonly<Record<DelegationModelRefusal, 
 };
 
 /** Every kebab word this file spells, for `mail-routes.test.ts`'s scan of `server/src/coord`: the model's refusals, the journal
- *  entry kinds, the pruning hold reasons, the intent route's one answer of its own, and two words that belong to `shared/api.ts` (`bash-worktree`, a source kind, and
- *  `not-due`, a cleanup state), read from there and never re-spelled. Derived from tables, never a list, so a word added to a
+ *  entry kinds, the pruning hold reasons, the intent route's one answer of its own, and words that belong to `shared/api.ts` (`bash-worktree`, a source kind,
+ *  `not-due`, a cleanup state, and the intent sources the `adopt` fold names, D-7973), read from there and never re-spelled. Derived from tables, never a list, so a word added to a
  *  union is admitted and a typo is not. None is a mail rejection or a run refusal. */
 export function isDelegationModelKebab(v: string): boolean {
   const own = (o: object): boolean => Object.prototype.hasOwnProperty.call(o, v);
   return own(DELEGATION_MODEL_REFUSALS) || own(DELEGATION_JOURNAL_ENTRY_KINDS) || own(DELEGATION_PRUNING_HOLD_REASONS) || own(COORDINATOR_INTENT_REFUSALS)
     || (DELEGATION_ACTIVITY_SOURCE_KINDS as readonly string[]).includes(v) || (DELEGATION_CLEANUP_STATES as readonly string[]).includes(v)
-    || isDelegationHealthKebab(v);
+    || (DELEGATION_INTENT_SOURCES as readonly string[]).includes(v) || isDelegationHealthKebab(v);
 }
 
 // ── Canonical JSON (RFC 8785 over the plan's closed domain) ──────────────────────────────────────────────────────────
@@ -804,10 +804,11 @@ const leaseRefusal = (code: DelegationModelRefusal, id: string, why: string): ne
  *   - `adopted` and `retained` have an expiry (`cleanupDueAt`, D-7829) and an `ephemeral` lease has none, else `lease-expiry` (only a
  *     keep sets one, and no transition returns a kept lease to `ephemeral`);
  *   - `cleanupState` is `not-due` and the cleanup clocks and evidence are null (wave 5 has no cleaner);
- *   - `terminalEvidenceAt` exactly beside `adoptedAt`, and not after it (D-7968); `carrierGenerationSeen` null or in `1..generation`;
+ *   - `terminalEvidenceAt` exactly beside `adoptedAt`, and not after it (D-7968); `terminalEvidenceAt` and `releasedAt` null or not
+ *     before `firstObservedAt`; `carrierGenerationSeen` null or in `1..generation`;
  *   - `lastObservedAt` is `firstObservedAt` (replay sets both to the creating entry's instant; no entry moves it);
- *   - the carrier row, when present, has some non-null field, a transfer's two fields together, no transfer on a released lease,
- *     and a `releaseReason` exactly when the lease is released (`lease-carrier-row`).
+ *   - the carrier row, when present, has some non-null field, a transfer's two fields together, no transfer on a released or a
+ *     promoted lease, and a `releaseReason` exactly when the lease is released (`lease-carrier-row`).
  * That the sequences name retained journal records whose fields equal the lease is the journal proof's (the checkpoint module).
  */
 export function assertLease(lease: DelegationLeaseRow, carrier: DelegationLeaseCarrierRow | undefined, appliedJournalSequence: number): void {
@@ -844,6 +845,12 @@ export function assertLease(lease: DelegationLeaseRow, carrier: DelegationLeaseC
   if (lease.terminalEvidenceAt !== null && lease.adoptedAt !== null && lease.terminalEvidenceAt > lease.adoptedAt) {
     leaseRefusal('lease-transition-field', id, `: terminalEvidenceAt ${lease.terminalEvidenceAt} is after adoptedAt ${lease.adoptedAt} (D-7968)`);
   }
+  // The plan's two lower bounds live here, once (review 1451 F8): the projectability check no longer repeats them, and its one caller
+  // (`validateDelegationCheckpoint`) runs this guard first, as do both store entry points, so the table's CHECK never meets them.
+  for (const field of ['terminalEvidenceAt', 'releasedAt'] as const) {
+    const at = lease[field];
+    if (at !== null && at < lease.firstObservedAt) leaseRefusal('lease-transition-field', id, `: ${field} ${at} is before firstObservedAt ${lease.firstObservedAt}`);
+  }
   const seen = lease.carrierGenerationSeen;
   if (seen !== null && (!Number.isSafeInteger(seen) || seen < 1 || seen > lease.generation)) {
     leaseRefusal('lease-generation', id, `has carrierGenerationSeen ${seen}, outside 1..${lease.generation}`);
@@ -861,6 +868,9 @@ export function assertLease(lease: DelegationLeaseRow, carrier: DelegationLeaseC
   if ((carrier.transferringSince === null) !== (carrier.transferRun === null)) leaseRefusal('lease-carrier-row', id, 'has half a transfer in its carrier row');
   if ((carrier.releaseReason === null) !== (lease.releasedAt === null)) leaseRefusal('lease-carrier-row', id, 'has a releaseReason exactly when it is not released');
   if (lease.releasedAt !== null && carrier.transferringSince !== null) leaseRefusal('lease-carrier-row', id, 'is released while its carrier row says transferring');
+  // Review 1451 F10: no row of the transition table starts a transfer from `promoted` (`transfer` starts only from a settled state), so
+  // a promoted lease whose carrier row says transferring is a state no journal can produce.
+  if (d === 'promoted' && carrier.transferringSince !== null) leaseRefusal('lease-carrier-row', id, 'is promoted while its carrier row says transferring');
 }
 
 /**
@@ -1319,6 +1329,16 @@ export interface CoordinatorIntentRequest {
  * that disagrees with the rows. So `set` adds only the current incarnation's key, `clear` removes only that key, and a
  * historical incarnation's entry stays exactly as it was.
  */
+/**
+ * THE BASIS RULE, spelled once: `row` with `source` added to its effective basis, the basis kept in `DELEGATION_INTENT_SOURCES`' own
+ * order, and the row made effective. `declareCoordinatorIntent`'s `set` adds `explicit` through it, and the `adopt` fold adds
+ * `retained-lineage` to the lease's parent row through it (wave 5, D-7973: spec §5.1, the parent's identity is kept alive with that
+ * provenance). Nothing in wave 5 removes `retained-lineage`.
+ */
+export function withDelegationIntentSource(row: DelegationSessionRow, source: DelegationIntentSource): DelegationSessionRow {
+  return { ...row, effective: true, effectiveBasis: DELEGATION_INTENT_SOURCES.filter((s) => s === source || row.effectiveBasis.includes(s)) };
+}
+
 export function declareCoordinatorIntent(
   checkpoint: DeepReadonly<DelegationCheckpointV1>, request: CoordinatorIntentRequest,
 ): DelegationCheckpointV1 {
@@ -1334,7 +1354,7 @@ export function declareCoordinatorIntent(
           sessionId: request.sessionId, parentIncarnation: request.parentIncarnation, explicitIntentAt: request.declaredAt, effective: true,
           effectiveBasis: basisWith(true), claudeSessionIds: [], firstObservedAt: request.declaredAt, lastObservedAt: request.declaredAt,
         }
-      : { ...found, explicitIntentAt: found.explicitIntentAt ?? request.declaredAt, effective: true, effectiveBasis: basisWith(true) };
+      : { ...withDelegationIntentSource(found, 'explicit'), explicitIntentAt: found.explicitIntentAt ?? request.declaredAt };
   } else {
     const remaining = basisWith(false);
     next = found === null ? null : { ...found, explicitIntentAt: null, effective: remaining.length > 0, effectiveBasis: remaining };

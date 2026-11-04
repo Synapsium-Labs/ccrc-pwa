@@ -1407,7 +1407,7 @@ export const MIGRATIONS: readonly string[] = [
   //     upserts the staying sessions in place, and inserts the activities, attempts, leases and lineage. An ordinary
   //     application that only adds rows and updates some does less: `CoordStore.projectDelegationCheckpointChanges` writes
   //     just the changed rows (a compare-and-swap UPDATE each, a plain INSERT for each new row) and holds the five tables to
-  //     the new checkpoint's row counts, falling back to the full projection for anything else; it never writes a lease. The checkpoint
+  //     the new checkpoint's row counts, falling back to the full projection for anything else; a lease row only ever UPDATEs there (a new lease takes the full projection). The checkpoint
   //     carries NO events, so `delegation_events` is journal-derived: only `CoordStore.insertDelegationEvent` and its batch
   //     `insertDelegationEvents` write it, a
   //     projection deletes the events of a session that leaves and touches no other, and a lost or damaged events table is

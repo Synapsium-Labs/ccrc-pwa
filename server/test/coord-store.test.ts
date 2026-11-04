@@ -1110,6 +1110,8 @@ describe('CoordStore: the delegation projection (delegation broker wave 3, Task 
       ['transition evidence', (l) => ({ ...l, cleanupEvidenceJson: '{}' }), 'lease-transition-field'],
       ['a carrier generation above the lease\'s', (l) => ({ ...l, carrierGenerationSeen: 1 }), 'lease-generation'],
       ['a release with no carrier row naming why', (l) => ({ ...l, releasedAt: at(9) }), 'lease-carrier-row'],
+      ['F8: a releasedAt before its firstObservedAt (the table\'s CHECK, met by assertLease before SQLite)',
+        (l) => ({ ...l, releasedAt: '2000-01-01T00:00:00.000Z' }), 'lease-transition-field'],
       ['a lastObservedAt that is not its firstObservedAt (replay sets both)', (l) => ({ ...l, lastObservedAt: at(9) }), 'lease-last-observed'],
       ['an event-less lease (its creating sequence is past the applied journal)', (l) => ({ ...l, creatingJournalSequence: 7, currentJournalSequence: 7 }), 'lease-without-journal-entry'],
     ];

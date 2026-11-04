@@ -61,8 +61,8 @@ export const DELEGATION_LEASE_TRANSITIONS: Readonly<Record<DelegationLeaseTransi
  *  expiry or run, terminal evidence out of place). Replay only: no door answers it, since a door builds the entry from its decision. */
 export const DELEGATION_LEASE_BAD_ENTRY = 'bad-entry';
 
-/** Every kebab word this file spells, for `mail-routes.test.ts`'s scan of `server/src/coord`. Derived from the three tables and the
- *  fold's one refusal. */
+/** Every kebab word this file spells, for `mail-routes.test.ts`'s scan of `server/src/coord`: the three lists (the reasons, the
+ *  lineage close reasons and the act refusals) and, beyond them, the fold's one refusal `bad-entry`. */
 export function isDelegationLeaseStateKebab(v: string): boolean {
   return v === DELEGATION_LEASE_BAD_ENTRY || (DELEGATION_LEASE_TRANSITION_REASONS as readonly string[]).includes(v)
     || (DELEGATION_LINEAGE_CLOSE_REASONS as readonly string[]).includes(v)

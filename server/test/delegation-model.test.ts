@@ -80,6 +80,8 @@ const JOURNAL_DIGEST = 'e70e4034ed7ca41e1c9c924ae62ad2597f60be54f9c12aa5d7761fc1
 const T0 = '2026-10-14T00:00:00.000Z';
 const T1 = '2026-10-14T00:10:00.000Z';
 const T2 = '2026-10-14T00:20:00.000Z';
+/** An instant before every fixture lease's `firstObservedAt` (T0). */
+const EARLY = '2026-10-13T23:50:00.000Z';
 
 describe('canonicalDelegationJson — RFC 8785 over the closed JSON domain', () => {
   it('orders properties by UTF-16 code units, RFC 8785 §3.2.3 vector (the emoji sorts BEFORE U+FB33)', () => {
@@ -587,6 +589,9 @@ describe('assertLease — what a lease row may hold (wave 3’s guard, loosened 
     ['W5-J6: carrierGenerationSeen above generation', { carrierGenerationSeen: 1 }, 5, 'lease-generation'],
     ['carrierGenerationSeen two above generation', { ...at(1), carrierGenerationSeen: 3 }, 9, 'lease-generation'],
     ['releasedAt with no carrier row naming why', { ...at(1), releasedAt: T1 }, 9, 'lease-carrier-row'],
+    ['F8: terminalEvidenceAt before firstObservedAt (the plan puts the bound in assertLease)',
+      { ...at(2), disposition: 'adopted', adoptedAt: T1, terminalEvidenceAt: EARLY, cleanupDueAt: T2 }, 9, 'lease-transition-field'],
+    ['F8: releasedAt before firstObservedAt', { ...at(2), releasedAt: EARLY }, 9, 'lease-transition-field'],
   ];
   it.each(refusals)('refuses %s', (_label, over, applied, code) => {
     expect(() => assertLease(lease(over), undefined, applied))
@@ -599,6 +604,9 @@ describe('assertLease — what a lease row may hold (wave 3’s guard, loosened 
     ['a releaseReason on an unreleased lease', lease({ ...at(1) }), carrier({ releaseReason: 'foreign' })],
     ['a released lease still transferring', lease({ ...at(2), releasedAt: T2 }), carrier({ releaseReason: 'foreign', transferringSince: T1, transferRun: 3 })],
     ['another lease\'s carrier row', lease({ ...at(1) }), carrier({ leaseId: 'lease-z', resolvedThrough: { attemptedAt: T1, attemptId: 'a' } })],
+    ['F10: a promoted lease still transferring (no table row starts a transfer from promoted)',
+      lease({ ...at(3), disposition: 'promoted', retainedAt: T1, cleanupDueAt: T2, promotedAt: T2 }),
+      carrier({ promotedRun: 12, promotedSession: null, transferringSince: T2, transferRun: 13 })],
   ])('refuses %s (lease-carrier-row)', (_label, l, c) => {
     refusal(() => assertLease(l, c, 9), 'lease-carrier-row');
   });
@@ -1159,7 +1167,7 @@ describe('the model is L1: pure, with no randomness and no IO of its own', () =>
   const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord', 'delegation-model.ts'), 'utf8');
   const code = src.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
 
-  it('imports node:crypto and shared/api.ts and nothing else (no fs, no fastify, no node:sqlite, no CoordStore)', () => {
+  it('imports node:crypto, shared/api.ts, shared/agent-protocol.ts and (types only) delegation-lease-state.ts, and nothing else (no fs, no fastify, no node:sqlite, no CoordStore)', () => {
     const specs = [...code.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1]);
     expect(specs.sort()).toEqual(['../../../shared/agent-protocol.js', '../../../shared/api.js', './delegation-lease-state.js', 'node:crypto']);
     // Wave 5 (PR5a): `./delegation-lease-state.js` is a type-only import (its reason words); `coord-policy-rings` walks runtime edges.

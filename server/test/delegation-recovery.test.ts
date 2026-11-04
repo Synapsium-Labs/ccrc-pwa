@@ -1066,6 +1066,22 @@ describe('W5-J7: lease transitions replay through the one decision, and a bad on
     expect(Object.keys(report.state.checkpoint)).not.toContain('leaseCarriers');
   });
 
+  it('D-7973: a replayed adopt adds retained-lineage to the parent row\'s effective basis and makes it effective; nothing removes it', () => {
+    const parentOf = (cp: DelegationCheckpointV1) => cp.sessions.find((s) => s.sessionId === PARENT && s.parentIncarnation === INC)!;
+    const beforeAdopt = recoverDelegation(null, fx().all.slice(0, 4)).state.checkpoint;          // through the carrier
+    expect(parentOf(beforeAdopt)).toMatchObject({ effective: false, effectiveBasis: [] });
+    const atAdopt = recoverDelegation(null, fx().all.slice(0, 5)).state.checkpoint;
+    expect(parentOf(atAdopt)).toMatchObject({ effective: true, effectiveBasis: ['retained-lineage'], explicitIntentAt: null });
+    // the later seen and retain leave it as it is
+    expect(parentOf(recoverDelegation(null, fx().all).state.checkpoint)).toMatchObject({ effective: true, effectiveBasis: ['retained-lineage'] });
+    // and it joins an existing basis in the vocabulary's order (the intent door's rule), the declaration kept
+    const declared = modelNs.declareCoordinatorIntent(recoverDelegation(null, fx().all.slice(0, 4)).state.checkpoint,
+      { action: 'set', sessionId: PARENT, parentIncarnation: INC, declaredAt: T(42) });
+    const report = recoverDelegation(encodeDelegationCheckpoint({ ...declared, revision: declared.revision + 1 }), fx().all);
+    expect(report.failure).toBeNull();
+    expect(parentOf(report.state.checkpoint)).toMatchObject({ effective: true, effectiveBasis: ['explicit', 'retained-lineage'], explicitIntentAt: T(42) });
+  });
+
   it('the same journal recovered from a checkpoint covering part of it (observed, then folded) is the same checkpoint', () => {
     const at4 = recoverDelegation(null, fx().all.slice(0, 5)).state.checkpoint;          // through the adopt
     const report = recoverDelegation(encodeDelegationCheckpoint(at4), fx().all);
@@ -1181,6 +1197,29 @@ describe('W5-J7b: the PR5a build recovers a journal holding every lease kind and
     expect(cp.pruningHolds.filter((h) => h.reason === 'open-lease' || h.reason === 'open-lineage')).toEqual([]);
   });
 
+  it('F5: the attach folds its resolvesThrough, read back before the release rebuilds the row', () => {
+    // created x2, lease-1's carrier, seen and attach: the prefix ends at the attach
+    const prefix = chainOf(entries.slice(0, 5), 4, base3[2]!.digest);
+    const report = recoverDelegation(null, [...base3, ...prefix]);
+    expect(report.failure).toBeNull();
+    expect(report.state.checkpoint.leaseCarriers).toEqual([
+      { leaseId: 'lease-1', transferringSince: null, transferRun: null, promotedRun: null, promotedSession: null, releaseReason: null, resolvedThrough: markA },
+    ]);
+    expect(report.state.checkpoint.leases.find((l) => l.leaseId === 'lease-1')).toMatchObject({ disposition: 'retained', generation: 2, releasedAt: null });
+  });
+
+  it('F5: resolvedThrough only rises: a later mark ordered below it leaves it where it was', () => {
+    const lower = { attemptedAt: T(60), attemptId: 'attempt-3' };
+    const sameInstantLower = { attemptedAt: T(70), attemptId: 'attempt-6' };
+    for (const mark of [lower, sameInstantLower]) {
+      const journal = chainOf([...entries.slice(0, 5),
+        releasedEntry({ leaseId: 'lease-1', generation: 3, releaseReason: 'foreign', at: T(82), resolvesThrough: mark })], 4, base3[2]!.digest);
+      const report = recoverDelegation(null, [...base3, ...journal]);
+      expect(report.failure, JSON.stringify(mark)).toBeNull();
+      expect(report.state.checkpoint.leaseCarriers?.[0], JSON.stringify(mark)).toMatchObject({ leaseId: 'lease-1', releaseReason: 'foreign', resolvedThrough: markA });
+    }
+  });
+
   it('the grammar reads each lease kind\'s exact shape: a missing or extra key, or a word outside its vocabulary, is refused', () => {
     const build = (entry: unknown) => () => buildDelegationJournalRecord({ sequence: 1, acceptedAt: T(1), previousDigest: null, entry: entry as DelegationJournalEntryV1 });
     const t = transitionEntry({ generation: 1, reason: 'carrier', to: 'ephemeral', at: T(41) }) as unknown as Record<string, unknown>;
@@ -1214,7 +1253,7 @@ describe('W5-J7b: the PR5a build recovers a journal holding every lease kind and
   });
 
   it('opens ready on the durable applier and projects the lease kinds to SQLite (no run row: lease-1 only)', async () => {
-    // The run-owned lineage row needs its run in `runs`; the attach-and-foreign half is projected here on its own.
+    // The attach-and-foreign half, projected on its own (the whole journal, run-owned lineage included, is the D-7972 row below).
     const head = chainOf(entries.slice(0, 6), 4, base3[2]!.digest);
     const dir = mkTmp('ccrc-deleg-pr5a-');
     writeFileSync(path.join(dir, DELEGATION_JOURNAL_FILE), bytesOf([...base3, ...head]));
@@ -1226,6 +1265,48 @@ describe('W5-J7b: the PR5a build recovers a journal holding every lease kind and
     expect(lease).toMatchObject({ generation: 3, disposition: 'retained', releasedAt: T(82), retainedAt: T(72), cleanupDueAt: plus7d(T(72)) });
     expect(h.store.readDelegationProjection().lineage.find((n) => n.leaseId === 'lease-1')).toMatchObject({ closeReason: 'foreign', closedAt: T(82) });
     expect(dur.state().checkpoint.leaseCarriers?.[0]).toMatchObject({ leaseId: 'lease-1', releaseReason: 'foreign', resolvedThrough: markB });
+  });
+
+  it('D-7972: a run-owned lineage row whose run coord.db lacks is left out visibly, the rest projects, and it projects once the run is there', async () => {
+    const dir = mkTmp('ccrc-deleg-pr5a-run-');
+    writeFileSync(path.join(dir, DELEGATION_JOURNAL_FILE), bytesOf(fx().all));
+    const h = harness({ dir });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const repairFailures: string[] = [];
+      const dur = await h.open({ warn: (m) => repairFailures.push(m) });
+      expect(dur.failure()).toBeNull();
+      expect(dur.state().phase).toBe('ready');
+      const runRow = (cp: DelegationCheckpointV1) => cp.lineage.find((n) => n.runId === 12);
+      expect(runRow(dur.state().checkpoint)).toBeDefined();                     // authority keeps it
+      const sqlite = () => h.store.readDelegationProjection();
+      // the full projection (recovery's repair): every other row, both leases and their own lineage, the run-owned row left out
+      expect(sqlite().leases.map((l) => l.leaseId).sort()).toEqual(['lease-1', 'lease-2']);
+      expect(sqlite().lineage.filter((n) => n.leaseId !== null).map((n) => n.closeReason).sort()).toEqual(['foreign', 'transfer']);
+      expect(runRow(sqlite())).toBeUndefined();
+      const said = () => warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('D-7972'));
+      expect(said()).toHaveLength(1);
+      expect(said()[0]).toMatch(/^ccrc-server: delegation lineage \S+ names run 12, which coord\.db does not hold/);
+      expect(repairFailures).toEqual([]);                                          // never a failed repair, so never stale
+      // the delta arm: an application while the run is still absent goes to the full projection, which leaves it out again
+      const intent = (action: 'set' | 'clear', at: string) => (cp: DelegationCheckpointV1) =>
+        modelNs.declareCoordinatorIntent(cp, { action, sessionId: PARENT, parentIncarnation: INC, declaredAt: at });
+      expect((await dur.applyCheckpointChange(intent('set', T(96)))).projection).toEqual({ status: 'projected' });
+      expect(runRow(sqlite())).toBeUndefined();
+      expect(said()).toHaveLength(1);                                              // one line per run id per process
+      // the run row arrives; the next application projects the row
+      h.store.db.prepare('INSERT INTO programs (slug, title, createdAt, state) VALUES (?, ?, ?, ?)').run('demo', 'demo', Date.now(), 'active');
+      h.store.db.prepare('INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(12, 'demo', 1, 1, 'project-a', 'planned', 'lane-a-coordinator', Date.now());
+      expect((await dur.applyCheckpointChange(intent('clear', T(97)))).projection).toEqual({ status: 'projected' });
+      expect(runRow(sqlite())).toEqual(runRow(dur.state().checkpoint));
+      expect(repairFailures).toEqual([]);
+      // and from there on the delta holds it
+      expect((await dur.applyCheckpointChange(intent('set', T(98)))).projection).toEqual({ status: 'projected' });
+      expect(sqlite().lineage).toEqual(modelNs.projectionViewOfDelegationCheckpoint(dur.state().checkpoint as DelegationCheckpointV1).lineage);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
@@ -2500,6 +2581,33 @@ describe('journal-alone-creates-lease table (W3-M18A)', () => {
     await expect(dur.applyCheckpointChange((cp) => ({ ...cp, leases: cp.leases.map((l) => ({ ...l, generation: 1 })) }))).rejects.toMatchObject({ code: 'change-refused' });
     await expect(dur.applyCheckpointChange((cp) => ({ ...cp, leases: [] }))).rejects.toMatchObject({ code: 'change-refused' });
     expect(dur.failure()).toBeNull();                                    // refused before any write: not a failed application
+  });
+
+  const leased = async () => {
+    const { dur, request } = await withActivity();
+    const created = await dur.createLease(request());
+    return { dur, leaseId: created.kind === 'created' ? created.leaseId : '', before: dur.state().checkpoint };
+  };
+
+  it('F3: refuses a checkpoint-only change to a carrier row: every lease fact is journal-first', async () => {
+    const { dur, leaseId, before } = await leased();
+    const mark = (cp: DelegationCheckpointV1): DelegationCheckpointV1 => ({ ...cp, leaseCarriers: [{ leaseId, transferringSince: null, transferRun: null,
+      promotedRun: null, promotedSession: null, releaseReason: null, resolvedThrough: { attemptedAt: T(8), attemptId: 'attempt-forged' } }] });
+    // the shape alone is legal (a resolution mark on an ephemeral lease), so only the journal-first guard refuses it
+    expect(() => modelNs.assertLeases(mark(before))).not.toThrow();
+    await expect(dur.applyCheckpointChange(mark)).rejects.toMatchObject({ code: 'change-refused', message: expect.stringContaining('carrier row') });
+    expect(dur.state().checkpoint).toEqual(before);
+    expect(dur.failure()).toBeNull();
+  });
+
+  it('F3: refuses a checkpoint-only change adding a run-owned lineage row', async () => {
+    const { dur, leaseId, before } = await leased();
+    const runRow = (cp: DelegationCheckpointV1): DelegationCheckpointV1 => ({ ...cp, lineage: [...cp.lineage, {
+      lineageId: modelNs.deriveDelegationRunLineageId({ leaseId, parentId: PARENT, parentIncarnation: INC, runId: 41 }), parentId: PARENT, parentIncarnation: INC,
+      activityId: null, leaseId: null, runId: 41, openedAt: T(8), closedAt: null, closeReason: null }] });
+    await expect(dur.applyCheckpointChange(runRow)).rejects.toMatchObject({ code: 'change-refused', message: expect.stringContaining('a run owns') });
+    expect(dur.state().checkpoint).toEqual(before);
+    expect(dur.failure()).toBeNull();
   });
 
   it('recovery refuses a checkpoint that carries a lease no journal entry created, and one with a nonzero generation', async () => {

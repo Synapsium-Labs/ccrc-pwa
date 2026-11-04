@@ -13,7 +13,10 @@ import {
   type DelegationJournalRecordV1,
 } from '../src/coord/delegation-model.js';
 import { buildDelegationJournalRecord } from '../src/coord/delegation-journal.js';
-import { recoverDelegation } from '../src/coord/delegation-checkpoint.js';
+import { decodeDelegationCheckpoint, encodeDelegationCheckpoint, recoverDelegation, validateDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const PARENT = 'lane-a-demo';
 const INC = 'g1';
@@ -77,5 +80,19 @@ describe('W5-J8: computeHolds holds an open lease\'s every record, and a release
     expect(cp.leases[0]).toMatchObject({ releasedAt: T(9), generation: 3, disposition: 'retained' });
     expect(cp.leaseCarriers).toEqual([{ leaseId: 'lease-1', transferringSince: null, transferRun: null, promotedRun: null, promotedSession: null,
       releaseReason: 'native-removed', resolvedThrough: null }]);
+  });
+});
+
+describe('F6: a checkpoint main\'s code wrote reads back byte-identical on this build (the reader-only floor changes no bytes)', () => {
+  // `fixtures/delegation-checkpoint-main.json` was built by main's own fold at the PR5a merge base (a520aaace), from fixture data only:
+  // three evidence records and one `lease-created`, so it holds sessions, activities, a lease, its lineage and the pruning holds.
+  const bytes = new Uint8Array(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'delegation-checkpoint-main.json')));
+
+  it('decodes, validates, and re-encodes to the same bytes, with no leaseCarriers member', () => {
+    const cp = decodeDelegationCheckpoint(bytes);
+    expect(cp.leases).toHaveLength(1);
+    expect(Object.keys(cp)).not.toContain('leaseCarriers');
+    expect(() => validateDelegationCheckpoint(cp, null)).not.toThrow();
+    expect(Buffer.from(encodeDelegationCheckpoint(cp)).equals(Buffer.from(bytes))).toBe(true);
   });
 });

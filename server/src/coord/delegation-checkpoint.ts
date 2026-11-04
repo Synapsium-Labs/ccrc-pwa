@@ -63,6 +63,7 @@ import {
   sortedProjectionRows,
   upkeepDelegationIntervals,
   WAVE3_LEASE_SOURCE_KINDS,
+  withDelegationIntentSource,
   type DeepReadonly,
   type DelegationActivityRow,
   type DelegationAttemptRow,
@@ -401,9 +402,10 @@ export function decodeDelegationCheckpoint(bytes: Uint8Array): DelegationCheckpo
 
 function unprojectable(detail: string): never { return refuse('unprojectable', detail); }
 
-/** The lease clocks the DDL holds at or after `firstObservedAt`. */
-const LEASE_CLOCKS = ['terminalEvidenceAt', 'adoptedAt', 'retainedAt', 'promotedAt', 'cleanupDueAt', 'cleanupStartedAt', 'cleanupFinishedAt',
-  'releasedAt'] as const satisfies readonly (keyof DelegationLeaseRow)[];
+/** The lease clocks the DDL holds at or after `firstObservedAt`, less the two `assertLease` already holds there (`terminalEvidenceAt` and
+ *  `releasedAt`, review 1451 F8): this check's one caller runs `assertLeases` first, so each bound is stated once. */
+const LEASE_CLOCKS = ['adoptedAt', 'retainedAt', 'promotedAt', 'cleanupDueAt', 'cleanupStartedAt', 'cleanupFinishedAt'] as const satisfies
+  readonly (keyof DelegationLeaseRow)[];
 
 /**
  * Refuses a checkpoint that `projectDelegationCheckpoint` could never accept: a duplicate key, a dangling reference, a CHECK
@@ -1216,6 +1218,14 @@ export class DelegationCheckpointBuilder {
       const ik = delegationLeaseIdentityKey(fold.lease);
       if (this.leaseByIdentity.get(ik) === e.leaseId) this.leaseByIdentity.delete(ik);
       if (this.leaseByPath.get(fold.lease.canonicalPath) === e.leaseId) this.leaseByPath.delete(fold.lease.canonicalPath);
+    }
+    // D-7973 (review 1451 F13): the floor folds every effect a later writer's entry has, so `adopt` keeps the parent's identity
+    // alive here, not in PR7: `retained-lineage` joins the effective basis of the lease's parent row (spec §5.1), and nothing removes it.
+    if (e.kind === 'lease-transition' && e.reason === 'adopt') {
+      const k = sessionKeyOf(fold.lease.parentId, fold.lease.parentIncarnation);
+      const parent = this.sessions.get(k);
+      if (parent === undefined) refuse('fold-refused', `record ${record.sequence} adopts lease ${e.leaseId}, whose parent (${fold.lease.parentId}, ${fold.lease.parentIncarnation}) has no session row`);
+      this.sessions.set(k, withDelegationIntentSource(parent, 'retained-lineage'));
     }
     this.leases.set(e.leaseId, fold.lease);
     if (fold.carrier === null) this.carriers.delete(e.leaseId); else this.carriers.set(e.leaseId, fold.carrier);
@@ -2543,9 +2553,12 @@ export class DelegationDurability {
               refuse('change-refused', `a change dropped or altered the identity of the activity ${a.activityId}: its ID, parent, source, upstream ID, identity journalId and opening instant are immutable (O4)`);
             }
           }
-          const leaseState = (cp: DelegationCheckpointV1): string => canonicalDelegationJson([cp.leases, cp.lineage.filter((n) => n.leaseId !== null)]);
+          // Every lease fact stays journal-first (plan, line 7): the leases, their carrier rows (a transfer, a promotion, a release reason,
+          // a resolution mark) and the lineage a lease or a promoted run owns. Only the journal writes them (review 1451 F3).
+          const leaseState = (cp: DelegationCheckpointV1): string => canonicalDelegationJson([cp.leases, cp.leaseCarriers ?? [],
+            cp.lineage.filter((n) => n.leaseId !== null || n.runId !== null)]);
           if (leaseState(after) !== leaseState(before)) {
-            refuse('change-refused', 'a checkpoint-only change cannot add or alter a lease or a lease\'s lineage: the journal alone creates leases');
+            refuse('change-refused', 'a checkpoint-only change cannot add or alter a lease, its carrier row or the lineage a lease or a run owns: the journal alone writes them');
           }
           b.replaceRows(after);
         },

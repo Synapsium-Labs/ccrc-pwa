@@ -247,7 +247,9 @@ import {
   encodeDelegationCheckpoint,
 } from '../src/coord/delegation-checkpoint.js';
 import { DELEGATION_JOURNAL_FILE } from '../src/coord/delegation-journal.js';
+import { DELEGATION_JOURNAL_ENTRY_KINDS } from '../src/coord/delegation-model.js';
 import { mkTmp } from './tmpHelpers.js';
+import { carrierCheckpointBytes, carrierCheckpoints } from './delegationCarrierCheckpoints.js';
 
 const HERE8B = path.dirname(fileURLToPath(import.meta.url));
 const HELPER_PATH = path.join(HERE8B, '..', '..', 'deploy', 'coordination-snapshot.mjs');
@@ -809,6 +811,15 @@ describe('8B: the helper validates a journal exactly as the server does (differe
     ] as const) bothAgree(name, text(`${asLine(RC)}${mutate(good)}`), {});
   });
 
+  it('F11: the two copies of the closed grammar name the same kinds, in both directions, and a kind outside it is refused by both', () => {
+    expect([...H.JOURNAL_ENTRY_KINDS].sort()).toEqual(Object.keys(DELEGATION_JOURNAL_ENTRY_KINDS).sort());
+    const asLine = (r: DelegationJournalRecordV1): string => new TextDecoder().decode(encodeDelegationJournalRecord(r));
+    const lease = LEASE_RECORD(RC);
+    for (const kind of ['lease-cleaned', 'tree-resolved', '']) {
+      bothAgree(`kind ${kind}`, text(`${asLine(RA)}${asLine(RB)}${asLine(RC)}${asLine(lease).replace('"kind":"lease-created"', `"kind":${JSON.stringify(kind)}`)}`), {});
+    }
+  });
+
   it('wave 5 (PR5a, D-7809): the three lease kinds are read by both, and a malformed one is refused by both with the same code', () => {
     const asLine = (r: DelegationJournalRecordV1): string => new TextDecoder().decode(encodeDelegationJournalRecord(r));
     const lease = LEASE_RECORD(RC);
@@ -837,10 +848,20 @@ describe('8B: the helper validates a journal exactly as the server does (differe
 });
 
 describe('8B: the helper reads a checkpoint exactly as the server does, as far as a snapshot needs (differential)', () => {
-  const real = [cpBytes(0, null), cpBytes(7, RC), cpBytes(3, RB, { pruningHolds: [{ journalId: RB.journalId, reason: 'checkpoint-anchor', ownerId: 'c' }, { journalId: RA.journalId, reason: 'identity-candidate', ownerId: 'agent-1' }] })];
+  // Wave 5, PR5a (review 1451 F1): two of the real set carry `leaseCarriers`, built by the server's own fold, so a top-level member
+  // the server writes and the helper does not read goes red here.
+  const real = [cpBytes(0, null), cpBytes(7, RC), cpBytes(3, RB, { pruningHolds: [{ journalId: RB.journalId, reason: 'checkpoint-anchor', ownerId: 'c' }, { journalId: RA.journalId, reason: 'identity-candidate', ownerId: 'agent-1' }] }),
+    ...carrierCheckpointBytes()];
   const refusals: Array<[string, Uint8Array]> = (() => {
     const good = new TextDecoder().decode(cpBytes(7, RC));
+    const carried = new TextDecoder().decode(carrierCheckpointBytes()[1]!);
     return [
+      // the carrier member: refused by both, with the same code
+      ['a carrier row with an unknown key', text(carried.replace('{"leaseId":"lease-1"', '{"leaseId":"lease-1","zz":1'))],
+      ['a carrier row missing a key', text(carried.replace(',"promotedSession":null,"releaseReason":"foreign"', ',"releaseReason":"foreign"'))],
+      ['a carrier row whose transferRun is 0', text(carried.replace('"transferRun":11', '"transferRun":0'))],
+      ['a carrier row whose resolve mark is not an object', text(carried.replace(/"resolvedThrough":\{"attemptId":"attempt-2","attemptedAt":"[^"]+"\}/, '"resolvedThrough":"attempt-2"'))],
+      ['leaseCarriers that is an object', text(carried.replace(/"leaseCarriers":\[.*?\],"leases"/, '"leaseCarriers":{},"leases"'))],
       ['BOM', new Uint8Array([0xef, 0xbb, 0xbf, ...text(good)])],
       ['no final LF', text(good.slice(0, -1))],
       ['CRLF', text(`${good.slice(0, -1)}\r\n`)],
@@ -855,6 +876,14 @@ describe('8B: the helper reads a checkpoint exactly as the server does, as far a
       ['a list that is an object', text(good.replace('"sessions":[]', '"sessions":{}'))],
     ];
   })();
+  it('F1: the carrier checkpoints are what PR5b writes: a released lease with its reason and mark, and a lease in transfer', () => {
+    const [released, transferring] = carrierCheckpointBytes().map((b) => decodeDelegationCheckpoint(b));
+    expect(released!.leaseCarriers).toEqual([{ leaseId: 'lease-1', transferringSince: null, transferRun: null, promotedRun: null, promotedSession: null,
+      releaseReason: 'foreign', resolvedThrough: { attemptedAt: '2026-10-14T00:00:55.000Z', attemptId: 'attempt-2' } }]);
+    expect(transferring!.leaseCarriers?.map((c) => [c.leaseId, c.transferRun])).toEqual([['lease-1', null], ['lease-2', 11]]);
+    for (const b of carrierCheckpointBytes()) expect(new TextDecoder().decode(b)).toContain('"leaseCarriers":[{');
+  });
+
   it('accepts every checkpoint the server\'s own encoder writes, with the same revision, anchor and holds', () => {
     for (const bytes of real) {
       const server = decodeDelegationCheckpoint(bytes);
@@ -873,6 +902,27 @@ describe('8B: the helper reads a checkpoint exactly as the server does, as far a
       expect(helper, name).toMatchObject({ ok: false, code: (server as { code: string }).code });
     });
   }
+  it('F1: capture, validate and restore each pass on a checkpoint that carries leaseCarriers (a fixture HOME)', async () => {
+    const { released, transferring } = carrierCheckpoints();
+    for (const c of [released, transferring]) {
+      const journal = bytesOf(...c.records);
+      const checkpoint = encodeDelegationCheckpoint(c.checkpoint);
+      const source = mkHome();
+      setLive(source, { journal, checkpoint, db: { marker: 1 } });
+      const { dir, manifest } = snapshotOf(source);
+      expect(manifest.delegation.checkpointRevision, c.name).toBe(1);
+      expect(readFileSync(path.join(dir, 'delegation-checkpoint.json')), c.name).toEqual(Buffer.from(checkpoint));
+      expect(classifyCli(dir, 'validate'), c.name).toMatchObject({ status: 0, stdout: expect.stringMatching(/^v1: a valid manifest, initialized delegation/) });
+      const target = mkHome();
+      H.restore({ home: target, from: dir, probe: inactive });
+      expect(readFileSync(liveFile(target, 'delegation-checkpoint.json')), c.name).toEqual(Buffer.from(checkpoint));
+      expect(readFileSync(liveFile(target, 'delegation-events.log')), c.name).toEqual(Buffer.from(journal));
+      const report = await recoverDelegationFromFiles(nodeDelegationFilePort, liveDir(target));
+      expect(report.failure, c.name).toBeNull();
+      expect(report.state.checkpoint.leaseCarriers, c.name).toEqual(c.checkpoint.leaseCarriers);
+    }
+  });
+
   it('the restore marker and file names the helper spells are the ones the server module reads', () => {
     expect(H.RESTORE_MARKER_FILE).toBe(COORDINATION_RESTORE_MARKER_FILE);
     expect(H.JOURNAL_FILE).toBe(DELEGATION_JOURNAL_FILE);

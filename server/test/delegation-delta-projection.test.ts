@@ -377,6 +377,30 @@ describe('PR5a: a lease row that changes, and a lease-owned lineage row that clo
     expect(w.t.words()).toEqual(['update delegation_leases', ...own.map(() => 'update delegation_lineage')]);
     expectParity(w.s, released);
   });
+
+  it('D-7972: a run-owned lineage row whose run is absent sends the delta to the full projection, which leaves it out; once the run is there it projects', () => {
+    const w = openWorld();
+    const lease = w.prior.leases[0]!;
+    const absent = w.runIds[1] + 1;
+    const row = { lineageId: model.deriveDelegationRunLineageId({ leaseId: lease.leaseId, parentId: lease.parentId, parentIncarnation: lease.parentIncarnation, runId: absent }),
+      parentId: lease.parentId, parentIncarnation: lease.parentIncarnation, activityId: null, leaseId: null, runId: absent, openedAt: at(8), closedAt: null, closeReason: null };
+    const next = { ...w.prior, lineage: [...w.prior.lineage, row] };
+    const warned: string[] = [];
+    const warn = console.warn;
+    console.warn = (m: unknown) => { warned.push(String(m)); };
+    try {
+      expect(changes(w.s, w.prior, next)).toEqual({ mode: 'full' });
+      expectParity(w.s, { ...next, lineage: w.prior.lineage });                    // every other row; the run-owned one left out
+      expect(changes(w.s, next, next)).toEqual({ mode: 'full' });                  // still absent: SQLite lacks a row prior holds
+      expect(warned.filter((m) => m.includes('D-7972'))).toHaveLength(1);
+      expect((w.s.openRun({ program: 'delta-fixture', title: 'Delta fixture', project: 'project-a', wave: 3, waveOf: 5, claimedBy: 'coordinator-a' }) as { id: number }).id).toBe(absent);
+      expect(changes(w.s, next, next)).toEqual({ mode: 'full' });                  // the row comes back by the full projection
+      expectParity(w.s, next);
+      expect(changes(w.s, next, next)).toEqual({ mode: 'delta', rows: 0 });         // and the delta holds it from there
+    } finally {
+      console.warn = warn;
+    }
+  });
 });
 
 // ── R8, R9, R10: what the compare-and-swap and the count each catch ──────────────────────────────────────────────────────
@@ -630,6 +654,9 @@ const twin = (): World => (twinWorld ??= openWorld());
  *  refusal (a CHECK, a unique index, a foreign key): the candidate is not a value the table can hold. */
 const probe = (next: DelegationCheckpointV1): Outcome => {
   const tw = twin();
+  // D-7972: a run-owned lineage row whose run is absent is LEFT OUT by the full projection where the foreign key used to refuse it;
+  // either way it is not a value the table holds.
+  if (next.lineage.some((n) => n.runId !== null && !tw.runIds.includes(n.runId))) return { kind: 'invalid' };
   try {
     tw.s.projectDelegationCheckpoint(next);
     tw.s.projectDelegationCheckpoint(tw.prior);

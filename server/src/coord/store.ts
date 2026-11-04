@@ -63,7 +63,7 @@ import {
   assertLeases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
   delegationLeaseCodec, delegationLineageCodec, delegationSessionCodec, DelegationModelError,
   prepareDelegationProjectionChanges,
-  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationProjectChangesResult,
+  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationLineageRow, type DelegationProjectChangesResult,
   type DelegationProjectionInsert, type DelegationProjectionUpdate, type DelegationRowCodec, type DelegationSqlValue,
 } from './delegation-model.js';
 // Child reclamation wave 10 (path-identity spec 2026-10-12 §5.2): the collector switch's read vocabularies, its journal
@@ -1787,6 +1787,8 @@ const feedDedupeHash = (key: string): string => createHash('sha256').update(key)
 export class CoordStore {
   /** Landing order wave 5f: null open; `replay` closed until `replayLandingJournal` proves the history; `restart` closed for good. */
   private landingFence: 'replay' | 'restart' | null;
+  /** D-7972: the run ids whose absent `runs` row this process has already warned about, so the warning is one line per run. */
+  private readonly lineageRunsWarned = new Set<number>();
   constructor(readonly db: DatabaseSync, private readonly landing: { landingJournal?: LandingJournalPort; onUnusableConnection?: () => never } = {}) {
     this.landingFence = landing.landingJournal === undefined ? null : 'replay';
   }
@@ -9814,7 +9816,8 @@ export class CoordStore {
     const activities = checkpoint.activities.map((r) => delegationActivityCodec.toDb(r));
     const attempts = checkpoint.attempts.map((r) => delegationAttemptCodec.toDb(r));
     const leases = checkpoint.leases.map((r) => delegationLeaseCodec.toDb(r));
-    const lineage = checkpoint.lineage.map((r) => delegationLineageCodec.toDb(r));
+    const withheld = this.lineageWithoutRun(checkpoint.lineage);
+    const lineage = checkpoint.lineage.filter((r) => !withheld.has(r.lineageId)).map((r) => delegationLineageCodec.toDb(r));
     const sessionKey = (id: unknown, incarnation: unknown): string => JSON.stringify([id, incarnation]);
     // A key repeated inside the checkpoint is refused HERE, before BEGIN. The plain INSERT used to refuse it with a UNIQUE
     // error; the upsert would take it quietly (it updates the one row twice and the last wins), narrowing a distinction the
@@ -9883,7 +9886,7 @@ export class CoordStore {
    */
   projectDelegationCheckpointChanges(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): DelegationProjectChangesResult {
     const diff = prepareDelegationProjectionChanges(prior, next);
-    if (!diff.applicable) { this.projectDelegationCheckpoint(next); return { mode: 'full' }; }
+    if (!diff.applicable || this.runLineageNeedsFull(prior, next)) { this.projectDelegationCheckpoint(next); return { mode: 'full' }; }
     const fk = (this.db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number } | undefined)?.foreign_keys;
     if (fk !== 1) throw new DelegationModelError('foreign-keys-off', `PRAGMA foreign_keys reads ${String(fk)}; the projection needs 1`);
     tx(this.db, () => {
@@ -9919,6 +9922,34 @@ export class CoordStore {
       }
     });
     return { mode: 'delta', rows: diff.updates.length + diff.inserts.length };
+  }
+
+  /**
+   * D-7972 (review 1451 F2): the run-owned lineage rows (a promotion's, wave 5) whose run `runs` does not hold. The checkpoint is
+   * authority and keeps them; the foreign key would refuse them, and every full projection with it, so the projection leaves them out,
+   * warns once per run id in this process, and asks again on every projection, so a row projects once its run row is there.
+   */
+  private lineageWithoutRun(rows: readonly DelegationLineageRow[]): Set<string> {
+    const out = new Set<string>();
+    const has = this.db.prepare('SELECT 1 AS one FROM runs WHERE id = ?');
+    for (const n of rows) {
+      if (n.runId === null || has.get(n.runId) !== undefined) continue;
+      out.add(n.lineageId);
+      if (this.lineageRunsWarned.has(n.runId)) continue;
+      this.lineageRunsWarned.add(n.runId);
+      console.warn(`ccrc-server: delegation lineage ${n.lineageId} names run ${n.runId}, which coord.db does not hold; the projection leaves it out until the run row is there (D-7972)`);
+    }
+    return out;
+  }
+
+  /** D-7972, the delta's pre-check: a run-owned lineage row of `next` whose run is absent, or one of `prior` that SQLite does not hold
+   *  (a full projection left it out), sends the application to the full projection, which leaves out or adds back exactly those rows. */
+  private runLineageNeedsFull(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): boolean {
+    const owned = prior.lineage.filter((n) => n.runId !== null);
+    if (owned.length === 0 && !next.lineage.some((n) => n.runId !== null)) return false;
+    if (this.lineageWithoutRun(next.lineage).size > 0) return true;
+    const held = new Set((this.db.prepare('SELECT lineageId FROM delegation_lineage WHERE runId IS NOT NULL').all() as Array<{ lineageId: string }>).map((r) => r.lineageId));
+    return owned.some((n) => !held.has(n.lineageId));
   }
 
   /**
