@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Execution status:** Drafted 2026-11-04 from the operator's ruling of that day (programme ledger, Decisions, 2026-11-04 10:22) at base `6da86bb8323e1c949a3e27e2cbd82606f475b121`. Not yet approved and not dispatched. It is dispatched as one worker run once the operator approves it.
+> **Execution status:** Drafted 2026-11-04 from the operator's ruling of that day (programme ledger, Decisions, 2026-11-04 10:22) at base `6da86bb8323e1c949a3e27e2cbd82606f475b121`. Approved as written by the operator on 2026-11-04 at 15:11 UTC (item 30). It is dispatched as one worker run once it lands; the run is recorded in the programme ledger.
 
 **Goal:** Make `deploy/measure-continuity.py --stage 6`'s `direct_pressure_kills` read the task notifications it now misses: those delivered as queued-command attachments, those only enqueued, and the summary-only notices it now counts as unmeasured. Neither the kill rule nor the B + 2 comparison changes.
 
@@ -304,10 +304,11 @@ The allocator issued D-7960 through D-7963 on 2026-11-04 10:17 UTC. All four are
 
 - The operator's ruling of 2026-11-04 is to redesign the scanner to read the notifications it now misses (programme ledger, Decisions, 2026-11-04 10:22).
 - The kill rule, the B + 2 comparison and the target of 0 are unchanged.
+- The operator approved this plan as written on 2026-11-04 at 15:11 UTC (item 30).
 
 ### Waiting on You
 
-- Approve this plan. Then the coordinator opens its run and dispatches it.
+- Nothing. The coordinator lands this plan, then opens its run and dispatches it.
 
 ### Later
 
