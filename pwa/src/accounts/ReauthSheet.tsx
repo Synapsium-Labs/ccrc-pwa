@@ -229,7 +229,7 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
       failure = e;
     }
     // The record is the app's, not this sheet's: it is written whether or not the sheet is still open, on any answer
-    // that may have signed the lane out (removed, absent, or a request that never completed). A sheet opened on the
+    // that may have signed the lane out (removed, absent, or no answer: `signOutUnknown`). A sheet opened on the
     // lane later cannot be sure (it may have been signed in elsewhere since), so the record only keeps it from saying
     // the lane keeps its old one, up to a passing check newer than the last one known here.
     const knownAt = checked?.check?.at ?? before?.check?.at;

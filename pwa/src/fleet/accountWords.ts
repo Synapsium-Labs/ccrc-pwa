@@ -927,8 +927,11 @@ export const cancelRefused = (word: string | undefined): string => (word !== und
 /** The result frame's wrong-account act (spec §6.2 step 10, §12.4). */
 export const WRONG_ACCOUNT = 'Not the account you meant?';
 export const SIGN_OUT_RESTART = 'Sign this lane out and start again';
-/** A sign-out whose request didn't complete (no refusal word came back): the box may have signed the lane out. */
-export const signOutUnknown = (word: string | undefined): boolean => !(word !== undefined && CODE_RE.test(word));
+/** A sign-out with no answer, where the box may have signed the lane out: a request that didn't complete, a word that
+ *  can't be read, or the route's `outcome-unknown` (a timeout, a lost answer, or an output it couldn't read). Anything
+ *  else is a refusal. */
+export const signOutUnknown = (word: string | undefined): boolean =>
+  word === 'outcome-unknown' || !(word !== undefined && CODE_RE.test(word));
 export const signOutRefused = (id: string, word: string | undefined): string => (!signOutUnknown(word)
   ? `The fleet host refused (${word}): ${id} was not signed out, and no new sign-in was started.`
   : `The request didn't complete, so whether ${id} was signed out is unknown. No new sign-in was started.`);
@@ -1032,7 +1035,7 @@ export const signOldOutDanger = (n: number, id: string): string =>
   `${plural(n, 'session')} on ${id} still ${n === 1 ? 'uses' : 'use'} the sign-in and may fail ${n === 1 ? 'its' : 'their'} next turn.`;
 export const STEP_UP_AGAIN_SIGN_OLD_OUT = "Confirm it's you again, then press it again. Nothing was signed out.";
 /** The old sign-in's sign-out was refused, or its answer never came: the lane keeps both until it is signed out. */
-export const signOldOutRefused = (id: string, word: string | undefined): string => (word !== undefined && CODE_RE.test(word)
+export const signOldOutRefused = (id: string, word: string | undefined): string => (!signOutUnknown(word)
   ? `The fleet host refused (${word}): ${id}'s old sign-in was not signed out.`
   : `The request didn't complete, so whether ${id}'s old sign-in was signed out is unknown. Press it again.`);
 /** Until the old sign-in is signed out, the lane holds both (spec §9's one stated exception to "never two"): said only
@@ -1131,9 +1134,13 @@ export function reauthEnd(id: string, method: 'login' | 'setup-token', kind: Sig
   }
 }
 
-/** A start refused with a word: A22's sentence, then what `old` allows of the old credential (D-7872 (10)). */
-export const reauthStartRefusal = (id: string, method: 'login' | 'setup-token', word: string, reason: string | undefined, old: OldCredential): string =>
-  `${signInStartRefusal(id, word, reason)} ${oldCredentialLine(id, old, credentialUntouched(id, method))}`;
+/** A start refused with a word: A22's sentence, then what `old` allows of the old credential (D-7872 (10)). `not-found`
+ *  says the first alone: the lane has left the roster and a removal signs it out, so it has no old credential to speak
+ *  of, as A19's `not-found` has none. */
+export const reauthStartRefusal = (id: string, method: 'login' | 'setup-token', word: string, reason: string | undefined, old: OldCredential): string => {
+  const refused = signInStartRefusal(id, word, reason);
+  return word === 'not-found' ? refused : `${refused} ${oldCredentialLine(id, old, credentialUntouched(id, method))}`;
+};
 
 /** The run frame's line once the helper says `done` (A20 installed it after its own check of the new credential). */
 export const reauthInstalled = (method: 'login' | 'setup-token'): string => (method === 'login'
