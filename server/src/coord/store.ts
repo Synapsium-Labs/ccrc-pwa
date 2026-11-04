@@ -60,10 +60,10 @@ import type { UpdateIntentLog } from './updateintentlog.js';
 // Delegation broker wave 3, Task 7: the projection's row shapes, codecs and guards are the PURE `delegation-model.ts`;
 // this file runs the SQL and nothing else.
 import {
-  assertWave3Leases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
+  assertLeases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
   delegationLeaseCodec, delegationLineageCodec, delegationSessionCodec, DelegationModelError,
   prepareDelegationProjectionChanges,
-  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationProjectChangesResult,
+  type DelegationCheckpointV1, type DelegationEventRow, type DelegationInsertEventsResult, type DelegationLineageRow, type DelegationProjectChangesResult,
   type DelegationProjectionInsert, type DelegationProjectionUpdate, type DelegationRowCodec, type DelegationSqlValue,
 } from './delegation-model.js';
 // Child reclamation wave 10 (path-identity spec 2026-10-12 §5.2): the collector switch's read vocabularies, its journal
@@ -1822,6 +1822,8 @@ const feedDedupeHash = (key: string): string => createHash('sha256').update(key)
 export class CoordStore {
   /** Landing order wave 5f: null open; `replay` closed until `replayLandingJournal` proves the history; `restart` closed for good. */
   private landingFence: 'replay' | 'restart' | null;
+  /** D-7972: the run ids whose absent `runs` row this process has already warned about, so the warning is one line per run. */
+  private readonly lineageRunsWarned = new Set<number>();
   constructor(readonly db: DatabaseSync, private readonly landing: { landingJournal?: LandingJournalPort; onUnusableConnection?: () => never } = {}) {
     this.landingFence = landing.landingJournal === undefined ? null : 'replay';
   }
@@ -9908,8 +9910,8 @@ export class CoordStore {
    * A fault at any statement rolls the whole replacement back; the previous projection survives intact. The cost is
    * O(the five tables) plus O(the events of the sessions that leave), never O(all events).
    *
-   * Everything refusable is refused BEFORE the transaction opens: the checkpoint's version and applied position, the wave-3
-   * lease invariants (`assertWave3Leases`), every row's encoding, a session key repeated inside the checkpoint, and a handle that
+   * Everything refusable is refused BEFORE the transaction opens: the checkpoint's version and applied position, the
+   * lease invariants (`assertLeases`), every row's encoding, a session key repeated inside the checkpoint, and a handle that
    * does not enforce foreign keys. A row the
    * schema itself refuses (a CHECK, a unique index, a foreign key) throws SQLite's error from inside the transaction.
    */
@@ -9919,13 +9921,14 @@ export class CoordStore {
     if (!Number.isSafeInteger(applied) || applied < 0) {
       throw new DelegationModelError('bad-checkpoint', `appliedJournalSequence ${String(applied)} is not a non-negative integer`);
     }
-    assertWave3Leases(checkpoint);
+    assertLeases(checkpoint);
     // Encoded now, outside the transaction: a malformed instant or list is a refusal, not a rollback.
     const sessions = checkpoint.sessions.map((r) => delegationSessionCodec.toDb(r));
     const activities = checkpoint.activities.map((r) => delegationActivityCodec.toDb(r));
     const attempts = checkpoint.attempts.map((r) => delegationAttemptCodec.toDb(r));
     const leases = checkpoint.leases.map((r) => delegationLeaseCodec.toDb(r));
-    const lineage = checkpoint.lineage.map((r) => delegationLineageCodec.toDb(r));
+    const withheld = this.lineageWithoutRun(checkpoint.lineage);
+    const lineage = checkpoint.lineage.filter((r) => !withheld.has(r.lineageId)).map((r) => delegationLineageCodec.toDb(r));
     const sessionKey = (id: unknown, incarnation: unknown): string => JSON.stringify([id, incarnation]);
     // A key repeated inside the checkpoint is refused HERE, before BEGIN. The plain INSERT used to refuse it with a UNIQUE
     // error; the upsert would take it quietly (it updates the one row twice and the last wins), narrowing a distinction the
@@ -9974,7 +9977,8 @@ export class CoordStore {
   /**
    * The delta twin of `projectDelegationCheckpoint`: makes the five non-event tables say what `next` says, given that they say what
    * `prior` says, by writing only the rows that differ. `diffDelegationProjection` decides. When the change is only additions and
-   * updates (no key leaves, no lease row or lease-owned lineage row changes or arrives) it runs, in ONE transaction:
+   * updates (no key leaves, no lease row and no lease-owned lineage row arrives, and a lease-owned lineage row changes only by
+   * closing: wave 5's `delegation_leases` and `delegation_lineage` arms) it runs, in ONE transaction:
    *   1. each new row as a plain INSERT, parents first (sessions, activities, attempts, lineage), so an UPDATE below may point at a
    *      parent that is new in this same delta;
    *   2. each changed row as a compare-and-swap UPDATE keyed on its primary key, whose WHERE also carries every column's prior
@@ -9987,13 +9991,13 @@ export class CoordStore {
    * `{ mode: 'full' }`. Values edited out of band in a row the delta does not touch wait for the next full projection.
    *
    * Everything the full projection refuses before its transaction is refused here the same way and with the same code, before
-   * BEGIN and with SQLite unchanged: the version and applied position, the wave-3 lease invariants, a changed or new row's
+   * BEGIN and with SQLite unchanged: the version and applied position, the lease invariants, a changed or new row's
    * encoding, and a handle that does not enforce foreign keys. A `next` the diff declines (a repeated session key included) runs the
    * full projection before that last check, so the full path gives its own answer, its own foreign-keys check included.
    */
   projectDelegationCheckpointChanges(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): DelegationProjectChangesResult {
     const diff = prepareDelegationProjectionChanges(prior, next);
-    if (!diff.applicable) { this.projectDelegationCheckpoint(next); return { mode: 'full' }; }
+    if (!diff.applicable || this.runLineageNeedsFull(prior, next)) { this.projectDelegationCheckpoint(next); return { mode: 'full' }; }
     const fk = (this.db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number } | undefined)?.foreign_keys;
     if (fk !== 1) throw new DelegationModelError('foreign-keys-off', `PRAGMA foreign_keys reads ${String(fk)}; the projection needs 1`);
     tx(this.db, () => {
@@ -10015,6 +10019,8 @@ export class CoordStore {
           case delegationSessionCodec.table: return swap('UPDATE delegation_sessions', delegationSessionCodec, () => delegationInsertSql(delegationSessionCodec));
           case delegationActivityCodec.table: return swap('UPDATE delegation_activities', delegationActivityCodec, () => delegationInsertSql(delegationActivityCodec));
           case delegationAttemptCodec.table: return swap('UPDATE delegation_attempts', delegationAttemptCodec, () => delegationInsertSql(delegationAttemptCodec));
+          // Wave 5 (PR5a): a lease only CHANGES in a delta (a transition, a release); a new lease is never one, so this arm has no INSERT.
+          case delegationLeaseCodec.table: return swap('UPDATE delegation_leases', delegationLeaseCodec, () => { throw new DelegationModelError('projection-delta-mismatch', 'a new lease is never a delta'); });
           case delegationLineageCodec.table: return swap('UPDATE delegation_lineage', delegationLineageCodec, () => delegationInsertSql(delegationLineageCodec));
           default: throw new DelegationModelError('projection-delta-mismatch', `${table}: the delta projection has no statement for this table`);
         }
@@ -10027,6 +10033,34 @@ export class CoordStore {
       }
     });
     return { mode: 'delta', rows: diff.updates.length + diff.inserts.length };
+  }
+
+  /**
+   * D-7972 (review 1451 F2): the run-owned lineage rows (a promotion's, wave 5) whose run `runs` does not hold. The checkpoint is
+   * authority and keeps them; the foreign key would refuse them, and every full projection with it, so the projection leaves them out,
+   * warns once per run id in this process, and asks again on every projection, so a row projects once its run row is there.
+   */
+  private lineageWithoutRun(rows: readonly DelegationLineageRow[]): Set<string> {
+    const out = new Set<string>();
+    const has = this.db.prepare('SELECT 1 AS one FROM runs WHERE id = ?');
+    for (const n of rows) {
+      if (n.runId === null || has.get(n.runId) !== undefined) continue;
+      out.add(n.lineageId);
+      if (this.lineageRunsWarned.has(n.runId)) continue;
+      this.lineageRunsWarned.add(n.runId);
+      console.warn(`ccrc-server: delegation lineage ${n.lineageId} names run ${n.runId}, which coord.db does not hold; the projection leaves it out until the run row is there (D-7972)`);
+    }
+    return out;
+  }
+
+  /** D-7972, the delta's pre-check: a run-owned lineage row of `next` whose run is absent, or one of `prior` that SQLite does not hold
+   *  (a full projection left it out), sends the application to the full projection, which leaves out or adds back exactly those rows. */
+  private runLineageNeedsFull(prior: DelegationCheckpointV1, next: DelegationCheckpointV1): boolean {
+    const owned = prior.lineage.filter((n) => n.runId !== null);
+    if (owned.length === 0 && !next.lineage.some((n) => n.runId !== null)) return false;
+    if (this.lineageWithoutRun(next.lineage).size > 0) return true;
+    const held = new Set((this.db.prepare('SELECT lineageId FROM delegation_lineage WHERE runId IS NOT NULL').all() as Array<{ lineageId: string }>).map((r) => r.lineageId));
+    return owned.some((n) => !held.has(n.lineageId));
   }
 
   /**

@@ -28,9 +28,9 @@ import {
   DelegationJsonError,
   DelegationModelError,
   assertDelegationCheckpointIdentity,
-  assertWave3Lease,
+  assertLease,
   WAVE3_LEASE_SOURCE_KINDS,
-  assertWave3Leases,
+  assertLeases,
   canonicalDelegationJson,
   delegationActivityCodec,
   delegationAttemptCodec,
@@ -54,10 +54,12 @@ import {
   type DelegationAttemptRow,
   type DelegationCheckpointV1,
   type DelegationEventRow,
+  type DelegationLeaseCarrierRow,
   type DelegationLeaseRow,
   type DelegationLineageRow,
   type DelegationSessionRow,
 } from '../src/coord/delegation-model.js';
+import { leaseRow as lease } from './delegationLeaseFixture.js';
 
 // ── fixed inputs (Python hashlib/json, not this module) ───────────────────────────────────────────────────────────
 const J = '842563601695ebb48c8fbb35e752df0c7c36923d6c8dea27f0602367d17add3b';   // sha256(b'fixture-journal-record-1')
@@ -78,6 +80,8 @@ const JOURNAL_DIGEST = 'e70e4034ed7ca41e1c9c924ae62ad2597f60be54f9c12aa5d7761fc1
 const T0 = '2026-10-14T00:00:00.000Z';
 const T1 = '2026-10-14T00:10:00.000Z';
 const T2 = '2026-10-14T00:20:00.000Z';
+/** An instant before every fixture lease's `firstObservedAt` (T0). */
+const EARLY = '2026-10-13T23:50:00.000Z';
 
 describe('canonicalDelegationJson — RFC 8785 over the closed JSON domain', () => {
   it('orders properties by UTF-16 code units, RFC 8785 §3.2.3 vector (the emoji sorts BEFORE U+FB33)', () => {
@@ -485,15 +489,6 @@ describe('split source domains — an ACTIVITY source and a LEASE source are dif
 });
 
 // ── fixtures for the guard, the codecs and the projection view ───────────────────────────────────────────────────────
-const lease = (over: Partial<DelegationLeaseRow> = {}): DelegationLeaseRow => ({
-  leaseId: '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f', generation: 0, creatingJournalSequence: 5, currentJournalSequence: 5,
-  activityId: ACTIVITY_ID_FROM_JOURNAL, parentId: 'lane-a-demo', parentIncarnation: 'g1', project: 'project-a',
-  adminRecord: 'wt-1', canonicalPath: '/work/project-a/.claude/worktrees/wt-1', creationBase: null, sourceKind: 'agent',
-  parentageState: 'linked', workspaceState: 'unmeasured', disposition: 'ephemeral', cleanupState: 'not-due',
-  cleanupPopulation: 'ephemeral-lease', firstObservedAt: T0, lastObservedAt: T0, terminalEvidenceAt: null,
-  adoptedAt: null, retainedAt: null, promotedAt: null, cleanupDueAt: null, cleanupStartedAt: null,
-  cleanupFinishedAt: null, cleanupEvidenceJson: null, carrierGenerationSeen: null, releasedAt: null, ...over,
-});
 const session = (over: Partial<DelegationSessionRow> = {}): DelegationSessionRow => ({
   sessionId: 'lane-a-demo', parentIncarnation: 'g1', explicitIntentAt: null, effective: false, effectiveBasis: [],
   claudeSessionIds: [], firstObservedAt: T0, lastObservedAt: T2, ...over,
@@ -522,85 +517,153 @@ const refusal = (fn: () => unknown, code: string): void => {
   expect(fn).toThrowError(expect.objectContaining({ name: 'DelegationModelError', code }));
 };
 
-describe('assertWave3Lease — what wave 3 may write to delegation_leases', () => {
+describe('assertLease — what a lease row may hold (wave 3’s guard, loosened by wave 5, PR5a)', () => {
+  const carrier = (over: Partial<DelegationLeaseCarrierRow> = {}): DelegationLeaseCarrierRow => ({
+    leaseId: lease().leaseId, transferringSince: null, transferRun: null, promotedRun: null, promotedSession: null, releaseReason: null,
+    resolvedThrough: null, ...over,
+  });
+  const at = (generation: number): Partial<DelegationLeaseRow> => ({ generation, currentJournalSequence: 5 + generation });
+
   it('accepts the one shape wave 3 writes, null creationBase and non-null alike', () => {
-    expect(() => assertWave3Lease(lease(), 5)).not.toThrow();
-    expect(() => assertWave3Lease(lease({ creationBase: 'abc123' }), 9)).not.toThrow();
+    expect(() => assertLease(lease(), undefined, 5)).not.toThrow();
+    expect(() => assertLease(lease({ creationBase: 'abc123' }), undefined, 9)).not.toThrow();
   });
 
   it('accepts every future-facing value that is not a TRANSITION: workspace, parentage and source vocabularies stay open', () => {
     for (const workspaceState of DELEGATION_WORKSPACE_STATES) {
       for (const parentageState of DELEGATION_PARENTAGE_STATES) {
-        expect(() => assertWave3Lease(lease({ workspaceState, parentageState }), 5)).not.toThrow();
+        expect(() => assertLease(lease({ workspaceState, parentageState }), undefined, 5)).not.toThrow();
       }
     }
     for (const sourceKind of DELEGATION_LEASE_SOURCE_KINDS) {
-      expect(() => assertWave3Lease(lease({ sourceKind }), 5)).not.toThrow();
+      expect(() => assertLease(lease({ sourceKind }), undefined, 5)).not.toThrow();
     }
   });
 
+  it('W5-J6: accepts each legal shape of the transition table, one lease per row, beside its carrier row', () => {
+    const legal: Array<[string, DelegationLeaseRow, DelegationLeaseCarrierRow | undefined]> = [
+      ['carrier: ephemeral at generation 1', lease({ ...at(1) }), undefined],
+      ['carrier seen at generation 1', lease({ ...at(1), carrierGenerationSeen: 1 }), undefined],
+      ['adopt: adopted, with its expiry', lease({ ...at(2), disposition: 'adopted', adoptedAt: T1, terminalEvidenceAt: T0, cleanupDueAt: T2 }), undefined],
+      ['retain: retained, seen one behind', lease({ ...at(3), disposition: 'retained', adoptedAt: T1, terminalEvidenceAt: T0, retainedAt: T2, cleanupDueAt: T2, carrierGenerationSeen: 2 }), undefined],
+      ['operator-retain from ephemeral', lease({ ...at(1), disposition: 'retained', retainedAt: T1, cleanupDueAt: T2 }), undefined],
+      ['transfer: adopted, transferring', lease({ ...at(3), disposition: 'adopted', adoptedAt: T1, terminalEvidenceAt: T1, cleanupDueAt: T2 }), carrier({ transferringSince: T2, transferRun: 12 })],
+      ['transfer from ephemeral', lease({ ...at(2) }), carrier({ transferringSince: T2, transferRun: 12 })],
+      ['promote: promoted, the run named', lease({ ...at(4), disposition: 'promoted', retainedAt: T1, cleanupDueAt: T2, promotedAt: T2 }), carrier({ promotedRun: 12, promotedSession: 'lane-a-demo-2' })],
+      ['released native-removed', lease({ ...at(2), releasedAt: T2 }), carrier({ releaseReason: 'native-removed' })],
+      ['released transferred after promotion', lease({ ...at(5), disposition: 'promoted', promotedAt: T1, releasedAt: T2 }), carrier({ promotedRun: 12, promotedSession: null, releaseReason: 'transferred' })],
+      ['a resolve mark alone', lease({ ...at(2), disposition: 'retained', retainedAt: T1, cleanupDueAt: T2 }), carrier({ resolvedThrough: { attemptedAt: T1, attemptId: 'attempt-1' } })],
+    ];
+    for (const [label, l, c] of legal) expect(() => assertLease(l, c, 20), label).not.toThrow();
+  });
+
   const refusals: Array<[string, Partial<DelegationLeaseRow>, number, string]> = [
-    ['a nonzero generation', { generation: 1 }, 5, 'lease-generation'],
+    ['a generation with equal creating and current sequences', { generation: 1 }, 5, 'lease-sequences'],
     ['a negative generation', { generation: -1 }, 5, 'lease-generation'],
     ['unequal creating and current sequences at generation 0', { currentJournalSequence: 6 }, 6, 'lease-sequences'],
     ['a current sequence below the creating one', { currentJournalSequence: 4 }, 5, 'lease-sequences'],
     ['a zero creating sequence', { creatingJournalSequence: 0, currentJournalSequence: 0 }, 5, 'lease-sequences'],
     ['a non-integer sequence', { creatingJournalSequence: 1.5, currentJournalSequence: 1.5 }, 5, 'lease-sequences'],
-    ['a non-ephemeral disposition (adopted)', { disposition: 'adopted' }, 5, 'lease-disposition'],
-    ['a non-ephemeral disposition (retained)', { disposition: 'retained' }, 5, 'lease-disposition'],
-    ['a non-ephemeral disposition (promoted)', { disposition: 'promoted' }, 5, 'lease-disposition'],
-    ['cleanup state pending', { cleanupState: 'pending' }, 5, 'lease-cleanup-state'],
+    ['adopted with no adoptedAt', { ...at(1), disposition: 'adopted', cleanupDueAt: T2 }, 9, 'lease-disposition'],
+    ['W5-J6: adopted with no expiry (cleanupDueAt)', { ...at(1), disposition: 'adopted', adoptedAt: T1 }, 9, 'lease-expiry'],
+    ['retained with no expiry', { ...at(1), disposition: 'retained', retainedAt: T1 }, 9, 'lease-expiry'],
+    ['an ephemeral lease with an expiry (only a keep sets one)', { ...at(1), cleanupDueAt: T2 }, 9, 'lease-expiry'],
+    ['retained with no retainedAt', { ...at(1), disposition: 'retained', cleanupDueAt: T2 }, 9, 'lease-disposition'],
+    ['promoted with no promotedAt', { ...at(1), disposition: 'promoted' }, 9, 'lease-disposition'],
+    ['promoted with no carrier row naming its run', { ...at(1), disposition: 'promoted', promotedAt: T1 }, 9, 'lease-disposition'],
+    ['W5-J6: cleanup state pending', { cleanupState: 'pending' }, 5, 'lease-cleanup-state'],
     ['cleanup state unmeasured', { cleanupState: 'unmeasured' }, 5, 'lease-cleanup-state'],
     ['a lastObservedAt that is not its firstObservedAt (replay sets both to the entry’s instant)', { lastObservedAt: T1 }, 5, 'lease-last-observed'],
     ['an event-less lease: its creating sequence is past the applied journal', {}, 4, 'lease-without-journal-entry'],
     ['an event-less lease against an empty journal', {}, 0, 'lease-without-journal-entry'],
-    ['terminalEvidenceAt set', { terminalEvidenceAt: T1 }, 5, 'lease-transition-field'],
-    ['adoptedAt set', { adoptedAt: T1 }, 5, 'lease-transition-field'],
-    ['retainedAt set', { retainedAt: T1 }, 5, 'lease-transition-field'],
-    ['promotedAt set', { promotedAt: T1 }, 5, 'lease-transition-field'],
-    ['cleanupDueAt set', { cleanupDueAt: T1 }, 5, 'lease-transition-field'],
+    ['W5-J6: a current sequence past the applied journal', { ...at(2) }, 6, 'lease-without-journal-entry'],
+    ['terminalEvidenceAt without adoptedAt', { terminalEvidenceAt: T1 }, 5, 'lease-transition-field'],
+    ['D-7968: adoptedAt without terminalEvidenceAt', { ...at(2), disposition: 'adopted', adoptedAt: T1, cleanupDueAt: T2 }, 9, 'lease-transition-field'],
+    ['D-7968: terminalEvidenceAt after adoptedAt', { ...at(2), disposition: 'adopted', adoptedAt: T1, terminalEvidenceAt: T2, cleanupDueAt: T2 }, 9, 'lease-transition-field'],
+    ['adoptedAt on an ephemeral lease', { adoptedAt: T1 }, 5, 'lease-disposition'],
+    ['retainedAt on an ephemeral lease', { retainedAt: T1 }, 5, 'lease-disposition'],
+    ['promotedAt on a lease that is not promoted', { promotedAt: T1 }, 5, 'lease-disposition'],
     ['cleanupStartedAt set', { cleanupStartedAt: T1 }, 5, 'lease-transition-field'],
     ['cleanupFinishedAt set', { cleanupFinishedAt: T1 }, 5, 'lease-transition-field'],
     ['cleanupEvidenceJson set', { cleanupEvidenceJson: '{}' }, 5, 'lease-transition-field'],
-    ['carrierGenerationSeen set', { carrierGenerationSeen: 1 }, 5, 'lease-transition-field'],
-    ['releasedAt set', { releasedAt: T1 }, 5, 'lease-transition-field'],
+    ['W5-J6: carrierGenerationSeen above generation', { carrierGenerationSeen: 1 }, 5, 'lease-generation'],
+    ['carrierGenerationSeen two above generation', { ...at(1), carrierGenerationSeen: 3 }, 9, 'lease-generation'],
+    ['releasedAt with no carrier row naming why', { ...at(1), releasedAt: T1 }, 9, 'lease-carrier-row'],
+    ['F8: terminalEvidenceAt before firstObservedAt (the plan puts the bound in assertLease)',
+      { ...at(2), disposition: 'adopted', adoptedAt: T1, terminalEvidenceAt: EARLY, cleanupDueAt: T2 }, 9, 'lease-transition-field'],
+    ['F8: releasedAt before firstObservedAt', { ...at(2), releasedAt: EARLY }, 9, 'lease-transition-field'],
   ];
   it.each(refusals)('refuses %s', (_label, over, applied, code) => {
-    expect(() => assertWave3Lease(lease(over), applied))
+    expect(() => assertLease(lease(over), undefined, applied))
       .toThrowError(expect.objectContaining({ name: 'DelegationModelError', code }));
   });
 
-  it('names the offending field in a transition refusal', () => {
-    expect(() => assertWave3Lease(lease({ adoptedAt: T1 }), 5)).toThrow(/adoptedAt/);
-    expect(() => assertWave3Lease(lease({ carrierGenerationSeen: 3 }), 5)).toThrow(/carrierGenerationSeen/);
+  it.each([
+    ['an all-null carrier row', lease({ ...at(1) }), carrier()],
+    ['half a transfer', lease({ ...at(1) }), carrier({ transferringSince: T1 })],
+    ['a releaseReason on an unreleased lease', lease({ ...at(1) }), carrier({ releaseReason: 'foreign' })],
+    ['a released lease still transferring', lease({ ...at(2), releasedAt: T2 }), carrier({ releaseReason: 'foreign', transferringSince: T1, transferRun: 3 })],
+    ['another lease\'s carrier row', lease({ ...at(1) }), carrier({ leaseId: 'lease-z', resolvedThrough: { attemptedAt: T1, attemptId: 'a' } })],
+    ['F10: a promoted lease still transferring (no table row starts a transfer from promoted)',
+      lease({ ...at(3), disposition: 'promoted', retainedAt: T1, cleanupDueAt: T2, promotedAt: T2 }),
+      carrier({ promotedRun: 12, promotedSession: null, transferringSince: T2, transferRun: 13 })],
+  ])('refuses %s (lease-carrier-row)', (_label, l, c) => {
+    refusal(() => assertLease(l, c, 9), 'lease-carrier-row');
+  });
+
+  it('names the offending field in a refusal', () => {
+    expect(() => assertLease(lease({ adoptedAt: T1 }), undefined, 5)).toThrow(/adoptedAt/);
+    expect(() => assertLease(lease({ carrierGenerationSeen: 3 }), undefined, 5)).toThrow(/carrierGenerationSeen/);
   });
 
   it('is a DelegationModelError, so a caller tells it from a SQLite error', () => {
-    try { assertWave3Lease(lease({ generation: 2 }), 5); expect.unreachable(); } catch (err) {
+    try { assertLease(lease({ generation: 2 }), undefined, 5); expect.unreachable(); } catch (err) {
       expect(err).toBeInstanceOf(DelegationModelError);
     }
   });
+
+  it('W5-J6: the rename leaves no assertWave3Lease text in server/src', () => {
+    const src = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true })
+      .flatMap((d) => (d.isDirectory() ? walk(path.join(dir, d.name)) : d.name.endsWith('.ts') ? [path.join(dir, d.name)] : []));
+    const files = walk(src);
+    expect(files.length).toBeGreaterThan(100);
+    expect(files.filter((f) => readFileSync(f, 'utf8').includes('assertWave3Lease')).map((f) => path.relative(src, f))).toEqual([]);
+  });
 });
 
-describe('assertWave3Leases — the checkpoint-level wave-3 invariants (plan: replay opens each lease’s lineage)', () => {
+describe('assertLeases — the checkpoint-level lease invariants (plan: replay opens each lease’s lineage)', () => {
   const opening = (l: DelegationLeaseRow, over: Partial<DelegationLineageRow> = {}): DelegationLineageRow => ({
     lineageId: delegationSha256Hex(`opening-${l.leaseId}`), parentId: l.parentId, parentIncarnation: l.parentIncarnation,
     activityId: null, leaseId: l.leaseId, runId: null, openedAt: l.firstObservedAt, closedAt: null, closeReason: null, ...over,
   });
-  const checkpoint = (leases: DelegationLeaseRow[], lineage: DelegationLineageRow[], applied = 9): DelegationCheckpointV1 =>
-    ({ ...emptyDelegationCheckpoint(), appliedJournalSequence: applied, leases, lineage });
+  const checkpoint = (leases: DelegationLeaseRow[], lineage: DelegationLineageRow[], applied = 9,
+    leaseCarriers?: DelegationLeaseCarrierRow[]): DelegationCheckpointV1 =>
+    ({ ...emptyDelegationCheckpoint(), appliedJournalSequence: applied, leases, lineage, ...(leaseCarriers === undefined ? {} : { leaseCarriers }) });
   const a = lease({ leaseId: 'lease-a' });
   const b = lease({ leaseId: 'lease-b', creatingJournalSequence: 6, currentJournalSequence: 6, canonicalPath: '/work/other', adminRecord: 'wt-2' });
+  const mark = (leaseId: string): DelegationLeaseCarrierRow => ({ leaseId, transferringSince: null, transferRun: null, promotedRun: null,
+    promotedSession: null, releaseReason: null, resolvedThrough: { attemptedAt: T1, attemptId: 'attempt-1' } });
 
   it('accepts leases that each have their lease-owned opening lineage row opened at the lease’s firstObservedAt', () => {
-    expect(() => assertWave3Leases(checkpoint([a, b], [opening(a), opening(b)]))).not.toThrow();
-    expect(() => assertWave3Leases(checkpoint([], []))).not.toThrow();
+    expect(() => assertLeases(checkpoint([a, b], [opening(a), opening(b)]))).not.toThrow();
+    expect(() => assertLeases(checkpoint([], []))).not.toThrow();
+    expect(() => assertLeases(checkpoint([a, b], [opening(a), opening(b)], 9, [mark('lease-a'), mark('lease-b')]))).not.toThrow();
   });
 
   it('keeps the per-lease invariants: the row-level refusals fire from the checkpoint-level guard too', () => {
-    refusal(() => assertWave3Leases(checkpoint([{ ...a, generation: 1 }], [opening(a)])), 'lease-generation');
-    refusal(() => assertWave3Leases(checkpoint([a], [opening(a)], 4)), 'lease-without-journal-entry');
-    refusal(() => assertWave3Leases(checkpoint([{ ...a, lastObservedAt: T1 }], [opening(a, { openedAt: T0 })])), 'lease-last-observed');
+    refusal(() => assertLeases(checkpoint([{ ...a, generation: 1 }], [opening(a)])), 'lease-sequences');
+    refusal(() => assertLeases(checkpoint([a], [opening(a)], 4)), 'lease-without-journal-entry');
+    refusal(() => assertLeases(checkpoint([{ ...a, lastObservedAt: T1 }], [opening(a, { openedAt: T0 })])), 'lease-last-observed');
+  });
+
+  it.each([
+    ['W5-J6: a carrier row with no lease', () => checkpoint([a], [opening(a)], 9, [mark('lease-a'), mark('lease-z')])],
+    ['a present, empty leaseCarriers (an empty member is absent)', () => checkpoint([a], [opening(a)], 9, [])],
+    ['carrier rows out of leaseId order', () => checkpoint([a, b], [opening(a), opening(b)], 9, [mark('lease-b'), mark('lease-a')])],
+    ['a carrier row twice', () => checkpoint([a], [opening(a)], 9, [mark('lease-a'), mark('lease-a')])],
+  ])('refuses %s (lease-carrier-row)', (_label, make) => {
+    refusal(() => assertLeases(make()), 'lease-carrier-row');
   });
 
   it.each([
@@ -611,11 +674,11 @@ describe('assertWave3Leases — the checkpoint-level wave-3 invariants (plan: re
     ['a run-owned row that merely shares the parent', () => checkpoint([a], [opening(a, { leaseId: null, runId: 7 })])],
     ['one lease covered and the other not', () => checkpoint([a, b], [opening(a)])],
   ])('refuses %s', (_label, make) => {
-    refusal(() => assertWave3Leases(make()), 'lease-opening-lineage');
+    refusal(() => assertLeases(make()), 'lease-opening-lineage');
   });
 
   it('names the lease that lacks its opening row', () => {
-    expect(() => assertWave3Leases(checkpoint([a, b], [opening(a)]))).toThrow(/lease-b/);
+    expect(() => assertLeases(checkpoint([a, b], [opening(a)]))).toThrow(/lease-b/);
   });
 });
 
@@ -1104,9 +1167,10 @@ describe('the model is L1: pure, with no randomness and no IO of its own', () =>
   const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord', 'delegation-model.ts'), 'utf8');
   const code = src.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
 
-  it('imports node:crypto and shared/api.ts and nothing else (no fs, no fastify, no node:sqlite, no CoordStore)', () => {
+  it('imports node:crypto, shared/api.ts, shared/agent-protocol.ts and (types only) delegation-lease-state.ts, and nothing else (no fs, no fastify, no node:sqlite, no CoordStore)', () => {
     const specs = [...code.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1]);
-    expect(specs.sort()).toEqual(['../../../shared/agent-protocol.js', '../../../shared/api.js', 'node:crypto']);
+    expect(specs.sort()).toEqual(['../../../shared/agent-protocol.js', '../../../shared/api.js', './delegation-lease-state.js', 'node:crypto']);
+    // Wave 5 (PR5a): `./delegation-lease-state.js` is a type-only import (its reason words); `coord-policy-rings` walks runtime edges.
   });
 
   it('calls no source of randomness or time: the serialized journal adapter owns randomUUID, and pure policy never mints', () => {
