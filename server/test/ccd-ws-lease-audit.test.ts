@@ -247,6 +247,15 @@ describe('ws-lease-audit measures a leased tree', () => {
     expect(m).toMatchObject({ aheadOfBase: c.aheadOfBase, branchAheadOfBase: c.branchAheadOfBase, dirty: c.dirty });
     expect(m.tip).not.toBe(c.tip);
     expect(m.token).not.toBe(c.token);
+    // and detached, so only HEAD moves: the branch tip, both counts and the dirt all stay, and the token still changes
+    h.git(t, 'checkout', '-q', '--detach');
+    const d0 = audit().doc;
+    h.git(t, 'commit', '-q', '--amend', '-m', 'c3');
+    const d1 = audit().doc;
+    expect(d1).toMatchObject({ aheadOfBase: d0.aheadOfBase, branchAheadOfBase: d0.branchAheadOfBase, dirty: d0.dirty });
+    expect(h.git(t, 'rev-parse', 'claude/agent-a').trim()).toBe(d0.tip);
+    expect(d1.tip).not.toBe(d0.tip);
+    expect(d1.token).not.toBe(d0.token);
   }, 60_000);
 
   it('W5-AU8b (review 1446 F4, D-7977): the token binds holders and whether they were asked', () => {

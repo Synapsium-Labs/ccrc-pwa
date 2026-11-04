@@ -89,4 +89,23 @@ Each mutant was applied alone to the working tree from a saved copy, restored an
 Python modules only, so the bash and TypeScript mutants used the saved-copy driver PR1 used. The fix round's mutants were
 re-measured at its tip.
 
-MUTATION-TABLE
+| Mutant | Edit | Went red |
+|---|---|---|
+| W5-AUM1 | `dirty` read with `--untracked-files=no` in place of `_ws_gc_dirty` | W5-AU2 (the untracked case) |
+| W5-AUM2 | an unmeasured `aheadOfBase` folded to 0 | W5-AU4b, W5-AU4c |
+| W5-AUM2b | `base` dropped from the fingerprint's inputs | W5-AU4 (answers `ok`) |
+| W5-AUM3 | the generation compare skipped | W5-AU3 |
+| W5-AUM4 | the generation dropped from the token's inputs | W5-AU8 |
+| W5-AUM5 | the lock file touched at the ladder's start | W5-AU7 |
+| W5-AUM6 | `holders` unmeasured folded to `[]` | W5-AU9 |
+| W5-AUM7 | `ws-lease-audit` added to `FORBIDDEN_CCD_VERBS` | W5-G14 |
+| W5-AUM8 | the ladder run outside `_ws_reclaim_contained` | W5-AU7 (the admin record's directory changes: `git status` refreshes the index, a lock and a rename) |
+| W5-AUM9 (F1) | `_dl_tree_of_record`'s bare `-e` leaf test restored | W5-AU6b (audit suite) and W5-L30 (mark suite), each run alone |
+| W5-AUM10 (F2) | the hidden-edit read dropped | W5-AU11 |
+| W5-AUM11 (F3) | the branch count dropped from `changed` | W5-AU12 |
+| W5-AUM12 (F4) | `holders=` dropped from the token | W5-AU8b |
+| W5-AUM13 (F5) | `tip=` dropped from the token | W5-AU8. It survived its first measurement in this round: an amend on the branch also moves `branchTip=`, which the token binds now. A detached amend, which moves HEAD alone, was added, and the mutant then went red. |
+| W5-AUM14 (F6) | the `claudeBase` compare replaced by `true` | W5-AU4c |
+| W5-AUM15 (F14) | the runner's `ws-lease-audit` row deleted | W5-G15 |
+| W5-AUM16 (F10) | a mention of the verb added to `ccd/history-skill/SKILL.md` | W5-G14 |
+| W5-AUM17 (F11) | a function with another refusal word added after `_dl_audit_ladder` | none, as meant: the CONTROL that the bounded scan ignores a later function (the unbounded one would have gone red) |
