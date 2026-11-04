@@ -21,6 +21,10 @@ import type { Dialog, DialogAsk, DialogMulti, HookAsk, SessionStatus, SessionStr
 import { reviewQuestions, reviewRows } from '../../shared/ask-menu.js';
 
 const POLL_MS = 2000;
+/** The per-socket heartbeat of both sockets, `/ws/fleet` and `/ws/session/:id` (console speed S2, spec D14). It is an app
+ *  frame because a browser cannot see pings, and it comes from a timer of the socket's own because a beat driven by the
+ *  watcher's tick would stop exactly when the tick is slow. */
+export const BEAT_MS = 10_000;
 const BACKLOG_N = 50;
 
 interface Resolved {
@@ -70,6 +74,8 @@ type Resolution =
 export class SessionStream implements FeedSubscriber {
   private tailer: TranscriptTailer | null = null;
   private poll: NodeJS.Timeout | null = null;
+  /** The beat's own interval (`BEAT_MS`), independent of `poll`: started before `start()`'s first await. */
+  private beat: NodeJS.Timeout | null = null;
   private stopped = false;
   private ticking = false;
   private uuid: string | null = null;
@@ -269,6 +275,9 @@ export class SessionStream implements FeedSubscriber {
     this.bus.on('notice', this.onNotice);
     this.bus.on(`session:${this.id}`, this.onSessionMsg);
     this.bus.on(`answered:${this.id}`, this.onAnswered);
+    // Before the first await: it beats while a resolve or a tick is held, whatever the resolve's outcome.
+    this.beat = setInterval(() => { this.send({ type: 'beat', at: Date.now() }); }, BEAT_MS);
+    this.beat.unref();
     const r = await this.resolve();
     if (this.stopped) return;
     if (r.ok) {
@@ -608,6 +617,8 @@ export class SessionStream implements FeedSubscriber {
     this.bus.off(`answered:${this.id}`, this.onAnswered);
     if (this.poll) clearInterval(this.poll);
     this.poll = null;
+    if (this.beat) clearInterval(this.beat);
+    this.beat = null;
     this.feed?.leave(this);
     this.feed = null;
     this.tailer?.stop();

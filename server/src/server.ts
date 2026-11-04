@@ -44,6 +44,7 @@ import { readTasks } from './tasks/read.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
+import { BEAT_MS } from './sessionws.js';
 // D-5866: the one verb question. Its own line, so the ccdargv import above is left as it stands.
 import { ccdCan } from './ccdargv.js';
 import {
@@ -1577,6 +1578,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // silently (fleet.ts), so this costs nothing while FLEET_PROTO_MIN stays
     // at FLEET_PROTO; it only bites the day MIN is raised on purpose.
     socket.send(JSON.stringify({ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO_MIN } satisfies FleetMsg));
+    const beat = setInterval(() => socket.send(JSON.stringify({ type: 'beat', at: Date.now() } satisfies FleetMsg)), BEAT_MS);
     // D-5995: the session-derived frames (fleet, notice, runs, coord) are masked before they are serialized, once per
     // broadcast (`maskedFrame`); a fleet row's server-built identity fields are kept as they are (`maskFleetFrame`).
     const sendFleet = (sessions: FleetSession[]) =>
@@ -1735,6 +1737,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     bus.on('waiting', onWaitingEvent);
     bus.on('fleet', onFleetWaiting);
     socket.on('close', () => {
+      clearInterval(beat);
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
       bus.off('runs', onRuns);
