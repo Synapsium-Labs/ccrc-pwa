@@ -2,11 +2,15 @@
 // listing's own `*.uuid` names, so a listed row the registry could not assemble (no `wrapper`, no `workdir`) is a
 // doubt (`unmeasured`), never an absence. Fixture homes only, through the registry-listing rig.
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { primed, rig } from './fleetListingFixture.js';
 import { coordinatorPresenceIn } from '../../shared/ledgers.js';
 import { removeTmpFixtures } from './tmpHelpers.js';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 afterEach(() => { vi.restoreAllMocks(); removeTmpFixtures(); });
 
@@ -40,5 +44,14 @@ describe('the watcher\'s listed ids (review 1336 F2)', () => {
     writeFileSync(path.join(r.cfg.registryDir, 'stray.txt'), 'x');
     await primed(r);
     expect([...r.w.currentRegistryIds()!].sort()).toEqual(['-lead', 'demo-a', 'demo-torn']);
+  });
+
+  // ONE WRITER (review 1338 F2): the listing's ids are derived in `readRegistryMeasured` and carried on `RegistryRead`, so no
+  // other source file parses `*.uuid` names out of a listing for itself.
+  it('are derived from the listing in registry.ts alone', () => {
+    const files = execFileSync('git', ['ls-files', '--', 'server/src', 'shared', 'pwa/src', 'agent/src'], { cwd: ROOT, encoding: 'utf8' })
+      .split('\n').filter((f) => /\.(?:ts|tsx|mts|mjs)$/.test(f));
+    const holders = files.filter((f) => readFileSync(path.join(ROOT, f), 'utf8').includes("endsWith('.uuid')"));
+    expect(holders).toEqual(['server/src/registry.ts']);
   });
 });
