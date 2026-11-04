@@ -202,7 +202,7 @@ CCRC_DOCTOR_CHECKS=(
   credentials
   pools
   pool-sync
-  transcripts
+  transcripts transcript_work   # one line, as `flock timeout`: _check_transcript_work is at the END of this file
   update-sync server-caps approval-verifier-runnable approval-key approval-key-colocated approval-digest-mismatch   # one line, as `flock timeout`: _check_server-caps is APPENDED near the end of this file, just before _check_oom-policy; the four approval checks are at the very END
   graphify
   graphify-path
@@ -11297,4 +11297,207 @@ _check_carry-copies() {
     return 2
   fi
   _dr_pass carry-copies "$detail; $rnote (warn bound $thr bytes)"
+}
+
+# ── transcript_work ───────────────────────────────────────────────────────
+# WORK KEPT INSIDE CLAUDE CODE'S TRANSCRIPT FOLDERS (D-7898). Sessions sometimes write scratch repositories, reports and
+# build output under a config dir's `projects/<slug>/` instead of a workspace or their temp root. Nothing governs those
+# bytes: the swap carry copies them between accounts, and a transcript retention would delete them with no rescue. This
+# check COUNTS AND SIZES them and WARNs; it deletes, moves and writes nothing.
+#
+# THE TWINS. `_DR_TW_SHAPES` (one `level|name|kinds` string per shape, `<uuid>` standing for a lowercase session id),
+# the two bounds, the top count and the bound on the walk are the bash spelling of `shared/disk.ts`'s
+# `TRANSCRIPT_SHAPES`, `TRANSCRIPT_WORK_WARN_TOTAL_BYTES`, `TRANSCRIPT_WORK_WARN_ENTRY_BYTES`, `TRANSCRIPT_WORK_TOP` and
+# `TRANSCRIPT_WORK_DEADLINE_MS`; `server/test/transcript-work.test.ts` reads this text and requires each equal, and
+# requires this check's count on a fixture tree to equal the agent's walk (`agent/src/transcriptWork.ts`) on the same
+# tree. The shapes are the ones Claude Code was measured writing on a fleet box (2026-11-03): at the slug level a
+# transcript `<uuid>.jsonl`, a session directory `<uuid>/` and `memory` (a directory, or ccrc's link to a shared one);
+# inside a session directory `subagents/`, `tool-results/` and `workflows/`. Anything else at either level, and anything
+# that is not a directory directly under `projects/`, is counted, and sized the way `du -sb` sizes it (each file and
+# link once, a directory itself 0: `_plat_bytes`, `du -sb` on Linux and its `find -ls` arm on macOS). A link is never
+# followed.
+#
+# BOUNDED, AND NEVER A PASS UNMEASURED. The walk stops at CCRC_DOCTOR_TRANSCRIPT_WORK_TIMEOUT seconds (default 20, the
+# agent's own bound); each `du` gets what is left. A walk out of time, a directory it cannot list, a size it cannot
+# read and a roster projection it cannot read are each a WARN that says the work is unmeasured. The roster's config
+# dirs come from `~/.ccrc/accounts.sh` (`_check_disk`'s read), each named by the first account naming it. SKIP on a
+# `server`-role box (no sessions). Appended at the END of this file, for `_check_timeout`'s reason.
+_DR_TW_WARN_TOTAL_BYTES=1073741824
+_DR_TW_WARN_ENTRY_BYTES=268435456
+_DR_TW_TOP=5
+_DR_TW_DEADLINE_S=20
+_DR_TW_SHAPES=(
+  'slug|<uuid>.jsonl|file'
+  'slug|<uuid>|dir'
+  'slug|memory|dir,link'
+  'session|subagents|dir'
+  'session|tool-results|dir'
+  'session|workflows|dir'
+)
+: "${CCRC_DOCTOR_TRANSCRIPT_WORK_TIMEOUT:=$_DR_TW_DEADLINE_S}"
+
+# <level> <name> <kind> -> 0 iff the entry is a shape Claude Code writes at that level.
+_dr_tw_shape() {
+  # The lowercase 8-4-4-4-12 session id, spelled class by class: a quantified hex class below the box-token marker
+  # would read as a fourth spelling of that check's generation id to its pin (doctor-box-token.test.ts).
+  local row lvl pat kinds re x='[0-9a-f]' u f
+  u="$x$x$x$x$x$x$x$x-$x$x$x$x-$x$x$x$x-$x$x$x$x-$x$x$x$x$x$x$x$x$x$x$x$x"
+  local -a fields
+  for row in "${_DR_TW_SHAPES[@]}"; do
+    IFS='|' read -r -a fields <<< "$row"
+    lvl="${fields[0]}" pat="${fields[1]}" kinds="${fields[2]}"
+    [ "$lvl" = "$1" ] || continue
+    case ",$kinds," in *",$3,"*) ;; *) continue ;; esac
+    re="${pat//./\\.}"; f="${re//<uuid>/$u}"
+    [[ "$2" =~ ^${f}$ ]] && return 0
+  done
+  return 1
+}
+
+# <path> -> sets _DR_TW_KIND to link|dir|file|other, from the entry itself (a link is never followed).
+_dr_tw_kind() {
+  if [ -L "$1" ]; then _DR_TW_KIND=link
+  elif [ -d "$1" ]; then _DR_TW_KIND=dir
+  elif [ -f "$1" ]; then _DR_TW_KIND=file
+  else _DR_TW_KIND=other; fi
+}
+
+# <seconds> <path> <kind> -> prints the apparent bytes `du -sb` gives; rc 0, 124 out of time, 1 not measured. A link is
+# sized as itself (`_plat_size`, an lstat, which `du` does too: `_plat_bytes`' macOS arm refuses a link that leads
+# nowhere); anything else through `_plat_bytes`. Both are functions, so each runs in a child bash under the deadline,
+# carried over by `declare -f` with the one shim `_plat_bytes` calls.
+_dr_tw_bytes() {
+  local out rc fn=_plat_bytes
+  [ "$3" = link ] && fn=_plat_size
+  # shellcheck disable=SC2016  # the child's own positional parameters
+  out="$(_plat_timeout "$1" "$BASH" -c "$(declare -f _plat_bytes _plat_size _plat_mktemp)"'
+CCD_OS="$1"; set -o pipefail; "$2" "$3"' _dr_tw_bytes "${CCD_OS:-linux}" "$fn" "$2" 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 124 ] && return 124
+  [ "$rc" -eq 0 ] && [[ "$out" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$out"
+}
+
+# <bytes> -> "512 B", "3 KiB", "41 MiB", "1.25 GiB" (whole units below a GiB, floored).
+_dr_tw_size() {
+  if [ "$1" -ge 1073741824 ]; then _dr_gib "$1"
+  elif [ "$1" -ge 1048576 ]; then printf '%d MiB' $(( $1 / 1048576 ))
+  elif [ "$1" -ge 1024 ]; then printf '%d KiB' $(( $1 / 1024 ))
+  else printf '%d B' "$1"; fi
+}
+
+_check_transcript_work() {
+  local _srv_role="" sh="$HOME/.ccrc/accounts.sh" pairs="" a dir
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip transcript_work "this box records CCRC_ROLE=server, so it hosts no sessions and keeps no transcripts"; return 3
+  fi
+  local roster_fix="re-run ccrc install to regenerate ~/.ccrc/accounts.sh — the wrappers check owns the roster's health"
+  if [ -e "$sh" ]; then
+    # shellcheck disable=SC1090
+    if [ ! -r "$sh" ] || ! pairs="$( { . "$sh" && declare -F _ccrc_cfg_dir; } >/dev/null 2>&1 || exit 1
+          for a in "${CCRC_ACCOUNTS[@]}"; do dir="$(_ccrc_cfg_dir "$a" 2>/dev/null)" && [ -n "$dir" ] && printf '%s\t%s\n' "$a" "$dir"; done
+          exit 0 )"; then
+      _dr_warn transcript_work "the roster projection at ~/.ccrc/accounts.sh could not be read, so the work kept in transcript folders is unmeasured" "$roster_fix"
+      return 2
+    fi
+  fi
+
+  # The walk, in one subshell (its globbing options stay there). One line per counted entry, `<bytes>\t<name>`, or one
+  # `!timeout` / `!failed <name>` line, after which it stops: a partial count is never a count.
+  local limit="$CCRC_DOCTOR_TRANSCRIPT_WORK_TIMEOUT" out
+  case "$limit" in ''|*[!0-9]*|0) limit="$_DR_TW_DEADLINE_S" ;; esac
+  out="$(
+    shopt -s dotglob nullglob
+    start=$SECONDS seen=" " dirs=0
+    left() { local l=$(( limit - (SECONDS - start) )); [ "$l" -gt 0 ] || { printf '!timeout\n'; exit 0; }; _DR_TW_LEFT=$l; }
+    listable() { [ -d "$1" ] && [ -r "$1" ] && [ -x "$1" ] || { printf '!failed %s\n' "$2"; exit 0; }; }
+    count() {   # <path> <name>, the entry's kind in _DR_TW_KIND
+      local b rc
+      left
+      b="$(_dr_tw_bytes "$_DR_TW_LEFT" "$1" "$_DR_TW_KIND")"; rc=$?
+      [ "$rc" -eq 124 ] && { printf '!timeout\n'; exit 0; }
+      [ "$rc" -eq 0 ] || { printf '!failed %s\n' "$2"; exit 0; }
+      printf '%s\t%s\n' "$b" "$2"
+    }
+    while IFS=$'\t' read -r a dir; do
+      [ -n "$dir" ] || continue
+      case "$seen" in *" $dir "*) continue ;; esac
+      seen+="$dir "; dirs=$((dirs + 1))
+      p="$dir/projects"
+      _dr_tw_kind "$p"
+      if [ "$_DR_TW_KIND" = other ] && ! { [ -e "$p" ] || [ -L "$p" ]; }; then continue; fi   # no projects/: nothing kept
+      listable "$p" "$a/projects"
+      left
+      for s in "$p"/*; do
+        slug="${s##*/}"
+        _dr_tw_kind "$s"
+        if [ "$_DR_TW_KIND" != dir ]; then count "$s" "$a/$slug"; continue; fi
+        listable "$s" "$a/$slug"
+        left
+        for e in "$s"/*; do
+          n="${e##*/}"
+          _dr_tw_kind "$e"
+          if ! _dr_tw_shape slug "$n" "$_DR_TW_KIND"; then count "$e" "$a/$slug/$n"; continue; fi
+          [ "$_DR_TW_KIND" = dir ] && [ "$n" != memory ] || continue
+          listable "$e" "$a/$slug/$n"
+          left
+          for c in "$e"/*; do
+            _dr_tw_kind "$c"
+            _dr_tw_shape session "${c##*/}" "$_DR_TW_KIND" || count "$c" "$a/$slug/$n/${c##*/}"
+          done
+        done
+      done
+    done <<< "$pairs"
+    printf '#dirs %s\n' "$dirs"
+  )"
+
+  local line ndirs=0 n=0 total=0 why="" bytes name
+  local -a nb=() nn=()
+  while IFS= read -r line; do
+    case "$line" in
+      '!timeout') why=timeout ;;
+      '!failed '*) why="failed:${line#!failed }" ;;
+      '#dirs '*) ndirs="${line#\#dirs }" ;;
+      *$'\t'*) bytes="${line%%$'\t'*}"; name="${line#*$'\t'}"; nb+=("$bytes"); nn+=("$name"); n=$((n + 1)); total=$((total + bytes)) ;;
+    esac
+  done <<< "$out"
+  if [ "$why" = timeout ]; then
+    _dr_warn transcript_work "the walk of the config dirs' projects/ transcript folders did not finish within ${limit}s, so the work kept there is unmeasured" \
+      "re-run ccrc doctor when the box is quieter; if it keeps running out of time, find the large trees by hand: du -sh ~/.claude*/projects/*/* | sort -h | tail"
+    return 2
+  fi
+  if [ -n "$why" ]; then
+    _dr_warn transcript_work "${why#failed:} could not be read under a config dir's projects/ folder, so the work kept in transcript folders is unmeasured" \
+      "check its mode (ls -ld) — doctor needs to list and size it; it never changes it"
+    return 2
+  fi
+
+  # The largest first, bytes then name: at most _DR_TW_TOP picks over the list.
+  local -a used=() top=()
+  local i k best largest=0
+  for ((k = 0; k < _DR_TW_TOP && k < n; k++)); do
+    best=-1
+    for ((i = 0; i < n; i++)); do
+      [ -z "${used[$i]:-}" ] || continue
+      if [ "$best" -lt 0 ] || [ "${nb[$i]}" -gt "${nb[$best]}" ] \
+         || { [ "${nb[$i]}" -eq "${nb[$best]}" ] && [[ "${nn[$i]}" < "${nn[$best]}" ]]; }; then best=$i; fi
+    done
+    used[$best]=1
+    [ "$k" -gt 0 ] || largest="${nb[$best]}"
+    top+=("${nn[$best]} $(_dr_tw_size "${nb[$best]}")")
+  done
+  local detail="$n entries, $total bytes ($(_dr_tw_size "$total")), outside Claude Code's transcript shapes under $ndirs config dir(s)' projects/ folders"
+  local bounds="$(_dr_tw_size "$_DR_TW_WARN_TOTAL_BYTES") in all, or $(_dr_tw_size "$_DR_TW_WARN_ENTRY_BYTES") in one entry"
+  local largest_s=""
+  [ "${#top[@]}" -eq 0 ] || largest_s="; largest: $(_dr_join "${top[@]}")"
+  if [ "$total" -gt "$_DR_TW_WARN_TOTAL_BYTES" ] || [ "$largest" -gt "$_DR_TW_WARN_ENTRY_BYTES" ]; then
+    _dr_warn transcript_work "$detail — over the warn bound ($bounds)$largest_s" \
+      "move each into its workspace or the session's temp root (TMPDIR, or CCRC_SESSION_TMPDIR), or delete it once nothing needs it — doctor deletes nothing; clause 18 of the coordinator and worker skills says where work belongs"
+    return 2
+  fi
+  if [ "$ndirs" -eq 0 ]; then
+    _dr_pass transcript_work "no roster config dir is projected yet (~/.ccrc/accounts.sh), so no transcript folder holds work"
+    return 0
+  fi
+  _dr_pass transcript_work "$detail, within the warn bound ($bounds)$largest_s"
 }
