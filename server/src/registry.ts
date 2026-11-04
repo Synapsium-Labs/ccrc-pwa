@@ -1307,10 +1307,10 @@ export const REGISTRY_ROW_CONCURRENCY = 8;
 export type RegistryReadOpts = {
   cache?: RegistryRowCache;
   /** This tick's tmux verdict for a row, or null when there is no (clean) listing: doubt reads hot. */
+  /** May be a Promise: it is awaited after the registry's own listing, so the caller's tmux listing and this
+   *  listing run together. */
   verdicts?: ((id: string) => SessionVerdict | null) | Promise<(id: string) => SessionVerdict | null>;
   nowMs?: number;
-  /** Modification times by listing name, when the agent reports them (the times arm); absent = names-only keys. */
-  times?: ReadonlyMap<string, number>;
 };
 
 /** Each valid id's cache key from the one listing: the sorted names starting `<id>.` (an id that prefixes another
@@ -1337,7 +1337,7 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig, opts?: 
   const now = Date.now();
   // The cache arm lists with modification times when the io can (console speed S1): a non-ok answer is the same
   // `listed: false` a null listing is. The no-opts path keeps its one plain `readdir`, request for request.
-  let times = opts?.times;
+  let times: ReadonlyMap<string, number> | undefined;
   let names: string[] | null;
   if (opts?.cache !== undefined && io.readdirWithTimesMeasured !== undefined) {
     const l = await io.readdirWithTimesMeasured(cfg.registryDir);
@@ -1387,7 +1387,7 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig, opts?: 
       reused.add(id); cold.add(id);
       return prev!.record;
     }
-    if (hotRowReuse(prev, key)) { reused.add(id); return prev!.record; }
+    if (hotRowReuse(prev, key, nowMs)) { reused.add(id); return prev!.record; }
     const rec = await buildRecord(io, cfg, listing, id, now);
     // A built row is stored with this read's time (an unclean one evicts); a dropped row (null) leaves no entry.
     if (rec !== null) cache.put(id, rec, key, nowMs); else cache.delete(id);

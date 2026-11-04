@@ -6,7 +6,7 @@
  * below is positively measured, so a missing previous read, an unclean record, an unknown verdict or no listing at
  * all each make the row hot, never cold.
  */
-import { HOLD_UNREADABLE, type SessionRecord } from './registry.js';
+import { HOLD_UNREADABLE, STRANDED_UNREADABLE, SUBSTRATE_UNREADABLE, type SessionRecord } from './registry.js';
 import type { SessionVerdict } from './exec.js';
 
 /** A cold row is re-read in full at least this often, whatever its key says. */
@@ -28,10 +28,24 @@ export function rowKeyEqual(a: RowKey, b: RowKey): boolean {
   return true;
 }
 
-/** A record every field of which was measured: nothing unmeasured, no lifecycle field unmeasured, and a hold that
- *  was readable. The one predicate for "may be reused or cached" (the row cache uses this too). */
+/** A record NO field of which is unmeasured or unreadable (spec §2.1: "no unmeasured or unreadable field"): nothing
+ *  unmeasured, no lifecycle field unmeasured, a project and a branch that did not read as `unreadable` (a MEASURED
+ *  absence, a main checkout's ordinary state, is clean), no unreadable route field, a readable hold,
+ *  substrate and strand marker, and no `unreadable` child, deny-settings or child-shell mark. The one predicate for "may be reused or cached" (the row cache uses this too).
+ *  `namedByOperator` is a boolean that is true for a readable AND an unreadable operator-name read, so the record
+ *  cannot tell them apart and no clause can be written for it. */
 export function isCleanRecord(rec: SessionRecord): boolean {
-  return rec.unmeasured.length === 0 && rec.lifecycleUnmeasured.length === 0 && rec.held !== HOLD_UNREADABLE;
+  return rec.unmeasured.length === 0
+    && rec.lifecycleUnmeasured.length === 0
+    && rec.projectEvidence !== 'unreadable'
+    && rec.branchEvidence !== 'unreadable'
+    && rec.held !== HOLD_UNREADABLE
+    && rec.substrate?.text !== SUBSTRATE_UNREADABLE
+    && rec.stranded?.reason !== STRANDED_UNREADABLE
+    && (rec.route === null || rec.route.unreadable.length === 0)
+    && rec.child.kind !== 'unreadable'
+    && rec.denySettings?.kind !== 'unreadable'
+    && rec.childShell?.kind !== 'unreadable';
 }
 
 export type PrevRow = { record: SessionRecord; key: RowKey; readAt: number };
@@ -52,9 +66,12 @@ export function rowTemperature(
   return 'cold';
 }
 
-/** With times only: a clean row whose key (names AND mtimes) is unchanged reuses its record even when hot. A
- *  names-only key cannot see a rewrite in place, so it never licenses reuse. */
-export function hotRowReuse(prev: PrevRow | undefined, key: RowKey): boolean {
+/** With times only: a clean row whose key (names AND mtimes) is unchanged reuses its record even when hot, for less
+ *  than `COLD_ROW_REREAD_MS` since its read (a reused row keeps its `readAt`, so a one-off failed field read cannot
+ *  stick while the key never changes). A names-only key cannot see a rewrite in place, so it never licenses reuse. */
+export function hotRowReuse(prev: PrevRow | undefined, key: RowKey, nowMs: number): boolean {
   if (prev === undefined || key.times === null || prev.key.times === null) return false;
+  const age = nowMs - prev.readAt;
+  if (age < 0 || age >= COLD_ROW_REREAD_MS) return false;
   return isCleanRecord(prev.record) && rowKeyEqual(prev.key, key);
 }

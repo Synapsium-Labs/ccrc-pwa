@@ -43,6 +43,14 @@ describe('RegistryRowCache', () => {
     c.put('sess-a', rec({ lifecycleUnmeasured: ['stopped'] }), key, 6);   // evicts the older clean entry
     expect(c.get('sess-a')).toBeUndefined();
   });
+  it('a record with child: unreadable is never stored', () => {
+    const c = new RegistryRowCache();
+    c.put('sess-a', rec({ child: { kind: 'unreadable' } }), key, 5);
+    expect(c.get('sess-a')).toBeUndefined();
+    c.put('sess-a', rec(), key, 5);
+    c.put('sess-a', rec({ child: { kind: 'unreadable' } }), key, 6);   // evicts the older clean entry
+    expect(c.get('sess-a')).toBeUndefined();
+  });
   it('prune drops ids no longer listed', () => {
     const c = new RegistryRowCache();
     c.put('sess-a', rec(), key, 5);
@@ -199,6 +207,22 @@ describe('readRegistryMeasured with modification times', () => {
     expect(second.listed && second.reused.has('lane-a-project-001')).toBe(true);
     expect(second.listed && second.cold.has('lane-a-project-001')).toBe(false);
     expect(second.listed && second.records.length).toBe(20);
+  });
+
+  it('a hot row reused by key is re-read once its read is 30 s old', async () => {
+    const reg = withTimes(fleetFixture(20));
+    const c = countingIO(reg);
+    const cache = new RegistryRowCache();
+    const verdicts = (): SessionVerdict => ({ verdict: 'live' });
+    await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts, nowMs: 1000 });
+    let before = c.requests.length;
+    const young = await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts, nowMs: 1000 + 29_999 });
+    expect(rowReads(c, before, 'lane-a-project-001')).toEqual([]);
+    expect(young.listed && young.reused.has('lane-a-project-001')).toBe(true);
+    before = c.requests.length;
+    const old = await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts, nowMs: 1000 + 30_000 });
+    expect(rowReads(c, before, 'lane-a-project-001').length).toBeGreaterThan(0);
+    expect(old.listed && old.reused.has('lane-a-project-001')).toBe(false);
   });
 
   it('a .uuid mtime change re-reads the row', async () => {
