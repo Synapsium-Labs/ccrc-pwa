@@ -9,7 +9,7 @@ import { WAITS_ON_WORDS } from '../../shared/ledgers';
 import { ApiError } from '../src/lib/apiError';
 import { api } from '../src/lib/api';
 import { PROGRAM_SLUG_MAX_CHARS } from '../../shared/api';
-import { ROUTES, isProgrammeSlug, matchRoute, programmeIsOpenable, programmePath } from '../src/lib/routes';
+import { ROUTES, isProgrammeSlug, matchRoute, programmeIsOpenable, programmePath, shellViewOf, topRouteOf } from '../src/lib/routes';
 import { ProgrammeScreen } from '../src/ledgers/ProgrammeScreen';
 import { STORED_TEXT, type RemoveSecret } from '../src/ledgers/ItemView';
 import { itemPath } from '../src/ledgers/WaitingRoutes';
@@ -72,6 +72,36 @@ describe('the programme route', () => {
       expect(programmeIsOpenable(slug), JSON.stringify(slug)).toBe(false);
     }
     expect(isProgrammeSlug('a'.repeat(PROGRAM_SLUG_MAX_CHARS))).toBe(true);
+  });
+
+  // Carry C (D-7951), review 1388 F1: a slug the owner refuses is no route, so a phone shows the fleet rather than a blank
+  // pane (`shell.css` hides both the fleet column and the placeholder under `[data-view='session']` below 900).
+  it('a slug the owner refuses is no route at all: matchRoute answers null, and the frame\'s view is the fleet', () => {
+    const tooLong = 'a'.repeat(PROGRAM_SLUG_MAX_CHARS + 1);
+    for (const path of ['/programmes/a.b', '/programmes/a.b/', '/programmes/a%20b', '/programmes/%20a', '/programmes/%C3%A9', `/programmes/${tooLong}`]) {
+      expect(matchRoute(path), path).toBeNull();
+      expect(shellViewOf(path), path).toBe('fleet');
+      expect(topRouteOf(path), path).toBeNull();
+    }
+    expect(shellViewOf('/programmes/prog-a')).toBe('session');
+  });
+
+  // Carry C (D-7951), review 1388 F3: `decodeURIComponent` throws on a malformed escape, and `App` calls `matchRoute` in its own
+  // body, outside every boundary but the root's. One guard: such a path is no route, on every row that captures a segment.
+  it('a malformed percent escape is no route, and matchRoute never throws on one', () => {
+    for (const path of ['/programmes/%zz', '/programmes/%', '/programmes/%E0%A4%A', '/s/%zz', '/s/%', '/settings/%zz']) {
+      expect(() => matchRoute(path), path).not.toThrow();
+      expect(matchRoute(path), path).toBeNull();
+      expect(shellViewOf(path), path).toBe('fleet');
+    }
+  });
+
+  // Carry C (D-7951), review 1388's advisory: the grammar is asked before the slug is encoded, so a string `encodeURIComponent`
+  // refuses (a lone surrogate) is refused, never thrown during the box's render.
+  it('programmeIsOpenable asks the grammar before it encodes: a lone surrogate is refused, never thrown', () => {
+    expect(() => programmeIsOpenable('\uD800')).not.toThrow();
+    expect(programmeIsOpenable('\uD800')).toBe(false);
+    expect(programmeIsOpenable('a\uDC00b')).toBe(false);
   });
 
   it('is a page under the fleet, not a place of its own: no tab, and no "Go to" command', () => {
