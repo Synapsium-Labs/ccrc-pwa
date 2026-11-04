@@ -393,9 +393,9 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // spec 2026-10-23-fleet-disk-retention-design §2.7.3 (rulings G2) chose: seven days, the expiry horizon, which ccd's WS_STALE_IDLE_S measures on the box.
     // The programme ledgers' "Recently cleared" trail (spec 2026-10-31-programme-ledgers-design D13, ruled in by the
     // coordinator for PL1) is a separate quantity too: seven days of cleared items, unrelated to token rotation.
-    // The delegation lease expiry (delegation broker wave 5, threshold A3, D-7829) is a separate quantity, ruled in by the operator's
-    // approval of the wave 5 plan (2026-11-04, which approves its thresholds): an adopted or retained tree is held back from the orphan
-    // lane for seven days from its last keep. It does not import the token interval.
+    // The delegation lease expiry (delegation broker wave 5, D-7829) is a separate quantity: an adopted or retained lease's cleanup-due
+    // interval, which every Retain resets, not the workspace lifecycle's archive-to-expiry interval. The operator approved it as one of
+    // the wave 5 plan's thresholds (D-7794, 2026-11-04), and the coordinator ruled it in here. It does not import the token interval.
     expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
       'server/src/childReclaimSweep.ts:CHILD_STALE_IDLE_MS',
