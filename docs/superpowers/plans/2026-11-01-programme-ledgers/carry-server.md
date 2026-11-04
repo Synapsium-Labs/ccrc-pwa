@@ -64,6 +64,12 @@ Recorded, nothing built: N3 (moving `fleetRowsUsable` and `ProjectWalkCache`), a
 
 ## Departures (all under the one issued number)
 
+- **carry-s-row27-pins**: two ring pins over row 27's readers were not in this pull request's first gate set and went
+  red on its first CI run after the main merge: `docs-shared` (`shared/docs.ts` imports only the redactor) and
+  `markdown-purity` (the parse worker's closure is exactly its lib files). Each now admits `shared/utf8.ts`, which
+  imports nothing, and still refuses any other import (mutants R27f and R27g). The `docs-shared` pin holds
+  `utf8.ts` to the same L0 refusals as the redactor. The headers of `shared/docs.ts` and `shared/slug.ts` now name
+  the counter as an import.
 - **carry-s-utf8-reach**: row 27's counter reached past the brief's expected files: a new L0 file, `shared/utf8.ts`, and
   `shared/docs.ts`, `shared/testbox.ts`, `shared/slug.ts` (a fifth counter, an encoder wrapper) and
   `pwa/src/lib/markdownGuard.ts`, all claimed and unheld. `markdownGuard` re-exports the counter under its old name, so
@@ -94,8 +100,9 @@ Recorded, nothing built: N3 (moving `fleetRowsUsable` and `ProjectWalkCache`), a
 
 ## Claims
 
-3417 (the brief's files), 3421 (row 2, 26 and 27's further files and tests), 3422 (the credential route guard). No file held
-by another programme was edited. In `ccd/ccrc-doctor-checks` only the secrets-posture comment changed.
+3417 (the brief's files), 3421 (row 2, 26 and 27's further files and tests), 3422 (the credential route guard), 3426 (row
+27's two ring pins). No file held by another programme was edited. In `ccd/ccrc-doctor-checks` only the secrets-posture
+comment changed.
 
 ## Mutants
 
@@ -127,3 +134,5 @@ Each applied in place, the suite run, and the file restored from the bytes held 
 | R35 the closed check before the retry log removed | killed: secret-mask "fails after close() and logs no … retrying line…" (that run also showed the suite's timing-bound case red under load; the suite is green alone) |
 | R36 the item view shows the programme-wide sentence | killed: item-secret "a slot the box cannot read says so…" |
 | R37a the leak scan's stream capture removed | killed: ledgers-secrets "the leak scan: a saved SECRET-MARK value…" (its stream control) |
+| R27f a third import (`./api.js`) in `shared/docs.ts` | killed: docs-shared "imports only `./redact.mjs` and `./utf8.js`…" |
+| R27g `markdownGuard.ts` re-exports from another shared file | killed: markdown-purity "is exactly the worker-side lib files and the shared byte counter", "imports nothing outside the closure…" |

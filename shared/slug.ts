@@ -2,12 +2,13 @@
  * The workspace name an operator types, or the Linear ticket they paste — and
  * the two string helpers that build it.
  *
- * L0. IMPORTS ONE SIBLING (`LC_REASON_MAX_BYTES` from `./api.js`, as other L0
- * files import each other) and nothing from `node:*`, because BOTH the PWA and
- * the server need it: the sheet previews the slug the operator will get, the
- * route validates the one it was sent, and they must be the same function or
- * the preview is a lie. `URL` and `TextEncoder` are platform globals in both
- * runtimes, which is everything non-local here.
+ * L0. IMPORTS TWO SIBLINGS (`LC_REASON_MAX_BYTES` from `./api.js`, and the one
+ * UTF-8 byte counter, `utf8Bytes` from `./utf8.js`, as other L0 files import
+ * each other) and nothing from `node:*`, because BOTH the PWA and the server
+ * need it: the sheet previews the slug the operator will get, the route
+ * validates the one it was sent, and they must be the same function or the
+ * preview is a lie. `URL` is a platform global in both runtimes, which is
+ * everything non-local here.
  *
  * THE BUDGET IS 31, AND IT IS NOT `naming.ts`'s 40. That one is the BRANCH
  * budget, validated on the box by `_ws_branch_valid`; this is the SLUG budget,

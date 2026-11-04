@@ -1,9 +1,10 @@
 // The native Docs reader's L0 vocabulary: the `shared/docs.ts` row of section 1 of the design,
 // `docs/superpowers/specs/2026-10-01-native-docs-reader-design.md`.
 //
-// L0, and it imports only `shared/redact.mjs` (D-5867), which imports nothing and names no host global: the PWA
-// bundles this file and the server and the agent compile it, so it may name no host global either (the PWA's types
-// carry none). Byte lengths are therefore computed from code points by hand. The file is pure ASCII: a non-ASCII
+// L0, and it imports only `shared/redact.mjs` (D-5867) and `shared/utf8.ts`, the one UTF-8 byte counter, each of
+// which imports nothing and names no host global: the PWA bundles this file and the server and the agent compile it,
+// so it may name no host global either (the PWA's types carry none). Byte lengths are therefore computed from code
+// points, by `utf8Bytes`. The file is pure ASCII: a non-ASCII
 // code point in a grammar is written only as a `\u` escape, so the parity scan reads each grammar line byte for byte.
 //
 // Everything here is declared once and derived everywhere else. ccd's embedded helper (`_docs_py`, `ccd/ccd`)
