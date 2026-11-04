@@ -327,6 +327,11 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
       await more.click();
       expect(await more.getAttribute('aria-expanded')).toBe('true');
       expect(await page.locator('.docs-truth').isVisible()).toBe(true);
+      // Escape is pressed from inside the open panel, so the panel's own handler and the focus's return to the button are
+      // what close it: a click leaves focus on the button, where the button's handler alone would do.
+      const inside = page.locator('.docs-more-panel').getByRole('button', { name: DOCS_HEAD_TEXT.copyCommit });
+      await inside.focus();
+      expect(await page.evaluate(() => document.activeElement?.closest('.docs-more-panel') !== null), 'focus is in the panel').toBe(true);
       expect(await page.locator('.docs-more-panel').getByRole('link', { name: DOCS_HEAD_TEXT.github }).isVisible()).toBe(true);
       const f = await measure(page);
       console.log(`PHH-FIGURE refined 412x915 panel-open ${JSON.stringify(f)}`);
