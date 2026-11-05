@@ -1,8 +1,8 @@
 // The reader lab's frames (native Docs reader, the reader lab plan of 2026-11-03, Task 6, refinement (h); the rich-docs
 // spec's rows A24, M10.9, M10.10). The one place in `pwa/src` outside the Docs reader that builds an iframe or a srcdoc.
 // Every frame is the reader frame's shape: `sandbox="allow-scripts"` and nothing else, a `srcdoc`,
-// `referrerpolicy="no-referrer"`. Only the wall frame carries a policy, the library's own with its script nonce and
-// canary added (`docs/reader/labPolicy.ts`), as a meta and as the iframe's `csp` attribute, as the reader frame does. A
+// `referrerpolicy="no-referrer"`. Only the wall frame carries a policy, the library's own with its script nonce,
+// fixed import hash and canary added (`docs/reader/labPolicy.ts`), as a meta and as the iframe's `csp` attribute, as the reader frame does. A
 // frame's script is one of `frameScripts.ts`' constants; what varies per run travels in a JSON data block just before it,
 // which no policy runs. A battery frame also carries the constant import script, first, with a data block of its own just
 // before it; the wall policy allows that script by its hash and the battery's by the frame's nonce. No frame is handed a port, and nothing here listens for a message: a frame reports only through

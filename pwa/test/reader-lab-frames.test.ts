@@ -1,7 +1,7 @@
 // The reader lab's frames (native Docs reader, the reader lab plan of 2026-11-03, Task 6; the rich-docs spec's rows
 // M10.9, M10.10, M10.11, M10.16): `readerLab/frames.ts`, `readerLab/frameScripts.ts`, `readerLab/battery.ts` and
 // `docs/reader/labPolicy.ts` in jsdom. Every frame is the reader frame's shape; only the wall frame carries a policy, the
-// library's own with exactly two sources added; every URL a frame can form is the console's origin plus this run's
+// library's own with exactly three sources added; every URL a frame can form is the console's origin plus this run's
 // probe path; the battery is L0's 27 channels in order.
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';

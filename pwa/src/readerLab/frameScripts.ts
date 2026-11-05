@@ -3,7 +3,7 @@
 // data block the script reads by position (the element just before it), so a script's text never varies and nothing
 // about a run is spelled in it. Every script reports only by loading `<base><name>` as an image, `base` being this run's
 // probe path on the console's own origin (M10.11); a name says what happened (`…-held`, `…-broke`), and no value a script
-// reads is ever sent. A store a script manages to open is deleted at once. Classic scripts, ES2017 at most.
+// reads is ever sent. A store a script manages to open is deleted at once. Classic scripts use dynamic import (ES2020).
 // Ring L1: string constants.
 import { LAB_BATTERY_CHANNELS_JS, LAB_BATTERY_PRELUDE_JS } from './battery';
 
