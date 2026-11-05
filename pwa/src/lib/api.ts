@@ -10,6 +10,7 @@ import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { RotateAnswer } from '../../../shared/box-token';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
+import type { PaneScopeStopState } from '../fleet/paneScopeStopWords';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
 import { questionAnswerRequest } from '../session/answerLifecycle';
@@ -779,6 +780,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  response and waits for the next `{type:'coord'}` frame's `reclaim` to
      *  confirm. No box token: an operator's same-origin write. */
     childReclaimPause: (state: 'on' | 'off') => post('/api/coord/reclaim-pause', { state }),
+    /** `POST /api/coord/pane-scope-stop` (D-7902): Settings › Automation › Stop leftovers, `{state}`. `requested`, never
+     *  the switch: the next `{type:'coord'}` frame's `paneScopeStop` is the answer, and the card settles on that.
+     *  `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have moved the switch. */
+    setPaneScopeStop: (state: PaneScopeStopState) =>
+      postJsonOr<{ readonly ok: true; readonly requested: PaneScopeStopState } | 'unreadable'>('/api/coord/pane-scope-stop', 'unreadable', { state }),
     /** `GET /api/coord/caps` — the two limits AND the two derived counts, in one
      *  shape and one round trip. They travel together because a cap without its
      *  usage is a number an operator cannot act on. 501 `not-configured` on a

@@ -20,6 +20,7 @@ import { STALL_SECTION_TEXT, type StallLevel } from '../../../shared/api';
 import { navigate } from '../lib/router';
 import type { SettingsSectionId } from '../lib/routes';
 import { COLLECT_PAUSE_TEXT, COLLECT_SECTION_TEXT } from './collectLaneWords';
+import { PANE_SCOPE_STOP_TEXT } from './paneScopeStopWords';
 import { DISPATCH_ABANDON_TEXT } from '../../../shared/dispatch-abandon';
 import { RADIO_FIELDSET, RADIO_LEGEND, Radio, toast } from '@ccrc/ui';
 
@@ -319,6 +320,10 @@ export const SETTINGS_CARDS = {
       scope: SETTINGS_SCOPE.fleet, title: 'Roll idle sessions',
       purpose: 'Restarts an idle coordinator onto the current ccrc release, resuming its conversation, once it has been '
         + 'quiet for 90 minutes. Other sessions pick up a new release when they next start.',
+    },
+    /** D-7902: the deliberate stop's pane-scope switch, after Roll idle sessions, one of the stops it reaches. */
+    paneScopeStop: {
+      scope: SETTINGS_SCOPE.fleet, title: PANE_SCOPE_STOP_TEXT.title, purpose: PANE_SCOPE_STOP_TEXT.purpose,
     },
     /** D-7860: the fleet box's backup, a quiet line; the card before Test box, which stays the section's last. */
     backup: {
