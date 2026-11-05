@@ -32378,8 +32378,7 @@ _ws_reclaim_recorded_archive() {   # id workdir -> rc 0 with _WS_RECORDED_ARCH=1
   local -a _WS_LOGS=()
   local _WS_KEEP_WHY='' _WS_RESOLVED='' _WS_RESOLVE_BASIS=''
   f="$REG/$o.archived"; [[ -f "$f" && ! -L "$f" ]] || return 1
-  a=$(_reg_read "$o" archived) || return 1
-  [[ -n "$a" && "$a" != *[!0123456789]* ]] || return 1
+  a=$(_reg_read "$o" archived) && [[ -n "$a" && "$a" != *[!0123456789]* ]] || return 1
   f="$REG/$o.archivemanifest"; [[ -f "$f" && ! -L "$f" ]] || return 1
   ruuid=$(_reg_read "$o" uuid) && [[ -n "$ruuid" ]] || return 1
   rbranch=$(_reg_read "$o" branch) && [[ -n "$rbranch" ]] || return 1
@@ -32391,12 +32390,10 @@ with open(f, "r", encoding="utf-8") as fh:
 ok = isinstance(doc, dict) and doc.get("id") == rid
 ok = ok and doc.get("uuid") == ruuid
 ok = ok and doc.get("branch") == rbranch
-ok = ok and doc.get("workdir") == w
-ok = ok and doc.get("workdirReal") == w
+ok = ok and doc.get("workdir") == w and doc.get("workdirReal") == w
 a = doc.get("worktreeAdmin") if ok else None
 ok = isinstance(a, str) and a not in ("", ".", "..") and "/" not in a and a.isprintable()
-sys.stdout.write(a if ok else "")
-sys.exit(0 if ok else 1)
+sys.stdout.write(a if ok else ""); sys.exit(0 if ok else 1)
 ' "$f" "$o" "$ruuid" "$rbranch" "$w" 2>/dev/null) && [[ -n "$adm" ]] || return 1
   parent="${w%/*}"; [[ -n "$parent" ]] || return 1
   _ws_reclaim_resolve "$parent" || return 1
