@@ -8420,7 +8420,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     wd_common=$(_ws_common_dir "$workdir"); main_common=$(_ws_common_dir "$main")
     (( registered == 0 )) && [[ -n "$main_common" && "$wd_common" == "$main_common" ]] \
       || _lc_refuse destroy "$id" foreign-worktree \
-           "$workdir is not a worktree of $main — nothing was touched; move or delete the directory by hand, then re-run (with it gone, ccd clears the leftover record itself; \`git worktree prune\` will not, while the directory is there)" \
+           "$workdir is not a worktree of $main — nothing was touched; move or delete the directory by hand, then re-run (with it gone, ccd clears the leftover record itself, with git -C $main worktree remove $workdir, one record and no other)" \
            dec.reason "$reason"
     # --untracked-files=all counts untracked files even under a config of
     # status.showUntrackedFiles=no, where `git worktree remove` deletes them
@@ -8539,7 +8539,7 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     git -C "$main" worktree remove "$workdir" \
       || { _lc_fail destroy "$id" "$lctx" worktree-remove-failed \
              "git refused to clear the worktree record for $workdir"
-           die "worktree record not cleared for $workdir — the session was stopped; git refused: unlock it (git -C $main worktree unlock $workdir) or clean the tree, then re-run — and if the directory is already gone, git -C $main worktree prune clears the record"; }
+           die "worktree record not cleared for $workdir — the session was stopped; git refused: unlock it (git -C $main worktree unlock $workdir) or clean the tree, then re-run"; }
   fi
 
   # D-5880 (#138): `branch -d` guards unmerged work, not a shared NAME — never take main, master, develop
@@ -8951,7 +8951,7 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   wd_common=$(_ws_common_dir "$workdir"); main_common=$(_ws_common_dir "$main")
   if [[ -z "$main_common" || "$wd_common" != "$main_common" ]]; then
     printf '{"refused":"worktree-foreign","detail":%s,"paths":[]}\n' \
-      "$(_json_str "$workdir is not a worktree of $main — nothing renamed; move or delete the directory by hand, then git -C $main worktree prune && git -C $main worktree add $workdir $old")"
+      "$(_json_str "$workdir is not a worktree of $main — nothing renamed; move or delete the directory by hand, then, if git still records a worktree there, git -C $main worktree remove $workdir, and then git -C $main worktree add $workdir $old")"
     return 0
   fi
   # $old is git's own record, corroborated above against the DIRECTORY. It is
@@ -13626,7 +13626,7 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       # it — instead of the blanket "not $main's worktree any more" the
       # ownership pair would otherwise report for a fact it cannot see.
       [[ -d "$cpath" ]] \
-        || { _ws_refuse child-record-stale "git still records a worktree at $cpath but nothing is there — run: git -C $main worktree prune, then re-audit"; return 1; }
+        || { _ws_refuse child-record-stale "git still records a worktree at $cpath but nothing is there — run: git -C $main worktree remove $cpath, then re-audit"; return 1; }
       # OWNERSHIP, reproven live — right after the `-d` check above, before
       # anything else touches `$cpath`, exactly the position `_ws_reap_eval`'s
       # own foreign-worktree rung (Phase B's `$workdir`/`$main` common-dir
