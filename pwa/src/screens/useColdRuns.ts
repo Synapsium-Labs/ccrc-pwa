@@ -63,6 +63,7 @@ export interface ColdRuns {
    * looking"). A three-state read, so a read failure can render its own honest
    * message instead of falling through to "No runs." — a POSITIVE claim about
    * the program's whole history that a failed read has no standing to make.
+   * It is the RE-READ's state: only `loadCold` sets and clears it. A failed older page is `loadOlder`'s own outcome.
    */
   readonly state: 'loading' | 'ok' | 'error';
   /** Re-read now. The two sheets that close a run call it on `onDone`: the
@@ -210,10 +211,10 @@ export function useColdRuns(
         if (next === current) return 'dropped';
         store.getState().setRunPages({ ...next, at: Date.now() });
         setCold(next.runs);
-        // `state` is left as it is: only a successful RE-READ clears an error a failed re-read left.
+        // `state` is left as it is: it is the RE-READ's alone, which only `loadCold` sets and clears (fix round 2, F3).
         return 'appended';
       })
-      .catch((): OlderOutcome => { if (aliveRef.current) setColdState('error'); return 'failed'; })
+      .catch((): OlderOutcome => 'failed')   // the older page's own outcome: it says nothing about the re-read (F3)
       .finally(() => { olderInflight.current = null; });
     olderInflight.current = reading;
     return reading;

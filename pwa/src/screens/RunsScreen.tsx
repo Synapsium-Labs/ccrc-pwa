@@ -124,9 +124,8 @@ export function RunsScreen({
   // "Show older" (console speed S2): disabled while a page is on its way.
   const [olderBusy, setOlderBusy] = useState(false);
   // Only a page that FAILED says so: a page `dropped` as stale (a re-read landed meanwhile) is not an error, and the next tap
-  // asks again. A good re-read (`coldState` back to `ok`) clears the line too.
+  // asks again. It is the older page's own outcome, apart from the re-read's (`coldState`): only the next tap clears it.
   const [olderFailed, setOlderFailed] = useState(false);
-  useEffect(() => { if (coldState === 'ok') setOlderFailed(false); }, [coldState]);
   const showOlder = (): void => {
     setOlderBusy(true);
     setOlderFailed(false);
@@ -224,8 +223,8 @@ export function RunsScreen({
   // source). When NEITHER has ever answered, this screen knows nothing at
   // all, and must say so rather than rendering the ordinary empty state.
   //
-  // Console speed S2: a held answer (`cold` non-null) IS a signal, whatever `coldState` says now. A failed "Show older"
-  // sets `coldState` to `error` while the rows stay, and must not swap the board for "Could not reach the server".
+  // Console speed S2: a held answer (`cold` non-null) IS a signal, whatever `coldState` says now: a failed re-read over
+  // stored pages keeps its rows, and must not swap the board for "Could not reach the server".
   const noSignalYet = !runsFrameSeen && coldState !== 'ok' && cold === null;
   // The board's own answer to "does this project already have a program
   // running?", handed to the sheet rather than fetched by it — the sheet's
@@ -426,11 +425,13 @@ export function RunsScreen({
                     : 'Show older'}
                 </Button>
               )}
-              {/* One failure line under Finished: a failed "Show older" says its own; else a failed re-read (a remount's
-                  background read included) says Finished may be missing newer closes, beside the stored rows (Step 6). */}
-              {hasOlder && shownFinished >= finished.length && olderFailed ? (
+              {/* Two failures, two lines, each its own fact (fix round 2, F3, F4): a failed re-read (a remount's background
+                  read included) says newer closes may be missing, beside the stored rows (Step 6); a failed "Show older"
+                  says older ones did not load. Both failed, both show. */}
+              {coldFailed && <EmptyState data-state="error">{FINISHED_UNREAD}</EmptyState>}
+              {hasOlder && shownFinished >= finished.length && olderFailed && (
                 <EmptyState data-state="error">Could not load older runs.</EmptyState>
-              ) : coldFailed ? <EmptyState data-state="error">{FINISHED_UNREAD}</EmptyState> : null}
+              )}
             </div>
           ) : coldFailed ? (
             // I6, second half: at least one run is active (this branch is

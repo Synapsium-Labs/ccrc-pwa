@@ -52,6 +52,8 @@ const unfold = (): void => {
     fireEvent.click(door);
   }
 };
+/** Finished's re-read failure line: newer closes may be missing. */
+const REREAD_FAILED = 'Could not reach the server — finished runs may exist that are not shown.';
 const flush = async (): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
 const ids = (rows: RunSummary[] | null): number[] => (rows ?? []).map((r) => r.id);
 const range = (hi: number, lo: number): number[] => Array.from({ length: hi - lo + 1 }, (_, i) => hi - i);
@@ -145,6 +147,7 @@ describe('the run archive in pages', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
     await flush();
     expect(screen.getByText('Could not load older runs.')).toBeInTheDocument();
+    expect(screen.queryByText(REREAD_FAILED), 'no re-read failed: newer runs are not missing').toBeNull();
     expect(rows()).toBe(before);
     expect(screen.getByRole('button', { name: 'Show older' })).not.toBeDisabled();
     // A second failure keeps the line.
@@ -159,10 +162,10 @@ describe('the run archive in pages', () => {
     expect(rows()).toBe(100);
     expect(screen.getByRole('button', { name: 'Show older' })).toBeInTheDocument();
     expect(screen.queryByText('Could not load older runs.')).toBeNull();
+    expect(screen.queryByText(REREAD_FAILED), 'a good retry of Show older leaves no failure line (fix round 2, F3)').toBeNull();
   });
 
   it('a failed background re-read with stored pages shows the error beside them (Step 6; fix round 1)', async () => {
-    const REREAD_FAILED = 'Could not reach the server — finished runs may exist that are not shown.';
     const a = archive(range(120, 1));
     const store = makeStore();
     const first = render(<RunsScreen store={store} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
@@ -177,13 +180,13 @@ describe('the run archive in pages', () => {
     await flush();
     expect(screen.getByText(REREAD_FAILED)).toBeInTheDocument();
     expect(rows(), 'the stored rows stay').toBe(drawn);
-    // A failed Show older says only its own line, never both.
+    // Both failed: both lines, two different facts (newer runs missing, older ones missing) (fix round 2, F4).
     unfold();
     a.load.mockRejectedValueOnce(new Error('down'));
     fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
     await flush();
     expect(screen.getByText('Could not load older runs.')).toBeInTheDocument();
-    expect(screen.queryByText(REREAD_FAILED)).toBeNull();
+    expect(screen.getByText(REREAD_FAILED)).toBeInTheDocument();
   });
 
   it('a re-read during Show older shows no failure line', async () => {
@@ -210,7 +213,7 @@ describe('the run archive in pages', () => {
     expect(screen.getByRole('button', { name: 'Show older' })).not.toBeDisabled();
   });
 
-  it('a good re-read clears the failure line', async () => {
+  it('a good re-read leaves the older page\'s failure line; only the next good tap clears it (fix round 2, F3)', async () => {
     const a = archive(range(120, 1), [130]);
     const store = makeStore();
     store.setState({ runs: [run(130)], runsFrameSeen: true });
@@ -224,6 +227,10 @@ describe('the run archive in pages', () => {
     act(() => { store.setState({ runs: [] }); });                   // a re-read, which answers
     await flush();
     expect(screen.getByRole('button', { name: 'Show older' })).toBeInTheDocument();   // the block is still mounted
+    expect(screen.getByText('Could not load older runs.'), 'the older pages are still not loaded').toBeInTheDocument();
+    expect(screen.queryByText(REREAD_FAILED)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
+    await flush();
     expect(screen.queryByText('Could not load older runs.')).toBeNull();
   });
 
@@ -486,7 +493,7 @@ describe('the run archive in pages', () => {
     let outcome: OlderOutcome = 'idle';
     await act(async () => { outcome = await result.current.loadOlder(); });
     expect(outcome).toBe('failed');
-    expect(result.current.state).toBe('error');
+    expect(result.current.state, 'the older page\'s failure is its own outcome, not the re-read\'s (F3)').toBe('ok');
     expect(result.current.cold).toHaveLength(50);
   });
 
