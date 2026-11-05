@@ -30,6 +30,9 @@ const BACKUP_SLOT = '<div class="banner-slot" data-banner="backup"></div>';
 const DISK_SLOT = '<div class="banner-slot" data-banner="disk"></div>';
 /** The fleet header's three doors to places the bottom bar holds (PL10): Docs, Account and Mail, each one button. */
 const HEAD_DOORS = /<button[^>]*(?:class="docs-door"|accounts-door|class="mail-badge")[^>]*>.*?<\/button>/g;
+/** The strip's no-lane placeholder, a door to the Accounts place, which a phone no longer draws: the bottom bar's Accounts door is
+ *  that door (PL10 fix round 1, review 1466 F3, the coordinator's ruling on 15104). jsdom renders a phone. */
+const STRIP_PLACEHOLDER = /<div class="accounts-strip" role="link"[^>]*><span class="accounts-strip-empty">[^<]*<\/span><\/div>/g;
 /** The programme box's title door (PL10, D26 amended), round the title span the base drew. */
 const TITLE_DOOR = /<a [^>]*pg-title-door[^>]*>(<span class="pg-title">[^<]*<\/span>)<\/a>/g;
 /** React's `useId` values, renumbered by first appearance. The ids' NUMBERS are the counter's position, not markup: a
@@ -72,8 +75,8 @@ describe('an older server: no delegation frame, the base\'s fleet (delegation br
       for (const word of ['inferred', 'Unowned work', 'Offline coordinator', 'delegated']) {
         expect(html, `${view}: no "${word}"`).not.toContain(word);
       }
-      expect(renumberIds(old), `${view}: the base's markup, byte for byte, less its three head doors`)
-        .toBe(renumberIds(baseline.views[view].replace(HEAD_DOORS, '')));
+      expect(renumberIds(old), `${view}: the base's markup, byte for byte, less its three head doors and the phone's strip placeholder`)
+        .toBe(renumberIds(baseline.views[view].replace(HEAD_DOORS, '').replace(STRIP_PLACEHOLDER, '')));
     }
   });
 });

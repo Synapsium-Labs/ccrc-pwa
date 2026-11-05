@@ -13,7 +13,7 @@
 //     is a row of its own under the header and the banner stack, and the lanes row sits above it: the banners are mounted
 //     and have a height, nothing overlaps, the detail pane starts below the line.
 //  3. Under a coarse pointer (a touch screen, emulated with `openApp`'s `touch`: headless Chrome ignores the DevTools
-//     pointer media feature, measured) every card and All accounts is at least 44 px tall, at a desk and on a phone (a
+//     pointer media feature, measured) every card (and, at a desk, All accounts: a phone draws none since PL10) is at least 44 px tall, at a desk and on a phone (a
 //     phone is always folded, so there it measures the line's cards, then the cards of the panel a tap opens).
 //  4. New session ends at the bar line's content edge (its right edge less the header's gutter, +-1 px): the lanes row
 //     under the line must not move it.
@@ -403,7 +403,7 @@ const COARSE: AppView[] = [
   ...SKINS.map((skin) => ({ skin, theme: PHOSPHOR, width: 390 })),
 ];
 
-describe('under coarse emulation every card and All accounts is at least 44 px tall', () => {
+describe('under coarse emulation every card and All accounts (at a desk) is at least 44 px tall', () => {
   for (const view of COARSE) {
     it(named(view), async () => {
       const phone = view.width < 900;
@@ -433,7 +433,10 @@ describe('under coarse emulation every card and All accounts is at least 44 px t
           // The panel sits inside the strip, so a phone's strip holds its four line cards and the panel's folded-away rest:
           // the whole roster, each lane once.
           if (cards.length !== count) out.push(`${cards.length} cards, not ${count}${panel ? ' (the line and the panel)' : ''}`);
-          if (end === null) out.push('no All accounts');
+          // A desk draws All accounts; a phone draws none, since its bottom bar holds the Accounts place (PL10 fix round 1,
+          // review 1466 F3).
+          if (!panel && end === null) out.push('no All accounts');
+          if (panel && end !== null) out.push('All accounts on a phone');
           if (control === null) out.push('no fold control');
           for (const el of [...cards, ...(end === null ? [] : [end]), ...(control === null ? [] : [control])]) {
             const r = el.getBoundingClientRect();

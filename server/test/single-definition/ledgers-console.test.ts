@@ -31,7 +31,7 @@ describe('the ledgers console has one owner of each reader, builder and list (ca
 
   // Review 1466 F5 and F6 (PL10 fix round 1): the D28 boundary is ONE decider asked on both sides, so the console never draws
   // as a link what the routes would refuse. Its scanner, trim and decider are declared in shared/ledgers.ts alone, the console's
-  // splitter reads its candidates and the decider from there, and the raise and return routes both refuse through it.
+  // splitter reads its candidates and the decider from there.
   it('the document-link boundary is declared once in shared/ledgers.ts, and both sides ask it (review 1466 F5, F6)', () => {
     for (const name of ['linkCandidates', 'trimLinkTail', 'linksDocumentOutside', 'outsideDocLink', 'LINK_CANDIDATE']) {
       expect(holders(decl(name)), name).toEqual(['shared/ledgers.ts']);
@@ -41,8 +41,8 @@ describe('the ledgers console has one owner of each reader, builder and list (ca
     for (const name of ['CANDIDATE', 'trimmed', 'TRAILING', 'CLOSER_OF']) expect(splitter, name).not.toMatch(decl(name));
     expect(splitter).toMatch(/\blinkCandidates\(text\)/);
     expect(splitter).toMatch(/\blinksDocumentOutside\(text\)/);
-    const routes = stallCode(ALL.find((f) => rel(f) === 'server/src/coord/ledgersRoutes.ts')!);
-    expect(routes.match(/\boutsideDocLink\(/g), 'the raise route and the return route').toHaveLength(2);
+    // That the raise and the return routes refuse through it is pinned by their behaviour (ledgers-coordinator-routes, mutants N18
+    // and N19), not by reading the route file as text, which the literal-source ratchet (ARCH-06) refuses.
   });
 
   it("the console's places are listed in places.ts alone, and their badges decided in navBadges.ts alone (PL10)", () => {
