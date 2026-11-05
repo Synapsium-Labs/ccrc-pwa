@@ -1214,11 +1214,14 @@ describe('PR5b: a lease whose tree is gone from two successful listings is relea
     const release = vi.spyOn(DelegationDurability.prototype, 'releaseLease');
     await censusPass(w, at(3), { demo: [OLD] });
     expect(release, 'one listing absent releases nothing').not.toHaveBeenCalled();
+    setNow(at(4));
+    await pass(w);                                                     // a pass over the census already reconciled: no new listing
+    expect(release, 'a pass that reuses its census counts no listing').not.toHaveBeenCalled();
     expect(leasesOf(w.home)[0]!.releasedAt).toBeNull();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     let slowed = false;     // a block phase made slow, so the pass writes its slow line
     w.watcher.setDelegationSeams({ onPassPhase: (k: string): void => { if (k === 'noteSessions' && !slowed) { slowed = true; setNow(Date.now() + 1500); } } } as never);
-    await censusPass(w, at(4), { demo: [OLD] });
+    await censusPass(w, at(5), { demo: [OLD] });
     expect(release).toHaveBeenCalledTimes(1);
     expect(release.mock.calls[0]![0]).toMatchObject({ leaseId, expectGeneration: 0, releaseReason: 'native-removed', lastHeadSha: 'a'.repeat(40), resolvesThrough: null });
     expect(leasesOf(w.home)[0]).toMatchObject({ leaseId, generation: 1, releasedAt: expect.any(String) });
@@ -1226,7 +1229,7 @@ describe('PR5b: a lease whose tree is gone from two successful listings is relea
     const line = warn.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith('ccrc-server: delegation pass slow:'));
     expect(line, 'the pass wrote its slow line').toBeDefined();
     expect(line).toMatch(/ leaseActs=\d+/);
-    await censusPass(w, at(5), { demo: [OLD] });
+    await censusPass(w, at(6), { demo: [OLD] });
     expect(release, 'a released lease is not planned again').toHaveBeenCalledTimes(1);
   });
 
