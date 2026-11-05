@@ -31699,7 +31699,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # subdirectory of a moved tree, never looks in a leaf, and finds nothing with a
   # blank admin entry): nothing runs for the row (`_ws_reclaim_gone_quiet`), and
   # no checkout at all stands under the child or either leaf
-  # (`_ws_reclaim_no_checkout`). With no checkout there, no moved tree is; with
+  # (`_ws_reclaim_no_checkout`). With no `.git` there, no moved checkout is; with
   # nothing running, no tree is in use. Its entry field must be `valid` or
   # `legacy-*` (a pending or unmeasured field holds by its own bucket), and its
   # spelling must lie at or under neither `mine` nor a resolved leaf, which `lit`
@@ -31715,9 +31715,13 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # both audit documents print it as `quietRows` (`_ws_quiet_rows_json`). A child held for
   # another reason still names them: they were let go, and something else held.
   # WHAT THIS DOES NOT SEE, a stated residual (`gone-row-release-misses-a-tree-with-no-git`):
-  # a tree stripped of its `.git`, moved by hand into a child or a leaf, for a stopped row
-  # with a gone spelling, is removed with the child. The base held this only by accident,
-  # and it is not in use: nothing runs for its row.
+  # the scan finds a row's tree only by a `.git` of its own, so for a stopped row with a gone
+  # spelling a tree with none is removed with the child: one inside the child by a link now
+  # gone (nothing moved or stripped, the shape D-3731 refused on purpose), a row that was
+  # never a checkout, a subdirectory of a checkout moved alone, and a tree stripped of its
+  # `.git`. It is not in use, since nothing runs for its row, but the pin keeps only what git
+  # would add in the child's own tree: an ignored file there, or anything in a leaf, is lost
+  # for good. Spec §5.5 says so, and the operator rules on it, and on contract R94, on #2294.
   #
   # NOR AT, INSIDE OR THROUGH A LEAF THE TAIL REMOVES WITH IT (spec §5.5,
   # §5.6). "Inside the child" is all three trees the tail deletes: the

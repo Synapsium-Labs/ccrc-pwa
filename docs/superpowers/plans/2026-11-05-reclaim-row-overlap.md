@@ -13,8 +13,8 @@ A row can overlap the child in four ways.
 | Way | Excluded by |
 |---|---|
 | Its spelling is at, in or through the child | the literal arms, which already answer for a gone row |
-| A component now gone was a link into the child | not by the spelling; nothing running means no tree is in use |
-| Its tree was moved into the child or a leaf | not by the spelling, and the moved-check's negatives prove little; no checkout at all standing there does |
+| A component now gone was a link into the child | not by the spelling, and not excluded at all: nothing running means the tree is not in use, and it goes with the child |
+| Its tree was moved into the child or a leaf | not by the spelling, and the moved-check's negatives prove little; no checkout at all standing there excludes a moved checkout, never a tree with no `.git` |
 | Its session is alive somewhere unknown | the pane positively gone and the unit positively stopped |
 
 The moved-check stays negative evidence. It misses a subdirectory of a moved tree, never looks in a leaf, and finds nothing with a blank admin entry. So a gone row is still never placed by a projection. It is released, unplaced, on a stronger question.
@@ -47,14 +47,15 @@ A released row keeps its `A` and `F` walk rules: only `unres` is skipped, and no
 - Child-reclamation spec §5.5: the vanished-child limit, the recorded arms' never-list, the release and its residual. §5.6, §5.7 and §7 stop leaning on a blanket hold.
 - Path-identity spec §4.5 step 2 and its reason, and the two places that repeat them.
 - The un-wedge spec's §4.1 and D6, which stay open for the operator on #2294.
-- The contract's R31 cost, R97 and its W3 carry, and the leaf limits it mirrors from the spec.
+- The contract's R31 and R94, each with a dated amendment, R94's as-built note, R31's cost, R97 and its W3 carry, and the leaf limits it mirrors from the spec.
 - The README's box-move paragraph.
 - The rung's header. `the accepted fail-closed cost` is about a row that is not absolute, and it still reads true, so it stays, with a pointer that a gone row's cost is narrower.
 
 ## Stated costs and limits
 
 - A child with a checkout of its own below its tree or in a leaf stays held while a gone row is released on it: here a checkout is not told from a moved tree. A temp root holding fixture clones is the common case. The hold is that child's alone, retryable, and names the rows by id.
-- `gone-row-release-misses-a-tree-with-no-git`: a tree stripped of its `.git`, moved by hand into a child or a leaf, for a stopped row with a gone spelling, is removed with the child. The base held this only by accident. It is not in use: nothing runs for its row.
+- `gone-row-release-misses-a-tree-with-no-git`: the scan finds a row's tree only by a `.git` of its own, so for a stopped row with a gone spelling, a tree with none is removed with the child. That is a tree inside the child by a link now gone (nothing moved or stripped, and the base refused it on purpose), a row that was never a checkout, a subdirectory of a checkout moved alone, and a tree stripped of its `.git`. It is not in use, because nothing runs for its row, but the pin keeps only what git would add in the child's own tree: an ignored file there, or anything in a leaf, is lost for good.
+- The release is the one place process state does more than refuse. The contract's R31 and R94 carry the amendment, and the operator rules on it with D6.
 - The trail is the audit document alone. The server reads no `quietRows` yet, so the key is visible where the document is printed, and the collector and the loose sweep, which print no such document, name no release. The fleet-level notice that follows is where the operator reads a held row.
 - A row dropped during the walk may still sit in a not-asked bucket it joined in the pass, such as a pending field. The next attempt finds no row.
 - The un-wedge spec (`2026-11-04-cleanup-unwedge-design.md`, D6) left narrowing ccd's hold for unrecorded rows open, pending a new proof and a ruling. #2294 asks for the narrowing, and this plan is that proof. The spec's archived-row arm and its naming of the hold are unaffected: a row this release cannot free stays in `unres`.

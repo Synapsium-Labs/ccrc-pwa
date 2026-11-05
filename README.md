@@ -4620,7 +4620,8 @@ writes a fresh field, or purge the row once its session has ended. The next recl
 weakens until then: a gone row's recorded identity still names the old host's device, so the check that holds a child
 when a checkout inside it is that row's moved tree matches no checkout; git's record of the tree still holds it. A row
 whose workdir is gone as well stops holding once its pane is gone, its unit stopped and no checkout stands under the
-child or a leaf (#2294). The reclaim and expiry audit documents name each such row in `quietRows`.
+child or a leaf (#2294). The reclaim and expiry audit documents name each such row in `quietRows`. A tree of that row's
+with no `.git` of its own goes with the child, and the pin keeps no ignored file and nothing in a leaf (spec §5.5).
 
 **The temp-root collector (child reclamation waves 7 and 9; the lane ships shadowed).** A child's temp root,
 `$HOME/.cc-tmp/<id>`, that outlives its workspace — a reclaim tail kept it because a process still used it or ccd's

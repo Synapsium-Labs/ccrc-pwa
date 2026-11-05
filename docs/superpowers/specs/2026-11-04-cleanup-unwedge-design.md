@@ -170,9 +170,11 @@ operator learns of it. A narrower rule needs a new proof and a ruling (Waiting o
 
 **Amended 2026-11-05 (#2294, D-8019).** #2294 asked for that narrowing, and it is built on a new proof, on none of
 the three scopes rejected above. A gone row stops holding when nothing runs for it and no checkout stands under the
-child or a leaf (child-reclamation spec §5.5). With no checkout there no moved tree is, and with nothing running no
+child or a leaf (child-reclamation spec §5.5). With no `.git` there no moved checkout is, and with nothing running no
 tree is in use. A gone row something may run for still holds every child, one beside a checkout holds that child, and
-R2 still names both. The operator confirms this on that PR.
+R2 still names both. The proof has a stated hole: a row's tree with no `.git` of its own is removed with the child, and
+that includes a tree inside the child by a link now gone, which the hold refused on purpose. It also makes contract
+R94's "may only refuse" untrue in one place. The operator rules on both on that PR.
 
 ### 4.2 ccd names the rows
 
@@ -372,7 +374,10 @@ reclaims again, and R2's line shows any row that still holds. The five rows git 
 - D6: ccd's hold for rows with no durable record stays box-wide. A narrower rule (for example, an archived row whose
   archive time precedes the child's birth) would need a new proof and has a box-move hole (a copied tree is born
   again on the new box). The drafter recommends not building any narrowing in this set. #2294 has since built one on
-  a different proof (§4.1), and it waits on your confirmation there.
+  a different proof (§4.1), and it waits on your ruling there, on three things together: the narrowing; contract R94,
+  because a gone pane and a stopped unit now turn a hold into a removal; and the residual
+  `gone-row-release-misses-a-tree-with-no-git`, because a stopped session's ignored file in such a tree, or anything
+  in a leaf, is then lost for good (child-reclamation spec §5.5).
 - D12: build the collector's box-move release, or rule once on the roots it would take.
 - The one-time act on `row-a` and `row-b` (§10), whichever you choose.
 

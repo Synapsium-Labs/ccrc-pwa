@@ -553,6 +553,26 @@ leave a wave undispatchable pending a ruling below.
     link's place: that re-points the spelling by replacement (D-3735), and the verb then removes a tree a session
     may still hold (review 213, measured). The only retry is wave 4's sweep (spec §5.5: retryable refusals are
     re-tried by the sweep). Until it ships, a held child keeps its tree after its one close-time attempt.
+  - **Amended by the gone-row release (2026-11-05, #2294, D-8019).** The two bullets above keep their words and no longer
+    say all of it. The release is spec §5.5's, and it waits on the operator's ruling on #2294, together with R94's
+    amendment and the un-wedge spec's D6.
+    - A modelled session "is not an input" stops being true in one case. A gone row that neither arm of R54 places stops
+      holding when its pane answers `gone`, its unit answers stopped, and no `.git` of any kind stands under the child
+      or at or under a leaf. Those two answers are required inputs: with them a hold becomes a removal. The row is
+      released, never placed, and nothing else about a session places or releases a row. R94's amendment says what
+      this does to "it may only refuse".
+    - The stated cost narrows. "Holds every child's reclaim" now describes a row something may run for, one whose
+      spelling is not plain, and one with a link on what is left of its path. A released row beside a checkout holds
+      that child alone. Two vanished children with nothing running for either release each other. So a hold no longer
+      ends only by a purge or a restored link: it also ends once nothing runs for the row and no checkout stands there.
+      A row that is not released keeps the cost as written, and the warning against a directory in a link's place stands.
+    - The release costs something the hold never cost
+      (`gone-row-release-misses-a-tree-with-no-git`). The rung finds a row's tree only by a `.git` of its own, so a tree
+      with none is removed with the child. That covers a tree inside the child by a link now gone (nothing moved,
+      nothing stripped: the shape D-3731 measured, which the hold refused on purpose), a row that was never a checkout,
+      a subdirectory of a checkout moved alone, and a tree stripped of its `.git`. Nothing runs for such a row, so the
+      tree is not in use, but it may be all that session left. The pin keeps only what git would add in the child's own
+      tree: an ignored file there has its path in the tombstone and its bytes nowhere, and nothing in a leaf is pinned.
 - **R32 — a held child is reclaimed when its programme retires; `not-finished` names its cause** (wave 3's
   wave-done, open item 1, 2026-09-25). R30 has a non-final close HOLD a child whose spent evidence is undated,
   unmeasurable or a merge-commit `.prnumber`, while the bind refuses that same child `workspace-spent`. No later
@@ -1560,8 +1580,8 @@ This note amends; it edits no earlier text.
       The verb arm is reached only in an audit-to-verb race. Wave 7's `crumb` field carries it.
   - `die "bad run id"` was reclaim's alone, so the sanctioned unjournaled set narrows by one.
 - **R31's stated cost.** A row whose directory is gone now holds only while neither arm of R54 places it, and, since
-  #2294 (D-8019), only while something may run for it or a checkout stands under the child or a leaf (spec §5.5). The
-  list below is what R54 alone leaves holding.
+  #2294 (D-8019), only while something may run for it or a checkout stands under the child or a leaf (spec §5.5, and
+  R31's own amendment). The list below is what R54 alone leaves holding.
   - Two interrupted children whose trees the tail removed release each other through the breadcrumb arm.
   - Two hand-deleted children of one repository release each other through the git-record arm.
   - These still hold: an unreadable `worktrees/` or `gitdir`, two admin entries naming one tree, a locked
@@ -3645,6 +3665,12 @@ differ, the spec's design governs and this section is corrected.
     entry identity, `$REG/<id>.workdirid` (PI1 B, PI2 L1, PI3 B). It is add-only: it may hold a row, and it never
     releases one.
   - The two remedies that say "re-point the link" contradict R31, and W3 rewords them (PI7).
+  - **Amended by the gone-row release (2026-11-05, #2294, D-8019).** "It may only refuse" has one exception, and it is not
+    settled: the operator rules on it on #2294, together with the un-wedge spec's D6. In the gone-row release (R31's
+    amendment, spec §5.5) a gone pane and a stopped unit are required inputs, so there they do more than refuse: with no
+    checkout under the child or a leaf, those two answers turn a hold into a removal. They never do so alone, they place
+    no row, and every other read of process state, the cwd probe included, still only refuses. If the ruling is no, the
+    release goes and R94 stands as written.
 
 - **R95 — R49 amended: a same-uid mount crossing is live, not latent.**
   - R49's "A bind mount of the same file system is a stated residual; only root can make one" is half false on the
@@ -4333,6 +4359,9 @@ the spec, never this contract.
   keeping the tree, the branch and the breadcrumb.
 - R31's "left to a follow-up programme" is built as R94 says. The entry field, `$REG/<id>.workdirid`
   (`workdirid-pending-form`, `workdirid-unreadable-holds`), may hold a row and never releases one.
+- Later than W3, and not settled: #2294's gone-row release is the one exception to "it may only refuse". There a gone pane
+  and a stopped unit turn a hold into a removal, and the operator rules on that on #2294. R31 and R94 each carry the
+  amendment. Everything W3 built here, `_ws_cwd_users` included, still only refuses.
 
 **R54 as W3 leaves it (the identity moved-check).**
 - R54's two arms stand. The identity moved-check is added beside them: a nested checkout whose identity is a gone row's

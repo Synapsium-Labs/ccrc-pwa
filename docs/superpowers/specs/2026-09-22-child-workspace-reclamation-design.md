@@ -472,16 +472,30 @@ Two limits follow, and both are stated so neither is discovered later:
   - its spelling lies at or under neither the child's resolved path nor a resolved leaf;
   - no `.git` of any kind stands below the child, or at or below a standing directory leaf, and the scan finished.
 
-  This reads process state, which the recorded arms never do, so it stays apart from them. It answers a stronger
-  question than the moved-check, whose negatives prove little: with no checkout there no moved tree is, and with
-  nothing running no tree is in use. A checkout it finds is not told from a moved tree, so a child with a clone of
+  This reads process state, which the recorded arms never do, so it stays apart from them, and it is the one place
+  process state does more than refuse (contract R94's amendment, for the operator on #2294). It answers a stronger
+  question than the moved-check, whose negatives prove little: with no `.git` there no moved checkout is, and with
+  nothing running no tree is in use. It does not prove that no tree of the row's stands there, which is the residual
+  below. A checkout it finds is not told from a moved tree, so a child with a clone of
   its own stays held while such a row stands, retryably and by row id. Both audit documents, reclaim and expiry,
   name every released row in `quietRows`: `[]` when none, `null` when the rung did not count. A child held for
   another reason still names the rows that were let go. The collector and the loose sweep ask the same rung, and
   print no such key.
-  **The residual, stated plainly:** a tree stripped of its `.git`, moved by hand into a child or a leaf, for a
-  stopped row with a gone spelling, is removed with the child (`gone-row-release-misses-a-tree-with-no-git`). The
-  base held this only by accident, and it is not in use: nothing runs for its row.
+  **The residual, stated plainly** (`gone-row-release-misses-a-tree-with-no-git`): the scan finds a row's tree only by a
+  `.git` of its own, so for a stopped row with a gone spelling, a tree with none is removed with the child. It reaches:
+  - a tree inside the child by a link now gone. This is the shape above, `<alias>/server` with `<alias>` removed, its
+    real tree `<child>/server`. Nothing was moved or stripped, and the only `.git` above it is the child's own. The
+    base refused this on purpose (D-3731);
+  - a row that was never a checkout, its directory moved into a child or a leaf;
+  - a subdirectory of a checkout moved alone into a child or a leaf;
+  - a tree stripped of its `.git`, moved by hand into a child or a leaf.
+
+  The base held the last three only by accident. None of these is in use, because nothing runs for its row, but it may
+  be all that session left, and part of it is lost for good. The pin phase keeps only what git would add in the child's
+  own tree: non-secret untracked and modified files go into the WIP commit, an ignored file has its path in the
+  tombstone and its bytes nowhere, and nothing in a leaf is pinned. Measured through the real verb: the audit answers reclaimable,
+  the verb exits 0, and such a file has no copy under HOME and no object in the repository, where the base answered
+  `unmeasured` with no token and the file stood. The operator rules on this with D6 of the un-wedge spec, on #2294.
 - **A `complete` resolution places the spelling as it reads now, not the session.** An alias re-pointed after a
   session entered through it resolves complete and outside, and so does a spelling through a bind mount. Both are
   pre-existing and left to a follow-up (D-3735).
@@ -1065,7 +1079,8 @@ liveness reading makes a projected row placeable, whether its session is up, gon
 session reported gone may still have processes whose cwd is inside the child, and a live one exposes nothing
 that ccd could check against a removed alias. Presence defers. Only a complete resolution places a row, and even
 that places its spelling, not its session (D-3735). A gone pane and a stopped unit can only let a gone row stop
-holding, with no checkout under the child or a leaf (§5.5, #2294), and that places nothing.
+holding, with no checkout under the child or a leaf (§5.5, #2294), and that places nothing. It does turn a hold into
+a removal, so it is an exception to contract R94, and the §5.5 residual is what it costs.
 
 ### 5.8 The kill-switch
 
