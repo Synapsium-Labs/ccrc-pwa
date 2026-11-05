@@ -2,7 +2,7 @@ import path from 'node:path';
 import { wireHookAsk } from './fleet.js';
 import type { Deps } from './server.js';
 import { SHAPE_ONLY_MASKER } from './accounts/mask.js';
-import type { Bus, Notice, RowEventName } from './bus.js';
+import type { Bus, Notice } from './bus.js';
 import type { rowFactsOf } from './tickPlan.js';
 import { servedFromWatcher } from './servedRead.js';
 import { configDirFor, type CcrcConfig } from './config.js';
@@ -19,7 +19,7 @@ import { workflowsFrame, type Proc } from './workflows/model.js';
 import { foldHookStateRead, type HookStateRawRead } from './hookstate.js';
 import { askKey, nextAgedKeep, NO_AGED_KEEP, type AgedKeep } from './askkey.js';
 import { framePairing } from './pane/askPairing.js';
-import type { Dialog, DialogAsk, DialogMulti, HookAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
+import type { Dialog, DialogAsk, FleetSession, DialogMulti, HookAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 import { reviewQuestions, reviewRows } from '../../shared/ask-menu.js';
 
 const POLL_MS = 2000;
@@ -31,7 +31,12 @@ export const BEAT_MS = 10_000;
  *  trigger, the backstop for a change neither saw (console speed S2, spec D8). */
 export const STREAM_BACKSTOP_MS = 30_000;
 /** What a stream asks the watcher for: structural, so `sessionws.ts` never imports `watch.ts` (`FleetWatcher` satisfies it). */
-export interface RowFactsSource { currentRowFacts(id: string): ReturnType<typeof rowFactsOf> }
+export interface RowFactsSource {
+  currentRowFacts(id: string): ReturnType<typeof rowFactsOf>;
+  /** The fleet as the latest tick listed it (`FleetWatcher.currentFleetListing`): each row's `status` and
+   *  `statusUpdatedAt` come from the same live-file measurement `resolve()` makes (D-115). */
+  currentFleetListing(): { sessions: FleetSession[]; listedAt: number } | null;
+}
 const BACKLOG_N = 50;
 
 interface Resolved {
@@ -81,6 +86,13 @@ type Resolution =
 export class SessionStream implements FeedSubscriber {
   private tailer: TranscriptTailer | null = null;
   private poll: NodeJS.Timeout | null = null;
+  /** With a watcher: the 30 s backstop's interval (`poll` is then the 2 s status look in the listing). */
+  private backstop: NodeJS.Timeout | null = null;
+  /** With a watcher: a trigger that came in while a tick was in flight or before the stream was armed, so the tick that
+   *  ends (or `start()`) runs once more and the change is not left to the backstop. */
+  private rerun = false;
+  /** The `statusUpdatedAt` of the last measurement this stream took, to compare with the listing's. */
+  private statusAt: number | null = null;
   /** The beat's own interval (`BEAT_MS`), independent of `poll`: started before `start()`'s first await. */
   private beat: NodeJS.Timeout | null = null;
   private stopped = false;
@@ -280,14 +292,24 @@ export class SessionStream implements FeedSubscriber {
     const masker = deps.masker ?? SHAPE_ONLY_MASKER;
     this.send = (m) => sendRaw(masker.maskDeep(m));
     this.transcripts = new TranscriptResolver(deps.io);
-    this.rowEvent = `row:${id}`;
   }
 
-  private readonly rowEvent: RowEventName;
-  /** The watcher saw this row's record or pane verdict change: re-resolve now (the same `tick()` the poll ran). */
-  private readonly onRowChanged = (): void => { void this.tick(); };
+  /** The watcher saw this row's record or pane verdict change: re-resolve now (the same `tick()` the poll ran). Before
+   *  `start()` has armed the stream (`poll` is still null) it only keeps the event, as `rerun`. */
+  private readonly onRowChanged = (): void => { if (this.poll) void this.tick(); else this.rerun = true; };
+
+  /** With a watcher, every `POLL_MS`: look this row up in the watcher's fleet listing, in memory, and run `tick()` only
+   *  when its status or `statusUpdatedAt` is not what this stream last measured. No fresh listing, or no such row,
+   *  polls as without a watcher: a full `tick()`. */
+  private lookInListing(): void {
+    const served = servedFromWatcher(this.rows?.currentFleetListing() ?? null, Date.now());
+    const row = served.serve ? served.value.sessions.find((x) => x.id === this.id) : undefined;
+    if (row === undefined || row.status !== this.status || row.statusUpdatedAt !== this.statusAt) void this.tick();
+  }
 
   async start(): Promise<void> {
+    // Before the first resolve, so a change during it is kept (`rerun`) and run once the stream is armed.
+    if (this.rows) this.bus.on(`row:${this.id}`, this.onRowChanged);
     this.bus.on('notice', this.onNotice);
     this.bus.on(`session:${this.id}`, this.onSessionMsg);
     this.bus.on(`answered:${this.id}`, this.onAnswered);
@@ -299,6 +321,7 @@ export class SessionStream implements FeedSubscriber {
     if (r.ok) {
       this.uuid = r.data.uuid;
       this.status = r.data.status;
+      this.statusAt = r.data.statusUpdatedAt;
       this.tailed = r.data.resolution;
       const echoed = this.since?.file ?? null;
       if (this.since && this.since.uuid === r.data.uuid
@@ -378,10 +401,14 @@ export class SessionStream implements FeedSubscriber {
     // appeared-branch heal a stream that started life unable to prove the
     // session existed at all (`this.uuid` is still null on that first tick).
     if (r.ok || r.reason === 'unmeasurable') {
-      if (this.rows) this.bus.on(this.rowEvent, this.onRowChanged);
-      this.poll = setInterval(() => { void this.tick(); }, this.rows ? STREAM_BACKSTOP_MS : POLL_MS);
+      this.poll = setInterval(() => { if (this.rows) this.lookInListing(); else void this.tick(); }, POLL_MS);
       this.poll.unref();
+      if (this.rows) {
+        this.backstop = setInterval(() => { void this.tick(); }, STREAM_BACKSTOP_MS).unref();
+        if (this.rerun) { this.rerun = false; void this.tick(); }
+      }
     } else {
+      this.bus.off(`row:${this.id}`, this.onRowChanged);   // a proven-gone session installs no trigger
       this.feed.leave(this);          // nothing will ever be asked of it again
     }
   }
@@ -632,9 +659,11 @@ export class SessionStream implements FeedSubscriber {
     this.bus.off('notice', this.onNotice);
     this.bus.off(`session:${this.id}`, this.onSessionMsg);
     this.bus.off(`answered:${this.id}`, this.onAnswered);
-    this.bus.off(this.rowEvent, this.onRowChanged);
+    this.bus.off(`row:${this.id}`, this.onRowChanged);
     if (this.poll) clearInterval(this.poll);
     this.poll = null;
+    if (this.backstop) clearInterval(this.backstop);
+    this.backstop = null;
     if (this.beat) clearInterval(this.beat);
     this.beat = null;
     this.feed?.leave(this);
@@ -666,7 +695,7 @@ export class SessionStream implements FeedSubscriber {
     // `uuid`/`workdir` would resolve `transcriptPath` against `''`, a path
     // that names nothing real, rather than this session's actual transcript.
     // `measuredIdentity` — the one door to the triple — is null the instant
-    // ANY of the three is unmeasured; this poll re-runs every 2 s, so a
+    // ANY of the three is unmeasured; this resolve re-runs every 2 s (with a watcher, on a row event, a status change or the 30 s backstop), so a
     // transient field read heals itself on the very next tick with no
     // special-casing beyond this early return. HONEST LIMIT: there is no
     // half-measure here — when `uuid` itself is unmeasured there is no
@@ -811,7 +840,7 @@ export class SessionStream implements FeedSubscriber {
   /** The tailed file shrank under us: treat as rotation — re-resolve, resend backlog.
    *  An unmeasurable or absent re-resolve here (rare — the file just rotated,
    *  so the registry read a moment ago plainly succeeded) leaves the OLD
-   *  tailer alone rather than tearing it down on a guess; the next 2 s tick
+   *  tailer alone rather than tearing it down on a guess; the next poll (or, with a watcher, row event or backstop)
    *  retries. */
   private async onFileShrunk(): Promise<void> {
     if (this.stopped) return;
@@ -876,9 +905,10 @@ export class SessionStream implements FeedSubscriber {
     return true;
   }
 
-  /** 2 s poll: uuid change → rotated + fresh backlog; status change → status msg. */
+  /** The poll's body (every 2 s; with a watcher, run on a row event, a status change in its listing or the backstop): uuid change → rotated + fresh backlog; status change → status msg. */
   private async tick(): Promise<void> {
-    if (this.stopped || this.ticking) return;
+    if (this.stopped) return;
+    if (this.ticking) { if (this.rows) this.rerun = true; return; }   // no overlap; a watched stream's trigger is kept
     this.ticking = true;
     try {
       const r = await this.resolve();
@@ -900,6 +930,7 @@ export class SessionStream implements FeedSubscriber {
       this.readable = r.ok;
       if (!r.ok) return;
       const data = r.data;
+      this.statusAt = data.statusUpdatedAt;
       this.resolvedFor = { file: data.file, proc: data.proc };
       this.feed?.setFacts(this, factsOf(data));
       if (data.uuid !== this.uuid) {
@@ -1022,6 +1053,7 @@ export class SessionStream implements FeedSubscriber {
       // reads them on its own clock and `onReading` applies them. This tick states what it measured about the session.
     } finally {
       this.ticking = false;
+      if (this.rerun && !this.stopped) { this.rerun = false; void this.tick(); }
     }
   }
 }
