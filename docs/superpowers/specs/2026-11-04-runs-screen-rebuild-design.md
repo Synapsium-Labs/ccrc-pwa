@@ -1,6 +1,6 @@
 # Runs screen rebuild (design)
 
-**Spec** · 2026-11-04 · Status: rev 2, draft for the operator, with the review of rev 1 applied · Issue: #1518 · Updates: `2026-10-20-runs-auto-expire-and-programme-view-design.md` (the ruled "Auto-expire + programme view", #1013) and its plan `docs/superpowers/plans/2026-10-21-runs-auto-expire-and-programme-view.md`
+**Spec** · 2026-11-04 · Status: rev 3, draft for the operator, with the review of rev 1 applied and the operator's answers to Q1 to Q5 recorded · Issue: #1518 · Updates: `2026-10-20-runs-auto-expire-and-programme-view-design.md` (the ruled "Auto-expire + programme view", #1013) and its plan `docs/superpowers/plans/2026-10-21-runs-auto-expire-and-programme-view.md`
 
 This document defines no D-numbers. The plan allocates them. Every D-number cited here is already defined on `origin/main`.
 
@@ -9,7 +9,7 @@ This document defines no D-numbers. The plan allocates them. Every D-number cite
 - **Programmes and projects** are counts or "programme A". Run numbers are kept, so a builder can replay the figures.
 - **"Ruled spec"** means the 2026-10-20 document. Its rule numbers (R1 to R8), lane rows (E1 to E5) and decisions (G1 to G6) keep their meanings here.
 - **"Author's call"** marks a choice the author made and the operator has not ruled. All of them are listed in §4.2 as A1 to A34, for the operator to check.
-- **"Open question"** marks a choice only the operator can settle. There are five, listed in §4.3 as Q1 to Q5, each with a recommendation. The body is written to the recommendation and names the question wherever it depends on one.
+- **"Q1 to Q5"** are the five choices only the operator could settle, listed in §4.3 with their recommendations. The operator answered all five on 2026-11-05, each as recommended. The body is written to those answers and names the question wherever it rests on one.
 - **What the review already answered** is in §20.
 - **Other work is named by its plan's own ids:** S1, S2, C1 and C2 are tasks of `2026-11-04-console-speed.md`; PL10 and PL11 are tasks of `2026-11-01-programme-ledgers.md`.
 
@@ -23,11 +23,11 @@ This document defines no D-numbers. The plan allocates them. Every D-number cite
   - a Stuck band that says why in plain words, with Abandon on the item;
   - bulk abandon of a stuck group, with one confirm;
   - proof of every abandon: a toast and a lasting record, however old the run.
-- **Auto-close alone cannot clear the backlog.** Replaying the ruled lane rows closes 18 of the 26 planned runs over 7 days. The other 8 need a person, so the ruled target of zero is unreachable and this document proposes a replacement (§12, Q3).
+- **Auto-close alone cannot clear the backlog.** Replaying the ruled lane rows closes 18 of the 26 planned runs over 7 days. The other 8 need a person, so the ruled target of zero is unreachable and the operator accepted a replacement (§12, Q3).
 - **A live coordinator cannot end its own never-started run.** `closeDecide` refuses `not-dispatched`, and the abandon door is closed to sessions by decision. That is why 25 planned runs with no session pile up under coordinators that are alive. The operator's delegation ruling answers this: a session raises a request and the operator approves with one tap, only if the coordinator did not handle it (§10).
 - **The server needs five facts it does not give today.** They are a run's own title, who closed it and why, last activity on the cold read, a read that finds any run, and a stuck verdict with its reason (§11).
 - **Order:** the waves in §15 put finding and clearing first and the auto-close lanes last (Q3). Screen work starts after the console-speed reads land, because they share the same read. This work runs in parallel with other work: the operator's request of 2026-11-04 overrides the 2026-10-26 refactor-first ruling for this work only.
-- **Five questions are the operator's (§4.3):** where the Stuck band sits, the cuts to the ruled programme view, the replaced targets and the new order, whether a request gets a "Keep the run" control, and whether §2's job list stands. The plan waits for the answers.
+- **The operator answered all five questions on 2026-11-05, each as recommended (§4.3):** the Stuck band sits above the programmes, every cut to the ruled programme view is accepted, the replaced targets and the new order are accepted, a request keeps its "Keep the run" control with both amendments, to D15 and D5, and §2's seven jobs and targets stand.
 
 ## 1. Intent and why
 
@@ -54,7 +54,7 @@ Groups 1 to 5 are the author's reading of the data today. §7 turns them into on
 
 ## 2. What a person must do in seconds
 
-Drawn from the measured failures. The list is the author's reading, so it is an open question: Q5 in §4.3.
+Drawn from the measured failures. The list began as the author's reading, and the operator confirmed it on 2026-11-05: Q5 in §4.3.
 
 | # | The job | Target | Today [M] |
 |---:|---|---|---|
@@ -105,7 +105,8 @@ These are the operator's, and they bind this design.
 - **Action on the item (2026-11-04).** An item that asks the operator to do something carries its own control: one tap plus a confirm.
 - **Delegation (2026-11-04).** A session may raise a request and the operator approves with one tap, but only if the coordinator did not handle it. The coordinator comes first. The abandon act itself stays unreachable from sessions (D-282, D-688): a session raises a request, it never calls the act.
 - **Parallel work (2026-11-04).** This work runs in parallel with other work. For this work only, that overrides the 2026-10-26 ruling that parked improvements until the architecture refactor ends.
-- **G1 to G4 and G6 of the ruled spec (2026-10-21)** stand, except where §13 says a later ruling changes them. G5 (Abandon under Advanced) is overturned by the 2026-11-04 rulings. No ruling yet changes G6, so the Stuck band above the programmes is an open question (Q1).
+- **Answers to Q1 to Q5 (2026-11-05).** The operator answered all five as recommended. §4.3 records each answer and its reasoning.
+- **G1 to G4 and G6 of the ruled spec (2026-10-21)** stand, except where §13 says a later ruling changes them. G5 (Abandon under Advanced) is overturned by the 2026-11-04 rulings. G6 is changed by the answer to Q1, which puts the Stuck band above the programmes.
 
 ### 4.2 Author's calls, for the operator to check
 
@@ -148,17 +149,19 @@ Each is the author's recommendation, not a ruling. "Instead" names the option no
 | A33 | `registry-unmeasurable` stops the bulk loop (§9.2) | It is a fault of the whole box, like 501 and 502 | Treat it as one run's refusal, and try the rest |
 | A34 | "Abandon all" acts on the list the sheet showed. Runs that leave the group are skipped by §9.2's rule, and runs that join it are not added (§9.2) | The operator confirmed that list | Re-read the group as the frame changes, which moves rows under a thumb |
 
-### 4.3 Open questions for the operator
+### 4.3 The operator's answers
 
-Only the operator can settle these. Each changes a ruled decision, an agreed decision, or what the work is for, so none is an author's call. The body follows each recommendation until the answer arrives. §15 makes the answers a gate before the plan.
+Only the operator could settle these. Each changes a ruled decision, an agreed decision, or what the work is for, so none was an author's call. The operator answered all five on 2026-11-05. Every answer matches the recommendation, so the body stands as written. The reasoning stays here as the record.
 
 **Q1. Does a Stuck band sit above the programmes on `/runs`?**
-- **Why it is open.** G6 ruled that `/runs` lands on the programme list. §13's reason for the band is the author's measurement, not a ruling. Abandon on the item does not settle where those items live.
+- **Answer (2026-11-05): yes, the Stuck band sits above the programmes.**
+- **Why it was open.** G6 ruled that `/runs` lands on the programme list. §13's reason for the band was the author's measurement, not a ruling. Abandon on the item does not settle where those items live.
 - **Recommendation: yes, the band first.** `/runs` still lands on the programme list, with at most five folded head lines above it, and none when nothing is stuck. Bulk abandon works per reason across programmes: 23 runs in 4 group acts. Reached through cards, the same 23 runs sit in 11 programmes, so 11 acts at best [I], and §2's job 2 would fail.
-- **What the answer decides.** The default board and B4. If programmes come first, §8.2 swaps its order, stuck runs are reached through their cards, §9.2's group control moves to the programme page, and §17's 18 taps must be measured again.
+- **What the answer decided.** The default board and B4. Had programmes come first, §8.2 would have swapped its order, stuck runs would have been reached through their cards, §9.2's group control would have moved to the programme page, and §17's 18 taps would have needed measuring again.
 
 **Q2. Does the operator accept cutting parts of the ruled programme view?**
-- **Why it is open.** These were ruled in the 2026-10-20 design, and rev 1 dropped them in §8 and §13 without listing them as calls.
+- **Answer (2026-11-05): yes, every cut is accepted.**
+- **Why it was open.** These were ruled in the 2026-10-20 design, and rev 1 dropped them in §8 and §13 without listing them as calls.
 - **Recommendation: accept each cut.**
 
 | Ruled part | Now | Why |
@@ -170,22 +173,25 @@ Only the operator can settle these. Each changes a ruled decision, an agreed dec
 | Instrument's list column | Beside the open run only in a broad column, so at 1920 and not at 1280, where the column is 860 | One layout rule. A list column at 860 would be a fork by skin |
 | Instrument's third region | Dropped. Its three contents stay reachable: closed waves on the programme page, "would close" in the pending-close line and on Advanced, and needs-you reasons on `/waiting` | The ruled review kept it as the programme's activity, and that activity still has a home |
 
-- **What the answer decides.** B5's scope and §8.1's one-layout rule. Keeping the stepper or the card lines adds them to B5, shown only where `waveOf` is known. Keeping the list column at 1280 or the third region means a second layout rule, or a fork by skin that §16's token-axis rule would have to give way to.
+- **What the answer decided.** B5's scope and §8.1's one-layout rule. Keeping the stepper or the card lines would have added them to B5, shown only where `waveOf` is known. Keeping the list column at 1280 or the third region would have meant a second layout rule, or a fork by skin that §16's token-axis rule would have had to give way to.
 
 **Q3. Does the operator accept the replaced targets and the new order?**
-- **Why it is open.** §12.4 replaces the ruled "planned over 7 days: 0", and §13 moves the auto-close lanes to last, behind finding and clearing. Neither is an author's call. A3 and A11 touch the target only in part.
+- **Answer (2026-11-05): yes, the replaced targets and the new order are both accepted.**
+- **Why it was open.** §12.4 replaces the ruled "planned over 7 days: 0", and §13 moves the auto-close lanes to last, behind finding and clearing. Neither was an author's call. A3 and A11 touch the target only in part.
 - **Recommendation: accept both.** Zero cannot be reached without closing overtaken work on an inference, and 417 and 848 wait on #119 either way. The lanes reach 18 of 26 and close nothing until shadow, the operator's reading and a delivered E1 warning are done. B2 to B4 give relief with no lane. The cost is that inflow continues until B7, and a person clears it meanwhile.
-- **What the answer decides.** If zero stands, overtaken runs need a lane row, which reverses A11. If lanes stay first, B7 moves ahead of B2 to B4, and the Advanced route it needs moves with it.
+- **What the answer decided.** Had zero stood, overtaken runs would have needed a lane row, which reverses A11. Had lanes stayed first, B7 would have moved ahead of B2 to B4, and the Advanced route it needs would have moved with it.
 
 **Q4. Should a request have a "Keep the run" control?**
-- **Why it is open.** The delegation ruling gives approval only. §10 adds a decline, which moves an item from open to dismissed while the programme is live. That amends agreed ledgers decision D15. `act` also closes an item with no coordinator re-measure, which amends agreed decision D5.
+- **Answer (2026-11-05): yes, keep the control, and both amendments, to D15 and D5, are accepted.**
+- **Why it was open.** The delegation ruling gives approval only. §10 adds a decline, which moves an item from open to dismissed while the programme is live. That amends agreed ledgers decision D15. `act` also closes an item with no coordinator re-measure, which amends agreed decision D5.
 - **Recommendation: keep it, and accept both amendments.** Without a decline the operator has no way to say no: the item stays in Waiting until the coordinator acts, and D15 refuses a dismiss while the programme is live. That is the control an item must carry. On D5, the server's own close is the measure, and the item's main case is a coordinator that is gone, so nothing could re-measure.
-- **What the answer decides.** B6's routes, its item moves and the `/waiting` row. With no decline, B6 loses `POST /api/items/:id/decline`, the `decline` move and the second control, and A22 and A24 apply to a withdraw alone.
+- **What the answer decided.** B6's routes, its item moves and the `/waiting` row. With no decline, B6 would have lost `POST /api/items/:id/decline`, the `decline` move and the second control, and A22 and A24 would have applied to a withdraw alone.
 
 **Q5. Does §2's job list stand?**
-- **Why it is open.** Rev 1 asked the operator to confirm it but left it out of §4.2. Its seven jobs and targets feed §17's measures and the shape of the board and search.
+- **Answer (2026-11-05): yes, all seven jobs and their targets stand.**
+- **Why it was open.** Rev 1 asked the operator to confirm it but left it out of §4.2. Its seven jobs and targets feed §17's measures and the shape of the board and search.
 - **Recommendation: accept the seven jobs and their targets.** Each comes from a measured failure, and job 1 and job 6 are the two the operator hit on run 410.
-- **What the answer decides.** §17's measures, and the board and search. Dropping "no scroll at every width" weakens the case in Q1. Dropping "under 5 seconds" means the search box need not be always visible.
+- **What the answer decided.** §17's measures, and the board and search. Dropping "no scroll at every width" would have weakened the case in Q1. Dropping "under 5 seconds" would have meant the search box need not be always visible.
 
 ## 5. Measured defects and their fixes
 
@@ -331,7 +337,7 @@ Measured columns [M, harness]:
 | 640 to 1239 | Medium | One column of items, each on fewer lines with its control at the right end. Programme cards two across from 840 |
 | 1240 and up | Broad | List beside the open run, at about 40 and 60 percent |
 
-Phone 360 to 430 is narrow in both skins. Laptop 1280 to 1470 is medium in both. Wide 1900 and up is medium in Refined and broad in Instrument, because `--page-max-wide` caps Refined at 1120. That difference comes from one token, not a fork. The ruled spec's Instrument list column and third region are dropped, subject to Q2: they were a skin fork, and P9's column never shipped.
+Phone 360 to 430 is narrow in both skins. Laptop 1280 to 1470 is medium in both. Wide 1900 and up is medium in Refined and broad in Instrument, because `--page-max-wide` caps Refined at 1120. That difference comes from one token, not a fork. The ruled spec's Instrument list column and third region are dropped (Q2): they were a skin fork, and P9's column never shipped.
 
 Judge every screen at 360, 390, 1280, 1470, 1920 × Refined and Instrument × light and dark. Colours come only from skin tokens. Text meets 4.5:1.
 
@@ -349,7 +355,7 @@ Top to bottom:
 2. **Search box** (§8.3). Always visible, at every width.
 3. **Paused banner.** `CoordBanner`, only while coordination is paused.
 4. **Closed today line.** "Closed today: 3 by you · 2 by ccrc · 60 by coordinators". Each count opens All runs with that filter. It appears once any close has landed that day. "Today" is the operator's local day (A32). This is the ruled spec's quiet line, now in one place.
-5. **Stuck band.** One row per reason with live runs, oldest first within a reason. Its place above the programmes is Q1.
+5. **Stuck band.** One row per reason with live runs, oldest first within a reason. Its place above the programmes is the operator's answer to Q1.
 6. **Waiting on its coordinator band.** One folded row (A14), selected as §7 says.
 7. **Programmes.** Cards, needs you first, then by last move.
 8. **Quiet programmes** fold: no run opened or closed in 7 days. 6 of 17 now, 8 at 15:12 [M].
@@ -499,7 +505,7 @@ PL11 makes this the Goals page: Goals, what the programme waits on, Stored secre
 - **The header is a superset of the card:** every card element verbatim, plus the current wave (`programmeCurrentWave`, as ruled), all four wave counts, the coordinator and its word with a link, and the pending-close line per reason.
 - **Open waves.** One entry per wave, newest first, using the same run row. A review nests under its wave. A stuck row carries its Abandon.
 - **Closed waves.** A fold, newest close first, from `GET /api/runs/find?program=<slug>`, each with who closed it: "done", "closed by the coordinator", "closed by ccrc: never started" or "closed by you: overtaken".
-- **The ruled wave stepper is dropped, subject to Q2.** Numbers reach 91, three pairs repeat and `waveOf` is usually null [M], so a stepper cannot draw honestly. The list above says the same.
+- **The ruled wave stepper is dropped (Q2).** Numbers reach 91, three pairs repeat and `waveOf` is usually null [M], so a stepper cannot draw honestly. The list above says the same.
 - **Resume** sits on this page's head when the coordinator reads dead, once, not on each row (F25).
 - **Doors in:** every programme card; the Fleet box title (D26, already planned); a run's detail; `inboxTarget`'s run kinds, which now open `/runs/<id>`; the session header's link.
 
@@ -694,7 +700,7 @@ flowchart TD
 
 **Telling the asker (A22).** The withdraw route sends no mail today. B6 adds a system mail to the asker on both paths, withdraw and decline, for an item that carries an `action`, in the same transaction as the move, as `tickWithMail` does.
 
-**The operator's two controls.** Both on the `/waiting` row and in the item view. The second is open: Q4.
+**The operator's two controls.** Both on the `/waiting` row and in the item view. The operator kept the second: Q4.
 
 | Part | Words |
 |---|---|
@@ -718,7 +724,7 @@ flowchart TD
 | `decline` | operator | open to dismissed | `POST /api/items/:id/decline` |
 | `settle` | ccrc | open or checking to done | The server, when a run starts or closes, and when the lane re-measures (A18) |
 
-None takes `programme-live`. `ItemActor` gains `ccrc`. `act` amends agreed ledgers decision D5 and `decline` amends D15, which is Q4.
+None takes `programme-live`. `ItemActor` gains `ccrc`. `act` amends agreed ledgers decision D5 and `decline` amends D15, and the operator accepted both: Q4.
 
 **The pins, in both directions.**
 - `/api/items/:id/act` and `/decline` are absent from `ccrc-api`'s table, like the abandon door (`ccrc-api-closed.test.ts`).
@@ -858,7 +864,7 @@ Each lane group gets a three-state control on Advanced: off, shadow, on. Its def
 
 ### 12.4 Targets, replaced
 
-Proposed, not ruled: this table is Q3.
+The operator accepted this table on 2026-11-05: Q3.
 
 | Ruled target | Status | Replaced by |
 |---|---|---|
@@ -874,21 +880,21 @@ Proposed, not ruled: this table is Q3.
 | "Close anyway" door | "Abandon anyway", the same act | One act, one word |
 | Run ledger at `/runs/ledger`, with lookup by id | Search and `/runs/<id>` do the lookup. Advanced keeps All runs | The ledger never shipped, and that was the direct cause of run 410 |
 | `/runs/p/<slug>` | `/programmes/<slug>` | A1; D26 and D29 |
-| Card with wave position, counts, chip, close line, last activity, coordinator | Name, lamp and word, one line, one marker | D-5545. `waveOf` is null on 43 of 52. Open: Q2 |
-| Wave stepper | A plain list of waves | Numbers reach 91, pairs repeat. Open: Q2 |
-| Instrument list and third region | One layout rule on column width | Skin is a token axis. P9's column never shipped. Open: Q2 |
+| Card with wave position, counts, chip, close line, last activity, coordinator | Name, lamp and word, one line, one marker | D-5545. `waveOf` is null on 43 of 52. Answered: Q2 |
+| Wave stepper | A plain list of waves | Numbers reach 91, pairs repeat. Answered: Q2 |
+| Instrument list and third region | One layout rule on column width | Skin is a token axis. P9's column never shipped. Answered: Q2 |
 | `lastActAt` on the wire | `lastMoveAt` on the cold read | It exists (D-7334); one field, one meaning |
 | `GET /api/programs` with `spread` | `GET /api/programmes`, no `spread` | Route spelling; FM10's field is not on main |
-| `/runs` shows programmes alone | A Stuck band above them | 28 of 52 are stuck; the job is to clear them. This is the author's measurement, not a ruling. Open: Q1 |
+| `/runs` shows programmes alone | A Stuck band above them | 28 of 52 are stuck; the job is to clear them. The measurement is the author's, and the operator accepted the band. Answered: Q1 |
 | Refused closes on `refusedClose?` | Items with an action | One needs-you source; action on the item |
 | `groupRuns` kept and corrected | Deleted | No caller; the server's verdict replaces it |
 | Group markers to arm | A control under Advanced | "Operator actions live in the UI" |
-| Target "planned over 7 days: 0" | §12.4 | The replay. Open: Q3 |
+| Target "planned over 7 days: 0" | §12.4 | The replay. Answered: Q3 |
 | Coordination banner only while paused, with no other toggle | Toggle under Advanced | A gap in the ruled spec |
 | `untold` in W1 | In B3 | Bulk abandon closes runs under live coordinators |
-| W0 to W5, lanes first | B1 to B9, finding first | The operator's pain is finding and clearing. W0 has shipped. Open: Q3 |
-| An item closes after the coordinator re-measures (ledgers D5) | `act` closes the item itself | The server's own close is the measure. Open: Q4 |
-| An operator dismisses only when no run is open (ledgers D15) | `decline` dismisses while the programme is live | Otherwise the operator cannot say no. Open: Q4 |
+| W0 to W5, lanes first | B1 to B9, finding first | The operator's pain is finding and clearing. W0 has shipped. Answered: Q3 |
+| An item closes after the coordinator re-measures (ledgers D5) | `act` closes the item itself | The server's own close is the measure. Answered: Q4 |
+| An operator dismisses only when no run is open (ledgers D15) | `decline` dismisses while the programme is live | Otherwise the operator cannot say no. Answered: Q4 |
 | Refactor first (2026-10-26) | Parallel | The operator's request of 2026-11-04, for this work only |
 
 Unchanged: G1 (72 hours, warning at 48), G2, G3, G4's shadow, G6's 7-day Finished, rules R1 to R8, the rows, the never list, the daily brake, coordinator-first notices, the record-only pushes.
@@ -909,7 +915,7 @@ Unchanged: G1 (72 hours, warning at 48), G2, G3, G4's shadow, G6's 7-day Finishe
 
 Each wave is its own PR, or a short series. Each lands its characterisation pins first and rolls back by revert or by a switch. The plan allocates D-numbers and may split waves further.
 
-**Before anything:** the operator checks §4.2 and answers §4.3, and the plan is written. Spec and mockups can start now. Any build touching the board or the runs read starts after #2290 and S2 land.
+**Before anything:** the operator answered §4.3 on 2026-11-05. The operator checks §4.2, and the plan is written. Spec and mockups can start now. Any build touching the board or the runs read starts after #2290 and S2 land.
 
 | Wave | What | Gate | Key pins |
 |---|---|---|---|
@@ -1004,7 +1010,7 @@ Measured before B1 and after each wave, with the same scripts. Page budgets are 
 
 ## 20. What the review asked, and the answers
 
-The review of rev 1 asked these and found the design holds. Code answers were read at `08e3b290a`. Gaps it found are A16 to A34, and what only the operator can settle is Q1 to Q5.
+The review of rev 1 asked these and found the design holds. Code answers were read at `08e3b290a`. Gaps it found are A16 to A34, and what only the operator could settle is Q1 to Q5, answered in §4.3.
 
 | Asked | Answer |
 |---|---|
