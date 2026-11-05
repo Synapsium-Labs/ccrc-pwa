@@ -11,7 +11,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fastSelection, relatedFromVitestList, guardTests, parseUntraced, scanShape, scansSourceTree, treeScanners, GUARD_TESTS, PIN_MAP_CARRIED, SCANNER_MAX_MS, TREE_READER, SESSION_HOOK_TRIGGERS } from '../../.github/ci/fast-plan.mjs';
+import { fastSelection, relatedFromVitestList, guardTests, parseUntraced, scanShape, scansSourceTree, treeScanners, GUARD_TESTS, HEAVY_TREE_READERS, PIN_MAP_CARRIED, SCANNER_MAX_MS, TREE_READER, SESSION_HOOK_TRIGGERS } from '../../.github/ci/fast-plan.mjs';
 import { liveTestFiles, selectIgnoringUncertainty, selectTests, vitestFollows } from '../../.github/ci/select-tests.mjs';
 import { untracedOutput, untracedSelection } from '../../.github/ci/select.mjs';
 import type { TestMap, TestRecord } from '../../.github/ci/testmap.mjs';
@@ -117,6 +117,16 @@ describe('the guard suites: patterns, less the map-carried pins, plus every test
     for (const f of ['topology-clean', 'oss-metadata', 'gitignore-secrets', 'consolidation-path-guard']) {
       expect(guards, f).toContain(`server/test/${f}.test.ts`);
     }
+  });
+
+  // D-7995: the shellcheck ratchet lists the tracked tree, so TREE_READER matches it, but a full pass is too slow to
+  // spend on every fast pull request; the queue and the full suite run it, and the map selects it for a script it reads.
+  it('a heavy tree reader is matched by TREE_READER yet is no guard', () => {
+    const ratchet = 'server/test/shellcheck-ratchet.test.ts';
+    expect(HEAVY_TREE_READERS).toEqual([ratchet]);
+    expect(TREE_READER.test(readFileSync(path.join(ROOT, ratchet), 'utf8'))).toBe(true);
+    expect(guards).not.toContain(ratchet);
+    expect(fastSelection({ live, related: [], guards, changed: ['pwa/src/app.tsx'] }).files).not.toContain(ratchet);
   });
 
   it('TREE_READER is what finds the tree readers: a direct git ls-files / diff / merge-base, never a fixture helper', () => {

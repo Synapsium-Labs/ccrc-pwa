@@ -61,6 +61,9 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // reason: the shape the dispatch path sends to a box advertising
   // `child-argv-v1` is the one `whitelist-subset.test.ts`'s layer 2 must prove crosses the bare grant.
   wsAddWorker: ['demo', { surface: 'agent', actor: 'run:7 dispatch', reason: null }, null, 7],
+  // Delegation broker wave 5 PR3 (W5-G18): a promoting dispatch's ws-add, `--child` and `--base` leading the project. The
+  // bare `['ws-add']` grant must cover it with no agent change.
+  wsAddWorkerBase: ['demo', { surface: 'agent', actor: 'run:7 dispatch', reason: null }, null, 7, 'a'.repeat(40), 'quiet-mesa', false],
   prStateSession: ['demo-quiet-basin'],
   prStateProject: ['demo'],
   prStatePr: ['demo', 41],
@@ -95,6 +98,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   wsOrphan: ['a'.repeat(64) as OrphanToken, '2f6f7270', true, { surface: 'agent', actor: 'orphan sweep', reason: null }],
   wsShedDeps: ['project-a-quiet-basin', 'child', true, { surface: 'agent', actor: 'sweep:deps-shed', reason: null }],
   leaseMark: [{ leaseId: '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', generation: 2, project: 'demo', adminRecord: 'agent-a', parentId: 'lane-a-demo', parentIncarnation: '11111111-2222-4333-8444-555555555555', activityId: 'act-1', source: 'agent', state: 'adopted', journalSeq: 9, expiresAtMs: 1767225600000, releaseReason: null, promoted: null }],
+  leaseAudit: ['0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', 2, true],
   // THE COLLECTOR'S LOOSE ARM (D-6626): the census rides `['ws-audit','--collect-census']`, the audit
   // `['ws-audit','--loose-hex']`, and the verb the collector's own `['ws-collect','--expect']`; the verb's sample carries a
   // dec so layer 2 proves the FLAGGED shape crosses with no third prefix.
@@ -113,6 +117,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // CHILD RECLAMATION wave 4 — `coordPause`'s shape exactly.
   reclaimPause: ['on'],
   testboxRemote: ['on'],
+  paneScopeStop: ['live'],   // D-7902, `testboxRemote`'s shape
   // Two ENTRIES, not one parameterised by `pool: string | null` — the
   // `start`/`enable` rule stated in `CCD_ARGV`'s `enable` docstring: the route
   // picks between two words, the argv shapes differ in their tail, and layer

@@ -25,6 +25,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -1043,7 +1044,7 @@ const START_STUBS = `${WS_ADD} _alive() { return 1; }; _have_systemctl() { retur
  *  for the registry-wins warning and fixed it the same way: `spawnSync`
  *  captures both streams unconditionally. */
 const run = (snippet: string): { code: number; stdout: string; stderr: string } => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
     env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
   });

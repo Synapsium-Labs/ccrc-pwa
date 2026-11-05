@@ -310,6 +310,18 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.testboxRemote('off')])).toBe(true);
   });
 
+  // The pane-scope stop's switch (D-7902): `testbox-remote`'s argument exactly, reached from
+  // `POST /api/coord/pane-scope-stop` (session-only), so a bare `['pane-scope-stop']` is refused here.
+  it('pane-scope-stop is grantable ONLY with --state', () => {
+    const ps = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'pane-scope-stop');
+    expect(ps.length, 'exactly one pane-scope-stop grant').toBe(1);
+    expect(ps[0]).toEqual(['pane-scope-stop', '--state']);
+    expect(isExecAllowed('ccd', ['pane-scope-stop', 'live'])).toBe(false);
+    expect(isExecAllowed('ccd', ['pane-scope-stop'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.paneScopeStop('live')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.paneScopeStop('shadow')])).toBe(true);
+  });
+
   // NATIVE DOCS READER wave 2 (spec 2026-10-01 section 2 (a), row 44). Four
   // read-only verbs, each enrolled for its ARGUMENT SURFACE (`coord-pause`'s
   // reason) and reached from session-gated routes that carry no box token. A
@@ -519,6 +531,9 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     // what this spawn IS, both are parsed by the same strip loop, and neither
     // may trail the dec, where an old ccd's positional binding would eat it.
     wsAddWorker: ['ws-add', '--no-rc', '--child', '7', 'demo', '--surface', 'agent', '--actor', 'run:7 dispatch'],
+    // W5-G18 (delegation broker wave 5 PR3): `--base` LEADS beside `--child`, before the project and the slug, so an older ccd
+    // binds it as the project and refuses (D-6164). The one-token `['ws-add']` grant covers it: no agent change.
+    wsAddWorkerBase: ['ws-add', '--no-rc', '--child', '7', '--base', 'a'.repeat(40), 'demo', 'quiet-mesa', '--surface', 'agent', '--actor', 'run:7 dispatch'],
     prStateSession: ['pr-state', '--session', 'demo-quiet-basin'],
     prStateProject: ['pr-state', '--project', 'demo'],
     prStatePr: ['pr-state', '--project', 'demo', '--pr', '41'],
@@ -547,6 +562,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     leaseMark: ['ws-lease-mark', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', '--generation', '2', '--project', 'demo',
                 '--admin-record-hex', '6167656e742d61', '--parent', 'lane-a-demo', '--parent-incarnation', '11111111-2222-4333-8444-555555555555',
                 '--activity', 'act-1', '--source', 'agent', '--state', 'adopted', '--journal-seq', '9', '--expires-at', '1767225600000'],
+    leaseAudit: ['ws-lease-audit', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', '--generation', '2', '--holders'],
     wsCollectCensus: ['ws-audit', '--collect-census'],
     wsCollectLooseAudit: ['ws-audit', '--loose-hex', '2d7266', '--collect'],
     wsCollectLoose: ['ws-collect', '--expect', 'a'.repeat(64), '--loose-hex', '2d7266', '--surface', 'agent', '--actor', 'collect sweep'],
@@ -559,6 +575,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     coordPause: ['coord-pause', '--state', 'on'],
     reclaimPause: ['reclaim-pause', '--state', 'on'],
     testboxRemote: ['testbox-remote', '--state', 'on'],
+    paneScopeStop: ['pane-scope-stop', '--state', 'live'],
     projectPoolSet: ['project-pool', '--project', 'demo', '--pool', 'pool-a'],
     projectPoolClear: ['project-pool', '--project', 'demo', '--clear'],
     projectAddClone: ['project-add', '--name', 'demo', '--url', 'https://github.com/o/r.git'],

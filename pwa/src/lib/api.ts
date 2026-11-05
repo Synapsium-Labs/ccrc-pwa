@@ -12,6 +12,7 @@ import type { RotateAnswer } from '../../../shared/box-token';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
+import { LONG_READ_MS, limitedFetch, type ReadOpts } from './readLimit';
 import { questionAnswerRequest } from '../session/answerLifecycle';
 import { ANSWERED, answered, linearViewOf, linearWorkspacesOf, linearWorkspacesNotConnectedOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readProjectAdd, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange, type LinearWorkspacesRead } from './wireReaders';
 import { TOKEN_ROTATE_PATH } from '../../../shared/box-token';
@@ -38,6 +39,8 @@ export interface RollIdleView {
 // `ApiError` lives in `./apiError` (D-5897, ARCH-05), a leaf that imports nothing, so a pure word module can name
 // it without loading this fetch adapter. Re-exported: every existing import, and every screen, keeps its line.
 export { ApiError };
+// The read time limit (console speed, task C1) lives in `./readLimit`, this file being one the growth check holds.
+export { ApiTimeout, LONG_READ_MS, READ_TIMEOUT_MS, type ReadOpts } from './readLimit';
 // The refusal tables and the readers left this file (ARCH-13b): re-exported, so no importer changes a line.
 export * from './refusalWords';
 export * from './wireReaders';
@@ -53,8 +56,8 @@ export const clipUrl = (id: string, name: string): string =>
 
 /** Injectable for tests; defaults to the real global fetch. */
 export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args)) {
-  const request = async (path: string, init?: RequestInit): Promise<Response> => {
-    const res = await fetchImpl(path, init);
+  const request = async (path: string, init?: RequestInit, opts?: ReadOpts): Promise<Response> => {
+    const res = await limitedFetch(fetchImpl, path, init, opts);
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       let body: unknown = text;
@@ -80,8 +83,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     return res;
   };
 
-  const getJson = async <T>(path: string): Promise<T> =>
-    (await request(path)).json() as Promise<T>;
+  const getJson = async <T>(path: string, opts?: ReadOpts): Promise<T> =>
+    (await request(path, undefined, opts)).json() as Promise<T>;
 
   const postInit = (body?: unknown): RequestInit =>
     body === undefined
@@ -248,7 +251,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      * happen not to need escaping" is how a path-injection ships the day the id
      * format changes.
      */
-    passkeys: (): Promise<PasskeyListResponse> => getJson<PasskeyListResponse>('/api/auth/passkeys'),
+    passkeys: (opts?: ReadOpts): Promise<PasskeyListResponse> => getJson<PasskeyListResponse>('/api/auth/passkeys', opts),
     revokePasskey: async (credentialIdB64url: string): Promise<void> => {
       await request(`/api/auth/passkey/${encodeURIComponent(credentialIdB64url)}`, { method: 'DELETE' });
     },
@@ -262,7 +265,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  coordination database. Read through `useUpdatesView`, whose
      *  `asUpdatesView` treats a malformed answer as a failure — the generic
      *  here is the contract, not a proof. */
-    updates: () => getJson<UpdatesView>('/api/updates'),
+    updates: (opts?: ReadOpts) => getJson<UpdatesView>('/api/updates', { timeoutMs: LONG_READ_MS.updates, ...opts }),
     /** `POST /api/updates/intent` — a PARTIAL over one scope (`UpdateIntentRequest`).
      *
      *  `postJsonOr`, not `postJson` (D-1150), for `setCoordCaps`'s reason: after
@@ -352,8 +355,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  above. Each answers the list, or `'unreadable'` for a 2xx whose body is not one (a write may have landed: the
      *  card re-reads). A refusal rejects with its `ApiError` (`workspace-exists` names the workspace, `step-up-required`
      *  …), except a check's 409 `not-connected`, whose list IS its answer. The key is only ever in the add's body. */
-    linearWorkspaces: async (): Promise<LinearWorkspacesRead | 'unreadable'> =>
-      linearWorkspacesOf(await (await request('/api/linear/workspaces', { headers: { accept: 'application/json' } })).json().catch(() => null)),
+    linearWorkspaces: async (opts?: ReadOpts): Promise<LinearWorkspacesRead | 'unreadable'> =>
+      linearWorkspacesOf(await (await request('/api/linear/workspaces', { headers: { accept: 'application/json' } }, opts)).json().catch(() => null)),
     addLinearWorkspace: async (key: string, replace: boolean): Promise<LinearWorkspacesRead | 'unreadable'> =>
       linearWorkspacesOf(await (await request('/api/linear/workspaces', jsonInit(replace ? { key, replace } : { key }))).json().catch(() => null)),
     checkLinearWorkspace: async (id: string): Promise<LinearWorkspacesRead | 'unreadable'> => {
@@ -530,8 +533,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  told how much sits above the screen. A non-2xx rejects with `ApiError`,
      *  whose `.body` carries the route's own `{error, detail?}`. */
     paneHistory: (id: string) =>
-      getJson<Extract<PaneHistoryReply, { ok: true }>>(`${sid(id)}/pane/history`),
-    pr: (id: string) => getJson<PrView>(`${sid(id)}/pr`),
+      getJson<Extract<PaneHistoryReply, { ok: true }>>(`${sid(id)}/pane/history`, { timeoutMs: LONG_READ_MS.paneHistory }),
+    pr: (id: string) => getJson<PrView>(`${sid(id)}/pr`, { timeoutMs: LONG_READ_MS.pr }),
     prOpen: (id: string, b: { title: string; body: string; draft: boolean }) => post(`${sid(id)}/pr`, b),
     /** `{force:true}` ONLY when it is true — `opts?.force === false` and an
      *  absent `opts` both send the byte-identical unforced request the route
@@ -557,7 +560,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  `bad-request`) because a client is not a security boundary. */
     hold: (id: string, reason: string) => post(`${sid(id)}/hold`, { reason }),
     release: (id: string) => post(`${sid(id)}/release`),
-    workspaceAudit: (id: string) => getJson<WsAudit>(`${sid(id)}/workspace/audit`),
+    workspaceAudit: (id: string) => getJson<WsAudit>(`${sid(id)}/workspace/audit`, { timeoutMs: LONG_READ_MS.workspaceAudit }),
     workspaceReap: async (id: string, expect: string): Promise<ReapResult> =>
       (await (await request(`${sid(id)}/workspace/reap`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -680,6 +683,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  one. */
     runs: (closed = false) =>
       getJson<{ runs: RunSummary[] }>(closed ? '/api/runs?closed=1' : '/api/runs'),
+    /** `GET /api/runs?closed=1&limit=&before=` (console speed, the run archive's pages): one page of finished runs, and
+     *  `nextBefore`, the cursor of the next page. An older server ignores both parameters and answers the whole archive
+     *  with no `nextBefore`, which a caller reads as the last page. */
+    runsPage: (limit: number, before: number | null, opts?: ReadOpts) =>
+      getJson<{ runs: RunSummary[]; nextBefore?: number }>(
+        `/api/runs?closed=1&limit=${limit}${before === null ? '' : `&before=${before}`}`, opts),
     /** `GET /api/runs/:id` (D-6799) - one run plus the `spend` its bound sessions
      *  have accrued per the usage sweep; `spend` is unmeasured, with a reason, when
      *  the sweep cannot say. */
@@ -812,7 +821,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  is what the server promises, not what arrived. 501 `not-configured` on a box with no coordination database, and
      *  404 `not-found` from an older server that lacks the route; the hook reads both as not available on this server
      *  (departure `older-server-404-reads-not-configured` (D-4035)). */
-    stallWatch: () => getJson<StallWatchView>('/api/coord/stall-watch'),
+    stallWatch: (opts?: ReadOpts) => getJson<StallWatchView>('/api/coord/stall-watch', opts),
     /** `POST /api/coord/stall-watch`: a PARTIAL, carrying only the field the operator moved, and `confirm` only when
      *  it sends back the key a 409 `confirm-required` answered with. The server decides whether a write needs a
      *  confirm (departure `server-decides-the-confirm` (D-4033)), so a 409 rejects with `ApiError` like every non-2xx,
@@ -828,7 +837,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  nothing, so its failure is only a failure, which the hook classifies (404 and 501 through
      *  `settingsReadFailure`, a 503 `state-unmeasurable` as its own kind). Session-gated when armed, open dark; no
      *  box token. */
-    collectLane: () => getJson<CollectLaneView>('/api/coord/collect-lane'),
+    collectLane: (opts?: ReadOpts) => getJson<CollectLaneView>('/api/coord/collect-lane', opts),
     /** `POST /api/coord/collect-lane`: `{choice}`, plus `confirm` only as the key a 409 `confirm-required` or
      *  `confirm-stale` answered with. The server decides the confirm, so a 409 rejects with `ApiError` like every
      *  non-2xx, and the section reads its body through `collectLanePostRefusal`. Session-gated when armed, open dark,
@@ -842,7 +851,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** `GET /api/coord/dispatch-abandon` (D-7319): the switch of the act that abandons a dispatch that never came back.
      *  Settings' Automation card reads it through `useDispatchAbandonView`, whose `asDispatchAbandonView` is the wire
      *  guard. 501 `not-configured` and an older server's 404 read as not available. Session-gated when armed. */
-    dispatchAbandon: () => getJson<DispatchAbandonView>('/api/coord/dispatch-abandon'),
+    dispatchAbandon: (opts?: ReadOpts) => getJson<DispatchAbandonView>('/api/coord/dispatch-abandon', opts),
     /** `POST /api/coord/dispatch-abandon`: `{choice:'on'|'off'}`. `postJsonOr` for `setCoordCaps`' reason: an answer that
      *  could not be read may still have stored the choice. */
     setDispatchAbandon: (body: DispatchAbandonRequest) =>
@@ -857,7 +866,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** `GET /api/testbox` (test box plan TB9, D-7411; spec 2026-10-28 §2.7): `{ok, testbox}`, the block the server's
      *  poll last decided, `null` before its first pass. Settings › Automation › Test box reads it through
      *  `useTestboxView`, whose `asTestboxBlock` is the wire guard, so the type here is the envelope only. */
-    testbox: () => getJson<{ readonly ok: true; readonly testbox: unknown }>('/api/testbox'),
+    testbox: (opts?: ReadOpts) => getJson<{ readonly ok: true; readonly testbox: unknown }>('/api/testbox', opts),
     /** `POST /api/testbox/switch`: `{on}` and nothing else (the route refuses any other field). The answer is
      *  `requested`, never the switch: the block's `switch` field, re-read, is the authoritative answer. */
     setTestboxSwitch: (on: boolean) =>
@@ -869,8 +878,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** `GET /api/digest?day=` (coordinator-first routing spec §10, D-5300): the digest of what coordinators decided
      *  in the operator's name for one UTC day, or, with no day, the newest whose window has closed. The digest screen
      *  reads it through `asDigestAnswer`, the wire guard. Session-gated when armed; no box token. */
-    digest: (day?: string) =>
-      getJson<DigestAnswer>(day === undefined ? '/api/digest' : `/api/digest?day=${encodeURIComponent(day)}`),
+    digest: (day?: string, opts?: ReadOpts) =>
+      getJson<DigestAnswer>(day === undefined ? '/api/digest' : `/api/digest?day=${encodeURIComponent(day)}`, opts),
     /** `POST /api/digest/correct` (D-5300): one line's correction, mailed verbatim to that line's coordinator. A 409
      *  (`not-coordinator`, `duplicate`) rejects with `ApiError` like every non-2xx. `postJson`, not `postJsonOr`: the
      *  screen reads nothing off the answer but its arrival, and a write whose answer was unreadable is shown as sent
@@ -932,9 +941,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      */
     docs: ((): DocsLoaders => {
       const marker = { [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE };
+      // NO TIME LIMIT on the docs reads (`timeoutMs: null`, console speed C1): a loader never rejects for a server
+      // answer, and its slot vocabulary (`docs/failures.ts`) has no word for "slow", so a timeout would leave a screen
+      // waiting on a promise its reader never catches. The server bounds them (ccd's docs verbs, 15 to 20 s, after a
+      // read lane's wait of at most 10 s).
+      const unlimited: ReadOpts = { timeoutMs: null };
       const read = async <T>(path: string, fields: readonly string[], init: RequestInit): Promise<DocsAnswer<T>> => {
         try {
-          return await readDocsEnvelope<T>(await request(path, init), fields);
+          return await readDocsEnvelope<T>(await request(path, init, unlimited), fields);
         } catch (err) {
           // `request` folds an unreadable error body to '' and throws ApiError, so an abort mid-body arrives as one.
           if (init.signal?.aborted) throw init.signal.reason;
@@ -954,7 +968,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
           if (declared === null) throw new Error('wrong-representation');
           return (async () => {
             try {
-              return await readDocsRaster(await request(docsApi.file(project, pin), { headers: marker, signal }), declared);
+              return await readDocsRaster(await request(docsApi.file(project, pin), { headers: marker, signal }, unlimited), declared);
             } catch (err) {
               if (signal?.aborted) throw signal.reason;
               return docsAnswerFromError(err);

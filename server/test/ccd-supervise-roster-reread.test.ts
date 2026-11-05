@@ -21,6 +21,7 @@
 // built from a path (the harness's own `sh` idiom, D-5259).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ccdSource, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
@@ -85,7 +86,7 @@ const supervise = (ticks: number): { code: number | null; stderr: string } => {
   // ccd-workspaces.test.ts reads every poison at this call site.
   const env = ghContainedEnv(h.home, { ...h.env(), CCD_HARNESS_SRC: CCD, CCD_HARNESS_SNIPPET: snippet },
     { systemd: true, tmux: true, net: true });
-  const r = spawnSync('bash', ['-c', 'ccd_h_src=$CCD_HARNESS_SRC ccd_h_snippet=$CCD_HARNESS_SNIPPET; '
+  const r = spawnSyncGroup('bash', ['-c', 'ccd_h_src=$CCD_HARNESS_SRC ccd_h_snippet=$CCD_HARNESS_SNIPPET; '
     + 'unset CCD_HARNESS_SRC CCD_HARNESS_SNIPPET; source "$ccd_h_src"; eval "$ccd_h_snippet"'], {
     encoding: 'utf8', cwd: h.home, timeout: 30000, env,
   });

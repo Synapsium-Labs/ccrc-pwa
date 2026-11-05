@@ -137,9 +137,12 @@ describe('_ccrc_job_stayed_up: an INT to the shell alone ends it at once (wave 1
       { env: e, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+    // Two ends. The orphaned `sleep` holds the pipes until it is reaped, so the shell's own end, the thing under test,
+    // is timed at `exit`, and stdout is read only after `close`, every byte in.
     const done = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((res) => {
       child.on('exit', (code, signal) => { res({ code, signal }); });
     });
+    const closed = new Promise<void>((res) => { child.on('close', () => { res(); }); });
     let end: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let elapsed = 0;
     try {
@@ -156,6 +159,7 @@ describe('_ccrc_job_stayed_up: an INT to the shell alone ends it at once (wave 1
       if (end === null) child.kill('SIGKILL');
       reapSurvivors(b);
     }
+    await closed;
     expect(survivors(b)).toEqual([]);
     expect(end, 'the shell never exited').not.toBeNull();
     expect(end!.signal, `stdout: ${stdout}`).toBe('SIGINT');

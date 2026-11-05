@@ -21,6 +21,7 @@
 import { Component } from 'react';
 import type { ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
+import { ScreenLoadError } from '../lib/lazyScreen';
 import { navigate } from '../lib/router';
 import '../styles/shell.css';
 
@@ -61,6 +62,9 @@ export class RenderBoundary extends Component<RenderBoundaryProps, RenderBoundar
 
   componentDidCatch(error: unknown): void {
     console.warn('ccrc: render error in ' + this.props.where, error);
+    // A lazy screen's failed load is forgotten only now that the fallback is drawn, so the next reset asks once more
+    // (`lib/lazyScreen.ts`; review 1473 F2).
+    if (error instanceof ScreenLoadError) error.forget();
   }
 
   render(): ReactNode {
@@ -81,11 +85,20 @@ export function RootFallback({ reload = () => location.reload() }: { reload?: ()
   );
 }
 
-/** The detail pane's fallback: one screen could not draw; the sidebar beside it still works. */
-export function ScreenFallback(): ReactNode {
+/** The detail pane's fallback: one screen could not draw; the sidebar beside it still works. When the screen's code
+ *  could not be loaded (`ScreenLoadError`, console speed C1, review 1464 F2) it says so and offers Reload too: the
+ *  boundary's reset asks for the code again on the next navigation, but a browser may keep a failed module, and a
+ *  reload always fetches afresh. `reload` defaults to reloading the page; tests inject it. */
+export function ScreenFallback({ error, reload = () => location.reload() }: { error?: unknown; reload?: () => void }): ReactNode {
+  const unloaded = error instanceof ScreenLoadError;
   return (
     <div className="render-fallback" role="alert">
-      <p className="render-fallback-copy">This screen could not be shown.</p>
+      <p className="render-fallback-copy">{unloaded ? 'This screen could not be loaded.' : 'This screen could not be shown.'}</p>
+      {unloaded && (
+        <Button variant="primary" onClick={() => reload()}>
+          Reload
+        </Button>
+      )}
       <Button variant="primary" onClick={() => navigate('/')}>
         Back to the fleet
       </Button>

@@ -941,7 +941,7 @@ says so. `GET /api/updates` (session-gated) reads all of it; `POST /api/updates/
 (rate-limited to at most once every few minutes, derived from the catalogue's own request budget) and
 `/api/updates/ack` are session-only — the box token never writes intent — and
 `GET /api/updates/intent/:nodeId` serves a node its projection as plain text under a session or the box token.
-`/api/fleet/health`'s `builds` is a view of the inventory rows, and the PWA no longer reads it. An `auto`
+`/api/fleet/health` no longer carries `builds` (retired in #2079); its `build` word is still derived from the inventory rows. An `auto`
 other than `off` is refused (`409`) until every node the intent covers lists `update-gate` in its `ccrc-caps`
 (an install of the W4 node side writes it); the dispatcher checks the same word again at every auto move.
 
@@ -1472,7 +1472,10 @@ cookie **or** the token, which is how a coordinator reads its own wave ledger fr
 the fleet host), `POST /api/token/claim` (the box token's claim door, which
 authenticates by a single-use code the server issued over the agent link), the
 login and passkey-assertion doors themselves,
-`GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
+`GET /api/auth/status` (with a minimized anonymous body), the reader lab's probe
+`/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request: its answer never depends on the nonce,
+the run or the name, and it only counts arrivals for a lab run someone opened, a signed-in session on an armed box and
+anyone who reaches the port on a dark one), and `GET /*`, the
 static bundle a browser has to
 download before it can show a login screen. Enrolling a passkey is **not**
 exempt — it requires already being signed in, which is what makes
@@ -2578,7 +2581,9 @@ with no `ccd-pool-sync.timer` — `--role both` or `--role server`, the
 single-box default, or any macOS box — has none of this: with no projection on
 disk it reads the declared tag, as before, so there a central tag is the
 server's refusal and forecast while ccd's own placement still follows
-`accounts.json`. The server never nudges; convergence is the timer's pull
+`accounts.json`. The PWA says so: `ccd caps` prints `pool-sync-absent` there,
+and the account pool chip dims and the editor warns that nothing enforces the
+tag. The server never nudges; convergence is the timer's pull
 alone, so a central change reaches the fleet within about a minute. On a fleet
 box running the timer, the fleet header shows `epoch N / observed M` (or
 `observed never synced`) while the fleet's projection lags the server's epoch;
@@ -3823,8 +3828,8 @@ the last-known-good fleet snapshot instead of going blank:
   the link is ready again, with the time since that stretch's first line. None of these values is an operator
   setting.
 - `GET /api/fleet/health` → `{mode, connected, downSince, roster, build, projectPools}`, plus
-  `builds` (each box's stamp) in remote mode and a `lifecycle` block (the journal mirror's state,
-  `unknown` until its first sweep) on a box running the coordination database —
+  a `lifecycle` block (the journal mirror's state, `unknown` until its first sweep) on a box running
+  the coordination database —
   poll `connected` for remote-mode connectivity (`mode: 'local'` always reports `connected: true`,
   with `roster` and `build` `unknown`). `roster` (does the fleet host's installed roster match the
   server's) reads `agreed`/`divergent`/`unknown`; `build` (do both boxes run the same build)
@@ -6585,10 +6590,18 @@ pressure-kill notifications in `direct_pressure_kills` (target 0 after the spawn
 pane-scope OOM stops in `reap_class_oom`, and NOW's fresh sweep record in `inert_scopes`. Direct kills are
 unique transcript-UUID/task-ID pairs, deduplicated across selected copies. The default reads the largest
 discovered main transcript per UUID; `--all-copies` includes divergent smaller copies but still counts
-one task once. Discovery can miss unreadable roots/stat failures, excludes subagent transcripts and does
-not read notifications delivered mid-turn as queued-command attachment rows;
-partial reads and absent input are reported, never claimed as a clean zero. Notification times are
-observations at delivery, not exact kill instants.
+one task once. Notifications are read from user text rows, from queued-command attachment prompts (a
+string or text parts) and from queue enqueue contents (a string); queue remove and dequeue rows are not
+read, and a queued payload of any other shape that holds a notification is unmeasured, never skipped,
+except a payload that cannot be dumped, which counts in `malformed_rows` instead.
+An unmeasured notification counts per transcript UUID and text (the readable text, or an unreadable payload's
+dump), across sources and copies; the same notice in different payload shapes, or with different trailing
+text, can count again.
+Discovery can miss unreadable roots/stat failures and excludes subagent transcripts;
+partial reads and absent input are reported, never claimed as a clean zero. Each row is timed by its own
+stamp: user and attachment rows are observations at delivery, enqueue rows at queue time, not exact kill
+instants, so a notice queued before a window's end and delivered after it counts in both windows.
+`notification_sources` counts what each source contributed.
 
 The frozen baseline B is the pane-OOM reap-class count with the reap still enabled. A read-only
 `--reap-baseline B` comparison requires stage 6 alone and an explicit interval of seven elapsed days,
@@ -6601,6 +6614,22 @@ is `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in ccd's child spawn environme
 resume-retry, including an external-provider wrapper that execs Claude Code. Deploying it does not retrofit
 existing panes. Assignment and any subsequent removal take effect at each session's NEXT ordinary start; no
 forced fleet restart is part of this change. An aggregate slice `MemoryHigh` must never return.
+
+### A deliberate stop's pane scope (D-7902)
+
+The sweep above collects what a dead pane left behind hours later; a stop ccd makes ON PURPOSE takes it down at once.
+`ccd stop`, and `ccd hibernate` (which the stop-done lane and the coordinator roll compose), read the session's pane and
+its scope from the live pane's `/proc/<pid>/cgroup` before the kill, after the stop's stamp and the unit's disable so
+that a wedged tmux server holds neither (the read is bounded, and one that runs out of time is logged `held`), and hand
+the rest to a job in its own transient unit, so the verb never waits: once the main process has exited and a ten-second grace has passed, that job runs
+`systemctl --user stop --no-block <unit>` — only for a `tmux-spawn-*.scope` whose parent
+is the session slice, only while something is still in it, and never while another live tmux pane has its process in it
+or below it. Every outcome is one `pane-scope <id>: …` line in `~/.cc-sessions/swap.log` (`stopped`, `would stop`,
+`held … : <why>`, `nothing left in …`). The auto-swap's restart is not a stop and never reaches it, and
+`KillMode=process` is unchanged. **It ships shadowed:** without `~/.cc-sessions/pane-scope-stop-live` each stop only
+logs `would stop <unit> (<n> processes)`. The operator arms it in Settings › Automation › Stop leftovers
+(`POST /api/coord/pane-scope-stop`, session-only, which runs `ccd pane-scope-stop --state live|shadow`, the marker's
+one writer); `ccrc doctor`'s `pane-scope-stop` check names the mode.
 
 ### Swap-carry copies and the dedupe sweep
 

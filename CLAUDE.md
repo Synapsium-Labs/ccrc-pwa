@@ -278,7 +278,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   recorded, not always, D-7780), the guard suites that scan the whole tree or the diff
   (censuses, single-definition, deviation-refs, growth-check, ownership, rings, ccd-contexts, dtbd, `typecheck-tests`,
   `oss-metadata`, the `*-pin` suites less `PIN_MAP_CARRIED`, and every test whose source runs `git ls-files`,
-  `git diff` or `git merge-base` itself: `TREE_READER`; and every test that lists a source tree itself — `server/src`,
+  `git diff` or `git merge-base` itself: `TREE_READER`, less `HEAVY_TREE_READERS`, the shellcheck ratchet, D-7995; and every test that lists a source tree itself — `server/src`,
   `shared`, `pwa/src`, `agent/src` or `ccd` — whose file took at most `SCANNER_MAX_MS` on the last full run, the heavier
   ones named in the summary and left to the queue: the full run RECORDS which tests list a root (a setup file wraps fs's
   listers, `.github/ci/tree-scanners.mjs`, published as the `tree-scanners` artifact beside `testtimes`), unioned with
@@ -500,8 +500,12 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   file absent and retires it.
 - **Zero new ccd verbs for coordination mutation** — mutations ride already-granted `CcdArgv` (a brand built at
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
-  Workspace-lifecycle verbs and flags (`ws-reclaim`, `ws-expire`, `ws-lease-mark`) act on workspaces, not on
-  coordination state, are server-composed only, and are not covered by that rule.
+  Workspace-lifecycle verbs and flags (`ws-reclaim`, `ws-expire`, `ws-lease-mark`, `ws-lease-audit`) act on workspaces,
+  not on coordination state, are server-composed only, and are not covered by that rule (`ws-lease-audit` is read-only:
+  it writes nothing to any durable path, so it is not on the SAFETY list; its residuals are its dirt readers' scratch
+  files under `$TMPDIR` and a gitattributes clean filter that `git status` and `git hash-object --path` still run).
+  `ws-add --base` (a child workspace's start point) is a workspace-lifecycle flag too and not covered by it: the
+  server composes it, behind `ws-add-base-v1`, but nothing refuses a session that runs it itself.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
   on missing — **except FOUR deliberately ungated operator doors: `POST /api/coord/pause`, `POST
   /api/runs/:id/abandon`, `POST /api/claims/:id/break` and `POST /api/runs/:id/reclaim`** (D-282 (was D-B4-9),
@@ -539,13 +543,14 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (child-reclamation wave 10, which also refuses `live` while sign-in is dark), `POST /api/coord/review-cap`
   (D-6795, the operator's lift of the review-round cap for one work run), `POST /api/coord/dispatch-abandon` (D-7319, the
   operator's switch on abandoning a dispatch that never came back), `POST /api/coord/roll-idle` (D-7453, the
-  operator's Settings row for the automatic coordinator roll), `POST /api/testbox/switch` (test box plan TB9, D-7411,
+  operator's Settings row for the automatic coordinator roll), `POST /api/coord/pane-scope-stop` (D-7902, the operator's
+  switch that arms a deliberate stop's pane-scope stop), `POST /api/testbox/switch` (test box plan TB9, D-7411,
   the operator's remote switch for test runs; the test box's read and sync take a session or the box token, D-7554)
   and `POST /api/questions/:id/answer` (W3 Q3f, D-7030, the operator's answer door of the question family) are
   session-gated only — armed, they sit behind the auth gate like every other PWA-surface write. The first
   needs prose because no scanner can see it: `coord-pause-route.test.ts` reads
   `server/src/coord/routes.ts` alone, and that route is registered in `server.ts`, so a door opened outside
-  that one file is invisible to the set that pins the doors. The other eight are in that file's `SESSION_ONLY`
+  that one file is invisible to the set that pins the doors. The other ten are in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` checks this sentence against it in both directions (D-1231). The update
   control plane's routes are session-only by design (the box token never writes intent — design 2026-09-20,
   decision 15): `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`, `POST

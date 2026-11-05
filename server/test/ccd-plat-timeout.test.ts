@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { accessSync, constants, existsSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -47,7 +48,9 @@ const COPIES: Array<[string, string, string]> = [
   ['helper', 'ccd-account-auth', '_auth_timeout'],
 ];
 interface Run { home: string; rc: string; ms: number; out: string; err: string }
-function drive(file: string, name: string, script: string, pathPrefix?: string, also: string[] = []): Run {
+/** `strays: 'end'` is for a case whose subject leaves a process behind that it does not assert on (`spawnSyncGroup`). */
+function drive(file: string, name: string, script: string, pathPrefix?: string, also: string[] = [],
+  strays: 'throw' | 'end' = 'throw'): Run {
   const home = mkdtempSync(path.join(tmpdir(), 'ccd-d2764-'));
   // `also` names further functions of the SAME file to source beside the shim (the strict neighbours, below).
   writeFileSync(path.join(home, 'shim.sh'), [name, ...also].map((n) => body(file, n)).join(''));
@@ -73,7 +76,7 @@ function drive(file: string, name: string, script: string, pathPrefix?: string, 
     script.replace(/@SHIM@/g, name).replace(/@HOME@/g, home),
   ].filter(Boolean).join('\n');
   const t0 = Date.now();
-  const r = spawnSync('bash', ['-c', prog], { encoding: 'utf8', timeout: 40_000, env });
+  const r = spawnSyncGroup('bash', ['-c', prog], { encoding: 'utf8', timeout: 40_000, env }, { strays });
   return { home, rc: (r.stdout ?? '').trim(), ms: Date.now() - t0, out: r.stdout ?? '', err: r.stderr ?? '' };
 }
 
@@ -158,9 +161,11 @@ describe('D-2764', () => {
     if (!bb) return;
     const bin = mkdtempSync(path.join(tmpdir(), 'ccd-d2764-bb-'));
     symlinkSync(bb, path.join(bin, 'timeout'));
+    // busybox's `timeout` ends only its child: the `sleep 6` under the TERM-ignoring bash stays behind (spawnSyncGroup
+    // found it on Linux CI, #896). This case is about the exit status, so the run ends that stray.
     const r = drive('ccd', '_plat_timeout',
       `@SHIM@ 1 bash -c 'trap "" TERM; sleep 6; : > @HOME@/outlived' >/dev/null 2>&1\nprintf %s "$?"`,
-      `${bin}:${process.env.PATH}`);
+      `${bin}:${process.env.PATH}`, [], 'end');
     expect(r.rc, `stderr: ${r.err}`).toBe('124');
     expect(existsSync(path.join(r.home, 'outlived'))).toBe(false);
   });
