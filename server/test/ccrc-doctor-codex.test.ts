@@ -6680,8 +6680,7 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
 
   it('W24-S6: a scheme-less mirror base\'s credentials never print either (curl reads it as http)', () => {
     const r = runBs(settingsBox('ccrc-doctor-bs-url-bare-', ['CCRC_RELEASE_BASE_URL=u:hunter2@mirror.example/r']));
-    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_RELEASE_BASE_URL=custom mirror\.example;/);
-    expect(r.stdout).toContain('mirror.example');
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_RELEASE_BASE_URL=custom;/);   // D-7923: no scheme shows `custom` alone; it read `custom mirror.example` before
     expect(r.stdout).not.toContain('hunter2');
     expect(r.code).toBe(0);
   });
@@ -6913,12 +6912,18 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
     expect(r.code).toBe(2);
   });
 
+  it.each(['zz-leak-tok-0123456789abcdef', 'mirror.example.invalid/r', 'user:pw@mirror.example.invalid/r'])('W2-D7923: a release base with no http(s) scheme (%s) prints custom alone', (v) => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-d7923-', [`CCRC_RELEASE_BASE_URL=${v}`]));
+    expect(verdict(r), r.stdout + r.stderr).toContain('CCRC_RELEASE_BASE_URL=custom;');
+    for (const t of ['zz-leak', 'mirror.example', 'user:pw']) expect(r.stdout + r.stderr).not.toContain(t);
+  });
+
   it('W2-D7: the release base shows its origin only', () => {
     const base = (v: string): Result => runBs(settingsBox('ccrc-doctor-bs-d7-', [`CCRC_RELEASE_BASE_URL=${v}`]));
     const a = base('https://u:hunter2@mirror.example/releases');
     expect(verdict(a), a.stdout + a.stderr).toContain('CCRC_RELEASE_BASE_URL=custom https://mirror.example;');
     const b = base('u:hunter2@mirror.example/r');
-    expect(verdict(b), b.stdout + b.stderr).toContain('CCRC_RELEASE_BASE_URL=custom mirror.example;');
+    expect(verdict(b), b.stdout + b.stderr).toContain('CCRC_RELEASE_BASE_URL=custom;');   // D-7923
     for (const bad of ['http:/u:hunter2@mirror.example/r', 'https:///u:hunter2@mirror.example/r']) {
       const c = base(bad);
       expect(verdict(c), c.stdout + c.stderr).toContain('CCRC_RELEASE_BASE_URL=custom;');

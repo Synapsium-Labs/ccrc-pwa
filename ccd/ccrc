@@ -26239,7 +26239,8 @@ cmd_backup() {
 # value that failed its check may be anything an operator typed. A setting a check cannot judge (a library that did not load, a reader that
 # could not decide) is `unmeasured`, with a sentence that names the file, a line and the key. An `ok` value or origin outside the envelope
 # (`_set_fits`), or a value holding a unit separator, is written `unmeasured` too, never cut (D-7909). The release base is shown as `default`,
-# or `custom` with its scheme and host only (`_upd_url_origin`), or `custom` alone when no host can be told from a credential (D-7873).
+# or `custom` with its scheme and host only (`_upd_url_origin`), or `custom` alone when no host can be told from a credential (D-7873) or
+# when the raw text does not begin with `http://` or `https://`, any case, so nothing pasted there can show (D-7923).
 # Neither `TBK_WARN` nor `GK_WARN` is read here, and `BOX_SETTINGS_KEYS` is gone: the class table is the one list (D-7910).
 # READ-ONLY: it never prunes, never takes update.lock and writes nothing but its own file, by temp and rename with the writers'
 # idiom (`_tmp_guard`, so a die or a SIGTERM through the EXIT chain leaves no `.tmp.$$`); it sets no trap of its own. What a SIGTERM
@@ -26532,7 +26533,11 @@ cmd_settings() {
             if [ "$rc" -eq 0 ]; then
               case "$KNOB_FROM" in
                 "$f_default"|"$f_empty") val="$f_default" ;;
-                *) if o="$(_upd_url_origin "$KNOB")"; then val="custom${o:+ $o}"; else val=custom; fi ;;   # D-7873: an '@' left after the redaction shows no host
+                *) case "$KNOB" in   # D-7923: a RAW value with no http(s) scheme shows `custom` alone and never reaches `_upd_url_origin`
+                     [Hh][Tt][Tt][Pp]://*|[Hh][Tt][Tt][Pp][Ss]://*)
+                       if o="$(_upd_url_origin "$KNOB")"; then val="custom${o:+ $o}"; else val=custom; fi ;;   # D-7873: an '@' left after the redaction shows no host
+                     *) val=custom ;;
+                   esac ;;
               esac
             fi ;;
           CCRC_MODELS_ADVANCE_BUDGET_S)

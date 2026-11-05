@@ -547,12 +547,13 @@ describe('ccrc settings: the release base shows its scheme and host, nothing els
   const SECRETS = ['secret', 'token', 'u:p', '/r', 'user', 'tok@'];
   it.each([
     ['https://user:secret@mirror.example.invalid/r/x?token=abc', 'custom https://mirror.example.invalid'],
-    ['user:secret@mirror.example.invalid/r?token=x', 'custom mirror.example.invalid'],
+    // D-7923 (operator item 41): a base whose raw text has no http(s) scheme shows `custom` alone; it read `custom mirror.example.invalid` before.
+    ['user:secret@mirror.example.invalid/r?token=x', 'custom'],
     ['https://u:p@x@mirror.example.invalid/r', 'custom https://mirror.example.invalid'],
     // D-7873: `tok@mirror.example.invalid` read `custom mirror.example.invalid` before; `_upd_redact` leaves a token-only userinfo before
     // a bare host (its KNOWN LIMIT), the `@` stays, and the row now records `custom` alone.
     ['tok@mirror.example.invalid', 'custom'],
-    ['tok@mirror.example.invalid:8080/r', 'custom mirror.example.invalid:8080'],
+    ['tok@mirror.example.invalid:8080/r', 'custom'],   // D-7923: read `custom mirror.example.invalid:8080` before
     ['https://tok@mirror.example.invalid/r', 'custom https://mirror.example.invalid'],
   ])('%s shows as %s', (url, shown) => {
     const home = boxWith('ccrc-sv-url-');
@@ -569,6 +570,21 @@ describe('ccrc settings: the release base shows its scheme and host, nothing els
       .toEqual({ key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom https://m.example.invalid', from: 'file' });
     expect(rowOf(json(boxWith('ccrc-sv-url4-', 'CCRC_RELEASE_BASE_URL=\n')), 'CCRC_RELEASE_BASE_URL'))
       .toEqual({ key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'default', from: 'empty' });
+  });
+});
+
+describe('ccrc settings: a release base with no http(s) scheme shows custom alone (D-7923, operator item 41)', () => {
+  const PLANTS = ['zz-leak-tok-0123456789abcdef', 'mirror.example.invalid/r', 'user:pw@mirror.example.invalid/r'];
+  it.each(PLANTS)('%s reads exactly `custom`, and its text is on no surface', (url) => {
+    const home = boxWith('ccrc-sv-url-noscheme-');
+    const sf = surfaces(home, { CCRC_RELEASE_BASE_URL: url });
+    expect(rowOf(docOf(sf.json), 'CCRC_RELEASE_BASE_URL')).toEqual({ key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom', from: 'environment' });
+    expect(sf.human.stdout).toMatch(/^CCRC_RELEASE_BASE_URL {10}custom {2}\(/m);
+    expectAbsent(sf, ['zz-leak', 'mirror.example', 'user:pw'], 'release base');
+  });
+  it('CONTROL: a scheme-ful value keeps its scheme and host', () => {
+    expect(rowOf(json(boxWith('ccrc-sv-url-scheme-'), { CCRC_RELEASE_BASE_URL: 'https://mirror.example.invalid:8443/r' }), 'CCRC_RELEASE_BASE_URL'))
+      .toEqual({ key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom https://mirror.example.invalid:8443', from: 'environment' });
   });
 });
 

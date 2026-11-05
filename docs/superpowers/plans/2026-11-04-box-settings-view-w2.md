@@ -2313,6 +2313,7 @@ takes the next spare and is named in the wave-done.
   calls, with the same behaviour; ruled by the coordinator (option A). Each of the six resolvers reads only its own setting, measured.
 - **D-7921.** The D12 class `presence` is spelled `is-set` in code, because C7o (OA-C18 (a), #1371) reserves `presence` in TS for session presence. The census-w7 `persistedPresenceWords` red began at Task 3's `2606db945` (32 against 20), not only at the 33 the sweep last read.
 - **D-7922.** `c6d9c83a4` rewrote an existing consumer assertion, `slice-limits-config.test.ts`'s row "the defaults it reads with are the template's own values", from `toEqual(['24G'])` and `toEqual(['6G'])` to set equality over every literal `_ccrc_knob CCRC_SESSION_SLICE_*` read plus a non-empty check, with a CONTROL row beside it. That departs from the plan's global constraint that no existing consumer assertion is edited (the one exception was D-7919's carry sentence), so it is ledgered here (review 1487 F3). Measured red-first: see As built, "Task 5, the slice defaults row".
+- **D-7923.** By operator item 41 (answering review 1487), a release base whose RAW text does not begin with `http://` or `https://`, any case, shows `custom` alone in the verb (JSON, snapshot and human form) and in doctor's `box-settings` line, and never reaches `_upd_url_origin`; the same word will be the only scheme-less word the envelope admits (part B, the shape change, follows). This supersedes D-6914 and D-7873's scheme-less sentence (`user:secret@mirror.example.invalid/r` read `mirror.example.invalid`) for the settings view. `_upd_url_origin` is unchanged, so its own direct rows stand. Existing assertions changed to the new truth: `ccrc-settings-verb.test.ts`, the `it.each` rows `user:secret@mirror.example.invalid/r?token=x` (was `custom mirror.example.invalid`) and `tok@mirror.example.invalid:8080/r` (was `custom mirror.example.invalid:8080`) of the release-base describe; `ccrc-doctor-codex.test.ts`, the rows `W24-S6` (was `custom mirror.example`) and `W2-D7` (its scheme-less case `u:hunter2@mirror.example/r`, was `custom mirror.example`). New rows: the verb describe `a release base with no http(s) scheme shows custom alone` (three plants and a scheme-ful control) and doctor's `W2-D7923` rows (the same three plants). Mutants: removing the verb's caller gate reds the three verb plants and the two changed verb rows; removing doctor's gate reds the three doctor plants, `W24-S6` and `W2-D7`.
 
 | Number | Task | What it records |
 |---|---|---|
@@ -2333,7 +2334,7 @@ takes the next spare and is named in the wave-done.
 | D-7920 | 3 | `_set_check`'s `updates` arm masks `ccrc.env` once, as the first statement of one subshell holding all six resolver calls, not six one-line `( BOX_ENV_FILE="$BOX_ENV_FILE/." KEY="$v" _resolver )` forms, which census C8(c) refuses; same behaviour (coordinator ruling, option A) |
 | D-7921 | gate sweep | The D12 class `presence` is spelled `is-set` in code, because C7o (OA-C18 (a), #1371) reserves `presence` in TS for session presence |
 | D-7922 | gate sweep (`c6d9c83a4`) | The slice-limits row "the defaults it reads with are the template's own values" is rewritten from `toEqual(['24G'])`/`toEqual(['6G'])` to set equality over every literal read plus a non-empty check, with a CONTROL row; a departure from the global constraint that no existing consumer assertion is edited |
-| D-7923 | | Spare, unused. |
+| D-7923 | operator item 41 (fix round 1) | A scheme-less release base shows `custom` alone in the verb and doctor (part A); the envelope's shape follows (part B). Supersedes D-6914/D-7873's scheme-less sentence for the settings view. | built (part A); mutants measured |
 | D-7924 | | Spare, unused. |
 | D-7925 | | Spare, unused. |
 
@@ -2356,7 +2357,7 @@ the task that built it, or re-measured in Task 8. Commit SHAs are those after th
 
 ### Deviations: each one's use
 
-D-7906 to D-7922 are defined once, in the bullets of "Deviations found" above; the table there carries each one's task.
+D-7906 to D-7923 are defined once, in the bullets of "Deviations found" above; the table there carries each one's task.
 
 | Number | Built in | Used by | State |
 |---|---|---|---|
@@ -2377,7 +2378,8 @@ D-7906 to D-7922 are defined once, in the bullets of "Deviations found" above; t
 | D-7920 | Task 3 (`2606db945`, fix round 1) | `_set_check`'s `updates` arm, one masked subshell; C8(c) unedited | built |
 | D-7921 | gate sweep (the rename commit) | the class token `is-set` in the bash table, L0, the server parse, the card and the tests; the spec's name `presence` stays in prose | built |
 | D-7922 | gate sweep (the slice defaults commit) | the slice-limits default row as set equality over every literal read, plus a CONTROL row | built; both mutants measured below |
-| D-7923 to D-7925 | none | none | Spare, unused. |
+| D-7923 | operator item 41 | the verb's and doctor's scheme-less release base shown as `custom` alone (see Deviations found) | built; both mutants measured (part B, the envelope shape, follows) |
+| D-7924 to D-7925 | none | none | Spare, unused. |
 
 D19 (`CCRC_TESTBOX_URL` is `presence`) was built by Task 3, D21 (a server node's fleet-only families as one line each) by
 Task 6, and D22 (a refused row's `why` is a member of a closed set) by Tasks 3 (the 33 words, `BOX_SETTING_REFUSAL_WORDS`
@@ -2521,7 +2523,7 @@ Unchanged from the plan:
 
 Added by the build:
 - The rc 2 WARN from doctor's box-settings check when a library failed to load carries the generic plain-line remedy, not one for the library.
-- The L0 origin shape admits a schemeless host: a value with no scheme, such as a pasted token, shows as `custom <value>`. This is identical on the merge base, and wave 1's agreed design shows the host of a schemeless base on purpose (D-6914, D-7873), so closing it is the operator's decision (a console item); this wave does not change the origin shape or `_upd_url_origin` (review 1487). (The comment in `boxSettings.ts` that overclaimed this was corrected by the final review; the residual itself stays here.)
+- Part B of D-7923 follows: the envelope (`BOX_SETTING_ORIGIN_SHAPE` in bash and L0, the server rows and the table rows) will require the scheme, so a scheme-less `custom <host>` row reads as outside the envelope. Until it lands the L0 shape still admits a schemeless host, though the verb and doctor no longer write one.
 - The human form of `ccrc settings` cuts an unmeasured why at 480 while the JSON record cuts at 240.
 - V10's keepalive, usage and carry rows re-run the verb's own literal read, not each consumer's.
 - `rowOfV2` checks a refused why against the whole closed set, not the key's own words (final review).
