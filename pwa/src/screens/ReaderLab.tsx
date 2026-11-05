@@ -56,7 +56,8 @@ export function ReaderLab(p: { readonly load?: () => Promise<RunModule> }): Reac
         const r = await mod.runReaderLab(mod.defaultLabDeps({ stage: stage.current!, signal: ctl.signal }), (pr) => {
           if (!ctl.signal.aborted) setState({ s: 'running', p: pr });
         });
-        if (!ctl.signal.aborted) setState({ s: 'done', text: mod.labResultText(r, device), outcomes: r.outcomes });
+        if (ctl.signal.aborted) setState({ s: 'before' });
+        else setState({ s: 'done', text: mod.labResultText(r, device), outcomes: r.outcomes });
       } catch (e) {
         if (ctl.signal.aborted) {
           setState({ s: 'before' });

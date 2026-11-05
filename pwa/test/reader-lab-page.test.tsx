@@ -3,7 +3,9 @@
 // is selected, never copied; leaving the page stops the run.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { LAB_MOUNT_WAIT_MS, LAB_PROBE_NAMES, type LabProbeName, type LabProbeTally, type LabRunView } from '../../shared/readerLab';
 import { createApi } from '../src/lib/api';
+import * as realRun from '../src/readerLab/run';
 import { LAB_CHECKS } from '../src/readerLab/checks';
 import { LAB_TEXT } from '../src/readerLab/labText';
 import type { LabDeps, LabProgress, LabResult } from '../src/readerLab/run';
@@ -95,6 +97,39 @@ describe('the reader lab page (reader lab plan, Task 10)', () => {
     await waitFor(() => expect(g.handed).toHaveLength(1));
     view.unmount();
     expect(g.handed[0]!.signal.aborted).toBe(true);
+  });
+
+  it('Stop during the real run final close returns to Before after close resolves', async () => {
+    let releaseClose: () => void = () => undefined;
+    const closing = new Promise<void>((resolve) => { releaseClose = resolve; });
+    const close = vi.fn(() => closing);
+    const tally: LabProbeTally = { hits: 0, cookie: 0, upgrade: 0,
+      site: { 'same-origin': 0, 'same-site': 0, 'cross-site': 0, none: 0, absent: 0, other: 0 },
+      origin: { null: 0, absent: 0, present: 0 } };
+    const probes = Object.fromEntries(LAB_PROBE_NAMES.map((n) => [n, { ...tally, hits: n === 'popup-ran' ? 1 : 0 }])) as Record<LabProbeName, LabProbeTally>;
+    const view: LabRunView = { openedAt: 0, expiresAt: 600_000, counted: 0, ignored: 0, saturated: false, probes };
+    let clock = 0;
+    const mod: RunModule = { ...realRun, defaultLabDeps: ({ stage, signal }) => ({
+      stage, signal, origin: 'https://box.example', gapWindow: 'ready',
+      door: { open: async () => ({ nonce: 'AAAAAAAAAAAAAAAAAAAAAA' }), read: async () => view, close, probe: async () => undefined },
+      mountFrame: () => ({ loads: () => 1, remove: () => undefined }),
+      render: async () => ({ kind: 'not-rendered' }) as Awaited<ReturnType<LabDeps['render']>>,
+      mountReader: async () => { throw new Error('unexpected mount'); },
+      frame: async () => (clock += 16), now: () => clock,
+      sleep: (ms) => ms >= LAB_MOUNT_WAIT_MS ? new Promise<void>(() => undefined) : ((clock += ms), Promise.resolve()),
+      address: () => 'https://box.example',
+    }) };
+    render(<ReaderLab load={async () => mod} />);
+    fireEvent.click(screen.getByRole('button', { name: LAB_TEXT.start }));
+    await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+    expect(screen.getByText(/^9 of 9:/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: LAB_TEXT.stop }));
+    expect(screen.getByText(LAB_TEXT.stopping)).toBeInTheDocument();
+    releaseClose();
+    await waitFor(() => expect(screen.getByRole('button', { name: LAB_TEXT.start })).toBeInTheDocument());
+    expect(screen.getAllByText(LAB_TEXT.notRun)).toHaveLength(LAB_CHECKS.length);
+    expect(screen.queryByText(LAB_TEXT.stopping)).toBeNull();
+    expect(screen.queryByText(LAB_TEXT.result)).toBeNull();
   });
 
   it('a check decided by the current step reads running, not its partial outcome', async () => {
