@@ -48,14 +48,40 @@ try { hit('cookie-image'); } catch (e) {}
 setTimeout(function () { hit('cookie-ran'); }, 300);
 })();`;
 
-/** The frame CSP battery (M8.B1): the wall frame first requests its canary, the one URL its policy allows, then every
- *  channel to `<base><prefix><channel>`; the control frame, with no policy, the same channels under its own prefix. */
+/** The one channel that does not run in the battery: a dynamic import takes its nonce from the script that calls it, so
+ *  from the battery's nonce'd script it would reach what the reader frame's hash-only scripts cannot. It runs from its
+ *  own constant script, `LAB_IMPORT_SCRIPT`, which the wall policy allows by hash. */
+export const LAB_IMPORT_CHANNEL = 'import-dynamic';
+
+/** The window property the import script sets before it imports: the battery's sign that the script ran. */
+export const LAB_IMPORT_MARK = 'ccrcLabImportRan';
+
+/** The dynamic-import channel's script (the reader lab design, section 3.1; the lab's wall frame allows it by hash, as the
+ *  reader frame allows its own scripts). Constant text on one line each: its sha256 below is of exactly this text. It
+ *  reads the data block just before it, sets the mark, and imports `<base><prefix>import-dynamic`. It runs in both the
+ *  wall frame and the control frame, before the battery. */
+export const LAB_IMPORT_SCRIPT = [
+  '(function () {',
+  'var cfg = JSON.parse(document.currentScript.previousElementSibling.textContent);',
+  `window.${LAB_IMPORT_MARK} = true;`,
+  `import(cfg.base + cfg.prefix + '${LAB_IMPORT_CHANNEL}').catch(function () {});`,
+  '})();',
+].join('\n');
+
+/** The CSP hash source of `LAB_IMPORT_SCRIPT`, declared once. No run-time hashing: `crypto.subtle` needs a secure context
+ *  and a box over plain HTTP is not one. `reader-lab-frames.test.ts` hashes the shipped text and pins it equal. */
+export const LAB_IMPORT_SCRIPT_SHA256 = 'sha256-RUqyX54BLN90Rd98EvQDICTn0kVK5pAY31kNiLY5E2E=';
+
+/** The frame CSP battery (M8.B1): the wall frame first requests its canary, the one URL its policy allows, and only when
+ *  the import script ran before it (so a wall frame whose hash script never ran reads "canary missing", never "holds");
+ *  then every channel but the import to `<base><prefix><channel>`; the control frame, with no policy, the same channels
+ *  under its own prefix. */
 export const BATTERY_SCRIPT = `(function () {
 ${PRELUDE}
 ${LAB_BATTERY_PRELUDE_JS}
 var channels = ${LAB_BATTERY_CHANNELS_JS};
-if (cfg.canary === true) hit('csp-canary');
-Object.keys(channels).forEach(function (name) { try { channels[name](url(cfg.prefix + name)); } catch (e) {} });
+if (cfg.canary === true && window.${LAB_IMPORT_MARK} === true) hit('csp-canary');
+Object.keys(channels).forEach(function (name) { if (name === '${LAB_IMPORT_CHANNEL}') return; try { channels[name](url(cfg.prefix + name)); } catch (e) {} });
 })();`;
 
 /** No popup, no top navigation (E1, M8.B4), after the operator's tap: every target is a door URL answering 204. */
@@ -116,6 +142,6 @@ hit('strays-sent');
 
 /** Every frame script, by name: the tests and the scans walk it. */
 export const LAB_FRAME_SCRIPTS: Readonly<Record<string, string>> = {
-  ambient: AMBIENT_SCRIPT, cookie: COOKIE_SCRIPT, battery: BATTERY_SCRIPT, popup: POPUP_SCRIPT,
+  ambient: AMBIENT_SCRIPT, cookie: COOKIE_SCRIPT, import: LAB_IMPORT_SCRIPT, battery: BATTERY_SCRIPT, popup: POPUP_SCRIPT,
   selfNav: SELF_NAV_SCRIPT, busy: BUSY_SCRIPT, strays: STRAYS_SCRIPT,
 };

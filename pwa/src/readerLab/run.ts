@@ -307,8 +307,8 @@ export async function runReaderLab(deps: LabDeps, progress: (p: LabProgress) => 
     // 4. The battery: the control frame with no policy, then the wall frame under the library's.
     step = 4;
     say(LAB_TEXT.steps.battery);
-    await withFrame({ script: BATTERY_SCRIPT, config: { base, prefix: 'ctl-', canary: false } }, LAB_SETTLE_MS);
-    await withFrame({ script: BATTERY_SCRIPT, config: { base, prefix: 'csp-', canary: true }, wall: { canary: `${base}csp-canary` } }, LAB_SETTLE_MS);
+    await withFrame({ script: BATTERY_SCRIPT, config: { base, prefix: 'ctl-', canary: false }, importChannel: true }, LAB_SETTLE_MS);
+    await withFrame({ script: BATTERY_SCRIPT, config: { base, prefix: 'csp-', canary: true }, importChannel: true, wall: { canary: `${base}csp-canary` } }, LAB_SETTLE_MS);
     // 5. A frame navigating itself.
     step = 5;
     say(LAB_TEXT.steps.selfNav);

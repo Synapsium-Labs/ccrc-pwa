@@ -1,8 +1,10 @@
 // The reader lab's wall-frame policy (native Docs reader, the reader lab plan of 2026-11-03, Task 6, refinement (i); the
 // rich-docs spec's row M10.10). Ring L1: pure. The lab's wall frame runs its battery under the shared Markdown library's
-// own frame policy with exactly two sources added: the frame's script nonce in `script-src`, so the battery's own inline
-// script runs, and one image URL, the run's canary, in `img-src`, which the battery requests first as its sign that it
-// ran. Everything else is `frameCsp()` as the reader frame carries it, so the walls the lab measures are the reader's.
+// own frame policy with exactly three sources added: the frame's script nonce in `script-src`, so the battery's own inline
+// script runs; the sha256 of the lab's one other inline script, the dynamic-import channel's, in the same `script-src`
+// (so that channel runs from a hash-allowed script, as the reader's own scripts do, and carries no nonce); and one image
+// URL, the run's canary, in `img-src`, which the battery requests first as its sign that it ran. Everything else is
+// `frameCsp()` as the reader frame carries it, so the walls the lab measures are the reader's.
 // This file lives under `docs/reader/` because that is the one home of the library's `./frame` (M8.10).
 import { FRAME_MANIFEST, frameCsp } from '@synapsium-labs/docserver/frame';
 
@@ -11,13 +13,16 @@ export const READER_LIBRARY_BUILD: string = FRAME_MANIFEST.enhance.sha256.slice(
 
 /** One CSP nonce source. */
 const NONCE_SOURCE = /^'nonce-[A-Za-z0-9+/_-]+={0,2}'$/;
+/** One hash source: a sha256 of 32 bytes in base64. */
+const HASH_SOURCE = /^'sha256-[A-Za-z0-9+/]{43}='$/;
 /** One URL source: a scheme, a host and a path, with no character a policy splits on or quotes with. */
 const URL_SOURCE = /^https?:\/\/[^\s;,'"]+$/;
 
-/** The wall frame's policy. Throws a TypeError for a source that is not exactly one nonce or one URL: the lab builds
- *  both, so that is a defect. */
-export function labWallCsp(nonceSource: string, canary: string): string {
+/** The wall frame's policy. Throws a TypeError for a source that is not exactly one nonce, one sha256 or one URL: the lab
+ *  builds all three, so that is a defect. */
+export function labWallCsp(nonceSource: string, hashSource: string, canary: string): string {
   if (!NONCE_SOURCE.test(nonceSource)) throw new TypeError('labWallCsp: not one nonce source');
+  if (!HASH_SOURCE.test(hashSource)) throw new TypeError('labWallCsp: not one sha256 source');
   if (!URL_SOURCE.test(canary)) throw new TypeError('labWallCsp: not one URL source');
   let scripts = 0;
   let images = 0;
@@ -25,7 +30,7 @@ export function labWallCsp(nonceSource: string, canary: string): string {
     const name = d.split(/\s+/)[0];
     if (name === 'script-src') {
       scripts += 1;
-      return `${d} ${nonceSource}`;
+      return `${d} ${nonceSource} ${hashSource}`;
     }
     if (name === 'img-src') {
       images += 1;
