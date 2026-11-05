@@ -903,6 +903,7 @@ const sansTheFailure = (snap: Record<string, unknown>): Record<string, unknown> 
 
 it('locked recomputation rejects an old token after alias removal', () => {
   const c = makeChild(h);
+  plantTmux(h, { sessions: [`cc-${ALT}`] });   // the measured shape: a pane still in that tree. Nothing running, the row stops holding (#2294)
   const a = aliasRow(h, c);
   const tok = evalOf(h).token;
   expect(tok, 'the CONTROL: the audit minted a token before the alternate row existed').toMatch(HEX64);
@@ -924,6 +925,7 @@ it('locked recomputation rejects an old token after alias removal', () => {
 
 it('fresh final ownership remeasures alternate projection', () => {
   const c = makeChild(h);
+  plantTmux(h, { sessions: [`cc-${ALT}`] });   // the measured shape: a pane still in that tree. Nothing running, the row stops holding (#2294)
   const a = aliasRow(h, c);
   a.pointAt('outside');
   a.writeRow();
@@ -960,6 +962,7 @@ it('fresh final ownership remeasures alternate projection', () => {
 
 it('resumed final ownership remeasures alternate projection', () => {
   const c = makeChild(h);
+  plantTmux(h, { sessions: [`cc-${ALT}`] });   // the measured shape: a pane still in that tree. Nothing running, the row stops holding (#2294)
   const a = aliasRow(h, c);
   interrupted(c, 'worktree');
   expect(h.reg(CHILD_ID, 'reaping')).toBe('reclaim:worktree'); // MUTATION_RESUMED_PHASE
@@ -990,6 +993,7 @@ it('resumed final ownership remeasures alternate projection', () => {
 
 it('defer-expired does not bypass ambiguous alternate ownership', () => {
   const c = makeChild(h);
+  plantTmux(h, { sessions: [`cc-${ALT}`] });   // the measured shape: a pane still in that tree. Nothing running, the row stops holding (#2294)
   const a = aliasRow(h, c);
   const deferred = evalOf(h, { defer: 1 }).token;
   expect(deferred, 'the CONTROL: a deferred token, minted before the row appeared').toMatch(HEX64);
@@ -1009,9 +1013,10 @@ it('defer-expired does not bypass ambiguous alternate ownership', () => {
 }, 90_000);
 
 /** One liveness state of the alternate session, modelled as FIXTURE state only — production placement is
- *  handed no liveness. The token is minted before the row exists; the row, its alias removed, is identical in
- *  every state. */
-const livenessCase = (hh: PrHarness, plant: () => void, defer: 0 | 1): {
+ *  handed no liveness: a modelled pane never places the row. It only lets a row nothing runs for stop holding, its
+ *  pane positively gone AND its unit positively stopped (#2294), which the two `gone` cases below tell apart. The
+ *  token is minted before the row exists; the row, its alias removed, is identical in every state. */
+const livenessCase = (hh: PrHarness, plant: () => void, defer: 0 | 1, pre = ''): {
   a: AliasRow; tok: string; answer: ReturnType<typeof evalOf>;
 } => {
   const c = makeChild(hh);
@@ -1022,12 +1027,12 @@ const livenessCase = (hh: PrHarness, plant: () => void, defer: 0 | 1): {
   a.writeRow();
   a.removeAlias();
   plant();
-  return { a, tok, answer: evalOf(hh, { defer }) };
+  return { a, tok, answer: evalOf(hh, { defer, pre }) };
 };
 /** After the verb: the same preserved state, the same unmeasured placement answer at the same seam. */
-const livenessSettles = (hh: PrHarness, a: AliasRow, tok: string, answer: ReturnType<typeof evalOf>, defer: 0 | 1): void => {
+const livenessSettles = (hh: PrHarness, a: AliasRow, tok: string, answer: ReturnType<typeof evalOf>, defer: 0 | 1, pre = ''): void => {
   const before = a.snapshot();
-  const v = childReclaimVerb(hh, tok, defer ? { extra: '--defer-expired' } : {});
+  const v = childReclaimVerb(hh, tok, { pre, ...(defer ? { extra: '--defer-expired' } : {}) });
   expect.soft(sansTheFailure(a.snapshot()), 'the tree, branch, competing row, tmux model and unit/pane actions stand').toEqual(before);
   lockedUnmeasured(v, a.raw);
   expect.soft(answer.token).toBe('');
@@ -1041,11 +1046,26 @@ it('liveness independent: live alternate projection refuses', () => {
   expect(tmuxSessions(h), 'the alternate session is still up').toContain(`cc-${ALT}`);
 }, 90_000);
 
-it('liveness independent: gone alternate projection refuses', () => {
-  const { a, tok, answer } = livenessCase(h, () => plantTmux(h, { sessions: ['cc-unrelated'] }), 0);
+it('liveness independent: gone alternate projection whose unit runs refuses', () => {
+  const pre = `_svc_is_active() { [[ "$1" == *${ALT}* ]] && printf active || printf inactive; };`;
+  const { a, tok, answer } = livenessCase(h, () => plantTmux(h, { sessions: ['cc-unrelated'] }), 0, pre);
   expect(answer.verdict).toBe('unmeasured') // MUTATION_GONE_AUTHORITY
-  livenessSettles(h, a, tok, answer, 0);
+  livenessSettles(h, a, tok, answer, 0, pre);
   expect(tmuxSessions(h), 'the CONTROL: no session of the alternate row was modelled').not.toContain(`cc-${ALT}`);
+}, 90_000);
+
+it('a gone alternate projection nothing runs for stops holding, unplaced: the child reclaims, its tree pinned first (#2294)', () => {
+  // The way the path-identity rule was measured failing needs a session in the tree. With its pane positively gone,
+  // its unit positively stopped and no checkout under the child, the row's spelling is still placed nowhere: only
+  // `unres` is skipped. What the stopped session left in `<child>/server` is the child's tree, and its WIP pin
+  // commits it to the attic before the removal, as it does for any untracked file.
+  const { a, answer } = livenessCase(h, () => plantTmux(h, { sessions: ['cc-unrelated'] }), 0);
+  expect(answer.verdict, answer.detail).toBe('reclaimable');
+  const v = childReclaimVerb(h, answer.token);
+  expect(v.code, v.stdout + v.stderr).toBe(0);
+  expect(h.reg(ALT, 'workdir'), 'the row stands: it only stopped holding').toBe(a.raw);
+  const wip = (JSON.parse(v.stdout) as { wip: string | null }).wip;
+  expect(wip, 'the other session’s file is pinned').toMatch(/^[0-9a-f]{40}$/);
 }, 90_000);
 
 it('liveness independent: unknown alternate projection refuses', () => {
@@ -1170,6 +1190,7 @@ it('a re-pointed alias resolves complete outside and reclaims: the pre-existing 
   // behaves the same), left to a follow-up programme; a fix there turns this case red on purpose. The recovery is
   // the next case: purging the row.
   const c = makeChild(h);
+  plantTmux(h, { sessions: [`cc-${ALT}`] });
   const a = aliasRow(h, c);
   a.pointAt('child');
   a.writeRow();
@@ -1188,6 +1209,7 @@ it('a re-pointed alias resolves complete outside and reclaims: the pre-existing 
 
 it('removing the ambiguous alternate row restores ordinary behavior', () => {
   const c = makeChild(h);
+  plantTmux(h, { sessions: [`cc-${ALT}`] });
   const a = aliasRow(h, c);
   a.pointAt('child');
   a.writeRow();

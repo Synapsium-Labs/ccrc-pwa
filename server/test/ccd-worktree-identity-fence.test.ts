@@ -4,7 +4,9 @@
 // it may give after any later W3 task (`allowed`): today's word and only stricter ones. A retryable hold may become a
 // terminal refusal. A tail's `worktree-remove-failed` may become `containment-refuted`. A FRESH verb may stop earlier,
 // at its in-lock recompute's `probe-unmeasured`, before the kill. A row never releases: no token, no `reclaimed` or
-// `expired`, no rc 0 that clears. A tail row leaves its tree, its branch and its breadcrumb standing. The CONTROL
+// `expired`, no rc 0 that clears. The one release since is #2294's, of a gone row nothing runs for, with no checkout
+// under the child (`ccd-reclaim-gone-quiet.test.ts`), so the gone rows here keep a pane up. A tail row leaves its
+// tree, its branch and its breadcrumb standing. The CONTROL
 // cases pin today's PASS on a clean child through every caller, against the host's own mount table. A CONTROL that
 // reds after a later task is a narrowing on the clean layout, never a fence row to relax.
 // THESE ARE FENCES, NOT RED-FIRST TESTS. They were measured green on W2's head, and each is proven to bite by a
@@ -24,7 +26,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CHILD_BRANCH, CHILD_ID, childReclaimVerb, evalOf, makeChild, type Child } from './childReclaimFixture.js';
+import { CHILD_BRANCH, CHILD_ID, childReclaimVerb, evalOf, makeChild, plantTmux, type Child } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
 import { FAMILIES } from './containmentRefutedFamilies.js';
 import {
@@ -280,7 +282,12 @@ const FENCE: Row[] = [
       return X();
     } },
   { id: 'F8.L', caller: 'L', title: 'a gone row with no git record and no breadcrumb', today: 'unmeasured', allowed: UNMEASURED,
-    run: () => { makeChild(h); otherRow('demo-gone', path.join(h.home, 'worktrees', 'demo', 'never-was')); return L(); } },
+    run: () => {
+      makeChild(h);
+      otherRow('demo-gone', path.join(h.home, 'worktrees', 'demo', 'never-was'));
+      plantTmux(h, { sessions: ['cc-demo-gone'] });
+      return L();
+    } },
   { id: 'F8.O', caller: 'O', title: 'a gone row with no git record and no breadcrumb', today: '2', allowed: RC2,
     run: () => {
       const c = makeChild(h);
@@ -292,6 +299,7 @@ const FENCE: Row[] = [
       const c = makeChild(h);
       const gone = path.join(h.home, 'worktrees', 'demo', 'gone-tree');
       sibling(c.main, 'demo', 'demo-gone-tree', gone, 'ws/gone-tree');
+      plantTmux(h, { sessions: ['cc-demo-gone-tree'] });
       fs.rmSync(gone, { recursive: true, force: true });
       const placed = L();
       expect(placed.word, `the CONTROL: git's record places the gone row — ${placed.detail}`).toBe('reclaimable');

@@ -1207,6 +1207,8 @@ describe('a protected direct entry reaches the alternate-row placement proof (#2
     expect(standing['verdict'], `the CONTROL: through the standing alias the row is rooted inside — ${standing['detail']}`)
       .toBe('containment-unproven');
     a.removeAlias();
+    // The measured shape: a pane still in that tree. With nothing running, the row stops holding, unplaced (#2294).
+    fs.writeFileSync(path.join(h.home, 'tmux-sessions'), `cc-${ALT}\n`);
     return { tok, raw: a.raw };
   };
 
