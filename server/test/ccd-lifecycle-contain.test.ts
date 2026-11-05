@@ -185,7 +185,7 @@ describe('the meas key vocabulary is ONE list', () => {
   // records does not currently exist to re-state.
   const all = new Set<string>(LIFECYCLE_MEAS_KEYS);
 
-  it('every meas.<key> ccd writes is on the list, and the list is exactly 37', () => {
+  it('every meas.<key> ccd writes is on the list, and the list is exactly 38', () => {
     // Mutant: emit `meas.slug` at any call site -> this fails with
     // `an unlisted meas key: [ 'slug' ]`, and wave 4 drops it at ingest with
     // nothing saying so — the identical failure mode `home`/`pool`/`reason`
@@ -210,8 +210,12 @@ describe('the meas key vocabulary is ONE list', () => {
     // fixes the PR emitting it, so `reviveMeas` carries it instead of dropping it.
     // 36 -> 37 (delegation broker wave 5 PR3, D-7827, D-7980): `meas.startpoint`, the `ws-add --base` start point on the
     // create row; declared in the commit that first emits it.
-    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 37').toBe(37);
+    // 37 -> 38 (cleanup un-wedge R4, D-8002): `meas.witness`, a collect line's `moved-host` after a box move. THIS SCAN
+    // caught it in the PR's full CI run (the emitting commit's own gate did not run this suite: the gap the notes above
+    // record); declared in the fix that follows, before the merge.
+    expect.soft(all.size, 'LIFECYCLE_MEAS_KEYS drifted from the measured 38').toBe(38);
     expect.soft(all.has('startpoint'), 'the ws-add --base start point is a declared key').toBe(true);
+    expect.soft(all.has('witness'), 'the collector\'s moved-host word is a declared key').toBe(true);
     const used = new Set([...src.matchAll(/\bmeas\.([A-Za-z][A-Za-z0-9]*)\b/g)].map((m) => m[1]!));
     expect.soft(used.size, 'no meas key found at all — the scan is vacuous').toBeGreaterThan(10);
     expect.soft([...used].filter((k) => !all.has(k)).sort(), 'an unlisted meas key').toEqual([]);

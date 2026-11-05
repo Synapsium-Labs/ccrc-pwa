@@ -213,6 +213,8 @@ export function reviveMeas(v: unknown): LifecycleMeas | null {
     childRun: s(o, 'childRun'),
     // Delegation broker wave 5 PR3 (D-7827) — a child `create` row's `--base` start point (`LifecycleMeas.startpoint`).
     startpoint: s(o, 'startpoint'),
+    // Cleanup un-wedge R4 (D-8002) — a collection of a leaf released after a box move (`LifecycleMeas.witness`).
+    witness: s(o, 'witness'),
   };
 }
 
