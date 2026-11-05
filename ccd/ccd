@@ -8532,10 +8532,12 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # Still no --force: the tree can have changed since the check above, and a
     # locked worktree refuses either way. By here the session IS stopped, so say
     # that rather than repeat "nothing touched".
-    # The recovery has to work in the state it is printed in. `worktree prune`
-    # only drops records whose directory is MISSING, so it is named for exactly
-    # that case and not offered as a general remedy — the "directory is there
-    # but is not ours" case refuses above, before anything is torn down.
+    # The recovery has to work in the state it is printed in: unlock the
+    # record or clean the tree. No repository-wide `worktree prune` is offered
+    # (D-7999): it clears every gone worktree's record at once, the evidence
+    # the reclaim's rows rung reads, and for a gone, unlocked tree the removal
+    # above does not fail — the "directory is there but is not ours" case
+    # refuses above, before anything is torn down.
     git -C "$main" worktree remove "$workdir" \
       || { _lc_fail destroy "$id" "$lctx" worktree-remove-failed \
              "git refused to clear the worktree record for $workdir"
@@ -8945,8 +8947,9 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # (The stranger is never written to either way, now that both the read and the
   # rename are scoped to $main; what this guard refuses is renaming on behalf of
   # a workspace that no longer exists.) Recovery measured on git 2.43.0: the
-  # stale record makes `worktree add` refuse until `prune` clears it, and prune
-  # only drops records whose directory is missing — hence both, in that order.
+  # stale record makes `worktree add` refuse until it is cleared, so the advice
+  # clears that one record (`git worktree remove <path>`, D-7999; never a
+  # repository-wide prune) once the directory is gone, then adds — in that order.
   local wd_common main_common
   wd_common=$(_ws_common_dir "$workdir"); main_common=$(_ws_common_dir "$main")
   if [[ -z "$main_common" || "$wd_common" != "$main_common" ]]; then
@@ -13626,8 +13629,8 @@ _ws_reap_eval() {   # id -> 0 when reapable, else REAP_VERDICT names the refusal
       # `git worktree list` (the read `$children` came from) still names this
       # path; nothing has told git the checkout itself is gone. Checked
       # first, before either read below even has a directory to open, so the
-      # refusal names what actually happened — a stale registration, prune
-      # it — instead of the blanket "not $main's worktree any more" the
+      # refusal names what actually happened — a stale registration, remove
+      # that one record — instead of the blanket "not $main's worktree any more" the
       # ownership pair would otherwise report for a fact it cannot see.
       [[ -d "$cpath" ]] \
         || { _ws_refuse child-record-stale "git still records a worktree at $cpath but nothing is there — run: git -C $main worktree remove $cpath, then re-audit"; return 1; }
