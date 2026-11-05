@@ -342,7 +342,7 @@ describe('the workflow control verb is operator-only (D-5936)', () => {
 
 // Cleanup un-wedge, Task R3 (spec 2026-11-04 §5): a repository-wide `git worktree prune` deletes git's record of every
 // gone worktree of the repository at once, and ccd's cleanup reads those records, so no approval may rule one. The
-// hook's `fmatch` holds the same row (`GITWT`), held equal to this one over `fixtures/prune-deny/` by
+// hook's `pmatch` holds the same row (`GITWT`), held equal to this one over `fixtures/prune-deny/` by
 // `session-hook-approval-deny.test.ts`. A dry run deletes nothing and is not forbidden.
 describe('the prune row: git worktree prune is forbidden, a dry run and every other prune are not', () => {
   const PRUNE_DENY: string[] = JSON.parse(readFileSync(path.join(here, 'fixtures/prune-deny/must-deny.json'), 'utf8'));
@@ -372,6 +372,13 @@ describe('the prune row: git worktree prune is forbidden, a dry run and every ot
   });
   it('no must-allow command is matched by the row', () => {
     expect(PRUNE_ALLOW.filter((c) => whys(c).includes('git worktree prune'))).toEqual([]);
+  });
+  it('bounded wrapper and git paths reject a 64 KB run of (/ in under 250 ms', () => {
+    const p = FORBIDDEN_PATTERNS.find((x) => x.why === 'git worktree prune');
+    expect(p).toBeDefined();
+    const t0 = performance.now();
+    expect(p!.test(`worktree prune ${'(/'.repeat(32 * 1024)}`)).toBe(false);
+    expect(performance.now() - t0).toBeLessThan(250);
   });
   it('the row is linear: a 256 KB line naming worktree and prune in every unit is matched in under 250 ms', () => {
     const p = FORBIDDEN_PATTERNS.find((x) => x.why === 'git worktree prune');

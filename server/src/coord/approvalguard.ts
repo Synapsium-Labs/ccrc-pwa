@@ -201,28 +201,26 @@ const g = (re: string): RegExp => new RegExp(re, 'g');
  *  gone worktree of the repository at once, and ccd's cleanup reads those records. The hook's `pmatch` holds the same
  *  row (`GITPRE`, `GOPT`, `GITWT`, `GLAST`, `qscan`, `hdocs`, `qread`), held equal to this one over
  *  `server/test/fixtures/prune-deny/`. Read once the raw text names `prune` and `worktree` (their letters may be split by
- *  quotes, a backslash or a line continuation), and read quote-aware, as bash reads it. A heredoc operator counts only in code,
- *  never inside quotes or a comment (but inside a `$(` within double quotes); its whole delimiter word is read, quotes
- *  removed; a quoted heredoc's body is dropped and an unquoted one's is text but for its substitutions, unless a shell
- *  is named on the operator's line, which keeps the body as code; an unreadable delimiter, an unclosed heredoc or more
- *  than 16 operator lines read the whole command as code. A quoted span is one word of text, never a command boundary
- *  (its whitespace and separators become `_`, an empty one standing alone stays a word), but for a `$(…)` or a backtick
- *  inside double quotes, and the string a `bash -c` (or `sh`, `zsh`, `dash`, `ksh`) runs is read as code. Then it is
- *  split into simple commands on `;`, `&`, `|` and newlines, and a simple command is refused whose program, at its
- *  head or after `$(`, `(`, a backtick or `{`, a shell keyword, assignments and a few wrappers (`sudo`, `nice`,
- *  `timeout`, `bash -c` and the like), is `git`, bare or path-qualified, then git's global options, `worktree`, any
- *  flags and `prune`, unless git's own words after `prune` (cut at `#`, a backtick, `<` and `>`) hold no `$` and a dry
- *  run (`-n`, `--dry-run`) that no later `--no-dry-run` cancels. Every repetition is bounded or unambiguous. An accident
- *  guard: an assembled string, a script, an alias, `eval`, a `$VAR` program and `git gc` run past it. */
-const GIT_PRE = String.raw`(?:^|\$\(|[(\x60{])\s*(?:(?:then|do|else|elif|if|while|until|!)\s+){0,4}(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+){0,8}`
-  + String.raw`(?:(?:\S{0,256}/)?(?:sudo|env|command|exec|nohup|nice|time|timeout|bash|sh|zsh|dash)\s+(?:(?:-\S*|[A-Za-z_][A-Za-z0-9_]*=\S*|[0-9][0-9.]*[smhd]?)\s+){0,8}){0,4}`
+ *  quotes, a backslash or a line continuation). The plain/raw and quote-stripped readings decide first. A denial may
+ *  be relaxed only by a complete text-only proof: every prune mention must be in modeled quoted text or a completely
+ *  read heredoc body, with no live substitution mentioning prune. Comments, unsupported shell -c heads, indirect
+ *  heredoc-to-shell routes, complex substitutions in double quotes, CRLF and multiple heredocs on a line keep the
+ *  plain refusal. The quote reader is deliberately incomplete, not a shell parser. It reads a direct, single quoted
+ *  shell -c argument one level deep; unsupported forms fail closed rather than guessing. Escapes in an unquoted
+ *  heredoc are consumed before collecting live substitutions. GIT_PRE matches command heads, wrappers and assignments;
+ *  GIT_GLOBAL_OPT also reads quoted, substitution and backtick operands containing spaces. After prune, the last -n,
+ *  --dry-run or unique --no-d... word decides, but any $, <, > or backtick voids the exemption (nothing is evaluated).
+ *  An accident guard: assembled strings, scripts, aliases, eval, $VAR programs and git gc remain residuals. */
+/** A shell word may contain a complete substitution or quoted operand holding spaces (not evaluated). */
+const GIT_VALUE = String.raw`(?:\$\([^()\n]*\)|\x60[^\x60\n]*\x60|'[^']*'|"(?:[^"\\]|\\[\s\S])*"|\\[\s\S]|[^\s\x60$'"\\;|&]|\$(?!\())+`;
+const GIT_PRE = String.raw`(?:^|\$\(|[(\x60{])\s*(?:(?:then|do|else|elif|if|while|until|!)\s+){0,4}(?:[A-Za-z_][A-Za-z0-9_]*=(?:${GIT_VALUE})?\s+){0,8}`
+  + String.raw`(?:(?:\S{0,256}/)?(?:sudo|env|command|exec|nohup|nice|time|timeout|bash|sh|zsh|dash)\s+(?:(?:-[A-Za-z]*[oO]\s+${GIT_VALUE}|-\S*|[A-Za-z_][A-Za-z0-9_]*=(?:${GIT_VALUE})?|[0-9][0-9.]*[smhd]?)\s+){0,8}){0,4}`
   + String.raw`(?:\S{0,256}/)?git\s+`;
-const GIT_GLOBAL_OPT = String.raw`(?:-[Cc]\s+\S+|--(?:git-dir|work-tree|namespace|config-env|attr-source)(?:=\S*|\s+\S+)|--exec-path(?:=\S*)?`
+const GIT_GLOBAL_OPT = String.raw`(?:-[Cc]\s+${GIT_VALUE}|--(?:git-dir|work-tree|namespace|config-env|attr-source)(?:=(?:${GIT_VALUE})?|\s+${GIT_VALUE})|--exec-path(?:=(?:${GIT_VALUE})?)?`
   + String.raw`|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice)|-[pP])\s+`;
-/** Group 1 is git's own words after `prune`, cut at `#`, a backtick, `<` and `>`; a `$` among them voids a dry run. */
-const GIT_WORKTREE_PRUNE = new RegExp(`${GIT_PRE}(?:${GIT_GLOBAL_OPT}){0,8}worktree\\s+(?:-\\S+\\s+)*prune(?![\\w-])([^#\\x60<>]*)`);
-/** The last dry-run word among them: git reads the last of `-n`, `--dry-run` and `--no-dry-run`. */
-const GIT_DRY_LAST = /^[\s\S]*(?:^|\s)(-n|--dry-run|--no-dry-run)(?=$|[\s)])/;
+/** Git's own tail, cut only at a comment: expansions and redirections void any dry-run exemption. */
+const GIT_WORKTREE_PRUNE = new RegExp(`${GIT_PRE}(?:${GIT_GLOBAL_OPT}){0,8}worktree\\s+(?:-\\S+\\s+)*prune(?![\\w-])([^#]*)`);
+const GIT_DRY_LAST = /^[\s\S]*(?:^|\s)(-n|--dry-run|--no-d(?:r(?:y(?:-(?:r(?:u(?:n)?)?)?)?)?)?)(?=$|[\s)])/;
 const PRUNE_ANCHOR = /p['"\\$\n]*r['"\\$\n]*u['"\\$\n]*n['"\\$\n]*e/;
 const WORKTREE_ANCHOR = /w['"\\$\n]*o['"\\$\n]*r['"\\$\n]*k['"\\$\n]*t['"\\$\n]*r['"\\$\n]*e['"\\$\n]*e/;
 const QUOTED_SEP_G = /[\s;&|()<>`$'"\\]/g;
@@ -230,6 +228,8 @@ const DQ_SEP = /[\s;&|()<>'"\\]/;
 const SH_NAME = String.raw`(?:\S{0,256}/)?(?:ba|z|da|k)?sh`;
 const SH_ANY = /(?:^|[\s;&|(])(?:\S{0,256}\/)?(?:ba|z|da|k|s)?sh(?=$|[\s;&|)])/;
 const SH_C = new RegExp(String.raw`(?:^|[\s;&|(])${SH_NAME}(?:\s+-[A-Za-z]+){0,4}\s+-[A-Za-z]*c[A-Za-z]*\s+$`);
+const SH_C_HEAD = new RegExp(String.raw`(?:^|[\s;&|(])${SH_NAME}\s+[^\n;&|]*-[A-Za-z]*c[A-Za-z]*(?=$|\s)`);
+const SH_C_DIRECT = new RegExp(String.raw`(?:^|[\s;&|(])${SH_NAME}\s+-[A-Za-z]*c[A-Za-z]*\s+$`);
 const HEREDOC_OP = /(?<![<])<<(?<dash>-?)(?![<])[ \t]*(?<w>(?:'[^']*'|"(?:[^"\\]|\\[\s\S])*"|\\[\s\S]|[^\s;&|()<>'"\\])+)/;
 const HEREDOC_WORD = /^(?:'[A-Za-z0-9_.-]*'|"[A-Za-z0-9_.-]*"|\\[A-Za-z0-9_.-]|[A-Za-z0-9_.-])+$/;
 const QTOK = /\$'(?:[^'\\]|\\[\s\S])*'?|\$?"(?:[^"\\]|\\[\s\S])*"?|'[^']*'?|\\[\s\S]?|[^"'\\$]+|\$/g;
@@ -238,9 +238,9 @@ const qkind = (s: string): string => s.startsWith("$'") ? 'a' : s.startsWith('"'
   : s.startsWith("'") ? 's' : s.startsWith('\\') ? 'e' : 'p';
 type QuoteTok = { readonly o: number; readonly s: string; readonly k: string };
 const tokens = (t: string): QuoteTok[] => [...t.matchAll(QTOK)].map((m) => ({ o: m.index ?? 0, s: m[0], k: qkind(m[0]) }));
-/** An unquoted heredoc's line: text, but for its substitutions. */
-const textLine = (l: string): string =>
-  l.replace(/(\$\([^()\n]*\)|`[^`\n]*`)|[\s;&|()<>'"\\]/g, (_m, s: string | undefined) => s ?? '_');
+/** Only live substitutions survive an unquoted heredoc's text; consume escapes before looking for them. */
+const textLine = (l: string): string => [...l.matchAll(/\\[\s\S]|(\$\([^()\n]*\)|`[^`\n]*`)|[^\\$`]+|[$`]/g)]
+  .flatMap((m) => m[1] === undefined ? [] : [m[1]]).join(' ');
 /** A double-quoted span's content: text, but for its substitutions. */
 const dqContent = (c: string): string => c.replace(/(\$\([^()]*\)|`[^`]*`)|\\([\s\S])|([\s;&|()<>'"\\])/g,
   (_m, s: string | undefined, ch: string | undefined) =>
@@ -265,16 +265,18 @@ function quoteScan(l: string, q0: string): { q: string; h: RegExpExecArray | nul
 }
 /** The hook's `hdocs`: each heredoc's body dropped (quoted), read as text (unquoted) or kept (a shell on its line); the
  *  command as written when a delimiter is unreadable, a heredoc is unclosed, or more than 16 lines hold an operator. */
-function hereDocs(all: string): string {
-  if (!all.includes('<<')) return all;
+function hereDocs(all: string): { s: string; ok: boolean } {
+  if (!all.includes('<<')) return { s: all, ok: true };
   const ls = all.split('\n');
-  if (ls.filter((l) => HEREDOC_OP.test(l)).length > 16) return all;
-  let mode = 'code'; let delim = ''; let tabs = false; let q = ''; let bad = false;
+  if (ls.filter((l) => HEREDOC_OP.test(l)).length > 16) return { s: all, ok: false };
+  let mode = 'code'; let delim = ''; let tabs = false; let q = ''; let bad = false; let ok = true;
   const out = ls.map((l) => {
     if (mode === 'code') {
       const r = quoteScan(l, q);
       q = r.q;
       if (r.h === null) return l;
+      if (/\\$/.test(l) || [...l.matchAll(new RegExp(HEREDOC_OP.source, 'g'))].length > 1
+        || /(?:^|[\s;&|(])(?:source|\.)\s+/.test(l)) ok = false;
       const w = r.h.groups?.['w'] ?? '';
       if (!HEREDOC_WORD.test(w)) { bad = true; return l; }
       delim = w.replace(/['"\\]/g, ''); tabs = r.h.groups?.['dash'] === '-';
@@ -285,11 +287,12 @@ function hereDocs(all: string): string {
     if ((tabs ? l.replace(/^\t+/, '') : l) === delim) { mode = 'code'; return l; }
     return mode === 'fed' ? l : mode === 'text' ? textLine(l) : '';
   });
-  return bad || mode !== 'code' ? all : out.join('\n');
+  const s = bad || mode !== 'code' ? all : out.join('\n');
+  return { s, ok: ok && !bad && mode === 'code' && !/\r\n|\\\n|\|[^\S\n]*\n|\n[^\S\n]*\||}[\s]*\|/.test(s) };
 }
 /** The hook's `qread`: the command with every quoted span read as one word of text. */
-function quoteAware(t: string, depth: number): string {
-  const toks = tokens(hereDocs(t));
+function quoteAware(t: string, depth: number, proof = false): string {
+  const toks = tokens(hereDocs(t).s);
   const n = toks.length;
   return toks.map(({ s, k }, i) => {
     if (k === 'p') return s;
@@ -298,23 +301,54 @@ function quoteAware(t: string, depth: number): string {
       : k === 's' ? ((x: string) => (x.endsWith("'") ? x.slice(0, -1) : x))(s.slice(1))
       : ((x: string) => (x.endsWith('"') ? x.slice(0, -1) : x))((s.startsWith('$') ? s.slice(1) : s).slice(1));
     const prev = toks[i - 1];
-    if (depth > 0 && prev !== undefined && prev.k === 'p' && SH_C.test(prev.s)) return quoteAware(c, depth - 1);
+    if (depth > 0 && prev !== undefined && prev.k === 'p' && SH_C.test(prev.s)) return quoteAware(c, depth - 1, proof);
     if (c === '') {
       const next = toks[i + 1];
       return (prev === undefined || /\s$/.test(prev.s)) && (next === undefined || /^[\s;&|)]/.test(next.s)) ? '_' : '';
     }
-    return k === 'h' ? dqContent(c) : c.replace(QUOTED_SEP_G, '_');
+    return proof ? (k === 'h' ? textLine(c) : '_') : k === 'h' ? dqContent(c) : c.replace(QUOTED_SEP_G, '_');
   }).join('');
 }
-const runsWorktreePrune = (t: string): boolean => PRUNE_ANCHOR.test(t) && WORKTREE_ANCHOR.test(t)
-  && quoteAware(t, 1).split(/[\n;&|]/).some((s) => {
-    if (!s.includes('worktree')) return false;
-    const m = GIT_WORKTREE_PRUNE.exec(s);
-    if (m === null) return false;
-    const r = m[1] ?? '';
-    const f = GIT_DRY_LAST.exec(r)?.[1];
-    return r.includes('$') || f === undefined || f === '--no-dry-run';
+/** The quote reader may relax a plain denial only for a complete, modeled text-only mention. */
+function modeledQuotes(t: string): boolean {
+  if (/\r\n/.test(t)) return false;
+  const hd = hereDocs(t);
+  if (!hd.ok) return false;
+  const toks = tokens(hd.s);
+  return toks.every(({ s, k }, i) => {
+    if (k === 'p') {
+      if (/(?:^|[\s;&|(])#/.test(s)) return false;
+      if (!SH_C_HEAD.test(s)) return true;
+      const next = toks[i + 1]; const after = toks[i + 2];
+      return SH_C_DIRECT.test(s) && next !== undefined && (next.k === 's' || next.k === 'h')
+        && (after === undefined || (after.k === 'p' && /^(?:[^\S\n]*$|[^\S\n]*[\n;&|])/.test(after.s)))
+        && modeledQuotes(next.s.slice(1, -1));
+    }
+    if (k === 's') return /^'[^']*'$/.test(s);
+    if (k === 'a') return /^\$'(?:[^'\\]|\\[\s\S])*'$/.test(s);
+    if (k !== 'h') return true;
+    // Complete heredoc delimiter words have already been modeled; do not mistake their quotes for nested syntax.
+    const c = s.replace(new RegExp(HEREDOC_OP.source, 'g'), '<<_');
+    return /^\$?"(?:[^"\\]|\\[\s\S])*"$/.test(s) && !/\$\([^)]*[(']|`[^`]*[()']/.test(c);
   });
+}
+const pruneReading = (t: string): boolean => t.split(/[\n;&|]/).some((s) => {
+  if (!s.includes('prune') || !s.includes('worktree')) return false;
+  const m = GIT_WORKTREE_PRUNE.exec(s);
+  if (m === null) return false;
+  const r = pruneNorm(m[1] ?? '');
+  const f = GIT_DRY_LAST.exec(r)?.[1];
+  return /[$<>`]/.test(r) || f === undefined || f.startsWith('--no-d');
+});
+const pruneNorm = (t: string): string => t.replace(/\\\n/g, '').replace(/\$(?=['"])/g, '')
+  .replace(/\\([\s\S])/g, '$1').replace(/['"]/g, '');
+const runsWorktreePrune = (t: string): boolean => {
+  if (!t.split(/[;&|]/).some((s) => PRUNE_ANCHOR.test(s) && WORKTREE_ANCHOR.test(s))) return false;
+  // Plain/raw and quote-stripped readings decide first; quote parsing never grants a new unproved allow.
+  if (!pruneReading(t) && !t.replace(/\\\n/g, '').split(/[\n;&|]/).some((s) =>
+    PRUNE_ANCHOR.test(s) && WORKTREE_ANCHOR.test(s) && pruneReading(pruneNorm(s)))) return false;
+  return !modeledQuotes(t) || PRUNE_ANCHOR.test(quoteAware(t, 1, true)) || pruneReading(quoteAware(t, 1));
+};
 
 /** Every forbidden shape, matched anywhere in a Bash command's text (spec §6.5 "forbidden"). Each test is linear in
  *  the text's length (D-5299). */

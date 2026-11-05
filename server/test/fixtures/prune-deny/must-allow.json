@@ -29,6 +29,7 @@
   "printf '%s\\n' 'a; git worktree prune'",
   "echo '(git worktree prune)'",
   "git commit -m \"x\\n\\ngit worktree prune\\n\"",
+  "git commit -m \"x\n\ngit worktree prune\n\"",
   "git commit -F - <<'EOF'\nR3 notes\ngit worktree prune is refused\n| git worktree prune | refused |\nEOF",
   "cat <<'EOF' > notes.md\n`git worktree prune`\n$(git worktree prune)\nEOF",
   "cat <<EOF > notes.md\ngit worktree prune, as plain text\nEOF",
@@ -37,5 +38,8 @@
   "git commit -m \"$(cat <<'EOF'\nfeat(hook): refuse a repo-wide git worktree prune on every session (D-8001)\n\nCleanup un-wedge Task R3, step 2. A repository-wide `git worktree prune`\ndeletes git's record of every gone worktree at once, and ccd's cleanup\nreads those records, so one session's prune holds the cleanup of every\nlane on the box. `APPROVAL_FORBIDDEN_JQ` gains a `prune` row in `fmatch`\n(GITPRE, GOPT, GITWT, GDRY; `norm` now defined before `fmatch`), read in\nall three modes; both prefilters gain `*prune*`; the reason names the\nscoped `git -C <main> worktree remove <path>` and allows a dry run.\n\nAn accident guard, not a wall: an assembled string, a script file, an\nalias, `eval`, a `$VAR` program and `git gc` run past it.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nEOF\n)\"",
   "git commit -F msg.txt",
   "gh pr create --body-file body.md",
-  "git worktree prune --verbose --dry-run"
+  "git worktree prune --verbose --dry-run",
+  "cat > f.md <<EOF\n\\`git worktree prune\\`\nEOF",
+  "cat > f.md <<EOF\n\\$(git worktree prune)\nEOF",
+  "gh pr create --body \"$(cat <<EOF\n\\`git worktree prune\\` and \\$(git worktree prune)\nEOF\n)\""
 ]

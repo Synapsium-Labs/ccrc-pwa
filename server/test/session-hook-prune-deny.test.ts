@@ -185,41 +185,57 @@ describe('this PR\'s own body is not refused by the prune row', () => {
   }
 });
 
-// Review 1479, F10(e): the quote-aware reading must cost no more than the tip's reading did. jq's global match and `gsub`
-// grow faster than linearly on a quote-dense payload, and the test slice's CPU and memory caps move absolute times, so
-// both bounds compare programs run in this test, on one 64 KB quote-dense command naming `worktree` and `prune`. Deny
-// mode is held against a reference: this program with `pmatch` replaced by what the tip's row cost there (its `norm`
-// over the command, and again over `norm`'s own form, which the tip's deny mode also matched). Class mode, where the
-// rest of the program is cheap, is held against the hook's `norm` over the same command. Measured on the build box: the
-// tip (33e521e07) 9.95 s in deny mode and 2.5 s in class mode; this program 7.3 s and 0.5 s; `norm` alone 3.0 s.
-describe('the prune row\'s cost on a 64 KB quote-dense payload naming worktree and prune', () => {
-  const hookSrc = fs.readFileSync(HOOK, 'utf8');
-  const prog = (/^APPROVAL_FORBIDDEN_JQ='([^']*)'$/m.exec(hookSrc) ?? [])[1] ?? '';
-  const normDef = (/^def norm: .*$/m.exec(prog) ?? [])[0] ?? '';
-  const pmatchDef = (/^def pmatch: [\s\S]*?"prune\\tgit worktree prune";$/m.exec(prog) ?? [])[0] ?? '';
-  const reference = prog.replace(pmatchDef,
-    'def pmatch: select(test("prune") and ([norm, (norm | norm)] | length > 0)) | select(false) | "prune\\tgit worktree prune";');
-  const unit = 'a "b c" \'d\' \\e ';
-  const command = `git worktree list --porcelain; echo prune ${unit.repeat(Math.floor((64 * 1024) / unit.length))}`;
-  const input = JSON.stringify({ tool_name: 'Bash', tool_input: { command } });
-  const timed = (args: string[]): number => {
-    const t0 = process.hrtime.bigint();
-    const r = spawnSync('jq', args, { input, encoding: 'utf8', maxBuffer: 1 << 26, timeout: 120_000 });
-    expect(r.status, r.stderr).toBe(0);
-    return Number(process.hrtime.bigint() - t0) / 1e6;
-  };
-  const run = (p: string, m: string): string[] => ['-r', '--arg', 'q', "'", '--arg', 'mode', m, p];
-  it('deny mode is no slower than the tip\'s row; the row alone (class mode) costs at most 0.6x norm', () => {
-    expect(pmatchDef).not.toBe('');
-    expect(normDef).not.toBe('');
-    expect(reference).not.toBe(prog);
-    const normMs = timed(['-r', '--arg', 'q', "'", `${normDef} .tool_input.command | norm | length`]);
-    const classMs = timed(run(prog, 'class'));
-    // Two runs of each, interleaved, and the faster of each pair: a loaded box slows one run, rarely both.
-    const pairs = [0, 1].map(() => [timed(run(reference, 'deny')), timed(run(prog, 'deny'))]);
-    const referenceMs = Math.min(...pairs.map((p) => p[0] as number));
-    const denyMs = Math.min(...pairs.map((p) => p[1] as number));
-    expect(classMs, `class ${classMs} ms, norm ${normMs} ms`).toBeLessThan(0.6 * normMs);
-    expect(denyMs, `deny ${denyMs} ms, the tip's row ${referenceMs} ms`).toBeLessThan(referenceMs);
-  }, 300_000);
+// Review 1493, FD8/R3/R4: compare the actual original program, not a synthetic reference or the presence of pmatch.
+// CI's server checkout carries full history (as the tree-reading guard suites require). No hook is executed here:
+// both embedded jq programs receive JSON text. Each mode, shape and size is a single invocation (startup included),
+// using the faster of two interleaved measurements. The coordinator's FD8 ruling accepts fixed jq startup cost but
+// pins both historical cost and 64-to-128 KB scaling; it does not permit an amortized stream comparison.
+describe('the forbidden program\'s cost on quote-dense payloads naming worktree and prune', () => {
+  const extract = (src: string): string => (/^APPROVAL_FORBIDDEN_JQ='([^']*)'$/m.exec(src) ?? [])[1] ?? '';
+  const prog = extract(fs.readFileSync(HOOK, 'utf8'));
+  const old = spawnSync('git', ['show', '33e521e07e7cc8585edade3f5162fc3ee0781457:ccd/session-hook.sh'],
+    { cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', maxBuffer: 1 << 24 });
+  const reference = extract(old.stdout);
+  for (const [name, unit, quoted] of [['quotes', 'a "b c" \'d\' \\e ', false], ['dqsub', '$(x) `y` ', true]] as const) {
+    const timed = (p: string, mode: string, kb: number): number => {
+      const dense = unit.repeat(Math.floor((kb * 1024) / unit.length));
+      const command = `git worktree list --porcelain; echo prune ${quoted ? `"${dense}"` : dense}`;
+      const input = JSON.stringify({ tool_name: 'Bash', tool_input: { command } });
+      const t0 = process.hrtime.bigint();
+      const r = spawnSync('jq', ['-r', '--arg', 'q', "'", '--arg', 'mode', mode, p],
+        { input, encoding: 'utf8', maxBuffer: 1 << 26, timeout: 120_000 });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout.trim()).toBe('');
+      return Number(process.hrtime.bigint() - t0) / 1e6;
+    };
+    for (const mode of ['deny', 'class']) {
+      it(`${name}: ${mode} stays within the startup-adjusted 33e521e07 bound at 64 KB`, () => {
+        expect(old.status, old.stderr).toBe(0);
+        expect(reference).not.toBe('');
+        expect(prog).not.toBe('');
+        const pairs = [0, 1].map(() => [timed(reference, mode, 64), timed(prog, mode, 64)]);
+        const referenceMs = Math.min(...pairs.map((p) => p[0] as number));
+        const currentMs = Math.min(...pairs.map((p) => p[1] as number));
+        expect(currentMs, `${name}/${mode}: current ${currentMs} ms, original ${referenceMs} ms`)
+          .toBeLessThanOrEqual(Math.max(1.5 * referenceMs, referenceMs + 25));
+      }, 300_000);
+      it(`${name}: ${mode} linearity from 64 to 128 KB stays within the inherited-cost bound`, () => {
+        expect(old.status, old.stderr).toBe(0);
+        expect(reference).not.toBe('');
+        expect(prog).not.toBe('');
+        const pairs = [0, 1].map(() => [timed(reference, mode, 64), timed(prog, mode, 64),
+          timed(reference, mode, 128), timed(prog, mode, 128)]);
+        const minima = [0, 1, 2, 3].map((i) => Math.min(...pairs.map((p) => p[i] as number)));
+        const [referenceSmall, smallMs, referenceLarge, largeMs] = minima as [number, number, number, number];
+        const referenceRatio = referenceLarge / referenceSmall;
+        // The coordinator's follow-up rules inherited super-linearity separately: retain 2.5x if the original is
+        // below it; otherwise allow the original ratio plus the explicitly accepted 0.5 measurement margin.
+        const bound = referenceRatio > 2.5 ? referenceRatio + 0.5 : 2.5;
+        const currentRatio = largeMs / smallMs;
+        const measured = `${name}/${mode}: original ${referenceRatio}x, current ${currentRatio}x, bound ${bound}x; ms ${minima.join(', ')}`;
+        console.info(measured);
+        expect(currentRatio, measured).toBeLessThanOrEqual(bound);
+      }, 300_000);
+    }
+  }
 });
