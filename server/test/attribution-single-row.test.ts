@@ -26,9 +26,16 @@ function registryOf(ids: readonly string[]): FakeRegistry {
   return { files };
 }
 
-/** `readdir` answers `names` in addition to what the base listing holds: a listed name no file backs. */
+/** The listing both ways, `readdir` and `readdirMeasured`, answering `names` in addition to what the base listing
+ *  holds (a listed name no file backs). `readdirMeasured` is derived from `readdir` here, so a counting base logs it as a
+ *  listing, and an io spread from `localIO` cannot list the real disk through the inherited measured member. */
 const withListed = (io: FleetIO, ...extra: string[]): FleetIO => ({
-  ...io, readdir: async (dir) => { const n = await io.readdir(dir); return n === null ? null : [...n, ...extra]; },
+  ...io,
+  readdir: async (dir) => { const n = await io.readdir(dir); return n === null ? null : [...n, ...extra]; },
+  readdirMeasured: async (dir) => {
+    const n = await io.readdir(dir);
+    return n === null ? { ok: false, reason: 'unreadable' } : { ok: true, entries: [...n, ...extra] };
+  },
 });
 
 describe('characterization: attributionVerdict answers (console speed S2, step 0)', () => {
@@ -97,6 +104,22 @@ describe('characterization: attributionVerdict answers (console speed S2, step 0
     const v = await attributionVerdict(io, cfg, '../escape', SENDER_UUID, 'byUuid');
     expect(v.ok).toBe(false);
     expect(v.ok === false && v.error).toBe('unknown-sender');
+  });
+
+  it('a bad id whose registry directory cannot be listed -> registry-unmeasurable', async () => {
+    for (const reason of ['unreadable', 'absent'] as const) {
+      const io: FleetIO = { ...localIO, readdirMeasured: async () => ({ ok: false, reason }) };
+      const v = await attributionVerdict(io, cfg, '../escape', SENDER_UUID, 'byUuid');
+      expect(v.ok, reason).toBe(false);
+      expect(v.ok === false && v.error, reason).toBe('registry-unmeasurable');
+    }
+  });
+
+  it('a bad id costs one listing and no field read', async () => {
+    const counting = countingIO(registryOf([SENDER, OTHER]));
+    const io = withListed(counting.io, '../escape.uuid');
+    await attributionVerdict(io, cfg, '../escape', SENDER_UUID, 'byUuid');
+    expect(counting.requests.map((q) => q.op)).toEqual(['readdir']);
   });
 
   it('a stale uuid -> stale-uuid', async () => {

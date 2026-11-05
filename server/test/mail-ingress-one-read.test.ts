@@ -52,7 +52,7 @@ const BAD = '--actor';
 type Route = 'mail' | 'ack' | 'attribution';
 interface Fixture { seed: readonly string[]; io?: FleetIO; from: string; to?: string; staleUuid?: true }
 
-const unlistableIO: FleetIO = { ...localIO, readdir: async () => null };
+const unlistableIO: FleetIO = { ...localIO, readdir: async () => null, readdirMeasured: async () => ({ ok: false, reason: 'unreadable' }) };
 
 const FIXTURES: Readonly<Record<string, Fixture>> = {
   'sender present': { seed: [SENDER, RCPT], from: SENDER },
@@ -124,11 +124,13 @@ const post = (a: FastifyInstance, url: string, payload: Record<string, unknown>)
 
 interface Req { op: 'readdir' | 'readFileMeasured' | 'readFile'; path: string }
 
-/** `io` with every registry-directory listing and every file read logged in issue order. */
+/** `io` with every listing (plain or measured: both are one listing, logged as `readdir`) and every file read logged in
+ *  issue order. */
 function logged(io: FleetIO, log: Req[]): FleetIO {
   return {
     ...io,
     readdir: async (dir, ...rest) => { log.push({ op: 'readdir', path: dir }); return io.readdir(dir, ...rest); },
+    readdirMeasured: async (dir, ...rest) => { log.push({ op: 'readdir', path: dir }); return io.readdirMeasured(dir, ...rest); },
     readFileMeasured: async (p, ...rest) => { log.push({ op: 'readFileMeasured', path: p }); return io.readFileMeasured(p, ...rest); },
     readFile: async (p, ...rest) => { log.push({ op: 'readFile', path: p }); return io.readFile(p, ...rest); },
   };
@@ -216,8 +218,9 @@ describe('one read, one row: the attribution gate lists the registry once and re
 // read: that listing never goes through the registry module. So each ladder's
 // calls are pinned too, keyed on the parser (D-6114's scan/symbols.ts), never on
 // source text: one `readRegistryMeasured(`, no `readdir(`, no `readRegistry(` in each mail route; and in
-// `attributionVerdict` one `readSessionRecord(`, no `readRegistryMeasured(`, no `readRegistry(`, and exactly one
-// `readdir(`, the `bad-id` arm's listing (the only id `readSessionRecord` answers before any listing of its own).
+// `attributionVerdict` one `readSessionRecord(`, no `readRegistryMeasured(`, no `readRegistry(`, no plain `readdir(`, and
+// exactly one `readdirMeasured(`, the `bad-id` arm's listing (the only id `readSessionRecord` answers before any listing
+// of its own; the plain `readdir` call sites may only shrink, `fleetio-contract.test.ts`).
 const ROUTES = 'server/src/coord/routes.ts';
 const ATTRIBUTION = 'server/src/coord/attribution.ts';
 type Span = { start: number; end: number };
@@ -249,7 +252,8 @@ const holdsOneRow = (names: string[]): void => {
   expect(names.filter((n) => n === 'readSessionRecord'), 'one single-row read').toHaveLength(1);
   expect(names, 'the whole-registry read is back in this ladder').not.toContain('readRegistryMeasured');
   expect(names, 'the wrapper is back in this ladder').not.toContain('readRegistry');
-  expect(names.filter((n) => n === 'readdir'), 'a listing beside the row read, other than the bad-id arm\'s').toHaveLength(1);
+  expect(names, 'a plain listing is back in this ladder').not.toContain('readdir');
+  expect(names.filter((n) => n === 'readdirMeasured'), 'a listing beside the row read, other than the bad-id arm\'s').toHaveLength(1);
 };
 
 describe('one read, pinned on the parse: no ladder lists the registry beside its measured read (D-5863)', () => {
@@ -277,8 +281,9 @@ describe('one read, pinned on the parse: no ladder lists the registry beside its
     const span = f.calls.find((c) => c.name === 'readRegistryMeasured')!;
     const names = f.calls.filter((c) => c.start >= span.start && c.name !== null).map((c) => c.name!);
     expect(() => holdsOneRow(names)).toThrow(/single-row/);
-    expect(() => holdsOneRow(['readSessionRecord', 'readdir', 'readdir'])).toThrow(/bad-id arm/);
-    holdsOneRow(['readSessionRecord', 'readdir']);
+    expect(() => holdsOneRow(['readSessionRecord', 'readdirMeasured', 'readdirMeasured'])).toThrow(/bad-id arm/);
+    expect(() => holdsOneRow(['readSessionRecord', 'readdir', 'readdirMeasured'])).toThrow(/plain listing/);
+    holdsOneRow(['readSessionRecord', 'readdirMeasured']);
   });
 
   const calls = (): Record<string, string[]> =>

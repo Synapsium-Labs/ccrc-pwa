@@ -48,11 +48,16 @@ export async function attributionVerdict(
       // An id the registry refuses is never read as a row. One listing keeps the two answers this check always gave
       // for it: a file named `<id>.uuid` that IS listed is a row the registry will not hand out (unmeasurable), and
       // an unlisted one is no sender at all.
-      const names = await io.readdir(cfg.registryDir);
-      if (names === null) {
+      // The measured listing (the plain `io.readdir` call sites may only shrink, D-5969). Both of its failures, an
+      // absent registry directory and an unreadable one, answer what the plain read's `null` always did here:
+      // `registry-unmeasurable`, since neither proves anything about the sender. They are two words in the read and
+      // stay two, folded only because this check's answer for them is the same.
+      const listing = await io.readdirMeasured(cfg.registryDir);
+      if (!listing.ok) {
         return { ok: false, error: 'registry-unmeasurable',
           detail: 'the registry directory could not be listed — transient, not a fact about the sender' };
       }
+      const names = listing.entries;
       if (names.includes(`${whoId}.uuid`)) {
         return { ok: false, error: 'registry-unmeasurable',
           detail: `registry row for ${whoId} is listed but unreadable — transient, not a fact about the sender` };
