@@ -35,6 +35,7 @@ import { DocsScreen } from './screens/DocsScreen';
 import { HighlightMeasure } from './screens/HighlightMeasure';
 import { MailScreen } from './screens/MailScreen';
 import { RunsScreen } from './screens/RunsScreen';
+import { ReaderLab } from './screens/ReaderLab';
 import { SessionScreen } from './screens/SessionScreen';
 import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
 import { SettingsScreen } from './screens/settings/SettingsFrame';
@@ -165,6 +166,8 @@ export function App(): ReactNode {
     <DigestScreen day={digestDay} />
   ) : route === 'measure-highlighting' ? (
     <HighlightMeasure />
+  ) : route === 'reader-lab' ? (
+    <ReaderLab />
   ) : route === 'docs' ? (
     // NOT keyed: one mount spans one Docs visit (its listings, its auto-refresh set, its image queue), across every
     // page, ref and view the visit opens.

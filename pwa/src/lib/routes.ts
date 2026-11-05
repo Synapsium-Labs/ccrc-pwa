@@ -52,6 +52,9 @@ export const ROUTES: readonly Route[] = [
   // R19's measurement page (W5h-a; base spec 2026-10-01 section 7.8): under Settings so the palette offers it ("Go to
   // Settings › Measure highlighting") on a phone; its id is not `settings-…`, so the ladder renders the page itself.
   { id: 'measure-highlighting', pattern: /^\/settings\/measure-highlighting\/?$/, title: 'Measure highlighting', top: false, path: '/settings/measure-highlighting' },
+  // The reader lab (the reader lab plan of 2026-11-03, Task 10): beside R19's page and of its shape; the palette offers it
+  // as "Go to Settings › Reader lab". Its id is not `settings-…`, so the ladder renders the page itself.
+  { id: 'reader-lab', pattern: /^\/settings\/reader-lab\/?$/, title: 'Reader lab', top: false, path: '/settings/reader-lab' },
   // Any other id under Settings (D-5504): still Settings, which says "That section does not exist." above its index,
   // never the fallback. No path, so "Go to" leaves it out.
   { id: 'settings-section', pattern: /^\/settings\/([^/]+)\/?$/, title: 'Settings', top: false, path: null },

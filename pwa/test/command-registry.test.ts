@@ -74,6 +74,7 @@ describe('the base commands', () => {
 
   it('offers R19\'s measurement page under Settings, and the oracle\'s rule admits a planted page under a top route and none under no top route (W5h-a)', () => {
     expect(GO_TO.find((g) => g.id === 'go-measure-highlighting')?.title).toBe('Go to Settings › Measure highlighting');
+    expect(GO_TO.find((g) => g.id === 'go-reader-lab')?.title).toBe('Go to Settings › Reader lab');
     expect(underTop(ROUTES, '/settings/planted')).toBe(true);
     expect(underTop(ROUTES, '/planted/page')).toBe(false);
     expect(underTop(ROUTES.filter((r) => r.path !== '/settings'), '/settings/planted')).toBe(false);
@@ -123,6 +124,8 @@ describe("the ids are W2's door table's", () => {
       'go-settings-security',
       // Docs W5h-a Task 9: R19's measurement page, a page under Settings; its door is the palette's Go to.
       'go-measure-highlighting',
+      // The reader lab plan, Task 10: the reader lab, a page under Settings beside R19's; its door is the palette's Go to.
+      'go-reader-lab',
       // W2 Task S2d: the ⋯ menu's items on the base, and the terminal and PR caps (D-5466).
       'session-model', 'session-effort', 'open-history', 'session-docs', 'session-swap', 'session-archive',
       'session-restore', 'open-terminal', 'session-pr',
@@ -221,7 +224,7 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // T3e (D-6385) adds `toggle-inspector`; every other command ranks as it did, so the table is read without it, and
     // the new command's own place is pinned in the empty list below.
     // W5h-a reads the table without go-measure-highlighting the same way; its own rank row and place are pinned below.
-    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting');
+    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab');
     // Desktop-polish PL5a adds `go-waiting` (a top route's door); the table is read without it, and its own place is below.
     const rankedBefore = (q: string): string[] => ranked(q).filter((id) => id !== 'go-waiting');
     for (const [q, ids] of BEFORE) expect(rankedBefore(q), JSON.stringify(q)).toEqual(ids);
@@ -234,6 +237,9 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // W5h-a: the one command whose title holds "measure", placed right after Settings' five pages.
     expect(rankCommands('measure', baseCommands()).map((c) => c.id)).toEqual(['go-measure-highlighting']);
     expect(empty.indexOf('go-measure-highlighting'), 'after Settings\' five pages').toBe(empty.indexOf('go-settings-security') + 1);
+    // The reader lab plan, Task 10: the one command whose title holds "reader", placed right after R19's page.
+    expect(rankCommands('reader', baseCommands()).map((c) => c.id)).toEqual(['go-reader-lab']);
+    expect(empty.indexOf('go-reader-lab'), 'after R19\'s page').toBe(empty.indexOf('go-measure-highlighting') + 1);
   });
 
   // Go to Waiting on you (desktop-polish PL5a): its own case, away from the lines other waves add to the one above.

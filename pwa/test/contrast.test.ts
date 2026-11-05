@@ -1165,6 +1165,7 @@ describe('every stylesheet under src/ is audited', () => {
       'src/fleet/programmeBox.css', // a programme as a box in its project card (Task G2): the frame, the kicker, the hues
       'src/ledgers/ledgers.css',  // the Waiting on you list and the item view (desktop-polish PL5a, D-7712): pills and the programme band
       'src/inspector/inspector.css', // the inspector's shared sections (W2 Task S8, D-5474); layout only
+      'src/readerLab/readerLab.css', // the reader lab page (reader lab plan, Task 10): layout only, no colour of its own
       'src/screens/digest.css',   // the daily digest screen (D-5300)
       'src/screens/settings/settings.css', // Settings' frame (R2b1, D-5504); one ink since R2b2: `.settings-when`
       'src/session/chat.css',
