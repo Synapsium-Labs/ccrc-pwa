@@ -2,7 +2,9 @@ import path from 'node:path';
 import { wireHookAsk } from './fleet.js';
 import type { Deps } from './server.js';
 import { SHAPE_ONLY_MASKER } from './accounts/mask.js';
-import type { Bus, Notice } from './bus.js';
+import type { Bus, Notice, RowEventName } from './bus.js';
+import type { rowFactsOf } from './tickPlan.js';
+import { servedFromWatcher } from './servedRead.js';
 import { configDirFor, type CcrcConfig } from './config.js';
 import { measuredIdentity, readSessionRecord } from './registry.js';
 import { liveSessionStatus, readLiveStateMeasured } from './livestate.js';
@@ -25,6 +27,11 @@ const POLL_MS = 2000;
  *  frame because a browser cannot see pings, and it comes from a timer of the socket's own because a beat driven by the
  *  watcher's tick would stop exactly when the tick is slow. */
 export const BEAT_MS = 10_000;
+/** A stream given the watcher's facts re-resolves on a `row:<id>` event or the tailer's rotation; this is the third
+ *  trigger, the backstop for a change neither saw (console speed S2, spec D8). */
+export const STREAM_BACKSTOP_MS = 30_000;
+/** What a stream asks the watcher for: structural, so `sessionws.ts` never imports `watch.ts` (`FleetWatcher` satisfies it). */
+export interface RowFactsSource { currentRowFacts(id: string): ReturnType<typeof rowFactsOf> }
 const BACKLOG_N = 50;
 
 interface Resolved {
@@ -265,11 +272,20 @@ export class SessionStream implements FeedSubscriber {
      *  its absence is still not a mismatch — a client with no file is a real
      *  state, and it is a state with no offset to protect. */
     private readonly since?: { uuid: string; offset: number; file?: string | null },
+    /** The watcher's last tick (console speed S2). Given, `resolve()` takes the row, the pane verdict and the pid from
+     *  it while they are fresh, and the stream re-resolves on `row:<id>` and a backstop instead of every `POLL_MS`.
+     *  Omitted, the stream is exactly what it was. */
+    private readonly rows?: RowFactsSource,
   ) {
     const masker = deps.masker ?? SHAPE_ONLY_MASKER;
     this.send = (m) => sendRaw(masker.maskDeep(m));
     this.transcripts = new TranscriptResolver(deps.io);
+    this.rowEvent = `row:${id}`;
   }
+
+  private readonly rowEvent: RowEventName;
+  /** The watcher saw this row's record or pane verdict change: re-resolve now (the same `tick()` the poll ran). */
+  private readonly onRowChanged = (): void => { void this.tick(); };
 
   async start(): Promise<void> {
     this.bus.on('notice', this.onNotice);
@@ -362,7 +378,8 @@ export class SessionStream implements FeedSubscriber {
     // appeared-branch heal a stream that started life unable to prove the
     // session existed at all (`this.uuid` is still null on that first tick).
     if (r.ok || r.reason === 'unmeasurable') {
-      this.poll = setInterval(() => { void this.tick(); }, POLL_MS);
+      if (this.rows) this.bus.on(this.rowEvent, this.onRowChanged);
+      this.poll = setInterval(() => { void this.tick(); }, this.rows ? STREAM_BACKSTOP_MS : POLL_MS);
       this.poll.unref();
     } else {
       this.feed.leave(this);          // nothing will ever be asked of it again
@@ -615,6 +632,7 @@ export class SessionStream implements FeedSubscriber {
     this.bus.off('notice', this.onNotice);
     this.bus.off(`session:${this.id}`, this.onSessionMsg);
     this.bus.off(`answered:${this.id}`, this.onAnswered);
+    this.bus.off(this.rowEvent, this.onRowChanged);
     if (this.poll) clearInterval(this.poll);
     this.poll = null;
     if (this.beat) clearInterval(this.beat);
@@ -629,7 +647,9 @@ export class SessionStream implements FeedSubscriber {
   private async resolve(): Promise<Resolution> {
     // C0.3: one session's own row, not the whole registry — this stream only
     // ever asks about `this.id`, every 2 s, for as long as the socket is open.
-    const read = await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
+    const served = this.rows ? servedFromWatcher(this.rows.currentRowFacts(this.id), Date.now()) : null;
+    const facts = served?.serve ? served.value : null;
+    const read = facts ? { kind: 'found' as const, record: facts.record } : await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
     if (read.kind !== 'found') {
       // The registry ladder is `readSession`'s row arm (ARCH-48, #783); this door keeps only its terminal answers.
       // `unlistable` is the SAME whole-fleet collapse `RegistryRead`'s own `listed: false` types elsewhere in this
@@ -684,14 +704,14 @@ export class SessionStream implements FeedSubscriber {
     // D-5561: one `has-session`, as before — its verdict kept, because the
     // workflow reader must not read a substrate fault (`unknown`) as a process
     // that died mid-run. `status` folds it exactly as `hasSession` did.
-    const verdict = (await this.deps.tmux.sessionVerdict(this.id)).verdict;
+    const verdict = (facts ? facts.verdict : await this.deps.tmux.sessionVerdict(this.id)).verdict;
     let proc: Proc = verdict === 'gone' ? { kind: 'gone' } : { kind: 'unmeasured' };
     // D-309 (was D-B8-13): `unknown` deliberately reads as not-alive here, so the chat
     // header shows 'dead' during a substrate fault — display-only, and the
     // same deferred product decision as assembleFleet's (see fleet.ts).
     if (verdict === 'live') {
       turn = 'idle';
-      const pid = await this.deps.tmux.panePid(this.id);
+      const pid = facts ? facts.pid : await this.deps.tmux.panePid(this.id);
       if (pid === null) {
         // D-5275: mirror `assembleFleet` (D-5234). The pane is alive and its
         // pid read FAILED, which measured nothing about the session; the card
