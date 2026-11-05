@@ -3665,7 +3665,7 @@ differ, the spec's design governs and this section is corrected.
     entry identity, `$REG/<id>.workdirid` (PI1 B, PI2 L1, PI3 B). It is add-only: it may hold a row, and it never
     releases one.
   - The two remedies that say "re-point the link" contradict R31, and W3 rewords them (PI7).
-  - **Amended by the gone-row release (2026-11-05, #2294, D-8019).** "It may only refuse" has one exception, and it is not
+  - **Amended by the gone-row release (2026-11-05, #2294).** "It may only refuse" has one exception, and it is not
     settled: the operator rules on it on #2294, together with the un-wedge spec's D6. In the gone-row release (R31's
     amendment, spec §5.5) a gone pane and a stopped unit are required inputs, so there they do more than refuse: with no
     checkout under the child or a leaf, those two answers turn a hold into a removal. They never do so alone, they place

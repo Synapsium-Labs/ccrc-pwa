@@ -875,7 +875,7 @@ describe('the records state the release, the exception it makes and what it cost
 
   it('R94 and its as-built note both name the one place process state does more than refuse', () => {
     const r94 = between(contract, '- **R94 — R31 amended', '- **R95 —');
-    expect(r94).toContain(AMENDED);
+    expect(r94, 'this section of the contract carries no D-number: `collect-lane-prose.test.ts`').toContain('**Amended by the gone-row release (2026-11-05, #2294).**');
     expect(r94).toContain('turn a hold into a removal');
     expect(between(contract, '**R94 as built (process state may only refuse).**', '**R54 as W3 leaves it')).toContain('turn a hold into a removal');
   });
