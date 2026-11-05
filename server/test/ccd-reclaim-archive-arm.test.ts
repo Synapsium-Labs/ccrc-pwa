@@ -407,6 +407,60 @@ describe('the review’s probes, each pinning a guard no case reached (review 15
   }, 120_000);
 });
 
+describe('the record names an admin directory only when that directory names the tree back (review 1521, F1)', () => {
+  // `worktreeAdmin` is git's reading of the tree's `.git` file. When that file names ANOTHER worktree's admin
+  // directory, the name recorded would be that worktree's, and the arm would prove the wrong directory absent while
+  // the tree's own stands. The review's chain: the tree's `.git` crossed to another worktree's admin directory at
+  // archive time; then `git worktree repair` points it home, `git worktree move` takes it into the child, and the
+  // other worktree is removed. The archive records null for a crossed tree, so the arm places nothing.
+  it('a tree whose .git names another worktree’s admin directory at archive time records null, and the chain places nothing', () => {
+    const c = makeChild(h);
+    const id = 'demo-still-harbor';
+    h.sh(`${WS_ADD} CCD_WS_SLUG=still-harbor cmd_ws_add demo`);
+    const main = path.join(h.home, 'projects', 'demo');
+    const wt = path.join(h.home, 'worktrees', 'demo', 'still-harbor');
+    const own = h.git(wt, 'rev-parse', '--absolute-git-dir');
+    const other = path.join(h.home, 'worktrees', 'demo', 'other-tree');
+    h.git(main, 'worktree', 'add', '-b', 'other-tree', other);
+    const otherAdmin = h.git(other, 'rev-parse', '--absolute-git-dir');
+    fs.writeFileSync(path.join(wt, '.git'), `gitdir: ${otherAdmin}\n`);
+    expect(h.git(wt, 'rev-parse', '--absolute-git-dir'), 'the CONTROL: the tree’s .git names the other directory')
+      .toBe(otherAdmin);
+    expect(stanza(main, wt), 'the CONTROL: git’s record still names the tree').not.toBe('');
+    h.sh(`${ARCH} cmd_ws_archive --session ${id}`);
+    expect(h.reg(id, 'archived'), 'the CONTROL: the real archive stands').toMatch(/^[0-9]+$/);
+    const m = manifestOf(id);
+    expect(m['workdir'], 'the CONTROL: the archive recorded where the tree stood').toBe(wt);
+    expect(m['worktreeAdmin'], 'the directory git names does not name the tree back').toBeNull();
+    h.git(main, 'worktree', 'repair');
+    expect(h.git(wt, 'rev-parse', '--absolute-git-dir'), 'the CONTROL: repaired, the .git names its own').toBe(own);
+    const dest = path.join(c.wt, 'gm');
+    h.git(main, 'worktree', 'move', wt, dest);
+    h.git(main, 'worktree', 'remove', '--force', other);
+    expect(fs.existsSync(wt), 'the CONTROL: nothing at the row’s path').toBe(false);
+    expect(stanza(main, wt), 'the CONTROL: git records nothing at the old path').toBe('');
+    expect(fs.existsSync(otherAdmin), 'the CONTROL: the other admin directory is gone').toBe(false);
+    expect(fs.existsSync(own), 'the CONTROL: the tree’s own admin directory stands').toBe(true);
+    held(evalOf(h), id, 'a crossed tree moved into the child');
+    expect(rowsRung(c.wt).arch, 'the archive arm placed nothing').toBe('');
+    // CONTROL: the name an unchecked read recorded makes the arm place the row while its tree lives in the child.
+    writeManifest(id, { ...m, worktreeAdmin: path.basename(otherAdmin) });
+    expect(rowsRung(c.wt).arch, 'the CONTROL: the crossed name places the row').toBe('1');
+  }, 120_000);
+
+  it('a worktree written with relative paths names its admin directory back, and the record names it', () => {
+    makeChild(h);
+    h.git(path.join(h.home, 'projects', 'demo'), 'config', 'worktree.useRelativePaths', 'true');
+    const s = archivedSibling();
+    const back = fs.readFileSync(path.join(s.admin, 'gitdir'), 'utf8').trim();
+    expect(back.startsWith('/'), `the CONTROL: the back-link is relative (${back})`).toBe(false);
+    expect(manifestOf(s.id)['worktreeAdmin'], 'resolved from the admin directory, it names the tree')
+      .toBe(path.basename(s.admin));
+    gone(s);
+    placed(evalOf(h), 'the record places the gone row');
+  }, 120_000);
+});
+
 describe('the moved-tree hole, for an archive-placed row', () => {
   it('an archived sibling’s tree moved inside the child by a plain mv keeps the child: rung 9’s repository read at the ladder, _ws_reclaim_owned at the tail', () => {
     const c = makeChild(h);

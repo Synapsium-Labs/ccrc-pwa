@@ -11007,12 +11007,19 @@ sys.stdout.write(out)
   # common directory's `worktrees/` (git's own reading of the tree's `.git`
   # file), else null: `git worktree move`, or `mv` then `git worktree repair`,
   # keeps that name while the tree lives elsewhere, so the arm holds while it
-  # stands (fix round 1, F1).
-  local uuid wdreal=null adm=null gd _WS_RESOLVED='' _WS_RESOLVE_BASIS=''
-  gd=$(git -C "$workdir" rev-parse --path-format=absolute --git-dir 2>/dev/null) && [[ "${gd%/*}" == "$main_common/worktrees" ]] && adm=$(_json_str "${gd##*/}")
+  # stands (fix round 1, F1). Only a directory that names the tree BACK is
+  # recorded (review 1521, F1): its `gitdir` file, taken relative to the admin
+  # directory when git wrote it relative (`worktree.useRelativePaths`), must
+  # read `<dir>/.git` for a `<dir>` that resolves `complete`, through the
+  # arm's own resolver, to where the workdir resolved. A `.git` naming another
+  # worktree's admin directory would record THAT one's name, and the arm would
+  # prove the wrong directory absent while the tree's own stands, so a
+  # back-link that disagrees, or cannot be read, records null, which holds.
+  local uuid wdreal=null wr='' adm=null gd bl _WS_RESOLVED='' _WS_RESOLVE_BASIS=''
   uuid=$(_reg_read "$id" uuid) && [[ -n "$uuid" ]] \
     || { echo "manifest: could not read the uuid of '$id'" >&2; return 1; }
-  ! _ws_reclaim_resolve "$workdir" || [[ "$_WS_RESOLVE_BASIS" != complete || "$_WS_RESOLVED" == //* ]] || wdreal=$(_json_str "$_WS_RESOLVED")
+  ! _ws_reclaim_resolve "$workdir" || [[ "$_WS_RESOLVE_BASIS" != complete || "$_WS_RESOLVED" == //* ]] || { wr=$_WS_RESOLVED; wdreal=$(_json_str "$wr"); }
+  gd=$(git -C "$workdir" rev-parse --path-format=absolute --git-dir 2>/dev/null) && [[ "${gd%/*}" == "$main_common/worktrees" ]] && bl=$(cat -- "$gd/gitdir" 2>/dev/null) && [[ "$bl" == */.git ]] && { [[ "$bl" == /* ]] || bl="$gd/$bl"; } && _ws_reclaim_resolve "${bl%/.git}" && [[ -n "$wr" && "$_WS_RESOLVE_BASIS" == complete && "$_WS_RESOLVED" == "$wr" ]] && adm=$(_json_str "${gd##*/}")
   printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"prHistory":%s,"transcript":%s,"workdir":%s,"workdirReal":%s,"uuid":%s,"worktreeAdmin":%s}\n' \
     "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$wthead")" "$(_json_str "$base")" \
     "$( [[ -n "$tip" ]] && _json_str "$tip" || echo null)" \
