@@ -58,7 +58,7 @@ A released row keeps its `A` and `F` walk rules: only `unres` is skipped, and no
 - The trail is the audit document alone. The server reads no `quietRows` yet, so the key is visible where the document is printed, and the collector and the loose sweep, which print no such document, name no release. The fleet-level notice that follows is where the operator reads a held row.
 - A row dropped during the walk may still sit in a not-asked bucket it joined in the pass, such as a pending field. The next attempt finds no row.
 - The un-wedge spec (`2026-11-04-cleanup-unwedge-design.md`, D6) left narrowing ccd's hold for unrecorded rows open, pending a new proof and a ruling. #2294 asks for the narrowing, and this plan is that proof. The spec's archived-row arm and its naming of the hold are unaffected: a row this release cannot free stays in `unres`.
-- `ccd/ccd` grows by 93 net code lines, past the growth limit, under the waiver `D-8019-ccd-ccd.json`: the rung has one home.
+- `ccd/ccd` grows by 105 net code lines, past the growth limit, under the waiver `D-8019-ccd-ccd.json`: the rung has one home.
 
 ## Deviations found
 

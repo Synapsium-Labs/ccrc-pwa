@@ -1,7 +1,7 @@
 {
   "file": "ccd/ccd",
-  "maxDelta": 96,
+  "maxDelta": 108,
   "d": "D-8019",
-  "reason": "a gone row holds only a reclaim it could overlap: the rows rung's release (`_ws_reclaim_gone_quiet`, `_ws_reclaim_quiet_row`, `_ws_reclaim_no_checkout`), the re-ask of a row the walk found gone, and `_ws_unit_stopped`, moved out of `_ws_expire_presence`; the rung has one home in ccd, and bash measures and orders these steps, measured +93 net code lines against the merge-base",
+  "reason": "a gone row holds only a reclaim it could overlap: the rows rung's release (`_ws_reclaim_gone_quiet`, `_ws_reclaim_quiet_row`, `_ws_reclaim_no_checkout`), the re-ask of a row the walk found gone, the audit trail of each release (`_ws_quiet_rows_json`), and `_ws_unit_stopped`, moved out of `_ws_expire_presence`; the rung has one home in ccd, and bash measures and orders these steps, measured +105 net code lines against the merge-base",
   "added": "2026-11-05"
 }
