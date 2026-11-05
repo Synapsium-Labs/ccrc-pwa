@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePaneScopeBox, SWEEP, UP, HOUR, CCD_SERVER } from './paneScopeFixture.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 
 const { fx, proc, server, cgOf, unitName, scope, inert, STATE, seen, seenBusy, arm, armBusy, regRow, livePanes, run, stops, rows } = makePaneScopeBox();
 
@@ -1566,7 +1567,7 @@ describe('the busy arm: a busy scope of a provably dead session', () => {
       const to = src.findIndex((l, i) => i > from && l === '}');
       const script = ['_dr_pass() { echo "PASS $1: $2"; return 0; }', '_dr_warn() { echo "WARN $1: $2"; echo "  remedy: $3"; return 2; }',
         '_dr_skip() { echo "SKIP $1: $2"; return 3; }', src.slice(from, to + 1).join('\n'), '_check_scope-sweep'].join('\n');
-      const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: 30000,
+      const r = spawnSyncGroup('bash', ['-c', script], { encoding: 'utf8', timeout: 30000,
         env: { PATH: process.env['PATH'] ?? '', HOME: fx.home, LC_ALL: 'C', CCRC_SCOPE_SWEEP_STATE: STATE() } });
       return { stdout: r.stdout, stderr: r.stderr };
     };
