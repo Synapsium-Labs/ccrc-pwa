@@ -234,6 +234,15 @@ describe('served routes with a fresh watcher tick: the answer carries ageMs and 
     expect(measuredReads(r.requests).length, 'the route read the registry itself').toBeGreaterThan(0);
   });
 
+  it('GET /api/fleet: fresh stamps with no pools wire held are not served, and read as today', async () => {
+    const r = await rig();
+    vi.spyOn(r.w, 'currentPools').mockReturnValue(null);
+    r.requests.length = 0;
+    const body = await r.get('/api/fleet');
+    expect('ageMs' in body).toBe(false);
+    expect(measuredReads(r.requests).length, 'the route read the registry itself').toBeGreaterThan(0);
+  });
+
   it('GET /api/fleet: a remote link that is down, with no snapshot, is not served (fix round 1, F3)', async () => {
     const f = fixture();
     const c = countingIO();
