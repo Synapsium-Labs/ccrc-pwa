@@ -33398,7 +33398,9 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   if (( rc != 0 )); then
     _ws_reclaim_no_record "$mainreal" "$workdir" \
       || { _ws_reclaim_unmeasured "$(_ws_leaf_why_line "$_WS_NOREC_WHY")"; return 1; }
-    _ws_refuse no-worktree-record "$main has no worktree record for $workdir"; return 1
+    # WHY git has no record, read-only and capped (Task R4, spec §6.2): the word does not change.
+    _ws_reclaim_norecord_why "$workdir"
+    _ws_refuse no-worktree-record "$main has no worktree record for $workdir${_WS_NOREC_DIAG:+ — $_WS_NOREC_DIAG}"; return 1
   fi
   # THE RECORD MUST NOT BE THE MAIN CHECKOUT'S. A row naming `$main` itself
   # would pin the project's own checkout and hand the tail its branch's
@@ -34555,6 +34557,59 @@ _ws_reclaim_no_record() {   # common workdir -> 0 when NO admin entry of the rep
     _WS_NOREC_WHY="git's worktree list omitted a record that exists: it printed no record of $w, but ${e#gitdir:} names $w/.git"
     return 1
   done
+  return 0
+}
+
+_WS_NOREC_DIAG=''
+_ws_reclaim_norecord_why() {   # workdir -> rc 0 with _WS_NOREC_DIAG = ONE capped line saying why git keeps no record of
+  #                                 the standing tree at workdir: it has no .git; its .git names an admin directory
+  #                                 that is absent; that directory stands and records another path; or its .git could
+  #                                 not be read. '' when the admin directory records workdir itself (nothing to say)
+  # RUNG 8'S `no-worktree-record` SAYS WHY (cleanup un-wedge, Task R4; spec
+  # §6.2). The word does not change and stays TERMINAL: this only reads the
+  # tree's `.git` file and the admin directory it names, both as files
+  # (`_ws_leaf_read_small`), and runs NO git — never `git worktree repair`,
+  # which re-links a copied or moved tree and is the operator's act (spec D13).
+  # The refusal's detail already names the main checkout and the tree, so a
+  # sentence names at most one more path, and the line is capped
+  # (`_ws_leaf_why_line`): a path is a name a session chose.
+  local w="${1%/}" g ad line back rc s=''
+  _WS_NOREC_DIAG=''
+  g="$w/.git"
+  if [[ -L "$g" ]]; then
+    s="its .git could not be read: it is a link, which is never followed"
+  else
+    _ws_reclaim_absent "$g"; rc=$?
+    if (( rc == 0 )); then
+      s="the tree has no .git, so it is a worktree of no repository"
+    elif (( rc == 2 )); then
+      s="its .git could not be read (${_WS_ABSENT_WHY:-whether it stands was never measured})"
+    elif [[ ! -f "$g" ]]; then
+      s="its .git could not be read as a worktree's pointer: it is not a file"
+    elif ! _ws_leaf_read_small "$g" || [[ "$_WS_SMALL_NUL" == inner ]]; then
+      s="its .git could not be read"
+    else
+      line="${_WS_SMALL%%$'\n'*}"; line="${line%$'\r'}"
+      ad="${line#gitdir: }"
+      if [[ "$line" != "gitdir: "?* ]]; then
+        s="its .git could not be read as a worktree's pointer: it names no admin directory"
+      else
+        [[ "$ad" == /* ]] || ad="$w/$ad"
+        _ws_reclaim_absent "$ad"; rc=$?
+        if (( rc == 0 )); then
+          s="its .git names the admin directory $ad, which is absent: git keeps no record of the tree"
+        elif (( rc == 2 )) || [[ -L "$ad" || ! -d "$ad" ]] || ! _ws_leaf_read_small "$ad/gitdir" \
+             || [[ "$_WS_SMALL_NUL" == inner ]]; then
+          s="its .git names the admin directory $ad, which could not be read"
+        else
+          back="${_WS_SMALL%%$'\n'*}"; back="${back%$'\r'}"
+          [[ "$back" == "$g" ]] \
+            || s="its admin directory stands but records another path, so the tree was copied or moved: git -C <main> worktree repair <tree>, with the two named above, re-links it, and that is the operator's act, never ccd's"
+        fi
+      fi
+    fi
+  fi
+  [[ -z "$s" ]] || _WS_NOREC_DIAG=$(_ws_leaf_why_line "$s")
   return 0
 }
 

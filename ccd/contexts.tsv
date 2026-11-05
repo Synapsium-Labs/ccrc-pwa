@@ -572,6 +572,7 @@ _ws_reclaim_attic_extra	C4
 _ws_reclaim_log_of	C4
 _ws_reclaim_admin_entries	C4
 _ws_reclaim_no_record	C4
+_ws_reclaim_norecord_why	C4
 _ws_reclaim_reflog_ids	C4
 _ws_reclaim_idfile	C4
 _ws_reclaim_gitdir_walk	C4
