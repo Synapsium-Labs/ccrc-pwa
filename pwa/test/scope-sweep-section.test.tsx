@@ -178,6 +178,63 @@ describe('the write (D-7994)', () => {
     expect(radio(T.off).checked).toBe(true);
   });
 
+  it('an answer that brings another reading still says so, through the real read', async () => {
+    vi.spyOn(api, 'scopeSweep').mockResolvedValue(view({ busy: 'unmeasurable' }));
+    vi.spyOn(api, 'setScopeSweepBusy').mockResolvedValue(view());
+    render(<Polled />);
+    await waitFor(() => expect(radio(T.on)).toBeInTheDocument());
+    fireEvent.click(radio(T.on));
+    await waitFor(() => expect(radio(T.off).checked).toBe(true));
+    expect(screen.getByRole('status')).toHaveTextContent(T.unconfirmed);
+  });
+
+  it('only a reading after the answer\'s own retires its line', async () => {
+    vi.spyOn(api, 'setScopeSweepBusy').mockResolvedValue(view());
+    const { show } = owned(view({ busy: 'unmeasurable' }));
+    fireEvent.click(radio(T.on));
+    await flush();
+    show(view());   // the answer's own reading, as `settle` installs it
+    expect(screen.getByRole('status')).toHaveTextContent(T.unconfirmed);
+    show(view({ busy: 'set' }));
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('a new tap takes the line, and an old answer\'s reading coming round again does not bring it back', async () => {
+    const set = vi.spyOn(api, 'setScopeSweepBusy').mockResolvedValue(view());
+    const { show } = owned(view());
+    fireEvent.click(radio(T.on));
+    await flush();
+    expect(screen.getByRole('status')).toHaveTextContent(T.unconfirmed);
+    set.mockResolvedValue(view({ busy: 'set' }));
+    fireEvent.click(radio(T.on));
+    await flush();
+    expect(screen.queryByRole('status')).toBeNull();
+    show(view({ busy: 'set' }));
+    show(view());
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('an answer that cannot say what stands leaves it to the unmeasured note: no choice above to point at', async () => {
+    vi.spyOn(api, 'scopeSweep').mockResolvedValue(view());
+    vi.spyOn(api, 'setScopeSweepBusy').mockResolvedValue(view({ busy: 'unmeasurable' }));
+    render(<Polled />);
+    await waitFor(() => expect(radio(T.off).checked).toBe(true));
+    fireEvent.click(radio(T.on));
+    await waitFor(() => expect(screen.getByText(T.unmeasured)).toBeInTheDocument());
+    expect(radio(T.on).checked).toBe(false);
+    expect(radio(T.off).checked).toBe(false);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('an unmeasured answer to an unmeasured card says the same', async () => {
+    vi.spyOn(api, 'setScopeSweepBusy').mockResolvedValue(view({ busy: 'unmeasurable' }));
+    owned(view({ busy: 'unmeasurable' }));
+    fireEvent.click(radio(T.on));
+    await flush();
+    expect(screen.getByText(T.unmeasured)).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
   it('no answer within the bound says so, keeps the last reading, frees the choice and re-reads', async () => {
     vi.useFakeTimers();
     vi.spyOn(api, 'setScopeSweepBusy').mockReturnValue(deferred().promise);

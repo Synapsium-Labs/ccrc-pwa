@@ -8,6 +8,8 @@
 // registry checks neither; a tap holds the choice with its line on screen, `COORD_CONFIRM_MS` bounds that hold, and the
 // write's answer speaks only while no read has shown what it asked and no newer tap has replaced it. This door answers
 // with the view itself, read after the verb ran, so a good answer settles the card at once; any other answer re-reads.
+// An answer that reads the other choice says so, and that line outlives the reading it brought. One that cannot say what
+// stands has no choice to point at, so the unmeasured note speaks for it.
 // The sweep's own pause (`scope-sweep-paused`) is not in the view, so this card shows the switches, not a paused sweep.
 // Nothing branches on the viewer's screen or pointer.
 import { useEffect, useRef, useState } from 'react';
@@ -54,6 +56,8 @@ function ScopeSweepBody({ view, stale, poll }: { view: ScopeSweepView; stale: bo
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The tap whose write's answer may still speak. `asked` ends at the bound; this ends when a read shows the tap.
   const tap = useRef<{ readonly choice: ScopeSweepBusyChoice } | null>(null);
+  // The reading an answer's line is about: its arrival is not news, so only a reading after it retires the line.
+  const spokenOf = useRef<ScopeSweepBusyChoice | null>(null);
   const line = useResultLine();
   const reading = scopeSweepChecked(view);
 
@@ -64,7 +68,8 @@ function ScopeSweepBody({ view, stale, poll }: { view: ScopeSweepView; stale: bo
 
   // A NEW reading retires any line about the old one; only the reading a tap asked for settles that tap.
   useEffect(() => {
-    line.clear();
+    if (reading === null || reading !== spokenOf.current) line.clear();
+    spokenOf.current = null;
     if (reading === tap.current?.choice) tap.current = null;
     if (reading === asked) {
       clearTimer();
@@ -78,6 +83,7 @@ function ScopeSweepBody({ view, stale, poll }: { view: ScopeSweepView; stale: bo
   const choose = (choice: ScopeSweepBusyChoice): void => {
     if (asked !== null) return;   // the disabled fieldset stops a finger; this stops a second call
     line.clear();
+    spokenOf.current = null;
     setAsked(choice);
     const mine = { choice };
     tap.current = mine;
@@ -103,8 +109,12 @@ function ScopeSweepBody({ view, stale, poll }: { view: ScopeSweepView; stale: bo
           reload();
           return;
         }
-        if (scopeSweepChecked(reply) === choice) line.clear();
-        else line.say(T.unconfirmed);
+        const stands = scopeSweepChecked(reply);
+        if (stands === choice || stands === null) line.clear();
+        else {
+          spokenOf.current = stands;
+          line.say(T.unconfirmed);
+        }
         settle(reply);
       },
       (err: unknown) => {
