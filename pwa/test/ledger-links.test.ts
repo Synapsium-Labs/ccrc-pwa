@@ -118,6 +118,8 @@ describe('linkRuns: the D28 boundary, and paths the console would not open as wr
       'https://github.com/o/r/blob/main/docs/superpowers//specs/x.md',
       'https://b.example/docs/p/x/..%2fspecs/a.md', 'https://b.example/docs/p/x/..%5cspecs/a.md', 'https://b.example/docs/p/x/%252e%252e/specs/a.md',
       'https://claude.ai/public/x/..%2fartifacts/abc',
+      // Named as written and gone once `..` is popped: either reading is enough.
+      'https://x.example/artifact/..%2fy', 'https://b.example/docs/p/specs/..%2fa.md',
       // Still changing after four rounds counts as outside, whatever it would decode to.
       'https://a.example/%2525252541bc', 'https://claude.ai/%2525252561rtifact/abc',
     ]) {
