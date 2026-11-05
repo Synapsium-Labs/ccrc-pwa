@@ -8,7 +8,7 @@ This document defines no D-numbers. The plan allocates them. Every D-number cite
 - **Live figures** come from one read-only snapshot at 21:30 UTC on 2026-11-04, compared with one at 15:12 UTC the same day. **[M]** marks a measured figure, **[I]** an inferred one.
 - **Programmes and projects** are counts or "programme A". Run numbers are kept, so a builder can replay the figures.
 - **"Ruled spec"** means the 2026-10-20 document. Its rule numbers (R1 to R8), lane rows (E1 to E5) and decisions (G1 to G6) keep their meanings here.
-- **"Author's call"** marks a choice the author made and the operator has not ruled. All of them are listed in §4.2 as A1 to A34, for the operator to check.
+- **"Author's call"** marks a choice the author made. All of them are listed in §4.2 as A1 to A34. The operator accepted them as written on 2026-11-05.
 - **"Q1 to Q5"** are the five choices only the operator could settle, listed in §4.3 with their recommendations. The operator answered all five on 2026-11-05, each as recommended. The body is written to those answers and names the question wherever it rests on one.
 - **What the review already answered** is in §20.
 - **Other work is named by its plan's own ids:** S1, S2, C1 and C2 are tasks of `2026-11-04-console-speed.md`; PL10 and PL11 are tasks of `2026-11-01-programme-ledgers.md`.
@@ -108,9 +108,9 @@ These are the operator's, and they bind this design.
 - **Answers to Q1 to Q5 (2026-11-05).** The operator answered all five as recommended. §4.3 records each answer and its reasoning.
 - **G1 to G4 and G6 of the ruled spec (2026-10-21)** stand, except where §13 says a later ruling changes them. G5 (Abandon under Advanced) is overturned by the 2026-11-04 rulings. G6 is changed by the answer to Q1, which puts the Stuck band above the programmes.
 
-### 4.2 Author's calls, for the operator to check
+### 4.2 Author's calls, accepted by the operator
 
-Each is the author's recommendation, not a ruling. "Instead" names the option not taken. A16 to A34 came out of the review of rev 1 and settle gaps it found.
+The operator accepted all of these as written on 2026-11-05. Each began as the author's recommendation. "Instead" names the option not taken. A16 to A34 came out of the review of rev 1 and settle gaps it found.
 
 | # | Call | Why | Instead |
 |---:|---|---|---|
@@ -915,7 +915,7 @@ Unchanged: G1 (72 hours, warning at 48), G2, G3, G4's shadow, G6's 7-day Finishe
 
 Each wave is its own PR, or a short series. Each lands its characterisation pins first and rolls back by revert or by a switch. The plan allocates D-numbers and may split waves further.
 
-**Before anything:** the operator answered §4.3 on 2026-11-05. The operator checks §4.2, and the plan is written. Spec and mockups can start now. Any build touching the board or the runs read starts after #2290 and S2 land.
+**Before anything:** the operator answered §4.3 and accepted §4.2 on 2026-11-05. The operator reviews the mockups, and the plan is written. Any build touching the board or the runs read starts after #2290 and S2 land.
 
 | Wave | What | Gate | Key pins |
 |---|---|---|---|
