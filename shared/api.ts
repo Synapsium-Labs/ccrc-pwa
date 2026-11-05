@@ -11945,6 +11945,12 @@ export interface DelegationObservationHealth {
   uncensusedLeases?: number;
 }
 
+/** `uncensusedLeases`' one reader (review 1498 F5): absence permits and reads as 0, none counted (a lane whose last census reached every
+ *  unreleased lease's project, or an older server's block, whose 0 never says an older lane reached them all). */
+export function delegationUncensusedLeasesOf(health: Pick<DelegationObservationHealth, 'uncensusedLeases'>): number {
+  return typeof health.uncensusedLeases === 'number' ? health.uncensusedLeases : 0;
+}
+
 /** A torn delegation-journal tail the server healed: a crash or a failed append left a partial last line, the server kept those bytes
  *  under `quarantinePath` and cut the journal back to its last complete record. The spool still holds what the fragment carried. */
 export interface DelegationTailHeal {
