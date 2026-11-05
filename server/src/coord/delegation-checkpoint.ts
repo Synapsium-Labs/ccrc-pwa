@@ -2130,7 +2130,7 @@ export interface DelegationLeaseReleaseRequest {
 }
 
 /** What a lease door did: appended one record (`applied`), found its own request already applied (`unchanged`, nothing appended), or
- *  declined with the decision's word. */
+ *  declined with the decision's word (`refused`). A request the fold refuses is not an outcome: the door's promise rejects. */
 export type DelegationLeaseActOutcome =
   | { kind: 'applied'; leaseId: string; generation: number; state: DelegationCarrierState; sequence: number; applied: DelegationApplyOutcome }
   | { kind: 'unchanged'; leaseId: string; generation: number; state: DelegationCarrierState }
@@ -2954,8 +2954,11 @@ export class DelegationDurability {
   //
   // Each runs in `createLease`'s shape: on the queue, ready or refused `not-ready`, decided by the SAME L1 decision the replay fold uses
   // (`delegation-lease-state.ts`), one entry built from that decision, one `commitLocked`, answered with the record's sequence. A request
-  // whose act and `expectGeneration + 1` already wrote the lease's current generation is its own replay and answers `unchanged`,
-  // appending nothing (spec §5.12). None of them calls `randomUUID`.
+  // whose act and `expectGeneration + 1` already wrote the lease's current generation, with the same identity (a promote's run, a
+  // release's reason: D-8026, live only), is its own replay and answers `unchanged`, appending nothing (spec §5.12); one that differs falls
+  // through to the decision, which refuses it (`stale-generation`, or `lease-released` for a release). A request the fold calls bad (an
+  // `adopt` with no `terminalEvidenceAt`, a keep with no `expiresAt`, a `transfer` with no run) rejects the promise with `fold-refused`,
+  // as `createLease`'s does, and appends nothing: it is never a `refused` answer. None of them calls `randomUUID`.
 
   /** A lease transition: the table's row for `req.reason`, with the request's own `carrierRequired` (D-7806). */
   transitionLease(req: DelegationLeaseTransitionRequest): Promise<DelegationLeaseActOutcome> {
@@ -2963,7 +2966,8 @@ export class DelegationDurability {
       const unready = this.leaseActUnready();
       if (unready !== null) return unready;
       const { lease, carrier, lastAct } = this.builder.leaseActView(req.leaseId);
-      if (lease !== undefined && lease.generation === req.expectGeneration + 1 && lastAct === req.reason) {
+      if (lease !== undefined && lease.generation === req.expectGeneration + 1 && lastAct === req.reason
+        && (req.reason !== 'promote' || carrier?.promotedRun === req.runId)) {                 // D-8026: the same run's promote, only
         return { kind: 'unchanged', leaseId: req.leaseId, generation: lease.generation, state: delegationCarrierStateOf(lease, carrier) };
       }
       const d = decideLeaseTransition(lease, carrier, { reason: req.reason, expectGeneration: req.expectGeneration, carrierRequired: req.carrierRequired });
@@ -2987,8 +2991,9 @@ export class DelegationDurability {
       const unready = this.leaseActUnready();
       if (unready !== null) return unready;
       const { lease, carrier } = this.builder.leaseActView(req.leaseId);
-      // Nothing follows a release, so a released lease one generation past the request is this request's replay.
-      if (lease !== undefined && lease.releasedAt !== null && lease.generation === req.expectGeneration + 1) {
+      // Nothing follows a release, so a released lease one generation past the request, for the request's reason, is its replay.
+      if (lease !== undefined && lease.releasedAt !== null && lease.generation === req.expectGeneration + 1
+        && carrier?.releaseReason === req.releaseReason) {                                     // D-8026: the same reason's release, only
         return { kind: 'unchanged', leaseId: req.leaseId, generation: lease.generation, state: 'released' };
       }
       const d = decideLeaseRelease(lease, carrier, { expectGeneration: req.expectGeneration });

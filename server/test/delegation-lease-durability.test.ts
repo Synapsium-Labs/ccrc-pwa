@@ -426,6 +426,35 @@ describe('PR5b Task 5.5.3: the lease doors beside createLease', () => {
     expect(r.uuids.n).toBe(minted);
   });
 
+  it('D-8026: a same-run promote retry answers unchanged; another run\'s promote answers stale-generation, a release for another reason lease-released, and nothing is appended', async () => {
+    const { r, dur, x, r1 } = await leased();
+    await dur.transitionLease(transition({ leaseId: x, reason: 'carrier', expectGeneration: 0 }));
+    await dur.transitionLease(transition({ leaseId: x, reason: 'transfer', expectGeneration: 1, runId: 11 }));
+    const promote = (runId: number) => transition({ leaseId: x, reason: 'promote', expectGeneration: 2, runId, promotedSession: 'lane-a-demo-child' });
+    expect(await dur.transitionLease(promote(11))).toMatchObject({ kind: 'applied', generation: 3, state: 'promoted' });
+    const n = journalRecords(r.dir).length;
+    expect(await dur.transitionLease(promote(11)), 'the same run\'s retry is its replay').toEqual({ kind: 'unchanged', leaseId: x, generation: 3, state: 'promoted' });
+    expect(await dur.transitionLease(promote(12)), 'another run\'s promote is not').toMatchObject({ kind: 'refused', refusal: 'stale-generation' });
+    const release = (releaseReason: 'native-removed' | 'foreign') =>
+      ({ leaseId: r1, expectGeneration: 0, releaseReason, at: iso(D0 + DAY + 5 * HOUR), lastHeadSha: null, resolvesThrough: null });
+    expect(await dur.releaseLease(release('native-removed'))).toMatchObject({ kind: 'applied', generation: 1, state: 'released' });
+    const m = journalRecords(r.dir).length;
+    expect(m).toBe(n + 1);
+    expect(await dur.releaseLease(release('native-removed'))).toEqual({ kind: 'unchanged', leaseId: r1, generation: 1, state: 'released' });
+    // It falls through to `decideLeaseRelease`, whose word for a released lease is `lease-released` (its check precedes the generation's).
+    expect(await dur.releaseLease(release('foreign')), 'a release for another reason is not').toMatchObject({ kind: 'refused', refusal: 'lease-released' });
+    expect(journalRecords(r.dir).length, 'nothing appended').toBe(m);
+  });
+
+  it('review 1498 F7: a request the fold refuses (an adopt with no terminal-evidence instant) rejects the door\'s promise, and nothing is appended', async () => {
+    const { r, dur, x } = await leased();
+    await dur.transitionLease(transition({ leaseId: x, reason: 'carrier', expectGeneration: 0 }));
+    const n = journalRecords(r.dir).length;
+    await expect(dur.transitionLease({ ...adoptAt(x, 1, D0 + DAY + 3 * HOUR), terminalEvidenceAt: null })).rejects.toThrow(/terminal-evidence/);
+    expect(journalRecords(r.dir).length, 'nothing appended').toBe(n);
+    expect(leaseOf(dur, x)).toMatchObject({ generation: 1, disposition: 'ephemeral' });
+  });
+
   it('a door on an applier that is not ready answers not-ready and writes nothing', async () => {
     const { r, dur, x } = await leased();
     r.ctl.fault = 'checkpoint-rename:before';
