@@ -10151,9 +10151,10 @@ export const BOX_SETTING_VALUE_WORDS: Readonly<Partial<Record<BoxSettingName, re
 export const BOX_SETTINGS_TEXT_MAX = 480;
 export const BOX_SETTINGS_WHY_MAX = 240;
 /** The envelope of an `ok` value and origin (D-7909), byte-equal to `BOX_SETTING_VALUE_SHAPE` and `BOX_SETTING_ORIGIN_SHAPE` in `ccd/ccrc`,
- *  written in the subset bash's `[[ =~ ]]` and a `RegExp` without the `u` flag read alike. */
+ *  written in the subset bash's `[[ =~ ]]` and a `RegExp` without the `u` flag read alike. An origin's `custom <host>` arm requires an http or https
+ *  scheme (operator item 41, D-7923), so a scheme-less word cannot show. */
 export const BOX_SETTING_VALUE_SHAPE = '^[0123456789]{1,32}([KMGTPE]|[smhd]|%)?$';
-export const BOX_SETTING_ORIGIN_SHAPE = '^(default|custom|custom ([Hh][Tt][Tt][Pp][Ss]?://)?(\\[[0123456789ABCDEFabcdef:.]+\\]|[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~-]+)(:[0123456789]{1,5})?)$';
+export const BOX_SETTING_ORIGIN_SHAPE = '^(default|custom|custom ([Hh][Tt][Tt][Pp][Ss]?://)(\\[[0123456789ABCDEFabcdef:.]+\\]|[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~-]+)(:[0123456789]{1,5})?)$';
 
 /** One version-1 setting as the server serves it (D-7911, D-7912). The box's file carries `value` on a refused row too; the server drops it
  *  and the box's `why`, so no console is sent a refused value. `why` is display text only: nothing branches on it. */

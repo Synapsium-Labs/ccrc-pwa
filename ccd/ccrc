@@ -26298,9 +26298,9 @@ _set_df() {
 # ── the class table's tools (box settings wave 2, D-7909, D-7914) ──
 # The two envelope literals, byte-equal to L0's BOX_SETTING_VALUE_SHAPE and BOX_SETTING_ORIGIN_SHAPE, in the subset glibc ERE and a
 # JavaScript RegExp read alike (no `(?:`, no `\d`, no ranges). An `ok` value is at most 32 digits and one unit; an origin is `default`,
-# `custom`, or `custom` and a scheme-and-host with a non-empty host.
+# `custom`, or `custom` and an http or https scheme and a host (non-empty; the scheme is required, D-7923).
 BOX_SETTING_VALUE_SHAPE='^[0123456789]{1,32}([KMGTPE]|[smhd]|%)?$'
-BOX_SETTING_ORIGIN_SHAPE='^(default|custom|custom ([Hh][Tt][Tt][Pp][Ss]?://)?(\[[0123456789ABCDEFabcdef:.]+\]|[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~-]+)(:[0123456789]{1,5})?)$'
+BOX_SETTING_ORIGIN_SHAPE='^(default|custom|custom ([Hh][Tt][Tt][Pp][Ss]?://)(\[[0123456789ABCDEFabcdef:.]+\]|[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~-]+)(:[0123456789]{1,5})?)$'
 # `_set_libs` loads the two libraries a family's check lives in; SET_GR_WHY or SET_TB_WHY is the fixed sentence when one did not load.
 _set_libs() {
   SET_GR_WHY=""; SET_TB_WHY=""

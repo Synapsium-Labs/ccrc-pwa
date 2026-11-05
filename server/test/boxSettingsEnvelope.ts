@@ -20,11 +20,12 @@ export const VALUE_SHAPE_MISSES: readonly string[] = [
 /** Origin strings the shape admits, and the ones it does not (E1; `custom https://` and `custom ` are review L10's). */
 export const ORIGIN_SHAPE_FITS: readonly string[] = [
   'default', 'custom', 'custom https://mirror.example.invalid:8443', 'custom HTTPS://mirror.example.invalid', 'custom https://[::1]:8080',
-  'custom mirror.example.invalid',
 ];
 export const ORIGIN_SHAPE_MISSES: readonly string[] = [
   'custom h:abc', 'custom h^x', 'custom https://u:p@h', 'custom https://h/r', 'custom https://h?x', 'custom ftp://h', 'custom https://',
   'custom ', 'https://h', 'set',
+  // D-7923: a scheme-less host does not fit (it read as fitting before)
+  'custom mirror.example.invalid', 'custom mirror.example', 'custom zz-leak',
 ];
 
 /** The server's check of an `ok` value or origin, composed from L0 alone: under the cut, then the shape, or (for a value) the key's own words. */

@@ -62,7 +62,7 @@ const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isS
 const oneOf = <T extends string>(list: readonly T[], v: unknown): v is T => typeof v === 'string' && (list as readonly string[]).includes(v);
 
 /** The two shapes are envelopes that admit no path, query, fragment, userinfo or whitespace, and restate no setting's own check
- *  (that stays in the writer's owner); an origin's host is any host-shaped word, so a token pasted as a schemeless base can still show (Later). Compiled once, without `g`, so a test holds no state. */
+ *  (that stays in the writer's owner); an origin's `custom <host>` arm requires an http or https scheme, so a scheme-less word cannot show (operator item 41, D-7923). Compiled once, without `g`, so a test holds no state. */
 const VALUE_RE = new RegExp(BOX_SETTING_VALUE_SHAPE);
 const ORIGIN_RE = new RegExp(BOX_SETTING_ORIGIN_SHAPE);
 

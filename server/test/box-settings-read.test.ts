@@ -733,6 +733,8 @@ describe('version 1: still exactly as strict in the file, rewritten on the way o
     ['CCRC_BACKUP_KEEP', 'zz-leak secret'], ['CCRC_BACKUP_KEEP', '/etc/x'], ['CCRC_BACKUP_KEEP', '1'.repeat(33)],
     ['CCRC_RELEASE_BASE_URL', 'custom https://u:p@h'], ['CCRC_RELEASE_BASE_URL', 'custom https://tok:secret'],
     ['CCRC_RELEASE_BASE_URL', 'custom https://h/r'], ['CCRC_RELEASE_BASE_URL', 'custom https://'],
+    // D-7923: a scheme-less word is outside the envelope, so a version-1 row of that shape reads unmeasured and never forwards it
+    ['CCRC_RELEASE_BASE_URL', 'custom zz-leak'], ['CCRC_RELEASE_BASE_URL', 'custom mirror.example.invalid'],
   ];
   it.each(unfit)('a version-1 ok row outside the envelope is rewritten unmeasured: %s = %s', (key, value) => {
     const name = 'defaults';
@@ -890,7 +892,7 @@ describe('parseBoxSettings, version 2: rows that parse', () => {
     expect(parsed(d).settings.find((r) => r.key === key)).toMatchObject({ state: 'ok', value });
   });
 
-  it.each(['custom', 'custom https://mirror.example.invalid:8443', 'custom HTTPS://mirror.example.invalid', 'custom https://[::1]:8080', 'custom mirror.example.invalid'])(
+  it.each(['custom', 'custom https://mirror.example.invalid:8443', 'custom HTTPS://mirror.example.invalid', 'custom https://[::1]:8080'])(
     'the release base at %s parses', (value) => {
       const d = v2Base();
       setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value, from: 'file' });
@@ -935,6 +937,8 @@ describe('parseBoxSettings, version 2: rows that are null, each alone on the bas
     'an origin with a query': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom https://h?x', from: 'file' }),
     'an origin with a fragment': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom https://h#x', from: 'file' }),
     'an origin with a colon that is not a port': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom h:abc', from: 'file' }),
+    'an origin with no scheme (D-7923)': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom zz-leak', from: 'file' }),
+    'an origin that is a bare host (D-7923)': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom mirror.example.invalid', from: 'file' }),
     'an origin on another scheme': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom ftp://h', from: 'file' }),
     'an origin with no host': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom https://', from: 'file' }),
     'an origin with a trailing space': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom ', from: 'file' }),
