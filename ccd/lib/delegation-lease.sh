@@ -761,12 +761,19 @@ _dl_orphan_rung() {   # <main> <tree> -> rc 0 not held; rc 1 held (refusal `leas
     3) DL_WHY="the by-tree entry names lease $DL_OWNER, whose carrier is absent"; return 4 ;;
     *) DL_WHY="the by-tree entry names lease $DL_OWNER, whose carrier cannot be read: $DL_WHY"; return 4 ;;
   esac
-  DL_HOLD_LEASE="$DL_OWNER"; DL_HOLD_GEN="$DL_C_generation"; DL_HOLD_STATE="$DL_C_state"
+  # the three are read by the orphan ladder (_ws_orphan_ladder, ccd/lib/disk-retention.sh) for its token
+  # shellcheck disable=SC2034  # read by _ws_orphan_ladder in ccd/lib/disk-retention.sh
+  DL_HOLD_LEASE="$DL_OWNER"
+  # shellcheck disable=SC2034  # read by _ws_orphan_ladder in ccd/lib/disk-retention.sh
+  DL_HOLD_GEN="$DL_C_generation"
+  # shellcheck disable=SC2034  # read by _ws_orphan_ladder in ccd/lib/disk-retention.sh
+  DL_HOLD_STATE="$DL_C_state"
   _dl_in "$DL_C_state" "$__DL_HOLDING" || return 0   # the state first, then the path (D-7804): a reused record is not held
   _ws_dir_physical "$tree" || { DL_WHY="the tree $tree could not be resolved ($_WS_PHYS_WHY)"; return 4; }
   [[ "$DL_C_canonicalPath" == "$_WS_PHYS" ]] \
     || { DL_WHY="lease $DL_OWNER holds ($DL_C_state) the tree $DL_C_canonicalPath on this admin record, not $_WS_PHYS: it may be this tree, moved"; return 4; }
   [[ "$DL_C_state" != transferring ]] || { DL_WHY="lease $DL_OWNER holds this tree (transferring)"; return 1; }
+  # shellcheck disable=SC2154  # DL_C_expiresAt is set by _dl_carrier_read through printf -v
   [[ "$DL_C_expiresAt" =~ ^[1-9][0-9]{0,15}$ ]] || { DL_WHY="lease $DL_OWNER holds this tree ($DL_C_state) with no expiry"; return 4; }
   _now_s_to now
   [[ "$now" =~ ^[0-9]+$ ]] || { DL_WHY="the clock answered '$now', not a whole number of seconds, so the hold's expiry cannot be compared"; return 4; }
