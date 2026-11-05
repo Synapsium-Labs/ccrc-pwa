@@ -5717,7 +5717,7 @@ These measurements ran in the foreground through the test runner against the fin
 | Server reader-lab vocabulary/runs/routes and auth-gate | 4 | 303 | 0 | 0 | 3.945 s |
 | Server single-definition, rings and census-w7 | 33 | 1,199 | 0 | 0 | 32.879 s |
 
-The PWA run retains the existing Vite native-config compatibility warning and Vitest experimental-type-testing warning; zero test failures does not mean pristine output. The fetched documentation-guard baseline is `origin/main` at `426accca5b669f9703c111aa23d0c41ac75075ca`, with no merge. Tracked-only deviation checks run after the local commit defines D-8033. Exact-tip CI, the CodeQL check itself, and alert states remain publication gates; the worker does not dismiss alerts.
+The PWA run retains the existing Vite native-config compatibility warning and Vitest experimental-type-testing warning; zero test failures does not mean pristine output. The fetched documentation-guard baseline is `origin/main` at `426accca5b669f9703c111aa23d0c41ac75075ca`, with no merge. After local commit `6d5b3219c` defined D-8033 in the same commit as its production use, the tracked documentation guards passed: deviation-refs, dtbd, citations, anchors and docs-parity, five files and 116 tests, zero failures/skips, 13.475 s. Exact-tip CI, the CodeQL check itself, and alert states remain publication gates; the worker does not dismiss alerts.
 
 ### Carried, not fixed
 
