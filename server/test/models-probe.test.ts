@@ -978,6 +978,87 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
     }
   });
 
+  // `--check` (accounts plan Task A24, D-8016): the same run, with an exit status that says how far it got. Without
+  // the flag each of these is the exit 1 the rest of this file pins.
+  describe('`--check`: did a request go, and what came back', () => {
+    const answered = (body: string): void => {
+      const f = path.join(home, 'answer');
+      fs.writeFileSync(f, body);
+      pr = probeRuntime(home, f);
+      fs.writeFileSync(py, pr.python, { mode: 0o755 });
+    };
+    const check = (extra: NodeJS.ProcessEnv = {}): Result =>
+      run(['codex-a', 'codex', '--check'], { CHATGPT_TOKEN_DIR: authDir(), CCRC_CODEX_PYTHON: py, CCRC_MODELS_AUTH_LIB: lib, ...extra });
+
+    it('0 for a catalogue, which it writes as any run does', () => {
+      signIn();
+      expect(check().code).toBe(0);
+      expect((catalogueAt('codex-a') as { models: unknown[] }).models).toHaveLength(9);
+    });
+
+    it('3 for a credential refused before any request: absent, expired, incomplete, unreadable', () => {
+      const plants: Array<[string, () => void]> = [
+        ['absent', () => { fs.writeFileSync(path.join(authDir(), 'auth.json'), '{}'); }],
+        ['expired', () => { signIn({ expiresIn: -60 }); }],
+        ['incomplete', () => { fs.writeFileSync(path.join(authDir(), 'auth.json'), JSON.stringify({ device_code_requested_at: 1 })); }],
+        ['unreadable', () => { fs.writeFileSync(path.join(authDir(), 'auth.json'), 'not json'); }],
+      ];
+      for (const [name, plant] of plants) {
+        plant();
+        expect(check().code, name).toBe(3);
+        expect(codex().code, `${name}, without the flag`).toBe(1);
+      }
+      expect(probeRuntimeCalls(pr.rec).flatMap((c) => c.requests), 'a request was made').toEqual([]);
+    });
+
+    it('3 for a status that bars the credential, and no request', async () => {
+      await recordRefusal('invalid_grant', 'needs-signin');
+      expect(check().code).toBe(3);
+      expect(probeRuntimeCalls(pr.rec).flatMap((c) => c.requests), 'a request was made').toEqual([]);
+    });
+
+    it('1 for a box that cannot run the check: it says nothing of the credential', () => {
+      signIn();
+      expect(check({ CCRC_CODEX_PYTHON: '' }).code).toBe(1);
+      expect(check({ CCRC_MODELS_AUTH_LIB: '' }).code).toBe(1);
+      expect(check({ CHATGPT_TOKEN_DIR: '' }).code).toBe(1);
+      expect(probeArgv0(pr.rec), 'an interpreter ran').toEqual([]);
+    });
+
+    it('4 for a request that got no answer, its traceback still on stderr', () => {
+      signIn();
+      answered('{}');
+      fs.rmSync(path.join(home, 'answer'));
+      const r = check();
+      expect(r.code).toBe(4);
+      expect(r.stderr).toContain('FileNotFoundError');
+      expect(probeRuntimeCalls(pr.rec).flatMap((c) => c.requests)).toHaveLength(1);
+      expect(codex().code, 'without the flag').toBe(1);
+    });
+
+    it('5 for an answer the normaliser refuses, undecodable bytes included', () => {
+      signIn();
+      answered('{"not":"a catalogue"}');
+      expect(check().code).toBe(5);
+      expect(codex().code, 'without the flag').toBe(1);
+      fs.writeFileSync(path.join(home, 'answer'), Buffer.from([0xff, 0xfe, 0x20]));
+      expect(check().code).toBe(5);
+    });
+
+    it('through the seam a missing file is 4 and a bad body 5, as on the arm', () => {
+      expect(check({ CCRC_MODELS_PROBE_FIXTURE: path.join(home, 'no-such-answer') }).code).toBe(4);
+      const bad = path.join(home, 'bad-answer');
+      fs.writeFileSync(bad, '{}');
+      expect(check({ CCRC_MODELS_PROBE_FIXTURE: bad }).code).toBe(5);
+    });
+
+    it('is the codex arm\'s alone', () => {
+      const r = run(['router', 'openrouter', '--check']);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain('--check is the codex arm');
+    });
+  });
+
   it('the codex-lane arm spells no default token directory and no PATH-derived interpreter', () => {
     const body = extractFn('_fetch_codex_lane');
     // Booleans, never `not.toMatch(body)`: a failure prints its subject.

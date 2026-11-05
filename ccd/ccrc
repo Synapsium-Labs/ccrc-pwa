@@ -2520,8 +2520,12 @@ already running).
             than signs in; pass --method login for a sign-in lane.
             auth-start|auth-code|auth-cancel --id --attempt run a sign-in
             detached, the code arriving once on stdin; "set --method
-            setup-token|login --attempt" installs what it captured, and
-            "credential --sign-out" signs a lane out. Run it with no
+            setup-token|login|openai-login --attempt" installs what it
+            captured, and "credential --sign-out" signs a lane out.
+            "add --provider openai" makes a ChatGPT (Codex) lane, and
+            "remove" deletes its sign-in folder under
+            .local/share/ccrc/codex/, whoever made it, unless
+            --keep-codex-auth or --keep-credential keeps it. Run it with no
             subcommand to see which subcommands this build has
   memory    census every (home, project) memory pair on this box: one line
             per pair naming its home, project slug and state — converged or
@@ -9542,7 +9546,7 @@ _acct_remove_gate() {   # <id> <remove|discard> <rehome-sleeping 0|1> — refuse
 _acct_remove() {
   local id="" v="" flag="" item="" sid="" field="" f="" model="" stands="" modelfiles="" lane_dir="" tier="" unit="" port="" q=0 usage_note=""
   local keepcred=0 seen_id=0 seen_keep=0 was_placeable=0 rc=0 already=0 mode=remove dry=0 rehome_sleeping=0
-  local keep_codex=0 delete_codex=0 codex_auth=""
+  local keep_codex=0 delete_codex=0 codex_auth="" codex_sign_in=""
   local -a rehomed=() rehomed_fields=() kept=() removed=() operator_steps=() lane_before=() lane_left=()
   while [ $# -gt 0 ]; do
     flag="${1%%=*}"
@@ -9711,6 +9715,10 @@ _acct_remove() {
     _codex_auth_hold "$id" >&2 \
       || _acct_refuse 1 codex-reap-failed "codex lane $id's credential lock (the auth library's) could not be taken, so its tiers cannot be stopped without cutting a token refresh short - the reason is on stderr. The roster, projection, launcher, registry rows and every account artifact still stand.$usage_note Retry the removal once the lane's refresh or sign-in has ended."
     codex_auth="$CX_AUTH"   # `_codex_auth_hold` just read the row, and after the drop nothing can
+    # A lane `add` made and nobody signed in holds no sign-in, so the answer must not list one as authorised at the
+    # provider. Only the library's `absent` says so: `incomplete` may hold a refresh token, and a library that cannot
+    # answer has said nothing, so both keep the row.
+    if _codex_auth_status "$id" 2>/dev/null && [ "$CX_AUTH_CRED" = absent ]; then codex_sign_in=none; fi
     _codex_stop_lane "$id" >&2 || :
     _codex_auth_release
     # `_codex_stop_order`'s walk (the whole-wave addendum, LB-2 part a): the
@@ -9825,17 +9833,18 @@ _acct_remove() {
     { [ -e "$f" ] || [ -L "$f" ]; } && kept+=("$f")
     # THE LANE'S SIGN-IN FOLDER (spec §11 step 4, G20, Q11; accounts plan Task A24). It goes by default, so a removed
     # lane's ChatGPT sign-in is not left on the box. The stops above ended every tier that reads it, and a sign-in in
-    # flight refused this removal. Two folders stay whatever was asked: one outside the home `add` makes them in, which
-    # a hand-written row may name and ccrc did not make, and one another lane's row still names. Each is named as a
-    # step. `rm` removes a symlink there, never what it points at. The sign-in stays authorised at the provider, which
-    # the answer's `atProvider` says.
+    # flight refused this removal. THE GUARD IS THE PATH, NOT WHO MADE THE FOLDER: nothing on the box records that. A
+    # hand-written row under `.local/share/ccrc/codex/`, the path the README's example and the roster's remedies give,
+    # is deleted as an added lane's is. Two folders stay whatever was asked: one outside that home, and one another
+    # lane's row still names. Each is named as a step. `rm` removes a symlink there, never what it points at. A sign-in
+    # the folder held stays authorised at the provider, which the answer's `atProvider` says.
     f="$HOME/$codex_auth"
     if [ -n "$codex_auth" ] && { [ -e "$f" ] || [ -L "$f" ]; }; then
       if [ "$keep_codex" -eq 1 ]; then
         kept+=("$f")
       elif [[ "$codex_auth" != .local/share/ccrc/codex/* ]]; then
         kept+=("$f")
-        operator_steps+=("\$HOME/$codex_auth, lane $id's ChatGPT sign-in folder, was kept: ccrc did not make it there. Delete it by hand if nothing else uses it.")
+        operator_steps+=("\$HOME/$codex_auth, lane $id's ChatGPT sign-in folder, was kept: ccrc deletes one only under .local/share/ccrc/codex/. Delete it by hand if nothing else uses it.")
       elif jq -e --arg d "$codex_auth" 'any(.accounts[]?; .exec?.authDir? == $d)' "$(_acct_roster_path)" >/dev/null 2>&1; then
         kept+=("$f")
         operator_steps+=("\$HOME/$codex_auth, lane $id's ChatGPT sign-in folder, was kept: another lane still names it.")
@@ -9977,6 +9986,7 @@ _acct_remove() {
     { [ -e "$f" ] || [ -L "$f" ]; } && kept+=("$f") || removed+=("$f")
   fi
   local -a args=(--file "$(_acct_roster_path)" --id "$id" --kind "$ACCT_KIND" --provider "$ACCT_PROVIDER" --secret-env "$ACCT_SECRET_ENV" --secrets "$ACCT_SECRETS")
+  [ -z "$codex_sign_in" ] || args+=(--codex-sign-in "$codex_sign_in")
   for f in ${rehomed[@]+"${rehomed[@]}"}; do args+=(--rehomed "$f"); done
   for f in ${kept[@]+"${kept[@]}"}; do args+=(--kept "$f"); done
   for f in ${removed[@]+"${removed[@]}"}; do args+=(--removed "$f"); done
@@ -11140,7 +11150,9 @@ _acct_install_sign_in() {   # <id> <scratch dir> <what-still-stands>
 # THE CODEX INSTALL (spec §9 row 5; accounts plan Task A24), in three steps:
 #  1. THE CHECK: the lane's catalogue fetched with the scratch credential, a real answer from the backend. It is the
 #     model probe's own fetch, told the scratch folder by this verb alone (`_models_probe_codex_env` keeps every other
-#     caller on the row's folder), and its answer stays in scratch, so a refusal changes nothing of the lane's.
+#     caller on the row's folder), and its answer stays in scratch, so a refusal changes nothing of the lane's. Only the
+#     code reaches the sheet (`_auth_install`), so each status of the probe's `--check` is a code of its own, and only
+#     a request that went can blame the provider: a sign-in the box could not check is not one the provider refused.
 #  2. THE MOVE: the auth library is the one writer of a lane's credential, so it commits it, under the credential's own
 #     lock, and answers with an exit status this verb turns into a code. The lane's gateway reads the new file at its next
 #     request, so no session restarts. The old check went with the old credential.
@@ -11148,21 +11160,30 @@ _acct_install_sign_in() {   # <id> <scratch dir> <what-still-stands>
 #     fetched for it. A lane that has one keeps it, so a Sign in again restarts no tier. A refresh that fails refuses
 #     nothing: the credential is in, the hourly refresh renders it, and `check` says `litellm-unrendered` until then.
 _acct_install_codex() {   # <id> <what-still-stands>
-  local id="$1" stands="$2" src="" rc=0
+  local id="$1" stands="$2" src="" py="" rc=0
   src="$(_codex_scratch_dir "$id")"
   { [ -d "$src" ] && [ ! -L "$src" ]; } \
     || _acct_refuse 1 no-credential "the sign-in left no folder at $src, so there is nothing to install. $stands"
   _codex_row "$id" >&2 \
     || _acct_refuse 1 lane-unreadable "lane $id's codex row could not be read, so the sign-in has nowhere to go. $stands"
-  ( CHATGPT_TOKEN_DIR="$src"; CCRC_MODELS_AUTH_LIB="$(_codex_auth_lib)"
-    CCRC_CODEX_PYTHON="$("$(_codex_runtime_cli)" python 2>/dev/null)" || CCRC_CODEX_PYTHON=''
+  py="$("$(_codex_runtime_cli)" python 2>/dev/null)" || py=''
+  [ -n "$py" ] \
+    || _acct_refuse 1 codex-runtime-absent "this box has no Codex runtime, so the new sign-in could not be checked: nothing was sent to the provider and it was not installed. 'ccrc install' builds the runtime; sign in again after it. $stands"
+  ( CHATGPT_TOKEN_DIR="$src"; CCRC_MODELS_AUTH_LIB="$(_codex_auth_lib)"; CCRC_CODEX_PYTHON="$py"
     export CHATGPT_TOKEN_DIR CCRC_MODELS_AUTH_LIB CCRC_CODEX_PYTHON
-    exec "$CCRC_HERE/ccrc-models-probe" "$id" codex --out "$src/catalogue.json" ) >&2 \
-    || _acct_refuse 1 token-unverified "the provider did not accept or did not answer a request with the new sign-in, so it was not installed. $stands"
+    exec "$CCRC_HERE/ccrc-models-probe" "$id" codex --check --out "$src/catalogue.json" ) >&2 || rc=$?
+  case "$rc" in
+    0) : ;;
+    3) _acct_refuse 1 no-credential "the sign-in in $src is absent, expired, barred or unreadable (the reason is on stderr), so nothing was sent to the provider and it was not installed. $stands" ;;
+    4) _acct_refuse 1 token-unverified "the provider did not accept or did not answer a request with the new sign-in, so it was not installed. $stands" ;;
+    5) _acct_refuse 1 codex-answer-unreadable "the provider answered a request with the new sign-in, but not with a model list this box can read, so the sign-in is not known good and was not installed. $stands" ;;
+    *) _acct_refuse 1 codex-check-unrun "the new sign-in could not be checked on this box (exit $rc; the reason is on stderr), which says nothing of the sign-in, so it was not installed. 'ccrc doctor' names what is missing. $stands" ;;
+  esac
+  rc=0
   _codex_auth install --from "$src" --auth-dir "$HOME/$CX_AUTH" --lane "$id" >/dev/null || rc=$?
   case "$rc" in
     0) : ;;
-    4) _acct_refuse 1 no-credential "the sign-in in $src failed its check, so it was not installed. $stands" ;;
+    4) _acct_refuse 1 no-credential "the sign-in in $src passed the request, but the auth library would not install it: it is expired, barred or not private to this user. $stands" ;;
     *) _acct_refuse 1 credential-write "the auth library could not install the sign-in into \$HOME/$CX_AUTH (exit $rc; its line is on stderr). $stands" ;;
   esac
   rm -rf -- "${src:?}"
@@ -14294,8 +14315,8 @@ _codex_tier_stale() {   # <id> <tier>
 # (D-7676), `<store>.damaged-<8 digits>T<6 digits>Z` (store.py's DAMAGED_STAMP) with `-wal`, `-shm` or neither,
 # keyed on the store's OWN name, only once lane.json named it and it passed the bare-name check, never a bare
 # `*.damaged-*`: it holds the account's encrypted reasoning, as the store does. Then it removes the directory, only if
-# that left it empty. It NEVER removes the logs (`~/.ccrc/logs/codex/<id>/`) or the OAuth directory, which is a
-# credential ccrc never obtained, and it leaves any other file in the directory alone.
+# that left it empty. It NEVER removes the logs (`~/.ccrc/logs/codex/<id>/`) or the OAuth directory, which is
+# `_acct_remove`'s to decide, and it leaves any other file in the directory alone.
 # It needs no roster row, only a well-formed id: account removal reaps a lane
 # whose row may already be gone. It stops nothing: the stop arm runs
 # `_codex_lock` → `_codex_stop_lane` → `_codex_unlock` before the roster drop,
@@ -28170,8 +28191,8 @@ _uninst_units() {
 # library — by exact unit where a user manager exists, by verified pid where
 # not. KEPT, stated so nobody has to infer it: ~/.ccrc/codex/<id>/ (diagnosis
 # material, and every byte of it regenerable), ~/.ccrc/logs/codex/, and every
-# lane's authDir — ccrc never obtained that credential, and removing it would
-# end a subscription session it did not start. `--purge` takes ~/.ccrc whole
+# lane's authDir — removing it would end a subscription session, and only
+# `ccrc account remove`, asked about that lane, does that. `--purge` takes ~/.ccrc whole
 # as before; authDir is never under ~/.ccrc (the roster refuses it), so a
 # purge cannot reach a credential either.
 #

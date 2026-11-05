@@ -1861,10 +1861,11 @@ def install_signin(auth_dir: str, *, source: str, lane: str) -> str:
     the record goes through `_commit_signin`, under the lane's own lock, as a device sign-in's does.
 
     THE CHECK, MADE BEFORE THE LANE IS TOUCHED. `source` must read `present`, unexpired and not barred, and its file
-    must be mode 0600 or tighter and this user's. That is every check a credential allows offline. It asks the provider
-    nothing: the exchange that wrote it answered moments ago, the lane's gateway reads only `auth_dir`, and the check
-    the sheet runs next is the first request on the new credential. Anything else is SigninUnusable, with `auth_dir`
-    untouched. `source` is left in place for the caller to delete. Answers `"installed"`."""
+    must be mode 0600 or tighter and this user's. That is every check a credential allows offline, and it asks the
+    provider nothing: that is the caller's check, a real request on `source` made before this runs. This is a verb of
+    its own, so it holds these gates itself, and after that request a mode or owner failure is what they meet. Anything
+    else is SigninUnusable, with `auth_dir` untouched. `source` is left in place for the caller to delete. Answers
+    `"installed"`."""
     report = status_report(source)
     r, raw = _read_raw(source)
     if r.credential != "present" or not isinstance(raw, dict):

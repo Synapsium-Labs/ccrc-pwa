@@ -699,7 +699,8 @@ const OPS = {
   // always had.
   drop: { keys: ['file', 'id', 'stands'], repeat: [] },
   removed: {
-    keys: ['file', 'id', 'rehomed', 'kept', 'removed', 'operator-step', 'kind', 'provider', 'secret-env', 'secrets'],
+    keys: ['file', 'id', 'rehomed', 'kept', 'removed', 'operator-step', 'kind', 'provider', 'secret-env', 'secrets',
+      'codex-sign-in'],
     repeat: ['rehomed', 'kept', 'removed', 'operator-step'],
   },
   // `--stands` here is `drop`'s key at a second address and for its reason: a
@@ -1989,9 +1990,12 @@ const AT_PROVIDER = {
   codex: { state: 'still-valid', revokeAt: 'chatgpt-settings' },
 };
 
-/** The credential kind of a removed lane, from the fields `lane` answered for it before the drop. */
-function credentialKindOf(kind, provider, secretEnv, secrets) {
-  if (kind === 'codex') return 'codex';
+/** The credential kind of a removed lane, from the fields `lane` answered for it before the drop. `codexSignIn` is
+ *  bash's measure of a Codex lane's folder: `none` when the auth library read no sign-in there, as on a lane `add` made
+ *  and nobody signed in. Such a lane has nothing to revoke, so it answers no kind. A folder deleted by hand reads the
+ *  same, because nothing on the box records that a sign-in ever existed. Unset, the row stands: nobody could tell. */
+function credentialKindOf(kind, provider, secretEnv, secrets, codexSignIn) {
+  if (kind === 'codex') return codexSignIn === 'none' ? null : 'codex';
   if (kind === 'external' || kind === undefined) return null;
   if (secrets === undefined || secrets === '') return provider === 'anthropic' ? 'anthropic-sign-in' : null;
   if (secretEnv === 'CLAUDE_CODE_OAUTH_TOKEN') return 'anthropic-token';
@@ -3210,7 +3214,7 @@ function main(argv) {
         `${a['file']} still carries account "${a['id']}", so this run cannot report it removed`);
       return 1;
     }
-    const kind = credentialKindOf(a['kind'], a['provider'], a['secret-env'], a['secrets']);
+    const kind = credentialKindOf(a['kind'], a['provider'], a['secret-env'], a['secrets'], a['codex-sign-in']);
     out({
       ok: true,
       id: a['id'],

@@ -4,7 +4,7 @@
 // check moves into the lane. Every case runs in a fixture HOME; the sign-in talks to `fakeAuthServer`, never a provider.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
 import { buildAccountArgv } from '../../shared/account-argv.js';
@@ -12,8 +12,8 @@ import {
   ATTEMPT, AUTH_ROSTER, HOST_OSTYPE, answerOf, authBox, authEnv, ccrcAuth, plantAttempt, reapAll, scratchOf, scrollbacks, statusOf, waitQuiet,
   waitState,
 } from './authAttemptFixture.js';
-import { fakeAuthServer, plantBackendCredential, syntheticJwt } from './codexAuthFixture.js';
-import { freePort, freePorts, plantCodexBins, plantFakeRuntime } from './codexLaneFixture.js';
+import { fakeAuthServer, plantBackendCredential, runAuthDriver, syntheticJwt } from './codexAuthFixture.js';
+import { freePort, freePorts, plantCodexBins, plantFakeRuntime, probeRuntime, probeRuntimeCalls } from './codexLaneFixture.js';
 import { ACCOUNT_OP, BASH, HAVE_FLOCK, REPO, laneState, seedRoster } from './laneStateFixture.js';
 import { makeCcdHarness } from './ccdWsHelpers.js';
 
@@ -206,8 +206,52 @@ describe('remove and the lane\'s sign-in folder (spec §11 step 4; G20, Q11)', (
     const a = answerOf(r);
     expect(a['removed']).toContain(authDir);
     expect(a['kept']).not.toContain(authDir);
-    expect(a['atProvider']).toEqual([expect.objectContaining({ kind: 'codex' })]);
+    expect(a['atProvider']).toEqual([{ kind: 'codex', state: 'still-valid', revokeAt: 'chatgpt-settings' }]);
   }, 60_000);
+
+  it.each([['remove'], ['discard']])('a lane nobody signed in lists nothing at the provider: --mode %s', async (mode) => {
+    const { home, base } = await codexBox('ccrc-codex-remove-unsigned-');
+    expect(add(home, 'lane-g', [], { CCRC_ACCOUNT_CODEX_PORT_BASE: base }).code).toBe(0);
+    const r = ccrcAuth(home, ['account', 'remove', '--id', 'lane-g', '--mode', mode], '', host);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(answerOf(r)['atProvider']).toEqual([]);
+  }, 60_000);
+
+  it('a cancelled first sign-in lists nothing at the provider either', async () => {
+    const { home, base } = await codexBox('ccrc-codex-remove-cancelled-');
+    expect(add(home, 'lane-g', [], { CCRC_ACCOUNT_CODEX_PORT_BASE: base }).code).toBe(0);
+    const srv = await fakeAuthServer({
+      usercode: [{ status: 200, body: { device_auth_id: 'dev-1', user_code: 'ABCD-1234', interval: 1 } }],
+      deviceToken: Array.from({ length: 20 }, () => ({ status: 403, body: {} })),
+    });
+    try {
+      expect(ccrcAuth(home, ['account', 'auth-start', '--id', 'lane-g', '--method', 'openai-login', '--attempt', ATTEMPT], '',
+        { CCRC_CODEX_AUTH_BASE: srv.base, CCRC_AUTH_TIMEOUT: '60' }).code).toBe(0);
+      await waitFor(() => statusOf(home, 'lane-g')?.['userCode'] === 'ABCD-1234');
+      expect(ccrcAuth(home, ['account', 'auth-cancel', '--id', 'lane-g', '--attempt', ATTEMPT]).code).toBe(0);
+      expect(await waitState(home, 'lane-g', ['cancelled', 'failed', 'done'], 40_000)).toBe('cancelled');
+      await waitQuiet(home);
+    } finally {
+      await srv.close();
+    }
+    const r = ccrcAuth(home, ['account', 'remove', '--id', 'lane-g', '--mode', 'discard'], '', host);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(answerOf(r)['atProvider']).toEqual([]);
+  }, 120_000);
+
+  it('a folder the library cannot call empty keeps the provider row: an unfinished sign-in, and a library that cannot answer', async () => {
+    const unfinished = await signedInLane('ccrc-codex-remove-unfinished-');
+    writeFileSync(join(unfinished.authDir, 'auth.json'), JSON.stringify({ device_code_requested_at: 1 }), { mode: 0o600 });
+    const a = ccrcAuth(unfinished.home, ['account', 'remove', '--id', 'lane-g'], '', host);
+    expect(a.code, a.stdout + a.stderr).toBe(0);
+    expect(answerOf(a)['atProvider']).toEqual([expect.objectContaining({ kind: 'codex' })]);
+
+    const blind = await signedInLane('ccrc-codex-remove-blind-');
+    rmSync(join(blind.home, '.local', 'bin', 'ccgpt-auth.py'));
+    const b = ccrcAuth(blind.home, ['account', 'remove', '--id', 'lane-g'], '', host);
+    expect(b.code, b.stdout + b.stderr).toBe(0);
+    expect(answerOf(b)['atProvider']).toEqual([expect.objectContaining({ kind: 'codex' })]);
+  }, 90_000);
 
   it.each([['--keep-codex-auth'], ['--keep-credential']])('%s keeps it, and says so', async (flag) => {
     const { home, authDir } = await signedInLane('ccrc-codex-remove-keep-');
@@ -256,6 +300,23 @@ describe('remove and the lane\'s sign-in folder (spec §11 step 4; G20, Q11)', (
   }, 90_000);
 });
 
+describe('the guard is the path, not who made the folder (D-8016 (6))', () => {
+  it('a hand-written lane under ccrc\'s home is deleted by default, and `--keep-codex-auth` keeps it', async () => {
+    const first = await codexLane('ccrc-codex-remove-handmade-');
+    const r = ccrcAuth(first.home, ['account', 'remove', '--id', 'lane-c'], '', host);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(existsSync(first.authDir), 'no record says who made it, so it goes').toBe(false);
+    expect(answerOf(r)['removed']).toContain(first.authDir);
+    expect(answerOf(r)['operator-steps']).toEqual([]);
+
+    const second = await codexLane('ccrc-codex-remove-handmade-kept-');
+    const kept = ccrcAuth(second.home, ['account', 'remove', '--id', 'lane-c', '--keep-codex-auth'], '', host);
+    expect(kept.code, kept.stdout + kept.stderr).toBe(0);
+    expect(readFileSync(join(second.authDir, 'auth.json'), 'utf8')).toBe(second.old);
+    expect(answerOf(kept)['kept']).toContain(second.authDir);
+  }, 90_000);
+});
+
 const CODEX_ROSTER = (ports: number[]) => ({
   ...AUTH_ROSTER,
   accounts: [...AUTH_ROSTER.accounts, {
@@ -264,8 +325,8 @@ const CODEX_ROSTER = (ports: number[]) => ({
   }],
 });
 
-async function codexLane(prefix: string): Promise<{ home: string; authDir: string; old: string }> {
-  const { home } = await codexBox(prefix, { roster: CODEX_ROSTER(await freePorts(2)) });
+async function codexLane(prefix: string, opts: { runtime?: boolean } = {}): Promise<{ home: string; authDir: string; old: string }> {
+  const { home } = await codexBox(prefix, { ...opts, roster: CODEX_ROSTER(await freePorts(2)) });
   const authDir = join(home, AUTH_ROOT, 'lane-c');
   plantBackendCredential(authDir);
   return { home, authDir, old: readFileSync(join(authDir, 'auth.json'), 'utf8') };
@@ -275,6 +336,12 @@ const fetched = { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW };
 const setCodex = (home: string, env: NodeJS.ProcessEnv = fetched) =>
   ccrcAuth(home, ['account', 'set', '--id', 'lane-c', '--method', 'openai-login', '--attempt', ATTEMPT], '', { ...host, ...env });
 const scratchDir = (home: string): string => join(scratchOf(home, 'lane-c'), 'codex');
+/** A refused install: the old credential byte-identical, nothing beside it, and the check's catalogue kept in scratch. */
+const laneUntouched = (home: string, authDir: string, old: string): void => {
+  expect(readFileSync(join(authDir, 'auth.json'), 'utf8')).toBe(old);
+  expect(readdirSync(authDir)).toEqual(['auth.json']);
+  expect(existsSync(join(home, '.ccrc', 'models', 'lane-c.json')), 'the check wrote the lane\'s catalogue').toBe(false);
+};
 
 describe('Sign in again on a Codex lane (spec §9 row 5)', () => {
   it('a Codex Sign in again keeps the old `authDir` contents until the scratch sign-in passes its check, and a cancelled one leaves them byte-identical', async () => {
@@ -315,19 +382,14 @@ describe('Sign in again on a Codex lane (spec §9 row 5)', () => {
     }
   }, 150_000);
 
-  it.each([
-    ['the backend does not answer it', {}, { CCRC_MODELS_PROBE_FIXTURE: '/nonexistent/answer' }, 'token-unverified'],
-    ['it is already expired', { expiresIn: -60 }, fetched, 'no-credential'],
-  ])('a scratch credential that fails its check leaves the lane byte-identical: %s', async (_name, cred, env, code) => {
+  it('a scratch credential the backend does not answer leaves the lane byte-identical', async () => {
     const { home, authDir, old } = await codexLane('ccrc-codex-reauth-refused-');
     plantAttempt(home, 'lane-c', ATTEMPT);
-    plantBackendCredential(scratchDir(home), cred);
-    const r = setCodex(home, env);
+    plantBackendCredential(scratchDir(home));
+    const r = setCodex(home, { CCRC_MODELS_PROBE_FIXTURE: '/nonexistent/answer' });
     expect(r.code).toBe(1);
-    expect(answerOf(r)['error']).toBe(code);
-    expect(readFileSync(join(authDir, 'auth.json'), 'utf8')).toBe(old);
-    expect(readdirSync(authDir)).toEqual(['auth.json']);
-    expect(existsSync(join(home, '.ccrc', 'models', 'lane-c.json')), 'the check wrote the lane\'s catalogue').toBe(false);
+    expect(answerOf(r)['error']).toBe('token-unverified');
+    laneUntouched(home, authDir, old);
   }, 60_000);
 
   it('no sign-in in scratch refuses `no-credential`, and another attempt\'s refuses `no-auth-attempt`', async () => {
@@ -393,6 +455,162 @@ describe('Sign in again on a Codex lane (spec §9 row 5)', () => {
     expect(r.code).toBe(1);
     expect(answerOf(r)['error']).toBe('method-not-supported');
   }, 60_000);
+});
+
+// NO FIXTURE SEAM BELOW. `CCRC_MODELS_PROBE_FIXTURE` replaces the fetch, and with it the arm's own reading of the
+// credential, so a case on the seam cannot say which credential the check used or what it refused. `probeRuntime` is the
+// real arm's interpreter: it records what it read and sent, answers from a file, and refuses every socket.
+describe('the check of a sign-in, on the real fetch arm', () => {
+  const realArm = (home: string, answer = CODEX_RAW): string => {
+    const pr = probeRuntime(home, answer);
+    plantFakeRuntime(home, { python: pr.python });
+    return pr.rec;
+  };
+  const answerFile = (home: string, body: string): string => {
+    const f = join(home, 'provider-answer');
+    writeFileSync(f, body);
+    return f;
+  };
+  const sent = (rec: string) => probeRuntimeCalls(rec).flatMap((c) => c.requests);
+  const set = (home: string) => setCodex(home, {});
+  const detailOf = (r: ReturnType<typeof set>): string => String(answerOf(r)['detail']);
+
+  it('it reads the scratch credential and sends that one, never the lane\'s', async () => {
+    const { home, authDir, old } = await codexLane('ccrc-codex-check-scratch-');
+    const rec = realArm(home);
+    plantAttempt(home, 'lane-c', ATTEMPT);
+    const cred = plantBackendCredential(scratchDir(home));
+    const r = set(home);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const calls = probeRuntimeCalls(rec);
+    expect(calls.map((c) => c.env['CHATGPT_TOKEN_DIR'])).toEqual([scratchDir(home)]);
+    // Booleans: a failing `toBe` would print the planted (synthetic) token.
+    expect(calls[0]!.requests[0]!.headers['authorization'] === `Bearer ${cred.access}`, 'the bearer is the new sign-in\'s').toBe(true);
+    expect(readFileSync(join(authDir, 'auth.json'), 'utf8')).not.toBe(old);
+  }, 60_000);
+
+  it.each<[string, (dir: string) => void]>([
+    ['it is already expired', (d) => { plantBackendCredential(d, { expiresIn: -60 }); }],
+    ['the folder holds no credential', (d) => { mkdirSync(d, { recursive: true }); }],
+    ['it does not parse', (d) => { mkdirSync(d, { recursive: true }); writeFileSync(join(d, 'auth.json'), 'not json', { mode: 0o600 }); }],
+    ['it is unfinished', (d) => { mkdirSync(d, { recursive: true }); writeFileSync(join(d, 'auth.json'), JSON.stringify({ device_code_requested_at: 1 }), { mode: 0o600 }); }],
+  ])('a scratch credential refused before any request, beside a good lane credential, is `no-credential`: %s', async (_name, plant) => {
+    const { home, authDir, old } = await codexLane('ccrc-codex-check-local-');
+    const rec = realArm(home);
+    plantAttempt(home, 'lane-c', ATTEMPT);
+    plant(scratchDir(home));
+    const r = set(home);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(answerOf(r)['error']).toBe('no-credential');
+    expect(detailOf(r)).toContain('nothing was sent');
+    expect(detailOf(r)).not.toContain('did not accept');
+    expect(sent(rec), 'a request was made').toEqual([]);
+    laneUntouched(home, authDir, old);
+  }, 60_000);
+
+  it('a scratch credential the tier barred is `no-credential`, and nothing is sent', async () => {
+    const { home, authDir, old } = await codexLane('ccrc-codex-check-barred-');
+    const rec = realArm(home);
+    plantAttempt(home, 'lane-c', ATTEMPT);
+    plantBackendCredential(scratchDir(home), { expiresIn: 30 });
+    const srv = await fakeAuthServer({ token: [{ status: 400, body: { error: 'invalid_grant' } }] });
+    try {
+      await runAuthDriver(home, { authDir: scratchDir(home), ops: [{ op: 'ensure_fresh', lane: 'lane-c' }] }, { CCRC_CODEX_AUTH_BASE: srv.base });
+    } finally {
+      await srv.close();
+    }
+    const r = set(home);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(answerOf(r)['error']).toBe('no-credential');
+    expect(sent(rec), 'a request was made').toEqual([]);
+    laneUntouched(home, authDir, old);
+  }, 60_000);
+
+  it('a request that gets no answer is `token-unverified`, the one code that blames the provider', async () => {
+    const { home, authDir, old } = await codexLane('ccrc-codex-check-silent-');
+    const answer = answerFile(home, '{}');
+    const rec = realArm(home, answer);
+    rmSync(answer);
+    plantAttempt(home, 'lane-c', ATTEMPT);
+    plantBackendCredential(scratchDir(home));
+    const r = set(home);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(answerOf(r)['error']).toBe('token-unverified');
+    expect(sent(rec)).toHaveLength(1);
+    laneUntouched(home, authDir, old);
+  }, 60_000);
+
+  it('an answer that is no model list is `codex-answer-unreadable`: the provider did answer', async () => {
+    const { home, authDir, old } = await codexLane('ccrc-codex-check-drift-');
+    const rec = realArm(home, answerFile(home, '{"not":"a catalogue"}'));
+    plantAttempt(home, 'lane-c', ATTEMPT);
+    plantBackendCredential(scratchDir(home));
+    const r = set(home);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(answerOf(r)['error']).toBe('codex-answer-unreadable');
+    expect(detailOf(r)).not.toContain('did not accept');
+    expect(sent(rec)).toHaveLength(1);
+    laneUntouched(home, authDir, old);
+  }, 60_000);
+
+  it('no runtime is `codex-runtime-absent`: nothing ran, and its remedy is the code', async () => {
+    const { home, authDir, old } = await codexLane('ccrc-codex-check-no-runtime-', { runtime: false });
+    plantAttempt(home, 'lane-c', ATTEMPT);
+    plantBackendCredential(scratchDir(home));
+    const r = set(home);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(answerOf(r)['error']).toBe('codex-runtime-absent');
+    expect(detailOf(r)).toContain('nothing was sent');
+    expect(detailOf(r)).toContain('ccrc install');
+    laneUntouched(home, authDir, old);
+  }, 60_000);
+
+  it('a check that cannot run is `codex-check-unrun`, which blames neither the sign-in nor the provider', async () => {
+    const { home, authDir, old } = await codexLane('ccrc-codex-check-no-library-');
+    const rec = realArm(home);
+    rmSync(join(home, '.local', 'bin', 'ccgpt-auth.py'));
+    plantAttempt(home, 'lane-c', ATTEMPT);
+    plantBackendCredential(scratchDir(home));
+    const r = set(home);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(answerOf(r)['error']).toBe('codex-check-unrun');
+    expect(detailOf(r)).not.toContain('did not accept');
+    expect(sent(rec), 'a request was made').toEqual([]);
+    laneUntouched(home, authDir, old);
+  }, 60_000);
+
+  it('a credential the provider took but that is not this user\'s alone is the library\'s refusal, at exit 4', async () => {
+    const { home, authDir, old } = await codexLane('ccrc-codex-check-mode-');
+    const rec = realArm(home);
+    plantAttempt(home, 'lane-c', ATTEMPT);
+    plantBackendCredential(scratchDir(home), { mode: 0o644 });
+    const r = set(home);
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    expect(answerOf(r)['error']).toBe('no-credential');
+    expect(detailOf(r)).toContain('would not install');
+    expect(sent(rec)).toHaveLength(1);
+    laneUntouched(home, authDir, old);
+  }, 60_000);
+
+  it('an attempt approved on a box with no runtime ends on the code that names the remedy, not on the provider', async () => {
+    const { home, authDir, old } = await codexLane('ccrc-codex-check-attempt-', { runtime: false });
+    const fresh = syntheticJwt({ exp: Math.floor(Date.now() / 1000) + 3600, jti: 'fresh-sign-in' });
+    const srv = await fakeAuthServer({
+      usercode: [{ status: 200, body: { device_auth_id: 'dev-1', user_code: 'ABCD-5678', interval: 1 } }],
+      deviceToken: [{ status: 200, body: { authorization_code: 'code-1', code_challenge: 'challenge-1', code_verifier: 'verifier-1' } }],
+      token: [{ status: 200, body: { access_token: fresh, refresh_token: 'rtok-fresh', id_token: fresh } }],
+    });
+    try {
+      expect(ccrcAuth(home, ['account', 'auth-start', '--id', 'lane-c', '--method', 'openai-login', '--attempt', ATTEMPT], '',
+        { CCRC_CODEX_AUTH_BASE: srv.base, CCRC_AUTH_TIMEOUT: '60' }).code).toBe(0);
+      expect(await waitState(home, 'lane-c', ['done', 'failed'], 60_000), JSON.stringify(scrollbacks(home))).toBe('failed');
+      await waitQuiet(home);
+      expect(statusOf(home, 'lane-c')?.['error']).toBe('codex-runtime-absent');
+      laneUntouched(home, authDir, old);
+    } finally {
+      await srv.close();
+    }
+  }, 120_000);
 });
 
 describe('`ccd caps` (N4)', () => {
