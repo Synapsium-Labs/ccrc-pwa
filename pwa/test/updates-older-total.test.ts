@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { NodeWire, ReleaseWire } from '../../shared/api';
 import type { BuildInfo } from '../../shared/buildinfo';
 import { releaseWindow } from '../src/screens/updates';
+import { asUpdatesView } from '../src/fleet/updatesRead';
 
 const T0 = Date.UTC(2026, 9, 1, 12, 0, 0);
 const DAY = 86_400_000;
@@ -59,5 +60,22 @@ describe('releaseWindow: olderHidden reads releasesTotal (console speed S2)', ()
     // The newest three are shown, seven older rows are in the window, 12 more were never sent.
     expect(w.olderHidden).toBe(7 + 12);
     expect(releaseWindow(windowRows(), [], 'stable').olderHidden).toBe(7);
+  });
+});
+
+describe('asUpdatesView keeps releasesTotal when it rebuilds an answer (console speed S2, fix round 1, F9)', () => {
+  it('a malformed release dropped from the rows leaves releasesTotal on the answer', () => {
+    const raw = {
+      catalogue: { lastOkAt: T0, lastError: null }, nodes: fleet(), intent: [],
+      releases: [...windowRows(), { tag: 42 }], releasesTotal: 22,
+    };
+    const view = asUpdatesView(raw);
+    expect(view?.releases).toHaveLength(10);
+    expect(view?.releasesTotal).toBe(22);
+  });
+
+  it('an answer with no releasesTotal gains none', () => {
+    const raw = { catalogue: { lastOkAt: T0, lastError: null }, nodes: fleet(), intent: [], releases: [...windowRows(), { tag: 42 }] };
+    expect('releasesTotal' in (asUpdatesView(raw) ?? {})).toBe(false);
   });
 });
