@@ -2,7 +2,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
-import { ACCOUNT_POOLS_CAP, CCD_ARGV } from './ccdargv.js';
+import { ACCOUNT_POOLS_CAP, CCD_ARGV, POOL_SYNC_ABSENT_CAP, POOL_SYNC_INSTALLED_CAP } from './ccdargv.js';
 import { POOL_NAME_RE } from '../../shared/roster.js';
 import { parseObservedEpochDoc, POOL_EPOCH_FILE_NAME } from '../../shared/agent-protocol.js';
 import type { PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire } from '../../shared/api.js';
@@ -331,10 +331,19 @@ export function poolsEnforcement(ccdVerbs: readonly string[] | null): PoolsEnfor
  * (`ccd/ccd`), the same channel `POOLS_CAP`/`ACTOR_FLAGS_CAP` already ride
  * (`ccdargv.ts`'s own docstring on `ACCOUNT_POOLS_CAP`). `null` is no
  * evidence (`unknown`); only a measured absence reads `unavailable`.
+ *
+ * That token proves ccd CAN honour a central tag, not that it does: the tag
+ * reaches ccd only through the projection the pool-sync timer pulls (D-8015).
+ * So `enforced` needs the timer measured present too, and the timer measured
+ * absent is `unavailable`. A ccd with the token and neither timer word is older
+ * than the measurement, which is no evidence either way: `unknown`, and never
+ * `enforced`.
  */
 export function accountPoolsEnforcement(ccdVerbs: readonly string[] | null): PoolsEnforcement {
   if (ccdVerbs === null) return 'unknown';
-  return ccdVerbs.includes(ACCOUNT_POOLS_CAP) ? 'enforced' : 'unavailable';
+  if (!ccdVerbs.includes(ACCOUNT_POOLS_CAP)) return 'unavailable';
+  if (ccdVerbs.includes(POOL_SYNC_INSTALLED_CAP)) return 'enforced';
+  return ccdVerbs.includes(POOL_SYNC_ABSENT_CAP) ? 'unavailable' : 'unknown';
 }
 
 /**

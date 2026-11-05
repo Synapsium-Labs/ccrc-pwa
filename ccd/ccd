@@ -9292,6 +9292,15 @@ EOF
   # token, not a dispatchable verb, so `PoolsEnforcement.accountPools` can
   # answer `enforced` only against a box that actually took this deploy.
   echo account-pools
+  # pool-sync-installed / pool-sync-absent — whether this box pulls the projection `_pool_ok` reads (D-8015). `account-pools`
+  # says this ccd CAN honour a central tag; with no timer unit nothing ever pulls one, so `_acct_pool_state` falls back to
+  # the declared roster and a tag set from the PWA binds only the server. One measured fact, so exactly one word, and
+  # `_pool_sync_installed` is its reader. Printing neither is what an older ccd does, and the server reads that as `unknown`.
+  if _pool_sync_installed; then
+    echo pool-sync-installed
+  else
+    echo pool-sync-absent
+  fi
   # The capability token for wave 2 of the terminal-drawer program, and it is
   # the proof of BOTH halves of that wave rather than of the verb alone: the
   # `win-size` verb and `_pane_measurable`'s stand-down at every typing site

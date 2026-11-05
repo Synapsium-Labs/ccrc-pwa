@@ -13,7 +13,7 @@ import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { loadSnapshot } from '../src/fleetstate.js';
-import { ACCOUNT_POOLS_CAP } from '../src/ccdargv.js';
+import { ACCOUNT_POOLS_CAP, POOL_SYNC_ABSENT_CAP, POOL_SYNC_INSTALLED_CAP } from '../src/ccdargv.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
@@ -1501,7 +1501,7 @@ describe('fleet REST + WS', () => {
       it('reads enforced/unavailable off the account-pools capability token, on both GET /api/fleet and the WS pools frame', async () => {
         const enforcedDeps = {
           ...testDeps(home),
-          fleetState: { connected: true, downSince: null, ccdVerbs: [ACCOUNT_POOLS_CAP], rosterFp: null, build: null },
+          fleetState: { connected: true, downSince: null, ccdVerbs: [ACCOUNT_POOLS_CAP, POOL_SYNC_INSTALLED_CAP], rosterFp: null, build: null },
         };
         const bus = new Bus();
         const watcher = mkWatcher(enforcedDeps, bus);
@@ -1524,6 +1524,23 @@ describe('fleet REST + WS', () => {
         const res2 = await app.inject({ method: 'GET', url: '/api/fleet' });
         const body2 = res2.json() as { pools: { accountPools?: string } };
         expect(body2.pools.accountPools).toBe('unavailable');
+      });
+
+      // D-8015: the case a box without the pool-sync timer is, on both of the field's call sites.
+      it('reads unavailable when the ccd has the token and the box has no pool-sync timer, on both GET /api/fleet and the WS pools frame', async () => {
+        const deps = {
+          ...testDeps(home),
+          fleetState: { connected: true, downSince: null, ccdVerbs: [ACCOUNT_POOLS_CAP, POOL_SYNC_ABSENT_CAP], rosterFp: null, build: null },
+        };
+        const bus = new Bus();
+        const watcher = mkWatcher(deps, bus);
+        app = await buildServer(deps, bus, watcher);
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        const body = res.json() as { pools: { accountPools?: string } };
+        expect(body.pools.accountPools).toBe('unavailable');
+
+        await watcher.tick();
+        expect(watcher.currentPools()?.accountPools).toBe('unavailable');
       });
 
       it('is absent-reads-unknown when there is no ccdVerbs evidence at all', async () => {
