@@ -2963,14 +2963,14 @@ export function registerCoordRoutes(
       const limit = parseCanonicalPositiveSafeInteger(q.limit);
       const before = q.before === undefined ? undefined : parseCanonicalPositiveSafeInteger(q.before);
       if (q.closed !== '1' || limit === null || limit > RUNS_PAGE_LIMIT_MAX || before === null) {
-        return reply.code(400).send({ ok: false, error: 'bad-request' });
+        return refuseRoute(reply, 'bad-request');
       }
       const page = deps.coord.runsPage({
         limit, ...(before === undefined ? {} : { before }),
         pinned: reclaimAttentionRunIds(watcher?.currentCoord()?.childReclaimAttention),
       });
       if (!page.read.ok) {
-        return reply.code(503).send({ ok: false, error: 'runs-unreadable', detail: page.read.detail });
+        return refuseRoute(reply, 'runs-unreadable', { detail: page.read.detail });
       }
       return {
         runs: composeChildReclaim(page.read.runs.map(toRunSummary)),
