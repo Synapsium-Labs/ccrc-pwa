@@ -11142,30 +11142,29 @@ _acct_install_sign_in() {   # <id> <scratch dir> <what-still-stands>
 #     model probe's own fetch, told the scratch folder by this verb alone (`_models_probe_codex_env` keeps every other
 #     caller on the row's folder), and its answer stays in scratch, so a refusal changes nothing of the lane's.
 #  2. THE MOVE: the auth library is the one writer of a lane's credential, so it commits it, under the credential's own
-#     lock, and answers with a word this verb turns into a code. The lane's gateway reads the new file at its next
+#     lock, and answers with an exit status this verb turns into a code. The lane's gateway reads the new file at its next
 #     request, so no session restarts. The old check went with the old credential.
 #  3. A FIRST SIGN-IN'S RENDER: `check` starts the gateway, which needs `litellm.yaml`, and only now can a catalogue be
 #     fetched for it. A lane that has one keeps it, so a Sign in again restarts no tier. A refresh that fails refuses
 #     nothing: the credential is in, the hourly refresh renders it, and `check` says `litellm-unrendered` until then.
 _acct_install_codex() {   # <id> <what-still-stands>
-  local id="$1" stands="$2" src="" said="" rc=0 re='^ccgpt-auth: ([a-z][a-z-]*): '
+  local id="$1" stands="$2" src="" rc=0
   src="$(_codex_scratch_dir "$id")"
   { [ -d "$src" ] && [ ! -L "$src" ]; } \
     || _acct_refuse 1 no-credential "the sign-in left no folder at $src, so there is nothing to install. $stands"
   _codex_row "$id" >&2 \
     || _acct_refuse 1 lane-unreadable "lane $id's codex row could not be read, so the sign-in has nowhere to go. $stands"
-  ( export CHATGPT_TOKEN_DIR="$src" CCRC_MODELS_AUTH_LIB="$(_codex_auth_lib)"
+  ( CHATGPT_TOKEN_DIR="$src"; CCRC_MODELS_AUTH_LIB="$(_codex_auth_lib)"
     CCRC_CODEX_PYTHON="$("$(_codex_runtime_cli)" python 2>/dev/null)" || CCRC_CODEX_PYTHON=''
-    export CCRC_CODEX_PYTHON
+    export CHATGPT_TOKEN_DIR CCRC_MODELS_AUTH_LIB CCRC_CODEX_PYTHON
     exec "$CCRC_HERE/ccrc-models-probe" "$id" codex --out "$src/catalogue.json" ) >&2 \
     || _acct_refuse 1 token-unverified "the provider did not accept or did not answer a request with the new sign-in, so it was not installed. $stands"
-  said="$(_codex_auth install --from "$src" --auth-dir "$HOME/$CX_AUTH" --lane "$id" 2>&1 >/dev/null)" || rc=$?
-  if [ "$rc" -ne 0 ]; then
-    printf '%s\n' "$said" >&2
-    [[ "$said" =~ $re ]] && [ "${BASH_REMATCH[1]}" = signin-unusable ] \
-      && _acct_refuse 1 no-credential "the sign-in in $src failed its check, so it was not installed. $stands"
-    _acct_refuse 1 credential-write "the auth library could not install the sign-in into \$HOME/$CX_AUTH (exit $rc; its line is on stderr). $stands"
-  fi
+  _codex_auth install --from "$src" --auth-dir "$HOME/$CX_AUTH" --lane "$id" >/dev/null || rc=$?
+  case "$rc" in
+    0) : ;;
+    4) _acct_refuse 1 no-credential "the sign-in in $src failed its check, so it was not installed. $stands" ;;
+    *) _acct_refuse 1 credential-write "the auth library could not install the sign-in into \$HOME/$CX_AUTH (exit $rc; its line is on stderr). $stands" ;;
+  esac
   rm -rf -- "${src:?}"
   _acct_lane_state "$id" --clear check
   [ -f "$(_codex_litellm_yaml "$id")" ] || ( cmd_models refresh "$id" ) >&2 || :

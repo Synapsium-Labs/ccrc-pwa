@@ -706,14 +706,14 @@ describe.skipIf(!PY)('install: a checked sign-in moves over the lane\'s credenti
       mkdirSync(from, { recursive: true });
       writeFileSync(credPath(from), JSON.stringify({ tokens: { access_token: 'x' } }), { mode: 0o600 });
     }],
-  ])('refuses a source that is %s, signin-unusable, with the lane as it was', async (_name, plant) => {
+  ])('refuses a source that is %s, rc 4, with the lane as it was', async (_name, plant) => {
     const { home, dir, from } = lanes('codex-install-refused-');
     plantBackendCredential(dir);
     const before = lstatKey(credPath(dir));
     plant(from);
     const r = await install(home, dir, from);
-    expect(r.status).toBe(1);
-    expect(r.stderr).toMatch(/^ccgpt-auth: signin-unusable: /);
+    expect(r.status).toBe(4);
+    expect(r.stderr).toMatch(/^ccgpt-auth: login-failed: /);
     expect(lstatKey(credPath(dir))).toBe(before);
     expect(readdirSync(dir)).toEqual(['auth.json']);
   });

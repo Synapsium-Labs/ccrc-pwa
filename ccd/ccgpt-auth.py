@@ -194,10 +194,9 @@ class LoginFailed(AuthError):
     word = "login-failed"
 
 
-class SigninUnusable(AuthError):
-    """A sign-in that `install_signin` was handed and will not install: it fails its check."""
-
-    word = "signin-unusable"
+class SigninUnusable(LoginFailed):
+    """A sign-in that `install_signin` was handed and will not install: it fails its check. A `login-failed` to every
+    reader; `main` alone tells it apart, by its exit status, because the caller answers it with another code."""
 
 
 class HeldReentry(RuntimeError):
@@ -1970,7 +1969,8 @@ def main(argv: List[str]) -> int:
                             `ccgpt-auth: <id>: already-signed-in: <ALREADY_SIGNED_IN>`, rc 0; or
                             `ccgpt-auth: <word>: <sentence>` on stderr, rc 1
       install --from <absolute> --lane <id>
-                            `install_signin`: `ccgpt-auth: <id>: installed`, rc 0; or the refusal line above, rc 1
+                            `install_signin`: `ccgpt-auth: <id>: installed`, rc 0; the refusal line above, rc 1;
+                            or that line and rc 4 when the sign-in at --from fails its check
       paths                 {"credential", "pending", "lock", "status", "lockWaitS"}, rc 0
       secret-files          the credential and checkpoint paths, one per line, rc 0"""
     if not argv or argv[0] not in _VERBS:
@@ -2013,7 +2013,7 @@ def main(argv: List[str]) -> int:
     except AuthError as e:
         out.flush()
         sys.stderr.write("ccgpt-auth: " + e.word + ": " + str(e) + "\n")
-        return 1
+        return 4 if isinstance(e, SigninUnusable) else 1
     line = "ccgpt-auth: " + lane + ": " + result
     if result == "already-signed-in":
         line += ": " + ALREADY_SIGNED_IN

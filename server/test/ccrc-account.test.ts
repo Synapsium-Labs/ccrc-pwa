@@ -6250,7 +6250,7 @@ describe('ccrc account remove', () => {
     expect(r.stderr).not.toMatch(/bridge tier/);
   });
 
-  itSystemd('C12: removing a codex account disables ccrc\'s own usage timer for it, reports the link removed, keeps its OAuth and logs, and never names another repository\'s (Plan 3a Task 7)', async () => {
+  itSystemd('C12: removing a codex account disables ccrc\'s own usage timer for it, reports the link removed, keeps its logs and, told to, its OAuth, and never names another repository\'s (Plan 3a Task 7)', async () => {
     const home = box('ccrc-account-remove-codex-usage-');
     const lane = await codexLaneOnFreePorts();
     seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
@@ -6268,7 +6268,7 @@ describe('ccrc account remove', () => {
     const foreign = plantForeignUsage(home, lane.id);
     const ctl = plantUsageCtl(home);
     plantTmux(home, []);
-    const r = run(home, ['account', 'remove', '--id', lane.id], '', { PATH: `${ctl}:${env(home)['PATH'] ?? ''}` });
+    const r = run(home, ['account', 'remove', '--id', lane.id, '--keep-codex-auth'], '', { PATH: `${ctl}:${env(home)['PATH'] ?? ''}` });
     expect(r.code, r.stderr).toBe(0);
     const j = oneObject(r);
     expect(usageCtlCalls(home)).toEqual([`--user disable --now ccrc-codex-usage@${lane.id}.timer`]);
