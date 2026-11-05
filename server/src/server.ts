@@ -75,7 +75,7 @@ import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from '.
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { createReaderLabRuns } from './readerLab/runs.js';
 import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
-import { servedFromWatcher, servedProjectReads } from './servedRead.js';
+import { servedFleetReads, servedFromWatcher, servedProjectReads } from './servedRead.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
@@ -1209,6 +1209,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // "unknown" on the PWA, which is the truth here.
       if (snap) return { sessions: dropStaleLandings(snap.sessions, Date.now()), stale: true, downSince: deps.fleetState.downSince };
     }
+    // Console speed S2: the watcher's last listed tick answers whole with its age (no registry read, no pools read, no
+    // assembly) while BOTH the listing and the pools read beside its wire are fresh (`servedFleetReads`). Anything less
+    // falls to the reads below, which are today's.
+    const servedFleet = servedFleetReads(watcher?.currentFleetListing() ?? null, watcher?.currentProjectPoolsRead() ?? null, Date.now());
+    const servedPools = servedFleet.serve ? watcher?.currentPools() ?? null : null;
+    if (servedFleet.serve && servedPools !== null) return { sessions: servedFleet.listing.sessions, pools: servedPools, ageMs: servedFleet.ageMs };
     // ONE registry read for this request (spec §2.3), handed to `assembleFleet` as its `records`; that function's own
     // fallback read is reached by tests alone. An UNLISTABLE registry is not an empty fleet: `{sessions: []}` would
     // tell the phone every session had gone. So this serves what the process last knew (the watcher's last
@@ -1218,11 +1224,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // through to here, and only the disconnected arm above carries `downSince`. Its counterpart on a listable
     // registry is `fleet-health.test.ts`'s disconnected case with no cache, which takes the live assemble.
     // [registry-refused:stale]
-    // Console speed S2: the watcher's last listed tick, while it is fresh and its pools wire exists, answers whole with its
-    // age: no registry read, no pools read, no assembly. Anything less falls to the reads below, which are today's.
-    const servedFleet = servedFromWatcher(watcher?.currentFleetListing() ?? null, Date.now());
-    const servedPools = servedFleet.serve ? watcher?.currentPools() ?? null : null;
-    if (servedFleet.serve && servedPools !== null) return { sessions: servedFleet.value.sessions, pools: servedPools, ageMs: servedFleet.ageMs };
     const reg = await readRegistryMeasured(deps.io, deps.cfg);
     if (!reg.listed) {
       return { sessions: dropStaleLandings(watcher?.currentFleet() ?? (await loadSnapshot(stateCachePath))?.sessions ?? [], Date.now()), stale: true };
@@ -1532,7 +1533,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       ...(servedLimits.serve ? { ageMs: servedLimits.ageMs } : {}),
     };
     // `lanes` and `connect` for the SESSION verdict only (D-5511, D-5517): a dark gate's reader, and a box token (which
-    // an armed gate refuses before this handler), get today's three fields and nothing else. The lane states are read
+    // an armed gate refuses before this handler), get today's three fields and nothing else (plus `ageMs`
+    // when the limits were served from the watcher). The lane states are read
     // only here, so no other `readLimits` caller pays for them.
     const auth = sessionAuth(req);
     if (!deps.cfg.authEnabled || !auth.allow || auth.reason !== 'session') return today;

@@ -10,6 +10,7 @@ import { buildServer } from '../src/server.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { localIO, type FleetIO } from '../src/io.js';
+import { servedFleetReads, servedProjectReads } from '../src/servedRead.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -119,18 +120,26 @@ describe('served routes with no watcher: today\'s answers (console speed S2, ste
 
 interface Req { op: string; path: string }
 /** `localIO` with every call logged, so what a route asks the agent link for is the thing measured. */
-function countingIO(): { io: FleetIO; requests: Req[] } {
+function countingIO(): { io: FleetIO; requests: Req[]; unlistable: Set<string> } {
   const requests: Req[] = [];
+  /** Directories whose listing fails (`readdir` null, `readdirMeasured` unreadable); mutable between requests. */
+  const unlistable = new Set<string>();
   const io = { ...localIO } as Record<string, unknown>;
   for (const [op, fn] of Object.entries(localIO)) {
     if (typeof fn !== 'function') continue;
-    io[op] = (...args: unknown[]) => { requests.push({ op, path: String(args[0]) }); return (fn as (...a: unknown[]) => unknown).apply(localIO, args); };
+    io[op] = (...args: unknown[]) => {
+      const p = String(args[0]);
+      requests.push({ op, path: p });
+      if (unlistable.has(p) && op === 'readdir') return Promise.resolve(null);
+      if (unlistable.has(p) && op === 'readdirMeasured') return Promise.resolve({ ok: false, reason: 'unreadable' });
+      return (fn as (...a: unknown[]) => unknown).apply(localIO, args);
+    };
   }
-  return { io: io as unknown as FleetIO, requests };
+  return { io: io as unknown as FleetIO, requests, unlistable };
 }
 
 /** A server over the fixture WITH a watcher that has ticked once (`tick: false` leaves it cold). */
-async function rig(tick = true): Promise<{ home: string; requests: Req[]; get: (url: string) => Promise<Record<string, unknown>>; w: FleetWatcher }> {
+async function rig(tick = true): Promise<{ home: string; requests: Req[]; unlistable: Set<string>; registryDir: string; get: (url: string) => Promise<Record<string, unknown>>; w: FleetWatcher }> {
   const f = fixture();
   const c = countingIO();
   const deps = withFakeClock({ ...testDeps(f.home), io: c.io });
@@ -141,7 +150,7 @@ async function rig(tick = true): Promise<{ home: string; requests: Req[]; get: (
   app = await buildServer(deps, bus, w);
   const a = app;
   return {
-    home: f.home, requests: c.requests, w,
+    home: f.home, requests: c.requests, unlistable: c.unlistable, registryDir: deps.cfg.registryDir, w,
     get: async (url) => {
       const res = await a.inject({ method: 'GET', url });
       expect(res.statusCode).toBe(200);
@@ -196,6 +205,16 @@ describe('served routes with a fresh watcher tick: the answer carries ageMs and 
     expect(projects[0]).toMatchObject({ pool: { state: 'untagged' }, placement: { kind: 'projected', wrapper: 'claude', score: 34 } });
   });
 
+  it('GET /api/fleet: a fresh listing with no pools read beside it is not served, and reads as today', async () => {
+    const r = await rig();
+    vi.spyOn(r.w, 'currentProjectPoolsRead').mockReturnValue(null);
+    r.requests.length = 0;
+    const body = await r.get('/api/fleet');
+    expect('ageMs' in body).toBe(false);
+    expect(Object.keys(body).sort()).toEqual(['pools', 'sessions']);
+    expect(measuredReads(r.requests).length, 'the route read the registry itself').toBeGreaterThan(0);
+  });
+
   it('GET /api/projects: the ?class= validation still runs first', async () => {
     const r = await rig();
     r.requests.length = 0;
@@ -226,4 +245,50 @@ describe('served routes with stale or missing watcher state answer as today (con
       expect(Object.keys(stale).sort()).toEqual(Object.keys(missing).sort());
     });
   }
+});
+
+describe('an unlistable tick (every watcher getter null) stops the routes serving (console speed S2, Step 7)', () => {
+  it('GET /api/accounts, /api/projects and /api/fleet read for themselves and carry no ageMs', async () => {
+    const r = await rig();
+    expect(typeof (await r.get('/api/accounts')).ageMs, 'control: served before').toBe('number');
+    r.unlistable.add(r.registryDir);
+    await r.w.tick();
+    expect(r.w.currentLimits()).toBeNull();
+    expect(r.w.currentProjectPoolsRead()).toBeNull();
+    expect(r.w.currentFleetListing()).toBeNull();
+    r.requests.length = 0;
+    const accounts = await r.get('/api/accounts');
+    expect('ageMs' in accounts).toBe(false);
+    expect((accounts.accounts as { wrapper: string }[]).map((a) => a.wrapper)).toEqual(['claude']);
+    expect(r.requests.some((q) => /\.cc-limits/.test(q.path)), 'accounts read the limits itself').toBe(true);
+    r.requests.length = 0;
+    const projects = await r.get('/api/projects');
+    expect('ageMs' in projects).toBe(false);
+    expect(r.requests.some((q) => /\.cc-limits/.test(q.path)), 'projects read the limits itself').toBe(true);
+    const fleet = await r.get('/api/fleet');
+    expect('ageMs' in fleet).toBe(false);
+    expect(fleet.stale, 'an unlistable registry reads as stale, as before').toBe(true);
+  });
+});
+
+describe('the serve deciders (console speed S2, Step 7)', () => {
+  const T = 1_000_000;
+  it('servedProjectReads: both fresh serve with the larger age; one stale or missing serves nothing', () => {
+    const pools = { listedAt: T - 3_000 };
+    const limits = { listedAt: T - 8_000 };
+    expect(servedProjectReads(pools, limits, T, 20_000)).toEqual({ serve: true, pools, limits, ageMs: 8_000 });
+    expect(servedProjectReads(pools, { listedAt: T - 20_000 }, T, 20_000)).toEqual({ serve: false });
+    expect(servedProjectReads(null, limits, T, 20_000)).toEqual({ serve: false });
+    expect(servedProjectReads(pools, null, T, 20_000)).toEqual({ serve: false });
+  });
+
+  it('servedFleetReads: the listing and the pools read serve together with the larger age, or not at all', () => {
+    const listing = { listedAt: T - 9_000, sessions: [] as string[] };
+    const poolsRead = { listedAt: T - 2_000 };
+    expect(servedFleetReads(listing, poolsRead, T, 20_000)).toEqual({ serve: true, listing, ageMs: 9_000 });
+    expect(servedFleetReads(listing, { listedAt: T - 30_000 }, T, 20_000)).toEqual({ serve: false });
+    expect(servedFleetReads({ ...listing, listedAt: T - 30_000 }, poolsRead, T, 20_000)).toEqual({ serve: false });
+    expect(servedFleetReads(listing, null, T, 20_000), 'no pools read').toEqual({ serve: false });
+    expect(servedFleetReads(null, poolsRead, T, 20_000), 'no listing').toEqual({ serve: false });
+  });
 });

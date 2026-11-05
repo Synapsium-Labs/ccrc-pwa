@@ -21,6 +21,18 @@ export function servedFromWatcher<T extends { listedAt: number }>(
   return ageMs >= 0 && ageMs < boundMs ? { serve: true, value: stamped, ageMs } : { serve: false };
 }
 
+/** Two stamped measurements served together or not at all, with the older age. Pure. */
+function servedPair<A extends { listedAt: number }, B extends { listedAt: number }>(
+  a: A | null,
+  b: B | null,
+  nowMs: number,
+  boundMs: number,
+): { serve: true; a: A; b: B; ageMs: number } | { serve: false } {
+  const x = servedFromWatcher(a, nowMs, boundMs);
+  const y = servedFromWatcher(b, nowMs, boundMs);
+  return x.serve && y.serve ? { serve: true, a: x.value, b: y.value, ageMs: Math.max(x.ageMs, y.ageMs) } : { serve: false };
+}
+
 /**
  * `GET /api/projects` reads two things the watcher also holds: the project-pool sweep and the limits. It serves them
  * only when BOTH are within the bound, since one served beside one read would stamp an answer with an age that is true of
@@ -32,7 +44,22 @@ export function servedProjectReads<P extends { listedAt: number }, L extends { l
   nowMs: number,
   boundMs: number = FLEET_ROWS_MAX_AGE_MS,
 ): { serve: true; pools: P; limits: L; ageMs: number } | { serve: false } {
-  const p = servedFromWatcher(pools, nowMs, boundMs);
-  const l = servedFromWatcher(limits, nowMs, boundMs);
-  return p.serve && l.serve ? { serve: true, pools: p.value, limits: l.value, ageMs: Math.max(p.ageMs, l.ageMs) } : { serve: false };
+  const r = servedPair(pools, limits, nowMs, boundMs);
+  return r.serve ? { serve: true, pools: r.a, limits: r.b, ageMs: r.ageMs } : { serve: false };
+}
+
+/**
+ * `GET /api/fleet` serves the watcher's registry listing and its pools wire together. The wire (`currentPools()`) carries
+ * no stamp of its own, so its freshness is that of the pools READ the watcher kept beside it (`currentProjectPoolsRead()`,
+ * set in the same `emitPools` call and cleared by an unlistable tick). Both within the bound, or neither is served: after an
+ * unlistable tick a fresh-looking listing must not travel with a `listed:false` wire. The age is the older of the two. Pure.
+ */
+export function servedFleetReads<F extends { listedAt: number }, P extends { listedAt: number }>(
+  listing: F | null,
+  poolsRead: P | null,
+  nowMs: number,
+  boundMs: number = FLEET_ROWS_MAX_AGE_MS,
+): { serve: true; listing: F; ageMs: number } | { serve: false } {
+  const r = servedPair(listing, poolsRead, nowMs, boundMs);
+  return r.serve ? { serve: true, listing: r.a, ageMs: r.ageMs } : { serve: false };
 }
