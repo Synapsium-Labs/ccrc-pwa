@@ -26,6 +26,12 @@ describe('anySendUnresolved (Task C3, F4)', () => {
     expect(anySendUnresolved()).toBe(true);
   });
 
+  it('a failed send holds even if marked queued', () => {
+    // No writer makes this today; it pins the reader's failed clause on its own.
+    put('unresolved-a', [{ key: 'p1', text: 'hello', state: 'failed', queued: true, error: 'not sent' }]);
+    expect(anySendUnresolved()).toBe(true);
+  });
+
   it('a queued send does not hold', () => {
     put('unresolved-a', [{ key: 'p1', text: 'hello', state: 'sending', queued: true }]);
     expect(anySendUnresolved()).toBe(false);
