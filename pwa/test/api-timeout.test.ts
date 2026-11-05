@@ -188,6 +188,7 @@ describe('ReadOpts reach the polled reads', () => {
     ['stallWatch', (a, o) => a.stallWatch(o)],
     ['collectLane', (a, o) => a.collectLane(o)],
     ['dispatchAbandon', (a, o) => a.dispatchAbandon(o)],
+    ['scopeSweep', (a, o) => a.scopeSweep(o)],
     ['testbox', (a, o) => a.testbox(o)],
     ['linearWorkspaces', (a, o) => a.linearWorkspaces(o)],
     ['digest', (a, o) => a.digest(undefined, o)],
