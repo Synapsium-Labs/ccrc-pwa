@@ -39059,8 +39059,9 @@ _ws_collect_qpath() {   # -> 0 with _WS_QPATH = `<physical ~/.cc-tmp>/.ccd-quara
   _WS_QPATH="${_WS_PHYS%/}/.ccd-quarantine"
 }
 
-_ws_collect_record_write() {   # id slot token -> 0 written, and PROVEN by reading it back; 1 not written
-  #                                (_WS_QREC_WHY) — the caller then refuses before anything moves
+_ws_collect_record_write() {   # id slot token [leaf] -> 0 written, and PROVEN by reading it back; 1 not written
+  #                                (_WS_QREC_WHY) — the caller then refuses before anything moves. leaf, given
+  #                                only for a leaf released after a box move, is its own `dev:ino:btime`
   # THE WITNESS LINE IT ACTED ON is the caller's last `_ws_tmproot_witness_read`
   # of id (`_WS_WIT_*`), and the CHECKOUTS its last pre-move `_ws_leaf_checkouts`
   # of the leaf (`_WS_CHECKOUTS_ACCEPTED`). A witness with no birth time (`-`) is
@@ -39071,8 +39072,15 @@ _ws_collect_record_write() {   # id slot token -> 0 written, and PROVEN by readi
   # path it carries is the `checkouts=` list's encoded admin and back-link
   # paths. A record that stands is never overwritten, and its directory is made
   # 0700 on first write.
-  local LC_ALL=C id="${1-}" slot="${2-}" token="${3-}" dir base name f tmp line co
+  # A LEAF RELEASED AFTER A BOX MOVE (`_ws_collect_moved_host`, Task R4) is
+  # not the directory its witness names: the record then ends ` leaf=` with the
+  # leaf's own `dev:ino:btime`, which every physical proof after this reads
+  # (`_WS_QREC_PDEV`…), while the witness's fields stay for its compare-and-drop.
+  # The witness itself is never written.
+  local LC_ALL=C id="${1-}" slot="${2-}" token="${3-}" leaf="${4-}" dir base name f tmp line co
   _WS_QREC_WHY=''
+  [[ -z "$leaf" || "$leaf" =~ ^[0-9]+:[0-9]+:[1-9][0-9]*$ ]] \
+    || { _WS_QREC_WHY="the leaf identity '$leaf' is not one ccd measures, so no record was written"; return 1; }
   _ws_tmproot_id_ok "$id" || { _WS_QREC_WHY="'$id' is not an id a witness is named for, so no record was written"; return 1; }
   base="${slot##*/}"
   [[ "$slot" == /* && "$base" == slot.* ]] || { _WS_QREC_WHY="$slot is not a quarantine slot's path, so no record was written"; return 1; }
@@ -39088,7 +39096,7 @@ _ws_collect_record_write() {   # id slot token -> 0 written, and PROVEN by readi
     || { _WS_QREC_WHY="no witness of $id with a birth time was read, so no record was written"; return 1; }
   co="${_WS_CHECKOUTS_ACCEPTED-}"
   _ws_collect_pairs_ok "$co" || { _WS_QREC_WHY="the accepted checkouts are not a list ccd writes, so no record was written"; return 1; }
-  line="v=1 id=$id dev=$_WS_WIT_DEV ino=$_WS_WIT_INO btime=$_WS_WIT_BTIME run=$_WS_WIT_RUN at=$_WS_WIT_AT token=$token checkouts=$co"
+  line="v=1 id=$id dev=$_WS_WIT_DEV ino=$_WS_WIT_INO btime=$_WS_WIT_BTIME run=$_WS_WIT_RUN at=$_WS_WIT_AT token=$token checkouts=$co${leaf:+ leaf=$leaf}"
   (( ${#line} + 1 <= WS_COLLECT_RECORD_MAX )) \
     || { _WS_QREC_WHY="the record of $id would hold more than $WS_COLLECT_RECORD_MAX bytes, so none was written"; return 1; }
   dir=$(_ws_collect_qrec_dir)
@@ -39102,7 +39110,8 @@ _ws_collect_record_write() {   # id slot token -> 0 written, and PROVEN by readi
     || { rm -f -- "$tmp" 2>/dev/null; _WS_QREC_WHY="$tmp could not be written, so no record was written"; return 1; }
   mv -f -- "$tmp" "$f" 2>/dev/null \
     || { rm -f -- "$tmp" 2>/dev/null; _WS_QREC_WHY="$tmp could not be renamed to $f, so no record was written"; return 1; }
-  if ! _ws_collect_record_read "$f" || [[ "$_WS_QREC_TOKEN" != "$token" || "$_WS_QREC_SLOT" != "$slot" ]]; then
+  if ! _ws_collect_record_read "$f" || [[ "$_WS_QREC_TOKEN" != "$token" || "$_WS_QREC_SLOT" != "$slot" \
+       || "$_WS_QREC_LEAF" != "$leaf" ]]; then
     rm -f -- "$f" 2>/dev/null
     _WS_QREC_WHY="$f did not read back as it was written, so it was removed and nothing moves"; return 1
   fi
@@ -39110,7 +39119,8 @@ _ws_collect_record_write() {   # id slot token -> 0 written, and PROVEN by readi
 }
 
 _ws_collect_record_read() {   # file -> 0 parsed (sets _WS_QREC_ID _WS_QREC_SLOT _WS_QREC_DEV _WS_QREC_INO
-  #                               _WS_QREC_BTIME _WS_QREC_RUN _WS_QREC_AT _WS_QREC_TOKEN _WS_QREC_CHECKOUTS)
+  #                               _WS_QREC_BTIME _WS_QREC_RUN _WS_QREC_AT _WS_QREC_TOKEN _WS_QREC_CHECKOUTS, and
+  #                               _WS_QREC_LEAF with the PHYSICAL identity _WS_QREC_PDEV _WS_QREC_PINO _WS_QREC_PBTIME)
   #                               | 1 absent, PROVEN | 2 unreadable or malformed | 3 unmeasured (_WS_QPATH_WHY):
   #                               whether the record stands could not be measured, or the physical
   #                               ~/.cc-tmp cannot be resolved, so no slot is derived
@@ -39135,12 +39145,20 @@ _ws_collect_record_read() {   # file -> 0 parsed (sets _WS_QREC_ID _WS_QREC_SLOT
   # `_ws_collect_qpath`, which makes nothing, so a record never names another
   # id's slot and a space in a path never splits one. `_WS_QREC_CHECKOUTS`
   # stays in `_ws_collect_enc`'s spelling, the form `_ws_leaf_checkouts`' alias
-  # compares.
+  # compares. THE PHYSICAL IDENTITY (Task R4): a record a released leaf left
+  # (`_ws_collect_moved_host`) ends ` leaf=<dev>:<ino>:<btime>`, the identity
+  # of the directory the verb moved; any other record's is the witness's. So
+  # `_WS_QREC_PDEV`, `_WS_QREC_PINO` and `_WS_QREC_PBTIME` are what every
+  # physical proof reads (the slot's leaf, the original path, the removal),
+  # and `_WS_QREC_DEV`, `_WS_QREC_INO` and `_WS_QREC_BTIME` stay the witness's,
+  # for its compare-and-drop. `_WS_QREC_LEAF` is the field as written, '' when
+  # absent. An older ccd reads such a record as malformed: kept, the operator's.
   local LC_ALL=C f="${1-}" name body line fd max rc
   local -a m
-  local re='^v=1 id=([A-Za-z0-9._-]+) dev=([0-9]+) ino=([0-9]+) btime=([1-9][0-9]*) run=([^ ]+) at=([0-9]{13}) token=([0-9a-f]{64}) checkouts=([^ ]*)$'
+  local re='^v=1 id=([A-Za-z0-9._-]+) dev=([0-9]+) ino=([0-9]+) btime=([1-9][0-9]*) run=([^ ]+) at=([0-9]{13}) token=([0-9a-f]{64}) checkouts=([^ ]*)( leaf=([0-9]+):([0-9]+):([1-9][0-9]*))?$'
   _WS_QREC_ID=''; _WS_QREC_SLOT=''; _WS_QREC_DEV=''; _WS_QREC_INO=''; _WS_QREC_BTIME=''
   _WS_QREC_RUN=''; _WS_QREC_AT=''; _WS_QREC_TOKEN=''; _WS_QREC_CHECKOUTS=''
+  _WS_QREC_LEAF=''; _WS_QREC_PDEV=''; _WS_QREC_PINO=''; _WS_QREC_PBTIME=''
   name="${f##*/}"
   [[ "$name" != .* ]] && _ws_collect_rec_id "$name" || return 2
   [[ ! -L "${f%/*}" ]] || return 2
@@ -39163,6 +39181,12 @@ _ws_collect_record_read() {   # file -> 0 parsed (sets _WS_QREC_ID _WS_QREC_SLOT
   _WS_QREC_ID="${m[1]}"; _WS_QREC_SLOT="$_WS_QPATH/slot.$name"; _WS_QREC_DEV="${m[2]}"; _WS_QREC_INO="${m[3]}"
   _WS_QREC_BTIME="${m[4]}"; _WS_QREC_RUN="${m[5]}"; _WS_QREC_AT="${m[6]}"; _WS_QREC_TOKEN="${m[7]}"
   _WS_QREC_CHECKOUTS="${m[8]}"
+  if [[ -n "${m[9]}" ]]; then
+    _WS_QREC_LEAF="${m[10]}:${m[11]}:${m[12]}"
+    _WS_QREC_PDEV="${m[10]}"; _WS_QREC_PINO="${m[11]}"; _WS_QREC_PBTIME="${m[12]}"
+  else
+    _WS_QREC_PDEV="${m[2]}"; _WS_QREC_PINO="${m[3]}"; _WS_QREC_PBTIME="${m[4]}"
+  fi
   return 0
 }
 
@@ -39525,6 +39549,18 @@ _ws_collect_token() {   # id -> the collector's token on stdout; rc 2, nothing p
   _child_runid_valid "${_WS_WIT_RUN-}" || return 2
   [[ "${_WS_IDLE_NEWEST_NS-}" =~ ^[0-9]{1,19}$ && "${_WS_IDLE_COUNT-}" =~ ^[1-9][0-9]*$ \
      && "${_WS_IDLE_LEAF-}" == */"$id" ]] || return 2
+  # A LEAF RELEASED AFTER A BOX MOVE (`_ws_collect_moved_host`, Task R4): its
+  # own mode, so it never equals today's token, and the leaf's own identity
+  # beside the witness's, so another directory at the id is another consent.
+  # It binds the walk as today's does.
+  if [[ "${_WS_COLLECT_WITNESS-}" == moved-host ]]; then
+    [[ "${_WS_COLLECT_LDEV-}" =~ ^[0-9]+$ && "${_WS_COLLECT_LINO-}" =~ ^[0-9]+$ && "${_WS_COLLECT_LBTIME-}" =~ ^[1-9][0-9]*$ ]] \
+      || return 2
+    _ws_reclaim_fingerprint "mode=collect-moved" "id=$id" "dev=$_WS_WIT_DEV" "ino=$_WS_WIT_INO" "btime=$_WS_WIT_BTIME" \
+      "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT" "leafdev=$_WS_COLLECT_LDEV" "leafino=$_WS_COLLECT_LINO" \
+      "leafbtime=$_WS_COLLECT_LBTIME" "newestCtimeNs=$_WS_IDLE_NEWEST_NS" "entries=$_WS_IDLE_COUNT"
+    return
+  fi
   _ws_reclaim_fingerprint "mode=collect" "id=$id" "dev=$_WS_WIT_DEV" "ino=$_WS_WIT_INO" "btime=$_WS_WIT_BTIME" \
     "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT" "newestCtimeNs=$_WS_IDLE_NEWEST_NS" "entries=$_WS_IDLE_COUNT"
 }
@@ -39696,6 +39732,7 @@ _ws_collect_reset() {   # -> every answer the collector's evaluation sets, clear
   _WS_COLLECT_PROBE=''; _WS_COLLECT_REG_WHY=''; _WS_COLLECT_PHASE=''; _WS_COLLECT_LEAF=''
   _WS_COLLECT_RECORD=''; _WS_COLLECT_SLOT=''; _WS_COLLECT_NEWEST_NS=''; _WS_COLLECT_ENTRIES=''
   _WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''; _WS_COLLECT_ASIDE=''
+  _WS_COLLECT_WITNESS=''; _WS_COLLECT_LDEV=''; _WS_COLLECT_LINO=''; _WS_COLLECT_LBTIME=''
   _WS_COLLECT_RECORDS=()
   _WS_WIT_DEV=''; _WS_WIT_INO=''; _WS_WIT_BTIME=''; _WS_WIT_RUN=''; _WS_WIT_UID=''; _WS_WIT_AT=''
 }
@@ -39829,6 +39866,70 @@ _ws_collect_root_dev() {   # dev what -> 0 when the physical ~/.cc-tmp is on dev
   return 1
 }
 
+_WS_MOVED_HOST_WHY=''
+_ws_collect_moved_host() {   # id leaf -> 0 the leaf at the id is released BY PATH after a box move (_WS_COLLECT_LDEV,
+  #                                _WS_COLLECT_LINO, _WS_COLLECT_LBTIME = its own identity); 1 one condition is PROVEN
+  #                                false (_WS_MOVED_HOST_WHY), and on Darwin, asking nothing; 2 one could not be read
+  #                                (_WS_MOVED_HOST_WHY): the table, the leaf's identity or birth time, the root's device
+  # THE COLLECTOR'S BOX-MOVE RELEASE (cleanup un-wedge, Task R4; spec §6.1,
+  # D12), the twin of the rows rung's release for a row's entry field (#1799,
+  # rule (d) in `_ws_reclaim_workdir_shared`). A witness records the device,
+  # inode and birth time of the temp root ccd made; a box move copies the root
+  # to the same path with a new identity, and no directory on the new box can
+  # ever match it. The witness (`_WS_WIT_*`, read by the caller) is released
+  # in favour of the PATH only when all of these hold:
+  #   M1  it carries a birth time and a real device (major not 0, the table's
+  #       `anon`: an overlay or a btrfs subvolume, which no table has to list);
+  #   M2  no line of this host's mount table carries that device, so the
+  #       directory it names is reachable at no path here; asked through the one
+  #       seam (`_ws_collect_mountinfo`) and the rows rung's own parser (a `D`
+  #       request to `_ws_reclaim_idwalk`); a table that cannot be read, is
+  #       empty or holds a line that is no mount is unmeasured, never "not
+  #       mounted";
+  #   M3  the leaf is a real directory at the id (an lstat, never followed),
+  #       owned by this user;
+  #   M4  it is on the device of the physical `~/.cc-tmp`, so it is no mount;
+  #   M5  its birth time is readable and not earlier than the witnessed one: a
+  #       copy is born after its original.
+  # Every later rung runs unchanged (M6), and the token binds the leaf's own
+  # identity beside the witness's, so the verb's in-lock recomputation reaches
+  # this release again or refuses. NOTHING IS WRITTEN: the witness keeps its
+  # one writer. Darwin keeps no mount table, so it asks nothing and answers 1.
+  local id="${1-}" leaf="${2-}" mi have hbt rc ans
+  _WS_MOVED_HOST_WHY=''; _WS_COLLECT_LDEV=''; _WS_COLLECT_LINO=''; _WS_COLLECT_LBTIME=''
+  [[ "$CCD_OS" != darwin ]] \
+    || { _WS_MOVED_HOST_WHY="this box keeps no mount table, so a moved host is never told from a moved leaf"; return 1; }
+  [[ "${_WS_WIT_DEV-}" =~ ^[1-9][0-9]{0,18}$ && "${_WS_WIT_BTIME-}" =~ ^[1-9][0-9]*$ ]] \
+    || { _WS_MOVED_HOST_WHY="the witness of $id carries no device or birth time to release"; return 1; }
+  [[ -d "$leaf" && ! -L "$leaf" && -O "$leaf" ]] \
+    || { _WS_MOVED_HOST_WHY="$leaf is not a real directory of this user"; return 1; }
+  mi=$(_ws_collect_mountinfo)
+  [[ -n "$mi" ]] \
+    || { _WS_MOVED_HOST_WHY="the mount table's seam names no mount table, so whether this host has device $_WS_WIT_DEV was never asked"; return 2; }
+  _ws_reclaim_idwalk "$mi" < <(printf 'D\t0\t%s\0' "$_WS_WIT_DEV"); rc=$?
+  (( rc == 0 )) \
+    || { _WS_MOVED_HOST_WHY="whether this host has device $_WS_WIT_DEV was never asked: $_WS_IDWALK_WHY"; return 2; }
+  ans="${_WS_IDWALK_OUT%%$'\n'*}"; ans="${ans#D 0 }"
+  case "$ans" in
+    absent) : ;;
+    anon) _WS_MOVED_HOST_WHY="the witness's device $_WS_WIT_DEV is of major 0, which no mount table has to list"; return 1 ;;
+    mounted) _WS_MOVED_HOST_WHY="this host mounts the witness's device $_WS_WIT_DEV, so the directory it names may stand here"; return 1 ;;
+    *) _WS_MOVED_HOST_WHY="whether this host has device $_WS_WIT_DEV could not be read from $mi (${ans#un })"; return 2 ;;
+  esac
+  have=$(_plat_devino "$leaf" 2>/dev/null) && [[ "$have" =~ ^[0-9]+:[0-9]+$ ]] \
+    || { _WS_MOVED_HOST_WHY="the device and inode of $leaf could not be read"; return 2; }
+  hbt=$(_plat_btime "$leaf" 2>/dev/null) && [[ "$hbt" =~ ^-?[0-9]+$ ]] \
+    || { _WS_MOVED_HOST_WHY="the birth time of $leaf could not be read"; return 2; }
+  (( hbt > 0 )) || { _WS_MOVED_HOST_WHY="the birth time of $leaf could not be read (this file system keeps none)"; return 2; }
+  _ws_collect_root_dev "${have%%:*}" "$leaf"; rc=$?
+  (( rc != 2 )) || { _WS_MOVED_HOST_WHY="$_WS_ROOTDEV_WHY"; return 2; }
+  (( rc == 0 )) || { _WS_MOVED_HOST_WHY="$leaf is not on the device of the physical $HOME/.cc-tmp, so it may be a mount: $_WS_ROOTDEV_WHY"; return 1; }
+  (( 10#$hbt >= 10#$_WS_WIT_BTIME )) \
+    || { _WS_MOVED_HOST_WHY="$leaf was born before the witnessed birth time $_WS_WIT_BTIME (born $hbt), so it is no copy of it"; return 1; }
+  _WS_COLLECT_LDEV="${have%%:*}"; _WS_COLLECT_LINO="${have#*:}"; _WS_COLLECT_LBTIME="$hbt"
+  return 0
+}
+
 _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP_TOKEN), a word, or `unmeasured`
   #                        (_WS_COLLECT_PROBE). The CALLER HOLDS `$REG/.reap-<id>.lock`. Reads only.
   local id="$1" leaf="$HOME/.cc-tmp/$1" rc floor why=walk-failed mode owner
@@ -39906,8 +40007,16 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
     _ws_reclaim_absent "$leaf"; rc=$?
     (( rc != 0 )) || { _ws_collect_unmeasured leaf "$leaf vanished while its identity was read — the next pass asks again"; return 1; }
     (( rc != 2 )) || { _ws_collect_unmeasured leaf "$_WS_ABSENT_WHY"; return 1; }
-    _ws_refuse witness-mismatch "$leaf is $(_plat_devino "$leaf" 2>/dev/null) born $(_plat_btime "$leaf" 2>/dev/null), not the $_WS_WIT_DEV:$_WS_WIT_INO born $_WS_WIT_BTIME $wits names — it is offered to the operator, never taken"
-    return 1
+    # A BOX MOVE (Task R4, spec §6.1): the one release of this identity, by
+    # path (`_ws_collect_moved_host`). Its rc 2 is unmeasured, never folded
+    # into the terminal word; every rung below still runs.
+    _ws_collect_moved_host "$id" "$leaf"; rc=$?
+    (( rc != 2 )) || { _ws_collect_unmeasured identity "$_WS_MOVED_HOST_WHY"; return 1; }
+    if (( rc != 0 )); then
+      _ws_refuse witness-mismatch "$leaf is $(_plat_devino "$leaf" 2>/dev/null) born $(_plat_btime "$leaf" 2>/dev/null), not the $_WS_WIT_DEV:$_WS_WIT_INO born $_WS_WIT_BTIME $wits names — it is offered to the operator, never taken${_WS_MOVED_HOST_WHY:+ ($_WS_MOVED_HOST_WHY)}"
+      return 1
+    fi
+    _WS_COLLECT_WITNESS=moved-host
   fi
   # OWNER WRITE, read off the leaf whose identity was just proven (spec
   # §5.10): a directory without it cannot be renamed to another parent, so the
@@ -39986,6 +40095,10 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   # pass shares (path-identity spec §2.5), so a junk or foreign record is answered in one set of words.
   _ws_collect_records_judge "$id" "$@" || return 1
   rec="$_WS_COLLECT_RECORD"; name="${rec##*/}"
+  # A RECORD A LEAF RELEASED AFTER A BOX MOVE LEFT (`leaf=`, Task R4): every
+  # identity below is the PHYSICAL one (`_WS_QREC_P*`, the leaf's own), and the
+  # document says `witness: moved-host`.
+  [[ -z "${_WS_QREC_LEAF-}" ]] || _WS_COLLECT_WITNESS=moved-host
   [[ "${_WS_QREC_BTIME-}" =~ ^[1-9][0-9]*$ ]] \
     || { _ws_refuse quarantine-kept "the quarantine record $rec records no birth time, so device and inode alone would vouch for what it names — it is kept for the operator"; return 1; }
   # THE QUARANTINE, asked as the fresh arm asks it (`_ws_collect_qcheck`,
@@ -40010,7 +40123,7 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
       _ws_refuse quarantine-kept "$sleaf is a link or not a directory — a slot leaf that is not the one moved there is kept for the operator"
       return 1
     elif [[ -d "$sleaf" ]]; then
-      _ws_collect_ident "$sleaf" "$_WS_QREC_DEV:$_WS_QREC_INO" "$_WS_QREC_BTIME"; rc=$?
+      _ws_collect_ident "$sleaf" "$_WS_QREC_PDEV:$_WS_QREC_PINO" "$_WS_QREC_PBTIME"; rc=$?
       (( rc != 2 )) || { _ws_collect_unmeasured identity "the device, inode or birth time of $sleaf could not be read"; return 1; }
       if (( rc != 0 )); then
         # As the fresh leaf's: rc 1 is also "nothing stands", and a slot leaf
@@ -40018,7 +40131,7 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
         _ws_reclaim_absent "$sleaf"; rc=$?
         (( rc != 0 )) || { _ws_collect_unmeasured slot "$sleaf vanished while its identity was read — the next pass asks again"; return 1; }
         (( rc != 2 )) || { _ws_collect_unmeasured slot "$_WS_ABSENT_WHY"; return 1; }
-        _ws_refuse quarantine-kept "$sleaf is $(_plat_devino "$sleaf" 2>/dev/null) born $(_plat_btime "$sleaf" 2>/dev/null), not the $_WS_QREC_DEV:$_WS_QREC_INO born $_WS_QREC_BTIME its record names — it is kept for the operator"
+        _ws_refuse quarantine-kept "$sleaf is $(_plat_devino "$sleaf" 2>/dev/null) born $(_plat_btime "$sleaf" 2>/dev/null), not the $_WS_QREC_PDEV:$_WS_QREC_PINO born $_WS_QREC_PBTIME its record names — it is kept for the operator"
         return 1
       fi
       sstate=leaf
@@ -40027,7 +40140,7 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
     _ws_reclaim_absent "$slot"; rc=$?
     (( rc == 0 )) || { _ws_collect_unmeasured slot "${_WS_ABSENT_WHY:-$slot stands but is neither a link, a file nor a directory}"; return 1; }
   fi
-  _ws_collect_ident "$orig" "$_WS_QREC_DEV:$_WS_QREC_INO" "$_WS_QREC_BTIME"; rc=$?
+  _ws_collect_ident "$orig" "$_WS_QREC_PDEV:$_WS_QREC_PINO" "$_WS_QREC_PBTIME"; rc=$?
   case "$rc" in
     0) ostate=match ;;
     1) _ws_reclaim_absent "$orig"; rc=$?
@@ -40042,7 +40155,7 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
     absent:match) phase=unmoved ;;
     *)          # NEITHER PLACE holds it, which is believed only on the device
                 # the record carries (`moved` and `unmoved` prove it by identity).
-                _ws_collect_root_dev "$_WS_QREC_DEV" "the quarantine record $name" \
+                _ws_collect_root_dev "$_WS_QREC_PDEV" "the quarantine record $name" \
                   || { _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again"; return 1; }
                 phase=removed ;;
   esac
@@ -40069,10 +40182,11 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   # token the record was written under (`pre=`), and its `checkouts=` list,
   # still encoded: the verb hands that list to the removal as the checkouts it
   # accepts, so a record whose list changed is another consent. The witness is
-  # NOT an input: the record is the resume's authority.
+  # NOT an input: the record is the resume's authority. A record a released
+  # leaf left binds its `leaf=` too (Task R4); any other mints today's token.
   REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect-resume "id=$id" "record=$name" "phase=$phase" "slot=$slot" \
     "dev=$_WS_QREC_DEV" "ino=$_WS_QREC_INO" "btime=$_WS_QREC_BTIME" "run=${_WS_QREC_RUN-}" "at=${_WS_QREC_AT-}" \
-    "pre=${_WS_QREC_TOKEN-}" "checkouts=${_WS_QREC_CHECKOUTS-}")
+    "pre=${_WS_QREC_TOKEN-}" "checkouts=${_WS_QREC_CHECKOUTS-}" ${_WS_QREC_LEAF:+"leaf=$_WS_QREC_LEAF"})
   [[ "$REAP_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
     || { REAP_TOKEN=''; _ws_collect_unmeasured token "the resume token of $id could not be minted"; return 1; }
   REAP_VERDICT=collectable
@@ -40356,6 +40470,9 @@ _ws_collect_audit_doc() {   # id -> THE document on stdout, and the journal line
     "$(_json_str "$id")" "$exists" "$(_json_str "$leaf")" "$wit" "$recs" "$newest" "$entries" \
     "$floor" "$idleat" "$probe"
   [[ -z "$_WS_COLLECT_PHASE" ]] || printf '"resume":%s,' "$(_json_str "$_WS_COLLECT_PHASE")"
+  # A leaf released after a box move (Task R4), or a record that names one, says so whatever a later rung answered;
+  # the key is absent otherwise.
+  [[ "${_WS_COLLECT_WITNESS-}" != moved-host ]] || printf '"witness":"moved-host",'
   if [[ "$REAP_VERDICT" == collectable ]]; then
     printf '"verdict":%s,"detail":"","token":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_TOKEN")"
     return 0
@@ -40564,12 +40681,12 @@ _ws_collect_putback() {   # id slot rec orig lctx why surface actor reason -> 0 
   # that cannot be read is left to the move, which refuses it and keeps.
   local id="$1" slot="$2" rec="$3" orig="$4" lctx="$5" why="$6" mrc arc=0 irc
   _ws_collect_gap restoring "$id" "$slot"
-  _ws_collect_ident "$slot/leaf" "${_WS_QREC_DEV-}:${_WS_QREC_INO-}" "${_WS_QREC_BTIME-}"; irc=$?
+  _ws_collect_ident "$slot/leaf" "${_WS_QREC_PDEV-}:${_WS_QREC_PINO-}" "${_WS_QREC_PBTIME-}"; irc=$?
   if (( irc == 1 )); then
     _ws_reclaim_absent "$slot/leaf"; arc=$?
     if (( arc == 1 )); then
       _ws_collect_refused "$id" "$lctx" quarantine-kept \
-        "kept in its slot with the quarantine record ${rec##*/}, listed for the operator, and nothing was moved back or removed: the slot's leaf is not the witnessed directory ${_WS_QREC_DEV-}:${_WS_QREC_INO-} born ${_WS_QREC_BTIME-}, so it never goes back to $orig, after: $why" \
+        "kept in its slot with the quarantine record ${rec##*/}, listed for the operator, and nothing was moved back or removed: the slot's leaf is not the witnessed directory ${_WS_QREC_PDEV-}:${_WS_QREC_PINO-} born ${_WS_QREC_PBTIME-}, so it never goes back to $orig, after: $why" \
         "$7" "$8" "$9"
       return 2
     fi
@@ -40580,7 +40697,7 @@ _ws_collect_putback() {   # id slot rec orig lctx why surface actor reason -> 0 
     fi
     arc=0
   fi
-  _ws_collect_move "$slot/leaf" "$orig" "${_WS_QREC_DEV-}:${_WS_QREC_INO-}" "${_WS_QREC_BTIME-}"; mrc=$?
+  _ws_collect_move "$slot/leaf" "$orig" "${_WS_QREC_PDEV-}:${_WS_QREC_PINO-}" "${_WS_QREC_PBTIME-}"; mrc=$?
   if (( mrc == 0 )); then
     _ws_collect_unwind "$slot" "$rec" && return 0
     _ws_collect_keep "$id" "$rec" "$lctx" "$id is back at $orig, but its slot or its record could not be cleared after: $why"
@@ -40735,7 +40852,11 @@ _ws_collect_finish() {   # id rec slot lctx resumed — the order (spec §5.10),
   _ws_collect_record_drop "$rec" \
     || { _ws_collect_keep "$id" "$rec" "$lctx" "the leaf is gone and its witness $cad, but the record could not be dropped"; return 1; }
   _ws_collect_gap dropped "$id" "$slot"
-  _lc_done collect "$id" "$lctx" verb ws-collect meas.resumed "$resumed" meas.leaf removed \
+  # The witness's compare-and-drop above compared the WITNESS's own fields; a record a leaf released after a box
+  # move left (`leaf=`, Task R4) says so on the done line.
+  local wmeas=()
+  [[ -z "${_WS_QREC_LEAF-}" ]] || wmeas=(meas.witness moved-host)
+  _lc_done collect "$id" "$lctx" verb ws-collect meas.resumed "$resumed" meas.leaf removed ${wmeas[@]+"${wmeas[@]}"} \
     detail "$(_ws_leaf_why_line "witness $cad; $_WS_COLLECT_TEMPS_REMOVED stale witness temp file(s) removed; collected $slot/leaf (record ${rec##*/})")"
   printf '{"collected":%s,"record":%s,"resumed":%s,"witness":%s}\n' "$(_json_str "$id")" "$(_json_str "${rec##*/}")" \
     "$( [[ -n "$resumed" ]] && echo true || echo false )" "$(_json_str "$cad")"
@@ -40766,7 +40887,9 @@ _ws_collect_after_move() {   # id rec orig lctx resumed surface actor reason —
     return 1
   fi
   (( rc == 0 )) || { _ws_collect_keep "$id" "$rec" "$lctx" "the quarantine record $name could not be read back after the move"; return 1; }
-  slot="${_WS_QREC_SLOT-}"; dev="${_WS_QREC_DEV-}"; ino="${_WS_QREC_INO-}"; bt="${_WS_QREC_BTIME-}"
+  # The PHYSICAL identity: the leaf's own for a leaf released after a box move (the record's `leaf=`, Task R4),
+  # else the witness's.
+  slot="${_WS_QREC_SLOT-}"; dev="${_WS_QREC_PDEV-}"; ino="${_WS_QREC_PINO-}"; bt="${_WS_QREC_PBTIME-}"
   # 5 — RE-PROVE after the move. Any doubt moves the leaf back, and only a
   # PROVEN restore clears the slot and the record. A slot's leaf that is not
   # the witnessed one is never moved back: it is KEPT (ruling T8 OPEN5).
@@ -40834,14 +40957,24 @@ _ws_collect_fresh() {   # id q orig lctx surface actor reason — steps 2 to 4 o
   # bound (`_ws_collect_fork`, in this lock, a moment ago): the record holds exactly those.
   local id="$1" q="$2" orig="$3" lctx="$4" surface="$5" actor="$6" reason="$7"
   local dev="${_WS_WIT_DEV-}" ino="${_WS_WIT_INO-}" bt="${_WS_WIT_BTIME-}" run="${_WS_WIT_RUN-}" at="${_WS_WIT_AT-}" token="${REAP_TOKEN-}"
-  local name slot rec rc why dropped
+  local name slot rec rc why dropped leaf='' wmeas=()
+  # THE PHYSICAL IDENTITY every step below proves the leaf by: the witness's,
+  # or, for a leaf the evaluation released after a box move in this lock
+  # (`_ws_collect_moved_host`, Task R4), the leaf's own, which the consent
+  # bound and the record carries as `leaf=`. The witness's fields stay for its
+  # compare-and-drop.
+  local pdev="$dev" pino="$ino" pbt="$bt"
+  if [[ "${_WS_COLLECT_WITNESS-}" == moved-host ]]; then
+    pdev="${_WS_COLLECT_LDEV-}"; pino="${_WS_COLLECT_LINO-}"; pbt="${_WS_COLLECT_LBTIME-}"
+    leaf="$pdev:$pino:$pbt"; wmeas=(meas.witness moved-host)
+  fi
   # 2 — LSTAT THE LEAF (Task 4's `_ws_collect_ident`): a real directory with
   # the witness's identity. A link, a file or a mismatch is never moved and
   # never unlinked: it is the operator's. NOTHING standing there, PROVEN, is
   # no mismatch: the leaf the evaluation saw in this lock is gone, which is a
   # retry (`state-changed`), and the next audit takes the witness-without-leaf
   # arm (ruling R-f). An absence that cannot be proven is unmeasured.
-  _ws_collect_ident "$orig" "$dev:$ino" "$bt"; rc=$?
+  _ws_collect_ident "$orig" "$pdev:$pino" "$pbt"; rc=$?
   case "$rc" in
     0) : ;;
     1) _ws_reclaim_absent "$orig"; rc=$?
@@ -40853,7 +40986,7 @@ _ws_collect_fresh() {   # id q orig lctx surface actor reason — steps 2 to 4 o
        fi
        (( rc != 2 )) || { _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved: ${_WS_ABSENT_WHY:-whether anything stands at $orig could not be asked}")"; return 1; }
        _ws_collect_refused "$id" "" witness-mismatch \
-         "nothing was moved or unlinked, and what stands is the operator's: it is not the real directory its witness names ($dev:$ino, born $bt) — $orig" \
+         "nothing was moved or unlinked, and what stands is the operator's: it is not the real directory its consent names ($pdev:$pino, born $pbt) — $orig" \
          "$surface" "$actor" "$reason"
        return 0 ;;
     *) _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved: the identity of $orig could not be read")"; return 1 ;;
@@ -40881,12 +41014,13 @@ _ws_collect_fresh() {   # id q orig lctx surface actor reason — steps 2 to 4 o
   # nothing between them. The read-back below compares the record with what
   # the consent bound, so a witness rewritten since the evaluation stops here.
   _ws_tmproot_witness_read "$id" || :
-  _ws_collect_record_write "$id" "$slot" "$token" \
+  _ws_collect_record_write "$id" "$slot" "$token" "$leaf" \
     || { _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved: the quarantine record for $id could not be written${_WS_QREC_WHY:+ ($_WS_QREC_WHY)}")"; return 1; }
   _ws_collect_gap recorded "$id" "$slot"
   if ! _ws_collect_record_read "$rec" || [[ "${_WS_QREC_ID-}" != "$id" || "${_WS_QREC_SLOT-}" != "$slot" \
        || "${_WS_QREC_DEV-}" != "$dev" || "${_WS_QREC_INO-}" != "$ino" || "${_WS_QREC_BTIME-}" != "$bt" \
-       || "${_WS_QREC_RUN-}" != "$run" || "${_WS_QREC_AT-}" != "$at" || "${_WS_QREC_TOKEN-}" != "$token" ]]; then
+       || "${_WS_QREC_RUN-}" != "$run" || "${_WS_QREC_AT-}" != "$at" || "${_WS_QREC_TOKEN-}" != "$token" \
+       || "${_WS_QREC_LEAF-}" != "$leaf" ]]; then
     if _ws_collect_record_drop "$rec"; then dropped='and the record was dropped'
     else dropped="and the record could not be dropped (${_WS_QREC_WHY:-not proven gone}): the next pass clears it"; fi
     _ws_reclaim_fail "$id" "" probe-unmeasured \
@@ -40907,12 +41041,12 @@ _ws_collect_fresh() {   # id q orig lctx surface actor reason — steps 2 to 4 o
   _ws_collect_gap slotted "$id" "$slot"
   _lc_intent collect "$id" "$lctx" verb ws-collect \
     detail "$(_ws_leaf_why_line "record $name: moving $orig into $slot/leaf")" \
-    dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
+    dec.surface "$surface" dec.actor "$actor" dec.reason "$reason" ${wmeas[@]+"${wmeas[@]}"}
   # 4 — THE MOVE: Task 4's `_ws_collect_move`, ONE NOREPLACE rename proven by
   # lstat (the slot's leaf is the witnessed directory AND nothing stands at the
   # original path), never by mv's exit code. It asks the source's identity
   # first, and renames nothing when that is not PROVEN the witnessed leaf.
-  _ws_collect_move "$orig" "$slot/leaf" "$dev:$ino" "$bt"; rc=$?
+  _ws_collect_move "$orig" "$slot/leaf" "$pdev:$pino" "$pbt"; rc=$?
   why="${_WS_MOVE_WHY-}"
   case "$rc" in
     0) : ;;
@@ -40994,7 +41128,7 @@ _ws_collect_resume() {   # id rec q orig lctx surface actor reason — a quarant
       # so a leaf that is not the one the record names is never acted on. Its
       # rc 1 is also "nothing stands": a slot leaf that vanished since the
       # evaluation is a retry, never the terminal word.
-      _ws_collect_ident "$slot/leaf" "${_WS_QREC_DEV-}:${_WS_QREC_INO-}" "${_WS_QREC_BTIME-}"; rc=$?
+      _ws_collect_ident "$slot/leaf" "${_WS_QREC_PDEV-}:${_WS_QREC_PINO-}" "${_WS_QREC_PBTIME-}"; rc=$?
       case "$rc" in
         0) : ;;
         1) _ws_reclaim_absent "$slot/leaf"; rc=$?

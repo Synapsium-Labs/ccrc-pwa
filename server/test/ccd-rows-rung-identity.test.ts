@@ -662,10 +662,12 @@ describe.skipIf(!LINUX)('parity: the walk’s mount point arm answers what `_ws_
   });
 });
 
-describe('the mount table has exactly two readers, both through its one seam (R13)', () => {
-  it('two readers: the call graph’s callers of `_ws_collect_mountinfo` are `_ws_collect_mounts_clear` and the rows rung', () => {
+describe('the mount table has exactly three readers, all through its one seam (R13)', () => {
+  // The third is the collector's box-move release (cleanup un-wedge, Task R4), which asks the rows rung's own `D`
+  // parser through `_ws_reclaim_idwalk`, never a parser of its own.
+  it('three readers: the call graph’s callers of `_ws_collect_mountinfo` are `_ws_collect_mounts_clear`, the collector’s box-move release and the rows rung', () => {
     const callers = ccdCallGraph().filter((e) => e.callee === '_ws_collect_mountinfo').map((e) => e.caller).sort();
-    expect(callers).toEqual(['_ws_collect_mounts_clear', '_ws_reclaim_workdir_shared']);
+    expect(callers).toEqual(['_ws_collect_mounts_clear', '_ws_collect_moved_host', '_ws_reclaim_workdir_shared']);
   });
 
   it('one literal: /proc/self/mountinfo stands in ccd’s code only in the seam and in `_carry_py`’s own CCD_MOUNTINFO reader', () => {
