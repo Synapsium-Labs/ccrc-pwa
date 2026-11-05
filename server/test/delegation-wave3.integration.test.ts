@@ -55,7 +55,7 @@ import { makeCcdHarness } from './ccdWsHelpers.js';
 import * as policy from '../src/coord/delegation-policy.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { parsedFile } from './scan/symbols.js';
+import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const HOOK = path.join(REPO_ROOT, 'ccd/session-hook.sh');
@@ -1272,18 +1272,20 @@ describe('8. the closed scope census', () => {
   // W5-K15 (delegation wave 5 PR6): the carrier verb is composed in ONE place, `markLeaseCarrier`, and only the lane's `leaseActs`
   // phase calls it (PR9 adds `server/src/coord/dispatch.ts` to this row; PR8 adds none: its doors leave the mark to the lane).
   it('W5-K15: the carrier mark is composed only through markLeaseCarrier, and only the lane\'s leaseActs phase calls it', () => {
+    // Keyed on the parse (scan/parse.ts calls, scan/symbols.ts spans), never on literal source text.
     const SRC = filesUnder('server/src', /\.ts$/);
-    expect(SRC.filter((f) => /CCD_ARGV\.leaseMark\(/.test(code(read(f)))), 'the builder\'s one caller').toEqual(['server/src/coord/delegationCarrierMark.ts']);
-    const calls = (f: string): number => [...code(read(f)).replace(/export async function markLeaseCarrier\(/, '').matchAll(/\bmarkLeaseCarrier\(/g)].length;
-    expect(SRC.filter((f) => calls(f) > 0), 'markLeaseCarrier\'s callers').toEqual(['server/src/watch.ts']);
-    expect(calls('server/src/watch.ts'), 'one call site').toBe(1);
-    const watch = code(read('server/src/watch.ts'));
-    const lane = watch.slice(watch.indexOf('class DelegationLane {'));
-    const start = lane.indexOf("this.phase(pass, 'leaseActs')");
-    const end = lane.indexOf('endActs(); }', start);
-    expect(start, 'the leaseActs phase opens').toBeGreaterThan(-1);
-    expect(end, 'and closes').toBeGreaterThan(start);
-    expect(lane.slice(start, end), 'the call is inside the leaseActs phase of DelegationLane').toMatch(/\bmarkLeaseCarrier\(/);
+    const callsOf = (f: string, callee: string): number => parsedFile(f).calls.filter((c) => c.callee === callee).length;
+    expect(SRC.filter((f) => callsOf(f, 'CCD_ARGV.leaseMark') > 0), 'the builder\'s one caller').toEqual(['server/src/coord/delegationCarrierMark.ts']);
+    expect(SRC.filter((f) => callsOf(f, 'markLeaseCarrier') > 0), 'markLeaseCarrier\'s callers').toEqual(['server/src/watch.ts']);
+    expect(callsOf('server/src/watch.ts', 'markLeaseCarrier'), 'one call site').toBe(1);
+    const run = callsIn(symbolOf('server/src/watch.ts', 'DelegationLane.run'));
+    const open = run.find((c) => c.name === 'phase' && c.args[1]?.text === 'leaseActs');
+    expect(open, 'DelegationLane.run opens the leaseActs phase').toBeDefined();
+    const close = run.find((c) => c.callee === 'endActs' && c.start > open!.start);
+    expect(close, 'and ends it').toBeDefined();
+    const mark = run.find((c) => c.callee === 'markLeaseCarrier');
+    expect(mark, 'the one call is in DelegationLane.run').toBeDefined();
+    expect(mark!.start > open!.end && mark!.end < close!.start, 'inside the leaseActs phase').toBe(true);
   });
 
   it('the complete future-facing columns exist, and no wave-3 writer can transition or populate them beyond inert initialization', async () => {

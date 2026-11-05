@@ -50,8 +50,13 @@ export function isStandingMarkRefusal(word: LeaseMarkRefusal): boolean {
 
 const LEASE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const STRINGS = ['parentId', 'parentIncarnation', 'activityId', 'project', 'adminRecord', 'canonicalPath', 'fingerprint'] as const;
-const KEYS: readonly (keyof DelegationCarrierBody)[] = ['v', 'leaseId', 'generation', 'state', 'journalSeq', ...STRINGS, 'source',
-  'claudeBase', 'branch', 'expiresAt', 'releaseReason', 'promotedRun', 'promotedSession', 'markedAt'];
+/** Every key of the body, total over the interface: a key added to `DelegationCarrierBody` is a compile error here until it is listed. */
+const BODY_KEYS: Readonly<Record<keyof DelegationCarrierBody, true>> = {
+  v: true, leaseId: true, generation: true, state: true, journalSeq: true, parentId: true, parentIncarnation: true, activityId: true,
+  source: true, project: true, adminRecord: true, canonicalPath: true, fingerprint: true, claudeBase: true, branch: true, expiresAt: true,
+  releaseReason: true, promotedRun: true, promotedSession: true, markedAt: true,
+};
+const KEYS = Object.keys(BODY_KEYS) as readonly (keyof DelegationCarrierBody)[];
 const count = (v: unknown, min: number): boolean => typeof v === 'number' && Number.isSafeInteger(v) && v >= min;
 const strOrNull = (v: unknown): boolean => v === null || typeof v === 'string';
 
