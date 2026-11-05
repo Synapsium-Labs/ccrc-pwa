@@ -3159,7 +3159,9 @@ describe('boot refusal (R24): an active restore marker, or one that cannot be me
     child.stdout.on('data', () => {});
     const code = await new Promise<number | null>((resolve) => {
       const timer = setTimeout(() => { killGroup(); resolve(null); }, 30_000);
-      child.on('exit', (c) => { clearTimeout(timer); killGroup(); resolve(c); });
+      // The group goes on `exit`, so a grandchild cannot hold the pipes open; the read ends on `close`, every byte in.
+      child.on('exit', () => { killGroup(); });
+      child.on('close', (c) => { clearTimeout(timer); resolve(c); });
     });
     expect(code, `stderr: ${stderr}`).toBe(1);
     expect(stderr).toContain('ccrc coordination-snapshot recover');

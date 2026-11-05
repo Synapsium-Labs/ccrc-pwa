@@ -133,7 +133,7 @@ describe('end to end: a nested real vitest under the agent\'s real setup (A2-A4)
     c.stdout!.setEncoding('utf8').on('data', (d: string) => { out += d; });
     c.stderr!.setEncoding('utf8').on('data', (d: string) => { out += d; });
     const watchdog = setTimeout(() => killGroup(c, 'SIGKILL'), 90_000);
-    const exit = new Promise<Exit>((r) => c.once('exit', (code, signal) => { clearTimeout(watchdog); r({ code, signal }); }));
+    const exit = new Promise<Exit>((r) => c.once('close', (code, signal) => { clearTimeout(watchdog); r({ code, signal }); }));
     return { child: c, pid: c.pid!, fx, exit, output: () => out };
   }
 
