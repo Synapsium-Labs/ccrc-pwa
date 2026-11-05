@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
-  PANE_LISTING_FORMAT, Tmux, parsePaneListing, pidFromListing, verdictFromListing,
+  PANE_LISTING_DEADLINE_MS, PANE_LISTING_FORMAT, Tmux, parsePaneListing, pidFromListing, verdictFromListing,
   type ExecResult, type PaneListing, type Runner,
 } from '../src/exec.js';
 import { isExecAllowed } from '../../agent/src/whitelist.js';
@@ -93,6 +93,30 @@ describe('Tmux.listPanes', () => {
     expect(l.at).toBeGreaterThanOrEqual(before);
     expect(l.at).toBeLessThanOrEqual(Date.now());
     expect(isExecAllowed('tmux', calls[0]!.slice(1))).toBe(true);
+  });
+});
+
+describe('Tmux.listPanes deadline', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  it('a tmux that never answers reads as a failed listing after the deadline', async () => {
+    vi.useFakeTimers();
+    const run: Runner = () => new Promise(() => {});
+    const p = new Tmux(run).listPanes();
+    let settled = false;
+    void p.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(PANE_LISTING_DEADLINE_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const l = await p;
+    expect(l.ok).toBe(false);
+    if (!l.ok) expect(l.detail).toBe('tmux list-panes did not answer within 10 s');
+  });
+  it('an answer in time leaves no timer behind', async () => {
+    vi.useFakeTimers();
+    const run: Runner = async () => ran('cc-x 1 0 9\n');
+    const l = await new Tmux(run).listPanes();
+    expect(l.ok).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

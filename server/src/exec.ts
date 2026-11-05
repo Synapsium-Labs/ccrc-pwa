@@ -132,6 +132,10 @@ const PANE_PROBE_ROW = /^([01]) (\d+) (\d+) (\d+) (\d+) ([01])$/;
  *  believing them. */
 export const PANE_LISTING_FORMAT = '#{session_name} #{window_active} #{pane_index} #{pane_pid}';
 
+/** The longest a watcher tick waits for the listing: the remote agent's exec deadline, so a local tmux that hangs is
+ *  bounded as a remote one is. Past it the answer is a failed listing and the tick asks each row the old way. */
+export const PANE_LISTING_DEADLINE_MS = 10_000;
+
 // The pure readers of a decoded listing (`PaneListing`, `verdictFromListing`, `pidFromListing`) live in `tickPlan.ts`
 // (L1) so no policy file loads this adapter; re-exported here so every import of them keeps resolving. The decoder of
 // tmux's own text stays here, beside the format it reads.
@@ -178,10 +182,24 @@ export class Tmux {
     return classifyHasSession(await this.run('tmux', ['has-session', '-t', tmuxTarget(id)]));
   }
   /** Console speed S1: every session's panes in one exec. Failure contract: `ok: false` for a listing that did not
-   *  run, failed or did not parse, and never an empty `panes` standing for it. `at` is taken before the exec. */
+   *  run, failed, did not parse or did not answer within `PANE_LISTING_DEADLINE_MS`, and never an empty `panes`
+   *  standing for it. `at` is taken before the exec. The deadline is a timer local to this call (cleared when the
+   *  call settles): the local runner has none, and the registry read waits on this listing. */
   async listPanes(): Promise<PaneListing> {
     const at = Date.now();
-    return parsePaneListing(await this.run('tmux', ['list-panes', '-a', '-F', PANE_LISTING_FORMAT]), at);
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<PaneListing>((resolve) => {
+      timer = setTimeout(
+        () => resolve({ ok: false, at, detail: `tmux list-panes did not answer within ${PANE_LISTING_DEADLINE_MS / 1000} s` }),
+        PANE_LISTING_DEADLINE_MS,
+      );
+    });
+    try {
+      return await Promise.race([
+        this.run('tmux', ['list-panes', '-a', '-F', PANE_LISTING_FORMAT]).then((r) => parsePaneListing(r, at)),
+        late,
+      ]);
+    } finally { clearTimeout(timer); }
   }
   /** Derived, exactly like bash `_alive`: true only for `live`. A caller that
    *  handles `gone` differently from `unknown` must use `sessionVerdict`
