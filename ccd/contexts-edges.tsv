@@ -10,6 +10,7 @@ _auto_stale_check -> _reg_get_to
 _auto_stale_check -> _reg_set
 _auto_stale_check -> _tmux_t
 _auto_swap_check -> _pane_born
+_auto_swap_check -> _pane_box_has_content
 _auto_swap_check -> _pane_measurable
 _auto_swap_check -> _route_note_floored
 _auto_swap_check -> _tmux_t
