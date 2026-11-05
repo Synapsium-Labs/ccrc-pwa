@@ -1,4 +1,5 @@
-// The page clock (D-7191; ARCH-75, #810): the ONE `visibilitychange` and the ONE `online` subscription in `pwa/src`.
+// The page clock (D-7191; ARCH-75, #810): the ONE `visibilitychange` and the ONE `online` subscription in `pwa/src`,
+// and since console speed Task C3 one window `focus` and one window `blur` subscription for the reload gate's "back".
 // Every view, hook and store that acts when the page turns visible, turns hidden or comes back online subscribes
 // here, and each subscription returns its stop. A document (or window) listener is added with its first subscriber
 // and removed with its last stop, so a page with no subscriber holds none (the leak rows in
@@ -57,4 +58,30 @@ export function onOnline(handler: Handler): Stop {
     if (!onlineHandlers.delete(handler)) return;
     if (onlineHandlers.size === 0) window.removeEventListener('online', onBackOnline);
   };
+}
+
+// ─── window focus and blur (console speed, Task C3) ─────────────────────────────────────────────────────────────────
+// A desktop window can stay visible for hours behind another window; regaining focus is how that person comes back.
+const focusHandlers = new Set<Handler>();
+const blurHandlers = new Set<Handler>();
+const onFocus = (): void => fanOut(focusHandlers);
+const onBlur = (): void => fanOut(blurHandlers);
+
+function subscribeWindow(type: 'focus' | 'blur', handlers: Set<Handler>, listener: Handler, handler: Handler): Stop {
+  if (handlers.size === 0) window.addEventListener(type, listener);
+  handlers.add(handler);
+  return () => {
+    if (!handlers.delete(handler)) return;
+    if (handlers.size === 0) window.removeEventListener(type, listener);
+  };
+}
+
+/** Run `handler` each time the window gains focus; the returned function stops it. */
+export function onWindowFocus(handler: Handler): Stop {
+  return subscribeWindow('focus', focusHandlers, onFocus, handler);
+}
+
+/** Run `handler` each time the window loses focus; the returned function stops it. */
+export function onWindowBlur(handler: Handler): Stop {
+  return subscribeWindow('blur', blurHandlers, onBlur, handler);
 }
