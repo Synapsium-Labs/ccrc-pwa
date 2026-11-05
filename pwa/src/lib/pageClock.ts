@@ -1,5 +1,6 @@
-// The page clock (D-7191; ARCH-75, #810): the ONE `visibilitychange` and the ONE `online` subscription in `pwa/src`,
-// and since console speed Task C3 one window `focus` and one window `blur` subscription for the reload gate's "back".
+// The page clock (D-7191; ARCH-75, #810): the ONE `visibilitychange` and the ONE `online` subscription in `pwa/src`.
+// Since console speed Task C3 it also holds a window `focus`, a window `blur` and a `pageshow` subscription for the
+// reload gate's "back"; it is not yet their only owner (`ledgers/waitingStore.ts` adds its own `focus` listener).
 // Every view, hook and store that acts when the page turns visible, turns hidden or comes back online subscribes
 // here, and each subscription returns its stop. A document (or window) listener is added with its first subscriber
 // and removed with its last stop, so a page with no subscriber holds none (the leak rows in
@@ -67,7 +68,9 @@ const blurHandlers = new Set<Handler>();
 const onFocus = (): void => fanOut(focusHandlers);
 const onBlur = (): void => fanOut(blurHandlers);
 
-function subscribeWindow(type: 'focus' | 'blur', handlers: Set<Handler>, listener: Handler, handler: Handler): Stop {
+function subscribeWindow(
+  type: 'focus' | 'blur' | 'pageshow', handlers: Set<Handler>, listener: (ev: Event) => void, handler: Handler,
+): Stop {
   if (handlers.size === 0) window.addEventListener(type, listener);
   handlers.add(handler);
   return () => {
@@ -84,4 +87,15 @@ export function onWindowFocus(handler: Handler): Stop {
 /** Run `handler` each time the window loses focus; the returned function stops it. */
 export function onWindowBlur(handler: Handler): Stop {
   return subscribeWindow('blur', blurHandlers, onBlur, handler);
+}
+
+// ─── pageshow from the back-forward cache (console speed, Task C3) ──────────────────────────────────────────────────
+const restoredHandlers = new Set<Handler>();
+const onPageShow = (ev: Event): void => {
+  if ((ev as PageTransitionEvent).persisted) fanOut(restoredHandlers);
+};
+
+/** Run `handler` each time the page is restored from the back-forward cache; the returned function stops it. */
+export function onPageRestored(handler: Handler): Stop {
+  return subscribeWindow('pageshow', restoredHandlers, onPageShow, handler);
 }

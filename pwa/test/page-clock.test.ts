@@ -2,7 +2,7 @@
 // subscribers; each stop removes only its own handler; the listener goes with the last stop (Review focus 10: a
 // listener that never unsubscribes).
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { onOnline, onPageHidden, onPageVisible, onWindowBlur, onWindowFocus } from '../src/lib/pageClock';
+import { onOnline, onPageHidden, onPageRestored, onPageVisible, onWindowBlur, onWindowFocus } from '../src/lib/pageClock';
 
 const setVisibility = (v: DocumentVisibilityState): void => {
   Object.defineProperty(document, 'visibilityState', { value: v, configurable: true });
@@ -24,6 +24,19 @@ const listenerCount = (target: EventTarget, type: string): (() => number) => {
 };
 
 describe('the page clock', () => {
+  it('one pageshow listener; restored handlers run only on a persisted pageshow (console speed, Task C3)', () => {
+    const live = listenerCount(window, 'pageshow');
+    const restored = vi.fn();
+    const stops = [onPageRestored(restored), onPageRestored(() => {})];
+    expect(live()).toBe(1);
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false }));
+    expect(restored).not.toHaveBeenCalled();
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+    expect(restored).toHaveBeenCalledTimes(1);
+    for (const stop of stops) stop();
+    expect(live()).toBe(0);
+  });
+
   it('one focus and one blur listener however many subscribers; each runs on its own event (console speed, Task C3)', () => {
     const liveFocus = listenerCount(window, 'focus');
     const liveBlur = listenerCount(window, 'blur');
