@@ -403,7 +403,8 @@ describe('the gate starts once and stops whole (Task C3)', () => {
     let mono = 50_000;
     vi.spyOn(Date, 'now').mockImplementation(() => wall);
     vi.spyOn(performance, 'now').mockImplementation(() => mono);
-    stop = startReloadGate({ reload: acts.reload, go: acts.go });
+    const { reload, go } = acts as ReloadActs;
+    stop = startReloadGate({ reload, go });
     noteActivated();
     wall += 60_000;                      // a network-time correction lands
     mono += 5_000;
