@@ -62,7 +62,7 @@ jobs:
   plan:
     name: plan macOS tests
     if: github.workflow == 'macos'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # actions: read — the durations are an artifact of a trusted main run (main-artifact.mjs).
     permissions:

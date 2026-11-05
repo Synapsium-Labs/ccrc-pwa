@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import * as F from './leaseFixture.js';
+import { LEASE, OTHER, THIRD, hex, BASE, type Flags, type Out } from './leaseFixture.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-lease-mark-'); h.makeRepo('demo'); });
@@ -28,32 +30,14 @@ describe('the lease library arrives, loaded beside the other two', () => {
   });
 });
 
-const LEASE = '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab';
-const OTHER = '7a6b5c4d-3e2f-4a1b-8c9d-0e1f2a3b4c5d';
-const THIRD = '2b3c4d5e-6f70-4812-9a3b-4c5d6e7f8091';
-const INC = '11111111-2222-4333-8444-555555555555';
-const hex = (s: string): string => Buffer.from(s).toString('hex');
-const reg = (): string => path.join(h.home, '.cc-sessions');
-const leasesDir = (): string => path.join(reg(), 'delegation', 'leases');
-const main = (): string => path.join(h.home, 'projects', 'demo');
-const agentTree = (name = 'agent-a', at = path.join(main(), '.claude', 'worktrees', name), from = main()): string => {
-  fs.mkdirSync(path.dirname(at), { recursive: true });
-  h.git(from, 'worktree', 'add', '-b', `claude/${name}`, '--', at);
-  return fs.realpathSync(at);
-};
-type Flags = Record<string, string | null>;
-const BASE: Flags = { lease: LEASE, generation: '1', project: 'demo', 'admin-record-hex': hex('agent-a'),
-  parent: 'lane-a-demo', 'parent-incarnation': INC, activity: 'act-1', source: 'agent', state: 'ephemeral', 'journal-seq': '7' };
-interface Out { code: number; doc: Record<string, unknown>; lines: string[] }
-const run = (argv: string, pre = ''): Out => {
-  const out = h.sh(`${pre} cmd_ws_lease_mark ${argv}; echo "rc=$?"`).trim().split('\n');
-  const code = Number(/^rc=(\d+)$/.exec(out.pop()!)![1]);
-  return { code, lines: out, doc: JSON.parse(out[out.length - 1] ?? '{}') as Record<string, unknown> };
-};
-const mark = (over: Flags = {}, pre = ''): Out =>
-  run(Object.entries({ ...BASE, ...over }).filter(([, v]) => v !== null).map(([k, v]) => `--${k} ${v}`).join(' '), pre);
-const carrierPath = (id = LEASE): string => path.join(leasesDir(), `${id}.json`);
-const carrier = (id = LEASE): Record<string, unknown> => JSON.parse(fs.readFileSync(carrierPath(id), 'utf8')) as Record<string, unknown>;
+const reg = (): string => F.reg(h);
+const leasesDir = (): string => F.leasesDir(h);
+const main = (): string => F.main(h);
+const agentTree = (name?: string, at?: string, from?: string): string => F.agentTree(h, name, at, from);
+const run = (argv: string, pre = ''): Out => F.run(h, argv, pre);
+const mark = (over: Flags = {}, pre = ''): Out => F.mark(h, over, pre);
+const carrierPath = (id = LEASE): string => F.carrierPath(h, id);
+const carrier = (id = LEASE): Record<string, unknown> => F.carrier(h, id);
 const byTree = (): string[] => fs.readdirSync(path.join(leasesDir(), 'by-tree')).filter((f) => !f.startsWith('.'));
 const entry = (): string => fs.readFileSync(path.join(leasesDir(), 'by-tree', byTree()[0]!), 'utf8').trim();
 /** Refused: the word, rc 1 (2 for usage), one line of stdout, and the carrier as it was (absent, or these bytes). */
@@ -554,5 +538,29 @@ describe('an unmeasured fingerprint names its reason', () => {
       refused(r, 'unmeasured');
       expect(String(r.doc.detail)).toMatch(/\.git is not a readable gitfile/);
     } finally { fs.chmodSync(path.join(t, '.git'), 0o644); }
+  }, 60_000);
+
+  it('W5-L30 (review 1446 F1, D-7974): a release whose tree\'s parent cannot be searched is refused unmeasured and writes nothing', () => {
+    if (process.getuid?.() === 0) return;   // root searches a mode-0000 directory
+    const t = agentTree(); mark();
+    const before = fs.readFileSync(carrierPath());
+    const parent = path.dirname(t);
+    const rel = { generation: '2', state: 'released', 'release-reason': 'native-removed', 'journal-seq': '8' };
+    fs.chmodSync(parent, 0);
+    try {
+      const r = mark(rel);
+      refused(r, 'unmeasured', before);
+      expect(String(r.doc.detail)).toContain('cannot be searched');
+    } finally { fs.chmodSync(parent, 0o755); }
+    expect(mark(rel).doc).toMatchObject({ ok: true, answer: 'written', state: 'released' });   // CONTROL: searchable again
+  }, 60_000);
+
+  it('W5-L31 (review 1461 F5, D-7978): a tag named like the branch leaves the carrier recording the branch\'s own name', () => {
+    const t = agentTree();
+    h.git(main(), 'tag', 'claude/agent-a', h.git(t, 'rev-parse', 'HEAD').trim());
+    // what `symbolic-ref --short` would have recorded, and the audit then read as a branch that does not exist
+    expect(h.git(t, 'symbolic-ref', '--short', 'HEAD').trim()).toBe('heads/claude/agent-a');
+    expect(mark().doc).toMatchObject({ ok: true, answer: 'written' });
+    expect(carrier().branch).toBe('claude/agent-a');
   }, 60_000);
 });

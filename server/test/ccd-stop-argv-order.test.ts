@@ -24,7 +24,7 @@
 // planted legacy rows, through Task 2's `appFor` in its own `mkTmp` fixture
 // HOME, with a runner that records argv and never execs.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -56,7 +56,7 @@ const argsOf = (argv: CcdArgv): string =>
 
 /** Captures the exit status and stderr of a refusal, which `h.sh` would throw on. */
 const run = (snippet: string): { ran: true, code: number; stdout: string; stderr: string } => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
     env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }),
   });
@@ -75,6 +75,8 @@ describe('stop sends --surface before the id (spec §2.3, §2.4)', () => {
       // process, so `_lc_obs`'s once-per-process pane probe comes first.
       `tmux list-panes -a -F #{session_name} #{pane_pid}`,
       `systemctl --user disable --now claude-session@${ID}`,
+      // D-7902: the pane's scope is read after the unit is stopped, so a wedged tmux holds no stop, and before the pane is killed.
+      `tmux list-panes -t =cc-${ID}: -F #{pane_pid}`,
       `tmux kill-session -t =cc-${ID}:`,
     ]);
     expect(h.reg(ID, 'stopped')).toMatch(/^\d{10} pwa$/);
@@ -93,6 +95,7 @@ describe('stop sends --surface before the id (spec §2.3, §2.4)', () => {
     expect(asManagerCalls(h.calls())).toEqual([
       `tmux list-panes -a -F #{session_name} #{pane_pid}`,
       'systemctl --user disable --now claude-session@claude-a-demo',
+      'tmux list-panes -t =cc-claude-a-demo: -F #{pane_pid}',
       'tmux kill-session -t =cc-claude-a-demo:',
     ]);
     expect(h.reg('claude-a-demo', 'stopped')).toMatch(/^\d{10} pwa$/);

@@ -38,7 +38,12 @@ export const CCD_SERVER = 2000;
 export const NETNS = 'net:[4026531840]';        // the sweep's own network namespace, and every fixture process's unless it says otherwise
 
 export interface Fx { base: string; home: string; xdg: string; proc: string; cg: string; bin: string }
-export interface ProcOpts { age: number; comm?: string; ppid?: number; cg?: string; sockets?: number[]; fdUnreadable?: boolean; netns?: string; statUnreadable?: boolean; state?: string; threads?: number }
+export interface ProcOpts {
+  age: number; comm?: string; ppid?: number; cg?: string; sockets?: number[]; fdUnreadable?: boolean; netns?: string; statUnreadable?: boolean; state?: string; threads?: number;
+  /** D-7993: its `/proc/<pid>/environ`, one `NAME=value` per entry (none by default), and whether that file or its
+   *  `cmdline` (`argv`, default the comm alone) can be read. */
+  env?: readonly string[]; envUnreadable?: boolean; argv?: readonly string[]; cmdlineUnreadable?: boolean;
+}
 export interface ScopeOpts {
   pane: number; server?: number; procs: number[]; cpu?: number; mem?: number; bornAgo?: number; monoOffset?: number;
   slice?: string; desc?: string; unit?: string; noProcsFile?: boolean; cgShown?: string; cpuShown?: string; monoShown?: string;
@@ -125,6 +130,10 @@ export function makePaneScopeBox(opts: { honourPattern?: boolean } = {}) {
     fs.symlinkSync(o.netns ?? NETNS, path.join(d, 'ns', 'net'));
     (o.sockets ?? []).forEach((ino, i) => fs.symlinkSync(`socket:[${ino}]`, path.join(d, 'fd', String(10 + i))));
     fs.symlinkSync('/dev/null', path.join(d, 'fd', '0'));
+    fs.writeFileSync(path.join(d, 'environ'), (o.env ?? []).map((v) => `${v}\0`).join(''));
+    fs.writeFileSync(path.join(d, 'cmdline'), (o.argv ?? [comm]).map((v) => `${v}\0`).join(''));
+    if (o.envUnreadable) fs.chmodSync(path.join(d, 'environ'), 0o000);
+    if (o.cmdlineUnreadable) fs.chmodSync(path.join(d, 'cmdline'), 0o000);
     if (o.fdUnreadable) fs.chmodSync(path.join(d, 'fd'), 0o000);
     if (o.statUnreadable) fs.chmodSync(path.join(d, 'stat'), 0o000);
   }
@@ -164,8 +173,21 @@ export function makePaneScopeBox(opts: { honourPattern?: boolean } = {}) {
     seenLines.push(`dead ${u} first=${UP - ago} cpu0=${cpu} verdict=${verdict} why=dead-under-6h server=ccd procs=1 mem=1 sockets=0 youngest=1 oldest=1 age=1 pids=1`);
     fs.writeFileSync(STATE(), ['# ccd-scope-sweep v1 tick=1 up=1 mode=shadow', ...seenLines].join('\n') + '\n');
   }
+  /** D-7993: a previous tick's `busy` line: the session first seen provably dead `ago` seconds ago. */
+  function seenBusy(u: string, ago: number, verdict = 'report'): void {
+    seenLines.push(`busy ${u} first=${UP - ago} verdict=${verdict} why=none session=- n=1 procs=1:x`);
+    fs.writeFileSync(STATE(), ['# ccd-scope-sweep v1 tick=1 up=1 mode=shadow', ...seenLines].join('\n') + '\n');
+  }
   beforeEach(() => { seenLines.length = 0; });
   const arm = (): void => fs.writeFileSync(path.join(fx.home, '.cc-sessions', 'scope-sweep-live'), '');
+  const armBusy = (): void => fs.writeFileSync(path.join(fx.home, '.cc-sessions', 'scope-sweep-busy-live'), '');
+  /** D-7993: a registry row: `$REG/<id>.generation` (no line feed, as the mint writes it), and `$REG/<id>.stopped` when it is stopped. */
+  function regRow(id: string, generation: string, o: { stopped?: boolean; hibernated?: boolean } = {}): void {
+    const reg = path.join(fx.home, '.cc-sessions');
+    fs.writeFileSync(path.join(reg, `${id}.generation`), generation);
+    if (o.stopped) fs.writeFileSync(path.join(reg, `${id}.stopped`), '');
+    if (o.hibernated) fs.writeFileSync(path.join(reg, `${id}.hibernated`), '1790000000 3\n');   // `<epoch> <idle-hours>`, `ccd hibernate`'s shape
+  }
   const livePanes = (...panes: number[]): void => fs.writeFileSync(path.join(fx.base, 'panes'), [4242, ...panes].map((p) => `${CCD_SERVER} ${p}\n`).join(''));
 
   /** `script` run over the box: the stubs first on PATH, the fixture's HOME, XDG_RUNTIME_DIR, /proc and cgroup roots;
@@ -185,7 +207,7 @@ export function makePaneScopeBox(opts: { honourPattern?: boolean } = {}) {
     .split('\n').filter((l) => l !== '');
   const stops = (): string[] => (fs.existsSync(path.join(fx.base, 'calls')) ? fs.readFileSync(path.join(fx.base, 'calls'), 'utf8') : '')
     .split('\n').filter((l) => l.startsWith('--user stop'));
-  const rows = (kind: 'dead' | 'old' | 'carry'): Record<string, Record<string, string>> => {
+  const rows = (kind: 'dead' | 'old' | 'carry' | 'busy'): Record<string, Record<string, string>> => {
     const out: Record<string, Record<string, string>> = {};
     if (!fs.existsSync(STATE())) return out;
     for (const l of fs.readFileSync(STATE(), 'utf8').split('\n')) {
@@ -217,7 +239,7 @@ export function makePaneScopeBox(opts: { honourPattern?: boolean } = {}) {
   const clearCalls = (): void => fs.rmSync(path.join(fx.base, 'calls'), { force: true });
 
   return {
-    fx, proc, server, cgOf, unitName, scope, inert, STATE, seen, arm, livePanes, run, runScript, calls, stops, rows,
+    fx, proc, server, cgOf, unitName, scope, inert, STATE, seen, seenBusy, arm, armBusy, regRow, livePanes, run, runScript, calls, stops, rows,
     listLine, memoryMax, gone, emptyShow, setPropertyRc, listRc, clearCalls,
   };
 }

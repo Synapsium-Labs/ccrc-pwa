@@ -14,7 +14,7 @@
 // screens and the toasts — is the same element in both skins, so a switch
 // remounts none of it (`skin-switch.test.tsx`).
 // ToastHost mounts here so stores/screens can fire toasts from anywhere.
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { BlockScreen } from './components/BlockScreen';
 import { LoginScreen } from './components/LoginScreen';
@@ -24,20 +24,28 @@ import { CommandLayer } from './command/CommandLayer';
 import { FleetChromeProvider } from './fleet/FleetChrome';
 import { FleetFlows, useFleetFlows } from './fleet/FleetFlows';
 import { useAuthLost } from './lib/auth';
+import { lazyScreen, preloadWhenIdle } from './lib/lazyScreen';
 import { navigate, useLocation } from './lib/router';
 import { matchRoute, sessionPath, shellViewOf } from './lib/routes';
 import { useSkin } from './lib/skin';
 import { AuthResumeInDetail } from './accounts/AuthResumeBanner';
-import { AccountsScreen } from './screens/AccountsScreen';
 import { ArchiveScreen } from './screens/ArchiveScreen';
-import { DigestScreen } from './screens/DigestScreen';
 import { DocsScreen } from './screens/DocsScreen';
-import { HighlightMeasure } from './screens/HighlightMeasure';
 import { MailScreen } from './screens/MailScreen';
-import { RunsScreen } from './screens/RunsScreen';
-import { SessionScreen } from './screens/SessionScreen';
 import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
-import { SettingsScreen } from './screens/settings/SettingsFrame';
+// THE BIG SCREENS LOAD ON DEMAND (console speed, task C1 "the link and the start"; spec 2026-11-04 §2.3): each is its
+// own chunk, fetched the first time its route opens, so the fleet list starts without them. The fleet, the shell, Mail,
+// Archive, Docs, the programme and the Waiting routes stay in the entry. `SettingsDataProvider` stays eager: it wraps
+// the whole shell on every route (D-5504), so a lazy provider would hold the frame at start-up and defer nothing.
+// `lazyScreen` (not React's `lazy`): a chunk that failed to load is asked for once more on the next navigation, which
+// recovers only where the engine fetches a failed module again (Chromium does not: it rejects with no request), so
+// the fallback's Reload is the recovery there (review 1473 F1).
+const AccountsScreen = lazyScreen(() => import('./screens/AccountsScreen').then((m) => m.AccountsScreen));
+const DigestScreen = lazyScreen(() => import('./screens/DigestScreen').then((m) => m.DigestScreen));
+const HighlightMeasure = lazyScreen(() => import('./screens/HighlightMeasure').then((m) => m.HighlightMeasure));
+const RunsScreen = lazyScreen(() => import('./screens/RunsScreen').then((m) => m.RunsScreen));
+const SessionScreen = lazyScreen(() => import('./screens/SessionScreen').then((m) => m.SessionScreen));
+const SettingsScreen = lazyScreen(() => import('./screens/settings/SettingsFrame').then((m) => m.SettingsScreen));
 import { ProgrammeScreen } from './ledgers/ProgrammeScreen';
 import { ItemListColumn, ItemRouteAt, WaitingRoute } from './ledgers/WaitingRoutes';
 import { ShellFrame } from './skins/frame';
@@ -61,6 +69,10 @@ function ArchiveRoute(): ReactNode {
 
 export function App(): ReactNode {
   const { path, search } = useLocation();
+  // The session screen is the one most often opened next: its chunk loads once the page is idle after the first
+  // paint, and once loaded the first open draws it in the first commit, with no loading line (reviews 1464 F4 and 1473
+  // F3). The entry's imports are unchanged.
+  useEffect(() => preloadWhenIdle(SessionScreen), []);
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect once at the shell so
     // deep links to /s/:id (or /archive) still get live names, limits and
@@ -148,23 +160,28 @@ export function App(): ReactNode {
   // all outside it, stay mounted. Its reset key is `path + search`, so any
   // navigation draws the ladder again; it is not a React `key`, so it never
   // remounts a screen and the pane reset above stays the shell's.
-  const ladder = sessionId !== null ? (
+  // A lazy screen's chunk loads under one Suspense, inside the boundary: while it loads the pane says so, and a chunk
+  // that fails to load throws into the boundary, which draws its fallback rather than a blank pane.
+  const loading = (screen: ReactNode): ReactNode => (
+    <Suspense fallback={<p className="shell-placeholder-copy" role="status">Loading…</p>}>{screen}</Suspense>
+  );
+  const ladder = sessionId !== null ? loading(
     // key remounts per session so per-session UI state (terminal drawer,
     // pickers) never leaks across a sidebar switch.
     <SessionScreen key={sessionId} id={sessionId} />
   ) : route === 'archive' ? (
     <ArchiveRoute />
-  ) : route === 'accounts' ? (
+  ) : route === 'accounts' ? loading(
     <AccountsScreen />
   ) : route === 'inbox' ? (
     <MailScreen />
-  ) : route === 'runs' ? (
+  ) : route === 'runs' ? loading(
     <RunsScreen />
-  ) : settings ? (
+  ) : settings ? loading(
     <SettingsScreen />
-  ) : route === 'digest' ? (
+  ) : route === 'digest' ? loading(
     <DigestScreen day={digestDay} />
-  ) : route === 'measure-highlighting' ? (
+  ) : route === 'measure-highlighting' ? loading(
     <HighlightMeasure />
   ) : route === 'docs' ? (
     // NOT keyed: one mount spans one Docs visit (its listings, its auto-refresh set, its image queue), across every
@@ -204,7 +221,7 @@ export function App(): ReactNode {
             started that waits for its code. The fleet's banner stack shows it on a desk and on a phone's fleet view;
             here, the top of the detail pane, on a phone's other views, so one instance is on screen at a time. */}
         <AuthResumeInDetail view={view} />
-        <RenderBoundary where="detail" resetKey={path + search} fallback={() => <ScreenFallback />}>{ladder}</RenderBoundary>
+        <RenderBoundary where="detail" resetKey={path + search} fallback={(e) => <ScreenFallback error={e} />}>{ladder}</RenderBoundary>
       </ShellFrame>
       <FleetFlows />
       {/* The ⌘K palette, the shortcut sheet and the global keys (D-5103),

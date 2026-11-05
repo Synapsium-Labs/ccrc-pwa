@@ -7,11 +7,11 @@
 **Revisions:** rev 3 (2026-11-04): the operator's approval is recorded, and one Find block is re-quoted. Export's review added a case after the old anchor of the floor-half block in `pwa/test/tap-targets.test.tsx`, so that block now anchors on the end of Export's Retry case, quoted from `b55e96a75`, Export's merge on `main`. The find-check, run by the coordinator against `main` at `707eae764`, counts 22 blocks and no miss. rev 2 (2026-11-03) applies review round 1 (sixteen findings upheld): the draft badge is drawn beside the ellipsised first line, never in it, with a 412 px long-branch case (spec-intent F1); the compact head keeps the crumbs while the tree slot is not `ok`, so §4.7 holds (F2); Share's waiting icon is named "Share: …" (F3); §4.17's "When it is offered" words and the "Export (plain view)" label join (e)'s departure and Q1, and Task 4 pins each word (F4); the row names the served ref for every default view that is not origin/HEAD (F5); the picked mockup's 1 px divider is kept inside the 44 px row, never-fetched and failed share its attention colour, and the parent-crumb label is named as a departure from the mockup (F6); the failed name is the neutral "Page details (freshness problem)" (F7); Q3 states the landscape cost and a 915 x 412 case records it (F8); Task 3's comment no longer spells the width constant, so Task 4 Step 0 can pass (executability F1); Task 2 keeps npm's cache and the tarball in the scratch directory it removes and extracts only the files the generator reads, with measured sizes (executability F2); the tap-targets render half waits for Share (executability F3, tests-guards F2); the disabled icon's fade is registered in `OPACITY_REGISTRY` (tests-guards F1); twelve mutation rows added, two predictions restated, and the "Formatting…" selector chain pinned against the live DOM (tests-guards F3 to F5). Find blocks: 22.
 
 **Scope:**
-- In: on a leaf page under 600 CSS px, `DocsHead` draws one row (back, a two-line label naming where and what, Share and Export as icons, Page details) and, under it, a Page details panel that holds the crumbs, the truth line, View on GitHub and Open committed version; while the tree slot is not `ok`, back and the crumbs, as today; the picked mockup's 1 px divider inside the row's 44 px; the Docs screen gives that row the top (no padding above it, 4 px under it); "Formatting…" lies over the reader's host on that screen instead of taking a line; three lucide icons vendored for it; five words in `docsText.ts`; the tests (jsdom behaviour, the stylesheet's declarations, both tap-target halves, the control census entry, two contrast grounds and one registered fade, and a browser test that measures the pixels above the title at the operator's phone's viewport).
+- In: on a leaf page under 600 CSS px, `DocsHead` draws one row (back, a two-line label naming where and what, Share and Export as icons, Page details) and, under it, a Page details panel that holds the crumbs, the truth line, View on GitHub and Open committed version; while the tree slot is not `ok`, back and the crumbs, as today; the picked mockup's 1 px divider inside the row's 44 px; the Docs screen gives that row the top (no padding above it but the safe-area inset, 4 px under it); "Formatting…" lies over the reader's host on that screen instead of taking a line; three lucide icons vendored for it; five words in `docsText.ts`; the tests (jsdom behaviour, the stylesheet's declarations, both tap-target halves, the control census entry, two contrast grounds and one registered fade, and a browser test that measures the pixels above the title at the operator's phone's viewport).
 - Out: option 2 (one bar merged with the reader frame's own, which needs hooks and a release of the shared reader library) and option 3 (a header that scrolls away); any change to the shared reader library, its pin, its bridge or its frame's own bar; the index, project, section and directory pages at any width; every page at 600 CSS px and wider (tablets and desktops); the banners, their order and their words; the share and export sheets; `DocsScreen.tsx` and `ReaderFrame.tsx`; the spec text (question Q1); the server, the agent, `ccd` and `shared/`.
 - Byte-identical: `pwa/src/screens/DocsScreen.tsx`, `pwa/src/docs/ReaderFrame.tsx`, every other file under `pwa/src/docs/` (`DocsLeaf.tsx`, `DocsBanners.tsx`, `ShareSheet.tsx`, `ExportSheet.tsx`, `export/**`, `reader/**` and the rest), `pwa/src/app.tsx`, `pwa/src/skins/**`, `pwa/src/styles/**`, every file under `ui/src/` but `ui/src/icons/lucide.ts`, `ui/package.json`, `pwa/package.json`, both lockfiles, `pwa/vite.config.ts`, `pwa/vitest.browser.config.ts`, `pwa/browser/app.ts`, `pwa/browser/harness.ts`, `pwa/browser/slowFirst.ts`, `pwa/browser/reader-frame.browser.test.ts`, `pwa/test/docs-scans.test.ts`, `pwa/test/contrast.test.ts`, `pwa/test/docs-screen.test.tsx`, `pwa/test/docs-truth.test.tsx`, `pwa/test/shell-css.test.ts`, `pwa/test/setup.ts`, `pwa/design/contrast-check.mjs`, `shared/**`, `server/**`, `agent/**`, `ccd/**`, `deploy/**`, `.github/**`, `README.md`, the specs and the ledger. Any other file is a stop-and-ask.
 
-**Goal:** On the operator's phone (a Pixel 10 Pro XL in Chrome on Android 17, CSS viewport about 412 x 915) about 341 px sat above a reader doc's title, and 256 of them, the console's own head, never scrolled away. After this wave the console's part is one 44 px row and a 4 px gap, and the title sits at most 133 px down (the figure of the mockup the operator picked), measured in a real Chromium at 412 x 915. Nothing the page says about what it served is lost: it is one tap away, and the row itself still says when the page is a ref view or a draft.
+**Goal:** On the operator's phone (a Pixel 10 Pro XL in Chrome on Android 17, CSS viewport about 412 x 915) about 341 px sat above a reader doc's title, and 256 of them, the console's own head, never scrolled away. After this wave the console's part is one 44 px row and a 4 px gap, and the title sits at most 133 px down (the figure of the mockup the operator picked), measured in a real Chromium at 412 x 915 (measured in run 1436: 311.5 px above the title at BASE, 234.5 of them the console's, so the console's part fell by 186.5 px, to 48, and the title sits at 125). Nothing the page says about what it served is lost: it is one tap away, and the row itself still says when the page is a ref view or a draft.
 
 **Architecture:** One switch, `headLayoutFor(compactWidth, page)` in `pwa/src/docs/DocsHead.tsx`, decides the header: `compact` on a leaf page while `DOCS_COMPACT_QUERY` (`(max-width: 599.98px)`) matches, `full` everywhere else. The full header's DOM is unchanged. The compact head (`CompactHead`, `CompactRow`, `CompactLabel`) reuses the header's own parts: `BackButton` (the back control, now one function both headers call), `ShareAction` and `ExportAction` with a `glyph` prop (an icon, its words as the accessible name; same element, class, key and sheet), `Crumbs` with an `unfold` prop, `TruthLine` and `GithubAction` unchanged, and one hook, `useHeadActions`, that works out Share's, Export's and the two links' states for either header. Page details is a disclosure (`aria-expanded`, `aria-controls`, a `role="region"` panel in the page's flow, `hidden` while closed, Escape closes it and returns focus). `docs.css` keys every new rule on the compact head's own classes, never on a width, so the component is the only place the width is decided.
 
@@ -53,7 +53,7 @@
 | `pwa/test/tap-targets.test.tsx`, the floor-half block only (Task 3 Step 1) | `b55e96a75` (Export's merge on `main`) | Export's review added a case after its old anchor (rev 3) |
 
 - **Rings and seams.** `DocsHead.tsx` stays ring L4 delivery: it decides the layout with one pure function (`headLayoutFor`) and one pure mapping (`freshDot`), and renders; it starts no request (the chip's tap is still `visit.refreshManual`). No overloaded `null` at a seam: `FreshDot`'s `null` has one meaning (no dot), `HeadActions.target`'s and `committedHref`'s each one (not offered). `Icon` is decoration (`aria-hidden`), so every icon's meaning is its button's accessible name.
-- **Exact values.** `DOCS_COMPACT_QUERY = '(max-width: 599.98px)'` (declared once, in `DocsHead.tsx`); the row's border box 44 px tall (`block-size: var(--tap-min)`) with a 1 px `--edge-subtle` divider inside it; the screen's `padding-top: 0` and `gap: var(--sp-1)` (4 px) when it holds the compact head; icons `share` (Share), `download` (Export), `ellipsis` (Page details) at size 20; a disabled row icon `opacity: 0.35`; the dot `var(--sp-2)` square at `--sp-2` from the button's top and end, `--status-done` (ok), `--status-attention` (never fetched, and failed); the five words `exportPlainHint`, `shareBusy` ("Share: {state}"), `more` ("Page details"), `moreNever` ("Page details (never fetched)"), `moreFailed` ("Page details (freshness problem)") (Task 4); the fade's registry key `.docs-compact-bar .docs-action:disabled 0.35`; the browser file's `PHONE` 412 x 915, `PHONE_TITLE_MAX` 133, `CONSOLE_PART_MAX` 48, `TAP` 44, `LONG_BRANCH` `ws/a-long-workspace-branch-for-the-phone-header`.
+- **Exact values.** `DOCS_COMPACT_QUERY = '(max-width: 599.98px)'` (declared once, in `DocsHead.tsx`); the row's border box 44 px tall (`block-size: var(--tap-min)`) with a 1 px `--edge-subtle` divider inside it; the screen's `padding-top: var(--safe-top)` (0 outside an installed iOS PWA) and `gap: var(--sp-1)` (4 px) when it holds the compact head; icons `share` (Share), `download` (Export), `ellipsis` (Page details) at size 20; a disabled row icon `opacity: 0.35`; the dot `var(--sp-2)` square at `--sp-2` from the button's top and end, `--status-done` (ok), `--status-attention` (never fetched, and failed); the five words `exportPlainHint`, `shareBusy` ("Share: {state}"), `more` ("Page details"), `moreNever` ("Page details (never fetched)"), `moreFailed` ("Page details (freshness problem)") (Task 4); the fade's registry key `.docs-compact-bar .docs-action:disabled 0.35`; the browser file's `PHONE` 412 x 915, `PHONE_TITLE_MAX` 133, `CONSOLE_PART_MAX` 48, `TAP` 44, `LONG_BRANCH` `ws/a-long-workspace-branch-for-the-phone-header`.
 - **Never spelled by this wave:** the shared reader library's package name or directory name, anywhere in `pwa/src` (docs-parity M7.9) or in this plan; a literal colour in `docs.css` or any new or edited pwa file (`contrast.test.ts`); `44px` in a size declaration (`tap-targets.test.tsx`); `(min-width: 900px)` in TypeScript (`sheet-desktop-arm.test.tsx`); `599.98` anywhere under `pwa/src` but `docs/DocsHead.tsx` (Task 4's census case); a numeric line citation (`file.ts` + colon + line) in any code or test file (`citations.test.ts`; cite `file#symbol`); a `D-` number outside `## Deviations found`; a placeholder deviation token in any commit (`server/test/dtbd.test.ts`); real host, user, project, account or path names (fixtures use `demo`, `specs`, `example-org/example-repo`).
 - **PUBLIC REPO.** This repository is public: code, docs, commit messages, branch names, the PR body and every comment. Never write host names, home or mount paths, account or lane names, other projects' names, real names, e-mail addresses, private ticket ids or Linear links. Refer to other ccrc work by its GitHub `#n`. Task 6 scans every changed file before the push, and every mail is gated on the same scan (rc 0, zero hits).
 - **Locate every edit by content.** Each Find block is quoted from the commit it names and must match exactly once; the find-check (Task 1 Step 0) counts every one at the dispatch base, and the `Edit` tool refuses a miss. Apply a task's blocks in the order written: each was checked to match once at BASE and still once after the blocks before it. A block absent or matching twice is a stop-and-ask. Cite code by `file#symbol`, never by line number.
@@ -141,7 +141,7 @@ Each refinement says What, Why and Cost if wrong, and whether it departs from a 
   - Cost if wrong: the dot's fill is a non-text graphic the contrast census does not measure (it measures inks); the fills are the status tokens the fleet's chips use on the same page ground.
   - Departs from no spec sentence: §4.5's chip, its states and its tap are unchanged inside the truth line.
 - **(g) The row keeps what goal 4 needs at a glance.**
-  - What: the label's first line adds, after the parent crumb and joined by ` · `, the served ref (`servedRefText`) whenever what was served is not the usual default (`rowRefText`: the page names a ref, or the served side is local, or the default chain's `via` is not `default:origin-head`, which covers a local main or master and origin's main or master when origin/HEAD is unset or dangling, measured in `ccd/ccd#default_chain`), and then the draft badge `rowBadge` gives: the truth line's own badge for this leaf, from `entryView` through `ENTRY_BADGE_TEXT` (a draft source's badge, or the view's badge), drawn as `.docs-badge`. The crumb and the ref are one text that ends in an ellipsis (`.docs-compact-where-text`); the badge is its sibling with `flex: none`, so the text order stays "where · ref · badge" and only the ref is cut. The usual default view, origin/HEAD resolved, adds nothing.
+  - What: the label's first line adds, after the parent crumb and joined by ` · `, the served ref (`servedRefText`) whenever what was served is not the usual default (`rowRefText`: the page names a ref, or the served side is local, or the default chain's `via` is not `default:origin-head`, which covers a local main or master and origin's main or master when origin/HEAD is unset or dangling, measured in `ccd/ccd#default_chain`), and then the draft badge `rowBadge` gives: the truth line's own badge for this leaf, from `entryView` through `ENTRY_BADGE_TEXT` (a draft source's badge, or the view's badge), drawn as `.docs-badge`. The crumb and the ref are two spans in one flex text (`.docs-compact-where-text`: `.docs-compact-where-crumb` and `.docs-compact-where-ref`, the ref's holding the ` · `), each cut by its own ellipsis and the crumb giving way first (a thousandfold flex-shrink), so a long parent directory never hides the served ref; the badge is the text's sibling with `flex: none`, so the order stays "where · ref · badge" and only a ref too long for the line is cut, at its end. The usual default view, origin/HEAD resolved, adds nothing.
   - Why: with the truth line behind a tap, a branch, a local default or a draft would otherwise look like origin's `main` on the row (the mockup named this loss and this fix, at no height). The draft view the banners link to is `?ref=refs/heads/<branch>`, served as "<branch> (local)", and a workspace branch can run past the 35 or so characters of 11 px mono the label has at 412 px; the badge is the part goal 4 needs, so it is the part that is never cut. One badge function (M4.T7) keeps the row and the truth line from disagreeing; docs-scans clause 1 reads `DocsHead.tsx`.
   - Cost if wrong: on a ref view with a long branch name the ref is what is truncated, never the badge; the full refname is the panel's. Task 5's long-branch case measures the badge whole and inside the label at 412 px.
   - Departs from no spec sentence; it narrows (d)'s departure.
@@ -151,7 +151,7 @@ Each refinement says What, Why and Cost if wrong, and whether it departs from a 
   - Cost if wrong: on a draft page the banners still take their height above the frame, as in the mockup.
   - Departs from no spec sentence (§4.5's banners table is unchanged).
 - **(i) The vertical budget, and "Formatting…".**
-  - What: `.docs-screen:has(> .docs-compact)` sets `padding-top: 0` and `gap: var(--sp-1)`. The row is one tap tall (`block-size: var(--tap-min)`) and carries the picked mockup's 1 px divider (`border-block-end: 1px solid var(--edge-subtle)`) inside that height, since box-sizing is border-box everywhere (`ui/src/styles/reset.css`), exactly as the mockup's `height: 44px; border-bottom: 1px` row does; the controls keep their 44 px boxes, centred, so they overhang the row's 43 px content box by half a pixel at its top and bottom. So the console's part above the frame is 48 px. On that screen `.doc-formatting` lies over the reader's host (`position: absolute` in a `position: relative` leaf, painting `--bg-page`) instead of taking a line, so the frame does not move when the reader is ready. The reader frame's own bar, body margin and gap (85 px in the mockup's map) are untouched.
+  - What: `.docs-screen:has(> .docs-compact)` sets `padding-top: var(--safe-top)` (the safe-area inset, 0 in Chromium tests and in an Android Chrome tab, so the row sits at the top there, and below the status bar of an installed iOS PWA, whose viewport is `viewport-fit=cover` under a translucent status bar, as the fleet, chat and ledgers screens pad the same token) and `gap: var(--sp-1)`. The row is one tap tall (`block-size: var(--tap-min)`) and carries the picked mockup's 1 px divider (`border-block-end: 1px solid var(--edge-subtle)`) inside that height, since box-sizing is border-box everywhere (`ui/src/styles/reset.css`), exactly as the mockup's `height: 44px; border-bottom: 1px` row does; the controls keep their 44 px boxes, centred, so they overhang the row's 43 px content box by half a pixel at its top and bottom. So the console's part above the frame is 48 px. On that screen `.doc-formatting` lies over the reader's host (`position: absolute` in a `position: relative` leaf, painting `--bg-page`) instead of taking a line, so the frame does not move when the reader is ready. The reader frame's own bar, body margin and gap (85 px in the mockup's map) are untouched.
   - Why: the mockup's 133 = 44 + 4 + 85, its divider counted inside the 44.
   - Cost if wrong: if the frame's own part measures above 85 at BASE, 133 is out of this wave's reach (Task 1 Step 4 stops before any code). The "Formatting…" overlay's selector chain (`.docs-screen > .docs-leaf > .doc-formatting` beside `.docs-reader`) is pinned against the live DOM in jsdom (Task 4's formatting-chain case), because the formatting window cannot be held in the browser file without naming the build's hashed chunks.
   - Departs from no spec sentence (the rich-docs spec's §4.1 "Size: sized to the Docs pane, and the frame scrolls itself" holds).
@@ -217,14 +217,17 @@ node .superpowers/sdd/2026-11-03-native-docs-reader-phone-header/find-check.mjs 
 ```ts
 // The Docs reader's compact phone head, measured in a real Chrome over the production build (native Docs reader, the
 // phone-header plan of 2026-11-03, refinements (a), (b), (d), (i)). The operator's phone, a Pixel 10 Pro XL in Chrome on
-// Android, has a CSS viewport of about 412 x 915; on it about 341 px sat above a reader doc's title, and the mockup the
-// operator picked (one console row) draws 133. So, at 412 x 915 with the reader up:
+// Android, has a CSS viewport of about 412 x 915; on it 311.5 px sat above a reader doc's title (measured at the base:
+// the console's part 234.5 and the reader frame's own top 77), and the mockup the operator picked (one console row)
+// draws 133. So, at 412 x 915 with the reader up:
 //   - the head is the compact row, and the console's part above the frame (the row and the gap under it) is at most
 //     CONSOLE_PART_MAX px, in either skin;
 //   - in Refined, the phone's skin, the title's top is at most PHONE_TITLE_MAX px below the top of the page;
 //   - every control on the row is at least one tap (44 x 44), and the row, the mockup's 1 px divider inside it, is one
 //     tap tall (its border box, as getBoundingClientRect reads it);
 //   - on a draft leaf of a ref view with a long branch name, the ref is cut and the draft badge is whole, inside the label;
+//   - on a leaf under a 46-character directory in a ref view, the ref still has room on the first line (the directory
+//     gives way first), and the badge is inside the label;
 //   - Page details opens the truth line under the row, and Escape closes it with focus back on the button.
 // At 599 the head is still the row; at 600, 768 and 1280 it is the full header, as before (its truth line on the page,
 // its crumbs folded below the desk width), and the phone turned sideways (915 x 412, a touch screen) is a desk width that
@@ -260,8 +263,14 @@ const SIZE = Buffer.byteLength(DOC, 'utf8');
 /** A branch name long enough to overflow the label's first line at 412 px. */
 const LONG_BRANCH = 'ws/a-long-workspace-branch-for-the-phone-header';
 
-/** The picked mockup's figures: 133 px above the title, of which the console's row and the gap under it are 48 (44 + 4)
- *  and the reader frame's own top (its body margin, its bar and the gap under the bar) 85, unchanged by this wave. */
+/** A parent directory as long as this repository's own plan directories run (46 characters), so the row's first line
+ *  holds the directory and nothing else unless the ref is given its own room. */
+const LONG_DIR = '2026-10-27-one-long-directory-name-for-the-row';
+
+/** The picked mockup's figure is 133 px above the title. The console's part, its row and the gap under it, is 48 (44 + 4),
+ *  and CONSOLE_PART_MAX is the binding pin. The reader frame's own top (its body margin, its bar and the gap under the
+ *  bar) measured 77: the shared reader library's, so not ccrc's to pin. The title therefore sits at 125, with 8 px of
+ *  slack under 133, kept so that a 1 px change in the library does not red a ccrc test. */
 const PHONE_TITLE_MAX = 133;
 const CONSOLE_PART_MAX = 48;
 /** The floor every control on the row reaches (`--tap-min`). */
@@ -291,9 +300,9 @@ const bodyOf = (value: unknown): Buffer => Buffer.from(JSON.stringify(value), 'u
 const COMMITTED_TREE = treeOk({ entries: [entry(SECTION, NAME, { committed: { kind: 'file', blob: BLOB, size: SIZE } })] });
 
 /** The same leaf in a ref view of a long local branch, with a draft over it held by that branch's checkout. */
-function draftTree(): ReturnType<typeof treeOk> {
+function draftTree(leaf = NAME): ReturnType<typeof treeOk> {
   const base = treeOk({
-    entries: [entry(SECTION, NAME, { committed: { kind: 'file', blob: BLOB, size: SIZE }, draft: draftOf('modified') })],
+    entries: [entry(SECTION, leaf, { committed: { kind: 'file', blob: BLOB, size: SIZE }, draft: draftOf('modified') })],
     drafts: { ...holder(), branch: LONG_BRANCH },
   });
   return {
@@ -304,7 +313,7 @@ function draftTree(): ReturnType<typeof treeOk> {
 
 /** `/api/docs/demo/tree` answers `tree` and `/api/docs/demo/file` the leaf's Markdown; any other `/api/docs` request (a
  *  refresh) answers 204. Routed after `openApp`'s own `/api` route, so this one answers first. */
-async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE): Promise<void> {
+async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE, leaf = NAME): Promise<void> {
   await app.ctx.route((u) => u.pathname.startsWith('/api/docs/'), async (route) => {
     const req = route.request();
     if (req.method() !== 'GET') {
@@ -317,7 +326,7 @@ async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE): Promise<void> 
       return;
     }
     const show = {
-      v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section: SECTION, path: NAME, size: SIZE,
+      v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, source: 'committed', section: SECTION, path: leaf, size: SIZE,
       sha256: BLOB.padEnd(64, '0'), encoding: 'utf8', text: DOC, commit: COMMIT_A, blob: BLOB, onRef: 'contains',
     };
     await route.fulfill({ status: 200, headers, body: bodyOf({ ok: true, contentClass: 'markdown', from: 'ccd', show }) });
@@ -327,23 +336,33 @@ async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE): Promise<void> 
 interface View { readonly width: number; readonly height: number; readonly skin: string; readonly touch?: boolean }
 
 /** A context at `view` (a touch screen below 900 px, or when `touch` asks), its `/api/docs` answering `tree`. */
-async function openView(view: View, tree = COMMITTED_TREE): Promise<OpenedApp> {
+async function openView(view: View, tree = COMMITTED_TREE, leaf = NAME): Promise<OpenedApp> {
   const app = await openApp(browser!, { width: view.width, skin: view.skin, theme: 'light', touch: view.touch }, { api: {}, fleetFrames: [] });
   await app.page.setViewportSize({ width: view.width, height: view.height });
-  await answerDocs(app, tree);
+  await answerDocs(app, tree, leaf);
   return app;
 }
 
 /** A context at `view` with the leaf open and the reader up. Throws when the reader fell back to the plain view or never
- *  came up: the figure is about the reader page. */
+ *  came up: the figure is about the reader page. One re-open on a fallback, D-7958: the reader's start watchdog (2 s for a
+ *  small document) can pass on a loaded runner, so a `fallback` re-navigates the same page once, and says so on the
+ *  console; a second `fallback`, a timeout and every other outcome throw as before. */
 async function openLeaf(view: View): Promise<OpenedApp> {
   const app = await openView(view);
-  await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}`, { waitUntil: 'load' });
-  const up = await app.page.waitForFunction((note) => {
-    if ([...document.querySelectorAll('.doc-plain-note')].some((n) => n.textContent === note)) return 'fallback';
-    return document.querySelector('.docs-reader iframe') !== null && document.querySelector('.doc-formatting') === null ? 'ready' : null;
-  }, READER_FALLBACK_NOTE, { timeout: 90_000, polling: 100 });
-  const outcome = await up.jsonValue();
+  const url = `${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}`;
+  const start = async (): Promise<unknown> => {
+    await app.page.goto(url, { waitUntil: 'load' });
+    const up = await app.page.waitForFunction((note) => {
+      if ([...document.querySelectorAll('.doc-plain-note')].some((n) => n.textContent === note)) return 'fallback';
+      return document.querySelector('.docs-reader iframe') !== null && document.querySelector('.doc-formatting') === null ? 'ready' : null;
+    }, READER_FALLBACK_NOTE, { timeout: 90_000, polling: 100 });
+    return up.jsonValue();
+  };
+  let outcome = await start();
+  if (outcome === 'fallback') {
+    console.warn(`PHH-RETRY ${view.skin} ${view.width}x${view.height}: the reader's start watchdog fell back; opening the leaf once more (D-7958)`);
+    outcome = await start();
+  }
   if (outcome !== 'ready') throw new Error(`the reader did not come up: ${String(outcome)}`);
   return app;
 }
@@ -452,6 +471,7 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
         expect(b.h, b.name).toBeGreaterThanOrEqual(TAP);
       }
       expect(r.bar.h, 'the row is one tap tall, its divider inside').toBeLessThanOrEqual(TAP + 0.5);
+      expect(r.bar.h, 'the row is a whole tap tall').toBeGreaterThanOrEqual(TAP - 0.5);
       expect(r.divider, 'the mockup\'s 1 px divider').toBe('1px');
       expect(r.lines.reduce((s, h) => s + h, 0), 'the label\'s two lines fit the row').toBeLessThanOrEqual(TAP);
     });
@@ -463,14 +483,14 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
       await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}?ref=${LONG_BRANCH}`, { waitUntil: 'load' });
       await app.page.waitForFunction(() => document.querySelector('.docs-compact-where .docs-badge') !== null, undefined, { timeout: 30_000 });
       const got = await app.page.evaluate(() => {
-        const rect = (sel: string): { left: number; right: number } | null => {
+        const rect = (sel: string): { left: number; right: number; top: number; mid: number } | null => {
           const r = document.querySelector(sel)?.getBoundingClientRect();
-          return r === undefined ? null : { left: r.left, right: r.right };
+          return r === undefined ? null : { left: r.left, right: r.right, top: r.top, mid: (r.top + r.bottom) / 2 };
         };
-        const text = document.querySelector('.docs-compact-where-text');
+        const text = document.querySelector('.docs-compact-where-ref');
         const badge = document.querySelector('.docs-compact-where .docs-badge');
         return {
-          label: rect('.docs-compact-label'), badge: rect('.docs-compact-where .docs-badge'),
+          label: rect('.docs-compact-label'), badge: rect('.docs-compact-where .docs-badge'), ref: rect('.docs-compact-where-ref'),
           textCut: text === null ? null : text.scrollWidth > text.clientWidth,
           badgeWhole: badge === null ? null : badge.scrollWidth <= badge.clientWidth + 1,
           words: badge?.textContent ?? null,
@@ -483,6 +503,46 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
       expect(got.badge).not.toBeNull();
       expect(got.badge!.left).toBeGreaterThanOrEqual(got.label!.left - 0.5);
       expect(got.badge!.right, 'the badge lies inside the label').toBeLessThanOrEqual(got.label!.right + 0.5);
+      // The badge stays on the ref's line (the ref's span is in this fixture, so it is the one measured): were the row to
+      // stack them, the badge would sit lower and still be inside the label. The two are centred on one line, and the badge
+      // is the taller box, so their tops differ by 1.4 px and their centres by none: the centres are compared.
+      expect(got.ref).not.toBeNull();
+      expect(Math.abs(got.badge!.mid - got.ref!.mid), 'the badge is on the ref\'s line').toBeLessThanOrEqual(1);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  it('412 x 915: a ref view of a leaf under a 46-character directory still draws the ref, and the badge is inside the label (refinement (g))', async () => {
+    const leaf = `${LONG_DIR}/${NAME}`;
+    const app = await openView({ ...PHONE, skin: REFINED }, draftTree(leaf), leaf);
+    try {
+      await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${leaf}?ref=${LONG_BRANCH}`, { waitUntil: 'load' });
+      await app.page.waitForFunction(() => document.querySelector('.docs-compact-where-ref') !== null, undefined, { timeout: 30_000 });
+      const got = await app.page.evaluate(() => {
+        const box = (sel: string): { left: number; right: number; width: number } | null => {
+          const r = document.querySelector(sel)?.getBoundingClientRect();
+          return r === undefined ? null : { left: r.left, right: r.right, width: r.width };
+        };
+        // The separator's own space is drawn: the first character of the ref's text has a box of its own.
+        const ref = document.querySelector('.docs-compact-where-ref');
+        const first = document.createRange();
+        if (ref?.firstChild != null) { first.setStart(ref.firstChild, 0); first.setEnd(ref.firstChild, 1); }
+        return {
+          label: box('.docs-compact-label'), crumb: box('.docs-compact-where-crumb'), ref: box('.docs-compact-where-ref'),
+          badge: box('.docs-compact-where .docs-badge'), separatorW: first.getBoundingClientRect().width,
+          refText: ref?.textContent ?? null,
+        };
+      });
+      console.log(`PHH-FIGURE refined 412x915 long-directory-ref ${JSON.stringify(got)}`);
+      expect(got.ref, 'the ref is drawn').not.toBeNull();
+      expect(got.ref!.width, 'the ref has room for at least four mono characters').toBeGreaterThan(24);
+      expect(got.separatorW, 'the separator\'s space is drawn').toBeGreaterThan(0);
+      expect(got.badge).not.toBeNull();
+      expect(got.label).not.toBeNull();
+      expect(got.badge!.right, 'the badge lies inside the label').toBeLessThanOrEqual(got.label!.right + 0.5);
+      expect(got.ref!.right, 'the ref ends before the badge').toBeLessThanOrEqual(got.badge!.left + 0.5);
       expect(app.errors, 'no page error').toEqual([]);
     } finally {
       await app.ctx.close();
@@ -497,6 +557,11 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
       await more.click();
       expect(await more.getAttribute('aria-expanded')).toBe('true');
       expect(await page.locator('.docs-truth').isVisible()).toBe(true);
+      // Escape is pressed from inside the open panel, so the panel's own handler and the focus's return to the button are
+      // what close it: a click leaves focus on the button, where the button's handler alone would do.
+      const inside = page.locator('.docs-more-panel').getByRole('button', { name: DOCS_HEAD_TEXT.copyCommit });
+      await inside.focus();
+      expect(await page.evaluate(() => document.activeElement?.closest('.docs-more-panel') !== null), 'focus is in the panel').toBe(true);
       expect(await page.locator('.docs-more-panel').getByRole('link', { name: DOCS_HEAD_TEXT.github }).isVisible()).toBe(true);
       const f = await measure(page);
       console.log(`PHH-FIGURE refined 412x915 panel-open ${JSON.stringify(f)}`);
@@ -539,7 +604,7 @@ describe('a tablet and a desktop keep the full header (refinement (b))', () => {
 ```
 
 - [ ] **Step 2: It typechecks at BASE, and the two browser censuses hold it.** `TSC-OK`. `( cd pwa && ./node_modules/.bin/vitest run test/browser-dist.test.ts test/browser-leg.test.ts )` — green, counts unchanged from BASE (the file serves `sharedDist()` in the pinned form and is named `*.browser.test.ts`).
-- [ ] **Step 3: Run it at BASE**, through `ccrc test`: `( cd pwa && CCRC_CHROME=<the brief's Chrome> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/docs-compact-head.browser.test.ts )`. Expected (prediction): `Tests  6 failed | 4 passed (10)`: the 412 x 915 Refined and Instrument cases and the 599 case red at `expect(f.head).toBe('compact')`, the row case at `the compact row is drawn`, the long-branch draft case at its 30 s wait for the row's badge, the Page details case at `Page details is on the row`; the 600, 768, 1280 and 915 x 412 cases green. Copy every `PHH-FIGURE` line into the SDD ledger.
+- [ ] **Step 3: Run it at BASE**, through `ccrc test`: `( cd pwa && CCRC_CHROME=<the brief's Chrome> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/docs-compact-head.browser.test.ts )`. Expected (prediction, for the file as it stood at Task 1, 10 cases): `Tests  6 failed | 4 passed (10)`, measured so at BASE (the fence above now holds 11 cases: the final review's fix round added the long-directory case, which was not run at BASE): the 412 x 915 Refined and Instrument cases and the 599 case red at `expect(f.head).toBe('compact')`, the row case at `the compact row is drawn`, the long-branch draft case at its 30 s wait for the row's badge, the Page details case at `Page details is on the row`; the 600, 768, 1280 and 915 x 412 cases green. Copy every `PHH-FIGURE` line into the SDD ledger.
 - [ ] **Step 4: Judge the BASE figures** (the main loop). From `PHH-FIGURE refined 412x915`: `screenTop`, `frameTop`, `titleInFrame`, `frameScroll`, `above` (predictions: 0, about 256, about 85, 0, about 341). Each of these is a **stop-and-ask, before any code changes**: `screenTop` not 0 (something draws above the Docs screen that the mockup did not count); `frameScroll` not 0; `48 + titleInFrame > 133` (the frame's own part is over the mockup's 85, so 133 is out of this wave's reach; the coordinator rules on the pin); a case that never got the reader up (`the reader did not come up`); a full-header case red at BASE (`no page error` names the errors). A `frameTop` or `above` far from the prediction is reported, not a stop.
 - [ ] **Step 5: Record, commit nothing.** The file stays untracked (Tasks 2 to 4 stage their files by name; Task 5 commits it). Record its sha256 (`sha256sum pwa/browser/docs-compact-head.browser.test.ts`) and the BASE figures for 412 (both skins), 599, 600, 768, 1280 and 915 x 412 in the SDD ledger; Task 5 compares against them. Task 1 contributes no mutation row: its guards are Task 5's.
 
@@ -645,16 +710,16 @@ describe('a tablet and a desktop keep the full header (refinement (b))', () => {
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { declValue, ruleIn, stripComments } from './cssRule';
+import { declValue, effectiveValue, ruleIn, selectorsOf, stripComments } from './cssRule';
 
 const docsCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'docs', 'docs.css'), 'utf8');
 const SCREEN = '.docs-screen:has(> .docs-compact)';
 const LEAF = `${SCREEN} > .docs-leaf:has(> .docs-reader)`;
 
 describe('the compact head in docs.css (the phone-header plan, refinements (d), (e), (f), (i), (k))', () => {
-  it('the screen gives the row the top: no padding above it and a 4 px gap under it; its sides and bottom as before', () => {
+  it('the screen gives the row the top: only the safe-area inset above it (0 outside an installed iOS app) and a 4 px gap under it; its sides and bottom as before', () => {
     const rule = ruleIn(docsCss, SCREEN);
-    expect(declValue(rule, 'padding-top')).toBe('0');
+    expect(declValue(rule, 'padding-top')).toBe('var(--safe-top)');
     expect(declValue(rule, 'gap')).toBe('var(--sp-1)');
     expect(declValue(rule, 'padding')).toBeNull();
     expect(declValue(ruleIn(docsCss, '.docs-screen'), 'padding')).toBe('var(--sp-2)');
@@ -668,6 +733,16 @@ describe('the compact head in docs.css (the phone-header plan, refinements (d), 
     expect(declValue(ruleIn(docsCss, '.docs-compact-crumbs'), 'display')).toBe('flex');
   });
 
+  it('the row\'s controls draw the focus ring inside their boxes: the row is at the top of the page, so an outer ring would be off-screen (refinement (k))', () => {
+    expect(declValue(ruleIn(docsCss, '.docs-compact-bar :focus-visible'), 'outline-offset')).toBe('-2px');
+  });
+
+  it('the crumbs state (the tree slot not ok) draws the same inset ring: it sits at the top of the page too, where the safe-area inset is 0', () => {
+    expect(declValue(ruleIn(docsCss, '.docs-compact-crumbs :focus-visible'), 'outline-offset')).toBe('-2px');
+    expect(selectorsOf(docsCss, '.docs-compact-crumbs :focus-visible'), 'one rule with the row\'s, not a second mechanism')
+      .toContain('.docs-compact-bar :focus-visible');
+  });
+
   it('the first line\'s text and the name end in an ellipsis; the draft badge beside the text never shrinks (refinement (g))', () => {
     for (const sel of ['.docs-compact-where-text', '.docs-compact-name']) {
       const lines = ruleIn(docsCss, sel);
@@ -678,6 +753,25 @@ describe('the compact head in docs.css (the phone-header plan, refinements (d), 
     expect(declValue(ruleIn(docsCss, '.docs-compact-where'), 'display')).toBe('flex');
     expect(declValue(ruleIn(docsCss, '.docs-compact-where'), 'overflow')).toBeNull();
     expect(declValue(ruleIn(docsCss, '.docs-compact-where .docs-badge'), 'flex')).toBe('none');
+  });
+
+  it('the crumb and the ref are two spans, each cut at its own end, the crumb giving way first, so a long directory never hides the ref (refinement (g))', () => {
+    // The first line's text also sits in the grouped ellipsis rule, so its flex line is read over every rule naming it.
+    expect(effectiveValue(docsCss, '.docs-compact-where-text', 'display')).toBe('flex');
+    expect(effectiveValue(docsCss, '.docs-compact-where-text', 'min-width')).toBe('0');
+    const crumb = ruleIn(docsCss, '.docs-compact-where-crumb');
+    const ref = ruleIn(docsCss, '.docs-compact-where-ref');
+    for (const [sel, rule] of [['crumb', crumb], ['ref', ref]] as const) {
+      expect(declValue(rule, 'min-width'), sel).toBe('0');
+      expect(declValue(rule, 'overflow'), sel).toBe('hidden');
+      expect(declValue(rule, 'text-overflow'), sel).toBe('ellipsis');
+    }
+    expect(declValue(crumb, 'white-space')).toBe('nowrap');
+    // The ref's span opens with the separator's space, which a flex item drops under `nowrap`.
+    expect(declValue(ref, 'white-space')).toBe('pre');
+    const shrink = (rule: string): number => Number(/^0\s+(\d+)\s+auto$/.exec(declValue(rule, 'flex') ?? '')?.[1] ?? Number.NaN);
+    expect(shrink(ref)).toBe(1);
+    expect(shrink(crumb), 'the crumb shrinks first').toBeGreaterThan(shrink(ref));
   });
 
   it('Share and Export on the row are a whole tap wide with no underline, and a disabled one is dimmed, not recoloured', () => {
@@ -776,18 +870,26 @@ describe('the compact head: .docs-more and the row’s .docs-action icons are a 
    the truth line and the link actions, closed until Page details opens it. While the tree slot is not `ok` the head is
    back and the crumbs (`.docs-compact-crumbs`), as the full header's is. The row is one tap tall with the picked
    mockup's 1 px divider inside that height (box-sizing is border-box everywhere, reset.css), so the row and the 4 px gap
-   under it are the console's whole part above the frame. The first line's draft badge sits beside its text, never
-   inside the part that ends in an ellipsis. GROUNDS: the row, the label and the panel paint nothing, so everything here
+   under it are the console's whole part above the frame (the screen pads its top for the status bar of an installed iOS app, `--safe-top`, 0 everywhere else). The first line's draft badge sits beside its text, never
+   inside the part that ends in an ellipsis. That part is two spans, the parent crumb and the served ref, each cut at its
+   own end, the crumb giving way first (a flex-shrink a thousand times the ref's), so a long parent directory never hides
+   which ref is served; the ref's span holds the ` · ` separator, so it keeps its spaces (`white-space: pre`: a flex item
+   drops a leading space under `nowrap`). GROUNDS: the row, the label and the panel paint nothing, so everything here
    sits on body's --bg-page as the full header does (design/audit.mjs registers `.docs-compact-where` and `.docs-more`
    there); an open `.docs-more` paints its own pressed ground and ink and is measured on it; the dot paints a status fill
    and sets no ink. A disabled icon is dimmed by opacity, registered in design/audit.mjs's OPACITY_REGISTRY beside the
    `.bell:disabled` fade it follows, because every docs rule that sets a colour is measured and none is exempt. — */
-.docs-screen:has(> .docs-compact) { padding-top: 0; gap: var(--sp-1); }
+.docs-screen:has(> .docs-compact) { padding-top: var(--safe-top); gap: var(--sp-1); }
 .docs-compact-bar {
   display: flex; align-items: center; min-width: 0;
   block-size: var(--tap-min);
   border-block-end: 1px solid var(--edge-subtle);
 }
+/* The row sits at the top of the page, so the global ring (2px offset 2px, base.css) would draw above the viewport: the
+   row's controls draw it inside their own boxes, and so do the controls of the crumbs state that stands in for the row
+   while the tree slot is not ok. */
+.docs-compact-crumbs :focus-visible,
+.docs-compact-bar :focus-visible { outline-offset: -2px; }
 .docs-compact-crumbs { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
 .docs-compact-label { flex: 1 1 auto; min-width: 0; margin: 0; }
 .docs-compact-where-text, .docs-compact-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -796,7 +898,9 @@ describe('the compact head: .docs-more and the row’s .docs-action icons are a 
   font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
   color: var(--ink-secondary);
 }
-.docs-compact-where-text { flex: 0 1 auto; min-width: 0; }
+.docs-compact-where-text { flex: 0 1 auto; min-width: 0; display: flex; }
+.docs-compact-where-crumb { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs-compact-where-ref { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
 .docs-compact-where .docs-badge { flex: none; }
 .docs-compact-name { display: block; font: var(--weight-medium) var(--text-md) / var(--leading-tight) var(--font-ui); }
 .docs-compact-bar .docs-action { justify-content: center; min-width: var(--tap-min); padding: 0; text-decoration: none; }
@@ -873,7 +977,7 @@ describe('the compact head: .docs-more and the row’s .docs-action icons are a 
 
 | id | spec | file | old → new | tests | expected red (prediction) |
 |---|---|---|---|---|---|
-| PHH-T3-M1 | (i) | `src/docs/docs.css` | `.docs-screen:has(> .docs-compact) { padding-top: 0; gap: var(--sp-1); }` → `.docs-screen:has(> .docs-compact) { gap: var(--sp-1); }` | `docs-compact-css` | 1 failed — `'the screen gives the row the top: …'` |
+| PHH-T3-M1 | (i) | `src/docs/docs.css` | `.docs-screen:has(> .docs-compact) { padding-top: var(--safe-top); gap: var(--sp-1); }` → `.docs-screen:has(> .docs-compact) { gap: var(--sp-1); }` | `docs-compact-css` | 1 failed — `'the screen gives the row the top: …'` |
 | PHH-T3-M2 | (d) | `src/docs/docs.css` | `.docs-more-panel[hidden] { display: none; }` → removed | `docs-compact-css` | 1 failed — `'a closed panel is not drawn: …'` |
 | PHH-T3-M3 | (k) | `src/docs/docs.css` | `min-height: var(--tap-min); min-width: var(--tap-min);` → `min-width: var(--tap-min);` | `docs-compact-css`, `tap-targets` | 2 failed — `'Page details is a tap square holding its dot …'`; `'are at least one tap tall and one tap wide, off the shared token'` |
 | PHH-T3-M4 | (e) | `src/docs/docs.css` | `.docs-compact-bar .docs-action { justify-content: center; min-width: var(--tap-min); padding: 0; text-decoration: none; }` → `.docs-compact-bar .docs-action { justify-content: center; padding: 0; text-decoration: none; }` | `docs-compact-css`, `tap-targets` | 2 failed — `'Share and Export on the row are a whole tap wide …'`; the tap-targets floor case |
@@ -889,7 +993,7 @@ describe('the compact head: .docs-more and the row’s .docs-action icons are a 
 
 ```json
 [
-  {"id": "PHH-T3-M1", "spec": "(i)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-screen:has(> .docs-compact) { padding-top: 0; gap: var(--sp-1); }", "new": ".docs-screen:has(> .docs-compact) { gap: var(--sp-1); }", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: the screen gives the row the top"},
+  {"id": "PHH-T3-M1", "spec": "(i)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-screen:has(> .docs-compact) { padding-top: var(--safe-top); gap: var(--sp-1); }", "new": ".docs-screen:has(> .docs-compact) { gap: var(--sp-1); }", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: the screen gives the row the top"},
   {"id": "PHH-T3-M2", "spec": "(d)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-more-panel[hidden] { display: none; }", "new": "", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: a closed panel is not drawn"},
   {"id": "PHH-T3-M3", "spec": "(k)", "pkg": "pwa", "file": "src/docs/docs.css", "old": "min-height: var(--tap-min); min-width: var(--tap-min);", "new": "min-width: var(--tap-min);", "tests": ["test/docs-compact-css.test.ts", "test/tap-targets.test.tsx"], "red": "2 failed: Page details is a tap square holding its dot; are at least one tap tall and one tap wide, off the shared token"},
   {"id": "PHH-T3-M4", "spec": "(e)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-compact-bar .docs-action { justify-content: center; min-width: var(--tap-min); padding: 0; text-decoration: none; }", "new": ".docs-compact-bar .docs-action { justify-content: center; padding: 0; text-decoration: none; }", "tests": ["test/docs-compact-css.test.ts", "test/tap-targets.test.tsx"], "red": "2 failed: Share and Export on the row are a whole tap wide; are at least one tap tall and one tap wide, off the shared token"},
@@ -936,19 +1040,20 @@ import type { ReactNode } from 'react';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { entryView } from '../../shared/docs';
+import { entryView, type DocPin } from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
-import { DOCS_COMPACT_QUERY, freshDot, headLayoutFor } from '../src/docs/DocsHead';
+import { DOCS_COMPACT_QUERY, DocsHead, freshDot, headLayoutFor } from '../src/docs/DocsHead';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
-import { DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, fillSentence, servedRefText, shortCommit } from '../src/docs/docsText';
+import { DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, fillSentence, servedRefText, shortCommit } from '../src/docs/docsText';
 import type { DocsFileAnswer, DocsLoaders, DocsTreeAnswer } from '../src/docs/failures';
 import { HighlighterContext } from '../src/lib/highlighterContext';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
+import type { DocsVisit } from '../src/docs/useDocsVisit';
 import { navigate, useLocation } from '../src/lib/router';
 import {
-  COMMIT_A, draftOf, entry, fakeLoaders, fileResponse, holder, okFile, okTree, pageAt, treeOk, type FakeLoaders,
+  COMMIT_A, FP_1, draftOf, entry, fakeLoaders, fileResponse, holder, okFile, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
 } from './docsFixtures';
 import { inThreadContext, inThreadHighlighter } from './highlightTestStore';
 
@@ -1108,6 +1213,42 @@ describe('the compact row (refinements (c), (e), (g))', () => {
     expect(bar().querySelector('.docs-compact-where')?.textContent, 'the default view on origin/HEAD adds nothing').toBe('specs');
   });
 
+  it('a ref view of a nested leaf draws the parent directory and the ref as two spans, the ref with its separator (refinement (g))', async () => {
+    atWidth(412);
+    const tree = treeOk({ entries: [entry('specs', 'd/x.md')] });
+    open('/docs/demo/specs/d/x.md?ref=main', fakeLoaders({ tree: okTree(tree) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    const where = bar().querySelector('.docs-compact-where') as HTMLElement;
+    expect(where.textContent).toBe(`d · ${servedRefText(tree.ref)}`);
+    expect([...where.children].map((c) => c.className)).toEqual(['docs-compact-where-text']);
+    const text = where.querySelector('.docs-compact-where-text') as HTMLElement;
+    // Each is cut at its own end (docs.css), so a long directory never takes the whole line from the ref.
+    expect([...text.children].map((c) => [c.className, c.textContent])).toEqual([
+      ['docs-compact-where-crumb', 'd'],
+      ['docs-compact-where-ref', ` · ${servedRefText(tree.ref)}`],
+    ]);
+    cleanup();
+    open('/docs/demo/specs/d/x.md', fakeLoaders({ tree: okTree(tree) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    expect([...bar().querySelectorAll('.docs-compact-where-text > *')].map((c) => c.className), 'no ref, no ref span')
+      .toEqual(['docs-compact-where-crumb']);
+  });
+
+  it('on view=committed of a draft leaf the row keeps its ref and draft badge and says nothing of the view; the banner under it does (refinement (g), (h))', async () => {
+    atWidth(412);
+    const e = entry('specs', 'a.md', { draft: draftOf('modified') });
+    const tree = treeOk({ entries: [e], drafts: holder() });
+    open('/docs/demo/specs/a.md?ref=main&view=committed', fakeLoaders({ tree: okTree(tree) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    const badge = entryView(e, tree.drafts, 'ref').badge;
+    expect(badge, 'the fixture opens a badged draft').not.toBeNull();
+    // The row is the draft view's row, byte for byte; the view is told by the banner in the flow, not by the row.
+    expect(bar().querySelector('.docs-compact-where')?.textContent).toBe(`specs · ${servedRefText(tree.ref)} · ${ENTRY_BADGE_TEXT[badge!]}`);
+    const banner = await screen.findByText(fillSentence(DOCS_BANNER_TEXT.viewCommitted, { short: shortCommit(tree.ref.commit) }));
+    expect(bar().contains(banner) || panel().contains(banner), 'the banner is outside the row and its panel').toBe(false);
+    expect(within(banner.closest('.docs-screen') as HTMLElement).getByRole('link', { name: DOCS_BANNER_TEXT.backToDraft })).toBeInTheDocument();
+  });
+
   it('a default view served from anywhere but origin/HEAD names its served ref on the row (refinement (g))', async () => {
     atWidth(412);
     const base = treeOk();
@@ -1117,6 +1258,40 @@ describe('the compact row (refinements (c), (e), (g))', () => {
     expect(servedRefText(tree.ref)).toBe('main (local)');
     expect(bar().querySelector('.docs-compact-where')?.textContent).toBe('specs · main (local)');
   });
+
+  it('a draft the tree no longer lists draws the truth line\'s word on the row, as plain text, never as a badge (refinement (g))', () => {
+    atWidth(412);
+    // The pin outlived a re-list: the leaf's file slot holds a draft pin, and the tree's entry no longer carries a draft, so
+    // entryView gives the leaf no badge and the truth line draws its plain word.
+    const tree = treeOk({ entries: [entry('specs', 'a.md')], drafts: holder() });
+    const pin: DocPin = { kind: 'draft', branch: 'main', head: COMMIT_A, section: 'specs', path: 'a.md', fp: FP_1 };
+    const visit: DocsVisit = {
+      tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
+      file: { s: 'loading', pin }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
+      retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+    };
+    render(<DocsHead page={pageAt('/docs/demo/specs/a.md?ref=main')} visit={visit} tree={tree} />);
+    const word = DOCS_HEAD_TEXT.sourceDraftUnbadged;
+    const where = bar().querySelector('.docs-compact-where') as HTMLElement;
+    expect(where.textContent, 'the row ends in the truth line\'s word').toBe(`specs · ${servedRefText(tree.ref)} · ${word}`);
+    expect(where.querySelector('.docs-badge'), 'the row draws it as text, as the truth line does').toBeNull();
+    const source = panel().querySelector('.docs-truth-source') as HTMLElement;
+    expect(source.textContent?.startsWith(word), 'the truth line starts with the same word').toBe(true);
+    expect(source.querySelector('.docs-badge'), 'the truth line draws no badge for it').toBeNull();
+  });
+
+  it.each(['default:origin-main', 'default:origin-master'] as const)(
+    'an origin-side default view that is %s names its served ref on the row (refinement (g))',
+    async (via) => {
+      atWidth(412);
+      const base = treeOk();
+      const tree = { ...base, ref: { ...base.ref, side: 'origin' as const, via } };
+      open('/docs/demo/specs/a.md', fakeLoaders({ tree: okTree(tree) }));
+      await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+      expect(servedRefText(tree.ref)).toContain(tree.ref.name);
+      expect(bar().querySelector('.docs-compact-where')?.textContent).toBe(`specs · ${servedRefText(tree.ref)}`);
+    },
+  );
 
   it('while the leaf moves to its pin, Share and Export are disabled and named for it, and the panel says why (refinement (e))', async () => {
     atWidth(412);
@@ -1253,6 +1428,22 @@ describe('Page details (refinements (c), (d), (f))', () => {
     expect(freshDot(state)).toBe(dot);
   });
 
+  it('a page whose last fetch failed names it: Page details (freshness problem), with the failed dot (refinement (f))', async () => {
+    atWidth(412);
+    const base = treeOk();
+    const tree = {
+      ...base,
+      freshness: {
+        ...base.freshness,
+        stamp: { okAgeMs: 179 * 60_000, attemptAgeMs: 5 * 60_000, lastOutcome: 'fetch-transport', okCommit: COMMIT_A },
+      },
+    } as const;
+    open('/docs/demo/specs/a.md', fakeLoaders({ tree: okTree(tree) }));
+    const b = await screen.findByRole('button', { name: DOCS_HEAD_TEXT.moreFailed });
+    expect(b.querySelector('.docs-more-dot')).toHaveAttribute('data-tone', 'failed');
+    expect(screen.queryByRole('button', { name: DOCS_HEAD_TEXT.moreNever }), 'failed is not never fetched').toBeNull();
+  });
+
   it('a page never fetched draws the amber dot and says so in the name; the dot itself is hidden from a screen reader', async () => {
     atWidth(412);
     open('/docs/demo/specs/a.md', fakeLoaders());
@@ -1323,7 +1514,8 @@ function Crumbs(p: { readonly crumbs: readonly DocsCrumb[] }): ReactNode {
 ```tsx
 /** The compact head's width (phone-header refinement (b)): under 600 CSS px, the compact window class. A leaf page draws one row there
  *  (`CompactHead`); a tablet, a desktop, and every other page at any width keep the header as it was. Spelled once, here:
- *  docs.css keys the row's rules on its own classes, never on a width (docs-compact-head.test.tsx holds both). */
+ *  docs.css keys the row's rules on its own classes, never on a width (docs-compact-css.test.ts holds that half; docs-compact-head.test.tsx
+ *  holds the other, that DocsHead.tsx alone spells it under pwa/src). */
 export const DOCS_COMPACT_QUERY = '(max-width: 599.98px)';
 
 /** Which header a page draws. */
@@ -1601,31 +1793,36 @@ function BackButton(p: { readonly page: DocsPageLocation }): ReactNode {
   );
 }
 
-/** The compact row's draft word (phone-header refinement (g)): the badge the truth line draws for this leaf, `entryView`'s through
- *  `ENTRY_BADGE_TEXT` (M4.T7, one badge function), or `null` when the truth line draws none. */
-function rowBadge(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): string | null {
+/** The compact row's draft word (phone-header refinement (g)): the word, and the form, the truth line draws for this leaf, so the
+ *  row follows the one source (M4.T7, one badge function). `entryView`'s badge through `ENTRY_BADGE_TEXT` is drawn as a
+ *  `.docs-badge` (`badged`); for a draft whose entry no longer opens one (the pin outlived a re-list) the truth line draws
+ *  `DOCS_HEAD_TEXT.sourceDraftUnbadged` as plain text, and so does the row (`badged` false). `null` when the truth line draws
+ *  no draft word. */
+interface RowBadge { readonly word: string; readonly badged: boolean }
+function rowBadge(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): RowBadge | null {
   const k = docsPathKind(tree, page.section, page.path, modeOf(page));
   if (k.kind !== 'leaf') return null;
   const s = leafSource(tree, page, openedPin(tree, page, file));
-  if (s.kind === 'draft') return badgeText(s.badge);
-  return k.view.badge === null ? null : ENTRY_BADGE_TEXT[k.view.badge];
+  if (s.kind === 'draft') return { word: badgeText(s.badge), badged: s.badge !== null };
+  return k.view.badge === null ? null : { word: ENTRY_BADGE_TEXT[k.view.badge], badged: true };
 }
 
 /** The compact row's two lines (phone-header refinements (c), (g)): where the page is over its name. The first line is the
- *  parent crumb and, when one is shown, the served ref, joined by ` · ` in a text that ends in an ellipsis; the draft
- *  badge follows it as a sibling, so a long ref is cut and the badge never is. Text, not links: back goes up one level,
- *  and the whole path is the panel's first line. */
+ *  parent crumb and, when one is shown, the served ref, joined by ` · ` (the ref's own span holds the separator), each its
+ *  own text that ends in an ellipsis and the crumb the one that gives way first, so a long parent directory never hides
+ *  which ref is served; the draft badge follows as a sibling, so a long ref is cut and the badge never is. Text, not
+ *  links: back goes up one level, and the whole path is the panel's first line. */
 function CompactLabel(p: {
-  readonly where: string; readonly name: string; readonly refText: string | null; readonly badge: string | null;
+  readonly where: string; readonly name: string; readonly refText: string | null; readonly badge: RowBadge | null;
 }): ReactNode {
   return (
     <p className="docs-compact-label">
       <span className="docs-compact-where">
         <span className="docs-compact-where-text">
-          {p.where}
-          {p.refText !== null && <>{SEP}{p.refText}</>}
+          <span className="docs-compact-where-crumb">{p.where}</span>
+          {p.refText !== null && <span className="docs-compact-where-ref">{SEP}{p.refText}</span>}
         </span>
-        {p.badge !== null && <>{SEP}<span className="docs-badge">{p.badge}</span></>}
+        {p.badge !== null && <>{SEP}{p.badge.badged ? <span className="docs-badge">{p.badge.word}</span> : p.badge.word}</>}
       </span>
       <span className="docs-compact-name">{p.name}</span>
     </p>
@@ -1791,7 +1988,7 @@ describe('the compact head: the rendered row carries .docs-back, .docs-action an
 
 describe('TextLink stays inside a line of text — a link alone is a control', () => {
 ```
-- [ ] **Step 6: Run it to see it pass.** `( cd pwa && ./node_modules/.bin/vitest run test/docs-compact-head.test.tsx )` — Expected (prediction): `Tests  39 passed (39)`. `TSC-OK`.
+- [ ] **Step 6: Run it to see it pass.** `( cd pwa && ./node_modules/.bin/vitest run test/docs-compact-head.test.tsx )` — Expected (prediction): `Tests  42 passed (42)`. `TSC-OK`.
 - [ ] **Step 7: The full header is unchanged, and the censuses hold.** Each alone, through `ccrc test` where heavy: `docs-screen.test.tsx`, `docs-truth.test.tsx`, `refined-phone.test.tsx` — green, each at its BASE count (they render the full header: setup's `matchMedia` answers false, and `refined-phone`'s 390 case reads `.docs-back` on a `tree: null` leaf, which the compact head keeps). `control-census.test.ts`, `tap-targets.test.tsx`, `docs-scans.test.ts`, `shell-css.test.ts`, `sheet-desktop-arm.test.tsx`, `markup-census.test.ts`, `literal-census.test.ts`, `docs-compact-css.test.ts` — green (`tap-targets.test.tsx` one case more than after Task 3; `control-census.test.ts` at its BASE count, with one more entry). `git fetch -q origin main && ( cd server && ./node_modules/.bin/vitest run test/docs-parity.test.ts test/citations.test.ts )` — green.
 - [ ] **Step 8: Commit.** `git add pwa/src/docs/DocsHead.tsx pwa/src/docs/docsText.ts pwa/test/docs-compact-head.test.tsx pwa/test/control-census.test.ts pwa/test/tap-targets.test.tsx` (expect 5), message `pwa: one Docs row on a phone, the rest behind Page details (docs phone header)`, trailer. Record the task's JSON row fence, as measured, in the SDD ledger.
 
@@ -1806,11 +2003,11 @@ describe('TextLink stays inside a line of text — a link alone is a control', (
 | PHH-T4-M5 | (d) | `toggle.current?.focus();` → removed | 1 failed — `'Escape in the open panel closes it and puts focus back on Page details …'` |
 | PHH-T4-M6 | (e) | `aria-label={p.glyph !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words}` → `aria-label={undefined}` | 7 failed — the order case, the ref and draft case, the default-view ref case, the updating case, the panel case, the Escape case, the new-page case (Share's icon has no name) |
 | PHH-T4-M7 | (e) | `aria-label={busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : p.glyph === true ? words : undefined}` → `aria-label={busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : undefined}` | 4 failed — `'at 390px …'`; `'at 599px …'`; the order case; the plain-view case |
-| PHH-T4-M8 | (g) | `if (s.kind === 'draft') return badgeText(s.badge);` → `if (s.kind === 'draft') return null;` | 1 failed — `'a ref view names its served ref on the row, and a draft leaf its badge, …'` |
+| PHH-T4-M8 | (g) | `if (s.kind === 'draft') return { word: badgeText(s.badge), badged: s.badge !== null };` → `if (s.kind === 'draft') return null;` | 1 failed — `'a ref view names its served ref on the row, and a draft leaf its badge, …'` |
 | PHH-T4-M9 | (g) | `where={p.where} name={p.name} refText={rowRefText(page, tree)} badge={rowBadge(tree, page, file)}` → `where={p.where} name={p.name} refText={null} badge={rowBadge(tree, page, file)}` | 2 failed — the ref and draft case; `'a default view served from anywhere but origin/HEAD names its served ref on the row …'` |
 | PHH-T4-M10 | (f) | `return state === 'ok' ? 'ok' : state === 'never' ? 'warn' : state === 'failed' ? 'failed' : null;` → `return state === 'ok' ? 'ok' : state === 'failed' ? 'failed' : null;` | 3 failed — `'the chip state never draws the dot warn'`; `'a page never fetched draws the amber dot …'`; the order case |
 | PHH-T4-M11 | (e) | `const exportNote = exported.s === 'plain-view' ? DOCS_HEAD_TEXT.exportPlainHint` → `const exportNote = exported.s === 'plain-view' ? null` | 1 failed — the plain-view case |
-| PHH-T4-M12 | (g) | `if (s.kind === 'draft') return badgeText(s.badge);` → `if (s.kind === 'draft') return tree.entries.find((x) => x.path === page.path)?.draft?.state ?? null;`; tests `test/docs-scans.test.ts` | 4 failed — `'the Docs screen code reads no draft state'`, `'a file planted beside the real ones is found, by file and line'` (its copy of `src/docs` carries the mutated head), `'M4.T7 Share clause: …'`, `'M4.T7 Export clause: …'` |
+| PHH-T4-M12 | (g) | `if (s.kind === 'draft') return { word: badgeText(s.badge), badged: s.badge !== null };` → `if (s.kind === 'draft') return { word: tree.entries.find((x) => x.path === page.path)?.draft?.state ?? '', badged: true };`; tests `test/docs-scans.test.ts` | 4 failed — `'the Docs screen code reads no draft state'`, `'a file planted beside the real ones is found, by file and line'` (its copy of `src/docs` carries the mutated head), `'M4.T7 Share clause: …'`, `'M4.T7 Export clause: …'` |
 | PHH-T4-M13 | (k) | file `test/control-census.test.ts`: `'docs/DocsHead.tsx <button> docs-more':` → `'docs/DocsHead.tsx <button> docs-more-gone':`; tests `test/control-census.test.ts` | 3 failed — `'registers every one'`, `'keeps no stale entry'`, `'verifies every TOKEN claim against the stylesheets'` (no rule selects `.docs-more-gone`) |
 | PHH-T4-M14 | (e) | `aria-label={p.glyph !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words}` → `aria-label={p.glyph !== true ? undefined : words}` | 1 failed — `'while the leaf moves to its pin, Share and Export are disabled and named for it, …'` (Share's waiting icon is named by the bare sentence) |
 | PHH-T4-M15 | (g) | `return page.ref !== null \|\| ref.side === 'local' \|\| ref.via !== 'default:origin-head' ? servedRefText(ref) : null;` → `return page.ref !== null ? servedRefText(ref) : null;` | 1 failed — `'a default view served from anywhere but origin/HEAD names its served ref on the row …'` |
@@ -1829,11 +2026,11 @@ describe('TextLink stays inside a line of text — a link alone is a control', (
   {"id": "PHH-T4-M5", "spec": "(d)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "toggle.current?.focus();", "new": "", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: Escape in the open panel closes it and puts focus back on Page details"},
   {"id": "PHH-T4-M6", "spec": "(e)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "aria-label={p.glyph !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words}", "new": "aria-label={undefined}", "tests": ["test/docs-compact-head.test.tsx"], "red": "7 failed: the order case; the ref and draft case; the default-view ref case; the updating case; the panel case; the Escape case; the new-page case"},
   {"id": "PHH-T4-M7", "spec": "(e)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "aria-label={busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : p.glyph === true ? words : undefined}", "new": "aria-label={busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : undefined}", "tests": ["test/docs-compact-head.test.tsx"], "red": "4 failed: at 390px; at 599px; the order case; the plain-view case"},
-  {"id": "PHH-T4-M8", "spec": "(g)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "if (s.kind === 'draft') return badgeText(s.badge);", "new": "if (s.kind === 'draft') return null;", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: a ref view names its served ref on the row, and a draft leaf its badge"},
+  {"id": "PHH-T4-M8", "spec": "(g)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "if (s.kind === 'draft') return { word: badgeText(s.badge), badged: s.badge !== null };", "new": "if (s.kind === 'draft') return null;", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: a ref view names its served ref on the row, and a draft leaf its badge"},
   {"id": "PHH-T4-M9", "spec": "(g)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "where={p.where} name={p.name} refText={rowRefText(page, tree)} badge={rowBadge(tree, page, file)}", "new": "where={p.where} name={p.name} refText={null} badge={rowBadge(tree, page, file)}", "tests": ["test/docs-compact-head.test.tsx"], "red": "2 failed: the ref and draft case; a default view served from anywhere but origin/HEAD names its served ref on the row"},
   {"id": "PHH-T4-M10", "spec": "(f)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "return state === 'ok' ? 'ok' : state === 'never' ? 'warn' : state === 'failed' ? 'failed' : null;", "new": "return state === 'ok' ? 'ok' : state === 'failed' ? 'failed' : null;", "tests": ["test/docs-compact-head.test.tsx"], "red": "3 failed: the chip state never draws the dot warn; a page never fetched draws the amber dot; the order case"},
   {"id": "PHH-T4-M11", "spec": "(e)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "const exportNote = exported.s === 'plain-view' ? DOCS_HEAD_TEXT.exportPlainHint", "new": "const exportNote = exported.s === 'plain-view' ? null", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: the plain-view case"},
-  {"id": "PHH-T4-M12", "spec": "(g)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "if (s.kind === 'draft') return badgeText(s.badge);", "new": "if (s.kind === 'draft') return tree.entries.find((x) => x.path === page.path)?.draft?.state ?? null;", "tests": ["test/docs-scans.test.ts"], "red": "4 failed: the Docs screen code reads no draft state; a file planted beside the real ones is found, by file and line; M4.T7 Share clause; M4.T7 Export clause"},
+  {"id": "PHH-T4-M12", "spec": "(g)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "if (s.kind === 'draft') return { word: badgeText(s.badge), badged: s.badge !== null };", "new": "if (s.kind === 'draft') return { word: tree.entries.find((x) => x.path === page.path)?.draft?.state ?? '', badged: true };", "tests": ["test/docs-scans.test.ts"], "red": "4 failed: the Docs screen code reads no draft state; a file planted beside the real ones is found, by file and line; M4.T7 Share clause; M4.T7 Export clause"},
   {"id": "PHH-T4-M13", "spec": "(k)", "pkg": "pwa", "file": "test/control-census.test.ts", "old": "'docs/DocsHead.tsx <button> docs-more':", "new": "'docs/DocsHead.tsx <button> docs-more-gone':", "tests": ["test/control-census.test.ts"], "red": "3 failed: registers every one; keeps no stale entry; verifies every TOKEN claim against the stylesheets"},
   {"id": "PHH-T4-M14", "spec": "(e)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "aria-label={p.glyph !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words}", "new": "aria-label={p.glyph !== true ? undefined : words}", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: while the leaf moves to its pin, Share and Export are disabled and named for it"},
   {"id": "PHH-T4-M15", "spec": "(g)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "return page.ref !== null || ref.side === 'local' || ref.via !== 'default:origin-head' ? servedRefText(ref) : null;", "new": "return page.ref !== null ? servedRefText(ref) : null;", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: a default view served from anywhere but origin/HEAD names its served ref on the row"},
@@ -1856,7 +2053,7 @@ describe('TextLink stays inside a line of text — a link alone is a control', (
 - Guards (not edited): `pwa/browser/reader-frame.browser.test.ts` (its 390 x 844 layout row now runs with the compact head).
 
 - [ ] **Step 0: The file is Task 1's.** `git status --porcelain -- pwa/browser/docs-compact-head.browser.test.ts` prints `?? pwa/browser/docs-compact-head.browser.test.ts`, and its sha256 equals the one recorded in Task 1 Step 5. A difference is a stop-and-ask.
-- [ ] **Step 1: Run it**, through `ccrc test`: `( cd pwa && CCRC_CHROME=<the brief's Chrome> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/docs-compact-head.browser.test.ts )` — Expected (prediction): `Tests  10 passed (10)`. Copy every `PHH-FIGURE` line into the SDD ledger. Predicted at 412 x 915 in Refined: `screenTop` 0, `frameTop` 48 (the 44 px row, its 1 px divider inside that height, and the 4 px gap), `titleInFrame` as at BASE (about 85), `above` about 133; the row line's `bar.h` 44 and `divider` `1px`; the long-branch line's `textCut` and `badgeWhole` both true.
+- [ ] **Step 1: Run it**, through `ccrc test`: `( cd pwa && CCRC_CHROME=<the brief's Chrome> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/docs-compact-head.browser.test.ts )` — Expected (prediction): `Tests  11 passed (11)` for the fence as it stands (measured at Task 5 as `10 passed (10)`, before the fix round added the long-directory case; `11 passed (11)` after it). Copy every `PHH-FIGURE` line into the SDD ledger. Predicted at 412 x 915 in Refined: `screenTop` 0, `frameTop` 48 (the 44 px row, its 1 px divider inside that height, and the 4 px gap), `titleInFrame` as at BASE (about 85), `above` about 133; the row line's `bar.h` 44 and `divider` `1px`; the long-branch line's `textCut` and `badgeWhole` both true.
 - [ ] **Step 2: Compare with BASE.** For 600 x 960, 768 x 1024, 1280 x 800 and 915 x 412, `frameTop` and `above` within 1 px of Task 1's figures (the full header is unchanged); a larger move is a stop-and-ask. The 915 x 412 figure is the cost Q3 names (a phone turned sideways keeps today's header); it is recorded, not pinned. For 412 x 915 in both skins, `titleInFrame` within 1 px of BASE (the frame's own part is untouched).
 - [ ] **Step 3: The reader's own browser rows still hold.** `( cd pwa && CCRC_CHROME=<the brief's Chrome> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/reader-frame.browser.test.ts )` through `ccrc test` — green at its BASE count (its `'the reader is sized to the Docs pane and only the frame scrolls, at 1280x800 and 390x844'` row now meets the compact head at 390 and must still find the frame one pane tall).
 - [ ] **Step 4: Commit.** `git add pwa/browser/docs-compact-head.browser.test.ts` (expect 1), message `pwa: the Docs phone header's figure, measured in Chromium at 412 x 915 (docs phone header)`, trailer. Record the task's JSON row fence, as measured, in the SDD ledger.
@@ -1865,25 +2062,25 @@ describe('TextLink stays inside a line of text — a link alone is a control', (
 
 | id | spec | file | old → new | expected red (prediction) |
 |---|---|---|---|---|
-| PHH-T5-M1 | (i) | `src/docs/docs.css` | `.docs-screen:has(> .docs-compact) { padding-top: 0; gap: var(--sp-1); }` → `.docs-screen:has(> .docs-compact) { gap: var(--sp-1); }` | 2 failed — the 412 x 915 Refined and Instrument cases (the console's part 56 px) |
+| PHH-T5-M1 | (i) | `src/docs/docs.css` | `.docs-screen:has(> .docs-compact) { padding-top: var(--safe-top); gap: var(--sp-1); }` → `.docs-screen:has(> .docs-compact) { gap: var(--sp-1); }` | 2 failed — the 412 x 915 Refined and Instrument cases (the console's part 56 px) |
 | PHH-T5-M2 | (b) | `src/docs/DocsHead.tsx` | `export const DOCS_COMPACT_QUERY = '(max-width: 599.98px)';` → `export const DOCS_COMPACT_QUERY = '(max-width: 899.98px)';` | 2 failed — `'600 x 960: …'`, `'768 x 1024: …'` |
 | PHH-T5-M3 | (e) | `src/docs/docs.css` | `.docs-compact-bar .docs-action { justify-content: center; min-width: var(--tap-min); padding: 0; text-decoration: none; }` → `.docs-compact-bar .docs-action { justify-content: center; padding: 0; text-decoration: none; }` | 1 failed — `'412 x 915: back, Share, Export and Page details, each at least one tap, …'` (Share and Export about 28 px wide) |
 | PHH-T5-M4 | (g) | `src/docs/docs.css` | `display: flex; align-items: center; gap: var(--sp-1); min-width: 0; white-space: nowrap;` → `display: block; align-items: center; gap: var(--sp-1); min-width: 0; white-space: nowrap;` | 1 failed — `'412 x 915: a draft in a ref view of a long branch; …'` (the badge runs past the label) |
-| PHH-T5-M5 | (d) | `src/docs/DocsHead.tsx` | `onClick={() => setOpen((o) => !o)} onKeyDown={onKeyDown}` → `onClick={() => setOpen((o) => !o)}` | 1 failed — `'412 x 915: Page details opens the truth line under the row; Escape closes it, …'` |
+| PHH-T5-M5 | (d) | `src/docs/DocsHead.tsx` | `onClick={() => setOpen((o) => !o)} onKeyDown={onKeyDown}` → `onClick={() => setOpen((o) => !o)}` | 1 failed — `'Escape in the open panel closes it and puts focus back on Page details …'` (in `test/docs-compact-head.test.tsx`: since review run 1460's F3 the browser Escape case presses Escape inside the panel, where the panel's own handler, PHH-FR2-M2, answers it) |
 
 ```json
 [
-  {"id": "PHH-T5-M1", "spec": "(i)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-screen:has(> .docs-compact) { padding-top: 0; gap: var(--sp-1); }", "new": ".docs-screen:has(> .docs-compact) { gap: var(--sp-1); }", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "2 failed: 412 x 915, Refined; 412 x 915, Instrument"},
+  {"id": "PHH-T5-M1", "spec": "(i)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-screen:has(> .docs-compact) { padding-top: var(--safe-top); gap: var(--sp-1); }", "new": ".docs-screen:has(> .docs-compact) { gap: var(--sp-1); }", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "2 failed: 412 x 915, Refined; 412 x 915, Instrument"},
   {"id": "PHH-T5-M2", "spec": "(b)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "export const DOCS_COMPACT_QUERY = '(max-width: 599.98px)';", "new": "export const DOCS_COMPACT_QUERY = '(max-width: 899.98px)';", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "2 failed: 600 x 960; 768 x 1024"},
   {"id": "PHH-T5-M3", "spec": "(e)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-compact-bar .docs-action { justify-content: center; min-width: var(--tap-min); padding: 0; text-decoration: none; }", "new": ".docs-compact-bar .docs-action { justify-content: center; padding: 0; text-decoration: none; }", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "1 failed: 412 x 915: back, Share, Export and Page details, each at least one tap"},
   {"id": "PHH-T5-M4", "spec": "(g)", "pkg": "pwa", "file": "src/docs/docs.css", "old": "display: flex; align-items: center; gap: var(--sp-1); min-width: 0; white-space: nowrap;", "new": "display: block; align-items: center; gap: var(--sp-1); min-width: 0; white-space: nowrap;", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "1 failed: 412 x 915: a draft in a ref view of a long branch"},
-  {"id": "PHH-T5-M5", "spec": "(d)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "onClick={() => setOpen((o) => !o)} onKeyDown={onKeyDown}", "new": "onClick={() => setOpen((o) => !o)}", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "1 failed: 412 x 915: Page details opens the truth line under the row; Escape closes it"}
+  {"id": "PHH-T5-M5", "spec": "(d)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "onClick={() => setOpen((o) => !o)} onKeyDown={onKeyDown}", "new": "onClick={() => setOpen((o) => !o)}", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: Escape in the open panel closes it and puts focus back on Page details"}
 ]
 ```
 
 A browser row's `tests` run under the browser config: `( cd pwa && CCRC_CHROME=<…> ./node_modules/.bin/vitest run --config vitest.browser.config.ts <tests> )`.
 
-**Verify:** the browser file 10 passed with the figures at or under 133 and 48, the row one tap tall with its divider inside, the long ref cut and the badge whole, and the full header's figures at BASE (the sideways figure recorded); `reader-frame.browser.test.ts` green.
+**Verify:** the browser file 11 passed (10 at Task 5, before the fix round's long-directory case) with the figures at or under 133 and 48, the row one tap tall with its divider inside, the long ref cut and the badge whole, and the full header's figures at BASE (the sideways figure recorded); `reader-frame.browser.test.ts` green.
 
 ### Task 6: Close — review, suites, the mutation table, results, push and the one PR
 
@@ -1905,7 +2102,16 @@ A browser row's `tests` run under the browser config: `( cd pwa && CCRC_CHROME=<
 
 ## Deviations found
 
-Issued at the run's opening (run 1436, 2026-11-04): 7953 to 7959. The first three are for refinements (c), (d) and (e), in that order; the other four are for departures found while executing and in a fix round. (Task 6 Step 4 replaces this line.)
+Issued at the run's opening (run 1436, 2026-11-04): 7953 to 7959.
+
+- **D-7953 (2026-11-04)** — `phone-row-label` (refinement (c)). Departs from §4.4's Layout sentence, "Phone (<900 px): one column, breadcrumb of the last two crumbs behind a leading `…` button, …". Under 600 CSS px, on a leaf whose tree slot is `ok`, the breadcrumb is a two-line text label (the parent crumb over the file name) and the whole path, every crumb a link and never folded, is the Page details panel's first line. While the tree slot is not `ok` the head is back and the crumbs, as today, so §4.7 holds. The operator approved it plan-only on 2026-11-04 (Q1); §4.4 is amended in one place when option 2 lands. Applied by Task 4 (`CompactLabel`, `Crumbs`' `unfold`, `CompactHead`), rows PHH-T4-M3 and PHH-T4-M18.
+- **D-7954 (2026-11-04)** — `phone-truth-behind-a-tap` (refinement (d)). Departs from §4.4's Layout sentence ("truth-line facts inline joined by ` · `"), from the Leaf row of §4.4's Views table ("Truth line, banners, actions"), and on a phone from §4.7's "a file failure … keeps the header and truth line" (the truth line is in the closed panel; review L1-F3). On a leaf under 600 CSS px the truth line is one tap away, in a disclosure in the page's flow under the row (`aria-expanded`, `aria-controls`, a `hidden` region, Escape closes it and returns focus); goal 4 holds through the panel and refinement (g). Approved plan-only by the operator (Q1, Q2). Applied by Task 4 (`CompactRow`), rows PHH-T3-M2, PHH-T4-M4, M5, M16, M19, PHH-T5-M5.
+- **D-7955 (2026-11-04)** — `phone-actions-as-icons` (refinement (e)). Departs from §4.5 ("**Share** sits after View on GitHub and before Open committed version", and its visible "Updating to <short>…"), from §4.17's "When it is offered" table, whose disabled words are visible on the button, and from the visible labels of the operator's Export rulings ("Export (plain view)", "Image not loaded"). On the row Share and Export are icons whose words are the accessible name ("Share: …" and "Export: …" while they wait) and a line in the panel; View on GitHub and Open committed version are in the panel. Approved plan-only by the operator (Q1). Applied by Task 4 (`ShareAction` and `ExportAction`'s `glyph`, `useHeadActions`), rows PHH-T4-M6, M7, M11, M14, PHH-T3-M4, PHH-T5-M3.
+- **D-7956 (2026-11-04)** — `row-crumb-gives-way-to-the-ref` (found in review, L1-F1). Departs from refinement (g)'s "The crumb and the ref are one text that ends in an ellipsis": on a nested leaf under a long directory (this repository's plan directories run to 46 characters; the label holds about 33 mono characters at 412 px, about 15 beside a badge) the one text cut inside the directory name and the served ref was never drawn, so a ref view read like origin's default. The crumb and the ref are now two spans inside `.docs-compact-where-text`, each with its own ellipsis, the crumb shrinking first (`flex: 0 1000 auto` against the ref's `0 1 auto`); the order stays where · ref · badge and the badge stays whole. Cost, carried: when the ref and the badge overflow the line the crumb shrinks to nothing and a leading ` · ` is left. Applied by the fix round (FR1), rows PHH-FR-M1 to M3.
+- **D-7957 (2026-11-04)** — `row-pads-for-the-status-bar` (found in review, L3-F2). Departs from the plan's exact value "the screen's `padding-top: 0`": the PWA is `viewport-fit=cover` with a translucent status bar, so an installed iOS PWA would draw the row under the status bar. The compact screen pads `var(--safe-top)` (0 in a browser tab, on Android Chrome and in the test Chromium, so no measured figure moves), as the fleet, chat and ledgers screens do. Applied by the fix round (FR6), rows PHH-FR-M8, PHH-T3-M1, PHH-T5-M1.
+- **D-7958 (2026-11-04)** — `open-leaf-reopens-once` (found in review run 1460, F6). Departs from Task 1 Step 1's verbatim `openLeaf`, which throws on the first `fallback`: the helper re-opens the leaf once when the outcome is `fallback`, and only then, writing one `PHH-RETRY` console line when it does; a second `fallback`, or any other outcome, throws as before. Reason: a fallback is the reader's 2 s start watchdog (`DOCS_PARSE_BUDGET_MS` for a small doc) passing on a loaded runner, and a red in the merge queue dequeues its whole group; one re-open rules that out without hiding a reader that never starts. No assertion is weakened. A test helper, so no mutation row; proved once with a mutant that forced the first outcome to `fallback` (the retry line, then green) and one that forced the second (`the reader did not come up: fallback`).
+
+Issued and unused: 7959.
 
 ## Where things stand
 
@@ -1947,3 +2153,206 @@ Issued at the run's opening (run 1436, 2026-11-04): 7953 to 7959. The first thre
 - The compact row for tablets or listings, or a height arm for a phone turned sideways (Q3's alternatives), if the operator wants one after using this one (one line in `headLayoutFor`, one constant, and its own width and height cases).
 - "Formatting…" over the host on the full header too (desktops and tablets), which this wave leaves as it is.
 - The operator's device check after rollout, on the phone that set the figure.
+
+## Results
+
+Run 1436, measured 2026-11-04 on the workspace branch, BASE `489d5b0d0` (origin/main at dispatch). Every figure below was measured in this run; a number that differs from its task's prediction says so beside it.
+
+### The figure
+
+At 412 x 915 the title of a reader doc is now **125 px** down (the pin is 133), of which the console's part is **48 px** (the pin is 48). At BASE it was 311.5, of which 234.5 was the console's. The reader frame's own part is 77, both before and after. The plan predicted about 341 at BASE and measured 311.5, 29.5 px less. 21.5 px of that is in the console's own part: the plan's map summed 256 (8 + 70 + 8 + 106 + 8 + 44 + 12), and 234.5 was measured. The other 8 px is the frame's part, 77 against the mockup's 85, because the mockup counted an `h1` top margin that the reader's own rule zeroes. The end figure, predicted at about 133, measured 125, 8 px less, for the same reason. Task 1 Step 4 reported the BASE difference rather than stopping. The console's part fell by 186.5 px (234.5 to 48), not the 208 the plan's map implied. Every desk and tablet width is unchanged to the pixel.
+
+| Case (`PHH-FIGURE`) | BASE (Task 1) | End (Task 5, re-measured after the fix round) |
+|---|---|---|
+| refined 412x915 | `{"head":"full","screenTop":0,"frameTop":234.5,"titleInFrame":77,"frameScroll":0,"above":311.5}` | `{"head":"compact","screenTop":0,"frameTop":48,"titleInFrame":77,"frameScroll":0,"above":125}` |
+| instrument 412x915 | `{"head":"full","screenTop":0,"frameTop":234.5,"titleInFrame":77,"frameScroll":0,"above":311.5}` | `{"head":"compact","screenTop":0,"frameTop":48,"titleInFrame":77,"frameScroll":0,"above":125}` |
+| refined 599x915 | `{"head":"full","screenTop":0,"frameTop":212,"titleInFrame":77,"frameScroll":0,"above":289}` | `{"head":"compact","screenTop":0,"frameTop":48,"titleInFrame":77,"frameScroll":0,"above":125}` |
+| refined 600x960 | `{"head":"full","screenTop":0,"frameTop":212,"titleInFrame":77,"frameScroll":0,"above":289}` | the same (delta 0) |
+| refined 768x1024 | `{"head":"full","screenTop":0,"frameTop":212,"titleInFrame":101,"frameScroll":0,"above":313}` | the same (delta 0) |
+| refined 1280x800 | `{"head":"full","screenTop":109,"frameTop":277,"titleInFrame":101,"frameScroll":0,"above":378}` | the same (delta 0) |
+| refined 915x412 | `{"head":"full","screenTop":109,"frameTop":321,"titleInFrame":77,"frameScroll":0,"above":398}` | the same (delta 0) |
+| refined 412x915 row | `null` (no row at BASE) | `{"bar":{"w":396,"h":44},"divider":"1px","buttons":[{"name":"Up one level","w":44,"h":44},{"name":"Share","w":44,"h":44},{"name":"Export (plain view)","w":44,"h":44},{"name":"Page details (never fetched)","w":44,"h":44}],"lines":[13.75,17.5]}` |
+| refined 412x915 long-branch-draft | the case timed out (no row) | `{"label":{"left":52,"right":272,"top":4.5,"mid":21.5},"badge":{"left":158.390625,"right":272,"top":4.5,"mid":12.75},"ref":{"left":52,"right":143.78125,"top":5.875,"mid":12.75},"textCut":true,"badgeWhole":true,"words":"draft · modified"}` (fix round 2 added the tops and centres) |
+| refined 412x915 long-directory-ref (fix round) | not in the file at BASE | `{"label":{"left":52,"right":272,"width":220},"crumb":{"left":52,"right":52,"width":0},"ref":{"left":52,"right":143.78125,"width":91.78125},"badge":{"left":158.390625,"right":272,"width":113.609375},"separatorW":6.609375,"refText":" · ws/a-long-workspace-branch-for-the-phone-header (local)"}` |
+| refined 412x915 panel-open | the case failed (no Page details) | `{"head":"compact","screenTop":0,"frameTop":325.5,"titleInFrame":77,"frameScroll":0,"above":402.5}` |
+
+- **Against the pins:** 125 <= 133 (`PHONE_TITLE_MAX`), and the console's part 48 <= 48 (`CONSOLE_PART_MAX`). `PHONE_TITLE_MAX` stays 133, the figure the operator picked, as the coordinator ruled on review run 1460. That leaves 8 px of slack over the measured 125, because the frame's 77 is the shared reader library's, not ccrc's, so a 1 px change there does not red a ccrc test. The binding pin is the console's `CONSOLE_PART_MAX` = 48, and the browser file's comment says so.
+- **Tablet and desktop deltas against BASE:** 600 x 960, 768 x 1024, 1280 x 800 and 915 x 412 all have delta 0 in `frameTop`, `titleInFrame` and `above`. At 412 x 915 the frame's own part is 77 at both ends.
+- **The browser file** `pwa/browser/docs-compact-head.browser.test.ts`: at BASE, 6 failed and 4 passed (10), as predicted. At the end it has 11 cases, all passed: the first fix round added the long-directory case, and fix round 2 added a same-line check to the long-branch case and an Escape pressed from inside the open panel. `reader-frame.browser.test.ts`: 24 passed (24), its BASE count.
+
+### Suites
+
+- **Per task, as measured:**
+  - Task 1: `T1-BASE-OK`, `FINDS-OK` (22 find blocks, 0 misses), `TSC-OK`. `browser-dist` plus `browser-leg` 30 passed (2 files).
+  - Task 2: `icon.test.tsx` one case more than at BASE, all green. `ICONS-CLEAN`. The regenerated `lucide.ts` adds 15 lines and deletes none.
+  - Task 3: Step 2 9 failed (7 + 2), as predicted. Step 4's contrast run had 7 red, not the predicted 2 (see "Named, without a number"). Green at the end of the task: `contrast` 320 (BASE 319), `docs-compact-css` 8, `tap-targets` 90.
+  - Task 4: Step 2 33 failed and 6 passed, as predicted. Step 6 39 of 39. Step 7 at BASE counts: `docs-screen` 121, `docs-truth` 113, `refined-phone` 21, `docs-scans` 116, `control-census` 11 (one entry more), `tap-targets` 91, `shell-css` 11, `sheet-desktop-arm` 18, `markup-census` 11, `literal-census` 5, `docs-compact-css` 8. server `docs-parity` plus `citations` 75.
+  - Task 5: the browser file 10 passed (10). `reader-frame.browser` 24 passed.
+  - After the fix round: `docs-compact-head.test.tsx` 42 passed (42), `docs-compact-css.test.ts` 10 passed, the browser file 11 passed (11). `docs-scans.test.ts` is byte-identical to BASE.
+  - After fix round 2 (review run 1460), each alone at the end state: `docs-compact-head.test.tsx` 45 passed (45), `docs-compact-css.test.ts` 11 passed (11), `tap-targets` 91, `control-census` 11, `contrast` 320, `docs-screen` 121, `docs-truth` 113, `refined-phone` 21, `docs-scans` 116 (file untouched), `markup-census` 11, `shell-css` 11, and the browser file 11 passed (11), with the figures unchanged. pwa `tsc` gives `TSC-OK` and ui `tsc` gives `UI-TSC-OK`. The coordinator's fix round asked for the touched files, the browser file, both typechecks and the ledger guards, so the whole pwa, browser and server suites were not re-run after it.
+- **The whole pwa suite** (3 shards, at the end state): 143 + 142 + 142 files; 3500 + 5079 + 4267 passed, with 2 + 0 + 1 skipped; green. It was also green on its first full run, before the fix round (3500 + 5079 + 4262 passed). pwa `tsc` gives `TSC-OK` and ui `tsc` gives `UI-TSC-OK`.
+- **The whole pwa browser suite:** this was the first full run, at the end state, with `--silent=false`, and took 1225 s on a box at load about 10. It ran 56 files: 53 passed and 3 failed. Its tests: 2073 passed, 4 failed, 1 expected fail and 52 skipped (2130).
+  - One of the reds is this wave's own row case, `412 x 915: back, Share, Export and Page details, …`, which failed with `the reader did not come up: fallback`. The reader's 2 s start watchdog (`DOCS_PARSE_BUDGET_MS` for a small doc) passed under the suite's load, and `openLeaf` then threw on a fallback by design (since fix round 2 it re-opens once first, D-7958). The other 10 cases in the file passed.
+  - The other reds are `connect-sheet` (instrument, phosphor, 390px) and `session-header`'s two 900 px cases (light and phosphor, `.chat-head` 200.8 against the accepted 188). The dispatch named those two as possibly red at base.
+  - Re-run alone, the three files gave 107 tests: 105 passed and 2 failed. `docs-compact-head` passed all 11 cases and `connect-sheet` passed; only `session-header`'s two 900 px cases stayed red. They are named here, not chased.
+- **The whole server suite** (16 shards, run in pieces on a loaded box, load average about 11 to 12): 16 shards, 1315 files; 24 files were red on the first run, every one outside this wave's Scope (`git diff --stat 489d5b0d0` is empty under `server/`, `shared/`, `agent/`, `ccd/`, `deploy/` and `.github/`, and none of the 24 reads a file this wave changes). Each was then re-run alone, one at a time, at load about 5 to 18: `session-hook-approval-deny` passed (322), and 23 stayed red. They are named here and not chased. By shape:
+  - **Timed out under load** (`Test timed out in 20000ms`, or the file's own `timeout` with rc 124): `approvals-routes`, `collect-lane-route`, `mail-inbox-store`, `shadow-journal`, `update-store-nodes`, `delegation-recovery`, `mail-sweep` and `retire-executors-pin`.
+  - **A timing bound under load:** `ccd-tool-adj` (`expected 800 to be less than 800`) and `secret-mask` (`tui flat`, 397.6 ms against 250).
+  - **This box's state:** `hold-gate`, `pr-sweep`, `questions-clock-pin`, `questions-sequence-pin` and `asks-mint` push or call twice where they expect once or never; `hold-gate`'s and `questions-clock-pin`'s stderr shows them reading this box's real `~/.ccrc`. `testbox-box-package` names the release directory, not its `build.json`, as group-writable, which is the scratch tree's mode. `platform-hazards` R14(i) reads 2 lines where the case expects 1, under bash 5.3.9.
+  - **The wrapper's own suites, run through the wrapper:** `ccrc-test-wrapper` (16) and `testbox-wrapper` (38) found none of the `systemd-run` or test-box lines they assert (`expected '' to …`, `expected undefined to be 'ran on: test box'`). Both ran inside `ccrc test`, the wrapper they test; the cause was not measured further.
+  - **Cause not measured:** `ccd-docs-fetch` (4, `ref-locked` expected), `ccrc-containment` (1, `--url=` 7 against 2), `child-reclaim-paused-at-server` (1) and `tmp-sweep` (1).
+- **Ledger guards** (after the Deviations commit, with `origin/main` fetched): `deviation-refs.test.ts` and `dtbd.test.ts`: green, 2 files, 32 passed (32), on commit `03e33361a`. On the first Results commit (`70ac0dba8`), the cross-tree case `is looking at two real trees` timed out at its 20 s twice while the test slice was swapping (OOM kills from other runs in the slice; 9.8 s for the file at `03e33361a`, 54 s now), and with `--testTimeout=180000` both files passed, 32 of 32, in 31 s. After fix round 2, on this Results commit as first committed (`c6c51409d`, which differs from it only by this sentence), with `origin/main` fetched: green, 2 files, 32 passed (32), in 10 s.
+- **The mutation table:** 51 rows, all 51 red, the whole table re-run at the end state after fix round 2 (before it, 47 rows, all red). In the first pass of that re-run PHH-T5-M5 (the Page details button's own Escape handler) was green: fix round 2's F3 moved the browser Escape case inside the panel, where the panel's own handler (PHH-FR2-M2) answers it. Its tests are restated to `test/docs-compact-head.test.tsx`, where it reds (1 failed | 44 passed). PHH-FR2-M2 ran with the browser config, where it reds the browser case. Run by hand against the jsdom file, it reds that file's Escape case too. For every row, `restore_sha_equal` and `status_equal` are true. Each row was run in the workspace, one at a time, bounded by `timeout -k` and `ulimit -u 4096`, and restored from saved bytes. `$HOME/.cc-tmp/phh-mut/` was then removed. The rows are below, each as measured at the end state, after fix round 2. The plan keeps the last occurrence of each id, so these are the end-state rows.
+
+**Task 2** (1 rows, all red):
+
+```json
+[
+  {"id": "PHH-T2-M1", "spec": "(j)", "pkg": "pwa", "file": "../ui/src/icons/lucide.ts", "old": "ellipsis: [", "new": "ellipsisGone: [", "tests": ["test/icon.test.tsx"], "red": "1 failed: the Docs compact head icons are vendored", "measured": "1 failed | 7 passed (8): the Docs compact head icons are vendored", "restore_sha_equal": true, "status_equal": true}
+]
+```
+
+**Task 3** (13 rows, all red):
+
+```json
+[
+  {"id": "PHH-T3-M1", "spec": "(i)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-screen:has(> .docs-compact) { padding-top: var(--safe-top); gap: var(--sp-1); }", "new": ".docs-screen:has(> .docs-compact) { gap: var(--sp-1); }", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: the screen gives the row the top", "measured": "1 failed | 10 passed (11): the screen gives the row the top: only the safe-area inset above it (0 outside an installed iOS app) and a 4 px gap under it; its sides and bottom as before", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T3-M2", "spec": "(d)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-more-panel[hidden] { display: none; }", "new": "", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: a closed panel is not drawn", "measured": "1 failed | 10 passed (11): a closed panel is not drawn: its own display gives way to [hidden]", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T3-M3", "spec": "(k)", "pkg": "pwa", "file": "src/docs/docs.css", "old": "min-height: var(--tap-min); min-width: var(--tap-min);", "new": "min-width: var(--tap-min);", "tests": ["test/docs-compact-css.test.ts", "test/tap-targets.test.tsx"], "red": "2 failed: Page details is a tap square holding its dot; are at least one tap tall and one tap wide, off the shared token", "measured": "2 failed | 100 passed (102): Page details is a tap square holding its dot (never fetched and failed in the mockup's one attention colour), and an open one paints its own pressed ground and ink; are at least one tap tall and one tap wide, off the shared token", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T3-M4", "spec": "(e)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-compact-bar .docs-action { justify-content: center; min-width: var(--tap-min); padding: 0; text-decoration: none; }", "new": ".docs-compact-bar .docs-action { justify-content: center; padding: 0; text-decoration: none; }", "tests": ["test/docs-compact-css.test.ts", "test/tap-targets.test.tsx"], "red": "2 failed: Share and Export on the row are a whole tap wide; are at least one tap tall and one tap wide, off the shared token", "measured": "2 failed | 100 passed (102): Share and Export on the row are a whole tap wide with no underline, and a disabled one is dimmed, not recoloured; are at least one tap tall and one tap wide, off the shared token", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T3-M5", "spec": "(i)", "pkg": "pwa", "file": "src/docs/docs.css", "old": "position: absolute; inset-block-start: 0; inset-inline: 0; z-index: 1;", "new": "inset-block-start: 0; inset-inline: 0; z-index: 1;", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: Formatting lies over the frame host", "measured": "1 failed | 10 passed (11): \"Formatting…\" lies over the frame host on the compact screen, on the page's own ground", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T3-M6", "spec": "(f)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-more-dot[data-tone='warn'], .docs-more-dot[data-tone='failed'] { background: var(--status-attention); }", "new": ".docs-more-dot[data-tone='warn'], .docs-more-dot[data-tone='failed'] { background: var(--status-done); }", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: Page details is a tap square holding its dot", "measured": "1 failed | 10 passed (11): Page details is a tap square holding its dot (never fetched and failed in the mockup's one attention colour), and an open one paints its own pressed ground and ink", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T3-M7", "spec": "(k)", "pkg": "pwa", "file": "design/audit.mjs", "old": "'.docs-more': {", "new": "'.docs-more-gone': {", "tests": ["test/contrast.test.ts"], "red": "at least 1 failed: measures every docs rule that sets a colour in both themes", "measured": "7 failed | 313 passed (320): contains no identities beyond the grandfathered blind spots; exits 0 when every pair passes; has no stale inherited registry entry, and it is not empty (148); measures every docs rule that sets a colour in both themes, at or above its floor; measures far more than the 94 token pairs it used to; passes every pair it measures; reports no structural problem", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T3-M8", "spec": "(k)", "pkg": "pwa", "file": "design/audit.mjs", "old": "'.docs-compact-where': {", "new": "'.docs-compact-where-gone': {", "tests": ["test/contrast.test.ts"], "red": "at least 1 failed: measures every docs rule that sets a colour in both themes", "measured": "7 failed | 313 passed (320): contains no identities beyond the grandfathered blind spots; exits 0 when every pair passes; has no stale inherited registry entry, and it is not empty (148); measures every docs rule that sets a colour in both themes, at or above its floor; measures far more than the 94 token pairs it used to; passes every pair it measures; reports no structural problem", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T3-M9", "spec": "(k)", "pkg": "pwa", "file": "design/audit.mjs", "old": "'.docs-compact-bar .docs-action:disabled 0.35': {", "new": "'.docs-compact-bar .docs-action:disabled 0.5': {", "tests": ["test/contrast.test.ts"], "red": "at least 2 failed: .docs-compact-bar .docs-action:disabled 0.35 is registered with a contrast decision; has no stale opacity registry entry", "measured": "6 failed | 314 passed (320): .docs-compact-bar .docs-action:disabled 0.35 is registered with a contrast decision; exits 0 when every pair passes; has no stale opacity registry entry, and it is not empty (9); measures far more than the 94 token pairs it used to; passes every pair it measures; reports no structural problem", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T3-M10", "spec": "(i)", "pkg": "pwa", "file": "src/docs/docs.css", "old": "block-size: var(--tap-min);", "new": "", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: the row is one tap tall with the mockup's 1 px divider inside that height", "measured": "1 failed | 10 passed (11): the row is one tap tall with the mockup's 1 px divider inside that height; the label gives way to the controls", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T3-M11", "spec": "(i)", "pkg": "pwa", "file": "src/docs/docs.css", "old": "border-block-end: 1px solid var(--edge-subtle);", "new": "", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: the row is one tap tall with the mockup's 1 px divider inside that height", "measured": "1 failed | 10 passed (11): the row is one tap tall with the mockup's 1 px divider inside that height; the label gives way to the controls", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T3-M12", "spec": "(a)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-more-panel[hidden] { display: none; }", "new": ".docs-more-panel[hidden] { display: none; } @media (max-width: 599.98px) { .docs-compact-bar { gap: 0; } }", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: no rule keys the compact head on a width", "measured": "1 failed | 10 passed (11): no rule keys the compact head on a width: the one max-width block is the reader layout's, as before (refinement (b))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T3-M13", "spec": "(g)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-compact-where .docs-badge { flex: none; }", "new": "", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: the first line's text and the name end in an ellipsis; the draft badge beside the text never shrinks", "measured": "1 failed | 10 passed (11): the first line's text and the name end in an ellipsis; the draft badge beside the text never shrinks (refinement (g))", "restore_sha_equal": true, "status_equal": true}
+]
+```
+
+**Task 4** (20 rows, all red):
+
+```json
+[
+  {"id": "PHH-T4-M1", "spec": "(a)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "return compactWidth && page.kind === 'path' && !page.dirSlash ? 'compact' : 'full';", "new": "return compactWidth && page.kind === 'path' ? 'compact' : 'full';", "tests": ["test/docs-compact-head.test.tsx"], "red": "2 failed: compact width true, /docs/demo/specs/d/: full; /docs/demo/specs/d/ at 390px keeps the full header", "measured": "2 failed | 43 passed (45): /docs/demo/specs/d/ at 390px keeps the full header; compact width true, /docs/demo/specs/d/: full", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M2", "spec": "(b)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "export const DOCS_COMPACT_QUERY = '(max-width: 599.98px)';", "new": "export const DOCS_COMPACT_QUERY = '(max-width: 899.98px)';", "tests": ["test/docs-compact-head.test.tsx"], "red": "3 failed: the compact width is under 600 CSS px; at 600px; at 768px", "measured": "3 failed | 42 passed (45): at 600px a leaf draws the compact row: false; the full header keeps its line of actions; at 768px a leaf draws the compact row: false; the full header keeps its line of actions; the compact width is under 600 CSS px, and only DocsHead.tsx spells it under pwa/src", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M3", "spec": "(c)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "const folded = p.unfold !== true && !desktop && !whole && p.crumbs.length > 2;", "new": "const folded = !desktop && !whole && p.crumbs.length > 2;", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: opens the panel: the whole path with no … button", "measured": "1 failed | 44 passed (45): opens the panel: the whole path with no … button, the truth line, View on GitHub; a second tap closes it", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M4", "spec": "(d)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "hidden={!open}", "new": "hidden={false}", "tests": ["test/docs-compact-head.test.tsx"], "red": "3 failed: opens the panel; at 390px; at 599px", "measured": "3 failed | 42 passed (45): at 390px a leaf draws the compact row: true; the full header keeps its line of actions; at 599px a leaf draws the compact row: true; the full header keeps its line of actions; opens the panel: the whole path with no … button, the truth line, View on GitHub; a second tap closes it", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M5", "spec": "(d)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "toggle.current?.focus();", "new": "", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: Escape in the open panel closes it and puts focus back on Page details", "measured": "1 failed | 44 passed (45): Escape in the open panel closes it and puts focus back on Page details (refinement (d))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M6", "spec": "(e)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "aria-label={p.glyph !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words}", "new": "aria-label={undefined}", "tests": ["test/docs-compact-head.test.tsx"], "red": "7 failed: the order case; the ref and draft case; the default-view ref case; the updating case; the panel case; the Escape case; the new-page case", "measured": "11 failed | 34 passed (45): Escape in the open panel closes it and puts focus back on Page details (refinement (d)); a default view served from anywhere but origin/HEAD names its served ref on the row (refinement (g)); a new page closes the panel: the head is keyed by the page; a ref view names its served ref on the row, and a draft leaf its badge, in the truth line's words (refinement (g)); a ref view of a nested leaf draws the parent directory and the ref as two spans, the ref with its separator (refinement (g)); an origin-side default view that is default:origin-main names its served ref on the row (refinement (g)); an origin-side default view that is default:origin-master names its served ref on the row (refinement (g)); on view=committed of a draft leaf the row keeps its ref and draft badge and says nothing of the view; the banner under it does (refinement (g), (h)); opens the panel: the whole path with no … button, the truth line, View on GitHub; a second tap closes it; reads back, Share, Export and Page details, in that order, each named; Share and Export draw an icon and no word", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M7", "spec": "(e)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "aria-label={busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : p.glyph === true ? words : undefined}", "new": "aria-label={busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : undefined}", "tests": ["test/docs-compact-head.test.tsx"], "red": "4 failed: at 390px; at 599px; the order case; the plain-view case", "measured": "4 failed | 41 passed (45): at 390px a leaf draws the compact row: true; the full header keeps its line of actions; at 599px a leaf draws the compact row: true; the full header keeps its line of actions; on a leaf the reader shows, the Export icon is named Export (plain view); its tap turns the reader off and says so under the row; reads back, Share, Export and Page details, in that order, each named; Share and Export draw an icon and no word", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M8", "spec": "(g)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "if (s.kind === 'draft') return { word: badgeText(s.badge), badged: s.badge !== null };", "new": "if (s.kind === 'draft') return null;", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: a ref view names its served ref on the row, and a draft leaf its badge", "measured": "2 failed | 43 passed (45): a draft the tree no longer lists draws the truth line's word on the row, as plain text, never as a badge (refinement (g)); a ref view names its served ref on the row, and a draft leaf its badge, in the truth line's words (refinement (g))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M9", "spec": "(g)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "where={p.where} name={p.name} refText={rowRefText(page, tree)} badge={rowBadge(tree, page, file)}", "new": "where={p.where} name={p.name} refText={null} badge={rowBadge(tree, page, file)}", "tests": ["test/docs-compact-head.test.tsx"], "red": "2 failed: the ref and draft case; a default view served from anywhere but origin/HEAD names its served ref on the row", "measured": "7 failed | 38 passed (45): a default view served from anywhere but origin/HEAD names its served ref on the row (refinement (g)); a draft the tree no longer lists draws the truth line's word on the row, as plain text, never as a badge (refinement (g)); a ref view names its served ref on the row, and a draft leaf its badge, in the truth line's words (refinement (g)); a ref view of a nested leaf draws the parent directory and the ref as two spans, the ref with its separator (refinement (g)); an origin-side default view that is default:origin-main names its served ref on the row (refinement (g)); an origin-side default view that is default:origin-master names its served ref on the row (refinement (g)); on view=committed of a draft leaf the row keeps its ref and draft badge and says nothing of the view; the banner under it does (refinement (g), (h))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M10", "spec": "(f)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "return state === 'ok' ? 'ok' : state === 'never' ? 'warn' : state === 'failed' ? 'failed' : null;", "new": "return state === 'ok' ? 'ok' : state === 'failed' ? 'failed' : null;", "tests": ["test/docs-compact-head.test.tsx"], "red": "3 failed: the chip state never draws the dot warn; a page never fetched draws the amber dot; the order case", "measured": "3 failed | 42 passed (45): a page never fetched draws the amber dot and says so in the name; the dot itself is hidden from a screen reader; reads back, Share, Export and Page details, in that order, each named; Share and Export draw an icon and no word; the chip state never draws the dot warn", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M11", "spec": "(e)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "const exportNote = exported.s === 'plain-view' ? DOCS_HEAD_TEXT.exportPlainHint", "new": "const exportNote = exported.s === 'plain-view' ? null", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: the plain-view case", "measured": "1 failed | 44 passed (45): on a leaf the reader shows, the Export icon is named Export (plain view); its tap turns the reader off and says so under the row", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M12", "spec": "(g)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "if (s.kind === 'draft') return { word: badgeText(s.badge), badged: s.badge !== null };", "new": "if (s.kind === 'draft') return { word: tree.entries.find((x) => x.path === page.path)?.draft?.state ?? '', badged: true };", "tests": ["test/docs-scans.test.ts"], "red": "4 failed: the Docs screen code reads no draft state; a file planted beside the real ones is found, by file and line; M4.T7 Share clause; M4.T7 Export clause", "measured": "4 failed | 112 passed (116): M4.T7 Export clause: the badge scan reads the export files and finds no draft state; M4.T7 Share clause: the badge scan reads share.ts and ShareSheet.tsx, and finds no draft state; a file planted beside the real ones is found, by file and line; the Docs screen code reads no draft state", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M13", "spec": "(k)", "pkg": "pwa", "file": "test/control-census.test.ts", "old": "'docs/DocsHead.tsx <button> docs-more':", "new": "'docs/DocsHead.tsx <button> docs-more-gone':", "tests": ["test/control-census.test.ts"], "red": "3 failed: registers every one; keeps no stale entry; verifies every TOKEN claim against the stylesheets", "measured": "3 failed | 8 passed (11): keeps no stale entry; registers every one; verifies every TOKEN claim against the stylesheets", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M14", "spec": "(e)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "aria-label={p.glyph !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words}", "new": "aria-label={p.glyph !== true ? undefined : words}", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: while the leaf moves to its pin, Share and Export are disabled and named for it", "measured": "1 failed | 44 passed (45): while the leaf moves to its pin, Share and Export are disabled and named for it, and the panel says why (refinement (e))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M15", "spec": "(g)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "return page.ref !== null || ref.side === 'local' || ref.via !== 'default:origin-head' ? servedRefText(ref) : null;", "new": "return page.ref !== null ? servedRefText(ref) : null;", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: a default view served from anywhere but origin/HEAD names its served ref on the row", "measured": "3 failed | 42 passed (45): a default view served from anywhere but origin/HEAD names its served ref on the row (refinement (g)); an origin-side default view that is default:origin-main names its served ref on the row (refinement (g)); an origin-side default view that is default:origin-master names its served ref on the row (refinement (g))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M16", "spec": "(d)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "key={docsPageUrl(page)} page={page} visit={visit} tree={tree} receivedAt={receivedAt} now={now} crumbs={crumbs}", "new": "page={page} visit={visit} tree={tree} receivedAt={receivedAt} now={now} crumbs={crumbs}", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: a new page closes the panel: the head is keyed by the page", "measured": "1 failed | 44 passed (45): a new page closes the panel: the head is keyed by the page", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M17", "spec": "(k)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "ref={toggle} type=\"button\" className=\"docs-more\" aria-expanded={open} aria-controls={panelId}", "new": "ref={toggle} type=\"button\" className=\"docs-more-x\" aria-expanded={open} aria-controls={panelId}", "tests": ["test/tap-targets.test.tsx", "test/control-census.test.ts"], "red": "3 failed: are the classes the rendered row carries; registers every one; keeps no stale entry", "measured": "3 failed | 99 passed (102): are the classes the rendered row carries; keeps no stale entry; registers every one", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M18", "spec": "(c)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "<Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} />", "new": "{null}", "tests": ["test/docs-compact-head.test.tsx"], "red": "2 failed: while the tree slot is loading; while the tree slot is unreachable", "measured": "2 failed | 43 passed (45): while the tree slot is loading, the head is back and the crumbs (spec 4.7: a tree failure keeps the crumbs); while the tree slot is unreachable, the head is back and the crumbs (spec 4.7: a tree failure keeps the crumbs)", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M19", "spec": "(d)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "onClick={() => setOpen((o) => !o)} onKeyDown={onKeyDown}", "new": "onClick={() => setOpen((o) => !o)}", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: Escape in the open panel closes it and puts focus back on Page details", "measured": "1 failed | 44 passed (45): Escape in the open panel closes it and puts focus back on Page details (refinement (d))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T4-M20", "spec": "(i)", "pkg": "pwa", "file": "src/docs/ReaderFrame.tsx", "old": "{state.s !== 'ready' && <p className=\"doc-formatting\">{DOC_FORMATTING}</p>}", "new": "{state.s !== 'ready' && <div><p className=\"doc-formatting\">{DOC_FORMATTING}</p></div>}", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: while the reader formats, the live DOM is the chain docs.css lays Formatting over the host by", "measured": "1 failed | 44 passed (45): while the reader formats, the live DOM is the chain docs.css lays \"Formatting…\" over the host by (refinement (i))", "restore_sha_equal": true, "status_equal": true}
+]
+```
+
+**Task 5** (5 rows, all red):
+
+```json
+[
+  {"id": "PHH-T5-M1", "spec": "(i)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-screen:has(> .docs-compact) { padding-top: var(--safe-top); gap: var(--sp-1); }", "new": ".docs-screen:has(> .docs-compact) { gap: var(--sp-1); }", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "2 failed: 412 x 915, Refined; 412 x 915, Instrument", "measured": "2 failed | 9 passed (11): 412 x 915, Instrument: the same row, and at most 48 px of the console above the frame; 412 x 915, Refined: the title is at most 133 px down, 48 of them the console's", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T5-M2", "spec": "(b)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "export const DOCS_COMPACT_QUERY = '(max-width: 599.98px)';", "new": "export const DOCS_COMPACT_QUERY = '(max-width: 899.98px)';", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "2 failed: 600 x 960; 768 x 1024", "measured": "2 failed | 9 passed (11): 600 x 960: the full header, its truth line and View on GitHub on the page; crumbs folded: true; 768 x 1024: the full header, its truth line and View on GitHub on the page; crumbs folded: true", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T5-M3", "spec": "(e)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-compact-bar .docs-action { justify-content: center; min-width: var(--tap-min); padding: 0; text-decoration: none; }", "new": ".docs-compact-bar .docs-action { justify-content: center; padding: 0; text-decoration: none; }", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "1 failed: 412 x 915: back, Share, Export and Page details, each at least one tap", "measured": "1 failed | 10 passed (11): 412 x 915: back, Share, Export and Page details, each at least one tap, on a row one tap tall", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T5-M4", "spec": "(g)", "pkg": "pwa", "file": "src/docs/docs.css", "old": "display: flex; align-items: center; gap: var(--sp-1); min-width: 0; white-space: nowrap;", "new": "display: block; align-items: center; gap: var(--sp-1); min-width: 0; white-space: nowrap;", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "1 failed: 412 x 915: a draft in a ref view of a long branch", "measured": "2 failed | 9 passed (11): 412 x 915: a draft in a ref view of a long branch; the ref is cut, the draft badge is whole and inside the label (refinement (g)); 412 x 915: a ref view of a leaf under a 46-character directory still draws the ref, and the badge is inside the label (refinement (g))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-T5-M5", "spec": "(d)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "onClick={() => setOpen((o) => !o)} onKeyDown={onKeyDown}", "new": "onClick={() => setOpen((o) => !o)}", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: Escape in the open panel closes it and puts focus back on Page details", "measured": "1 failed | 44 passed (45): Escape in the open panel closes it and puts focus back on Page details (refinement (d))", "restore_sha_equal": true, "status_equal": true}
+]
+```
+
+**The fix round (rows added in Task 6, each measured)** (8 rows, all red):
+
+```json
+[
+  {"id": "PHH-FR-M1", "spec": "(g)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "{p.refText !== null && <span className=\"docs-compact-where-ref\">{SEP}{p.refText}</span>}", "new": "{p.refText !== null && <>{SEP}{p.refText}</>}", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: a ref view of a nested leaf draws the parent directory and the ref as two spans, the ref with its separator", "measured": "1 failed | 44 passed (45): a ref view of a nested leaf draws the parent directory and the ref as two spans, the ref with its separator (refinement (g))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-FR-M2", "spec": "(g)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-compact-where-crumb { flex: 0 1000 auto;", "new": ".docs-compact-where-crumb { flex: 0 1 auto;", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: the crumb and the ref are two spans, each cut at its own end, the crumb giving way first", "measured": "1 failed | 10 passed (11): the crumb and the ref are two spans, each cut at its own end, the crumb giving way first, so a long directory never hides the ref (refinement (g))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-FR-M3", "spec": "(g)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-compact-where-crumb { flex: 0 1000 auto;", "new": ".docs-compact-where-crumb { flex: none;", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "1 failed: 412 x 915: a ref view of a leaf under a 46-character directory still draws the ref (the ref has room for at least four mono characters: expected 0 to be greater than 24)", "measured": "1 failed | 10 passed (11): 412 x 915: a ref view of a leaf under a 46-character directory still draws the ref, and the badge is inside the label (refinement (g))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-FR-M4", "spec": "(g)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "return k.view.badge === null ? null : { word: ENTRY_BADGE_TEXT[k.view.badge], badged: true };", "new": "return null;", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: on view=committed of a draft leaf the row keeps its ref and draft badge", "measured": "1 failed | 44 passed (45): on view=committed of a draft leaf the row keeps its ref and draft badge and says nothing of the view; the banner under it does (refinement (g), (h))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-FR-M5", "spec": "(f)", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "aria-label={dot === 'failed' ? DOCS_HEAD_TEXT.moreFailed : dot === 'warn'", "new": "aria-label={dot === 'warn'", "tests": ["test/docs-compact-head.test.tsx"], "red": "1 failed: a page whose last fetch failed names it: Page details (freshness problem), with the failed dot", "measured": "1 failed | 44 passed (45): a page whose last fetch failed names it: Page details (freshness problem), with the failed dot (refinement (f))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-FR-M6", "spec": "(k)", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-compact-bar :focus-visible { outline-offset: -2px; }", "new": "", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: the row's controls draw the focus ring inside their boxes", "measured": "2 failed | 9 passed (11): the crumbs state (the tree slot not ok) draws the same inset ring: it sits at the top of the page too, where the safe-area inset is 0; the row's controls draw the focus ring inside their boxes: the row is at the top of the page, so an outer ring would be off-screen (refinement (k))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-FR-M7", "spec": "(i)", "pkg": "pwa", "file": "src/docs/docs.css", "old": "block-size: var(--tap-min);", "new": "block-size: var(--tap-min); max-block-size: var(--sp-8);", "tests": ["browser/docs-compact-head.browser.test.ts"], "red": "1 failed: 412 x 915: back, Share, Export and Page details (the row is a whole tap tall: expected 32 to be greater than or equal to 43.5)", "measured": "1 failed | 10 passed (11): 412 x 915: back, Share, Export and Page details, each at least one tap, on a row one tap tall", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-FR-M8", "spec": "(i)", "pkg": "pwa", "file": "src/docs/docs.css", "old": "padding-top: var(--safe-top); gap: var(--sp-1); }", "new": "padding-top: 0; gap: var(--sp-1); }", "tests": ["test/docs-compact-css.test.ts"], "red": "1 failed: the screen gives the row the top (expected '0' to be 'var(--safe-top)')", "measured": "1 failed | 10 passed (11): the screen gives the row the top: only the safe-area inset above it (0 outside an installed iOS app) and a 4 px gap under it; its sides and bottom as before", "restore_sha_equal": true, "status_equal": true}
+]
+```
+
+**Fix round 2 (review run 1460, each measured)** (4 rows, all red):
+
+```json
+[
+  {"id": "PHH-FR2-M1", "spec": "A", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "return page.ref !== null || ref.side === 'local' || ref.via !== 'default:origin-head' ? servedRefText(ref) : null;", "new": "return page.ref !== null || ref.side === 'local' ? servedRefText(ref) : null;", "tests": ["test/docs-compact-head.test.tsx"], "red": "measured: 2 failed: an origin-side default view that is default:origin-main / default:origin-master names its served ref on the row", "measured": "2 failed | 43 passed (45): an origin-side default view that is default:origin-main names its served ref on the row (refinement (g)); an origin-side default view that is default:origin-master names its served ref on the row (refinement (g))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-FR2-M2", "spec": "C", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": " aria-label={DOCS_HEAD_TEXT.more} onKeyDown={onKeyDown}", "new": " aria-label={DOCS_HEAD_TEXT.more}", "tests": ["test/docs-compact-head.test.tsx", "browser/docs-compact-head.browser.test.ts"], "red": "measured: jsdom 1 failed: Escape in the open panel closes it and puts focus back on Page details; browser 1 failed: Page details opens the truth line under the row; Escape closes it", "measured": "1 failed | 10 passed (11): 412 x 915: Page details opens the truth line under the row; Escape closes it, focus back on the button (refinement (d)); and, run against test/docs-compact-head.test.tsx by hand, 1 failed | 44 passed (45): Escape in the open panel closes it and puts focus back on Page details (refinement (d))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-FR2-M3", "spec": "D", "pkg": "pwa", "file": "src/docs/DocsHead.tsx", "old": "{p.badge.badged ? <span className=\"docs-badge\">{p.badge.word}</span> : p.badge.word}", "new": "<span className=\"docs-badge\">{p.badge.word}</span>", "tests": ["test/docs-compact-head.test.tsx"], "red": "measured: 1 failed: a draft the tree no longer lists draws the truth line's word on the row, as plain text, never as a badge", "measured": "1 failed | 44 passed (45): a draft the tree no longer lists draws the truth line's word on the row, as plain text, never as a badge (refinement (g))", "restore_sha_equal": true, "status_equal": true},
+  {"id": "PHH-FR2-M4", "spec": "G", "pkg": "pwa", "file": "src/docs/docs.css", "old": ".docs-compact-crumbs :focus-visible,", "new": "", "tests": ["test/docs-compact-css.test.ts"], "red": "measured: 1 failed: the crumbs state (the tree slot not ok) draws the same inset ring", "measured": "1 failed | 10 passed (11): the crumbs state (the tree slot not ok) draws the same inset ring: it sits at the top of the page too, where the safe-area inset is 0", "restore_sha_equal": true, "status_equal": true}
+]
+```
+
+### Fix round 2 (review run 1460, the coordinator's rulings in its fix-round mail)
+
+One commit per item, each red first. The rows are under "Fix round 2" above.
+
+- **F1 (important), fixed:** two jsdom cases pin the origin-side default rungs (`default:origin-main` and `default:origin-master` name the served ref on the row). Row PHH-FR2-M1 deletes only the `via` clause and reds both. The Review Focus claim that a default view served from origin's main is pinned now holds.
+- **F2 (important), fixed:** the long-branch browser case checks that the badge is on the ref's line (centres within 1 px, not tops: the coordinator accepted this departure from its fix-round text, which is not a departure from the plan and takes no number; see the restatements). PHH-T5-M4 now reds it.
+- **F3 (minor), fixed:** the real-engine Escape case presses Escape from the panel's copy-commit control, so its focus-return half can fail. Row PHH-FR2-M2 removes the panel region's `onKeyDown` and reds the jsdom and browser cases.
+- **F4 (minor), ruled and fixed:** the row follows the truth line. A draft whose `entryView` badge is null draws the same word (`DOCS_HEAD_TEXT.sourceDraftUnbadged`) as plain text, not a `.docs-badge`. `rowBadge` returns the word and whether it is badged, and its comment says so. A case compares the row with the panel's truth line for that draft. Row PHH-FR2-M3. Rows PHH-T4-M8, PHH-T4-M12 and PHH-FR-M4 have new `old` text.
+- **F5 (minor), fixed:** the figures are restated from the measurement above and in the Goal (186.5 px), and the browser file's header and `PHONE_TITLE_MAX` comments say 311.5, 234.5 and 77, with the 8 px slack.
+- **F6 (advisory), ruled: D-7958.** `openLeaf` re-opens the leaf once on a fallback and prints a `PHH-RETRY` line when it does.
+- **F7 (advisory), fixed:** the crumbs state (the tree slot not `ok`) draws the same inset focus ring as the row. A `docs-compact-css` case and row PHH-FR2-M4 pin it.
+- **F8 (advisory), fixed:** Task 1 Step 3, Task 5 Step 1 and Task 5's Verify line say which count was measured when, for the 11-case file.
+- **F9 (advisory), fixed:** `DOCS_COMPACT_QUERY`'s comment cites `docs-compact-css.test.ts` for the width half.
+- **Re-review (opus):** all eight items addressed. The row updates for F4 went into their own commit, not F4's, so the row text is stale at that one commit and current at the tip.
+
+### Named, without a number
+
+These are choices that filled a silence while executing. None departs from a spec sentence.
+
+- **Task 1's browser file** was extracted from the plan's Step 1 fence by `awk`, in the main loop, not by an implementer. It is a byte-for-byte transcription, sha256 `9eecd8e7…`, checked again at Task 5 Step 0.
+- **Mutation rows were measured once**, in Task 6 Step 3, at the end state, not once per task. The plan keeps the last occurrence of each id, so a per-task run would be superseded, and measuring each table twice in place doubles the time the low-disk rule allows.
+- **Task 4 was dispatched while Task 3's review ran.** Task 3 was committed and its review was read-only.
+- **Prediction restatements, measured:**
+  - The BASE figure was 311.5, not about 341: 21.5 px of the difference is the console's own part (234.5 against the map's 256) and 8 px the frame's (77 against 85). The end figure is 125, not about 133, the same 8 px.
+  - Task 3 Step 4's contrast run was 7 red, not 2. The extra five are `reports no structural problem`, the uncovered census, and three gate-command cases (`exits 0 when every pair passes`, `measures far more than the 94 token pairs`, `passes every pair it measures`), which all read the same report.
+  - PHH-T4-M6 measured 9 failed against 7, and PHH-T4-M9 4 against 2. The extras are the fix round's nested-leaf two-span case and its committed-view case.
+  - PHH-T3-M7 and M8 measured 7, and PHH-T3-M9 6, where the plan predicted "at least".
+  - PHH-T5-M4's recorded red is the long-branch case, but at `70ac0dba8` the mutant redded only the long-directory case: since the first fix round made `.docs-compact-where-text` a flex box, the long-branch case's assertions held with the badge on a second line. Fix round 2's same-line check makes it red both cases.
+  - PHH-T4-M15 now reds 3 cases, not 1: the local-main case and fix round 2's two origin-side cases.
+  - PHH-T5-M5 is now measured in `test/docs-compact-head.test.tsx`, not the browser file (see the mutation table line above).
+  - Fix round 2's same-line check compares the badge's and the ref's vertical centres within 1 px, not their tops as the ruling worded it. The badge is the taller box, so on the correct layout the tops differ by 1.375 px and the centres are equal (12.75), while a badge on a second line moves its centre by about a line.
+- **Fix L1-F2 is a pin only.** On `view=committed` of a draft leaf, the row keeps its ref and its draft badge, and the view-committed banner in the page's flow says which version is drawn. Fix L1-F3 is a document change: D-7954 also names §4.7's "keeps the header and truth line".
+- **The ref span keeps `white-space: pre`**, so the separator's leading space survives the span boundary.
+- **The long-directory fixture** is `2026-10-27-one-long-directory-name-for-the-row`, 46 characters, which is the length of this repository's longest plan directory. The fix round's first name was 49 characters; the re-review caught it.
+- **Task 1 Step 3's and Task 4 Step 2's red counts** stay as predicted at BASE. The cases the fix round added are counted in the after-fix lines above.
+
+### Carried, not fixed
+
+Each item is parked with a ruling in the run's ledger. None of them breaks goal 4: the row still shows any served ref other than origin/HEAD and the whole badge, and Page details holds the full truth line.
+
+- **The emptied crumb and its leading ` · `.** When the ref and the badge together overflow the first line, the crumb shrinks to nothing and the separator is left at the start. For example, a workspace-branch draft view reads ` · ws/a-long-wo… · draft · modified`; the long-directory figure above shows the crumb at 0 px. The re-reviewer's suggested fix is to move the separator into the crumb span, optionally with a floor on the crumb's width.
+- **Leftover declarations.** `overflow`, `text-overflow` and `white-space` on the flex container `.docs-compact-where-text` are vestigial since the two spans, and the css case pins them. PHH-FR-M4's mutant is broad: it nulls every badge.
+- **Escape in an open sheet (L2-F3).** Share's or Export's sheet renders outside the panel, so Escape there leaves the panel open (lens 2 verified this in the code). No test pins it.
+- **Focus when the tree slot turns `ok` (L2-F4).** Focus on back or a crumb drops to `body` when the crumbs view becomes the row.
+- **Crossing 600 px (rotation).** The two subtrees swap, which loses an open sheet, an open panel or a copied state.
+- **The compact gap (L3-F3).** The 4 px gap applies to every gap on the compact screen, as refinement (i) spells it. Banners sit 8 px closer.
+- **A typed slashless directory URL (L3-F4)** shows the row for one frame before the screen's slash redirect. App links carry the slash.
+- **The width guard (L3-F5)** catches `599` and `max-width` only, so a `(width < 600px)` spelling would pass. `DOCS_COMPACT_QUERY`'s own test pins the value.
+- **The plan-verbatim test text (L3-F6, Task 1 minors).** `answerDocs`' docstring says other `/api/docs` requests answer 204, but only non-GETs do. The Instrument case does not assert that the Instrument skin was drawn; its figures equal Refined's.
+- **About 20 asserted declarations in `docs-compact-css` have no mutation row (L4-F1).** Each is an exact-string check over a rule that is proven to exist.
+- **The dot fills are not measured by the contrast census (L4-F2)**, because they are not text. Lens 4 computed at least 3:1 in all 12 palettes.
+- **The browser file's comment names the phone model that set the figure (L4-F3).** It is not a private name, and the plan carries the same text.
+- **`CompactHead` draws the plain-view note even while the tree is `null`.** The full header draws it only once the tree is not `null`.
+- **Task 5's case minors:**
+  - `badgeWhole` (`scrollWidth <= clientWidth + 1`) is near-vacuous for a `flex: none` badge; the rect check `badge.right <= label.right` is the real guard.
+  - The row case's label-lines figure is taken on a committed tree with no badge; with a badge the first line is 16.5, which still fits 44.
+  - The panel-open case does not pin that the frame still fills the pane. That holds at 915 tall; below about 654 px the reader's `min-block-size` takes over.
+- **`reader-frame.browser`'s ready cases can still meet the reader's 2 s start watchdog under heavy load.** This file's `openLeaf` now re-opens once on a fallback (D-7958); that file is outside this wave's Scope and keeps its exposure.
+- **Task 2's new `icon.test.tsx` case** repeats the geometric set and the render loop of the case before it (plan-verbatim).

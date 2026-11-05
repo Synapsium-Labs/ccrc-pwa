@@ -168,7 +168,7 @@ on:
     branches: [main]
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -202,7 +202,7 @@ jobs:
   publish:
     needs: build
     if: needs.build.outputs.release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -306,7 +306,7 @@ const PLANTED: Array<[string, string, string]> = [
   ['a publish env reads an output build does not declare', plant(RECEIVE_DIGEST, '          CCRC_BUILD_DIGEST: ${{ needs.build.outputs.digests }}\n'), 'which job build does not declare'],
   ['a publish env reads a job outside its needs', plant(RECEIVE_DIGEST, '          CCRC_BUILD_DIGEST: ${{ needs.other.outputs.x }}\n'), 'which is not in its needs'],
   ['the workflow grants write-all', beforeJobs('permissions: write-all\n'), 'grants write at workflow level'],
-  ['the build job runs self-hosted', plant('    runs-on: ubuntu-latest\n    timeout-minutes: 30\n', '    runs-on: self-hosted\n    timeout-minutes: 30\n'), 'not ubuntu-latest'],
+  ['the build job runs self-hosted', plant('    runs-on: ubuntu-24.04\n    timeout-minutes: 30\n', '    runs-on: self-hosted\n    timeout-minutes: 30\n'), 'not ubuntu-24.04'],
   ['a write job the allowlist does not know', plant('  publish:\n', '  release:\n'), 'is not on the allowlist'],
   // Beyond the plan's list (this task's own guards, each with its mutation row).
   ['the download names no path', plant(DOWNLOAD_PATH, ''), 'gives actions/download-artifact no with: key path, which its set requires'],
@@ -441,7 +441,7 @@ describe('W26-G4: the guard sees each planted breach', () => {
 describe('W26-G6: a build job is found by its markers alone (D-6655)', () => {
   const MARKERS = ['npm', 'npx', 'pnpm', 'yarn', 'tsc', 'vite', 'build-release.sh', 'release-main.sh prepare', 'release-main.sh compare'];
   const oneStep = (run: string): WorkflowJob => job(workflowJobs(
-    `on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n    steps:\n      - run: ${run}\n`,
+    `on: push\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    steps:\n      - run: ${run}\n`,
   ), 'j');
 
   it.each(MARKERS)('a job running %s is a build job', (marker) => {

@@ -1,4 +1,4 @@
-import { laneNotReadyReason, stateWordFor } from '../../../shared/accounts.js';
+import { laneNotReadyReason, neverEnabled, stateWordFor } from '../../../shared/accounts.js';
 import { ACCOUNT_CAPS, type AccountOriginClass, type AccountsConnect, type LaneWire, type RosterWire } from '../../../shared/api.js';
 import type { AccountLimits, LaneStatesRead } from '../limits.js';
 import type { SecretMasker } from './mask.js';
@@ -41,6 +41,9 @@ export function lanesWire(
       ...(st?.validatedAt !== undefined ? { validatedAt: st.validatedAt } : {}),
       ...(st?.credit !== undefined ? { credit: st.credit } : {}),
       ...(st?.mintedAt !== undefined ? { mintedAt: st.mintedAt } : {}),
+      ...(st?.signedOutAt !== undefined ? { signedOutAt: st.signedOutAt } : {}),
+      ...(st?.credential !== undefined ? { credential: st.credential } : {}),
+      ...(st !== null && neverEnabled(st) ? { adding: true as const } : {}),
       ready: notReady === null,
       ...(notReady !== null ? { notReadyReason: notReady } : {}),
     };

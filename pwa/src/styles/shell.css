@@ -438,11 +438,15 @@
     color: var(--ink-tertiary);
     opacity: 0.6;
   }
-  .shell-placeholder-copy {
-    font-family: var(--family-mono);
-    font-size: var(--fs-sm);
-    color: var(--ink-secondary);
-  }
+}
+
+/* The placeholder's copy, at every width: it is also the detail pane's loading line while a lazy screen's code loads
+   (`app.tsx`, console speed C1; review 1464 F9), and that line shows on a phone too. Below 900px the placeholder
+   itself is hidden, so only the loading line uses this there. */
+.shell-placeholder-copy {
+  font-family: var(--family-mono);
+  font-size: var(--fs-sm);
+  color: var(--ink-secondary);
 }
 
 /* ---- BlockScreen: the dormant handshake's block (Rider E) ------------ */

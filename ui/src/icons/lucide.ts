@@ -143,6 +143,21 @@ export const ICONS = {
     ['path', { d: 'M15 3v18' }],
     ['path', { d: 'm10 15-3-3 3-3' }],
   ],
+  share: [
+    ['path', { d: 'M12 2v13' }],
+    ['path', { d: 'm16 6-4-4-4 4' }],
+    ['path', { d: 'M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8' }],
+  ],
+  download: [
+    ['path', { d: 'M12 15V3' }],
+    ['path', { d: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4' }],
+    ['path', { d: 'm7 10 5 5 5-5' }],
+  ],
+  ellipsis: [
+    ['circle', { cx: '12', cy: '12', r: '1' }],
+    ['circle', { cx: '19', cy: '12', r: '1' }],
+    ['circle', { cx: '5', cy: '12', r: '1' }],
+  ],
 } as const satisfies Readonly<Record<string, readonly IconNode[]>>;
 
 export type IconName = keyof typeof ICONS;

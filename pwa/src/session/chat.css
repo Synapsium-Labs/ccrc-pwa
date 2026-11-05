@@ -938,6 +938,9 @@ button.metachip:active {
 }
 .inputbar:focus-within {
   border-color: var(--accent);
+  /* Invisible in normal colours; forced colours draw it, where the accent border is overridden and the field itself
+     draws no ring, so the composer keeps a focus cue there (review 1473 A5). */
+  outline: 2px solid transparent;
 }
 .prompt-glyph {
   flex: none;
@@ -961,6 +964,13 @@ button.metachip:active {
   max-height: calc(var(--fs-input) * 9);
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+/* The field draws no focus ring: the input bar's own border shows focus (`.inputbar:focus-within` above). Written as a
+   `:focus-visible` rule (0,2,0) so it outranks base.css's unlayered `:focus-visible` ring (0,1,0) whatever order the
+   two sheets arrive in: the lazy session chunk links this sheet before the entry's (console speed C1, review 1464 F1),
+   and `outline: none` on `.composer-input` alone (0,1,0) then lost to the ring. */
+.composer-input:focus-visible {
+  outline: none;
 }
 .composer-input::placeholder {
   color: var(--ink-tertiary);

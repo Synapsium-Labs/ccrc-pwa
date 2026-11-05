@@ -21,10 +21,13 @@
 // `DelegationFilePort`, so every durability edge can be faulted in a test and nothing here ever reads the live `~/.ccrc`
 // unless a caller hands it that directory.
 import {
+  DELEGATION_CARRIER_STATES,
   DELEGATION_EVENT_KINDS,
+  DELEGATION_LEASE_RELEASE_REASONS,
   DELEGATION_LEASE_SOURCE_KINDS,
   type DelegationEventEnvelopeV1,
 } from '../../../shared/api.js';
+import { DELEGATION_LEASE_TRANSITION_REASONS, DELEGATION_LINEAGE_CLOSE_REASONS } from './delegation-lease-state.js';
 import {
   DelegationJsonError,
   DelegationModelError,
@@ -34,6 +37,7 @@ import {
   delegationSha256Hex,
   isLowerHex64,
   parseDelegationInstant,
+  type DelegationAttemptMark,
   type DelegationEventRow,
   type DelegationJournalEntryV1,
   type DelegationJournalRecordV1,
@@ -203,6 +207,68 @@ const LEASE_ENTRY_KEYS = [
   'creationBase', 'sourceKind', 'correlationJournalIds', 'firstObservedAt', 'lineageId',
 ] as const;
 
+// Wave 5, PR5a (D-7809): the three lease kinds' keys, as TOTAL tables over each entry type, so a field added to a kind is a compile
+// error here until it is named. Every field a later wave-5 writer fills is here now (O5-8 (c)), so no later PR adds grammar. A lease
+// kind's SHAPE is the journal's; whether it may apply (its generation, its state) is the fold's (`delegation-lease-state.ts`).
+type LeaseKind<K extends DelegationJournalEntryV1['kind']> = Extract<DelegationJournalEntryV1, { kind: K }>;
+const keysOf = <T>(table: Readonly<Record<keyof T, true>>): readonly string[] => Object.keys(table);
+const LEASE_TRANSITION_KEYS = keysOf<LeaseKind<'lease-transition'>>({
+  kind: true, leaseId: true, generation: true, reason: true, to: true, at: true, expiresAt: true, terminalEvidenceAt: true, runId: true,
+  promotedSession: true, auditEvidence: true, lineageClose: true, lineageOpenRun: true, resolvesThrough: true,
+});
+const LEASE_RELEASED_KEYS = keysOf<LeaseKind<'lease-released'>>({
+  kind: true, leaseId: true, generation: true, releaseReason: true, at: true, lastHeadSha: true, resolvesThrough: true,
+});
+const LEASE_CARRIER_SEEN_KEYS = keysOf<LeaseKind<'lease-carrier-seen'>>({ kind: true, leaseId: true, generation: true, at: true });
+const ATTEMPT_MARK_KEYS = keysOf<DelegationAttemptMark>({ attemptedAt: true, attemptId: true });
+
+function positiveInt(v: unknown, what: string): number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 1 ? v : refuse('bad-field', `${what} is not a positive safe integer`);
+}
+const positiveIntOrNull = (v: unknown, what: string): number | null => (v === null ? null : positiveInt(v, what));
+const nonEmptyOrNull = (v: unknown, what: string): string | null => (v === null ? null : nonEmptyString(v, what));
+function instant(v: unknown, what: string): string { assertInstant(v, what); return v; }
+const instantOrNull = (v: unknown, what: string): string | null => (v === null ? null : instant(v, what));
+function memberOf<T extends string>(list: readonly T[], v: unknown, what: string): T {
+  return isMember(list, v) ? v : refuse('bad-field', `${what} is not one of ${list.join(', ')}`);
+}
+function attemptMarkOrNull(v: unknown): DelegationAttemptMark | null {
+  if (v === null) return null;
+  if (!isRecord(v)) return refuse('bad-field', 'resolvesThrough is neither null nor an object');
+  exactKeys(v, ATTEMPT_MARK_KEYS, 'resolvesThrough');
+  return { attemptedAt: instant(v.attemptedAt, 'resolvesThrough.attemptedAt'), attemptId: nonEmptyString(v.attemptId, 'resolvesThrough.attemptId') };
+}
+
+/** A lease kind's entry rebuilt field by field, or a refusal; null for a kind that is not one of the three. */
+function validateLeaseKind(e: Record<string, unknown>): DelegationJournalEntryV1 | null {
+  switch (e.kind) {
+    case 'lease-transition':
+      exactKeys(e, LEASE_TRANSITION_KEYS, 'a lease-transition entry');
+      return {
+        kind: 'lease-transition', leaseId: nonEmptyString(e.leaseId, 'leaseId'), generation: positiveInt(e.generation, 'generation'),
+        reason: memberOf(DELEGATION_LEASE_TRANSITION_REASONS, e.reason, 'reason'), to: memberOf(DELEGATION_CARRIER_STATES, e.to, 'to'),
+        at: instant(e.at, 'at'), expiresAt: instantOrNull(e.expiresAt, `expiresAt`),   // a template label: switches-history pins the quoted key to the audit document's one reader
+        terminalEvidenceAt: instantOrNull(e.terminalEvidenceAt, 'terminalEvidenceAt'), runId: positiveIntOrNull(e.runId, 'runId'),
+        promotedSession: nonEmptyOrNull(e.promotedSession, 'promotedSession'),
+        auditEvidence: e.auditEvidence === null ? null : typeof e.auditEvidence === 'string' ? e.auditEvidence : refuse('bad-field', 'auditEvidence is neither null nor a string'),
+        lineageClose: e.lineageClose === null ? null : memberOf(DELEGATION_LINEAGE_CLOSE_REASONS, e.lineageClose, 'lineageClose'),
+        lineageOpenRun: positiveIntOrNull(e.lineageOpenRun, 'lineageOpenRun'), resolvesThrough: attemptMarkOrNull(e.resolvesThrough),
+      };
+    case 'lease-released':
+      exactKeys(e, LEASE_RELEASED_KEYS, 'a lease-released entry');
+      return {
+        kind: 'lease-released', leaseId: nonEmptyString(e.leaseId, 'leaseId'), generation: positiveInt(e.generation, 'generation'),
+        releaseReason: memberOf(DELEGATION_LEASE_RELEASE_REASONS, e.releaseReason, 'releaseReason'), at: instant(e.at, 'at'),
+        lastHeadSha: nonEmptyOrNull(e.lastHeadSha, 'lastHeadSha'), resolvesThrough: attemptMarkOrNull(e.resolvesThrough),
+      };
+    case 'lease-carrier-seen':
+      exactKeys(e, LEASE_CARRIER_SEEN_KEYS, 'a lease-carrier-seen entry');
+      return { kind: 'lease-carrier-seen', leaseId: nonEmptyString(e.leaseId, 'leaseId'), generation: positiveInt(e.generation, 'generation'), at: instant(e.at, 'at') };
+    default:
+      return null;
+  }
+}
+
 /** The keys the DURABILITY layer reads from an evidence envelope. The envelope's variant-specific fields are the ingest
  *  layer's closed union (W3-M69); the journal keeps them verbatim and requires only that they be inside the canonical JSON
  *  domain, which the canonical re-encoding check proves. */
@@ -219,8 +285,8 @@ function isEventEnvelope(v: unknown): v is DelegationEventEnvelopeV1 {
   return v['agentId'] === undefined || typeof v['agentId'] === 'string';
 }
 
-/** The closed entry grammar: `evidence-accepted` and `lease-created`, nothing else. A later wave may ADD a variant; it may not
- *  reinterpret either of these two. Returns a fresh entry object, but an evidence entry keeps the caller's `event` BY REFERENCE (its
+/** The closed entry grammar: `evidence-accepted`, `lease-created` and wave 5's three lease kinds (`lease-transition`,
+ *  `lease-released`, `lease-carrier-seen`, PR5a), nothing else. A later wave may ADD a variant; it may not reinterpret one. Returns a fresh entry object, but an evidence entry keeps the caller's `event` BY REFERENCE (its
  *  variant-specific fields are opaque here), so a caller must not mutate an event it has handed over. A lease-created entry is
  *  rebuilt field by field. */
 function validateEntry(entry: unknown): DelegationJournalEntryV1 {
@@ -261,7 +327,7 @@ function validateEntry(entry: unknown): DelegationJournalEntryV1 {
       lineageId: hex64(entry['lineageId'], 'lineageId'),
     };
   }
-  return refuse('bad-field', `entry kind ${JSON.stringify(entry['kind'])} is not in the closed grammar`);
+  return validateLeaseKind(entry) ?? refuse('bad-field', `entry kind ${JSON.stringify(entry['kind'])} is not in the closed grammar`);
 }
 
 const RECORD_KEYS = ['v', 'sequence', 'journalId', 'acceptedAt', 'previousDigest', 'entry', 'digest'] as const;
@@ -666,7 +732,9 @@ export function planDelegationJournalAppend(input: {
       const id = entry.event.eventId;
       if (input.eventIds.has(id) || batchEvents.has(id)) { skipped.push({ index, reason: 'duplicate-event' }); return; }
       batchEvents.add(id);
-    } else {
+    } else if (entry.kind === 'lease-created') {
+      // Only a CREATION deduplicates by identity and path; the wave-5 lease kinds name a lease that already exists, and whether one
+      // applies is the fold's decision (`delegation-lease-state.ts`), never the append planner's.
       const identityKey = delegationLeaseIdentityKey(entry);
       const sameIdentity = batchLeaseByIdentity.get(identityKey) ?? input.leases.byIdentity(identityKey);
       if (sameIdentity !== undefined) { skipped.push({ index, reason: 'duplicate-lease', leaseId: sameIdentity }); return; }

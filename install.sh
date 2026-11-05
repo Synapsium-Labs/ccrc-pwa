@@ -31,6 +31,9 @@ CCRC_RELEASE_REPO="ccrc-pwa"
 # SHA256SUMS (small by design — a host that keeps sending forever is not "a
 # slow but live download"), as the updater's two fetches do. A tarball gets
 # no total bound: a large live transfer must be let finish.
+# `--max-filesize` is enforced for a body of UNKNOWN length (no Content-Length)
+# only by curl 8.4.0 and later; below that curl ignores it for such a body — its
+# manual says so — and only the total bound holds.
 : "${CCRC_RELEASE_CONNECT_TIMEOUT:=10}"
 : "${CCRC_RELEASE_SPEED_LIMIT:=1024}"
 : "${CCRC_RELEASE_SPEED_TIME:=30}"
@@ -41,8 +44,9 @@ CCRC_RELEASE_REPO="ccrc-pwa"
 # limit" or an error, so a value is used only when it is a plain whole number
 # from 1 to the updater's own ceiling; anything else falls back to the default
 # with one warning line (the updater's `_upd_validate_timeout`, same sentence,
-# on stderr here). The calls below repeat its arguments, and install-sh.test.ts
-# reds when a default or a ceiling differs from the ones ccd/ccrc passes.
+# on stderr here). The release arm's calls repeat its arguments, and
+# install-sh.test.ts reds when a default or a ceiling differs from the ones
+# ccd/ccrc passes.
 # Indirect read and `printf -v`: no eval, and both are bash 3.1+.
 _inst_validate_knob() {
   local name="$1" default="$2" what="${3:-a whole number of seconds from 1 to 3600}" max="${4:-3600}" val LC_ALL=C
@@ -52,13 +56,6 @@ _inst_validate_knob() {
   echo "install.sh: WARN: $name='${val//[![:print:]]/?}' is not $what — using $default" >&2
   printf -v "$name" '%s' "$default"
 }
-_inst_validate_knob CCRC_RELEASE_CONNECT_TIMEOUT 10
-_inst_validate_knob CCRC_RELEASE_SPEED_LIMIT 1024 \
-  'a whole number of bytes/second from 1 to 100000000' 100000000
-_inst_validate_knob CCRC_RELEASE_SPEED_TIME 30
-_inst_validate_knob CCRC_RELEASE_SUMS_MAX_TIME 20
-_inst_validate_knob CCRC_RELEASE_SUMS_MAX_FILESIZE 4096 \
-  'a whole number of bytes from 1 to 1048576' 1048576
 
 # ── The URL redactor — a COPY of `_upd_redact` (ccd/ccrc), held equal by OUTPUT,
 # not by text, under an install.sh-local name. It masks a URL's userinfo and the
@@ -162,7 +159,26 @@ if [ "$RELEASE_MODE" = true ]; then
   command -v curl >/dev/null 2>&1 \
     || { echo "install.sh: curl is not installed — install curl, then re-run" >&2; exit 1; }
   BASE="${CCRC_RELEASE_BASE_URL:-https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases}"
+  # The release paths are appended to the base, so a query or a fragment swallows
+  # them, and `_inst_redact` would print it whole. The sentence names the variable
+  # and never the value: a query can carry a token.
+  case "$BASE" in
+    *'?'*|*'#'*)
+      echo "install.sh: CCRC_RELEASE_BASE_URL holds a query or a fragment, so the release paths cannot be appended to it — refusing" >&2
+      exit 1 ;;
+  esac
   if [ -n "$RELEASE_TAG" ]; then URL_DIR="$BASE/download/$RELEASE_TAG"; else URL_DIR="$BASE/latest/download"; fi
+
+  # Only the two fetches below read a knob, so only this arm judges one, before
+  # the first of them, as the updater's `_upd_resolve` does: a bad value is no
+  # warning of `--help`'s or a checkout install's.
+  _inst_validate_knob CCRC_RELEASE_CONNECT_TIMEOUT 10
+  _inst_validate_knob CCRC_RELEASE_SPEED_LIMIT 1024 \
+    'a whole number of bytes/second from 1 to 100000000' 100000000
+  _inst_validate_knob CCRC_RELEASE_SPEED_TIME 30
+  _inst_validate_knob CCRC_RELEASE_SUMS_MAX_TIME 20
+  _inst_validate_knob CCRC_RELEASE_SUMS_MAX_FILESIZE 4096 \
+    'a whole number of bytes from 1 to 1048576' 1048576
 
   # AN EXPLICIT TEMPLATE, because BSD `mktemp` IGNORES `$TMPDIR` when given
   # none — measured: macOS answers inside its own per-user Darwin temp dir
@@ -191,7 +207,7 @@ if [ "$RELEASE_MODE" = true ]; then
     --max-time "$CCRC_RELEASE_SUMS_MAX_TIME" --max-filesize "$CCRC_RELEASE_SUMS_MAX_FILESIZE" \
     --speed-limit "$CCRC_RELEASE_SPEED_LIMIT" --speed-time "$CCRC_RELEASE_SPEED_TIME" \
     -o "$STAGING/SHA256SUMS" "$URL_DIR/SHA256SUMS" \
-    || { echo "install.sh: download failed: $URL_SAFE/SHA256SUMS (is there a release, or did the connection stall or time out?)" >&2; exit 1; }
+    || { echo "install.sh: download failed: $URL_SAFE/SHA256SUMS (is there a release, or did the connection stall — connect ${CCRC_RELEASE_CONNECT_TIMEOUT}s / under ${CCRC_RELEASE_SPEED_LIMIT}B/s for ${CCRC_RELEASE_SPEED_TIME}s — or did it time out after ${CCRC_RELEASE_SUMS_MAX_TIME}s / exceed ${CCRC_RELEASE_SUMS_MAX_FILESIZE} bytes) — nothing on this box was changed" >&2; exit 1; }
   read -r _sum TARNAME < "$STAGING/SHA256SUMS" \
     || { echo "install.sh: SHA256SUMS is empty — refusing" >&2; exit 1; }
   # The sha256sum binary-mode marker (`<digest> *<name>`) is the line format's,
@@ -202,11 +218,20 @@ if [ "$RELEASE_MODE" = true ]; then
   if [ -n "$NAME_RULE" ]; then
     echo "install.sh: SHA256SUMS's tarball name $NAME_RULE — refusing" >&2; exit 1
   fi
+  # THE TAG IS BOUND, as the updater's `_upd_resolve` binds it: the name SHA256SUMS
+  # gives must BE the tag asked for, tag to tag and un-stripped, before the tarball
+  # is fetched. Printing the name is safe here: it has passed the rules above.
+  if [ -n "$RELEASE_TAG" ]; then
+    V="${TARNAME#ccrc-}"; V="${V%.tar.gz}"
+    if [ "$V" != "$RELEASE_TAG" ]; then
+      echo "install.sh: the release at $RELEASE_TAG names a $TARNAME (version $V, not $RELEASE_TAG) — refusing" >&2; exit 1
+    fi
+  fi
   echo "install.sh: fetching $URL_SAFE/$TARNAME …"
   curl -g -fsSL --connect-timeout "$CCRC_RELEASE_CONNECT_TIMEOUT" \
     --speed-limit "$CCRC_RELEASE_SPEED_LIMIT" --speed-time "$CCRC_RELEASE_SPEED_TIME" \
     -o "$STAGING/$TARNAME" "$URL_DIR/$TARNAME" \
-    || { echo "install.sh: download failed: $URL_SAFE/$TARNAME (did the connection stall — under ${CCRC_RELEASE_SPEED_LIMIT}B/s for ${CCRC_RELEASE_SPEED_TIME}s?)" >&2; exit 1; }
+    || { echo "install.sh: download failed: $URL_SAFE/$TARNAME (or did the connection stall — connect ${CCRC_RELEASE_CONNECT_TIMEOUT}s / under ${CCRC_RELEASE_SPEED_LIMIT}B/s for ${CCRC_RELEASE_SPEED_TIME}s) — nothing on this box was changed" >&2; exit 1; }
 
   # Verify BEFORE extracting: a tarball that fails its checksum never gets
   # to put a single file on disk, let alone run one.

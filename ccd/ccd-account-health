@@ -217,7 +217,7 @@ _ah_lane_state() {   # <id> <verdict>
   mkdir -p -m 0700 "$AH_LOCKS_DIR" \
     || { _ah_say "$1: lane state not written — cannot create $AH_LOCKS_DIR"; return 0; }
   flock -n -E 75 "$AH_LOCKS_DIR/$1.lock" \
-    node "$LANE_STATE_OP" lane-state --id "$1" --check-verdict "$2" --check-at "$at" >/dev/null || rc=$?
+    node "$LANE_STATE_OP" lane-state --id "$1" --check-verdict "$2" --check-at "$at" --file "$HOME/.ccrc/accounts.json" >/dev/null || rc=$?
   case "$rc" in
     0) : ;;
     75) _ah_say "$1: lane state left to the account verb acting on it" ;;

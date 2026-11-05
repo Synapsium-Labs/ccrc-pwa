@@ -100,6 +100,22 @@ describe('Icon', () => {
     }
   });
 
+  // The Docs reader's compact phone head (the phone-header plan of 2026-11-03): Share and Export as icons on the row,
+  // and the Page details button. Each is vendored, and each draws.
+  it('the Docs compact head icons are vendored', () => {
+    const GEOMETRIC = new Set(['path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'ellipse']);
+    for (const name of ['share', 'download', 'ellipsis'] as const) {
+      // Named first, so a missing icon reds with its name, not a TypeError inside Icon.
+      expect(Object.keys(ICONS), name).toContain(name);
+      const { container, unmount } = render(<Icon name={name} size={20} />);
+      const svg = container.querySelector('svg');
+      expect(svg, name).not.toBeNull();
+      const drawn = [...svg!.children].filter((c) => GEOMETRIC.has(c.tagName.toLowerCase()));
+      expect(drawn.length, `${name} draws at least one geometric child`).toBeGreaterThan(0);
+      unmount();
+    }
+  });
+
   it('the vendored set ships its licence and names its lucide version', () => {
     const licence = readFileSync(path.join(ROOT, 'ui/src/icons/LICENSE.lucide'), 'utf8');
     expect(licence).toMatch(/^ISC License/);

@@ -372,10 +372,11 @@ describe('RB13: a clone owns its Bash facts', () => {
 
 describe('RB-CLONE: clone() and replaceRows() carry every collection of the builder (the clone census)', () => {
   const Z = 'agent-ghi789';
-  /** The 18 collections `clone()` copies (the newest: bashCalls, bashDue, stopDue, workflowLaunches, and wave 4's equalPreSequence, D-7021). */
+  /** The 20 collections `clone()` copies (the newest: bashCalls, bashDue, stopDue, workflowLaunches, wave 4's equalPreSequence, D-7021,
+   *  and wave 5's leaseRecords and carriers, PR5a). */
   const COLLECTIONS = [
     'sessions', 'attempts', 'activities', 'mapping', 'intent', 'leases', 'lineage', 'cursors', 'intervals', 'candidates', 'leaseFacts',
-    'leaseByIdentity', 'leaseByPath', 'bashCalls', 'bashDue', 'stopDue', 'workflowLaunches', 'equalPreSequence',
+    'leaseByIdentity', 'leaseByPath', 'bashCalls', 'bashDue', 'stopDue', 'workflowLaunches', 'equalPreSequence', 'leaseRecords', 'carriers',
   ].sort();
   /** The scalars `clone()` deliberately does NOT copy, each with its reason. None today: every scalar field is carried by value. */
   const NOT_COPIED: Record<string, string> = {};
@@ -433,6 +434,13 @@ describe('RB-CLONE: clone() and replaceRows() carry every collection of the buil
       lineageId: deriveDelegationLineageId({ leaseId, parentId: PARENT, parentIncarnation: INC, activityId }),
     } as DelegationJournalEntryV1, A0 + 7000]], evidence[evidence.length - 1]);
     b.foldRecord(lease!);
+    // Wave 5 (PR5a): the lease's first carrier and a transfer, so leaseRecords and the carrier row are filled.
+    const tr = (generation: number, reason: string, to: string, at: string, runId: number | null): DelegationJournalEntryV1 => ({
+      kind: 'lease-transition', leaseId, generation, reason, to, at, expiresAt: null, terminalEvidenceAt: null, runId, promotedSession: null,
+      auditEvidence: null, lineageClose: null, lineageOpenRun: null, resolvesThrough: null,
+    } as DelegationJournalEntryV1);
+    const moves = chainEntriesAt([[tr(1, 'carrier', 'ephemeral', T(8), null), A0 + 7100], [tr(2, 'transfer', 'transferring', T(8), 3), A0 + 7200]], lease!);
+    for (const r of moves) b.foldRecord(r);
     b.setCursor({ sessionId: PARENT, parentIncarnation: INC, bucket: '2026101412', cursor: 4096, lastSize: 4096, lastCompleteAt: T(8), intervalState: 'measured', detail: null, anchor: null, replaced: false });
     b.mergeInterval({ sessionId: PARENT, parentIncarnation: INC, utcHour: formatDelegationInstant(A0), state: 'measured', detail: null, recordedAt: T(8) });
     // An attempt and the coordinator intent: checkpoint-only state, which only a replacement of the rows can bring in.
@@ -447,10 +455,10 @@ describe('RB-CLONE: clone() and replaceRows() carry every collection of the buil
     return b;
   }
 
-  it('RB-CLONE: (i) clone() copies each of the 18 collections as a new object equal by value, and every scalar by value (mutants MCL(F), MCL-s)', () => {
+  it('RB-CLONE: (i) clone() copies each of the 20 collections as a new object equal by value, and every scalar by value (mutants MCL(F), MCL-s)', () => {
     const b = populated();
     const own = collectionsOf(b);
-    expect(Object.keys(own).sort(), 'the builder\'s Map, Array and plain-object fields are exactly the 18 collections clone() must copy').toEqual(COLLECTIONS);
+    expect(Object.keys(own).sort(), 'the builder\'s Map, Array and plain-object fields are exactly the 20 collections clone() must copy').toEqual(COLLECTIONS);
     for (const name of COLLECTIONS) expect(sizeOf(own[name]), `the fixture fills ${name}`).toBeGreaterThan(0);
     const coveredEnds = scalarsOf(b)['coveredEnds'];
     expect(typeof coveredEnds === 'number' && coveredEnds > 0, `coveredEnds (${String(coveredEnds)}) counts the run a covered notification ended`).toBe(true);
@@ -470,8 +478,8 @@ describe('RB-CLONE: clone() and replaceRows() carry every collection of the buil
 
   it('RB-CLONE: (ii) replaceRows(build()) keeps each journal-derived field equal by value (mutants MCL-r(F))', () => {
     const b = populated();
-    expect(Object.keys(collectionsOf(b)).sort(), 'the builder\'s collection fields are exactly the 18 named').toEqual(COLLECTIONS);
-    const FIELDS = ['candidates', 'leaseFacts', 'bashCalls', 'bashDue', 'stopDue', 'workflowLaunches', 'equalPreSequence'];
+    expect(Object.keys(collectionsOf(b)).sort(), 'the builder\'s collection fields are exactly the 20 named').toEqual(COLLECTIONS);
+    const FIELDS = ['candidates', 'leaseFacts', 'leaseRecords', 'bashCalls', 'bashDue', 'stopDue', 'workflowLaunches', 'equalPreSequence'];
     const before = collectionsOf(b);
     const snapshot = Object.fromEntries(FIELDS.map((f) => [f, structuredClone(before[f])]));
     for (const f of FIELDS) expect(sizeOf(before[f]), `the fixture fills ${f}`).toBeGreaterThan(0);

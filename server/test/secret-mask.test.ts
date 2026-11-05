@@ -1233,6 +1233,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/coord/collect-lane': "the collector's settings and counters",
     '/api/coord/dispatch-abandon': "the dead-dispatch switch's choice and bound (D-7319)",
     '/api/coord/roll-idle': 'one setting word and its two choices (D-7453)',
+    '/api/coord/scope-sweep': "the sweep's two switches, each a marker state word (D-7994)",
     '/api/testbox': "the test box's state and reasons, the two hosts' tool versions and the run counts: no session text (D-7411)",
     '/api/approvals/:id/ruling': 'a signed ruling read by the fleet box (a mask would break the signature); its input is shape-redacted at write',
     '/api/approvals/key': 'a public key',
@@ -1241,6 +1242,10 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/docs/projects': 'repository content, not session text',
     '/api/docs/:project/tree': 'repository content, not session text',
     '/api/docs/:project/file': 'repository content, not session text',
+    // The reader lab's door (reader lab plan, RL-a; D-7967): the run read answers its opener counts by the lab's closed
+    // names and classes, and the probe answers an empty 204. Neither carries session text.
+    '/api/reader-lab/runs/:nonce': "a run's counts by probe name and request class, from the lab's closed vocabulary; no session text",
+    '/api/reader-lab/probe/:nonce/:name': 'an empty 204 with no-store; no body',
     '/api/linear/connection': "the Linear connection's state: organisation and user names, the key's last four characters, the check time; never the key",
     '/api/linear/resolve': "the operator's own typed name, its derived slug, and a Linear issue title; no session text",
     // The Settings list (#1444, plan task LK11, spec §10.2): what the slot records and the legacy pair hold, read from the

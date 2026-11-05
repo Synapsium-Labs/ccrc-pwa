@@ -36,6 +36,7 @@ import type { LinearJournal } from './linear/journal.js';
 import type { LinearWritePolicy } from './linear/policy.js';
 import type { LinearRateService } from './linear/rate.js';
 import type { LinearRefresher } from './linear/refresher.js';
+import type { PerfRecorder } from './perf/recorder.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
  *  generation journal `CoordStore.setCollectLane` appends to inside its transaction, and this process's boot nonce,
@@ -45,6 +46,8 @@ export interface CollectLaneDeps { readonly journal: CollectLaneJournal; readonl
 
 export interface Deps {
   cfg: CcrcConfig;
+  /** The timing recorder (console speed S1): absent in tests; `index.ts` builds one. It changes no behaviour. */
+  perf?: PerfRecorder;
   /** The deploy's build stamp (buildinfo.ts, read once at boot from
    *  `cfg.buildInfoPath`). `null` on a dev checkout or an unstamped box;
    *  absent has the same meaning — `/health` treats both as null, and so does

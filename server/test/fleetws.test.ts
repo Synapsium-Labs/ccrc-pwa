@@ -13,7 +13,7 @@ import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { loadSnapshot } from '../src/fleetstate.js';
-import { ACCOUNT_POOLS_CAP } from '../src/ccdargv.js';
+import { ACCOUNT_POOLS_CAP, POOL_SYNC_ABSENT_CAP, POOL_SYNC_INSTALLED_CAP } from '../src/ccdargv.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
@@ -436,13 +436,15 @@ describe('fleet REST + WS', () => {
       expect(snap!.savedAt).toBeGreaterThan(firstSavedAt);
       const secondSavedAt = snap!.savedAt;
 
-      // Not a one-tick exception — the survivor keeps getting a fresh
-      // snapshot on every subsequent healthy tick, exactly as an unshrunk
-      // fleet would.
+      // Not a one-tick exception — the survivor's cache stays live exactly as an unshrunk fleet's: it is rewritten when
+      // the survivor changes and, since console speed S1 (the cache is written only on change), left alone when it does not.
       await new Promise((r) => setTimeout(r, 3));
       await watcher.tick();
-      const laterSnap = await loadSnapshot(cachePath);
-      expect(laterSnap!.savedAt).toBeGreaterThan(secondSavedAt);
+      expect((await loadSnapshot(cachePath))!.savedAt).toBe(secondSavedAt);
+      writeFileSync(path.join(home, '.cc-sessions', 'claude-a-project-f.branch'), 'ws/changed');
+      await new Promise((r) => setTimeout(r, 3));
+      await watcher.tick();
+      expect((await loadSnapshot(cachePath))!.savedAt).toBeGreaterThan(secondSavedAt);
 
       rmSync(cacheDir, { recursive: true, force: true });
     });
@@ -974,7 +976,7 @@ describe('fleet REST + WS', () => {
       // the wire order every client relies on is hello, fleet, runs, coord.
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect(frame.coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
       ws.close();
     });
 
@@ -1004,7 +1006,7 @@ describe('fleet REST + WS', () => {
       await watcher.tick();
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect(frame.coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
       ws.close();
     });
 
@@ -1013,11 +1015,22 @@ describe('fleet REST + WS', () => {
       const { ws, next, watcher } = await connect();
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
-      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'set', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'set', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
 
       marker('coordinator-paused');
       await watcher.tick();
-      expect((await next()).coord).toEqual({ pause: 'set', mail: 'set', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect((await next()).coord).toEqual({ pause: 'set', mail: 'set', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
+      ws.close();
+    });
+
+    it('reports set for pane-scope-stop-live off the same listing, independently of the other markers (D-7902)', async () => {
+      // The switch's one read for the PWA: armed is `set`, and arming it reads as no pause of any kind.
+      marker('pane-scope-stop-live');
+      const { ws, next } = await connect();
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).coord).toEqual(
+        { pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'set' });
       ws.close();
     });
 
@@ -1030,12 +1043,12 @@ describe('fleet REST + WS', () => {
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
       expect((await next()).coord).toEqual(
-        { pause: 'clear', mail: 'clear', reclaim: 'set', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+        { pause: 'clear', mail: 'clear', reclaim: 'set', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
 
       marker('coordinator-paused');
       await watcher.tick();
       expect((await next()).coord).toEqual(
-        { pause: 'set', mail: 'clear', reclaim: 'set', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+        { pause: 'set', mail: 'clear', reclaim: 'set', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
       ws.close();
     });
 
@@ -1051,7 +1064,7 @@ describe('fleet REST + WS', () => {
       await watcher.tick();
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'unmeasurable' });
       ws.close();
     });
 
@@ -1066,20 +1079,20 @@ describe('fleet REST + WS', () => {
       const { ws, next, watcher } = await connect({ io: flaky });
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
-      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
 
       listable = false;
       await watcher.tick();     // this tick returns early — and still reports
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'unmeasurable' });
 
       // And nothing ELSE was broadcast on that tick: the fail-shut return still
       // skips the fleet snapshot, exactly as it did before this frame existed.
       listable = true;
       marker('coordinator-paused');
       await watcher.tick();
-      expect((await next()).coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect((await next()).coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
       ws.close();
     });
 
@@ -1501,7 +1514,7 @@ describe('fleet REST + WS', () => {
       it('reads enforced/unavailable off the account-pools capability token, on both GET /api/fleet and the WS pools frame', async () => {
         const enforcedDeps = {
           ...testDeps(home),
-          fleetState: { connected: true, downSince: null, ccdVerbs: [ACCOUNT_POOLS_CAP], rosterFp: null, build: null },
+          fleetState: { connected: true, downSince: null, ccdVerbs: [ACCOUNT_POOLS_CAP, POOL_SYNC_INSTALLED_CAP], rosterFp: null, build: null },
         };
         const bus = new Bus();
         const watcher = mkWatcher(enforcedDeps, bus);
@@ -1524,6 +1537,23 @@ describe('fleet REST + WS', () => {
         const res2 = await app.inject({ method: 'GET', url: '/api/fleet' });
         const body2 = res2.json() as { pools: { accountPools?: string } };
         expect(body2.pools.accountPools).toBe('unavailable');
+      });
+
+      // D-8015: the case a box without the pool-sync timer is, on both of the field's call sites.
+      it('reads unavailable when the ccd has the token and the box has no pool-sync timer, on both GET /api/fleet and the WS pools frame', async () => {
+        const deps = {
+          ...testDeps(home),
+          fleetState: { connected: true, downSince: null, ccdVerbs: [ACCOUNT_POOLS_CAP, POOL_SYNC_ABSENT_CAP], rosterFp: null, build: null },
+        };
+        const bus = new Bus();
+        const watcher = mkWatcher(deps, bus);
+        app = await buildServer(deps, bus, watcher);
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        const body = res.json() as { pools: { accountPools?: string } };
+        expect(body.pools.accountPools).toBe('unavailable');
+
+        await watcher.tick();
+        expect(watcher.currentPools()?.accountPools).toBe('unavailable');
       });
 
       it('is absent-reads-unknown when there is no ccdVerbs evidence at all', async () => {

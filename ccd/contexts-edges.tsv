@@ -330,6 +330,7 @@ cmd_account_pane -> _tmux_new_session
 cmd_attach -> _alive
 cmd_attach -> _id
 cmd_attach -> cmd_ensure
+cmd_caps -> _pool_sync_installed
 cmd_clip -> _alive
 cmd_clip -> _tmux_t
 cmd_enable -> _ws_expire_refuse_return
@@ -366,6 +367,8 @@ cmd_hibernate -> _lc_surface_norm
 cmd_hibernate -> _operator_choice_keep
 cmd_hibernate -> _operator_choice_unmark
 cmd_hibernate -> _pane_for_keystroke
+cmd_hibernate -> _pane_scope_of
+cmd_hibernate -> _pane_scope_stop
 cmd_hibernate -> _reg_get_to
 cmd_hibernate -> _reg_id_ok
 cmd_hibernate -> _reg_set
@@ -420,6 +423,8 @@ cmd_stop -> _lc_done
 cmd_stop -> _lc_surface_norm
 cmd_stop -> _operator_choice_keep
 cmd_stop -> _operator_choice_unmark
+cmd_stop -> _pane_scope_of
+cmd_stop -> _pane_scope_stop
 cmd_stop -> _reg_id_ok
 cmd_stop -> _tmux_t
 cmd_stop -> _ws_unsupervise

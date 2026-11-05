@@ -185,16 +185,32 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the test box switch verb granted without --state',
     codes: ['TS2322'],
   },
+  // THE SWEEP'S BUSY ARM SWITCH (D-7994), g14's shape: enrolled on `--state`, so the narrowed grant is a compile error.
+  'g27-scope-sweep-busy-without-state.ts': {
+    what: 'the busy arm switch verb granted without --state',
+    codes: ['TS2322'],
+  },
   // THE LEASE CARRIER (delegation broker wave 5, PR1), g23's shape: enrolled on `--lease`, so the narrowed grant is a
   // compile error.
   'g25-ws-lease-mark-without-lease.ts': {
     what: 'the lease carrier writer granted without --lease',
     codes: ['TS2322'],
   },
+  // THE LEASE AUDIT (delegation broker wave 5, PR2), g25's shape: enrolled on `--lease`, so the narrowed grant is a
+  // compile error.
+  'g26-ws-lease-audit-without-lease.ts': {
+    what: 'the lease audit granted without --lease',
+    codes: ['TS2322'],
+  },
   // ADD A PROJECT (add-project spec 2026-11-04 §4), g21's shape: enrolled on `--name`, its whole argument surface, so the
   // narrowed grant is a compile error.
   'g26-project-add-without-name.ts': {
     what: 'the project create verb granted without --name',
+    codes: ['TS2322'],
+  },
+  // THE PANE-SCOPE STOP'S SWITCH (D-7902), g24's shape: enrolled on `--state`, so the narrowed grant is a compile error.
+  'g27-pane-scope-stop-without-state.ts': {
+    what: 'the pane-scope stop switch verb granted without --state',
     codes: ['TS2322'],
   },
 };
@@ -431,6 +447,26 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
       .toEqual([['testbox-remote', '--state']]);
   });
 
+  it('throws on a pane-scope-stop without --state, and grants exactly the one prefix (D-7902)', () => {
+    expect(() => auditExecWhitelist(withCcd([['pane-scope-stop']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['pane-scope-stop', '--live']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['pane-scope-stop', '--state']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'pane-scope-stop'), 'one pane-scope-stop grant, on --state')
+      .toEqual([['pane-scope-stop', '--state']]);
+  });
+
+  it('throws on a scope-sweep-busy without --state, and grants exactly the one prefix (D-7994)', () => {
+    expect(() => auditExecWhitelist(withCcd([['scope-sweep-busy']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['scope-sweep-busy', '--on']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['scope-sweep-busy', '--state']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'scope-sweep-busy'), 'one scope-sweep-busy grant, on --state')
+      .toEqual([['scope-sweep-busy', '--state']]);
+  });
+
   it('throws on a ws-shed-deps without --session, and grants exactly the one prefix (D-7278)', () => {
     expect(() => auditExecWhitelist(withCcd([['ws-shed-deps']])))
       .toThrow(/only grantable with '--session'/);
@@ -448,6 +484,15 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     expect(REQUIRED_VERB_FLAG['ws-lease-mark']).toBe('--lease');
     expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-lease-mark'), 'one ws-lease-mark grant, on --lease')
       .toEqual([['ws-lease-mark', '--lease']]);
+  });
+
+  it('W5-G11: throws on a ws-lease-audit without --lease, and grants exactly the one prefix (delegation broker wave 5)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-audit']]))).toThrow();
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-audit', '--generation']]))).toThrow();
+    expect(() => auditExecWhitelist(withCcd([['ws-lease-audit', '--lease']]))).not.toThrow();
+    expect(REQUIRED_VERB_FLAG['ws-lease-audit']).toBe('--lease');
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-lease-audit'), 'one ws-lease-audit grant, on --lease')
+      .toEqual([['ws-lease-audit', '--lease']]);
   });
 
   it('throws on a ws-orphan with no confirmation token, and grants the audit modes without one (D-6630)', () => {

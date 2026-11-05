@@ -6,6 +6,7 @@ import type { SessionRecord } from '../registry.js';
 import { CCD_ARGV, ccdCan } from '../ccdargv.js';
 import { isFullLine, parsePrLines, phaseFor, type CcdPrLine, type CcdPrRow } from '../prstate.js';
 import { readPrHistory } from './prhistory.js';
+import { prRowCounts } from './rundefs.js';
 import type { PrLineageEntry } from './store.js';
 import type { PrPhase } from '../../../shared/api.js';
 import { runNamesSession } from './runBinding.js';
@@ -202,14 +203,17 @@ const LIVE_PHASE: Readonly<Record<PrPhase, 'spent' | 'unspent' | 'unmeasured'>> 
  * sources, in this order, and the order is the argument:
  *
  *  1. `rec.prNumber` — present is evidence of spent. ONE DIRECTION ONLY: the
- *     registry reads `.prnumber` through the collapsing `field()`, which folds
+ *     registry reads `.prnumber` through the collapsing `listedField`, which folds
  *     an unreadable file into the same null as an absent one, so a null says
  *     nothing and the verdict falls through.
  *  2. `.prhistory`, through `readPrHistory` — which tells absent from
  *     unreadable. Unreadable answers `unmeasured`: `closeRun`'s own fail-shut
- *     direction on the same file. Any entry answers `spent`, naming the
- *     NEWEST by `recordedAt` (the ledger is append-only, so a retired PR stays
- *     a PR).
+ *     direction on the same file. Any row `prRowCounts` admits for `rec.branch`
+ *     answers `spent`, naming the NEWEST such row by `recordedAt` (the ledger is
+ *     append-only, so a retired PR stays a PR). A row placed on another branch
+ *     is not evidence about this one (D-5941), so it falls through to rung 3,
+ *     and so does any placed row when `rec.branch` is null: the registry names
+ *     no branch to match it against.
  *  3. The LIVE rung, `childSpentLive` — see its own docstring.
  *
  * Rungs 1–2 answer `incarnation: 'unplaced'`: neither carries a date, and
@@ -236,7 +240,9 @@ export async function childSpent(
   const history = await readPrHistory(deps.io, deps.cfg.registryDir, rec.id);
   if (!history.ok) return { kind: 'unmeasured', detail: 'the PR ledger (.prhistory) could not be read' };
   let newest: PrLineageEntry | null = null;
-  for (const e of history.entries) if (newest === null || e.recordedAt >= newest.recordedAt) newest = e;
+  for (const e of history.entries) {
+    if (prRowCounts(e, rec.branch) && (newest === null || e.recordedAt >= newest.recordedAt)) newest = e;
+  }
   if (newest !== null) return { kind: 'spent', pr: newest.pr, source: 'prhistory', incarnation: 'unplaced' };
 
   return line !== undefined ? childSpentLiveFrom(line, rec, birth) : childSpentLive(deps, rec, birth);

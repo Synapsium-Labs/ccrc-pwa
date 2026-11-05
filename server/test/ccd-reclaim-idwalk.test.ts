@@ -20,7 +20,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD, ccdSource } from './ccdWsHelpers.js';
+import { CCD, ccdSource, ghContainedEnv } from './ccdWsHelpers.js';
 import { realMounts } from './wsCollectFixture.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { DARWIN_IDENT_SHIMS } from './worktreeIdentityFixture.js';
@@ -73,13 +73,14 @@ const walk = (reqs: Req[], o: { mi?: string; bt?: string[]; pre?: string } = {})
   return parsed(r.stdout);
 };
 /** `snippet`, sourced and run exactly as `h.sh` runs one, but in a process group of its own with a 20 s ceiling
- *  (`spawnSyncGroup`). Its environment is the harness's own `h.env()`, which `ghContainedEnv` builds with the gh,
- *  systemd, tmux and net poisons. Pass `strays: 'end'` for a case that leaves a process in the group on purpose. */
+ *  (`spawnSyncGroup`). Its environment is the harness's own `h.env()`, and it names the gh, systemd, tmux and net
+ *  poisons itself, as every bash spawn in a ccd suite must for the containment scan to read it. Pass `strays: 'end'` for a case that leaves a process in the group on purpose. */
 const grouped = (snippet: string, strays: 'throw' | 'end' = 'throw'): { out: string; timedOut: boolean } => {
   const r = spawnSyncGroup('bash', ['-c', 'ccd_h_src=$CCD_HARNESS_SRC ccd_h_snippet=$CCD_HARNESS_SNIPPET; '
     + 'unset CCD_HARNESS_SRC CCD_HARNESS_SNIPPET; source "$ccd_h_src"; eval "$ccd_h_snippet"'],
   { encoding: 'utf8', cwd: h.home, timeout: 20_000, stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...h.env(), CCD_HARNESS_SRC: CCD, CCD_HARNESS_SNIPPET: snippet } }, { strays });
+    env: ghContainedEnv(h.home, { ...h.env(), CCD_HARNESS_SRC: CCD, CCD_HARNESS_SNIPPET: snippet },
+      { systemd: true, tmux: true, net: true }) }, { strays });
   return { out: (r.stdout ?? '').trim(), timedOut: (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' };
 };
 /** A directory at `at(name)` holding one link per `tools` entry that the harness's own PATH resolves. */
