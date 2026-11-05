@@ -29,7 +29,7 @@ import { LEDGER_ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusa
 import {
   ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
-  earlierTickBlocks, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, secretAnswer, secretTailOf,
+  earlierTickBlocks, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, outsideDocLink, secretAnswer, secretTailOf,
   type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
 } from '../../../shared/ledgers.js';
@@ -39,7 +39,7 @@ import { insertSystemMailTx } from './rundefsTx.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
   OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
-  removeOperatorSecret, sweepOperatorSecretTemps, writeOperatorSecret, type OperatorSecretMeta, type OperatorSecretState,
+  removeOperatorSecret, programmeChainKey, sweepOperatorSecretTemps, writeOperatorSecret, type OperatorSecretMeta, type OperatorSecretState,
   type RegisterSecret,
 } from './ledgersSecrets.js';
 
@@ -245,6 +245,12 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       { tag: `item-${item.id}`, url: WAITING_URL });
   };
 
+  /** The refusal of a text that links a document outside the console (`outsideDocLink`, spec D28): the raise route's and the
+   *  return route's, as the console draws both through `linkRuns` (review 1466 F5). */
+  const refuseOutsideDocLink = (reply: FastifyReply, address: string) => refuseRoute(reply, LEDGER_ROUTE_REFUSALS.outsideDocLink, {
+    detail: `${address} links a document outside the console: write its repository path (docs/superpowers/specs/<file>.md), which the console opens in the Docs reader`,
+  });
+
   // ── raise, and read a programme's items ────────────────────────────────────────────────────────────────────────────
 
   app.post('/api/programmes/:slug/items', async (req, reply) => {
@@ -257,6 +263,11 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (who === null) return bad(reply, 'byId and byUuid are required strings');
     const parsed = parseRaise(body as Body);
     if (!parsed.ok) return bad(reply, parsed.detail);
+    // A link to a document is its repository path, which the console opens in the Docs reader (desktop-polish PL10, D-7952;
+    // spec D28): an artifact page or an outside document server in any field the operator reads is refused before any write.
+    const outside = outsideDocLink([parsed.v.title, parsed.v.why, ...parsed.v.how, ...(parsed.v.options ?? []),
+      ...(parsed.v.recommendedWhy === null ? [] : [parsed.v.recommendedWhy]), ...(parsed.v.soonLabel === null ? [] : [parsed.v.soonLabel])]);
+    if (outside !== null) return refuseOutsideDocLink(reply, outside);
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
     if (!owns(coord, reply, who.byId, slug)) return;
     const v = parsed.v;
@@ -341,6 +352,11 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     // The note is checked ahead of attribution, as the body's shape is (the order the plan names); a missing note
     // reaches here as null and is refused before any item is read.
     if (isObject(req.body) && note === null) return bad(reply, `a returned item needs a note of 1 to ${RETURN_NOTE_MAX} characters`);
+    // The console draws the note through `linkRuns` ("sent back: …"), so it is held to the raise route's rule (spec D28; review
+    // 1466 F5): of the coordinator's other notes, a confirm and a withdraw take none, and no tick answer or modification text is
+    // drawn through it.
+    const outside = note === null ? null : outsideDocLink([note]);
+    if (outside !== null) return refuseOutsideDocLink(reply, outside);
     const head = await itemHead(req, reply);
     if (head === null) return;
     const item = ownedItem(coord, reply, head);
@@ -617,9 +633,10 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    * nothing; the write and the masker's registration (`writeOperatorSecret`); then the tick, with the answer
    * `secretAnswer` builds: set and the time, and the tail only when the masker catches the value (`masked`), NEVER the value.
    *
-   * ONE SAVE OF A SLOT AT A TIME (review 1389 F2): everything after the gate runs on the slot's own chain (`underSlot`), so a
-   * second save of the same slot starts only once the first has ticked, and then meets `not-open` before it writes anything.
-   * The file, its metadata and the masker's row are always one save's. A Remove of the slot rides the same chain. An act that
+   * ONE SAVE OF A SLOT AT A TIME (review 1389 F2): everything after the gate runs on its programme's chain (`underSlot`, keyed by
+   * `programmeChainKey`: every slot and spelling of the programme, review 1466 F11 and F12), so a second save of the same slot
+   * starts only once the first has ticked, and then meets `not-open` before it writes anything. The file, its metadata and the
+   * masker's row are always one save's. A Remove rides the same chain. An act that
    * waits past `SLOT_WAIT_MS` answers `slot-busy` and does nothing (review 1391 A-3).
    *
    * AFTER THE VALUE IS IN ITS SLOT, EVERY FAILURE IS ONE WORD (review 1389 F3): `stored-not-ticked`, whether the fsync or the
@@ -671,8 +688,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (id === null) return bad(reply, 'the item id is a positive integer');
     const first = coord.itemById(id);
     if (first === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
-    // The chain's key is the slot the item names; inside it every check is made again, on the item as it is then.
-    return underSlot(`${first.program}\u0000${first.secretSlot ?? ''}`, async () => {
+    // The chain's key is the programme the item names (`programmeChainKey`); inside it every check is made again, on the item as
+    // it is then.
+    return underSlot(programmeChainKey(first.program), async () => {
       const item = coord.itemById(id);
       if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${id}` });
       if (item.kind !== 'secret') return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notSecretItem, { detail: `item ${id} does not ask for a secret` });
@@ -758,7 +776,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    * (review 1418 A2): a retire whose read of the lane's rows failed (they stay in the table, review 1416 A-S5), and a delete
    * still held on a busy coord.db when the process stops. Those rows reload after a restart and go on masking the removed
    * value (the safe side) until a save of the slot replaces them, unless a rotation came before the restart: then they match
-   * nothing, because previous box tokens are memory-only (`SecretMasker`'s class doc), and only keep the re-key retrying
+   * nothing, because previous box tokens are memory-only (`accounts/mask.ts`'s module header, A ROTATION …; review 1440 F5), and only keep the re-key retrying
    * (review 1426 F-E). Nothing on disk is unmasked by it: the value file is gone. Nothing stored: `secret-not-stored` (the lane is retired all the same, so a
    * row left by a slot removed by hand stops being re-keyed, review 1391 A-2). A value file that cannot be removed:
    * `remove-failed`, and nothing else changes. Every answer is a fixed word with a fixed detail; none carries the value, which
@@ -770,7 +788,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (!operatorSlotNamesValid(slug, slot)) {
       return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badSlot, { detail: 'that programme or slot name is not one this server stores a secret under' });
     }
-    return underSlot(`${slug}\u0000${slot}`, async () => {
+    return underSlot(programmeChainKey(slug), async () => {
       let done: 'removed' | 'none';
       try {
         done = await removeOperatorSecret(deps.ccrcDir, slug, slot);

@@ -253,7 +253,9 @@
      card's content in every viewport and both themes. A FAB that measures itself
      publishes its height and margin as --phone-nav-h (W2 Task S5, D-5471); the
      round `+` does not, so 56px stays the floor. */
-  padding-bottom: calc(max(56px, var(--phone-nav-h)) + var(--sp-6) + var(--safe-bottom));
+  /* The device's inset, not `--safe-bottom`: below 900 the shell lifts `--safe-bottom` above the phone's bottom bar, and `.fleet`
+     around this list already reserves that, so the bar's height is reserved once (desktop-polish PL10, review 1466 F19). */
+  padding-bottom: calc(max(56px, var(--phone-nav-h)) + var(--sp-6) + env(safe-area-inset-bottom, 0px));
 }
 /* The fleet foot's region of work whose session is not listed: a grid item of .fleet-list, like .proj-card, so it
    takes the card's floor. A grid item's automatic minimum is its min-content width, and its rows' words are
@@ -771,7 +773,7 @@
 
 /* Accounts strip, the lanes row (T2c, D-6329): a card per lane, most free first, two columns on a phone and four from
    700px, each card the door to its lane (role="link" in AccountsStrip.tsx, so it declares the tap floor itself:
-   `.account-gauge` below) and All accounts after the last card, a row of its own on a phone. The strip is a plain group
+   `.account-gauge` below) and, at the desk, All accounts after the last card. The strip is a plain group
    while it has cards. Only the placeholder, no lane to show, is itself one door to /accounts (D-161), and so only
    `.accounts-strip[role="link"]` takes the floor and the pointer. */
 .accounts-strip,
@@ -792,16 +794,16 @@
   .accounts-strip,
   .accounts-flyout { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
-/* The end cell: the fold's control (when the strip folds) and then All accounts, a gap between them. Its own row under
-   the cards on a phone (and wherever the cards wrap to two columns); the desk's frame header puts it in the row's
-   next track (shell.css). The two share ONE row at every width and never stack: All accounts keeps its width
+/* The end cell: the fold's control (when the strip folds) and then, at the desk, All accounts, a gap between them. On a
+   phone it holds the control alone, in its own row under the cards (review 1466 F3); the desk's frame header puts it in the
+   row's next track (shell.css). At the desk the two share ONE row and never stack: All accounts keeps its width
    (`flex: none`), and the control gives (`flex: 1 1 0; min-width: 0`), its words wrapping inside it, centred, over
    as many lines as they need. "+13 more · 1 sign-in expired · 1 rate-limited" is 290 to 330px on one line in the
    quiet Button's mono, wider than a phone's share of the cell, and a cell that wrapped its buttons put All accounts
-   on a second 44px row. The quiet variant is `leading-none` with no vertical padding, so the control sets a line
-   height and a little padding of its own for a wrapped line to clear its border; the tap floor (`min-h-tap`) is
-   the Button's, and is kept. The control is the one element here with `aria-controls` (at the desk it names the strip's
-   group; on a phone, the panel it opens). On a phone the open panel is a child of this cell too, between the two, so
+   on a second 44px row (when a phone still drew it). The quiet variant is `leading-none` with no vertical padding, so
+   the control sets a line height and a little padding of its own for a wrapped line to clear its border; the tap floor
+   (`min-h-tap`) is the Button's, and is kept. The control is the one element here with `aria-controls` (at the desk it
+   names the strip's group; on a phone, the panel it opens). On a phone the open panel is a child of this cell too, after the control, so
    `:not([aria-controls])` matches it; its `flex: none` is moot there, since the panel is absolutely positioned (below)
    and out of the flex row. */
 .accounts-end {

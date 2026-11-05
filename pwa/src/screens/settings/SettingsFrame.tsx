@@ -8,7 +8,8 @@
 //   - `/settings/<id>`: the gate's banner, then the section's page, led by its `<h2>`, with Back to the index.
 // The banner (`SignInGateBanner`, settings Task R2b2) holds the same place in the tree in both, so moving between the
 // index and a section keeps its node, and its `role="alert"` is announced once per mount of the frame.
-//   - an unknown id (`settings-section`): the index, with "That section does not exist." above it. Nothing 404s.
+//   - an unknown id (`settings-section`): the index, with "That section does not exist." above it. Nothing 404s, except a
+//     malformed escape (`/settings/%zz`), which is outside the table and never reaches this frame (review 1437 F2).
 //
 // The `<h1>` is "Settings" on every route; `document.title` is "<Section> · Settings · ccrc". Opening a section moves
 // focus to its `<h2>`; Back returns focus to the row it came from. Every read is the frame's one view

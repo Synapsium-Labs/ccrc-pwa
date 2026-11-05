@@ -102,7 +102,8 @@ export function App(): ReactNode {
   const at = matchRoute(path);
   const route = at?.route.id ?? null;
   const sessionId = route === 'session' ? at!.param : null;
-  // `/settings`, a section page, or an id that names none (D-5504): every one is Settings, never the fallback.
+  // `/settings`, a section page, or an id that names none (D-5504): every one is Settings, never the fallback, except a
+  // malformed escape (`/settings/%zz`), which is outside the table (carry C, D-7951; review 1437 F2).
   const settings = route === 'settings' || (route?.startsWith('settings-') ?? false);
   // `/digest?day=YYYY-MM-DD` (D-5300): the screen validates nothing about
   // `day` itself: the server answers 400 for a day that is not a UTC date.

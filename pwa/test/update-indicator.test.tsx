@@ -171,10 +171,13 @@ describe('UpdateIndicator (D-6327)', () => {
     expect(el.closest('footer.shell-status'), 'Instrument 900, session route: in the status bar').not.toBeNull();
     expect(el).toHaveAttribute('data-form', 'status');
     cleanup();
-    // Refined on a phone: a row of the phone header, after the accounts strip.
+    // Refined on a phone: a row of the phone header, after the accounts strip, the header's last row before it. This fixture
+    // has no lane to show, and a phone draws no strip then (its placeholder is a door to the Accounts place, which the bottom
+    // bar holds: PL10 fix round 1, review 1466 F3), so the row follows the header's rows (its first, or its subline).
     el = await mount(REFINED, 899);
     expect(el.closest('header.ref-phone-head'), 'Refined 899: under the phone header').not.toBeNull();
-    expect(el.previousElementSibling?.matches('.accounts-strip'), 'after the accounts strip').toBe(true);
+    expect(el.closest('header.ref-phone-head')!.querySelector('.accounts-strip'), 'no strip with no lane on a phone').toBeNull();
+    expect(el.previousElementSibling?.matches('.ref-phone-row, .ref-phone-sub'), 'after the header rows').toBe(true);
     expect(el).toHaveAttribute('data-form', 'row');
     cleanup();
     // Instrument on a phone: in the fleet column, after the banner stack's slots (asserted below).

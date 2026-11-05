@@ -93,7 +93,7 @@ export const noStoreRoute: { onRequest: (req: FastifyRequest, reply: FastifyRepl
 
 /**
  * The route options of a credential write whose BODY is the credential (programme ledgers plan PL6's secret route, and
- * the Linear key's two writes): its body cap; `noStoreRoute`, so `no-store` is on the answers that come before the gate
+ * the Linear key's writes, five routes in `linear/routes.ts`; review 1440 F7): its body cap; `noStoreRoute`, so `no-store` is on the answers that come before the gate
  * runs (a parse error, an oversize body) as well as on the gate's own; and those body errors as fixed words, because
  * Fastify's own parse error text can quote a fragment of the body. Defined once (review 1389 A6).
  */

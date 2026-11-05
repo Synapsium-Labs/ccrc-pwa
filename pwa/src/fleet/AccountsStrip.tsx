@@ -8,8 +8,8 @@
 // measure), and the desk one line of the freest lanes that fit beside the end cell (the width is `useRowWidth`'s
 // measure, the count `rowFit`'s and `foldShown`'s). The lanes left out are not mounted at all, never hidden by CSS. A
 // folded strip never hides fewer than two lanes, so a short one shows every lane and no control. When it folds, the
-// end cell holds one control before All accounts, worded by `foldWords` alone ("+13 more" and a count of the hidden
-// lanes that need the operator, or "Show fewer"). The desk's choice is kept on the device (`useStripExpanded`); below
+// end cell holds one control (before All accounts, at the desk), worded by `foldWords` alone ("+13 more" and a count of
+// the hidden lanes that need the operator, or "Show fewer"). The desk's choice is kept on the device (`useStripExpanded`); below
 // 900 px the strip is always folded and that choice is neither read nor written. This component only renders what the
 // fold answers and reads no lane count of its own.
 //
@@ -21,9 +21,15 @@
 // `actionDoor('open-lane', …)` that navigates by itself, and Enter activates it as it does an anchor. The cards are
 // ONE tab stop, a roving `tabIndex` (the card last focused, the first at mount), and the arrow keys, Home and End move
 // across the SHOWN cards without wrapping (`rovingStep`); a stop on a lane that folded away falls to the first shown
-// card. After the last card the end cell holds the fold's control, if any, then All accounts, the `go-accounts`
-// command door, the next tab stop; so a phone, where a card is a small target, still has the whole screen one tap
-// away. The row itself is a group, not a door.
+// card. After the last card the end cell holds the fold's control, if any, then, at the desk, All accounts, the `go-accounts`
+// command door, the next tab stop. The row itself is a group, not a door.
+//
+// NO DOOR TO THE ACCOUNTS PLACE ON A PHONE (desktop-polish PL10, D-7952; spec D25; review 1466 F3, the coordinator's ruling
+// of 2026-11-04). Below 900 px the phone's bottom bar holds the Accounts place, and a phone head keeps no door to a bar place:
+// the lane cards are gauges and stay, each its own lane's door, and so does the fold's control, which opens the panel of the
+// lanes the line folds away; All accounts is not drawn, and the end cell is drawn only for the control. With no lane to show
+// the strip is the placeholder door (below) at the desk, and nothing at all on a phone, where the bar's Accounts door is the
+// durable door to the Accounts screen.
 //
 // THE FLYOUT (R120, strip-hover-flyout). At the desk, while the strip is folded, resting the pointer on the line (the
 // group, its end cell included) or moving keyboard focus into it opens `.accounts-flyout`: a panel under the line, drawn over
@@ -53,8 +59,8 @@
 // THE PHONE'S PANEL (S5c, phone-strip-tap-panel). Below 900 px a folded strip has no hover and no stored choice, so its
 // control opens the SAME panel as the desk's flyout (`lanesPanel`: the lanes the line folds away, in `lanesByFree`'s
 // order, each card its lane's door) on a TAP, and on nothing else: not the pointer resting on the strip, not focus, not a tap on a line card
-// (a line card is a door and only navigates). It sits in the DOM inside the end cell, after the control and before All
-// accounts, so Tab goes the control, the panel's cards, All accounts; the stylesheet draws it over the content under
+// (a line card is a door and only navigates). It sits in the DOM inside the end cell, after the control (and, at the
+// desk, before All accounts), so Tab goes the control, the panel's cards, then All accounts at the desk; the stylesheet draws it over the content under
 // the strip, and `--panel-room` (the room left under the strip, measured when it opens and when the window resizes)
 // bounds its height. The control names its state: `aria-expanded` is whether the panel is open, `aria-controls` is its
 // id. It closes on a second tap of the control, a tap outside the strip and the panel (a document `pointerdown`),
@@ -63,12 +69,13 @@
 // another layer has handled is that layer's: the palette and the ask surface stop it in the capture phase, so the
 // panel never sees it, and a default-prevented one is left alone. A close that finds focus in the panel (or on the
 // page, where a panel that just left the DOM drops it) hands it to the control, or to the line's tab stop when a poll
-// took the control in the same commit, or to the placeholder door when it left no live lane; focus anywhere else
+// took the control in the same commit, or to the placeholder door when it left no live lane (on a phone, where no
+// placeholder is drawn, the page keeps it); focus anywhere else
 // stays where it is (the same hand-back as the flyout's). Crossing back to a phone does not reopen it. Presentation
 // state, per mount.
 //
-// THE PLACEHOLDER DOOR (D-161). With no lane to show the strip is exactly one `go-accounts` door and never renders
-// nothing. As a full-width readout of meters the strip read as DATA rather than navigation, so an operator hunting for
+// THE PLACEHOLDER DOOR (D-161). With no lane to show the strip is exactly one `go-accounts` door at the desk and never
+// renders nothing there (on a phone it renders nothing, above: the bottom bar's Accounts door is that door). As a full-width readout of meters the strip read as DATA rather than navigation, so an operator hunting for
 // the passkey enrolment button on the screen behind it never found it. FleetScreen's header now carries a named
 // control ("Account — your sign-in and accounts"), and PasskeyNotice is a third route in the one posture that most needs it, but
 // the state the strip used to bail out on entirely (every lane markered `-disabled`, or no poll landed or succeeded
@@ -303,6 +310,7 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
   // With no lane to show the strip is the `go-accounts` door itself: it asks the command layer, which navigates, as the
   // palette's "Go to Accounts" does.
   if (placeholder !== null) {
+    if (!desk) return null;
     const door = commandDoor('go-accounts');
     // role="link" (not "button"): this mirrors an <a> to /accounts, so it takes the anchor's own keyboard contract:
     // Enter activates, Space does not (Space belongs to role="button"). tabIndex=0 is what makes a <div> reach the
@@ -498,7 +506,7 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
     >
       {shown.map((a, i) => laneCard(a, i, shown, stop, cardRefs.current, setStopId))}
       {flyShown && lanesPanel(flyHeld)}
-      <div className="accounts-end" ref={endRef}>
+      {(desk || fold.foldable) && <div className="accounts-end" ref={endRef}>
         {/* Rendered iff the fold folds, the same element folded and expanded (never keyed on state), so focus stays on
             it across a toggle. Its words are its name; it is no door (no data-command, no data-action). At the desk it
             pins the strip open and names the cards' group; on a phone it opens the panel, which follows it, and names
@@ -516,8 +524,8 @@ export function AccountsStrip({ store = useFleetStore }: { store?: FleetStore } 
           </Button>
         )}
         {panelShown && lanesPanel(panelHeld, { id: panelId, room: panelRoom, onOpenLane: closePanel })}
-        <Button variant="ghost" size="fit" {...commandDoor('go-accounts')}>{ALL_ACCOUNTS}</Button>
-      </div>
+        {desk && <Button variant="ghost" size="fit" {...commandDoor('go-accounts')}>{ALL_ACCOUNTS}</Button>}
+      </div>}
     </div>
   );
 }

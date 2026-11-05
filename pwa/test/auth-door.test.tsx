@@ -55,7 +55,6 @@ import { renderSettings } from './settingsHost';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
 import { TEST_ROSTER } from './rosterFixture';
-import { labelInName, shownText } from './labelInName';
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -181,35 +180,18 @@ const renderSecurity = (): void => { renderSettings('security'); };
 // ── 1. the door ─────────────────────────────────────────────────────────────
 
 describe('the durable door to /accounts (D-161)', () => {
-  it('sits in the fleet header, says what it is, and routes there', async () => {
-    stubFetch({ authed: true, passkeysEnrolled: 1, mode: 'passphrase' });
-    const store = makeStore();
-    renderFleet(<FleetScreen store={store} />);
-    // Its name now leads with the word it shows, "Account" (label in name, D-7897).
-    const door = screen.getByRole('button', { name: 'Account — your sign-in and accounts' });
-    // In the header's control cluster, beside the mail badge and the bell —
-    // not somewhere down the list where it would be a second strip.
-    expect(door.closest('.fleet-head-right')).not.toBeNull();
-    // NOT icon-only. An unlabelled glyph would be exactly as undiscoverable as
-    // the strip this exists to replace, which is the whole defect.
-    expect(door.textContent).toMatch(/account/i);
-    // And a voice user saying that word reaches it: the word is in the name.
-    expect(labelInName(shownText(door), door.getAttribute('aria-label') ?? '')).toBe(true);
-    fireEvent.click(door);
-    expect(location.pathname).toBe('/accounts');
-  });
-
-  it('renders on a fleet with no sessions at all — the first-run state needs it most', () => {
-    // D-2's rule, the one AccountsStrip and the runs row are both already
-    // moved out of the populated arm for: the only door must never render
-    // nothing. A brand-new box has zero sessions and an operator who has
-    // never signed in anywhere.
+  // Since desktop-polish PL10 (D-7952; the coordinator's ruling of 2026-11-04) the phone's bottom bar is the phone's one
+  // navigation: its Accounts door is the durable door, on every page but an open session and on a fleet with no sessions
+  // (`test/phone-bar.test.tsx`), and at a desk the bar's tab and the rail's item are. The fleet header holds no second one.
+  it('the fleet header holds no Account door: the bottom bar\'s Accounts door is the durable one', () => {
     stubFetch({ authed: true, passkeysEnrolled: 1, mode: 'passphrase' });
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     act(() => { store.setState({ conn: 'open', sessions: [] }); });
-    // Its name now leads with the word it shows, "Account" (label in name, D-7897).
-    expect(screen.getByRole('button', { name: 'Account — your sign-in and accounts' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Account — your sign-in and accounts' })).toBeNull();
+    expect(document.querySelector('.fleet-head-right .accounts-door')).toBeNull();
+    // Settings, a door the bar does not hold, stays in the header.
+    expect(screen.getByRole('button', { name: 'Settings — updates and notifications' }).closest('.fleet-head-right')).not.toBeNull();
   });
 });
 

@@ -88,21 +88,25 @@ const head = (): HTMLElement => {
   expect(h, 'the phone header is mounted').not.toBeNull();
   return h!;
 };
+// The header's one door since PL10: the places it held are the phone's bottom bar's (desktop-polish PL10, D-7952; the
+// coordinator's ruling on PL10's question, 2026-11-04).
 const DOORS = [
-  ['go-waiting', 'Waiting on you'],
-  ['go-inbox', 'Inbox'],
-  ['go-runs', 'Runs'],
-  ['go-docs', 'Docs'],
   ['go-settings', 'Settings'],
 ] as const;
+/** The phone's bottom bar (`PhoneBar`, inside the frame's `<nav aria-label="Navigation">`). */
+const phoneBar = (): HTMLElement => {
+  const b = document.querySelector<HTMLElement>('nav.shell-phone-nav');
+  expect(b, 'the bottom bar is mounted').not.toBeNull();
+  return b!;
+};
 
 describe("Refined's phone header (W2 Task S5)", () => {
-  it('the phone header holds the wordmark and the five doors, each with its word as its accessible name, each at least --tap-min, each carrying its data-command', () => {
+  it('the phone header holds the wordmark and the Settings door, with its word as its accessible name, at least --tap-min, carrying its data-command; the places are the bottom bar\'s', () => {
     atWidth(390);
     render(<App />);
     const h = head();
     expect(h.querySelector('[data-wordmark]'), 'the identity core').not.toBeNull();
-    const doors = [...within(h).getByRole('navigation', { name: 'Primary' }).querySelectorAll<HTMLElement>('[data-command]')];
+    const doors = [...h.querySelectorAll<HTMLElement>('.ref-phone-doors [data-command]')];
     expect(doors.map((d) => d.getAttribute('data-command'))).toEqual(DOORS.map(([id]) => id));
     for (const [i, [, word]] of DOORS.entries()) {
       expect(doors[i], word).toHaveAccessibleName(word);
@@ -111,12 +115,13 @@ describe("Refined's phone header (W2 Task S5)", () => {
       expect(doors[i], `${word} is at least --tap-min wide`).toHaveClass('min-w-tap');
       expect(doors[i]!.className, word).not.toMatch(/(^|\s)h-\d/);
     }
-    // A door runs its command: the layer navigates.
-    fireEvent.click(within(h).getByRole('button', { name: 'Runs' }));
+    expect(within(h).queryByRole('navigation'), 'the header is no second navigation').toBeNull();
+    // The places are the bar's, and a door there runs its command: the layer navigates.
+    fireEvent.click(within(phoneBar()).getByRole('button', { name: 'Runs' }));
     expect(location.pathname).toBe('/runs');
   });
 
-  it("a badged door's name carries its count", () => {
+  it("a badged door's name carries its count (the bottom bar's, since PL10)", () => {
     // Only what waits on the operator is counted (T2d, D-6330): two sessions ask, and one run's worker is one of them.
     const sessions = [
       fleetSession({ id: 'ask-a', bucket: 'attention' }),
@@ -128,7 +133,7 @@ describe("Refined's phone header (W2 Task S5)", () => {
     atWidth(390);
     render(<App />);
     act(() => useFleetStore.setState({ conn: 'open', sessions, fleetFrameSeen: true, runs: [run(1, 'ask-a'), run(2, 'calm')], runsFrameSeen: true }));
-    const h = head();
+    const h = phoneBar();
     expect(within(h).getByRole('button', { name: 'Inbox, 2 waiting for you' })).toHaveAttribute('data-command', 'go-inbox');
     expect(within(h).getByRole('button', { name: 'Runs, 1 needs you' })).toHaveAttribute('data-command', 'go-runs');
     act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'calm', bucket: 'idle' })] }));
@@ -137,11 +142,11 @@ describe("Refined's phone header (W2 Task S5)", () => {
   });
 
   // Desktop-polish PL5a (D-7712): the phone's Waiting on you door counts open items plus questions, never an item being checked.
-  it("the Waiting on you door's name carries its count, and prints no badge before the waiting frame", () => {
+  it("the Waiting on you door's name carries its count, and prints no badge before the waiting frame (the bottom bar's, since PL10)", () => {
     atWidth(390);
     render(<App />);
     act(() => useFleetStore.setState({ conn: 'open', fleetFrameSeen: true, sessions: [fleetSession({ id: 'ask-a', bucket: 'attention' })] }));
-    const h = head();
+    const h = phoneBar();
     expect(within(h).getByRole('button', { name: 'Waiting on you' })).toHaveAttribute('data-command', 'go-waiting');
     act(() => useFleetStore.setState({
       waiting: waitingView({ items: [itemView({ id: 1 }), itemView({ id: 2, state: 'checking' })] }),
@@ -207,7 +212,7 @@ describe("Refined's phone header (W2 Task S5)", () => {
     expect(published()).toBe('');
   });
 
-  it("the phone header shows the full strip: each lane's 5h and 7d rows, each card its lane's door, All accounts the go-accounts door", async () => {
+  it("the phone header shows the full strip: each lane's 5h and 7d rows, each card its lane's door, and no go-accounts door (PL10: the bar holds Accounts)", async () => {
     const lanes = [lane('lane-a', 30, 80), lane('lane-b', 12, null), lane('lane-c', null, 5), lane('lane-d', 1, 2), lane('lane-e', 3, 4)];
     vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: lanes, projected: { wrapper: 'lane-a', score: 0 }, roster: [] });
     atWidth(390);
@@ -215,7 +220,8 @@ describe("Refined's phone header (W2 Task S5)", () => {
     const strip = await within(head()).findByRole('group', { name: /^account usage, highest lane-a 80%/ });
     await within(strip).findByText('lane-a');
     expect(strip).toHaveClass('accounts-strip');
-    // The strip is no door itself: its cards are, and the end cell's All accounts is the `go-accounts` door.
+    // The strip is no door itself: its cards are. Below 900 the bottom bar holds the Accounts place, so the phone head draws no
+    // `go-accounts` door, All accounts included (desktop-polish PL10, review 1466 F3).
     expect(strip).not.toHaveAttribute('data-command');
     const cards = [...strip.querySelectorAll<HTMLElement>('.account-gauge')];
     expect(cards).toHaveLength(lanes.length);
@@ -228,16 +234,12 @@ describe("Refined's phone header (W2 Task S5)", () => {
     expect(windows(cards.find((c) => name(c) === 'lane-c')!)).toEqual(['7d']);
     // One readout of the lanes on the page: the full strip is the phone's.
     expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
-    // A card opens its lane; All accounts is a command door, which the layer navigates.
+    expect(within(head()).queryByRole('button', { name: 'All accounts' })).toBeNull();
+    expect(head().querySelector('[data-command="go-accounts"]')).toBeNull();
+    // A card opens its lane.
     fireEvent.click(cards.find((c) => name(c) === 'lane-b')!);
     expect(location.pathname).toBe('/accounts');
     expect(location.search).toBe('?lane=lane-b');
-    act(() => { navigate('/'); });
-    const all = await within(head()).findByRole('button', { name: 'All accounts' });
-    expect(all).toHaveAttribute('data-command', 'go-accounts');
-    fireEvent.click(all);
-    expect(location.pathname).toBe('/accounts');
-    expect(location.search).toBe('');
   });
 
   // The strip folds at every width (S5b, D-6530): four cards on a phone, whatever its width, and the control's words say
@@ -258,8 +260,8 @@ describe("Refined's phone header (W2 Task S5)", () => {
     expect(cardNames(strip)).toEqual(['lane-a', 'lane-f', 'lane-with-a-very-long-name-q', 'lane-e']);
     const more = within(strip).getByRole('button', { name: '+13 more · 1 sign-in expired · 1 rate-limited' });
     expect(more).toHaveAttribute('aria-expanded', 'false');
-    // The end cell holds the control, then All accounts: still one strip on the page.
-    expect(more.closest('.accounts-end')!.lastElementChild).toBe(within(strip).getByRole('button', { name: 'All accounts' }));
+    // The end cell holds the control alone (no All accounts below 900: PL10, review 1466 F3): still one strip on the page.
+    expect([...more.closest('.accounts-end')!.children]).toEqual([more]);
     expect(document.querySelectorAll('.accounts-strip')).toHaveLength(1);
   });
 

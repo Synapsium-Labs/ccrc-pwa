@@ -69,7 +69,8 @@ edits no ledger.
   mounts it (`pl9-banners-above-the-swapped-column`). The first version of this note said "nothing they own is lost", which
   was false for Instrument's banners. The item route does not draw the build readout (`BuildLine`, in both skins),
   the pool-lag readout (in both skins: Refined's desk column draws it in the fleet's head too), Refined's count line (its
-  frame has no status bar to print it) or the fleet column's hidden stale-update live region (review 1402, A-2), and because the
+  frame has no status bar to print it), Refined's runs line and its class chooser, the hot-files strip and the conflict chip
+  (both skins; review 1437 F3) or the fleet column's hidden stale-update live region (review 1402, A-2), and because the
   banner stack is mounted again on entering and on leaving the route, it loses its state there too: the "+n more" fold, the
   halt banner's and the host banner's confirm states, and the passkey notice, which reads `/api/auth/status` again (A-4).
 - `pl9-steps-items-only`: Previous and Next step from item to item. A session's question is a row of the list but opens its

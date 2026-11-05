@@ -517,7 +517,7 @@ export function refusalText<K extends string>(err: unknown, table: Readonly<Reco
 export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'programme-ended' | 'programme-unclaimed' | 'not-open' | 'duplicate' | 'programme-live' | 'use-secret-route'
   | 'not-a-secret-item' | 'bad-slot' | 'stored-not-ticked' | 'secret-not-one-line' | 'slot-busy' | 'secret-not-stored'
-  | 'secrets-unreadable' | 'remove-failed' | 'secret-name-collides' | 'bad-request' | 'too-large' | 'unknown-item' | 'not-configured', string
+  | 'secrets-unreadable' | 'remove-failed' | 'secret-name-collides' | 'outside-doc-link' | 'bad-request' | 'too-large' | 'unknown-item' | 'not-configured', string
 >> = {
   'programme-ended': 'This programme has no open run, so no coordinator is waiting for this. Dismiss the item instead.',
   'programme-unclaimed': 'This programme has an open run, but no coordinator holds it, so nobody would see your tick. Abandon that run from the Runs screen first, or wait for a coordinator to take it.',
@@ -535,8 +535,11 @@ export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'secret-not-stored': 'No secret is stored there any more. The list will update.',
   'secrets-unreadable': 'The stored secrets of this programme could not be read on the box.',
   'remove-failed': "The box couldn't remove that secret, so it is still stored. Try again.",
-  // A programme or slot name that differs from a stored one only by capital letters (review 1416 F3).
-  'secret-name-collides': 'The box already keeps a secret under a name that differs from this one only in capital letters, so nothing was saved. Ask the coordinator to raise the item again with the same spelling as before.',
+  // A programme or slot name that differs from a stored one only by capital letters (review 1416 F3). The recourse is the
+  // stored one's Remove, which also removes a programme folder it empties (review 1440 F2), or a hand removal on the box.
+  'secret-name-collides': "A secret for this programme is already stored under a name spelled differently, only in capital letters, so nothing was saved. Remove that stored secret from its programme's Stored secrets (or from the box by hand), then save this one again.",
+  // The raise route's word (desktop-polish PL10, D-7952): the coordinator's own refusal, said here in case one reaches the console.
+  'outside-doc-link': 'That item linked a document outside the console, so it was not raised. A document link is its repository path, which opens in Docs.',
   'bad-request': `The server did not accept that answer. An answer is between 1 and ${ANSWER_MAX} characters; shorten it and try again.`,
   'too-large': 'That answer, with its note, is too long to send to the coordinator. Shorten it and try again.',
   'unknown-item': 'The server has no such item any more. The list will update.',

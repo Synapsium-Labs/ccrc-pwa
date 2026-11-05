@@ -30,12 +30,13 @@ import {
 } from '../../../shared/ledgers';
 import type { StepUpDeps } from '../accounts/useStepUp';
 import { fleetHues } from '../fleet/programmeBoxes';
-import { programWave, programmeTitle, runHomeProject, waveOfWords } from '../fleet/runWords';
+import { programWave, programmeTitle, waveOfWords } from '../fleet/runWords';
 import { api } from '../lib/api';
 import { navigate } from '../lib/router';
 import { ROUTES, sessionPath } from '../lib/routes';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
-import { GoalsPanel } from './GoalsPanel';
+import { GoalsPanel, SpecLink } from './GoalsPanel';
+import { homeProjectOf, specHref } from './ledgerLinks';
 import { EMPTY_WORD, NO_FRAME_WORD, ageWords, groupByProgramme, listGroups, openRunsOf, questionRows, type ItemList } from './ledgerWords';
 import { STORED_TEXT, StoredSecretRemove, removeStoredSecret, type RemoveSecret } from './ItemView';
 import { Back, itemPath, useHeard, useUnavailable } from './WaitingRoutes';
@@ -65,13 +66,6 @@ function useGoalsRead(slug: string): GoalsRead {
     return () => { live = false; };
   }, [slug]);
   return read.slug === slug ? read.read : 'reading';
-}
-
-/** The newest run of the programme that names a home project: the repository whose Docs hold its spec. `null` when none does. */
-function homeProjectOf(slug: string, runs: readonly RunSummary[]): string | null {
-  const mine = runs.filter((r) => r.program === slug).sort((a, b) => b.id - a.id);
-  for (const r of mine) { const home = runHomeProject(r); if (home !== null) return home; }
-  return null;
 }
 
 const NO_RUNS: readonly RunSummary[] = [];
@@ -238,17 +232,22 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets }: {
   const list: ItemList = { at: 'programme', programme: slug };
   const stored = useStoredSecrets(slug, secretItemsKey(slug, view), secrets?.read ?? readStoredSecrets);
   const now = Date.now();
+  const home = homeProjectOf(slug, heard);
+  // The head's Spec link reads the pin the Goals card draws: the frame's copy, else the fetched one (PL10, D-7952; D26).
+  const pinned = held ?? (read !== 'reading' && read !== 'failed' ? read : null);
+  const title = programmeTitle(slug, heard);
   return (
     <div className="wl pv" data-program={slug} data-hue={hue}>
       <header className="pv-head" data-hue={hue}>
         <Back to={FLEET_PATH} label="Back to Fleet" />
         <span className="pv-kicker">Programme</span>
-        <h1 className="pv-title">{programmeTitle(slug, heard)}</h1>
+        <h1 className="pv-title">{title}</h1>
         {wave !== null && <span className="pv-sub">{waveOfWords(wave)}</span>}
+        <SpecLink href={specHref(pinned?.specPath ?? null, home)} programme={title} className="pv-spec" />
       </header>
       <div className="pv-two">
         <div className="pv-card">
-          <GoalsCard read={read} held={held} homeProject={homeProjectOf(slug, heard)} heldItems={heldItems} list={list} />
+          <GoalsCard read={read} held={held} homeProject={home} heldItems={heldItems} list={list} />
         </div>
         <WaitingCard slug={slug} view={view} sessions={sessions} runs={runs} unavailable={unavailable} now={now} list={list}
                      stored={<StoredSecretsSection slug={slug} secrets={stored.secrets} now={now} onRemoved={stored.reread}

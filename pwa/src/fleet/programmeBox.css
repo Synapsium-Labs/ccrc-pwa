@@ -67,6 +67,17 @@
    whole line is cut. The Status view's project name (Task G3) is cut the same way. */
 .pg-title,
 .pg-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The title as a door into the programme view (desktop-polish PL10, D26 amended): the title's own ink and cut, underlined so it
+   reads as a way in, and under a coarse pointer a box at the tap floor. The Spec link beside it is the same: a text link in the
+   kicker's ink on the kicker's tint, the gated pair. */
+.pg-title-door,
+.pg-spec { display: inline-flex; align-items: center; min-width: 0; color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.pg-title-door { flex: 0 1 auto; }
+.pg-spec { flex: none; }
+@media (pointer: coarse) {
+  .pg-title-door,
+  .pg-spec { min-height: var(--tap-min); }
+}
 .pg-prog { margin-left: auto; display: flex; align-items: center; gap: var(--sp-1); flex: none; }
 .pg-count { white-space: nowrap; }
 /* The waiting chip (desktop-polish PL5b): "N waiting on you", a `Door` to the programme's view. It is NOT tinted and not the

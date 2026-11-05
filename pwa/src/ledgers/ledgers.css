@@ -65,6 +65,12 @@
 .wl-group[data-hue='magenta'] { --pg: var(--prog-magenta); }
 .wl-group[data-hue='blue'] { --pg: var(--prog-blue); }
 .wl-ghead { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+/* The programme's Spec link, at the end of its group's heading and of the programme view's head (desktop-polish PL10, D-7952;
+   D26): a text link in the page's own ink on the page's ground, and under a coarse pointer a box at the tap floor. */
+.wl-gspec, .pv-spec, .wi-spec { margin-left: auto; font-size: var(--fs-meta); }
+@media (pointer: coarse) {
+  .wl-gspec, .pv-spec, .wi-spec { display: inline-flex; align-items: center; min-height: var(--tap-min); }
+}
 .wl .wl-gtitle { font-weight: var(--weight-medium); font-size: var(--fs-base); color: var(--ink-primary); overflow-wrap: anywhere; }
 .wl .wl-gwave { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
 .wl-items { display: grid; gap: var(--sp-1); list-style: none; margin: 0; padding: 0; }
@@ -109,7 +115,17 @@
 .wi-band[data-hue='blue'] { --pg: var(--prog-blue); --pg-tint: var(--prog-blue-tint); --pg-ink: var(--prog-blue); }
 /* The programme's name: its hue on its own tint (the pair `.pg-kicker` is gated on), ink on the surface when it has no hue. */
 .wi-band .wi-prog { font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--pg-ink); overflow-wrap: anywhere; }
-.wi-band .wi-prog + .wi-pill { margin-left: auto; }
+.wi-band .wi-prog-door { font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--pg-ink); overflow-wrap: anywhere; }
+.wi-band .wi-prog + .wi-pill,
+.wi-band .wi-prog-door + .wi-pill { margin-left: auto; }
+/* With pills the Spec link follows the last one, so the pills keep the band's end and the free space stays before them (review
+   1466 F13); with none it takes the free space itself, as every Spec link does. */
+.wi-band .wi-pill + .wi-spec { margin-left: 0; }
+/* The name as a door into the programme view (PL10, D26): a class of its own, since `TextLink` wears it
+   (`hook-class-collision.test.ts`), under a coarse pointer at the tap floor. */
+@media (pointer: coarse) {
+  .wi-band .wi-prog-door { display: inline-flex; align-items: center; min-height: var(--tap-min); }
+}
 .wi-detail { display: grid; grid-template-columns: minmax(0, 1fr) 21rem; gap: var(--sp-3); align-items: start; }
 @media (max-width: 900px) { .wi-detail { grid-template-columns: minmax(0, 1fr); } }
 .wi-card { display: grid; gap: var(--sp-2); padding: var(--sp-3); min-width: 0; background: var(--bg-surface); color: var(--ink-primary); border: 1px solid var(--edge-subtle); border-radius: var(--r-md); }
@@ -163,6 +179,17 @@
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; max-width: var(--wl-measure);
   padding: var(--sp-2) var(--sp-2) 0; background: var(--bg-page); color: var(--ink-primary);
 }
+/* On a phone the strip stays in view while the operator reads a long item, so stepping through the decisions never needs a
+   scroll back up (desktop-polish PL10, D-7952; D25). The page scrolls the document there, so the strip sticks to the viewport's
+   top on its own ground; at a desk the item scrolls in its pane beside the list, where the strip has always been in reach. In
+   reach is below the status bar: an installed app draws under it, so the strip's own opaque ground covers the top inset and its
+   controls sit under it, at rest and stuck (review 1466 F2). */
+@media (max-width: 899.98px) {
+  .wi-nav {
+    position: sticky; top: 0; z-index: var(--z-header);
+    padding-top: calc(var(--sp-2) + var(--safe-top)); padding-bottom: var(--sp-2);
+  }
+}
 /* The buttons are flex boxes, which drop a space beside the glyph: the gap is that space. */
 .wi-nav .wi-back,
 .wi-nav .wi-step { gap: var(--sp-1); }
@@ -179,10 +206,11 @@
 .wl-beside { max-width: none; }
 /* The fleet's banner stack above the list beside an item, in a skin that draws it in its left column (Instrument; follow-up
    F1): the fleet column's own top space, side gutters and gap (`.fleet`, fleet.css: the same tokens), so a banner sits where
-   it sits on the list. The stack's slots are `display: contents`, so their banners are this box's own items. The stack keeps
-   every slot mounted, empty when its banner does not show, so the box is never `:empty`: its room is given only while a banner
-   draws, by Refined's own test for the same fact (`.shell-banners` in refined.css), and with none the box takes no room
-   (carry C, D-7951; review 1408 F1). */
+   it sits on the list. The stack's slots are `display: contents`, so their banners are this box's own items. Some slots stay
+   mounted while their banner does not show (the notice and resume slots mount only while they apply, and a folded slot holds
+   a hidden banner), so whether the box is `:empty` says nothing: its room is given only while a banner draws, by Refined's own
+   test for the same fact (`.shell-banners` in refined.css), and with none the box takes no room (carry C, D-7951; review 1408
+   F1; review 1437 A11). */
 .wl-banners { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
 .wl-banners:has(> .banner-slot > *, > .banner-more) { padding: calc(var(--sp-3) + var(--safe-top)) var(--sp-4) 0; }
 .wl-beside .wl-item { grid-template-columns: minmax(0, 1fr); }

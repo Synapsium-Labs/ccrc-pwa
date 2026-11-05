@@ -7,29 +7,24 @@
 // A change that came from a Waiting on you item links to it through `itemHref`, which the screen hands in (it knows the
 // route and what the list still holds), so this file still names no route and reads no store.
 //
-// The Docs link is the one thing built here, and it is built only from a checked path: `isSpecPath` (under the specs
-// directory, Markdown, no `..`) in a project that passes the project grammar. A pin that fails either draws no link
-// (plan Review Focus 5, PWA side). The URL goes through `docsPageUrl(docsLocation(...))` as every Docs link does
-// (refinement (q)); the Docs reader serves merged content only, so a change whose PR has not merged says so.
+// The Docs link is built only from a checked path: `isSpecPath` (under the specs directory, Markdown, no `..`) in a project
+// that passes the project grammar. A pin that fails either draws no link (plan Review Focus 5, PWA side). Its one builder is
+// `specHref` in `ledgerLinks.ts` (desktop-polish PL10, D-7952), which the item band, each programme group and the programme
+// view's head ask too; the Docs reader serves merged content only, so a change whose PR has not merged says so.
 import type { ReactNode } from 'react';
 import { TextLink } from '@ccrc/ui';
-import { docsPageUrl, isDocsProject } from '../../../shared/docs';
-import { isSpecPath, type GoalsView } from '../../../shared/ledgers';
-import { docsLocation } from '../docs/docsLinks';
+import type { GoalsView } from '../../../shared/ledgers';
 import { inAppClick } from '../fleet/settingsText';
 import { releaseDate } from '../lib/format';
+import { specHref } from './ledgerLinks';
 
-const SPECS_DIR = 'docs/superpowers/specs/';
-
-/** The Docs page of the pinned spec in the programme's home project, or null: no pin, a path that is not a spec
- *  path, or no usable home project. Null has those three meanings and no caller needs to tell them apart. */
-function specHref(specPath: string | null, homeProject: string | null): string | null {
-  if (specPath === null || homeProject === null) return null;
-  if (!isSpecPath(specPath) || !isDocsProject(homeProject)) return null;
-  return docsPageUrl(docsLocation(
-    { kind: 'project', project: homeProject, ref: null },
-    { kind: 'path', section: 'specs', path: specPath.slice(SPECS_DIR.length), dirSlash: false },
-  ));
+/** The "Spec" link wherever the ledgers name a programme (desktop-polish PL10, D-7952; spec §2, D26): the item band, each
+ *  programme group of the combined list and the programme view's head. `href` is `specHref`'s or `programmeSpecHref`'s answer;
+ *  null draws nothing, so a programme with no pin has no link. Its name says whose spec it opens, since a list holds several. */
+export function SpecLink({ href, programme, className }: { href: string | null; programme: string; className?: string }): ReactNode {
+  return href === null ? null : (
+    <TextLink href={href} onClick={inAppClick(href)} aria-label={`Spec for ${programme}`} className={className}>Spec</TextLink>
+  );
 }
 
 /** "Open the item" for a change that came from one, when the screen has a page to send it to. */

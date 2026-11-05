@@ -292,13 +292,19 @@ describe.each(SKINS)('moving between items in %s', (skin) => {
       expect(Math.abs(item.top - list.top), `gap above ${JSON.stringify(at)}`).toBeLessThanOrEqual(1);
     });
 
-    // Carry C (D-7951), review 1408 F1: the stack keeps every slot mounted, so with no banner to show the box must take no
-    // room: the list beside the item starts at the top of the left column, as it did before the box (Instrument). Refined
-    // draws no box there at all.
+    // Carry C (D-7951), review 1408 F1: slots stay mounted while their banner does not show, so with no banner to show the box
+    // must take no room: the list beside the item starts at the top of the left column, as it did before the box (Instrument).
+    // Refined draws no box there at all; its one stack is under its bar, and that box takes no room either by its own `:has`
+    // test, so Refined's branch bears load on that rule (review 1437 A3: it passed with or without the gate before).
     it(`at ${width}: with no banner to show, the box above the list beside an item takes no room`, async () => {
       const { ctx, page, errors } = await open(skin, width, '/waiting/1');
       try {
         await page.waitForSelector('.shell-nav .wl-beside', { timeout: 20_000 });
+        const desk = await page.evaluate(() => {
+          const box = document.querySelector<HTMLElement>('.ref-frame > .shell-banners');
+          if (box === null) return null;
+          return { shown: box.querySelectorAll(':scope > .banner-slot > *, :scope > .banner-more').length, height: box.getBoundingClientRect().height };
+        });
         const at = await page.evaluate(() => {
           const box = document.querySelector<HTMLElement>('.shell-nav .wl-banners');
           if (box === null) return null;
@@ -315,6 +321,9 @@ describe.each(SKINS)('moving between items in %s', (skin) => {
           expect(at!.besideTop, `the list's top in the column ${JSON.stringify(at)}`).toBeLessThanOrEqual(0.5);
         } else {
           expect(at, 'Refined draws its stack under its bar, not in the column').toBeNull();
+          expect(desk, 'Refined\'s stack under its bar').not.toBeNull();
+          expect(desk!.shown, 'no banner shows in this fixture').toBe(0);
+          expect(desk!.height, `Refined's empty stack under its bar ${JSON.stringify(desk)}`).toBeLessThanOrEqual(0.5);
         }
         expect(errors).toEqual([]);
       } finally {

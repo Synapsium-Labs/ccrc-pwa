@@ -388,8 +388,16 @@ describe('ROUTES and the ladder, both ways', () => {
   ];
   const placeholder = (): Element | null => document.querySelector('.shell-placeholder');
 
+  // The probes the table must place outside itself, named here rather than read back from `matchRoute`, so a row that starts
+  // taking one (the programme row without its `accepts`, M12) is red here too, not only in its own case (review 1437 A3).
+  const OUTSIDE = new Set([
+    '/nope', '/docsearch', '/docs-x', '/s/', '/runsx', '/mail/x', '/waiting/x', '/waiting/7/y', '/waitingx',
+    '/programmes', '/programmes/a/b', '/programmesx', '/programmes/a.b', '/programmes/%zz', '/s/%zz', '/settings/%zz', '/settings/a/b',
+  ]);
+
   it('every ROUTES row is reached by a probe, and every probe renders what the table says', () => {
     for (const r of ROUTES) expect(PROBES.some((p) => r.pattern.test(p)), `no probe for ${r.id}`).toBe(true);
+    for (const p of PROBES) expect(matchRoute(p) === null, `${p} is ${OUTSIDE.has(p) ? '' : 'not '}outside the table`).toBe(OUTSIDE.has(p));
     for (const p of PROBES) {
       navigate(p);
       const view = render(<App />);

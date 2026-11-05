@@ -175,7 +175,8 @@ describe('AccountsStrip', () => {
     expect(importsBuilder).toBe(true);
   });
 
-  it('after the last card, All accounts is the go-accounts door', async () => {
+  it('at the desk, after the last card, All accounts is the go-accounts door; on a phone there is none (PL10, review 1466 F3)', async () => {
+    stubDesk(1300);
     stubAccounts(threeLanes());
     const { container } = render(<AccountsStrip />);
     await screen.findByText('lane-a');
@@ -187,6 +188,16 @@ describe('AccountsStrip', () => {
     const last = cardsOf(container).at(-1)!;
     expect(last.compareDocumentPosition(all) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(all.closest('.accounts-end')!.parentElement).toBe(container.querySelector('.accounts-strip'));
+    // Below 900 the bottom bar holds the Accounts place, so the strip draws no door to it: the cards stay, each its lane's door,
+    // and with nothing to fold there is no end cell at all.
+    cleanup();
+    vi.unstubAllGlobals();
+    const phone = render(<AccountsStrip />);
+    await screen.findByText('lane-a');
+    expect(cardsOf(phone.container)).toHaveLength(3);
+    expect(screen.queryByRole('button', { name: 'All accounts' })).toBeNull();
+    expect(phone.container.querySelector('[data-command="go-accounts"]')).toBeNull();
+    expect(phone.container.querySelector('.accounts-end')).toBeNull();
   });
 
   it('with lanes to show the strip is a group named over every live lane, no link and no tab stop; with none it is the go-accounts door', async () => {
@@ -218,6 +229,7 @@ describe('AccountsStrip', () => {
   });
 
   it('the cards are one tab stop: arrows, Home and End move focus and the stop, stop at either end, and Tab goes on to All accounts', async () => {
+    stubDesk(1300); // All accounts is the desk's (PL10, review 1466 F3)
     stubAccounts(threeLanes());
     const user = userEvent.setup();
     const { container } = render(<AccountsStrip />);
@@ -288,6 +300,7 @@ describe('AccountsStrip', () => {
   });
 
   it('arrow keys pressed on All accounts leave the cards\' tab stop where it was', async () => {
+    stubDesk(1300); // All accounts is the desk's (PL10, review 1466 F3)
     stubAccounts(threeLanes());
     const user = userEvent.setup();
     const { container } = render(<AccountsStrip />);
@@ -349,7 +362,9 @@ describe('AccountsStrip', () => {
   // the desktop top bar down with it (shell.css's `.shell-accounts:empty`).
   // Losing the gauges is fine — losing the one way to REACH the screen that
   // explains why the gauges are gone is the bug.
-  describe('never disappears, even with nothing to gauge (Task 6 review fix)', () => {
+  describe('never disappears at the desk, even with nothing to gauge (Task 6 review fix)', () => {
+    // The placeholder is the desk's: on a phone the bottom bar's Accounts door is the durable door (PL10, review 1466 F3).
+    beforeEach(() => { stubDesk(1300); });
     // These two click the strip, a command door now (desktop-polish S5a): they mount the layer that navigates.
     it('stays a tappable link when every reporting lane is disabled', async () => {
       stubAccounts([acct({ wrapper: 'claude', disabled: true }), acct({ wrapper: 'claude9', disabled: true })]);
@@ -381,6 +396,20 @@ describe('AccountsStrip', () => {
       expect(screen.getByText(/checking accounts…/i)).toBeInTheDocument();
       expect(screen.queryByText(/no accounts reporting/i)).not.toBeInTheDocument();
     });
+
+    // Desktop-polish PL10 (review 1466 F3, the coordinator's ruling on 15104): below 900 the bottom bar holds the Accounts place,
+    // so with nothing to gauge the strip draws nothing there, in every placeholder state.
+    it('on a phone, with nothing to gauge, the strip draws nothing: no door to the Accounts place beside the bar', async () => {
+      vi.unstubAllGlobals();
+      const { container } = render(<AccountsStrip />);
+      expect(container.innerHTML).toBe('');
+      cleanup();
+      stubAccounts([]);
+      expect(render(<AccountsStrip />).container.innerHTML).toBe('');
+      cleanup();
+      stubAccounts([acct({ wrapper: 'claude', disabled: true })]);
+      expect(render(<AccountsStrip />).container.innerHTML).toBe('');
+    });
   });
 
   // Task 6 (Build 3 PR G, Rider A) made the strip the nav affordance onto /accounts; T2c (D-6329, R48) splits that
@@ -407,6 +436,7 @@ describe('AccountsStrip', () => {
     });
 
     it('All accounts goes through the command layer: without one a tap goes nowhere, with one it opens /accounts', async () => {
+      stubDesk(1300); // All accounts is the desk's (PL10, review 1466 F3)
       stubAccounts([acct({ wrapper: 'claude' })]);
       render(<AccountsStrip />);
       fireEvent.click(await screen.findByRole('button', { name: 'All accounts' }));
@@ -430,6 +460,7 @@ describe('AccountsStrip', () => {
     });
 
     it('the placeholder is the class the rendered link actually carries', async () => {
+      stubDesk(1300); // the placeholder is the desk's (PL10, review 1466 F3)
       stubAccounts([]);
       render(<AccountsStrip />);
       const link = await screen.findByRole('link', { name: 'account usage — open accounts' });
@@ -501,25 +532,22 @@ describe('the lanes fold (S5b, D-6530)', () => {
     expect(cardsOf(container).map(nameOf)).toEqual(SHOWN);
   });
 
-  it('the control sits in the end cell, after the last shown card and before All accounts, and follows the cards\' one tab stop in tab order', async () => {
+  it('on a phone the control is the end cell\'s one control, after the last shown card, and follows the cards\' one tab stop in tab order (PL10: no All accounts below 900)', async () => {
     stubSeventeen();
     const user = userEvent.setup();
     const { container } = render(<AccountsStrip />);
     await screen.findByText('lane-a');
     const more = control(WORDS);
-    const all = screen.getByRole('button', { name: 'All accounts' });
     const end = more.closest('.accounts-end')!;
     expect(end).not.toBeNull();
-    expect(all.closest('.accounts-end')).toBe(end);
     expect(end.parentElement).toBe(container.querySelector('.accounts-strip'));
-    expect([...end.children]).toEqual([more, all]);
+    expect([...end.children]).toEqual([more]);
+    expect(screen.queryByRole('button', { name: 'All accounts' })).toBeNull();
     expect(cardsOf(container).at(-1)!.compareDocumentPosition(more) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await user.tab();
     expect(document.activeElement).toBe(cardsOf(container)[0]);
     await user.tab();
     expect(document.activeElement).toBe(more);
-    await user.tab();
-    expect(document.activeElement).toBe(all);
   });
 
   it('each shown card stays its lane\'s open-lane door: a tap and Enter open /accounts?lane=<id>', async () => {
@@ -746,6 +774,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
   });
 
   it('no control in the placeholder states', async () => {
+    stubDesk(1300); // the placeholder is the desk's (PL10, review 1466 F3)
     // No answer has landed in the store (`usage: null`, its reset state): the "checking accounts" placeholder.
     render(<AccountsStrip />);
     expect(screen.queryByRole('button')).toBeNull();
@@ -772,7 +801,6 @@ describe('the lanes fold (S5b, D-6530)', () => {
     const lineCardsOf = (container: HTMLElement): HTMLElement[] => [...groupOf(container).children].filter((c): c is HTMLElement => c.classList.contains('account-gauge'));
     const names = seventeenLanes(nowSec);
     const labelOf = (id: string): string => names.roster.find((r) => r.id === id)!.label;
-    const allAccounts = (): HTMLElement => screen.getByRole('button', { name: 'All accounts' });
     const mountPhone = async (): Promise<HTMLElement> => {
       stubSeventeen();
       const { container } = render(<AccountsStrip />);
@@ -792,7 +820,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
       return container;
     };
 
-    it("a tap on '+13 more' opens a panel of the 13 lanes the line folds away, in lanesByFree's order from the line's last card, in the end cell between the control and All accounts, and the control names it", async () => {
+    it("a tap on '+13 more' opens a panel of the 13 lanes the line folds away, in lanesByFree's order from the line's last card, in the end cell after the control, and the control names it", async () => {
       const container = await mountPhone();
       const more = control(WORDS);
       expect(panelOf(container)).toBeNull();
@@ -814,15 +842,16 @@ describe('the lanes fold (S5b, D-6530)', () => {
       expect(more).toHaveAttribute('aria-controls', panel.id);
       expect(panel.id).toBe(id);
       expect(panel.id).not.toBe(groupOf(container).id);
-      // In the end cell, right after the control and before All accounts; a group named for what it holds, and no dialog.
+      // In the end cell, right after the control (a phone draws no All accounts: PL10, review 1466 F3); a group named for what
+      // it holds, and no dialog.
       const end = more.closest('.accounts-end')!;
-      expect([...end.children]).toEqual([more, panel, allAccounts()]);
+      expect([...end.children]).toEqual([more, panel]);
       expect(panel).toHaveAttribute('role', 'group');
       expect(panel.getAttribute('aria-label')).toBe(FLYOUT_LABEL);
       expect(panel).not.toHaveAttribute('aria-modal');
     });
 
-    it('Tab goes from the control to the panel\'s one stop, then on to All accounts', async () => {
+    it('Tab goes from the control to the panel\'s one stop, then out of the strip (a phone draws no All accounts)', async () => {
       const container = await mountPhone();
       const user = userEvent.setup();
       act(() => { control().focus(); });
@@ -832,7 +861,7 @@ describe('the lanes fold (S5b, D-6530)', () => {
       await user.tab();
       expect(document.activeElement).toBe(cards[0]);
       await user.tab();
-      expect(document.activeElement).toBe(allAccounts());
+      expect(groupOf(container).contains(document.activeElement)).toBe(false);
     });
 
     it('each panel card is its lane\'s open-lane door, and a tap on one opens that lane and closes the panel', async () => {
@@ -1160,9 +1189,10 @@ describe('the lanes fold (S5b, D-6530)', () => {
     });
 
     // Review 1131 A1 (C12 item 20): a poll that drops the focused panel card's lane fires no blur, so the panel's flag goes
-    // stale; the operator then moves to All accounts, and a later poll leaves nothing to fold. The hand-back must not take
-    // focus off All accounts: only focus still in the panel, or on the page, is the panel's to hand back.
-    it('a stale panel flag never takes focus off All accounts when a later poll leaves nothing to fold', async () => {
+    // stale; the operator then moves to a card on the line (All accounts until PL10, which draws none on a phone), and a later
+    // poll leaves nothing to fold. The hand-back must not take focus off that card: only focus still in the panel, or on the
+    // page, is the panel's to hand back.
+    it('a stale panel flag never takes focus off a line card when a later poll leaves nothing to fold', async () => {
       const container = await openPanel();
       const card = panelCardsOf(container)[9]!;
       act(() => { card.focus(); });
@@ -1171,24 +1201,26 @@ describe('the lanes fold (S5b, D-6530)', () => {
       const lane = all.find((a) => [...card.querySelectorAll('*')].some((e) => e.textContent === labelOf(a.wrapper)))!;
       stubLanes(all.filter((a) => a !== lane));
       expect(panelOf(container), 'sixteen lanes still fold, so the panel stays').not.toBeNull();
-      const end = allAccounts();
-      act(() => { end.focus(); });
-      expect(document.activeElement).toBe(end);
+      const onLine = lineCardsOf(container)[0]!;
+      const name = nameOf(onLine);
+      act(() => { onLine.focus(); });
+      expect(document.activeElement).toBe(onLine);
       stubLanes(all.slice(0, 5));
       expect(panelOf(container)).toBeNull();
-      expect(document.activeElement, 'focus stays on All accounts').toBe(end);
+      expect(nameOf(document.activeElement as HTMLElement), 'focus stays on the line card').toBe(name);
     });
 
-    // Review 1131 A2 (C12 item 20): a poll that leaves no live lane draws the placeholder door, with no control and no
-    // line; a panel card's focus goes to that door, never to the page.
-    it('a poll that leaves no live lane hands a panel card\'s focus to the placeholder door, never to the page', async () => {
+    // Review 1131 A2 (C12 item 20) held that a poll leaving no live lane handed a panel card's focus to the placeholder door.
+    // Since PL10 (review 1466 F3, the ruling on 15104) a phone draws no placeholder: the bottom bar's Accounts door is the door
+    // there, so the strip, its panel with it, is gone, and the focus it held rests on the page.
+    it('on a phone a poll that leaves no live lane takes the strip away, panel and all, and draws no placeholder door', async () => {
       const container = await openPanel();
       const card = panelCardsOf(container)[9]!;
       act(() => { card.focus(); });
       stubLanes(seventeenLanes(nowSec).accounts.map((a) => ({ ...a, disabled: true })));
-      const door = screen.getByRole('link', { name: ACCOUNTS_DOOR_LABEL });
+      expect(screen.queryByRole('link', { name: ACCOUNTS_DOOR_LABEL })).toBeNull();
       expect(panelOf(container)).toBeNull();
-      expect(document.activeElement, 'on the placeholder door').toBe(door);
+      expect(container.innerHTML).toBe('');
     });
 
     // ── phone-fold-two-lines: the phone folds to two lines of the tracks its grid draws ──

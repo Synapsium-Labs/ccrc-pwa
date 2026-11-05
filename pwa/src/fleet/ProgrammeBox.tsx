@@ -12,17 +12,25 @@
 // movement readout does (the selector returns the NUMBER, so a frame that changes no count renders nothing), and it takes
 // no prop: the card's memo holds, and neither skin's list passes it anything.
 //
+// EVERY BOX IS A DOOR INTO ITS PROGRAMME VIEW (desktop-polish PL10, D26 amended, D-7952; the operator's steer of 2026-11-04):
+// its title opens the view whatever the count, and a box whose programme has a pinned spec links it ("Spec", the Docs reader
+// address `programmeSpecHref` builds from the waiting frame's Goals and the heard runs, the programme view's own source), on a
+// leaf of its own that selects the address string, so the card's memo holds. A slug the view refuses keeps a plain title.
+//
 // The movement readout ticks on its own leaf (`Movement`), as the folded header's `LastActive` does, so the card's
 // memo (C9, D-6441) holds: the card never re-renders for the time.
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
-import { BareRow, Door, Icon, useNow } from '@ccrc/ui';
+import { BareRow, Door, Icon, TextLink, useNow } from '@ccrc/ui';
 import type { RunSummary } from '../../../shared/api';
+import { SpecLink } from '../ledgers/GoalsPanel';
+import { programmeSpecHref } from '../ledgers/ledgerLinks';
 import { programmeWaitingCount } from '../ledgers/ledgerWords';
 import { navigate } from '../lib/router';
 import { programmeIsOpenable, programmePath } from '../lib/routes';
 import { useFleetStore } from '../stores/fleet';
 import { WAITING_BADGE_UNIT, badgePrint } from './navBadges';
+import { inAppClick } from './settingsText';
 import { fleetRowKey, type FleetRow } from './nestFleet';
 import {
   footerWords, movementWords, progressWords, type BoxState, type ProgHue, type ProgrammeBoxView, type Tray,
@@ -43,6 +51,19 @@ function Movement({ view, state, nowMs }: { view: ProgrammeBoxView; state: BoxSt
  *  the figure spoken is the real count, as every navigation badge's accessible name carries it (`navBadges.ts`). One
  *  spelling for both (carry C, D-7951; review 1388's advisories). */
 const waitingChipWords = (figure: string): string => `${figure} ${WAITING_BADGE_UNIT}`;
+
+/** The box's Spec link: the pinned spec in the Docs reader, or nothing without a pin or a home project. */
+function BoxSpec({ slug, title }: { slug: string; title: string }): ReactNode {
+  const href = useFleetStore((s) => (s.waiting === null ? null : programmeSpecHref(slug, s.waiting.goals, s.runsFrameSeen ? s.runs : [])));
+  return <SpecLink href={href} programme={title} className="pg-spec" />;
+}
+
+/** The box's title, a door into the programme view when the view takes the slug; otherwise the title as words. */
+function Title({ slug, title }: { slug: string; title: string }): ReactNode {
+  if (!programmeIsOpenable(slug)) return <span className="pg-title">{title}</span>;
+  const href = programmePath(slug);
+  return <TextLink className="pg-title-door" href={href} onClick={inAppClick(href)}><span className="pg-title">{title}</span></TextLink>;
+}
 
 /** The chip: nothing at zero (and while no list has been heard), else the count in words, and a way into the programme. */
 function WaitingChip({ slug, title }: { slug: string; title: string }): ReactNode {
@@ -99,8 +120,9 @@ export function ProgrammeBox({ view, state, tray, drawRow, drawAbroad, hueOf, on
         <Icon name="workflow" className="pg-ico" />
         <span className="pg-word">Programme</span>
         <span className="pg-sep" aria-hidden="true">·</span>
-        <span className="pg-title">{view.lead.title}</span>
+        <Title slug={view.lead.slug} title={view.lead.title} />
         <WaitingChip slug={view.lead.slug} title={view.lead.title} />
+        <BoxSpec slug={view.lead.slug} title={view.lead.title} />
         {view.more > 0 && <span className="pg-also">{`+ ${view.more} more`}</span>}
         {mode !== undefined && (
           <>

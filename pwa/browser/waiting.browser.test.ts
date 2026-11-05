@@ -131,7 +131,8 @@ const measure = (): {
     const [a, b] = [lum(rgb(k.color)), lum(rgb(bg))].sort((x, y) => y - x);
     return (a! + 0.05) / (b! + 0.05);
   };
-  const band = document.querySelector('.wi-band .wi-prog');
+  // The programme's name: a door into its view where the view takes the slug (`.wi-prog-door`, desktop-polish PL10), else words.
+  const band = document.querySelector('.wi-band .wi-prog, .wi-band .wi-prog-door');
   return {
     pills: [...document.querySelectorAll('.wl-pill')].map((p) => ({ text: p.textContent ?? '', ratio: ratio(p) })),
     band: band === null ? null : { ratio: ratio(band) },
